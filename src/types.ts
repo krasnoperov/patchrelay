@@ -121,10 +121,19 @@ export interface PersistedIssueRecord {
   linearIssueId: string;
   linearIssueKey?: string;
   title?: string;
+  issueUrl?: string;
   currentState: IssueState;
+  activeStage?: RunStage;
+  desiredStage?: RunStage;
+  desiredStateName?: string;
+  desiredWebhookId?: string;
+  desiredWebhookTimestamp?: number;
   branchName?: string;
   worktreePath?: string;
   activeRunId?: number;
+  leaseOwner?: string;
+  leaseExpiresAt?: string;
+  lastHeartbeatAt?: string;
   lastWebhookAt?: string;
   updatedAt: string;
 }
@@ -155,6 +164,21 @@ export interface IssueRunRecord {
   sessionId?: number;
   resultJson?: string;
   errorJson?: string;
+}
+
+export interface SessionRecord {
+  id: number;
+  projectId: string;
+  linearIssueId: string;
+  runId: number;
+  stage: RunStage;
+  zmxSessionName: string;
+  processId?: number;
+  branchName: string;
+  worktreePath: string;
+  startedAt: string;
+  endedAt?: string;
+  exitCode?: number;
 }
 
 export interface LaunchPlan {

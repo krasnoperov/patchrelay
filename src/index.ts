@@ -20,8 +20,9 @@ async function main(): Promise<void> {
   const db = new PatchRelayDatabase(config.database.path, config.database.wal);
   db.runMigrations();
 
-  const launcher = new LaunchRunner(config, db, logger);
+  const launcher = new LaunchRunner(config, db, logger, `${process.pid}`);
   const service = new PatchRelayService(config, db, launcher, logger);
+  await service.start();
   const app = await buildHttpServer(config, service, logger);
 
   await app.listen({
@@ -38,6 +39,17 @@ async function main(): Promise<void> {
     },
     "PatchRelay started",
   );
+
+  const shutdown = async (): Promise<void> => {
+    service.stop();
+    await app.close();
+  };
+  process.once("SIGINT", () => {
+    void shutdown();
+  });
+  process.once("SIGTERM", () => {
+    void shutdown();
+  });
 }
 
 main().catch((error) => {
