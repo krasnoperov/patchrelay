@@ -107,7 +107,7 @@ PatchRelay records:
 
 PatchRelay writes:
 
-- a structured JSON log stream to stdout and to a required local file
+- a logfmt log stream to stdout and to a required local file
 - one archived JSON file per received webhook under `logging.webhook_archive_dir`
 - explicit processing logs for normalized issue metadata, project resolution, ignored events, launch plans, and session exits
 - explicit command logs for `git worktree add` and the `zmx` launch command

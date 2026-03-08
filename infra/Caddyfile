@@ -10,7 +10,7 @@ patchrelay.krasnoperov.me {
 		reverse_proxy 127.0.0.1:8787
 	}
 
-	@health path /healthz
+	@health path /health
 	handle @health {
 		reverse_proxy 127.0.0.1:8787
 	}

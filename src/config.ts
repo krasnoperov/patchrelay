@@ -30,7 +30,7 @@ const configSchema = z.object({
   server: z.object({
     bind: z.string().default("127.0.0.1"),
     port: z.number().int().positive().default(8787),
-    health_path: z.string().default("/healthz"),
+    health_path: z.string().default("/health"),
   }),
   ingress: z.object({
     linear_webhook_path: z.string().default("/webhooks/linear"),
@@ -39,7 +39,7 @@ const configSchema = z.object({
   }),
   logging: z.object({
     level: z.enum(["debug", "info", "warn", "error"]).default("info"),
-    format: z.literal("json").default("json"),
+    format: z.literal("logfmt").default("logfmt"),
     file_path: z.string().min(1).default("/var/log/patchrelay/patchrelay.log"),
     webhook_archive_dir: z.string().optional(),
   }),
@@ -53,6 +53,7 @@ const configSchema = z.object({
   runner: z
     .object({
       zmx_bin: z.string().default("zmx"),
+      zmx_session_prefix_env: z.string().default("ZMX_SESSION_PREFIX"),
       git_bin: z.string().default("git"),
       launch: z.object({
         shell: z.string().default("codex"),
@@ -103,6 +104,7 @@ export function loadConfig(configPath = process.env.PATCHRELAY_CONFIG ?? path.re
   const webhookSecret = process.env[parsed.linear.webhook_secret_env];
   const logFilePath = process.env.PATCHRELAY_LOG_FILE ?? parsed.logging.file_path;
   const webhookArchiveDir = process.env.PATCHRELAY_WEBHOOK_ARCHIVE_DIR ?? parsed.logging.webhook_archive_dir;
+  const zmxSessionPrefix = process.env[parsed.runner.zmx_session_prefix_env];
 
   if (!webhookSecret) {
     throw new Error(`Missing env var ${parsed.linear.webhook_secret_env}`);
@@ -134,6 +136,7 @@ export function loadConfig(configPath = process.env.PATCHRELAY_CONFIG ?? path.re
     },
     runner: {
       zmxBin: parsed.runner.zmx_bin,
+      ...(zmxSessionPrefix ? { zmxSessionPrefix } : {}),
       gitBin: parsed.runner.git_bin,
       launch: parsed.runner.launch,
     },

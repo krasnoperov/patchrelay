@@ -47,7 +47,7 @@ PatchRelay v1 does not implement:
 PatchRelay exposes:
 
 - `POST /webhooks/linear`
-- `GET /healthz`
+- `GET /health`
 
 For each webhook it must:
 
@@ -113,7 +113,7 @@ PatchRelay then:
 1. ensures the worktree root exists
 2. creates or refreshes the worktree for the issue
 3. creates or resets the issue branch from `HEAD`
-4. launches a named `zmx` session
+4. launches a named `zmx` session derived from the issue key and optional host prefix
 5. runs Codex in the worktree with the issue metadata and workflow file path using explicit non-interactive CLI flags configured by PatchRelay
 
 ## Persistence Model
@@ -131,7 +131,7 @@ The SQLite database is the local source of truth for what PatchRelay accepted an
 
 PatchRelay v1 keeps local operator logs for:
 
-- the main structured processing log, always written to the configured local file
+- the main logfmt processing log, always written to the configured local file
 - one archived file per received webhook
 - launch planning details
 - the git and `zmx` commands it is about to run

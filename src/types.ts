@@ -62,7 +62,7 @@ export interface AppConfig {
   };
   logging: {
     level: "debug" | "info" | "warn" | "error";
-    format: "json";
+    format: "logfmt";
     filePath: string;
     webhookArchiveDir?: string;
   };
@@ -75,6 +75,7 @@ export interface AppConfig {
   };
   runner: {
     zmxBin: string;
+    zmxSessionPrefix?: string;
     gitBin: string;
     launch: LaunchCommandConfig;
   };

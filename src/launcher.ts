@@ -18,12 +18,22 @@ function sanitizePathSegment(value: string): string {
   return value.replace(/[^a-zA-Z0-9._-]+/g, "-");
 }
 
+function buildSessionName(config: AppConfig, issue: IssueMetadata, workflowKind: WorkflowKind): string {
+  const base = sanitizePathSegment((issue.identifier ?? issue.id).toLowerCase());
+  const suffix = workflowKind === "implementation" ? "" : workflowKind === "review" ? "r" : "d";
+  const prefixedBase = config.runner.zmxSessionPrefix
+    ? `${sanitizePathSegment(config.runner.zmxSessionPrefix)}-${base}`
+    : base;
+
+  return `${prefixedBase}${suffix}`;
+}
+
 function buildPrompt(issue: IssueMetadata, workflowKind: WorkflowKind, workflowFile: string): string {
   const verb = workflowKind === "implementation" ? "implement" : workflowKind === "review" ? "review" : "deploy";
   return `${issue.id} ${verb} according to ${path.basename(workflowFile)}`;
 }
 
-function buildLaunchPlan(project: ProjectConfig, issue: IssueMetadata, workflowKind: WorkflowKind): LaunchPlan {
+function buildLaunchPlan(config: AppConfig, project: ProjectConfig, issue: IssueMetadata, workflowKind: WorkflowKind): LaunchPlan {
   const slug = issue.title ? slugify(issue.title) : "";
   const branchSuffix = slug ? `${issue.id}-${slug}` : issue.id;
   const workflowFile = project.workflowFiles[workflowKind];
@@ -31,7 +41,7 @@ function buildLaunchPlan(project: ProjectConfig, issue: IssueMetadata, workflowK
   return {
     branchName: `${project.branchPrefix}/${branchSuffix}`,
     worktreePath: path.join(project.worktreeRoot, sanitizePathSegment(issue.id)),
-    sessionName: `${sanitizePathSegment(project.id)}-${sanitizePathSegment(issue.id)}-${workflowKind}`,
+    sessionName: buildSessionName(config, issue, workflowKind),
     prompt: buildPrompt(issue, workflowKind, workflowFile),
     workflowKind,
     workflowFile,
@@ -57,7 +67,7 @@ export class LaunchRunner {
     workflowKind: WorkflowKind;
   }): Promise<LaunchPlan> {
     const { project, issue, webhookId, workflowKind } = params;
-    const plan = buildLaunchPlan(project, issue, workflowKind);
+    const plan = buildLaunchPlan(this.config, project, issue, workflowKind);
     const runId = this.db.createIssueRun({
       projectId: project.id,
       linearIssueId: issue.id,

@@ -47,7 +47,7 @@ test("resolveProject matches a project using webhook metadata only", () => {
     server: {
       bind: "127.0.0.1",
       port: 8787,
-      healthPath: "/healthz",
+      healthPath: "/health",
     },
     ingress: {
       linearWebhookPath: "/webhooks/linear",
