@@ -1,0 +1,29 @@
+{
+	email aleksei@krasnoperov.me
+}
+
+patchrelay.krasnoperov.me {
+	encode zstd gzip
+
+	@home path /
+	handle @home {
+		reverse_proxy 127.0.0.1:8787
+	}
+
+	@health path /healthz
+	handle @health {
+		reverse_proxy 127.0.0.1:8787
+	}
+
+	@linear_webhook {
+		path /webhooks/linear
+		method POST
+	}
+	handle @linear_webhook {
+		reverse_proxy 127.0.0.1:8787
+	}
+
+	handle {
+		respond "not found" 404
+	}
+}

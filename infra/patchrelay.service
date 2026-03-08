@@ -1,0 +1,27 @@
+[Unit]
+Description=PatchRelay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=alv
+Group=alv
+WorkingDirectory=/home/alv/projects/patchrelay
+EnvironmentFile=/home/alv/projects/patchrelay/.env
+Environment=NODE_ENV=production
+Environment=PATH=/home/alv/.nvm/versions/node/v24.13.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+ExecStart=/usr/bin/env npm run start
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=false
+ReadWritePaths=/home/alv/projects/patchrelay /home/alv/.local/share/patchrelay /home/alv/worktrees /var/log/patchrelay
+StateDirectory=patchrelay
+RuntimeDirectory=patchrelay
+LogsDirectory=patchrelay
+
+[Install]
+WantedBy=multi-user.target

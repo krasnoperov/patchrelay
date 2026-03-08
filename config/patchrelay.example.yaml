@@ -1,0 +1,55 @@
+server:
+  bind: 127.0.0.1
+  port: 8787
+  health_path: /healthz
+
+ingress:
+  linear_webhook_path: /webhooks/linear
+  max_body_bytes: 262144
+  max_timestamp_skew_seconds: 60
+
+logging:
+  level: info
+  format: json
+  file_path: /var/log/patchrelay/patchrelay.log
+  webhook_archive_dir: /var/log/patchrelay/webhooks
+
+database:
+  path: ${PATCHRELAY_DB_PATH:-/home/alv/.local/share/patchrelay/patchrelay.sqlite}
+  wal: true
+
+linear:
+  webhook_secret_env: LINEAR_WEBHOOK_SECRET
+
+runner:
+  zmx_bin: zmx
+  git_bin: git
+  launch:
+    shell: codex
+    args:
+      - exec
+      - --dangerously-bypass-approvals-and-sandbox
+      - --cd
+      - "{worktreePath}"
+      - "{prompt}"
+
+projects:
+  - id: patchrelay
+    repo_path: /home/alv/projects/patchrelay
+    worktree_root: /home/alv/worktrees/patchrelay
+    workflow_files:
+      implementation: /home/alv/projects/patchrelay/IMPLEMENTATION_WORKFLOW.md
+      review: /home/alv/projects/patchrelay/REVIEW_WORKFLOW.md
+      deploy: /home/alv/projects/patchrelay/DEPLOY_WORKFLOW.md
+    workflow_statuses:
+      implementation: Start
+      review: Review
+      deploy: Deploy
+      human_needed: Human Needed
+    linear_team_ids:
+      - USE
+    allow_labels:
+      - patchrelay
+    trigger_events:
+      - statusChanged
+    branch_prefix: patchrelay
