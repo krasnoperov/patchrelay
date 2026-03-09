@@ -136,6 +136,18 @@ export class PatchRelayDatabase {
 
   runMigrations(): void {
     this.connection.exec(baseMigration);
+    this.ensureColumnExists("tracked_issues", "status_comment_id", "TEXT");
+  }
+
+  private ensureColumnExists(tableName: string, columnName: string, definition: string): void {
+    const columns = this.connection
+      .prepare(`PRAGMA table_info(${tableName})`)
+      .all() as Array<{ name?: string }>;
+    if (columns.some((column) => String(column.name) === columnName)) {
+      return;
+    }
+
+    this.connection.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
   }
 
   insertWebhookEvent(params: {

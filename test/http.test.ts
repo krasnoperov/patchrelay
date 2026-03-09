@@ -127,7 +127,7 @@ test("health endpoint includes build version metadata from the built artifact", 
       url: "/",
     });
     assert.match(home.body, /codex app-server/);
-    assert.match(home.body, /api\/issues\/:issueKey\/report/);
+    assert.doesNotMatch(home.body, /api\/issues\/:issueKey\/report/);
 
     await app.close();
   } finally {
