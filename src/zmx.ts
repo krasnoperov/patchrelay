@@ -1,3 +1,4 @@
+import * as pty from "node-pty";
 import { spawn } from "node:child_process";
 import { execCommand } from "./utils.js";
 
@@ -9,8 +10,54 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
+function sanitizeZmxEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const next = { ...env };
+  delete next.ZMX_SESSION;
+  delete next.ZMX_SESSION_PREFIX;
+  return next;
+}
+
 export class ZmxSessionManager {
   constructor(private readonly zmxBin: string) {}
+
+  attachCommandLine(
+    sessionName: string,
+    commandLine: string,
+    options: {
+      cwd?: string;
+      env?: NodeJS.ProcessEnv;
+      cols?: number;
+      rows?: number;
+    } = {},
+  ): pty.IPty {
+    const client = pty.spawn(this.zmxBin, ["attach", sessionName], {
+      name: "xterm-256color",
+      cwd: options.cwd ?? process.cwd(),
+      env: sanitizeZmxEnv(options.env),
+      cols: options.cols ?? 120,
+      rows: options.rows ?? 40,
+    });
+    const finalCommand = `${commandLine}; exit $?`;
+    setTimeout(() => {
+      client.write(`${finalCommand}\n`);
+    }, 250);
+    return client;
+  }
+
+  attach(
+    sessionName: string,
+    shell: string,
+    args: string[],
+    options: {
+      cwd?: string;
+      env?: NodeJS.ProcessEnv;
+      cols?: number;
+      rows?: number;
+    } = {},
+  ): pty.IPty {
+    const commandLine = [shell, ...args].map((part) => shellQuote(part)).join(" ");
+    return this.attachCommandLine(sessionName, commandLine, options);
+  }
 
   async runCommandLine(
     sessionName: string,
@@ -21,7 +68,10 @@ export class ZmxSessionManager {
     } = {},
   ): Promise<void> {
     const finalCommand = `${commandLine}; exit $?`;
-    const result = await execCommand(this.zmxBin, ["run", sessionName, finalCommand], options);
+    const result = await execCommand(this.zmxBin, ["run", sessionName, finalCommand], {
+      ...options,
+      stdio: ["ignore", "ignore", "ignore"],
+    });
     if (result.exitCode !== 0) {
       throw new Error(`zmx run failed for ${sessionName}: ${result.stderr || result.stdout}`);
     }
@@ -44,6 +94,7 @@ export class ZmxSessionManager {
     sessionName: string,
     options: {
       cwd?: string;
+      env?: NodeJS.ProcessEnv;
       timeoutMs?: number;
     } = {},
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
@@ -62,7 +113,7 @@ export class ZmxSessionManager {
     });
   }
 
-  async listSessions(options: { timeoutMs?: number } = {}): Promise<string[]> {
+  async listSessions(options: { env?: NodeJS.ProcessEnv; timeoutMs?: number } = {}): Promise<string[]> {
     const result = await execCommand(this.zmxBin, ["list", "--short"], options);
     if (result.exitCode !== 0) {
       throw new Error(`zmx list failed: ${result.stderr || result.stdout}`);

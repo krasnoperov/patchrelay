@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import type { StdioOptions } from "node:child_process";
 
 export function ensureAbsolutePath(inputPath: string): string {
   return path.isAbsolute(inputPath) ? inputPath : path.resolve(process.cwd(), inputPath);
@@ -45,6 +46,7 @@ export async function execCommand(
   options: {
     cwd?: string;
     env?: NodeJS.ProcessEnv;
+    stdio?: StdioOptions;
     timeoutMs?: number;
   } = {},
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
@@ -52,7 +54,7 @@ export async function execCommand(
     const child = spawn(command, args, {
       cwd: options.cwd,
       env: options.env,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: options.stdio ?? ["ignore", "pipe", "pipe"],
     });
 
     let stdout = "";
@@ -60,13 +62,17 @@ export async function execCommand(
     let settled = false;
     let timeout: NodeJS.Timeout | undefined;
 
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString();
-    });
+    if (child.stdout) {
+      child.stdout.on("data", (chunk) => {
+        stdout += chunk.toString();
+      });
+    }
 
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString();
-    });
+    if (child.stderr) {
+      child.stderr.on("data", (chunk) => {
+        stderr += chunk.toString();
+      });
+    }
 
     child.on("error", (error) => {
       if (settled) {
@@ -156,4 +162,3 @@ export function extractFirstJsonObject(text: string): string | undefined {
 
   return undefined;
 }
-

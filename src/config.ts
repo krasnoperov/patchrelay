@@ -65,7 +65,7 @@ const configSchema = z.object({
       git_bin: "git",
       launch: {
         shell: "codex",
-        args: ["exec", "--dangerously-bypass-approvals-and-sandbox", "--cd", "{worktreePath}", "{prompt}"],
+        args: ["--no-alt-screen", "--cd", "{worktreePath}", "{prompt}"],
       },
     }),
   projects: z.array(projectSchema).min(1),

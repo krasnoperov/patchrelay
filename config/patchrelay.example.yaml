@@ -27,8 +27,7 @@ runner:
   launch:
     shell: codex
     args:
-      - exec
-      - --dangerously-bypass-approvals-and-sandbox
+      - --no-alt-screen
       - --cd
       - "{worktreePath}"
       - "{prompt}"

@@ -114,7 +114,7 @@ PatchRelay then:
 2. creates or refreshes the worktree for the issue
 3. creates or resets the issue branch from `HEAD`
 4. launches a named `zmx` session derived from the issue key and optional host prefix
-5. runs Codex in the worktree with the issue metadata and workflow file path using explicit non-interactive CLI flags configured by PatchRelay
+5. runs Codex in the worktree with the issue metadata and workflow file path using explicit CLI flags configured by PatchRelay
 
 ## Persistence Model
 
