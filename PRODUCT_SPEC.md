@@ -95,13 +95,25 @@ PatchRelay exposes:
 - `GET /health`
 - `GET /api/issues/:issueKey`
 - `GET /api/issues/:issueKey/report`
+- `GET /api/issues/:issueKey/live`
+- `GET /api/issues/:issueKey/stages/:stageRunId/events`
+
+## Linear Ownership
+
+PatchRelay owns the deterministic workflow bookkeeping in Linear:
+
+- moving a claimed stage into the matching active state such as `Implementing`, `Reviewing`, or `Deploying`
+- maintaining one service-owned status comment per tracked issue
+- optionally adding and removing service-owned workflow labels such as `llm-working` and `llm-awaiting-handoff`
+- rolling the issue back to a configured fallback state such as `Human Needed` if stage launch fails
+
+Codex remains responsible for judgment-heavy final transitions such as moving an issue to `Review`, `Deploy`, `Done`, or `Human Needed`.
 
 ## Future Extensions
 
 Later versions may add:
 
-- Linear write-back with explicit service ownership
 - pause, cancel, and retry controls
-- manual stage steering
+- manual stage steering beyond Linear comments
 - richer approval routing
 - UI streaming for live thread observation

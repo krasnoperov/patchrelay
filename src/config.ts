@@ -19,10 +19,20 @@ const projectSchema = z.object({
     development: z.string().min(1).default("Start"),
     review: z.string().min(1).default("Review"),
     deploy: z.string().min(1).default("Deploy"),
+    development_active: z.string().min(1).default("Implementing"),
+    review_active: z.string().min(1).default("Reviewing"),
+    deploy_active: z.string().min(1).default("Deploying"),
     cleanup: z.string().optional(),
+    cleanup_active: z.string().optional(),
     human_needed: z.string().optional(),
     done: z.string().optional(),
   }),
+  workflow_labels: z
+    .object({
+      working: z.string().min(1).optional(),
+      awaiting_handoff: z.string().min(1).optional(),
+    })
+    .optional(),
   issue_key_prefixes: z.array(z.string().min(1)).default([]),
   linear_team_ids: z.array(z.string().min(1)).default([]),
   allow_labels: z.array(z.string().min(1)).default([]),
@@ -53,6 +63,8 @@ const configSchema = z.object({
   }),
   linear: z.object({
     webhook_secret_env: z.string().default("LINEAR_WEBHOOK_SECRET"),
+    api_token_env: z.string().default("LINEAR_API_TOKEN"),
+    graphql_url: z.string().url().default("https://api.linear.app/graphql"),
   }),
   runner: z
     .object({
@@ -122,6 +134,7 @@ export function loadConfig(
 
   const requireLinearSecret = options?.requireLinearSecret ?? true;
   const webhookSecret = process.env[parsed.linear.webhook_secret_env];
+  const apiToken = process.env[parsed.linear.api_token_env];
   if (requireLinearSecret && !webhookSecret) {
     throw new Error(`Missing env var ${parsed.linear.webhook_secret_env}`);
   }
@@ -152,6 +165,8 @@ export function loadConfig(
     },
     linear: {
       webhookSecret: webhookSecret ?? "",
+      ...(apiToken ? { apiToken } : {}),
+      graphqlUrl: parsed.linear.graphql_url,
     },
     runner: {
       gitBin: parsed.runner.git_bin,
@@ -186,10 +201,22 @@ export function loadConfig(
         development: project.workflow_statuses.development,
         review: project.workflow_statuses.review,
         deploy: project.workflow_statuses.deploy,
+        developmentActive: project.workflow_statuses.development_active,
+        reviewActive: project.workflow_statuses.review_active,
+        deployActive: project.workflow_statuses.deploy_active,
         ...(project.workflow_statuses.cleanup ? { cleanup: project.workflow_statuses.cleanup } : {}),
+        ...(project.workflow_statuses.cleanup_active ? { cleanupActive: project.workflow_statuses.cleanup_active } : {}),
         ...(project.workflow_statuses.human_needed ? { humanNeeded: project.workflow_statuses.human_needed } : {}),
         ...(project.workflow_statuses.done ? { done: project.workflow_statuses.done } : {}),
       },
+      ...(project.workflow_labels
+        ? {
+            workflowLabels: {
+              ...(project.workflow_labels.working ? { working: project.workflow_labels.working } : {}),
+              ...(project.workflow_labels.awaiting_handoff ? { awaitingHandoff: project.workflow_labels.awaiting_handoff } : {}),
+            },
+          }
+        : {}),
       issueKeyPrefixes: project.issue_key_prefixes,
       linearTeamIds: project.linear_team_ids,
       allowLabels: project.allow_labels,

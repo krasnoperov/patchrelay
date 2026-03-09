@@ -106,6 +106,7 @@ test("resolveProject matches by issue key prefix and team", () => {
     },
     linear: {
       webhookSecret: "secret",
+      graphqlUrl: "https://linear.example/graphql",
     },
     runner: {
       gitBin: "git",
@@ -132,6 +133,9 @@ test("resolveProject matches by issue key prefix and team", () => {
           development: "Start",
           review: "Review",
           deploy: "Deploy",
+          developmentActive: "Implementing",
+          reviewActive: "Reviewing",
+          deployActive: "Deploying",
         },
         issueKeyPrefixes: ["ALPHA"],
         linearTeamIds: ["OPS"],
@@ -153,6 +157,9 @@ test("resolveProject matches by issue key prefix and team", () => {
           development: "Start",
           review: "Review",
           deploy: "Deploy",
+          developmentActive: "Implementing",
+          reviewActive: "Reviewing",
+          deployActive: "Deploying",
         },
         issueKeyPrefixes: ["USE"],
         linearTeamIds: ["USE"],

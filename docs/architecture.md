@@ -2,13 +2,15 @@
 
 ## System Shape
 
-PatchRelay is a local orchestration service with five responsibilities:
+PatchRelay is a local orchestration service with seven responsibilities:
 
 1. accept and verify Linear webhooks
 2. persist issue, workspace, pipeline, stage, and observation state in SQLite
 3. create and maintain per-issue git worktrees
 4. drive Codex through `codex app-server`
-5. expose read-only issue and stage reports
+5. write deterministic workflow state back to Linear
+6. steer active turns with queued Linear comments
+7. expose issue and stage inspection endpoints
 
 `codex app-server` is the source of truth for agent thread history.
 PatchRelay is the source of truth for workflow policy, workspace ownership, and issue-to-thread correlation.
@@ -28,6 +30,7 @@ Stores:
 - active pipeline id
 - active stage run id
 - latest Codex thread id
+- service-owned Linear status comment id
 
 ### Workspace
 
@@ -112,6 +115,12 @@ PatchRelay maps Linear states to internal stages:
 - `Deploy` -> `deploy`
 - optional configured cleanup state -> `cleanup`
 
+When PatchRelay claims a stage, it also moves the issue into the matching active state:
+
+- `development` -> `Implementing`
+- `review` -> `Reviewing`
+- `deploy` -> `Deploying`
+
 The service records the desired stage even if another stage is still running.
 
 ### 4. Workspace Preparation
@@ -120,7 +129,7 @@ When no active stage run exists, PatchRelay:
 
 1. computes the worktree path from the issue key
 2. computes the branch name from the configured prefix, issue key, and title
-3. creates or refreshes the worktree from repository `HEAD`
+3. reuses the existing issue worktree when present, otherwise creates it from repository `HEAD`
 4. creates or reuses the issue workspace row
 
 ### 5. Codex Thread Execution
@@ -130,6 +139,7 @@ For the next stage run:
 - if this is the first stage for the issue, PatchRelay calls `thread/start`
 - if a prior stage exists, PatchRelay calls `thread/fork`
 - PatchRelay then calls `turn/start` with the issue context and workflow file contents
+- while preparing the run, PatchRelay also claims the matching active Linear state, refreshes its service-owned status comment, and applies configured workflow labels
 
 The resulting thread id and turn id are persisted immediately.
 
@@ -151,8 +161,12 @@ On `turn/completed`, PatchRelay:
 2. reads the full thread with `thread/read`
 3. synthesizes a stage report
 4. marks the stage run completed or failed
-5. updates the workspace and issue
-6. launches any queued next stage
+5. re-reads Linear to see whether the agent advanced the issue to a final handoff state
+6. if the issue is still in the active state PatchRelay set, updates the service-owned Linear comment and workflow labels to flag that handoff is still needed
+7. if the issue has already moved on, clears any service-owned workflow labels
+8. launches any queued next stage
+
+If stage launch fails before Codex is running, PatchRelay marks the stage failed locally, rolls the issue to the configured fallback Linear state such as `Human Needed`, removes service-owned workflow labels, and updates the service-owned comment with the failure.
 
 ## Why App-Server
 
@@ -177,6 +191,7 @@ SQLite stores:
 - pipeline runs
 - stage runs
 - thread events
+- queued turn inputs
 
 The database is not a copy of Codex thread history. It is the orchestration ledger that points to thread history and caches reports.
 
@@ -186,6 +201,8 @@ PatchRelay exposes:
 
 - issue overview by issue key
 - stage reports by issue key
+- live active-stage status by issue key
+- raw stage event history by issue key and stage run id
 - log stream for service-level behavior
 
 The operator can inspect what happened without attaching to a live terminal.

@@ -31,6 +31,7 @@ function createConfig(baseDir: string): AppConfig {
     },
     linear: {
       webhookSecret: "",
+      graphqlUrl: "https://linear.example/graphql",
     },
     runner: {
       gitBin: "git",
@@ -58,6 +59,9 @@ function createConfig(baseDir: string): AppConfig {
           development: "Start",
           review: "Review",
           deploy: "Deploy",
+          developmentActive: "Implementing",
+          reviewActive: "Reviewing",
+          deployActive: "Deploying",
           cleanup: "Cleanup",
           humanNeeded: "Human Needed",
           done: "Done",

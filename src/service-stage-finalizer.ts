@@ -2,6 +2,12 @@ import type { CodexNotification } from "./codex-app-server.js";
 import type { CodexAppServerClient } from "./codex-app-server.js";
 import type { PatchRelayDatabase } from "./db.js";
 import {
+  buildAwaitingHandoffComment,
+  resolveActiveLinearState,
+  resolveWorkflowLabelCleanup,
+  resolveWorkflowLabelNames,
+} from "./linear-workflow.js";
+import {
   buildFailedStageReport,
   buildPendingMaterializationThread,
   buildStageReport,
@@ -11,12 +17,14 @@ import {
   resolveStageRunStatus,
   summarizeCurrentThread,
 } from "./stage-reporting.js";
-import type { CodexThreadSummary, StageRunRecord, TrackedIssueRecord } from "./types.js";
+import type { AppConfig, CodexThreadSummary, LinearClient, StageRunRecord, TrackedIssueRecord } from "./types.js";
 
 export class ServiceStageFinalizer {
   constructor(
+    private readonly config: AppConfig,
     private readonly db: PatchRelayDatabase,
     private readonly codex: CodexAppServerClient,
+    private readonly linear: LinearClient | undefined,
     private readonly enqueueIssue: (projectId: string, issueId: string) => void,
   ) {}
 
@@ -62,6 +70,10 @@ export class ServiceStageFinalizer {
       method: notification.method,
       eventJson: JSON.stringify(notification.params),
     });
+
+    if (notification.method === "turn/started" || notification.method.startsWith("item/")) {
+      await this.flushQueuedTurnInputs(stageRun);
+    }
 
     if (notification.method !== "turn/completed") {
       return;
@@ -145,7 +157,7 @@ export class ServiceStageFinalizer {
       reportJson: JSON.stringify(report),
     });
 
-    this.advanceAfterStageCompletion(stageRun);
+    void this.advanceAfterStageCompletion(stageRun);
   }
 
   private failStageRun(
@@ -171,12 +183,75 @@ export class ServiceStageFinalizer {
     });
   }
 
-  private advanceAfterStageCompletion(stageRun: StageRunRecord): void {
+  async flushQueuedTurnInputs(stageRun: StageRunRecord): Promise<void> {
+    if (!stageRun.threadId || !stageRun.turnId) {
+      return;
+    }
+
+    const pending = this.db.listPendingTurnInputs(stageRun.id);
+    for (const input of pending) {
+      try {
+        await this.codex.steerTurn({
+          threadId: stageRun.threadId,
+          turnId: stageRun.turnId,
+          input: input.body,
+        });
+        this.db.markTurnInputDelivered(input.id);
+      } catch {
+        break;
+      }
+    }
+  }
+
+  private async advanceAfterStageCompletion(stageRun: StageRunRecord): Promise<void> {
     const refreshedIssue = this.db.getTrackedIssue(stageRun.projectId, stageRun.linearIssueId);
     const pipeline = this.db.getPipelineRun(stageRun.pipelineRunId);
     if (refreshedIssue?.desiredStage) {
       this.enqueueIssue(stageRun.projectId, stageRun.linearIssueId);
       return;
+    }
+
+    const project = this.config.projects.find((candidate) => candidate.id === stageRun.projectId);
+    const activeState = project ? resolveActiveLinearState(project, stageRun.stage) : undefined;
+    if (refreshedIssue && pipeline && this.linear && project && activeState) {
+      try {
+        const linearIssue = await this.linear.getIssue(stageRun.linearIssueId);
+        if (linearIssue.stateName?.trim().toLowerCase() === activeState.trim().toLowerCase()) {
+          const labels = resolveWorkflowLabelNames(project, "awaitingHandoff");
+          if (labels.add.length > 0 || labels.remove.length > 0) {
+            await this.linear.updateIssueLabels({
+              issueId: stageRun.linearIssueId,
+              ...(labels.add.length > 0 ? { addNames: labels.add } : {}),
+              ...(labels.remove.length > 0 ? { removeNames: labels.remove } : {}),
+            });
+          }
+          this.db.setIssueLifecycleStatus(stageRun.projectId, stageRun.linearIssueId, "paused");
+          this.db.setPipelineStatus(pipeline.id, "paused");
+
+          const finalStageRun = this.db.getStageRun(stageRun.id) ?? stageRun;
+          const result = await this.linear.upsertIssueComment({
+            issueId: stageRun.linearIssueId,
+            ...(refreshedIssue.statusCommentId ? { commentId: refreshedIssue.statusCommentId } : {}),
+            body: buildAwaitingHandoffComment({
+              issue: refreshedIssue,
+              stageRun: finalStageRun,
+              activeState,
+            }),
+          });
+          this.db.setIssueStatusComment(stageRun.projectId, stageRun.linearIssueId, result.id);
+          return;
+        }
+
+        const cleanup = resolveWorkflowLabelCleanup(project);
+        if (cleanup.remove.length > 0) {
+          await this.linear.updateIssueLabels({
+            issueId: stageRun.linearIssueId,
+            removeNames: cleanup.remove,
+          });
+        }
+      } catch {
+        // Preserve the completed stage locally even if Linear read-back failed.
+      }
     }
 
     if (pipeline) {

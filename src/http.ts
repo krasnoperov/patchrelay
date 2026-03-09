@@ -146,7 +146,6 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
         <span class="chip">Version: <code>${buildInfo.version}</code></span>
         <span class="chip">Commit: <code>${buildInfo.commit}</code></span>
         <span class="chip">Logs: <code>${config.logging.filePath}</code></span>
-        <span class="chip">Observe: <code>/api/issues/:issueKey/report</code></span>
       </div>
     </main>
   </body>

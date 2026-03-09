@@ -1,4 +1,4 @@
-import type { IssueMetadata, LinearWebhookPayload, NormalizedEvent, TriggerEvent } from "./types.js";
+import type { CommentMetadata, IssueMetadata, LinearWebhookPayload, NormalizedEvent, TriggerEvent } from "./types.js";
 
 function deriveTriggerEvent(payload: LinearWebhookPayload): TriggerEvent {
   if (payload.type === "Issue") {
@@ -121,11 +121,37 @@ function extractIssueMetadata(payload: LinearWebhookPayload): IssueMetadata | un
   };
 }
 
+function extractCommentMetadata(payload: LinearWebhookPayload): CommentMetadata | undefined {
+  if (payload.type !== "Comment") {
+    return undefined;
+  }
+
+  const data = asRecord(payload.data);
+  if (!data) {
+    return undefined;
+  }
+
+  const id = getString(data, "id");
+  const body = getString(data, "body");
+  const userRecord = asRecord(data.user);
+  const userName = getString(userRecord ?? {}, "name");
+  if (!id) {
+    return undefined;
+  }
+
+  return {
+    id,
+    ...(body ? { body } : {}),
+    ...(userName ? { userName } : {}),
+  };
+}
+
 export function normalizeWebhook(params: {
   webhookId: string;
   payload: LinearWebhookPayload;
 }): NormalizedEvent {
   const issue = extractIssueMetadata(params.payload);
+  const comment = extractCommentMetadata(params.payload);
   if (!issue) {
     throw new Error(`Unable to determine issue metadata from ${params.payload.type} webhook`);
   }
@@ -138,6 +164,7 @@ export function normalizeWebhook(params: {
     triggerEvent,
     eventType: `${params.payload.type}.${params.payload.action}`,
     issue,
+    ...(comment ? { comment } : {}),
     payload: params.payload,
   };
 }

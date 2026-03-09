@@ -15,4 +15,6 @@ Codex must:
 3. leave enough evidence in the thread history for PatchRelay to build a read-only report
 4. keep the worktree in a reviewable state for the next stage
 
+While a turn is active, PatchRelay may steer it with fresh Linear comment context instead of waiting for the next stage.
+
 Stage continuity is handled by PatchRelay through thread forking and workspace reuse, not by terminal session reuse.

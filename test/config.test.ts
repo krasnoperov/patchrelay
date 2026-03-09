@@ -55,6 +55,7 @@ database:
   path: ./data/patchrelay.sqlite
 linear:
   webhook_secret_env: CUSTOM_LINEAR_SECRET
+  api_token_env: CUSTOM_LINEAR_TOKEN
 projects:
   - id: usertold
     repo_path: ./repo
@@ -68,6 +69,9 @@ projects:
       development: Start
       review: Review
       deploy: Deploy
+      development_active: Implementing
+      review_active: Reviewing
+      deploy_active: Deploying
       cleanup: Cleanup
     trigger_events: [statusChanged]
     branch_prefix: use
@@ -86,6 +90,7 @@ runner:
         PATCHRELAY_DB_PATH: path.join(baseDir, "runtime.sqlite"),
         PATCHRELAY_WEBHOOK_ARCHIVE_DIR: path.join(baseDir, "runtime-archive"),
         CUSTOM_LINEAR_SECRET: "top-secret",
+        CUSTOM_LINEAR_TOKEN: "linear-token",
         LOG_FILE_PATH: path.join(baseDir, "ignored.log"),
         ARCHIVE_DIR: path.join(baseDir, "ignored-archive"),
       },
@@ -98,6 +103,7 @@ runner:
         assert.equal(config.logging.webhookArchiveDir, path.join(baseDir, "runtime-archive"));
         assert.equal(config.database.path, path.join(baseDir, "runtime.sqlite"));
         assert.equal(config.linear.webhookSecret, "top-secret");
+        assert.equal(config.linear.apiToken, "linear-token");
         assert.equal(config.projects[0]?.repoPath, path.join(baseDir, "repo"));
         assert.equal(config.projects[0]?.worktreeRoot, path.join(baseDir, "worktrees"));
         assert.equal(config.projects[0]?.workflowFiles.review, path.join(baseDir, "REVIEW.md"));
@@ -145,6 +151,9 @@ projects:
       development: Start
       review: Review
       deploy: Deploy
+      development_active: Implementing
+      review_active: Reviewing
+      deploy_active: Deploying
       cleanup: Cleanup
     trigger_events: [statusChanged]
     branch_prefix: use

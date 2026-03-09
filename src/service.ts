@@ -2,13 +2,22 @@ import path from "node:path";
 import type { Logger } from "pino";
 import { CodexAppServerClient, type CodexNotification } from "./codex-app-server.js";
 import { PatchRelayDatabase } from "./db.js";
+import { isPatchRelayStatusComment } from "./linear-workflow.js";
 import { resolveProject, triggerEventAllowed } from "./project-resolution.js";
 import { SerialWorkQueue } from "./service-queue.js";
 import { ServiceStageFinalizer } from "./service-stage-finalizer.js";
 import { type IssueQueueItem, ServiceStageRunner } from "./service-stage-runner.js";
 import { acceptIncomingWebhook } from "./service-webhooks.js";
 import { summarizeCurrentThread } from "./stage-reporting.js";
-import type { AppConfig, LinearWebhookPayload, StageReport, StageRunRecord, TrackedIssueRecord } from "./types.js";
+import type {
+  AppConfig,
+  LinearClient,
+  LinearWebhookPayload,
+  NormalizedEvent,
+  StageReport,
+  StageRunRecord,
+  TrackedIssueRecord,
+} from "./types.js";
 import { safeJsonParse } from "./utils.js";
 import { normalizeWebhook } from "./webhooks.js";
 import { resolveWorkflowStage } from "./workflow-policy.js";
@@ -29,10 +38,13 @@ export class PatchRelayService {
     readonly config: AppConfig,
     readonly db: PatchRelayDatabase,
     readonly codex: CodexAppServerClient,
+    readonly linear: LinearClient | undefined,
     readonly logger: Logger,
   ) {
-    this.stageRunner = new ServiceStageRunner(config, db, codex, logger);
-    this.stageFinalizer = new ServiceStageFinalizer(db, codex, (projectId, issueId) => this.enqueueIssue(projectId, issueId));
+    this.stageRunner = new ServiceStageRunner(config, db, codex, linear, logger);
+    this.stageFinalizer = new ServiceStageFinalizer(config, db, codex, linear, (projectId, issueId) =>
+      this.enqueueIssue(projectId, issueId),
+    );
     this.webhookQueue = new SerialWorkQueue((eventId) => this.processWebhookEvent(eventId), logger, (eventId) => String(eventId));
     this.issueQueue = new SerialWorkQueue((item) => this.processIssue(item), logger, makeIssueQueueKey);
     this.codex.on("notification", (notification: CodexNotification) => {
@@ -116,10 +128,50 @@ export class PatchRelayService {
       lastWebhookAt: new Date().toISOString(),
     });
 
+    await this.handleCommentWebhook(normalized, project.id);
+
     this.db.markWebhookProcessed(webhookEventId, "processed");
     if (desiredStage) {
       this.enqueueIssue(project.id, normalized.issue.id);
     }
+  }
+
+  private async handleCommentWebhook(normalized: NormalizedEvent, projectId: string): Promise<void> {
+    if ((normalized.triggerEvent !== "commentCreated" && normalized.triggerEvent !== "commentUpdated") || !normalized.comment?.body) {
+      return;
+    }
+
+    const issue = this.db.getTrackedIssue(projectId, normalized.issue.id);
+    if (!issue?.activeStageRunId) {
+      return;
+    }
+
+    if (isPatchRelayStatusComment(normalized.comment.id, normalized.comment.body, issue.statusCommentId)) {
+      return;
+    }
+
+    const stageRun = this.db.getStageRun(issue.activeStageRunId);
+    if (!stageRun) {
+      return;
+    }
+
+    const body = [
+      "New Linear comment received while you are working.",
+      normalized.comment.userName ? `Author: ${normalized.comment.userName}` : undefined,
+      "",
+      normalized.comment.body.trim(),
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    this.db.enqueueTurnInput({
+      stageRunId: stageRun.id,
+      ...(stageRun.threadId ? { threadId: stageRun.threadId } : {}),
+      ...(stageRun.turnId ? { turnId: stageRun.turnId } : {}),
+      source: `linear-comment:${normalized.comment.id}`,
+      body,
+    });
+    await this.stageFinalizer.flushQueuedTurnInputs(stageRun);
   }
 
   async processIssue(item: IssueQueueItem): Promise<void> {

@@ -43,6 +43,12 @@ export interface StartTurnOptions {
   cwd: string;
 }
 
+export interface SteerTurnOptions {
+  threadId: string;
+  turnId: string;
+  input: string;
+}
+
 export function resolveCodexAppServerLaunch(config: CodexAppServerConfig): { command: string; args: string[] } {
   if (!config.sourceBashrc) {
     return {
@@ -214,6 +220,20 @@ export class CodexAppServerClient extends EventEmitter {
     return response.data.map((thread) => this.mapThread(thread));
   }
 
+  async steerTurn(options: SteerTurnOptions): Promise<void> {
+    await this.sendRequest("turn/steer", {
+      threadId: options.threadId,
+      expectedTurnId: options.turnId,
+      input: [
+        {
+          type: "text",
+          text: options.input,
+          text_elements: [],
+        },
+      ],
+    });
+  }
+
   private sendNotification(method: string, params?: unknown): void {
     this.writeMessage({
       jsonrpc: "2.0",
@@ -335,11 +355,16 @@ export class CodexAppServerClient extends EventEmitter {
 
   private mapThread(thread: Record<string, unknown>): CodexThreadSummary {
     const turns = Array.isArray(thread.turns) ? thread.turns : [];
+    const rawStatus = thread.status;
+    const status =
+      rawStatus && typeof rawStatus === "object" && "type" in (rawStatus as Record<string, unknown>)
+        ? String((rawStatus as Record<string, unknown>).type)
+        : String(rawStatus ?? "unknown");
     return {
       id: String(thread.id),
       preview: String(thread.preview ?? ""),
       cwd: String(thread.cwd ?? ""),
-      status: String(thread.status ?? "unknown"),
+      status,
       ...(thread.path === null || thread.path === undefined ? {} : { path: String(thread.path) }),
       turns: turns.map((turn) => {
         const value = turn as Record<string, unknown>;

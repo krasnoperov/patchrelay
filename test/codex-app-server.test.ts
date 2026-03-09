@@ -53,6 +53,12 @@ test("CodexAppServerClient handles initialize, approval requests, notifications,
       status: "inProgress",
     });
 
+    await client.steerTurn({
+      threadId: "thread-1",
+      turnId: "turn-2",
+      input: "Please incorporate a new Linear comment.",
+    });
+
     const thread = await client.readThread("thread-1");
     assert.equal(thread.id, "thread-1");
     assert.equal(thread.cwd, "/tmp/read");

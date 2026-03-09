@@ -9,12 +9,24 @@ import test from "node:test";
 import pino from "pino";
 import { PatchRelayDatabase } from "../src/db.js";
 import { PatchRelayService } from "../src/service.js";
-import type { AppConfig, CodexThreadSummary, LinearWebhookPayload, ProjectConfig } from "../src/types.js";
+import type { AppConfig, CodexThreadSummary, LinearClient, LinearWebhookPayload, LinearIssueSnapshot, ProjectConfig } from "../src/types.js";
+
+const DEFAULT_WORKFLOW_STATES = [
+  { id: "start", name: "Start" },
+  { id: "implementing", name: "Implementing" },
+  { id: "review", name: "Review" },
+  { id: "reviewing", name: "Reviewing" },
+  { id: "deploy", name: "Deploy" },
+  { id: "deploying", name: "Deploying" },
+  { id: "done", name: "Done" },
+  { id: "human-needed", name: "Human Needed" },
+];
 
 class FakeCodexClient extends EventEmitter {
   readonly startedThreads: string[] = [];
   readonly forkedFrom: string[] = [];
   readonly turns: Array<{ threadId: string; input: string }> = [];
+  readonly steeredTurns: Array<{ threadId: string; turnId: string; input: string }> = [];
   readonly threads = new Map<string, CodexThreadSummary>();
   private nextThreadNumber = 1;
   private nextTurnNumber = 1;
@@ -47,6 +59,10 @@ class FakeCodexClient extends EventEmitter {
 
   async readThread(threadId: string): Promise<CodexThreadSummary> {
     return this.threads.get(threadId)!;
+  }
+
+  async steerTurn(params: { threadId: string; turnId: string; input: string }): Promise<void> {
+    this.steeredTurns.push(params);
   }
 
   async listThreads(): Promise<CodexThreadSummary[]> {
@@ -90,6 +106,80 @@ class FakeCodexClient extends EventEmitter {
   }
 }
 
+class FakeLinearClient implements LinearClient {
+  readonly issues = new Map<string, LinearIssueSnapshot>();
+  readonly comments = new Map<string, { id: string; issueId: string; body: string }>();
+  readonly stateTransitions: Array<{ issueId: string; stateName: string }> = [];
+  readonly labelUpdates: Array<{ issueId: string; addNames: string[]; removeNames: string[] }> = [];
+  private nextCommentNumber = 1;
+  async getIssue(issueId: string): Promise<LinearIssueSnapshot> {
+    const existing = this.issues.get(issueId);
+    if (existing) {
+      return existing;
+    }
+
+    const issue = {
+      id: issueId,
+      stateId: "start",
+      stateName: "Start",
+      workflowStates: DEFAULT_WORKFLOW_STATES,
+      labelIds: [],
+      labels: [],
+      teamLabels: [
+        { id: "label-working", name: "llm-working" },
+        { id: "label-awaiting", name: "llm-awaiting-handoff" },
+      ],
+    };
+    this.issues.set(issueId, issue);
+    return issue;
+  }
+
+  async setIssueState(issueId: string, stateName: string): Promise<LinearIssueSnapshot> {
+    const issue = await this.getIssue(issueId);
+    const state = issue.workflowStates.find((entry) => entry.name === stateName);
+    assert.ok(state);
+    const nextIssue = {
+      ...issue,
+      stateId: state.id,
+      stateName: state.name,
+    };
+    this.issues.set(issueId, nextIssue);
+    this.stateTransitions.push({ issueId, stateName });
+    return nextIssue;
+  }
+
+  async upsertIssueComment(params: { issueId: string; commentId?: string; body: string }) {
+    const id = params.commentId ?? `comment-${this.nextCommentNumber++}`;
+    const comment = { id, issueId: params.issueId, body: params.body };
+    this.comments.set(id, comment);
+    return { id, body: params.body };
+  }
+
+  async updateIssueLabels(params: { issueId: string; addNames?: string[]; removeNames?: string[] }): Promise<LinearIssueSnapshot> {
+    const issue = await this.getIssue(params.issueId);
+    const addNames = params.addNames ?? [];
+    const removeNames = params.removeNames ?? [];
+    this.labelUpdates.push({ issueId: params.issueId, addNames, removeNames });
+
+    const byName = new Map(issue.teamLabels.map((label) => [label.name, label]));
+    const nextLabels = issue.labels.filter((label) => !removeNames.includes(label.name));
+    for (const name of addNames) {
+      const label = byName.get(name);
+      if (label && !nextLabels.some((entry) => entry.id === label.id)) {
+        nextLabels.push(label);
+      }
+    }
+
+    const nextIssue = {
+      ...issue,
+      labels: nextLabels,
+      labelIds: nextLabels.map((label) => label.id),
+    };
+    this.issues.set(params.issueId, nextIssue);
+    return nextIssue;
+  }
+}
+
 function createConfig(baseDir: string): AppConfig {
   return {
     server: {
@@ -113,6 +203,8 @@ function createConfig(baseDir: string): AppConfig {
     },
     linear: {
       webhookSecret: "secret",
+      apiToken: "linear-token",
+      graphqlUrl: "https://linear.example/graphql",
     },
     runner: {
       gitBin: "git",
@@ -140,9 +232,16 @@ function createConfig(baseDir: string): AppConfig {
           development: "Start",
           review: "Review",
           deploy: "Deploy",
+          developmentActive: "Implementing",
+          reviewActive: "Reviewing",
+          deployActive: "Deploying",
           cleanup: "Cleanup",
           humanNeeded: "Human Needed",
           done: "Done",
+        },
+        workflowLabels: {
+          working: "llm-working",
+          awaitingHandoff: "llm-awaiting-handoff",
         },
         issueKeyPrefixes: ["USE"],
         linearTeamIds: ["USE"],
@@ -175,8 +274,64 @@ function createService(baseDir: string) {
   const db = new PatchRelayDatabase(config.database.path, true);
   db.runMigrations();
   const codex = new FakeCodexClient();
-  const service = new PatchRelayService(config, db, codex as never, pino({ enabled: false }));
-  return { config, db, codex, service, project: config.projects[0] as ProjectConfig };
+  const linear = new FakeLinearClient();
+  const service = new PatchRelayService(config, db, codex as never, linear, pino({ enabled: false }));
+  const workflowStates = DEFAULT_WORKFLOW_STATES;
+  const teamLabels = [
+    { id: "label-working", name: "llm-working" },
+    { id: "label-awaiting", name: "llm-awaiting-handoff" },
+  ];
+  linear.issues.set("issue_1", {
+    id: "issue_1",
+    identifier: "USE-25",
+    stateId: "start",
+    stateName: "Start",
+    workflowStates,
+    labelIds: [],
+    labels: [],
+    teamLabels,
+  });
+  linear.issues.set("issue_2", {
+    id: "issue_2",
+    identifier: "USE-26",
+    stateId: "start",
+    stateName: "Start",
+    workflowStates,
+    labelIds: [],
+    labels: [],
+    teamLabels,
+  });
+  linear.issues.set("issue_3", {
+    id: "issue_3",
+    identifier: "USE-27",
+    stateId: "start",
+    stateName: "Start",
+    workflowStates,
+    labelIds: [],
+    labels: [],
+    teamLabels,
+  });
+  linear.issues.set("issue_4", {
+    id: "issue_4",
+    identifier: "USE-28",
+    stateId: "start",
+    stateName: "Start",
+    workflowStates,
+    labelIds: [],
+    labels: [],
+    teamLabels,
+  });
+  linear.issues.set("issue_5", {
+    id: "issue_5",
+    identifier: "USE-29",
+    stateId: "start",
+    stateName: "Start",
+    workflowStates,
+    labelIds: [],
+    labels: [],
+    teamLabels,
+  });
+  return { config, db, codex, linear, service, project: config.projects[0] as ProjectConfig };
 }
 
 async function flushQueues(): Promise<void> {
@@ -204,7 +359,7 @@ async function waitFor(assertion: () => void, timeoutMs = 2000): Promise<void> {
 test("service keeps one workspace and forks later stages from the prior thread", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-service-"));
   try {
-    const { db, codex, service } = createService(baseDir);
+    const { db, codex, linear, service } = createService(baseDir);
     await service.start();
 
     const startEvent = db.insertWebhookEvent({
@@ -240,9 +395,19 @@ test("service keeps one workspace and forks later stages from the prior thread",
 
     const issueAfterStart = db.getTrackedIssue("usertold", "issue_1");
     assert.ok(issueAfterStart?.activeStageRunId);
+    assert.equal(linear.stateTransitions[0]?.stateName, "Implementing");
+    assert.deepEqual(linear.labelUpdates[0], {
+      issueId: "issue_1",
+      addNames: ["llm-working"],
+      removeNames: ["llm-awaiting-handoff"],
+    });
+    assert.match(linear.comments.get(issueAfterStart?.statusCommentId ?? "")?.body ?? "", /PatchRelay is running the development stage/);
     const startStageRun = db.getStageRun(issueAfterStart.activeStageRunId);
     assert.equal(startStageRun?.stage, "development");
     assert.ok(startStageRun?.threadId);
+    const workspacePath = db.getActiveWorkspaceForIssue("usertold", "issue_1")?.worktreePath;
+    assert.ok(workspacePath);
+    writeFileSync(path.join(workspacePath, "sentinel.txt"), "keep me\n", "utf8");
 
     db.recordDesiredStage({
       projectId: "usertold",
@@ -292,6 +457,7 @@ test("service keeps one workspace and forks later stages from the prior thread",
     const reviewStageRun = db.getStageRun(latestIssue.activeStageRunId!);
     assert.equal(reviewStageRun?.stage, "review");
     assert.equal(reviewStageRun?.parentThreadId, startStageRun?.threadId);
+    assert.equal(existsSync(path.join(workspacePath, "sentinel.txt")), true);
 
     service.stop();
   } finally {
@@ -302,7 +468,7 @@ test("service keeps one workspace and forks later stages from the prior thread",
 test("service builds a read-only report from completed thread history", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-report-"));
   try {
-    const { db, codex, service } = createService(baseDir);
+    const { db, codex, linear, service } = createService(baseDir);
     await service.start();
 
     db.recordDesiredStage({
@@ -366,6 +532,15 @@ test("service builds a read-only report from completed thread history", async ()
     assert.equal(report?.stages[0].report?.toolCalls[0].name, "apply_patch");
     const overview = await service.getIssueOverview("USE-26");
     assert.equal(overview?.latestStageRun?.status, "completed");
+    const refreshedIssue = db.getTrackedIssue("usertold", "issue_2");
+    assert.equal(db.getPipelineRun(refreshedIssue!.activePipelineRunId!)?.status, "paused");
+    assert.match(linear.comments.get(refreshedIssue?.statusCommentId ?? "")?.body ?? "", /awaiting-final-state/);
+    assert.equal(db.getTrackedIssue("usertold", "issue_2")?.lifecycleStatus, "paused");
+    assert.deepEqual(linear.labelUpdates.at(-1), {
+      issueId: "issue_2",
+      addNames: ["llm-awaiting-handoff"],
+      removeNames: ["llm-working"],
+    });
 
     service.stop();
   } finally {
@@ -430,6 +605,242 @@ test("service exposes raw stored events and live active status", async () => {
   }
 });
 
+test("service forwards new Linear comments into the active turn", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-comments-"));
+  try {
+    const { db, codex, service } = createService(baseDir);
+    await service.start();
+
+    db.recordDesiredStage({
+      projectId: "usertold",
+      linearIssueId: "issue_3",
+      issueKey: "USE-27",
+      title: "Inspect live status",
+      issueUrl: "https://linear.app/example/issue/USE-27",
+      currentLinearState: "Start",
+      desiredStage: "development",
+      desiredWebhookId: "delivery-start",
+      lastWebhookAt: new Date().toISOString(),
+    });
+
+    await service.processIssue({ projectId: "usertold", issueId: "issue_3" });
+    await flushQueues();
+
+    const issue = db.getTrackedIssue("usertold", "issue_3");
+    const stageRun = db.getStageRun(issue!.activeStageRunId!);
+    const event = db.insertWebhookEvent({
+      webhookId: "delivery-comment",
+      receivedAt: new Date().toISOString(),
+      eventType: "Comment.create",
+      issueId: "issue_3",
+      headersJson: "{}",
+      payloadJson: JSON.stringify({
+        action: "create",
+        type: "Comment",
+        createdAt: "2026-03-08T12:05:00.000Z",
+        webhookTimestamp: 1000,
+        data: {
+          id: "comment_1",
+          body: "Please also update the docs.",
+          user: { name: "Alex" },
+          issue: {
+            id: "issue_3",
+            identifier: "USE-27",
+            title: "Inspect live status",
+            team: { key: "USE" },
+            state: { name: "Implementing" },
+          },
+        },
+      }),
+      signatureValid: true,
+      dedupeStatus: "accepted",
+    });
+
+    await service.processWebhookEvent(event.id);
+    assert.equal(codex.steeredTurns.length, 1);
+    assert.equal(codex.steeredTurns[0]?.threadId, stageRun?.threadId);
+    assert.match(codex.steeredTurns[0]?.input ?? "", /Please also update the docs/);
+
+    service.stop();
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("service preserves comments that arrive before thread startup finishes", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-prelaunch-comments-"));
+  try {
+    const { config, db, codex, linear, service } = createService(baseDir);
+    await service.start();
+
+    db.upsertTrackedIssue({
+      projectId: "usertold",
+      linearIssueId: "issue_3",
+      issueKey: "USE-27",
+      title: "Inspect live status",
+      currentLinearState: "Implementing",
+      desiredStage: "development",
+      desiredWebhookId: "delivery-start",
+      lifecycleStatus: "queued",
+      lastWebhookAt: new Date().toISOString(),
+    });
+    const claim = db.claimStageRun({
+      projectId: "usertold",
+      linearIssueId: "issue_3",
+      stage: "development",
+      triggerWebhookId: "delivery-start",
+      branchName: "use/USE-27-inspect-live-status",
+      worktreePath: path.join(baseDir, "worktrees", "USE-27"),
+      workflowFile: config.projects[0].workflowFiles.development,
+      promptText: "Implement carefully.",
+    });
+    assert.ok(claim);
+
+    linear.issues.set("issue_3", {
+      ...linear.issues.get("issue_3")!,
+      stateId: "implementing",
+      stateName: "Implementing",
+    });
+
+    const event = db.insertWebhookEvent({
+      webhookId: "delivery-comment-prelaunch",
+      receivedAt: new Date().toISOString(),
+      eventType: "Comment.create",
+      issueId: "issue_3",
+      headersJson: "{}",
+      payloadJson: JSON.stringify({
+        action: "create",
+        type: "Comment",
+        createdAt: "2026-03-08T12:05:00.000Z",
+        webhookTimestamp: 1000,
+        data: {
+          id: "comment_prelaunch",
+          body: "Please handle the migration edge case too.",
+          user: { name: "Alex" },
+          issue: {
+            id: "issue_3",
+            identifier: "USE-27",
+            title: "Inspect live status",
+            team: { key: "USE" },
+            state: { name: "Implementing" },
+          },
+        },
+      }),
+      signatureValid: true,
+      dedupeStatus: "accepted",
+    });
+
+    await service.processWebhookEvent(event.id);
+    assert.equal(db.listPendingTurnInputs(claim.stageRun.id).length, 1);
+
+    db.updateStageRunThread({ stageRunId: claim.stageRun.id, threadId: "thread-prelaunch", turnId: "turn-prelaunch" });
+    codex.threads.set("thread-prelaunch", {
+      id: "thread-prelaunch",
+      preview: "PatchRelay stage",
+      cwd: claim.workspace.worktreePath,
+      status: "running",
+      turns: [{ id: "turn-prelaunch", status: "inProgress", items: [] }],
+    });
+    codex.emit("notification", {
+      method: "turn/started",
+      params: { threadId: "thread-prelaunch", turnId: "turn-prelaunch" },
+    });
+    await flushQueues();
+
+    assert.equal(codex.steeredTurns.length, 1);
+    assert.match(codex.steeredTurns[0]?.input ?? "", /migration edge case/);
+
+    service.stop();
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("service clears service-owned labels when the agent advances Linear state", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-label-cleanup-"));
+  try {
+    const { db, codex, linear, service } = createService(baseDir);
+    await service.start();
+
+    db.recordDesiredStage({
+      projectId: "usertold",
+      linearIssueId: "issue_2",
+      issueKey: "USE-26",
+      title: "Observe agent work",
+      issueUrl: "https://linear.app/example/issue/USE-26",
+      currentLinearState: "Start",
+      desiredStage: "development",
+      desiredWebhookId: "delivery-start",
+      lastWebhookAt: new Date().toISOString(),
+    });
+
+    await service.processIssue({ projectId: "usertold", issueId: "issue_2" });
+    await flushQueues();
+
+    linear.issues.set("issue_2", {
+      ...linear.issues.get("issue_2")!,
+      stateId: "review",
+      stateName: "Review",
+      labels: [{ id: "label-working", name: "llm-working" }],
+      labelIds: ["label-working"],
+    });
+
+    const issue = db.getTrackedIssue("usertold", "issue_2");
+    const stageRun = db.getStageRun(issue!.activeStageRunId!);
+    codex.completeThread(stageRun!.threadId!, [{ type: "agentMessage", id: "assistant-1", text: "Ready for review." }]);
+    await flushQueues();
+
+    assert.deepEqual(linear.labelUpdates.at(-1), {
+      issueId: "issue_2",
+      addNames: [],
+      removeNames: ["llm-working", "llm-awaiting-handoff"],
+    });
+
+    service.stop();
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("service rolls Linear back to Human Needed when launch fails", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-launch-failure-"));
+  try {
+    const { db, codex, linear, service } = createService(baseDir);
+    codex.startThread = async () => {
+      throw new Error("codex unavailable");
+    };
+    await service.start();
+
+    db.recordDesiredStage({
+      projectId: "usertold",
+      linearIssueId: "issue_2",
+      issueKey: "USE-26",
+      title: "Observe agent work",
+      issueUrl: "https://linear.app/example/issue/USE-26",
+      currentLinearState: "Start",
+      desiredStage: "development",
+      desiredWebhookId: "delivery-start",
+      lastWebhookAt: new Date().toISOString(),
+    });
+
+    await assert.rejects(() => service.processIssue({ projectId: "usertold", issueId: "issue_2" }), /codex unavailable/);
+
+    assert.equal(linear.issues.get("issue_2")?.stateName, "Human Needed");
+    assert.deepEqual(linear.labelUpdates.at(-1), {
+      issueId: "issue_2",
+      addNames: [],
+      removeNames: ["llm-working", "llm-awaiting-handoff"],
+    });
+    const issue = db.getTrackedIssue("usertold", "issue_2");
+    assert.equal(issue?.lifecycleStatus, "failed");
+    assert.match(linear.comments.get(issue?.statusCommentId ?? "")?.body ?? "", /launch-failed/);
+
+    service.stop();
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("service startup reconciles finished and missing active threads", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-"));
   try {
@@ -438,6 +849,17 @@ test("service startup reconciles finished and missing active threads", async () 
     const db = new PatchRelayDatabase(config.database.path, true);
     db.runMigrations();
     const codex = new FakeCodexClient();
+    const linear = new FakeLinearClient();
+    const workflowStates = [
+      { id: "start", name: "Start" },
+      { id: "implementing", name: "Implementing" },
+      { id: "review", name: "Review" },
+      { id: "reviewing", name: "Reviewing" },
+      { id: "deploy", name: "Deploy" },
+      { id: "deploying", name: "Deploying" },
+    ];
+    linear.issues.set("issue_4", { id: "issue_4", identifier: "USE-28", stateId: "implementing", stateName: "Implementing", workflowStates });
+    linear.issues.set("issue_5", { id: "issue_5", identifier: "USE-29", stateId: "implementing", stateName: "Implementing", workflowStates });
 
     db.upsertTrackedIssue({
       projectId: "usertold",
@@ -495,7 +917,7 @@ test("service startup reconciles finished and missing active threads", async () 
     db.updateStageRunThread({ stageRunId: missingClaim!.stageRun.id, threadId: "thread-missing", turnId: "turn-2" });
     codex.removeThread("thread-missing");
 
-    const service = new PatchRelayService(config, db, codex as never, pino({ enabled: false }));
+    const service = new PatchRelayService(config, db, codex as never, linear, pino({ enabled: false }));
     await service.start();
     await flushQueues();
 
@@ -537,7 +959,8 @@ test("service ignores webhook events when project routing is ambiguous", async (
     const db = new PatchRelayDatabase(config.database.path, true);
     db.runMigrations();
     const codex = new FakeCodexClient();
-    const service = new PatchRelayService(config, db, codex as never, pino({ enabled: false }));
+    const linear = new FakeLinearClient();
+    const service = new PatchRelayService(config, db, codex as never, linear, pino({ enabled: false }));
     await service.start();
 
     const event = db.insertWebhookEvent({

@@ -3,6 +3,7 @@ import type {
   IssueLifecycleStatus,
   PipelineRunRecord,
   PipelineStatus,
+  QueuedTurnInputRecord,
   StageRunRecord,
   StageRunStatus,
   ThreadEventRecord,
@@ -45,6 +46,7 @@ CREATE TABLE IF NOT EXISTS tracked_issues (
   active_pipeline_run_id INTEGER,
   active_stage_run_id INTEGER,
   latest_thread_id TEXT,
+  status_comment_id TEXT,
   lifecycle_status TEXT NOT NULL,
   last_webhook_at TEXT,
   updated_at TEXT NOT NULL,
@@ -102,6 +104,17 @@ CREATE TABLE IF NOT EXISTS thread_events (
   turn_id TEXT,
   method TEXT NOT NULL,
   event_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS queued_turn_inputs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  stage_run_id INTEGER NOT NULL,
+  thread_id TEXT,
+  turn_id TEXT,
+  source TEXT NOT NULL,
+  body TEXT NOT NULL,
+  delivered_at TEXT,
   created_at TEXT NOT NULL
 );
 `;
@@ -193,6 +206,7 @@ export class PatchRelayDatabase {
     activePipelineRunId?: number | null;
     activeStageRunId?: number | null;
     latestThreadId?: string | null;
+    statusCommentId?: string | null;
     lifecycleStatus: IssueLifecycleStatus;
     lastWebhookAt?: string;
   }): TrackedIssueRecord {
@@ -202,8 +216,9 @@ export class PatchRelayDatabase {
         `
         INSERT INTO tracked_issues (
           project_id, linear_issue_id, issue_key, title, issue_url, current_linear_state, desired_stage, desired_webhook_id,
-          active_workspace_id, active_pipeline_run_id, active_stage_run_id, latest_thread_id, lifecycle_status, last_webhook_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          active_workspace_id, active_pipeline_run_id, active_stage_run_id, latest_thread_id, status_comment_id,
+          lifecycle_status, last_webhook_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(project_id, linear_issue_id) DO UPDATE SET
           issue_key = COALESCE(excluded.issue_key, tracked_issues.issue_key),
           title = COALESCE(excluded.title, tracked_issues.title),
@@ -215,6 +230,7 @@ export class PatchRelayDatabase {
           active_pipeline_run_id = COALESCE(excluded.active_pipeline_run_id, tracked_issues.active_pipeline_run_id),
           active_stage_run_id = COALESCE(excluded.active_stage_run_id, tracked_issues.active_stage_run_id),
           latest_thread_id = COALESCE(excluded.latest_thread_id, tracked_issues.latest_thread_id),
+          status_comment_id = COALESCE(excluded.status_comment_id, tracked_issues.status_comment_id),
           lifecycle_status = excluded.lifecycle_status,
           last_webhook_at = COALESCE(excluded.last_webhook_at, tracked_issues.last_webhook_at),
           updated_at = excluded.updated_at
@@ -233,6 +249,7 @@ export class PatchRelayDatabase {
         params.activePipelineRunId ?? null,
         params.activeStageRunId ?? null,
         params.latestThreadId ?? null,
+        params.statusCommentId ?? null,
         params.lifecycleStatus,
         params.lastWebhookAt ?? null,
         now,
@@ -287,6 +304,7 @@ export class PatchRelayDatabase {
       activePipelineRunId: existing?.activePipelineRunId ?? null,
       activeStageRunId: existing?.activeStageRunId ?? null,
       latestThreadId: existing?.latestThreadId ?? null,
+      statusCommentId: existing?.statusCommentId ?? null,
       lifecycleStatus,
       lastWebhookAt: params.lastWebhookAt,
     });
@@ -541,6 +559,10 @@ export class PatchRelayDatabase {
     this.connection.prepare("UPDATE pipeline_runs SET status = 'completed', ended_at = ? WHERE id = ?").run(isoNow(), pipelineRunId);
   }
 
+  setPipelineStatus(pipelineRunId: number, status: PipelineStatus): void {
+    this.connection.prepare("UPDATE pipeline_runs SET status = ? WHERE id = ?").run(status, pipelineRunId);
+  }
+
   setIssueDesiredStage(projectId: string, linearIssueId: string, desiredStage?: WorkflowStage, desiredWebhookId?: string): void {
     this.connection
       .prepare(
@@ -551,6 +573,30 @@ export class PatchRelayDatabase {
         `,
       )
       .run(desiredStage ?? null, desiredWebhookId ?? null, desiredStage ? "queued" : "idle", isoNow(), projectId, linearIssueId);
+  }
+
+  setIssueLifecycleStatus(projectId: string, linearIssueId: string, lifecycleStatus: IssueLifecycleStatus): void {
+    this.connection
+      .prepare(
+        `
+        UPDATE tracked_issues
+        SET lifecycle_status = ?, updated_at = ?
+        WHERE project_id = ? AND linear_issue_id = ?
+        `,
+      )
+      .run(lifecycleStatus, isoNow(), projectId, linearIssueId);
+  }
+
+  setIssueStatusComment(projectId: string, linearIssueId: string, statusCommentId: string): void {
+    this.connection
+      .prepare(
+        `
+        UPDATE tracked_issues
+        SET status_comment_id = ?, updated_at = ?
+        WHERE project_id = ? AND linear_issue_id = ?
+        `,
+      )
+      .run(statusCommentId, isoNow(), projectId, linearIssueId);
   }
 
   saveThreadEvent(params: { stageRunId: number; threadId: string; turnId?: string; method: string; eventJson: string }): number {
@@ -570,6 +616,33 @@ export class PatchRelayDatabase {
       .prepare("SELECT * FROM thread_events WHERE stage_run_id = ? ORDER BY id")
       .all(stageRunId) as Record<string, unknown>[];
     return rows.map((row) => this.mapThreadEvent(row));
+  }
+
+  enqueueTurnInput(params: { stageRunId: number; threadId?: string; turnId?: string; source: string; body: string }): number {
+    const result = this.connection
+      .prepare(
+        `
+        INSERT INTO queued_turn_inputs (stage_run_id, thread_id, turn_id, source, body, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        `,
+      )
+      .run(params.stageRunId, params.threadId ?? null, params.turnId ?? null, params.source, params.body, isoNow());
+    return Number(result.lastInsertRowid);
+  }
+
+  listPendingTurnInputs(stageRunId: number): QueuedTurnInputRecord[] {
+    const rows = this.connection
+      .prepare("SELECT * FROM queued_turn_inputs WHERE stage_run_id = ? AND delivered_at IS NULL ORDER BY id")
+      .all(stageRunId) as Record<string, unknown>[];
+    return rows.map((row) => this.mapQueuedTurnInput(row));
+  }
+
+  markTurnInputDelivered(id: number): void {
+    this.connection.prepare("UPDATE queued_turn_inputs SET delivered_at = ? WHERE id = ?").run(isoNow(), id);
+  }
+
+  setPendingTurnInputRouting(id: number, threadId: string, turnId: string): void {
+    this.connection.prepare("UPDATE queued_turn_inputs SET thread_id = ?, turn_id = ? WHERE id = ?").run(threadId, turnId, id);
   }
 
   getLatestStageRunForIssue(projectId: string, linearIssueId: string): StageRunRecord | undefined {
@@ -633,6 +706,7 @@ export class PatchRelayDatabase {
       ...(row.active_pipeline_run_id === null ? {} : { activePipelineRunId: Number(row.active_pipeline_run_id) }),
       ...(row.active_stage_run_id === null ? {} : { activeStageRunId: Number(row.active_stage_run_id) }),
       ...(row.latest_thread_id === null ? {} : { latestThreadId: String(row.latest_thread_id) }),
+      ...(row.status_comment_id === null ? {} : { statusCommentId: String(row.status_comment_id) }),
       lifecycleStatus: row.lifecycle_status as IssueLifecycleStatus,
       ...(row.last_webhook_at === null ? {} : { lastWebhookAt: String(row.last_webhook_at) }),
       updatedAt: String(row.updated_at),
@@ -697,6 +771,19 @@ export class PatchRelayDatabase {
       ...(row.turn_id === null ? {} : { turnId: String(row.turn_id) }),
       method: String(row.method),
       eventJson: String(row.event_json),
+      createdAt: String(row.created_at),
+    };
+  }
+
+  private mapQueuedTurnInput(row: Record<string, unknown>): QueuedTurnInputRecord {
+    return {
+      id: Number(row.id),
+      stageRunId: Number(row.stage_run_id),
+      ...(row.thread_id === null ? {} : { threadId: String(row.thread_id) }),
+      ...(row.turn_id === null ? {} : { turnId: String(row.turn_id) }),
+      source: String(row.source),
+      body: String(row.body),
+      ...(row.delivered_at === null ? {} : { deliveredAt: String(row.delivered_at) }),
       createdAt: String(row.created_at),
     };
   }

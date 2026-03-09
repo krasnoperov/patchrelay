@@ -20,6 +20,8 @@ database:
 
 linear:
   webhook_secret_env: LINEAR_WEBHOOK_SECRET
+  api_token_env: LINEAR_API_TOKEN
+  graphql_url: https://api.linear.app/graphql
 
 runner:
   git_bin: git
@@ -47,9 +49,15 @@ projects:
       development: Start
       review: Review
       deploy: Deploy
+      development_active: Implementing
+      review_active: Reviewing
+      deploy_active: Deploying
       cleanup: Cleanup
       human_needed: Human Needed
       done: Done
+    workflow_labels:
+      working: llm-working
+      awaiting_handoff: llm-awaiting-handoff
     issue_key_prefixes:
       - USE
     linear_team_ids:

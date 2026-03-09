@@ -27,6 +27,7 @@ function createConfig(): AppConfig {
     },
     linear: {
       webhookSecret: "secret",
+      graphqlUrl: "https://linear.example/graphql",
     },
     runner: {
       gitBin: "git",
@@ -53,6 +54,9 @@ function createConfig(): AppConfig {
           development: "Start",
           review: "Review",
           deploy: "Deploy",
+          developmentActive: "Implementing",
+          reviewActive: "Reviewing",
+          deployActive: "Deploying",
           cleanup: "Cleanup",
         },
         issueKeyPrefixes: ["ALPHA"],
@@ -75,6 +79,9 @@ function createConfig(): AppConfig {
           development: "Start",
           review: "Review",
           deploy: "Deploy",
+          developmentActive: "Implementing",
+          reviewActive: "Reviewing",
+          deployActive: "Deploying",
           cleanup: "Cleanup",
         },
         issueKeyPrefixes: ["USE"],

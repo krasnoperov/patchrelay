@@ -23,7 +23,11 @@ export interface WorkflowStatusConfig {
   development: string;
   review: string;
   deploy: string;
+  developmentActive: string;
+  reviewActive: string;
+  deployActive: string;
   cleanup?: string;
+  cleanupActive?: string;
   humanNeeded?: string;
   done?: string;
 }
@@ -41,6 +45,10 @@ export interface ProjectConfig {
   worktreeRoot: string;
   workflowFiles: ProjectWorkflowFiles;
   workflowStatuses: WorkflowStatusConfig;
+  workflowLabels?: {
+    working?: string;
+    awaitingHandoff?: string;
+  };
   issueKeyPrefixes: string[];
   linearTeamIds: string[];
   allowLabels: string[];
@@ -86,6 +94,8 @@ export interface AppConfig {
   };
   linear: {
     webhookSecret: string;
+    apiToken?: string;
+    graphqlUrl: string;
   };
   runner: {
     gitBin: string;
@@ -117,6 +127,12 @@ export interface IssueMetadata {
   labelNames: string[];
 }
 
+export interface CommentMetadata {
+  id: string;
+  body?: string;
+  userName?: string;
+}
+
 export interface NormalizedEvent {
   webhookId: string;
   entityType: LinearEntityType;
@@ -124,6 +140,7 @@ export interface NormalizedEvent {
   triggerEvent: TriggerEvent;
   eventType: string;
   issue: IssueMetadata;
+  comment?: CommentMetadata;
   payload: LinearWebhookPayload;
 }
 
@@ -155,6 +172,7 @@ export interface TrackedIssueRecord {
   activePipelineRunId?: number;
   activeStageRunId?: number;
   latestThreadId?: string;
+  statusCommentId?: string;
   lifecycleStatus: IssueLifecycleStatus;
   lastWebhookAt?: string;
   updatedAt: string;
@@ -211,6 +229,17 @@ export interface ThreadEventRecord {
   turnId?: string;
   method: string;
   eventJson: string;
+  createdAt: string;
+}
+
+export interface QueuedTurnInputRecord {
+  id: number;
+  stageRunId: number;
+  threadId?: string;
+  turnId?: string;
+  source: string;
+  body: string;
+  deliveredAt?: string;
   createdAt: string;
 }
 
@@ -287,4 +316,41 @@ export interface StageReport {
     durationMs?: number | null;
   }>;
   eventCounts: Record<string, number>;
+}
+
+export interface LinearIssueSnapshot {
+  id: string;
+  identifier?: string;
+  title?: string;
+  url?: string;
+  stateId?: string;
+  stateName?: string;
+  teamId?: string;
+  teamKey?: string;
+  workflowStates: Array<{
+    id: string;
+    name: string;
+    type?: string;
+  }>;
+  labelIds: string[];
+  labels: Array<{
+    id: string;
+    name: string;
+  }>;
+  teamLabels: Array<{
+    id: string;
+    name: string;
+  }>;
+}
+
+export interface LinearCommentUpsertResult {
+  id: string;
+  body: string;
+}
+
+export interface LinearClient {
+  getIssue(issueId: string): Promise<LinearIssueSnapshot>;
+  setIssueState(issueId: string, stateName: string): Promise<LinearIssueSnapshot>;
+  upsertIssueComment(params: { issueId: string; commentId?: string; body: string }): Promise<LinearCommentUpsertResult>;
+  updateIssueLabels(params: { issueId: string; addNames?: string[]; removeNames?: string[] }): Promise<LinearIssueSnapshot>;
 }

@@ -124,6 +124,17 @@ rl.on("line", (line) => {
     return;
   }
 
+  if (message.method === "turn/steer") {
+    send({
+      jsonrpc: "2.0",
+      id: message.id,
+      result: {
+        ok: true,
+      },
+    });
+    return;
+  }
+
   if (message.method === "thread/read") {
     if (scenario === "error-response") {
       send({
