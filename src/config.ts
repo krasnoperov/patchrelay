@@ -102,7 +102,10 @@ function expandEnv(value: unknown): unknown {
   return value;
 }
 
-export function loadConfig(configPath = process.env.PATCHRELAY_CONFIG ?? path.resolve("config/patchrelay.yaml")): AppConfig {
+export function loadConfig(
+  configPath = process.env.PATCHRELAY_CONFIG ?? path.resolve("config/patchrelay.yaml"),
+  options?: { requireLinearSecret?: boolean },
+): AppConfig {
   const requestedPath = ensureAbsolutePath(configPath);
   const fallbackPath = ensureAbsolutePath(path.resolve("config/patchrelay.example.yaml"));
   const resolvedPath = existsSync(requestedPath) ? requestedPath : fallbackPath;
@@ -114,8 +117,9 @@ export function loadConfig(configPath = process.env.PATCHRELAY_CONFIG ?? path.re
   const parsedYaml = YAML.parse(raw);
   const parsed = configSchema.parse(expandEnv(parsedYaml));
 
+  const requireLinearSecret = options?.requireLinearSecret ?? true;
   const webhookSecret = process.env[parsed.linear.webhook_secret_env];
-  if (!webhookSecret) {
+  if (requireLinearSecret && !webhookSecret) {
     throw new Error(`Missing env var ${parsed.linear.webhook_secret_env}`);
   }
 
@@ -144,7 +148,7 @@ export function loadConfig(configPath = process.env.PATCHRELAY_CONFIG ?? path.re
       wal: parsed.database.wal,
     },
     linear: {
-      webhookSecret,
+      webhookSecret: webhookSecret ?? "",
     },
     runner: {
       gitBin: parsed.runner.git_bin,

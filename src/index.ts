@@ -1,5 +1,8 @@
+#!/usr/bin/env node
+
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { runCli } from "./cli/index.js";
 import { CodexAppServerClient } from "./codex-app-server.js";
 import { loadConfig } from "./config.js";
 import { PatchRelayDatabase } from "./db.js";
@@ -9,6 +12,12 @@ import { PatchRelayService } from "./service.js";
 import { ensureDir } from "./utils.js";
 
 async function main(): Promise<void> {
+  const cliExitCode = await runCli(process.argv.slice(2));
+  if (cliExitCode !== -1) {
+    process.exitCode = cliExitCode;
+    return;
+  }
+
   const config = loadConfig();
   await ensureDir(dirname(config.database.path));
   await ensureDir(dirname(config.logging.filePath));

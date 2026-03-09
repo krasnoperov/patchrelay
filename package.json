@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "bin": {
+    "patchrelay": "dist/index.js"
+  },
   "description": "Local control plane that turns selected Linear issues into controlled coding-agent sessions.",
   "engines": {
     "node": ">=24.0.0"
