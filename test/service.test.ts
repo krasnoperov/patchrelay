@@ -134,12 +134,8 @@ class FakeLaunchRunner {
     return plan;
   }
 
-  async listLiveSessions(): Promise<string[]> {
-    return [];
-  }
-
-  async readExitCode(): Promise<number | undefined> {
-    return 0;
+  async getSessionState() {
+    return { kind: "missing" } as const;
   }
 
   resumeSessionMonitoring(): void {}
@@ -321,6 +317,30 @@ test("service startup reconciles stale active runs and launches pending desired 
     assert.equal(launcher.launches.map((entry) => entry.stage).join(","), "review");
     assert.equal(reconciled?.activeStage, "review");
     service.stop();
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("buildLaunchPlan uses distinct session names for different runs of the same issue and stage", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-session-name-"));
+  try {
+    const config = createConfig(baseDir);
+    const project = config.projects[0];
+    const issue = {
+      id: "issue_3",
+      identifier: "ENG-3",
+      title: "Unique session names",
+      url: "https://linear.app/example/issue/ENG-3",
+      labelNames: [],
+    };
+
+    const first = buildLaunchPlan(config, project, issue, "review", "101");
+    const second = buildLaunchPlan(config, project, issue, "review", "102");
+
+    assert.notEqual(first.sessionName, second.sessionName);
+    assert.match(first.sessionName, /-101$/);
+    assert.match(second.sessionName, /-102$/);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

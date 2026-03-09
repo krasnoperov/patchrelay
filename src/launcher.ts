@@ -1,6 +1,5 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import type { IPty } from "node-pty";
 import type { Logger } from "pino";
 import { PatchRelayDatabase } from "./db.js";
@@ -20,6 +19,11 @@ import { ZmxSessionManager } from "./zmx.js";
 const LEASE_DURATION_MS = 5 * 60 * 1000;
 const LEASE_HEARTBEAT_MS = 30 * 1000;
 
+export type SessionState =
+  | { kind: "running" }
+  | { kind: "completed"; exitCode: number }
+  | { kind: "missing" };
+
 function slugify(value: string): string {
   return value
     .toLowerCase()
@@ -32,14 +36,19 @@ function sanitizePathSegment(value: string): string {
   return value.replace(/[^a-zA-Z0-9._-]+/g, "-");
 }
 
-function buildSessionName(config: AppConfig, issue: IssueMetadata, workflowKind: WorkflowKind): string {
+function buildSessionName(
+  config: AppConfig,
+  issue: IssueMetadata,
+  workflowKind: WorkflowKind,
+  runToken?: string,
+): string {
   const base = sanitizePathSegment((issue.identifier ?? issue.id).toLowerCase());
   const suffix = workflowKind === "implementation" ? "" : workflowKind === "review" ? "r" : "d";
   const prefixedBase = config.runner.zmxSessionPrefix
     ? `${sanitizePathSegment(config.runner.zmxSessionPrefix)}-${base}`
     : base;
 
-  return `${prefixedBase}${suffix}`;
+  return runToken ? `${prefixedBase}${suffix}-${sanitizePathSegment(runToken)}` : `${prefixedBase}${suffix}`;
 }
 
 function buildPrompt(issue: IssueMetadata, workflowKind: WorkflowKind, workflowFile: string): string {
@@ -52,6 +61,7 @@ export function buildLaunchPlan(
   project: ProjectConfig,
   issue: IssueMetadata,
   workflowKind: WorkflowKind,
+  runToken?: string,
 ): LaunchPlan {
   const issueRef = sanitizePathSegment(issue.identifier ?? issue.id);
   const slug = issue.title ? slugify(issue.title) : "";
@@ -61,7 +71,7 @@ export function buildLaunchPlan(
   return {
     branchName: `${project.branchPrefix}/${branchSuffix}`,
     worktreePath: path.join(project.worktreeRoot, issueRef),
-    sessionName: buildSessionName(config, issue, workflowKind),
+    sessionName: buildSessionName(config, issue, workflowKind, runToken),
     prompt: buildPrompt(issue, workflowKind, workflowFile),
     workflowKind,
     workflowFile,
@@ -139,6 +149,7 @@ export class LaunchRunner {
     }
 
     const { runId } = claim;
+    const runPlan = buildLaunchPlan(this.config, params.project, issueMetadata, params.workflowKind, `${runId}`);
     let attachClient: IPty | undefined;
 
     this.logger.info(
@@ -147,35 +158,35 @@ export class LaunchRunner {
         issueId: params.issue.linearIssueId,
         issueKey: params.issue.linearIssueKey,
         issueTitle: params.issue.title,
-        workflowKind: plan.workflowKind,
-        workflowFile: plan.workflowFile,
-        branchName: plan.branchName,
-        worktreePath: plan.worktreePath,
-        sessionName: plan.sessionName,
+        workflowKind: runPlan.workflowKind,
+        workflowFile: runPlan.workflowFile,
+        branchName: runPlan.branchName,
+        worktreePath: runPlan.worktreePath,
+        sessionName: runPlan.sessionName,
         runId,
       },
       "Prepared launch plan",
     );
 
     try {
-      if (!existsSync(plan.workflowFile)) {
-        throw new Error(`Workflow file not found: ${plan.workflowFile}`);
+      if (!existsSync(runPlan.workflowFile)) {
+        throw new Error(`Workflow file not found: ${runPlan.workflowFile}`);
       }
 
       await ensureDir(params.project.worktreeRoot);
-      await this.ensureWorktree(params.project.repoPath, plan.worktreePath, plan.branchName);
+      await this.ensureWorktree(params.project.repoPath, runPlan.worktreePath, runPlan.branchName);
 
       const command = interpolateTemplateArray(this.config.runner.launch.args, {
         repoPath: params.project.repoPath,
-        worktreePath: plan.worktreePath,
-        workflowFile: plan.workflowFile,
+        worktreePath: runPlan.worktreePath,
+        workflowFile: runPlan.workflowFile,
         projectId: params.project.id,
         issueId: params.issue.linearIssueId,
         issueKey: params.issue.linearIssueKey ?? "",
         issueTitle: params.issue.title ?? "",
         issueUrl: params.issue.issueUrl ?? "",
-        branchName: plan.branchName,
-        prompt: plan.prompt,
+        branchName: runPlan.branchName,
+        prompt: runPlan.prompt,
       });
 
       this.logger.info(
@@ -183,8 +194,8 @@ export class LaunchRunner {
           projectId: params.project.id,
           issueId: params.issue.linearIssueId,
           runId,
-          cwd: plan.worktreePath,
-          workflowKind: plan.workflowKind,
+          cwd: runPlan.worktreePath,
+          workflowKind: runPlan.workflowKind,
           command: {
             shell: this.config.runner.launch.shell,
             args: command,
@@ -193,19 +204,19 @@ export class LaunchRunner {
         "Launching zmx session command",
       );
 
-      attachClient = this.zmx.attach(plan.sessionName, this.config.runner.launch.shell, command, {
-        cwd: plan.worktreePath,
+      attachClient = this.zmx.attach(runPlan.sessionName, this.config.runner.launch.shell, command, {
+        cwd: runPlan.worktreePath,
       });
-      await this.waitForAttachSession(plan.sessionName, attachClient, 10_000);
+      await this.waitForAttachSession(runPlan.sessionName, attachClient, 10_000);
 
       const sessionId = this.db.createSession({
         projectId: params.project.id,
         linearIssueId: params.issue.linearIssueId,
         runId,
-        stage: plan.stage,
-        zmxSessionName: plan.sessionName,
-        branchName: plan.branchName,
-        worktreePath: plan.worktreePath,
+        stage: runPlan.stage,
+        zmxSessionName: runPlan.sessionName,
+        branchName: runPlan.branchName,
+        worktreePath: runPlan.worktreePath,
       });
       this.attachedClients.set(sessionId, attachClient);
       attachClient = undefined;
@@ -227,7 +238,7 @@ export class LaunchRunner {
           id: runId,
           projectId: params.project.id,
           linearIssueId: params.issue.linearIssueId,
-          stage: plan.stage,
+          stage: runPlan.stage,
           status: "running",
           startedAt: new Date().toISOString(),
           triggerWebhookId: params.triggerWebhookId,
@@ -239,15 +250,15 @@ export class LaunchRunner {
           linearIssueId: params.issue.linearIssueId,
           runId,
           stage: plan.stage,
-          zmxSessionName: plan.sessionName,
-          branchName: plan.branchName,
-          worktreePath: plan.worktreePath,
+          zmxSessionName: runPlan.sessionName,
+          branchName: runPlan.branchName,
+          worktreePath: runPlan.worktreePath,
           startedAt: new Date().toISOString(),
         },
-        plan,
+        plan: runPlan,
       });
 
-      return plan;
+      return runPlan;
     } catch (error) {
       attachClient?.kill();
       this.db.finishIssueRun({
@@ -272,7 +283,7 @@ export class LaunchRunner {
     session: SessionRecord;
   }): void {
     const issueMetadata = toIssueMetadata(params.issue);
-    const plan = buildLaunchPlan(this.config, params.project, issueMetadata, params.run.stage);
+      const plan = buildLaunchPlan(this.config, params.project, issueMetadata, params.run.stage, `${params.run.id}`);
     this.db.refreshIssueLease({
       projectId: params.project.id,
       linearIssueId: params.issue.linearIssueId,
@@ -295,17 +306,19 @@ export class LaunchRunner {
     });
   }
 
-  async listLiveSessions(): Promise<string[]> {
-    return this.zmx.listSessions({ timeoutMs: 10_000 });
-  }
-
-  async readExitCode(sessionName: string): Promise<number | undefined> {
+  async getSessionState(sessionName: string): Promise<SessionState> {
     try {
       const history = await this.zmx.history(sessionName, { timeoutMs: 10_000 });
-      return parseExitCodeFromHistory(history);
+      const exitCode = parseExitCodeFromHistory(history);
+      if (exitCode !== undefined) {
+        return { kind: "completed", exitCode };
+      }
     } catch {
-      return undefined;
+      // Fall through to live session discovery below.
     }
+
+    const sessions = await this.zmx.listSessions({ timeoutMs: 10_000 }).catch((): string[] => []);
+    return sessions.includes(sessionName) ? { kind: "running" } : { kind: "missing" };
   }
 
   private monitorSession(params: {
@@ -324,15 +337,71 @@ export class LaunchRunner {
     const child = this.zmx.spawnWait(params.plan.sessionName, {
       cwd: params.plan.worktreePath,
     });
-    const heartbeat = setInterval(() => {
-      this.db.refreshIssueLease({
+    let finalized = false;
+    let polling = false;
+    const finalize = (exitCode: number): void => {
+      if (finalized) {
+        return;
+      }
+      finalized = true;
+      clearInterval(heartbeat);
+      this.monitoredSessions.delete(params.session.id);
+      this.attachedClients.delete(params.session.id);
+      attachClient?.kill();
+      child.kill();
+      this.logger.info(
+        {
+          projectId: params.project.id,
+          issueId: params.issue.id,
+          sessionName: params.plan.sessionName,
+          exitCode,
+        },
+        "Launch session exited",
+      );
+      this.finishRunLifecycle({
         projectId: params.project.id,
         linearIssueId: params.issue.id,
         runId: params.run.id,
-        leaseOwner: this.leaseOwner,
-        leaseDurationMs: LEASE_DURATION_MS,
-        state: "running",
+        sessionId: params.session.id,
+        exitCode,
       });
+    };
+    const heartbeat = setInterval(() => {
+      if (polling || finalized) {
+        return;
+      }
+
+      polling = true;
+      void this.getSessionState(params.plan.sessionName)
+        .then((state) => {
+          if (state.kind === "running") {
+            this.db.refreshIssueLease({
+              projectId: params.project.id,
+              linearIssueId: params.issue.id,
+              runId: params.run.id,
+              leaseOwner: this.leaseOwner,
+              leaseDurationMs: LEASE_DURATION_MS,
+              state: "running",
+            });
+            return;
+          }
+
+          finalize(state.kind === "completed" ? state.exitCode : 1);
+        })
+        .catch((error) => {
+          this.logger.warn(
+            {
+              error,
+              projectId: params.project.id,
+              issueId: params.issue.id,
+              sessionName: params.plan.sessionName,
+            },
+            "Failed to poll session state for heartbeat",
+          );
+        })
+        .finally(() => {
+          polling = false;
+        });
     }, LEASE_HEARTBEAT_MS);
 
     child.stdout.on("data", (chunk) => {
@@ -360,27 +429,7 @@ export class LaunchRunner {
     });
 
     child.on("close", (code) => {
-      clearInterval(heartbeat);
-      const exitCode = code ?? 1;
-      this.monitoredSessions.delete(params.session.id);
-      this.attachedClients.delete(params.session.id);
-      attachClient?.kill();
-      this.logger.info(
-        {
-          projectId: params.project.id,
-          issueId: params.issue.id,
-          sessionName: params.plan.sessionName,
-          exitCode,
-        },
-        "Launch session exited",
-      );
-      this.finishRunLifecycle({
-        projectId: params.project.id,
-        linearIssueId: params.issue.id,
-        runId: params.run.id,
-        sessionId: params.session.id,
-        exitCode,
-      });
+      finalize(code ?? 1);
     });
   }
 

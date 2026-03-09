@@ -407,11 +407,6 @@ export class PatchRelayService {
       return;
     }
 
-    const liveSessions = new Set(await this.launcher.listLiveSessions().catch((error) => {
-      this.logger.error({ error }, "Failed to list zmx sessions during reconciliation");
-      return [];
-    }));
-
     for (const issue of activeIssues) {
       const project = this.config.projects.find((candidate) => candidate.id === issue.projectId);
       if (!project) {
@@ -462,7 +457,20 @@ export class PatchRelayService {
         continue;
       }
 
-      if (liveSessions.has(session.zmxSessionName)) {
+      const sessionState = await this.launcher.getSessionState(session.zmxSessionName).catch((error) => {
+        this.logger.error(
+          {
+            error,
+            projectId: issue.projectId,
+            issueId: issue.linearIssueId,
+            sessionName: session.zmxSessionName,
+          },
+          "Failed to inspect session state during reconciliation",
+        );
+        return { kind: "missing" } as const;
+      });
+
+      if (sessionState.kind === "running") {
         this.launcher.resumeSessionMonitoring({
           project,
           issue,
@@ -472,7 +480,7 @@ export class PatchRelayService {
         continue;
       }
 
-      const exitCode = (await this.launcher.readExitCode(session.zmxSessionName)) ?? 1;
+      const exitCode = sessionState.kind === "completed" ? sessionState.exitCode : 1;
       this.db.finishSession(session.id, exitCode);
       this.db.finishIssueRun({
         runId: run.id,
