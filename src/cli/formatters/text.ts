@@ -102,9 +102,9 @@ export function formatWorktree(result: WorktreeResult, cdOnly: boolean): string 
 }
 
 export function formatOpen(result: OpenResult): string {
-  const commands = [`cd ${result.workspace.worktreePath}`, "git branch --show-current", "codex"];
+  const commands = [`cd ${result.workspace.worktreePath}`, "git branch --show-current", "codex --dangerously-skip-permissions"];
   if (result.resumeThreadId) {
-    commands.push(`codex resume ${result.resumeThreadId}`);
+    commands.push(`codex --dangerously-skip-permissions resume ${result.resumeThreadId}`);
   }
   return `${commands.join("\n")}\n`;
 }

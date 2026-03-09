@@ -1,14 +1,15 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import pino from "pino";
 import { PatchRelayDatabase } from "../src/db.js";
 import { PatchRelayService } from "../src/service.js";
-import type { AppConfig, CodexThreadSummary, ProjectConfig } from "../src/types.js";
+import type { AppConfig, CodexThreadSummary, LinearWebhookPayload, ProjectConfig } from "../src/types.js";
 
 class FakeCodexClient extends EventEmitter {
   readonly startedThreads: string[] = [];
@@ -316,7 +317,7 @@ test("service builds a read-only report from completed thread history", async ()
       lastWebhookAt: new Date().toISOString(),
     });
 
-    await service.processIssue("usertold::issue_2");
+    await service.processIssue({ projectId: "usertold", issueId: "issue_2" });
     await flushQueues();
 
     const issue = db.getTrackedIssue("usertold", "issue_2");
@@ -390,7 +391,7 @@ test("service exposes raw stored events and live active status", async () => {
       lastWebhookAt: new Date().toISOString(),
     });
 
-    await service.processIssue("usertold::issue_3");
+    await service.processIssue({ projectId: "usertold", issueId: "issue_3" });
     await flushQueues();
 
     const issue = db.getTrackedIssue("usertold", "issue_3");
@@ -571,6 +572,82 @@ test("service ignores webhook events when project routing is ambiguous", async (
     assert.equal(db.getWebhookEvent(event.id)?.processingStatus, "processed");
 
     service.stop();
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("service acceptWebhook rejects invalid signatures, dedupes deliveries, and archives accepted payloads", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-accept-webhook-"));
+  try {
+    const { config, db, codex, service } = createService(baseDir);
+    config.logging.webhookArchiveDir = path.join(baseDir, "webhook-archive");
+
+    const payload: LinearWebhookPayload = {
+      action: "update",
+      type: "Issue",
+      createdAt: "2026-03-08T12:00:00.000Z",
+      webhookTimestamp: Date.now(),
+      updatedFrom: {
+        stateId: "state_start",
+      },
+      data: {
+        id: "issue_sig",
+        identifier: "USE-55",
+        title: "Deploy with wrangler",
+        team: {
+          key: "USE",
+        },
+        state: {
+          name: "Start",
+        },
+      },
+    };
+
+    const rawBody = Buffer.from(JSON.stringify(payload), "utf8");
+    const validSignature = crypto.createHmac("sha256", config.linear.webhookSecret).update(rawBody).digest("hex");
+
+    const invalid = await service.acceptWebhook({
+      webhookId: "delivery-invalid",
+      headers: {
+        "linear-signature": "deadbeef",
+      },
+      rawBody,
+    });
+    assert.equal(invalid.status, 401);
+    assert.equal(invalid.body.reason, "invalid_signature");
+
+    const accepted = await service.acceptWebhook({
+      webhookId: "delivery-valid",
+      headers: {
+        "linear-signature": validSignature,
+      },
+      rawBody,
+    });
+    assert.equal(accepted.status, 200);
+    assert.equal(accepted.body.accepted, true);
+
+    const duplicate = await service.acceptWebhook({
+      webhookId: "delivery-valid",
+      headers: {
+        "linear-signature": validSignature,
+      },
+      rawBody,
+    });
+    assert.equal(duplicate.status, 200);
+    assert.equal(duplicate.body.duplicate, true);
+
+    await waitFor(() => {
+      const stored = db.getTrackedIssueByKey("USE-55");
+      assert.ok(stored);
+      assert.equal(codex.startedThreads.length, 1);
+      assert.ok(stored.activeStageRunId);
+    });
+
+    const archiveDir = config.logging.webhookArchiveDir!;
+    const expectedArchive = path.join(archiveDir, new Date().toISOString().slice(0, 10));
+    assert.equal(existsSync(archiveDir), true);
+    assert.equal(existsSync(expectedArchive), true);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

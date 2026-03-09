@@ -82,6 +82,20 @@ function writeOutput(stream: Output, text: string): void {
   stream.write(text);
 }
 
+function buildOpenCommand(config: AppConfig, worktreePath: string, resumeThreadId?: string): { command: string; args: string[] } {
+  const args = ["--dangerously-skip-permissions"];
+  if (resumeThreadId) {
+    args.push("resume", "-C", worktreePath, resumeThreadId);
+  } else {
+    args.push("-C", worktreePath);
+  }
+
+  return {
+    command: config.runner.codex.bin,
+    args,
+  };
+}
+
 async function runInteractiveCommand(command: string, args: string[]): Promise<number> {
   return await new Promise<number>((resolve, reject) => {
     const child = spawn(command, args, {
@@ -248,10 +262,8 @@ export async function runCli(
         return 0;
       }
 
-      const args = result.resumeThreadId
-        ? ["resume", "-C", result.workspace.worktreePath, result.resumeThreadId]
-        : ["-C", result.workspace.worktreePath];
-      return await (options?.runInteractive ?? runInteractiveCommand)("codex", args);
+      const openCommand = buildOpenCommand(config, result.workspace.worktreePath, result.resumeThreadId);
+      return await (options?.runInteractive ?? runInteractiveCommand)(openCommand.command, openCommand.args);
     }
 
     if (command === "retry") {

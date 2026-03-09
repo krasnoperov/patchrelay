@@ -2,13 +2,14 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import test from "node:test";
 import pino from "pino";
-import { CodexAppServerClient } from "../src/codex-app-server.js";
+import { CodexAppServerClient, resolveCodexAppServerLaunch } from "../src/codex-app-server.js";
 
 function createClient(scenario: string) {
   return new CodexAppServerClient(
     {
       bin: process.execPath,
       args: [path.resolve("test/fixtures/fake-codex-app-server.mjs"), scenario],
+      sourceBashrc: false,
       approvalPolicy: "never",
       sandboxMode: "danger-full-access",
       persistExtendedHistory: false,
@@ -74,6 +75,24 @@ test("CodexAppServerClient handles initialize, approval requests, notifications,
   } finally {
     await client.stop();
   }
+});
+
+test("resolveCodexAppServerLaunch can wrap codex in a shell that sources bashrc", () => {
+  assert.deepEqual(
+    resolveCodexAppServerLaunch({
+      bin: "codex",
+      args: ["app-server"],
+      shellBin: "/bin/bash",
+      sourceBashrc: true,
+      approvalPolicy: "never",
+      sandboxMode: "danger-full-access",
+      persistExtendedHistory: false,
+    }),
+    {
+      command: "/bin/bash",
+      args: ["-lc", 'source ~/.bashrc >/dev/null 2>&1 || true; exec "$0" "$@"', "codex", "app-server"],
+    },
+  );
 });
 
 test("CodexAppServerClient rejects JSON-RPC error responses", async () => {

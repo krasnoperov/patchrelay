@@ -43,6 +43,46 @@ test("normalizeWebhook extracts issue metadata from a Linear issue webhook", () 
   assert.equal(normalized.triggerEvent, "statusChanged");
 });
 
+test("normalizeWebhook extracts nested issue metadata from comment webhooks and label nodes", () => {
+  const payload: LinearWebhookPayload = {
+    action: "create",
+    type: "Comment",
+    createdAt: "2026-03-08T12:00:00.000Z",
+    webhookTimestamp: Date.now(),
+    data: {
+      issue: {
+        id: "issue_comment",
+        identifier: "USE-124",
+        title: "Comment-triggered routing",
+        team: {
+          id: "team_1",
+          key: "USE",
+        },
+        labels: {
+          nodes: [{ name: "ops" }, { name: "cloudflare" }],
+        },
+        state: {
+          id: "state_review",
+          name: "Review",
+          type: "started",
+        },
+      },
+    },
+  };
+
+  const normalized = normalizeWebhook({
+    webhookId: "delivery_comment",
+    payload,
+  });
+
+  assert.equal(normalized.issue.id, "issue_comment");
+  assert.equal(normalized.issue.identifier, "USE-124");
+  assert.equal(normalized.issue.teamId, "team_1");
+  assert.equal(normalized.issue.stateId, "state_review");
+  assert.deepEqual(normalized.issue.labelNames, ["ops", "cloudflare"]);
+  assert.equal(normalized.triggerEvent, "commentCreated");
+});
+
 test("resolveProject matches by issue key prefix and team", () => {
   const config: AppConfig = {
     server: {

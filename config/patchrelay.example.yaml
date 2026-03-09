@@ -27,6 +27,8 @@ runner:
     bin: codex
     args:
       - app-server
+    shell_bin: /bin/bash
+    source_bashrc: true
     service_name: patchrelay
     approval_policy: never
     sandbox_mode: danger-full-access

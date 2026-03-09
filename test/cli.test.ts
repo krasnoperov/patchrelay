@@ -204,7 +204,7 @@ test("cli inspect, worktree, open, events, and report render stored issue detail
 
     const openOut = createBufferStream();
     assert.equal(await runCli(["open", "USE-54", "--print"], { config, data, stdout: openOut.stream, stderr: stderr.stream }), 0);
-    assert.match(openOut.read(), /codex resume thread-54/);
+    assert.match(openOut.read(), /codex --dangerously-skip-permissions resume thread-54/);
 
     const reportOut = createBufferStream();
     assert.equal(await runCli(["report", "USE-54"], { config, data, stdout: reportOut.stream, stderr: stderr.stream }), 0);
@@ -244,7 +244,7 @@ test("cli open launches codex in the issue worktree", async () => {
     assert.deepEqual(calls, [
       {
         command: "codex",
-        args: ["resume", "-C", path.join(config.projects[0].worktreeRoot, "USE-54"), "thread-54"],
+        args: ["--dangerously-skip-permissions", "resume", "-C", path.join(config.projects[0].worktreeRoot, "USE-54"), "thread-54"],
       },
     ]);
   } finally {

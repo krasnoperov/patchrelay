@@ -60,6 +60,8 @@ const configSchema = z.object({
       codex: z.object({
         bin: z.string().default("codex"),
         args: z.array(z.string()).default(["app-server"]),
+        shell_bin: z.string().optional(),
+        source_bashrc: z.boolean().default(true),
         model: z.string().optional(),
         model_provider: z.string().optional(),
         service_name: z.string().default("patchrelay"),
@@ -75,6 +77,7 @@ const configSchema = z.object({
       codex: {
         bin: "codex",
         args: ["app-server"],
+        source_bashrc: true,
         service_name: "patchrelay",
         approval_policy: "never",
         sandbox_mode: "danger-full-access",
@@ -155,6 +158,8 @@ export function loadConfig(
       codex: {
         bin: parsed.runner.codex.bin,
         args: parsed.runner.codex.args,
+        ...(parsed.runner.codex.shell_bin ? { shellBin: parsed.runner.codex.shell_bin } : {}),
+        sourceBashrc: parsed.runner.codex.source_bashrc,
         ...(parsed.runner.codex.model ? { model: parsed.runner.codex.model } : {}),
         ...(parsed.runner.codex.model_provider ? { modelProvider: parsed.runner.codex.model_provider } : {}),
         ...(parsed.runner.codex.service_name ? { serviceName: parsed.runner.codex.service_name } : {}),

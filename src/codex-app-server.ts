@@ -43,6 +43,25 @@ export interface StartTurnOptions {
   cwd: string;
 }
 
+export function resolveCodexAppServerLaunch(config: CodexAppServerConfig): { command: string; args: string[] } {
+  if (!config.sourceBashrc) {
+    return {
+      command: config.bin,
+      args: config.args,
+    };
+  }
+
+  return {
+    command: config.shellBin ?? "bash",
+    args: [
+      "-lc",
+      'source ~/.bashrc >/dev/null 2>&1 || true; exec "$0" "$@"',
+      config.bin,
+      ...config.args,
+    ],
+  };
+}
+
 export class CodexAppServerClient extends EventEmitter {
   private child: ChildProcessWithoutNullStreams | undefined;
   private nextRequestId = 1;
@@ -59,7 +78,8 @@ export class CodexAppServerClient extends EventEmitter {
       return;
     }
 
-    this.child = spawn(this.config.bin, this.config.args, {
+    const launch = resolveCodexAppServerLaunch(this.config);
+    this.child = spawn(launch.command, launch.args, {
       stdio: ["pipe", "pipe", "pipe"],
     });
 

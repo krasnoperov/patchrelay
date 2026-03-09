@@ -51,6 +51,8 @@ export interface ProjectConfig {
 export interface CodexAppServerConfig {
   bin: string;
   args: string[];
+  shellBin?: string;
+  sourceBashrc?: boolean;
   model?: string;
   modelProvider?: string;
   serviceName?: string;

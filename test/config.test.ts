@@ -71,6 +71,10 @@ projects:
       cleanup: Cleanup
     trigger_events: [statusChanged]
     branch_prefix: use
+runner:
+  codex:
+    shell_bin: /bin/bash
+    source_bashrc: true
 `,
       "utf8",
     );
@@ -97,6 +101,8 @@ projects:
         assert.equal(config.projects[0]?.repoPath, path.join(baseDir, "repo"));
         assert.equal(config.projects[0]?.worktreeRoot, path.join(baseDir, "worktrees"));
         assert.equal(config.projects[0]?.workflowFiles.review, path.join(baseDir, "REVIEW.md"));
+        assert.equal(config.runner.codex.shellBin, "/bin/bash");
+        assert.equal(config.runner.codex.sourceBashrc, true);
       },
     );
   } finally {
@@ -142,6 +148,9 @@ projects:
       cleanup: Cleanup
     trigger_events: [statusChanged]
     branch_prefix: use
+runner:
+  codex:
+    source_bashrc: false
 `,
       "utf8",
     );
@@ -153,6 +162,8 @@ projects:
       },
       () => {
         assert.throws(() => loadConfig(), /Missing env var REQUIRED_SECRET/);
+        const config = loadConfig(undefined, { requireLinearSecret: false });
+        assert.equal(config.runner.codex.sourceBashrc, false);
       },
     );
   } finally {
