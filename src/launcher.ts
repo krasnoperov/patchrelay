@@ -405,26 +405,49 @@ export class LaunchRunner {
     }, LEASE_HEARTBEAT_MS);
 
     child.stdout.on("data", (chunk) => {
+      const output = chunk.toString().trim();
+      if (!output) {
+        return;
+      }
+
+      if (/^still waiting task=/.test(output)) {
+        this.logger.debug(
+          {
+            projectId: params.project.id,
+            issueId: params.issue.id,
+            sessionName: params.plan.sessionName,
+            waitOutput: output,
+          },
+          "zmx wait heartbeat",
+        );
+        return;
+      }
+
       this.logger.info(
         {
           projectId: params.project.id,
           issueId: params.issue.id,
           sessionName: params.plan.sessionName,
-          output: chunk.toString().trim(),
+          waitOutput: output,
         },
-        "Launch session output",
+        "zmx wait output",
       );
     });
 
     child.stderr.on("data", (chunk) => {
+      const errorOutput = chunk.toString().trim();
+      if (!errorOutput) {
+        return;
+      }
+
       this.logger.warn(
         {
           projectId: params.project.id,
           issueId: params.issue.id,
           sessionName: params.plan.sessionName,
-          errorOutput: chunk.toString().trim(),
+          waitErrorOutput: errorOutput,
         },
-        "Launch session stderr",
+        "zmx wait stderr",
       );
     });
 
