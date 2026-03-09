@@ -83,7 +83,7 @@ function writeOutput(stream: Output, text: string): void {
 }
 
 function buildOpenCommand(config: AppConfig, worktreePath: string, resumeThreadId?: string): { command: string; args: string[] } {
-  const args = ["--dangerously-skip-permissions"];
+  const args = ["--dangerously-bypass-approvals-and-sandbox"];
   if (resumeThreadId) {
     args.push("resume", "-C", worktreePath, resumeThreadId);
   } else {
