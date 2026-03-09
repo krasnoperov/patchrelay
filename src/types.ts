@@ -13,23 +13,26 @@ export type TriggerEvent =
   | "assignmentChanged"
   | "delegateChanged";
 
-export type IssueState = "received" | "ignored" | "launching" | "running" | "completed" | "failed";
-export type RunStage = "implementation" | "review" | "deploy";
-export type RunStatus = "running" | "completed" | "failed";
-
-export type WorkflowKind = "implementation" | "review" | "deploy";
+export type WorkflowStage = "development" | "review" | "deploy" | "cleanup";
+export type IssueLifecycleStatus = "idle" | "queued" | "running" | "paused" | "completed" | "failed";
+export type WorkspaceStatus = "active" | "paused" | "closing" | "closed";
+export type PipelineStatus = "active" | "completed" | "failed" | "paused";
+export type StageRunStatus = "running" | "completed" | "failed" | "waiting";
 
 export interface WorkflowStatusConfig {
-  implementation: string;
+  development: string;
   review: string;
   deploy: string;
+  cleanup?: string;
   humanNeeded?: string;
+  done?: string;
 }
 
 export interface ProjectWorkflowFiles {
-  implementation: string;
+  development: string;
   review: string;
   deploy: string;
+  cleanup: string;
 }
 
 export interface ProjectConfig {
@@ -38,15 +41,24 @@ export interface ProjectConfig {
   worktreeRoot: string;
   workflowFiles: ProjectWorkflowFiles;
   workflowStatuses: WorkflowStatusConfig;
+  issueKeyPrefixes: string[];
   linearTeamIds: string[];
   allowLabels: string[];
   triggerEvents: TriggerEvent[];
   branchPrefix: string;
 }
 
-export interface LaunchCommandConfig {
-  shell: string;
+export interface CodexAppServerConfig {
+  bin: string;
   args: string[];
+  model?: string;
+  modelProvider?: string;
+  serviceName?: string;
+  baseInstructions?: string;
+  developerInstructions?: string;
+  approvalPolicy: "never" | "on-request" | "on-failure" | "untrusted";
+  sandboxMode: "danger-full-access" | "workspace-write" | "read-only";
+  persistExtendedHistory: boolean;
 }
 
 export interface AppConfig {
@@ -74,10 +86,8 @@ export interface AppConfig {
     webhookSecret: string;
   };
   runner: {
-    zmxBin: string;
-    zmxSessionPrefix?: string;
     gitBin: string;
-    launch: LaunchCommandConfig;
+    codex: CodexAppServerConfig;
   };
   projects: ProjectConfig[];
 }
@@ -115,29 +125,6 @@ export interface NormalizedEvent {
   payload: LinearWebhookPayload;
 }
 
-export interface PersistedIssueRecord {
-  id: number;
-  projectId: string;
-  linearIssueId: string;
-  linearIssueKey?: string;
-  title?: string;
-  issueUrl?: string;
-  currentState: IssueState;
-  activeStage?: RunStage;
-  desiredStage?: RunStage;
-  desiredStateName?: string;
-  desiredWebhookId?: string;
-  desiredWebhookTimestamp?: number;
-  branchName?: string;
-  worktreePath?: string;
-  activeRunId?: number;
-  leaseOwner?: string;
-  leaseExpiresAt?: string;
-  lastHeartbeatAt?: string;
-  lastWebhookAt?: string;
-  updatedAt: string;
-}
-
 export interface WebhookEventRecord {
   id: number;
   webhookId: string;
@@ -152,41 +139,150 @@ export interface WebhookEventRecord {
   processingStatus: "pending" | "processed" | "failed";
 }
 
-export interface IssueRunRecord {
+export interface TrackedIssueRecord {
   id: number;
   projectId: string;
   linearIssueId: string;
-  stage: RunStage;
-  status: RunStatus;
-  startedAt: string;
-  finishedAt?: string;
-  triggerWebhookId: string;
-  sessionId?: number;
-  resultJson?: string;
-  errorJson?: string;
+  issueKey?: string;
+  title?: string;
+  issueUrl?: string;
+  currentLinearState?: string;
+  desiredStage?: WorkflowStage;
+  desiredWebhookId?: string;
+  activeWorkspaceId?: number;
+  activePipelineRunId?: number;
+  activeStageRunId?: number;
+  latestThreadId?: string;
+  lifecycleStatus: IssueLifecycleStatus;
+  lastWebhookAt?: string;
+  updatedAt: string;
 }
 
-export interface SessionRecord {
+export interface WorkspaceRecord {
   id: number;
   projectId: string;
   linearIssueId: string;
-  runId: number;
-  stage: RunStage;
-  zmxSessionName: string;
-  processId?: number;
   branchName: string;
   worktreePath: string;
+  status: WorkspaceStatus;
+  lastStage?: WorkflowStage;
+  lastThreadId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PipelineRunRecord {
+  id: number;
+  projectId: string;
+  linearIssueId: string;
+  workspaceId: number;
+  status: PipelineStatus;
+  currentStage?: WorkflowStage;
   startedAt: string;
   endedAt?: string;
-  exitCode?: number;
 }
 
-export interface LaunchPlan {
+export interface StageRunRecord {
+  id: number;
+  pipelineRunId: number;
+  projectId: string;
+  linearIssueId: string;
+  workspaceId: number;
+  stage: WorkflowStage;
+  status: StageRunStatus;
+  triggerWebhookId: string;
+  workflowFile: string;
+  promptText: string;
+  threadId?: string;
+  parentThreadId?: string;
+  turnId?: string;
+  summaryJson?: string;
+  reportJson?: string;
+  startedAt: string;
+  endedAt?: string;
+}
+
+export interface ThreadEventRecord {
+  id: number;
+  stageRunId: number;
+  threadId: string;
+  turnId?: string;
+  method: string;
+  eventJson: string;
+  createdAt: string;
+}
+
+export interface StageLaunchPlan {
   branchName: string;
   worktreePath: string;
-  sessionName: string;
-  prompt: string;
-  workflowKind: WorkflowKind;
   workflowFile: string;
-  stage: RunStage;
+  prompt: string;
+  stage: WorkflowStage;
+}
+
+export interface CodexThreadSummary {
+  id: string;
+  preview: string;
+  cwd: string;
+  status: string;
+  path?: string | null;
+  turns: CodexTurnSummary[];
+}
+
+export interface CodexTurnSummary {
+  id: string;
+  status: string;
+  error?: {
+    message: string;
+  } | null;
+  items: CodexThreadItem[];
+}
+
+export type CodexThreadItem =
+  | { type: "userMessage"; id: string; content: unknown[] }
+  | { type: "agentMessage"; id: string; text: string; phase?: string | null }
+  | { type: "plan"; id: string; text: string }
+  | { type: "reasoning"; id: string; summary: string[]; content: string[] }
+  | {
+      type: "commandExecution";
+      id: string;
+      command: string;
+      cwd: string;
+      status: string;
+      aggregatedOutput?: string | null;
+      exitCode?: number | null;
+      durationMs?: number | null;
+    }
+  | { type: "fileChange"; id: string; status: string; changes: Array<Record<string, unknown>> }
+  | { type: "mcpToolCall"; id: string; server: string; tool: string; status: string; durationMs?: number | null }
+  | { type: "dynamicToolCall"; id: string; tool: string; status: string; durationMs?: number | null }
+  | { type: string; id: string; [key: string]: unknown };
+
+export interface StageReport {
+  issueKey?: string;
+  stage: WorkflowStage;
+  status: StageRunStatus;
+  threadId?: string;
+  parentThreadId?: string;
+  turnId?: string;
+  prompt: string;
+  workflowFile: string;
+  assistantMessages: string[];
+  plans: string[];
+  reasoning: string[];
+  commands: Array<{
+    command: string;
+    cwd: string;
+    status: string;
+    exitCode?: number | null;
+    durationMs?: number | null;
+  }>;
+  fileChanges: Array<Record<string, unknown>>;
+  toolCalls: Array<{
+    type: string;
+    name: string;
+    status: string;
+    durationMs?: number | null;
+  }>;
+  eventCounts: Record<string, number>;
 }

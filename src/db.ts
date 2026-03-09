@@ -1,15 +1,22 @@
 import Database from "better-sqlite3";
 import type {
-  IssueRunRecord,
-  IssueState,
-  PersistedIssueRecord,
-  RunStage,
-  RunStatus,
-  SessionRecord,
+  IssueLifecycleStatus,
+  PipelineRunRecord,
+  PipelineStatus,
+  StageRunRecord,
+  StageRunStatus,
+  ThreadEventRecord,
+  TrackedIssueRecord,
   WebhookEventRecord,
+  WorkflowStage,
+  WorkspaceRecord,
 } from "./types.js";
 
 const baseMigration = `
+DROP TABLE IF EXISTS issues;
+DROP TABLE IF EXISTS issue_runs;
+DROP TABLE IF EXISTS sessions;
+
 CREATE TABLE IF NOT EXISTS webhook_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   webhook_id TEXT NOT NULL UNIQUE,
@@ -24,86 +31,83 @@ CREATE TABLE IF NOT EXISTS webhook_events (
   processing_status TEXT NOT NULL DEFAULT 'pending'
 );
 
-CREATE TABLE IF NOT EXISTS issues (
+CREATE TABLE IF NOT EXISTS tracked_issues (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   project_id TEXT NOT NULL,
   linear_issue_id TEXT NOT NULL,
-  linear_issue_key TEXT,
+  issue_key TEXT,
   title TEXT,
   issue_url TEXT,
-  current_state TEXT NOT NULL,
-  active_stage TEXT,
+  current_linear_state TEXT,
   desired_stage TEXT,
-  desired_state_name TEXT,
   desired_webhook_id TEXT,
-  desired_webhook_timestamp INTEGER,
-  branch_name TEXT,
-  worktree_path TEXT,
-  active_run_id INTEGER,
-  lease_owner TEXT,
-  lease_expires_at TEXT,
-  last_heartbeat_at TEXT,
+  active_workspace_id INTEGER,
+  active_pipeline_run_id INTEGER,
+  active_stage_run_id INTEGER,
+  latest_thread_id TEXT,
+  lifecycle_status TEXT NOT NULL,
   last_webhook_at TEXT,
   updated_at TEXT NOT NULL,
   UNIQUE(project_id, linear_issue_id)
 );
 
-CREATE TABLE IF NOT EXISTS issue_runs (
+CREATE TABLE IF NOT EXISTS workspaces (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   project_id TEXT NOT NULL,
   linear_issue_id TEXT NOT NULL,
-  stage TEXT NOT NULL,
-  status TEXT NOT NULL,
-  started_at TEXT NOT NULL,
-  finished_at TEXT,
-  trigger_webhook_id TEXT NOT NULL,
-  session_id INTEGER,
-  result_json TEXT,
-  error_json TEXT
-);
-
-CREATE TABLE IF NOT EXISTS sessions (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  project_id TEXT NOT NULL,
-  linear_issue_id TEXT NOT NULL,
-  run_id INTEGER NOT NULL,
-  stage TEXT NOT NULL,
-  zmx_session_name TEXT NOT NULL,
-  process_id INTEGER,
   branch_name TEXT NOT NULL,
   worktree_path TEXT NOT NULL,
+  status TEXT NOT NULL,
+  last_stage TEXT,
+  last_thread_id TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS pipeline_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id TEXT NOT NULL,
+  linear_issue_id TEXT NOT NULL,
+  workspace_id INTEGER NOT NULL,
+  status TEXT NOT NULL,
+  current_stage TEXT,
   started_at TEXT NOT NULL,
-  ended_at TEXT,
-  exit_code INTEGER
+  ended_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS stage_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  pipeline_run_id INTEGER NOT NULL,
+  project_id TEXT NOT NULL,
+  linear_issue_id TEXT NOT NULL,
+  workspace_id INTEGER NOT NULL,
+  stage TEXT NOT NULL,
+  status TEXT NOT NULL,
+  trigger_webhook_id TEXT NOT NULL,
+  workflow_file TEXT NOT NULL,
+  prompt_text TEXT NOT NULL,
+  thread_id TEXT,
+  parent_thread_id TEXT,
+  turn_id TEXT,
+  summary_json TEXT,
+  report_json TEXT,
+  started_at TEXT NOT NULL,
+  ended_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS thread_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  stage_run_id INTEGER NOT NULL,
+  thread_id TEXT NOT NULL,
+  turn_id TEXT,
+  method TEXT NOT NULL,
+  event_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
 );
 `;
 
-function columnExists(connection: Database.Database, table: string, column: string): boolean {
-  const rows = connection.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
-  return rows.some((row) => row.name === column);
-}
-
-function addColumnIfMissing(connection: Database.Database, table: string, column: string, definition: string): void {
-  if (!columnExists(connection, table, column)) {
-    connection.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
-  }
-}
-
 function isoNow(): string {
   return new Date().toISOString();
-}
-
-function isoFromMs(timestampMs: number): string {
-  return new Date(timestampMs).toISOString();
-}
-
-function parseIsoMs(value?: string): number | undefined {
-  if (!value) {
-    return undefined;
-  }
-
-  const parsed = Date.parse(value);
-  return Number.isNaN(parsed) ? undefined : parsed;
 }
 
 export class PatchRelayDatabase {
@@ -119,16 +123,6 @@ export class PatchRelayDatabase {
 
   runMigrations(): void {
     this.connection.exec(baseMigration);
-
-    addColumnIfMissing(this.connection, "issues", "issue_url", "TEXT");
-    addColumnIfMissing(this.connection, "issues", "active_stage", "TEXT");
-    addColumnIfMissing(this.connection, "issues", "desired_stage", "TEXT");
-    addColumnIfMissing(this.connection, "issues", "desired_state_name", "TEXT");
-    addColumnIfMissing(this.connection, "issues", "desired_webhook_id", "TEXT");
-    addColumnIfMissing(this.connection, "issues", "desired_webhook_timestamp", "INTEGER");
-    addColumnIfMissing(this.connection, "issues", "lease_owner", "TEXT");
-    addColumnIfMissing(this.connection, "issues", "lease_expires_at", "TEXT");
-    addColumnIfMissing(this.connection, "issues", "last_heartbeat_at", "TEXT");
   }
 
   insertWebhookEvent(params: {
@@ -145,7 +139,6 @@ export class PatchRelayDatabase {
     const existing = this.connection.prepare("SELECT id FROM webhook_events WHERE webhook_id = ?").get(params.webhookId) as
       | { id: number }
       | undefined;
-
     if (existing) {
       this.connection.prepare("UPDATE webhook_events SET dedupe_status = 'duplicate' WHERE id = ?").run(existing.id);
       return { id: existing.id, inserted: false };
@@ -187,380 +180,300 @@ export class PatchRelayDatabase {
     return row ? this.mapWebhookEvent(row) : undefined;
   }
 
-  upsertIssue(params: {
+  upsertTrackedIssue(params: {
     projectId: string;
     linearIssueId: string;
-    linearIssueKey?: string;
+    issueKey?: string;
     title?: string;
     issueUrl?: string;
-    currentState: IssueState;
-    branchName?: string;
-    worktreePath?: string;
-    activeRunId?: number | null;
-    activeStage?: RunStage | null;
-    desiredStage?: RunStage | null;
-    desiredStateName?: string | null;
+    currentLinearState?: string;
+    desiredStage?: WorkflowStage | null;
     desiredWebhookId?: string | null;
-    desiredWebhookTimestamp?: number | null;
-    leaseOwner?: string | null;
-    leaseExpiresAt?: string | null;
-    lastHeartbeatAt?: string | null;
-    lastWebhookAt: string;
-  }): PersistedIssueRecord {
+    activeWorkspaceId?: number | null;
+    activePipelineRunId?: number | null;
+    activeStageRunId?: number | null;
+    latestThreadId?: string | null;
+    lifecycleStatus: IssueLifecycleStatus;
+    lastWebhookAt?: string;
+  }): TrackedIssueRecord {
     const now = isoNow();
     this.connection
       .prepare(
         `
-        INSERT INTO issues (
-          project_id, linear_issue_id, linear_issue_key, title, issue_url, current_state, active_stage, desired_stage,
-          desired_state_name, desired_webhook_id, desired_webhook_timestamp, branch_name, worktree_path, active_run_id,
-          lease_owner, lease_expires_at, last_heartbeat_at, last_webhook_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO tracked_issues (
+          project_id, linear_issue_id, issue_key, title, issue_url, current_linear_state, desired_stage, desired_webhook_id,
+          active_workspace_id, active_pipeline_run_id, active_stage_run_id, latest_thread_id, lifecycle_status, last_webhook_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(project_id, linear_issue_id) DO UPDATE SET
-          linear_issue_key = COALESCE(excluded.linear_issue_key, issues.linear_issue_key),
-          title = COALESCE(excluded.title, issues.title),
-          issue_url = COALESCE(excluded.issue_url, issues.issue_url),
-          current_state = excluded.current_state,
-          active_stage = COALESCE(excluded.active_stage, issues.active_stage),
-          desired_stage = COALESCE(excluded.desired_stage, issues.desired_stage),
-          desired_state_name = COALESCE(excluded.desired_state_name, issues.desired_state_name),
-          desired_webhook_id = COALESCE(excluded.desired_webhook_id, issues.desired_webhook_id),
-          desired_webhook_timestamp = COALESCE(excluded.desired_webhook_timestamp, issues.desired_webhook_timestamp),
-          branch_name = COALESCE(excluded.branch_name, issues.branch_name),
-          worktree_path = COALESCE(excluded.worktree_path, issues.worktree_path),
-          active_run_id = COALESCE(excluded.active_run_id, issues.active_run_id),
-          lease_owner = COALESCE(excluded.lease_owner, issues.lease_owner),
-          lease_expires_at = COALESCE(excluded.lease_expires_at, issues.lease_expires_at),
-          last_heartbeat_at = COALESCE(excluded.last_heartbeat_at, issues.last_heartbeat_at),
-          last_webhook_at = excluded.last_webhook_at,
+          issue_key = COALESCE(excluded.issue_key, tracked_issues.issue_key),
+          title = COALESCE(excluded.title, tracked_issues.title),
+          issue_url = COALESCE(excluded.issue_url, tracked_issues.issue_url),
+          current_linear_state = COALESCE(excluded.current_linear_state, tracked_issues.current_linear_state),
+          desired_stage = COALESCE(excluded.desired_stage, tracked_issues.desired_stage),
+          desired_webhook_id = COALESCE(excluded.desired_webhook_id, tracked_issues.desired_webhook_id),
+          active_workspace_id = COALESCE(excluded.active_workspace_id, tracked_issues.active_workspace_id),
+          active_pipeline_run_id = COALESCE(excluded.active_pipeline_run_id, tracked_issues.active_pipeline_run_id),
+          active_stage_run_id = COALESCE(excluded.active_stage_run_id, tracked_issues.active_stage_run_id),
+          latest_thread_id = COALESCE(excluded.latest_thread_id, tracked_issues.latest_thread_id),
+          lifecycle_status = excluded.lifecycle_status,
+          last_webhook_at = COALESCE(excluded.last_webhook_at, tracked_issues.last_webhook_at),
           updated_at = excluded.updated_at
         `,
       )
       .run(
         params.projectId,
         params.linearIssueId,
-        params.linearIssueKey ?? null,
+        params.issueKey ?? null,
         params.title ?? null,
         params.issueUrl ?? null,
-        params.currentState,
-        params.activeStage ?? null,
+        params.currentLinearState ?? null,
         params.desiredStage ?? null,
-        params.desiredStateName ?? null,
         params.desiredWebhookId ?? null,
-        params.desiredWebhookTimestamp ?? null,
-        params.branchName ?? null,
-        params.worktreePath ?? null,
-        params.activeRunId ?? null,
-        params.leaseOwner ?? null,
-        params.leaseExpiresAt ?? null,
-        params.lastHeartbeatAt ?? null,
-        params.lastWebhookAt,
+        params.activeWorkspaceId ?? null,
+        params.activePipelineRunId ?? null,
+        params.activeStageRunId ?? null,
+        params.latestThreadId ?? null,
+        params.lifecycleStatus,
+        params.lastWebhookAt ?? null,
         now,
       );
 
-    return this.getIssue(params.projectId, params.linearIssueId)!;
+    return this.getTrackedIssue(params.projectId, params.linearIssueId)!;
   }
 
-  getIssue(projectId: string, linearIssueId: string): PersistedIssueRecord | undefined {
+  getTrackedIssue(projectId: string, linearIssueId: string): TrackedIssueRecord | undefined {
     const row = this.connection
-      .prepare("SELECT * FROM issues WHERE project_id = ? AND linear_issue_id = ?")
+      .prepare("SELECT * FROM tracked_issues WHERE project_id = ? AND linear_issue_id = ?")
       .get(projectId, linearIssueId) as Record<string, unknown> | undefined;
-    return row ? this.mapIssue(row) : undefined;
+    return row ? this.mapTrackedIssue(row) : undefined;
   }
 
-  listIssuesWithActiveRuns(): PersistedIssueRecord[] {
-    const rows = this.connection
-      .prepare("SELECT * FROM issues WHERE active_run_id IS NOT NULL OR current_state IN ('launching', 'running')")
-      .all() as Record<string, unknown>[];
-    return rows.map((row) => this.mapIssue(row));
-  }
-
-  listIssuesReadyForLaunch(): PersistedIssueRecord[] {
-    const rows = this.connection
-      .prepare("SELECT * FROM issues WHERE desired_stage IS NOT NULL AND active_run_id IS NULL")
-      .all() as Record<string, unknown>[];
-    return rows.map((row) => this.mapIssue(row));
-  }
-
-  updateIssueState(
-    projectId: string,
-    linearIssueId: string,
-    state: IssueState,
-    values: {
-      branchName?: string;
-      worktreePath?: string;
-      activeRunId?: number | null;
-      activeStage?: RunStage | null;
-      leaseOwner?: string | null;
-      leaseExpiresAt?: string | null;
-      lastHeartbeatAt?: string | null;
-    } = {},
-  ): void {
-    const current = this.getIssue(projectId, linearIssueId);
-    if (!current) {
-      return;
-    }
-
-    const now = isoNow();
-    this.connection
-      .prepare(
-        `
-        UPDATE issues
-        SET current_state = ?, branch_name = ?, worktree_path = ?, active_run_id = ?, active_stage = ?, lease_owner = ?,
-            lease_expires_at = ?, last_heartbeat_at = ?, updated_at = ?
-        WHERE project_id = ? AND linear_issue_id = ?
-        `,
-      )
-      .run(
-        state,
-        values.branchName ?? current.branchName ?? null,
-        values.worktreePath ?? current.worktreePath ?? null,
-        values.activeRunId ?? current.activeRunId ?? null,
-        values.activeStage ?? current.activeStage ?? null,
-        values.leaseOwner ?? current.leaseOwner ?? null,
-        values.leaseExpiresAt ?? current.leaseExpiresAt ?? null,
-        values.lastHeartbeatAt ?? current.lastHeartbeatAt ?? null,
-        now,
-        projectId,
-        linearIssueId,
-      );
+  getTrackedIssueByKey(issueKey: string): TrackedIssueRecord | undefined {
+    const row = this.connection
+      .prepare("SELECT * FROM tracked_issues WHERE issue_key = ? ORDER BY updated_at DESC LIMIT 1")
+      .get(issueKey) as Record<string, unknown> | undefined;
+    return row ? this.mapTrackedIssue(row) : undefined;
   }
 
   recordDesiredStage(params: {
     projectId: string;
     linearIssueId: string;
-    currentState: IssueState;
-    linearIssueKey?: string;
+    issueKey?: string;
     title?: string;
     issueUrl?: string;
-    desiredStage?: RunStage;
-    desiredStateName?: string;
-    desiredWebhookId: string;
-    desiredWebhookTimestamp: number;
+    currentLinearState?: string;
+    desiredStage?: WorkflowStage;
+    desiredWebhookId?: string;
     lastWebhookAt: string;
-  }): PersistedIssueRecord {
-    const transaction = this.connection.transaction(() => {
-      const current = this.getIssue(params.projectId, params.linearIssueId);
-      if (!current) {
-        throw new Error(`Issue missing while recording desired stage: ${params.projectId}/${params.linearIssueId}`);
-      }
+  }): TrackedIssueRecord {
+    const existing = this.getTrackedIssue(params.projectId, params.linearIssueId);
+    const lifecycleStatus =
+      existing?.activeStageRunId || params.desiredStage ? existing?.lifecycleStatus ?? "queued" : existing?.lifecycleStatus ?? "idle";
+    const issueKey = params.issueKey ?? existing?.issueKey;
+    const title = params.title ?? existing?.title;
+    const issueUrl = params.issueUrl ?? existing?.issueUrl;
+    const currentLinearState = params.currentLinearState ?? existing?.currentLinearState;
 
-      const currentTimestamp = current.desiredWebhookTimestamp ?? -1;
-      if (current.desiredWebhookId && currentTimestamp > params.desiredWebhookTimestamp) {
-        return current;
-      }
-
-      const desiredStage = params.desiredStage ?? current.desiredStage ?? null;
-      const desiredStateName =
-        params.desiredStage !== undefined ? params.desiredStateName ?? null : current.desiredStateName ?? null;
-      const desiredWebhookId = params.desiredStage !== undefined ? params.desiredWebhookId : current.desiredWebhookId ?? null;
-      const desiredWebhookTimestamp =
-        params.desiredStage !== undefined ? params.desiredWebhookTimestamp : current.desiredWebhookTimestamp ?? null;
-      const nextState = current.activeRunId ? current.currentState : params.currentState;
-      const now = isoNow();
-      this.connection
-        .prepare(
-          `
-          UPDATE issues
-          SET linear_issue_key = COALESCE(?, linear_issue_key),
-              title = COALESCE(?, title),
-              issue_url = COALESCE(?, issue_url),
-              current_state = ?,
-              desired_stage = ?,
-              desired_state_name = ?,
-              desired_webhook_id = ?,
-              desired_webhook_timestamp = ?,
-              last_webhook_at = ?,
-              updated_at = ?
-          WHERE project_id = ? AND linear_issue_id = ?
-          `,
-        )
-        .run(
-          params.linearIssueKey ?? null,
-          params.title ?? null,
-          params.issueUrl ?? null,
-          nextState,
-          desiredStage,
-          desiredStateName,
-          desiredWebhookId,
-          desiredWebhookTimestamp,
-          params.lastWebhookAt,
-          now,
-          params.projectId,
-          params.linearIssueId,
-        );
-
-      return this.getIssue(params.projectId, params.linearIssueId)!;
+    return this.upsertTrackedIssue({
+      projectId: params.projectId,
+      linearIssueId: params.linearIssueId,
+      ...(issueKey ? { issueKey } : {}),
+      ...(title ? { title } : {}),
+      ...(issueUrl ? { issueUrl } : {}),
+      ...(currentLinearState ? { currentLinearState } : {}),
+      desiredStage: params.desiredStage ?? existing?.desiredStage ?? null,
+      desiredWebhookId: params.desiredWebhookId ?? existing?.desiredWebhookId ?? null,
+      activeWorkspaceId: existing?.activeWorkspaceId ?? null,
+      activePipelineRunId: existing?.activePipelineRunId ?? null,
+      activeStageRunId: existing?.activeStageRunId ?? null,
+      latestThreadId: existing?.latestThreadId ?? null,
+      lifecycleStatus,
+      lastWebhookAt: params.lastWebhookAt,
     });
-
-    return transaction();
   }
 
-  claimIssueLaunch(params: {
+  listIssuesReadyForExecution(): TrackedIssueRecord[] {
+    const rows = this.connection
+      .prepare("SELECT * FROM tracked_issues WHERE desired_stage IS NOT NULL AND active_stage_run_id IS NULL")
+      .all() as Record<string, unknown>[];
+    return rows.map((row) => this.mapTrackedIssue(row));
+  }
+
+  listActiveStageRuns(): StageRunRecord[] {
+    const rows = this.connection.prepare("SELECT * FROM stage_runs WHERE status = 'running'").all() as Record<string, unknown>[];
+    return rows.map((row) => this.mapStageRun(row));
+  }
+
+  claimStageRun(params: {
     projectId: string;
     linearIssueId: string;
-    stage: RunStage;
+    stage: WorkflowStage;
     triggerWebhookId: string;
     branchName: string;
     worktreePath: string;
-    leaseOwner: string;
-    leaseDurationMs: number;
-  }): { issue: PersistedIssueRecord; runId: number } | undefined {
+    workflowFile: string;
+    promptText: string;
+  }): { issue: TrackedIssueRecord; workspace: WorkspaceRecord; pipeline: PipelineRunRecord; stageRun: StageRunRecord } | undefined {
     const transaction = this.connection.transaction(() => {
-      const issue = this.getIssue(params.projectId, params.linearIssueId);
-      if (!issue) {
+      const issue = this.getTrackedIssue(params.projectId, params.linearIssueId);
+      if (!issue || issue.activeStageRunId || issue.desiredStage !== params.stage || issue.desiredWebhookId !== params.triggerWebhookId) {
         return undefined;
       }
 
-      const leaseExpiresAtMs = parseIsoMs(issue.leaseExpiresAt);
-      const leaseExpired = leaseExpiresAtMs !== undefined && leaseExpiresAtMs <= Date.now();
-      if (issue.activeRunId && !leaseExpired) {
-        return undefined;
+      const now = isoNow();
+      let workspace = issue.activeWorkspaceId ? this.getWorkspace(issue.activeWorkspaceId) : undefined;
+      if (!workspace) {
+        const workspaceResult = this.connection
+          .prepare(
+            `
+            INSERT INTO workspaces (project_id, linear_issue_id, branch_name, worktree_path, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, 'active', ?, ?)
+            `,
+          )
+          .run(params.projectId, params.linearIssueId, params.branchName, params.worktreePath, now, now);
+        workspace = this.getWorkspace(Number(workspaceResult.lastInsertRowid))!;
+      } else {
+        this.connection
+          .prepare(
+            `
+            UPDATE workspaces
+            SET branch_name = ?, worktree_path = ?, status = 'active', updated_at = ?
+            WHERE id = ?
+            `,
+          )
+          .run(params.branchName, params.worktreePath, now, workspace.id);
+        workspace = this.getWorkspace(workspace.id)!;
       }
 
-      if (issue.desiredStage !== params.stage || issue.desiredWebhookId !== params.triggerWebhookId) {
-        return undefined;
+      let pipeline = issue.activePipelineRunId ? this.getPipelineRun(issue.activePipelineRunId) : undefined;
+      if (!pipeline || pipeline.status !== "active") {
+        const pipelineResult = this.connection
+          .prepare(
+            `
+            INSERT INTO pipeline_runs (project_id, linear_issue_id, workspace_id, status, current_stage, started_at)
+            VALUES (?, ?, ?, 'active', ?, ?)
+            `,
+          )
+          .run(params.projectId, params.linearIssueId, workspace.id, params.stage, now);
+        pipeline = this.getPipelineRun(Number(pipelineResult.lastInsertRowid))!;
+      } else {
+        this.connection.prepare("UPDATE pipeline_runs SET current_stage = ? WHERE id = ?").run(params.stage, pipeline.id);
+        pipeline = this.getPipelineRun(pipeline.id)!;
       }
 
-      const startedAt = isoNow();
-      const runResult = this.connection
+      const stageRunResult = this.connection
         .prepare(
           `
-          INSERT INTO issue_runs (project_id, linear_issue_id, stage, status, started_at, trigger_webhook_id)
-          VALUES (?, ?, ?, 'running', ?, ?)
+          INSERT INTO stage_runs (
+            pipeline_run_id, project_id, linear_issue_id, workspace_id, stage, status, trigger_webhook_id, workflow_file, prompt_text, started_at
+          ) VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?, ?)
           `,
         )
-        .run(params.projectId, params.linearIssueId, params.stage, startedAt, params.triggerWebhookId);
+        .run(
+          pipeline.id,
+          params.projectId,
+          params.linearIssueId,
+          workspace.id,
+          params.stage,
+          params.triggerWebhookId,
+          params.workflowFile,
+          params.promptText,
+          now,
+        );
+      const stageRun = this.getStageRun(Number(stageRunResult.lastInsertRowid))!;
 
-      const runId = Number(runResult.lastInsertRowid);
-      const leaseExpiresAt = isoFromMs(Date.now() + params.leaseDurationMs);
       this.connection
         .prepare(
           `
-          UPDATE issues
-          SET current_state = 'launching',
-              active_stage = ?,
-              branch_name = ?,
-              worktree_path = ?,
-              active_run_id = ?,
-              lease_owner = ?,
-              lease_expires_at = ?,
-              last_heartbeat_at = ?,
-              desired_stage = NULL,
-              desired_state_name = NULL,
+          UPDATE tracked_issues
+          SET desired_stage = NULL,
               desired_webhook_id = NULL,
-              desired_webhook_timestamp = NULL,
+              active_workspace_id = ?,
+              active_pipeline_run_id = ?,
+              active_stage_run_id = ?,
+              lifecycle_status = 'running',
               updated_at = ?
           WHERE project_id = ? AND linear_issue_id = ?
           `,
         )
-        .run(
-          params.stage,
-          params.branchName,
-          params.worktreePath,
-          runId,
-          params.leaseOwner,
-          leaseExpiresAt,
-          startedAt,
-          startedAt,
-          params.projectId,
-          params.linearIssueId,
-        );
+        .run(workspace.id, pipeline.id, stageRun.id, now, params.projectId, params.linearIssueId);
 
       return {
-        issue: this.getIssue(params.projectId, params.linearIssueId)!,
-        runId,
+        issue: this.getTrackedIssue(params.projectId, params.linearIssueId)!,
+        workspace,
+        pipeline,
+        stageRun,
       };
     });
 
     return transaction();
   }
 
-  updateRunSessionId(runId: number, sessionId: number): void {
-    this.connection.prepare("UPDATE issue_runs SET session_id = ? WHERE id = ?").run(sessionId, runId);
+  getWorkspace(id: number): WorkspaceRecord | undefined {
+    const row = this.connection.prepare("SELECT * FROM workspaces WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+    return row ? this.mapWorkspace(row) : undefined;
   }
 
-  getIssueRun(runId: number): IssueRunRecord | undefined {
-    const row = this.connection.prepare("SELECT * FROM issue_runs WHERE id = ?").get(runId) as Record<string, unknown> | undefined;
-    return row ? this.mapIssueRun(row) : undefined;
+  getActiveWorkspaceForIssue(projectId: string, linearIssueId: string): WorkspaceRecord | undefined {
+    const row = this.connection
+      .prepare("SELECT * FROM workspaces WHERE project_id = ? AND linear_issue_id = ? ORDER BY id DESC LIMIT 1")
+      .get(projectId, linearIssueId) as Record<string, unknown> | undefined;
+    return row ? this.mapWorkspace(row) : undefined;
   }
 
-  finishIssueRun(params: {
-    runId: number;
-    status: RunStatus;
-    resultJson?: string;
-    errorJson?: string;
-  }): void {
-    const now = isoNow();
+  getPipelineRun(id: number): PipelineRunRecord | undefined {
+    const row = this.connection.prepare("SELECT * FROM pipeline_runs WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+    return row ? this.mapPipelineRun(row) : undefined;
+  }
+
+  getActivePipelineForIssue(projectId: string, linearIssueId: string): PipelineRunRecord | undefined {
+    const row = this.connection
+      .prepare("SELECT * FROM pipeline_runs WHERE project_id = ? AND linear_issue_id = ? AND status = 'active' ORDER BY id DESC LIMIT 1")
+      .get(projectId, linearIssueId) as Record<string, unknown> | undefined;
+    return row ? this.mapPipelineRun(row) : undefined;
+  }
+
+  getStageRun(id: number): StageRunRecord | undefined {
+    const row = this.connection.prepare("SELECT * FROM stage_runs WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+    return row ? this.mapStageRun(row) : undefined;
+  }
+
+  getStageRunByThreadId(threadId: string): StageRunRecord | undefined {
+    const row = this.connection
+      .prepare("SELECT * FROM stage_runs WHERE thread_id = ? ORDER BY id DESC LIMIT 1")
+      .get(threadId) as Record<string, unknown> | undefined;
+    return row ? this.mapStageRun(row) : undefined;
+  }
+
+  listStageRunsForIssue(projectId: string, linearIssueId: string): StageRunRecord[] {
+    const rows = this.connection
+      .prepare("SELECT * FROM stage_runs WHERE project_id = ? AND linear_issue_id = ? ORDER BY id")
+      .all(projectId, linearIssueId) as Record<string, unknown>[];
+    return rows.map((row) => this.mapStageRun(row));
+  }
+
+  updateStageRunThread(params: { stageRunId: number; threadId: string; parentThreadId?: string; turnId?: string }): void {
     this.connection
       .prepare(
         `
-        UPDATE issue_runs
-        SET status = ?, finished_at = ?, result_json = ?, error_json = ?
+        UPDATE stage_runs
+        SET thread_id = ?, parent_thread_id = COALESCE(?, parent_thread_id), turn_id = COALESCE(?, turn_id)
         WHERE id = ?
         `,
       )
-      .run(params.status, now, params.resultJson ?? null, params.errorJson ?? null, params.runId);
+      .run(params.threadId, params.parentThreadId ?? null, params.turnId ?? null, params.stageRunId);
   }
 
-  createSession(params: {
-    projectId: string;
-    linearIssueId: string;
-    runId: number;
-    stage: RunStage;
-    zmxSessionName: string;
-    processId?: number;
-    branchName: string;
-    worktreePath: string;
-  }): number {
-    const now = isoNow();
-    const result = this.connection
-      .prepare(
-        `
-        INSERT INTO sessions (
-          project_id, linear_issue_id, run_id, stage, zmx_session_name, process_id, branch_name, worktree_path, started_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `,
-      )
-      .run(
-        params.projectId,
-        params.linearIssueId,
-        params.runId,
-        params.stage,
-        params.zmxSessionName,
-        params.processId ?? null,
-        params.branchName,
-        params.worktreePath,
-        now,
-      );
-
-    return Number(result.lastInsertRowid);
-  }
-
-  getSession(sessionId: number): SessionRecord | undefined {
-    const row = this.connection.prepare("SELECT * FROM sessions WHERE id = ?").get(sessionId) as Record<string, unknown> | undefined;
-    return row ? this.mapSession(row) : undefined;
-  }
-
-  getSessionByRun(runId: number): SessionRecord | undefined {
-    const row = this.connection.prepare("SELECT * FROM sessions WHERE run_id = ?").get(runId) as Record<string, unknown> | undefined;
-    return row ? this.mapSession(row) : undefined;
-  }
-
-  finishSession(sessionId: number, exitCode: number): void {
-    this.connection.prepare("UPDATE sessions SET ended_at = ?, exit_code = ? WHERE id = ?").run(isoNow(), exitCode, sessionId);
-  }
-
-  refreshIssueLease(params: {
-    projectId: string;
-    linearIssueId: string;
-    runId: number;
-    leaseOwner: string;
-    leaseDurationMs: number;
-    state?: IssueState;
+  finishStageRun(params: {
+    stageRunId: number;
+    status: StageRunStatus;
+    threadId: string;
+    turnId?: string;
+    summaryJson?: string;
+    reportJson?: string;
   }): void {
-    const current = this.getIssue(params.projectId, params.linearIssueId);
-    if (!current || current.activeRunId !== params.runId) {
+    const stageRun = this.getStageRun(params.stageRunId);
+    if (!stageRun) {
       return;
     }
 
@@ -568,72 +481,124 @@ export class PatchRelayDatabase {
     this.connection
       .prepare(
         `
-        UPDATE issues
-        SET current_state = ?, lease_owner = ?, lease_expires_at = ?, last_heartbeat_at = ?, updated_at = ?
-        WHERE project_id = ? AND linear_issue_id = ? AND active_run_id = ?
+        UPDATE stage_runs
+        SET status = ?, thread_id = ?, turn_id = COALESCE(?, turn_id), summary_json = ?, report_json = ?, ended_at = ?
+        WHERE id = ?
         `,
       )
       .run(
-        params.state ?? current.currentState,
-        params.leaseOwner,
-        isoFromMs(Date.now() + params.leaseDurationMs),
+        params.status,
+        params.threadId,
+        params.turnId ?? null,
+        params.summaryJson ?? null,
+        params.reportJson ?? null,
         now,
-        now,
-        params.projectId,
-        params.linearIssueId,
-        params.runId,
+        params.stageRunId,
       );
-  }
-
-  clearActiveRun(params: {
-    projectId: string;
-    linearIssueId: string;
-    runId?: number;
-    nextState: IssueState;
-  }): void {
-    const current = this.getIssue(params.projectId, params.linearIssueId);
-    if (!current) {
-      return;
-    }
-
-    if (params.runId !== undefined && current.activeRunId !== params.runId) {
-      return;
-    }
 
     this.connection
       .prepare(
         `
-        UPDATE issues
-        SET current_state = ?, active_run_id = NULL, active_stage = NULL, lease_owner = NULL,
-            lease_expires_at = NULL, last_heartbeat_at = NULL, updated_at = ?
+        UPDATE workspaces
+        SET last_stage = ?, last_thread_id = ?, status = ?, updated_at = ?
+        WHERE id = ?
+        `,
+      )
+      .run(stageRun.stage, params.threadId, params.status === "completed" ? "active" : "paused", now, stageRun.workspaceId);
+
+    this.connection
+      .prepare(
+        `
+        UPDATE tracked_issues
+        SET active_stage_run_id = NULL,
+            latest_thread_id = ?,
+            lifecycle_status = ?,
+            updated_at = ?
         WHERE project_id = ? AND linear_issue_id = ?
         `,
       )
-      .run(params.nextState, isoNow(), params.projectId, params.linearIssueId);
+      .run(
+        params.threadId,
+        params.status === "completed" ? "idle" : "failed",
+        now,
+        stageRun.projectId,
+        stageRun.linearIssueId,
+      );
+
+    const nextPipelineStatus: PipelineStatus = params.status === "completed" ? "active" : "failed";
+    this.connection
+      .prepare(
+        `
+        UPDATE pipeline_runs
+        SET status = ?, current_stage = ?, ended_at = CASE WHEN ? = 'failed' THEN ? ELSE ended_at END
+        WHERE id = ?
+        `,
+      )
+      .run(nextPipelineStatus, stageRun.stage, nextPipelineStatus, now, stageRun.pipelineRunId);
   }
 
-  private mapIssue(row: Record<string, unknown>): PersistedIssueRecord {
+  markPipelineCompleted(pipelineRunId: number): void {
+    this.connection.prepare("UPDATE pipeline_runs SET status = 'completed', ended_at = ? WHERE id = ?").run(isoNow(), pipelineRunId);
+  }
+
+  setIssueDesiredStage(projectId: string, linearIssueId: string, desiredStage?: WorkflowStage, desiredWebhookId?: string): void {
+    this.connection
+      .prepare(
+        `
+        UPDATE tracked_issues
+        SET desired_stage = ?, desired_webhook_id = ?, lifecycle_status = ?, updated_at = ?
+        WHERE project_id = ? AND linear_issue_id = ?
+        `,
+      )
+      .run(desiredStage ?? null, desiredWebhookId ?? null, desiredStage ? "queued" : "idle", isoNow(), projectId, linearIssueId);
+  }
+
+  saveThreadEvent(params: { stageRunId: number; threadId: string; turnId?: string; method: string; eventJson: string }): number {
+    const result = this.connection
+      .prepare(
+        `
+        INSERT INTO thread_events (stage_run_id, thread_id, turn_id, method, event_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        `,
+      )
+      .run(params.stageRunId, params.threadId, params.turnId ?? null, params.method, params.eventJson, isoNow());
+    return Number(result.lastInsertRowid);
+  }
+
+  listThreadEvents(stageRunId: number): ThreadEventRecord[] {
+    const rows = this.connection
+      .prepare("SELECT * FROM thread_events WHERE stage_run_id = ? ORDER BY id")
+      .all(stageRunId) as Record<string, unknown>[];
+    return rows.map((row) => this.mapThreadEvent(row));
+  }
+
+  getLatestStageRunForIssue(projectId: string, linearIssueId: string): StageRunRecord | undefined {
+    const row = this.connection
+      .prepare("SELECT * FROM stage_runs WHERE project_id = ? AND linear_issue_id = ? ORDER BY id DESC LIMIT 1")
+      .get(projectId, linearIssueId) as Record<string, unknown> | undefined;
+    return row ? this.mapStageRun(row) : undefined;
+  }
+
+  getIssueOverview(issueKey: string): {
+    issue: TrackedIssueRecord;
+    workspace?: WorkspaceRecord;
+    pipeline?: PipelineRunRecord;
+    activeStageRun?: StageRunRecord;
+  } | undefined {
+    const issue = this.getTrackedIssueByKey(issueKey);
+    if (!issue) {
+      return undefined;
+    }
+
+    const workspace = issue.activeWorkspaceId ? this.getWorkspace(issue.activeWorkspaceId) : undefined;
+    const pipeline = issue.activePipelineRunId ? this.getPipelineRun(issue.activePipelineRunId) : undefined;
+    const activeStageRun = issue.activeStageRunId ? this.getStageRun(issue.activeStageRunId) : undefined;
+
     return {
-      id: Number(row.id),
-      projectId: String(row.project_id),
-      linearIssueId: String(row.linear_issue_id),
-      ...(row.linear_issue_key === null ? {} : { linearIssueKey: String(row.linear_issue_key) }),
-      ...(row.title === null ? {} : { title: String(row.title) }),
-      ...(row.issue_url === null ? {} : { issueUrl: String(row.issue_url) }),
-      currentState: row.current_state as IssueState,
-      ...(row.active_stage === null ? {} : { activeStage: row.active_stage as RunStage }),
-      ...(row.desired_stage === null ? {} : { desiredStage: row.desired_stage as RunStage }),
-      ...(row.desired_state_name === null ? {} : { desiredStateName: String(row.desired_state_name) }),
-      ...(row.desired_webhook_id === null ? {} : { desiredWebhookId: String(row.desired_webhook_id) }),
-      ...(row.desired_webhook_timestamp === null ? {} : { desiredWebhookTimestamp: Number(row.desired_webhook_timestamp) }),
-      ...(row.branch_name === null ? {} : { branchName: String(row.branch_name) }),
-      ...(row.worktree_path === null ? {} : { worktreePath: String(row.worktree_path) }),
-      ...(row.active_run_id === null ? {} : { activeRunId: Number(row.active_run_id) }),
-      ...(row.lease_owner === null ? {} : { leaseOwner: String(row.lease_owner) }),
-      ...(row.lease_expires_at === null ? {} : { leaseExpiresAt: String(row.lease_expires_at) }),
-      ...(row.last_heartbeat_at === null ? {} : { lastHeartbeatAt: String(row.last_heartbeat_at) }),
-      ...(row.last_webhook_at === null ? {} : { lastWebhookAt: String(row.last_webhook_at) }),
-      updatedAt: String(row.updated_at),
+      issue,
+      ...(workspace ? { workspace } : {}),
+      ...(pipeline ? { pipeline } : {}),
+      ...(activeStageRun ? { activeStageRun } : {}),
     };
   }
 
@@ -653,36 +618,86 @@ export class PatchRelayDatabase {
     };
   }
 
-  private mapIssueRun(row: Record<string, unknown>): IssueRunRecord {
+  private mapTrackedIssue(row: Record<string, unknown>): TrackedIssueRecord {
     return {
       id: Number(row.id),
       projectId: String(row.project_id),
       linearIssueId: String(row.linear_issue_id),
-      stage: row.stage as RunStage,
-      status: row.status as RunStatus,
-      startedAt: String(row.started_at),
-      ...(row.finished_at === null ? {} : { finishedAt: String(row.finished_at) }),
-      triggerWebhookId: String(row.trigger_webhook_id),
-      ...(row.session_id === null ? {} : { sessionId: Number(row.session_id) }),
-      ...(row.result_json === null ? {} : { resultJson: String(row.result_json) }),
-      ...(row.error_json === null ? {} : { errorJson: String(row.error_json) }),
+      ...(row.issue_key === null ? {} : { issueKey: String(row.issue_key) }),
+      ...(row.title === null ? {} : { title: String(row.title) }),
+      ...(row.issue_url === null ? {} : { issueUrl: String(row.issue_url) }),
+      ...(row.current_linear_state === null ? {} : { currentLinearState: String(row.current_linear_state) }),
+      ...(row.desired_stage === null ? {} : { desiredStage: row.desired_stage as WorkflowStage }),
+      ...(row.desired_webhook_id === null ? {} : { desiredWebhookId: String(row.desired_webhook_id) }),
+      ...(row.active_workspace_id === null ? {} : { activeWorkspaceId: Number(row.active_workspace_id) }),
+      ...(row.active_pipeline_run_id === null ? {} : { activePipelineRunId: Number(row.active_pipeline_run_id) }),
+      ...(row.active_stage_run_id === null ? {} : { activeStageRunId: Number(row.active_stage_run_id) }),
+      ...(row.latest_thread_id === null ? {} : { latestThreadId: String(row.latest_thread_id) }),
+      lifecycleStatus: row.lifecycle_status as IssueLifecycleStatus,
+      ...(row.last_webhook_at === null ? {} : { lastWebhookAt: String(row.last_webhook_at) }),
+      updatedAt: String(row.updated_at),
     };
   }
 
-  private mapSession(row: Record<string, unknown>): SessionRecord {
+  private mapWorkspace(row: Record<string, unknown>): WorkspaceRecord {
     return {
       id: Number(row.id),
       projectId: String(row.project_id),
       linearIssueId: String(row.linear_issue_id),
-      runId: Number(row.run_id),
-      stage: row.stage as RunStage,
-      zmxSessionName: String(row.zmx_session_name),
-      ...(row.process_id === null ? {} : { processId: Number(row.process_id) }),
       branchName: String(row.branch_name),
       worktreePath: String(row.worktree_path),
+      status: row.status as WorkspaceRecord["status"],
+      ...(row.last_stage === null ? {} : { lastStage: row.last_stage as WorkflowStage }),
+      ...(row.last_thread_id === null ? {} : { lastThreadId: String(row.last_thread_id) }),
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+    };
+  }
+
+  private mapPipelineRun(row: Record<string, unknown>): PipelineRunRecord {
+    return {
+      id: Number(row.id),
+      projectId: String(row.project_id),
+      linearIssueId: String(row.linear_issue_id),
+      workspaceId: Number(row.workspace_id),
+      status: row.status as PipelineStatus,
+      ...(row.current_stage === null ? {} : { currentStage: row.current_stage as WorkflowStage }),
       startedAt: String(row.started_at),
       ...(row.ended_at === null ? {} : { endedAt: String(row.ended_at) }),
-      ...(row.exit_code === null ? {} : { exitCode: Number(row.exit_code) }),
+    };
+  }
+
+  private mapStageRun(row: Record<string, unknown>): StageRunRecord {
+    return {
+      id: Number(row.id),
+      pipelineRunId: Number(row.pipeline_run_id),
+      projectId: String(row.project_id),
+      linearIssueId: String(row.linear_issue_id),
+      workspaceId: Number(row.workspace_id),
+      stage: row.stage as WorkflowStage,
+      status: row.status as StageRunStatus,
+      triggerWebhookId: String(row.trigger_webhook_id),
+      workflowFile: String(row.workflow_file),
+      promptText: String(row.prompt_text),
+      ...(row.thread_id === null ? {} : { threadId: String(row.thread_id) }),
+      ...(row.parent_thread_id === null ? {} : { parentThreadId: String(row.parent_thread_id) }),
+      ...(row.turn_id === null ? {} : { turnId: String(row.turn_id) }),
+      ...(row.summary_json === null ? {} : { summaryJson: String(row.summary_json) }),
+      ...(row.report_json === null ? {} : { reportJson: String(row.report_json) }),
+      startedAt: String(row.started_at),
+      ...(row.ended_at === null ? {} : { endedAt: String(row.ended_at) }),
+    };
+  }
+
+  private mapThreadEvent(row: Record<string, unknown>): ThreadEventRecord {
+    return {
+      id: Number(row.id),
+      stageRunId: Number(row.stage_run_id),
+      threadId: String(row.thread_id),
+      ...(row.turn_id === null ? {} : { turnId: String(row.turn_id) }),
+      method: String(row.method),
+      eventJson: String(row.event_json),
+      createdAt: String(row.created_at),
     };
   }
 }

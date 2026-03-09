@@ -1,13 +1,93 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { EventEmitter } from "node:events";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import pino from "pino";
 import { PatchRelayDatabase } from "../src/db.js";
-import { buildLaunchPlan } from "../src/launcher.js";
 import { PatchRelayService } from "../src/service.js";
-import type { AppConfig, PersistedIssueRecord, ProjectConfig, WorkflowKind } from "../src/types.js";
+import type { AppConfig, CodexThreadSummary, ProjectConfig } from "../src/types.js";
+
+class FakeCodexClient extends EventEmitter {
+  readonly startedThreads: string[] = [];
+  readonly forkedFrom: string[] = [];
+  readonly turns: Array<{ threadId: string; input: string }> = [];
+  readonly threads = new Map<string, CodexThreadSummary>();
+  private nextThreadNumber = 1;
+  private nextTurnNumber = 1;
+
+  async start(): Promise<void> {}
+  async stop(): Promise<void> {}
+
+  async startThread(params: { cwd: string }): Promise<CodexThreadSummary> {
+    const thread = this.makeThread(`thread-${this.nextThreadNumber++}`, params.cwd);
+    this.startedThreads.push(thread.id);
+    this.threads.set(thread.id, thread);
+    return thread;
+  }
+
+  async forkThread(threadId: string, cwd?: string): Promise<CodexThreadSummary> {
+    const thread = this.makeThread(`thread-${this.nextThreadNumber++}`, cwd ?? `/tmp/${threadId}`);
+    this.forkedFrom.push(threadId);
+    this.threads.set(thread.id, thread);
+    return thread;
+  }
+
+  async startTurn(params: { threadId: string; input: string }): Promise<{ threadId: string; turnId: string; status: string }> {
+    this.turns.push({ threadId: params.threadId, input: params.input });
+    return {
+      threadId: params.threadId,
+      turnId: `turn-${this.nextTurnNumber++}`,
+      status: "inProgress",
+    };
+  }
+
+  async readThread(threadId: string): Promise<CodexThreadSummary> {
+    return this.threads.get(threadId)!;
+  }
+
+  async listThreads(): Promise<CodexThreadSummary[]> {
+    return [...this.threads.values()];
+  }
+
+  removeThread(threadId: string): void {
+    this.threads.delete(threadId);
+  }
+
+  completeThread(threadId: string, items: CodexThreadSummary["turns"][number]["items"]): void {
+    const thread = this.threads.get(threadId);
+    assert.ok(thread);
+    thread.turns = [
+      {
+        id: "turn-final",
+        status: "completed",
+        items,
+      },
+    ];
+    this.emit("notification", {
+      method: "turn/completed",
+      params: {
+        threadId,
+        turn: {
+          id: "turn-final",
+          status: "completed",
+        },
+      },
+    });
+  }
+
+  private makeThread(id: string, cwd: string): CodexThreadSummary {
+    return {
+      id,
+      preview: "PatchRelay stage",
+      cwd,
+      status: "idle",
+      turns: [],
+    };
+  }
+}
 
 function createConfig(baseDir: string): AppConfig {
   return {
@@ -34,49 +114,68 @@ function createConfig(baseDir: string): AppConfig {
       webhookSecret: "secret",
     },
     runner: {
-      zmxBin: "zmx",
       gitBin: "git",
-      launch: {
-        shell: "codex",
-        args: ["exec", "{prompt}"],
+      codex: {
+        bin: "codex",
+        args: ["app-server"],
+        approvalPolicy: "never",
+        sandboxMode: "danger-full-access",
+        persistExtendedHistory: true,
+        serviceName: "patchrelay-test",
       },
     },
     projects: [
       {
-        id: "patchrelay",
-        repoPath: baseDir,
+        id: "usertold",
+        repoPath: path.join(baseDir, "repo"),
         worktreeRoot: path.join(baseDir, "worktrees"),
         workflowFiles: {
-          implementation: path.join(baseDir, "implementation.md"),
-          review: path.join(baseDir, "review.md"),
-          deploy: path.join(baseDir, "deploy.md"),
+          development: path.join(baseDir, "DEVELOPMENT_WORKFLOW.md"),
+          review: path.join(baseDir, "REVIEW_WORKFLOW.md"),
+          deploy: path.join(baseDir, "DEPLOY_WORKFLOW.md"),
+          cleanup: path.join(baseDir, "CLEANUP_WORKFLOW.md"),
         },
         workflowStatuses: {
-          implementation: "Start",
+          development: "Start",
           review: "Review",
           deploy: "Deploy",
+          cleanup: "Cleanup",
+          humanNeeded: "Human Needed",
+          done: "Done",
         },
-        linearTeamIds: ["ENG"],
+        issueKeyPrefixes: ["USE"],
+        linearTeamIds: ["USE"],
         allowLabels: [],
         triggerEvents: ["statusChanged"],
-        branchPrefix: "patchrelay",
+        branchPrefix: "use",
       },
     ],
   };
 }
 
-function createLogger() {
-  return pino({ enabled: false });
+function setupRepo(baseDir: string, config: AppConfig): void {
+  const repoPath = config.projects[0].repoPath;
+  execFileSync("git", ["init", repoPath], { stdio: "ignore" });
+  execFileSync("git", ["-C", repoPath, "config", "user.email", "patchrelay@example.com"], { stdio: "ignore" });
+  execFileSync("git", ["-C", repoPath, "config", "user.name", "PatchRelay"], { stdio: "ignore" });
+  writeFileSync(path.join(repoPath, "README.md"), "# test\n", "utf8");
+  execFileSync("git", ["-C", repoPath, "add", "."], { stdio: "ignore" });
+  execFileSync("git", ["-C", repoPath, "commit", "-m", "initial"], { stdio: "ignore" });
+
+  writeFileSync(config.projects[0].workflowFiles.development, "Implement carefully.\n", "utf8");
+  writeFileSync(config.projects[0].workflowFiles.review, "Review carefully.\n", "utf8");
+  writeFileSync(config.projects[0].workflowFiles.deploy, "Deploy carefully.\n", "utf8");
+  writeFileSync(config.projects[0].workflowFiles.cleanup, "Clean up carefully.\n", "utf8");
 }
 
-function issueToMetadata(issue: PersistedIssueRecord) {
-  return {
-    id: issue.linearIssueId,
-    ...(issue.linearIssueKey ? { identifier: issue.linearIssueKey } : {}),
-    ...(issue.title ? { title: issue.title } : {}),
-    ...(issue.issueUrl ? { url: issue.issueUrl } : {}),
-    labelNames: [],
-  };
+function createService(baseDir: string) {
+  const config = createConfig(baseDir);
+  setupRepo(baseDir, config);
+  const db = new PatchRelayDatabase(config.database.path, true);
+  db.runMigrations();
+  const codex = new FakeCodexClient();
+  const service = new PatchRelayService(config, db, codex as never, pino({ enabled: false }));
+  return { config, db, codex, service, project: config.projects[0] as ProjectConfig };
 }
 
 async function flushQueues(): Promise<void> {
@@ -84,89 +183,28 @@ async function flushQueues(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-class FakeLaunchRunner {
-  private completionHandler?: (params: {
-    projectId: string;
-    linearIssueId: string;
-    runId: number;
-    sessionId: number;
-    exitCode: number;
-  }) => Promise<void> | void;
-  readonly launches: Array<{ issueId: string; stage: WorkflowKind; triggerWebhookId: string }> = [];
+async function waitFor(assertion: () => void, timeoutMs = 2000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let lastError: unknown;
 
-  constructor(
-    private readonly config: AppConfig,
-    private readonly db: PatchRelayDatabase,
-  ) {}
-
-  setRunCompletionHandler(
-    handler: (params: { projectId: string; linearIssueId: string; runId: number; sessionId: number; exitCode: number }) => Promise<void> | void,
-  ): void {
-    this.completionHandler = handler;
-  }
-
-  async launch(params: {
-    project: ProjectConfig;
-    issue: PersistedIssueRecord;
-    workflowKind: WorkflowKind;
-    triggerWebhookId: string;
-  }) {
-    const plan = buildLaunchPlan(this.config, params.project, issueToMetadata(params.issue), params.workflowKind);
-    const claim = this.db.claimIssueLaunch({
-      projectId: params.project.id,
-      linearIssueId: params.issue.linearIssueId,
-      stage: params.workflowKind,
-      triggerWebhookId: params.triggerWebhookId,
-      branchName: plan.branchName,
-      worktreePath: plan.worktreePath,
-      leaseOwner: "test",
-      leaseDurationMs: 60_000,
-    });
-    if (!claim) {
-      return undefined;
+  while (Date.now() < deadline) {
+    try {
+      assertion();
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 20));
     }
-
-    this.launches.push({
-      issueId: params.issue.linearIssueId,
-      stage: params.workflowKind,
-      triggerWebhookId: params.triggerWebhookId,
-    });
-    return plan;
   }
 
-  async getSessionState() {
-    return { kind: "missing" } as const;
-  }
-
-  resumeSessionMonitoring(): void {}
-
-  async completeIssue(projectId: string, linearIssueId: string, exitCode = 0): Promise<void> {
-    const issue = this.db.getIssue(projectId, linearIssueId);
-    assert.ok(issue?.activeRunId, "issue should have an active run before completion");
-    this.db.clearActiveRun({
-      projectId,
-      linearIssueId,
-      runId: issue.activeRunId,
-      nextState: exitCode === 0 ? "completed" : "failed",
-    });
-    await this.completionHandler?.({
-      projectId,
-      linearIssueId,
-      runId: issue.activeRunId,
-      sessionId: 0,
-      exitCode,
-    });
-  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
-test("service defers newer stage webhooks until the active run completes", async () => {
+test("service keeps one workspace and forks later stages from the prior thread", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-service-"));
   try {
-    const config = createConfig(baseDir);
-    const db = new PatchRelayDatabase(config.database.path, true);
-    db.runMigrations();
-    const launcher = new FakeLaunchRunner(config, db);
-    const service = new PatchRelayService(config, db, launcher as never, createLogger());
+    const { db, codex, service } = createService(baseDir);
+    await service.start();
 
     const startEvent = db.insertWebhookEvent({
       webhookId: "delivery-start",
@@ -182,10 +220,10 @@ test("service defers newer stage webhooks until the active run completes", async
         updatedFrom: { stateId: "todo" },
         data: {
           id: "issue_1",
-          identifier: "ENG-1",
-          title: "Fix stage handoff",
-          url: "https://linear.app/example/issue/ENG-1",
-          team: { key: "ENG" },
+          identifier: "USE-25",
+          title: "Build app server orchestration",
+          url: "https://linear.app/example/issue/USE-25",
+          team: { key: "USE" },
           state: { name: "Start" },
         },
       }),
@@ -194,261 +232,277 @@ test("service defers newer stage webhooks until the active run completes", async
     });
 
     await service.processWebhookEvent(startEvent.id);
-    await flushQueues();
-
-    const reviewEvent = db.insertWebhookEvent({
-      webhookId: "delivery-review",
-      receivedAt: new Date().toISOString(),
-      eventType: "Issue.update",
-      issueId: "issue_1",
-      headersJson: "{}",
-      payloadJson: JSON.stringify({
-        action: "update",
-        type: "Issue",
-        createdAt: "2026-03-08T12:01:00.000Z",
-        webhookTimestamp: 2000,
-        updatedFrom: { stateId: "implementing" },
-        data: {
-          id: "issue_1",
-          identifier: "ENG-1",
-          title: "Fix stage handoff",
-          url: "https://linear.app/example/issue/ENG-1",
-          team: { key: "ENG" },
-          state: { name: "Review" },
-        },
-      }),
-      signatureValid: true,
-      dedupeStatus: "accepted",
+    await waitFor(() => {
+      assert.equal(codex.startedThreads.length, 1);
+      assert.equal(codex.turns.length, 1);
     });
 
-    await service.processWebhookEvent(reviewEvent.id);
-    await flushQueues();
+    const issueAfterStart = db.getTrackedIssue("usertold", "issue_1");
+    assert.ok(issueAfterStart?.activeStageRunId);
+    const startStageRun = db.getStageRun(issueAfterStart.activeStageRunId);
+    assert.equal(startStageRun?.stage, "development");
+    assert.ok(startStageRun?.threadId);
 
-    let issue = db.getIssue("patchrelay", "issue_1");
-    assert.equal(launcher.launches.map((entry) => entry.stage).join(","), "implementation");
-    assert.equal(issue?.desiredStage, "review");
+    db.recordDesiredStage({
+      projectId: "usertold",
+      linearIssueId: "issue_1",
+      issueKey: "USE-25",
+      title: "Build app server orchestration",
+      issueUrl: "https://linear.app/example/issue/USE-25",
+      currentLinearState: "Review",
+      desiredStage: "review",
+      desiredWebhookId: "delivery-review",
+      lastWebhookAt: new Date().toISOString(),
+    });
 
-    await launcher.completeIssue("patchrelay", "issue_1");
-    await flushQueues();
+    codex.completeThread(startStageRun!.threadId!, [
+      {
+        type: "agentMessage",
+        id: "assistant-1",
+        text: "Implemented the feature and left the tree ready for review.",
+      },
+      {
+        type: "commandExecution",
+        id: "cmd-1",
+        command: "npm test",
+        cwd: "/tmp/worktree",
+        status: "completed",
+        exitCode: 0,
+        durationMs: 1234,
+      },
+      {
+        type: "fileChange",
+        id: "file-1",
+        status: "completed",
+        changes: [{ path: "src/service.ts", kind: "update" }],
+      },
+    ]);
+    await waitFor(() => {
+      assert.deepEqual(codex.forkedFrom, [startStageRun!.threadId!]);
+      assert.equal(codex.turns.length, 2);
+    });
 
-    issue = db.getIssue("patchrelay", "issue_1");
-    assert.equal(launcher.launches.map((entry) => entry.stage).join(","), "implementation,review");
-    assert.equal(issue?.desiredStage, undefined);
+    const latestIssue = db.getTrackedIssue("usertold", "issue_1");
+    const workspace = db.getActiveWorkspaceForIssue("usertold", "issue_1");
+    assert.ok(workspace);
+    assert.equal(workspace?.lastThreadId, startStageRun?.threadId);
+    assert.ok(latestIssue?.activeStageRunId);
+
+    const reviewStageRun = db.getStageRun(latestIssue.activeStageRunId!);
+    assert.equal(reviewStageRun?.stage, "review");
+    assert.equal(reviewStageRun?.parentThreadId, startStageRun?.threadId);
+
     service.stop();
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
 
-test("service startup reconciles stale active runs and launches pending desired work", async () => {
+test("service builds a read-only report from completed thread history", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-report-"));
+  try {
+    const { db, codex, service } = createService(baseDir);
+    await service.start();
+
+    db.recordDesiredStage({
+      projectId: "usertold",
+      linearIssueId: "issue_2",
+      issueKey: "USE-26",
+      title: "Observe agent work",
+      issueUrl: "https://linear.app/example/issue/USE-26",
+      currentLinearState: "Start",
+      desiredStage: "development",
+      desiredWebhookId: "delivery-start",
+      lastWebhookAt: new Date().toISOString(),
+    });
+
+    await service.processIssue("usertold::issue_2");
+    await flushQueues();
+
+    const issue = db.getTrackedIssue("usertold", "issue_2");
+    const stageRun = db.getStageRun(issue!.activeStageRunId!);
+    codex.completeThread(stageRun!.threadId!, [
+      {
+        type: "agentMessage",
+        id: "assistant-1",
+        text: "I updated the service and verified the changes.",
+      },
+      {
+        type: "plan",
+        id: "plan-1",
+        text: "1. Update service. 2. Add tests.",
+      },
+      {
+        type: "commandExecution",
+        id: "cmd-1",
+        command: "npm test",
+        cwd: "/tmp/worktree",
+        status: "completed",
+        exitCode: 0,
+        durationMs: 2345,
+      },
+      {
+        type: "fileChange",
+        id: "file-1",
+        status: "completed",
+        changes: [{ path: "src/http.ts", kind: "update" }],
+      },
+      {
+        type: "dynamicToolCall",
+        id: "tool-1",
+        tool: "apply_patch",
+        status: "completed",
+        durationMs: 345,
+      },
+    ]);
+    await flushQueues();
+
+    const report = await service.getIssueReport("USE-26");
+    assert.ok(report);
+    assert.equal(report?.stages.length, 1);
+    assert.equal(report?.stages[0].report?.assistantMessages[0], "I updated the service and verified the changes.");
+    assert.equal(report?.stages[0].report?.commands[0].command, "npm test");
+    assert.equal(report?.stages[0].report?.toolCalls[0].name, "apply_patch");
+    const overview = await service.getIssueOverview("USE-26");
+    assert.equal(overview?.latestStageRun?.status, "completed");
+
+    service.stop();
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("service exposes raw stored events and live active status", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-live-"));
+  try {
+    const { db, codex, service } = createService(baseDir);
+    await service.start();
+
+    db.recordDesiredStage({
+      projectId: "usertold",
+      linearIssueId: "issue_3",
+      issueKey: "USE-27",
+      title: "Inspect live status",
+      issueUrl: "https://linear.app/example/issue/USE-27",
+      currentLinearState: "Start",
+      desiredStage: "development",
+      desiredWebhookId: "delivery-start",
+      lastWebhookAt: new Date().toISOString(),
+    });
+
+    await service.processIssue("usertold::issue_3");
+    await flushQueues();
+
+    const issue = db.getTrackedIssue("usertold", "issue_3");
+    const stageRun = db.getStageRun(issue!.activeStageRunId!);
+    db.saveThreadEvent({
+      stageRunId: stageRun!.id,
+      threadId: stageRun!.threadId!,
+      turnId: stageRun!.turnId,
+      method: "turn/started",
+      eventJson: JSON.stringify({ threadId: stageRun!.threadId, turnId: stageRun!.turnId }),
+    });
+
+    codex.threads.set(stageRun!.threadId!, {
+      ...codex.threads.get(stageRun!.threadId!)!,
+      status: "running",
+      turns: [
+        {
+          id: stageRun!.turnId!,
+          status: "inProgress",
+          items: [{ type: "agentMessage", id: "assistant-1", text: "Working through the task." }],
+        },
+      ],
+    });
+
+    const live = await service.getActiveStageStatus("USE-27");
+    assert.equal(live?.liveThread.latestTurnStatus, "inProgress");
+    assert.equal(live?.liveThread.latestAgentMessage, "Working through the task.");
+
+    const events = await service.getStageEvents("USE-27", stageRun!.id);
+    assert.equal(events?.events[0].method, "turn/started");
+    assert.equal(events?.events[0].parsedEvent?.threadId, stageRun!.threadId);
+
+    service.stop();
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("service startup reconciles finished and missing active threads", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-"));
   try {
     const config = createConfig(baseDir);
+    setupRepo(baseDir, config);
     const db = new PatchRelayDatabase(config.database.path, true);
     db.runMigrations();
+    const codex = new FakeCodexClient();
 
-    db.upsertIssue({
-      projectId: "patchrelay",
-      linearIssueId: "issue_2",
-      linearIssueKey: "ENG-2",
-      title: "Recover stale run",
-      issueUrl: "https://linear.app/example/issue/ENG-2",
-      currentState: "received",
-      lastWebhookAt: new Date().toISOString(),
-    });
-
-    const issue = db.recordDesiredStage({
-      projectId: "patchrelay",
-      linearIssueId: "issue_2",
-      currentState: "received",
-      linearIssueKey: "ENG-2",
-      title: "Recover stale run",
-      issueUrl: "https://linear.app/example/issue/ENG-2",
-      desiredStage: "implementation",
-      desiredStateName: "Start",
+    db.upsertTrackedIssue({
+      projectId: "usertold",
+      linearIssueId: "issue_4",
+      issueKey: "USE-28",
+      title: "Recover finished stage",
+      currentLinearState: "Start",
+      desiredStage: "development",
       desiredWebhookId: "delivery-start",
-      desiredWebhookTimestamp: 1000,
+      lifecycleStatus: "running",
       lastWebhookAt: new Date().toISOString(),
     });
-
-    const project = config.projects[0];
-    const plan = buildLaunchPlan(config, project, issueToMetadata(issue), "implementation");
-    const claim = db.claimIssueLaunch({
-      projectId: "patchrelay",
-      linearIssueId: "issue_2",
-      stage: "implementation",
+    const claim = db.claimStageRun({
+      projectId: "usertold",
+      linearIssueId: "issue_4",
+      stage: "development",
       triggerWebhookId: "delivery-start",
-      branchName: plan.branchName,
-      worktreePath: plan.worktreePath,
-      leaseOwner: "old-worker",
-      leaseDurationMs: 60_000,
+      branchName: "use/USE-28-recover-finished-stage",
+      worktreePath: path.join(baseDir, "worktrees", "USE-28"),
+      workflowFile: config.projects[0].workflowFiles.development,
+      promptText: "Recover this stage",
     });
     assert.ok(claim);
-    const sessionId = db.createSession({
-      projectId: "patchrelay",
-      linearIssueId: "issue_2",
-      runId: claim.runId,
-      stage: "implementation",
-      zmxSessionName: plan.sessionName,
-      branchName: plan.branchName,
-      worktreePath: plan.worktreePath,
-    });
-    db.updateRunSessionId(claim.runId, sessionId);
-    db.recordDesiredStage({
-      projectId: "patchrelay",
-      linearIssueId: "issue_2",
-      currentState: "running",
-      linearIssueKey: "ENG-2",
-      title: "Recover stale run",
-      issueUrl: "https://linear.app/example/issue/ENG-2",
-      desiredStage: "review",
-      desiredStateName: "Review",
-      desiredWebhookId: "delivery-review",
-      desiredWebhookTimestamp: 2000,
-      lastWebhookAt: new Date().toISOString(),
+    db.updateStageRunThread({ stageRunId: claim!.stageRun.id, threadId: "thread-finished", turnId: "turn-1" });
+    codex.threads.set("thread-finished", {
+      id: "thread-finished",
+      preview: "Recovered",
+      cwd: claim!.workspace.worktreePath,
+      status: "idle",
+      turns: [{ id: "turn-1", status: "completed", items: [{ type: "agentMessage", id: "a1", text: "Recovered." }] }],
     });
 
-    const launcher = new FakeLaunchRunner(config, db);
-    const service = new PatchRelayService(config, db, launcher as never, createLogger());
+    db.upsertTrackedIssue({
+      projectId: "usertold",
+      linearIssueId: "issue_5",
+      issueKey: "USE-29",
+      title: "Recover missing stage",
+      currentLinearState: "Start",
+      desiredStage: "development",
+      desiredWebhookId: "delivery-start-missing",
+      lifecycleStatus: "running",
+      lastWebhookAt: new Date().toISOString(),
+    });
+    const missingClaim = db.claimStageRun({
+      projectId: "usertold",
+      linearIssueId: "issue_5",
+      stage: "development",
+      triggerWebhookId: "delivery-start-missing",
+      branchName: "use/USE-29-recover-missing-stage",
+      worktreePath: path.join(baseDir, "worktrees", "USE-29"),
+      workflowFile: config.projects[0].workflowFiles.development,
+      promptText: "Recover missing stage",
+    });
+    assert.ok(missingClaim);
+    db.updateStageRunThread({ stageRunId: missingClaim!.stageRun.id, threadId: "thread-missing", turnId: "turn-2" });
+    codex.removeThread("thread-missing");
+
+    const service = new PatchRelayService(config, db, codex as never, pino({ enabled: false }));
     await service.start();
     await flushQueues();
 
-    const reconciled = db.getIssue("patchrelay", "issue_2");
-    assert.equal(launcher.launches.map((entry) => entry.stage).join(","), "review");
-    assert.equal(reconciled?.activeStage, "review");
-    service.stop();
-  } finally {
-    rmSync(baseDir, { recursive: true, force: true });
-  }
-});
+    const finishedStage = db.getStageRun(claim!.stageRun.id);
+    const missingStage = db.getStageRun(missingClaim!.stageRun.id);
+    assert.equal(finishedStage?.status, "completed");
+    assert.equal(missingStage?.status, "failed");
 
-test("buildLaunchPlan uses distinct session names for different runs of the same issue and stage", () => {
-  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-session-name-"));
-  try {
-    const config = createConfig(baseDir);
-    const project = config.projects[0];
-    const issue = {
-      id: "issue_3",
-      identifier: "ENG-3",
-      title: "Unique session names",
-      url: "https://linear.app/example/issue/ENG-3",
-      labelNames: [],
-    };
-
-    const first = buildLaunchPlan(config, project, issue, "review", "101");
-    const second = buildLaunchPlan(config, project, issue, "review", "102");
-
-    assert.notEqual(first.sessionName, second.sessionName);
-    assert.match(first.sessionName, /-101$/);
-    assert.match(second.sessionName, /-102$/);
-  } finally {
-    rmSync(baseDir, { recursive: true, force: true });
-  }
-});
-
-test("non-trigger state updates do not clear a queued desired stage while another run is active", async () => {
-  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-non-trigger-"));
-  try {
-    const config = createConfig(baseDir);
-    const db = new PatchRelayDatabase(config.database.path, true);
-    db.runMigrations();
-    const launcher = new FakeLaunchRunner(config, db);
-    const service = new PatchRelayService(config, db, launcher as never, createLogger());
-
-    const reviewEvent = db.insertWebhookEvent({
-      webhookId: "delivery-review",
-      receivedAt: new Date().toISOString(),
-      eventType: "Issue.update",
-      issueId: "issue_3",
-      headersJson: "{}",
-      payloadJson: JSON.stringify({
-        action: "update",
-        type: "Issue",
-        createdAt: "2026-03-08T12:00:00.000Z",
-        webhookTimestamp: 1000,
-        updatedFrom: { stateId: "implementing" },
-        data: {
-          id: "issue_3",
-          identifier: "ENG-3",
-          title: "Preserve desired stage",
-          url: "https://linear.app/example/issue/ENG-3",
-          team: { key: "ENG" },
-          state: { name: "Review" },
-        },
-      }),
-      signatureValid: true,
-      dedupeStatus: "accepted",
-    });
-
-    await service.processWebhookEvent(reviewEvent.id);
-    await flushQueues();
-
-    const startEvent = db.insertWebhookEvent({
-      webhookId: "delivery-start",
-      receivedAt: new Date().toISOString(),
-      eventType: "Issue.update",
-      issueId: "issue_3",
-      headersJson: "{}",
-      payloadJson: JSON.stringify({
-        action: "update",
-        type: "Issue",
-        createdAt: "2026-03-08T12:01:00.000Z",
-        webhookTimestamp: 2000,
-        updatedFrom: { stateId: "review" },
-        data: {
-          id: "issue_3",
-          identifier: "ENG-3",
-          title: "Preserve desired stage",
-          url: "https://linear.app/example/issue/ENG-3",
-          team: { key: "ENG" },
-          state: { name: "Start" },
-        },
-      }),
-      signatureValid: true,
-      dedupeStatus: "accepted",
-    });
-
-    await service.processWebhookEvent(startEvent.id);
-    await flushQueues();
-
-    let issue = db.getIssue("patchrelay", "issue_3");
-    assert.equal(issue?.activeStage, "review");
-    assert.equal(issue?.desiredStage, "implementation");
-    assert.equal(issue?.desiredWebhookId, "delivery-start");
-
-    const todoEvent = db.insertWebhookEvent({
-      webhookId: "delivery-todo",
-      receivedAt: new Date().toISOString(),
-      eventType: "Issue.update",
-      issueId: "issue_3",
-      headersJson: "{}",
-      payloadJson: JSON.stringify({
-        action: "update",
-        type: "Issue",
-        createdAt: "2026-03-08T12:02:00.000Z",
-        webhookTimestamp: 3000,
-        updatedFrom: { stateId: "start" },
-        data: {
-          id: "issue_3",
-          identifier: "ENG-3",
-          title: "Preserve desired stage",
-          url: "https://linear.app/example/issue/ENG-3",
-          team: { key: "ENG" },
-          state: { name: "Todo" },
-        },
-      }),
-      signatureValid: true,
-      dedupeStatus: "accepted",
-    });
-
-    await service.processWebhookEvent(todoEvent.id);
-    await flushQueues();
-
-    issue = db.getIssue("patchrelay", "issue_3");
-    assert.equal(issue?.currentState, "launching");
-    assert.ok(issue?.activeRunId);
-    assert.equal(issue?.desiredStage, "implementation");
-    assert.equal(issue?.desiredWebhookId, "delivery-start");
     service.stop();
   } finally {
     rmSync(baseDir, { recursive: true, force: true });

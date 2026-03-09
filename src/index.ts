@@ -1,9 +1,9 @@
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { CodexAppServerClient } from "./codex-app-server.js";
 import { loadConfig } from "./config.js";
 import { PatchRelayDatabase } from "./db.js";
 import { buildHttpServer } from "./http.js";
-import { LaunchRunner } from "./launcher.js";
 import { createLogger } from "./logging.js";
 import { PatchRelayService } from "./service.js";
 import { ensureDir } from "./utils.js";
@@ -20,8 +20,8 @@ async function main(): Promise<void> {
   const db = new PatchRelayDatabase(config.database.path, config.database.wal);
   db.runMigrations();
 
-  const launcher = new LaunchRunner(config, db, logger, `${process.pid}`);
-  const service = new PatchRelayService(config, db, launcher, logger);
+  const codex = new CodexAppServerClient(config.runner.codex, logger);
+  const service = new PatchRelayService(config, db, codex, logger);
   await service.start();
   const app = await buildHttpServer(config, service, logger);
 

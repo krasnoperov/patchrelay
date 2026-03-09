@@ -32,32 +32,40 @@ function createConfig(baseDir: string): AppConfig {
       webhookSecret: "secret",
     },
     runner: {
-      zmxBin: "zmx",
       gitBin: "git",
-      launch: {
-        shell: "codex",
-        args: ["exec", "{prompt}"],
+      codex: {
+        bin: "codex",
+        args: ["app-server"],
+        approvalPolicy: "never",
+        sandboxMode: "danger-full-access",
+        persistExtendedHistory: true,
+        serviceName: "patchrelay-test",
       },
     },
     projects: [
       {
-        id: "patchrelay",
-        repoPath: baseDir,
+        id: "usertold",
+        repoPath: path.join(baseDir, "repo"),
         worktreeRoot: path.join(baseDir, "worktrees"),
         workflowFiles: {
-          implementation: path.join(baseDir, "implementation.md"),
-          review: path.join(baseDir, "review.md"),
-          deploy: path.join(baseDir, "deploy.md"),
+          development: path.join(baseDir, "DEVELOPMENT_WORKFLOW.md"),
+          review: path.join(baseDir, "REVIEW_WORKFLOW.md"),
+          deploy: path.join(baseDir, "DEPLOY_WORKFLOW.md"),
+          cleanup: path.join(baseDir, "CLEANUP_WORKFLOW.md"),
         },
         workflowStatuses: {
-          implementation: "Start",
+          development: "Start",
           review: "Review",
           deploy: "Deploy",
+          cleanup: "Cleanup",
+          humanNeeded: "Human Needed",
+          done: "Done",
         },
-        linearTeamIds: ["ENG"],
+        issueKeyPrefixes: ["USE"],
+        linearTeamIds: ["USE"],
         allowLabels: [],
         triggerEvents: ["statusChanged"],
-        branchPrefix: "patchrelay",
+        branchPrefix: "use",
       },
     ],
   };
@@ -90,6 +98,8 @@ test("health endpoint includes build version metadata from the built artifact", 
       config,
       {
         acceptWebhook: async () => ({ status: 200, body: { ok: true } }),
+        getIssueOverview: async () => undefined,
+        getIssueReport: async () => undefined,
       } as never,
       pino({ enabled: false }),
     );
@@ -107,6 +117,13 @@ test("health endpoint includes build version metadata from the built artifact", 
       commit: "abc123def456",
       builtAt: "2026-03-09T08:55:00.000Z",
     });
+
+    const home = await app.inject({
+      method: "GET",
+      url: "/",
+    });
+    assert.match(home.body, /codex app-server/);
+    assert.match(home.body, /api\/issues\/:issueKey\/report/);
 
     await app.close();
   } finally {

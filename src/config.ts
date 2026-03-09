@@ -10,16 +10,20 @@ const projectSchema = z.object({
   repo_path: z.string().min(1),
   worktree_root: z.string().min(1),
   workflow_files: z.object({
-    implementation: z.string().min(1),
+    development: z.string().min(1),
     review: z.string().min(1),
     deploy: z.string().min(1),
+    cleanup: z.string().min(1),
   }),
   workflow_statuses: z.object({
-    implementation: z.string().min(1).default("Start"),
+    development: z.string().min(1).default("Start"),
     review: z.string().min(1).default("Review"),
     deploy: z.string().min(1).default("Deploy"),
+    cleanup: z.string().optional(),
     human_needed: z.string().optional(),
+    done: z.string().optional(),
   }),
+  issue_key_prefixes: z.array(z.string().min(1)).default([]),
   linear_team_ids: z.array(z.string().min(1)).default([]),
   allow_labels: z.array(z.string().min(1)).default([]),
   trigger_events: z.array(z.string().min(1)).min(1),
@@ -52,20 +56,29 @@ const configSchema = z.object({
   }),
   runner: z
     .object({
-      zmx_bin: z.string().default("zmx"),
-      zmx_session_prefix_env: z.string().default("ZMX_SESSION_PREFIX"),
       git_bin: z.string().default("git"),
-      launch: z.object({
-        shell: z.string().default("codex"),
-        args: z.array(z.string()).min(1),
+      codex: z.object({
+        bin: z.string().default("codex"),
+        args: z.array(z.string()).default(["app-server"]),
+        model: z.string().optional(),
+        model_provider: z.string().optional(),
+        service_name: z.string().default("patchrelay"),
+        base_instructions: z.string().optional(),
+        developer_instructions: z.string().optional(),
+        approval_policy: z.enum(["never", "on-request", "on-failure", "untrusted"]).default("never"),
+        sandbox_mode: z.enum(["danger-full-access", "workspace-write", "read-only"]).default("danger-full-access"),
+        persist_extended_history: z.boolean().default(false),
       }),
     })
     .default({
-      zmx_bin: "zmx",
       git_bin: "git",
-      launch: {
-        shell: "codex",
-        args: ["--no-alt-screen", "--cd", "{worktreePath}", "{prompt}"],
+      codex: {
+        bin: "codex",
+        args: ["app-server"],
+        service_name: "patchrelay",
+        approval_policy: "never",
+        sandbox_mode: "danger-full-access",
+        persist_extended_history: false,
       },
     }),
   projects: z.array(projectSchema).min(1),
@@ -102,13 +115,12 @@ export function loadConfig(configPath = process.env.PATCHRELAY_CONFIG ?? path.re
   const parsed = configSchema.parse(expandEnv(parsedYaml));
 
   const webhookSecret = process.env[parsed.linear.webhook_secret_env];
-  const logFilePath = process.env.PATCHRELAY_LOG_FILE ?? parsed.logging.file_path;
-  const webhookArchiveDir = process.env.PATCHRELAY_WEBHOOK_ARCHIVE_DIR ?? parsed.logging.webhook_archive_dir;
-  const zmxSessionPrefix = process.env[parsed.runner.zmx_session_prefix_env];
-
   if (!webhookSecret) {
     throw new Error(`Missing env var ${parsed.linear.webhook_secret_env}`);
   }
+
+  const logFilePath = process.env.PATCHRELAY_LOG_FILE ?? parsed.logging.file_path;
+  const webhookArchiveDir = process.env.PATCHRELAY_WEBHOOK_ARCHIVE_DIR ?? parsed.logging.webhook_archive_dir;
 
   return {
     server: {
@@ -135,26 +147,41 @@ export function loadConfig(configPath = process.env.PATCHRELAY_CONFIG ?? path.re
       webhookSecret,
     },
     runner: {
-      zmxBin: parsed.runner.zmx_bin,
-      ...(zmxSessionPrefix ? { zmxSessionPrefix } : {}),
       gitBin: parsed.runner.git_bin,
-      launch: parsed.runner.launch,
+      codex: {
+        bin: parsed.runner.codex.bin,
+        args: parsed.runner.codex.args,
+        ...(parsed.runner.codex.model ? { model: parsed.runner.codex.model } : {}),
+        ...(parsed.runner.codex.model_provider ? { modelProvider: parsed.runner.codex.model_provider } : {}),
+        ...(parsed.runner.codex.service_name ? { serviceName: parsed.runner.codex.service_name } : {}),
+        ...(parsed.runner.codex.base_instructions ? { baseInstructions: parsed.runner.codex.base_instructions } : {}),
+        ...(parsed.runner.codex.developer_instructions
+          ? { developerInstructions: parsed.runner.codex.developer_instructions }
+          : {}),
+        approvalPolicy: parsed.runner.codex.approval_policy,
+        sandboxMode: parsed.runner.codex.sandbox_mode,
+        persistExtendedHistory: parsed.runner.codex.persist_extended_history,
+      },
     },
     projects: parsed.projects.map((project) => ({
       id: project.id,
       repoPath: ensureAbsolutePath(project.repo_path),
       worktreeRoot: ensureAbsolutePath(project.worktree_root),
       workflowFiles: {
-        implementation: ensureAbsolutePath(project.workflow_files.implementation),
+        development: ensureAbsolutePath(project.workflow_files.development),
         review: ensureAbsolutePath(project.workflow_files.review),
         deploy: ensureAbsolutePath(project.workflow_files.deploy),
+        cleanup: ensureAbsolutePath(project.workflow_files.cleanup),
       },
       workflowStatuses: {
-        implementation: project.workflow_statuses.implementation,
+        development: project.workflow_statuses.development,
         review: project.workflow_statuses.review,
         deploy: project.workflow_statuses.deploy,
+        ...(project.workflow_statuses.cleanup ? { cleanup: project.workflow_statuses.cleanup } : {}),
         ...(project.workflow_statuses.human_needed ? { humanNeeded: project.workflow_statuses.human_needed } : {}),
+        ...(project.workflow_statuses.done ? { done: project.workflow_statuses.done } : {}),
       },
+      issueKeyPrefixes: project.issue_key_prefixes,
       linearTeamIds: project.linear_team_ids,
       allowLabels: project.allow_labels,
       triggerEvents: project.trigger_events as AppConfig["projects"][number]["triggerEvents"],

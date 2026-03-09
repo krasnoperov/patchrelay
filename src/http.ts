@@ -17,6 +17,7 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
   const app = fastify({
     loggerInstance: logger,
     bodyLimit: config.ingress.maxBodyBytes,
+    disableRequestLogging: true,
   });
 
   await app.register(rawBody, {
@@ -136,8 +137,8 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
       <p class="eyebrow">PatchRelay</p>
       <h1>Webhook in, worktree out.</h1>
       <p>
-        PatchRelay listens for signed Linear webhooks, prepares an issue-specific worktree, and launches
-        autonomous Codex runs through <code>zmx</code> on this machine.
+        PatchRelay listens for signed Linear webhooks, prepares an issue-specific worktree, and orchestrates
+        staged Codex runs through <code>codex app-server</code> with durable thread history and read-only reports.
       </p>
       <div class="meta">
         <span class="chip">Health: <a href="${config.server.healthPath}">${config.server.healthPath}</a></span>
@@ -145,6 +146,7 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
         <span class="chip">Version: <code>${buildInfo.version}</code></span>
         <span class="chip">Commit: <code>${buildInfo.commit}</code></span>
         <span class="chip">Logs: <code>${config.logging.filePath}</code></span>
+        <span class="chip">Observe: <code>/api/issues/:issueKey/report</code></span>
       </div>
     </main>
   </body>
@@ -185,6 +187,59 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
       return reply.code(result.status).send(result.body);
     },
   );
+
+  app.get("/api/issues/:issueKey", async (request, reply) => {
+    const issueKey = (request.params as { issueKey: string }).issueKey;
+    const result = await service.getIssueOverview(issueKey);
+    if (!result) {
+      return reply.code(404).send({ ok: false, reason: "issue_not_found" });
+    }
+    return reply.send({ ok: true, ...result });
+  });
+
+  app.get("/api/issues/:issueKey/report", async (request, reply) => {
+    const issueKey = (request.params as { issueKey: string }).issueKey;
+    const result = await service.getIssueReport(issueKey);
+    if (!result) {
+      return reply.code(404).send({ ok: false, reason: "issue_not_found" });
+    }
+    return reply.send({ ok: true, ...result });
+  });
+
+  app.get("/api/issues/:issueKey/live", async (request, reply) => {
+    const issueKey = (request.params as { issueKey: string }).issueKey;
+    const result = await service.getActiveStageStatus(issueKey);
+    if (!result) {
+      return reply.code(404).send({ ok: false, reason: "active_stage_not_found" });
+    }
+    return reply.send({ ok: true, ...result });
+  });
+
+  app.get("/api/issues/:issueKey/stages/:stageRunId/events", async (request, reply) => {
+    const { issueKey, stageRunId } = request.params as { issueKey: string; stageRunId: string };
+    const result = await service.getStageEvents(issueKey, Number(stageRunId));
+    if (!result) {
+      return reply.code(404).send({ ok: false, reason: "stage_run_not_found" });
+    }
+    return reply.send({ ok: true, ...result });
+  });
+
+  app.addHook("onResponse", async (request, reply) => {
+    if (reply.statusCode < 500) {
+      return;
+    }
+
+    request.log.error(
+      {
+        reqId: request.id,
+        method: request.method,
+        url: request.url,
+        statusCode: reply.statusCode,
+        responseTime: reply.elapsedTime,
+      },
+      "request failed",
+    );
+  });
 
   return app;
 }

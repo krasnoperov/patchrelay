@@ -4,28 +4,28 @@ import { resolveProject, triggerEventAllowed } from "../src/project-resolution.j
 import type { AppConfig, LinearWebhookPayload } from "../src/types.js";
 import { normalizeWebhook } from "../src/webhooks.js";
 
-test("normalizeWebhook extracts launch metadata directly from an issue webhook payload", () => {
+test("normalizeWebhook extracts issue metadata from a Linear issue webhook", () => {
   const payload: LinearWebhookPayload = {
     action: "update",
     type: "Issue",
     createdAt: "2026-03-08T12:00:00.000Z",
     webhookTimestamp: Date.now(),
     updatedFrom: {
-      labels: [],
+      stateId: "state_start",
     },
     data: {
       id: "issue_123",
-      identifier: "ENG-123",
-      title: "Fix webhook branch naming",
-      url: "https://linear.app/example/issue/ENG-123/fix-webhook-branch-naming",
+      identifier: "USE-123",
+      title: "Track app-server threads",
+      url: "https://linear.app/example/issue/USE-123",
       team: {
         id: "team_1",
-        key: "ENG",
+        key: "USE",
       },
-      labels: [
-        { name: "patchrelay" },
-        { name: "backend" },
-      ],
+      labels: [{ name: "backend" }],
+      state: {
+        name: "Start",
+      },
     },
   };
 
@@ -35,14 +35,15 @@ test("normalizeWebhook extracts launch metadata directly from an issue webhook p
   });
 
   assert.equal(normalized.issue.id, "issue_123");
-  assert.equal(normalized.issue.identifier, "ENG-123");
-  assert.equal(normalized.issue.title, "Fix webhook branch naming");
-  assert.equal(normalized.issue.teamKey, "ENG");
-  assert.deepEqual(normalized.issue.labelNames, ["patchrelay", "backend"]);
-  assert.equal(normalized.triggerEvent, "labelChanged");
+  assert.equal(normalized.issue.identifier, "USE-123");
+  assert.equal(normalized.issue.title, "Track app-server threads");
+  assert.equal(normalized.issue.teamKey, "USE");
+  assert.equal(normalized.issue.stateName, "Start");
+  assert.deepEqual(normalized.issue.labelNames, ["backend"]);
+  assert.equal(normalized.triggerEvent, "statusChanged");
 });
 
-test("resolveProject matches a project using webhook metadata only", () => {
+test("resolveProject matches by issue key prefix and team", () => {
   const config: AppConfig = {
     server: {
       bind: "127.0.0.1",
@@ -56,7 +57,8 @@ test("resolveProject matches a project using webhook metadata only", () => {
     },
     logging: {
       level: "info",
-      format: "json",
+      format: "logfmt",
+      filePath: "/tmp/patchrelay.log",
     },
     database: {
       path: "/tmp/patchrelay.sqlite",
@@ -66,11 +68,13 @@ test("resolveProject matches a project using webhook metadata only", () => {
       webhookSecret: "secret",
     },
     runner: {
-      zmxBin: "zmx",
       gitBin: "git",
-      launch: {
-        shell: "codex",
-        args: ["exec", "{prompt}"],
+      codex: {
+        bin: "codex",
+        args: ["app-server"],
+        approvalPolicy: "never",
+        sandboxMode: "danger-full-access",
+        persistExtendedHistory: true,
       },
     },
     projects: [
@@ -78,21 +82,43 @@ test("resolveProject matches a project using webhook metadata only", () => {
         id: "alpha",
         repoPath: "/repos/alpha",
         worktreeRoot: "/worktrees/alpha",
-        workflowFile: "/repos/alpha/docs/workflow.md",
+        workflowFiles: {
+          development: "/repos/alpha/DEVELOPMENT_WORKFLOW.md",
+          review: "/repos/alpha/REVIEW_WORKFLOW.md",
+          deploy: "/repos/alpha/DEPLOY_WORKFLOW.md",
+          cleanup: "/repos/alpha/CLEANUP_WORKFLOW.md",
+        },
+        workflowStatuses: {
+          development: "Start",
+          review: "Review",
+          deploy: "Deploy",
+        },
+        issueKeyPrefixes: ["ALPHA"],
         linearTeamIds: ["OPS"],
         allowLabels: ["alpha"],
-        triggerEvents: ["issueCreated"],
+        triggerEvents: ["statusChanged"],
         branchPrefix: "alpha",
       },
       {
-        id: "patchrelay",
-        repoPath: "/repos/patchrelay",
-        worktreeRoot: "/worktrees/patchrelay",
-        workflowFile: "/repos/patchrelay/docs/workflow.md",
-        linearTeamIds: ["ENG"],
-        allowLabels: ["patchrelay"],
-        triggerEvents: ["issueCreated", "labelChanged"],
-        branchPrefix: "patchrelay",
+        id: "usertold",
+        repoPath: "/repos/usertold",
+        worktreeRoot: "/worktrees/usertold",
+        workflowFiles: {
+          development: "/repos/usertold/DEVELOPMENT_WORKFLOW.md",
+          review: "/repos/usertold/REVIEW_WORKFLOW.md",
+          deploy: "/repos/usertold/DEPLOY_WORKFLOW.md",
+          cleanup: "/repos/usertold/CLEANUP_WORKFLOW.md",
+        },
+        workflowStatuses: {
+          development: "Start",
+          review: "Review",
+          deploy: "Deploy",
+        },
+        issueKeyPrefixes: ["USE"],
+        linearTeamIds: ["USE"],
+        allowLabels: [],
+        triggerEvents: ["statusChanged"],
+        branchPrefix: "use",
       },
     ],
   };
@@ -105,21 +131,24 @@ test("resolveProject matches a project using webhook metadata only", () => {
       createdAt: "2026-03-08T12:00:00.000Z",
       webhookTimestamp: Date.now(),
       updatedFrom: {
-        labels: [],
+        stateId: "state_start",
       },
       data: {
         id: "issue_999",
-        identifier: "ENG-999",
-        title: "Launch Codex from webhook",
+        identifier: "USE-999",
+        title: "Launch app-server workflow",
         team: {
-          key: "ENG",
+          key: "USE",
         },
-        labels: [{ name: "patchrelay" }],
+        labels: [{ name: "platform" }],
+        state: {
+          name: "Start",
+        },
       },
     },
   });
 
   const project = resolveProject(config, normalized.issue);
-  assert.equal(project?.id, "patchrelay");
+  assert.equal(project?.id, "usertold");
   assert.equal(triggerEventAllowed(project!, normalized.triggerEvent), true);
 });
