@@ -22,33 +22,37 @@ linear:
   webhook_secret_env: LINEAR_WEBHOOK_SECRET
 
 runner:
-  zmx_bin: zmx
   git_bin: git
-  launch:
-    shell: codex
+  codex:
+    bin: codex
     args:
-      - --no-alt-screen
-      - --cd
-      - "{worktreePath}"
-      - "{prompt}"
+      - app-server
+    service_name: patchrelay
+    approval_policy: never
+    sandbox_mode: danger-full-access
+    persist_extended_history: false
 
 projects:
-  - id: patchrelay
-    repo_path: /home/alv/projects/patchrelay
-    worktree_root: /home/alv/worktrees/patchrelay
+  - id: usertold
+    repo_path: /home/alv/projects/usertold
+    worktree_root: /home/alv/worktrees/usertold
     workflow_files:
-      implementation: /home/alv/projects/patchrelay/IMPLEMENTATION_WORKFLOW.md
-      review: /home/alv/projects/patchrelay/REVIEW_WORKFLOW.md
-      deploy: /home/alv/projects/patchrelay/DEPLOY_WORKFLOW.md
+      development: /home/alv/projects/usertold/DEVELOPMENT_WORKFLOW.md
+      review: /home/alv/projects/usertold/REVIEW_WORKFLOW.md
+      deploy: /home/alv/projects/usertold/DEPLOY_WORKFLOW.md
+      cleanup: /home/alv/projects/usertold/CLEANUP_WORKFLOW.md
     workflow_statuses:
-      implementation: Start
+      development: Start
       review: Review
       deploy: Deploy
+      cleanup: Cleanup
       human_needed: Human Needed
+      done: Done
+    issue_key_prefixes:
+      - USE
     linear_team_ids:
       - USE
-    allow_labels:
-      - patchrelay
+    allow_labels: []
     trigger_events:
       - statusChanged
-    branch_prefix: patchrelay
+    branch_prefix: use

@@ -2,148 +2,106 @@
 
 ## Summary
 
-PatchRelay v1 is a local status-driven webhook-to-worktree launcher for Linear issues.
+PatchRelay is a local workflow orchestrator for Linear-driven software delivery.
 
-It runs on a developer-owned machine, receives signed Linear webhooks, extracts issue metadata from the webhook payload, prepares a dedicated git worktree and branch, launches `zmx`/Codex with the issue metadata plus a workflow description file, and persists local run state in SQLite.
+It receives signed Linear webhooks, resolves the owning repository from the issue key and project policy, prepares an issue-specific git worktree, and drives staged Codex work through `codex app-server`. The service persists issue, workspace, pipeline, stage, thread, and observation state in SQLite so operators can inspect exactly what each agent did, even after the live run has ended.
 
-PatchRelay v1 does not read the latest issue from Linear before launch and does not write comments or state updates back to Linear.
+## Product Goals
+
+PatchRelay must:
+
+1. receive and verify Linear webhooks
+2. map issue keys such as `USE-25` to the correct local repository and workflow policy
+3. create one durable workspace per issue lifecycle
+4. support sequential agent stages in the same worktree and branch
+5. persist Codex thread ids so later stages can fork or resume prior work
+6. capture enough thread history and event data to produce read-only stage reports
+7. keep tracker state, local workspace state, and agent history correlated
+
+## Core Workflow
+
+For a matched issue:
+
+1. PatchRelay stores the webhook and normalizes issue metadata.
+2. PatchRelay resolves the project from the issue key prefix, team, and label policy.
+3. PatchRelay translates the current Linear state into a desired internal stage.
+4. PatchRelay creates or reuses the issue workspace and branch.
+5. PatchRelay creates a new stage run.
+6. PatchRelay starts or forks a Codex thread through `codex app-server`.
+7. PatchRelay starts a turn seeded with the stage workflow file and issue context.
+8. PatchRelay records thread events and persists a report when the turn completes.
+9. PatchRelay waits for the next Linear webhook or queued desired stage.
+
+## Stage Model
+
+PatchRelay supports these ordered stages:
+
+- `development`
+- `review`
+- `deploy`
+- `cleanup`
+
+The same issue may move through several sequential stages while staying on the same worktree and branch.
 
 ## Required Behavior
 
-PatchRelay v1 must:
+PatchRelay must:
 
-1. receive Linear webhooks over HTTPS
-2. verify webhook authenticity and timestamp freshness
-3. persist webhook payloads and deduplicate repeated deliveries
-4. extract issue metadata directly from the webhook payload
-5. resolve the target local project from webhook metadata
-6. decide whether the new Linear status should start implementation, review, or deploy
-7. create or refresh the issue worktree and branch
-8. launch `zmx` / Codex with issue metadata and the configured workflow file
-9. persist local run and session state
+1. verify webhook signatures and timestamp freshness
+2. deduplicate deliveries by Linear delivery id
+3. persist raw webhook payloads
+4. keep one active stage run per issue at a time
+5. queue later desired stages while an earlier stage run is active
+6. preserve the full Codex thread id for every stage run
+7. store per-stage reports that summarize messages, commands, file changes, and tool activity
+8. expose read-only HTTP endpoints for issue overview and reports
 
-## Explicit Non-Goals
+## Observability Requirements
 
-PatchRelay v1 does not implement:
+PatchRelay must make it possible to answer:
 
-- safety review stages
-- multi-stage orchestration beyond selecting the correct workflow file from the incoming status
-- Linear GraphQL reads before launch
-- Linear comments or state synchronization
-- OAuth flows
-- manual replay endpoints
-- admin UI
+- which worktree and branch belong to a given issue
+- which stage is currently running
+- which Codex thread id owns that stage
+- what the agent said
+- which commands it ran
+- which files it changed
+- whether the stage completed, failed, or paused
+
+Read-only observation is a first-class requirement, not an implementation detail.
 
 ## Deployment Model
 
-- PatchRelay runs locally and binds to `127.0.0.1`
-- Caddy terminates TLS and forwards Linear webhooks to PatchRelay
+- PatchRelay runs locally on a developer or operator machine
+- Caddy or another reverse proxy terminates TLS and forwards Linear webhooks
 - PatchRelay stores state in local SQLite
-- PatchRelay creates git worktrees locally
-- PatchRelay starts local `zmx` sessions that run Codex
+- repositories and worktrees live on local disk
+- a long-lived `codex app-server` process is managed by PatchRelay
 
-## Webhook Contract
+## Non-Goals
+
+PatchRelay does not need to:
+
+- preserve compatibility with the previous `zmx` architecture
+- support multi-user auth or tenant isolation
+- implement a rich operator UI before the service model is stable
+- perform full Linear sync beyond webhook-driven orchestration
+
+## Public HTTP Surface
 
 PatchRelay exposes:
 
 - `POST /webhooks/linear`
 - `GET /health`
+- `GET /api/issues/:issueKey`
+- `GET /api/issues/:issueKey/report`
 
-For each webhook it must:
-
-1. read the raw request body
-2. verify `Linear-Signature` using the configured webhook secret
-3. reject stale payloads using `webhookTimestamp`
-4. store the payload and dedupe by delivery id
-5. enqueue asynchronous processing
-6. return a fast HTTP response
-
-## Routing Model
-
-PatchRelay routes work using metadata contained in the webhook payload itself.
-
-Project resolution is based on configured selectors such as:
-
-- allowed Linear team ids or team keys
-- allowed labels
-- allowed trigger events
-
-The expected Linear workflow vocabulary is:
-
-- `Todo`
-- `Start`
-- `Implementing`
-- `Review`
-- `Reviewing`
-- `Deploy`
-- `Deploying`
-- `Human Needed`
-- `Done`
-
-After project resolution, PatchRelay starts work only for configured status transitions such as:
-
-- `Start` -> implementation workflow
-- `Review` -> review workflow
-- `Deploy` -> deploy workflow
-
-Queued trigger states are `Start`, `Review`, and `Deploy`.
-
-Active execution states such as `Implementing`, `Reviewing`, and `Deploying` do not launch new work. They indicate that an agent has already claimed that stage.
-
-Non-trigger states such as `Todo`, `Human Needed`, and `Done` are persisted and logged but do not launch work.
-
-If only one project is configured, PatchRelay may route directly to that project.
-
-If no configured project matches the webhook metadata, the event is ignored after persistence.
-
-## Launch Contract
-
-For a matched issue event, PatchRelay must derive:
-
-- issue id
-- issue key if present
-- issue title if present
-- issue URL if present
-- branch name
-- worktree path
-- workflow file path
-
-PatchRelay then:
-
-1. ensures the worktree root exists
-2. creates or refreshes the worktree for the issue
-3. creates or resets the issue branch from `HEAD`
-4. launches a named `zmx` session derived from the issue key and optional host prefix
-5. runs Codex in the worktree with the issue metadata and workflow file path using explicit CLI flags configured by PatchRelay
-
-## Persistence Model
-
-PatchRelay persists:
-
-- webhook receipts
-- issue records
-- launch runs
-- active and completed sessions
-
-The SQLite database is the local source of truth for what PatchRelay accepted and launched.
-
-## Local Logging
-
-PatchRelay v1 keeps local operator logs for:
-
-- the main logfmt processing log, always written to the configured local file
-- one archived file per received webhook
-- launch planning details
-- the git and `zmx` commands it is about to run
-- `zmx` stdout, stderr, and exit status
-
-## Future Direction
+## Future Extensions
 
 Later versions may add:
 
-- Linear write-back
-- OAuth-based app identity
-- richer trigger policies
-- native Linear agent UX
-
-Those are explicitly outside the v1 implementation.
+- Linear write-back with explicit service ownership
+- pause, cancel, and retry controls
+- manual stage steering
+- richer approval routing
+- UI streaming for live thread observation

@@ -2,169 +2,190 @@
 
 ## System Shape
 
-PatchRelay v1 is a single local service with four responsibilities:
+PatchRelay is a local orchestration service with five responsibilities:
 
 1. accept and verify Linear webhooks
-2. persist webhook and run state in SQLite
-3. create per-issue git worktrees and branches
-4. launch `zmx` / Codex with a workflow file and webhook-derived issue metadata
+2. persist issue, workspace, pipeline, stage, and observation state in SQLite
+3. create and maintain per-issue git worktrees
+4. drive Codex through `codex app-server`
+5. expose read-only issue and stage reports
 
-It is intentionally not a Linear synchronization engine.
+`codex app-server` is the source of truth for agent thread history.
+PatchRelay is the source of truth for workflow policy, workspace ownership, and issue-to-thread correlation.
+
+## Main Entities
+
+### Tracked Issue
+
+One record per Linear issue per project.
+
+Stores:
+
+- Linear issue id and key
+- latest known Linear state
+- desired next stage
+- active workspace id
+- active pipeline id
+- active stage run id
+- latest Codex thread id
+
+### Workspace
+
+One durable git worktree and branch for an issue lifecycle.
+
+Stores:
+
+- branch name
+- worktree path
+- workspace status
+- last completed stage
+- last Codex thread id
+
+### Pipeline Run
+
+A logical automation lifecycle for an issue workspace.
+
+Stores:
+
+- workspace id
+- active stage
+- pipeline status
+- start and end timestamps
+
+### Stage Run
+
+One concrete `development`, `review`, `deploy`, or `cleanup` execution.
+
+Stores:
+
+- workflow stage
+- workflow file path
+- prompt text
+- Codex thread id
+- parent thread id
+- turn id
+- stage status
+- report payload
+
+### Thread Event
+
+A persisted Codex app-server notification correlated to a stage run.
+
+Stores:
+
+- thread id
+- optional turn id
+- notification method
+- raw event JSON
 
 ## Request Flow
 
 ### 1. Webhook Intake
 
-Caddy forwards `POST /webhooks/linear` to the local PatchRelay service.
-
 PatchRelay:
 
 - reads the raw request body
-- verifies the HMAC signature
+- verifies the Linear HMAC signature
 - validates timestamp freshness
-- rejects malformed payloads
-- deduplicates by webhook delivery id
-- stores the webhook payload in SQLite
+- deduplicates by delivery id
+- archives the webhook payload
+- persists a webhook receipt row
 - enqueues asynchronous processing
 
-The HTTP response is fast and does not wait for git or agent work.
+### 2. Issue Routing
 
-### 2. Metadata Extraction
+PatchRelay resolves a local project from:
 
-The worker extracts issue metadata from the webhook payload itself.
+- issue key prefix such as `USE`
+- Linear team metadata
+- optional labels
+- allowed trigger events
 
-The minimum useful fields are:
+Issue key prefix is the primary routing key.
 
-- issue id
-- issue key when present
-- issue title when present
-- issue URL when present
-- team metadata when present
-- label metadata when present
+### 3. Desired Stage Recording
 
-Issue metadata is not refreshed from Linear before launch in v1.
+PatchRelay maps Linear states to internal stages:
 
-### 3. Project Resolution
+- `Start` -> `development`
+- `Review` -> `review`
+- `Deploy` -> `deploy`
+- optional configured cleanup state -> `cleanup`
 
-PatchRelay resolves a local project using webhook metadata.
+The service records the desired stage even if another stage is still running.
 
-The configured selectors are:
+### 4. Workspace Preparation
 
-- `linear_team_ids`
-- `allow_labels`
-- `trigger_events`
+When no active stage run exists, PatchRelay:
 
-If exactly one project is configured, PatchRelay may use it directly.
+1. computes the worktree path from the issue key
+2. computes the branch name from the configured prefix, issue key, and title
+3. creates or refreshes the worktree from repository `HEAD`
+4. creates or reuses the issue workspace row
 
-If no project matches, the event is marked ignored after persistence.
+### 5. Codex Thread Execution
 
-### 4. Workflow Selection
+For the next stage run:
 
-PatchRelay selects a workflow only when a status change webhook moves an issue into a configured automation state.
+- if this is the first stage for the issue, PatchRelay calls `thread/start`
+- if a prior stage exists, PatchRelay calls `thread/fork`
+- PatchRelay then calls `turn/start` with the issue context and workflow file contents
 
-The expected status set is:
+The resulting thread id and turn id are persisted immediately.
 
-- `Todo`
-- `Start`
-- `Implementing`
-- `Review`
-- `Reviewing`
-- `Deploy`
-- `Deploying`
-- `Human Needed`
-- `Done`
+### 6. Observation And Completion
 
-Default mapping:
+PatchRelay listens to `codex app-server` notifications such as:
 
-- `Start` -> implementation
-- `Review` -> review
-- `Deploy` -> deploy
+- `turn/started`
+- `turn/completed`
+- `item/started`
+- `item/completed`
+- `item/agentMessage/delta`
+- `turn/plan/updated`
+- `turn/diff/updated`
 
-Other statuses such as `Todo`, `Implementing`, `Reviewing`, `Deploying`, `Human Needed`, and `Done` do not launch work.
+On `turn/completed`, PatchRelay:
 
-### 5. Local Launch
+1. stores the final notification
+2. reads the full thread with `thread/read`
+3. synthesizes a stage report
+4. marks the stage run completed or failed
+5. updates the workspace and issue
+6. launches any queued next stage
 
-For a matched project, PatchRelay:
+## Why App-Server
 
-1. computes the worktree path from the issue id
-2. computes the branch name from the configured prefix, issue id, and title
-3. creates or refreshes the worktree from the repository `HEAD`
-4. launches a named `zmx` session
-5. runs Codex in that worktree with issue metadata and the selected workflow file path
+This design intentionally avoids terminal multiplexers as the workflow backbone.
 
-PatchRelay passes the Codex automation flags explicitly in the configured command and does not rely on shell aliases from interactive dotfiles.
+We need:
 
-### 6. Local State Tracking
+- durable thread ids
+- resumable and forkable stage history
+- read-only inspection after a run finishes
+- stage sequencing independent from terminal session lifetime
 
-PatchRelay records:
+`codex app-server` provides those primitives directly.
 
-- that the run was launched
-- which branch and worktree were used
-- which `zmx` session name was created
-- whether the session later exited successfully or failed
+## Persistence Summary
 
-## Logging And Archives
+SQLite stores:
 
-PatchRelay writes:
+- webhook receipts
+- tracked issues
+- workspaces
+- pipeline runs
+- stage runs
+- thread events
 
-- a logfmt log stream to stdout and to a required local file
-- one archived JSON file per received webhook under `logging.webhook_archive_dir`
-- explicit processing logs for normalized issue metadata, project resolution, ignored events, launch plans, and session exits
-- explicit command logs for `git worktree add` and the `zmx` launch command
+The database is not a copy of Codex thread history. It is the orchestration ledger that points to thread history and caches reports.
 
-## Configuration
+## Operator Surface
 
-Each project defines:
+PatchRelay exposes:
 
-- repository path
-- worktree root
-- workflow files
-- workflow-trigger statuses
-- branch prefix
-- team selectors
-- label selectors
-- trigger events
+- issue overview by issue key
+- stage reports by issue key
+- log stream for service-level behavior
 
-Example:
-
-```yaml
-projects:
-  - id: patchrelay
-    repo_path: /home/alv/projects/patchrelay
-    worktree_root: /home/alv/worktrees/patchrelay
-    workflow_files:
-      implementation: /home/alv/projects/patchrelay/IMPLEMENTATION_WORKFLOW.md
-      review: /home/alv/projects/patchrelay/REVIEW_WORKFLOW.md
-      deploy: /home/alv/projects/patchrelay/DEPLOY_WORKFLOW.md
-    workflow_statuses:
-      implementation: Start
-      review: Review
-      deploy: Deploy
-    linear_team_ids:
-      - ENG
-    allow_labels: []
-    trigger_events:
-      - statusChanged
-    branch_prefix: patchrelay
-```
-
-## Security Model
-
-PatchRelay v1 relies on Linear’s normal webhook security model:
-
-- webhook signing secret
-- raw-body HMAC verification
-- timestamp freshness checks
-- delivery id deduplication
-
-There is no extra path suffix in v1.
-
-## Deliberate Omissions
-
-PatchRelay v1 does not include:
-
-- pre-launch GraphQL fetches
-- Linear comments
-- Linear state transitions
-- OAuth token management
-- internal safety orchestration
+The operator can inspect what happened without attaching to a live terminal.

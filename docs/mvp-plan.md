@@ -1,82 +1,97 @@
-# PatchRelay v1 Plan
+# PatchRelay Implementation Plan
 
-## Goal
+## Outcome
 
-Ship a minimal, reliable version of PatchRelay that turns a verified Linear webhook into a local coding session.
+Build PatchRelay as a local issue-to-workspace orchestrator on top of `codex app-server`.
 
-## v1 Scope
+The completed service should:
 
-Included:
+1. route Linear issues to repositories by issue key prefix and project policy
+2. keep one durable worktree and branch per issue lifecycle
+3. execute sequential stage runs through Codex thread start and fork operations
+4. persist enough thread history and event data to generate read-only reports
 
-1. receive Linear webhooks over HTTPS via Caddy
-2. verify signature and timestamp
-3. persist webhook payloads and dedupe repeated deliveries
-4. extract issue metadata from the webhook payload
-5. resolve the target project
-6. select implementation, review, or deploy from the new Linear status
-7. create a worktree and branch for the issue
-8. launch `zmx` / Codex with issue metadata and the configured workflow file
-9. persist local run and session state
+## Milestone 1: Core Intake
 
-Linear statuses used by v1:
+Deliver:
 
-- `Todo`
-- `Start`
-- `Implementing`
-- `Review`
-- `Reviewing`
-- `Deploy`
-- `Deploying`
-- `Human Needed`
-- `Done`
+1. verified webhook ingestion
+2. webhook archival
+3. normalized issue metadata extraction
+4. project resolution by issue key prefix, team, and labels
 
-Trigger statuses:
+Acceptance:
 
-- `Start`
-- `Review`
-- `Deploy`
+- duplicate deliveries are ignored
+- invalid signatures are rejected
+- valid status webhooks create or update tracked issue rows
 
-Non-trigger statuses:
+## Milestone 2: Workspace Ledger
 
-- `Todo`
-- `Implementing`
-- `Reviewing`
-- `Deploying`
-- `Human Needed`
-- `Done`
+Deliver:
 
-Deferred:
+1. new SQLite schema for tracked issues, workspaces, pipeline runs, stage runs, and thread events
+2. one active stage run per issue
+3. queued desired stage behavior
 
-- Linear GraphQL reads
-- Linear comments
-- Linear status updates
-- OAuth flows
-- safety stage
-- admin tooling
+Acceptance:
 
-## Success Criteria
+- later stage webhooks are queued while a stage is active
+- the same issue keeps the same workspace across stages
 
-PatchRelay v1 is successful when it can reliably:
+## Milestone 3: Codex App-Server Client
 
-1. receive a real Linear issue webhook
-2. verify and persist the delivery
-3. route the event to the correct configured project
-4. create the expected worktree and branch
-5. launch a `zmx` session that runs Codex in that worktree
-6. record the resulting local run state in SQLite
+Deliver:
 
-## Deployment Shape
+1. long-lived `codex app-server` process management
+2. JSON-RPC client transport
+3. support for `initialize`, `thread/start`, `thread/fork`, `thread/resume`, `turn/start`, `thread/read`, and `thread/list`
+4. notification persistence
 
-- public URL: `https://patchrelay.krasnoperov.me/webhooks/linear`
-- Caddy reverse proxies to the local PatchRelay HTTP server
-- PatchRelay stores state in SQLite
-- PatchRelay launches local `zmx` sessions
+Acceptance:
 
-## Operator Expectations
+- PatchRelay can create a thread for the first stage
+- PatchRelay can fork from the previous thread for the next stage
+- thread ids are persisted in SQLite
 
-For v1, observability comes from:
+## Milestone 4: Stage Execution Engine
 
-- structured logs
-- SQLite state
-- local git worktrees
-- `zmx` session inspection
+Deliver:
+
+1. worktree preparation from repo `HEAD`
+2. stage prompt construction from issue metadata and workflow file contents
+3. stage completion handling on `turn/completed`
+4. pipeline progression to later queued stages
+
+Acceptance:
+
+- `development -> review -> deploy -> cleanup` can run as separate sequential stage runs
+- follow-up stages do not depend on terminal session lifetime
+
+## Milestone 5: Read-Only Observation
+
+Deliver:
+
+1. persisted thread event log per stage
+2. thread readback after stage completion
+3. stage report synthesis covering messages, commands, file changes, and tool activity
+4. HTTP report endpoints
+
+Acceptance:
+
+- operator can inspect what happened after a stage has already finished
+- report can be retrieved without connecting to a terminal session
+
+## Milestone 6: Hardening
+
+Deliver:
+
+1. restart-safe app-server reconnect strategy
+2. explicit failure handling for interrupted stages
+3. pause and human-needed policy hooks
+4. richer report summaries
+
+Acceptance:
+
+- service restart does not orphan issue state
+- failed stage runs remain inspectable

@@ -1,7 +1,18 @@
 # PatchRelay Codex Workflow
 
-1. Read the issue metadata supplied by PatchRelay.
-2. Inspect the repository state in the current worktree.
-3. Implement the requested change in this worktree only.
-4. Run relevant validation commands when possible.
-5. Leave the worktree in a reviewable state.
+For each stage run, PatchRelay sends Codex a turn that includes:
+
+1. the Linear issue key and title
+2. the Linear issue URL when available
+3. the current stage name
+4. the prepared worktree context
+5. the full contents of the repo-local stage workflow file
+
+Codex must:
+
+1. work only inside the prepared worktree
+2. treat the current stage workflow file as the controlling policy for that turn
+3. leave enough evidence in the thread history for PatchRelay to build a read-only report
+4. keep the worktree in a reviewable state for the next stage
+
+Stage continuity is handled by PatchRelay through thread forking and workspace reuse, not by terminal session reuse.
