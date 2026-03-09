@@ -1,8 +1,8 @@
 {
-	email aleksei@krasnoperov.me
+	email you@example.com
 }
 
-patchrelay.krasnoperov.me {
+patchrelay.example.com {
 	encode zstd gzip
 
 	@home path /

@@ -214,7 +214,7 @@ Print the exact human takeover command for the issue.
 Example output:
 
 ```bash
-cd /home/alv/worktrees/usertold/USE-54
+cd /srv/patchrelay/worktrees/usertold/USE-54
 git branch --show-current
 codex
 ```
@@ -307,7 +307,7 @@ Example:
 ```text
 USE-54  Human Needed
 Title: Redesign session detail page into a playback-first minimal evidence workspace
-Workspace: /home/alv/worktrees/usertold/USE-54
+Workspace: /srv/patchrelay/worktrees/usertold/USE-54
 Branch: usertold/USE-54-redesign-session-detail-page-into-a-playback-first-minimal-e
 
 Latest stage: deploy

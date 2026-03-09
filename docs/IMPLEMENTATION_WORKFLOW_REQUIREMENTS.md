@@ -1,6 +1,6 @@
 # Development Workflow Requirements
 
-Each repo-local `DEVELOPMENT_WORKFLOW.md` should tell the development agent:
+Each repo-local `IMPLEMENTATION_WORKFLOW.md` should tell the development agent:
 
 1. how to confirm the issue is still in the development-ready Linear state
 2. how to work only inside the provided issue worktree

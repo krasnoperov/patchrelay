@@ -5,12 +5,12 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=alv
-Group=alv
-WorkingDirectory=/home/alv/projects/patchrelay
-EnvironmentFile=/home/alv/projects/patchrelay/.env
+User=patchrelay
+Group=patchrelay
+WorkingDirectory=/opt/patchrelay
+EnvironmentFile=/opt/patchrelay/.env
 Environment=NODE_ENV=production
-Environment=PATH=/home/alv/.nvm/versions/node/v24.13.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
 ExecStart=/usr/bin/env npm run start
 Restart=on-failure
 RestartSec=5
@@ -18,7 +18,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=false
-ReadWritePaths=/home/alv/projects/patchrelay /home/alv/.local/share/patchrelay /home/alv/worktrees /var/log/patchrelay
+ReadWritePaths=/opt/patchrelay /var/lib/patchrelay /srv/patchrelay/worktrees /var/log/patchrelay
 StateDirectory=patchrelay
 RuntimeDirectory=patchrelay
 LogsDirectory=patchrelay

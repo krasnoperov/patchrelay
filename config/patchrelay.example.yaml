@@ -15,7 +15,7 @@ logging:
   webhook_archive_dir: /var/log/patchrelay/webhooks
 
 database:
-  path: ${PATCHRELAY_DB_PATH:-/home/alv/.local/share/patchrelay/patchrelay.sqlite}
+  path: ${PATCHRELAY_DB_PATH:-/var/lib/patchrelay/patchrelay.sqlite}
   wal: true
 
 linear:
@@ -37,14 +37,14 @@ runner:
     persist_extended_history: false
 
 projects:
-  - id: usertold
-    repo_path: /home/alv/projects/usertold
-    worktree_root: /home/alv/worktrees/usertold
+  - id: your-project
+    repo_path: /srv/repos/your-project
+    worktree_root: /srv/patchrelay/worktrees/your-project
     workflow_files:
-      development: /home/alv/projects/usertold/DEVELOPMENT_WORKFLOW.md
-      review: /home/alv/projects/usertold/REVIEW_WORKFLOW.md
-      deploy: /home/alv/projects/usertold/DEPLOY_WORKFLOW.md
-      cleanup: /home/alv/projects/usertold/CLEANUP_WORKFLOW.md
+      development: /srv/repos/your-project/IMPLEMENTATION_WORKFLOW.md
+      review: /srv/repos/your-project/REVIEW_WORKFLOW.md
+      deploy: /srv/repos/your-project/DEPLOY_WORKFLOW.md
+      cleanup: /srv/repos/your-project/CLEANUP_WORKFLOW.md
     workflow_statuses:
       development: Start
       review: Review
@@ -59,10 +59,13 @@ projects:
       working: llm-working
       awaiting_handoff: llm-awaiting-handoff
     issue_key_prefixes:
-      - USE
+      - APP
     linear_team_ids:
-      - USE
+      - APP
     allow_labels: []
     trigger_events:
       - statusChanged
-    branch_prefix: use
+      - commentCreated
+      - commentUpdated
+      - assignmentChanged
+    branch_prefix: app
