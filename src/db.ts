@@ -350,6 +350,12 @@ export class PatchRelayDatabase {
         return current;
       }
 
+      const desiredStage = params.desiredStage ?? current.desiredStage ?? null;
+      const desiredStateName =
+        params.desiredStage !== undefined ? params.desiredStateName ?? null : current.desiredStateName ?? null;
+      const desiredWebhookId = params.desiredStage !== undefined ? params.desiredWebhookId : current.desiredWebhookId ?? null;
+      const desiredWebhookTimestamp =
+        params.desiredStage !== undefined ? params.desiredWebhookTimestamp : current.desiredWebhookTimestamp ?? null;
       const nextState = current.activeRunId ? current.currentState : params.currentState;
       const now = isoNow();
       this.connection
@@ -374,10 +380,10 @@ export class PatchRelayDatabase {
           params.title ?? null,
           params.issueUrl ?? null,
           nextState,
-          params.desiredStage ?? null,
-          params.desiredStateName ?? null,
-          params.desiredWebhookId,
-          params.desiredWebhookTimestamp,
+          desiredStage,
+          desiredStateName,
+          desiredWebhookId,
+          desiredWebhookTimestamp,
           params.lastWebhookAt,
           now,
           params.projectId,

@@ -345,3 +345,112 @@ test("buildLaunchPlan uses distinct session names for different runs of the same
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("non-trigger state updates do not clear a queued desired stage while another run is active", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-non-trigger-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, true);
+    db.runMigrations();
+    const launcher = new FakeLaunchRunner(config, db);
+    const service = new PatchRelayService(config, db, launcher as never, createLogger());
+
+    const reviewEvent = db.insertWebhookEvent({
+      webhookId: "delivery-review",
+      receivedAt: new Date().toISOString(),
+      eventType: "Issue.update",
+      issueId: "issue_3",
+      headersJson: "{}",
+      payloadJson: JSON.stringify({
+        action: "update",
+        type: "Issue",
+        createdAt: "2026-03-08T12:00:00.000Z",
+        webhookTimestamp: 1000,
+        updatedFrom: { stateId: "implementing" },
+        data: {
+          id: "issue_3",
+          identifier: "ENG-3",
+          title: "Preserve desired stage",
+          url: "https://linear.app/example/issue/ENG-3",
+          team: { key: "ENG" },
+          state: { name: "Review" },
+        },
+      }),
+      signatureValid: true,
+      dedupeStatus: "accepted",
+    });
+
+    await service.processWebhookEvent(reviewEvent.id);
+    await flushQueues();
+
+    const startEvent = db.insertWebhookEvent({
+      webhookId: "delivery-start",
+      receivedAt: new Date().toISOString(),
+      eventType: "Issue.update",
+      issueId: "issue_3",
+      headersJson: "{}",
+      payloadJson: JSON.stringify({
+        action: "update",
+        type: "Issue",
+        createdAt: "2026-03-08T12:01:00.000Z",
+        webhookTimestamp: 2000,
+        updatedFrom: { stateId: "review" },
+        data: {
+          id: "issue_3",
+          identifier: "ENG-3",
+          title: "Preserve desired stage",
+          url: "https://linear.app/example/issue/ENG-3",
+          team: { key: "ENG" },
+          state: { name: "Start" },
+        },
+      }),
+      signatureValid: true,
+      dedupeStatus: "accepted",
+    });
+
+    await service.processWebhookEvent(startEvent.id);
+    await flushQueues();
+
+    let issue = db.getIssue("patchrelay", "issue_3");
+    assert.equal(issue?.activeStage, "review");
+    assert.equal(issue?.desiredStage, "implementation");
+    assert.equal(issue?.desiredWebhookId, "delivery-start");
+
+    const todoEvent = db.insertWebhookEvent({
+      webhookId: "delivery-todo",
+      receivedAt: new Date().toISOString(),
+      eventType: "Issue.update",
+      issueId: "issue_3",
+      headersJson: "{}",
+      payloadJson: JSON.stringify({
+        action: "update",
+        type: "Issue",
+        createdAt: "2026-03-08T12:02:00.000Z",
+        webhookTimestamp: 3000,
+        updatedFrom: { stateId: "start" },
+        data: {
+          id: "issue_3",
+          identifier: "ENG-3",
+          title: "Preserve desired stage",
+          url: "https://linear.app/example/issue/ENG-3",
+          team: { key: "ENG" },
+          state: { name: "Todo" },
+        },
+      }),
+      signatureValid: true,
+      dedupeStatus: "accepted",
+    });
+
+    await service.processWebhookEvent(todoEvent.id);
+    await flushQueues();
+
+    issue = db.getIssue("patchrelay", "issue_3");
+    assert.equal(issue?.currentState, "launching");
+    assert.ok(issue?.activeRunId);
+    assert.equal(issue?.desiredStage, "implementation");
+    assert.equal(issue?.desiredWebhookId, "delivery-start");
+    service.stop();
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
