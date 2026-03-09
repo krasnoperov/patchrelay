@@ -2,6 +2,7 @@ import type { FastifyRequest } from "fastify";
 import fastify from "fastify";
 import rawBody from "fastify-raw-body";
 import type { Logger } from "pino";
+import { getBuildInfo } from "./build-info.js";
 import type { AppConfig } from "./types.js";
 import { PatchRelayService } from "./service.js";
 
@@ -12,6 +13,7 @@ declare module "fastify" {
 }
 
 export async function buildHttpServer(config: AppConfig, service: PatchRelayService, logger: Logger) {
+  const buildInfo = getBuildInfo();
   const app = fastify({
     loggerInstance: logger,
     bodyLimit: config.ingress.maxBodyBytes,
@@ -140,6 +142,8 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
       <div class="meta">
         <span class="chip">Health: <a href="${config.server.healthPath}">${config.server.healthPath}</a></span>
         <span class="chip">Webhook: <code>${config.ingress.linearWebhookPath}</code></span>
+        <span class="chip">Version: <code>${buildInfo.version}</code></span>
+        <span class="chip">Commit: <code>${buildInfo.commit}</code></span>
         <span class="chip">Logs: <code>${config.logging.filePath}</code></span>
       </div>
     </main>
@@ -149,7 +153,10 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
 
   app.get(config.server.healthPath, async () => ({
     ok: true,
-    service: "patchrelay",
+    service: buildInfo.service,
+    version: buildInfo.version,
+    commit: buildInfo.commit,
+    builtAt: buildInfo.builtAt,
   }));
 
   app.post(

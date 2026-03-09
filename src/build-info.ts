@@ -1,0 +1,35 @@
+import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
+
+export interface BuildInfo {
+  service: string;
+  version: string;
+  commit: string;
+  builtAt: string;
+}
+
+const fallbackBuildInfo: BuildInfo = {
+  service: "patchrelay",
+  version: "0.1.0",
+  commit: "unknown",
+  builtAt: "unknown",
+};
+
+export function getBuildInfo(): BuildInfo {
+  const buildInfoPath = path.resolve(process.cwd(), "dist/build-info.json");
+  if (!existsSync(buildInfoPath)) {
+    return fallbackBuildInfo;
+  }
+
+  try {
+    const parsed = JSON.parse(readFileSync(buildInfoPath, "utf8")) as Partial<BuildInfo>;
+    return {
+      service: typeof parsed.service === "string" ? parsed.service : fallbackBuildInfo.service,
+      version: typeof parsed.version === "string" ? parsed.version : fallbackBuildInfo.version,
+      commit: typeof parsed.commit === "string" ? parsed.commit : fallbackBuildInfo.commit,
+      builtAt: typeof parsed.builtAt === "string" ? parsed.builtAt : fallbackBuildInfo.builtAt,
+    };
+  } catch {
+    return fallbackBuildInfo;
+  }
+}
