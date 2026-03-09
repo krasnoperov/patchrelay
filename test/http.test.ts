@@ -131,3 +131,142 @@ test("health endpoint includes build version metadata from the built artifact", 
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("http routes handle webhook validation and issue/report/live/events lookups", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-http-routes-"));
+
+  try {
+    const config = createConfig(baseDir);
+    const app = await buildHttpServer(
+      config,
+      {
+        acceptWebhook: async ({ webhookId }) => ({
+          status: 202,
+          body: { ok: true, webhookId },
+        }),
+        getIssueOverview: async (issueKey: string) =>
+          issueKey === "USE-42"
+            ? {
+                issue: { issueKey: "USE-42" },
+                latestStageRun: { id: 7, stage: "development", status: "completed" },
+              }
+            : undefined,
+        getIssueReport: async (issueKey: string) =>
+          issueKey === "USE-42"
+            ? {
+                issue: { issueKey: "USE-42" },
+                stages: [{ stageRun: { id: 7, stage: "development", status: "completed" } }],
+              }
+            : undefined,
+        getActiveStageStatus: async (issueKey: string) =>
+          issueKey === "USE-42"
+            ? {
+                issue: { issueKey: "USE-42" },
+                stageRun: { id: 8, stage: "review", status: "running" },
+                liveThread: { threadId: "thread-1", threadStatus: "running" },
+              }
+            : undefined,
+        getStageEvents: async (issueKey: string, stageRunId: number) =>
+          issueKey === "USE-42" && stageRunId === 8
+            ? {
+                issue: { issueKey: "USE-42" },
+                stageRun: { id: 8, stage: "review", status: "running" },
+                events: [{ id: 1, method: "turn/started" }],
+              }
+            : undefined,
+      } as never,
+      pino({ enabled: false }),
+    );
+
+    const missingHeader = await app.inject({
+      method: "POST",
+      url: config.ingress.linearWebhookPath,
+      payload: { ok: true },
+    });
+    assert.equal(missingHeader.statusCode, 400);
+    assert.deepEqual(missingHeader.json(), { ok: false, reason: "missing_delivery_header" });
+
+    const acceptedWebhook = await app.inject({
+      method: "POST",
+      url: config.ingress.linearWebhookPath,
+      headers: {
+        "content-type": "application/json",
+        "linear-delivery": "delivery-1",
+      },
+      payload: { ok: true },
+    });
+    assert.equal(acceptedWebhook.statusCode, 202);
+    assert.deepEqual(acceptedWebhook.json(), { ok: true, webhookId: "delivery-1" });
+
+    const overview = await app.inject({
+      method: "GET",
+      url: "/api/issues/USE-42",
+    });
+    assert.equal(overview.statusCode, 200);
+    assert.deepEqual(overview.json(), {
+      ok: true,
+      issue: { issueKey: "USE-42" },
+      latestStageRun: { id: 7, stage: "development", status: "completed" },
+    });
+
+    const missingOverview = await app.inject({
+      method: "GET",
+      url: "/api/issues/USE-404",
+    });
+    assert.equal(missingOverview.statusCode, 404);
+    assert.deepEqual(missingOverview.json(), { ok: false, reason: "issue_not_found" });
+
+    const report = await app.inject({
+      method: "GET",
+      url: "/api/issues/USE-42/report",
+    });
+    assert.equal(report.statusCode, 200);
+    assert.deepEqual(report.json(), {
+      ok: true,
+      issue: { issueKey: "USE-42" },
+      stages: [{ stageRun: { id: 7, stage: "development", status: "completed" } }],
+    });
+
+    const live = await app.inject({
+      method: "GET",
+      url: "/api/issues/USE-42/live",
+    });
+    assert.equal(live.statusCode, 200);
+    assert.deepEqual(live.json(), {
+      ok: true,
+      issue: { issueKey: "USE-42" },
+      stageRun: { id: 8, stage: "review", status: "running" },
+      liveThread: { threadId: "thread-1", threadStatus: "running" },
+    });
+
+    const missingLive = await app.inject({
+      method: "GET",
+      url: "/api/issues/USE-404/live",
+    });
+    assert.equal(missingLive.statusCode, 404);
+    assert.deepEqual(missingLive.json(), { ok: false, reason: "active_stage_not_found" });
+
+    const events = await app.inject({
+      method: "GET",
+      url: "/api/issues/USE-42/stages/8/events",
+    });
+    assert.equal(events.statusCode, 200);
+    assert.deepEqual(events.json(), {
+      ok: true,
+      issue: { issueKey: "USE-42" },
+      stageRun: { id: 8, stage: "review", status: "running" },
+      events: [{ id: 1, method: "turn/started" }],
+    });
+
+    const missingEvents = await app.inject({
+      method: "GET",
+      url: "/api/issues/USE-42/stages/999/events",
+    });
+    assert.equal(missingEvents.statusCode, 404);
+    assert.deepEqual(missingEvents.json(), { ok: false, reason: "stage_run_not_found" });
+
+    await app.close();
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});

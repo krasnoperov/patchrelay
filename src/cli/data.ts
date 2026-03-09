@@ -2,6 +2,7 @@ import pino from "pino";
 import { CodexAppServerClient } from "../codex-app-server.js";
 import { PatchRelayDatabase } from "../db.js";
 import type { AppConfig, CodexThreadItem, CodexThreadSummary, StageReport, StageRunRecord, WorkflowStage } from "../types.js";
+import { resolveWorkflowStage } from "../workflow-policy.js";
 
 interface LiveSummary {
   threadId: string;
@@ -110,25 +111,11 @@ function latestEventTimestamp(db: PatchRelayDatabase, stageRunId: number): strin
 
 function resolveStageFromState(config: AppConfig, projectId: string, stateName?: string): WorkflowStage | undefined {
   const project = config.projects.find((entry) => entry.id === projectId);
-  const normalized = stateName?.trim().toLowerCase();
-  if (!project || !normalized) {
+  if (!project) {
     return undefined;
   }
 
-  if (normalized === project.workflowStatuses.development.trim().toLowerCase()) {
-    return "development";
-  }
-  if (normalized === project.workflowStatuses.review.trim().toLowerCase()) {
-    return "review";
-  }
-  if (normalized === project.workflowStatuses.deploy.trim().toLowerCase()) {
-    return "deploy";
-  }
-  if (project.workflowStatuses.cleanup && normalized === project.workflowStatuses.cleanup.trim().toLowerCase()) {
-    return "cleanup";
-  }
-
-  return undefined;
+  return resolveWorkflowStage(project, stateName);
 }
 
 export class CliDataAccess {

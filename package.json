@@ -12,7 +12,7 @@
   },
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc -p tsconfig.json && node scripts/write-build-info.mjs",
+    "build": "rm -rf dist && tsc -p tsconfig.json && chmod +x dist/index.js && node scripts/write-build-info.mjs",
     "start": "node dist/index.js",
     "restart": "sudo systemctl restart patchrelay",
     "check": "tsc -p tsconfig.json --noEmit",

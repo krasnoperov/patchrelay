@@ -508,3 +508,70 @@ test("service startup reconciles finished and missing active threads", async () 
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("service ignores webhook events when project routing is ambiguous", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-ambiguous-"));
+  try {
+    const config = createConfig(baseDir);
+    setupRepo(baseDir, config);
+    config.projects.push({
+      ...config.projects[0]!,
+      id: "usertold-copy",
+      repoPath: path.join(baseDir, "repo-copy"),
+      worktreeRoot: path.join(baseDir, "worktrees-copy"),
+      workflowFiles: {
+        development: path.join(baseDir, "COPY_DEVELOPMENT_WORKFLOW.md"),
+        review: path.join(baseDir, "COPY_REVIEW_WORKFLOW.md"),
+        deploy: path.join(baseDir, "COPY_DEPLOY_WORKFLOW.md"),
+        cleanup: path.join(baseDir, "COPY_CLEANUP_WORKFLOW.md"),
+      },
+    });
+    setupRepo(baseDir, { ...config, projects: [config.projects[1]!] });
+
+    writeFileSync(config.projects[1]!.workflowFiles.development, "Implement carefully.\n", "utf8");
+    writeFileSync(config.projects[1]!.workflowFiles.review, "Review carefully.\n", "utf8");
+    writeFileSync(config.projects[1]!.workflowFiles.deploy, "Deploy carefully.\n", "utf8");
+    writeFileSync(config.projects[1]!.workflowFiles.cleanup, "Clean up carefully.\n", "utf8");
+
+    const db = new PatchRelayDatabase(config.database.path, true);
+    db.runMigrations();
+    const codex = new FakeCodexClient();
+    const service = new PatchRelayService(config, db, codex as never, pino({ enabled: false }));
+    await service.start();
+
+    const event = db.insertWebhookEvent({
+      webhookId: "delivery-ambiguous",
+      receivedAt: new Date().toISOString(),
+      eventType: "Issue.update",
+      issueId: "issue_ambiguous",
+      headersJson: "{}",
+      payloadJson: JSON.stringify({
+        action: "update",
+        type: "Issue",
+        createdAt: "2026-03-08T12:00:00.000Z",
+        webhookTimestamp: 1000,
+        updatedFrom: { stateId: "todo" },
+        data: {
+          id: "issue_ambiguous",
+          identifier: "USE-30",
+          title: "Ambiguous routing",
+          team: { key: "USE" },
+          state: { name: "Start" },
+        },
+      }),
+      signatureValid: true,
+      dedupeStatus: "accepted",
+    });
+
+    await service.processWebhookEvent(event.id);
+    await flushQueues();
+
+    assert.equal(db.getTrackedIssueByKey("USE-30"), undefined);
+    assert.equal(codex.startedThreads.length, 0);
+    assert.equal(db.getWebhookEvent(event.id)?.processingStatus, "processed");
+
+    service.stop();
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});

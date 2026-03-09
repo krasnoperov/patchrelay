@@ -1,25 +1,31 @@
-import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import type { Logger } from "pino";
 import { CodexAppServerClient, type CodexNotification } from "./codex-app-server.js";
 import { PatchRelayDatabase } from "./db.js";
 import { resolveProject, triggerEventAllowed } from "./project-resolution.js";
+import { acceptIncomingWebhook } from "./service-webhooks.js";
+import { buildStageLaunchPlan, isCodexThreadId } from "./stage-launch.js";
+import {
+  buildFailedStageReport,
+  buildPendingMaterializationThread,
+  buildStageReport,
+  countEventMethods,
+  extractStageSummary,
+  extractTurnId,
+  resolveStageRunStatus,
+  summarizeCurrentThread,
+} from "./stage-reporting.js";
 import type {
   AppConfig,
-  CodexThreadItem,
   CodexThreadSummary,
   LinearWebhookPayload,
-  NormalizedEvent,
-  ProjectConfig,
-  StageLaunchPlan,
   StageReport,
   StageRunRecord,
   TrackedIssueRecord,
-  WorkflowStage,
 } from "./types.js";
-import { ensureDir, execCommand, safeJsonParse, timestampMsWithinSkew, verifyHmacSha256Hex } from "./utils.js";
-import { archiveWebhook } from "./webhook-archive.js";
+import { ensureDir, execCommand, safeJsonParse } from "./utils.js";
 import { normalizeWebhook } from "./webhooks.js";
+import { resolveWorkflowStage } from "./workflow-policy.js";
 
 const ISSUE_KEY_DELIMITER = "::";
 
@@ -69,186 +75,6 @@ function parseIssueQueueKey(value: string): { projectId: string; issueId: string
   return { projectId, issueId };
 }
 
-function slugify(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 60);
-}
-
-function sanitizePathSegment(value: string): string {
-  return value.replace(/[^a-zA-Z0-9._-]+/g, "-");
-}
-
-function isCodexThreadId(value: string | undefined): value is string {
-  if (!value) {
-    return false;
-  }
-
-  return !value.startsWith("missing-thread-") && !value.startsWith("launch-failed-");
-}
-
-function resolveStage(project: ProjectConfig, stateName?: string): WorkflowStage | undefined {
-  const normalized = stateName?.trim().toLowerCase();
-  if (!normalized) {
-    return undefined;
-  }
-
-  if (normalized === project.workflowStatuses.development.trim().toLowerCase()) {
-    return "development";
-  }
-  if (normalized === project.workflowStatuses.review.trim().toLowerCase()) {
-    return "review";
-  }
-  if (normalized === project.workflowStatuses.deploy.trim().toLowerCase()) {
-    return "deploy";
-  }
-  if (project.workflowStatuses.cleanup && normalized === project.workflowStatuses.cleanup.trim().toLowerCase()) {
-    return "cleanup";
-  }
-
-  return undefined;
-}
-
-function buildStageLaunchPlan(project: ProjectConfig, issue: TrackedIssueRecord, stage: WorkflowStage): StageLaunchPlan {
-  const issueRef = sanitizePathSegment(issue.issueKey ?? issue.linearIssueId);
-  const slug = issue.title ? slugify(issue.title) : "";
-  const branchSuffix = slug ? `${issueRef}-${slug}` : issueRef;
-  const workflowFile = project.workflowFiles[stage];
-
-  return {
-    branchName: `${project.branchPrefix}/${branchSuffix}`,
-    worktreePath: path.join(project.worktreeRoot, issueRef),
-    workflowFile,
-    stage,
-    prompt: buildStagePrompt(issue, stage, workflowFile),
-  };
-}
-
-function buildStagePrompt(issue: TrackedIssueRecord, stage: WorkflowStage, workflowFile: string): string {
-  const workflowBody = existsSync(workflowFile) ? readFileSync(workflowFile, "utf8").trim() : "";
-  return [
-    `Issue: ${issue.issueKey ?? issue.linearIssueId}`,
-    issue.title ? `Title: ${issue.title}` : undefined,
-    issue.issueUrl ? `Linear URL: ${issue.issueUrl}` : undefined,
-    issue.currentLinearState ? `Current Linear State: ${issue.currentLinearState}` : undefined,
-    `Stage: ${stage}`,
-    "",
-    "Operate only inside the prepared worktree for this issue. Continue the issue lifecycle in this workspace.",
-    "Capture a crisp summary of what you did, what changed, and what remains blocked so PatchRelay can publish a read-only report.",
-    "",
-    `Workflow File: ${path.basename(workflowFile)}`,
-    workflowBody,
-  ]
-    .filter(Boolean)
-    .join("\n");
-}
-
-function extractStageSummary(report: StageReport): Record<string, unknown> {
-  return {
-    assistantMessageCount: report.assistantMessages.length,
-    commandCount: report.commands.length,
-    fileChangeCount: report.fileChanges.length,
-    toolCallCount: report.toolCalls.length,
-    latestAssistantMessage: report.assistantMessages.at(-1) ?? null,
-  };
-}
-
-function summarizeCurrentThread(thread: CodexThreadSummary): {
-  threadId: string;
-  threadStatus: string;
-  latestTurnId?: string;
-  latestTurnStatus?: string;
-  latestAgentMessage?: string;
-} {
-  const latestTurn = thread.turns.at(-1);
-  const latestAgentMessage = latestTurn?.items
-    .filter((item): item is Extract<CodexThreadItem, { type: "agentMessage" }> => item.type === "agentMessage")
-    .at(-1)?.text;
-
-  return {
-    threadId: thread.id,
-    threadStatus: thread.status,
-    ...(latestTurn ? { latestTurnId: latestTurn.id, latestTurnStatus: latestTurn.status } : {}),
-    ...(latestAgentMessage ? { latestAgentMessage } : {}),
-  };
-}
-
-function buildStageReport(stageRun: StageRunRecord, issue: TrackedIssueRecord, thread: CodexThreadSummary, eventCounts: Record<string, number>): StageReport {
-  const assistantMessages: string[] = [];
-  const plans: string[] = [];
-  const reasoning: string[] = [];
-  const commands: StageReport["commands"] = [];
-  const fileChanges: Array<Record<string, unknown>> = [];
-  const toolCalls: StageReport["toolCalls"] = [];
-
-  for (const turn of thread.turns) {
-    for (const rawItem of turn.items as CodexThreadItem[]) {
-      const item = rawItem as CodexThreadItem & Record<string, unknown>;
-      if (item.type === "agentMessage" && typeof item.text === "string") {
-        assistantMessages.push(item.text);
-      } else if (item.type === "plan" && typeof item.text === "string") {
-        plans.push(item.text);
-      } else if (
-        item.type === "reasoning" &&
-        Array.isArray(item.summary) &&
-        Array.isArray(item.content)
-      ) {
-        reasoning.push(...(item.summary as string[]), ...(item.content as string[]));
-      } else if (item.type === "commandExecution" && typeof item.command === "string" && typeof item.cwd === "string") {
-        commands.push({
-          command: item.command,
-          cwd: item.cwd,
-          status: typeof item.status === "string" ? item.status : "unknown",
-          ...(typeof item.exitCode === "number" || item.exitCode === null ? { exitCode: item.exitCode as number | null } : {}),
-          ...(typeof item.durationMs === "number" || item.durationMs === null
-            ? { durationMs: item.durationMs as number | null }
-            : {}),
-        });
-      } else if (item.type === "fileChange" && Array.isArray(item.changes)) {
-        fileChanges.push(...(item.changes as Array<Record<string, unknown>>));
-      } else if (item.type === "mcpToolCall" && typeof item.server === "string" && typeof item.tool === "string") {
-        toolCalls.push({
-          type: "mcp",
-          name: `${item.server}/${item.tool}`,
-          status: typeof item.status === "string" ? item.status : "unknown",
-          ...(typeof item.durationMs === "number" || item.durationMs === null
-            ? { durationMs: item.durationMs as number | null }
-            : {}),
-        });
-      } else if (item.type === "dynamicToolCall" && typeof item.tool === "string") {
-        toolCalls.push({
-          type: "dynamic",
-          name: item.tool,
-          status: typeof item.status === "string" ? item.status : "unknown",
-          ...(typeof item.durationMs === "number" || item.durationMs === null
-            ? { durationMs: item.durationMs as number | null }
-            : {}),
-        });
-      }
-    }
-  }
-
-  return {
-    ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
-    stage: stageRun.stage,
-    status: stageRun.status,
-    ...(stageRun.threadId ? { threadId: stageRun.threadId } : {}),
-    ...(stageRun.parentThreadId ? { parentThreadId: stageRun.parentThreadId } : {}),
-    ...(stageRun.turnId ? { turnId: stageRun.turnId } : {}),
-    prompt: stageRun.promptText,
-    workflowFile: stageRun.workflowFile,
-    assistantMessages,
-    plans,
-    reasoning,
-    commands,
-    fileChanges,
-    toolCalls,
-    eventCounts,
-  };
-}
-
 export class PatchRelayService {
   readonly webhookQueue: InMemoryQueue<number>;
   readonly issueQueue: InMemoryQueue<string>;
@@ -286,118 +112,21 @@ export class PatchRelayService {
     status: number;
     body: Record<string, string | number | boolean>;
   }> {
-    const receivedAt = new Date().toISOString();
-    let payload: LinearWebhookPayload;
-    try {
-      payload = JSON.parse(params.rawBody.toString("utf8")) as LinearWebhookPayload;
-    } catch {
-      this.logger.warn({ webhookId: params.webhookId }, "Rejecting malformed webhook payload");
-      return { status: 400, body: { ok: false, reason: "invalid_json" } };
-    }
-
-    let normalized: NormalizedEvent;
-    try {
-      normalized = normalizeWebhook({
-        webhookId: params.webhookId,
-        payload,
-      });
-    } catch (error) {
-      this.logger.warn({ webhookId: params.webhookId, error }, "Rejecting unsupported webhook payload");
-      return { status: 400, body: { ok: false, reason: "unsupported_payload" } };
-    }
-
-    const issueRef = normalized.issue.identifier ?? normalized.issue.id;
-    const stateName = normalized.issue.stateName;
-    const title = normalized.issue.title;
-    const summary = [
-      `Linear webhook for ${issueRef}`,
-      normalized.triggerEvent,
-      stateName ? `to ${stateName}` : undefined,
-      title ? `(${title})` : undefined,
-    ]
-      .filter(Boolean)
-      .join(" ");
-
-    this.logger.info(
-      {
-        issueKey: normalized.issue.identifier,
-        triggerEvent: normalized.triggerEvent,
-        state: stateName,
-        title,
-      },
-      summary,
-    );
-    this.logger.debug(
-      {
-        webhookId: params.webhookId,
-        eventType: normalized.eventType,
-        issueId: normalized.issue.id,
-      },
-      "Webhook metadata",
-    );
-
-    if (configHasArchiveDir(this.config)) {
-      try {
-        const archivePath = await archiveWebhook({
-          archiveDir: this.config.logging.webhookArchiveDir,
-          webhookId: params.webhookId,
-          receivedAt,
-          headers: params.headers,
-          rawBody: params.rawBody,
-          payload,
-        });
-        this.logger.debug({ webhookId: params.webhookId, archivePath }, "Archived webhook to local file");
-      } catch (error) {
-        this.logger.error({ webhookId: params.webhookId, error }, "Failed to archive webhook to local file");
-      }
-    }
-
-    const signature = typeof params.headers["linear-signature"] === "string" ? params.headers["linear-signature"] : "";
-    const validSignature = verifyHmacSha256Hex(params.rawBody, this.config.linear.webhookSecret, signature);
-    if (!validSignature) {
-      this.db.insertWebhookEvent({
-        webhookId: params.webhookId,
-        receivedAt,
-        eventType: normalized.eventType,
-        issueId: normalized.issue.id,
-        headersJson: JSON.stringify(params.headers),
-        payloadJson: JSON.stringify(payload),
-        signatureValid: false,
-        dedupeStatus: "rejected",
-      });
-      return { status: 401, body: { ok: false, reason: "invalid_signature" } };
-    }
-
-    if (!timestampMsWithinSkew(payload.webhookTimestamp, this.config.ingress.maxTimestampSkewSeconds)) {
-      this.db.insertWebhookEvent({
-        webhookId: params.webhookId,
-        receivedAt,
-        eventType: normalized.eventType,
-        issueId: normalized.issue.id,
-        headersJson: JSON.stringify(params.headers),
-        payloadJson: JSON.stringify(payload),
-        signatureValid: true,
-        dedupeStatus: "rejected",
-      });
-      return { status: 401, body: { ok: false, reason: "stale_timestamp" } };
-    }
-
-    const stored = this.db.insertWebhookEvent({
+    const result = await acceptIncomingWebhook({
+      config: this.config,
+      db: this.db,
+      logger: this.logger,
       webhookId: params.webhookId,
-      receivedAt,
-      eventType: normalized.eventType,
-      issueId: normalized.issue.id,
-      headersJson: JSON.stringify(params.headers),
-      payloadJson: JSON.stringify(payload),
-      signatureValid: true,
-      dedupeStatus: "accepted",
+      headers: params.headers,
+      rawBody: params.rawBody,
     });
-    if (!stored.inserted) {
-      return { status: 200, body: { ok: true, duplicate: true } };
+    if (result.accepted) {
+      this.webhookQueue.enqueue(result.accepted.id);
     }
-
-    this.webhookQueue.enqueue(stored.id);
-    return { status: 200, body: { ok: true, accepted: true, webhookEventId: stored.id } };
+    return {
+      status: result.status,
+      body: result.body,
+    };
   }
 
   async processWebhookEvent(webhookEventId: number): Promise<void> {
@@ -424,7 +153,7 @@ export class PatchRelayService {
 
     this.db.assignWebhookProject(webhookEventId, project.id);
     const desiredStage = triggerEventAllowed(project, normalized.triggerEvent)
-      ? resolveStage(project, normalized.issue.stateName)
+      ? resolveWorkflowStage(project, normalized.issue.stateName)
       : undefined;
 
     this.db.recordDesiredStage({
@@ -542,20 +271,7 @@ export class PatchRelayService {
         status: "failed",
         threadId: failureThreadId,
         summaryJson: JSON.stringify({ message: err.message }),
-        reportJson: JSON.stringify({
-          stage: claim.stageRun.stage,
-          status: "failed",
-          threadId: failureThreadId,
-          prompt: claim.stageRun.promptText,
-          workflowFile: claim.stageRun.workflowFile,
-          assistantMessages: [],
-          plans: [],
-          reasoning: [],
-          commands: [],
-          fileChanges: [],
-          toolCalls: [],
-          eventCounts: {},
-        }),
+        reportJson: JSON.stringify(buildFailedStageReport(claim.stageRun, "failed", { threadId: failureThreadId })),
       });
       this.logger.error(
         {
@@ -649,22 +365,7 @@ export class PatchRelayService {
 
     const thread = await this.codex.readThread(stageRun.threadId, true).catch((error) => {
       const err = error instanceof Error ? error : new Error(String(error));
-      return {
-        id: stageRun.threadId!,
-        preview: "",
-        cwd: "",
-        status: "pending-materialization",
-        turns: [
-          {
-            id: stageRun.turnId ?? "pending-turn",
-            status: "inProgress",
-            error: {
-              message: err.message,
-            },
-            items: [],
-          },
-        ],
-      } as CodexThreadSummary;
+      return buildPendingMaterializationThread(stageRun, err);
     });
 
     return {
@@ -698,105 +399,32 @@ export class PatchRelayService {
       return;
     }
 
-    const latestStageRun = this.db.getStageRun(stageRun.id);
-    if (!latestStageRun) {
-      return;
-    }
-
     const thread = await this.codex.readThread(threadId, true);
-    const eventCounts = this.db.listThreadEvents(stageRun.id).reduce<Record<string, number>>((counts, event) => {
-      counts[event.method] = (counts[event.method] ?? 0) + 1;
-      return counts;
-    }, {});
-    const stageStatus = this.resolveStageStatus(notification.params);
+    const stageStatus = resolveStageRunStatus(notification.params);
     const issue = this.db.getTrackedIssue(stageRun.projectId, stageRun.linearIssueId);
     if (!issue) {
       return;
     }
 
-    const refreshedStageRun = this.db.getStageRun(stageRun.id) ?? stageRun;
-    const report = buildStageReport(
-      {
-        ...refreshedStageRun,
-        status: stageStatus,
-        threadId,
-      },
-      issue,
-      thread,
-      eventCounts,
-    );
-
     const completedTurnId = extractTurnId(notification.params);
-    this.db.finishStageRun({
-      stageRunId: stageRun.id,
-      status: stageStatus,
+    this.completeStageRun(stageRun, issue, thread, stageStatus, {
       threadId,
       ...(completedTurnId ? { turnId: completedTurnId } : {}),
-      summaryJson: JSON.stringify(extractStageSummary(report)),
-      reportJson: JSON.stringify(report),
     });
-
-    const refreshedIssue = this.db.getTrackedIssue(stageRun.projectId, stageRun.linearIssueId);
-    const pipeline = this.db.getPipelineRun(stageRun.pipelineRunId);
-    if (stageStatus === "completed" && refreshedIssue?.desiredStage) {
-      this.issueQueue.enqueue(makeIssueQueueKey(stageRun.projectId, stageRun.linearIssueId));
-      return;
-    }
-
-    if (stageStatus === "completed" && pipeline && !refreshedIssue?.desiredStage) {
-      this.db.markPipelineCompleted(pipeline.id);
-    }
   }
 
   private async reconcileActiveStageRuns(): Promise<void> {
     const activeStageRuns = this.db.listActiveStageRuns();
     for (const stageRun of activeStageRuns) {
       if (!stageRun.threadId) {
-        this.db.finishStageRun({
-          stageRunId: stageRun.id,
-          status: "failed",
-          threadId: `missing-thread-${stageRun.id}`,
-          summaryJson: JSON.stringify({ message: "Stage run had no persisted thread id during reconciliation" }),
-          reportJson: JSON.stringify({
-            stage: stageRun.stage,
-            status: "failed",
-            prompt: stageRun.promptText,
-            workflowFile: stageRun.workflowFile,
-            assistantMessages: [],
-            plans: [],
-            reasoning: [],
-            commands: [],
-            fileChanges: [],
-            toolCalls: [],
-            eventCounts: {},
-          }),
-        });
+        this.failStageRun(stageRun, `missing-thread-${stageRun.id}`, "Stage run had no persisted thread id during reconciliation");
         continue;
       }
 
       const thread = await this.codex.readThread(stageRun.threadId, true).catch(() => undefined);
       if (!thread) {
-        this.db.finishStageRun({
-          stageRunId: stageRun.id,
-          status: "failed",
-          threadId: stageRun.threadId,
+        this.failStageRun(stageRun, stageRun.threadId, "Thread was not found during startup reconciliation", {
           ...(stageRun.turnId ? { turnId: stageRun.turnId } : {}),
-          summaryJson: JSON.stringify({ message: "Thread was not found during startup reconciliation" }),
-          reportJson: JSON.stringify({
-            stage: stageRun.stage,
-            status: "failed",
-            threadId: stageRun.threadId,
-            ...(stageRun.turnId ? { turnId: stageRun.turnId } : {}),
-            prompt: stageRun.promptText,
-            workflowFile: stageRun.workflowFile,
-            assistantMessages: [],
-            plans: [],
-            reasoning: [],
-            commands: [],
-            fileChanges: [],
-            toolCalls: [],
-            eventCounts: {},
-          }),
         });
         continue;
       }
@@ -811,70 +439,88 @@ export class PatchRelayService {
         continue;
       }
 
-      const eventCounts = this.db.listThreadEvents(stageRun.id).reduce<Record<string, number>>((counts, event) => {
-        counts[event.method] = (counts[event.method] ?? 0) + 1;
-        return counts;
-      }, {});
       const resolvedStatus = latestTurn.status === "completed" ? "completed" : "failed";
-      const report = buildStageReport(
-        {
-          ...stageRun,
-          status: resolvedStatus,
-          threadId: stageRun.threadId,
+      if (resolvedStatus === "failed") {
+        this.failStageRun(stageRun, stageRun.threadId, "Thread completed reconciliation in a failed state", {
           ...(latestTurn.id ? { turnId: latestTurn.id } : {}),
-        },
-        issue,
-        thread,
-        eventCounts,
-      );
+        });
+        continue;
+      }
 
-      this.db.finishStageRun({
-        stageRunId: stageRun.id,
-        status: resolvedStatus,
+      this.completeStageRun(stageRun, issue, thread, "completed", {
         threadId: stageRun.threadId,
         ...(latestTurn.id ? { turnId: latestTurn.id } : {}),
-        summaryJson: JSON.stringify(extractStageSummary(report)),
-        reportJson: JSON.stringify(report),
       });
-
-      const refreshedIssue = this.db.getTrackedIssue(stageRun.projectId, stageRun.linearIssueId);
-      const pipeline = this.db.getPipelineRun(stageRun.pipelineRunId);
-      if (resolvedStatus === "completed" && refreshedIssue?.desiredStage) {
-        this.issueQueue.enqueue(makeIssueQueueKey(stageRun.projectId, stageRun.linearIssueId));
-      } else if (resolvedStatus === "completed" && pipeline && !refreshedIssue?.desiredStage) {
-        this.db.markPipelineCompleted(pipeline.id);
-      }
     }
   }
 
-  private resolveStageStatus(params: Record<string, unknown>): StageRunRecord["status"] {
-    const turn = params.turn;
-    if (!turn || typeof turn !== "object") {
-      return "failed";
-    }
+  private completeStageRun(
+    stageRun: StageRunRecord,
+    issue: TrackedIssueRecord,
+    thread: CodexThreadSummary,
+    status: StageRunRecord["status"],
+    params: { threadId: string; turnId?: string },
+  ): void {
+    const refreshedStageRun = this.db.getStageRun(stageRun.id) ?? stageRun;
+    const finalizedStageRun = {
+      ...refreshedStageRun,
+      status,
+      threadId: params.threadId,
+      ...(params.turnId ? { turnId: params.turnId } : {}),
+    };
+    const report = buildStageReport(finalizedStageRun, issue, thread, countEventMethods(this.db.listThreadEvents(stageRun.id)));
 
-    const status = String((turn as Record<string, unknown>).status ?? "failed");
-    return status === "completed" ? "completed" : "failed";
+    this.db.finishStageRun({
+      stageRunId: stageRun.id,
+      status,
+      threadId: params.threadId,
+      ...(params.turnId ? { turnId: params.turnId } : {}),
+      summaryJson: JSON.stringify(extractStageSummary(report)),
+      reportJson: JSON.stringify(report),
+    });
+
+    this.advanceAfterStageCompletion(stageRun);
   }
 
+  private failStageRun(
+    stageRun: StageRunRecord,
+    threadId: string,
+    message: string,
+    options?: {
+      turnId?: string;
+    },
+  ): void {
+    this.db.finishStageRun({
+      stageRunId: stageRun.id,
+      status: "failed",
+      threadId,
+      ...(options?.turnId ? { turnId: options.turnId } : {}),
+      summaryJson: JSON.stringify({ message }),
+      reportJson: JSON.stringify(
+        buildFailedStageReport(stageRun, "failed", {
+          threadId,
+          ...(options?.turnId ? { turnId: options.turnId } : {}),
+        }),
+      ),
+    });
+  }
+
+  private advanceAfterStageCompletion(stageRun: StageRunRecord): void {
+    const refreshedIssue = this.db.getTrackedIssue(stageRun.projectId, stageRun.linearIssueId);
+    const pipeline = this.db.getPipelineRun(stageRun.pipelineRunId);
+    if (refreshedIssue?.desiredStage) {
+      this.issueQueue.enqueue(makeIssueQueueKey(stageRun.projectId, stageRun.linearIssueId));
+      return;
+    }
+
+    if (pipeline) {
+      this.db.markPipelineCompleted(pipeline.id);
+    }
+  }
   private async ensureWorktree(repoPath: string, worktreePath: string, branchName: string): Promise<void> {
     await ensureDir(path.dirname(worktreePath));
     await execCommand(this.config.runner.gitBin, ["-C", repoPath, "worktree", "add", "--force", "-B", branchName, worktreePath, "HEAD"], {
       timeoutMs: 120_000,
     });
   }
-}
-
-function configHasArchiveDir(config: AppConfig): config is AppConfig & { logging: { webhookArchiveDir: string } } {
-  return typeof config.logging.webhookArchiveDir === "string" && config.logging.webhookArchiveDir.length > 0;
-}
-
-function extractTurnId(params: Record<string, unknown>): string | undefined {
-  const turn = params.turn;
-  if (!turn || typeof turn !== "object") {
-    return undefined;
-  }
-
-  const id = (turn as Record<string, unknown>).id;
-  return typeof id === "string" ? id : undefined;
 }
