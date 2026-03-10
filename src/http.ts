@@ -14,6 +14,8 @@ declare module "fastify" {
 
 export async function buildHttpServer(config: AppConfig, service: PatchRelayService, logger: Logger) {
   const buildInfo = getBuildInfo();
+  const loopbackBind = isLoopbackBind(config.server.bind);
+  const managementRoutesEnabled = Boolean(config.linear.oauth) && (loopbackBind || config.operatorApi.enabled);
   const app = fastify({
     loggerInstance: logger,
     bodyLimit: config.ingress.maxBodyBytes,
@@ -267,6 +269,9 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
       return reply.send({ ok: true, ...result });
     });
 
+  }
+
+  if (managementRoutesEnabled) {
     app.get("/api/installations", async (_request, reply) => {
       return reply.send({ ok: true, installations: service.listLinearInstallations() });
     });
@@ -274,6 +279,15 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
     app.get("/api/oauth/linear/start", async (request, reply) => {
       const projectId = getQueryParam(request, "projectId");
       const result = service.createLinearOAuthStart(projectId ? { projectId } : undefined);
+      return reply.send({ ok: true, ...result });
+    });
+
+    app.get("/api/oauth/linear/state/:state", async (request, reply) => {
+      const { state } = request.params as { state: string };
+      const result = service.getLinearOAuthStateStatus(state);
+      if (!result) {
+        return reply.code(404).send({ ok: false, reason: "oauth_state_not_found" });
+      }
       return reply.send({ ok: true, ...result });
     });
 
@@ -291,10 +305,13 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
       }
 
       try {
-        const link = installationId === undefined ? service.unlinkProjectInstallation(projectId) : service.linkProjectInstallation(projectId, installationId);
+        const link =
+          installationId === undefined ? service.unlinkProjectInstallation(projectId) : service.linkProjectInstallation(projectId, installationId);
         return reply.send({ ok: true, link });
       } catch (error) {
-        return reply.code(404).send({ ok: false, reason: "link_failed", message: error instanceof Error ? error.message : String(error) });
+        return reply
+          .code(404)
+          .send({ ok: false, reason: "link_failed", message: error instanceof Error ? error.message : String(error) });
       }
     });
   }
@@ -345,12 +362,20 @@ function getHeader(request: FastifyRequest, name: string): string | undefined {
 }
 
 function isAuthorizedOperatorRequest(request: FastifyRequest, config: AppConfig): boolean {
+  if (isLoopbackBind(config.server.bind)) {
+    return true;
+  }
+
   if (!config.operatorApi.bearerToken) {
     return true;
   }
 
   const auth = getHeader(request, "authorization");
   return auth === `Bearer ${config.operatorApi.bearerToken}`;
+}
+
+function isLoopbackBind(bind: string): boolean {
+  return bind === "127.0.0.1" || bind === "::1" || bind === "localhost";
 }
 
 function renderSetupPage(

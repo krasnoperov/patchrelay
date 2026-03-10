@@ -12,12 +12,12 @@ ingress:
 logging:
   level: info
   format: logfmt
-  file_path: /var/log/patchrelay/patchrelay.log
+  file_path: ${PATCHRELAY_LOG_FILE:-/home/your-user/.local/state/patchrelay/patchrelay.log}
   # Optional. Enable only if you want raw webhook archives on disk.
-  # webhook_archive_dir: /var/log/patchrelay/webhooks
+  # webhook_archive_dir: /home/your-user/.local/state/patchrelay/webhooks
 
 database:
-  path: ${PATCHRELAY_DB_PATH:-/var/lib/patchrelay/patchrelay.sqlite}
+  path: ${PATCHRELAY_DB_PATH:-/home/your-user/.local/state/patchrelay/patchrelay.sqlite}
   wal: true
 
 linear:
@@ -36,7 +36,8 @@ linear:
 
 operator_api:
   enabled: false
-  # If enabled on anything other than 127.0.0.1, require a bearer token env.
+  # Personal-mode default is disabled. If enabled on anything other than
+  # 127.0.0.1, require a bearer token env.
   # bearer_token_env: PATCHRELAY_OPERATOR_TOKEN
 
 runner:
@@ -54,13 +55,13 @@ runner:
 
 projects:
   - id: your-project
-    repo_path: /srv/repos/your-project
-    worktree_root: /srv/patchrelay/worktrees/your-project
+    repo_path: /home/your-user/src/your-project
+    worktree_root: /home/your-user/.local/share/patchrelay/worktrees/your-project
     workflow_files:
-      development: /srv/repos/your-project/IMPLEMENTATION_WORKFLOW.md
-      review: /srv/repos/your-project/REVIEW_WORKFLOW.md
-      deploy: /srv/repos/your-project/DEPLOY_WORKFLOW.md
-      cleanup: /srv/repos/your-project/CLEANUP_WORKFLOW.md
+      development: /home/your-user/src/your-project/IMPLEMENTATION_WORKFLOW.md
+      review: /home/your-user/src/your-project/REVIEW_WORKFLOW.md
+      deploy: /home/your-user/src/your-project/DEPLOY_WORKFLOW.md
+      cleanup: /home/your-user/src/your-project/CLEANUP_WORKFLOW.md
     workflow_statuses:
       development: Start
       review: Review

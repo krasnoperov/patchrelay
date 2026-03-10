@@ -2,7 +2,9 @@
 
 ## Purpose
 
-`patchrelay` is a terminal-first operator utility for inspecting and following PatchRelay issue pipelines without using the browser endpoints directly.
+`patchrelay` is the primary operator interface for PatchRelay.
+
+The browser is only a consent helper for Linear OAuth.
 
 The CLI is not a second orchestrator.
 
@@ -27,6 +29,7 @@ Its second job is light operator control:
 - start a Linear OAuth installation flow
 - inspect connected Linear installations
 - link a project to an installation
+- keep setup and daily operation in the terminal
 
 ## User goals
 
@@ -125,20 +128,44 @@ Output includes:
 
 ### `patchrelay connect [--project <projectId>]`
 
-Create a Linear OAuth authorization URL for the current PatchRelay installation.
+Start a Linear OAuth installation flow for the current PatchRelay installation.
 
 Output includes:
 
-- the authorize URL
+- whether PatchRelay could open the browser automatically
+- the authorize URL as a fallback if the browser could not be opened
 - the redirect URI PatchRelay expects
+- completion status after OAuth consent succeeds
+- the connected installation summary
+
+Expected flow:
+
+1. CLI requests a one-time OAuth start from local PatchRelay.
+2. CLI opens the browser to Linear consent.
+3. User approves access in the browser.
+4. Linear redirects back to local PatchRelay.
+5. CLI returns to a completed terminal flow without requiring `/setup`.
 
 ### `patchrelay installations`
 
 List connected Linear installations and the projects linked to them.
 
-### `patchrelay link-installation <projectId> <installationId|none>`
+### `patchrelay link-installation <projectId> <installationId>`
 
-Link a configured project to a Linear installation, or clear the link with `none`.
+Link a configured project to a Linear installation.
+
+### `patchrelay unlink-installation <projectId>`
+
+Clear a project's Linear installation link without using the `none` sentinel.
+
+### `patchrelay webhook <projectId>`
+
+Print the current webhook URL and setup instructions for a project.
+
+Flags:
+
+- `--show-secret`
+- `--json`
 
 ### `patchrelay inspect <issueKey>`
 
@@ -336,6 +363,8 @@ The CLI should not speak JSON-RPC to `codex app-server` directly in the first ve
 
 PatchRelay already owns that relationship.
 
+For the operator setup path, the CLI may use local HTTP endpoints for OAuth start/completion state while still keeping the browser out of the main control loop.
+
 ## UX details
 
 ### Human-readable style
@@ -431,6 +460,7 @@ The first usable CLI version is done when:
 6. `patchrelay open USE-54` gives a correct manual takeover path
 7. every command supports `--json`
 8. failures are understandable without opening SQLite manually
+9. `patchrelay connect` can complete a Linear OAuth installation with the browser used only for consent
 
 ## Future extension
 

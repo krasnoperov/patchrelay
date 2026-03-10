@@ -5,6 +5,9 @@
 patchrelay.example.com {
 	encode zstd gzip
 
+	# Forward only the public ingress surface to a localhost PatchRelay instance
+	# that is running under a systemd user service.
+
 	@home path /
 	handle @home {
 		reverse_proxy 127.0.0.1:8787
@@ -12,6 +15,11 @@ patchrelay.example.com {
 
 	@health path /health
 	handle @health {
+		reverse_proxy 127.0.0.1:8787
+	}
+
+	@ready path /ready
+	handle @ready {
 		reverse_proxy 127.0.0.1:8787
 	}
 

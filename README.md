@@ -9,6 +9,13 @@ PatchRelay now supports both:
 - legacy single-workspace mode with one `LINEAR_API_TOKEN`
 - OAuth installation mode for smoother setup, multiple Linear workspaces, and less manual token handling
 
+The recommended operator model is now personal-mode on a machine you control:
+
+- run PatchRelay as your own Unix user
+- let Codex inherit that user's existing git, SSH, and local tool permissions
+- use the `patchrelay` CLI as the primary operator interface
+- use the browser only for Linear OAuth consent
+
 ## Why This Exists
 
 PatchRelay is built for a very specific operating model:
@@ -43,7 +50,7 @@ PatchRelay is meant to be published behind a reverse proxy with only these route
 - `GET /ready`
 - `POST /webhooks/linear`
 
-Internal inspection endpoints are disabled by default. If you enable the optional operator API, keep it local or protect it with a bearer token.
+Internal inspection endpoints are disabled by default. The CLI-first OAuth flow still works on loopback without exposing the wider operator API. If you enable the optional operator API, keep it local or protect it with a bearer token.
 
 ## Quick Start
 
@@ -51,7 +58,7 @@ Internal inspection endpoints are disabled by default. If you enable the optiona
    - Linux machine or VM you control
    - Node.js 24+
    - `git`
-   - `codex` CLI installed and authenticated
+   - `codex` CLI installed and authenticated for the same Unix user that will run PatchRelay
    - either a Linear personal API key or a Linear OAuth app
    - a Linear webhook secret
 
@@ -75,7 +82,7 @@ cp config/patchrelay.example.yaml config/patchrelay.yaml
    - For legacy mode, set `LINEAR_API_TOKEN`.
    - For OAuth mode, set `PATCHRELAY_TOKEN_ENCRYPTION_KEY`, `LINEAR_OAUTH_CLIENT_ID`, and `LINEAR_OAUTH_CLIENT_SECRET`.
 
-5. Start PatchRelay:
+5. Start PatchRelay as your own user:
 
 ```bash
 npm run start
@@ -88,12 +95,16 @@ npm run build
 node dist/index.js doctor
 ```
 
-For OAuth mode, you can then connect Linear from the local setup surface or CLI:
+For OAuth mode, use the CLI as the primary operator interface:
 
 ```bash
 patchrelay connect --project your-project
 patchrelay installations
+patchrelay link-installation your-project 1
+patchrelay webhook your-project
 ```
+
+`patchrelay connect` opens the browser only to complete Linear OAuth consent and then returns you to the terminal workflow.
 
 6. Put it behind Caddy, nginx, or another reverse proxy that exposes only `/`, `/health`, `/ready`, and `POST /webhooks/linear`.
 
@@ -123,12 +134,13 @@ The requirement docs for those files live in:
 - [docs/architecture.md](docs/architecture.md): internal model and request flow
 - [docs/codex-workflow.md](docs/codex-workflow.md): how PatchRelay uses `codex app-server`
 - [docs/self-hosting.md](docs/self-hosting.md): installation and deployment guide
-- [docs/cli-spec.md](docs/cli-spec.md): operator CLI design
+- [docs/cli-spec.md](docs/cli-spec.md): CLI-first operator workflow
 
 ## Security Notes
 
 - Keep PatchRelay bound to `127.0.0.1` unless you have a strong reason not to.
 - Publish only `/`, `/health`, `/ready`, and `POST /webhooks/linear`.
+- Run PatchRelay as your own user if you want Codex to inherit your existing git, SSH, and local tool access.
 - Leave the operator API disabled unless you need it. If you enable it on a non-local bind, require a bearer token.
 - Give the Linear API token only the access needed to update issues and comments in the target workspace.
 - Treat repo-local workflow docs as code execution policy, because PatchRelay passes them directly into agent turns.

@@ -1,27 +1,26 @@
 [Unit]
-Description=PatchRelay
+Description=PatchRelay (systemd user service)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=patchrelay
-Group=patchrelay
-WorkingDirectory=/opt/patchrelay
-EnvironmentFile=/opt/patchrelay/.env
+WorkingDirectory=%h/src/patchrelay
+EnvironmentFile=%h/.config/patchrelay/.env
 Environment=NODE_ENV=production
-Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=/usr/bin/env npm run start
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
 PrivateTmp=true
-ProtectSystem=strict
+ProtectSystem=full
 ProtectHome=false
-ReadWritePaths=/opt/patchrelay /var/lib/patchrelay /srv/patchrelay/worktrees /var/log/patchrelay
-StateDirectory=patchrelay
-RuntimeDirectory=patchrelay
-LogsDirectory=patchrelay
+ReadWritePaths=%h/src/patchrelay %h/.config/patchrelay %h/.local/state/patchrelay %h/.local/share/patchrelay
+
+# PatchRelay is intended to run as your real user so Codex inherits your
+# existing git, SSH, and local tool permissions.
+# Add your managed repository roots to ReadWritePaths if you keep hardening enabled.
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target

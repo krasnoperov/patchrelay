@@ -84,6 +84,9 @@ export class PatchRelayService {
     if (!this.config.linear.oauth) {
       throw new Error("Linear OAuth is not configured");
     }
+    if (params?.projectId && !this.config.projects.some((project) => project.id === params.projectId)) {
+      throw new Error(`Unknown project: ${params.projectId}`);
+    }
 
     const state = createOAuthStateToken();
     const record = this.db.createOAuthState({
@@ -106,16 +109,54 @@ export class PatchRelayService {
       throw new Error("OAuth state was not found or has already been consumed");
     }
 
-    const installation = await installLinearOAuthCode({
-      config: this.config,
-      db: this.db,
-      logger: this.logger,
-      code: params.code,
-      redirectUri: oauthState.redirectUri,
+    try {
+      const installation = await installLinearOAuthCode({
+        config: this.config,
+        db: this.db,
+        logger: this.logger,
+        code: params.code,
+        redirectUri: oauthState.redirectUri,
+        ...(oauthState.projectId ? { projectId: oauthState.projectId } : {}),
+      });
+      this.db.finalizeOAuthState({
+        state: params.state,
+        status: "completed",
+        installationId: installation.id,
+      });
+      return installation;
+    } catch (error) {
+      this.db.finalizeOAuthState({
+        state: params.state,
+        status: "failed",
+        errorMessage: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  getLinearOAuthStateStatus(state: string):
+    | {
+        state: string;
+        status: "pending" | "completed" | "failed";
+        projectId?: string;
+        installation?: LinearInstallationRecord;
+        errorMessage?: string;
+      }
+    | undefined {
+    const oauthState = this.db.getOAuthState(state);
+    if (!oauthState) {
+      return undefined;
+    }
+
+    const installation =
+      oauthState.installationId !== undefined ? this.db.getLinearInstallation(oauthState.installationId) : undefined;
+    return {
+      state: oauthState.state,
+      status: oauthState.status,
       ...(oauthState.projectId ? { projectId: oauthState.projectId } : {}),
-    });
-    this.db.consumeOAuthState(params.state);
-    return installation;
+      ...(installation ? { installation } : {}),
+      ...(oauthState.errorMessage ? { errorMessage: oauthState.errorMessage } : {}),
+    };
   }
 
   listLinearInstallations(): Array<{

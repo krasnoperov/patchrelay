@@ -23,6 +23,8 @@ const KNOWN_COMMANDS = new Set([
   "connect",
   "installations",
   "link-installation",
+  "unlink-installation",
+  "webhook",
   "help",
 ]);
 
@@ -81,9 +83,11 @@ function helpText(): string {
     "  retry <issueKey> [--stage <stage>] [--reason <text>] [--json]",
     "  list [--active] [--failed] [--project <projectId>] [--json]",
     "  doctor [--json]",
-    "  connect [--project <projectId>] [--json]",
+    "  connect [--project <projectId>] [--no-open] [--timeout <seconds>] [--json]",
     "  installations [--json]",
-    "  link-installation <projectId> <installationId|none> [--json]",
+    "  link-installation <projectId> <installationId> [--json]",
+    "  unlink-installation <projectId> [--json]",
+    "  webhook <projectId> [--show-secret] [--json]",
     "  serve",
   ].join("\n");
 }
@@ -146,6 +150,28 @@ async function runInteractiveCommand(command: string, args: string[]): Promise<n
   });
 }
 
+async function openExternalUrl(url: string): Promise<boolean> {
+  const candidates =
+    process.platform === "darwin"
+      ? [{ command: "open", args: [url] }]
+      : process.platform === "win32"
+        ? [{ command: "cmd", args: ["/c", "start", "", url] }]
+        : [{ command: "xdg-open", args: [url] }];
+
+  for (const candidate of candidates) {
+    try {
+      const exitCode = await runInteractiveCommand(candidate.command, candidate.args);
+      if (exitCode === 0) {
+        return true;
+      }
+    } catch {
+      // Try the next opener.
+    }
+  }
+
+  return false;
+}
+
 export async function runCli(
   argv: string[],
   options?: {
@@ -154,6 +180,8 @@ export async function runCli(
     config?: AppConfig;
     data?: CliDataAccess;
     runInteractive?: InteractiveRunner;
+    openExternal?: (url: string) => Promise<boolean>;
+    connectPollIntervalMs?: number;
   },
 ): Promise<number> {
   const stdout = options?.stdout ?? process.stdout;
@@ -308,10 +336,71 @@ export async function runCli(
     }
 
     if (command === "connect") {
-      const result = data.connect(typeof parsed.flags.get("project") === "string" ? String(parsed.flags.get("project")) : undefined);
+      const result = await data.connect(typeof parsed.flags.get("project") === "string" ? String(parsed.flags.get("project")) : undefined);
+      if (json) {
+        writeOutput(stdout, formatJson(result));
+        return 0;
+      }
+
+      const noOpen = parsed.flags.get("no-open") === true;
+      const timeoutSeconds = typeof parsed.flags.get("timeout") === "string" ? Number(parsed.flags.get("timeout")) : 180;
+      if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
+        throw new Error("connect --timeout must be a positive number of seconds.");
+      }
+
+      const opener = options?.openExternal ?? openExternalUrl;
+      const opened = noOpen ? false : await opener(result.authorizeUrl);
+      writeOutput(stdout, `${result.projectId ? `Project: ${result.projectId}\n` : ""}${opened ? "Opened browser for Linear OAuth.\n" : "Open this URL in a browser:\n"}${opened ? result.authorizeUrl : `${result.authorizeUrl}\n`}Waiting for OAuth approval...\n`);
+
+      const deadline = Date.now() + timeoutSeconds * 1000;
+      const pollIntervalMs = options?.connectPollIntervalMs ?? 1000;
+      do {
+        const status = await data.connectStatus(result.state);
+        if (status.status === "completed") {
+          const label = status.installation?.workspaceName ?? status.installation?.actorName ?? `installation #${status.installation?.id ?? "unknown"}`;
+          writeOutput(
+            stdout,
+            `Connected ${label}${status.projectId ? ` for project ${status.projectId}` : ""}.${status.installation?.id ? ` Installation ${status.installation.id}.` : ""}\n`,
+          );
+          return 0;
+        }
+        if (status.status === "failed") {
+          throw new Error(status.errorMessage ?? "Linear OAuth failed.");
+        }
+        if (Date.now() >= deadline) {
+          throw new Error(`Timed out waiting for Linear OAuth after ${timeoutSeconds} seconds.`);
+        }
+        await delay(pollIntervalMs);
+      } while (true);
+    }
+
+    if (command === "webhook") {
+      const projectId = commandArgs[0];
+      if (!projectId) {
+        throw new Error("webhook requires <projectId>.");
+      }
+      const result = data.webhookInstructions(projectId);
+      if (json) {
+        writeOutput(
+          stdout,
+          formatJson({
+            ...result,
+            ...(parsed.flags.get("show-secret") === true ? { webhookSecret: config.linear.webhookSecret } : {}),
+          }),
+        );
+        return 0;
+      }
       writeOutput(
         stdout,
-        json ? formatJson(result) : `${result.projectId ? `Project: ${result.projectId}\n` : ""}Open this URL in a browser:\n${result.url}\n`,
+        [
+          `Project: ${result.projectId}`,
+          `Webhook URL: ${result.webhookUrl}`,
+          `Linked installation: ${result.installationId ?? "none"}`,
+          parsed.flags.get("show-secret") === true
+            ? `Webhook secret: ${config.linear.webhookSecret || "(not configured)"}`
+            : `Webhook secret: ${result.sharedSecretConfigured ? "configured on this host (use --show-secret to print it)" : "not configured"}`,
+          "This is the current shared deployment webhook endpoint.",
+        ].join("\n") + "\n",
       );
       return 0;
     }
@@ -335,21 +424,27 @@ export async function runCli(
       const projectId = commandArgs[0];
       const rawInstallationId = commandArgs[1];
       if (!projectId || !rawInstallationId) {
-        throw new Error("link-installation requires <projectId> <installationId|none>.");
+        throw new Error("link-installation requires <projectId> <installationId>.");
       }
-      const installationId = rawInstallationId === "none" ? undefined : Number(rawInstallationId);
-      if (rawInstallationId !== "none" && !Number.isFinite(installationId)) {
-        throw new Error("link-installation requires <projectId> <installationId|none>.");
+      const installationId = Number(rawInstallationId);
+      if (!Number.isFinite(installationId)) {
+        throw new Error("link-installation requires <projectId> <installationId>.");
       }
       const result = data.linkInstallation(projectId, installationId);
       writeOutput(
         stdout,
-        json
-          ? formatJson(result)
-          : installationId === undefined
-            ? `Removed installation link for ${projectId}.\n`
-            : `Linked ${projectId} to installation ${result.installationId}.\n`,
+        json ? formatJson(result) : `Linked ${projectId} to installation ${result.installationId}.\n`,
       );
+      return 0;
+    }
+
+    if (command === "unlink-installation") {
+      const projectId = commandArgs[0];
+      if (!projectId) {
+        throw new Error("unlink-installation requires <projectId>.");
+      }
+      const result = data.linkInstallation(projectId, undefined);
+      writeOutput(stdout, json ? formatJson(result) : `Removed installation link for ${projectId}.\n`);
       return 0;
     }
 

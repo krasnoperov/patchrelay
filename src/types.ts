@@ -164,6 +164,7 @@ export interface WebhookEventRecord {
   eventType: string;
   issueId?: string;
   projectId?: string;
+  installationId?: number;
   headersJson: string;
   payloadJson: string;
   signatureValid: boolean;
@@ -181,6 +182,8 @@ export interface LinearInstallationRecord {
   actorName?: string;
   accessTokenCiphertext: string;
   refreshTokenCiphertext?: string;
+  webhookPathToken?: string;
+  webhookSecretCiphertext?: string;
   scopesJson: string;
   tokenType?: string;
   expiresAt?: string;
@@ -202,7 +205,10 @@ export interface OAuthStateRecord {
   redirectUri: string;
   actor: "user" | "app";
   createdAt: string;
+  status: "pending" | "completed" | "failed";
   consumedAt?: string;
+  installationId?: number;
+  errorMessage?: string;
 }
 
 export interface LinearOauthTokenSet {

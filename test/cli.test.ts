@@ -388,19 +388,50 @@ test("cli connect, installations, and link-installation cover OAuth installation
         tokenEncryptionKey: "encryption-secret",
       },
     };
-    const db = new PatchRelayDatabase(config.database.path, true);
-    db.runMigrations();
-    db.upsertLinearInstallation({
-      workspaceId: "team_1",
-      workspaceName: "Workspace One",
-      workspaceKey: "WS1",
-      actorId: "actor-1",
-      actorName: "PatchRelay App",
-      accessTokenCiphertext: "ciphertext",
-      scopesJson: JSON.stringify(["read", "write"]),
-      tokenType: "Bearer",
-    });
-    const data = new CliDataAccess(config, { db });
+    const data = {
+      async connect(projectId?: string) {
+        return {
+          state: "state-1",
+          authorizeUrl: "https://linear.app/oauth/authorize?state=state-1",
+          redirectUri: "http://127.0.0.1:8787/oauth/linear/callback",
+          ...(projectId ? { projectId } : {}),
+        };
+      },
+      async connectStatus() {
+        return {
+          state: "state-1",
+          status: "completed" as const,
+          projectId: "usertold",
+          installation: { id: 1, workspaceName: "Workspace One" },
+        };
+      },
+      listInstallations() {
+        return {
+          installations: [
+            {
+              id: 1,
+              workspaceName: "Workspace One",
+              workspaceKey: "WS1",
+              actorName: "PatchRelay App",
+              actorId: "actor-1",
+              linkedProjects: [],
+            },
+          ],
+        };
+      },
+      linkInstallation(projectId: string, installationId?: number) {
+        return installationId === undefined ? { projectId } : { projectId, installationId };
+      },
+      webhookInstructions() {
+        return {
+          projectId: "usertold",
+          installationId: 1,
+          webhookUrl: "http://127.0.0.1:8787/webhooks/linear",
+          webhookPath: "/webhooks/linear",
+          sharedSecretConfigured: false,
+        };
+      },
+    } as unknown as CliDataAccess;
 
     const connectOut = createBufferStream();
     assert.equal(
@@ -409,10 +440,13 @@ test("cli connect, installations, and link-installation cover OAuth installation
         data,
         stdout: connectOut.stream,
         stderr: createBufferStream().stream,
+        openExternal: async () => true,
+        connectPollIntervalMs: 1,
       }),
       0,
     );
-    assert.match(connectOut.read(), /http:\/\/127\.0\.0\.1:8787\/auth\/linear\/start\?projectId=usertold/);
+    assert.match(connectOut.read(), /Opened browser for Linear OAuth/);
+    assert.match(connectOut.read(), /Connected Workspace One for project usertold/);
 
     const installationsOut = createBufferStream();
     assert.equal(
@@ -440,7 +474,7 @@ test("cli connect, installations, and link-installation cover OAuth installation
 
     const unlinkOut = createBufferStream();
     assert.equal(
-      await runCli(["link-installation", "usertold", "none"], {
+      await runCli(["unlink-installation", "usertold"], {
         config,
         data,
         stdout: unlinkOut.stream,
@@ -449,6 +483,206 @@ test("cli connect, installations, and link-installation cover OAuth installation
       0,
     );
     assert.match(unlinkOut.read(), /Removed installation link/);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("cli OAuth operator commands support json output and validation failures", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-installations-"));
+  try {
+    const config = {
+      ...createConfig(baseDir),
+      linear: {
+        ...createConfig(baseDir).linear,
+        oauth: {
+          clientId: "client-id",
+          clientSecret: "client-secret",
+          redirectUri: "http://127.0.0.1:8787/oauth/linear/callback",
+          scopes: ["read", "write"],
+          actor: "app" as const,
+        },
+        tokenEncryptionKey: "encryption-secret",
+      },
+    };
+    const data = {
+      async connect(projectId?: string) {
+        if (projectId === "missing-project") {
+          throw new Error("Unknown project: missing-project");
+        }
+        return {
+          state: "state-1",
+          authorizeUrl: "https://linear.app/oauth/authorize?state=state-1",
+          redirectUri: "http://127.0.0.1:8787/oauth/linear/callback",
+          ...(projectId ? { projectId } : {}),
+        };
+      },
+      listInstallations() {
+        return {
+          installations: [
+            {
+              id: 1,
+              workspaceName: "Workspace One",
+              workspaceKey: "WS1",
+              actorName: "PatchRelay App",
+              actorId: "actor-1",
+              linkedProjects: ["usertold"],
+            },
+          ],
+        };
+      },
+      linkInstallation(projectId: string, installationId?: number) {
+        if (projectId === "missing-project") {
+          throw new Error("Unknown project: missing-project");
+        }
+        if (installationId === 999) {
+          throw new Error("Unknown installation: 999");
+        }
+        return installationId === undefined ? { projectId } : { projectId, installationId };
+      },
+      webhookInstructions(projectId: string) {
+        if (projectId === "missing-project") {
+          throw new Error("Unknown project: missing-project");
+        }
+        return {
+          projectId,
+          installationId: 1,
+          webhookUrl: "http://127.0.0.1:8787/webhooks/linear",
+          webhookPath: "/webhooks/linear",
+          sharedSecretConfigured: true,
+        };
+      },
+    } as unknown as CliDataAccess;
+
+    const connectJson = createBufferStream();
+    assert.equal(
+      await runCli(["connect", "--project", "usertold", "--json"], {
+        config,
+        data,
+        stdout: connectJson.stream,
+        stderr: createBufferStream().stream,
+      }),
+      0,
+    );
+    assert.deepEqual(JSON.parse(connectJson.read()), {
+      state: "state-1",
+      authorizeUrl: "https://linear.app/oauth/authorize?state=state-1",
+      redirectUri: "http://127.0.0.1:8787/oauth/linear/callback",
+      projectId: "usertold",
+    });
+
+    const linkJson = createBufferStream();
+    assert.equal(
+      await runCli(["link-installation", "usertold", "1", "--json"], {
+        config,
+        data,
+        stdout: linkJson.stream,
+        stderr: createBufferStream().stream,
+      }),
+      0,
+    );
+    assert.deepEqual(JSON.parse(linkJson.read()), {
+      projectId: "usertold",
+      installationId: 1,
+    });
+
+    const installationsJson = createBufferStream();
+    assert.equal(
+      await runCli(["installations", "--json"], {
+        config,
+        data,
+        stdout: installationsJson.stream,
+        stderr: createBufferStream().stream,
+      }),
+      0,
+    );
+    assert.deepEqual(JSON.parse(installationsJson.read()), {
+      installations: [
+        {
+          id: 1,
+          workspaceName: "Workspace One",
+          workspaceKey: "WS1",
+          actorName: "PatchRelay App",
+          actorId: "actor-1",
+          linkedProjects: ["usertold"],
+        },
+      ],
+    });
+
+    const unlinkJson = createBufferStream();
+    assert.equal(
+      await runCli(["unlink-installation", "usertold", "--json"], {
+        config,
+        data,
+        stdout: unlinkJson.stream,
+        stderr: createBufferStream().stream,
+      }),
+      0,
+    );
+    assert.deepEqual(JSON.parse(unlinkJson.read()), {
+      projectId: "usertold",
+    });
+
+    const webhookJson = createBufferStream();
+    assert.equal(
+      await runCli(["webhook", "usertold", "--show-secret", "--json"], {
+        config: {
+          ...config,
+          linear: {
+            ...config.linear,
+            webhookSecret: "webhook-secret",
+          },
+        },
+        data,
+        stdout: webhookJson.stream,
+        stderr: createBufferStream().stream,
+      }),
+      0,
+    );
+    assert.deepEqual(JSON.parse(webhookJson.read()), {
+      projectId: "usertold",
+      installationId: 1,
+      webhookUrl: "http://127.0.0.1:8787/webhooks/linear",
+      webhookPath: "/webhooks/linear",
+      sharedSecretConfigured: true,
+      webhookSecret: "webhook-secret",
+    });
+
+    const connectError = createBufferStream();
+    assert.equal(
+      await runCli(["connect", "--project", "missing-project"], {
+        config,
+        data,
+        stdout: createBufferStream().stream,
+        stderr: connectError.stream,
+      }),
+      1,
+    );
+    assert.match(connectError.read(), /Unknown project: missing-project/);
+
+    const linkError = createBufferStream();
+    assert.equal(
+      await runCli(["link-installation", "usertold", "999"], {
+        config,
+        data,
+        stdout: createBufferStream().stream,
+        stderr: linkError.stream,
+      }),
+      1,
+    );
+    assert.match(linkError.read(), /Unknown installation: 999/);
+
+    const webhookError = createBufferStream();
+    assert.equal(
+      await runCli(["webhook", "missing-project"], {
+        config,
+        data,
+        stdout: createBufferStream().stream,
+        stderr: webhookError.stream,
+      }),
+      1,
+    );
+    assert.match(webhookError.read(), /Unknown project: missing-project/);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

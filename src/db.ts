@@ -152,7 +152,10 @@ CREATE TABLE IF NOT EXISTS oauth_states (
   redirect_uri TEXT NOT NULL,
   actor TEXT NOT NULL,
   created_at TEXT NOT NULL,
-  consumed_at TEXT
+  status TEXT NOT NULL DEFAULT 'pending',
+  consumed_at TEXT,
+  installation_id INTEGER,
+  error_message TEXT
 );
 `;
 
@@ -174,6 +177,9 @@ export class PatchRelayDatabase {
   runMigrations(): void {
     this.connection.exec(baseMigration);
     this.ensureColumnExists("tracked_issues", "status_comment_id", "TEXT");
+    this.ensureColumnExists("oauth_states", "status", "TEXT NOT NULL DEFAULT 'pending'");
+    this.ensureColumnExists("oauth_states", "installation_id", "INTEGER");
+    this.ensureColumnExists("oauth_states", "error_message", "TEXT");
   }
 
   private ensureColumnExists(tableName: string, columnName: string, definition: string): void {
@@ -943,8 +949,8 @@ export class PatchRelayDatabase {
     const result = this.connection
       .prepare(
         `
-        INSERT INTO oauth_states (provider, state, project_id, redirect_uri, actor, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO oauth_states (provider, state, project_id, redirect_uri, actor, created_at, status)
+        VALUES (?, ?, ?, ?, ?, ?, 'pending')
         `,
       )
       .run(params.provider, params.state, params.projectId ?? null, params.redirectUri, params.actor, now);
@@ -958,15 +964,31 @@ export class PatchRelayDatabase {
     return row ? this.mapOAuthState(row) : undefined;
   }
 
-  consumeOAuthState(state: string): OAuthStateRecord | undefined {
+  finalizeOAuthState(params: {
+    state: string;
+    status: "completed" | "failed";
+    installationId?: number;
+    errorMessage?: string;
+  }): OAuthStateRecord | undefined {
     const row = this.connection
       .prepare("SELECT * FROM oauth_states WHERE state = ? AND consumed_at IS NULL ORDER BY id DESC LIMIT 1")
-      .get(state) as Record<string, unknown> | undefined;
+      .get(params.state) as Record<string, unknown> | undefined;
     if (!row) {
       return undefined;
     }
 
-    this.connection.prepare("UPDATE oauth_states SET consumed_at = ? WHERE id = ?").run(isoNow(), Number(row.id));
+    this.connection
+      .prepare(
+        `
+        UPDATE oauth_states
+        SET status = ?,
+            consumed_at = ?,
+            installation_id = ?,
+            error_message = ?
+        WHERE id = ?
+        `,
+      )
+      .run(params.status, isoNow(), params.installationId ?? null, params.errorMessage ?? null, Number(row.id));
     return this.getOAuthStateById(Number(row.id));
   }
 
@@ -1027,7 +1049,10 @@ export class PatchRelayDatabase {
       redirectUri: String(row.redirect_uri),
       actor: row.actor as OAuthStateRecord["actor"],
       createdAt: String(row.created_at),
+      status: (row.status as OAuthStateRecord["status"]) ?? "pending",
       ...(row.consumed_at === null ? {} : { consumedAt: String(row.consumed_at) }),
+      ...(row.installation_id === null ? {} : { installationId: Number(row.installation_id) }),
+      ...(row.error_message === null ? {} : { errorMessage: String(row.error_message) }),
     };
   }
 

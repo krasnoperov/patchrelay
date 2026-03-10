@@ -161,6 +161,10 @@ test("http routes handle webhook validation and issue/report/live/events lookups
   try {
     const config = {
       ...createConfig(baseDir),
+      server: {
+        ...createConfig(baseDir).server,
+        bind: "0.0.0.0",
+      },
       operatorApi: {
         enabled: true,
         bearerToken: "operator-token",
@@ -536,6 +540,248 @@ test("http OAuth and installation routes support setup flows", async () => {
     });
     assert.equal(callback.statusCode, 200);
     assert.match(callback.body, /Connected Linear installation #8/);
+
+    await app.close();
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("localhost operator OAuth APIs stay usable without a bearer token when operator API is enabled", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-http-local-operator-"));
+
+  try {
+    const baseConfig = createConfig(baseDir);
+    const config: AppConfig = {
+      ...baseConfig,
+      operatorApi: {
+        enabled: true,
+      },
+      linear: {
+        ...baseConfig.linear,
+        tokenEncryptionKey: "encryption-key",
+        oauth: {
+          clientId: "client-id",
+          clientSecret: "client-secret",
+          redirectUri: "http://127.0.0.1:8787/oauth/linear/callback",
+          scopes: ["read", "write"],
+          actor: "user",
+        },
+      },
+    };
+
+    const app = await buildHttpServer(
+      config,
+      {
+        acceptWebhook: async () => ({ status: 200, body: { ok: true } }),
+        getReadiness: () => ({ ready: true, codexStarted: true }),
+        listLinearInstallations: () => [
+          {
+            installation: { id: 7, workspaceName: "Acme" },
+            linkedProjects: [],
+          },
+        ],
+        createLinearOAuthStart: ({ projectId }: { projectId?: string }) => ({
+          state: "state-local",
+          authorizeUrl: `https://linear.app/oauth/authorize?state=state-local&projectId=${projectId ?? ""}`,
+          redirectUri: config.linear.oauth!.redirectUri,
+        }),
+        linkProjectInstallation: (projectId: string, installationId: number) => ({ projectId, installationId }),
+        unlinkProjectInstallation: () => undefined,
+      } as never,
+      pino({ enabled: false }),
+    );
+
+    const start = await app.inject({
+      method: "GET",
+      url: "/api/oauth/linear/start?projectId=usertold",
+    });
+    assert.equal(start.statusCode, 200);
+    assert.equal(start.json().state, "state-local");
+
+    const list = await app.inject({
+      method: "GET",
+      url: "/api/installations",
+    });
+    assert.equal(list.statusCode, 200);
+    assert.equal(list.json().installations[0].installation.workspaceName, "Acme");
+
+    const link = await app.inject({
+      method: "POST",
+      url: "/api/projects/usertold/installation",
+      payload: {
+        installationId: 7,
+      },
+    });
+    assert.equal(link.statusCode, 200);
+    assert.deepEqual(link.json().link, { projectId: "usertold", installationId: 7 });
+
+    await app.close();
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("remote operator OAuth APIs require bearer auth when operator API is enabled", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-http-remote-operator-"));
+
+  try {
+    const baseConfig = createConfig(baseDir);
+    const config: AppConfig = {
+      ...baseConfig,
+      server: {
+        ...baseConfig.server,
+        bind: "0.0.0.0",
+      },
+      operatorApi: {
+        enabled: true,
+        bearerToken: "operator-token",
+      },
+      linear: {
+        ...baseConfig.linear,
+        tokenEncryptionKey: "encryption-key",
+        oauth: {
+          clientId: "client-id",
+          clientSecret: "client-secret",
+          redirectUri: "http://127.0.0.1:8787/oauth/linear/callback",
+          scopes: ["read", "write"],
+          actor: "user",
+        },
+      },
+    };
+
+    const app = await buildHttpServer(
+      config,
+      {
+        acceptWebhook: async () => ({ status: 200, body: { ok: true } }),
+        getReadiness: () => ({ ready: true, codexStarted: true }),
+        listLinearInstallations: () => [],
+        createLinearOAuthStart: () => ({
+          state: "state-remote",
+          authorizeUrl: "https://linear.app/oauth/authorize?state=state-remote",
+          redirectUri: config.linear.oauth!.redirectUri,
+        }),
+        linkProjectInstallation: (projectId: string, installationId: number) => ({ projectId, installationId }),
+      } as never,
+      pino({ enabled: false }),
+    );
+
+    const unauthenticatedStart = await app.inject({
+      method: "GET",
+      url: "/api/oauth/linear/start?projectId=usertold",
+    });
+    assert.equal(unauthenticatedStart.statusCode, 401);
+    assert.deepEqual(unauthenticatedStart.json(), { ok: false, reason: "operator_auth_required" });
+
+    const authenticatedStart = await app.inject({
+      method: "GET",
+      url: "/api/oauth/linear/start?projectId=usertold",
+      headers: {
+        authorization: "Bearer operator-token",
+      },
+    });
+    assert.equal(authenticatedStart.statusCode, 200);
+    assert.equal(authenticatedStart.json().state, "state-remote");
+
+    const unauthenticatedList = await app.inject({
+      method: "GET",
+      url: "/api/installations",
+    });
+    assert.equal(unauthenticatedList.statusCode, 401);
+    assert.deepEqual(unauthenticatedList.json(), { ok: false, reason: "operator_auth_required" });
+
+    const unauthenticatedLink = await app.inject({
+      method: "POST",
+      url: "/api/projects/usertold/installation",
+      payload: {
+        installationId: 7,
+      },
+    });
+    assert.equal(unauthenticatedLink.statusCode, 401);
+    assert.deepEqual(unauthenticatedLink.json(), { ok: false, reason: "operator_auth_required" });
+
+    const authenticatedLink = await app.inject({
+      method: "POST",
+      url: "/api/projects/usertold/installation",
+      headers: {
+        authorization: "Bearer operator-token",
+      },
+      payload: {
+        installationId: 7,
+      },
+    });
+    assert.equal(authenticatedLink.statusCode, 200);
+    assert.deepEqual(authenticatedLink.json().link, { projectId: "usertold", installationId: 7 });
+
+    await app.close();
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("http exposes OAuth state polling for CLI-driven OAuth completion", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-http-oauth-state-"));
+
+  try {
+    const baseConfig = createConfig(baseDir);
+    const config: AppConfig = {
+      ...baseConfig,
+      linear: {
+        ...baseConfig.linear,
+        tokenEncryptionKey: "encryption-key",
+        oauth: {
+          clientId: "client-id",
+          clientSecret: "client-secret",
+          redirectUri: "http://127.0.0.1:8787/oauth/linear/callback",
+          scopes: ["read", "write"],
+          actor: "user",
+        },
+      },
+    };
+
+    const app = await buildHttpServer(
+      config,
+      {
+        acceptWebhook: async () => ({ status: 200, body: { ok: true } }),
+        getReadiness: () => ({ ready: true, codexStarted: true }),
+        listLinearInstallations: () => [],
+        createLinearOAuthStart: () => ({
+          state: "state-1",
+          authorizeUrl: "https://linear.app/oauth/authorize?state=state-1",
+          redirectUri: config.linear.oauth!.redirectUri,
+        }),
+        getLinearOAuthStateStatus: (state: string) =>
+          state === "state-1"
+            ? {
+                state,
+                status: "completed",
+                projectId: "usertold",
+                installation: { id: 9, workspaceName: "Workspace Nine" },
+              }
+            : undefined,
+      } as never,
+      pino({ enabled: false }),
+    );
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/oauth/linear/state/state-1",
+    });
+    assert.equal(response.statusCode, 200);
+    assert.deepEqual(response.json(), {
+      ok: true,
+      state: "state-1",
+      status: "completed",
+      projectId: "usertold",
+      installation: { id: 9, workspaceName: "Workspace Nine" },
+    });
+
+    const missing = await app.inject({
+      method: "GET",
+      url: "/api/oauth/linear/state/missing",
+    });
+    assert.equal(missing.statusCode, 404);
+    assert.deepEqual(missing.json(), { ok: false, reason: "oauth_state_not_found" });
 
     await app.close();
   } finally {

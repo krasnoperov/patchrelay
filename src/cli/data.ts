@@ -89,8 +89,32 @@ export interface InstallationListResult {
 }
 
 export interface ConnectResult {
-  url: string;
+  state: string;
+  authorizeUrl: string;
+  redirectUri: string;
   projectId?: string;
+}
+
+export interface ConnectStateResult {
+  state: string;
+  status: "pending" | "completed" | "failed";
+  projectId?: string;
+  installation?: {
+    id: number;
+    workspaceName?: string;
+    workspaceKey?: string;
+    actorName?: string;
+    actorId?: string;
+  };
+  errorMessage?: string;
+}
+
+export interface WebhookInstructionsResult {
+  projectId: string;
+  installationId?: number;
+  webhookUrl: string;
+  webhookPath: string;
+  sharedSecretConfigured: boolean;
 }
 
 function safeJsonParse(value: string | undefined): Record<string, unknown> | undefined {
@@ -385,28 +409,22 @@ export class CliDataAccess {
     }));
   }
 
-  connect(projectId?: string): ConnectResult {
-    const redirectUri = this.config.linear.oauth?.redirectUri;
-    if (!redirectUri) {
+  async connect(projectId?: string): Promise<ConnectResult> {
+    if (!this.config.linear.oauth) {
       throw new Error("Linear OAuth is not configured.");
     }
 
-    const baseUrl = redirectUri.endsWith("/oauth/linear/callback")
-      ? redirectUri.slice(0, -"/oauth/linear/callback".length)
-      : redirectUri.replace(/\/+$/, "");
-    const url = new URL("/auth/linear/start", baseUrl);
-    if (projectId) {
-      const project = this.config.projects.find((entry) => entry.id === projectId);
-      if (!project) {
-        throw new Error(`Unknown project: ${projectId}`);
-      }
-      url.searchParams.set("projectId", projectId);
+    return await this.requestJson<ConnectResult>("/api/oauth/linear/start", {
+      ...(projectId ? { projectId } : {}),
+    });
+  }
+
+  async connectStatus(state: string): Promise<ConnectStateResult> {
+    if (!state) {
+      throw new Error("OAuth state is required.");
     }
 
-    return {
-      url: url.toString(),
-      ...(projectId ? { projectId } : {}),
-    };
+    return await this.requestJson<ConnectStateResult>(`/api/oauth/linear/state/${encodeURIComponent(state)}`);
   }
 
   listInstallations(): InstallationListResult {
@@ -447,6 +465,72 @@ export class CliDataAccess {
       projectId: link.projectId,
       installationId: link.installationId,
     };
+  }
+
+  webhookInstructions(projectId: string): WebhookInstructionsResult {
+    const project = this.config.projects.find((entry) => entry.id === projectId);
+    if (!project) {
+      throw new Error(`Unknown project: ${projectId}`);
+    }
+
+    const baseUrl = this.getServiceBaseUrl();
+    const installation = this.db.getLinearInstallationForProject(projectId);
+    return {
+      projectId,
+      ...(installation ? { installationId: installation.id } : {}),
+      webhookUrl: new URL(this.config.ingress.linearWebhookPath, baseUrl).toString(),
+      webhookPath: this.config.ingress.linearWebhookPath,
+      sharedSecretConfigured: this.config.linear.webhookSecret.length > 0,
+    };
+  }
+
+  private getServiceBaseUrl(): string {
+    const redirectUri = this.config.linear.oauth?.redirectUri;
+    if (redirectUri) {
+      const url = new URL(redirectUri);
+      url.pathname = "/";
+      url.search = "";
+      url.hash = "";
+      return url.toString();
+    }
+
+    return `http://${this.config.server.bind}:${this.config.server.port}/`;
+  }
+
+  private async requestJson<T>(pathname: string, query?: Record<string, string | undefined>): Promise<T> {
+    const url = new URL(pathname, this.getServiceBaseUrl());
+    for (const [key, value] of Object.entries(query ?? {})) {
+      if (value) {
+        url.searchParams.set(key, value);
+      }
+    }
+
+    const response = await fetch(url, {
+      headers: {
+        accept: "application/json",
+        ...(this.config.operatorApi.bearerToken ? { authorization: `Bearer ${this.config.operatorApi.bearerToken}` } : {}),
+      },
+    });
+    const body = await response.text();
+    if (!response.ok) {
+      const message = this.readErrorMessage(body);
+      throw new Error(message ?? `Request failed: ${response.status}`);
+    }
+
+    const parsed = JSON.parse(body) as { ok?: boolean } & T;
+    if (parsed.ok === false) {
+      throw new Error(this.readErrorMessage(body) ?? "Request failed.");
+    }
+    return parsed;
+  }
+
+  private readErrorMessage(body: string): string | undefined {
+    try {
+      const parsed = JSON.parse(body) as { message?: string; reason?: string };
+      return parsed.message ?? parsed.reason;
+    } catch {
+      return undefined;
+    }
   }
 
   private async readLiveSummary(threadId: string, latestTimestampSeen?: string): Promise<LiveSummary> {
