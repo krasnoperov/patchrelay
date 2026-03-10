@@ -197,4 +197,4 @@ By default, if `trusted_actors` is omitted, PatchRelay preserves the existing be
 
 PatchRelay is usable now, but still opinionated and early. The current focus is a solid self-hosted workflow for operators who want issue-driven automation on their own machines and servers, not a generalized SaaS product.
 
-PatchRelay is intentionally still below `1.0.0` while the service model, operator ergonomics, and security posture continue to harden. Releases are generated automatically from `main`, and ongoing feature work should land through branches and pull requests with conventional-commit-style titles so the changelog stays readable.
+PatchRelay is intentionally still below `1.0.0` while the service model, operator ergonomics, and security posture continue to harden. Releases are generated from release PRs on `main` with Release Please, and ongoing feature work should land through branches and pull requests with conventional-commit-style titles so the changelog stays readable.
