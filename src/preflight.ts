@@ -183,7 +183,7 @@ function checkPublicBaseUrl(config: AppConfig): PreflightCheck[] {
     return [
       warn(
         "public_url",
-        "server.public_base_url is not configured; public webhook URLs will be derived from linear.oauth.redirect_uri",
+        "server.public_base_url is not configured; set it to the public HTTPS origin that Linear should call",
       ),
     ];
   }

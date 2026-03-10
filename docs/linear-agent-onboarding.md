@@ -23,7 +23,7 @@ That means repositories own workflow instructions, but PatchRelay owns the Linea
 
 ## Linear App Setup
 
-Create one Linear OAuth app for this PatchRelay instance.
+Create one Linear OAuth app for this PatchRelay instance in Linear `Settings > API > Applications`.
 
 Recommended settings:
 
@@ -100,7 +100,7 @@ Practical rule:
 
 For one machine with several repositories:
 
-1. Run `patchrelay init` once.
+1. Run `patchrelay init https://your-domain.example` once.
 2. Put the machine-level secrets in `~/.config/patchrelay/.env`.
 3. Add one `projects[]` entry per repository in `~/.config/patchrelay/patchrelay.yaml`.
 4. Give each project its own `repo_path`, `worktree_root`, and `branch_prefix`.
@@ -114,8 +114,8 @@ For the standard Linear app-agent flow, you can usually omit `trigger_events` en
 
 ## Recommended Onboarding Flow
 
-1. Install PatchRelay and run `patchrelay init`.
-2. Put the four required Linear secrets in `~/.config/patchrelay/.env`.
+1. Install PatchRelay and run `patchrelay init https://your-domain.example`.
+2. Keep the generated `LINEAR_WEBHOOK_SECRET` and `PATCHRELAY_TOKEN_ENCRYPTION_KEY`, then fill in `LINEAR_OAUTH_CLIENT_ID` and `LINEAR_OAUTH_CLIENT_SECRET` in `~/.config/patchrelay/.env`.
 3. Create the Linear OAuth app with `actor=app`, the required scopes, and webhook settings.
 4. Set `server.public_base_url` to the public HTTPS origin Linear can reach.
 5. Add one or more `projects[]` entries.

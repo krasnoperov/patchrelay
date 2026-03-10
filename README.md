@@ -66,7 +66,7 @@ npm install -g patchrelay
 ### 2. Bootstrap config
 
 ```bash
-patchrelay init
+patchrelay init https://patchrelay.example.com
 ```
 
 This creates:
@@ -74,13 +74,15 @@ This creates:
 - `~/.config/patchrelay/.env`
 - `~/.config/patchrelay/patchrelay.yaml`
 
+`patchrelay init` also prints the exact webhook URL, OAuth callback URL, and the Linear app options to choose in `Settings > API > Applications`.
+
 ### 3. Configure access
 
-Edit `~/.config/patchrelay/.env`:
+Edit `~/.config/patchrelay/.env` and fill in only the Linear OAuth client values. Keep the generated webhook secret and token-encryption key:
 
 ```bash
-LINEAR_WEBHOOK_SECRET=replace-with-linear-webhook-secret
-PATCHRELAY_TOKEN_ENCRYPTION_KEY=replace-with-long-random-secret
+LINEAR_WEBHOOK_SECRET=generated-by-patchrelay-init
+PATCHRELAY_TOKEN_ENCRYPTION_KEY=generated-by-patchrelay-init
 LINEAR_OAUTH_CLIENT_ID=replace-with-linear-oauth-client-id
 LINEAR_OAUTH_CLIENT_SECRET=replace-with-linear-oauth-client-secret
 ```
@@ -89,7 +91,7 @@ LINEAR_OAUTH_CLIENT_SECRET=replace-with-linear-oauth-client-secret
 
 Edit the generated `~/.config/patchrelay/patchrelay.yaml`.
 
-Keep the required top-level structure from `patchrelay init`, then set your public domain and add a project block:
+Keep the generated top-level structure and add a project block:
 
 ```yaml
 server:
@@ -166,7 +168,6 @@ Important:
 - Linear needs a public HTTPS URL to reach your webhook.
 - `server.public_base_url` is the public domain PatchRelay uses when it prints webhook URLs.
 - PatchRelay itself should usually stay bound to `127.0.0.1` and sit behind Caddy, nginx, or another public ingress layer.
-- PatchRelay now derives `linear.oauth.redirect_uri` as `${server.public_base_url}/oauth/linear/callback` unless you override it for loopback OAuth.
 - Publish these routes from your reverse proxy: `GET /`, `GET /health`, `GET /ready`, `GET /oauth/linear/callback`, and `POST /webhooks/linear`.
 - PatchRelay reacts best when the Linear OAuth app is configured to deliver issue, comment, agent session, permission change, and inbox notification webhooks to the shared PatchRelay endpoint.
 - In self-hosted mode you currently do need your own Linear OAuth app, but one app can be reused across all projects and Linear workspaces linked to the same PatchRelay instance.
@@ -203,7 +204,6 @@ Today that takeover path is intentionally YOLO mode: it launches Codex with `--d
 - Use `trusted_actors` if only specific Linear users or domains should be allowed to trigger automation.
 - Use `defaults.workflow_files` and `defaults.workflow_statuses` if you want one shared convention across projects.
 - Override `runner.codex.approval_policy` and `runner.codex.sandbox_mode` to match how much autonomy you want for service-run stages.
-- Override `linear.oauth.redirect_uri` only if you want OAuth to complete somewhere other than the derived default.
 
 ## Docs
 

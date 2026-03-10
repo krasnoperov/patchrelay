@@ -435,8 +435,18 @@ test("cli init writes XDG config files and install-service manages the user unit
       },
       async () => {
         const initOut = createBufferStream();
-        assert.equal(await runCli(["init"], { stdout: initOut.stream, stderr: createBufferStream().stream }), 0);
-        assert.match(initOut.read(), /Config directory:/);
+        assert.equal(
+          await runCli(["init", "patchrelay.example.com"], {
+            stdout: initOut.stream,
+            stderr: createBufferStream().stream,
+          }),
+          0,
+        );
+        const initText = initOut.read();
+        assert.match(initText, /Config directory:/);
+        assert.match(initText, /Public base URL: https:\/\/patchrelay\.example\.com/);
+        assert.match(initText, /Webhook URL: https:\/\/patchrelay\.example\.com\/webhooks\/linear/);
+        assert.match(initText, /Open Linear Settings > API > Applications/);
 
         const envPath = path.join(configHome, "patchrelay", ".env");
         const configPath = path.join(configHome, "patchrelay", "patchrelay.yaml");
@@ -448,6 +458,7 @@ test("cli init writes XDG config files and install-service manages the user unit
         const configContents = readFileSync(configPath, "utf8");
         assert.equal(configContents.includes("token_encryption_key_env: PATCHRELAY_TOKEN_ENCRYPTION_KEY"), true);
         assert.equal(configContents.includes(path.join(dataHome, "patchrelay", "worktrees")), true);
+        assert.equal(configContents.includes("public_base_url: https://patchrelay.example.com"), true);
 
         const installOut = createBufferStream();
         assert.equal(
@@ -483,6 +494,12 @@ test("cli init writes XDG config files and install-service manages the user unit
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
+});
+
+test("cli init requires a public base URL", async () => {
+  const stderr = createBufferStream();
+  assert.equal(await runCli(["init"], { stdout: createBufferStream().stream, stderr: stderr.stream }), 1);
+  assert.match(stderr.read(), /Usage: patchrelay init <public-base-url>/);
 });
 
 test("cli connect and installations cover OAuth installation flows", async () => {

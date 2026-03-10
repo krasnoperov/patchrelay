@@ -32,12 +32,6 @@ linear:
   oauth:
     client_id_env: LINEAR_OAUTH_CLIENT_ID
     client_secret_env: LINEAR_OAUTH_CLIENT_SECRET
-    # Optional override. By default PatchRelay derives
-    # ${server.public_base_url}/oauth/linear/callback, or falls back to the
-    # local bind/port when no public base URL is configured.
-    # Set this only if you want OAuth to complete on loopback instead of the
-    # public domain.
-    # redirect_uri: http://127.0.0.1:8787/oauth/linear/callback
     scopes:
       - read
       - write

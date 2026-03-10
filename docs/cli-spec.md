@@ -127,11 +127,17 @@ Output includes:
 - whether repo, worktree, database, log, and workflow paths are usable
 - whether `git` and `codex` are executable
 - whether the operator API is exposed safely for the current bind settings
-- whether `server.public_base_url` and `linear.oauth.redirect_uri` look usable for Linear-facing ingress
+- whether `server.public_base_url` looks usable for Linear-facing ingress
 
 ### `patchrelay init`
 
 Bootstrap the local PatchRelay home in XDG-style user directories.
+
+Usage:
+
+```bash
+patchrelay init https://patchrelay.example.com
+```
 
 By default this writes:
 
@@ -412,9 +418,9 @@ For the operator setup path, the CLI may use local HTTP endpoints for OAuth star
 
 The intended packaged onboarding flow is:
 
-1. `patchrelay init`
+1. `patchrelay init https://patchrelay.example.com`
 2. edit `~/.config/patchrelay/.env`
-3. edit `~/.config/patchrelay/patchrelay.yaml`
+3. add your project block in `~/.config/patchrelay/patchrelay.yaml`
 4. `patchrelay doctor`
 5. `patchrelay install-service`
 6. `patchrelay connect --project <projectId>`

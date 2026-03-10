@@ -16,10 +16,10 @@ import {
   readBundledAsset,
 } from "./runtime-paths.ts";
 
-function renderTemplate(template: string): string {
+function renderTemplate(template: string, replacements?: { publicBaseUrl?: string }): string {
   const home = homedir();
   const user = basename(home);
-  return template
+  const rendered = template
     .replaceAll("${PATCHRELAY_CONFIG:-/home/your-user/.config/patchrelay/patchrelay.yaml}", getDefaultConfigPath())
     .replaceAll("${PATCHRELAY_DB_PATH:-/home/your-user/.local/state/patchrelay/patchrelay.sqlite}", getDefaultDatabasePath())
     .replaceAll("${PATCHRELAY_LOG_FILE:-/home/your-user/.local/state/patchrelay/patchrelay.log}", getDefaultLogPath())
@@ -31,6 +31,12 @@ function renderTemplate(template: string): string {
     .replaceAll("/home/your-user/.local/share/patchrelay", getPatchRelayDataDir())
     .replaceAll("/home/your-user", home)
     .replaceAll("your-user", user);
+
+  if (replacements?.publicBaseUrl) {
+    return rendered.replaceAll("https://patchrelay.example.com", replacements.publicBaseUrl);
+  }
+
+  return rendered;
 }
 
 function generateSecret(bytes = 32): string {
@@ -59,7 +65,7 @@ async function writeTemplateFile(targetPath: string, content: string, force: boo
   return "created";
 }
 
-export async function initializePatchRelayHome(options?: { force?: boolean }): Promise<{
+export async function initializePatchRelayHome(options?: { force?: boolean; publicBaseUrl?: string }): Promise<{
   configDir: string;
   envPath: string;
   configPath: string;
@@ -67,8 +73,12 @@ export async function initializePatchRelayHome(options?: { force?: boolean }): P
   dataDir: string;
   envStatus: "created" | "skipped";
   configStatus: "created" | "skipped";
+  publicBaseUrl?: string;
+  webhookUrl?: string;
+  oauthCallbackUrl?: string;
 }> {
   const force = options?.force ?? false;
+  const publicBaseUrl = options?.publicBaseUrl;
   const configDir = getPatchRelayConfigDir();
   const envPath = getDefaultEnvPath();
   const configPath = getDefaultConfigPath();
@@ -80,7 +90,10 @@ export async function initializePatchRelayHome(options?: { force?: boolean }): P
   await mkdir(dataDir, { recursive: true });
 
   const envTemplate = renderEnvTemplate(readBundledAsset(".env.example"));
-  const configTemplate = renderTemplate(readBundledAsset("config/patchrelay.example.yaml"));
+  const configTemplate = renderTemplate(
+    readBundledAsset("config/patchrelay.example.yaml"),
+    publicBaseUrl ? { publicBaseUrl } : undefined,
+  );
 
   const envStatus = await writeTemplateFile(envPath, envTemplate, force);
   const configStatus = await writeTemplateFile(configPath, configTemplate, force);
@@ -93,6 +106,13 @@ export async function initializePatchRelayHome(options?: { force?: boolean }): P
     dataDir,
     envStatus,
     configStatus,
+    ...(publicBaseUrl
+      ? {
+          publicBaseUrl,
+          webhookUrl: new URL("/webhooks/linear", publicBaseUrl).toString(),
+          oauthCallbackUrl: new URL("/oauth/linear/callback", publicBaseUrl).toString(),
+        }
+      : {}),
   };
 }
 

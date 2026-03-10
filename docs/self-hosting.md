@@ -36,10 +36,6 @@ By default PatchRelay derives the OAuth callback as:
 
 - `${server.public_base_url}/oauth/linear/callback`
 
-Only set `linear.oauth.redirect_uri` if you want the advanced loopback setup instead:
-
-- `linear.oauth.redirect_uri: http://127.0.0.1:8787/oauth/linear/callback`
-
 The OAuth callback path itself is fixed by PatchRelay and must stay `/oauth/linear/callback`.
 
 ## Prerequisites
@@ -70,7 +66,7 @@ npm install -g ./patchrelay-*.tgz
 ## 2. Create Runtime Files
 
 ```bash
-patchrelay init
+patchrelay init https://patchrelay.example.com
 ```
 
 This creates:
@@ -87,14 +83,14 @@ Default runtime paths are:
 
 ## 3. Configure Secrets
 
-Create a Linear OAuth app and configure its redirect URI to point at PatchRelay.
+Create a Linear OAuth app in Linear `Settings > API > Applications`.
 
-Examples:
+`patchrelay init https://patchrelay.example.com` prints the exact values to paste into that app, including:
 
-- local callback: `http://127.0.0.1:8787/oauth/linear/callback`
-- public callback: `https://patchrelay.example.com/oauth/linear/callback`
+- redirect URI: `https://patchrelay.example.com/oauth/linear/callback`
+- webhook URL: `https://patchrelay.example.com/webhooks/linear`
 
-The callback path is fixed and must remain `/oauth/linear/callback`.
+The callback path is fixed and remains `/oauth/linear/callback`.
 
 For self-hosting today, you do need your own Linear OAuth app. The good news is that one app can be reused across every project and Linear workspace connected to the same PatchRelay instance.
 
@@ -115,11 +111,11 @@ In the normal delegated-agent flow, PatchRelay is webhook-driven:
 
 PatchRelay does not need to poll Linear to notice delegation in the normal flow.
 
-Then edit `~/.config/patchrelay/.env`:
+Then edit `~/.config/patchrelay/.env` and keep the generated webhook secret and token-encryption key:
 
 ```bash
-LINEAR_WEBHOOK_SECRET=replace-with-linear-webhook-secret
-PATCHRELAY_TOKEN_ENCRYPTION_KEY=replace-with-long-random-secret
+LINEAR_WEBHOOK_SECRET=generated-by-patchrelay-init
+PATCHRELAY_TOKEN_ENCRYPTION_KEY=generated-by-patchrelay-init
 LINEAR_OAUTH_CLIENT_ID=replace-with-linear-oauth-client-id
 LINEAR_OAUTH_CLIENT_SECRET=replace-with-linear-oauth-client-secret
 # PATCHRELAY_OPERATOR_TOKEN=replace-with-operator-api-token
@@ -142,15 +138,7 @@ server:
   public_base_url: https://patchrelay.example.com
 ```
 
-PatchRelay will derive `linear.oauth.redirect_uri` as `https://patchrelay.example.com/oauth/linear/callback`.
-
-Only add an explicit override if you want OAuth to complete on loopback instead:
-
-```yaml
-linear:
-  oauth:
-    redirect_uri: http://127.0.0.1:8787/oauth/linear/callback
-```
+PatchRelay will use `https://patchrelay.example.com/oauth/linear/callback` as the OAuth callback.
 
 Each project needs:
 
@@ -354,7 +342,6 @@ PatchRelay only manages explicitly configured labels and ignores missing labels 
 - store logs in user-owned directories
 - enable webhook archival only if you actually need raw payload retention
 - configure `trusted_actors` for every project that should only be driven by a known owner or trusted group
-- leave `linear.oauth.redirect_uri` unset unless you intentionally want loopback OAuth
 
 ## Security Model
 

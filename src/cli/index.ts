@@ -85,13 +85,19 @@ function helpText(): string {
     "  retry <issueKey> [--stage <stage>] [--reason <text>] [--json]",
     "  list [--active] [--failed] [--project <projectId>] [--json]",
     "  doctor [--json]",
-    "  init [--force] [--json]",
+    "  init <public-base-url> [--force] [--json]",
     "  connect [--project <projectId>] [--no-open] [--timeout <seconds>] [--json]",
     "  installations [--json]",
     "  install-service [--force] [--write-only] [--json]",
     "  restart-service [--json]",
     "  serve",
   ].join("\n");
+}
+
+function normalizePublicBaseUrl(value: string): string {
+  const candidate = /^[a-zA-Z][a-zA-Z\d+.-]*:\/\//.test(value) ? value : `https://${value}`;
+  const url = new URL(candidate);
+  return url.origin;
 }
 
 function getStageFlag(value: string | boolean | undefined): WorkflowStage | undefined {
@@ -221,7 +227,18 @@ export async function runCli(
 
   if (command === "init") {
     try {
-      const result = await initializePatchRelayHome({ force: parsed.flags.get("force") === true });
+      const requestedPublicBaseUrl =
+        typeof parsed.flags.get("public-base-url") === "string"
+          ? String(parsed.flags.get("public-base-url"))
+          : commandArgs[0];
+      if (!requestedPublicBaseUrl) {
+        throw new Error("Usage: patchrelay init <public-base-url>");
+      }
+      const publicBaseUrl = normalizePublicBaseUrl(requestedPublicBaseUrl);
+      const result = await initializePatchRelayHome({
+        force: parsed.flags.get("force") === true,
+        publicBaseUrl,
+      });
       writeOutput(
         stdout,
         json
@@ -233,22 +250,30 @@ export async function runCli(
               `State directory: ${result.stateDir}`,
               `Data directory: ${result.dataDir}`,
               "",
-              "Configure these URLs in patchrelay.yaml:",
-              "- Public base URL: https://patchrelay.example.com",
-              "- Webhook URL: https://patchrelay.example.com/webhooks/linear",
-              "- OAuth callback (derived by default): https://patchrelay.example.com/oauth/linear/callback",
+              "PatchRelay public URLs:",
+              `- Public base URL: ${result.publicBaseUrl}`,
+              `- Webhook URL: ${result.webhookUrl}`,
+              `- OAuth callback: ${result.oauthCallbackUrl}`,
+              "",
+              "Register the app in Linear:",
+              "- Open Linear Settings > API > Applications",
+              "- Create an OAuth app for PatchRelay",
+              "- Choose actor `app`",
+              "- Choose scopes `read`, `write`, `app:assignable`, `app:mentionable`",
+              `- Add redirect URI ${result.oauthCallbackUrl}`,
+              `- Add webhook URL ${result.webhookUrl}`,
+              "- Enable webhook categories for issue events, comment events, agent session events, permission changes, and inbox/app-user notifications",
+              "",
+              result.configStatus === "skipped"
+                ? `Config file was skipped, so make sure ${result.configPath} still has server.public_base_url: ${result.publicBaseUrl}`
+                : `Config file already includes server.public_base_url: ${result.publicBaseUrl}`,
               "",
               "Next steps:",
               `1. Edit ${result.envPath}`,
-              `2. Edit ${result.configPath}`,
-              "3. Paste your Linear OAuth client id and client secret into the generated .env",
-              "4. Paste LINEAR_WEBHOOK_SECRET from that .env into the Linear OAuth app webhook signing secret",
-              "5. Configure your Linear OAuth app for `actor=app` with `app:assignable` and `app:mentionable`",
-              "6. Configure the Linear OAuth app webhook settings for issue, comment, agent session, permission change, and inbox notification events",
-              "7. Set `server.public_base_url`",
-              "8. Override `linear.oauth.redirect_uri` only if you want loopback OAuth",
-              "9. Run `patchrelay doctor`",
-              "10. Run `patchrelay install-service`",
+              "2. Paste your Linear OAuth client id and client secret into that .env",
+              "3. Paste LINEAR_WEBHOOK_SECRET from that .env into the Linear OAuth app webhook signing secret",
+              "4. Run `patchrelay doctor`",
+              "5. Run `patchrelay install-service`",
             ].join("\n") + "\n",
       );
       return 0;
