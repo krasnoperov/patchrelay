@@ -23,9 +23,19 @@ export async function runPreflight(config: AppConfig): Promise<PreflightReport> 
     checks.push(pass("linear", "Linear webhook secret is configured"));
   }
   if (!config.linear.apiToken) {
-    checks.push(warn("linear", "LINEAR_API_TOKEN is missing; PatchRelay will not update Linear state or comments"));
+    if (!config.linear.oauth) {
+      checks.push(warn("linear", "LINEAR_API_TOKEN is missing; PatchRelay will not update Linear state or comments"));
+    }
   } else {
     checks.push(pass("linear", "Linear API token is configured"));
+  }
+  if (config.linear.oauth) {
+    checks.push(pass("linear_oauth", `Linear OAuth is configured with actor=${config.linear.oauth.actor}`));
+    if (!config.linear.tokenEncryptionKey) {
+      checks.push(fail("linear_oauth", "PATCHRELAY_TOKEN_ENCRYPTION_KEY is missing"));
+    } else {
+      checks.push(pass("linear_oauth", "Token encryption key is configured"));
+    }
   }
 
   if (config.operatorApi.enabled) {

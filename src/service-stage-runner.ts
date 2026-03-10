@@ -12,7 +12,7 @@ import {
 } from "./linear-workflow.js";
 import { buildStageLaunchPlan, isCodexThreadId } from "./stage-launch.js";
 import { buildFailedStageReport } from "./stage-reporting.js";
-import type { AppConfig, LinearClient, StageRunRecord, TrackedIssueRecord } from "./types.js";
+import type { AppConfig, LinearClientProvider, StageRunRecord, TrackedIssueRecord } from "./types.js";
 import { ensureDir, execCommand } from "./utils.js";
 
 export interface IssueQueueItem {
@@ -25,7 +25,7 @@ export class ServiceStageRunner {
     private readonly config: AppConfig,
     private readonly db: PatchRelayDatabase,
     private readonly codex: CodexAppServerClient,
-    private readonly linear: LinearClient | undefined,
+    private readonly linearProvider: LinearClientProvider,
     private readonly logger: Logger,
   ) {}
 
@@ -187,13 +187,14 @@ export class ServiceStageRunner {
       reportJson: JSON.stringify(buildFailedStageReport(stageRun, "failed", { threadId: failureThreadId })),
     });
 
-    if (!this.linear) {
+    const linear = await this.linearProvider.forProject(stageRun.projectId);
+    if (!linear) {
       return;
     }
 
     const fallbackState = project.workflowStatuses.humanNeeded;
     if (fallbackState) {
-      await this.linear.setIssueState(stageRun.linearIssueId, fallbackState).catch(() => undefined);
+      await linear.setIssueState(stageRun.linearIssueId, fallbackState).catch(() => undefined);
       this.db.setIssueLifecycleStatus(stageRun.projectId, stageRun.linearIssueId, "failed");
       this.db.upsertTrackedIssue({
         projectId: stageRun.projectId,
@@ -206,7 +207,7 @@ export class ServiceStageRunner {
 
     const cleanup = resolveWorkflowLabelCleanup(project);
     if (cleanup.remove.length > 0) {
-      await this.linear
+      await linear
         .updateIssueLabels({
           issueId: stageRun.linearIssueId,
           removeNames: cleanup.remove,
@@ -214,7 +215,7 @@ export class ServiceStageRunner {
         .catch(() => undefined);
     }
 
-    const result = await this.linear
+    const result = await linear
       .upsertIssueComment({
         issueId: stageRun.linearIssueId,
         ...(issue.statusCommentId ? { commentId: issue.statusCommentId } : {}),
@@ -252,14 +253,15 @@ export class ServiceStageRunner {
     stageRun: StageRunRecord,
   ): Promise<void> {
     const activeState = resolveActiveLinearState(project, stageRun.stage);
-    if (!activeState || !this.linear) {
+    const linear = await this.linearProvider.forProject(stageRun.projectId);
+    if (!activeState || !linear) {
       return;
     }
 
-    await this.linear.setIssueState(stageRun.linearIssueId, activeState);
+    await linear.setIssueState(stageRun.linearIssueId, activeState);
     const labels = resolveWorkflowLabelNames(project, "working");
     if (labels.add.length > 0 || labels.remove.length > 0) {
-      await this.linear.updateIssueLabels({
+      await linear.updateIssueLabels({
         issueId: stageRun.linearIssueId,
         ...(labels.add.length > 0 ? { addNames: labels.add } : {}),
         ...(labels.remove.length > 0 ? { removeNames: labels.remove } : {}),
@@ -275,7 +277,8 @@ export class ServiceStageRunner {
   }
 
   private async refreshStatusComment(projectId: string, issueId: string, stageRunId: number): Promise<void> {
-    if (!this.linear) {
+    const linear = await this.linearProvider.forProject(projectId);
+    if (!linear) {
       return;
     }
 
@@ -286,7 +289,7 @@ export class ServiceStageRunner {
       return;
     }
 
-    const result = await this.linear.upsertIssueComment({
+    const result = await linear.upsertIssueComment({
       issueId,
       ...(issue.statusCommentId ? { commentId: issue.statusCommentId } : {}),
       body: buildRunningStatusComment({

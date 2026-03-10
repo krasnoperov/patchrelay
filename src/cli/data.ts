@@ -76,6 +76,23 @@ export interface ListResultItem {
   updatedAt: string;
 }
 
+export interface InstallationListResult {
+  installations: Array<{
+    id: number;
+    workspaceName?: string;
+    workspaceKey?: string;
+    actorName?: string;
+    actorId?: string;
+    expiresAt?: string;
+    linkedProjects: string[];
+  }>;
+}
+
+export interface ConnectResult {
+  url: string;
+  projectId?: string;
+}
+
 function safeJsonParse(value: string | undefined): Record<string, unknown> | undefined {
   if (!value) {
     return undefined;
@@ -366,6 +383,70 @@ export class CliDataAccess {
       ...(row.latest_stage_status === null ? {} : { latestStageStatus: String(row.latest_stage_status) }),
       updatedAt: String(row.updated_at),
     }));
+  }
+
+  connect(projectId?: string): ConnectResult {
+    const redirectUri = this.config.linear.oauth?.redirectUri;
+    if (!redirectUri) {
+      throw new Error("Linear OAuth is not configured.");
+    }
+
+    const baseUrl = redirectUri.endsWith("/oauth/linear/callback")
+      ? redirectUri.slice(0, -"/oauth/linear/callback".length)
+      : redirectUri.replace(/\/+$/, "");
+    const url = new URL("/auth/linear/start", baseUrl);
+    if (projectId) {
+      const project = this.config.projects.find((entry) => entry.id === projectId);
+      if (!project) {
+        throw new Error(`Unknown project: ${projectId}`);
+      }
+      url.searchParams.set("projectId", projectId);
+    }
+
+    return {
+      url: url.toString(),
+      ...(projectId ? { projectId } : {}),
+    };
+  }
+
+  listInstallations(): InstallationListResult {
+    const links = this.db.listProjectInstallations();
+    return {
+      installations: this.db.listLinearInstallations().map((installation) => ({
+        id: installation.id,
+        ...(installation.workspaceName ? { workspaceName: installation.workspaceName } : {}),
+        ...(installation.workspaceKey ? { workspaceKey: installation.workspaceKey } : {}),
+        ...(installation.actorName ? { actorName: installation.actorName } : {}),
+        ...(installation.actorId ? { actorId: installation.actorId } : {}),
+        ...(installation.expiresAt ? { expiresAt: installation.expiresAt } : {}),
+        linkedProjects: links
+          .filter((link: { projectId: string; installationId: number }) => link.installationId === installation.id)
+          .map((link: { projectId: string; installationId: number }) => link.projectId),
+      })),
+    };
+  }
+
+  linkInstallation(projectId: string, installationId?: number): { projectId: string; installationId?: number } {
+    const project = this.config.projects.find((entry) => entry.id === projectId);
+    if (!project) {
+      throw new Error(`Unknown project: ${projectId}`);
+    }
+
+    if (installationId === undefined) {
+      this.db.unlinkProjectInstallation(projectId);
+      return { projectId };
+    }
+
+    const installation = this.db.getLinearInstallation(installationId);
+    if (!installation) {
+      throw new Error(`Unknown installation: ${installationId}`);
+    }
+
+    const link = this.db.linkProjectInstallation(projectId, installationId);
+    return {
+      projectId: link.projectId,
+      installationId: link.installationId,
+    };
   }
 
   private async readLiveSummary(threadId: string, latestTimestampSeen?: string): Promise<LiveSummary> {

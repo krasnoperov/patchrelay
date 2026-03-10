@@ -53,9 +53,6 @@ logging:
   webhook_archive_dir: \${ARCHIVE_DIR:-./archive}
 database:
   path: ./data/patchrelay.sqlite
-linear:
-  webhook_secret_env: CUSTOM_LINEAR_SECRET
-  api_token_env: CUSTOM_LINEAR_TOKEN
 operator_api:
   enabled: true
   bearer_token_env: PATCHRELAY_OPERATOR_TOKEN
@@ -82,6 +79,16 @@ runner:
   codex:
     shell_bin: /bin/bash
     source_bashrc: true
+linear:
+  webhook_secret_env: CUSTOM_LINEAR_SECRET
+  api_token_env: CUSTOM_LINEAR_TOKEN
+  token_encryption_key_env: PATCHRELAY_TOKEN_ENCRYPTION_KEY
+  oauth:
+    client_id_env: LINEAR_OAUTH_CLIENT_ID
+    client_secret_env: LINEAR_OAUTH_CLIENT_SECRET
+    redirect_uri: http://127.0.0.1:8787/oauth/linear/callback
+    scopes: [read, write]
+    actor: user
 `,
       "utf8",
     );
@@ -95,6 +102,9 @@ runner:
         CUSTOM_LINEAR_SECRET: "top-secret",
         CUSTOM_LINEAR_TOKEN: "linear-token",
         PATCHRELAY_OPERATOR_TOKEN: "operator-secret",
+        PATCHRELAY_TOKEN_ENCRYPTION_KEY: "enc-secret",
+        LINEAR_OAUTH_CLIENT_ID: "oauth-client-id",
+        LINEAR_OAUTH_CLIENT_SECRET: "oauth-client-secret",
         LOG_FILE_PATH: path.join(baseDir, "ignored.log"),
         ARCHIVE_DIR: path.join(baseDir, "ignored-archive"),
       },
@@ -109,6 +119,9 @@ runner:
         assert.equal(config.database.path, path.join(baseDir, "runtime.sqlite"));
         assert.equal(config.linear.webhookSecret, "top-secret");
         assert.equal(config.linear.apiToken, "linear-token");
+        assert.equal(config.linear.tokenEncryptionKey, "enc-secret");
+        assert.equal(config.linear.oauth?.clientId, "oauth-client-id");
+        assert.equal(config.linear.oauth?.clientSecret, "oauth-client-secret");
         assert.equal(config.operatorApi.enabled, true);
         assert.equal(config.operatorApi.bearerToken, "operator-secret");
         assert.equal(config.projects[0]?.repoPath, path.join(baseDir, "repo"));

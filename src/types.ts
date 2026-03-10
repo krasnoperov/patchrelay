@@ -97,6 +97,14 @@ export interface AppConfig {
     webhookSecret: string;
     apiToken?: string;
     graphqlUrl: string;
+    oauth?: {
+      clientId: string;
+      clientSecret: string;
+      redirectUri: string;
+      scopes: string[];
+      actor: "user" | "app";
+    };
+    tokenEncryptionKey?: string;
   };
   operatorApi: {
     enabled: boolean;
@@ -161,6 +169,56 @@ export interface WebhookEventRecord {
   signatureValid: boolean;
   dedupeStatus: "accepted" | "duplicate" | "rejected";
   processingStatus: "pending" | "processed" | "failed";
+}
+
+export interface LinearInstallationRecord {
+  id: number;
+  provider: "linear";
+  workspaceId?: string;
+  workspaceName?: string;
+  workspaceKey?: string;
+  actorId?: string;
+  actorName?: string;
+  accessTokenCiphertext: string;
+  refreshTokenCiphertext?: string;
+  scopesJson: string;
+  tokenType?: string;
+  expiresAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProjectInstallationRecord {
+  projectId: string;
+  installationId: number;
+  linkedAt: string;
+}
+
+export interface OAuthStateRecord {
+  id: number;
+  provider: "linear";
+  state: string;
+  projectId?: string;
+  redirectUri: string;
+  actor: "user" | "app";
+  createdAt: string;
+  consumedAt?: string;
+}
+
+export interface LinearOauthTokenSet {
+  accessToken: string;
+  refreshToken?: string;
+  expiresAt?: string;
+  scopes: string[];
+  tokenType?: string;
+}
+
+export interface LinearActorProfile {
+  workspaceId?: string;
+  workspaceName?: string;
+  workspaceKey?: string;
+  actorId?: string;
+  actorName?: string;
 }
 
 export interface TrackedIssueRecord {
@@ -358,4 +416,9 @@ export interface LinearClient {
   setIssueState(issueId: string, stateName: string): Promise<LinearIssueSnapshot>;
   upsertIssueComment(params: { issueId: string; commentId?: string; body: string }): Promise<LinearCommentUpsertResult>;
   updateIssueLabels(params: { issueId: string; addNames?: string[]; removeNames?: string[] }): Promise<LinearIssueSnapshot>;
+  getActorProfile(): Promise<LinearActorProfile>;
+}
+
+export interface LinearClientProvider {
+  forProject(projectId: string): Promise<LinearClient | undefined>;
 }

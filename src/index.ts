@@ -7,7 +7,7 @@ import { CodexAppServerClient } from "./codex-app-server.js";
 import { loadConfig } from "./config.js";
 import { PatchRelayDatabase } from "./db.js";
 import { buildHttpServer } from "./http.js";
-import { LinearGraphqlClient } from "./linear-client.js";
+import { DatabaseBackedLinearClientProvider } from "./linear-client.js";
 import { createLogger } from "./logging.js";
 import { runPreflight } from "./preflight.js";
 import { PatchRelayService } from "./service.js";
@@ -43,10 +43,8 @@ async function main(): Promise<void> {
   db.runMigrations();
 
   const codex = new CodexAppServerClient(config.runner.codex, logger);
-  const linear = config.linear.apiToken
-    ? new LinearGraphqlClient({ apiToken: config.linear.apiToken, graphqlUrl: config.linear.graphqlUrl }, logger)
-    : undefined;
-  const service = new PatchRelayService(config, db, codex, linear, logger);
+  const linearProvider = new DatabaseBackedLinearClientProvider(config, db, logger);
+  const service = new PatchRelayService(config, db, codex, linearProvider, logger);
   await service.start();
   const app = await buildHttpServer(config, service, logger);
 

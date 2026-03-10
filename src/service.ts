@@ -3,6 +3,7 @@ import type { Logger } from "pino";
 import { CodexAppServerClient, type CodexNotification } from "./codex-app-server.js";
 import { PatchRelayDatabase } from "./db.js";
 import { isPatchRelayStatusComment } from "./linear-workflow.js";
+import { createLinearOAuthUrl, createOAuthStateToken, installLinearOAuthCode } from "./linear-oauth.js";
 import { resolveProject, triggerEventAllowed } from "./project-resolution.js";
 import { SerialWorkQueue } from "./service-queue.js";
 import { ServiceStageFinalizer } from "./service-stage-finalizer.js";
@@ -12,6 +13,8 @@ import { summarizeCurrentThread } from "./stage-reporting.js";
 import type {
   AppConfig,
   LinearClient,
+  LinearInstallationRecord,
+  LinearClientProvider,
   LinearWebhookPayload,
   NormalizedEvent,
   StageReport,
@@ -31,6 +34,7 @@ function makeIssueQueueKey(item: IssueQueueItem): string {
 export class PatchRelayService {
   readonly webhookQueue: SerialWorkQueue<number>;
   readonly issueQueue: SerialWorkQueue<IssueQueueItem>;
+  readonly linearProvider: LinearClientProvider;
   private readonly stageRunner: ServiceStageRunner;
   private readonly stageFinalizer: ServiceStageFinalizer;
   private ready = false;
@@ -40,11 +44,12 @@ export class PatchRelayService {
     readonly config: AppConfig,
     readonly db: PatchRelayDatabase,
     readonly codex: CodexAppServerClient,
-    readonly linear: LinearClient | undefined,
+    linearProvider: LinearClientProvider | LinearClient | undefined,
     readonly logger: Logger,
   ) {
-    this.stageRunner = new ServiceStageRunner(config, db, codex, linear, logger);
-    this.stageFinalizer = new ServiceStageFinalizer(config, db, codex, linear, (projectId, issueId) =>
+    this.linearProvider = toLinearClientProvider(linearProvider);
+    this.stageRunner = new ServiceStageRunner(config, db, codex, this.linearProvider, logger);
+    this.stageFinalizer = new ServiceStageFinalizer(config, db, codex, this.linearProvider, (projectId, issueId) =>
       this.enqueueIssue(projectId, issueId),
     );
     this.webhookQueue = new SerialWorkQueue((eventId) => this.processWebhookEvent(eventId), logger, (eventId) => String(eventId));
@@ -73,6 +78,78 @@ export class PatchRelayService {
   stop(): void {
     this.ready = false;
     void this.codex.stop();
+  }
+
+  createLinearOAuthStart(params?: { projectId?: string }): { state: string; authorizeUrl: string; redirectUri: string } {
+    if (!this.config.linear.oauth) {
+      throw new Error("Linear OAuth is not configured");
+    }
+
+    const state = createOAuthStateToken();
+    const record = this.db.createOAuthState({
+      provider: "linear",
+      state,
+      redirectUri: this.config.linear.oauth.redirectUri,
+      actor: this.config.linear.oauth.actor,
+      ...(params?.projectId ? { projectId: params.projectId } : {}),
+    });
+    return {
+      state,
+      authorizeUrl: createLinearOAuthUrl(this.config, record.state, record.redirectUri, record.projectId),
+      redirectUri: record.redirectUri,
+    };
+  }
+
+  async completeLinearOAuth(params: { state: string; code: string }): Promise<LinearInstallationRecord> {
+    const oauthState = this.db.getOAuthState(params.state);
+    if (!oauthState || oauthState.consumedAt) {
+      throw new Error("OAuth state was not found or has already been consumed");
+    }
+
+    const installation = await installLinearOAuthCode({
+      config: this.config,
+      db: this.db,
+      logger: this.logger,
+      code: params.code,
+      redirectUri: oauthState.redirectUri,
+      ...(oauthState.projectId ? { projectId: oauthState.projectId } : {}),
+    });
+    this.db.consumeOAuthState(params.state);
+    return installation;
+  }
+
+  listLinearInstallations(): Array<{
+    installation: ReturnType<PatchRelayDatabase["getLinearInstallation"]>;
+    linkedProjects: string[];
+  }> {
+    const links = this.db.listProjectInstallations();
+    return this.db.listLinearInstallations().map((installation) => ({
+      installation,
+      linkedProjects: links
+        .filter((link: { projectId: string; installationId: number }) => link.installationId === installation.id)
+        .map((link: { projectId: string; installationId: number }) => link.projectId),
+    }));
+  }
+
+  linkProjectInstallation(projectId: string, installationId: number) {
+    const project = this.config.projects.find((entry) => entry.id === projectId);
+    if (!project) {
+      throw new Error(`Unknown project: ${projectId}`);
+    }
+    const installation = this.db.getLinearInstallation(installationId);
+    if (!installation) {
+      throw new Error(`Unknown installation: ${installationId}`);
+    }
+    return this.db.linkProjectInstallation(projectId, installationId);
+  }
+
+  unlinkProjectInstallation(projectId: string) {
+    const project = this.config.projects.find((entry) => entry.id === projectId);
+    if (!project) {
+      throw new Error(`Unknown project: ${projectId}`);
+    }
+    this.db.unlinkProjectInstallation(projectId);
+    return undefined;
   }
 
   getReadiness() {
@@ -268,4 +345,16 @@ export class PatchRelayService {
   private enqueueIssue(projectId: string, issueId: string): void {
     this.issueQueue.enqueue({ projectId, issueId });
   }
+}
+
+function toLinearClientProvider(linear: LinearClientProvider | LinearClient | undefined): LinearClientProvider {
+  if (linear && typeof (linear as LinearClientProvider).forProject === "function") {
+    return linear as LinearClientProvider;
+  }
+
+  return {
+    async forProject(): Promise<LinearClient | undefined> {
+      return linear as LinearClient | undefined;
+    },
+  };
 }

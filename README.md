@@ -4,6 +4,11 @@ PatchRelay is a self-hosted control plane for Linear-driven software delivery wi
 
 It listens for signed Linear webhooks, maps issues to local repositories, prepares one durable git worktree per issue, and runs staged Codex turns through `codex app-server`. PatchRelay keeps the tracker state, workspace state, and agent thread history correlated so you can see what happened after the run, not just while it is live.
 
+PatchRelay now supports both:
+
+- legacy single-workspace mode with one `LINEAR_API_TOKEN`
+- OAuth installation mode for smoother setup, multiple Linear workspaces, and less manual token handling
+
 ## Why This Exists
 
 PatchRelay is built for a very specific operating model:
@@ -47,7 +52,7 @@ Internal inspection endpoints are disabled by default. If you enable the optiona
    - Node.js 24+
    - `git`
    - `codex` CLI installed and authenticated
-   - a Linear personal API key
+   - either a Linear personal API key or a Linear OAuth app
    - a Linear webhook secret
 
 2. Clone and install:
@@ -67,6 +72,8 @@ cp config/patchrelay.example.yaml config/patchrelay.yaml
 ```
 
 4. Edit `.env` and `config/patchrelay.yaml` for your machine, repos, worktree roots, workflow docs, and Linear team/status names.
+   - For legacy mode, set `LINEAR_API_TOKEN`.
+   - For OAuth mode, set `PATCHRELAY_TOKEN_ENCRYPTION_KEY`, `LINEAR_OAUTH_CLIENT_ID`, and `LINEAR_OAUTH_CLIENT_SECRET`.
 
 5. Start PatchRelay:
 
@@ -79,6 +86,13 @@ Before putting it in service, run:
 ```bash
 npm run build
 node dist/index.js doctor
+```
+
+For OAuth mode, you can then connect Linear from the local setup surface or CLI:
+
+```bash
+patchrelay connect --project your-project
+patchrelay installations
 ```
 
 6. Put it behind Caddy, nginx, or another reverse proxy that exposes only `/`, `/health`, `/ready`, and `POST /webhooks/linear`.

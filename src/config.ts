@@ -66,6 +66,16 @@ const configSchema = z.object({
     webhook_secret_env: z.string().default("LINEAR_WEBHOOK_SECRET"),
     api_token_env: z.string().default("LINEAR_API_TOKEN"),
     graphql_url: z.string().url().default("https://api.linear.app/graphql"),
+    token_encryption_key_env: z.string().default("PATCHRELAY_TOKEN_ENCRYPTION_KEY"),
+    oauth: z
+      .object({
+        client_id_env: z.string().default("LINEAR_OAUTH_CLIENT_ID"),
+        client_secret_env: z.string().default("LINEAR_OAUTH_CLIENT_SECRET"),
+        redirect_uri: z.string().url(),
+        scopes: z.array(z.string().min(1)).default(["read", "write"]),
+        actor: z.enum(["user", "app"]).default("user"),
+      })
+      .optional(),
   }),
   operator_api: z
     .object({
@@ -144,6 +154,9 @@ export function loadConfig(
   const requireLinearSecret = options?.requireLinearSecret ?? true;
   const webhookSecret = process.env[parsed.linear.webhook_secret_env];
   const apiToken = process.env[parsed.linear.api_token_env];
+  const tokenEncryptionKey = process.env[parsed.linear.token_encryption_key_env];
+  const oauthClientId = parsed.linear.oauth ? process.env[parsed.linear.oauth.client_id_env] : undefined;
+  const oauthClientSecret = parsed.linear.oauth ? process.env[parsed.linear.oauth.client_secret_env] : undefined;
   const operatorApiToken = parsed.operator_api.bearer_token_env
     ? process.env[parsed.operator_api.bearer_token_env]
     : undefined;
@@ -180,6 +193,18 @@ export function loadConfig(
       webhookSecret: webhookSecret ?? "",
       ...(apiToken ? { apiToken } : {}),
       graphqlUrl: parsed.linear.graphql_url,
+      ...(parsed.linear.oauth && oauthClientId && oauthClientSecret
+        ? {
+            oauth: {
+              clientId: oauthClientId,
+              clientSecret: oauthClientSecret,
+              redirectUri: parsed.linear.oauth.redirect_uri,
+              scopes: parsed.linear.oauth.scopes,
+              actor: parsed.linear.oauth.actor,
+            },
+          }
+        : {}),
+      ...(tokenEncryptionKey ? { tokenEncryptionKey } : {}),
     },
     operatorApi: {
       enabled: parsed.operator_api.enabled,
@@ -276,5 +301,9 @@ function validateConfigSemantics(config: AppConfig): void {
 
   if (config.operatorApi.enabled && config.server.bind !== "127.0.0.1" && !config.operatorApi.bearerToken) {
     throw new Error("operator_api.enabled requires operator_api.bearer_token_env when server.bind is not 127.0.0.1");
+  }
+
+  if (config.linear.oauth && !config.linear.tokenEncryptionKey) {
+    throw new Error("linear.oauth requires linear.token_encryption_key_env to be set");
   }
 }

@@ -171,6 +171,29 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
     });
   });
 
+  if (config.linear.oauth) {
+    app.get("/auth/linear/start", async (request, reply) => {
+      const projectId = getQueryParam(request, "projectId");
+      const result = service.createLinearOAuthStart(projectId ? { projectId } : undefined);
+      return reply.redirect(result.authorizeUrl);
+    });
+
+    app.get("/setup", async (_request, reply) => {
+      const installations = service.listLinearInstallations();
+      const projects: Array<{ id: string; installationId?: number }> = config.projects.map((project) => {
+        const linked = installations.find((entry) => entry.linkedProjects.includes(project.id));
+        return {
+          id: project.id,
+          ...(linked?.installation?.id ? { installationId: linked.installation.id } : {}),
+        };
+      });
+
+      return reply
+        .type("text/html; charset=utf-8")
+        .send(renderSetupPage(config, installations, projects));
+    });
+  }
+
   app.post(
     config.ingress.linearWebhookPath,
     {
@@ -243,7 +266,58 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
       }
       return reply.send({ ok: true, ...result });
     });
+
+    app.get("/api/installations", async (_request, reply) => {
+      return reply.send({ ok: true, installations: service.listLinearInstallations() });
+    });
+
+    app.get("/api/oauth/linear/start", async (request, reply) => {
+      const projectId = getQueryParam(request, "projectId");
+      const result = service.createLinearOAuthStart(projectId ? { projectId } : undefined);
+      return reply.send({ ok: true, ...result });
+    });
+
+    app.post("/api/projects/:projectId/installation", async (request, reply) => {
+      const { projectId } = request.params as { projectId: string };
+      const rawInstallationId = (request.body as { installationId?: number | string | null } | undefined)?.installationId;
+      const installationId =
+        rawInstallationId === null || rawInstallationId === "null" || rawInstallationId === ""
+          ? undefined
+          : Number(rawInstallationId);
+      if (rawInstallationId !== null && rawInstallationId !== "null" && rawInstallationId !== "") {
+        if (typeof installationId !== "number" || !Number.isFinite(installationId) || installationId <= 0) {
+          return reply.code(400).send({ ok: false, reason: "invalid_installation_id" });
+        }
+      }
+
+      try {
+        const link = installationId === undefined ? service.unlinkProjectInstallation(projectId) : service.linkProjectInstallation(projectId, installationId);
+        return reply.send({ ok: true, link });
+      } catch (error) {
+        return reply.code(404).send({ ok: false, reason: "link_failed", message: error instanceof Error ? error.message : String(error) });
+      }
+    });
   }
+
+  app.get("/oauth/linear/callback", async (request, reply) => {
+    const code = getQueryParam(request, "code");
+    const state = getQueryParam(request, "state");
+    if (!code || !state) {
+      return reply.code(400).type("text/html; charset=utf-8").send(renderOAuthResult("Missing code or state."));
+    }
+
+    try {
+      const installation = await service.completeLinearOAuth({ code, state });
+      return reply
+        .type("text/html; charset=utf-8")
+        .send(renderOAuthResult(`Connected Linear installation #${installation.id}. You can close this window.`));
+    } catch (error) {
+      return reply
+        .code(400)
+        .type("text/html; charset=utf-8")
+        .send(renderOAuthResult(error instanceof Error ? error.message : String(error)));
+    }
+  });
 
   app.addHook("onResponse", async (request, reply) => {
     if (reply.statusCode < 500) {
@@ -277,4 +351,83 @@ function isAuthorizedOperatorRequest(request: FastifyRequest, config: AppConfig)
 
   const auth = getHeader(request, "authorization");
   return auth === `Bearer ${config.operatorApi.bearerToken}`;
+}
+
+function renderSetupPage(
+  config: AppConfig,
+  installations: Array<{ installation: ReturnType<PatchRelayService["listLinearInstallations"]>[number]["installation"]; linkedProjects: string[] }>,
+  projects: Array<{ id: string; installationId?: number }>,
+): string {
+  const installItems = installations
+    .map((entry) => {
+      const installation = entry.installation;
+      const name = installation?.workspaceName ?? installation?.actorName ?? `Installation #${installation?.id ?? "unknown"}`;
+      const details = [installation?.workspaceKey, installation?.actorId].filter(Boolean).join(" ");
+      const links = entry.linkedProjects.length > 0 ? `Linked projects: ${entry.linkedProjects.join(", ")}` : "Not linked";
+      return `<li><strong>${escapeHtml(name)}</strong><br><span>${escapeHtml(details || links)}</span><br><span>${escapeHtml(links)}</span></li>`;
+    })
+    .join("");
+
+  const projectItems = projects
+    .map(
+      (project) =>
+        `<li><strong>${escapeHtml(project.id)}</strong> - ${
+          project.installationId ? `installation #${project.installationId}` : "not linked"
+        } - <a href="/auth/linear/start?projectId=${encodeURIComponent(project.id)}">Connect Linear</a></li>`,
+    )
+    .join("");
+
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>PatchRelay Setup</title>
+  </head>
+  <body>
+    <main>
+      <h1>PatchRelay Setup</h1>
+      <p>Linear OAuth redirect: <code>${escapeHtml(config.linear.oauth?.redirectUri ?? "not configured")}</code></p>
+      <h2>Projects</h2>
+      <ul>${projectItems || "<li>No projects configured.</li>"}</ul>
+      <h2>Installations</h2>
+      <ul>${installItems || "<li>No Linear installations connected yet.</li>"}</ul>
+    </main>
+  </body>
+</html>`;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll("\"", "&quot;");
+}
+
+function getQueryParam(request: FastifyRequest, key: string): string | undefined {
+  const value = (request.query as Record<string, unknown> | undefined)?.[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+function renderOAuthResult(message: string): string {
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>PatchRelay OAuth</title>
+    <style>
+      body { font-family: Georgia, "Times New Roman", serif; background: #f6f3ee; color: #1f1d1a; margin: 0; padding: 32px; }
+      main { max-width: 640px; margin: 10vh auto; background: rgba(255,255,255,0.82); border: 1px solid rgba(31,29,26,0.12); border-radius: 20px; padding: 32px; }
+      p { font-size: 18px; line-height: 1.6; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>PatchRelay</h1>
+      <p>${escapeHtml(message)}</p>
+    </main>
+  </body>
+</html>`;
 }

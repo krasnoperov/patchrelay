@@ -1,8 +1,11 @@
 import Database from "better-sqlite3";
 import type {
   IssueLifecycleStatus,
+  LinearInstallationRecord,
+  OAuthStateRecord,
   PipelineRunRecord,
   PipelineStatus,
+  ProjectInstallationRecord,
   QueuedTurnInputRecord,
   StageRunRecord,
   StageRunStatus,
@@ -116,6 +119,40 @@ CREATE TABLE IF NOT EXISTS queued_turn_inputs (
   body TEXT NOT NULL,
   delivered_at TEXT,
   created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS linear_installations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  provider TEXT NOT NULL DEFAULT 'linear',
+  workspace_id TEXT,
+  workspace_name TEXT,
+  workspace_key TEXT,
+  actor_id TEXT,
+  actor_name TEXT,
+  access_token_ciphertext TEXT NOT NULL,
+  refresh_token_ciphertext TEXT,
+  scopes_json TEXT NOT NULL,
+  token_type TEXT,
+  expires_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS project_installations (
+  project_id TEXT PRIMARY KEY,
+  installation_id INTEGER NOT NULL,
+  linked_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS oauth_states (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  provider TEXT NOT NULL,
+  state TEXT NOT NULL UNIQUE,
+  project_id TEXT,
+  redirect_uri TEXT NOT NULL,
+  actor TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  consumed_at TEXT
 );
 `;
 
@@ -281,6 +318,13 @@ export class PatchRelayDatabase {
     const row = this.connection
       .prepare("SELECT * FROM tracked_issues WHERE issue_key = ? ORDER BY updated_at DESC LIMIT 1")
       .get(issueKey) as Record<string, unknown> | undefined;
+    return row ? this.mapTrackedIssue(row) : undefined;
+  }
+
+  getTrackedIssueByLinearIssueId(linearIssueId: string): TrackedIssueRecord | undefined {
+    const row = this.connection
+      .prepare("SELECT * FROM tracked_issues WHERE linear_issue_id = ? ORDER BY updated_at DESC LIMIT 1")
+      .get(linearIssueId) as Record<string, unknown> | undefined;
     return row ? this.mapTrackedIssue(row) : undefined;
   }
 
@@ -687,6 +731,250 @@ export class PatchRelayDatabase {
     };
   }
 
+  upsertLinearInstallation(params: {
+    workspaceId?: string;
+    workspaceName?: string;
+    workspaceKey?: string;
+    actorId?: string;
+    actorName?: string;
+    accessTokenCiphertext: string;
+    refreshTokenCiphertext?: string | null;
+    scopesJson: string;
+    tokenType?: string;
+    expiresAt?: string | null;
+  }): LinearInstallationRecord {
+    const now = isoNow();
+    const existing =
+      (params.workspaceId
+        ? (this.connection
+            .prepare("SELECT id FROM linear_installations WHERE workspace_id = ? ORDER BY id DESC LIMIT 1")
+            .get(params.workspaceId) as { id: number } | undefined)
+        : undefined) ??
+      (params.actorId
+        ? (this.connection
+            .prepare("SELECT id FROM linear_installations WHERE actor_id = ? ORDER BY id DESC LIMIT 1")
+            .get(params.actorId) as { id: number } | undefined)
+        : undefined);
+
+    if (existing) {
+      this.connection
+        .prepare(
+          `
+          UPDATE linear_installations
+          SET workspace_id = COALESCE(?, workspace_id),
+              workspace_name = COALESCE(?, workspace_name),
+              workspace_key = COALESCE(?, workspace_key),
+              actor_id = COALESCE(?, actor_id),
+              actor_name = COALESCE(?, actor_name),
+              access_token_ciphertext = ?,
+              refresh_token_ciphertext = COALESCE(?, refresh_token_ciphertext),
+              scopes_json = ?,
+              token_type = COALESCE(?, token_type),
+              expires_at = COALESCE(?, expires_at),
+              updated_at = ?
+          WHERE id = ?
+          `,
+        )
+        .run(
+          params.workspaceId ?? null,
+          params.workspaceName ?? null,
+          params.workspaceKey ?? null,
+          params.actorId ?? null,
+          params.actorName ?? null,
+          params.accessTokenCiphertext,
+          params.refreshTokenCiphertext ?? null,
+          params.scopesJson,
+          params.tokenType ?? null,
+          params.expiresAt ?? null,
+          now,
+          existing.id,
+        );
+      return this.getLinearInstallation(existing.id)!;
+    }
+
+    const result = this.connection
+      .prepare(
+        `
+        INSERT INTO linear_installations (
+          provider, workspace_id, workspace_name, workspace_key, actor_id, actor_name,
+          access_token_ciphertext, refresh_token_ciphertext, scopes_json, token_type, expires_at, created_at, updated_at
+        ) VALUES ('linear', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+      )
+      .run(
+        params.workspaceId ?? null,
+        params.workspaceName ?? null,
+        params.workspaceKey ?? null,
+        params.actorId ?? null,
+        params.actorName ?? null,
+        params.accessTokenCiphertext,
+        params.refreshTokenCiphertext ?? null,
+        params.scopesJson,
+        params.tokenType ?? null,
+        params.expiresAt ?? null,
+        now,
+        now,
+      );
+    return this.getLinearInstallation(Number(result.lastInsertRowid))!;
+  }
+
+  saveLinearInstallation(params: {
+    workspaceId?: string;
+    workspaceName?: string;
+    workspaceKey?: string;
+    actorId?: string;
+    actorName?: string;
+    accessTokenCiphertext: string;
+    refreshTokenCiphertext?: string | null;
+    scopesJson: string;
+    tokenType?: string;
+    expiresAt?: string | null;
+  }): LinearInstallationRecord {
+    return this.upsertLinearInstallation(params);
+  }
+
+  updateLinearInstallationTokens(
+    id: number,
+    params: {
+      accessTokenCiphertext: string;
+      refreshTokenCiphertext?: string | null;
+      scopesJson?: string;
+      tokenType?: string | null;
+      expiresAt?: string | null;
+    },
+  ): LinearInstallationRecord | undefined {
+    this.connection
+      .prepare(
+        `
+        UPDATE linear_installations
+        SET access_token_ciphertext = ?,
+            refresh_token_ciphertext = COALESCE(?, refresh_token_ciphertext),
+            scopes_json = COALESCE(?, scopes_json),
+            token_type = COALESCE(?, token_type),
+            expires_at = COALESCE(?, expires_at),
+            updated_at = ?
+        WHERE id = ?
+        `,
+      )
+      .run(
+        params.accessTokenCiphertext,
+        params.refreshTokenCiphertext ?? null,
+        params.scopesJson ?? null,
+        params.tokenType ?? null,
+        params.expiresAt ?? null,
+        isoNow(),
+        id,
+      );
+    return this.getLinearInstallation(id);
+  }
+
+  getLinearInstallation(id: number): LinearInstallationRecord | undefined {
+    const row = this.connection
+      .prepare("SELECT * FROM linear_installations WHERE id = ?")
+      .get(id) as Record<string, unknown> | undefined;
+    return row ? this.mapLinearInstallation(row) : undefined;
+  }
+
+  listLinearInstallations(): LinearInstallationRecord[] {
+    const rows = this.connection
+      .prepare("SELECT * FROM linear_installations ORDER BY updated_at DESC, id DESC")
+      .all() as Record<string, unknown>[];
+    return rows.map((row) => this.mapLinearInstallation(row));
+  }
+
+  linkProjectInstallation(projectId: string, installationId: number): ProjectInstallationRecord {
+    const now = isoNow();
+    this.connection
+      .prepare(
+        `
+        INSERT INTO project_installations (project_id, installation_id, linked_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(project_id) DO UPDATE SET installation_id = excluded.installation_id, linked_at = excluded.linked_at
+        `,
+      )
+      .run(projectId, installationId, now);
+    return this.getProjectInstallation(projectId)!;
+  }
+
+  setProjectInstallation(projectId: string, installationId: number): ProjectInstallationRecord {
+    return this.linkProjectInstallation(projectId, installationId);
+  }
+
+  getProjectInstallation(projectId: string): ProjectInstallationRecord | undefined {
+    const row = this.connection
+      .prepare("SELECT * FROM project_installations WHERE project_id = ?")
+      .get(projectId) as Record<string, unknown> | undefined;
+    return row ? this.mapProjectInstallation(row) : undefined;
+  }
+
+  listProjectInstallations(): ProjectInstallationRecord[] {
+    const rows = this.connection
+      .prepare("SELECT * FROM project_installations ORDER BY project_id")
+      .all() as Record<string, unknown>[];
+    return rows.map((row) => this.mapProjectInstallation(row));
+  }
+
+  unlinkProjectInstallation(projectId: string): void {
+    this.connection.prepare("DELETE FROM project_installations WHERE project_id = ?").run(projectId);
+  }
+
+  getLinearInstallationForProject(projectId: string): LinearInstallationRecord | undefined {
+    const row = this.connection
+      .prepare(
+        `
+        SELECT li.*
+        FROM linear_installations li
+        INNER JOIN project_installations pi ON pi.installation_id = li.id
+        WHERE pi.project_id = ?
+        `,
+      )
+      .get(projectId) as Record<string, unknown> | undefined;
+    return row ? this.mapLinearInstallation(row) : undefined;
+  }
+
+  createOAuthState(params: {
+    provider: "linear";
+    state: string;
+    projectId?: string;
+    redirectUri: string;
+    actor: "user" | "app";
+  }): OAuthStateRecord {
+    const now = isoNow();
+    const result = this.connection
+      .prepare(
+        `
+        INSERT INTO oauth_states (provider, state, project_id, redirect_uri, actor, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        `,
+      )
+      .run(params.provider, params.state, params.projectId ?? null, params.redirectUri, params.actor, now);
+    return this.getOAuthStateById(Number(result.lastInsertRowid))!;
+  }
+
+  getOAuthState(state: string): OAuthStateRecord | undefined {
+    const row = this.connection
+      .prepare("SELECT * FROM oauth_states WHERE state = ? ORDER BY id DESC LIMIT 1")
+      .get(state) as Record<string, unknown> | undefined;
+    return row ? this.mapOAuthState(row) : undefined;
+  }
+
+  consumeOAuthState(state: string): OAuthStateRecord | undefined {
+    const row = this.connection
+      .prepare("SELECT * FROM oauth_states WHERE state = ? AND consumed_at IS NULL ORDER BY id DESC LIMIT 1")
+      .get(state) as Record<string, unknown> | undefined;
+    if (!row) {
+      return undefined;
+    }
+
+    this.connection.prepare("UPDATE oauth_states SET consumed_at = ? WHERE id = ?").run(isoNow(), Number(row.id));
+    return this.getOAuthStateById(Number(row.id));
+  }
+
+  private getOAuthStateById(id: number): OAuthStateRecord | undefined {
+    const row = this.connection.prepare("SELECT * FROM oauth_states WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+    return row ? this.mapOAuthState(row) : undefined;
+  }
+
   private mapWebhookEvent(row: Record<string, unknown>): WebhookEventRecord {
     return {
       id: Number(row.id),
@@ -700,6 +988,46 @@ export class PatchRelayDatabase {
       signatureValid: Number(row.signature_valid) === 1,
       dedupeStatus: row.dedupe_status as WebhookEventRecord["dedupeStatus"],
       processingStatus: row.processing_status as WebhookEventRecord["processingStatus"],
+    };
+  }
+
+  private mapLinearInstallation(row: Record<string, unknown>): LinearInstallationRecord {
+    return {
+      id: Number(row.id),
+      provider: "linear",
+      ...(row.workspace_id === null ? {} : { workspaceId: String(row.workspace_id) }),
+      ...(row.workspace_name === null ? {} : { workspaceName: String(row.workspace_name) }),
+      ...(row.workspace_key === null ? {} : { workspaceKey: String(row.workspace_key) }),
+      ...(row.actor_id === null ? {} : { actorId: String(row.actor_id) }),
+      ...(row.actor_name === null ? {} : { actorName: String(row.actor_name) }),
+      accessTokenCiphertext: String(row.access_token_ciphertext),
+      ...(row.refresh_token_ciphertext === null ? {} : { refreshTokenCiphertext: String(row.refresh_token_ciphertext) }),
+      scopesJson: String(row.scopes_json),
+      ...(row.token_type === null ? {} : { tokenType: String(row.token_type) }),
+      ...(row.expires_at === null ? {} : { expiresAt: String(row.expires_at) }),
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+    };
+  }
+
+  private mapProjectInstallation(row: Record<string, unknown>): ProjectInstallationRecord {
+    return {
+      projectId: String(row.project_id),
+      installationId: Number(row.installation_id),
+      linkedAt: String(row.linked_at),
+    };
+  }
+
+  private mapOAuthState(row: Record<string, unknown>): OAuthStateRecord {
+    return {
+      id: Number(row.id),
+      provider: "linear",
+      state: String(row.state),
+      ...(row.project_id === null ? {} : { projectId: String(row.project_id) }),
+      redirectUri: String(row.redirect_uri),
+      actor: row.actor as OAuthStateRecord["actor"],
+      createdAt: String(row.created_at),
+      ...(row.consumed_at === null ? {} : { consumedAt: String(row.consumed_at) }),
     };
   }
 

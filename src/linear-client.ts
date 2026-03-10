@@ -1,5 +1,15 @@
 import type { Logger } from "pino";
-import type { LinearClient, LinearCommentUpsertResult, LinearIssueSnapshot } from "./types.js";
+import { PatchRelayDatabase } from "./db.js";
+import { refreshLinearOAuthToken } from "./linear-oauth.js";
+import { decryptSecret, encryptSecret } from "./token-crypto.js";
+import type {
+  AppConfig,
+  LinearActorProfile,
+  LinearClient,
+  LinearClientProvider,
+  LinearCommentUpsertResult,
+  LinearIssueSnapshot,
+} from "./types.js";
 
 interface GraphqlResponse<T> {
   data?: T;
@@ -13,6 +23,7 @@ export class LinearGraphqlClient implements LinearClient {
     private readonly options: {
       apiToken: string;
       graphqlUrl: string;
+      authMode?: "api-key" | "oauth-bearer";
     },
     private readonly logger: Logger,
   ) {}
@@ -306,12 +317,36 @@ export class LinearGraphqlClient implements LinearClient {
     return this.mapIssue(response.issueUpdate.issue);
   }
 
+  async getActorProfile(): Promise<LinearActorProfile> {
+    const response = await this.request<{
+      viewer?: {
+        id?: string | null;
+        name?: string | null;
+      } | null;
+    }>(
+      `
+      query PatchRelayViewer {
+        viewer {
+          id
+          name
+        }
+      }
+      `,
+      {},
+    );
+
+    return {
+      ...(response.viewer?.id ? { actorId: response.viewer.id } : {}),
+      ...(response.viewer?.name ? { actorName: response.viewer.name } : {}),
+    };
+  }
+
   private async request<T>(query: string, variables: Record<string, unknown>): Promise<T> {
     const response = await fetch(this.options.graphqlUrl, {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        authorization: this.options.apiToken,
+        authorization: this.options.authMode === "oauth-bearer" ? `Bearer ${this.options.apiToken}` : this.options.apiToken,
       },
       body: JSON.stringify({
         query,
@@ -394,4 +429,70 @@ export class LinearGraphqlClient implements LinearClient {
 
     return labelIds;
   }
+}
+
+export class DatabaseBackedLinearClientProvider implements LinearClientProvider {
+  constructor(
+    private readonly config: AppConfig,
+    private readonly db: PatchRelayDatabase,
+    private readonly logger: Logger,
+  ) {}
+
+  async forProject(projectId: string): Promise<LinearClient | undefined> {
+    const link = this.db.getProjectInstallation(projectId);
+    if (link) {
+      const installation = this.db.getLinearInstallation(link.installationId);
+      if (!installation || !this.config.linear.tokenEncryptionKey) {
+        return undefined;
+      }
+
+      let accessToken = decryptSecret(installation.accessTokenCiphertext, this.config.linear.tokenEncryptionKey);
+      const refreshToken = installation.refreshTokenCiphertext
+        ? decryptSecret(installation.refreshTokenCiphertext, this.config.linear.tokenEncryptionKey)
+        : undefined;
+
+      if (shouldRefreshToken(installation.expiresAt) && refreshToken) {
+        const refreshed = await refreshLinearOAuthToken(this.config, refreshToken);
+        accessToken = refreshed.accessToken;
+        this.db.updateLinearInstallationTokens(installation.id, {
+          accessTokenCiphertext: encryptSecret(refreshed.accessToken, this.config.linear.tokenEncryptionKey),
+          ...(refreshed.refreshToken
+            ? { refreshTokenCiphertext: encryptSecret(refreshed.refreshToken, this.config.linear.tokenEncryptionKey) }
+            : {}),
+          scopesJson: JSON.stringify(refreshed.scopes),
+          ...(refreshed.expiresAt ? { expiresAt: refreshed.expiresAt } : {}),
+        });
+      }
+
+      return new LinearGraphqlClient(
+        {
+          apiToken: accessToken,
+          graphqlUrl: this.config.linear.graphqlUrl,
+          authMode: "oauth-bearer",
+        },
+        this.logger,
+      );
+    }
+
+    if (!this.config.linear.apiToken) {
+      return undefined;
+    }
+
+    return new LinearGraphqlClient(
+      {
+        apiToken: this.config.linear.apiToken,
+        graphqlUrl: this.config.linear.graphqlUrl,
+        authMode: "api-key",
+      },
+      this.logger,
+    );
+  }
+}
+
+function shouldRefreshToken(expiresAt?: string): boolean {
+  if (!expiresAt) {
+    return false;
+  }
+
+  return Date.parse(expiresAt) <= Date.now() + 5 * 60 * 1000;
 }

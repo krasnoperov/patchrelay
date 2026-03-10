@@ -370,3 +370,86 @@ test("cli doctor reports preflight status", async () => {
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("cli connect, installations, and link-installation cover OAuth installation flows", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-installations-"));
+  try {
+    const config = {
+      ...createConfig(baseDir),
+      linear: {
+        ...createConfig(baseDir).linear,
+        oauth: {
+          clientId: "client-id",
+          clientSecret: "client-secret",
+          redirectUri: "http://127.0.0.1:8787/oauth/linear/callback",
+          scopes: ["read", "write"],
+          actor: "app" as const,
+        },
+        tokenEncryptionKey: "encryption-secret",
+      },
+    };
+    const db = new PatchRelayDatabase(config.database.path, true);
+    db.runMigrations();
+    db.upsertLinearInstallation({
+      workspaceId: "team_1",
+      workspaceName: "Workspace One",
+      workspaceKey: "WS1",
+      actorId: "actor-1",
+      actorName: "PatchRelay App",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: JSON.stringify(["read", "write"]),
+      tokenType: "Bearer",
+    });
+    const data = new CliDataAccess(config, { db });
+
+    const connectOut = createBufferStream();
+    assert.equal(
+      await runCli(["connect", "--project", "usertold"], {
+        config,
+        data,
+        stdout: connectOut.stream,
+        stderr: createBufferStream().stream,
+      }),
+      0,
+    );
+    assert.match(connectOut.read(), /http:\/\/127\.0\.0\.1:8787\/auth\/linear\/start\?projectId=usertold/);
+
+    const installationsOut = createBufferStream();
+    assert.equal(
+      await runCli(["installations"], {
+        config,
+        data,
+        stdout: installationsOut.stream,
+        stderr: createBufferStream().stream,
+      }),
+      0,
+    );
+    assert.match(installationsOut.read(), /Workspace One/);
+
+    const linkOut = createBufferStream();
+    assert.equal(
+      await runCli(["link-installation", "usertold", "1"], {
+        config,
+        data,
+        stdout: linkOut.stream,
+        stderr: createBufferStream().stream,
+      }),
+      0,
+    );
+    assert.match(linkOut.read(), /Linked usertold to installation 1/);
+
+    const unlinkOut = createBufferStream();
+    assert.equal(
+      await runCli(["link-installation", "usertold", "none"], {
+        config,
+        data,
+        stdout: unlinkOut.stream,
+        stderr: createBufferStream().stream,
+      }),
+      0,
+    );
+    assert.match(unlinkOut.read(), /Removed installation link/);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});

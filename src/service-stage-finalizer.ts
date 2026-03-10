@@ -17,14 +17,14 @@ import {
   resolveStageRunStatus,
   summarizeCurrentThread,
 } from "./stage-reporting.js";
-import type { AppConfig, CodexThreadSummary, LinearClient, StageRunRecord, TrackedIssueRecord } from "./types.js";
+import type { AppConfig, CodexThreadSummary, LinearClientProvider, StageRunRecord, TrackedIssueRecord } from "./types.js";
 
 export class ServiceStageFinalizer {
   constructor(
     private readonly config: AppConfig,
     private readonly db: PatchRelayDatabase,
     private readonly codex: CodexAppServerClient,
-    private readonly linear: LinearClient | undefined,
+    private readonly linearProvider: LinearClientProvider,
     private readonly enqueueIssue: (projectId: string, issueId: string) => void,
   ) {}
 
@@ -213,13 +213,14 @@ export class ServiceStageFinalizer {
 
     const project = this.config.projects.find((candidate) => candidate.id === stageRun.projectId);
     const activeState = project ? resolveActiveLinearState(project, stageRun.stage) : undefined;
-    if (refreshedIssue && pipeline && this.linear && project && activeState) {
+    const linear = project ? await this.linearProvider.forProject(stageRun.projectId) : undefined;
+    if (refreshedIssue && pipeline && linear && project && activeState) {
       try {
-        const linearIssue = await this.linear.getIssue(stageRun.linearIssueId);
+        const linearIssue = await linear.getIssue(stageRun.linearIssueId);
         if (linearIssue.stateName?.trim().toLowerCase() === activeState.trim().toLowerCase()) {
           const labels = resolveWorkflowLabelNames(project, "awaitingHandoff");
           if (labels.add.length > 0 || labels.remove.length > 0) {
-            await this.linear.updateIssueLabels({
+            await linear.updateIssueLabels({
               issueId: stageRun.linearIssueId,
               ...(labels.add.length > 0 ? { addNames: labels.add } : {}),
               ...(labels.remove.length > 0 ? { removeNames: labels.remove } : {}),
@@ -229,7 +230,7 @@ export class ServiceStageFinalizer {
           this.db.setPipelineStatus(pipeline.id, "paused");
 
           const finalStageRun = this.db.getStageRun(stageRun.id) ?? stageRun;
-          const result = await this.linear.upsertIssueComment({
+          const result = await linear.upsertIssueComment({
             issueId: stageRun.linearIssueId,
             ...(refreshedIssue.statusCommentId ? { commentId: refreshedIssue.statusCommentId } : {}),
             body: buildAwaitingHandoffComment({
@@ -244,7 +245,7 @@ export class ServiceStageFinalizer {
 
         const cleanup = resolveWorkflowLabelCleanup(project);
         if (cleanup.remove.length > 0) {
-          await this.linear.updateIssueLabels({
+          await linear.updateIssueLabels({
             issueId: stageRun.linearIssueId,
             removeNames: cleanup.remove,
           });

@@ -24,6 +24,9 @@ Its second job is light operator control:
 - re-trigger a stage
 - tail live activity
 - open the right workspace path
+- start a Linear OAuth installation flow
+- inspect connected Linear installations
+- link a project to an installation
 
 ## User goals
 
@@ -58,6 +61,7 @@ Initial scope:
 - raw stage events
 - worktree path and branch inspection
 - simple retry/requeue control
+- installation-aware Linear setup for local operators
 
 Out of scope for the first version:
 
@@ -118,6 +122,23 @@ Output includes:
 - whether repo, worktree, database, log, and workflow paths are usable
 - whether `git` and `codex` are executable
 - whether the operator API is exposed safely for the current bind settings
+
+### `patchrelay connect [--project <projectId>]`
+
+Create a Linear OAuth authorization URL for the current PatchRelay installation.
+
+Output includes:
+
+- the authorize URL
+- the redirect URI PatchRelay expects
+
+### `patchrelay installations`
+
+List connected Linear installations and the projects linked to them.
+
+### `patchrelay link-installation <projectId> <installationId|none>`
+
+Link a configured project to a Linear installation, or clear the link with `none`.
 
 ### `patchrelay inspect <issueKey>`
 

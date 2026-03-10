@@ -42,3 +42,44 @@ test("LinearGraphqlClient sends raw API key auth", async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test("LinearGraphqlClient sends Bearer auth for OAuth tokens", async () => {
+  const originalFetch = globalThis.fetch;
+  let seenAuthorization = "";
+
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    seenAuthorization = String((init?.headers as Record<string, string>)?.authorization ?? "");
+    return new Response(
+      JSON.stringify({
+        data: {
+          issue: {
+            id: "issue_1",
+            state: { id: "start", name: "Start" },
+            labels: { nodes: [] },
+            team: { states: { nodes: [] }, labels: { nodes: [] } },
+          },
+        },
+      }),
+      {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      },
+    );
+  }) as typeof fetch;
+
+  try {
+    const client = new LinearGraphqlClient(
+      {
+        apiToken: "oauth-token",
+        graphqlUrl: "https://linear.example/graphql",
+        authMode: "oauth-bearer",
+      },
+      pino({ enabled: false }),
+    );
+
+    await client.getIssue("issue_1");
+    assert.equal(seenAuthorization, "Bearer oauth-token");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

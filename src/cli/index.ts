@@ -9,7 +9,22 @@ import type { AppConfig, WorkflowStage } from "../types.js";
 
 type Output = Pick<NodeJS.WriteStream, "write">;
 
-const KNOWN_COMMANDS = new Set(["serve", "inspect", "live", "report", "events", "worktree", "open", "retry", "list", "doctor", "help"]);
+const KNOWN_COMMANDS = new Set([
+  "serve",
+  "inspect",
+  "live",
+  "report",
+  "events",
+  "worktree",
+  "open",
+  "retry",
+  "list",
+  "doctor",
+  "connect",
+  "installations",
+  "link-installation",
+  "help",
+]);
 
 interface ParsedArgs {
   positionals: string[];
@@ -66,6 +81,9 @@ function helpText(): string {
     "  retry <issueKey> [--stage <stage>] [--reason <text>] [--json]",
     "  list [--active] [--failed] [--project <projectId>] [--json]",
     "  doctor [--json]",
+    "  connect [--project <projectId>] [--json]",
+    "  installations [--json]",
+    "  link-installation <projectId> <installationId|none> [--json]",
     "  serve",
   ].join("\n");
 }
@@ -287,6 +305,52 @@ export async function runCli(
 
       const openCommand = buildOpenCommand(config, result.workspace.worktreePath, result.resumeThreadId);
       return await (options?.runInteractive ?? runInteractiveCommand)(openCommand.command, openCommand.args);
+    }
+
+    if (command === "connect") {
+      const result = data.connect(typeof parsed.flags.get("project") === "string" ? String(parsed.flags.get("project")) : undefined);
+      writeOutput(
+        stdout,
+        json ? formatJson(result) : `${result.projectId ? `Project: ${result.projectId}\n` : ""}Open this URL in a browser:\n${result.url}\n`,
+      );
+      return 0;
+    }
+
+    if (command === "installations") {
+      const result = data.listInstallations();
+      if (json) {
+        writeOutput(stdout, formatJson(result));
+        return 0;
+      }
+      writeOutput(
+        stdout,
+        `${(result.installations.length > 0
+          ? result.installations.map((item) => `${item.id}  ${item.workspaceName ?? item.actorName ?? "-"}  projects=${item.linkedProjects.join(",") || "-"}`)
+          : ["No installations found."]).join("\n")}\n`,
+      );
+      return 0;
+    }
+
+    if (command === "link-installation") {
+      const projectId = commandArgs[0];
+      const rawInstallationId = commandArgs[1];
+      if (!projectId || !rawInstallationId) {
+        throw new Error("link-installation requires <projectId> <installationId|none>.");
+      }
+      const installationId = rawInstallationId === "none" ? undefined : Number(rawInstallationId);
+      if (rawInstallationId !== "none" && !Number.isFinite(installationId)) {
+        throw new Error("link-installation requires <projectId> <installationId|none>.");
+      }
+      const result = data.linkInstallation(projectId, installationId);
+      writeOutput(
+        stdout,
+        json
+          ? formatJson(result)
+          : installationId === undefined
+            ? `Removed installation link for ${projectId}.\n`
+            : `Linked ${projectId} to installation ${result.installationId}.\n`,
+      );
+      return 0;
     }
 
     if (command === "retry") {

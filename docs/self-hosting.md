@@ -20,7 +20,7 @@ The common deployment shape is:
 - `codex` CLI installed and authenticated for the machine user running PatchRelay
 - access to the local repositories you want to automate
 - Linear workspace access
-- one Linear personal API key
+- either one Linear personal API key or one Linear OAuth app
 - one Linear webhook secret
 
 ## 1. Clone And Build
@@ -41,13 +41,20 @@ cp config/patchrelay.example.yaml config/patchrelay.yaml
 
 ## 3. Configure Secrets
 
-Create a Linear personal API key in `Linear -> Settings -> API -> Personal API keys`.
+Choose one of these modes:
+
+- Legacy mode: create a Linear personal API key in `Linear -> Settings -> API -> Personal API keys`.
+- OAuth mode: create a Linear OAuth app and configure its redirect URI to point at PatchRelay, for example `http://127.0.0.1:8787/oauth/linear/callback` during local setup or your public setup URL in production.
 
 Then edit `.env`:
 
 ```bash
 LINEAR_WEBHOOK_SECRET=replace-with-linear-webhook-secret
 LINEAR_API_TOKEN=replace-with-linear-api-token
+# or, for OAuth installation mode:
+# PATCHRELAY_TOKEN_ENCRYPTION_KEY=replace-with-long-random-secret
+# LINEAR_OAUTH_CLIENT_ID=replace-with-linear-oauth-client-id
+# LINEAR_OAUTH_CLIENT_SECRET=replace-with-linear-oauth-client-secret
 # PATCHRELAY_OPERATOR_TOKEN=replace-with-operator-api-token
 ```
 
@@ -69,6 +76,8 @@ Each project needs:
 The example config is intentionally verbose so you can adapt it to your own workflow without editing code.
 
 Keep `operator_api.enabled: false` unless you explicitly need the local inspection API. If you enable it on anything other than `127.0.0.1`, set `bearer_token_env` and publish it only behind additional access controls.
+
+If you enable Linear OAuth, keep the operator API on and protected so you can use the setup endpoints and installation management routes safely.
 
 ## 5. Add Repo-Local Workflow Docs
 
@@ -113,6 +122,20 @@ Health check:
 
 ```bash
 curl http://127.0.0.1:8787/health
+```
+
+For OAuth installation mode, open:
+
+```text
+http://127.0.0.1:8787/setup
+```
+
+or use:
+
+```bash
+patchrelay connect --project your-project
+patchrelay installations
+patchrelay link-installation your-project 1
 ```
 
 ## 7. Run As A Service

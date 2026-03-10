@@ -22,8 +22,17 @@ database:
 
 linear:
   webhook_secret_env: LINEAR_WEBHOOK_SECRET
-  api_token_env: LINEAR_API_TOKEN
   graphql_url: https://api.linear.app/graphql
+  api_token_env: LINEAR_API_TOKEN
+  token_encryption_key_env: PATCHRELAY_TOKEN_ENCRYPTION_KEY
+  oauth:
+    client_id_env: LINEAR_OAUTH_CLIENT_ID
+    client_secret_env: LINEAR_OAUTH_CLIENT_SECRET
+    redirect_uri: http://127.0.0.1:8787/oauth/linear/callback
+    scopes:
+      - read
+      - write
+    actor: app
 
 operator_api:
   enabled: false

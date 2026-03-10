@@ -129,6 +129,31 @@ export function redactSensitiveHeaders(headers: Record<string, string | string[]
   );
 }
 
+export function encryptSecret(plaintext: string, keyMaterial: string): string {
+  const key = crypto.createHash("sha256").update(keyMaterial).digest();
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
+  const ciphertext = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return JSON.stringify({
+    iv: iv.toString("base64"),
+    tag: tag.toString("base64"),
+    ciphertext: ciphertext.toString("base64"),
+  });
+}
+
+export function decryptSecret(payload: string, keyMaterial: string): string {
+  const parsed = JSON.parse(payload) as { iv: string; tag: string; ciphertext: string };
+  const key = crypto.createHash("sha256").update(keyMaterial).digest();
+  const decipher = crypto.createDecipheriv("aes-256-gcm", key, Buffer.from(parsed.iv, "base64"));
+  decipher.setAuthTag(Buffer.from(parsed.tag, "base64"));
+  const plaintext = Buffer.concat([
+    decipher.update(Buffer.from(parsed.ciphertext, "base64")),
+    decipher.final(),
+  ]);
+  return plaintext.toString("utf8");
+}
+
 export function extractFirstJsonObject(text: string): string | undefined {
   const start = text.indexOf("{");
   if (start === -1) {
