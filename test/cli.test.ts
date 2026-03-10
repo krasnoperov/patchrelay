@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -14,6 +14,7 @@ function createConfig(baseDir: string): AppConfig {
       bind: "127.0.0.1",
       port: 8787,
       healthPath: "/health",
+      readinessPath: "/ready",
     },
     ingress: {
       linearWebhookPath: "/webhooks/linear",
@@ -32,6 +33,9 @@ function createConfig(baseDir: string): AppConfig {
     linear: {
       webhookSecret: "",
       graphqlUrl: "https://linear.example/graphql",
+    },
+    operatorApi: {
+      enabled: false,
     },
     runner: {
       gitBin: "git",
@@ -187,6 +191,13 @@ function seedDatabase(db: PatchRelayDatabase, config: AppConfig): void {
   db.updateStageRunThread({ stageRunId: running.stageRun.id, threadId: "thread-56", turnId: "turn-56" });
 }
 
+function seedRuntimeFiles(config: AppConfig): void {
+  mkdirSync(config.projects[0].repoPath, { recursive: true });
+  for (const workflowFile of Object.values(config.projects[0].workflowFiles)) {
+    writeFileSync(workflowFile, "# workflow\n", "utf8");
+  }
+}
+
 test("cli inspect, worktree, open, events, and report render stored issue details", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-"));
   try {
@@ -295,6 +306,66 @@ test("cli list and retry cover operator control flows", async () => {
     const inspectJson = createBufferStream();
     assert.equal(await runCli(["USE-54", "--json"], { config, data, stdout: inspectJson.stream, stderr: createBufferStream().stream }), 0);
     assert.match(inspectJson.read(), /"issueKey": "USE-54"/);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("cli doctor reports deployment readiness problems", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-doctor-"));
+
+  try {
+    const config = createConfig(baseDir);
+    mkdirSync(config.projects[0].repoPath, { recursive: true });
+
+    const stdout = createBufferStream();
+    const stderr = createBufferStream();
+    const exitCode = await runCli(["doctor"], {
+      config,
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+    });
+
+    assert.equal(exitCode, 1);
+    assert.match(stdout.read(), /PatchRelay doctor/);
+    assert.match(stdout.read(), /FAIL \[project:usertold:workflow:development\]/);
+    assert.equal(stderr.read(), "");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("cli doctor reports preflight status", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-doctor-"));
+  try {
+    const config = {
+      ...createConfig(baseDir),
+      linear: {
+        ...createConfig(baseDir).linear,
+        webhookSecret: "secret",
+      },
+      runner: {
+        ...createConfig(baseDir).runner,
+        gitBin: "true",
+        codex: {
+          ...createConfig(baseDir).runner.codex,
+          bin: "true",
+        },
+      },
+    };
+    seedRuntimeFiles(config);
+
+    const stdout = createBufferStream();
+    const stderr = createBufferStream();
+    const exitCode = await runCli(["doctor"], { config, stdout: stdout.stream, stderr: stderr.stream });
+
+    assert.equal(exitCode, 0);
+    assert.match(stdout.read(), /WARN \[linear\] LINEAR_API_TOKEN is missing/);
+    assert.match(stdout.read(), /PASS \[linear\] Linear webhook secret is configured/);
+
+    const jsonOut = createBufferStream();
+    assert.equal(await runCli(["doctor", "--json"], { config, stdout: jsonOut.stream, stderr: stderr.stream }), 0);
+    assert.match(jsonOut.read(), /"ok": true/);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

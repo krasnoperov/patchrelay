@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import { loadConfig } from "../config.js";
+import { runPreflight } from "../preflight.js";
 import { CliDataAccess } from "./data.js";
 import { formatJson } from "./formatters/json.js";
 import { formatEvents, formatInspect, formatList, formatLive, formatOpen, formatReport, formatRetry, formatWorktree } from "./formatters/text.js";
@@ -8,7 +9,7 @@ import type { AppConfig, WorkflowStage } from "../types.js";
 
 type Output = Pick<NodeJS.WriteStream, "write">;
 
-const KNOWN_COMMANDS = new Set(["serve", "inspect", "live", "report", "events", "worktree", "open", "retry", "list", "help"]);
+const KNOWN_COMMANDS = new Set(["serve", "inspect", "live", "report", "events", "worktree", "open", "retry", "list", "doctor", "help"]);
 
 interface ParsedArgs {
   positionals: string[];
@@ -64,6 +65,7 @@ function helpText(): string {
     "  open <issueKey> [--print] [--json]",
     "  retry <issueKey> [--stage <stage>] [--reason <text>] [--json]",
     "  list [--active] [--failed] [--project <projectId>] [--json]",
+    "  doctor [--json]",
     "  serve",
   ].join("\n");
 }
@@ -80,6 +82,19 @@ function getStageFlag(value: string | boolean | undefined): WorkflowStage | unde
 
 function writeOutput(stream: Output, text: string): void {
   stream.write(text);
+}
+
+function formatDoctor(report: Awaited<ReturnType<typeof runPreflight>>): string {
+  const lines = ["PatchRelay doctor", ""];
+
+  for (const check of report.checks) {
+    const marker = check.status === "pass" ? "PASS" : check.status === "warn" ? "WARN" : "FAIL";
+    lines.push(`${marker} [${check.scope}] ${check.message}`);
+  }
+
+  lines.push("");
+  lines.push(report.ok ? "Doctor result: ready" : "Doctor result: not ready");
+  return `${lines.join("\n")}\n`;
 }
 
 function buildOpenCommand(config: AppConfig, worktreePath: string, resumeThreadId?: string): { command: string; args: string[] } {
@@ -142,10 +157,18 @@ export async function runCli(
   }
 
   const config = options?.config ?? loadConfig(undefined, { requireLinearSecret: false });
-  const data = options?.data ?? new CliDataAccess(config);
+  let data = options?.data;
   const json = parsed.flags.get("json") === true;
 
   try {
+    if (command === "doctor") {
+      const report = await runPreflight(config);
+      writeOutput(stdout, json ? formatJson(report) : formatDoctor(report));
+      return report.ok ? 0 : 1;
+    }
+
+    data ??= new CliDataAccess(config);
+
     if (command === "inspect") {
       const issueKey = commandArgs[0];
       if (!issueKey) {
@@ -302,7 +325,7 @@ export async function runCli(
     writeOutput(stderr, `${error instanceof Error ? error.message : String(error)}\n`);
     return 1;
   } finally {
-    if (!options?.data) {
+    if (data && !options?.data) {
       data.close();
     }
   }

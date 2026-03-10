@@ -45,6 +45,7 @@ const configSchema = z.object({
     bind: z.string().default("127.0.0.1"),
     port: z.number().int().positive().default(8787),
     health_path: z.string().default("/health"),
+    readiness_path: z.string().default("/ready"),
   }),
   ingress: z.object({
     linear_webhook_path: z.string().default("/webhooks/linear"),
@@ -66,6 +67,14 @@ const configSchema = z.object({
     api_token_env: z.string().default("LINEAR_API_TOKEN"),
     graphql_url: z.string().url().default("https://api.linear.app/graphql"),
   }),
+  operator_api: z
+    .object({
+      enabled: z.boolean().default(false),
+      bearer_token_env: z.string().optional(),
+    })
+    .default({
+      enabled: false,
+    }),
   runner: z
     .object({
       git_bin: z.string().default("git"),
@@ -135,6 +144,9 @@ export function loadConfig(
   const requireLinearSecret = options?.requireLinearSecret ?? true;
   const webhookSecret = process.env[parsed.linear.webhook_secret_env];
   const apiToken = process.env[parsed.linear.api_token_env];
+  const operatorApiToken = parsed.operator_api.bearer_token_env
+    ? process.env[parsed.operator_api.bearer_token_env]
+    : undefined;
   if (requireLinearSecret && !webhookSecret) {
     throw new Error(`Missing env var ${parsed.linear.webhook_secret_env}`);
   }
@@ -142,11 +154,12 @@ export function loadConfig(
   const logFilePath = process.env.PATCHRELAY_LOG_FILE ?? parsed.logging.file_path;
   const webhookArchiveDir = process.env.PATCHRELAY_WEBHOOK_ARCHIVE_DIR ?? parsed.logging.webhook_archive_dir;
 
-  return {
+  const config: AppConfig = {
     server: {
       bind: parsed.server.bind,
       port: parsed.server.port,
       healthPath: parsed.server.health_path,
+      readinessPath: parsed.server.readiness_path,
     },
     ingress: {
       linearWebhookPath: parsed.ingress.linear_webhook_path,
@@ -167,6 +180,10 @@ export function loadConfig(
       webhookSecret: webhookSecret ?? "",
       ...(apiToken ? { apiToken } : {}),
       graphqlUrl: parsed.linear.graphql_url,
+    },
+    operatorApi: {
+      enabled: parsed.operator_api.enabled,
+      ...(operatorApiToken ? { bearerToken: operatorApiToken } : {}),
     },
     runner: {
       gitBin: parsed.runner.git_bin,
@@ -224,4 +241,40 @@ export function loadConfig(
       branchPrefix: project.branch_prefix,
     })),
   };
+
+  validateConfigSemantics(config);
+  return config;
+}
+
+function validateConfigSemantics(config: AppConfig): void {
+  const projectIds = new Set<string>();
+  const issuePrefixes = new Map<string, string>();
+  const linearTeamIds = new Map<string, string>();
+
+  for (const project of config.projects) {
+    if (projectIds.has(project.id)) {
+      throw new Error(`Duplicate project id: ${project.id}`);
+    }
+    projectIds.add(project.id);
+
+    for (const prefix of project.issueKeyPrefixes) {
+      const owner = issuePrefixes.get(prefix);
+      if (owner && owner !== project.id) {
+        throw new Error(`Issue key prefix "${prefix}" is configured for both ${owner} and ${project.id}`);
+      }
+      issuePrefixes.set(prefix, project.id);
+    }
+
+    for (const teamId of project.linearTeamIds) {
+      const owner = linearTeamIds.get(teamId);
+      if (owner && owner !== project.id) {
+        throw new Error(`Linear team id "${teamId}" is configured for both ${owner} and ${project.id}`);
+      }
+      linearTeamIds.set(teamId, project.id);
+    }
+  }
+
+  if (config.operatorApi.enabled && config.server.bind !== "127.0.0.1" && !config.operatorApi.bearerToken) {
+    throw new Error("operator_api.enabled requires operator_api.bearer_token_env when server.bind is not 127.0.0.1");
+  }
 }

@@ -35,9 +35,10 @@ PatchRelay is meant to be published behind a reverse proxy with only these route
 
 - `GET /`
 - `GET /health`
+- `GET /ready`
 - `POST /webhooks/linear`
 
-Internal inspection endpoints exist for local operator use, but should not be published to the internet.
+Internal inspection endpoints are disabled by default. If you enable the optional operator API, keep it local or protect it with a bearer token.
 
 ## Quick Start
 
@@ -73,7 +74,14 @@ cp config/patchrelay.example.yaml config/patchrelay.yaml
 npm run start
 ```
 
-6. Put it behind Caddy, nginx, or another reverse proxy that exposes only `/`, `/health`, and `POST /webhooks/linear`.
+Before putting it in service, run:
+
+```bash
+npm run build
+node dist/index.js doctor
+```
+
+6. Put it behind Caddy, nginx, or another reverse proxy that exposes only `/`, `/health`, `/ready`, and `POST /webhooks/linear`.
 
 For a fuller install walkthrough, see [docs/self-hosting.md](docs/self-hosting.md).
 
@@ -106,7 +114,8 @@ The requirement docs for those files live in:
 ## Security Notes
 
 - Keep PatchRelay bound to `127.0.0.1` unless you have a strong reason not to.
-- Publish only `/`, `/health`, and `POST /webhooks/linear`.
+- Publish only `/`, `/health`, `/ready`, and `POST /webhooks/linear`.
+- Leave the operator API disabled unless you need it. If you enable it on a non-local bind, require a bearer token.
 - Give the Linear API token only the access needed to update issues and comments in the target workspace.
 - Treat repo-local workflow docs as code execution policy, because PatchRelay passes them directly into agent turns.
 

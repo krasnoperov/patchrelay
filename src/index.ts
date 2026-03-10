@@ -9,6 +9,7 @@ import { PatchRelayDatabase } from "./db.js";
 import { buildHttpServer } from "./http.js";
 import { LinearGraphqlClient } from "./linear-client.js";
 import { createLogger } from "./logging.js";
+import { runPreflight } from "./preflight.js";
 import { PatchRelayService } from "./service.js";
 import { ensureDir } from "./utils.js";
 
@@ -24,6 +25,17 @@ async function main(): Promise<void> {
   await ensureDir(dirname(config.logging.filePath));
   if (config.logging.webhookArchiveDir) {
     await ensureDir(config.logging.webhookArchiveDir);
+  }
+  for (const project of config.projects) {
+    await ensureDir(project.worktreeRoot);
+  }
+
+  const preflight = await runPreflight(config);
+  const failedChecks = preflight.checks.filter((check) => check.status === "fail");
+  if (failedChecks.length > 0) {
+    throw new Error(
+      ["PatchRelay startup preflight failed:", ...failedChecks.map((check) => `- [${check.scope}] ${check.message}`)].join("\n"),
+    );
   }
 
   const logger = createLogger(config);

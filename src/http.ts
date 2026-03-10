@@ -160,6 +160,17 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
     builtAt: buildInfo.builtAt,
   }));
 
+  app.get(config.server.readinessPath, async (_request, reply) => {
+    const readiness = service.getReadiness();
+    return reply.code(readiness.ready ? 200 : 503).send({
+      ok: readiness.ready,
+      ...readiness,
+      service: buildInfo.service,
+      version: buildInfo.version,
+      commit: buildInfo.commit,
+    });
+  });
+
   app.post(
     config.ingress.linearWebhookPath,
     {
@@ -187,41 +198,52 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
     },
   );
 
-  app.get("/api/issues/:issueKey", async (request, reply) => {
-    const issueKey = (request.params as { issueKey: string }).issueKey;
-    const result = await service.getIssueOverview(issueKey);
-    if (!result) {
-      return reply.code(404).send({ ok: false, reason: "issue_not_found" });
-    }
-    return reply.send({ ok: true, ...result });
-  });
+  if (config.operatorApi.enabled) {
+    app.addHook("onRequest", async (request, reply) => {
+      if (!request.url.startsWith("/api/")) {
+        return;
+      }
+      if (!isAuthorizedOperatorRequest(request, config)) {
+        return reply.code(401).send({ ok: false, reason: "operator_auth_required" });
+      }
+    });
 
-  app.get("/api/issues/:issueKey/report", async (request, reply) => {
-    const issueKey = (request.params as { issueKey: string }).issueKey;
-    const result = await service.getIssueReport(issueKey);
-    if (!result) {
-      return reply.code(404).send({ ok: false, reason: "issue_not_found" });
-    }
-    return reply.send({ ok: true, ...result });
-  });
+    app.get("/api/issues/:issueKey", async (request, reply) => {
+      const issueKey = (request.params as { issueKey: string }).issueKey;
+      const result = await service.getIssueOverview(issueKey);
+      if (!result) {
+        return reply.code(404).send({ ok: false, reason: "issue_not_found" });
+      }
+      return reply.send({ ok: true, ...result });
+    });
 
-  app.get("/api/issues/:issueKey/live", async (request, reply) => {
-    const issueKey = (request.params as { issueKey: string }).issueKey;
-    const result = await service.getActiveStageStatus(issueKey);
-    if (!result) {
-      return reply.code(404).send({ ok: false, reason: "active_stage_not_found" });
-    }
-    return reply.send({ ok: true, ...result });
-  });
+    app.get("/api/issues/:issueKey/report", async (request, reply) => {
+      const issueKey = (request.params as { issueKey: string }).issueKey;
+      const result = await service.getIssueReport(issueKey);
+      if (!result) {
+        return reply.code(404).send({ ok: false, reason: "issue_not_found" });
+      }
+      return reply.send({ ok: true, ...result });
+    });
 
-  app.get("/api/issues/:issueKey/stages/:stageRunId/events", async (request, reply) => {
-    const { issueKey, stageRunId } = request.params as { issueKey: string; stageRunId: string };
-    const result = await service.getStageEvents(issueKey, Number(stageRunId));
-    if (!result) {
-      return reply.code(404).send({ ok: false, reason: "stage_run_not_found" });
-    }
-    return reply.send({ ok: true, ...result });
-  });
+    app.get("/api/issues/:issueKey/live", async (request, reply) => {
+      const issueKey = (request.params as { issueKey: string }).issueKey;
+      const result = await service.getActiveStageStatus(issueKey);
+      if (!result) {
+        return reply.code(404).send({ ok: false, reason: "active_stage_not_found" });
+      }
+      return reply.send({ ok: true, ...result });
+    });
+
+    app.get("/api/issues/:issueKey/stages/:stageRunId/events", async (request, reply) => {
+      const { issueKey, stageRunId } = request.params as { issueKey: string; stageRunId: string };
+      const result = await service.getStageEvents(issueKey, Number(stageRunId));
+      if (!result) {
+        return reply.code(404).send({ ok: false, reason: "stage_run_not_found" });
+      }
+      return reply.send({ ok: true, ...result });
+    });
+  }
 
   app.addHook("onResponse", async (request, reply) => {
     if (reply.statusCode < 500) {
@@ -246,4 +268,13 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
 function getHeader(request: FastifyRequest, name: string): string | undefined {
   const value = request.headers[name];
   return typeof value === "string" ? value : undefined;
+}
+
+function isAuthorizedOperatorRequest(request: FastifyRequest, config: AppConfig): boolean {
+  if (!config.operatorApi.bearerToken) {
+    return true;
+  }
+
+  const auth = getHeader(request, "authorization");
+  return auth === `Bearer ${config.operatorApi.bearerToken}`;
 }

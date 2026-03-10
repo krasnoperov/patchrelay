@@ -79,6 +79,10 @@ export class CodexAppServerClient extends EventEmitter {
     super();
   }
 
+  isStarted(): boolean {
+    return this.started;
+  }
+
   async start(): Promise<void> {
     if (this.started) {
       return;

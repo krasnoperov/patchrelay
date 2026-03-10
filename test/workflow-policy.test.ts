@@ -10,6 +10,7 @@ function createConfig(): AppConfig {
       bind: "127.0.0.1",
       port: 8787,
       healthPath: "/health",
+      readinessPath: "/ready",
     },
     ingress: {
       linearWebhookPath: "/webhooks/linear",
@@ -28,6 +29,9 @@ function createConfig(): AppConfig {
     linear: {
       webhookSecret: "secret",
       graphqlUrl: "https://linear.example/graphql",
+    },
+    operatorApi: {
+      enabled: false,
     },
     runner: {
       gitBin: "git",

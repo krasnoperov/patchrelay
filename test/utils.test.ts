@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import test from "node:test";
 import {
+  redactSensitiveHeaders,
   ensureAbsolutePath,
   execCommand,
   extractFirstJsonObject,
@@ -25,6 +26,18 @@ test("utils cover path, template, and json helpers", () => {
   assert.equal(extractFirstJsonObject("prefix {\"a\":{\"b\":1}} suffix"), "{\"a\":{\"b\":1}}");
   assert.equal(extractFirstJsonObject("text without object"), undefined);
   assert.equal(extractFirstJsonObject("say {\"quoted\":\"}\\\" still inside\"} done"), "{\"quoted\":\"}\\\" still inside\"}");
+  assert.deepEqual(
+    redactSensitiveHeaders({
+      authorization: "Bearer secret",
+      "linear-signature": "abc",
+      "content-type": "application/json",
+    }),
+    {
+      authorization: "[redacted]",
+      "linear-signature": "[redacted]",
+      "content-type": "application/json",
+    },
+  );
 });
 
 test("utils cover timestamp skew and hmac validation", () => {

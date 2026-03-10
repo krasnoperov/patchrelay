@@ -7,6 +7,17 @@ export function createLogger(config: AppConfig): Logger {
   const options: LoggerOptions = {
     level: config.logging.level,
     base: null,
+    redact: {
+      paths: [
+        "headers.authorization",
+        "headers.cookie",
+        "headers.set-cookie",
+        "req.headers.authorization",
+        "req.headers.cookie",
+        "req.headers.set-cookie",
+      ],
+      censor: "[redacted]",
+    },
     transport: {
       targets: [
         {

@@ -4,6 +4,8 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import type { StdioOptions } from "node:child_process";
 
+const REDACTED_HEADER_NAMES = new Set(["authorization", "cookie", "set-cookie", "linear-signature"]);
+
 export function ensureAbsolutePath(inputPath: string): string {
   return path.isAbsolute(inputPath) ? inputPath : path.resolve(process.cwd(), inputPath);
 }
@@ -119,6 +121,12 @@ export function safeJsonParse<T>(value: string): T | undefined {
   } catch {
     return undefined;
   }
+}
+
+export function redactSensitiveHeaders(headers: Record<string, string | string[] | undefined>): Record<string, string | string[] | undefined> {
+  return Object.fromEntries(
+    Object.entries(headers).map(([name, value]) => [name, REDACTED_HEADER_NAMES.has(name.toLowerCase()) ? "[redacted]" : value]),
+  );
 }
 
 export function extractFirstJsonObject(text: string): string | undefined {

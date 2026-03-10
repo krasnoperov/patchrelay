@@ -2,6 +2,7 @@
   "name": "patchrelay",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "bin": {
     "patchrelay": "dist/index.js"
@@ -14,9 +15,11 @@
     "dev": "tsx watch src/index.ts",
     "build": "rm -rf dist && tsc -p tsconfig.json && chmod +x dist/index.js && node scripts/write-build-info.mjs",
     "start": "node dist/index.js serve",
+    "doctor": "node dist/index.js doctor",
     "restart": "sudo systemctl restart patchrelay",
     "check": "tsc -p tsconfig.json --noEmit",
-    "test": "node --import tsx --test test/**/*.test.ts"
+    "test": "node --import tsx --test test/**/*.test.ts",
+    "ci": "npm run check && npm test && npm run build"
   },
   "dependencies": {
     "better-sqlite3": "^12.1.1",

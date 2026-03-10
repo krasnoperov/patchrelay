@@ -33,6 +33,8 @@ export class PatchRelayService {
   readonly issueQueue: SerialWorkQueue<IssueQueueItem>;
   private readonly stageRunner: ServiceStageRunner;
   private readonly stageFinalizer: ServiceStageFinalizer;
+  private ready = false;
+  private startupError: string | undefined;
 
   constructor(
     readonly config: AppConfig,
@@ -53,15 +55,32 @@ export class PatchRelayService {
   }
 
   async start(): Promise<void> {
-    await this.codex.start();
-    await this.stageFinalizer.reconcileActiveStageRuns();
-    for (const issue of this.db.listIssuesReadyForExecution()) {
-      this.enqueueIssue(issue.projectId, issue.linearIssueId);
+    try {
+      await this.codex.start();
+      await this.stageFinalizer.reconcileActiveStageRuns();
+      for (const issue of this.db.listIssuesReadyForExecution()) {
+        this.enqueueIssue(issue.projectId, issue.linearIssueId);
+      }
+      this.ready = true;
+      this.startupError = undefined;
+    } catch (error) {
+      this.ready = false;
+      this.startupError = error instanceof Error ? error.message : String(error);
+      throw error;
     }
   }
 
   stop(): void {
+    this.ready = false;
     void this.codex.stop();
+  }
+
+  getReadiness() {
+    return {
+      ready: this.ready && this.codex.isStarted(),
+      codexStarted: this.codex.isStarted(),
+      ...(this.startupError ? { startupError: this.startupError } : {}),
+    };
   }
 
   async acceptWebhook(params: {

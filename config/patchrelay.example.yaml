@@ -2,6 +2,7 @@ server:
   bind: 127.0.0.1
   port: 8787
   health_path: /health
+  readiness_path: /ready
 
 ingress:
   linear_webhook_path: /webhooks/linear
@@ -12,7 +13,8 @@ logging:
   level: info
   format: logfmt
   file_path: /var/log/patchrelay/patchrelay.log
-  webhook_archive_dir: /var/log/patchrelay/webhooks
+  # Optional. Enable only if you want raw webhook archives on disk.
+  # webhook_archive_dir: /var/log/patchrelay/webhooks
 
 database:
   path: ${PATCHRELAY_DB_PATH:-/var/lib/patchrelay/patchrelay.sqlite}
@@ -22,6 +24,11 @@ linear:
   webhook_secret_env: LINEAR_WEBHOOK_SECRET
   api_token_env: LINEAR_API_TOKEN
   graphql_url: https://api.linear.app/graphql
+
+operator_api:
+  enabled: false
+  # If enabled on anything other than 127.0.0.1, require a bearer token env.
+  # bearer_token_env: PATCHRELAY_OPERATOR_TOKEN
 
 runner:
   git_bin: git

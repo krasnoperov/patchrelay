@@ -74,6 +74,12 @@ Primary entrypoint:
 patchrelay <command> [args] [flags]
 ```
 
+Preflight:
+
+```bash
+patchrelay doctor
+```
+
 Default behavior:
 
 ```bash
@@ -101,6 +107,17 @@ Primary keys exposed to users:
 Internal ids such as pipeline ids and thread ids may be displayed, but users should not need them for common tasks.
 
 ## Command set
+
+### `patchrelay doctor`
+
+Run deployment preflight checks for the current config and environment.
+
+Output includes:
+
+- whether required secrets are present
+- whether repo, worktree, database, log, and workflow paths are usable
+- whether `git` and `codex` are executable
+- whether the operator API is exposed safely for the current bind settings
 
 ### `patchrelay inspect <issueKey>`
 

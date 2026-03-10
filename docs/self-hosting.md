@@ -8,7 +8,7 @@ The common deployment shape is:
 
 1. PatchRelay runs locally and listens on `127.0.0.1:8787`
 2. Caddy or another reverse proxy terminates TLS
-3. only `/`, `/health`, and `POST /webhooks/linear` are published
+3. only `/`, `/health`, `/ready`, and `POST /webhooks/linear` are published
 4. PatchRelay reads and writes local git repos and worktrees directly
 5. Codex runs through `codex app-server` on the same machine
 
@@ -48,6 +48,7 @@ Then edit `.env`:
 ```bash
 LINEAR_WEBHOOK_SECRET=replace-with-linear-webhook-secret
 LINEAR_API_TOKEN=replace-with-linear-api-token
+# PATCHRELAY_OPERATOR_TOKEN=replace-with-operator-api-token
 ```
 
 Optional overrides such as `PATCHRELAY_CONFIG`, `PATCHRELAY_DB_PATH`, and `PATCHRELAY_LOG_FILE` can also live there.
@@ -66,6 +67,8 @@ Each project needs:
 - a branch prefix
 
 The example config is intentionally verbose so you can adapt it to your own workflow without editing code.
+
+Keep `operator_api.enabled: false` unless you explicitly need the local inspection API. If you enable it on anything other than `127.0.0.1`, set `bearer_token_env` and publish it only behind additional access controls.
 
 ## 5. Add Repo-Local Workflow Docs
 
@@ -91,6 +94,13 @@ For a manual start:
 
 ```bash
 npm run start
+```
+
+Before enabling the service, run the built-in preflight:
+
+```bash
+npm run build
+node dist/index.js doctor
 ```
 
 For development:
@@ -122,6 +132,7 @@ Keep the published surface minimal:
 
 - `GET /`
 - `GET /health`
+- `GET /ready`
 - `POST /webhooks/linear`
 
 Everything else should return `404`.
@@ -158,11 +169,12 @@ PatchRelay only manages explicitly configured labels and ignores missing labels 
 ## Recommended Production Defaults
 
 - bind PatchRelay to `127.0.0.1`
-- expose only `/`, `/health`, and `POST /webhooks/linear`
+- expose only `/`, `/health`, `/ready`, and `POST /webhooks/linear`
 - run under a dedicated Unix user
 - keep worktrees outside the application checkout
 - keep the database on local disk
-- store logs and archived webhooks in dedicated directories
+- store logs in dedicated directories
+- enable webhook archival only if you actually need raw payload retention
 
 ## Troubleshooting
 
@@ -173,6 +185,7 @@ If PatchRelay starts but does not process issue transitions:
 - check that the relevant trigger event is enabled
 - check that the configured workflow status names exactly match your Linear workflow
 - check that `codex app-server` can start for the service user
+- run `node dist/index.js doctor` and clear any failing preflight checks
 
 If PatchRelay can read webhooks but cannot write back to Linear:
 

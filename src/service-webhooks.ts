@@ -3,7 +3,7 @@ import { PatchRelayDatabase } from "./db.js";
 import type { AppConfig, LinearWebhookPayload, NormalizedEvent } from "./types.js";
 import { archiveWebhook } from "./webhook-archive.js";
 import { normalizeWebhook } from "./webhooks.js";
-import { timestampMsWithinSkew, verifyHmacSha256Hex } from "./utils.js";
+import { redactSensitiveHeaders, timestampMsWithinSkew, verifyHmacSha256Hex } from "./utils.js";
 
 export interface AcceptedWebhook {
   id: number;
@@ -62,7 +62,8 @@ export async function acceptIncomingWebhook(params: {
   });
 
   const signature = typeof params.headers["linear-signature"] === "string" ? params.headers["linear-signature"] : "";
-  const headersJson = JSON.stringify(params.headers);
+  const sanitizedHeaders = redactSensitiveHeaders(params.headers);
+  const headersJson = JSON.stringify(sanitizedHeaders);
   const payloadJson = JSON.stringify(payload);
 
   if (!verifyHmacSha256Hex(params.rawBody, params.config.linear.webhookSecret, signature)) {
@@ -164,7 +165,7 @@ async function archiveAcceptedPayload(params: {
       archiveDir: params.config.logging.webhookArchiveDir,
       webhookId: params.webhookId,
       receivedAt: params.receivedAt,
-      headers: params.headers,
+      headers: redactSensitiveHeaders(params.headers),
       rawBody: params.rawBody,
       payload: params.payload,
     });

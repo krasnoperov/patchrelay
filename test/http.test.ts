@@ -13,6 +13,7 @@ function createConfig(baseDir: string): AppConfig {
       bind: "127.0.0.1",
       port: 8787,
       healthPath: "/health",
+      readinessPath: "/ready",
     },
     ingress: {
       linearWebhookPath: "/webhooks/linear",
@@ -31,6 +32,9 @@ function createConfig(baseDir: string): AppConfig {
     linear: {
       webhookSecret: "secret",
       graphqlUrl: "https://linear.example/graphql",
+    },
+    operatorApi: {
+      enabled: false,
     },
     runner: {
       gitBin: "git",
@@ -102,6 +106,7 @@ test("health endpoint includes build version metadata from the built artifact", 
       config,
       {
         acceptWebhook: async () => ({ status: 200, body: { ok: true } }),
+        getReadiness: () => ({ ready: true, codexStarted: true }),
         getIssueOverview: async () => undefined,
         getIssueReport: async () => undefined,
       } as never,
@@ -122,6 +127,20 @@ test("health endpoint includes build version metadata from the built artifact", 
       builtAt: "2026-03-09T08:55:00.000Z",
     });
 
+    const readiness = await app.inject({
+      method: "GET",
+      url: config.server.readinessPath,
+    });
+    assert.equal(readiness.statusCode, 200);
+    assert.deepEqual(readiness.json(), {
+      ok: true,
+      ready: true,
+      codexStarted: true,
+      service: "patchrelay",
+      version: "0.1.0-test",
+      commit: "abc123def456",
+    });
+
     const home = await app.inject({
       method: "GET",
       url: "/",
@@ -140,7 +159,13 @@ test("http routes handle webhook validation and issue/report/live/events lookups
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-http-routes-"));
 
   try {
-    const config = createConfig(baseDir);
+    const config = {
+      ...createConfig(baseDir),
+      operatorApi: {
+        enabled: true,
+        bearerToken: "operator-token",
+      },
+    };
     const app = await buildHttpServer(
       config,
       {
@@ -148,6 +173,7 @@ test("http routes handle webhook validation and issue/report/live/events lookups
           status: 202,
           body: { ok: true, webhookId },
         }),
+        getReadiness: () => ({ ready: false, codexStarted: false, startupError: "codex offline" }),
         getIssueOverview: async (issueKey: string) =>
           issueKey === "USE-42"
             ? {
@@ -182,6 +208,19 @@ test("http routes handle webhook validation and issue/report/live/events lookups
       pino({ enabled: false }),
     );
 
+    const readiness = await app.inject({
+      method: "GET",
+      url: config.server.readinessPath,
+    });
+    assert.equal(readiness.statusCode, 503);
+    assert.equal(readiness.json().ok, false);
+    assert.equal(readiness.json().ready, false);
+    assert.equal(readiness.json().codexStarted, false);
+    assert.equal(readiness.json().startupError, "codex offline");
+    assert.equal(readiness.json().service, "patchrelay");
+    assert.equal(typeof readiness.json().version, "string");
+    assert.equal(typeof readiness.json().commit, "string");
+
     const missingHeader = await app.inject({
       method: "POST",
       url: config.ingress.linearWebhookPath,
@@ -202,9 +241,19 @@ test("http routes handle webhook validation and issue/report/live/events lookups
     assert.equal(acceptedWebhook.statusCode, 202);
     assert.deepEqual(acceptedWebhook.json(), { ok: true, webhookId: "delivery-1" });
 
+    const unauthorizedOverview = await app.inject({
+      method: "GET",
+      url: "/api/issues/USE-42",
+    });
+    assert.equal(unauthorizedOverview.statusCode, 401);
+    assert.deepEqual(unauthorizedOverview.json(), { ok: false, reason: "operator_auth_required" });
+
     const overview = await app.inject({
       method: "GET",
       url: "/api/issues/USE-42",
+      headers: {
+        authorization: "Bearer operator-token",
+      },
     });
     assert.equal(overview.statusCode, 200);
     assert.deepEqual(overview.json(), {
@@ -216,6 +265,9 @@ test("http routes handle webhook validation and issue/report/live/events lookups
     const missingOverview = await app.inject({
       method: "GET",
       url: "/api/issues/USE-404",
+      headers: {
+        authorization: "Bearer operator-token",
+      },
     });
     assert.equal(missingOverview.statusCode, 404);
     assert.deepEqual(missingOverview.json(), { ok: false, reason: "issue_not_found" });
@@ -223,6 +275,9 @@ test("http routes handle webhook validation and issue/report/live/events lookups
     const report = await app.inject({
       method: "GET",
       url: "/api/issues/USE-42/report",
+      headers: {
+        authorization: "Bearer operator-token",
+      },
     });
     assert.equal(report.statusCode, 200);
     assert.deepEqual(report.json(), {
@@ -234,6 +289,9 @@ test("http routes handle webhook validation and issue/report/live/events lookups
     const live = await app.inject({
       method: "GET",
       url: "/api/issues/USE-42/live",
+      headers: {
+        authorization: "Bearer operator-token",
+      },
     });
     assert.equal(live.statusCode, 200);
     assert.deepEqual(live.json(), {
@@ -246,6 +304,9 @@ test("http routes handle webhook validation and issue/report/live/events lookups
     const missingLive = await app.inject({
       method: "GET",
       url: "/api/issues/USE-404/live",
+      headers: {
+        authorization: "Bearer operator-token",
+      },
     });
     assert.equal(missingLive.statusCode, 404);
     assert.deepEqual(missingLive.json(), { ok: false, reason: "active_stage_not_found" });
@@ -253,6 +314,9 @@ test("http routes handle webhook validation and issue/report/live/events lookups
     const events = await app.inject({
       method: "GET",
       url: "/api/issues/USE-42/stages/8/events",
+      headers: {
+        authorization: "Bearer operator-token",
+      },
     });
     assert.equal(events.statusCode, 200);
     assert.deepEqual(events.json(), {
@@ -265,9 +329,38 @@ test("http routes handle webhook validation and issue/report/live/events lookups
     const missingEvents = await app.inject({
       method: "GET",
       url: "/api/issues/USE-42/stages/999/events",
+      headers: {
+        authorization: "Bearer operator-token",
+      },
     });
     assert.equal(missingEvents.statusCode, 404);
     assert.deepEqual(missingEvents.json(), { ok: false, reason: "stage_run_not_found" });
+
+    await app.close();
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("internal operator routes stay disabled by default", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-http-disabled-"));
+
+  try {
+    const config = createConfig(baseDir);
+    const app = await buildHttpServer(
+      config,
+      {
+        acceptWebhook: async () => ({ status: 200, body: { ok: true } }),
+        getReadiness: () => ({ ready: true, codexStarted: true }),
+      } as never,
+      pino({ enabled: false }),
+    );
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/issues/USE-42",
+    });
+    assert.equal(response.statusCode, 404);
 
     await app.close();
   } finally {

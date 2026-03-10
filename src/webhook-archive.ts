@@ -1,6 +1,8 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+const REDACTED_HEADERS = new Set(["authorization", "cookie", "set-cookie", "linear-signature"]);
+
 function sanitizePathSegment(value: string): string {
   return value.replace(/[^a-zA-Z0-9._-]+/g, "-");
 }
@@ -25,7 +27,7 @@ export async function archiveWebhook(params: {
       {
         webhookId: params.webhookId,
         receivedAt: params.receivedAt,
-        headers: params.headers,
+        headers: redactHeaders(params.headers),
         rawBodyUtf8: params.rawBody.toString("utf8"),
         payload: params.payload,
       },
@@ -36,4 +38,10 @@ export async function archiveWebhook(params: {
   );
 
   return filePath;
+}
+
+function redactHeaders(headers: Record<string, string | string[] | undefined>): Record<string, string | string[] | undefined> {
+  return Object.fromEntries(
+    Object.entries(headers).map(([key, value]) => [key, REDACTED_HEADERS.has(key.toLowerCase()) ? "[redacted]" : value]),
+  );
 }

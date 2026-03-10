@@ -76,6 +76,7 @@ export interface AppConfig {
     bind: string;
     port: number;
     healthPath: string;
+    readinessPath: string;
   };
   ingress: {
     linearWebhookPath: string;
@@ -96,6 +97,10 @@ export interface AppConfig {
     webhookSecret: string;
     apiToken?: string;
     graphqlUrl: string;
+  };
+  operatorApi: {
+    enabled: boolean;
+    bearerToken?: string;
   };
   runner: {
     gitBin: string;
