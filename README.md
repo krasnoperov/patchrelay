@@ -1,15 +1,14 @@
 # PatchRelay
 
-Build an agentic development loop with Codex and Linear on your own machine.
+Build an agentic loop with Codex and Linear on your own machine.
 
 PatchRelay is a self-hosted webhook listener and CLI that:
 
-- listens for Linear webhooks
-- maps issues to local repos
-- creates one durable worktree per issue
-- runs staged Codex sessions through `codex app-server`
-- reports status back to Linear
-- lets you jump into the same worktree and take over with normal `codex` CLI when you want
+- basically acts as a webhook listener that creates worktrees and runs Codex, done right
+- integrates `codex app-server`, Linear, OAuth, and lifecycle monitoring
+- uses your setup: your usual tools, your usual access, and your preferred Codex approval or sandbox mode
+- can run automatically, report status back to Linear, and handle comments during active runs
+- lets you connect to the Codex session in the issue worktree with the usual `codex` CLI and take control when you want
 
 This is the "do the glue layer properly" version of running coding agents from a tracker.
 
