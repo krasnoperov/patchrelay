@@ -50,6 +50,9 @@ export async function runPreflight(config: AppConfig): Promise<PreflightReport> 
     checks.push(pass("operator_api", "Operator API is disabled"));
   }
 
+  checks.push(...checkPublicBaseUrl(config));
+  checks.push(...checkOAuthRedirectUri(config));
+
   checks.push(...checkPath("database", path.dirname(config.database.path), "directory", { createIfMissing: true, writable: true }));
   checks.push(...checkPath("logging", path.dirname(config.logging.filePath), "directory", { createIfMissing: true, writable: true }));
   if (config.logging.webhookArchiveDir) {
@@ -145,6 +148,68 @@ async function checkExecutable(scope: string, command: string): Promise<Prefligh
   } catch (error) {
     return fail(scope, `${command} is not executable: ${formatError(error)}`);
   }
+}
+
+function checkPublicBaseUrl(config: AppConfig): PreflightCheck[] {
+  const publicBaseUrl = config.server.publicBaseUrl;
+  if (!publicBaseUrl) {
+    return [
+      warn(
+        "public_url",
+        "server.public_base_url is not configured; public webhook URLs will be derived from linear.oauth.redirect_uri",
+      ),
+    ];
+  }
+
+  try {
+    const url = new URL(publicBaseUrl);
+    const checks: PreflightCheck[] = [pass("public_url", `Public base URL configured: ${url.origin}`)];
+
+    if (url.protocol !== "https:") {
+      checks.push(warn("public_url", "server.public_base_url is not HTTPS; Linear-facing ingress should usually be HTTPS"));
+    }
+
+    if (isLoopbackHost(url.hostname)) {
+      checks.push(warn("public_url", "server.public_base_url points at a loopback host and will not be reachable by Linear"));
+    }
+
+    if (url.pathname !== "/" && url.pathname !== "") {
+      checks.push(warn("public_url", "server.public_base_url path is ignored; use only scheme, host, and optional port"));
+    }
+
+    return checks;
+  } catch (error) {
+    return [fail("public_url", `Invalid server.public_base_url: ${formatError(error)}`)];
+  }
+}
+
+function checkOAuthRedirectUri(config: AppConfig): PreflightCheck[] {
+  try {
+    const url = new URL(config.linear.oauth.redirectUri);
+    const checks: PreflightCheck[] = [];
+
+    if (url.pathname !== "/oauth/linear/callback") {
+      checks.push(fail("linear_oauth", 'linear.oauth.redirect_uri must use the fixed "/oauth/linear/callback" path'));
+      return checks;
+    }
+
+    if (isLoopbackHost(url.hostname)) {
+      checks.push(pass("linear_oauth", "Linear OAuth redirect URI is configured for local callback handling"));
+    } else {
+      checks.push(pass("linear_oauth", `Linear OAuth redirect URI is configured for public callback handling at ${url.origin}`));
+      if (url.protocol !== "https:") {
+        checks.push(warn("linear_oauth", "Public Linear OAuth redirect URIs should usually use HTTPS"));
+      }
+    }
+
+    return checks;
+  } catch (error) {
+    return [fail("linear_oauth", `Invalid linear.oauth.redirect_uri: ${formatError(error)}`)];
+  }
+}
+
+function isLoopbackHost(host: string): boolean {
+  return host === "127.0.0.1" || host === "::1" || host === "localhost";
 }
 
 function formatError(error: unknown): string {

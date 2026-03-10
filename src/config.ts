@@ -61,6 +61,7 @@ const configSchema = z.object({
   server: z.object({
     bind: z.string().default("127.0.0.1"),
     port: z.number().int().positive().default(8787),
+    public_base_url: z.string().url().optional(),
     health_path: z.string().default("/health"),
     readiness_path: z.string().default("/ready"),
   }),
@@ -294,6 +295,7 @@ export function loadConfig(
     server: {
       bind: parsed.server.bind,
       port: parsed.server.port,
+      ...(parsed.server.public_base_url ? { publicBaseUrl: parsed.server.public_base_url } : {}),
       healthPath: parsed.server.health_path,
       readinessPath: parsed.server.readiness_path,
     },
@@ -388,6 +390,11 @@ export function loadConfig(
 }
 
 function validateConfigSemantics(config: AppConfig): void {
+  const redirectUri = new URL(config.linear.oauth.redirectUri);
+  if (redirectUri.pathname !== "/oauth/linear/callback") {
+    throw new Error('linear.oauth.redirect_uri must use the fixed "/oauth/linear/callback" path');
+  }
+
   const projectIds = new Set<string>();
   const issuePrefixes = new Map<string, string>();
   const linearTeamIds = new Map<string, string>();

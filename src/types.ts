@@ -81,6 +81,7 @@ export interface AppConfig {
   server: {
     bind: string;
     port: number;
+    publicBaseUrl?: string;
     healthPath: string;
     readinessPath: string;
   };

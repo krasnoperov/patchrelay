@@ -11,6 +11,7 @@ function createConfig(baseDir: string): AppConfig {
     server: {
       bind: "127.0.0.1",
       port: 8787,
+      publicBaseUrl: "https://patchrelay.example.com",
       healthPath: "/health",
       readinessPath: "/ready",
     },
@@ -101,6 +102,7 @@ test("runPreflight reports a healthy local setup", async () => {
     assert.equal(report.ok, true);
     assert.ok(report.checks.some((check) => check.scope === "git" && check.status === "pass"));
     assert.ok(report.checks.some((check) => check.scope === "codex" && check.status === "pass"));
+    assert.ok(report.checks.some((check) => check.scope === "public_url" && check.status === "pass"));
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -119,6 +121,34 @@ test("runPreflight fails when workflow files are missing", async () => {
     assert.ok(
       report.checks.some(
         (check) => check.scope === "project:usertold:workflow:development" && check.status === "fail",
+      ),
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("runPreflight warns when the public base URL is missing", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-preflight-public-url-"));
+
+  try {
+    const config = createConfig(baseDir);
+    mkdirSync(config.projects[0].repoPath, { recursive: true });
+    writeFileSync(config.projects[0].workflowFiles.development, "# dev\n", "utf8");
+    writeFileSync(config.projects[0].workflowFiles.review, "# review\n", "utf8");
+    writeFileSync(config.projects[0].workflowFiles.deploy, "# deploy\n", "utf8");
+    writeFileSync(config.projects[0].workflowFiles.cleanup, "# cleanup\n", "utf8");
+    delete config.server.publicBaseUrl;
+
+    const report = await runPreflight(config);
+
+    assert.equal(report.ok, true);
+    assert.ok(
+      report.checks.some(
+        (check) =>
+          check.scope === "public_url" &&
+          check.status === "warn" &&
+          check.message.includes("server.public_base_url is not configured"),
       ),
     );
   } finally {

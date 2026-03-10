@@ -460,7 +460,7 @@ export class CliDataAccess {
       throw new Error(`Unknown project: ${projectId}`);
     }
 
-    const baseUrl = this.getServiceBaseUrl();
+    const baseUrl = this.getPublicBaseUrl();
     const installation = (await this.listInstallations()).installations.find((entry) => entry.linkedProjects.includes(projectId))?.installation;
     return {
       projectId,
@@ -471,17 +471,38 @@ export class CliDataAccess {
     };
   }
 
-  private getServiceBaseUrl(): string {
-    const redirectUri = this.config.linear.oauth.redirectUri;
-    if (redirectUri) {
-      const url = new URL(redirectUri);
-      url.pathname = "/";
-      url.search = "";
-      url.hash = "";
-      return url.toString();
+  private getPublicBaseUrl(): string {
+    if (this.config.server.publicBaseUrl) {
+      return this.toOriginRoot(this.config.server.publicBaseUrl);
     }
 
-    return `http://${this.config.server.bind}:${this.config.server.port}/`;
+    return this.toOriginRoot(this.config.linear.oauth.redirectUri);
+  }
+
+  private getOperatorBaseUrl(): string {
+    const host = this.normalizeLocalHost(this.config.server.bind);
+    return `http://${host}:${this.config.server.port}/`;
+  }
+
+  private toOriginRoot(urlString: string): string {
+    const url = new URL(urlString);
+    url.pathname = "/";
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  }
+
+  private normalizeLocalHost(bind: string): string {
+    if (bind === "0.0.0.0") {
+      return "127.0.0.1";
+    }
+    if (bind === "::") {
+      return "[::1]";
+    }
+    if (bind.includes(":") && !bind.startsWith("[")) {
+      return `[${bind}]`;
+    }
+    return bind;
   }
 
   private async requestJson<T>(
@@ -489,7 +510,7 @@ export class CliDataAccess {
     query?: Record<string, string | undefined>,
     init?: { method?: "GET" | "POST" | "DELETE"; body?: unknown },
   ): Promise<T> {
-    const url = new URL(pathname, this.getServiceBaseUrl());
+    const url = new URL(pathname, this.getOperatorBaseUrl());
     for (const [key, value] of Object.entries(query ?? {})) {
       if (value) {
         url.searchParams.set(key, value);

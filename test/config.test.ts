@@ -58,6 +58,7 @@ test("loadConfig expands env vars, resolves paths, and honors runtime overrides"
 server:
   bind: 0.0.0.0
   port: 9999
+  public_base_url: https://patchrelay.example.com
 ingress:
   linear_webhook_path: /webhooks/linear
   max_body_bytes: 262144
@@ -121,6 +122,7 @@ ${oauthConfigYaml}
         const config = loadConfig();
         assert.equal(config.server.bind, "0.0.0.0");
         assert.equal(config.server.port, 9999);
+        assert.equal(config.server.publicBaseUrl, "https://patchrelay.example.com");
         assert.equal(config.server.readinessPath, "/ready");
         assert.equal(config.logging.filePath, path.join(baseDir, "runtime.log"));
         assert.equal(config.logging.webhookArchiveDir, path.join(baseDir, "runtime-archive"));
@@ -359,6 +361,64 @@ projects:
         assert.equal(config.projects[0]?.workflowStatuses.cleanupActive, undefined);
         assert.equal(config.projects[0]?.workflowStatuses.humanNeeded, "Escalate");
         assert.equal(config.projects[0]?.workflowStatuses.done, "Shipped");
+      },
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("loadConfig rejects OAuth redirect URIs with a nonstandard callback path", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-config-oauth-path-"));
+
+  try {
+    mkdirSync(path.join(baseDir, "config"), { recursive: true });
+    mkdirSync(path.join(baseDir, "repo"), { recursive: true });
+    mkdirSync(path.join(baseDir, "worktrees"), { recursive: true });
+    writeFileSync(
+      path.join(baseDir, "config", "patchrelay.yaml"),
+      `
+server:
+  bind: 127.0.0.1
+  port: 8787
+ingress:
+  linear_webhook_path: /webhooks/linear
+  max_body_bytes: 262144
+  max_timestamp_skew_seconds: 60
+logging:
+  file_path: ./patchrelay.log
+database:
+  path: ./data/patchrelay.sqlite
+linear:
+  webhook_secret_env: REQUIRED_SECRET
+  token_encryption_key_env: PATCHRELAY_TOKEN_ENCRYPTION_KEY
+  oauth:
+    client_id_env: LINEAR_OAUTH_CLIENT_ID
+    client_secret_env: LINEAR_OAUTH_CLIENT_SECRET
+    redirect_uri: https://patchrelay.example.com/not-the-fixed-path
+    scopes: [read, write]
+    actor: app
+projects:
+  - id: usertold
+    repo_path: ./repo
+    worktree_root: ./worktrees
+    trigger_events: [statusChanged]
+    branch_prefix: use
+`,
+      "utf8",
+    );
+
+    withEnv(
+      {
+        PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.yaml"),
+        REQUIRED_SECRET: "top-secret",
+        ...oauthEnv,
+      },
+      () => {
+        assert.throws(
+          () => loadConfig(),
+          /linear\.oauth\.redirect_uri must use the fixed "\/oauth\/linear\/callback" path/,
+        );
       },
     );
   } finally {

@@ -23,6 +23,14 @@ patchrelay.example.com {
 		reverse_proxy 127.0.0.1:8787
 	}
 
+	@oauth_callback {
+		path /oauth/linear/callback
+		method GET
+	}
+	handle @oauth_callback {
+		reverse_proxy 127.0.0.1:8787
+	}
+
 	@linear_webhook {
 		path /webhooks/linear
 		method POST

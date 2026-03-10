@@ -15,6 +15,7 @@ function createConfig(baseDir: string): AppConfig {
     server: {
       bind: "127.0.0.1",
       port: 8787,
+      publicBaseUrl: "https://patchrelay.example.com",
       healthPath: "/health",
       readinessPath: "/ready",
     },
@@ -817,6 +818,10 @@ test("cli installation commands use the local HTTP service end to end", async ()
   try {
     const config = {
       ...createConfig(baseDir),
+      server: {
+        ...createConfig(baseDir).server,
+        publicBaseUrl: "https://patchrelay.example.com",
+      },
       linear: {
         ...createConfig(baseDir).linear,
         webhookSecret: "webhook-secret",
@@ -932,7 +937,7 @@ test("cli installation commands use the local HTTP service end to end", async ()
       }),
       0,
     );
-    assert.match(webhookOut.read(), /Webhook URL: http:\/\/127\.0\.0\.1:/);
+    assert.match(webhookOut.read(), /Webhook URL: https:\/\/patchrelay\.example\.com\/webhooks\/linear/);
 
     const unlinkOut = createBufferStream();
     assert.equal(

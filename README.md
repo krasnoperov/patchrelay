@@ -37,9 +37,17 @@ PatchRelay is designed for a local, operator-owned setup:
 - Codex runs through `codex app-server`
 - Linear is the control surface
 - `patchrelay` CLI is the operator interface
-- a reverse proxy exposes only the webhook endpoint
+- a reverse proxy exposes the Linear-facing routes
 
 Linux and Node.js `24+` are the intended runtime.
+
+You will also need:
+
+- `git`
+- `codex`
+- a Linear OAuth app
+- a Linear webhook secret
+- a public HTTPS entrypoint such as Caddy, nginx, or a tunnel so Linear can reach your PatchRelay webhook
 
 ## Quick Start
 
@@ -73,12 +81,20 @@ LINEAR_OAUTH_CLIENT_SECRET=replace-with-linear-oauth-client-secret
 
 ### 4. Configure a project
 
-Edit `~/.config/patchrelay/patchrelay.yaml`:
+Edit the generated `~/.config/patchrelay/patchrelay.yaml`.
+
+Keep the required top-level structure from `patchrelay init`, then set your public domain and add a project block:
 
 ```yaml
 server:
   bind: 127.0.0.1
   port: 8787
+  public_base_url: https://patchrelay.example.com
+
+linear:
+  oauth:
+    # The callback path is fixed by PatchRelay.
+    redirect_uri: https://patchrelay.example.com/oauth/linear/callback
 
 runner:
   codex:
@@ -147,6 +163,14 @@ patchrelay webhook app
 
 Then point your Linear webhook to the URL printed by `patchrelay webhook app`.
 
+Important:
+
+- Linear needs a public HTTPS URL to reach your webhook.
+- `server.public_base_url` is the public domain PatchRelay uses when it prints webhook URLs.
+- PatchRelay itself should usually stay bound to `127.0.0.1` and sit behind Caddy, nginx, or another public ingress layer.
+- `linear.oauth.redirect_uri` should usually be `${server.public_base_url}/oauth/linear/callback`.
+- Publish these routes from your reverse proxy: `GET /`, `GET /health`, `GET /ready`, `GET /oauth/linear/callback`, and `POST /webhooks/linear`.
+
 ## Daily Loop
 
 1. Move a Linear issue into a configured workflow state like `Start`, `Review`, or `Deploy`.
@@ -167,13 +191,17 @@ Useful commands:
 
 `patchrelay open` is the handoff bridge: it opens Codex in the issue worktree and resumes the existing thread when PatchRelay has one.
 
+Today that takeover path is intentionally YOLO mode: it launches Codex with `--dangerously-bypass-approvals-and-sandbox`.
+
 ## Configuration Notes
 
 - Keep PatchRelay bound to `127.0.0.1`.
+- Set `server.public_base_url` to the public HTTPS origin that Linear should call.
 - Expose only `GET /`, `GET /health`, `GET /ready`, and `POST /webhooks/linear`.
 - Use `trusted_actors` if only specific Linear users or domains should be allowed to trigger automation.
 - Use `defaults.workflow_files` and `defaults.workflow_statuses` if you want one shared convention across projects.
-- Override `runner.codex.approval_policy` and `runner.codex.sandbox_mode` to match how much autonomy you want.
+- Override `runner.codex.approval_policy` and `runner.codex.sandbox_mode` to match how much autonomy you want for service-run stages.
+- Set `linear.oauth.redirect_uri` to `${server.public_base_url}/oauth/linear/callback`.
 
 ## Docs
 

@@ -1,6 +1,9 @@
 server:
   bind: 127.0.0.1
   port: 8787
+  # Public HTTPS origin that Linear should use for webhook delivery.
+  # PatchRelay still typically binds only to 127.0.0.1 and sits behind Caddy/nginx.
+  public_base_url: https://patchrelay.example.com
   health_path: /health
   readiness_path: /ready
 
@@ -27,6 +30,9 @@ linear:
   oauth:
     client_id_env: LINEAR_OAUTH_CLIENT_ID
     client_secret_env: LINEAR_OAUTH_CLIENT_SECRET
+    # The callback path is fixed by PatchRelay and must stay /oauth/linear/callback.
+    # Use a loopback URL for local browser consent, or a public HTTPS URL if you want
+    # OAuth to complete through the reverse proxy.
     redirect_uri: http://127.0.0.1:8787/oauth/linear/callback
     scopes:
       - read

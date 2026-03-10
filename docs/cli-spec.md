@@ -128,6 +128,7 @@ Output includes:
 - whether repo, worktree, database, log, and workflow paths are usable
 - whether `git` and `codex` are executable
 - whether the operator API is exposed safely for the current bind settings
+- whether `server.public_base_url` and `linear.oauth.redirect_uri` look usable for Linear-facing ingress
 
 ### `patchrelay init`
 
@@ -217,6 +218,8 @@ Clear a project's Linear installation link without using the `none` sentinel.
 ### `patchrelay webhook <projectId>`
 
 Print the current webhook URL and setup instructions for a project.
+
+The printed public URL should come from `server.public_base_url` when configured.
 
 Flags:
 
@@ -346,7 +349,13 @@ If a resumable PatchRelay-managed thread id exists, also print:
 codex resume <threadId>
 ```
 
-This command is informational. It does not spawn a subshell.
+Current behavior:
+
+- reuses the managed worktree
+- resumes the latest PatchRelay thread when available
+- launches Codex with `--dangerously-bypass-approvals-and-sandbox`
+
+This is intentionally the direct handoff / YOLO path. The command is informational and does not spawn a subshell unless you omit `--print` and let `patchrelay open` launch Codex for you.
 
 ### `patchrelay retry <issueKey>`
 

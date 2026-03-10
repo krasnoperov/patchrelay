@@ -16,10 +16,33 @@ The common deployment shape is:
 
 1. PatchRelay runs locally and listens on `127.0.0.1:8787`
 2. `patchrelay` CLI drives setup, installation linking, and inspection
-3. Caddy or another reverse proxy terminates TLS if you need public webhook ingress
+3. Caddy or another reverse proxy provides the public HTTPS entrypoint Linear can reach
 4. only `/`, `/health`, `/ready`, and `POST /webhooks/linear` are published
 5. PatchRelay reads and writes local git repos and worktrees directly
 6. Codex runs through `codex app-server` on the same machine under the same user
+
+## Public Ingress
+
+Linear cannot call a service that only exists on your loopback interface.
+
+In the normal setup you need both:
+
+- PatchRelay bound locally, usually `127.0.0.1:8787`
+- a public HTTPS domain such as `https://patchrelay.example.com` forwarded to that local service by Caddy, nginx, or a tunnel
+
+PatchRelay should know that public origin through `server.public_base_url`.
+
+Recommended split:
+
+- `server.public_base_url: https://patchrelay.example.com`
+- `linear.oauth.redirect_uri: http://127.0.0.1:8787/oauth/linear/callback` if you want OAuth to complete locally in the browser
+
+Or, if you want OAuth to complete through the public domain too:
+
+- `server.public_base_url: https://patchrelay.example.com`
+- `linear.oauth.redirect_uri: https://patchrelay.example.com/oauth/linear/callback`
+
+The OAuth callback path itself is fixed by PatchRelay and must stay `/oauth/linear/callback`.
 
 ## Prerequisites
 
@@ -66,7 +89,14 @@ Default runtime paths are:
 
 ## 3. Configure Secrets
 
-Create a Linear OAuth app and configure its redirect URI to point at PatchRelay, for example `http://127.0.0.1:8787/oauth/linear/callback` for personal-mode local setup or your public callback URL if you later expose it remotely.
+Create a Linear OAuth app and configure its redirect URI to point at PatchRelay.
+
+Examples:
+
+- local callback: `http://127.0.0.1:8787/oauth/linear/callback`
+- public callback: `https://patchrelay.example.com/oauth/linear/callback`
+
+The callback path is fixed and must remain `/oauth/linear/callback`.
 
 Then edit `~/.config/patchrelay/.env`:
 
@@ -83,6 +113,21 @@ Optional overrides such as `PATCHRELAY_CONFIG`, `PATCHRELAY_DB_PATH`, and `PATCH
 ## 4. Configure Projects
 
 Edit `~/.config/patchrelay/patchrelay.yaml` and define one or more projects.
+
+At the top level, configure the public HTTPS origin that Linear should use:
+
+```yaml
+server:
+  bind: 127.0.0.1
+  port: 8787
+  public_base_url: https://patchrelay.example.com
+
+linear:
+  oauth:
+    redirect_uri: http://127.0.0.1:8787/oauth/linear/callback
+```
+
+Switch `linear.oauth.redirect_uri` to `https://patchrelay.example.com/oauth/linear/callback` if you want OAuth to complete through the reverse proxy instead of loopback.
 
 Each project needs:
 
@@ -163,6 +208,8 @@ patchrelay webhook your-project
 
 `patchrelay connect` opens the browser only long enough to approve the Linear OAuth app, then returns to the CLI workflow.
 
+`patchrelay webhook <project>` prints a URL derived from `server.public_base_url` when that is configured.
+
 ## 7. Run As A Service
 
 Create and start the user service with:
@@ -202,14 +249,39 @@ That runs `systemctl --user daemon-reload` and `systemctl --user restart patchre
 
 The repo includes a generic Caddy example in [infra/Caddyfile](../infra/Caddyfile).
 
-Keep the published surface minimal:
+Publish these routes:
 
 - `GET /`
 - `GET /health`
 - `GET /ready`
+- `GET /oauth/linear/callback`
 - `POST /webhooks/linear`
 
 Everything else should return `404`.
+
+Example:
+
+```caddyfile
+{
+	email you@example.com
+}
+
+patchrelay.example.com {
+	encode zstd gzip
+
+	@patchrelay_public {
+		path / /health /ready /oauth/linear/callback /webhooks/linear
+	}
+
+	handle @patchrelay_public {
+		reverse_proxy 127.0.0.1:8787
+	}
+
+	handle {
+		respond "not found" 404
+	}
+}
+```
 
 ## 9. Configure The Linear Webhook
 
@@ -220,6 +292,8 @@ https://your-domain.example/webhooks/linear
 ```
 
 Use the same signing secret you placed in `.env`.
+
+Prefer using `patchrelay webhook <project>` instead of handwriting this URL. It uses `server.public_base_url` as the public origin.
 
 At minimum, PatchRelay is useful with status change events. Comment events are also useful because PatchRelay can steer an active turn with fresh Linear comments.
 
@@ -244,6 +318,7 @@ PatchRelay only manages explicitly configured labels and ignores missing labels 
 ## Recommended Production Defaults
 
 - bind PatchRelay to `127.0.0.1`
+- set `server.public_base_url` to a public HTTPS origin
 - expose only `/`, `/health`, `/ready`, and `POST /webhooks/linear`
 - run it as your own Unix user so Codex inherits your existing permissions
 - keep worktrees outside the application checkout
