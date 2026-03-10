@@ -3,7 +3,7 @@ import test from "node:test";
 import pino from "pino";
 import { LinearGraphqlClient } from "../src/linear-client.js";
 
-test("LinearGraphqlClient sends Bearer auth", async () => {
+test("LinearGraphqlClient sends raw API key auth", async () => {
   const originalFetch = globalThis.fetch;
   let seenAuthorization = "";
 
@@ -37,7 +37,7 @@ test("LinearGraphqlClient sends Bearer auth", async () => {
     );
 
     await client.getIssue("issue_1");
-    assert.equal(seenAuthorization, "Bearer secret-token");
+    assert.equal(seenAuthorization, "secret-token");
   } finally {
     globalThis.fetch = originalFetch;
   }

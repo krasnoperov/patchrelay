@@ -311,7 +311,7 @@ export class LinearGraphqlClient implements LinearClient {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        authorization: `Bearer ${this.options.apiToken}`,
+        authorization: this.options.apiToken,
       },
       body: JSON.stringify({
         query,
