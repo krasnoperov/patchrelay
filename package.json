@@ -19,7 +19,7 @@
     "config/patchrelay.example.yaml",
     "infra/patchrelay.service"
   ],
-  "description": "Local control plane that turns selected Linear issues into controlled coding-agent sessions.",
+  "description": "Self-hosted Linear-to-Codex control plane and CLI for issue worktrees, staged runs, and inspection.",
   "engines": {
     "node": ">=24.0.0"
   },

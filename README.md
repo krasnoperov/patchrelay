@@ -1,76 +1,74 @@
 # PatchRelay
 
-PatchRelay is a self-hosted control plane for Linear-driven software delivery with coding agents.
+PatchRelay is a self-hosted service and CLI that turns selected Linear issues into controlled Codex sessions on your own machine or server.
 
-It listens for signed Linear webhooks, maps issues to local repositories, prepares one durable git worktree per issue, and runs staged Codex turns through `codex app-server`. PatchRelay keeps the tracker state, workspace state, and agent thread history correlated so you can see what happened after the run, not just while it is live.
+It sits between Linear, your local repositories, and `codex app-server`:
 
-PatchRelay uses one Linear setup model: OAuth-backed installations linked to projects through the CLI.
+- verifies signed Linear webhooks
+- routes issues to the right local repository
+- creates one durable git branch and worktree per issue
+- runs staged agent workflows for implementation, review, deploy, and cleanup
+- stores orchestration state in SQLite so you can inspect what happened later
+- gives you a terminal-first operator workflow through the `patchrelay` CLI
 
-The recommended operator model is now personal-mode on a machine you control:
+If you want Linear to be the trigger, Codex to work in real repos with real tools, and a human to be able to inspect or take over cleanly, PatchRelay is built for that model.
 
-- run PatchRelay as your own Unix user
-- let Codex inherit that user's existing git, SSH, and local tool permissions
-- use the `patchrelay` CLI as the primary operator interface
-- use the browser only for Linear OAuth consent
+## What You Install
 
-## Why This Exists
+The npm package gives you:
 
-PatchRelay is built for a very specific operating model:
+- `patchrelay` CLI
+- the local PatchRelay service
+- config templates for a user-owned install
+- a systemd user unit template for Linux
 
-- issues live in Linear
-- the coding agent has full access to your own server and repositories
-- one issue gets one durable branch and worktree
-- implementation, review, and deploy happen as explicit workflow stages
-- deterministic tracker bookkeeping is owned by the service
-- judgment-heavy final state transitions are still owned by the agent
+The CLI is the main operator interface. The browser is only used for Linear OAuth consent during `patchrelay connect`.
 
-That gives you a setup where the agent can work with real tools in a real environment, while the service keeps orchestration, auditability, and handoff state predictable.
+## Best Fit
 
-## What PatchRelay Does
+PatchRelay is a good fit if:
 
-- verifies and archives Linear webhooks
-- maps Linear states such as `Start`, `Review`, and `Deploy` into internal stages
-- creates or reuses one issue workspace and branch
-- starts or forks Codex threads through `codex app-server`
-- writes deterministic active state back to Linear such as `Implementing`, `Reviewing`, and `Deploying`
-- maintains a service-owned status comment in Linear
-- optionally manages service-owned workflow labels such as `llm-working`
-- forwards fresh Linear comments into an active Codex turn
-- persists stage reports and raw event history for later inspection
+- you already use Linear as the source of truth for work
+- you want automation to run on infrastructure you control
+- the agent needs your existing git, SSH, shell, and repo permissions
+- you want one branch and worktree per issue lifecycle
+- you want to inspect stage history after the live run is over
 
-## Public Surface
+## Requirements
 
-PatchRelay is meant to be published behind a reverse proxy with only these routes exposed:
+- Linux is the intended runtime
+- Node.js `24+`
+- `git`
+- `codex` CLI installed and authenticated for the same Unix user that will run PatchRelay
+- a Linear workspace
+- a Linear OAuth app
+- a Linear webhook signing secret
 
-- `GET /`
-- `GET /health`
-- `GET /ready`
-- `POST /webhooks/linear`
+`patchrelay install-service` installs a systemd user service, so Linux with user-level systemd is the happy path. You can still run `patchrelay serve` manually if you want a foreground process.
 
-Other routes fall into two local/operator buckets:
+## How It Works
 
-- loopback management routes used by the CLI-first setup flow such as `/oauth/linear/callback`, `/api/oauth/linear/*`, `/api/installations`, and project-installation linking
-- optional inspection routes under `/api/issues/*`, which stay disabled unless `operator_api.enabled` is turned on
+1. You configure one or more local projects in `patchrelay.yaml`.
+2. You link PatchRelay to Linear with `patchrelay connect` and `patchrelay link-installation`.
+3. A Linear webhook arrives for a matching issue.
+4. PatchRelay maps the issue state to a stage such as `development`, `review`, or `deploy`.
+5. PatchRelay creates or reuses that issue's branch and worktree.
+6. PatchRelay starts or forks a Codex thread through `codex app-server`.
+7. You inspect progress with the CLI, or jump into the exact worktree with `patchrelay open`.
 
-Internal inspection endpoints are disabled by default. The CLI-first OAuth flow still works on loopback without exposing the wider operator API. If you enable the optional operator API, keep it local or protect it with a bearer token.
+PatchRelay owns the deterministic plumbing: webhook verification, stage claiming, active-state bookkeeping, service comments, and worktree lifecycle.
 
-## Quick Start
+The agent still owns judgment-heavy decisions such as moving an issue to `Review`, `Deploy`, `Done`, or `Human Needed`.
 
-1. Install prerequisites:
-   - Linux machine or VM you control
-   - Node.js 24+
-   - `git`
-   - `codex` CLI installed and authenticated for the same Unix user that will run PatchRelay
-   - a Linear OAuth app
-   - a Linear webhook secret
+## Install
 
-2. Install PatchRelay:
+Install from npm:
 
 ```bash
 npm install -g patchrelay
 ```
 
-If you are packaging from a source checkout instead of installing from the registry:
+Or from a local checkout:
 
 ```bash
 npm install
@@ -78,7 +76,9 @@ npm pack
 npm install -g ./patchrelay-*.tgz
 ```
 
-3. Bootstrap the local home:
+## Quick Start
+
+### 1. Bootstrap PatchRelay's home directory
 
 ```bash
 patchrelay init
@@ -88,113 +88,241 @@ This creates:
 
 - `~/.config/patchrelay/.env`
 - `~/.config/patchrelay/patchrelay.yaml`
+- `~/.local/state/patchrelay/`
+- `~/.local/share/patchrelay/`
 
-By default PatchRelay stores:
+Default locations:
 
-- config in `~/.config/patchrelay/`
-- database and logs in `~/.local/state/patchrelay/`
-- worktrees under `~/.local/share/patchrelay/`
+- config: `~/.config/patchrelay/`
+- database: `~/.local/state/patchrelay/patchrelay.sqlite`
+- logs: `~/.local/state/patchrelay/patchrelay.log`
+- worktrees: usually `~/.local/share/patchrelay/worktrees/<project>`
 
-4. Edit `~/.config/patchrelay/.env` and `~/.config/patchrelay/patchrelay.yaml` for your machine, repos, worktree roots, and Linear routing.
-   - Set `PATCHRELAY_TOKEN_ENCRYPTION_KEY`, `LINEAR_OAUTH_CLIENT_ID`, and `LINEAR_OAUTH_CLIENT_SECRET`.
-   - Standard workflow doc names and state names are built in. Use top-level `defaults` to change those conventions globally, and project-level `workflow_files` or `workflow_statuses` only when a repo needs overrides.
-   - Configure `trusted_actors` for each project if only a specific owner or trusted Linear group should be allowed to trigger automation.
+### 2. Configure secrets in `.env`
 
-5. Add the repo-local workflow docs PatchRelay should use, usually:
+Edit `~/.config/patchrelay/.env`:
 
 ```bash
+LINEAR_WEBHOOK_SECRET=replace-with-linear-webhook-secret
+PATCHRELAY_TOKEN_ENCRYPTION_KEY=replace-with-long-random-secret
+LINEAR_OAUTH_CLIENT_ID=replace-with-linear-oauth-client-id
+LINEAR_OAUTH_CLIENT_SECRET=replace-with-linear-oauth-client-secret
+```
+
+Optional:
+
+```bash
+# Only needed if you enable operator_api.enabled: true
+PATCHRELAY_OPERATOR_TOKEN=replace-with-random-operator-token
+```
+
+### 3. Configure your first project
+
+Edit `~/.config/patchrelay/patchrelay.yaml` and add a project that points at a real local repository:
+
+```yaml
+server:
+  bind: 127.0.0.1
+  port: 8787
+
+linear:
+  oauth:
+    redirect_uri: http://127.0.0.1:8787/oauth/linear/callback
+
+projects:
+  - id: app
+    repo_path: /home/your-user/src/app
+    worktree_root: /home/your-user/.local/share/patchrelay/worktrees/app
+    issue_key_prefixes:
+      - APP
+    linear_team_ids:
+      - APP
+    trigger_events:
+      - statusChanged
+      - commentCreated
+      - commentUpdated
+      - assignmentChanged
+    branch_prefix: app
+    workflow_labels:
+      working: llm-working
+      awaiting_handoff: llm-awaiting-handoff
+    trusted_actors:
+      emails:
+        - owner@example.com
+```
+
+Important project fields:
+
+- `id`: the project id used by the CLI
+- `repo_path`: local repository to automate
+- `worktree_root`: where PatchRelay will create per-issue worktrees
+- `issue_key_prefixes`: issue prefixes this project should claim, such as `APP`
+- `linear_team_ids`: team ids or keys that may route here
+- `trigger_events`: which Linear webhook events can steer automation
+- `branch_prefix`: prefix for generated branches
+- `trusted_actors`: optional allowlist of people or domains allowed to trigger runs
+
+Routing rules:
+
+- PatchRelay matches projects by issue key prefix, team, and optional labels.
+- If you define multiple projects, make those routes unambiguous.
+- `allow_labels` is optional and can be used to require one of a specific set of labels before a project matches.
+
+### 4. Add workflow docs to the repo
+
+By default PatchRelay looks for these files in the repo root:
+
+```text
 IMPLEMENTATION_WORKFLOW.md
 REVIEW_WORKFLOW.md
 DEPLOY_WORKFLOW.md
 CLEANUP_WORKFLOW.md
 ```
 
-6. Validate the setup:
+These files are the policy PatchRelay passes into the agent. They should explain what the agent is allowed to do, what checks to run, and what a successful handoff looks like.
+
+If your repo uses different filenames or Linear state names, you can override them globally under `defaults` or per project with `workflow_files` and `workflow_statuses`.
+
+Built-in default Linear states:
+
+- `Start` -> development
+- `Review` -> review
+- `Deploy` -> deploy
+- `Cleanup` -> cleanup
+- active states: `Implementing`, `Reviewing`, `Deploying`, `Cleaning Up`
+- fallback and handoff states: `Human Needed`, `Done`
+
+### 5. Validate the setup
 
 ```bash
 patchrelay doctor
 ```
 
-7. Install and start the user service:
+`doctor` checks:
+
+- required secrets
+- repo and worktree paths
+- workflow files
+- database and log locations
+- `git` and `codex` executables
+- operator API safety for the current bind settings
+
+### 6. Start the service
+
+Recommended:
 
 ```bash
 patchrelay install-service
 ```
 
-8. Use the CLI as the primary operator interface:
+That writes `~/.config/systemd/user/patchrelay.service`, reloads user units, and enables + starts the service.
+
+Manual foreground mode:
 
 ```bash
-patchrelay connect --project your-project
-patchrelay installations
-patchrelay link-installation your-project 1
-patchrelay webhook your-project
+patchrelay serve
 ```
 
-`patchrelay connect` opens the browser only to complete Linear OAuth consent and then returns you to the terminal workflow.
-
-9. Put it behind Caddy, nginx, or another reverse proxy that exposes only `/`, `/health`, `/ready`, and `POST /webhooks/linear`.
-
-After package updates, restart the service with:
+After package updates or config changes:
 
 ```bash
 patchrelay restart-service
 ```
 
-For a fuller install walkthrough, see [docs/self-hosting.md](docs/self-hosting.md).
+### 7. Connect Linear and link an installation
 
-## Workflow Model
+```bash
+patchrelay connect --project app
+patchrelay installations
+patchrelay link-installation app 1
+patchrelay webhook app
+```
 
-PatchRelay assumes repo-local workflow docs such as:
+What these do:
 
-- `IMPLEMENTATION_WORKFLOW.md`
-- `REVIEW_WORKFLOW.md`
-- `DEPLOY_WORKFLOW.md`
-- `CLEANUP_WORKFLOW.md`
+- `connect`: starts the Linear OAuth flow and opens a browser for consent
+- `installations`: lists connected Linear installations
+- `link-installation`: links one configured PatchRelay project to one Linear installation
+- `webhook`: prints the webhook URL you should configure in Linear for that project
 
-These docs tell the agent how to work in that repository. PatchRelay injects the relevant file into each turn and owns the deterministic bookkeeping around active Linear states, service comments, and optional workflow labels.
+### 8. Expose only the webhook surface
 
-By default, PatchRelay looks for those four filenames in each repo root and uses the conventional Linear states `Start`, `Review`, `Deploy`, `Cleanup`, `Implementing`, `Reviewing`, `Deploying`, `Cleaning Up`, `Human Needed`, and `Done`. Keep those defaults if they fit your workflow, set top-level `defaults` if you want one shared convention across projects, or override `workflow_files` / `workflow_statuses` on a specific project when it needs custom automation.
+PatchRelay is designed to run locally and sit behind a reverse proxy such as Caddy or nginx.
 
-Workflow file paths are resolved relative to each project's `repo_path` unless you provide an absolute path. Optional inherited statuses such as `cleanup`, `cleanup_active`, `human_needed`, and `done` can be disabled for a project with `null`.
+Publish only:
 
-The requirement docs for those files live in:
+- `GET /`
+- `GET /health`
+- `GET /ready`
+- `POST /webhooks/linear`
 
-- [docs/IMPLEMENTATION_WORKFLOW_REQUIREMENTS.md](docs/IMPLEMENTATION_WORKFLOW_REQUIREMENTS.md)
-- [docs/REVIEW_WORKFLOW_REQUIREMENTS.md](docs/REVIEW_WORKFLOW_REQUIREMENTS.md)
-- [docs/DEPLOY_WORKFLOW_REQUIREMENTS.md](docs/DEPLOY_WORKFLOW_REQUIREMENTS.md)
-- [docs/CLEANUP_WORKFLOW_REQUIREMENTS.md](docs/CLEANUP_WORKFLOW_REQUIREMENTS.md)
+Keep the wider operator API disabled unless you intentionally need it.
 
-## Docs
+## Using PatchRelay Day To Day
 
-- [CHANGELOG.md](CHANGELOG.md): generated release history
-- [PRODUCT_SPEC.md](PRODUCT_SPEC.md): product goals and external behavior
-- [docs/architecture.md](docs/architecture.md): internal model and request flow
-- [docs/codex-workflow.md](docs/codex-workflow.md): how PatchRelay uses `codex app-server`
-- [docs/self-hosting.md](docs/self-hosting.md): installation and deployment guide
-- [docs/cli-spec.md](docs/cli-spec.md): CLI-first operator workflow
+Once the service is running, the main workflow is simple:
+
+1. Move a Linear issue into one of the configured trigger states such as `Start`, `Review`, or `Deploy`.
+2. PatchRelay claims the stage, creates or reuses the issue worktree, and launches the Codex turn.
+3. Use the CLI to inspect progress, reports, and raw events.
+4. Open the issue worktree locally if you want to take over or continue manually.
+
+Useful commands:
+
+| Command | What it does |
+| --- | --- |
+| `patchrelay doctor` | Validate secrets, paths, workflow files, and executables |
+| `patchrelay list --active` | List active tracked issues |
+| `patchrelay inspect USE-54` | Show a compact summary for one issue |
+| `patchrelay live USE-54 --watch` | Tail the current live stage |
+| `patchrelay report USE-54` | Show the latest completed stage report |
+| `patchrelay events USE-54 --follow` | Stream raw stage events |
+| `patchrelay worktree USE-54 --cd` | Print the issue worktree path or a `cd` command |
+| `patchrelay open USE-54` | Open an interactive Codex session in the issue worktree |
+| `patchrelay retry USE-54 --stage review` | Requeue a stage |
+| `patchrelay webhook app` | Print the current webhook URL for a configured project |
+
+`patchrelay open` resumes the latest issue thread when PatchRelay has one; otherwise it opens Codex directly in the worktree.
+
+## Configuring Another Project
+
+To add a new repository later:
+
+1. Add another entry under `projects:` in `patchrelay.yaml`.
+2. Give it a unique `id`, `repo_path`, `worktree_root`, and `branch_prefix`.
+3. Set routing with `issue_key_prefixes`, `linear_team_ids`, and optional `allow_labels`.
+4. Add workflow docs to that repository.
+5. Run `patchrelay doctor`.
+6. Link the project to a Linear installation with `patchrelay link-installation <projectId> <installationId>`.
+7. Re-run `patchrelay webhook <projectId>` if you need to confirm the webhook target.
+
+If every project shares the same workflow filenames or Linear states, set them once under `defaults` instead of repeating them in each project block.
 
 ## Security Notes
 
+- Run PatchRelay as your own Unix user if you want Codex to inherit your existing git, SSH, and local tool permissions.
 - Keep PatchRelay bound to `127.0.0.1` unless you have a strong reason not to.
-- Publish only `/`, `/health`, `/ready`, and `POST /webhooks/linear`.
-- Run PatchRelay as your own user if you want Codex to inherit your existing git, SSH, and local tool access.
-- Leave the operator API disabled unless you need it. If you enable it on a non-local bind, require a bearer token.
-- Keep the Linear OAuth app scopes limited to the issue and comment access PatchRelay actually needs.
-- Treat repo-local workflow docs as code execution policy, because PatchRelay passes them directly into agent turns.
-- If you use Linear as a control surface, configure `projects[].trusted_actors` so only trusted owners or trusted email domains can trigger or steer automation for that project.
+- Expose only the webhook routes through your reverse proxy.
+- Leave `operator_api.enabled: false` unless you explicitly need the inspection API.
+- If you enable the operator API on anything other than loopback, require a bearer token.
+- Treat repo-local workflow files as execution policy, because PatchRelay passes them directly into agent turns.
+- Use `trusted_actors` if only certain Linear users or domains should be able to trigger automation for a project.
 
-## Trust Model
+## Docs
 
-PatchRelay has three separate trust boundaries:
-
-- Public ingress: only signed Linear webhooks should reach the public service surface.
-- Operator control: setup, inspection, and installation-linking should stay local or behind operator auth.
-- Linear actor trust: even valid signed webhooks are ignored for a project if their Linear actor is not in that project's `trusted_actors` allowlist.
-
-By default, if `trusted_actors` is omitted, PatchRelay preserves the existing behavior and accepts any valid actor in the routed Linear workspace. If `trusted_actors` is configured for a project, the webhook actor must match by `id`, `name`, `email`, or `email_domain` or the event is ignored before it can queue a stage or steer a live comment.
+- [Self-hosting guide](https://github.com/krasnoperov/patchrelay/blob/main/docs/self-hosting.md)
+- [CLI specification](https://github.com/krasnoperov/patchrelay/blob/main/docs/cli-spec.md)
+- [Architecture](https://github.com/krasnoperov/patchrelay/blob/main/docs/architecture.md)
+- [Codex workflow integration](https://github.com/krasnoperov/patchrelay/blob/main/docs/codex-workflow.md)
+- [Implementation workflow requirements](https://github.com/krasnoperov/patchrelay/blob/main/docs/IMPLEMENTATION_WORKFLOW_REQUIREMENTS.md)
+- [Review workflow requirements](https://github.com/krasnoperov/patchrelay/blob/main/docs/REVIEW_WORKFLOW_REQUIREMENTS.md)
+- [Deploy workflow requirements](https://github.com/krasnoperov/patchrelay/blob/main/docs/DEPLOY_WORKFLOW_REQUIREMENTS.md)
+- [Cleanup workflow requirements](https://github.com/krasnoperov/patchrelay/blob/main/docs/CLEANUP_WORKFLOW_REQUIREMENTS.md)
+- [Product spec](https://github.com/krasnoperov/patchrelay/blob/main/PRODUCT_SPEC.md)
+- [Security policy](https://github.com/krasnoperov/patchrelay/blob/main/SECURITY.md)
 
 ## Status
 
-PatchRelay is usable now, but still opinionated and early. The current focus is a solid self-hosted workflow for operators who want issue-driven automation on their own machines and servers, not a generalized SaaS product.
+PatchRelay is usable now, but still early and intentionally opinionated.
 
-PatchRelay is intentionally still below `1.0.0` while the service model, operator ergonomics, and security posture continue to harden. Releases are generated from release PRs on `main` with Release Please, and ongoing feature work should land through branches and pull requests with conventional-commit-style titles so the changelog stays readable.
+The current focus is a solid self-hosted workflow for operators who want Linear-driven automation on their own machines and servers, not a generalized SaaS control plane.
