@@ -1,9 +1,9 @@
 import type { Logger } from "pino";
-import { PatchRelayDatabase } from "./db.js";
-import type { AppConfig, LinearWebhookPayload, NormalizedEvent } from "./types.js";
-import { archiveWebhook } from "./webhook-archive.js";
-import { normalizeWebhook } from "./webhooks.js";
-import { redactSensitiveHeaders, timestampMsWithinSkew, verifyHmacSha256Hex } from "./utils.js";
+import { PatchRelayDatabase } from "./db.ts";
+import type { AppConfig, LinearWebhookPayload, NormalizedEvent } from "./types.ts";
+import { archiveWebhook } from "./webhook-archive.ts";
+import { normalizeWebhook } from "./webhooks.ts";
+import { redactSensitiveHeaders, timestampMsWithinSkew, verifyHmacSha256Hex } from "./utils.ts";
 
 export interface AcceptedWebhook {
   id: number;

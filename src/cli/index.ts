@@ -1,13 +1,13 @@
 import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
-import { loadConfig } from "../config.js";
-import { initializePatchRelayHome, installUserServiceUnit } from "../install.js";
-import { runPreflight } from "../preflight.js";
-import { getDefaultConfigPath, getDefaultEnvPath, getSystemdUserUnitPath } from "../runtime-paths.js";
-import { CliDataAccess } from "./data.js";
-import { formatJson } from "./formatters/json.js";
-import { formatEvents, formatInspect, formatList, formatLive, formatOpen, formatReport, formatRetry, formatWorktree } from "./formatters/text.js";
-import type { AppConfig, WorkflowStage } from "../types.js";
+import { loadConfig } from "../config.ts";
+import { initializePatchRelayHome, installUserServiceUnit } from "../install.ts";
+import { runPreflight } from "../preflight.ts";
+import { getDefaultConfigPath, getDefaultEnvPath, getSystemdUserUnitPath } from "../runtime-paths.ts";
+import { CliDataAccess } from "./data.ts";
+import { formatJson } from "./formatters/json.ts";
+import { formatEvents, formatInspect, formatList, formatLive, formatOpen, formatReport, formatRetry, formatWorktree } from "./formatters/text.ts";
+import type { AppConfig, WorkflowStage } from "../types.ts";
 
 type Output = Pick<NodeJS.WriteStream, "write">;
 

@@ -3,8 +3,8 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { runPreflight } from "../src/preflight.js";
-import type { AppConfig } from "../src/types.js";
+import { runPreflight } from "../src/preflight.ts";
+import type { AppConfig } from "../src/types.ts";
 
 function createConfig(baseDir: string): AppConfig {
   return {

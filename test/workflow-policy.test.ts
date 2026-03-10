@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { resolveProject, triggerEventAllowed } from "../src/project-resolution.js";
-import type { AppConfig, IssueMetadata } from "../src/types.js";
-import { resolveWorkflowStage } from "../src/workflow-policy.js";
+import { resolveProject, triggerEventAllowed } from "../src/project-resolution.ts";
+import type { AppConfig, IssueMetadata } from "../src/types.ts";
+import { resolveWorkflowStage } from "../src/workflow-policy.ts";
 
 function createConfig(): AppConfig {
   return {

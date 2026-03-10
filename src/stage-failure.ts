@@ -1,6 +1,6 @@
-import { buildStageFailedComment, resolveActiveLinearState, resolveWorkflowLabelCleanup } from "./linear-workflow.js";
-import type { PatchRelayDatabase } from "./db.js";
-import type { LinearClientProvider, ProjectConfig, StageRunRecord, TrackedIssueRecord } from "./types.js";
+import { buildStageFailedComment, resolveActiveLinearState, resolveWorkflowLabelCleanup } from "./linear-workflow.ts";
+import type { PatchRelayDatabase } from "./db.ts";
+import type { LinearClientProvider, ProjectConfig, StageRunRecord, TrackedIssueRecord } from "./types.ts";
 
 function normalizeStateName(value: string | undefined): string | undefined {
   const trimmed = value?.trim();

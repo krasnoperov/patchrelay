@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import type { ProjectConfig, StageLaunchPlan, TrackedIssueRecord, WorkflowStage } from "./types.js";
+import type { ProjectConfig, StageLaunchPlan, TrackedIssueRecord, WorkflowStage } from "./types.ts";
 
 function slugify(value: string): string {
   return value

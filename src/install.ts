@@ -13,7 +13,7 @@ import {
   getPatchRelayStateDir,
   getSystemdUserUnitPath,
   readBundledAsset,
-} from "./runtime-paths.js";
+} from "./runtime-paths.ts";
 
 function renderTemplate(template: string): string {
   const home = homedir();

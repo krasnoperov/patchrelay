@@ -6,9 +6,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import pino from "pino";
-import { PatchRelayDatabase } from "../src/db.js";
-import { PatchRelayService } from "../src/service.js";
-import type { AppConfig, CodexThreadSummary, LinearClient, LinearIssueSnapshot } from "../src/types.js";
+import { PatchRelayDatabase } from "../src/db.ts";
+import { PatchRelayService } from "../src/service.ts";
+import type { AppConfig, CodexThreadSummary, LinearClient, LinearIssueSnapshot } from "../src/types.ts";
 
 const WORKFLOW_STATES = [
   { id: "start", name: "Start" },

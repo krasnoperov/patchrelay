@@ -5,9 +5,9 @@ import path from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
 import pino from "pino";
-import { PatchRelayDatabase } from "../src/db.js";
-import { acceptIncomingWebhook } from "../src/service-webhooks.js";
-import type { AppConfig, LinearWebhookPayload } from "../src/types.js";
+import { PatchRelayDatabase } from "../src/db.ts";
+import { acceptIncomingWebhook } from "../src/service-webhooks.ts";
+import type { AppConfig, LinearWebhookPayload } from "../src/types.ts";
 
 function buildConfig(baseDir: string): AppConfig {
   return {

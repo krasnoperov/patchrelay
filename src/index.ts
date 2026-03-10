@@ -2,16 +2,16 @@
 
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { runCli } from "./cli/index.js";
-import { CodexAppServerClient } from "./codex-app-server.js";
-import { loadConfig } from "./config.js";
-import { PatchRelayDatabase } from "./db.js";
-import { buildHttpServer } from "./http.js";
-import { DatabaseBackedLinearClientProvider } from "./linear-client.js";
-import { createLogger } from "./logging.js";
-import { runPreflight } from "./preflight.js";
-import { PatchRelayService } from "./service.js";
-import { ensureDir } from "./utils.js";
+import { runCli } from "./cli/index.ts";
+import { CodexAppServerClient } from "./codex-app-server.ts";
+import { loadConfig } from "./config.ts";
+import { PatchRelayDatabase } from "./db.ts";
+import { buildHttpServer } from "./http.ts";
+import { DatabaseBackedLinearClientProvider } from "./linear-client.ts";
+import { createLogger } from "./logging.ts";
+import { runPreflight } from "./preflight.ts";
+import { PatchRelayService } from "./service.ts";
+import { ensureDir } from "./utils.ts";
 
 async function main(): Promise<void> {
   const cliExitCode = await runCli(process.argv.slice(2));

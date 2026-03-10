@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { archiveWebhook } from "../src/webhook-archive.js";
+import { archiveWebhook } from "../src/webhook-archive.ts";
 
 test("archiveWebhook writes a dated json file with sanitized webhook id", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-archive-"));

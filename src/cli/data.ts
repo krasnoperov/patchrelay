@@ -1,8 +1,8 @@
 import pino from "pino";
-import { CodexAppServerClient } from "../codex-app-server.js";
-import { PatchRelayDatabase } from "../db.js";
-import type { AppConfig, CodexThreadItem, CodexThreadSummary, StageReport, StageRunRecord, WorkflowStage } from "../types.js";
-import { resolveWorkflowStage } from "../workflow-policy.js";
+import { CodexAppServerClient } from "../codex-app-server.ts";
+import { PatchRelayDatabase } from "../db.ts";
+import type { AppConfig, CodexThreadItem, CodexThreadSummary, StageReport, StageRunRecord, WorkflowStage } from "../types.ts";
+import { resolveWorkflowStage } from "../workflow-policy.ts";
 
 interface LiveSummary {
   threadId: string;

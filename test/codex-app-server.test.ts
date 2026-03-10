@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import test from "node:test";
 import pino from "pino";
-import { CodexAppServerClient, resolveCodexAppServerLaunch } from "../src/codex-app-server.js";
+import { CodexAppServerClient, resolveCodexAppServerLaunch } from "../src/codex-app-server.ts";
 
 function createClient(scenario: string) {
   return new CodexAppServerClient(

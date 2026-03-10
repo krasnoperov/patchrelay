@@ -2,9 +2,9 @@ import type { FastifyRequest } from "fastify";
 import fastify from "fastify";
 import rawBody from "fastify-raw-body";
 import type { Logger } from "pino";
-import { getBuildInfo } from "./build-info.js";
-import type { AppConfig } from "./types.js";
-import { PatchRelayService } from "./service.js";
+import { getBuildInfo } from "./build-info.ts";
+import type { AppConfig } from "./types.ts";
+import { PatchRelayService } from "./service.ts";
 
 declare module "fastify" {
   interface FastifyRequest {

@@ -4,9 +4,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import pino from "pino";
-import { getBuildInfo } from "../src/build-info.js";
-import { buildHttpServer } from "../src/http.js";
-import type { AppConfig } from "../src/types.js";
+import { getBuildInfo } from "../src/build-info.ts";
+import { buildHttpServer } from "../src/http.ts";
+import type { AppConfig } from "../src/types.ts";
 
 function createConfig(baseDir: string): AppConfig {
   return {

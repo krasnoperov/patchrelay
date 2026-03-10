@@ -1,8 +1,8 @@
 import crypto from "node:crypto";
 import type { Logger } from "pino";
-import { PatchRelayDatabase } from "./db.js";
-import { encryptSecret } from "./token-crypto.js";
-import type { AppConfig, LinearInstallationRecord, LinearOauthTokenSet } from "./types.js";
+import { PatchRelayDatabase } from "./db.ts";
+import { encryptSecret } from "./token-crypto.ts";
+import type { AppConfig, LinearInstallationRecord, LinearOauthTokenSet } from "./types.ts";
 
 const DEFAULT_LINEAR_AUTHORIZE_URL = "https://linear.app/oauth/authorize";
 const DEFAULT_LINEAR_TOKEN_URL = "https://api.linear.app/oauth/token";

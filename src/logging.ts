@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import pino, { type Logger, type LoggerOptions } from "pino";
-import type { AppConfig } from "./types.js";
+import type { AppConfig } from "./types.ts";
 
 export function createLogger(config: AppConfig): Logger {
   const options: LoggerOptions = {

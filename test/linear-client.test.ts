@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import pino from "pino";
-import { LinearGraphqlClient } from "../src/linear-client.js";
+import { LinearGraphqlClient } from "../src/linear-client.ts";
 
 test("LinearGraphqlClient sends Bearer auth for access tokens", async () => {
   const originalFetch = globalThis.fetch;

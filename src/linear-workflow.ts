@@ -1,4 +1,4 @@
-import type { ProjectConfig, StageRunRecord, TrackedIssueRecord, WorkflowStage } from "./types.js";
+import type { ProjectConfig, StageRunRecord, TrackedIssueRecord, WorkflowStage } from "./types.ts";
 
 const STATUS_MARKER = "<!-- patchrelay:status-comment -->";
 

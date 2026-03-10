@@ -2,9 +2,9 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
 import { z } from "zod";
-import type { AppConfig } from "./types.js";
-import { getDefaultConfigPath, getDefaultDatabasePath, getDefaultLogPath } from "./runtime-paths.js";
-import { ensureAbsolutePath } from "./utils.js";
+import type { AppConfig } from "./types.ts";
+import { getDefaultConfigPath, getDefaultDatabasePath, getDefaultLogPath } from "./runtime-paths.ts";
+import { ensureAbsolutePath } from "./utils.ts";
 
 const workflowFilesSchema = z.object({
   development: z.string().min(1),

@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { Logger } from "pino";
-import type { CodexAppServerConfig, CodexThreadItem, CodexThreadSummary } from "./types.js";
+import type { CodexAppServerConfig, CodexThreadItem, CodexThreadSummary } from "./types.ts";
 
 interface JsonRpcSuccess {
   jsonrpc?: string;

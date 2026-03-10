@@ -1,4 +1,4 @@
-import type { CodexThreadItem, CodexThreadSummary, StageReport, StageRunRecord, ThreadEventRecord, TrackedIssueRecord } from "./types.js";
+import type { CodexThreadItem, CodexThreadSummary, StageReport, StageRunRecord, ThreadEventRecord, TrackedIssueRecord } from "./types.ts";
 
 export function extractStageSummary(report: StageReport): Record<string, unknown> {
   return {

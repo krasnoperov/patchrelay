@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ensureAbsolutePath } from "./utils.js";
+import { ensureAbsolutePath } from "./utils.ts";
 
 export interface PatchRelayPathLayout {
   homeDir: string;

@@ -11,7 +11,7 @@ import {
   safeJsonParse,
   timestampMsWithinSkew,
   verifyHmacSha256Hex,
-} from "../src/utils.js";
+} from "../src/utils.ts";
 
 test("utils cover path, template, and json helpers", () => {
   assert.equal(ensureAbsolutePath("/tmp/x"), "/tmp/x");

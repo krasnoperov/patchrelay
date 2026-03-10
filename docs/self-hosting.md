@@ -143,7 +143,7 @@ patchrelay serve
 For development:
 
 ```bash
-tsx watch src/index.ts
+node --watch --experimental-transform-types src/index.ts
 ```
 
 Health check:

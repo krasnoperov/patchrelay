@@ -14,7 +14,7 @@ import type {
   WebhookEventRecord,
   WorkflowStage,
   WorkspaceRecord,
-} from "./types.js";
+} from "./types.ts";
 
 const baseMigration = `
 DROP TABLE IF EXISTS issues;

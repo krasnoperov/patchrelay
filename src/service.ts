@@ -1,15 +1,15 @@
 import path from "node:path";
 import type { Logger } from "pino";
-import { CodexAppServerClient, type CodexNotification } from "./codex-app-server.js";
-import { PatchRelayDatabase } from "./db.js";
-import { isPatchRelayStatusComment } from "./linear-workflow.js";
-import { createLinearOAuthUrl, createOAuthStateToken, installLinearOAuthCode } from "./linear-oauth.js";
-import { resolveProject, triggerEventAllowed, trustedActorAllowed } from "./project-resolution.js";
-import { SerialWorkQueue } from "./service-queue.js";
-import { ServiceStageFinalizer } from "./service-stage-finalizer.js";
-import { type IssueQueueItem, ServiceStageRunner } from "./service-stage-runner.js";
-import { acceptIncomingWebhook } from "./service-webhooks.js";
-import { summarizeCurrentThread } from "./stage-reporting.js";
+import { CodexAppServerClient, type CodexNotification } from "./codex-app-server.ts";
+import { PatchRelayDatabase } from "./db.ts";
+import { isPatchRelayStatusComment } from "./linear-workflow.ts";
+import { createLinearOAuthUrl, createOAuthStateToken, installLinearOAuthCode } from "./linear-oauth.ts";
+import { resolveProject, triggerEventAllowed, trustedActorAllowed } from "./project-resolution.ts";
+import { SerialWorkQueue } from "./service-queue.ts";
+import { ServiceStageFinalizer } from "./service-stage-finalizer.ts";
+import { type IssueQueueItem, ServiceStageRunner } from "./service-stage-runner.ts";
+import { acceptIncomingWebhook } from "./service-webhooks.ts";
+import { summarizeCurrentThread } from "./stage-reporting.ts";
 import type {
   AppConfig,
   LinearClient,
@@ -20,10 +20,10 @@ import type {
   StageReport,
   StageRunRecord,
   TrackedIssueRecord,
-} from "./types.js";
-import { safeJsonParse } from "./utils.js";
-import { normalizeWebhook } from "./webhooks.js";
-import { resolveWorkflowStage } from "./workflow-policy.js";
+} from "./types.ts";
+import { safeJsonParse } from "./utils.ts";
+import { normalizeWebhook } from "./webhooks.ts";
+import { resolveWorkflowStage } from "./workflow-policy.ts";
 
 const ISSUE_KEY_DELIMITER = "::";
 const LINEAR_OAUTH_STATE_TTL_MS = 15 * 60 * 1000;

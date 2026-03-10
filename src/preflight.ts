@@ -1,7 +1,7 @@
 import { accessSync, constants, existsSync, mkdirSync, statSync } from "node:fs";
 import path from "node:path";
-import type { AppConfig } from "./types.js";
-import { execCommand } from "./utils.js";
+import type { AppConfig } from "./types.ts";
+import { execCommand } from "./utils.ts";
 
 export interface PreflightCheck {
   status: "pass" | "warn" | "fail";

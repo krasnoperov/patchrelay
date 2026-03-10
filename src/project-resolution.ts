@@ -1,5 +1,5 @@
-import type { AppConfig, IssueMetadata, LinearActorMetadata, ProjectConfig, TriggerEvent } from "./types.js";
-import { matchesProject } from "./workflow-policy.js";
+import type { AppConfig, IssueMetadata, LinearActorMetadata, ProjectConfig, TriggerEvent } from "./types.ts";
+import { matchesProject } from "./workflow-policy.ts";
 
 export function resolveProject(config: AppConfig, issue: IssueMetadata): ProjectConfig | undefined {
   const matches = config.projects.filter((project) => matchesProject(issue, project));

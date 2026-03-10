@@ -1,4 +1,4 @@
-import type { CommentMetadata, IssueMetadata, LinearActorMetadata, LinearWebhookPayload, NormalizedEvent, TriggerEvent } from "./types.js";
+import type { CommentMetadata, IssueMetadata, LinearActorMetadata, LinearWebhookPayload, NormalizedEvent, TriggerEvent } from "./types.ts";
 
 function deriveTriggerEvent(payload: LinearWebhookPayload): TriggerEvent {
   if (payload.type === "Issue") {

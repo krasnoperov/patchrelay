@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { getBundledAssetPath } from "./runtime-paths.js";
+import { getBundledAssetPath } from "./runtime-paths.ts";
 
 export interface BuildInfo {
   service: string;

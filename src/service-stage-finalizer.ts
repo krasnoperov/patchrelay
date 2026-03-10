@@ -1,13 +1,13 @@
-import type { CodexNotification } from "./codex-app-server.js";
-import type { CodexAppServerClient } from "./codex-app-server.js";
-import type { PatchRelayDatabase } from "./db.js";
+import type { CodexNotification } from "./codex-app-server.ts";
+import type { CodexAppServerClient } from "./codex-app-server.ts";
+import type { PatchRelayDatabase } from "./db.ts";
 import {
   buildAwaitingHandoffComment,
   resolveActiveLinearState,
   resolveWorkflowLabelCleanup,
   resolveWorkflowLabelNames,
-} from "./linear-workflow.js";
-import { syncFailedStageToLinear } from "./stage-failure.js";
+} from "./linear-workflow.ts";
+import { syncFailedStageToLinear } from "./stage-failure.ts";
 import {
   buildFailedStageReport,
   buildPendingMaterializationThread,
@@ -17,8 +17,8 @@ import {
   extractTurnId,
   resolveStageRunStatus,
   summarizeCurrentThread,
-} from "./stage-reporting.js";
-import type { AppConfig, CodexThreadSummary, LinearClientProvider, StageRunRecord, TrackedIssueRecord } from "./types.js";
+} from "./stage-reporting.ts";
+import type { AppConfig, CodexThreadSummary, LinearClientProvider, StageRunRecord, TrackedIssueRecord } from "./types.ts";
 
 export class ServiceStageFinalizer {
   constructor(

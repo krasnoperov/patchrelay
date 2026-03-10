@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { resolveProject, triggerEventAllowed, trustedActorAllowed } from "../src/project-resolution.js";
-import type { AppConfig, LinearWebhookPayload } from "../src/types.js";
-import { normalizeWebhook } from "../src/webhooks.js";
+import { resolveProject, triggerEventAllowed, trustedActorAllowed } from "../src/project-resolution.ts";
+import type { AppConfig, LinearWebhookPayload } from "../src/types.ts";
+import { normalizeWebhook } from "../src/webhooks.ts";
 
 test("normalizeWebhook extracts issue metadata from a Linear issue webhook", () => {
   const payload: LinearWebhookPayload = {

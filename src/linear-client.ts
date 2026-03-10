@@ -1,7 +1,7 @@
 import type { Logger } from "pino";
-import { PatchRelayDatabase } from "./db.js";
-import { refreshLinearOAuthToken } from "./linear-oauth.js";
-import { decryptSecret, encryptSecret } from "./token-crypto.js";
+import { PatchRelayDatabase } from "./db.ts";
+import { refreshLinearOAuthToken } from "./linear-oauth.ts";
+import { decryptSecret, encryptSecret } from "./token-crypto.ts";
 import type {
   AppConfig,
   LinearActorProfile,
@@ -9,7 +9,7 @@ import type {
   LinearClientProvider,
   LinearCommentUpsertResult,
   LinearIssueSnapshot,
-} from "./types.js";
+} from "./types.ts";
 
 interface GraphqlResponse<T> {
   data?: T;

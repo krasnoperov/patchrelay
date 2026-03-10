@@ -4,11 +4,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import pino from "pino";
-import { runCli } from "../src/cli/index.js";
-import { CliDataAccess } from "../src/cli/data.js";
-import { PatchRelayDatabase } from "../src/db.js";
-import { buildHttpServer } from "../src/http.js";
-import type { AppConfig } from "../src/types.js";
+import { runCli } from "../src/cli/index.ts";
+import { CliDataAccess } from "../src/cli/data.ts";
+import { PatchRelayDatabase } from "../src/db.ts";
+import { buildHttpServer } from "../src/http.ts";
+import type { AppConfig } from "../src/types.ts";
 
 function createConfig(baseDir: string): AppConfig {
   return {

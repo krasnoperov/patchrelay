@@ -1,18 +1,18 @@
 import { existsSync, lstatSync, realpathSync } from "node:fs";
 import path from "node:path";
 import type { Logger } from "pino";
-import type { CodexAppServerClient } from "./codex-app-server.js";
-import type { PatchRelayDatabase } from "./db.js";
+import type { CodexAppServerClient } from "./codex-app-server.ts";
+import type { PatchRelayDatabase } from "./db.ts";
 import {
   buildRunningStatusComment,
   resolveActiveLinearState,
   resolveWorkflowLabelNames,
-} from "./linear-workflow.js";
-import { buildStageLaunchPlan, isCodexThreadId } from "./stage-launch.js";
-import { syncFailedStageToLinear } from "./stage-failure.js";
-import { buildFailedStageReport } from "./stage-reporting.js";
-import type { AppConfig, LinearClientProvider, StageRunRecord, TrackedIssueRecord } from "./types.js";
-import { ensureDir, execCommand } from "./utils.js";
+} from "./linear-workflow.ts";
+import { buildStageLaunchPlan, isCodexThreadId } from "./stage-launch.ts";
+import { syncFailedStageToLinear } from "./stage-failure.ts";
+import { buildFailedStageReport } from "./stage-reporting.ts";
+import type { AppConfig, LinearClientProvider, StageRunRecord, TrackedIssueRecord } from "./types.ts";
+import { ensureDir, execCommand } from "./utils.ts";
 
 export interface IssueQueueItem {
   projectId: string;

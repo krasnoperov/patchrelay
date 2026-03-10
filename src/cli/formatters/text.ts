@@ -1,4 +1,4 @@
-import type { EventsResult, InspectResult, ListResultItem, OpenResult, ReportResult, RetryResult, WorktreeResult } from "../data.js";
+import type { EventsResult, InspectResult, ListResultItem, OpenResult, ReportResult, RetryResult, WorktreeResult } from "../data.ts";
 
 function value(label: string, entry: string | number | undefined): string {
   return `${label}: ${entry ?? "-"}`;
@@ -35,7 +35,7 @@ export function formatInspect(result: InspectResult): string {
   return `${lines.join("\n")}\n`;
 }
 
-export function formatLive(result: Awaited<ReturnType<import("../data.js").CliDataAccess["live"]>> extends infer T ? Exclude<T, undefined> : never): string {
+export function formatLive(result: Awaited<ReturnType<import("../data.ts").CliDataAccess["live"]>> extends infer T ? Exclude<T, undefined> : never): string {
   const lines = [
     value("Issue", result.issue.issueKey ?? result.issue.linearIssueId),
     value("Stage", result.stageRun.stage),

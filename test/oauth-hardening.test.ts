@@ -4,10 +4,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import pino from "pino";
-import { PatchRelayDatabase } from "../src/db.js";
-import { buildRunningStatusComment } from "../src/linear-workflow.js";
-import { PatchRelayService } from "../src/service.js";
-import type { AppConfig } from "../src/types.js";
+import { PatchRelayDatabase } from "../src/db.ts";
+import { buildRunningStatusComment } from "../src/linear-workflow.ts";
+import { PatchRelayService } from "../src/service.ts";
+import type { AppConfig } from "../src/types.ts";
 
 function buildConfig(baseDir: string): AppConfig {
   return {
