@@ -73,6 +73,10 @@ projects:
       review_active: Reviewing
       deploy_active: Deploying
       cleanup: Cleanup
+    trusted_actors:
+      ids: [user_123]
+      emails: [owner@example.com]
+      email_domains: [example.com]
     trigger_events: [statusChanged]
     branch_prefix: use
 runner:
@@ -127,6 +131,12 @@ linear:
         assert.equal(config.projects[0]?.repoPath, path.join(baseDir, "repo"));
         assert.equal(config.projects[0]?.worktreeRoot, path.join(baseDir, "worktrees"));
         assert.equal(config.projects[0]?.workflowFiles.review, path.join(baseDir, "REVIEW.md"));
+        assert.deepEqual(config.projects[0]?.trustedActors, {
+          ids: ["user_123"],
+          names: [],
+          emails: ["owner@example.com"],
+          emailDomains: ["example.com"],
+        });
         assert.equal(config.runner.codex.shellBin, "/bin/bash");
         assert.equal(config.runner.codex.sourceBashrc, true);
       },
@@ -270,6 +280,72 @@ projects:
           () => loadConfig(),
           /operator_api.enabled requires operator_api.bearer_token_env when server.bind is not 127.0.0.1/,
         );
+      },
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("loadConfig supports trusted actor names and domains", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-config-trust-"));
+
+  try {
+    mkdirSync(path.join(baseDir, "config"), { recursive: true });
+    writeFileSync(
+      path.join(baseDir, "config", "patchrelay.yaml"),
+      `
+server:
+  bind: 127.0.0.1
+  port: 8787
+ingress:
+  linear_webhook_path: /webhooks/linear
+  max_body_bytes: 262144
+  max_timestamp_skew_seconds: 60
+logging:
+  file_path: ./patchrelay.log
+database:
+  path: ./data/patchrelay.sqlite
+linear:
+  webhook_secret_env: REQUIRED_SECRET
+projects:
+  - id: one
+    repo_path: ./repo
+    worktree_root: ./worktrees
+    workflow_files:
+      development: ./DEVELOPMENT.md
+      review: ./REVIEW.md
+      deploy: ./DEPLOY.md
+      cleanup: ./CLEANUP.md
+    workflow_statuses:
+      development: Start
+      review: Review
+      deploy: Deploy
+      development_active: Implementing
+      review_active: Reviewing
+      deploy_active: Deploying
+    trusted_actors:
+      names: [Owner Name]
+      email_domains: [trusted.example]
+    trigger_events: [statusChanged]
+    branch_prefix: use
+`,
+      "utf8",
+    );
+
+    withEnv(
+      {
+        PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.yaml"),
+        REQUIRED_SECRET: "top-secret",
+      },
+      () => {
+        const config = loadConfig();
+        assert.deepEqual(config.projects[0]?.trustedActors, {
+          ids: [],
+          names: ["Owner Name"],
+          emails: [],
+          emailDomains: ["trusted.example"],
+        });
       },
     );
   } finally {

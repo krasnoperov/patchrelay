@@ -88,6 +88,8 @@ Keep `operator_api.enabled: false` unless you explicitly need the local inspecti
 
 For the recommended CLI-first flow, you do not need to use `/setup` as a primary control surface. The browser is only needed for Linear OAuth consent after `patchrelay connect`.
 
+If you want Linear itself to be part of your trust boundary, configure `trusted_actors` on each project. That allowlist can name specific owners by `id` or `email`, or define a group-style allowlist with `email_domains`. When `trusted_actors` is present, unmatched Linear actors are ignored before they can trigger stages or steer a live comment.
+
 ## 5. Add Repo-Local Workflow Docs
 
 Each automated repository should contain:
@@ -214,6 +216,17 @@ PatchRelay only manages explicitly configured labels and ignores missing labels 
 - keep the database on local disk in a user-owned path
 - store logs in user-owned directories
 - enable webhook archival only if you actually need raw payload retention
+- configure `trusted_actors` for every project that should only be driven by a known owner or trusted group
+
+## Security Model
+
+Think about PatchRelay as three linked control planes:
+
+1. Web ingress: your reverse proxy should expose only the minimal webhook surface.
+2. Operator control: CLI-first setup and inspection stay local or behind explicit operator auth.
+3. Linear trust: `trusted_actors` decides who in Linear is allowed to trigger or steer automation once the webhook is already valid.
+
+That last layer matters because a valid signed webhook only proves the event came from Linear, not that the human or integration behind the event is one you want influencing a privileged local agent.
 
 ## Troubleshooting
 

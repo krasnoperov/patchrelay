@@ -52,6 +52,12 @@ export interface ProjectConfig {
   issueKeyPrefixes: string[];
   linearTeamIds: string[];
   allowLabels: string[];
+  trustedActors?: {
+    ids: string[];
+    names: string[];
+    emails: string[];
+    emailDomains: string[];
+  };
   triggerEvents: TriggerEvent[];
   branchPrefix: string;
 }
@@ -122,9 +128,17 @@ export interface LinearWebhookPayload {
   type: LinearEntityType;
   createdAt: string;
   webhookTimestamp: number;
+  actor?: Record<string, unknown>;
   data: Record<string, unknown>;
   updatedFrom?: Record<string, unknown>;
   url?: string;
+}
+
+export interface LinearActorMetadata {
+  id?: string;
+  name?: string;
+  email?: string;
+  type?: string;
 }
 
 export interface IssueMetadata {
@@ -152,6 +166,7 @@ export interface NormalizedEvent {
   action: LinearAction;
   triggerEvent: TriggerEvent;
   eventType: string;
+  actor?: LinearActorMetadata;
   issue: IssueMetadata;
   comment?: CommentMetadata;
   payload: LinearWebhookPayload;

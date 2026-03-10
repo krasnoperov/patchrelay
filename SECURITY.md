@@ -22,3 +22,14 @@ PatchRelay is designed for infrastructure you control. Recommended production po
 - leave `operator_api.enabled` disabled unless you explicitly need the HTTP operator endpoints
 - require `PATCHRELAY_OPERATOR_TOKEN` if you enable the operator API on a non-loopback bind
 - treat workflow files and Codex runtime access as privileged automation policy
+- configure `projects[].trusted_actors` so only trusted Linear owners or trusted domains can trigger automation
+
+## Configuration model
+
+PatchRelay separates trust into three layers:
+
+- Network trust: the public server surface should only accept signed Linear webhooks.
+- Operator trust: local setup and inspection routes are for the operator, not the public internet.
+- Linear actor trust: a valid webhook is still ignored if its actor is not trusted for the routed project.
+
+`trusted_actors` is evaluated per project. When configured, unmatched issue and comment events are ignored before they can change desired stage state or inject comment context into an active turn.

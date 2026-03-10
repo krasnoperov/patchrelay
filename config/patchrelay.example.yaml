@@ -80,6 +80,16 @@ projects:
     linear_team_ids:
       - APP
     allow_labels: []
+    # Optional. If set, PatchRelay ignores webhooks whose Linear actor does not
+    # match one of these trusted identities. Use ids/emails for owners, or
+    # email_domains for a group-style allowlist.
+    trusted_actors:
+      ids: []
+      names: []
+      emails:
+        - owner@example.com
+      email_domains:
+        - trusted.example.com
     trigger_events:
       - statusChanged
       - commentCreated

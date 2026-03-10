@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { resolveProject, triggerEventAllowed } from "../src/project-resolution.js";
+import { resolveProject, triggerEventAllowed, trustedActorAllowed } from "../src/project-resolution.js";
 import type { AppConfig, LinearWebhookPayload } from "../src/types.js";
 import { normalizeWebhook } from "../src/webhooks.js";
 
@@ -49,6 +49,12 @@ test("normalizeWebhook extracts nested issue metadata from comment webhooks and 
     type: "Comment",
     createdAt: "2026-03-08T12:00:00.000Z",
     webhookTimestamp: Date.now(),
+    actor: {
+      id: "user_1",
+      name: "Alex Operator",
+      email: "alex@example.com",
+      type: "User",
+    } as unknown as Record<string, unknown>,
     data: {
       issue: {
         id: "issue_comment",
@@ -80,6 +86,12 @@ test("normalizeWebhook extracts nested issue metadata from comment webhooks and 
   assert.equal(normalized.issue.teamId, "team_1");
   assert.equal(normalized.issue.stateId, "state_review");
   assert.deepEqual(normalized.issue.labelNames, ["ops", "cloudflare"]);
+  assert.deepEqual(normalized.actor, {
+    id: "user_1",
+    name: "Alex Operator",
+    email: "alex@example.com",
+    type: "User",
+  });
   assert.equal(normalized.triggerEvent, "commentCreated");
 });
 
@@ -202,4 +214,44 @@ test("resolveProject matches by issue key prefix and team", () => {
   const project = resolveProject(config, normalized.issue);
   assert.equal(project?.id, "usertold");
   assert.equal(triggerEventAllowed(project!, normalized.triggerEvent), true);
+});
+
+test("trustedActorAllowed matches ids, emails, names, and trusted email domains", () => {
+  const project = {
+    id: "usertold",
+    repoPath: "/repos/usertold",
+    worktreeRoot: "/worktrees/usertold",
+    workflowFiles: {
+      development: "/repos/usertold/DEVELOPMENT_WORKFLOW.md",
+      review: "/repos/usertold/REVIEW_WORKFLOW.md",
+      deploy: "/repos/usertold/DEPLOY_WORKFLOW.md",
+      cleanup: "/repos/usertold/CLEANUP_WORKFLOW.md",
+    },
+    workflowStatuses: {
+      development: "Start",
+      review: "Review",
+      deploy: "Deploy",
+      developmentActive: "Implementing",
+      reviewActive: "Reviewing",
+      deployActive: "Deploying",
+    },
+    issueKeyPrefixes: ["USE"],
+    linearTeamIds: ["USE"],
+    allowLabels: [],
+    trustedActors: {
+      ids: ["user_1"],
+      names: ["Owner Name"],
+      emails: ["owner@example.com"],
+      emailDomains: ["trusted.example.com"],
+    },
+    triggerEvents: ["statusChanged"],
+    branchPrefix: "use",
+  };
+
+  assert.equal(trustedActorAllowed(project, { id: "user_1" }), true);
+  assert.equal(trustedActorAllowed(project, { name: "owner name" }), true);
+  assert.equal(trustedActorAllowed(project, { email: "OWNER@example.com" }), true);
+  assert.equal(trustedActorAllowed(project, { email: "teammate@trusted.example.com" }), true);
+  assert.equal(trustedActorAllowed(project, { email: "intruder@elsewhere.example" }), false);
+  assert.equal(trustedActorAllowed(project, undefined), false);
 });

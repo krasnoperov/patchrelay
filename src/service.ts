@@ -4,7 +4,7 @@ import { CodexAppServerClient, type CodexNotification } from "./codex-app-server
 import { PatchRelayDatabase } from "./db.js";
 import { isPatchRelayStatusComment } from "./linear-workflow.js";
 import { createLinearOAuthUrl, createOAuthStateToken, installLinearOAuthCode } from "./linear-oauth.js";
-import { resolveProject, triggerEventAllowed } from "./project-resolution.js";
+import { resolveProject, triggerEventAllowed, trustedActorAllowed } from "./project-resolution.js";
 import { SerialWorkQueue } from "./service-queue.js";
 import { ServiceStageFinalizer } from "./service-stage-finalizer.js";
 import { type IssueQueueItem, ServiceStageRunner } from "./service-stage-runner.js";
@@ -269,6 +269,22 @@ export class PatchRelayService {
     });
     const project = resolveProject(this.config, normalized.issue);
     if (!project) {
+      this.db.markWebhookProcessed(webhookEventId, "processed");
+      return;
+    }
+
+    if (!trustedActorAllowed(project, normalized.actor)) {
+      this.logger.info(
+        {
+          webhookId: normalized.webhookId,
+          projectId: project.id,
+          triggerEvent: normalized.triggerEvent,
+          actorId: normalized.actor?.id,
+          actorName: normalized.actor?.name,
+          actorEmail: normalized.actor?.email,
+        },
+        "Ignoring webhook from untrusted Linear actor",
+      );
       this.db.markWebhookProcessed(webhookEventId, "processed");
       return;
     }

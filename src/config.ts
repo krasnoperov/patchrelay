@@ -33,6 +33,14 @@ const projectSchema = z.object({
       awaiting_handoff: z.string().min(1).optional(),
     })
     .optional(),
+  trusted_actors: z
+    .object({
+      ids: z.array(z.string().min(1)).default([]),
+      names: z.array(z.string().min(1)).default([]),
+      emails: z.array(z.string().email()).default([]),
+      email_domains: z.array(z.string().min(1)).default([]),
+    })
+    .optional(),
   issue_key_prefixes: z.array(z.string().min(1)).default([]),
   linear_team_ids: z.array(z.string().min(1)).default([]),
   allow_labels: z.array(z.string().min(1)).default([]),
@@ -256,6 +264,16 @@ export function loadConfig(
             workflowLabels: {
               ...(project.workflow_labels.working ? { working: project.workflow_labels.working } : {}),
               ...(project.workflow_labels.awaiting_handoff ? { awaitingHandoff: project.workflow_labels.awaiting_handoff } : {}),
+            },
+          }
+        : {}),
+      ...(project.trusted_actors
+        ? {
+            trustedActors: {
+              ids: project.trusted_actors.ids,
+              names: project.trusted_actors.names,
+              emails: project.trusted_actors.emails,
+              emailDomains: project.trusted_actors.email_domains,
             },
           }
         : {}),

@@ -1,4 +1,4 @@
-import type { CommentMetadata, IssueMetadata, LinearWebhookPayload, NormalizedEvent, TriggerEvent } from "./types.js";
+import type { CommentMetadata, IssueMetadata, LinearActorMetadata, LinearWebhookPayload, NormalizedEvent, TriggerEvent } from "./types.js";
 
 function deriveTriggerEvent(payload: LinearWebhookPayload): TriggerEvent {
   if (payload.type === "Issue") {
@@ -121,6 +121,46 @@ function extractIssueMetadata(payload: LinearWebhookPayload): IssueMetadata | un
   };
 }
 
+function extractActorFromRecord(record: Record<string, unknown> | undefined): LinearActorMetadata | undefined {
+  if (!record) {
+    return undefined;
+  }
+
+  const nestedUser = asRecord(record.user);
+  const id = getString(record, "id") ?? getString(record, "actorId") ?? getString(record, "userId") ?? getString(nestedUser ?? {}, "id");
+  const name = getString(record, "name") ?? getString(nestedUser ?? {}, "name");
+  const email = getString(record, "email") ?? getString(nestedUser ?? {}, "email");
+  const type = getString(record, "type") ?? getString(record, "__typename");
+
+  if (!id && !name && !email && !type) {
+    return undefined;
+  }
+
+  return {
+    ...(id ? { id } : {}),
+    ...(name ? { name } : {}),
+    ...(email ? { email } : {}),
+    ...(type ? { type } : {}),
+  };
+}
+
+function extractActorMetadata(payload: LinearWebhookPayload): LinearActorMetadata | undefined {
+  const payloadActor = extractActorFromRecord(asRecord((payload as unknown as Record<string, unknown>).actor));
+  if (payloadActor) {
+    return payloadActor;
+  }
+
+  const data = asRecord(payload.data);
+  const fallbacks = [
+    extractActorFromRecord(asRecord(data?.actor)),
+    extractActorFromRecord(asRecord(data?.user)),
+    extractActorFromRecord(asRecord(data?.creator)),
+    extractActorFromRecord(asRecord(data?.createdBy)),
+  ];
+
+  return fallbacks.find(Boolean);
+}
+
 function extractCommentMetadata(payload: LinearWebhookPayload): CommentMetadata | undefined {
   if (payload.type !== "Comment") {
     return undefined;
@@ -152,6 +192,7 @@ export function normalizeWebhook(params: {
 }): NormalizedEvent {
   const issue = extractIssueMetadata(params.payload);
   const comment = extractCommentMetadata(params.payload);
+  const actor = extractActorMetadata(params.payload);
   if (!issue) {
     throw new Error(`Unable to determine issue metadata from ${params.payload.type} webhook`);
   }
@@ -163,6 +204,7 @@ export function normalizeWebhook(params: {
     action: params.payload.action,
     triggerEvent,
     eventType: `${params.payload.type}.${params.payload.action}`,
+    ...(actor ? { actor } : {}),
     issue,
     ...(comment ? { comment } : {}),
     payload: params.payload,

@@ -144,6 +144,17 @@ The requirement docs for those files live in:
 - Leave the operator API disabled unless you need it. If you enable it on a non-local bind, require a bearer token.
 - Give the Linear API token only the access needed to update issues and comments in the target workspace.
 - Treat repo-local workflow docs as code execution policy, because PatchRelay passes them directly into agent turns.
+- If you use Linear as a control surface, configure `projects[].trusted_actors` so only trusted owners or trusted email domains can trigger or steer automation for that project.
+
+## Trust Model
+
+PatchRelay has three separate trust boundaries:
+
+- Public ingress: only signed Linear webhooks should reach the public service surface.
+- Operator control: setup, inspection, and installation-linking should stay local or behind operator auth.
+- Linear actor trust: even valid signed webhooks are ignored for a project if their Linear actor is not in that project's `trusted_actors` allowlist.
+
+By default, if `trusted_actors` is omitted, PatchRelay preserves the existing behavior and accepts any valid actor in the routed Linear workspace. If `trusted_actors` is configured for a project, the webhook actor must match by `id`, `name`, `email`, or `email_domain` or the event is ignored before it can queue a stage or steer a live comment.
 
 ## Status
 
