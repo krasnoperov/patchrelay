@@ -4,10 +4,7 @@ PatchRelay is a self-hosted control plane for Linear-driven software delivery wi
 
 It listens for signed Linear webhooks, maps issues to local repositories, prepares one durable git worktree per issue, and runs staged Codex turns through `codex app-server`. PatchRelay keeps the tracker state, workspace state, and agent thread history correlated so you can see what happened after the run, not just while it is live.
 
-PatchRelay now supports both:
-
-- legacy single-workspace mode with one `LINEAR_API_TOKEN`
-- OAuth installation mode for smoother setup, multiple Linear workspaces, and less manual token handling
+PatchRelay uses one Linear setup model: OAuth-backed installations linked to projects through the CLI.
 
 The recommended operator model is now personal-mode on a machine you control:
 
@@ -59,7 +56,7 @@ Internal inspection endpoints are disabled by default. The CLI-first OAuth flow 
    - Node.js 24+
    - `git`
    - `codex` CLI installed and authenticated for the same Unix user that will run PatchRelay
-   - either a Linear personal API key or a Linear OAuth app
+   - a Linear OAuth app
    - a Linear webhook secret
 
 2. Clone and install:
@@ -79,8 +76,7 @@ cp config/patchrelay.example.yaml config/patchrelay.yaml
 ```
 
 4. Edit `.env` and `config/patchrelay.yaml` for your machine, repos, worktree roots, and Linear routing.
-   - For legacy mode, set `LINEAR_API_TOKEN`.
-   - For OAuth mode, set `PATCHRELAY_TOKEN_ENCRYPTION_KEY`, `LINEAR_OAUTH_CLIENT_ID`, and `LINEAR_OAUTH_CLIENT_SECRET`.
+   - Set `PATCHRELAY_TOKEN_ENCRYPTION_KEY`, `LINEAR_OAUTH_CLIENT_ID`, and `LINEAR_OAUTH_CLIENT_SECRET`.
    - Standard workflow doc names and state names are built in. Use top-level `defaults` to change those conventions globally, and project-level `workflow_files` or `workflow_statuses` only when a repo needs overrides.
 
 5. Start PatchRelay as your own user:
@@ -96,7 +92,7 @@ npm run build
 node dist/index.js doctor
 ```
 
-For OAuth mode, use the CLI as the primary operator interface:
+Use the CLI as the primary operator interface:
 
 ```bash
 patchrelay connect --project your-project
@@ -147,7 +143,7 @@ The requirement docs for those files live in:
 - Publish only `/`, `/health`, `/ready`, and `POST /webhooks/linear`.
 - Run PatchRelay as your own user if you want Codex to inherit your existing git, SSH, and local tool access.
 - Leave the operator API disabled unless you need it. If you enable it on a non-local bind, require a bearer token.
-- Give the Linear API token only the access needed to update issues and comments in the target workspace.
+- Keep the Linear OAuth app scopes limited to the issue and comment access PatchRelay actually needs.
 - Treat repo-local workflow docs as code execution policy, because PatchRelay passes them directly into agent turns.
 - If you use Linear as a control surface, configure `projects[].trusted_actors` so only trusted owners or trusted email domains can trigger or steer automation for that project.
 

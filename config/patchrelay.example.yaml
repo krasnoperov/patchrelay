@@ -23,7 +23,6 @@ database:
 linear:
   webhook_secret_env: LINEAR_WEBHOOK_SECRET
   graphql_url: https://api.linear.app/graphql
-  api_token_env: LINEAR_API_TOKEN
   token_encryption_key_env: PATCHRELAY_TOKEN_ENCRYPTION_KEY
   oauth:
     client_id_env: LINEAR_OAUTH_CLIENT_ID

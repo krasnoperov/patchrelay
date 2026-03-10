@@ -412,10 +412,6 @@ export class CliDataAccess {
   }
 
   async connect(projectId?: string): Promise<ConnectResult> {
-    if (!this.config.linear.oauth) {
-      throw new Error("Linear OAuth is not configured.");
-    }
-
     return await this.requestJson<ConnectResult>("/api/oauth/linear/start", {
       ...(projectId ? { projectId } : {}),
     });
@@ -476,7 +472,7 @@ export class CliDataAccess {
   }
 
   private getServiceBaseUrl(): string {
-    const redirectUri = this.config.linear.oauth?.redirectUri;
+    const redirectUri = this.config.linear.oauth.redirectUri;
     if (redirectUri) {
       const url = new URL(redirectUri);
       url.pathname = "/";

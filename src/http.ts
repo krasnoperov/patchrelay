@@ -15,8 +15,8 @@ declare module "fastify" {
 export async function buildHttpServer(config: AppConfig, service: PatchRelayService, logger: Logger) {
   const buildInfo = getBuildInfo();
   const loopbackBind = isLoopbackBind(config.server.bind);
-  const localOAuthPagesEnabled = Boolean(config.linear.oauth) && loopbackBind;
-  const managementRoutesEnabled = Boolean(config.linear.oauth) && (loopbackBind || config.operatorApi.enabled);
+  const localOAuthPagesEnabled = loopbackBind;
+  const managementRoutesEnabled = loopbackBind || config.operatorApi.enabled;
   const app = fastify({
     loggerInstance: logger,
     bodyLimit: config.ingress.maxBodyBytes,
@@ -424,7 +424,7 @@ function renderSetupPage(
   <body>
     <main>
       <h1>PatchRelay Setup</h1>
-      <p>Linear OAuth redirect: <code>${escapeHtml(config.linear.oauth?.redirectUri ?? "not configured")}</code></p>
+      <p>Linear OAuth redirect: <code>${escapeHtml(config.linear.oauth.redirectUri)}</code></p>
       <h2>Projects</h2>
       <ul>${projectItems || "<li>No projects configured.</li>"}</ul>
       <h2>Installations</h2>

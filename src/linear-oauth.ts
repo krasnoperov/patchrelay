@@ -25,10 +25,6 @@ export function createLinearOAuthUrl(
   redirectUri?: string,
   _projectId?: string,
 ): string {
-  if (!config.linear.oauth) {
-    throw new Error("Linear OAuth is not configured");
-  }
-
   const url = new URL(DEFAULT_LINEAR_AUTHORIZE_URL);
   url.searchParams.set("client_id", config.linear.oauth.clientId);
   url.searchParams.set("redirect_uri", redirectUri ?? config.linear.oauth.redirectUri);
@@ -47,10 +43,6 @@ export async function exchangeLinearOAuthCode(
     redirectUri: string;
   },
 ): Promise<LinearOauthTokenSet> {
-  if (!config.linear.oauth) {
-    throw new Error("Linear OAuth is not configured");
-  }
-
   const response = await fetch(DEFAULT_LINEAR_TOKEN_URL, {
     method: "POST",
     headers: {
@@ -92,10 +84,6 @@ export async function refreshLinearOAuthToken(
   config: AppConfig,
   refreshToken: string,
 ): Promise<LinearOauthTokenSet> {
-  if (!config.linear.oauth) {
-    throw new Error("Linear OAuth is not configured");
-  }
-
   const response = await fetch(DEFAULT_LINEAR_TOKEN_URL, {
     method: "POST",
     headers: {
@@ -209,10 +197,6 @@ export async function installLinearOAuthCode(params: {
   redirectUri: string;
   projectId?: string;
 }): Promise<LinearInstallationRecord> {
-  if (!params.config.linear.oauth || !params.config.linear.tokenEncryptionKey) {
-    throw new Error("Linear OAuth is not configured");
-  }
-
   const tokenSet = await exchangeLinearOAuthCode(params.config, {
     code: params.code,
     redirectUri: params.redirectUri,

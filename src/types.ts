@@ -101,16 +101,15 @@ export interface AppConfig {
   };
   linear: {
     webhookSecret: string;
-    apiToken?: string;
     graphqlUrl: string;
-    oauth?: {
+    oauth: {
       clientId: string;
       clientSecret: string;
       redirectUri: string;
       scopes: string[];
       actor: "user" | "app";
     };
-    tokenEncryptionKey?: string;
+    tokenEncryptionKey: string;
   };
   operatorApi: {
     enabled: boolean;

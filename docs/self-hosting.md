@@ -29,7 +29,7 @@ The common deployment shape is:
 - `codex` CLI installed and authenticated for the same user who will run PatchRelay
 - access to the local repositories you want to automate
 - Linear workspace access
-- either one Linear personal API key or one Linear OAuth app
+- one Linear OAuth app
 - one Linear webhook secret
 
 ## 1. Clone And Build
@@ -50,20 +50,15 @@ cp config/patchrelay.example.yaml config/patchrelay.yaml
 
 ## 3. Configure Secrets
 
-Choose one of these modes:
-
-- Legacy mode: create a Linear personal API key in `Linear -> Settings -> API -> Personal API keys`.
-- OAuth mode: create a Linear OAuth app and configure its redirect URI to point at PatchRelay, for example `http://127.0.0.1:8787/oauth/linear/callback` for personal-mode local setup or your public callback URL if you later expose it remotely.
+Create a Linear OAuth app and configure its redirect URI to point at PatchRelay, for example `http://127.0.0.1:8787/oauth/linear/callback` for personal-mode local setup or your public callback URL if you later expose it remotely.
 
 Then edit `.env`:
 
 ```bash
 LINEAR_WEBHOOK_SECRET=replace-with-linear-webhook-secret
-LINEAR_API_TOKEN=replace-with-linear-api-token
-# or, for OAuth installation mode:
-# PATCHRELAY_TOKEN_ENCRYPTION_KEY=replace-with-long-random-secret
-# LINEAR_OAUTH_CLIENT_ID=replace-with-linear-oauth-client-id
-# LINEAR_OAUTH_CLIENT_SECRET=replace-with-linear-oauth-client-secret
+PATCHRELAY_TOKEN_ENCRYPTION_KEY=replace-with-long-random-secret
+LINEAR_OAUTH_CLIENT_ID=replace-with-linear-oauth-client-id
+LINEAR_OAUTH_CLIENT_SECRET=replace-with-linear-oauth-client-secret
 # PATCHRELAY_OPERATOR_TOKEN=replace-with-operator-api-token
 ```
 
@@ -142,7 +137,7 @@ Health check:
 curl http://127.0.0.1:8787/health
 ```
 
-For OAuth installation mode, stay in the terminal:
+Stay in the terminal:
 
 ```bash
 patchrelay connect --project your-project
@@ -248,6 +243,6 @@ If PatchRelay starts but does not process issue transitions:
 
 If PatchRelay can read webhooks but cannot write back to Linear:
 
-- verify `LINEAR_API_TOKEN`
-- verify the token has permission to read and update issues and comments
+- verify the connected installation is linked to the project
+- verify the OAuth app scopes cover reading and updating issues and comments
 - verify the configured active status names and optional labels exist in the Linear workspace

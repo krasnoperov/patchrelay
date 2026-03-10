@@ -21,9 +21,8 @@ interface GraphqlResponse<T> {
 export class LinearGraphqlClient implements LinearClient {
   constructor(
     private readonly options: {
-      apiToken: string;
+      accessToken: string;
       graphqlUrl: string;
-      authMode?: "api-key" | "oauth-bearer";
     },
     private readonly logger: Logger,
   ) {}
@@ -346,7 +345,7 @@ export class LinearGraphqlClient implements LinearClient {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        authorization: this.options.authMode === "oauth-bearer" ? `Bearer ${this.options.apiToken}` : this.options.apiToken,
+        authorization: `Bearer ${this.options.accessToken}`,
       },
       body: JSON.stringify({
         query,
@@ -442,22 +441,23 @@ export class DatabaseBackedLinearClientProvider implements LinearClientProvider 
     const link = this.db.getProjectInstallation(projectId);
     if (link) {
       const installation = this.db.getLinearInstallation(link.installationId);
-      if (!installation || !this.config.linear.tokenEncryptionKey) {
+      if (!installation) {
         return undefined;
       }
 
-      let accessToken = decryptSecret(installation.accessTokenCiphertext, this.config.linear.tokenEncryptionKey);
+      const encryptionKey = this.config.linear.tokenEncryptionKey;
+      let accessToken = decryptSecret(installation.accessTokenCiphertext, encryptionKey);
       const refreshToken = installation.refreshTokenCiphertext
-        ? decryptSecret(installation.refreshTokenCiphertext, this.config.linear.tokenEncryptionKey)
+        ? decryptSecret(installation.refreshTokenCiphertext, encryptionKey)
         : undefined;
 
       if (shouldRefreshToken(installation.expiresAt) && refreshToken) {
         const refreshed = await refreshLinearOAuthToken(this.config, refreshToken);
         accessToken = refreshed.accessToken;
         this.db.updateLinearInstallationTokens(installation.id, {
-          accessTokenCiphertext: encryptSecret(refreshed.accessToken, this.config.linear.tokenEncryptionKey),
+          accessTokenCiphertext: encryptSecret(refreshed.accessToken, encryptionKey),
           ...(refreshed.refreshToken
-            ? { refreshTokenCiphertext: encryptSecret(refreshed.refreshToken, this.config.linear.tokenEncryptionKey) }
+            ? { refreshTokenCiphertext: encryptSecret(refreshed.refreshToken, encryptionKey) }
             : {}),
           scopesJson: JSON.stringify(refreshed.scopes),
           ...(refreshed.expiresAt ? { expiresAt: refreshed.expiresAt } : {}),
@@ -466,26 +466,13 @@ export class DatabaseBackedLinearClientProvider implements LinearClientProvider 
 
       return new LinearGraphqlClient(
         {
-          apiToken: accessToken,
+          accessToken,
           graphqlUrl: this.config.linear.graphqlUrl,
-          authMode: "oauth-bearer",
         },
         this.logger,
       );
     }
-
-    if (!this.config.linear.apiToken) {
-      return undefined;
-    }
-
-    return new LinearGraphqlClient(
-      {
-        apiToken: this.config.linear.apiToken,
-        graphqlUrl: this.config.linear.graphqlUrl,
-        authMode: "api-key",
-      },
-      this.logger,
-    );
+    return undefined;
   }
 }
 

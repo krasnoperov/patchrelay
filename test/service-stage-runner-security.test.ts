@@ -119,8 +119,15 @@ function createConfig(baseDir: string): AppConfig {
     },
     linear: {
       webhookSecret: "secret",
-      apiToken: "linear-token",
       graphqlUrl: "https://linear.example/graphql",
+      oauth: {
+        clientId: "client-id",
+        clientSecret: "client-secret",
+        redirectUri: "http://127.0.0.1:8787/oauth/linear/callback",
+        scopes: ["read", "write"],
+        actor: "app",
+      },
+      tokenEncryptionKey: "0123456789abcdef0123456789abcdef",
     },
     operatorApi: {
       enabled: false,

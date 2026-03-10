@@ -87,9 +87,6 @@ export class PatchRelayService {
   }
 
   createLinearOAuthStart(params?: { projectId?: string }): { state: string; authorizeUrl: string; redirectUri: string } {
-    if (!this.config.linear.oauth) {
-      throw new Error("Linear OAuth is not configured");
-    }
     if (params?.projectId && !this.config.projects.some((project) => project.id === params.projectId)) {
       throw new Error(`Unknown project: ${params.projectId}`);
     }

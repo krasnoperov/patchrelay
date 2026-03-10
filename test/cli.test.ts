@@ -35,6 +35,14 @@ function createConfig(baseDir: string): AppConfig {
     linear: {
       webhookSecret: "",
       graphqlUrl: "https://linear.example/graphql",
+      oauth: {
+        clientId: "client-id",
+        clientSecret: "client-secret",
+        redirectUri: "http://127.0.0.1:8787/oauth/linear/callback",
+        scopes: ["read", "write"],
+        actor: "app",
+      },
+      tokenEncryptionKey: "0123456789abcdef0123456789abcdef",
     },
     operatorApi: {
       enabled: false,
@@ -362,8 +370,8 @@ test("cli doctor reports preflight status", async () => {
     const exitCode = await runCli(["doctor"], { config, stdout: stdout.stream, stderr: stderr.stream });
 
     assert.equal(exitCode, 0);
-    assert.match(stdout.read(), /WARN \[linear\] LINEAR_API_TOKEN is missing/);
     assert.match(stdout.read(), /PASS \[linear\] Linear webhook secret is configured/);
+    assert.match(stdout.read(), /PASS \[linear_oauth\] Linear OAuth is configured with actor=app/);
 
     const jsonOut = createBufferStream();
     assert.equal(await runCli(["doctor", "--json"], { config, stdout: jsonOut.stream, stderr: stderr.stream }), 0);

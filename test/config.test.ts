@@ -5,6 +5,20 @@ import path from "node:path";
 import test from "node:test";
 import { loadConfig } from "../src/config.js";
 
+const oauthConfigYaml = `  token_encryption_key_env: PATCHRELAY_TOKEN_ENCRYPTION_KEY
+  oauth:
+    client_id_env: LINEAR_OAUTH_CLIENT_ID
+    client_secret_env: LINEAR_OAUTH_CLIENT_SECRET
+    redirect_uri: http://127.0.0.1:8787/oauth/linear/callback
+    scopes: [read, write]
+    actor: user`;
+
+const oauthEnv = {
+  PATCHRELAY_TOKEN_ENCRYPTION_KEY: "enc-secret",
+  LINEAR_OAUTH_CLIENT_ID: "oauth-client-id",
+  LINEAR_OAUTH_CLIENT_SECRET: "oauth-client-secret",
+};
+
 function withEnv(values: Record<string, string | undefined>, run: () => void): void {
   const previous = new Map<string, string | undefined>();
 
@@ -85,14 +99,7 @@ runner:
     source_bashrc: true
 linear:
   webhook_secret_env: CUSTOM_LINEAR_SECRET
-  api_token_env: CUSTOM_LINEAR_TOKEN
-  token_encryption_key_env: PATCHRELAY_TOKEN_ENCRYPTION_KEY
-  oauth:
-    client_id_env: LINEAR_OAUTH_CLIENT_ID
-    client_secret_env: LINEAR_OAUTH_CLIENT_SECRET
-    redirect_uri: http://127.0.0.1:8787/oauth/linear/callback
-    scopes: [read, write]
-    actor: user
+${oauthConfigYaml}
 `,
       "utf8",
     );
@@ -104,11 +111,8 @@ linear:
         PATCHRELAY_DB_PATH: path.join(baseDir, "runtime.sqlite"),
         PATCHRELAY_WEBHOOK_ARCHIVE_DIR: path.join(baseDir, "runtime-archive"),
         CUSTOM_LINEAR_SECRET: "top-secret",
-        CUSTOM_LINEAR_TOKEN: "linear-token",
         PATCHRELAY_OPERATOR_TOKEN: "operator-secret",
-        PATCHRELAY_TOKEN_ENCRYPTION_KEY: "enc-secret",
-        LINEAR_OAUTH_CLIENT_ID: "oauth-client-id",
-        LINEAR_OAUTH_CLIENT_SECRET: "oauth-client-secret",
+        ...oauthEnv,
         LOG_FILE_PATH: path.join(baseDir, "ignored.log"),
         ARCHIVE_DIR: path.join(baseDir, "ignored-archive"),
       },
@@ -122,10 +126,9 @@ linear:
         assert.equal(config.logging.webhookArchiveDir, path.join(baseDir, "runtime-archive"));
         assert.equal(config.database.path, path.join(baseDir, "runtime.sqlite"));
         assert.equal(config.linear.webhookSecret, "top-secret");
-        assert.equal(config.linear.apiToken, "linear-token");
         assert.equal(config.linear.tokenEncryptionKey, "enc-secret");
-        assert.equal(config.linear.oauth?.clientId, "oauth-client-id");
-        assert.equal(config.linear.oauth?.clientSecret, "oauth-client-secret");
+        assert.equal(config.linear.oauth.clientId, "oauth-client-id");
+        assert.equal(config.linear.oauth.clientSecret, "oauth-client-secret");
         assert.equal(config.operatorApi.enabled, true);
         assert.equal(config.operatorApi.bearerToken, "operator-secret");
         assert.equal(config.projects[0]?.repoPath, path.join(baseDir, "repo"));
@@ -172,6 +175,7 @@ database:
   path: ./data/patchrelay.sqlite
 linear:
   webhook_secret_env: REQUIRED_SECRET
+${oauthConfigYaml}
 defaults:
   workflow_files:
     deploy: automation/DEPLOY.md
@@ -200,6 +204,7 @@ projects:
       {
         PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.yaml"),
         REQUIRED_SECRET: "top-secret",
+        ...oauthEnv,
       },
       () => {
         const config = loadConfig();
@@ -253,6 +258,7 @@ database:
   path: ./data/patchrelay.sqlite
 linear:
   webhook_secret_env: REQUIRED_SECRET
+${oauthConfigYaml}
 defaults:
   workflow_files:
     review: workflows/REVIEW.md
@@ -282,6 +288,7 @@ projects:
       {
         PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.yaml"),
         REQUIRED_SECRET: "top-secret",
+        ...oauthEnv,
       },
       () => {
         const config = loadConfig();
@@ -328,6 +335,7 @@ database:
   path: ./data/patchrelay.sqlite
 linear:
   webhook_secret_env: REQUIRED_SECRET
+${oauthConfigYaml}
 projects:
   - id: usertold
     repo_path: ${repoPath}
@@ -342,6 +350,7 @@ projects:
       {
         PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.yaml"),
         REQUIRED_SECRET: "top-secret",
+        ...oauthEnv,
       },
       () => {
         const config = loadConfig();
@@ -395,6 +404,7 @@ database:
   path: ./data/patchrelay.sqlite
 linear:
   webhook_secret_env: REQUIRED_SECRET
+${oauthConfigYaml}
 defaults:
   workflow_statuses:
     cleanup: Cleanup
@@ -418,6 +428,7 @@ projects:
       {
         PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.yaml"),
         REQUIRED_SECRET: "top-secret",
+        ...oauthEnv,
       },
       () => {
         const config = loadConfig();
@@ -453,6 +464,7 @@ database:
   path: ./data/patchrelay.sqlite
 linear:
   webhook_secret_env: REQUIRED_SECRET
+${oauthConfigYaml}
 operator_api:
   enabled: true
 projects:
@@ -500,6 +512,7 @@ projects:
       {
         PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.yaml"),
         REQUIRED_SECRET: "top-secret",
+        ...oauthEnv,
       },
       () => {
         assert.throws(() => loadConfig(), /Issue key prefix "USE" is configured for both one and two/);
@@ -531,6 +544,7 @@ database:
   path: ./data/patchrelay.sqlite
 linear:
   webhook_secret_env: REQUIRED_SECRET
+${oauthConfigYaml}
 operator_api:
   enabled: true
 projects:
@@ -559,6 +573,7 @@ projects:
       {
         PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.yaml"),
         REQUIRED_SECRET: "top-secret",
+        ...oauthEnv,
       },
       () => {
         assert.throws(
@@ -593,6 +608,7 @@ database:
   path: ./data/patchrelay.sqlite
 linear:
   webhook_secret_env: REQUIRED_SECRET
+${oauthConfigYaml}
 projects:
   - id: one
     repo_path: ./repo
@@ -622,6 +638,7 @@ projects:
       {
         PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.yaml"),
         REQUIRED_SECRET: "top-secret",
+        ...oauthEnv,
       },
       () => {
         const config = loadConfig();
@@ -659,6 +676,7 @@ database:
   path: ./data/patchrelay.sqlite
 linear:
   webhook_secret_env: REQUIRED_SECRET
+${oauthConfigYaml}
 projects:
   - id: usertold
     repo_path: ./repo
@@ -689,6 +707,7 @@ runner:
       {
         PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.yaml"),
         REQUIRED_SECRET: undefined,
+        ...oauthEnv,
       },
       () => {
         assert.throws(() => loadConfig(), /Missing env var REQUIRED_SECRET/);
