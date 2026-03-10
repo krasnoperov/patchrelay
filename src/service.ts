@@ -139,7 +139,7 @@ export class PatchRelayService {
         state: string;
         status: "pending" | "completed" | "failed";
         projectId?: string;
-        installation?: LinearInstallationRecord;
+        installation?: ReturnType<PatchRelayService["getLinearInstallationSummary"]>;
         errorMessage?: string;
       }
     | undefined {
@@ -154,18 +154,18 @@ export class PatchRelayService {
       state: oauthState.state,
       status: oauthState.status,
       ...(oauthState.projectId ? { projectId: oauthState.projectId } : {}),
-      ...(installation ? { installation } : {}),
+      ...(installation ? { installation: this.getLinearInstallationSummary(installation) } : {}),
       ...(oauthState.errorMessage ? { errorMessage: oauthState.errorMessage } : {}),
     };
   }
 
   listLinearInstallations(): Array<{
-    installation: ReturnType<PatchRelayDatabase["getLinearInstallation"]>;
+    installation: ReturnType<PatchRelayService["getLinearInstallationSummary"]>;
     linkedProjects: string[];
   }> {
     const links = this.db.listProjectInstallations();
     return this.db.listLinearInstallations().map((installation) => ({
-      installation,
+      installation: this.getLinearInstallationSummary(installation),
       linkedProjects: links
         .filter((link: { projectId: string; installationId: number }) => link.installationId === installation.id)
         .map((link: { projectId: string; installationId: number }) => link.projectId),
@@ -191,6 +191,17 @@ export class PatchRelayService {
     }
     this.db.unlinkProjectInstallation(projectId);
     return undefined;
+  }
+
+  private getLinearInstallationSummary(installation: LinearInstallationRecord) {
+    return {
+      id: installation.id,
+      ...(installation.workspaceName ? { workspaceName: installation.workspaceName } : {}),
+      ...(installation.workspaceKey ? { workspaceKey: installation.workspaceKey } : {}),
+      ...(installation.actorName ? { actorName: installation.actorName } : {}),
+      ...(installation.actorId ? { actorId: installation.actorId } : {}),
+      ...(installation.expiresAt ? { expiresAt: installation.expiresAt } : {}),
+    };
   }
 
   getReadiness() {

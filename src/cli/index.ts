@@ -379,7 +379,7 @@ export async function runCli(
       if (!projectId) {
         throw new Error("webhook requires <projectId>.");
       }
-      const result = data.webhookInstructions(projectId);
+      const result = await data.webhookInstructions(projectId);
       if (json) {
         writeOutput(
           stdout,
@@ -406,7 +406,7 @@ export async function runCli(
     }
 
     if (command === "installations") {
-      const result = data.listInstallations();
+      const result = await data.listInstallations();
       if (json) {
         writeOutput(stdout, formatJson(result));
         return 0;
@@ -414,7 +414,7 @@ export async function runCli(
       writeOutput(
         stdout,
         `${(result.installations.length > 0
-          ? result.installations.map((item) => `${item.id}  ${item.workspaceName ?? item.actorName ?? "-"}  projects=${item.linkedProjects.join(",") || "-"}`)
+          ? result.installations.map((item) => `${item.installation.id}  ${item.installation.workspaceName ?? item.installation.actorName ?? "-"}  projects=${item.linkedProjects.join(",") || "-"}`)
           : ["No installations found."]).join("\n")}\n`,
       );
       return 0;
@@ -430,7 +430,7 @@ export async function runCli(
       if (!Number.isFinite(installationId)) {
         throw new Error("link-installation requires <projectId> <installationId>.");
       }
-      const result = data.linkInstallation(projectId, installationId);
+      const result = await data.linkInstallation(projectId, installationId);
       writeOutput(
         stdout,
         json ? formatJson(result) : `Linked ${projectId} to installation ${result.installationId}.\n`,
@@ -443,7 +443,7 @@ export async function runCli(
       if (!projectId) {
         throw new Error("unlink-installation requires <projectId>.");
       }
-      const result = data.linkInstallation(projectId, undefined);
+      const result = await data.unlinkInstallation(projectId);
       writeOutput(stdout, json ? formatJson(result) : `Removed installation link for ${projectId}.\n`);
       return 0;
     }

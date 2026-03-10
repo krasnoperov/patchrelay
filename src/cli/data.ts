@@ -78,12 +78,14 @@ export interface ListResultItem {
 
 export interface InstallationListResult {
   installations: Array<{
-    id: number;
-    workspaceName?: string;
-    workspaceKey?: string;
-    actorName?: string;
-    actorId?: string;
-    expiresAt?: string;
+    installation: {
+      id: number;
+      workspaceName?: string;
+      workspaceKey?: string;
+      actorName?: string;
+      actorId?: string;
+      expiresAt?: string;
+    };
     linkedProjects: string[];
   }>;
 }
@@ -427,57 +429,46 @@ export class CliDataAccess {
     return await this.requestJson<ConnectStateResult>(`/api/oauth/linear/state/${encodeURIComponent(state)}`);
   }
 
-  listInstallations(): InstallationListResult {
-    const links = this.db.listProjectInstallations();
-    return {
-      installations: this.db.listLinearInstallations().map((installation) => ({
-        id: installation.id,
-        ...(installation.workspaceName ? { workspaceName: installation.workspaceName } : {}),
-        ...(installation.workspaceKey ? { workspaceKey: installation.workspaceKey } : {}),
-        ...(installation.actorName ? { actorName: installation.actorName } : {}),
-        ...(installation.actorId ? { actorId: installation.actorId } : {}),
-        ...(installation.expiresAt ? { expiresAt: installation.expiresAt } : {}),
-        linkedProjects: links
-          .filter((link: { projectId: string; installationId: number }) => link.installationId === installation.id)
-          .map((link: { projectId: string; installationId: number }) => link.projectId),
-      })),
-    };
+  async listInstallations(): Promise<InstallationListResult> {
+    return await this.requestJson<InstallationListResult>("/api/installations");
   }
 
-  linkInstallation(projectId: string, installationId?: number): { projectId: string; installationId?: number } {
-    const project = this.config.projects.find((entry) => entry.id === projectId);
-    if (!project) {
-      throw new Error(`Unknown project: ${projectId}`);
-    }
-
-    if (installationId === undefined) {
-      this.db.unlinkProjectInstallation(projectId);
-      return { projectId };
-    }
-
-    const installation = this.db.getLinearInstallation(installationId);
-    if (!installation) {
-      throw new Error(`Unknown installation: ${installationId}`);
-    }
-
-    const link = this.db.linkProjectInstallation(projectId, installationId);
-    return {
-      projectId: link.projectId,
-      installationId: link.installationId,
-    };
+  async linkInstallation(projectId: string, installationId: number): Promise<{ projectId: string; installationId?: number }> {
+    const result = await this.requestJson<{ link: { projectId: string; installationId: number } }>(
+      `/api/projects/${encodeURIComponent(projectId)}/installation`,
+      undefined,
+      {
+        method: "POST",
+        body: {
+          installationId,
+        },
+      },
+    );
+    return result.link;
   }
 
-  webhookInstructions(projectId: string): WebhookInstructionsResult {
+  async unlinkInstallation(projectId: string): Promise<{ projectId: string; installationId?: number }> {
+    await this.requestJson<{ ok: true }>(
+      `/api/projects/${encodeURIComponent(projectId)}/installation`,
+      undefined,
+      {
+        method: "DELETE",
+      },
+    );
+    return { projectId };
+  }
+
+  async webhookInstructions(projectId: string): Promise<WebhookInstructionsResult> {
     const project = this.config.projects.find((entry) => entry.id === projectId);
     if (!project) {
       throw new Error(`Unknown project: ${projectId}`);
     }
 
     const baseUrl = this.getServiceBaseUrl();
-    const installation = this.db.getLinearInstallationForProject(projectId);
+    const installation = (await this.listInstallations()).installations.find((entry) => entry.linkedProjects.includes(projectId))?.installation;
     return {
       projectId,
-      ...(installation ? { installationId: installation.id } : {}),
+      ...(installation?.id ? { installationId: installation.id } : {}),
       webhookUrl: new URL(this.config.ingress.linearWebhookPath, baseUrl).toString(),
       webhookPath: this.config.ingress.linearWebhookPath,
       sharedSecretConfigured: this.config.linear.webhookSecret.length > 0,
@@ -497,7 +488,11 @@ export class CliDataAccess {
     return `http://${this.config.server.bind}:${this.config.server.port}/`;
   }
 
-  private async requestJson<T>(pathname: string, query?: Record<string, string | undefined>): Promise<T> {
+  private async requestJson<T>(
+    pathname: string,
+    query?: Record<string, string | undefined>,
+    init?: { method?: "GET" | "POST" | "DELETE"; body?: unknown },
+  ): Promise<T> {
     const url = new URL(pathname, this.getServiceBaseUrl());
     for (const [key, value] of Object.entries(query ?? {})) {
       if (value) {
@@ -506,10 +501,13 @@ export class CliDataAccess {
     }
 
     const response = await fetch(url, {
+      method: init?.method ?? "GET",
       headers: {
         accept: "application/json",
+        ...(init?.body !== undefined ? { "content-type": "application/json" } : {}),
         ...(this.config.operatorApi.bearerToken ? { authorization: `Bearer ${this.config.operatorApi.bearerToken}` } : {}),
       },
+      ...(init?.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
     });
     const body = await response.text();
     if (!response.ok) {

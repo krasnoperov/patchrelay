@@ -1079,3 +1079,83 @@ test("service acceptWebhook rejects invalid signatures, dedupes deliveries, and 
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("service redacts stored OAuth token ciphertext from installation-facing summaries", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-service-oauth-"));
+  try {
+    const config = createConfig(baseDir);
+    config.linear.oauth = {
+      clientId: "client-id",
+      clientSecret: "client-secret",
+      redirectUri: "http://127.0.0.1:8787/oauth/linear/callback",
+      scopes: ["read", "write"],
+      actor: "app",
+    };
+    config.linear.tokenEncryptionKey = crypto.randomBytes(32).toString("hex");
+    setupRepo(baseDir, config);
+
+    const db = new PatchRelayDatabase(config.database.path, true);
+    db.runMigrations();
+    const codex = new FakeCodexClient();
+    const linear = new FakeLinearClient();
+    const service = new PatchRelayService(config, db, codex as never, linear, pino({ enabled: false }));
+
+    const installation = db.upsertLinearInstallation({
+      workspaceId: "team_1",
+      workspaceName: "Workspace One",
+      workspaceKey: "WS1",
+      actorId: "actor-1",
+      actorName: "PatchRelay App",
+      accessTokenCiphertext: "ciphertext-access",
+      refreshTokenCiphertext: "ciphertext-refresh",
+      scopesJson: JSON.stringify(["read", "write"]),
+      tokenType: "Bearer",
+    });
+    db.linkProjectInstallation("usertold", installation.id);
+    db.createOAuthState({
+      provider: "linear",
+      state: "state-1",
+      redirectUri: config.linear.oauth.redirectUri,
+      actor: "app",
+      projectId: "usertold",
+    });
+    db.finalizeOAuthState({
+      state: "state-1",
+      status: "completed",
+      installationId: installation.id,
+    });
+
+    const installations = service.listLinearInstallations();
+    assert.deepEqual(installations, [
+      {
+        installation: {
+          id: installation.id,
+          workspaceName: "Workspace One",
+          workspaceKey: "WS1",
+          actorName: "PatchRelay App",
+          actorId: "actor-1",
+        },
+        linkedProjects: ["usertold"],
+      },
+    ]);
+    assert.equal("accessTokenCiphertext" in installations[0]!.installation, false);
+    assert.equal("refreshTokenCiphertext" in installations[0]!.installation, false);
+
+    const oauthStatus = service.getLinearOAuthStateStatus("state-1");
+    assert.deepEqual(oauthStatus, {
+      state: "state-1",
+      status: "completed",
+      projectId: "usertold",
+      installation: {
+        id: installation.id,
+        workspaceName: "Workspace One",
+        workspaceKey: "WS1",
+        actorName: "PatchRelay App",
+        actorId: "actor-1",
+      },
+    });
+    assert.equal(oauthStatus && oauthStatus.installation ? "accessTokenCiphertext" in oauthStatus.installation : false, false);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});

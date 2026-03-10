@@ -314,6 +314,18 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
           .send({ ok: false, reason: "link_failed", message: error instanceof Error ? error.message : String(error) });
       }
     });
+
+    app.delete("/api/projects/:projectId/installation", async (request, reply) => {
+      const { projectId } = request.params as { projectId: string };
+      try {
+        service.unlinkProjectInstallation(projectId);
+        return reply.send({ ok: true });
+      } catch (error) {
+        return reply
+          .code(404)
+          .send({ ok: false, reason: "link_failed", message: error instanceof Error ? error.message : String(error) });
+      }
+    });
   }
 
   app.get("/oauth/linear/callback", async (request, reply) => {
