@@ -155,3 +155,40 @@ test("runPreflight warns when the public base URL is missing", async () => {
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("runPreflight warns when app-mode projects omit agent-session triggers", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-preflight-agent-triggers-"));
+
+  try {
+    const config = createConfig(baseDir);
+    config.linear.oauth.actor = "app";
+    config.linear.oauth.scopes = ["read", "write", "app:assignable", "app:mentionable"];
+    mkdirSync(config.projects[0].repoPath, { recursive: true });
+    writeFileSync(config.projects[0].workflowFiles.development, "# dev\n", "utf8");
+    writeFileSync(config.projects[0].workflowFiles.review, "# review\n", "utf8");
+    writeFileSync(config.projects[0].workflowFiles.deploy, "# deploy\n", "utf8");
+    writeFileSync(config.projects[0].workflowFiles.cleanup, "# cleanup\n", "utf8");
+
+    const report = await runPreflight(config);
+
+    assert.equal(report.ok, true);
+    assert.ok(
+      report.checks.some(
+        (check) =>
+          check.scope === "project:usertold:triggers" &&
+          check.status === "warn" &&
+          check.message.includes("agentSessionCreated"),
+      ),
+    );
+    assert.ok(
+      report.checks.some(
+        (check) =>
+          check.scope === "project:usertold:triggers" &&
+          check.status === "warn" &&
+          check.message.includes("agentPrompted"),
+      ),
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});

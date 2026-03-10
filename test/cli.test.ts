@@ -440,7 +440,11 @@ test("cli init writes XDG config files and install-service manages the user unit
 
         const envPath = path.join(configHome, "patchrelay", ".env");
         const configPath = path.join(configHome, "patchrelay", "patchrelay.yaml");
-        assert.equal(readFileSync(envPath, "utf8").includes("LINEAR_WEBHOOK_SECRET"), true);
+        const envContents = readFileSync(envPath, "utf8");
+        assert.match(envContents, /^LINEAR_WEBHOOK_SECRET=[0-9a-f]{64}$/m);
+        assert.match(envContents, /^PATCHRELAY_TOKEN_ENCRYPTION_KEY=[0-9a-f]{64}$/m);
+        assert.doesNotMatch(envContents, /replace-with-linear-webhook-secret/);
+        assert.doesNotMatch(envContents, /replace-with-long-random-secret/);
         const configContents = readFileSync(configPath, "utf8");
         assert.equal(configContents.includes("token_encryption_key_env: PATCHRELAY_TOKEN_ENCRYPTION_KEY"), true);
         assert.equal(configContents.includes(path.join(dataHome, "patchrelay", "worktrees")), true);
@@ -481,7 +485,7 @@ test("cli init writes XDG config files and install-service manages the user unit
   }
 });
 
-test("cli connect, installations, and link-installation cover OAuth installation flows", async () => {
+test("cli connect and installations cover OAuth installation flows", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-installations-"));
   try {
     const config = {
@@ -531,21 +535,6 @@ test("cli connect, installations, and link-installation cover OAuth installation
           ],
         };
       },
-      async linkInstallation(projectId: string, installationId: number) {
-        return { projectId, installationId };
-      },
-      async unlinkInstallation(projectId: string) {
-        return { projectId };
-      },
-      async webhookInstructions() {
-        return {
-          projectId: "usertold",
-          installationId: 1,
-          webhookUrl: "http://127.0.0.1:8787/webhooks/linear",
-          webhookPath: "/webhooks/linear",
-          sharedSecretConfigured: false,
-        };
-      },
     } as unknown as CliDataAccess;
 
     const connectOut = createBufferStream();
@@ -574,30 +563,51 @@ test("cli connect, installations, and link-installation cover OAuth installation
       0,
     );
     assert.match(installationsOut.read(), /Workspace One/);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
 
-    const linkOut = createBufferStream();
+test("cli connect reuses an existing installation when the project can be linked locally", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-connect-reuse-"));
+  try {
+    const config = {
+      ...createConfig(baseDir),
+      linear: {
+        ...createConfig(baseDir).linear,
+        oauth: {
+          clientId: "client-id",
+          clientSecret: "client-secret",
+          redirectUri: "http://127.0.0.1:8787/oauth/linear/callback",
+          scopes: ["read", "write"],
+          actor: "app" as const,
+        },
+        tokenEncryptionKey: "encryption-secret",
+      },
+    };
+    const data = {
+      async connect(projectId?: string) {
+        return {
+          completed: true as const,
+          reusedExisting: true as const,
+          projectId: projectId ?? "usertold",
+          installation: { id: 7, workspaceName: "Workspace Seven" },
+        };
+      },
+    } as unknown as CliDataAccess;
+
+    const connectOut = createBufferStream();
     assert.equal(
-      await runCli(["link-installation", "usertold", "1"], {
+      await runCli(["connect", "--project", "usertold"], {
         config,
         data,
-        stdout: linkOut.stream,
+        stdout: connectOut.stream,
         stderr: createBufferStream().stream,
       }),
       0,
     );
-    assert.match(linkOut.read(), /Linked usertold to installation 1/);
-
-    const unlinkOut = createBufferStream();
-    assert.equal(
-      await runCli(["unlink-installation", "usertold"], {
-        config,
-        data,
-        stdout: unlinkOut.stream,
-        stderr: createBufferStream().stream,
-      }),
-      0,
-    );
-    assert.match(unlinkOut.read(), /Removed installation link/);
+    assert.match(connectOut.read(), /Linked project usertold to existing Linear installation 7/);
+    assert.match(connectOut.read(), /No new OAuth approval was needed/);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -648,33 +658,6 @@ test("cli OAuth operator commands support json output and validation failures", 
           ],
         };
       },
-      async linkInstallation(projectId: string, installationId: number) {
-        if (projectId === "missing-project") {
-          throw new Error("Unknown project: missing-project");
-        }
-        if (installationId === 999) {
-          throw new Error("Unknown installation: 999");
-        }
-        return { projectId, installationId };
-      },
-      async unlinkInstallation(projectId: string) {
-        if (projectId === "missing-project") {
-          throw new Error("Unknown project: missing-project");
-        }
-        return { projectId };
-      },
-      async webhookInstructions(projectId: string) {
-        if (projectId === "missing-project") {
-          throw new Error("Unknown project: missing-project");
-        }
-        return {
-          projectId,
-          installationId: 1,
-          webhookUrl: "http://127.0.0.1:8787/webhooks/linear",
-          webhookPath: "/webhooks/linear",
-          sharedSecretConfigured: true,
-        };
-      },
     } as unknown as CliDataAccess;
 
     const connectJson = createBufferStream();
@@ -692,21 +675,6 @@ test("cli OAuth operator commands support json output and validation failures", 
       authorizeUrl: "https://linear.app/oauth/authorize?state=state-1",
       redirectUri: "http://127.0.0.1:8787/oauth/linear/callback",
       projectId: "usertold",
-    });
-
-    const linkJson = createBufferStream();
-    assert.equal(
-      await runCli(["link-installation", "usertold", "1", "--json"], {
-        config,
-        data,
-        stdout: linkJson.stream,
-        stderr: createBufferStream().stream,
-      }),
-      0,
-    );
-    assert.deepEqual(JSON.parse(linkJson.read()), {
-      projectId: "usertold",
-      installationId: 1,
     });
 
     const installationsJson = createBufferStream();
@@ -734,45 +702,6 @@ test("cli OAuth operator commands support json output and validation failures", 
       ],
     });
 
-    const unlinkJson = createBufferStream();
-    assert.equal(
-      await runCli(["unlink-installation", "usertold", "--json"], {
-        config,
-        data,
-        stdout: unlinkJson.stream,
-        stderr: createBufferStream().stream,
-      }),
-      0,
-    );
-    assert.deepEqual(JSON.parse(unlinkJson.read()), {
-      projectId: "usertold",
-    });
-
-    const webhookJson = createBufferStream();
-    assert.equal(
-      await runCli(["webhook", "usertold", "--show-secret", "--json"], {
-        config: {
-          ...config,
-          linear: {
-            ...config.linear,
-            webhookSecret: "webhook-secret",
-          },
-        },
-        data,
-        stdout: webhookJson.stream,
-        stderr: createBufferStream().stream,
-      }),
-      0,
-    );
-    assert.deepEqual(JSON.parse(webhookJson.read()), {
-      projectId: "usertold",
-      installationId: 1,
-      webhookUrl: "http://127.0.0.1:8787/webhooks/linear",
-      webhookPath: "/webhooks/linear",
-      sharedSecretConfigured: true,
-      webhookSecret: "webhook-secret",
-    });
-
     const connectError = createBufferStream();
     assert.equal(
       await runCli(["connect", "--project", "missing-project"], {
@@ -785,29 +714,6 @@ test("cli OAuth operator commands support json output and validation failures", 
     );
     assert.match(connectError.read(), /Unknown project: missing-project/);
 
-    const linkError = createBufferStream();
-    assert.equal(
-      await runCli(["link-installation", "usertold", "999"], {
-        config,
-        data,
-        stdout: createBufferStream().stream,
-        stderr: linkError.stream,
-      }),
-      1,
-    );
-    assert.match(linkError.read(), /Unknown installation: 999/);
-
-    const webhookError = createBufferStream();
-    assert.equal(
-      await runCli(["webhook", "missing-project"], {
-        config,
-        data,
-        stdout: createBufferStream().stream,
-        stderr: webhookError.stream,
-      }),
-      1,
-    );
-    assert.match(webhookError.read(), /Unknown project: missing-project/);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -854,14 +760,16 @@ test("cli installation commands use the local HTTP service end to end", async ()
             return undefined;
           }
           oauthPollCount += 1;
-          return oauthPollCount < 2
-            ? { state, status: "pending" as const, projectId: "usertold" }
-            : {
-                state,
-                status: "completed" as const,
-                projectId: "usertold",
-                installation: { id: 7, workspaceName: "Workspace Seven" },
-              };
+          if (oauthPollCount < 2) {
+            return { state, status: "pending" as const, projectId: "usertold" };
+          }
+          links.set("usertold", 7);
+          return {
+            state,
+            status: "completed" as const,
+            projectId: "usertold",
+            installation: { id: 7, workspaceName: "Workspace Seven" },
+          };
         },
         listLinearInstallations: () => [
           {
@@ -869,14 +777,6 @@ test("cli installation commands use the local HTTP service end to end", async ()
             linkedProjects: [...links.entries()].filter(([, id]) => id === 7).map(([projectId]) => projectId),
           },
         ],
-        linkProjectInstallation: (projectId: string, installationId: number) => {
-          links.set(projectId, installationId);
-          return { projectId, installationId };
-        },
-        unlinkProjectInstallation: (projectId: string) => {
-          links.delete(projectId);
-          return undefined;
-        },
       } as never,
       pino({ enabled: false }),
     );
@@ -901,17 +801,6 @@ test("cli installation commands use the local HTTP service end to end", async ()
       0,
     );
     assert.match(connectOut.read(), /Connected Workspace Seven for project usertold/);
-
-    const linkOut = createBufferStream();
-    assert.equal(
-      await runCli(["link-installation", "usertold", "7"], {
-        config,
-        data,
-        stdout: linkOut.stream,
-        stderr: createBufferStream().stream,
-      }),
-      0,
-    );
     assert.equal(links.get("usertold"), 7);
 
     const installationsOut = createBufferStream();
@@ -926,30 +815,6 @@ test("cli installation commands use the local HTTP service end to end", async ()
     );
     assert.match(installationsOut.read(), /Workspace Seven/);
     assert.match(installationsOut.read(), /projects=usertold/);
-
-    const webhookOut = createBufferStream();
-    assert.equal(
-      await runCli(["webhook", "usertold"], {
-        config,
-        data,
-        stdout: webhookOut.stream,
-        stderr: createBufferStream().stream,
-      }),
-      0,
-    );
-    assert.match(webhookOut.read(), /Webhook URL: https:\/\/patchrelay\.example\.com\/webhooks\/linear/);
-
-    const unlinkOut = createBufferStream();
-    assert.equal(
-      await runCli(["unlink-installation", "usertold"], {
-        config,
-        data,
-        stdout: unlinkOut.stream,
-        stderr: createBufferStream().stream,
-      }),
-      0,
-    );
-    assert.equal(links.has("usertold"), false);
 
     data.close();
     await app.close();

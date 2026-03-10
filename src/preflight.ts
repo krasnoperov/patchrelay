@@ -37,6 +37,33 @@ export async function runPreflight(config: AppConfig): Promise<PreflightReport> 
   } else {
     checks.push(pass("linear_oauth", "Token encryption key is configured"));
   }
+  if (config.linear.oauth.actor === "app") {
+    const scopes = new Set(config.linear.oauth.scopes);
+    const missingScopes = ["app:assignable", "app:mentionable"].filter((scope) => !scopes.has(scope));
+    if (missingScopes.length > 0) {
+      checks.push(warn("linear_oauth", `Linear app actor is missing recommended agent scopes: ${missingScopes.join(", ")}`));
+    } else {
+      checks.push(pass("linear_oauth", "Linear app actor includes assignable and mentionable scopes"));
+    }
+    for (const project of config.projects) {
+      if (!project.triggerEvents.includes("agentSessionCreated")) {
+        checks.push(
+          warn(
+            `project:${project.id}:triggers`,
+            "App-mode delegation works best when trigger_events includes agentSessionCreated",
+          ),
+        );
+      }
+      if (!project.triggerEvents.includes("agentPrompted")) {
+        checks.push(
+          warn(
+            `project:${project.id}:triggers`,
+            "Native follow-up agent prompts will not reach an active run unless trigger_events includes agentPrompted",
+          ),
+        );
+      }
+    }
+  }
 
   if (config.operatorApi.enabled) {
     if (config.operatorApi.bearerToken) {

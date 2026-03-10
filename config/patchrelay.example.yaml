@@ -24,19 +24,25 @@ database:
   wal: true
 
 linear:
+  # These env vars are machine-level PatchRelay secrets shared across the
+  # projects served by this PatchRelay instance.
   webhook_secret_env: LINEAR_WEBHOOK_SECRET
   graphql_url: https://api.linear.app/graphql
   token_encryption_key_env: PATCHRELAY_TOKEN_ENCRYPTION_KEY
   oauth:
     client_id_env: LINEAR_OAUTH_CLIENT_ID
     client_secret_env: LINEAR_OAUTH_CLIENT_SECRET
-    # The callback path is fixed by PatchRelay and must stay /oauth/linear/callback.
-    # Use a loopback URL for local browser consent, or a public HTTPS URL if you want
-    # OAuth to complete through the reverse proxy.
-    redirect_uri: http://127.0.0.1:8787/oauth/linear/callback
+    # Optional override. By default PatchRelay derives
+    # ${server.public_base_url}/oauth/linear/callback, or falls back to the
+    # local bind/port when no public base URL is configured.
+    # Set this only if you want OAuth to complete on loopback instead of the
+    # public domain.
+    # redirect_uri: http://127.0.0.1:8787/oauth/linear/callback
     scopes:
       - read
       - write
+      - app:assignable
+      - app:mentionable
     actor: app
 
 operator_api:
@@ -101,10 +107,12 @@ projects:
       email_domains:
         - trusted.example.com
     trigger_events:
+      - agentSessionCreated
+      - agentPrompted
+      - delegateChanged
       - statusChanged
       - commentCreated
       - commentUpdated
-      - assignmentChanged
     branch_prefix: app
 
   - id: your-project-with-overrides

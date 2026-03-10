@@ -109,10 +109,12 @@ class FakeCodexClient extends EventEmitter {
 class FakeLinearClient implements LinearClient {
   readonly issues = new Map<string, LinearIssueSnapshot>();
   readonly comments = new Map<string, { id: string; issueId: string; body: string }>();
+  readonly agentActivities: Array<{ agentSessionId: string; content: Record<string, unknown>; ephemeral: boolean }> = [];
   readonly stateTransitions: Array<{ issueId: string; stateName: string }> = [];
   readonly labelUpdates: Array<{ issueId: string; addNames: string[]; removeNames: string[] }> = [];
   failNextCommentUpsert = false;
   private nextCommentNumber = 1;
+  private nextAgentActivityNumber = 1;
   async getIssue(issueId: string): Promise<LinearIssueSnapshot> {
     const existing = this.issues.get(issueId);
     if (existing) {
@@ -158,6 +160,15 @@ class FakeLinearClient implements LinearClient {
     const comment = { id, issueId: params.issueId, body: params.body };
     this.comments.set(id, comment);
     return { id, body: params.body };
+  }
+
+  async createAgentActivity(params: { agentSessionId: string; content: Record<string, unknown>; ephemeral?: boolean }) {
+    this.agentActivities.push({
+      agentSessionId: params.agentSessionId,
+      content: params.content,
+      ephemeral: params.ephemeral ?? false,
+    });
+    return { id: `agent-activity-${this.nextAgentActivityNumber++}` };
   }
 
   async updateIssueLabels(params: { issueId: string; addNames?: string[]; removeNames?: string[] }): Promise<LinearIssueSnapshot> {
@@ -478,6 +489,168 @@ test("service keeps one workspace and forks later stages from the prior thread",
     assert.equal(existsSync(path.join(workspacePath, "sentinel.txt")), true);
 
     service.stop();
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("service starts a workflow from a Linear agent session and forwards the initial prompt context", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-service-agent-created-"));
+  try {
+    const { db, codex, linear, service } = createService(baseDir);
+    await service.start();
+
+    const event = db.insertWebhookEvent({
+      webhookId: "delivery-agent-created",
+      receivedAt: new Date().toISOString(),
+      eventType: "AgentSessionEvent.created",
+      issueId: "issue_1",
+      headersJson: "{}",
+      payloadJson: JSON.stringify({
+        action: "created",
+        type: "AgentSessionEvent",
+        createdAt: "2026-03-08T12:00:00.000Z",
+        webhookTimestamp: 1000,
+        data: {
+          promptContext: "Please focus on the implementation plan before changing files.",
+          agentSession: {
+            id: "session-1",
+            issue: {
+              id: "issue_1",
+              identifier: "USE-25",
+              title: "Build app server orchestration",
+              team: { key: "USE" },
+              state: { name: "Start" },
+            },
+          },
+        },
+      }),
+      signatureValid: true,
+      dedupeStatus: "accepted",
+    });
+
+    await service.processWebhookEvent(event.id);
+    await waitFor(() => {
+      assert.equal(codex.startedThreads.length, 1);
+      assert.equal(codex.turns.length, 1);
+      assert.equal(codex.steeredTurns.length, 1);
+    });
+
+    const trackedIssue = db.getTrackedIssue("usertold", "issue_1");
+    assert.equal(trackedIssue?.activeAgentSessionId, "session-1");
+    assert.equal(codex.steeredTurns[0]?.input.includes("implementation plan"), true);
+    assert.ok(
+      linear.agentActivities.some(
+        (entry) =>
+          entry.agentSessionId === "session-1" &&
+          entry.content.type === "thought" &&
+          String(entry.content.body).includes("preparing the development workflow"),
+      ),
+    );
+    assert.ok(
+      linear.agentActivities.some(
+        (entry) =>
+          entry.agentSessionId === "session-1" &&
+          entry.content.type === "action" &&
+          entry.content.parameter === "development",
+      ),
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("service routes prompted agent follow-ups into the active stage instead of requeueing it", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-service-agent-prompted-"));
+  try {
+    const { db, codex, linear, service } = createService(baseDir);
+    await service.start();
+
+    const created = db.insertWebhookEvent({
+      webhookId: "delivery-agent-created",
+      receivedAt: new Date().toISOString(),
+      eventType: "AgentSessionEvent.created",
+      issueId: "issue_1",
+      headersJson: "{}",
+      payloadJson: JSON.stringify({
+        action: "created",
+        type: "AgentSessionEvent",
+        createdAt: "2026-03-08T12:00:00.000Z",
+        webhookTimestamp: 1000,
+        data: {
+          agentSession: {
+            id: "session-1",
+            issue: {
+              id: "issue_1",
+              identifier: "USE-25",
+              title: "Build app server orchestration",
+              team: { key: "USE" },
+              state: { name: "Start" },
+            },
+          },
+        },
+      }),
+      signatureValid: true,
+      dedupeStatus: "accepted",
+    });
+
+    await service.processWebhookEvent(created.id);
+    await waitFor(() => {
+      assert.equal(codex.startedThreads.length, 1);
+      assert.equal(codex.turns.length, 1);
+    });
+
+    const prompted = db.insertWebhookEvent({
+      webhookId: "delivery-agent-prompted",
+      receivedAt: new Date().toISOString(),
+      eventType: "AgentSessionEvent.prompted",
+      issueId: "issue_1",
+      headersJson: "{}",
+      payloadJson: JSON.stringify({
+        action: "prompted",
+        type: "AgentSessionEvent",
+        createdAt: "2026-03-08T12:00:05.000Z",
+        webhookTimestamp: 1005,
+        data: {
+          agentActivity: {
+            body: "Please also update the README before you finish.",
+          },
+          agentSession: {
+            id: "session-1",
+            issue: {
+              id: "issue_1",
+              identifier: "USE-25",
+              title: "Build app server orchestration",
+              team: { key: "USE" },
+              state: { name: "Implementing" },
+            },
+          },
+        },
+      }),
+      signatureValid: true,
+      dedupeStatus: "accepted",
+    });
+
+    const startedThreadsBeforePrompt = codex.startedThreads.length;
+    const turnsBeforePrompt = codex.turns.length;
+    const steersBeforePrompt = codex.steeredTurns.length;
+
+    await service.processWebhookEvent(prompted.id);
+    await waitFor(() => {
+      assert.equal(codex.startedThreads.length, startedThreadsBeforePrompt);
+      assert.equal(codex.turns.length, turnsBeforePrompt);
+      assert.equal(codex.steeredTurns.length, steersBeforePrompt + 1);
+    });
+
+    assert.equal(codex.steeredTurns.at(-1)?.input.includes("update the README"), true);
+    assert.ok(
+      linear.agentActivities.some(
+        (entry) =>
+          entry.agentSessionId === "session-1" &&
+          entry.content.type === "thought" &&
+          String(entry.content.body).includes("follow-up instructions"),
+      ),
+    );
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -1285,6 +1458,53 @@ test("service acceptWebhook rejects invalid signatures, dedupes deliveries, and 
     const expectedArchive = path.join(archiveDir, new Date().toISOString().slice(0, 10));
     assert.equal(existsSync(archiveDir), true);
     assert.equal(existsSync(expectedArchive), true);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("service acceptWebhook accepts supplemental app webhooks without issue metadata", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-accept-installation-webhook-"));
+  try {
+    const { config, db, service } = createService(baseDir);
+    await service.start();
+
+    const payload: LinearWebhookPayload = {
+      action: "teamAccessChanged",
+      type: "PermissionChange",
+      createdAt: "2026-03-10T12:00:00.000Z",
+      webhookTimestamp: Date.now(),
+      data: {
+        organizationId: "org_1",
+        oauthClientId: "oauth-client-1",
+        appUserId: "app_user_1",
+        addedTeamIds: ["team_added"],
+        removedTeamIds: ["team_removed"],
+      },
+    };
+
+    const rawBody = Buffer.from(JSON.stringify(payload), "utf8");
+    const signature = crypto.createHmac("sha256", config.linear.webhookSecret).update(rawBody).digest("hex");
+
+    const accepted = await service.acceptWebhook({
+      webhookId: "delivery-installation-event",
+      headers: {
+        "linear-signature": signature,
+      },
+      rawBody,
+    });
+
+    assert.equal(accepted.status, 200);
+    assert.equal(accepted.body.accepted, true);
+
+    await waitFor(() => {
+      const stored = db.getWebhookEvent(1);
+      assert.ok(stored);
+      assert.equal(stored.issueId, undefined);
+      assert.equal(stored.processingStatus, "processed");
+    });
+
+    service.stop();
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

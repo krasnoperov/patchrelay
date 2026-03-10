@@ -43,6 +43,44 @@ test("normalizeWebhook extracts issue metadata from a Linear issue webhook", () 
   assert.equal(normalized.triggerEvent, "statusChanged");
 });
 
+test("normalizeWebhook treats delegate object updates as delegateChanged", () => {
+  const payload: LinearWebhookPayload = {
+    action: "update",
+    type: "Issue",
+    createdAt: "2026-03-10T12:00:00.000Z",
+    webhookTimestamp: Date.now(),
+    updatedFrom: {
+      delegate: {
+        id: "previous_delegate",
+      } as unknown as Record<string, unknown>,
+    },
+    data: {
+      id: "issue_delegate",
+      identifier: "USE-123",
+      title: "Delegate via object payload",
+      delegate: {
+        id: "app_user_1",
+        name: "PatchRelay",
+      },
+      team: {
+        id: "team_1",
+        key: "USE",
+      },
+      state: {
+        name: "Start",
+      },
+    },
+  };
+
+  const normalized = normalizeWebhook({
+    webhookId: "delivery_delegate_object",
+    payload,
+  });
+
+  assert.equal(normalized.triggerEvent, "delegateChanged");
+  assert.equal(normalized.issue?.delegateId, "app_user_1");
+});
+
 test("normalizeWebhook extracts nested issue metadata from comment webhooks and label nodes", () => {
   const payload: LinearWebhookPayload = {
     action: "create",
@@ -93,6 +131,130 @@ test("normalizeWebhook extracts nested issue metadata from comment webhooks and 
     type: "User",
   });
   assert.equal(normalized.triggerEvent, "commentCreated");
+});
+
+test("normalizeWebhook extracts agent session context from delegation webhooks", () => {
+  const payload: LinearWebhookPayload = {
+    action: "created",
+    type: "AgentSessionEvent",
+    createdAt: "2026-03-08T12:00:00.000Z",
+    webhookTimestamp: Date.now(),
+    actor: {
+      id: "user_2",
+      name: "Taylor Operator",
+      email: "taylor@example.com",
+      type: "User",
+    } as unknown as Record<string, unknown>,
+    data: {
+      promptContext: "<issue identifier=\"USE-125\"><title>Implement agent delegation</title></issue>",
+      agentSession: {
+        id: "session_1",
+        issue: {
+          id: "issue_agent",
+          identifier: "USE-125",
+          title: "Implement agent delegation",
+          delegateId: "app_user_1",
+          delegate: {
+            id: "app_user_1",
+            name: "PatchRelay",
+          },
+          team: {
+            id: "team_1",
+            key: "USE",
+          },
+          state: {
+            id: "state_start",
+            name: "Start",
+            type: "started",
+          },
+        },
+      },
+    },
+  };
+
+  const normalized = normalizeWebhook({
+    webhookId: "delivery_agent_session",
+    payload,
+  });
+
+  assert.equal(normalized.triggerEvent, "agentSessionCreated");
+  assert.equal(normalized.issue.id, "issue_agent");
+  assert.equal(normalized.issue.delegateId, "app_user_1");
+  assert.equal(normalized.agentSession?.id, "session_1");
+  assert.equal(
+    normalized.agentSession?.promptContext,
+    "<issue identifier=\"USE-125\"><title>Implement agent delegation</title></issue>",
+  );
+});
+
+test("normalizeWebhook accepts installation permission change webhooks without issue metadata", () => {
+  const payload: LinearWebhookPayload = {
+    action: "teamAccessChanged",
+    type: "PermissionChange",
+    createdAt: "2026-03-10T12:00:00.000Z",
+    webhookTimestamp: Date.now(),
+    data: {
+      organizationId: "org_1",
+      oauthClientId: "oauth-client-1",
+      appUserId: "app_user_1",
+      addedTeamIds: ["team_added"],
+      removedTeamIds: ["team_removed"],
+      canAccessAllPublicTeams: false,
+    },
+  };
+
+  const normalized = normalizeWebhook({
+    webhookId: "delivery_permission_change",
+    payload,
+  });
+
+  assert.equal(normalized.triggerEvent, "installationPermissionsChanged");
+  assert.equal(normalized.issue, undefined);
+  assert.deepEqual(normalized.installation, {
+    organizationId: "org_1",
+    oauthClientId: "oauth-client-1",
+    appUserId: "app_user_1",
+    canAccessAllPublicTeams: false,
+    addedTeamIds: ["team_added"],
+    removedTeamIds: ["team_removed"],
+  });
+});
+
+test("normalizeWebhook extracts issue metadata from app-user notifications when available", () => {
+  const payload: LinearWebhookPayload = {
+    action: "create",
+    type: "AppUserNotification",
+    createdAt: "2026-03-10T12:00:00.000Z",
+    webhookTimestamp: Date.now(),
+    data: {
+      appUserId: "app_user_1",
+      notification: {
+        type: "issueNewComment",
+        issue: {
+          id: "issue_notification",
+          identifier: "USE-126",
+          title: "Inbox notification fallback",
+          team: {
+            id: "team_1",
+            key: "USE",
+          },
+          state: {
+            name: "Review",
+          },
+        },
+      },
+    },
+  };
+
+  const normalized = normalizeWebhook({
+    webhookId: "delivery_app_notification",
+    payload,
+  });
+
+  assert.equal(normalized.triggerEvent, "appUserNotification");
+  assert.equal(normalized.issue?.identifier, "USE-126");
+  assert.equal(normalized.installation?.notificationType, "issueNewComment");
+  assert.equal(normalized.installation?.appUserId, "app_user_1");
 });
 
 test("resolveProject matches by issue key prefix and team", () => {

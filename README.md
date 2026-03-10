@@ -17,13 +17,13 @@ This is the "do the glue layer properly" version of running coding agents from a
 - Use your own machine, repos, secrets, SSH, shell tools, and deployment access.
 - Keep the agent close to the real environment instead of recreating it in a hosted sandbox.
 - Choose your own Codex approval and sandbox settings.
-- Let Linear drive the loop automatically through states and comments.
+- Let Linear drive the loop automatically through delegation, workflow stages, and comments.
 - Drop into the exact issue worktree and resume control manually when needed.
 
 PatchRelay owns the boring but important parts:
 
 - webhook verification
-- Linear OAuth and installation linking
+- Linear OAuth and workspace installations
 - issue-to-repo routing
 - worktree and branch lifecycle
 - stage bookkeeping and reporting
@@ -45,9 +45,15 @@ You will also need:
 
 - `git`
 - `codex`
-- a Linear OAuth app
+- a Linear OAuth app for this PatchRelay deployment
 - a Linear webhook secret
 - a public HTTPS entrypoint such as Caddy, nginx, or a tunnel so Linear can reach your PatchRelay webhook
+
+For the agent-style PatchRelay flow, configure the Linear OAuth app with:
+
+- `actor=app`
+- scopes `read`, `write`, `app:assignable`, and `app:mentionable`
+- webhook settings that include issue, comment, agent session, permission change, and inbox notification events
 
 ## Quick Start
 
@@ -91,11 +97,6 @@ server:
   port: 8787
   public_base_url: https://patchrelay.example.com
 
-linear:
-  oauth:
-    # The callback path is fixed by PatchRelay.
-    redirect_uri: https://patchrelay.example.com/oauth/linear/callback
-
 runner:
   codex:
     approval_policy: never
@@ -110,10 +111,12 @@ projects:
     linear_team_ids:
       - APP
     trigger_events:
+      - agentSessionCreated
+      - agentPrompted
+      - delegateChanged
       - statusChanged
       - commentCreated
       - commentUpdated
-      - assignmentChanged
     branch_prefix: app
 ```
 
@@ -157,26 +160,30 @@ patchrelay serve
 ```bash
 patchrelay connect --project app
 patchrelay installations
-patchrelay link-installation app 1
-patchrelay webhook app
 ```
 
-Then point your Linear webhook to the URL printed by `patchrelay webhook app`.
+If your Linear OAuth app webhook settings are configured, authorizing the app will auto-provision the workspace webhook during `patchrelay connect`.
+
+If you later add another local repo that should use the same Linear installation, run `patchrelay connect --project <id>` for that repo too. PatchRelay now reuses the single saved installation automatically when there is no ambiguity, so you usually will not need another browser approval.
 
 Important:
 
 - Linear needs a public HTTPS URL to reach your webhook.
 - `server.public_base_url` is the public domain PatchRelay uses when it prints webhook URLs.
 - PatchRelay itself should usually stay bound to `127.0.0.1` and sit behind Caddy, nginx, or another public ingress layer.
-- `linear.oauth.redirect_uri` should usually be `${server.public_base_url}/oauth/linear/callback`.
+- PatchRelay now derives `linear.oauth.redirect_uri` as `${server.public_base_url}/oauth/linear/callback` unless you override it for loopback OAuth.
 - Publish these routes from your reverse proxy: `GET /`, `GET /health`, `GET /ready`, `GET /oauth/linear/callback`, and `POST /webhooks/linear`.
+- PatchRelay reacts best when the Linear OAuth app is configured to deliver issue, comment, agent session, permission change, and inbox notification webhooks to the shared PatchRelay endpoint.
+- In self-hosted mode you currently do need your own Linear OAuth app, but one app can be reused across all projects and Linear workspaces linked to the same PatchRelay instance.
+- Delegation is webhook-driven: Linear creates an agent session and delivers `AgentSessionEvent.created` when work is delegated to the PatchRelay app, then uses `AgentSessionEvent.prompted` for native follow-up instructions.
 
 ## Daily Loop
 
-1. Move a Linear issue into a configured workflow state like `Start`, `Review`, or `Deploy`.
-2. PatchRelay creates or reuses the issue worktree and launches the Codex stage.
-3. Watch progress from the terminal.
-4. If needed, open the same worktree and take over manually.
+1. Delegate a Linear issue to the PatchRelay app.
+2. PatchRelay reads the current workflow state like `Start`, `Review`, or `Deploy` to choose the stage to run.
+3. Linear sends the delegation and agent-session webhooks to PatchRelay, which creates or reuses the issue worktree and launches the Codex stage.
+4. Follow up in the issue comments to steer the active run or wake it with fresh input while it remains delegated.
+5. Watch progress from the terminal or open the same worktree and take over manually.
 
 Useful commands:
 
@@ -197,17 +204,18 @@ Today that takeover path is intentionally YOLO mode: it launches Codex with `--d
 
 - Keep PatchRelay bound to `127.0.0.1`.
 - Set `server.public_base_url` to the public HTTPS origin that Linear should call.
-- Expose only `GET /`, `GET /health`, `GET /ready`, and `POST /webhooks/linear`.
+- Expose only `GET /`, `GET /health`, `GET /ready`, `GET /oauth/linear/callback`, and `POST /webhooks/linear`.
 - Use `trusted_actors` if only specific Linear users or domains should be allowed to trigger automation.
 - Use `defaults.workflow_files` and `defaults.workflow_statuses` if you want one shared convention across projects.
 - Override `runner.codex.approval_policy` and `runner.codex.sandbox_mode` to match how much autonomy you want for service-run stages.
-- Set `linear.oauth.redirect_uri` to `${server.public_base_url}/oauth/linear/callback`.
+- Override `linear.oauth.redirect_uri` only if you want OAuth to complete somewhere other than the derived default.
 
 ## Docs
 
 Keep the README for the big picture; use the docs for the details:
 
 - [Self-hosting and deployment](https://github.com/krasnoperov/patchrelay/blob/main/docs/self-hosting.md)
+- [Linear agent onboarding](https://github.com/krasnoperov/patchrelay/blob/main/docs/linear-agent-onboarding.md)
 - [CLI reference](https://github.com/krasnoperov/patchrelay/blob/main/docs/cli-spec.md)
 - [Architecture](https://github.com/krasnoperov/patchrelay/blob/main/docs/architecture.md)
 - [Codex integration details](https://github.com/krasnoperov/patchrelay/blob/main/docs/codex-workflow.md)

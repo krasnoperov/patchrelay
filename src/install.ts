@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { basename, dirname } from "node:path";
 import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -32,6 +33,22 @@ function renderTemplate(template: string): string {
     .replaceAll("your-user", user);
 }
 
+function generateSecret(bytes = 32): string {
+  return crypto.randomBytes(bytes).toString("hex");
+}
+
+function renderEnvTemplate(template: string): string {
+  return template
+    .replace(
+      "LINEAR_WEBHOOK_SECRET=replace-with-linear-webhook-secret",
+      `LINEAR_WEBHOOK_SECRET=${generateSecret()}`,
+    )
+    .replace(
+      "PATCHRELAY_TOKEN_ENCRYPTION_KEY=replace-with-long-random-secret",
+      `PATCHRELAY_TOKEN_ENCRYPTION_KEY=${generateSecret()}`,
+    );
+}
+
 async function writeTemplateFile(targetPath: string, content: string, force: boolean): Promise<"created" | "skipped"> {
   if (!force && existsSync(targetPath)) {
     return "skipped";
@@ -62,7 +79,7 @@ export async function initializePatchRelayHome(options?: { force?: boolean }): P
   await mkdir(stateDir, { recursive: true });
   await mkdir(dataDir, { recursive: true });
 
-  const envTemplate = readBundledAsset(".env.example");
+  const envTemplate = renderEnvTemplate(readBundledAsset(".env.example"));
   const configTemplate = renderTemplate(readBundledAsset("config/patchrelay.example.yaml"));
 
   const envStatus = await writeTemplateFile(envPath, envTemplate, force);

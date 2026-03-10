@@ -25,11 +25,8 @@ const KNOWN_COMMANDS = new Set([
   "init",
   "connect",
   "installations",
-  "link-installation",
-  "unlink-installation",
   "install-service",
   "restart-service",
-  "webhook",
   "help",
 ]);
 
@@ -91,11 +88,8 @@ function helpText(): string {
     "  init [--force] [--json]",
     "  connect [--project <projectId>] [--no-open] [--timeout <seconds>] [--json]",
     "  installations [--json]",
-    "  link-installation <projectId> <installationId> [--json]",
-    "  unlink-installation <projectId> [--json]",
     "  install-service [--force] [--write-only] [--json]",
     "  restart-service [--json]",
-    "  webhook <projectId> [--show-secret] [--json]",
     "  serve",
   ].join("\n");
 }
@@ -242,14 +236,19 @@ export async function runCli(
               "Configure these URLs in patchrelay.yaml:",
               "- Public base URL: https://patchrelay.example.com",
               "- Webhook URL: https://patchrelay.example.com/webhooks/linear",
-              "- OAuth callback: https://patchrelay.example.com/oauth/linear/callback",
+              "- OAuth callback (derived by default): https://patchrelay.example.com/oauth/linear/callback",
               "",
               "Next steps:",
               `1. Edit ${result.envPath}`,
               `2. Edit ${result.configPath}`,
-              "3. Set `server.public_base_url` and `linear.oauth.redirect_uri`",
-              "4. Run `patchrelay doctor`",
-              "5. Run `patchrelay install-service`",
+              "3. Paste your Linear OAuth client id and client secret into the generated .env",
+              "4. Paste LINEAR_WEBHOOK_SECRET from that .env into the Linear OAuth app webhook signing secret",
+              "5. Configure your Linear OAuth app for `actor=app` with `app:assignable` and `app:mentionable`",
+              "6. Configure the Linear OAuth app webhook settings for issue, comment, agent session, permission change, and inbox notification events",
+              "7. Set `server.public_base_url`",
+              "8. Override `linear.oauth.redirect_uri` only if you want loopback OAuth",
+              "9. Run `patchrelay doctor`",
+              "10. Run `patchrelay install-service`",
             ].join("\n") + "\n",
       );
       return 0;
@@ -459,6 +458,19 @@ export async function runCli(
         return 0;
       }
 
+      if ("completed" in result && result.completed) {
+        const label = result.installation.workspaceName ?? result.installation.actorName ?? `installation #${result.installation.id}`;
+        writeOutput(
+          stdout,
+          `Linked project ${result.projectId} to existing Linear installation ${result.installation.id} (${label}). No new OAuth approval was needed.\n`,
+        );
+        return 0;
+      }
+      if ("completed" in result) {
+        throw new Error("Unexpected completed connect result.");
+      }
+      const oauthStart = result;
+
       const noOpen = parsed.flags.get("no-open") === true;
       const timeoutSeconds = typeof parsed.flags.get("timeout") === "string" ? Number(parsed.flags.get("timeout")) : 180;
       if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
@@ -466,18 +478,25 @@ export async function runCli(
       }
 
       const opener = options?.openExternal ?? openExternalUrl;
-      const opened = noOpen ? false : await opener(result.authorizeUrl);
-      writeOutput(stdout, `${result.projectId ? `Project: ${result.projectId}\n` : ""}${opened ? "Opened browser for Linear OAuth.\n" : "Open this URL in a browser:\n"}${opened ? result.authorizeUrl : `${result.authorizeUrl}\n`}Waiting for OAuth approval...\n`);
+      const opened = noOpen ? false : await opener(oauthStart.authorizeUrl);
+      writeOutput(stdout, `${oauthStart.projectId ? `Project: ${oauthStart.projectId}\n` : ""}${opened ? "Opened browser for Linear OAuth.\n" : "Open this URL in a browser:\n"}${opened ? oauthStart.authorizeUrl : `${oauthStart.authorizeUrl}\n`}Waiting for OAuth approval...\n`);
 
       const deadline = Date.now() + timeoutSeconds * 1000;
       const pollIntervalMs = options?.connectPollIntervalMs ?? 1000;
       do {
-        const status = await data.connectStatus(result.state);
+        const status = await data.connectStatus(oauthStart.state);
         if (status.status === "completed") {
           const label = status.installation?.workspaceName ?? status.installation?.actorName ?? `installation #${status.installation?.id ?? "unknown"}`;
           writeOutput(
             stdout,
-            `Connected ${label}${status.projectId ? ` for project ${status.projectId}` : ""}.${status.installation?.id ? ` Installation ${status.installation.id}.` : ""}\n`,
+            [
+              `Connected ${label}${status.projectId ? ` for project ${status.projectId}` : ""}.${status.installation?.id ? ` Installation ${status.installation.id}.` : ""}`,
+              config.linear.oauth.actor === "app"
+                ? "If your Linear OAuth app webhook settings are configured, Linear has now provisioned the workspace webhook automatically."
+                : undefined,
+            ]
+              .filter(Boolean)
+              .join("\n") + "\n",
           );
           return 0;
         }
@@ -489,37 +508,6 @@ export async function runCli(
         }
         await delay(pollIntervalMs);
       } while (true);
-    }
-
-    if (command === "webhook") {
-      const projectId = commandArgs[0];
-      if (!projectId) {
-        throw new Error("webhook requires <projectId>.");
-      }
-      const result = await data.webhookInstructions(projectId);
-      if (json) {
-        writeOutput(
-          stdout,
-          formatJson({
-            ...result,
-            ...(parsed.flags.get("show-secret") === true ? { webhookSecret: config.linear.webhookSecret } : {}),
-          }),
-        );
-        return 0;
-      }
-      writeOutput(
-        stdout,
-        [
-          `Project: ${result.projectId}`,
-          `Webhook URL: ${result.webhookUrl}`,
-          `Linked installation: ${result.installationId ?? "none"}`,
-          parsed.flags.get("show-secret") === true
-            ? `Webhook secret: ${config.linear.webhookSecret || "(not configured)"}`
-            : `Webhook secret: ${result.sharedSecretConfigured ? "configured on this host (use --show-secret to print it)" : "not configured"}`,
-          "This is the current shared deployment webhook endpoint.",
-        ].join("\n") + "\n",
-      );
-      return 0;
     }
 
     if (command === "installations") {
@@ -534,34 +522,6 @@ export async function runCli(
           ? result.installations.map((item) => `${item.installation.id}  ${item.installation.workspaceName ?? item.installation.actorName ?? "-"}  projects=${item.linkedProjects.join(",") || "-"}`)
           : ["No installations found."]).join("\n")}\n`,
       );
-      return 0;
-    }
-
-    if (command === "link-installation") {
-      const projectId = commandArgs[0];
-      const rawInstallationId = commandArgs[1];
-      if (!projectId || !rawInstallationId) {
-        throw new Error("link-installation requires <projectId> <installationId>.");
-      }
-      const installationId = Number(rawInstallationId);
-      if (!Number.isFinite(installationId)) {
-        throw new Error("link-installation requires <projectId> <installationId>.");
-      }
-      const result = await data.linkInstallation(projectId, installationId);
-      writeOutput(
-        stdout,
-        json ? formatJson(result) : `Linked ${projectId} to installation ${result.installationId}.\n`,
-      );
-      return 0;
-    }
-
-    if (command === "unlink-installation") {
-      const projectId = commandArgs[0];
-      if (!projectId) {
-        throw new Error("unlink-installation requires <projectId>.");
-      }
-      const result = await data.unlinkInstallation(projectId);
-      writeOutput(stdout, json ? formatJson(result) : `Removed installation link for ${projectId}.\n`);
       return 0;
     }
 
