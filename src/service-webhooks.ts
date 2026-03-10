@@ -31,12 +31,21 @@ export async function acceptIncomingWebhook(params: {
     }
 > {
   const receivedAt = new Date().toISOString();
+  const signature = typeof params.headers["linear-signature"] === "string" ? params.headers["linear-signature"] : "";
+  if (!verifyHmacSha256Hex(params.rawBody, params.config.linear.webhookSecret, signature)) {
+    return { status: 401, body: { ok: false, reason: "invalid_signature" } };
+  }
+
   let payload: LinearWebhookPayload;
   try {
     payload = JSON.parse(params.rawBody.toString("utf8")) as LinearWebhookPayload;
   } catch {
     params.logger.warn({ webhookId: params.webhookId }, "Rejecting malformed webhook payload");
     return { status: 400, body: { ok: false, reason: "invalid_json" } };
+  }
+
+  if (!timestampMsWithinSkew(payload.webhookTimestamp, params.config.ingress.maxTimestampSkewSeconds)) {
+    return { status: 401, body: { ok: false, reason: "stale_timestamp" } };
   }
 
   let normalized: NormalizedEvent;
@@ -50,6 +59,10 @@ export async function acceptIncomingWebhook(params: {
     return { status: 400, body: { ok: false, reason: "unsupported_payload" } };
   }
 
+  const sanitizedHeaders = redactSensitiveHeaders(params.headers);
+  const headersJson = JSON.stringify(sanitizedHeaders);
+  const payloadJson = JSON.stringify(payload);
+
   logWebhookSummary(params.logger, normalized);
   await archiveAcceptedPayload({
     config: params.config,
@@ -60,35 +73,6 @@ export async function acceptIncomingWebhook(params: {
     rawBody: params.rawBody,
     payload,
   });
-
-  const signature = typeof params.headers["linear-signature"] === "string" ? params.headers["linear-signature"] : "";
-  const sanitizedHeaders = redactSensitiveHeaders(params.headers);
-  const headersJson = JSON.stringify(sanitizedHeaders);
-  const payloadJson = JSON.stringify(payload);
-
-  if (!verifyHmacSha256Hex(params.rawBody, params.config.linear.webhookSecret, signature)) {
-    persistRejectedWebhook(params.db, {
-      webhookId: params.webhookId,
-      receivedAt,
-      normalized,
-      headersJson,
-      payloadJson,
-      signatureValid: false,
-    });
-    return { status: 401, body: { ok: false, reason: "invalid_signature" } };
-  }
-
-  if (!timestampMsWithinSkew(payload.webhookTimestamp, params.config.ingress.maxTimestampSkewSeconds)) {
-    persistRejectedWebhook(params.db, {
-      webhookId: params.webhookId,
-      receivedAt,
-      normalized,
-      headersJson,
-      payloadJson,
-      signatureValid: true,
-    });
-    return { status: 401, body: { ok: false, reason: "stale_timestamp" } };
-  }
 
   const stored = params.db.insertWebhookEvent({
     webhookId: params.webhookId,
@@ -173,27 +157,4 @@ async function archiveAcceptedPayload(params: {
   } catch (error) {
     params.logger.error({ webhookId: params.webhookId, error }, "Failed to archive webhook to local file");
   }
-}
-
-function persistRejectedWebhook(
-  db: PatchRelayDatabase,
-  params: {
-    webhookId: string;
-    receivedAt: string;
-    normalized: NormalizedEvent;
-    headersJson: string;
-    payloadJson: string;
-    signatureValid: boolean;
-  },
-): void {
-  db.insertWebhookEvent({
-    webhookId: params.webhookId,
-    receivedAt: params.receivedAt,
-    eventType: params.normalized.eventType,
-    issueId: params.normalized.issue.id,
-    headersJson: params.headersJson,
-    payloadJson: params.payloadJson,
-    signatureValid: params.signatureValid,
-    dedupeStatus: "rejected",
-  });
 }

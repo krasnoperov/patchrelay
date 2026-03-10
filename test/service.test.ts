@@ -405,12 +405,14 @@ test("service keeps one workspace and forks later stages from the prior thread",
       addNames: ["llm-working"],
       removeNames: ["llm-awaiting-handoff"],
     });
-    assert.match(linear.comments.get(issueAfterStart?.statusCommentId ?? "")?.body ?? "", /PatchRelay is running the development stage/);
+    const runningComment = linear.comments.get(issueAfterStart?.statusCommentId ?? "")?.body ?? "";
+    assert.match(runningComment, /PatchRelay is running the development stage/);
     const startStageRun = db.getStageRun(issueAfterStart.activeStageRunId);
     assert.equal(startStageRun?.stage, "development");
     assert.ok(startStageRun?.threadId);
     const workspacePath = db.getActiveWorkspaceForIssue("usertold", "issue_1")?.worktreePath;
     assert.ok(workspacePath);
+    assert.equal(runningComment.includes(workspacePath), false);
     writeFileSync(path.join(workspacePath, "sentinel.txt"), "keep me\n", "utf8");
 
     db.recordDesiredStage({

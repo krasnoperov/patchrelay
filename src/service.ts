@@ -26,9 +26,15 @@ import { normalizeWebhook } from "./webhooks.js";
 import { resolveWorkflowStage } from "./workflow-policy.js";
 
 const ISSUE_KEY_DELIMITER = "::";
+const LINEAR_OAUTH_STATE_TTL_MS = 15 * 60 * 1000;
 
 function makeIssueQueueKey(item: IssueQueueItem): string {
   return `${item.projectId}${ISSUE_KEY_DELIMITER}${item.issueId}`;
+}
+
+function oauthStateExpired(createdAt: string): boolean {
+  const createdAtMs = Date.parse(createdAt);
+  return !Number.isFinite(createdAtMs) || createdAtMs + LINEAR_OAUTH_STATE_TTL_MS < Date.now();
 }
 
 export class PatchRelayService {
@@ -107,6 +113,14 @@ export class PatchRelayService {
     const oauthState = this.db.getOAuthState(params.state);
     if (!oauthState || oauthState.consumedAt) {
       throw new Error("OAuth state was not found or has already been consumed");
+    }
+    if (oauthStateExpired(oauthState.createdAt)) {
+      this.db.finalizeOAuthState({
+        state: params.state,
+        status: "failed",
+        errorMessage: "OAuth state expired",
+      });
+      throw new Error("OAuth state has expired. Start the connection flow again.");
     }
 
     try {

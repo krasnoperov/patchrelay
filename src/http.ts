@@ -15,6 +15,7 @@ declare module "fastify" {
 export async function buildHttpServer(config: AppConfig, service: PatchRelayService, logger: Logger) {
   const buildInfo = getBuildInfo();
   const loopbackBind = isLoopbackBind(config.server.bind);
+  const localOAuthPagesEnabled = Boolean(config.linear.oauth) && loopbackBind;
   const managementRoutesEnabled = Boolean(config.linear.oauth) && (loopbackBind || config.operatorApi.enabled);
   const app = fastify({
     loggerInstance: logger,
@@ -173,7 +174,7 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
     });
   });
 
-  if (config.linear.oauth) {
+  if (localOAuthPagesEnabled) {
     app.get("/auth/linear/start", async (request, reply) => {
       const projectId = getQueryParam(request, "projectId");
       const result = service.createLinearOAuthStart(projectId ? { projectId } : undefined);
@@ -399,9 +400,8 @@ function renderSetupPage(
     .map((entry) => {
       const installation = entry.installation;
       const name = installation?.workspaceName ?? installation?.actorName ?? `Installation #${installation?.id ?? "unknown"}`;
-      const details = [installation?.workspaceKey, installation?.actorId].filter(Boolean).join(" ");
       const links = entry.linkedProjects.length > 0 ? `Linked projects: ${entry.linkedProjects.join(", ")}` : "Not linked";
-      return `<li><strong>${escapeHtml(name)}</strong><br><span>${escapeHtml(details || links)}</span><br><span>${escapeHtml(links)}</span></li>`;
+      return `<li><strong>${escapeHtml(name)}</strong><br><span>${escapeHtml(links)}</span></li>`;
     })
     .join("");
 
@@ -409,7 +409,7 @@ function renderSetupPage(
     .map(
       (project) =>
         `<li><strong>${escapeHtml(project.id)}</strong> - ${
-          project.installationId ? `installation #${project.installationId}` : "not linked"
+          project.installationId ? "linked" : "not linked"
         } - <a href="/auth/linear/start?projectId=${encodeURIComponent(project.id)}">Connect Linear</a></li>`,
     )
     .join("");

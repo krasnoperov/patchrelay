@@ -372,7 +372,7 @@ test("internal operator routes stay disabled by default", async () => {
   }
 });
 
-test("http exposes OAuth setup and callback routes when Linear OAuth is configured", async () => {
+test("loopback OAuth setup routes stay available for local setup", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-http-oauth-"));
 
   try {
@@ -423,6 +423,7 @@ test("http exposes OAuth setup and callback routes when Linear OAuth is configur
     assert.equal(setup.statusCode, 200);
     assert.match(setup.body, /Workspace One/);
     assert.match(setup.body, /Connect Linear/);
+    assert.doesNotMatch(setup.body, /actor-/i);
 
     const oauthStart = await app.inject({
       method: "GET",
@@ -682,6 +683,18 @@ test("remote operator OAuth APIs require bearer auth when operator API is enable
     });
     assert.equal(authenticatedStart.statusCode, 200);
     assert.equal(authenticatedStart.json().state, "state-remote");
+
+    const remoteSetup = await app.inject({
+      method: "GET",
+      url: "/setup",
+    });
+    assert.equal(remoteSetup.statusCode, 404);
+
+    const remoteBrowserStart = await app.inject({
+      method: "GET",
+      url: "/auth/linear/start?projectId=usertold",
+    });
+    assert.equal(remoteBrowserStart.statusCode, 404);
 
     const unauthenticatedList = await app.inject({
       method: "GET",

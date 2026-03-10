@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, lstatSync, realpathSync } from "node:fs";
 import path from "node:path";
 import type { Logger } from "pino";
 import type { CodexAppServerClient } from "./codex-app-server.js";
@@ -57,7 +57,7 @@ export class ServiceStageRunner {
 
     try {
       await ensureDir(project.worktreeRoot);
-      await this.ensureWorktree(project.repoPath, plan.worktreePath, plan.branchName);
+      await this.ensureWorktree(project.repoPath, project.worktreeRoot, plan.worktreePath, plan.branchName);
       await this.markStageActive(project, claim.issue, claim.stageRun);
 
       const threadLaunch = await this.launchStageThread(item.projectId, item.issueId, claim.stageRun.id, plan.worktreePath, issue.issueKey);
@@ -232,8 +232,9 @@ export class ServiceStageRunner {
     }
   }
 
-  private async ensureWorktree(repoPath: string, worktreePath: string, branchName: string): Promise<void> {
+  private async ensureWorktree(repoPath: string, worktreeRoot: string, worktreePath: string, branchName: string): Promise<void> {
     if (existsSync(worktreePath)) {
+      await this.assertTrustedExistingWorktree(repoPath, worktreeRoot, worktreePath);
       return;
     }
 
@@ -245,6 +246,56 @@ export class ServiceStageRunner {
         timeoutMs: 120_000,
       },
     );
+  }
+
+  private async assertTrustedExistingWorktree(repoPath: string, worktreeRoot: string, worktreePath: string): Promise<void> {
+    const worktreeStats = lstatSync(worktreePath);
+    if (worktreeStats.isSymbolicLink()) {
+      throw new Error(`Refusing to reuse symlinked worktree path: ${worktreePath}`);
+    }
+    if (!worktreeStats.isDirectory()) {
+      throw new Error(`Refusing to reuse non-directory worktree path: ${worktreePath}`);
+    }
+
+    const resolvedRoot = realpathSync(worktreeRoot);
+    const resolvedWorktree = realpathSync(worktreePath);
+    if (!isPathWithinRoot(resolvedRoot, resolvedWorktree)) {
+      throw new Error(`Refusing to reuse worktree outside configured root: ${worktreePath}`);
+    }
+
+    const listedWorktrees = await this.listRegisteredWorktrees(repoPath);
+    if (!listedWorktrees.has(resolvedWorktree)) {
+      throw new Error(`Refusing to reuse unregistered worktree path: ${worktreePath}`);
+    }
+  }
+
+  private async listRegisteredWorktrees(repoPath: string): Promise<Set<string>> {
+    const result = await execCommand(this.config.runner.gitBin, ["-C", repoPath, "worktree", "list", "--porcelain"], {
+      timeoutMs: 120_000,
+    });
+    if (result.exitCode !== 0) {
+      throw new Error(`Unable to verify registered worktrees for ${repoPath}`);
+    }
+
+    const worktrees = new Set<string>();
+    for (const line of result.stdout.split(/\r?\n/)) {
+      if (!line.startsWith("worktree ")) {
+        continue;
+      }
+
+      const listedPath = line.slice("worktree ".length).trim();
+      if (!listedPath) {
+        continue;
+      }
+
+      try {
+        worktrees.add(realpathSync(listedPath));
+      } catch {
+        worktrees.add(path.resolve(listedPath));
+      }
+    }
+
+    return worktrees;
   }
 
   private async markStageActive(
@@ -296,9 +347,13 @@ export class ServiceStageRunner {
         issue,
         stageRun,
         branchName: workspace.branchName,
-        worktreePath: workspace.worktreePath,
       }),
     });
     this.db.setIssueStatusComment(projectId, issueId, result.id);
   }
+}
+
+function isPathWithinRoot(rootPath: string, candidatePath: string): boolean {
+  const relative = path.relative(rootPath, candidatePath);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }

@@ -19,7 +19,6 @@ export function buildRunningStatusComment(params: {
   issue: TrackedIssueRecord;
   stageRun: StageRunRecord;
   branchName: string;
-  worktreePath: string;
 }): string {
   return [
     STATUS_MARKER,
@@ -28,7 +27,6 @@ export function buildRunningStatusComment(params: {
     `- Issue: \`${params.issue.issueKey ?? params.issue.linearIssueId}\``,
     `- Stage: \`${params.stageRun.stage}\``,
     `- Branch: \`${params.branchName}\``,
-    `- Worktree: \`${params.worktreePath}\``,
     `- Thread: \`${params.stageRun.threadId ?? "starting"}\``,
     `- Turn: \`${params.stageRun.turnId ?? "starting"}\``,
     `- Started: \`${params.stageRun.startedAt}\``,
