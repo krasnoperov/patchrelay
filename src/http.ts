@@ -15,7 +15,6 @@ declare module "fastify" {
 export async function buildHttpServer(config: AppConfig, service: PatchRelayService, logger: Logger) {
   const buildInfo = getBuildInfo();
   const loopbackBind = isLoopbackBind(config.server.bind);
-  const localOAuthPagesEnabled = loopbackBind;
   const managementRoutesEnabled = loopbackBind || config.operatorApi.enabled;
   const app = fastify({
     loggerInstance: logger,
@@ -173,29 +172,6 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
       commit: buildInfo.commit,
     });
   });
-
-  if (localOAuthPagesEnabled) {
-    app.get("/auth/linear/start", async (request, reply) => {
-      const projectId = getQueryParam(request, "projectId");
-      const result = service.createLinearOAuthStart(projectId ? { projectId } : undefined);
-      return reply.redirect(result.authorizeUrl);
-    });
-
-    app.get("/setup", async (_request, reply) => {
-      const installations = service.listLinearInstallations();
-      const projects: Array<{ id: string; installationId?: number }> = config.projects.map((project) => {
-        const linked = installations.find((entry) => entry.linkedProjects.includes(project.id));
-        return {
-          id: project.id,
-          ...(linked?.installation?.id ? { installationId: linked.installation.id } : {}),
-        };
-      });
-
-      return reply
-        .type("text/html; charset=utf-8")
-        .send(renderSetupPage(config, installations, projects));
-    });
-  }
 
   app.post(
     config.ingress.linearWebhookPath,
@@ -389,49 +365,6 @@ function isAuthorizedOperatorRequest(request: FastifyRequest, config: AppConfig)
 
 function isLoopbackBind(bind: string): boolean {
   return bind === "127.0.0.1" || bind === "::1" || bind === "localhost";
-}
-
-function renderSetupPage(
-  config: AppConfig,
-  installations: Array<{ installation: ReturnType<PatchRelayService["listLinearInstallations"]>[number]["installation"]; linkedProjects: string[] }>,
-  projects: Array<{ id: string; installationId?: number }>,
-): string {
-  const installItems = installations
-    .map((entry) => {
-      const installation = entry.installation;
-      const name = installation?.workspaceName ?? installation?.actorName ?? `Installation #${installation?.id ?? "unknown"}`;
-      const links = entry.linkedProjects.length > 0 ? `Linked projects: ${entry.linkedProjects.join(", ")}` : "Not linked";
-      return `<li><strong>${escapeHtml(name)}</strong><br><span>${escapeHtml(links)}</span></li>`;
-    })
-    .join("");
-
-  const projectItems = projects
-    .map(
-      (project) =>
-        `<li><strong>${escapeHtml(project.id)}</strong> - ${
-          project.installationId ? "linked" : "not linked"
-        } - <a href="/auth/linear/start?projectId=${encodeURIComponent(project.id)}">Connect Linear</a></li>`,
-    )
-    .join("");
-
-  return `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>PatchRelay Setup</title>
-  </head>
-  <body>
-    <main>
-      <h1>PatchRelay Setup</h1>
-      <p>Linear OAuth redirect: <code>${escapeHtml(config.linear.oauth.redirectUri)}</code></p>
-      <h2>Projects</h2>
-      <ul>${projectItems || "<li>No projects configured.</li>"}</ul>
-      <h2>Installations</h2>
-      <ul>${installItems || "<li>No Linear installations connected yet.</li>"}</ul>
-    </main>
-  </body>
-</html>`;
 }
 
 function escapeHtml(value: string): string {

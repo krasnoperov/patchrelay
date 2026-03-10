@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { getBundledAssetPath } from "./runtime-paths.js";
 
 export interface BuildInfo {
   service: string;
@@ -17,12 +18,14 @@ const fallbackBuildInfo: BuildInfo = {
 
 export function getBuildInfo(): BuildInfo {
   const buildInfoPath = path.resolve(process.cwd(), "dist/build-info.json");
-  if (!existsSync(buildInfoPath)) {
+  const fallbackPath = getBundledAssetPath("dist/build-info.json");
+  const resolvedPath = existsSync(buildInfoPath) ? buildInfoPath : fallbackPath;
+  if (!existsSync(resolvedPath)) {
     return fallbackBuildInfo;
   }
 
   try {
-    const parsed = JSON.parse(readFileSync(buildInfoPath, "utf8")) as Partial<BuildInfo>;
+    const parsed = JSON.parse(readFileSync(resolvedPath, "utf8")) as Partial<BuildInfo>;
     return {
       service: typeof parsed.service === "string" ? parsed.service : fallbackBuildInfo.service,
       version: typeof parsed.version === "string" ? parsed.version : fallbackBuildInfo.version,

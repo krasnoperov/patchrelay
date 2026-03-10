@@ -5,18 +5,19 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/src/patchrelay
-EnvironmentFile=%h/.config/patchrelay/.env
+WorkingDirectory=/home/your-user
+EnvironmentFile=/home/your-user/.config/patchrelay/.env
 Environment=NODE_ENV=production
-Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=/usr/bin/env npm run start
+Environment=PATCHRELAY_CONFIG=/home/your-user/.config/patchrelay/patchrelay.yaml
+Environment=PATH=/home/your-user/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/env patchrelay serve
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=false
-ReadWritePaths=%h/src/patchrelay %h/.config/patchrelay %h/.local/state/patchrelay %h/.local/share/patchrelay
+ReadWritePaths=/home/your-user/.config/patchrelay /home/your-user/.local/state/patchrelay /home/your-user/.local/share/patchrelay
 
 # PatchRelay is intended to run as your real user so Codex inherits your
 # existing git, SSH, and local tool permissions.

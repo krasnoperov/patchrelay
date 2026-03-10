@@ -150,6 +150,62 @@ ${oauthConfigYaml}
   }
 });
 
+test("loadConfig defaults to the XDG config path when PATCHRELAY_CONFIG is unset", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-config-xdg-"));
+  const configHome = path.join(baseDir, "config-home");
+  const repoPath = path.join(baseDir, "repo");
+  const worktreeRoot = path.join(baseDir, "worktrees");
+  const configPath = path.join(configHome, "patchrelay", "patchrelay.yaml");
+
+  try {
+    mkdirSync(path.dirname(configPath), { recursive: true });
+    mkdirSync(repoPath, { recursive: true });
+    mkdirSync(worktreeRoot, { recursive: true });
+    writeFileSync(
+      configPath,
+      `
+server:
+  bind: 127.0.0.1
+  port: 8787
+ingress:
+  linear_webhook_path: /webhooks/linear
+  max_body_bytes: 262144
+  max_timestamp_skew_seconds: 60
+logging:
+  file_path: ${JSON.stringify(path.join(baseDir, "patchrelay.log"))}
+database:
+  path: ${JSON.stringify(path.join(baseDir, "patchrelay.sqlite"))}
+linear:
+  webhook_secret_env: REQUIRED_SECRET
+${oauthConfigYaml}
+projects:
+  - id: usertold
+    repo_path: ${JSON.stringify(repoPath)}
+    worktree_root: ${JSON.stringify(worktreeRoot)}
+    trigger_events: [statusChanged]
+    branch_prefix: use
+`,
+      "utf8",
+    );
+
+    withEnv(
+      {
+        PATCHRELAY_CONFIG: undefined,
+        XDG_CONFIG_HOME: configHome,
+        REQUIRED_SECRET: "top-secret",
+        ...oauthEnv,
+      },
+      () => {
+        const config = loadConfig();
+        assert.equal(config.projects[0]?.repoPath, repoPath);
+        assert.equal(config.projects[0]?.workflowFiles.development, path.join(repoPath, "IMPLEMENTATION_WORKFLOW.md"));
+      },
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("loadConfig merges global workflow defaults with sparse project overrides", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-config-defaults-"));
   const repoPath = path.join(baseDir, "repo-one");

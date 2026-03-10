@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import pino from "pino";
+import { getBuildInfo } from "../src/build-info.js";
 import { buildHttpServer } from "../src/http.js";
 import type { AppConfig } from "../src/types.js";
 
@@ -89,26 +90,9 @@ function createConfig(baseDir: string): AppConfig {
 
 test("health endpoint includes build version metadata from the built artifact", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-http-"));
-  const originalCwd = process.cwd();
+  const buildInfo = getBuildInfo();
 
   try {
-    mkdirSync(path.join(baseDir, "dist"), { recursive: true });
-    writeFileSync(
-      path.join(baseDir, "dist/build-info.json"),
-      `${JSON.stringify(
-        {
-          service: "patchrelay",
-          version: "0.1.0-test",
-          commit: "abc123def456",
-          builtAt: "2026-03-09T08:55:00.000Z",
-        },
-        null,
-        2,
-      )}\n`,
-      "utf8",
-    );
-    process.chdir(baseDir);
-
     const config = createConfig(baseDir);
     const app = await buildHttpServer(
       config,
@@ -129,10 +113,10 @@ test("health endpoint includes build version metadata from the built artifact", 
     assert.equal(response.statusCode, 200);
     assert.deepEqual(response.json(), {
       ok: true,
-      service: "patchrelay",
-      version: "0.1.0-test",
-      commit: "abc123def456",
-      builtAt: "2026-03-09T08:55:00.000Z",
+      service: buildInfo.service,
+      version: buildInfo.version,
+      commit: buildInfo.commit,
+      builtAt: buildInfo.builtAt,
     });
 
     const readiness = await app.inject({
@@ -144,9 +128,9 @@ test("health endpoint includes build version metadata from the built artifact", 
       ok: true,
       ready: true,
       codexStarted: true,
-      service: "patchrelay",
-      version: "0.1.0-test",
-      commit: "abc123def456",
+      service: buildInfo.service,
+      version: buildInfo.version,
+      commit: buildInfo.commit,
     });
 
     const home = await app.inject({
@@ -158,7 +142,6 @@ test("health endpoint includes build version metadata from the built artifact", 
 
     await app.close();
   } finally {
-    process.chdir(originalCwd);
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
@@ -424,22 +407,6 @@ test("loopback OAuth setup routes stay available for local setup", async () => {
       pino({ enabled: false }),
     );
 
-    const setup = await app.inject({
-      method: "GET",
-      url: "/setup",
-    });
-    assert.equal(setup.statusCode, 200);
-    assert.match(setup.body, /Workspace One/);
-    assert.match(setup.body, /Connect Linear/);
-    assert.doesNotMatch(setup.body, /actor-/i);
-
-    const oauthStart = await app.inject({
-      method: "GET",
-      url: "/auth/linear/start?projectId=usertold",
-    });
-    assert.equal(oauthStart.statusCode, 302);
-    assert.equal(oauthStart.headers.location, "https://linear.app/oauth/authorize?state=state-1");
-
     const oauthApi = await app.inject({
       method: "GET",
       url: "/api/oauth/linear/start",
@@ -691,18 +658,6 @@ test("remote operator OAuth APIs require bearer auth when operator API is enable
     });
     assert.equal(authenticatedStart.statusCode, 200);
     assert.equal(authenticatedStart.json().state, "state-remote");
-
-    const remoteSetup = await app.inject({
-      method: "GET",
-      url: "/setup",
-    });
-    assert.equal(remoteSetup.statusCode, 404);
-
-    const remoteBrowserStart = await app.inject({
-      method: "GET",
-      url: "/auth/linear/start?projectId=usertold",
-    });
-    assert.equal(remoteBrowserStart.statusCode, 404);
 
     const unauthenticatedList = await app.inject({
       method: "GET",

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -103,6 +103,41 @@ function createBufferStream() {
       return buffer;
     },
   };
+}
+
+function withEnv(values: Record<string, string | undefined>, run: () => Promise<void> | void): Promise<void> | void {
+  const previous = new Map<string, string | undefined>();
+
+  for (const [key, value] of Object.entries(values)) {
+    previous.set(key, process.env[key]);
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+
+  const restore = () => {
+    for (const [key, value] of previous.entries()) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  };
+
+  try {
+    const result = run();
+    if (result && typeof (result as Promise<void>).then === "function") {
+      return (result as Promise<void>).finally(restore);
+    }
+    restore();
+    return result;
+  } catch (error) {
+    restore();
+    throw error;
+  }
 }
 
 function seedDatabase(db: PatchRelayDatabase, config: AppConfig): void {
@@ -376,6 +411,70 @@ test("cli doctor reports preflight status", async () => {
     const jsonOut = createBufferStream();
     assert.equal(await runCli(["doctor", "--json"], { config, stdout: jsonOut.stream, stderr: stderr.stream }), 0);
     assert.match(jsonOut.read(), /"ok": true/);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("cli init writes XDG config files and install-service manages the user unit", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-init-"));
+  const configHome = path.join(baseDir, ".config");
+  const stateHome = path.join(baseDir, ".state");
+  const dataHome = path.join(baseDir, ".share");
+
+  try {
+    await withEnv(
+      {
+        XDG_CONFIG_HOME: configHome,
+        XDG_STATE_HOME: stateHome,
+        XDG_DATA_HOME: dataHome,
+        PATCHRELAY_CONFIG: undefined,
+        PATCHRELAY_DB_PATH: undefined,
+        PATCHRELAY_LOG_FILE: undefined,
+      },
+      async () => {
+        const initOut = createBufferStream();
+        assert.equal(await runCli(["init"], { stdout: initOut.stream, stderr: createBufferStream().stream }), 0);
+        assert.match(initOut.read(), /Config directory:/);
+
+        const envPath = path.join(configHome, "patchrelay", ".env");
+        const configPath = path.join(configHome, "patchrelay", "patchrelay.yaml");
+        assert.equal(readFileSync(envPath, "utf8").includes("LINEAR_WEBHOOK_SECRET"), true);
+        const configContents = readFileSync(configPath, "utf8");
+        assert.equal(configContents.includes("token_encryption_key_env: PATCHRELAY_TOKEN_ENCRYPTION_KEY"), true);
+        assert.equal(configContents.includes(path.join(dataHome, "patchrelay", "worktrees")), true);
+
+        const installOut = createBufferStream();
+        assert.equal(
+          await runCli(["install-service", "--write-only"], {
+            stdout: installOut.stream,
+            stderr: createBufferStream().stream,
+          }),
+          0,
+        );
+        const unitPath = path.join(configHome, "systemd", "user", "patchrelay.service");
+        const unit = readFileSync(unitPath, "utf8");
+        assert.match(unit, /ExecStart=\/usr\/bin\/env patchrelay serve/);
+        assert.match(unit, new RegExp(`Environment=PATCHRELAY_CONFIG=${configPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+
+        const commands: string[] = [];
+        assert.equal(
+          await runCli(["restart-service", "--json"], {
+            stdout: createBufferStream().stream,
+            stderr: createBufferStream().stream,
+            runInteractive: async (command, args) => {
+              commands.push([command, ...args].join(" "));
+              return 0;
+            },
+          }),
+          0,
+        );
+        assert.deepEqual(commands, [
+          "systemctl --user daemon-reload",
+          "systemctl --user restart patchrelay",
+        ]);
+      },
+    );
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

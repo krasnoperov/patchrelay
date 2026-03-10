@@ -23,12 +23,14 @@ Its first job is observability:
 
 Its second job is light operator control:
 
+- bootstrap a local PatchRelay home
 - re-trigger a stage
 - tail live activity
 - open the right workspace path
 - start a Linear OAuth installation flow
 - inspect connected Linear installations
 - link a project to an installation
+- install and restart the user service
 - keep setup and daily operation in the terminal
 
 ## User goals
@@ -58,6 +60,7 @@ The CLI must work well over SSH and in a plain terminal.
 
 Initial scope:
 
+- local bootstrap and service management
 - issue overview
 - live stage status
 - completed stage reports
@@ -126,6 +129,59 @@ Output includes:
 - whether `git` and `codex` are executable
 - whether the operator API is exposed safely for the current bind settings
 
+### `patchrelay init`
+
+Bootstrap the local PatchRelay home in XDG-style user directories.
+
+By default this writes:
+
+- `~/.config/patchrelay/.env`
+- `~/.config/patchrelay/patchrelay.yaml`
+
+It also creates:
+
+- `~/.local/state/patchrelay/`
+- `~/.local/share/patchrelay/`
+
+Flags:
+
+- `--force`
+- `--json`
+
+This is the expected first command after installing the package.
+
+### `patchrelay install-service`
+
+Install the systemd user unit for PatchRelay.
+
+Behavior:
+
+- writes `~/.config/systemd/user/patchrelay.service`
+- points the service at the same config and env files created by `patchrelay init`
+- reloads systemd user units
+- enables and starts the `patchrelay` service
+
+Flags:
+
+- `--force`
+- `--write-only`
+- `--json`
+
+`--write-only` skips `systemctl --user daemon-reload` and `systemctl --user enable --now patchrelay`.
+
+### `patchrelay restart-service`
+
+Restart the systemd user service after a package update or config change.
+
+Behavior:
+
+- runs `systemctl --user daemon-reload`
+- runs `systemctl --user restart patchrelay`
+
+Flags:
+
+- `--json`
+
 ### `patchrelay connect [--project <projectId>]`
 
 Start a Linear OAuth installation flow for the current PatchRelay installation.
@@ -144,7 +200,7 @@ Expected flow:
 2. CLI opens the browser to Linear consent.
 3. User approves access in the browser.
 4. Linear redirects back to local PatchRelay.
-5. CLI returns to a completed terminal flow without requiring `/setup`.
+5. CLI returns to a completed terminal flow.
 
 ### `patchrelay installations`
 
@@ -364,6 +420,15 @@ The CLI should not speak JSON-RPC to `codex app-server` directly in the first ve
 PatchRelay already owns that relationship.
 
 For the operator setup path, the CLI may use local HTTP endpoints for OAuth start/completion state while still keeping the browser out of the main control loop.
+
+The intended packaged onboarding flow is:
+
+1. `patchrelay init`
+2. edit `~/.config/patchrelay/.env`
+3. edit `~/.config/patchrelay/patchrelay.yaml`
+4. `patchrelay doctor`
+5. `patchrelay install-service`
+6. `patchrelay connect --project <projectId>`
 
 ## UX details
 

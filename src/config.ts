@@ -3,6 +3,7 @@ import path from "node:path";
 import YAML from "yaml";
 import { z } from "zod";
 import type { AppConfig } from "./types.js";
+import { getDefaultConfigPath, getDefaultDatabasePath, getDefaultLogPath } from "./runtime-paths.js";
 import { ensureAbsolutePath } from "./utils.js";
 
 const workflowFilesSchema = z.object({
@@ -71,11 +72,11 @@ const configSchema = z.object({
   logging: z.object({
     level: z.enum(["debug", "info", "warn", "error"]).default("info"),
     format: z.literal("logfmt").default("logfmt"),
-    file_path: z.string().min(1).default("/var/log/patchrelay/patchrelay.log"),
+    file_path: z.string().min(1).default(getDefaultLogPath()),
     webhook_archive_dir: z.string().optional(),
   }),
   database: z.object({
-    path: z.string().min(1),
+    path: z.string().min(1).default(getDefaultDatabasePath()),
     wal: z.boolean().default(true),
   }),
   linear: z.object({
@@ -252,21 +253,20 @@ function mergeWorkflowStatuses(
 }
 
 export function loadConfig(
-  configPath = process.env.PATCHRELAY_CONFIG ?? path.resolve("config/patchrelay.yaml"),
-  options?: { requireLinearSecret?: boolean },
+  configPath = process.env.PATCHRELAY_CONFIG ?? getDefaultConfigPath(),
+  options?: { requireLinearSecret?: boolean; allowMissingSecrets?: boolean },
 ): AppConfig {
   const requestedPath = ensureAbsolutePath(configPath);
-  const fallbackPath = ensureAbsolutePath(path.resolve("config/patchrelay.example.yaml"));
-  const resolvedPath = existsSync(requestedPath) ? requestedPath : fallbackPath;
-  if (!existsSync(resolvedPath)) {
-    throw new Error(`Config file not found: ${requestedPath}`);
+  if (!existsSync(requestedPath)) {
+    throw new Error(`Config file not found: ${requestedPath}. Run "patchrelay init" to create it.`);
   }
 
-  const raw = readFileSync(resolvedPath, "utf8");
+  const raw = readFileSync(requestedPath, "utf8");
   const parsedYaml = YAML.parse(raw);
   const parsed = configSchema.parse(expandEnv(parsedYaml));
 
   const requireLinearSecret = options?.requireLinearSecret ?? true;
+  const allowMissingSecrets = options?.allowMissingSecrets ?? false;
   const webhookSecret = process.env[parsed.linear.webhook_secret_env];
   const tokenEncryptionKey = process.env[parsed.linear.token_encryption_key_env];
   const oauthClientId = process.env[parsed.linear.oauth.client_id_env];
@@ -274,16 +274,16 @@ export function loadConfig(
   const operatorApiToken = parsed.operator_api.bearer_token_env
     ? process.env[parsed.operator_api.bearer_token_env]
     : undefined;
-  if (requireLinearSecret && !webhookSecret) {
+  if (requireLinearSecret && !webhookSecret && !allowMissingSecrets) {
     throw new Error(`Missing env var ${parsed.linear.webhook_secret_env}`);
   }
-  if (!oauthClientId) {
+  if (!oauthClientId && !allowMissingSecrets) {
     throw new Error(`Missing env var ${parsed.linear.oauth.client_id_env}`);
   }
-  if (!oauthClientSecret) {
+  if (!oauthClientSecret && !allowMissingSecrets) {
     throw new Error(`Missing env var ${parsed.linear.oauth.client_secret_env}`);
   }
-  if (!tokenEncryptionKey) {
+  if (!tokenEncryptionKey && !allowMissingSecrets) {
     throw new Error(`Missing env var ${parsed.linear.token_encryption_key_env}`);
   }
 
@@ -316,13 +316,13 @@ export function loadConfig(
       webhookSecret: webhookSecret ?? "",
       graphqlUrl: parsed.linear.graphql_url,
       oauth: {
-        clientId: oauthClientId,
-        clientSecret: oauthClientSecret,
+        clientId: oauthClientId ?? "",
+        clientSecret: oauthClientSecret ?? "",
         redirectUri: parsed.linear.oauth.redirect_uri,
         scopes: parsed.linear.oauth.scopes,
         actor: parsed.linear.oauth.actor,
       },
-      tokenEncryptionKey,
+      tokenEncryptionKey: tokenEncryptionKey ?? "",
     },
     operatorApi: {
       enabled: parsed.operator_api.enabled,

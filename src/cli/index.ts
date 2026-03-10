@@ -1,7 +1,9 @@
 import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import { loadConfig } from "../config.js";
+import { initializePatchRelayHome, installUserServiceUnit } from "../install.js";
 import { runPreflight } from "../preflight.js";
+import { getDefaultConfigPath, getDefaultEnvPath, getSystemdUserUnitPath } from "../runtime-paths.js";
 import { CliDataAccess } from "./data.js";
 import { formatJson } from "./formatters/json.js";
 import { formatEvents, formatInspect, formatList, formatLive, formatOpen, formatReport, formatRetry, formatWorktree } from "./formatters/text.js";
@@ -20,10 +22,13 @@ const KNOWN_COMMANDS = new Set([
   "retry",
   "list",
   "doctor",
+  "init",
   "connect",
   "installations",
   "link-installation",
   "unlink-installation",
+  "install-service",
+  "restart-service",
   "webhook",
   "help",
 ]);
@@ -83,10 +88,13 @@ function helpText(): string {
     "  retry <issueKey> [--stage <stage>] [--reason <text>] [--json]",
     "  list [--active] [--failed] [--project <projectId>] [--json]",
     "  doctor [--json]",
+    "  init [--force] [--json]",
     "  connect [--project <projectId>] [--no-open] [--timeout <seconds>] [--json]",
     "  installations [--json]",
     "  link-installation <projectId> <installationId> [--json]",
     "  unlink-installation <projectId> [--json]",
+    "  install-service [--force] [--write-only] [--json]",
+    "  restart-service [--json]",
     "  webhook <projectId> [--show-secret] [--json]",
     "  serve",
   ].join("\n");
@@ -172,6 +180,18 @@ async function openExternalUrl(url: string): Promise<boolean> {
   return false;
 }
 
+async function runServiceCommands(
+  runner: InteractiveRunner,
+  commands: Array<{ command: string; args: string[] }>,
+): Promise<void> {
+  for (const entry of commands) {
+    const exitCode = await runner(entry.command, entry.args);
+    if (exitCode !== 0) {
+      throw new Error(`Command failed with exit code ${exitCode}: ${entry.command} ${entry.args.join(" ")}`);
+    }
+  }
+}
+
 export async function runCli(
   argv: string[],
   options?: {
@@ -202,9 +222,100 @@ export async function runCli(
     return -1;
   }
 
-  const config = options?.config ?? loadConfig(undefined, { requireLinearSecret: false });
-  let data = options?.data;
+  const runInteractive = options?.runInteractive ?? runInteractiveCommand;
   const json = parsed.flags.get("json") === true;
+
+  if (command === "init") {
+    try {
+      const result = await initializePatchRelayHome({ force: parsed.flags.get("force") === true });
+      writeOutput(
+        stdout,
+        json
+          ? formatJson(result)
+          : [
+              `Config directory: ${result.configDir}`,
+              `Env file: ${result.envPath} (${result.envStatus})`,
+              `Config file: ${result.configPath} (${result.configStatus})`,
+              `State directory: ${result.stateDir}`,
+              `Data directory: ${result.dataDir}`,
+              "",
+              "Next steps:",
+              `1. Edit ${result.envPath}`,
+              `2. Edit ${result.configPath}`,
+              "3. Run `patchrelay doctor`",
+              "4. Run `patchrelay install-service`",
+            ].join("\n") + "\n",
+      );
+      return 0;
+    } catch (error) {
+      writeOutput(stderr, `${error instanceof Error ? error.message : String(error)}\n`);
+      return 1;
+    }
+  }
+
+  if (command === "install-service") {
+    try {
+      const result = await installUserServiceUnit({ force: parsed.flags.get("force") === true });
+      const writeOnly = parsed.flags.get("write-only") === true;
+      if (!writeOnly) {
+        await runServiceCommands(runInteractive, [
+          { command: "systemctl", args: ["--user", "daemon-reload"] },
+          { command: "systemctl", args: ["--user", "enable", "--now", "patchrelay"] },
+        ]);
+      }
+      writeOutput(
+        stdout,
+        json
+          ? formatJson({ ...result, writeOnly })
+          : [
+              `Service unit: ${result.unitPath} (${result.status})`,
+              `Env file: ${result.envPath}`,
+              `Config file: ${result.configPath}`,
+              writeOnly
+                ? "Service unit written. Start it with: systemctl --user enable --now patchrelay"
+                : "PatchRelay user service installed and started.",
+              "After package updates, run: patchrelay restart-service",
+            ].join("\n") + "\n",
+      );
+      return 0;
+    } catch (error) {
+      writeOutput(stderr, `${error instanceof Error ? error.message : String(error)}\n`);
+      return 1;
+    }
+  }
+
+  if (command === "restart-service") {
+    try {
+      await runServiceCommands(runInteractive, [
+        { command: "systemctl", args: ["--user", "daemon-reload"] },
+        { command: "systemctl", args: ["--user", "restart", "patchrelay"] },
+      ]);
+      writeOutput(
+        stdout,
+        json
+          ? formatJson({
+              service: "patchrelay",
+              unitPath: getSystemdUserUnitPath(),
+              envPath: getDefaultEnvPath(),
+              configPath: getDefaultConfigPath(),
+              restarted: true,
+            })
+          : "Reloaded systemd user units and restarted PatchRelay.\n",
+      );
+      return 0;
+    } catch (error) {
+      writeOutput(stderr, `${error instanceof Error ? error.message : String(error)}\n`);
+      return 1;
+    }
+  }
+
+  const config =
+    options?.config ??
+    loadConfig(undefined, {
+      requireLinearSecret: false,
+      allowMissingSecrets: command === "doctor" || command === "install-service",
+    });
+  let data = options?.data;
 
   try {
     if (command === "doctor") {
@@ -332,7 +443,7 @@ export async function runCli(
       }
 
       const openCommand = buildOpenCommand(config, result.workspace.worktreePath, result.resumeThreadId);
-      return await (options?.runInteractive ?? runInteractiveCommand)(openCommand.command, openCommand.args);
+      return await runInteractive(openCommand.command, openCommand.args);
     }
 
     if (command === "connect") {

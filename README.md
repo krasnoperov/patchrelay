@@ -59,40 +59,64 @@ Internal inspection endpoints are disabled by default. The CLI-first OAuth flow 
    - a Linear OAuth app
    - a Linear webhook secret
 
-2. Clone and install:
+2. Install PatchRelay:
 
 ```bash
-git clone https://github.com/krasnoperov/patchrelay.git
-cd patchrelay
+npm install -g patchrelay
+```
+
+If you are packaging from a source checkout instead of installing from the registry:
+
+```bash
 npm install
-npm run build
+npm pack
+npm install -g ./patchrelay-*.tgz
 ```
 
-3. Create local config:
+3. Bootstrap the local home:
 
 ```bash
-cp .env.example .env
-cp config/patchrelay.example.yaml config/patchrelay.yaml
+patchrelay init
 ```
 
-4. Edit `.env` and `config/patchrelay.yaml` for your machine, repos, worktree roots, and Linear routing.
+This creates:
+
+- `~/.config/patchrelay/.env`
+- `~/.config/patchrelay/patchrelay.yaml`
+
+By default PatchRelay stores:
+
+- config in `~/.config/patchrelay/`
+- database and logs in `~/.local/state/patchrelay/`
+- worktrees under `~/.local/share/patchrelay/`
+
+4. Edit `~/.config/patchrelay/.env` and `~/.config/patchrelay/patchrelay.yaml` for your machine, repos, worktree roots, and Linear routing.
    - Set `PATCHRELAY_TOKEN_ENCRYPTION_KEY`, `LINEAR_OAUTH_CLIENT_ID`, and `LINEAR_OAUTH_CLIENT_SECRET`.
    - Standard workflow doc names and state names are built in. Use top-level `defaults` to change those conventions globally, and project-level `workflow_files` or `workflow_statuses` only when a repo needs overrides.
+   - Configure `trusted_actors` for each project if only a specific owner or trusted Linear group should be allowed to trigger automation.
 
-5. Start PatchRelay as your own user:
-
-```bash
-npm run start
-```
-
-Before putting it in service, run:
+5. Add the repo-local workflow docs PatchRelay should use, usually:
 
 ```bash
-npm run build
-node dist/index.js doctor
+IMPLEMENTATION_WORKFLOW.md
+REVIEW_WORKFLOW.md
+DEPLOY_WORKFLOW.md
+CLEANUP_WORKFLOW.md
 ```
 
-Use the CLI as the primary operator interface:
+6. Validate the setup:
+
+```bash
+patchrelay doctor
+```
+
+7. Install and start the user service:
+
+```bash
+patchrelay install-service
+```
+
+8. Use the CLI as the primary operator interface:
 
 ```bash
 patchrelay connect --project your-project
@@ -103,7 +127,13 @@ patchrelay webhook your-project
 
 `patchrelay connect` opens the browser only to complete Linear OAuth consent and then returns you to the terminal workflow.
 
-6. Put it behind Caddy, nginx, or another reverse proxy that exposes only `/`, `/health`, `/ready`, and `POST /webhooks/linear`.
+9. Put it behind Caddy, nginx, or another reverse proxy that exposes only `/`, `/health`, `/ready`, and `POST /webhooks/linear`.
+
+After package updates, restart the service with:
+
+```bash
+patchrelay restart-service
+```
 
 For a fuller install walkthrough, see [docs/self-hosting.md](docs/self-hosting.md).
 

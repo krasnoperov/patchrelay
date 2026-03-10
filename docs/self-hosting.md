@@ -32,27 +32,43 @@ The common deployment shape is:
 - one Linear OAuth app
 - one Linear webhook secret
 
-## 1. Clone And Build
+## 1. Install PatchRelay
 
 ```bash
-git clone https://github.com/krasnoperov/patchrelay.git
-cd patchrelay
+npm install -g patchrelay
+```
+
+If you are installing from a local source checkout instead of the package registry:
+
+```bash
 npm install
-npm run build
+npm pack
+npm install -g ./patchrelay-*.tgz
 ```
 
 ## 2. Create Runtime Files
 
 ```bash
-cp .env.example .env
-cp config/patchrelay.example.yaml config/patchrelay.yaml
+patchrelay init
 ```
+
+This creates:
+
+- `~/.config/patchrelay/.env`
+- `~/.config/patchrelay/patchrelay.yaml`
+
+Default runtime paths are:
+
+- config: `~/.config/patchrelay/`
+- database: `~/.local/state/patchrelay/patchrelay.sqlite`
+- logs: `~/.local/state/patchrelay/patchrelay.log`
+- worktree roots: usually `~/.local/share/patchrelay/worktrees/<project>`
 
 ## 3. Configure Secrets
 
 Create a Linear OAuth app and configure its redirect URI to point at PatchRelay, for example `http://127.0.0.1:8787/oauth/linear/callback` for personal-mode local setup or your public callback URL if you later expose it remotely.
 
-Then edit `.env`:
+Then edit `~/.config/patchrelay/.env`:
 
 ```bash
 LINEAR_WEBHOOK_SECRET=replace-with-linear-webhook-secret
@@ -66,7 +82,7 @@ Optional overrides such as `PATCHRELAY_CONFIG`, `PATCHRELAY_DB_PATH`, and `PATCH
 
 ## 4. Configure Projects
 
-Edit `config/patchrelay.yaml` and define one or more projects.
+Edit `~/.config/patchrelay/patchrelay.yaml` and define one or more projects.
 
 Each project needs:
 
@@ -86,7 +102,7 @@ Workflow file paths are resolved relative to `repo_path` unless you provide an a
 
 Keep `operator_api.enabled: false` unless you explicitly need the local inspection API. The CLI-first OAuth flow still works on loopback without turning the wider operator API on. If you enable it on anything other than `127.0.0.1`, set `bearer_token_env` and publish it only behind additional access controls.
 
-For the recommended CLI-first flow, you do not need to use `/setup` as a primary control surface. The browser is only needed for Linear OAuth consent after `patchrelay connect`.
+The browser is only needed for Linear OAuth consent after `patchrelay connect`.
 
 If you want Linear itself to be part of your trust boundary, configure `trusted_actors` on each project. That allowlist can name specific owners by `id` or `email`, or define a group-style allowlist with `email_domains`. When `trusted_actors` is present, unmatched Linear actors are ignored before they can trigger stages or steer a live comment.
 
@@ -112,23 +128,22 @@ Requirement references:
 
 ## 6. Start PatchRelay
 
-For a manual start:
-
-```bash
-npm run start
-```
-
 Before enabling the service, run the built-in preflight:
 
 ```bash
-npm run build
-node dist/index.js doctor
+patchrelay doctor
+```
+
+For a foreground manual start:
+
+```bash
+patchrelay serve
 ```
 
 For development:
 
 ```bash
-npm run dev
+tsx watch src/index.ts
 ```
 
 Health check:
@@ -150,9 +165,18 @@ patchrelay webhook your-project
 
 ## 7. Run As A Service
 
-The repo includes a systemd user-service example in [infra/patchrelay.service](../infra/patchrelay.service). Copy it into `~/.config/systemd/user/patchrelay.service`, replace the placeholder paths, then run:
+Create and start the user service with:
 
 ```bash
+patchrelay install-service
+```
+
+That writes `~/.config/systemd/user/patchrelay.service`, reloads the user unit set, and enables + starts `patchrelay`.
+
+If you only want to write the unit file without starting it yet:
+
+```bash
+patchrelay install-service --write-only
 systemctl --user daemon-reload
 systemctl --user enable --now patchrelay
 ```
@@ -165,6 +189,14 @@ sudo loginctl enable-linger "$USER"
 
 This is the preferred mode because Codex, git, SSH, and any repo-specific toolchains then run with your existing user permissions and credentials.
 Make sure the unit still has write access to every repository path and worktree root that PatchRelay will manage.
+
+After package updates, restart PatchRelay with:
+
+```bash
+patchrelay restart-service
+```
+
+That runs `systemctl --user daemon-reload` and `systemctl --user restart patchrelay` for you. If you changed the unit manually, re-run `patchrelay install-service --force` first.
 
 ## 8. Publish Through Caddy
 
@@ -239,7 +271,7 @@ If PatchRelay starts but does not process issue transitions:
 - check that the relevant trigger event is enabled
 - check that the configured workflow status names exactly match your Linear workflow
 - check that `codex app-server` can start for your user
-- run `node dist/index.js doctor` and clear any failing preflight checks
+- run `patchrelay doctor` and clear any failing preflight checks
 
 If PatchRelay can read webhooks but cannot write back to Linear:
 
