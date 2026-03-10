@@ -165,8 +165,11 @@ PatchRelay is convention-first here:
 
 - by default it looks for `IMPLEMENTATION_WORKFLOW.md`, `REVIEW_WORKFLOW.md`, `DEPLOY_WORKFLOW.md`, and `CLEANUP_WORKFLOW.md` in each repo root
 - by default it maps `Start`, `Review`, `Deploy`, `Cleanup`, `Implementing`, `Reviewing`, `Deploying`, `Cleaning Up`, `Human Needed`, and `Done`
+- by default it uses `agentSessionCreated`, `agentPrompted`, and `statusChanged` as trigger events for app-mode installs
 - `defaults.workflow_files` and `defaults.workflow_statuses` let you change those conventions globally
 - `projects[].workflow_files` and `projects[].workflow_statuses` are sparse overrides, so a project only needs to declare the entries that differ
+
+`projects[].trigger_events` is optional now and mainly for advanced overrides. Keep it only if you want PatchRelay to react to a non-default set such as regular issue comments.
 
 Workflow file paths are resolved relative to `repo_path` unless you provide an absolute path. Optional convention states such as `cleanup`, `cleanup_active`, `human_needed`, and `done` can be disabled for a project by setting them to `null`.
 

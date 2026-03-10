@@ -320,6 +320,61 @@ projects:
   }
 });
 
+test("loadConfig applies default app-mode trigger events when trigger_events is omitted", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-config-default-triggers-"));
+  const repoPath = path.join(baseDir, "repo");
+  const worktreeRoot = path.join(baseDir, "worktrees");
+
+  try {
+    mkdirSync(path.join(baseDir, "config"), { recursive: true });
+    mkdirSync(repoPath, { recursive: true });
+    mkdirSync(worktreeRoot, { recursive: true });
+    writeFileSync(
+      path.join(baseDir, "config", "patchrelay.yaml"),
+      `
+server:
+  bind: 127.0.0.1
+  port: 8787
+ingress:
+  linear_webhook_path: /webhooks/linear
+  max_body_bytes: 262144
+  max_timestamp_skew_seconds: 60
+logging:
+  file_path: ./patchrelay.log
+database:
+  path: ./data/patchrelay.sqlite
+linear:
+  webhook_secret_env: REQUIRED_SECRET
+  token_encryption_key_env: PATCHRELAY_TOKEN_ENCRYPTION_KEY
+  oauth:
+    client_id_env: LINEAR_OAUTH_CLIENT_ID
+    client_secret_env: LINEAR_OAUTH_CLIENT_SECRET
+    actor: app
+projects:
+  - id: usertold
+    repo_path: ${JSON.stringify(repoPath)}
+    worktree_root: ${JSON.stringify(worktreeRoot)}
+    branch_prefix: use
+`,
+      "utf8",
+    );
+
+    withEnv(
+      {
+        PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.yaml"),
+        REQUIRED_SECRET: "top-secret",
+        ...oauthEnv,
+      },
+      () => {
+        const config = loadConfig();
+        assert.deepEqual(config.projects[0]?.triggerEvents, ["agentSessionCreated", "agentPrompted", "statusChanged"]);
+      },
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("loadConfig merges global workflow defaults with sparse project overrides", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-config-defaults-"));
   const repoPath = path.join(baseDir, "repo-one");

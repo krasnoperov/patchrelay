@@ -56,7 +56,7 @@ const projectSchema = z.object({
   issue_key_prefixes: z.array(z.string().min(1)).default([]),
   linear_team_ids: z.array(z.string().min(1)).default([]),
   allow_labels: z.array(z.string().min(1)).default([]),
-  trigger_events: z.array(z.string().min(1)).min(1),
+  trigger_events: z.array(z.string().min(1)).min(1).optional(),
   branch_prefix: z.string().min(1),
 });
 
@@ -161,6 +161,14 @@ const builtinWorkflowStatuses = {
   human_needed: "Human Needed",
   done: "Done",
 } as const;
+
+function defaultTriggerEvents(actor: "user" | "app"): AppConfig["projects"][number]["triggerEvents"] {
+  if (actor === "app") {
+    return ["agentSessionCreated", "agentPrompted", "statusChanged"];
+  }
+
+  return ["statusChanged"];
+}
 
 function expandEnv(value: unknown): unknown {
   if (typeof value === "string") {
@@ -411,7 +419,9 @@ export function loadConfig(
       issueKeyPrefixes: project.issue_key_prefixes,
       linearTeamIds: project.linear_team_ids,
       allowLabels: project.allow_labels,
-      triggerEvents: project.trigger_events as AppConfig["projects"][number]["triggerEvents"],
+      triggerEvents:
+        (project.trigger_events as AppConfig["projects"][number]["triggerEvents"] | undefined) ??
+        defaultTriggerEvents(parsed.linear.oauth.actor),
       branchPrefix: project.branch_prefix,
     })),
   };

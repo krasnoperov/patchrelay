@@ -110,13 +110,6 @@ projects:
       - APP
     linear_team_ids:
       - APP
-    trigger_events:
-      - agentSessionCreated
-      - agentPrompted
-      - delegateChanged
-      - statusChanged
-      - commentCreated
-      - commentUpdated
     branch_prefix: app
 ```
 
@@ -126,8 +119,10 @@ Minimum project fields:
 - `repo_path`: local repo to automate
 - `worktree_root`: where issue worktrees are created
 - `issue_key_prefixes` / `linear_team_ids`: routing rules
-- `trigger_events`: which Linear events can steer runs
+- `trigger_events`: optional advanced override for which Linear events can steer runs
 - `branch_prefix`: generated branch prefix
+
+For the normal Linear app-agent flow, you can usually omit `trigger_events`. PatchRelay defaults to `agentSessionCreated`, `agentPrompted`, and `statusChanged` for app-mode installs.
 
 ### 5. Add workflow docs to the repo
 

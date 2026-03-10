@@ -110,6 +110,8 @@ For one machine with several repositories:
 
 One PatchRelay instance can serve several repos cleanly as long as routing is unambiguous.
 
+For the standard Linear app-agent flow, you can usually omit `trigger_events` entirely. PatchRelay defaults to `agentSessionCreated`, `agentPrompted`, and `statusChanged`.
+
 ## Recommended Onboarding Flow
 
 1. Install PatchRelay and run `patchrelay init`.
@@ -126,4 +128,4 @@ One PatchRelay instance can serve several repos cleanly as long as routing is un
 ## Operator Notes
 
 - PatchRelay now accepts supplemental Linear app webhooks such as permission-change, app-user-notification, and app-revoked events. They are informational today; the core execution path still depends on issue, comment, and agent-session events.
-- If delegation stops working, check team access on the Linear app, the webhook secret, and whether the project's `trigger_events` include `agentSessionCreated` and `agentPrompted`.
+- If delegation stops working, check team access on the Linear app, the webhook secret, and whether a custom `trigger_events` override accidentally removed `agentSessionCreated` or `agentPrompted`.

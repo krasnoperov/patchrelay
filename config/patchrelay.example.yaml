@@ -106,13 +106,13 @@ projects:
         - owner@example.com
       email_domains:
         - trusted.example.com
-    trigger_events:
-      - agentSessionCreated
-      - agentPrompted
-      - delegateChanged
-      - statusChanged
-      - commentCreated
-      - commentUpdated
+    # Optional. PatchRelay defaults to agentSessionCreated, agentPrompted, and
+    # statusChanged for app-mode installs. Set this only if you want custom
+    # steering behavior.
+    # trigger_events:
+    #   - agentSessionCreated
+    #   - agentPrompted
+    #   - statusChanged
     branch_prefix: app
 
   - id: your-project-with-overrides
@@ -127,6 +127,4 @@ projects:
       cleanup_active: null
     linear_team_ids:
       - OPS
-    trigger_events:
-      - statusChanged
     branch_prefix: ops
