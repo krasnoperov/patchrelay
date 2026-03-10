@@ -130,7 +130,7 @@ linear:
         assert.equal(config.operatorApi.bearerToken, "operator-secret");
         assert.equal(config.projects[0]?.repoPath, path.join(baseDir, "repo"));
         assert.equal(config.projects[0]?.worktreeRoot, path.join(baseDir, "worktrees"));
-        assert.equal(config.projects[0]?.workflowFiles.review, path.join(baseDir, "REVIEW.md"));
+        assert.equal(config.projects[0]?.workflowFiles.review, path.join(baseDir, "repo", "REVIEW.md"));
         assert.deepEqual(config.projects[0]?.trustedActors, {
           ids: ["user_123"],
           names: [],
@@ -143,6 +143,291 @@ linear:
     );
   } finally {
     process.chdir(originalCwd);
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("loadConfig merges global workflow defaults with sparse project overrides", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-config-defaults-"));
+  const repoPath = path.join(baseDir, "repo-one");
+  const worktreeRoot = path.join(baseDir, "worktrees-one");
+
+  try {
+    mkdirSync(path.join(baseDir, "config"), { recursive: true });
+    mkdirSync(repoPath, { recursive: true });
+    mkdirSync(worktreeRoot, { recursive: true });
+    writeFileSync(
+      path.join(baseDir, "config", "patchrelay.yaml"),
+      `
+server:
+  bind: 127.0.0.1
+  port: 8787
+ingress:
+  linear_webhook_path: /webhooks/linear
+  max_body_bytes: 262144
+  max_timestamp_skew_seconds: 60
+logging:
+  file_path: ./patchrelay.log
+database:
+  path: ./data/patchrelay.sqlite
+linear:
+  webhook_secret_env: REQUIRED_SECRET
+defaults:
+  workflow_files:
+    deploy: automation/DEPLOY.md
+    cleanup: automation/CLEANUP.md
+  workflow_statuses:
+    deploy: Release
+    deploy_active: Releasing
+    cleanup: Wrap Up
+    done: Completed
+projects:
+  - id: one
+    repo_path: ${repoPath}
+    worktree_root: ${worktreeRoot}
+    workflow_files:
+      review: custom/REVIEW.md
+    workflow_statuses:
+      review: QA Review
+      review_active: In QA
+    trigger_events: [statusChanged]
+    branch_prefix: one
+`,
+      "utf8",
+    );
+
+    withEnv(
+      {
+        PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.yaml"),
+        REQUIRED_SECRET: "top-secret",
+      },
+      () => {
+        const config = loadConfig();
+        assert.deepEqual(config.projects[0]?.workflowFiles, {
+          development: path.join(repoPath, "IMPLEMENTATION_WORKFLOW.md"),
+          review: path.join(repoPath, "custom", "REVIEW.md"),
+          deploy: path.join(repoPath, "automation", "DEPLOY.md"),
+          cleanup: path.join(repoPath, "automation", "CLEANUP.md"),
+        });
+        assert.deepEqual(config.projects[0]?.workflowStatuses, {
+          development: "Start",
+          review: "QA Review",
+          deploy: "Release",
+          developmentActive: "Implementing",
+          reviewActive: "In QA",
+          deployActive: "Releasing",
+          cleanup: "Wrap Up",
+          cleanupActive: "Cleaning Up",
+          humanNeeded: "Human Needed",
+          done: "Completed",
+        });
+      },
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("loadConfig merges workflow defaults with sparse project overrides", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-config-defaults-"));
+  const repoPath = path.join(baseDir, "repo");
+  const worktreeRoot = path.join(baseDir, "worktrees");
+
+  try {
+    mkdirSync(path.join(baseDir, "config"), { recursive: true });
+    mkdirSync(repoPath, { recursive: true });
+    mkdirSync(worktreeRoot, { recursive: true });
+    writeFileSync(
+      path.join(baseDir, "config", "patchrelay.yaml"),
+      `
+server:
+  bind: 127.0.0.1
+  port: 8787
+ingress:
+  linear_webhook_path: /webhooks/linear
+  max_body_bytes: 262144
+  max_timestamp_skew_seconds: 60
+logging:
+  file_path: ./patchrelay.log
+database:
+  path: ./data/patchrelay.sqlite
+linear:
+  webhook_secret_env: REQUIRED_SECRET
+defaults:
+  workflow_files:
+    review: workflows/REVIEW.md
+  workflow_statuses:
+    review: Peer Review
+    cleanup: Cleanup
+    cleanup_active: Cleaning
+    human_needed: Needs Human
+projects:
+  - id: usertold
+    repo_path: ${repoPath}
+    worktree_root: ${worktreeRoot}
+    workflow_files:
+      deploy: ops/DEPLOY.md
+    workflow_statuses:
+      deploy: Release
+      cleanup: null
+      human_needed: Escalate
+      done: Shipped
+    trigger_events: [statusChanged]
+    branch_prefix: use
+`,
+      "utf8",
+    );
+
+    withEnv(
+      {
+        PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.yaml"),
+        REQUIRED_SECRET: "top-secret",
+      },
+      () => {
+        const config = loadConfig();
+        assert.equal(config.projects[0]?.workflowFiles.development, path.join(repoPath, "IMPLEMENTATION_WORKFLOW.md"));
+        assert.equal(config.projects[0]?.workflowFiles.review, path.join(repoPath, "workflows", "REVIEW.md"));
+        assert.equal(config.projects[0]?.workflowFiles.deploy, path.join(repoPath, "ops", "DEPLOY.md"));
+        assert.equal(config.projects[0]?.workflowFiles.cleanup, path.join(repoPath, "CLEANUP_WORKFLOW.md"));
+        assert.equal(config.projects[0]?.workflowStatuses.development, "Start");
+        assert.equal(config.projects[0]?.workflowStatuses.review, "Peer Review");
+        assert.equal(config.projects[0]?.workflowStatuses.deploy, "Release");
+        assert.equal(config.projects[0]?.workflowStatuses.cleanup, undefined);
+        assert.equal(config.projects[0]?.workflowStatuses.cleanupActive, undefined);
+        assert.equal(config.projects[0]?.workflowStatuses.humanNeeded, "Escalate");
+        assert.equal(config.projects[0]?.workflowStatuses.done, "Shipped");
+      },
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("loadConfig applies built-in workflow conventions when workflow settings are omitted", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-config-conventions-"));
+  const repoPath = path.join(baseDir, "repo");
+  const worktreeRoot = path.join(baseDir, "worktrees");
+
+  try {
+    mkdirSync(path.join(baseDir, "config"), { recursive: true });
+    mkdirSync(repoPath, { recursive: true });
+    mkdirSync(worktreeRoot, { recursive: true });
+    writeFileSync(
+      path.join(baseDir, "config", "patchrelay.yaml"),
+      `
+server:
+  bind: 127.0.0.1
+  port: 8787
+ingress:
+  linear_webhook_path: /webhooks/linear
+  max_body_bytes: 262144
+  max_timestamp_skew_seconds: 60
+logging:
+  file_path: ./patchrelay.log
+database:
+  path: ./data/patchrelay.sqlite
+linear:
+  webhook_secret_env: REQUIRED_SECRET
+projects:
+  - id: usertold
+    repo_path: ${repoPath}
+    worktree_root: ${worktreeRoot}
+    trigger_events: [statusChanged]
+    branch_prefix: use
+`,
+      "utf8",
+    );
+
+    withEnv(
+      {
+        PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.yaml"),
+        REQUIRED_SECRET: "top-secret",
+      },
+      () => {
+        const config = loadConfig();
+        assert.deepEqual(config.projects[0]?.workflowFiles, {
+          development: path.join(repoPath, "IMPLEMENTATION_WORKFLOW.md"),
+          review: path.join(repoPath, "REVIEW_WORKFLOW.md"),
+          deploy: path.join(repoPath, "DEPLOY_WORKFLOW.md"),
+          cleanup: path.join(repoPath, "CLEANUP_WORKFLOW.md"),
+        });
+        assert.deepEqual(config.projects[0]?.workflowStatuses, {
+          development: "Start",
+          review: "Review",
+          deploy: "Deploy",
+          developmentActive: "Implementing",
+          reviewActive: "Reviewing",
+          deployActive: "Deploying",
+          cleanup: "Cleanup",
+          cleanupActive: "Cleaning Up",
+          humanNeeded: "Human Needed",
+          done: "Done",
+        });
+      },
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("loadConfig lets projects disable optional workflow statuses with null", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-config-disable-statuses-"));
+  const repoPath = path.join(baseDir, "repo");
+  const worktreeRoot = path.join(baseDir, "worktrees");
+
+  try {
+    mkdirSync(path.join(baseDir, "config"), { recursive: true });
+    mkdirSync(repoPath, { recursive: true });
+    mkdirSync(worktreeRoot, { recursive: true });
+    writeFileSync(
+      path.join(baseDir, "config", "patchrelay.yaml"),
+      `
+server:
+  bind: 127.0.0.1
+  port: 8787
+ingress:
+  linear_webhook_path: /webhooks/linear
+  max_body_bytes: 262144
+  max_timestamp_skew_seconds: 60
+logging:
+  file_path: ./patchrelay.log
+database:
+  path: ./data/patchrelay.sqlite
+linear:
+  webhook_secret_env: REQUIRED_SECRET
+defaults:
+  workflow_statuses:
+    cleanup: Cleanup
+    cleanup_active: Cleaning Up
+    human_needed: Human Needed
+projects:
+  - id: one
+    repo_path: ${repoPath}
+    worktree_root: ${worktreeRoot}
+    workflow_statuses:
+      cleanup: null
+      cleanup_active: null
+      human_needed: null
+    trigger_events: [statusChanged]
+    branch_prefix: one
+`,
+      "utf8",
+    );
+
+    withEnv(
+      {
+        PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.yaml"),
+        REQUIRED_SECRET: "top-secret",
+      },
+      () => {
+        const config = loadConfig();
+        assert.equal(config.projects[0]?.workflowStatuses.cleanup, undefined);
+        assert.equal(config.projects[0]?.workflowStatuses.cleanupActive, undefined);
+        assert.equal(config.projects[0]?.workflowStatuses.humanNeeded, undefined);
+        assert.equal(config.projects[0]?.workflowStatuses.done, "Done");
+      },
+    );
+  } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
 });

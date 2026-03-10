@@ -5,28 +5,36 @@ import { z } from "zod";
 import type { AppConfig } from "./types.js";
 import { ensureAbsolutePath } from "./utils.js";
 
+const workflowFilesSchema = z.object({
+  development: z.string().min(1),
+  review: z.string().min(1),
+  deploy: z.string().min(1),
+  cleanup: z.string().min(1),
+});
+
+const workflowFilesOverrideSchema = workflowFilesSchema.partial();
+
+const workflowStatusesSchema = z.object({
+  development: z.string().min(1),
+  review: z.string().min(1),
+  deploy: z.string().min(1),
+  development_active: z.string().min(1),
+  review_active: z.string().min(1),
+  deploy_active: z.string().min(1),
+  cleanup: z.string().min(1).nullable().optional(),
+  cleanup_active: z.string().min(1).nullable().optional(),
+  human_needed: z.string().min(1).nullable().optional(),
+  done: z.string().min(1).nullable().optional(),
+});
+
+const workflowStatusesOverrideSchema = workflowStatusesSchema.partial();
+
 const projectSchema = z.object({
   id: z.string().min(1),
   repo_path: z.string().min(1),
   worktree_root: z.string().min(1),
-  workflow_files: z.object({
-    development: z.string().min(1),
-    review: z.string().min(1),
-    deploy: z.string().min(1),
-    cleanup: z.string().min(1),
-  }),
-  workflow_statuses: z.object({
-    development: z.string().min(1).default("Start"),
-    review: z.string().min(1).default("Review"),
-    deploy: z.string().min(1).default("Deploy"),
-    development_active: z.string().min(1).default("Implementing"),
-    review_active: z.string().min(1).default("Reviewing"),
-    deploy_active: z.string().min(1).default("Deploying"),
-    cleanup: z.string().optional(),
-    cleanup_active: z.string().optional(),
-    human_needed: z.string().optional(),
-    done: z.string().optional(),
-  }),
+  workflow_files: workflowFilesOverrideSchema.optional(),
+  workflow_statuses: workflowStatusesOverrideSchema.optional(),
   workflow_labels: z
     .object({
       working: z.string().min(1).optional(),
@@ -123,8 +131,34 @@ const configSchema = z.object({
         persist_extended_history: false,
       },
     }),
+  defaults: z
+    .object({
+      workflow_files: workflowFilesOverrideSchema.optional(),
+      workflow_statuses: workflowStatusesOverrideSchema.optional(),
+    })
+    .default({}),
   projects: z.array(projectSchema).min(1),
 });
+
+const builtinWorkflowFiles = {
+  development: "IMPLEMENTATION_WORKFLOW.md",
+  review: "REVIEW_WORKFLOW.md",
+  deploy: "DEPLOY_WORKFLOW.md",
+  cleanup: "CLEANUP_WORKFLOW.md",
+} as const;
+
+const builtinWorkflowStatuses = {
+  development: "Start",
+  review: "Review",
+  deploy: "Deploy",
+  development_active: "Implementing",
+  review_active: "Reviewing",
+  deploy_active: "Deploying",
+  cleanup: "Cleanup",
+  cleanup_active: "Cleaning Up",
+  human_needed: "Human Needed",
+  done: "Done",
+} as const;
 
 function expandEnv(value: unknown): unknown {
   if (typeof value === "string") {
@@ -142,6 +176,81 @@ function expandEnv(value: unknown): unknown {
   }
 
   return value;
+}
+
+function resolveWorkflowFilePath(repoPath: string, workflowFile: string): string {
+  return path.isAbsolute(workflowFile) ? ensureAbsolutePath(workflowFile) : path.resolve(repoPath, workflowFile);
+}
+
+function mergeWorkflowFiles(
+  repoPath: string,
+  defaults: z.infer<typeof workflowFilesOverrideSchema> | undefined,
+  overrides: z.infer<typeof workflowFilesOverrideSchema> | undefined,
+): AppConfig["projects"][number]["workflowFiles"] {
+  const merged = {
+    ...builtinWorkflowFiles,
+    ...(defaults ?? {}),
+    ...(overrides ?? {}),
+  };
+
+  return {
+    development: resolveWorkflowFilePath(repoPath, merged.development),
+    review: resolveWorkflowFilePath(repoPath, merged.review),
+    deploy: resolveWorkflowFilePath(repoPath, merged.deploy),
+    cleanup: resolveWorkflowFilePath(repoPath, merged.cleanup),
+  };
+}
+
+function mergeWorkflowStatuses(
+  defaults: z.infer<typeof workflowStatusesOverrideSchema> | undefined,
+  overrides: z.infer<typeof workflowStatusesOverrideSchema> | undefined,
+): AppConfig["projects"][number]["workflowStatuses"] {
+  const merged = {
+    development: overrides?.development ?? defaults?.development ?? builtinWorkflowStatuses.development,
+    review: overrides?.review ?? defaults?.review ?? builtinWorkflowStatuses.review,
+    deploy: overrides?.deploy ?? defaults?.deploy ?? builtinWorkflowStatuses.deploy,
+    development_active:
+      overrides?.development_active ?? defaults?.development_active ?? builtinWorkflowStatuses.development_active,
+    review_active: overrides?.review_active ?? defaults?.review_active ?? builtinWorkflowStatuses.review_active,
+    deploy_active: overrides?.deploy_active ?? defaults?.deploy_active ?? builtinWorkflowStatuses.deploy_active,
+    cleanup:
+      overrides?.cleanup !== undefined
+        ? overrides.cleanup
+        : defaults?.cleanup !== undefined
+          ? defaults.cleanup
+          : builtinWorkflowStatuses.cleanup,
+    cleanup_active:
+      overrides?.cleanup_active !== undefined
+        ? overrides.cleanup_active
+        : defaults?.cleanup_active !== undefined
+          ? defaults.cleanup_active
+          : builtinWorkflowStatuses.cleanup_active,
+    human_needed:
+      overrides?.human_needed !== undefined
+        ? overrides.human_needed
+        : defaults?.human_needed !== undefined
+          ? defaults.human_needed
+          : builtinWorkflowStatuses.human_needed,
+    done:
+      overrides?.done !== undefined
+        ? overrides.done
+        : defaults?.done !== undefined
+          ? defaults.done
+          : builtinWorkflowStatuses.done,
+  };
+
+  return {
+    development: merged.development,
+    review: merged.review,
+    deploy: merged.deploy,
+    developmentActive: merged.development_active,
+    reviewActive: merged.review_active,
+    deployActive: merged.deploy_active,
+    ...(merged.cleanup ? { cleanup: merged.cleanup } : {}),
+    ...(merged.cleanup && merged.cleanup_active ? { cleanupActive: merged.cleanup_active } : {}),
+    ...(merged.human_needed ? { humanNeeded: merged.human_needed } : {}),
+    ...(merged.done ? { done: merged.done } : {}),
+  };
 }
 
 export function loadConfig(
@@ -241,24 +350,12 @@ export function loadConfig(
       id: project.id,
       repoPath: ensureAbsolutePath(project.repo_path),
       worktreeRoot: ensureAbsolutePath(project.worktree_root),
-      workflowFiles: {
-        development: ensureAbsolutePath(project.workflow_files.development),
-        review: ensureAbsolutePath(project.workflow_files.review),
-        deploy: ensureAbsolutePath(project.workflow_files.deploy),
-        cleanup: ensureAbsolutePath(project.workflow_files.cleanup),
-      },
-      workflowStatuses: {
-        development: project.workflow_statuses.development,
-        review: project.workflow_statuses.review,
-        deploy: project.workflow_statuses.deploy,
-        developmentActive: project.workflow_statuses.development_active,
-        reviewActive: project.workflow_statuses.review_active,
-        deployActive: project.workflow_statuses.deploy_active,
-        ...(project.workflow_statuses.cleanup ? { cleanup: project.workflow_statuses.cleanup } : {}),
-        ...(project.workflow_statuses.cleanup_active ? { cleanupActive: project.workflow_statuses.cleanup_active } : {}),
-        ...(project.workflow_statuses.human_needed ? { humanNeeded: project.workflow_statuses.human_needed } : {}),
-        ...(project.workflow_statuses.done ? { done: project.workflow_statuses.done } : {}),
-      },
+      workflowFiles: mergeWorkflowFiles(
+        ensureAbsolutePath(project.repo_path),
+        parsed.defaults.workflow_files,
+        project.workflow_files,
+      ),
+      workflowStatuses: mergeWorkflowStatuses(parsed.defaults.workflow_statuses, project.workflow_statuses),
       ...(project.workflow_labels
         ? {
             workflowLabels: {

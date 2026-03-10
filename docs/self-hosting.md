@@ -77,12 +77,17 @@ Each project needs:
 
 - a local repository path
 - a worktree root
-- repo-local workflow files for development, review, deploy, and cleanup
-- the Linear statuses that should trigger each stage
 - the issue key prefixes or team ids that should route to that project
 - a branch prefix
 
-The example config is intentionally verbose so you can adapt it to your own workflow without editing code.
+PatchRelay is convention-first here:
+
+- by default it looks for `IMPLEMENTATION_WORKFLOW.md`, `REVIEW_WORKFLOW.md`, `DEPLOY_WORKFLOW.md`, and `CLEANUP_WORKFLOW.md` in each repo root
+- by default it maps `Start`, `Review`, `Deploy`, `Cleanup`, `Implementing`, `Reviewing`, `Deploying`, `Cleaning Up`, `Human Needed`, and `Done`
+- `defaults.workflow_files` and `defaults.workflow_statuses` let you change those conventions globally
+- `projects[].workflow_files` and `projects[].workflow_statuses` are sparse overrides, so a project only needs to declare the entries that differ
+
+Workflow file paths are resolved relative to `repo_path` unless you provide an absolute path. Optional convention states such as `cleanup`, `cleanup_active`, `human_needed`, and `done` can be disabled for a project by setting them to `null`.
 
 Keep `operator_api.enabled: false` unless you explicitly need the local inspection API. The CLI-first OAuth flow still works on loopback without turning the wider operator API on. If you enable it on anything other than `127.0.0.1`, set `bearer_token_env` and publish it only behind additional access controls.
 
@@ -100,6 +105,8 @@ Each automated repository should contain:
 - `CLEANUP_WORKFLOW.md`
 
 These files are the policy PatchRelay passes to the agent. They should explain what the agent is allowed to do in that repository, what validation is required, and when final issue states should be moved.
+
+If every repo follows the standard filenames above, you do not need to repeat `workflow_files` in each project config.
 
 Requirement references:
 

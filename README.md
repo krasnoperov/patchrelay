@@ -78,9 +78,10 @@ cp .env.example .env
 cp config/patchrelay.example.yaml config/patchrelay.yaml
 ```
 
-4. Edit `.env` and `config/patchrelay.yaml` for your machine, repos, worktree roots, workflow docs, and Linear team/status names.
+4. Edit `.env` and `config/patchrelay.yaml` for your machine, repos, worktree roots, and Linear routing.
    - For legacy mode, set `LINEAR_API_TOKEN`.
    - For OAuth mode, set `PATCHRELAY_TOKEN_ENCRYPTION_KEY`, `LINEAR_OAUTH_CLIENT_ID`, and `LINEAR_OAUTH_CLIENT_SECRET`.
+   - Standard workflow doc names and state names are built in. Use top-level `defaults` to change those conventions globally, and project-level `workflow_files` or `workflow_statuses` only when a repo needs overrides.
 
 5. Start PatchRelay as your own user:
 
@@ -120,6 +121,10 @@ PatchRelay assumes repo-local workflow docs such as:
 - `CLEANUP_WORKFLOW.md`
 
 These docs tell the agent how to work in that repository. PatchRelay injects the relevant file into each turn and owns the deterministic bookkeeping around active Linear states, service comments, and optional workflow labels.
+
+By default, PatchRelay looks for those four filenames in each repo root and uses the conventional Linear states `Start`, `Review`, `Deploy`, `Cleanup`, `Implementing`, `Reviewing`, `Deploying`, `Cleaning Up`, `Human Needed`, and `Done`. Keep those defaults if they fit your workflow, set top-level `defaults` if you want one shared convention across projects, or override `workflow_files` / `workflow_statuses` on a specific project when it needs custom automation.
+
+Workflow file paths are resolved relative to each project's `repo_path` unless you provide an absolute path. Optional inherited statuses such as `cleanup`, `cleanup_active`, `human_needed`, and `done` can be disabled for a project with `null`.
 
 The requirement docs for those files live in:
 

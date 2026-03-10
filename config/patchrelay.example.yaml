@@ -53,25 +53,30 @@ runner:
     sandbox_mode: danger-full-access
     persist_extended_history: false
 
+defaults:
+  # Optional global conventions. Workflow file paths are resolved relative to
+  # each project's repo_path unless you provide absolute paths.
+  workflow_files:
+    development: IMPLEMENTATION_WORKFLOW.md
+    review: REVIEW_WORKFLOW.md
+    deploy: DEPLOY_WORKFLOW.md
+    cleanup: CLEANUP_WORKFLOW.md
+  workflow_statuses:
+    development: Start
+    review: Review
+    deploy: Deploy
+    development_active: Implementing
+    review_active: Reviewing
+    deploy_active: Deploying
+    cleanup: Cleanup
+    cleanup_active: Cleaning Up
+    human_needed: Human Needed
+    done: Done
+
 projects:
   - id: your-project
     repo_path: /home/your-user/src/your-project
     worktree_root: /home/your-user/.local/share/patchrelay/worktrees/your-project
-    workflow_files:
-      development: /home/your-user/src/your-project/IMPLEMENTATION_WORKFLOW.md
-      review: /home/your-user/src/your-project/REVIEW_WORKFLOW.md
-      deploy: /home/your-user/src/your-project/DEPLOY_WORKFLOW.md
-      cleanup: /home/your-user/src/your-project/CLEANUP_WORKFLOW.md
-    workflow_statuses:
-      development: Start
-      review: Review
-      deploy: Deploy
-      development_active: Implementing
-      review_active: Reviewing
-      deploy_active: Deploying
-      cleanup: Cleanup
-      human_needed: Human Needed
-      done: Done
     workflow_labels:
       working: llm-working
       awaiting_handoff: llm-awaiting-handoff
@@ -96,3 +101,19 @@ projects:
       - commentUpdated
       - assignmentChanged
     branch_prefix: app
+
+  - id: your-project-with-overrides
+    repo_path: /home/your-user/src/your-project-with-overrides
+    worktree_root: /home/your-user/.local/share/patchrelay/worktrees/your-project-with-overrides
+    workflow_files:
+      deploy: ops/RELEASE_WORKFLOW.md
+    workflow_statuses:
+      review: QA Review
+      review_active: In QA
+      cleanup: null
+      cleanup_active: null
+    linear_team_ids:
+      - OPS
+    trigger_events:
+      - statusChanged
+    branch_prefix: ops
