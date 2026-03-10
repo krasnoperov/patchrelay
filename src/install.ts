@@ -1,8 +1,9 @@
 import crypto from "node:crypto";
 import { basename, dirname } from "node:path";
 import { existsSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
+import YAML from "yaml";
 import {
   getDefaultConfigPath,
   getDefaultDatabasePath,
@@ -65,6 +66,32 @@ async function writeTemplateFile(targetPath: string, content: string, force: boo
   return "created";
 }
 
+async function applyPublicBaseUrlToConfig(
+  configPath: string,
+  publicBaseUrl?: string,
+): Promise<"created" | "updated" | "skipped"> {
+  if (!publicBaseUrl || !existsSync(configPath)) {
+    return "skipped";
+  }
+
+  const original = await readFile(configPath, "utf8");
+  const document = YAML.parseDocument(original);
+  const serverNode = document.get("server", true);
+  if (YAML.isMap(serverNode)) {
+    serverNode.set("public_base_url", publicBaseUrl);
+  } else {
+    document.set("server", document.createNode({ public_base_url: publicBaseUrl }));
+  }
+
+  const next = document.toString();
+  if (next === original) {
+    return "skipped";
+  }
+
+  await writeFile(configPath, next, "utf8");
+  return "updated";
+}
+
 export async function initializePatchRelayHome(options?: { force?: boolean; publicBaseUrl?: string }): Promise<{
   configDir: string;
   envPath: string;
@@ -72,7 +99,7 @@ export async function initializePatchRelayHome(options?: { force?: boolean; publ
   stateDir: string;
   dataDir: string;
   envStatus: "created" | "skipped";
-  configStatus: "created" | "skipped";
+  configStatus: "created" | "updated" | "skipped";
   publicBaseUrl?: string;
   webhookUrl?: string;
   oauthCallbackUrl?: string;
@@ -96,7 +123,9 @@ export async function initializePatchRelayHome(options?: { force?: boolean; publ
   );
 
   const envStatus = await writeTemplateFile(envPath, envTemplate, force);
-  const configStatus = await writeTemplateFile(configPath, configTemplate, force);
+  const initialConfigStatus = await writeTemplateFile(configPath, configTemplate, force);
+  const configStatus =
+    initialConfigStatus === "created" ? initialConfigStatus : await applyPublicBaseUrlToConfig(configPath, publicBaseUrl);
 
   return {
     configDir,

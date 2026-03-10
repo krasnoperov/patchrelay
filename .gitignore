@@ -7,4 +7,4 @@ config/patchrelay.yaml
 *.sqlite-shm
 *.sqlite-wal
 logs/
-
+*.tgz

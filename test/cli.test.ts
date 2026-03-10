@@ -502,6 +502,56 @@ test("cli init requires a public base URL", async () => {
   assert.match(stderr.read(), /Usage: patchrelay init <public-base-url>/);
 });
 
+test("cli init updates the saved public base URL on rerun", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-init-rerun-"));
+  const configHome = path.join(baseDir, ".config");
+  const stateHome = path.join(baseDir, ".state");
+  const dataHome = path.join(baseDir, ".share");
+
+  try {
+    await withEnv(
+      {
+        XDG_CONFIG_HOME: configHome,
+        XDG_STATE_HOME: stateHome,
+        XDG_DATA_HOME: dataHome,
+        PATCHRELAY_CONFIG: undefined,
+        PATCHRELAY_DB_PATH: undefined,
+        PATCHRELAY_LOG_FILE: undefined,
+      },
+      async () => {
+        assert.equal(
+          await runCli(["init", "first.example.com"], {
+            stdout: createBufferStream().stream,
+            stderr: createBufferStream().stream,
+          }),
+          0,
+        );
+
+        const rerunOut = createBufferStream();
+        assert.equal(
+          await runCli(["init", "relay.acme.dev"], {
+            stdout: rerunOut.stream,
+            stderr: createBufferStream().stream,
+          }),
+          0,
+        );
+
+        const rerunText = rerunOut.read();
+        assert.match(rerunText, /Config file: .* \(updated\)/);
+        assert.match(rerunText, /Public base URL: https:\/\/relay\.acme\.dev/);
+        assert.doesNotMatch(rerunText, /patchrelay\.example\.com/);
+
+        const configPath = path.join(configHome, "patchrelay", "patchrelay.yaml");
+        const configContents = readFileSync(configPath, "utf8");
+        assert.equal(configContents.includes("public_base_url: https://relay.acme.dev"), true);
+        assert.equal(configContents.includes("public_base_url: https://first.example.com"), false);
+      },
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("cli connect and installations cover OAuth installation flows", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-installations-"));
   try {
