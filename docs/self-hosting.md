@@ -100,7 +100,7 @@ PatchRelay is convention-first here:
 
 Workflow file paths are resolved relative to `repo_path` unless you provide an absolute path. Optional convention states such as `cleanup`, `cleanup_active`, `human_needed`, and `done` can be disabled for a project by setting them to `null`.
 
-Keep `operator_api.enabled: false` unless you explicitly need the local inspection API. The CLI-first OAuth flow still works on loopback without turning the wider operator API on. If you enable it on anything other than `127.0.0.1`, set `bearer_token_env` and publish it only behind additional access controls.
+Keep `operator_api.enabled: false` unless you explicitly need the issue inspection API. The CLI-first OAuth flow still works on loopback because the local management routes for OAuth and installation linking remain available there without turning the wider inspection API on. If you enable the inspection API on anything other than `127.0.0.1`, set `bearer_token_env` and publish it only behind additional access controls.
 
 The browser is only needed for Linear OAuth consent after `patchrelay connect`.
 

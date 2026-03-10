@@ -47,6 +47,11 @@ PatchRelay is meant to be published behind a reverse proxy with only these route
 - `GET /ready`
 - `POST /webhooks/linear`
 
+Other routes fall into two local/operator buckets:
+
+- loopback management routes used by the CLI-first setup flow such as `/oauth/linear/callback`, `/api/oauth/linear/*`, `/api/installations`, and project-installation linking
+- optional inspection routes under `/api/issues/*`, which stay disabled unless `operator_api.enabled` is turned on
+
 Internal inspection endpoints are disabled by default. The CLI-first OAuth flow still works on loopback without exposing the wider operator API. If you enable the optional operator API, keep it local or protect it with a bearer token.
 
 ## Quick Start
@@ -161,6 +166,7 @@ The requirement docs for those files live in:
 
 ## Docs
 
+- [CHANGELOG.md](CHANGELOG.md): generated release history
 - [PRODUCT_SPEC.md](PRODUCT_SPEC.md): product goals and external behavior
 - [docs/architecture.md](docs/architecture.md): internal model and request flow
 - [docs/codex-workflow.md](docs/codex-workflow.md): how PatchRelay uses `codex app-server`
@@ -190,3 +196,5 @@ By default, if `trusted_actors` is omitted, PatchRelay preserves the existing be
 ## Status
 
 PatchRelay is usable now, but still opinionated and early. The current focus is a solid self-hosted workflow for operators who want issue-driven automation on their own machines and servers, not a generalized SaaS product.
+
+PatchRelay is intentionally still below `1.0.0` while the service model, operator ergonomics, and security posture continue to harden. Releases are generated automatically from `main`, and ongoing feature work should land through branches and pull requests with conventional-commit-style titles so the changelog stays readable.

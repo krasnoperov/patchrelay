@@ -54,22 +54,26 @@ export function buildAwaitingHandoffComment(params: {
   ].join("\n");
 }
 
-export function buildLaunchFailedComment(params: {
+export function buildStageFailedComment(params: {
   issue: TrackedIssueRecord;
   stageRun: StageRunRecord;
   message: string;
   fallbackState?: string;
+  mode?: "launch" | "failed";
 }): string {
+  const mode = params.mode ?? "launch";
   return [
     STATUS_MARKER,
-    `PatchRelay could not start the ${params.stageRun.stage} stage.`,
+    mode === "launch"
+      ? `PatchRelay could not start the ${params.stageRun.stage} stage.`
+      : `PatchRelay marked the ${params.stageRun.stage} stage as failed.`,
     "",
     `- Issue: \`${params.issue.issueKey ?? params.issue.linearIssueId}\``,
     `- Stage: \`${params.stageRun.stage}\``,
     `- Started: \`${params.stageRun.startedAt}\``,
     `- Failure: \`${params.message}\``,
     `- Recommended state: \`${params.fallbackState ?? "Human Needed"}\``,
-    "- Status: `launch-failed`",
+    mode === "launch" ? "- Status: `launch-failed`" : "- Status: `stage-failed`",
   ].join("\n");
 }
 

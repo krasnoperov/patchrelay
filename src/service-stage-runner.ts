@@ -4,13 +4,12 @@ import type { Logger } from "pino";
 import type { CodexAppServerClient } from "./codex-app-server.js";
 import type { PatchRelayDatabase } from "./db.js";
 import {
-  buildLaunchFailedComment,
   buildRunningStatusComment,
   resolveActiveLinearState,
-  resolveWorkflowLabelCleanup,
   resolveWorkflowLabelNames,
 } from "./linear-workflow.js";
 import { buildStageLaunchPlan, isCodexThreadId } from "./stage-launch.js";
+import { syncFailedStageToLinear } from "./stage-failure.js";
 import { buildFailedStageReport } from "./stage-reporting.js";
 import type { AppConfig, LinearClientProvider, StageRunRecord, TrackedIssueRecord } from "./types.js";
 import { ensureDir, execCommand } from "./utils.js";
@@ -55,66 +54,22 @@ export class ServiceStageRunner {
       return;
     }
 
+    let threadLaunch;
+    let turn;
     try {
       await ensureDir(project.worktreeRoot);
       await this.ensureWorktree(project.repoPath, project.worktreeRoot, plan.worktreePath, plan.branchName);
       await this.markStageActive(project, claim.issue, claim.stageRun);
 
-      const threadLaunch = await this.launchStageThread(item.projectId, item.issueId, claim.stageRun.id, plan.worktreePath, issue.issueKey);
-      const turn = await this.codex.startTurn({
+      threadLaunch = await this.launchStageThread(item.projectId, item.issueId, claim.stageRun.id, plan.worktreePath, issue.issueKey);
+      turn = await this.codex.startTurn({
         threadId: threadLaunch.threadId,
         cwd: plan.worktreePath,
         input: plan.prompt,
       });
-
-      this.db.updateStageRunThread({
-        stageRunId: claim.stageRun.id,
-        threadId: threadLaunch.threadId,
-        ...(threadLaunch.parentThreadId ? { parentThreadId: threadLaunch.parentThreadId } : {}),
-        turnId: turn.turnId,
-      });
-
-      for (const input of this.db.listPendingTurnInputs(claim.stageRun.id)) {
-        this.db.setPendingTurnInputRouting(input.id, threadLaunch.threadId, turn.turnId);
-      }
-      for (const input of this.db.listPendingTurnInputs(claim.stageRun.id)) {
-        try {
-          await this.codex.steerTurn({
-            threadId: threadLaunch.threadId,
-            turnId: turn.turnId,
-            input: input.body,
-          });
-          this.db.markTurnInputDelivered(input.id);
-        } catch (steerError) {
-          this.logger.warn(
-            {
-              issueKey: issue.issueKey,
-              threadId: threadLaunch.threadId,
-              turnId: turn.turnId,
-              queuedInputId: input.id,
-              error: steerError instanceof Error ? steerError.message : String(steerError),
-            },
-            "Failed to deliver queued Linear comment during stage startup",
-          );
-          break;
-        }
-      }
-      await this.refreshStatusComment(item.projectId, item.issueId, claim.stageRun.id);
-
-      this.logger.info(
-        {
-          issueKey: issue.issueKey,
-          stage: claim.stageRun.stage,
-          worktreePath: plan.worktreePath,
-          branchName: plan.branchName,
-          threadId: threadLaunch.threadId,
-          turnId: turn.turnId,
-        },
-        "Started Codex stage run",
-      );
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
-      await this.markLaunchFailed(project, claim.issue, claim.stageRun, err.message);
+      await this.markLaunchFailed(project, claim.issue, claim.stageRun, err.message, threadLaunch?.threadId);
       this.logger.error(
         {
           issueKey: issue.issueKey,
@@ -128,6 +83,31 @@ export class ServiceStageRunner {
       );
       throw err;
     }
+
+    this.db.updateStageRunThread({
+      stageRunId: claim.stageRun.id,
+      threadId: threadLaunch.threadId,
+      ...(threadLaunch.parentThreadId ? { parentThreadId: threadLaunch.parentThreadId } : {}),
+      turnId: turn.turnId,
+    });
+
+    for (const input of this.db.listPendingTurnInputs(claim.stageRun.id)) {
+      this.db.setPendingTurnInputRouting(input.id, threadLaunch.threadId, turn.turnId);
+    }
+    await this.deliverPendingTurnInputs(claim.issue, claim.stageRun.id, threadLaunch.threadId, turn.turnId);
+    await this.refreshStatusComment(item.projectId, item.issueId, claim.stageRun.id, issue.issueKey);
+
+    this.logger.info(
+      {
+        issueKey: issue.issueKey,
+        stage: claim.stageRun.stage,
+        worktreePath: plan.worktreePath,
+        branchName: plan.branchName,
+        threadId: threadLaunch.threadId,
+        turnId: turn.turnId,
+      },
+      "Started Codex stage run",
+    );
   }
 
   private async launchStageThread(
@@ -177,8 +157,9 @@ export class ServiceStageRunner {
     issue: TrackedIssueRecord,
     stageRun: StageRunRecord,
     message: string,
+    threadId?: string,
   ): Promise<void> {
-    const failureThreadId = `launch-failed-${stageRun.id}`;
+    const failureThreadId = threadId ?? `launch-failed-${stageRun.id}`;
     this.db.finishStageRun({
       stageRunId: stageRun.id,
       status: "failed",
@@ -187,49 +168,18 @@ export class ServiceStageRunner {
       reportJson: JSON.stringify(buildFailedStageReport(stageRun, "failed", { threadId: failureThreadId })),
     });
 
-    const linear = await this.linearProvider.forProject(stageRun.projectId);
-    if (!linear) {
-      return;
-    }
-
-    const fallbackState = project.workflowStatuses.humanNeeded;
-    if (fallbackState) {
-      await linear.setIssueState(stageRun.linearIssueId, fallbackState).catch(() => undefined);
-      this.db.setIssueLifecycleStatus(stageRun.projectId, stageRun.linearIssueId, "failed");
-      this.db.upsertTrackedIssue({
-        projectId: stageRun.projectId,
-        linearIssueId: stageRun.linearIssueId,
-        currentLinearState: fallbackState,
-        statusCommentId: issue.statusCommentId ?? null,
-        lifecycleStatus: "failed",
-      });
-    }
-
-    const cleanup = resolveWorkflowLabelCleanup(project);
-    if (cleanup.remove.length > 0) {
-      await linear
-        .updateIssueLabels({
-          issueId: stageRun.linearIssueId,
-          removeNames: cleanup.remove,
-        })
-        .catch(() => undefined);
-    }
-
-    const result = await linear
-      .upsertIssueComment({
-        issueId: stageRun.linearIssueId,
-        ...(issue.statusCommentId ? { commentId: issue.statusCommentId } : {}),
-        body: buildLaunchFailedComment({
-          issue,
-          stageRun,
-          message,
-          ...(fallbackState ? { fallbackState } : {}),
-        }),
-      })
-      .catch(() => undefined);
-    if (result) {
-      this.db.setIssueStatusComment(stageRun.projectId, stageRun.linearIssueId, result.id);
-    }
+    await syncFailedStageToLinear({
+      db: this.db,
+      linearProvider: this.linearProvider,
+      project,
+      issue,
+      stageRun: {
+        ...stageRun,
+        threadId: failureThreadId,
+      },
+      message,
+      mode: "launch",
+    });
   }
 
   private async ensureWorktree(repoPath: string, worktreeRoot: string, worktreePath: string, branchName: string): Promise<void> {
@@ -327,7 +277,42 @@ export class ServiceStageRunner {
     });
   }
 
-  private async refreshStatusComment(projectId: string, issueId: string, stageRunId: number): Promise<void> {
+  private async deliverPendingTurnInputs(
+    issue: TrackedIssueRecord,
+    stageRunId: number,
+    threadId: string,
+    turnId: string,
+  ): Promise<void> {
+    for (const input of this.db.listPendingTurnInputs(stageRunId)) {
+      try {
+        await this.codex.steerTurn({
+          threadId,
+          turnId,
+          input: input.body,
+        });
+        this.db.markTurnInputDelivered(input.id);
+      } catch (steerError) {
+        this.logger.warn(
+          {
+            issueKey: issue.issueKey,
+            threadId,
+            turnId,
+            queuedInputId: input.id,
+            error: steerError instanceof Error ? steerError.message : String(steerError),
+          },
+          "Failed to deliver queued Linear comment during stage startup",
+        );
+        break;
+      }
+    }
+  }
+
+  private async refreshStatusComment(
+    projectId: string,
+    issueId: string,
+    stageRunId: number,
+    issueKey?: string,
+  ): Promise<void> {
     const linear = await this.linearProvider.forProject(projectId);
     if (!linear) {
       return;
@@ -340,16 +325,28 @@ export class ServiceStageRunner {
       return;
     }
 
-    const result = await linear.upsertIssueComment({
-      issueId,
-      ...(issue.statusCommentId ? { commentId: issue.statusCommentId } : {}),
-      body: buildRunningStatusComment({
-        issue,
-        stageRun,
-        branchName: workspace.branchName,
-      }),
-    });
-    this.db.setIssueStatusComment(projectId, issueId, result.id);
+    try {
+      const result = await linear.upsertIssueComment({
+        issueId,
+        ...(issue.statusCommentId ? { commentId: issue.statusCommentId } : {}),
+        body: buildRunningStatusComment({
+          issue,
+          stageRun,
+          branchName: workspace.branchName,
+        }),
+      });
+      this.db.setIssueStatusComment(projectId, issueId, result.id);
+    } catch (error) {
+      this.logger.warn(
+        {
+          issueKey,
+          stageRunId,
+          issueId,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        "Failed to refresh running status comment after stage startup",
+      );
+    }
   }
 }
 

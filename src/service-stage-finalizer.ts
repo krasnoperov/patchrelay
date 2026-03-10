@@ -7,6 +7,7 @@ import {
   resolveWorkflowLabelCleanup,
   resolveWorkflowLabelNames,
 } from "./linear-workflow.js";
+import { syncFailedStageToLinear } from "./stage-failure.js";
 import {
   buildFailedStageReport,
   buildPendingMaterializationThread,
@@ -96,13 +97,17 @@ export class ServiceStageFinalizer {
     const activeStageRuns = this.db.listActiveStageRuns();
     for (const stageRun of activeStageRuns) {
       if (!stageRun.threadId) {
-        this.failStageRun(stageRun, `missing-thread-${stageRun.id}`, "Stage run had no persisted thread id during reconciliation");
+        await this.failStageRunDuringReconciliation(
+          stageRun,
+          `missing-thread-${stageRun.id}`,
+          "Stage run had no persisted thread id during reconciliation",
+        );
         continue;
       }
 
       const thread = await this.codex.readThread(stageRun.threadId, true).catch(() => undefined);
       if (!thread) {
-        this.failStageRun(stageRun, stageRun.threadId, "Thread was not found during startup reconciliation", {
+        await this.failStageRunDuringReconciliation(stageRun, stageRun.threadId, "Thread was not found during startup reconciliation", {
           ...(stageRun.turnId ? { turnId: stageRun.turnId } : {}),
         });
         continue;
@@ -119,7 +124,7 @@ export class ServiceStageFinalizer {
       }
 
       if (latestTurn.status !== "completed") {
-        this.failStageRun(stageRun, stageRun.threadId, "Thread completed reconciliation in a failed state", {
+        await this.failStageRunDuringReconciliation(stageRun, stageRun.threadId, "Thread completed reconciliation in a failed state", {
           ...(latestTurn.id ? { turnId: latestTurn.id } : {}),
         });
         continue;
@@ -180,6 +185,38 @@ export class ServiceStageFinalizer {
           ...(options?.turnId ? { turnId: options.turnId } : {}),
         }),
       ),
+    });
+  }
+
+  private async failStageRunDuringReconciliation(
+    stageRun: StageRunRecord,
+    threadId: string,
+    message: string,
+    options?: {
+      turnId?: string;
+    },
+  ): Promise<void> {
+    this.failStageRun(stageRun, threadId, message, options);
+
+    const issue = this.db.getTrackedIssue(stageRun.projectId, stageRun.linearIssueId);
+    const project = this.config.projects.find((candidate) => candidate.id === stageRun.projectId);
+    if (!issue || !project) {
+      return;
+    }
+
+    await syncFailedStageToLinear({
+      db: this.db,
+      linearProvider: this.linearProvider,
+      project,
+      issue,
+      stageRun: {
+        ...stageRun,
+        threadId,
+        ...(options?.turnId ? { turnId: options.turnId } : {}),
+      },
+      message,
+      mode: "failed",
+      requireActiveLinearStateMatch: true,
     });
   }
 

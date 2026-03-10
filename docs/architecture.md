@@ -10,7 +10,7 @@ PatchRelay is a local orchestration service with seven responsibilities:
 4. drive Codex through `codex app-server`
 5. write deterministic workflow state back to Linear
 6. steer active turns with queued Linear comments
-7. expose issue and stage inspection endpoints
+7. expose local management routes and, optionally, issue and stage inspection endpoints
 
 `codex app-server` is the source of truth for agent thread history.
 PatchRelay is the source of truth for workflow policy, workspace ownership, and issue-to-thread correlation.
@@ -139,7 +139,8 @@ For the next stage run:
 - if this is the first stage for the issue, PatchRelay calls `thread/start`
 - if a prior stage exists, PatchRelay calls `thread/fork`
 - PatchRelay then calls `turn/start` with the issue context and workflow file contents
-- while preparing the run, PatchRelay also claims the matching active Linear state, refreshes its service-owned status comment, and applies configured workflow labels
+- while preparing the run, PatchRelay also claims the matching active Linear state and applies configured workflow labels
+- after the turn is live, PatchRelay best-effort refreshes its service-owned running status comment and flushes any queued Linear comments
 
 The resulting thread id and turn id are persisted immediately.
 
@@ -166,7 +167,7 @@ On `turn/completed`, PatchRelay:
 7. if the issue has already moved on, clears any service-owned workflow labels
 8. launches any queued next stage
 
-If stage launch fails before Codex is running, PatchRelay marks the stage failed locally, rolls the issue to the configured fallback Linear state such as `Human Needed`, removes service-owned workflow labels, and updates the service-owned comment with the failure.
+If stage launch fails before a turn is live, PatchRelay marks the stage failed locally, rolls the issue to the configured fallback Linear state such as `Human Needed`, removes service-owned workflow labels, and updates the service-owned comment with the failure. If PatchRelay later finds an unrecoverable active stage during startup reconciliation, it applies the same failure sync back to Linear only when the issue is still in the service-owned active state.
 
 ## Why App-Server
 
@@ -197,7 +198,13 @@ The database is not a copy of Codex thread history. It is the orchestration ledg
 
 ## Operator Surface
 
-PatchRelay exposes:
+PatchRelay always exposes local management routes for:
+
+- Linear OAuth start and callback handling
+- installation listing
+- project-to-installation linking
+
+When `operator_api.enabled` is on, PatchRelay also exposes:
 
 - issue overview by issue key
 - stage reports by issue key

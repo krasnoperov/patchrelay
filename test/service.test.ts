@@ -111,6 +111,7 @@ class FakeLinearClient implements LinearClient {
   readonly comments = new Map<string, { id: string; issueId: string; body: string }>();
   readonly stateTransitions: Array<{ issueId: string; stateName: string }> = [];
   readonly labelUpdates: Array<{ issueId: string; addNames: string[]; removeNames: string[] }> = [];
+  failNextCommentUpsert = false;
   private nextCommentNumber = 1;
   async getIssue(issueId: string): Promise<LinearIssueSnapshot> {
     const existing = this.issues.get(issueId);
@@ -149,6 +150,10 @@ class FakeLinearClient implements LinearClient {
   }
 
   async upsertIssueComment(params: { issueId: string; commentId?: string; body: string }) {
+    if (this.failNextCommentUpsert) {
+      this.failNextCommentUpsert = false;
+      throw new Error("comment service unavailable");
+    }
     const id = params.commentId ?? `comment-${this.nextCommentNumber++}`;
     const comment = { id, issueId: params.issueId, body: params.body };
     this.comments.set(id, comment);
@@ -993,6 +998,41 @@ test("service rolls Linear back to Human Needed when launch fails", async () => 
   }
 });
 
+test("service keeps the stage running when the status comment refresh fails after turn startup", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-post-start-comment-failure-"));
+  try {
+    const { db, codex, linear, service } = createService(baseDir);
+    linear.failNextCommentUpsert = true;
+    await service.start();
+
+    db.recordDesiredStage({
+      projectId: "usertold",
+      linearIssueId: "issue_2",
+      issueKey: "USE-31",
+      title: "Keep running after comment refresh failure",
+      issueUrl: "https://linear.app/example/issue/USE-31",
+      currentLinearState: "Start",
+      desiredStage: "development",
+      desiredWebhookId: "delivery-start",
+      lastWebhookAt: new Date().toISOString(),
+    });
+
+    await service.processIssue({ projectId: "usertold", issueId: "issue_2" });
+
+    const issue = db.getTrackedIssue("usertold", "issue_2");
+    const stageRun = db.getStageRun(issue!.activeStageRunId!);
+    assert.equal(stageRun?.status, "running");
+    assert.equal(issue?.lifecycleStatus, "running");
+    assert.equal(linear.issues.get("issue_2")?.stateName, "Implementing");
+    assert.equal(codex.turns.length, 1);
+    assert.equal(linear.comments.size, 0);
+
+    service.stop();
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("service startup reconciles finished and missing active threads", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-"));
   try {
@@ -1009,9 +1049,22 @@ test("service startup reconciles finished and missing active threads", async () 
       { id: "reviewing", name: "Reviewing" },
       { id: "deploy", name: "Deploy" },
       { id: "deploying", name: "Deploying" },
+      { id: "human-needed", name: "Human Needed" },
     ];
     linear.issues.set("issue_4", { id: "issue_4", identifier: "USE-28", stateId: "implementing", stateName: "Implementing", workflowStates });
-    linear.issues.set("issue_5", { id: "issue_5", identifier: "USE-29", stateId: "implementing", stateName: "Implementing", workflowStates });
+    linear.issues.set("issue_5", {
+      id: "issue_5",
+      identifier: "USE-29",
+      stateId: "implementing",
+      stateName: "Implementing",
+      workflowStates,
+      labels: [{ id: "label-working", name: "llm-working" }],
+      labelIds: ["label-working"],
+      teamLabels: [
+        { id: "label-working", name: "llm-working" },
+        { id: "label-awaiting", name: "llm-awaiting-handoff" },
+      ],
+    });
 
     db.upsertTrackedIssue({
       projectId: "usertold",
@@ -1077,6 +1130,15 @@ test("service startup reconciles finished and missing active threads", async () 
     const missingStage = db.getStageRun(missingClaim!.stageRun.id);
     assert.equal(finishedStage?.status, "completed");
     assert.equal(missingStage?.status, "failed");
+    assert.equal(linear.issues.get("issue_5")?.stateName, "Human Needed");
+    assert.deepEqual(linear.labelUpdates.at(-1), {
+      issueId: "issue_5",
+      addNames: [],
+      removeNames: ["llm-working", "llm-awaiting-handoff"],
+    });
+    const missingIssue = db.getTrackedIssue("usertold", "issue_5");
+    assert.equal(missingIssue?.lifecycleStatus, "failed");
+    assert.match(linear.comments.get(missingIssue?.statusCommentId ?? "")?.body ?? "", /stage-failed/);
 
     service.stop();
   } finally {
