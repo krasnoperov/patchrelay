@@ -90,6 +90,10 @@ class FakeLinearClient implements LinearClient {
     return { id, body: params.body };
   }
 
+  async createAgentActivity(): Promise<{ id: string }> {
+    return { id: "agent-activity-1" };
+  }
+
   async updateIssueLabels(params: { issueId: string }): Promise<LinearIssueSnapshot> {
     return await this.getIssue(params.issueId);
   }

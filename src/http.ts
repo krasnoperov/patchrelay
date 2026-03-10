@@ -267,42 +267,6 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
       }
       return reply.send({ ok: true, ...result });
     });
-
-    app.post("/api/projects/:projectId/installation", async (request, reply) => {
-      const { projectId } = request.params as { projectId: string };
-      const rawInstallationId = (request.body as { installationId?: number | string | null } | undefined)?.installationId;
-      const installationId =
-        rawInstallationId === null || rawInstallationId === "null" || rawInstallationId === ""
-          ? undefined
-          : Number(rawInstallationId);
-      if (rawInstallationId !== null && rawInstallationId !== "null" && rawInstallationId !== "") {
-        if (typeof installationId !== "number" || !Number.isFinite(installationId) || installationId <= 0) {
-          return reply.code(400).send({ ok: false, reason: "invalid_installation_id" });
-        }
-      }
-
-      try {
-        const link =
-          installationId === undefined ? service.unlinkProjectInstallation(projectId) : service.linkProjectInstallation(projectId, installationId);
-        return reply.send({ ok: true, link });
-      } catch (error) {
-        return reply
-          .code(404)
-          .send({ ok: false, reason: "link_failed", message: error instanceof Error ? error.message : String(error) });
-      }
-    });
-
-    app.delete("/api/projects/:projectId/installation", async (request, reply) => {
-      const { projectId } = request.params as { projectId: string };
-      try {
-        service.unlinkProjectInstallation(projectId);
-        return reply.send({ ok: true });
-      } catch (error) {
-        return reply
-          .code(404)
-          .send({ ok: false, reason: "link_failed", message: error instanceof Error ? error.message : String(error) });
-      }
-    });
   }
 
   app.get("/oauth/linear/callback", async (request, reply) => {

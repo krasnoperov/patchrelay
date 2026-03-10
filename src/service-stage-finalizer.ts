@@ -244,6 +244,10 @@ export class ServiceStageFinalizer {
     const refreshedIssue = this.db.getTrackedIssue(stageRun.projectId, stageRun.linearIssueId);
     const pipeline = this.db.getPipelineRun(stageRun.pipelineRunId);
     if (refreshedIssue?.desiredStage) {
+      await this.publishAgentCompletion(refreshedIssue, {
+        type: "thought",
+        body: `The ${stageRun.stage} workflow finished. PatchRelay is preparing the next requested workflow.`,
+      });
       this.enqueueIssue(stageRun.projectId, stageRun.linearIssueId);
       return;
     }
@@ -277,6 +281,10 @@ export class ServiceStageFinalizer {
             }),
           });
           this.db.setIssueStatusComment(stageRun.projectId, stageRun.linearIssueId, result.id);
+          await this.publishAgentCompletion(refreshedIssue, {
+            type: "elicitation",
+            body: `PatchRelay finished the ${stageRun.stage} workflow. Move the issue to its next workflow state or leave a follow-up prompt to continue.`,
+          });
           return;
         }
 
@@ -295,5 +303,34 @@ export class ServiceStageFinalizer {
     if (pipeline) {
       this.db.markPipelineCompleted(pipeline.id);
     }
+    if (refreshedIssue) {
+      await this.publishAgentCompletion(refreshedIssue, {
+        type: "response",
+        body: `PatchRelay finished the ${stageRun.stage} workflow.`,
+      });
+    }
+  }
+
+  private async publishAgentCompletion(
+    issue: TrackedIssueRecord,
+    content:
+      | { type: "thought" | "elicitation" | "response" | "error"; body: string }
+      | { type: "action"; action: string; parameter: string; result?: string },
+  ): Promise<void> {
+    if (!issue.activeAgentSessionId) {
+      return;
+    }
+
+    const linear = await this.linearProvider.forProject(issue.projectId);
+    if (!linear) {
+      return;
+    }
+
+    await linear
+      .createAgentActivity({
+        agentSessionId: issue.activeAgentSessionId,
+        content,
+      })
+      .catch(() => undefined);
   }
 }

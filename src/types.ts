@@ -1,5 +1,5 @@
-export type LinearAction = "create" | "update" | "remove";
-export type LinearEntityType = "Issue" | "Comment" | string;
+export type LinearAction = "create" | "update" | "remove" | "created" | "prompted" | string;
+export type LinearEntityType = "Issue" | "Comment" | "AgentSessionEvent" | string;
 
 export type TriggerEvent =
   | "issueCreated"
@@ -11,7 +11,12 @@ export type TriggerEvent =
   | "labelChanged"
   | "statusChanged"
   | "assignmentChanged"
-  | "delegateChanged";
+  | "delegateChanged"
+  | "agentSessionCreated"
+  | "agentPrompted"
+  | "installationPermissionsChanged"
+  | "installationRevoked"
+  | "appUserNotification";
 
 export type WorkflowStage = "development" | "review" | "deploy" | "cleanup";
 export type IssueLifecycleStatus = "idle" | "queued" | "running" | "paused" | "completed" | "failed";
@@ -151,6 +156,8 @@ export interface IssueMetadata {
   stateId?: string;
   stateName?: string;
   stateType?: string;
+  delegateId?: string;
+  delegateName?: string;
   labelNames: string[];
 }
 
@@ -160,6 +167,23 @@ export interface CommentMetadata {
   userName?: string;
 }
 
+export interface AgentSessionMetadata {
+  id: string;
+  promptContext?: string;
+  promptBody?: string;
+  issueCommentId?: string;
+}
+
+export interface InstallationWebhookMetadata {
+  organizationId?: string;
+  oauthClientId?: string;
+  appUserId?: string;
+  canAccessAllPublicTeams?: boolean;
+  addedTeamIds: string[];
+  removedTeamIds: string[];
+  notificationType?: string;
+}
+
 export interface NormalizedEvent {
   webhookId: string;
   entityType: LinearEntityType;
@@ -167,8 +191,10 @@ export interface NormalizedEvent {
   triggerEvent: TriggerEvent;
   eventType: string;
   actor?: LinearActorMetadata;
-  issue: IssueMetadata;
+  issue?: IssueMetadata;
   comment?: CommentMetadata;
+  agentSession?: AgentSessionMetadata;
+  installation?: InstallationWebhookMetadata;
   payload: LinearWebhookPayload;
 }
 
@@ -257,6 +283,8 @@ export interface TrackedIssueRecord {
   activeStageRunId?: number;
   latestThreadId?: string;
   statusCommentId?: string;
+  activeAgentSessionId?: string;
+  pendingLaunchInput?: string;
   lifecycleStatus: IssueLifecycleStatus;
   lastWebhookAt?: string;
   updatedAt: string;
@@ -432,10 +460,23 @@ export interface LinearCommentUpsertResult {
   body: string;
 }
 
+export type LinearAgentActivityContent =
+  | { type: "thought" | "elicitation" | "response" | "error"; body: string }
+  | { type: "action"; action: string; parameter: string; result?: string };
+
+export interface LinearAgentActivityResult {
+  id: string;
+}
+
 export interface LinearClient {
   getIssue(issueId: string): Promise<LinearIssueSnapshot>;
   setIssueState(issueId: string, stateName: string): Promise<LinearIssueSnapshot>;
   upsertIssueComment(params: { issueId: string; commentId?: string; body: string }): Promise<LinearCommentUpsertResult>;
+  createAgentActivity(params: {
+    agentSessionId: string;
+    content: LinearAgentActivityContent;
+    ephemeral?: boolean;
+  }): Promise<LinearAgentActivityResult>;
   updateIssueLabels(params: { issueId: string; addNames?: string[]; removeNames?: string[] }): Promise<LinearIssueSnapshot>;
   getActorProfile(): Promise<LinearActorProfile>;
 }

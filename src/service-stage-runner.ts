@@ -94,8 +94,19 @@ export class ServiceStageRunner {
     for (const input of this.db.listPendingTurnInputs(claim.stageRun.id)) {
       this.db.setPendingTurnInputRouting(input.id, threadLaunch.threadId, turn.turnId);
     }
+    const pendingLaunchInput = this.db.consumeIssuePendingLaunchInput(item.projectId, item.issueId);
+    if (pendingLaunchInput) {
+      this.db.enqueueTurnInput({
+        stageRunId: claim.stageRun.id,
+        threadId: threadLaunch.threadId,
+        turnId: turn.turnId,
+        source: "linear-agent-launch",
+        body: pendingLaunchInput,
+      });
+    }
     await this.deliverPendingTurnInputs(claim.issue, claim.stageRun.id, threadLaunch.threadId, turn.turnId);
     await this.refreshStatusComment(item.projectId, item.issueId, claim.stageRun.id, issue.issueKey);
+    await this.publishAgentStageStarted(claim.issue, claim.stageRun.stage);
 
     this.logger.info(
       {
@@ -345,6 +356,40 @@ export class ServiceStageRunner {
           error: error instanceof Error ? error.message : String(error),
         },
         "Failed to refresh running status comment after stage startup",
+      );
+    }
+  }
+
+  private async publishAgentStageStarted(issue: TrackedIssueRecord, stage: StageRunRecord["stage"]): Promise<void> {
+    if (!issue.activeAgentSessionId) {
+      return;
+    }
+
+    const linear = await this.linearProvider.forProject(issue.projectId);
+    if (!linear) {
+      return;
+    }
+
+    try {
+      await linear.createAgentActivity({
+        agentSessionId: issue.activeAgentSessionId,
+        content: {
+          type: "action",
+          action: "running_workflow",
+          parameter: stage,
+          result: `PatchRelay started the ${stage} workflow.`,
+        },
+        ephemeral: true,
+      });
+    } catch (error) {
+      this.logger.warn(
+        {
+          issueKey: issue.issueKey,
+          stage,
+          agentSessionId: issue.activeAgentSessionId,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        "Failed to publish Linear agent activity after stage startup",
       );
     }
   }

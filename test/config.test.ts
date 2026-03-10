@@ -13,6 +13,13 @@ const oauthConfigYaml = `  token_encryption_key_env: PATCHRELAY_TOKEN_ENCRYPTION
     scopes: [read, write]
     actor: user`;
 
+const oauthConfigYamlWithoutRedirect = `  token_encryption_key_env: PATCHRELAY_TOKEN_ENCRYPTION_KEY
+  oauth:
+    client_id_env: LINEAR_OAUTH_CLIENT_ID
+    client_secret_env: LINEAR_OAUTH_CLIENT_SECRET
+    scopes: [read, write]
+    actor: user`;
+
 const oauthEnv = {
   PATCHRELAY_TOKEN_ENCRYPTION_KEY: "enc-secret",
   LINEAR_OAUTH_CLIENT_ID: "oauth-client-id",
@@ -201,6 +208,111 @@ projects:
         const config = loadConfig();
         assert.equal(config.projects[0]?.repoPath, repoPath);
         assert.equal(config.projects[0]?.workflowFiles.development, path.join(repoPath, "IMPLEMENTATION_WORKFLOW.md"));
+      },
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("loadConfig derives the OAuth redirect URI from server.public_base_url when redirect_uri is omitted", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-config-derived-public-oauth-"));
+  const repoPath = path.join(baseDir, "repo");
+  const worktreeRoot = path.join(baseDir, "worktrees");
+
+  try {
+    mkdirSync(path.join(baseDir, "config"), { recursive: true });
+    mkdirSync(repoPath, { recursive: true });
+    mkdirSync(worktreeRoot, { recursive: true });
+    writeFileSync(
+      path.join(baseDir, "config", "patchrelay.yaml"),
+      `
+server:
+  bind: 127.0.0.1
+  port: 8787
+  public_base_url: https://patchrelay.example.com/ignored-path
+ingress:
+  linear_webhook_path: /webhooks/linear
+  max_body_bytes: 262144
+  max_timestamp_skew_seconds: 60
+logging:
+  file_path: ./patchrelay.log
+database:
+  path: ./data/patchrelay.sqlite
+linear:
+  webhook_secret_env: REQUIRED_SECRET
+${oauthConfigYamlWithoutRedirect}
+projects:
+  - id: usertold
+    repo_path: ${JSON.stringify(repoPath)}
+    worktree_root: ${JSON.stringify(worktreeRoot)}
+    trigger_events: [statusChanged]
+    branch_prefix: use
+`,
+      "utf8",
+    );
+
+    withEnv(
+      {
+        PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.yaml"),
+        REQUIRED_SECRET: "top-secret",
+        ...oauthEnv,
+      },
+      () => {
+        const config = loadConfig();
+        assert.equal(config.linear.oauth.redirectUri, "https://patchrelay.example.com/oauth/linear/callback");
+      },
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("loadConfig derives the OAuth redirect URI from the local bind and port when no public URL is configured", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-config-derived-local-oauth-"));
+  const repoPath = path.join(baseDir, "repo");
+  const worktreeRoot = path.join(baseDir, "worktrees");
+
+  try {
+    mkdirSync(path.join(baseDir, "config"), { recursive: true });
+    mkdirSync(repoPath, { recursive: true });
+    mkdirSync(worktreeRoot, { recursive: true });
+    writeFileSync(
+      path.join(baseDir, "config", "patchrelay.yaml"),
+      `
+server:
+  bind: 0.0.0.0
+  port: 9999
+ingress:
+  linear_webhook_path: /webhooks/linear
+  max_body_bytes: 262144
+  max_timestamp_skew_seconds: 60
+logging:
+  file_path: ./patchrelay.log
+database:
+  path: ./data/patchrelay.sqlite
+linear:
+  webhook_secret_env: REQUIRED_SECRET
+${oauthConfigYamlWithoutRedirect}
+projects:
+  - id: usertold
+    repo_path: ${JSON.stringify(repoPath)}
+    worktree_root: ${JSON.stringify(worktreeRoot)}
+    trigger_events: [statusChanged]
+    branch_prefix: use
+`,
+      "utf8",
+    );
+
+    withEnv(
+      {
+        PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.yaml"),
+        REQUIRED_SECRET: "top-secret",
+        ...oauthEnv,
+      },
+      () => {
+        const config = loadConfig();
+        assert.equal(config.linear.oauth.redirectUri, "http://127.0.0.1:9999/oauth/linear/callback");
       },
     );
   } finally {

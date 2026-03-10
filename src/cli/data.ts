@@ -90,12 +90,25 @@ export interface InstallationListResult {
   }>;
 }
 
-export interface ConnectResult {
-  state: string;
-  authorizeUrl: string;
-  redirectUri: string;
-  projectId?: string;
-}
+export type ConnectResult =
+  | {
+      state: string;
+      authorizeUrl: string;
+      redirectUri: string;
+      projectId?: string;
+    }
+  | {
+      completed: true;
+      reusedExisting: true;
+      projectId: string;
+      installation: {
+        id: number;
+        workspaceName?: string;
+        workspaceKey?: string;
+        actorName?: string;
+        actorId?: string;
+      };
+    };
 
 export interface ConnectStateResult {
   state: string;
@@ -109,14 +122,6 @@ export interface ConnectStateResult {
     actorId?: string;
   };
   errorMessage?: string;
-}
-
-export interface WebhookInstructionsResult {
-  projectId: string;
-  installationId?: number;
-  webhookUrl: string;
-  webhookPath: string;
-  sharedSecretConfigured: boolean;
 }
 
 function safeJsonParse(value: string | undefined): Record<string, unknown> | undefined {
@@ -429,67 +434,9 @@ export class CliDataAccess {
     return await this.requestJson<InstallationListResult>("/api/installations");
   }
 
-  async linkInstallation(projectId: string, installationId: number): Promise<{ projectId: string; installationId?: number }> {
-    const result = await this.requestJson<{ link: { projectId: string; installationId: number } }>(
-      `/api/projects/${encodeURIComponent(projectId)}/installation`,
-      undefined,
-      {
-        method: "POST",
-        body: {
-          installationId,
-        },
-      },
-    );
-    return result.link;
-  }
-
-  async unlinkInstallation(projectId: string): Promise<{ projectId: string; installationId?: number }> {
-    await this.requestJson<{ ok: true }>(
-      `/api/projects/${encodeURIComponent(projectId)}/installation`,
-      undefined,
-      {
-        method: "DELETE",
-      },
-    );
-    return { projectId };
-  }
-
-  async webhookInstructions(projectId: string): Promise<WebhookInstructionsResult> {
-    const project = this.config.projects.find((entry) => entry.id === projectId);
-    if (!project) {
-      throw new Error(`Unknown project: ${projectId}`);
-    }
-
-    const baseUrl = this.getPublicBaseUrl();
-    const installation = (await this.listInstallations()).installations.find((entry) => entry.linkedProjects.includes(projectId))?.installation;
-    return {
-      projectId,
-      ...(installation?.id ? { installationId: installation.id } : {}),
-      webhookUrl: new URL(this.config.ingress.linearWebhookPath, baseUrl).toString(),
-      webhookPath: this.config.ingress.linearWebhookPath,
-      sharedSecretConfigured: this.config.linear.webhookSecret.length > 0,
-    };
-  }
-
-  private getPublicBaseUrl(): string {
-    if (this.config.server.publicBaseUrl) {
-      return this.toOriginRoot(this.config.server.publicBaseUrl);
-    }
-
-    return this.toOriginRoot(this.config.linear.oauth.redirectUri);
-  }
-
   private getOperatorBaseUrl(): string {
     const host = this.normalizeLocalHost(this.config.server.bind);
     return `http://${host}:${this.config.server.port}/`;
-  }
-
-  private toOriginRoot(urlString: string): string {
-    const url = new URL(urlString);
-    url.pathname = "/";
-    url.search = "";
-    url.hash = "";
-    return url.toString();
   }
 
   private normalizeLocalHost(bind: string): string {

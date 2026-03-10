@@ -80,4 +80,16 @@ export async function syncFailedStageToLinear(params: {
   if (result) {
     params.db.setIssueStatusComment(params.stageRun.projectId, params.stageRun.linearIssueId, result.id);
   }
+
+  if (params.issue.activeAgentSessionId) {
+    await linear
+      .createAgentActivity({
+        agentSessionId: params.issue.activeAgentSessionId,
+        content: {
+          type: "error",
+          body: `PatchRelay could not complete the ${params.stageRun.stage} workflow: ${params.message}`,
+        },
+      })
+      .catch(() => undefined);
+  }
 }

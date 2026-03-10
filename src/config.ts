@@ -1,10 +1,13 @@
 import { existsSync, readFileSync } from "node:fs";
+import { isIP } from "node:net";
 import path from "node:path";
 import YAML from "yaml";
 import { z } from "zod";
 import type { AppConfig } from "./types.ts";
 import { getDefaultConfigPath, getDefaultDatabasePath, getDefaultLogPath } from "./runtime-paths.ts";
 import { ensureAbsolutePath } from "./utils.ts";
+
+const LINEAR_OAUTH_CALLBACK_PATH = "/oauth/linear/callback";
 
 const workflowFilesSchema = z.object({
   development: z.string().min(1),
@@ -87,9 +90,9 @@ const configSchema = z.object({
     oauth: z.object({
       client_id_env: z.string().default("LINEAR_OAUTH_CLIENT_ID"),
       client_secret_env: z.string().default("LINEAR_OAUTH_CLIENT_SECRET"),
-      redirect_uri: z.string().url(),
-      scopes: z.array(z.string().min(1)).default(["read", "write"]),
-      actor: z.enum(["user", "app"]).default("user"),
+      redirect_uri: z.string().url().optional(),
+      scopes: z.array(z.string().min(1)).default(["read", "write", "app:assignable", "app:mentionable"]),
+      actor: z.enum(["user", "app"]).default("app"),
     }),
   }),
   operator_api: z
@@ -179,6 +182,33 @@ function expandEnv(value: unknown): unknown {
 
 function resolveWorkflowFilePath(repoPath: string, workflowFile: string): string {
   return path.isAbsolute(workflowFile) ? ensureAbsolutePath(workflowFile) : path.resolve(repoPath, workflowFile);
+}
+
+function formatUrlHost(host: string): string {
+  return isIP(host) === 6 && !host.startsWith("[") ? `[${host}]` : host;
+}
+
+function normalizeLocalRedirectHost(host: string): string {
+  if (host === "0.0.0.0") {
+    return "127.0.0.1";
+  }
+  if (host === "::") {
+    return "::1";
+  }
+  return host;
+}
+
+function deriveLinearOAuthRedirectUri(server: {
+  bind: string;
+  port: number;
+  public_base_url?: string | undefined;
+}): string {
+  if (server.public_base_url) {
+    return new URL(LINEAR_OAUTH_CALLBACK_PATH, new URL(server.public_base_url).origin).toString();
+  }
+
+  const host = normalizeLocalRedirectHost(server.bind);
+  return new URL(LINEAR_OAUTH_CALLBACK_PATH, `http://${formatUrlHost(host)}:${server.port}`).toString();
 }
 
 function mergeWorkflowFiles(
@@ -290,6 +320,7 @@ export function loadConfig(
 
   const logFilePath = process.env.PATCHRELAY_LOG_FILE ?? parsed.logging.file_path;
   const webhookArchiveDir = process.env.PATCHRELAY_WEBHOOK_ARCHIVE_DIR ?? parsed.logging.webhook_archive_dir;
+  const oauthRedirectUri = parsed.linear.oauth.redirect_uri ?? deriveLinearOAuthRedirectUri(parsed.server);
 
   const config: AppConfig = {
     server: {
@@ -320,7 +351,7 @@ export function loadConfig(
       oauth: {
         clientId: oauthClientId ?? "",
         clientSecret: oauthClientSecret ?? "",
-        redirectUri: parsed.linear.oauth.redirect_uri,
+        redirectUri: oauthRedirectUri,
         scopes: parsed.linear.oauth.scopes,
         actor: parsed.linear.oauth.actor,
       },
@@ -391,8 +422,8 @@ export function loadConfig(
 
 function validateConfigSemantics(config: AppConfig): void {
   const redirectUri = new URL(config.linear.oauth.redirectUri);
-  if (redirectUri.pathname !== "/oauth/linear/callback") {
-    throw new Error('linear.oauth.redirect_uri must use the fixed "/oauth/linear/callback" path');
+  if (redirectUri.pathname !== LINEAR_OAUTH_CALLBACK_PATH) {
+    throw new Error(`linear.oauth.redirect_uri must use the fixed "${LINEAR_OAUTH_CALLBACK_PATH}" path`);
   }
 
   const projectIds = new Set<string>();

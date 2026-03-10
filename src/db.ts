@@ -50,6 +50,8 @@ CREATE TABLE IF NOT EXISTS tracked_issues (
   active_stage_run_id INTEGER,
   latest_thread_id TEXT,
   status_comment_id TEXT,
+  active_agent_session_id TEXT,
+  pending_launch_input TEXT,
   lifecycle_status TEXT NOT NULL,
   last_webhook_at TEXT,
   updated_at TEXT NOT NULL,
@@ -177,6 +179,8 @@ export class PatchRelayDatabase {
   runMigrations(): void {
     this.connection.exec(baseMigration);
     this.ensureColumnExists("tracked_issues", "status_comment_id", "TEXT");
+    this.ensureColumnExists("tracked_issues", "active_agent_session_id", "TEXT");
+    this.ensureColumnExists("tracked_issues", "pending_launch_input", "TEXT");
     this.ensureColumnExists("oauth_states", "status", "TEXT NOT NULL DEFAULT 'pending'");
     this.ensureColumnExists("oauth_states", "installation_id", "INTEGER");
     this.ensureColumnExists("oauth_states", "error_message", "TEXT");
@@ -262,6 +266,8 @@ export class PatchRelayDatabase {
     activeStageRunId?: number | null;
     latestThreadId?: string | null;
     statusCommentId?: string | null;
+    activeAgentSessionId?: string | null;
+    pendingLaunchInput?: string | null;
     lifecycleStatus: IssueLifecycleStatus;
     lastWebhookAt?: string;
   }): TrackedIssueRecord {
@@ -272,8 +278,9 @@ export class PatchRelayDatabase {
         INSERT INTO tracked_issues (
           project_id, linear_issue_id, issue_key, title, issue_url, current_linear_state, desired_stage, desired_webhook_id,
           active_workspace_id, active_pipeline_run_id, active_stage_run_id, latest_thread_id, status_comment_id,
+          active_agent_session_id, pending_launch_input,
           lifecycle_status, last_webhook_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(project_id, linear_issue_id) DO UPDATE SET
           issue_key = COALESCE(excluded.issue_key, tracked_issues.issue_key),
           title = COALESCE(excluded.title, tracked_issues.title),
@@ -286,6 +293,8 @@ export class PatchRelayDatabase {
           active_stage_run_id = COALESCE(excluded.active_stage_run_id, tracked_issues.active_stage_run_id),
           latest_thread_id = COALESCE(excluded.latest_thread_id, tracked_issues.latest_thread_id),
           status_comment_id = COALESCE(excluded.status_comment_id, tracked_issues.status_comment_id),
+          active_agent_session_id = COALESCE(excluded.active_agent_session_id, tracked_issues.active_agent_session_id),
+          pending_launch_input = COALESCE(excluded.pending_launch_input, tracked_issues.pending_launch_input),
           lifecycle_status = excluded.lifecycle_status,
           last_webhook_at = COALESCE(excluded.last_webhook_at, tracked_issues.last_webhook_at),
           updated_at = excluded.updated_at
@@ -305,6 +314,8 @@ export class PatchRelayDatabase {
         params.activeStageRunId ?? null,
         params.latestThreadId ?? null,
         params.statusCommentId ?? null,
+        params.activeAgentSessionId ?? null,
+        params.pendingLaunchInput ?? null,
         params.lifecycleStatus,
         params.lastWebhookAt ?? null,
         now,
@@ -367,6 +378,8 @@ export class PatchRelayDatabase {
       activeStageRunId: existing?.activeStageRunId ?? null,
       latestThreadId: existing?.latestThreadId ?? null,
       statusCommentId: existing?.statusCommentId ?? null,
+      activeAgentSessionId: existing?.activeAgentSessionId ?? null,
+      pendingLaunchInput: existing?.pendingLaunchInput ?? null,
       lifecycleStatus,
       lastWebhookAt: params.lastWebhookAt,
     });
@@ -659,6 +672,41 @@ export class PatchRelayDatabase {
         `,
       )
       .run(statusCommentId, isoNow(), projectId, linearIssueId);
+  }
+
+  setIssueActiveAgentSession(projectId: string, linearIssueId: string, agentSessionId?: string): void {
+    this.connection
+      .prepare(
+        `
+        UPDATE tracked_issues
+        SET active_agent_session_id = ?, updated_at = ?
+        WHERE project_id = ? AND linear_issue_id = ?
+        `,
+      )
+      .run(agentSessionId ?? null, isoNow(), projectId, linearIssueId);
+  }
+
+  setIssuePendingLaunchInput(projectId: string, linearIssueId: string, body?: string): void {
+    this.connection
+      .prepare(
+        `
+        UPDATE tracked_issues
+        SET pending_launch_input = ?, updated_at = ?
+        WHERE project_id = ? AND linear_issue_id = ?
+        `,
+      )
+      .run(body ?? null, isoNow(), projectId, linearIssueId);
+  }
+
+  consumeIssuePendingLaunchInput(projectId: string, linearIssueId: string): string | undefined {
+    const issue = this.getTrackedIssue(projectId, linearIssueId);
+    const body = issue?.pendingLaunchInput;
+    if (!body) {
+      return undefined;
+    }
+
+    this.setIssuePendingLaunchInput(projectId, linearIssueId, undefined);
+    return body;
   }
 
   saveThreadEvent(params: { stageRunId: number; threadId: string; turnId?: string; method: string; eventJson: string }): number {
@@ -1072,6 +1120,8 @@ export class PatchRelayDatabase {
       ...(row.active_stage_run_id === null ? {} : { activeStageRunId: Number(row.active_stage_run_id) }),
       ...(row.latest_thread_id === null ? {} : { latestThreadId: String(row.latest_thread_id) }),
       ...(row.status_comment_id === null ? {} : { statusCommentId: String(row.status_comment_id) }),
+      ...(row.active_agent_session_id === null ? {} : { activeAgentSessionId: String(row.active_agent_session_id) }),
+      ...(row.pending_launch_input === null ? {} : { pendingLaunchInput: String(row.pending_launch_input) }),
       lifecycleStatus: row.lifecycle_status as IssueLifecycleStatus,
       ...(row.last_webhook_at === null ? {} : { lastWebhookAt: String(row.last_webhook_at) }),
       updatedAt: String(row.updated_at),

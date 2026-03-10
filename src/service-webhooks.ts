@@ -78,7 +78,7 @@ export async function acceptIncomingWebhook(params: {
     webhookId: params.webhookId,
     receivedAt,
     eventType: normalized.eventType,
-    issueId: normalized.issue.id,
+    ...(normalized.issue ? { issueId: normalized.issue.id } : {}),
     headersJson,
     payloadJson,
     signatureValid: true,
@@ -100,9 +100,9 @@ export async function acceptIncomingWebhook(params: {
 }
 
 function logWebhookSummary(logger: Logger, normalized: NormalizedEvent): void {
-  const issueRef = normalized.issue.identifier ?? normalized.issue.id;
-  const stateName = normalized.issue.stateName;
-  const title = normalized.issue.title;
+  const issueRef = normalized.issue?.identifier ?? normalized.issue?.id ?? normalized.installation?.appUserId ?? normalized.entityType;
+  const stateName = normalized.issue?.stateName;
+  const title = normalized.issue?.title;
   const summary = [
     `Linear webhook for ${issueRef}`,
     normalized.triggerEvent,
@@ -114,10 +114,12 @@ function logWebhookSummary(logger: Logger, normalized: NormalizedEvent): void {
 
   logger.info(
     {
-      issueKey: normalized.issue.identifier,
+      issueKey: normalized.issue?.identifier,
       triggerEvent: normalized.triggerEvent,
       state: stateName,
       title,
+      appUserId: normalized.installation?.appUserId,
+      notificationType: normalized.installation?.notificationType,
     },
     summary,
   );
@@ -125,7 +127,7 @@ function logWebhookSummary(logger: Logger, normalized: NormalizedEvent): void {
     {
       webhookId: normalized.webhookId,
       eventType: normalized.eventType,
-      issueId: normalized.issue.id,
+      issueId: normalized.issue?.id,
     },
     "Webhook metadata",
   );

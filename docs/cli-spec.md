@@ -29,7 +29,6 @@ Its second job is light operator control:
 - open the right workspace path
 - start a Linear OAuth installation flow
 - inspect connected Linear installations
-- link a project to an installation
 - install and restart the user service
 - keep setup and daily operation in the terminal
 
@@ -206,25 +205,6 @@ Expected flow:
 ### `patchrelay installations`
 
 List connected Linear installations and the projects linked to them.
-
-### `patchrelay link-installation <projectId> <installationId>`
-
-Link a configured project to a Linear installation.
-
-### `patchrelay unlink-installation <projectId>`
-
-Clear a project's Linear installation link without using the `none` sentinel.
-
-### `patchrelay webhook <projectId>`
-
-Print the current webhook URL and setup instructions for a project.
-
-The printed public URL should come from `server.public_base_url` when configured.
-
-Flags:
-
-- `--show-secret`
-- `--json`
 
 ### `patchrelay inspect <issueKey>`
 

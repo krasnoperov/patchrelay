@@ -4,6 +4,8 @@ import { refreshLinearOAuthToken } from "./linear-oauth.ts";
 import { decryptSecret, encryptSecret } from "./token-crypto.ts";
 import type {
   AppConfig,
+  LinearAgentActivityContent,
+  LinearAgentActivityResult,
   LinearActorProfile,
   LinearClient,
   LinearClientProvider,
@@ -229,6 +231,43 @@ export class LinearGraphqlClient implements LinearClient {
     }
 
     return response.commentCreate.comment;
+  }
+
+  async createAgentActivity(params: {
+    agentSessionId: string;
+    content: LinearAgentActivityContent;
+    ephemeral?: boolean;
+  }): Promise<LinearAgentActivityResult> {
+    const response = await this.request<{
+      agentActivityCreate: {
+        success: boolean;
+        agentActivity?: { id: string } | null;
+      };
+    }>(
+      `
+      mutation PatchRelayCreateAgentActivity($input: AgentActivityCreateInput!) {
+        agentActivityCreate(input: $input) {
+          success
+          agentActivity {
+            id
+          }
+        }
+      }
+      `,
+      {
+        input: {
+          agentSessionId: params.agentSessionId,
+          content: params.content,
+          ephemeral: params.ephemeral ?? false,
+        },
+      },
+    );
+
+    if (!response.agentActivityCreate.success || !response.agentActivityCreate.agentActivity) {
+      throw new Error(`Linear rejected agent activity for session ${params.agentSessionId}`);
+    }
+
+    return response.agentActivityCreate.agentActivity;
   }
 
   async updateIssueLabels(params: { issueId: string; addNames?: string[]; removeNames?: string[] }): Promise<LinearIssueSnapshot> {
