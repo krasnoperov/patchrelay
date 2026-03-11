@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import pino from "pino";
 import { runCli } from "../src/cli/index.ts";
+import { loadConfig } from "../src/config.ts";
 import { CliDataAccess } from "../src/cli/data.ts";
 import { PatchRelayDatabase } from "../src/db.ts";
 import { buildHttpServer } from "../src/http.ts";
@@ -459,7 +460,7 @@ test("cli init writes XDG config files and install-service manages the user unit
         assert.equal(configContents.includes("public_base_url: https://patchrelay.example.com"), true);
         assert.equal(configContents.includes("projects:"), false);
         assert.equal(configContents.includes(path.join(dataHome, "patchrelay", "worktrees")), false);
-        assert.match(initText, /Use the project configuration tool to add your first repository/);
+        assert.match(initText, /Add your first repository with `patchrelay project add <id> <repo-path>`/);
 
         const installOut = createBufferStream();
         assert.equal(
@@ -546,6 +547,114 @@ test("cli init updates the saved public base URL on rerun", async () => {
         const configContents = readFileSync(configPath, "utf8");
         assert.equal(configContents.includes("public_base_url: https://relay.acme.dev"), true);
         assert.equal(configContents.includes("public_base_url: https://first.example.com"), false);
+      },
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("cli project add appends a minimal project to config", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-project-add-"));
+  const configHome = path.join(baseDir, ".config");
+  const stateHome = path.join(baseDir, ".state");
+  const dataHome = path.join(baseDir, ".share");
+  const repoPath = path.join(baseDir, "repo");
+
+  try {
+    mkdirSync(repoPath, { recursive: true });
+    await withEnv(
+      {
+        XDG_CONFIG_HOME: configHome,
+        XDG_STATE_HOME: stateHome,
+        XDG_DATA_HOME: dataHome,
+        PATCHRELAY_CONFIG: undefined,
+        PATCHRELAY_DB_PATH: undefined,
+        PATCHRELAY_LOG_FILE: undefined,
+      },
+      async () => {
+        assert.equal(
+          await runCli(["init", "relay.example.com"], {
+            stdout: createBufferStream().stream,
+            stderr: createBufferStream().stream,
+          }),
+          0,
+        );
+
+        const projectOut = createBufferStream();
+        assert.equal(
+          await runCli(["project", "add", "usertold", repoPath, "--issue-prefix", "USE"], {
+            stdout: projectOut.stream,
+            stderr: createBufferStream().stream,
+          }),
+          0,
+        );
+        assert.match(projectOut.read(), /Added project usertold/);
+
+        const configPath = path.join(configHome, "patchrelay", "patchrelay.yaml");
+        const configContents = readFileSync(configPath, "utf8");
+        assert.match(configContents, /projects:/);
+        assert.match(configContents, /id: usertold/);
+        assert.match(configContents, /repo_path:/);
+        assert.match(configContents, /issue_key_prefixes:/);
+
+        const config = loadConfig(configPath, { requireLinearSecret: false, allowMissingSecrets: true });
+        assert.equal(config.projects[0]?.id, "usertold");
+        assert.equal(config.projects[0]?.repoPath, repoPath);
+        assert.equal(config.projects[0]?.branchPrefix, "usertold");
+        assert.equal(config.projects[0]?.worktreeRoot, path.join(dataHome, "patchrelay", "worktrees", "usertold"));
+      },
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("cli project add requires routing when adding a second project", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-project-add-routing-"));
+  const configHome = path.join(baseDir, ".config");
+  const stateHome = path.join(baseDir, ".state");
+  const dataHome = path.join(baseDir, ".share");
+  const firstRepoPath = path.join(baseDir, "repo-one");
+  const secondRepoPath = path.join(baseDir, "repo-two");
+
+  try {
+    mkdirSync(firstRepoPath, { recursive: true });
+    mkdirSync(secondRepoPath, { recursive: true });
+    await withEnv(
+      {
+        XDG_CONFIG_HOME: configHome,
+        XDG_STATE_HOME: stateHome,
+        XDG_DATA_HOME: dataHome,
+        PATCHRELAY_CONFIG: undefined,
+        PATCHRELAY_DB_PATH: undefined,
+        PATCHRELAY_LOG_FILE: undefined,
+      },
+      async () => {
+        assert.equal(
+          await runCli(["init", "relay.example.com"], {
+            stdout: createBufferStream().stream,
+            stderr: createBufferStream().stream,
+          }),
+          0,
+        );
+        assert.equal(
+          await runCli(["project", "add", "one", firstRepoPath, "--issue-prefix", "ONE"], {
+            stdout: createBufferStream().stream,
+            stderr: createBufferStream().stream,
+          }),
+          0,
+        );
+
+        const stderr = createBufferStream();
+        assert.equal(
+          await runCli(["project", "add", "two", secondRepoPath], {
+            stdout: createBufferStream().stream,
+            stderr: stderr.stream,
+          }),
+          1,
+        );
+        assert.match(stderr.read(), /Adding a second project requires routing/);
       },
     );
   } finally {

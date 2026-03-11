@@ -102,7 +102,7 @@ For one machine with several repositories:
 
 1. Run `patchrelay init https://your-domain.example` once.
 2. Put the machine-level secrets in `~/.config/patchrelay/.env`.
-3. Use the separate project configuration tool to add one project per repository.
+3. Run `patchrelay project add <id> <repo-path>` once per repository.
 4. Give each project its `repo_path`.
 5. Route each project by `issue_key_prefixes`, `linear_team_ids`, or both when you need disambiguation.
 6. Keep workflow files inside each repository.
@@ -118,7 +118,7 @@ For the standard Linear app-agent flow, you can usually omit `trigger_events` en
 2. Keep the generated `LINEAR_WEBHOOK_SECRET` and `PATCHRELAY_TOKEN_ENCRYPTION_KEY`, then fill in `LINEAR_OAUTH_CLIENT_ID` and `LINEAR_OAUTH_CLIENT_SECRET` in `~/.config/patchrelay/.env`.
 3. Create the Linear OAuth app with `actor=app`, the required scopes, and webhook settings.
 4. Set `server.public_base_url` to the public HTTPS origin Linear can reach.
-5. Use the separate project configuration tool to add one or more projects.
+5. Add one or more projects with `patchrelay project add <id> <repo-path>`.
 6. Add the repo-local workflow files to each automated repository.
 7. Run `patchrelay doctor` and fix any failures or warnings.
 8. Run `patchrelay install-service`.

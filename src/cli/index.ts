@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import { loadConfig } from "../config.ts";
-import { initializePatchRelayHome, installUserServiceUnit } from "../install.ts";
+import { addProjectToConfig, initializePatchRelayHome, installUserServiceUnit } from "../install.ts";
 import { runPreflight } from "../preflight.ts";
 import { getDefaultConfigPath, getDefaultEnvPath, getSystemdUserUnitPath } from "../runtime-paths.ts";
 import { CliDataAccess } from "./data.ts";
@@ -23,6 +23,7 @@ const KNOWN_COMMANDS = new Set([
   "list",
   "doctor",
   "init",
+  "project",
   "connect",
   "installations",
   "install-service",
@@ -86,6 +87,7 @@ function helpText(): string {
     "  list [--active] [--failed] [--project <projectId>] [--json]",
     "  doctor [--json]",
     "  init <public-base-url> [--force] [--json]",
+    "  project add <id> <repo-path> [--issue-prefix <prefixes>] [--team-id <ids>] [--json]",
     "  connect [--project <projectId>] [--no-open] [--timeout <seconds>] [--json]",
     "  installations [--json]",
     "  install-service [--force] [--write-only] [--json]",
@@ -108,6 +110,17 @@ function getStageFlag(value: string | boolean | undefined): WorkflowStage | unde
     return value;
   }
   throw new Error(`Unsupported stage: ${value}`);
+}
+
+function parseCsvFlag(value: string | boolean | undefined): string[] {
+  if (typeof value !== "string") {
+    return [];
+  }
+
+  return value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
 }
 
 function writeOutput(stream: Output, text: string): void {
@@ -272,7 +285,7 @@ export async function runCli(
               `1. Edit ${result.envPath}`,
               "2. Paste your Linear OAuth client id and client secret into that .env",
               "3. Paste LINEAR_WEBHOOK_SECRET from that .env into the Linear OAuth app webhook signing secret",
-              "4. Use the project configuration tool to add your first repository",
+              "4. Add your first repository with `patchrelay project add <id> <repo-path>`",
               "5. Run `patchrelay doctor`",
               "6. Run `patchrelay install-service`",
             ].join("\n") + "\n",
@@ -332,6 +345,50 @@ export async function runCli(
               restarted: true,
             })
           : "Reloaded systemd user units and restarted PatchRelay.\n",
+      );
+      return 0;
+    } catch (error) {
+      writeOutput(stderr, `${error instanceof Error ? error.message : String(error)}\n`);
+      return 1;
+    }
+  }
+
+  if (command === "project") {
+    try {
+      const subcommand = commandArgs[0];
+      if (subcommand !== "add") {
+        throw new Error('Usage: patchrelay project add <id> <repo-path> [--issue-prefix <prefixes>] [--team-id <ids>]');
+      }
+
+      const projectId = commandArgs[1];
+      const repoPath = commandArgs[2];
+      if (!projectId || !repoPath) {
+        throw new Error('Usage: patchrelay project add <id> <repo-path> [--issue-prefix <prefixes>] [--team-id <ids>]');
+      }
+
+      const result = await addProjectToConfig({
+        id: projectId,
+        repoPath,
+        issueKeyPrefixes: parseCsvFlag(parsed.flags.get("issue-prefix")),
+        linearTeamIds: parseCsvFlag(parsed.flags.get("team-id")),
+      });
+      writeOutput(
+        stdout,
+        json
+          ? formatJson(result)
+          : [
+              `Config file: ${result.configPath}`,
+              `Added project ${result.project.id} for ${result.project.repoPath}`,
+              result.project.issueKeyPrefixes.length > 0
+                ? `Issue key prefixes: ${result.project.issueKeyPrefixes.join(", ")}`
+                : undefined,
+              result.project.linearTeamIds.length > 0
+                ? `Linear team ids: ${result.project.linearTeamIds.join(", ")}`
+                : undefined,
+              `Next: patchrelay connect --project ${result.project.id}`,
+            ]
+              .filter(Boolean)
+              .join("\n") + "\n",
       );
       return 0;
     } catch (error) {

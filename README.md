@@ -89,9 +89,11 @@ LINEAR_OAUTH_CLIENT_SECRET=replace-with-linear-oauth-client-secret
 
 ### 4. Configure a project
 
-Use the separate project configuration tool to add repositories after `patchrelay init`.
+Add repositories after `patchrelay init` with `patchrelay project add <id> <repo-path>`.
 
-The generated `~/.config/patchrelay/patchrelay.yaml` is machine-level service config only. Project entries should be created by the project configuration flow, not by hand-editing a placeholder template.
+For a single project, that is usually enough. For multiple projects, add routing with `--issue-prefix APP` or `--team-id <linear-team-id>`.
+
+The generated `~/.config/patchrelay/patchrelay.yaml` is machine-level service config only. Project entries should be created with the CLI, not by hand-editing a placeholder template.
 
 ### 5. Add workflow docs to the repo
 
