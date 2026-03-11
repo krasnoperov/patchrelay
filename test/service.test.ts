@@ -310,7 +310,7 @@ function setupRepo(baseDir: string, config: AppConfig): void {
   execFileSync("git", ["-C", repoPath, "config", "user.name", "PatchRelay"], { stdio: "ignore" });
   writeFileSync(path.join(repoPath, "README.md"), "# test\n", "utf8");
   execFileSync("git", ["-C", repoPath, "add", "."], { stdio: "ignore" });
-  execFileSync("git", ["-C", repoPath, "commit", "-m", "initial"], { stdio: "ignore" });
+  execFileSync("git", ["-C", repoPath, "-c", "commit.gpgsign=false", "commit", "-m", "initial"], { stdio: "ignore" });
 
   for (const workflow of config.projects[0].workflows) {
     writeFileSync(workflow.workflowFile, `${workflow.id} carefully.\n`, "utf8");

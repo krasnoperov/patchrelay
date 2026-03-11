@@ -1,14 +1,209 @@
 import assert from "node:assert/strict";
-import path from "node:path";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 import test from "node:test";
 import pino from "pino";
 import { CodexAppServerClient, resolveCodexAppServerLaunch } from "../src/codex-app-server.ts";
+
+class FakeChildProcess extends EventEmitter {
+  readonly stdin = new PassThrough();
+  readonly stdout = new PassThrough();
+  readonly stderr = new PassThrough();
+
+  constructor(private readonly scenario: string) {
+    super();
+
+    let buffer = "";
+    this.stdin.setEncoding("utf8");
+    this.stdin.on("data", (chunk) => {
+      buffer += chunk;
+      while (true) {
+        const newlineIndex = buffer.indexOf("\n");
+        if (newlineIndex === -1) {
+          break;
+        }
+        const line = buffer.slice(0, newlineIndex).trim();
+        buffer = buffer.slice(newlineIndex + 1);
+        if (!line) {
+          continue;
+        }
+        this.handleMessage(JSON.parse(line) as Record<string, unknown>);
+      }
+    });
+  }
+
+  kill(signal: NodeJS.Signals = "SIGTERM"): boolean {
+    this.emit("close", null, signal);
+    return true;
+  }
+
+  private sendStdout(message: Record<string, unknown>): void {
+    this.stdout.write(`${JSON.stringify(message)}\n`);
+  }
+
+  private handleMessage(message: Record<string, unknown>): void {
+    if (message.method === "initialize") {
+      this.sendStdout({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: {
+          serverInfo: {
+            name: "fake-codex",
+            version: "0.0.1",
+          },
+        },
+      });
+      return;
+    }
+
+    if (message.method === "initialized") {
+      this.sendStdout({
+        jsonrpc: "2.0",
+        id: "approval-1",
+        method: "item/commandExecution/requestApproval",
+        params: {
+          command: "npm test",
+        },
+      });
+      return;
+    }
+
+    if (message.id === "approval-1") {
+      this.sendStdout({
+        jsonrpc: "2.0",
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+        },
+      });
+      return;
+    }
+
+    if (message.method === "thread/start") {
+      if (this.scenario === "pending-close") {
+        setTimeout(() => {
+          this.emit("close", 7, null);
+        }, 10);
+        return;
+      }
+
+      this.sendStdout({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: {
+          thread: buildThread("thread-1", ((message.params as Record<string, unknown>)?.cwd as string | undefined) ?? "/tmp/worktree"),
+        },
+      });
+      return;
+    }
+
+    if (message.method === "thread/resume") {
+      const params = (message.params as Record<string, unknown>) ?? {};
+      this.sendStdout({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: {
+          thread: buildThread(String(params.threadId), (params.cwd as string | undefined) ?? "/tmp/resumed"),
+        },
+      });
+      return;
+    }
+
+    if (message.method === "thread/fork") {
+      const params = (message.params as Record<string, unknown>) ?? {};
+      this.sendStdout({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: {
+          thread: buildThread("thread-forked", (params.cwd as string | undefined) ?? "/tmp/forked"),
+        },
+      });
+      return;
+    }
+
+    if (message.method === "turn/start") {
+      this.sendStdout({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: {
+          turn: {
+            id: "turn-2",
+            status: "inProgress",
+          },
+        },
+      });
+      return;
+    }
+
+    if (message.method === "turn/steer") {
+      this.sendStdout({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: {
+          ok: true,
+        },
+      });
+      return;
+    }
+
+    if (message.method === "thread/read") {
+      if (this.scenario === "error-response") {
+        this.sendStdout({
+          jsonrpc: "2.0",
+          id: message.id,
+          error: {
+            message: "thread read failed",
+          },
+        });
+        return;
+      }
+
+      const params = (message.params as Record<string, unknown>) ?? {};
+      this.sendStdout({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: {
+          thread: buildThread(String(params.threadId), "/tmp/read"),
+        },
+      });
+      return;
+    }
+
+    if (message.method === "thread/list") {
+      this.sendStdout({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: {
+          data: [buildThread("thread-1"), buildThread("thread-2", "/tmp/other")],
+        },
+      });
+    }
+  }
+}
+
+function buildThread(id: string, cwd = "/tmp/worktree") {
+  return {
+    id,
+    preview: "PatchRelay stage",
+    cwd,
+    status: "idle",
+    path: `${cwd}/thread.json`,
+    turns: [
+      {
+        id: "turn-1",
+        status: "completed",
+        items: [{ type: "agentMessage", id: "assistant-1", text: "Hello from fake codex." }],
+      },
+    ],
+  };
+}
 
 function createClient(scenario: string) {
   return new CodexAppServerClient(
     {
       bin: process.execPath,
-      args: [path.resolve("test/fixtures/fake-codex-app-server.mjs"), scenario],
+      args: ["unused"],
       sourceBashrc: false,
       approvalPolicy: "never",
       sandboxMode: "danger-full-access",
@@ -16,6 +211,7 @@ function createClient(scenario: string) {
       serviceName: "patchrelay-test",
     },
     pino({ enabled: false }),
+    (() => new FakeChildProcess(scenario)) as never,
   );
 }
 

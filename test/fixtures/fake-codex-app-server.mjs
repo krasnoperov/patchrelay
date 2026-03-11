@@ -1,13 +1,11 @@
-import readline from "node:readline";
+import fs from "node:fs";
 
 const scenario = process.argv[2] ?? "normal";
-const rl = readline.createInterface({
-  input: process.stdin,
-  crlfDelay: Infinity,
-});
+process.stdin.resume();
+setInterval(() => {}, 1 << 30);
 
 function send(message) {
-  process.stdout.write(`${JSON.stringify(message)}\n`);
+  fs.writeSync(process.stdout.fd, `${JSON.stringify(message)}\n`);
 }
 
 function buildThread(id, cwd = "/tmp/worktree") {
@@ -27,7 +25,7 @@ function buildThread(id, cwd = "/tmp/worktree") {
   };
 }
 
-rl.on("line", (line) => {
+function handleLine(line) {
   if (!line.trim()) {
     return;
   }
@@ -165,5 +163,21 @@ rl.on("line", (line) => {
         data: [buildThread("thread-1"), buildThread("thread-2", "/tmp/other")],
       },
     });
+  }
+}
+
+let stdinBuffer = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  stdinBuffer += chunk;
+  while (true) {
+    const newlineIndex = stdinBuffer.indexOf("\n");
+    if (newlineIndex === -1) {
+      break;
+    }
+
+    const line = stdinBuffer.slice(0, newlineIndex);
+    stdinBuffer = stdinBuffer.slice(newlineIndex + 1);
+    handleLine(line);
   }
 });

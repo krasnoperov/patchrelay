@@ -1208,7 +1208,7 @@ test("cli OAuth operator commands support json output and validation failures", 
   }
 });
 
-test("cli installation commands use the local HTTP service end to end", async () => {
+test("cli installation commands use the local HTTP service end to end", async (t) => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-http-"));
   try {
     const config = {
@@ -1270,7 +1270,14 @@ test("cli installation commands use the local HTTP service end to end", async ()
       pino({ enabled: false }),
     );
 
-    await app.listen({ host: "127.0.0.1", port: 0 });
+    try {
+      await app.listen({ host: "127.0.0.1", port: 0 });
+    } catch (error) {
+      if (error && typeof error === "object" && "code" in error && error.code === "EPERM") {
+        t.skip("Binding a local TCP listener is not permitted in this environment");
+      }
+      throw error;
+    }
     const address = app.server.address();
     assert.ok(address && typeof address === "object");
     config.server.port = address.port;

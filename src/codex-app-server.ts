@@ -75,7 +75,11 @@ export class CodexAppServerClient extends EventEmitter {
   private stdoutBuffer = "";
   private started = false;
 
-  constructor(private readonly config: CodexAppServerConfig, private readonly logger: Logger) {
+  constructor(
+    private readonly config: CodexAppServerConfig,
+    private readonly logger: Logger,
+    private readonly spawnProcess: typeof spawn = spawn,
+  ) {
     super();
   }
 
@@ -89,9 +93,9 @@ export class CodexAppServerClient extends EventEmitter {
     }
 
     const launch = resolveCodexAppServerLaunch(this.config);
-    this.child = spawn(launch.command, launch.args, {
+    this.child = this.spawnProcess(launch.command, launch.args, {
       stdio: ["pipe", "pipe", "pipe"],
-    });
+    }) as ChildProcessWithoutNullStreams;
 
     this.child.stderr.on("data", (chunk) => {
       const line = chunk.toString().trim();

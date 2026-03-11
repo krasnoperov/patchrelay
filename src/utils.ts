@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { execFile } from "node:child_process";
 import type { StdioOptions } from "node:child_process";
 
 const REDACTED_HEADER_NAMES = new Set(["authorization", "cookie", "set-cookie", "linear-signature"]);
@@ -53,65 +53,44 @@ export async function execCommand(
   } = {},
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
+    execFile(command, args, {
       cwd: options.cwd,
       env: options.env,
-      stdio: options.stdio ?? ["ignore", "pipe", "pipe"],
-    });
-
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-    let timeout: NodeJS.Timeout | undefined;
-
-    if (child.stdout) {
-      child.stdout.on("data", (chunk) => {
-        stdout += chunk.toString();
-      });
-    }
-
-    if (child.stderr) {
-      child.stderr.on("data", (chunk) => {
-        stderr += chunk.toString();
-      });
-    }
-
-    child.on("error", (error) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      if (timeout) {
-        clearTimeout(timeout);
-      }
-      reject(error);
-    });
-
-    child.on("close", (code) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      if (timeout) {
-        clearTimeout(timeout);
-      }
-      resolve({
-        stdout,
-        stderr,
-        exitCode: code ?? 1,
-      });
-    });
-
-    if (options.timeoutMs && options.timeoutMs > 0) {
-      timeout = setTimeout(() => {
-        if (settled) {
+      timeout: options.timeoutMs,
+      killSignal: "SIGTERM",
+      encoding: "utf8",
+      maxBuffer: 10 * 1024 * 1024,
+      ...(options.stdio ? { stdio: options.stdio } : {}),
+    }, (error, stdout, stderr) => {
+      if (error) {
+        const timeoutError =
+          typeof error === "object" &&
+          error !== null &&
+          "killed" in error &&
+          "signal" in error &&
+          error.killed === true &&
+          error.signal === "SIGTERM" &&
+          options.timeoutMs;
+        if (timeoutError) {
+          reject(new Error(`Command timed out after ${options.timeoutMs}ms: ${command}`));
           return;
         }
-        settled = true;
-        child.kill("SIGTERM");
-        reject(new Error(`Command timed out after ${options.timeoutMs}ms: ${command}`));
-      }, options.timeoutMs);
-    }
+
+        const exitCode = typeof error === "object" && error !== null && "code" in error ? Number(error.code) : 1;
+        resolve({
+          stdout: typeof stdout === "string" ? stdout : "",
+          stderr: typeof stderr === "string" ? stderr : "",
+          exitCode,
+        });
+        return;
+      }
+
+      resolve({
+        stdout: typeof stdout === "string" ? stdout : "",
+        stderr: typeof stderr === "string" ? stderr : "",
+        exitCode: 0,
+      });
+    });
   });
 }
 

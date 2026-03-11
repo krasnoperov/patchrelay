@@ -57,10 +57,13 @@ test("utils cover timestamp skew and hmac validation", () => {
 });
 
 test("execCommand captures output and timeout failures", async () => {
-  const success = await execCommand(process.execPath, ["-e", "process.stdout.write('out'); process.stderr.write('err')"]);
+  const success = await execCommand(
+    process.execPath,
+    ["-e", "require('node:fs').writeSync(1, 'out\\n'); require('node:fs').writeSync(2, 'err\\n')"],
+  );
   assert.equal(success.exitCode, 0);
-  assert.equal(success.stdout, "out");
-  assert.equal(success.stderr, "err");
+  assert.equal(success.stdout.trim(), "out");
+  assert.equal(success.stderr.trim(), "err");
 
   await assert.rejects(
     () => execCommand(process.execPath, ["-e", "setTimeout(() => {}, 200)"], { timeoutMs: 10 }),
