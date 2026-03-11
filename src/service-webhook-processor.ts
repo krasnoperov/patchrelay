@@ -101,7 +101,7 @@ export class ServiceWebhookProcessor {
     if (normalized.agentSession?.id) {
       this.db.setIssueActiveAgentSession(project.id, normalized.issue.id, normalized.agentSession.id);
     }
-    if (launchInput && !activeStageRun) {
+    if (launchInput && !activeStageRun && this.isDelegatedToPatchRelay(project, normalized)) {
       this.db.setIssuePendingLaunchInput(project.id, normalized.issue.id, launchInput);
     }
 
@@ -126,16 +126,22 @@ export class ServiceWebhookProcessor {
     }
 
     const stageAllowed = triggerEventAllowed(project, normalized.triggerEvent);
+    const delegatedToPatchRelay = this.isDelegatedToPatchRelay(project, normalized);
     let desiredStage: WorkflowStage | undefined;
 
     if (normalized.triggerEvent === "delegateChanged") {
-      desiredStage = this.resolveDelegateStage(project, normalized);
+      desiredStage = delegatedToPatchRelay ? resolveWorkflowStage(project, normalizedIssue.stateName) : undefined;
       if (!desiredStage) {
         return undefined;
       }
       if (!stageAllowed && !project.triggerEvents.includes("statusChanged")) {
         return undefined;
       }
+    } else if (normalized.triggerEvent === "agentSessionCreated" || normalized.triggerEvent === "agentPrompted") {
+      if (!delegatedToPatchRelay || !stageAllowed) {
+        return undefined;
+      }
+      desiredStage = resolveWorkflowStage(project, normalizedIssue.stateName);
     } else if (stageAllowed) {
       desiredStage = resolveWorkflowStage(project, normalizedIssue.stateName);
     } else {
@@ -151,20 +157,17 @@ export class ServiceWebhookProcessor {
     return desiredStage;
   }
 
-  private resolveDelegateStage(project: ProjectConfig, normalized: NormalizedEvent): WorkflowStage | undefined {
+  private isDelegatedToPatchRelay(project: ProjectConfig, normalized: NormalizedEvent): boolean {
     const normalizedIssue = normalized.issue;
     if (!normalizedIssue) {
-      return undefined;
+      return false;
     }
 
     const installation = this.db.getLinearInstallationForProject(project.id);
     if (!installation?.actorId) {
-      return undefined;
+      return false;
     }
-    if (normalizedIssue.delegateId !== installation.actorId) {
-      return undefined;
-    }
-    return resolveWorkflowStage(project, normalizedIssue.stateName);
+    return normalizedIssue.delegateId === installation.actorId;
   }
 
   private resolveLaunchInput(agentSession: AgentSessionMetadata | undefined): string | undefined {
@@ -199,8 +202,29 @@ export class ServiceWebhookProcessor {
     const promptBody = trimPrompt(normalized.agentSession.promptBody);
     const promptContext = trimPrompt(normalized.agentSession.promptContext);
     const activeStageRun = issue?.activeStageRunId ? this.db.getStageRun(issue.activeStageRunId) : undefined;
+    const delegatedToPatchRelay = this.isDelegatedToPatchRelay(project, normalized);
+    const runnableWorkflow = normalized.issue?.stateName ? resolveWorkflowStage(project, normalized.issue.stateName) : undefined;
 
     if (normalized.triggerEvent === "agentSessionCreated") {
+      if (!delegatedToPatchRelay) {
+        if (activeStageRun) {
+          await this.safeCreateAgentActivity(linear, normalized.agentSession.id, {
+            type: "thought",
+            body: `PatchRelay is already running the ${activeStageRun.stage} workflow for this issue. Delegate it to PatchRelay if you want automation to own the workflow, or keep replying here to steer the active run.`,
+          });
+          return;
+        }
+
+        const body = runnableWorkflow
+          ? `PatchRelay received your mention. Delegate the issue to PatchRelay to start the ${runnableWorkflow} workflow from the current \`${normalized.issue?.stateName}\` state.`
+          : `PatchRelay received your mention, but the issue is not in a runnable workflow state yet. Move it to one of: ${listRunnableStates(project).join(", ")}, then delegate it to PatchRelay.`;
+        await this.safeCreateAgentActivity(linear, normalized.agentSession.id, {
+          type: "elicitation",
+          body,
+        });
+        return;
+      }
+
       if (!desiredStage && !activeStageRun) {
         const runnableStates = listRunnableStates(project).join(", ");
         await this.safeCreateAgentActivity(linear, normalized.agentSession.id, {
@@ -243,6 +267,17 @@ export class ServiceWebhookProcessor {
       await this.safeCreateAgentActivity(linear, normalized.agentSession.id, {
         type: "thought",
         body: `PatchRelay routed your follow-up instructions into the active ${activeStageRun.stage} workflow.`,
+      });
+      return;
+    }
+
+    if (!delegatedToPatchRelay && (promptBody || promptContext)) {
+      const body = runnableWorkflow
+        ? `PatchRelay received your prompt. Delegate the issue to PatchRelay to start the ${runnableWorkflow} workflow from the current \`${normalized.issue?.stateName}\` state.`
+        : `PatchRelay received your prompt, but the issue is not in a runnable workflow state yet. Move it to one of: ${listRunnableStates(project).join(", ")}, then delegate it to PatchRelay.`;
+      await this.safeCreateAgentActivity(linear, normalized.agentSession.id, {
+        type: "elicitation",
+        body,
       });
       return;
     }

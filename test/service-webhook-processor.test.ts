@@ -186,6 +186,20 @@ function createHarness(baseDir: string) {
   return { config, db, linear, processor, flushedStageRunIds, enqueuedIssues };
 }
 
+function installPatchRelayApp(db: PatchRelayDatabase, projectId = "usertold", actorId = "patchrelay-app") {
+  const installation = db.saveLinearInstallation({
+    workspaceId: "workspace-1",
+    workspaceName: "Workspace One",
+    workspaceKey: "WS1",
+    actorId,
+    actorName: "PatchRelay",
+    accessTokenCiphertext: "ciphertext",
+    scopesJson: JSON.stringify(["read", "write"]),
+  });
+  db.linkProjectInstallation(projectId, installation.id);
+  return installation;
+}
+
 test("webhook processor records desired stage and enqueues matching issues", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-processor-"));
   try {
@@ -230,6 +244,7 @@ test("webhook processor routes prompted agent follow-ups into the active stage",
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-processor-active-"));
   try {
     const { config, db, linear, processor, flushedStageRunIds, enqueuedIssues } = createHarness(baseDir);
+    installPatchRelayApp(db);
 
     db.recordDesiredStage({
       projectId: "usertold",
@@ -281,6 +296,7 @@ test("webhook processor routes prompted agent follow-ups into the active stage",
               identifier: "USE-25",
               title: "Build app server orchestration",
               team: { key: "USE" },
+              delegate: { id: "patchrelay-app", name: "PatchRelay" },
               state: { name: "Implementing" },
             },
           },
@@ -303,6 +319,58 @@ test("webhook processor routes prompted agent follow-ups into the active stage",
           activity.agentSessionId === "session-1" &&
           activity.content.type === "thought" &&
           activity.ephemeral === true,
+      ),
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("webhook processor keeps mention-only sessions conversational instead of enqueuing work", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-processor-mentioned-"));
+  try {
+    const { db, linear, processor, enqueuedIssues } = createHarness(baseDir);
+    installPatchRelayApp(db);
+
+    const event = db.insertWebhookEvent({
+      webhookId: "delivery-agent-created-mentioned",
+      receivedAt: new Date().toISOString(),
+      eventType: "AgentSessionEvent.created",
+      issueId: "issue_1",
+      headersJson: "{}",
+      payloadJson: JSON.stringify({
+        action: "created",
+        type: "AgentSessionEvent",
+        createdAt: "2026-03-08T12:00:00.000Z",
+        webhookTimestamp: 1000,
+        data: {
+          promptContext: "Can you check this one?",
+          agentSession: {
+            id: "session-mentioned",
+            issue: {
+              id: "issue_1",
+              identifier: "USE-25",
+              title: "Build app server orchestration",
+              team: { key: "USE" },
+              state: { name: "Start" },
+            },
+          },
+        },
+      }),
+      signatureValid: true,
+      dedupeStatus: "accepted",
+    });
+
+    await processor.processWebhookEvent(event.id);
+
+    assert.deepEqual(enqueuedIssues, []);
+    assert.equal(db.getTrackedIssue("usertold", "issue_1")?.desiredStage, undefined);
+    assert.ok(
+      linear.agentActivities.some(
+        (activity) =>
+          activity.agentSessionId === "session-mentioned" &&
+          activity.content.type === "elicitation" &&
+          String(activity.content.body).includes("Delegate the issue to PatchRelay"),
       ),
     );
   } finally {

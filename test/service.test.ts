@@ -383,6 +383,22 @@ function createService(baseDir: string) {
   return { config, db, codex, linear, service, project: config.projects[0] as ProjectConfig };
 }
 
+function installPatchRelayApp(db: PatchRelayDatabase, projectId = "usertold", actorId = "patchrelay-app") {
+  const installation = db.upsertLinearInstallation({
+    workspaceId: "workspace-1",
+    workspaceName: "Workspace One",
+    workspaceKey: "WS1",
+    actorId,
+    actorName: "PatchRelay",
+    accessTokenCiphertext: "ciphertext-access",
+    refreshTokenCiphertext: "ciphertext-refresh",
+    scopesJson: JSON.stringify(["read", "write"]),
+    tokenType: "Bearer",
+  });
+  db.linkProjectInstallation(projectId, installation.id);
+  return installation;
+}
+
 async function flushQueues(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -520,6 +536,7 @@ test("service starts a workflow from a Linear agent session and forwards the ini
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-service-agent-created-"));
   try {
     const { db, codex, linear, service } = createService(baseDir);
+    installPatchRelayApp(db);
     await service.start();
 
     const event = db.insertWebhookEvent({
@@ -542,6 +559,7 @@ test("service starts a workflow from a Linear agent session and forwards the ini
               identifier: "USE-25",
               title: "Build app server orchestration",
               team: { key: "USE" },
+              delegate: { id: "patchrelay-app", name: "PatchRelay" },
               state: { name: "Start" },
             },
           },
@@ -582,10 +600,65 @@ test("service starts a workflow from a Linear agent session and forwards the ini
   }
 });
 
+test("service keeps mention-only agent sessions conversational instead of launching workflows", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-service-agent-mentioned-"));
+  try {
+    const { db, codex, linear, service } = createService(baseDir);
+    installPatchRelayApp(db);
+    await service.start();
+
+    const event = db.insertWebhookEvent({
+      webhookId: "delivery-agent-mentioned",
+      receivedAt: new Date().toISOString(),
+      eventType: "AgentSessionEvent.created",
+      issueId: "issue_1",
+      headersJson: "{}",
+      payloadJson: JSON.stringify({
+        action: "created",
+        type: "AgentSessionEvent",
+        createdAt: "2026-03-08T12:00:00.000Z",
+        webhookTimestamp: 1000,
+        data: {
+          promptContext: "Can you take a quick look at this?",
+          agentSession: {
+            id: "session-mentioned",
+            issue: {
+              id: "issue_1",
+              identifier: "USE-25",
+              title: "Build app server orchestration",
+              team: { key: "USE" },
+              state: { name: "Start" },
+            },
+          },
+        },
+      }),
+      signatureValid: true,
+      dedupeStatus: "accepted",
+    });
+
+    await service.processWebhookEvent(event.id);
+    await flushQueues();
+
+    assert.equal(codex.startedThreads.length, 0);
+    assert.equal(db.getTrackedIssue("usertold", "issue_1")?.desiredStage, undefined);
+    assert.ok(
+      linear.agentActivities.some(
+        (entry) =>
+          entry.agentSessionId === "session-mentioned" &&
+          entry.content.type === "elicitation" &&
+          String(entry.content.body).includes("Delegate the issue to PatchRelay to start the development workflow"),
+      ),
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("service routes prompted agent follow-ups into the active stage instead of requeueing it", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-service-agent-prompted-"));
   try {
     const { db, codex, linear, service } = createService(baseDir);
+    installPatchRelayApp(db);
     await service.start();
 
     const created = db.insertWebhookEvent({
@@ -607,6 +680,7 @@ test("service routes prompted agent follow-ups into the active stage instead of 
               identifier: "USE-25",
               title: "Build app server orchestration",
               team: { key: "USE" },
+              delegate: { id: "patchrelay-app", name: "PatchRelay" },
               state: { name: "Start" },
             },
           },
@@ -644,6 +718,7 @@ test("service routes prompted agent follow-ups into the active stage instead of 
               identifier: "USE-25",
               title: "Build app server orchestration",
               team: { key: "USE" },
+              delegate: { id: "patchrelay-app", name: "PatchRelay" },
               state: { name: "Implementing" },
             },
           },
@@ -671,6 +746,62 @@ test("service routes prompted agent follow-ups into the active stage instead of 
           entry.agentSessionId === "session-1" &&
           entry.content.type === "thought" &&
           String(entry.content.body).includes("follow-up instructions"),
+      ),
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("service keeps mention-only follow-up prompts conversational when no workflow is running", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-service-agent-prompt-mentioned-"));
+  try {
+    const { db, codex, linear, service } = createService(baseDir);
+    installPatchRelayApp(db);
+    await service.start();
+
+    const prompted = db.insertWebhookEvent({
+      webhookId: "delivery-agent-prompted-mentioned",
+      receivedAt: new Date().toISOString(),
+      eventType: "AgentSessionEvent.prompted",
+      issueId: "issue_1",
+      headersJson: "{}",
+      payloadJson: JSON.stringify({
+        action: "prompted",
+        type: "AgentSessionEvent",
+        createdAt: "2026-03-08T12:00:05.000Z",
+        webhookTimestamp: 1005,
+        data: {
+          agentActivity: {
+            body: "Please start on this now.",
+          },
+          agentSession: {
+            id: "session-mentioned-prompt",
+            issue: {
+              id: "issue_1",
+              identifier: "USE-25",
+              title: "Build app server orchestration",
+              team: { key: "USE" },
+              state: { name: "Start" },
+            },
+          },
+        },
+      }),
+      signatureValid: true,
+      dedupeStatus: "accepted",
+    });
+
+    await service.processWebhookEvent(prompted.id);
+    await flushQueues();
+
+    assert.equal(codex.startedThreads.length, 0);
+    assert.equal(codex.steeredTurns.length, 0);
+    assert.ok(
+      linear.agentActivities.some(
+        (entry) =>
+          entry.agentSessionId === "session-mentioned-prompt" &&
+          entry.content.type === "elicitation" &&
+          String(entry.content.body).includes("Delegate the issue to PatchRelay to start the development workflow"),
       ),
     );
   } finally {

@@ -63,6 +63,19 @@ This is the normal happy path:
 7. PatchRelay creates or reuses the issue worktree and launches the stage through `codex app-server`.
 8. PatchRelay reports progress back to Linear with service-owned status comments, workflow bookkeeping, and agent activity.
 
+## Mentions Vs Delegation
+
+PatchRelay treats these two Linear agent interactions differently:
+
+- mention PatchRelay to open a conversational agent session
+- delegate PatchRelay to let it run the workflow for the issue's current Linear state
+
+That means:
+
+- `AgentSessionEvent.created` can arrive for either a mention or a delegation
+- PatchRelay only launches a workflow when the issue is actually delegated to the PatchRelay app user
+- mention-only sessions stay conversational and tell the operator what state or delegation step is needed next
+
 ## Follow-Up Inputs
 
 Follow-up instructions can arrive in two ways:

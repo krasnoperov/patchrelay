@@ -61,11 +61,11 @@ For the exact OAuth app settings and webhook categories, use the Linear onboardi
 
 ## How It Works
 
-1. Linear delegates an issue or sends a stage-driving event.
+1. A human delegates PatchRelay on an issue to start automation, or mentions it to start a conversational agent session.
 2. PatchRelay verifies the webhook and routes the issue to the right local project.
-3. PatchRelay creates or reuses the issue worktree and launches the matching stage through `codex app-server`.
+3. Delegated issues create or reuse the issue worktree and launch the matching workflow through `codex app-server`.
 4. PatchRelay persists thread ids, run state, and observations so the work stays inspectable and resumable.
-5. Linear comments can steer the active run, and an operator can take over from the exact same worktree when needed.
+5. Mentions stay conversational, while delegated sessions and issue comments can steer the active run. An operator can take over from the exact same worktree when needed.
 
 ## Workflow Configuration
 
