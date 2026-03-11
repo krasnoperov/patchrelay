@@ -384,7 +384,7 @@ function createService(baseDir: string) {
 }
 
 function installPatchRelayApp(db: PatchRelayDatabase, projectId = "usertold", actorId = "patchrelay-app") {
-  const installation = db.upsertLinearInstallation({
+  const installation = db.linearInstallations.upsertLinearInstallation({
     workspaceId: "workspace-1",
     workspaceName: "Workspace One",
     workspaceKey: "WS1",
@@ -395,7 +395,7 @@ function installPatchRelayApp(db: PatchRelayDatabase, projectId = "usertold", ac
     scopesJson: JSON.stringify(["read", "write"]),
     tokenType: "Bearer",
   });
-  db.linkProjectInstallation(projectId, installation.id);
+  db.linearInstallations.linkProjectInstallation(projectId, installation.id);
   return installation;
 }
 
@@ -427,7 +427,7 @@ test("service keeps one workspace and forks later stages from the prior thread",
     const { db, codex, linear, service } = createService(baseDir);
     await service.start();
 
-    const startEvent = db.insertWebhookEvent({
+    const startEvent = db.webhookEvents.insertWebhookEvent({
       webhookId: "delivery-start",
       receivedAt: new Date().toISOString(),
       eventType: "Issue.update",
@@ -458,7 +458,7 @@ test("service keeps one workspace and forks later stages from the prior thread",
       assert.equal(codex.turns.length, 1);
     });
 
-    const issueAfterStart = db.getTrackedIssue("usertold", "issue_1");
+    const issueAfterStart = db.issueWorkflows.getTrackedIssue("usertold", "issue_1");
     assert.ok(issueAfterStart?.activeStageRunId);
     assert.equal(linear.stateTransitions[0]?.stateName, "Implementing");
     assert.deepEqual(linear.labelUpdates[0], {
@@ -468,15 +468,15 @@ test("service keeps one workspace and forks later stages from the prior thread",
     });
     const runningComment = linear.comments.get(issueAfterStart?.statusCommentId ?? "")?.body ?? "";
     assert.match(runningComment, /PatchRelay is running the development workflow/);
-    const startStageRun = db.getStageRun(issueAfterStart.activeStageRunId);
+    const startStageRun = db.issueWorkflows.getStageRun(issueAfterStart.activeStageRunId);
     assert.equal(startStageRun?.stage, "development");
     assert.ok(startStageRun?.threadId);
-    const workspacePath = db.getActiveWorkspaceForIssue("usertold", "issue_1")?.worktreePath;
+    const workspacePath = db.issueWorkflows.getActiveWorkspaceForIssue("usertold", "issue_1")?.worktreePath;
     assert.ok(workspacePath);
     assert.equal(runningComment.includes(workspacePath), false);
     writeFileSync(path.join(workspacePath, "sentinel.txt"), "keep me\n", "utf8");
 
-    db.recordDesiredStage({
+    db.issueWorkflows.recordDesiredStage({
       projectId: "usertold",
       linearIssueId: "issue_1",
       issueKey: "USE-25",
@@ -515,13 +515,13 @@ test("service keeps one workspace and forks later stages from the prior thread",
       assert.equal(codex.turns.length, 2);
     });
 
-    const latestIssue = db.getTrackedIssue("usertold", "issue_1");
-    const workspace = db.getActiveWorkspaceForIssue("usertold", "issue_1");
+    const latestIssue = db.issueWorkflows.getTrackedIssue("usertold", "issue_1");
+    const workspace = db.issueWorkflows.getActiveWorkspaceForIssue("usertold", "issue_1");
     assert.ok(workspace);
     assert.equal(workspace?.lastThreadId, startStageRun?.threadId);
     assert.ok(latestIssue?.activeStageRunId);
 
-    const reviewStageRun = db.getStageRun(latestIssue.activeStageRunId!);
+    const reviewStageRun = db.issueWorkflows.getStageRun(latestIssue.activeStageRunId!);
     assert.equal(reviewStageRun?.stage, "review");
     assert.equal(reviewStageRun?.parentThreadId, startStageRun?.threadId);
     assert.equal(existsSync(path.join(workspacePath, "sentinel.txt")), true);
@@ -539,7 +539,7 @@ test("service starts a workflow from a Linear agent session and forwards the ini
     installPatchRelayApp(db);
     await service.start();
 
-    const event = db.insertWebhookEvent({
+    const event = db.webhookEvents.insertWebhookEvent({
       webhookId: "delivery-agent-created",
       receivedAt: new Date().toISOString(),
       eventType: "AgentSessionEvent.created",
@@ -576,7 +576,7 @@ test("service starts a workflow from a Linear agent session and forwards the ini
       assert.equal(codex.steeredTurns.length, 1);
     });
 
-    const trackedIssue = db.getTrackedIssue("usertold", "issue_1");
+    const trackedIssue = db.issueWorkflows.getTrackedIssue("usertold", "issue_1");
     assert.equal(trackedIssue?.activeAgentSessionId, "session-1");
     assert.equal(codex.steeredTurns[0]?.input.includes("implementation plan"), true);
     assert.ok(
@@ -607,7 +607,7 @@ test("service keeps mention-only agent sessions conversational instead of launch
     installPatchRelayApp(db);
     await service.start();
 
-    const event = db.insertWebhookEvent({
+    const event = db.webhookEvents.insertWebhookEvent({
       webhookId: "delivery-agent-mentioned",
       receivedAt: new Date().toISOString(),
       eventType: "AgentSessionEvent.created",
@@ -640,7 +640,7 @@ test("service keeps mention-only agent sessions conversational instead of launch
     await flushQueues();
 
     assert.equal(codex.startedThreads.length, 0);
-    assert.equal(db.getTrackedIssue("usertold", "issue_1")?.desiredStage, undefined);
+    assert.equal(db.issueWorkflows.getTrackedIssue("usertold", "issue_1")?.desiredStage, undefined);
     assert.ok(
       linear.agentActivities.some(
         (entry) =>
@@ -661,7 +661,7 @@ test("service routes prompted agent follow-ups into the active stage instead of 
     installPatchRelayApp(db);
     await service.start();
 
-    const created = db.insertWebhookEvent({
+    const created = db.webhookEvents.insertWebhookEvent({
       webhookId: "delivery-agent-created",
       receivedAt: new Date().toISOString(),
       eventType: "AgentSessionEvent.created",
@@ -696,7 +696,7 @@ test("service routes prompted agent follow-ups into the active stage instead of 
       assert.equal(codex.turns.length, 1);
     });
 
-    const prompted = db.insertWebhookEvent({
+    const prompted = db.webhookEvents.insertWebhookEvent({
       webhookId: "delivery-agent-prompted",
       receivedAt: new Date().toISOString(),
       eventType: "AgentSessionEvent.prompted",
@@ -760,7 +760,7 @@ test("service keeps mention-only follow-up prompts conversational when no workfl
     installPatchRelayApp(db);
     await service.start();
 
-    const prompted = db.insertWebhookEvent({
+    const prompted = db.webhookEvents.insertWebhookEvent({
       webhookId: "delivery-agent-prompted-mentioned",
       receivedAt: new Date().toISOString(),
       eventType: "AgentSessionEvent.prompted",
@@ -815,7 +815,7 @@ test("service builds a read-only report from completed thread history", async ()
     const { db, codex, linear, service } = createService(baseDir);
     await service.start();
 
-    db.recordDesiredStage({
+    db.issueWorkflows.recordDesiredStage({
       projectId: "usertold",
       linearIssueId: "issue_2",
       issueKey: "USE-26",
@@ -830,8 +830,8 @@ test("service builds a read-only report from completed thread history", async ()
     await service.processIssue({ projectId: "usertold", issueId: "issue_2" });
     await flushQueues();
 
-    const issue = db.getTrackedIssue("usertold", "issue_2");
-    const stageRun = db.getStageRun(issue!.activeStageRunId!);
+    const issue = db.issueWorkflows.getTrackedIssue("usertold", "issue_2");
+    const stageRun = db.issueWorkflows.getStageRun(issue!.activeStageRunId!);
     codex.completeThread(stageRun!.threadId!, [
       {
         type: "agentMessage",
@@ -876,10 +876,10 @@ test("service builds a read-only report from completed thread history", async ()
     assert.equal(report?.stages[0].report?.toolCalls[0].name, "apply_patch");
     const overview = await service.getIssueOverview("USE-26");
     assert.equal(overview?.latestStageRun?.status, "completed");
-    const refreshedIssue = db.getTrackedIssue("usertold", "issue_2");
-    assert.equal(db.getPipelineRun(refreshedIssue!.activePipelineRunId!)?.status, "paused");
+    const refreshedIssue = db.issueWorkflows.getTrackedIssue("usertold", "issue_2");
+    assert.equal(db.issueWorkflows.getPipelineRun(refreshedIssue!.activePipelineRunId!)?.status, "paused");
     assert.match(linear.comments.get(refreshedIssue?.statusCommentId ?? "")?.body ?? "", /awaiting-final-state/);
-    assert.equal(db.getTrackedIssue("usertold", "issue_2")?.lifecycleStatus, "paused");
+    assert.equal(db.issueWorkflows.getTrackedIssue("usertold", "issue_2")?.lifecycleStatus, "paused");
     assert.deepEqual(linear.labelUpdates.at(-1), {
       issueId: "issue_2",
       addNames: ["llm-awaiting-handoff"],
@@ -898,7 +898,7 @@ test("service exposes raw stored events and live active status", async () => {
     const { db, codex, service } = createService(baseDir);
     await service.start();
 
-    db.recordDesiredStage({
+    db.issueWorkflows.recordDesiredStage({
       projectId: "usertold",
       linearIssueId: "issue_3",
       issueKey: "USE-27",
@@ -913,9 +913,9 @@ test("service exposes raw stored events and live active status", async () => {
     await service.processIssue({ projectId: "usertold", issueId: "issue_3" });
     await flushQueues();
 
-    const issue = db.getTrackedIssue("usertold", "issue_3");
-    const stageRun = db.getStageRun(issue!.activeStageRunId!);
-    db.saveThreadEvent({
+    const issue = db.issueWorkflows.getTrackedIssue("usertold", "issue_3");
+    const stageRun = db.issueWorkflows.getStageRun(issue!.activeStageRunId!);
+    db.stageEvents.saveThreadEvent({
       stageRunId: stageRun!.id,
       threadId: stageRun!.threadId!,
       turnId: stageRun!.turnId,
@@ -955,7 +955,7 @@ test("service forwards new Linear comments into the active turn", async () => {
     const { db, codex, service } = createService(baseDir);
     await service.start();
 
-    db.recordDesiredStage({
+    db.issueWorkflows.recordDesiredStage({
       projectId: "usertold",
       linearIssueId: "issue_3",
       issueKey: "USE-27",
@@ -970,9 +970,9 @@ test("service forwards new Linear comments into the active turn", async () => {
     await service.processIssue({ projectId: "usertold", issueId: "issue_3" });
     await flushQueues();
 
-    const issue = db.getTrackedIssue("usertold", "issue_3");
-    const stageRun = db.getStageRun(issue!.activeStageRunId!);
-    const event = db.insertWebhookEvent({
+    const issue = db.issueWorkflows.getTrackedIssue("usertold", "issue_3");
+    const stageRun = db.issueWorkflows.getStageRun(issue!.activeStageRunId!);
+    const event = db.webhookEvents.insertWebhookEvent({
       webhookId: "delivery-comment",
       receivedAt: new Date().toISOString(),
       eventType: "Comment.create",
@@ -1023,7 +1023,7 @@ test("service ignores webhook events from untrusted Linear actors", async () => 
     };
     await service.start();
 
-    const untrustedStart = db.insertWebhookEvent({
+    const untrustedStart = db.webhookEvents.insertWebhookEvent({
       webhookId: "delivery-untrusted-start",
       receivedAt: new Date().toISOString(),
       eventType: "Issue.update",
@@ -1052,10 +1052,10 @@ test("service ignores webhook events from untrusted Linear actors", async () => 
     });
 
     await service.processWebhookEvent(untrustedStart.id);
-    assert.equal(db.getTrackedIssue("usertold", "issue_3"), undefined);
+    assert.equal(db.issueWorkflows.getTrackedIssue("usertold", "issue_3"), undefined);
     assert.equal(codex.startedThreads.length, 0);
 
-    db.recordDesiredStage({
+    db.issueWorkflows.recordDesiredStage({
       projectId: "usertold",
       linearIssueId: "issue_3",
       issueKey: "USE-27",
@@ -1069,10 +1069,10 @@ test("service ignores webhook events from untrusted Linear actors", async () => 
 
     await service.processIssue({ projectId: "usertold", issueId: "issue_3" });
     await flushQueues();
-    const issue = db.getTrackedIssue("usertold", "issue_3");
-    const stageRun = db.getStageRun(issue!.activeStageRunId!);
+    const issue = db.issueWorkflows.getTrackedIssue("usertold", "issue_3");
+    const stageRun = db.issueWorkflows.getStageRun(issue!.activeStageRunId!);
 
-    const untrustedComment = db.insertWebhookEvent({
+    const untrustedComment = db.webhookEvents.insertWebhookEvent({
       webhookId: "delivery-untrusted-comment",
       receivedAt: new Date().toISOString(),
       eventType: "Comment.create",
@@ -1106,9 +1106,9 @@ test("service ignores webhook events from untrusted Linear actors", async () => 
 
     await service.processWebhookEvent(untrustedComment.id);
     assert.equal(codex.steeredTurns.length, 0);
-    assert.equal(stageRun?.threadId, db.getStageRun(issue!.activeStageRunId!)?.threadId);
+    assert.equal(stageRun?.threadId, db.issueWorkflows.getStageRun(issue!.activeStageRunId!)?.threadId);
 
-    const trustedComment = db.insertWebhookEvent({
+    const trustedComment = db.webhookEvents.insertWebhookEvent({
       webhookId: "delivery-trusted-comment",
       receivedAt: new Date().toISOString(),
       eventType: "Comment.create",
@@ -1156,7 +1156,7 @@ test("service preserves comments that arrive before thread startup finishes", as
     const { config, db, codex, linear, service } = createService(baseDir);
     await service.start();
 
-    db.upsertTrackedIssue({
+    db.issueWorkflows.upsertTrackedIssue({
       projectId: "usertold",
       linearIssueId: "issue_3",
       issueKey: "USE-27",
@@ -1167,7 +1167,7 @@ test("service preserves comments that arrive before thread startup finishes", as
       lifecycleStatus: "queued",
       lastWebhookAt: new Date().toISOString(),
     });
-    const claim = db.claimStageRun({
+    const claim = db.issueWorkflows.claimStageRun({
       projectId: "usertold",
       linearIssueId: "issue_3",
       stage: "development",
@@ -1185,7 +1185,7 @@ test("service preserves comments that arrive before thread startup finishes", as
       stateName: "Implementing",
     });
 
-    const event = db.insertWebhookEvent({
+    const event = db.webhookEvents.insertWebhookEvent({
       webhookId: "delivery-comment-prelaunch",
       receivedAt: new Date().toISOString(),
       eventType: "Comment.create",
@@ -1214,9 +1214,13 @@ test("service preserves comments that arrive before thread startup finishes", as
     });
 
     await service.processWebhookEvent(event.id);
-    assert.equal(db.listPendingTurnInputs(claim.stageRun.id).length, 1);
+    assert.equal(db.stageEvents.listPendingTurnInputs(claim.stageRun.id).length, 1);
 
-    db.updateStageRunThread({ stageRunId: claim.stageRun.id, threadId: "thread-prelaunch", turnId: "turn-prelaunch" });
+    db.issueWorkflows.updateStageRunThread({
+      stageRunId: claim.stageRun.id,
+      threadId: "thread-prelaunch",
+      turnId: "turn-prelaunch",
+    });
     codex.threads.set("thread-prelaunch", {
       id: "thread-prelaunch",
       preview: "PatchRelay stage",
@@ -1245,7 +1249,7 @@ test("service clears service-owned labels when the agent advances Linear state",
     const { db, codex, linear, service } = createService(baseDir);
     await service.start();
 
-    db.recordDesiredStage({
+    db.issueWorkflows.recordDesiredStage({
       projectId: "usertold",
       linearIssueId: "issue_2",
       issueKey: "USE-26",
@@ -1268,8 +1272,8 @@ test("service clears service-owned labels when the agent advances Linear state",
       labelIds: ["label-working"],
     });
 
-    const issue = db.getTrackedIssue("usertold", "issue_2");
-    const stageRun = db.getStageRun(issue!.activeStageRunId!);
+    const issue = db.issueWorkflows.getTrackedIssue("usertold", "issue_2");
+    const stageRun = db.issueWorkflows.getStageRun(issue!.activeStageRunId!);
     codex.completeThread(stageRun!.threadId!, [{ type: "agentMessage", id: "assistant-1", text: "Ready for review." }]);
     await flushQueues();
 
@@ -1294,7 +1298,7 @@ test("service rolls Linear back to Human Needed when launch fails", async () => 
     };
     await service.start();
 
-    db.recordDesiredStage({
+    db.issueWorkflows.recordDesiredStage({
       projectId: "usertold",
       linearIssueId: "issue_2",
       issueKey: "USE-26",
@@ -1314,7 +1318,7 @@ test("service rolls Linear back to Human Needed when launch fails", async () => 
       addNames: [],
       removeNames: ["llm-working", "llm-awaiting-handoff"],
     });
-    const issue = db.getTrackedIssue("usertold", "issue_2");
+    const issue = db.issueWorkflows.getTrackedIssue("usertold", "issue_2");
     assert.equal(issue?.lifecycleStatus, "failed");
     assert.match(linear.comments.get(issue?.statusCommentId ?? "")?.body ?? "", /launch-failed/);
 
@@ -1331,7 +1335,7 @@ test("service keeps the stage running when the status comment refresh fails afte
     linear.failNextCommentUpsert = true;
     await service.start();
 
-    db.recordDesiredStage({
+    db.issueWorkflows.recordDesiredStage({
       projectId: "usertold",
       linearIssueId: "issue_2",
       issueKey: "USE-31",
@@ -1345,8 +1349,8 @@ test("service keeps the stage running when the status comment refresh fails afte
 
     await service.processIssue({ projectId: "usertold", issueId: "issue_2" });
 
-    const issue = db.getTrackedIssue("usertold", "issue_2");
-    const stageRun = db.getStageRun(issue!.activeStageRunId!);
+    const issue = db.issueWorkflows.getTrackedIssue("usertold", "issue_2");
+    const stageRun = db.issueWorkflows.getStageRun(issue!.activeStageRunId!);
     assert.equal(stageRun?.status, "running");
     assert.equal(issue?.lifecycleStatus, "running");
     assert.equal(linear.issues.get("issue_2")?.stateName, "Implementing");
@@ -1392,7 +1396,7 @@ test("service startup reconciles finished and missing active threads", async () 
       ],
     });
 
-    db.upsertTrackedIssue({
+    db.issueWorkflows.upsertTrackedIssue({
       projectId: "usertold",
       linearIssueId: "issue_4",
       issueKey: "USE-28",
@@ -1403,7 +1407,7 @@ test("service startup reconciles finished and missing active threads", async () 
       lifecycleStatus: "running",
       lastWebhookAt: new Date().toISOString(),
     });
-    const claim = db.claimStageRun({
+    const claim = db.issueWorkflows.claimStageRun({
       projectId: "usertold",
       linearIssueId: "issue_4",
       stage: "development",
@@ -1414,7 +1418,11 @@ test("service startup reconciles finished and missing active threads", async () 
       promptText: "Recover this stage",
     });
     assert.ok(claim);
-    db.updateStageRunThread({ stageRunId: claim!.stageRun.id, threadId: "thread-finished", turnId: "turn-1" });
+    db.issueWorkflows.updateStageRunThread({
+      stageRunId: claim!.stageRun.id,
+      threadId: "thread-finished",
+      turnId: "turn-1",
+    });
     codex.threads.set("thread-finished", {
       id: "thread-finished",
       preview: "Recovered",
@@ -1423,7 +1431,7 @@ test("service startup reconciles finished and missing active threads", async () 
       turns: [{ id: "turn-1", status: "completed", items: [{ type: "agentMessage", id: "a1", text: "Recovered." }] }],
     });
 
-    db.upsertTrackedIssue({
+    db.issueWorkflows.upsertTrackedIssue({
       projectId: "usertold",
       linearIssueId: "issue_5",
       issueKey: "USE-29",
@@ -1434,7 +1442,7 @@ test("service startup reconciles finished and missing active threads", async () 
       lifecycleStatus: "running",
       lastWebhookAt: new Date().toISOString(),
     });
-    const missingClaim = db.claimStageRun({
+    const missingClaim = db.issueWorkflows.claimStageRun({
       projectId: "usertold",
       linearIssueId: "issue_5",
       stage: "development",
@@ -1445,15 +1453,19 @@ test("service startup reconciles finished and missing active threads", async () 
       promptText: "Recover missing stage",
     });
     assert.ok(missingClaim);
-    db.updateStageRunThread({ stageRunId: missingClaim!.stageRun.id, threadId: "thread-missing", turnId: "turn-2" });
+    db.issueWorkflows.updateStageRunThread({
+      stageRunId: missingClaim!.stageRun.id,
+      threadId: "thread-missing",
+      turnId: "turn-2",
+    });
     codex.removeThread("thread-missing");
 
     const service = new PatchRelayService(config, db, codex as never, linear, pino({ enabled: false }));
     await service.start();
     await flushQueues();
 
-    const finishedStage = db.getStageRun(claim!.stageRun.id);
-    const missingStage = db.getStageRun(missingClaim!.stageRun.id);
+    const finishedStage = db.issueWorkflows.getStageRun(claim!.stageRun.id);
+    const missingStage = db.issueWorkflows.getStageRun(missingClaim!.stageRun.id);
     assert.equal(finishedStage?.status, "completed");
     assert.equal(missingStage?.status, "failed");
     assert.equal(linear.issues.get("issue_5")?.stateName, "Human Needed");
@@ -1462,7 +1474,7 @@ test("service startup reconciles finished and missing active threads", async () 
       addNames: [],
       removeNames: ["llm-working", "llm-awaiting-handoff"],
     });
-    const missingIssue = db.getTrackedIssue("usertold", "issue_5");
+    const missingIssue = db.issueWorkflows.getTrackedIssue("usertold", "issue_5");
     assert.equal(missingIssue?.lifecycleStatus, "failed");
     assert.match(linear.comments.get(missingIssue?.statusCommentId ?? "")?.body ?? "", /stage-failed/);
 
@@ -1497,7 +1509,7 @@ test("service ignores webhook events when project routing is ambiguous", async (
     const service = new PatchRelayService(config, db, codex as never, linear, pino({ enabled: false }));
     await service.start();
 
-    const event = db.insertWebhookEvent({
+    const event = db.webhookEvents.insertWebhookEvent({
       webhookId: "delivery-ambiguous",
       receivedAt: new Date().toISOString(),
       eventType: "Issue.update",
@@ -1524,9 +1536,9 @@ test("service ignores webhook events when project routing is ambiguous", async (
     await service.processWebhookEvent(event.id);
     await flushQueues();
 
-    assert.equal(db.getTrackedIssueByKey("USE-30"), undefined);
+    assert.equal(db.issueWorkflows.getTrackedIssueByKey("USE-30"), undefined);
     assert.equal(codex.startedThreads.length, 0);
-    assert.equal(db.getWebhookEvent(event.id)?.processingStatus, "processed");
+    assert.equal(db.webhookEvents.getWebhookEvent(event.id)?.processingStatus, "processed");
 
     service.stop();
   } finally {
@@ -1595,7 +1607,7 @@ test("service acceptWebhook rejects invalid signatures, dedupes deliveries, and 
     assert.equal(duplicate.body.duplicate, true);
 
     await waitFor(() => {
-      const stored = db.getTrackedIssueByKey("USE-55");
+      const stored = db.issueWorkflows.getTrackedIssueByKey("USE-55");
       assert.ok(stored);
       assert.equal(codex.startedThreads.length, 1);
       assert.ok(stored.activeStageRunId);
@@ -1645,7 +1657,7 @@ test("service acceptWebhook accepts supplemental app webhooks without issue meta
     assert.equal(accepted.body.accepted, true);
 
     await waitFor(() => {
-      const stored = db.getWebhookEvent(1);
+      const stored = db.webhookEvents.getWebhookEvent(1);
       assert.ok(stored);
       assert.equal(stored.issueId, undefined);
       assert.equal(stored.processingStatus, "processed");
@@ -1677,7 +1689,7 @@ test("service redacts stored OAuth token ciphertext from installation-facing sum
     const linear = new FakeLinearClient();
     const service = new PatchRelayService(config, db, codex as never, linear, pino({ enabled: false }));
 
-    const installation = db.upsertLinearInstallation({
+    const installation = db.linearInstallations.upsertLinearInstallation({
       workspaceId: "team_1",
       workspaceName: "Workspace One",
       workspaceKey: "WS1",
@@ -1688,15 +1700,15 @@ test("service redacts stored OAuth token ciphertext from installation-facing sum
       scopesJson: JSON.stringify(["read", "write"]),
       tokenType: "Bearer",
     });
-    db.linkProjectInstallation("usertold", installation.id);
-    db.createOAuthState({
+    db.linearInstallations.linkProjectInstallation("usertold", installation.id);
+    db.linearInstallations.createOAuthState({
       provider: "linear",
       state: "state-1",
       redirectUri: config.linear.oauth.redirectUri,
       actor: "app",
       projectId: "usertold",
     });
-    db.finalizeOAuthState({
+    db.linearInstallations.finalizeOAuthState({
       state: "state-1",
       status: "completed",
       installationId: installation.id,

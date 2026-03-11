@@ -168,7 +168,7 @@ function withEnv(values: Record<string, string | undefined>, run: () => Promise<
 function seedDatabase(db: PatchRelayDatabase, config: AppConfig): void {
   mkdirSync(config.projects[0].worktreeRoot, { recursive: true });
 
-  db.upsertTrackedIssue({
+  db.issueWorkflows.upsertTrackedIssue({
     projectId: "usertold",
     linearIssueId: "issue-1",
     issueKey: "USE-54",
@@ -180,7 +180,7 @@ function seedDatabase(db: PatchRelayDatabase, config: AppConfig): void {
     lifecycleStatus: "failed",
     lastWebhookAt: "2026-03-09T08:00:00.000Z",
   });
-  const completed = db.claimStageRun({
+  const completed = db.issueWorkflows.claimStageRun({
     projectId: "usertold",
     linearIssueId: "issue-1",
     stage: "deploy",
@@ -191,15 +191,15 @@ function seedDatabase(db: PatchRelayDatabase, config: AppConfig): void {
     promptText: "Deploy it",
   });
   assert.ok(completed);
-  db.updateStageRunThread({ stageRunId: completed.stageRun.id, threadId: "thread-54", turnId: "turn-54" });
-  db.saveThreadEvent({
+  db.issueWorkflows.updateStageRunThread({ stageRunId: completed.stageRun.id, threadId: "thread-54", turnId: "turn-54" });
+  db.stageEvents.saveThreadEvent({
     stageRunId: completed.stageRun.id,
     threadId: "thread-54",
     turnId: "turn-54",
     method: "turn/started",
     eventJson: JSON.stringify({ threadId: "thread-54", turnId: "turn-54" }),
   });
-  db.finishStageRun({
+  db.issueWorkflows.finishStageRun({
     stageRunId: completed.stageRun.id,
     status: "failed",
     threadId: "thread-54",
@@ -225,7 +225,7 @@ function seedDatabase(db: PatchRelayDatabase, config: AppConfig): void {
     }),
   });
 
-  db.upsertTrackedIssue({
+  db.issueWorkflows.upsertTrackedIssue({
     projectId: "usertold",
     linearIssueId: "issue-2",
     issueKey: "USE-55",
@@ -234,9 +234,9 @@ function seedDatabase(db: PatchRelayDatabase, config: AppConfig): void {
     lifecycleStatus: "idle",
     lastWebhookAt: "2026-03-09T09:00:00.000Z",
   });
-  db.setIssueDesiredStage("usertold", "issue-2", undefined);
+  db.issueWorkflows.setIssueDesiredStage("usertold", "issue-2", undefined);
 
-  db.upsertTrackedIssue({
+  db.issueWorkflows.upsertTrackedIssue({
     projectId: "usertold",
     linearIssueId: "issue-3",
     issueKey: "USE-56",
@@ -247,7 +247,7 @@ function seedDatabase(db: PatchRelayDatabase, config: AppConfig): void {
     lifecycleStatus: "running",
     lastWebhookAt: "2026-03-09T10:00:00.000Z",
   });
-  const running = db.claimStageRun({
+  const running = db.issueWorkflows.claimStageRun({
     projectId: "usertold",
     linearIssueId: "issue-3",
     stage: "development",
@@ -258,7 +258,7 @@ function seedDatabase(db: PatchRelayDatabase, config: AppConfig): void {
     promptText: "Build it",
   });
   assert.ok(running);
-  db.updateStageRunThread({ stageRunId: running.stageRun.id, threadId: "thread-56", turnId: "turn-56" });
+  db.issueWorkflows.updateStageRunThread({ stageRunId: running.stageRun.id, threadId: "thread-56", turnId: "turn-56" });
 }
 
 function seedRuntimeFiles(config: AppConfig): void {
@@ -369,7 +369,7 @@ test("cli list and retry cover operator control flows", async () => {
     );
     assert.match(retryOut.read(), /Queued stage: review/);
 
-    const updated = db.getTrackedIssue("usertold", "issue-2");
+    const updated = db.issueWorkflows.getTrackedIssue("usertold", "issue-2");
     assert.equal(updated?.desiredStage, "review");
     assert.equal(updated?.lifecycleStatus, "queued");
 

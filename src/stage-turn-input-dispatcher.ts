@@ -1,6 +1,6 @@
 import type { Logger } from "pino";
 import type { CodexAppServerClient } from "./codex-app-server.ts";
-import type { StageTurnInputStoreProvider } from "./db-ports.ts";
+import type { StageTurnInputStoreProvider } from "./stage-event-ports.ts";
 import type { StageRunRecord } from "./types.ts";
 
 export class StageTurnInputDispatcher {

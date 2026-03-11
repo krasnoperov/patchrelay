@@ -1,7 +1,7 @@
 import pino from "pino";
 import { CodexAppServerClient } from "../codex-app-server.ts";
 import { PatchRelayDatabase } from "../db.ts";
-import type { AppConfig, CodexThreadItem, CodexThreadSummary, StageReport, StageRunRecord, WorkflowStage } from "../types.ts";
+import type { AppConfig, CodexThreadItem, CodexThreadSummary, StageReport, StageRunRecord, TrackedIssueRecord, WorkspaceRecord, WorkflowStage } from "../types.ts";
 import { resolveWorkflowStage } from "../workflow-policy.ts";
 
 interface LiveSummary {
@@ -14,8 +14,8 @@ interface LiveSummary {
 }
 
 export interface InspectResult {
-  issue: ReturnType<PatchRelayDatabase["getTrackedIssueByKey"]>;
-  workspace?: ReturnType<PatchRelayDatabase["getActiveWorkspaceForIssue"]>;
+  issue: TrackedIssueRecord | undefined;
+  workspace?: WorkspaceRecord;
   activeStageRun?: StageRunRecord;
   latestStageRun?: StageRunRecord;
   latestReport?: StageReport;
@@ -25,7 +25,7 @@ export interface InspectResult {
 }
 
 export interface ReportResult {
-  issue: NonNullable<ReturnType<PatchRelayDatabase["getTrackedIssueByKey"]>>;
+  issue: TrackedIssueRecord;
   stages: Array<{
     stageRun: StageRunRecord;
     report?: StageReport;
@@ -34,7 +34,7 @@ export interface ReportResult {
 }
 
 export interface EventsResult {
-  issue: NonNullable<ReturnType<PatchRelayDatabase["getTrackedIssueByKey"]>>;
+  issue: TrackedIssueRecord;
   stageRun: StageRunRecord;
   events: Array<{
     id: number;
@@ -49,8 +49,8 @@ export interface EventsResult {
 }
 
 export interface WorktreeResult {
-  issue: NonNullable<ReturnType<PatchRelayDatabase["getTrackedIssueByKey"]>>;
-  workspace: NonNullable<ReturnType<PatchRelayDatabase["getActiveWorkspaceForIssue"]>>;
+  issue: TrackedIssueRecord;
+  workspace: WorkspaceRecord;
   repoId: string;
 }
 
@@ -59,7 +59,7 @@ export interface OpenResult extends WorktreeResult {
 }
 
 export interface RetryResult {
-  issue: NonNullable<ReturnType<PatchRelayDatabase["getTrackedIssueByKey"]>>;
+  issue: TrackedIssueRecord;
   stage: WorkflowStage;
   reason?: string;
 }
@@ -153,7 +153,7 @@ function summarizeThread(thread: CodexThreadSummary, latestTimestampSeen?: strin
 }
 
 function latestEventTimestamp(db: PatchRelayDatabase, stageRunId: number): string | undefined {
-  const events = db.listThreadEvents(stageRunId);
+  const events = db.stageEvents.listThreadEvents(stageRunId);
   return events.at(-1)?.createdAt;
 }
 
@@ -189,14 +189,14 @@ export class CliDataAccess {
   }
 
   async inspect(issueKey: string): Promise<InspectResult | undefined> {
-    const issue = this.db.getTrackedIssueByKey(issueKey);
+    const issue = this.db.issueWorkflows.getTrackedIssueByKey(issueKey);
     if (!issue) {
       return undefined;
     }
 
-    const workspace = this.db.getActiveWorkspaceForIssue(issue.projectId, issue.linearIssueId);
-    const activeStageRun = issue.activeStageRunId ? this.db.getStageRun(issue.activeStageRunId) : undefined;
-    const latestStageRun = this.db.getLatestStageRunForIssue(issue.projectId, issue.linearIssueId);
+    const workspace = this.db.issueWorkflows.getActiveWorkspaceForIssue(issue.projectId, issue.linearIssueId);
+    const activeStageRun = issue.activeStageRunId ? this.db.issueWorkflows.getStageRun(issue.activeStageRunId) : undefined;
+    const latestStageRun = this.db.issueWorkflows.getLatestStageRunForIssue(issue.projectId, issue.linearIssueId);
     const latestReport = latestStageRun?.reportJson ? (JSON.parse(latestStageRun.reportJson) as StageReport) : undefined;
     const latestSummary = safeJsonParse(latestStageRun?.summaryJson);
     const live =
@@ -225,18 +225,18 @@ export class CliDataAccess {
 
   async live(issueKey: string): Promise<
     | {
-        issue: NonNullable<ReturnType<PatchRelayDatabase["getTrackedIssueByKey"]>>;
+        issue: TrackedIssueRecord;
         stageRun: StageRunRecord;
         live?: LiveSummary;
       }
     | undefined
   > {
-    const issue = this.db.getTrackedIssueByKey(issueKey);
+    const issue = this.db.issueWorkflows.getTrackedIssueByKey(issueKey);
     if (!issue?.activeStageRunId) {
       return undefined;
     }
 
-    const stageRun = this.db.getStageRun(issue.activeStageRunId);
+    const stageRun = this.db.issueWorkflows.getStageRun(issue.activeStageRunId);
     if (!stageRun) {
       return undefined;
     }
@@ -253,13 +253,13 @@ export class CliDataAccess {
   }
 
   report(issueKey: string, options?: { stage?: WorkflowStage; stageRunId?: number }): ReportResult | undefined {
-    const issue = this.db.getTrackedIssueByKey(issueKey);
+    const issue = this.db.issueWorkflows.getTrackedIssueByKey(issueKey);
     if (!issue) {
       return undefined;
     }
 
     const stages = this.db
-      .listStageRunsForIssue(issue.projectId, issue.linearIssueId)
+      .issueWorkflows.listStageRunsForIssue(issue.projectId, issue.linearIssueId)
       .filter((stageRun) => {
         if (options?.stageRunId !== undefined && stageRun.id !== options.stageRunId) {
           return false;
@@ -280,21 +280,21 @@ export class CliDataAccess {
   }
 
   events(issueKey: string, options?: { stageRunId?: number; method?: string; afterId?: number }): EventsResult | undefined {
-    const issue = this.db.getTrackedIssueByKey(issueKey);
+    const issue = this.db.issueWorkflows.getTrackedIssueByKey(issueKey);
     if (!issue) {
       return undefined;
     }
 
     const stageRun =
-      (options?.stageRunId !== undefined ? this.db.getStageRun(options.stageRunId) : undefined) ??
-      (issue.activeStageRunId ? this.db.getStageRun(issue.activeStageRunId) : undefined) ??
-      this.db.getLatestStageRunForIssue(issue.projectId, issue.linearIssueId);
+      (options?.stageRunId !== undefined ? this.db.issueWorkflows.getStageRun(options.stageRunId) : undefined) ??
+      (issue.activeStageRunId ? this.db.issueWorkflows.getStageRun(issue.activeStageRunId) : undefined) ??
+      this.db.issueWorkflows.getLatestStageRunForIssue(issue.projectId, issue.linearIssueId);
     if (!stageRun || stageRun.projectId !== issue.projectId || stageRun.linearIssueId !== issue.linearIssueId) {
       return undefined;
     }
 
     const events = this.db
-      .listThreadEvents(stageRun.id)
+      .stageEvents.listThreadEvents(stageRun.id)
       .filter((event) => (options?.method ? event.method === options.method : true))
       .filter((event) => (options?.afterId !== undefined ? event.id > options.afterId : true))
       .map((event) => ({
@@ -306,12 +306,12 @@ export class CliDataAccess {
   }
 
   worktree(issueKey: string): WorktreeResult | undefined {
-    const issue = this.db.getTrackedIssueByKey(issueKey);
+    const issue = this.db.issueWorkflows.getTrackedIssueByKey(issueKey);
     if (!issue) {
       return undefined;
     }
 
-    const workspace = this.db.getActiveWorkspaceForIssue(issue.projectId, issue.linearIssueId);
+    const workspace = this.db.issueWorkflows.getActiveWorkspaceForIssue(issue.projectId, issue.linearIssueId);
     if (!workspace) {
       return undefined;
     }
@@ -337,7 +337,7 @@ export class CliDataAccess {
   }
 
   retry(issueKey: string, options?: { stage?: WorkflowStage; reason?: string }): RetryResult | undefined {
-    const issue = this.db.getTrackedIssueByKey(issueKey);
+    const issue = this.db.issueWorkflows.getTrackedIssueByKey(issueKey);
     if (!issue) {
       return undefined;
     }
@@ -350,8 +350,8 @@ export class CliDataAccess {
       throw new Error(`Unable to infer a stage for ${issueKey}; pass --stage.`);
     }
 
-    this.db.setIssueDesiredStage(issue.projectId, issue.linearIssueId, stage, `cli-retry-${Date.now()}`);
-    const updated = this.db.getTrackedIssue(issue.projectId, issue.linearIssueId)!;
+    this.db.issueWorkflows.setIssueDesiredStage(issue.projectId, issue.linearIssueId, stage, `cli-retry-${Date.now()}`);
+    const updated = this.db.issueWorkflows.getTrackedIssue(issue.projectId, issue.linearIssueId)!;
     return {
       issue: updated,
       stage,

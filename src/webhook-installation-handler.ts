@@ -1,5 +1,5 @@
 import type { Logger } from "pino";
-import type { LinearInstallationStoreProvider } from "./db-ports.ts";
+import type { LinearInstallationStoreProvider } from "./installation-ports.ts";
 import type { AppConfig, NormalizedEvent } from "./types.ts";
 
 export class InstallationWebhookHandler {

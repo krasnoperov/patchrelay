@@ -240,7 +240,7 @@ function createService(baseDir: string) {
 }
 
 function queueIssue(db: PatchRelayDatabase): void {
-  db.recordDesiredStage({
+  db.issueWorkflows.recordDesiredStage({
     projectId: "usertold",
     linearIssueId: "issue_1",
     issueKey: "USE-90",
@@ -271,7 +271,7 @@ test("service rejects symlinked preexisting worktree paths", async () => {
     );
 
     assert.equal(codex.startedThreads.length, 0);
-    assert.equal(db.getTrackedIssue("usertold", "issue_1")?.lifecycleStatus, "failed");
+    assert.equal(db.issueWorkflows.getTrackedIssue("usertold", "issue_1")?.lifecycleStatus, "failed");
     assert.equal(linear.issues.get("issue_1")?.stateName, "Human Needed");
     assert.match(
       [...linear.comments.values()].at(-1)?.body ?? "",
@@ -300,7 +300,7 @@ test("service rejects preexisting directories that are not registered git worktr
     );
 
     assert.equal(codex.startedThreads.length, 0);
-    assert.equal(db.getTrackedIssue("usertold", "issue_1")?.lifecycleStatus, "failed");
+    assert.equal(db.issueWorkflows.getTrackedIssue("usertold", "issue_1")?.lifecycleStatus, "failed");
     assert.equal(linear.issues.get("issue_1")?.stateName, "Human Needed");
     assert.match(
       [...linear.comments.values()].at(-1)?.body ?? "",

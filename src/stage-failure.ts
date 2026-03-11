@@ -4,7 +4,7 @@ import {
   resolveFallbackLinearState,
   resolveWorkflowLabelCleanup,
 } from "./linear-workflow.ts";
-import type { IssueWorkflowLifecycleStoreProvider } from "./db-ports.ts";
+import type { IssueWorkflowLifecycleStoreProvider } from "./workflow-ports.ts";
 import type { LinearClientProvider, ProjectConfig, StageRunRecord, TrackedIssueRecord } from "./types.ts";
 
 function normalizeStateName(value: string | undefined): string | undefined {

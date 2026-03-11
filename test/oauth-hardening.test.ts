@@ -115,7 +115,7 @@ test("completeLinearOAuth rejects expired OAuth states and marks them failed", a
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
     db.runMigrations();
 
-    const oauthState = db.createOAuthState({
+    const oauthState = db.linearInstallations.createOAuthState({
       provider: "linear",
       state: "state-expired",
       projectId: "usertold",
@@ -138,7 +138,7 @@ test("completeLinearOAuth rejects expired OAuth states and marks them failed", a
       /OAuth state has expired/,
     );
 
-    const refreshed = db.getOAuthState(oauthState.state);
+    const refreshed = db.linearInstallations.getOAuthState(oauthState.state);
     assert.equal(refreshed?.status, "failed");
     assert.equal(refreshed?.errorMessage, "OAuth state expired");
     assert.equal(Boolean(refreshed?.consumedAt), true);

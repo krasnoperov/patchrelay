@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import type { Logger } from "pino";
-import type { LinearInstallationStore } from "./db-ports.ts";
+import type { LinearInstallationStore } from "./installation-ports.ts";
 import { encryptSecret } from "./token-crypto.ts";
 import type { AppConfig, LinearInstallationRecord, LinearOauthTokenSet } from "./types.ts";
 

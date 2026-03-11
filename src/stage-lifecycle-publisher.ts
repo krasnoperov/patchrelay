@@ -1,5 +1,5 @@
 import type { Logger } from "pino";
-import type { IssueWorkflowLifecycleStoreProvider } from "./db-ports.ts";
+import type { IssueWorkflowLifecycleStoreProvider } from "./workflow-ports.ts";
 import {
   buildAwaitingHandoffComment,
   buildRunningStatusComment,

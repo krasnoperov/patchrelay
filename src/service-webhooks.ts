@@ -1,5 +1,5 @@
 import type { Logger } from "pino";
-import type { WebhookEventStoreProvider } from "./db-ports.ts";
+import type { WebhookEventStoreProvider } from "./webhook-event-ports.ts";
 import type { AppConfig, LinearWebhookPayload, NormalizedEvent } from "./types.ts";
 import { archiveWebhook } from "./webhook-archive.ts";
 import { normalizeWebhook } from "./webhooks.ts";

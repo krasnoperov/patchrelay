@@ -1,6 +1,9 @@
 import type { Logger } from "pino";
 import type { CodexAppServerClient } from "./codex-app-server.ts";
-import type { IssueWorkflowWebhookStoreProvider, LinearInstallationStoreProvider, StageEventQueryStoreProvider, StageTurnInputStoreProvider, WebhookEventStoreProvider } from "./db-ports.ts";
+import type { LinearInstallationStoreProvider } from "./installation-ports.ts";
+import type { StageEventQueryStoreProvider, StageTurnInputStoreProvider } from "./stage-event-ports.ts";
+import type { IssueWorkflowWebhookStoreProvider } from "./workflow-ports.ts";
+import type { WebhookEventStoreProvider } from "./webhook-event-ports.ts";
 import { resolveProject, trustedActorAllowed } from "./project-resolution.ts";
 import { StageAgentActivityPublisher } from "./stage-agent-activity-publisher.ts";
 import { StageTurnInputDispatcher } from "./stage-turn-input-dispatcher.ts";

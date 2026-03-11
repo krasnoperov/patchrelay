@@ -1,6 +1,6 @@
 import type { Logger } from "pino";
 import type { CodexAppServerClient } from "./codex-app-server.ts";
-import type { ActiveStageRunReconciler, ReadyIssueSource } from "./db-ports.ts";
+import type { ActiveStageRunReconciler, ReadyIssueSource } from "./workflow-ports.ts";
 import { SerialWorkQueue } from "./service-queue.ts";
 
 const ISSUE_KEY_DELIMITER = "::";

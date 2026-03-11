@@ -2,12 +2,14 @@ import type { Logger } from "pino";
 import type { CodexNotification } from "./codex-app-server.ts";
 import type { CodexAppServerClient } from "./codex-app-server.ts";
 import type {
+  StageEventQueryStoreProvider,
+  StageTurnInputStoreProvider,
+} from "./stage-event-ports.ts";
+import type {
   IssueWorkflowExecutionStoreProvider,
   IssueWorkflowLifecycleStoreProvider,
   IssueWorkflowQueryStoreProvider,
-  StageEventQueryStoreProvider,
-  StageTurnInputStoreProvider,
-} from "./db-ports.ts";
+} from "./workflow-ports.ts";
 import { syncFailedStageToLinear } from "./stage-failure.ts";
 import {
   buildFailedStageReport,

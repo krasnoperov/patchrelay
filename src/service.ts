@@ -1,7 +1,10 @@
 import type { Logger } from "pino";
 import type { CodexAppServerClient, CodexNotification } from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
-import type { ActiveStageRunReconciler, ReadyIssueSource } from "./db-ports.ts";
+import type { LinearInstallationStoreProvider } from "./installation-ports.ts";
+import type { StageEventQueryStoreProvider, StageTurnInputStoreProvider } from "./stage-event-ports.ts";
+import type { IssueWorkflowExecutionStoreProvider, IssueWorkflowLifecycleStoreProvider, IssueWorkflowQueryStoreProvider, IssueWorkflowWebhookStoreProvider, ReadyIssueSource } from "./workflow-ports.ts";
+import type { WebhookEventStoreProvider } from "./webhook-event-ports.ts";
 import { IssueQueryService } from "./issue-query-service.ts";
 import { LinearOAuthService } from "./linear-oauth-service.ts";
 import { ServiceRuntime } from "./service-runtime.ts";
@@ -10,6 +13,30 @@ import { type IssueQueueItem, ServiceStageRunner } from "./service-stage-runner.
 import { ServiceWebhookProcessor } from "./service-webhook-processor.ts";
 import { acceptIncomingWebhook } from "./service-webhooks.ts";
 import type { AppConfig, LinearClient, LinearClientProvider } from "./types.ts";
+
+type ServiceStores = WebhookEventStoreProvider &
+  IssueWorkflowExecutionStoreProvider &
+  IssueWorkflowLifecycleStoreProvider &
+  IssueWorkflowQueryStoreProvider &
+  IssueWorkflowWebhookStoreProvider &
+  StageTurnInputStoreProvider &
+  StageEventQueryStoreProvider &
+  LinearInstallationStoreProvider;
+
+function createServiceStores(db: PatchRelayDatabase): ServiceStores {
+  return {
+    webhookEvents: db.webhookEvents,
+    issueWorkflows: db.issueWorkflows,
+    stageEvents: db.stageEvents,
+    linearInstallations: db.linearInstallations,
+  };
+}
+
+function createReadyIssueSource(stores: ServiceStores): ReadyIssueSource {
+  return {
+    listIssuesReadyForExecution: () => stores.issueWorkflows.listIssuesReadyForExecution(),
+  };
+}
 
 export class PatchRelayService {
   readonly linearProvider: LinearClientProvider;
@@ -28,28 +55,18 @@ export class PatchRelayService {
     readonly logger: Logger,
   ) {
     this.linearProvider = toLinearClientProvider(linearProvider);
-    const stores = {
-      webhookEvents: db.webhookEvents,
-      issueWorkflows: db.issueWorkflows,
-      stageEvents: db.stageEvents,
-      linearInstallations: db.linearInstallations,
-    };
+    const stores = createServiceStores(db);
     this.stageRunner = new ServiceStageRunner(config, stores, codex, this.linearProvider, logger);
+    let enqueueIssue: (projectId: string, issueId: string) => void = () => {
+      throw new Error("Service runtime enqueueIssue is not initialized");
+    };
 
-    const runtime = new ServiceRuntime(
-      codex,
-      logger,
-      this.stageFinalizerProxy(),
-      stores.issueWorkflows as ReadyIssueSource,
-      this.webhookProcessorProxy(),
-      this.issueProcessorProxy(),
-    );
     this.stageFinalizer = new ServiceStageFinalizer(
       config,
       stores,
       codex,
       this.linearProvider,
-      (projectId, issueId) => runtime.enqueueIssue(projectId, issueId),
+      (projectId, issueId) => enqueueIssue(projectId, issueId),
       logger,
     );
     this.webhookProcessor = new ServiceWebhookProcessor(
@@ -57,9 +74,20 @@ export class PatchRelayService {
       stores,
       this.linearProvider,
       codex,
-      (projectId, issueId) => runtime.enqueueIssue(projectId, issueId),
+      (projectId, issueId) => enqueueIssue(projectId, issueId),
       logger,
     );
+    const runtime = new ServiceRuntime(
+      codex,
+      logger,
+      this.stageFinalizer,
+      createReadyIssueSource(stores),
+      this.webhookProcessor,
+      {
+        processIssue: (item) => this.stageRunner.run(item),
+      },
+    );
+    enqueueIssue = (projectId, issueId) => runtime.enqueueIssue(projectId, issueId);
     this.oauthService = new LinearOAuthService(config, stores, logger);
     this.queryService = new IssueQueryService(stores, codex, this.stageFinalizer);
     this.runtime = runtime;
@@ -67,24 +95,6 @@ export class PatchRelayService {
     this.codex.on("notification", (notification: CodexNotification) => {
       void this.stageFinalizer.handleCodexNotification(notification);
     });
-  }
-
-  private stageFinalizerProxy(): ActiveStageRunReconciler {
-    return {
-      reconcileActiveStageRuns: () => this.stageFinalizer.reconcileActiveStageRuns(),
-    };
-  }
-
-  private webhookProcessorProxy() {
-    return {
-      processWebhookEvent: (eventId: number) => this.processWebhookEvent(eventId),
-    };
-  }
-
-  private issueProcessorProxy() {
-    return {
-      processIssue: (item: IssueQueueItem) => this.processIssue(item),
-    };
   }
 
   async start(): Promise<void> {

@@ -191,7 +191,7 @@ function createHarness(baseDir: string) {
 }
 
 function installPatchRelayApp(db: PatchRelayDatabase, projectId = "usertold", actorId = "patchrelay-app") {
-  const installation = db.saveLinearInstallation({
+  const installation = db.linearInstallations.saveLinearInstallation({
     workspaceId: "workspace-1",
     workspaceName: "Workspace One",
     workspaceKey: "WS1",
@@ -200,7 +200,7 @@ function installPatchRelayApp(db: PatchRelayDatabase, projectId = "usertold", ac
     accessTokenCiphertext: "ciphertext",
     scopesJson: JSON.stringify(["read", "write"]),
   });
-  db.linkProjectInstallation(projectId, installation.id);
+  db.linearInstallations.linkProjectInstallation(projectId, installation.id);
   return installation;
 }
 
@@ -208,7 +208,7 @@ test("webhook processor records desired stage and enqueues matching issues", asy
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-processor-"));
   try {
     const { db, processor, enqueuedIssues } = createHarness(baseDir);
-    const event = db.insertWebhookEvent({
+    const event = db.webhookEvents.insertWebhookEvent({
       webhookId: "delivery-start",
       receivedAt: new Date().toISOString(),
       eventType: "Issue.update",
@@ -235,9 +235,9 @@ test("webhook processor records desired stage and enqueues matching issues", asy
 
     await processor.processWebhookEvent(event.id);
 
-    const issue = db.getTrackedIssue("usertold", "issue_1");
+    const issue = db.issueWorkflows.getTrackedIssue("usertold", "issue_1");
     assert.equal(issue?.desiredStage, "development");
-    assert.equal(db.getWebhookEvent(event.id)?.processingStatus, "processed");
+    assert.equal(db.webhookEvents.getWebhookEvent(event.id)?.processingStatus, "processed");
     assert.deepEqual(enqueuedIssues, [{ projectId: "usertold", issueId: "issue_1" }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -250,7 +250,7 @@ test("webhook processor routes prompted agent follow-ups into the active stage",
     const { config, db, linear, codex, processor, enqueuedIssues } = createHarness(baseDir);
     installPatchRelayApp(db);
 
-    db.recordDesiredStage({
+    db.issueWorkflows.recordDesiredStage({
       projectId: "usertold",
       linearIssueId: "issue_1",
       issueKey: "USE-25",
@@ -261,7 +261,7 @@ test("webhook processor routes prompted agent follow-ups into the active stage",
       desiredWebhookId: "delivery-start",
       lastWebhookAt: new Date().toISOString(),
     });
-    const claim = db.claimStageRun({
+    const claim = db.issueWorkflows.claimStageRun({
       projectId: "usertold",
       linearIssueId: "issue_1",
       stage: "development",
@@ -272,13 +272,13 @@ test("webhook processor routes prompted agent follow-ups into the active stage",
       promptText: "Implement carefully.",
     });
     assert.ok(claim);
-    db.updateStageRunThread({
+    db.issueWorkflows.updateStageRunThread({
       stageRunId: claim.stageRun.id,
       threadId: "thread-1",
       turnId: "turn-1",
     });
 
-    const event = db.insertWebhookEvent({
+    const event = db.webhookEvents.insertWebhookEvent({
       webhookId: "delivery-agent-prompt",
       receivedAt: new Date().toISOString(),
       eventType: "AgentSessionEvent.prompted",
@@ -312,7 +312,7 @@ test("webhook processor routes prompted agent follow-ups into the active stage",
 
     await processor.processWebhookEvent(event.id);
 
-    const pending = db.listPendingTurnInputs(claim.stageRun.id);
+    const pending = db.stageEvents.listPendingTurnInputs(claim.stageRun.id);
     assert.equal(pending.length, 0);
     assert.equal(codex.steeredTurns.length, 1);
     assert.match(codex.steeredTurns[0]!.input, /Please add tests/);
@@ -336,7 +336,7 @@ test("webhook processor keeps mention-only sessions conversational instead of en
     const { db, linear, processor, enqueuedIssues } = createHarness(baseDir);
     installPatchRelayApp(db);
 
-    const event = db.insertWebhookEvent({
+    const event = db.webhookEvents.insertWebhookEvent({
       webhookId: "delivery-agent-created-mentioned",
       receivedAt: new Date().toISOString(),
       eventType: "AgentSessionEvent.created",
@@ -368,7 +368,7 @@ test("webhook processor keeps mention-only sessions conversational instead of en
     await processor.processWebhookEvent(event.id);
 
     assert.deepEqual(enqueuedIssues, []);
-    assert.equal(db.getTrackedIssue("usertold", "issue_1")?.desiredStage, undefined);
+    assert.equal(db.issueWorkflows.getTrackedIssue("usertold", "issue_1")?.desiredStage, undefined);
     assert.ok(
       linear.agentActivities.some(
         (activity) =>
@@ -386,15 +386,15 @@ test("webhook processor handles installation-only webhooks without enqueuing iss
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-processor-installation-"));
   try {
     const { db, processor, enqueuedIssues } = createHarness(baseDir);
-    const installation = db.saveLinearInstallation({
+    const installation = db.linearInstallations.saveLinearInstallation({
       actorId: "app_user_1",
       actorName: "PatchRelay",
       accessTokenCiphertext: "ciphertext",
       scopesJson: JSON.stringify(["read", "write"]),
     });
-    db.linkProjectInstallation("usertold", installation.id);
+    db.linearInstallations.linkProjectInstallation("usertold", installation.id);
 
-    const event = db.insertWebhookEvent({
+    const event = db.webhookEvents.insertWebhookEvent({
       webhookId: "delivery-permission-change",
       receivedAt: new Date().toISOString(),
       eventType: "PermissionChange.teamAccessChanged",
@@ -419,7 +419,7 @@ test("webhook processor handles installation-only webhooks without enqueuing iss
 
     await processor.processWebhookEvent(event.id);
 
-    assert.equal(db.getWebhookEvent(event.id)?.processingStatus, "processed");
+    assert.equal(db.webhookEvents.getWebhookEvent(event.id)?.processingStatus, "processed");
     assert.deepEqual(enqueuedIssues, []);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });

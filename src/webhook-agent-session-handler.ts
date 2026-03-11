@@ -1,4 +1,5 @@
-import type { IssueWorkflowWebhookStoreProvider, StageEventQueryStoreProvider } from "./db-ports.ts";
+import type { StageEventQueryStoreProvider } from "./stage-event-ports.ts";
+import type { IssueWorkflowWebhookStoreProvider } from "./workflow-ports.ts";
 import type { StageAgentActivityPublisher } from "./stage-agent-activity-publisher.ts";
 import type { StageTurnInputDispatcher } from "./stage-turn-input-dispatcher.ts";
 import type { NormalizedEvent, ProjectConfig, TrackedIssueRecord, WorkflowStage } from "./types.ts";

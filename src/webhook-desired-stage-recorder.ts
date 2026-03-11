@@ -1,4 +1,5 @@
-import type { IssueWorkflowWebhookStoreProvider, LinearInstallationStoreProvider } from "./db-ports.ts";
+import type { LinearInstallationStoreProvider } from "./installation-ports.ts";
+import type { IssueWorkflowWebhookStoreProvider } from "./workflow-ports.ts";
 import { triggerEventAllowed } from "./project-resolution.ts";
 import type { AgentSessionMetadata, NormalizedEvent, ProjectConfig, StageRunRecord, TrackedIssueRecord, WorkflowStage } from "./types.ts";
 import { resolveWorkflowStage } from "./workflow-policy.ts";

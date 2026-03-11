@@ -1,5 +1,6 @@
 import type { CodexAppServerClient } from "./codex-app-server.ts";
-import type { IssueWorkflowQueryStoreProvider, StageEventQueryStoreProvider } from "./db-ports.ts";
+import type { StageEventQueryStoreProvider } from "./stage-event-ports.ts";
+import type { IssueWorkflowQueryStoreProvider } from "./workflow-ports.ts";
 import { summarizeCurrentThread } from "./stage-reporting.ts";
 import type { StageReport } from "./types.ts";
 import { safeJsonParse } from "./utils.ts";

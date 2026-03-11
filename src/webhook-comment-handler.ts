@@ -1,4 +1,5 @@
-import type { IssueWorkflowWebhookStoreProvider, StageEventQueryStoreProvider } from "./db-ports.ts";
+import type { StageEventQueryStoreProvider } from "./stage-event-ports.ts";
+import type { IssueWorkflowWebhookStoreProvider } from "./workflow-ports.ts";
 import { isPatchRelayStatusComment } from "./linear-workflow.ts";
 import type { StageTurnInputDispatcher } from "./stage-turn-input-dispatcher.ts";
 import type { NormalizedEvent } from "./types.ts";

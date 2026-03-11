@@ -477,9 +477,9 @@ export class DatabaseBackedLinearClientProvider implements LinearClientProvider 
   ) {}
 
   async forProject(projectId: string): Promise<LinearClient | undefined> {
-    const link = this.db.getProjectInstallation(projectId);
+    const link = this.db.linearInstallations.getProjectInstallation(projectId);
     if (link) {
-      const installation = this.db.getLinearInstallation(link.installationId);
+      const installation = this.db.linearInstallations.getLinearInstallation(link.installationId);
       if (!installation) {
         return undefined;
       }
@@ -493,7 +493,7 @@ export class DatabaseBackedLinearClientProvider implements LinearClientProvider 
       if (shouldRefreshToken(installation.expiresAt) && refreshToken) {
         const refreshed = await refreshLinearOAuthToken(this.config, refreshToken);
         accessToken = refreshed.accessToken;
-        this.db.updateLinearInstallationTokens(installation.id, {
+        this.db.linearInstallations.updateLinearInstallationTokens(installation.id, {
           accessTokenCiphertext: encryptSecret(refreshed.accessToken, encryptionKey),
           ...(refreshed.refreshToken
             ? { refreshTokenCiphertext: encryptSecret(refreshed.refreshToken, encryptionKey) }
