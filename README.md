@@ -67,6 +67,39 @@ For the exact OAuth app settings and webhook categories, use the Linear onboardi
 4. PatchRelay persists thread ids, run state, and observations so the work stays inspectable and resumable.
 5. Linear comments can steer the active run, and an operator can take over from the exact same worktree when needed.
 
+## Workflow Configuration
+
+PatchRelay keeps workflow configuration simple:
+
+- route issues to a project by team, issue prefix, or labels
+- when an issue is delegated to PatchRelay, it looks at the current Linear state
+- that Linear state selects the workflow stage to run
+- that stage selects the workflow file from the repo
+
+Most teams only configure:
+
+- which issues belong to which project
+- which Linear states mean implementation, review, deploy, or cleanup
+- which workflow file belongs to each stage
+
+Today the runnable stage set is still fixed to `development`, `review`, `deploy`, and optional `cleanup`, but each project can rename those states and point them at different workflow files.
+
+Examples:
+
+- a standard project can map `Start -> development`, `Review -> review`, and `Deploy -> deploy`
+- a push-to-main project can automate implementation and review, then let GitHub Actions handle deployment while PatchRelay moves failures back to `Human Needed`
+- a project with a QA gate can map a custom Linear state into `review` and keep the QA instructions in its review workflow file
+
+## Access Control
+
+PatchRelay reacts only for issues that route to a configured project.
+
+- use `linear_team_ids`, `issue_key_prefixes`, and optional labels to keep unrelated or public boards out of scope
+- in the normal setup, anyone with access to the routed Linear project can delegate work to the PatchRelay app
+- use `trusted_actors` only when a project needs a narrower allowlist inside Linear
+
+That keeps the default model simple without forcing an extra allowlist for every team.
+
 ## Quick Start
 
 ### 1. Install
