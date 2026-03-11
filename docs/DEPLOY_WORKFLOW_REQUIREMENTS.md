@@ -1,5 +1,7 @@
 # Deploy Workflow Requirements
 
+Each repo-local `DEPLOY_WORKFLOW.md` is policy consumed by a PatchRelay-managed deploy stage run. It should define the allowed deployment path, the required validation, and the evidence needed for read-only reporting.
+
 Each repo-local `DEPLOY_WORKFLOW.md` should tell the deploy agent:
 
 1. how to confirm the issue is approved for deployment

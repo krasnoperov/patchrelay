@@ -1,5 +1,7 @@
 # Review Workflow Requirements
 
+Each repo-local `REVIEW_WORKFLOW.md` is policy consumed by a PatchRelay-managed review stage run. It should define how review uses the existing workspace and prior evidence, and what must be captured for the next handoff.
+
 Each repo-local `REVIEW_WORKFLOW.md` should tell the review agent:
 
 1. how to confirm the issue is ready for review

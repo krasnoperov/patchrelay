@@ -1,6 +1,6 @@
 # Contributing
 
-PatchRelay is currently focused on a self-hosted Linear-to-Codex workflow. The best contributions are narrowly scoped changes that improve reliability, operator safety, observability, and documentation.
+PatchRelay is currently focused on a self-hosted execution harness for Linear-driven Codex work. The best contributions are narrowly scoped changes that improve reliability, operator safety, observability, and documentation.
 
 ## Local development
 

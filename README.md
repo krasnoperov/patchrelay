@@ -223,7 +223,7 @@ Use the README for the product overview and quick start. Use the docs for operat
 
 - [Self-hosting and deployment](https://github.com/krasnoperov/patchrelay/blob/main/docs/self-hosting.md)
 - [Linear agent onboarding](https://github.com/krasnoperov/patchrelay/blob/main/docs/linear-agent-onboarding.md)
-- [CLI reference](https://github.com/krasnoperov/patchrelay/blob/main/docs/cli-spec.md)
+- [CLI reference](https://github.com/krasnoperov/patchrelay/blob/main/docs/cli-reference.md)
 - [Architecture](https://github.com/krasnoperov/patchrelay/blob/main/docs/architecture.md)
 - [Codex integration details](https://github.com/krasnoperov/patchrelay/blob/main/docs/codex-workflow.md)
 - [Workflow file requirements](https://github.com/krasnoperov/patchrelay/blob/main/docs/IMPLEMENTATION_WORKFLOW_REQUIREMENTS.md)

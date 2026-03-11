@@ -1,5 +1,7 @@
 # Cleanup Workflow Requirements
 
+Each repo-local `CLEANUP_WORKFLOW.md` is policy consumed by a PatchRelay-managed cleanup stage run. It should define what cleanup is allowed to do, what final notes must be preserved, and when the issue can be fully closed.
+
 Each repo-local `CLEANUP_WORKFLOW.md` should tell the cleanup agent:
 
 1. how to confirm deployment is complete and cleanup is allowed

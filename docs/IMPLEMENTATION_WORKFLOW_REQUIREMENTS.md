@@ -1,5 +1,7 @@
 # Development Workflow Requirements
 
+Each repo-local `IMPLEMENTATION_WORKFLOW.md` is policy consumed by a PatchRelay-managed implementation stage run. It should give the harness enough guidance to execute safely inside the issue worktree and leave evidence for read-only reporting.
+
 Each repo-local `IMPLEMENTATION_WORKFLOW.md` should tell the development agent:
 
 1. how to confirm the issue is still in the development-ready Linear state

@@ -1,4 +1,6 @@
-# PatchRelay Implementation Plan
+# Archived: PatchRelay Implementation Plan
+
+This document is kept only as historical planning context. The current product docs live in the main documentation set and describe the shipped self-hosted execution harness rather than the original MVP plan.
 
 ## Outcome
 

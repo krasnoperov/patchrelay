@@ -1,8 +1,8 @@
-# Linear Agent Onboarding
+# Linear App Setup For PatchRelay
 
-## Goal
+## Purpose
 
-This is the shortest current runbook for onboarding one PatchRelay service on one machine, with one or many repositories, against Linear's current agent/app workflow.
+This guide covers the Linear side of a PatchRelay deployment: the OAuth app, webhook categories, delegation model, and the most common troubleshooting points.
 
 Use this guide together with:
 
@@ -11,26 +11,30 @@ Use this guide together with:
 
 ## Mental Model
 
-PatchRelay is machine-level infrastructure, not a per-repo integration.
+PatchRelay is a machine-level execution harness, not a per-repo plugin.
 
 - one PatchRelay service runs on the machine
 - one Linear OAuth app is usually enough for that PatchRelay instance
-- one machine-level `.env` holds the Linear secrets for the service
+- one machine-level `.env` holds the Linear secrets
 - one `patchrelay.yaml` contains one `projects[]` block per repository
 - each repository contributes workflow policy files such as `IMPLEMENTATION_WORKFLOW.md`
 
-That means repositories own workflow instructions, but PatchRelay owns the Linear app connection, webhook intake, token storage, and worktree orchestration.
+Repositories own workflow instructions. PatchRelay owns the Linear app connection, webhook intake, token storage, routing, worktree orchestration, thread continuity, and reporting.
 
-## Linear App Setup
+## Create The Linear OAuth App
 
 Create one Linear OAuth app for this PatchRelay instance in Linear `Settings > API > Applications`.
 
 Recommended settings:
 
 - `actor=app`
-- scopes: `read`, `write`, `app:assignable`, `app:mentionable`
+- scopes: `read`, `write`, `app:assignable`, and `app:mentionable`
 - redirect URI: `https://your-domain.example/oauth/linear/callback`
 - webhook URL: `https://your-domain.example/webhooks/linear`
+
+PatchRelay expects one app per machine-level service, not one app per repository.
+
+## Webhook Categories
 
 Required webhook categories for PatchRelay's core loop:
 
@@ -44,31 +48,29 @@ Useful supplemental categories:
 - OAuth app revoked
 - app-user notifications
 
-Why this matters:
+The execution path is still driven by signed webhooks. PatchRelay does not poll Linear for delegation.
 
-- in Linear's current app-user model, delegating work to an agent is not ordinary assignee automation
-- a human stays responsible for the issue, and Linear delegates the issue to the app user
-- the native trigger PatchRelay cares about is the agent session webhook, not polling
+## How Delegation Works
 
-## What Happens When You Delegate
-
-This is the current happy path:
+This is the normal happy path:
 
 1. A human delegates a Linear issue to the PatchRelay app.
 2. Linear creates an agent session for that app user.
 3. Linear sends `AgentSessionEvent.created` to PatchRelay's webhook URL.
 4. PatchRelay verifies the HMAC signature with `LINEAR_WEBHOOK_SECRET`.
 5. PatchRelay resolves the matching `projects[]` entry from the issue key prefix and/or Linear team id.
-6. PatchRelay picks the stage from the issue's current Linear state such as `Start`, `Review`, or `Deploy`.
-7. PatchRelay creates or reuses the issue worktree and launches the Codex stage.
-8. PatchRelay reports progress back to Linear with agent activities and status comments.
+6. PatchRelay maps the issue's current Linear state such as `Start`, `Review`, or `Deploy` into the next internal stage.
+7. PatchRelay creates or reuses the issue worktree and launches the stage through `codex app-server`.
+8. PatchRelay reports progress back to Linear with service-owned status comments, workflow bookkeeping, and agent activity.
 
-Follow-up instructions can then arrive in two ways:
+## Follow-Up Inputs
+
+Follow-up instructions can arrive in two ways:
 
 - `AgentSessionEvent.prompted`: the native Linear agent-prompt path; PatchRelay routes this into the active Codex run
-- issue comments: PatchRelay also forwards regular issue comments into the active run while the stage is live
+- issue comments: PatchRelay can also forward regular issue comments into the active run while the stage is live
 
-Normal operation is webhook-driven. PatchRelay does not poll Linear for delegation.
+For the standard Linear app-agent flow, you can usually omit `trigger_events` entirely. PatchRelay defaults to `agentSessionCreated`, `agentPrompted`, and `statusChanged`.
 
 ## Secrets And Boundaries
 
@@ -80,56 +82,48 @@ Keep these secrets at the machine level in `~/.config/patchrelay/.env`:
 - `PATCHRELAY_TOKEN_ENCRYPTION_KEY`
 - optional: `PATCHRELAY_OPERATOR_TOKEN`
 
-Recommended boundary:
+Do not:
 
-- do not copy these into repository `.env` files
-- do not commit them into any repository
-- do not duplicate them per repo unless you intentionally run separate PatchRelay instances
+- copy them into repository `.env` files
+- commit them into any repository
+- duplicate them per repo unless you intentionally run separate PatchRelay instances
 
 How PatchRelay uses them:
 
 - `LINEAR_WEBHOOK_SECRET` verifies incoming webhook signatures
-- the OAuth client id/secret complete `patchrelay connect`
+- the OAuth client id and secret complete `patchrelay connect`
 - `PATCHRELAY_TOKEN_ENCRYPTION_KEY` encrypts installed workspace access tokens before they are stored in PatchRelay's SQLite database
 
-Practical rule:
-
-- if multiple repos live on one machine and should be driven by the same PatchRelay service, they should usually share one machine-level PatchRelay `.env`
-
-## Multi-Repo Setup
+## Multi-Repo Linear Setup
 
 For one machine with several repositories:
 
 1. Run `patchrelay init https://your-domain.example` once.
 2. Put the machine-level secrets in `~/.config/patchrelay/.env`.
 3. Run `patchrelay project apply <id> <repo-path>` once per repository.
-4. Give each project its `repo_path`.
-5. Route each project by `issue_key_prefixes`, `linear_team_ids`, or both when you need disambiguation.
-6. Keep workflow files inside each repository.
-7. If `project apply` reports missing workflow files or secrets, fix them and rerun `patchrelay project apply`.
+4. Route each project by `issue_key_prefixes`, `linear_team_ids`, or both when you need disambiguation.
+5. Keep workflow files inside each repository.
+6. If `project apply` reports missing workflow files or secrets, fix them and rerun `patchrelay project apply`.
 
 One PatchRelay instance can serve several repos cleanly as long as routing is unambiguous.
 
-For the standard Linear app-agent flow, you can usually omit `trigger_events` entirely. PatchRelay defaults to `agentSessionCreated`, `agentPrompted`, and `statusChanged`.
-
 ## Recommended Onboarding Flow
 
-1. Install PatchRelay and run `patchrelay init https://your-domain.example`.
-2. Keep the generated `LINEAR_WEBHOOK_SECRET` and `PATCHRELAY_TOKEN_ENCRYPTION_KEY`, then fill in `LINEAR_OAUTH_CLIENT_ID` and `LINEAR_OAUTH_CLIENT_SECRET` in `~/.config/patchrelay/.env`.
-3. Create the Linear OAuth app with `actor=app`, the required scopes, and webhook settings.
-4. Add one or more projects with `patchrelay project apply <id> <repo-path>`.
-5. If `project apply` reports missing workflow files, add the repo-local workflow files to each automated repository and rerun `patchrelay project apply`.
-6. Run `patchrelay doctor` and fix any remaining failures or warnings.
-7. Delegate a Linear issue to the PatchRelay app and confirm the webhook-driven stage starts.
+1. Follow [self-hosting.md](./self-hosting.md) to install PatchRelay and create runtime files.
+2. Create the Linear OAuth app with `actor=app`, the required scopes, and webhook settings.
+3. Fill in `LINEAR_OAUTH_CLIENT_ID` and `LINEAR_OAUTH_CLIENT_SECRET` in `~/.config/patchrelay/.env`.
+4. Run `patchrelay project apply <id> <repo-path>`.
+5. Run `patchrelay doctor`.
+6. Delegate a Linear issue to the PatchRelay app and confirm the webhook-driven stage starts.
 
-Why this order:
+## Troubleshooting
 
-- `patchrelay init` is machine-level and requires the public HTTPS origin up front.
-- `patchrelay.yaml` should stay minimal; defaults cover the rest of the local runtime in the normal case.
-- `patchrelay init` installs the service and a config watcher immediately.
-- `patchrelay project apply` is the idempotent happy-path command: it upserts the project, reloads PatchRelay when possible, and reuses or starts the Linear connect flow automatically.
+If delegation stops working, check:
 
-## Operator Notes
+- team access on the Linear app
+- the configured webhook URL and redirect URI
+- `LINEAR_WEBHOOK_SECRET`
+- whether a custom `trigger_events` override accidentally removed `agentSessionCreated` or `agentPrompted`
+- whether the routed project has valid workflow files and unambiguous routing keys
 
-- PatchRelay now accepts supplemental Linear app webhooks such as permission-change, app-user-notification, and app-revoked events. They are informational today; the core execution path still depends on issue, comment, and agent-session events.
-- If delegation stops working, check team access on the Linear app, the webhook secret, and whether a custom `trigger_events` override accidentally removed `agentSessionCreated` or `agentPrompted`.
+PatchRelay also accepts supplemental Linear app webhooks such as permission-change, app-user-notification, and app-revoked events. They are useful for observability, but the core execution path still depends on issue, comment, and agent-session events.
