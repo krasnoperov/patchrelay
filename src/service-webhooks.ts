@@ -33,6 +33,7 @@ export async function acceptIncomingWebhook(params: {
   const receivedAt = new Date().toISOString();
   const signature = typeof params.headers["linear-signature"] === "string" ? params.headers["linear-signature"] : "";
   if (!verifyHmacSha256Hex(params.rawBody, params.config.linear.webhookSecret, signature)) {
+    params.logger.warn({ webhookId: params.webhookId }, "Rejecting webhook with invalid signature");
     return { status: 401, body: { ok: false, reason: "invalid_signature" } };
   }
 
@@ -45,6 +46,7 @@ export async function acceptIncomingWebhook(params: {
   }
 
   if (!timestampMsWithinSkew(payload.webhookTimestamp, params.config.ingress.maxTimestampSkewSeconds)) {
+    params.logger.warn({ webhookId: params.webhookId, webhookTimestamp: payload.webhookTimestamp }, "Rejecting stale webhook payload");
     return { status: 401, body: { ok: false, reason: "stale_timestamp" } };
   }
 
@@ -85,8 +87,20 @@ export async function acceptIncomingWebhook(params: {
     dedupeStatus: "accepted",
   });
   if (!stored.inserted) {
+    params.logger.info({ webhookId: params.webhookId, webhookEventId: stored.id }, "Ignoring duplicate webhook delivery");
     return { status: 200, body: { ok: true, duplicate: true } };
   }
+
+  params.logger.info(
+    {
+      webhookId: params.webhookId,
+      webhookEventId: stored.id,
+      triggerEvent: normalized.triggerEvent,
+      issueKey: normalized.issue?.identifier,
+      issueId: normalized.issue?.id,
+    },
+    "Accepted Linear webhook for asynchronous processing",
+  );
 
   return {
     accepted: {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import pino from "pino";
+import type { Logger } from "pino";
 import { StageLifecyclePublisher } from "../src/stage-lifecycle-publisher.ts";
 import type { AppConfig, LinearAgentActivityContent, LinearClient, LinearIssueSnapshot, PipelineRunRecord, StageRunRecord, TrackedIssueRecord, WorkspaceRecord } from "../src/types.ts";
 
@@ -19,8 +19,14 @@ class FakeLinearClient implements LinearClient {
   readonly comments: Array<{ issueId: string; commentId?: string; body: string }> = [];
   readonly agentActivities: Array<{ agentSessionId: string; content: LinearAgentActivityContent; ephemeral?: boolean }> = [];
   failNextCommentUpsert = false;
+  failNextAgentActivity = false;
+  failNextGetIssue = false;
 
   async getIssue(issueId: string): Promise<LinearIssueSnapshot> {
+    if (this.failNextGetIssue) {
+      this.failNextGetIssue = false;
+      throw new Error("issue read failed");
+    }
     const issue = this.issues.get(issueId);
     assert.ok(issue);
     return issue;
@@ -51,6 +57,10 @@ class FakeLinearClient implements LinearClient {
     content: LinearAgentActivityContent;
     ephemeral?: boolean;
   }) {
+    if (this.failNextAgentActivity) {
+      this.failNextAgentActivity = false;
+      throw new Error("agent activity write failed");
+    }
     this.agentActivities.push(params);
     return { id: `activity-${this.agentActivities.length}` };
   }
@@ -143,6 +153,26 @@ class FakeIssueWorkflowStore {
     pipeline.status = "completed";
     this.completedPipelines.push(pipelineRunId);
   }
+}
+
+function createCaptureLogger() {
+  const warnings: Array<{ bindings: Record<string, unknown>; message: string }> = [];
+  const logger = {
+    fatal() {},
+    error() {},
+    warn(bindings: Record<string, unknown>, message: string) {
+      warnings.push({ bindings, message });
+    },
+    info() {},
+    debug() {},
+    trace() {},
+    silent() {},
+    child() {
+      return logger;
+    },
+    level: "debug",
+  } as unknown as Logger;
+  return { logger, warnings };
 }
 
 function issueKey(projectId: string, issueId: string): string {
@@ -278,6 +308,7 @@ function createHarness() {
   const project = config.projects[0]!;
   const store = new FakeIssueWorkflowStore();
   const linear = new FakeLinearClient();
+  const { logger, warnings } = createCaptureLogger();
   const issue = createIssueRecord({ statusCommentId: "comment-existing", activeAgentSessionId: "session-1" });
   const stageRun = createStageRun();
   const pipeline = createPipeline();
@@ -310,10 +341,10 @@ function createHarness() {
         return projectId === "proj" ? linear : undefined;
       },
     },
-    pino({ enabled: false }),
+    logger,
   );
 
-  return { publisher, store, linear, issue, stageRun, pipeline, workspace, project };
+  return { publisher, store, linear, issue, stageRun, pipeline, workspace, project, warnings };
 }
 
 test("markStageActive updates Linear state, labels, and tracked issue state", async () => {
@@ -424,7 +455,7 @@ test("markStageActive and publishStageCompletion no-op cleanly when workflow sta
     config,
     { issueWorkflows: store },
     { async forProject() { return undefined; } },
-    pino({ enabled: false }),
+    createCaptureLogger().logger,
   );
 
   await publisher.markStageActive(
@@ -449,4 +480,32 @@ test("markStageActive and publishStageCompletion no-op cleanly when workflow sta
 
   assert.equal(store.completedPipelines.length, 0);
   assert.equal(store.getTrackedIssue("missing", "issue-2")?.currentLinearState, undefined);
+});
+
+test("publishStageCompletion logs when final Linear sync fails after local completion", async () => {
+  const { publisher, linear, stageRun, warnings } = createHarness();
+
+  linear.failNextGetIssue = true;
+  await publisher.publishStageCompletion(stageRun, () => undefined);
+
+  assert.equal(warnings.length, 1);
+  assert.equal(warnings[0]?.message, "Stage completed locally but PatchRelay could not finish the final Linear sync");
+  assert.equal(warnings[0]?.bindings.stageRunId, stageRun.id);
+  assert.equal(warnings[0]?.bindings.issueId, stageRun.linearIssueId);
+});
+
+test("publishStageCompletion logs when final agent activity publish fails", async () => {
+  const { publisher, linear, stageRun, warnings } = createHarness();
+
+  linear.issues.set("issue-1", {
+    ...(linear.issues.get("issue-1") as LinearIssueSnapshot),
+    stateName: "Done",
+  });
+  linear.failNextAgentActivity = true;
+  await publisher.publishStageCompletion(stageRun, () => undefined);
+
+  assert.equal(warnings.length, 1);
+  assert.equal(warnings[0]?.message, "Failed to publish Linear agent activity");
+  assert.equal(warnings[0]?.bindings.issueId, stageRun.linearIssueId);
+  assert.equal(warnings[0]?.bindings.activityType, "response");
 });

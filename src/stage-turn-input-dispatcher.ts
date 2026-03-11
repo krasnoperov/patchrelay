@@ -2,6 +2,7 @@ import type { Logger } from "pino";
 import type { CodexAppServerClient } from "./codex-app-server.ts";
 import type { StageTurnInputStoreProvider } from "./stage-event-ports.ts";
 import type { StageRunRecord } from "./types.ts";
+import { sanitizeDiagnosticText } from "./utils.ts";
 
 export class StageTurnInputDispatcher {
   constructor(
@@ -36,19 +37,27 @@ export class StageTurnInputDispatcher {
           input: input.body,
         });
         this.inputs.stageEvents.markTurnInputDelivered(input.id);
+        this.logger.debug(
+          {
+            threadId: stageRun.threadId,
+            turnId: stageRun.turnId,
+            queuedInputId: input.id,
+            source: input.source,
+          },
+          "Delivered queued turn input to Codex",
+        );
       } catch (error) {
-        if (options?.logFailures) {
-          this.logger.warn(
-            {
-              issueKey: options.issueKey,
-              threadId: stageRun.threadId,
-              turnId: stageRun.turnId,
-              queuedInputId: input.id,
-              error: error instanceof Error ? error.message : String(error),
-            },
-            options.failureMessage ?? "Failed to deliver queued turn input",
-          );
-        }
+        this.logger.warn(
+          {
+            issueKey: options?.issueKey,
+            threadId: stageRun.threadId,
+            turnId: stageRun.turnId,
+            queuedInputId: input.id,
+            source: input.source,
+            error: sanitizeDiagnosticText(error instanceof Error ? error.message : String(error)),
+          },
+          options?.failureMessage ?? "Failed to deliver queued turn input",
+        );
         break;
       }
     }

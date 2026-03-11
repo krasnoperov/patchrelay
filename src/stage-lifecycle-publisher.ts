@@ -8,6 +8,7 @@ import {
   resolveWorkflowLabelNames,
 } from "./linear-workflow.ts";
 import type { AppConfig, LinearClientProvider, StageRunRecord, TrackedIssueRecord } from "./types.ts";
+import { sanitizeDiagnosticText } from "./utils.ts";
 
 export class StageLifecyclePublisher {
   constructor(
@@ -175,8 +176,18 @@ export class StageLifecyclePublisher {
             removeNames: cleanup.remove,
           });
         }
-      } catch {
-        // Preserve the completed stage locally even if Linear read-back failed.
+      } catch (error) {
+        this.logger.warn(
+          {
+            issueKey: refreshedIssue.issueKey,
+            issueId: stageRun.linearIssueId,
+            stageRunId: stageRun.id,
+            stage: stageRun.stage,
+            pipelineRunId: pipeline.id,
+            error: sanitizeDiagnosticText(error instanceof Error ? error.message : String(error)),
+          },
+          "Stage completed locally but PatchRelay could not finish the final Linear sync",
+        );
       }
     }
 
@@ -211,6 +222,17 @@ export class StageLifecyclePublisher {
         agentSessionId: issue.activeAgentSessionId,
         content,
       })
-      .catch(() => undefined);
+      .catch((error) => {
+        this.logger.warn(
+          {
+            issueKey: issue.issueKey,
+            issueId: issue.linearIssueId,
+            agentSessionId: issue.activeAgentSessionId,
+            activityType: content.type,
+            error: sanitizeDiagnosticText(error instanceof Error ? error.message : String(error)),
+          },
+          "Failed to publish Linear agent activity",
+        );
+      });
   }
 }

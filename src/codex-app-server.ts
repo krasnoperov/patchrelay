@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { Logger } from "pino";
 import type { CodexAppServerConfig, CodexThreadItem, CodexThreadSummary } from "./types.ts";
+import { sanitizeDiagnosticText } from "./utils.ts";
 
 interface JsonRpcSuccess {
   jsonrpc?: string;
@@ -74,6 +75,7 @@ export class CodexAppServerClient extends EventEmitter {
   private readonly pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
   private stdoutBuffer = "";
   private started = false;
+  private stopping = false;
 
   constructor(
     private readonly config: CodexAppServerConfig,
@@ -92,7 +94,9 @@ export class CodexAppServerClient extends EventEmitter {
       return;
     }
 
+    this.stopping = false;
     const launch = resolveCodexAppServerLaunch(this.config);
+    this.logger.info({ command: launch.command, args: launch.args }, "Starting Codex app-server");
     this.child = this.spawnProcess(launch.command, launch.args, {
       stdio: ["pipe", "pipe", "pipe"],
     }) as ChildProcessWithoutNullStreams;
@@ -100,16 +104,34 @@ export class CodexAppServerClient extends EventEmitter {
     this.child.stderr.on("data", (chunk) => {
       const line = chunk.toString().trim();
       if (line) {
-        this.logger.warn({ output: line }, "Codex app-server stderr");
+        this.logger.warn({ output: sanitizeDiagnosticText(line) }, "Codex app-server stderr");
       }
     });
 
     this.child.on("error", (error) => {
-      this.rejectAllPending(error instanceof Error ? error : new Error(String(error)));
+      const err = error instanceof Error ? error : new Error(String(error));
+      this.logger.error(
+        {
+          error: sanitizeDiagnosticText(err.message),
+          pendingRequestCount: this.pending.size,
+        },
+        "Codex app-server process errored",
+      );
+      this.rejectAllPending(err);
     });
 
-    this.child.on("close", (code) => {
+    this.child.on("close", (code, signal) => {
       this.started = false;
+      const log = this.stopping ? this.logger.info.bind(this.logger) : this.logger.warn.bind(this.logger);
+      log(
+        {
+          code: code ?? 1,
+          signal: signal ?? null,
+          pendingRequestCount: this.pending.size,
+        },
+        this.stopping ? "Codex app-server stopped" : "Codex app-server exited",
+      );
+      this.stopping = false;
       this.rejectAllPending(new Error(`Codex app-server exited with code ${code ?? 1}`));
     });
 
@@ -126,7 +148,17 @@ export class CodexAppServerClient extends EventEmitter {
       },
       capabilities: null,
     });
-    this.logger.info({ initializeResponse }, "Connected to Codex app-server");
+    const serverInfo =
+      initializeResponse && typeof initializeResponse === "object" && "serverInfo" in (initializeResponse as Record<string, unknown>)
+        ? ((initializeResponse as Record<string, unknown>).serverInfo as Record<string, unknown> | undefined)
+        : undefined;
+    this.logger.info(
+      {
+        serverName: typeof serverInfo?.name === "string" ? serverInfo.name : undefined,
+        serverVersion: typeof serverInfo?.version === "string" ? serverInfo.version : undefined,
+      },
+      "Connected to Codex app-server",
+    );
     this.sendNotification("initialized");
     this.started = true;
   }
@@ -136,6 +168,8 @@ export class CodexAppServerClient extends EventEmitter {
       return;
     }
 
+    this.logger.info("Stopping Codex app-server");
+    this.stopping = true;
     this.child.kill("SIGTERM");
     this.child = undefined;
     this.started = false;
@@ -267,7 +301,18 @@ export class CodexAppServerClient extends EventEmitter {
       params,
     });
 
-    return promise;
+    return promise.catch((error) => {
+      const err = error instanceof Error ? error : new Error(String(error));
+      this.logger.error(
+        {
+          method,
+          requestId: id,
+          error: sanitizeDiagnosticText(err.message),
+        },
+        "Codex app-server request failed",
+      );
+      throw err;
+    });
   }
 
   private writeMessage(message: Record<string, unknown>): void {
@@ -291,7 +336,22 @@ export class CodexAppServerClient extends EventEmitter {
         continue;
       }
 
-      this.handleMessage(JSON.parse(line) as JsonRpcSuccess | JsonRpcFailure | JsonRpcRequest | JsonRpcNotification);
+      try {
+        this.handleMessage(JSON.parse(line) as JsonRpcSuccess | JsonRpcFailure | JsonRpcRequest | JsonRpcNotification);
+      } catch (error) {
+        const err = error instanceof Error ? error : new Error(String(error));
+        this.started = false;
+        this.logger.error(
+          {
+            error: sanitizeDiagnosticText(err.message),
+            output: sanitizeDiagnosticText(line),
+          },
+          "Failed to parse Codex app-server stdout message",
+        );
+        this.rejectAllPending(new Error(`Codex app-server emitted invalid JSON: ${err.message}`));
+        this.child?.kill("SIGTERM");
+        return;
+      }
     }
   }
 

@@ -8,6 +8,7 @@ import {
   extractFirstJsonObject,
   interpolateTemplate,
   interpolateTemplateArray,
+  sanitizeDiagnosticText,
   safeJsonParse,
   timestampMsWithinSkew,
   verifyHmacSha256Hex,
@@ -38,6 +39,11 @@ test("utils cover path, template, and json helpers", () => {
       "content-type": "application/json",
     },
   );
+
+  assert.equal(sanitizeDiagnosticText("Authorization: Bearer secret-token"), "Authorization: Bearer [redacted]");
+  assert.equal(sanitizeDiagnosticText("access_token=abc123 refreshToken=def456"), "access_token=[redacted] refreshToken=[redacted]");
+  assert.equal(sanitizeDiagnosticText("secret=abc123"), "secret=[redacted]");
+  assert.match(sanitizeDiagnosticText(`prefix ${"x".repeat(600)}`), /\[truncated\]$/);
 });
 
 test("utils cover timestamp skew and hmac validation", () => {

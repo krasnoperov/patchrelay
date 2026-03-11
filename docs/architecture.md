@@ -210,6 +210,5 @@ When `operator_api.enabled` is on, PatchRelay also exposes:
 - stage reports by issue key
 - live active-stage status by issue key
 - raw stage event history by issue key and stage run id
-- log stream for service-level behavior
 
 The operator can inspect what happened without attaching to a live terminal.

@@ -5,6 +5,11 @@ import { execFile } from "node:child_process";
 import type { StdioOptions } from "node:child_process";
 
 const REDACTED_HEADER_NAMES = new Set(["authorization", "cookie", "set-cookie", "linear-signature"]);
+const DIAGNOSTIC_REPLACEMENTS: Array<[RegExp, string]> = [
+  [/\bBearer\s+[A-Za-z0-9._~+/=-]+\b/gi, "Bearer [redacted]"],
+  [/\b(access[_-]?token|refresh[_-]?token|client[_-]?secret|webhook[_-]?secret|api[_-]?key|password|tokenEncryptionKey|bearerToken|secret)=([^\s&]+)/gi, "$1=[redacted]"],
+  [/"(access_token|refresh_token|client_secret|accessToken|refreshToken|clientSecret|webhookSecret|apiKey|password|tokenEncryptionKey|bearerToken|secret)"\s*:\s*"[^"]*"/g, "\"$1\":\"[redacted]\""],
+];
 
 export function ensureAbsolutePath(inputPath: string): string {
   return path.isAbsolute(inputPath) ? inputPath : path.resolve(process.cwd(), inputPath);
@@ -106,6 +111,19 @@ export function redactSensitiveHeaders(headers: Record<string, string | string[]
   return Object.fromEntries(
     Object.entries(headers).map(([name, value]) => [name, REDACTED_HEADER_NAMES.has(name.toLowerCase()) ? "[redacted]" : value]),
   );
+}
+
+export function sanitizeDiagnosticText(text: string, maxLength = 500): string {
+  let sanitized = text;
+  for (const [pattern, replacement] of DIAGNOSTIC_REPLACEMENTS) {
+    sanitized = sanitized.replace(pattern, replacement);
+  }
+
+  if (sanitized.length <= maxLength) {
+    return sanitized;
+  }
+
+  return `${sanitized.slice(0, Math.max(0, maxLength - 12))}[truncated]`;
 }
 
 export function encryptSecret(plaintext: string, keyMaterial: string): string {

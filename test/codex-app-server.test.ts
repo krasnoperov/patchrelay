@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import test from "node:test";
-import pino from "pino";
+import type { Logger } from "pino";
 import { CodexAppServerClient, resolveCodexAppServerLaunch } from "../src/codex-app-server.ts";
 
 class FakeChildProcess extends EventEmitter {
@@ -91,6 +91,13 @@ class FakeChildProcess extends EventEmitter {
           this.emit("close", 7, null);
         }, 10);
         return;
+      }
+      if (this.scenario === "malformed-stdout") {
+        this.stdout.write("Authorization: Bearer secret-token\n");
+        return;
+      }
+      if (this.scenario === "stderr-secret") {
+        this.stderr.write("Authorization: Bearer secret-token\n");
       }
 
       this.sendStdout({
@@ -204,7 +211,39 @@ function buildThread(id: string, cwd = "/tmp/worktree") {
   };
 }
 
-function createClient(scenario: string, approvalPolicy: "never" | "on-request" | "on-failure" | "untrusted" = "never") {
+function createCaptureLogger() {
+  const entries: Array<{ level: "info" | "warn" | "error" | "debug"; bindings: Record<string, unknown>; message: string }> = [];
+  const logger = {
+    fatal(bindings: Record<string, unknown>, message: string) {
+      entries.push({ level: "error", bindings, message });
+    },
+    error(bindings: Record<string, unknown>, message: string) {
+      entries.push({ level: "error", bindings, message });
+    },
+    warn(bindings: Record<string, unknown>, message: string) {
+      entries.push({ level: "warn", bindings, message });
+    },
+    info(bindings: Record<string, unknown>, message: string) {
+      entries.push({ level: "info", bindings, message });
+    },
+    debug(bindings: Record<string, unknown>, message: string) {
+      entries.push({ level: "debug", bindings, message });
+    },
+    trace() {},
+    silent() {},
+    child() {
+      return logger;
+    },
+    level: "debug",
+  } as unknown as Logger;
+  return { logger, entries };
+}
+
+function createClient(
+  scenario: string,
+  approvalPolicy: "never" | "on-request" | "on-failure" | "untrusted" = "never",
+  logger: Logger = createCaptureLogger().logger,
+) {
   const child = new FakeChildProcess(scenario);
   const client = new CodexAppServerClient(
     {
@@ -216,7 +255,7 @@ function createClient(scenario: string, approvalPolicy: "never" | "on-request" |
       persistExtendedHistory: false,
       serviceName: "patchrelay-test",
     },
-    pino({ enabled: false }),
+    logger,
     (() => child) as never,
   );
   return { client, child };
@@ -340,6 +379,39 @@ test("CodexAppServerClient rejects server approval requests when policy is not a
 
     assert.deepEqual(child.approvalResponses, [{ id: "approval-1", decision: "rejectForSession" }]);
     assert.deepEqual(notifications, []);
+  } finally {
+    await client.stop();
+  }
+});
+
+test("CodexAppServerClient rejects malformed stdout with sanitized diagnostics", async () => {
+  const { logger, entries } = createCaptureLogger();
+  const { client } = createClient("malformed-stdout", "never", logger);
+
+  try {
+    await client.start();
+    await assert.rejects(() => client.startThread({ cwd: "/tmp/worktree" }), /Codex app-server emitted invalid JSON/);
+
+    const parseLog = entries.find((entry) => entry.message === "Failed to parse Codex app-server stdout message");
+    assert.ok(parseLog);
+    assert.equal(parseLog?.level, "error");
+    assert.equal(parseLog?.bindings.output, "Authorization: Bearer [redacted]");
+  } finally {
+    await client.stop();
+  }
+});
+
+test("CodexAppServerClient sanitizes stderr diagnostics before logging them", async () => {
+  const { logger, entries } = createCaptureLogger();
+  const { client } = createClient("stderr-secret", "never", logger);
+
+  try {
+    await client.start();
+    await client.startThread({ cwd: "/tmp/worktree" });
+
+    const stderrLog = entries.find((entry) => entry.message === "Codex app-server stderr");
+    assert.ok(stderrLog);
+    assert.equal(stderrLog?.bindings.output, "Authorization: Bearer [redacted]");
   } finally {
     await client.stop();
   }

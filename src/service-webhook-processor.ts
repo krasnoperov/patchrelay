@@ -9,7 +9,7 @@ import { StageAgentActivityPublisher } from "./stage-agent-activity-publisher.ts
 import { StageTurnInputDispatcher } from "./stage-turn-input-dispatcher.ts";
 import type { IssueQueueItem } from "./service-stage-runner.ts";
 import type { AppConfig, LinearClientProvider, LinearWebhookPayload } from "./types.ts";
-import { safeJsonParse } from "./utils.ts";
+import { safeJsonParse, sanitizeDiagnosticText } from "./utils.ts";
 import { AgentSessionWebhookHandler } from "./webhook-agent-session-handler.ts";
 import { CommentWebhookHandler } from "./webhook-comment-handler.ts";
 import { WebhookDesiredStageRecorder } from "./webhook-desired-stage-recorder.ts";
@@ -45,62 +45,129 @@ export class ServiceWebhookProcessor {
   async processWebhookEvent(webhookEventId: number): Promise<void> {
     const event = this.stores.webhookEvents.getWebhookEvent(webhookEventId);
     if (!event) {
+      this.logger.warn({ webhookEventId }, "Webhook event was not found during processing");
       return;
     }
 
-    const payload = safeJsonParse<LinearWebhookPayload>(event.payloadJson);
-    if (!payload) {
-      this.stores.webhookEvents.markWebhookProcessed(webhookEventId, "failed");
-      throw new Error(`Stored webhook payload is invalid JSON: event ${webhookEventId}`);
-    }
+    try {
+      const payload = safeJsonParse<LinearWebhookPayload>(event.payloadJson);
+      if (!payload) {
+        this.stores.webhookEvents.markWebhookProcessed(webhookEventId, "failed");
+        throw new Error(`Stored webhook payload is invalid JSON: event ${webhookEventId}`);
+      }
 
-    const normalized = normalizeWebhook({
-      webhookId: event.webhookId,
-      payload,
-    });
-    if (!normalized.issue) {
-      this.installationHandler.handle(normalized);
-      this.stores.webhookEvents.markWebhookProcessed(webhookEventId, "processed");
-      return;
-    }
-
-    const project = resolveProject(this.config, normalized.issue);
-    if (!project) {
-      this.stores.webhookEvents.markWebhookProcessed(webhookEventId, "processed");
-      return;
-    }
-
-    if (!trustedActorAllowed(project, normalized.actor)) {
+      const normalized = normalizeWebhook({
+        webhookId: event.webhookId,
+        payload,
+      });
       this.logger.info(
         {
-          webhookId: normalized.webhookId,
-          projectId: project.id,
+          webhookEventId,
+          webhookId: event.webhookId,
+          eventType: normalized.eventType,
           triggerEvent: normalized.triggerEvent,
-          actorId: normalized.actor?.id,
-          actorName: normalized.actor?.name,
-          actorEmail: normalized.actor?.email,
+          issueKey: normalized.issue?.identifier,
+          issueId: normalized.issue?.id,
         },
-        "Ignoring webhook from untrusted Linear actor",
+        "Processing stored webhook event",
       );
+      if (!normalized.issue) {
+        this.installationHandler.handle(normalized);
+        this.stores.webhookEvents.markWebhookProcessed(webhookEventId, "processed");
+        return;
+      }
+
+      const project = resolveProject(this.config, normalized.issue);
+      if (!project) {
+        this.logger.info(
+          {
+            webhookEventId,
+            webhookId: event.webhookId,
+            issueKey: normalized.issue.identifier,
+            issueId: normalized.issue.id,
+            teamId: normalized.issue.teamId,
+            teamKey: normalized.issue.teamKey,
+            triggerEvent: normalized.triggerEvent,
+          },
+          "Ignoring webhook because no project route matched the Linear issue",
+        );
+        this.stores.webhookEvents.markWebhookProcessed(webhookEventId, "processed");
+        return;
+      }
+
+      if (!trustedActorAllowed(project, normalized.actor)) {
+        this.logger.info(
+          {
+            webhookId: normalized.webhookId,
+            projectId: project.id,
+            triggerEvent: normalized.triggerEvent,
+            actorId: normalized.actor?.id,
+            actorName: normalized.actor?.name,
+            actorEmail: normalized.actor?.email,
+          },
+          "Ignoring webhook from untrusted Linear actor",
+        );
+        this.stores.webhookEvents.markWebhookProcessed(webhookEventId, "processed");
+        return;
+      }
+
+      this.stores.webhookEvents.assignWebhookProject(webhookEventId, project.id);
+      const issueState = this.desiredStageRecorder.record(project, normalized);
+
+      await this.agentSessionHandler.handle({
+        normalized,
+        project,
+        issue: issueState.issue,
+        desiredStage: issueState.desiredStage,
+        delegatedToPatchRelay: issueState.delegatedToPatchRelay,
+      });
+      await this.commentHandler.handle(normalized, project);
+
       this.stores.webhookEvents.markWebhookProcessed(webhookEventId, "processed");
-      return;
-    }
+      if (issueState.desiredStage) {
+        this.logger.info(
+          {
+            webhookEventId,
+            webhookId: event.webhookId,
+            projectId: project.id,
+            issueKey: normalized.issue.identifier,
+            issueId: normalized.issue.id,
+            desiredStage: issueState.desiredStage,
+            delegatedToPatchRelay: issueState.delegatedToPatchRelay,
+          },
+          "Recorded desired stage from webhook and enqueued issue execution",
+        );
+        this.enqueueIssue(project.id, normalized.issue.id);
+        return;
+      }
 
-    this.stores.webhookEvents.assignWebhookProject(webhookEventId, project.id);
-    const issueState = this.desiredStageRecorder.record(project, normalized);
-
-    await this.agentSessionHandler.handle({
-      normalized,
-      project,
-      issue: issueState.issue,
-      desiredStage: issueState.desiredStage,
-      delegatedToPatchRelay: issueState.delegatedToPatchRelay,
-    });
-    await this.commentHandler.handle(normalized, project);
-
-    this.stores.webhookEvents.markWebhookProcessed(webhookEventId, "processed");
-    if (issueState.desiredStage) {
-      this.enqueueIssue(project.id, normalized.issue.id);
+      this.logger.info(
+        {
+          webhookEventId,
+          webhookId: event.webhookId,
+          projectId: project.id,
+          issueKey: normalized.issue.identifier,
+          issueId: normalized.issue.id,
+          triggerEvent: normalized.triggerEvent,
+          delegatedToPatchRelay: issueState.delegatedToPatchRelay,
+        },
+        "Processed webhook without enqueuing a new stage run",
+      );
+    } catch (error) {
+      this.stores.webhookEvents.markWebhookProcessed(webhookEventId, "failed");
+      const err = error instanceof Error ? error : new Error(String(error));
+      this.logger.error(
+        {
+          webhookEventId,
+          webhookId: event.webhookId,
+          issueId: event.issueId,
+          projectId: event.projectId,
+          error: sanitizeDiagnosticText(err.message),
+          stack: err.stack,
+        },
+        "Failed to process Linear webhook event",
+      );
+      throw err;
     }
   }
 }

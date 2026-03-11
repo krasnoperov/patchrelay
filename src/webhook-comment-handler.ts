@@ -55,6 +55,9 @@ export class CommentWebhookHandler {
       source: `linear-comment:${normalized.comment.id}`,
       body,
     });
-    await this.turnInputDispatcher.flush(stageRun);
+    await this.turnInputDispatcher.flush(stageRun, {
+      ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
+      failureMessage: "Failed to deliver queued Linear comment to active Codex turn",
+    });
   }
 }

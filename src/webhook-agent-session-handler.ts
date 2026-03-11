@@ -97,7 +97,10 @@ export class AgentSessionWebhookHandler {
         source: `linear-agent-prompt:${normalized.agentSession.id}:${normalized.webhookId}`,
         body: ["New Linear agent prompt received while you are working.", "", promptBody].join("\n"),
       });
-      await this.turnInputDispatcher.flush(activeStageRun);
+      await this.turnInputDispatcher.flush(activeStageRun, {
+        ...(issue?.issueKey ? { issueKey: issue.issueKey } : {}),
+        failureMessage: "Failed to deliver queued Linear agent prompt to active Codex turn",
+      });
       await this.agentActivity.publishForSession(project.id, normalized.agentSession.id, {
         type: "thought",
         body: `PatchRelay routed your follow-up instructions into the active ${activeStageRun.stage} workflow.`,
