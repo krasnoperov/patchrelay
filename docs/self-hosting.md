@@ -127,25 +127,22 @@ Keep these values machine-level. They belong in PatchRelay's own `.env`, not ins
 
 ## 4. Configure Projects
 
-Edit `~/.config/patchrelay/patchrelay.yaml` and define one or more projects.
+`patchrelay init` writes only the machine-level service config to `~/.config/patchrelay/patchrelay.yaml`.
 
 At the top level, configure the public HTTPS origin that Linear should use:
 
 ```yaml
 server:
-  bind: 127.0.0.1
-  port: 8787
   public_base_url: https://patchrelay.example.com
 ```
 
 PatchRelay will use `https://patchrelay.example.com/oauth/linear/callback` as the OAuth callback.
 
-Each project needs:
+Add repositories with the separate project configuration tool. A project only needs:
 
-- a local repository path
-- a worktree root
-- the issue key prefixes or team ids that should route to that project
-- a branch prefix
+- `id`
+- `repo_path`
+- one routing key when you have multiple projects: `issue_key_prefixes` or `linear_team_ids`
 
 For a single-machine multi-repo setup, add one `projects[]` entry per repository. PatchRelay uses those entries for routing and worktree isolation, while the Linear OAuth app, webhook secret, and encrypted installation tokens stay shared at the service level.
 
@@ -156,6 +153,8 @@ PatchRelay is convention-first here:
 - by default it uses `agentSessionCreated`, `agentPrompted`, and `statusChanged` as trigger events for app-mode installs
 - `defaults.workflow_files` and `defaults.workflow_statuses` let you change those conventions globally
 - `projects[].workflow_files` and `projects[].workflow_statuses` are sparse overrides, so a project only needs to declare the entries that differ
+- `worktree_root` defaults to `~/.local/share/patchrelay/worktrees/<project-id>`
+- `branch_prefix` defaults to a slug of the project id
 
 `projects[].trigger_events` is optional now and mainly for advanced overrides. Keep it only if you want PatchRelay to react to a non-default set such as regular issue comments.
 
@@ -174,7 +173,7 @@ Each automated repository should contain:
 - `IMPLEMENTATION_WORKFLOW.md`
 - `REVIEW_WORKFLOW.md`
 - `DEPLOY_WORKFLOW.md`
-- `CLEANUP_WORKFLOW.md`
+- optional: `CLEANUP_WORKFLOW.md`
 
 These files are the policy PatchRelay passes to the agent. They should explain what the agent is allowed to do in that repository, what validation is required, and when final issue states should be moved.
 

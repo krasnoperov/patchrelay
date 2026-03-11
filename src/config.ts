@@ -4,7 +4,7 @@ import path from "node:path";
 import YAML from "yaml";
 import { z } from "zod";
 import type { AppConfig } from "./types.ts";
-import { getDefaultConfigPath, getDefaultDatabasePath, getDefaultLogPath } from "./runtime-paths.ts";
+import { getDefaultConfigPath, getDefaultDatabasePath, getDefaultLogPath, getPatchRelayDataDir } from "./runtime-paths.ts";
 import { ensureAbsolutePath } from "./utils.ts";
 
 const LINEAR_OAUTH_CALLBACK_PATH = "/oauth/linear/callback";
@@ -36,7 +36,7 @@ const workflowStatusesOverrideSchema = workflowStatusesSchema.partial();
 const projectSchema = z.object({
   id: z.string().min(1),
   repo_path: z.string().min(1),
-  worktree_root: z.string().min(1),
+  worktree_root: z.string().min(1).optional(),
   workflow_files: workflowFilesOverrideSchema.optional(),
   workflow_statuses: workflowStatusesOverrideSchema.optional(),
   workflow_labels: z
@@ -57,7 +57,7 @@ const projectSchema = z.object({
   linear_team_ids: z.array(z.string().min(1)).default([]),
   allow_labels: z.array(z.string().min(1)).default([]),
   trigger_events: z.array(z.string().min(1)).min(1).optional(),
-  branch_prefix: z.string().min(1),
+  branch_prefix: z.string().min(1).optional(),
 });
 
 const configSchema = z.object({
@@ -103,43 +103,30 @@ const configSchema = z.object({
     .default({
       enabled: false,
     }),
-  runner: z
-    .object({
-      git_bin: z.string().default("git"),
-      codex: z.object({
-        bin: z.string().default("codex"),
-        args: z.array(z.string()).default(["app-server"]),
-        shell_bin: z.string().optional(),
-        source_bashrc: z.boolean().default(true),
-        model: z.string().optional(),
-        model_provider: z.string().optional(),
-        service_name: z.string().default("patchrelay"),
-        base_instructions: z.string().optional(),
-        developer_instructions: z.string().optional(),
-        approval_policy: z.enum(["never", "on-request", "on-failure", "untrusted"]).default("never"),
-        sandbox_mode: z.enum(["danger-full-access", "workspace-write", "read-only"]).default("danger-full-access"),
-        persist_extended_history: z.boolean().default(false),
-      }),
-    })
-    .default({
-      git_bin: "git",
-      codex: {
-        bin: "codex",
-        args: ["app-server"],
-        source_bashrc: true,
-        service_name: "patchrelay",
-        approval_policy: "never",
-        sandbox_mode: "danger-full-access",
-        persist_extended_history: false,
-      },
+  runner: z.object({
+    git_bin: z.string().default("git"),
+    codex: z.object({
+      bin: z.string().default("codex"),
+      args: z.array(z.string()).default(["app-server"]),
+      shell_bin: z.string().optional(),
+      source_bashrc: z.boolean().default(true),
+      model: z.string().optional(),
+      model_provider: z.string().optional(),
+      service_name: z.string().default("patchrelay"),
+      base_instructions: z.string().optional(),
+      developer_instructions: z.string().optional(),
+      approval_policy: z.enum(["never", "on-request", "on-failure", "untrusted"]).default("never"),
+      sandbox_mode: z.enum(["danger-full-access", "workspace-write", "read-only"]).default("danger-full-access"),
+      persist_extended_history: z.boolean().default(false),
     }),
+  }),
   defaults: z
     .object({
       workflow_files: workflowFilesOverrideSchema.optional(),
       workflow_statuses: workflowStatusesOverrideSchema.optional(),
     })
     .default({}),
-  projects: z.array(projectSchema).min(1),
+  projects: z.array(projectSchema).default([]),
 });
 
 const builtinWorkflowFiles = {
@@ -170,6 +157,34 @@ function defaultTriggerEvents(actor: "user" | "app"): AppConfig["projects"][numb
   return ["statusChanged"];
 }
 
+function withSectionDefaults(input: unknown): unknown {
+  const source = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
+  const { linear: _linear, runner: _runner, ...rest } = source;
+  const linear = source.linear && typeof source.linear === "object" ? (source.linear as Record<string, unknown>) : {};
+  const runner = source.runner && typeof source.runner === "object" ? (source.runner as Record<string, unknown>) : {};
+  const linearOauth = linear.oauth && typeof linear.oauth === "object" ? (linear.oauth as Record<string, unknown>) : {};
+  const runnerCodex = runner.codex && typeof runner.codex === "object" ? (runner.codex as Record<string, unknown>) : {};
+
+  return {
+    server: {},
+    ingress: {},
+    logging: {},
+    database: {},
+    operator_api: {},
+    defaults: {},
+    projects: [],
+    ...rest,
+    linear: {
+      ...linear,
+      oauth: linearOauth,
+    },
+    runner: {
+      ...runner,
+      codex: runnerCodex,
+    },
+  };
+}
+
 function expandEnv(value: unknown): unknown {
   if (typeof value === "string") {
     return value.replace(/\$\{([A-Z0-9_]+)(?::-(.*?))?\}/g, (_match, name: string, fallback?: string) => {
@@ -190,6 +205,19 @@ function expandEnv(value: unknown): unknown {
 
 function resolveWorkflowFilePath(repoPath: string, workflowFile: string): string {
   return path.isAbsolute(workflowFile) ? ensureAbsolutePath(workflowFile) : path.resolve(repoPath, workflowFile);
+}
+
+function defaultWorktreeRoot(projectId: string): string {
+  return path.join(getPatchRelayDataDir(), "worktrees", projectId);
+}
+
+function defaultBranchPrefix(projectId: string): string {
+  const sanitized = projectId
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return sanitized || "patchrelay";
 }
 
 function formatUrlHost(host: string): string {
@@ -223,19 +251,20 @@ function mergeWorkflowFiles(
   repoPath: string,
   defaults: z.infer<typeof workflowFilesOverrideSchema> | undefined,
   overrides: z.infer<typeof workflowFilesOverrideSchema> | undefined,
+  options?: { cleanupEnabled?: boolean },
 ): AppConfig["projects"][number]["workflowFiles"] {
   const merged = {
     development: overrides?.development ?? defaults?.development ?? builtinWorkflowFiles.development,
     review: overrides?.review ?? defaults?.review ?? builtinWorkflowFiles.review,
     deploy: overrides?.deploy ?? defaults?.deploy ?? builtinWorkflowFiles.deploy,
-    cleanup: overrides?.cleanup ?? defaults?.cleanup ?? builtinWorkflowFiles.cleanup,
+    ...(options?.cleanupEnabled ? { cleanup: overrides?.cleanup ?? defaults?.cleanup ?? builtinWorkflowFiles.cleanup } : {}),
   };
 
   return {
     development: resolveWorkflowFilePath(repoPath, merged.development),
     review: resolveWorkflowFilePath(repoPath, merged.review),
     deploy: resolveWorkflowFilePath(repoPath, merged.deploy),
-    cleanup: resolveWorkflowFilePath(repoPath, merged.cleanup),
+    ...(merged.cleanup ? { cleanup: resolveWorkflowFilePath(repoPath, merged.cleanup) } : {}),
   };
 }
 
@@ -302,7 +331,7 @@ export function loadConfig(
 
   const raw = readFileSync(requestedPath, "utf8");
   const parsedYaml = YAML.parse(raw);
-  const parsed = configSchema.parse(expandEnv(parsedYaml));
+  const parsed = configSchema.parse(withSectionDefaults(expandEnv(parsedYaml)));
 
   const requireLinearSecret = options?.requireLinearSecret ?? true;
   const allowMissingSecrets = options?.allowMissingSecrets ?? false;
@@ -388,42 +417,45 @@ export function loadConfig(
         persistExtendedHistory: parsed.runner.codex.persist_extended_history,
       },
     },
-    projects: parsed.projects.map((project) => ({
-      id: project.id,
-      repoPath: ensureAbsolutePath(project.repo_path),
-      worktreeRoot: ensureAbsolutePath(project.worktree_root),
-      workflowFiles: mergeWorkflowFiles(
-        ensureAbsolutePath(project.repo_path),
-        parsed.defaults.workflow_files,
-        project.workflow_files,
-      ),
-      workflowStatuses: mergeWorkflowStatuses(parsed.defaults.workflow_statuses, project.workflow_statuses),
-      ...(project.workflow_labels
-        ? {
-            workflowLabels: {
-              ...(project.workflow_labels.working ? { working: project.workflow_labels.working } : {}),
-              ...(project.workflow_labels.awaiting_handoff ? { awaitingHandoff: project.workflow_labels.awaiting_handoff } : {}),
-            },
-          }
-        : {}),
-      ...(project.trusted_actors
-        ? {
-            trustedActors: {
-              ids: project.trusted_actors.ids,
-              names: project.trusted_actors.names,
-              emails: project.trusted_actors.emails,
-              emailDomains: project.trusted_actors.email_domains,
-            },
-          }
-        : {}),
-      issueKeyPrefixes: project.issue_key_prefixes,
-      linearTeamIds: project.linear_team_ids,
-      allowLabels: project.allow_labels,
-      triggerEvents:
-        (project.trigger_events as AppConfig["projects"][number]["triggerEvents"] | undefined) ??
-        defaultTriggerEvents(parsed.linear.oauth.actor),
-      branchPrefix: project.branch_prefix,
-    })),
+    projects: parsed.projects.map((project) => {
+      const repoPath = ensureAbsolutePath(project.repo_path);
+      const workflowStatuses = mergeWorkflowStatuses(parsed.defaults.workflow_statuses, project.workflow_statuses);
+
+      return {
+        id: project.id,
+        repoPath,
+        worktreeRoot: ensureAbsolutePath(project.worktree_root ?? defaultWorktreeRoot(project.id)),
+        workflowFiles: mergeWorkflowFiles(repoPath, parsed.defaults.workflow_files, project.workflow_files, {
+          cleanupEnabled: Boolean(workflowStatuses.cleanup),
+        }),
+        workflowStatuses,
+        ...(project.workflow_labels
+          ? {
+              workflowLabels: {
+                ...(project.workflow_labels.working ? { working: project.workflow_labels.working } : {}),
+                ...(project.workflow_labels.awaiting_handoff ? { awaitingHandoff: project.workflow_labels.awaiting_handoff } : {}),
+              },
+            }
+          : {}),
+        ...(project.trusted_actors
+          ? {
+              trustedActors: {
+                ids: project.trusted_actors.ids,
+                names: project.trusted_actors.names,
+                emails: project.trusted_actors.emails,
+                emailDomains: project.trusted_actors.email_domains,
+              },
+            }
+          : {}),
+        issueKeyPrefixes: project.issue_key_prefixes,
+        linearTeamIds: project.linear_team_ids,
+        allowLabels: project.allow_labels,
+        triggerEvents:
+          (project.trigger_events as AppConfig["projects"][number]["triggerEvents"] | undefined) ??
+          defaultTriggerEvents(parsed.linear.oauth.actor),
+        branchPrefix: project.branch_prefix ?? defaultBranchPrefix(project.id),
+      };
+    }),
   };
 
   validateConfigSemantics(config);

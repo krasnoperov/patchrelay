@@ -420,7 +420,7 @@ The intended packaged onboarding flow is:
 
 1. `patchrelay init https://patchrelay.example.com`
 2. edit `~/.config/patchrelay/.env`
-3. add your project block in `~/.config/patchrelay/patchrelay.yaml`
+3. use the separate project configuration tool to add a repository
 4. `patchrelay doctor`
 5. `patchrelay install-service`
 6. `patchrelay connect --project <projectId>`

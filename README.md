@@ -89,42 +89,9 @@ LINEAR_OAUTH_CLIENT_SECRET=replace-with-linear-oauth-client-secret
 
 ### 4. Configure a project
 
-Edit the generated `~/.config/patchrelay/patchrelay.yaml`.
+Use the separate project configuration tool to add repositories after `patchrelay init`.
 
-Keep the generated top-level structure and add a project block:
-
-```yaml
-server:
-  bind: 127.0.0.1
-  port: 8787
-  public_base_url: https://patchrelay.example.com
-
-runner:
-  codex:
-    approval_policy: never
-    sandbox_mode: danger-full-access
-
-projects:
-  - id: app
-    repo_path: /home/your-user/src/app
-    worktree_root: /home/your-user/.local/share/patchrelay/worktrees/app
-    issue_key_prefixes:
-      - APP
-    linear_team_ids:
-      - APP
-    branch_prefix: app
-```
-
-Minimum project fields:
-
-- `id`: CLI-facing project id
-- `repo_path`: local repo to automate
-- `worktree_root`: where issue worktrees are created
-- `issue_key_prefixes` / `linear_team_ids`: routing rules
-- `trigger_events`: optional advanced override for which Linear events can steer runs
-- `branch_prefix`: generated branch prefix
-
-For the normal Linear app-agent flow, you can usually omit `trigger_events`. PatchRelay defaults to `agentSessionCreated`, `agentPrompted`, and `statusChanged` for app-mode installs.
+The generated `~/.config/patchrelay/patchrelay.yaml` is machine-level service config only. Project entries should be created by the project configuration flow, not by hand-editing a placeholder template.
 
 ### 5. Add workflow docs to the repo
 

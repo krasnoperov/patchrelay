@@ -156,6 +156,48 @@ test("runPreflight warns when the public base URL is missing", async () => {
   }
 });
 
+test("runPreflight warns when no projects are configured yet", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-preflight-no-projects-"));
+
+  try {
+    const config = createConfig(baseDir);
+    config.projects = [];
+
+    const report = await runPreflight(config);
+
+    assert.equal(report.ok, true);
+    assert.ok(
+      report.checks.some(
+        (check) => check.scope === "projects" && check.status === "warn" && check.message.includes("No projects are configured yet"),
+      ),
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("runPreflight does not require cleanup workflow files when cleanup is disabled", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-preflight-no-cleanup-"));
+
+  try {
+    const config = createConfig(baseDir);
+    mkdirSync(config.projects[0].repoPath, { recursive: true });
+    writeFileSync(config.projects[0].workflowFiles.development, "# dev\n", "utf8");
+    writeFileSync(config.projects[0].workflowFiles.review, "# review\n", "utf8");
+    writeFileSync(config.projects[0].workflowFiles.deploy, "# deploy\n", "utf8");
+    delete config.projects[0].workflowFiles.cleanup;
+    delete config.projects[0].workflowStatuses.cleanup;
+    delete config.projects[0].workflowStatuses.cleanupActive;
+
+    const report = await runPreflight(config);
+
+    assert.equal(report.ok, true);
+    assert.ok(report.checks.every((check) => check.scope !== "project:usertold:workflow:cleanup"));
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("runPreflight warns when app-mode projects omit agent-session triggers", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-preflight-agent-triggers-"));
 

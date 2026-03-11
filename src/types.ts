@@ -41,7 +41,7 @@ export interface ProjectWorkflowFiles {
   development: string;
   review: string;
   deploy: string;
-  cleanup: string;
+  cleanup?: string;
 }
 
 export interface ProjectConfig {

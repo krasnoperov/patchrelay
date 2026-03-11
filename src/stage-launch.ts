@@ -31,6 +31,9 @@ export function buildStageLaunchPlan(
   const slug = issue.title ? slugify(issue.title) : "";
   const branchSuffix = slug ? `${issueRef}-${slug}` : issueRef;
   const workflowFile = project.workflowFiles[stage];
+  if (!workflowFile) {
+    throw new Error(`Workflow file is not configured for stage ${stage} in project ${project.id}`);
+  }
 
   return {
     branchName: `${project.branchPrefix}/${branchSuffix}`,

@@ -456,9 +456,10 @@ test("cli init writes XDG config files and install-service manages the user unit
         assert.doesNotMatch(envContents, /replace-with-linear-webhook-secret/);
         assert.doesNotMatch(envContents, /replace-with-long-random-secret/);
         const configContents = readFileSync(configPath, "utf8");
-        assert.equal(configContents.includes("token_encryption_key_env: PATCHRELAY_TOKEN_ENCRYPTION_KEY"), true);
-        assert.equal(configContents.includes(path.join(dataHome, "patchrelay", "worktrees")), true);
         assert.equal(configContents.includes("public_base_url: https://patchrelay.example.com"), true);
+        assert.equal(configContents.includes("projects:"), false);
+        assert.equal(configContents.includes(path.join(dataHome, "patchrelay", "worktrees")), false);
+        assert.match(initText, /Use the project configuration tool to add your first repository/);
 
         const installOut = createBufferStream();
         assert.equal(

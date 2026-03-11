@@ -88,13 +88,19 @@ export async function runPreflight(config: AppConfig): Promise<PreflightReport> 
     checks.push(warn("archive", "Raw webhook archival is disabled"));
   }
 
+  if (config.projects.length === 0) {
+    checks.push(warn("projects", "No projects are configured yet; add one with the project configuration tool before connecting Linear"));
+  }
+
   for (const project of config.projects) {
     checks.push(...checkPath(`project:${project.id}:repo`, project.repoPath, "directory", { writable: true }));
     checks.push(...checkPath(`project:${project.id}:worktrees`, project.worktreeRoot, "directory", { createIfMissing: true, writable: true }));
     checks.push(...checkPath(`project:${project.id}:workflow:development`, project.workflowFiles.development, "file", {}));
     checks.push(...checkPath(`project:${project.id}:workflow:review`, project.workflowFiles.review, "file", {}));
     checks.push(...checkPath(`project:${project.id}:workflow:deploy`, project.workflowFiles.deploy, "file", {}));
-    checks.push(...checkPath(`project:${project.id}:workflow:cleanup`, project.workflowFiles.cleanup, "file", {}));
+    if (project.workflowFiles.cleanup) {
+      checks.push(...checkPath(`project:${project.id}:workflow:cleanup`, project.workflowFiles.cleanup, "file", {}));
+    }
   }
 
   checks.push(await checkExecutable("git", config.runner.gitBin));

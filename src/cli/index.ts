@@ -272,8 +272,9 @@ export async function runCli(
               `1. Edit ${result.envPath}`,
               "2. Paste your Linear OAuth client id and client secret into that .env",
               "3. Paste LINEAR_WEBHOOK_SECRET from that .env into the Linear OAuth app webhook signing secret",
-              "4. Run `patchrelay doctor`",
-              "5. Run `patchrelay install-service`",
+              "4. Use the project configuration tool to add your first repository",
+              "5. Run `patchrelay doctor`",
+              "6. Run `patchrelay install-service`",
             ].join("\n") + "\n",
       );
       return 0;

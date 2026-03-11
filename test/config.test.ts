@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { loadConfig } from "../src/config.ts";
+import { getPatchRelayDataDir } from "../src/runtime-paths.ts";
 
 const oauthConfigYaml = `  token_encryption_key_env: PATCHRELAY_TOKEN_ENCRYPTION_KEY
   oauth:
@@ -215,6 +216,38 @@ projects:
   }
 });
 
+test("loadConfig accepts machine-level config before any projects are added", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-config-machine-only-"));
+
+  try {
+    mkdirSync(path.join(baseDir, "config"), { recursive: true });
+    writeFileSync(
+      path.join(baseDir, "config", "patchrelay.yaml"),
+      `
+server:
+  public_base_url: https://relay.example.com
+`,
+      "utf8",
+    );
+
+    withEnv(
+      {
+        PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.yaml"),
+        LINEAR_WEBHOOK_SECRET: "top-secret",
+        ...oauthEnv,
+      },
+      () => {
+        const config = loadConfig();
+        assert.equal(config.server.publicBaseUrl, "https://relay.example.com");
+        assert.equal(config.projects.length, 0);
+        assert.equal(config.runner.codex.bin, "codex");
+      },
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("loadConfig derives the OAuth redirect URI from server.public_base_url when redirect_uri is omitted", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-config-derived-public-oauth-"));
   const repoPath = path.join(baseDir, "repo");
@@ -375,6 +408,48 @@ projects:
   }
 });
 
+test("loadConfig derives project worktree_root and branch_prefix when omitted", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-config-project-defaults-"));
+  const repoPath = path.join(baseDir, "repo");
+
+  try {
+    mkdirSync(path.join(baseDir, "config"), { recursive: true });
+    mkdirSync(repoPath, { recursive: true });
+    writeFileSync(
+      path.join(baseDir, "config", "patchrelay.yaml"),
+      `
+server:
+  public_base_url: https://relay.example.com
+linear:
+  webhook_secret_env: REQUIRED_SECRET
+${oauthConfigYamlWithoutRedirect}
+projects:
+  - id: Usertold App
+    repo_path: ${JSON.stringify(repoPath)}
+`,
+      "utf8",
+    );
+
+    withEnv(
+      {
+        PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.yaml"),
+        REQUIRED_SECRET: "top-secret",
+        ...oauthEnv,
+      },
+      () => {
+        const config = loadConfig();
+        assert.equal(
+          config.projects[0]?.worktreeRoot,
+          path.join(getPatchRelayDataDir(), "worktrees", "Usertold App"),
+        );
+        assert.equal(config.projects[0]?.branchPrefix, "usertold-app");
+      },
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("loadConfig merges global workflow defaults with sparse project overrides", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-config-defaults-"));
   const repoPath = path.join(baseDir, "repo-one");
@@ -520,7 +595,7 @@ projects:
         assert.equal(config.projects[0]?.workflowFiles.development, path.join(repoPath, "IMPLEMENTATION_WORKFLOW.md"));
         assert.equal(config.projects[0]?.workflowFiles.review, path.join(repoPath, "workflows", "REVIEW.md"));
         assert.equal(config.projects[0]?.workflowFiles.deploy, path.join(repoPath, "ops", "DEPLOY.md"));
-        assert.equal(config.projects[0]?.workflowFiles.cleanup, path.join(repoPath, "CLEANUP_WORKFLOW.md"));
+        assert.equal(config.projects[0]?.workflowFiles.cleanup, undefined);
         assert.equal(config.projects[0]?.workflowStatuses.development, "Start");
         assert.equal(config.projects[0]?.workflowStatuses.review, "Peer Review");
         assert.equal(config.projects[0]?.workflowStatuses.deploy, "Release");
@@ -717,6 +792,7 @@ projects:
         const config = loadConfig();
         assert.equal(config.projects[0]?.workflowStatuses.cleanup, undefined);
         assert.equal(config.projects[0]?.workflowStatuses.cleanupActive, undefined);
+        assert.equal(config.projects[0]?.workflowFiles.cleanup, undefined);
         assert.equal(config.projects[0]?.workflowStatuses.humanNeeded, undefined);
         assert.equal(config.projects[0]?.workflowStatuses.done, "Done");
       },
