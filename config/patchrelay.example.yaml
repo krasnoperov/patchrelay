@@ -2,4 +2,5 @@ server:
   public_base_url: https://patchrelay.example.com
 
 # Machine-level PatchRelay config only.
-# Add repositories with the separate project configuration command.
+# Keep this file minimal unless you intentionally need overrides.
+# Add repositories with `patchrelay project add <id> <repo-path>`.

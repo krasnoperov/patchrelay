@@ -102,11 +102,11 @@ For one machine with several repositories:
 
 1. Run `patchrelay init https://your-domain.example` once.
 2. Put the machine-level secrets in `~/.config/patchrelay/.env`.
-3. Run `patchrelay project add <id> <repo-path>` once per repository.
+3. Run `patchrelay project apply <id> <repo-path>` once per repository.
 4. Give each project its `repo_path`.
 5. Route each project by `issue_key_prefixes`, `linear_team_ids`, or both when you need disambiguation.
 6. Keep workflow files inside each repository.
-7. Run `patchrelay connect --project <projectId>` for each project that should link to a Linear installation.
+7. If `project apply` reports missing workflow files or secrets, fix them and rerun `patchrelay project apply`.
 
 One PatchRelay instance can serve several repos cleanly as long as routing is unambiguous.
 
@@ -117,12 +117,17 @@ For the standard Linear app-agent flow, you can usually omit `trigger_events` en
 1. Install PatchRelay and run `patchrelay init https://your-domain.example`.
 2. Keep the generated `LINEAR_WEBHOOK_SECRET` and `PATCHRELAY_TOKEN_ENCRYPTION_KEY`, then fill in `LINEAR_OAUTH_CLIENT_ID` and `LINEAR_OAUTH_CLIENT_SECRET` in `~/.config/patchrelay/.env`.
 3. Create the Linear OAuth app with `actor=app`, the required scopes, and webhook settings.
-4. Add one or more projects with `patchrelay project add <id> <repo-path>`.
-5. Add the repo-local workflow files to each automated repository.
-6. Run `patchrelay doctor` and fix any failures or warnings.
-7. Run `patchrelay install-service`.
-8. Run `patchrelay connect --project <projectId>`.
-9. Delegate a Linear issue to the PatchRelay app and confirm the webhook-driven stage starts.
+4. Add one or more projects with `patchrelay project apply <id> <repo-path>`.
+5. If `project apply` reports missing workflow files, add the repo-local workflow files to each automated repository and rerun `patchrelay project apply`.
+6. Run `patchrelay doctor` and fix any remaining failures or warnings.
+7. Delegate a Linear issue to the PatchRelay app and confirm the webhook-driven stage starts.
+
+Why this order:
+
+- `patchrelay init` is machine-level and requires the public HTTPS origin up front.
+- `patchrelay.yaml` should stay minimal; defaults cover the rest of the local runtime in the normal case.
+- `patchrelay init` installs the service and a config watcher immediately.
+- `patchrelay project apply` is the idempotent happy-path command: it upserts the project, reloads PatchRelay when possible, and reuses or starts the Linear connect flow automatically.
 
 ## Operator Notes
 

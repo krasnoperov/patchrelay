@@ -1,0 +1,6 @@
+[Unit]
+Description=PatchRelay reload helper (systemd user service)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/env systemctl --user reload-or-restart patchrelay.service

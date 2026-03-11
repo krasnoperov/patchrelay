@@ -15,6 +15,8 @@ export interface PatchRelayPathLayout {
   logFilePath: string;
   systemdUserDir: string;
   systemdUnitPath: string;
+  systemdReloadUnitPath: string;
+  systemdPathUnitPath: string;
 }
 
 export function getPatchRelayPathLayout(): PatchRelayPathLayout {
@@ -41,6 +43,8 @@ export function getPatchRelayPathLayout(): PatchRelayPathLayout {
     logFilePath: ensureAbsolutePath(process.env.PATCHRELAY_LOG_FILE ?? path.join(stateDir, "patchrelay.log")),
     systemdUserDir,
     systemdUnitPath: path.join(systemdUserDir, "patchrelay.service"),
+    systemdReloadUnitPath: path.join(systemdUserDir, "patchrelay-reload.service"),
+    systemdPathUnitPath: path.join(systemdUserDir, "patchrelay.path"),
   };
 }
 
@@ -78,6 +82,14 @@ export function getDefaultWebhookArchiveDir(): string {
 
 export function getSystemdUserUnitPath(): string {
   return getPatchRelayPathLayout().systemdUnitPath;
+}
+
+export function getSystemdUserReloadUnitPath(): string {
+  return getPatchRelayPathLayout().systemdReloadUnitPath;
+}
+
+export function getSystemdUserPathUnitPath(): string {
+  return getPatchRelayPathLayout().systemdPathUnitPath;
 }
 
 export function getPackageRoot(): string {

@@ -593,7 +593,7 @@ export class PatchRelayService {
           organizationId: normalized.installation.organizationId,
           oauthClientId: normalized.installation.oauthClientId,
         },
-        "Linear OAuth app installation was revoked; reconnect affected projects with `patchrelay connect --project <id>`",
+        "Linear OAuth app installation was revoked; reconnect affected projects with `patchrelay project apply <id> <repo-path>` or `patchrelay connect --project <id>`",
       );
       return;
     }

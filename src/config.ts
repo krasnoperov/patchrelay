@@ -185,22 +185,59 @@ function withSectionDefaults(input: unknown): unknown {
   };
 }
 
-function expandEnv(value: unknown): unknown {
+function expandEnv(value: unknown, env: Record<string, string | undefined>): unknown {
   if (typeof value === "string") {
     return value.replace(/\$\{([A-Z0-9_]+)(?::-(.*?))?\}/g, (_match, name: string, fallback?: string) => {
-      return process.env[name] ?? fallback ?? "";
+      return env[name] ?? fallback ?? "";
     });
   }
 
   if (Array.isArray(value)) {
-    return value.map((entry) => expandEnv(entry));
+    return value.map((entry) => expandEnv(entry, env));
   }
 
   if (value && typeof value === "object") {
-    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, expandEnv(entry)]));
+    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, expandEnv(entry, env)]));
   }
 
   return value;
+}
+
+function readAdjacentEnvFile(configPath: string): Record<string, string> {
+  const envPath = path.join(path.dirname(configPath), ".env");
+  if (!existsSync(envPath)) {
+    return {};
+  }
+
+  const values: Record<string, string> = {};
+  const raw = readFileSync(envPath, "utf8");
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) {
+      continue;
+    }
+
+    const separator = trimmed.indexOf("=");
+    if (separator <= 0) {
+      continue;
+    }
+
+    const name = trimmed.slice(0, separator).trim();
+    if (!name) {
+      continue;
+    }
+
+    let value = trimmed.slice(separator + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    values[name] = value;
+  }
+
+  return values;
 }
 
 function resolveWorkflowFilePath(repoPath: string, workflowFile: string): string {
@@ -329,18 +366,24 @@ export function loadConfig(
     throw new Error(`Config file not found: ${requestedPath}. Run "patchrelay init" to create it.`);
   }
 
+  const adjacentEnv = readAdjacentEnvFile(requestedPath);
+  const env = {
+    ...adjacentEnv,
+    ...process.env,
+  };
+
   const raw = readFileSync(requestedPath, "utf8");
   const parsedYaml = YAML.parse(raw);
-  const parsed = configSchema.parse(withSectionDefaults(expandEnv(parsedYaml)));
+  const parsed = configSchema.parse(withSectionDefaults(expandEnv(parsedYaml, env)));
 
   const requireLinearSecret = options?.requireLinearSecret ?? true;
   const allowMissingSecrets = options?.allowMissingSecrets ?? false;
-  const webhookSecret = process.env[parsed.linear.webhook_secret_env];
-  const tokenEncryptionKey = process.env[parsed.linear.token_encryption_key_env];
-  const oauthClientId = process.env[parsed.linear.oauth.client_id_env];
-  const oauthClientSecret = process.env[parsed.linear.oauth.client_secret_env];
+  const webhookSecret = env[parsed.linear.webhook_secret_env];
+  const tokenEncryptionKey = env[parsed.linear.token_encryption_key_env];
+  const oauthClientId = env[parsed.linear.oauth.client_id_env];
+  const oauthClientSecret = env[parsed.linear.oauth.client_secret_env];
   const operatorApiToken = parsed.operator_api.bearer_token_env
-    ? process.env[parsed.operator_api.bearer_token_env]
+    ? env[parsed.operator_api.bearer_token_env]
     : undefined;
   if (requireLinearSecret && !webhookSecret && !allowMissingSecrets) {
     throw new Error(`Missing env var ${parsed.linear.webhook_secret_env}`);
@@ -355,8 +398,8 @@ export function loadConfig(
     throw new Error(`Missing env var ${parsed.linear.token_encryption_key_env}`);
   }
 
-  const logFilePath = process.env.PATCHRELAY_LOG_FILE ?? parsed.logging.file_path;
-  const webhookArchiveDir = process.env.PATCHRELAY_WEBHOOK_ARCHIVE_DIR ?? parsed.logging.webhook_archive_dir;
+  const logFilePath = env.PATCHRELAY_LOG_FILE ?? parsed.logging.file_path;
+  const webhookArchiveDir = env.PATCHRELAY_WEBHOOK_ARCHIVE_DIR ?? parsed.logging.webhook_archive_dir;
   const oauthRedirectUri = parsed.linear.oauth.redirect_uri ?? deriveLinearOAuthRedirectUri(parsed.server);
 
   const config: AppConfig = {
@@ -373,13 +416,13 @@ export function loadConfig(
       maxTimestampSkewSeconds: parsed.ingress.max_timestamp_skew_seconds,
     },
     logging: {
-      level: (process.env.PATCHRELAY_LOG_LEVEL as AppConfig["logging"]["level"] | undefined) ?? parsed.logging.level,
+      level: (env.PATCHRELAY_LOG_LEVEL as AppConfig["logging"]["level"] | undefined) ?? parsed.logging.level,
       format: parsed.logging.format,
       filePath: ensureAbsolutePath(logFilePath),
       ...(webhookArchiveDir ? { webhookArchiveDir: ensureAbsolutePath(webhookArchiveDir) } : {}),
     },
     database: {
-      path: ensureAbsolutePath(process.env.PATCHRELAY_DB_PATH ?? parsed.database.path),
+      path: ensureAbsolutePath(env.PATCHRELAY_DB_PATH ?? parsed.database.path),
       wal: parsed.database.wal,
     },
     linear: {

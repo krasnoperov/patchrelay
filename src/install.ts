@@ -13,6 +13,8 @@ import {
   getPatchRelayConfigDir,
   getPatchRelayDataDir,
   getPatchRelayStateDir,
+  getSystemdUserPathUnitPath,
+  getSystemdUserReloadUnitPath,
   getSystemdUserUnitPath,
   readBundledAsset,
 } from "./runtime-paths.ts";
@@ -147,24 +149,40 @@ export async function initializePatchRelayHome(options?: { force?: boolean; publ
   };
 }
 
-export async function installUserServiceUnit(options?: { force?: boolean }): Promise<{
+export async function installUserServiceUnits(options?: { force?: boolean }): Promise<{
   unitPath: string;
+  reloadUnitPath: string;
+  pathUnitPath: string;
   envPath: string;
   configPath: string;
-  status: "created" | "skipped";
+  serviceStatus: "created" | "skipped";
+  reloadStatus: "created" | "skipped";
+  pathStatus: "created" | "skipped";
 }> {
   const force = options?.force ?? false;
   const unitPath = getSystemdUserUnitPath();
-  const status = await writeTemplateFile(unitPath, renderTemplate(readBundledAsset("infra/patchrelay.service")), force);
+  const reloadUnitPath = getSystemdUserReloadUnitPath();
+  const pathUnitPath = getSystemdUserPathUnitPath();
+  const serviceStatus = await writeTemplateFile(unitPath, renderTemplate(readBundledAsset("infra/patchrelay.service")), force);
+  const reloadStatus = await writeTemplateFile(
+    reloadUnitPath,
+    renderTemplate(readBundledAsset("infra/patchrelay-reload.service")),
+    force,
+  );
+  const pathStatus = await writeTemplateFile(pathUnitPath, renderTemplate(readBundledAsset("infra/patchrelay.path")), force);
   return {
     unitPath,
+    reloadUnitPath,
+    pathUnitPath,
     envPath: getDefaultEnvPath(),
     configPath: getDefaultConfigPath(),
-    status,
+    serviceStatus,
+    reloadStatus,
+    pathStatus,
   };
 }
 
-export async function addProjectToConfig(options: {
+export async function upsertProjectInConfig(options: {
   id: string;
   repoPath: string;
   issueKeyPrefixes?: string[];
@@ -172,6 +190,7 @@ export async function addProjectToConfig(options: {
   configPath?: string;
 }): Promise<{
   configPath: string;
+  status: "created" | "updated" | "unchanged";
   project: {
     id: string;
     repoPath: string;
@@ -181,7 +200,9 @@ export async function addProjectToConfig(options: {
 }> {
   const configPath = options.configPath ?? getDefaultConfigPath();
   if (!existsSync(configPath)) {
-    throw new Error(`Config file not found: ${configPath}. Run "patchrelay init <public-base-url>" first.`);
+    throw new Error(
+      `Config file not found: ${configPath}. Run "patchrelay init <public-base-url>" first so PatchRelay knows the public HTTPS origin for Linear.`,
+    );
   }
 
   const projectId = options.id.trim();
@@ -196,17 +217,34 @@ export async function addProjectToConfig(options: {
   const original = await readFile(configPath, "utf8");
   const parsed = (YAML.parse(original) ?? {}) as { projects?: Array<Record<string, unknown>> };
   const existingProjects = Array.isArray(parsed.projects) ? parsed.projects : [];
+  const existingIndex = existingProjects.findIndex((project) => String(project.id ?? "") === projectId);
+  const existingProject = existingIndex >= 0 ? existingProjects[existingIndex] : undefined;
 
-  if (existingProjects.some((project) => String(project.id ?? "") === projectId)) {
-    throw new Error(`Project already exists: ${projectId}`);
+  const nextProject: Record<string, unknown> = {
+    ...(existingProject ?? {}),
+    id: projectId,
+    repo_path: repoPath,
+  };
+  if (issueKeyPrefixes.length > 0) {
+    nextProject.issue_key_prefixes = issueKeyPrefixes;
+  } else {
+    delete nextProject.issue_key_prefixes;
+  }
+  if (linearTeamIds.length > 0) {
+    nextProject.linear_team_ids = linearTeamIds;
+  } else {
+    delete nextProject.linear_team_ids;
   }
 
-  if (existingProjects.length > 0 && issueKeyPrefixes.length === 0 && linearTeamIds.length === 0) {
-    throw new Error("Adding a second project requires routing. Use --issue-prefix or --team-id.");
+  if (existingProjects.length - (existingProject ? 1 : 0) > 0 && issueKeyPrefixes.length === 0 && linearTeamIds.length === 0) {
+    throw new Error("Adding or updating a project in a multi-project config requires routing. Use --issue-prefix or --team-id.");
   }
 
-  if (existingProjects.length > 0) {
-    const unscoped = existingProjects.find((project) => {
+  if (existingProjects.length - (existingProject ? 1 : 0) > 0) {
+    const unscoped = existingProjects.find((project, index) => {
+      if (index === existingIndex) {
+        return false;
+      }
       const prefixes = Array.isArray(project.issue_key_prefixes) ? project.issue_key_prefixes : [];
       const teamIds = Array.isArray(project.linear_team_ids) ? project.linear_team_ids : [];
       const labels = Array.isArray(project.allow_labels) ? project.allow_labels : [];
@@ -220,8 +258,10 @@ export async function addProjectToConfig(options: {
   }
 
   for (const prefix of issueKeyPrefixes) {
-    const owner = existingProjects.find((project) =>
-      Array.isArray(project.issue_key_prefixes) && project.issue_key_prefixes.map(String).includes(prefix),
+    const owner = existingProjects.find((project, index) =>
+      index !== existingIndex &&
+      Array.isArray(project.issue_key_prefixes) &&
+      project.issue_key_prefixes.map(String).includes(prefix),
     );
     if (owner) {
       throw new Error(`Issue key prefix "${prefix}" is already configured for project ${String(owner.id ?? "unknown")}`);
@@ -229,13 +269,34 @@ export async function addProjectToConfig(options: {
   }
 
   for (const teamId of linearTeamIds) {
-    const owner = existingProjects.find((project) =>
-      Array.isArray(project.linear_team_ids) && project.linear_team_ids.map(String).includes(teamId),
+    const owner = existingProjects.find((project, index) =>
+      index !== existingIndex &&
+      Array.isArray(project.linear_team_ids) &&
+      project.linear_team_ids.map(String).includes(teamId),
     );
     if (owner) {
       throw new Error(`Linear team id "${teamId}" is already configured for project ${String(owner.id ?? "unknown")}`);
     }
   }
+
+  const normalizedExistingProject =
+    existingProject &&
+    JSON.stringify({
+      id: String(existingProject.id ?? ""),
+      repo_path: String(existingProject.repo_path ?? ""),
+      issue_key_prefixes: Array.isArray(existingProject.issue_key_prefixes)
+        ? existingProject.issue_key_prefixes.map(String)
+        : [],
+      linear_team_ids: Array.isArray(existingProject.linear_team_ids) ? existingProject.linear_team_ids.map(String) : [],
+    });
+  const normalizedNextProject = JSON.stringify({
+    id: String(nextProject.id ?? ""),
+    repo_path: String(nextProject.repo_path ?? ""),
+    issue_key_prefixes: issueKeyPrefixes,
+    linear_team_ids: linearTeamIds,
+  });
+  const status: "created" | "updated" | "unchanged" =
+    existingProject === undefined ? "created" : normalizedExistingProject === normalizedNextProject ? "unchanged" : "updated";
 
   const document = original.trim() ? YAML.parseDocument(original) : new YAML.Document({});
   if (!YAML.isMap(document.contents)) {
@@ -251,26 +312,31 @@ export async function addProjectToConfig(options: {
     throw new Error(`Config file field "projects" must be a YAML sequence: ${configPath}`);
   }
 
-  const projectNode = document.createNode({
-    id: projectId,
-    repo_path: repoPath,
-    ...(issueKeyPrefixes.length > 0 ? { issue_key_prefixes: issueKeyPrefixes } : {}),
-    ...(linearTeamIds.length > 0 ? { linear_team_ids: linearTeamIds } : {}),
-  });
-  projectsNode.add(projectNode);
+  if (status !== "unchanged") {
+    const nextProjects = [...existingProjects];
+    if (existingIndex >= 0) {
+      nextProjects[existingIndex] = nextProject;
+    } else {
+      nextProjects.push(nextProject);
+    }
+    document.set("projects", document.createNode(nextProjects));
 
-  const next = document.toString();
-  await writeFile(configPath, next, "utf8");
+    const next = document.toString();
+    await writeFile(configPath, next, "utf8");
+  }
 
   try {
     loadConfig(configPath, { requireLinearSecret: false, allowMissingSecrets: true });
   } catch (error) {
-    await writeFile(configPath, original, "utf8");
+    if (status !== "unchanged") {
+      await writeFile(configPath, original, "utf8");
+    }
     throw error;
   }
 
   return {
     configPath,
+    status,
     project: {
       id: projectId,
       repoPath,

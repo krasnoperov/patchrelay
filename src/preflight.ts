@@ -89,7 +89,7 @@ export async function runPreflight(config: AppConfig): Promise<PreflightReport> 
   }
 
   if (config.projects.length === 0) {
-    checks.push(warn("projects", "No projects are configured yet; add one with `patchrelay project add <id> <repo-path>` before connecting Linear"));
+    checks.push(warn("projects", "No projects are configured yet; add one with `patchrelay project apply <id> <repo-path>` before connecting Linear"));
   }
 
   for (const project of config.projects) {

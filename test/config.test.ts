@@ -216,6 +216,70 @@ projects:
   }
 });
 
+test("loadConfig reads missing secrets from the default adjacent .env file", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-config-adjacent-env-"));
+  const configHome = path.join(baseDir, "config-home");
+  const repoPath = path.join(baseDir, "repo");
+  const worktreeRoot = path.join(baseDir, "worktrees");
+  const configPath = path.join(configHome, "patchrelay", "patchrelay.yaml");
+  const envPath = path.join(configHome, "patchrelay", ".env");
+
+  try {
+    mkdirSync(path.dirname(configPath), { recursive: true });
+    mkdirSync(repoPath, { recursive: true });
+    mkdirSync(worktreeRoot, { recursive: true });
+    writeFileSync(
+      configPath,
+      `
+server:
+  bind: 127.0.0.1
+  port: 8787
+linear:
+  webhook_secret_env: REQUIRED_SECRET
+${oauthConfigYaml}
+projects:
+  - id: usertold
+    repo_path: ${JSON.stringify(repoPath)}
+    worktree_root: ${JSON.stringify(worktreeRoot)}
+    trigger_events: [statusChanged]
+    branch_prefix: use
+`,
+      "utf8",
+    );
+    writeFileSync(
+      envPath,
+      [
+        "REQUIRED_SECRET=top-secret",
+        "PATCHRELAY_TOKEN_ENCRYPTION_KEY=env-enc-secret",
+        "LINEAR_OAUTH_CLIENT_ID=env-client-id",
+        "LINEAR_OAUTH_CLIENT_SECRET=env-client-secret",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    withEnv(
+      {
+        PATCHRELAY_CONFIG: undefined,
+        XDG_CONFIG_HOME: configHome,
+        REQUIRED_SECRET: undefined,
+        PATCHRELAY_TOKEN_ENCRYPTION_KEY: undefined,
+        LINEAR_OAUTH_CLIENT_ID: undefined,
+        LINEAR_OAUTH_CLIENT_SECRET: undefined,
+      },
+      () => {
+        const config = loadConfig();
+        assert.equal(config.linear.webhookSecret, "top-secret");
+        assert.equal(config.linear.tokenEncryptionKey, "env-enc-secret");
+        assert.equal(config.linear.oauth.clientId, "env-client-id");
+        assert.equal(config.linear.oauth.clientSecret, "env-client-secret");
+      },
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("loadConfig accepts machine-level config before any projects are added", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-config-machine-only-"));
 

@@ -418,6 +418,21 @@ test("cli doctor reports preflight status", async () => {
   }
 });
 
+test("cli help explains the setup sequence and default behavior", async () => {
+  const stdout = createBufferStream();
+  const stderr = createBufferStream();
+
+  assert.equal(await runCli([], { stdout: stdout.stream, stderr: stderr.stream }), 0);
+  assert.equal(stderr.read(), "");
+  assert.match(stdout.read(), /First-time setup:/);
+  assert.match(stdout.read(), /patchrelay init <public-https-url>/);
+  assert.match(stdout.read(), /patchrelay project apply <id> <repo-path>/);
+  assert.match(
+    stdout.read(),
+    /In the normal\s+case you only need the public URL, the required secrets, and at least one project\./,
+  );
+});
+
 test("cli init writes XDG config files and install-service manages the user unit", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-init-"));
   const configHome = path.join(baseDir, ".config");
@@ -436,10 +451,15 @@ test("cli init writes XDG config files and install-service manages the user unit
       },
       async () => {
         const initOut = createBufferStream();
+        const initCommands: string[] = [];
         assert.equal(
           await runCli(["init", "patchrelay.example.com"], {
             stdout: initOut.stream,
             stderr: createBufferStream().stream,
+            runInteractive: async (command, args) => {
+              initCommands.push([command, ...args].join(" "));
+              return 0;
+            },
           }),
           0,
         );
@@ -447,7 +467,10 @@ test("cli init writes XDG config files and install-service manages the user unit
         assert.match(initText, /Config directory:/);
         assert.match(initText, /Public base URL: https:\/\/patchrelay\.example\.com/);
         assert.match(initText, /Webhook URL: https:\/\/patchrelay\.example\.com\/webhooks\/linear/);
+        assert.match(initText, /Config file contains only machine-level essentials/);
+        assert.match(initText, /The user service and config watcher are installed for you/);
         assert.match(initText, /Open Linear Settings > API > Applications/);
+        assert.match(initText, /Run `patchrelay project apply <id> <repo-path>`/);
 
         const envPath = path.join(configHome, "patchrelay", ".env");
         const configPath = path.join(configHome, "patchrelay", "patchrelay.yaml");
@@ -460,7 +483,12 @@ test("cli init writes XDG config files and install-service manages the user unit
         assert.equal(configContents.includes("public_base_url: https://patchrelay.example.com"), true);
         assert.equal(configContents.includes("projects:"), false);
         assert.equal(configContents.includes(path.join(dataHome, "patchrelay", "worktrees")), false);
-        assert.match(initText, /Add your first repository with `patchrelay project add <id> <repo-path>`/);
+        assert.deepEqual(initCommands, [
+          "systemctl --user daemon-reload",
+          "systemctl --user enable --now patchrelay.path",
+          "systemctl --user enable patchrelay.service",
+          "systemctl --user reload-or-restart patchrelay.service",
+        ]);
 
         const installOut = createBufferStream();
         assert.equal(
@@ -471,9 +499,15 @@ test("cli init writes XDG config files and install-service manages the user unit
           0,
         );
         const unitPath = path.join(configHome, "systemd", "user", "patchrelay.service");
+        const reloadUnitPath = path.join(configHome, "systemd", "user", "patchrelay-reload.service");
+        const pathUnitPath = path.join(configHome, "systemd", "user", "patchrelay.path");
         const unit = readFileSync(unitPath, "utf8");
+        const reloadUnit = readFileSync(reloadUnitPath, "utf8");
+        const pathUnit = readFileSync(pathUnitPath, "utf8");
         assert.match(unit, /ExecStart=\/usr\/bin\/env patchrelay serve/);
         assert.match(unit, new RegExp(`Environment=PATCHRELAY_CONFIG=${configPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+        assert.match(reloadUnit, /reload-or-restart patchrelay\.service/);
+        assert.match(pathUnit, /Unit=patchrelay-reload\.service/);
 
         const commands: string[] = [];
         assert.equal(
@@ -489,7 +523,7 @@ test("cli init writes XDG config files and install-service manages the user unit
         );
         assert.deepEqual(commands, [
           "systemctl --user daemon-reload",
-          "systemctl --user restart patchrelay",
+          "systemctl --user reload-or-restart patchrelay.service",
         ]);
       },
     );
@@ -501,7 +535,8 @@ test("cli init writes XDG config files and install-service manages the user unit
 test("cli init requires a public base URL", async () => {
   const stderr = createBufferStream();
   assert.equal(await runCli(["init"], { stdout: createBufferStream().stream, stderr: stderr.stream }), 1);
-  assert.match(stderr.read(), /Usage: patchrelay init <public-base-url>/);
+  assert.match(stderr.read(), /patchrelay init requires <public-base-url>/);
+  assert.match(stderr.read(), /PatchRelay must know the public HTTPS origin/);
 });
 
 test("cli init updates the saved public base URL on rerun", async () => {
@@ -525,6 +560,7 @@ test("cli init updates the saved public base URL on rerun", async () => {
           await runCli(["init", "first.example.com"], {
             stdout: createBufferStream().stream,
             stderr: createBufferStream().stream,
+            runInteractive: async () => 0,
           }),
           0,
         );
@@ -534,6 +570,7 @@ test("cli init updates the saved public base URL on rerun", async () => {
           await runCli(["init", "relay.acme.dev"], {
             stdout: rerunOut.stream,
             stderr: createBufferStream().stream,
+            runInteractive: async () => 0,
           }),
           0,
         );
@@ -554,7 +591,7 @@ test("cli init updates the saved public base URL on rerun", async () => {
   }
 });
 
-test("cli project add appends a minimal project to config", async () => {
+test("cli project apply appends a minimal project to config", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-project-add-"));
   const configHome = path.join(baseDir, ".config");
   const stateHome = path.join(baseDir, ".state");
@@ -577,19 +614,22 @@ test("cli project add appends a minimal project to config", async () => {
           await runCli(["init", "relay.example.com"], {
             stdout: createBufferStream().stream,
             stderr: createBufferStream().stream,
+            runInteractive: async () => 0,
           }),
           0,
         );
 
         const projectOut = createBufferStream();
         assert.equal(
-          await runCli(["project", "add", "usertold", repoPath, "--issue-prefix", "USE"], {
+          await runCli(["project", "apply", "usertold", repoPath, "--issue-prefix", "USE", "--no-connect"], {
             stdout: projectOut.stream,
             stderr: createBufferStream().stream,
+            runInteractive: async () => 0,
           }),
           0,
         );
-        assert.match(projectOut.read(), /Added project usertold/);
+        assert.match(projectOut.read(), /Created project usertold/);
+        assert.match(projectOut.read(), /Linear connect was skipped because PatchRelay is not ready yet:/);
 
         const configPath = path.join(configHome, "patchrelay", "patchrelay.yaml");
         const configContents = readFileSync(configPath, "utf8");
@@ -610,7 +650,66 @@ test("cli project add appends a minimal project to config", async () => {
   }
 });
 
-test("cli project add requires routing when adding a second project", async () => {
+test("cli project apply is idempotent and can skip connect until env is ready", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-project-apply-idempotent-"));
+  const configHome = path.join(baseDir, ".config");
+  const stateHome = path.join(baseDir, ".state");
+  const dataHome = path.join(baseDir, ".share");
+  const repoPath = path.join(baseDir, "repo");
+
+  try {
+    mkdirSync(repoPath, { recursive: true });
+    await withEnv(
+      {
+        XDG_CONFIG_HOME: configHome,
+        XDG_STATE_HOME: stateHome,
+        XDG_DATA_HOME: dataHome,
+        PATCHRELAY_CONFIG: undefined,
+        PATCHRELAY_DB_PATH: undefined,
+        PATCHRELAY_LOG_FILE: undefined,
+        LINEAR_WEBHOOK_SECRET: undefined,
+        PATCHRELAY_TOKEN_ENCRYPTION_KEY: undefined,
+        LINEAR_OAUTH_CLIENT_ID: undefined,
+        LINEAR_OAUTH_CLIENT_SECRET: undefined,
+      },
+      async () => {
+        assert.equal(
+          await runCli(["init", "relay.example.com"], {
+            stdout: createBufferStream().stream,
+            stderr: createBufferStream().stream,
+            runInteractive: async () => 0,
+          }),
+          0,
+        );
+
+        const projectOut = createBufferStream();
+        assert.equal(
+          await runCli(["project", "apply", "usertold", repoPath, "--issue-prefix", "USE"], {
+            stdout: projectOut.stream,
+            stderr: createBufferStream().stream,
+          }),
+          0,
+        );
+        assert.match(projectOut.read(), /Linear connect was skipped because PatchRelay is not ready yet:/);
+        assert.match(projectOut.read(), /Fix the failures above and rerun `patchrelay project apply`/);
+
+        const rerunOut = createBufferStream();
+        assert.equal(
+          await runCli(["project", "apply", "usertold", repoPath, "--issue-prefix", "USE"], {
+            stdout: rerunOut.stream,
+            stderr: createBufferStream().stream,
+          }),
+          0,
+        );
+        assert.match(rerunOut.read(), /Verified project usertold/);
+      },
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("cli project apply requires routing when adding a second project", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-project-add-routing-"));
   const configHome = path.join(baseDir, ".config");
   const stateHome = path.join(baseDir, ".state");
@@ -635,26 +734,209 @@ test("cli project add requires routing when adding a second project", async () =
           await runCli(["init", "relay.example.com"], {
             stdout: createBufferStream().stream,
             stderr: createBufferStream().stream,
+            runInteractive: async () => 0,
           }),
           0,
         );
         assert.equal(
-          await runCli(["project", "add", "one", firstRepoPath, "--issue-prefix", "ONE"], {
+          await runCli(["project", "apply", "one", firstRepoPath, "--issue-prefix", "ONE", "--no-connect"], {
             stdout: createBufferStream().stream,
             stderr: createBufferStream().stream,
+            runInteractive: async () => 0,
           }),
           0,
         );
 
         const stderr = createBufferStream();
         assert.equal(
-          await runCli(["project", "add", "two", secondRepoPath], {
+          await runCli(["project", "apply", "two", secondRepoPath], {
             stdout: createBufferStream().stream,
             stderr: stderr.stream,
           }),
           1,
         );
-        assert.match(stderr.read(), /Adding a second project requires routing/);
+        assert.match(stderr.read(), /requires routing/);
+      },
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("cli project apply can auto-connect using the default .env file", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-project-apply-connect-"));
+  const configHome = path.join(baseDir, ".config");
+  const stateHome = path.join(baseDir, ".state");
+  const dataHome = path.join(baseDir, ".share");
+  const repoPath = path.join(baseDir, "repo");
+
+  try {
+    mkdirSync(repoPath, { recursive: true });
+    writeFileSync(path.join(repoPath, "IMPLEMENTATION_WORKFLOW.md"), "# implementation\n", "utf8");
+    writeFileSync(path.join(repoPath, "REVIEW_WORKFLOW.md"), "# review\n", "utf8");
+    writeFileSync(path.join(repoPath, "DEPLOY_WORKFLOW.md"), "# deploy\n", "utf8");
+    writeFileSync(path.join(repoPath, "CLEANUP_WORKFLOW.md"), "# cleanup\n", "utf8");
+
+    await withEnv(
+      {
+        XDG_CONFIG_HOME: configHome,
+        XDG_STATE_HOME: stateHome,
+        XDG_DATA_HOME: dataHome,
+        PATCHRELAY_CONFIG: undefined,
+        PATCHRELAY_DB_PATH: undefined,
+        PATCHRELAY_LOG_FILE: undefined,
+        LINEAR_WEBHOOK_SECRET: undefined,
+        PATCHRELAY_TOKEN_ENCRYPTION_KEY: undefined,
+        LINEAR_OAUTH_CLIENT_ID: undefined,
+        LINEAR_OAUTH_CLIENT_SECRET: undefined,
+      },
+      async () => {
+        assert.equal(
+          await runCli(["init", "relay.example.com"], {
+            stdout: createBufferStream().stream,
+            stderr: createBufferStream().stream,
+            runInteractive: async () => 0,
+          }),
+          0,
+        );
+
+        const envPath = path.join(configHome, "patchrelay", ".env");
+        writeFileSync(
+          envPath,
+          [
+            "LINEAR_WEBHOOK_SECRET=secret",
+            "PATCHRELAY_TOKEN_ENCRYPTION_KEY=enc-secret",
+            "LINEAR_OAUTH_CLIENT_ID=client-id",
+            "LINEAR_OAUTH_CLIENT_SECRET=client-secret",
+            "",
+          ].join("\n"),
+          "utf8",
+        );
+
+        const connectData = {
+          async connect(projectId?: string) {
+            return {
+              completed: true as const,
+              reusedExisting: true as const,
+              projectId: projectId ?? "usertold",
+              installation: { id: 7, workspaceName: "Workspace Seven" },
+            };
+          },
+        } as unknown as CliDataAccess;
+
+        const projectOut = createBufferStream();
+        const commands: string[] = [];
+        assert.equal(
+          await runCli(["project", "apply", "usertold", repoPath, "--issue-prefix", "USE"], {
+            stdout: projectOut.stream,
+            stderr: createBufferStream().stream,
+            data: connectData,
+            runInteractive: async (command, args) => {
+              commands.push([command, ...args].join(" "));
+              return 0;
+            },
+          }),
+          0,
+        );
+        assert.match(projectOut.read(), /Created project usertold/);
+        assert.match(projectOut.read(), /Linked project usertold to existing Linear installation 7/);
+        assert.deepEqual(commands, [
+          "systemctl --user daemon-reload",
+          "systemctl --user enable --now patchrelay.path",
+          "systemctl --user enable patchrelay.service",
+          "systemctl --user reload-or-restart patchrelay.service",
+        ]);
+      },
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("cli project apply json performs the workflow and returns structured connect state", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-project-apply-json-"));
+  const configHome = path.join(baseDir, ".config");
+  const stateHome = path.join(baseDir, ".state");
+  const dataHome = path.join(baseDir, ".share");
+  const repoPath = path.join(baseDir, "repo");
+
+  try {
+    mkdirSync(repoPath, { recursive: true });
+    writeFileSync(path.join(repoPath, "IMPLEMENTATION_WORKFLOW.md"), "# implementation\n", "utf8");
+    writeFileSync(path.join(repoPath, "REVIEW_WORKFLOW.md"), "# review\n", "utf8");
+    writeFileSync(path.join(repoPath, "DEPLOY_WORKFLOW.md"), "# deploy\n", "utf8");
+    writeFileSync(path.join(repoPath, "CLEANUP_WORKFLOW.md"), "# cleanup\n", "utf8");
+
+    await withEnv(
+      {
+        XDG_CONFIG_HOME: configHome,
+        XDG_STATE_HOME: stateHome,
+        XDG_DATA_HOME: dataHome,
+        PATCHRELAY_CONFIG: undefined,
+        PATCHRELAY_DB_PATH: undefined,
+        PATCHRELAY_LOG_FILE: undefined,
+        LINEAR_WEBHOOK_SECRET: undefined,
+        PATCHRELAY_TOKEN_ENCRYPTION_KEY: undefined,
+        LINEAR_OAUTH_CLIENT_ID: undefined,
+        LINEAR_OAUTH_CLIENT_SECRET: undefined,
+      },
+      async () => {
+        assert.equal(
+          await runCli(["init", "relay.example.com"], {
+            stdout: createBufferStream().stream,
+            stderr: createBufferStream().stream,
+            runInteractive: async () => 0,
+          }),
+          0,
+        );
+
+        writeFileSync(
+          path.join(configHome, "patchrelay", ".env"),
+          [
+            "LINEAR_WEBHOOK_SECRET=secret",
+            "PATCHRELAY_TOKEN_ENCRYPTION_KEY=enc-secret",
+            "LINEAR_OAUTH_CLIENT_ID=client-id",
+            "LINEAR_OAUTH_CLIENT_SECRET=client-secret",
+            "",
+          ].join("\n"),
+          "utf8",
+        );
+
+        const connectData = {
+          async connect(projectId?: string) {
+            return {
+              completed: true as const,
+              reusedExisting: true as const,
+              projectId: projectId ?? "usertold",
+              installation: { id: 9, workspaceName: "Workspace Nine" },
+            };
+          },
+        } as unknown as CliDataAccess;
+
+        const projectOut = createBufferStream();
+        assert.equal(
+          await runCli(["project", "apply", "usertold", repoPath, "--issue-prefix", "USE", "--json"], {
+            stdout: projectOut.stream,
+            stderr: createBufferStream().stream,
+            data: connectData,
+            runInteractive: async () => 0,
+          }),
+          0,
+        );
+
+        const parsed = JSON.parse(projectOut.read()) as Record<string, unknown>;
+        assert.equal(parsed.status, "created");
+        assert.equal((parsed.serviceReloaded as boolean | undefined) ?? false, true);
+        assert.equal(((parsed.readiness as { ok?: boolean }).ok ?? false), true);
+        assert.deepEqual(parsed.connect, {
+          attempted: true,
+          result: {
+            completed: true,
+            reusedExisting: true,
+            projectId: "usertold",
+            installation: { id: 9, workspaceName: "Workspace Nine" },
+          },
+        });
       },
     );
   } finally {

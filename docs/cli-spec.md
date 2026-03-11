@@ -133,6 +133,8 @@ Output includes:
 
 Bootstrap the local PatchRelay home in XDG-style user directories.
 
+`patchrelay init` requires the public HTTPS origin up front. PatchRelay uses it to derive the Linear-facing webhook URL and the fixed OAuth callback URL.
+
 Usage:
 
 ```bash
@@ -143,6 +145,13 @@ By default this writes:
 
 - `~/.config/patchrelay/.env`
 - `~/.config/patchrelay/patchrelay.yaml`
+- `~/.config/systemd/user/patchrelay.service`
+- `~/.config/systemd/user/patchrelay-reload.service`
+- `~/.config/systemd/user/patchrelay.path`
+
+The generated `patchrelay.yaml` is intentionally minimal and machine-level only. In the normal case the user does not need to override bind address, database path, log path, worktree roots, workflow filenames, workflow statuses, or Codex runner settings.
+
+It also installs the PatchRelay user service and a watcher that reload-or-restarts PatchRelay when the config or env file changes.
 
 It also creates:
 
@@ -156,41 +165,49 @@ Flags:
 
 This is the expected first command after installing the package.
 
-### `patchrelay project add <id> <repo-path>`
+### `patchrelay project apply <id> <repo-path>`
 
-Add a repository entry to the local PatchRelay config.
+Create or update a repository entry in the local PatchRelay config.
 
 Usage:
 
 ```bash
-patchrelay project add app /absolute/path/to/repo
+patchrelay project apply app /absolute/path/to/repo
 ```
 
 Behavior:
 
-- writes a new `projects[]` entry into `~/.config/patchrelay/patchrelay.yaml`
+- writes or updates a `projects[]` entry in `~/.config/patchrelay/patchrelay.yaml`
 - stores the repo path as an absolute path
 - accepts optional routing with `--issue-prefix <prefixes>` and `--team-id <ids>`
 - rejects duplicate project ids, duplicate routing keys, and ambiguous multi-project setups
+- runs readiness checks for the updated project
+- reloads the PatchRelay service when the local setup is ready
+- reuses or starts the Linear OAuth installation flow unless `--no-connect` is passed
+- is safe to rerun after fixing missing workflow files, secrets, or routing
 
 Flags:
 
 - `--issue-prefix <prefixes>`
 - `--team-id <ids>`
+- `--no-connect`
+- `--timeout <seconds>`
 - `--json`
 
-This is the normal way to finish local repo setup after `patchrelay init`.
+This is the normal happy-path command after `patchrelay init`.
 
 ### `patchrelay install-service`
 
-Install the systemd user unit for PatchRelay.
+Reinstall the systemd user units for PatchRelay.
 
 Behavior:
 
 - writes `~/.config/systemd/user/patchrelay.service`
+- writes `~/.config/systemd/user/patchrelay-reload.service`
+- writes `~/.config/systemd/user/patchrelay.path`
 - points the service at the same config and env files created by `patchrelay init`
 - reloads systemd user units
-- enables and starts the `patchrelay` service
+- enables the watcher and reload-or-restarts the `patchrelay` service
 
 Flags:
 
@@ -198,7 +215,7 @@ Flags:
 - `--write-only`
 - `--json`
 
-`--write-only` skips `systemctl --user daemon-reload` and `systemctl --user enable --now patchrelay`.
+`--write-only` skips the systemd activation steps.
 
 ### `patchrelay restart-service`
 
@@ -207,7 +224,7 @@ Restart the systemd user service after a package update or config change.
 Behavior:
 
 - runs `systemctl --user daemon-reload`
-- runs `systemctl --user restart patchrelay`
+- runs `systemctl --user reload-or-restart patchrelay.service`
 
 Flags:
 
@@ -216,6 +233,8 @@ Flags:
 ### `patchrelay connect [--project <projectId>]`
 
 Start a Linear OAuth installation flow for the current PatchRelay installation.
+
+This is intended as the advanced/manual version of the connect flow. In the normal happy path, `patchrelay project apply` calls it for you after the project config is ready.
 
 Output includes:
 
@@ -445,10 +464,9 @@ The intended packaged onboarding flow is:
 
 1. `patchrelay init https://patchrelay.example.com`
 2. edit `~/.config/patchrelay/.env`
-3. run `patchrelay project add <id> <repo-path>`
-4. `patchrelay doctor`
-5. `patchrelay install-service`
-6. `patchrelay connect --project <projectId>`
+3. run `patchrelay project apply <id> <repo-path>`
+4. if `project apply` reports missing workflow files, add them and rerun `patchrelay project apply`
+5. `patchrelay doctor`
 
 ## UX details
 
