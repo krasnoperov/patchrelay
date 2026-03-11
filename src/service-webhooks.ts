@@ -1,5 +1,5 @@
 import type { Logger } from "pino";
-import { PatchRelayDatabase } from "./db.ts";
+import type { PatchRelayDatabase } from "./db.ts";
 import type { AppConfig, LinearWebhookPayload, NormalizedEvent } from "./types.ts";
 import { archiveWebhook } from "./webhook-archive.ts";
 import { normalizeWebhook } from "./webhooks.ts";

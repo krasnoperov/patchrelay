@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
 import { dirname } from "node:path";
-import { fileURLToPath } from "node:url";
 import { runCli } from "./cli/index.ts";
 import { CodexAppServerClient } from "./codex-app-server.ts";
 import { loadConfig } from "./config.ts";

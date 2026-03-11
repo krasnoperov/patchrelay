@@ -1,5 +1,5 @@
 import type { Logger } from "pino";
-import { PatchRelayDatabase } from "./db.ts";
+import type { PatchRelayDatabase } from "./db.ts";
 import { refreshLinearOAuthToken } from "./linear-oauth.ts";
 import { decryptSecret, encryptSecret } from "./token-crypto.ts";
 import type {

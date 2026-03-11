@@ -280,7 +280,7 @@ test("cli inspect, worktree, open, events, and report render stored issue detail
     const stdout = createBufferStream();
     const stderr = createBufferStream();
     assert.equal(await runCli(["inspect", "USE-54"], { config, data, stdout: stdout.stream, stderr: stderr.stream }), 0);
-    assert.match(stdout.read(), /USE-54  Human Needed/);
+    assert.match(stdout.read(), /USE-54 {2}Human Needed/);
     assert.match(stdout.read(), /Deploy did not complete because auth was missing/);
 
     const worktreeOut = createBufferStream();
