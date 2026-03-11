@@ -1,4 +1,4 @@
-import type { IssueMetadata, ProjectConfig, WorkflowStage } from "./types.ts";
+import type { IssueMetadata, ProjectConfig, ProjectWorkflowConfig, WorkflowStage } from "./types.ts";
 
 function normalize(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
@@ -15,26 +15,30 @@ function extractIssuePrefix(identifier?: string): string | undefined {
   return prefix ? prefix.toUpperCase() : undefined;
 }
 
-export function resolveWorkflowStage(project: ProjectConfig, stateName?: string): WorkflowStage | undefined {
+export function resolveWorkflow(project: ProjectConfig, stateName?: string): ProjectWorkflowConfig | undefined {
   const normalized = normalize(stateName);
   if (!normalized) {
     return undefined;
   }
 
-  if (normalized === normalize(project.workflowStatuses.development)) {
-    return "development";
-  }
-  if (normalized === normalize(project.workflowStatuses.review)) {
-    return "review";
-  }
-  if (normalized === normalize(project.workflowStatuses.deploy)) {
-    return "deploy";
-  }
-  if (project.workflowStatuses.cleanup && normalized === normalize(project.workflowStatuses.cleanup)) {
-    return "cleanup";
+  return project.workflows.find((workflow) => normalize(workflow.whenState) === normalized);
+}
+
+export function resolveWorkflowStage(project: ProjectConfig, stateName?: string): WorkflowStage | undefined {
+  return resolveWorkflow(project, stateName)?.id;
+}
+
+export function resolveWorkflowById(project: ProjectConfig, workflowId?: string): ProjectWorkflowConfig | undefined {
+  const normalized = normalize(workflowId);
+  if (!normalized) {
+    return undefined;
   }
 
-  return undefined;
+  return project.workflows.find((workflow) => normalize(workflow.id) === normalized);
+}
+
+export function listRunnableStates(project: ProjectConfig): string[] {
+  return project.workflows.map((workflow) => workflow.whenState);
 }
 
 export function matchesProject(issue: IssueMetadata, project: ProjectConfig): boolean {

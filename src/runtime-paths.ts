@@ -8,7 +8,8 @@ export interface PatchRelayPathLayout {
   homeDir: string;
   configDir: string;
   configPath: string;
-  envPath: string;
+  runtimeEnvPath: string;
+  serviceEnvPath: string;
   stateDir: string;
   shareDir: string;
   databasePath: string;
@@ -27,7 +28,8 @@ export function getPatchRelayPathLayout(): PatchRelayPathLayout {
 
   const configPath = ensureAbsolutePath(process.env.PATCHRELAY_CONFIG ?? path.join(xdgConfigHome, "patchrelay", "patchrelay.yaml"));
   const configDir = path.dirname(configPath);
-  const envPath = path.join(configDir, ".env");
+  const runtimeEnvPath = path.join(configDir, "runtime.env");
+  const serviceEnvPath = path.join(configDir, "service.env");
   const stateDir = path.join(xdgStateHome, "patchrelay");
   const shareDir = path.join(xdgDataHome, "patchrelay");
   const systemdUserDir = path.join(xdgConfigHome, "systemd", "user");
@@ -36,7 +38,8 @@ export function getPatchRelayPathLayout(): PatchRelayPathLayout {
     homeDir,
     configDir,
     configPath,
-    envPath,
+    runtimeEnvPath,
+    serviceEnvPath,
     stateDir,
     shareDir,
     databasePath: ensureAbsolutePath(process.env.PATCHRELAY_DB_PATH ?? path.join(stateDir, "patchrelay.sqlite")),
@@ -56,8 +59,12 @@ export function getDefaultConfigPath(): string {
   return getPatchRelayPathLayout().configPath;
 }
 
-export function getDefaultEnvPath(): string {
-  return getPatchRelayPathLayout().envPath;
+export function getDefaultRuntimeEnvPath(): string {
+  return getPatchRelayPathLayout().runtimeEnvPath;
+}
+
+export function getDefaultServiceEnvPath(): string {
+  return getPatchRelayPathLayout().serviceEnvPath;
 }
 
 export function getPatchRelayStateDir(): string {

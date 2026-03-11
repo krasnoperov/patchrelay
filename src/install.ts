@@ -7,7 +7,8 @@ import YAML from "yaml";
 import {
   getDefaultConfigPath,
   getDefaultDatabasePath,
-  getDefaultEnvPath,
+  getDefaultRuntimeEnvPath,
+  getDefaultServiceEnvPath,
   getDefaultLogPath,
   getDefaultWebhookArchiveDir,
   getPatchRelayConfigDir,
@@ -21,6 +22,39 @@ import {
 import { loadConfig } from "./config.ts";
 import { ensureAbsolutePath } from "./utils.ts";
 
+function defaultProjectWorkflows(): Array<Record<string, string>> {
+  return [
+    {
+      id: "development",
+      when_state: "Start",
+      active_state: "Implementing",
+      workflow_file: "IMPLEMENTATION_WORKFLOW.md",
+      fallback_state: "Human Needed",
+    },
+    {
+      id: "review",
+      when_state: "Review",
+      active_state: "Reviewing",
+      workflow_file: "REVIEW_WORKFLOW.md",
+      fallback_state: "Human Needed",
+    },
+    {
+      id: "deploy",
+      when_state: "Deploy",
+      active_state: "Deploying",
+      workflow_file: "DEPLOY_WORKFLOW.md",
+      fallback_state: "Human Needed",
+    },
+    {
+      id: "cleanup",
+      when_state: "Cleanup",
+      active_state: "Cleaning Up",
+      workflow_file: "CLEANUP_WORKFLOW.md",
+      fallback_state: "Human Needed",
+    },
+  ];
+}
+
 function renderTemplate(template: string, replacements?: { publicBaseUrl?: string }): string {
   const home = homedir();
   const user = basename(home);
@@ -28,7 +62,8 @@ function renderTemplate(template: string, replacements?: { publicBaseUrl?: strin
     .replaceAll("${PATCHRELAY_CONFIG:-/home/your-user/.config/patchrelay/patchrelay.yaml}", getDefaultConfigPath())
     .replaceAll("${PATCHRELAY_DB_PATH:-/home/your-user/.local/state/patchrelay/patchrelay.sqlite}", getDefaultDatabasePath())
     .replaceAll("${PATCHRELAY_LOG_FILE:-/home/your-user/.local/state/patchrelay/patchrelay.log}", getDefaultLogPath())
-    .replaceAll("/home/your-user/.config/patchrelay/.env", getDefaultEnvPath())
+    .replaceAll("/home/your-user/.config/patchrelay/runtime.env", getDefaultRuntimeEnvPath())
+    .replaceAll("/home/your-user/.config/patchrelay/service.env", getDefaultServiceEnvPath())
     .replaceAll("/home/your-user/.config/patchrelay/patchrelay.yaml", getDefaultConfigPath())
     .replaceAll("/home/your-user/.config/patchrelay", getPatchRelayConfigDir())
     .replaceAll("/home/your-user/.local/state/patchrelay/webhooks", getDefaultWebhookArchiveDir())
@@ -48,7 +83,7 @@ function generateSecret(bytes = 32): string {
   return crypto.randomBytes(bytes).toString("hex");
 }
 
-function renderEnvTemplate(template: string): string {
+function renderServiceEnvTemplate(template: string): string {
   return template
     .replace(
       "LINEAR_WEBHOOK_SECRET=replace-with-linear-webhook-secret",
@@ -98,11 +133,13 @@ async function applyPublicBaseUrlToConfig(
 
 export async function initializePatchRelayHome(options?: { force?: boolean; publicBaseUrl?: string }): Promise<{
   configDir: string;
-  envPath: string;
+  runtimeEnvPath: string;
+  serviceEnvPath: string;
   configPath: string;
   stateDir: string;
   dataDir: string;
-  envStatus: "created" | "skipped";
+  runtimeEnvStatus: "created" | "skipped";
+  serviceEnvStatus: "created" | "skipped";
   configStatus: "created" | "updated" | "skipped";
   publicBaseUrl?: string;
   webhookUrl?: string;
@@ -111,7 +148,8 @@ export async function initializePatchRelayHome(options?: { force?: boolean; publ
   const force = options?.force ?? false;
   const publicBaseUrl = options?.publicBaseUrl;
   const configDir = getPatchRelayConfigDir();
-  const envPath = getDefaultEnvPath();
+  const runtimeEnvPath = getDefaultRuntimeEnvPath();
+  const serviceEnvPath = getDefaultServiceEnvPath();
   const configPath = getDefaultConfigPath();
   const stateDir = getPatchRelayStateDir();
   const dataDir = getPatchRelayDataDir();
@@ -120,24 +158,28 @@ export async function initializePatchRelayHome(options?: { force?: boolean; publ
   await mkdir(stateDir, { recursive: true });
   await mkdir(dataDir, { recursive: true });
 
-  const envTemplate = renderEnvTemplate(readBundledAsset(".env.example"));
+  const runtimeEnvTemplate = renderTemplate(readBundledAsset("runtime.env.example"));
+  const serviceEnvTemplate = renderServiceEnvTemplate(readBundledAsset("service.env.example"));
   const configTemplate = renderTemplate(
     readBundledAsset("config/patchrelay.example.yaml"),
     publicBaseUrl ? { publicBaseUrl } : undefined,
   );
 
-  const envStatus = await writeTemplateFile(envPath, envTemplate, force);
+  const runtimeEnvStatus = await writeTemplateFile(runtimeEnvPath, runtimeEnvTemplate, force);
+  const serviceEnvStatus = await writeTemplateFile(serviceEnvPath, serviceEnvTemplate, force);
   const initialConfigStatus = await writeTemplateFile(configPath, configTemplate, force);
   const configStatus =
     initialConfigStatus === "created" ? initialConfigStatus : await applyPublicBaseUrlToConfig(configPath, publicBaseUrl);
 
   return {
     configDir,
-    envPath,
+    runtimeEnvPath,
+    serviceEnvPath,
     configPath,
     stateDir,
     dataDir,
-    envStatus,
+    runtimeEnvStatus,
+    serviceEnvStatus,
     configStatus,
     ...(publicBaseUrl
       ? {
@@ -153,7 +195,8 @@ export async function installUserServiceUnits(options?: { force?: boolean }): Pr
   unitPath: string;
   reloadUnitPath: string;
   pathUnitPath: string;
-  envPath: string;
+  runtimeEnvPath: string;
+  serviceEnvPath: string;
   configPath: string;
   serviceStatus: "created" | "skipped";
   reloadStatus: "created" | "skipped";
@@ -174,7 +217,8 @@ export async function installUserServiceUnits(options?: { force?: boolean }): Pr
     unitPath,
     reloadUnitPath,
     pathUnitPath,
-    envPath: getDefaultEnvPath(),
+    runtimeEnvPath: getDefaultRuntimeEnvPath(),
+    serviceEnvPath: getDefaultServiceEnvPath(),
     configPath: getDefaultConfigPath(),
     serviceStatus,
     reloadStatus,
@@ -224,6 +268,10 @@ export async function upsertProjectInConfig(options: {
     ...(existingProject ?? {}),
     id: projectId,
     repo_path: repoPath,
+    workflows:
+      Array.isArray(existingProject?.workflows) && existingProject.workflows.length > 0
+        ? existingProject.workflows
+        : defaultProjectWorkflows(),
   };
   if (issueKeyPrefixes.length > 0) {
     nextProject.issue_key_prefixes = issueKeyPrefixes;
@@ -326,7 +374,7 @@ export async function upsertProjectInConfig(options: {
   }
 
   try {
-    loadConfig(configPath, { requireLinearSecret: false, allowMissingSecrets: true });
+    loadConfig(configPath, { profile: "write_config" });
   } catch (error) {
     if (status !== "unchanged") {
       await writeFile(configPath, original, "utf8");

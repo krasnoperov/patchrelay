@@ -16,6 +16,45 @@ const WORKFLOW_STATES = [
   { id: "human-needed", name: "Human Needed" },
 ];
 
+function createWorkflows(baseDir: string) {
+  return [
+    {
+      id: "development",
+      whenState: "Start",
+      activeState: "Implementing",
+      workflowFile: path.join(baseDir, "DEVELOPMENT_WORKFLOW.md"),
+      fallbackState: "Human Needed",
+    },
+    {
+      id: "review",
+      whenState: "Review",
+      activeState: "Reviewing",
+      workflowFile: path.join(baseDir, "REVIEW_WORKFLOW.md"),
+      fallbackState: "Human Needed",
+    },
+    {
+      id: "deploy",
+      whenState: "Deploy",
+      activeState: "Deploying",
+      workflowFile: path.join(baseDir, "DEPLOY_WORKFLOW.md"),
+      fallbackState: "Human Needed",
+    },
+    {
+      id: "cleanup",
+      whenState: "Cleanup",
+      activeState: "Cleaning Up",
+      workflowFile: path.join(baseDir, "CLEANUP_WORKFLOW.md"),
+      fallbackState: "Human Needed",
+    },
+  ];
+}
+
+function getWorkflowFile(config: AppConfig, workflowId: string): string {
+  const workflow = config.projects[0]?.workflows.find((entry) => entry.id === workflowId);
+  assert.ok(workflow);
+  return workflow.workflowFile;
+}
+
 class FakeCodexClient extends EventEmitter {
   readonly startedThreads: string[] = [];
 
@@ -152,23 +191,7 @@ function createConfig(baseDir: string): AppConfig {
         id: "usertold",
         repoPath: path.join(baseDir, "repo"),
         worktreeRoot: path.join(baseDir, "worktrees"),
-        workflowFiles: {
-          development: path.join(baseDir, "DEVELOPMENT_WORKFLOW.md"),
-          review: path.join(baseDir, "REVIEW_WORKFLOW.md"),
-          deploy: path.join(baseDir, "DEPLOY_WORKFLOW.md"),
-          cleanup: path.join(baseDir, "CLEANUP_WORKFLOW.md"),
-        },
-        workflowStatuses: {
-          development: "Start",
-          review: "Review",
-          deploy: "Deploy",
-          developmentActive: "Implementing",
-          reviewActive: "Reviewing",
-          deployActive: "Deploying",
-          cleanup: "Cleanup",
-          humanNeeded: "Human Needed",
-          done: "Done",
-        },
+        workflows: createWorkflows(baseDir),
         issueKeyPrefixes: ["USE"],
         linearTeamIds: ["USE"],
         allowLabels: [],
@@ -189,10 +212,10 @@ function setupRepo(config: AppConfig): void {
   execFileSync("git", ["-C", repoPath, "add", "."], { stdio: "ignore" });
   execFileSync("git", ["-C", repoPath, "commit", "-m", "initial"], { stdio: "ignore" });
 
-  writeFileSync(config.projects[0]!.workflowFiles.development, "Implement carefully.\n", "utf8");
-  writeFileSync(config.projects[0]!.workflowFiles.review, "Review carefully.\n", "utf8");
-  writeFileSync(config.projects[0]!.workflowFiles.deploy, "Deploy carefully.\n", "utf8");
-  writeFileSync(config.projects[0]!.workflowFiles.cleanup, "Clean up carefully.\n", "utf8");
+  writeFileSync(getWorkflowFile(config, "development"), "Implement carefully.\n", "utf8");
+  writeFileSync(getWorkflowFile(config, "review"), "Review carefully.\n", "utf8");
+  writeFileSync(getWorkflowFile(config, "deploy"), "Deploy carefully.\n", "utf8");
+  writeFileSync(getWorkflowFile(config, "cleanup"), "Clean up carefully.\n", "utf8");
 }
 
 function createService(baseDir: string) {

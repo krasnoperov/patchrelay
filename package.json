@@ -15,7 +15,8 @@
   },
   "files": [
     "dist",
-    ".env.example",
+    "runtime.env.example",
+    "service.env.example",
     "config/patchrelay.example.yaml",
     "infra/patchrelay.service",
     "infra/patchrelay-reload.service",

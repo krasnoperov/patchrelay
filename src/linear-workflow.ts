@@ -1,18 +1,14 @@
-import type { ProjectConfig, StageRunRecord, TrackedIssueRecord, WorkflowStage } from "./types.ts";
+import type { ProjectConfig, StageRunRecord, TrackedIssueRecord } from "./types.ts";
+import { resolveWorkflowById } from "./workflow-policy.ts";
 
 const STATUS_MARKER = "<!-- patchrelay:status-comment -->";
 
-export function resolveActiveLinearState(project: ProjectConfig, stage: WorkflowStage): string | undefined {
-  if (stage === "development") {
-    return project.workflowStatuses.developmentActive;
-  }
-  if (stage === "review") {
-    return project.workflowStatuses.reviewActive;
-  }
-  if (stage === "deploy") {
-    return project.workflowStatuses.deployActive;
-  }
-  return project.workflowStatuses.cleanupActive;
+export function resolveActiveLinearState(project: ProjectConfig, stage: string): string | undefined {
+  return resolveWorkflowById(project, stage)?.activeState;
+}
+
+export function resolveFallbackLinearState(project: ProjectConfig, stage: string): string | undefined {
+  return resolveWorkflowById(project, stage)?.fallbackState;
 }
 
 export function buildRunningStatusComment(params: {
@@ -22,10 +18,10 @@ export function buildRunningStatusComment(params: {
 }): string {
   return [
     STATUS_MARKER,
-    `PatchRelay is running the ${params.stageRun.stage} stage.`,
+    `PatchRelay is running the ${params.stageRun.stage} workflow.`,
     "",
     `- Issue: \`${params.issue.issueKey ?? params.issue.linearIssueId}\``,
-    `- Stage: \`${params.stageRun.stage}\``,
+    `- Workflow: \`${params.stageRun.stage}\``,
     `- Branch: \`${params.branchName}\``,
     `- Thread: \`${params.stageRun.threadId ?? "starting"}\``,
     `- Turn: \`${params.stageRun.turnId ?? "starting"}\``,
@@ -41,16 +37,16 @@ export function buildAwaitingHandoffComment(params: {
 }): string {
   return [
     STATUS_MARKER,
-    `PatchRelay finished the ${params.stageRun.stage} turn, but Linear is still in \`${params.activeState}\`.`,
+    `PatchRelay finished the ${params.stageRun.stage} workflow, but Linear is still in \`${params.activeState}\`.`,
     "",
     `- Issue: \`${params.issue.issueKey ?? params.issue.linearIssueId}\``,
-    `- Stage: \`${params.stageRun.stage}\``,
+    `- Workflow: \`${params.stageRun.stage}\``,
     `- Thread: \`${params.stageRun.threadId ?? "unknown"}\``,
     `- Turn: \`${params.stageRun.turnId ?? "unknown"}\``,
     `- Completed: \`${params.stageRun.endedAt ?? new Date().toISOString()}\``,
     "- Status: `awaiting-final-state`",
     "",
-    "The agent likely finished work without moving the issue to its next Linear state. Please review the thread report and update the issue state.",
+    "The workflow likely finished without moving the issue to its next Linear state. Please review the thread report and update the issue state.",
   ].join("\n");
 }
 
@@ -65,11 +61,11 @@ export function buildStageFailedComment(params: {
   return [
     STATUS_MARKER,
     mode === "launch"
-      ? `PatchRelay could not start the ${params.stageRun.stage} stage.`
-      : `PatchRelay marked the ${params.stageRun.stage} stage as failed.`,
+      ? `PatchRelay could not start the ${params.stageRun.stage} workflow.`
+      : `PatchRelay marked the ${params.stageRun.stage} workflow as failed.`,
     "",
     `- Issue: \`${params.issue.issueKey ?? params.issue.linearIssueId}\``,
-    `- Stage: \`${params.stageRun.stage}\``,
+    `- Workflow: \`${params.stageRun.stage}\``,
     `- Started: \`${params.stageRun.startedAt}\``,
     `- Failure: \`${params.message}\``,
     `- Recommended state: \`${params.fallbackState ?? "Human Needed"}\``,

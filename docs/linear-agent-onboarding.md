@@ -15,7 +15,7 @@ PatchRelay is a machine-level execution harness, not a per-repo plugin.
 
 - one PatchRelay service runs on the machine
 - one Linear OAuth app is usually enough for that PatchRelay instance
-- one machine-level `.env` holds the Linear secrets
+- one machine-level `service.env` holds the Linear secrets
 - one `patchrelay.yaml` contains one `projects[]` block per repository
 - each repository contributes workflow policy files such as `IMPLEMENTATION_WORKFLOW.md`
 
@@ -74,13 +74,12 @@ For the standard Linear app-agent flow, you can usually omit `trigger_events` en
 
 ## Secrets And Boundaries
 
-Keep these secrets at the machine level in `~/.config/patchrelay/.env`:
+Keep these secrets at the machine level in `~/.config/patchrelay/service.env`:
 
 - `LINEAR_WEBHOOK_SECRET`
 - `LINEAR_OAUTH_CLIENT_ID`
 - `LINEAR_OAUTH_CLIENT_SECRET`
 - `PATCHRELAY_TOKEN_ENCRYPTION_KEY`
-- optional: `PATCHRELAY_OPERATOR_TOKEN`
 
 Do not:
 
@@ -99,7 +98,7 @@ How PatchRelay uses them:
 For one machine with several repositories:
 
 1. Run `patchrelay init https://your-domain.example` once.
-2. Put the machine-level secrets in `~/.config/patchrelay/.env`.
+2. Put the machine-level secrets in `~/.config/patchrelay/service.env`.
 3. Run `patchrelay project apply <id> <repo-path>` once per repository.
 4. Route each project by `issue_key_prefixes`, `linear_team_ids`, or both when you need disambiguation.
 5. Keep workflow files inside each repository.
@@ -111,7 +110,7 @@ One PatchRelay instance can serve several repos cleanly as long as routing is un
 
 1. Follow [self-hosting.md](./self-hosting.md) to install PatchRelay and create runtime files.
 2. Create the Linear OAuth app with `actor=app`, the required scopes, and webhook settings.
-3. Fill in `LINEAR_OAUTH_CLIENT_ID` and `LINEAR_OAUTH_CLIENT_SECRET` in `~/.config/patchrelay/.env`.
+3. Fill in `LINEAR_OAUTH_CLIENT_ID` and `LINEAR_OAUTH_CLIENT_SECRET` in `~/.config/patchrelay/service.env`.
 4. Run `patchrelay project apply <id> <repo-path>`.
 5. Run `patchrelay doctor`.
 6. Delegate a Linear issue to the PatchRelay app and confirm the webhook-driven stage starts.

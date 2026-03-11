@@ -32,7 +32,7 @@ PatchRelay does the deterministic harness work that you do not want to re-implem
 - verifies and deduplicates Linear webhooks
 - maps issue events to the correct local project and workflow policy
 - creates and reuses one durable worktree and branch per issue lifecycle
-- starts or forks Codex threads for sequential stages like development, review, deploy, and cleanup
+- starts or forks Codex threads for the workflows you bind to Linear states
 - persists enough state to correlate the Linear issue, local workspace, stage run, and Codex thread
 - reports progress back to Linear and forwards follow-up comments into active runs
 - exposes CLI and optional read-only inspection surfaces so operators can understand what happened
@@ -73,22 +73,21 @@ PatchRelay keeps workflow configuration simple:
 
 - route issues to a project by team, issue prefix, or labels
 - when an issue is delegated to PatchRelay, it looks at the current Linear state
-- that Linear state selects the workflow stage to run
-- that stage selects the workflow file from the repo
+- that Linear state selects the matching workflow to run
+- that workflow selects the repo-local workflow file
 
 Most teams only configure:
 
 - which issues belong to which project
-- which Linear states mean implementation, review, deploy, or cleanup
-- which workflow file belongs to each stage
-
-Today the runnable stage set is still fixed to `development`, `review`, `deploy`, and optional `cleanup`, but each project can rename those states and point them at different workflow files.
+- which Linear states should wake each workflow
+- which workflow file belongs to each workflow
+- which active state PatchRelay should set while that workflow is running
 
 Examples:
 
 - a standard project can map `Start -> development`, `Review -> review`, and `Deploy -> deploy`
 - a push-to-main project can automate implementation and review, then let GitHub Actions handle deployment while PatchRelay moves failures back to `Human Needed`
-- a project with a QA gate can map a custom Linear state into `review` and keep the QA instructions in its review workflow file
+- a project with a QA gate can add a `qa` workflow bound to `Ready for QA`
 
 ## Access Control
 
@@ -118,7 +117,8 @@ patchrelay init https://patchrelay.example.com
 
 It creates the local config, env file, and user service units:
 
-- `~/.config/patchrelay/.env`
+- `~/.config/patchrelay/runtime.env`
+- `~/.config/patchrelay/service.env`
 - `~/.config/patchrelay/patchrelay.yaml`
 - `~/.config/systemd/user/patchrelay.service`
 - `~/.config/systemd/user/patchrelay-reload.service`
@@ -128,7 +128,7 @@ The generated `patchrelay.yaml` is intentionally minimal, and `patchrelay init` 
 
 ### 3. Configure access
 
-Edit `~/.config/patchrelay/.env` and fill in only the Linear OAuth client values. Keep the generated webhook secret and token-encryption key:
+Edit `~/.config/patchrelay/service.env` and fill in only the Linear OAuth client values. Keep the generated webhook secret and token-encryption key:
 
 ```bash
 LINEAR_WEBHOOK_SECRET=generated-by-patchrelay-init
@@ -136,6 +136,8 @@ PATCHRELAY_TOKEN_ENCRYPTION_KEY=generated-by-patchrelay-init
 LINEAR_OAUTH_CLIENT_ID=replace-with-linear-oauth-client-id
 LINEAR_OAUTH_CLIENT_SECRET=replace-with-linear-oauth-client-secret
 ```
+
+Keep service secrets in `service.env`. `runtime.env` is for non-secret overrides such as `PATCHRELAY_DB_PATH` or `PATCHRELAY_LOG_FILE`. Everyday local inspection commands do not require exporting these values in your shell.
 
 ### 4. Configure a project
 
@@ -191,8 +193,8 @@ Important:
 ## Daily Loop
 
 1. Delegate a Linear issue to the PatchRelay app.
-2. PatchRelay reads the current workflow state like `Start`, `Review`, or `Deploy` to choose the stage to run.
-3. Linear sends the delegation and agent-session webhooks to PatchRelay, which creates or reuses the issue worktree and launches the Codex stage.
+2. PatchRelay reads the current Linear state like `Start`, `Ready for QA`, or `Deploy` to choose the matching workflow.
+3. Linear sends the delegation and agent-session webhooks to PatchRelay, which creates or reuses the issue worktree and launches the matching workflow.
 4. Follow up in the issue comments to steer the active run or wake it with fresh input while it remains delegated.
 5. Watch progress from the terminal or open the same worktree and take over manually.
 

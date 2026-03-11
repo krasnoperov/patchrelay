@@ -11,6 +11,45 @@ import { PatchRelayDatabase } from "../src/db.ts";
 import { buildHttpServer } from "../src/http.ts";
 import type { AppConfig } from "../src/types.ts";
 
+function createWorkflows(baseDir: string) {
+  return [
+    {
+      id: "development",
+      whenState: "Start",
+      activeState: "Implementing",
+      workflowFile: path.join(baseDir, "DEVELOPMENT_WORKFLOW.md"),
+      fallbackState: "Human Needed",
+    },
+    {
+      id: "review",
+      whenState: "Review",
+      activeState: "Reviewing",
+      workflowFile: path.join(baseDir, "REVIEW_WORKFLOW.md"),
+      fallbackState: "Human Needed",
+    },
+    {
+      id: "deploy",
+      whenState: "Deploy",
+      activeState: "Deploying",
+      workflowFile: path.join(baseDir, "DEPLOY_WORKFLOW.md"),
+      fallbackState: "Human Needed",
+    },
+    {
+      id: "cleanup",
+      whenState: "Cleanup",
+      activeState: "Cleaning Up",
+      workflowFile: path.join(baseDir, "CLEANUP_WORKFLOW.md"),
+      fallbackState: "Human Needed",
+    },
+  ];
+}
+
+function getWorkflowFile(config: AppConfig, workflowId: string): string {
+  const workflow = config.projects[0]?.workflows.find((entry) => entry.id === workflowId);
+  assert.ok(workflow);
+  return workflow.workflowFile;
+}
+
 function createConfig(baseDir: string): AppConfig {
   return {
     server: {
@@ -65,23 +104,7 @@ function createConfig(baseDir: string): AppConfig {
         id: "usertold",
         repoPath: path.join(baseDir, "repo"),
         worktreeRoot: path.join(baseDir, "worktrees"),
-        workflowFiles: {
-          development: path.join(baseDir, "DEVELOPMENT_WORKFLOW.md"),
-          review: path.join(baseDir, "REVIEW_WORKFLOW.md"),
-          deploy: path.join(baseDir, "DEPLOY_WORKFLOW.md"),
-          cleanup: path.join(baseDir, "CLEANUP_WORKFLOW.md"),
-        },
-        workflowStatuses: {
-          development: "Start",
-          review: "Review",
-          deploy: "Deploy",
-          developmentActive: "Implementing",
-          reviewActive: "Reviewing",
-          deployActive: "Deploying",
-          cleanup: "Cleanup",
-          humanNeeded: "Human Needed",
-          done: "Done",
-        },
+        workflows: createWorkflows(baseDir),
         issueKeyPrefixes: ["USE"],
         linearTeamIds: ["USE"],
         allowLabels: [],
@@ -164,7 +187,7 @@ function seedDatabase(db: PatchRelayDatabase, config: AppConfig): void {
     triggerWebhookId: "delivery-1",
     branchName: "use/USE-54-playback-first-evidence-workspace",
     worktreePath: path.join(config.projects[0].worktreeRoot, "USE-54"),
-    workflowFile: config.projects[0].workflowFiles.deploy,
+    workflowFile: getWorkflowFile(config, "deploy"),
     promptText: "Deploy it",
   });
   assert.ok(completed);
@@ -191,7 +214,7 @@ function seedDatabase(db: PatchRelayDatabase, config: AppConfig): void {
       threadId: "thread-54",
       turnId: "turn-54",
       prompt: "Deploy it",
-      workflowFile: config.projects[0].workflowFiles.deploy,
+      workflowFile: getWorkflowFile(config, "deploy"),
       assistantMessages: ["Deploy did not complete because auth was missing."],
       plans: [],
       reasoning: [],
@@ -231,7 +254,7 @@ function seedDatabase(db: PatchRelayDatabase, config: AppConfig): void {
     triggerWebhookId: "delivery-3",
     branchName: "use/USE-56-running-stage",
     worktreePath: path.join(config.projects[0].worktreeRoot, "USE-56"),
-    workflowFile: config.projects[0].workflowFiles.development,
+    workflowFile: getWorkflowFile(config, "development"),
     promptText: "Build it",
   });
   assert.ok(running);
@@ -240,8 +263,8 @@ function seedDatabase(db: PatchRelayDatabase, config: AppConfig): void {
 
 function seedRuntimeFiles(config: AppConfig): void {
   mkdirSync(config.projects[0].repoPath, { recursive: true });
-  for (const workflowFile of Object.values(config.projects[0].workflowFiles)) {
-    writeFileSync(workflowFile, "# workflow\n", "utf8");
+  for (const workflow of config.projects[0].workflows) {
+    writeFileSync(workflow.workflowFile, "# workflow\n", "utf8");
   }
 }
 
@@ -472,13 +495,16 @@ test("cli init writes XDG config files and install-service manages the user unit
         assert.match(initText, /Open Linear Settings > API > Applications/);
         assert.match(initText, /Run `patchrelay project apply <id> <repo-path>`/);
 
-        const envPath = path.join(configHome, "patchrelay", ".env");
+        const runtimeEnvPath = path.join(configHome, "patchrelay", "runtime.env");
+        const serviceEnvPath = path.join(configHome, "patchrelay", "service.env");
         const configPath = path.join(configHome, "patchrelay", "patchrelay.yaml");
-        const envContents = readFileSync(envPath, "utf8");
-        assert.match(envContents, /^LINEAR_WEBHOOK_SECRET=[0-9a-f]{64}$/m);
-        assert.match(envContents, /^PATCHRELAY_TOKEN_ENCRYPTION_KEY=[0-9a-f]{64}$/m);
-        assert.doesNotMatch(envContents, /replace-with-linear-webhook-secret/);
-        assert.doesNotMatch(envContents, /replace-with-long-random-secret/);
+        const runtimeEnvContents = readFileSync(runtimeEnvPath, "utf8");
+        const serviceEnvContents = readFileSync(serviceEnvPath, "utf8");
+        assert.match(serviceEnvContents, /^LINEAR_WEBHOOK_SECRET=[0-9a-f]{64}$/m);
+        assert.match(serviceEnvContents, /^PATCHRELAY_TOKEN_ENCRYPTION_KEY=[0-9a-f]{64}$/m);
+        assert.doesNotMatch(serviceEnvContents, /replace-with-linear-webhook-secret/);
+        assert.doesNotMatch(serviceEnvContents, /replace-with-long-random-secret/);
+        assert.match(runtimeEnvContents, /PATCHRELAY_DB_PATH/);
         const configContents = readFileSync(configPath, "utf8");
         assert.equal(configContents.includes("public_base_url: https://patchrelay.example.com"), true);
         assert.equal(configContents.includes("projects:"), false);
@@ -506,8 +532,12 @@ test("cli init writes XDG config files and install-service manages the user unit
         const pathUnit = readFileSync(pathUnitPath, "utf8");
         assert.match(unit, /ExecStart=\/usr\/bin\/env patchrelay serve/);
         assert.match(unit, new RegExp(`Environment=PATCHRELAY_CONFIG=${configPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+        assert.match(unit, /EnvironmentFile=-.*runtime\.env/);
+        assert.match(unit, /EnvironmentFile=.*service\.env/);
         assert.match(reloadUnit, /reload-or-restart patchrelay\.service/);
         assert.match(pathUnit, /Unit=patchrelay-reload\.service/);
+        assert.match(pathUnit, /PathChanged=.*runtime\.env/);
+        assert.match(pathUnit, /PathChanged=.*service\.env/);
 
         const commands: string[] = [];
         assert.equal(
@@ -638,7 +668,7 @@ test("cli project apply appends a minimal project to config", async () => {
         assert.match(configContents, /repo_path:/);
         assert.match(configContents, /issue_key_prefixes:/);
 
-        const config = loadConfig(configPath, { requireLinearSecret: false, allowMissingSecrets: true });
+        const config = loadConfig(configPath, { profile: "write_config" });
         assert.equal(config.projects[0]?.id, "usertold");
         assert.equal(config.projects[0]?.repoPath, repoPath);
         assert.equal(config.projects[0]?.branchPrefix, "usertold");
@@ -763,7 +793,7 @@ test("cli project apply requires routing when adding a second project", async ()
   }
 });
 
-test("cli project apply can auto-connect using the default .env file", async () => {
+test("cli project apply can auto-connect using the default service.env file", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-project-apply-connect-"));
   const configHome = path.join(baseDir, ".config");
   const stateHome = path.join(baseDir, ".state");
@@ -800,7 +830,7 @@ test("cli project apply can auto-connect using the default .env file", async () 
           0,
         );
 
-        const envPath = path.join(configHome, "patchrelay", ".env");
+        const envPath = path.join(configHome, "patchrelay", "service.env");
         writeFileSync(
           envPath,
           [
@@ -891,7 +921,7 @@ test("cli project apply json performs the workflow and returns structured connec
         );
 
         writeFileSync(
-          path.join(configHome, "patchrelay", ".env"),
+          path.join(configHome, "patchrelay", "service.env"),
           [
             "LINEAR_WEBHOOK_SECRET=secret",
             "PATCHRELAY_TOKEN_ENCRYPTION_KEY=enc-secret",

@@ -8,6 +8,39 @@ import { getBuildInfo } from "../src/build-info.ts";
 import { buildHttpServer } from "../src/http.ts";
 import type { AppConfig } from "../src/types.ts";
 
+function createWorkflows(baseDir: string) {
+  return [
+    {
+      id: "development",
+      whenState: "Start",
+      activeState: "Implementing",
+      workflowFile: path.join(baseDir, "IMPLEMENTATION_WORKFLOW.md"),
+      fallbackState: "Human Needed",
+    },
+    {
+      id: "review",
+      whenState: "Review",
+      activeState: "Reviewing",
+      workflowFile: path.join(baseDir, "REVIEW_WORKFLOW.md"),
+      fallbackState: "Human Needed",
+    },
+    {
+      id: "deploy",
+      whenState: "Deploy",
+      activeState: "Deploying",
+      workflowFile: path.join(baseDir, "DEPLOY_WORKFLOW.md"),
+      fallbackState: "Human Needed",
+    },
+    {
+      id: "cleanup",
+      whenState: "Cleanup",
+      activeState: "Cleaning Up",
+      workflowFile: path.join(baseDir, "CLEANUP_WORKFLOW.md"),
+      fallbackState: "Human Needed",
+    },
+  ];
+}
+
 function createConfig(baseDir: string): AppConfig {
   return {
     server: {
@@ -61,23 +94,7 @@ function createConfig(baseDir: string): AppConfig {
         id: "usertold",
         repoPath: path.join(baseDir, "repo"),
         worktreeRoot: path.join(baseDir, "worktrees"),
-        workflowFiles: {
-          development: path.join(baseDir, "DEVELOPMENT_WORKFLOW.md"),
-          review: path.join(baseDir, "REVIEW_WORKFLOW.md"),
-          deploy: path.join(baseDir, "DEPLOY_WORKFLOW.md"),
-          cleanup: path.join(baseDir, "CLEANUP_WORKFLOW.md"),
-        },
-        workflowStatuses: {
-          development: "Start",
-          review: "Review",
-          deploy: "Deploy",
-          developmentActive: "Implementing",
-          reviewActive: "Reviewing",
-          deployActive: "Deploying",
-          cleanup: "Cleanup",
-          humanNeeded: "Human Needed",
-          done: "Done",
-        },
+        workflows: createWorkflows(baseDir),
         issueKeyPrefixes: ["USE"],
         linearTeamIds: ["USE"],
         allowLabels: [],

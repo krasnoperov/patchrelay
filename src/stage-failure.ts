@@ -1,4 +1,9 @@
-import { buildStageFailedComment, resolveActiveLinearState, resolveWorkflowLabelCleanup } from "./linear-workflow.ts";
+import {
+  buildStageFailedComment,
+  resolveActiveLinearState,
+  resolveFallbackLinearState,
+  resolveWorkflowLabelCleanup,
+} from "./linear-workflow.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { LinearClientProvider, ProjectConfig, StageRunRecord, TrackedIssueRecord } from "./types.ts";
 
@@ -22,7 +27,7 @@ export async function syncFailedStageToLinear(params: {
     return;
   }
 
-  const fallbackState = params.project.workflowStatuses.humanNeeded;
+  const fallbackState = resolveFallbackLinearState(params.project, params.stageRun.stage);
   let shouldWriteFailureState = true;
   if (params.requireActiveLinearStateMatch) {
     const activeState = resolveActiveLinearState(params.project, params.stageRun.stage);

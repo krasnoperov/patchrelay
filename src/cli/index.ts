@@ -1,11 +1,12 @@
 import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
-import { loadConfig } from "../config.ts";
+import { loadConfig, type ConfigLoadProfile } from "../config.ts";
 import { initializePatchRelayHome, installUserServiceUnits, upsertProjectInConfig } from "../install.ts";
 import { runPreflight } from "../preflight.ts";
 import {
   getDefaultConfigPath,
-  getDefaultEnvPath,
+  getDefaultRuntimeEnvPath,
+  getDefaultServiceEnvPath,
   getSystemdUserPathUnitPath,
   getSystemdUserReloadUnitPath,
   getSystemdUserUnitPath,
@@ -91,9 +92,9 @@ function helpText(): string {
     "",
     "First-time setup:",
     "  1. patchrelay init <public-https-url>",
-    "  2. Fill in ~/.config/patchrelay/.env",
+    "  2. Fill in ~/.config/patchrelay/service.env",
     "  3. patchrelay project apply <id> <repo-path>",
-    "  4. Add workflow files to that repo if they are not there yet, then rerun `project apply`",
+    "  4. Edit the generated project workflows if needed, then add those workflow files to the repo",
     "  5. patchrelay doctor",
     "",
     "Why init needs the public URL:",
@@ -102,7 +103,7 @@ function helpText(): string {
     "",
     "Default behavior:",
     "  PatchRelay already defaults the local bind address, database path, log path, worktree",
-    "  root, workflow filenames, workflow statuses, and Codex runner settings. In the normal",
+    "  root, and Codex runner settings. In the normal",
     "  case you only need the public URL, the required secrets, and at least one project.",
     "  `patchrelay init` installs the user service and config watcher, and `project apply`",
     "  upserts the repo config and reuses or starts the Linear connection flow.",
@@ -111,7 +112,7 @@ function helpText(): string {
     "  init <public-base-url> [--force] [--json]                Bootstrap the machine-level PatchRelay home",
     "  project apply <id> <repo-path> [--issue-prefix <prefixes>] [--team-id <ids>] [--no-connect] [--timeout <seconds>] [--json]",
     "                                                           Upsert one local repository and connect it to Linear when ready",
-    "  doctor [--json]                                          Check secrets, paths, workflows, git, and codex",
+    "  doctor [--json]                                          Check secrets, paths, configured workflow files, git, and codex",
     "  install-service [--force] [--write-only] [--json]       Reinstall the systemd user service and watcher",
     "  restart-service [--json]                                Reload-or-restart the systemd user service",
     "  connect [--project <projectId>] [--no-open] [--timeout <seconds>] [--json]",
@@ -120,14 +121,14 @@ function helpText(): string {
     "  serve                                                   Run the local PatchRelay service",
     "  inspect <issueKey>                                      Show the latest known issue state",
     "  live <issueKey> [--watch] [--json]                      Show the active run status",
-    "  report <issueKey> [--stage <stage>] [--stage-run <id>] [--json]",
-    "                                                           Show finished stage reports",
+    "  report <issueKey> [--stage <workflow>] [--stage-run <id>] [--json]",
+    "                                                           Show finished workflow reports",
     "  events <issueKey> [--stage-run <id>] [--method <name>] [--follow] [--json]",
     "                                                           Show raw thread events",
     "  worktree <issueKey> [--cd] [--json]                     Print the issue worktree path",
     "  open <issueKey> [--print] [--json]                      Open Codex in the issue worktree",
-    "  retry <issueKey> [--stage <stage>] [--reason <text>] [--json]",
-    "                                                           Requeue a stage",
+    "  retry <issueKey> [--stage <workflow>] [--reason <text>] [--json]",
+    "                                                           Requeue a workflow",
     "  list [--active] [--failed] [--project <projectId>] [--json]",
     "                                                           List tracked issues",
   ].join("\n");
@@ -143,10 +144,8 @@ function getStageFlag(value: string | boolean | undefined): WorkflowStage | unde
   if (typeof value !== "string") {
     return undefined;
   }
-  if (value === "development" || value === "review" || value === "deploy" || value === "cleanup") {
-    return value;
-  }
-  throw new Error(`Unsupported stage: ${value}`);
+  const trimmed = value.trim();
+  return trimmed || undefined;
 }
 
 function parseCsvFlag(value: string | boolean | undefined): string[] {
@@ -343,6 +342,28 @@ function restartServiceCommands(): ServiceCommand[] {
   ];
 }
 
+function getCommandConfigProfile(command: string): ConfigLoadProfile {
+  switch (command) {
+    case "doctor":
+    case "install-service":
+      return "doctor";
+    case "connect":
+    case "installations":
+      return "operator_cli";
+    case "inspect":
+    case "live":
+    case "report":
+    case "events":
+    case "worktree":
+    case "open":
+    case "retry":
+    case "list":
+      return "cli";
+    default:
+      return "service";
+  }
+}
+
 export async function runCli(
   argv: string[],
   options?: {
@@ -404,7 +425,8 @@ export async function runCli(
           ? formatJson({ ...result, serviceUnits, serviceState })
           : [
               `Config directory: ${result.configDir}`,
-              `Env file: ${result.envPath} (${result.envStatus})`,
+              `Runtime env: ${result.runtimeEnvPath} (${result.runtimeEnvStatus})`,
+              `Service env: ${result.serviceEnvPath} (${result.serviceEnvStatus})`,
               `Config file: ${result.configPath} (${result.configStatus})`,
               `State directory: ${result.stateDir}`,
               `Data directory: ${result.dataDir}`,
@@ -419,7 +441,7 @@ export async function runCli(
               "",
               "Created with defaults:",
               `- Config file contains only machine-level essentials such as server.public_base_url`,
-              `- Database, logs, bind address, worktree roots, workflow file names, and workflow states use built-in defaults`,
+              `- Database, logs, bind address, and worktree roots use built-in defaults`,
               `- The user service and config watcher are installed for you`,
               "",
               "Register the app in Linear:",
@@ -444,11 +466,11 @@ export async function runCli(
                 : undefined,
               "",
               "Next steps:",
-              `1. Edit ${result.envPath}`,
-              "2. Paste your Linear OAuth client id and client secret into that .env and keep the generated webhook secret and token encryption key",
-              "3. Paste LINEAR_WEBHOOK_SECRET from that .env into the Linear OAuth app webhook signing secret",
+              `1. Edit ${result.serviceEnvPath}`,
+              "2. Paste your Linear OAuth client id and client secret into service.env and keep the generated webhook secret and token encryption key",
+              "3. Paste LINEAR_WEBHOOK_SECRET from service.env into the Linear OAuth app webhook signing secret",
               "4. Run `patchrelay project apply <id> <repo-path>`",
-              "5. If workflow files were missing, add repo workflow files such as IMPLEMENTATION_WORKFLOW.md, REVIEW_WORKFLOW.md, and DEPLOY_WORKFLOW.md, then rerun `patchrelay project apply`",
+              "5. Edit the generated project workflows if you want custom state names or workflow files, then add those workflow files to the repo",
               "6. Run `patchrelay doctor`",
             ]
               .filter(Boolean)
@@ -476,7 +498,8 @@ export async function runCli(
               `Service unit: ${result.unitPath} (${result.serviceStatus})`,
               `Reload unit: ${result.reloadUnitPath} (${result.reloadStatus})`,
               `Watcher unit: ${result.pathUnitPath} (${result.pathStatus})`,
-              `Env file: ${result.envPath}`,
+              `Runtime env: ${result.runtimeEnvPath}`,
+              `Service env: ${result.serviceEnvPath}`,
               `Config file: ${result.configPath}`,
               writeOnly
                 ? "Service units written. Start them with: systemctl --user daemon-reload && systemctl --user enable --now patchrelay.path && systemctl --user enable patchrelay.service && systemctl --user reload-or-restart patchrelay.service"
@@ -502,7 +525,8 @@ export async function runCli(
               unitPath: getSystemdUserUnitPath(),
               reloadUnitPath: getSystemdUserReloadUnitPath(),
               pathUnitPath: getSystemdUserPathUnitPath(),
-              envPath: getDefaultEnvPath(),
+              runtimeEnvPath: getDefaultRuntimeEnvPath(),
+              serviceEnvPath: getDefaultServiceEnvPath(),
               configPath: getDefaultConfigPath(),
               restarted: true,
             })
@@ -552,7 +576,7 @@ export async function runCli(
 
       let fullConfig: AppConfig;
       try {
-        fullConfig = loadConfig(undefined, { requireLinearSecret: false });
+        fullConfig = loadConfig(undefined, { profile: "doctor" });
       } catch (error) {
         if (json) {
           writeOutput(
@@ -669,8 +693,7 @@ export async function runCli(
   const config =
     options?.config ??
     loadConfig(undefined, {
-      requireLinearSecret: false,
-      allowMissingSecrets: command === "doctor" || command === "install-service",
+      profile: getCommandConfigProfile(command),
     });
   let data = options?.data;
 

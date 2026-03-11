@@ -6,7 +6,8 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=/home/your-user
-EnvironmentFile=/home/your-user/.config/patchrelay/.env
+EnvironmentFile=-/home/your-user/.config/patchrelay/runtime.env
+EnvironmentFile=/home/your-user/.config/patchrelay/service.env
 Environment=NODE_ENV=production
 Environment=PATCHRELAY_CONFIG=/home/your-user/.config/patchrelay/patchrelay.yaml
 Environment=PATH=/home/your-user/.local/bin:/usr/local/bin:/usr/bin:/bin

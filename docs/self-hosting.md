@@ -77,7 +77,8 @@ This command requires the public HTTPS origin up front because PatchRelay must k
 
 It creates:
 
-- `~/.config/patchrelay/.env`
+- `~/.config/patchrelay/runtime.env`
+- `~/.config/patchrelay/service.env`
 - `~/.config/patchrelay/patchrelay.yaml`
 - `~/.config/systemd/user/patchrelay.service`
 - `~/.config/systemd/user/patchrelay-reload.service`
@@ -92,23 +93,23 @@ Default runtime paths are:
 
 The generated `patchrelay.yaml` stays intentionally minimal. In the default setup it only needs `server.public_base_url`; PatchRelay already has built-in defaults for the local bind address, database path, logs, worktree roots, workflow filenames, workflow states, and Codex runner settings.
 
-`patchrelay init` also installs the user service and a watcher that reload-or-restarts PatchRelay whenever `patchrelay.yaml` or `.env` changes.
+`patchrelay init` also installs the user service and a watcher that reload-or-restarts PatchRelay whenever `patchrelay.yaml`, `runtime.env`, or `service.env` changes.
 
 ## 3. Configure Machine-Level Secrets
 
-Edit `~/.config/patchrelay/.env` and keep the generated webhook secret and token-encryption key:
+Edit `~/.config/patchrelay/service.env` and keep the generated webhook secret and token-encryption key:
 
 ```bash
 LINEAR_WEBHOOK_SECRET=generated-by-patchrelay-init
 PATCHRELAY_TOKEN_ENCRYPTION_KEY=generated-by-patchrelay-init
 LINEAR_OAUTH_CLIENT_ID=replace-with-linear-oauth-client-id
 LINEAR_OAUTH_CLIENT_SECRET=replace-with-linear-oauth-client-secret
-# PATCHRELAY_OPERATOR_TOKEN=replace-with-operator-api-token
 ```
 
-Optional overrides such as `PATCHRELAY_CONFIG`, `PATCHRELAY_DB_PATH`, and `PATCHRELAY_LOG_FILE` can also live there. In personal-mode, prefer user-owned paths over `/opt` or `/var` paths.
+Optional non-secret overrides such as `PATCHRELAY_CONFIG`, `PATCHRELAY_DB_PATH`, and `PATCHRELAY_LOG_FILE` belong in `~/.config/patchrelay/runtime.env`. In personal-mode, prefer user-owned paths over `/opt` or `/var` paths.
 
-Keep these values machine-level. They belong in PatchRelay's own `.env`, not inside repository `.env` files.
+Keep these values machine-level. They belong in PatchRelay's own env files, not inside repository `.env` files.
+PatchRelay reads `runtime.env` for non-secret runtime overrides and `service.env` for service credentials. Read-only local inspection commands use local state and do not require exporting these values in your shell.
 
 For the Linear OAuth app settings and webhook categories, use [linear-agent-onboarding.md](./linear-agent-onboarding.md).
 
@@ -139,17 +140,17 @@ Add repositories with `patchrelay project apply <id> <repo-path>`. A project onl
 
 PatchRelay is convention-first here:
 
+- by default it generates four workflow bindings per project: `development`, `review`, `deploy`, and `cleanup`
+- each binding maps one Linear state such as `Start` or `Deploy` to one repo workflow file
 - by default it looks for `IMPLEMENTATION_WORKFLOW.md`, `REVIEW_WORKFLOW.md`, `DEPLOY_WORKFLOW.md`, and `CLEANUP_WORKFLOW.md` in each repo root
-- by default it maps `Start`, `Review`, `Deploy`, `Cleanup`, `Implementing`, `Reviewing`, `Deploying`, `Cleaning Up`, `Human Needed`, and `Done`
 - by default it uses `agentSessionCreated`, `agentPrompted`, and `statusChanged` as trigger events for app-mode installs
-- `defaults.workflow_files` and `defaults.workflow_statuses` let you change those conventions globally
-- `projects[].workflow_files` and `projects[].workflow_statuses` are sparse overrides, so a project only needs to declare the entries that differ
+- edit `projects[].workflows` when you want different state names, active states, workflow ids, or workflow file paths
 - `worktree_root` defaults to `~/.local/share/patchrelay/worktrees/<project-id>`
 - `branch_prefix` defaults to a slug of the project id
 
 `projects[].trigger_events` is optional and mainly for advanced overrides. Keep it only if you want PatchRelay to react to a non-default set such as regular issue comments.
 
-Workflow file paths are resolved relative to `repo_path` unless you provide an absolute path. Optional convention states such as `cleanup`, `cleanup_active`, `human_needed`, and `done` can be disabled for a project by setting them to `null`.
+Workflow file paths are resolved relative to `repo_path` unless you provide an absolute path. PatchRelay chooses a workflow by matching the current Linear state to `projects[].workflows[].when_state`, then moves the issue to that workflow's `active_state` while Codex is running.
 
 If you want Linear itself to be part of your trust boundary, configure `trusted_actors` on each project. That allowlist can name specific owners by `id` or `email`, or define a group-style allowlist with `email_domains`.
 

@@ -4,41 +4,31 @@ import path from "node:path";
 import YAML from "yaml";
 import { z } from "zod";
 import type { AppConfig } from "./types.ts";
-import { getDefaultConfigPath, getDefaultDatabasePath, getDefaultLogPath, getPatchRelayDataDir } from "./runtime-paths.ts";
+import {
+  getDefaultConfigPath,
+  getDefaultDatabasePath,
+  getDefaultLogPath,
+  getDefaultRuntimeEnvPath,
+  getDefaultServiceEnvPath,
+  getPatchRelayDataDir,
+} from "./runtime-paths.ts";
 import { ensureAbsolutePath } from "./utils.ts";
 
 const LINEAR_OAUTH_CALLBACK_PATH = "/oauth/linear/callback";
 
-const workflowFilesSchema = z.object({
-  development: z.string().min(1),
-  review: z.string().min(1),
-  deploy: z.string().min(1),
-  cleanup: z.string().min(1),
+const workflowSchema = z.object({
+  id: z.string().min(1),
+  when_state: z.string().min(1),
+  active_state: z.string().min(1),
+  workflow_file: z.string().min(1),
+  fallback_state: z.string().min(1).nullable().optional(),
 });
-
-const workflowFilesOverrideSchema = workflowFilesSchema.partial();
-
-const workflowStatusesSchema = z.object({
-  development: z.string().min(1),
-  review: z.string().min(1),
-  deploy: z.string().min(1),
-  development_active: z.string().min(1),
-  review_active: z.string().min(1),
-  deploy_active: z.string().min(1),
-  cleanup: z.string().min(1).nullable().optional(),
-  cleanup_active: z.string().min(1).nullable().optional(),
-  human_needed: z.string().min(1).nullable().optional(),
-  done: z.string().min(1).nullable().optional(),
-});
-
-const workflowStatusesOverrideSchema = workflowStatusesSchema.partial();
 
 const projectSchema = z.object({
   id: z.string().min(1),
   repo_path: z.string().min(1),
   worktree_root: z.string().min(1).optional(),
-  workflow_files: workflowFilesOverrideSchema.optional(),
-  workflow_statuses: workflowStatusesOverrideSchema.optional(),
+  workflows: z.array(workflowSchema).min(1).optional(),
   workflow_labels: z
     .object({
       working: z.string().min(1).optional(),
@@ -120,34 +110,8 @@ const configSchema = z.object({
       persist_extended_history: z.boolean().default(false),
     }),
   }),
-  defaults: z
-    .object({
-      workflow_files: workflowFilesOverrideSchema.optional(),
-      workflow_statuses: workflowStatusesOverrideSchema.optional(),
-    })
-    .default({}),
   projects: z.array(projectSchema).default([]),
 });
-
-const builtinWorkflowFiles = {
-  development: "IMPLEMENTATION_WORKFLOW.md",
-  review: "REVIEW_WORKFLOW.md",
-  deploy: "DEPLOY_WORKFLOW.md",
-  cleanup: "CLEANUP_WORKFLOW.md",
-} as const;
-
-const builtinWorkflowStatuses = {
-  development: "Start",
-  review: "Review",
-  deploy: "Deploy",
-  development_active: "Implementing",
-  review_active: "Reviewing",
-  deploy_active: "Deploying",
-  cleanup: "Cleanup",
-  cleanup_active: "Cleaning Up",
-  human_needed: "Human Needed",
-  done: "Done",
-} as const;
 
 function defaultTriggerEvents(actor: "user" | "app"): AppConfig["projects"][number]["triggerEvents"] {
   if (actor === "app") {
@@ -156,6 +120,37 @@ function defaultTriggerEvents(actor: "user" | "app"): AppConfig["projects"][numb
 
   return ["statusChanged"];
 }
+
+const builtinWorkflows: z.infer<typeof workflowSchema>[] = [
+  {
+    id: "development",
+    when_state: "Start",
+    active_state: "Implementing",
+    workflow_file: "IMPLEMENTATION_WORKFLOW.md",
+    fallback_state: "Human Needed",
+  },
+  {
+    id: "review",
+    when_state: "Review",
+    active_state: "Reviewing",
+    workflow_file: "REVIEW_WORKFLOW.md",
+    fallback_state: "Human Needed",
+  },
+  {
+    id: "deploy",
+    when_state: "Deploy",
+    active_state: "Deploying",
+    workflow_file: "DEPLOY_WORKFLOW.md",
+    fallback_state: "Human Needed",
+  },
+  {
+    id: "cleanup",
+    when_state: "Cleanup",
+    active_state: "Cleaning Up",
+    workflow_file: "CLEANUP_WORKFLOW.md",
+    fallback_state: "Human Needed",
+  },
+];
 
 function withSectionDefaults(input: unknown): unknown {
   const source = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
@@ -171,7 +166,6 @@ function withSectionDefaults(input: unknown): unknown {
     logging: {},
     database: {},
     operator_api: {},
-    defaults: {},
     projects: [],
     ...rest,
     linear: {
@@ -203,8 +197,7 @@ function expandEnv(value: unknown, env: Record<string, string | undefined>): unk
   return value;
 }
 
-function readAdjacentEnvFile(configPath: string): Record<string, string> {
-  const envPath = path.join(path.dirname(configPath), ".env");
+function readEnvFile(envPath: string): Record<string, string> {
   if (!existsSync(envPath)) {
     return {};
   }
@@ -238,6 +231,32 @@ function readAdjacentEnvFile(configPath: string): Record<string, string> {
   }
 
   return values;
+}
+
+function getEnvFilesForProfile(
+  configPath: string,
+  profile: ConfigLoadProfile,
+): string[] {
+  const configDir = path.dirname(configPath);
+  const runtimeEnvPath = configDir === path.dirname(getDefaultConfigPath()) ? getDefaultRuntimeEnvPath() : path.join(configDir, "runtime.env");
+  const serviceEnvPath = configDir === path.dirname(getDefaultConfigPath()) ? getDefaultServiceEnvPath() : path.join(configDir, "service.env");
+
+  switch (profile) {
+    case "service":
+      return [runtimeEnvPath, serviceEnvPath];
+    case "cli":
+    case "write_config":
+      return [runtimeEnvPath];
+    case "operator_cli":
+      return [runtimeEnvPath, serviceEnvPath];
+    case "doctor":
+      return [runtimeEnvPath, serviceEnvPath];
+  }
+}
+
+function readEnvFilesForProfile(configPath: string, profile: ConfigLoadProfile): Record<string, string> {
+  const paths = getEnvFilesForProfile(configPath, profile);
+  return Object.assign({}, ...paths.map((envPath) => readEnvFile(envPath)));
 }
 
 function resolveWorkflowFilePath(repoPath: string, workflowFile: string): string {
@@ -284,89 +303,30 @@ function deriveLinearOAuthRedirectUri(server: {
   return new URL(LINEAR_OAUTH_CALLBACK_PATH, `http://${formatUrlHost(host)}:${server.port}`).toString();
 }
 
-function mergeWorkflowFiles(
+function mergeWorkflows(
   repoPath: string,
-  defaults: z.infer<typeof workflowFilesOverrideSchema> | undefined,
-  overrides: z.infer<typeof workflowFilesOverrideSchema> | undefined,
-  options?: { cleanupEnabled?: boolean },
-): AppConfig["projects"][number]["workflowFiles"] {
-  const merged = {
-    development: overrides?.development ?? defaults?.development ?? builtinWorkflowFiles.development,
-    review: overrides?.review ?? defaults?.review ?? builtinWorkflowFiles.review,
-    deploy: overrides?.deploy ?? defaults?.deploy ?? builtinWorkflowFiles.deploy,
-    ...(options?.cleanupEnabled ? { cleanup: overrides?.cleanup ?? defaults?.cleanup ?? builtinWorkflowFiles.cleanup } : {}),
-  };
-
-  return {
-    development: resolveWorkflowFilePath(repoPath, merged.development),
-    review: resolveWorkflowFilePath(repoPath, merged.review),
-    deploy: resolveWorkflowFilePath(repoPath, merged.deploy),
-    ...(merged.cleanup ? { cleanup: resolveWorkflowFilePath(repoPath, merged.cleanup) } : {}),
-  };
-}
-
-function mergeWorkflowStatuses(
-  defaults: z.infer<typeof workflowStatusesOverrideSchema> | undefined,
-  overrides: z.infer<typeof workflowStatusesOverrideSchema> | undefined,
-): AppConfig["projects"][number]["workflowStatuses"] {
-  const merged = {
-    development: overrides?.development ?? defaults?.development ?? builtinWorkflowStatuses.development,
-    review: overrides?.review ?? defaults?.review ?? builtinWorkflowStatuses.review,
-    deploy: overrides?.deploy ?? defaults?.deploy ?? builtinWorkflowStatuses.deploy,
-    development_active:
-      overrides?.development_active ?? defaults?.development_active ?? builtinWorkflowStatuses.development_active,
-    review_active: overrides?.review_active ?? defaults?.review_active ?? builtinWorkflowStatuses.review_active,
-    deploy_active: overrides?.deploy_active ?? defaults?.deploy_active ?? builtinWorkflowStatuses.deploy_active,
-    cleanup:
-      overrides?.cleanup !== undefined
-        ? overrides.cleanup
-        : defaults?.cleanup !== undefined
-          ? defaults.cleanup
-          : builtinWorkflowStatuses.cleanup,
-    cleanup_active:
-      overrides?.cleanup_active !== undefined
-        ? overrides.cleanup_active
-        : defaults?.cleanup_active !== undefined
-          ? defaults.cleanup_active
-          : builtinWorkflowStatuses.cleanup_active,
-    human_needed:
-      overrides?.human_needed !== undefined
-        ? overrides.human_needed
-        : defaults?.human_needed !== undefined
-          ? defaults.human_needed
-          : builtinWorkflowStatuses.human_needed,
-    done:
-      overrides?.done !== undefined
-        ? overrides.done
-        : defaults?.done !== undefined
-          ? defaults.done
-          : builtinWorkflowStatuses.done,
-  };
-
-  return {
-    development: merged.development,
-    review: merged.review,
-    deploy: merged.deploy,
-    developmentActive: merged.development_active,
-    reviewActive: merged.review_active,
-    deployActive: merged.deploy_active,
-    ...(merged.cleanup ? { cleanup: merged.cleanup } : {}),
-    ...(merged.cleanup && merged.cleanup_active ? { cleanupActive: merged.cleanup_active } : {}),
-    ...(merged.human_needed ? { humanNeeded: merged.human_needed } : {}),
-    ...(merged.done ? { done: merged.done } : {}),
-  };
+  workflows: z.infer<typeof workflowSchema>[],
+): AppConfig["projects"][number]["workflows"] {
+  return workflows.map((workflow) => ({
+    id: workflow.id,
+    whenState: workflow.when_state,
+    activeState: workflow.active_state,
+    workflowFile: resolveWorkflowFilePath(repoPath, workflow.workflow_file),
+    ...(workflow.fallback_state ? { fallbackState: workflow.fallback_state } : {}),
+  }));
 }
 
 export function loadConfig(
   configPath = process.env.PATCHRELAY_CONFIG ?? getDefaultConfigPath(),
-  options?: { requireLinearSecret?: boolean; allowMissingSecrets?: boolean },
+  options?: { profile?: ConfigLoadProfile },
 ): AppConfig {
   const requestedPath = ensureAbsolutePath(configPath);
   if (!existsSync(requestedPath)) {
     throw new Error(`Config file not found: ${requestedPath}. Run "patchrelay init" to create it.`);
   }
 
-  const adjacentEnv = readAdjacentEnvFile(requestedPath);
+  const profile = options?.profile ?? "service";
+  const adjacentEnv = readEnvFilesForProfile(requestedPath, profile);
   const env = {
     ...adjacentEnv,
     ...process.env,
@@ -376,8 +336,7 @@ export function loadConfig(
   const parsedYaml = YAML.parse(raw);
   const parsed = configSchema.parse(withSectionDefaults(expandEnv(parsedYaml, env)));
 
-  const requireLinearSecret = options?.requireLinearSecret ?? true;
-  const allowMissingSecrets = options?.allowMissingSecrets ?? false;
+  const requirements = getLoadProfileRequirements(profile);
   const webhookSecret = env[parsed.linear.webhook_secret_env];
   const tokenEncryptionKey = env[parsed.linear.token_encryption_key_env];
   const oauthClientId = env[parsed.linear.oauth.client_id_env];
@@ -385,16 +344,16 @@ export function loadConfig(
   const operatorApiToken = parsed.operator_api.bearer_token_env
     ? env[parsed.operator_api.bearer_token_env]
     : undefined;
-  if (requireLinearSecret && !webhookSecret && !allowMissingSecrets) {
+  if (requirements.requireWebhookSecret && !webhookSecret) {
     throw new Error(`Missing env var ${parsed.linear.webhook_secret_env}`);
   }
-  if (!oauthClientId && !allowMissingSecrets) {
+  if (requirements.requireOAuthClientId && !oauthClientId) {
     throw new Error(`Missing env var ${parsed.linear.oauth.client_id_env}`);
   }
-  if (!oauthClientSecret && !allowMissingSecrets) {
+  if (requirements.requireOAuthClientSecret && !oauthClientSecret) {
     throw new Error(`Missing env var ${parsed.linear.oauth.client_secret_env}`);
   }
-  if (!tokenEncryptionKey && !allowMissingSecrets) {
+  if (requirements.requireTokenEncryptionKey && !tokenEncryptionKey) {
     throw new Error(`Missing env var ${parsed.linear.token_encryption_key_env}`);
   }
 
@@ -462,16 +421,11 @@ export function loadConfig(
     },
     projects: parsed.projects.map((project) => {
       const repoPath = ensureAbsolutePath(project.repo_path);
-      const workflowStatuses = mergeWorkflowStatuses(parsed.defaults.workflow_statuses, project.workflow_statuses);
-
       return {
         id: project.id,
         repoPath,
         worktreeRoot: ensureAbsolutePath(project.worktree_root ?? defaultWorktreeRoot(project.id)),
-        workflowFiles: mergeWorkflowFiles(repoPath, parsed.defaults.workflow_files, project.workflow_files, {
-          cleanupEnabled: Boolean(workflowStatuses.cleanup),
-        }),
-        workflowStatuses,
+        workflows: mergeWorkflows(repoPath, project.workflows ?? builtinWorkflows),
         ...(project.workflow_labels
           ? {
               workflowLabels: {
@@ -501,11 +455,55 @@ export function loadConfig(
     }),
   };
 
-  validateConfigSemantics(config);
+  validateConfigSemantics(config, {
+    allowMissingOperatorApiToken: requirements.allowMissingOperatorApiToken,
+  });
   return config;
 }
 
-function validateConfigSemantics(config: AppConfig): void {
+export type ConfigLoadProfile = "service" | "cli" | "operator_cli" | "doctor" | "write_config";
+
+function getLoadProfileRequirements(profile: ConfigLoadProfile): {
+  requireWebhookSecret: boolean;
+  requireOAuthClientId: boolean;
+  requireOAuthClientSecret: boolean;
+  requireTokenEncryptionKey: boolean;
+  allowMissingOperatorApiToken: boolean;
+} {
+  switch (profile) {
+    case "service":
+      return {
+        requireWebhookSecret: true,
+        requireOAuthClientId: true,
+        requireOAuthClientSecret: true,
+        requireTokenEncryptionKey: true,
+        allowMissingOperatorApiToken: false,
+      };
+    case "operator_cli":
+      return {
+        requireWebhookSecret: false,
+        requireOAuthClientId: false,
+        requireOAuthClientSecret: false,
+        requireTokenEncryptionKey: false,
+        allowMissingOperatorApiToken: false,
+      };
+    case "cli":
+    case "doctor":
+    case "write_config":
+      return {
+        requireWebhookSecret: false,
+        requireOAuthClientId: false,
+        requireOAuthClientSecret: false,
+        requireTokenEncryptionKey: false,
+        allowMissingOperatorApiToken: true,
+      };
+  }
+}
+
+function validateConfigSemantics(
+  config: AppConfig,
+  options?: { allowMissingOperatorApiToken?: boolean },
+): void {
   const redirectUri = new URL(config.linear.oauth.redirectUri);
   if (redirectUri.pathname !== LINEAR_OAUTH_CALLBACK_PATH) {
     throw new Error(`linear.oauth.redirect_uri must use the fixed "${LINEAR_OAUTH_CALLBACK_PATH}" path`);
@@ -536,9 +534,30 @@ function validateConfigSemantics(config: AppConfig): void {
       }
       linearTeamIds.set(teamId, project.id);
     }
+
+    const workflowIds = new Set<string>();
+    const workflowStates = new Set<string>();
+    for (const workflow of project.workflows) {
+      const normalizedWorkflowId = workflow.id.trim().toLowerCase();
+      if (workflowIds.has(normalizedWorkflowId)) {
+        throw new Error(`Workflow id "${workflow.id}" is configured more than once in project ${project.id}`);
+      }
+      workflowIds.add(normalizedWorkflowId);
+
+      const normalizedState = workflow.whenState.trim().toLowerCase();
+      if (workflowStates.has(normalizedState)) {
+        throw new Error(`Linear state "${workflow.whenState}" is configured for more than one workflow in project ${project.id}`);
+      }
+      workflowStates.add(normalizedState);
+    }
   }
 
-  if (config.operatorApi.enabled && config.server.bind !== "127.0.0.1" && !config.operatorApi.bearerToken) {
+  if (
+    config.operatorApi.enabled &&
+    config.server.bind !== "127.0.0.1" &&
+    !config.operatorApi.bearerToken &&
+    !options?.allowMissingOperatorApiToken
+  ) {
     throw new Error("operator_api.enabled requires operator_api.bearer_token_env when server.bind is not 127.0.0.1");
   }
 }

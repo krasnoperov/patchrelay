@@ -22,6 +22,7 @@ patchrelay <command> [args] [flags]
 
 Available commands:
 
+- `project apply <id> <repo-path> [--issue-prefix <prefixes>] [--team-id <ids>] [--no-connect] [--timeout <seconds>] [--json]`
 - `inspect <issueKey>`
 - `live <issueKey> [--watch] [--json]`
 - `report <issueKey> [--stage <stage>] [--stage-run <id>] [--json]`
@@ -31,7 +32,7 @@ Available commands:
 - `retry <issueKey> [--stage <stage>] [--reason <text>] [--json]`
 - `list [--active] [--failed] [--project <projectId>] [--json]`
 - `doctor [--json]`
-- `init [--force] [--json]`
+- `init <public-base-url> [--force] [--json]`
 - `connect [--project <projectId>] [--no-open] [--timeout <seconds>] [--json]`
 - `installations [--json]`
 - `install-service [--force] [--write-only] [--json]`
@@ -52,7 +53,8 @@ patchrelay init https://patchrelay.example.com
 
 By default this writes:
 
-- `~/.config/patchrelay/.env`
+- `~/.config/patchrelay/runtime.env`
+- `~/.config/patchrelay/service.env`
 - `~/.config/patchrelay/patchrelay.yaml`
 - `~/.config/systemd/user/patchrelay.service`
 - `~/.config/systemd/user/patchrelay-reload.service`

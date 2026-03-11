@@ -18,38 +18,25 @@ export type TriggerEvent =
   | "installationRevoked"
   | "appUserNotification";
 
-export type WorkflowStage = "development" | "review" | "deploy" | "cleanup";
+export type WorkflowStage = string;
 export type IssueLifecycleStatus = "idle" | "queued" | "running" | "paused" | "completed" | "failed";
 export type WorkspaceStatus = "active" | "paused" | "closing" | "closed";
 export type PipelineStatus = "active" | "completed" | "failed" | "paused";
 export type StageRunStatus = "running" | "completed" | "failed" | "waiting";
 
-export interface WorkflowStatusConfig {
-  development: string;
-  review: string;
-  deploy: string;
-  developmentActive: string;
-  reviewActive: string;
-  deployActive: string;
-  cleanup?: string;
-  cleanupActive?: string;
-  humanNeeded?: string;
-  done?: string;
-}
-
-export interface ProjectWorkflowFiles {
-  development: string;
-  review: string;
-  deploy: string;
-  cleanup?: string;
+export interface ProjectWorkflowConfig {
+  id: string;
+  whenState: string;
+  activeState: string;
+  workflowFile: string;
+  fallbackState?: string;
 }
 
 export interface ProjectConfig {
   id: string;
   repoPath: string;
   worktreeRoot: string;
-  workflowFiles: ProjectWorkflowFiles;
-  workflowStatuses: WorkflowStatusConfig;
+  workflows: ProjectWorkflowConfig[];
   workflowLabels?: {
     working?: string;
     awaitingHandoff?: string;

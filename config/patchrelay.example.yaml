@@ -3,4 +3,4 @@ server:
 
 # Machine-level PatchRelay config only.
 # Keep this file minimal unless you intentionally need overrides.
-# Add repositories with `patchrelay project add <id> <repo-path>`.
+# Add repositories with `patchrelay project apply <id> <repo-path>`.

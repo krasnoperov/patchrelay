@@ -95,11 +95,8 @@ export async function runPreflight(config: AppConfig): Promise<PreflightReport> 
   for (const project of config.projects) {
     checks.push(...checkPath(`project:${project.id}:repo`, project.repoPath, "directory", { writable: true }));
     checks.push(...checkPath(`project:${project.id}:worktrees`, project.worktreeRoot, "directory", { createIfMissing: true, writable: true }));
-    checks.push(...checkPath(`project:${project.id}:workflow:development`, project.workflowFiles.development, "file", {}));
-    checks.push(...checkPath(`project:${project.id}:workflow:review`, project.workflowFiles.review, "file", {}));
-    checks.push(...checkPath(`project:${project.id}:workflow:deploy`, project.workflowFiles.deploy, "file", {}));
-    if (project.workflowFiles.cleanup) {
-      checks.push(...checkPath(`project:${project.id}:workflow:cleanup`, project.workflowFiles.cleanup, "file", {}));
+    for (const workflow of project.workflows) {
+      checks.push(...checkPath(`project:${project.id}:workflow:${workflow.id}`, workflow.workflowFile, "file", {}));
     }
   }
 

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import path from "node:path";
 import test from "node:test";
 import { resolveProject, triggerEventAllowed, trustedActorAllowed } from "../src/project-resolution.ts";
 import type { AppConfig, LinearWebhookPayload } from "../src/types.ts";
@@ -309,20 +310,7 @@ test("resolveProject matches by issue key prefix and team", () => {
         id: "alpha",
         repoPath: "/repos/alpha",
         worktreeRoot: "/worktrees/alpha",
-        workflowFiles: {
-          development: "/repos/alpha/DEVELOPMENT_WORKFLOW.md",
-          review: "/repos/alpha/REVIEW_WORKFLOW.md",
-          deploy: "/repos/alpha/DEPLOY_WORKFLOW.md",
-          cleanup: "/repos/alpha/CLEANUP_WORKFLOW.md",
-        },
-        workflowStatuses: {
-          development: "Start",
-          review: "Review",
-          deploy: "Deploy",
-          developmentActive: "Implementing",
-          reviewActive: "Reviewing",
-          deployActive: "Deploying",
-        },
+        workflows: createWorkflows("/repos/alpha"),
         issueKeyPrefixes: ["ALPHA"],
         linearTeamIds: ["OPS"],
         allowLabels: ["alpha"],
@@ -333,20 +321,7 @@ test("resolveProject matches by issue key prefix and team", () => {
         id: "usertold",
         repoPath: "/repos/usertold",
         worktreeRoot: "/worktrees/usertold",
-        workflowFiles: {
-          development: "/repos/usertold/DEVELOPMENT_WORKFLOW.md",
-          review: "/repos/usertold/REVIEW_WORKFLOW.md",
-          deploy: "/repos/usertold/DEPLOY_WORKFLOW.md",
-          cleanup: "/repos/usertold/CLEANUP_WORKFLOW.md",
-        },
-        workflowStatuses: {
-          development: "Start",
-          review: "Review",
-          deploy: "Deploy",
-          developmentActive: "Implementing",
-          reviewActive: "Reviewing",
-          deployActive: "Deploying",
-        },
+        workflows: createWorkflows("/repos/usertold"),
         issueKeyPrefixes: ["USE"],
         linearTeamIds: ["USE"],
         allowLabels: [],
@@ -391,20 +366,7 @@ test("trustedActorAllowed matches ids, emails, names, and trusted email domains"
     id: "usertold",
     repoPath: "/repos/usertold",
     worktreeRoot: "/worktrees/usertold",
-    workflowFiles: {
-      development: "/repos/usertold/DEVELOPMENT_WORKFLOW.md",
-      review: "/repos/usertold/REVIEW_WORKFLOW.md",
-      deploy: "/repos/usertold/DEPLOY_WORKFLOW.md",
-      cleanup: "/repos/usertold/CLEANUP_WORKFLOW.md",
-    },
-    workflowStatuses: {
-      development: "Start",
-      review: "Review",
-      deploy: "Deploy",
-      developmentActive: "Implementing",
-      reviewActive: "Reviewing",
-      deployActive: "Deploying",
-    },
+    workflows: createWorkflows("/repos/usertold"),
     issueKeyPrefixes: ["USE"],
     linearTeamIds: ["USE"],
     allowLabels: [],
@@ -425,3 +387,31 @@ test("trustedActorAllowed matches ids, emails, names, and trusted email domains"
   assert.equal(trustedActorAllowed(project, { email: "intruder@elsewhere.example" }), false);
   assert.equal(trustedActorAllowed(project, undefined), false);
 });
+function createWorkflows(repoPath: string) {
+  return [
+    {
+      id: "development",
+      whenState: "Start",
+      activeState: "Implementing",
+      workflowFile: path.join(repoPath, "DEVELOPMENT_WORKFLOW.md"),
+    },
+    {
+      id: "review",
+      whenState: "Review",
+      activeState: "Reviewing",
+      workflowFile: path.join(repoPath, "REVIEW_WORKFLOW.md"),
+    },
+    {
+      id: "deploy",
+      whenState: "Deploy",
+      activeState: "Deploying",
+      workflowFile: path.join(repoPath, "DEPLOY_WORKFLOW.md"),
+    },
+    {
+      id: "cleanup",
+      whenState: "Cleanup",
+      activeState: "Cleaning Up",
+      workflowFile: path.join(repoPath, "CLEANUP_WORKFLOW.md"),
+    },
+  ];
+}

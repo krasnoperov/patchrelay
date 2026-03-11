@@ -1,8 +1,38 @@
 import assert from "node:assert/strict";
+import path from "node:path";
 import test from "node:test";
 import { resolveProject, triggerEventAllowed } from "../src/project-resolution.ts";
 import type { AppConfig, IssueMetadata } from "../src/types.ts";
 import { resolveWorkflowStage } from "../src/workflow-policy.ts";
+
+function createWorkflows(repoPath: string) {
+  return [
+    {
+      id: "development",
+      whenState: "Start",
+      activeState: "Implementing",
+      workflowFile: path.join(repoPath, "DEVELOPMENT_WORKFLOW.md"),
+    },
+    {
+      id: "review",
+      whenState: "Review",
+      activeState: "Reviewing",
+      workflowFile: path.join(repoPath, "REVIEW_WORKFLOW.md"),
+    },
+    {
+      id: "deploy",
+      whenState: "Deploy",
+      activeState: "Deploying",
+      workflowFile: path.join(repoPath, "DEPLOY_WORKFLOW.md"),
+    },
+    {
+      id: "cleanup",
+      whenState: "Cleanup",
+      activeState: "Cleaning Up",
+      workflowFile: path.join(repoPath, "CLEANUP_WORKFLOW.md"),
+    },
+  ];
+}
 
 function createConfig(): AppConfig {
   return {
@@ -56,21 +86,7 @@ function createConfig(): AppConfig {
         id: "alpha",
         repoPath: "/repos/alpha",
         worktreeRoot: "/worktrees/alpha",
-        workflowFiles: {
-          development: "/repos/alpha/DEVELOPMENT_WORKFLOW.md",
-          review: "/repos/alpha/REVIEW_WORKFLOW.md",
-          deploy: "/repos/alpha/DEPLOY_WORKFLOW.md",
-          cleanup: "/repos/alpha/CLEANUP_WORKFLOW.md",
-        },
-        workflowStatuses: {
-          development: "Start",
-          review: "Review",
-          deploy: "Deploy",
-          developmentActive: "Implementing",
-          reviewActive: "Reviewing",
-          deployActive: "Deploying",
-          cleanup: "Cleanup",
-        },
+        workflows: createWorkflows("/repos/alpha"),
         issueKeyPrefixes: ["ALPHA"],
         linearTeamIds: ["OPS"],
         allowLabels: ["alpha"],
@@ -81,21 +97,7 @@ function createConfig(): AppConfig {
         id: "usertold",
         repoPath: "/repos/usertold",
         worktreeRoot: "/worktrees/usertold",
-        workflowFiles: {
-          development: "/repos/usertold/DEVELOPMENT_WORKFLOW.md",
-          review: "/repos/usertold/REVIEW_WORKFLOW.md",
-          deploy: "/repos/usertold/DEPLOY_WORKFLOW.md",
-          cleanup: "/repos/usertold/CLEANUP_WORKFLOW.md",
-        },
-        workflowStatuses: {
-          development: "Start",
-          review: "Review",
-          deploy: "Deploy",
-          developmentActive: "Implementing",
-          reviewActive: "Reviewing",
-          deployActive: "Deploying",
-          cleanup: "Cleanup",
-        },
+        workflows: createWorkflows("/repos/usertold"),
         issueKeyPrefixes: ["USE"],
         linearTeamIds: ["USE"],
         allowLabels: [],
@@ -139,12 +141,7 @@ test("resolveProject returns undefined when routing is ambiguous", () => {
     id: "usertold-copy",
     repoPath: "/repos/usertold-copy",
     worktreeRoot: "/worktrees/usertold-copy",
-    workflowFiles: {
-      development: "/repos/usertold-copy/DEVELOPMENT_WORKFLOW.md",
-      review: "/repos/usertold-copy/REVIEW_WORKFLOW.md",
-      deploy: "/repos/usertold-copy/DEPLOY_WORKFLOW.md",
-      cleanup: "/repos/usertold-copy/CLEANUP_WORKFLOW.md",
-    },
+    workflows: createWorkflows("/repos/usertold-copy"),
   });
 
   const issue: IssueMetadata = {

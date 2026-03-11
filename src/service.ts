@@ -26,7 +26,7 @@ import type {
 } from "./types.ts";
 import { safeJsonParse } from "./utils.ts";
 import { normalizeWebhook } from "./webhooks.ts";
-import { resolveWorkflowStage } from "./workflow-policy.ts";
+import { listRunnableStates, resolveWorkflowStage } from "./workflow-policy.ts";
 
 const ISSUE_KEY_DELIMITER = "::";
 const LINEAR_OAUTH_STATE_TTL_MS = 15 * 60 * 1000;
@@ -444,9 +444,10 @@ export class PatchRelayService {
 
     if (normalized.triggerEvent === "agentSessionCreated") {
       if (!desiredStage && !activeStageRun) {
+        const runnableStates = listRunnableStates(project).join(", ");
         await this.safeCreateAgentActivity(linear, normalized.agentSession.id, {
           type: "elicitation",
-          body: "PatchRelay is delegated, but the issue is not in a runnable workflow state. Move it to Start, Review, or Deploy and try again.",
+          body: `PatchRelay is delegated, but the issue is not in a runnable workflow state. Move it to one of: ${runnableStates}.`,
         });
         return;
       }
@@ -497,9 +498,10 @@ export class PatchRelayService {
     }
 
     if (!activeStageRun && !desiredStage && (promptBody || promptContext)) {
+      const runnableStates = listRunnableStates(project).join(", ");
       await this.safeCreateAgentActivity(linear, normalized.agentSession.id, {
         type: "elicitation",
-        body: "PatchRelay received your prompt, but the issue is not in a runnable workflow state yet. Move it to Start, Review, or Deploy first.",
+        body: `PatchRelay received your prompt, but the issue is not in a runnable workflow state yet. Move it to one of: ${runnableStates}.`,
       });
     }
   }

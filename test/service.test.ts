@@ -22,6 +22,45 @@ const DEFAULT_WORKFLOW_STATES = [
   { id: "human-needed", name: "Human Needed" },
 ];
 
+function createWorkflows(baseDir: string, prefix = "") {
+  return [
+    {
+      id: "development",
+      whenState: "Start",
+      activeState: "Implementing",
+      workflowFile: path.join(baseDir, `${prefix}IMPLEMENTATION_WORKFLOW.md`),
+      fallbackState: "Human Needed",
+    },
+    {
+      id: "review",
+      whenState: "Review",
+      activeState: "Reviewing",
+      workflowFile: path.join(baseDir, `${prefix}REVIEW_WORKFLOW.md`),
+      fallbackState: "Human Needed",
+    },
+    {
+      id: "deploy",
+      whenState: "Deploy",
+      activeState: "Deploying",
+      workflowFile: path.join(baseDir, `${prefix}DEPLOY_WORKFLOW.md`),
+      fallbackState: "Human Needed",
+    },
+    {
+      id: "cleanup",
+      whenState: "Cleanup",
+      activeState: "Cleaning Up",
+      workflowFile: path.join(baseDir, `${prefix}CLEANUP_WORKFLOW.md`),
+      fallbackState: "Human Needed",
+    },
+  ];
+}
+
+function getWorkflowFile(project: ProjectConfig, workflowId: string): string {
+  const workflow = project.workflows.find((item) => item.id === workflowId);
+  assert.ok(workflow);
+  return workflow.workflowFile;
+}
+
 class FakeCodexClient extends EventEmitter {
   readonly startedThreads: string[] = [];
   readonly forkedFrom: string[] = [];
@@ -249,23 +288,7 @@ function createConfig(baseDir: string): AppConfig {
         id: "usertold",
         repoPath: path.join(baseDir, "repo"),
         worktreeRoot: path.join(baseDir, "worktrees"),
-        workflowFiles: {
-          development: path.join(baseDir, "DEVELOPMENT_WORKFLOW.md"),
-          review: path.join(baseDir, "REVIEW_WORKFLOW.md"),
-          deploy: path.join(baseDir, "DEPLOY_WORKFLOW.md"),
-          cleanup: path.join(baseDir, "CLEANUP_WORKFLOW.md"),
-        },
-        workflowStatuses: {
-          development: "Start",
-          review: "Review",
-          deploy: "Deploy",
-          developmentActive: "Implementing",
-          reviewActive: "Reviewing",
-          deployActive: "Deploying",
-          cleanup: "Cleanup",
-          humanNeeded: "Human Needed",
-          done: "Done",
-        },
+        workflows: createWorkflows(baseDir),
         workflowLabels: {
           working: "llm-working",
           awaitingHandoff: "llm-awaiting-handoff",
@@ -289,10 +312,9 @@ function setupRepo(baseDir: string, config: AppConfig): void {
   execFileSync("git", ["-C", repoPath, "add", "."], { stdio: "ignore" });
   execFileSync("git", ["-C", repoPath, "commit", "-m", "initial"], { stdio: "ignore" });
 
-  writeFileSync(config.projects[0].workflowFiles.development, "Implement carefully.\n", "utf8");
-  writeFileSync(config.projects[0].workflowFiles.review, "Review carefully.\n", "utf8");
-  writeFileSync(config.projects[0].workflowFiles.deploy, "Deploy carefully.\n", "utf8");
-  writeFileSync(config.projects[0].workflowFiles.cleanup, "Clean up carefully.\n", "utf8");
+  for (const workflow of config.projects[0].workflows) {
+    writeFileSync(workflow.workflowFile, `${workflow.id} carefully.\n`, "utf8");
+  }
 }
 
 function createService(baseDir: string) {
@@ -429,7 +451,7 @@ test("service keeps one workspace and forks later stages from the prior thread",
       removeNames: ["llm-awaiting-handoff"],
     });
     const runningComment = linear.comments.get(issueAfterStart?.statusCommentId ?? "")?.body ?? "";
-    assert.match(runningComment, /PatchRelay is running the development stage/);
+    assert.match(runningComment, /PatchRelay is running the development workflow/);
     const startStageRun = db.getStageRun(issueAfterStart.activeStageRunId);
     assert.equal(startStageRun?.stage, "development");
     assert.ok(startStageRun?.threadId);
@@ -1021,7 +1043,7 @@ test("service preserves comments that arrive before thread startup finishes", as
       triggerWebhookId: "delivery-start",
       branchName: "use/USE-27-inspect-live-status",
       worktreePath: path.join(baseDir, "worktrees", "USE-27"),
-      workflowFile: config.projects[0].workflowFiles.development,
+      workflowFile: getWorkflowFile(config.projects[0], "development"),
       promptText: "Implement carefully.",
     });
     assert.ok(claim);
@@ -1257,7 +1279,7 @@ test("service startup reconciles finished and missing active threads", async () 
       triggerWebhookId: "delivery-start",
       branchName: "use/USE-28-recover-finished-stage",
       worktreePath: path.join(baseDir, "worktrees", "USE-28"),
-      workflowFile: config.projects[0].workflowFiles.development,
+      workflowFile: getWorkflowFile(config.projects[0], "development"),
       promptText: "Recover this stage",
     });
     assert.ok(claim);
@@ -1288,7 +1310,7 @@ test("service startup reconciles finished and missing active threads", async () 
       triggerWebhookId: "delivery-start-missing",
       branchName: "use/USE-29-recover-missing-stage",
       worktreePath: path.join(baseDir, "worktrees", "USE-29"),
-      workflowFile: config.projects[0].workflowFiles.development,
+      workflowFile: getWorkflowFile(config.projects[0], "development"),
       promptText: "Recover missing stage",
     });
     assert.ok(missingClaim);
@@ -1329,19 +1351,13 @@ test("service ignores webhook events when project routing is ambiguous", async (
       id: "usertold-copy",
       repoPath: path.join(baseDir, "repo-copy"),
       worktreeRoot: path.join(baseDir, "worktrees-copy"),
-      workflowFiles: {
-        development: path.join(baseDir, "COPY_DEVELOPMENT_WORKFLOW.md"),
-        review: path.join(baseDir, "COPY_REVIEW_WORKFLOW.md"),
-        deploy: path.join(baseDir, "COPY_DEPLOY_WORKFLOW.md"),
-        cleanup: path.join(baseDir, "COPY_CLEANUP_WORKFLOW.md"),
-      },
+      workflows: createWorkflows(baseDir, "COPY_"),
     });
     setupRepo(baseDir, { ...config, projects: [config.projects[1]!] });
 
-    writeFileSync(config.projects[1]!.workflowFiles.development, "Implement carefully.\n", "utf8");
-    writeFileSync(config.projects[1]!.workflowFiles.review, "Review carefully.\n", "utf8");
-    writeFileSync(config.projects[1]!.workflowFiles.deploy, "Deploy carefully.\n", "utf8");
-    writeFileSync(config.projects[1]!.workflowFiles.cleanup, "Clean up carefully.\n", "utf8");
+    for (const workflow of config.projects[1]!.workflows) {
+      writeFileSync(workflow.workflowFile, `${workflow.id} carefully.\n`, "utf8");
+    }
 
     const db = new PatchRelayDatabase(config.database.path, true);
     db.runMigrations();

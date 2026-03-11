@@ -6,6 +6,45 @@ import test from "node:test";
 import { runPreflight } from "../src/preflight.ts";
 import type { AppConfig } from "../src/types.ts";
 
+function createWorkflows(baseDir: string) {
+  return [
+    {
+      id: "development",
+      whenState: "Start",
+      activeState: "Implementing",
+      workflowFile: path.join(baseDir, "IMPLEMENTATION_WORKFLOW.md"),
+      fallbackState: "Human Needed",
+    },
+    {
+      id: "review",
+      whenState: "Review",
+      activeState: "Reviewing",
+      workflowFile: path.join(baseDir, "REVIEW_WORKFLOW.md"),
+      fallbackState: "Human Needed",
+    },
+    {
+      id: "deploy",
+      whenState: "Deploy",
+      activeState: "Deploying",
+      workflowFile: path.join(baseDir, "DEPLOY_WORKFLOW.md"),
+      fallbackState: "Human Needed",
+    },
+    {
+      id: "cleanup",
+      whenState: "Cleanup",
+      activeState: "Cleaning Up",
+      workflowFile: path.join(baseDir, "CLEANUP_WORKFLOW.md"),
+      fallbackState: "Human Needed",
+    },
+  ];
+}
+
+function writeWorkflowFiles(config: AppConfig): void {
+  for (const workflow of config.projects[0].workflows) {
+    writeFileSync(workflow.workflowFile, `# ${workflow.id}\n`, "utf8");
+  }
+}
+
 function createConfig(baseDir: string): AppConfig {
   return {
     server: {
@@ -59,23 +98,7 @@ function createConfig(baseDir: string): AppConfig {
         id: "usertold",
         repoPath: path.join(baseDir, "repo"),
         worktreeRoot: path.join(baseDir, "worktrees"),
-        workflowFiles: {
-          development: path.join(baseDir, "IMPLEMENTATION_WORKFLOW.md"),
-          review: path.join(baseDir, "REVIEW_WORKFLOW.md"),
-          deploy: path.join(baseDir, "DEPLOY_WORKFLOW.md"),
-          cleanup: path.join(baseDir, "CLEANUP_WORKFLOW.md"),
-        },
-        workflowStatuses: {
-          development: "Start",
-          review: "Review",
-          deploy: "Deploy",
-          developmentActive: "Implementing",
-          reviewActive: "Reviewing",
-          deployActive: "Deploying",
-          cleanup: "Cleanup",
-          humanNeeded: "Human Needed",
-          done: "Done",
-        },
+        workflows: createWorkflows(baseDir),
         issueKeyPrefixes: ["USE"],
         linearTeamIds: ["USE"],
         allowLabels: [],
@@ -92,10 +115,7 @@ test("runPreflight reports a healthy local setup", async () => {
   try {
     const config = createConfig(baseDir);
     mkdirSync(config.projects[0].repoPath, { recursive: true });
-    writeFileSync(config.projects[0].workflowFiles.development, "# dev\n", "utf8");
-    writeFileSync(config.projects[0].workflowFiles.review, "# review\n", "utf8");
-    writeFileSync(config.projects[0].workflowFiles.deploy, "# deploy\n", "utf8");
-    writeFileSync(config.projects[0].workflowFiles.cleanup, "# cleanup\n", "utf8");
+    writeWorkflowFiles(config);
 
     const report = await runPreflight(config);
 
@@ -118,11 +138,7 @@ test("runPreflight fails when workflow files are missing", async () => {
     const report = await runPreflight(config);
 
     assert.equal(report.ok, false);
-    assert.ok(
-      report.checks.some(
-        (check) => check.scope === "project:usertold:workflow:development" && check.status === "fail",
-      ),
-    );
+    assert.ok(report.checks.some((check) => check.scope === "project:usertold:workflow:development" && check.status === "fail"));
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -134,10 +150,7 @@ test("runPreflight warns when the public base URL is missing", async () => {
   try {
     const config = createConfig(baseDir);
     mkdirSync(config.projects[0].repoPath, { recursive: true });
-    writeFileSync(config.projects[0].workflowFiles.development, "# dev\n", "utf8");
-    writeFileSync(config.projects[0].workflowFiles.review, "# review\n", "utf8");
-    writeFileSync(config.projects[0].workflowFiles.deploy, "# deploy\n", "utf8");
-    writeFileSync(config.projects[0].workflowFiles.cleanup, "# cleanup\n", "utf8");
+    writeWorkflowFiles(config);
     delete config.server.publicBaseUrl;
 
     const report = await runPreflight(config);
@@ -182,12 +195,8 @@ test("runPreflight does not require cleanup workflow files when cleanup is disab
   try {
     const config = createConfig(baseDir);
     mkdirSync(config.projects[0].repoPath, { recursive: true });
-    writeFileSync(config.projects[0].workflowFiles.development, "# dev\n", "utf8");
-    writeFileSync(config.projects[0].workflowFiles.review, "# review\n", "utf8");
-    writeFileSync(config.projects[0].workflowFiles.deploy, "# deploy\n", "utf8");
-    delete config.projects[0].workflowFiles.cleanup;
-    delete config.projects[0].workflowStatuses.cleanup;
-    delete config.projects[0].workflowStatuses.cleanupActive;
+    config.projects[0].workflows = config.projects[0].workflows.filter((workflow) => workflow.id !== "cleanup");
+    writeWorkflowFiles(config);
 
     const report = await runPreflight(config);
 
@@ -206,10 +215,7 @@ test("runPreflight warns when app-mode projects omit agent-session triggers", as
     config.linear.oauth.actor = "app";
     config.linear.oauth.scopes = ["read", "write", "app:assignable", "app:mentionable"];
     mkdirSync(config.projects[0].repoPath, { recursive: true });
-    writeFileSync(config.projects[0].workflowFiles.development, "# dev\n", "utf8");
-    writeFileSync(config.projects[0].workflowFiles.review, "# review\n", "utf8");
-    writeFileSync(config.projects[0].workflowFiles.deploy, "# deploy\n", "utf8");
-    writeFileSync(config.projects[0].workflowFiles.cleanup, "# cleanup\n", "utf8");
+    writeWorkflowFiles(config);
 
     const report = await runPreflight(config);
 
