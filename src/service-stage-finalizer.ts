@@ -1,12 +1,7 @@
+import type { Logger } from "pino";
 import type { CodexNotification } from "./codex-app-server.ts";
 import type { CodexAppServerClient } from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
-import {
-  buildAwaitingHandoffComment,
-  resolveActiveLinearState,
-  resolveWorkflowLabelCleanup,
-  resolveWorkflowLabelNames,
-} from "./linear-workflow.ts";
 import { syncFailedStageToLinear } from "./stage-failure.ts";
 import {
   buildFailedStageReport,
@@ -18,24 +13,34 @@ import {
   resolveStageRunStatus,
   summarizeCurrentThread,
 } from "./stage-reporting.ts";
+import { StageLifecyclePublisher } from "./stage-lifecycle-publisher.ts";
+import { StageTurnInputDispatcher } from "./stage-turn-input-dispatcher.ts";
 import type { AppConfig, CodexThreadSummary, LinearClientProvider, StageRunRecord, TrackedIssueRecord } from "./types.ts";
 
 export class ServiceStageFinalizer {
+  private readonly inputDispatcher: StageTurnInputDispatcher;
+  private readonly lifecyclePublisher: StageLifecyclePublisher;
+
   constructor(
     private readonly config: AppConfig,
     private readonly db: PatchRelayDatabase,
     private readonly codex: CodexAppServerClient,
     private readonly linearProvider: LinearClientProvider,
     private readonly enqueueIssue: (projectId: string, issueId: string) => void,
-  ) {}
+    logger?: Logger,
+  ) {
+    const lifecycleLogger = logger ?? consoleLogger();
+    this.inputDispatcher = new StageTurnInputDispatcher(db, codex, lifecycleLogger);
+    this.lifecyclePublisher = new StageLifecyclePublisher(config, db, linearProvider, lifecycleLogger);
+  }
 
   async getActiveStageStatus(issueKey: string) {
-    const issue = this.db.getTrackedIssueByKey(issueKey);
+    const issue = this.db.issueWorkflows.getTrackedIssueByKey(issueKey);
     if (!issue?.activeStageRunId) {
       return undefined;
     }
 
-    const stageRun = this.db.getStageRun(issue.activeStageRunId);
+    const stageRun = this.db.issueWorkflows.getStageRun(issue.activeStageRunId);
     if (!stageRun || !stageRun.threadId) {
       return undefined;
     }
@@ -58,13 +63,13 @@ export class ServiceStageFinalizer {
       return;
     }
 
-    const stageRun = this.db.getStageRunByThreadId(threadId);
+    const stageRun = this.db.issueWorkflows.getStageRunByThreadId(threadId);
     if (!stageRun) {
       return;
     }
 
     const turnId = typeof notification.params.turnId === "string" ? notification.params.turnId : undefined;
-    this.db.saveThreadEvent({
+    this.db.stageEvents.saveThreadEvent({
       stageRunId: stageRun.id,
       threadId,
       ...(turnId ? { turnId } : {}),
@@ -81,7 +86,7 @@ export class ServiceStageFinalizer {
     }
 
     const thread = await this.codex.readThread(threadId, true);
-    const issue = this.db.getTrackedIssue(stageRun.projectId, stageRun.linearIssueId);
+    const issue = this.db.issueWorkflows.getTrackedIssue(stageRun.projectId, stageRun.linearIssueId);
     if (!issue) {
       return;
     }
@@ -94,7 +99,7 @@ export class ServiceStageFinalizer {
   }
 
   async reconcileActiveStageRuns(): Promise<void> {
-    const activeStageRuns = this.db.listActiveStageRuns();
+    const activeStageRuns = this.db.issueWorkflows.listActiveStageRuns();
     for (const stageRun of activeStageRuns) {
       if (!stageRun.threadId) {
         await this.failStageRunDuringReconciliation(
@@ -118,7 +123,7 @@ export class ServiceStageFinalizer {
         continue;
       }
 
-      const issue = this.db.getTrackedIssue(stageRun.projectId, stageRun.linearIssueId);
+      const issue = this.db.issueWorkflows.getTrackedIssue(stageRun.projectId, stageRun.linearIssueId);
       if (!issue) {
         continue;
       }
@@ -144,16 +149,16 @@ export class ServiceStageFinalizer {
     status: StageRunRecord["status"],
     params: { threadId: string; turnId?: string },
   ): void {
-    const refreshedStageRun = this.db.getStageRun(stageRun.id) ?? stageRun;
+    const refreshedStageRun = this.db.issueWorkflows.getStageRun(stageRun.id) ?? stageRun;
     const finalizedStageRun = {
       ...refreshedStageRun,
       status,
       threadId: params.threadId,
       ...(params.turnId ? { turnId: params.turnId } : {}),
     };
-    const report = buildStageReport(finalizedStageRun, issue, thread, countEventMethods(this.db.listThreadEvents(stageRun.id)));
+    const report = buildStageReport(finalizedStageRun, issue, thread, countEventMethods(this.db.stageEvents.listThreadEvents(stageRun.id)));
 
-    this.db.finishStageRun({
+    this.db.issueWorkflows.finishStageRun({
       stageRunId: stageRun.id,
       status,
       threadId: params.threadId,
@@ -173,7 +178,7 @@ export class ServiceStageFinalizer {
       turnId?: string;
     },
   ): void {
-    this.db.finishStageRun({
+    this.db.issueWorkflows.finishStageRun({
       stageRunId: stageRun.id,
       status: "failed",
       threadId,
@@ -198,7 +203,7 @@ export class ServiceStageFinalizer {
   ): Promise<void> {
     this.failStageRun(stageRun, threadId, message, options);
 
-    const issue = this.db.getTrackedIssue(stageRun.projectId, stageRun.linearIssueId);
+    const issue = this.db.issueWorkflows.getTrackedIssue(stageRun.projectId, stageRun.linearIssueId);
     const project = this.config.projects.find((candidate) => candidate.id === stageRun.projectId);
     if (!issue || !project) {
       return;
@@ -221,116 +226,25 @@ export class ServiceStageFinalizer {
   }
 
   async flushQueuedTurnInputs(stageRun: StageRunRecord): Promise<void> {
-    if (!stageRun.threadId || !stageRun.turnId) {
-      return;
-    }
-
-    const pending = this.db.listPendingTurnInputs(stageRun.id);
-    for (const input of pending) {
-      try {
-        await this.codex.steerTurn({
-          threadId: stageRun.threadId,
-          turnId: stageRun.turnId,
-          input: input.body,
-        });
-        this.db.markTurnInputDelivered(input.id);
-      } catch {
-        break;
-      }
-    }
+    await this.inputDispatcher.flush(stageRun);
   }
 
   private async advanceAfterStageCompletion(stageRun: StageRunRecord): Promise<void> {
-    const refreshedIssue = this.db.getTrackedIssue(stageRun.projectId, stageRun.linearIssueId);
-    const pipeline = this.db.getPipelineRun(stageRun.pipelineRunId);
-    if (refreshedIssue?.desiredStage) {
-      await this.publishAgentCompletion(refreshedIssue, {
-        type: "thought",
-        body: `The ${stageRun.stage} workflow finished. PatchRelay is preparing the next requested workflow.`,
-      });
-      this.enqueueIssue(stageRun.projectId, stageRun.linearIssueId);
-      return;
-    }
-
-    const project = this.config.projects.find((candidate) => candidate.id === stageRun.projectId);
-    const activeState = project ? resolveActiveLinearState(project, stageRun.stage) : undefined;
-    const linear = project ? await this.linearProvider.forProject(stageRun.projectId) : undefined;
-    if (refreshedIssue && pipeline && linear && project && activeState) {
-      try {
-        const linearIssue = await linear.getIssue(stageRun.linearIssueId);
-        if (linearIssue.stateName?.trim().toLowerCase() === activeState.trim().toLowerCase()) {
-          const labels = resolveWorkflowLabelNames(project, "awaitingHandoff");
-          if (labels.add.length > 0 || labels.remove.length > 0) {
-            await linear.updateIssueLabels({
-              issueId: stageRun.linearIssueId,
-              ...(labels.add.length > 0 ? { addNames: labels.add } : {}),
-              ...(labels.remove.length > 0 ? { removeNames: labels.remove } : {}),
-            });
-          }
-          this.db.setIssueLifecycleStatus(stageRun.projectId, stageRun.linearIssueId, "paused");
-          this.db.setPipelineStatus(pipeline.id, "paused");
-
-          const finalStageRun = this.db.getStageRun(stageRun.id) ?? stageRun;
-          const result = await linear.upsertIssueComment({
-            issueId: stageRun.linearIssueId,
-            ...(refreshedIssue.statusCommentId ? { commentId: refreshedIssue.statusCommentId } : {}),
-            body: buildAwaitingHandoffComment({
-              issue: refreshedIssue,
-              stageRun: finalStageRun,
-              activeState,
-            }),
-          });
-          this.db.setIssueStatusComment(stageRun.projectId, stageRun.linearIssueId, result.id);
-          await this.publishAgentCompletion(refreshedIssue, {
-            type: "elicitation",
-            body: `PatchRelay finished the ${stageRun.stage} workflow. Move the issue to its next workflow state or leave a follow-up prompt to continue.`,
-          });
-          return;
-        }
-
-        const cleanup = resolveWorkflowLabelCleanup(project);
-        if (cleanup.remove.length > 0) {
-          await linear.updateIssueLabels({
-            issueId: stageRun.linearIssueId,
-            removeNames: cleanup.remove,
-          });
-        }
-      } catch {
-        // Preserve the completed stage locally even if Linear read-back failed.
-      }
-    }
-
-    if (pipeline) {
-      this.db.markPipelineCompleted(pipeline.id);
-    }
-    if (refreshedIssue) {
-      await this.publishAgentCompletion(refreshedIssue, {
-        type: "response",
-        body: `PatchRelay finished the ${stageRun.stage} workflow.`,
-      });
-    }
+    await this.lifecyclePublisher.publishStageCompletion(stageRun, this.enqueueIssue);
   }
+}
 
-  private async publishAgentCompletion(
-    issue: TrackedIssueRecord,
-    content:
-      | { type: "thought" | "elicitation" | "response" | "error"; body: string }
-      | { type: "action"; action: string; parameter: string; result?: string },
-  ): Promise<void> {
-    if (!issue.activeAgentSessionId) {
-      return;
-    }
-
-    const linear = await this.linearProvider.forProject(issue.projectId);
-    if (!linear) {
-      return;
-    }
-
-    await linear
-      .createAgentActivity({
-        agentSessionId: issue.activeAgentSessionId,
-        content,
-      })
-      .catch(() => undefined);
-  }
+function consoleLogger(): Logger {
+  const noop = () => undefined;
+  return {
+    fatal: noop,
+    error: noop,
+    warn: noop,
+    info: noop,
+    debug: noop,
+    trace: noop,
+    silent: noop,
+    child: () => consoleLogger(),
+    level: "silent",
+  } as unknown as Logger;
 }

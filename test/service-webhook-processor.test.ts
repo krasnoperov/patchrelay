@@ -58,6 +58,14 @@ class FakeLinearClient implements LinearClient {
   }
 }
 
+class FakeCodexClient {
+  readonly steeredTurns: Array<{ threadId: string; turnId: string; input: string }> = [];
+
+  async steerTurn(params: { threadId: string; turnId: string; input: string }): Promise<void> {
+    this.steeredTurns.push(params);
+  }
+}
+
 function createConfig(baseDir: string): AppConfig {
   return {
     server: {
@@ -148,6 +156,7 @@ function createHarness(baseDir: string) {
   db.runMigrations();
 
   const linear = new FakeLinearClient();
+  const codex = new FakeCodexClient();
   linear.issues.set("issue_1", {
     id: "issue_1",
     identifier: "USE-25",
@@ -162,7 +171,6 @@ function createHarness(baseDir: string) {
     teamLabels: [],
   });
 
-  const flushedStageRunIds: number[] = [];
   const enqueuedIssues: Array<{ projectId: string; issueId: string }> = [];
   const processor = new ServiceWebhookProcessor(
     config,
@@ -172,18 +180,14 @@ function createHarness(baseDir: string) {
         return projectId === "usertold" ? linear : undefined;
       },
     },
-    {
-      async flushQueuedTurnInputs(stageRun) {
-        flushedStageRunIds.push(stageRun.id);
-      },
-    },
+    codex as never,
     (projectId, issueId) => {
       enqueuedIssues.push({ projectId, issueId });
     },
     pino({ enabled: false }),
   );
 
-  return { config, db, linear, processor, flushedStageRunIds, enqueuedIssues };
+  return { config, db, linear, codex, processor, enqueuedIssues };
 }
 
 function installPatchRelayApp(db: PatchRelayDatabase, projectId = "usertold", actorId = "patchrelay-app") {
@@ -243,7 +247,7 @@ test("webhook processor records desired stage and enqueues matching issues", asy
 test("webhook processor routes prompted agent follow-ups into the active stage", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-processor-active-"));
   try {
-    const { config, db, linear, processor, flushedStageRunIds, enqueuedIssues } = createHarness(baseDir);
+    const { config, db, linear, codex, processor, enqueuedIssues } = createHarness(baseDir);
     installPatchRelayApp(db);
 
     db.recordDesiredStage({
@@ -309,9 +313,9 @@ test("webhook processor routes prompted agent follow-ups into the active stage",
     await processor.processWebhookEvent(event.id);
 
     const pending = db.listPendingTurnInputs(claim.stageRun.id);
-    assert.equal(pending.length, 1);
-    assert.match(pending[0]!.body, /Please add tests/);
-    assert.deepEqual(flushedStageRunIds, [claim.stageRun.id]);
+    assert.equal(pending.length, 0);
+    assert.equal(codex.steeredTurns.length, 1);
+    assert.match(codex.steeredTurns[0]!.input, /Please add tests/);
     assert.deepEqual(enqueuedIssues, []);
     assert.ok(
       linear.agentActivities.some(

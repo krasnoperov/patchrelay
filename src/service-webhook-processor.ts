@@ -1,12 +1,13 @@
 import type { Logger } from "pino";
+import type { CodexAppServerClient } from "./codex-app-server.ts";
 import { isPatchRelayStatusComment } from "./linear-workflow.ts";
 import { resolveProject, triggerEventAllowed, trustedActorAllowed } from "./project-resolution.ts";
-import type { ServiceStageFinalizer } from "./service-stage-finalizer.ts";
+import { StageAgentActivityPublisher } from "./stage-agent-activity-publisher.ts";
+import { StageTurnInputDispatcher } from "./stage-turn-input-dispatcher.ts";
 import type { IssueQueueItem } from "./service-stage-runner.ts";
 import type {
   AppConfig,
   AgentSessionMetadata,
-  LinearClient,
   LinearClientProvider,
   LinearWebhookPayload,
   NormalizedEvent,
@@ -26,24 +27,30 @@ function trimPrompt(value: string | undefined): string | undefined {
 }
 
 export class ServiceWebhookProcessor {
+  private readonly turnInputDispatcher: StageTurnInputDispatcher;
+  private readonly agentActivity: StageAgentActivityPublisher;
+
   constructor(
     private readonly config: AppConfig,
     private readonly db: PatchRelayDatabase,
-    private readonly linearProvider: LinearClientProvider,
-    private readonly stageFinalizer: Pick<ServiceStageFinalizer, "flushQueuedTurnInputs">,
+    linearProvider: LinearClientProvider,
+    codex: CodexAppServerClient,
     private readonly enqueueIssue: (projectId: IssueQueueItem["projectId"], issueId: IssueQueueItem["issueId"]) => void,
     private readonly logger: Logger,
-  ) {}
+  ) {
+    this.turnInputDispatcher = new StageTurnInputDispatcher(db, codex, logger);
+    this.agentActivity = new StageAgentActivityPublisher(linearProvider, logger);
+  }
 
   async processWebhookEvent(webhookEventId: number): Promise<void> {
-    const event = this.db.getWebhookEvent(webhookEventId);
+    const event = this.db.webhookEvents.getWebhookEvent(webhookEventId);
     if (!event) {
       return;
     }
 
     const payload = safeJsonParse<LinearWebhookPayload>(event.payloadJson);
     if (!payload) {
-      this.db.markWebhookProcessed(webhookEventId, "failed");
+      this.db.webhookEvents.markWebhookProcessed(webhookEventId, "failed");
       throw new Error(`Stored webhook payload is invalid JSON: event ${webhookEventId}`);
     }
 
@@ -53,13 +60,13 @@ export class ServiceWebhookProcessor {
     });
     if (!normalized.issue) {
       this.handleInstallationWebhook(normalized);
-      this.db.markWebhookProcessed(webhookEventId, "processed");
+      this.db.webhookEvents.markWebhookProcessed(webhookEventId, "processed");
       return;
     }
 
     const project = resolveProject(this.config, normalized.issue);
     if (!project) {
-      this.db.markWebhookProcessed(webhookEventId, "processed");
+      this.db.webhookEvents.markWebhookProcessed(webhookEventId, "processed");
       return;
     }
 
@@ -75,18 +82,18 @@ export class ServiceWebhookProcessor {
         },
         "Ignoring webhook from untrusted Linear actor",
       );
-      this.db.markWebhookProcessed(webhookEventId, "processed");
+      this.db.webhookEvents.markWebhookProcessed(webhookEventId, "processed");
       return;
     }
 
-    this.db.assignWebhookProject(webhookEventId, project.id);
+    this.db.webhookEvents.assignWebhookProject(webhookEventId, project.id);
 
-    const issue = this.db.getTrackedIssue(project.id, normalized.issue.id);
-    const activeStageRun = issue?.activeStageRunId ? this.db.getStageRun(issue.activeStageRunId) : undefined;
+    const issue = this.db.issueWorkflows.getTrackedIssue(project.id, normalized.issue.id);
+    const activeStageRun = issue?.activeStageRunId ? this.db.issueWorkflows.getStageRun(issue.activeStageRunId) : undefined;
     const desiredStage = this.resolveDesiredStage(project, normalized, issue, activeStageRun);
     const launchInput = this.resolveLaunchInput(normalized.agentSession);
 
-    this.db.recordDesiredStage({
+    this.db.issueWorkflows.recordDesiredStage({
       projectId: project.id,
       linearIssueId: normalized.issue.id,
       ...(normalized.issue.identifier ? { issueKey: normalized.issue.identifier } : {}),
@@ -99,16 +106,21 @@ export class ServiceWebhookProcessor {
     });
 
     if (normalized.agentSession?.id) {
-      this.db.setIssueActiveAgentSession(project.id, normalized.issue.id, normalized.agentSession.id);
+      this.db.issueWorkflows.setIssueActiveAgentSession(project.id, normalized.issue.id, normalized.agentSession.id);
     }
     if (launchInput && !activeStageRun && this.isDelegatedToPatchRelay(project, normalized)) {
-      this.db.setIssuePendingLaunchInput(project.id, normalized.issue.id, launchInput);
+      this.db.issueWorkflows.setIssuePendingLaunchInput(project.id, normalized.issue.id, launchInput);
     }
 
-    await this.handleAgentSessionWebhook(normalized, project, issue ?? this.db.getTrackedIssue(project.id, normalized.issue.id), desiredStage);
+    await this.handleAgentSessionWebhook(
+      normalized,
+      project,
+      issue ?? this.db.issueWorkflows.getTrackedIssue(project.id, normalized.issue.id),
+      desiredStage,
+    );
     await this.handleCommentWebhook(normalized, project.id);
 
-    this.db.markWebhookProcessed(webhookEventId, "processed");
+    this.db.webhookEvents.markWebhookProcessed(webhookEventId, "processed");
     if (desiredStage) {
       this.enqueueIssue(project.id, normalized.issue.id);
     }
@@ -163,7 +175,7 @@ export class ServiceWebhookProcessor {
       return false;
     }
 
-    const installation = this.db.getLinearInstallationForProject(project.id);
+    const installation = this.db.linearInstallations.getLinearInstallationForProject(project.id);
     if (!installation?.actorId) {
       return false;
     }
@@ -194,21 +206,16 @@ export class ServiceWebhookProcessor {
       return;
     }
 
-    const linear = await this.linearProvider.forProject(project.id);
-    if (!linear) {
-      return;
-    }
-
     const promptBody = trimPrompt(normalized.agentSession.promptBody);
     const promptContext = trimPrompt(normalized.agentSession.promptContext);
-    const activeStageRun = issue?.activeStageRunId ? this.db.getStageRun(issue.activeStageRunId) : undefined;
+    const activeStageRun = issue?.activeStageRunId ? this.db.issueWorkflows.getStageRun(issue.activeStageRunId) : undefined;
     const delegatedToPatchRelay = this.isDelegatedToPatchRelay(project, normalized);
     const runnableWorkflow = normalized.issue?.stateName ? resolveWorkflowStage(project, normalized.issue.stateName) : undefined;
 
     if (normalized.triggerEvent === "agentSessionCreated") {
       if (!delegatedToPatchRelay) {
         if (activeStageRun) {
-          await this.safeCreateAgentActivity(linear, normalized.agentSession.id, {
+          await this.agentActivity.publishForSession(project.id, normalized.agentSession.id, {
             type: "thought",
             body: `PatchRelay is already running the ${activeStageRun.stage} workflow for this issue. Delegate it to PatchRelay if you want automation to own the workflow, or keep replying here to steer the active run.`,
           });
@@ -218,7 +225,7 @@ export class ServiceWebhookProcessor {
         const body = runnableWorkflow
           ? `PatchRelay received your mention. Delegate the issue to PatchRelay to start the ${runnableWorkflow} workflow from the current \`${normalized.issue?.stateName}\` state.`
           : `PatchRelay received your mention, but the issue is not in a runnable workflow state yet. Move it to one of: ${listRunnableStates(project).join(", ")}, then delegate it to PatchRelay.`;
-        await this.safeCreateAgentActivity(linear, normalized.agentSession.id, {
+        await this.agentActivity.publishForSession(project.id, normalized.agentSession.id, {
           type: "elicitation",
           body,
         });
@@ -227,7 +234,7 @@ export class ServiceWebhookProcessor {
 
       if (!desiredStage && !activeStageRun) {
         const runnableStates = listRunnableStates(project).join(", ");
-        await this.safeCreateAgentActivity(linear, normalized.agentSession.id, {
+        await this.agentActivity.publishForSession(project.id, normalized.agentSession.id, {
           type: "elicitation",
           body: `PatchRelay is delegated, but the issue is not in a runnable workflow state. Move it to one of: ${runnableStates}.`,
         });
@@ -235,7 +242,7 @@ export class ServiceWebhookProcessor {
       }
 
       if (desiredStage) {
-        await this.safeCreateAgentActivity(linear, normalized.agentSession.id, {
+        await this.agentActivity.publishForSession(project.id, normalized.agentSession.id, {
           type: "thought",
           body: `PatchRelay received the delegation and is preparing the ${desiredStage} workflow.`,
         });
@@ -243,7 +250,7 @@ export class ServiceWebhookProcessor {
       }
 
       if (activeStageRun) {
-        await this.safeCreateAgentActivity(linear, normalized.agentSession.id, {
+        await this.agentActivity.publishForSession(project.id, normalized.agentSession.id, {
           type: "thought",
           body: `PatchRelay is already running the ${activeStageRun.stage} workflow for this issue.`,
         });
@@ -256,15 +263,15 @@ export class ServiceWebhookProcessor {
     }
 
     if (activeStageRun && promptBody) {
-      this.db.enqueueTurnInput({
+      this.db.stageEvents.enqueueTurnInput({
         stageRunId: activeStageRun.id,
         ...(activeStageRun.threadId ? { threadId: activeStageRun.threadId } : {}),
         ...(activeStageRun.turnId ? { turnId: activeStageRun.turnId } : {}),
         source: `linear-agent-prompt:${normalized.agentSession.id}:${normalized.webhookId}`,
         body: ["New Linear agent prompt received while you are working.", "", promptBody].join("\n"),
       });
-      await this.stageFinalizer.flushQueuedTurnInputs(activeStageRun);
-      await this.safeCreateAgentActivity(linear, normalized.agentSession.id, {
+      await this.turnInputDispatcher.flush(activeStageRun);
+      await this.agentActivity.publishForSession(project.id, normalized.agentSession.id, {
         type: "thought",
         body: `PatchRelay routed your follow-up instructions into the active ${activeStageRun.stage} workflow.`,
       });
@@ -275,7 +282,7 @@ export class ServiceWebhookProcessor {
       const body = runnableWorkflow
         ? `PatchRelay received your prompt. Delegate the issue to PatchRelay to start the ${runnableWorkflow} workflow from the current \`${normalized.issue?.stateName}\` state.`
         : `PatchRelay received your prompt, but the issue is not in a runnable workflow state yet. Move it to one of: ${listRunnableStates(project).join(", ")}, then delegate it to PatchRelay.`;
-      await this.safeCreateAgentActivity(linear, normalized.agentSession.id, {
+      await this.agentActivity.publishForSession(project.id, normalized.agentSession.id, {
         type: "elicitation",
         body,
       });
@@ -283,7 +290,7 @@ export class ServiceWebhookProcessor {
     }
 
     if (!activeStageRun && desiredStage) {
-      await this.safeCreateAgentActivity(linear, normalized.agentSession.id, {
+      await this.agentActivity.publishForSession(project.id, normalized.agentSession.id, {
         type: "thought",
         body: `PatchRelay received your prompt and is preparing the ${desiredStage} workflow.`,
       });
@@ -292,7 +299,7 @@ export class ServiceWebhookProcessor {
 
     if (!activeStageRun && !desiredStage && (promptBody || promptContext)) {
       const runnableStates = listRunnableStates(project).join(", ");
-      await this.safeCreateAgentActivity(linear, normalized.agentSession.id, {
+      await this.agentActivity.publishForSession(project.id, normalized.agentSession.id, {
         type: "elicitation",
         body: `PatchRelay received your prompt, but the issue is not in a runnable workflow state yet. Move it to one of: ${runnableStates}.`,
       });
@@ -309,7 +316,7 @@ export class ServiceWebhookProcessor {
       return;
     }
 
-    const issue = this.db.getTrackedIssue(projectId, normalizedIssue.id);
+    const issue = this.db.issueWorkflows.getTrackedIssue(projectId, normalizedIssue.id);
     if (!issue?.activeStageRunId) {
       return;
     }
@@ -318,7 +325,7 @@ export class ServiceWebhookProcessor {
       return;
     }
 
-    const stageRun = this.db.getStageRun(issue.activeStageRunId);
+    const stageRun = this.db.issueWorkflows.getStageRun(issue.activeStageRunId);
     if (!stageRun) {
       return;
     }
@@ -332,14 +339,14 @@ export class ServiceWebhookProcessor {
       .filter(Boolean)
       .join("\n");
 
-    this.db.enqueueTurnInput({
+    this.db.stageEvents.enqueueTurnInput({
       stageRunId: stageRun.id,
       ...(stageRun.threadId ? { threadId: stageRun.threadId } : {}),
       ...(stageRun.turnId ? { turnId: stageRun.turnId } : {}),
       source: `linear-comment:${normalized.comment.id}`,
       body,
     });
-    await this.stageFinalizer.flushQueuedTurnInputs(stageRun);
+    await this.turnInputDispatcher.flush(stageRun);
   }
 
   private handleInstallationWebhook(normalized: NormalizedEvent): void {
@@ -349,9 +356,11 @@ export class ServiceWebhookProcessor {
 
     if (normalized.triggerEvent === "installationPermissionsChanged") {
       const matchingInstallations = normalized.installation.appUserId
-        ? this.db.listLinearInstallations().filter((installation) => installation.actorId === normalized.installation?.appUserId)
+        ? this.db.linearInstallations
+            .listLinearInstallations()
+            .filter((installation) => installation.actorId === normalized.installation?.appUserId)
         : [];
-      const links = this.db.listProjectInstallations();
+      const links = this.db.linearInstallations.listProjectInstallations();
       const impactedProjects = matchingInstallations.flatMap((installation) =>
         links
           .filter((link) => link.installationId === installation.id)
@@ -401,30 +410,6 @@ export class ServiceWebhookProcessor {
           organizationId: normalized.installation.organizationId,
         },
         "Received Linear app-user notification webhook",
-      );
-    }
-  }
-
-  private async safeCreateAgentActivity(
-    linear: LinearClient,
-    agentSessionId: string,
-    content:
-      | { type: "thought" | "elicitation" | "response" | "error"; body: string }
-      | { type: "action"; action: string; parameter: string; result?: string },
-  ): Promise<void> {
-    try {
-      await linear.createAgentActivity({
-        agentSessionId,
-        content,
-        ephemeral: content.type === "thought" || content.type === "action",
-      });
-    } catch (error) {
-      this.logger.warn(
-        {
-          agentSessionId,
-          error: error instanceof Error ? error.message : String(error),
-        },
-        "Failed to publish Linear agent activity",
       );
     }
   }
