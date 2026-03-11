@@ -117,13 +117,12 @@ For the standard Linear app-agent flow, you can usually omit `trigger_events` en
 1. Install PatchRelay and run `patchrelay init https://your-domain.example`.
 2. Keep the generated `LINEAR_WEBHOOK_SECRET` and `PATCHRELAY_TOKEN_ENCRYPTION_KEY`, then fill in `LINEAR_OAUTH_CLIENT_ID` and `LINEAR_OAUTH_CLIENT_SECRET` in `~/.config/patchrelay/.env`.
 3. Create the Linear OAuth app with `actor=app`, the required scopes, and webhook settings.
-4. Set `server.public_base_url` to the public HTTPS origin Linear can reach.
-5. Add one or more projects with `patchrelay project add <id> <repo-path>`.
-6. Add the repo-local workflow files to each automated repository.
-7. Run `patchrelay doctor` and fix any failures or warnings.
-8. Run `patchrelay install-service`.
-9. Run `patchrelay connect --project <projectId>`.
-10. Delegate a Linear issue to the PatchRelay app and confirm the webhook-driven stage starts.
+4. Add one or more projects with `patchrelay project add <id> <repo-path>`.
+5. Add the repo-local workflow files to each automated repository.
+6. Run `patchrelay doctor` and fix any failures or warnings.
+7. Run `patchrelay install-service`.
+8. Run `patchrelay connect --project <projectId>`.
+9. Delegate a Linear issue to the PatchRelay app and confirm the webhook-driven stage starts.
 
 ## Operator Notes
 

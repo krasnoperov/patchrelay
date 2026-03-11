@@ -135,7 +135,7 @@ If you later add another local repo that should use the same Linear installation
 Important:
 
 - Linear needs a public HTTPS URL to reach your webhook.
-- `server.public_base_url` is the public domain PatchRelay uses when it prints webhook URLs.
+- `patchrelay init <public-base-url>` writes `server.public_base_url`, which PatchRelay uses when it prints webhook URLs.
 - PatchRelay itself should usually stay bound to `127.0.0.1` and sit behind Caddy, nginx, or another public ingress layer.
 - Publish these routes from your reverse proxy: `GET /`, `GET /health`, `GET /ready`, `GET /oauth/linear/callback`, and `POST /webhooks/linear`.
 - PatchRelay reacts best when the Linear OAuth app is configured to deliver issue, comment, agent session, permission change, and inbox notification webhooks to the shared PatchRelay endpoint.

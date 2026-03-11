@@ -156,6 +156,31 @@ Flags:
 
 This is the expected first command after installing the package.
 
+### `patchrelay project add <id> <repo-path>`
+
+Add a repository entry to the local PatchRelay config.
+
+Usage:
+
+```bash
+patchrelay project add app /absolute/path/to/repo
+```
+
+Behavior:
+
+- writes a new `projects[]` entry into `~/.config/patchrelay/patchrelay.yaml`
+- stores the repo path as an absolute path
+- accepts optional routing with `--issue-prefix <prefixes>` and `--team-id <ids>`
+- rejects duplicate project ids, duplicate routing keys, and ambiguous multi-project setups
+
+Flags:
+
+- `--issue-prefix <prefixes>`
+- `--team-id <ids>`
+- `--json`
+
+This is the normal way to finish local repo setup after `patchrelay init`.
+
 ### `patchrelay install-service`
 
 Install the systemd user unit for PatchRelay.

@@ -138,7 +138,7 @@ server:
 
 PatchRelay will use `https://patchrelay.example.com/oauth/linear/callback` as the OAuth callback.
 
-Add repositories with the separate project configuration tool. A project only needs:
+Add repositories with `patchrelay project add <id> <repo-path>`. A project only needs:
 
 - `id`
 - `repo_path`
@@ -173,11 +173,11 @@ Each automated repository should contain:
 - `IMPLEMENTATION_WORKFLOW.md`
 - `REVIEW_WORKFLOW.md`
 - `DEPLOY_WORKFLOW.md`
-- optional: `CLEANUP_WORKFLOW.md`
+- `CLEANUP_WORKFLOW.md` by default
 
 These files are the policy PatchRelay passes to the agent. They should explain what the agent is allowed to do in that repository, what validation is required, and when final issue states should be moved.
 
-If every repo follows the standard filenames above, you do not need to repeat `workflow_files` in each project config.
+If every repo follows the standard filenames above, you do not need to repeat `workflow_files` in each project config. If you do not want a cleanup stage for a project, disable it explicitly in config by setting the cleanup workflow file or cleanup statuses to `null`.
 
 Requirement references:
 
