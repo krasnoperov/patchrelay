@@ -4,7 +4,7 @@ import {
   resolveFallbackLinearState,
   resolveWorkflowLabelCleanup,
 } from "./linear-workflow.ts";
-import type { PatchRelayDatabase } from "./db.ts";
+import type { IssueWorkflowLifecycleStoreProvider } from "./db-ports.ts";
 import type { LinearClientProvider, ProjectConfig, StageRunRecord, TrackedIssueRecord } from "./types.ts";
 
 function normalizeStateName(value: string | undefined): string | undefined {
@@ -13,7 +13,7 @@ function normalizeStateName(value: string | undefined): string | undefined {
 }
 
 export async function syncFailedStageToLinear(params: {
-  db: PatchRelayDatabase;
+  stores: IssueWorkflowLifecycleStoreProvider;
   linearProvider: LinearClientProvider;
   project: ProjectConfig;
   issue: TrackedIssueRecord;
@@ -59,8 +59,8 @@ export async function syncFailedStageToLinear(params: {
 
   if (fallbackState) {
     await linear.setIssueState(params.stageRun.linearIssueId, fallbackState).catch(() => undefined);
-    params.db.setIssueLifecycleStatus(params.stageRun.projectId, params.stageRun.linearIssueId, "failed");
-    params.db.upsertTrackedIssue({
+    params.stores.issueWorkflows.setIssueLifecycleStatus(params.stageRun.projectId, params.stageRun.linearIssueId, "failed");
+    params.stores.issueWorkflows.upsertTrackedIssue({
       projectId: params.stageRun.projectId,
       linearIssueId: params.stageRun.linearIssueId,
       currentLinearState: fallbackState,
@@ -80,10 +80,10 @@ export async function syncFailedStageToLinear(params: {
         ...(fallbackState ? { fallbackState } : {}),
         ...(params.mode ? { mode: params.mode } : {}),
       }),
-    })
+  })
     .catch(() => undefined);
   if (result) {
-    params.db.setIssueStatusComment(params.stageRun.projectId, params.stageRun.linearIssueId, result.id);
+    params.stores.issueWorkflows.setIssueStatusComment(params.stageRun.projectId, params.stageRun.linearIssueId, result.id);
   }
 
   if (params.issue.activeAgentSessionId) {

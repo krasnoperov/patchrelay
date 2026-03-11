@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import type { Logger } from "pino";
-import type { PatchRelayDatabase } from "./db.ts";
+import type { LinearInstallationStore } from "./db-ports.ts";
 import { encryptSecret } from "./token-crypto.ts";
 import type { AppConfig, LinearInstallationRecord, LinearOauthTokenSet } from "./types.ts";
 
@@ -191,7 +191,7 @@ export async function fetchLinearViewerIdentity(
 
 export async function installLinearOAuthCode(params: {
   config: AppConfig;
-  db: PatchRelayDatabase;
+  db: LinearInstallationStore;
   logger: Logger;
   code: string;
   redirectUri: string;

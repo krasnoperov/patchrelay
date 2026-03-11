@@ -1,6 +1,6 @@
 import type { Logger } from "pino";
 import type { CodexAppServerClient } from "./codex-app-server.ts";
-import type { PatchRelayDatabase } from "./db.ts";
+import type { IssueWorkflowExecutionStoreProvider, IssueWorkflowLifecycleStoreProvider, StageEventQueryStoreProvider, StageTurnInputStoreProvider } from "./db-ports.ts";
 import { buildStageLaunchPlan, isCodexThreadId } from "./stage-launch.ts";
 import { syncFailedStageToLinear } from "./stage-failure.ts";
 import { buildFailedStageReport } from "./stage-reporting.ts";
@@ -21,14 +21,17 @@ export class ServiceStageRunner {
 
   constructor(
     private readonly config: AppConfig,
-    private readonly db: PatchRelayDatabase,
+    private readonly stores: IssueWorkflowExecutionStoreProvider &
+      IssueWorkflowLifecycleStoreProvider &
+      StageTurnInputStoreProvider &
+      StageEventQueryStoreProvider,
     private readonly codex: CodexAppServerClient,
     private readonly linearProvider: LinearClientProvider,
     private readonly logger: Logger,
   ) {
     this.worktreeManager = new WorktreeManager(config);
-    this.inputDispatcher = new StageTurnInputDispatcher(db, codex, logger);
-    this.lifecyclePublisher = new StageLifecyclePublisher(config, db, linearProvider, logger);
+    this.inputDispatcher = new StageTurnInputDispatcher(stores, codex, logger);
+    this.lifecyclePublisher = new StageLifecyclePublisher(config, stores, linearProvider, logger);
   }
 
   async run(item: IssueQueueItem): Promise<void> {
@@ -37,13 +40,13 @@ export class ServiceStageRunner {
       return;
     }
 
-    const issue = this.db.issueWorkflows.getTrackedIssue(item.projectId, item.issueId);
+    const issue = this.stores.issueWorkflows.getTrackedIssue(item.projectId, item.issueId);
     if (!issue || !issue.desiredStage || !issue.desiredWebhookId || issue.activeStageRunId) {
       return;
     }
 
     const plan = buildStageLaunchPlan(project, issue, issue.desiredStage);
-    const claim = this.db.issueWorkflows.claimStageRun({
+    const claim = this.stores.issueWorkflows.claimStageRun({
       projectId: item.projectId,
       linearIssueId: item.issueId,
       stage: issue.desiredStage,
@@ -86,7 +89,7 @@ export class ServiceStageRunner {
       throw err;
     }
 
-    this.db.issueWorkflows.updateStageRunThread({
+    this.stores.issueWorkflows.updateStageRunThread({
       stageRunId: claim.stageRun.id,
       threadId: threadLaunch.threadId,
       ...(threadLaunch.parentThreadId ? { parentThreadId: threadLaunch.parentThreadId } : {}),
@@ -94,9 +97,9 @@ export class ServiceStageRunner {
     });
 
     this.inputDispatcher.routePendingInputs(claim.stageRun.id, threadLaunch.threadId, turn.turnId);
-    const pendingLaunchInput = this.db.issueWorkflows.consumeIssuePendingLaunchInput(item.projectId, item.issueId);
+    const pendingLaunchInput = this.stores.issueWorkflows.consumeIssuePendingLaunchInput(item.projectId, item.issueId);
     if (pendingLaunchInput) {
-      this.db.stageEvents.enqueueTurnInput({
+      this.stores.stageEvents.enqueueTurnInput({
         stageRunId: claim.stageRun.id,
         threadId: threadLaunch.threadId,
         turnId: turn.turnId,
@@ -135,7 +138,7 @@ export class ServiceStageRunner {
     worktreePath: string,
     issueKey?: string,
   ): Promise<{ threadId: string; parentThreadId?: string }> {
-    const previousStageRun = this.db.issueWorkflows
+    const previousStageRun = this.stores.issueWorkflows
       .listStageRunsForIssue(projectId, issueId)
       .filter((stageRun) => stageRun.id !== stageRunId)
       .at(-1);
@@ -178,7 +181,7 @@ export class ServiceStageRunner {
     threadId?: string,
   ): Promise<void> {
     const failureThreadId = threadId ?? `launch-failed-${stageRun.id}`;
-    this.db.issueWorkflows.finishStageRun({
+    this.stores.issueWorkflows.finishStageRun({
       stageRunId: stageRun.id,
       status: "failed",
       threadId: failureThreadId,
@@ -187,7 +190,7 @@ export class ServiceStageRunner {
     });
 
     await syncFailedStageToLinear({
-      db: this.db,
+      stores: this.stores,
       linearProvider: this.linearProvider,
       project,
       issue,

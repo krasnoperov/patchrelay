@@ -1,5 +1,5 @@
 import type { Logger } from "pino";
-import type { PatchRelayDatabase } from "./db.ts";
+import type { IssueWorkflowLifecycleStoreProvider } from "./db-ports.ts";
 import {
   buildAwaitingHandoffComment,
   buildRunningStatusComment,
@@ -12,7 +12,7 @@ import type { AppConfig, LinearClientProvider, StageRunRecord, TrackedIssueRecor
 export class StageLifecyclePublisher {
   constructor(
     private readonly config: AppConfig,
-    private readonly db: PatchRelayDatabase,
+    private readonly stores: IssueWorkflowLifecycleStoreProvider,
     private readonly linearProvider: LinearClientProvider,
     private readonly logger: Logger,
   ) {}
@@ -37,7 +37,7 @@ export class StageLifecyclePublisher {
         ...(labels.remove.length > 0 ? { removeNames: labels.remove } : {}),
       });
     }
-    this.db.issueWorkflows.upsertTrackedIssue({
+    this.stores.issueWorkflows.upsertTrackedIssue({
       projectId: stageRun.projectId,
       linearIssueId: stageRun.linearIssueId,
       currentLinearState: activeState,
@@ -52,9 +52,9 @@ export class StageLifecyclePublisher {
       return;
     }
 
-    const issue = this.db.issueWorkflows.getTrackedIssue(projectId, issueId);
-    const stageRun = this.db.issueWorkflows.getStageRun(stageRunId);
-    const workspace = stageRun ? this.db.issueWorkflows.getWorkspace(stageRun.workspaceId) : undefined;
+    const issue = this.stores.issueWorkflows.getTrackedIssue(projectId, issueId);
+    const stageRun = this.stores.issueWorkflows.getStageRun(stageRunId);
+    const workspace = stageRun ? this.stores.issueWorkflows.getWorkspace(stageRun.workspaceId) : undefined;
     if (!issue || !stageRun || !workspace) {
       return;
     }
@@ -69,7 +69,7 @@ export class StageLifecyclePublisher {
           branchName: workspace.branchName,
         }),
       });
-      this.db.issueWorkflows.setIssueStatusComment(projectId, issueId, result.id);
+      this.stores.issueWorkflows.setIssueStatusComment(projectId, issueId, result.id);
     } catch (error) {
       this.logger.warn(
         {
@@ -121,8 +121,8 @@ export class StageLifecyclePublisher {
     stageRun: StageRunRecord,
     enqueueIssue: (projectId: string, issueId: string) => void,
   ): Promise<void> {
-    const refreshedIssue = this.db.issueWorkflows.getTrackedIssue(stageRun.projectId, stageRun.linearIssueId);
-    const pipeline = this.db.issueWorkflows.getPipelineRun(stageRun.pipelineRunId);
+    const refreshedIssue = this.stores.issueWorkflows.getTrackedIssue(stageRun.projectId, stageRun.linearIssueId);
+    const pipeline = this.stores.issueWorkflows.getPipelineRun(stageRun.pipelineRunId);
     if (refreshedIssue?.desiredStage) {
       await this.publishAgentCompletion(refreshedIssue, {
         type: "thought",
@@ -147,10 +147,10 @@ export class StageLifecyclePublisher {
               ...(labels.remove.length > 0 ? { removeNames: labels.remove } : {}),
             });
           }
-          this.db.issueWorkflows.setIssueLifecycleStatus(stageRun.projectId, stageRun.linearIssueId, "paused");
-          this.db.issueWorkflows.setPipelineStatus(pipeline.id, "paused");
+          this.stores.issueWorkflows.setIssueLifecycleStatus(stageRun.projectId, stageRun.linearIssueId, "paused");
+          this.stores.issueWorkflows.setPipelineStatus(pipeline.id, "paused");
 
-          const finalStageRun = this.db.issueWorkflows.getStageRun(stageRun.id) ?? stageRun;
+          const finalStageRun = this.stores.issueWorkflows.getStageRun(stageRun.id) ?? stageRun;
           const result = await linear.upsertIssueComment({
             issueId: stageRun.linearIssueId,
             ...(refreshedIssue.statusCommentId ? { commentId: refreshedIssue.statusCommentId } : {}),
@@ -160,7 +160,7 @@ export class StageLifecyclePublisher {
               activeState,
             }),
           });
-          this.db.issueWorkflows.setIssueStatusComment(stageRun.projectId, stageRun.linearIssueId, result.id);
+          this.stores.issueWorkflows.setIssueStatusComment(stageRun.projectId, stageRun.linearIssueId, result.id);
           await this.publishAgentCompletion(refreshedIssue, {
             type: "elicitation",
             body: `PatchRelay finished the ${stageRun.stage} workflow. Move the issue to its next workflow state or leave a follow-up prompt to continue.`,
@@ -181,7 +181,7 @@ export class StageLifecyclePublisher {
     }
 
     if (pipeline) {
-      this.db.issueWorkflows.markPipelineCompleted(pipeline.id);
+      this.stores.issueWorkflows.markPipelineCompleted(pipeline.id);
     }
     if (refreshedIssue) {
       await this.publishAgentCompletion(refreshedIssue, {

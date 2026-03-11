@@ -1,5 +1,5 @@
 import type { Logger } from "pino";
-import type { PatchRelayDatabase } from "./db.ts";
+import type { WebhookEventStoreProvider } from "./db-ports.ts";
 import type { AppConfig, LinearWebhookPayload, NormalizedEvent } from "./types.ts";
 import { archiveWebhook } from "./webhook-archive.ts";
 import { normalizeWebhook } from "./webhooks.ts";
@@ -13,7 +13,7 @@ export interface AcceptedWebhook {
 
 export async function acceptIncomingWebhook(params: {
   config: AppConfig;
-  db: PatchRelayDatabase;
+  stores: WebhookEventStoreProvider;
   logger: Logger;
   webhookId: string;
   headers: Record<string, string | string[] | undefined>;
@@ -74,7 +74,7 @@ export async function acceptIncomingWebhook(params: {
     payload,
   });
 
-  const stored = params.db.insertWebhookEvent({
+  const stored = params.stores.webhookEvents.insertWebhookEvent({
     webhookId: params.webhookId,
     receivedAt,
     eventType: normalized.eventType,

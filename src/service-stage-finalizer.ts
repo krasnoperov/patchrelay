@@ -1,7 +1,13 @@
 import type { Logger } from "pino";
 import type { CodexNotification } from "./codex-app-server.ts";
 import type { CodexAppServerClient } from "./codex-app-server.ts";
-import type { PatchRelayDatabase } from "./db.ts";
+import type {
+  IssueWorkflowExecutionStoreProvider,
+  IssueWorkflowLifecycleStoreProvider,
+  IssueWorkflowQueryStoreProvider,
+  StageEventQueryStoreProvider,
+  StageTurnInputStoreProvider,
+} from "./db-ports.ts";
 import { syncFailedStageToLinear } from "./stage-failure.ts";
 import {
   buildFailedStageReport,
@@ -23,24 +29,28 @@ export class ServiceStageFinalizer {
 
   constructor(
     private readonly config: AppConfig,
-    private readonly db: PatchRelayDatabase,
+    private readonly stores: IssueWorkflowExecutionStoreProvider &
+      IssueWorkflowLifecycleStoreProvider &
+      IssueWorkflowQueryStoreProvider &
+      StageEventQueryStoreProvider &
+      StageTurnInputStoreProvider,
     private readonly codex: CodexAppServerClient,
     private readonly linearProvider: LinearClientProvider,
     private readonly enqueueIssue: (projectId: string, issueId: string) => void,
     logger?: Logger,
   ) {
     const lifecycleLogger = logger ?? consoleLogger();
-    this.inputDispatcher = new StageTurnInputDispatcher(db, codex, lifecycleLogger);
-    this.lifecyclePublisher = new StageLifecyclePublisher(config, db, linearProvider, lifecycleLogger);
+    this.inputDispatcher = new StageTurnInputDispatcher(stores, codex, lifecycleLogger);
+    this.lifecyclePublisher = new StageLifecyclePublisher(config, stores, linearProvider, lifecycleLogger);
   }
 
   async getActiveStageStatus(issueKey: string) {
-    const issue = this.db.issueWorkflows.getTrackedIssueByKey(issueKey);
+    const issue = this.stores.issueWorkflows.getTrackedIssueByKey(issueKey);
     if (!issue?.activeStageRunId) {
       return undefined;
     }
 
-    const stageRun = this.db.issueWorkflows.getStageRun(issue.activeStageRunId);
+    const stageRun = this.stores.issueWorkflows.getStageRun(issue.activeStageRunId);
     if (!stageRun || !stageRun.threadId) {
       return undefined;
     }
@@ -63,13 +73,13 @@ export class ServiceStageFinalizer {
       return;
     }
 
-    const stageRun = this.db.issueWorkflows.getStageRunByThreadId(threadId);
+    const stageRun = this.stores.issueWorkflows.getStageRunByThreadId(threadId);
     if (!stageRun) {
       return;
     }
 
     const turnId = typeof notification.params.turnId === "string" ? notification.params.turnId : undefined;
-    this.db.stageEvents.saveThreadEvent({
+    this.stores.stageEvents.saveThreadEvent({
       stageRunId: stageRun.id,
       threadId,
       ...(turnId ? { turnId } : {}),
@@ -86,7 +96,7 @@ export class ServiceStageFinalizer {
     }
 
     const thread = await this.codex.readThread(threadId, true);
-    const issue = this.db.issueWorkflows.getTrackedIssue(stageRun.projectId, stageRun.linearIssueId);
+    const issue = this.stores.issueWorkflows.getTrackedIssue(stageRun.projectId, stageRun.linearIssueId);
     if (!issue) {
       return;
     }
@@ -99,7 +109,7 @@ export class ServiceStageFinalizer {
   }
 
   async reconcileActiveStageRuns(): Promise<void> {
-    const activeStageRuns = this.db.issueWorkflows.listActiveStageRuns();
+    const activeStageRuns = this.stores.issueWorkflows.listActiveStageRuns();
     for (const stageRun of activeStageRuns) {
       if (!stageRun.threadId) {
         await this.failStageRunDuringReconciliation(
@@ -123,7 +133,7 @@ export class ServiceStageFinalizer {
         continue;
       }
 
-      const issue = this.db.issueWorkflows.getTrackedIssue(stageRun.projectId, stageRun.linearIssueId);
+      const issue = this.stores.issueWorkflows.getTrackedIssue(stageRun.projectId, stageRun.linearIssueId);
       if (!issue) {
         continue;
       }
@@ -149,16 +159,16 @@ export class ServiceStageFinalizer {
     status: StageRunRecord["status"],
     params: { threadId: string; turnId?: string },
   ): void {
-    const refreshedStageRun = this.db.issueWorkflows.getStageRun(stageRun.id) ?? stageRun;
+    const refreshedStageRun = this.stores.issueWorkflows.getStageRun(stageRun.id) ?? stageRun;
     const finalizedStageRun = {
       ...refreshedStageRun,
       status,
       threadId: params.threadId,
       ...(params.turnId ? { turnId: params.turnId } : {}),
     };
-    const report = buildStageReport(finalizedStageRun, issue, thread, countEventMethods(this.db.stageEvents.listThreadEvents(stageRun.id)));
+    const report = buildStageReport(finalizedStageRun, issue, thread, countEventMethods(this.stores.stageEvents.listThreadEvents(stageRun.id)));
 
-    this.db.issueWorkflows.finishStageRun({
+    this.stores.issueWorkflows.finishStageRun({
       stageRunId: stageRun.id,
       status,
       threadId: params.threadId,
@@ -178,7 +188,7 @@ export class ServiceStageFinalizer {
       turnId?: string;
     },
   ): void {
-    this.db.issueWorkflows.finishStageRun({
+    this.stores.issueWorkflows.finishStageRun({
       stageRunId: stageRun.id,
       status: "failed",
       threadId,
@@ -203,14 +213,14 @@ export class ServiceStageFinalizer {
   ): Promise<void> {
     this.failStageRun(stageRun, threadId, message, options);
 
-    const issue = this.db.issueWorkflows.getTrackedIssue(stageRun.projectId, stageRun.linearIssueId);
+    const issue = this.stores.issueWorkflows.getTrackedIssue(stageRun.projectId, stageRun.linearIssueId);
     const project = this.config.projects.find((candidate) => candidate.id === stageRun.projectId);
     if (!issue || !project) {
       return;
     }
 
     await syncFailedStageToLinear({
-      db: this.db,
+      stores: this.stores,
       linearProvider: this.linearProvider,
       project,
       issue,

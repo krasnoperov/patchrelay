@@ -1,6 +1,7 @@
 import type { Logger } from "pino";
 import type { CodexAppServerClient, CodexNotification } from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
+import type { ActiveStageRunReconciler, ReadyIssueSource } from "./db-ports.ts";
 import { IssueQueryService } from "./issue-query-service.ts";
 import { LinearOAuthService } from "./linear-oauth-service.ts";
 import { ServiceRuntime } from "./service-runtime.ts";
@@ -27,19 +28,25 @@ export class PatchRelayService {
     readonly logger: Logger,
   ) {
     this.linearProvider = toLinearClientProvider(linearProvider);
-    this.stageRunner = new ServiceStageRunner(config, db, codex, this.linearProvider, logger);
+    const stores = {
+      webhookEvents: db.webhookEvents,
+      issueWorkflows: db.issueWorkflows,
+      stageEvents: db.stageEvents,
+      linearInstallations: db.linearInstallations,
+    };
+    this.stageRunner = new ServiceStageRunner(config, stores, codex, this.linearProvider, logger);
 
     const runtime = new ServiceRuntime(
       codex,
       logger,
-      () => this.stageFinalizer.reconcileActiveStageRuns(),
-      () => db.issueWorkflows.listIssuesReadyForExecution(),
-      (eventId) => this.processWebhookEvent(eventId),
-      (item) => this.processIssue(item),
+      this.stageFinalizerProxy(),
+      stores.issueWorkflows as ReadyIssueSource,
+      this.webhookProcessorProxy(),
+      this.issueProcessorProxy(),
     );
     this.stageFinalizer = new ServiceStageFinalizer(
       config,
-      db,
+      stores,
       codex,
       this.linearProvider,
       (projectId, issueId) => runtime.enqueueIssue(projectId, issueId),
@@ -47,19 +54,37 @@ export class PatchRelayService {
     );
     this.webhookProcessor = new ServiceWebhookProcessor(
       config,
-      db,
+      stores,
       this.linearProvider,
       codex,
       (projectId, issueId) => runtime.enqueueIssue(projectId, issueId),
       logger,
     );
-    this.oauthService = new LinearOAuthService(config, db, logger);
-    this.queryService = new IssueQueryService(db, codex, this.stageFinalizer);
+    this.oauthService = new LinearOAuthService(config, stores, logger);
+    this.queryService = new IssueQueryService(stores, codex, this.stageFinalizer);
     this.runtime = runtime;
 
     this.codex.on("notification", (notification: CodexNotification) => {
       void this.stageFinalizer.handleCodexNotification(notification);
     });
+  }
+
+  private stageFinalizerProxy(): ActiveStageRunReconciler {
+    return {
+      reconcileActiveStageRuns: () => this.stageFinalizer.reconcileActiveStageRuns(),
+    };
+  }
+
+  private webhookProcessorProxy() {
+    return {
+      processWebhookEvent: (eventId: number) => this.processWebhookEvent(eventId),
+    };
+  }
+
+  private issueProcessorProxy() {
+    return {
+      processIssue: (item: IssueQueueItem) => this.processIssue(item),
+    };
   }
 
   async start(): Promise<void> {
@@ -100,7 +125,7 @@ export class PatchRelayService {
   }> {
     const result = await acceptIncomingWebhook({
       config: this.config,
-      db: this.db,
+      stores: { webhookEvents: this.db.webhookEvents },
       logger: this.logger,
       webhookId: params.webhookId,
       headers: params.headers,

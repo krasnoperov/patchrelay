@@ -1,5 +1,5 @@
 import type { Logger } from "pino";
-import type { PatchRelayDatabase } from "./db.ts";
+import type { LinearInstallationStoreProvider } from "./db-ports.ts";
 import { createLinearOAuthUrl, createOAuthStateToken, installLinearOAuthCode } from "./linear-oauth.ts";
 import type { AppConfig, LinearInstallationRecord } from "./types.ts";
 
@@ -13,7 +13,7 @@ function oauthStateExpired(createdAt: string): boolean {
 export class LinearOAuthService {
   constructor(
     private readonly config: AppConfig,
-    private readonly db: PatchRelayDatabase,
+    private readonly stores: LinearInstallationStoreProvider,
     private readonly logger: Logger,
   ) {}
 
@@ -23,9 +23,9 @@ export class LinearOAuthService {
     }
 
     if (params?.projectId) {
-      const existingLink = this.db.linearInstallations.getProjectInstallation(params.projectId);
+      const existingLink = this.stores.linearInstallations.getProjectInstallation(params.projectId);
       if (existingLink) {
-        const installation = this.db.linearInstallations.getLinearInstallation(existingLink.installationId);
+        const installation = this.stores.linearInstallations.getLinearInstallation(existingLink.installationId);
         if (installation) {
           return {
             completed: true as const,
@@ -36,11 +36,11 @@ export class LinearOAuthService {
         }
       }
 
-      const installations = this.db.linearInstallations.listLinearInstallations();
+      const installations = this.stores.linearInstallations.listLinearInstallations();
       if (installations.length === 1) {
         const installation = installations[0];
         if (installation) {
-          this.db.linearInstallations.linkProjectInstallation(params.projectId, installation.id);
+          this.stores.linearInstallations.linkProjectInstallation(params.projectId, installation.id);
           return {
             completed: true as const,
             reusedExisting: true as const,
@@ -52,7 +52,7 @@ export class LinearOAuthService {
     }
 
     const state = createOAuthStateToken();
-    const record = this.db.linearInstallations.createOAuthState({
+    const record = this.stores.linearInstallations.createOAuthState({
       provider: "linear",
       state,
       redirectUri: this.config.linear.oauth.redirectUri,
@@ -68,12 +68,12 @@ export class LinearOAuthService {
   }
 
   async complete(params: { state: string; code: string }): Promise<LinearInstallationRecord> {
-    const oauthState = this.db.linearInstallations.getOAuthState(params.state);
+    const oauthState = this.stores.linearInstallations.getOAuthState(params.state);
     if (!oauthState || oauthState.consumedAt) {
       throw new Error("OAuth state was not found or has already been consumed");
     }
     if (oauthStateExpired(oauthState.createdAt)) {
-      this.db.linearInstallations.finalizeOAuthState({
+      this.stores.linearInstallations.finalizeOAuthState({
         state: params.state,
         status: "failed",
         errorMessage: "OAuth state expired",
@@ -84,20 +84,20 @@ export class LinearOAuthService {
     try {
       const installation = await installLinearOAuthCode({
         config: this.config,
-        db: this.db,
+        db: this.stores.linearInstallations,
         logger: this.logger,
         code: params.code,
         redirectUri: oauthState.redirectUri,
         ...(oauthState.projectId ? { projectId: oauthState.projectId } : {}),
       });
-      this.db.linearInstallations.finalizeOAuthState({
+      this.stores.linearInstallations.finalizeOAuthState({
         state: params.state,
         status: "completed",
         installationId: installation.id,
       });
       return installation;
     } catch (error) {
-      this.db.linearInstallations.finalizeOAuthState({
+      this.stores.linearInstallations.finalizeOAuthState({
         state: params.state,
         status: "failed",
         errorMessage: error instanceof Error ? error.message : String(error),
@@ -107,13 +107,13 @@ export class LinearOAuthService {
   }
 
   getStateStatus(state: string) {
-    const oauthState = this.db.linearInstallations.getOAuthState(state);
+    const oauthState = this.stores.linearInstallations.getOAuthState(state);
     if (!oauthState) {
       return undefined;
     }
 
     const installation =
-      oauthState.installationId !== undefined ? this.db.linearInstallations.getLinearInstallation(oauthState.installationId) : undefined;
+      oauthState.installationId !== undefined ? this.stores.linearInstallations.getLinearInstallation(oauthState.installationId) : undefined;
     return {
       state: oauthState.state,
       status: oauthState.status,
@@ -124,8 +124,8 @@ export class LinearOAuthService {
   }
 
   listInstallations(): Array<{ installation: ReturnType<LinearOAuthService["getInstallationSummary"]>; linkedProjects: string[] }> {
-    const links = this.db.linearInstallations.listProjectInstallations();
-    return this.db.linearInstallations.listLinearInstallations().map((installation) => ({
+    const links = this.stores.linearInstallations.listProjectInstallations();
+    return this.stores.linearInstallations.listLinearInstallations().map((installation) => ({
       installation: this.getInstallationSummary(installation),
       linkedProjects: links.filter((link) => link.installationId === installation.id).map((link) => link.projectId),
     }));
