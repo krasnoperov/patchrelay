@@ -9,6 +9,7 @@ class FakeChildProcess extends EventEmitter {
   readonly stdin = new PassThrough();
   readonly stdout = new PassThrough();
   readonly stderr = new PassThrough();
+  readonly approvalResponses: Array<{ id: string; decision: string }> = [];
 
   constructor(private readonly scenario: string) {
     super();
@@ -69,14 +70,18 @@ class FakeChildProcess extends EventEmitter {
     }
 
     if (message.id === "approval-1") {
-      this.sendStdout({
-        jsonrpc: "2.0",
-        method: "turn/started",
-        params: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-        },
-      });
+      const decision = String((message.result as Record<string, unknown> | undefined)?.decision ?? "");
+      this.approvalResponses.push({ id: "approval-1", decision });
+      if (decision.startsWith("accept")) {
+        this.sendStdout({
+          jsonrpc: "2.0",
+          method: "turn/started",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+          },
+        });
+      }
       return;
     }
 
@@ -199,24 +204,26 @@ function buildThread(id: string, cwd = "/tmp/worktree") {
   };
 }
 
-function createClient(scenario: string) {
-  return new CodexAppServerClient(
+function createClient(scenario: string, approvalPolicy: "never" | "on-request" | "on-failure" | "untrusted" = "never") {
+  const child = new FakeChildProcess(scenario);
+  const client = new CodexAppServerClient(
     {
       bin: process.execPath,
       args: ["unused"],
       sourceBashrc: false,
-      approvalPolicy: "never",
+      approvalPolicy,
       sandboxMode: "danger-full-access",
       persistExtendedHistory: false,
       serviceName: "patchrelay-test",
     },
     pino({ enabled: false }),
-    (() => new FakeChildProcess(scenario)) as never,
+    (() => child) as never,
   );
+  return { client, child };
 }
 
 test("CodexAppServerClient handles initialize, approval requests, notifications, and thread operations", async () => {
-  const client = createClient("normal");
+  const { client, child } = createClient("normal");
   const notifications: Array<{ method: string; params: Record<string, unknown> }> = [];
   client.on("notification", (notification) => {
     notifications.push(notification);
@@ -265,6 +272,7 @@ test("CodexAppServerClient handles initialize, approval requests, notifications,
     assert.equal(threads[1]?.id, "thread-2");
 
     await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.deepEqual(child.approvalResponses, [{ id: "approval-1", decision: "acceptForSession" }]);
     assert.deepEqual(notifications, [
       {
         method: "turn/started",
@@ -298,7 +306,7 @@ test("resolveCodexAppServerLaunch can wrap codex in a shell that sources bashrc"
 });
 
 test("CodexAppServerClient rejects JSON-RPC error responses", async () => {
-  const client = createClient("error-response");
+  const { client } = createClient("error-response");
 
   try {
     await client.start();
@@ -309,11 +317,29 @@ test("CodexAppServerClient rejects JSON-RPC error responses", async () => {
 });
 
 test("CodexAppServerClient rejects pending requests when the app-server exits", async () => {
-  const client = createClient("pending-close");
+  const { client } = createClient("pending-close");
 
   try {
     await client.start();
     await assert.rejects(() => client.startThread({ cwd: "/tmp/worktree" }), /exited with code 7/);
+  } finally {
+    await client.stop();
+  }
+});
+
+test("CodexAppServerClient rejects server approval requests when policy is not accept-all", async () => {
+  const { client, child } = createClient("normal", "on-request");
+  const notifications: Array<{ method: string; params: Record<string, unknown> }> = [];
+  client.on("notification", (notification) => {
+    notifications.push(notification);
+  });
+
+  try {
+    await client.start();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    assert.deepEqual(child.approvalResponses, [{ id: "approval-1", decision: "rejectForSession" }]);
+    assert.deepEqual(notifications, []);
   } finally {
     await client.stop();
   }

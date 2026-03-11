@@ -96,7 +96,7 @@ export class ServiceWebhookProcessor {
       desiredStage: issueState.desiredStage,
       delegatedToPatchRelay: issueState.delegatedToPatchRelay,
     });
-    await this.commentHandler.handle(normalized, project.id);
+    await this.commentHandler.handle(normalized, project);
 
     this.stores.webhookEvents.markWebhookProcessed(webhookEventId, "processed");
     if (issueState.desiredStage) {

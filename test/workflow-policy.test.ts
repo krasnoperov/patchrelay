@@ -118,7 +118,7 @@ test("resolveWorkflowStage maps configured Linear states to workflow stages", ()
   assert.equal(resolveWorkflowStage(project, "Blocked"), undefined);
 });
 
-test("resolveProject matches a single configured project and allows its trigger event", () => {
+test("resolveProject matches a single configured project only when routing constraints match", () => {
   const config = createConfig();
   const issue: IssueMetadata = {
     id: "issue_999",
@@ -132,6 +132,20 @@ test("resolveProject matches a single configured project and allows its trigger 
   const project = resolveProject(config, issue);
   assert.equal(project?.id, "usertold");
   assert.equal(triggerEventAllowed(project!, "statusChanged"), true);
+});
+
+test("resolveProject returns undefined when a single configured project does not match routing constraints", () => {
+  const config = createConfig();
+  const issue: IssueMetadata = {
+    id: "issue_999",
+    identifier: "OPS-999",
+    title: "Launch app-server workflow",
+    teamKey: "OPS",
+    stateName: "Start",
+    labelNames: ["platform"],
+  };
+
+  assert.equal(resolveProject(config, issue), undefined);
 });
 
 test("resolveProject returns undefined when routing is ambiguous", () => {

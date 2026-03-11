@@ -1,8 +1,9 @@
 import type { StageEventQueryStoreProvider } from "./stage-event-ports.ts";
 import type { IssueWorkflowWebhookStoreProvider } from "./workflow-ports.ts";
 import { isPatchRelayStatusComment } from "./linear-workflow.ts";
+import { triggerEventAllowed } from "./project-resolution.ts";
 import type { StageTurnInputDispatcher } from "./stage-turn-input-dispatcher.ts";
-import type { NormalizedEvent } from "./types.ts";
+import type { NormalizedEvent, ProjectConfig } from "./types.ts";
 
 export class CommentWebhookHandler {
   constructor(
@@ -10,8 +11,12 @@ export class CommentWebhookHandler {
     private readonly turnInputDispatcher: StageTurnInputDispatcher,
   ) {}
 
-  async handle(normalized: NormalizedEvent, projectId: string): Promise<void> {
+  async handle(normalized: NormalizedEvent, project: ProjectConfig): Promise<void> {
     if ((normalized.triggerEvent !== "commentCreated" && normalized.triggerEvent !== "commentUpdated") || !normalized.comment?.body) {
+      return;
+    }
+
+    if (!triggerEventAllowed(project, normalized.triggerEvent)) {
       return;
     }
 
@@ -20,7 +25,7 @@ export class CommentWebhookHandler {
       return;
     }
 
-    const issue = this.stores.issueWorkflows.getTrackedIssue(projectId, normalizedIssue.id);
+    const issue = this.stores.issueWorkflows.getTrackedIssue(project.id, normalizedIssue.id);
     if (!issue?.activeStageRunId) {
       return;
     }

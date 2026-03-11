@@ -143,7 +143,7 @@ function createConfig(baseDir: string): AppConfig {
           emails: [],
           emailDomains: [],
         },
-        triggerEvents: ["statusChanged", "commentCreated", "commentUpdated"],
+        triggerEvents: ["statusChanged", "commentCreated", "commentUpdated", "agentPrompted"],
         branchPrefix: "use",
       },
     ],
@@ -325,6 +325,193 @@ test("webhook processor routes prompted agent follow-ups into the active stage",
           activity.ephemeral === true,
       ),
     );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("webhook processor ignores out-of-scope issues even in a single-project setup", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-processor-routing-"));
+  try {
+    const { db, processor, enqueuedIssues } = createHarness(baseDir);
+    const event = db.webhookEvents.insertWebhookEvent({
+      webhookId: "delivery-out-of-scope",
+      receivedAt: new Date().toISOString(),
+      eventType: "Issue.update",
+      issueId: "issue_foreign",
+      headersJson: "{}",
+      payloadJson: JSON.stringify({
+        action: "update",
+        type: "Issue",
+        createdAt: "2026-03-08T12:00:00.000Z",
+        webhookTimestamp: 1000,
+        updatedFrom: { stateId: "todo" },
+        data: {
+          id: "issue_foreign",
+          identifier: "OPS-25",
+          title: "Outside configured scope",
+          url: "https://linear.app/example/issue/OPS-25",
+          team: { key: "OPS" },
+          state: { name: "Start" },
+        },
+      }),
+      signatureValid: true,
+      dedupeStatus: "accepted",
+    });
+
+    await processor.processWebhookEvent(event.id);
+
+    assert.equal(db.issueWorkflows.getTrackedIssueByKey("OPS-25"), undefined);
+    assert.equal(db.webhookEvents.getWebhookEvent(event.id)?.processingStatus, "processed");
+    assert.deepEqual(enqueuedIssues, []);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("webhook processor does not steer prompted agent follow-ups when agentPrompted is disabled", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-processor-prompt-triggers-"));
+  try {
+    const { config, db, codex, processor, enqueuedIssues } = createHarness(baseDir);
+    config.projects[0]!.triggerEvents = ["statusChanged"];
+    installPatchRelayApp(db);
+
+    db.issueWorkflows.recordDesiredStage({
+      projectId: "usertold",
+      linearIssueId: "issue_1",
+      issueKey: "USE-25",
+      title: "Build app server orchestration",
+      issueUrl: "https://linear.app/example/issue/USE-25",
+      currentLinearState: "Implementing",
+      desiredStage: "development",
+      desiredWebhookId: "delivery-start",
+      lastWebhookAt: new Date().toISOString(),
+    });
+    const claim = db.issueWorkflows.claimStageRun({
+      projectId: "usertold",
+      linearIssueId: "issue_1",
+      stage: "development",
+      triggerWebhookId: "delivery-start",
+      branchName: "use/USE-25",
+      worktreePath: path.join(config.projects[0]!.worktreeRoot, "USE-25"),
+      workflowFile: config.projects[0]!.workflows[0]!.workflowFile,
+      promptText: "Implement carefully.",
+    });
+    assert.ok(claim);
+    db.issueWorkflows.updateStageRunThread({
+      stageRunId: claim.stageRun.id,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    const event = db.webhookEvents.insertWebhookEvent({
+      webhookId: "delivery-agent-prompt-disabled",
+      receivedAt: new Date().toISOString(),
+      eventType: "AgentSessionEvent.prompted",
+      issueId: "issue_1",
+      headersJson: "{}",
+      payloadJson: JSON.stringify({
+        action: "prompted",
+        type: "AgentSessionEvent",
+        createdAt: "2026-03-08T12:05:00.000Z",
+        webhookTimestamp: 1005,
+        data: {
+          agentActivity: {
+            body: "Please add tests for the queueing behavior.",
+          },
+          agentSession: {
+            id: "session-1",
+            issue: {
+              id: "issue_1",
+              identifier: "USE-25",
+              title: "Build app server orchestration",
+              team: { key: "USE" },
+              delegate: { id: "patchrelay-app", name: "PatchRelay" },
+              state: { name: "Implementing" },
+            },
+          },
+        },
+      }),
+      signatureValid: true,
+      dedupeStatus: "accepted",
+    });
+
+    await processor.processWebhookEvent(event.id);
+
+    assert.equal(codex.steeredTurns.length, 0);
+    assert.equal(db.stageEvents.listPendingTurnInputs(claim.stageRun.id).length, 0);
+    assert.deepEqual(enqueuedIssues, []);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("webhook processor does not steer issue comments when comment triggers are disabled", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-processor-comment-triggers-"));
+  try {
+    const { config, db, codex, processor } = createHarness(baseDir);
+    config.projects[0]!.triggerEvents = ["statusChanged"];
+
+    db.issueWorkflows.recordDesiredStage({
+      projectId: "usertold",
+      linearIssueId: "issue_1",
+      issueKey: "USE-25",
+      title: "Build app server orchestration",
+      issueUrl: "https://linear.app/example/issue/USE-25",
+      currentLinearState: "Implementing",
+      desiredStage: "development",
+      desiredWebhookId: "delivery-start",
+      lastWebhookAt: new Date().toISOString(),
+    });
+    const claim = db.issueWorkflows.claimStageRun({
+      projectId: "usertold",
+      linearIssueId: "issue_1",
+      stage: "development",
+      triggerWebhookId: "delivery-start",
+      branchName: "use/USE-25",
+      worktreePath: path.join(config.projects[0]!.worktreeRoot, "USE-25"),
+      workflowFile: config.projects[0]!.workflows[0]!.workflowFile,
+      promptText: "Implement carefully.",
+    });
+    assert.ok(claim);
+    db.issueWorkflows.updateStageRunThread({
+      stageRunId: claim.stageRun.id,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    const event = db.webhookEvents.insertWebhookEvent({
+      webhookId: "delivery-comment-disabled",
+      receivedAt: new Date().toISOString(),
+      eventType: "Comment.create",
+      issueId: "issue_1",
+      headersJson: "{}",
+      payloadJson: JSON.stringify({
+        action: "create",
+        type: "Comment",
+        createdAt: "2026-03-08T12:05:00.000Z",
+        webhookTimestamp: 1000,
+        data: {
+          id: "comment_1",
+          body: "Please also update the docs.",
+          user: { name: "Alex" },
+          issue: {
+            id: "issue_1",
+            identifier: "USE-25",
+            title: "Build app server orchestration",
+            team: { key: "USE" },
+            state: { name: "Implementing" },
+          },
+        },
+      }),
+      signatureValid: true,
+      dedupeStatus: "accepted",
+    });
+
+    await processor.processWebhookEvent(event.id);
+
+    assert.equal(codex.steeredTurns.length, 0);
+    assert.equal(db.stageEvents.listPendingTurnInputs(claim.stageRun.id).length, 0);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

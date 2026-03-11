@@ -2,6 +2,7 @@ import type { StageEventQueryStoreProvider } from "./stage-event-ports.ts";
 import type { IssueWorkflowWebhookStoreProvider } from "./workflow-ports.ts";
 import type { StageAgentActivityPublisher } from "./stage-agent-activity-publisher.ts";
 import type { StageTurnInputDispatcher } from "./stage-turn-input-dispatcher.ts";
+import { triggerEventAllowed } from "./project-resolution.ts";
 import type { NormalizedEvent, ProjectConfig, TrackedIssueRecord, WorkflowStage } from "./types.ts";
 import { listRunnableStates, resolveWorkflowStage } from "./workflow-policy.ts";
 
@@ -81,6 +82,10 @@ export class AgentSessionWebhookHandler {
     }
 
     if (normalized.triggerEvent !== "agentPrompted") {
+      return;
+    }
+
+    if (!triggerEventAllowed(project, normalized.triggerEvent)) {
       return;
     }
 

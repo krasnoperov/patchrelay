@@ -8,10 +8,6 @@ export function resolveProject(config: AppConfig, issue: IssueMetadata): Project
     return matches[0];
   }
 
-  if (matches.length === 0 && config.projects.length === 1) {
-    return config.projects[0];
-  }
-
   return undefined;
 }
 
@@ -22,10 +18,6 @@ export function triggerEventAllowed(project: ProjectConfig, triggerEvent: Trigge
 
   if (triggerEvent === "agentSessionCreated") {
     return project.triggerEvents.includes("delegateChanged") || project.triggerEvents.includes("statusChanged");
-  }
-
-  if (triggerEvent === "agentPrompted") {
-    return project.triggerEvents.includes("commentCreated") || project.triggerEvents.includes("commentUpdated");
   }
 
   return project.triggerEvents.includes(triggerEvent);

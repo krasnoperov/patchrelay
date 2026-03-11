@@ -296,7 +296,7 @@ function createConfig(baseDir: string): AppConfig {
         issueKeyPrefixes: ["USE"],
         linearTeamIds: ["USE"],
         allowLabels: [],
-        triggerEvents: ["statusChanged"],
+        triggerEvents: ["statusChanged", "commentCreated", "commentUpdated", "agentPrompted"],
         branchPrefix: "use",
       },
     ],

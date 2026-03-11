@@ -331,16 +331,16 @@ export class CodexAppServerClient extends EventEmitter {
 
     switch (request.method) {
       case "item/commandExecution/requestApproval":
-        result = { decision: "acceptForSession" };
+        result = { decision: this.resolveSessionApprovalDecision() };
         break;
       case "item/fileChange/requestApproval":
-        result = { decision: "acceptForSession" };
+        result = { decision: this.resolveSessionApprovalDecision() };
         break;
       case "execCommandApproval":
-        result = { decision: "accept" };
+        result = { decision: this.resolveOneShotApprovalDecision() };
         break;
       case "applyPatchApproval":
-        result = { decision: "accept" };
+        result = { decision: this.resolveOneShotApprovalDecision() };
         break;
       default:
         result = null;
@@ -352,6 +352,14 @@ export class CodexAppServerClient extends EventEmitter {
       id,
       result,
     });
+  }
+
+  private resolveSessionApprovalDecision(): "acceptForSession" | "rejectForSession" {
+    return this.config.approvalPolicy === "never" ? "acceptForSession" : "rejectForSession";
+  }
+
+  private resolveOneShotApprovalDecision(): "accept" | "reject" {
+    return this.config.approvalPolicy === "never" ? "accept" : "reject";
   }
 
   private rejectAllPending(error: Error): void {
