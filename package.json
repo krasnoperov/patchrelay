@@ -17,9 +17,11 @@
     "dist",
     ".env.example",
     "config/patchrelay.example.yaml",
-    "infra/patchrelay.service"
+    "infra/patchrelay.service",
+    "infra/patchrelay-reload.service",
+    "infra/patchrelay.path"
   ],
-  "description": "Self-hosted Linear-to-Codex control plane and CLI for issue worktrees, staged runs, and inspection.",
+  "description": "Self-hosted harness for Linear-driven Codex work with durable issue worktrees, staged runs, and inspection.",
   "engines": {
     "node": ">=24.0.0"
   },

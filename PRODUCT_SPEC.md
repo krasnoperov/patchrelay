@@ -2,9 +2,9 @@
 
 ## Summary
 
-PatchRelay is a local workflow orchestrator for Linear-driven software delivery.
+PatchRelay is a self-hosted execution harness for Linear-driven Codex work.
 
-It receives signed Linear webhooks, resolves the owning repository from the issue key and project policy, prepares an issue-specific git worktree, and drives staged Codex work through `codex app-server`. The service persists issue, workspace, pipeline, stage, thread, and observation state in SQLite so operators can inspect exactly what each agent did, even after the live run has ended.
+It receives signed Linear webhooks, resolves the owning repository from the issue key and project policy, prepares an issue-specific git worktree, and drives staged Codex work through `codex app-server`. The service persists issue, workspace, pipeline, stage, thread, and observation state in SQLite so operators can inspect exactly what each run did, even after the live run has ended.
 
 ## Product Goals
 
@@ -17,6 +17,7 @@ PatchRelay must:
 5. persist Codex thread ids so later stages can fork or resume prior work
 6. capture enough thread history and event data to produce read-only stage reports
 7. keep tracker state, local workspace state, and agent history correlated
+8. act as the deterministic system around the model rather than pushing workflow bookkeeping into prompts alone
 
 ## Core Workflow
 
@@ -68,7 +69,7 @@ PatchRelay must make it possible to answer:
 - which files it changed
 - whether the stage completed, failed, or paused
 
-Read-only observation is a first-class requirement, not an implementation detail.
+Read-only observation is a first-class harness requirement, not an implementation detail.
 
 ## Deployment Model
 
@@ -77,6 +78,17 @@ Read-only observation is a first-class requirement, not an implementation detail
 - PatchRelay stores state in local SQLite
 - repositories and worktrees live on local disk
 - a long-lived `codex app-server` process is managed by PatchRelay
+
+## Harness Responsibilities
+
+PatchRelay owns the deterministic execution layer around Codex:
+
+- webhook verification and intake
+- issue routing and workflow policy selection
+- durable worktree and branch management
+- stage sequencing and thread continuity
+- run-state persistence and inspection
+- status sync and comment forwarding back through Linear
 
 ## Non-Goals
 

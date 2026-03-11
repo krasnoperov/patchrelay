@@ -2,7 +2,7 @@
 
 ## System Shape
 
-PatchRelay is a local orchestration service with seven responsibilities:
+PatchRelay is a self-hosted execution harness around Codex with seven responsibilities:
 
 1. accept and verify Linear webhooks
 2. persist issue, workspace, pipeline, stage, and observation state in SQLite
@@ -194,7 +194,7 @@ SQLite stores:
 - thread events
 - queued turn inputs
 
-The database is not a copy of Codex thread history. It is the orchestration ledger that points to thread history and caches reports.
+The database is not a copy of Codex thread history. It is the harness ledger that points to thread history and caches reports.
 
 ## Operator Surface
 

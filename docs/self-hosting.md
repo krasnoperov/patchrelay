@@ -2,7 +2,9 @@
 
 ## Overview
 
-PatchRelay is designed to run on a machine you control, close to the repositories and deployment surface your agent needs to access.
+PatchRelay is designed to run on a machine you control, close to the repositories and deployment surface that Codex needs to access.
+
+In harness terms, self-hosting matters because PatchRelay is the execution system around the model. It is responsible for routing work, preparing durable workspaces, carrying forward state, and keeping runs inspectable in the same environment where the code actually lives.
 
 The recommended deployment mode is personal-mode:
 
@@ -69,10 +71,15 @@ npm install -g ./patchrelay-*.tgz
 patchrelay init https://patchrelay.example.com
 ```
 
+This command requires the public HTTPS origin up front because PatchRelay must know the Linear-facing webhook URL and OAuth callback URL for this machine.
+
 This creates:
 
 - `~/.config/patchrelay/.env`
 - `~/.config/patchrelay/patchrelay.yaml`
+- `~/.config/systemd/user/patchrelay.service`
+- `~/.config/systemd/user/patchrelay-reload.service`
+- `~/.config/systemd/user/patchrelay.path`
 
 Default runtime paths are:
 
@@ -80,6 +87,10 @@ Default runtime paths are:
 - database: `~/.local/state/patchrelay/patchrelay.sqlite`
 - logs: `~/.local/state/patchrelay/patchrelay.log`
 - worktree roots: usually `~/.local/share/patchrelay/worktrees/<project>`
+
+The generated `patchrelay.yaml` stays intentionally minimal. In the default setup it only needs `server.public_base_url`; PatchRelay already has built-in defaults for the local bind address, database path, logs, worktree roots, workflow filenames, workflow states, and Codex runner settings.
+
+`patchrelay init` also installs the user service and a watcher that reload-or-restarts PatchRelay whenever `patchrelay.yaml` or `.env` changes.
 
 ## 3. Configure Secrets
 
@@ -138,11 +149,19 @@ server:
 
 PatchRelay will use `https://patchrelay.example.com/oauth/linear/callback` as the OAuth callback.
 
-Add repositories with `patchrelay project add <id> <repo-path>`. A project only needs:
+Add repositories with `patchrelay project apply <id> <repo-path>`. A project only needs:
 
 - `id`
 - `repo_path`
 - one routing key when you have multiple projects: `issue_key_prefixes` or `linear_team_ids`
+
+`patchrelay project apply` is the idempotent happy-path command:
+
+- it creates or updates the local project entry
+- it checks whether PatchRelay is ready to start with that project
+- it reloads the service when it can
+- it reuses or starts the Linear authorization flow when the local setup is ready
+- if workflow files or secrets are still missing, it tells you what to fix and can be rerun safely
 
 For a single-machine multi-repo setup, add one `projects[]` entry per repository. PatchRelay uses those entries for routing and worktree isolation, while the Linear OAuth app, webhook secret, and encrypted installation tokens stay shared at the service level.
 
@@ -162,7 +181,7 @@ Workflow file paths are resolved relative to `repo_path` unless you provide an a
 
 Keep `operator_api.enabled: false` unless you explicitly need the issue inspection API. The CLI-first OAuth flow still works on loopback because the local OAuth management routes remain available there without turning the wider inspection API on. If you enable the inspection API on anything other than `127.0.0.1`, set `bearer_token_env` and publish it only behind additional access controls.
 
-The browser is only needed for Linear OAuth consent after `patchrelay connect`.
+The browser is only needed for Linear OAuth consent after `patchrelay project apply` or `patchrelay connect`.
 
 If you want Linear itself to be part of your trust boundary, configure `trusted_actors` on each project. That allowlist can name specific owners by `id` or `email`, or define a group-style allowlist with `email_domains`. When `trusted_actors` is present, unmatched Linear actors are ignored before they can trigger stages or steer a live comment.
 
@@ -175,7 +194,7 @@ Each automated repository should contain:
 - `DEPLOY_WORKFLOW.md`
 - `CLEANUP_WORKFLOW.md` by default
 
-These files are the policy PatchRelay passes to the agent. They should explain what the agent is allowed to do in that repository, what validation is required, and when final issue states should be moved.
+These files are the repo-local policy PatchRelay passes into each stage run. They should explain what the agent is allowed to do in that repository, what validation is required, and when final issue states should be moved.
 
 If every repo follows the standard filenames above, you do not need to repeat `workflow_files` in each project config. If you do not want a cleanup stage for a project, disable it explicitly in config by setting the cleanup workflow file or cleanup statuses to `null`.
 
@@ -186,9 +205,9 @@ Requirement references:
 - [DEPLOY_WORKFLOW_REQUIREMENTS.md](DEPLOY_WORKFLOW_REQUIREMENTS.md)
 - [CLEANUP_WORKFLOW_REQUIREMENTS.md](CLEANUP_WORKFLOW_REQUIREMENTS.md)
 
-## 6. Start PatchRelay
+## 6. Validate And Operate
 
-Before enabling the service, run the built-in preflight:
+Before delegating work, run the built-in preflight:
 
 ```bash
 patchrelay doctor
@@ -215,13 +234,13 @@ curl http://127.0.0.1:8787/health
 Stay in the terminal:
 
 ```bash
-patchrelay connect --project your-project
+patchrelay project apply your-project /absolute/path/to/repo
 patchrelay installations
 ```
 
-`patchrelay connect` opens the browser only long enough to approve the Linear OAuth app, then returns to the CLI workflow.
+`patchrelay project apply` opens the browser only long enough to approve the Linear OAuth app when it needs a fresh installation, then returns to the CLI workflow.
 
-When you later add another local repo or PatchRelay project that should reuse the same Linear app installation, run `patchrelay connect --project other-project` again. If PatchRelay sees exactly one saved installation, it links that project locally without another OAuth consent step.
+When you later add another local repo or PatchRelay project that should reuse the same Linear app installation, run `patchrelay project apply other-project /absolute/path/to/repo` again. If PatchRelay sees exactly one saved installation, it links that project locally without another OAuth consent step.
 
 ## 7. Run As A Service
 
@@ -231,14 +250,27 @@ Create and start the user service with:
 patchrelay install-service
 ```
 
-That writes `~/.config/systemd/user/patchrelay.service`, reloads the user unit set, and enables + starts `patchrelay`.
+That writes:
+
+- `~/.config/systemd/user/patchrelay.service`
+- `~/.config/systemd/user/patchrelay-reload.service`
+- `~/.config/systemd/user/patchrelay.path`
+
+And then runs:
+
+- `systemctl --user daemon-reload`
+- `systemctl --user enable --now patchrelay.path`
+- `systemctl --user enable patchrelay.service`
+- `systemctl --user reload-or-restart patchrelay.service`
 
 If you only want to write the unit file without starting it yet:
 
 ```bash
 patchrelay install-service --write-only
 systemctl --user daemon-reload
-systemctl --user enable --now patchrelay
+systemctl --user enable --now patchrelay.path
+systemctl --user enable patchrelay.service
+systemctl --user reload-or-restart patchrelay.service
 ```
 
 If the machine should keep PatchRelay running after logout, enable lingering for your user once:
@@ -256,7 +288,7 @@ After package updates, restart PatchRelay with:
 patchrelay restart-service
 ```
 
-That runs `systemctl --user daemon-reload` and `systemctl --user restart patchrelay` for you. If you changed the unit manually, re-run `patchrelay install-service --force` first.
+That runs `systemctl --user daemon-reload` and `systemctl --user reload-or-restart patchrelay.service` for you. If you changed the units manually, re-run `patchrelay install-service --force` first.
 
 ## 8. Publish Through Caddy
 

@@ -17,4 +17,4 @@ Codex must:
 
 While a turn is active, PatchRelay may steer it with fresh Linear comment context instead of waiting for the next stage.
 
-Stage continuity is handled by PatchRelay through thread forking and workspace reuse, not by terminal session reuse.
+Stage continuity is a harness responsibility handled by PatchRelay through thread forking and workspace reuse, not by terminal session reuse.
