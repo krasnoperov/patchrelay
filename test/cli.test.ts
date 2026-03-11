@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -128,6 +128,10 @@ function createBufferStream() {
       return buffer;
     },
   };
+}
+
+function modeOf(filePath: string): number {
+  return statSync(filePath).mode & 0o777;
 }
 
 function withEnv(values: Record<string, string | undefined>, run: () => Promise<void> | void): Promise<void> | void {
@@ -504,6 +508,9 @@ test("cli init writes XDG config files and install-service manages the user unit
         assert.match(serviceEnvContents, /^PATCHRELAY_TOKEN_ENCRYPTION_KEY=[0-9a-f]{64}$/m);
         assert.doesNotMatch(serviceEnvContents, /replace-with-linear-webhook-secret/);
         assert.doesNotMatch(serviceEnvContents, /replace-with-long-random-secret/);
+        if (process.platform !== "win32") {
+          assert.equal(modeOf(serviceEnvPath), 0o600);
+        }
         assert.match(runtimeEnvContents, /PATCHRELAY_DB_PATH/);
         const configContents = readFileSync(configPath, "utf8");
         assert.equal(configContents.includes("public_base_url: https://patchrelay.example.com"), true);

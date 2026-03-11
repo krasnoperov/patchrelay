@@ -233,13 +233,27 @@ function readEnvFile(envPath: string): Record<string, string> {
   return values;
 }
 
+export function getAdjacentEnvFilePaths(
+  configPath = process.env.PATCHRELAY_CONFIG ?? getDefaultConfigPath(),
+): {
+  runtimeEnvPath: string;
+  serviceEnvPath: string;
+} {
+  const resolvedPath = ensureAbsolutePath(configPath);
+  const configDir = path.dirname(resolvedPath);
+  return {
+    runtimeEnvPath:
+      configDir === path.dirname(getDefaultConfigPath()) ? getDefaultRuntimeEnvPath() : path.join(configDir, "runtime.env"),
+    serviceEnvPath:
+      configDir === path.dirname(getDefaultConfigPath()) ? getDefaultServiceEnvPath() : path.join(configDir, "service.env"),
+  };
+}
+
 function getEnvFilesForProfile(
   configPath: string,
   profile: ConfigLoadProfile,
 ): string[] {
-  const configDir = path.dirname(configPath);
-  const runtimeEnvPath = configDir === path.dirname(getDefaultConfigPath()) ? getDefaultRuntimeEnvPath() : path.join(configDir, "runtime.env");
-  const serviceEnvPath = configDir === path.dirname(getDefaultConfigPath()) ? getDefaultServiceEnvPath() : path.join(configDir, "service.env");
+  const { runtimeEnvPath, serviceEnvPath } = getAdjacentEnvFilePaths(configPath);
 
   switch (profile) {
     case "service":

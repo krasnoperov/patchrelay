@@ -20,6 +20,7 @@ import {
   readBundledAsset,
 } from "./runtime-paths.ts";
 import { loadConfig } from "./config.ts";
+import { enforceArbitraryFilePermissions } from "./file-permissions.ts";
 import { ensureAbsolutePath } from "./utils.ts";
 
 function defaultProjectWorkflows(): Array<Record<string, string>> {
@@ -95,13 +96,24 @@ function renderServiceEnvTemplate(template: string): string {
     );
 }
 
-async function writeTemplateFile(targetPath: string, content: string, force: boolean): Promise<"created" | "skipped"> {
+async function writeTemplateFile(
+  targetPath: string,
+  content: string,
+  force: boolean,
+  options?: { mode?: number },
+): Promise<"created" | "skipped"> {
   if (!force && existsSync(targetPath)) {
+    if (options?.mode !== undefined) {
+      await enforceArbitraryFilePermissions(targetPath, options.mode);
+    }
     return "skipped";
   }
 
   await mkdir(dirname(targetPath), { recursive: true });
   await writeFile(targetPath, content, "utf8");
+  if (options?.mode !== undefined) {
+    await enforceArbitraryFilePermissions(targetPath, options.mode);
+  }
   return "created";
 }
 
@@ -166,7 +178,7 @@ export async function initializePatchRelayHome(options?: { force?: boolean; publ
   );
 
   const runtimeEnvStatus = await writeTemplateFile(runtimeEnvPath, runtimeEnvTemplate, force);
-  const serviceEnvStatus = await writeTemplateFile(serviceEnvPath, serviceEnvTemplate, force);
+  const serviceEnvStatus = await writeTemplateFile(serviceEnvPath, serviceEnvTemplate, force, { mode: 0o600 });
   const initialConfigStatus = await writeTemplateFile(configPath, configTemplate, force);
   const configStatus =
     initialConfigStatus === "created" ? initialConfigStatus : await applyPublicBaseUrlToConfig(configPath, publicBaseUrl);
