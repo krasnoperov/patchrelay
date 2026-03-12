@@ -362,7 +362,7 @@ test("webhook processor routes prompted agent follow-ups into the active stage",
     assert.equal(pending.length, 0);
     assert.equal(codex.steeredTurns.length, 1);
     assert.match(codex.steeredTurns[0]!.input, /Please add tests/);
-    assert.equal(db.obligations.listPendingObligations({ runLeaseId: runLease.id }).length, 1);
+    assert.equal(db.obligations.listPendingObligations({ runLeaseId: runLease.id }).length, 0);
     assert.deepEqual(enqueuedIssues, []);
     assert.ok(
       linear.agentActivities.some(
