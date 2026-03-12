@@ -2,7 +2,17 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { Logger } from "pino";
 import { StageLifecyclePublisher } from "../src/stage-lifecycle-publisher.ts";
-import type { AppConfig, LinearAgentActivityContent, LinearClient, LinearIssueSnapshot, PipelineRunRecord, StageRunRecord, TrackedIssueRecord, WorkspaceRecord } from "../src/types.ts";
+import type {
+  AppConfig,
+  IssueControlRecord,
+  LinearAgentActivityContent,
+  LinearClient,
+  LinearIssueSnapshot,
+  PipelineRunRecord,
+  StageRunRecord,
+  TrackedIssueRecord,
+  WorkspaceRecord,
+} from "../src/types.ts";
 
 const WORKFLOW_STATES = [
   { id: "start", name: "Start" },
@@ -82,6 +92,7 @@ class FakeLinearClient implements LinearClient {
 
 class FakeIssueWorkflowStore {
   readonly issues = new Map<string, TrackedIssueRecord>();
+  readonly issueControls = new Map<string, IssueControlRecord>();
   readonly stageRuns = new Map<number, StageRunRecord>();
   readonly workspaces = new Map<number, WorkspaceRecord>();
   readonly pipelines = new Map<number, PipelineRunRecord>();
@@ -89,6 +100,33 @@ class FakeIssueWorkflowStore {
   readonly pipelineStatusUpdates: Array<{ pipelineRunId: number; status: PipelineRunRecord["status"] }> = [];
   readonly completedPipelines: number[] = [];
   readonly statusCommentUpdates: Array<{ projectId: string; issueId: string; commentId?: string }> = [];
+
+  upsertIssueControl(params: {
+    projectId: string;
+    linearIssueId: string;
+    serviceOwnedCommentId?: string;
+    activeAgentSessionId?: string;
+    lifecycleStatus: IssueControlRecord["lifecycleStatus"];
+  }): IssueControlRecord {
+    const key = issueKey(params.projectId, params.linearIssueId);
+    const existing = this.issueControls.get(key);
+    const nextIssueControl: IssueControlRecord = {
+      id: existing?.id ?? this.issueControls.size + 1,
+      projectId: params.projectId,
+      linearIssueId: params.linearIssueId,
+      serviceOwnedCommentId: params.serviceOwnedCommentId ?? existing?.serviceOwnedCommentId,
+      activeAgentSessionId: params.activeAgentSessionId ?? existing?.activeAgentSessionId,
+      lifecycleStatus: params.lifecycleStatus,
+      createdAt: existing?.createdAt ?? "2026-03-11T10:00:00.000Z",
+      updatedAt: "2026-03-11T10:05:00.000Z",
+      desiredStage: existing?.desiredStage,
+      desiredReceiptId: existing?.desiredReceiptId,
+      activeWorkspaceOwnershipId: existing?.activeWorkspaceOwnershipId,
+      activeRunLeaseId: existing?.activeRunLeaseId,
+    };
+    this.issueControls.set(key, nextIssueControl);
+    return nextIssueControl;
+  }
 
   upsertTrackedIssue(params: {
     projectId: string;
@@ -335,7 +373,7 @@ function createHarness() {
   });
   const publisher = new StageLifecyclePublisher(
     config,
-    { issueWorkflows: store },
+    { issueWorkflows: store, issueControl: store },
     {
       async forProject(projectId: string) {
         return projectId === "proj" ? linear : undefined;
@@ -453,7 +491,7 @@ test("markStageActive and publishStageCompletion no-op cleanly when workflow sta
 
   const publisher = new StageLifecyclePublisher(
     config,
-    { issueWorkflows: store },
+    { issueWorkflows: store, issueControl: store },
     { async forProject() { return undefined; } },
     createCaptureLogger().logger,
   );

@@ -296,12 +296,13 @@ function seedRuntimeFiles(config: AppConfig): void {
 
 test("cli inspect, worktree, open, events, and report render stored issue details", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-"));
+  let data: CliDataAccess | undefined;
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, true);
     db.runMigrations();
     seedDatabase(db, config);
-    const data = new CliDataAccess(config, { db });
+    data = new CliDataAccess(config, { db });
 
     const stdout = createBufferStream();
     const stderr = createBufferStream();
@@ -326,18 +327,20 @@ test("cli inspect, worktree, open, events, and report render stored issue detail
     assert.equal(await runCli(["events", "USE-54"], { config, data, stdout: eventsOut.stream, stderr: stderr.stream }), 0);
     assert.match(eventsOut.read(), /turn\/started/);
   } finally {
+    data?.close();
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
 
 test("cli open launches codex in the issue worktree", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-"));
+  let data: CliDataAccess | undefined;
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, true);
     db.runMigrations();
     seedDatabase(db, config);
-    const data = new CliDataAccess(config, { db });
+    data = new CliDataAccess(config, { db });
 
     const calls: Array<{ command: string; args: string[] }> = [];
     const exitCode = await runCli(["open", "USE-54"], {
@@ -365,18 +368,20 @@ test("cli open launches codex in the issue worktree", async () => {
       },
     ]);
   } finally {
+    data?.close();
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
 
 test("cli list and retry cover operator control flows", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-"));
+  let data: CliDataAccess | undefined;
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, true);
     db.runMigrations();
     seedDatabase(db, config);
-    const data = new CliDataAccess(config, { db });
+    data = new CliDataAccess(config, { db });
 
     const failedList = createBufferStream();
     assert.equal(await runCli(["list", "--failed"], { config, data, stdout: failedList.stream, stderr: createBufferStream().stream }), 0);
@@ -406,18 +411,20 @@ test("cli list and retry cover operator control flows", async () => {
     assert.equal(await runCli(["USE-54", "--json"], { config, data, stdout: inspectJson.stream, stderr: createBufferStream().stream }), 0);
     assert.match(inspectJson.read(), /"issueKey": "USE-54"/);
   } finally {
+    data?.close();
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
 
 test("cli retry blocks when the ledger still owns an active run lease", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-retry-ledger-active-"));
+  let data: CliDataAccess | undefined;
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, true);
     db.runMigrations();
     seedDatabase(db, config);
-    const data = new CliDataAccess(config, { db });
+    data = new CliDataAccess(config, { db });
 
     const issue = db.issueWorkflows.getTrackedIssue("usertold", "issue-2");
     assert.ok(issue);
@@ -461,12 +468,14 @@ test("cli retry blocks when the ledger still owns an active run lease", () => {
 
     assert.throws(() => data.retry("USE-55"), /already has an active stage run/);
   } finally {
+    data?.close();
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
 
 test("cli falls back to ledger workspace and run context when legacy active pointers are sparse", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-ledger-fallback-"));
+  let data: CliDataAccess | undefined;
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, true);
@@ -526,7 +535,7 @@ test("cli falls back to ledger workspace and run context when legacy active poin
       lifecycleStatus: "running",
     });
 
-    const data = new CliDataAccess(config, { db });
+    data = new CliDataAccess(config, { db });
     const worktree = data.worktree("USE-57");
     assert.equal(worktree?.workspace.worktreePath, path.join(config.projects[0].worktreeRoot, "USE-57"));
 
@@ -537,6 +546,7 @@ test("cli falls back to ledger workspace and run context when legacy active poin
     const listed = list.find((entry) => entry.issueKey === "USE-57");
     assert.equal(listed?.activeStage, "development");
   } finally {
+    data?.close();
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
