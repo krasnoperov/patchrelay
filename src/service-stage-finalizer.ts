@@ -2,6 +2,7 @@ import type { Logger } from "pino";
 import type { CodexNotification } from "./codex-app-server.ts";
 import type { CodexAppServerClient } from "./codex-app-server.ts";
 import type { IssueControlStoreProvider, ObligationStoreProvider, RunLeaseStoreProvider, WorkspaceOwnershipStoreProvider } from "./ledger-ports.ts";
+import { ReconciliationActionApplier } from "./reconciliation-action-applier.ts";
 import { reconcileIssue } from "./reconciliation-engine.ts";
 import { buildReconciliationSnapshot } from "./reconciliation-snapshot-builder.ts";
 import type {
@@ -32,6 +33,7 @@ import { safeJsonParse } from "./utils.ts";
 export class ServiceStageFinalizer {
   private readonly inputDispatcher: StageTurnInputDispatcher;
   private readonly lifecyclePublisher: StageLifecyclePublisher;
+  private readonly actionApplier: ReconciliationActionApplier;
 
   constructor(
     private readonly config: AppConfig,
@@ -49,6 +51,14 @@ export class ServiceStageFinalizer {
     const lifecycleLogger = logger ?? consoleLogger();
     this.inputDispatcher = new StageTurnInputDispatcher(stores, codex, lifecycleLogger);
     this.lifecyclePublisher = new StageLifecyclePublisher(config, stores, linearProvider, lifecycleLogger);
+    this.actionApplier = new ReconciliationActionApplier({
+      enqueueIssue,
+      deliverPendingObligations: (projectId, linearIssueId, threadId, turnId) =>
+        this.deliverPendingObligations(projectId, linearIssueId, threadId, turnId),
+      completeStageRun: (stageRun, issue, thread, status, params) => this.completeStageRun(stageRun, issue, thread, status, params),
+      failStageRunDuringReconciliation: (stageRun, threadId, message, options) =>
+        this.failStageRunDuringReconciliation(stageRun, threadId, message, options),
+    });
   }
 
   async getActiveStageStatus(issueKey: string) {
@@ -404,8 +414,6 @@ export class ServiceStageFinalizer {
       return;
     }
 
-    const threadId = runLease.threadId ?? stageRun.threadId;
-    const turnId = runLease.turnId ?? stageRun.turnId;
     const decision = reconcileIssue(snapshot.input);
 
     if (decision.outcome === "hydrate_live_state") {
@@ -413,52 +421,13 @@ export class ServiceStageFinalizer {
       return;
     }
 
-    const clearAction = decision.actions.find((action) => action.type === "clear_active_run" || action.type === "release_issue_ownership");
-    const nextLifecycleStatus =
-      clearAction?.type === "clear_active_run" || clearAction?.type === "release_issue_ownership"
-        ? clearAction.nextLifecycleStatus
-        : undefined;
-
-    if (decision.outcome === "launch") {
-      this.enqueueIssue(runLease.projectId, runLease.linearIssueId);
-      return;
-    }
-
-    if (decision.outcome === "continue") {
-      if (!threadId) {
-        return;
-      }
-      await this.deliverPendingObligations(runLease.projectId, runLease.linearIssueId, threadId, turnId);
-      return;
-    }
-
-    if (decision.outcome === "complete" && snapshot.input.live?.codex?.status === "found") {
-      const issue = this.stores.issueWorkflows.getTrackedIssue(runLease.projectId, runLease.linearIssueId);
-      if (!issue) {
-        return;
-      }
-      const liveThread = snapshot.input.live.codex.thread;
-      if (!liveThread) {
-        return;
-      }
-      const latestTurn = liveThread.turns.at(-1);
-      this.completeStageRun(stageRun, issue, liveThread, "completed", {
-        threadId: liveThread.id,
-        ...(latestTurn?.id ? { turnId: latestTurn.id } : {}),
-        ...(nextLifecycleStatus ? { nextLifecycleStatus } : {}),
-      });
-      return;
-    }
-
-    if (decision.outcome === "fail" || decision.outcome === "release") {
-      const failedAction = decision.actions.find((action) => action.type === "mark_run_failed");
-      await this.failStageRunDuringReconciliation(
-        stageRun,
-        failedAction?.type === "mark_run_failed" && failedAction.threadId ? failedAction.threadId : threadId ?? `missing-thread-${stageRun.id}`,
-        decision.reasons[0] ?? "Thread was not found during startup reconciliation",
-        ...(failedAction?.type === "mark_run_failed" && failedAction.turnId ? [{ turnId: failedAction.turnId }] : []),
-      );
-    }
+    const issue = this.stores.issueWorkflows.getTrackedIssue(runLease.projectId, runLease.linearIssueId);
+    await this.actionApplier.apply({
+      snapshot,
+      decision,
+      stageRun,
+      ...(issue ? { issue } : {}),
+    });
   }
 
   private async reconcileLegacyStageRun(stageRun: StageRunRecord): Promise<void> {
