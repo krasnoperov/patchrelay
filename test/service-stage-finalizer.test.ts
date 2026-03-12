@@ -665,13 +665,13 @@ function createHarness(options?: {
 }
 
 test("reconciliation fails an active stage when the persisted thread is missing", async () => {
-  const { store, linear, finalizer, stageRun } = createHarness();
+  const { store, linear, finalizer, stageRun } = createHarness({ withLedger: true });
 
   await finalizer.reconcileActiveStageRuns();
 
   assert.equal(store.getStageRun(stageRun.id)?.status, "failed");
   assert.deepEqual(linear.stateTransitions, [{ issueId: "issue-1", stateName: "Human Needed" }]);
-  assert.match(linear.comments[0]?.body ?? "", /Thread was not found during startup reconciliation/);
+  assert.match(linear.comments[0]?.body ?? "", /thread was not found during reconciliation/);
   assert.deepEqual(store.lifecycleStatuses.at(-1), {
     projectId: "proj",
     issueId: "issue-1",
@@ -691,7 +691,7 @@ test("reconciliation leaves an active stage alone when the latest turn is still 
 });
 
 test("reconciliation only fails back to Linear when the issue is still in the service-owned active state", async () => {
-  const { store, linear, finalizer, stageRun } = createHarness({ issueStateName: "Review" });
+  const { store, linear, finalizer, stageRun } = createHarness({ withLedger: true, issueStateName: "Review" });
 
   await finalizer.reconcileActiveStageRuns();
 
@@ -757,4 +757,13 @@ test("ledger reconciliation uses the run lease thread snapshot instead of legacy
   assert.equal(store.getStageRun(stageRun.id)?.status, "completed");
   assert.equal(store.finishedStageRuns.at(-1)?.threadId, "ledger-thread");
   assert.equal(store.finishedStageRuns.at(-1)?.turnId, "turn-1");
+});
+
+test("startup reconciliation ignores legacy stage runs when no active run lease exists", async () => {
+  const { store, finalizer, stageRun } = createHarness();
+
+  await finalizer.reconcileActiveStageRuns();
+
+  assert.equal(store.getStageRun(stageRun.id)?.status, "running");
+  assert.equal(store.finishedStageRuns.length, 0);
 });

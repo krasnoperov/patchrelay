@@ -129,54 +129,8 @@ export class ServiceStageFinalizer {
 
   async reconcileActiveStageRuns(): Promise<void> {
     const activeRunLeases = this.stores.runLeases?.listActiveRunLeases().filter((runLease) => runLease.status === "running") ?? [];
-    if (activeRunLeases.length > 0) {
-      for (const runLease of activeRunLeases) {
-        await this.reconcileRunLease(runLease.id);
-      }
-      return;
-    }
-
-    const activeStageRuns = this.stores.issueWorkflows.listActiveStageRuns();
-    for (const stageRun of activeStageRuns) {
-      if (!stageRun.threadId) {
-        await this.failStageRunDuringReconciliation(
-          stageRun,
-          `missing-thread-${stageRun.id}`,
-          "Stage run had no persisted thread id during reconciliation",
-        );
-        continue;
-      }
-
-      const thread = await this.codex.readThread(stageRun.threadId, true).catch(() => undefined);
-      if (!thread) {
-        await this.failStageRunDuringReconciliation(stageRun, stageRun.threadId, "Thread was not found during startup reconciliation", {
-          ...(stageRun.turnId ? { turnId: stageRun.turnId } : {}),
-        });
-        continue;
-      }
-
-      const latestTurn = thread.turns.at(-1);
-      if (!latestTurn || latestTurn.status === "inProgress") {
-        await this.deliverPendingObligations(stageRun.projectId, stageRun.linearIssueId, stageRun.threadId, latestTurn?.id ?? stageRun.turnId);
-        continue;
-      }
-
-      const issue = this.stores.issueWorkflows.getTrackedIssue(stageRun.projectId, stageRun.linearIssueId);
-      if (!issue) {
-        continue;
-      }
-
-      if (latestTurn.status !== "completed") {
-        await this.failStageRunDuringReconciliation(stageRun, stageRun.threadId, "Thread completed reconciliation in a failed state", {
-          ...(latestTurn.id ? { turnId: latestTurn.id } : {}),
-        });
-        continue;
-      }
-
-      this.completeStageRun(stageRun, issue, thread, "completed", {
-        threadId: stageRun.threadId,
-        ...(latestTurn.id ? { turnId: latestTurn.id } : {}),
-      });
+    for (const runLease of activeRunLeases) {
+      await this.reconcileRunLease(runLease.id);
     }
   }
 
@@ -417,7 +371,6 @@ export class ServiceStageFinalizer {
     const decision = reconcileIssue(snapshot.input);
 
     if (decision.outcome === "hydrate_live_state") {
-      await this.reconcileLegacyStageRun(stageRun);
       return;
     }
 
@@ -427,48 +380,6 @@ export class ServiceStageFinalizer {
       decision,
       stageRun,
       ...(issue ? { issue } : {}),
-    });
-  }
-
-  private async reconcileLegacyStageRun(stageRun: StageRunRecord): Promise<void> {
-    if (!stageRun.threadId) {
-      await this.failStageRunDuringReconciliation(
-        stageRun,
-        `missing-thread-${stageRun.id}`,
-        "Stage run had no persisted thread id during reconciliation",
-      );
-      return;
-    }
-
-    const thread = await this.codex.readThread(stageRun.threadId, true).catch(() => undefined);
-    if (!thread) {
-      await this.failStageRunDuringReconciliation(stageRun, stageRun.threadId, "Thread was not found during startup reconciliation", {
-        ...(stageRun.turnId ? { turnId: stageRun.turnId } : {}),
-      });
-      return;
-    }
-
-    const latestTurn = thread.turns.at(-1);
-    if (!latestTurn || latestTurn.status === "inProgress") {
-      await this.deliverPendingObligations(stageRun.projectId, stageRun.linearIssueId, stageRun.threadId, latestTurn?.id ?? stageRun.turnId);
-      return;
-    }
-
-    const issue = this.stores.issueWorkflows.getTrackedIssue(stageRun.projectId, stageRun.linearIssueId);
-    if (!issue) {
-      return;
-    }
-
-    if (latestTurn.status !== "completed") {
-      await this.failStageRunDuringReconciliation(stageRun, stageRun.threadId, "Thread completed reconciliation in a failed state", {
-        ...(latestTurn.id ? { turnId: latestTurn.id } : {}),
-      });
-      return;
-    }
-
-    this.completeStageRun(stageRun, issue, thread, "completed", {
-      threadId: stageRun.threadId,
-      ...(latestTurn.id ? { turnId: latestTurn.id } : {}),
     });
   }
 }
