@@ -1698,6 +1698,50 @@ test("service restart reconciles a stage that completed while PatchRelay was dow
   }
 });
 
+test("service startup launches queued ledger intent even when the legacy tracked issue is missing", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-ledger-only-launch-"));
+  try {
+    const { db, codex, linear, service } = createService(baseDir);
+    const receipt = ensureEventReceipt(db, {
+      webhookId: "delivery-ledger-only",
+      projectId: "usertold",
+      linearIssueId: "issue_4",
+    });
+    db.issueControl.upsertIssueControl({
+      projectId: "usertold",
+      linearIssueId: "issue_4",
+      desiredStage: "development",
+      desiredReceiptId: receipt.id,
+      lifecycleStatus: "queued",
+    });
+
+    await service.start();
+    await flushQueues();
+
+    await waitFor(() => {
+      const startedIssue = db.issueWorkflows.getTrackedIssue("usertold", "issue_4");
+      assert.ok(startedIssue);
+      assert.ok(startedIssue.activeStageRunId);
+      assert.equal(codex.startedThreads.length, 1);
+    });
+
+    const issue = db.issueWorkflows.getTrackedIssue("usertold", "issue_4")!;
+    assert.equal(issue.issueKey, "USE-28");
+    const stageRun = db.issueWorkflows.getStageRun(issue.activeStageRunId!);
+    assert.equal(stageRun?.status, "running");
+    const issueControl = db.issueControl.getIssueControl("usertold", "issue_4");
+    assert.ok(issueControl?.activeRunLeaseId);
+    const runLease = db.runLeases.getRunLease(issueControl.activeRunLeaseId!);
+    assert.equal(runLease?.threadId, stageRun?.threadId);
+    assert.equal(runLease?.turnId, stageRun?.turnId);
+    assert.equal(linear.issues.get("issue_4")?.stateName, "Implementing");
+
+    service.stop();
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("service startup leaves in-progress reconciled stages running", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-in-progress-"));
   try {

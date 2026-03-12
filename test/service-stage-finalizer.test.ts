@@ -694,14 +694,10 @@ function createHarness(options?: {
     {
       issueWorkflows: store,
       stageEvents,
-      ...(options?.withLedger
-        ? {
-            issueControl: ledger,
-            runLeases: ledger,
-            obligations: ledger,
-            workspaceOwnership: ledger,
-          }
-        : {}),
+      issueControl: ledger,
+      runLeases: ledger,
+      obligations: ledger,
+      workspaceOwnership: ledger,
     },
     codex as never,
     {

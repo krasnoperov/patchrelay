@@ -3,36 +3,7 @@ import test from "node:test";
 import { ReconciliationActionApplier } from "../src/reconciliation-action-applier.ts";
 import type { ReconciliationDecision } from "../src/reconciliation-types.ts";
 import type { ReconciliationSnapshot } from "../src/reconciliation-snapshot-builder.ts";
-import type { CodexThreadSummary, StageRunRecord, TrackedIssueRecord } from "../src/types.ts";
-
-function createStageRun(overrides?: Partial<StageRunRecord>): StageRunRecord {
-  return {
-    id: 11,
-    pipelineRunId: 7,
-    projectId: "proj",
-    linearIssueId: "issue-1",
-    workspaceId: 4,
-    stage: "development",
-    status: "running",
-    triggerWebhookId: "delivery-1",
-    workflowFile: "workflows/development.md",
-    promptText: "Implement carefully.",
-    threadId: "thread-legacy",
-    turnId: "turn-legacy",
-    startedAt: "2026-03-12T00:00:00.000Z",
-    ...overrides,
-  };
-}
-
-function createIssue(overrides?: Partial<TrackedIssueRecord>): TrackedIssueRecord {
-  return {
-    projectId: "proj",
-    linearIssueId: "issue-1",
-    issueKey: "APP-1",
-    lifecycleStatus: "running",
-    ...overrides,
-  };
-}
+import type { CodexThreadSummary } from "../src/types.ts";
 
 function createThread(status: "inProgress" | "completed" | "failed"): CodexThreadSummary {
   return {
@@ -98,10 +69,10 @@ test("reconciliation action applier completes a stage using the live codex threa
   const applier = new ReconciliationActionApplier({
     enqueueIssue: () => assert.fail("should not enqueue"),
     deliverPendingObligations: async () => assert.fail("should not deliver obligations"),
-    completeStageRun: (_stageRun, _issue, _thread, _status, params) => {
+    completeRun: (_projectId, _linearIssueId, _thread, params) => {
       calls.completed = params;
     },
-    failStageRunDuringReconciliation: async () => assert.fail("should not fail"),
+    failRunDuringReconciliation: async () => assert.fail("should not fail"),
   });
 
   const decision: ReconciliationDecision = {
@@ -128,12 +99,7 @@ test("reconciliation action applier completes a stage using the live codex threa
     ],
   };
 
-  await applier.apply({
-    snapshot: createSnapshot(),
-    decision,
-    stageRun: createStageRun(),
-    issue: createIssue(),
-  });
+  await applier.apply({ snapshot: createSnapshot(), decision });
 
   assert.deepEqual(calls.completed, {
     threadId: "thread-live",
@@ -147,8 +113,8 @@ test("reconciliation action applier fails a released run when the decision still
   const applier = new ReconciliationActionApplier({
     enqueueIssue: () => assert.fail("should not enqueue"),
     deliverPendingObligations: async () => assert.fail("should not deliver obligations"),
-    completeStageRun: () => assert.fail("should not complete"),
-    failStageRunDuringReconciliation: async (_stageRun, threadId, message, options) => {
+    completeRun: () => assert.fail("should not complete"),
+    failRunDuringReconciliation: async (_projectId, _linearIssueId, threadId, message, options) => {
       calls.failed = { threadId, message, ...(options?.turnId ? { turnId: options.turnId } : {}) };
     },
   });
@@ -177,12 +143,7 @@ test("reconciliation action applier fails a released run when the decision still
     ],
   };
 
-  await applier.apply({
-    snapshot: createSnapshot(),
-    decision,
-    stageRun: createStageRun(),
-    issue: createIssue(),
-  });
+  await applier.apply({ snapshot: createSnapshot(), decision });
 
   assert.deepEqual(calls.failed, {
     threadId: "thread-live",
@@ -196,10 +157,10 @@ test("reconciliation action applier treats release as successful completion", as
   const applier = new ReconciliationActionApplier({
     enqueueIssue: () => assert.fail("should not enqueue"),
     deliverPendingObligations: async () => assert.fail("should not deliver obligations"),
-    completeStageRun: (_stageRun, _issue, _thread, _status, params) => {
+    completeRun: (_projectId, _linearIssueId, _thread, params) => {
       calls.completed = params;
     },
-    failStageRunDuringReconciliation: async () => assert.fail("should not fail"),
+    failRunDuringReconciliation: async () => assert.fail("should not fail"),
   });
 
   const decision: ReconciliationDecision = {
@@ -226,12 +187,7 @@ test("reconciliation action applier treats release as successful completion", as
     ],
   };
 
-  await applier.apply({
-    snapshot: createSnapshot(),
-    decision,
-    stageRun: createStageRun(),
-    issue: createIssue(),
-  });
+  await applier.apply({ snapshot: createSnapshot(), decision });
 
   assert.deepEqual(calls.completed, {
     threadId: "thread-live",

@@ -410,6 +410,61 @@ test("cli list and retry cover operator control flows", async () => {
   }
 });
 
+test("cli retry blocks when the ledger still owns an active run lease", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-retry-ledger-active-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, true);
+    db.runMigrations();
+    seedDatabase(db, config);
+    const data = new CliDataAccess(config, { db });
+
+    const issue = db.issueWorkflows.getTrackedIssue("usertold", "issue-2");
+    assert.ok(issue);
+    const control = db.issueControl.upsertIssueControl({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      lifecycleStatus: "running",
+    });
+    const workspace = db.workspaceOwnership.upsertWorkspaceOwnership({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      branchName: "use/USE-55-ledger-active",
+      worktreePath: path.join(config.projects[0].worktreeRoot, "USE-55-ledger-active"),
+      status: "active",
+    });
+    const runLease = db.runLeases.createRunLease({
+      issueControlId: control.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      workspaceOwnershipId: workspace.id,
+      stage: "review",
+      status: "running",
+    });
+    db.issueControl.upsertIssueControl({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      activeWorkspaceOwnershipId: workspace.id,
+      activeRunLeaseId: runLease.id,
+      lifecycleStatus: "running",
+    });
+    db.issueWorkflows.upsertTrackedIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      issueKey: issue.issueKey,
+      title: issue.title,
+      currentLinearState: issue.currentLinearState,
+      desiredStage: undefined,
+      lifecycleStatus: "running",
+      lastWebhookAt: issue.lastWebhookAt ?? "2026-03-09T09:00:00.000Z",
+    });
+
+    assert.throws(() => data.retry("USE-55"), /already has an active stage run/);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("cli falls back to ledger workspace and run context when legacy active pointers are sparse", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-ledger-fallback-"));
   try {

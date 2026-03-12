@@ -14,7 +14,7 @@ import { sanitizeDiagnosticText } from "./utils.ts";
 export class StageLifecyclePublisher {
   constructor(
     private readonly config: AppConfig,
-    private readonly stores: IssueWorkflowLifecycleStoreProvider & Partial<IssueControlStoreProvider>,
+    private readonly stores: IssueWorkflowLifecycleStoreProvider & IssueControlStoreProvider,
     private readonly linearProvider: LinearClientProvider,
     private readonly logger: Logger,
   ) {}
@@ -46,7 +46,7 @@ export class StageLifecyclePublisher {
       statusCommentId: issue.statusCommentId ?? null,
       lifecycleStatus: "running",
     });
-    this.stores.issueControl?.upsertIssueControl({
+    this.stores.issueControl.upsertIssueControl({
       projectId: stageRun.projectId,
       linearIssueId: stageRun.linearIssueId,
       ...(issue.statusCommentId ? { serviceOwnedCommentId: issue.statusCommentId } : {}),
@@ -79,7 +79,7 @@ export class StageLifecyclePublisher {
         }),
       });
       this.stores.issueWorkflows.setIssueStatusComment(projectId, issueId, result.id);
-      this.stores.issueControl?.upsertIssueControl({
+      this.stores.issueControl.upsertIssueControl({
         projectId,
         linearIssueId: issueId,
         serviceOwnedCommentId: result.id,
@@ -164,7 +164,7 @@ export class StageLifecyclePublisher {
           }
           this.stores.issueWorkflows.setIssueLifecycleStatus(stageRun.projectId, stageRun.linearIssueId, "paused");
           this.stores.issueWorkflows.setPipelineStatus(pipeline.id, "paused");
-          this.stores.issueControl?.upsertIssueControl({
+          this.stores.issueControl.upsertIssueControl({
             projectId: stageRun.projectId,
             linearIssueId: stageRun.linearIssueId,
             lifecycleStatus: "paused",
@@ -181,7 +181,7 @@ export class StageLifecyclePublisher {
             }),
           });
           this.stores.issueWorkflows.setIssueStatusComment(stageRun.projectId, stageRun.linearIssueId, result.id);
-          this.stores.issueControl?.upsertIssueControl({
+          this.stores.issueControl.upsertIssueControl({
             projectId: stageRun.projectId,
             linearIssueId: stageRun.linearIssueId,
             serviceOwnedCommentId: result.id,

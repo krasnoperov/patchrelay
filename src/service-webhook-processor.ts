@@ -1,6 +1,6 @@
 import type { Logger } from "pino";
 import type { CodexAppServerClient } from "./codex-app-server.ts";
-import type { EventReceiptStoreProvider, IssueControlStoreProvider, ObligationStoreProvider } from "./ledger-ports.ts";
+import type { EventReceiptStoreProvider, IssueControlStoreProvider, ObligationStoreProvider, RunLeaseStoreProvider } from "./ledger-ports.ts";
 import type { LinearInstallationStoreProvider } from "./installation-ports.ts";
 import type { StageEventLogStoreProvider, StageTurnInputStoreProvider } from "./stage-event-ports.ts";
 import type { IssueWorkflowWebhookStoreProvider } from "./workflow-ports.ts";
@@ -26,7 +26,10 @@ export class ServiceWebhookProcessor {
   constructor(
     private readonly config: AppConfig,
     private readonly stores: WebhookEventStoreProvider &
-      Partial<EventReceiptStoreProvider & IssueControlStoreProvider & ObligationStoreProvider> &
+      EventReceiptStoreProvider &
+      IssueControlStoreProvider &
+      ObligationStoreProvider &
+      RunLeaseStoreProvider &
       IssueWorkflowWebhookStoreProvider &
       LinearInstallationStoreProvider &
       StageTurnInputStoreProvider &
@@ -42,10 +45,6 @@ export class ServiceWebhookProcessor {
     this.agentSessionHandler = new AgentSessionWebhookHandler(stores, turnInputDispatcher, agentActivity);
     this.commentHandler = new CommentWebhookHandler(stores, turnInputDispatcher);
     this.installationHandler = new InstallationWebhookHandler(config, stores, logger);
-  }
-
-  private get ledgerStores(): Partial<EventReceiptStoreProvider> {
-    return this.stores as Partial<EventReceiptStoreProvider>;
   }
 
   async processWebhookEvent(webhookEventId: number): Promise<void> {
@@ -190,7 +189,7 @@ export class ServiceWebhookProcessor {
     if (!receipt) {
       return;
     }
-    this.ledgerStores.eventReceipts?.assignEventReceiptContext(receipt.id, {
+    this.stores.eventReceipts.assignEventReceiptContext(receipt.id, {
       ...(projectId ? { projectId } : {}),
       ...(linearIssueId ? { linearIssueId } : {}),
     });
@@ -201,11 +200,11 @@ export class ServiceWebhookProcessor {
     if (!receipt) {
       return;
     }
-    this.ledgerStores.eventReceipts?.markEventReceiptProcessed(receipt.id, status);
+    this.stores.eventReceipts.markEventReceiptProcessed(receipt.id, status);
   }
 
   private lookupEventReceipt(webhookId: string) {
-    return this.ledgerStores.eventReceipts?.getEventReceiptBySourceExternalId("linear-webhook", webhookId);
+    return this.stores.eventReceipts.getEventReceiptBySourceExternalId("linear-webhook", webhookId);
   }
 
   private ensureEventReceipt(
@@ -219,7 +218,7 @@ export class ServiceWebhookProcessor {
       return existing;
     }
 
-    const inserted = this.ledgerStores.eventReceipts?.insertEventReceipt({
+    const inserted = this.stores.eventReceipts.insertEventReceipt({
       source: "linear-webhook",
       externalId: event.webhookId,
       eventType: event.eventType,
@@ -230,6 +229,6 @@ export class ServiceWebhookProcessor {
       headersJson: event.headersJson,
       payloadJson: event.payloadJson,
     });
-    return inserted ? this.ledgerStores.eventReceipts?.getEventReceipt(inserted.id) : undefined;
+    return this.stores.eventReceipts.getEventReceipt(inserted.id);
   }
 }

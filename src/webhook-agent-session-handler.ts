@@ -17,7 +17,9 @@ export class AgentSessionWebhookHandler {
   constructor(
     private readonly stores: IssueWorkflowWebhookStoreProvider &
       StageTurnInputStoreProvider &
-      Partial<IssueControlStoreProvider & ObligationStoreProvider & RunLeaseStoreProvider>,
+      IssueControlStoreProvider &
+      ObligationStoreProvider &
+      RunLeaseStoreProvider,
     private readonly turnInputDispatcher: StageTurnInputDispatcher,
     private readonly agentActivity: StageAgentActivityPublisher,
   ) {}
@@ -36,11 +38,8 @@ export class AgentSessionWebhookHandler {
 
     const promptBody = trimPrompt(normalized.agentSession.promptBody);
     const promptContext = trimPrompt(normalized.agentSession.promptContext);
-    const issueControl = normalized.issue ? this.stores.issueControl?.getIssueControl(project.id, normalized.issue.id) : undefined;
-    const activeRunLease =
-      issueControl?.activeRunLeaseId !== undefined && this.stores.runLeases
-        ? this.stores.runLeases.getRunLease(issueControl.activeRunLeaseId)
-        : undefined;
+    const issueControl = normalized.issue ? this.stores.issueControl.getIssueControl(project.id, normalized.issue.id) : undefined;
+    const activeRunLease = issueControl?.activeRunLeaseId !== undefined ? this.stores.runLeases.getRunLease(issueControl.activeRunLeaseId) : undefined;
     const activeStageRun = issue?.activeStageRunId ? this.stores.issueWorkflows.getStageRun(issue.activeStageRunId) : undefined;
     const activeStage = activeRunLease?.stage ?? activeStageRun?.stage;
     const runnableWorkflow = normalized.issue?.stateName ? resolveWorkflowStage(project, normalized.issue.stateName) : undefined;
@@ -103,7 +102,7 @@ export class AgentSessionWebhookHandler {
       const dedupeKey = buildPromptDedupeKey(normalized.agentSession.id, promptBody);
       if (
         issueControl?.activeRunLeaseId !== undefined &&
-        this.stores.obligations?.getObligationByDedupeKey({
+        this.stores.obligations.getObligationByDedupeKey({
           runLeaseId: issueControl.activeRunLeaseId,
           kind: "deliver_turn_input",
           dedupeKey,
@@ -132,7 +131,7 @@ export class AgentSessionWebhookHandler {
           source,
           body: promptInput,
         });
-        if (obligationId !== undefined && this.stores.obligations) {
+        if (obligationId !== undefined) {
           this.stores.obligations.updateObligationPayloadJson(
             obligationId,
             JSON.stringify({
@@ -204,8 +203,8 @@ export class AgentSessionWebhookHandler {
     promptBody: string,
     dedupeKey: string,
   ): number | undefined {
-    const activeRunLeaseId = this.stores.issueControl?.getIssueControl(projectId, linearIssueId)?.activeRunLeaseId;
-    if (!this.stores.obligations || activeRunLeaseId === undefined) {
+    const activeRunLeaseId = this.stores.issueControl.getIssueControl(projectId, linearIssueId)?.activeRunLeaseId;
+    if (activeRunLeaseId === undefined) {
       return undefined;
     }
 

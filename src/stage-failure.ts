@@ -14,7 +14,7 @@ function normalizeStateName(value: string | undefined): string | undefined {
 }
 
 export async function syncFailedStageToLinear(params: {
-  stores: IssueWorkflowLifecycleStoreProvider & Partial<IssueControlStoreProvider>;
+  stores: IssueWorkflowLifecycleStoreProvider & IssueControlStoreProvider;
   linearProvider: LinearClientProvider;
   project: ProjectConfig;
   issue: TrackedIssueRecord;
@@ -68,7 +68,7 @@ export async function syncFailedStageToLinear(params: {
       statusCommentId: params.issue.statusCommentId ?? null,
       lifecycleStatus: "failed",
     });
-    params.stores.issueControl?.upsertIssueControl({
+    params.stores.issueControl.upsertIssueControl({
       projectId: params.stageRun.projectId,
       linearIssueId: params.stageRun.linearIssueId,
       lifecycleStatus: "failed",
@@ -92,7 +92,7 @@ export async function syncFailedStageToLinear(params: {
     .catch(() => undefined);
   if (result) {
     params.stores.issueWorkflows.setIssueStatusComment(params.stageRun.projectId, params.stageRun.linearIssueId, result.id);
-    params.stores.issueControl?.upsertIssueControl({
+    params.stores.issueControl.upsertIssueControl({
       projectId: params.stageRun.projectId,
       linearIssueId: params.stageRun.linearIssueId,
       serviceOwnedCommentId: result.id,

@@ -42,7 +42,10 @@ export class ServiceStageFinalizer {
       IssueWorkflowQueryStoreProvider &
       StageEventLogStoreProvider &
       StageTurnInputStoreProvider &
-      Partial<IssueControlStoreProvider & ObligationStoreProvider & RunLeaseStoreProvider & WorkspaceOwnershipStoreProvider>,
+      IssueControlStoreProvider &
+      ObligationStoreProvider &
+      RunLeaseStoreProvider &
+      WorkspaceOwnershipStoreProvider,
     private readonly codex: CodexAppServerClient,
     private readonly linearProvider: LinearClientProvider,
     private readonly enqueueIssue: (projectId: string, issueId: string) => void,
@@ -55,9 +58,10 @@ export class ServiceStageFinalizer {
       enqueueIssue,
       deliverPendingObligations: (projectId, linearIssueId, threadId, turnId) =>
         this.deliverPendingObligations(projectId, linearIssueId, threadId, turnId),
-      completeStageRun: (stageRun, issue, thread, status, params) => this.completeStageRun(stageRun, issue, thread, status, params),
-      failStageRunDuringReconciliation: (stageRun, threadId, message, options) =>
-        this.failStageRunDuringReconciliation(stageRun, threadId, message, options),
+      completeRun: (projectId, linearIssueId, thread, params) =>
+        this.completeReconciledRun(projectId, linearIssueId, thread, params),
+      failRunDuringReconciliation: (projectId, linearIssueId, threadId, message, options) =>
+        this.failRunLeaseDuringReconciliation(projectId, linearIssueId, threadId, message, options),
     });
   }
 
@@ -130,7 +134,7 @@ export class ServiceStageFinalizer {
   async reconcileActiveStageRuns(): Promise<void> {
     const runLeaseIds = [
       ...this.adoptLegacyRunningStages(),
-      ...(this.stores.runLeases?.listActiveRunLeases().filter((runLease) => runLease.status === "running").map((runLease) => runLease.id) ?? []),
+      ...this.stores.runLeases.listActiveRunLeases().filter((runLease) => runLease.status === "running").map((runLease) => runLease.id),
     ];
     for (const runLeaseId of new Set(runLeaseIds)) {
       await this.reconcileRunLease(runLeaseId);
@@ -153,6 +157,11 @@ export class ServiceStageFinalizer {
     };
     const report = buildStageReport(finalizedStageRun, issue, thread, countEventMethods(this.stores.stageEvents.listThreadEvents(stageRun.id)));
 
+    this.finishLedgerRun(stageRun.projectId, stageRun.linearIssueId, "completed", {
+      threadId: params.threadId,
+      ...(params.turnId ? { turnId: params.turnId } : {}),
+      nextLifecycleStatus: params.nextLifecycleStatus ?? (issue.desiredStage ? "queued" : "completed"),
+    });
     this.stores.issueWorkflows.finishStageRun({
       stageRunId: stageRun.id,
       status,
@@ -160,11 +169,6 @@ export class ServiceStageFinalizer {
       ...(params.turnId ? { turnId: params.turnId } : {}),
       summaryJson: JSON.stringify(extractStageSummary(report)),
       reportJson: JSON.stringify(report),
-    });
-    this.finishLedgerRun(stageRun.projectId, stageRun.linearIssueId, "completed", {
-      threadId: params.threadId,
-      ...(params.turnId ? { turnId: params.turnId } : {}),
-      nextLifecycleStatus: params.nextLifecycleStatus ?? (issue.desiredStage ? "queued" : "completed"),
     });
 
     void this.advanceAfterStageCompletion(stageRun);
@@ -178,6 +182,12 @@ export class ServiceStageFinalizer {
       turnId?: string;
     },
   ): void {
+    this.finishLedgerRun(stageRun.projectId, stageRun.linearIssueId, "failed", {
+      threadId,
+      ...(options?.turnId ? { turnId: options.turnId } : {}),
+      failureReason: message,
+      nextLifecycleStatus: "failed",
+    });
     this.stores.issueWorkflows.finishStageRun({
       stageRunId: stageRun.id,
       status: "failed",
@@ -190,12 +200,6 @@ export class ServiceStageFinalizer {
           ...(options?.turnId ? { turnId: options.turnId } : {}),
         }),
       ),
-    });
-    this.finishLedgerRun(stageRun.projectId, stageRun.linearIssueId, "failed", {
-      threadId,
-      ...(options?.turnId ? { turnId: options.turnId } : {}),
-      failureReason: message,
-      nextLifecycleStatus: "failed",
     });
   }
 
@@ -250,12 +254,12 @@ export class ServiceStageFinalizer {
       nextLifecycleStatus: TrackedIssueRecord["lifecycleStatus"];
     },
   ): void {
-    const issueControl = this.stores.issueControl?.getIssueControl(projectId, linearIssueId);
+    const issueControl = this.stores.issueControl.getIssueControl(projectId, linearIssueId);
     if (!issueControl?.activeRunLeaseId) {
       return;
     }
 
-    this.stores.runLeases?.finishRunLease({
+    this.stores.runLeases.finishRunLease({
       runLeaseId: issueControl.activeRunLeaseId,
       status,
       ...(params.threadId ? { threadId: params.threadId } : {}),
@@ -264,9 +268,9 @@ export class ServiceStageFinalizer {
     });
 
     if (issueControl.activeWorkspaceOwnershipId !== undefined) {
-      const workspace = this.stores.workspaceOwnership?.getWorkspaceOwnership(issueControl.activeWorkspaceOwnershipId);
+      const workspace = this.stores.workspaceOwnership.getWorkspaceOwnership(issueControl.activeWorkspaceOwnershipId);
       if (workspace) {
-        this.stores.workspaceOwnership?.upsertWorkspaceOwnership({
+        this.stores.workspaceOwnership.upsertWorkspaceOwnership({
           projectId,
           linearIssueId,
           branchName: workspace.branchName,
@@ -277,7 +281,7 @@ export class ServiceStageFinalizer {
       }
     }
 
-    this.stores.issueControl?.upsertIssueControl({
+    this.stores.issueControl.upsertIssueControl({
       projectId,
       linearIssueId,
       activeRunLeaseId: null,
@@ -300,8 +304,8 @@ export class ServiceStageFinalizer {
       return;
     }
 
-    const issueControl = this.stores.issueControl?.getIssueControl(projectId, linearIssueId);
-    if (!issueControl?.activeRunLeaseId || !this.stores.obligations) {
+    const issueControl = this.stores.issueControl.getIssueControl(projectId, linearIssueId);
+    if (!issueControl?.activeRunLeaseId) {
       return;
     }
 
@@ -345,10 +349,6 @@ export class ServiceStageFinalizer {
   }
 
   private adoptLegacyRunningStages(): number[] {
-    if (!this.stores.issueControl || !this.stores.runLeases || !this.stores.workspaceOwnership) {
-      return [];
-    }
-
     const adoptedRunLeaseIds: number[] = [];
     for (const stageRun of this.stores.issueWorkflows.listActiveStageRuns()) {
       const issue = this.stores.issueWorkflows.getTrackedIssue(stageRun.projectId, stageRun.linearIssueId);
@@ -373,14 +373,14 @@ export class ServiceStageFinalizer {
   }
 
   private adoptLegacyStageRun(issue: TrackedIssueRecord, stageRun: StageRunRecord, workspace: WorkspaceRecord): number {
-    const workspaceOwnership = this.stores.workspaceOwnership!.upsertWorkspaceOwnership({
+    const workspaceOwnership = this.stores.workspaceOwnership.upsertWorkspaceOwnership({
       projectId: stageRun.projectId,
       linearIssueId: stageRun.linearIssueId,
       branchName: workspace.branchName,
       worktreePath: workspace.worktreePath,
       status: "active",
     });
-    const issueControl = this.stores.issueControl!.upsertIssueControl({
+    const issueControl = this.stores.issueControl.upsertIssueControl({
       projectId: stageRun.projectId,
       linearIssueId: stageRun.linearIssueId,
       desiredStage: null,
@@ -390,7 +390,7 @@ export class ServiceStageFinalizer {
       ...(issue.activeAgentSessionId ? { activeAgentSessionId: issue.activeAgentSessionId } : {}),
       lifecycleStatus: "running",
     });
-    const runLease = this.stores.runLeases!.createRunLease({
+    const runLease = this.stores.runLeases.createRunLease({
       issueControlId: issueControl.id,
       projectId: stageRun.projectId,
       linearIssueId: stageRun.linearIssueId,
@@ -400,7 +400,7 @@ export class ServiceStageFinalizer {
     });
 
     if (stageRun.threadId || stageRun.turnId || stageRun.parentThreadId) {
-      this.stores.runLeases!.updateRunLeaseThread({
+      this.stores.runLeases.updateRunLeaseThread({
         runLeaseId: runLease.id,
         ...(stageRun.threadId ? { threadId: stageRun.threadId } : {}),
         ...(stageRun.turnId ? { turnId: stageRun.turnId } : {}),
@@ -408,7 +408,7 @@ export class ServiceStageFinalizer {
       });
     }
 
-    this.stores.workspaceOwnership!.upsertWorkspaceOwnership({
+    this.stores.workspaceOwnership.upsertWorkspaceOwnership({
       projectId: stageRun.projectId,
       linearIssueId: stageRun.linearIssueId,
       branchName: workspace.branchName,
@@ -416,7 +416,7 @@ export class ServiceStageFinalizer {
       status: "active",
       currentRunLeaseId: runLease.id,
     });
-    this.stores.issueControl!.upsertIssueControl({
+    this.stores.issueControl.upsertIssueControl({
       projectId: stageRun.projectId,
       linearIssueId: stageRun.linearIssueId,
       desiredStage: null,
@@ -431,17 +431,13 @@ export class ServiceStageFinalizer {
   }
 
   private async reconcileRunLease(runLeaseId: number): Promise<void> {
-    if (!this.stores.runLeases || !this.stores.issueControl) {
-      return;
-    }
-
     const snapshot = await buildReconciliationSnapshot({
       config: this.config,
       stores: {
         issueControl: this.stores.issueControl,
         runLeases: this.stores.runLeases,
-        ...(this.stores.workspaceOwnership ? { workspaceOwnership: this.stores.workspaceOwnership } : {}),
-        ...(this.stores.obligations ? { obligations: this.stores.obligations } : {}),
+        workspaceOwnership: this.stores.workspaceOwnership,
+        obligations: this.stores.obligations,
       },
       codex: this.codex,
       linearProvider: this.linearProvider,
@@ -450,29 +446,60 @@ export class ServiceStageFinalizer {
     if (!snapshot) {
       return;
     }
-
-    const runLease = snapshot.runLease;
-
-    const stageRun =
-      (runLease.threadId ? this.stores.issueWorkflows.getStageRunByThreadId(runLease.threadId) : undefined) ??
-      this.stores.issueWorkflows.getLatestStageRunForIssue(runLease.projectId, runLease.linearIssueId);
-    if (!stageRun) {
-      return;
-    }
-
     const decision = reconcileIssue(snapshot.input);
 
     if (decision.outcome === "hydrate_live_state") {
       return;
     }
 
-    const issue = this.stores.issueWorkflows.getTrackedIssue(runLease.projectId, runLease.linearIssueId);
     await this.actionApplier.apply({
       snapshot,
       decision,
-      stageRun,
-      ...(issue ? { issue } : {}),
     });
+  }
+
+  private completeReconciledRun(
+    projectId: string,
+    linearIssueId: string,
+    thread: CodexThreadSummary,
+    params: { threadId: string; turnId?: string; nextLifecycleStatus?: TrackedIssueRecord["lifecycleStatus"] },
+  ): void {
+    const stageRun = this.findLegacyStageRunForIssue(projectId, linearIssueId, params.threadId);
+    const issue = this.stores.issueWorkflows.getTrackedIssue(projectId, linearIssueId);
+    if (!stageRun || !issue) {
+      this.finishLedgerRun(projectId, linearIssueId, "completed", {
+        threadId: params.threadId,
+        ...(params.turnId ? { turnId: params.turnId } : {}),
+        nextLifecycleStatus: params.nextLifecycleStatus ?? "completed",
+      });
+      return;
+    }
+    this.completeStageRun(stageRun, issue, thread, "completed", params);
+  }
+
+  private async failRunLeaseDuringReconciliation(
+    projectId: string,
+    linearIssueId: string,
+    threadId: string,
+    message: string,
+    options?: { turnId?: string },
+  ): Promise<void> {
+    const stageRun = this.findLegacyStageRunForIssue(projectId, linearIssueId, threadId);
+    if (!stageRun) {
+      this.finishLedgerRun(projectId, linearIssueId, "failed", {
+        threadId,
+        ...(options?.turnId ? { turnId: options.turnId } : {}),
+        failureReason: message,
+        nextLifecycleStatus: "failed",
+      });
+      return;
+    }
+    await this.failStageRunDuringReconciliation(stageRun, threadId, message, options);
+  }
+
+  private findLegacyStageRunForIssue(projectId: string, linearIssueId: string, threadId?: string): StageRunRecord | undefined {
+    return (threadId ? this.stores.issueWorkflows.getStageRunByThreadId(threadId) : undefined) ??
+      this.stores.issueWorkflows.getLatestStageRunForIssue(projectId, linearIssueId);
   }
 }
 

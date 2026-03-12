@@ -22,9 +22,7 @@ export interface ReconciliationSnapshot {
   input: ReconciliationInput;
 }
 
-type SnapshotStores = IssueControlStoreProvider &
-  RunLeaseStoreProvider &
-  Partial<WorkspaceOwnershipStoreProvider & ObligationStoreProvider>;
+type SnapshotStores = IssueControlStoreProvider & RunLeaseStoreProvider & WorkspaceOwnershipStoreProvider & ObligationStoreProvider;
 
 export async function buildReconciliationSnapshot(params: {
   config: Pick<AppConfig, "projects">;
@@ -43,7 +41,7 @@ export async function buildReconciliationSnapshot(params: {
     return undefined;
   }
 
-  const workspaceOwnership = params.stores.workspaceOwnership?.getWorkspaceOwnership(runLease.workspaceOwnershipId);
+  const workspaceOwnership = params.stores.workspaceOwnership.getWorkspaceOwnership(runLease.workspaceOwnershipId);
   const project = params.config.projects.find((candidate) => candidate.id === runLease.projectId);
   const workflowConfig = project?.workflows.find((workflow) => workflow.id === runLease.stage);
   const liveLinear =
@@ -76,19 +74,18 @@ export async function buildReconciliationSnapshot(params: {
           .catch((error) => mapCodexReadFailure(error))
       : ({ status: "unknown" as const });
 
-  const obligations: ReconciliationObligation[] =
-    params.stores.obligations?.listPendingObligations({ runLeaseId: runLease.id }).map((obligation) => {
-      const payload = safeJsonParse<unknown>(obligation.payloadJson);
-      return {
-        id: obligation.id,
-        kind: obligation.kind,
-        status: obligation.status,
-        ...(obligation.runLeaseId !== undefined ? { runId: obligation.runLeaseId } : {}),
-        ...(obligation.threadId ? { threadId: obligation.threadId } : {}),
-        ...(obligation.turnId ? { turnId: obligation.turnId } : {}),
-        ...(payload !== undefined ? { payload } : {}),
-      };
-    }) ?? [];
+  const obligations: ReconciliationObligation[] = params.stores.obligations.listPendingObligations({ runLeaseId: runLease.id }).map((obligation) => {
+    const payload = safeJsonParse<unknown>(obligation.payloadJson);
+    return {
+      id: obligation.id,
+      kind: obligation.kind,
+      status: obligation.status,
+      ...(obligation.runLeaseId !== undefined ? { runId: obligation.runLeaseId } : {}),
+      ...(obligation.threadId ? { threadId: obligation.threadId } : {}),
+      ...(obligation.turnId ? { turnId: obligation.turnId } : {}),
+      ...(payload !== undefined ? { payload } : {}),
+    };
+  });
 
   return {
     issueControl,

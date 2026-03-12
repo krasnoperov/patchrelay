@@ -14,7 +14,7 @@ export interface AcceptedWebhook {
 
 export async function acceptIncomingWebhook(params: {
   config: AppConfig;
-  stores: WebhookEventStoreProvider & Partial<EventReceiptStoreProvider>;
+  stores: WebhookEventStoreProvider & EventReceiptStoreProvider;
   logger: Logger;
   webhookId: string;
   headers: Record<string, string | string[] | undefined>;
@@ -130,7 +130,7 @@ export async function acceptIncomingWebhook(params: {
 }
 
 function recordEventReceipt(
-  stores: Partial<EventReceiptStoreProvider>,
+  stores: EventReceiptStoreProvider,
   params: {
     webhookId: string;
     receivedAt: string;
@@ -139,10 +139,6 @@ function recordEventReceipt(
     payloadJson: string;
   },
 ): void {
-  if (!stores.eventReceipts) {
-    return;
-  }
-
   stores.eventReceipts.insertEventReceipt({
     source: "linear-webhook",
     externalId: params.webhookId,

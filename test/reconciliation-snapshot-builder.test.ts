@@ -218,6 +218,17 @@ test("buildReconciliationSnapshot preserves transient Codex lookup failures as r
     threadId: "thread-1",
     startedAt: "2026-03-12T00:00:00.000Z",
   };
+  const workspace: WorkspaceOwnershipRecord = {
+    id: 3,
+    projectId: "proj",
+    linearIssueId: "issue-1",
+    branchName: "app/ISSUE-1",
+    worktreePath: "/tmp/worktree",
+    status: "active",
+    currentRunLeaseId: 2,
+    createdAt: "2026-03-12T00:00:00.000Z",
+    updatedAt: "2026-03-12T00:00:00.000Z",
+  };
 
   const snapshot = await buildReconciliationSnapshot({
     config: createConfig(),
@@ -233,6 +244,19 @@ test("buildReconciliationSnapshot preserves transient Codex lookup failures as r
         createRunLease: () => runLease,
         updateRunLeaseThread: () => undefined,
         finishRunLease: () => undefined,
+      },
+      workspaceOwnership: {
+        getWorkspaceOwnership: () => workspace,
+        getWorkspaceOwnershipForIssue: () => workspace,
+        upsertWorkspaceOwnership: () => workspace,
+      },
+      obligations: {
+        enqueueObligation: () => assert.fail("should not enqueue"),
+        getObligationByDedupeKey: () => undefined,
+        listPendingObligations: () => [],
+        updateObligationPayloadJson: () => undefined,
+        updateObligationRouting: () => undefined,
+        markObligationStatus: () => undefined,
       },
     },
     codex: new FakeCodexClient(new Map(), { throwOnRead: true }) as never,

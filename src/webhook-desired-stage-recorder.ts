@@ -22,7 +22,7 @@ export class WebhookDesiredStageRecorder {
   constructor(
     private readonly stores: IssueWorkflowWebhookStoreProvider &
       LinearInstallationStoreProvider &
-      Partial<IssueControlStoreProvider>,
+      IssueControlStoreProvider,
   ) {}
 
   record(project: ProjectConfig, normalized: NormalizedEvent, options?: { eventReceiptId?: number }): RecordedWebhookIssueState {
@@ -153,7 +153,7 @@ export class WebhookDesiredStageRecorder {
     activeAgentSessionId: string | undefined,
     eventReceiptId: number | undefined,
   ): void {
-    if (!this.stores.issueControl || !desiredStage) {
+    if (!desiredStage) {
       return;
     }
 
@@ -177,7 +177,7 @@ export class WebhookDesiredStageRecorder {
     activeAgentSessionId: string | undefined,
     eventReceiptId: number | undefined,
   ): void {
-    if (!this.stores.issueControl || !issue) {
+    if (!issue) {
       return;
     }
 

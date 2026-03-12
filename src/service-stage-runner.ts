@@ -33,13 +33,11 @@ export class ServiceStageRunner {
       IssueWorkflowLifecycleStoreProvider &
       IssueWorkflowWebhookStoreProvider &
       StageTurnInputStoreProvider &
-      Partial<
-        EventReceiptStoreProvider &
-          IssueControlStoreProvider &
-          ObligationStoreProvider &
-          WorkspaceOwnershipStoreProvider &
-          RunLeaseStoreProvider
-      >,
+      EventReceiptStoreProvider &
+      IssueControlStoreProvider &
+      ObligationStoreProvider &
+      WorkspaceOwnershipStoreProvider &
+      RunLeaseStoreProvider,
     private readonly codex: CodexAppServerClient,
     private readonly linearProvider: LinearClientProvider,
     private readonly logger: Logger,
@@ -55,13 +53,12 @@ export class ServiceStageRunner {
       return;
     }
 
-    const issueControl = this.stores.issueControl?.getIssueControl(item.projectId, item.issueId);
+    const issueControl = this.stores.issueControl.getIssueControl(item.projectId, item.issueId);
     if (!issueControl?.desiredStage || issueControl.activeRunLeaseId !== undefined) {
       return;
     }
 
-    const receipt =
-      issueControl.desiredReceiptId !== undefined ? this.stores.eventReceipts?.getEventReceipt(issueControl.desiredReceiptId) : undefined;
+    const receipt = issueControl.desiredReceiptId !== undefined ? this.stores.eventReceipts.getEventReceipt(issueControl.desiredReceiptId) : undefined;
     if (!receipt?.externalId) {
       return;
     }
@@ -118,7 +115,7 @@ export class ServiceStageRunner {
     }
 
     if (runLeaseId !== undefined) {
-      this.stores.runLeases?.updateRunLeaseThread({
+      this.stores.runLeases.updateRunLeaseThread({
         runLeaseId,
         threadId: threadLaunch.threadId,
         ...(threadLaunch.parentThreadId ? { parentThreadId: threadLaunch.parentThreadId } : {}),
@@ -136,8 +133,8 @@ export class ServiceStageRunner {
     const pendingLaunchInput = this.stores.issueWorkflows.consumeIssuePendingLaunchInput(item.projectId, item.issueId);
     if (pendingLaunchInput) {
       let obligationId: number | undefined;
-      const issueControl = this.stores.issueControl?.getIssueControl(item.projectId, item.issueId);
-      if (issueControl?.activeRunLeaseId !== undefined && this.stores.obligations) {
+      const issueControl = this.stores.issueControl.getIssueControl(item.projectId, item.issueId);
+      if (issueControl?.activeRunLeaseId !== undefined) {
         obligationId = this.stores.obligations.enqueueObligation({
           projectId: item.projectId,
           linearIssueId: item.issueId,
@@ -160,7 +157,7 @@ export class ServiceStageRunner {
         source: "linear-agent-launch",
         body: pendingLaunchInput,
       });
-      if (obligationId !== undefined && this.stores.obligations) {
+      if (obligationId !== undefined) {
         this.stores.obligations.updateObligationPayloadJson(
           obligationId,
           JSON.stringify({
@@ -313,10 +310,6 @@ export class ServiceStageRunner {
   private beginRunLease(
     claim: { issue: TrackedIssueRecord; workspace: { branchName: string; worktreePath: string }; stageRun: StageRunRecord },
   ): number | undefined {
-    if (!this.stores.issueControl || !this.stores.workspaceOwnership || !this.stores.runLeases) {
-      return undefined;
-    }
-
     const existingIssueControl = this.stores.issueControl.getIssueControl(claim.issue.projectId, claim.issue.linearIssueId);
     const receiptId = existingIssueControl?.desiredReceiptId;
     const issueControl = this.stores.issueControl.upsertIssueControl({
@@ -372,12 +365,12 @@ export class ServiceStageRunner {
     status: "failed",
     params: { threadId?: string; turnId?: string; failureReason?: string },
   ): void {
-    const issueControl = this.stores.issueControl?.getIssueControl(projectId, linearIssueId);
+    const issueControl = this.stores.issueControl.getIssueControl(projectId, linearIssueId);
     if (!issueControl?.activeRunLeaseId) {
       return;
     }
 
-    this.stores.runLeases?.finishRunLease({
+    this.stores.runLeases.finishRunLease({
       runLeaseId: issueControl.activeRunLeaseId,
       status,
       ...(params.threadId ? { threadId: params.threadId } : {}),
@@ -385,9 +378,9 @@ export class ServiceStageRunner {
       ...(params.failureReason ? { failureReason: params.failureReason } : {}),
     });
     if (issueControl.activeWorkspaceOwnershipId !== undefined) {
-      const workspace = this.stores.workspaceOwnership?.getWorkspaceOwnership(issueControl.activeWorkspaceOwnershipId);
+      const workspace = this.stores.workspaceOwnership.getWorkspaceOwnership(issueControl.activeWorkspaceOwnershipId);
       if (workspace) {
-        this.stores.workspaceOwnership?.upsertWorkspaceOwnership({
+        this.stores.workspaceOwnership.upsertWorkspaceOwnership({
           projectId,
           linearIssueId,
           branchName: workspace.branchName,
@@ -397,7 +390,7 @@ export class ServiceStageRunner {
         });
       }
     }
-    this.stores.issueControl?.upsertIssueControl({
+    this.stores.issueControl.upsertIssueControl({
       projectId,
       linearIssueId,
       activeRunLeaseId: null,

@@ -60,8 +60,12 @@ class FakeLinearClient implements LinearClient {
 
 class FakeCodexClient {
   readonly steeredTurns: Array<{ threadId: string; turnId: string; input: string }> = [];
+  steerError?: Error;
 
   async steerTurn(params: { threadId: string; turnId: string; input: string }): Promise<void> {
+    if (this.steerError) {
+      throw this.steerError;
+    }
     this.steeredTurns.push(params);
   }
 }
@@ -813,6 +817,122 @@ test("webhook processor keeps mention-only sessions conversational instead of en
           String(activity.content.body).includes("Delegate the issue to PatchRelay"),
       ),
     );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("webhook processor reports queued follow-up instructions when active delivery fails", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-processor-agent-prompt-queued-"));
+  try {
+    const { db, linear, codex, processor } = createHarness(baseDir);
+    installPatchRelayApp(db);
+    db.issueWorkflows.recordDesiredStage({
+      projectId: "usertold",
+      linearIssueId: "issue_1",
+      issueKey: "USE-25",
+      title: "Build app server orchestration",
+      issueUrl: "https://linear.app/example/issue/USE-25",
+      currentLinearState: "Implementing",
+      desiredStage: "development",
+      desiredWebhookId: "delivery-start",
+      lastWebhookAt: new Date().toISOString(),
+    });
+    const claim = db.issueWorkflows.claimStageRun({
+      projectId: "usertold",
+      linearIssueId: "issue_1",
+      stage: "development",
+      triggerWebhookId: "delivery-start",
+      branchName: "use/USE-25-build-app-server-orchestration",
+      worktreePath: path.join(baseDir, "worktrees", "USE-25"),
+      workflowFile: path.join(baseDir, "DEVELOPMENT_WORKFLOW.md"),
+      promptText: "Implement it",
+    });
+    assert.ok(claim);
+    db.issueWorkflows.updateStageRunThread({
+      stageRunId: claim.stageRun.id,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+    const issueControl = db.issueControl.upsertIssueControl({
+      projectId: "usertold",
+      linearIssueId: "issue_1",
+      desiredStage: null,
+      lifecycleStatus: "running",
+    });
+    const workspace = db.workspaceOwnership.upsertWorkspaceOwnership({
+      projectId: "usertold",
+      linearIssueId: "issue_1",
+      branchName: claim.workspace.branchName,
+      worktreePath: claim.workspace.worktreePath,
+      status: "active",
+    });
+    const runLease = db.runLeases.createRunLease({
+      issueControlId: issueControl.id,
+      projectId: "usertold",
+      linearIssueId: "issue_1",
+      workspaceOwnershipId: workspace.id,
+      stage: "development",
+      status: "running",
+    });
+    db.runLeases.updateRunLeaseThread({
+      runLeaseId: runLease.id,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+    db.issueControl.upsertIssueControl({
+      projectId: "usertold",
+      linearIssueId: "issue_1",
+      activeWorkspaceOwnershipId: workspace.id,
+      activeRunLeaseId: runLease.id,
+      lifecycleStatus: "running",
+    });
+    codex.steerError = new Error("codex temporarily unavailable");
+
+    const event = db.webhookEvents.insertWebhookEvent({
+      webhookId: "delivery-agent-prompt-queued",
+      receivedAt: new Date().toISOString(),
+      eventType: "AgentSessionEvent.prompted",
+      issueId: "issue_1",
+      headersJson: "{}",
+      payloadJson: JSON.stringify({
+        action: "prompted",
+        type: "AgentSessionEvent",
+        createdAt: "2026-03-08T12:00:00.000Z",
+        webhookTimestamp: 1000,
+        data: {
+          agentActivity: {
+            body: "Please update the tests.",
+          },
+          agentSession: {
+            id: "session-queued",
+            issue: {
+              id: "issue_1",
+              identifier: "USE-25",
+              title: "Build app server orchestration",
+              team: { key: "USE" },
+              delegate: { id: "patchrelay-app", name: "PatchRelay" },
+              state: { name: "Implementing" },
+            },
+          },
+        },
+      }),
+      signatureValid: true,
+      dedupeStatus: "accepted",
+    });
+
+    await processor.processWebhookEvent(event.id);
+
+    assert.equal(codex.steeredTurns.length, 0);
+    const queuedActivity = linear.agentActivities.find(
+      (activity) => activity.agentSessionId === "session-queued" && activity.content.type === "thought",
+    );
+    assert.ok(queuedActivity);
+    assert.match(String(queuedActivity.content.body), /follow-up instructions|queued/i);
+    assert.doesNotMatch(String(queuedActivity.content.body), /routed your follow-up instructions/i);
+    const obligations = db.obligations.listPendingObligations({ runLeaseId: runLease.id, kind: "deliver_turn_input" });
+    assert.equal(obligations.length, 1);
+    assert.equal(obligations[0]?.status, "pending");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

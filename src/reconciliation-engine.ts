@@ -354,16 +354,14 @@ function needsCodexState(run: ReconciliationRun, liveCodex: ReconciliationLiveCo
 }
 
 function shouldFailBack(liveLinear: ReconciliationLiveLinearState, policy: ReconciliationPolicy): boolean {
-  if (!policy.activeLinearStateName) {
-    return true;
-  }
-  if (liveLinear.status !== "known") {
-    return false;
-  }
-  return liveLinear.issue?.stateName === policy.activeLinearStateName;
+  return matchesActiveLinearOwnership(liveLinear, policy);
 }
 
 function shouldAwaitHandoff(liveLinear: ReconciliationLiveLinearState, policy: ReconciliationPolicy): boolean {
+  return matchesActiveLinearOwnership(liveLinear, policy);
+}
+
+function matchesActiveLinearOwnership(liveLinear: ReconciliationLiveLinearState, policy: ReconciliationPolicy): boolean {
   if (!policy.activeLinearStateName) {
     return true;
   }

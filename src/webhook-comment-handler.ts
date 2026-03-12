@@ -11,7 +11,9 @@ export class CommentWebhookHandler {
   constructor(
     private readonly stores: IssueWorkflowWebhookStoreProvider &
       StageTurnInputStoreProvider &
-      Partial<IssueControlStoreProvider & ObligationStoreProvider & RunLeaseStoreProvider>,
+      IssueControlStoreProvider &
+      ObligationStoreProvider &
+      RunLeaseStoreProvider,
     private readonly turnInputDispatcher: StageTurnInputDispatcher,
   ) {}
 
@@ -30,8 +32,8 @@ export class CommentWebhookHandler {
     }
 
     const issue = this.stores.issueWorkflows.getTrackedIssue(project.id, normalizedIssue.id);
-    const issueControl = this.stores.issueControl?.getIssueControl(project.id, normalizedIssue.id);
-    if (!issueControl?.activeRunLeaseId || !this.stores.runLeases) {
+    const issueControl = this.stores.issueControl.getIssueControl(project.id, normalizedIssue.id);
+    if (!issueControl?.activeRunLeaseId) {
       return;
     }
 
@@ -56,7 +58,7 @@ export class CommentWebhookHandler {
     const dedupeKey = buildCommentDedupeKey(normalized.comment.id, body);
     if (
       issueControl.activeRunLeaseId !== undefined &&
-      this.stores.obligations?.getObligationByDedupeKey({
+        this.stores.obligations.getObligationByDedupeKey({
         runLeaseId: issueControl.activeRunLeaseId,
         kind: "deliver_turn_input",
         dedupeKey,
@@ -84,7 +86,7 @@ export class CommentWebhookHandler {
         source,
         body,
       });
-      if (obligationId !== undefined && this.stores.obligations) {
+      if (obligationId !== undefined) {
         this.stores.obligations.updateObligationPayloadJson(
           obligationId,
           JSON.stringify({
@@ -120,8 +122,8 @@ export class CommentWebhookHandler {
     body: string,
     dedupeKey: string,
   ): number | undefined {
-    const activeRunLeaseId = this.stores.issueControl?.getIssueControl(projectId, linearIssueId)?.activeRunLeaseId;
-    if (!this.stores.obligations || activeRunLeaseId === undefined) {
+    const activeRunLeaseId = this.stores.issueControl.getIssueControl(projectId, linearIssueId)?.activeRunLeaseId;
+    if (activeRunLeaseId === undefined) {
       return undefined;
     }
 

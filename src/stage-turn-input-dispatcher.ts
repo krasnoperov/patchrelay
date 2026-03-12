@@ -8,7 +8,7 @@ import { safeJsonParse } from "./utils.ts";
 
 export class StageTurnInputDispatcher {
   constructor(
-    private readonly inputs: StageTurnInputStoreProvider & Partial<IssueControlStoreProvider & ObligationStoreProvider>,
+    private readonly inputs: StageTurnInputStoreProvider & IssueControlStoreProvider & ObligationStoreProvider,
     private readonly codex: CodexAppServerClient,
     private readonly logger: Logger,
   ) {}
@@ -18,8 +18,8 @@ export class StageTurnInputDispatcher {
       this.inputs.stageEvents.setPendingTurnInputRouting(input.id, threadId, turnId);
     }
 
-    const issueControl = this.inputs.issueControl?.getIssueControl(stageRun.projectId, stageRun.linearIssueId);
-    if (!issueControl?.activeRunLeaseId || !this.inputs.obligations) {
+    const issueControl = this.inputs.issueControl.getIssueControl(stageRun.projectId, stageRun.linearIssueId);
+    if (!issueControl?.activeRunLeaseId) {
       return;
     }
 
@@ -59,7 +59,7 @@ export class StageTurnInputDispatcher {
             this.inputs.stageEvents.markTurnInputDelivered(mirroredQueuedInputId);
             deliveredInputIds.push(mirroredQueuedInputId);
           }
-          this.inputs.obligations?.markObligationStatus(input.id, "completed");
+          this.inputs.obligations.markObligationStatus(input.id, "completed");
         } else {
           this.inputs.stageEvents.markTurnInputDelivered(input.id);
           deliveredInputIds.push(input.id);
@@ -108,8 +108,8 @@ export class StageTurnInputDispatcher {
   }
 
   private listPendingObligationInputs(stageRun: Pick<StageRunRecord, "projectId" | "linearIssueId">) {
-    const issueControl = this.inputs.issueControl?.getIssueControl(stageRun.projectId, stageRun.linearIssueId);
-    if (!issueControl?.activeRunLeaseId || !this.inputs.obligations) {
+    const issueControl = this.inputs.issueControl.getIssueControl(stageRun.projectId, stageRun.linearIssueId);
+    if (!issueControl?.activeRunLeaseId) {
       return undefined;
     }
 
