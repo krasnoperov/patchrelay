@@ -1314,6 +1314,14 @@ test("service preserves comments that arrive before thread startup finishes", as
       promptText: "Implement carefully.",
     });
     assert.ok(claim);
+    mirrorActiveRunLease(db, {
+      projectId: "usertold",
+      linearIssueId: "issue_3",
+      stage: "development",
+      triggerWebhookId: "delivery-start",
+      branchName: claim!.workspace.branchName,
+      worktreePath: claim!.workspace.worktreePath,
+    });
 
     linear.issues.set("issue_3", {
       ...linear.issues.get("issue_3")!,

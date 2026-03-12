@@ -405,12 +405,6 @@ export class CliDataAccess {
       conditions.push("ti.project_id = ?");
       values.push(options.project);
     }
-    if (options?.active) {
-      conditions.push("ti.active_stage_run_id IS NOT NULL");
-    }
-    if (options?.failed) {
-      conditions.push("latest_stage.status = 'failed'");
-    }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
     const rows = this.db.connection
@@ -441,7 +435,7 @@ export class CliDataAccess {
       )
       .all(...values) as Array<Record<string, unknown>>;
 
-    return rows.map((row) => {
+    const items = rows.map((row) => {
       const projectId = String(row.project_id);
       const issueKey = row.issue_key === null ? undefined : String(row.issue_key);
       const issue = row.issue_key === null ? undefined : this.db.issueWorkflows.getTrackedIssueByKey(String(row.issue_key));
@@ -470,6 +464,16 @@ export class CliDataAccess {
             : {}),
         updatedAt: String(row.updated_at),
       };
+    });
+
+    return items.filter((item) => {
+      if (options?.active && !item.activeStage) {
+        return false;
+      }
+      if (options?.failed && item.latestStageStatus !== "failed") {
+        return false;
+      }
+      return true;
     });
   }
 
