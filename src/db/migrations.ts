@@ -42,6 +42,49 @@ CREATE TABLE IF NOT EXISTS tracked_issues (
   UNIQUE(project_id, linear_issue_id)
 );
 
+CREATE TABLE IF NOT EXISTS event_receipts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source TEXT NOT NULL,
+  external_id TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  received_at TEXT NOT NULL,
+  acceptance_status TEXT NOT NULL,
+  processing_status TEXT NOT NULL DEFAULT 'pending',
+  project_id TEXT,
+  linear_issue_id TEXT,
+  headers_json TEXT,
+  payload_json TEXT,
+  UNIQUE(source, external_id)
+);
+
+CREATE TABLE IF NOT EXISTS issue_control (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id TEXT NOT NULL,
+  linear_issue_id TEXT NOT NULL,
+  desired_stage TEXT,
+  desired_receipt_id INTEGER,
+  active_run_lease_id INTEGER,
+  active_workspace_ownership_id INTEGER,
+  service_owned_comment_id TEXT,
+  active_agent_session_id TEXT,
+  lifecycle_status TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(project_id, linear_issue_id)
+);
+
+CREATE TABLE IF NOT EXISTS workspace_ownership (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id TEXT NOT NULL,
+  linear_issue_id TEXT NOT NULL,
+  branch_name TEXT NOT NULL,
+  worktree_path TEXT NOT NULL,
+  status TEXT NOT NULL,
+  current_run_lease_id INTEGER,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(project_id, linear_issue_id)
+);
+
 CREATE TABLE IF NOT EXISTS workspaces (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   project_id TEXT NOT NULL,
@@ -64,6 +107,26 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
   current_stage TEXT,
   started_at TEXT NOT NULL,
   ended_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS run_leases (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  issue_control_id INTEGER NOT NULL,
+  project_id TEXT NOT NULL,
+  linear_issue_id TEXT NOT NULL,
+  workspace_ownership_id INTEGER NOT NULL,
+  stage TEXT NOT NULL,
+  status TEXT NOT NULL,
+  trigger_receipt_id INTEGER,
+  thread_id TEXT,
+  parent_thread_id TEXT,
+  turn_id TEXT,
+  started_at TEXT NOT NULL,
+  ended_at TEXT,
+  failure_reason TEXT,
+  FOREIGN KEY(issue_control_id) REFERENCES issue_control(id) ON DELETE CASCADE,
+  FOREIGN KEY(workspace_ownership_id) REFERENCES workspace_ownership(id) ON DELETE CASCADE,
+  FOREIGN KEY(trigger_receipt_id) REFERENCES event_receipts(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS stage_runs (
@@ -107,6 +170,25 @@ CREATE TABLE IF NOT EXISTS queued_turn_inputs (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS obligations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id TEXT NOT NULL,
+  linear_issue_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  status TEXT NOT NULL,
+  source TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  run_lease_id INTEGER,
+  thread_id TEXT,
+  turn_id TEXT,
+  dedupe_key TEXT,
+  last_error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  completed_at TEXT,
+  FOREIGN KEY(run_lease_id) REFERENCES run_leases(id) ON DELETE SET NULL
+);
+
 CREATE TABLE IF NOT EXISTS linear_installations (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   provider TEXT NOT NULL DEFAULT 'linear',
@@ -143,6 +225,11 @@ CREATE TABLE IF NOT EXISTS oauth_states (
   installation_id INTEGER,
   error_message TEXT
 );
+
+CREATE INDEX IF NOT EXISTS idx_event_receipts_project_issue ON event_receipts(project_id, linear_issue_id);
+CREATE INDEX IF NOT EXISTS idx_issue_control_ready ON issue_control(desired_stage, active_run_lease_id);
+CREATE INDEX IF NOT EXISTS idx_run_leases_active ON run_leases(status, project_id, linear_issue_id);
+CREATE INDEX IF NOT EXISTS idx_obligations_pending ON obligations(status, run_lease_id, kind);
 `;
 
 function ensureColumnExists(connection: DatabaseConnection, tableName: string, columnName: string, definition: string): void {

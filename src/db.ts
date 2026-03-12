@@ -1,3 +1,4 @@
+import { AuthoritativeLedgerStore } from "./db/authoritative-ledger-store.ts";
 import { IssueWorkflowStore } from "./db/issue-workflow-store.ts";
 import { LinearInstallationStore } from "./db/linear-installation-store.ts";
 import { runPatchRelayMigrations } from "./db/migrations.ts";
@@ -7,6 +8,12 @@ import { WebhookEventStore } from "./db/webhook-event-store.ts";
 
 export class PatchRelayDatabase {
   readonly connection: DatabaseConnection;
+  readonly authoritativeLedger: AuthoritativeLedgerStore;
+  readonly eventReceipts: AuthoritativeLedgerStore;
+  readonly issueControl: AuthoritativeLedgerStore;
+  readonly workspaceOwnership: AuthoritativeLedgerStore;
+  readonly runLeases: AuthoritativeLedgerStore;
+  readonly obligations: AuthoritativeLedgerStore;
   readonly webhookEvents: WebhookEventStore;
   readonly issueWorkflows: IssueWorkflowStore;
   readonly stageEvents: StageEventStore;
@@ -19,6 +26,12 @@ export class PatchRelayDatabase {
       this.connection.pragma("journal_mode = WAL");
     }
 
+    this.authoritativeLedger = new AuthoritativeLedgerStore(this.connection);
+    this.eventReceipts = this.authoritativeLedger;
+    this.issueControl = this.authoritativeLedger;
+    this.workspaceOwnership = this.authoritativeLedger;
+    this.runLeases = this.authoritativeLedger;
+    this.obligations = this.authoritativeLedger;
     this.webhookEvents = new WebhookEventStore(this.connection);
     this.issueWorkflows = new IssueWorkflowStore(this.connection);
     this.stageEvents = new StageEventStore(this.connection);

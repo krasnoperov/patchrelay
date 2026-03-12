@@ -1,5 +1,24 @@
 import type { IssueLifecycleStatus, PipelineStatus, StageRunStatus, WorkflowStage, WorkspaceStatus } from "./workflow-types.ts";
 
+export type EventReceiptAcceptanceStatus = "accepted" | "duplicate" | "rejected";
+export type EventReceiptProcessingStatus = "pending" | "processed" | "failed";
+export type RunLeaseStatus = "queued" | "running" | "paused" | "completed" | "failed" | "released";
+export type ObligationStatus = "pending" | "in_progress" | "completed" | "failed" | "cancelled";
+
+export interface EventReceiptRecord {
+  id: number;
+  source: string;
+  externalId: string;
+  eventType: string;
+  receivedAt: string;
+  acceptanceStatus: EventReceiptAcceptanceStatus;
+  processingStatus: EventReceiptProcessingStatus;
+  projectId?: string;
+  linearIssueId?: string;
+  headersJson?: string;
+  payloadJson?: string;
+}
+
 export interface WebhookEventRecord {
   id: number;
   webhookId: string;
@@ -13,6 +32,20 @@ export interface WebhookEventRecord {
   signatureValid: boolean;
   dedupeStatus: "accepted" | "duplicate" | "rejected";
   processingStatus: "pending" | "processed" | "failed";
+}
+
+export interface IssueControlRecord {
+  id: number;
+  projectId: string;
+  linearIssueId: string;
+  desiredStage?: WorkflowStage;
+  desiredReceiptId?: number;
+  activeRunLeaseId?: number;
+  activeWorkspaceOwnershipId?: number;
+  serviceOwnedCommentId?: string;
+  activeAgentSessionId?: string;
+  lifecycleStatus: IssueLifecycleStatus;
+  updatedAt: string;
 }
 
 export interface TrackedIssueRecord {
@@ -37,6 +70,18 @@ export interface TrackedIssueRecord {
   updatedAt: string;
 }
 
+export interface WorkspaceOwnershipRecord {
+  id: number;
+  projectId: string;
+  linearIssueId: string;
+  branchName: string;
+  worktreePath: string;
+  status: "active" | "paused" | "released";
+  currentRunLeaseId?: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface WorkspaceRecord {
   id: number;
   projectId: string;
@@ -48,6 +93,23 @@ export interface WorkspaceRecord {
   lastThreadId?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface RunLeaseRecord {
+  id: number;
+  issueControlId: number;
+  projectId: string;
+  linearIssueId: string;
+  workspaceOwnershipId: number;
+  stage: WorkflowStage;
+  status: RunLeaseStatus;
+  triggerReceiptId?: number;
+  threadId?: string;
+  parentThreadId?: string;
+  turnId?: string;
+  startedAt: string;
+  endedAt?: string;
+  failureReason?: string;
 }
 
 export interface PipelineRunRecord {
@@ -79,6 +141,24 @@ export interface StageRunRecord {
   reportJson?: string;
   startedAt: string;
   endedAt?: string;
+}
+
+export interface ObligationRecord {
+  id: number;
+  projectId: string;
+  linearIssueId: string;
+  kind: string;
+  status: ObligationStatus;
+  source: string;
+  payloadJson: string;
+  runLeaseId?: number;
+  threadId?: string;
+  turnId?: string;
+  dedupeKey?: string;
+  lastError?: string;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
 }
 
 export interface ThreadEventRecord {
