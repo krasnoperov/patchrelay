@@ -12,9 +12,15 @@ import type {
 } from "../src/types.ts";
 
 class FakeCodexClient {
-  constructor(private readonly threads: Map<string, CodexThreadSummary>) {}
+  constructor(
+    private readonly threads: Map<string, CodexThreadSummary>,
+    private readonly options?: { throwOnRead?: boolean },
+  ) {}
 
   async readThread(threadId: string): Promise<CodexThreadSummary> {
+    if (this.options?.throwOnRead) {
+      throw new Error(`Transient read failure for ${threadId}`);
+    }
     const thread = this.threads.get(threadId);
     if (!thread) {
       throw new Error(`Missing thread ${threadId}`);
@@ -189,6 +195,60 @@ test("buildReconciliationSnapshot assembles ledger-native reconciliation input",
       },
     },
   });
+});
+
+test("buildReconciliationSnapshot preserves transient Codex lookup failures as retryable errors", async () => {
+  const issueControl: IssueControlRecord = {
+    id: 1,
+    projectId: "proj",
+    linearIssueId: "issue-1",
+    activeRunLeaseId: 2,
+    lifecycleStatus: "running",
+    updatedAt: "2026-03-12T00:00:00.000Z",
+  };
+  const runLease: RunLeaseRecord = {
+    id: 2,
+    issueControlId: 1,
+    projectId: "proj",
+    linearIssueId: "issue-1",
+    workspaceOwnershipId: 3,
+    stage: "development",
+    status: "running",
+    threadId: "thread-1",
+    startedAt: "2026-03-12T00:00:00.000Z",
+  };
+
+  const snapshot = await buildReconciliationSnapshot({
+    config: createConfig(),
+    stores: {
+      issueControl: {
+        getIssueControl: () => issueControl,
+        upsertIssueControl: () => issueControl,
+        listIssueControlsReadyForLaunch: () => [],
+      },
+      runLeases: {
+        getRunLease: () => runLease,
+        listActiveRunLeases: () => [runLease],
+        createRunLease: () => runLease,
+        updateRunLeaseThread: () => undefined,
+        finishRunLease: () => undefined,
+      },
+    },
+    codex: new FakeCodexClient(new Map(), { throwOnRead: true }) as never,
+    linearProvider: {
+      forProject: async () =>
+        ({
+          getIssue: async () => ({
+            id: "issue-1",
+            stateName: "Implementing",
+          }),
+        }) as never,
+    } satisfies LinearClientProvider,
+    runLeaseId: 2,
+  });
+
+  assert.equal(snapshot?.input.live?.codex?.status, "error");
+  assert.match(snapshot?.input.live?.codex?.errorMessage ?? "", /Transient read failure/);
 });
 
 function createConfig(): AppConfig {

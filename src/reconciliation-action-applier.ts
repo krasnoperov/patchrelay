@@ -50,7 +50,7 @@ export class ReconciliationActionApplier {
       return;
     }
 
-    if (decision.outcome === "complete") {
+    if (decision.outcome === "complete" || decision.outcome === "release") {
       const liveThread = snapshot.input.live?.codex?.status === "found" ? snapshot.input.live.codex.thread : undefined;
       if (!issue || !liveThread) {
         return;
@@ -64,7 +64,7 @@ export class ReconciliationActionApplier {
       return;
     }
 
-    if (decision.outcome === "fail" || decision.outcome === "release") {
+    if (decision.outcome === "fail") {
       const failedAction = decision.actions.find((action) => action.type === "mark_run_failed");
       await this.callbacks.failStageRunDuringReconciliation(
         stageRun,

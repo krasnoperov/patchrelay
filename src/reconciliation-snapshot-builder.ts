@@ -73,7 +73,10 @@ export async function buildReconciliationSnapshot(params: {
       ? await params.codex
           .readThread(runLease.threadId, true)
           .then((thread) => ({ status: "found" as const, thread }))
-          .catch(() => ({ status: "missing" as const }))
+          .catch((error) => ({
+            status: "error" as const,
+            errorMessage: error instanceof Error ? error.message : String(error),
+          }))
       : ({ status: "unknown" as const });
 
   const obligations: ReconciliationObligation[] =
