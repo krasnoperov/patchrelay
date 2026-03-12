@@ -1,4 +1,4 @@
-import type { StageEventQueryStoreProvider } from "./stage-event-ports.ts";
+import type { StageTurnInputStoreProvider } from "./stage-event-ports.ts";
 import type { IssueWorkflowWebhookStoreProvider } from "./workflow-ports.ts";
 import type { StageAgentActivityPublisher } from "./stage-agent-activity-publisher.ts";
 import type { StageTurnInputDispatcher } from "./stage-turn-input-dispatcher.ts";
@@ -13,7 +13,7 @@ function trimPrompt(value: string | undefined): string | undefined {
 
 export class AgentSessionWebhookHandler {
   constructor(
-    private readonly stores: IssueWorkflowWebhookStoreProvider & StageEventQueryStoreProvider,
+    private readonly stores: IssueWorkflowWebhookStoreProvider & StageTurnInputStoreProvider,
     private readonly turnInputDispatcher: StageTurnInputDispatcher,
     private readonly agentActivity: StageAgentActivityPublisher,
   ) {}

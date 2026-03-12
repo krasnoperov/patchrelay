@@ -8,7 +8,7 @@ import type {
   IssueWorkflowExecutionStoreProvider,
   IssueWorkflowQueryStoreProvider,
   LinearInstallationStoreProvider,
-  StageEventQueryStoreProvider,
+  StageEventStoreProvider,
   WebhookEventStoreProvider,
 } from "../src/db-ports.ts";
 
@@ -174,7 +174,7 @@ test("db ports preserve stage event queue routing and delivery markers", () => {
   const { baseDir, stores } = createHarness();
   try {
     const workflowExecution: IssueWorkflowExecutionStoreProvider["issueWorkflows"] = stores.issueWorkflows;
-    const stageEvents: StageEventQueryStoreProvider["stageEvents"] = stores.stageEvents;
+    const stageEvents: StageEventStoreProvider["stageEvents"] = stores.stageEvents;
 
     workflowExecution.recordDesiredStage({
       projectId: "proj",

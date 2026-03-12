@@ -1,5 +1,5 @@
 import type { CodexAppServerClient } from "./codex-app-server.ts";
-import type { StageEventQueryStoreProvider } from "./stage-event-ports.ts";
+import type { StageEventLogStoreProvider } from "./stage-event-ports.ts";
 import type { IssueWorkflowQueryStoreProvider } from "./workflow-ports.ts";
 import { summarizeCurrentThread } from "./stage-reporting.ts";
 import type { StageReport } from "./types.ts";
@@ -8,7 +8,7 @@ import type { ServiceStageFinalizer } from "./service-stage-finalizer.ts";
 
 export class IssueQueryService {
   constructor(
-    private readonly stores: IssueWorkflowQueryStoreProvider & StageEventQueryStoreProvider,
+    private readonly stores: IssueWorkflowQueryStoreProvider & StageEventLogStoreProvider,
     private readonly codex: CodexAppServerClient,
     private readonly stageFinalizer: Pick<ServiceStageFinalizer, "getActiveStageStatus">,
   ) {}

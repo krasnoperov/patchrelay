@@ -97,6 +97,8 @@ export interface IssueWorkflowQueryStoreProvider {
   issueWorkflows: IssueWorkflowQueryStore;
 }
 
+// Ready issues are authoritative coordination output: this is the set of issues
+// the harness currently believes are eligible to launch.
 export interface ReadyIssueSource {
   listIssuesReadyForExecution(): Array<{ projectId: string; linearIssueId: string }>;
 }

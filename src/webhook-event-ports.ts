@@ -1,5 +1,7 @@
 import type { WebhookEventRecord } from "./types.ts";
 
+// Webhook receipts are authoritative coordination state because PatchRelay must
+// deduplicate deliveries and resume processing correctly after a restart.
 export interface WebhookEventStore {
   insertWebhookEvent(params: {
     webhookId: string;

@@ -1,4 +1,4 @@
-import type { StageEventQueryStoreProvider } from "./stage-event-ports.ts";
+import type { StageTurnInputStoreProvider } from "./stage-event-ports.ts";
 import type { IssueWorkflowWebhookStoreProvider } from "./workflow-ports.ts";
 import { isPatchRelayStatusComment } from "./linear-workflow.ts";
 import { triggerEventAllowed } from "./project-resolution.ts";
@@ -7,7 +7,7 @@ import type { NormalizedEvent, ProjectConfig } from "./types.ts";
 
 export class CommentWebhookHandler {
   constructor(
-    private readonly stores: IssueWorkflowWebhookStoreProvider & StageEventQueryStoreProvider,
+    private readonly stores: IssueWorkflowWebhookStoreProvider & StageTurnInputStoreProvider,
     private readonly turnInputDispatcher: StageTurnInputDispatcher,
   ) {}
 

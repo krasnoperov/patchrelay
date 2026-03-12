@@ -1,6 +1,6 @@
 import type { Logger } from "pino";
 import type { CodexAppServerClient } from "./codex-app-server.ts";
-import type { StageEventQueryStoreProvider, StageTurnInputStoreProvider } from "./stage-event-ports.ts";
+import type { StageTurnInputStoreProvider } from "./stage-event-ports.ts";
 import type { IssueWorkflowExecutionStoreProvider, IssueWorkflowLifecycleStoreProvider } from "./workflow-ports.ts";
 import { buildStageLaunchPlan, isCodexThreadId } from "./stage-launch.ts";
 import { syncFailedStageToLinear } from "./stage-failure.ts";
@@ -24,8 +24,7 @@ export class ServiceStageRunner {
     private readonly config: AppConfig,
     private readonly stores: IssueWorkflowExecutionStoreProvider &
       IssueWorkflowLifecycleStoreProvider &
-      StageTurnInputStoreProvider &
-      StageEventQueryStoreProvider,
+      StageTurnInputStoreProvider,
     private readonly codex: CodexAppServerClient,
     private readonly linearProvider: LinearClientProvider,
     private readonly logger: Logger,

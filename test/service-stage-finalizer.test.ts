@@ -1,0 +1,475 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import pino from "pino";
+import { ServiceStageFinalizer } from "../src/service-stage-finalizer.ts";
+import type {
+  AppConfig,
+  CodexThreadSummary,
+  LinearAgentActivityContent,
+  LinearClient,
+  LinearIssueSnapshot,
+  PipelineRunRecord,
+  StageRunRecord,
+  TrackedIssueRecord,
+  WorkspaceRecord,
+} from "../src/types.ts";
+
+const WORKFLOW_STATES = [
+  { id: "start", name: "Start" },
+  { id: "implementing", name: "Implementing" },
+  { id: "human-needed", name: "Human Needed" },
+];
+
+class FakeLinearClient implements LinearClient {
+  readonly issues = new Map<string, LinearIssueSnapshot>();
+  readonly stateTransitions: Array<{ issueId: string; stateName: string }> = [];
+  readonly comments: Array<{ issueId: string; commentId?: string; body: string }> = [];
+  readonly agentActivities: Array<{ agentSessionId: string; content: LinearAgentActivityContent; ephemeral?: boolean }> = [];
+
+  async getIssue(issueId: string): Promise<LinearIssueSnapshot> {
+    const issue = this.issues.get(issueId);
+    assert.ok(issue);
+    return issue;
+  }
+
+  async setIssueState(issueId: string, stateName: string): Promise<LinearIssueSnapshot> {
+    const issue = await this.getIssue(issueId);
+    const nextIssue = {
+      ...issue,
+      stateId: stateName.toLowerCase().replaceAll(" ", "-"),
+      stateName,
+    };
+    this.issues.set(issueId, nextIssue);
+    this.stateTransitions.push({ issueId, stateName });
+    return nextIssue;
+  }
+
+  async upsertIssueComment(params: { issueId: string; commentId?: string; body: string }): Promise<{ id: string; body: string }> {
+    this.comments.push(params);
+    return {
+      id: params.commentId ?? `comment-${this.comments.length}`,
+      body: params.body,
+    };
+  }
+
+  async createAgentActivity(params: {
+    agentSessionId: string;
+    content: LinearAgentActivityContent;
+    ephemeral?: boolean;
+  }): Promise<{ id: string }> {
+    this.agentActivities.push(params);
+    return { id: `activity-${this.agentActivities.length}` };
+  }
+
+  async updateIssueLabels(params: { issueId: string }): Promise<LinearIssueSnapshot> {
+    return await this.getIssue(params.issueId);
+  }
+
+  async getActorProfile() {
+    return {};
+  }
+}
+
+class FakeCodexClient {
+  readonly steerCalls: Array<{ threadId: string; turnId: string; input: string }> = [];
+  readonly threads = new Map<string, CodexThreadSummary>();
+
+  async readThread(threadId: string): Promise<CodexThreadSummary> {
+    const thread = this.threads.get(threadId);
+    if (!thread) {
+      throw new Error("thread not found");
+    }
+    return thread;
+  }
+
+  async steerTurn(params: { threadId: string; turnId: string; input: string }): Promise<void> {
+    this.steerCalls.push(params);
+  }
+}
+
+class FakeIssueWorkflowStore {
+  readonly issues = new Map<string, TrackedIssueRecord>();
+  readonly stageRuns = new Map<number, StageRunRecord>();
+  readonly pipelines = new Map<number, PipelineRunRecord>();
+  readonly workspaces = new Map<number, WorkspaceRecord>();
+  readonly finishedStageRuns: Array<{
+    stageRunId: number;
+    status: StageRunRecord["status"];
+    threadId: string;
+    turnId?: string;
+    summaryJson?: string;
+    reportJson?: string;
+  }> = [];
+  readonly lifecycleStatuses: Array<{ projectId: string; issueId: string; status: TrackedIssueRecord["lifecycleStatus"] }> = [];
+  readonly statusComments: Array<{ projectId: string; issueId: string; commentId?: string }> = [];
+  readonly pipelineStatuses: Array<{ pipelineRunId: number; status: PipelineRunRecord["status"] }> = [];
+  readonly completedPipelines: number[] = [];
+
+  getTrackedIssue(projectId: string, linearIssueId: string): TrackedIssueRecord | undefined {
+    return this.issues.get(issueKey(projectId, linearIssueId));
+  }
+
+  getTrackedIssueByKey(issueKeyValue: string): TrackedIssueRecord | undefined {
+    return [...this.issues.values()].find((issue) => issue.issueKey === issueKeyValue);
+  }
+
+  getStageRun(stageRunId: number): StageRunRecord | undefined {
+    return this.stageRuns.get(stageRunId);
+  }
+
+  getStageRunByThreadId(threadId: string): StageRunRecord | undefined {
+    return [...this.stageRuns.values()].find((stageRun) => stageRun.threadId === threadId);
+  }
+
+  listActiveStageRuns(): StageRunRecord[] {
+    return [...this.stageRuns.values()].filter((stageRun) => stageRun.status === "running");
+  }
+
+  listStageRunsForIssue(projectId: string, linearIssueId: string): StageRunRecord[] {
+    return [...this.stageRuns.values()].filter((stageRun) => stageRun.projectId === projectId && stageRun.linearIssueId === linearIssueId);
+  }
+
+  finishStageRun(params: {
+    stageRunId: number;
+    status: StageRunRecord["status"];
+    threadId: string;
+    turnId?: string;
+    summaryJson?: string;
+    reportJson?: string;
+  }): void {
+    const stageRun = this.stageRuns.get(params.stageRunId);
+    assert.ok(stageRun);
+    stageRun.status = params.status;
+    stageRun.threadId = params.threadId;
+    stageRun.turnId = params.turnId;
+    this.finishedStageRuns.push(params);
+  }
+
+  upsertTrackedIssue(params: {
+    projectId: string;
+    linearIssueId: string;
+    currentLinearState?: string;
+    statusCommentId?: string | null;
+    lifecycleStatus: TrackedIssueRecord["lifecycleStatus"];
+  }): TrackedIssueRecord {
+    const existing = this.getTrackedIssue(params.projectId, params.linearIssueId);
+    assert.ok(existing);
+    const nextIssue = {
+      ...existing,
+      ...(params.currentLinearState ? { currentLinearState: params.currentLinearState } : {}),
+      ...(params.statusCommentId !== undefined ? { statusCommentId: params.statusCommentId ?? undefined } : {}),
+      lifecycleStatus: params.lifecycleStatus,
+    };
+    this.issues.set(issueKey(params.projectId, params.linearIssueId), nextIssue);
+    return nextIssue;
+  }
+
+  setIssueLifecycleStatus(projectId: string, linearIssueId: string, status: TrackedIssueRecord["lifecycleStatus"]): void {
+    const issue = this.getTrackedIssue(projectId, linearIssueId);
+    assert.ok(issue);
+    issue.lifecycleStatus = status;
+    this.lifecycleStatuses.push({ projectId, issueId: linearIssueId, status });
+  }
+
+  setIssueStatusComment(projectId: string, linearIssueId: string, commentId?: string): void {
+    const issue = this.getTrackedIssue(projectId, linearIssueId);
+    assert.ok(issue);
+    issue.statusCommentId = commentId;
+    this.statusComments.push({ projectId, issueId: linearIssueId, commentId });
+  }
+
+  getPipelineRun(pipelineRunId: number): PipelineRunRecord | undefined {
+    return this.pipelines.get(pipelineRunId);
+  }
+
+  setPipelineStatus(pipelineRunId: number, status: PipelineRunRecord["status"]): void {
+    const pipeline = this.getPipelineRun(pipelineRunId);
+    assert.ok(pipeline);
+    pipeline.status = status;
+    this.pipelineStatuses.push({ pipelineRunId, status });
+  }
+
+  markPipelineCompleted(pipelineRunId: number): void {
+    const pipeline = this.getPipelineRun(pipelineRunId);
+    assert.ok(pipeline);
+    pipeline.status = "completed";
+    this.completedPipelines.push(pipelineRunId);
+  }
+
+  getWorkspace(workspaceId: number): WorkspaceRecord | undefined {
+    return this.workspaces.get(workspaceId);
+  }
+}
+
+class FakeStageEventStore {
+  readonly savedEvents: Array<{ stageRunId: number; threadId: string; turnId?: string; method: string; eventJson: string }> = [];
+  readonly pendingInputs: Array<{ id: number; stageRunId: number; body: string; source: string; threadId?: string; turnId?: string }> = [];
+  readonly deliveredInputs: number[] = [];
+
+  listThreadEvents(): Array<{ method: string }> {
+    return this.savedEvents.map((event) => ({ method: event.method }));
+  }
+
+  saveThreadEvent(params: { stageRunId: number; threadId: string; turnId?: string; method: string; eventJson: string }): number {
+    this.savedEvents.push(params);
+    return this.savedEvents.length;
+  }
+
+  enqueueTurnInput(params: { stageRunId: number; threadId?: string; turnId?: string; source: string; body: string }): number {
+    const id = this.pendingInputs.length + 1;
+    this.pendingInputs.push({ id, ...params });
+    return id;
+  }
+
+  listPendingTurnInputs(stageRunId: number) {
+    return this.pendingInputs.filter((input) => input.stageRunId === stageRunId && !this.deliveredInputs.includes(input.id));
+  }
+
+  setPendingTurnInputRouting(id: number, threadId: string, turnId: string): void {
+    const input = this.pendingInputs.find((entry) => entry.id === id);
+    assert.ok(input);
+    input.threadId = threadId;
+    input.turnId = turnId;
+  }
+
+  markTurnInputDelivered(id: number): void {
+    this.deliveredInputs.push(id);
+  }
+}
+
+function issueKey(projectId: string, issueId: string): string {
+  return `${projectId}:${issueId}`;
+}
+
+function createConfig(persistExtendedHistory: boolean): AppConfig {
+  return {
+    server: { bind: "127.0.0.1", port: 8787, healthPath: "/health", readinessPath: "/ready" },
+    ingress: { linearWebhookPath: "/webhooks/linear", maxBodyBytes: 1024, maxTimestampSkewSeconds: 60 },
+    logging: { level: "info", format: "logfmt", filePath: "/tmp/patchrelay.log" },
+    database: { path: "/tmp/patchrelay.sqlite", wal: true },
+    linear: {
+      webhookSecret: "secret",
+      graphqlUrl: "https://linear.example/graphql",
+      oauth: {
+        clientId: "client",
+        clientSecret: "secret",
+        redirectUri: "http://127.0.0.1:8787/oauth/linear/callback",
+        scopes: ["read", "write"],
+        actor: "app",
+      },
+      tokenEncryptionKey: "0123456789abcdef0123456789abcdef",
+    },
+    operatorApi: { enabled: false },
+    runner: {
+      gitBin: "git",
+      codex: {
+        bin: "codex",
+        args: ["app-server"],
+        approvalPolicy: "never",
+        sandboxMode: "danger-full-access",
+        persistExtendedHistory,
+      },
+    },
+    projects: [
+      {
+        id: "proj",
+        repoPath: "/tmp/repo",
+        worktreeRoot: "/tmp/worktrees",
+        workflows: [
+          {
+            id: "development",
+            whenState: "Start",
+            activeState: "Implementing",
+            workflowFile: "/tmp/IMPLEMENTATION_WORKFLOW.md",
+            fallbackState: "Human Needed",
+          },
+        ],
+        issueKeyPrefixes: ["APP"],
+        linearTeamIds: ["APP"],
+        allowLabels: [],
+        triggerEvents: ["statusChanged", "commentCreated", "commentUpdated"],
+        branchPrefix: "app",
+      },
+    ],
+  };
+}
+
+function createIssue(overrides: Partial<TrackedIssueRecord> = {}): TrackedIssueRecord {
+  return {
+    id: 1,
+    projectId: "proj",
+    linearIssueId: "issue-1",
+    issueKey: "APP-1",
+    title: "Reconcile stage",
+    currentLinearState: "Implementing",
+    statusCommentId: "comment-1",
+    activeAgentSessionId: "session-1",
+    lifecycleStatus: "running",
+    updatedAt: "2026-03-12T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function createStageRun(overrides: Partial<StageRunRecord> = {}): StageRunRecord {
+  return {
+    id: 10,
+    pipelineRunId: 20,
+    projectId: "proj",
+    linearIssueId: "issue-1",
+    workspaceId: 30,
+    stage: "development",
+    status: "running",
+    triggerWebhookId: "delivery-1",
+    workflowFile: "/tmp/IMPLEMENTATION_WORKFLOW.md",
+    promptText: "Implement it",
+    threadId: "thread-1",
+    turnId: "turn-1",
+    startedAt: "2026-03-12T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function createPipeline(overrides: Partial<PipelineRunRecord> = {}): PipelineRunRecord {
+  return {
+    id: 20,
+    projectId: "proj",
+    linearIssueId: "issue-1",
+    workspaceId: 30,
+    status: "active",
+    currentStage: "development",
+    startedAt: "2026-03-12T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function createWorkspace(overrides: Partial<WorkspaceRecord> = {}): WorkspaceRecord {
+  return {
+    id: 30,
+    projectId: "proj",
+    linearIssueId: "issue-1",
+    branchName: "app/APP-1",
+    worktreePath: "/tmp/worktrees/APP-1",
+    status: "active",
+    createdAt: "2026-03-12T00:00:00.000Z",
+    updatedAt: "2026-03-12T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function createThread(status: "completed" | "inProgress"): CodexThreadSummary {
+  return {
+    id: "thread-1",
+    preview: "PatchRelay stage",
+    cwd: "/tmp/worktrees/APP-1",
+    status: status === "completed" ? "idle" : "running",
+    turns: [
+      {
+        id: "turn-1",
+        status,
+        items: [],
+      },
+    ],
+  };
+}
+
+function createHarness(options?: {
+  persistExtendedHistory?: boolean;
+  issueStateName?: string;
+  stageRun?: Partial<StageRunRecord>;
+}) {
+  const config = createConfig(options?.persistExtendedHistory ?? true);
+  const store = new FakeIssueWorkflowStore();
+  const stageEvents = new FakeStageEventStore();
+  const codex = new FakeCodexClient();
+  const linear = new FakeLinearClient();
+  const issue = createIssue();
+  const stageRun = createStageRun(options?.stageRun);
+  const pipeline = createPipeline();
+  const workspace = createWorkspace();
+  store.issues.set(issueKey(issue.projectId, issue.linearIssueId), issue);
+  store.stageRuns.set(stageRun.id, stageRun);
+  store.pipelines.set(pipeline.id, pipeline);
+  store.workspaces.set(workspace.id, workspace);
+  linear.issues.set(issue.linearIssueId, {
+    id: issue.linearIssueId,
+    identifier: issue.issueKey,
+    title: issue.title,
+    stateId: "implementing",
+    stateName: options?.issueStateName ?? "Implementing",
+    workflowStates: WORKFLOW_STATES,
+    labelIds: [],
+    labels: [],
+    teamLabels: [],
+  });
+
+  const finalizer = new ServiceStageFinalizer(
+    config,
+    {
+      issueWorkflows: store,
+      stageEvents,
+    },
+    codex as never,
+    {
+      async forProject(projectId: string) {
+        return projectId === "proj" ? linear : undefined;
+      },
+    },
+    () => undefined,
+    pino({ enabled: false }),
+  );
+
+  return { store, stageEvents, codex, linear, finalizer, issue, stageRun };
+}
+
+test("reconciliation fails an active stage when the persisted thread is missing", async () => {
+  const { store, linear, finalizer, stageRun } = createHarness();
+
+  await finalizer.reconcileActiveStageRuns();
+
+  assert.equal(store.getStageRun(stageRun.id)?.status, "failed");
+  assert.deepEqual(linear.stateTransitions, [{ issueId: "issue-1", stateName: "Human Needed" }]);
+  assert.match(linear.comments[0]?.body ?? "", /Thread was not found during startup reconciliation/);
+  assert.deepEqual(store.lifecycleStatuses.at(-1), {
+    projectId: "proj",
+    issueId: "issue-1",
+    status: "failed",
+  });
+});
+
+test("reconciliation leaves an active stage alone when the latest turn is still in progress", async () => {
+  const { store, codex, linear, finalizer, stageRun } = createHarness();
+  codex.threads.set(stageRun.threadId!, createThread("inProgress"));
+
+  await finalizer.reconcileActiveStageRuns();
+
+  assert.equal(store.getStageRun(stageRun.id)?.status, "running");
+  assert.equal(linear.stateTransitions.length, 0);
+  assert.equal(store.finishedStageRuns.length, 0);
+});
+
+test("reconciliation only fails back to Linear when the issue is still in the service-owned active state", async () => {
+  const { store, linear, finalizer, stageRun } = createHarness({ issueStateName: "Review" });
+
+  await finalizer.reconcileActiveStageRuns();
+
+  assert.equal(store.getStageRun(stageRun.id)?.status, "failed");
+  assert.equal(linear.stateTransitions.length, 0);
+  assert.equal(linear.comments.length, 0);
+});
+
+test("notification history is only persisted when extended history is enabled", async () => {
+  const disabled = createHarness({ persistExtendedHistory: false });
+  await disabled.finalizer.handleCodexNotification({
+    method: "turn/started",
+    params: { threadId: "thread-1", turnId: "turn-1" },
+  } as never);
+  assert.equal(disabled.stageEvents.savedEvents.length, 0);
+
+  const enabled = createHarness({ persistExtendedHistory: true });
+  await enabled.finalizer.handleCodexNotification({
+    method: "turn/started",
+    params: { threadId: "thread-1", turnId: "turn-1" },
+  } as never);
+  assert.equal(enabled.stageEvents.savedEvents.length, 1);
+  assert.equal(enabled.stageEvents.savedEvents[0]?.method, "turn/started");
+});

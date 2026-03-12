@@ -2,7 +2,7 @@ import type { Logger } from "pino";
 import type { CodexNotification } from "./codex-app-server.ts";
 import type { CodexAppServerClient } from "./codex-app-server.ts";
 import type {
-  StageEventQueryStoreProvider,
+  StageEventLogStoreProvider,
   StageTurnInputStoreProvider,
 } from "./stage-event-ports.ts";
 import type {
@@ -34,7 +34,7 @@ export class ServiceStageFinalizer {
     private readonly stores: IssueWorkflowExecutionStoreProvider &
       IssueWorkflowLifecycleStoreProvider &
       IssueWorkflowQueryStoreProvider &
-      StageEventQueryStoreProvider &
+      StageEventLogStoreProvider &
       StageTurnInputStoreProvider,
     private readonly codex: CodexAppServerClient,
     private readonly linearProvider: LinearClientProvider,
@@ -81,13 +81,15 @@ export class ServiceStageFinalizer {
     }
 
     const turnId = typeof notification.params.turnId === "string" ? notification.params.turnId : undefined;
-    this.stores.stageEvents.saveThreadEvent({
-      stageRunId: stageRun.id,
-      threadId,
-      ...(turnId ? { turnId } : {}),
-      method: notification.method,
-      eventJson: JSON.stringify(notification.params),
-    });
+    if (this.config.runner.codex.persistExtendedHistory) {
+      this.stores.stageEvents.saveThreadEvent({
+        stageRunId: stageRun.id,
+        threadId,
+        ...(turnId ? { turnId } : {}),
+        method: notification.method,
+        eventJson: JSON.stringify(notification.params),
+      });
+    }
 
     if (notification.method === "turn/started" || notification.method.startsWith("item/")) {
       await this.flushQueuedTurnInputs(stageRun);

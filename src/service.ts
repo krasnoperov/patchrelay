@@ -2,7 +2,7 @@ import type { Logger } from "pino";
 import type { CodexAppServerClient, CodexNotification } from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { LinearInstallationStoreProvider } from "./installation-ports.ts";
-import type { StageEventQueryStoreProvider, StageTurnInputStoreProvider } from "./stage-event-ports.ts";
+import type { StageEventLogStoreProvider, StageTurnInputStoreProvider } from "./stage-event-ports.ts";
 import type { IssueWorkflowExecutionStoreProvider, IssueWorkflowLifecycleStoreProvider, IssueWorkflowQueryStoreProvider, IssueWorkflowWebhookStoreProvider, ReadyIssueSource } from "./workflow-ports.ts";
 import type { WebhookEventStoreProvider } from "./webhook-event-ports.ts";
 import { IssueQueryService } from "./issue-query-service.ts";
@@ -20,7 +20,7 @@ type ServiceStores = WebhookEventStoreProvider &
   IssueWorkflowQueryStoreProvider &
   IssueWorkflowWebhookStoreProvider &
   StageTurnInputStoreProvider &
-  StageEventQueryStoreProvider &
+  StageEventLogStoreProvider &
   LinearInstallationStoreProvider;
 
 function createServiceStores(db: PatchRelayDatabase): ServiceStores {
@@ -38,6 +38,11 @@ function createReadyIssueSource(stores: ServiceStores): ReadyIssueSource {
   };
 }
 
+// PatchRelayService wires together the harness layers:
+// - integration: webhook intake, OAuth, Linear client access
+// - coordination: runtime queueing, stage launch, completion, reconciliation
+// - execution: Codex app-server and worktree-backed stage runs
+// - observability: issue/report query surfaces
 export class PatchRelayService {
   readonly linearProvider: LinearClientProvider;
   private readonly stageRunner: ServiceStageRunner;

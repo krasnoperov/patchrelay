@@ -1484,6 +1484,157 @@ test("service startup reconciles finished and missing active threads", async () 
   }
 });
 
+test("service startup leaves in-progress reconciled stages running", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-in-progress-"));
+  try {
+    const config = createConfig(baseDir);
+    setupRepo(baseDir, config);
+    const db = new PatchRelayDatabase(config.database.path, true);
+    db.runMigrations();
+    const codex = new FakeCodexClient();
+    const linear = new FakeLinearClient();
+    const workflowStates = [
+      { id: "start", name: "Start" },
+      { id: "implementing", name: "Implementing" },
+      { id: "review", name: "Review" },
+      { id: "reviewing", name: "Reviewing" },
+      { id: "human-needed", name: "Human Needed" },
+    ];
+    linear.issues.set("issue_6", {
+      id: "issue_6",
+      identifier: "USE-32",
+      stateId: "implementing",
+      stateName: "Implementing",
+      workflowStates,
+    });
+
+    db.issueWorkflows.upsertTrackedIssue({
+      projectId: "usertold",
+      linearIssueId: "issue_6",
+      issueKey: "USE-32",
+      title: "Keep in-progress stage running",
+      currentLinearState: "Start",
+      desiredStage: "development",
+      desiredWebhookId: "delivery-start-in-progress",
+      lifecycleStatus: "running",
+      lastWebhookAt: new Date().toISOString(),
+    });
+    const claim = db.issueWorkflows.claimStageRun({
+      projectId: "usertold",
+      linearIssueId: "issue_6",
+      stage: "development",
+      triggerWebhookId: "delivery-start-in-progress",
+      branchName: "use/USE-32-keep-in-progress-stage-running",
+      worktreePath: path.join(baseDir, "worktrees", "USE-32"),
+      workflowFile: getWorkflowFile(config.projects[0], "development"),
+      promptText: "Keep running",
+    });
+    assert.ok(claim);
+    db.issueWorkflows.updateStageRunThread({
+      stageRunId: claim!.stageRun.id,
+      threadId: "thread-in-progress",
+      turnId: "turn-live",
+    });
+    codex.threads.set("thread-in-progress", {
+      id: "thread-in-progress",
+      preview: "Still running",
+      cwd: claim!.workspace.worktreePath,
+      status: "active",
+      turns: [{ id: "turn-live", status: "inProgress", items: [] }],
+    });
+
+    const service = new PatchRelayService(config, db, codex as never, linear, pino({ enabled: false }));
+    await service.start();
+    await flushQueues();
+
+    const stageRun = db.issueWorkflows.getStageRun(claim!.stageRun.id);
+    const issue = db.issueWorkflows.getTrackedIssue("usertold", "issue_6");
+    assert.equal(stageRun?.status, "running");
+    assert.equal(issue?.lifecycleStatus, "running");
+    assert.equal(linear.issues.get("issue_6")?.stateName, "Implementing");
+    assert.equal(linear.comments.size, 0);
+
+    service.stop();
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("service startup fails active stages with no persisted thread id", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-missing-thread-id-"));
+  try {
+    const config = createConfig(baseDir);
+    setupRepo(baseDir, config);
+    const db = new PatchRelayDatabase(config.database.path, true);
+    db.runMigrations();
+    const codex = new FakeCodexClient();
+    const linear = new FakeLinearClient();
+    const workflowStates = [
+      { id: "start", name: "Start" },
+      { id: "implementing", name: "Implementing" },
+      { id: "review", name: "Review" },
+      { id: "reviewing", name: "Reviewing" },
+      { id: "human-needed", name: "Human Needed" },
+    ];
+    linear.issues.set("issue_7", {
+      id: "issue_7",
+      identifier: "USE-33",
+      stateId: "implementing",
+      stateName: "Implementing",
+      workflowStates,
+      labels: [{ id: "label-working", name: "llm-working" }],
+      labelIds: ["label-working"],
+      teamLabels: [
+        { id: "label-working", name: "llm-working" },
+        { id: "label-awaiting", name: "llm-awaiting-handoff" },
+      ],
+    });
+
+    db.issueWorkflows.upsertTrackedIssue({
+      projectId: "usertold",
+      linearIssueId: "issue_7",
+      issueKey: "USE-33",
+      title: "Fail missing thread id stage",
+      currentLinearState: "Start",
+      desiredStage: "development",
+      desiredWebhookId: "delivery-start-missing-thread-id",
+      lifecycleStatus: "running",
+      lastWebhookAt: new Date().toISOString(),
+    });
+    const claim = db.issueWorkflows.claimStageRun({
+      projectId: "usertold",
+      linearIssueId: "issue_7",
+      stage: "development",
+      triggerWebhookId: "delivery-start-missing-thread-id",
+      branchName: "use/USE-33-fail-missing-thread-id-stage",
+      worktreePath: path.join(baseDir, "worktrees", "USE-33"),
+      workflowFile: getWorkflowFile(config.projects[0], "development"),
+      promptText: "Fail this stage",
+    });
+    assert.ok(claim);
+
+    const service = new PatchRelayService(config, db, codex as never, linear, pino({ enabled: false }));
+    await service.start();
+    await flushQueues();
+
+    const stageRun = db.issueWorkflows.getStageRun(claim!.stageRun.id);
+    const issue = db.issueWorkflows.getTrackedIssue("usertold", "issue_7");
+    assert.equal(stageRun?.status, "failed");
+    assert.equal(issue?.lifecycleStatus, "failed");
+    assert.equal(linear.issues.get("issue_7")?.stateName, "Human Needed");
+    assert.deepEqual(linear.labelUpdates.at(-1), {
+      issueId: "issue_7",
+      addNames: [],
+      removeNames: ["llm-working", "llm-awaiting-handoff"],
+    });
+    assert.match(linear.comments.get(issue?.statusCommentId ?? "")?.body ?? "", /stage-failed/);
+
+    service.stop();
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("service ignores webhook events when project routing is ambiguous", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-ambiguous-"));
   try {

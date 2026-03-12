@@ -63,6 +63,8 @@ function makeIssueQueueKey(item: RuntimeIssueQueueItem): string {
   return `${item.projectId}${ISSUE_KEY_DELIMITER}${item.issueId}`;
 }
 
+// ServiceRuntime is the coordination seam for the harness. It is responsible for
+// startup reconciliation, queue ownership, and handing eligible work to the stage runner.
 export class ServiceRuntime {
   readonly webhookQueue: SerialWorkQueue<number>;
   readonly issueQueue: SerialWorkQueue<RuntimeIssueQueueItem>;
@@ -93,6 +95,8 @@ export class ServiceRuntime {
   async start(): Promise<void> {
     try {
       await this.codex.start();
+      // Reconciliation happens before new work is enqueued so restart recovery can
+      // resolve or release any previously claimed work deterministically.
       await this.stageRunReconciler.reconcileActiveStageRuns();
       for (const issue of this.readyIssueSource.listIssuesReadyForExecution()) {
         this.enqueueIssue(issue.projectId, issue.linearIssueId);

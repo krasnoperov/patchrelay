@@ -37,6 +37,18 @@ PatchRelay does the deterministic harness work that you do not want to re-implem
 - reports progress back to Linear and forwards follow-up comments into active runs
 - exposes CLI and optional read-only inspection surfaces so operators can understand what happened
 
+## System Layers
+
+PatchRelay works best when read as five layers with clear ownership:
+
+- policy layer: repo workflow files and stage prompts
+- coordination layer: issue claiming, stage selection, retries, and reconciliation
+- execution layer: durable worktrees, Codex threads, and queued turn input delivery
+- integration layer: Linear webhooks, OAuth, project routing, and deterministic state sync
+- observability layer: CLI inspection, reports, event trails, and operator endpoints
+
+That separation is intentional. PatchRelay is not the policy itself and it is not the coding agent. It is the harness that keeps those pieces coordinated in a real repository with real operational state.
+
 ## Runtime Model
 
 PatchRelay is designed for a local, operator-owned setup:
@@ -66,6 +78,20 @@ For the exact OAuth app settings and webhook categories, use the Linear onboardi
 3. Delegated issues create or reuse the issue worktree and launch the matching workflow through `codex app-server`.
 4. PatchRelay persists thread ids, run state, and observations so the work stays inspectable and resumable.
 5. Mentions stay conversational, while delegated sessions and issue comments can steer the active run. An operator can take over from the exact same worktree when needed.
+
+## Restart And Reconciliation
+
+PatchRelay treats restart safety as part of the harness contract, not as a best-effort extra.
+
+After a restart, the service should be able to answer:
+
+- which issue owns each active worktree
+- which stage was running or queued
+- which Codex thread and turn belong to that work
+- whether the issue is still eligible to continue
+- whether the run should resume, hand off, or fail back to a human state
+
+This is why PatchRelay keeps a small harness ledger alongside Codex thread history and Linear state. The goal is not to duplicate the model transcript. The goal is to make automation restartable, inspectable, and recoverable when the process or machine is interrupted.
 
 ## Workflow Configuration
 
@@ -233,6 +259,9 @@ Use the README for the product overview and quick start. Use the docs for operat
 - [Linear agent onboarding](https://github.com/krasnoperov/patchrelay/blob/main/docs/linear-agent-onboarding.md)
 - [CLI reference](https://github.com/krasnoperov/patchrelay/blob/main/docs/cli-reference.md)
 - [Architecture](https://github.com/krasnoperov/patchrelay/blob/main/docs/architecture.md)
+- [Module map](https://github.com/krasnoperov/patchrelay/blob/main/docs/module-map.md)
+- [Authoritative vs derived state](https://github.com/krasnoperov/patchrelay/blob/main/docs/state-authority.md)
+- [Persistence audit](https://github.com/krasnoperov/patchrelay/blob/main/docs/persistence-audit.md)
 - [Codex integration details](https://github.com/krasnoperov/patchrelay/blob/main/docs/codex-workflow.md)
 - [Workflow file requirements](https://github.com/krasnoperov/patchrelay/blob/main/docs/IMPLEMENTATION_WORKFLOW_REQUIREMENTS.md)
 - [Security policy](https://github.com/krasnoperov/patchrelay/blob/main/SECURITY.md)
