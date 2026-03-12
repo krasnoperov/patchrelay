@@ -326,13 +326,16 @@ async function tryManageService(
   }
 }
 
-function installServiceCommands(): ServiceCommand[] {
-  return [
+function installServiceCommands(options?: { skipReload?: boolean }): ServiceCommand[] {
+  const commands: ServiceCommand[] = [
     { command: "systemctl", args: ["--user", "daemon-reload"] },
     { command: "systemctl", args: ["--user", "enable", "--now", "patchrelay.path"] },
     { command: "systemctl", args: ["--user", "enable", "patchrelay.service"] },
-    { command: "systemctl", args: ["--user", "reload-or-restart", "patchrelay.service"] },
   ];
+  if (!options?.skipReload) {
+    commands.push({ command: "systemctl", args: ["--user", "reload-or-restart", "patchrelay.service"] });
+  }
+  return commands;
 }
 
 function restartServiceCommands(): ServiceCommand[] {
@@ -627,7 +630,8 @@ export async function runCli(
         return 0;
       }
 
-      const serviceState = await tryManageService(runInteractive, installServiceCommands());
+      const skipReload = result.status === "unchanged";
+      const serviceState = await tryManageService(runInteractive, installServiceCommands({ skipReload }));
       if (!serviceState.ok) {
         throw new Error(`Project was saved, but PatchRelay could not be reloaded: ${serviceState.error}`);
       }
@@ -635,14 +639,14 @@ export async function runCli(
       const cliData = options?.data ?? new CliDataAccess(fullConfig);
       try {
         if (json) {
-          const connectResult = noConnect ? undefined : await cliData.connect(projectId);
+          const connectResult = noConnect ? undefined : await cliData.connect(result.project.id);
           writeOutput(
             stdout,
             formatJson({
               ...result,
               serviceUnits,
               readiness: report,
-              serviceReloaded: true,
+              serviceReloaded: !skipReload,
               ...(noConnect
                 ? {
                     connect: {
@@ -675,7 +679,7 @@ export async function runCli(
           stdout,
           noOpen: parsed.flags.get("no-open") === true,
           timeoutSeconds: parseTimeoutSeconds(parsed.flags.get("timeout"), "project apply"),
-          projectId,
+          projectId: result.project.id,
           ...(options?.openExternal ? { openExternal: options.openExternal } : {}),
           ...(options?.connectPollIntervalMs !== undefined ? { connectPollIntervalMs: options.connectPollIntervalMs } : {}),
         });

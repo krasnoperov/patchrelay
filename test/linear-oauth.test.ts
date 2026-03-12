@@ -120,8 +120,8 @@ test("exchangeLinearOAuthCode and refreshLinearOAuthToken normalize successful r
     assert.deepEqual(refreshed.scopes, ["read", "write"]);
     assert.ok(refreshed.expiresAt);
 
-    assert.match(calls[0].body ?? "", /"grant_type":"authorization_code"/);
-    assert.match(calls[1].body ?? "", /"grant_type":"refresh_token"/);
+    assert.match(calls[0].body ?? "", /grant_type=authorization_code/);
+    assert.match(calls[1].body ?? "", /grant_type=refresh_token/);
   } finally {
     globalThis.fetch = originalFetch;
   }

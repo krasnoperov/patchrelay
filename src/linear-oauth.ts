@@ -46,20 +46,21 @@ export async function exchangeLinearOAuthCode(
   const response = await fetch(DEFAULT_LINEAR_TOKEN_URL, {
     method: "POST",
     headers: {
-      "content-type": "application/json",
+      "content-type": "application/x-www-form-urlencoded",
     },
-    body: JSON.stringify({
+    body: new URLSearchParams({
       grant_type: "authorization_code",
       code: params.code,
       client_id: config.linear.oauth.clientId,
       client_secret: config.linear.oauth.clientSecret,
       redirect_uri: params.redirectUri,
-    }),
+    }).toString(),
   });
 
   const payload = (await response.json().catch(() => undefined)) as Record<string, unknown> | undefined;
   if (!response.ok || !payload) {
-    throw new Error(`Linear OAuth code exchange failed with HTTP ${response.status}`);
+    const detail = payload?.error ? `: ${String(payload.error)}` : "";
+    throw new Error(`Linear OAuth code exchange failed with HTTP ${response.status}${detail}`);
   }
 
   const accessToken = typeof payload.access_token === "string" ? payload.access_token : undefined;
@@ -87,14 +88,14 @@ export async function refreshLinearOAuthToken(
   const response = await fetch(DEFAULT_LINEAR_TOKEN_URL, {
     method: "POST",
     headers: {
-      "content-type": "application/json",
+      "content-type": "application/x-www-form-urlencoded",
     },
-    body: JSON.stringify({
+    body: new URLSearchParams({
       grant_type: "refresh_token",
       refresh_token: refreshToken,
       client_id: config.linear.oauth.clientId,
       client_secret: config.linear.oauth.clientSecret,
-    }),
+    }).toString(),
   });
 
   const payload = (await response.json().catch(() => undefined)) as Record<string, unknown> | undefined;
