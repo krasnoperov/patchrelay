@@ -1,373 +1,345 @@
-# Reconciliation Authority Cutover Plan
+# Final Ledger Transition Plan
 
 ## Goal
 
-Complete the transition from legacy restart logic to a ledger-native recovery harness where:
+Remove the legacy workflow model completely.
 
-- `event_receipts`, `issue_control`, `workspace_ownership`, `run_leases`, and `obligations`
-  are the authoritative coordination ledger
-- live Linear and Codex reads provide current truth
-- restart recovery is driven by explicit reconciliation actions
-- legacy workflow tables become compatibility/projection layers instead of correctness inputs
+After this transition, PatchRelay should have:
 
-## Current State
+- one authoritative coordination ledger
+- one small projection layer for operator lookups
+- one artifact layer for reports and event history
+- no runtime dependence on `tracked_issues`, `workspaces`, `pipeline_runs`, `stage_runs`, or
+  `queued_turn_inputs`
 
-The current branch already has:
+The end state is intentionally simple:
 
-- additive authoritative ledger tables and stores
-- a standalone reconciliation engine
-- dual-write from webhook intake, desired-stage recording, launch, completion, and failure
-- durable obligations for human follow-up
-- obligation dedupe enforced by store semantics and a unique index
-- ledger-aware startup recovery that checks active `run_leases` before falling back to legacy rows
-- obligation replay that clears the matching legacy queued input on successful delivery
-
-The system is still in a bridge state, though:
-
-- startup recovery is still hybrid because `run_leases` fall back to legacy `stage_runs`
-- ready-launch seeding still merges ledger-ready `issue_control` with legacy `tracked_issues`
-- stage launch still claims and mirrors through legacy workflow rows
-- queued turn inputs still participate in operational delivery alongside ledger `obligations`
-- CLI/query/report paths still read legacy workflow tables directly
-
-## Immediate Gaps To Close
-
-### 1. Make the ledger the only recovery input
-
-`ServiceRuntime.start()` and `ServiceStageFinalizer.reconcileActiveStageRuns()` should stop using
-legacy `tracked_issues` / `stage_runs` as fallback inputs. Reconciliation should be able to run
-solely from the authoritative ledger plus live Linear/Codex reads.
-
-### 2. Make the ledger the only launch-intent input
-
-Ready-launch seeding and stage launch should stop consulting legacy `tracked_issues` for desired
-stage / desired webhook / active-run ownership.
-
-### 3. Demote compatibility rows without breaking operators
-
-Legacy rows should remain mirrored only long enough for CLI/report/query compatibility. They should
-not participate in correctness paths once ledger-native recovery and launch are complete.
-
-## Target End State
-
-PatchRelay should answer these questions after any restart:
-
-1. Which external events have already been accepted?
-2. What issue work does the harness currently own?
-3. Which run lease is active for that issue?
-4. Which obligations are still undelivered?
-5. What service-owned external writes must be updated instead of duplicated?
-6. Given live Linear and Codex state, what is the next safe action?
-
-The authoritative runtime loop becomes:
-
-1. Read active `run_leases` and launch-ready `issue_control` rows.
-2. Hydrate live Linear and Codex state.
-3. Run the reconciliation engine.
-4. Apply the resulting actions idempotently.
-5. Update compatibility/projection tables only as a mirror layer.
-
-## Implementation Phases
-
-### Phase 1: Idempotent obligations
-
-- add a unique index or equivalent store-level upsert semantics for obligation dedupe
-- store enough payload to map an obligation back to the matching queued turn input
-- when reconciliation delivers an obligation successfully, mark both:
-  - the obligation completed
-  - the matching queued turn input delivered
-- add tests for duplicate comment/prompt delivery and restart replay
-
-### Phase 2: Reconciliation snapshot builder
-
-Add a dedicated builder that assembles reconciliation input from:
-
+- `event_receipts`
 - `issue_control`
-- the active `run_lease`
-- pending `obligations`
-- live Linear issue read
-- live Codex thread read
+- `workspace_ownership`
+- `run_leases`
+- `obligations`
+- installation and OAuth tables
+- a few explicit projection and artifact tables
 
-This builder should not depend on legacy `tracked_issues` presentation fields or `thread_events`.
+Everything else should be deleted.
 
-### Phase 3: Action applier
+## End-State Architecture
 
-Introduce a single action-application layer that can execute the reconciliation engine outputs:
+### Authoritative Ledger
 
-- `launch_desired_stage`
-- `keep_run_active`
-- `mark_run_completed`
-- `mark_run_failed`
-- `clear_active_run`
-- `release_issue_ownership`
-- `sync_linear_failure`
-- `refresh_status_comment`
-- `route_obligation`
-- `deliver_obligation`
-- `await_codex_retry`
+These tables remain and own correctness:
 
-The action applier becomes the one place where restart recovery mutates the ledger and performs
-external side effects.
+- `event_receipts`
+  Deduplication, acceptance, and webhook processing ownership.
+- `issue_control`
+  Desired stage, active run lease, active workspace ownership, lifecycle status, and service-owned
+  Linear anchors.
+- `workspace_ownership`
+  Durable issue-to-worktree ownership.
+- `run_leases`
+  The only execution record used for launch, restart, completion, and failure.
+- `obligations`
+  The only durable source of pending work that must be delivered after restart.
 
-### Phase 4: Ledger-native startup recovery
+### Projection Layer
 
-Replace the current legacy reconcile loop with:
+These tables exist only to make the CLI and HTTP surfaces pleasant:
 
-- `listActiveRunLeases()` as the source of active work
-- `listIssueControlsReadyForLaunch()` as the source of desired launches
-- reconciliation-engine decisions plus the action applier
+- `issue_projection`
+  Cached issue key, title, URL, current Linear state, and last-seen metadata.
 
-Legacy `stage_runs` remain mirrored during this phase for compatibility and reporting, but they no
-longer drive startup recovery.
+Projection rules:
 
-### Phase 5: Ledger-native launch eligibility
+- projections are never used to decide ownership or next action
+- projections may be stale or absent
+- runtime paths must tolerate rebuilding them from live Linear reads
 
-Update launch orchestration so the readiness path is based on `issue_control` instead of
-`tracked_issues`:
+### Artifact Layer
 
-- `ServiceRuntime` seeds work from the ledger-ready issue controls
-- `ServiceStageRunner` consumes ledger intent first
-- legacy `claimStageRun()` remains as a compatibility mirror until projections are removed
+These tables exist only for operator history and reports:
 
-### Phase 6: Demote legacy tables to projections
+- `run_reports`
+  Summary JSON and report JSON keyed by `run_lease_id`
+- `run_thread_events`
+  Event history keyed by `run_lease_id`
 
-Once reconciliation and launch eligibility are ledger-native:
+Artifact rules:
 
-- stop using `tracked_issues` as a correctness input
-- stop using `stage_runs` as a restart/recovery input
-- treat `queued_turn_inputs`, `thread_events`, and stage reports as compatibility/projection data
-- retain legacy writes only as long as the CLI/report/query layers still need them
+- artifacts are not required for restart correctness
+- missing artifacts must not block recovery
+- artifacts should be keyed by `run_lease_id`, not by any legacy stage-run id
 
-## Remaining Steps
+## Legacy That Must Disappear
 
-The remaining work is now the full hybrid-removal sequence:
+Delete all of this:
 
-1. Build a canonical ledger reconciliation snapshot builder.
-2. Introduce a reconciliation action applier and move startup recovery through it.
-3. Remove the legacy `stage_runs` fallback from startup reconciliation.
-4. Make launch seeding and launch claiming ledger-native.
-5. Make `obligations` the only durable pending-input correctness path.
-6. Demote `tracked_issues`, `stage_runs`, and `queued_turn_inputs` to projection status.
-7. Update CLI/report/query surfaces to tolerate missing legacy authority.
-8. Remove remaining legacy recovery reads and simplify the old stores.
+- `tracked_issues`
+- `workspaces`
+- `pipeline_runs`
+- `stage_runs`
+- `queued_turn_inputs`
+- `IssueWorkflowStore`
+- most of `workflow-ports.ts`
 
-## Proposed PR Sequence
+Delete these concepts from runtime code:
 
-### PR 1: Fix obligation replay and dedupe gaps
+- `activeWorkspaceId`
+- `activePipelineRunId`
+- `activeStageRunId`
+- `latestThreadId`
+- `statusCommentId` on tracked issues as an authority input
+- `pendingLaunchInput`
+- `claimStageRun`
+- `finishStageRun`
+- `listActiveStageRuns`
+- `getLatestStageRunForIssue` as anything other than history
 
-- enforce dedupe on obligations
-- clear matching legacy queued input on obligation delivery
-- add focused restart/idempotency tests
+## What Still Blocks Removal Today
 
-Status: implemented on this branch.
+Legacy is no longer the control plane, but it still backs three things:
 
-### PR 2: Add ledger reconciliation snapshot and action applier
+1. launch and completion mirrors
+2. operator read models
+3. artifact storage keyed by `stageRunId`
 
-- build canonical reconciliation input from the ledger
-- introduce action execution as a dedicated subsystem
-- keep existing recovery loop in place but exercise the action applier in tests
+The hard blocker is the third one.
 
-### PR 3: Switch startup recovery from `stage_runs` to `run_leases`
+Reports, thread event history, and queued-input mirrors are still tied to `stage_runs`. As long as
+artifact storage is keyed by legacy stage runs, the legacy workflow model cannot fully disappear.
 
-- make `run_leases` the source of active work
-- use the reconciliation engine end-to-end during startup
-- keep legacy rows mirrored for compatibility
+## Final Transition Strategy
 
-### PR 4: Switch ready-launch seeding from `tracked_issues` to `issue_control`
+Do the rest of the migration as one deliberate transition branch with ordered commits. The branch
+can be reviewed as one PR if desired, but the code changes should still be applied in this order so
+the system stays understandable and testable.
 
-- seed runtime queues from ledger intent
-- make the launch path ledger-first
-- keep dual-write to legacy launch rows temporarily
+### Step 1: Add ledger-native projection and artifact tables
 
-### PR 5: Demote legacy recovery inputs to projections
+Add:
 
-- remove the old reconcile loop
-- narrow remaining legacy reads to CLI/report compatibility
-- document the new authoritative runtime model
+- `issue_projection`
+- `run_reports`
+- `run_thread_events`
 
-## Commit-Oriented Execution Plan
+Rules:
 
-To finish the cutover cleanly, use a stacked sequence of narrow commits where each commit leaves the
-branch operational and validated.
+- `issue_projection` is keyed by `(project_id, linear_issue_id)`
+- `run_reports` is keyed by `run_lease_id`
+- `run_thread_events` is keyed by `run_lease_id`
 
-### Commit A: Canonical reconciliation snapshot builder
+Do not add new mixed tables. Keep projections and artifacts separate.
 
-Scope:
+### Step 2: Replace stage-run keyed artifacts with run-lease keyed artifacts
 
-- add a builder that loads `issue_control`, active `run_leases`, `workspace_ownership`, pending
-  `obligations`, and live Linear/Codex state
-- normalize the builder output into the reconciliation-engine input shape
-- add focused tests for snapshot assembly and edge cases like missing thread IDs or missing live
-  Linear data
+Move:
 
-Expected files:
+- `summary_json`
+- `report_json`
+- `thread_events`
+- operator event history
 
-- `src/reconciliation-snapshot-builder.ts`
-- `src/reconciliation-types.ts`
-- `src/service-stage-finalizer.ts`
-- reconciliation tests
+off legacy `stageRunId` and onto `runLeaseId`.
 
-Owner:
+Keep legacy mirror rows readable during the migration if needed, but stop writing new authoritative
+data there once the new artifact tables exist.
 
-- one worker agent focused only on reconciliation input assembly
+### Step 3: Replace pending launch input and queued turn input with obligations only
 
-### Commit B: Reconciliation action applier
+Remove correctness dependence on:
 
-Scope:
+- `tracked_issues.pending_launch_input`
+- `queued_turn_inputs`
 
-- introduce a dedicated action-applier module
-- map reconciliation outputs to concrete operations:
-  - enqueue launch
-  - keep run active
-  - mark run complete
-  - mark run failed
-  - clear active ownership
-  - deliver obligation
-  - refresh service-owned write anchors
-- make startup recovery call the applier instead of open-coding the behavior in the finalizer
+New rule:
 
-Expected files:
+- every undelivered operator input is an `obligation`
+- launch input is just another obligation kind
+- delivery state lives only in `obligations`
 
-- `src/reconciliation-action-applier.ts`
-- `src/service-stage-finalizer.ts`
-- supporting tests
+If mirrored input rows are still useful for history during the transition, they must become derived
+trace rows only.
 
-Owner:
+### Step 4: Replace legacy issue metadata reads with `issue_projection`
 
-- one worker agent focused only on recovery action execution
+Move CLI and HTTP lookup entry points from:
 
-### Commit C: Remove legacy startup fallback
+- `tracked_issues.issue_key`
+- `tracked_issues.title`
+- `tracked_issues.issue_url`
+- `tracked_issues.current_linear_state`
 
-Scope:
+to `issue_projection`.
 
-- delete the `stage_runs` fallback path from startup reconciliation
-- make `listActiveRunLeases()` the only source of active work at startup
-- keep legacy row updates as mirror writes only
-- add restart tests proving recovery works with no legacy stage-run reads
+Update:
 
-Expected files:
+- [src/cli/data.ts](../src/cli/data.ts)
+- [src/issue-query-service.ts](../src/issue-query-service.ts)
+- any lookup helpers in [src/http.ts](../src/http.ts)
 
-- `src/service-stage-finalizer.ts`
-- `src/service-runtime.ts`
-- restart tests
+After this step, `tracked_issues` should no longer be needed for operator lookup.
 
-Owner:
+### Step 5: Make launch fully ledger-native
 
-- one worker agent focused on runtime cutover and restart invariants
+Change [src/service-stage-runner.ts](../src/service-stage-runner.ts) so launch no longer creates or
+claims legacy workflow rows.
 
-### Commit D: Ledger-native launch seeding and claiming
+Replace:
 
-Scope:
+- `claimStageRun`
+- `updateStageRunThread`
+- `consumeIssuePendingLaunchInput`
 
-- make `issue_control` the only readiness input
-- move desired-stage and desired-receipt resolution fully into the ledger path
-- stop consulting legacy `tracked_issues` to decide whether a run should launch
-- keep legacy `claimStageRun()` only as mirror/projection write support until later cleanup
+with:
 
-Expected files:
+- `issue_control` for desired stage
+- `workspace_ownership` for worktree ownership
+- `run_leases` for execution record creation
+- `obligations` for pending launch input
 
-- `src/service.ts`
-- `src/service-stage-runner.ts`
-- `src/webhook-desired-stage-recorder.ts`
-- launch tests
+The only launch record should be a `run_lease`.
 
-Owner:
+### Step 6: Make completion and failure fully ledger-native
 
-- one worker agent focused on ready-queue and launch orchestration
+Change:
 
-### Commit E: Make obligations the sole durable pending-input path
+- [src/service-stage-finalizer.ts](../src/service-stage-finalizer.ts)
+- [src/stage-lifecycle-publisher.ts](../src/stage-lifecycle-publisher.ts)
+- [src/stage-failure.ts](../src/stage-failure.ts)
 
-Scope:
+so they no longer write:
 
-- stop using `queued_turn_inputs` as a correctness dependency
-- treat legacy queued inputs as optional mirrored trace rows
-- make restart replay and active delivery read only ledger `obligations`
-- add tests for comment wake-ups, prompt wake-ups, and restart redelivery with no legacy queue
+- `finishStageRun`
+- legacy pipeline status
+- legacy workspace status
+- tracked issue active pointers
 
-Expected files:
+Completion and failure should update:
 
-- `src/stage-turn-input-dispatcher.ts`
-- `src/webhook-comment-handler.ts`
-- `src/webhook-agent-session-handler.ts`
-- `src/service-stage-finalizer.ts`
-- obligation delivery tests
+- `run_leases`
+- `issue_control`
+- `workspace_ownership`
+- `run_reports`
+- `issue_projection` when useful for UX
 
-Owner:
+### Step 7: Remove legacy adoption and mirror fallback logic
 
-- one worker agent focused on operator-input delivery only
+Delete:
 
-### Commit F: Demote legacy rows and update read surfaces
+- startup adoption of legacy running stages
+- mirror lookup fallback during reconciliation
+- legacy-first active status fallbacks
 
-Scope:
+At this point, if a record is not in the ledger, PatchRelay does not own it.
 
-- narrow CLI/query/report reads so they no longer assume legacy workflow tables are authoritative
-- keep compatibility rendering where useful, but tolerate missing legacy authority fields
-- document the projection-only role of `tracked_issues`, `stage_runs`, and `queued_turn_inputs`
+### Step 8: Replace workflow ports with ledger and projection ports
 
-Expected files:
+Shrink [src/workflow-ports.ts](../src/workflow-ports.ts) drastically or remove it entirely.
 
-- `src/cli/data.ts`
-- query/report helpers
-- docs updates
+Split responsibilities into:
 
-Owner:
+- ledger ports
+- projection ports
+- artifact ports
 
-- one worker agent focused on read surfaces and compatibility
+This should make it impossible for new code to casually depend on the old workflow model.
 
-### Commit G: Remove dead legacy recovery reads
+### Step 9: Delete the legacy store and schema
 
-Scope:
+Delete:
 
-- remove no-longer-used legacy recovery helpers and fallback branches
-- simplify stores/interfaces that were only needed for the hybrid phase
-- update docs to describe the completed authoritative runtime model
+- [src/db/issue-workflow-store.ts](../src/db/issue-workflow-store.ts)
+- legacy workflow types from [src/db-types.ts](../src/db-types.ts)
+- legacy table creation from [src/db/migrations.ts](../src/db/migrations.ts)
 
-Expected files:
+Drop these tables from SQLite:
 
-- `src/db/issue-workflow-store.ts`
-- `src/service-stage-finalizer.ts`
-- `src/service.ts`
-- docs
+- `tracked_issues`
+- `workspaces`
+- `pipeline_runs`
+- `stage_runs`
+- `queued_turn_inputs`
 
-Owner:
+After this step, there is no legacy code left.
 
-- one worker agent focused on cleanup after all previous commits land
+## Concrete Module Changes
 
-## Suggested Agent Choreography
+### New modules to add
 
-Use a baton-pass sequence rather than asking many agents to edit the same runtime files at once.
-The critical-path modules overlap heavily, so parallelism should happen by phase, not by file
-conflict.
+- `src/db/issue-projection-store.ts`
+- `src/db/run-artifact-store.ts`
+- `src/projection-ports.ts`
+- `src/artifact-ports.ts`
 
-1. Agent 1 implements Commit A and commits.
-2. Agent 2 branches from Agent 1's result, implements Commit B, and commits.
-3. Agent 3 branches from Agent 2's result, implements Commit C, and commits.
-4. Agent 4 branches from Agent 3's result, implements Commit D, and commits.
-5. Agent 1 resumes from Agent 4's result, implements Commit E, and commits.
-6. Agent 2 resumes from Agent 5's result, implements Commit F, and commits.
-7. Agent 3 resumes from Agent 6's result, implements Commit G, and commits.
+### Modules to rewrite
 
-At each baton point:
+- [src/service-stage-runner.ts](../src/service-stage-runner.ts)
+- [src/service-stage-finalizer.ts](../src/service-stage-finalizer.ts)
+- [src/stage-lifecycle-publisher.ts](../src/stage-lifecycle-publisher.ts)
+- [src/stage-failure.ts](../src/stage-failure.ts)
+- [src/stage-turn-input-dispatcher.ts](../src/stage-turn-input-dispatcher.ts)
+- [src/cli/data.ts](../src/cli/data.ts)
+- [src/issue-query-service.ts](../src/issue-query-service.ts)
+- [src/service.ts](../src/service.ts)
 
-- run `npm run lint`
-- run `npm run check`
-- run `npm test`
-- review the diff before handing the branch to the next agent
+### Modules to delete
 
-This preserves the workflow we already used successfully: each step is a real commit, each commit
-keeps the system operational, and the stacked branch converges on full removal of the hybrid model.
+- [src/db/issue-workflow-store.ts](../src/db/issue-workflow-store.ts)
 
-## Non-Goals
+### Modules to shrink heavily
 
-- no removal of SQLite as the coordination ledger
-- no broad CLI/report redesign in the same PRs
-- no immediate deletion of compatibility tables before ledger-native runtime is proven
+- [src/workflow-ports.ts](../src/workflow-ports.ts)
+- [src/db-types.ts](../src/db-types.ts)
+- [src/db/migrations.ts](../src/db/migrations.ts)
 
-## Acceptance Criteria
+## Testing Requirements For The Final Transition
 
-- restart correctness depends on the authoritative ledger plus live Linear/Codex reads
-- duplicate webhooks/comments/prompts do not create duplicate obligations or duplicate deliveries
-- startup recovery no longer begins from `stage_runs`
-- ready-launch seeding no longer begins from `tracked_issues`
-- legacy workflow tables are compatibility/projection layers, not the source of truth
-- `npm run lint`, `npm run check`, and `npm test` pass throughout the migration
+Before deleting the legacy schema, add or keep tests that prove:
+
+- launch works with no legacy workflow rows present
+- restart recovery works with no legacy workflow rows present
+- operator input survives restart with only obligations present
+- inspect, live, report, and events work from ledger + projection/artifact tables
+- completion and failure produce reports without `stage_runs`
+- no code path reads `tracked_issues.active_stage_run_id`
+- no code path reads `queued_turn_inputs` for correctness
+
+Add one explicit integration test suite that runs PatchRelay against a database containing only the
+new tables and proves the full lifecycle:
+
+1. desired stage recorded
+2. run lease launched
+3. operator input delivered through obligations
+4. restart recovery runs
+5. completion recorded
+6. report and live views remain available
+
+## Definition Of Done
+
+This transition is done only when all of the following are true:
+
+- no runtime code imports or calls `IssueWorkflowStore`
+- no runtime path depends on `tracked_issues`, `stage_runs`, `pipeline_runs`, `workspaces`, or
+  `queued_turn_inputs`
+- active status, inspect, report, and events work without any legacy table present
+- launch, completion, failure, and restart recovery use only ledger tables plus projections and
+  artifacts
+- the legacy schema and store files are deleted
+
+Anything short of that is still hybrid.
+
+## Recommended Execution Shape
+
+Even if this ships as one PR, implement it as these ordered commits:
+
+1. add `issue_projection`, `run_reports`, and `run_thread_events`
+2. move reports and thread history to `run_lease_id`
+3. move all pending-input handling to `obligations`
+4. move operator lookups to `issue_projection`
+5. make launch ledger-only
+6. make completion/failure ledger-only
+7. remove legacy fallback and adoption logic
+8. remove workflow ports/store usage
+9. delete legacy schema and tests
+
+That is the shortest reasonable path to a codebase with no legacy architecture left in it.
