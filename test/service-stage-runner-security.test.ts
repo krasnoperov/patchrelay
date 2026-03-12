@@ -240,7 +240,7 @@ function createService(baseDir: string) {
 }
 
 function queueIssue(db: PatchRelayDatabase): void {
-  db.issueWorkflows.recordDesiredStage({
+  const issue = db.issueWorkflows.recordDesiredStage({
     projectId: "usertold",
     linearIssueId: "issue_1",
     issueKey: "USE-90",
@@ -250,6 +250,22 @@ function queueIssue(db: PatchRelayDatabase): void {
     desiredStage: "development",
     desiredWebhookId: "delivery-start",
     lastWebhookAt: new Date().toISOString(),
+  });
+  const receipt = db.eventReceipts.insertEventReceipt({
+    source: "linear-webhook",
+    externalId: "delivery-start",
+    eventType: "legacy-test-event",
+    receivedAt: new Date().toISOString(),
+    acceptanceStatus: "accepted",
+    projectId: "usertold",
+    linearIssueId: "issue_1",
+  });
+  db.issueControl.upsertIssueControl({
+    projectId: "usertold",
+    linearIssueId: "issue_1",
+    desiredStage: "development",
+    desiredReceiptId: receipt.id,
+    lifecycleStatus: issue.lifecycleStatus,
   });
 }
 

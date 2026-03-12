@@ -951,7 +951,7 @@ test("service builds a read-only report from completed thread history", async ()
     const { db, codex, linear, service } = createService(baseDir);
     await service.start();
 
-    db.issueWorkflows.recordDesiredStage({
+    recordDesiredStageWithLedger(db, {
       projectId: "usertold",
       linearIssueId: "issue_2",
       issueKey: "USE-26",
@@ -1034,7 +1034,7 @@ test("service exposes raw stored events and live active status", async () => {
     const { db, codex, service } = createService(baseDir);
     await service.start();
 
-    db.issueWorkflows.recordDesiredStage({
+    recordDesiredStageWithLedger(db, {
       projectId: "usertold",
       linearIssueId: "issue_3",
       issueKey: "USE-27",
@@ -1091,7 +1091,7 @@ test("service forwards new Linear comments into the active turn", async () => {
     const { db, codex, service } = createService(baseDir);
     await service.start();
 
-    db.issueWorkflows.recordDesiredStage({
+    recordDesiredStageWithLedger(db, {
       projectId: "usertold",
       linearIssueId: "issue_3",
       issueKey: "USE-27",
@@ -1191,7 +1191,7 @@ test("service ignores webhook events from untrusted Linear actors", async () => 
     assert.equal(db.issueWorkflows.getTrackedIssue("usertold", "issue_3"), undefined);
     assert.equal(codex.startedThreads.length, 0);
 
-    db.issueWorkflows.recordDesiredStage({
+    recordDesiredStageWithLedger(db, {
       projectId: "usertold",
       linearIssueId: "issue_3",
       issueKey: "USE-27",
@@ -1385,7 +1385,7 @@ test("service clears service-owned labels when the agent advances Linear state",
     const { db, codex, linear, service } = createService(baseDir);
     await service.start();
 
-    db.issueWorkflows.recordDesiredStage({
+    recordDesiredStageWithLedger(db, {
       projectId: "usertold",
       linearIssueId: "issue_2",
       issueKey: "USE-26",
@@ -1434,7 +1434,7 @@ test("service rolls Linear back to Human Needed when launch fails", async () => 
     };
     await service.start();
 
-    db.issueWorkflows.recordDesiredStage({
+    recordDesiredStageWithLedger(db, {
       projectId: "usertold",
       linearIssueId: "issue_2",
       issueKey: "USE-26",
@@ -1471,7 +1471,7 @@ test("service keeps the stage running when the status comment refresh fails afte
     linear.failNextCommentUpsert = true;
     await service.start();
 
-    db.issueWorkflows.recordDesiredStage({
+    recordDesiredStageWithLedger(db, {
       projectId: "usertold",
       linearIssueId: "issue_2",
       issueKey: "USE-31",
