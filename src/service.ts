@@ -75,7 +75,14 @@ export class PatchRelayService {
   ) {
     this.linearProvider = toLinearClientProvider(linearProvider);
     const stores = createServiceStores(db);
-    this.stageRunner = new ServiceStageRunner(config, stores, codex, this.linearProvider, logger);
+    this.stageRunner = new ServiceStageRunner(
+      config,
+      stores,
+      codex,
+      this.linearProvider,
+      logger,
+      (fn) => db.connection.transaction(fn)(),
+    );
     let enqueueIssue: (projectId: string, issueId: string) => void = () => {
       throw new Error("Service runtime enqueueIssue is not initialized");
     };

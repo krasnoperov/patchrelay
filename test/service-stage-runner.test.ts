@@ -234,7 +234,7 @@ function setupRepo(config: AppConfig): void {
   }
 }
 
-function createHarness(baseDir: string) {
+function createHarness(baseDir: string, options?: { runAtomically?: <T>(fn: () => T) => T }) {
   const config = createConfig(baseDir);
   setupRepo(config);
   const db = new PatchRelayDatabase(config.database.path, true);
@@ -268,6 +268,7 @@ function createHarness(baseDir: string) {
       },
     },
     pino({ enabled: false }),
+    options?.runAtomically,
   );
   return { config, db, codex, linear, runner };
 }
@@ -491,6 +492,34 @@ test("stage runner no-ops when ledger ownership already has an active run lease"
     assert.equal(codex.startedThreads.length, 0);
     assert.equal(codex.startedTurns.length, 0);
     assert.equal(db.issueWorkflows.listStageRunsForIssue("usertold", "issue-1").length, 1);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("stage runner finalizes failed launches inside the provided atomic wrapper", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-stage-runner-atomic-launch-failure-"));
+  try {
+    const atomicCalls: string[] = [];
+    const { db, runner, codex } = createHarness(baseDir, {
+      runAtomically: (fn) => {
+        atomicCalls.push("begin");
+        const result = fn();
+        atomicCalls.push("end");
+        return result;
+      },
+    });
+    queueDesiredStage(db);
+    codex.startTurnError = new Error("turn start failed");
+
+    await assert.rejects(
+      () => runner.run({ projectId: "usertold", issueId: "issue-1" }),
+      /turn start failed/,
+    );
+
+    assert.deepEqual(atomicCalls, ["begin", "end"]);
+    assert.equal(db.issueControl.getIssueControl("usertold", "issue-1")?.activeRunLeaseId, undefined);
+    assert.equal(db.runLeases.getRunLease(1)?.status, "failed");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

@@ -25,6 +25,7 @@ export class ServiceStageRunner {
   private readonly worktreeManager: WorktreeManager;
   private readonly inputDispatcher: StageTurnInputDispatcher;
   private readonly lifecyclePublisher: StageLifecyclePublisher;
+  private readonly runAtomically: <T>(fn: () => T) => T;
 
   constructor(
     private readonly config: AppConfig,
@@ -39,7 +40,9 @@ export class ServiceStageRunner {
     private readonly codex: CodexAppServerClient,
     private readonly linearProvider: LinearClientProvider,
     private readonly logger: Logger,
+    runAtomically: <T>(fn: () => T) => T = (fn) => fn(),
   ) {
+    this.runAtomically = runAtomically;
     this.worktreeManager = new WorktreeManager(config);
     this.inputDispatcher = new StageTurnInputDispatcher(stores, codex, logger);
     this.lifecyclePublisher = new StageLifecyclePublisher(config, stores, linearProvider, logger);
@@ -230,16 +233,18 @@ export class ServiceStageRunner {
     threadId?: string,
   ): Promise<void> {
     const failureThreadId = threadId ?? `launch-failed-${stageRun.id}`;
-    this.stores.issueWorkflows.finishStageRun({
-      stageRunId: stageRun.id,
-      status: "failed",
-      threadId: failureThreadId,
-      summaryJson: JSON.stringify({ message }),
-      reportJson: JSON.stringify(buildFailedStageReport(stageRun, "failed", { threadId: failureThreadId })),
-    });
-    this.finishRunLease(stageRun.projectId, stageRun.linearIssueId, "failed", {
-      threadId: failureThreadId,
-      failureReason: message,
+    this.runAtomically(() => {
+      this.stores.issueWorkflows.finishStageRun({
+        stageRunId: stageRun.id,
+        status: "failed",
+        threadId: failureThreadId,
+        summaryJson: JSON.stringify({ message }),
+        reportJson: JSON.stringify(buildFailedStageReport(stageRun, "failed", { threadId: failureThreadId })),
+      });
+      this.finishRunLease(stageRun.projectId, stageRun.linearIssueId, "failed", {
+        threadId: failureThreadId,
+        failureReason: message,
+      });
     });
 
     await syncFailedStageToLinear({
