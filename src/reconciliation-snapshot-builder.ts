@@ -73,10 +73,7 @@ export async function buildReconciliationSnapshot(params: {
       ? await params.codex
           .readThread(runLease.threadId, true)
           .then((thread) => ({ status: "found" as const, thread }))
-          .catch((error) => ({
-            status: "error" as const,
-            errorMessage: error instanceof Error ? error.message : String(error),
-          }))
+          .catch((error) => mapCodexReadFailure(error))
       : ({ status: "unknown" as const });
 
   const obligations: ReconciliationObligation[] =
@@ -127,5 +124,17 @@ export async function buildReconciliationSnapshot(params: {
         codex: liveCodex,
       },
     },
+  };
+}
+
+function mapCodexReadFailure(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  const normalized = message.trim().toLowerCase();
+  if (normalized.includes("not found") || normalized.includes("missing")) {
+    return { status: "missing" as const };
+  }
+  return {
+    status: "error" as const,
+    errorMessage: message,
   };
 }

@@ -42,6 +42,7 @@ export class WebhookDesiredStageRecorder {
     const delegatedToPatchRelay = this.isDelegatedToPatchRelay(project, normalized);
     const desiredStage = this.resolveDesiredStage(project, normalized, issue, activeStageRun, delegatedToPatchRelay);
     const launchInput = this.resolveLaunchInput(normalized.agentSession);
+    this.persistIssueControlFirst(project.id, normalizedIssue.id, issue, desiredStage, normalized.agentSession?.id, options?.eventReceiptId);
 
     this.stores.issueWorkflows.recordDesiredStage({
       projectId: project.id,
@@ -142,6 +143,30 @@ export class WebhookDesiredStageRecorder {
     }
 
     return undefined;
+  }
+
+  private persistIssueControlFirst(
+    projectId: string,
+    linearIssueId: string,
+    issue: TrackedIssueRecord | undefined,
+    desiredStage: WorkflowStage | undefined,
+    activeAgentSessionId: string | undefined,
+    eventReceiptId: number | undefined,
+  ): void {
+    if (!this.stores.issueControl || !desiredStage) {
+      return;
+    }
+
+    const lifecycleStatus = issue?.activeStageRunId || desiredStage ? issue?.lifecycleStatus ?? "queued" : issue?.lifecycleStatus ?? "idle";
+    this.stores.issueControl.upsertIssueControl({
+      projectId,
+      linearIssueId,
+      desiredStage,
+      ...(eventReceiptId !== undefined ? { desiredReceiptId: eventReceiptId } : {}),
+      ...(issue?.statusCommentId ? { serviceOwnedCommentId: issue.statusCommentId } : {}),
+      ...(activeAgentSessionId ? { activeAgentSessionId } : {}),
+      lifecycleStatus,
+    });
   }
 
   private syncIssueControl(

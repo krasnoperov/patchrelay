@@ -142,6 +142,55 @@ test("reconciliation action applier completes a stage using the live codex threa
   });
 });
 
+test("reconciliation action applier fails a released run when the decision still carries mark_run_failed", async () => {
+  const calls: { failed?: { threadId: string; message: string; turnId?: string } } = {};
+  const applier = new ReconciliationActionApplier({
+    enqueueIssue: () => assert.fail("should not enqueue"),
+    deliverPendingObligations: async () => assert.fail("should not deliver obligations"),
+    completeStageRun: () => assert.fail("should not complete"),
+    failStageRunDuringReconciliation: async (_stageRun, threadId, message, options) => {
+      calls.failed = { threadId, message, ...(options?.turnId ? { turnId: options.turnId } : {}) };
+    },
+  });
+
+  const decision: ReconciliationDecision = {
+    outcome: "release",
+    reasons: ["thread was not found during reconciliation"],
+    actions: [
+      {
+        type: "mark_run_failed",
+        projectId: "proj",
+        linearIssueId: "issue-1",
+        runId: 90,
+        threadId: "thread-live",
+        turnId: "turn-live",
+        reason: "thread was not found during reconciliation",
+      },
+      {
+        type: "release_issue_ownership",
+        projectId: "proj",
+        linearIssueId: "issue-1",
+        runId: 90,
+        nextLifecycleStatus: "failed",
+        reason: "moved on",
+      },
+    ],
+  };
+
+  await applier.apply({
+    snapshot: createSnapshot(),
+    decision,
+    stageRun: createStageRun(),
+    issue: createIssue(),
+  });
+
+  assert.deepEqual(calls.failed, {
+    threadId: "thread-live",
+    turnId: "turn-live",
+    message: "thread was not found during reconciliation",
+  });
+});
+
 test("reconciliation action applier treats release as successful completion", async () => {
   const calls: { completed?: { threadId: string; turnId?: string; nextLifecycleStatus?: string } } = {};
   const applier = new ReconciliationActionApplier({

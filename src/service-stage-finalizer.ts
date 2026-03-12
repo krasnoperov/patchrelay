@@ -27,7 +27,7 @@ import {
 } from "./stage-reporting.ts";
 import { StageLifecyclePublisher } from "./stage-lifecycle-publisher.ts";
 import { StageTurnInputDispatcher } from "./stage-turn-input-dispatcher.ts";
-import type { AppConfig, CodexThreadSummary, LinearClientProvider, StageRunRecord, TrackedIssueRecord } from "./types.ts";
+import type { AppConfig, CodexThreadSummary, LinearClientProvider, StageRunRecord, TrackedIssueRecord, WorkspaceRecord } from "./types.ts";
 import { safeJsonParse } from "./utils.ts";
 
 export class ServiceStageFinalizer {
@@ -128,9 +128,12 @@ export class ServiceStageFinalizer {
   }
 
   async reconcileActiveStageRuns(): Promise<void> {
-    const activeRunLeases = this.stores.runLeases?.listActiveRunLeases().filter((runLease) => runLease.status === "running") ?? [];
-    for (const runLease of activeRunLeases) {
-      await this.reconcileRunLease(runLease.id);
+    const runLeaseIds = [
+      ...this.adoptLegacyRunningStages(),
+      ...(this.stores.runLeases?.listActiveRunLeases().filter((runLease) => runLease.status === "running").map((runLease) => runLease.id) ?? []),
+    ];
+    for (const runLeaseId of new Set(runLeaseIds)) {
+      await this.reconcileRunLease(runLeaseId);
     }
   }
 
@@ -315,26 +318,116 @@ export class ServiceStageFinalizer {
       }
 
       try {
+        this.stores.obligations.markObligationStatus(obligation.id, "in_progress");
         const mirroredQueuedInput =
-          payload?.stageRunId !== undefined && payload.queuedInputId !== undefined
-            ? this.stores.stageEvents.listPendingTurnInputs(payload.stageRunId).find((input) => input.id === payload.queuedInputId)
+          payload?.stageRunId !== undefined
+            ? this.stores.stageEvents.listPendingTurnInputs(payload.stageRunId).find((input) =>
+                payload.queuedInputId !== undefined ? input.id === payload.queuedInputId : input.source === obligation.source && input.body === body,
+              )
             : undefined;
-        if (mirroredQueuedInput && payload?.queuedInputId !== undefined) {
-          this.stores.stageEvents.setPendingTurnInputRouting(payload.queuedInputId, threadId, turnId);
+        if (mirroredQueuedInput) {
+          this.stores.stageEvents.setPendingTurnInputRouting(mirroredQueuedInput.id, threadId, turnId);
         }
         await this.codex.steerTurn({ threadId, turnId, input: body });
-        if (mirroredQueuedInput && payload?.queuedInputId !== undefined) {
-          this.stores.stageEvents.markTurnInputDelivered(payload.queuedInputId);
+        if (mirroredQueuedInput) {
+          this.stores.stageEvents.markTurnInputDelivered(mirroredQueuedInput.id);
         }
         this.stores.obligations.markObligationStatus(obligation.id, "completed");
       } catch (error) {
         this.stores.obligations.markObligationStatus(
           obligation.id,
-          "failed",
+          "pending",
           error instanceof Error ? error.message : String(error),
         );
+        break;
       }
     }
+  }
+
+  private adoptLegacyRunningStages(): number[] {
+    if (!this.stores.issueControl || !this.stores.runLeases || !this.stores.workspaceOwnership) {
+      return [];
+    }
+
+    const adoptedRunLeaseIds: number[] = [];
+    for (const stageRun of this.stores.issueWorkflows.listActiveStageRuns()) {
+      const issue = this.stores.issueWorkflows.getTrackedIssue(stageRun.projectId, stageRun.linearIssueId);
+      if (!issue) {
+        continue;
+      }
+
+      const existingControl = this.stores.issueControl.getIssueControl(stageRun.projectId, stageRun.linearIssueId);
+      if (existingControl?.activeRunLeaseId !== undefined) {
+        continue;
+      }
+
+      const workspace = this.stores.issueWorkflows.getWorkspace(stageRun.workspaceId);
+      if (!workspace) {
+        continue;
+      }
+
+      adoptedRunLeaseIds.push(this.adoptLegacyStageRun(issue, stageRun, workspace));
+    }
+
+    return adoptedRunLeaseIds;
+  }
+
+  private adoptLegacyStageRun(issue: TrackedIssueRecord, stageRun: StageRunRecord, workspace: WorkspaceRecord): number {
+    const workspaceOwnership = this.stores.workspaceOwnership!.upsertWorkspaceOwnership({
+      projectId: stageRun.projectId,
+      linearIssueId: stageRun.linearIssueId,
+      branchName: workspace.branchName,
+      worktreePath: workspace.worktreePath,
+      status: "active",
+    });
+    const issueControl = this.stores.issueControl!.upsertIssueControl({
+      projectId: stageRun.projectId,
+      linearIssueId: stageRun.linearIssueId,
+      desiredStage: null,
+      desiredReceiptId: null,
+      activeWorkspaceOwnershipId: workspaceOwnership.id,
+      ...(issue.statusCommentId ? { serviceOwnedCommentId: issue.statusCommentId } : {}),
+      ...(issue.activeAgentSessionId ? { activeAgentSessionId: issue.activeAgentSessionId } : {}),
+      lifecycleStatus: "running",
+    });
+    const runLease = this.stores.runLeases!.createRunLease({
+      issueControlId: issueControl.id,
+      projectId: stageRun.projectId,
+      linearIssueId: stageRun.linearIssueId,
+      workspaceOwnershipId: workspaceOwnership.id,
+      stage: stageRun.stage,
+      status: "running",
+    });
+
+    if (stageRun.threadId || stageRun.turnId || stageRun.parentThreadId) {
+      this.stores.runLeases!.updateRunLeaseThread({
+        runLeaseId: runLease.id,
+        ...(stageRun.threadId ? { threadId: stageRun.threadId } : {}),
+        ...(stageRun.turnId ? { turnId: stageRun.turnId } : {}),
+        ...(stageRun.parentThreadId ? { parentThreadId: stageRun.parentThreadId } : {}),
+      });
+    }
+
+    this.stores.workspaceOwnership!.upsertWorkspaceOwnership({
+      projectId: stageRun.projectId,
+      linearIssueId: stageRun.linearIssueId,
+      branchName: workspace.branchName,
+      worktreePath: workspace.worktreePath,
+      status: "active",
+      currentRunLeaseId: runLease.id,
+    });
+    this.stores.issueControl!.upsertIssueControl({
+      projectId: stageRun.projectId,
+      linearIssueId: stageRun.linearIssueId,
+      desiredStage: null,
+      desiredReceiptId: null,
+      activeWorkspaceOwnershipId: workspaceOwnership.id,
+      activeRunLeaseId: runLease.id,
+      ...(issue.statusCommentId ? { serviceOwnedCommentId: issue.statusCommentId } : {}),
+      ...(issue.activeAgentSessionId ? { activeAgentSessionId: issue.activeAgentSessionId } : {}),
+      lifecycleStatus: "running",
+    });
+    return runLease.id;
   }
 
   private async reconcileRunLease(runLeaseId: number): Promise<void> {

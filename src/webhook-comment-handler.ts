@@ -66,27 +66,35 @@ export class CommentWebhookHandler {
     }
 
     const source = `linear-comment:${normalized.comment.id}`;
-    const queuedInputId =
-      mirroredStageRun
-        ? this.stores.stageEvents.enqueueTurnInput({
-            stageRunId: mirroredStageRun.id,
-            ...(runLease.threadId ? { threadId: runLease.threadId } : {}),
-            ...(runLease.turnId ? { turnId: runLease.turnId } : {}),
-            source,
-            body,
-          })
-        : undefined;
     const obligationId = this.enqueueObligation(
       project.id,
       normalizedIssue.id,
       mirroredStageRun?.id,
       runLease.threadId,
       runLease.turnId,
-      queuedInputId,
       normalized.comment.id,
       body,
       dedupeKey,
     );
+    if (mirroredStageRun) {
+      const queuedInputId = this.stores.stageEvents.enqueueTurnInput({
+        stageRunId: mirroredStageRun.id,
+        ...(runLease.threadId ? { threadId: runLease.threadId } : {}),
+        ...(runLease.turnId ? { turnId: runLease.turnId } : {}),
+        source,
+        body,
+      });
+      if (obligationId !== undefined && this.stores.obligations) {
+        this.stores.obligations.updateObligationPayloadJson(
+          obligationId,
+          JSON.stringify({
+            body,
+            queuedInputId,
+            stageRunId: mirroredStageRun.id,
+          }),
+        );
+      }
+    }
     await this.turnInputDispatcher.flush(
       {
         id: mirroredStageRun?.id ?? 0,
@@ -108,7 +116,6 @@ export class CommentWebhookHandler {
     stageRunId: number | undefined,
     threadId: string | undefined,
     turnId: string | undefined,
-    queuedInputId: number | undefined,
     commentId: string,
     body: string,
     dedupeKey: string,
@@ -125,7 +132,6 @@ export class CommentWebhookHandler {
       source: `linear-comment:${commentId}`,
       payloadJson: JSON.stringify({
         body,
-        ...(queuedInputId !== undefined ? { queuedInputId } : {}),
         ...(stageRunId !== undefined ? { stageRunId } : {}),
       }),
       runLeaseId: activeRunLeaseId,

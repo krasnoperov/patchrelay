@@ -67,6 +67,7 @@ class FakeCodexClient extends EventEmitter {
   readonly turns: Array<{ threadId: string; input: string }> = [];
   readonly steeredTurns: Array<{ threadId: string; turnId: string; input: string }> = [];
   readonly threads = new Map<string, CodexThreadSummary>();
+  steerError?: Error;
   private nextThreadNumber = 1;
   private nextTurnNumber = 1;
 
@@ -101,6 +102,9 @@ class FakeCodexClient extends EventEmitter {
   }
 
   async steerTurn(params: { threadId: string; turnId: string; input: string }): Promise<void> {
+    if (this.steerError) {
+      throw this.steerError;
+    }
     this.steeredTurns.push(params);
   }
 
@@ -1648,6 +1652,52 @@ test("service startup reconciles finished and missing active threads", async () 
   }
 });
 
+test("service restart reconciles a stage that completed while PatchRelay was down", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-restart-reconcile-completed-"));
+  try {
+    const { db, codex, linear, service, config } = createService(baseDir);
+    await service.start();
+
+    recordDesiredStageWithLedger(db, {
+      projectId: "usertold",
+      linearIssueId: "issue_4",
+      issueKey: "USE-28",
+      title: "Recover finished stage after restart",
+      issueUrl: "https://linear.app/example/issue/USE-28",
+      currentLinearState: "Start",
+      desiredStage: "development",
+      desiredWebhookId: "delivery-start-restart",
+      lastWebhookAt: new Date().toISOString(),
+    });
+
+    await service.processIssue({ projectId: "usertold", issueId: "issue_4" });
+    await flushQueues();
+
+    const startedIssue = db.issueWorkflows.getTrackedIssue("usertold", "issue_4");
+    const startedStageRun = db.issueWorkflows.getStageRun(startedIssue!.activeStageRunId!);
+    assert.ok(startedStageRun?.threadId);
+
+    service.stop();
+    const recoveredThread = codex.threads.get(startedStageRun!.threadId!);
+    assert.ok(recoveredThread);
+    recoveredThread.turns = [{ id: "turn-recovered", status: "completed", items: [{ type: "agentMessage", id: "assistant-1", text: "Recovered." }] }];
+    recoveredThread.status = "idle";
+
+    const restarted = new PatchRelayService(config, db, codex as never, linear, pino({ enabled: false }));
+    await restarted.start();
+    await flushQueues();
+
+    const recoveredStage = db.issueWorkflows.getStageRun(startedStageRun!.id);
+    const recoveredIssue = db.issueWorkflows.getTrackedIssue("usertold", "issue_4");
+    assert.equal(recoveredStage?.status, "completed");
+    assert.equal(recoveredIssue?.lifecycleStatus, "paused");
+
+    restarted.stop();
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("service startup leaves in-progress reconciled stages running", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-in-progress-"));
   try {
@@ -1729,6 +1779,93 @@ test("service startup leaves in-progress reconciled stages running", async () =>
     assert.equal(linear.comments.size, 0);
 
     service.stop();
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("service restart retries pending obligations after a transient reconciliation delivery failure", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-obligation-retry-"));
+  try {
+    const { db, codex, linear, service, config } = createService(baseDir);
+    await service.start();
+
+    recordDesiredStageWithLedger(db, {
+      projectId: "usertold",
+      linearIssueId: "issue_2",
+      issueKey: "USE-26",
+      title: "Retry queued follow-up after restart",
+      issueUrl: "https://linear.app/example/issue/USE-26",
+      currentLinearState: "Start",
+      desiredStage: "development",
+      desiredWebhookId: "delivery-start",
+      lastWebhookAt: new Date().toISOString(),
+    });
+
+    await service.processIssue({ projectId: "usertold", issueId: "issue_2" });
+    await flushQueues();
+
+    const issue = db.issueWorkflows.getTrackedIssue("usertold", "issue_2");
+    assert.ok(issue?.activeStageRunId);
+    const stageRun = db.issueWorkflows.getStageRun(issue.activeStageRunId);
+    assert.ok(stageRun?.threadId);
+    const issueControl = db.issueControl.getIssueControl("usertold", "issue_2");
+    assert.ok(issueControl?.activeRunLeaseId);
+    const queuedInputId = db.stageEvents.enqueueTurnInput({
+      stageRunId: stageRun.id,
+      threadId: stageRun.threadId,
+      turnId: stageRun.turnId,
+      source: "linear-comment:restart-retry",
+      body: "Please retry this after the restart.",
+    });
+    db.obligations.enqueueObligation({
+      projectId: "usertold",
+      linearIssueId: "issue_2",
+      kind: "deliver_turn_input",
+      source: "linear-comment:restart-retry",
+      payloadJson: JSON.stringify({
+        body: "Please retry this after the restart.",
+        queuedInputId,
+        stageRunId: stageRun.id,
+      }),
+      runLeaseId: issueControl.activeRunLeaseId,
+      threadId: stageRun.threadId,
+      turnId: stageRun.turnId,
+      dedupeKey: "restart-retry",
+    });
+
+    service.stop();
+
+    codex.steerError = new Error("codex temporarily unavailable");
+    const restartedWithFailure = new PatchRelayService(config, db, codex as never, linear, pino({ enabled: false }));
+    await restartedWithFailure.start();
+    await flushQueues();
+    restartedWithFailure.stop();
+
+    assert.equal(db.obligations.getObligationByDedupeKey({
+      runLeaseId: issueControl.activeRunLeaseId,
+      kind: "deliver_turn_input",
+      dedupeKey: "restart-retry",
+    })?.status, "pending");
+    assert.equal(db.stageEvents.listPendingTurnInputs(stageRun.id).length, 1);
+
+    codex.steerError = undefined;
+    const restarted = new PatchRelayService(config, db, codex as never, linear, pino({ enabled: false }));
+    await restarted.start();
+    await flushQueues();
+
+    assert.equal(
+      db.obligations.getObligationByDedupeKey({
+        runLeaseId: issueControl.activeRunLeaseId,
+        kind: "deliver_turn_input",
+        dedupeKey: "restart-retry",
+      })?.status,
+      "completed",
+    );
+    assert.equal(db.stageEvents.listPendingTurnInputs(stageRun.id).length, 0);
+    assert.ok(codex.steeredTurns.some((entry) => entry.input.includes("Please retry this after the restart.")));
+
+    restarted.stop();
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

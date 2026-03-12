@@ -113,28 +113,37 @@ export class AgentSessionWebhookHandler {
       }
 
       const promptInput = ["New Linear agent prompt received while you are working.", "", promptBody].join("\n");
-      const queuedInputId =
-        activeStageRun
-          ? this.stores.stageEvents.enqueueTurnInput({
-              stageRunId: activeStageRun.id,
-              ...(activeRunLease.threadId ? { threadId: activeRunLease.threadId } : {}),
-              ...(activeRunLease.turnId ? { turnId: activeRunLease.turnId } : {}),
-              source: `linear-agent-prompt:${normalized.agentSession.id}:${normalized.webhookId}`,
-              body: promptInput,
-            })
-          : undefined;
+      const source = `linear-agent-prompt:${normalized.agentSession.id}:${normalized.webhookId}`;
       const obligationId = this.enqueueObligation(
         project.id,
         normalized.issue!.id,
         activeStageRun?.id,
         activeRunLease.threadId,
         activeRunLease.turnId,
-        queuedInputId,
-        normalized.agentSession.id,
+        source,
         promptInput,
         dedupeKey,
       );
-      await this.turnInputDispatcher.flush(
+      if (activeStageRun) {
+        const queuedInputId = this.stores.stageEvents.enqueueTurnInput({
+          stageRunId: activeStageRun.id,
+          ...(activeRunLease.threadId ? { threadId: activeRunLease.threadId } : {}),
+          ...(activeRunLease.turnId ? { turnId: activeRunLease.turnId } : {}),
+          source,
+          body: promptInput,
+        });
+        if (obligationId !== undefined && this.stores.obligations) {
+          this.stores.obligations.updateObligationPayloadJson(
+            obligationId,
+            JSON.stringify({
+              body: promptInput,
+              queuedInputId,
+              stageRunId: activeStageRun.id,
+            }),
+          );
+        }
+      }
+      const flushResult = await this.turnInputDispatcher.flush(
         {
           id: activeStageRun?.id ?? 0,
           projectId: project.id,
@@ -149,7 +158,10 @@ export class AgentSessionWebhookHandler {
       );
       await this.agentActivity.publishForSession(project.id, normalized.agentSession.id, {
         type: "thought",
-        body: `PatchRelay routed your follow-up instructions into the active ${activeRunLease.stage} workflow.`,
+        body:
+          obligationId !== undefined && flushResult.deliveredObligationIds.includes(obligationId)
+            ? `PatchRelay routed your follow-up instructions into the active ${activeRunLease.stage} workflow.`
+            : `PatchRelay queued your follow-up instructions for delivery into the active ${activeRunLease.stage} workflow.`,
       });
       return;
     }
@@ -188,8 +200,7 @@ export class AgentSessionWebhookHandler {
     stageRunId: number | undefined,
     threadId: string | undefined,
     turnId: string | undefined,
-    queuedInputId: number | undefined,
-    agentSessionId: string,
+    source: string,
     promptBody: string,
     dedupeKey: string,
   ): number | undefined {
@@ -202,10 +213,9 @@ export class AgentSessionWebhookHandler {
       projectId,
       linearIssueId,
       kind: "deliver_turn_input",
-      source: `linear-agent-prompt:${agentSessionId}`,
+      source,
       payloadJson: JSON.stringify({
         body: promptBody,
-        ...(queuedInputId !== undefined ? { queuedInputId } : {}),
         ...(stageRunId !== undefined ? { stageRunId } : {}),
       }),
       runLeaseId: activeRunLeaseId,

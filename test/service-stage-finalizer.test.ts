@@ -77,6 +77,7 @@ class FakeLinearClient implements LinearClient {
 class FakeCodexClient {
   readonly steerCalls: Array<{ threadId: string; turnId: string; input: string }> = [];
   readonly threads = new Map<string, CodexThreadSummary>();
+  steerError?: Error;
 
   async readThread(threadId: string): Promise<CodexThreadSummary> {
     const thread = this.threads.get(threadId);
@@ -87,6 +88,9 @@ class FakeCodexClient {
   }
 
   async steerTurn(params: { threadId: string; turnId: string; input: string }): Promise<void> {
+    if (this.steerError) {
+      throw this.steerError;
+    }
     this.steerCalls.push(params);
   }
 }
@@ -250,6 +254,7 @@ class FakeLedgerStore {
   readonly runLeases = new Map<number, RunLeaseRecord>();
   readonly obligations = new Map<number, ObligationRecord>();
   readonly workspaceOwnership = new Map<number, WorkspaceOwnershipRecord>();
+  private nextRunLeaseId = 90;
 
   getIssueControl(projectId: string, linearIssueId: string): IssueControlRecord | undefined {
     return this.issueControls.get(issueKey(projectId, linearIssueId));
@@ -314,6 +319,44 @@ class FakeLedgerStore {
 
   listActiveRunLeases(): RunLeaseRecord[] {
     return [...this.runLeases.values()].filter((runLease) => runLease.status === "running");
+  }
+
+  createRunLease(params: {
+    issueControlId: number;
+    projectId: string;
+    linearIssueId: string;
+    workspaceOwnershipId: number;
+    stage: StageRunRecord["stage"];
+    triggerReceiptId?: number | null;
+    status?: Extract<RunLeaseRecord["status"], "queued" | "running" | "paused">;
+  }): RunLeaseRecord {
+    const runLease: RunLeaseRecord = {
+      id: this.nextRunLeaseId++,
+      issueControlId: params.issueControlId,
+      projectId: params.projectId,
+      linearIssueId: params.linearIssueId,
+      workspaceOwnershipId: params.workspaceOwnershipId,
+      stage: params.stage,
+      status: params.status ?? "queued",
+      ...(params.triggerReceiptId ? { triggerReceiptId: params.triggerReceiptId } : {}),
+      startedAt: "2026-03-12T00:00:00.000Z",
+    };
+    this.runLeases.set(runLease.id, runLease);
+    return runLease;
+  }
+
+  updateRunLeaseThread(params: { runLeaseId: number; threadId?: string | null; turnId?: string | null; parentThreadId?: string | null }): void {
+    const runLease = this.runLeases.get(params.runLeaseId);
+    assert.ok(runLease);
+    if (params.threadId) {
+      runLease.threadId = params.threadId;
+    }
+    if (params.turnId) {
+      runLease.turnId = params.turnId;
+    }
+    if (params.parentThreadId) {
+      runLease.parentThreadId = params.parentThreadId;
+    }
   }
 
   finishRunLease(params: {
@@ -384,6 +427,12 @@ class FakeLedgerStore {
       }
       return true;
     });
+  }
+
+  updateObligationPayloadJson(id: number, payloadJson: string): void {
+    const obligation = this.obligations.get(id);
+    assert.ok(obligation);
+    obligation.payloadJson = payloadJson;
   }
 
   updateObligationRouting(id: number, params: { threadId?: string | null; turnId?: string | null }): void {
@@ -554,6 +603,7 @@ function createHarness(options?: {
   issueStateName?: string;
   stageRun?: Partial<StageRunRecord>;
   withLedger?: boolean;
+  withoutActiveLease?: boolean;
   pendingObligationBody?: string;
 }) {
   const config = createConfig(options?.persistExtendedHistory ?? true);
@@ -582,23 +632,25 @@ function createHarness(options?: {
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       activeWorkspaceOwnershipId: workspaceOwnership.id,
-      activeRunLeaseId: 90,
+      ...(options.withoutActiveLease ? {} : { activeRunLeaseId: 90 }),
       serviceOwnedCommentId: issue.statusCommentId ?? null,
       activeAgentSessionId: issue.activeAgentSessionId ?? null,
       lifecycleStatus: issue.lifecycleStatus,
     });
-    ledger.runLeases.set(90, {
-      id: 90,
-      issueControlId: issueControl.id,
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      workspaceOwnershipId: workspaceOwnership.id,
-      stage: stageRun.stage,
-      status: "running",
-      threadId: stageRun.threadId,
-      turnId: stageRun.turnId,
-      startedAt: stageRun.startedAt,
-    });
+    if (!options.withoutActiveLease) {
+      ledger.runLeases.set(90, {
+        id: 90,
+        issueControlId: issueControl.id,
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        workspaceOwnershipId: workspaceOwnership.id,
+        stage: stageRun.stage,
+        status: "running",
+        threadId: stageRun.threadId,
+        turnId: stageRun.turnId,
+        startedAt: stageRun.startedAt,
+      });
+    }
     if (options.pendingObligationBody) {
       stageEvents.enqueueTurnInput({
         stageRunId: stageRun.id,
@@ -781,11 +833,29 @@ test("ledger reconciliation uses the run lease thread snapshot instead of legacy
   assert.equal(store.finishedStageRuns.at(-1)?.turnId, "turn-1");
 });
 
-test("startup reconciliation ignores legacy stage runs when no active run lease exists", async () => {
-  const { store, finalizer, stageRun } = createHarness();
+test("startup reconciliation adopts legacy stage runs when no active run lease exists", async () => {
+  const { store, ledger, codex, finalizer, stageRun } = createHarness({ withLedger: true, withoutActiveLease: true });
+  codex.threads.set(stageRun.threadId!, createThread("inProgress"));
 
   await finalizer.reconcileActiveStageRuns();
 
   assert.equal(store.getStageRun(stageRun.id)?.status, "running");
   assert.equal(store.finishedStageRuns.length, 0);
+  assert.equal(ledger.listActiveRunLeases().length, 1);
+  assert.equal(ledger.listActiveRunLeases()[0]?.threadId, "thread-1");
+  assert.equal(ledger.getIssueControl("proj", "issue-1")?.activeRunLeaseId, ledger.listActiveRunLeases()[0]?.id);
+});
+
+test("ledger reconciliation keeps obligations retryable when Codex steer fails", async () => {
+  const { ledger, codex, finalizer, stageRun } = createHarness({
+    withLedger: true,
+    pendingObligationBody: "Please update the handoff copy.",
+  });
+  codex.threads.set(stageRun.threadId!, createThread("inProgress"));
+  codex.steerError = new Error("codex temporarily unavailable");
+
+  await finalizer.reconcileActiveStageRuns();
+
+  assert.equal(ledger.obligations.get(1)?.status, "pending");
+  assert.equal(ledger.obligations.get(1)?.lastError, "codex temporarily unavailable");
 });

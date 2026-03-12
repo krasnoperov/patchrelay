@@ -362,7 +362,8 @@ export class CliDataAccess {
     if (!issue) {
       return undefined;
     }
-    if (issue.activeStageRunId) {
+    const issueControl = this.db.issueControl.getIssueControl(issue.projectId, issue.linearIssueId);
+    if (issueControl?.activeRunLeaseId !== undefined || (!issueControl && issue.activeStageRunId)) {
       throw new Error(`Issue ${issueKey} already has an active stage run.`);
     }
 
@@ -372,7 +373,6 @@ export class CliDataAccess {
     }
 
     const webhookId = `cli-retry-${Date.now()}`;
-    this.db.issueWorkflows.setIssueDesiredStage(issue.projectId, issue.linearIssueId, stage, webhookId);
     const receipt = this.db.eventReceipts.insertEventReceipt({
       source: "linear-webhook",
       externalId: webhookId,
@@ -389,6 +389,7 @@ export class CliDataAccess {
       desiredReceiptId: receipt.id,
       lifecycleStatus: "queued",
     });
+    this.db.issueWorkflows.setIssueDesiredStage(issue.projectId, issue.linearIssueId, stage, webhookId);
     const updated = this.db.issueWorkflows.getTrackedIssue(issue.projectId, issue.linearIssueId)!;
     return {
       issue: updated,

@@ -379,6 +379,19 @@ export class AuthoritativeLedgerStore implements AuthoritativeLedgerStoreContrac
     return rows.map((row) => mapObligation(row));
   }
 
+  updateObligationPayloadJson(id: number, payloadJson: string): void {
+    this.connection
+      .prepare(
+        `
+        UPDATE obligations
+        SET payload_json = ?,
+            updated_at = ?
+        WHERE id = ?
+        `,
+      )
+      .run(payloadJson, isoNow(), id);
+  }
+
   updateObligationRouting(id: number, params: { threadId?: string | null; turnId?: string | null }): void {
     this.connection
       .prepare(

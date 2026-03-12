@@ -8,7 +8,7 @@ import type {
   WorkspaceOwnershipStoreProvider,
 } from "./ledger-ports.ts";
 import type { StageTurnInputStoreProvider } from "./stage-event-ports.ts";
-import type { IssueWorkflowExecutionStoreProvider, IssueWorkflowLifecycleStoreProvider } from "./workflow-ports.ts";
+import type { IssueWorkflowExecutionStoreProvider, IssueWorkflowLifecycleStoreProvider, IssueWorkflowWebhookStoreProvider } from "./workflow-ports.ts";
 import { buildStageLaunchPlan, isCodexThreadId } from "./stage-launch.ts";
 import { syncFailedStageToLinear } from "./stage-failure.ts";
 import { buildFailedStageReport } from "./stage-reporting.ts";
@@ -31,6 +31,7 @@ export class ServiceStageRunner {
     private readonly config: AppConfig,
     private readonly stores: IssueWorkflowExecutionStoreProvider &
       IssueWorkflowLifecycleStoreProvider &
+      IssueWorkflowWebhookStoreProvider &
       StageTurnInputStoreProvider &
       Partial<
         EventReceiptStoreProvider &
@@ -54,9 +55,8 @@ export class ServiceStageRunner {
       return;
     }
 
-    const issue = this.stores.issueWorkflows.getTrackedIssue(item.projectId, item.issueId);
     const issueControl = this.stores.issueControl?.getIssueControl(item.projectId, item.issueId);
-    if (!issue || !issueControl?.desiredStage || issueControl.activeRunLeaseId !== undefined) {
+    if (!issueControl?.desiredStage || issueControl.activeRunLeaseId !== undefined) {
       return;
     }
 
@@ -67,6 +67,10 @@ export class ServiceStageRunner {
     }
     const desiredStage = issueControl.desiredStage;
     const desiredWebhookId = receipt.externalId;
+    const issue = await this.ensureLaunchIssueMirror(project, item.issueId, desiredStage, desiredWebhookId);
+    if (!issue) {
+      return;
+    }
 
     const plan = buildStageLaunchPlan(project, issue, desiredStage);
     const claim = this.stores.issueWorkflows.claimStageRun({
@@ -113,12 +117,6 @@ export class ServiceStageRunner {
       throw err;
     }
 
-    this.stores.issueWorkflows.updateStageRunThread({
-      stageRunId: claim.stageRun.id,
-      threadId: threadLaunch.threadId,
-      ...(threadLaunch.parentThreadId ? { parentThreadId: threadLaunch.parentThreadId } : {}),
-      turnId: turn.turnId,
-    });
     if (runLeaseId !== undefined) {
       this.stores.runLeases?.updateRunLeaseThread({
         runLeaseId,
@@ -127,34 +125,50 @@ export class ServiceStageRunner {
         turnId: turn.turnId,
       });
     }
+    this.stores.issueWorkflows.updateStageRunThread({
+      stageRunId: claim.stageRun.id,
+      threadId: threadLaunch.threadId,
+      ...(threadLaunch.parentThreadId ? { parentThreadId: threadLaunch.parentThreadId } : {}),
+      turnId: turn.turnId,
+    });
 
     this.inputDispatcher.routePendingInputs(claim.stageRun, threadLaunch.threadId, turn.turnId);
     const pendingLaunchInput = this.stores.issueWorkflows.consumeIssuePendingLaunchInput(item.projectId, item.issueId);
     if (pendingLaunchInput) {
-      const mirroredQueuedInputId = this.stores.stageEvents.enqueueTurnInput({
-        stageRunId: claim.stageRun.id,
-        threadId: threadLaunch.threadId,
-        turnId: turn.turnId,
-        source: "linear-agent-launch",
-        body: pendingLaunchInput,
-      });
+      let obligationId: number | undefined;
       const issueControl = this.stores.issueControl?.getIssueControl(item.projectId, item.issueId);
       if (issueControl?.activeRunLeaseId !== undefined && this.stores.obligations) {
-        this.stores.obligations.enqueueObligation({
+        obligationId = this.stores.obligations.enqueueObligation({
           projectId: item.projectId,
           linearIssueId: item.issueId,
           kind: "deliver_turn_input",
           source: "linear-agent-launch",
           payloadJson: JSON.stringify({
             body: pendingLaunchInput,
-            queuedInputId: mirroredQueuedInputId,
             stageRunId: claim.stageRun.id,
           }),
           runLeaseId: issueControl.activeRunLeaseId,
           threadId: threadLaunch.threadId,
           turnId: turn.turnId,
-          dedupeKey: `linear-agent-launch:${claim.stageRun.id}:${mirroredQueuedInputId}`,
-        });
+          dedupeKey: `linear-agent-launch:${claim.stageRun.id}`,
+        }).id;
+      }
+      const queuedInputId = this.stores.stageEvents.enqueueTurnInput({
+        stageRunId: claim.stageRun.id,
+        threadId: threadLaunch.threadId,
+        turnId: turn.turnId,
+        source: "linear-agent-launch",
+        body: pendingLaunchInput,
+      });
+      if (obligationId !== undefined && this.stores.obligations) {
+        this.stores.obligations.updateObligationPayloadJson(
+          obligationId,
+          JSON.stringify({
+            body: pendingLaunchInput,
+            queuedInputId,
+            stageRunId: claim.stageRun.id,
+          }),
+        );
       }
     }
     await this.inputDispatcher.flush(
@@ -185,6 +199,39 @@ export class ServiceStageRunner {
       },
       "Started Codex stage run",
     );
+  }
+
+  private async ensureLaunchIssueMirror(
+    project: AppConfig["projects"][number],
+    linearIssueId: string,
+    desiredStage: StageRunRecord["stage"],
+    desiredWebhookId: string,
+  ): Promise<TrackedIssueRecord | undefined> {
+    const existing = this.stores.issueWorkflows.getTrackedIssue(project.id, linearIssueId);
+    if (existing?.desiredStage === desiredStage && existing.desiredWebhookId === desiredWebhookId) {
+      return existing;
+    }
+
+    const liveIssue = await this.linearProvider
+      .forProject(project.id)
+      .then((linear) => linear?.getIssue(linearIssueId))
+      .catch(() => undefined);
+
+    return this.stores.issueWorkflows.recordDesiredStage({
+      projectId: project.id,
+      linearIssueId,
+      ...(liveIssue?.identifier ? { issueKey: liveIssue.identifier } : existing?.issueKey ? { issueKey: existing.issueKey } : {}),
+      ...(liveIssue?.title ? { title: liveIssue.title } : existing?.title ? { title: existing.title } : {}),
+      ...(liveIssue?.url ? { issueUrl: liveIssue.url } : existing?.issueUrl ? { issueUrl: existing.issueUrl } : {}),
+      ...(liveIssue?.stateName
+        ? { currentLinearState: liveIssue.stateName }
+        : existing?.currentLinearState
+          ? { currentLinearState: existing.currentLinearState }
+          : {}),
+      desiredStage,
+      desiredWebhookId,
+      lastWebhookAt: new Date().toISOString(),
+    });
   }
 
   private async launchStageThread(

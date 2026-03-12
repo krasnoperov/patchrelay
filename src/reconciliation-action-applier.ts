@@ -50,7 +50,8 @@ export class ReconciliationActionApplier {
       return;
     }
 
-    if (decision.outcome === "complete" || decision.outcome === "release") {
+    const completedAction = decision.actions.find((action) => action.type === "mark_run_completed");
+    if (decision.outcome === "complete" || (decision.outcome === "release" && completedAction?.type === "mark_run_completed")) {
       const liveThread = snapshot.input.live?.codex?.status === "found" ? snapshot.input.live.codex.thread : undefined;
       if (!issue || !liveThread) {
         return;
@@ -64,8 +65,11 @@ export class ReconciliationActionApplier {
       return;
     }
 
-    if (decision.outcome === "fail") {
+    if (decision.outcome === "fail" || decision.outcome === "release") {
       const failedAction = decision.actions.find((action) => action.type === "mark_run_failed");
+      if (decision.outcome === "release" && failedAction?.type !== "mark_run_failed") {
+        return;
+      }
       await this.callbacks.failStageRunDuringReconciliation(
         stageRun,
         failedAction?.type === "mark_run_failed" && failedAction.threadId ? failedAction.threadId : threadId ?? `missing-thread-${stageRun.id}`,

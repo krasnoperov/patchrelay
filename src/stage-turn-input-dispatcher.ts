@@ -35,12 +35,14 @@ export class StageTurnInputDispatcher {
       logFailures?: boolean;
       failureMessage?: string;
     },
-  ): Promise<{ deliveredInputIds: number[] }> {
+  ): Promise<{ deliveredInputIds: number[]; deliveredObligationIds: number[]; deliveredCount: number }> {
     if (!stageRun.threadId || !stageRun.turnId) {
-      return { deliveredInputIds: [] };
+      return { deliveredInputIds: [], deliveredObligationIds: [], deliveredCount: 0 };
     }
 
     const deliveredInputIds: number[] = [];
+    const deliveredObligationIds: number[] = [];
+    let deliveredCount = 0;
     const inputs = this.listPendingInputs(stageRun);
     for (const input of inputs) {
       try {
@@ -50,15 +52,19 @@ export class StageTurnInputDispatcher {
           input: input.body,
         });
         if (input.kind === "obligation") {
-          if (input.queuedInputId !== undefined) {
-            this.inputs.stageEvents.markTurnInputDelivered(input.queuedInputId);
-            deliveredInputIds.push(input.queuedInputId);
+          deliveredObligationIds.push(input.id);
+          const mirroredQueuedInputId =
+            input.queuedInputId ?? this.findMirroredQueuedInputId(input.stageRunId, input.source, input.body);
+          if (mirroredQueuedInputId !== undefined) {
+            this.inputs.stageEvents.markTurnInputDelivered(mirroredQueuedInputId);
+            deliveredInputIds.push(mirroredQueuedInputId);
           }
           this.inputs.obligations?.markObligationStatus(input.id, "completed");
         } else {
           this.inputs.stageEvents.markTurnInputDelivered(input.id);
           deliveredInputIds.push(input.id);
         }
+        deliveredCount += 1;
         this.logger.debug(
           {
             threadId: stageRun.threadId,
@@ -84,7 +90,7 @@ export class StageTurnInputDispatcher {
       }
     }
 
-    return { deliveredInputIds };
+    return { deliveredInputIds, deliveredObligationIds, deliveredCount };
   }
 
   private listPendingInputs(stageRun: Pick<StageRunRecord, "id" | "projectId" | "linearIssueId">) {
@@ -110,7 +116,7 @@ export class StageTurnInputDispatcher {
     return this.inputs.obligations
       .listPendingObligations({ runLeaseId: issueControl.activeRunLeaseId, kind: "deliver_turn_input" })
       .flatMap((obligation) => {
-        const payload = safeJsonParse<{ body?: string; queuedInputId?: number }>(obligation.payloadJson);
+        const payload = safeJsonParse<{ body?: string; queuedInputId?: number; stageRunId?: number }>(obligation.payloadJson);
         const body = payload?.body?.trim();
         if (!body) {
           return [];
@@ -122,8 +128,19 @@ export class StageTurnInputDispatcher {
             source: obligation.source,
             body,
             ...(payload?.queuedInputId !== undefined ? { queuedInputId: payload.queuedInputId } : {}),
+            ...(payload?.stageRunId !== undefined ? { stageRunId: payload.stageRunId } : {}),
           },
         ];
       });
+  }
+
+  private findMirroredQueuedInputId(stageRunId: number | undefined, source: string, body: string): number | undefined {
+    if (stageRunId === undefined) {
+      return undefined;
+    }
+
+    return this.inputs.stageEvents
+      .listPendingTurnInputs(stageRunId)
+      .find((input) => input.source === source && input.body === body)?.id;
   }
 }
