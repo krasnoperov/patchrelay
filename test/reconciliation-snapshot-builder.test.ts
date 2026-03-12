@@ -276,6 +276,339 @@ test("buildReconciliationSnapshot preserves transient Codex lookup failures as r
   assert.match(snapshot?.input.live?.codex?.errorMessage ?? "", /Transient read failure/);
 });
 
+test("buildReconciliationSnapshot tolerates a missing workspace ownership record", async () => {
+  const issueControl: IssueControlRecord = {
+    id: 1,
+    projectId: "proj",
+    linearIssueId: "issue-1",
+    activeRunLeaseId: 2,
+    activeWorkspaceOwnershipId: 3,
+    lifecycleStatus: "running",
+    updatedAt: "2026-03-12T00:00:00.000Z",
+  };
+  const runLease: RunLeaseRecord = {
+    id: 2,
+    issueControlId: 1,
+    projectId: "proj",
+    linearIssueId: "issue-1",
+    workspaceOwnershipId: 3,
+    stage: "development",
+    status: "running",
+    threadId: "thread-1",
+    startedAt: "2026-03-12T00:00:00.000Z",
+  };
+
+  const snapshot = await buildReconciliationSnapshot({
+    config: createConfig(),
+    stores: {
+      issueControl: {
+        getIssueControl: () => issueControl,
+        upsertIssueControl: () => issueControl,
+        listIssueControlsReadyForLaunch: () => [],
+      },
+      runLeases: {
+        getRunLease: () => runLease,
+        listActiveRunLeases: () => [runLease],
+        createRunLease: () => runLease,
+        updateRunLeaseThread: () => undefined,
+        finishRunLease: () => undefined,
+      },
+      workspaceOwnership: {
+        getWorkspaceOwnership: () => undefined,
+        getWorkspaceOwnershipForIssue: () => undefined,
+        upsertWorkspaceOwnership: () => assert.fail("should not upsert"),
+      },
+      obligations: {
+        enqueueObligation: () => assert.fail("should not enqueue"),
+        getObligationByDedupeKey: () => undefined,
+        listPendingObligations: () => [],
+        updateObligationPayloadJson: () => undefined,
+        updateObligationRouting: () => undefined,
+        markObligationStatus: () => undefined,
+      },
+    },
+    codex: new FakeCodexClient(
+      new Map([
+        [
+          "thread-1",
+          {
+            id: "thread-1",
+            createdAt: "2026-03-12T00:00:00.000Z",
+            updatedAt: "2026-03-12T00:00:00.000Z",
+            status: "running",
+            turns: [],
+          },
+        ],
+      ]),
+    ) as never,
+    linearProvider: {
+      forProject: async () =>
+        ({
+          getIssue: async () => ({
+            id: "issue-1",
+            stateName: "Implementing",
+          }),
+        }) as never,
+    } satisfies LinearClientProvider,
+    runLeaseId: 2,
+  });
+
+  assert.ok(snapshot);
+  assert.equal(snapshot.workspaceOwnership, undefined);
+  assert.equal(snapshot.input.live?.codex?.status, "found");
+});
+
+test("buildReconciliationSnapshot preserves multiple pending obligations for the active run", async () => {
+  const issueControl: IssueControlRecord = {
+    id: 1,
+    projectId: "proj",
+    linearIssueId: "issue-1",
+    activeRunLeaseId: 2,
+    lifecycleStatus: "running",
+    updatedAt: "2026-03-12T00:00:00.000Z",
+  };
+  const runLease: RunLeaseRecord = {
+    id: 2,
+    issueControlId: 1,
+    projectId: "proj",
+    linearIssueId: "issue-1",
+    workspaceOwnershipId: 3,
+    stage: "development",
+    status: "running",
+    threadId: "thread-1",
+    startedAt: "2026-03-12T00:00:00.000Z",
+  };
+  const workspace: WorkspaceOwnershipRecord = {
+    id: 3,
+    projectId: "proj",
+    linearIssueId: "issue-1",
+    branchName: "app/ISSUE-1",
+    worktreePath: "/tmp/worktree",
+    status: "active",
+    currentRunLeaseId: 2,
+    createdAt: "2026-03-12T00:00:00.000Z",
+    updatedAt: "2026-03-12T00:00:00.000Z",
+  };
+  const obligations: ObligationRecord[] = [
+    {
+      id: 4,
+      projectId: "proj",
+      linearIssueId: "issue-1",
+      kind: "deliver_turn_input",
+      status: "pending",
+      source: "linear-comment:1",
+      payloadJson: JSON.stringify({ body: "First follow-up." }),
+      runLeaseId: 2,
+      createdAt: "2026-03-12T00:00:00.000Z",
+      updatedAt: "2026-03-12T00:00:00.000Z",
+    },
+    {
+      id: 5,
+      projectId: "proj",
+      linearIssueId: "issue-1",
+      kind: "deliver_turn_input",
+      status: "in_progress",
+      source: "linear-comment:2",
+      payloadJson: JSON.stringify({ body: "Second follow-up.", queuedInputId: 17 }),
+      runLeaseId: 2,
+      threadId: "thread-old",
+      turnId: "turn-old",
+      createdAt: "2026-03-12T00:00:01.000Z",
+      updatedAt: "2026-03-12T00:00:01.000Z",
+    },
+  ];
+
+  const snapshot = await buildReconciliationSnapshot({
+    config: createConfig(),
+    stores: {
+      issueControl: {
+        getIssueControl: () => issueControl,
+        upsertIssueControl: () => issueControl,
+        listIssueControlsReadyForLaunch: () => [],
+      },
+      runLeases: {
+        getRunLease: () => runLease,
+        listActiveRunLeases: () => [runLease],
+        createRunLease: () => runLease,
+        updateRunLeaseThread: () => undefined,
+        finishRunLease: () => undefined,
+      },
+      workspaceOwnership: {
+        getWorkspaceOwnership: () => workspace,
+        getWorkspaceOwnershipForIssue: () => workspace,
+        upsertWorkspaceOwnership: () => workspace,
+      },
+      obligations: {
+        enqueueObligation: () => obligations[0]!,
+        getObligationByDedupeKey: () => undefined,
+        listPendingObligations: () => obligations,
+        updateObligationPayloadJson: () => undefined,
+        updateObligationRouting: () => undefined,
+        markObligationStatus: () => undefined,
+      },
+    },
+    codex: new FakeCodexClient(
+      new Map([
+        [
+          "thread-1",
+          {
+            id: "thread-1",
+            createdAt: "2026-03-12T00:00:00.000Z",
+            updatedAt: "2026-03-12T00:00:00.000Z",
+            status: "running",
+            turns: [],
+          },
+        ],
+      ]),
+    ) as never,
+    linearProvider: {
+      forProject: async () =>
+        ({
+          getIssue: async () => ({
+            id: "issue-1",
+            stateName: "Implementing",
+          }),
+        }) as never,
+    } satisfies LinearClientProvider,
+    runLeaseId: 2,
+  });
+
+  assert.deepEqual(snapshot?.input.obligations, [
+    {
+      id: 4,
+      kind: "deliver_turn_input",
+      status: "pending",
+      runId: 2,
+      payload: {
+        body: "First follow-up.",
+      },
+    },
+    {
+      id: 5,
+      kind: "deliver_turn_input",
+      status: "in_progress",
+      runId: 2,
+      threadId: "thread-old",
+      turnId: "turn-old",
+      payload: {
+        body: "Second follow-up.",
+        queuedInputId: 17,
+      },
+    },
+  ]);
+});
+
+test("buildReconciliationSnapshot tolerates missing workspace ownership and still returns pending obligations", async () => {
+  const issueControl: IssueControlRecord = {
+    id: 1,
+    projectId: "proj",
+    linearIssueId: "issue-1",
+    activeRunLeaseId: 2,
+    activeWorkspaceOwnershipId: 99,
+    lifecycleStatus: "running",
+    updatedAt: "2026-03-12T00:00:00.000Z",
+  };
+  const runLease: RunLeaseRecord = {
+    id: 2,
+    issueControlId: 1,
+    projectId: "proj",
+    linearIssueId: "issue-1",
+    workspaceOwnershipId: 99,
+    stage: "development",
+    status: "running",
+    threadId: "thread-1",
+    turnId: "turn-1",
+    startedAt: "2026-03-12T00:00:00.000Z",
+  };
+  const obligation: ObligationRecord = {
+    id: 4,
+    projectId: "proj",
+    linearIssueId: "issue-1",
+    kind: "deliver_turn_input",
+    status: "pending",
+    source: "linear-comment:1",
+    payloadJson: JSON.stringify({ body: "Please update the copy." }),
+    runLeaseId: 2,
+    createdAt: "2026-03-12T00:00:00.000Z",
+    updatedAt: "2026-03-12T00:00:00.000Z",
+  };
+
+  const snapshot = await buildReconciliationSnapshot({
+    config: createConfig(),
+    stores: {
+      issueControl: {
+        getIssueControl: () => issueControl,
+        upsertIssueControl: () => issueControl,
+        listIssueControlsReadyForLaunch: () => [],
+      },
+      runLeases: {
+        getRunLease: () => runLease,
+        listActiveRunLeases: () => [runLease],
+        createRunLease: () => runLease,
+        updateRunLeaseThread: () => undefined,
+        finishRunLease: () => undefined,
+      },
+      workspaceOwnership: {
+        getWorkspaceOwnership: () => undefined,
+        getWorkspaceOwnershipForIssue: () => undefined,
+        upsertWorkspaceOwnership: () => assert.fail("should not upsert workspace ownership"),
+      },
+      obligations: {
+        enqueueObligation: () => obligation,
+        getObligationByDedupeKey: () => undefined,
+        listPendingObligations: () => [obligation],
+        updateObligationPayloadJson: () => undefined,
+        updateObligationRouting: () => undefined,
+        markObligationStatus: () => undefined,
+      },
+    },
+    codex: new FakeCodexClient(
+      new Map([
+        [
+          "thread-1",
+          {
+            id: "thread-1",
+            createdAt: "2026-03-12T00:00:00.000Z",
+            updatedAt: "2026-03-12T00:00:00.000Z",
+            status: "running",
+            turns: [
+              {
+                id: "turn-1",
+                status: "inProgress",
+                items: [],
+              },
+            ],
+          },
+        ],
+      ]),
+    ) as never,
+    linearProvider: {
+      forProject: async () =>
+        ({
+          getIssue: async () => ({
+            id: "issue-1",
+            stateName: "Implementing",
+          }),
+        }) as never,
+    } satisfies LinearClientProvider,
+    runLeaseId: 2,
+  });
+
+  assert.ok(snapshot);
+  assert.equal(snapshot.workspaceOwnership, undefined);
+  assert.deepEqual(snapshot.input.obligations, [
+    {
+      id: 4,
+      kind: "deliver_turn_input",
+      status: "pending",
+      runId: 2,
+      payload: {
+        body: "Please update the copy.",
+      },
+    },
+  ]);
+});
+
 function createConfig(): AppConfig {
   return {
     server: {

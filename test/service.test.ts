@@ -1742,6 +1742,187 @@ test("service startup launches queued ledger intent even when the legacy tracked
   }
 });
 
+test("service startup launches queued ledger intent and delivers pending launch input to the active turn", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-startup-pending-launch-input-"));
+  try {
+    const { db, codex, service } = createService(baseDir);
+    recordDesiredStageWithLedger(db, {
+      projectId: "usertold",
+      linearIssueId: "issue_2",
+      issueKey: "USE-26",
+      title: "Deliver launch input on startup",
+      issueUrl: "https://linear.app/example/issue/USE-26",
+      currentLinearState: "Start",
+      desiredStage: "development",
+      desiredWebhookId: "delivery-startup-launch-input",
+      lastWebhookAt: new Date().toISOString(),
+    });
+    db.issueWorkflows.setIssuePendingLaunchInput(
+      "usertold",
+      "issue_2",
+      "Please start by validating the failing setup path.",
+    );
+
+    await service.start();
+
+    await waitFor(() => {
+      const issue = db.issueWorkflows.getTrackedIssue("usertold", "issue_2");
+      assert.ok(issue?.activeStageRunId);
+      assert.ok(
+        codex.steeredTurns.some((entry) => entry.input.includes("validating the failing setup path")),
+      );
+    });
+
+    const issue = db.issueWorkflows.getTrackedIssue("usertold", "issue_2");
+    assert.ok(issue?.activeStageRunId);
+    const issueControl = db.issueControl.getIssueControl("usertold", "issue_2");
+    assert.ok(issueControl?.activeRunLeaseId);
+    const obligation = db.obligations.getObligationByDedupeKey({
+      runLeaseId: issueControl.activeRunLeaseId!,
+      kind: "deliver_turn_input",
+      dedupeKey: `linear-agent-launch:${issue.activeStageRunId}`,
+    });
+    assert.ok(obligation);
+    assert.equal(obligation.status, "completed");
+
+    service.stop();
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("service startup launches queued ledger intent and preserves pending launch input delivery", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-ledger-launch-input-"));
+  try {
+    const { db, codex, service } = createService(baseDir);
+    recordDesiredStageWithLedger(db, {
+      projectId: "usertold",
+      linearIssueId: "issue_5",
+      issueKey: "USE-29",
+      title: "Preserve startup launch input",
+      issueUrl: "https://linear.app/example/issue/USE-29",
+      currentLinearState: "Start",
+      desiredStage: "development",
+      desiredWebhookId: "delivery-ledger-input",
+      lastWebhookAt: new Date().toISOString(),
+    });
+    db.issueWorkflows.setIssuePendingLaunchInput("usertold", "issue_5", "Please keep the intro copy intact.");
+
+    await service.start();
+    await flushQueues();
+
+    await waitFor(() => {
+      const trackedIssue = db.issueWorkflows.getTrackedIssue("usertold", "issue_5");
+      assert.ok(trackedIssue?.activeStageRunId);
+      assert.equal(codex.startedThreads.length, 1);
+    });
+
+    const trackedIssue = db.issueWorkflows.getTrackedIssue("usertold", "issue_5")!;
+    const stageRun = db.issueWorkflows.getStageRun(trackedIssue.activeStageRunId!);
+    assert.ok(stageRun?.threadId);
+    const issueControl = db.issueControl.getIssueControl("usertold", "issue_5");
+    assert.ok(issueControl?.activeRunLeaseId);
+    const obligation = db.obligations.getObligationByDedupeKey({
+      runLeaseId: issueControl.activeRunLeaseId!,
+      kind: "deliver_turn_input",
+      dedupeKey: `linear-agent-launch:${stageRun!.id}`,
+    });
+    assert.ok(obligation);
+    assert.match(obligation.payloadJson, /Please keep the intro copy intact/);
+
+    if (obligation.status === "completed") {
+      assert.ok(codex.steeredTurns.some((entry) => entry.input.includes("Please keep the intro copy intact.")));
+      assert.equal(db.stageEvents.listPendingTurnInputs(stageRun!.id).length, 0);
+    } else {
+      assert.equal(obligation.status, "pending");
+      assert.equal(db.stageEvents.listPendingTurnInputs(stageRun!.id).length, 1);
+    }
+
+    service.stop();
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("service startup adopts a legacy-only active run into the ledger and keeps it running", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-legacy-adoption-"));
+  try {
+    const config = createConfig(baseDir);
+    setupRepo(baseDir, config);
+    const db = new PatchRelayDatabase(config.database.path, true);
+    db.runMigrations();
+    const codex = new FakeCodexClient();
+    const linear = new FakeLinearClient();
+    linear.issues.set("issue_8", {
+      id: "issue_8",
+      identifier: "USE-33",
+      stateId: "implementing",
+      stateName: "Implementing",
+      workflowStates: DEFAULT_WORKFLOW_STATES,
+      labelIds: [],
+      labels: [],
+      teamLabels: [
+        { id: "label-working", name: "llm-working" },
+        { id: "label-awaiting", name: "llm-awaiting-handoff" },
+      ],
+    });
+
+    db.issueWorkflows.upsertTrackedIssue({
+      projectId: "usertold",
+      linearIssueId: "issue_8",
+      issueKey: "USE-33",
+      title: "Adopt legacy-only active run",
+      currentLinearState: "Implementing",
+      desiredStage: "development",
+      desiredWebhookId: "delivery-start-adopt",
+      lifecycleStatus: "running",
+      lastWebhookAt: new Date().toISOString(),
+    });
+    const claim = db.issueWorkflows.claimStageRun({
+      projectId: "usertold",
+      linearIssueId: "issue_8",
+      stage: "development",
+      triggerWebhookId: "delivery-start-adopt",
+      branchName: "use/USE-33-adopt-legacy-only-active-run",
+      worktreePath: path.join(baseDir, "worktrees", "USE-33"),
+      workflowFile: getWorkflowFile(config.projects[0], "development"),
+      promptText: "Keep running",
+    });
+    assert.ok(claim);
+    db.issueWorkflows.updateStageRunThread({
+      stageRunId: claim.stageRun.id,
+      threadId: "thread-legacy-adopt",
+      turnId: "turn-legacy-adopt",
+    });
+    codex.threads.set("thread-legacy-adopt", {
+      id: "thread-legacy-adopt",
+      preview: "Legacy active run",
+      cwd: claim.workspace.worktreePath,
+      status: "active",
+      turns: [{ id: "turn-legacy-adopt", status: "inProgress", items: [] }],
+    });
+
+    const service = new PatchRelayService(config, db, codex as never, linear, pino({ enabled: false }));
+    await service.start();
+    await flushQueues();
+
+    const issueControl = db.issueControl.getIssueControl("usertold", "issue_8");
+    assert.ok(issueControl?.activeRunLeaseId);
+    assert.equal(issueControl?.lifecycleStatus, "running");
+    const runLease = db.runLeases.getRunLease(issueControl.activeRunLeaseId!);
+    assert.equal(runLease?.threadId, "thread-legacy-adopt");
+    assert.equal(runLease?.turnId, "turn-legacy-adopt");
+    assert.equal(runLease?.status, "running");
+    assert.equal(db.issueWorkflows.getStageRun(claim.stageRun.id)?.status, "running");
+    assert.equal(codex.startedThreads.length, 0);
+    assert.equal(codex.turns.length, 0);
+
+    service.stop();
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("service startup leaves in-progress reconciled stages running", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-in-progress-"));
   try {

@@ -246,6 +246,122 @@ test("reconciliation routes and delivers pending obligations while the latest tu
   ]);
 });
 
+test("reconciliation awaits codex retry instead of failing the run on transient thread read errors", () => {
+  const decision = reconcileIssue({
+    issue: {
+      projectId: "proj",
+      linearIssueId: "issue-1",
+      lifecycleStatus: "running",
+      activeRun: {
+        id: 9,
+        stage: "development",
+        status: "running",
+        threadId: "thread-1",
+      },
+    },
+    live: {
+      codex: {
+        status: "error",
+        errorMessage: "codex app-server restarted mid-read",
+      },
+    },
+  });
+
+  assert.equal(decision.outcome, "continue");
+  assert.deepEqual(decision.actions, [
+    {
+      type: "await_codex_retry",
+      projectId: "proj",
+      linearIssueId: "issue-1",
+      runId: 9,
+      reason: "codex app-server restarted mid-read",
+    },
+  ]);
+});
+
+test("reconciliation routes multiple pending obligations to the latest live turn", () => {
+  const decision = reconcileIssue({
+    issue: {
+      projectId: "proj",
+      linearIssueId: "issue-1",
+      lifecycleStatus: "running",
+      activeRun: {
+        id: 9,
+        stage: "development",
+        status: "running",
+        threadId: "thread-1",
+      },
+    },
+    obligations: [
+      {
+        id: 100,
+        kind: "deliver_turn_input",
+        status: "pending",
+      },
+      {
+        id: 101,
+        kind: "deliver_turn_input",
+        status: "in_progress",
+        threadId: "thread-older",
+        turnId: "turn-older",
+      },
+    ],
+    live: {
+      codex: {
+        status: "found",
+        thread: createThread({ id: "turn-2", status: "inProgress" }),
+      },
+    },
+  });
+
+  assert.equal(decision.outcome, "continue");
+  assert.deepEqual(
+    decision.actions.filter((action) => action.type === "route_obligation" || action.type === "deliver_obligation"),
+    [
+      {
+        type: "route_obligation",
+        projectId: "proj",
+        linearIssueId: "issue-1",
+        obligationId: 100,
+        runId: 9,
+        threadId: "thread-1",
+        turnId: "turn-2",
+        reason: "pending obligation should target the latest live turn",
+      },
+      {
+        type: "deliver_obligation",
+        projectId: "proj",
+        linearIssueId: "issue-1",
+        obligationId: 100,
+        runId: 9,
+        threadId: "thread-1",
+        turnId: "turn-2",
+        reason: "pending obligation can be delivered to the active turn",
+      },
+      {
+        type: "route_obligation",
+        projectId: "proj",
+        linearIssueId: "issue-1",
+        obligationId: 101,
+        runId: 9,
+        threadId: "thread-1",
+        turnId: "turn-2",
+        reason: "pending obligation should target the latest live turn",
+      },
+      {
+        type: "deliver_obligation",
+        projectId: "proj",
+        linearIssueId: "issue-1",
+        obligationId: 101,
+        runId: 9,
+        threadId: "thread-1",
+        turnId: "turn-2",
+        reason: "pending obligation can be delivered to the active turn",
+      },
+    ],
+  );
+});
+
 test("reconciliation marks a completed run and pauses for handoff when Linear still matches the active state", () => {
   const decision = reconcileIssue({
     issue: {
