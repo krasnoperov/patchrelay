@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { IssueControlStoreProvider, ObligationStoreProvider } from "./ledger-ports.ts";
+import type { IssueControlStoreProvider, ObligationStoreProvider, RunLeaseStoreProvider } from "./ledger-ports.ts";
 import type { StageTurnInputStoreProvider } from "./stage-event-ports.ts";
 import type { IssueWorkflowWebhookStoreProvider } from "./workflow-ports.ts";
 import { isPatchRelayStatusComment } from "./linear-workflow.ts";
@@ -11,7 +11,7 @@ export class CommentWebhookHandler {
   constructor(
     private readonly stores: IssueWorkflowWebhookStoreProvider &
       StageTurnInputStoreProvider &
-      Partial<IssueControlStoreProvider & ObligationStoreProvider>,
+      Partial<IssueControlStoreProvider & ObligationStoreProvider & RunLeaseStoreProvider>,
     private readonly turnInputDispatcher: StageTurnInputDispatcher,
   ) {}
 
@@ -30,18 +30,20 @@ export class CommentWebhookHandler {
     }
 
     const issue = this.stores.issueWorkflows.getTrackedIssue(project.id, normalizedIssue.id);
-    if (!issue?.activeStageRunId) {
+    const issueControl = this.stores.issueControl?.getIssueControl(project.id, normalizedIssue.id);
+    if (!issueControl?.activeRunLeaseId || !this.stores.runLeases) {
       return;
     }
 
-    if (isPatchRelayStatusComment(normalized.comment.id, normalized.comment.body, issue.statusCommentId)) {
+    if (isPatchRelayStatusComment(normalized.comment.id, normalized.comment.body, issueControl.serviceOwnedCommentId ?? issue?.statusCommentId)) {
       return;
     }
 
-    const stageRun = this.stores.issueWorkflows.getStageRun(issue.activeStageRunId);
-    if (!stageRun) {
+    const runLease = this.stores.runLeases.getRunLease(issueControl.activeRunLeaseId);
+    if (!runLease) {
       return;
     }
+    const mirroredStageRun = issue?.activeStageRunId ? this.stores.issueWorkflows.getStageRun(issue.activeStageRunId) : undefined;
 
     const body = [
       "New Linear comment received while you are working.",
@@ -51,12 +53,11 @@ export class CommentWebhookHandler {
     ]
       .filter(Boolean)
       .join("\n");
-    const activeRunLeaseId = this.stores.issueControl?.getIssueControl(project.id, normalizedIssue.id)?.activeRunLeaseId;
     const dedupeKey = buildCommentDedupeKey(normalized.comment.id, body);
     if (
-      activeRunLeaseId !== undefined &&
+      issueControl.activeRunLeaseId !== undefined &&
       this.stores.obligations?.getObligationByDedupeKey({
-        runLeaseId: activeRunLeaseId,
+        runLeaseId: issueControl.activeRunLeaseId,
         kind: "deliver_turn_input",
         dedupeKey,
       })
@@ -65,37 +66,49 @@ export class CommentWebhookHandler {
     }
 
     const source = `linear-comment:${normalized.comment.id}`;
-    const queuedInputId = this.stores.stageEvents.enqueueTurnInput({
-      stageRunId: stageRun.id,
-      ...(stageRun.threadId ? { threadId: stageRun.threadId } : {}),
-      ...(stageRun.turnId ? { turnId: stageRun.turnId } : {}),
-      source,
-      body,
-    });
+    const queuedInputId =
+      mirroredStageRun
+        ? this.stores.stageEvents.enqueueTurnInput({
+            stageRunId: mirroredStageRun.id,
+            ...(runLease.threadId ? { threadId: runLease.threadId } : {}),
+            ...(runLease.turnId ? { turnId: runLease.turnId } : {}),
+            source,
+            body,
+          })
+        : undefined;
     const obligationId = this.enqueueObligation(
       project.id,
       normalizedIssue.id,
-      stageRun.id,
-      stageRun.threadId,
-      stageRun.turnId,
+      mirroredStageRun?.id,
+      runLease.threadId,
+      runLease.turnId,
       queuedInputId,
       normalized.comment.id,
       body,
       dedupeKey,
     );
-    await this.turnInputDispatcher.flush(stageRun, {
-      ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
-      failureMessage: "Failed to deliver queued Linear comment to active Codex turn",
-    });
+    await this.turnInputDispatcher.flush(
+      {
+        id: mirroredStageRun?.id ?? 0,
+        projectId: project.id,
+        linearIssueId: normalizedIssue.id,
+        ...(runLease.threadId ? { threadId: runLease.threadId } : {}),
+        ...(runLease.turnId ? { turnId: runLease.turnId } : {}),
+      },
+      {
+        ...(issue?.issueKey ? { issueKey: issue.issueKey } : {}),
+        failureMessage: "Failed to deliver queued Linear comment to active Codex turn",
+      },
+    );
   }
 
   private enqueueObligation(
     projectId: string,
     linearIssueId: string,
-    stageRunId: number,
+    stageRunId: number | undefined,
     threadId: string | undefined,
     turnId: string | undefined,
-    queuedInputId: number,
+    queuedInputId: number | undefined,
     commentId: string,
     body: string,
     dedupeKey: string,
@@ -111,9 +124,9 @@ export class CommentWebhookHandler {
       kind: "deliver_turn_input",
       source: `linear-comment:${commentId}`,
       payloadJson: JSON.stringify({
-        queuedInputId,
-        stageRunId,
         body,
+        ...(queuedInputId !== undefined ? { queuedInputId } : {}),
+        ...(stageRunId !== undefined ? { stageRunId } : {}),
       }),
       runLeaseId: activeRunLeaseId,
       ...(threadId ? { threadId } : {}),

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { IssueControlStoreProvider, ObligationStoreProvider } from "./ledger-ports.ts";
+import type { IssueControlStoreProvider, ObligationStoreProvider, RunLeaseStoreProvider } from "./ledger-ports.ts";
 import type { StageTurnInputStoreProvider } from "./stage-event-ports.ts";
 import type { IssueWorkflowWebhookStoreProvider } from "./workflow-ports.ts";
 import type { StageAgentActivityPublisher } from "./stage-agent-activity-publisher.ts";
@@ -17,7 +17,7 @@ export class AgentSessionWebhookHandler {
   constructor(
     private readonly stores: IssueWorkflowWebhookStoreProvider &
       StageTurnInputStoreProvider &
-      Partial<IssueControlStoreProvider & ObligationStoreProvider>,
+      Partial<IssueControlStoreProvider & ObligationStoreProvider & RunLeaseStoreProvider>,
     private readonly turnInputDispatcher: StageTurnInputDispatcher,
     private readonly agentActivity: StageAgentActivityPublisher,
   ) {}
@@ -36,15 +36,21 @@ export class AgentSessionWebhookHandler {
 
     const promptBody = trimPrompt(normalized.agentSession.promptBody);
     const promptContext = trimPrompt(normalized.agentSession.promptContext);
+    const issueControl = normalized.issue ? this.stores.issueControl?.getIssueControl(project.id, normalized.issue.id) : undefined;
+    const activeRunLease =
+      issueControl?.activeRunLeaseId !== undefined && this.stores.runLeases
+        ? this.stores.runLeases.getRunLease(issueControl.activeRunLeaseId)
+        : undefined;
     const activeStageRun = issue?.activeStageRunId ? this.stores.issueWorkflows.getStageRun(issue.activeStageRunId) : undefined;
+    const activeStage = activeRunLease?.stage ?? activeStageRun?.stage;
     const runnableWorkflow = normalized.issue?.stateName ? resolveWorkflowStage(project, normalized.issue.stateName) : undefined;
 
     if (normalized.triggerEvent === "agentSessionCreated") {
       if (!delegatedToPatchRelay) {
-        if (activeStageRun) {
+        if (activeStage) {
           await this.agentActivity.publishForSession(project.id, normalized.agentSession.id, {
             type: "thought",
-            body: `PatchRelay is already running the ${activeStageRun.stage} workflow for this issue. Delegate it to PatchRelay if you want automation to own the workflow, or keep replying here to steer the active run.`,
+            body: `PatchRelay is already running the ${activeStage} workflow for this issue. Delegate it to PatchRelay if you want automation to own the workflow, or keep replying here to steer the active run.`,
           });
           return;
         }
@@ -59,7 +65,7 @@ export class AgentSessionWebhookHandler {
         return;
       }
 
-      if (!desiredStage && !activeStageRun) {
+      if (!desiredStage && !activeStage) {
         const runnableStates = listRunnableStates(project).join(", ");
         await this.agentActivity.publishForSession(project.id, normalized.agentSession.id, {
           type: "elicitation",
@@ -76,10 +82,10 @@ export class AgentSessionWebhookHandler {
         return;
       }
 
-      if (activeStageRun) {
+      if (activeStage) {
         await this.agentActivity.publishForSession(project.id, normalized.agentSession.id, {
           type: "thought",
-          body: `PatchRelay is already running the ${activeStageRun.stage} workflow for this issue.`,
+          body: `PatchRelay is already running the ${activeStage} workflow for this issue.`,
         });
       }
       return;
@@ -93,13 +99,12 @@ export class AgentSessionWebhookHandler {
       return;
     }
 
-    if (activeStageRun && promptBody) {
-      const activeRunLeaseId = this.stores.issueControl?.getIssueControl(project.id, normalized.issue!.id)?.activeRunLeaseId;
+    if (activeRunLease && promptBody) {
       const dedupeKey = buildPromptDedupeKey(normalized.agentSession.id, promptBody);
       if (
-        activeRunLeaseId !== undefined &&
+        issueControl?.activeRunLeaseId !== undefined &&
         this.stores.obligations?.getObligationByDedupeKey({
-          runLeaseId: activeRunLeaseId,
+          runLeaseId: issueControl.activeRunLeaseId,
           kind: "deliver_turn_input",
           dedupeKey,
         })
@@ -107,31 +112,44 @@ export class AgentSessionWebhookHandler {
         return;
       }
 
-      const queuedInputId = this.stores.stageEvents.enqueueTurnInput({
-        stageRunId: activeStageRun.id,
-        ...(activeStageRun.threadId ? { threadId: activeStageRun.threadId } : {}),
-        ...(activeStageRun.turnId ? { turnId: activeStageRun.turnId } : {}),
-        source: `linear-agent-prompt:${normalized.agentSession.id}:${normalized.webhookId}`,
-        body: ["New Linear agent prompt received while you are working.", "", promptBody].join("\n"),
-      });
+      const promptInput = ["New Linear agent prompt received while you are working.", "", promptBody].join("\n");
+      const queuedInputId =
+        activeStageRun
+          ? this.stores.stageEvents.enqueueTurnInput({
+              stageRunId: activeStageRun.id,
+              ...(activeRunLease.threadId ? { threadId: activeRunLease.threadId } : {}),
+              ...(activeRunLease.turnId ? { turnId: activeRunLease.turnId } : {}),
+              source: `linear-agent-prompt:${normalized.agentSession.id}:${normalized.webhookId}`,
+              body: promptInput,
+            })
+          : undefined;
       const obligationId = this.enqueueObligation(
         project.id,
         normalized.issue!.id,
-        activeStageRun.id,
-        activeStageRun.threadId,
-        activeStageRun.turnId,
+        activeStageRun?.id,
+        activeRunLease.threadId,
+        activeRunLease.turnId,
         queuedInputId,
         normalized.agentSession.id,
-        promptBody,
+        promptInput,
         dedupeKey,
       );
-      await this.turnInputDispatcher.flush(activeStageRun, {
-        ...(issue?.issueKey ? { issueKey: issue.issueKey } : {}),
-        failureMessage: "Failed to deliver queued Linear agent prompt to active Codex turn",
-      });
+      await this.turnInputDispatcher.flush(
+        {
+          id: activeStageRun?.id ?? 0,
+          projectId: project.id,
+          linearIssueId: normalized.issue!.id,
+          ...(activeRunLease.threadId ? { threadId: activeRunLease.threadId } : {}),
+          ...(activeRunLease.turnId ? { turnId: activeRunLease.turnId } : {}),
+        },
+        {
+          ...(issue?.issueKey ? { issueKey: issue.issueKey } : {}),
+          failureMessage: "Failed to deliver queued Linear agent prompt to active Codex turn",
+        },
+      );
       await this.agentActivity.publishForSession(project.id, normalized.agentSession.id, {
         type: "thought",
-        body: `PatchRelay routed your follow-up instructions into the active ${activeStageRun.stage} workflow.`,
+        body: `PatchRelay routed your follow-up instructions into the active ${activeRunLease.stage} workflow.`,
       });
       return;
     }
@@ -167,10 +185,10 @@ export class AgentSessionWebhookHandler {
   private enqueueObligation(
     projectId: string,
     linearIssueId: string,
-    stageRunId: number,
+    stageRunId: number | undefined,
     threadId: string | undefined,
     turnId: string | undefined,
-    queuedInputId: number,
+    queuedInputId: number | undefined,
     agentSessionId: string,
     promptBody: string,
     dedupeKey: string,
@@ -186,9 +204,9 @@ export class AgentSessionWebhookHandler {
       kind: "deliver_turn_input",
       source: `linear-agent-prompt:${agentSessionId}`,
       payloadJson: JSON.stringify({
-        queuedInputId,
-        stageRunId,
         body: promptBody,
+        ...(queuedInputId !== undefined ? { queuedInputId } : {}),
+        ...(stageRunId !== undefined ? { stageRunId } : {}),
       }),
       runLeaseId: activeRunLeaseId,
       ...(threadId ? { threadId } : {}),
