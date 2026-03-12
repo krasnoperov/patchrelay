@@ -9,7 +9,7 @@ import { loadConfig } from "../src/config.ts";
 import { CliDataAccess } from "../src/cli/data.ts";
 import { PatchRelayDatabase } from "../src/db.ts";
 import { buildHttpServer } from "../src/http.ts";
-import type { AppConfig } from "../src/types.ts";
+import type { AppConfig, CodexThreadSummary } from "../src/types.ts";
 
 function createWorkflows(baseDir: string) {
   return [
@@ -189,6 +189,18 @@ function writeRunnerBinaries(configPath: string, binaries: { gitBin?: string; co
   }
 
   writeFileSync(configPath, `${JSON.stringify(raw, null, 2)}\n`, "utf8");
+}
+
+function createStubCodex(threads: Record<string, CodexThreadSummary>) {
+  return {
+    async start() {},
+    async stop() {},
+    async readThread(threadId: string) {
+      const thread = threads[threadId];
+      assert.ok(thread);
+      return thread;
+    },
+  };
 }
 
 function seedDatabase(db: PatchRelayDatabase, config: AppConfig): void {
@@ -491,6 +503,32 @@ test("cli falls back to ledger workspace and run context when legacy active poin
       lifecycleStatus: "running",
       lastWebhookAt: "2026-03-09T11:00:00.000Z",
     });
+    db.issueWorkflows.setIssueDesiredStage("usertold", "issue-4", "review", "delivery-stale");
+    const stale = db.issueWorkflows.claimStageRun({
+      projectId: "usertold",
+      linearIssueId: "issue-4",
+      stage: "review",
+      triggerWebhookId: "delivery-stale",
+      branchName: "use/USE-57-stale-review",
+      worktreePath: path.join(config.projects[0].worktreeRoot, "USE-57-stale"),
+      workflowFile: getWorkflowFile(config, "review"),
+      promptText: "Stale review run",
+    });
+    assert.ok(stale);
+    db.issueWorkflows.updateStageRunThread({
+      stageRunId: stale.stageRun.id,
+      threadId: "thread-57-stale",
+      turnId: "turn-57-stale",
+    });
+    db.issueWorkflows.finishStageRun({
+      stageRunId: stale.stageRun.id,
+      status: "completed",
+      threadId: "thread-57-stale",
+      turnId: "turn-57-stale",
+    });
+    db.connection
+      .prepare("UPDATE tracked_issues SET active_stage_run_id = ?, lifecycle_status = 'running' WHERE project_id = ? AND linear_issue_id = ?")
+      .run(stale.stageRun.id, "usertold", "issue-4");
     const receipt = db.eventReceipts.insertEventReceipt({
       source: "linear-webhook",
       externalId: "delivery-ledger",
@@ -535,16 +573,45 @@ test("cli falls back to ledger workspace and run context when legacy active poin
       lifecycleStatus: "running",
     });
 
-    data = new CliDataAccess(config, { db });
+    data = new CliDataAccess(config, {
+      db,
+      codex: createStubCodex({
+        "thread-57": {
+          id: "thread-57",
+          preview: "Ledger-backed running issue",
+          cwd: path.join(config.projects[0].worktreeRoot, "USE-57"),
+          status: "running",
+          turns: [
+            {
+              id: "turn-57",
+              status: "inProgress",
+              items: [{ type: "agentMessage", id: "assistant-57", text: "Still implementing the change." }],
+            },
+          ],
+        },
+      }) as never,
+    });
     const worktree = data.worktree("USE-57");
     assert.equal(worktree?.workspace.worktreePath, path.join(config.projects[0].worktreeRoot, "USE-57"));
 
     const opened = data.open("USE-57");
     assert.equal(opened?.resumeThreadId, "thread-57");
 
+    const inspect = await data.inspect("USE-57");
+    assert.equal(inspect?.activeStageRun?.stage, "development");
+    assert.equal(inspect?.activeStageRun?.threadId, "thread-57");
+    assert.equal(inspect?.latestStageRun?.stage, "review");
+
+    const live = await data.live("USE-57");
+    assert.equal(live?.stageRun.stage, "development");
+    assert.equal(live?.stageRun.threadId, "thread-57");
+    assert.equal(live?.live?.latestTurnStatus, "inProgress");
+
     const list = data.list({ active: true });
     const listed = list.find((entry) => entry.issueKey === "USE-57");
     assert.equal(listed?.activeStage, "development");
+    assert.equal(listed?.latestStage, "review");
+    assert.equal(listed?.latestStageStatus, "completed");
   } finally {
     data?.close();
     rmSync(baseDir, { recursive: true, force: true });

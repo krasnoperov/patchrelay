@@ -19,16 +19,21 @@ export class IssueQueryService {
       return undefined;
     }
 
+    const activeStatus = await this.stageFinalizer.getActiveStageStatus(issueKey);
+    const activeStageRun = activeStatus?.stageRun ?? result.activeStageRun;
     const latestStageRun = this.stores.issueWorkflows.getLatestStageRunForIssue(result.issue.projectId, result.issue.linearIssueId);
     let liveThread;
-    if (result.activeStageRun?.threadId) {
-      liveThread = await this.codex.readThread(result.activeStageRun.threadId, true).catch(() => undefined);
+    if (activeStatus?.liveThread) {
+      liveThread = activeStatus.liveThread;
+    } else if (activeStageRun?.threadId) {
+      liveThread = await this.codex.readThread(activeStageRun.threadId, true).then(summarizeCurrentThread).catch(() => undefined);
     }
 
     return {
       ...result,
+      ...(activeStageRun ? { activeStageRun } : {}),
       ...(latestStageRun ? { latestStageRun } : {}),
-      ...(liveThread ? { liveThread: summarizeCurrentThread(liveThread) } : {}),
+      ...(liveThread ? { liveThread } : {}),
     };
   }
 

@@ -1089,6 +1089,64 @@ test("service exposes raw stored events and live active status", async () => {
   }
 });
 
+test("service overview and live status stay ledger-backed when the legacy active pointer is missing", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-ledger-active-status-"));
+  try {
+    const { db, codex, service } = createService(baseDir);
+    await service.start();
+
+    recordDesiredStageWithLedger(db, {
+      projectId: "usertold",
+      linearIssueId: "issue-3",
+      issueKey: "USE-27",
+      title: "Inspect live status",
+      issueUrl: "https://linear.app/example/issue/USE-27",
+      currentLinearState: "Start",
+      desiredStage: "development",
+      desiredWebhookId: "delivery-start",
+      lastWebhookAt: new Date().toISOString(),
+    });
+
+    await service.processIssue({ projectId: "usertold", issueId: "issue-3" });
+    await flushQueues();
+
+    const issue = db.issueWorkflows.getTrackedIssue("usertold", "issue-3");
+    assert.ok(issue?.activeStageRunId);
+    const stageRun = db.issueWorkflows.getStageRun(issue.activeStageRunId);
+    assert.ok(stageRun?.threadId);
+
+    db.connection
+      .prepare("UPDATE tracked_issues SET active_stage_run_id = NULL WHERE project_id = ? AND linear_issue_id = ?")
+      .run("usertold", "issue-3");
+
+    codex.threads.set(stageRun.threadId, {
+      ...codex.threads.get(stageRun.threadId)!,
+      status: "running",
+      turns: [
+        {
+          id: stageRun.turnId!,
+          status: "inProgress",
+          items: [{ type: "agentMessage", id: "assistant-ledger", text: "Continuing from the ledger lease." }],
+        },
+      ],
+    });
+
+    const overview = await service.getIssueOverview("USE-27");
+    assert.equal(overview?.activeStageRun?.stage, "development");
+    assert.equal(overview?.activeStageRun?.threadId, stageRun.threadId);
+    assert.equal(overview?.liveThread?.latestAgentMessage, "Continuing from the ledger lease.");
+
+    const live = await service.getActiveStageStatus("USE-27");
+    assert.equal(live?.stageRun.stage, "development");
+    assert.equal(live?.stageRun.threadId, stageRun.threadId);
+    assert.equal(live?.liveThread.latestAgentMessage, "Continuing from the ledger lease.");
+
+    service.stop();
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("service forwards new Linear comments into the active turn", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-comments-"));
   try {

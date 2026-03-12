@@ -605,6 +605,7 @@ function createHarness(options?: {
   withLedger?: boolean;
   withoutActiveLease?: boolean;
   pendingObligationBody?: string;
+  issueControlLifecycleStatus?: TrackedIssueRecord["lifecycleStatus"];
 }) {
   const config = createConfig(options?.persistExtendedHistory ?? true);
   const store = new FakeIssueWorkflowStore();
@@ -635,7 +636,7 @@ function createHarness(options?: {
       ...(options.withoutActiveLease ? {} : { activeRunLeaseId: 90 }),
       serviceOwnedCommentId: issue.statusCommentId ?? null,
       activeAgentSessionId: issue.activeAgentSessionId ?? null,
-      lifecycleStatus: issue.lifecycleStatus,
+      lifecycleStatus: options.issueControlLifecycleStatus ?? issue.lifecycleStatus,
     });
     if (!options.withoutActiveLease) {
       ledger.runLeases.set(90, {
@@ -840,6 +841,46 @@ test("startup reconciliation adopts legacy stage runs when no active run lease e
   assert.equal(ledger.listActiveRunLeases().length, 1);
   assert.equal(ledger.listActiveRunLeases()[0]?.threadId, "thread-1");
   assert.equal(ledger.getIssueControl("proj", "issue-1")?.activeRunLeaseId, ledger.listActiveRunLeases()[0]?.id);
+});
+
+test("startup reconciliation does not resurrect a legacy running stage after the ledger already marked it completed", async () => {
+  const { store, ledger, codex, finalizer, stageRun } = createHarness({
+    withLedger: true,
+    withoutActiveLease: true,
+    issueControlLifecycleStatus: "completed",
+  });
+  codex.threads.set(stageRun.threadId!, createThread("inProgress"));
+
+  await finalizer.reconcileActiveStageRuns();
+
+  assert.equal(store.getStageRun(stageRun.id)?.status, "running");
+  assert.equal(ledger.listActiveRunLeases().length, 0);
+  assert.equal(ledger.getIssueControl("proj", "issue-1")?.activeRunLeaseId, undefined);
+  assert.equal(ledger.getIssueControl("proj", "issue-1")?.lifecycleStatus, "completed");
+});
+
+test("active stage status prefers the active lease thread over a stale legacy activeStageRun pointer", async () => {
+  const { store, codex, finalizer } = createHarness({ withLedger: true });
+  const issue = store.getTrackedIssue("proj", "issue-1");
+  assert.ok(issue);
+  const staleStageRun = createStageRun({
+    id: 99,
+    threadId: "stale-thread",
+    turnId: "stale-turn",
+    startedAt: "2026-03-11T00:00:00.000Z",
+  });
+  store.stageRuns.set(staleStageRun.id, staleStageRun);
+  issue.activeStageRunId = staleStageRun.id;
+  codex.threads.set("thread-1", {
+    ...createThread("inProgress"),
+    turns: [{ id: "turn-1", status: "inProgress", items: [{ type: "agentMessage", id: "assistant-1", text: "Using the lease-backed thread." }] }],
+  });
+
+  const active = await finalizer.getActiveStageStatus("APP-1");
+
+  assert.equal(active?.stageRun.threadId, "thread-1");
+  assert.equal(active?.liveThread.threadId, "thread-1");
+  assert.equal(active?.liveThread.latestAgentMessage, "Using the lease-backed thread.");
 });
 
 test("ledger reconciliation keeps obligations retryable when Codex steer fails", async () => {

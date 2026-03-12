@@ -88,6 +88,7 @@ export class PatchRelayService {
       this.linearProvider,
       (projectId, issueId) => enqueueIssue(projectId, issueId),
       logger,
+      (fn) => db.connection.transaction(fn)(),
     );
     this.webhookProcessor = new ServiceWebhookProcessor(
       config,

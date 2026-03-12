@@ -350,7 +350,11 @@ export class CliDataAccess {
     }
 
     const ledger = this.getLedgerIssueContext(worktree.issue.projectId, worktree.issue.linearIssueId);
-    const resumeThreadId = worktree.issue.latestThreadId ?? worktree.workspace.lastThreadId ?? ledger.runLease?.threadId;
+    const resumeThreadId =
+      (ledger.issueControl?.activeRunLeaseId ? ledger.runLease?.threadId : undefined) ??
+      worktree.workspace.lastThreadId ??
+      worktree.issue.latestThreadId ??
+      ledger.runLease?.threadId;
     return {
       ...worktree,
       ...(resumeThreadId ? { resumeThreadId } : {}),
@@ -448,10 +452,10 @@ export class CliDataAccess {
         projectId,
         ...(row.current_linear_state === null ? {} : { currentLinearState: String(row.current_linear_state) }),
         lifecycleStatus: String(row.lifecycle_status),
-        ...(row.active_stage !== null
-          ? { activeStage: row.active_stage as WorkflowStage }
-          : ledger?.runLease
-            ? { activeStage: ledger.runLease.stage }
+        ...(ledger?.runLease
+          ? { activeStage: ledger.runLease.stage }
+          : row.active_stage !== null
+            ? { activeStage: row.active_stage as WorkflowStage }
             : {}),
         ...(row.latest_stage !== null
           ? { latestStage: row.latest_stage as WorkflowStage }
@@ -484,9 +488,7 @@ export class CliDataAccess {
     const workspaceOwnership = issueControl?.activeWorkspaceOwnershipId
       ? this.db.workspaceOwnership.getWorkspaceOwnership(issueControl.activeWorkspaceOwnershipId)
       : undefined;
-    const mirroredStageRun =
-      (runLease?.threadId ? this.db.issueWorkflows.getStageRunByThreadId(runLease.threadId) : undefined) ??
-      this.db.issueWorkflows.getLatestStageRunForIssue(projectId, linearIssueId);
+    const mirroredStageRun = runLease?.threadId ? this.db.issueWorkflows.getStageRunByThreadId(runLease.threadId) : undefined;
 
     return {
       ...(issueControl ? { issueControl } : {}),
@@ -497,9 +499,9 @@ export class CliDataAccess {
   }
 
   private getActiveStageRunForIssue(issue: TrackedIssueRecord, ledger?: LedgerIssueContext): StageRunRecord | undefined {
-    const activeStageRun =
-      (issue.activeStageRunId ? this.db.issueWorkflows.getStageRun(issue.activeStageRunId) : undefined) ??
-      (ledger ?? this.getLedgerIssueContext(issue.projectId, issue.linearIssueId)).mirroredStageRun;
+    const context = ledger ?? this.getLedgerIssueContext(issue.projectId, issue.linearIssueId);
+    const directStageRun = issue.activeStageRunId ? this.db.issueWorkflows.getStageRun(issue.activeStageRunId) : undefined;
+    const activeStageRun = context.mirroredStageRun ?? this.synthesizeStageRunFromLease(context) ?? directStageRun;
 
     if (!activeStageRun) {
       return undefined;
@@ -510,15 +512,47 @@ export class CliDataAccess {
       : undefined;
   }
 
-  private getWorkspaceForIssue(issue: TrackedIssueRecord, ledger?: LedgerIssueContext): WorkspaceRecord | undefined {
-    const activeWorkspace = this.db.issueWorkflows.getActiveWorkspaceForIssue(issue.projectId, issue.linearIssueId);
-    if (activeWorkspace) {
-      return activeWorkspace;
+  private synthesizeStageRunFromLease(ledger: LedgerIssueContext): StageRunRecord | undefined {
+    if (!ledger.runLease) {
+      return undefined;
     }
 
-    const workspaceOwnership = (ledger ?? this.getLedgerIssueContext(issue.projectId, issue.linearIssueId)).workspaceOwnership;
+    return {
+      id: -ledger.runLease.id,
+      pipelineRunId: 0,
+      projectId: ledger.runLease.projectId,
+      linearIssueId: ledger.runLease.linearIssueId,
+      workspaceId: 0,
+      stage: ledger.runLease.stage,
+      status:
+        ledger.runLease.status === "failed"
+          ? "failed"
+          : ledger.runLease.status === "completed"
+            ? "completed"
+            : "running",
+      triggerWebhookId: "ledger-active-run",
+      workflowFile: "",
+      promptText: "",
+      ...(ledger.runLease.threadId ? { threadId: ledger.runLease.threadId } : {}),
+      ...(ledger.runLease.parentThreadId ? { parentThreadId: ledger.runLease.parentThreadId } : {}),
+      ...(ledger.runLease.turnId ? { turnId: ledger.runLease.turnId } : {}),
+      startedAt: ledger.runLease.startedAt,
+      ...(ledger.runLease.endedAt ? { endedAt: ledger.runLease.endedAt } : {}),
+    };
+  }
+
+  private getWorkspaceForIssue(issue: TrackedIssueRecord, ledger?: LedgerIssueContext): WorkspaceRecord | undefined {
+    const context = ledger ?? this.getLedgerIssueContext(issue.projectId, issue.linearIssueId);
+    if (!context.issueControl?.activeRunLeaseId) {
+      const activeWorkspace = this.db.issueWorkflows.getActiveWorkspaceForIssue(issue.projectId, issue.linearIssueId);
+      if (activeWorkspace) {
+        return activeWorkspace;
+      }
+    }
+
+    const workspaceOwnership = context.workspaceOwnership;
     if (!workspaceOwnership) {
-      return undefined;
+      return this.db.issueWorkflows.getActiveWorkspaceForIssue(issue.projectId, issue.linearIssueId);
     }
 
     return {
@@ -533,7 +567,7 @@ export class CliDataAccess {
           : workspaceOwnership.status === "paused"
             ? "paused"
             : "active",
-      ...(ledger?.runLease?.threadId ? { lastThreadId: ledger.runLease.threadId } : {}),
+      ...(context.runLease?.threadId ? { lastThreadId: context.runLease.threadId } : {}),
       createdAt: workspaceOwnership.createdAt,
       updatedAt: workspaceOwnership.updatedAt,
     };

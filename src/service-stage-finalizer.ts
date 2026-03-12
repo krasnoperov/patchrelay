@@ -34,6 +34,7 @@ export class ServiceStageFinalizer {
   private readonly inputDispatcher: StageTurnInputDispatcher;
   private readonly lifecyclePublisher: StageLifecyclePublisher;
   private readonly actionApplier: ReconciliationActionApplier;
+  private readonly runAtomically: <T>(fn: () => T) => T;
 
   constructor(
     private readonly config: AppConfig,
@@ -50,7 +51,9 @@ export class ServiceStageFinalizer {
     private readonly linearProvider: LinearClientProvider,
     private readonly enqueueIssue: (projectId: string, issueId: string) => void,
     logger?: Logger,
+    runAtomically: <T>(fn: () => T) => T = (fn) => fn(),
   ) {
+    this.runAtomically = runAtomically;
     const lifecycleLogger = logger ?? consoleLogger();
     this.inputDispatcher = new StageTurnInputDispatcher(stores, codex, lifecycleLogger);
     this.lifecyclePublisher = new StageLifecyclePublisher(config, stores, linearProvider, lifecycleLogger);
@@ -67,12 +70,12 @@ export class ServiceStageFinalizer {
 
   async getActiveStageStatus(issueKey: string) {
     const issue = this.stores.issueWorkflows.getTrackedIssueByKey(issueKey);
-    if (!issue?.activeStageRunId) {
+    if (!issue) {
       return undefined;
     }
 
-    const stageRun = this.stores.issueWorkflows.getStageRun(issue.activeStageRunId);
-    if (!stageRun || !stageRun.threadId) {
+    const stageRun = this.resolveActiveStageRun(issue);
+    if (!stageRun?.threadId) {
       return undefined;
     }
 
@@ -157,18 +160,20 @@ export class ServiceStageFinalizer {
     };
     const report = buildStageReport(finalizedStageRun, issue, thread, countEventMethods(this.stores.stageEvents.listThreadEvents(stageRun.id)));
 
-    this.finishLedgerRun(stageRun.projectId, stageRun.linearIssueId, "completed", {
-      threadId: params.threadId,
-      ...(params.turnId ? { turnId: params.turnId } : {}),
-      nextLifecycleStatus: params.nextLifecycleStatus ?? (issue.desiredStage ? "queued" : "completed"),
-    });
-    this.stores.issueWorkflows.finishStageRun({
-      stageRunId: stageRun.id,
-      status,
-      threadId: params.threadId,
-      ...(params.turnId ? { turnId: params.turnId } : {}),
-      summaryJson: JSON.stringify(extractStageSummary(report)),
-      reportJson: JSON.stringify(report),
+    this.runAtomically(() => {
+      this.finishLedgerRun(stageRun.projectId, stageRun.linearIssueId, "completed", {
+        threadId: params.threadId,
+        ...(params.turnId ? { turnId: params.turnId } : {}),
+        nextLifecycleStatus: params.nextLifecycleStatus ?? (issue.desiredStage ? "queued" : "completed"),
+      });
+      this.stores.issueWorkflows.finishStageRun({
+        stageRunId: stageRun.id,
+        status,
+        threadId: params.threadId,
+        ...(params.turnId ? { turnId: params.turnId } : {}),
+        summaryJson: JSON.stringify(extractStageSummary(report)),
+        reportJson: JSON.stringify(report),
+      });
     });
 
     void this.advanceAfterStageCompletion(stageRun);
@@ -182,24 +187,26 @@ export class ServiceStageFinalizer {
       turnId?: string;
     },
   ): void {
-    this.finishLedgerRun(stageRun.projectId, stageRun.linearIssueId, "failed", {
-      threadId,
-      ...(options?.turnId ? { turnId: options.turnId } : {}),
-      failureReason: message,
-      nextLifecycleStatus: "failed",
-    });
-    this.stores.issueWorkflows.finishStageRun({
-      stageRunId: stageRun.id,
-      status: "failed",
-      threadId,
-      ...(options?.turnId ? { turnId: options.turnId } : {}),
-      summaryJson: JSON.stringify({ message }),
-      reportJson: JSON.stringify(
-        buildFailedStageReport(stageRun, "failed", {
-          threadId,
-          ...(options?.turnId ? { turnId: options.turnId } : {}),
-        }),
-      ),
+    this.runAtomically(() => {
+      this.finishLedgerRun(stageRun.projectId, stageRun.linearIssueId, "failed", {
+        threadId,
+        ...(options?.turnId ? { turnId: options.turnId } : {}),
+        failureReason: message,
+        nextLifecycleStatus: "failed",
+      });
+      this.stores.issueWorkflows.finishStageRun({
+        stageRunId: stageRun.id,
+        status: "failed",
+        threadId,
+        ...(options?.turnId ? { turnId: options.turnId } : {}),
+        summaryJson: JSON.stringify({ message }),
+        reportJson: JSON.stringify(
+          buildFailedStageReport(stageRun, "failed", {
+            threadId,
+            ...(options?.turnId ? { turnId: options.turnId } : {}),
+          }),
+        ),
+      });
     });
   }
 
@@ -360,6 +367,9 @@ export class ServiceStageFinalizer {
       if (existingControl?.activeRunLeaseId !== undefined) {
         continue;
       }
+      if (existingControl && existingControl.lifecycleStatus !== "running") {
+        continue;
+      }
 
       const workspace = this.stores.issueWorkflows.getWorkspace(stageRun.workspaceId);
       if (!workspace) {
@@ -500,6 +510,47 @@ export class ServiceStageFinalizer {
   private findLegacyStageRunForIssue(projectId: string, linearIssueId: string, threadId?: string): StageRunRecord | undefined {
     return (threadId ? this.stores.issueWorkflows.getStageRunByThreadId(threadId) : undefined) ??
       this.stores.issueWorkflows.getLatestStageRunForIssue(projectId, linearIssueId);
+  }
+
+  private resolveActiveStageRun(issue: TrackedIssueRecord): StageRunRecord | undefined {
+    const directStageRun =
+      this.resolveLedgerMirroredStageRun(issue.projectId, issue.linearIssueId) ??
+      (issue.activeStageRunId ? this.stores.issueWorkflows.getStageRun(issue.activeStageRunId) : undefined);
+    if (directStageRun) {
+      return directStageRun.projectId === issue.projectId && directStageRun.linearIssueId === issue.linearIssueId
+        ? directStageRun
+        : undefined;
+    }
+
+    const issueControl = this.stores.issueControl.getIssueControl(issue.projectId, issue.linearIssueId);
+    const runLease = issueControl?.activeRunLeaseId ? this.stores.runLeases.getRunLease(issueControl.activeRunLeaseId) : undefined;
+    if (!runLease) {
+      return undefined;
+    }
+
+    return {
+      id: -runLease.id,
+      pipelineRunId: 0,
+      projectId: runLease.projectId,
+      linearIssueId: runLease.linearIssueId,
+      workspaceId: 0,
+      stage: runLease.stage,
+      status: runLease.status === "failed" ? "failed" : runLease.status === "completed" ? "completed" : "running",
+      triggerWebhookId: "ledger-active-run",
+      workflowFile: "",
+      promptText: "",
+      ...(runLease.threadId ? { threadId: runLease.threadId } : {}),
+      ...(runLease.parentThreadId ? { parentThreadId: runLease.parentThreadId } : {}),
+      ...(runLease.turnId ? { turnId: runLease.turnId } : {}),
+      startedAt: runLease.startedAt,
+      ...(runLease.endedAt ? { endedAt: runLease.endedAt } : {}),
+    };
+  }
+
+  private resolveLedgerMirroredStageRun(projectId: string, linearIssueId: string): StageRunRecord | undefined {
+    const issueControl = this.stores.issueControl.getIssueControl(projectId, linearIssueId);
+    const runLease = issueControl?.activeRunLeaseId ? this.stores.runLeases.getRunLease(issueControl.activeRunLeaseId) : undefined;
+    return runLease?.threadId ? this.stores.issueWorkflows.getStageRunByThreadId(runLease.threadId) : undefined;
   }
 }
 
