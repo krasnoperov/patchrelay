@@ -379,9 +379,10 @@ export class AuthoritativeLedgerStore implements AuthoritativeLedgerStoreContrac
     throw new Error(`Failed to persist obligation for ${params.projectId}:${params.linearIssueId}:${params.kind}`);
   }
 
-  listPendingObligations(params?: { runLeaseId?: number; kind?: string }): ObligationRecord[] {
-    const clauses = ["status IN ('pending', 'in_progress', 'failed')"];
-    const values: Array<number | string> = [];
+  listPendingObligations(params?: { runLeaseId?: number; kind?: string; includeInProgress?: boolean }): ObligationRecord[] {
+    const statuses = params?.includeInProgress ? ["pending", "in_progress"] : ["pending"];
+    const clauses = [`status IN (${statuses.map(() => "?").join(", ")})`];
+    const values: Array<number | string> = [...statuses];
     if (params?.runLeaseId !== undefined) {
       clauses.push("run_lease_id = ?");
       values.push(params.runLeaseId);
@@ -395,6 +396,37 @@ export class AuthoritativeLedgerStore implements AuthoritativeLedgerStoreContrac
       .prepare(`SELECT * FROM obligations WHERE ${clauses.join(" AND ")} ORDER BY id`)
       .all(...values) as Record<string, unknown>[];
     return rows.map((row) => mapObligation(row));
+  }
+
+  claimPendingObligation(
+    id: number,
+    params?: { runLeaseId?: number | null; threadId?: string | null; turnId?: string | null },
+  ): boolean {
+    const result = this.connection
+      .prepare(
+        `
+        UPDATE obligations
+        SET status = 'in_progress',
+            run_lease_id = CASE WHEN @setRunLeaseId = 1 THEN @runLeaseId ELSE run_lease_id END,
+            thread_id = CASE WHEN @setThreadId = 1 THEN @threadId ELSE thread_id END,
+            turn_id = CASE WHEN @setTurnId = 1 THEN @turnId ELSE turn_id END,
+            last_error = NULL,
+            updated_at = @updatedAt
+        WHERE id = @id
+          AND status = 'pending'
+        `,
+      )
+      .run({
+        id,
+        runLeaseId: params?.runLeaseId ?? null,
+        threadId: params?.threadId ?? null,
+        turnId: params?.turnId ?? null,
+        updatedAt: isoNow(),
+        setRunLeaseId: Number("runLeaseId" in (params ?? {})),
+        setThreadId: Number("threadId" in (params ?? {})),
+        setTurnId: Number("turnId" in (params ?? {})),
+      });
+    return result.changes > 0;
   }
 
   updateObligationPayloadJson(id: number, payloadJson: string): void {

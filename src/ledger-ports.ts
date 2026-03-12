@@ -108,7 +108,8 @@ export interface ObligationStore {
     dedupeKey?: string | null;
   }): ObligationRecord;
   getObligationByDedupeKey(params: { runLeaseId: number; kind: string; dedupeKey: string }): ObligationRecord | undefined;
-  listPendingObligations(params?: { runLeaseId?: number; kind?: string }): ObligationRecord[];
+  listPendingObligations(params?: { runLeaseId?: number; kind?: string; includeInProgress?: boolean }): ObligationRecord[];
+  claimPendingObligation(id: number, params?: { runLeaseId?: number | null; threadId?: string | null; turnId?: string | null }): boolean;
   updateObligationPayloadJson(id: number, payloadJson: string): void;
   updateObligationRouting(id: number, params: { runLeaseId?: number | null; threadId?: string | null; turnId?: string | null }): void;
   markObligationStatus(id: number, status: ObligationRecord["status"], lastError?: string | null): void;

@@ -31,6 +31,15 @@ export class ReconciliationActionApplier {
     const { snapshot, decision } = params;
     const threadId = snapshot.runLease.threadId;
     const turnId = snapshot.runLease.turnId;
+    const obligationTargetAction = decision.actions.find((action) => action.type === "deliver_obligation" || action.type === "route_obligation");
+    const targetThreadId =
+      obligationTargetAction?.type === "deliver_obligation" || obligationTargetAction?.type === "route_obligation"
+        ? obligationTargetAction.threadId
+        : threadId;
+    const targetTurnId =
+      obligationTargetAction?.type === "deliver_obligation" || obligationTargetAction?.type === "route_obligation"
+        ? obligationTargetAction.turnId
+        : turnId;
     const clearAction = decision.actions.find((action) => action.type === "clear_active_run" || action.type === "release_issue_ownership");
     const nextLifecycleStatus =
       clearAction?.type === "clear_active_run" || clearAction?.type === "release_issue_ownership"
@@ -43,8 +52,13 @@ export class ReconciliationActionApplier {
     }
 
     if (decision.outcome === "continue") {
-      if (threadId) {
-        await this.callbacks.deliverPendingObligations(snapshot.runLease.projectId, snapshot.runLease.linearIssueId, threadId, turnId);
+      if (targetThreadId) {
+        await this.callbacks.deliverPendingObligations(
+          snapshot.runLease.projectId,
+          snapshot.runLease.linearIssueId,
+          targetThreadId,
+          targetTurnId,
+        );
       }
       return;
     }

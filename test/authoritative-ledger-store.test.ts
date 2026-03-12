@@ -224,3 +224,63 @@ test("authoritative ledger dedupes obligations by run lease, kind, and dedupe ke
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("authoritative ledger only exposes pending obligations by default and claims them atomically", () => {
+  const { baseDir, db } = createHarness();
+  try {
+    const issueControl = db.issueControl.upsertIssueControl({
+      projectId: "proj",
+      linearIssueId: "issue-2",
+      lifecycleStatus: "running",
+    });
+    const workspace = db.workspaceOwnership.upsertWorkspaceOwnership({
+      projectId: "proj",
+      linearIssueId: "issue-2",
+      branchName: "app/APP-2",
+      worktreePath: "/tmp/worktrees/APP-2",
+      status: "active",
+    });
+    const runLease = db.runLeases.createRunLease({
+      issueControlId: issueControl.id,
+      projectId: "proj",
+      linearIssueId: "issue-2",
+      workspaceOwnershipId: workspace.id,
+      stage: "development",
+      status: "running",
+    });
+    const obligation = db.obligations.enqueueObligation({
+      projectId: "proj",
+      linearIssueId: "issue-2",
+      kind: "deliver_turn_input",
+      source: "linear-comment:2",
+      payloadJson: "{\"body\":\"Please retry.\"}",
+      runLeaseId: runLease.id,
+    });
+
+    assert.deepEqual(db.obligations.listPendingObligations({ runLeaseId: runLease.id }).map((entry) => entry.id), [obligation.id]);
+    assert.equal(
+      db.obligations.claimPendingObligation(obligation.id, {
+        runLeaseId: runLease.id,
+        threadId: "thread-2",
+        turnId: "turn-2",
+      }),
+      true,
+    );
+    assert.equal(db.obligations.claimPendingObligation(obligation.id), false);
+    assert.deepEqual(db.obligations.listPendingObligations({ runLeaseId: runLease.id }).map((entry) => entry.id), []);
+    assert.deepEqual(
+      db.obligations.listPendingObligations({ runLeaseId: runLease.id, includeInProgress: true }).map((entry) => entry.status),
+      ["in_progress"],
+    );
+
+    db.obligations.markObligationStatus(obligation.id, "failed", "payload invalid");
+
+    assert.deepEqual(db.obligations.listPendingObligations({ runLeaseId: runLease.id }).map((entry) => entry.id), []);
+    assert.deepEqual(
+      db.obligations.listPendingObligations({ runLeaseId: runLease.id, includeInProgress: true }).map((entry) => entry.id),
+      [],
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});

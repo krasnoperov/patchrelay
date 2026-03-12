@@ -124,7 +124,15 @@ export class ServiceStageFinalizer {
     }
 
     const completedTurnId = extractTurnId(notification.params);
-    this.completeStageRun(stageRun, issue, thread, resolveStageRunStatus(notification.params), {
+    const status = resolveStageRunStatus(notification.params);
+    if (status === "failed") {
+      await this.failStageRunAndSync(stageRun, issue, threadId, "Codex reported the turn completed in a failed state", {
+        ...(completedTurnId ? { turnId: completedTurnId } : {}),
+      });
+      return;
+    }
+
+    this.completeStageRun(stageRun, issue, thread, status, {
       threadId,
       ...(completedTurnId ? { turnId: completedTurnId } : {}),
     });
@@ -234,6 +242,37 @@ export class ServiceStageFinalizer {
     });
   }
 
+  private async failStageRunAndSync(
+    stageRun: StageRunRecord,
+    issue: TrackedIssueRecord,
+    threadId: string,
+    message: string,
+    options?: {
+      turnId?: string;
+    },
+  ): Promise<void> {
+    this.failStageRun(stageRun, threadId, message, options);
+
+    const project = this.config.projects.find((candidate) => candidate.id === stageRun.projectId);
+    if (!project) {
+      return;
+    }
+
+    await syncFailedStageToLinear({
+      stores: this.stores,
+      linearProvider: this.linearProvider,
+      project,
+      issue,
+      stageRun: {
+        ...stageRun,
+        threadId,
+        ...(options?.turnId ? { turnId: options.turnId } : {}),
+      },
+      message,
+      mode: "failed",
+    });
+  }
+
   async flushQueuedTurnInputs(stageRun: StageRunRecord): Promise<void> {
     await this.inputDispatcher.flush(stageRun);
   }
@@ -302,41 +341,18 @@ export class ServiceStageFinalizer {
     if (!turnId) {
       return;
     }
-
-    const issueControl = this.stores.issueControl.getIssueControl(projectId, linearIssueId);
-    if (!issueControl?.activeRunLeaseId) {
-      return;
-    }
-
-    for (const obligation of this.stores.obligations.listPendingObligations({
-      runLeaseId: issueControl.activeRunLeaseId,
-      kind: "deliver_turn_input",
-    })) {
-      this.stores.obligations.updateObligationRouting(obligation.id, {
-        runLeaseId: issueControl.activeRunLeaseId,
+    await this.inputDispatcher.flush(
+      {
+        id: 0,
+        projectId,
+        linearIssueId,
         threadId,
         turnId,
-      });
-      const payload = safeJsonParse<{ body?: string }>(obligation.payloadJson);
-      const body = payload?.body?.trim();
-      if (!body) {
-        this.stores.obligations.markObligationStatus(obligation.id, "failed", "obligation payload had no deliverable body");
-        continue;
-      }
-
-      try {
-        this.stores.obligations.markObligationStatus(obligation.id, "in_progress");
-        await this.codex.steerTurn({ threadId, turnId, input: body });
-        this.stores.obligations.markObligationStatus(obligation.id, "completed");
-      } catch (error) {
-        this.stores.obligations.markObligationStatus(
-          obligation.id,
-          "pending",
-          error instanceof Error ? error.message : String(error),
-        );
-        break;
-      }
-    }
+      },
+      {
+        retryInProgress: true,
+      },
+    );
   }
 
   private async reconcileRunLease(runLeaseId: number): Promise<void> {
@@ -358,7 +374,9 @@ export class ServiceStageFinalizer {
     const decision = reconcileIssue(snapshot.input);
 
     if (decision.outcome === "hydrate_live_state") {
-      return;
+      throw new Error(
+        `Startup reconciliation requires live state hydration for ${snapshot.runLease.projectId}:${snapshot.runLease.linearIssueId}: ${decision.reasons.join("; ")}`,
+      );
     }
 
     await this.actionApplier.apply({

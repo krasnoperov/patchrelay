@@ -33,6 +33,7 @@ export class StageTurnInputDispatcher {
       issueKey?: string;
       logFailures?: boolean;
       failureMessage?: string;
+      retryInProgress?: boolean;
     },
   ): Promise<{ deliveredInputIds: number[]; deliveredObligationIds: number[]; deliveredCount: number }> {
     if (!stageRun.threadId || !stageRun.turnId) {
@@ -47,40 +48,66 @@ export class StageTurnInputDispatcher {
     const deliveredInputIds: number[] = [];
     const deliveredObligationIds: number[] = [];
     let deliveredCount = 0;
-    for (const input of this.listPendingInputs(stageRun.projectId, stageRun.linearIssueId, issueControl.activeRunLeaseId)) {
+    const obligationQuery = options?.retryInProgress ? { includeInProgress: true } : undefined;
+    for (const obligation of this.listPendingInputObligations(
+      stageRun.projectId,
+      stageRun.linearIssueId,
+      issueControl.activeRunLeaseId,
+      obligationQuery,
+    )) {
+      const payload = safeJsonParse<{ body?: string }>(obligation.payloadJson);
+      const body = payload?.body?.trim();
+      if (!body) {
+        this.inputs.obligations.markObligationStatus(obligation.id, "failed", "obligation payload had no deliverable body");
+        continue;
+      }
+
+      const claimed =
+        obligation.status === "in_progress" && options?.retryInProgress
+          ? true
+          : this.inputs.obligations.claimPendingObligation(obligation.id, {
+              runLeaseId: issueControl.activeRunLeaseId,
+              threadId: stageRun.threadId,
+              turnId: stageRun.turnId,
+            });
+      if (!claimed) {
+        continue;
+      }
+
       try {
-        this.inputs.obligations.updateObligationRouting(input.id, {
-          runLeaseId: issueControl.activeRunLeaseId,
-          threadId: stageRun.threadId,
-          turnId: stageRun.turnId,
-        });
-        this.inputs.obligations.markObligationStatus(input.id, "in_progress");
+        if (obligation.status === "in_progress") {
+          this.inputs.obligations.updateObligationRouting(obligation.id, {
+            runLeaseId: issueControl.activeRunLeaseId,
+            threadId: stageRun.threadId,
+            turnId: stageRun.turnId,
+          });
+        }
         await this.codex.steerTurn({
           threadId: stageRun.threadId,
           turnId: stageRun.turnId,
-          input: input.body,
+          input: body,
         });
-        deliveredObligationIds.push(input.id);
-        this.inputs.obligations.markObligationStatus(input.id, "completed");
+        deliveredObligationIds.push(obligation.id);
+        this.inputs.obligations.markObligationStatus(obligation.id, "completed");
         deliveredCount += 1;
         this.logger.debug(
           {
             threadId: stageRun.threadId,
             turnId: stageRun.turnId,
-            obligationId: input.id,
-            source: input.source,
+            obligationId: obligation.id,
+            source: obligation.source,
           },
           "Delivered queued turn input to Codex",
         );
       } catch (error) {
-        this.inputs.obligations.markObligationStatus(input.id, "pending", error instanceof Error ? error.message : String(error));
+        this.inputs.obligations.markObligationStatus(obligation.id, "pending", error instanceof Error ? error.message : String(error));
         this.logger.warn(
           {
             issueKey: options?.issueKey,
             threadId: stageRun.threadId,
             turnId: stageRun.turnId,
-            obligationId: input.id,
-            source: input.source,
+            obligationId: obligation.id,
+            source: obligation.source,
             error: sanitizeDiagnosticText(error instanceof Error ? error.message : String(error)),
           },
           options?.failureMessage ?? "Failed to deliver queued turn input",
@@ -92,28 +119,17 @@ export class StageTurnInputDispatcher {
     return { deliveredInputIds, deliveredObligationIds, deliveredCount };
   }
 
-  private listPendingInputs(projectId: string, linearIssueId: string, activeRunLeaseId: number) {
-    return this.listPendingInputObligations(projectId, linearIssueId, activeRunLeaseId)
-      .flatMap((obligation) => {
-        const payload = safeJsonParse<{ body?: string }>(obligation.payloadJson);
-        const body = payload?.body?.trim();
-        if (!body) {
-          this.inputs.obligations.markObligationStatus(obligation.id, "failed", "obligation payload had no deliverable body");
-          return [];
-        }
-        return [
-          {
-            id: obligation.id,
-            source: obligation.source,
-            body,
-          },
-        ];
-      });
-  }
-
-  private listPendingInputObligations(projectId: string, linearIssueId: string, activeRunLeaseId: number) {
+  private listPendingInputObligations(
+    projectId: string,
+    linearIssueId: string,
+    activeRunLeaseId: number,
+    options?: { includeInProgress?: boolean },
+  ) {
+    const query = options?.includeInProgress
+      ? { kind: "deliver_turn_input", includeInProgress: true as const }
+      : { kind: "deliver_turn_input" };
     return this.inputs.obligations
-      .listPendingObligations({ kind: "deliver_turn_input" })
+      .listPendingObligations(query)
       .filter(
         (obligation) =>
           obligation.projectId === projectId &&

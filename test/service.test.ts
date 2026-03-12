@@ -116,13 +116,18 @@ class FakeCodexClient extends EventEmitter {
     this.threads.delete(threadId);
   }
 
-  completeThread(threadId: string, items: CodexThreadSummary["turns"][number]["items"]): void {
+  completeThread(
+    threadId: string,
+    items: CodexThreadSummary["turns"][number]["items"],
+    options?: { status?: "completed" | "failed" },
+  ): void {
     const thread = this.threads.get(threadId);
     assert.ok(thread);
+    const status = options?.status ?? "completed";
     thread.turns = [
       {
         id: "turn-final",
-        status: "completed",
+        status,
         items,
       },
     ];
@@ -132,7 +137,7 @@ class FakeCodexClient extends EventEmitter {
         threadId,
         turn: {
           id: "turn-final",
-          status: "completed",
+          status,
         },
       },
     });
@@ -156,9 +161,13 @@ class FakeLinearClient implements LinearClient {
   readonly stateTransitions: Array<{ issueId: string; stateName: string }> = [];
   readonly labelUpdates: Array<{ issueId: string; addNames: string[]; removeNames: string[] }> = [];
   failNextCommentUpsert = false;
+  getIssueError?: Error;
   private nextCommentNumber = 1;
   private nextAgentActivityNumber = 1;
   async getIssue(issueId: string): Promise<LinearIssueSnapshot> {
+    if (this.getIssueError) {
+      throw this.getIssueError;
+    }
     const existing = this.issues.get(issueId);
     if (existing) {
       return existing;
@@ -983,6 +992,49 @@ test("service builds a read-only report from completed thread history", async ()
   }
 });
 
+test("service treats failed turn/completed notifications as stage failures", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-report-failed-completion-"));
+  try {
+    const { db, codex, linear, service } = createService(baseDir);
+    await service.start();
+
+    recordDesiredStageWithLedger(db, {
+      projectId: "usertold",
+      linearIssueId: "issue_2",
+      issueKey: "USE-26",
+      title: "Observe failed agent work",
+      issueUrl: "https://linear.app/example/issue/USE-26",
+      currentLinearState: "Start",
+      desiredStage: "development",
+      desiredWebhookId: "delivery-start-failed",
+      lastWebhookAt: new Date().toISOString(),
+    });
+
+    await service.processIssue({ projectId: "usertold", issueId: "issue_2" });
+    await flushQueues();
+
+    const issue = db.issueWorkflows.getTrackedIssue("usertold", "issue_2");
+    const stageRun = db.issueWorkflows.getStageRun(issue!.activeStageRunId!);
+    codex.completeThread(
+      stageRun!.threadId!,
+      [{ type: "agentMessage", id: "assistant-1", text: "I hit a failure." }],
+      { status: "failed" },
+    );
+    await flushQueues();
+
+    const refreshedIssue = db.issueWorkflows.getTrackedIssue("usertold", "issue_2");
+    const refreshedStageRun = db.issueWorkflows.getStageRun(stageRun!.id);
+    assert.equal(refreshedStageRun?.status, "failed");
+    assert.equal(refreshedIssue?.lifecycleStatus, "failed");
+    assert.equal(linear.issues.get("issue_2")?.stateName, "Human Needed");
+    assert.match(linear.comments.get(refreshedIssue?.statusCommentId ?? "")?.body ?? "", /stage-failed/);
+
+    service.stop();
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("service exposes raw stored events and live active status", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-live-"));
   try {
@@ -1674,6 +1726,44 @@ test("service restart reconciles a stage that completed while PatchRelay was dow
     assert.equal(recoveredIssue?.lifecycleStatus, "paused");
 
     restarted.stop();
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("service startup fails loudly when reconciliation cannot hydrate live Linear state", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-restart-linear-hydration-failure-"));
+  try {
+    const { db, codex, linear, service, config } = createService(baseDir);
+    await service.start();
+
+    recordDesiredStageWithLedger(db, {
+      projectId: "usertold",
+      linearIssueId: "issue_4",
+      issueKey: "USE-28",
+      title: "Recover stage with missing live Linear state",
+      issueUrl: "https://linear.app/example/issue/USE-28",
+      currentLinearState: "Start",
+      desiredStage: "development",
+      desiredWebhookId: "delivery-start-restart-linear",
+      lastWebhookAt: new Date().toISOString(),
+    });
+
+    await service.processIssue({ projectId: "usertold", issueId: "issue_4" });
+    await flushQueues();
+
+    const startedIssue = db.issueWorkflows.getTrackedIssue("usertold", "issue_4");
+    const startedStageRun = db.issueWorkflows.getStageRun(startedIssue!.activeStageRunId!);
+    assert.ok(startedStageRun?.threadId);
+
+    service.stop();
+    linear.getIssueError = new Error("linear unavailable");
+
+    const restarted = new PatchRelayService(config, db, codex as never, linear, pino({ enabled: false }));
+    await assert.rejects(
+      restarted.start(),
+      /Startup reconciliation requires live state hydration for usertold:issue_4/,
+    );
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

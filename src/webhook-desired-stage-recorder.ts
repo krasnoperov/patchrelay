@@ -43,6 +43,7 @@ export class WebhookDesiredStageRecorder {
     const activeStageRun =
       issueControl?.activeRunLeaseId !== undefined ? this.stores.issueWorkflows.getStageRun(issueControl.activeRunLeaseId) : undefined;
     const delegatedToPatchRelay = this.isDelegatedToPatchRelay(project, normalized);
+    const stageAllowed = triggerEventAllowed(project, normalized.triggerEvent);
     const desiredStage = this.resolveDesiredStage(project, normalized, issue, activeStageRun, delegatedToPatchRelay);
     const launchInput = this.resolveLaunchInput(normalized.agentSession);
     this.persistIssueControlFirst(
@@ -68,7 +69,7 @@ export class WebhookDesiredStageRecorder {
     if (normalized.agentSession?.id) {
       this.stores.issueWorkflows.setIssueActiveAgentSession(project.id, normalizedIssue.id, normalized.agentSession.id);
     }
-    if (launchInput && !activeStageRun && delegatedToPatchRelay) {
+    if (launchInput && !activeStageRun && delegatedToPatchRelay && stageAllowed) {
       this.stores.obligations.enqueueObligation({
         projectId: project.id,
         linearIssueId: normalizedIssue.id,
@@ -175,7 +176,7 @@ export class WebhookDesiredStageRecorder {
       return;
     }
 
-    const lifecycleStatus = activeStageRun || desiredStage ? issue?.lifecycleStatus ?? "queued" : issue?.lifecycleStatus ?? "idle";
+    const lifecycleStatus = issue?.lifecycleStatus ?? "queued";
     this.stores.issueControl.upsertIssueControl({
       projectId,
       linearIssueId,

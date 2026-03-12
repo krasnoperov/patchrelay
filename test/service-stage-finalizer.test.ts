@@ -414,9 +414,12 @@ class FakeLedgerStore {
     return nextWorkspace;
   }
 
-  listPendingObligations(params?: { runLeaseId?: number; kind?: string }): ObligationRecord[] {
+  listPendingObligations(params?: { runLeaseId?: number; kind?: string; includeInProgress?: boolean }): ObligationRecord[] {
     return [...this.obligations.values()].filter((obligation) => {
-      if (obligation.status === "completed" || obligation.status === "cancelled") {
+      if (obligation.status === "completed" || obligation.status === "cancelled" || obligation.status === "failed") {
+        return false;
+      }
+      if (!params?.includeInProgress && obligation.status === "in_progress") {
         return false;
       }
       if (params?.runLeaseId !== undefined && obligation.runLeaseId !== params.runLeaseId) {
@@ -427,6 +430,26 @@ class FakeLedgerStore {
       }
       return true;
     });
+  }
+
+  claimPendingObligation(id: number, params?: { runLeaseId?: number | null; threadId?: string | null; turnId?: string | null }): boolean {
+    const obligation = this.obligations.get(id);
+    assert.ok(obligation);
+    if (obligation.status !== "pending") {
+      return false;
+    }
+    obligation.status = "in_progress";
+    obligation.lastError = undefined;
+    if (params?.runLeaseId !== undefined) {
+      obligation.runLeaseId = params.runLeaseId ?? undefined;
+    }
+    if (params?.threadId !== undefined) {
+      obligation.threadId = params.threadId ?? undefined;
+    }
+    if (params?.turnId !== undefined) {
+      obligation.turnId = params.turnId ?? undefined;
+    }
+    return true;
   }
 
   updateObligationPayloadJson(id: number, payloadJson: string): void {
@@ -893,4 +916,33 @@ test("ledger reconciliation keeps obligations retryable when Codex steer fails",
 
   assert.equal(ledger.obligations.get(1)?.status, "pending");
   assert.equal(ledger.obligations.get(1)?.lastError, "codex temporarily unavailable");
+});
+
+test("ledger reconciliation retries in-progress obligations against the live turn", async () => {
+  const { ledger, codex, finalizer, stageRun } = createHarness({
+    withLedger: true,
+    pendingObligationBody: "Please update the handoff copy.",
+  });
+  const obligation = ledger.obligations.get(1);
+  assert.ok(obligation);
+  obligation.status = "in_progress";
+  const runLease = ledger.runLeases.get(90);
+  assert.ok(runLease);
+  runLease.turnId = "turn-stale";
+  codex.threads.set(stageRun.threadId!, {
+    ...createThread("inProgress"),
+    turns: [{ id: "turn-live", status: "inProgress", items: [] }],
+  });
+
+  await finalizer.reconcileActiveStageRuns();
+
+  assert.deepEqual(codex.steerCalls, [
+    {
+      threadId: "thread-1",
+      turnId: "turn-live",
+      input: "Please update the handoff copy.",
+    },
+  ]);
+  assert.equal(ledger.obligations.get(1)?.status, "completed");
+  assert.equal(ledger.obligations.get(1)?.turnId, "turn-live");
 });

@@ -575,6 +575,57 @@ test("webhook processor does not steer prompted agent follow-ups when agentPromp
   }
 });
 
+test("webhook processor does not enqueue launch input from prompted sessions when agentPrompted is disabled", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-processor-prompt-launch-disabled-"));
+  try {
+    const { config, db, codex, processor, enqueuedIssues } = createHarness(baseDir);
+    config.projects[0]!.triggerEvents = ["statusChanged"];
+    installPatchRelayApp(db);
+
+    const event = db.webhookEvents.insertWebhookEvent({
+      webhookId: "delivery-agent-prompt-disabled-no-run",
+      receivedAt: new Date().toISOString(),
+      eventType: "AgentSessionEvent.prompted",
+      issueId: "issue_1",
+      headersJson: "{}",
+      payloadJson: JSON.stringify({
+        action: "prompted",
+        type: "AgentSessionEvent",
+        createdAt: "2026-03-08T12:05:00.000Z",
+        webhookTimestamp: 1005,
+        data: {
+          agentActivity: {
+            body: "Please start this now.",
+          },
+          agentSession: {
+            id: "session-2",
+            issue: {
+              id: "issue_1",
+              identifier: "USE-25",
+              title: "Build app server orchestration",
+              team: { key: "USE" },
+              delegate: { id: "patchrelay-app", name: "PatchRelay" },
+              state: { name: "Start" },
+            },
+          },
+        },
+      }),
+      signatureValid: true,
+      dedupeStatus: "accepted",
+    });
+
+    await processor.processWebhookEvent(event.id);
+
+    assert.equal(codex.steeredTurns.length, 0);
+    assert.equal(db.obligations.listPendingObligations({ kind: "deliver_turn_input" }).length, 0);
+    assert.equal(listInputObligations(db).length, 0);
+    assert.equal(db.issueControl.getIssueControl("usertold", "issue_1")?.desiredStage, undefined);
+    assert.deepEqual(enqueuedIssues, []);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("webhook processor does not steer issue comments when comment triggers are disabled", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-processor-comment-triggers-"));
   try {

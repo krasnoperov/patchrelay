@@ -195,3 +195,61 @@ test("reconciliation action applier treats release as successful completion", as
     nextLifecycleStatus: "completed",
   });
 });
+
+test("reconciliation action applier continues delivery against the live routed turn", async () => {
+  const calls: { delivered?: { threadId: string; turnId?: string } } = {};
+  const applier = new ReconciliationActionApplier({
+    enqueueIssue: () => assert.fail("should not enqueue"),
+    deliverPendingObligations: async (_projectId, _linearIssueId, threadId, turnId) => {
+      calls.delivered = { threadId, ...(turnId ? { turnId } : {}) };
+    },
+    completeRun: () => assert.fail("should not complete"),
+    failRunDuringReconciliation: async () => assert.fail("should not fail"),
+  });
+
+  const snapshot = createSnapshot();
+  snapshot.runLease.turnId = "turn-stale";
+  snapshot.input.live = {
+    codex: {
+      status: "found",
+      thread: {
+        ...createThread("inProgress"),
+        turns: [{ id: "turn-live-2", status: "inProgress", cwd: "/tmp/worktree", approvalPolicy: "on-failure", sandboxPolicy: { mode: "workspace-write" } }],
+      },
+    },
+  };
+
+  const decision: ReconciliationDecision = {
+    outcome: "continue",
+    reasons: ["latest turn is still in progress"],
+    actions: [
+      {
+        type: "route_obligation",
+        projectId: "proj",
+        linearIssueId: "issue-1",
+        obligationId: 7,
+        runId: 90,
+        threadId: "thread-live",
+        turnId: "turn-live-2",
+        reason: "route to the live turn",
+      },
+      {
+        type: "deliver_obligation",
+        projectId: "proj",
+        linearIssueId: "issue-1",
+        obligationId: 7,
+        runId: 90,
+        threadId: "thread-live",
+        turnId: "turn-live-2",
+        reason: "deliver to the live turn",
+      },
+    ],
+  };
+
+  await applier.apply({ snapshot, decision });
+
+  assert.deepEqual(calls.delivered, {
+    threadId: "thread-live",
+    turnId: "turn-live-2",
+  });
+});

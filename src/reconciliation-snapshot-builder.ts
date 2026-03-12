@@ -74,7 +74,9 @@ export async function buildReconciliationSnapshot(params: {
           .catch((error) => mapCodexReadFailure(error))
       : ({ status: "unknown" as const });
 
-  const obligations: ReconciliationObligation[] = params.stores.obligations.listPendingObligations({ runLeaseId: runLease.id }).map((obligation) => {
+  const obligations: ReconciliationObligation[] = params.stores.obligations
+    .listPendingObligations({ runLeaseId: runLease.id, includeInProgress: true })
+    .map((obligation) => {
     const payload = safeJsonParse<unknown>(obligation.payloadJson);
     return {
       id: obligation.id,
@@ -85,7 +87,7 @@ export async function buildReconciliationSnapshot(params: {
       ...(obligation.turnId ? { turnId: obligation.turnId } : {}),
       ...(payload !== undefined ? { payload } : {}),
     };
-  });
+    });
 
   return {
     issueControl,

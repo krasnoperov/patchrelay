@@ -11,12 +11,16 @@ class FakeCodexClient {
   readonly steers: Array<{ threadId: string; turnId: string; input: string }> = [];
   failAfter?: number;
   failureMessage = "steer failed";
+  holdSteerUntil?: Promise<void>;
 
   async steerTurn(params: { threadId: string; turnId: string; input: string }): Promise<void> {
     if (this.failAfter !== undefined && this.steers.length >= this.failAfter) {
       throw new Error(this.failureMessage);
     }
     this.steers.push(params);
+    if (this.holdSteerUntil) {
+      await this.holdSteerUntil;
+    }
   }
 }
 
@@ -257,6 +261,161 @@ test("dispatcher ignores completed obligations once ledger delivery is complete"
     assert.equal(codex.steers.length, 0);
     assert.equal(db.obligations.listPendingObligations({ runLeaseId: runLease.id, kind: "deliver_turn_input" }).length, 0);
     assert.equal(listInputObligations(db, "proj", "issue-9").length, 0);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("dispatcher does not redeliver in-progress obligations during overlapping flushes", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-turn-dispatcher-overlap-"));
+  try {
+    const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
+    db.runMigrations();
+    const codex = new FakeCodexClient();
+    let releaseSteer: (() => void) | undefined;
+    codex.holdSteerUntil = new Promise<void>((resolve) => {
+      releaseSteer = resolve;
+    });
+    const { logger } = createCaptureLogger();
+    const dispatcher = new StageTurnInputDispatcher(db, codex as never, logger);
+
+    const issueControl = db.issueControl.upsertIssueControl({
+      projectId: "proj",
+      linearIssueId: "issue-10",
+      lifecycleStatus: "running",
+    });
+    const workspace = db.workspaceOwnership.upsertWorkspaceOwnership({
+      projectId: "proj",
+      linearIssueId: "issue-10",
+      branchName: "proj/issue-10",
+      worktreePath: "/tmp/worktree-10",
+      status: "active",
+    });
+    const runLease = db.runLeases.createRunLease({
+      issueControlId: issueControl.id,
+      projectId: "proj",
+      linearIssueId: "issue-10",
+      workspaceOwnershipId: workspace.id,
+      stage: "development",
+      status: "running",
+    });
+    db.issueControl.upsertIssueControl({
+      projectId: "proj",
+      linearIssueId: "issue-10",
+      activeWorkspaceOwnershipId: workspace.id,
+      activeRunLeaseId: runLease.id,
+      lifecycleStatus: "running",
+    });
+    db.obligations.enqueueObligation({
+      projectId: "proj",
+      linearIssueId: "issue-10",
+      kind: "deliver_turn_input",
+      source: "linear-comment:comment-10",
+      payloadJson: JSON.stringify({ body: "only once" }),
+      runLeaseId: runLease.id,
+    });
+
+    const firstFlush = dispatcher.flush({
+      id: 10,
+      projectId: "proj",
+      linearIssueId: "issue-10",
+      threadId: "thread-10",
+      turnId: "turn-10",
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await dispatcher.flush({
+      id: 10,
+      projectId: "proj",
+      linearIssueId: "issue-10",
+      threadId: "thread-10",
+      turnId: "turn-10",
+    });
+
+    assert.deepEqual(codex.steers.map((entry) => entry.input), ["only once"]);
+    assert.equal(listInputObligations(db, "proj", "issue-10")[0]?.status, "in_progress");
+
+    releaseSteer?.();
+    await firstFlush;
+
+    assert.deepEqual(codex.steers.map((entry) => entry.input), ["only once"]);
+    assert.equal(listInputObligations(db, "proj", "issue-10")[0]?.status, "completed");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("dispatcher leaves failed obligations dead-lettered instead of retrying them", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-turn-dispatcher-failed-dead-letter-"));
+  try {
+    const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
+    db.runMigrations();
+    const codex = new FakeCodexClient();
+    const { logger } = createCaptureLogger();
+    const dispatcher = new StageTurnInputDispatcher(db, codex as never, logger);
+
+    const issueControl = db.issueControl.upsertIssueControl({
+      projectId: "proj",
+      linearIssueId: "issue-11",
+      lifecycleStatus: "running",
+    });
+    const workspace = db.workspaceOwnership.upsertWorkspaceOwnership({
+      projectId: "proj",
+      linearIssueId: "issue-11",
+      branchName: "proj/issue-11",
+      worktreePath: "/tmp/worktree-11",
+      status: "active",
+    });
+    const runLease = db.runLeases.createRunLease({
+      issueControlId: issueControl.id,
+      projectId: "proj",
+      linearIssueId: "issue-11",
+      workspaceOwnershipId: workspace.id,
+      stage: "development",
+      status: "running",
+    });
+    db.issueControl.upsertIssueControl({
+      projectId: "proj",
+      linearIssueId: "issue-11",
+      activeWorkspaceOwnershipId: workspace.id,
+      activeRunLeaseId: runLease.id,
+      lifecycleStatus: "running",
+    });
+    db.obligations.enqueueObligation({
+      projectId: "proj",
+      linearIssueId: "issue-11",
+      kind: "deliver_turn_input",
+      source: "linear-comment:comment-11",
+      payloadJson: JSON.stringify({}),
+      runLeaseId: runLease.id,
+    });
+
+    await dispatcher.flush({
+      id: 11,
+      projectId: "proj",
+      linearIssueId: "issue-11",
+      threadId: "thread-11",
+      turnId: "turn-11",
+    });
+    await dispatcher.flush({
+      id: 11,
+      projectId: "proj",
+      linearIssueId: "issue-11",
+      threadId: "thread-11",
+      turnId: "turn-11",
+    });
+
+    assert.equal(codex.steers.length, 0);
+    assert.equal(listInputObligations(db, "proj", "issue-11")[0]?.status, "failed");
+    assert.equal(db.obligations.listPendingObligations({ runLeaseId: runLease.id, kind: "deliver_turn_input" }).length, 0);
+    assert.equal(
+      db.obligations.listPendingObligations({
+        runLeaseId: runLease.id,
+        kind: "deliver_turn_input",
+        includeInProgress: true,
+      }).length,
+      0,
+    );
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
