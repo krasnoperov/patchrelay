@@ -14,7 +14,9 @@ function trimPrompt(value: string | undefined): string | undefined {
 
 export class AgentSessionWebhookHandler {
   constructor(
-    private readonly stores: IssueWorkflowWebhookStoreProvider & StageTurnInputStoreProvider,
+    private readonly stores: IssueWorkflowWebhookStoreProvider &
+      StageTurnInputStoreProvider &
+      Partial<IssueControlStoreProvider & ObligationStoreProvider>,
     private readonly turnInputDispatcher: StageTurnInputDispatcher,
     private readonly agentActivity: StageAgentActivityPublisher,
   ) {}
