@@ -49,22 +49,68 @@ test("dispatcher routes and flushes pending inputs in order and stops after fail
     const { logger } = createCaptureLogger();
     const dispatcher = new StageTurnInputDispatcher(db, codex as never, logger);
 
-    db.stageEvents.enqueueTurnInput({
+    const issueControl = db.issueControl.upsertIssueControl({
+      projectId: "proj",
+      linearIssueId: "issue-1",
+      lifecycleStatus: "running",
+    });
+    const workspace = db.workspaceOwnership.upsertWorkspaceOwnership({
+      projectId: "proj",
+      linearIssueId: "issue-1",
+      branchName: "proj/issue-1",
+      worktreePath: "/tmp/worktree-1",
+      status: "active",
+    });
+    const runLease = db.runLeases.createRunLease({
+      issueControlId: issueControl.id,
+      projectId: "proj",
+      linearIssueId: "issue-1",
+      workspaceOwnershipId: workspace.id,
+      stage: "development",
+      status: "running",
+    });
+    db.issueControl.upsertIssueControl({
+      projectId: "proj",
+      linearIssueId: "issue-1",
+      activeWorkspaceOwnershipId: workspace.id,
+      activeRunLeaseId: runLease.id,
+      lifecycleStatus: "running",
+    });
+
+    const firstQueuedInputId = db.stageEvents.enqueueTurnInput({
       stageRunId: 1,
       source: "one",
       body: "first",
     });
-    db.stageEvents.enqueueTurnInput({
+    const secondQueuedInputId = db.stageEvents.enqueueTurnInput({
       stageRunId: 1,
       source: "two",
       body: "second",
     });
+    db.obligations.enqueueObligation({
+      projectId: "proj",
+      linearIssueId: "issue-1",
+      kind: "deliver_turn_input",
+      source: "one",
+      payloadJson: JSON.stringify({ body: "first", queuedInputId: firstQueuedInputId }),
+      runLeaseId: runLease.id,
+    });
+    db.obligations.enqueueObligation({
+      projectId: "proj",
+      linearIssueId: "issue-1",
+      kind: "deliver_turn_input",
+      source: "two",
+      payloadJson: JSON.stringify({ body: "second", queuedInputId: secondQueuedInputId }),
+      runLeaseId: runLease.id,
+    });
 
-    dispatcher.routePendingInputs(1, "thread-1", "turn-1");
+    dispatcher.routePendingInputs({ id: 1, projectId: "proj", linearIssueId: "issue-1" }, "thread-1", "turn-1");
     codex.failAfter = 1;
     await dispatcher.flush(
       {
         id: 1,
+        projectId: "proj",
+        linearIssueId: "issue-1",
         threadId: "thread-1",
         turnId: "turn-1",
       },
@@ -91,18 +137,57 @@ test("dispatcher logs queued input delivery failures by default", async () => {
     const { logger, warnings } = createCaptureLogger();
     const dispatcher = new StageTurnInputDispatcher(db, codex as never, logger);
 
-    db.stageEvents.enqueueTurnInput({
+    const issueControl = db.issueControl.upsertIssueControl({
+      projectId: "proj",
+      linearIssueId: "issue-7",
+      lifecycleStatus: "running",
+    });
+    const workspace = db.workspaceOwnership.upsertWorkspaceOwnership({
+      projectId: "proj",
+      linearIssueId: "issue-7",
+      branchName: "proj/issue-7",
+      worktreePath: "/tmp/worktree-7",
+      status: "active",
+    });
+    const runLease = db.runLeases.createRunLease({
+      issueControlId: issueControl.id,
+      projectId: "proj",
+      linearIssueId: "issue-7",
+      workspaceOwnershipId: workspace.id,
+      stage: "development",
+      status: "running",
+    });
+    db.issueControl.upsertIssueControl({
+      projectId: "proj",
+      linearIssueId: "issue-7",
+      activeWorkspaceOwnershipId: workspace.id,
+      activeRunLeaseId: runLease.id,
+      lifecycleStatus: "running",
+    });
+    const queuedInputId = db.stageEvents.enqueueTurnInput({
       stageRunId: 7,
       threadId: "thread-7",
       turnId: "turn-7",
       source: "linear-comment:comment-7",
       body: "please retry this",
     });
+    db.obligations.enqueueObligation({
+      projectId: "proj",
+      linearIssueId: "issue-7",
+      kind: "deliver_turn_input",
+      source: "linear-comment:comment-7",
+      payloadJson: JSON.stringify({ body: "please retry this", queuedInputId }),
+      runLeaseId: runLease.id,
+      threadId: "thread-7",
+      turnId: "turn-7",
+    });
 
     codex.failAfter = 0;
     codex.failureMessage = "authorization=Bearer secret-token";
     await dispatcher.flush({
       id: 7,
+      projectId: "proj",
+      linearIssueId: "issue-7",
       threadId: "thread-7",
       turnId: "turn-7",
     });
@@ -114,6 +199,66 @@ test("dispatcher logs queued input delivery failures by default", async () => {
     assert.equal(warnings[0]?.bindings.source, "linear-comment:comment-7");
     assert.equal(warnings[0]?.bindings.error, "authorization=Bearer [redacted]");
     assert.equal(db.stageEvents.listPendingTurnInputs(7).length, 1);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("dispatcher ignores mirrored legacy queue rows once ledger obligations are complete", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-turn-dispatcher-ledger-first-"));
+  try {
+    const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
+    db.runMigrations();
+    const codex = new FakeCodexClient();
+    const { logger } = createCaptureLogger();
+    const dispatcher = new StageTurnInputDispatcher(db, codex as never, logger);
+
+    const issueControl = db.issueControl.upsertIssueControl({
+      projectId: "proj",
+      linearIssueId: "issue-9",
+      lifecycleStatus: "running",
+    });
+    const workspace = db.workspaceOwnership.upsertWorkspaceOwnership({
+      projectId: "proj",
+      linearIssueId: "issue-9",
+      branchName: "proj/issue-9",
+      worktreePath: "/tmp/worktree-9",
+      status: "active",
+    });
+    const runLease = db.runLeases.createRunLease({
+      issueControlId: issueControl.id,
+      projectId: "proj",
+      linearIssueId: "issue-9",
+      workspaceOwnershipId: workspace.id,
+      stage: "development",
+      status: "running",
+    });
+    db.issueControl.upsertIssueControl({
+      projectId: "proj",
+      linearIssueId: "issue-9",
+      activeWorkspaceOwnershipId: workspace.id,
+      activeRunLeaseId: runLease.id,
+      lifecycleStatus: "running",
+    });
+
+    db.stageEvents.enqueueTurnInput({
+      stageRunId: 9,
+      threadId: "thread-9",
+      turnId: "turn-9",
+      source: "legacy-only",
+      body: "stale mirrored queue row",
+    });
+
+    await dispatcher.flush({
+      id: 9,
+      projectId: "proj",
+      linearIssueId: "issue-9",
+      threadId: "thread-9",
+      turnId: "turn-9",
+    });
+
+    assert.equal(codex.steers.length, 0);
+    assert.equal(db.stageEvents.listPendingTurnInputs(9).length, 1);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

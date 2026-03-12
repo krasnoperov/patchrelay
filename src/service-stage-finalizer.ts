@@ -302,29 +302,28 @@ export class ServiceStageFinalizer {
       return;
     }
 
-    for (const obligation of this.stores.obligations.listPendingObligations({ runLeaseId: issueControl.activeRunLeaseId })) {
+    for (const obligation of this.stores.obligations.listPendingObligations({
+      runLeaseId: issueControl.activeRunLeaseId,
+      kind: "deliver_turn_input",
+    })) {
       this.stores.obligations.updateObligationRouting(obligation.id, { threadId, turnId });
       const payload = safeJsonParse<{ body?: string; queuedInputId?: number; stageRunId?: number }>(obligation.payloadJson);
       const body = payload?.body?.trim();
-      if (
-        payload?.stageRunId !== undefined &&
-        payload.queuedInputId !== undefined &&
-        !this.stores.stageEvents.listPendingTurnInputs(payload.stageRunId).some((input) => input.id === payload.queuedInputId)
-      ) {
-        this.stores.obligations.markObligationStatus(obligation.id, "completed");
-        continue;
-      }
       if (!body) {
         this.stores.obligations.markObligationStatus(obligation.id, "failed", "obligation payload had no deliverable body");
         continue;
       }
 
       try {
-        if (payload?.stageRunId !== undefined && payload.queuedInputId !== undefined) {
+        const mirroredQueuedInput =
+          payload?.stageRunId !== undefined && payload.queuedInputId !== undefined
+            ? this.stores.stageEvents.listPendingTurnInputs(payload.stageRunId).find((input) => input.id === payload.queuedInputId)
+            : undefined;
+        if (mirroredQueuedInput && payload?.queuedInputId !== undefined) {
           this.stores.stageEvents.setPendingTurnInputRouting(payload.queuedInputId, threadId, turnId);
         }
         await this.codex.steerTurn({ threadId, turnId, input: body });
-        if (payload?.queuedInputId !== undefined) {
+        if (mirroredQueuedInput && payload?.queuedInputId !== undefined) {
           this.stores.stageEvents.markTurnInputDelivered(payload.queuedInputId);
         }
         this.stores.obligations.markObligationStatus(obligation.id, "completed");

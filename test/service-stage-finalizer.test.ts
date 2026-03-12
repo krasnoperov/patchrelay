@@ -738,6 +738,28 @@ test("ledger reconciliation replays obligations and clears the matching legacy q
   assert.equal(stageEvents.listPendingTurnInputs(stageRun.id).length, 0);
 });
 
+test("ledger reconciliation replays obligations without requiring a mirrored legacy queue row", async () => {
+  const { stageEvents, ledger, codex, finalizer, stageRun } = createHarness({
+    withLedger: true,
+    pendingObligationBody: "Please update the deployment notes.",
+  });
+  codex.threads.set(stageRun.threadId!, createThread("inProgress"));
+  stageEvents.deliveredInputs = [];
+  stageEvents.pendingInputs = [];
+
+  await finalizer.reconcileActiveStageRuns();
+
+  assert.deepEqual(codex.steerCalls, [
+    {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      input: "Please update the deployment notes.",
+    },
+  ]);
+  assert.equal(ledger.obligations.get(1)?.status, "completed");
+  assert.equal(stageEvents.deliveredInputs.length, 0);
+});
+
 test("ledger reconciliation uses the run lease thread snapshot instead of legacy stage-run metadata", async () => {
   const { store, ledger, codex, finalizer, stageRun } = createHarness({
     withLedger: true,

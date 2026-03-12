@@ -1,7 +1,7 @@
 import type { QueuedTurnInputRecord, ThreadEventRecord } from "./types.ts";
 
-// Queued turn inputs are authoritative coordination state: they must survive restarts
-// so PatchRelay can continue delivering undelivered human follow-up into the active run.
+// Queued turn inputs are a compatibility mirror for operator visibility during the
+// ledger cutover. Active delivery correctness should come from obligations instead.
 export interface StageTurnInputStore {
   enqueueTurnInput(params: { stageRunId: number; threadId?: string; turnId?: string; source: string; body: string }): number;
   listPendingTurnInputs(stageRunId: number): QueuedTurnInputRecord[];

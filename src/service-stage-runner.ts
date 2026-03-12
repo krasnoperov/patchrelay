@@ -1,6 +1,12 @@
 import type { Logger } from "pino";
 import type { CodexAppServerClient } from "./codex-app-server.ts";
-import type { EventReceiptStoreProvider, IssueControlStoreProvider, RunLeaseStoreProvider, WorkspaceOwnershipStoreProvider } from "./ledger-ports.ts";
+import type {
+  EventReceiptStoreProvider,
+  IssueControlStoreProvider,
+  ObligationStoreProvider,
+  RunLeaseStoreProvider,
+  WorkspaceOwnershipStoreProvider,
+} from "./ledger-ports.ts";
 import type { StageTurnInputStoreProvider } from "./stage-event-ports.ts";
 import type { IssueWorkflowExecutionStoreProvider, IssueWorkflowLifecycleStoreProvider } from "./workflow-ports.ts";
 import { buildStageLaunchPlan, isCodexThreadId } from "./stage-launch.ts";
@@ -26,7 +32,13 @@ export class ServiceStageRunner {
     private readonly stores: IssueWorkflowExecutionStoreProvider &
       IssueWorkflowLifecycleStoreProvider &
       StageTurnInputStoreProvider &
-      Partial<EventReceiptStoreProvider & IssueControlStoreProvider & WorkspaceOwnershipStoreProvider & RunLeaseStoreProvider>,
+      Partial<
+        EventReceiptStoreProvider &
+          IssueControlStoreProvider &
+          ObligationStoreProvider &
+          WorkspaceOwnershipStoreProvider &
+          RunLeaseStoreProvider
+      >,
     private readonly codex: CodexAppServerClient,
     private readonly linearProvider: LinearClientProvider,
     private readonly logger: Logger,
@@ -116,19 +128,43 @@ export class ServiceStageRunner {
       });
     }
 
-    this.inputDispatcher.routePendingInputs(claim.stageRun.id, threadLaunch.threadId, turn.turnId);
+    this.inputDispatcher.routePendingInputs(claim.stageRun, threadLaunch.threadId, turn.turnId);
     const pendingLaunchInput = this.stores.issueWorkflows.consumeIssuePendingLaunchInput(item.projectId, item.issueId);
     if (pendingLaunchInput) {
-      this.stores.stageEvents.enqueueTurnInput({
+      const mirroredQueuedInputId = this.stores.stageEvents.enqueueTurnInput({
         stageRunId: claim.stageRun.id,
         threadId: threadLaunch.threadId,
         turnId: turn.turnId,
         source: "linear-agent-launch",
         body: pendingLaunchInput,
       });
+      const issueControl = this.stores.issueControl?.getIssueControl(item.projectId, item.issueId);
+      if (issueControl?.activeRunLeaseId !== undefined && this.stores.obligations) {
+        this.stores.obligations.enqueueObligation({
+          projectId: item.projectId,
+          linearIssueId: item.issueId,
+          kind: "deliver_turn_input",
+          source: "linear-agent-launch",
+          payloadJson: JSON.stringify({
+            body: pendingLaunchInput,
+            queuedInputId: mirroredQueuedInputId,
+            stageRunId: claim.stageRun.id,
+          }),
+          runLeaseId: issueControl.activeRunLeaseId,
+          threadId: threadLaunch.threadId,
+          turnId: turn.turnId,
+          dedupeKey: `linear-agent-launch:${claim.stageRun.id}:${mirroredQueuedInputId}`,
+        });
+      }
     }
     await this.inputDispatcher.flush(
-      { id: claim.stageRun.id, threadId: threadLaunch.threadId, turnId: turn.turnId },
+      {
+        id: claim.stageRun.id,
+        projectId: claim.stageRun.projectId,
+        linearIssueId: claim.stageRun.linearIssueId,
+        threadId: threadLaunch.threadId,
+        turnId: turn.turnId,
+      },
       {
         logFailures: true,
         failureMessage: "Failed to deliver queued Linear comment during stage startup",

@@ -87,15 +87,6 @@ export class CommentWebhookHandler {
       ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
       failureMessage: "Failed to deliver queued Linear comment to active Codex turn",
     });
-
-    if (!obligationId) {
-      return;
-    }
-
-    const stillPending = this.stores.stageEvents.listPendingTurnInputs(stageRun.id).some((input) => input.id === queuedInputId);
-    if (!stillPending) {
-      this.stores.obligations?.markObligationStatus(obligationId, "completed");
-    }
   }
 
   private enqueueObligation(

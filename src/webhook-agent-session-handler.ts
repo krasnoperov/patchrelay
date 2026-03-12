@@ -129,12 +129,6 @@ export class AgentSessionWebhookHandler {
         ...(issue?.issueKey ? { issueKey: issue.issueKey } : {}),
         failureMessage: "Failed to deliver queued Linear agent prompt to active Codex turn",
       });
-      if (obligationId) {
-        const stillPending = this.stores.stageEvents.listPendingTurnInputs(activeStageRun.id).some((input) => input.id === queuedInputId);
-        if (!stillPending) {
-          this.stores.obligations?.markObligationStatus(obligationId, "completed");
-        }
-      }
       await this.agentActivity.publishForSession(project.id, normalized.agentSession.id, {
         type: "thought",
         body: `PatchRelay routed your follow-up instructions into the active ${activeStageRun.stage} workflow.`,
