@@ -81,7 +81,12 @@ export async function execCommand(
           return;
         }
 
-        const exitCode = typeof error === "object" && error !== null && "code" in error ? Number(error.code) : 1;
+        const rawCode = typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
+        if (typeof rawCode === "string" && !/^-?\d+$/.test(rawCode)) {
+          reject(error);
+          return;
+        }
+        const exitCode = typeof rawCode === "number" ? rawCode : typeof rawCode === "string" ? Number(rawCode) : 1;
         resolve({
           stdout: typeof stdout === "string" ? stdout : "",
           stderr: typeof stderr === "string" ? stderr : "",

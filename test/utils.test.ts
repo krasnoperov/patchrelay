@@ -75,4 +75,9 @@ test("execCommand captures output and timeout failures", async () => {
     () => execCommand(process.execPath, ["-e", "setTimeout(() => {}, 200)"], { timeoutMs: 10 }),
     /Command timed out after 10ms/,
   );
+
+  await assert.rejects(
+    () => execCommand("definitely-not-a-real-patchrelay-command", ["--version"]),
+    /ENOENT/,
+  );
 });

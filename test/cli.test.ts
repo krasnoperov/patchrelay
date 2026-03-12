@@ -169,6 +169,28 @@ function withEnv(values: Record<string, string | undefined>, run: () => Promise<
   }
 }
 
+function writeRunnerBinaries(configPath: string, binaries: { gitBin?: string; codexBin?: string }): void {
+  const raw = JSON.parse(readFileSync(configPath, "utf8")) as {
+    runner?: {
+      git_bin?: string;
+      codex?: {
+        bin?: string;
+      };
+    };
+  };
+
+  raw.runner ??= {};
+  if (binaries.gitBin) {
+    raw.runner.git_bin = binaries.gitBin;
+  }
+  if (binaries.codexBin) {
+    raw.runner.codex ??= {};
+    raw.runner.codex.bin = binaries.codexBin;
+  }
+
+  writeFileSync(configPath, `${JSON.stringify(raw, null, 2)}\n`, "utf8");
+}
+
 function seedDatabase(db: PatchRelayDatabase, config: AppConfig): void {
   mkdirSync(config.projects[0].worktreeRoot, { recursive: true });
 
@@ -838,6 +860,7 @@ test("cli project apply can auto-connect using the default service.env file", as
         );
 
         const envPath = path.join(configHome, "patchrelay", "service.env");
+        const configPath = path.join(configHome, "patchrelay", "patchrelay.json");
         writeFileSync(
           envPath,
           [
@@ -849,6 +872,7 @@ test("cli project apply can auto-connect using the default service.env file", as
           ].join("\n"),
           "utf8",
         );
+        writeRunnerBinaries(configPath, { codexBin: "true" });
 
         const connectData = {
           async connect(projectId?: string) {
@@ -938,6 +962,7 @@ test("cli project apply json performs the workflow and returns structured connec
           ].join("\n"),
           "utf8",
         );
+        writeRunnerBinaries(path.join(configHome, "patchrelay", "patchrelay.json"), { codexBin: "true" });
 
         const connectData = {
           async connect(projectId?: string) {
