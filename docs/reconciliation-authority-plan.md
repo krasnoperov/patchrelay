@@ -18,32 +18,35 @@ The current branch already has:
 - a standalone reconciliation engine
 - dual-write from webhook intake, desired-stage recording, launch, completion, and failure
 - durable obligations for human follow-up
+- obligation dedupe enforced by store semantics and a unique index
+- ledger-aware startup recovery that checks active `run_leases` before falling back to legacy rows
+- obligation replay that clears the matching legacy queued input on successful delivery
 
 The system is still in a bridge state, though:
 
-- startup recovery still starts from legacy `stage_runs`
-- ready-launch seeding still starts from legacy `tracked_issues`
-- obligation replay does not fully clear the matching legacy queue entry
-- obligation dedupe keys are advisory only
+- startup recovery is still hybrid because `run_leases` fall back to legacy `stage_runs`
+- ready-launch seeding still merges ledger-ready `issue_control` with legacy `tracked_issues`
+- stage launch still claims and mirrors through legacy workflow rows
+- queued turn inputs still participate in operational delivery alongside ledger `obligations`
+- CLI/query/report paths still read legacy workflow tables directly
 
 ## Immediate Gaps To Close
 
-### 1. Make obligation replay idempotent
-
-When an obligation is replayed during reconciliation, PatchRelay must also mark the matching legacy
-queued turn input as delivered. Otherwise the same human follow-up can be sent again through the
-legacy flush path.
-
-### 2. Enforce obligation dedupe
-
-`obligations.dedupe_key` should be protected by store-level semantics and a database uniqueness
-constraint scoped to the active run when appropriate. Duplicate processing of the same webhook or
-comment should not create a second obligation.
-
-### 3. Stop treating the ledger as secondary during restart
+### 1. Make the ledger the only recovery input
 
 `ServiceRuntime.start()` and `ServiceStageFinalizer.reconcileActiveStageRuns()` should stop using
-legacy `tracked_issues` / `stage_runs` as the starting point for recovery decisions.
+legacy `tracked_issues` / `stage_runs` as fallback inputs. Reconciliation should be able to run
+solely from the authoritative ledger plus live Linear/Codex reads.
+
+### 2. Make the ledger the only launch-intent input
+
+Ready-launch seeding and stage launch should stop consulting legacy `tracked_issues` for desired
+stage / desired webhook / active-run ownership.
+
+### 3. Demote compatibility rows without breaking operators
+
+Legacy rows should remain mirrored only long enough for CLI/report/query compatibility. They should
+not participate in correctness paths once ledger-native recovery and launch are complete.
 
 ## Target End State
 
@@ -135,6 +138,19 @@ Once reconciliation and launch eligibility are ledger-native:
 - treat `queued_turn_inputs`, `thread_events`, and stage reports as compatibility/projection data
 - retain legacy writes only as long as the CLI/report/query layers still need them
 
+## Remaining Steps
+
+The remaining work is now the full hybrid-removal sequence:
+
+1. Build a canonical ledger reconciliation snapshot builder.
+2. Introduce a reconciliation action applier and move startup recovery through it.
+3. Remove the legacy `stage_runs` fallback from startup reconciliation.
+4. Make launch seeding and launch claiming ledger-native.
+5. Make `obligations` the only durable pending-input correctness path.
+6. Demote `tracked_issues`, `stage_runs`, and `queued_turn_inputs` to projection status.
+7. Update CLI/report/query surfaces to tolerate missing legacy authority.
+8. Remove remaining legacy recovery reads and simplify the old stores.
+
 ## Proposed PR Sequence
 
 ### PR 1: Fix obligation replay and dedupe gaps
@@ -142,6 +158,8 @@ Once reconciliation and launch eligibility are ledger-native:
 - enforce dedupe on obligations
 - clear matching legacy queued input on obligation delivery
 - add focused restart/idempotency tests
+
+Status: implemented on this branch.
 
 ### PR 2: Add ledger reconciliation snapshot and action applier
 
@@ -166,6 +184,178 @@ Once reconciliation and launch eligibility are ledger-native:
 - remove the old reconcile loop
 - narrow remaining legacy reads to CLI/report compatibility
 - document the new authoritative runtime model
+
+## Commit-Oriented Execution Plan
+
+To finish the cutover cleanly, use a stacked sequence of narrow commits where each commit leaves the
+branch operational and validated.
+
+### Commit A: Canonical reconciliation snapshot builder
+
+Scope:
+
+- add a builder that loads `issue_control`, active `run_leases`, `workspace_ownership`, pending
+  `obligations`, and live Linear/Codex state
+- normalize the builder output into the reconciliation-engine input shape
+- add focused tests for snapshot assembly and edge cases like missing thread IDs or missing live
+  Linear data
+
+Expected files:
+
+- `src/reconciliation-snapshot-builder.ts`
+- `src/reconciliation-types.ts`
+- `src/service-stage-finalizer.ts`
+- reconciliation tests
+
+Owner:
+
+- one worker agent focused only on reconciliation input assembly
+
+### Commit B: Reconciliation action applier
+
+Scope:
+
+- introduce a dedicated action-applier module
+- map reconciliation outputs to concrete operations:
+  - enqueue launch
+  - keep run active
+  - mark run complete
+  - mark run failed
+  - clear active ownership
+  - deliver obligation
+  - refresh service-owned write anchors
+- make startup recovery call the applier instead of open-coding the behavior in the finalizer
+
+Expected files:
+
+- `src/reconciliation-action-applier.ts`
+- `src/service-stage-finalizer.ts`
+- supporting tests
+
+Owner:
+
+- one worker agent focused only on recovery action execution
+
+### Commit C: Remove legacy startup fallback
+
+Scope:
+
+- delete the `stage_runs` fallback path from startup reconciliation
+- make `listActiveRunLeases()` the only source of active work at startup
+- keep legacy row updates as mirror writes only
+- add restart tests proving recovery works with no legacy stage-run reads
+
+Expected files:
+
+- `src/service-stage-finalizer.ts`
+- `src/service-runtime.ts`
+- restart tests
+
+Owner:
+
+- one worker agent focused on runtime cutover and restart invariants
+
+### Commit D: Ledger-native launch seeding and claiming
+
+Scope:
+
+- make `issue_control` the only readiness input
+- move desired-stage and desired-receipt resolution fully into the ledger path
+- stop consulting legacy `tracked_issues` to decide whether a run should launch
+- keep legacy `claimStageRun()` only as mirror/projection write support until later cleanup
+
+Expected files:
+
+- `src/service.ts`
+- `src/service-stage-runner.ts`
+- `src/webhook-desired-stage-recorder.ts`
+- launch tests
+
+Owner:
+
+- one worker agent focused on ready-queue and launch orchestration
+
+### Commit E: Make obligations the sole durable pending-input path
+
+Scope:
+
+- stop using `queued_turn_inputs` as a correctness dependency
+- treat legacy queued inputs as optional mirrored trace rows
+- make restart replay and active delivery read only ledger `obligations`
+- add tests for comment wake-ups, prompt wake-ups, and restart redelivery with no legacy queue
+
+Expected files:
+
+- `src/stage-turn-input-dispatcher.ts`
+- `src/webhook-comment-handler.ts`
+- `src/webhook-agent-session-handler.ts`
+- `src/service-stage-finalizer.ts`
+- obligation delivery tests
+
+Owner:
+
+- one worker agent focused on operator-input delivery only
+
+### Commit F: Demote legacy rows and update read surfaces
+
+Scope:
+
+- narrow CLI/query/report reads so they no longer assume legacy workflow tables are authoritative
+- keep compatibility rendering where useful, but tolerate missing legacy authority fields
+- document the projection-only role of `tracked_issues`, `stage_runs`, and `queued_turn_inputs`
+
+Expected files:
+
+- `src/cli/data.ts`
+- query/report helpers
+- docs updates
+
+Owner:
+
+- one worker agent focused on read surfaces and compatibility
+
+### Commit G: Remove dead legacy recovery reads
+
+Scope:
+
+- remove no-longer-used legacy recovery helpers and fallback branches
+- simplify stores/interfaces that were only needed for the hybrid phase
+- update docs to describe the completed authoritative runtime model
+
+Expected files:
+
+- `src/db/issue-workflow-store.ts`
+- `src/service-stage-finalizer.ts`
+- `src/service.ts`
+- docs
+
+Owner:
+
+- one worker agent focused on cleanup after all previous commits land
+
+## Suggested Agent Choreography
+
+Use a baton-pass sequence rather than asking many agents to edit the same runtime files at once.
+The critical-path modules overlap heavily, so parallelism should happen by phase, not by file
+conflict.
+
+1. Agent 1 implements Commit A and commits.
+2. Agent 2 branches from Agent 1's result, implements Commit B, and commits.
+3. Agent 3 branches from Agent 2's result, implements Commit C, and commits.
+4. Agent 4 branches from Agent 3's result, implements Commit D, and commits.
+5. Agent 1 resumes from Agent 4's result, implements Commit E, and commits.
+6. Agent 2 resumes from Agent 5's result, implements Commit F, and commits.
+7. Agent 3 resumes from Agent 6's result, implements Commit G, and commits.
+
+At each baton point:
+
+- run `npm run lint`
+- run `npm run check`
+- run `npm test`
+- review the diff before handing the branch to the next agent
+
+This preserves the workflow we already used successfully: each step is a real commit, each commit
+keeps the system operational, and the stacked branch converges on full removal of the hybrid model.
 
 ## Non-Goals
 
