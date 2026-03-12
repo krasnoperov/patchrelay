@@ -55,7 +55,7 @@ export class ServiceStageRunner {
     }
 
     const issue = this.stores.issueWorkflows.getTrackedIssue(item.projectId, item.issueId);
-    const issueControl = this.resolveLaunchIssueControl(item.projectId, item.issueId, issue);
+    const issueControl = this.stores.issueControl?.getIssueControl(item.projectId, item.issueId);
     if (!issue || !issueControl?.desiredStage || issueControl.activeRunLeaseId !== undefined) {
       return;
     }
@@ -317,53 +317,6 @@ export class ServiceStageRunner {
       lifecycleStatus: "running",
     });
     return runLease.id;
-  }
-
-  private resolveLaunchIssueControl(
-    projectId: string,
-    linearIssueId: string,
-    issue: TrackedIssueRecord | undefined,
-  ) {
-    const existingIssueControl = this.stores.issueControl?.getIssueControl(projectId, linearIssueId);
-    if (!issue?.desiredStage || !issue.desiredWebhookId || !this.stores.issueControl) {
-      return existingIssueControl;
-    }
-
-    const existingReceipt = this.stores.eventReceipts?.getEventReceiptBySourceExternalId("linear-webhook", issue.desiredWebhookId);
-    const insertedReceipt =
-      existingReceipt ??
-      this.stores.eventReceipts?.insertEventReceipt({
-        source: "linear-webhook",
-        externalId: issue.desiredWebhookId,
-        eventType: "legacy-launch-intent",
-        receivedAt: new Date().toISOString(),
-        acceptanceStatus: "accepted",
-        projectId,
-        linearIssueId,
-      });
-    const receiptId = insertedReceipt?.id;
-
-    return this.stores.issueControl.upsertIssueControl({
-      projectId,
-      linearIssueId,
-      ...(existingIssueControl?.desiredStage ? { desiredStage: existingIssueControl.desiredStage } : { desiredStage: issue.desiredStage }),
-      ...(receiptId !== undefined ? { desiredReceiptId: receiptId } : {}),
-      ...(existingIssueControl?.activeWorkspaceOwnershipId !== undefined
-        ? { activeWorkspaceOwnershipId: existingIssueControl.activeWorkspaceOwnershipId }
-        : {}),
-      ...(existingIssueControl?.activeRunLeaseId !== undefined ? { activeRunLeaseId: existingIssueControl.activeRunLeaseId } : {}),
-      ...(issue.statusCommentId
-        ? { serviceOwnedCommentId: issue.statusCommentId }
-        : existingIssueControl?.serviceOwnedCommentId
-          ? { serviceOwnedCommentId: existingIssueControl.serviceOwnedCommentId }
-          : {}),
-      ...(issue.activeAgentSessionId
-        ? { activeAgentSessionId: issue.activeAgentSessionId }
-        : existingIssueControl?.activeAgentSessionId
-          ? { activeAgentSessionId: existingIssueControl.activeAgentSessionId }
-          : {}),
-      lifecycleStatus: existingIssueControl?.lifecycleStatus ?? issue.lifecycleStatus,
-    });
   }
 
   private finishRunLease(
