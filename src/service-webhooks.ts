@@ -1,4 +1,5 @@
 import type { Logger } from "pino";
+import type { EventReceiptStoreProvider } from "./ledger-ports.ts";
 import type { WebhookEventStoreProvider } from "./webhook-event-ports.ts";
 import type { AppConfig, LinearWebhookPayload, NormalizedEvent } from "./types.ts";
 import { archiveWebhook } from "./webhook-archive.ts";
@@ -13,7 +14,7 @@ export interface AcceptedWebhook {
 
 export async function acceptIncomingWebhook(params: {
   config: AppConfig;
-  stores: WebhookEventStoreProvider;
+  stores: WebhookEventStoreProvider & EventReceiptStoreProvider;
   logger: Logger;
   webhookId: string;
   headers: Record<string, string | string[] | undefined>;
@@ -87,9 +88,24 @@ export async function acceptIncomingWebhook(params: {
     dedupeStatus: "accepted",
   });
   if (!stored.inserted) {
+    recordEventReceipt(params.stores, {
+      webhookId: params.webhookId,
+      receivedAt,
+      normalized,
+      headersJson,
+      payloadJson,
+    });
     params.logger.info({ webhookId: params.webhookId, webhookEventId: stored.id }, "Ignoring duplicate webhook delivery");
     return { status: 200, body: { ok: true, duplicate: true } };
   }
+
+  recordEventReceipt(params.stores, {
+    webhookId: params.webhookId,
+    receivedAt,
+    normalized,
+    headersJson,
+    payloadJson,
+  });
 
   params.logger.info(
     {
@@ -111,6 +127,28 @@ export async function acceptIncomingWebhook(params: {
     status: 200,
     body: { ok: true, accepted: true, webhookEventId: stored.id },
   };
+}
+
+function recordEventReceipt(
+  stores: EventReceiptStoreProvider,
+  params: {
+    webhookId: string;
+    receivedAt: string;
+    normalized: NormalizedEvent;
+    headersJson: string;
+    payloadJson: string;
+  },
+): void {
+  stores.eventReceipts.insertEventReceipt({
+    source: "linear-webhook",
+    externalId: params.webhookId,
+    eventType: params.normalized.eventType,
+    receivedAt: params.receivedAt,
+    acceptanceStatus: "accepted",
+    ...(params.normalized.issue ? { linearIssueId: params.normalized.issue.id } : {}),
+    headersJson: params.headersJson,
+    payloadJson: params.payloadJson,
+  });
 }
 
 function logWebhookSummary(logger: Logger, normalized: NormalizedEvent): void {

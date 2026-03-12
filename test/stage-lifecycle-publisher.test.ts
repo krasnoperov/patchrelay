@@ -2,7 +2,17 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { Logger } from "pino";
 import { StageLifecyclePublisher } from "../src/stage-lifecycle-publisher.ts";
-import type { AppConfig, LinearAgentActivityContent, LinearClient, LinearIssueSnapshot, PipelineRunRecord, StageRunRecord, TrackedIssueRecord, WorkspaceRecord } from "../src/types.ts";
+import type {
+  AppConfig,
+  IssueControlRecord,
+  LinearAgentActivityContent,
+  LinearClient,
+  LinearIssueSnapshot,
+  PipelineRunRecord,
+  StageRunRecord,
+  TrackedIssueRecord,
+  WorkspaceRecord,
+} from "../src/types.ts";
 
 const WORKFLOW_STATES = [
   { id: "start", name: "Start" },
@@ -82,13 +92,39 @@ class FakeLinearClient implements LinearClient {
 
 class FakeIssueWorkflowStore {
   readonly issues = new Map<string, TrackedIssueRecord>();
+  readonly issueControls = new Map<string, IssueControlRecord>();
   readonly stageRuns = new Map<number, StageRunRecord>();
   readonly workspaces = new Map<number, WorkspaceRecord>();
   readonly pipelines = new Map<number, PipelineRunRecord>();
   readonly lifecycleUpdates: Array<{ projectId: string; issueId: string; status: TrackedIssueRecord["lifecycleStatus"] }> = [];
-  readonly pipelineStatusUpdates: Array<{ pipelineRunId: number; status: PipelineRunRecord["status"] }> = [];
-  readonly completedPipelines: number[] = [];
   readonly statusCommentUpdates: Array<{ projectId: string; issueId: string; commentId?: string }> = [];
+
+  upsertIssueControl(params: {
+    projectId: string;
+    linearIssueId: string;
+    serviceOwnedCommentId?: string;
+    activeAgentSessionId?: string;
+    lifecycleStatus: IssueControlRecord["lifecycleStatus"];
+  }): IssueControlRecord {
+    const key = issueKey(params.projectId, params.linearIssueId);
+    const existing = this.issueControls.get(key);
+    const nextIssueControl: IssueControlRecord = {
+      id: existing?.id ?? this.issueControls.size + 1,
+      projectId: params.projectId,
+      linearIssueId: params.linearIssueId,
+      serviceOwnedCommentId: params.serviceOwnedCommentId ?? existing?.serviceOwnedCommentId,
+      activeAgentSessionId: params.activeAgentSessionId ?? existing?.activeAgentSessionId,
+      lifecycleStatus: params.lifecycleStatus,
+      createdAt: existing?.createdAt ?? "2026-03-11T10:00:00.000Z",
+      updatedAt: "2026-03-11T10:05:00.000Z",
+      desiredStage: existing?.desiredStage,
+      desiredReceiptId: existing?.desiredReceiptId,
+      activeWorkspaceOwnershipId: existing?.activeWorkspaceOwnershipId,
+      activeRunLeaseId: existing?.activeRunLeaseId,
+    };
+    this.issueControls.set(key, nextIssueControl);
+    return nextIssueControl;
+  }
 
   upsertTrackedIssue(params: {
     projectId: string;
@@ -138,20 +174,6 @@ class FakeIssueWorkflowStore {
     assert.ok(issue);
     issue.lifecycleStatus = status;
     this.lifecycleUpdates.push({ projectId, issueId: linearIssueId, status });
-  }
-
-  setPipelineStatus(pipelineRunId: number, status: PipelineRunRecord["status"]): void {
-    const pipeline = this.getPipelineRun(pipelineRunId);
-    assert.ok(pipeline);
-    pipeline.status = status;
-    this.pipelineStatusUpdates.push({ pipelineRunId, status });
-  }
-
-  markPipelineCompleted(pipelineRunId: number): void {
-    const pipeline = this.getPipelineRun(pipelineRunId);
-    assert.ok(pipeline);
-    pipeline.status = "completed";
-    this.completedPipelines.push(pipelineRunId);
   }
 }
 
@@ -335,7 +357,7 @@ function createHarness() {
   });
   const publisher = new StageLifecyclePublisher(
     config,
-    { issueWorkflows: store },
+    { issueWorkflows: store, issueControl: store },
     {
       async forProject(projectId: string) {
         return projectId === "proj" ? linear : undefined;
@@ -395,11 +417,10 @@ test("publishStageCompletion enqueues the next requested workflow and publishes 
 
   assert.deepEqual(enqueued, [{ projectId: "proj", issueId: "issue-1" }]);
   assert.equal(linear.agentActivities.at(-1)?.content.type, "thought");
-  assert.equal(store.completedPipelines.length, 0);
 });
 
 test("publishStageCompletion pauses for handoff when Linear is still in the active state", async () => {
-  const { publisher, store, linear, stageRun, pipeline } = createHarness();
+  const { publisher, store, linear, stageRun } = createHarness();
   store.stageRuns.set(stageRun.id, { ...stageRun, endedAt: "2026-03-11T10:05:00.000Z", status: "completed" });
 
   await publisher.publishStageCompletion(stageRun, () => {
@@ -407,7 +428,6 @@ test("publishStageCompletion pauses for handoff when Linear is still in the acti
   });
 
   assert.deepEqual(store.lifecycleUpdates, [{ projectId: "proj", issueId: "issue-1", status: "paused" }]);
-  assert.deepEqual(store.pipelineStatusUpdates, [{ pipelineRunId: pipeline.id, status: "paused" }]);
   assert.deepEqual(linear.labelUpdates, [
     {
       issueId: "issue-1",
@@ -420,7 +440,7 @@ test("publishStageCompletion pauses for handoff when Linear is still in the acti
 });
 
 test("publishStageCompletion cleans up workflow labels after Linear already moved on and completes the pipeline", async () => {
-  const { publisher, store, linear, stageRun, pipeline } = createHarness();
+  const { publisher, linear, stageRun } = createHarness();
   linear.issues.set("issue-1", {
     ...(linear.issues.get("issue-1") as LinearIssueSnapshot),
     stateName: "Done",
@@ -437,7 +457,6 @@ test("publishStageCompletion cleans up workflow labels after Linear already move
       removeNames: ["llm-working", "llm-awaiting-handoff"],
     },
   ]);
-  assert.deepEqual(store.completedPipelines, [pipeline.id]);
   assert.equal(linear.agentActivities.at(-1)?.content.type, "response");
 });
 
@@ -453,7 +472,7 @@ test("markStageActive and publishStageCompletion no-op cleanly when workflow sta
 
   const publisher = new StageLifecyclePublisher(
     config,
-    { issueWorkflows: store },
+    { issueWorkflows: store, issueControl: store },
     { async forProject() { return undefined; } },
     createCaptureLogger().logger,
   );
@@ -478,7 +497,6 @@ test("markStageActive and publishStageCompletion no-op cleanly when workflow sta
     throw new Error("should not enqueue");
   });
 
-  assert.equal(store.completedPipelines.length, 0);
   assert.equal(store.getTrackedIssue("missing", "issue-2")?.currentLinearState, undefined);
 });
 

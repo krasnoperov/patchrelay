@@ -8,7 +8,7 @@ import type {
   IssueWorkflowExecutionStoreProvider,
   IssueWorkflowQueryStoreProvider,
   LinearInstallationStoreProvider,
-  StageEventQueryStoreProvider,
+  StageEventLogStoreProvider,
   WebhookEventStoreProvider,
 } from "../src/db-ports.ts";
 
@@ -145,8 +145,6 @@ test("db ports preserve issue workflow execution and query behavior", () => {
       threadId: "thread-1",
       turnId: "turn-1",
     });
-    workflowExecution.setIssuePendingLaunchInput("proj", "issue-1", "Hello from Linear");
-    assert.equal(workflowExecution.consumeIssuePendingLaunchInput("proj", "issue-1"), "Hello from Linear");
 
     workflowExecution.finishStageRun({
       stageRunId: claim.stageRun.id,
@@ -164,17 +162,17 @@ test("db ports preserve issue workflow execution and query behavior", () => {
     assert.equal(latestStage?.status, "completed");
     assert.equal(overview?.issue.issueKey, "APP-1");
     assert.equal(overview?.workspace?.branchName, "app/APP-1");
-    assert.equal(overview?.pipeline?.status, "active");
+    assert.equal(overview?.pipeline?.status, "completed");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
 
-test("db ports preserve stage event queue routing and delivery markers", () => {
+test("db ports preserve thread event history for ledger-backed stage runs", () => {
   const { baseDir, stores } = createHarness();
   try {
     const workflowExecution: IssueWorkflowExecutionStoreProvider["issueWorkflows"] = stores.issueWorkflows;
-    const stageEvents: StageEventQueryStoreProvider["stageEvents"] = stores.stageEvents;
+    const stageEvents: StageEventLogStoreProvider["stageEvents"] = stores.stageEvents;
 
     workflowExecution.recordDesiredStage({
       projectId: "proj",
@@ -204,20 +202,11 @@ test("db ports preserve stage event queue routing and delivery markers", () => {
       method: "turn/started",
       eventJson: "{\"threadId\":\"thread-1\"}",
     });
-    const queuedInputId = stageEvents.enqueueTurnInput({
-      stageRunId: claim.stageRun.id,
-      source: "linear-comment:1",
-      body: "Please adjust the copy.",
-    });
-    stageEvents.setPendingTurnInputRouting(queuedInputId, "thread-1", "turn-1");
-    stageEvents.markTurnInputDelivered(queuedInputId);
 
     const events = stageEvents.listThreadEvents(claim.stageRun.id);
-    const inputs = stageEvents.listPendingTurnInputs(claim.stageRun.id);
 
     assert.equal(events[0]?.id, eventId);
     assert.equal(events[0]?.method, "turn/started");
-    assert.equal(inputs.length, 0);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

@@ -1,3 +1,4 @@
+import type { IssueControlStoreProvider, ObligationStoreProvider } from "./ledger-ports.ts";
 import type { LinearInstallationStoreProvider } from "./installation-ports.ts";
 import type { IssueWorkflowWebhookStoreProvider } from "./workflow-ports.ts";
 import { triggerEventAllowed } from "./project-resolution.ts";
@@ -18,9 +19,14 @@ export interface RecordedWebhookIssueState {
 }
 
 export class WebhookDesiredStageRecorder {
-  constructor(private readonly stores: IssueWorkflowWebhookStoreProvider & LinearInstallationStoreProvider) {}
+  constructor(
+    private readonly stores: IssueWorkflowWebhookStoreProvider &
+      LinearInstallationStoreProvider &
+      IssueControlStoreProvider &
+      ObligationStoreProvider,
+  ) {}
 
-  record(project: ProjectConfig, normalized: NormalizedEvent): RecordedWebhookIssueState {
+  record(project: ProjectConfig, normalized: NormalizedEvent, options?: { eventReceiptId?: number }): RecordedWebhookIssueState {
     const normalizedIssue = normalized.issue;
     if (!normalizedIssue) {
       return {
@@ -33,10 +39,22 @@ export class WebhookDesiredStageRecorder {
     }
 
     const issue = this.stores.issueWorkflows.getTrackedIssue(project.id, normalizedIssue.id);
-    const activeStageRun = issue?.activeStageRunId ? this.stores.issueWorkflows.getStageRun(issue.activeStageRunId) : undefined;
+    const issueControl = this.stores.issueControl.getIssueControl(project.id, normalizedIssue.id);
+    const activeStageRun =
+      issueControl?.activeRunLeaseId !== undefined ? this.stores.issueWorkflows.getStageRun(issueControl.activeRunLeaseId) : undefined;
     const delegatedToPatchRelay = this.isDelegatedToPatchRelay(project, normalized);
+    const stageAllowed = triggerEventAllowed(project, normalized.triggerEvent);
     const desiredStage = this.resolveDesiredStage(project, normalized, issue, activeStageRun, delegatedToPatchRelay);
     const launchInput = this.resolveLaunchInput(normalized.agentSession);
+    this.persistIssueControlFirst(
+      project.id,
+      normalizedIssue.id,
+      issue,
+      activeStageRun,
+      desiredStage,
+      normalized.agentSession?.id,
+      options?.eventReceiptId,
+    );
 
     this.stores.issueWorkflows.recordDesiredStage({
       projectId: project.id,
@@ -45,20 +63,29 @@ export class WebhookDesiredStageRecorder {
       ...(normalizedIssue.title ? { title: normalizedIssue.title } : {}),
       ...(normalizedIssue.url ? { issueUrl: normalizedIssue.url } : {}),
       ...(normalizedIssue.stateName ? { currentLinearState: normalizedIssue.stateName } : {}),
-      ...(desiredStage ? { desiredStage } : {}),
-      ...(desiredStage ? { desiredWebhookId: normalized.webhookId } : {}),
       lastWebhookAt: new Date().toISOString(),
     });
 
     if (normalized.agentSession?.id) {
       this.stores.issueWorkflows.setIssueActiveAgentSession(project.id, normalizedIssue.id, normalized.agentSession.id);
     }
-    if (launchInput && !activeStageRun && delegatedToPatchRelay) {
-      this.stores.issueWorkflows.setIssuePendingLaunchInput(project.id, normalizedIssue.id, launchInput);
+    if (launchInput && !activeStageRun && delegatedToPatchRelay && stageAllowed) {
+      this.stores.obligations.enqueueObligation({
+        projectId: project.id,
+        linearIssueId: normalizedIssue.id,
+        kind: "deliver_turn_input",
+        source: `linear-agent-launch:${normalized.agentSession?.id ?? normalized.webhookId}`,
+        payloadJson: JSON.stringify({
+          body: launchInput,
+        }),
+      });
     }
 
+    const refreshedIssue = this.stores.issueWorkflows.getTrackedIssue(project.id, normalizedIssue.id);
+    this.syncIssueControl(project.id, normalizedIssue.id, refreshedIssue, desiredStage, normalized.agentSession?.id, options?.eventReceiptId);
+
     return {
-      issue: issue ?? this.stores.issueWorkflows.getTrackedIssue(project.id, normalizedIssue.id),
+      issue: refreshedIssue ?? issue,
       activeStageRun,
       desiredStage,
       delegatedToPatchRelay,
@@ -134,5 +161,52 @@ export class WebhookDesiredStageRecorder {
     }
 
     return undefined;
+  }
+
+  private persistIssueControlFirst(
+    projectId: string,
+    linearIssueId: string,
+    issue: TrackedIssueRecord | undefined,
+    activeStageRun: StageRunRecord | undefined,
+    desiredStage: WorkflowStage | undefined,
+    activeAgentSessionId: string | undefined,
+    eventReceiptId: number | undefined,
+  ): void {
+    if (!desiredStage) {
+      return;
+    }
+
+    const lifecycleStatus = issue?.lifecycleStatus ?? "queued";
+    this.stores.issueControl.upsertIssueControl({
+      projectId,
+      linearIssueId,
+      desiredStage,
+      ...(eventReceiptId !== undefined ? { desiredReceiptId: eventReceiptId } : {}),
+      ...(issue?.statusCommentId ? { serviceOwnedCommentId: issue.statusCommentId } : {}),
+      ...(activeAgentSessionId ? { activeAgentSessionId } : {}),
+      lifecycleStatus,
+    });
+  }
+
+  private syncIssueControl(
+    projectId: string,
+    linearIssueId: string,
+    issue: TrackedIssueRecord | undefined,
+    desiredStage: WorkflowStage | undefined,
+    activeAgentSessionId: string | undefined,
+    eventReceiptId: number | undefined,
+  ): void {
+    if (!issue) {
+      return;
+    }
+
+    this.stores.issueControl.upsertIssueControl({
+      projectId,
+      linearIssueId,
+      ...(desiredStage ? { desiredStage } : {}),
+      ...(eventReceiptId !== undefined && desiredStage ? { desiredReceiptId: eventReceiptId } : {}),
+      ...(activeAgentSessionId ? { activeAgentSessionId } : {}),
+      lifecycleStatus: issue.lifecycleStatus,
+    });
   }
 }

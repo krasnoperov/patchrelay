@@ -6,20 +6,26 @@ import test from "node:test";
 import { loadConfig } from "../src/config.ts";
 import { getPatchRelayDataDir } from "../src/runtime-paths.ts";
 
-const oauthConfigYaml = `  token_encryption_key_env: PATCHRELAY_TOKEN_ENCRYPTION_KEY
-  oauth:
-    client_id_env: LINEAR_OAUTH_CLIENT_ID
-    client_secret_env: LINEAR_OAUTH_CLIENT_SECRET
-    redirect_uri: http://127.0.0.1:8787/oauth/linear/callback
-    scopes: [read, write]
-    actor: user`;
+const oauthConfig = {
+  token_encryption_key_env: "PATCHRELAY_TOKEN_ENCRYPTION_KEY",
+  oauth: {
+    client_id_env: "LINEAR_OAUTH_CLIENT_ID",
+    client_secret_env: "LINEAR_OAUTH_CLIENT_SECRET",
+    redirect_uri: "http://127.0.0.1:8787/oauth/linear/callback",
+    scopes: ["read", "write"],
+    actor: "user",
+  },
+} as const;
 
-const oauthConfigYamlWithoutRedirect = `  token_encryption_key_env: PATCHRELAY_TOKEN_ENCRYPTION_KEY
-  oauth:
-    client_id_env: LINEAR_OAUTH_CLIENT_ID
-    client_secret_env: LINEAR_OAUTH_CLIENT_SECRET
-    scopes: [read, write]
-    actor: user`;
+const oauthConfigWithoutRedirect = {
+  token_encryption_key_env: "PATCHRELAY_TOKEN_ENCRYPTION_KEY",
+  oauth: {
+    client_id_env: "LINEAR_OAUTH_CLIENT_ID",
+    client_secret_env: "LINEAR_OAUTH_CLIENT_SECRET",
+    scopes: ["read", "write"],
+    actor: "user",
+  },
+} as const;
 
 const oauthEnv = {
   PATCHRELAY_TOKEN_ENCRYPTION_KEY: "enc-secret",
@@ -72,6 +78,10 @@ function workflowSummary(config: ReturnType<typeof loadConfig>, projectIndex: nu
   }));
 }
 
+function writeConfigFixture(configPath: string, value: unknown): void {
+  writeFileSync(configPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
 test("loadConfig expands env vars, resolves paths, and honors runtime overrides", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-config-"));
   const originalCwd = process.cwd();
@@ -80,70 +90,87 @@ test("loadConfig expands env vars, resolves paths, and honors runtime overrides"
     mkdirSync(path.join(baseDir, "config"), { recursive: true });
     mkdirSync(path.join(baseDir, "repo"), { recursive: true });
     mkdirSync(path.join(baseDir, "worktrees"), { recursive: true });
-    writeFileSync(
-      path.join(baseDir, "config", "patchrelay.yaml"),
-      `
-server:
-  bind: 0.0.0.0
-  port: 9999
-  public_base_url: https://patchrelay.example.com
-ingress:
-  linear_webhook_path: /webhooks/linear
-  max_body_bytes: 262144
-  max_timestamp_skew_seconds: 60
-logging:
-  file_path: \${LOG_FILE_PATH:-./logs/default.log}
-  webhook_archive_dir: \${ARCHIVE_DIR:-./archive}
-database:
-  path: ./data/patchrelay.sqlite
-operator_api:
-  enabled: true
-  bearer_token_env: PATCHRELAY_OPERATOR_TOKEN
-projects:
-  - id: usertold
-    repo_path: ./repo
-    worktree_root: ./worktrees
-    workflows:
-      - id: development
-        when_state: Start
-        active_state: Implementing
-        workflow_file: ./DEVELOPMENT.md
-        fallback_state: Human Needed
-      - id: review
-        when_state: Review
-        active_state: Reviewing
-        workflow_file: ./REVIEW.md
-        fallback_state: Human Needed
-      - id: deploy
-        when_state: Deploy
-        active_state: Deploying
-        workflow_file: ./DEPLOY.md
-        fallback_state: Human Needed
-      - id: cleanup
-        when_state: Cleanup
-        active_state: Cleaning Up
-        workflow_file: ./CLEANUP.md
-        fallback_state: Human Needed
-    trusted_actors:
-      ids: [user_123]
-      emails: [owner@example.com]
-      email_domains: [example.com]
-    trigger_events: [statusChanged]
-    branch_prefix: use
-runner:
-  codex:
-    shell_bin: /bin/bash
-    source_bashrc: true
-linear:
-  webhook_secret_env: CUSTOM_LINEAR_SECRET
-${oauthConfigYaml}
-`,
-      "utf8",
-    );
+    writeConfigFixture(path.join(baseDir, "config", "patchrelay.json"), {
+      server: {
+        bind: "0.0.0.0",
+        port: 9999,
+        public_base_url: "https://patchrelay.example.com",
+      },
+      ingress: {
+        linear_webhook_path: "/webhooks/linear",
+        max_body_bytes: 262144,
+        max_timestamp_skew_seconds: 60,
+      },
+      logging: {
+        file_path: "${LOG_FILE_PATH:-./logs/default.log}",
+        webhook_archive_dir: "${ARCHIVE_DIR:-./archive}",
+      },
+      database: {
+        path: "./data/patchrelay.sqlite",
+      },
+      operator_api: {
+        enabled: true,
+        bearer_token_env: "PATCHRELAY_OPERATOR_TOKEN",
+      },
+      projects: [
+        {
+          id: "usertold",
+          repo_path: "./repo",
+          worktree_root: "./worktrees",
+          workflows: [
+            {
+              id: "development",
+              when_state: "Start",
+              active_state: "Implementing",
+              workflow_file: "./DEVELOPMENT.md",
+              fallback_state: "Human Needed",
+            },
+            {
+              id: "review",
+              when_state: "Review",
+              active_state: "Reviewing",
+              workflow_file: "./REVIEW.md",
+              fallback_state: "Human Needed",
+            },
+            {
+              id: "deploy",
+              when_state: "Deploy",
+              active_state: "Deploying",
+              workflow_file: "./DEPLOY.md",
+              fallback_state: "Human Needed",
+            },
+            {
+              id: "cleanup",
+              when_state: "Cleanup",
+              active_state: "Cleaning Up",
+              workflow_file: "./CLEANUP.md",
+              fallback_state: "Human Needed",
+            },
+          ],
+          trusted_actors: {
+            ids: ["user_123"],
+            emails: ["owner@example.com"],
+            email_domains: ["example.com"],
+          },
+          trigger_events: ["statusChanged"],
+          branch_prefix: "use",
+        },
+      ],
+      runner: {
+        codex: {
+          shell_bin: "/bin/bash",
+          source_bashrc: true,
+        },
+      },
+      linear: {
+        webhook_secret_env: "CUSTOM_LINEAR_SECRET",
+        ...oauthConfig,
+      },
+    });
 
     withEnv(
       {
-        PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.yaml"),
+        PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.json"),
         PATCHRELAY_LOG_FILE: path.join(baseDir, "runtime.log"),
         PATCHRELAY_DB_PATH: path.join(baseDir, "runtime.sqlite"),
         PATCHRELAY_WEBHOOK_ARCHIVE_DIR: path.join(baseDir, "runtime-archive"),
@@ -193,38 +220,42 @@ test("loadConfig defaults to the XDG config path when PATCHRELAY_CONFIG is unset
   const configHome = path.join(baseDir, "config-home");
   const repoPath = path.join(baseDir, "repo");
   const worktreeRoot = path.join(baseDir, "worktrees");
-  const configPath = path.join(configHome, "patchrelay", "patchrelay.yaml");
+  const configPath = path.join(configHome, "patchrelay", "patchrelay.json");
 
   try {
     mkdirSync(path.dirname(configPath), { recursive: true });
     mkdirSync(repoPath, { recursive: true });
     mkdirSync(worktreeRoot, { recursive: true });
-    writeFileSync(
-      configPath,
-      `
-server:
-  bind: 127.0.0.1
-  port: 8787
-ingress:
-  linear_webhook_path: /webhooks/linear
-  max_body_bytes: 262144
-  max_timestamp_skew_seconds: 60
-logging:
-  file_path: ${JSON.stringify(path.join(baseDir, "patchrelay.log"))}
-database:
-  path: ${JSON.stringify(path.join(baseDir, "patchrelay.sqlite"))}
-linear:
-  webhook_secret_env: REQUIRED_SECRET
-${oauthConfigYaml}
-projects:
-  - id: usertold
-    repo_path: ${JSON.stringify(repoPath)}
-    worktree_root: ${JSON.stringify(worktreeRoot)}
-    trigger_events: [statusChanged]
-    branch_prefix: use
-`,
-      "utf8",
-    );
+    writeConfigFixture(configPath, {
+      server: {
+        bind: "127.0.0.1",
+        port: 8787,
+      },
+      ingress: {
+        linear_webhook_path: "/webhooks/linear",
+        max_body_bytes: 262144,
+        max_timestamp_skew_seconds: 60,
+      },
+      logging: {
+        file_path: path.join(baseDir, "patchrelay.log"),
+      },
+      database: {
+        path: path.join(baseDir, "patchrelay.sqlite"),
+      },
+      linear: {
+        webhook_secret_env: "REQUIRED_SECRET",
+        ...oauthConfig,
+      },
+      projects: [
+        {
+          id: "usertold",
+          repo_path: repoPath,
+          worktree_root: worktreeRoot,
+          trigger_events: ["statusChanged"],
+          branch_prefix: "use",
+        },
+      ],
+    });
 
     withEnv(
       {
@@ -249,31 +280,32 @@ test("loadConfig reads service secrets from the default adjacent service.env fil
   const configHome = path.join(baseDir, "config-home");
   const repoPath = path.join(baseDir, "repo");
   const worktreeRoot = path.join(baseDir, "worktrees");
-  const configPath = path.join(configHome, "patchrelay", "patchrelay.yaml");
+  const configPath = path.join(configHome, "patchrelay", "patchrelay.json");
   const serviceEnvPath = path.join(configHome, "patchrelay", "service.env");
 
   try {
     mkdirSync(path.dirname(configPath), { recursive: true });
     mkdirSync(repoPath, { recursive: true });
     mkdirSync(worktreeRoot, { recursive: true });
-    writeFileSync(
-      configPath,
-      `
-server:
-  bind: 127.0.0.1
-  port: 8787
-linear:
-  webhook_secret_env: REQUIRED_SECRET
-${oauthConfigYaml}
-projects:
-  - id: usertold
-    repo_path: ${JSON.stringify(repoPath)}
-    worktree_root: ${JSON.stringify(worktreeRoot)}
-    trigger_events: [statusChanged]
-    branch_prefix: use
-`,
-      "utf8",
-    );
+    writeConfigFixture(configPath, {
+      server: {
+        bind: "127.0.0.1",
+        port: 8787,
+      },
+      linear: {
+        webhook_secret_env: "REQUIRED_SECRET",
+        ...oauthConfig,
+      },
+      projects: [
+        {
+          id: "usertold",
+          repo_path: repoPath,
+          worktree_root: worktreeRoot,
+          trigger_events: ["statusChanged"],
+          branch_prefix: "use",
+        },
+      ],
+    });
     writeFileSync(
       serviceEnvPath,
       [
@@ -313,31 +345,32 @@ test("loadConfig keeps local cli profile from reading service.env secrets", () =
   const configHome = path.join(baseDir, "config-home");
   const repoPath = path.join(baseDir, "repo");
   const worktreeRoot = path.join(baseDir, "worktrees");
-  const configPath = path.join(configHome, "patchrelay", "patchrelay.yaml");
+  const configPath = path.join(configHome, "patchrelay", "patchrelay.json");
   const serviceEnvPath = path.join(configHome, "patchrelay", "service.env");
 
   try {
     mkdirSync(path.dirname(configPath), { recursive: true });
     mkdirSync(repoPath, { recursive: true });
     mkdirSync(worktreeRoot, { recursive: true });
-    writeFileSync(
-      configPath,
-      `
-server:
-  bind: 127.0.0.1
-  port: 8787
-linear:
-  webhook_secret_env: REQUIRED_SECRET
-${oauthConfigYaml}
-projects:
-  - id: usertold
-    repo_path: ${JSON.stringify(repoPath)}
-    worktree_root: ${JSON.stringify(worktreeRoot)}
-    trigger_events: [statusChanged]
-    branch_prefix: use
-`,
-      "utf8",
-    );
+    writeConfigFixture(configPath, {
+      server: {
+        bind: "127.0.0.1",
+        port: 8787,
+      },
+      linear: {
+        webhook_secret_env: "REQUIRED_SECRET",
+        ...oauthConfig,
+      },
+      projects: [
+        {
+          id: "usertold",
+          repo_path: repoPath,
+          worktree_root: worktreeRoot,
+          trigger_events: ["statusChanged"],
+          branch_prefix: "use",
+        },
+      ],
+    });
     writeFileSync(
       serviceEnvPath,
       [
@@ -378,18 +411,15 @@ test("loadConfig accepts machine-level config before any projects are added", ()
 
   try {
     mkdirSync(path.join(baseDir, "config"), { recursive: true });
-    writeFileSync(
-      path.join(baseDir, "config", "patchrelay.yaml"),
-      `
-server:
-  public_base_url: https://relay.example.com
-`,
-      "utf8",
-    );
+    writeConfigFixture(path.join(baseDir, "config", "patchrelay.json"), {
+      server: {
+        public_base_url: "https://relay.example.com",
+      },
+    });
 
     withEnv(
       {
-        PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.yaml"),
+        PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.json"),
         LINEAR_WEBHOOK_SECRET: "top-secret",
         ...oauthEnv,
       },
@@ -414,37 +444,41 @@ test("loadConfig derives the OAuth redirect URI from server.public_base_url when
     mkdirSync(path.join(baseDir, "config"), { recursive: true });
     mkdirSync(repoPath, { recursive: true });
     mkdirSync(worktreeRoot, { recursive: true });
-    writeFileSync(
-      path.join(baseDir, "config", "patchrelay.yaml"),
-      `
-server:
-  bind: 127.0.0.1
-  port: 8787
-  public_base_url: https://patchrelay.example.com/ignored-path
-ingress:
-  linear_webhook_path: /webhooks/linear
-  max_body_bytes: 262144
-  max_timestamp_skew_seconds: 60
-logging:
-  file_path: ./patchrelay.log
-database:
-  path: ./data/patchrelay.sqlite
-linear:
-  webhook_secret_env: REQUIRED_SECRET
-${oauthConfigYamlWithoutRedirect}
-projects:
-  - id: usertold
-    repo_path: ${JSON.stringify(repoPath)}
-    worktree_root: ${JSON.stringify(worktreeRoot)}
-    trigger_events: [statusChanged]
-    branch_prefix: use
-`,
-      "utf8",
-    );
+    writeConfigFixture(path.join(baseDir, "config", "patchrelay.json"), {
+      server: {
+        bind: "127.0.0.1",
+        port: 8787,
+        public_base_url: "https://patchrelay.example.com/ignored-path",
+      },
+      ingress: {
+        linear_webhook_path: "/webhooks/linear",
+        max_body_bytes: 262144,
+        max_timestamp_skew_seconds: 60,
+      },
+      logging: {
+        file_path: "./patchrelay.log",
+      },
+      database: {
+        path: "./data/patchrelay.sqlite",
+      },
+      linear: {
+        webhook_secret_env: "REQUIRED_SECRET",
+        ...oauthConfigWithoutRedirect,
+      },
+      projects: [
+        {
+          id: "usertold",
+          repo_path: repoPath,
+          worktree_root: worktreeRoot,
+          trigger_events: ["statusChanged"],
+          branch_prefix: "use",
+        },
+      ],
+    });
 
     withEnv(
       {
-        PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.yaml"),
+        PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.json"),
         REQUIRED_SECRET: "top-secret",
         ...oauthEnv,
       },
@@ -467,36 +501,40 @@ test("loadConfig derives the OAuth redirect URI from the local bind and port whe
     mkdirSync(path.join(baseDir, "config"), { recursive: true });
     mkdirSync(repoPath, { recursive: true });
     mkdirSync(worktreeRoot, { recursive: true });
-    writeFileSync(
-      path.join(baseDir, "config", "patchrelay.yaml"),
-      `
-server:
-  bind: 0.0.0.0
-  port: 9999
-ingress:
-  linear_webhook_path: /webhooks/linear
-  max_body_bytes: 262144
-  max_timestamp_skew_seconds: 60
-logging:
-  file_path: ./patchrelay.log
-database:
-  path: ./data/patchrelay.sqlite
-linear:
-  webhook_secret_env: REQUIRED_SECRET
-${oauthConfigYamlWithoutRedirect}
-projects:
-  - id: usertold
-    repo_path: ${JSON.stringify(repoPath)}
-    worktree_root: ${JSON.stringify(worktreeRoot)}
-    trigger_events: [statusChanged]
-    branch_prefix: use
-`,
-      "utf8",
-    );
+    writeConfigFixture(path.join(baseDir, "config", "patchrelay.json"), {
+      server: {
+        bind: "0.0.0.0",
+        port: 9999,
+      },
+      ingress: {
+        linear_webhook_path: "/webhooks/linear",
+        max_body_bytes: 262144,
+        max_timestamp_skew_seconds: 60,
+      },
+      logging: {
+        file_path: "./patchrelay.log",
+      },
+      database: {
+        path: "./data/patchrelay.sqlite",
+      },
+      linear: {
+        webhook_secret_env: "REQUIRED_SECRET",
+        ...oauthConfigWithoutRedirect,
+      },
+      projects: [
+        {
+          id: "usertold",
+          repo_path: repoPath,
+          worktree_root: worktreeRoot,
+          trigger_events: ["statusChanged"],
+          branch_prefix: "use",
+        },
+      ],
+    });
 
     withEnv(
       {
-        PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.yaml"),
+        PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.json"),
         REQUIRED_SECRET: "top-secret",
         ...oauthEnv,
       },
@@ -519,39 +557,44 @@ test("loadConfig applies default app-mode trigger events when trigger_events is 
     mkdirSync(path.join(baseDir, "config"), { recursive: true });
     mkdirSync(repoPath, { recursive: true });
     mkdirSync(worktreeRoot, { recursive: true });
-    writeFileSync(
-      path.join(baseDir, "config", "patchrelay.yaml"),
-      `
-server:
-  bind: 127.0.0.1
-  port: 8787
-ingress:
-  linear_webhook_path: /webhooks/linear
-  max_body_bytes: 262144
-  max_timestamp_skew_seconds: 60
-logging:
-  file_path: ./patchrelay.log
-database:
-  path: ./data/patchrelay.sqlite
-linear:
-  webhook_secret_env: REQUIRED_SECRET
-  token_encryption_key_env: PATCHRELAY_TOKEN_ENCRYPTION_KEY
-  oauth:
-    client_id_env: LINEAR_OAUTH_CLIENT_ID
-    client_secret_env: LINEAR_OAUTH_CLIENT_SECRET
-    actor: app
-projects:
-  - id: usertold
-    repo_path: ${JSON.stringify(repoPath)}
-    worktree_root: ${JSON.stringify(worktreeRoot)}
-    branch_prefix: use
-`,
-      "utf8",
-    );
+    writeConfigFixture(path.join(baseDir, "config", "patchrelay.json"), {
+      server: {
+        bind: "127.0.0.1",
+        port: 8787,
+      },
+      ingress: {
+        linear_webhook_path: "/webhooks/linear",
+        max_body_bytes: 262144,
+        max_timestamp_skew_seconds: 60,
+      },
+      logging: {
+        file_path: "./patchrelay.log",
+      },
+      database: {
+        path: "./data/patchrelay.sqlite",
+      },
+      linear: {
+        webhook_secret_env: "REQUIRED_SECRET",
+        token_encryption_key_env: "PATCHRELAY_TOKEN_ENCRYPTION_KEY",
+        oauth: {
+          client_id_env: "LINEAR_OAUTH_CLIENT_ID",
+          client_secret_env: "LINEAR_OAUTH_CLIENT_SECRET",
+          actor: "app",
+        },
+      },
+      projects: [
+        {
+          id: "usertold",
+          repo_path: repoPath,
+          worktree_root: worktreeRoot,
+          branch_prefix: "use",
+        },
+      ],
+    });
 
     withEnv(
       {
-        PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.yaml"),
+        PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.json"),
         REQUIRED_SECRET: "top-secret",
         ...oauthEnv,
       },
@@ -572,24 +615,25 @@ test("loadConfig derives project worktree_root and branch_prefix when omitted", 
   try {
     mkdirSync(path.join(baseDir, "config"), { recursive: true });
     mkdirSync(repoPath, { recursive: true });
-    writeFileSync(
-      path.join(baseDir, "config", "patchrelay.yaml"),
-      `
-server:
-  public_base_url: https://relay.example.com
-linear:
-  webhook_secret_env: REQUIRED_SECRET
-${oauthConfigYamlWithoutRedirect}
-projects:
-  - id: Usertold App
-    repo_path: ${JSON.stringify(repoPath)}
-`,
-      "utf8",
-    );
+    writeConfigFixture(path.join(baseDir, "config", "patchrelay.json"), {
+      server: {
+        public_base_url: "https://relay.example.com",
+      },
+      linear: {
+        webhook_secret_env: "REQUIRED_SECRET",
+        ...oauthConfigWithoutRedirect,
+      },
+      projects: [
+        {
+          id: "Usertold App",
+          repo_path: repoPath,
+        },
+      ],
+    });
 
     withEnv(
       {
-        PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.yaml"),
+        PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.json"),
         REQUIRED_SECRET: "top-secret",
         ...oauthEnv,
       },
@@ -616,57 +660,70 @@ test("loadConfig resolves explicit workflows relative to each repo", () => {
     mkdirSync(path.join(baseDir, "config"), { recursive: true });
     mkdirSync(repoPath, { recursive: true });
     mkdirSync(worktreeRoot, { recursive: true });
-    writeFileSync(
-      path.join(baseDir, "config", "patchrelay.yaml"),
-      `
-server:
-  bind: 127.0.0.1
-  port: 8787
-ingress:
-  linear_webhook_path: /webhooks/linear
-  max_body_bytes: 262144
-  max_timestamp_skew_seconds: 60
-logging:
-  file_path: ./patchrelay.log
-database:
-  path: ./data/patchrelay.sqlite
-linear:
-  webhook_secret_env: REQUIRED_SECRET
-${oauthConfigYaml}
-projects:
-  - id: one
-    repo_path: ${repoPath}
-    worktree_root: ${worktreeRoot}
-    workflows:
-      - id: development
-        when_state: Start
-        active_state: Implementing
-        workflow_file: IMPLEMENTATION_WORKFLOW.md
-        fallback_state: Human Needed
-      - id: qa-review
-        when_state: QA Review
-        active_state: In QA
-        workflow_file: custom/REVIEW.md
-        fallback_state: Human Needed
-      - id: release
-        when_state: Release
-        active_state: Releasing
-        workflow_file: automation/DEPLOY.md
-        fallback_state: Human Needed
-      - id: cleanup
-        when_state: Wrap Up
-        active_state: Cleaning Up
-        workflow_file: automation/CLEANUP.md
-        fallback_state: Human Needed
-    trigger_events: [statusChanged]
-    branch_prefix: one
-`,
-      "utf8",
-    );
+    writeConfigFixture(path.join(baseDir, "config", "patchrelay.json"), {
+      server: {
+        bind: "127.0.0.1",
+        port: 8787,
+      },
+      ingress: {
+        linear_webhook_path: "/webhooks/linear",
+        max_body_bytes: 262144,
+        max_timestamp_skew_seconds: 60,
+      },
+      logging: {
+        file_path: "./patchrelay.log",
+      },
+      database: {
+        path: "./data/patchrelay.sqlite",
+      },
+      linear: {
+        webhook_secret_env: "REQUIRED_SECRET",
+        ...oauthConfig,
+      },
+      projects: [
+        {
+          id: "one",
+          repo_path: repoPath,
+          worktree_root: worktreeRoot,
+          workflows: [
+            {
+              id: "development",
+              when_state: "Start",
+              active_state: "Implementing",
+              workflow_file: "IMPLEMENTATION_WORKFLOW.md",
+              fallback_state: "Human Needed",
+            },
+            {
+              id: "qa-review",
+              when_state: "QA Review",
+              active_state: "In QA",
+              workflow_file: "custom/REVIEW.md",
+              fallback_state: "Human Needed",
+            },
+            {
+              id: "release",
+              when_state: "Release",
+              active_state: "Releasing",
+              workflow_file: "automation/DEPLOY.md",
+              fallback_state: "Human Needed",
+            },
+            {
+              id: "cleanup",
+              when_state: "Wrap Up",
+              active_state: "Cleaning Up",
+              workflow_file: "automation/CLEANUP.md",
+              fallback_state: "Human Needed",
+            },
+          ],
+          trigger_events: ["statusChanged"],
+          branch_prefix: "one",
+        },
+      ],
+    });
 
     withEnv(
       {
-        PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.yaml"),
+        PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.json"),
         REQUIRED_SECRET: "top-secret",
         ...oauthEnv,
       },
@@ -718,45 +775,54 @@ test("loadConfig rejects duplicate workflow ids and duplicate trigger states per
     mkdirSync(path.join(baseDir, "config"), { recursive: true });
     mkdirSync(repoPath, { recursive: true });
     mkdirSync(worktreeRoot, { recursive: true });
-    writeFileSync(
-      path.join(baseDir, "config", "patchrelay.yaml"),
-      `
-server:
-  bind: 127.0.0.1
-  port: 8787
-ingress:
-  linear_webhook_path: /webhooks/linear
-  max_body_bytes: 262144
-  max_timestamp_skew_seconds: 60
-logging:
-  file_path: ./patchrelay.log
-database:
-  path: ./data/patchrelay.sqlite
-linear:
-  webhook_secret_env: REQUIRED_SECRET
-${oauthConfigYaml}
-projects:
-  - id: usertold
-    repo_path: ${repoPath}
-    worktree_root: ${worktreeRoot}
-    workflows:
-      - id: development
-        when_state: Start
-        active_state: Implementing
-        workflow_file: IMPLEMENTATION_WORKFLOW.md
-      - id: development
-        when_state: Review
-        active_state: Reviewing
-        workflow_file: REVIEW_WORKFLOW.md
-    trigger_events: [statusChanged]
-    branch_prefix: use
-`,
-      "utf8",
-    );
+    writeConfigFixture(path.join(baseDir, "config", "patchrelay.json"), {
+      server: {
+        bind: "127.0.0.1",
+        port: 8787,
+      },
+      ingress: {
+        linear_webhook_path: "/webhooks/linear",
+        max_body_bytes: 262144,
+        max_timestamp_skew_seconds: 60,
+      },
+      logging: {
+        file_path: "./patchrelay.log",
+      },
+      database: {
+        path: "./data/patchrelay.sqlite",
+      },
+      linear: {
+        webhook_secret_env: "REQUIRED_SECRET",
+        ...oauthConfig,
+      },
+      projects: [
+        {
+          id: "usertold",
+          repo_path: repoPath,
+          worktree_root: worktreeRoot,
+          workflows: [
+            {
+              id: "development",
+              when_state: "Start",
+              active_state: "Implementing",
+              workflow_file: "IMPLEMENTATION_WORKFLOW.md",
+            },
+            {
+              id: "development",
+              when_state: "Review",
+              active_state: "Reviewing",
+              workflow_file: "REVIEW_WORKFLOW.md",
+            },
+          ],
+          trigger_events: ["statusChanged"],
+          branch_prefix: "use",
+        },
+      ],
+    });
 
     withEnv(
       {
-        PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.yaml"),
+        PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.json"),
         REQUIRED_SECRET: "top-secret",
         ...oauthEnv,
       },
@@ -776,42 +842,47 @@ test("loadConfig rejects OAuth redirect URIs with a nonstandard callback path", 
     mkdirSync(path.join(baseDir, "config"), { recursive: true });
     mkdirSync(path.join(baseDir, "repo"), { recursive: true });
     mkdirSync(path.join(baseDir, "worktrees"), { recursive: true });
-    writeFileSync(
-      path.join(baseDir, "config", "patchrelay.yaml"),
-      `
-server:
-  bind: 127.0.0.1
-  port: 8787
-ingress:
-  linear_webhook_path: /webhooks/linear
-  max_body_bytes: 262144
-  max_timestamp_skew_seconds: 60
-logging:
-  file_path: ./patchrelay.log
-database:
-  path: ./data/patchrelay.sqlite
-linear:
-  webhook_secret_env: REQUIRED_SECRET
-  token_encryption_key_env: PATCHRELAY_TOKEN_ENCRYPTION_KEY
-  oauth:
-    client_id_env: LINEAR_OAUTH_CLIENT_ID
-    client_secret_env: LINEAR_OAUTH_CLIENT_SECRET
-    redirect_uri: https://patchrelay.example.com/not-the-fixed-path
-    scopes: [read, write]
-    actor: app
-projects:
-  - id: usertold
-    repo_path: ./repo
-    worktree_root: ./worktrees
-    trigger_events: [statusChanged]
-    branch_prefix: use
-`,
-      "utf8",
-    );
+    writeConfigFixture(path.join(baseDir, "config", "patchrelay.json"), {
+      server: {
+        bind: "127.0.0.1",
+        port: 8787,
+      },
+      ingress: {
+        linear_webhook_path: "/webhooks/linear",
+        max_body_bytes: 262144,
+        max_timestamp_skew_seconds: 60,
+      },
+      logging: {
+        file_path: "./patchrelay.log",
+      },
+      database: {
+        path: "./data/patchrelay.sqlite",
+      },
+      linear: {
+        webhook_secret_env: "REQUIRED_SECRET",
+        token_encryption_key_env: "PATCHRELAY_TOKEN_ENCRYPTION_KEY",
+        oauth: {
+          client_id_env: "LINEAR_OAUTH_CLIENT_ID",
+          client_secret_env: "LINEAR_OAUTH_CLIENT_SECRET",
+          redirect_uri: "https://patchrelay.example.com/not-the-fixed-path",
+          scopes: ["read", "write"],
+          actor: "app",
+        },
+      },
+      projects: [
+        {
+          id: "usertold",
+          repo_path: "./repo",
+          worktree_root: "./worktrees",
+          trigger_events: ["statusChanged"],
+          branch_prefix: "use",
+        },
+      ],
+    });
 
     withEnv(
       {
-        PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.yaml"),
+        PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.json"),
         REQUIRED_SECRET: "top-secret",
         ...oauthEnv,
       },
@@ -836,36 +907,40 @@ test("loadConfig applies built-in workflow conventions when workflow settings ar
     mkdirSync(path.join(baseDir, "config"), { recursive: true });
     mkdirSync(repoPath, { recursive: true });
     mkdirSync(worktreeRoot, { recursive: true });
-    writeFileSync(
-      path.join(baseDir, "config", "patchrelay.yaml"),
-      `
-server:
-  bind: 127.0.0.1
-  port: 8787
-ingress:
-  linear_webhook_path: /webhooks/linear
-  max_body_bytes: 262144
-  max_timestamp_skew_seconds: 60
-logging:
-  file_path: ./patchrelay.log
-database:
-  path: ./data/patchrelay.sqlite
-linear:
-  webhook_secret_env: REQUIRED_SECRET
-${oauthConfigYaml}
-projects:
-  - id: usertold
-    repo_path: ${repoPath}
-    worktree_root: ${worktreeRoot}
-    trigger_events: [statusChanged]
-    branch_prefix: use
-`,
-      "utf8",
-    );
+    writeConfigFixture(path.join(baseDir, "config", "patchrelay.json"), {
+      server: {
+        bind: "127.0.0.1",
+        port: 8787,
+      },
+      ingress: {
+        linear_webhook_path: "/webhooks/linear",
+        max_body_bytes: 262144,
+        max_timestamp_skew_seconds: 60,
+      },
+      logging: {
+        file_path: "./patchrelay.log",
+      },
+      database: {
+        path: "./data/patchrelay.sqlite",
+      },
+      linear: {
+        webhook_secret_env: "REQUIRED_SECRET",
+        ...oauthConfig,
+      },
+      projects: [
+        {
+          id: "usertold",
+          repo_path: repoPath,
+          worktree_root: worktreeRoot,
+          trigger_events: ["statusChanged"],
+          branch_prefix: "use",
+        },
+      ],
+    });
 
     withEnv(
       {
-        PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.yaml"),
+        PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.json"),
         REQUIRED_SECRET: "top-secret",
         ...oauthEnv,
       },
@@ -917,45 +992,54 @@ test("loadConfig rejects duplicate workflow trigger states within a project", ()
     mkdirSync(path.join(baseDir, "config"), { recursive: true });
     mkdirSync(repoPath, { recursive: true });
     mkdirSync(worktreeRoot, { recursive: true });
-    writeFileSync(
-      path.join(baseDir, "config", "patchrelay.yaml"),
-      `
-server:
-  bind: 127.0.0.1
-  port: 8787
-ingress:
-  linear_webhook_path: /webhooks/linear
-  max_body_bytes: 262144
-  max_timestamp_skew_seconds: 60
-logging:
-  file_path: ./patchrelay.log
-database:
-  path: ./data/patchrelay.sqlite
-linear:
-  webhook_secret_env: REQUIRED_SECRET
-${oauthConfigYaml}
-projects:
-  - id: one
-    repo_path: ${repoPath}
-    worktree_root: ${worktreeRoot}
-    workflows:
-      - id: review
-        when_state: Review
-        active_state: Reviewing
-        workflow_file: REVIEW_WORKFLOW.md
-      - id: qa
-        when_state: Review
-        active_state: Running QA
-        workflow_file: QA_WORKFLOW.md
-    trigger_events: [statusChanged]
-    branch_prefix: one
-`,
-      "utf8",
-    );
+    writeConfigFixture(path.join(baseDir, "config", "patchrelay.json"), {
+      server: {
+        bind: "127.0.0.1",
+        port: 8787,
+      },
+      ingress: {
+        linear_webhook_path: "/webhooks/linear",
+        max_body_bytes: 262144,
+        max_timestamp_skew_seconds: 60,
+      },
+      logging: {
+        file_path: "./patchrelay.log",
+      },
+      database: {
+        path: "./data/patchrelay.sqlite",
+      },
+      linear: {
+        webhook_secret_env: "REQUIRED_SECRET",
+        ...oauthConfig,
+      },
+      projects: [
+        {
+          id: "one",
+          repo_path: repoPath,
+          worktree_root: worktreeRoot,
+          workflows: [
+            {
+              id: "review",
+              when_state: "Review",
+              active_state: "Reviewing",
+              workflow_file: "REVIEW_WORKFLOW.md",
+            },
+            {
+              id: "qa",
+              when_state: "Review",
+              active_state: "Running QA",
+              workflow_file: "QA_WORKFLOW.md",
+            },
+          ],
+          trigger_events: ["statusChanged"],
+          branch_prefix: "one",
+        },
+      ],
+    });
 
     withEnv(
       {
-        PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.yaml"),
+        PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.json"),
         REQUIRED_SECRET: "top-secret",
         ...oauthEnv,
       },
@@ -973,45 +1057,52 @@ test("loadConfig rejects overlapping project routing and unsafe operator API exp
 
   try {
     mkdirSync(path.join(baseDir, "config"), { recursive: true });
-    writeFileSync(
-      path.join(baseDir, "config", "patchrelay.yaml"),
-      `
-server:
-  bind: 0.0.0.0
-  port: 8787
-ingress:
-  linear_webhook_path: /webhooks/linear
-  max_body_bytes: 262144
-  max_timestamp_skew_seconds: 60
-logging:
-  file_path: ./patchrelay.log
-database:
-  path: ./data/patchrelay.sqlite
-linear:
-  webhook_secret_env: REQUIRED_SECRET
-${oauthConfigYaml}
-operator_api:
-  enabled: true
-projects:
-  - id: one
-    repo_path: ./repo-one
-    worktree_root: ./worktrees-one
-    issue_key_prefixes: [USE]
-    trigger_events: [statusChanged]
-    branch_prefix: use
-  - id: two
-    repo_path: ./repo-two
-    worktree_root: ./worktrees-two
-    issue_key_prefixes: [USE]
-    trigger_events: [statusChanged]
-    branch_prefix: use2
-`,
-      "utf8",
-    );
+    writeConfigFixture(path.join(baseDir, "config", "patchrelay.json"), {
+      server: {
+        bind: "0.0.0.0",
+        port: 8787,
+      },
+      ingress: {
+        linear_webhook_path: "/webhooks/linear",
+        max_body_bytes: 262144,
+        max_timestamp_skew_seconds: 60,
+      },
+      logging: {
+        file_path: "./patchrelay.log",
+      },
+      database: {
+        path: "./data/patchrelay.sqlite",
+      },
+      linear: {
+        webhook_secret_env: "REQUIRED_SECRET",
+        ...oauthConfig,
+      },
+      operator_api: {
+        enabled: true,
+      },
+      projects: [
+        {
+          id: "one",
+          repo_path: "./repo-one",
+          worktree_root: "./worktrees-one",
+          issue_key_prefixes: ["USE"],
+          trigger_events: ["statusChanged"],
+          branch_prefix: "use",
+        },
+        {
+          id: "two",
+          repo_path: "./repo-two",
+          worktree_root: "./worktrees-two",
+          issue_key_prefixes: ["USE"],
+          trigger_events: ["statusChanged"],
+          branch_prefix: "use2",
+        },
+      ],
+    });
 
     withEnv(
       {
-        PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.yaml"),
+        PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.json"),
         REQUIRED_SECRET: "top-secret",
         ...oauthEnv,
       },
@@ -1029,38 +1120,43 @@ test("loadConfig rejects operator API exposure without a bearer token outside lo
 
   try {
     mkdirSync(path.join(baseDir, "config"), { recursive: true });
-    writeFileSync(
-      path.join(baseDir, "config", "patchrelay.yaml"),
-      `
-server:
-  bind: 0.0.0.0
-  port: 8787
-ingress:
-  linear_webhook_path: /webhooks/linear
-  max_body_bytes: 262144
-  max_timestamp_skew_seconds: 60
-logging:
-  file_path: ./patchrelay.log
-database:
-  path: ./data/patchrelay.sqlite
-linear:
-  webhook_secret_env: REQUIRED_SECRET
-${oauthConfigYaml}
-operator_api:
-  enabled: true
-projects:
-  - id: usertold
-    repo_path: ./repo
-    worktree_root: ./worktrees
-    trigger_events: [statusChanged]
-    branch_prefix: use
-`,
-      "utf8",
-    );
+    writeConfigFixture(path.join(baseDir, "config", "patchrelay.json"), {
+      server: {
+        bind: "0.0.0.0",
+        port: 8787,
+      },
+      ingress: {
+        linear_webhook_path: "/webhooks/linear",
+        max_body_bytes: 262144,
+        max_timestamp_skew_seconds: 60,
+      },
+      logging: {
+        file_path: "./patchrelay.log",
+      },
+      database: {
+        path: "./data/patchrelay.sqlite",
+      },
+      linear: {
+        webhook_secret_env: "REQUIRED_SECRET",
+        ...oauthConfig,
+      },
+      operator_api: {
+        enabled: true,
+      },
+      projects: [
+        {
+          id: "usertold",
+          repo_path: "./repo",
+          worktree_root: "./worktrees",
+          trigger_events: ["statusChanged"],
+          branch_prefix: "use",
+        },
+      ],
+    });
 
     withEnv(
       {
-        PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.yaml"),
+        PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.json"),
         REQUIRED_SECRET: "top-secret",
         ...oauthEnv,
       },
@@ -1083,39 +1179,44 @@ test("loadConfig supports trusted actor names and domains", () => {
 
   try {
     mkdirSync(path.join(baseDir, "config"), { recursive: true });
-    writeFileSync(
-      path.join(baseDir, "config", "patchrelay.yaml"),
-      `
-server:
-  bind: 127.0.0.1
-  port: 8787
-ingress:
-  linear_webhook_path: /webhooks/linear
-  max_body_bytes: 262144
-  max_timestamp_skew_seconds: 60
-logging:
-  file_path: ./patchrelay.log
-database:
-  path: ./data/patchrelay.sqlite
-linear:
-  webhook_secret_env: REQUIRED_SECRET
-${oauthConfigYaml}
-projects:
-  - id: one
-    repo_path: ./repo
-    worktree_root: ./worktrees
-    trusted_actors:
-      names: [Owner Name]
-      email_domains: [trusted.example]
-    trigger_events: [statusChanged]
-    branch_prefix: use
-`,
-      "utf8",
-    );
+    writeConfigFixture(path.join(baseDir, "config", "patchrelay.json"), {
+      server: {
+        bind: "127.0.0.1",
+        port: 8787,
+      },
+      ingress: {
+        linear_webhook_path: "/webhooks/linear",
+        max_body_bytes: 262144,
+        max_timestamp_skew_seconds: 60,
+      },
+      logging: {
+        file_path: "./patchrelay.log",
+      },
+      database: {
+        path: "./data/patchrelay.sqlite",
+      },
+      linear: {
+        webhook_secret_env: "REQUIRED_SECRET",
+        ...oauthConfig,
+      },
+      projects: [
+        {
+          id: "one",
+          repo_path: "./repo",
+          worktree_root: "./worktrees",
+          trusted_actors: {
+            names: ["Owner Name"],
+            email_domains: ["trusted.example"],
+          },
+          trigger_events: ["statusChanged"],
+          branch_prefix: "use",
+        },
+      ],
+    });
 
     withEnv(
       {
-        PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.yaml"),
+        PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.json"),
         REQUIRED_SECRET: "top-secret",
         ...oauthEnv,
       },
@@ -1139,39 +1240,45 @@ test("loadConfig only requires service secrets in the service profile", () => {
 
   try {
     mkdirSync(path.join(baseDir, "config"), { recursive: true });
-    writeFileSync(
-      path.join(baseDir, "config", "patchrelay.yaml"),
-      `
-server:
-  bind: 127.0.0.1
-  port: 8787
-ingress:
-  linear_webhook_path: /webhooks/linear
-  max_body_bytes: 262144
-  max_timestamp_skew_seconds: 60
-logging:
-  file_path: ./patchrelay.log
-database:
-  path: ./data/patchrelay.sqlite
-linear:
-  webhook_secret_env: REQUIRED_SECRET
-${oauthConfigYaml}
-projects:
-  - id: usertold
-    repo_path: ./repo
-    worktree_root: ./worktrees
-    trigger_events: [statusChanged]
-    branch_prefix: use
-runner:
-  codex:
-    source_bashrc: false
-`,
-      "utf8",
-    );
+    writeConfigFixture(path.join(baseDir, "config", "patchrelay.json"), {
+      server: {
+        bind: "127.0.0.1",
+        port: 8787,
+      },
+      ingress: {
+        linear_webhook_path: "/webhooks/linear",
+        max_body_bytes: 262144,
+        max_timestamp_skew_seconds: 60,
+      },
+      logging: {
+        file_path: "./patchrelay.log",
+      },
+      database: {
+        path: "./data/patchrelay.sqlite",
+      },
+      linear: {
+        webhook_secret_env: "REQUIRED_SECRET",
+        ...oauthConfig,
+      },
+      projects: [
+        {
+          id: "usertold",
+          repo_path: "./repo",
+          worktree_root: "./worktrees",
+          trigger_events: ["statusChanged"],
+          branch_prefix: "use",
+        },
+      ],
+      runner: {
+        codex: {
+          source_bashrc: false,
+        },
+      },
+    });
 
     withEnv(
       {
-        PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.yaml"),
+        PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.json"),
         REQUIRED_SECRET: undefined,
         ...oauthEnv,
       },

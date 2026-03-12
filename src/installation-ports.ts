@@ -1,5 +1,7 @@
 import type { LinearInstallationRecord, OAuthStateRecord, ProjectInstallationRecord } from "./types.ts";
 
+// Installation and OAuth records are authoritative state because PatchRelay owns
+// the credential linkage between a local project and a Linear installation.
 export interface LinearInstallationStore {
   upsertLinearInstallation(params: {
     workspaceId?: string;

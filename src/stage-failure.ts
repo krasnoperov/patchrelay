@@ -4,6 +4,7 @@ import {
   resolveFallbackLinearState,
   resolveWorkflowLabelCleanup,
 } from "./linear-workflow.ts";
+import type { IssueControlStoreProvider } from "./ledger-ports.ts";
 import type { IssueWorkflowLifecycleStoreProvider } from "./workflow-ports.ts";
 import type { LinearClientProvider, ProjectConfig, StageRunRecord, TrackedIssueRecord } from "./types.ts";
 
@@ -13,7 +14,7 @@ function normalizeStateName(value: string | undefined): string | undefined {
 }
 
 export async function syncFailedStageToLinear(params: {
-  stores: IssueWorkflowLifecycleStoreProvider;
+  stores: IssueWorkflowLifecycleStoreProvider & IssueControlStoreProvider;
   linearProvider: LinearClientProvider;
   project: ProjectConfig;
   issue: TrackedIssueRecord;
@@ -67,6 +68,13 @@ export async function syncFailedStageToLinear(params: {
       statusCommentId: params.issue.statusCommentId ?? null,
       lifecycleStatus: "failed",
     });
+    params.stores.issueControl.upsertIssueControl({
+      projectId: params.stageRun.projectId,
+      linearIssueId: params.stageRun.linearIssueId,
+      lifecycleStatus: "failed",
+      ...(params.issue.statusCommentId ? { serviceOwnedCommentId: params.issue.statusCommentId } : {}),
+      ...(params.issue.activeAgentSessionId ? { activeAgentSessionId: params.issue.activeAgentSessionId } : {}),
+    });
   }
 
   const result = await linear
@@ -84,6 +92,13 @@ export async function syncFailedStageToLinear(params: {
     .catch(() => undefined);
   if (result) {
     params.stores.issueWorkflows.setIssueStatusComment(params.stageRun.projectId, params.stageRun.linearIssueId, result.id);
+    params.stores.issueControl.upsertIssueControl({
+      projectId: params.stageRun.projectId,
+      linearIssueId: params.stageRun.linearIssueId,
+      serviceOwnedCommentId: result.id,
+      lifecycleStatus: "failed",
+      ...(params.issue.activeAgentSessionId ? { activeAgentSessionId: params.issue.activeAgentSessionId } : {}),
+    });
   }
 
   if (params.issue.activeAgentSessionId) {

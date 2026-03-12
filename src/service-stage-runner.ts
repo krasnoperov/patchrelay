@@ -1,7 +1,13 @@
 import type { Logger } from "pino";
 import type { CodexAppServerClient } from "./codex-app-server.ts";
-import type { StageEventQueryStoreProvider, StageTurnInputStoreProvider } from "./stage-event-ports.ts";
-import type { IssueWorkflowExecutionStoreProvider, IssueWorkflowLifecycleStoreProvider } from "./workflow-ports.ts";
+import type {
+  EventReceiptStoreProvider,
+  IssueControlStoreProvider,
+  ObligationStoreProvider,
+  RunLeaseStoreProvider,
+  WorkspaceOwnershipStoreProvider,
+} from "./ledger-ports.ts";
+import type { IssueWorkflowExecutionStoreProvider, IssueWorkflowLifecycleStoreProvider, IssueWorkflowWebhookStoreProvider } from "./workflow-ports.ts";
 import { buildStageLaunchPlan, isCodexThreadId } from "./stage-launch.ts";
 import { syncFailedStageToLinear } from "./stage-failure.ts";
 import { buildFailedStageReport } from "./stage-reporting.ts";
@@ -19,17 +25,24 @@ export class ServiceStageRunner {
   private readonly worktreeManager: WorktreeManager;
   private readonly inputDispatcher: StageTurnInputDispatcher;
   private readonly lifecyclePublisher: StageLifecyclePublisher;
+  private readonly runAtomically: <T>(fn: () => T) => T;
 
   constructor(
     private readonly config: AppConfig,
     private readonly stores: IssueWorkflowExecutionStoreProvider &
       IssueWorkflowLifecycleStoreProvider &
-      StageTurnInputStoreProvider &
-      StageEventQueryStoreProvider,
+      IssueWorkflowWebhookStoreProvider &
+      EventReceiptStoreProvider &
+      IssueControlStoreProvider &
+      ObligationStoreProvider &
+      WorkspaceOwnershipStoreProvider &
+      RunLeaseStoreProvider,
     private readonly codex: CodexAppServerClient,
     private readonly linearProvider: LinearClientProvider,
     private readonly logger: Logger,
+    runAtomically: <T>(fn: () => T) => T = (fn) => fn(),
   ) {
+    this.runAtomically = runAtomically;
     this.worktreeManager = new WorktreeManager(config);
     this.inputDispatcher = new StageTurnInputDispatcher(stores, codex, logger);
     this.lifecyclePublisher = new StageLifecyclePublisher(config, stores, linearProvider, logger);
@@ -41,17 +54,28 @@ export class ServiceStageRunner {
       return;
     }
 
-    const issue = this.stores.issueWorkflows.getTrackedIssue(item.projectId, item.issueId);
-    if (!issue || !issue.desiredStage || !issue.desiredWebhookId || issue.activeStageRunId) {
+    const issueControl = this.stores.issueControl.getIssueControl(item.projectId, item.issueId);
+    if (!issueControl?.desiredStage || issueControl.activeRunLeaseId !== undefined) {
       return;
     }
 
-    const plan = buildStageLaunchPlan(project, issue, issue.desiredStage);
+    const receipt = issueControl.desiredReceiptId !== undefined ? this.stores.eventReceipts.getEventReceipt(issueControl.desiredReceiptId) : undefined;
+    if (!receipt?.externalId) {
+      return;
+    }
+    const desiredStage = issueControl.desiredStage;
+    const desiredWebhookId = receipt.externalId;
+    const issue = await this.ensureLaunchIssueMirror(project, item.issueId, desiredStage, desiredWebhookId);
+    if (!issue) {
+      return;
+    }
+
+    const plan = buildStageLaunchPlan(project, issue, desiredStage);
     const claim = this.stores.issueWorkflows.claimStageRun({
       projectId: item.projectId,
       linearIssueId: item.issueId,
-      stage: issue.desiredStage,
-      triggerWebhookId: issue.desiredWebhookId,
+      stage: desiredStage,
+      triggerWebhookId: desiredWebhookId,
       branchName: plan.branchName,
       worktreePath: plan.worktreePath,
       workflowFile: plan.workflowFile,
@@ -97,19 +121,15 @@ export class ServiceStageRunner {
       turnId: turn.turnId,
     });
 
-    this.inputDispatcher.routePendingInputs(claim.stageRun.id, threadLaunch.threadId, turn.turnId);
-    const pendingLaunchInput = this.stores.issueWorkflows.consumeIssuePendingLaunchInput(item.projectId, item.issueId);
-    if (pendingLaunchInput) {
-      this.stores.stageEvents.enqueueTurnInput({
-        stageRunId: claim.stageRun.id,
+    this.inputDispatcher.routePendingInputs(claim.stageRun, threadLaunch.threadId, turn.turnId);
+    await this.inputDispatcher.flush(
+      {
+        id: claim.stageRun.id,
+        projectId: claim.stageRun.projectId,
+        linearIssueId: claim.stageRun.linearIssueId,
         threadId: threadLaunch.threadId,
         turnId: turn.turnId,
-        source: "linear-agent-launch",
-        body: pendingLaunchInput,
-      });
-    }
-    await this.inputDispatcher.flush(
-      { id: claim.stageRun.id, threadId: threadLaunch.threadId, turnId: turn.turnId },
+      },
       {
         logFailures: true,
         failureMessage: "Failed to deliver queued Linear comment during stage startup",
@@ -130,6 +150,37 @@ export class ServiceStageRunner {
       },
       "Started Codex stage run",
     );
+  }
+
+  private async ensureLaunchIssueMirror(
+    project: AppConfig["projects"][number],
+    linearIssueId: string,
+    _desiredStage: StageRunRecord["stage"],
+    _desiredWebhookId: string,
+  ): Promise<TrackedIssueRecord | undefined> {
+    const existing = this.stores.issueWorkflows.getTrackedIssue(project.id, linearIssueId);
+    if (existing?.issueKey && existing.title && existing.issueUrl && existing.currentLinearState) {
+      return existing;
+    }
+
+    const liveIssue = await this.linearProvider
+      .forProject(project.id)
+      .then((linear) => linear?.getIssue(linearIssueId))
+      .catch(() => undefined);
+
+    return this.stores.issueWorkflows.recordDesiredStage({
+      projectId: project.id,
+      linearIssueId,
+      ...(liveIssue?.identifier ? { issueKey: liveIssue.identifier } : existing?.issueKey ? { issueKey: existing.issueKey } : {}),
+      ...(liveIssue?.title ? { title: liveIssue.title } : existing?.title ? { title: existing.title } : {}),
+      ...(liveIssue?.url ? { issueUrl: liveIssue.url } : existing?.issueUrl ? { issueUrl: existing.issueUrl } : {}),
+      ...(liveIssue?.stateName
+        ? { currentLinearState: liveIssue.stateName }
+        : existing?.currentLinearState
+          ? { currentLinearState: existing.currentLinearState }
+          : {}),
+      lastWebhookAt: new Date().toISOString(),
+    });
   }
 
   private async launchStageThread(
@@ -182,12 +233,18 @@ export class ServiceStageRunner {
     threadId?: string,
   ): Promise<void> {
     const failureThreadId = threadId ?? `launch-failed-${stageRun.id}`;
-    this.stores.issueWorkflows.finishStageRun({
-      stageRunId: stageRun.id,
-      status: "failed",
-      threadId: failureThreadId,
-      summaryJson: JSON.stringify({ message }),
-      reportJson: JSON.stringify(buildFailedStageReport(stageRun, "failed", { threadId: failureThreadId })),
+    this.runAtomically(() => {
+      this.stores.issueWorkflows.finishStageRun({
+        stageRunId: stageRun.id,
+        status: "failed",
+        threadId: failureThreadId,
+        summaryJson: JSON.stringify({ message }),
+        reportJson: JSON.stringify(buildFailedStageReport(stageRun, "failed", { threadId: failureThreadId })),
+      });
+      this.finishRunLease(stageRun.projectId, stageRun.linearIssueId, "failed", {
+        threadId: failureThreadId,
+        failureReason: message,
+      });
     });
 
     await syncFailedStageToLinear({
@@ -201,6 +258,50 @@ export class ServiceStageRunner {
       },
       message,
       mode: "launch",
+    });
+  }
+
+  private finishRunLease(
+    projectId: string,
+    linearIssueId: string,
+    status: "failed",
+    params: { threadId?: string; turnId?: string; failureReason?: string },
+  ): void {
+    const issueControl = this.stores.issueControl.getIssueControl(projectId, linearIssueId);
+    if (!issueControl?.activeRunLeaseId) {
+      return;
+    }
+
+    this.stores.runLeases.finishRunLease({
+      runLeaseId: issueControl.activeRunLeaseId,
+      status,
+      ...(params.threadId ? { threadId: params.threadId } : {}),
+      ...(params.turnId ? { turnId: params.turnId } : {}),
+      ...(params.failureReason ? { failureReason: params.failureReason } : {}),
+    });
+    if (issueControl.activeWorkspaceOwnershipId !== undefined) {
+      const workspace = this.stores.workspaceOwnership.getWorkspaceOwnership(issueControl.activeWorkspaceOwnershipId);
+      if (workspace) {
+        this.stores.workspaceOwnership.upsertWorkspaceOwnership({
+          projectId,
+          linearIssueId,
+          branchName: workspace.branchName,
+          worktreePath: workspace.worktreePath,
+          status: "paused",
+          currentRunLeaseId: null,
+        });
+      }
+    }
+    this.stores.issueControl.upsertIssueControl({
+      projectId,
+      linearIssueId,
+      activeRunLeaseId: null,
+      lifecycleStatus: "failed",
+      ...(issueControl.activeWorkspaceOwnershipId !== undefined
+        ? { activeWorkspaceOwnershipId: issueControl.activeWorkspaceOwnershipId }
+        : {}),
+      ...(issueControl.serviceOwnedCommentId ? { serviceOwnedCommentId: issueControl.serviceOwnedCommentId } : {}),
+      ...(issueControl.activeAgentSessionId ? { activeAgentSessionId: issueControl.activeAgentSessionId } : {}),
     });
   }
 }

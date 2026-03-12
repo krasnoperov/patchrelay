@@ -1,6 +1,23 @@
 import js from "@eslint/js";
-import globals from "globals";
 import tseslint from "typescript-eslint";
+
+const nodeGlobals = {
+  AbortController: "readonly",
+  AbortSignal: "readonly",
+  Buffer: "readonly",
+  URL: "readonly",
+  URLSearchParams: "readonly",
+  clearImmediate: "readonly",
+  clearInterval: "readonly",
+  clearTimeout: "readonly",
+  console: "readonly",
+  fetch: "readonly",
+  process: "readonly",
+  setImmediate: "readonly",
+  setInterval: "readonly",
+  setTimeout: "readonly",
+  structuredClone: "readonly",
+};
 
 export default tseslint.config(
   {
@@ -12,7 +29,7 @@ export default tseslint.config(
       ecmaVersion: "latest",
       sourceType: "module",
       globals: {
-        ...globals.node,
+        ...nodeGlobals,
       },
     },
     ...js.configs.recommended,
@@ -23,7 +40,7 @@ export default tseslint.config(
       ecmaVersion: "latest",
       sourceType: "module",
       globals: {
-        ...globals.node,
+        ...nodeGlobals,
       },
     },
     extends: [js.configs.recommended, ...tseslint.configs.recommended],

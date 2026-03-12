@@ -1,5 +1,5 @@
 import type { CodexAppServerClient } from "./codex-app-server.ts";
-import type { StageEventQueryStoreProvider } from "./stage-event-ports.ts";
+import type { StageEventLogStoreProvider } from "./stage-event-ports.ts";
 import type { IssueWorkflowQueryStoreProvider } from "./workflow-ports.ts";
 import { summarizeCurrentThread } from "./stage-reporting.ts";
 import type { StageReport } from "./types.ts";
@@ -8,7 +8,7 @@ import type { ServiceStageFinalizer } from "./service-stage-finalizer.ts";
 
 export class IssueQueryService {
   constructor(
-    private readonly stores: IssueWorkflowQueryStoreProvider & StageEventQueryStoreProvider,
+    private readonly stores: IssueWorkflowQueryStoreProvider & StageEventLogStoreProvider,
     private readonly codex: CodexAppServerClient,
     private readonly stageFinalizer: Pick<ServiceStageFinalizer, "getActiveStageStatus">,
   ) {}
@@ -19,16 +19,21 @@ export class IssueQueryService {
       return undefined;
     }
 
+    const activeStatus = await this.stageFinalizer.getActiveStageStatus(issueKey);
+    const activeStageRun = activeStatus?.stageRun ?? result.activeStageRun;
     const latestStageRun = this.stores.issueWorkflows.getLatestStageRunForIssue(result.issue.projectId, result.issue.linearIssueId);
     let liveThread;
-    if (result.activeStageRun?.threadId) {
-      liveThread = await this.codex.readThread(result.activeStageRun.threadId, true).catch(() => undefined);
+    if (activeStatus?.liveThread) {
+      liveThread = activeStatus.liveThread;
+    } else if (activeStageRun?.threadId) {
+      liveThread = await this.codex.readThread(activeStageRun.threadId, true).then(summarizeCurrentThread).catch(() => undefined);
     }
 
     return {
       ...result,
+      ...(activeStageRun ? { activeStageRun } : {}),
       ...(latestStageRun ? { latestStageRun } : {}),
-      ...(liveThread ? { liveThread: summarizeCurrentThread(liveThread) } : {}),
+      ...(liveThread ? { liveThread } : {}),
     };
   }
 

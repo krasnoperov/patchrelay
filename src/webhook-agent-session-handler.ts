@@ -1,4 +1,5 @@
-import type { StageEventQueryStoreProvider } from "./stage-event-ports.ts";
+import { createHash } from "node:crypto";
+import type { IssueControlStoreProvider, ObligationStoreProvider, RunLeaseStoreProvider } from "./ledger-ports.ts";
 import type { IssueWorkflowWebhookStoreProvider } from "./workflow-ports.ts";
 import type { StageAgentActivityPublisher } from "./stage-agent-activity-publisher.ts";
 import type { StageTurnInputDispatcher } from "./stage-turn-input-dispatcher.ts";
@@ -13,7 +14,10 @@ function trimPrompt(value: string | undefined): string | undefined {
 
 export class AgentSessionWebhookHandler {
   constructor(
-    private readonly stores: IssueWorkflowWebhookStoreProvider & StageEventQueryStoreProvider,
+    private readonly stores: IssueWorkflowWebhookStoreProvider &
+      IssueControlStoreProvider &
+      ObligationStoreProvider &
+      RunLeaseStoreProvider,
     private readonly turnInputDispatcher: StageTurnInputDispatcher,
     private readonly agentActivity: StageAgentActivityPublisher,
   ) {}
@@ -32,15 +36,17 @@ export class AgentSessionWebhookHandler {
 
     const promptBody = trimPrompt(normalized.agentSession.promptBody);
     const promptContext = trimPrompt(normalized.agentSession.promptContext);
-    const activeStageRun = issue?.activeStageRunId ? this.stores.issueWorkflows.getStageRun(issue.activeStageRunId) : undefined;
+    const issueControl = normalized.issue ? this.stores.issueControl.getIssueControl(project.id, normalized.issue.id) : undefined;
+    const activeRunLease = issueControl?.activeRunLeaseId !== undefined ? this.stores.runLeases.getRunLease(issueControl.activeRunLeaseId) : undefined;
+    const activeStage = activeRunLease?.stage;
     const runnableWorkflow = normalized.issue?.stateName ? resolveWorkflowStage(project, normalized.issue.stateName) : undefined;
 
     if (normalized.triggerEvent === "agentSessionCreated") {
       if (!delegatedToPatchRelay) {
-        if (activeStageRun) {
+        if (activeStage) {
           await this.agentActivity.publishForSession(project.id, normalized.agentSession.id, {
             type: "thought",
-            body: `PatchRelay is already running the ${activeStageRun.stage} workflow for this issue. Delegate it to PatchRelay if you want automation to own the workflow, or keep replying here to steer the active run.`,
+            body: `PatchRelay is already running the ${activeStage} workflow for this issue. Delegate it to PatchRelay if you want automation to own the workflow, or keep replying here to steer the active run.`,
           });
           return;
         }
@@ -55,7 +61,7 @@ export class AgentSessionWebhookHandler {
         return;
       }
 
-      if (!desiredStage && !activeStageRun) {
+      if (!desiredStage && !activeStage) {
         const runnableStates = listRunnableStates(project).join(", ");
         await this.agentActivity.publishForSession(project.id, normalized.agentSession.id, {
           type: "elicitation",
@@ -72,10 +78,10 @@ export class AgentSessionWebhookHandler {
         return;
       }
 
-      if (activeStageRun) {
+      if (activeStage) {
         await this.agentActivity.publishForSession(project.id, normalized.agentSession.id, {
           type: "thought",
-          body: `PatchRelay is already running the ${activeStageRun.stage} workflow for this issue.`,
+          body: `PatchRelay is already running the ${activeStage} workflow for this issue.`,
         });
       }
       return;
@@ -89,21 +95,49 @@ export class AgentSessionWebhookHandler {
       return;
     }
 
-    if (activeStageRun && promptBody) {
-      this.stores.stageEvents.enqueueTurnInput({
-        stageRunId: activeStageRun.id,
-        ...(activeStageRun.threadId ? { threadId: activeStageRun.threadId } : {}),
-        ...(activeStageRun.turnId ? { turnId: activeStageRun.turnId } : {}),
-        source: `linear-agent-prompt:${normalized.agentSession.id}:${normalized.webhookId}`,
-        body: ["New Linear agent prompt received while you are working.", "", promptBody].join("\n"),
-      });
-      await this.turnInputDispatcher.flush(activeStageRun, {
-        ...(issue?.issueKey ? { issueKey: issue.issueKey } : {}),
-        failureMessage: "Failed to deliver queued Linear agent prompt to active Codex turn",
-      });
+    if (activeRunLease && promptBody) {
+      const dedupeKey = buildPromptDedupeKey(normalized.agentSession.id, promptBody);
+      if (
+        issueControl?.activeRunLeaseId !== undefined &&
+        this.stores.obligations.getObligationByDedupeKey({
+          runLeaseId: issueControl.activeRunLeaseId,
+          kind: "deliver_turn_input",
+          dedupeKey,
+        })
+      ) {
+        return;
+      }
+
+      const promptInput = ["New Linear agent prompt received while you are working.", "", promptBody].join("\n");
+      const source = `linear-agent-prompt:${normalized.agentSession.id}:${normalized.webhookId}`;
+      const obligationId = this.enqueueObligation(
+        project.id,
+        normalized.issue!.id,
+        activeRunLease.threadId,
+        activeRunLease.turnId,
+        source,
+        promptInput,
+        dedupeKey,
+      );
+      const flushResult = await this.turnInputDispatcher.flush(
+        {
+          id: issueControl?.activeRunLeaseId ?? 0,
+          projectId: project.id,
+          linearIssueId: normalized.issue!.id,
+          ...(activeRunLease.threadId ? { threadId: activeRunLease.threadId } : {}),
+          ...(activeRunLease.turnId ? { turnId: activeRunLease.turnId } : {}),
+        },
+        {
+          ...(issue?.issueKey ? { issueKey: issue.issueKey } : {}),
+          failureMessage: "Failed to deliver queued Linear agent prompt to active Codex turn",
+        },
+      );
       await this.agentActivity.publishForSession(project.id, normalized.agentSession.id, {
         type: "thought",
-        body: `PatchRelay routed your follow-up instructions into the active ${activeStageRun.stage} workflow.`,
+        body:
+          obligationId !== undefined && flushResult.deliveredObligationIds.includes(obligationId)
+            ? `PatchRelay routed your follow-up instructions into the active ${activeRunLease.stage} workflow.`
+            : `PatchRelay queued your follow-up instructions for delivery into the active ${activeRunLease.stage} workflow.`,
       });
       return;
     }
@@ -119,7 +153,7 @@ export class AgentSessionWebhookHandler {
       return;
     }
 
-    if (!activeStageRun && desiredStage) {
+    if (!activeRunLease && desiredStage) {
       await this.agentActivity.publishForSession(project.id, normalized.agentSession.id, {
         type: "thought",
         body: `PatchRelay received your prompt and is preparing the ${desiredStage} workflow.`,
@@ -127,7 +161,7 @@ export class AgentSessionWebhookHandler {
       return;
     }
 
-    if (!activeStageRun && !desiredStage && (promptBody || promptContext)) {
+    if (!activeRunLease && !desiredStage && (promptBody || promptContext)) {
       const runnableStates = listRunnableStates(project).join(", ");
       await this.agentActivity.publishForSession(project.id, normalized.agentSession.id, {
         type: "elicitation",
@@ -135,4 +169,42 @@ export class AgentSessionWebhookHandler {
       });
     }
   }
+
+  private enqueueObligation(
+    projectId: string,
+    linearIssueId: string,
+    threadId: string | undefined,
+    turnId: string | undefined,
+    source: string,
+    promptBody: string,
+    dedupeKey: string,
+  ): number | undefined {
+    const activeRunLeaseId = this.stores.issueControl.getIssueControl(projectId, linearIssueId)?.activeRunLeaseId;
+    if (activeRunLeaseId === undefined) {
+      return undefined;
+    }
+
+    const obligation = this.stores.obligations.enqueueObligation({
+      projectId,
+      linearIssueId,
+      kind: "deliver_turn_input",
+      source,
+      payloadJson: JSON.stringify({
+        body: promptBody,
+      }),
+      runLeaseId: activeRunLeaseId,
+      ...(threadId ? { threadId } : {}),
+      ...(turnId ? { turnId } : {}),
+      dedupeKey,
+    });
+    return obligation.id;
+  }
+}
+
+function buildPromptDedupeKey(agentSessionId: string, promptBody: string): string {
+  return `linear-agent-prompt:${agentSessionId}:${hashBody(promptBody)}`;
+}
+
+function hashBody(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
 }

@@ -79,7 +79,7 @@ It creates:
 
 - `~/.config/patchrelay/runtime.env`
 - `~/.config/patchrelay/service.env`
-- `~/.config/patchrelay/patchrelay.yaml`
+- `~/.config/patchrelay/patchrelay.json`
 - `~/.config/systemd/user/patchrelay.service`
 - `~/.config/systemd/user/patchrelay-reload.service`
 - `~/.config/systemd/user/patchrelay.path`
@@ -91,9 +91,41 @@ Default runtime paths are:
 - logs: `~/.local/state/patchrelay/patchrelay.log`
 - worktree roots: usually `~/.local/share/patchrelay/worktrees/<project>`
 
-The generated `patchrelay.yaml` stays intentionally minimal. In the default setup it only needs `server.public_base_url`; PatchRelay already has built-in defaults for the local bind address, database path, logs, worktree roots, workflow filenames, workflow states, and Codex runner settings.
+## Troubleshooting
 
-`patchrelay init` also installs the user service and a watcher that reload-or-restarts PatchRelay whenever `patchrelay.yaml`, `runtime.env`, or `service.env` changes.
+When something looks stuck or inconsistent, start with the local PatchRelay logs:
+
+- log file: `~/.local/state/patchrelay/patchrelay.log`
+- user service logs: `journalctl --user -u patchrelay.service -f`
+
+Use the log file when you want the persisted service history on disk. Use `journalctl` when you want the live user-service stream managed by systemd.
+
+Common places to look:
+
+- Linear did nothing after a state change, delegation, or mention:
+  check for webhook intake logs such as accepted, rejected, stale, or duplicate deliveries
+- the agent ignored a new Linear comment or prompt:
+  check for queued turn-input delivery logs and any `Failed to deliver queued Linear ... to active Codex turn` warnings
+- Codex execution looks broken or stops unexpectedly:
+  check for `Starting Codex app-server`, `Codex app-server request failed`, `Codex app-server stderr`, or `Codex app-server exited`
+- Codex finished but Linear comments, labels, or handoff state look wrong:
+  check for `Stage completed locally but PatchRelay could not finish the final Linear sync`
+
+The most useful correlation fields in logs are:
+
+- `webhookId`
+- `webhookEventId`
+- `projectId`
+- `issueKey`
+- `issueId`
+- `stageRunId`
+- `threadId`
+- `turnId`
+- `agentSessionId`
+
+The generated `patchrelay.json` stays intentionally minimal. In the default setup it only needs `server.public_base_url`; PatchRelay already has built-in defaults for the local bind address, database path, logs, worktree roots, workflow filenames, workflow states, and Codex runner settings.
+
+`patchrelay init` also installs the user service and a watcher that reload-or-restarts PatchRelay whenever `patchrelay.json`, `runtime.env`, or `service.env` changes.
 
 ## 3. Configure Machine-Level Secrets
 
@@ -115,13 +147,16 @@ For the Linear OAuth app settings and webhook categories, use [linear-agent-onbo
 
 ## 4. Configure Projects
 
-`patchrelay init` writes only the machine-level service config to `~/.config/patchrelay/patchrelay.yaml`.
+`patchrelay init` writes only the machine-level service config to `~/.config/patchrelay/patchrelay.json`.
 
 At the top level, configure the public HTTPS origin that Linear should use:
 
-```yaml
-server:
-  public_base_url: https://patchrelay.example.com
+```json
+{
+  "server": {
+    "public_base_url": "https://patchrelay.example.com"
+  }
+}
 ```
 
 Add repositories with `patchrelay project apply <id> <repo-path>`. A project only needs:

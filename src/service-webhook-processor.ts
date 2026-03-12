@@ -1,7 +1,8 @@
 import type { Logger } from "pino";
 import type { CodexAppServerClient } from "./codex-app-server.ts";
+import type { EventReceiptStoreProvider, IssueControlStoreProvider, ObligationStoreProvider, RunLeaseStoreProvider } from "./ledger-ports.ts";
 import type { LinearInstallationStoreProvider } from "./installation-ports.ts";
-import type { StageEventQueryStoreProvider, StageTurnInputStoreProvider } from "./stage-event-ports.ts";
+import type { StageEventLogStoreProvider } from "./stage-event-ports.ts";
 import type { IssueWorkflowWebhookStoreProvider } from "./workflow-ports.ts";
 import type { WebhookEventStoreProvider } from "./webhook-event-ports.ts";
 import { resolveProject, trustedActorAllowed } from "./project-resolution.ts";
@@ -25,10 +26,13 @@ export class ServiceWebhookProcessor {
   constructor(
     private readonly config: AppConfig,
     private readonly stores: WebhookEventStoreProvider &
+      EventReceiptStoreProvider &
+      IssueControlStoreProvider &
+      ObligationStoreProvider &
+      RunLeaseStoreProvider &
       IssueWorkflowWebhookStoreProvider &
       LinearInstallationStoreProvider &
-      StageTurnInputStoreProvider &
-      StageEventQueryStoreProvider,
+      StageEventLogStoreProvider,
     linearProvider: LinearClientProvider,
     codex: CodexAppServerClient,
     private readonly enqueueIssue: (projectId: IssueQueueItem["projectId"], issueId: IssueQueueItem["issueId"]) => void,
@@ -53,6 +57,7 @@ export class ServiceWebhookProcessor {
       const payload = safeJsonParse<LinearWebhookPayload>(event.payloadJson);
       if (!payload) {
         this.stores.webhookEvents.markWebhookProcessed(webhookEventId, "failed");
+        this.markEventReceiptProcessed(event.webhookId, "failed");
         throw new Error(`Stored webhook payload is invalid JSON: event ${webhookEventId}`);
       }
 
@@ -74,6 +79,7 @@ export class ServiceWebhookProcessor {
       if (!normalized.issue) {
         this.installationHandler.handle(normalized);
         this.stores.webhookEvents.markWebhookProcessed(webhookEventId, "processed");
+        this.markEventReceiptProcessed(event.webhookId, "processed");
         return;
       }
 
@@ -92,6 +98,7 @@ export class ServiceWebhookProcessor {
           "Ignoring webhook because no project route matched the Linear issue",
         );
         this.stores.webhookEvents.markWebhookProcessed(webhookEventId, "processed");
+        this.markEventReceiptProcessed(event.webhookId, "processed");
         return;
       }
 
@@ -108,11 +115,14 @@ export class ServiceWebhookProcessor {
           "Ignoring webhook from untrusted Linear actor",
         );
         this.stores.webhookEvents.markWebhookProcessed(webhookEventId, "processed");
+        this.assignEventReceiptContext(event.webhookId, project.id, normalized.issue.id);
+        this.markEventReceiptProcessed(event.webhookId, "processed");
         return;
       }
 
       this.stores.webhookEvents.assignWebhookProject(webhookEventId, project.id);
-      const issueState = this.desiredStageRecorder.record(project, normalized);
+      const receipt = this.ensureEventReceipt(event, project.id, normalized.issue.id);
+      const issueState = this.desiredStageRecorder.record(project, normalized, receipt ? { eventReceiptId: receipt.id } : undefined);
 
       await this.agentSessionHandler.handle({
         normalized,
@@ -124,6 +134,7 @@ export class ServiceWebhookProcessor {
       await this.commentHandler.handle(normalized, project);
 
       this.stores.webhookEvents.markWebhookProcessed(webhookEventId, "processed");
+      this.markEventReceiptProcessed(event.webhookId, "processed");
       if (issueState.desiredStage) {
         this.logger.info(
           {
@@ -155,6 +166,7 @@ export class ServiceWebhookProcessor {
       );
     } catch (error) {
       this.stores.webhookEvents.markWebhookProcessed(webhookEventId, "failed");
+      this.markEventReceiptProcessed(event.webhookId, "failed");
       const err = error instanceof Error ? error : new Error(String(error));
       this.logger.error(
         {
@@ -169,5 +181,53 @@ export class ServiceWebhookProcessor {
       );
       throw err;
     }
+  }
+
+  private assignEventReceiptContext(webhookId: string, projectId?: string, linearIssueId?: string): void {
+    const receipt = this.lookupEventReceipt(webhookId);
+    if (!receipt) {
+      return;
+    }
+    this.stores.eventReceipts.assignEventReceiptContext(receipt.id, {
+      ...(projectId ? { projectId } : {}),
+      ...(linearIssueId ? { linearIssueId } : {}),
+    });
+  }
+
+  private markEventReceiptProcessed(webhookId: string, status: "processed" | "failed"): void {
+    const receipt = this.lookupEventReceipt(webhookId);
+    if (!receipt) {
+      return;
+    }
+    this.stores.eventReceipts.markEventReceiptProcessed(receipt.id, status);
+  }
+
+  private lookupEventReceipt(webhookId: string) {
+    return this.stores.eventReceipts.getEventReceiptBySourceExternalId("linear-webhook", webhookId);
+  }
+
+  private ensureEventReceipt(
+    event: { webhookId: string; eventType: string; receivedAt: string; headersJson: string; payloadJson: string },
+    projectId?: string,
+    linearIssueId?: string,
+  ) {
+    const existing = this.lookupEventReceipt(event.webhookId);
+    if (existing) {
+      this.assignEventReceiptContext(event.webhookId, projectId, linearIssueId);
+      return existing;
+    }
+
+    const inserted = this.stores.eventReceipts.insertEventReceipt({
+      source: "linear-webhook",
+      externalId: event.webhookId,
+      eventType: event.eventType,
+      receivedAt: event.receivedAt,
+      acceptanceStatus: "accepted",
+      ...(projectId ? { projectId } : {}),
+      ...(linearIssueId ? { linearIssueId } : {}),
+      headersJson: event.headersJson,
+      payloadJson: event.payloadJson,
+    });
+    return this.stores.eventReceipts.getEventReceipt(inserted.id);
   }
 }

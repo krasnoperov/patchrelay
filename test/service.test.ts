@@ -67,6 +67,7 @@ class FakeCodexClient extends EventEmitter {
   readonly turns: Array<{ threadId: string; input: string }> = [];
   readonly steeredTurns: Array<{ threadId: string; turnId: string; input: string }> = [];
   readonly threads = new Map<string, CodexThreadSummary>();
+  steerError?: Error;
   private nextThreadNumber = 1;
   private nextTurnNumber = 1;
 
@@ -101,6 +102,9 @@ class FakeCodexClient extends EventEmitter {
   }
 
   async steerTurn(params: { threadId: string; turnId: string; input: string }): Promise<void> {
+    if (this.steerError) {
+      throw this.steerError;
+    }
     this.steeredTurns.push(params);
   }
 
@@ -112,13 +116,18 @@ class FakeCodexClient extends EventEmitter {
     this.threads.delete(threadId);
   }
 
-  completeThread(threadId: string, items: CodexThreadSummary["turns"][number]["items"]): void {
+  completeThread(
+    threadId: string,
+    items: CodexThreadSummary["turns"][number]["items"],
+    options?: { status?: "completed" | "failed" },
+  ): void {
     const thread = this.threads.get(threadId);
     assert.ok(thread);
+    const status = options?.status ?? "completed";
     thread.turns = [
       {
         id: "turn-final",
-        status: "completed",
+        status,
         items,
       },
     ];
@@ -128,7 +137,7 @@ class FakeCodexClient extends EventEmitter {
         threadId,
         turn: {
           id: "turn-final",
-          status: "completed",
+          status,
         },
       },
     });
@@ -152,9 +161,13 @@ class FakeLinearClient implements LinearClient {
   readonly stateTransitions: Array<{ issueId: string; stateName: string }> = [];
   readonly labelUpdates: Array<{ issueId: string; addNames: string[]; removeNames: string[] }> = [];
   failNextCommentUpsert = false;
+  getIssueError?: Error;
   private nextCommentNumber = 1;
   private nextAgentActivityNumber = 1;
   async getIssue(issueId: string): Promise<LinearIssueSnapshot> {
+    if (this.getIssueError) {
+      throw this.getIssueError;
+    }
     const existing = this.issues.get(issueId);
     if (existing) {
       return existing;
@@ -399,6 +412,93 @@ function installPatchRelayApp(db: PatchRelayDatabase, projectId = "usertold", ac
   return installation;
 }
 
+function ensureEventReceipt(
+  db: PatchRelayDatabase,
+  params: {
+    webhookId: string;
+    eventType?: string;
+    projectId: string;
+    linearIssueId: string;
+    receivedAt?: string;
+  },
+) {
+  const existing = db.eventReceipts.getEventReceiptBySourceExternalId("linear-webhook", params.webhookId);
+  if (existing) {
+    return existing;
+  }
+
+  const inserted = db.eventReceipts.insertEventReceipt({
+    source: "linear-webhook",
+    externalId: params.webhookId,
+    eventType: params.eventType ?? "legacy-test-event",
+    receivedAt: params.receivedAt ?? new Date().toISOString(),
+    acceptanceStatus: "accepted",
+    projectId: params.projectId,
+    linearIssueId: params.linearIssueId,
+  });
+  return db.eventReceipts.getEventReceipt(inserted.id)!;
+}
+
+function recordDesiredStageWithLedger(
+  db: PatchRelayDatabase,
+  params: {
+    projectId: string;
+    linearIssueId: string;
+    issueKey?: string;
+    title?: string;
+    issueUrl?: string;
+    currentLinearState?: string;
+    desiredStage?: "development" | "review" | "deploy" | "cleanup";
+    desiredWebhookId?: string;
+    lastWebhookAt: string;
+  },
+) {
+  const issue = db.issueWorkflows.recordDesiredStage(params);
+  const receipt =
+    params.desiredStage && params.desiredWebhookId
+      ? ensureEventReceipt(db, {
+          webhookId: params.desiredWebhookId,
+          projectId: params.projectId,
+          linearIssueId: params.linearIssueId,
+          receivedAt: params.lastWebhookAt,
+        })
+      : undefined;
+  db.issueControl.upsertIssueControl({
+    projectId: params.projectId,
+    linearIssueId: params.linearIssueId,
+    ...(params.desiredStage ? { desiredStage: params.desiredStage } : {}),
+    ...(receipt ? { desiredReceiptId: receipt.id } : {}),
+    ...(issue.statusCommentId ? { serviceOwnedCommentId: issue.statusCommentId } : {}),
+    ...(issue.activeAgentSessionId ? { activeAgentSessionId: issue.activeAgentSessionId } : {}),
+    lifecycleStatus: issue.lifecycleStatus,
+  });
+  return issue;
+}
+
+function enqueueLaunchInput(db: PatchRelayDatabase, projectId: string, linearIssueId: string, body: string, source = "linear-agent-launch:test") {
+  db.obligations.enqueueObligation({
+    projectId,
+    linearIssueId,
+    kind: "deliver_turn_input",
+    source,
+    payloadJson: JSON.stringify({ body }),
+  });
+}
+
+function getLatestInputObligation(db: PatchRelayDatabase, projectId: string, linearIssueId: string, source: string) {
+  return db.connection
+    .prepare(
+      `
+      SELECT *
+      FROM obligations
+      WHERE project_id = ? AND linear_issue_id = ? AND kind = 'deliver_turn_input' AND source = ?
+      ORDER BY id DESC
+      LIMIT 1
+      `,
+    )
+    .get(projectId, linearIssueId, source) as Record<string, unknown> | undefined;
+}
+
 async function flushQueues(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -476,7 +576,7 @@ test("service keeps one workspace and forks later stages from the prior thread",
     assert.equal(runningComment.includes(workspacePath), false);
     writeFileSync(path.join(workspacePath, "sentinel.txt"), "keep me\n", "utf8");
 
-    db.issueWorkflows.recordDesiredStage({
+    recordDesiredStageWithLedger(db, {
       projectId: "usertold",
       linearIssueId: "issue_1",
       issueKey: "USE-25",
@@ -815,7 +915,7 @@ test("service builds a read-only report from completed thread history", async ()
     const { db, codex, linear, service } = createService(baseDir);
     await service.start();
 
-    db.issueWorkflows.recordDesiredStage({
+    recordDesiredStageWithLedger(db, {
       projectId: "usertold",
       linearIssueId: "issue_2",
       issueKey: "USE-26",
@@ -892,13 +992,56 @@ test("service builds a read-only report from completed thread history", async ()
   }
 });
 
+test("service treats failed turn/completed notifications as stage failures", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-report-failed-completion-"));
+  try {
+    const { db, codex, linear, service } = createService(baseDir);
+    await service.start();
+
+    recordDesiredStageWithLedger(db, {
+      projectId: "usertold",
+      linearIssueId: "issue_2",
+      issueKey: "USE-26",
+      title: "Observe failed agent work",
+      issueUrl: "https://linear.app/example/issue/USE-26",
+      currentLinearState: "Start",
+      desiredStage: "development",
+      desiredWebhookId: "delivery-start-failed",
+      lastWebhookAt: new Date().toISOString(),
+    });
+
+    await service.processIssue({ projectId: "usertold", issueId: "issue_2" });
+    await flushQueues();
+
+    const issue = db.issueWorkflows.getTrackedIssue("usertold", "issue_2");
+    const stageRun = db.issueWorkflows.getStageRun(issue!.activeStageRunId!);
+    codex.completeThread(
+      stageRun!.threadId!,
+      [{ type: "agentMessage", id: "assistant-1", text: "I hit a failure." }],
+      { status: "failed" },
+    );
+    await flushQueues();
+
+    const refreshedIssue = db.issueWorkflows.getTrackedIssue("usertold", "issue_2");
+    const refreshedStageRun = db.issueWorkflows.getStageRun(stageRun!.id);
+    assert.equal(refreshedStageRun?.status, "failed");
+    assert.equal(refreshedIssue?.lifecycleStatus, "failed");
+    assert.equal(linear.issues.get("issue_2")?.stateName, "Human Needed");
+    assert.match(linear.comments.get(refreshedIssue?.statusCommentId ?? "")?.body ?? "", /stage-failed/);
+
+    service.stop();
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("service exposes raw stored events and live active status", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-live-"));
   try {
     const { db, codex, service } = createService(baseDir);
     await service.start();
 
-    db.issueWorkflows.recordDesiredStage({
+    recordDesiredStageWithLedger(db, {
       projectId: "usertold",
       linearIssueId: "issue_3",
       issueKey: "USE-27",
@@ -949,13 +1092,67 @@ test("service exposes raw stored events and live active status", async () => {
   }
 });
 
+test("service overview and live status stay ledger-backed when the legacy active pointer is missing", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-ledger-active-status-"));
+  try {
+    const { db, codex, service } = createService(baseDir);
+    await service.start();
+
+    recordDesiredStageWithLedger(db, {
+      projectId: "usertold",
+      linearIssueId: "issue-3",
+      issueKey: "USE-27",
+      title: "Inspect live status",
+      issueUrl: "https://linear.app/example/issue/USE-27",
+      currentLinearState: "Start",
+      desiredStage: "development",
+      desiredWebhookId: "delivery-start",
+      lastWebhookAt: new Date().toISOString(),
+    });
+
+    await service.processIssue({ projectId: "usertold", issueId: "issue-3" });
+    await flushQueues();
+
+    const issue = db.issueWorkflows.getTrackedIssue("usertold", "issue-3");
+    assert.ok(issue?.activeStageRunId);
+    const stageRun = db.issueWorkflows.getStageRun(issue.activeStageRunId);
+    assert.ok(stageRun?.threadId);
+
+    codex.threads.set(stageRun.threadId, {
+      ...codex.threads.get(stageRun.threadId)!,
+      status: "running",
+      turns: [
+        {
+          id: stageRun.turnId!,
+          status: "inProgress",
+          items: [{ type: "agentMessage", id: "assistant-ledger", text: "Continuing from the ledger lease." }],
+        },
+      ],
+    });
+
+    const overview = await service.getIssueOverview("USE-27");
+    assert.equal(overview?.activeStageRun?.stage, "development");
+    assert.equal(overview?.activeStageRun?.threadId, stageRun.threadId);
+    assert.equal(overview?.liveThread?.latestAgentMessage, "Continuing from the ledger lease.");
+
+    const live = await service.getActiveStageStatus("USE-27");
+    assert.equal(live?.stageRun.stage, "development");
+    assert.equal(live?.stageRun.threadId, stageRun.threadId);
+    assert.equal(live?.liveThread.latestAgentMessage, "Continuing from the ledger lease.");
+
+    service.stop();
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("service forwards new Linear comments into the active turn", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-comments-"));
   try {
     const { db, codex, service } = createService(baseDir);
     await service.start();
 
-    db.issueWorkflows.recordDesiredStage({
+    recordDesiredStageWithLedger(db, {
       projectId: "usertold",
       linearIssueId: "issue_3",
       issueKey: "USE-27",
@@ -1055,7 +1252,7 @@ test("service ignores webhook events from untrusted Linear actors", async () => 
     assert.equal(db.issueWorkflows.getTrackedIssue("usertold", "issue_3"), undefined);
     assert.equal(codex.startedThreads.length, 0);
 
-    db.issueWorkflows.recordDesiredStage({
+    recordDesiredStageWithLedger(db, {
       projectId: "usertold",
       linearIssueId: "issue_3",
       issueKey: "USE-27",
@@ -1178,7 +1375,6 @@ test("service preserves comments that arrive before thread startup finishes", as
       promptText: "Implement carefully.",
     });
     assert.ok(claim);
-
     linear.issues.set("issue_3", {
       ...linear.issues.get("issue_3")!,
       stateId: "implementing",
@@ -1214,7 +1410,12 @@ test("service preserves comments that arrive before thread startup finishes", as
     });
 
     await service.processWebhookEvent(event.id);
-    assert.equal(db.stageEvents.listPendingTurnInputs(claim.stageRun.id).length, 1);
+    const pendingBeforeStartup = db.obligations.listPendingObligations({
+      runLeaseId: claim.stageRun.id,
+      kind: "deliver_turn_input",
+    });
+    assert.equal(pendingBeforeStartup.length, 1);
+    assert.match(pendingBeforeStartup[0]?.payloadJson ?? "", /migration edge case/);
 
     db.issueWorkflows.updateStageRunThread({
       stageRunId: claim.stageRun.id,
@@ -1249,7 +1450,7 @@ test("service clears service-owned labels when the agent advances Linear state",
     const { db, codex, linear, service } = createService(baseDir);
     await service.start();
 
-    db.issueWorkflows.recordDesiredStage({
+    recordDesiredStageWithLedger(db, {
       projectId: "usertold",
       linearIssueId: "issue_2",
       issueKey: "USE-26",
@@ -1298,7 +1499,7 @@ test("service rolls Linear back to Human Needed when launch fails", async () => 
     };
     await service.start();
 
-    db.issueWorkflows.recordDesiredStage({
+    recordDesiredStageWithLedger(db, {
       projectId: "usertold",
       linearIssueId: "issue_2",
       issueKey: "USE-26",
@@ -1335,7 +1536,7 @@ test("service keeps the stage running when the status comment refresh fails afte
     linear.failNextCommentUpsert = true;
     await service.start();
 
-    db.issueWorkflows.recordDesiredStage({
+    recordDesiredStageWithLedger(db, {
       projectId: "usertold",
       linearIssueId: "issue_2",
       issueKey: "USE-31",
@@ -1477,6 +1678,531 @@ test("service startup reconciles finished and missing active threads", async () 
     const missingIssue = db.issueWorkflows.getTrackedIssue("usertold", "issue_5");
     assert.equal(missingIssue?.lifecycleStatus, "failed");
     assert.match(linear.comments.get(missingIssue?.statusCommentId ?? "")?.body ?? "", /stage-failed/);
+
+    service.stop();
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("service restart reconciles a stage that completed while PatchRelay was down", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-restart-reconcile-completed-"));
+  try {
+    const { db, codex, linear, service, config } = createService(baseDir);
+    await service.start();
+
+    recordDesiredStageWithLedger(db, {
+      projectId: "usertold",
+      linearIssueId: "issue_4",
+      issueKey: "USE-28",
+      title: "Recover finished stage after restart",
+      issueUrl: "https://linear.app/example/issue/USE-28",
+      currentLinearState: "Start",
+      desiredStage: "development",
+      desiredWebhookId: "delivery-start-restart",
+      lastWebhookAt: new Date().toISOString(),
+    });
+
+    await service.processIssue({ projectId: "usertold", issueId: "issue_4" });
+    await flushQueues();
+
+    const startedIssue = db.issueWorkflows.getTrackedIssue("usertold", "issue_4");
+    const startedStageRun = db.issueWorkflows.getStageRun(startedIssue!.activeStageRunId!);
+    assert.ok(startedStageRun?.threadId);
+
+    service.stop();
+    const recoveredThread = codex.threads.get(startedStageRun!.threadId!);
+    assert.ok(recoveredThread);
+    recoveredThread.turns = [{ id: "turn-recovered", status: "completed", items: [{ type: "agentMessage", id: "assistant-1", text: "Recovered." }] }];
+    recoveredThread.status = "idle";
+
+    const restarted = new PatchRelayService(config, db, codex as never, linear, pino({ enabled: false }));
+    await restarted.start();
+    await flushQueues();
+
+    const recoveredStage = db.issueWorkflows.getStageRun(startedStageRun!.id);
+    const recoveredIssue = db.issueWorkflows.getTrackedIssue("usertold", "issue_4");
+    assert.equal(recoveredStage?.status, "completed");
+    assert.equal(recoveredIssue?.lifecycleStatus, "paused");
+
+    restarted.stop();
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("service startup fails loudly when reconciliation cannot hydrate live Linear state", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-restart-linear-hydration-failure-"));
+  try {
+    const { db, codex, linear, service, config } = createService(baseDir);
+    await service.start();
+
+    recordDesiredStageWithLedger(db, {
+      projectId: "usertold",
+      linearIssueId: "issue_4",
+      issueKey: "USE-28",
+      title: "Recover stage with missing live Linear state",
+      issueUrl: "https://linear.app/example/issue/USE-28",
+      currentLinearState: "Start",
+      desiredStage: "development",
+      desiredWebhookId: "delivery-start-restart-linear",
+      lastWebhookAt: new Date().toISOString(),
+    });
+
+    await service.processIssue({ projectId: "usertold", issueId: "issue_4" });
+    await flushQueues();
+
+    const startedIssue = db.issueWorkflows.getTrackedIssue("usertold", "issue_4");
+    const startedStageRun = db.issueWorkflows.getStageRun(startedIssue!.activeStageRunId!);
+    assert.ok(startedStageRun?.threadId);
+
+    service.stop();
+    linear.getIssueError = new Error("linear unavailable");
+
+    const restarted = new PatchRelayService(config, db, codex as never, linear, pino({ enabled: false }));
+    await assert.rejects(
+      restarted.start(),
+      /Startup reconciliation requires live state hydration for usertold:issue_4/,
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("service startup launches queued ledger intent even when the legacy tracked issue is missing", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-ledger-only-launch-"));
+  try {
+    const { db, codex, linear, service } = createService(baseDir);
+    const receipt = ensureEventReceipt(db, {
+      webhookId: "delivery-ledger-only",
+      projectId: "usertold",
+      linearIssueId: "issue_4",
+    });
+    db.issueControl.upsertIssueControl({
+      projectId: "usertold",
+      linearIssueId: "issue_4",
+      desiredStage: "development",
+      desiredReceiptId: receipt.id,
+      lifecycleStatus: "queued",
+    });
+
+    await service.start();
+    await flushQueues();
+
+    await waitFor(() => {
+      const startedIssue = db.issueWorkflows.getTrackedIssue("usertold", "issue_4");
+      assert.ok(startedIssue);
+      assert.ok(startedIssue.activeStageRunId);
+      assert.equal(codex.startedThreads.length, 1);
+    });
+
+    const issue = db.issueWorkflows.getTrackedIssue("usertold", "issue_4")!;
+    assert.equal(issue.issueKey, "USE-28");
+    const stageRun = db.issueWorkflows.getStageRun(issue.activeStageRunId!);
+    assert.equal(stageRun?.status, "running");
+    const issueControl = db.issueControl.getIssueControl("usertold", "issue_4");
+    assert.ok(issueControl?.activeRunLeaseId);
+    const runLease = db.runLeases.getRunLease(issueControl.activeRunLeaseId!);
+    assert.equal(runLease?.threadId, stageRun?.threadId);
+    assert.equal(runLease?.turnId, stageRun?.turnId);
+    assert.equal(linear.issues.get("issue_4")?.stateName, "Implementing");
+
+    service.stop();
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("service startup launches queued ledger intent and delivers pending launch input to the active turn", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-startup-pending-launch-input-"));
+  try {
+    const { db, codex, service } = createService(baseDir);
+    recordDesiredStageWithLedger(db, {
+      projectId: "usertold",
+      linearIssueId: "issue_2",
+      issueKey: "USE-26",
+      title: "Deliver launch input on startup",
+      issueUrl: "https://linear.app/example/issue/USE-26",
+      currentLinearState: "Start",
+      desiredStage: "development",
+      desiredWebhookId: "delivery-startup-launch-input",
+      lastWebhookAt: new Date().toISOString(),
+    });
+    enqueueLaunchInput(db, "usertold", "issue_2", "Please start by validating the failing setup path.");
+
+    await service.start();
+
+    await waitFor(() => {
+      const issue = db.issueWorkflows.getTrackedIssue("usertold", "issue_2");
+      assert.ok(issue?.activeStageRunId);
+      assert.ok(
+        codex.steeredTurns.some((entry) => entry.input.includes("validating the failing setup path")),
+      );
+    });
+
+    const issue = db.issueWorkflows.getTrackedIssue("usertold", "issue_2");
+    assert.ok(issue?.activeStageRunId);
+    const issueControl = db.issueControl.getIssueControl("usertold", "issue_2");
+    assert.ok(issueControl?.activeRunLeaseId);
+    const obligation = getLatestInputObligation(db, "usertold", "issue_2", "linear-agent-launch:test");
+    assert.ok(obligation);
+    assert.equal(String(obligation.status), "completed");
+    assert.equal(Number(obligation.run_lease_id), issueControl.activeRunLeaseId);
+    assert.equal(String(obligation.thread_id), "thread-1");
+    assert.equal(String(obligation.turn_id), "turn-1");
+
+    service.stop();
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("service startup launches queued ledger intent and preserves pending launch input delivery", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-ledger-launch-input-"));
+  try {
+    const { db, codex, service } = createService(baseDir);
+    recordDesiredStageWithLedger(db, {
+      projectId: "usertold",
+      linearIssueId: "issue_5",
+      issueKey: "USE-29",
+      title: "Preserve startup launch input",
+      issueUrl: "https://linear.app/example/issue/USE-29",
+      currentLinearState: "Start",
+      desiredStage: "development",
+      desiredWebhookId: "delivery-ledger-input",
+      lastWebhookAt: new Date().toISOString(),
+    });
+    enqueueLaunchInput(db, "usertold", "issue_5", "Please keep the intro copy intact.");
+
+    await service.start();
+    await flushQueues();
+
+    await waitFor(() => {
+      const trackedIssue = db.issueWorkflows.getTrackedIssue("usertold", "issue_5");
+      assert.ok(trackedIssue?.activeStageRunId);
+      assert.equal(codex.startedThreads.length, 1);
+    });
+
+    const trackedIssue = db.issueWorkflows.getTrackedIssue("usertold", "issue_5")!;
+    const stageRun = db.issueWorkflows.getStageRun(trackedIssue.activeStageRunId!);
+    assert.ok(stageRun?.threadId);
+    const issueControl = db.issueControl.getIssueControl("usertold", "issue_5");
+    assert.ok(issueControl?.activeRunLeaseId);
+    const obligation = getLatestInputObligation(db, "usertold", "issue_5", "linear-agent-launch:test");
+    assert.ok(obligation);
+    assert.equal(Number(obligation.run_lease_id), issueControl.activeRunLeaseId);
+    assert.match(String(obligation.payload_json), /Please keep the intro copy intact/);
+
+    if (String(obligation.status) === "completed") {
+      assert.ok(codex.steeredTurns.some((entry) => entry.input.includes("Please keep the intro copy intact.")));
+    } else {
+      assert.equal(String(obligation.status), "pending");
+    }
+
+    service.stop();
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("service startup adopts a legacy-only active run into the ledger and keeps it running", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-legacy-adoption-"));
+  try {
+    const config = createConfig(baseDir);
+    setupRepo(baseDir, config);
+    const db = new PatchRelayDatabase(config.database.path, true);
+    db.runMigrations();
+    const codex = new FakeCodexClient();
+    const linear = new FakeLinearClient();
+    linear.issues.set("issue_8", {
+      id: "issue_8",
+      identifier: "USE-33",
+      stateId: "implementing",
+      stateName: "Implementing",
+      workflowStates: DEFAULT_WORKFLOW_STATES,
+      labelIds: [],
+      labels: [],
+      teamLabels: [
+        { id: "label-working", name: "llm-working" },
+        { id: "label-awaiting", name: "llm-awaiting-handoff" },
+      ],
+    });
+
+    db.issueWorkflows.upsertTrackedIssue({
+      projectId: "usertold",
+      linearIssueId: "issue_8",
+      issueKey: "USE-33",
+      title: "Adopt legacy-only active run",
+      currentLinearState: "Implementing",
+      desiredStage: "development",
+      desiredWebhookId: "delivery-start-adopt",
+      lifecycleStatus: "running",
+      lastWebhookAt: new Date().toISOString(),
+    });
+    const claim = db.issueWorkflows.claimStageRun({
+      projectId: "usertold",
+      linearIssueId: "issue_8",
+      stage: "development",
+      triggerWebhookId: "delivery-start-adopt",
+      branchName: "use/USE-33-adopt-legacy-only-active-run",
+      worktreePath: path.join(baseDir, "worktrees", "USE-33"),
+      workflowFile: getWorkflowFile(config.projects[0], "development"),
+      promptText: "Keep running",
+    });
+    assert.ok(claim);
+    db.issueWorkflows.updateStageRunThread({
+      stageRunId: claim.stageRun.id,
+      threadId: "thread-legacy-adopt",
+      turnId: "turn-legacy-adopt",
+    });
+    codex.threads.set("thread-legacy-adopt", {
+      id: "thread-legacy-adopt",
+      preview: "Legacy active run",
+      cwd: claim.workspace.worktreePath,
+      status: "active",
+      turns: [{ id: "turn-legacy-adopt", status: "inProgress", items: [] }],
+    });
+
+    const service = new PatchRelayService(config, db, codex as never, linear, pino({ enabled: false }));
+    await service.start();
+    await flushQueues();
+
+    const issueControl = db.issueControl.getIssueControl("usertold", "issue_8");
+    assert.ok(issueControl?.activeRunLeaseId);
+    assert.equal(issueControl?.lifecycleStatus, "running");
+    const runLease = db.runLeases.getRunLease(issueControl.activeRunLeaseId!);
+    assert.equal(runLease?.threadId, "thread-legacy-adopt");
+    assert.equal(runLease?.turnId, "turn-legacy-adopt");
+    assert.equal(runLease?.status, "running");
+    assert.equal(db.issueWorkflows.getStageRun(claim.stageRun.id)?.status, "running");
+    assert.equal(codex.startedThreads.length, 0);
+    assert.equal(codex.turns.length, 0);
+
+    service.stop();
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("service startup leaves in-progress reconciled stages running", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-in-progress-"));
+  try {
+    const config = createConfig(baseDir);
+    setupRepo(baseDir, config);
+    const db = new PatchRelayDatabase(config.database.path, true);
+    db.runMigrations();
+    const codex = new FakeCodexClient();
+    const linear = new FakeLinearClient();
+    const workflowStates = [
+      { id: "start", name: "Start" },
+      { id: "implementing", name: "Implementing" },
+      { id: "review", name: "Review" },
+      { id: "reviewing", name: "Reviewing" },
+      { id: "human-needed", name: "Human Needed" },
+    ];
+    linear.issues.set("issue_6", {
+      id: "issue_6",
+      identifier: "USE-32",
+      stateId: "implementing",
+      stateName: "Implementing",
+      workflowStates,
+    });
+
+    db.issueWorkflows.upsertTrackedIssue({
+      projectId: "usertold",
+      linearIssueId: "issue_6",
+      issueKey: "USE-32",
+      title: "Keep in-progress stage running",
+      currentLinearState: "Start",
+      desiredStage: "development",
+      desiredWebhookId: "delivery-start-in-progress",
+      lifecycleStatus: "running",
+      lastWebhookAt: new Date().toISOString(),
+    });
+    const claim = db.issueWorkflows.claimStageRun({
+      projectId: "usertold",
+      linearIssueId: "issue_6",
+      stage: "development",
+      triggerWebhookId: "delivery-start-in-progress",
+      branchName: "use/USE-32-keep-in-progress-stage-running",
+      worktreePath: path.join(baseDir, "worktrees", "USE-32"),
+      workflowFile: getWorkflowFile(config.projects[0], "development"),
+      promptText: "Keep running",
+    });
+    assert.ok(claim);
+    db.issueWorkflows.updateStageRunThread({
+      stageRunId: claim!.stageRun.id,
+      threadId: "thread-in-progress",
+      turnId: "turn-live",
+    });
+    codex.threads.set("thread-in-progress", {
+      id: "thread-in-progress",
+      preview: "Still running",
+      cwd: claim!.workspace.worktreePath,
+      status: "active",
+      turns: [{ id: "turn-live", status: "inProgress", items: [] }],
+    });
+
+    const service = new PatchRelayService(config, db, codex as never, linear, pino({ enabled: false }));
+    await service.start();
+    await flushQueues();
+
+    const stageRun = db.issueWorkflows.getStageRun(claim!.stageRun.id);
+    const issue = db.issueWorkflows.getTrackedIssue("usertold", "issue_6");
+    assert.equal(stageRun?.status, "running");
+    assert.equal(issue?.lifecycleStatus, "running");
+    assert.equal(linear.issues.get("issue_6")?.stateName, "Implementing");
+    assert.equal(linear.comments.size, 0);
+
+    service.stop();
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("service restart retries pending obligations after a transient reconciliation delivery failure", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-obligation-retry-"));
+  try {
+    const { db, codex, linear, service, config } = createService(baseDir);
+    await service.start();
+
+    recordDesiredStageWithLedger(db, {
+      projectId: "usertold",
+      linearIssueId: "issue_2",
+      issueKey: "USE-26",
+      title: "Retry queued follow-up after restart",
+      issueUrl: "https://linear.app/example/issue/USE-26",
+      currentLinearState: "Start",
+      desiredStage: "development",
+      desiredWebhookId: "delivery-start",
+      lastWebhookAt: new Date().toISOString(),
+    });
+
+    await service.processIssue({ projectId: "usertold", issueId: "issue_2" });
+    await flushQueues();
+
+    const issue = db.issueWorkflows.getTrackedIssue("usertold", "issue_2");
+    assert.ok(issue?.activeStageRunId);
+    const stageRun = db.issueWorkflows.getStageRun(issue.activeStageRunId);
+    assert.ok(stageRun?.threadId);
+    const issueControl = db.issueControl.getIssueControl("usertold", "issue_2");
+    assert.ok(issueControl?.activeRunLeaseId);
+    db.obligations.enqueueObligation({
+      projectId: "usertold",
+      linearIssueId: "issue_2",
+      kind: "deliver_turn_input",
+      source: "linear-comment:restart-retry",
+      payloadJson: JSON.stringify({
+        body: "Please retry this after the restart.",
+      }),
+      runLeaseId: issueControl.activeRunLeaseId,
+      threadId: stageRun.threadId,
+      turnId: stageRun.turnId,
+      dedupeKey: "restart-retry",
+    });
+
+    service.stop();
+
+    codex.steerError = new Error("codex temporarily unavailable");
+    const restartedWithFailure = new PatchRelayService(config, db, codex as never, linear, pino({ enabled: false }));
+    await restartedWithFailure.start();
+    await flushQueues();
+    restartedWithFailure.stop();
+
+    assert.equal(db.obligations.getObligationByDedupeKey({
+      runLeaseId: issueControl.activeRunLeaseId,
+      kind: "deliver_turn_input",
+      dedupeKey: "restart-retry",
+    })?.status, "pending");
+
+    codex.steerError = undefined;
+    const restarted = new PatchRelayService(config, db, codex as never, linear, pino({ enabled: false }));
+    await restarted.start();
+    await flushQueues();
+
+    assert.equal(
+      db.obligations.getObligationByDedupeKey({
+        runLeaseId: issueControl.activeRunLeaseId,
+        kind: "deliver_turn_input",
+        dedupeKey: "restart-retry",
+      })?.status,
+      "completed",
+    );
+    assert.ok(codex.steeredTurns.some((entry) => entry.input.includes("Please retry this after the restart.")));
+
+    restarted.stop();
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("service startup fails active stages with no persisted thread id", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-missing-thread-id-"));
+  try {
+    const config = createConfig(baseDir);
+    setupRepo(baseDir, config);
+    const db = new PatchRelayDatabase(config.database.path, true);
+    db.runMigrations();
+    const codex = new FakeCodexClient();
+    const linear = new FakeLinearClient();
+    const workflowStates = [
+      { id: "start", name: "Start" },
+      { id: "implementing", name: "Implementing" },
+      { id: "review", name: "Review" },
+      { id: "reviewing", name: "Reviewing" },
+      { id: "human-needed", name: "Human Needed" },
+    ];
+    linear.issues.set("issue_7", {
+      id: "issue_7",
+      identifier: "USE-33",
+      stateId: "implementing",
+      stateName: "Implementing",
+      workflowStates,
+      labels: [{ id: "label-working", name: "llm-working" }],
+      labelIds: ["label-working"],
+      teamLabels: [
+        { id: "label-working", name: "llm-working" },
+        { id: "label-awaiting", name: "llm-awaiting-handoff" },
+      ],
+    });
+
+    db.issueWorkflows.upsertTrackedIssue({
+      projectId: "usertold",
+      linearIssueId: "issue_7",
+      issueKey: "USE-33",
+      title: "Fail missing thread id stage",
+      currentLinearState: "Start",
+      desiredStage: "development",
+      desiredWebhookId: "delivery-start-missing-thread-id",
+      lifecycleStatus: "running",
+      lastWebhookAt: new Date().toISOString(),
+    });
+    const claim = db.issueWorkflows.claimStageRun({
+      projectId: "usertold",
+      linearIssueId: "issue_7",
+      stage: "development",
+      triggerWebhookId: "delivery-start-missing-thread-id",
+      branchName: "use/USE-33-fail-missing-thread-id-stage",
+      worktreePath: path.join(baseDir, "worktrees", "USE-33"),
+      workflowFile: getWorkflowFile(config.projects[0], "development"),
+      promptText: "Fail this stage",
+    });
+    assert.ok(claim);
+    const service = new PatchRelayService(config, db, codex as never, linear, pino({ enabled: false }));
+    await service.start();
+    await flushQueues();
+
+    const stageRun = db.issueWorkflows.getStageRun(claim!.stageRun.id);
+    const issue = db.issueWorkflows.getTrackedIssue("usertold", "issue_7");
+    assert.equal(stageRun?.status, "failed");
+    assert.equal(issue?.lifecycleStatus, "failed");
+    assert.equal(linear.issues.get("issue_7")?.stateName, "Human Needed");
+    assert.deepEqual(linear.labelUpdates.at(-1), {
+      issueId: "issue_7",
+      addNames: [],
+      removeNames: ["llm-working", "llm-awaiting-handoff"],
+    });
+    assert.match(linear.comments.get(issue?.statusCommentId ?? "")?.body ?? "", /stage-failed/);
 
     service.stop();
   } finally {

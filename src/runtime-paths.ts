@@ -26,7 +26,7 @@ export function getPatchRelayPathLayout(): PatchRelayPathLayout {
   const xdgStateHome = process.env.XDG_STATE_HOME ?? path.join(homeDir, ".local", "state");
   const xdgDataHome = process.env.XDG_DATA_HOME ?? path.join(homeDir, ".local", "share");
 
-  const configPath = ensureAbsolutePath(process.env.PATCHRELAY_CONFIG ?? path.join(xdgConfigHome, "patchrelay", "patchrelay.yaml"));
+  const configPath = ensureAbsolutePath(process.env.PATCHRELAY_CONFIG ?? path.join(xdgConfigHome, "patchrelay", "patchrelay.json"));
   const configDir = path.dirname(configPath);
   const runtimeEnvPath = path.join(configDir, "runtime.env");
   const serviceEnvPath = path.join(configDir, "service.env");

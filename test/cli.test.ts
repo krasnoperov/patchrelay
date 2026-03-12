@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -9,7 +9,7 @@ import { loadConfig } from "../src/config.ts";
 import { CliDataAccess } from "../src/cli/data.ts";
 import { PatchRelayDatabase } from "../src/db.ts";
 import { buildHttpServer } from "../src/http.ts";
-import type { AppConfig } from "../src/types.ts";
+import type { AppConfig, CodexThreadSummary } from "../src/types.ts";
 
 function createWorkflows(baseDir: string) {
   return [
@@ -130,6 +130,10 @@ function createBufferStream() {
   };
 }
 
+function modeOf(filePath: string): number {
+  return statSync(filePath).mode & 0o777;
+}
+
 function withEnv(values: Record<string, string | undefined>, run: () => Promise<void> | void): Promise<void> | void {
   const previous = new Map<string, string | undefined>();
 
@@ -163,6 +167,40 @@ function withEnv(values: Record<string, string | undefined>, run: () => Promise<
     restore();
     throw error;
   }
+}
+
+function writeRunnerBinaries(configPath: string, binaries: { gitBin?: string; codexBin?: string }): void {
+  const raw = JSON.parse(readFileSync(configPath, "utf8")) as {
+    runner?: {
+      git_bin?: string;
+      codex?: {
+        bin?: string;
+      };
+    };
+  };
+
+  raw.runner ??= {};
+  if (binaries.gitBin) {
+    raw.runner.git_bin = binaries.gitBin;
+  }
+  if (binaries.codexBin) {
+    raw.runner.codex ??= {};
+    raw.runner.codex.bin = binaries.codexBin;
+  }
+
+  writeFileSync(configPath, `${JSON.stringify(raw, null, 2)}\n`, "utf8");
+}
+
+function createStubCodex(threads: Record<string, CodexThreadSummary>) {
+  return {
+    async start() {},
+    async stop() {},
+    async readThread(threadId: string) {
+      const thread = threads[threadId];
+      assert.ok(thread);
+      return thread;
+    },
+  };
 }
 
 function seedDatabase(db: PatchRelayDatabase, config: AppConfig): void {
@@ -270,12 +308,13 @@ function seedRuntimeFiles(config: AppConfig): void {
 
 test("cli inspect, worktree, open, events, and report render stored issue details", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-"));
+  let data: CliDataAccess | undefined;
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, true);
     db.runMigrations();
     seedDatabase(db, config);
-    const data = new CliDataAccess(config, { db });
+    data = new CliDataAccess(config, { db });
 
     const stdout = createBufferStream();
     const stderr = createBufferStream();
@@ -300,18 +339,20 @@ test("cli inspect, worktree, open, events, and report render stored issue detail
     assert.equal(await runCli(["events", "USE-54"], { config, data, stdout: eventsOut.stream, stderr: stderr.stream }), 0);
     assert.match(eventsOut.read(), /turn\/started/);
   } finally {
+    data?.close();
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
 
 test("cli open launches codex in the issue worktree", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-"));
+  let data: CliDataAccess | undefined;
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, true);
     db.runMigrations();
     seedDatabase(db, config);
-    const data = new CliDataAccess(config, { db });
+    data = new CliDataAccess(config, { db });
 
     const calls: Array<{ command: string; args: string[] }> = [];
     const exitCode = await runCli(["open", "USE-54"], {
@@ -339,18 +380,20 @@ test("cli open launches codex in the issue worktree", async () => {
       },
     ]);
   } finally {
+    data?.close();
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
 
 test("cli list and retry cover operator control flows", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-"));
+  let data: CliDataAccess | undefined;
   try {
     const config = createConfig(baseDir);
     const db = new PatchRelayDatabase(config.database.path, true);
     db.runMigrations();
     seedDatabase(db, config);
-    const data = new CliDataAccess(config, { db });
+    data = new CliDataAccess(config, { db });
 
     const failedList = createBufferStream();
     assert.equal(await runCli(["list", "--failed"], { config, data, stdout: failedList.stream, stderr: createBufferStream().stream }), 0);
@@ -372,11 +415,202 @@ test("cli list and retry cover operator control flows", async () => {
     const updated = db.issueWorkflows.getTrackedIssue("usertold", "issue-2");
     assert.equal(updated?.desiredStage, "review");
     assert.equal(updated?.lifecycleStatus, "queued");
+    const issueControl = db.issueControl.getIssueControl("usertold", "issue-2");
+    assert.equal(issueControl?.desiredStage, "review");
+    assert.ok(issueControl?.desiredReceiptId);
 
     const inspectJson = createBufferStream();
     assert.equal(await runCli(["USE-54", "--json"], { config, data, stdout: inspectJson.stream, stderr: createBufferStream().stream }), 0);
     assert.match(inspectJson.read(), /"issueKey": "USE-54"/);
   } finally {
+    data?.close();
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("cli retry blocks when the ledger still owns an active run lease", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-retry-ledger-active-"));
+  let data: CliDataAccess | undefined;
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, true);
+    db.runMigrations();
+    seedDatabase(db, config);
+    data = new CliDataAccess(config, { db });
+
+    const issue = db.issueWorkflows.getTrackedIssue("usertold", "issue-2");
+    assert.ok(issue);
+    const control = db.issueControl.upsertIssueControl({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      lifecycleStatus: "running",
+    });
+    const workspace = db.workspaceOwnership.upsertWorkspaceOwnership({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      branchName: "use/USE-55-ledger-active",
+      worktreePath: path.join(config.projects[0].worktreeRoot, "USE-55-ledger-active"),
+      status: "active",
+    });
+    const runLease = db.runLeases.createRunLease({
+      issueControlId: control.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      workspaceOwnershipId: workspace.id,
+      stage: "review",
+      status: "running",
+    });
+    db.issueControl.upsertIssueControl({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      activeWorkspaceOwnershipId: workspace.id,
+      activeRunLeaseId: runLease.id,
+      lifecycleStatus: "running",
+    });
+    db.issueWorkflows.upsertTrackedIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      issueKey: issue.issueKey,
+      title: issue.title,
+      currentLinearState: issue.currentLinearState,
+      desiredStage: undefined,
+      lifecycleStatus: "running",
+      lastWebhookAt: issue.lastWebhookAt ?? "2026-03-09T09:00:00.000Z",
+    });
+
+    assert.throws(() => data.retry("USE-55"), /already has an active stage run/);
+  } finally {
+    data?.close();
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("cli falls back to ledger workspace and run context when legacy active pointers are sparse", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-ledger-fallback-"));
+  let data: CliDataAccess | undefined;
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, true);
+    db.runMigrations();
+    seedRuntimeFiles(config);
+
+    db.issueWorkflows.upsertTrackedIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-4",
+      issueKey: "USE-57",
+      title: "Ledger-backed running issue",
+      currentLinearState: "Implementing",
+      lifecycleStatus: "running",
+      lastWebhookAt: "2026-03-09T11:00:00.000Z",
+    });
+    db.issueWorkflows.setIssueDesiredStage("usertold", "issue-4", "review", "delivery-stale");
+    const stale = db.issueWorkflows.claimStageRun({
+      projectId: "usertold",
+      linearIssueId: "issue-4",
+      stage: "review",
+      triggerWebhookId: "delivery-stale",
+      branchName: "use/USE-57-stale-review",
+      worktreePath: path.join(config.projects[0].worktreeRoot, "USE-57-stale"),
+      workflowFile: getWorkflowFile(config, "review"),
+      promptText: "Stale review run",
+    });
+    assert.ok(stale);
+    db.issueWorkflows.updateStageRunThread({
+      stageRunId: stale.stageRun.id,
+      threadId: "thread-57-stale",
+      turnId: "turn-57-stale",
+    });
+    db.issueWorkflows.finishStageRun({
+      stageRunId: stale.stageRun.id,
+      status: "completed",
+      threadId: "thread-57-stale",
+      turnId: "turn-57-stale",
+    });
+    const receipt = db.eventReceipts.insertEventReceipt({
+      source: "linear-webhook",
+      externalId: "delivery-ledger",
+      eventType: "Issue.update",
+      receivedAt: "2026-03-09T11:00:00.000Z",
+      acceptanceStatus: "accepted",
+      projectId: "usertold",
+      linearIssueId: "issue-4",
+    });
+    const issueControl = db.issueControl.upsertIssueControl({
+      projectId: "usertold",
+      linearIssueId: "issue-4",
+      activeWorkspaceOwnershipId: null,
+      lifecycleStatus: "running",
+    });
+    const workspace = db.workspaceOwnership.upsertWorkspaceOwnership({
+      projectId: "usertold",
+      linearIssueId: "issue-4",
+      branchName: "use/USE-57-ledger-backed-running-issue",
+      worktreePath: path.join(config.projects[0].worktreeRoot, "USE-57"),
+      status: "active",
+    });
+    const runLease = db.runLeases.createRunLease({
+      issueControlId: issueControl.id,
+      projectId: "usertold",
+      linearIssueId: "issue-4",
+      workspaceOwnershipId: workspace.id,
+      stage: "development",
+      triggerReceiptId: receipt.id,
+      status: "running",
+    });
+    db.runLeases.updateRunLeaseThread({
+      runLeaseId: runLease.id,
+      threadId: "thread-57",
+      turnId: "turn-57",
+    });
+    db.issueControl.upsertIssueControl({
+      projectId: "usertold",
+      linearIssueId: "issue-4",
+      activeWorkspaceOwnershipId: workspace.id,
+      activeRunLeaseId: runLease.id,
+      lifecycleStatus: "running",
+    });
+
+    data = new CliDataAccess(config, {
+      db,
+      codex: createStubCodex({
+        "thread-57": {
+          id: "thread-57",
+          preview: "Ledger-backed running issue",
+          cwd: path.join(config.projects[0].worktreeRoot, "USE-57"),
+          status: "running",
+          turns: [
+            {
+              id: "turn-57",
+              status: "inProgress",
+              items: [{ type: "agentMessage", id: "assistant-57", text: "Still implementing the change." }],
+            },
+          ],
+        },
+      }) as never,
+    });
+    const worktree = data.worktree("USE-57");
+    assert.equal(worktree?.workspace.worktreePath, path.join(config.projects[0].worktreeRoot, "USE-57"));
+
+    const opened = data.open("USE-57");
+    assert.equal(opened?.resumeThreadId, "thread-57");
+
+    const inspect = await data.inspect("USE-57");
+    assert.equal(inspect?.activeStageRun?.stage, "development");
+    assert.equal(inspect?.activeStageRun?.threadId, "thread-57");
+    assert.equal(inspect?.latestStageRun?.stage, "development");
+
+    const live = await data.live("USE-57");
+    assert.equal(live?.stageRun.stage, "development");
+    assert.equal(live?.stageRun.threadId, "thread-57");
+    assert.equal(live?.live?.latestTurnStatus, "inProgress");
+
+    const list = data.list({ active: true });
+    const listed = list.find((entry) => entry.issueKey === "USE-57");
+    assert.equal(listed?.activeStage, "development");
+    assert.equal(listed?.latestStage, "development");
+    assert.equal(listed?.latestStageStatus, "running");
+  } finally {
+    data?.close();
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
@@ -497,17 +731,20 @@ test("cli init writes XDG config files and install-service manages the user unit
 
         const runtimeEnvPath = path.join(configHome, "patchrelay", "runtime.env");
         const serviceEnvPath = path.join(configHome, "patchrelay", "service.env");
-        const configPath = path.join(configHome, "patchrelay", "patchrelay.yaml");
+        const configPath = path.join(configHome, "patchrelay", "patchrelay.json");
         const runtimeEnvContents = readFileSync(runtimeEnvPath, "utf8");
         const serviceEnvContents = readFileSync(serviceEnvPath, "utf8");
         assert.match(serviceEnvContents, /^LINEAR_WEBHOOK_SECRET=[0-9a-f]{64}$/m);
         assert.match(serviceEnvContents, /^PATCHRELAY_TOKEN_ENCRYPTION_KEY=[0-9a-f]{64}$/m);
         assert.doesNotMatch(serviceEnvContents, /replace-with-linear-webhook-secret/);
         assert.doesNotMatch(serviceEnvContents, /replace-with-long-random-secret/);
+        if (process.platform !== "win32") {
+          assert.equal(modeOf(serviceEnvPath), 0o600);
+        }
         assert.match(runtimeEnvContents, /PATCHRELAY_DB_PATH/);
         const configContents = readFileSync(configPath, "utf8");
-        assert.equal(configContents.includes("public_base_url: https://patchrelay.example.com"), true);
-        assert.equal(configContents.includes("projects:"), false);
+        assert.equal(configContents.includes('"public_base_url": "https://patchrelay.example.com"'), true);
+        assert.equal(configContents.includes('"projects"'), false);
         assert.equal(configContents.includes(path.join(dataHome, "patchrelay", "worktrees")), false);
         assert.deepEqual(initCommands, [
           "systemctl --user daemon-reload",
@@ -610,10 +847,10 @@ test("cli init updates the saved public base URL on rerun", async () => {
         assert.match(rerunText, /Public base URL: https:\/\/relay\.acme\.dev/);
         assert.doesNotMatch(rerunText, /patchrelay\.example\.com/);
 
-        const configPath = path.join(configHome, "patchrelay", "patchrelay.yaml");
+        const configPath = path.join(configHome, "patchrelay", "patchrelay.json");
         const configContents = readFileSync(configPath, "utf8");
-        assert.equal(configContents.includes("public_base_url: https://relay.acme.dev"), true);
-        assert.equal(configContents.includes("public_base_url: https://first.example.com"), false);
+        assert.equal(configContents.includes('"public_base_url": "https://relay.acme.dev"'), true);
+        assert.equal(configContents.includes('"public_base_url": "https://first.example.com"'), false);
       },
     );
   } finally {
@@ -661,12 +898,12 @@ test("cli project apply appends a minimal project to config", async () => {
         assert.match(projectOut.read(), /Created project usertold/);
         assert.match(projectOut.read(), /Linear connect was skipped because PatchRelay is not ready yet:/);
 
-        const configPath = path.join(configHome, "patchrelay", "patchrelay.yaml");
+        const configPath = path.join(configHome, "patchrelay", "patchrelay.json");
         const configContents = readFileSync(configPath, "utf8");
-        assert.match(configContents, /projects:/);
-        assert.match(configContents, /id: usertold/);
-        assert.match(configContents, /repo_path:/);
-        assert.match(configContents, /issue_key_prefixes:/);
+        assert.match(configContents, /"projects"\s*:/);
+        assert.match(configContents, /"id"\s*:\s*"usertold"/);
+        assert.match(configContents, /"repo_path"\s*:/);
+        assert.match(configContents, /"issue_key_prefixes"\s*:/);
 
         const config = loadConfig(configPath, { profile: "write_config" });
         assert.equal(config.projects[0]?.id, "usertold");
@@ -831,6 +1068,7 @@ test("cli project apply can auto-connect using the default service.env file", as
         );
 
         const envPath = path.join(configHome, "patchrelay", "service.env");
+        const configPath = path.join(configHome, "patchrelay", "patchrelay.json");
         writeFileSync(
           envPath,
           [
@@ -842,6 +1080,7 @@ test("cli project apply can auto-connect using the default service.env file", as
           ].join("\n"),
           "utf8",
         );
+        writeRunnerBinaries(configPath, { codexBin: "true" });
 
         const connectData = {
           async connect(projectId?: string) {
@@ -931,6 +1170,7 @@ test("cli project apply json performs the workflow and returns structured connec
           ].join("\n"),
           "utf8",
         );
+        writeRunnerBinaries(path.join(configHome, "patchrelay", "patchrelay.json"), { codexBin: "true" });
 
         const connectData = {
           async connect(projectId?: string) {

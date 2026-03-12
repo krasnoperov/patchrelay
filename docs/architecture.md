@@ -15,6 +15,42 @@ PatchRelay is a self-hosted execution harness around Codex with seven responsibi
 `codex app-server` is the source of truth for agent thread history.
 PatchRelay is the source of truth for workflow policy, workspace ownership, and issue-to-thread correlation.
 
+The key design constraint is that PatchRelay remains the harness around the model. It should keep deterministic workflow coordination out of the prompt layer while avoiding repo-specific business logic that belongs in workflow files or agent tools.
+
+## Layer Model
+
+PatchRelay is easiest to reason about as five layers:
+
+### 1. Policy Layer
+
+Repository-owned workflow files define stage behavior, prompt instructions, and team-specific rules.
+
+### 2. Coordination Layer
+
+The service decides when an issue is eligible, which stage should run next, whether a run should retry, and how restart reconciliation should resolve partially completed work.
+
+### 3. Execution Layer
+
+PatchRelay owns durable worktrees, Codex thread lifecycle, turn startup, and queued human follow-up input delivery.
+
+### 4. Integration Layer
+
+PatchRelay verifies Linear webhooks, performs OAuth and installation linking, routes issues to the right project, and applies deterministic state changes back to Linear.
+
+### 5. Observability Layer
+
+PatchRelay exposes reports, event history, active-stage inspection, and operator-facing CLI and API surfaces.
+
+These layers are intentionally separate:
+
+- policy tells the agent how to work
+- coordination decides when work should run
+- execution performs the work in the repo
+- integration keeps external systems consistent
+- observability explains what happened
+
+For a current file-by-file view of those boundaries, see [module-map.md](./module-map.md).
+
 ## Main Entities
 
 ### Tracked Issue
@@ -80,6 +116,29 @@ Stores:
 - optional turn id
 - notification method
 - raw event JSON
+
+## Authoritative Versus Derived State
+
+PatchRelay keeps a harness ledger in SQLite, but not every artifact deserves to be authoritative state.
+
+Authoritative state is the data PatchRelay must recover exactly after a restart in order to continue or safely stop automation:
+
+- webhook dedupe and processing state
+- Linear installation and OAuth state
+- issue-to-workspace ownership
+- issue-to-thread and stage-run correlation
+- active and desired stage coordination
+
+Derived state is anything PatchRelay can rebuild or re-read from another durable source:
+
+- Codex thread transcript details
+- verbose event trails
+- rendered reports and operator views
+- current Linear issue fields that can be fetched again
+
+This distinction is important when extending the service. New persistence should default to derived or cache-like storage unless the information is required for coordination, restart safety, or deterministic Linear writeback.
+
+For the current classification of stored entities, see [persistence-audit.md](./persistence-audit.md).
 
 ## Request Flow
 
@@ -169,6 +228,25 @@ On `turn/completed`, PatchRelay:
 
 If stage launch fails before a turn is live, PatchRelay marks the stage failed locally, rolls the issue to the configured fallback Linear state such as `Human Needed`, removes service-owned workflow labels, and updates the service-owned comment with the failure. If PatchRelay later finds an unrecoverable active stage during startup reconciliation, it applies the same failure sync back to Linear only when the issue is still in the service-owned active state.
 
+## Reconciliation And Restart
+
+Restart behavior is a first-class architectural requirement.
+
+After process startup, PatchRelay must reconcile three realities:
+
+1. Linear state
+2. local harness state
+3. Codex thread and stage state
+
+The reconciliation loop should answer:
+
+- is this issue still eligible for the stage PatchRelay last claimed
+- is there an active stage that can continue, or only state that needs cleanup
+- does Linear still reflect the service-owned active state, or has a human already moved the issue on
+- should PatchRelay resume, queue follow-up work, or fail the stage back to a human-needed state
+
+This is why PatchRelay persists stage ownership and issue-to-thread correlation instead of relying only on Linear or only on Codex. Linear is the control surface, Codex is the source of thread history, and PatchRelay is the layer that makes restart recovery deterministic.
+
 ## Why App-Server
 
 This design intentionally avoids terminal multiplexers as the workflow backbone.
@@ -187,12 +265,14 @@ We need:
 SQLite stores:
 
 - webhook receipts
-- tracked issues
-- workspaces
-- pipeline runs
-- stage runs
-- thread events
-- queued turn inputs
+- issue control
+- issue projection
+- workspace ownership
+- run leases
+- obligations
+- run reports
+- run thread events
+- installation and OAuth state
 
 The database is not a copy of Codex thread history. It is the harness ledger that points to thread history and caches reports.
 

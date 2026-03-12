@@ -16,7 +16,7 @@ PatchRelay releases are automated from `main` with Release Please. This checklis
 - Run `npm run check`
 - Run `npm test`
 - Run `npm run build`
-- Confirm `.env.example` and `config/patchrelay.example.yaml` match the current config surface
+- Confirm `.env.example` and `config/patchrelay.example.json` match the current config surface
 - Confirm README and self-hosting docs reflect the packaged install, service management flow, and public routes
 - Confirm `/api` operator routes are disabled by default
 - Confirm `/ready` behavior matches the startup model

@@ -1,7 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { isIP } from "node:net";
 import path from "node:path";
-import YAML from "yaml";
 import { z } from "zod";
 import type { AppConfig } from "./types.ts";
 import {
@@ -233,13 +232,27 @@ function readEnvFile(envPath: string): Record<string, string> {
   return values;
 }
 
+export function getAdjacentEnvFilePaths(
+  configPath = process.env.PATCHRELAY_CONFIG ?? getDefaultConfigPath(),
+): {
+  runtimeEnvPath: string;
+  serviceEnvPath: string;
+} {
+  const resolvedPath = ensureAbsolutePath(configPath);
+  const configDir = path.dirname(resolvedPath);
+  return {
+    runtimeEnvPath:
+      configDir === path.dirname(getDefaultConfigPath()) ? getDefaultRuntimeEnvPath() : path.join(configDir, "runtime.env"),
+    serviceEnvPath:
+      configDir === path.dirname(getDefaultConfigPath()) ? getDefaultServiceEnvPath() : path.join(configDir, "service.env"),
+  };
+}
+
 function getEnvFilesForProfile(
   configPath: string,
   profile: ConfigLoadProfile,
 ): string[] {
-  const configDir = path.dirname(configPath);
-  const runtimeEnvPath = configDir === path.dirname(getDefaultConfigPath()) ? getDefaultRuntimeEnvPath() : path.join(configDir, "runtime.env");
-  const serviceEnvPath = configDir === path.dirname(getDefaultConfigPath()) ? getDefaultServiceEnvPath() : path.join(configDir, "service.env");
+  const { runtimeEnvPath, serviceEnvPath } = getAdjacentEnvFilePaths(configPath);
 
   switch (profile) {
     case "service":
@@ -333,8 +346,16 @@ export function loadConfig(
   };
 
   const raw = readFileSync(requestedPath, "utf8");
-  const parsedYaml = YAML.parse(raw);
-  const parsed = configSchema.parse(withSectionDefaults(expandEnv(parsedYaml, env)));
+  let parsedFile: unknown;
+  try {
+    parsedFile = JSON.parse(raw);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Invalid JSON config file: ${requestedPath}: ${message}`, {
+      cause: error,
+    });
+  }
+  const parsed = configSchema.parse(withSectionDefaults(expandEnv(parsedFile, env)));
 
   const requirements = getLoadProfileRequirements(profile);
   const webhookSecret = env[parsed.linear.webhook_secret_env];

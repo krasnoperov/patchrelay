@@ -3,8 +3,9 @@
 import { dirname } from "node:path";
 import { runCli } from "./cli/index.ts";
 import { CodexAppServerClient } from "./codex-app-server.ts";
-import { loadConfig } from "./config.ts";
+import { getAdjacentEnvFilePaths, loadConfig } from "./config.ts";
 import { PatchRelayDatabase } from "./db.ts";
+import { enforceRuntimeFilePermissions, enforceServiceEnvPermissions } from "./file-permissions.ts";
 import { buildHttpServer } from "./http.ts";
 import { DatabaseBackedLinearClientProvider } from "./linear-client.ts";
 import { createLogger } from "./logging.ts";
@@ -19,7 +20,9 @@ async function main(): Promise<void> {
     return;
   }
 
-  const config = loadConfig();
+  const configPath = process.env.PATCHRELAY_CONFIG;
+  const config = loadConfig(configPath);
+  await enforceServiceEnvPermissions(getAdjacentEnvFilePaths(configPath).serviceEnvPath);
   await ensureDir(dirname(config.database.path));
   await ensureDir(dirname(config.logging.filePath));
   if (config.logging.webhookArchiveDir) {
@@ -28,6 +31,7 @@ async function main(): Promise<void> {
   for (const project of config.projects) {
     await ensureDir(project.worktreeRoot);
   }
+  await enforceRuntimeFilePermissions(config);
 
   const preflight = await runPreflight(config);
   const failedChecks = preflight.checks.filter((check) => check.status === "fail");

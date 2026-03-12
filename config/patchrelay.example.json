@@ -1,0 +1,5 @@
+{
+  "server": {
+    "public_base_url": "https://patchrelay.example.com"
+  }
+}

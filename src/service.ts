@@ -1,8 +1,9 @@
 import type { Logger } from "pino";
 import type { CodexAppServerClient, CodexNotification } from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
+import type { EventReceiptStoreProvider, IssueControlStoreProvider, ObligationStoreProvider, RunLeaseStoreProvider, WorkspaceOwnershipStoreProvider } from "./ledger-ports.ts";
 import type { LinearInstallationStoreProvider } from "./installation-ports.ts";
-import type { StageEventQueryStoreProvider, StageTurnInputStoreProvider } from "./stage-event-ports.ts";
+import type { StageEventLogStoreProvider } from "./stage-event-ports.ts";
 import type { IssueWorkflowExecutionStoreProvider, IssueWorkflowLifecycleStoreProvider, IssueWorkflowQueryStoreProvider, IssueWorkflowWebhookStoreProvider, ReadyIssueSource } from "./workflow-ports.ts";
 import type { WebhookEventStoreProvider } from "./webhook-event-ports.ts";
 import { IssueQueryService } from "./issue-query-service.ts";
@@ -15,17 +16,26 @@ import { acceptIncomingWebhook } from "./service-webhooks.ts";
 import type { AppConfig, LinearClient, LinearClientProvider } from "./types.ts";
 
 type ServiceStores = WebhookEventStoreProvider &
+  EventReceiptStoreProvider &
+  IssueControlStoreProvider &
+  WorkspaceOwnershipStoreProvider &
+  RunLeaseStoreProvider &
+  ObligationStoreProvider &
   IssueWorkflowExecutionStoreProvider &
   IssueWorkflowLifecycleStoreProvider &
   IssueWorkflowQueryStoreProvider &
   IssueWorkflowWebhookStoreProvider &
-  StageTurnInputStoreProvider &
-  StageEventQueryStoreProvider &
+  StageEventLogStoreProvider &
   LinearInstallationStoreProvider;
 
 function createServiceStores(db: PatchRelayDatabase): ServiceStores {
   return {
     webhookEvents: db.webhookEvents,
+    eventReceipts: db.eventReceipts,
+    issueControl: db.issueControl,
+    workspaceOwnership: db.workspaceOwnership,
+    runLeases: db.runLeases,
+    obligations: db.obligations,
     issueWorkflows: db.issueWorkflows,
     stageEvents: db.stageEvents,
     linearInstallations: db.linearInstallations,
@@ -34,10 +44,19 @@ function createServiceStores(db: PatchRelayDatabase): ServiceStores {
 
 function createReadyIssueSource(stores: ServiceStores): ReadyIssueSource {
   return {
-    listIssuesReadyForExecution: () => stores.issueWorkflows.listIssuesReadyForExecution(),
+    listIssuesReadyForExecution: () =>
+      stores.issueControl.listIssueControlsReadyForLaunch().map((issue) => ({
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+      })),
   };
 }
 
+// PatchRelayService wires together the harness layers:
+// - integration: webhook intake, OAuth, Linear client access
+// - coordination: runtime queueing, stage launch, completion, reconciliation
+// - execution: Codex app-server and worktree-backed stage runs
+// - observability: issue/report query surfaces
 export class PatchRelayService {
   readonly linearProvider: LinearClientProvider;
   private readonly stageRunner: ServiceStageRunner;
@@ -56,7 +75,14 @@ export class PatchRelayService {
   ) {
     this.linearProvider = toLinearClientProvider(linearProvider);
     const stores = createServiceStores(db);
-    this.stageRunner = new ServiceStageRunner(config, stores, codex, this.linearProvider, logger);
+    this.stageRunner = new ServiceStageRunner(
+      config,
+      stores,
+      codex,
+      this.linearProvider,
+      logger,
+      (fn) => db.connection.transaction(fn)(),
+    );
     let enqueueIssue: (projectId: string, issueId: string) => void = () => {
       throw new Error("Service runtime enqueueIssue is not initialized");
     };
@@ -68,6 +94,7 @@ export class PatchRelayService {
       this.linearProvider,
       (projectId, issueId) => enqueueIssue(projectId, issueId),
       logger,
+      (fn) => db.connection.transaction(fn)(),
     );
     this.webhookProcessor = new ServiceWebhookProcessor(
       config,
@@ -135,7 +162,10 @@ export class PatchRelayService {
   }> {
     const result = await acceptIncomingWebhook({
       config: this.config,
-      stores: { webhookEvents: this.db.webhookEvents },
+      stores: {
+        webhookEvents: this.db.webhookEvents,
+        eventReceipts: this.db.eventReceipts,
+      },
       logger: this.logger,
       webhookId: params.webhookId,
       headers: params.headers,
