@@ -119,12 +119,12 @@ It creates the local config, env file, and user service units:
 
 - `~/.config/patchrelay/runtime.env`
 - `~/.config/patchrelay/service.env`
-- `~/.config/patchrelay/patchrelay.yaml`
+- `~/.config/patchrelay/patchrelay.json`
 - `~/.config/systemd/user/patchrelay.service`
 - `~/.config/systemd/user/patchrelay-reload.service`
 - `~/.config/systemd/user/patchrelay.path`
 
-The generated `patchrelay.yaml` is intentionally minimal, and `patchrelay init` prints the webhook URL, OAuth callback URL, and the Linear app values you need next.
+The generated `patchrelay.json` is intentionally minimal, and `patchrelay init` prints the webhook URL, OAuth callback URL, and the Linear app values you need next.
 
 ### 3. Configure access
 
@@ -145,7 +145,7 @@ Add repositories after `patchrelay init` with `patchrelay project apply <id> <re
 
 For a single project, that is usually enough. For multiple projects, add routing with `--issue-prefix APP` or `--team-id <linear-team-id>`.
 
-The generated `~/.config/patchrelay/patchrelay.yaml` is machine-level service config only. Project entries should be created with the CLI, not by hand-editing a placeholder template.
+The generated `~/.config/patchrelay/patchrelay.json` is machine-level service config only. Project entries should be created with the CLI, not by hand-editing a placeholder template.
 
 `patchrelay project apply` is idempotent:
 

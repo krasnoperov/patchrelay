@@ -79,7 +79,7 @@ It creates:
 
 - `~/.config/patchrelay/runtime.env`
 - `~/.config/patchrelay/service.env`
-- `~/.config/patchrelay/patchrelay.yaml`
+- `~/.config/patchrelay/patchrelay.json`
 - `~/.config/systemd/user/patchrelay.service`
 - `~/.config/systemd/user/patchrelay-reload.service`
 - `~/.config/systemd/user/patchrelay.path`
@@ -123,9 +123,9 @@ The most useful correlation fields in logs are:
 - `turnId`
 - `agentSessionId`
 
-The generated `patchrelay.yaml` stays intentionally minimal. In the default setup it only needs `server.public_base_url`; PatchRelay already has built-in defaults for the local bind address, database path, logs, worktree roots, workflow filenames, workflow states, and Codex runner settings.
+The generated `patchrelay.json` stays intentionally minimal. In the default setup it only needs `server.public_base_url`; PatchRelay already has built-in defaults for the local bind address, database path, logs, worktree roots, workflow filenames, workflow states, and Codex runner settings.
 
-`patchrelay init` also installs the user service and a watcher that reload-or-restarts PatchRelay whenever `patchrelay.yaml`, `runtime.env`, or `service.env` changes.
+`patchrelay init` also installs the user service and a watcher that reload-or-restarts PatchRelay whenever `patchrelay.json`, `runtime.env`, or `service.env` changes.
 
 ## 3. Configure Machine-Level Secrets
 
@@ -147,13 +147,16 @@ For the Linear OAuth app settings and webhook categories, use [linear-agent-onbo
 
 ## 4. Configure Projects
 
-`patchrelay init` writes only the machine-level service config to `~/.config/patchrelay/patchrelay.yaml`.
+`patchrelay init` writes only the machine-level service config to `~/.config/patchrelay/patchrelay.json`.
 
 At the top level, configure the public HTTPS origin that Linear should use:
 
-```yaml
-server:
-  public_base_url: https://patchrelay.example.com
+```json
+{
+  "server": {
+    "public_base_url": "https://patchrelay.example.com"
+  }
+}
 ```
 
 Add repositories with `patchrelay project apply <id> <repo-path>`. A project only needs:

@@ -2,7 +2,7 @@ node_modules/
 dist/
 .env
 .env.local
-config/patchrelay.yaml
+config/patchrelay.json
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal

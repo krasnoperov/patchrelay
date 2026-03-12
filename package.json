@@ -17,7 +17,7 @@
     "dist",
     "runtime.env.example",
     "service.env.example",
-    "config/patchrelay.example.yaml",
+    "config/patchrelay.example.json",
     "infra/patchrelay.service",
     "infra/patchrelay-reload.service",
     "infra/patchrelay.path"
@@ -39,21 +39,17 @@
     "ci": "npm run lint && npm run check && npm test && npm run build"
   },
   "dependencies": {
-    "better-sqlite3": "^12.6.2",
     "fastify": "^5.8.2",
     "fastify-raw-body": "^5.0.0",
     "pino": "^10.3.1",
     "pino-logfmt": "^1.1.3",
-    "yaml": "^2.8.2",
     "zod": "^4.3.6"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^24.12.0",
     "eslint": "^10.0.3",
-    "globals": "^17.4.0",
-    "typescript-eslint": "^8.57.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.57.0"
   }
 }

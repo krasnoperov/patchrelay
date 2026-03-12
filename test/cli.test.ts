@@ -501,7 +501,7 @@ test("cli init writes XDG config files and install-service manages the user unit
 
         const runtimeEnvPath = path.join(configHome, "patchrelay", "runtime.env");
         const serviceEnvPath = path.join(configHome, "patchrelay", "service.env");
-        const configPath = path.join(configHome, "patchrelay", "patchrelay.yaml");
+        const configPath = path.join(configHome, "patchrelay", "patchrelay.json");
         const runtimeEnvContents = readFileSync(runtimeEnvPath, "utf8");
         const serviceEnvContents = readFileSync(serviceEnvPath, "utf8");
         assert.match(serviceEnvContents, /^LINEAR_WEBHOOK_SECRET=[0-9a-f]{64}$/m);
@@ -513,8 +513,8 @@ test("cli init writes XDG config files and install-service manages the user unit
         }
         assert.match(runtimeEnvContents, /PATCHRELAY_DB_PATH/);
         const configContents = readFileSync(configPath, "utf8");
-        assert.equal(configContents.includes("public_base_url: https://patchrelay.example.com"), true);
-        assert.equal(configContents.includes("projects:"), false);
+        assert.equal(configContents.includes('"public_base_url": "https://patchrelay.example.com"'), true);
+        assert.equal(configContents.includes('"projects"'), false);
         assert.equal(configContents.includes(path.join(dataHome, "patchrelay", "worktrees")), false);
         assert.deepEqual(initCommands, [
           "systemctl --user daemon-reload",
@@ -617,10 +617,10 @@ test("cli init updates the saved public base URL on rerun", async () => {
         assert.match(rerunText, /Public base URL: https:\/\/relay\.acme\.dev/);
         assert.doesNotMatch(rerunText, /patchrelay\.example\.com/);
 
-        const configPath = path.join(configHome, "patchrelay", "patchrelay.yaml");
+        const configPath = path.join(configHome, "patchrelay", "patchrelay.json");
         const configContents = readFileSync(configPath, "utf8");
-        assert.equal(configContents.includes("public_base_url: https://relay.acme.dev"), true);
-        assert.equal(configContents.includes("public_base_url: https://first.example.com"), false);
+        assert.equal(configContents.includes('"public_base_url": "https://relay.acme.dev"'), true);
+        assert.equal(configContents.includes('"public_base_url": "https://first.example.com"'), false);
       },
     );
   } finally {
@@ -668,12 +668,12 @@ test("cli project apply appends a minimal project to config", async () => {
         assert.match(projectOut.read(), /Created project usertold/);
         assert.match(projectOut.read(), /Linear connect was skipped because PatchRelay is not ready yet:/);
 
-        const configPath = path.join(configHome, "patchrelay", "patchrelay.yaml");
+        const configPath = path.join(configHome, "patchrelay", "patchrelay.json");
         const configContents = readFileSync(configPath, "utf8");
-        assert.match(configContents, /projects:/);
-        assert.match(configContents, /id: usertold/);
-        assert.match(configContents, /repo_path:/);
-        assert.match(configContents, /issue_key_prefixes:/);
+        assert.match(configContents, /"projects"\s*:/);
+        assert.match(configContents, /"id"\s*:\s*"usertold"/);
+        assert.match(configContents, /"repo_path"\s*:/);
+        assert.match(configContents, /"issue_key_prefixes"\s*:/);
 
         const config = loadConfig(configPath, { profile: "write_config" });
         assert.equal(config.projects[0]?.id, "usertold");

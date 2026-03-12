@@ -3,7 +3,6 @@ import { basename, dirname } from "node:path";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import YAML from "yaml";
 import {
   getDefaultConfigPath,
   getDefaultDatabasePath,
@@ -60,12 +59,12 @@ function renderTemplate(template: string, replacements?: { publicBaseUrl?: strin
   const home = homedir();
   const user = basename(home);
   const rendered = template
-    .replaceAll("${PATCHRELAY_CONFIG:-/home/your-user/.config/patchrelay/patchrelay.yaml}", getDefaultConfigPath())
+    .replaceAll("${PATCHRELAY_CONFIG:-/home/your-user/.config/patchrelay/patchrelay.json}", getDefaultConfigPath())
     .replaceAll("${PATCHRELAY_DB_PATH:-/home/your-user/.local/state/patchrelay/patchrelay.sqlite}", getDefaultDatabasePath())
     .replaceAll("${PATCHRELAY_LOG_FILE:-/home/your-user/.local/state/patchrelay/patchrelay.log}", getDefaultLogPath())
     .replaceAll("/home/your-user/.config/patchrelay/runtime.env", getDefaultRuntimeEnvPath())
     .replaceAll("/home/your-user/.config/patchrelay/service.env", getDefaultServiceEnvPath())
-    .replaceAll("/home/your-user/.config/patchrelay/patchrelay.yaml", getDefaultConfigPath())
+    .replaceAll("/home/your-user/.config/patchrelay/patchrelay.json", getDefaultConfigPath())
     .replaceAll("/home/your-user/.config/patchrelay", getPatchRelayConfigDir())
     .replaceAll("/home/your-user/.local/state/patchrelay/webhooks", getDefaultWebhookArchiveDir())
     .replaceAll("/home/your-user/.local/state/patchrelay", getPatchRelayStateDir())
@@ -78,6 +77,29 @@ function renderTemplate(template: string, replacements?: { publicBaseUrl?: strin
   }
 
   return rendered;
+}
+
+function parseConfigObject(raw: string, configPath: string): Record<string, unknown> {
+  const source = raw.trim() ? raw : "{}";
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(source);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Invalid JSON config file: ${configPath}: ${message}`, {
+      cause: error,
+    });
+  }
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`Config file must contain a JSON object at the top level: ${configPath}`);
+  }
+
+  return parsed as Record<string, unknown>;
+}
+
+function stringifyConfig(config: Record<string, unknown>): string {
+  return `${JSON.stringify(config, null, 2)}\n`;
 }
 
 function generateSecret(bytes = 32): string {
@@ -126,15 +148,14 @@ async function applyPublicBaseUrlToConfig(
   }
 
   const original = await readFile(configPath, "utf8");
-  const document = YAML.parseDocument(original);
-  const serverNode = document.get("server", true);
-  if (YAML.isMap(serverNode)) {
-    serverNode.set("public_base_url", publicBaseUrl);
-  } else {
-    document.set("server", document.createNode({ public_base_url: publicBaseUrl }));
-  }
+  const document = parseConfigObject(original, configPath);
+  const server = document.server && typeof document.server === "object" && !Array.isArray(document.server)
+    ? { ...(document.server as Record<string, unknown>) }
+    : {};
+  server.public_base_url = publicBaseUrl;
+  document.server = server;
 
-  const next = document.toString();
+  const next = stringifyConfig(document);
   if (next === original) {
     return "skipped";
   }
@@ -173,7 +194,7 @@ export async function initializePatchRelayHome(options?: { force?: boolean; publ
   const runtimeEnvTemplate = renderTemplate(readBundledAsset("runtime.env.example"));
   const serviceEnvTemplate = renderServiceEnvTemplate(readBundledAsset("service.env.example"));
   const configTemplate = renderTemplate(
-    readBundledAsset("config/patchrelay.example.yaml"),
+    readBundledAsset("config/patchrelay.example.json"),
     publicBaseUrl ? { publicBaseUrl } : undefined,
   );
 
@@ -271,7 +292,7 @@ export async function upsertProjectInConfig(options: {
   const linearTeamIds = [...new Set((options.linearTeamIds ?? []).map((value) => value.trim()).filter(Boolean))];
 
   const original = await readFile(configPath, "utf8");
-  const parsed = (YAML.parse(original) ?? {}) as { projects?: Array<Record<string, unknown>> };
+  const parsed = parseConfigObject(original, configPath) as { projects?: Array<Record<string, unknown>> };
   const existingProjects = Array.isArray(parsed.projects) ? parsed.projects : [];
   const existingIndex = existingProjects.findIndex((project) => String(project.id ?? "") === projectId);
   const existingProject = existingIndex >= 0 ? existingProjects[existingIndex] : undefined;
@@ -358,18 +379,9 @@ export async function upsertProjectInConfig(options: {
   const status: "created" | "updated" | "unchanged" =
     existingProject === undefined ? "created" : normalizedExistingProject === normalizedNextProject ? "unchanged" : "updated";
 
-  const document = original.trim() ? YAML.parseDocument(original) : new YAML.Document({});
-  if (!YAML.isMap(document.contents)) {
-    throw new Error(`Config file must contain a YAML mapping at the top level: ${configPath}`);
-  }
-
-  let projectsNode = document.get("projects", true);
-  if (!projectsNode) {
-    projectsNode = document.createNode([]);
-    document.set("projects", projectsNode);
-  }
-  if (!YAML.isSeq(projectsNode)) {
-    throw new Error(`Config file field "projects" must be a YAML sequence: ${configPath}`);
+  const document = parseConfigObject(original, configPath);
+  if ("projects" in document && document.projects !== undefined && !Array.isArray(document.projects)) {
+    throw new Error(`Config file field "projects" must be a JSON array: ${configPath}`);
   }
 
   if (status !== "unchanged") {
@@ -379,9 +391,8 @@ export async function upsertProjectInConfig(options: {
     } else {
       nextProjects.push(nextProject);
     }
-    document.set("projects", document.createNode(nextProjects));
-
-    const next = document.toString();
+    document.projects = nextProjects;
+    const next = stringifyConfig(document);
     await writeFile(configPath, next, "utf8");
   }
 

@@ -5,7 +5,7 @@ Description=Watch PatchRelay config and env changes
 Unit=patchrelay-reload.service
 PathChanged=/home/your-user/.config/patchrelay/runtime.env
 PathChanged=/home/your-user/.config/patchrelay/service.env
-PathChanged=/home/your-user/.config/patchrelay/patchrelay.yaml
+PathChanged=/home/your-user/.config/patchrelay/patchrelay.json
 
 [Install]
 WantedBy=default.target

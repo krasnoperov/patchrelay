@@ -1,7 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { isIP } from "node:net";
 import path from "node:path";
-import YAML from "yaml";
 import { z } from "zod";
 import type { AppConfig } from "./types.ts";
 import {
@@ -347,8 +346,16 @@ export function loadConfig(
   };
 
   const raw = readFileSync(requestedPath, "utf8");
-  const parsedYaml = YAML.parse(raw);
-  const parsed = configSchema.parse(withSectionDefaults(expandEnv(parsedYaml, env)));
+  let parsedFile: unknown;
+  try {
+    parsedFile = JSON.parse(raw);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Invalid JSON config file: ${requestedPath}: ${message}`, {
+      cause: error,
+    });
+  }
+  const parsed = configSchema.parse(withSectionDefaults(expandEnv(parsedFile, env)));
 
   const requirements = getLoadProfileRequirements(profile);
   const webhookSecret = env[parsed.linear.webhook_secret_env];

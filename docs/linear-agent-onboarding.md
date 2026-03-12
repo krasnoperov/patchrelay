@@ -16,7 +16,7 @@ PatchRelay is a machine-level execution harness, not a per-repo plugin.
 - one PatchRelay service runs on the machine
 - one Linear OAuth app is usually enough for that PatchRelay instance
 - one machine-level `service.env` holds the Linear secrets
-- one `patchrelay.yaml` contains one `projects[]` block per repository
+- one `patchrelay.json` contains one `projects[]` block per repository
 - each repository contributes workflow policy files such as `IMPLEMENTATION_WORKFLOW.md`
 
 Repositories own workflow instructions. PatchRelay owns the Linear app connection, webhook intake, token storage, routing, worktree orchestration, thread continuity, and reporting.

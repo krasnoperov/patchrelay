@@ -55,7 +55,7 @@ By default this writes:
 
 - `~/.config/patchrelay/runtime.env`
 - `~/.config/patchrelay/service.env`
-- `~/.config/patchrelay/patchrelay.yaml`
+- `~/.config/patchrelay/patchrelay.json`
 - `~/.config/systemd/user/patchrelay.service`
 - `~/.config/systemd/user/patchrelay-reload.service`
 - `~/.config/systemd/user/patchrelay.path`
@@ -121,7 +121,7 @@ patchrelay project apply app /absolute/path/to/repo
 
 Behavior:
 
-- writes or updates a `projects[]` entry in `~/.config/patchrelay/patchrelay.yaml`
+- writes or updates a `projects[]` entry in `~/.config/patchrelay/patchrelay.json`
 - stores the repo path as an absolute path
 - accepts optional routing with `--issue-prefix <prefixes>` and `--team-id <ids>`
 - runs readiness checks for the updated project
