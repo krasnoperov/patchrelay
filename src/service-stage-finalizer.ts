@@ -25,7 +25,7 @@ import {
 import { StageLifecyclePublisher } from "./stage-lifecycle-publisher.ts";
 import { StageTurnInputDispatcher } from "./stage-turn-input-dispatcher.ts";
 import type { AppConfig, CodexThreadSummary, LinearClientProvider, StageRunRecord, TrackedIssueRecord } from "./types.ts";
-import { safeJsonParse } from "./utils.ts";
+
 
 export class ServiceStageFinalizer {
   private readonly inputDispatcher: StageTurnInputDispatcher;
