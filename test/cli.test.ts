@@ -398,10 +398,89 @@ test("cli list and retry cover operator control flows", async () => {
     const updated = db.issueWorkflows.getTrackedIssue("usertold", "issue-2");
     assert.equal(updated?.desiredStage, "review");
     assert.equal(updated?.lifecycleStatus, "queued");
+    const issueControl = db.issueControl.getIssueControl("usertold", "issue-2");
+    assert.equal(issueControl?.desiredStage, "review");
+    assert.ok(issueControl?.desiredReceiptId);
 
     const inspectJson = createBufferStream();
     assert.equal(await runCli(["USE-54", "--json"], { config, data, stdout: inspectJson.stream, stderr: createBufferStream().stream }), 0);
     assert.match(inspectJson.read(), /"issueKey": "USE-54"/);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("cli falls back to ledger workspace and run context when legacy active pointers are sparse", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-ledger-fallback-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, true);
+    db.runMigrations();
+    seedRuntimeFiles(config);
+
+    db.issueWorkflows.upsertTrackedIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-4",
+      issueKey: "USE-57",
+      title: "Ledger-backed running issue",
+      currentLinearState: "Implementing",
+      lifecycleStatus: "running",
+      lastWebhookAt: "2026-03-09T11:00:00.000Z",
+    });
+    const receipt = db.eventReceipts.insertEventReceipt({
+      source: "linear-webhook",
+      externalId: "delivery-ledger",
+      eventType: "Issue.update",
+      receivedAt: "2026-03-09T11:00:00.000Z",
+      acceptanceStatus: "accepted",
+      projectId: "usertold",
+      linearIssueId: "issue-4",
+    });
+    const issueControl = db.issueControl.upsertIssueControl({
+      projectId: "usertold",
+      linearIssueId: "issue-4",
+      activeWorkspaceOwnershipId: null,
+      lifecycleStatus: "running",
+    });
+    const workspace = db.workspaceOwnership.upsertWorkspaceOwnership({
+      projectId: "usertold",
+      linearIssueId: "issue-4",
+      branchName: "use/USE-57-ledger-backed-running-issue",
+      worktreePath: path.join(config.projects[0].worktreeRoot, "USE-57"),
+      status: "active",
+    });
+    const runLease = db.runLeases.createRunLease({
+      issueControlId: issueControl.id,
+      projectId: "usertold",
+      linearIssueId: "issue-4",
+      workspaceOwnershipId: workspace.id,
+      stage: "development",
+      triggerReceiptId: receipt.id,
+      status: "running",
+    });
+    db.runLeases.updateRunLeaseThread({
+      runLeaseId: runLease.id,
+      threadId: "thread-57",
+      turnId: "turn-57",
+    });
+    db.issueControl.upsertIssueControl({
+      projectId: "usertold",
+      linearIssueId: "issue-4",
+      activeWorkspaceOwnershipId: workspace.id,
+      activeRunLeaseId: runLease.id,
+      lifecycleStatus: "running",
+    });
+
+    const data = new CliDataAccess(config, { db });
+    const worktree = data.worktree("USE-57");
+    assert.equal(worktree?.workspace.worktreePath, path.join(config.projects[0].worktreeRoot, "USE-57"));
+
+    const opened = data.open("USE-57");
+    assert.equal(opened?.resumeThreadId, "thread-57");
+
+    const list = data.list({ active: true });
+    const listed = list.find((entry) => entry.issueKey === "USE-57");
+    assert.equal(listed?.activeStage, "development");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
