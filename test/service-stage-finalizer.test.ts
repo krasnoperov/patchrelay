@@ -133,6 +133,10 @@ class FakeIssueWorkflowStore {
     return [...this.stageRuns.values()].filter((stageRun) => stageRun.projectId === projectId && stageRun.linearIssueId === linearIssueId);
   }
 
+  getLatestStageRunForIssue(projectId: string, linearIssueId: string): StageRunRecord | undefined {
+    return this.listStageRunsForIssue(projectId, linearIssueId).at(-1);
+  }
+
   finishStageRun(params: {
     stageRunId: number;
     status: StageRunRecord["status"];
@@ -526,8 +530,12 @@ function createWorkspace(overrides: Partial<WorkspaceRecord> = {}): WorkspaceRec
 }
 
 function createThread(status: "completed" | "inProgress"): CodexThreadSummary {
+  return createThreadWithId("thread-1", status);
+}
+
+function createThreadWithId(id: string, status: "completed" | "inProgress"): CodexThreadSummary {
   return {
-    id: "thread-1",
+    id,
     preview: "PatchRelay stage",
     cwd: "/tmp/worktrees/APP-1",
     status: status === "completed" ? "idle" : "running",
@@ -728,4 +736,25 @@ test("ledger reconciliation replays obligations and clears the matching legacy q
   assert.deepEqual(stageEvents.deliveredInputs, [1]);
   assert.equal(ledger.obligations.get(1)?.status, "completed");
   assert.equal(stageEvents.listPendingTurnInputs(stageRun.id).length, 0);
+});
+
+test("ledger reconciliation uses the run lease thread snapshot instead of legacy stage-run metadata", async () => {
+  const { store, ledger, codex, finalizer, stageRun } = createHarness({
+    withLedger: true,
+    stageRun: {
+      threadId: "legacy-thread",
+      turnId: "legacy-turn",
+    },
+  });
+  const runLease = ledger.runLeases.get(90);
+  assert.ok(runLease);
+  runLease.threadId = "ledger-thread";
+  runLease.turnId = "ledger-turn";
+  codex.threads.set("ledger-thread", createThreadWithId("ledger-thread", "completed"));
+
+  await finalizer.reconcileActiveStageRuns();
+
+  assert.equal(store.getStageRun(stageRun.id)?.status, "completed");
+  assert.equal(store.finishedStageRuns.at(-1)?.threadId, "ledger-thread");
+  assert.equal(store.finishedStageRuns.at(-1)?.turnId, "turn-1");
 });

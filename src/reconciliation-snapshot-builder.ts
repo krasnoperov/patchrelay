@@ -8,7 +8,6 @@ import type {
 import type { ReconciliationInput, ReconciliationObligation } from "./reconciliation-types.ts";
 import type {
   AppConfig,
-  EventReceiptRecord,
   IssueControlRecord,
   LinearClientProvider,
   RunLeaseRecord,
@@ -20,7 +19,6 @@ export interface ReconciliationSnapshot {
   issueControl: IssueControlRecord;
   runLease: RunLeaseRecord;
   workspaceOwnership?: WorkspaceOwnershipRecord;
-  triggerReceipt?: EventReceiptRecord;
   input: ReconciliationInput;
 }
 
@@ -79,17 +77,18 @@ export async function buildReconciliationSnapshot(params: {
       : ({ status: "unknown" as const });
 
   const obligations: ReconciliationObligation[] =
-    params.stores.obligations?.listPendingObligations({ runLeaseId: runLease.id }).map((obligation) => ({
-      id: obligation.id,
-      kind: obligation.kind,
-      status: obligation.status,
-      ...(obligation.runLeaseId !== undefined ? { runId: obligation.runLeaseId } : {}),
-      ...(obligation.threadId ? { threadId: obligation.threadId } : {}),
-      ...(obligation.turnId ? { turnId: obligation.turnId } : {}),
-      ...(safeJsonParse<unknown>(obligation.payloadJson) !== undefined
-        ? { payload: safeJsonParse<unknown>(obligation.payloadJson) }
-        : {}),
-    })) ?? [];
+    params.stores.obligations?.listPendingObligations({ runLeaseId: runLease.id }).map((obligation) => {
+      const payload = safeJsonParse<unknown>(obligation.payloadJson);
+      return {
+        id: obligation.id,
+        kind: obligation.kind,
+        status: obligation.status,
+        ...(obligation.runLeaseId !== undefined ? { runId: obligation.runLeaseId } : {}),
+        ...(obligation.threadId ? { threadId: obligation.threadId } : {}),
+        ...(obligation.turnId ? { turnId: obligation.turnId } : {}),
+        ...(payload !== undefined ? { payload } : {}),
+      };
+    }) ?? [];
 
   return {
     issueControl,

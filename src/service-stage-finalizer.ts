@@ -395,10 +395,7 @@ export class ServiceStageFinalizer {
       return;
     }
 
-    const runLease = this.stores.runLeases.getRunLease(runLeaseId);
-    if (!runLease) {
-      return;
-    }
+    const runLease = snapshot.runLease;
 
     const stageRun =
       (runLease.threadId ? this.stores.issueWorkflows.getStageRunByThreadId(runLease.threadId) : undefined) ??
@@ -412,12 +409,7 @@ export class ServiceStageFinalizer {
     const decision = reconcileIssue(snapshot.input);
 
     if (decision.outcome === "hydrate_live_state") {
-      await this.failStageRunDuringReconciliation(
-        stageRun,
-        threadId ?? `missing-thread-${stageRun.id}`,
-        "Ledger reconciliation could not hydrate the live state snapshot",
-        ...(turnId ? [{ turnId }] : []),
-      );
+      await this.reconcileLegacyStageRun(stageRun);
       return;
     }
 
@@ -433,7 +425,10 @@ export class ServiceStageFinalizer {
     }
 
     if (decision.outcome === "continue") {
-      await this.deliverPendingObligations(runLease.projectId, runLease.linearIssueId, threadId ?? stageRun.threadId!, turnId);
+      if (!threadId) {
+        return;
+      }
+      await this.deliverPendingObligations(runLease.projectId, runLease.linearIssueId, threadId, turnId);
       return;
     }
 
