@@ -208,6 +208,14 @@ test("webhook processor records desired stage and enqueues matching issues", asy
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-processor-"));
   try {
     const { db, processor, enqueuedIssues } = createHarness(baseDir);
+    const receipt = db.eventReceipts.insertEventReceipt({
+      source: "linear-webhook",
+      externalId: "delivery-start",
+      eventType: "Issue.update",
+      receivedAt: new Date().toISOString(),
+      acceptanceStatus: "accepted",
+      linearIssueId: "issue_1",
+    });
     const event = db.webhookEvents.insertWebhookEvent({
       webhookId: "delivery-start",
       receivedAt: new Date().toISOString(),
@@ -236,8 +244,14 @@ test("webhook processor records desired stage and enqueues matching issues", asy
     await processor.processWebhookEvent(event.id);
 
     const issue = db.issueWorkflows.getTrackedIssue("usertold", "issue_1");
+    const issueControl = db.issueControl.getIssueControl("usertold", "issue_1");
     assert.equal(issue?.desiredStage, "development");
+    assert.equal(issueControl?.desiredStage, "development");
+    assert.equal(issueControl?.desiredReceiptId, receipt.id);
+    assert.equal(issueControl?.lifecycleStatus, "queued");
     assert.equal(db.webhookEvents.getWebhookEvent(event.id)?.processingStatus, "processed");
+    assert.equal(db.eventReceipts.getEventReceipt(receipt.id)?.processingStatus, "processed");
+    assert.equal(db.eventReceipts.getEventReceipt(receipt.id)?.projectId, "usertold");
     assert.deepEqual(enqueuedIssues, [{ projectId: "usertold", issueId: "issue_1" }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -272,8 +286,40 @@ test("webhook processor routes prompted agent follow-ups into the active stage",
       promptText: "Implement carefully.",
     });
     assert.ok(claim);
+    const workspaceOwnership = db.workspaceOwnership.upsertWorkspaceOwnership({
+      projectId: "usertold",
+      linearIssueId: "issue_1",
+      branchName: "use/USE-25",
+      worktreePath: path.join(config.projects[0].worktreeRoot, "USE-25"),
+      status: "active",
+    });
+    const issueControl = db.issueControl.upsertIssueControl({
+      projectId: "usertold",
+      linearIssueId: "issue_1",
+      lifecycleStatus: "running",
+    });
+    const runLease = db.runLeases.createRunLease({
+      issueControlId: issueControl.id,
+      projectId: "usertold",
+      linearIssueId: "issue_1",
+      workspaceOwnershipId: workspaceOwnership.id,
+      stage: "development",
+      status: "running",
+    });
+    db.issueControl.upsertIssueControl({
+      projectId: "usertold",
+      linearIssueId: "issue_1",
+      activeWorkspaceOwnershipId: workspaceOwnership.id,
+      activeRunLeaseId: runLease.id,
+      lifecycleStatus: "running",
+    });
     db.issueWorkflows.updateStageRunThread({
       stageRunId: claim.stageRun.id,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+    db.runLeases.updateRunLeaseThread({
+      runLeaseId: runLease.id,
       threadId: "thread-1",
       turnId: "turn-1",
     });
@@ -316,6 +362,7 @@ test("webhook processor routes prompted agent follow-ups into the active stage",
     assert.equal(pending.length, 0);
     assert.equal(codex.steeredTurns.length, 1);
     assert.match(codex.steeredTurns[0]!.input, /Please add tests/);
+    assert.equal(db.obligations.listPendingObligations({ runLeaseId: runLease.id }).length, 1);
     assert.deepEqual(enqueuedIssues, []);
     assert.ok(
       linear.agentActivities.some(
@@ -325,6 +372,104 @@ test("webhook processor routes prompted agent follow-ups into the active stage",
           activity.ephemeral === true,
       ),
     );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("webhook processor records durable comment obligations alongside queued turn input delivery", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-processor-comment-obligation-"));
+  try {
+    const { config, db, processor } = createHarness(baseDir);
+    db.issueWorkflows.recordDesiredStage({
+      projectId: "usertold",
+      linearIssueId: "issue_1",
+      issueKey: "USE-25",
+      title: "Build app server orchestration",
+      issueUrl: "https://linear.app/example/issue/USE-25",
+      currentLinearState: "Implementing",
+      desiredStage: "development",
+      desiredWebhookId: "delivery-start",
+      lastWebhookAt: new Date().toISOString(),
+    });
+    const claim = db.issueWorkflows.claimStageRun({
+      projectId: "usertold",
+      linearIssueId: "issue_1",
+      stage: "development",
+      triggerWebhookId: "delivery-start",
+      branchName: "use/USE-25",
+      worktreePath: path.join(config.projects[0]!.worktreeRoot, "USE-25"),
+      workflowFile: config.projects[0]!.workflows[0]!.workflowFile,
+      promptText: "Implement carefully.",
+    });
+    assert.ok(claim);
+
+    const workspaceOwnership = db.workspaceOwnership.upsertWorkspaceOwnership({
+      projectId: "usertold",
+      linearIssueId: "issue_1",
+      branchName: "use/USE-25",
+      worktreePath: path.join(config.projects[0]!.worktreeRoot, "USE-25"),
+      status: "active",
+    });
+    const issueControl = db.issueControl.upsertIssueControl({
+      projectId: "usertold",
+      linearIssueId: "issue_1",
+      lifecycleStatus: "running",
+    });
+    const runLease = db.runLeases.createRunLease({
+      issueControlId: issueControl.id,
+      projectId: "usertold",
+      linearIssueId: "issue_1",
+      workspaceOwnershipId: workspaceOwnership.id,
+      stage: "development",
+      status: "running",
+    });
+    db.issueControl.upsertIssueControl({
+      projectId: "usertold",
+      linearIssueId: "issue_1",
+      activeWorkspaceOwnershipId: workspaceOwnership.id,
+      activeRunLeaseId: runLease.id,
+      lifecycleStatus: "running",
+    });
+
+    const event = db.webhookEvents.insertWebhookEvent({
+      webhookId: "delivery-comment-obligation",
+      receivedAt: new Date().toISOString(),
+      eventType: "Comment.create",
+      issueId: "issue_1",
+      headersJson: "{}",
+      payloadJson: JSON.stringify({
+        action: "create",
+        type: "Comment",
+        createdAt: "2026-03-08T12:05:00.000Z",
+        webhookTimestamp: 1000,
+        data: {
+          id: "comment_2",
+          body: "Please also update the docs.",
+          user: { name: "Alex" },
+          issue: {
+            id: "issue_1",
+            identifier: "USE-25",
+            title: "Build app server orchestration",
+            team: { key: "USE" },
+            state: { name: "Implementing" },
+          },
+        },
+      }),
+      signatureValid: true,
+      dedupeStatus: "accepted",
+    });
+
+    await processor.processWebhookEvent(event.id);
+
+    const pendingInputs = db.stageEvents.listPendingTurnInputs(claim.stageRun.id);
+    assert.equal(pendingInputs.length, 1);
+    assert.equal(pendingInputs[0]?.source, "linear-comment:comment_2");
+    const obligations = db.obligations.listPendingObligations({ runLeaseId: runLease.id });
+    assert.equal(obligations.length, 1);
+    assert.equal(obligations[0]?.source, "linear-comment:comment_2");
+    assert.equal(obligations[0]?.threadId, undefined);
+    assert.equal(obligations[0]?.turnId, undefined);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

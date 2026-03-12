@@ -16,6 +16,7 @@ export interface EventReceiptStore {
   markEventReceiptProcessed(id: number, status: EventReceiptRecord["processingStatus"]): void;
   assignEventReceiptContext(id: number, params: { projectId?: string; linearIssueId?: string }): void;
   getEventReceipt(id: number): EventReceiptRecord | undefined;
+  getEventReceiptBySourceExternalId(source: string, externalId: string): EventReceiptRecord | undefined;
 }
 
 export interface EventReceiptStoreProvider {

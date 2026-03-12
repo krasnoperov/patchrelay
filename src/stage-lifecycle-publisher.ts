@@ -1,4 +1,5 @@
 import type { Logger } from "pino";
+import type { IssueControlStoreProvider } from "./ledger-ports.ts";
 import type { IssueWorkflowLifecycleStoreProvider } from "./workflow-ports.ts";
 import {
   buildAwaitingHandoffComment,
@@ -13,7 +14,7 @@ import { sanitizeDiagnosticText } from "./utils.ts";
 export class StageLifecyclePublisher {
   constructor(
     private readonly config: AppConfig,
-    private readonly stores: IssueWorkflowLifecycleStoreProvider,
+    private readonly stores: IssueWorkflowLifecycleStoreProvider & Partial<IssueControlStoreProvider>,
     private readonly linearProvider: LinearClientProvider,
     private readonly logger: Logger,
   ) {}
@@ -45,6 +46,13 @@ export class StageLifecyclePublisher {
       statusCommentId: issue.statusCommentId ?? null,
       lifecycleStatus: "running",
     });
+    this.stores.issueControl?.upsertIssueControl({
+      projectId: stageRun.projectId,
+      linearIssueId: stageRun.linearIssueId,
+      ...(issue.statusCommentId ? { serviceOwnedCommentId: issue.statusCommentId } : {}),
+      ...(issue.activeAgentSessionId ? { activeAgentSessionId: issue.activeAgentSessionId } : {}),
+      lifecycleStatus: "running",
+    });
   }
 
   async refreshRunningStatusComment(projectId: string, issueId: string, stageRunId: number, issueKey?: string): Promise<void> {
@@ -71,6 +79,12 @@ export class StageLifecyclePublisher {
         }),
       });
       this.stores.issueWorkflows.setIssueStatusComment(projectId, issueId, result.id);
+      this.stores.issueControl?.upsertIssueControl({
+        projectId,
+        linearIssueId: issueId,
+        serviceOwnedCommentId: result.id,
+        lifecycleStatus: issue.lifecycleStatus,
+      });
     } catch (error) {
       this.logger.warn(
         {
@@ -150,6 +164,11 @@ export class StageLifecyclePublisher {
           }
           this.stores.issueWorkflows.setIssueLifecycleStatus(stageRun.projectId, stageRun.linearIssueId, "paused");
           this.stores.issueWorkflows.setPipelineStatus(pipeline.id, "paused");
+          this.stores.issueControl?.upsertIssueControl({
+            projectId: stageRun.projectId,
+            linearIssueId: stageRun.linearIssueId,
+            lifecycleStatus: "paused",
+          });
 
           const finalStageRun = this.stores.issueWorkflows.getStageRun(stageRun.id) ?? stageRun;
           const result = await linear.upsertIssueComment({
@@ -162,6 +181,12 @@ export class StageLifecyclePublisher {
             }),
           });
           this.stores.issueWorkflows.setIssueStatusComment(stageRun.projectId, stageRun.linearIssueId, result.id);
+          this.stores.issueControl?.upsertIssueControl({
+            projectId: stageRun.projectId,
+            linearIssueId: stageRun.linearIssueId,
+            serviceOwnedCommentId: result.id,
+            lifecycleStatus: "paused",
+          });
           await this.publishAgentCompletion(refreshedIssue, {
             type: "elicitation",
             body: `PatchRelay finished the ${stageRun.stage} workflow. Move the issue to its next workflow state or leave a follow-up prompt to continue.`,

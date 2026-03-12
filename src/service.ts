@@ -1,6 +1,7 @@
 import type { Logger } from "pino";
 import type { CodexAppServerClient, CodexNotification } from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
+import type { EventReceiptStoreProvider, IssueControlStoreProvider, ObligationStoreProvider, RunLeaseStoreProvider, WorkspaceOwnershipStoreProvider } from "./ledger-ports.ts";
 import type { LinearInstallationStoreProvider } from "./installation-ports.ts";
 import type { StageEventLogStoreProvider, StageTurnInputStoreProvider } from "./stage-event-ports.ts";
 import type { IssueWorkflowExecutionStoreProvider, IssueWorkflowLifecycleStoreProvider, IssueWorkflowQueryStoreProvider, IssueWorkflowWebhookStoreProvider, ReadyIssueSource } from "./workflow-ports.ts";
@@ -15,6 +16,11 @@ import { acceptIncomingWebhook } from "./service-webhooks.ts";
 import type { AppConfig, LinearClient, LinearClientProvider } from "./types.ts";
 
 type ServiceStores = WebhookEventStoreProvider &
+  EventReceiptStoreProvider &
+  IssueControlStoreProvider &
+  WorkspaceOwnershipStoreProvider &
+  RunLeaseStoreProvider &
+  ObligationStoreProvider &
   IssueWorkflowExecutionStoreProvider &
   IssueWorkflowLifecycleStoreProvider &
   IssueWorkflowQueryStoreProvider &
@@ -26,6 +32,11 @@ type ServiceStores = WebhookEventStoreProvider &
 function createServiceStores(db: PatchRelayDatabase): ServiceStores {
   return {
     webhookEvents: db.webhookEvents,
+    eventReceipts: db.eventReceipts,
+    issueControl: db.issueControl,
+    workspaceOwnership: db.workspaceOwnership,
+    runLeases: db.runLeases,
+    obligations: db.obligations,
     issueWorkflows: db.issueWorkflows,
     stageEvents: db.stageEvents,
     linearInstallations: db.linearInstallations,
@@ -140,7 +151,10 @@ export class PatchRelayService {
   }> {
     const result = await acceptIncomingWebhook({
       config: this.config,
-      stores: { webhookEvents: this.db.webhookEvents },
+      stores: {
+        webhookEvents: this.db.webhookEvents,
+        eventReceipts: this.db.eventReceipts,
+      },
       logger: this.logger,
       webhookId: params.webhookId,
       headers: params.headers,

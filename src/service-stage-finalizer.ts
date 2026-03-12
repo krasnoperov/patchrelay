@@ -1,6 +1,7 @@
 import type { Logger } from "pino";
 import type { CodexNotification } from "./codex-app-server.ts";
 import type { CodexAppServerClient } from "./codex-app-server.ts";
+import type { IssueControlStoreProvider, ObligationStoreProvider, RunLeaseStoreProvider, WorkspaceOwnershipStoreProvider } from "./ledger-ports.ts";
 import type {
   StageEventLogStoreProvider,
   StageTurnInputStoreProvider,
@@ -24,6 +25,7 @@ import {
 import { StageLifecyclePublisher } from "./stage-lifecycle-publisher.ts";
 import { StageTurnInputDispatcher } from "./stage-turn-input-dispatcher.ts";
 import type { AppConfig, CodexThreadSummary, LinearClientProvider, StageRunRecord, TrackedIssueRecord } from "./types.ts";
+import { safeJsonParse } from "./utils.ts";
 
 export class ServiceStageFinalizer {
   private readonly inputDispatcher: StageTurnInputDispatcher;
@@ -35,7 +37,8 @@ export class ServiceStageFinalizer {
       IssueWorkflowLifecycleStoreProvider &
       IssueWorkflowQueryStoreProvider &
       StageEventLogStoreProvider &
-      StageTurnInputStoreProvider,
+      StageTurnInputStoreProvider &
+      Partial<IssueControlStoreProvider & ObligationStoreProvider & RunLeaseStoreProvider & WorkspaceOwnershipStoreProvider>,
     private readonly codex: CodexAppServerClient,
     private readonly linearProvider: LinearClientProvider,
     private readonly enqueueIssue: (projectId: string, issueId: string) => void,
@@ -134,6 +137,7 @@ export class ServiceStageFinalizer {
 
       const latestTurn = thread.turns.at(-1);
       if (!latestTurn || latestTurn.status === "inProgress") {
+        await this.deliverPendingObligations(stageRun.projectId, stageRun.linearIssueId, stageRun.threadId, latestTurn?.id ?? stageRun.turnId);
         continue;
       }
 
@@ -180,6 +184,11 @@ export class ServiceStageFinalizer {
       summaryJson: JSON.stringify(extractStageSummary(report)),
       reportJson: JSON.stringify(report),
     });
+    this.finishLedgerRun(stageRun.projectId, stageRun.linearIssueId, "completed", {
+      threadId: params.threadId,
+      ...(params.turnId ? { turnId: params.turnId } : {}),
+      nextLifecycleStatus: issue.desiredStage ? "queued" : "completed",
+    });
 
     void this.advanceAfterStageCompletion(stageRun);
   }
@@ -204,6 +213,12 @@ export class ServiceStageFinalizer {
           ...(options?.turnId ? { turnId: options.turnId } : {}),
         }),
       ),
+    });
+    this.finishLedgerRun(stageRun.projectId, stageRun.linearIssueId, "failed", {
+      threadId,
+      ...(options?.turnId ? { turnId: options.turnId } : {}),
+      failureReason: message,
+      nextLifecycleStatus: "failed",
     });
   }
 
@@ -245,6 +260,94 @@ export class ServiceStageFinalizer {
 
   private async advanceAfterStageCompletion(stageRun: StageRunRecord): Promise<void> {
     await this.lifecyclePublisher.publishStageCompletion(stageRun, this.enqueueIssue);
+  }
+
+  private finishLedgerRun(
+    projectId: string,
+    linearIssueId: string,
+    status: "completed" | "failed",
+    params: {
+      threadId?: string;
+      turnId?: string;
+      failureReason?: string;
+      nextLifecycleStatus: TrackedIssueRecord["lifecycleStatus"];
+    },
+  ): void {
+    const issueControl = this.stores.issueControl?.getIssueControl(projectId, linearIssueId);
+    if (!issueControl?.activeRunLeaseId) {
+      return;
+    }
+
+    this.stores.runLeases?.finishRunLease({
+      runLeaseId: issueControl.activeRunLeaseId,
+      status,
+      ...(params.threadId ? { threadId: params.threadId } : {}),
+      ...(params.turnId ? { turnId: params.turnId } : {}),
+      ...(params.failureReason ? { failureReason: params.failureReason } : {}),
+    });
+
+    if (issueControl.activeWorkspaceOwnershipId !== undefined) {
+      const workspace = this.stores.workspaceOwnership?.getWorkspaceOwnership(issueControl.activeWorkspaceOwnershipId);
+      if (workspace) {
+        this.stores.workspaceOwnership?.upsertWorkspaceOwnership({
+          projectId,
+          linearIssueId,
+          branchName: workspace.branchName,
+          worktreePath: workspace.worktreePath,
+          status: status === "completed" ? "active" : "paused",
+          currentRunLeaseId: null,
+        });
+      }
+    }
+
+    this.stores.issueControl?.upsertIssueControl({
+      projectId,
+      linearIssueId,
+      activeRunLeaseId: null,
+      ...(issueControl.activeWorkspaceOwnershipId !== undefined
+        ? { activeWorkspaceOwnershipId: issueControl.activeWorkspaceOwnershipId }
+        : {}),
+      ...(issueControl.serviceOwnedCommentId ? { serviceOwnedCommentId: issueControl.serviceOwnedCommentId } : {}),
+      ...(issueControl.activeAgentSessionId ? { activeAgentSessionId: issueControl.activeAgentSessionId } : {}),
+      lifecycleStatus: params.nextLifecycleStatus,
+    });
+  }
+
+  private async deliverPendingObligations(
+    projectId: string,
+    linearIssueId: string,
+    threadId: string,
+    turnId?: string,
+  ): Promise<void> {
+    if (!turnId) {
+      return;
+    }
+
+    const issueControl = this.stores.issueControl?.getIssueControl(projectId, linearIssueId);
+    if (!issueControl?.activeRunLeaseId || !this.stores.obligations) {
+      return;
+    }
+
+    for (const obligation of this.stores.obligations.listPendingObligations({ runLeaseId: issueControl.activeRunLeaseId })) {
+      this.stores.obligations.updateObligationRouting(obligation.id, { threadId, turnId });
+      const payload = safeJsonParse<{ body?: string }>(obligation.payloadJson);
+      const body = payload?.body?.trim();
+      if (!body) {
+        this.stores.obligations.markObligationStatus(obligation.id, "failed", "obligation payload had no deliverable body");
+        continue;
+      }
+
+      try {
+        await this.codex.steerTurn({ threadId, turnId, input: body });
+        this.stores.obligations.markObligationStatus(obligation.id, "completed");
+      } catch (error) {
+        this.stores.obligations.markObligationStatus(
+          obligation.id,
+          "failed",
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    }
   }
 }
 

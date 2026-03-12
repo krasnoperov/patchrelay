@@ -76,6 +76,13 @@ export class AuthoritativeLedgerStore implements AuthoritativeLedgerStoreContrac
     return row ? mapEventReceipt(row) : undefined;
   }
 
+  getEventReceiptBySourceExternalId(source: string, externalId: string): EventReceiptRecord | undefined {
+    const row = this.connection
+      .prepare("SELECT * FROM event_receipts WHERE source = ? AND external_id = ?")
+      .get(source, externalId) as Record<string, unknown> | undefined;
+    return row ? mapEventReceipt(row) : undefined;
+  }
+
   upsertIssueControl(params: {
     projectId: string;
     linearIssueId: string;

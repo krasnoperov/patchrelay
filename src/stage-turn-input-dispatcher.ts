@@ -24,11 +24,12 @@ export class StageTurnInputDispatcher {
       logFailures?: boolean;
       failureMessage?: string;
     },
-  ): Promise<void> {
+  ): Promise<{ deliveredInputIds: number[] }> {
     if (!stageRun.threadId || !stageRun.turnId) {
-      return;
+      return { deliveredInputIds: [] };
     }
 
+    const deliveredInputIds: number[] = [];
     for (const input of this.inputs.stageEvents.listPendingTurnInputs(stageRun.id)) {
       try {
         await this.codex.steerTurn({
@@ -37,6 +38,7 @@ export class StageTurnInputDispatcher {
           input: input.body,
         });
         this.inputs.stageEvents.markTurnInputDelivered(input.id);
+        deliveredInputIds.push(input.id);
         this.logger.debug(
           {
             threadId: stageRun.threadId,
@@ -61,5 +63,7 @@ export class StageTurnInputDispatcher {
         break;
       }
     }
+
+    return { deliveredInputIds };
   }
 }

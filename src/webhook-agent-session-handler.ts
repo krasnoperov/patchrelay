@@ -1,3 +1,4 @@
+import type { IssueControlStoreProvider, ObligationStoreProvider } from "./ledger-ports.ts";
 import type { StageTurnInputStoreProvider } from "./stage-event-ports.ts";
 import type { IssueWorkflowWebhookStoreProvider } from "./workflow-ports.ts";
 import type { StageAgentActivityPublisher } from "./stage-agent-activity-publisher.ts";
@@ -90,17 +91,33 @@ export class AgentSessionWebhookHandler {
     }
 
     if (activeStageRun && promptBody) {
-      this.stores.stageEvents.enqueueTurnInput({
+      const queuedInputId = this.stores.stageEvents.enqueueTurnInput({
         stageRunId: activeStageRun.id,
         ...(activeStageRun.threadId ? { threadId: activeStageRun.threadId } : {}),
         ...(activeStageRun.turnId ? { turnId: activeStageRun.turnId } : {}),
         source: `linear-agent-prompt:${normalized.agentSession.id}:${normalized.webhookId}`,
         body: ["New Linear agent prompt received while you are working.", "", promptBody].join("\n"),
       });
+      const obligationId = this.enqueueObligation(
+        project.id,
+        normalized.issue!.id,
+        activeStageRun.id,
+        activeStageRun.threadId,
+        activeStageRun.turnId,
+        queuedInputId,
+        normalized.agentSession.id,
+        promptBody,
+      );
       await this.turnInputDispatcher.flush(activeStageRun, {
         ...(issue?.issueKey ? { issueKey: issue.issueKey } : {}),
         failureMessage: "Failed to deliver queued Linear agent prompt to active Codex turn",
       });
+      if (obligationId) {
+        const stillPending = this.stores.stageEvents.listPendingTurnInputs(activeStageRun.id).some((input) => input.id === queuedInputId);
+        if (!stillPending) {
+          this.stores.obligations?.markObligationStatus(obligationId, "completed");
+        }
+      }
       await this.agentActivity.publishForSession(project.id, normalized.agentSession.id, {
         type: "thought",
         body: `PatchRelay routed your follow-up instructions into the active ${activeStageRun.stage} workflow.`,
@@ -134,5 +151,38 @@ export class AgentSessionWebhookHandler {
         body: `PatchRelay received your prompt, but the issue is not in a runnable workflow state yet. Move it to one of: ${runnableStates}.`,
       });
     }
+  }
+
+  private enqueueObligation(
+    projectId: string,
+    linearIssueId: string,
+    stageRunId: number,
+    threadId: string | undefined,
+    turnId: string | undefined,
+    queuedInputId: number,
+    agentSessionId: string,
+    promptBody: string,
+  ): number | undefined {
+    const activeRunLeaseId = this.stores.issueControl?.getIssueControl(projectId, linearIssueId)?.activeRunLeaseId;
+    if (!this.stores.obligations || activeRunLeaseId === undefined) {
+      return undefined;
+    }
+
+    const obligation = this.stores.obligations.enqueueObligation({
+      projectId,
+      linearIssueId,
+      kind: "deliver_turn_input",
+      source: `linear-agent-prompt:${agentSessionId}`,
+      payloadJson: JSON.stringify({
+        queuedInputId,
+        stageRunId,
+        body: promptBody,
+      }),
+      runLeaseId: activeRunLeaseId,
+      ...(threadId ? { threadId } : {}),
+      ...(turnId ? { turnId } : {}),
+      dedupeKey: `linear-agent-prompt:${agentSessionId}:${queuedInputId}`,
+    });
+    return obligation.id;
   }
 }

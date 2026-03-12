@@ -1,3 +1,4 @@
+import type { IssueControlStoreProvider } from "./ledger-ports.ts";
 import type { LinearInstallationStoreProvider } from "./installation-ports.ts";
 import type { IssueWorkflowWebhookStoreProvider } from "./workflow-ports.ts";
 import { triggerEventAllowed } from "./project-resolution.ts";
@@ -18,9 +19,13 @@ export interface RecordedWebhookIssueState {
 }
 
 export class WebhookDesiredStageRecorder {
-  constructor(private readonly stores: IssueWorkflowWebhookStoreProvider & LinearInstallationStoreProvider) {}
+  constructor(
+    private readonly stores: IssueWorkflowWebhookStoreProvider &
+      LinearInstallationStoreProvider &
+      Partial<IssueControlStoreProvider>,
+  ) {}
 
-  record(project: ProjectConfig, normalized: NormalizedEvent): RecordedWebhookIssueState {
+  record(project: ProjectConfig, normalized: NormalizedEvent, options?: { eventReceiptId?: number }): RecordedWebhookIssueState {
     const normalizedIssue = normalized.issue;
     if (!normalizedIssue) {
       return {
@@ -57,8 +62,11 @@ export class WebhookDesiredStageRecorder {
       this.stores.issueWorkflows.setIssuePendingLaunchInput(project.id, normalizedIssue.id, launchInput);
     }
 
+    const refreshedIssue = this.stores.issueWorkflows.getTrackedIssue(project.id, normalizedIssue.id);
+    this.syncIssueControl(project.id, normalizedIssue.id, refreshedIssue, desiredStage, normalized.agentSession?.id, options?.eventReceiptId);
+
     return {
-      issue: issue ?? this.stores.issueWorkflows.getTrackedIssue(project.id, normalizedIssue.id),
+      issue: refreshedIssue ?? issue,
       activeStageRun,
       desiredStage,
       delegatedToPatchRelay,
@@ -134,5 +142,27 @@ export class WebhookDesiredStageRecorder {
     }
 
     return undefined;
+  }
+
+  private syncIssueControl(
+    projectId: string,
+    linearIssueId: string,
+    issue: TrackedIssueRecord | undefined,
+    desiredStage: WorkflowStage | undefined,
+    activeAgentSessionId: string | undefined,
+    eventReceiptId: number | undefined,
+  ): void {
+    if (!this.stores.issueControl || !issue) {
+      return;
+    }
+
+    this.stores.issueControl.upsertIssueControl({
+      projectId,
+      linearIssueId,
+      ...(desiredStage ? { desiredStage } : {}),
+      ...(eventReceiptId !== undefined && desiredStage ? { desiredReceiptId: eventReceiptId } : {}),
+      ...(activeAgentSessionId ? { activeAgentSessionId } : {}),
+      lifecycleStatus: issue.lifecycleStatus,
+    });
   }
 }

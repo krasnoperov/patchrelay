@@ -147,6 +147,11 @@ function storedWebhookCount(db: PatchRelayDatabase): number {
   return row.count;
 }
 
+function storedEventReceiptCount(db: PatchRelayDatabase): number {
+  const row = db.connection.prepare("SELECT COUNT(*) AS count FROM event_receipts").get() as { count: number };
+  return row.count;
+}
+
 test("acceptIncomingWebhook does not persist or archive invalid signatures", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-security-"));
 
@@ -159,7 +164,7 @@ test("acceptIncomingWebhook does not persist or archive invalid signatures", asy
     const rawBody = Buffer.from(JSON.stringify(payload), "utf8");
     const result = await acceptIncomingWebhook({
       config,
-      db,
+      stores: db,
       logger: pino({ enabled: false }),
       webhookId: "delivery-invalid",
       headers: {
@@ -190,7 +195,7 @@ test("acceptIncomingWebhook does not persist or archive stale payloads", async (
     const signature = crypto.createHmac("sha256", config.linear.webhookSecret).update(rawBody).digest("hex");
     const result = await acceptIncomingWebhook({
       config,
-      db,
+      stores: db,
       logger: pino({ enabled: false }),
       webhookId: "delivery-stale",
       headers: {
@@ -202,6 +207,41 @@ test("acceptIncomingWebhook does not persist or archive stale payloads", async (
     assert.equal(result.status, 401);
     assert.equal(storedWebhookCount(db), 0);
     assert.equal(archivedFileCount(config.logging.webhookArchiveDir!), 0);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("acceptIncomingWebhook dual-writes authoritative event receipts for accepted deliveries", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-accepted-"));
+
+  try {
+    const config = buildConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+
+    const payload = buildPayload();
+    const rawBody = Buffer.from(JSON.stringify(payload), "utf8");
+    const signature = crypto.createHmac("sha256", config.linear.webhookSecret).update(rawBody).digest("hex");
+    const result = await acceptIncomingWebhook({
+      config,
+      stores: db,
+      logger: pino({ enabled: false }),
+      webhookId: "delivery-accepted",
+      headers: {
+        "linear-signature": signature,
+      },
+      rawBody,
+    });
+
+    assert.equal(result.status, 200);
+    assert.equal(storedWebhookCount(db), 1);
+    assert.equal(storedEventReceiptCount(db), 1);
+    const receipt = db.eventReceipts.getEventReceiptBySourceExternalId("linear-webhook", "delivery-accepted");
+    assert.equal(receipt?.eventType, "Issue.update");
+    assert.equal(receipt?.linearIssueId, "issue-1");
+    assert.equal(receipt?.processingStatus, "pending");
+    assert.ok(archivedFileCount(config.logging.webhookArchiveDir!) > 0);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
