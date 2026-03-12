@@ -103,6 +103,7 @@ export interface ObligationStore {
     turnId?: string | null;
     dedupeKey?: string | null;
   }): ObligationRecord;
+  getObligationByDedupeKey(params: { runLeaseId: number; kind: string; dedupeKey: string }): ObligationRecord | undefined;
   listPendingObligations(params?: { runLeaseId?: number; kind?: string }): ObligationRecord[];
   updateObligationRouting(id: number, params: { threadId?: string | null; turnId?: string | null }): void;
   markObligationStatus(id: number, status: ObligationRecord["status"], lastError?: string | null): void;

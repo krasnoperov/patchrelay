@@ -321,7 +321,7 @@ export class AuthoritativeLedgerStore implements AuthoritativeLedgerStoreContrac
     const result = this.connection
       .prepare(
         `
-        INSERT INTO obligations (
+        INSERT OR IGNORE INTO obligations (
           project_id, linear_issue_id, kind, status, source, payload_json, run_lease_id, thread_id, turn_id, dedupe_key, created_at, updated_at
         ) VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?)
         `,
@@ -339,7 +339,26 @@ export class AuthoritativeLedgerStore implements AuthoritativeLedgerStoreContrac
         now,
         now,
       );
-    return this.getObligation(Number(result.lastInsertRowid))!;
+
+    if (result.changes) {
+      return this.getObligation(Number(result.lastInsertRowid))!;
+    }
+
+    if (params.dedupeKey) {
+      const existing =
+        params.runLeaseId === undefined || params.runLeaseId === null
+          ? undefined
+          : this.getObligationByDedupeKey({
+              runLeaseId: params.runLeaseId,
+              kind: params.kind,
+              dedupeKey: params.dedupeKey,
+            });
+      if (existing) {
+        return existing;
+      }
+    }
+
+    throw new Error(`Failed to persist obligation for ${params.projectId}:${params.linearIssueId}:${params.kind}`);
   }
 
   listPendingObligations(params?: { runLeaseId?: number; kind?: string }): ObligationRecord[] {
@@ -406,6 +425,22 @@ export class AuthoritativeLedgerStore implements AuthoritativeLedgerStoreContrac
 
   private getObligation(id: number): ObligationRecord | undefined {
     const row = this.connection.prepare("SELECT * FROM obligations WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+    return row ? mapObligation(row) : undefined;
+  }
+
+  getObligationByDedupeKey(params: { runLeaseId: number; kind: string; dedupeKey: string }): ObligationRecord | undefined {
+    const row = this.connection
+      .prepare(
+        `
+        SELECT * FROM obligations
+        WHERE run_lease_id IS ?
+          AND kind = ?
+          AND dedupe_key = ?
+        ORDER BY id DESC
+        LIMIT 1
+        `,
+      )
+      .get(params.runLeaseId, params.kind, params.dedupeKey) as Record<string, unknown> | undefined;
     return row ? mapObligation(row) : undefined;
   }
 }

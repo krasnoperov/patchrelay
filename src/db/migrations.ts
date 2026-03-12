@@ -230,6 +230,9 @@ CREATE INDEX IF NOT EXISTS idx_event_receipts_project_issue ON event_receipts(pr
 CREATE INDEX IF NOT EXISTS idx_issue_control_ready ON issue_control(desired_stage, active_run_lease_id);
 CREATE INDEX IF NOT EXISTS idx_run_leases_active ON run_leases(status, project_id, linear_issue_id);
 CREATE INDEX IF NOT EXISTS idx_obligations_pending ON obligations(status, run_lease_id, kind);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_obligations_dedupe
+ON obligations(run_lease_id, kind, dedupe_key)
+WHERE dedupe_key IS NOT NULL;
 `;
 
 function ensureColumnExists(connection: DatabaseConnection, tableName: string, columnName: string, definition: string): void {

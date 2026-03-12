@@ -2,6 +2,7 @@ import type { Logger } from "pino";
 import type { CodexNotification } from "./codex-app-server.ts";
 import type { CodexAppServerClient } from "./codex-app-server.ts";
 import type { IssueControlStoreProvider, ObligationStoreProvider, RunLeaseStoreProvider, WorkspaceOwnershipStoreProvider } from "./ledger-ports.ts";
+import { reconcileIssue } from "./reconciliation-engine.ts";
 import type {
   StageEventLogStoreProvider,
   StageTurnInputStoreProvider,
@@ -116,6 +117,14 @@ export class ServiceStageFinalizer {
   }
 
   async reconcileActiveStageRuns(): Promise<void> {
+    const activeRunLeases = this.stores.runLeases?.listActiveRunLeases().filter((runLease) => runLease.status === "running") ?? [];
+    if (activeRunLeases.length > 0) {
+      for (const runLease of activeRunLeases) {
+        await this.reconcileRunLease(runLease.id);
+      }
+      return;
+    }
+
     const activeStageRuns = this.stores.issueWorkflows.listActiveStageRuns();
     for (const stageRun of activeStageRuns) {
       if (!stageRun.threadId) {
@@ -165,7 +174,7 @@ export class ServiceStageFinalizer {
     issue: TrackedIssueRecord,
     thread: CodexThreadSummary,
     status: StageRunRecord["status"],
-    params: { threadId: string; turnId?: string },
+    params: { threadId: string; turnId?: string; nextLifecycleStatus?: TrackedIssueRecord["lifecycleStatus"] },
   ): void {
     const refreshedStageRun = this.stores.issueWorkflows.getStageRun(stageRun.id) ?? stageRun;
     const finalizedStageRun = {
@@ -187,7 +196,7 @@ export class ServiceStageFinalizer {
     this.finishLedgerRun(stageRun.projectId, stageRun.linearIssueId, "completed", {
       threadId: params.threadId,
       ...(params.turnId ? { turnId: params.turnId } : {}),
-      nextLifecycleStatus: issue.desiredStage ? "queued" : "completed",
+      nextLifecycleStatus: params.nextLifecycleStatus ?? (issue.desiredStage ? "queued" : "completed"),
     });
 
     void this.advanceAfterStageCompletion(stageRun);
@@ -330,15 +339,29 @@ export class ServiceStageFinalizer {
 
     for (const obligation of this.stores.obligations.listPendingObligations({ runLeaseId: issueControl.activeRunLeaseId })) {
       this.stores.obligations.updateObligationRouting(obligation.id, { threadId, turnId });
-      const payload = safeJsonParse<{ body?: string }>(obligation.payloadJson);
+      const payload = safeJsonParse<{ body?: string; queuedInputId?: number; stageRunId?: number }>(obligation.payloadJson);
       const body = payload?.body?.trim();
+      if (
+        payload?.stageRunId !== undefined &&
+        payload.queuedInputId !== undefined &&
+        !this.stores.stageEvents.listPendingTurnInputs(payload.stageRunId).some((input) => input.id === payload.queuedInputId)
+      ) {
+        this.stores.obligations.markObligationStatus(obligation.id, "completed");
+        continue;
+      }
       if (!body) {
         this.stores.obligations.markObligationStatus(obligation.id, "failed", "obligation payload had no deliverable body");
         continue;
       }
 
       try {
+        if (payload?.stageRunId !== undefined && payload.queuedInputId !== undefined) {
+          this.stores.stageEvents.setPendingTurnInputRouting(payload.queuedInputId, threadId, turnId);
+        }
         await this.codex.steerTurn({ threadId, turnId, input: body });
+        if (payload?.queuedInputId !== undefined) {
+          this.stores.stageEvents.markTurnInputDelivered(payload.queuedInputId);
+        }
         this.stores.obligations.markObligationStatus(obligation.id, "completed");
       } catch (error) {
         this.stores.obligations.markObligationStatus(
@@ -348,6 +371,186 @@ export class ServiceStageFinalizer {
         );
       }
     }
+  }
+
+  private async reconcileRunLease(runLeaseId: number): Promise<void> {
+    const runLease = this.stores.runLeases?.getRunLease(runLeaseId);
+    if (!runLease) {
+      return;
+    }
+
+    const issueControl = this.stores.issueControl?.getIssueControl(runLease.projectId, runLease.linearIssueId);
+    if (!issueControl) {
+      return;
+    }
+
+    const issue = this.stores.issueWorkflows.getTrackedIssue(runLease.projectId, runLease.linearIssueId);
+    const stageRun =
+      (issue?.activeStageRunId ? this.stores.issueWorkflows.getStageRun(issue.activeStageRunId) : undefined) ??
+      (runLease.threadId ? this.stores.issueWorkflows.getStageRunByThreadId(runLease.threadId) : undefined) ??
+      this.stores.issueWorkflows.getLatestStageRunForIssue(runLease.projectId, runLease.linearIssueId);
+    if (!stageRun) {
+      return;
+    }
+
+    const project = this.config.projects.find((candidate) => candidate.id === runLease.projectId);
+    const linear = project ? await this.linearProvider.forProject(runLease.projectId) : undefined;
+    const liveLinear =
+      project && linear
+        ? await linear
+            .getIssue(runLease.linearIssueId)
+            .then((linearIssue) =>
+              linearIssue.stateName
+                ? {
+                    status: "known" as const,
+                    issue: {
+                      id: linearIssue.id,
+                      stateName: linearIssue.stateName,
+                    },
+                  }
+                : ({ status: "unknown" as const }),
+            )
+            .catch(() => ({ status: "unknown" as const }))
+        : ({ status: "unknown" as const });
+    const threadId = runLease.threadId ?? stageRun.threadId;
+    const turnId = runLease.turnId ?? stageRun.turnId;
+    const liveCodex =
+      threadId
+        ? await this.codex
+            .readThread(threadId, true)
+            .then((thread) => ({ status: "found" as const, thread }))
+            .catch(() => ({ status: "missing" as const }))
+        : ({ status: "unknown" as const });
+    const obligations = this.stores.obligations?.listPendingObligations({ runLeaseId }).map((obligation) => {
+      const payload = safeJsonParse<{
+        body?: string;
+        queuedInputId?: number;
+        stageRunId?: number;
+      }>(obligation.payloadJson);
+      return {
+        id: obligation.id,
+        kind: obligation.kind,
+        status: obligation.status,
+        runId: runLease.id,
+        ...(obligation.threadId ? { threadId: obligation.threadId } : {}),
+        ...(obligation.turnId ? { turnId: obligation.turnId } : {}),
+        ...(payload ? { payload } : {}),
+      };
+    }) ?? [];
+    const workflowConfig = project?.workflows.find((workflow) => workflow.id === runLease.stage);
+    const decision = reconcileIssue({
+      issue: {
+        projectId: runLease.projectId,
+        linearIssueId: runLease.linearIssueId,
+        ...(issueControl.desiredStage ? { desiredStage: issueControl.desiredStage } : {}),
+        lifecycleStatus: issueControl.lifecycleStatus,
+        ...(issueControl.serviceOwnedCommentId ? { statusCommentId: issueControl.serviceOwnedCommentId } : {}),
+        activeRun: {
+          id: runLease.id,
+          stage: runLease.stage,
+          status: runLease.status,
+          ...(threadId ? { threadId } : {}),
+          ...(turnId ? { turnId } : {}),
+          ...(runLease.parentThreadId ? { parentThreadId: runLease.parentThreadId } : {}),
+        },
+      },
+      obligations,
+      ...(workflowConfig
+        ? {
+            policy: {
+              ...(workflowConfig.activeState ? { activeLinearStateName: workflowConfig.activeState } : {}),
+              ...(workflowConfig.fallbackState ? { fallbackLinearStateName: workflowConfig.fallbackState } : {}),
+            },
+          }
+        : {}),
+      live: {
+        linear: liveLinear,
+        codex: liveCodex,
+      },
+    });
+
+    if (decision.outcome === "hydrate_live_state") {
+      await this.reconcileLegacyStageRun(stageRun);
+      return;
+    }
+
+    const clearAction = decision.actions.find((action) => action.type === "clear_active_run" || action.type === "release_issue_ownership");
+    const nextLifecycleStatus =
+      clearAction?.type === "clear_active_run" || clearAction?.type === "release_issue_ownership"
+        ? clearAction.nextLifecycleStatus
+        : undefined;
+
+    if (decision.outcome === "launch") {
+      this.enqueueIssue(runLease.projectId, runLease.linearIssueId);
+      return;
+    }
+
+    if (decision.outcome === "continue") {
+      await this.deliverPendingObligations(runLease.projectId, runLease.linearIssueId, threadId ?? stageRun.threadId!, turnId);
+      return;
+    }
+
+    if (decision.outcome === "complete" && liveCodex.status === "found" && issue) {
+      const latestTurn = liveCodex.thread.turns.at(-1);
+      this.completeStageRun(stageRun, issue, liveCodex.thread, "completed", {
+        threadId: liveCodex.thread.id,
+        ...(latestTurn?.id ? { turnId: latestTurn.id } : {}),
+        ...(nextLifecycleStatus ? { nextLifecycleStatus } : {}),
+      });
+      return;
+    }
+
+    if (decision.outcome === "fail" || decision.outcome === "release") {
+      const failedAction = decision.actions.find((action) => action.type === "mark_run_failed");
+      await this.failStageRunDuringReconciliation(
+        stageRun,
+        failedAction?.type === "mark_run_failed" && failedAction.threadId ? failedAction.threadId : threadId ?? `missing-thread-${stageRun.id}`,
+        decision.reasons[0] ?? "Thread was not found during startup reconciliation",
+        ...(failedAction?.type === "mark_run_failed" && failedAction.turnId ? [{ turnId: failedAction.turnId }] : []),
+      );
+    }
+  }
+
+  private async reconcileLegacyStageRun(stageRun: StageRunRecord): Promise<void> {
+    if (!stageRun.threadId) {
+      await this.failStageRunDuringReconciliation(
+        stageRun,
+        `missing-thread-${stageRun.id}`,
+        "Stage run had no persisted thread id during reconciliation",
+      );
+      return;
+    }
+
+    const thread = await this.codex.readThread(stageRun.threadId, true).catch(() => undefined);
+    if (!thread) {
+      await this.failStageRunDuringReconciliation(stageRun, stageRun.threadId, "Thread was not found during startup reconciliation", {
+        ...(stageRun.turnId ? { turnId: stageRun.turnId } : {}),
+      });
+      return;
+    }
+
+    const latestTurn = thread.turns.at(-1);
+    if (!latestTurn || latestTurn.status === "inProgress") {
+      await this.deliverPendingObligations(stageRun.projectId, stageRun.linearIssueId, stageRun.threadId, latestTurn?.id ?? stageRun.turnId);
+      return;
+    }
+
+    const issue = this.stores.issueWorkflows.getTrackedIssue(stageRun.projectId, stageRun.linearIssueId);
+    if (!issue) {
+      return;
+    }
+
+    if (latestTurn.status !== "completed") {
+      await this.failStageRunDuringReconciliation(stageRun, stageRun.threadId, "Thread completed reconciliation in a failed state", {
+        ...(latestTurn.id ? { turnId: latestTurn.id } : {}),
+      });
+      return;
+    }
+
+    this.completeStageRun(stageRun, issue, thread, "completed", {
+      threadId: stageRun.threadId,
+      ...(latestTurn.id ? { turnId: latestTurn.id } : {}),
+    });
   }
 }
 

@@ -43,16 +43,23 @@ export class ServiceStageRunner {
     }
 
     const issue = this.stores.issueWorkflows.getTrackedIssue(item.projectId, item.issueId);
-    if (!issue || !issue.desiredStage || !issue.desiredWebhookId || issue.activeStageRunId) {
+    const issueControl = this.stores.issueControl?.getIssueControl(item.projectId, item.issueId);
+    const desiredStage = issue?.desiredStage ?? issueControl?.desiredStage;
+    const desiredWebhookId =
+      issue?.desiredWebhookId ??
+      (issueControl?.desiredReceiptId !== undefined
+        ? this.stores.eventReceipts?.getEventReceipt(issueControl.desiredReceiptId)?.externalId
+        : undefined);
+    if (!issue || !desiredStage || !desiredWebhookId || issue.activeStageRunId) {
       return;
     }
 
-    const plan = buildStageLaunchPlan(project, issue, issue.desiredStage);
+    const plan = buildStageLaunchPlan(project, issue, desiredStage);
     const claim = this.stores.issueWorkflows.claimStageRun({
       projectId: item.projectId,
       linearIssueId: item.issueId,
-      stage: issue.desiredStage,
-      triggerWebhookId: issue.desiredWebhookId,
+      stage: desiredStage,
+      triggerWebhookId: desiredWebhookId,
       branchName: plan.branchName,
       worktreePath: plan.worktreePath,
       workflowFile: plan.workflowFile,

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { IssueControlStoreProvider, ObligationStoreProvider } from "./ledger-ports.ts";
 import type { StageTurnInputStoreProvider } from "./stage-event-ports.ts";
 import type { IssueWorkflowWebhookStoreProvider } from "./workflow-ports.ts";
@@ -50,6 +51,18 @@ export class CommentWebhookHandler {
     ]
       .filter(Boolean)
       .join("\n");
+    const activeRunLeaseId = this.stores.issueControl?.getIssueControl(project.id, normalizedIssue.id)?.activeRunLeaseId;
+    const dedupeKey = buildCommentDedupeKey(normalized.comment.id, body);
+    if (
+      activeRunLeaseId !== undefined &&
+      this.stores.obligations?.getObligationByDedupeKey({
+        runLeaseId: activeRunLeaseId,
+        kind: "deliver_turn_input",
+        dedupeKey,
+      })
+    ) {
+      return;
+    }
 
     const source = `linear-comment:${normalized.comment.id}`;
     const queuedInputId = this.stores.stageEvents.enqueueTurnInput({
@@ -68,6 +81,7 @@ export class CommentWebhookHandler {
       queuedInputId,
       normalized.comment.id,
       body,
+      dedupeKey,
     );
     await this.turnInputDispatcher.flush(stageRun, {
       ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
@@ -93,6 +107,7 @@ export class CommentWebhookHandler {
     queuedInputId: number,
     commentId: string,
     body: string,
+    dedupeKey: string,
   ): number | undefined {
     const activeRunLeaseId = this.stores.issueControl?.getIssueControl(projectId, linearIssueId)?.activeRunLeaseId;
     if (!this.stores.obligations || activeRunLeaseId === undefined) {
@@ -112,8 +127,16 @@ export class CommentWebhookHandler {
       runLeaseId: activeRunLeaseId,
       ...(threadId ? { threadId } : {}),
       ...(turnId ? { turnId } : {}),
-      dedupeKey: `linear-comment:${commentId}`,
+      dedupeKey,
     });
     return obligation.id;
   }
+}
+
+function buildCommentDedupeKey(commentId: string, body: string): string {
+  return `linear-comment:${commentId}:${hashBody(body)}`;
+}
+
+function hashBody(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
 }

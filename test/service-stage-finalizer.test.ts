@@ -8,9 +8,13 @@ import type {
   LinearAgentActivityContent,
   LinearClient,
   LinearIssueSnapshot,
+  IssueControlRecord,
+  ObligationRecord,
   PipelineRunRecord,
+  RunLeaseRecord,
   StageRunRecord,
   TrackedIssueRecord,
+  WorkspaceOwnershipRecord,
   WorkspaceRecord,
 } from "../src/types.ts";
 
@@ -237,6 +241,171 @@ class FakeStageEventStore {
   }
 }
 
+class FakeLedgerStore {
+  readonly issueControls = new Map<string, IssueControlRecord>();
+  readonly runLeases = new Map<number, RunLeaseRecord>();
+  readonly obligations = new Map<number, ObligationRecord>();
+  readonly workspaceOwnership = new Map<number, WorkspaceOwnershipRecord>();
+
+  getIssueControl(projectId: string, linearIssueId: string): IssueControlRecord | undefined {
+    return this.issueControls.get(issueKey(projectId, linearIssueId));
+  }
+
+  upsertIssueControl(params: {
+    projectId: string;
+    linearIssueId: string;
+    desiredStage?: StageRunRecord["stage"] | null;
+    desiredReceiptId?: number | null;
+    activeWorkspaceOwnershipId?: number | null;
+    activeRunLeaseId?: number | null;
+    serviceOwnedCommentId?: string | null;
+    activeAgentSessionId?: string | null;
+    lifecycleStatus: TrackedIssueRecord["lifecycleStatus"];
+  }): IssueControlRecord {
+    const existing = this.getIssueControl(params.projectId, params.linearIssueId);
+    const nextIssueControl: IssueControlRecord = {
+      id: existing?.id ?? 1,
+      projectId: params.projectId,
+      linearIssueId: params.linearIssueId,
+      ...(params.desiredStage !== undefined
+        ? (params.desiredStage ? { desiredStage: params.desiredStage } : {})
+        : existing?.desiredStage
+          ? { desiredStage: existing.desiredStage }
+          : {}),
+      ...(params.desiredReceiptId !== undefined
+        ? (params.desiredReceiptId !== null ? { desiredReceiptId: params.desiredReceiptId } : {})
+        : existing?.desiredReceiptId !== undefined
+          ? { desiredReceiptId: existing.desiredReceiptId }
+          : {}),
+      ...(params.activeWorkspaceOwnershipId !== undefined
+        ? (params.activeWorkspaceOwnershipId !== null ? { activeWorkspaceOwnershipId: params.activeWorkspaceOwnershipId } : {})
+        : existing?.activeWorkspaceOwnershipId !== undefined
+          ? { activeWorkspaceOwnershipId: existing.activeWorkspaceOwnershipId }
+          : {}),
+      ...(params.activeRunLeaseId !== undefined
+        ? (params.activeRunLeaseId !== null ? { activeRunLeaseId: params.activeRunLeaseId } : {})
+        : existing?.activeRunLeaseId !== undefined
+          ? { activeRunLeaseId: existing.activeRunLeaseId }
+          : {}),
+      ...(params.serviceOwnedCommentId !== undefined
+        ? (params.serviceOwnedCommentId ? { serviceOwnedCommentId: params.serviceOwnedCommentId } : {})
+        : existing?.serviceOwnedCommentId
+          ? { serviceOwnedCommentId: existing.serviceOwnedCommentId }
+          : {}),
+      ...(params.activeAgentSessionId !== undefined
+        ? (params.activeAgentSessionId ? { activeAgentSessionId: params.activeAgentSessionId } : {})
+        : existing?.activeAgentSessionId
+          ? { activeAgentSessionId: existing.activeAgentSessionId }
+          : {}),
+      lifecycleStatus: params.lifecycleStatus,
+      updatedAt: "2026-03-12T00:00:00.000Z",
+    };
+    this.issueControls.set(issueKey(params.projectId, params.linearIssueId), nextIssueControl);
+    return nextIssueControl;
+  }
+
+  getRunLease(id: number): RunLeaseRecord | undefined {
+    return this.runLeases.get(id);
+  }
+
+  listActiveRunLeases(): RunLeaseRecord[] {
+    return [...this.runLeases.values()].filter((runLease) => runLease.status === "running");
+  }
+
+  finishRunLease(params: {
+    runLeaseId: number;
+    status: "paused" | "completed" | "failed" | "released";
+    threadId?: string | null;
+    turnId?: string | null;
+    failureReason?: string | null;
+  }): void {
+    const runLease = this.runLeases.get(params.runLeaseId);
+    assert.ok(runLease);
+    runLease.status = params.status;
+    if (params.threadId) {
+      runLease.threadId = params.threadId;
+    }
+    if (params.turnId) {
+      runLease.turnId = params.turnId;
+    }
+    if (params.failureReason) {
+      runLease.failureReason = params.failureReason;
+    }
+  }
+
+  getWorkspaceOwnership(id: number): WorkspaceOwnershipRecord | undefined {
+    return this.workspaceOwnership.get(id);
+  }
+
+  upsertWorkspaceOwnership(params: {
+    projectId: string;
+    linearIssueId: string;
+    branchName: string;
+    worktreePath: string;
+    status: WorkspaceOwnershipRecord["status"];
+    currentRunLeaseId?: number | null;
+  }): WorkspaceOwnershipRecord {
+    const existing = [...this.workspaceOwnership.values()].find(
+      (workspace) => workspace.projectId === params.projectId && workspace.linearIssueId === params.linearIssueId,
+    );
+    const nextWorkspace: WorkspaceOwnershipRecord = {
+      id: existing?.id ?? 40,
+      projectId: params.projectId,
+      linearIssueId: params.linearIssueId,
+      branchName: params.branchName,
+      worktreePath: params.worktreePath,
+      status: params.status,
+      ...(params.currentRunLeaseId !== undefined
+        ? (params.currentRunLeaseId !== null ? { currentRunLeaseId: params.currentRunLeaseId } : {})
+        : existing?.currentRunLeaseId !== undefined
+          ? { currentRunLeaseId: existing.currentRunLeaseId }
+          : {}),
+      createdAt: existing?.createdAt ?? "2026-03-12T00:00:00.000Z",
+      updatedAt: "2026-03-12T00:00:00.000Z",
+    };
+    this.workspaceOwnership.set(nextWorkspace.id, nextWorkspace);
+    return nextWorkspace;
+  }
+
+  listPendingObligations(params?: { runLeaseId?: number; kind?: string }): ObligationRecord[] {
+    return [...this.obligations.values()].filter((obligation) => {
+      if (obligation.status === "completed" || obligation.status === "cancelled") {
+        return false;
+      }
+      if (params?.runLeaseId !== undefined && obligation.runLeaseId !== params.runLeaseId) {
+        return false;
+      }
+      if (params?.kind && obligation.kind !== params.kind) {
+        return false;
+      }
+      return true;
+    });
+  }
+
+  updateObligationRouting(id: number, params: { threadId?: string | null; turnId?: string | null }): void {
+    const obligation = this.obligations.get(id);
+    assert.ok(obligation);
+    if (params.threadId) {
+      obligation.threadId = params.threadId;
+    }
+    if (params.turnId) {
+      obligation.turnId = params.turnId;
+    }
+  }
+
+  markObligationStatus(id: number, status: ObligationRecord["status"], lastError?: string | null): void {
+    const obligation = this.obligations.get(id);
+    assert.ok(obligation);
+    obligation.status = status;
+    if (lastError) {
+      obligation.lastError = lastError;
+    }
+    if (status === "completed") {
+      obligation.completedAt = "2026-03-12T00:00:00.000Z";
+    }
+  }
+}
+
 function issueKey(projectId: string, issueId: string): string {
   return `${projectId}:${issueId}`;
 }
@@ -376,10 +545,13 @@ function createHarness(options?: {
   persistExtendedHistory?: boolean;
   issueStateName?: string;
   stageRun?: Partial<StageRunRecord>;
+  withLedger?: boolean;
+  pendingObligationBody?: string;
 }) {
   const config = createConfig(options?.persistExtendedHistory ?? true);
   const store = new FakeIssueWorkflowStore();
   const stageEvents = new FakeStageEventStore();
+  const ledger = new FakeLedgerStore();
   const codex = new FakeCodexClient();
   const linear = new FakeLinearClient();
   const issue = createIssue();
@@ -390,6 +562,61 @@ function createHarness(options?: {
   store.stageRuns.set(stageRun.id, stageRun);
   store.pipelines.set(pipeline.id, pipeline);
   store.workspaces.set(workspace.id, workspace);
+  if (options?.withLedger) {
+    const workspaceOwnership = ledger.upsertWorkspaceOwnership({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      branchName: workspace.branchName,
+      worktreePath: workspace.worktreePath,
+      status: "active",
+    });
+    const issueControl = ledger.upsertIssueControl({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      activeWorkspaceOwnershipId: workspaceOwnership.id,
+      activeRunLeaseId: 90,
+      serviceOwnedCommentId: issue.statusCommentId ?? null,
+      activeAgentSessionId: issue.activeAgentSessionId ?? null,
+      lifecycleStatus: issue.lifecycleStatus,
+    });
+    ledger.runLeases.set(90, {
+      id: 90,
+      issueControlId: issueControl.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      workspaceOwnershipId: workspaceOwnership.id,
+      stage: stageRun.stage,
+      status: "running",
+      threadId: stageRun.threadId,
+      turnId: stageRun.turnId,
+      startedAt: stageRun.startedAt,
+    });
+    if (options.pendingObligationBody) {
+      stageEvents.enqueueTurnInput({
+        stageRunId: stageRun.id,
+        threadId: stageRun.threadId,
+        turnId: stageRun.turnId,
+        source: "linear-comment:1",
+        body: options.pendingObligationBody,
+      });
+      ledger.obligations.set(1, {
+        id: 1,
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        kind: "deliver_turn_input",
+        status: "pending",
+        source: "linear-comment:1",
+        payloadJson: JSON.stringify({
+          queuedInputId: 1,
+          stageRunId: stageRun.id,
+          body: options.pendingObligationBody,
+        }),
+        runLeaseId: 90,
+        createdAt: "2026-03-12T00:00:00.000Z",
+        updatedAt: "2026-03-12T00:00:00.000Z",
+      });
+    }
+  }
   linear.issues.set(issue.linearIssueId, {
     id: issue.linearIssueId,
     identifier: issue.issueKey,
@@ -407,6 +634,14 @@ function createHarness(options?: {
     {
       issueWorkflows: store,
       stageEvents,
+      ...(options?.withLedger
+        ? {
+            issueControl: ledger,
+            runLeases: ledger,
+            obligations: ledger,
+            workspaceOwnership: ledger,
+          }
+        : {}),
     },
     codex as never,
     {
@@ -418,7 +653,7 @@ function createHarness(options?: {
     pino({ enabled: false }),
   );
 
-  return { store, stageEvents, codex, linear, finalizer, issue, stageRun };
+  return { store, stageEvents, ledger, codex, linear, finalizer, issue, stageRun };
 }
 
 test("reconciliation fails an active stage when the persisted thread is missing", async () => {
@@ -472,4 +707,25 @@ test("notification history is only persisted when extended history is enabled", 
   } as never);
   assert.equal(enabled.stageEvents.savedEvents.length, 1);
   assert.equal(enabled.stageEvents.savedEvents[0]?.method, "turn/started");
+});
+
+test("ledger reconciliation replays obligations and clears the matching legacy queued input", async () => {
+  const { stageEvents, ledger, codex, finalizer, stageRun } = createHarness({
+    withLedger: true,
+    pendingObligationBody: "Please update the handoff copy.",
+  });
+  codex.threads.set(stageRun.threadId!, createThread("inProgress"));
+
+  await finalizer.reconcileActiveStageRuns();
+
+  assert.deepEqual(codex.steerCalls, [
+    {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      input: "Please update the handoff copy.",
+    },
+  ]);
+  assert.deepEqual(stageEvents.deliveredInputs, [1]);
+  assert.equal(ledger.obligations.get(1)?.status, "completed");
+  assert.equal(stageEvents.listPendingTurnInputs(stageRun.id).length, 0);
 });

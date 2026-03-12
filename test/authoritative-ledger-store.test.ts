@@ -166,3 +166,61 @@ test("authoritative ledger preserves issue control, workspace ownership, run lea
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("authoritative ledger dedupes obligations by run lease, kind, and dedupe key", () => {
+  const { baseDir, db } = createHarness();
+  try {
+    const issueControl = db.issueControl.upsertIssueControl({
+      projectId: "proj",
+      linearIssueId: "issue-1",
+      lifecycleStatus: "running",
+    });
+    const workspace = db.workspaceOwnership.upsertWorkspaceOwnership({
+      projectId: "proj",
+      linearIssueId: "issue-1",
+      branchName: "app/APP-1",
+      worktreePath: "/tmp/worktrees/APP-1",
+      status: "active",
+    });
+    const runLease = db.runLeases.createRunLease({
+      issueControlId: issueControl.id,
+      projectId: "proj",
+      linearIssueId: "issue-1",
+      workspaceOwnershipId: workspace.id,
+      stage: "development",
+      status: "running",
+    });
+
+    const first = db.obligations.enqueueObligation({
+      projectId: "proj",
+      linearIssueId: "issue-1",
+      kind: "deliver_turn_input",
+      source: "linear-comment:1",
+      payloadJson: "{\"body\":\"Please adjust the copy.\"}",
+      runLeaseId: runLease.id,
+      dedupeKey: "comment-1:hash-1",
+    });
+    const duplicate = db.obligations.enqueueObligation({
+      projectId: "proj",
+      linearIssueId: "issue-1",
+      kind: "deliver_turn_input",
+      source: "linear-comment:1",
+      payloadJson: "{\"body\":\"Please adjust the copy.\"}",
+      runLeaseId: runLease.id,
+      dedupeKey: "comment-1:hash-1",
+    });
+
+    assert.equal(first.id, duplicate.id);
+    assert.deepEqual(db.obligations.listPendingObligations({ runLeaseId: runLease.id }).map((entry) => entry.id), [first.id]);
+    assert.equal(
+      db.obligations.getObligationByDedupeKey({
+        runLeaseId: runLease.id,
+        kind: "deliver_turn_input",
+        dedupeKey: "comment-1:hash-1",
+      })?.id,
+      first.id,
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});

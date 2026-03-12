@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { IssueControlStoreProvider, ObligationStoreProvider } from "./ledger-ports.ts";
 import type { StageTurnInputStoreProvider } from "./stage-event-ports.ts";
 import type { IssueWorkflowWebhookStoreProvider } from "./workflow-ports.ts";
@@ -93,6 +94,19 @@ export class AgentSessionWebhookHandler {
     }
 
     if (activeStageRun && promptBody) {
+      const activeRunLeaseId = this.stores.issueControl?.getIssueControl(project.id, normalized.issue!.id)?.activeRunLeaseId;
+      const dedupeKey = buildPromptDedupeKey(normalized.agentSession.id, promptBody);
+      if (
+        activeRunLeaseId !== undefined &&
+        this.stores.obligations?.getObligationByDedupeKey({
+          runLeaseId: activeRunLeaseId,
+          kind: "deliver_turn_input",
+          dedupeKey,
+        })
+      ) {
+        return;
+      }
+
       const queuedInputId = this.stores.stageEvents.enqueueTurnInput({
         stageRunId: activeStageRun.id,
         ...(activeStageRun.threadId ? { threadId: activeStageRun.threadId } : {}),
@@ -109,6 +123,7 @@ export class AgentSessionWebhookHandler {
         queuedInputId,
         normalized.agentSession.id,
         promptBody,
+        dedupeKey,
       );
       await this.turnInputDispatcher.flush(activeStageRun, {
         ...(issue?.issueKey ? { issueKey: issue.issueKey } : {}),
@@ -164,6 +179,7 @@ export class AgentSessionWebhookHandler {
     queuedInputId: number,
     agentSessionId: string,
     promptBody: string,
+    dedupeKey: string,
   ): number | undefined {
     const activeRunLeaseId = this.stores.issueControl?.getIssueControl(projectId, linearIssueId)?.activeRunLeaseId;
     if (!this.stores.obligations || activeRunLeaseId === undefined) {
@@ -183,8 +199,16 @@ export class AgentSessionWebhookHandler {
       runLeaseId: activeRunLeaseId,
       ...(threadId ? { threadId } : {}),
       ...(turnId ? { turnId } : {}),
-      dedupeKey: `linear-agent-prompt:${agentSessionId}:${queuedInputId}`,
+      dedupeKey,
     });
     return obligation.id;
   }
+}
+
+function buildPromptDedupeKey(agentSessionId: string, promptBody: string): string {
+  return `linear-agent-prompt:${agentSessionId}:${hashBody(promptBody)}`;
+}
+
+function hashBody(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
 }
