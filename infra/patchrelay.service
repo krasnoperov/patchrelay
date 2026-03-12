@@ -2,6 +2,8 @@
 Description=PatchRelay (systemd user service)
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=8
 
 [Service]
 Type=simple

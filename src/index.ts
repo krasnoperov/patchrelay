@@ -51,10 +51,21 @@ async function main(): Promise<void> {
   await service.start();
   const app = await buildHttpServer(config, service, logger);
 
-  await app.listen({
-    host: config.server.bind,
-    port: config.server.port,
-  });
+  try {
+    await app.listen({
+      host: config.server.bind,
+      port: config.server.port,
+    });
+  } catch (error: unknown) {
+    if (error && typeof error === "object" && "code" in error && (error as { code: string }).code === "EADDRINUSE") {
+      throw new Error(
+        `Port ${config.server.port} on ${config.server.bind} is already in use. ` +
+        `Another patchrelay process may be running. Check with: ss -tlnp | grep ${config.server.port}`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
 
   logger.info(
     {

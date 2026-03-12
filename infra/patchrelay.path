@@ -6,6 +6,8 @@ Unit=patchrelay-reload.service
 PathChanged=/home/your-user/.config/patchrelay/runtime.env
 PathChanged=/home/your-user/.config/patchrelay/service.env
 PathChanged=/home/your-user/.config/patchrelay/patchrelay.json
+TriggerLimitIntervalSec=5
+TriggerLimitBurst=1
 
 [Install]
 WantedBy=default.target

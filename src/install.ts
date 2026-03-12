@@ -294,12 +294,13 @@ export async function upsertProjectInConfig(options: {
   const original = await readFile(configPath, "utf8");
   const parsed = parseConfigObject(original, configPath) as { projects?: Array<Record<string, unknown>> };
   const existingProjects = Array.isArray(parsed.projects) ? parsed.projects : [];
-  const existingIndex = existingProjects.findIndex((project) => String(project.id ?? "") === projectId);
+  const existingIndex = existingProjects.findIndex((project) => String(project.id ?? "").toLowerCase() === projectId.toLowerCase());
   const existingProject = existingIndex >= 0 ? existingProjects[existingIndex] : undefined;
 
+  const resolvedProjectId = existingProject ? String(existingProject.id ?? projectId) : projectId;
   const nextProject: Record<string, unknown> = {
     ...(existingProject ?? {}),
-    id: projectId,
+    id: resolvedProjectId,
     repo_path: repoPath,
     workflows:
       Array.isArray(existingProject?.workflows) && existingProject.workflows.length > 0
@@ -409,7 +410,7 @@ export async function upsertProjectInConfig(options: {
     configPath,
     status,
     project: {
-      id: projectId,
+      id: resolvedProjectId,
       repoPath,
       issueKeyPrefixes,
       linearTeamIds,
