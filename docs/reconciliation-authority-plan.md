@@ -1,8 +1,19 @@
 # Final Ledger Transition Plan
 
+Status: completed.
+
+PatchRelay now runs on the ledger-first model described here. The legacy workflow tables named in
+this document are gone from the active schema and runtime paths. The remaining open work, if we
+want it, is organizational: shrinking the compatibility adapter layer around synthesized workflow
+view models.
+
+This document is now best read as a description of the final architecture plus a historical record
+of the sequence that got us there. The current source of truth is the codebase’s ledger-first
+schema and runtime behavior.
+
 ## Goal
 
-Remove the legacy workflow model completely.
+Describe the final ledger-first workflow model.
 
 After this transition, PatchRelay should have:
 
@@ -70,9 +81,9 @@ Artifact rules:
 - missing artifacts must not block recovery
 - artifacts should be keyed by `run_lease_id`, not by any legacy stage-run id
 
-## Legacy That Must Disappear
+## Legacy That Disappeared
 
-Delete all of this:
+These were removed as part of the cleanup:
 
 - `tracked_issues`
 - `workspaces`
@@ -82,7 +93,7 @@ Delete all of this:
 - `IssueWorkflowStore`
 - most of `workflow-ports.ts`
 
-Delete these concepts from runtime code:
+These runtime concepts were removed or downgraded from authority inputs:
 
 - `activeWorkspaceId`
 - `activePipelineRunId`
@@ -95,24 +106,10 @@ Delete these concepts from runtime code:
 - `listActiveStageRuns`
 - `getLatestStageRunForIssue` as anything other than history
 
-## What Still Blocks Removal Today
+## Transition Strategy Used
 
-Legacy is no longer the control plane, but it still backs three things:
-
-1. launch and completion mirrors
-2. operator read models
-3. artifact storage keyed by `stageRunId`
-
-The hard blocker is the third one.
-
-Reports, thread event history, and queued-input mirrors are still tied to `stage_runs`. As long as
-artifact storage is keyed by legacy stage runs, the legacy workflow model cannot fully disappear.
-
-## Final Transition Strategy
-
-Do the rest of the migration as one deliberate transition branch with ordered commits. The branch
-can be reviewed as one PR if desired, but the code changes should still be applied in this order so
-the system stays understandable and testable.
+The rest of this document preserves the ordered transition plan that was executed to reach the
+current state. It is retained for context and review history, not as an active migration checklist.
 
 ### Step 1: Add ledger-native projection and artifact tables
 

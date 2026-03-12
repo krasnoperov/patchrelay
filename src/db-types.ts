@@ -48,6 +48,18 @@ export interface IssueControlRecord {
   updatedAt: string;
 }
 
+export interface IssueProjectionRecord {
+  id: number;
+  projectId: string;
+  linearIssueId: string;
+  issueKey?: string;
+  title?: string;
+  issueUrl?: string;
+  currentLinearState?: string;
+  lastWebhookAt?: string;
+  updatedAt: string;
+}
+
 export interface TrackedIssueRecord {
   id: number;
   projectId: string;
@@ -64,7 +76,6 @@ export interface TrackedIssueRecord {
   latestThreadId?: string;
   statusCommentId?: string;
   activeAgentSessionId?: string;
-  pendingLaunchInput?: string;
   lifecycleStatus: IssueLifecycleStatus;
   lastWebhookAt?: string;
   updatedAt: string;
@@ -104,6 +115,8 @@ export interface RunLeaseRecord {
   stage: WorkflowStage;
   status: RunLeaseStatus;
   triggerReceiptId?: number;
+  workflowFile: string;
+  promptText: string;
   threadId?: string;
   parentThreadId?: string;
   turnId?: string;
@@ -161,6 +174,14 @@ export interface ObligationRecord {
   completedAt?: string;
 }
 
+export interface RunReportRecord {
+  runLeaseId: number;
+  summaryJson?: string;
+  reportJson?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ThreadEventRecord {
   id: number;
   stageRunId: number;
@@ -168,16 +189,5 @@ export interface ThreadEventRecord {
   turnId?: string;
   method: string;
   eventJson: string;
-  createdAt: string;
-}
-
-export interface QueuedTurnInputRecord {
-  id: number;
-  stageRunId: number;
-  threadId?: string;
-  turnId?: string;
-  source: string;
-  body: string;
-  deliveredAt?: string;
   createdAt: string;
 }

@@ -21,8 +21,6 @@ export interface IssueWorkflowLifecycleStore {
   setIssueStatusComment(projectId: string, linearIssueId: string, commentId?: string): void;
   getPipelineRun(pipelineRunId: number): PipelineRunRecord | undefined;
   setIssueLifecycleStatus(projectId: string, linearIssueId: string, status: TrackedIssueRecord["lifecycleStatus"]): void;
-  setPipelineStatus(pipelineRunId: number, status: PipelineRunRecord["status"]): void;
-  markPipelineCompleted(pipelineRunId: number): void;
 }
 
 export interface IssueWorkflowLifecycleStoreProvider {
@@ -45,7 +43,6 @@ export interface IssueWorkflowExecutionStore extends IssueWorkflowLifecycleStore
     promptText: string;
   }): { issue: TrackedIssueRecord; workspace: WorkspaceRecord; pipeline: PipelineRunRecord; stageRun: StageRunRecord } | undefined;
   updateStageRunThread(params: { stageRunId: number; threadId: string; parentThreadId?: string; turnId?: string }): void;
-  consumeIssuePendingLaunchInput(projectId: string, linearIssueId: string): string | undefined;
   finishStageRun(params: {
     stageRunId: number;
     status: StageRunRecord["status"];
@@ -75,7 +72,6 @@ export interface IssueWorkflowWebhookStore {
     lastWebhookAt: string;
   }): TrackedIssueRecord;
   setIssueActiveAgentSession(projectId: string, linearIssueId: string, agentSessionId?: string): void;
-  setIssuePendingLaunchInput(projectId: string, linearIssueId: string, body?: string): void;
 }
 
 export interface IssueWorkflowWebhookStoreProvider {

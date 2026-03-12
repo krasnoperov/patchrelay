@@ -67,11 +67,15 @@ export interface RunLeaseStore {
     linearIssueId: string;
     workspaceOwnershipId: number;
     stage: WorkflowStage;
+    workflowFile?: string;
+    promptText?: string;
     triggerReceiptId?: number | null;
     status?: Extract<RunLeaseRecord["status"], "queued" | "running" | "paused">;
   }): RunLeaseRecord;
   getRunLease(id: number): RunLeaseRecord | undefined;
+  getRunLeaseByThreadId(threadId: string): RunLeaseRecord | undefined;
   listActiveRunLeases(): RunLeaseRecord[];
+  listRunLeasesForIssue(projectId: string, linearIssueId: string): RunLeaseRecord[];
   updateRunLeaseThread(params: {
     runLeaseId: number;
     threadId?: string | null;
@@ -106,7 +110,7 @@ export interface ObligationStore {
   getObligationByDedupeKey(params: { runLeaseId: number; kind: string; dedupeKey: string }): ObligationRecord | undefined;
   listPendingObligations(params?: { runLeaseId?: number; kind?: string }): ObligationRecord[];
   updateObligationPayloadJson(id: number, payloadJson: string): void;
-  updateObligationRouting(id: number, params: { threadId?: string | null; turnId?: string | null }): void;
+  updateObligationRouting(id: number, params: { runLeaseId?: number | null; threadId?: string | null; turnId?: string | null }): void;
   markObligationStatus(id: number, status: ObligationRecord["status"], lastError?: string | null): void;
 }
 

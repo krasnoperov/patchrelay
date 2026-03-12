@@ -97,8 +97,6 @@ class FakeIssueWorkflowStore {
   readonly workspaces = new Map<number, WorkspaceRecord>();
   readonly pipelines = new Map<number, PipelineRunRecord>();
   readonly lifecycleUpdates: Array<{ projectId: string; issueId: string; status: TrackedIssueRecord["lifecycleStatus"] }> = [];
-  readonly pipelineStatusUpdates: Array<{ pipelineRunId: number; status: PipelineRunRecord["status"] }> = [];
-  readonly completedPipelines: number[] = [];
   readonly statusCommentUpdates: Array<{ projectId: string; issueId: string; commentId?: string }> = [];
 
   upsertIssueControl(params: {
@@ -176,20 +174,6 @@ class FakeIssueWorkflowStore {
     assert.ok(issue);
     issue.lifecycleStatus = status;
     this.lifecycleUpdates.push({ projectId, issueId: linearIssueId, status });
-  }
-
-  setPipelineStatus(pipelineRunId: number, status: PipelineRunRecord["status"]): void {
-    const pipeline = this.getPipelineRun(pipelineRunId);
-    assert.ok(pipeline);
-    pipeline.status = status;
-    this.pipelineStatusUpdates.push({ pipelineRunId, status });
-  }
-
-  markPipelineCompleted(pipelineRunId: number): void {
-    const pipeline = this.getPipelineRun(pipelineRunId);
-    assert.ok(pipeline);
-    pipeline.status = "completed";
-    this.completedPipelines.push(pipelineRunId);
   }
 }
 
@@ -433,11 +417,10 @@ test("publishStageCompletion enqueues the next requested workflow and publishes 
 
   assert.deepEqual(enqueued, [{ projectId: "proj", issueId: "issue-1" }]);
   assert.equal(linear.agentActivities.at(-1)?.content.type, "thought");
-  assert.equal(store.completedPipelines.length, 0);
 });
 
 test("publishStageCompletion pauses for handoff when Linear is still in the active state", async () => {
-  const { publisher, store, linear, stageRun, pipeline } = createHarness();
+  const { publisher, store, linear, stageRun } = createHarness();
   store.stageRuns.set(stageRun.id, { ...stageRun, endedAt: "2026-03-11T10:05:00.000Z", status: "completed" });
 
   await publisher.publishStageCompletion(stageRun, () => {
@@ -445,7 +428,6 @@ test("publishStageCompletion pauses for handoff when Linear is still in the acti
   });
 
   assert.deepEqual(store.lifecycleUpdates, [{ projectId: "proj", issueId: "issue-1", status: "paused" }]);
-  assert.deepEqual(store.pipelineStatusUpdates, [{ pipelineRunId: pipeline.id, status: "paused" }]);
   assert.deepEqual(linear.labelUpdates, [
     {
       issueId: "issue-1",
@@ -458,7 +440,7 @@ test("publishStageCompletion pauses for handoff when Linear is still in the acti
 });
 
 test("publishStageCompletion cleans up workflow labels after Linear already moved on and completes the pipeline", async () => {
-  const { publisher, store, linear, stageRun, pipeline } = createHarness();
+  const { publisher, linear, stageRun } = createHarness();
   linear.issues.set("issue-1", {
     ...(linear.issues.get("issue-1") as LinearIssueSnapshot),
     stateName: "Done",
@@ -475,7 +457,6 @@ test("publishStageCompletion cleans up workflow labels after Linear already move
       removeNames: ["llm-working", "llm-awaiting-handoff"],
     },
   ]);
-  assert.deepEqual(store.completedPipelines, [pipeline.id]);
   assert.equal(linear.agentActivities.at(-1)?.content.type, "response");
 });
 
@@ -516,7 +497,6 @@ test("markStageActive and publishStageCompletion no-op cleanly when workflow sta
     throw new Error("should not enqueue");
   });
 
-  assert.equal(store.completedPipelines.length, 0);
   assert.equal(store.getTrackedIssue("missing", "issue-2")?.currentLinearState, undefined);
 });
 

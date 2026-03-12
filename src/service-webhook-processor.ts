@@ -2,7 +2,7 @@ import type { Logger } from "pino";
 import type { CodexAppServerClient } from "./codex-app-server.ts";
 import type { EventReceiptStoreProvider, IssueControlStoreProvider, ObligationStoreProvider, RunLeaseStoreProvider } from "./ledger-ports.ts";
 import type { LinearInstallationStoreProvider } from "./installation-ports.ts";
-import type { StageEventLogStoreProvider, StageTurnInputStoreProvider } from "./stage-event-ports.ts";
+import type { StageEventLogStoreProvider } from "./stage-event-ports.ts";
 import type { IssueWorkflowWebhookStoreProvider } from "./workflow-ports.ts";
 import type { WebhookEventStoreProvider } from "./webhook-event-ports.ts";
 import { resolveProject, trustedActorAllowed } from "./project-resolution.ts";
@@ -32,7 +32,6 @@ export class ServiceWebhookProcessor {
       RunLeaseStoreProvider &
       IssueWorkflowWebhookStoreProvider &
       LinearInstallationStoreProvider &
-      StageTurnInputStoreProvider &
       StageEventLogStoreProvider,
     linearProvider: LinearClientProvider,
     codex: CodexAppServerClient,

@@ -466,77 +466,28 @@ function recordDesiredStageWithLedger(
   return issue;
 }
 
-function mirrorActiveRunLease(
-  db: PatchRelayDatabase,
-  params: {
-    projectId: string;
-    linearIssueId: string;
-    stage: "development" | "review" | "deploy" | "cleanup";
-    triggerWebhookId: string;
-    branchName: string;
-    worktreePath: string;
-    threadId?: string;
-    turnId?: string;
-    parentThreadId?: string;
-  },
-) {
-  const issue = db.issueWorkflows.getTrackedIssue(params.projectId, params.linearIssueId);
-  assert.ok(issue);
-  const receipt = ensureEventReceipt(db, {
-    webhookId: params.triggerWebhookId,
-    projectId: params.projectId,
-    linearIssueId: params.linearIssueId,
+function enqueueLaunchInput(db: PatchRelayDatabase, projectId: string, linearIssueId: string, body: string, source = "linear-agent-launch:test") {
+  db.obligations.enqueueObligation({
+    projectId,
+    linearIssueId,
+    kind: "deliver_turn_input",
+    source,
+    payloadJson: JSON.stringify({ body }),
   });
-  const issueControl = db.issueControl.upsertIssueControl({
-    projectId: params.projectId,
-    linearIssueId: params.linearIssueId,
-    desiredReceiptId: null,
-    lifecycleStatus: "running",
-    ...(issue.statusCommentId ? { serviceOwnedCommentId: issue.statusCommentId } : {}),
-    ...(issue.activeAgentSessionId ? { activeAgentSessionId: issue.activeAgentSessionId } : {}),
-  });
-  const workspace = db.workspaceOwnership.upsertWorkspaceOwnership({
-    projectId: params.projectId,
-    linearIssueId: params.linearIssueId,
-    branchName: params.branchName,
-    worktreePath: params.worktreePath,
-    status: "active",
-  });
-  const runLease = db.runLeases.createRunLease({
-    issueControlId: issueControl.id,
-    projectId: params.projectId,
-    linearIssueId: params.linearIssueId,
-    workspaceOwnershipId: workspace.id,
-    stage: params.stage,
-    triggerReceiptId: receipt.id,
-    status: "running",
-  });
-  if (params.threadId || params.turnId || params.parentThreadId) {
-    db.runLeases.updateRunLeaseThread({
-      runLeaseId: runLease.id,
-      ...(params.threadId ? { threadId: params.threadId } : {}),
-      ...(params.turnId ? { turnId: params.turnId } : {}),
-      ...(params.parentThreadId ? { parentThreadId: params.parentThreadId } : {}),
-    });
-  }
-  db.workspaceOwnership.upsertWorkspaceOwnership({
-    projectId: params.projectId,
-    linearIssueId: params.linearIssueId,
-    branchName: params.branchName,
-    worktreePath: params.worktreePath,
-    status: "active",
-    currentRunLeaseId: runLease.id,
-  });
-  db.issueControl.upsertIssueControl({
-    projectId: params.projectId,
-    linearIssueId: params.linearIssueId,
-    activeWorkspaceOwnershipId: workspace.id,
-    activeRunLeaseId: runLease.id,
-    desiredReceiptId: null,
-    lifecycleStatus: "running",
-    ...(issue.statusCommentId ? { serviceOwnedCommentId: issue.statusCommentId } : {}),
-    ...(issue.activeAgentSessionId ? { activeAgentSessionId: issue.activeAgentSessionId } : {}),
-  });
+}
+
+function getLatestInputObligation(db: PatchRelayDatabase, projectId: string, linearIssueId: string, source: string) {
+  return db.connection
+    .prepare(
+      `
+      SELECT *
+      FROM obligations
+      WHERE project_id = ? AND linear_issue_id = ? AND kind = 'deliver_turn_input' AND source = ?
+      ORDER BY id DESC
+      LIMIT 1
+      `,
+    )
+    .get(projectId, linearIssueId, source) as Record<string, unknown> | undefined;
 }
 
 async function flushQueues(): Promise<void> {
@@ -1115,10 +1066,6 @@ test("service overview and live status stay ledger-backed when the legacy active
     const stageRun = db.issueWorkflows.getStageRun(issue.activeStageRunId);
     assert.ok(stageRun?.threadId);
 
-    db.connection
-      .prepare("UPDATE tracked_issues SET active_stage_run_id = NULL WHERE project_id = ? AND linear_issue_id = ?")
-      .run("usertold", "issue-3");
-
     codex.threads.set(stageRun.threadId, {
       ...codex.threads.get(stageRun.threadId)!,
       status: "running",
@@ -1376,15 +1323,6 @@ test("service preserves comments that arrive before thread startup finishes", as
       promptText: "Implement carefully.",
     });
     assert.ok(claim);
-    mirrorActiveRunLease(db, {
-      projectId: "usertold",
-      linearIssueId: "issue_3",
-      stage: "development",
-      triggerWebhookId: "delivery-start",
-      branchName: claim!.workspace.branchName,
-      worktreePath: claim!.workspace.worktreePath,
-    });
-
     linear.issues.set("issue_3", {
       ...linear.issues.get("issue_3")!,
       stateId: "implementing",
@@ -1420,7 +1358,12 @@ test("service preserves comments that arrive before thread startup finishes", as
     });
 
     await service.processWebhookEvent(event.id);
-    assert.equal(db.stageEvents.listPendingTurnInputs(claim.stageRun.id).length, 1);
+    const pendingBeforeStartup = db.obligations.listPendingObligations({
+      runLeaseId: claim.stageRun.id,
+      kind: "deliver_turn_input",
+    });
+    assert.equal(pendingBeforeStartup.length, 1);
+    assert.match(pendingBeforeStartup[0]?.payloadJson ?? "", /migration edge case/);
 
     db.issueWorkflows.updateStageRunThread({
       stageRunId: claim.stageRun.id,
@@ -1629,16 +1572,6 @@ test("service startup reconciles finished and missing active threads", async () 
       threadId: "thread-finished",
       turnId: "turn-1",
     });
-    mirrorActiveRunLease(db, {
-      projectId: "usertold",
-      linearIssueId: "issue_4",
-      stage: "development",
-      triggerWebhookId: "delivery-start",
-      branchName: claim!.workspace.branchName,
-      worktreePath: claim!.workspace.worktreePath,
-      threadId: "thread-finished",
-      turnId: "turn-1",
-    });
     codex.threads.set("thread-finished", {
       id: "thread-finished",
       preview: "Recovered",
@@ -1671,16 +1604,6 @@ test("service startup reconciles finished and missing active threads", async () 
     assert.ok(missingClaim);
     db.issueWorkflows.updateStageRunThread({
       stageRunId: missingClaim!.stageRun.id,
-      threadId: "thread-missing",
-      turnId: "turn-2",
-    });
-    mirrorActiveRunLease(db, {
-      projectId: "usertold",
-      linearIssueId: "issue_5",
-      stage: "development",
-      triggerWebhookId: "delivery-start-missing",
-      branchName: missingClaim!.workspace.branchName,
-      worktreePath: missingClaim!.workspace.worktreePath,
       threadId: "thread-missing",
       turnId: "turn-2",
     });
@@ -1815,11 +1738,7 @@ test("service startup launches queued ledger intent and delivers pending launch 
       desiredWebhookId: "delivery-startup-launch-input",
       lastWebhookAt: new Date().toISOString(),
     });
-    db.issueWorkflows.setIssuePendingLaunchInput(
-      "usertold",
-      "issue_2",
-      "Please start by validating the failing setup path.",
-    );
+    enqueueLaunchInput(db, "usertold", "issue_2", "Please start by validating the failing setup path.");
 
     await service.start();
 
@@ -1835,13 +1754,12 @@ test("service startup launches queued ledger intent and delivers pending launch 
     assert.ok(issue?.activeStageRunId);
     const issueControl = db.issueControl.getIssueControl("usertold", "issue_2");
     assert.ok(issueControl?.activeRunLeaseId);
-    const obligation = db.obligations.getObligationByDedupeKey({
-      runLeaseId: issueControl.activeRunLeaseId!,
-      kind: "deliver_turn_input",
-      dedupeKey: `linear-agent-launch:${issue.activeStageRunId}`,
-    });
+    const obligation = getLatestInputObligation(db, "usertold", "issue_2", "linear-agent-launch:test");
     assert.ok(obligation);
-    assert.equal(obligation.status, "completed");
+    assert.equal(String(obligation.status), "completed");
+    assert.equal(Number(obligation.run_lease_id), issueControl.activeRunLeaseId);
+    assert.equal(String(obligation.thread_id), "thread-1");
+    assert.equal(String(obligation.turn_id), "turn-1");
 
     service.stop();
   } finally {
@@ -1864,7 +1782,7 @@ test("service startup launches queued ledger intent and preserves pending launch
       desiredWebhookId: "delivery-ledger-input",
       lastWebhookAt: new Date().toISOString(),
     });
-    db.issueWorkflows.setIssuePendingLaunchInput("usertold", "issue_5", "Please keep the intro copy intact.");
+    enqueueLaunchInput(db, "usertold", "issue_5", "Please keep the intro copy intact.");
 
     await service.start();
     await flushQueues();
@@ -1880,20 +1798,15 @@ test("service startup launches queued ledger intent and preserves pending launch
     assert.ok(stageRun?.threadId);
     const issueControl = db.issueControl.getIssueControl("usertold", "issue_5");
     assert.ok(issueControl?.activeRunLeaseId);
-    const obligation = db.obligations.getObligationByDedupeKey({
-      runLeaseId: issueControl.activeRunLeaseId!,
-      kind: "deliver_turn_input",
-      dedupeKey: `linear-agent-launch:${stageRun!.id}`,
-    });
+    const obligation = getLatestInputObligation(db, "usertold", "issue_5", "linear-agent-launch:test");
     assert.ok(obligation);
-    assert.match(obligation.payloadJson, /Please keep the intro copy intact/);
+    assert.equal(Number(obligation.run_lease_id), issueControl.activeRunLeaseId);
+    assert.match(String(obligation.payload_json), /Please keep the intro copy intact/);
 
-    if (obligation.status === "completed") {
+    if (String(obligation.status) === "completed") {
       assert.ok(codex.steeredTurns.some((entry) => entry.input.includes("Please keep the intro copy intact.")));
-      assert.equal(db.stageEvents.listPendingTurnInputs(stageRun!.id).length, 0);
     } else {
-      assert.equal(obligation.status, "pending");
-      assert.equal(db.stageEvents.listPendingTurnInputs(stageRun!.id).length, 1);
+      assert.equal(String(obligation.status), "pending");
     }
 
     service.stop();
@@ -2032,16 +1945,6 @@ test("service startup leaves in-progress reconciled stages running", async () =>
       threadId: "thread-in-progress",
       turnId: "turn-live",
     });
-    mirrorActiveRunLease(db, {
-      projectId: "usertold",
-      linearIssueId: "issue_6",
-      stage: "development",
-      triggerWebhookId: "delivery-start-in-progress",
-      branchName: claim!.workspace.branchName,
-      worktreePath: claim!.workspace.worktreePath,
-      threadId: "thread-in-progress",
-      turnId: "turn-live",
-    });
     codex.threads.set("thread-in-progress", {
       id: "thread-in-progress",
       preview: "Still running",
@@ -2094,13 +1997,6 @@ test("service restart retries pending obligations after a transient reconciliati
     assert.ok(stageRun?.threadId);
     const issueControl = db.issueControl.getIssueControl("usertold", "issue_2");
     assert.ok(issueControl?.activeRunLeaseId);
-    const queuedInputId = db.stageEvents.enqueueTurnInput({
-      stageRunId: stageRun.id,
-      threadId: stageRun.threadId,
-      turnId: stageRun.turnId,
-      source: "linear-comment:restart-retry",
-      body: "Please retry this after the restart.",
-    });
     db.obligations.enqueueObligation({
       projectId: "usertold",
       linearIssueId: "issue_2",
@@ -2108,8 +2004,6 @@ test("service restart retries pending obligations after a transient reconciliati
       source: "linear-comment:restart-retry",
       payloadJson: JSON.stringify({
         body: "Please retry this after the restart.",
-        queuedInputId,
-        stageRunId: stageRun.id,
       }),
       runLeaseId: issueControl.activeRunLeaseId,
       threadId: stageRun.threadId,
@@ -2130,7 +2024,6 @@ test("service restart retries pending obligations after a transient reconciliati
       kind: "deliver_turn_input",
       dedupeKey: "restart-retry",
     })?.status, "pending");
-    assert.equal(db.stageEvents.listPendingTurnInputs(stageRun.id).length, 1);
 
     codex.steerError = undefined;
     const restarted = new PatchRelayService(config, db, codex as never, linear, pino({ enabled: false }));
@@ -2145,7 +2038,6 @@ test("service restart retries pending obligations after a transient reconciliati
       })?.status,
       "completed",
     );
-    assert.equal(db.stageEvents.listPendingTurnInputs(stageRun.id).length, 0);
     assert.ok(codex.steeredTurns.some((entry) => entry.input.includes("Please retry this after the restart.")));
 
     restarted.stop();
@@ -2206,15 +2098,6 @@ test("service startup fails active stages with no persisted thread id", async ()
       promptText: "Fail this stage",
     });
     assert.ok(claim);
-    mirrorActiveRunLease(db, {
-      projectId: "usertold",
-      linearIssueId: "issue_7",
-      stage: "development",
-      triggerWebhookId: "delivery-start-missing-thread-id",
-      branchName: claim!.workspace.branchName,
-      worktreePath: claim!.workspace.worktreePath,
-    });
-
     const service = new PatchRelayService(config, db, codex as never, linear, pino({ enabled: false }));
     await service.start();
     await flushQueues();

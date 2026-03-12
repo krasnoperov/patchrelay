@@ -210,6 +210,8 @@ export class AuthoritativeLedgerStore implements AuthoritativeLedgerStoreContrac
     linearIssueId: string;
     workspaceOwnershipId: number;
     stage: WorkflowStage;
+    workflowFile: string;
+    promptText: string;
     triggerReceiptId?: number | null;
     status?: Extract<RunLeaseRecord["status"], "queued" | "running" | "paused">;
   }): RunLeaseRecord {
@@ -217,8 +219,8 @@ export class AuthoritativeLedgerStore implements AuthoritativeLedgerStoreContrac
       .prepare(
         `
         INSERT INTO run_leases (
-          issue_control_id, project_id, linear_issue_id, workspace_ownership_id, stage, status, trigger_receipt_id, started_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          issue_control_id, project_id, linear_issue_id, workspace_ownership_id, stage, status, trigger_receipt_id, workflow_file, prompt_text, started_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
       )
       .run(
@@ -229,6 +231,8 @@ export class AuthoritativeLedgerStore implements AuthoritativeLedgerStoreContrac
         params.stage,
         params.status ?? "queued",
         params.triggerReceiptId ?? null,
+        params.workflowFile ?? "",
+        params.promptText ?? "",
         isoNow(),
       );
     return this.getRunLease(Number(result.lastInsertRowid))!;
@@ -239,10 +243,24 @@ export class AuthoritativeLedgerStore implements AuthoritativeLedgerStoreContrac
     return row ? mapRunLease(row) : undefined;
   }
 
+  getRunLeaseByThreadId(threadId: string): RunLeaseRecord | undefined {
+    const row = this.connection
+      .prepare("SELECT * FROM run_leases WHERE thread_id = ? ORDER BY id DESC LIMIT 1")
+      .get(threadId) as Record<string, unknown> | undefined;
+    return row ? mapRunLease(row) : undefined;
+  }
+
   listActiveRunLeases(): RunLeaseRecord[] {
     const rows = this.connection
       .prepare("SELECT * FROM run_leases WHERE status IN ('queued', 'running', 'paused') ORDER BY id")
       .all() as Record<string, unknown>[];
+    return rows.map((row) => mapRunLease(row));
+  }
+
+  listRunLeasesForIssue(projectId: string, linearIssueId: string): RunLeaseRecord[] {
+    const rows = this.connection
+      .prepare("SELECT * FROM run_leases WHERE project_id = ? AND linear_issue_id = ? ORDER BY id")
+      .all(projectId, linearIssueId) as Record<string, unknown>[];
     return rows.map((row) => mapRunLease(row));
   }
 
@@ -392,12 +410,13 @@ export class AuthoritativeLedgerStore implements AuthoritativeLedgerStoreContrac
       .run(payloadJson, isoNow(), id);
   }
 
-  updateObligationRouting(id: number, params: { threadId?: string | null; turnId?: string | null }): void {
+  updateObligationRouting(id: number, params: { runLeaseId?: number | null; threadId?: string | null; turnId?: string | null }): void {
     this.connection
       .prepare(
         `
         UPDATE obligations
-        SET thread_id = CASE WHEN @setThreadId = 1 THEN @threadId ELSE thread_id END,
+        SET run_lease_id = CASE WHEN @setRunLeaseId = 1 THEN @runLeaseId ELSE run_lease_id END,
+            thread_id = CASE WHEN @setThreadId = 1 THEN @threadId ELSE thread_id END,
             turn_id = CASE WHEN @setTurnId = 1 THEN @turnId ELSE turn_id END,
             updated_at = @updatedAt
         WHERE id = @id
@@ -405,9 +424,11 @@ export class AuthoritativeLedgerStore implements AuthoritativeLedgerStoreContrac
       )
       .run({
         id,
+        runLeaseId: params.runLeaseId ?? null,
         threadId: params.threadId ?? null,
         turnId: params.turnId ?? null,
         updatedAt: isoNow(),
+        setRunLeaseId: Number("runLeaseId" in params),
         setThreadId: Number("threadId" in params),
         setTurnId: Number("turnId" in params),
       });
@@ -514,6 +535,8 @@ function mapRunLease(row: Record<string, unknown>): RunLeaseRecord {
     stage: row.stage as WorkflowStage,
     status: row.status as RunLeaseRecord["status"],
     ...(row.trigger_receipt_id === null ? {} : { triggerReceiptId: Number(row.trigger_receipt_id) }),
+    workflowFile: String(row.workflow_file ?? ""),
+    promptText: String(row.prompt_text ?? ""),
     ...(row.thread_id === null ? {} : { threadId: String(row.thread_id) }),
     ...(row.parent_thread_id === null ? {} : { parentThreadId: String(row.parent_thread_id) }),
     ...(row.turn_id === null ? {} : { turnId: String(row.turn_id) }),

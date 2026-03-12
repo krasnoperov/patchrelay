@@ -1,4 +1,4 @@
-import type { IssueControlStoreProvider } from "./ledger-ports.ts";
+import type { IssueControlStoreProvider, ObligationStoreProvider } from "./ledger-ports.ts";
 import type { LinearInstallationStoreProvider } from "./installation-ports.ts";
 import type { IssueWorkflowWebhookStoreProvider } from "./workflow-ports.ts";
 import { triggerEventAllowed } from "./project-resolution.ts";
@@ -22,7 +22,8 @@ export class WebhookDesiredStageRecorder {
   constructor(
     private readonly stores: IssueWorkflowWebhookStoreProvider &
       LinearInstallationStoreProvider &
-      IssueControlStoreProvider,
+      IssueControlStoreProvider &
+      ObligationStoreProvider,
   ) {}
 
   record(project: ProjectConfig, normalized: NormalizedEvent, options?: { eventReceiptId?: number }): RecordedWebhookIssueState {
@@ -38,11 +39,21 @@ export class WebhookDesiredStageRecorder {
     }
 
     const issue = this.stores.issueWorkflows.getTrackedIssue(project.id, normalizedIssue.id);
-    const activeStageRun = issue?.activeStageRunId ? this.stores.issueWorkflows.getStageRun(issue.activeStageRunId) : undefined;
+    const issueControl = this.stores.issueControl.getIssueControl(project.id, normalizedIssue.id);
+    const activeStageRun =
+      issueControl?.activeRunLeaseId !== undefined ? this.stores.issueWorkflows.getStageRun(issueControl.activeRunLeaseId) : undefined;
     const delegatedToPatchRelay = this.isDelegatedToPatchRelay(project, normalized);
     const desiredStage = this.resolveDesiredStage(project, normalized, issue, activeStageRun, delegatedToPatchRelay);
     const launchInput = this.resolveLaunchInput(normalized.agentSession);
-    this.persistIssueControlFirst(project.id, normalizedIssue.id, issue, desiredStage, normalized.agentSession?.id, options?.eventReceiptId);
+    this.persistIssueControlFirst(
+      project.id,
+      normalizedIssue.id,
+      issue,
+      activeStageRun,
+      desiredStage,
+      normalized.agentSession?.id,
+      options?.eventReceiptId,
+    );
 
     this.stores.issueWorkflows.recordDesiredStage({
       projectId: project.id,
@@ -51,8 +62,6 @@ export class WebhookDesiredStageRecorder {
       ...(normalizedIssue.title ? { title: normalizedIssue.title } : {}),
       ...(normalizedIssue.url ? { issueUrl: normalizedIssue.url } : {}),
       ...(normalizedIssue.stateName ? { currentLinearState: normalizedIssue.stateName } : {}),
-      ...(desiredStage ? { desiredStage } : {}),
-      ...(desiredStage ? { desiredWebhookId: normalized.webhookId } : {}),
       lastWebhookAt: new Date().toISOString(),
     });
 
@@ -60,7 +69,15 @@ export class WebhookDesiredStageRecorder {
       this.stores.issueWorkflows.setIssueActiveAgentSession(project.id, normalizedIssue.id, normalized.agentSession.id);
     }
     if (launchInput && !activeStageRun && delegatedToPatchRelay) {
-      this.stores.issueWorkflows.setIssuePendingLaunchInput(project.id, normalizedIssue.id, launchInput);
+      this.stores.obligations.enqueueObligation({
+        projectId: project.id,
+        linearIssueId: normalizedIssue.id,
+        kind: "deliver_turn_input",
+        source: `linear-agent-launch:${normalized.agentSession?.id ?? normalized.webhookId}`,
+        payloadJson: JSON.stringify({
+          body: launchInput,
+        }),
+      });
     }
 
     const refreshedIssue = this.stores.issueWorkflows.getTrackedIssue(project.id, normalizedIssue.id);
@@ -149,6 +166,7 @@ export class WebhookDesiredStageRecorder {
     projectId: string,
     linearIssueId: string,
     issue: TrackedIssueRecord | undefined,
+    activeStageRun: StageRunRecord | undefined,
     desiredStage: WorkflowStage | undefined,
     activeAgentSessionId: string | undefined,
     eventReceiptId: number | undefined,
@@ -157,7 +175,7 @@ export class WebhookDesiredStageRecorder {
       return;
     }
 
-    const lifecycleStatus = issue?.activeStageRunId || desiredStage ? issue?.lifecycleStatus ?? "queued" : issue?.lifecycleStatus ?? "idle";
+    const lifecycleStatus = activeStageRun || desiredStage ? issue?.lifecycleStatus ?? "queued" : issue?.lifecycleStatus ?? "idle";
     this.stores.issueControl.upsertIssueControl({
       projectId,
       linearIssueId,

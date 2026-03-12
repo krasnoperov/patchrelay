@@ -265,12 +265,14 @@ We need:
 SQLite stores:
 
 - webhook receipts
-- tracked issues
-- workspaces
-- pipeline runs
-- stage runs
-- thread events
-- queued turn inputs
+- issue control
+- issue projection
+- workspace ownership
+- run leases
+- obligations
+- run reports
+- run thread events
+- installation and OAuth state
 
 The database is not a copy of Codex thread history. It is the harness ledger that points to thread history and caches reports.
 

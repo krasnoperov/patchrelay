@@ -40,6 +40,19 @@ function createCaptureLogger() {
   return { logger, warnings };
 }
 
+function listInputObligations(db: PatchRelayDatabase, projectId: string, linearIssueId: string) {
+  return db.connection
+    .prepare(
+      `
+      SELECT id, source, status, run_lease_id, thread_id, turn_id, last_error
+      FROM obligations
+      WHERE project_id = ? AND linear_issue_id = ? AND kind = 'deliver_turn_input'
+      ORDER BY id
+      `,
+    )
+    .all(projectId, linearIssueId) as Array<Record<string, unknown>>;
+}
+
 test("dispatcher routes and flushes pending inputs in order and stops after failure", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-turn-dispatcher-"));
   try {
@@ -77,22 +90,12 @@ test("dispatcher routes and flushes pending inputs in order and stops after fail
       lifecycleStatus: "running",
     });
 
-    const firstQueuedInputId = db.stageEvents.enqueueTurnInput({
-      stageRunId: 1,
-      source: "one",
-      body: "first",
-    });
-    const secondQueuedInputId = db.stageEvents.enqueueTurnInput({
-      stageRunId: 1,
-      source: "two",
-      body: "second",
-    });
     db.obligations.enqueueObligation({
       projectId: "proj",
       linearIssueId: "issue-1",
       kind: "deliver_turn_input",
       source: "one",
-      payloadJson: JSON.stringify({ body: "first", queuedInputId: firstQueuedInputId }),
+      payloadJson: JSON.stringify({ body: "first" }),
       runLeaseId: runLease.id,
     });
     db.obligations.enqueueObligation({
@@ -100,7 +103,7 @@ test("dispatcher routes and flushes pending inputs in order and stops after fail
       linearIssueId: "issue-1",
       kind: "deliver_turn_input",
       source: "two",
-      payloadJson: JSON.stringify({ body: "second", queuedInputId: secondQueuedInputId }),
+      payloadJson: JSON.stringify({ body: "second" }),
       runLeaseId: runLease.id,
     });
 
@@ -118,11 +121,17 @@ test("dispatcher routes and flushes pending inputs in order and stops after fail
     );
 
     assert.deepEqual(codex.steers.map((entry) => entry.input), ["first"]);
-    const remaining = db.stageEvents.listPendingTurnInputs(1);
+    const remaining = db.obligations.listPendingObligations({ runLeaseId: runLease.id, kind: "deliver_turn_input" });
     assert.equal(remaining.length, 1);
-    assert.equal(remaining[0]?.body, "second");
+    assert.equal(remaining[0]?.source, "two");
     assert.equal(remaining[0]?.threadId, "thread-1");
     assert.equal(remaining[0]?.turnId, "turn-1");
+    const obligations = listInputObligations(db, "proj", "issue-1");
+    assert.equal(obligations[0]?.status, "completed");
+    assert.equal(obligations[0]?.thread_id, "thread-1");
+    assert.equal(obligations[0]?.turn_id, "turn-1");
+    assert.equal(obligations[1]?.status, "pending");
+    assert.equal(obligations[1]?.last_error, "steer failed");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -164,19 +173,12 @@ test("dispatcher logs queued input delivery failures by default", async () => {
       activeRunLeaseId: runLease.id,
       lifecycleStatus: "running",
     });
-    const queuedInputId = db.stageEvents.enqueueTurnInput({
-      stageRunId: 7,
-      threadId: "thread-7",
-      turnId: "turn-7",
-      source: "linear-comment:comment-7",
-      body: "please retry this",
-    });
     db.obligations.enqueueObligation({
       projectId: "proj",
       linearIssueId: "issue-7",
       kind: "deliver_turn_input",
       source: "linear-comment:comment-7",
-      payloadJson: JSON.stringify({ body: "please retry this", queuedInputId }),
+      payloadJson: JSON.stringify({ body: "please retry this" }),
       runLeaseId: runLease.id,
       threadId: "thread-7",
       turnId: "turn-7",
@@ -198,13 +200,16 @@ test("dispatcher logs queued input delivery failures by default", async () => {
     assert.equal(warnings[0]?.bindings.turnId, "turn-7");
     assert.equal(warnings[0]?.bindings.source, "linear-comment:comment-7");
     assert.equal(warnings[0]?.bindings.error, "authorization=Bearer [redacted]");
-    assert.equal(db.stageEvents.listPendingTurnInputs(7).length, 1);
+    const pending = db.obligations.listPendingObligations({ runLeaseId: runLease.id, kind: "deliver_turn_input" });
+    assert.equal(pending.length, 1);
+    assert.equal(pending[0]?.threadId, "thread-7");
+    assert.equal(pending[0]?.turnId, "turn-7");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
 
-test("dispatcher ignores mirrored legacy queue rows once ledger obligations are complete", async () => {
+test("dispatcher ignores completed obligations once ledger delivery is complete", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-turn-dispatcher-ledger-first-"));
   try {
     const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
@@ -241,14 +246,6 @@ test("dispatcher ignores mirrored legacy queue rows once ledger obligations are 
       lifecycleStatus: "running",
     });
 
-    db.stageEvents.enqueueTurnInput({
-      stageRunId: 9,
-      threadId: "thread-9",
-      turnId: "turn-9",
-      source: "legacy-only",
-      body: "stale mirrored queue row",
-    });
-
     await dispatcher.flush({
       id: 9,
       projectId: "proj",
@@ -258,7 +255,8 @@ test("dispatcher ignores mirrored legacy queue rows once ledger obligations are 
     });
 
     assert.equal(codex.steers.length, 0);
-    assert.equal(db.stageEvents.listPendingTurnInputs(9).length, 1);
+    assert.equal(db.obligations.listPendingObligations({ runLeaseId: runLease.id, kind: "deliver_turn_input" }).length, 0);
+    assert.equal(listInputObligations(db, "proj", "issue-9").length, 0);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

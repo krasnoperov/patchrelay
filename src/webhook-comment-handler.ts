@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import type { IssueControlStoreProvider, ObligationStoreProvider, RunLeaseStoreProvider } from "./ledger-ports.ts";
-import type { StageTurnInputStoreProvider } from "./stage-event-ports.ts";
 import type { IssueWorkflowWebhookStoreProvider } from "./workflow-ports.ts";
 import { isPatchRelayStatusComment } from "./linear-workflow.ts";
 import { triggerEventAllowed } from "./project-resolution.ts";
@@ -10,7 +9,6 @@ import type { NormalizedEvent, ProjectConfig } from "./types.ts";
 export class CommentWebhookHandler {
   constructor(
     private readonly stores: IssueWorkflowWebhookStoreProvider &
-      StageTurnInputStoreProvider &
       IssueControlStoreProvider &
       ObligationStoreProvider &
       RunLeaseStoreProvider,
@@ -45,7 +43,6 @@ export class CommentWebhookHandler {
     if (!runLease) {
       return;
     }
-    const mirroredStageRun = issue?.activeStageRunId ? this.stores.issueWorkflows.getStageRun(issue.activeStageRunId) : undefined;
 
     const body = [
       "New Linear comment received while you are working.",
@@ -67,39 +64,18 @@ export class CommentWebhookHandler {
       return;
     }
 
-    const source = `linear-comment:${normalized.comment.id}`;
-    const obligationId = this.enqueueObligation(
+    this.enqueueObligation(
       project.id,
       normalizedIssue.id,
-      mirroredStageRun?.id,
       runLease.threadId,
       runLease.turnId,
       normalized.comment.id,
       body,
       dedupeKey,
     );
-    if (mirroredStageRun) {
-      const queuedInputId = this.stores.stageEvents.enqueueTurnInput({
-        stageRunId: mirroredStageRun.id,
-        ...(runLease.threadId ? { threadId: runLease.threadId } : {}),
-        ...(runLease.turnId ? { turnId: runLease.turnId } : {}),
-        source,
-        body,
-      });
-      if (obligationId !== undefined) {
-        this.stores.obligations.updateObligationPayloadJson(
-          obligationId,
-          JSON.stringify({
-            body,
-            queuedInputId,
-            stageRunId: mirroredStageRun.id,
-          }),
-        );
-      }
-    }
     await this.turnInputDispatcher.flush(
       {
-        id: mirroredStageRun?.id ?? 0,
+        id: issueControl.activeRunLeaseId,
         projectId: project.id,
         linearIssueId: normalizedIssue.id,
         ...(runLease.threadId ? { threadId: runLease.threadId } : {}),
@@ -115,7 +91,6 @@ export class CommentWebhookHandler {
   private enqueueObligation(
     projectId: string,
     linearIssueId: string,
-    stageRunId: number | undefined,
     threadId: string | undefined,
     turnId: string | undefined,
     commentId: string,
@@ -134,7 +109,6 @@ export class CommentWebhookHandler {
       source: `linear-comment:${commentId}`,
       payloadJson: JSON.stringify({
         body,
-        ...(stageRunId !== undefined ? { stageRunId } : {}),
       }),
       runLeaseId: activeRunLeaseId,
       ...(threadId ? { threadId } : {}),

@@ -66,10 +66,10 @@ hard dependency of the orchestration loop.
 Use SQLite for authoritative coordination state:
 
 - webhook receipt and dedupe records
-- active tracked issue state
+- active issue control state
 - active stage ownership
 - active thread correlation
-- undelivered queued inputs
+- undelivered obligations
 - installation, OAuth, and token linkage
 
 Prefer reports, archives, or optional caches for derived state:
@@ -90,26 +90,31 @@ The current persistence model is closest to the following split:
 
 - `webhook_events`
   Needed for dedupe, processing status, and safe webhook intake.
-- `tracked_issues`
-  Needed for issue ownership, desired stage, active stage, and service-owned Linear sync state.
-- `workspaces`
+- `event_receipts`
+  Needed for accepted webhook identity, dedupe correlation, and desired-stage trigger ownership.
+- `issue_control`
+  Needed for desired stage, active run lease, active workspace ownership, lifecycle status, and
+  service-owned Linear anchors.
+- `workspace_ownership`
   Needed for durable issue-to-worktree ownership.
-- `pipeline_runs`
-  Needed for stage sequencing and lifecycle status.
-- `stage_runs`
-  Needed for issue-to-thread correlation and restart-safe stage ownership.
-- `queued_turn_inputs`
+- `run_leases`
+  Needed for issue-to-thread correlation and restart-safe execution ownership.
+- `obligations`
   Needed so human or Linear follow-up input is not lost before delivery to a live turn.
 - `linear_installations`, `project_installations`, `oauth_states`
   Needed for installation linkage, token ownership, and safe OAuth completion.
 
 ### Derived Or Artifact-Like State
 
-- archived webhook payload files
-  Useful for debugging and audit trails, but not required for restart correctness.
-- `thread_events`
+- `issue_projection`
+  Useful for CLI and HTTP lookups, but not required to decide ownership or next action.
+- `run_reports`
+  Useful for operator reporting, but rebuildable from thread history and completion state.
+- `run_thread_events`
   Useful for operator history, event counts, and debugging, but not required to continue or safely
   stop a run.
+- archived webhook payload files
+  Useful for debugging and audit trails, but not required for restart correctness.
 - rendered stage reports and CLI views
   Useful for inspection, but rebuildable from authoritative state plus upstream systems.
 
@@ -117,9 +122,9 @@ The current persistence model is closest to the following split:
 
 These are reasonable today, but should be reviewed before adding more persistence around them:
 
-- cached issue title, key, and URL in `tracked_issues`
-- cached current Linear state in `tracked_issues`
-- detailed event payloads in `thread_events`
+- cached issue title, key, and URL in `issue_projection`
+- cached current Linear state in `issue_projection`
+- detailed event payloads in `run_thread_events`
 
 They are helpful for operator ergonomics, but they should stay secondary to the core coordination
 ledger.

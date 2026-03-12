@@ -766,7 +766,7 @@ test("notification history is only persisted when extended history is enabled", 
   assert.equal(enabled.stageEvents.savedEvents[0]?.method, "turn/started");
 });
 
-test("ledger reconciliation replays obligations and clears the matching legacy queued input", async () => {
+test("ledger reconciliation replays obligations without relying on a queued-input mirror", async () => {
   const { stageEvents, ledger, codex, finalizer, stageRun } = createHarness({
     withLedger: true,
     pendingObligationBody: "Please update the handoff copy.",
@@ -782,9 +782,8 @@ test("ledger reconciliation replays obligations and clears the matching legacy q
       input: "Please update the handoff copy.",
     },
   ]);
-  assert.deepEqual(stageEvents.deliveredInputs, [1]);
   assert.equal(ledger.obligations.get(1)?.status, "completed");
-  assert.equal(stageEvents.listPendingTurnInputs(stageRun.id).length, 0);
+  assert.equal(stageEvents.deliveredInputs.length, 0);
 });
 
 test("ledger reconciliation replays obligations without requiring a mirrored legacy queue row", async () => {
@@ -830,7 +829,7 @@ test("ledger reconciliation uses the run lease thread snapshot instead of legacy
   assert.equal(store.finishedStageRuns.at(-1)?.turnId, "turn-1");
 });
 
-test("startup reconciliation adopts legacy stage runs when no active run lease exists", async () => {
+test("startup reconciliation ignores legacy-only stage runs when no active run lease exists", async () => {
   const { store, ledger, codex, finalizer, stageRun } = createHarness({ withLedger: true, withoutActiveLease: true });
   codex.threads.set(stageRun.threadId!, createThread("inProgress"));
 
@@ -838,9 +837,8 @@ test("startup reconciliation adopts legacy stage runs when no active run lease e
 
   assert.equal(store.getStageRun(stageRun.id)?.status, "running");
   assert.equal(store.finishedStageRuns.length, 0);
-  assert.equal(ledger.listActiveRunLeases().length, 1);
-  assert.equal(ledger.listActiveRunLeases()[0]?.threadId, "thread-1");
-  assert.equal(ledger.getIssueControl("proj", "issue-1")?.activeRunLeaseId, ledger.listActiveRunLeases()[0]?.id);
+  assert.equal(ledger.listActiveRunLeases().length, 0);
+  assert.equal(ledger.getIssueControl("proj", "issue-1")?.activeRunLeaseId, undefined);
 });
 
 test("startup reconciliation does not resurrect a legacy running stage after the ledger already marked it completed", async () => {

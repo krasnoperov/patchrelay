@@ -272,23 +272,18 @@ function createHarness(baseDir: string) {
   return { config, db, codex, linear, runner };
 }
 
-function queueDesiredStage(db: PatchRelayDatabase, options?: { createLegacyMirror?: boolean; pendingLaunchInput?: string }) {
-  if (options?.createLegacyMirror) {
-    db.issueWorkflows.recordDesiredStage({
-      projectId: "usertold",
-      linearIssueId: "issue-1",
-      issueKey: "USE-25",
-      title: "Build app server orchestration",
-      issueUrl: "https://linear.app/example/issue/USE-25",
-      currentLinearState: "Start",
-      desiredStage: "development",
-      desiredWebhookId: "delivery-start",
-      lastWebhookAt: "2026-03-12T10:00:00.000Z",
-    });
-    if (options.pendingLaunchInput) {
-      db.issueWorkflows.setIssuePendingLaunchInput("usertold", "issue-1", options.pendingLaunchInput);
-    }
-  }
+function queueDesiredStage(db: PatchRelayDatabase, options?: { pendingLaunchInput?: string }) {
+  db.issueWorkflows.recordDesiredStage({
+    projectId: "usertold",
+    linearIssueId: "issue-1",
+    issueKey: "USE-25",
+    title: "Build app server orchestration",
+    issueUrl: "https://linear.app/example/issue/USE-25",
+    currentLinearState: "Start",
+    desiredStage: "development",
+    desiredWebhookId: "delivery-start",
+    lastWebhookAt: "2026-03-12T10:00:00.000Z",
+  });
 
   const receipt = db.eventReceipts.insertEventReceipt({
     source: "linear-webhook",
@@ -306,6 +301,31 @@ function queueDesiredStage(db: PatchRelayDatabase, options?: { createLegacyMirro
     desiredReceiptId: receipt.id,
     lifecycleStatus: "queued",
   });
+  if (options?.pendingLaunchInput) {
+    db.obligations.enqueueObligation({
+      projectId: "usertold",
+      linearIssueId: "issue-1",
+      kind: "deliver_turn_input",
+      source: "linear-agent-launch:test",
+      payloadJson: JSON.stringify({
+        body: options.pendingLaunchInput,
+      }),
+    });
+  }
+}
+
+function getInputObligation(db: PatchRelayDatabase, source: string) {
+  return db.connection
+    .prepare(
+      `
+      SELECT *
+      FROM obligations
+      WHERE project_id = ? AND linear_issue_id = ? AND kind = 'deliver_turn_input' AND source = ?
+      ORDER BY id DESC
+      LIMIT 1
+      `,
+    )
+    .get("usertold", "issue-1", source) as Record<string, unknown> | undefined;
 }
 
 test("stage runner launches a queued ledger intent and records active lease ownership", async () => {
@@ -364,7 +384,6 @@ test("stage runner persists and delivers pending launch input through the obliga
   try {
     const { db, codex, runner } = createHarness(baseDir);
     queueDesiredStage(db, {
-      createLegacyMirror: true,
       pendingLaunchInput: "Please start by checking the deployment logs.",
     });
 
@@ -375,21 +394,16 @@ test("stage runner persists and delivers pending launch input through the obliga
 
     const issueControl = db.issueControl.getIssueControl("usertold", "issue-1");
     assert.ok(issueControl?.activeRunLeaseId);
-    const obligation = db.obligations.getObligationByDedupeKey({
-      runLeaseId: issueControl.activeRunLeaseId!,
-      kind: "deliver_turn_input",
-      dedupeKey: `linear-agent-launch:${db.issueWorkflows.getTrackedIssue("usertold", "issue-1")!.activeStageRunId!}`,
-    });
-    assert.ok(obligation);
-    assert.equal(obligation.status, "completed");
+    const obligationRow = getInputObligation(db, "linear-agent-launch:test");
+    assert.ok(obligationRow);
+    assert.equal(String(obligationRow.status), "completed");
+    assert.equal(Number(obligationRow.run_lease_id), issueControl.activeRunLeaseId);
+    assert.equal(String(obligationRow.thread_id), "thread-1");
+    assert.equal(String(obligationRow.turn_id), "turn-1");
+    assert.equal(db.obligations.listPendingObligations({ runLeaseId: issueControl.activeRunLeaseId, kind: "deliver_turn_input" }).length, 0);
 
-    const payload = JSON.parse(obligation.payloadJson) as { queuedInputId?: number; body?: string; stageRunId?: number };
+    const payload = JSON.parse(String(obligationRow.payload_json)) as { body?: string };
     assert.equal(payload.body, "Please start by checking the deployment logs.");
-    assert.equal(typeof payload.queuedInputId, "number");
-    assert.equal(typeof payload.stageRunId, "number");
-
-    const pendingMirrorRows = db.stageEvents.listPendingTurnInputs(payload.stageRunId!);
-    assert.equal(pendingMirrorRows.length, 0);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -399,7 +413,7 @@ test("stage runner marks the run failed when turn startup errors after thread cr
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-stage-runner-start-turn-failure-"));
   try {
     const { db, codex, linear, runner } = createHarness(baseDir);
-    queueDesiredStage(db, { createLegacyMirror: true });
+    queueDesiredStage(db);
     codex.startTurnError = new Error("turn start failed");
 
     await assert.rejects(
@@ -439,7 +453,7 @@ test("stage runner no-ops when ledger ownership already has an active run lease"
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-stage-runner-active-lease-"));
   try {
     const { db, codex, runner } = createHarness(baseDir);
-    queueDesiredStage(db, { createLegacyMirror: true });
+    queueDesiredStage(db);
     const issueControl = db.issueControl.upsertIssueControl({
       projectId: "usertold",
       linearIssueId: "issue-1",
@@ -476,7 +490,7 @@ test("stage runner no-ops when ledger ownership already has an active run lease"
 
     assert.equal(codex.startedThreads.length, 0);
     assert.equal(codex.startedTurns.length, 0);
-    assert.equal(db.issueWorkflows.listStageRunsForIssue("usertold", "issue-1").length, 0);
+    assert.equal(db.issueWorkflows.listStageRunsForIssue("usertold", "issue-1").length, 1);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

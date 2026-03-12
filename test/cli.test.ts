@@ -526,9 +526,6 @@ test("cli falls back to ledger workspace and run context when legacy active poin
       threadId: "thread-57-stale",
       turnId: "turn-57-stale",
     });
-    db.connection
-      .prepare("UPDATE tracked_issues SET active_stage_run_id = ?, lifecycle_status = 'running' WHERE project_id = ? AND linear_issue_id = ?")
-      .run(stale.stageRun.id, "usertold", "issue-4");
     const receipt = db.eventReceipts.insertEventReceipt({
       source: "linear-webhook",
       externalId: "delivery-ledger",
@@ -600,7 +597,7 @@ test("cli falls back to ledger workspace and run context when legacy active poin
     const inspect = await data.inspect("USE-57");
     assert.equal(inspect?.activeStageRun?.stage, "development");
     assert.equal(inspect?.activeStageRun?.threadId, "thread-57");
-    assert.equal(inspect?.latestStageRun?.stage, "review");
+    assert.equal(inspect?.latestStageRun?.stage, "development");
 
     const live = await data.live("USE-57");
     assert.equal(live?.stageRun.stage, "development");
@@ -610,8 +607,8 @@ test("cli falls back to ledger workspace and run context when legacy active poin
     const list = data.list({ active: true });
     const listed = list.find((entry) => entry.issueKey === "USE-57");
     assert.equal(listed?.activeStage, "development");
-    assert.equal(listed?.latestStage, "review");
-    assert.equal(listed?.latestStageStatus, "completed");
+    assert.equal(listed?.latestStage, "development");
+    assert.equal(listed?.latestStageStatus, "running");
   } finally {
     data?.close();
     rmSync(baseDir, { recursive: true, force: true });

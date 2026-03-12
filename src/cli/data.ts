@@ -366,8 +366,8 @@ export class CliDataAccess {
     if (!issue) {
       return undefined;
     }
-    const issueControl = this.db.issueControl.getIssueControl(issue.projectId, issue.linearIssueId);
-    if (issueControl?.activeRunLeaseId !== undefined || (!issueControl && issue.activeStageRunId)) {
+    const ledger = this.getLedgerIssueContext(issue.projectId, issue.linearIssueId);
+    if (ledger.issueControl?.activeRunLeaseId !== undefined) {
       throw new Error(`Issue ${issueKey} already has an active stage run.`);
     }
 
@@ -407,7 +407,7 @@ export class CliDataAccess {
     const values: Array<string> = [];
 
     if (options?.project) {
-      conditions.push("ti.project_id = ?");
+      conditions.push("ai.project_id = ?");
       values.push(options.project);
     }
 
@@ -415,35 +415,47 @@ export class CliDataAccess {
     const rows = this.db.connection
       .prepare(
         `
+        WITH all_issues AS (
+          SELECT project_id, linear_issue_id FROM issue_projection
+          UNION
+          SELECT project_id, linear_issue_id FROM issue_control
+        )
         SELECT
-          ti.issue_key,
-          ti.title,
-          ti.project_id,
-          ti.current_linear_state,
-          ti.lifecycle_status,
-          ti.updated_at,
-          active_stage.stage AS active_stage,
-          latest_stage.stage AS latest_stage,
-          latest_stage.status AS latest_stage_status
-        FROM tracked_issues ti
-        LEFT JOIN stage_runs active_stage ON active_stage.id = ti.active_stage_run_id
-        LEFT JOIN stage_runs latest_stage ON latest_stage.id = (
-          SELECT sr.id
-          FROM stage_runs sr
-          WHERE sr.project_id = ti.project_id AND sr.linear_issue_id = ti.linear_issue_id
-          ORDER BY sr.id DESC
+          ai.project_id,
+          ai.linear_issue_id,
+          ip.issue_key,
+          ip.title,
+          ip.current_linear_state,
+          COALESCE(ic.lifecycle_status, 'idle') AS lifecycle_status,
+          COALESCE(ic.updated_at, ip.updated_at) AS updated_at,
+          active_run.stage AS active_stage,
+          latest_run.stage AS latest_stage,
+          latest_run.status AS latest_stage_status
+        FROM all_issues ai
+        LEFT JOIN issue_projection ip
+          ON ip.project_id = ai.project_id AND ip.linear_issue_id = ai.linear_issue_id
+        LEFT JOIN issue_control ic
+          ON ic.project_id = ai.project_id AND ic.linear_issue_id = ai.linear_issue_id
+        LEFT JOIN run_leases active_run
+          ON active_run.id = ic.active_run_lease_id
+        LEFT JOIN run_leases latest_run ON latest_run.id = (
+          SELECT rl.id
+          FROM run_leases rl
+          WHERE rl.project_id = ai.project_id AND rl.linear_issue_id = ai.linear_issue_id
+          ORDER BY rl.id DESC
           LIMIT 1
         )
         ${whereClause}
-        ORDER BY ti.updated_at DESC, ti.issue_key ASC
+        ORDER BY COALESCE(ic.updated_at, ip.updated_at) DESC, ip.issue_key ASC, ai.linear_issue_id ASC
         `,
       )
       .all(...values) as Array<Record<string, unknown>>;
 
     const items = rows.map((row) => {
       const projectId = String(row.project_id);
+      const linearIssueId = String(row.linear_issue_id);
       const issueKey = row.issue_key === null ? undefined : String(row.issue_key);
-      const issue = row.issue_key === null ? undefined : this.db.issueWorkflows.getTrackedIssueByKey(String(row.issue_key));
+      const issue = this.db.issueWorkflows.getTrackedIssue(projectId, linearIssueId);
       const ledger = issue ? this.getLedgerIssueContext(issue.projectId, issue.linearIssueId) : undefined;
 
       return {
@@ -488,7 +500,7 @@ export class CliDataAccess {
     const workspaceOwnership = issueControl?.activeWorkspaceOwnershipId
       ? this.db.workspaceOwnership.getWorkspaceOwnership(issueControl.activeWorkspaceOwnershipId)
       : undefined;
-    const mirroredStageRun = runLease?.threadId ? this.db.issueWorkflows.getStageRunByThreadId(runLease.threadId) : undefined;
+    const mirroredStageRun = issueControl?.activeRunLeaseId ? this.db.issueWorkflows.getStageRun(issueControl.activeRunLeaseId) : undefined;
 
     return {
       ...(issueControl ? { issueControl } : {}),
@@ -500,8 +512,7 @@ export class CliDataAccess {
 
   private getActiveStageRunForIssue(issue: TrackedIssueRecord, ledger?: LedgerIssueContext): StageRunRecord | undefined {
     const context = ledger ?? this.getLedgerIssueContext(issue.projectId, issue.linearIssueId);
-    const directStageRun = issue.activeStageRunId ? this.db.issueWorkflows.getStageRun(issue.activeStageRunId) : undefined;
-    const activeStageRun = context.mirroredStageRun ?? this.synthesizeStageRunFromLease(context) ?? directStageRun;
+    const activeStageRun = context.mirroredStageRun ?? this.synthesizeStageRunFromLease(context);
 
     if (!activeStageRun) {
       return undefined;
@@ -527,12 +538,12 @@ export class CliDataAccess {
       status:
         ledger.runLease.status === "failed"
           ? "failed"
-          : ledger.runLease.status === "completed"
+          : ledger.runLease.status === "completed" || ledger.runLease.status === "released" || ledger.runLease.status === "paused"
             ? "completed"
             : "running",
       triggerWebhookId: "ledger-active-run",
-      workflowFile: "",
-      promptText: "",
+      workflowFile: ledger.runLease.workflowFile,
+      promptText: ledger.runLease.promptText,
       ...(ledger.runLease.threadId ? { threadId: ledger.runLease.threadId } : {}),
       ...(ledger.runLease.parentThreadId ? { parentThreadId: ledger.runLease.parentThreadId } : {}),
       ...(ledger.runLease.turnId ? { turnId: ledger.runLease.turnId } : {}),

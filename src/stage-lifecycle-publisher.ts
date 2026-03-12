@@ -137,7 +137,6 @@ export class StageLifecyclePublisher {
     enqueueIssue: (projectId: string, issueId: string) => void,
   ): Promise<void> {
     const refreshedIssue = this.stores.issueWorkflows.getTrackedIssue(stageRun.projectId, stageRun.linearIssueId);
-    const pipeline = this.stores.issueWorkflows.getPipelineRun(stageRun.pipelineRunId);
     if (refreshedIssue?.desiredStage) {
       await this.publishAgentCompletion(refreshedIssue, {
         type: "thought",
@@ -150,7 +149,7 @@ export class StageLifecyclePublisher {
     const project = this.config.projects.find((candidate) => candidate.id === stageRun.projectId);
     const activeState = project ? resolveActiveLinearState(project, stageRun.stage) : undefined;
     const linear = project ? await this.linearProvider.forProject(stageRun.projectId) : undefined;
-    if (refreshedIssue && pipeline && linear && project && activeState) {
+    if (refreshedIssue && linear && project && activeState) {
       try {
         const linearIssue = await linear.getIssue(stageRun.linearIssueId);
         if (linearIssue.stateName?.trim().toLowerCase() === activeState.trim().toLowerCase()) {
@@ -163,7 +162,6 @@ export class StageLifecyclePublisher {
             });
           }
           this.stores.issueWorkflows.setIssueLifecycleStatus(stageRun.projectId, stageRun.linearIssueId, "paused");
-          this.stores.issueWorkflows.setPipelineStatus(pipeline.id, "paused");
           this.stores.issueControl.upsertIssueControl({
             projectId: stageRun.projectId,
             linearIssueId: stageRun.linearIssueId,
@@ -208,7 +206,6 @@ export class StageLifecyclePublisher {
             issueId: stageRun.linearIssueId,
             stageRunId: stageRun.id,
             stage: stageRun.stage,
-            pipelineRunId: pipeline.id,
             error: sanitizeDiagnosticText(error instanceof Error ? error.message : String(error)),
           },
           "Stage completed locally but PatchRelay could not finish the final Linear sync",
@@ -216,9 +213,6 @@ export class StageLifecyclePublisher {
       }
     }
 
-    if (pipeline) {
-      this.stores.issueWorkflows.markPipelineCompleted(pipeline.id);
-    }
     if (refreshedIssue) {
       await this.publishAgentCompletion(refreshedIssue, {
         type: "response",

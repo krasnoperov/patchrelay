@@ -7,7 +7,6 @@ import type {
   RunLeaseStoreProvider,
   WorkspaceOwnershipStoreProvider,
 } from "./ledger-ports.ts";
-import type { StageTurnInputStoreProvider } from "./stage-event-ports.ts";
 import type { IssueWorkflowExecutionStoreProvider, IssueWorkflowLifecycleStoreProvider, IssueWorkflowWebhookStoreProvider } from "./workflow-ports.ts";
 import { buildStageLaunchPlan, isCodexThreadId } from "./stage-launch.ts";
 import { syncFailedStageToLinear } from "./stage-failure.ts";
@@ -32,7 +31,6 @@ export class ServiceStageRunner {
     private readonly stores: IssueWorkflowExecutionStoreProvider &
       IssueWorkflowLifecycleStoreProvider &
       IssueWorkflowWebhookStoreProvider &
-      StageTurnInputStoreProvider &
       EventReceiptStoreProvider &
       IssueControlStoreProvider &
       ObligationStoreProvider &
@@ -86,7 +84,6 @@ export class ServiceStageRunner {
 
     let threadLaunch;
     let turn;
-    const runLeaseId = this.beginRunLease(claim);
     try {
       await this.worktreeManager.ensureIssueWorktree(project.repoPath, project.worktreeRoot, plan.worktreePath, plan.branchName);
       await this.lifecyclePublisher.markStageActive(project, claim.issue, claim.stageRun);
@@ -114,14 +111,6 @@ export class ServiceStageRunner {
       throw err;
     }
 
-    if (runLeaseId !== undefined) {
-      this.stores.runLeases.updateRunLeaseThread({
-        runLeaseId,
-        threadId: threadLaunch.threadId,
-        ...(threadLaunch.parentThreadId ? { parentThreadId: threadLaunch.parentThreadId } : {}),
-        turnId: turn.turnId,
-      });
-    }
     this.stores.issueWorkflows.updateStageRunThread({
       stageRunId: claim.stageRun.id,
       threadId: threadLaunch.threadId,
@@ -130,44 +119,6 @@ export class ServiceStageRunner {
     });
 
     this.inputDispatcher.routePendingInputs(claim.stageRun, threadLaunch.threadId, turn.turnId);
-    const pendingLaunchInput = this.stores.issueWorkflows.consumeIssuePendingLaunchInput(item.projectId, item.issueId);
-    if (pendingLaunchInput) {
-      let obligationId: number | undefined;
-      const issueControl = this.stores.issueControl.getIssueControl(item.projectId, item.issueId);
-      if (issueControl?.activeRunLeaseId !== undefined) {
-        obligationId = this.stores.obligations.enqueueObligation({
-          projectId: item.projectId,
-          linearIssueId: item.issueId,
-          kind: "deliver_turn_input",
-          source: "linear-agent-launch",
-          payloadJson: JSON.stringify({
-            body: pendingLaunchInput,
-            stageRunId: claim.stageRun.id,
-          }),
-          runLeaseId: issueControl.activeRunLeaseId,
-          threadId: threadLaunch.threadId,
-          turnId: turn.turnId,
-          dedupeKey: `linear-agent-launch:${claim.stageRun.id}`,
-        }).id;
-      }
-      const queuedInputId = this.stores.stageEvents.enqueueTurnInput({
-        stageRunId: claim.stageRun.id,
-        threadId: threadLaunch.threadId,
-        turnId: turn.turnId,
-        source: "linear-agent-launch",
-        body: pendingLaunchInput,
-      });
-      if (obligationId !== undefined) {
-        this.stores.obligations.updateObligationPayloadJson(
-          obligationId,
-          JSON.stringify({
-            body: pendingLaunchInput,
-            queuedInputId,
-            stageRunId: claim.stageRun.id,
-          }),
-        );
-      }
-    }
     await this.inputDispatcher.flush(
       {
         id: claim.stageRun.id,
@@ -201,11 +152,11 @@ export class ServiceStageRunner {
   private async ensureLaunchIssueMirror(
     project: AppConfig["projects"][number],
     linearIssueId: string,
-    desiredStage: StageRunRecord["stage"],
-    desiredWebhookId: string,
+    _desiredStage: StageRunRecord["stage"],
+    _desiredWebhookId: string,
   ): Promise<TrackedIssueRecord | undefined> {
     const existing = this.stores.issueWorkflows.getTrackedIssue(project.id, linearIssueId);
-    if (existing?.desiredStage === desiredStage && existing.desiredWebhookId === desiredWebhookId) {
+    if (existing?.issueKey && existing.title && existing.issueUrl && existing.currentLinearState) {
       return existing;
     }
 
@@ -225,8 +176,6 @@ export class ServiceStageRunner {
         : existing?.currentLinearState
           ? { currentLinearState: existing.currentLinearState }
           : {}),
-      desiredStage,
-      desiredWebhookId,
       lastWebhookAt: new Date().toISOString(),
     });
   }
@@ -305,58 +254,6 @@ export class ServiceStageRunner {
       message,
       mode: "launch",
     });
-  }
-
-  private beginRunLease(
-    claim: { issue: TrackedIssueRecord; workspace: { branchName: string; worktreePath: string }; stageRun: StageRunRecord },
-  ): number | undefined {
-    const existingIssueControl = this.stores.issueControl.getIssueControl(claim.issue.projectId, claim.issue.linearIssueId);
-    const receiptId = existingIssueControl?.desiredReceiptId;
-    const issueControl = this.stores.issueControl.upsertIssueControl({
-      projectId: claim.issue.projectId,
-      linearIssueId: claim.issue.linearIssueId,
-      desiredStage: null,
-      ...(receiptId !== undefined ? { desiredReceiptId: null } : {}),
-      ...(claim.issue.statusCommentId ? { serviceOwnedCommentId: claim.issue.statusCommentId } : {}),
-      ...(claim.issue.activeAgentSessionId ? { activeAgentSessionId: claim.issue.activeAgentSessionId } : {}),
-      lifecycleStatus: "running",
-    });
-    const workspaceOwnership = this.stores.workspaceOwnership.upsertWorkspaceOwnership({
-      projectId: claim.issue.projectId,
-      linearIssueId: claim.issue.linearIssueId,
-      branchName: claim.workspace.branchName,
-      worktreePath: claim.workspace.worktreePath,
-      status: "active",
-    });
-    const runLease = this.stores.runLeases.createRunLease({
-      issueControlId: issueControl.id,
-      projectId: claim.issue.projectId,
-      linearIssueId: claim.issue.linearIssueId,
-      workspaceOwnershipId: workspaceOwnership.id,
-      stage: claim.stageRun.stage,
-      ...(receiptId !== undefined ? { triggerReceiptId: receiptId } : {}),
-      status: "running",
-    });
-    this.stores.workspaceOwnership.upsertWorkspaceOwnership({
-      projectId: claim.issue.projectId,
-      linearIssueId: claim.issue.linearIssueId,
-      branchName: claim.workspace.branchName,
-      worktreePath: claim.workspace.worktreePath,
-      status: "active",
-      currentRunLeaseId: runLease.id,
-    });
-    this.stores.issueControl.upsertIssueControl({
-      projectId: claim.issue.projectId,
-      linearIssueId: claim.issue.linearIssueId,
-      desiredStage: null,
-      desiredReceiptId: null,
-      activeWorkspaceOwnershipId: workspaceOwnership.id,
-      activeRunLeaseId: runLease.id,
-      ...(claim.issue.statusCommentId ? { serviceOwnedCommentId: claim.issue.statusCommentId } : {}),
-      ...(claim.issue.activeAgentSessionId ? { activeAgentSessionId: claim.issue.activeAgentSessionId } : {}),
-      lifecycleStatus: "running",
-    });
-    return runLease.id;
   }
 
   private finishRunLease(

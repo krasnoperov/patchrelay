@@ -3,7 +3,7 @@ import type { CodexAppServerClient, CodexNotification } from "./codex-app-server
 import type { PatchRelayDatabase } from "./db.ts";
 import type { EventReceiptStoreProvider, IssueControlStoreProvider, ObligationStoreProvider, RunLeaseStoreProvider, WorkspaceOwnershipStoreProvider } from "./ledger-ports.ts";
 import type { LinearInstallationStoreProvider } from "./installation-ports.ts";
-import type { StageEventLogStoreProvider, StageTurnInputStoreProvider } from "./stage-event-ports.ts";
+import type { StageEventLogStoreProvider } from "./stage-event-ports.ts";
 import type { IssueWorkflowExecutionStoreProvider, IssueWorkflowLifecycleStoreProvider, IssueWorkflowQueryStoreProvider, IssueWorkflowWebhookStoreProvider, ReadyIssueSource } from "./workflow-ports.ts";
 import type { WebhookEventStoreProvider } from "./webhook-event-ports.ts";
 import { IssueQueryService } from "./issue-query-service.ts";
@@ -25,7 +25,6 @@ type ServiceStores = WebhookEventStoreProvider &
   IssueWorkflowLifecycleStoreProvider &
   IssueWorkflowQueryStoreProvider &
   IssueWorkflowWebhookStoreProvider &
-  StageTurnInputStoreProvider &
   StageEventLogStoreProvider &
   LinearInstallationStoreProvider;
 
