@@ -3,6 +3,7 @@ import type { CodexNotification } from "./codex-app-server.ts";
 import type { CodexAppServerClient } from "./codex-app-server.ts";
 import type { IssueControlStoreProvider, ObligationStoreProvider, RunLeaseStoreProvider, WorkspaceOwnershipStoreProvider } from "./ledger-ports.ts";
 import { reconcileIssue } from "./reconciliation-engine.ts";
+import { buildReconciliationSnapshot } from "./reconciliation-snapshot-builder.ts";
 import type {
   StageEventLogStoreProvider,
   StageTurnInputStoreProvider,
@@ -374,103 +375,49 @@ export class ServiceStageFinalizer {
   }
 
   private async reconcileRunLease(runLeaseId: number): Promise<void> {
-    const runLease = this.stores.runLeases?.getRunLease(runLeaseId);
+    if (!this.stores.runLeases || !this.stores.issueControl) {
+      return;
+    }
+
+    const snapshot = await buildReconciliationSnapshot({
+      config: this.config,
+      stores: {
+        issueControl: this.stores.issueControl,
+        runLeases: this.stores.runLeases,
+        ...(this.stores.workspaceOwnership ? { workspaceOwnership: this.stores.workspaceOwnership } : {}),
+        ...(this.stores.obligations ? { obligations: this.stores.obligations } : {}),
+      },
+      codex: this.codex,
+      linearProvider: this.linearProvider,
+      runLeaseId,
+    });
+    if (!snapshot) {
+      return;
+    }
+
+    const runLease = this.stores.runLeases.getRunLease(runLeaseId);
     if (!runLease) {
       return;
     }
 
-    const issueControl = this.stores.issueControl?.getIssueControl(runLease.projectId, runLease.linearIssueId);
-    if (!issueControl) {
-      return;
-    }
-
-    const issue = this.stores.issueWorkflows.getTrackedIssue(runLease.projectId, runLease.linearIssueId);
     const stageRun =
-      (issue?.activeStageRunId ? this.stores.issueWorkflows.getStageRun(issue.activeStageRunId) : undefined) ??
       (runLease.threadId ? this.stores.issueWorkflows.getStageRunByThreadId(runLease.threadId) : undefined) ??
       this.stores.issueWorkflows.getLatestStageRunForIssue(runLease.projectId, runLease.linearIssueId);
     if (!stageRun) {
       return;
     }
 
-    const project = this.config.projects.find((candidate) => candidate.id === runLease.projectId);
-    const linear = project ? await this.linearProvider.forProject(runLease.projectId) : undefined;
-    const liveLinear =
-      project && linear
-        ? await linear
-            .getIssue(runLease.linearIssueId)
-            .then((linearIssue) =>
-              linearIssue.stateName
-                ? {
-                    status: "known" as const,
-                    issue: {
-                      id: linearIssue.id,
-                      stateName: linearIssue.stateName,
-                    },
-                  }
-                : ({ status: "unknown" as const }),
-            )
-            .catch(() => ({ status: "unknown" as const }))
-        : ({ status: "unknown" as const });
     const threadId = runLease.threadId ?? stageRun.threadId;
     const turnId = runLease.turnId ?? stageRun.turnId;
-    const liveCodex =
-      threadId
-        ? await this.codex
-            .readThread(threadId, true)
-            .then((thread) => ({ status: "found" as const, thread }))
-            .catch(() => ({ status: "missing" as const }))
-        : ({ status: "unknown" as const });
-    const obligations = this.stores.obligations?.listPendingObligations({ runLeaseId }).map((obligation) => {
-      const payload = safeJsonParse<{
-        body?: string;
-        queuedInputId?: number;
-        stageRunId?: number;
-      }>(obligation.payloadJson);
-      return {
-        id: obligation.id,
-        kind: obligation.kind,
-        status: obligation.status,
-        runId: runLease.id,
-        ...(obligation.threadId ? { threadId: obligation.threadId } : {}),
-        ...(obligation.turnId ? { turnId: obligation.turnId } : {}),
-        ...(payload ? { payload } : {}),
-      };
-    }) ?? [];
-    const workflowConfig = project?.workflows.find((workflow) => workflow.id === runLease.stage);
-    const decision = reconcileIssue({
-      issue: {
-        projectId: runLease.projectId,
-        linearIssueId: runLease.linearIssueId,
-        ...(issueControl.desiredStage ? { desiredStage: issueControl.desiredStage } : {}),
-        lifecycleStatus: issueControl.lifecycleStatus,
-        ...(issueControl.serviceOwnedCommentId ? { statusCommentId: issueControl.serviceOwnedCommentId } : {}),
-        activeRun: {
-          id: runLease.id,
-          stage: runLease.stage,
-          status: runLease.status,
-          ...(threadId ? { threadId } : {}),
-          ...(turnId ? { turnId } : {}),
-          ...(runLease.parentThreadId ? { parentThreadId: runLease.parentThreadId } : {}),
-        },
-      },
-      obligations,
-      ...(workflowConfig
-        ? {
-            policy: {
-              ...(workflowConfig.activeState ? { activeLinearStateName: workflowConfig.activeState } : {}),
-              ...(workflowConfig.fallbackState ? { fallbackLinearStateName: workflowConfig.fallbackState } : {}),
-            },
-          }
-        : {}),
-      live: {
-        linear: liveLinear,
-        codex: liveCodex,
-      },
-    });
+    const decision = reconcileIssue(snapshot.input);
 
     if (decision.outcome === "hydrate_live_state") {
-      await this.reconcileLegacyStageRun(stageRun);
+      await this.failStageRunDuringReconciliation(
+        stageRun,
+        threadId ?? `missing-thread-${stageRun.id}`,
+        "Ledger reconciliation could not hydrate the live state snapshot",
+        ...(turnId ? [{ turnId }] : []),
+      );
       return;
     }
 
@@ -490,10 +437,18 @@ export class ServiceStageFinalizer {
       return;
     }
 
-    if (decision.outcome === "complete" && liveCodex.status === "found" && issue) {
-      const latestTurn = liveCodex.thread.turns.at(-1);
-      this.completeStageRun(stageRun, issue, liveCodex.thread, "completed", {
-        threadId: liveCodex.thread.id,
+    if (decision.outcome === "complete" && snapshot.input.live?.codex?.status === "found") {
+      const issue = this.stores.issueWorkflows.getTrackedIssue(runLease.projectId, runLease.linearIssueId);
+      if (!issue) {
+        return;
+      }
+      const liveThread = snapshot.input.live.codex.thread;
+      if (!liveThread) {
+        return;
+      }
+      const latestTurn = liveThread.turns.at(-1);
+      this.completeStageRun(stageRun, issue, liveThread, "completed", {
+        threadId: liveThread.id,
         ...(latestTurn?.id ? { turnId: latestTurn.id } : {}),
         ...(nextLifecycleStatus ? { nextLifecycleStatus } : {}),
       });
