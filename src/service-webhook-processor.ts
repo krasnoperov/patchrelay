@@ -123,10 +123,7 @@ export class ServiceWebhookProcessor {
       }
 
       this.stores.webhookEvents.assignWebhookProject(webhookEventId, project.id);
-      const receipt = this.lookupEventReceipt(event.webhookId);
-      if (receipt) {
-        this.assignEventReceiptContext(event.webhookId, project.id, normalized.issue.id);
-      }
+      const receipt = this.ensureEventReceipt(event, project.id, normalized.issue.id);
       const issueState = this.desiredStageRecorder.record(project, normalized, receipt ? { eventReceiptId: receipt.id } : undefined);
 
       await this.agentSessionHandler.handle({
@@ -209,5 +206,30 @@ export class ServiceWebhookProcessor {
 
   private lookupEventReceipt(webhookId: string) {
     return this.ledgerStores.eventReceipts?.getEventReceiptBySourceExternalId("linear-webhook", webhookId);
+  }
+
+  private ensureEventReceipt(
+    event: { webhookId: string; eventType: string; receivedAt: string; headersJson: string; payloadJson: string },
+    projectId?: string,
+    linearIssueId?: string,
+  ) {
+    const existing = this.lookupEventReceipt(event.webhookId);
+    if (existing) {
+      this.assignEventReceiptContext(event.webhookId, projectId, linearIssueId);
+      return existing;
+    }
+
+    const inserted = this.ledgerStores.eventReceipts?.insertEventReceipt({
+      source: "linear-webhook",
+      externalId: event.webhookId,
+      eventType: event.eventType,
+      receivedAt: event.receivedAt,
+      acceptanceStatus: "accepted",
+      ...(projectId ? { projectId } : {}),
+      ...(linearIssueId ? { linearIssueId } : {}),
+      headersJson: event.headersJson,
+      payloadJson: event.payloadJson,
+    });
+    return inserted ? this.ledgerStores.eventReceipts?.getEventReceipt(inserted.id) : undefined;
   }
 }

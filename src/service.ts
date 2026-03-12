@@ -45,22 +45,11 @@ function createServiceStores(db: PatchRelayDatabase): ServiceStores {
 
 function createReadyIssueSource(stores: ServiceStores): ReadyIssueSource {
   return {
-    listIssuesReadyForExecution: () => {
-      const readyIssues = new Map<string, { projectId: string; linearIssueId: string }>();
-      for (const issue of stores.issueControl.listIssueControlsReadyForLaunch()) {
-        readyIssues.set(`${issue.projectId}:${issue.linearIssueId}`, {
-          projectId: issue.projectId,
-          linearIssueId: issue.linearIssueId,
-        });
-      }
-      for (const issue of stores.issueWorkflows.listIssuesReadyForExecution()) {
-        readyIssues.set(`${issue.projectId}:${issue.linearIssueId}`, {
-          projectId: issue.projectId,
-          linearIssueId: issue.linearIssueId,
-        });
-      }
-      return [...readyIssues.values()];
-    },
+    listIssuesReadyForExecution: () =>
+      stores.issueControl.listIssueControlsReadyForLaunch().map((issue) => ({
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+      })),
   };
 }
 

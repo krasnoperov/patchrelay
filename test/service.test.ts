@@ -399,6 +399,142 @@ function installPatchRelayApp(db: PatchRelayDatabase, projectId = "usertold", ac
   return installation;
 }
 
+function ensureEventReceipt(
+  db: PatchRelayDatabase,
+  params: {
+    webhookId: string;
+    eventType?: string;
+    projectId: string;
+    linearIssueId: string;
+    receivedAt?: string;
+  },
+) {
+  const existing = db.eventReceipts.getEventReceiptBySourceExternalId("linear-webhook", params.webhookId);
+  if (existing) {
+    return existing;
+  }
+
+  const inserted = db.eventReceipts.insertEventReceipt({
+    source: "linear-webhook",
+    externalId: params.webhookId,
+    eventType: params.eventType ?? "legacy-test-event",
+    receivedAt: params.receivedAt ?? new Date().toISOString(),
+    acceptanceStatus: "accepted",
+    projectId: params.projectId,
+    linearIssueId: params.linearIssueId,
+  });
+  return db.eventReceipts.getEventReceipt(inserted.id)!;
+}
+
+function recordDesiredStageWithLedger(
+  db: PatchRelayDatabase,
+  params: {
+    projectId: string;
+    linearIssueId: string;
+    issueKey?: string;
+    title?: string;
+    issueUrl?: string;
+    currentLinearState?: string;
+    desiredStage?: "development" | "review" | "deploy" | "cleanup";
+    desiredWebhookId?: string;
+    lastWebhookAt: string;
+  },
+) {
+  const issue = db.issueWorkflows.recordDesiredStage(params);
+  const receipt =
+    params.desiredStage && params.desiredWebhookId
+      ? ensureEventReceipt(db, {
+          webhookId: params.desiredWebhookId,
+          projectId: params.projectId,
+          linearIssueId: params.linearIssueId,
+          receivedAt: params.lastWebhookAt,
+        })
+      : undefined;
+  db.issueControl.upsertIssueControl({
+    projectId: params.projectId,
+    linearIssueId: params.linearIssueId,
+    ...(params.desiredStage ? { desiredStage: params.desiredStage } : {}),
+    ...(receipt ? { desiredReceiptId: receipt.id } : {}),
+    ...(issue.statusCommentId ? { serviceOwnedCommentId: issue.statusCommentId } : {}),
+    ...(issue.activeAgentSessionId ? { activeAgentSessionId: issue.activeAgentSessionId } : {}),
+    lifecycleStatus: issue.lifecycleStatus,
+  });
+  return issue;
+}
+
+function mirrorActiveRunLease(
+  db: PatchRelayDatabase,
+  params: {
+    projectId: string;
+    linearIssueId: string;
+    stage: "development" | "review" | "deploy" | "cleanup";
+    triggerWebhookId: string;
+    branchName: string;
+    worktreePath: string;
+    threadId?: string;
+    turnId?: string;
+    parentThreadId?: string;
+  },
+) {
+  const issue = db.issueWorkflows.getTrackedIssue(params.projectId, params.linearIssueId);
+  assert.ok(issue);
+  const receipt = ensureEventReceipt(db, {
+    webhookId: params.triggerWebhookId,
+    projectId: params.projectId,
+    linearIssueId: params.linearIssueId,
+  });
+  const issueControl = db.issueControl.upsertIssueControl({
+    projectId: params.projectId,
+    linearIssueId: params.linearIssueId,
+    desiredReceiptId: null,
+    lifecycleStatus: "running",
+    ...(issue.statusCommentId ? { serviceOwnedCommentId: issue.statusCommentId } : {}),
+    ...(issue.activeAgentSessionId ? { activeAgentSessionId: issue.activeAgentSessionId } : {}),
+  });
+  const workspace = db.workspaceOwnership.upsertWorkspaceOwnership({
+    projectId: params.projectId,
+    linearIssueId: params.linearIssueId,
+    branchName: params.branchName,
+    worktreePath: params.worktreePath,
+    status: "active",
+  });
+  const runLease = db.runLeases.createRunLease({
+    issueControlId: issueControl.id,
+    projectId: params.projectId,
+    linearIssueId: params.linearIssueId,
+    workspaceOwnershipId: workspace.id,
+    stage: params.stage,
+    triggerReceiptId: receipt.id,
+    status: "running",
+  });
+  if (params.threadId || params.turnId || params.parentThreadId) {
+    db.runLeases.updateRunLeaseThread({
+      runLeaseId: runLease.id,
+      ...(params.threadId ? { threadId: params.threadId } : {}),
+      ...(params.turnId ? { turnId: params.turnId } : {}),
+      ...(params.parentThreadId ? { parentThreadId: params.parentThreadId } : {}),
+    });
+  }
+  db.workspaceOwnership.upsertWorkspaceOwnership({
+    projectId: params.projectId,
+    linearIssueId: params.linearIssueId,
+    branchName: params.branchName,
+    worktreePath: params.worktreePath,
+    status: "active",
+    currentRunLeaseId: runLease.id,
+  });
+  db.issueControl.upsertIssueControl({
+    projectId: params.projectId,
+    linearIssueId: params.linearIssueId,
+    activeWorkspaceOwnershipId: workspace.id,
+    activeRunLeaseId: runLease.id,
+    desiredReceiptId: null,
+    lifecycleStatus: "running",
+    ...(issue.statusCommentId ? { serviceOwnedCommentId: issue.statusCommentId } : {}),
+    ...(issue.activeAgentSessionId ? { activeAgentSessionId: issue.activeAgentSessionId } : {}),
+  });
+}
+
 async function flushQueues(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -476,7 +612,7 @@ test("service keeps one workspace and forks later stages from the prior thread",
     assert.equal(runningComment.includes(workspacePath), false);
     writeFileSync(path.join(workspacePath, "sentinel.txt"), "keep me\n", "utf8");
 
-    db.issueWorkflows.recordDesiredStage({
+    recordDesiredStageWithLedger(db, {
       projectId: "usertold",
       linearIssueId: "issue_1",
       issueKey: "USE-25",
@@ -1423,6 +1559,16 @@ test("service startup reconciles finished and missing active threads", async () 
       threadId: "thread-finished",
       turnId: "turn-1",
     });
+    mirrorActiveRunLease(db, {
+      projectId: "usertold",
+      linearIssueId: "issue_4",
+      stage: "development",
+      triggerWebhookId: "delivery-start",
+      branchName: claim!.workspace.branchName,
+      worktreePath: claim!.workspace.worktreePath,
+      threadId: "thread-finished",
+      turnId: "turn-1",
+    });
     codex.threads.set("thread-finished", {
       id: "thread-finished",
       preview: "Recovered",
@@ -1455,6 +1601,16 @@ test("service startup reconciles finished and missing active threads", async () 
     assert.ok(missingClaim);
     db.issueWorkflows.updateStageRunThread({
       stageRunId: missingClaim!.stageRun.id,
+      threadId: "thread-missing",
+      turnId: "turn-2",
+    });
+    mirrorActiveRunLease(db, {
+      projectId: "usertold",
+      linearIssueId: "issue_5",
+      stage: "development",
+      triggerWebhookId: "delivery-start-missing",
+      branchName: missingClaim!.workspace.branchName,
+      worktreePath: missingClaim!.workspace.worktreePath,
       threadId: "thread-missing",
       turnId: "turn-2",
     });
@@ -1535,6 +1691,16 @@ test("service startup leaves in-progress reconciled stages running", async () =>
       threadId: "thread-in-progress",
       turnId: "turn-live",
     });
+    mirrorActiveRunLease(db, {
+      projectId: "usertold",
+      linearIssueId: "issue_6",
+      stage: "development",
+      triggerWebhookId: "delivery-start-in-progress",
+      branchName: claim!.workspace.branchName,
+      worktreePath: claim!.workspace.worktreePath,
+      threadId: "thread-in-progress",
+      turnId: "turn-live",
+    });
     codex.threads.set("thread-in-progress", {
       id: "thread-in-progress",
       preview: "Still running",
@@ -1612,6 +1778,14 @@ test("service startup fails active stages with no persisted thread id", async ()
       promptText: "Fail this stage",
     });
     assert.ok(claim);
+    mirrorActiveRunLease(db, {
+      projectId: "usertold",
+      linearIssueId: "issue_7",
+      stage: "development",
+      triggerWebhookId: "delivery-start-missing-thread-id",
+      branchName: claim!.workspace.branchName,
+      worktreePath: claim!.workspace.worktreePath,
+    });
 
     const service = new PatchRelayService(config, db, codex as never, linear, pino({ enabled: false }));
     await service.start();

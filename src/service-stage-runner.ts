@@ -43,16 +43,18 @@ export class ServiceStageRunner {
     }
 
     const issue = this.stores.issueWorkflows.getTrackedIssue(item.projectId, item.issueId);
-    const issueControl = this.stores.issueControl?.getIssueControl(item.projectId, item.issueId);
-    const desiredStage = issue?.desiredStage ?? issueControl?.desiredStage;
-    const desiredWebhookId =
-      issue?.desiredWebhookId ??
-      (issueControl?.desiredReceiptId !== undefined
-        ? this.stores.eventReceipts?.getEventReceipt(issueControl.desiredReceiptId)?.externalId
-        : undefined);
-    if (!issue || !desiredStage || !desiredWebhookId || issue.activeStageRunId) {
+    const issueControl = this.resolveLaunchIssueControl(item.projectId, item.issueId, issue);
+    if (!issue || !issueControl?.desiredStage || issueControl.activeRunLeaseId !== undefined) {
       return;
     }
+
+    const receipt =
+      issueControl.desiredReceiptId !== undefined ? this.stores.eventReceipts?.getEventReceipt(issueControl.desiredReceiptId) : undefined;
+    if (!receipt?.externalId) {
+      return;
+    }
+    const desiredStage = issueControl.desiredStage;
+    const desiredWebhookId = receipt.externalId;
 
     const plan = buildStageLaunchPlan(project, issue, desiredStage);
     const claim = this.stores.issueWorkflows.claimStageRun({
@@ -71,7 +73,7 @@ export class ServiceStageRunner {
 
     let threadLaunch;
     let turn;
-    const runLeaseId = this.beginRunLease(claim, issue);
+    const runLeaseId = this.beginRunLease(claim);
     try {
       await this.worktreeManager.ensureIssueWorktree(project.repoPath, project.worktreeRoot, plan.worktreePath, plan.branchName);
       await this.lifecyclePublisher.markStageActive(project, claim.issue, claim.stageRun);
@@ -227,18 +229,13 @@ export class ServiceStageRunner {
 
   private beginRunLease(
     claim: { issue: TrackedIssueRecord; workspace: { branchName: string; worktreePath: string }; stageRun: StageRunRecord },
-    issueBeforeClaim: TrackedIssueRecord,
   ): number | undefined {
     if (!this.stores.issueControl || !this.stores.workspaceOwnership || !this.stores.runLeases) {
       return undefined;
     }
 
     const existingIssueControl = this.stores.issueControl.getIssueControl(claim.issue.projectId, claim.issue.linearIssueId);
-    const receiptId =
-      existingIssueControl?.desiredReceiptId ??
-      (issueBeforeClaim.desiredWebhookId
-        ? this.stores.eventReceipts?.getEventReceiptBySourceExternalId("linear-webhook", issueBeforeClaim.desiredWebhookId)?.id
-        : undefined);
+    const receiptId = existingIssueControl?.desiredReceiptId;
     const issueControl = this.stores.issueControl.upsertIssueControl({
       projectId: claim.issue.projectId,
       linearIssueId: claim.issue.linearIssueId,
@@ -284,6 +281,53 @@ export class ServiceStageRunner {
       lifecycleStatus: "running",
     });
     return runLease.id;
+  }
+
+  private resolveLaunchIssueControl(
+    projectId: string,
+    linearIssueId: string,
+    issue: TrackedIssueRecord | undefined,
+  ) {
+    const existingIssueControl = this.stores.issueControl?.getIssueControl(projectId, linearIssueId);
+    if (!issue?.desiredStage || !issue.desiredWebhookId || !this.stores.issueControl) {
+      return existingIssueControl;
+    }
+
+    const existingReceipt = this.stores.eventReceipts?.getEventReceiptBySourceExternalId("linear-webhook", issue.desiredWebhookId);
+    const insertedReceipt =
+      existingReceipt ??
+      this.stores.eventReceipts?.insertEventReceipt({
+        source: "linear-webhook",
+        externalId: issue.desiredWebhookId,
+        eventType: "legacy-launch-intent",
+        receivedAt: new Date().toISOString(),
+        acceptanceStatus: "accepted",
+        projectId,
+        linearIssueId,
+      });
+    const receiptId = insertedReceipt?.id;
+
+    return this.stores.issueControl.upsertIssueControl({
+      projectId,
+      linearIssueId,
+      ...(existingIssueControl?.desiredStage ? { desiredStage: existingIssueControl.desiredStage } : { desiredStage: issue.desiredStage }),
+      ...(receiptId !== undefined ? { desiredReceiptId: receiptId } : {}),
+      ...(existingIssueControl?.activeWorkspaceOwnershipId !== undefined
+        ? { activeWorkspaceOwnershipId: existingIssueControl.activeWorkspaceOwnershipId }
+        : {}),
+      ...(existingIssueControl?.activeRunLeaseId !== undefined ? { activeRunLeaseId: existingIssueControl.activeRunLeaseId } : {}),
+      ...(issue.statusCommentId
+        ? { serviceOwnedCommentId: issue.statusCommentId }
+        : existingIssueControl?.serviceOwnedCommentId
+          ? { serviceOwnedCommentId: existingIssueControl.serviceOwnedCommentId }
+          : {}),
+      ...(issue.activeAgentSessionId
+        ? { activeAgentSessionId: issue.activeAgentSessionId }
+        : existingIssueControl?.activeAgentSessionId
+          ? { activeAgentSessionId: existingIssueControl.activeAgentSessionId }
+          : {}),
+      lifecycleStatus: existingIssueControl?.lifecycleStatus ?? issue.lifecycleStatus,
+    });
   }
 
   private finishRunLease(
