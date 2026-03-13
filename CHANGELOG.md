@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.3.0...patchrelay-v0.4.0) (2026-03-13)
+
+
+### Features
+
+* persist issue session handoff history for open ([45e6bb6](https://github.com/krasnoperov/patchrelay/commit/45e6bb6ccbfd822d12487e3ee7d52c0af7e69105))
+
 ## [0.3.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.2.0...patchrelay-v0.3.0) (2026-03-13)
 
 
