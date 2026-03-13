@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.2.0...patchrelay-v0.3.0) (2026-03-13)
+
+
+### Features
+
+* separate workflow coordination from query and cli dispatch ([e40a046](https://github.com/krasnoperov/patchrelay/commit/e40a046e95869e8f064a7a4b4bcd0e9c18e5c8f6))
+
 ## [0.2.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.1.0...patchrelay-v0.2.0) (2026-03-12)
 
 
