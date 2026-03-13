@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.5.0...patchrelay-v0.5.1) (2026-03-13)
+
+
+### Bug Fixes
+
+* complete CI pre-merge coverage ([39383f3](https://github.com/krasnoperov/patchrelay/commit/39383f307a9bb1b4cbafe1650b3c794cfbb53c3a))
+
 ## [0.5.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.4.1...patchrelay-v0.5.0) (2026-03-13)
 
 
