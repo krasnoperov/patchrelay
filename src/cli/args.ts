@@ -1,5 +1,6 @@
 import type { WorkflowStage } from "../types.ts";
 import type { ParsedArgs, ResolvedCommand } from "./command-types.ts";
+import { UnknownCommandError, UnknownFlagsError } from "./errors.ts";
 
 export const KNOWN_COMMANDS = new Set([
   "version",
@@ -31,6 +32,10 @@ export function parseArgs(argv: string[]): ParsedArgs {
 
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index]!;
+    if (value === "-h" || value === "--help") {
+      flags.set("help", true);
+      continue;
+    }
     if (!value.startsWith("--")) {
       positionals.push(value);
       continue;
@@ -73,7 +78,11 @@ export function resolveCommand(parsed: ParsedArgs): ResolvedCommand {
     return { command: "inspect", commandArgs: parsed.positionals };
   }
 
-  throw new Error(`Unknown command: ${requestedCommand}. Run \`patchrelay help\`.`);
+  throw new UnknownCommandError(requestedCommand);
+}
+
+export function hasHelpFlag(parsed: ParsedArgs): boolean {
+  return parsed.flags.get("help") === true;
 }
 
 export function getStageFlag(value: string | boolean | undefined): WorkflowStage | undefined {
@@ -96,15 +105,13 @@ export function parseCsvFlag(value: string | boolean | undefined): string[] {
 }
 
 export function assertKnownFlags(parsed: ParsedArgs, command: string, allowedFlags: string[]): void {
-  const allowed = new Set(allowedFlags);
+  const allowed = new Set(["help", ...allowedFlags]);
   const unknownFlags = [...parsed.flags.keys()].filter((flag) => !allowed.has(flag)).sort();
   if (unknownFlags.length === 0) {
     return;
   }
 
-  throw new Error(
-    `Unknown flag${unknownFlags.length === 1 ? "" : "s"} for ${command}: ${unknownFlags.map((flag) => `--${flag}`).join(", ")}`,
-  );
+  throw new UnknownFlagsError(unknownFlags, command === "project" || command === "project apply" ? "project" : "root");
 }
 
 export function parsePositiveIntegerFlag(

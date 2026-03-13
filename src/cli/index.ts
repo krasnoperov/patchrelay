@@ -1,7 +1,7 @@
 import { loadConfig, type ConfigLoadProfile } from "../config.ts";
+import type { AppConfig } from "../types.ts";
 import { getBuildInfo } from "../build-info.ts";
-import { runPreflight } from "../preflight.ts";
-import { assertKnownFlags, parseArgs, resolveCommand } from "./args.ts";
+import { assertKnownFlags, hasHelpFlag, parseArgs, resolveCommand } from "./args.ts";
 import { handleConnectCommand, handleInstallationsCommand } from "./commands/connect.ts";
 import { handleFeedCommand } from "./commands/feed.ts";
 import {
@@ -17,67 +17,12 @@ import {
 import { handleProjectCommand } from "./commands/project.ts";
 import { handleInitCommand, handleInstallServiceCommand, handleRestartServiceCommand } from "./commands/setup.ts";
 import type { RunCliOptions } from "./command-types.ts";
-import { CliDataAccess } from "./data.ts";
+import type { CliDataAccess } from "./data.ts";
+import { CliUsageError } from "./errors.ts";
 import { formatJson } from "./formatters/json.ts";
+import { helpTextFor, rootHelpText } from "./help.ts";
 import { runInteractiveCommand } from "./interactive.ts";
-import { formatDoctor, writeOutput } from "./output.ts";
-
-function helpText(): string {
-  return [
-    "PatchRelay",
-    "",
-    "patchrelay is a local service and CLI that connects Linear issue delegation to Codex worktrees on your machine.",
-    "",
-    "Usage:",
-    "  patchrelay <command> [args] [flags]",
-    "  patchrelay <issueKey>                 # shorthand for `patchrelay inspect <issueKey>`",
-    "",
-    "First-time setup:",
-    "  1. patchrelay init <public-https-url>",
-    "  2. Fill in ~/.config/patchrelay/service.env",
-    "  3. patchrelay project apply <id> <repo-path>",
-    "  4. Edit the generated project workflows if needed, then add those workflow files to the repo",
-    "  5. patchrelay doctor",
-    "",
-    "Why init needs the public URL:",
-    "  Linear must reach PatchRelay at a public HTTPS origin for both the webhook endpoint",
-    "  and the OAuth callback. `patchrelay init` writes that origin to `server.public_base_url`.",
-    "",
-    "Default behavior:",
-    "  PatchRelay already defaults the local bind address, database path, log path, worktree",
-    "  root, and Codex runner settings. In the normal",
-    "  case you only need the public URL, the required secrets, and at least one project.",
-    "  `patchrelay init` installs the user service and config watcher, and `project apply`",
-    "  upserts the repo config and reuses or starts the Linear connection flow.",
-    "",
-    "Commands:",
-    "  version [--json]                                        Show the installed PatchRelay build version",
-    "  init <public-base-url> [--force] [--json]                Bootstrap the machine-level PatchRelay home",
-    "  project apply <id> <repo-path> [--issue-prefix <prefixes>] [--team-id <ids>] [--no-connect] [--no-open] [--timeout <seconds>] [--json]",
-    "                                                           Upsert one local repository and connect it to Linear when ready",
-    "  doctor [--json]                                          Check secrets, paths, configured workflow files, git, and codex",
-    "  install-service [--force] [--write-only] [--json]       Reinstall the systemd user service and watcher",
-    "  restart-service [--json]                                Reload-or-restart the systemd user service",
-    "  connect [--project <projectId>] [--no-open] [--timeout <seconds>] [--json]",
-    "                                                           Advanced: start or reuse a Linear installation directly",
-    "  installations [--json]                                  Show connected Linear installations",
-    "  feed [--follow] [--limit <count>] [--issue <issueKey>] [--project <projectId>] [--json]",
-    "                                                           Show a live operator feed from the daemon",
-    "  serve                                                   Run the local PatchRelay service",
-    "  inspect <issueKey>                                      Show the latest known issue state",
-    "  live <issueKey> [--watch] [--json]                      Show the active run status",
-    "  report <issueKey> [--stage <workflow>] [--stage-run <id>] [--json]",
-    "                                                           Show finished workflow reports",
-    "  events <issueKey> [--stage-run <id>] [--method <name>] [--follow] [--json]",
-    "                                                           Show raw thread events",
-    "  worktree <issueKey> [--cd] [--json]                     Print the issue worktree path",
-    "  open <issueKey> [--print] [--json]                      Open Codex in the issue worktree",
-    "  retry <issueKey> [--stage <workflow>] [--reason <text>] [--json]",
-    "                                                           Requeue a workflow",
-    "  list [--active] [--failed] [--project <projectId>] [--json]",
-    "                                                           List tracked issues",
-  ].join("\n");
-}
+import { formatDoctor, writeOutput, writeUsageError } from "./output.ts";
 
 function getCommandConfigProfile(command: string): ConfigLoadProfile {
   switch (command) {
@@ -184,17 +129,34 @@ export async function runCli(
     ({ command, commandArgs } = resolveCommand(parsed));
     validateFlags(command, commandArgs, parsed);
   } catch (error) {
+    if (error instanceof CliUsageError) {
+      writeUsageError(stderr, error);
+      return 1;
+    }
     writeOutput(stderr, `${error instanceof Error ? error.message : String(error)}\n`);
     return 1;
   }
   const json = parsed.flags.get("json") === true;
   if (command === "help") {
-    writeOutput(stdout, `${helpText()}\n`);
+    const topic = commandArgs[0];
+    if (topic === "project") {
+      writeOutput(stdout, `${helpTextFor("project")}\n`);
+      return 0;
+    }
+    if (topic) {
+      writeUsageError(stderr, new CliUsageError(`Unknown help topic: ${topic}`));
+      return 1;
+    }
+    writeOutput(stdout, `${rootHelpText()}\n`);
     return 0;
   }
   if (command === "version") {
     const buildInfo = getBuildInfo();
     writeOutput(stdout, json ? formatJson(buildInfo) : `${buildInfo.version}\n`);
+    return 0;
+  }
+  if (hasHelpFlag(parsed)) {
+    writeOutput(stdout, `${helpTextFor(command === "project" ? "project" : "root")}\n`);
     return 0;
   }
   if (command === "serve") {
@@ -237,15 +199,24 @@ export async function runCli(
   }
 
   if (command === "project") {
-    return await handleProjectCommand({
-      commandArgs,
-      parsed,
-      json,
-      stdout,
-      stderr,
-      runInteractive,
-      ...(options ? { options } : {}),
-    });
+    try {
+      return await handleProjectCommand({
+        commandArgs,
+        parsed,
+        json,
+        stdout,
+        stderr,
+        runInteractive,
+        ...(options ? { options } : {}),
+      });
+    } catch (error) {
+      if (error instanceof CliUsageError) {
+        writeUsageError(stderr, error);
+        return 1;
+      }
+      writeOutput(stderr, `${error instanceof Error ? error.message : String(error)}\n`);
+      return 1;
+    }
   }
 
   const config =
@@ -257,12 +228,13 @@ export async function runCli(
 
   try {
     if (command === "doctor") {
+      const { runPreflight } = await import("../preflight.ts");
       const report = await runPreflight(config);
       writeOutput(stdout, json ? formatJson(report) : formatDoctor(report));
       return report.ok ? 0 : 1;
     }
 
-    data ??= new CliDataAccess(config);
+    data ??= await createCliDataAccess(config);
 
     if (command === "inspect") {
       return await handleInspectCommand({ commandArgs, parsed, json, stdout, data, config, runInteractive });
@@ -326,6 +298,10 @@ export async function runCli(
 
     throw new Error(`Unknown command: ${command}`);
   } catch (error) {
+    if (error instanceof CliUsageError) {
+      writeUsageError(stderr, error);
+      return 1;
+    }
     writeOutput(stderr, `${error instanceof Error ? error.message : String(error)}\n`);
     return 1;
   } finally {
@@ -333,4 +309,9 @@ export async function runCli(
       data.close();
     }
   }
+}
+
+async function createCliDataAccess(config: AppConfig): Promise<CliDataAccess> {
+  const { CliDataAccess } = await import("./data.ts");
+  return new CliDataAccess(config);
 }

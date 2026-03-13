@@ -1,8 +1,14 @@
 import type { runPreflight } from "../preflight.ts";
 import type { Output } from "./command-types.ts";
+import type { CliUsageError } from "./errors.ts";
+import { helpTextFor } from "./help.ts";
 
 export function writeOutput(stream: Output, text: string): void {
   stream.write(text);
+}
+
+export function writeUsageError(stream: Output, error: CliUsageError): void {
+  writeOutput(stream, `${helpTextFor(error.helpTopic)}\n\nError: ${error.message}\n`);
 }
 
 export function formatDoctor(report: Awaited<ReturnType<typeof runPreflight>>): string {
