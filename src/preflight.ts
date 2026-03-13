@@ -1,5 +1,7 @@
 import { accessSync, constants, existsSync, mkdirSync, statSync } from "node:fs";
 import path from "node:path";
+import { runPatchRelayMigrations } from "./db/migrations.ts";
+import { SqliteConnection } from "./db/shared.ts";
 import type { AppConfig } from "./types.ts";
 import { execCommand } from "./utils.ts";
 
@@ -81,6 +83,7 @@ export async function runPreflight(config: AppConfig): Promise<PreflightReport> 
   checks.push(...checkOAuthRedirectUri(config));
 
   checks.push(...checkPath("database", path.dirname(config.database.path), "directory", { createIfMissing: true, writable: true }));
+  checks.push(checkDatabaseSchema(config));
   checks.push(...checkPath("logging", path.dirname(config.logging.filePath), "directory", { createIfMissing: true, writable: true }));
   if (config.logging.webhookArchiveDir) {
     checks.push(...checkPath("archive", config.logging.webhookArchiveDir, "directory", { createIfMissing: true, writable: true }));
@@ -107,6 +110,47 @@ export async function runPreflight(config: AppConfig): Promise<PreflightReport> 
     checks,
     ok: checks.every((check) => check.status !== "fail"),
   };
+}
+
+function checkDatabaseSchema(config: AppConfig): PreflightCheck {
+  let connection: SqliteConnection | undefined;
+  try {
+    connection = new SqliteConnection(config.database.path);
+    connection.pragma("foreign_keys = ON");
+    if (config.database.wal) {
+      connection.pragma("journal_mode = WAL");
+    }
+
+    runPatchRelayMigrations(connection);
+
+    const quickCheck = connection.prepare("PRAGMA quick_check").get();
+    const quickCheckResult = quickCheck ? Object.values(quickCheck)[0] : undefined;
+    if (quickCheckResult !== "ok") {
+      return fail("database_schema", `SQLite quick_check failed: ${String(quickCheckResult ?? "unknown result")}`);
+    }
+
+    const schemaStats = connection
+      .prepare(
+        `
+        SELECT
+          COUNT(*) AS object_count
+        FROM sqlite_master
+        WHERE type IN ('table', 'index', 'view', 'trigger')
+          AND name NOT LIKE 'sqlite_%'
+        `,
+      )
+      .get();
+    const objectCount = Number(schemaStats?.object_count ?? 0);
+    if (objectCount < 1) {
+      return fail("database_schema", "Database schema is empty after migrations");
+    }
+
+    return pass("database_schema", `Database opened, migrations applied, and schema is readable (${objectCount} objects)`);
+  } catch (error) {
+    return fail("database_schema", `Unable to open or validate database schema at ${config.database.path}: ${formatError(error)}`);
+  } finally {
+    connection?.close();
+  }
 }
 
 function checkPath(
