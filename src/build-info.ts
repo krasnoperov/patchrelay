@@ -9,6 +9,11 @@ export interface BuildInfo {
   builtAt: string;
 }
 
+interface BuildInfoPaths {
+  bundledPath?: string;
+  cwdPath?: string;
+}
+
 const fallbackBuildInfo: BuildInfo = {
   service: "patchrelay",
   version: "0.1.0",
@@ -16,10 +21,10 @@ const fallbackBuildInfo: BuildInfo = {
   builtAt: "unknown",
 };
 
-export function getBuildInfo(): BuildInfo {
-  const buildInfoPath = path.resolve(process.cwd(), "dist/build-info.json");
-  const fallbackPath = getBundledAssetPath("dist/build-info.json");
-  const resolvedPath = existsSync(buildInfoPath) ? buildInfoPath : fallbackPath;
+export function getBuildInfo(paths?: BuildInfoPaths): BuildInfo {
+  const fallbackPath = paths?.bundledPath ?? getBundledAssetPath("dist/build-info.json");
+  const cwdBuildInfoPath = paths?.cwdPath ?? path.resolve(process.cwd(), "dist/build-info.json");
+  const resolvedPath = existsSync(fallbackPath) ? fallbackPath : cwdBuildInfoPath;
   if (!existsSync(resolvedPath)) {
     return fallbackBuildInfo;
   }
