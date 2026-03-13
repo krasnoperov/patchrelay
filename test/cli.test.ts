@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -129,6 +130,13 @@ function createBufferStream() {
       return buffer;
     },
   };
+}
+
+function runCliProcess(args: string[]) {
+  return spawnSync(process.execPath, ["--experimental-transform-types", "src/index.ts", ...args], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  });
 }
 
 function modeOf(filePath: string): number {
@@ -639,7 +647,8 @@ test("cli list and retry cover operator control flows", async () => {
 test("cli rejects unknown commands, unknown flags, and invalid numeric flags", async () => {
   const commandError = createBufferStream();
   assert.equal(await runCli(["conenct"], { stdout: createBufferStream().stream, stderr: commandError.stream }), 1);
-  assert.match(commandError.read(), /Unknown command: conenct/);
+  assert.match(commandError.read(), /PatchRelay/);
+  assert.match(commandError.read(), /Error: Unknown command: conenct/);
 
   const flagError = createBufferStream();
   assert.equal(
@@ -649,7 +658,8 @@ test("cli rejects unknown commands, unknown flags, and invalid numeric flags", a
     }),
     1,
   );
-  assert.match(flagError.read(), /Unknown flag for connect: --projct/);
+  assert.match(flagError.read(), /PatchRelay/);
+  assert.match(flagError.read(), /Error: Unknown flag: --projct/);
 
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-invalid-stage-run-"));
   let data: CliDataAccess | undefined;
@@ -934,10 +944,50 @@ test("cli help explains the setup sequence and default behavior", async () => {
   assert.match(stdout.read(), /version \[--json\]/);
   assert.match(stdout.read(), /patchrelay init <public-https-url>/);
   assert.match(stdout.read(), /patchrelay project apply <id> <repo-path>/);
+  assert.match(stdout.read(), /Automation env vars:/);
+  assert.match(stdout.read(), /Examples:/);
   assert.match(
     stdout.read(),
     /In the normal\s+case you only need the public URL, the required secrets, and at least one project\./,
   );
+});
+
+test("cli project help prints command-specific usage and errors", async () => {
+  const helpOut = createBufferStream();
+  assert.equal(await runCli(["project", "--help"], { stdout: helpOut.stream, stderr: createBufferStream().stream }), 0);
+  assert.match(helpOut.read(), /patchrelay project apply <id> <repo-path>/);
+  assert.match(helpOut.read(), /Behavior:/);
+
+  const usageError = createBufferStream();
+  assert.equal(await runCli(["project"], { stdout: createBufferStream().stream, stderr: usageError.stream }), 1);
+  assert.match(usageError.read(), /patchrelay project apply <id> <repo-path>/);
+  assert.match(usageError.read(), /Error: patchrelay project requires a subcommand\./);
+
+  const flagError = createBufferStream();
+  assert.equal(
+    await runCli(["project", "apply", "demo", "/tmp/demo", "--bogus"], {
+      stdout: createBufferStream().stream,
+      stderr: flagError.stream,
+    }),
+    1,
+  );
+  assert.match(flagError.read(), /patchrelay project apply <id> <repo-path>/);
+  assert.match(flagError.read(), /Error: Unknown flag: --bogus/);
+});
+
+test("cli process paths avoid sqlite warnings until sqlite-backed commands run", () => {
+  const help = runCliProcess(["help"]);
+  assert.equal(help.status, 0);
+  assert.doesNotMatch(help.stderr, /SQLite is an experimental feature/);
+
+  const version = runCliProcess(["version"]);
+  assert.equal(version.status, 0);
+  assert.doesNotMatch(version.stderr, /SQLite is an experimental feature/);
+
+  const unknown = runCliProcess(["frobnicate"]);
+  assert.equal(unknown.status, 1);
+  assert.match(unknown.stderr, /Error: Unknown command: frobnicate/);
+  assert.doesNotMatch(unknown.stderr, /SQLite is an experimental feature/);
 });
 
 test("cli version prints the installed build version in text and json", async () => {

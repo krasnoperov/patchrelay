@@ -2,16 +2,6 @@
 
 import { dirname } from "node:path";
 import { runCli } from "./cli/index.ts";
-import { CodexAppServerClient } from "./codex-app-server.ts";
-import { getAdjacentEnvFilePaths, loadConfig } from "./config.ts";
-import { PatchRelayDatabase } from "./db.ts";
-import { enforceRuntimeFilePermissions, enforceServiceEnvPermissions } from "./file-permissions.ts";
-import { buildHttpServer } from "./http.ts";
-import { DatabaseBackedLinearClientProvider } from "./linear-client.ts";
-import { createLogger } from "./logging.ts";
-import { runPreflight } from "./preflight.ts";
-import { PatchRelayService } from "./service.ts";
-import { ensureDir } from "./utils.ts";
 
 async function main(): Promise<void> {
   const cliExitCode = await runCli(process.argv.slice(2));
@@ -19,6 +9,30 @@ async function main(): Promise<void> {
     process.exitCode = cliExitCode;
     return;
   }
+
+  const [
+    { CodexAppServerClient },
+    { getAdjacentEnvFilePaths, loadConfig },
+    { PatchRelayDatabase },
+    { enforceRuntimeFilePermissions, enforceServiceEnvPermissions },
+    { buildHttpServer },
+    { DatabaseBackedLinearClientProvider },
+    { createLogger },
+    { runPreflight },
+    { PatchRelayService },
+    { ensureDir },
+  ] = await Promise.all([
+    import("./codex-app-server.ts"),
+    import("./config.ts"),
+    import("./db.ts"),
+    import("./file-permissions.ts"),
+    import("./http.ts"),
+    import("./linear-client.ts"),
+    import("./logging.ts"),
+    import("./preflight.ts"),
+    import("./service.ts"),
+    import("./utils.ts"),
+  ]);
 
   const configPath = process.env.PATCHRELAY_CONFIG;
   const config = loadConfig(configPath);
