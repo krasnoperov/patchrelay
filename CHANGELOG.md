@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.4.0...patchrelay-v0.4.1) (2026-03-13)
+
+
+### Bug Fixes
+
+* verify database schema health in doctor ([6c7221d](https://github.com/krasnoperov/patchrelay/commit/6c7221db17b8bf09e8b5108d98a345586eeaf923))
+
 ## [0.4.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.3.0...patchrelay-v0.4.0) (2026-03-13)
 
 
