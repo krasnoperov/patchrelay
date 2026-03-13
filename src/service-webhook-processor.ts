@@ -10,7 +10,7 @@ import { resolveProject, trustedActorAllowed } from "./project-resolution.ts";
 import { StageAgentActivityPublisher } from "./stage-agent-activity-publisher.ts";
 import { StageTurnInputDispatcher } from "./stage-turn-input-dispatcher.ts";
 import type { IssueQueueItem } from "./service-stage-runner.ts";
-import type { AppConfig, LinearClientProvider, LinearWebhookPayload } from "./types.ts";
+import type { AppConfig, LinearClientProvider, LinearWebhookPayload, NormalizedEvent } from "./types.ts";
 import { safeJsonParse, sanitizeDiagnosticText } from "./utils.ts";
 import { AgentSessionWebhookHandler } from "./webhook-agent-session-handler.ts";
 import { CommentWebhookHandler } from "./webhook-comment-handler.ts";
@@ -293,9 +293,9 @@ function describeWebhookObservation(
   delegatedToPatchRelay: boolean,
 ): {
   kind: "webhook" | "agent" | "comment";
-  status?: string;
+  status?: string | undefined;
   summary: string;
-  detail?: string;
+  detail?: string | undefined;
 } | undefined {
   switch (normalized.triggerEvent) {
     case "delegateChanged":

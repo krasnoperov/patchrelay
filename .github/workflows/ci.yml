@@ -2,13 +2,39 @@ name: CI
 
 on:
   push:
-    branches:
-      - main
   pull_request:
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
-  verify:
-    runs-on: ubuntu-latest
+  lint:
+    name: lint
+    runs-on:
+      - self-hosted
+      - self-hosted-host
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+  typecheck:
+    name: typecheck
+    runs-on:
+      - self-hosted
+      - self-hosted-host
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
@@ -23,10 +49,50 @@ jobs:
         run: npm ci
 
       - name: Typecheck
-        run: npm run check
+        run: npm run typecheck
+
+  test:
+    name: test
+    runs-on:
+      - self-hosted
+      - self-hosted-host
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
 
       - name: Test
         run: npm test
+
+  build:
+    name: build
+    runs-on:
+      - self-hosted
+      - self-hosted-host
+    needs:
+      - lint
+      - typecheck
+      - test
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
 
       - name: Build
         run: npm run build

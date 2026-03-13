@@ -130,10 +130,10 @@ export class CommentWebhookHandler {
 
   private publishCommentDeliveryEvent(params: {
     projectId: string;
-    issueKey?: string;
+    issueKey?: string | undefined;
     stage: WorkflowStage;
     obligationId: number | undefined;
-    authorName?: string;
+    authorName?: string | undefined;
     flushResult: {
       deliveredObligationIds: number[];
       failedObligationIds: number[];

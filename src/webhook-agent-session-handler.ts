@@ -211,7 +211,7 @@ export class AgentSessionWebhookHandler {
 
   private publishPromptDeliveryEvent(params: {
     projectId: string;
-    issueKey?: string;
+    issueKey?: string | undefined;
     stage: WorkflowStage;
     obligationId: number | undefined;
     flushResult: {

@@ -9,11 +9,11 @@ export interface OperatorFeedEvent {
   level: OperatorFeedEventLevel;
   kind: OperatorFeedEventKind;
   summary: string;
-  detail?: string;
-  issueKey?: string;
-  projectId?: string;
-  stage?: WorkflowStage;
-  status?: string;
+  detail?: string | undefined;
+  issueKey?: string | undefined;
+  projectId?: string | undefined;
+  stage?: WorkflowStage | undefined;
+  status?: string | undefined;
 }
 
 type OperatorFeedListener = (event: OperatorFeedEvent) => void;
