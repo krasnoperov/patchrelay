@@ -2,6 +2,7 @@ import type { WorkflowStage } from "../types.ts";
 import type { ParsedArgs, ResolvedCommand } from "./command-types.ts";
 
 export const KNOWN_COMMANDS = new Set([
+  "version",
   "serve",
   "inspect",
   "live",
