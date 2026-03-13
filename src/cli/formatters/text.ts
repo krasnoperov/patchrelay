@@ -1,4 +1,5 @@
-import type { CliDataAccess, EventsResult, InspectResult, ListResultItem, OpenResult, ReportResult, RetryResult, WorktreeResult } from "../data.ts";
+import type { CliDataAccess, EventsResult, InspectResult, ListResultItem, OpenResult, OperatorFeedResult, ReportResult, RetryResult, WorktreeResult } from "../data.ts";
+import type { OperatorFeedEvent } from "../../operator-feed.ts";
 
 function value(label: string, entry: string | number | undefined): string {
   return `${label}: ${entry ?? "-"}`;
@@ -101,15 +102,28 @@ export function formatWorktree(result: WorktreeResult, cdOnly: boolean): string 
   ].join("\n")}\n`;
 }
 
-export function formatOpen(result: OpenResult): string {
+function formatCommand(command: string, args: string[]): string {
+  return [command, ...args].join(" ");
+}
+
+export function formatOpen(
+  result: OpenResult,
+  command?: { command: string; args: string[] },
+): string {
   const commands = [
     `cd ${result.workspace.worktreePath}`,
     "git branch --show-current",
-    "codex --dangerously-bypass-approvals-and-sandbox",
   ];
-  if (result.resumeThreadId) {
-    commands.push(`codex --dangerously-bypass-approvals-and-sandbox resume ${result.resumeThreadId}`);
+  if (result.needsNewSession) {
+    commands.push(`# No resumable thread found; \`patchrelay open ${result.issue.issueKey ?? result.issue.linearIssueId}\` will create a fresh session.`);
   }
+  commands.push(
+    command
+      ? formatCommand(command.command, command.args)
+      : result.resumeThreadId
+        ? `codex --dangerously-bypass-approvals-and-sandbox resume ${result.resumeThreadId}`
+        : "codex --dangerously-bypass-approvals-and-sandbox",
+  );
   return `${commands.join("\n")}\n`;
 }
 
@@ -136,4 +150,53 @@ export function formatList(items: ListResultItem[]): string {
       ].join("\t"),
     )
     .join("\n")}\n`;
+}
+
+function colorize(enabled: boolean, code: string, value: string): string {
+  return enabled ? `\u001B[${code}m${value}\u001B[0m` : value;
+}
+
+function formatFeedStatus(event: OperatorFeedEvent, color: boolean): string {
+  const raw = event.status ?? event.kind;
+  const label = raw.replaceAll("_", " ");
+  const padded = label.padEnd(15);
+  if (event.level === "error" || raw === "failed" || raw === "delivery_failed") {
+    return colorize(color, "31", padded);
+  }
+  if (event.level === "warn" || raw === "ignored" || raw === "fallback" || raw === "handoff") {
+    return colorize(color, "33", padded);
+  }
+  if (raw === "running" || raw === "started" || raw === "delegated") {
+    return colorize(color, "32", padded);
+  }
+  if (raw === "queued") {
+    return colorize(color, "36", padded);
+  }
+  return colorize(color, "2", padded);
+}
+
+export function formatOperatorFeedEvent(event: OperatorFeedEvent, options?: { color?: boolean }): string {
+  const color = options?.color === true;
+  const timestamp = new Date(event.at).toLocaleTimeString("en-GB", { hour12: false });
+  const issue = event.issueKey ?? event.projectId ?? "-";
+  const line = [
+    colorize(color, "2", timestamp),
+    colorize(color, "1", issue.padEnd(10)),
+    formatFeedStatus(event, color),
+    event.summary,
+  ].join("  ");
+
+  if (!event.detail) {
+    return `${line}\n`;
+  }
+
+  return `${line}\n${colorize(color, "2", `  ${truncateLine(event.detail)}`)}\n`;
+}
+
+export function formatOperatorFeed(result: OperatorFeedResult, options?: { color?: boolean }): string {
+  if (result.events.length === 0) {
+    return "No feed events yet.\n";
+  }
+
+  return result.events.map((event) => formatOperatorFeedEvent(event, options)).join("");
 }

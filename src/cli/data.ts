@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import pino from "pino";
 import { CodexAppServerClient } from "../codex-app-server.ts";
 import { PatchRelayDatabase } from "../db.ts";
+import type { OperatorFeedEvent } from "../operator-feed.ts";
 import { WorktreeManager } from "../worktree-manager.ts";
 import type {
   AppConfig,
@@ -69,6 +70,7 @@ export interface WorktreeResult {
 
 export interface OpenResult extends WorktreeResult {
   resumeThreadId?: string;
+  needsNewSession?: boolean;
 }
 
 export interface RetryResult {
@@ -101,6 +103,10 @@ export interface InstallationListResult {
     };
     linkedProjects: string[];
   }>;
+}
+
+export interface OperatorFeedResult {
+  events: OperatorFeedEvent[];
 }
 
 export type ConnectResult =
@@ -355,19 +361,31 @@ export class CliDataAccess {
     };
   }
 
-  async prepareOpen(issueKey: string): Promise<OpenResult | undefined> {
+  async resolveOpen(
+    issueKey: string,
+    options?: { ensureWorktree?: boolean; createThreadIfMissing?: boolean },
+  ): Promise<OpenResult | undefined> {
     const worktree = this.worktree(issueKey);
     if (!worktree) {
       return undefined;
     }
 
-    await this.ensureOpenWorktree(worktree);
+    if (options?.ensureWorktree) {
+      await this.ensureOpenWorktree(worktree);
+    }
 
     const existingThreadId = await this.resolveStoredOpenThreadId(worktree);
     if (existingThreadId) {
       return {
         ...worktree,
         resumeThreadId: existingThreadId,
+      };
+    }
+
+    if (!options?.createThreadIfMissing) {
+      return {
+        ...worktree,
+        needsNewSession: true,
       };
     }
 
@@ -389,6 +407,13 @@ export class CliDataAccess {
       ...worktree,
       resumeThreadId: thread.id,
     };
+  }
+
+  async prepareOpen(issueKey: string): Promise<OpenResult | undefined> {
+    return await this.resolveOpen(issueKey, {
+      ensureWorktree: true,
+      createThreadIfMissing: true,
+    });
   }
 
   retry(issueKey: string, options?: { stage?: WorkflowStage; reason?: string }): RetryResult | undefined {
@@ -670,6 +695,82 @@ export class CliDataAccess {
 
   async listInstallations(): Promise<InstallationListResult> {
     return await this.requestJson<InstallationListResult>("/api/installations");
+  }
+
+  async listOperatorFeed(options?: { limit?: number; issueKey?: string; projectId?: string }): Promise<OperatorFeedResult> {
+    return await this.requestJson<OperatorFeedResult>("/api/feed", {
+      ...(options?.limit && options.limit > 0 ? { limit: String(options.limit) } : {}),
+      ...(options?.issueKey ? { issue: options.issueKey } : {}),
+      ...(options?.projectId ? { project: options.projectId } : {}),
+    });
+  }
+
+  async followOperatorFeed(
+    onEvent: (event: OperatorFeedEvent) => void,
+    options?: { limit?: number; issueKey?: string; projectId?: string },
+  ): Promise<void> {
+    const url = new URL("/api/feed", this.getOperatorBaseUrl());
+    url.searchParams.set("follow", "1");
+    if (options?.limit && options.limit > 0) {
+      url.searchParams.set("limit", String(options.limit));
+    }
+    if (options?.issueKey) {
+      url.searchParams.set("issue", options.issueKey);
+    }
+    if (options?.projectId) {
+      url.searchParams.set("project", options.projectId);
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        accept: "text/event-stream",
+        ...(this.config.operatorApi.bearerToken ? { authorization: `Bearer ${this.config.operatorApi.bearerToken}` } : {}),
+      },
+    });
+    if (!response.ok || !response.body) {
+      const body = await response.text().catch(() => "");
+      const message = this.readErrorMessage(body);
+      throw new Error(message ?? `Request failed: ${response.status}`);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let dataLines: string[] = [];
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      let newlineIndex = buffer.indexOf("\n");
+      while (newlineIndex !== -1) {
+        const rawLine = buffer.slice(0, newlineIndex);
+        buffer = buffer.slice(newlineIndex + 1);
+        const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+
+        if (!line) {
+          if (dataLines.length > 0) {
+            const parsed = JSON.parse(dataLines.join("\n")) as OperatorFeedEvent;
+            onEvent(parsed);
+            dataLines = [];
+          }
+          newlineIndex = buffer.indexOf("\n");
+          continue;
+        }
+
+        if (line.startsWith(":")) {
+          newlineIndex = buffer.indexOf("\n");
+          continue;
+        }
+
+        if (line.startsWith("data:")) {
+          dataLines.push(line.slice(5).trimStart());
+        }
+        newlineIndex = buffer.indexOf("\n");
+      }
+    }
   }
 
   private getOperatorBaseUrl(): string {

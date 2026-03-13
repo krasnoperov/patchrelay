@@ -10,6 +10,11 @@ export interface ParsedArgs {
   flags: Map<string, string | boolean>;
 }
 
+export interface ResolvedCommand {
+  command: string;
+  commandArgs: string[];
+}
+
 export interface RunCliOptions {
   stdout?: Output;
   stderr?: Output;

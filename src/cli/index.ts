@@ -1,7 +1,8 @@
 import { loadConfig, type ConfigLoadProfile } from "../config.ts";
 import { runPreflight } from "../preflight.ts";
-import { parseArgs, resolveCommand } from "./args.ts";
+import { assertKnownFlags, parseArgs, resolveCommand } from "./args.ts";
 import { handleConnectCommand, handleInstallationsCommand } from "./commands/connect.ts";
+import { handleFeedCommand } from "./commands/feed.ts";
 import {
   handleEventsCommand,
   handleInspectCommand,
@@ -50,7 +51,7 @@ function helpText(): string {
     "",
     "Commands:",
     "  init <public-base-url> [--force] [--json]                Bootstrap the machine-level PatchRelay home",
-    "  project apply <id> <repo-path> [--issue-prefix <prefixes>] [--team-id <ids>] [--no-connect] [--timeout <seconds>] [--json]",
+    "  project apply <id> <repo-path> [--issue-prefix <prefixes>] [--team-id <ids>] [--no-connect] [--no-open] [--timeout <seconds>] [--json]",
     "                                                           Upsert one local repository and connect it to Linear when ready",
     "  doctor [--json]                                          Check secrets, paths, configured workflow files, git, and codex",
     "  install-service [--force] [--write-only] [--json]       Reinstall the systemd user service and watcher",
@@ -58,6 +59,8 @@ function helpText(): string {
     "  connect [--project <projectId>] [--no-open] [--timeout <seconds>] [--json]",
     "                                                           Advanced: start or reuse a Linear installation directly",
     "  installations [--json]                                  Show connected Linear installations",
+    "  feed [--follow] [--limit <count>] [--issue <issueKey>] [--project <projectId>] [--json]",
+    "                                                           Show a live operator feed from the daemon",
     "  serve                                                   Run the local PatchRelay service",
     "  inspect <issueKey>                                      Show the latest known issue state",
     "  live <issueKey> [--watch] [--json]                      Show the active run status",
@@ -81,6 +84,7 @@ function getCommandConfigProfile(command: string): ConfigLoadProfile {
       return "doctor";
     case "connect":
     case "installations":
+    case "feed":
       return "operator_cli";
     case "inspect":
     case "live":
@@ -96,14 +100,86 @@ function getCommandConfigProfile(command: string): ConfigLoadProfile {
   }
 }
 
+function validateFlags(command: string, commandArgs: string[], parsed: ReturnType<typeof parseArgs>): void {
+  switch (command) {
+    case "help":
+    case "serve":
+      assertKnownFlags(parsed, command, []);
+      return;
+    case "inspect":
+      assertKnownFlags(parsed, command, ["json"]);
+      return;
+    case "live":
+      assertKnownFlags(parsed, command, ["watch", "json"]);
+      return;
+    case "report":
+      assertKnownFlags(parsed, command, ["stage", "stage-run", "json"]);
+      return;
+    case "events":
+      assertKnownFlags(parsed, command, ["stage-run", "method", "follow", "json"]);
+      return;
+    case "worktree":
+      assertKnownFlags(parsed, command, ["cd", "json"]);
+      return;
+    case "open":
+      assertKnownFlags(parsed, command, ["print", "json"]);
+      return;
+    case "retry":
+      assertKnownFlags(parsed, command, ["stage", "reason", "json"]);
+      return;
+    case "list":
+      assertKnownFlags(parsed, command, ["active", "failed", "project", "json"]);
+      return;
+    case "doctor":
+      assertKnownFlags(parsed, command, ["json"]);
+      return;
+    case "init":
+      assertKnownFlags(parsed, command, ["force", "json", "public-base-url"]);
+      return;
+    case "project":
+      if (commandArgs[0] === "apply") {
+        assertKnownFlags(parsed, "project apply", ["issue-prefix", "team-id", "no-connect", "no-open", "timeout", "json"]);
+        return;
+      }
+      assertKnownFlags(parsed, command, []);
+      return;
+    case "connect":
+      assertKnownFlags(parsed, command, ["project", "no-open", "timeout", "json"]);
+      return;
+    case "installations":
+      assertKnownFlags(parsed, command, ["json"]);
+      return;
+    case "feed":
+      assertKnownFlags(parsed, command, ["follow", "limit", "issue", "project", "json"]);
+      return;
+    case "install-service":
+      assertKnownFlags(parsed, command, ["force", "write-only", "json"]);
+      return;
+    case "restart-service":
+      assertKnownFlags(parsed, command, ["json"]);
+      return;
+    default:
+      return;
+  }
+}
+
 export async function runCli(
   argv: string[],
   options?: RunCliOptions,
 ): Promise<number> {
   const stdout = options?.stdout ?? process.stdout;
   const stderr = options?.stderr ?? process.stderr;
-  const parsed = parseArgs(argv);
-  const { command, commandArgs } = resolveCommand(parsed);
+  let parsed: ReturnType<typeof parseArgs>;
+  let command: string;
+  let commandArgs: string[];
+  try {
+    parsed = parseArgs(argv);
+    ({ command, commandArgs } = resolveCommand(parsed));
+    validateFlags(command, commandArgs, parsed);
+  } catch (error) {
+    writeOutput(stderr, `${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
   if (command === "help") {
     writeOutput(stdout, `${helpText()}\n`);
     return 0;
@@ -213,6 +289,15 @@ export async function runCli(
 
     if (command === "installations") {
       return await handleInstallationsCommand({
+        json,
+        stdout,
+        data,
+      });
+    }
+
+    if (command === "feed") {
+      return await handleFeedCommand({
+        parsed,
         json,
         stdout,
         data,

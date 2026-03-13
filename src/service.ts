@@ -8,6 +8,7 @@ import type { IssueWorkflowCoordinatorProvider, IssueWorkflowQueryStoreProvider,
 import type { WebhookEventStoreProvider } from "./webhook-event-ports.ts";
 import { IssueQueryService } from "./issue-query-service.ts";
 import { LinearOAuthService } from "./linear-oauth-service.ts";
+import { OperatorEventFeed } from "./operator-feed.ts";
 import { ServiceRuntime } from "./service-runtime.ts";
 import { ServiceStageFinalizer } from "./service-stage-finalizer.ts";
 import { type IssueQueueItem, ServiceStageRunner } from "./service-stage-runner.ts";
@@ -64,6 +65,7 @@ export class PatchRelayService {
   private readonly oauthService: LinearOAuthService;
   private readonly queryService: IssueQueryService;
   private readonly runtime: ServiceRuntime;
+  private readonly feed: OperatorEventFeed;
 
   constructor(
     readonly config: AppConfig,
@@ -73,6 +75,7 @@ export class PatchRelayService {
     readonly logger: Logger,
   ) {
     this.linearProvider = toLinearClientProvider(linearProvider);
+    this.feed = new OperatorEventFeed(db.operatorFeed);
     const stores = createServiceStores(db);
     this.stageRunner = new ServiceStageRunner(
       config,
@@ -81,6 +84,7 @@ export class PatchRelayService {
       this.linearProvider,
       logger,
       (fn) => db.connection.transaction(fn)(),
+      this.feed,
     );
     let enqueueIssue: (projectId: string, issueId: string) => void = () => {
       throw new Error("Service runtime enqueueIssue is not initialized");
@@ -93,6 +97,7 @@ export class PatchRelayService {
       this.linearProvider,
       (projectId, issueId) => enqueueIssue(projectId, issueId),
       logger,
+      this.feed,
       (fn) => db.connection.transaction(fn)(),
     );
     this.webhookProcessor = new ServiceWebhookProcessor(
@@ -102,6 +107,7 @@ export class PatchRelayService {
       codex,
       (projectId, issueId) => enqueueIssue(projectId, issueId),
       logger,
+      this.feed,
     );
     const runtime = new ServiceRuntime(
       codex,
@@ -149,6 +155,14 @@ export class PatchRelayService {
 
   getReadiness() {
     return this.runtime.getReadiness();
+  }
+
+  listOperatorFeed(options?: { limit?: number; afterId?: number; issueKey?: string; projectId?: string }) {
+    return this.feed.list(options);
+  }
+
+  subscribeOperatorFeed(listener: Parameters<OperatorEventFeed["subscribe"]>[0]) {
+    return this.feed.subscribe(listener);
   }
 
   async acceptWebhook(params: {

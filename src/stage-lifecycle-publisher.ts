@@ -1,5 +1,6 @@
 import type { Logger } from "pino";
 import type { IssueControlStoreProvider } from "./ledger-ports.ts";
+import type { OperatorEventFeed } from "./operator-feed.ts";
 import type { IssueWorkflowCoordinatorProvider, IssueWorkflowQueryStoreProvider } from "./workflow-ports.ts";
 import {
   buildAwaitingHandoffComment,
@@ -17,6 +18,7 @@ export class StageLifecyclePublisher {
     private readonly stores: IssueWorkflowCoordinatorProvider & IssueWorkflowQueryStoreProvider & IssueControlStoreProvider,
     private readonly linearProvider: LinearClientProvider,
     private readonly logger: Logger,
+    private readonly feed?: OperatorEventFeed,
   ) {}
 
   async markStageActive(
@@ -126,6 +128,15 @@ export class StageLifecyclePublisher {
   ): Promise<void> {
     const refreshedIssue = this.stores.issueWorkflows.getTrackedIssue(stageRun.projectId, stageRun.linearIssueId);
     if (refreshedIssue?.desiredStage) {
+      this.feed?.publish({
+        level: "info",
+        kind: "stage",
+        issueKey: refreshedIssue.issueKey,
+        projectId: refreshedIssue.projectId,
+        stage: stageRun.stage,
+        status: "queued",
+        summary: `Completed ${stageRun.stage} workflow and queued ${refreshedIssue.desiredStage}`,
+      });
       await this.publishAgentCompletion(refreshedIssue, {
         type: "thought",
         body: `The ${stageRun.stage} workflow finished. PatchRelay is preparing the next requested workflow.`,
@@ -162,6 +173,16 @@ export class StageLifecyclePublisher {
             }),
           });
           this.stores.workflowCoordinator.setIssueStatusComment(stageRun.projectId, stageRun.linearIssueId, result.id);
+          this.feed?.publish({
+            level: "info",
+            kind: "stage",
+            issueKey: refreshedIssue.issueKey,
+            projectId: refreshedIssue.projectId,
+            stage: stageRun.stage,
+            status: "handoff",
+            summary: `Completed ${stageRun.stage} workflow`,
+            detail: `Waiting for a Linear state change or follow-up input while the issue remains in ${activeState}.`,
+          });
           await this.publishAgentCompletion(refreshedIssue, {
             type: "elicitation",
             body: `PatchRelay finished the ${stageRun.stage} workflow. Move the issue to its next workflow state or leave a follow-up prompt to continue.`,
@@ -191,6 +212,15 @@ export class StageLifecyclePublisher {
     }
 
     if (refreshedIssue) {
+      this.feed?.publish({
+        level: "info",
+        kind: "stage",
+        issueKey: refreshedIssue.issueKey,
+        projectId: refreshedIssue.projectId,
+        stage: stageRun.stage,
+        status: "completed",
+        summary: `Completed ${stageRun.stage} workflow`,
+      });
       await this.publishAgentCompletion(refreshedIssue, {
         type: "response",
         body: `PatchRelay finished the ${stageRun.stage} workflow.`,

@@ -358,7 +358,7 @@ test("cli inspect, worktree, open, events, and report render stored issue detail
 
     const openOut = createBufferStream();
     assert.equal(await runCli(["open", "USE-54", "--print"], { config, data, stdout: openOut.stream, stderr: stderr.stream }), 0);
-    assert.match(openOut.read(), /codex --dangerously-bypass-approvals-and-sandbox resume thread-54/);
+    assert.match(openOut.read(), /codex --dangerously-bypass-approvals-and-sandbox resume -C .*USE-54 thread-54/);
 
     const reportOut = createBufferStream();
     assert.equal(await runCli(["report", "USE-54"], { config, data, stdout: reportOut.stream, stderr: stderr.stream }), 0);
@@ -550,6 +550,48 @@ test("cli open creates and persists a fresh issue session when no stored session
   }
 });
 
+test("cli open --print does not advertise a stale resume thread", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-open-print-fresh-"));
+  let data: CliDataAccess | undefined;
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, true);
+    db.runMigrations();
+    seedDatabase(db, config);
+
+    const workspace = db.issueWorkflows.getActiveWorkspaceForIssue("usertold", "issue-1");
+    assert.ok(workspace);
+    db.issueSessions.upsertIssueSession({
+      projectId: "usertold",
+      linearIssueId: "issue-1",
+      workspaceOwnershipId: workspace.id,
+      threadId: "thread-missing",
+      source: "operator_open",
+    });
+
+    data = new CliDataAccess(config, {
+      db,
+      codex: createStubCodex({}) as never,
+    });
+
+    const stdout = createBufferStream();
+    const exitCode = await runCli(["open", "USE-54", "--print"], {
+      config,
+      data,
+      stdout: stdout.stream,
+      stderr: createBufferStream().stream,
+    });
+
+    assert.equal(exitCode, 0);
+    assert.doesNotMatch(stdout.read(), /resume thread-missing/);
+    assert.match(stdout.read(), /create a fresh session/);
+    assert.match(stdout.read(), /codex --dangerously-bypass-approvals-and-sandbox -C /);
+  } finally {
+    data?.close();
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("cli list and retry cover operator control flows", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-"));
   let data: CliDataAccess | undefined;
@@ -587,6 +629,47 @@ test("cli list and retry cover operator control flows", async () => {
     const inspectJson = createBufferStream();
     assert.equal(await runCli(["USE-54", "--json"], { config, data, stdout: inspectJson.stream, stderr: createBufferStream().stream }), 0);
     assert.match(inspectJson.read(), /"issueKey": "USE-54"/);
+  } finally {
+    data?.close();
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("cli rejects unknown commands, unknown flags, and invalid numeric flags", async () => {
+  const commandError = createBufferStream();
+  assert.equal(await runCli(["conenct"], { stdout: createBufferStream().stream, stderr: commandError.stream }), 1);
+  assert.match(commandError.read(), /Unknown command: conenct/);
+
+  const flagError = createBufferStream();
+  assert.equal(
+    await runCli(["connect", "--projct", "usertold"], {
+      stdout: createBufferStream().stream,
+      stderr: flagError.stream,
+    }),
+    1,
+  );
+  assert.match(flagError.read(), /Unknown flag for connect: --projct/);
+
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-invalid-stage-run-"));
+  let data: CliDataAccess | undefined;
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, true);
+    db.runMigrations();
+    seedDatabase(db, config);
+    data = new CliDataAccess(config, { db });
+
+    const stageRunError = createBufferStream();
+    assert.equal(
+      await runCli(["report", "USE-54", "--stage-run", "abc"], {
+        config,
+        data,
+        stdout: createBufferStream().stream,
+        stderr: stageRunError.stream,
+      }),
+      1,
+    );
+    assert.match(stageRunError.read(), /--stage-run must be a positive integer/);
   } finally {
     data?.close();
     rmSync(baseDir, { recursive: true, force: true });
@@ -1457,6 +1540,151 @@ test("cli connect and installations cover OAuth installation flows", async () =>
       0,
     );
     assert.match(installationsOut.read(), /Workspace One/);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("cli feed renders operator observations in text and json", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-feed-"));
+  try {
+    const config = createConfig(baseDir);
+    const data = {
+      async listOperatorFeed() {
+        return {
+          events: [
+            {
+              id: 1,
+              at: "2026-03-13T12:34:56.000Z",
+              level: "info" as const,
+              kind: "stage" as const,
+              issueKey: "USE-54",
+              stage: "review" as const,
+              status: "running",
+              summary: "Started review workflow",
+              detail: "Turn turn-54 is now live.",
+            },
+          ],
+        };
+      },
+    } as unknown as CliDataAccess;
+
+    const textOut = createBufferStream();
+    assert.equal(
+      await runCli(["feed"], {
+        config,
+        data,
+        stdout: textOut.stream,
+        stderr: createBufferStream().stream,
+      }),
+      0,
+    );
+    assert.match(textOut.read(), /USE-54/);
+    assert.match(textOut.read(), /Started review workflow/);
+
+    const jsonOut = createBufferStream();
+    assert.equal(
+      await runCli(["feed", "--json"], {
+        config,
+        data,
+        stdout: jsonOut.stream,
+        stderr: createBufferStream().stream,
+      }),
+      0,
+    );
+    assert.deepEqual(JSON.parse(jsonOut.read()), {
+      events: [
+        {
+          id: 1,
+          at: "2026-03-13T12:34:56.000Z",
+          level: "info",
+          kind: "stage",
+          issueKey: "USE-54",
+          stage: "review",
+          status: "running",
+          summary: "Started review workflow",
+          detail: "Turn turn-54 is now live.",
+        },
+      ],
+    });
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("cli feed forwards issue and project filters to the operator API client", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-feed-filters-"));
+  try {
+    const config = createConfig(baseDir);
+    const seen: Array<Record<string, unknown>> = [];
+    const data = {
+      async listOperatorFeed(options?: { limit?: number; issueKey?: string; projectId?: string }) {
+        seen.push(options ?? {});
+        return { events: [] };
+      },
+      async followOperatorFeed(
+        _onEvent: (event: Record<string, unknown>) => void,
+        options?: { limit?: number; issueKey?: string; projectId?: string },
+      ) {
+        seen.push(options ?? {});
+      },
+    } as unknown as CliDataAccess;
+
+    assert.equal(
+      await runCli(["feed", "--issue", "USE-54", "--project", "usertold", "--limit", "25"], {
+        config,
+        data,
+        stdout: createBufferStream().stream,
+        stderr: createBufferStream().stream,
+      }),
+      0,
+    );
+    assert.deepEqual(seen[0], { limit: 25, issueKey: "USE-54", projectId: "usertold" });
+
+    assert.equal(
+      await runCli(["feed", "--follow", "--issue", "USE-54", "--project", "usertold"], {
+        config,
+        data,
+        stdout: createBufferStream().stream,
+        stderr: createBufferStream().stream,
+      }),
+      0,
+    );
+    assert.deepEqual(seen[1], { limit: 50, issueKey: "USE-54", projectId: "usertold" });
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("cli feed --follow streams live operator observations", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-feed-follow-"));
+  try {
+    const config = createConfig(baseDir);
+    const data = {
+      async followOperatorFeed(onEvent: (event: Record<string, unknown>) => void) {
+        onEvent({
+          id: 7,
+          at: "2026-03-13T12:35:10.000Z",
+          level: "info",
+          kind: "agent",
+          issueKey: "USE-54",
+          status: "delegated",
+          summary: "Delegated to PatchRelay",
+        });
+      },
+    } as unknown as CliDataAccess;
+
+    const stdout = createBufferStream();
+    assert.equal(
+      await runCli(["feed", "--follow"], {
+        config,
+        data,
+        stdout: stdout.stream,
+        stderr: createBufferStream().stream,
+      }),
+      0,
+    );
+    assert.match(stdout.read(), /Delegated to PatchRelay/);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

@@ -4,6 +4,7 @@ import { IssueWorkflowCoordinator } from "./db/issue-workflow-coordinator.ts";
 import { IssueWorkflowStore } from "./db/issue-workflow-store.ts";
 import { LinearInstallationStore } from "./db/linear-installation-store.ts";
 import { runPatchRelayMigrations } from "./db/migrations.ts";
+import { OperatorFeedStore } from "./db/operator-feed-store.ts";
 import { RunReportStore } from "./db/run-report-store.ts";
 import { StageEventStore } from "./db/stage-event-store.ts";
 import { SqliteConnection, type DatabaseConnection } from "./db/shared.ts";
@@ -25,6 +26,7 @@ export class PatchRelayDatabase {
   readonly runReports: RunReportStore;
   readonly stageEvents: StageEventStore;
   readonly linearInstallations: LinearInstallationStore;
+  readonly operatorFeed: OperatorFeedStore;
 
   constructor(databasePath: string, wal: boolean) {
     this.connection = new SqliteConnection(databasePath);
@@ -57,6 +59,7 @@ export class PatchRelayDatabase {
     });
     this.stageEvents = new StageEventStore(this.connection);
     this.linearInstallations = new LinearInstallationStore(this.connection);
+    this.operatorFeed = new OperatorFeedStore(this.connection);
   }
 
   runMigrations(): void {

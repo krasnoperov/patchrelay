@@ -22,7 +22,7 @@ patchrelay <command> [args] [flags]
 
 Available commands:
 
-- `project apply <id> <repo-path> [--issue-prefix <prefixes>] [--team-id <ids>] [--no-connect] [--timeout <seconds>] [--json]`
+- `project apply <id> <repo-path> [--issue-prefix <prefixes>] [--team-id <ids>] [--no-connect] [--no-open] [--timeout <seconds>] [--json]`
 - `inspect <issueKey>`
 - `live <issueKey> [--watch] [--json]`
 - `report <issueKey> [--stage <stage>] [--stage-run <id>] [--json]`
@@ -35,6 +35,7 @@ Available commands:
 - `init <public-base-url> [--force] [--json]`
 - `connect [--project <projectId>] [--no-open] [--timeout <seconds>] [--json]`
 - `installations [--json]`
+- `feed [--follow] [--limit <count>] [--json]`
 - `install-service [--force] [--write-only] [--json]`
 - `restart-service [--json]`
 - `serve`
@@ -107,6 +108,28 @@ Flags:
 
 - `--json`
 
+### `patchrelay feed`
+
+Show the daemon's operator feed with human-level observations.
+
+The feed keeps a small derived history in SQLite so recent observations survive daemon restarts.
+
+Typical entries include:
+
+- delegated issues
+- mentions and follow-up prompts
+- queued workflows
+- turn start and completion
+- handoff or failure observations
+
+Flags:
+
+- `--follow`
+- `--limit <count>`
+- `--issue <issueKey>`
+- `--project <projectId>`
+- `--json`
+
 ## Project And Service Commands
 
 ### `patchrelay project apply <id> <repo-path>`
@@ -134,6 +157,7 @@ Flags:
 - `--issue-prefix <prefixes>`
 - `--team-id <ids>`
 - `--no-connect`
+- `--no-open`
 - `--timeout <seconds>`
 - `--json`
 
@@ -280,6 +304,7 @@ Current behavior:
 
 - reuses the PatchRelay-managed worktree
 - resumes the latest managed thread when available
+- falls back to a fresh session when no resumable thread is still available
 - launches Codex with `--dangerously-bypass-approvals-and-sandbox`
 
 Flags:

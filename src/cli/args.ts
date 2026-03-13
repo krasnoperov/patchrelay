@@ -1,5 +1,5 @@
 import type { WorkflowStage } from "../types.ts";
-import type { ParsedArgs } from "./command-types.ts";
+import type { ParsedArgs, ResolvedCommand } from "./command-types.ts";
 
 export const KNOWN_COMMANDS = new Set([
   "serve",
@@ -16,10 +16,13 @@ export const KNOWN_COMMANDS = new Set([
   "project",
   "connect",
   "installations",
+  "feed",
   "install-service",
   "restart-service",
   "help",
 ]);
+
+const ISSUE_KEY_PATTERN = /^[A-Za-z][A-Za-z0-9]*-\d+$/;
 
 export function parseArgs(argv: string[]): ParsedArgs {
   const positionals: string[] = [];
@@ -55,15 +58,21 @@ export function parseArgs(argv: string[]): ParsedArgs {
   return { positionals, flags };
 }
 
-export function resolveCommand(parsed: ParsedArgs): { command: string; commandArgs: string[] } {
+export function resolveCommand(parsed: ParsedArgs): ResolvedCommand {
   const requestedCommand = parsed.positionals[0];
-  const command = !requestedCommand
-    ? "help"
-    : KNOWN_COMMANDS.has(requestedCommand)
-      ? requestedCommand
-      : "inspect";
-  const commandArgs = command === requestedCommand ? parsed.positionals.slice(1) : parsed.positionals;
-  return { command, commandArgs };
+  if (!requestedCommand) {
+    return { command: "help", commandArgs: [] };
+  }
+
+  if (KNOWN_COMMANDS.has(requestedCommand)) {
+    return { command: requestedCommand, commandArgs: parsed.positionals.slice(1) };
+  }
+
+  if (ISSUE_KEY_PATTERN.test(requestedCommand)) {
+    return { command: "inspect", commandArgs: parsed.positionals };
+  }
+
+  throw new Error(`Unknown command: ${requestedCommand}. Run \`patchrelay help\`.`);
 }
 
 export function getStageFlag(value: string | boolean | undefined): WorkflowStage | undefined {
@@ -83,4 +92,37 @@ export function parseCsvFlag(value: string | boolean | undefined): string[] {
     .split(",")
     .map((entry) => entry.trim())
     .filter(Boolean);
+}
+
+export function assertKnownFlags(parsed: ParsedArgs, command: string, allowedFlags: string[]): void {
+  const allowed = new Set(allowedFlags);
+  const unknownFlags = [...parsed.flags.keys()].filter((flag) => !allowed.has(flag)).sort();
+  if (unknownFlags.length === 0) {
+    return;
+  }
+
+  throw new Error(
+    `Unknown flag${unknownFlags.length === 1 ? "" : "s"} for ${command}: ${unknownFlags.map((flag) => `--${flag}`).join(", ")}`,
+  );
+}
+
+export function parsePositiveIntegerFlag(
+  value: string | boolean | undefined,
+  flagName: string,
+): number | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    throw new Error(`${flagName} must be a positive integer.`);
+  }
+
+  const parsed = Number(trimmed);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${flagName} must be a positive integer.`);
+  }
+
+  return parsed;
 }

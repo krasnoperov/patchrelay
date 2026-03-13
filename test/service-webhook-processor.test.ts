@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import pino from "pino";
 import { PatchRelayDatabase } from "../src/db.ts";
+import { OperatorEventFeed } from "../src/operator-feed.ts";
 import { ServiceWebhookProcessor } from "../src/service-webhook-processor.ts";
 import type { AppConfig, LinearAgentActivityContent, LinearClient, LinearIssueSnapshot } from "../src/types.ts";
 
@@ -161,6 +162,7 @@ function createHarness(baseDir: string) {
 
   const linear = new FakeLinearClient();
   const codex = new FakeCodexClient();
+  const feed = new OperatorEventFeed(db.operatorFeed);
   linear.issues.set("issue_1", {
     id: "issue_1",
     identifier: "USE-25",
@@ -189,9 +191,10 @@ function createHarness(baseDir: string) {
       enqueuedIssues.push({ projectId, issueId });
     },
     pino({ enabled: false }),
+    feed,
   );
 
-  return { config, db, linear, codex, processor, enqueuedIssues };
+  return { config, db, linear, codex, processor, enqueuedIssues, feed };
 }
 
 function installPatchRelayApp(db: PatchRelayDatabase, projectId = "usertold", actorId = "patchrelay-app") {
@@ -785,6 +788,110 @@ test("webhook processor reports queued follow-up instructions when active delive
     const stored = listInputObligations(db, claim.stageRun.id);
     assert.equal(stored.length, 1);
     assert.equal(stored[0]?.last_error, "codex temporarily unavailable");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("webhook processor publishes delivered agent prompt observations to the operator feed", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-processor-agent-feed-"));
+  try {
+    const { config, db, codex, processor, feed } = createHarness(baseDir);
+    installPatchRelayApp(db);
+    createActiveStageRun(db, config, {
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    const event = db.webhookEvents.insertWebhookEvent({
+      webhookId: "delivery-agent-prompt-feed",
+      receivedAt: new Date().toISOString(),
+      eventType: "AgentSessionEvent.prompted",
+      issueId: "issue_1",
+      headersJson: "{}",
+      payloadJson: JSON.stringify({
+        action: "prompted",
+        type: "AgentSessionEvent",
+        createdAt: "2026-03-08T12:00:00.000Z",
+        webhookTimestamp: 1000,
+        data: {
+          agentActivity: {
+            body: "Please tighten the tests.",
+          },
+          agentSession: {
+            id: "session-feed",
+            issue: {
+              id: "issue_1",
+              identifier: "USE-25",
+              title: "Build app server orchestration",
+              team: { key: "USE" },
+              delegate: { id: "patchrelay-app", name: "PatchRelay" },
+              state: { name: "Implementing" },
+            },
+          },
+        },
+      }),
+      signatureValid: true,
+      dedupeStatus: "accepted",
+    });
+
+    await processor.processWebhookEvent(event.id);
+
+    const deliveryEvent = feed.list({ issueKey: "USE-25" }).find((entry) => entry.kind === "agent" && entry.status === "delivered");
+    assert.ok(deliveryEvent);
+    assert.match(deliveryEvent.summary, /Delivered follow-up prompt/);
+    assert.equal(deliveryEvent.stage, "development");
+    assert.equal(codex.steeredTurns.length, 1);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("webhook processor publishes failed comment delivery observations to the operator feed", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-processor-comment-feed-"));
+  try {
+    const { config, db, codex, processor, feed } = createHarness(baseDir);
+    installPatchRelayApp(db);
+    createActiveStageRun(db, config, {
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+    codex.steerError = new Error("comment delivery timed out");
+
+    const event = db.webhookEvents.insertWebhookEvent({
+      webhookId: "delivery-comment-feed",
+      receivedAt: new Date().toISOString(),
+      eventType: "Comment.create",
+      issueId: "issue_1",
+      headersJson: "{}",
+      payloadJson: JSON.stringify({
+        action: "create",
+        type: "Comment",
+        createdAt: "2026-03-08T12:05:00.000Z",
+        webhookTimestamp: 1000,
+        data: {
+          id: "comment-feed",
+          body: "Please also refresh the docs.",
+          user: { name: "Alex" },
+          issue: {
+            id: "issue_1",
+            identifier: "USE-25",
+            title: "Build app server orchestration",
+            team: { key: "USE" },
+            state: { name: "Implementing" },
+          },
+        },
+      }),
+      signatureValid: true,
+      dedupeStatus: "accepted",
+    });
+
+    await processor.processWebhookEvent(event.id);
+
+    const deliveryEvent = feed.list({ issueKey: "USE-25" }).find((entry) => entry.kind === "comment" && entry.status === "delivery_failed");
+    assert.ok(deliveryEvent);
+    assert.match(deliveryEvent.summary, /Could not deliver follow-up comment/);
+    assert.match(deliveryEvent.detail ?? "", /Alex/);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

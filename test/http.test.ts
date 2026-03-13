@@ -216,6 +216,35 @@ test("http routes handle webhook validation and issue/report/live/events lookups
                 events: [{ id: 1, method: "turn/started" }],
               }
             : undefined,
+        listOperatorFeed: ({ limit, issueKey, projectId }: { limit?: number; issueKey?: string; projectId?: string } = {}) =>
+          [
+            {
+              id: 2,
+              at: "2026-03-13T12:00:00.000Z",
+              level: "info",
+              kind: "stage",
+              issueKey: "USE-42",
+              projectId: "usertold",
+              stage: "review",
+              status: "running",
+              summary: `Started review workflow${limit ? ` (${limit})` : ""}`,
+            },
+            {
+              id: 3,
+              at: "2026-03-13T12:01:00.000Z",
+              level: "warn",
+              kind: "comment",
+              issueKey: "OPS-7",
+              projectId: "ops",
+              status: "delivery_failed",
+              summary: "Could not deliver follow-up comment",
+            },
+          ].filter(
+            (event) =>
+              (!issueKey || event.issueKey === issueKey) &&
+              (!projectId || event.projectId === projectId),
+          ),
+        subscribeOperatorFeed: () => () => undefined,
       } as never,
       pino({ enabled: false }),
     );
@@ -336,6 +365,65 @@ test("http routes handle webhook validation and issue/report/live/events lookups
       issue: { issueKey: "USE-42" },
       stageRun: { id: 8, stage: "review", status: "running" },
       events: [{ id: 1, method: "turn/started" }],
+    });
+
+    const feed = await app.inject({
+      method: "GET",
+      url: "/api/feed?limit=10",
+      headers: {
+        authorization: "Bearer operator-token",
+      },
+    });
+    assert.equal(feed.statusCode, 200);
+    assert.deepEqual(feed.json(), {
+      ok: true,
+      events: [
+        {
+          id: 2,
+          at: "2026-03-13T12:00:00.000Z",
+          level: "info",
+          kind: "stage",
+          issueKey: "USE-42",
+          projectId: "usertold",
+          stage: "review",
+          status: "running",
+          summary: "Started review workflow (10)",
+        },
+        {
+          id: 3,
+          at: "2026-03-13T12:01:00.000Z",
+          level: "warn",
+          kind: "comment",
+          issueKey: "OPS-7",
+          projectId: "ops",
+          status: "delivery_failed",
+          summary: "Could not deliver follow-up comment",
+        },
+      ],
+    });
+
+    const filteredFeed = await app.inject({
+      method: "GET",
+      url: "/api/feed?issue=OPS-7&project=ops",
+      headers: {
+        authorization: "Bearer operator-token",
+      },
+    });
+    assert.equal(filteredFeed.statusCode, 200);
+    assert.deepEqual(filteredFeed.json(), {
+      ok: true,
+      events: [
+        {
+          id: 3,
+          at: "2026-03-13T12:01:00.000Z",
+          level: "warn",
+          kind: "comment",
+          issueKey: "OPS-7",
+          projectId: "ops",
+          status: "delivery_failed",
+          summary: "Could not deliver follow-up comment",
+        },
+      ],
     });
 
     const missingEvents = await app.inject({

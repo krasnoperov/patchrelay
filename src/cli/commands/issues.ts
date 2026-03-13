@@ -1,6 +1,6 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { AppConfig, WorkflowStage } from "../../types.ts";
-import { getStageFlag } from "../args.ts";
+import { getStageFlag, parsePositiveIntegerFlag } from "../args.ts";
 import type { InteractiveRunner, Output, ParsedArgs } from "../command-types.ts";
 import type { CliDataAccess } from "../data.ts";
 import { formatJson } from "../formatters/json.ts";
@@ -61,8 +61,9 @@ export async function handleReportCommand(params: IssueCommandParams): Promise<n
   if (stage) {
     reportOptions.stage = stage;
   }
-  if (typeof params.parsed.flags.get("stage-run") === "string") {
-    reportOptions.stageRunId = Number(params.parsed.flags.get("stage-run"));
+  const stageRunId = parsePositiveIntegerFlag(params.parsed.flags.get("stage-run"), "--stage-run");
+  if (stageRunId !== undefined) {
+    reportOptions.stageRunId = stageRunId;
   }
   const result = params.data.report(issueKey, reportOptions);
   if (!result) {
@@ -79,8 +80,7 @@ export async function handleEventsCommand(params: IssueCommandParams): Promise<n
   }
   const follow = params.parsed.flags.get("follow") === true;
   let afterId: number | undefined;
-  let stageRunId =
-    typeof params.parsed.flags.get("stage-run") === "string" ? Number(params.parsed.flags.get("stage-run")) : undefined;
+  let stageRunId = parsePositiveIntegerFlag(params.parsed.flags.get("stage-run"), "--stage-run");
   do {
     const result = params.data.events(issueKey, {
       ...(stageRunId !== undefined ? { stageRunId } : {}),
@@ -122,7 +122,7 @@ export async function handleOpenCommand(params: IssueCommandParams): Promise<num
     throw new Error("open requires <issueKey>.");
   }
   if (params.json) {
-    const result = params.data.open(issueKey);
+    const result = await params.data.resolveOpen(issueKey);
     if (!result) {
       throw new Error(`Workspace not found for ${issueKey}`);
     }
@@ -130,11 +130,12 @@ export async function handleOpenCommand(params: IssueCommandParams): Promise<num
     return 0;
   }
   if (params.parsed.flags.get("print") === true) {
-    const result = params.data.open(issueKey);
+    const result = await params.data.resolveOpen(issueKey);
     if (!result) {
       throw new Error(`Workspace not found for ${issueKey}`);
     }
-    writeOutput(params.stdout, formatOpen(result));
+    const openCommand = buildOpenCommand(params.config, result.workspace.worktreePath, result.resumeThreadId);
+    writeOutput(params.stdout, formatOpen(result, openCommand));
     return 0;
   }
 
