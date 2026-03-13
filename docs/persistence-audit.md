@@ -25,6 +25,7 @@ The current storage story is mostly healthy:
 | `event_receipts` | Authoritative | PatchRelay owns accepted webhook identity, dedupe correlation, and trigger linkage |
 | `issue_control` | Authoritative | It binds an issue to desired stage, active run, active workspace, and service-owned lifecycle state |
 | `workspace_ownership` | Authoritative | PatchRelay owns durable issue worktree and branch correlation |
+| `issue_sessions` | Authoritative | PatchRelay owns the issue-to-session handoff history needed to reopen the right Codex session |
 | `run_leases` active state and thread correlation | Authoritative | Restart recovery and deterministic handoff depend on them |
 | `obligations` before completion | Authoritative | Undelivered operator input affects correctness and restart safety |
 | `issue_projection` | Derived projection | Helpful for CLI/operator views and routing context, but Linear still owns these facts upstream |
@@ -38,6 +39,7 @@ The current storage story is mostly healthy:
 
 - webhook dedupe and processing state
 - active issue ownership and stage ownership
+- issue-to-session handoff history for operator reopen flows
 - active issue-to-thread correlation
 - undelivered queued obligations
 - installation, token, and OAuth state

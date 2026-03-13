@@ -191,13 +191,30 @@ function writeRunnerBinaries(configPath: string, binaries: { gitBin?: string; co
   writeFileSync(configPath, `${JSON.stringify(raw, null, 2)}\n`, "utf8");
 }
 
-function createStubCodex(threads: Record<string, CodexThreadSummary>) {
+function createStubCodex(
+  threads: Record<string, CodexThreadSummary>,
+  options?: { startThreadId?: string },
+) {
   return {
     async start() {},
     async stop() {},
     async readThread(threadId: string) {
       const thread = threads[threadId];
-      assert.ok(thread);
+      if (!thread) {
+        throw new Error(`Missing thread ${threadId}`);
+      }
+      return thread;
+    },
+    async startThread(params: { cwd: string }) {
+      const id = options?.startThreadId ?? `thread-created-${Object.keys(threads).length + 1}`;
+      const thread: CodexThreadSummary = {
+        id,
+        preview: "Operator session",
+        cwd: params.cwd,
+        status: "running",
+        turns: [],
+      };
+      threads[id] = thread;
       return thread;
     },
   };
@@ -229,6 +246,7 @@ function seedDatabase(db: PatchRelayDatabase, config: AppConfig): void {
     promptText: "Deploy it",
   });
   assert.ok(completed);
+  mkdirSync(path.join(config.projects[0].worktreeRoot, "USE-54"), { recursive: true });
   db.workflowCoordinator.updateStageRunThread({ stageRunId: completed.stageRun.id, threadId: "thread-54", turnId: "turn-54" });
   db.stageEvents.saveThreadEvent({
     stageRunId: completed.stageRun.id,
@@ -296,6 +314,7 @@ function seedDatabase(db: PatchRelayDatabase, config: AppConfig): void {
     promptText: "Build it",
   });
   assert.ok(running);
+  mkdirSync(path.join(config.projects[0].worktreeRoot, "USE-56"), { recursive: true });
   db.workflowCoordinator.updateStageRunThread({ stageRunId: running.stageRun.id, threadId: "thread-56", turnId: "turn-56" });
 }
 
@@ -314,7 +333,18 @@ test("cli inspect, worktree, open, events, and report render stored issue detail
     const db = new PatchRelayDatabase(config.database.path, true);
     db.runMigrations();
     seedDatabase(db, config);
-    data = new CliDataAccess(config, { db });
+    data = new CliDataAccess(config, {
+      db,
+      codex: createStubCodex({
+        "thread-54": {
+          id: "thread-54",
+          preview: "Deploy issue",
+          cwd: path.join(config.projects[0].worktreeRoot, "USE-54"),
+          status: "completed",
+          turns: [],
+        },
+      }) as never,
+    });
 
     const stdout = createBufferStream();
     const stderr = createBufferStream();
@@ -352,7 +382,18 @@ test("cli open launches codex in the issue worktree", async () => {
     const db = new PatchRelayDatabase(config.database.path, true);
     db.runMigrations();
     seedDatabase(db, config);
-    data = new CliDataAccess(config, { db });
+    data = new CliDataAccess(config, {
+      db,
+      codex: createStubCodex({
+        "thread-54": {
+          id: "thread-54",
+          preview: "Deploy issue",
+          cwd: path.join(config.projects[0].worktreeRoot, "USE-54"),
+          status: "completed",
+          turns: [],
+        },
+      }) as never,
+    });
 
     const calls: Array<{ command: string; args: string[] }> = [];
     const exitCode = await runCli(["open", "USE-54"], {
@@ -379,6 +420,130 @@ test("cli open launches codex in the issue worktree", async () => {
         ],
       },
     ]);
+  } finally {
+    data?.close();
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("cli open prefers the most recently reopened issue session", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-open-session-"));
+  let data: CliDataAccess | undefined;
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, true);
+    db.runMigrations();
+    seedDatabase(db, config);
+
+    const workspace = db.issueWorkflows.getActiveWorkspaceForIssue("usertold", "issue-1");
+    assert.ok(workspace);
+    db.issueSessions.upsertIssueSession({
+      projectId: "usertold",
+      linearIssueId: "issue-1",
+      workspaceOwnershipId: workspace.id,
+      threadId: "thread-older",
+      source: "operator_open",
+    });
+    db.issueSessions.upsertIssueSession({
+      projectId: "usertold",
+      linearIssueId: "issue-1",
+      workspaceOwnershipId: workspace.id,
+      threadId: "thread-newer",
+      source: "operator_open",
+    });
+    db.issueSessions.touchIssueSession("thread-newer");
+
+    data = new CliDataAccess(config, {
+      db,
+      codex: createStubCodex({
+        "thread-newer": {
+          id: "thread-newer",
+          preview: "Reopened issue session",
+          cwd: workspace.worktreePath,
+          status: "running",
+          turns: [],
+        },
+      }) as never,
+    });
+
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const exitCode = await runCli(["open", "USE-54"], {
+      config,
+      data,
+      stdout: createBufferStream().stream,
+      stderr: createBufferStream().stream,
+      runInteractive: async (command, args) => {
+        calls.push({ command, args });
+        return 0;
+      },
+    });
+
+    assert.equal(exitCode, 0);
+    assert.deepEqual(calls.at(0)?.args, [
+      "--dangerously-bypass-approvals-and-sandbox",
+      "resume",
+      "-C",
+      workspace.worktreePath,
+      "thread-newer",
+    ]);
+    assert.ok(db.issueSessions.getIssueSessionByThreadId("thread-newer")?.lastOpenedAt);
+  } finally {
+    data?.close();
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("cli open creates and persists a fresh issue session when no stored session can be resumed", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-open-fresh-"));
+  let data: CliDataAccess | undefined;
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, true);
+    db.runMigrations();
+    seedDatabase(db, config);
+
+    const workspace = db.issueWorkflows.getActiveWorkspaceForIssue("usertold", "issue-1");
+    assert.ok(workspace);
+    const existing = db.issueSessions.upsertIssueSession({
+      projectId: "usertold",
+      linearIssueId: "issue-1",
+      workspaceOwnershipId: workspace.id,
+      threadId: "thread-missing",
+      source: "operator_open",
+    });
+    assert.equal(existing.threadId, "thread-missing");
+
+    data = new CliDataAccess(config, {
+      db,
+      codex: createStubCodex({}, { startThreadId: "thread-created-1" }) as never,
+    });
+
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const exitCode = await runCli(["open", "USE-54"], {
+      config,
+      data,
+      stdout: createBufferStream().stream,
+      stderr: createBufferStream().stream,
+      runInteractive: async (command, args) => {
+        calls.push({ command, args });
+        return 0;
+      },
+    });
+
+    assert.equal(exitCode, 0);
+    assert.deepEqual(calls.at(0)?.args, [
+      "--dangerously-bypass-approvals-and-sandbox",
+      "resume",
+      "-C",
+      workspace.worktreePath,
+      "thread-created-1",
+    ]);
+
+    const created = db.issueSessions.getIssueSessionByThreadId("thread-created-1");
+    assert.ok(created);
+    assert.equal(created?.source, "operator_open");
+    assert.equal(created?.workspaceOwnershipId, workspace.id);
+    assert.ok(created?.lastOpenedAt);
   } finally {
     data?.close();
     rmSync(baseDir, { recursive: true, force: true });

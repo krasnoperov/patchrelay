@@ -223,6 +223,23 @@ export class IssueWorkflowCoordinator {
       ...(params.parentThreadId !== undefined ? { parentThreadId: params.parentThreadId } : {}),
       ...(params.turnId !== undefined ? { turnId: params.turnId } : {}),
     });
+
+    const stageRun = this.issueWorkflows.getStageRun(params.stageRunId);
+    if (!stageRun) {
+      return;
+    }
+
+    const issue = this.issueWorkflows.getTrackedIssue(stageRun.projectId, stageRun.linearIssueId);
+    this.authoritativeLedger.upsertIssueSession({
+      projectId: stageRun.projectId,
+      linearIssueId: stageRun.linearIssueId,
+      workspaceOwnershipId: stageRun.workspaceId,
+      runLeaseId: stageRun.id,
+      threadId: params.threadId,
+      ...(params.parentThreadId !== undefined ? { parentThreadId: params.parentThreadId } : {}),
+      ...(issue?.activeAgentSessionId ? { linkedAgentSessionId: issue.activeAgentSessionId } : {}),
+      source: "stage_run",
+    });
   }
 
   finishStageRun(params: {
@@ -250,6 +267,21 @@ export class IssueWorkflowCoordinator {
       threadId: params.threadId,
       ...(params.turnId !== undefined ? { turnId: params.turnId } : {}),
     });
+
+    const runLease = this.authoritativeLedger.getRunLease(params.stageRunId);
+    if (runLease?.workspaceOwnershipId !== undefined) {
+      const issue = this.issueWorkflows.getTrackedIssue(stageRun.projectId, stageRun.linearIssueId);
+      this.authoritativeLedger.upsertIssueSession({
+        projectId: stageRun.projectId,
+        linearIssueId: stageRun.linearIssueId,
+        workspaceOwnershipId: runLease.workspaceOwnershipId,
+        runLeaseId: params.stageRunId,
+        threadId: params.threadId,
+        ...(runLease.parentThreadId ? { parentThreadId: runLease.parentThreadId } : {}),
+        ...(issue?.activeAgentSessionId ? { linkedAgentSessionId: issue.activeAgentSessionId } : {}),
+        source: "stage_run",
+      });
+    }
 
     const workspace = this.authoritativeLedger.getWorkspaceOwnership(stageRun.workspaceId);
     if (workspace) {

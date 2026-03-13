@@ -1,5 +1,12 @@
 import type { AuthoritativeLedgerStore as AuthoritativeLedgerStoreContract } from "../ledger-ports.ts";
-import type { EventReceiptRecord, IssueControlRecord, ObligationRecord, RunLeaseRecord, WorkspaceOwnershipRecord } from "../types.ts";
+import type {
+  EventReceiptRecord,
+  IssueControlRecord,
+  IssueSessionRecord,
+  ObligationRecord,
+  RunLeaseRecord,
+  WorkspaceOwnershipRecord,
+} from "../types.ts";
 import type { IssueLifecycleStatus, WorkflowStage } from "../workflow-types.ts";
 import { isoNow, type DatabaseConnection } from "./shared.ts";
 
@@ -202,6 +209,105 @@ export class AuthoritativeLedgerStore implements AuthoritativeLedgerStoreContrac
       .prepare("SELECT * FROM workspace_ownership WHERE project_id = ? AND linear_issue_id = ?")
       .get(projectId, linearIssueId) as Record<string, unknown> | undefined;
     return row ? mapWorkspaceOwnership(row) : undefined;
+  }
+
+  upsertIssueSession(params: {
+    projectId: string;
+    linearIssueId: string;
+    workspaceOwnershipId: number;
+    threadId: string;
+    source: IssueSessionRecord["source"];
+    runLeaseId?: number | null;
+    parentThreadId?: string | null;
+    linkedAgentSessionId?: string | null;
+  }): IssueSessionRecord {
+    const now = isoNow();
+    this.connection
+      .prepare(
+        `
+        INSERT INTO issue_sessions (
+          project_id, linear_issue_id, workspace_ownership_id, run_lease_id, thread_id, parent_thread_id,
+          source, linked_agent_session_id, created_at, updated_at, last_opened_at
+        ) VALUES (
+          @projectId, @linearIssueId, @workspaceOwnershipId, @runLeaseId, @threadId, @parentThreadId,
+          @source, @linkedAgentSessionId, @createdAt, @updatedAt, NULL
+        )
+        ON CONFLICT(thread_id) DO UPDATE SET
+          project_id = @projectId,
+          linear_issue_id = @linearIssueId,
+          workspace_ownership_id = @workspaceOwnershipId,
+          run_lease_id = CASE WHEN @setRunLeaseId = 1 THEN @runLeaseId ELSE issue_sessions.run_lease_id END,
+          parent_thread_id = CASE WHEN @setParentThreadId = 1 THEN @parentThreadId ELSE issue_sessions.parent_thread_id END,
+          source = @source,
+          linked_agent_session_id = CASE
+            WHEN @setLinkedAgentSessionId = 1 THEN @linkedAgentSessionId
+            ELSE issue_sessions.linked_agent_session_id
+          END,
+          updated_at = @updatedAt
+        `,
+      )
+      .run({
+        projectId: params.projectId,
+        linearIssueId: params.linearIssueId,
+        workspaceOwnershipId: params.workspaceOwnershipId,
+        runLeaseId: params.runLeaseId ?? null,
+        threadId: params.threadId,
+        parentThreadId: params.parentThreadId ?? null,
+        source: params.source,
+        linkedAgentSessionId: params.linkedAgentSessionId ?? null,
+        createdAt: now,
+        updatedAt: now,
+        setRunLeaseId: Number("runLeaseId" in params),
+        setParentThreadId: Number("parentThreadId" in params),
+        setLinkedAgentSessionId: Number("linkedAgentSessionId" in params),
+      });
+
+    return this.getIssueSessionByThreadId(params.threadId)!;
+  }
+
+  getIssueSessionByThreadId(threadId: string): IssueSessionRecord | undefined {
+    const row = this.connection
+      .prepare("SELECT * FROM issue_sessions WHERE thread_id = ?")
+      .get(threadId) as Record<string, unknown> | undefined;
+    return row ? mapIssueSession(row) : undefined;
+  }
+
+  listIssueSessionsForIssue(projectId: string, linearIssueId: string): IssueSessionRecord[] {
+    const rows = this.connection
+      .prepare(
+        `
+        SELECT * FROM issue_sessions
+        WHERE project_id = ? AND linear_issue_id = ?
+        ORDER BY
+          CASE WHEN last_opened_at IS NULL THEN 1 ELSE 0 END,
+          last_opened_at DESC,
+          id DESC
+        `,
+      )
+      .all(projectId, linearIssueId) as Record<string, unknown>[];
+    return rows.map((row) => mapIssueSession(row));
+  }
+
+  touchIssueSession(threadId: string): IssueSessionRecord | undefined {
+    const now = isoNow();
+    const result = this.connection
+      .prepare(
+        `
+        UPDATE issue_sessions
+        SET updated_at = @updatedAt,
+            last_opened_at = @lastOpenedAt
+        WHERE thread_id = @threadId
+        `,
+      )
+      .run({
+        threadId,
+        updatedAt: now,
+        lastOpenedAt: now,
+      });
+    if (result.changes < 1) {
+      return undefined;
+    }
+    return this.getIssueSessionByThreadId(threadId);
   }
 
   createRunLease(params: {
@@ -575,6 +681,23 @@ function mapRunLease(row: Record<string, unknown>): RunLeaseRecord {
     startedAt: String(row.started_at),
     ...(row.ended_at === null ? {} : { endedAt: String(row.ended_at) }),
     ...(row.failure_reason === null ? {} : { failureReason: String(row.failure_reason) }),
+  };
+}
+
+function mapIssueSession(row: Record<string, unknown>): IssueSessionRecord {
+  return {
+    id: Number(row.id),
+    projectId: String(row.project_id),
+    linearIssueId: String(row.linear_issue_id),
+    workspaceOwnershipId: Number(row.workspace_ownership_id),
+    threadId: String(row.thread_id),
+    source: row.source as IssueSessionRecord["source"],
+    ...(row.run_lease_id === null ? {} : { runLeaseId: Number(row.run_lease_id) }),
+    ...(row.parent_thread_id === null ? {} : { parentThreadId: String(row.parent_thread_id) }),
+    ...(row.linked_agent_session_id === null ? {} : { linkedAgentSessionId: String(row.linked_agent_session_id) }),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+    ...(row.last_opened_at === null ? {} : { lastOpenedAt: String(row.last_opened_at) }),
   };
 }
 

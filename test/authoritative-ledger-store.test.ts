@@ -225,6 +225,40 @@ test("authoritative ledger dedupes obligations by run lease, kind, and dedupe ke
   }
 });
 
+test("authoritative ledger preserves issue session history and last-opened tracking", () => {
+  const { baseDir, db } = createHarness();
+  try {
+    const workspace = db.workspaceOwnership.upsertWorkspaceOwnership({
+      projectId: "proj",
+      linearIssueId: "issue-1",
+      branchName: "app/APP-1",
+      worktreePath: "/tmp/worktrees/APP-1",
+      status: "active",
+    });
+
+    const session = db.issueSessions.upsertIssueSession({
+      projectId: "proj",
+      linearIssueId: "issue-1",
+      workspaceOwnershipId: workspace.id,
+      threadId: "thread-1",
+      parentThreadId: "thread-parent",
+      linkedAgentSessionId: "session-1",
+      source: "stage_run",
+    });
+    const touched = db.issueSessions.touchIssueSession("thread-1");
+    const listed = db.issueSessions.listIssueSessionsForIssue("proj", "issue-1");
+
+    assert.equal(session.threadId, "thread-1");
+    assert.equal(session.parentThreadId, "thread-parent");
+    assert.equal(session.linkedAgentSessionId, "session-1");
+    assert.ok(touched?.lastOpenedAt);
+    assert.deepEqual(listed.map((entry) => entry.threadId), ["thread-1"]);
+    assert.equal(db.issueSessions.getIssueSessionByThreadId("thread-1")?.workspaceOwnershipId, workspace.id);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("authoritative ledger only exposes pending obligations by default and claims them atomically", () => {
   const { baseDir, db } = createHarness();
   try {

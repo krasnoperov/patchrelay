@@ -121,19 +121,27 @@ export async function handleOpenCommand(params: IssueCommandParams): Promise<num
   if (!issueKey) {
     throw new Error("open requires <issueKey>.");
   }
-  const result = params.data.open(issueKey);
-  if (!result) {
-    throw new Error(`Workspace not found for ${issueKey}`);
-  }
   if (params.json) {
+    const result = params.data.open(issueKey);
+    if (!result) {
+      throw new Error(`Workspace not found for ${issueKey}`);
+    }
     writeOutput(params.stdout, formatJson(result));
     return 0;
   }
   if (params.parsed.flags.get("print") === true) {
+    const result = params.data.open(issueKey);
+    if (!result) {
+      throw new Error(`Workspace not found for ${issueKey}`);
+    }
     writeOutput(params.stdout, formatOpen(result));
     return 0;
   }
 
+  const result = await params.data.prepareOpen(issueKey);
+  if (!result) {
+    throw new Error(`Workspace not found for ${issueKey}`);
+  }
   const openCommand = buildOpenCommand(params.config, result.workspace.worktreePath, result.resumeThreadId);
   return await params.runInteractive(openCommand.command, openCommand.args);
 }
