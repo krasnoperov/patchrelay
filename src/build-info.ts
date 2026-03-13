@@ -17,9 +17,9 @@ const fallbackBuildInfo: BuildInfo = {
 };
 
 export function getBuildInfo(): BuildInfo {
-  const buildInfoPath = path.resolve(process.cwd(), "dist/build-info.json");
   const fallbackPath = getBundledAssetPath("dist/build-info.json");
-  const resolvedPath = existsSync(buildInfoPath) ? buildInfoPath : fallbackPath;
+  const cwdBuildInfoPath = path.resolve(process.cwd(), "dist/build-info.json");
+  const resolvedPath = existsSync(fallbackPath) ? fallbackPath : cwdBuildInfoPath;
   if (!existsSync(resolvedPath)) {
     return fallbackBuildInfo;
   }
