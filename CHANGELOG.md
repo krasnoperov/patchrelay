@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.7.0...patchrelay-v0.7.1) (2026-03-13)
+
+
+### Bug Fixes
+
+* keep HTTP CLI commands free of sqlite imports ([8b221a6](https://github.com/krasnoperov/patchrelay/commit/8b221a6e20e95fcef16511b0ae80de97254e0510))
+
 ## [0.7.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.6.1...patchrelay-v0.7.0) (2026-03-13)
 
 
