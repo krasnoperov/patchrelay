@@ -21,9 +21,7 @@ concurrency:
 jobs:
   release:
     name: Release Please
-    runs-on:
-      - self-hosted
-      - self-hosted-host
+    runs-on: ubuntu-latest
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
