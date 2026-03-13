@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.6.0...patchrelay-v0.6.1) (2026-03-13)
+
+
+### Bug Fixes
+
+* prefer bundled build metadata ([9e4cadf](https://github.com/krasnoperov/patchrelay/commit/9e4cadfaefb8c64501a0d19b79f689bbc7899d32))
+
 ## [0.6.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.5.1...patchrelay-v0.6.0) (2026-03-13)
 
 
