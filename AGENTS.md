@@ -21,6 +21,7 @@ Release workflow guidance:
 - Start new work from the current `main` tip into a topic branch such as `fix/...`, `feat/...`, or `chore/...`.
 - Merge completed work back through a branch/PR flow so Release Please can see a clean releasable history on `main`.
 - Run `npm run ci` before opening or merging a PR. In this repo that is the local pre-merge gate for lint, typecheck, tests, and build.
+- CI should run for branch pushes, pull requests, and pushes to `main` so failures surface before and after merge.
 - Prefer squash merges for releasable work. Release Please documents squash merge as the recommended mode for commit-message overrides and clean release parsing.
 - Make the squash commit or final merge-to-`main` commit use a Conventional Commit title. In this repo, `feat:` triggers the next minor release and `fix:` triggers the next patch release while still in `0.x`. `deps:` is also releasable; `chore:` alone is not.
 - Release Please in this repo runs from `.github/workflows/release.yml` on pushes to `main`, using `release-please-config.json` and `.release-please-manifest.json`. A release PR is only opened or updated after releasable commits land on `main`.
