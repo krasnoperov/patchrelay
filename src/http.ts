@@ -249,6 +249,56 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
   }
 
   if (managementRoutesEnabled) {
+    app.get("/api/feed", async (request, reply) => {
+      const limit = getPositiveIntegerQueryParam(request, "limit") ?? 50;
+      const issueKey = getQueryParam(request, "issue")?.trim() || undefined;
+      const projectId = getQueryParam(request, "project")?.trim() || undefined;
+      const feedQuery = {
+        limit,
+        ...(issueKey ? { issueKey } : {}),
+        ...(projectId ? { projectId } : {}),
+      };
+      if (getQueryParam(request, "follow") !== "1") {
+        return reply.send({ ok: true, events: service.listOperatorFeed(feedQuery) });
+      }
+
+      reply.hijack();
+      reply.raw.writeHead(200, {
+        "content-type": "text/event-stream; charset=utf-8",
+        "cache-control": "no-cache, no-transform",
+        connection: "keep-alive",
+        "x-accel-buffering": "no",
+      });
+
+      const writeEvent = (event: unknown) => {
+        reply.raw.write(`event: feed\n`);
+        reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
+      };
+
+      for (const event of service.listOperatorFeed(feedQuery)) {
+        writeEvent(event);
+      }
+
+      const unsubscribe = service.subscribeOperatorFeed((event) => {
+        if (issueKey && event.issueKey !== issueKey) {
+          return;
+        }
+        if (projectId && event.projectId !== projectId) {
+          return;
+        }
+        writeEvent(event);
+      });
+      const keepAlive = setInterval(() => {
+        reply.raw.write(": keepalive\n\n");
+      }, 15000);
+
+      request.raw.on("close", () => {
+        clearInterval(keepAlive);
+        unsubscribe();
+        reply.raw.end();
+      });
+    });
+
     app.get("/api/installations", async (_request, reply) => {
       return reply.send({ ok: true, installations: service.listLinearInstallations() });
     });
@@ -342,6 +392,16 @@ function escapeHtml(value: string): string {
 function getQueryParam(request: FastifyRequest, key: string): string | undefined {
   const value = (request.query as Record<string, unknown> | undefined)?.[key];
   return typeof value === "string" ? value : undefined;
+}
+
+function getPositiveIntegerQueryParam(request: FastifyRequest, key: string): number | undefined {
+  const value = getQueryParam(request, key);
+  if (!value || !/^\d+$/.test(value)) {
+    return undefined;
+  }
+
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 function renderOAuthResult(message: string): string {

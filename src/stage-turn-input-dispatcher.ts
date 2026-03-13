@@ -35,18 +35,24 @@ export class StageTurnInputDispatcher {
       failureMessage?: string;
       retryInProgress?: boolean;
     },
-  ): Promise<{ deliveredInputIds: number[]; deliveredObligationIds: number[]; deliveredCount: number }> {
+  ): Promise<{
+    deliveredInputIds: number[];
+    deliveredObligationIds: number[];
+    deliveredCount: number;
+    failedObligationIds: number[];
+  }> {
     if (!stageRun.threadId || !stageRun.turnId) {
-      return { deliveredInputIds: [], deliveredObligationIds: [], deliveredCount: 0 };
+      return { deliveredInputIds: [], deliveredObligationIds: [], deliveredCount: 0, failedObligationIds: [] };
     }
 
     const issueControl = this.inputs.issueControl.getIssueControl(stageRun.projectId, stageRun.linearIssueId);
     if (!issueControl?.activeRunLeaseId) {
-      return { deliveredInputIds: [], deliveredObligationIds: [], deliveredCount: 0 };
+      return { deliveredInputIds: [], deliveredObligationIds: [], deliveredCount: 0, failedObligationIds: [] };
     }
 
     const deliveredInputIds: number[] = [];
     const deliveredObligationIds: number[] = [];
+    const failedObligationIds: number[] = [];
     let deliveredCount = 0;
     const obligationQuery = options?.retryInProgress ? { includeInProgress: true } : undefined;
     for (const obligation of this.listPendingInputObligations(
@@ -101,6 +107,7 @@ export class StageTurnInputDispatcher {
         );
       } catch (error) {
         this.inputs.obligations.markObligationStatus(obligation.id, "pending", error instanceof Error ? error.message : String(error));
+        failedObligationIds.push(obligation.id);
         this.logger.warn(
           {
             issueKey: options?.issueKey,
@@ -116,7 +123,7 @@ export class StageTurnInputDispatcher {
       }
     }
 
-    return { deliveredInputIds, deliveredObligationIds, deliveredCount };
+    return { deliveredInputIds, deliveredObligationIds, deliveredCount, failedObligationIds };
   }
 
   private listPendingInputObligations(

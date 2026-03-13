@@ -2,6 +2,7 @@ import type { Logger } from "pino";
 import type { CodexAppServerClient } from "./codex-app-server.ts";
 import type { EventReceiptStoreProvider, IssueControlStoreProvider, ObligationStoreProvider, RunLeaseStoreProvider } from "./ledger-ports.ts";
 import type { LinearInstallationStoreProvider } from "./installation-ports.ts";
+import type { OperatorEventFeed } from "./operator-feed.ts";
 import type { StageEventLogStoreProvider } from "./stage-event-ports.ts";
 import type { IssueWorkflowCoordinatorProvider, IssueWorkflowQueryStoreProvider } from "./workflow-ports.ts";
 import type { WebhookEventStoreProvider } from "./webhook-event-ports.ts";
@@ -38,12 +39,13 @@ export class ServiceWebhookProcessor {
     codex: CodexAppServerClient,
     private readonly enqueueIssue: (projectId: IssueQueueItem["projectId"], issueId: IssueQueueItem["issueId"]) => void,
     private readonly logger: Logger,
+    private readonly feed?: OperatorEventFeed,
   ) {
     const turnInputDispatcher = new StageTurnInputDispatcher(stores, codex, logger);
     const agentActivity = new StageAgentActivityPublisher(linearProvider, logger);
     this.desiredStageRecorder = new WebhookDesiredStageRecorder(stores);
-    this.agentSessionHandler = new AgentSessionWebhookHandler(stores, turnInputDispatcher, agentActivity);
-    this.commentHandler = new CommentWebhookHandler(stores, turnInputDispatcher);
+    this.agentSessionHandler = new AgentSessionWebhookHandler(stores, turnInputDispatcher, agentActivity, feed);
+    this.commentHandler = new CommentWebhookHandler(stores, turnInputDispatcher, feed);
     this.installationHandler = new InstallationWebhookHandler(config, stores, logger);
   }
 
@@ -78,6 +80,12 @@ export class ServiceWebhookProcessor {
         "Processing stored webhook event",
       );
       if (!normalized.issue) {
+        this.feed?.publish({
+          level: "info",
+          kind: "webhook",
+          status: normalized.triggerEvent,
+          summary: `Received ${normalized.triggerEvent} webhook`,
+        });
         this.installationHandler.handle(normalized);
         this.stores.webhookEvents.markWebhookProcessed(webhookEventId, "processed");
         this.markEventReceiptProcessed(event.webhookId, "processed");
@@ -86,6 +94,14 @@ export class ServiceWebhookProcessor {
 
       const project = resolveProject(this.config, normalized.issue);
       if (!project) {
+        this.feed?.publish({
+          level: "warn",
+          kind: "webhook",
+          issueKey: normalized.issue.identifier,
+          status: "ignored",
+          summary: "Ignored webhook with no matching project route",
+          detail: normalized.triggerEvent,
+        });
         this.logger.info(
           {
             webhookEventId,
@@ -104,6 +120,15 @@ export class ServiceWebhookProcessor {
       }
 
       if (!trustedActorAllowed(project, normalized.actor)) {
+        this.feed?.publish({
+          level: "warn",
+          kind: "webhook",
+          issueKey: normalized.issue.identifier,
+          projectId: project.id,
+          status: "ignored",
+          summary: "Ignored webhook from an untrusted actor",
+          detail: normalized.actor?.name ?? normalized.actor?.email ?? normalized.triggerEvent,
+        });
         this.logger.info(
           {
             webhookId: normalized.webhookId,
@@ -124,6 +149,18 @@ export class ServiceWebhookProcessor {
       this.stores.webhookEvents.assignWebhookProject(webhookEventId, project.id);
       const receipt = this.ensureEventReceipt(event, project.id, normalized.issue.id);
       const issueState = this.desiredStageRecorder.record(project, normalized, receipt ? { eventReceiptId: receipt.id } : undefined);
+      const observation = describeWebhookObservation(normalized, issueState.delegatedToPatchRelay);
+      if (observation) {
+        this.feed?.publish({
+          level: "info",
+          kind: observation.kind,
+          issueKey: normalized.issue.identifier,
+          projectId: project.id,
+          ...(observation.status ? { status: observation.status } : {}),
+          summary: observation.summary,
+          ...(observation.detail ? { detail: observation.detail } : {}),
+        });
+      }
 
       await this.agentSessionHandler.handle({
         normalized,
@@ -137,6 +174,16 @@ export class ServiceWebhookProcessor {
       this.stores.webhookEvents.markWebhookProcessed(webhookEventId, "processed");
       this.markEventReceiptProcessed(event.webhookId, "processed");
       if (issueState.desiredStage) {
+        this.feed?.publish({
+          level: "info",
+          kind: "stage",
+          issueKey: normalized.issue.identifier,
+          projectId: project.id,
+          stage: issueState.desiredStage,
+          status: "queued",
+          summary: `Queued ${issueState.desiredStage} workflow`,
+          detail: `Triggered by ${normalized.triggerEvent}${normalized.issue.stateName ? ` from ${normalized.issue.stateName}` : ""}.`,
+        });
         this.logger.info(
           {
             webhookEventId,
@@ -169,6 +216,14 @@ export class ServiceWebhookProcessor {
       this.stores.webhookEvents.markWebhookProcessed(webhookEventId, "failed");
       this.markEventReceiptProcessed(event.webhookId, "failed");
       const err = error instanceof Error ? error : new Error(String(error));
+      this.feed?.publish({
+        level: "error",
+        kind: "webhook",
+        projectId: event.projectId ?? undefined,
+        status: "failed",
+        summary: "Failed to process webhook",
+        detail: sanitizeDiagnosticText(err.message),
+      });
       this.logger.error(
         {
           webhookEventId,
@@ -230,5 +285,61 @@ export class ServiceWebhookProcessor {
       payloadJson: event.payloadJson,
     });
     return this.stores.eventReceipts.getEventReceipt(inserted.id);
+  }
+}
+
+function describeWebhookObservation(
+  normalized: NormalizedEvent,
+  delegatedToPatchRelay: boolean,
+): {
+  kind: "webhook" | "agent" | "comment";
+  status?: string;
+  summary: string;
+  detail?: string;
+} | undefined {
+  switch (normalized.triggerEvent) {
+    case "delegateChanged":
+      return delegatedToPatchRelay
+        ? {
+            kind: "agent",
+            status: "delegated",
+            summary: "Delegated to PatchRelay",
+            detail: normalized.issue?.stateName ? `Current Linear state: ${normalized.issue.stateName}.` : undefined,
+          }
+        : {
+            kind: "agent",
+            status: "undelegated",
+            summary: "Delegation moved away from PatchRelay",
+          };
+    case "agentSessionCreated":
+      return {
+        kind: "agent",
+        status: delegatedToPatchRelay ? "session" : "mention",
+        summary: delegatedToPatchRelay ? "Opened a delegated agent session" : "Mentioned PatchRelay in Linear",
+        detail: normalized.agentSession?.promptBody ?? normalized.agentSession?.promptContext,
+      };
+    case "agentPrompted":
+      return {
+        kind: "agent",
+        status: "prompted",
+        summary: "Received follow-up agent instructions",
+        detail: normalized.agentSession?.promptBody ?? normalized.agentSession?.promptContext,
+      };
+    case "commentCreated":
+    case "commentUpdated":
+      return {
+        kind: "comment",
+        status: "received",
+        summary: "Received a Linear comment",
+        detail: normalized.comment?.userName ?? normalized.comment?.body,
+      };
+    case "statusChanged":
+      return {
+        kind: "webhook",
+        status: "status_changed",
+        summary: normalized.issue?.stateName ? `Linear state changed to ${normalized.issue.stateName}` : "Linear state changed",
+      };
+    default:
+      return undefined;
   }
 }

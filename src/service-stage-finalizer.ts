@@ -8,6 +8,7 @@ import { buildReconciliationSnapshot } from "./reconciliation-snapshot-builder.t
 import type { StageEventLogStoreProvider } from "./stage-event-ports.ts";
 import type { IssueWorkflowCoordinatorProvider, IssueWorkflowQueryStoreProvider } from "./workflow-ports.ts";
 import { syncFailedStageToLinear } from "./stage-failure.ts";
+import type { OperatorEventFeed } from "./operator-feed.ts";
 import {
   buildFailedStageReport,
   buildPendingMaterializationThread,
@@ -42,12 +43,13 @@ export class ServiceStageFinalizer {
     private readonly linearProvider: LinearClientProvider,
     private readonly enqueueIssue: (projectId: string, issueId: string) => void,
     logger?: Logger,
+    private readonly feed?: OperatorEventFeed,
     runAtomically: <T>(fn: () => T) => T = (fn) => fn(),
   ) {
     this.runAtomically = runAtomically;
     const lifecycleLogger = logger ?? consoleLogger();
     this.inputDispatcher = new StageTurnInputDispatcher(stores, codex, lifecycleLogger);
-    this.lifecyclePublisher = new StageLifecyclePublisher(config, stores, linearProvider, lifecycleLogger);
+    this.lifecyclePublisher = new StageLifecyclePublisher(config, stores, linearProvider, lifecycleLogger, feed);
     this.actionApplier = new ReconciliationActionApplier({
       enqueueIssue,
       deliverPendingObligations: (projectId, linearIssueId, threadId, turnId) =>
@@ -105,6 +107,19 @@ export class ServiceStageFinalizer {
     }
 
     if (notification.method === "turn/started" || notification.method.startsWith("item/")) {
+      if (notification.method === "turn/started") {
+        const issue = this.stores.issueWorkflows.getTrackedIssue(stageRun.projectId, stageRun.linearIssueId);
+        this.feed?.publish({
+          level: "info",
+          kind: "turn",
+          issueKey: issue?.issueKey,
+          projectId: stageRun.projectId,
+          stage: stageRun.stage,
+          status: "started",
+          summary: `Turn started for ${stageRun.stage}`,
+          detail: turnId ? `Turn ${turnId} is now live.` : undefined,
+        });
+      }
       await this.flushQueuedTurnInputs(stageRun);
     }
 
@@ -121,11 +136,32 @@ export class ServiceStageFinalizer {
     const completedTurnId = extractTurnId(notification.params);
     const status = resolveStageRunStatus(notification.params);
     if (status === "failed") {
+      this.feed?.publish({
+        level: "error",
+        kind: "turn",
+        issueKey: issue.issueKey,
+        projectId: stageRun.projectId,
+        stage: stageRun.stage,
+        status: "failed",
+        summary: `Turn failed for ${stageRun.stage}`,
+        detail: completedTurnId ? `Turn ${completedTurnId} completed in a failed state.` : undefined,
+      });
       await this.failStageRunAndSync(stageRun, issue, threadId, "Codex reported the turn completed in a failed state", {
         ...(completedTurnId ? { turnId: completedTurnId } : {}),
       });
       return;
     }
+
+    this.feed?.publish({
+      level: "info",
+      kind: "turn",
+      issueKey: issue.issueKey,
+      projectId: stageRun.projectId,
+      stage: stageRun.stage,
+      status: "completed",
+      summary: `Turn completed for ${stageRun.stage}`,
+      detail: summarizeCurrentThread(thread).latestAgentMessage,
+    });
 
     this.completeStageRun(stageRun, issue, thread, status, {
       threadId,

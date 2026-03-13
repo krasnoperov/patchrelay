@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { IssueControlStoreProvider, ObligationStoreProvider, RunLeaseStoreProvider } from "./ledger-ports.ts";
 import type { IssueWorkflowQueryStoreProvider } from "./workflow-ports.ts";
+import type { OperatorEventFeed } from "./operator-feed.ts";
 import type { StageAgentActivityPublisher } from "./stage-agent-activity-publisher.ts";
 import type { StageTurnInputDispatcher } from "./stage-turn-input-dispatcher.ts";
 import { triggerEventAllowed } from "./project-resolution.ts";
@@ -20,6 +21,7 @@ export class AgentSessionWebhookHandler {
       RunLeaseStoreProvider,
     private readonly turnInputDispatcher: StageTurnInputDispatcher,
     private readonly agentActivity: StageAgentActivityPublisher,
+    private readonly feed?: OperatorEventFeed,
   ) {}
 
   async handle(params: {
@@ -132,6 +134,13 @@ export class AgentSessionWebhookHandler {
           failureMessage: "Failed to deliver queued Linear agent prompt to active Codex turn",
         },
       );
+      this.publishPromptDeliveryEvent({
+        projectId: project.id,
+        issueKey: issue?.issueKey ?? normalized.issue?.identifier,
+        stage: activeRunLease.stage,
+        obligationId,
+        flushResult,
+      });
       await this.agentActivity.publishForSession(project.id, normalized.agentSession.id, {
         type: "thought",
         body:
@@ -198,6 +207,60 @@ export class AgentSessionWebhookHandler {
       dedupeKey,
     });
     return obligation.id;
+  }
+
+  private publishPromptDeliveryEvent(params: {
+    projectId: string;
+    issueKey?: string;
+    stage: WorkflowStage;
+    obligationId: number | undefined;
+    flushResult: {
+      deliveredObligationIds: number[];
+      failedObligationIds: number[];
+    };
+  }): void {
+    if (params.obligationId === undefined) {
+      return;
+    }
+
+    if (params.flushResult.deliveredObligationIds.includes(params.obligationId)) {
+      this.feed?.publish({
+        level: "info",
+        kind: "agent",
+        projectId: params.projectId,
+        issueKey: params.issueKey,
+        stage: params.stage,
+        status: "delivered",
+        summary: `Delivered follow-up prompt to active ${params.stage} workflow`,
+        detail: "The active Linear agent session was routed into the running Codex turn.",
+      });
+      return;
+    }
+
+    if (params.flushResult.failedObligationIds.includes(params.obligationId)) {
+      this.feed?.publish({
+        level: "warn",
+        kind: "agent",
+        projectId: params.projectId,
+        issueKey: params.issueKey,
+        stage: params.stage,
+        status: "delivery_failed",
+        summary: `Could not deliver follow-up prompt to active ${params.stage} workflow`,
+        detail: "PatchRelay kept the prompt queued and will retry delivery on the next active turn.",
+      });
+      return;
+    }
+
+    this.feed?.publish({
+      level: "info",
+      kind: "agent",
+      projectId: params.projectId,
+      issueKey: params.issueKey,
+      stage: params.stage,
+      status: "queued",
+      summary: `Queued follow-up prompt for active ${params.stage} workflow`,
+      detail: "PatchRelay saved the prompt for the next delivery opportunity.",
+    });
   }
 }
 

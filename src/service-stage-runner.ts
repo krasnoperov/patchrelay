@@ -10,6 +10,7 @@ import type {
 import type { IssueWorkflowCoordinatorProvider, IssueWorkflowQueryStoreProvider } from "./workflow-ports.ts";
 import { buildStageLaunchPlan, isCodexThreadId } from "./stage-launch.ts";
 import { syncFailedStageToLinear } from "./stage-failure.ts";
+import type { OperatorEventFeed } from "./operator-feed.ts";
 import { buildFailedStageReport } from "./stage-reporting.ts";
 import { StageLifecyclePublisher } from "./stage-lifecycle-publisher.ts";
 import { StageTurnInputDispatcher } from "./stage-turn-input-dispatcher.ts";
@@ -40,11 +41,12 @@ export class ServiceStageRunner {
     private readonly linearProvider: LinearClientProvider,
     private readonly logger: Logger,
     runAtomically: <T>(fn: () => T) => T = (fn) => fn(),
+    private readonly feed?: OperatorEventFeed,
   ) {
     this.runAtomically = runAtomically;
     this.worktreeManager = new WorktreeManager(config);
     this.inputDispatcher = new StageTurnInputDispatcher(stores, codex, logger);
-    this.lifecyclePublisher = new StageLifecyclePublisher(config, stores, linearProvider, logger);
+    this.lifecyclePublisher = new StageLifecyclePublisher(config, stores, linearProvider, logger, feed);
   }
 
   async run(item: IssueQueueItem): Promise<void> {
@@ -70,6 +72,16 @@ export class ServiceStageRunner {
     }
 
     const plan = buildStageLaunchPlan(project, issue, desiredStage);
+    this.feed?.publish({
+      level: "info",
+      kind: "stage",
+      issueKey: issue.issueKey,
+      projectId: item.projectId,
+      stage: desiredStage,
+      status: "starting",
+      summary: `Starting ${desiredStage} workflow`,
+      detail: `Preparing ${plan.branchName}`,
+    });
     const claim = this.stores.workflowCoordinator.claimStageRun({
       projectId: item.projectId,
       linearIssueId: item.issueId,
@@ -110,6 +122,16 @@ export class ServiceStageRunner {
         },
         "Failed to launch Codex stage run",
       );
+      this.feed?.publish({
+        level: "error",
+        kind: "stage",
+        issueKey: issue.issueKey,
+        projectId: item.projectId,
+        stage: claim.stageRun.stage,
+        status: "failed",
+        summary: `Failed to launch ${claim.stageRun.stage} workflow`,
+        detail: err.message,
+      });
       throw err;
     }
 
@@ -149,6 +171,16 @@ export class ServiceStageRunner {
       },
       "Started Codex stage run",
     );
+    this.feed?.publish({
+      level: "info",
+      kind: "stage",
+      issueKey: issue.issueKey,
+      projectId: item.projectId,
+      stage: claim.stageRun.stage,
+      status: "running",
+      summary: `Started ${claim.stageRun.stage} workflow`,
+      detail: `Turn ${turn.turnId} is running in ${plan.branchName}.`,
+    });
   }
 
   private async ensureLaunchIssueMirror(
@@ -215,6 +247,15 @@ export class ServiceStageRunner {
           },
           "Falling back to a fresh Codex thread after parent thread fork failed",
         );
+        this.feed?.publish({
+          level: "warn",
+          kind: "turn",
+          issueKey,
+          projectId,
+          status: "fallback",
+          summary: "Could not fork the previous Codex thread",
+          detail: "Starting a fresh thread instead.",
+        });
       }
     }
 

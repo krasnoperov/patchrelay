@@ -186,6 +186,19 @@ CREATE TABLE IF NOT EXISTS oauth_states (
   error_message TEXT
 );
 
+CREATE TABLE IF NOT EXISTS operator_feed_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  at TEXT NOT NULL,
+  level TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  detail TEXT,
+  issue_key TEXT,
+  project_id TEXT,
+  stage TEXT,
+  status TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_event_receipts_project_issue ON event_receipts(project_id, linear_issue_id);
 CREATE INDEX IF NOT EXISTS idx_issue_control_ready ON issue_control(desired_stage, active_run_lease_id);
 CREATE INDEX IF NOT EXISTS idx_issue_projection_issue_key ON issue_projection(issue_key);
@@ -194,6 +207,8 @@ CREATE INDEX IF NOT EXISTS idx_issue_sessions_last_opened ON issue_sessions(proj
 CREATE INDEX IF NOT EXISTS idx_run_leases_active ON run_leases(status, project_id, linear_issue_id);
 CREATE INDEX IF NOT EXISTS idx_run_leases_thread ON run_leases(thread_id);
 CREATE INDEX IF NOT EXISTS idx_run_thread_events_run ON run_thread_events(run_lease_id, id);
+CREATE INDEX IF NOT EXISTS idx_operator_feed_events_issue ON operator_feed_events(issue_key, id);
+CREATE INDEX IF NOT EXISTS idx_operator_feed_events_project ON operator_feed_events(project_id, id);
 CREATE INDEX IF NOT EXISTS idx_obligations_pending ON obligations(status, run_lease_id, kind);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_obligations_dedupe
 ON obligations(run_lease_id, kind, dedupe_key)
