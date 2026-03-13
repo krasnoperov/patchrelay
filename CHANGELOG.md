@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.6.1...patchrelay-v0.7.0) (2026-03-13)
+
+
+### Features
+
+* refresh cli help and lazy-load sqlite ([ddc22a1](https://github.com/krasnoperov/patchrelay/commit/ddc22a1cfd89ea9b0e93776902efd6a31d89ae4a))
+
 ## [0.6.1](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.6.0...patchrelay-v0.6.1) (2026-03-13)
 
 
