@@ -1,7 +1,7 @@
 import type { AppConfig } from "../../types.ts";
 import type { Output, ParsedArgs, RunCliOptions } from "../command-types.ts";
 import { runConnectFlow, parseTimeoutSeconds } from "../connect-flow.ts";
-import type { CliDataAccess } from "../data.ts";
+import type { CliOperatorDataAccess } from "../operator-client.ts";
 import { formatJson } from "../formatters/json.ts";
 import { openExternalUrl } from "../interactive.ts";
 import { writeOutput } from "../output.ts";
@@ -11,7 +11,7 @@ interface ConnectCommandParams {
   json: boolean;
   stdout: Output;
   config: AppConfig;
-  data: CliDataAccess;
+  data: CliOperatorDataAccess;
   options?: RunCliOptions;
 }
 
@@ -32,7 +32,7 @@ export async function handleConnectCommand(params: ConnectCommandParams): Promis
 interface InstallationsCommandParams {
   json: boolean;
   stdout: Output;
-  data: CliDataAccess;
+  data: CliOperatorDataAccess;
 }
 
 export async function handleInstallationsCommand(params: InstallationsCommandParams): Promise<number> {

@@ -1,5 +1,6 @@
 import type { AppConfig } from "../types.ts";
 import type { CliDataAccess } from "./data.ts";
+import type { CliOperatorDataAccess } from "./operator-client.ts";
 
 export type Output = Pick<NodeJS.WriteStream, "write">;
 
@@ -19,7 +20,7 @@ export interface RunCliOptions {
   stdout?: Output;
   stderr?: Output;
   config?: AppConfig;
-  data?: CliDataAccess;
+  data?: CliDataAccess | CliOperatorDataAccess;
   runInteractive?: InteractiveRunner;
   openExternal?: (url: string) => Promise<boolean>;
   connectPollIntervalMs?: number;

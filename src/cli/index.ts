@@ -22,6 +22,7 @@ import { CliUsageError } from "./errors.ts";
 import { formatJson } from "./formatters/json.ts";
 import { helpTextFor, rootHelpText } from "./help.ts";
 import { runInteractiveCommand } from "./interactive.ts";
+import type { CliOperatorDataAccess } from "./operator-client.ts";
 import { formatDoctor, writeOutput, writeUsageError } from "./output.ts";
 
 function getCommandConfigProfile(command: string): ConfigLoadProfile {
@@ -225,6 +226,7 @@ export async function runCli(
       profile: getCommandConfigProfile(command),
     });
   let data = options?.data;
+  let ownsData = false;
 
   try {
     if (command === "doctor") {
@@ -234,66 +236,121 @@ export async function runCli(
       return report.ok ? 0 : 1;
     }
 
-    data ??= await createCliDataAccess(config);
-
     if (command === "inspect") {
-      return await handleInspectCommand({ commandArgs, parsed, json, stdout, data, config, runInteractive });
+      const issueData = await ensureIssueDataAccess(data, config);
+      if (!data) {
+        data = issueData;
+        ownsData = true;
+      }
+      return await handleInspectCommand({ commandArgs, parsed, json, stdout, data: issueData, config, runInteractive });
     }
 
     if (command === "live") {
-      return await handleLiveCommand({ commandArgs, parsed, json, stdout, data, config, runInteractive });
+      const issueData = await ensureIssueDataAccess(data, config);
+      if (!data) {
+        data = issueData;
+        ownsData = true;
+      }
+      return await handleLiveCommand({ commandArgs, parsed, json, stdout, data: issueData, config, runInteractive });
     }
 
     if (command === "report") {
-      return await handleReportCommand({ commandArgs, parsed, json, stdout, data, config, runInteractive });
+      const issueData = await ensureIssueDataAccess(data, config);
+      if (!data) {
+        data = issueData;
+        ownsData = true;
+      }
+      return await handleReportCommand({ commandArgs, parsed, json, stdout, data: issueData, config, runInteractive });
     }
 
     if (command === "events") {
-      return await handleEventsCommand({ commandArgs, parsed, json, stdout, data, config, runInteractive });
+      const issueData = await ensureIssueDataAccess(data, config);
+      if (!data) {
+        data = issueData;
+        ownsData = true;
+      }
+      return await handleEventsCommand({ commandArgs, parsed, json, stdout, data: issueData, config, runInteractive });
     }
 
     if (command === "worktree") {
-      return await handleWorktreeCommand({ commandArgs, parsed, json, stdout, data, config, runInteractive });
+      const issueData = await ensureIssueDataAccess(data, config);
+      if (!data) {
+        data = issueData;
+        ownsData = true;
+      }
+      return await handleWorktreeCommand({ commandArgs, parsed, json, stdout, data: issueData, config, runInteractive });
     }
 
     if (command === "open") {
-      return await handleOpenCommand({ commandArgs, parsed, json, stdout, data, config, runInteractive });
+      const issueData = await ensureIssueDataAccess(data, config);
+      if (!data) {
+        data = issueData;
+        ownsData = true;
+      }
+      return await handleOpenCommand({ commandArgs, parsed, json, stdout, data: issueData, config, runInteractive });
     }
 
     if (command === "connect") {
+      const operatorData = await ensureConnectDataAccess(data, config);
+      if (!data) {
+        data = operatorData;
+        ownsData = true;
+      }
       return await handleConnectCommand({
         parsed,
         json,
         stdout,
         config,
-        data,
+        data: operatorData,
         ...(options ? { options } : {}),
       });
     }
 
     if (command === "installations") {
+      const operatorData = await ensureInstallationsDataAccess(data, config);
+      if (!data) {
+        data = operatorData;
+        ownsData = true;
+      }
       return await handleInstallationsCommand({
         json,
         stdout,
-        data,
+        data: operatorData,
       });
     }
 
     if (command === "feed") {
+      const operatorData = parsed.flags.get("follow") === true
+        ? await ensureFeedFollowDataAccess(data, config)
+        : await ensureFeedListDataAccess(data, config);
+      if (!data) {
+        data = operatorData;
+        ownsData = true;
+      }
       return await handleFeedCommand({
         parsed,
         json,
         stdout,
-        data,
+        data: operatorData,
       });
     }
 
     if (command === "retry") {
-      return await handleRetryCommand({ commandArgs, parsed, json, stdout, data, config, runInteractive });
+      const issueData = await ensureIssueDataAccess(data, config);
+      if (!data) {
+        data = issueData;
+        ownsData = true;
+      }
+      return await handleRetryCommand({ commandArgs, parsed, json, stdout, data: issueData, config, runInteractive });
     }
 
     if (command === "list") {
-      return await handleListCommand({ commandArgs, parsed, json, stdout, data, config, runInteractive });
+      const issueData = await ensureIssueDataAccess(data, config);
+      if (!data) {
+        data = issueData;
+        ownsData = true;
+      }
+      return await handleListCommand({ commandArgs, parsed, json, stdout, data: issueData, config, runInteractive });
     }
 
     throw new Error(`Unknown command: ${command}`);
@@ -305,7 +362,7 @@ export async function runCli(
     writeOutput(stderr, `${error instanceof Error ? error.message : String(error)}\n`);
     return 1;
   } finally {
-    if (data && !options?.data) {
+    if (ownsData && data) {
       data.close();
     }
   }
@@ -314,4 +371,99 @@ export async function runCli(
 async function createCliDataAccess(config: AppConfig): Promise<CliDataAccess> {
   const { CliDataAccess } = await import("./data.ts");
   return new CliDataAccess(config);
+}
+
+async function createCliOperatorDataAccess(config: AppConfig): Promise<CliOperatorDataAccess> {
+  const { CliOperatorApiClient } = await import("./operator-client.ts");
+  return new CliOperatorApiClient(config);
+}
+
+async function ensureIssueDataAccess(
+  data: RunCliOptions["data"],
+  config: AppConfig,
+): Promise<CliDataAccess> {
+  if (data) {
+    if (isIssueDataAccess(data)) {
+      return data;
+    }
+    throw new Error("Issue inspection commands require local SQLite-backed CLI data access.");
+  }
+
+  return await createCliDataAccess(config);
+}
+
+async function ensureConnectDataAccess(
+  data: RunCliOptions["data"],
+  config: AppConfig,
+): Promise<CliOperatorDataAccess> {
+  if (data) {
+    if (hasConnectDataAccess(data)) {
+      return data;
+    }
+    throw new Error("The connect command requires HTTP-backed OAuth CLI data access.");
+  }
+
+  return await createCliOperatorDataAccess(config);
+}
+
+function isIssueDataAccess(data: RunCliOptions["data"]): data is CliDataAccess {
+  return !!data && typeof data === "object" && "inspect" in data && typeof data.inspect === "function";
+}
+
+async function ensureInstallationsDataAccess(
+  data: RunCliOptions["data"],
+  config: AppConfig,
+): Promise<CliOperatorDataAccess> {
+  if (data) {
+    if (hasInstallationsDataAccess(data)) {
+      return data as CliOperatorDataAccess;
+    }
+    throw new Error("The installations command requires HTTP-backed installation data access.");
+  }
+
+  return await createCliOperatorDataAccess(config);
+}
+
+async function ensureFeedListDataAccess(
+  data: RunCliOptions["data"],
+  config: AppConfig,
+): Promise<CliOperatorDataAccess> {
+  if (data) {
+    if (hasFeedListDataAccess(data)) {
+      return data as CliOperatorDataAccess;
+    }
+    throw new Error("The feed command requires listOperatorFeed() data access.");
+  }
+
+  return await createCliOperatorDataAccess(config);
+}
+
+function hasConnectDataAccess(data: RunCliOptions["data"]): data is CliOperatorDataAccess {
+  return !!data && typeof data === "object" && "connect" in data && typeof data.connect === "function";
+}
+
+function hasInstallationsDataAccess(data: RunCliOptions["data"]): boolean {
+  return !!data && typeof data === "object" && "listInstallations" in data && typeof data.listInstallations === "function";
+}
+
+async function ensureFeedFollowDataAccess(
+  data: RunCliOptions["data"],
+  config: AppConfig,
+): Promise<CliOperatorDataAccess> {
+  if (data) {
+    if (hasFeedFollowDataAccess(data)) {
+      return data as CliOperatorDataAccess;
+    }
+    throw new Error("The feed --follow command requires followOperatorFeed() data access.");
+  }
+
+  return await createCliOperatorDataAccess(config);
+}
+
+function hasFeedListDataAccess(data: RunCliOptions["data"]): boolean {
+  return !!data && typeof data === "object" && "listOperatorFeed" in data && typeof data.listOperatorFeed === "function";
+}
+
+function hasFeedFollowDataAccess(data: RunCliOptions["data"]): boolean {
+  return !!data && typeof data === "object" && "followOperatorFeed" in data && typeof data.followOperatorFeed === "function";
 }

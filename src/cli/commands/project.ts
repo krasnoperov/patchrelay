@@ -4,10 +4,10 @@ import type { AppConfig } from "../../types.ts";
 import { hasHelpFlag, parseCsvFlag } from "../args.ts";
 import type { InteractiveRunner, Output, ParsedArgs, RunCliOptions } from "../command-types.ts";
 import { runConnectFlow, parseTimeoutSeconds } from "../connect-flow.ts";
-import type { CliDataAccess } from "../data.ts";
 import { CliUsageError } from "../errors.ts";
 import { formatJson } from "../formatters/json.ts";
 import { projectHelpText } from "../help.ts";
+import type { CliOperatorDataAccess } from "../operator-client.ts";
 import { writeOutput } from "../output.ts";
 import { installServiceCommands, tryManageService } from "../service-commands.ts";
 
@@ -119,7 +119,7 @@ export async function handleProjectCommand(params: ProjectCommandParams): Promis
     throw new Error(`Project was saved, but PatchRelay could not be reloaded: ${serviceState.error}`);
   }
 
-  const cliData = params.options?.data ?? (await createCliDataAccess(fullConfig));
+  const cliData = params.options?.data ?? (await createCliOperatorDataAccess(fullConfig));
   try {
     if (params.json) {
       const connectResult = noConnect ? undefined : await cliData.connect(projectId);
@@ -173,7 +173,7 @@ export async function handleProjectCommand(params: ProjectCommandParams): Promis
   }
 }
 
-async function createCliDataAccess(config: AppConfig): Promise<CliDataAccess> {
-  const { CliDataAccess } = await import("../data.ts");
-  return new CliDataAccess(config);
+async function createCliOperatorDataAccess(config: AppConfig): Promise<CliOperatorDataAccess> {
+  const { CliOperatorApiClient } = await import("../operator-client.ts");
+  return new CliOperatorApiClient(config);
 }
