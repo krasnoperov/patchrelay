@@ -123,6 +123,7 @@ test("runPreflight reports a healthy local setup", async () => {
     assert.ok(report.checks.some((check) => check.scope === "git" && check.status === "pass"));
     assert.ok(report.checks.some((check) => check.scope === "codex" && check.status === "pass"));
     assert.ok(report.checks.some((check) => check.scope === "public_url" && check.status === "pass"));
+    assert.ok(report.checks.some((check) => check.scope === "database_schema" && check.status === "pass"));
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -234,6 +235,31 @@ test("runPreflight warns when app-mode projects omit agent-session triggers", as
           check.scope === "project:usertold:triggers" &&
           check.status === "warn" &&
           check.message.includes("agentPrompted"),
+      ),
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("runPreflight fails when the configured database path cannot host a SQLite schema", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-preflight-db-schema-"));
+
+  try {
+    const config = createConfig(baseDir);
+    mkdirSync(config.projects[0].repoPath, { recursive: true });
+    writeWorkflowFiles(config);
+    mkdirSync(config.database.path, { recursive: true });
+
+    const report = await runPreflight(config);
+
+    assert.equal(report.ok, false);
+    assert.ok(
+      report.checks.some(
+        (check) =>
+          check.scope === "database_schema" &&
+          check.status === "fail" &&
+          check.message.includes("Unable to open or validate database schema"),
       ),
     );
   } finally {
