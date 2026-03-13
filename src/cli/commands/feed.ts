@@ -1,5 +1,5 @@
 import type { Output, ParsedArgs } from "../command-types.ts";
-import type { CliDataAccess } from "../data.ts";
+import type { CliOperatorDataAccess } from "../operator-client.ts";
 import { formatJson } from "../formatters/json.ts";
 import { formatOperatorFeed, formatOperatorFeedEvent } from "../formatters/text.ts";
 import { writeOutput } from "../output.ts";
@@ -8,7 +8,7 @@ interface FeedCommandParams {
   parsed: ParsedArgs;
   json: boolean;
   stdout: Output;
-  data: CliDataAccess;
+  data: CliOperatorDataAccess;
 }
 
 function parseLimit(value: string | boolean | undefined): number {

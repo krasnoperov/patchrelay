@@ -1,6 +1,6 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { AppConfig } from "../types.ts";
-import type { CliDataAccess } from "./data.ts";
+import type { CliOperatorDataAccess } from "./operator-client.ts";
 import { formatJson } from "./formatters/json.ts";
 import type { Output } from "./command-types.ts";
 import { writeOutput } from "./output.ts";
@@ -15,7 +15,7 @@ export function parseTimeoutSeconds(value: string | boolean | undefined, command
 
 export async function runConnectFlow(params: {
   config: AppConfig;
-  data: CliDataAccess;
+  data: CliOperatorDataAccess;
   stdout: Output;
   openExternal?: (url: string) => Promise<boolean>;
   connectPollIntervalMs?: number;

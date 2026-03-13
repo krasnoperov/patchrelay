@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { createServer } from "node:http";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -132,10 +133,60 @@ function createBufferStream() {
   };
 }
 
-function runCliProcess(args: string[]) {
+function runCliProcess(
+  args: string[],
+  options?: { env?: Record<string, string | undefined>; cwd?: string },
+) {
+  const env = { ...process.env } as Record<string, string>;
+  for (const [key, value] of Object.entries(options?.env ?? {})) {
+    if (value === undefined) {
+      delete env[key];
+    } else {
+      env[key] = value;
+    }
+  }
+
   return spawnSync(process.execPath, ["--experimental-transform-types", "src/index.ts", ...args], {
-    cwd: process.cwd(),
+    cwd: options?.cwd ?? process.cwd(),
     encoding: "utf8",
+    env,
+  });
+}
+
+async function runCliProcessAsync(
+  args: string[],
+  options?: { env?: Record<string, string | undefined>; cwd?: string },
+): Promise<{ status: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }> {
+  const env = { ...process.env } as Record<string, string>;
+  for (const [key, value] of Object.entries(options?.env ?? {})) {
+    if (value === undefined) {
+      delete env[key];
+    } else {
+      env[key] = value;
+    }
+  }
+
+  return await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ["--experimental-transform-types", "src/index.ts", ...args], {
+      cwd: options?.cwd ?? process.cwd(),
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", reject);
+    child.on("close", (status, signal) => {
+      resolve({ status, signal, stdout, stderr });
+    });
   });
 }
 
@@ -988,6 +1039,128 @@ test("cli process paths avoid sqlite warnings until sqlite-backed commands run",
   assert.equal(unknown.status, 1);
   assert.match(unknown.stderr, /Error: Unknown command: frobnicate/);
   assert.doesNotMatch(unknown.stderr, /SQLite is an experimental feature/);
+});
+
+test("cli feed uses the HTTP operator client without loading sqlite", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-feed-http-only-"));
+  const configDir = path.join(baseDir, "config");
+  const configPath = path.join(configDir, "patchrelay.json");
+  mkdirSync(configDir, { recursive: true });
+
+  const server = createServer((request, response) => {
+    assert.equal(request.url, "/api/feed?limit=1");
+    response.writeHead(200, {
+      "content-type": "application/json",
+      connection: "close",
+    });
+    response.end(
+      JSON.stringify({
+        ok: true,
+        events: [
+          {
+            id: 1,
+            createdAt: "2026-03-13T18:00:00.000Z",
+            issueKey: "USE-1",
+            projectId: "usertold",
+            category: "received",
+            label: "received",
+            message: "Received a Linear comment",
+          },
+        ],
+      }),
+    );
+  });
+
+  try {
+    const address = await new Promise<{ port: number }>((resolve, reject) => {
+      server.listen(0, "127.0.0.1", () => {
+        const value = server.address();
+        if (!value || typeof value === "string") {
+          reject(new Error("Expected a TCP address"));
+          return;
+        }
+        resolve({ port: value.port });
+      });
+      server.once("error", reject);
+    });
+
+    writeFileSync(
+      configPath,
+      `${JSON.stringify(
+        {
+          server: {
+            bind: "127.0.0.1",
+            port: address.port,
+          },
+          ingress: {
+            linear_webhook_path: "/webhooks/linear",
+            max_body_bytes: 262144,
+            max_timestamp_skew_seconds: 60,
+          },
+          logging: {
+            file_path: path.join(baseDir, "patchrelay.log"),
+          },
+          database: {
+            path: path.join(baseDir, "patchrelay.sqlite"),
+          },
+          operator_api: {
+            enabled: true,
+          },
+          linear: {
+            webhook_secret_env: "LINEAR_WEBHOOK_SECRET",
+            token_encryption_key_env: "PATCHRELAY_TOKEN_ENCRYPTION_KEY",
+            oauth: {
+              client_id_env: "LINEAR_OAUTH_CLIENT_ID",
+              client_secret_env: "LINEAR_OAUTH_CLIENT_SECRET",
+              redirect_uri: `http://127.0.0.1:${address.port}/oauth/linear/callback`,
+              scopes: ["read", "write"],
+              actor: "user",
+            },
+          },
+          runner: {
+            git_bin: "git",
+            codex: {
+              bin: "codex",
+              args: ["app-server"],
+              approval_policy: "never",
+              sandbox_mode: "danger-full-access",
+              persist_extended_history: false,
+            },
+          },
+          projects: [],
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const result = await runCliProcessAsync(["feed", "--json", "--limit", "1"], {
+      env: {
+        PATCHRELAY_CONFIG: configPath,
+        LINEAR_WEBHOOK_SECRET: "webhook-secret",
+        PATCHRELAY_TOKEN_ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef",
+        LINEAR_OAUTH_CLIENT_ID: "oauth-client-id",
+        LINEAR_OAUTH_CLIENT_SECRET: "oauth-client-secret",
+      },
+    });
+
+    assert.equal(result.status, 0);
+    assert.match(result.stdout, /"events":/);
+    assert.doesNotMatch(result.stderr, /SQLite is an experimental feature/);
+  } finally {
+    server.closeAllConnections?.();
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve();
+      });
+    });
+    rmSync(baseDir, { recursive: true, force: true });
+  }
 });
 
 test("cli version prints the installed build version in text and json", async () => {

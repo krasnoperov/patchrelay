@@ -1,4 +1,4 @@
-import type { CliDataAccess, EventsResult, InspectResult, ListResultItem, OpenResult, OperatorFeedResult, ReportResult, RetryResult, WorktreeResult } from "../data.ts";
+import type { EventsResult, InspectResult, ListResultItem, LiveResult, OpenResult, OperatorFeedResult, ReportResult, RetryResult, WorktreeResult } from "../data.ts";
 import type { OperatorFeedEvent } from "../../operator-feed.ts";
 
 function value(label: string, entry: string | number | undefined): string {
@@ -36,7 +36,7 @@ export function formatInspect(result: InspectResult): string {
   return `${lines.join("\n")}\n`;
 }
 
-export function formatLive(result: Awaited<ReturnType<CliDataAccess["live"]>> extends infer T ? Exclude<T, undefined> : never): string {
+export function formatLive(result: LiveResult): string {
   const lines = [
     value("Issue", result.issue.issueKey ?? result.issue.linearIssueId),
     value("Stage", result.stageRun.stage),
