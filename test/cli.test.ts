@@ -206,7 +206,7 @@ function createStubCodex(threads: Record<string, CodexThreadSummary>) {
 function seedDatabase(db: PatchRelayDatabase, config: AppConfig): void {
   mkdirSync(config.projects[0].worktreeRoot, { recursive: true });
 
-  db.issueWorkflows.upsertTrackedIssue({
+  db.workflowCoordinator.upsertTrackedIssue({
     projectId: "usertold",
     linearIssueId: "issue-1",
     issueKey: "USE-54",
@@ -218,7 +218,7 @@ function seedDatabase(db: PatchRelayDatabase, config: AppConfig): void {
     lifecycleStatus: "failed",
     lastWebhookAt: "2026-03-09T08:00:00.000Z",
   });
-  const completed = db.issueWorkflows.claimStageRun({
+  const completed = db.workflowCoordinator.claimStageRun({
     projectId: "usertold",
     linearIssueId: "issue-1",
     stage: "deploy",
@@ -229,7 +229,7 @@ function seedDatabase(db: PatchRelayDatabase, config: AppConfig): void {
     promptText: "Deploy it",
   });
   assert.ok(completed);
-  db.issueWorkflows.updateStageRunThread({ stageRunId: completed.stageRun.id, threadId: "thread-54", turnId: "turn-54" });
+  db.workflowCoordinator.updateStageRunThread({ stageRunId: completed.stageRun.id, threadId: "thread-54", turnId: "turn-54" });
   db.stageEvents.saveThreadEvent({
     stageRunId: completed.stageRun.id,
     threadId: "thread-54",
@@ -237,7 +237,7 @@ function seedDatabase(db: PatchRelayDatabase, config: AppConfig): void {
     method: "turn/started",
     eventJson: JSON.stringify({ threadId: "thread-54", turnId: "turn-54" }),
   });
-  db.issueWorkflows.finishStageRun({
+  db.workflowCoordinator.finishStageRun({
     stageRunId: completed.stageRun.id,
     status: "failed",
     threadId: "thread-54",
@@ -263,7 +263,7 @@ function seedDatabase(db: PatchRelayDatabase, config: AppConfig): void {
     }),
   });
 
-  db.issueWorkflows.upsertTrackedIssue({
+  db.workflowCoordinator.upsertTrackedIssue({
     projectId: "usertold",
     linearIssueId: "issue-2",
     issueKey: "USE-55",
@@ -272,9 +272,9 @@ function seedDatabase(db: PatchRelayDatabase, config: AppConfig): void {
     lifecycleStatus: "idle",
     lastWebhookAt: "2026-03-09T09:00:00.000Z",
   });
-  db.issueWorkflows.setIssueDesiredStage("usertold", "issue-2", undefined);
+  db.workflowCoordinator.setIssueDesiredStage("usertold", "issue-2", undefined);
 
-  db.issueWorkflows.upsertTrackedIssue({
+  db.workflowCoordinator.upsertTrackedIssue({
     projectId: "usertold",
     linearIssueId: "issue-3",
     issueKey: "USE-56",
@@ -285,7 +285,7 @@ function seedDatabase(db: PatchRelayDatabase, config: AppConfig): void {
     lifecycleStatus: "running",
     lastWebhookAt: "2026-03-09T10:00:00.000Z",
   });
-  const running = db.issueWorkflows.claimStageRun({
+  const running = db.workflowCoordinator.claimStageRun({
     projectId: "usertold",
     linearIssueId: "issue-3",
     stage: "development",
@@ -296,7 +296,7 @@ function seedDatabase(db: PatchRelayDatabase, config: AppConfig): void {
     promptText: "Build it",
   });
   assert.ok(running);
-  db.issueWorkflows.updateStageRunThread({ stageRunId: running.stageRun.id, threadId: "thread-56", turnId: "turn-56" });
+  db.workflowCoordinator.updateStageRunThread({ stageRunId: running.stageRun.id, threadId: "thread-56", turnId: "turn-56" });
 }
 
 function seedRuntimeFiles(config: AppConfig): void {
@@ -467,7 +467,7 @@ test("cli retry blocks when the ledger still owns an active run lease", () => {
       activeRunLeaseId: runLease.id,
       lifecycleStatus: "running",
     });
-    db.issueWorkflows.upsertTrackedIssue({
+    db.workflowCoordinator.upsertTrackedIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       issueKey: issue.issueKey,
@@ -494,7 +494,7 @@ test("cli falls back to ledger workspace and run context when legacy active poin
     db.runMigrations();
     seedRuntimeFiles(config);
 
-    db.issueWorkflows.upsertTrackedIssue({
+    db.workflowCoordinator.upsertTrackedIssue({
       projectId: "usertold",
       linearIssueId: "issue-4",
       issueKey: "USE-57",
@@ -503,8 +503,8 @@ test("cli falls back to ledger workspace and run context when legacy active poin
       lifecycleStatus: "running",
       lastWebhookAt: "2026-03-09T11:00:00.000Z",
     });
-    db.issueWorkflows.setIssueDesiredStage("usertold", "issue-4", "review", "delivery-stale");
-    const stale = db.issueWorkflows.claimStageRun({
+    db.workflowCoordinator.setIssueDesiredStage("usertold", "issue-4", "review", { desiredWebhookId: "delivery-stale" });
+    const stale = db.workflowCoordinator.claimStageRun({
       projectId: "usertold",
       linearIssueId: "issue-4",
       stage: "review",
@@ -515,12 +515,12 @@ test("cli falls back to ledger workspace and run context when legacy active poin
       promptText: "Stale review run",
     });
     assert.ok(stale);
-    db.issueWorkflows.updateStageRunThread({
+    db.workflowCoordinator.updateStageRunThread({
       stageRunId: stale.stageRun.id,
       threadId: "thread-57-stale",
       turnId: "turn-57-stale",
     });
-    db.issueWorkflows.finishStageRun({
+    db.workflowCoordinator.finishStageRun({
       stageRunId: stale.stageRun.id,
       status: "completed",
       threadId: "thread-57-stale",

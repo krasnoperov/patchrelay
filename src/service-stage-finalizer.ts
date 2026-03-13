@@ -6,11 +6,7 @@ import { ReconciliationActionApplier } from "./reconciliation-action-applier.ts"
 import { reconcileIssue } from "./reconciliation-engine.ts";
 import { buildReconciliationSnapshot } from "./reconciliation-snapshot-builder.ts";
 import type { StageEventLogStoreProvider } from "./stage-event-ports.ts";
-import type {
-  IssueWorkflowExecutionStoreProvider,
-  IssueWorkflowLifecycleStoreProvider,
-  IssueWorkflowQueryStoreProvider,
-} from "./workflow-ports.ts";
+import type { IssueWorkflowCoordinatorProvider, IssueWorkflowQueryStoreProvider } from "./workflow-ports.ts";
 import { syncFailedStageToLinear } from "./stage-failure.ts";
 import {
   buildFailedStageReport,
@@ -35,8 +31,7 @@ export class ServiceStageFinalizer {
 
   constructor(
     private readonly config: AppConfig,
-    private readonly stores: IssueWorkflowExecutionStoreProvider &
-      IssueWorkflowLifecycleStoreProvider &
+    private readonly stores: IssueWorkflowCoordinatorProvider &
       IssueWorkflowQueryStoreProvider &
       StageEventLogStoreProvider &
       IssueControlStoreProvider &
@@ -166,7 +161,7 @@ export class ServiceStageFinalizer {
         ...(params.turnId ? { turnId: params.turnId } : {}),
         nextLifecycleStatus: params.nextLifecycleStatus ?? (issue.desiredStage ? "queued" : "completed"),
       });
-      this.stores.issueWorkflows.finishStageRun({
+      this.stores.workflowCoordinator.finishStageRun({
         stageRunId: stageRun.id,
         status,
         threadId: params.threadId,
@@ -194,7 +189,7 @@ export class ServiceStageFinalizer {
         failureReason: message,
         nextLifecycleStatus: "failed",
       });
-      this.stores.issueWorkflows.finishStageRun({
+      this.stores.workflowCoordinator.finishStageRun({
         stageRunId: stageRun.id,
         status: "failed",
         threadId,

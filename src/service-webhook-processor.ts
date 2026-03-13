@@ -3,7 +3,7 @@ import type { CodexAppServerClient } from "./codex-app-server.ts";
 import type { EventReceiptStoreProvider, IssueControlStoreProvider, ObligationStoreProvider, RunLeaseStoreProvider } from "./ledger-ports.ts";
 import type { LinearInstallationStoreProvider } from "./installation-ports.ts";
 import type { StageEventLogStoreProvider } from "./stage-event-ports.ts";
-import type { IssueWorkflowWebhookStoreProvider } from "./workflow-ports.ts";
+import type { IssueWorkflowCoordinatorProvider, IssueWorkflowQueryStoreProvider } from "./workflow-ports.ts";
 import type { WebhookEventStoreProvider } from "./webhook-event-ports.ts";
 import { resolveProject, trustedActorAllowed } from "./project-resolution.ts";
 import { StageAgentActivityPublisher } from "./stage-agent-activity-publisher.ts";
@@ -30,7 +30,8 @@ export class ServiceWebhookProcessor {
       IssueControlStoreProvider &
       ObligationStoreProvider &
       RunLeaseStoreProvider &
-      IssueWorkflowWebhookStoreProvider &
+      IssueWorkflowCoordinatorProvider &
+      IssueWorkflowQueryStoreProvider &
       LinearInstallationStoreProvider &
       StageEventLogStoreProvider,
     linearProvider: LinearClientProvider,

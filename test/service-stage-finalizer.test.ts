@@ -166,6 +166,13 @@ class FakeIssueWorkflowStore {
   }): TrackedIssueRecord {
     const existing = this.getTrackedIssue(params.projectId, params.linearIssueId);
     assert.ok(existing);
+    if (existing.lifecycleStatus !== params.lifecycleStatus) {
+      this.lifecycleStatuses.push({
+        projectId: params.projectId,
+        issueId: params.linearIssueId,
+        status: params.lifecycleStatus,
+      });
+    }
     const nextIssue = {
       ...existing,
       ...(params.currentLinearState ? { currentLinearState: params.currentLinearState } : {}),
@@ -716,6 +723,7 @@ function createHarness(options?: {
   const finalizer = new ServiceStageFinalizer(
     config,
     {
+      workflowCoordinator: store,
       issueWorkflows: store,
       stageEvents,
       issueControl: ledger,

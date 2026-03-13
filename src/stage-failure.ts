@@ -4,8 +4,7 @@ import {
   resolveFallbackLinearState,
   resolveWorkflowLabelCleanup,
 } from "./linear-workflow.ts";
-import type { IssueControlStoreProvider } from "./ledger-ports.ts";
-import type { IssueWorkflowLifecycleStoreProvider } from "./workflow-ports.ts";
+import type { IssueWorkflowCoordinatorProvider } from "./workflow-ports.ts";
 import type { LinearClientProvider, ProjectConfig, StageRunRecord, TrackedIssueRecord } from "./types.ts";
 
 function normalizeStateName(value: string | undefined): string | undefined {
@@ -14,7 +13,7 @@ function normalizeStateName(value: string | undefined): string | undefined {
 }
 
 export async function syncFailedStageToLinear(params: {
-  stores: IssueWorkflowLifecycleStoreProvider & IssueControlStoreProvider;
+  stores: IssueWorkflowCoordinatorProvider;
   linearProvider: LinearClientProvider;
   project: ProjectConfig;
   issue: TrackedIssueRecord;
@@ -60,20 +59,13 @@ export async function syncFailedStageToLinear(params: {
 
   if (fallbackState) {
     await linear.setIssueState(params.stageRun.linearIssueId, fallbackState).catch(() => undefined);
-    params.stores.issueWorkflows.setIssueLifecycleStatus(params.stageRun.projectId, params.stageRun.linearIssueId, "failed");
-    params.stores.issueWorkflows.upsertTrackedIssue({
+    params.stores.workflowCoordinator.upsertTrackedIssue({
       projectId: params.stageRun.projectId,
       linearIssueId: params.stageRun.linearIssueId,
       currentLinearState: fallbackState,
       statusCommentId: params.issue.statusCommentId ?? null,
+      activeAgentSessionId: params.issue.activeAgentSessionId ?? null,
       lifecycleStatus: "failed",
-    });
-    params.stores.issueControl.upsertIssueControl({
-      projectId: params.stageRun.projectId,
-      linearIssueId: params.stageRun.linearIssueId,
-      lifecycleStatus: "failed",
-      ...(params.issue.statusCommentId ? { serviceOwnedCommentId: params.issue.statusCommentId } : {}),
-      ...(params.issue.activeAgentSessionId ? { activeAgentSessionId: params.issue.activeAgentSessionId } : {}),
     });
   }
 
@@ -91,14 +83,7 @@ export async function syncFailedStageToLinear(params: {
   })
     .catch(() => undefined);
   if (result) {
-    params.stores.issueWorkflows.setIssueStatusComment(params.stageRun.projectId, params.stageRun.linearIssueId, result.id);
-    params.stores.issueControl.upsertIssueControl({
-      projectId: params.stageRun.projectId,
-      linearIssueId: params.stageRun.linearIssueId,
-      serviceOwnedCommentId: result.id,
-      lifecycleStatus: "failed",
-      ...(params.issue.activeAgentSessionId ? { activeAgentSessionId: params.issue.activeAgentSessionId } : {}),
-    });
+    params.stores.workflowCoordinator.setIssueStatusComment(params.stageRun.projectId, params.stageRun.linearIssueId, result.id);
   }
 
   if (params.issue.activeAgentSessionId) {

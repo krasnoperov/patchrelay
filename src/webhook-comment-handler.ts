@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { IssueControlStoreProvider, ObligationStoreProvider, RunLeaseStoreProvider } from "./ledger-ports.ts";
-import type { IssueWorkflowWebhookStoreProvider } from "./workflow-ports.ts";
+import type { IssueWorkflowQueryStoreProvider } from "./workflow-ports.ts";
 import { isPatchRelayStatusComment } from "./linear-workflow.ts";
 import { triggerEventAllowed } from "./project-resolution.ts";
 import type { StageTurnInputDispatcher } from "./stage-turn-input-dispatcher.ts";
@@ -8,7 +8,7 @@ import type { NormalizedEvent, ProjectConfig } from "./types.ts";
 
 export class CommentWebhookHandler {
   constructor(
-    private readonly stores: IssueWorkflowWebhookStoreProvider &
+    private readonly stores: IssueWorkflowQueryStoreProvider &
       IssueControlStoreProvider &
       ObligationStoreProvider &
       RunLeaseStoreProvider,

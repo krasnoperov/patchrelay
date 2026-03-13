@@ -7,7 +7,7 @@ import type {
   RunLeaseStoreProvider,
   WorkspaceOwnershipStoreProvider,
 } from "./ledger-ports.ts";
-import type { IssueWorkflowExecutionStoreProvider, IssueWorkflowLifecycleStoreProvider, IssueWorkflowWebhookStoreProvider } from "./workflow-ports.ts";
+import type { IssueWorkflowCoordinatorProvider, IssueWorkflowQueryStoreProvider } from "./workflow-ports.ts";
 import { buildStageLaunchPlan, isCodexThreadId } from "./stage-launch.ts";
 import { syncFailedStageToLinear } from "./stage-failure.ts";
 import { buildFailedStageReport } from "./stage-reporting.ts";
@@ -29,9 +29,8 @@ export class ServiceStageRunner {
 
   constructor(
     private readonly config: AppConfig,
-    private readonly stores: IssueWorkflowExecutionStoreProvider &
-      IssueWorkflowLifecycleStoreProvider &
-      IssueWorkflowWebhookStoreProvider &
+    private readonly stores: IssueWorkflowCoordinatorProvider &
+      IssueWorkflowQueryStoreProvider &
       EventReceiptStoreProvider &
       IssueControlStoreProvider &
       ObligationStoreProvider &
@@ -71,7 +70,7 @@ export class ServiceStageRunner {
     }
 
     const plan = buildStageLaunchPlan(project, issue, desiredStage);
-    const claim = this.stores.issueWorkflows.claimStageRun({
+    const claim = this.stores.workflowCoordinator.claimStageRun({
       projectId: item.projectId,
       linearIssueId: item.issueId,
       stage: desiredStage,
@@ -114,7 +113,7 @@ export class ServiceStageRunner {
       throw err;
     }
 
-    this.stores.issueWorkflows.updateStageRunThread({
+    this.stores.workflowCoordinator.updateStageRunThread({
       stageRunId: claim.stageRun.id,
       threadId: threadLaunch.threadId,
       ...(threadLaunch.parentThreadId ? { parentThreadId: threadLaunch.parentThreadId } : {}),
@@ -168,7 +167,7 @@ export class ServiceStageRunner {
       .then((linear) => linear?.getIssue(linearIssueId))
       .catch(() => undefined);
 
-    return this.stores.issueWorkflows.recordDesiredStage({
+    return this.stores.workflowCoordinator.recordDesiredStage({
       projectId: project.id,
       linearIssueId,
       ...(liveIssue?.identifier ? { issueKey: liveIssue.identifier } : existing?.issueKey ? { issueKey: existing.issueKey } : {}),
@@ -234,7 +233,7 @@ export class ServiceStageRunner {
   ): Promise<void> {
     const failureThreadId = threadId ?? `launch-failed-${stageRun.id}`;
     this.runAtomically(() => {
-      this.stores.issueWorkflows.finishStageRun({
+      this.stores.workflowCoordinator.finishStageRun({
         stageRunId: stageRun.id,
         status: "failed",
         threadId: failureThreadId,

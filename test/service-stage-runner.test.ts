@@ -274,7 +274,7 @@ function createHarness(baseDir: string, options?: { runAtomically?: <T>(fn: () =
 }
 
 function queueDesiredStage(db: PatchRelayDatabase, options?: { pendingLaunchInput?: string }) {
-  db.issueWorkflows.recordDesiredStage({
+  db.workflowCoordinator.recordDesiredStage({
     projectId: "usertold",
     linearIssueId: "issue-1",
     issueKey: "USE-25",

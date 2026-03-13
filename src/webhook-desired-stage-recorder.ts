@@ -1,6 +1,6 @@
 import type { IssueControlStoreProvider, ObligationStoreProvider } from "./ledger-ports.ts";
 import type { LinearInstallationStoreProvider } from "./installation-ports.ts";
-import type { IssueWorkflowWebhookStoreProvider } from "./workflow-ports.ts";
+import type { IssueWorkflowCoordinatorProvider, IssueWorkflowQueryStoreProvider } from "./workflow-ports.ts";
 import { triggerEventAllowed } from "./project-resolution.ts";
 import type { AgentSessionMetadata, NormalizedEvent, ProjectConfig, StageRunRecord, TrackedIssueRecord, WorkflowStage } from "./types.ts";
 import { resolveWorkflowStage } from "./workflow-policy.ts";
@@ -20,7 +20,8 @@ export interface RecordedWebhookIssueState {
 
 export class WebhookDesiredStageRecorder {
   constructor(
-    private readonly stores: IssueWorkflowWebhookStoreProvider &
+    private readonly stores: IssueWorkflowCoordinatorProvider &
+      IssueWorkflowQueryStoreProvider &
       LinearInstallationStoreProvider &
       IssueControlStoreProvider &
       ObligationStoreProvider,
@@ -46,29 +47,19 @@ export class WebhookDesiredStageRecorder {
     const stageAllowed = triggerEventAllowed(project, normalized.triggerEvent);
     const desiredStage = this.resolveDesiredStage(project, normalized, issue, activeStageRun, delegatedToPatchRelay);
     const launchInput = this.resolveLaunchInput(normalized.agentSession);
-    this.persistIssueControlFirst(
-      project.id,
-      normalizedIssue.id,
-      issue,
-      activeStageRun,
-      desiredStage,
-      normalized.agentSession?.id,
-      options?.eventReceiptId,
-    );
-
-    this.stores.issueWorkflows.recordDesiredStage({
+    const refreshedIssue = this.stores.workflowCoordinator.recordDesiredStage({
       projectId: project.id,
       linearIssueId: normalizedIssue.id,
       ...(normalizedIssue.identifier ? { issueKey: normalizedIssue.identifier } : {}),
       ...(normalizedIssue.title ? { title: normalizedIssue.title } : {}),
       ...(normalizedIssue.url ? { issueUrl: normalizedIssue.url } : {}),
       ...(normalizedIssue.stateName ? { currentLinearState: normalizedIssue.stateName } : {}),
+      ...(desiredStage ? { desiredStage } : {}),
+      ...(options?.eventReceiptId !== undefined ? { desiredReceiptId: options.eventReceiptId } : {}),
+      ...(normalized.agentSession?.id ? { activeAgentSessionId: normalized.agentSession.id } : {}),
       lastWebhookAt: new Date().toISOString(),
     });
 
-    if (normalized.agentSession?.id) {
-      this.stores.issueWorkflows.setIssueActiveAgentSession(project.id, normalizedIssue.id, normalized.agentSession.id);
-    }
     if (launchInput && !activeStageRun && delegatedToPatchRelay && stageAllowed) {
       this.stores.obligations.enqueueObligation({
         projectId: project.id,
@@ -80,9 +71,6 @@ export class WebhookDesiredStageRecorder {
         }),
       });
     }
-
-    const refreshedIssue = this.stores.issueWorkflows.getTrackedIssue(project.id, normalizedIssue.id);
-    this.syncIssueControl(project.id, normalizedIssue.id, refreshedIssue, desiredStage, normalized.agentSession?.id, options?.eventReceiptId);
 
     return {
       issue: refreshedIssue ?? issue,
@@ -163,50 +151,4 @@ export class WebhookDesiredStageRecorder {
     return undefined;
   }
 
-  private persistIssueControlFirst(
-    projectId: string,
-    linearIssueId: string,
-    issue: TrackedIssueRecord | undefined,
-    activeStageRun: StageRunRecord | undefined,
-    desiredStage: WorkflowStage | undefined,
-    activeAgentSessionId: string | undefined,
-    eventReceiptId: number | undefined,
-  ): void {
-    if (!desiredStage) {
-      return;
-    }
-
-    const lifecycleStatus = issue?.lifecycleStatus ?? "queued";
-    this.stores.issueControl.upsertIssueControl({
-      projectId,
-      linearIssueId,
-      desiredStage,
-      ...(eventReceiptId !== undefined ? { desiredReceiptId: eventReceiptId } : {}),
-      ...(issue?.statusCommentId ? { serviceOwnedCommentId: issue.statusCommentId } : {}),
-      ...(activeAgentSessionId ? { activeAgentSessionId } : {}),
-      lifecycleStatus,
-    });
-  }
-
-  private syncIssueControl(
-    projectId: string,
-    linearIssueId: string,
-    issue: TrackedIssueRecord | undefined,
-    desiredStage: WorkflowStage | undefined,
-    activeAgentSessionId: string | undefined,
-    eventReceiptId: number | undefined,
-  ): void {
-    if (!issue) {
-      return;
-    }
-
-    this.stores.issueControl.upsertIssueControl({
-      projectId,
-      linearIssueId,
-      ...(desiredStage ? { desiredStage } : {}),
-      ...(eventReceiptId !== undefined && desiredStage ? { desiredReceiptId: eventReceiptId } : {}),
-      ...(activeAgentSessionId ? { activeAgentSessionId } : {}),
-      lifecycleStatus: issue.lifecycleStatus,
-    });
-  }
 }

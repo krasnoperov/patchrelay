@@ -453,7 +453,7 @@ function recordDesiredStageWithLedger(
     lastWebhookAt: string;
   },
 ) {
-  const issue = db.issueWorkflows.recordDesiredStage(params);
+  const issue = db.workflowCoordinator.recordDesiredStage(params);
   const receipt =
     params.desiredStage && params.desiredWebhookId
       ? ensureEventReceipt(db, {
@@ -1353,7 +1353,7 @@ test("service preserves comments that arrive before thread startup finishes", as
     const { config, db, codex, linear, service } = createService(baseDir);
     await service.start();
 
-    db.issueWorkflows.upsertTrackedIssue({
+    db.workflowCoordinator.upsertTrackedIssue({
       projectId: "usertold",
       linearIssueId: "issue_3",
       issueKey: "USE-27",
@@ -1364,7 +1364,7 @@ test("service preserves comments that arrive before thread startup finishes", as
       lifecycleStatus: "queued",
       lastWebhookAt: new Date().toISOString(),
     });
-    const claim = db.issueWorkflows.claimStageRun({
+    const claim = db.workflowCoordinator.claimStageRun({
       projectId: "usertold",
       linearIssueId: "issue_3",
       stage: "development",
@@ -1417,7 +1417,7 @@ test("service preserves comments that arrive before thread startup finishes", as
     assert.equal(pendingBeforeStartup.length, 1);
     assert.match(pendingBeforeStartup[0]?.payloadJson ?? "", /migration edge case/);
 
-    db.issueWorkflows.updateStageRunThread({
+    db.workflowCoordinator.updateStageRunThread({
       stageRunId: claim.stageRun.id,
       threadId: "thread-prelaunch",
       turnId: "turn-prelaunch",
@@ -1597,7 +1597,7 @@ test("service startup reconciles finished and missing active threads", async () 
       ],
     });
 
-    db.issueWorkflows.upsertTrackedIssue({
+    db.workflowCoordinator.upsertTrackedIssue({
       projectId: "usertold",
       linearIssueId: "issue_4",
       issueKey: "USE-28",
@@ -1608,7 +1608,7 @@ test("service startup reconciles finished and missing active threads", async () 
       lifecycleStatus: "running",
       lastWebhookAt: new Date().toISOString(),
     });
-    const claim = db.issueWorkflows.claimStageRun({
+    const claim = db.workflowCoordinator.claimStageRun({
       projectId: "usertold",
       linearIssueId: "issue_4",
       stage: "development",
@@ -1619,7 +1619,7 @@ test("service startup reconciles finished and missing active threads", async () 
       promptText: "Recover this stage",
     });
     assert.ok(claim);
-    db.issueWorkflows.updateStageRunThread({
+    db.workflowCoordinator.updateStageRunThread({
       stageRunId: claim!.stageRun.id,
       threadId: "thread-finished",
       turnId: "turn-1",
@@ -1632,7 +1632,7 @@ test("service startup reconciles finished and missing active threads", async () 
       turns: [{ id: "turn-1", status: "completed", items: [{ type: "agentMessage", id: "a1", text: "Recovered." }] }],
     });
 
-    db.issueWorkflows.upsertTrackedIssue({
+    db.workflowCoordinator.upsertTrackedIssue({
       projectId: "usertold",
       linearIssueId: "issue_5",
       issueKey: "USE-29",
@@ -1643,7 +1643,7 @@ test("service startup reconciles finished and missing active threads", async () 
       lifecycleStatus: "running",
       lastWebhookAt: new Date().toISOString(),
     });
-    const missingClaim = db.issueWorkflows.claimStageRun({
+    const missingClaim = db.workflowCoordinator.claimStageRun({
       projectId: "usertold",
       linearIssueId: "issue_5",
       stage: "development",
@@ -1654,7 +1654,7 @@ test("service startup reconciles finished and missing active threads", async () 
       promptText: "Recover missing stage",
     });
     assert.ok(missingClaim);
-    db.issueWorkflows.updateStageRunThread({
+    db.workflowCoordinator.updateStageRunThread({
       stageRunId: missingClaim!.stageRun.id,
       threadId: "thread-missing",
       turnId: "turn-2",
@@ -1928,7 +1928,7 @@ test("service startup adopts a legacy-only active run into the ledger and keeps 
       ],
     });
 
-    db.issueWorkflows.upsertTrackedIssue({
+    db.workflowCoordinator.upsertTrackedIssue({
       projectId: "usertold",
       linearIssueId: "issue_8",
       issueKey: "USE-33",
@@ -1939,7 +1939,7 @@ test("service startup adopts a legacy-only active run into the ledger and keeps 
       lifecycleStatus: "running",
       lastWebhookAt: new Date().toISOString(),
     });
-    const claim = db.issueWorkflows.claimStageRun({
+    const claim = db.workflowCoordinator.claimStageRun({
       projectId: "usertold",
       linearIssueId: "issue_8",
       stage: "development",
@@ -1950,7 +1950,7 @@ test("service startup adopts a legacy-only active run into the ledger and keeps 
       promptText: "Keep running",
     });
     assert.ok(claim);
-    db.issueWorkflows.updateStageRunThread({
+    db.workflowCoordinator.updateStageRunThread({
       stageRunId: claim.stageRun.id,
       threadId: "thread-legacy-adopt",
       turnId: "turn-legacy-adopt",
@@ -2008,7 +2008,7 @@ test("service startup leaves in-progress reconciled stages running", async () =>
       workflowStates,
     });
 
-    db.issueWorkflows.upsertTrackedIssue({
+    db.workflowCoordinator.upsertTrackedIssue({
       projectId: "usertold",
       linearIssueId: "issue_6",
       issueKey: "USE-32",
@@ -2019,7 +2019,7 @@ test("service startup leaves in-progress reconciled stages running", async () =>
       lifecycleStatus: "running",
       lastWebhookAt: new Date().toISOString(),
     });
-    const claim = db.issueWorkflows.claimStageRun({
+    const claim = db.workflowCoordinator.claimStageRun({
       projectId: "usertold",
       linearIssueId: "issue_6",
       stage: "development",
@@ -2030,7 +2030,7 @@ test("service startup leaves in-progress reconciled stages running", async () =>
       promptText: "Keep running",
     });
     assert.ok(claim);
-    db.issueWorkflows.updateStageRunThread({
+    db.workflowCoordinator.updateStageRunThread({
       stageRunId: claim!.stageRun.id,
       threadId: "thread-in-progress",
       turnId: "turn-live",
@@ -2166,7 +2166,7 @@ test("service startup fails active stages with no persisted thread id", async ()
       ],
     });
 
-    db.issueWorkflows.upsertTrackedIssue({
+    db.workflowCoordinator.upsertTrackedIssue({
       projectId: "usertold",
       linearIssueId: "issue_7",
       issueKey: "USE-33",
@@ -2177,7 +2177,7 @@ test("service startup fails active stages with no persisted thread id", async ()
       lifecycleStatus: "running",
       lastWebhookAt: new Date().toISOString(),
     });
-    const claim = db.issueWorkflows.claimStageRun({
+    const claim = db.workflowCoordinator.claimStageRun({
       projectId: "usertold",
       linearIssueId: "issue_7",
       stage: "development",

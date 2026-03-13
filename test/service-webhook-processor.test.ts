@@ -209,7 +209,7 @@ function installPatchRelayApp(db: PatchRelayDatabase, projectId = "usertold", ac
 }
 
 function seedDesiredStage(db: PatchRelayDatabase) {
-  db.issueWorkflows.recordDesiredStage({
+  db.workflowCoordinator.recordDesiredStage({
     projectId: "usertold",
     linearIssueId: "issue_1",
     issueKey: "USE-25",
@@ -228,7 +228,7 @@ function createActiveStageRun(
   options?: { threadId?: string; turnId?: string; branchName?: string; worktreePath?: string; workflowFile?: string; promptText?: string },
 ) {
   seedDesiredStage(db);
-  const claim = db.issueWorkflows.claimStageRun({
+  const claim = db.workflowCoordinator.claimStageRun({
     projectId: "usertold",
     linearIssueId: "issue_1",
     stage: "development",
@@ -240,7 +240,7 @@ function createActiveStageRun(
   });
   assert.ok(claim);
   if (options?.threadId) {
-    db.issueWorkflows.updateStageRunThread({
+    db.workflowCoordinator.updateStageRunThread({
       stageRunId: claim.stageRun.id,
       threadId: options.threadId,
       ...(options.turnId ? { turnId: options.turnId } : {}),

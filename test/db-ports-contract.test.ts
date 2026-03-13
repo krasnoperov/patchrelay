@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { PatchRelayDatabase } from "../src/db.ts";
 import type {
-  IssueWorkflowExecutionStoreProvider,
+  IssueWorkflowCoordinatorProvider,
   IssueWorkflowQueryStoreProvider,
   LinearInstallationStoreProvider,
   StageEventLogStoreProvider,
@@ -18,6 +18,7 @@ function createHarness() {
   db.runMigrations();
   const stores = {
     webhookEvents: db.webhookEvents,
+    workflowCoordinator: db.workflowCoordinator,
     issueWorkflows: db.issueWorkflows,
     stageEvents: db.stageEvents,
     linearInstallations: db.linearInstallations,
@@ -109,10 +110,10 @@ test("db ports preserve Linear installation linking and OAuth state lifecycle", 
 test("db ports preserve issue workflow execution and query behavior", () => {
   const { baseDir, stores } = createHarness();
   try {
-    const workflowExecution: IssueWorkflowExecutionStoreProvider["issueWorkflows"] = stores.issueWorkflows;
+    const workflowCoordinator: IssueWorkflowCoordinatorProvider["workflowCoordinator"] = stores.workflowCoordinator;
     const workflowQuery: IssueWorkflowQueryStoreProvider["issueWorkflows"] = stores.issueWorkflows;
 
-    workflowExecution.recordDesiredStage({
+    workflowCoordinator.recordDesiredStage({
       projectId: "proj",
       linearIssueId: "issue-1",
       issueKey: "APP-1",
@@ -123,12 +124,14 @@ test("db ports preserve issue workflow execution and query behavior", () => {
       desiredWebhookId: "delivery-1",
       lastWebhookAt: "2026-03-11T10:00:00.000Z",
     });
-    const readyIssues = workflowExecution.listIssuesReadyForExecution();
+    const readyIssues = [stores.issueWorkflows.getTrackedIssue("proj", "issue-1")].filter(
+      (issue): issue is NonNullable<typeof issue> => Boolean(issue?.desiredStage),
+    );
     assert.equal(readyIssues.length, 1);
     assert.equal(readyIssues[0]?.projectId, "proj");
     assert.equal(readyIssues[0]?.linearIssueId, "issue-1");
 
-    const claim = workflowExecution.claimStageRun({
+    const claim = workflowCoordinator.claimStageRun({
       projectId: "proj",
       linearIssueId: "issue-1",
       stage: "development",
@@ -140,13 +143,13 @@ test("db ports preserve issue workflow execution and query behavior", () => {
     });
     assert.ok(claim);
 
-    workflowExecution.updateStageRunThread({
+    workflowCoordinator.updateStageRunThread({
       stageRunId: claim.stageRun.id,
       threadId: "thread-1",
       turnId: "turn-1",
     });
 
-    workflowExecution.finishStageRun({
+    workflowCoordinator.finishStageRun({
       stageRunId: claim.stageRun.id,
       status: "completed",
       threadId: "thread-1",
@@ -171,10 +174,10 @@ test("db ports preserve issue workflow execution and query behavior", () => {
 test("db ports preserve thread event history for ledger-backed stage runs", () => {
   const { baseDir, stores } = createHarness();
   try {
-    const workflowExecution: IssueWorkflowExecutionStoreProvider["issueWorkflows"] = stores.issueWorkflows;
+    const workflowCoordinator: IssueWorkflowCoordinatorProvider["workflowCoordinator"] = stores.workflowCoordinator;
     const stageEvents: StageEventLogStoreProvider["stageEvents"] = stores.stageEvents;
 
-    workflowExecution.recordDesiredStage({
+    workflowCoordinator.recordDesiredStage({
       projectId: "proj",
       linearIssueId: "issue-1",
       issueKey: "APP-1",
@@ -183,7 +186,7 @@ test("db ports preserve thread event history for ledger-backed stage runs", () =
       desiredWebhookId: "delivery-1",
       lastWebhookAt: "2026-03-11T10:00:00.000Z",
     });
-    const claim = workflowExecution.claimStageRun({
+    const claim = workflowCoordinator.claimStageRun({
       projectId: "proj",
       linearIssueId: "issue-1",
       stage: "development",

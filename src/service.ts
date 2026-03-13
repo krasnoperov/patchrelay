@@ -4,7 +4,7 @@ import type { PatchRelayDatabase } from "./db.ts";
 import type { EventReceiptStoreProvider, IssueControlStoreProvider, ObligationStoreProvider, RunLeaseStoreProvider, WorkspaceOwnershipStoreProvider } from "./ledger-ports.ts";
 import type { LinearInstallationStoreProvider } from "./installation-ports.ts";
 import type { StageEventLogStoreProvider } from "./stage-event-ports.ts";
-import type { IssueWorkflowExecutionStoreProvider, IssueWorkflowLifecycleStoreProvider, IssueWorkflowQueryStoreProvider, IssueWorkflowWebhookStoreProvider, ReadyIssueSource } from "./workflow-ports.ts";
+import type { IssueWorkflowCoordinatorProvider, IssueWorkflowQueryStoreProvider, ReadyIssueSource } from "./workflow-ports.ts";
 import type { WebhookEventStoreProvider } from "./webhook-event-ports.ts";
 import { IssueQueryService } from "./issue-query-service.ts";
 import { LinearOAuthService } from "./linear-oauth-service.ts";
@@ -21,10 +21,8 @@ type ServiceStores = WebhookEventStoreProvider &
   WorkspaceOwnershipStoreProvider &
   RunLeaseStoreProvider &
   ObligationStoreProvider &
-  IssueWorkflowExecutionStoreProvider &
-  IssueWorkflowLifecycleStoreProvider &
+  IssueWorkflowCoordinatorProvider &
   IssueWorkflowQueryStoreProvider &
-  IssueWorkflowWebhookStoreProvider &
   StageEventLogStoreProvider &
   LinearInstallationStoreProvider;
 
@@ -36,6 +34,7 @@ function createServiceStores(db: PatchRelayDatabase): ServiceStores {
     workspaceOwnership: db.workspaceOwnership,
     runLeases: db.runLeases,
     obligations: db.obligations,
+    workflowCoordinator: db.workflowCoordinator,
     issueWorkflows: db.issueWorkflows,
     stageEvents: db.stageEvents,
     linearInstallations: db.linearInstallations,

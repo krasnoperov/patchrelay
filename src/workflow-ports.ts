@@ -7,31 +7,39 @@ export interface IssueOverviewRecord {
   activeStageRun?: StageRunRecord;
 }
 
-export interface IssueWorkflowLifecycleStore {
+export interface IssueWorkflowCoordinator {
   upsertTrackedIssue(params: {
     projectId: string;
     linearIssueId: string;
+    issueKey?: string;
+    title?: string;
+    issueUrl?: string;
     currentLinearState?: string;
+    desiredStage?: WorkflowStage | null;
+    desiredWebhookId?: string | null;
+    desiredReceiptId?: number | null;
+    activeWorkspaceId?: number | null;
+    activePipelineRunId?: number | null;
+    activeStageRunId?: number | null;
+    latestThreadId?: string | null;
     statusCommentId?: string | null;
+    activeAgentSessionId?: string | null;
     lifecycleStatus: TrackedIssueRecord["lifecycleStatus"];
+    lastWebhookAt?: string;
   }): TrackedIssueRecord;
-  getTrackedIssue(projectId: string, linearIssueId: string): TrackedIssueRecord | undefined;
-  getStageRun(stageRunId: number): StageRunRecord | undefined;
-  getWorkspace(workspaceId: number): WorkspaceRecord | undefined;
-  setIssueStatusComment(projectId: string, linearIssueId: string, commentId?: string): void;
-  getPipelineRun(pipelineRunId: number): PipelineRunRecord | undefined;
-  setIssueLifecycleStatus(projectId: string, linearIssueId: string, status: TrackedIssueRecord["lifecycleStatus"]): void;
-}
-
-export interface IssueWorkflowLifecycleStoreProvider {
-  issueWorkflows: IssueWorkflowLifecycleStore;
-}
-
-export interface IssueWorkflowExecutionStore extends IssueWorkflowLifecycleStore {
-  listIssuesReadyForExecution(): Array<{ projectId: string; linearIssueId: string }>;
-  listActiveStageRuns(): StageRunRecord[];
-  getStageRunByThreadId(threadId: string): StageRunRecord | undefined;
-  listStageRunsForIssue(projectId: string, linearIssueId: string): StageRunRecord[];
+  recordDesiredStage(params: {
+    projectId: string;
+    linearIssueId: string;
+    issueKey?: string;
+    title?: string;
+    issueUrl?: string;
+    currentLinearState?: string;
+    desiredStage?: WorkflowStage;
+    desiredWebhookId?: string;
+    desiredReceiptId?: number;
+    activeAgentSessionId?: string | null;
+    lastWebhookAt: string;
+  }): TrackedIssueRecord;
   claimStageRun(params: {
     projectId: string;
     linearIssueId: string;
@@ -51,31 +59,19 @@ export interface IssueWorkflowExecutionStore extends IssueWorkflowLifecycleStore
     summaryJson?: string;
     reportJson?: string;
   }): void;
-}
-
-export interface IssueWorkflowExecutionStoreProvider {
-  issueWorkflows: IssueWorkflowExecutionStore;
-}
-
-export interface IssueWorkflowWebhookStore {
-  getTrackedIssue(projectId: string, linearIssueId: string): TrackedIssueRecord | undefined;
-  getStageRun(stageRunId: number): StageRunRecord | undefined;
-  recordDesiredStage(params: {
-    projectId: string;
-    linearIssueId: string;
-    issueKey?: string;
-    title?: string;
-    issueUrl?: string;
-    currentLinearState?: string;
-    desiredStage?: WorkflowStage;
-    desiredWebhookId?: string;
-    lastWebhookAt: string;
-  }): TrackedIssueRecord;
+  setIssueDesiredStage(
+    projectId: string,
+    linearIssueId: string,
+    desiredStage?: WorkflowStage,
+    options?: { desiredWebhookId?: string; desiredReceiptId?: number; lifecycleStatus?: TrackedIssueRecord["lifecycleStatus"] },
+  ): void;
+  setIssueLifecycleStatus(projectId: string, linearIssueId: string, status: TrackedIssueRecord["lifecycleStatus"]): void;
+  setIssueStatusComment(projectId: string, linearIssueId: string, commentId?: string): void;
   setIssueActiveAgentSession(projectId: string, linearIssueId: string, agentSessionId?: string): void;
 }
 
-export interface IssueWorkflowWebhookStoreProvider {
-  issueWorkflows: IssueWorkflowWebhookStore;
+export interface IssueWorkflowCoordinatorProvider {
+  workflowCoordinator: IssueWorkflowCoordinator;
 }
 
 export interface IssueWorkflowQueryStore {
@@ -87,6 +83,8 @@ export interface IssueWorkflowQueryStore {
   getStageRun(stageRunId: number): StageRunRecord | undefined;
   getStageRunByThreadId(threadId: string): StageRunRecord | undefined;
   listActiveStageRuns(): StageRunRecord[];
+  getWorkspace(workspaceId: number): WorkspaceRecord | undefined;
+  getPipelineRun(pipelineRunId: number): PipelineRunRecord | undefined;
 }
 
 export interface IssueWorkflowQueryStoreProvider {

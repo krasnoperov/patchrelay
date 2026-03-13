@@ -10,7 +10,6 @@ import type {
   StageReport,
   StageRunRecord,
   TrackedIssueRecord,
-  WorkspaceOwnershipRecord,
   WorkspaceRecord,
   WorkflowStage,
 } from "../types.ts";
@@ -181,8 +180,6 @@ function resolveStageFromState(config: AppConfig, projectId: string, stateName?:
 interface LedgerIssueContext {
   issueControl?: IssueControlRecord;
   runLease?: RunLeaseRecord;
-  workspaceOwnership?: WorkspaceOwnershipRecord;
-  mirroredStageRun?: StageRunRecord;
 }
 
 export class CliDataAccess {
@@ -386,14 +383,10 @@ export class CliDataAccess {
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
     });
-    this.db.issueControl.upsertIssueControl({
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      desiredStage: stage,
+    this.db.workflowCoordinator.setIssueDesiredStage(issue.projectId, issue.linearIssueId, stage, {
       desiredReceiptId: receipt.id,
       lifecycleStatus: "queued",
     });
-    this.db.issueWorkflows.setIssueDesiredStage(issue.projectId, issue.linearIssueId, stage, webhookId);
     const updated = this.db.issueWorkflows.getTrackedIssue(issue.projectId, issue.linearIssueId)!;
     return {
       issue: updated,
@@ -471,13 +464,20 @@ export class CliDataAccess {
             : {}),
         ...(row.latest_stage !== null
           ? { latestStage: row.latest_stage as WorkflowStage }
-          : ledger?.mirroredStageRun
-            ? { latestStage: ledger.mirroredStageRun.stage }
+          : ledger?.runLease
+            ? { latestStage: ledger.runLease.stage }
             : {}),
         ...(row.latest_stage_status !== null
           ? { latestStageStatus: String(row.latest_stage_status) }
-          : ledger?.mirroredStageRun
-            ? { latestStageStatus: ledger.mirroredStageRun.status }
+          : ledger?.runLease
+            ? {
+                latestStageStatus:
+                  ledger.runLease.status === "failed"
+                    ? "failed"
+                    : ledger.runLease.status === "completed" || ledger.runLease.status === "released" || ledger.runLease.status === "paused"
+                      ? "completed"
+                      : "running",
+              }
             : {}),
         updatedAt: String(row.updated_at),
       };
@@ -497,22 +497,18 @@ export class CliDataAccess {
   private getLedgerIssueContext(projectId: string, linearIssueId: string): LedgerIssueContext {
     const issueControl = this.db.issueControl.getIssueControl(projectId, linearIssueId);
     const runLease = issueControl?.activeRunLeaseId ? this.db.runLeases.getRunLease(issueControl.activeRunLeaseId) : undefined;
-    const workspaceOwnership = issueControl?.activeWorkspaceOwnershipId
-      ? this.db.workspaceOwnership.getWorkspaceOwnership(issueControl.activeWorkspaceOwnershipId)
-      : undefined;
-    const mirroredStageRun = issueControl?.activeRunLeaseId ? this.db.issueWorkflows.getStageRun(issueControl.activeRunLeaseId) : undefined;
 
     return {
       ...(issueControl ? { issueControl } : {}),
       ...(runLease ? { runLease } : {}),
-      ...(workspaceOwnership ? { workspaceOwnership } : {}),
-      ...(mirroredStageRun ? { mirroredStageRun } : {}),
     };
   }
 
   private getActiveStageRunForIssue(issue: TrackedIssueRecord, ledger?: LedgerIssueContext): StageRunRecord | undefined {
     const context = ledger ?? this.getLedgerIssueContext(issue.projectId, issue.linearIssueId);
-    const activeStageRun = context.mirroredStageRun ?? this.synthesizeStageRunFromLease(context);
+    const activeStageRun = context.issueControl?.activeRunLeaseId
+      ? this.db.issueWorkflows.getStageRun(context.issueControl.activeRunLeaseId)
+      : undefined;
 
     if (!activeStageRun) {
       return undefined;
@@ -523,65 +519,16 @@ export class CliDataAccess {
       : undefined;
   }
 
-  private synthesizeStageRunFromLease(ledger: LedgerIssueContext): StageRunRecord | undefined {
-    if (!ledger.runLease) {
-      return undefined;
-    }
-
-    return {
-      id: -ledger.runLease.id,
-      pipelineRunId: 0,
-      projectId: ledger.runLease.projectId,
-      linearIssueId: ledger.runLease.linearIssueId,
-      workspaceId: 0,
-      stage: ledger.runLease.stage,
-      status:
-        ledger.runLease.status === "failed"
-          ? "failed"
-          : ledger.runLease.status === "completed" || ledger.runLease.status === "released" || ledger.runLease.status === "paused"
-            ? "completed"
-            : "running",
-      triggerWebhookId: "ledger-active-run",
-      workflowFile: ledger.runLease.workflowFile,
-      promptText: ledger.runLease.promptText,
-      ...(ledger.runLease.threadId ? { threadId: ledger.runLease.threadId } : {}),
-      ...(ledger.runLease.parentThreadId ? { parentThreadId: ledger.runLease.parentThreadId } : {}),
-      ...(ledger.runLease.turnId ? { turnId: ledger.runLease.turnId } : {}),
-      startedAt: ledger.runLease.startedAt,
-      ...(ledger.runLease.endedAt ? { endedAt: ledger.runLease.endedAt } : {}),
-    };
-  }
-
   private getWorkspaceForIssue(issue: TrackedIssueRecord, ledger?: LedgerIssueContext): WorkspaceRecord | undefined {
     const context = ledger ?? this.getLedgerIssueContext(issue.projectId, issue.linearIssueId);
-    if (!context.issueControl?.activeRunLeaseId) {
-      const activeWorkspace = this.db.issueWorkflows.getActiveWorkspaceForIssue(issue.projectId, issue.linearIssueId);
+    if (context.issueControl?.activeWorkspaceOwnershipId !== undefined) {
+      const activeWorkspace = this.db.issueWorkflows.getWorkspace(context.issueControl.activeWorkspaceOwnershipId);
       if (activeWorkspace) {
         return activeWorkspace;
       }
     }
 
-    const workspaceOwnership = context.workspaceOwnership;
-    if (!workspaceOwnership) {
-      return this.db.issueWorkflows.getActiveWorkspaceForIssue(issue.projectId, issue.linearIssueId);
-    }
-
-    return {
-      id: workspaceOwnership.id,
-      projectId: workspaceOwnership.projectId,
-      linearIssueId: workspaceOwnership.linearIssueId,
-      branchName: workspaceOwnership.branchName,
-      worktreePath: workspaceOwnership.worktreePath,
-      status:
-        workspaceOwnership.status === "released"
-          ? "closed"
-          : workspaceOwnership.status === "paused"
-            ? "paused"
-            : "active",
-      ...(context.runLease?.threadId ? { lastThreadId: context.runLease.threadId } : {}),
-      createdAt: workspaceOwnership.createdAt,
-      updatedAt: workspaceOwnership.updatedAt,
-    };
+    return this.db.issueWorkflows.getActiveWorkspaceForIssue(issue.projectId, issue.linearIssueId);
   }
 
   async connect(projectId?: string): Promise<ConnectResult> {

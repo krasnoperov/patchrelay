@@ -357,7 +357,7 @@ function createHarness() {
   });
   const publisher = new StageLifecyclePublisher(
     config,
-    { issueWorkflows: store, issueControl: store },
+    { workflowCoordinator: store, issueWorkflows: store, issueControl: store },
     {
       async forProject(projectId: string) {
         return projectId === "proj" ? linear : undefined;
@@ -472,7 +472,7 @@ test("markStageActive and publishStageCompletion no-op cleanly when workflow sta
 
   const publisher = new StageLifecyclePublisher(
     config,
-    { issueWorkflows: store, issueControl: store },
+    { workflowCoordinator: store, issueWorkflows: store, issueControl: store },
     { async forProject() { return undefined; } },
     createCaptureLogger().logger,
   );

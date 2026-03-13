@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { IssueControlStoreProvider, ObligationStoreProvider, RunLeaseStoreProvider } from "./ledger-ports.ts";
-import type { IssueWorkflowWebhookStoreProvider } from "./workflow-ports.ts";
+import type { IssueWorkflowQueryStoreProvider } from "./workflow-ports.ts";
 import type { StageAgentActivityPublisher } from "./stage-agent-activity-publisher.ts";
 import type { StageTurnInputDispatcher } from "./stage-turn-input-dispatcher.ts";
 import { triggerEventAllowed } from "./project-resolution.ts";
@@ -14,7 +14,7 @@ function trimPrompt(value: string | undefined): string | undefined {
 
 export class AgentSessionWebhookHandler {
   constructor(
-    private readonly stores: IssueWorkflowWebhookStoreProvider &
+    private readonly stores: IssueWorkflowQueryStoreProvider &
       IssueControlStoreProvider &
       ObligationStoreProvider &
       RunLeaseStoreProvider,

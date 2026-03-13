@@ -240,7 +240,7 @@ function createService(baseDir: string) {
 }
 
 function queueIssue(db: PatchRelayDatabase): void {
-  const issue = db.issueWorkflows.recordDesiredStage({
+  const issue = db.workflowCoordinator.recordDesiredStage({
     projectId: "usertold",
     linearIssueId: "issue_1",
     issueKey: "USE-90",
