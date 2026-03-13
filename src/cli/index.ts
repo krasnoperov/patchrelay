@@ -1,4 +1,5 @@
 import { loadConfig, type ConfigLoadProfile } from "../config.ts";
+import { getBuildInfo } from "../build-info.ts";
 import { runPreflight } from "../preflight.ts";
 import { assertKnownFlags, parseArgs, resolveCommand } from "./args.ts";
 import { handleConnectCommand, handleInstallationsCommand } from "./commands/connect.ts";
@@ -50,6 +51,7 @@ function helpText(): string {
     "  upserts the repo config and reuses or starts the Linear connection flow.",
     "",
     "Commands:",
+    "  version [--json]                                        Show the installed PatchRelay build version",
     "  init <public-base-url> [--force] [--json]                Bootstrap the machine-level PatchRelay home",
     "  project apply <id> <repo-path> [--issue-prefix <prefixes>] [--team-id <ids>] [--no-connect] [--no-open] [--timeout <seconds>] [--json]",
     "                                                           Upsert one local repository and connect it to Linear when ready",
@@ -79,6 +81,8 @@ function helpText(): string {
 
 function getCommandConfigProfile(command: string): ConfigLoadProfile {
   switch (command) {
+    case "version":
+      return "service";
     case "doctor":
     case "install-service":
       return "doctor";
@@ -102,6 +106,9 @@ function getCommandConfigProfile(command: string): ConfigLoadProfile {
 
 function validateFlags(command: string, commandArgs: string[], parsed: ReturnType<typeof parseArgs>): void {
   switch (command) {
+    case "version":
+      assertKnownFlags(parsed, command, ["json"]);
+      return;
     case "help":
     case "serve":
       assertKnownFlags(parsed, command, []);
@@ -180,8 +187,14 @@ export async function runCli(
     writeOutput(stderr, `${error instanceof Error ? error.message : String(error)}\n`);
     return 1;
   }
+  const json = parsed.flags.get("json") === true;
   if (command === "help") {
     writeOutput(stdout, `${helpText()}\n`);
+    return 0;
+  }
+  if (command === "version") {
+    const buildInfo = getBuildInfo();
+    writeOutput(stdout, json ? formatJson(buildInfo) : `${buildInfo.version}\n`);
     return 0;
   }
   if (command === "serve") {
@@ -189,7 +202,6 @@ export async function runCli(
   }
 
   const runInteractive = options?.runInteractive ?? runInteractiveCommand;
-  const json = parsed.flags.get("json") === true;
 
   if (command === "init") {
     return await handleInitCommand({

@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync }
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { getBuildInfo } from "../src/build-info.ts";
 import pino from "pino";
 import { runCli } from "../src/cli/index.ts";
 import { loadConfig } from "../src/config.ts";
@@ -930,12 +931,25 @@ test("cli help explains the setup sequence and default behavior", async () => {
   assert.equal(await runCli([], { stdout: stdout.stream, stderr: stderr.stream }), 0);
   assert.equal(stderr.read(), "");
   assert.match(stdout.read(), /First-time setup:/);
+  assert.match(stdout.read(), /version \[--json\]/);
   assert.match(stdout.read(), /patchrelay init <public-https-url>/);
   assert.match(stdout.read(), /patchrelay project apply <id> <repo-path>/);
   assert.match(
     stdout.read(),
     /In the normal\s+case you only need the public URL, the required secrets, and at least one project\./,
   );
+});
+
+test("cli version prints the installed build version in text and json", async () => {
+  const buildInfo = getBuildInfo();
+
+  const stdout = createBufferStream();
+  assert.equal(await runCli(["version"], { stdout: stdout.stream, stderr: createBufferStream().stream }), 0);
+  assert.equal(stdout.read().trim(), buildInfo.version);
+
+  const jsonOut = createBufferStream();
+  assert.equal(await runCli(["version", "--json"], { stdout: jsonOut.stream, stderr: createBufferStream().stream }), 0);
+  assert.match(jsonOut.read(), new RegExp(`"version":\\s*"${buildInfo.version.replaceAll(".", "\\.")}"`));
 });
 
 test("cli init writes XDG config files and install-service manages the user unit", async () => {
