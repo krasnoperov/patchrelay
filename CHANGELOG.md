@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.5.1...patchrelay-v0.6.0) (2026-03-13)
+
+
+### Features
+
+* add version CLI command ([66447c7](https://github.com/krasnoperov/patchrelay/commit/66447c7bdca8764794788d86aa1727545e3ba1e3))
+
 ## [0.5.1](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.5.0...patchrelay-v0.5.1) (2026-03-13)
 
 
