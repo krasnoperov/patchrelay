@@ -1,6 +1,8 @@
+import { existsSync } from "node:fs";
 import pino from "pino";
 import { CodexAppServerClient } from "../codex-app-server.ts";
 import { PatchRelayDatabase } from "../db.ts";
+import { WorktreeManager } from "../worktree-manager.ts";
 import type {
   AppConfig,
   CodexThreadItem,
@@ -346,15 +348,46 @@ export class CliDataAccess {
       return undefined;
     }
 
-    const ledger = this.getLedgerIssueContext(worktree.issue.projectId, worktree.issue.linearIssueId);
-    const resumeThreadId =
-      (ledger.issueControl?.activeRunLeaseId ? ledger.runLease?.threadId : undefined) ??
-      worktree.workspace.lastThreadId ??
-      worktree.issue.latestThreadId ??
-      ledger.runLease?.threadId;
+    const resumeThreadId = this.getStoredOpenThreadId(worktree);
     return {
       ...worktree,
       ...(resumeThreadId ? { resumeThreadId } : {}),
+    };
+  }
+
+  async prepareOpen(issueKey: string): Promise<OpenResult | undefined> {
+    const worktree = this.worktree(issueKey);
+    if (!worktree) {
+      return undefined;
+    }
+
+    await this.ensureOpenWorktree(worktree);
+
+    const existingThreadId = await this.resolveStoredOpenThreadId(worktree);
+    if (existingThreadId) {
+      return {
+        ...worktree,
+        resumeThreadId: existingThreadId,
+      };
+    }
+
+    const codex = await this.getCodex();
+    const thread = await codex.startThread({
+      cwd: worktree.workspace.worktreePath,
+    });
+    this.db.issueSessions.upsertIssueSession({
+      projectId: worktree.issue.projectId,
+      linearIssueId: worktree.issue.linearIssueId,
+      workspaceOwnershipId: worktree.workspace.id,
+      threadId: thread.id,
+      source: "operator_open",
+      ...(worktree.issue.activeAgentSessionId ? { linkedAgentSessionId: worktree.issue.activeAgentSessionId } : {}),
+    });
+    this.db.issueSessions.touchIssueSession(thread.id);
+
+    return {
+      ...worktree,
+      resumeThreadId: thread.id,
     };
   }
 
@@ -529,6 +562,96 @@ export class CliDataAccess {
     }
 
     return this.db.issueWorkflows.getActiveWorkspaceForIssue(issue.projectId, issue.linearIssueId);
+  }
+
+  private getStoredOpenThreadId(worktree: WorktreeResult): string | undefined {
+    return this.listOpenCandidateThreadIds(worktree).at(0);
+  }
+
+  private async resolveStoredOpenThreadId(worktree: WorktreeResult): Promise<string | undefined> {
+    for (const threadId of this.listOpenCandidateThreadIds(worktree)) {
+      if (!(await this.canReadThread(threadId))) {
+        continue;
+      }
+
+      this.recordOpenThreadForIssue(worktree, threadId);
+      return threadId;
+    }
+
+    return undefined;
+  }
+
+  private listOpenCandidateThreadIds(worktree: WorktreeResult): string[] {
+    const ledger = this.getLedgerIssueContext(worktree.issue.projectId, worktree.issue.linearIssueId);
+    const sessions = this.db.issueSessions.listIssueSessionsForIssue(worktree.issue.projectId, worktree.issue.linearIssueId);
+    const candidates = [
+      ledger.issueControl?.activeRunLeaseId ? ledger.runLease?.threadId : undefined,
+      ...sessions.map((session) => session.threadId),
+      worktree.workspace.lastThreadId,
+      worktree.issue.latestThreadId,
+      ledger.runLease?.threadId,
+    ];
+
+    const seen = new Set<string>();
+    const ordered: string[] = [];
+    for (const candidate of candidates) {
+      if (!candidate || seen.has(candidate)) {
+        continue;
+      }
+      seen.add(candidate);
+      ordered.push(candidate);
+    }
+    return ordered;
+  }
+
+  private recordOpenThreadForIssue(worktree: WorktreeResult, threadId: string): void {
+    const existing = this.db.issueSessions.getIssueSessionByThreadId(threadId);
+    if (existing) {
+      this.db.issueSessions.touchIssueSession(threadId);
+      return;
+    }
+
+    const runLease = this.db.runLeases.getRunLeaseByThreadId(threadId);
+    this.db.issueSessions.upsertIssueSession({
+      projectId: worktree.issue.projectId,
+      linearIssueId: worktree.issue.linearIssueId,
+      workspaceOwnershipId: runLease?.workspaceOwnershipId ?? worktree.workspace.id,
+      threadId,
+      source: runLease ? "stage_run" : "operator_open",
+      ...(runLease?.id !== undefined ? { runLeaseId: runLease.id } : {}),
+      ...(runLease?.parentThreadId ? { parentThreadId: runLease.parentThreadId } : {}),
+      ...(worktree.issue.activeAgentSessionId ? { linkedAgentSessionId: worktree.issue.activeAgentSessionId } : {}),
+    });
+    this.db.issueSessions.touchIssueSession(threadId);
+  }
+
+  private async canReadThread(threadId: string): Promise<boolean> {
+    try {
+      const codex = await this.getCodex();
+      await codex.readThread(threadId, false);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async ensureOpenWorktree(worktree: WorktreeResult): Promise<void> {
+    if (existsSync(worktree.workspace.worktreePath)) {
+      return;
+    }
+
+    const project = this.config.projects.find((entry) => entry.id === worktree.repoId);
+    if (!project) {
+      throw new Error(`Project not found for ${worktree.repoId}`);
+    }
+
+    const worktreeManager = new WorktreeManager(this.config);
+    await worktreeManager.ensureIssueWorktree(
+      project.repoPath,
+      project.worktreeRoot,
+      worktree.workspace.worktreePath,
+      worktree.workspace.branchName,
+    );
   }
 
   async connect(projectId?: string): Promise<ConnectResult> {

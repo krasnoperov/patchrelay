@@ -4,6 +4,7 @@ export type EventReceiptAcceptanceStatus = "accepted" | "duplicate" | "rejected"
 export type EventReceiptProcessingStatus = "pending" | "processed" | "failed";
 export type RunLeaseStatus = "queued" | "running" | "paused" | "completed" | "failed" | "released";
 export type ObligationStatus = "pending" | "in_progress" | "completed" | "failed" | "cancelled";
+export type IssueSessionSource = "stage_run" | "operator_open";
 
 export interface EventReceiptRecord {
   id: number;
@@ -104,6 +105,21 @@ export interface WorkspaceRecord {
   lastThreadId?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface IssueSessionRecord {
+  id: number;
+  projectId: string;
+  linearIssueId: string;
+  workspaceOwnershipId: number;
+  threadId: string;
+  source: IssueSessionSource;
+  runLeaseId?: number;
+  parentThreadId?: string;
+  linkedAgentSessionId?: string;
+  createdAt: string;
+  updatedAt: string;
+  lastOpenedAt?: string;
 }
 
 export interface RunLeaseRecord {

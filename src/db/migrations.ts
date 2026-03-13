@@ -93,6 +93,23 @@ CREATE TABLE IF NOT EXISTS run_leases (
   FOREIGN KEY(trigger_receipt_id) REFERENCES event_receipts(id) ON DELETE SET NULL
 );
 
+CREATE TABLE IF NOT EXISTS issue_sessions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id TEXT NOT NULL,
+  linear_issue_id TEXT NOT NULL,
+  workspace_ownership_id INTEGER NOT NULL,
+  run_lease_id INTEGER,
+  thread_id TEXT NOT NULL UNIQUE,
+  parent_thread_id TEXT,
+  source TEXT NOT NULL,
+  linked_agent_session_id TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  last_opened_at TEXT,
+  FOREIGN KEY(workspace_ownership_id) REFERENCES workspace_ownership(id) ON DELETE CASCADE,
+  FOREIGN KEY(run_lease_id) REFERENCES run_leases(id) ON DELETE SET NULL
+);
+
 CREATE TABLE IF NOT EXISTS run_reports (
   run_lease_id INTEGER PRIMARY KEY,
   summary_json TEXT,
@@ -172,6 +189,8 @@ CREATE TABLE IF NOT EXISTS oauth_states (
 CREATE INDEX IF NOT EXISTS idx_event_receipts_project_issue ON event_receipts(project_id, linear_issue_id);
 CREATE INDEX IF NOT EXISTS idx_issue_control_ready ON issue_control(desired_stage, active_run_lease_id);
 CREATE INDEX IF NOT EXISTS idx_issue_projection_issue_key ON issue_projection(issue_key);
+CREATE INDEX IF NOT EXISTS idx_issue_sessions_issue ON issue_sessions(project_id, linear_issue_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_issue_sessions_last_opened ON issue_sessions(project_id, linear_issue_id, last_opened_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_run_leases_active ON run_leases(status, project_id, linear_issue_id);
 CREATE INDEX IF NOT EXISTS idx_run_leases_thread ON run_leases(thread_id);
 CREATE INDEX IF NOT EXISTS idx_run_thread_events_run ON run_thread_events(run_lease_id, id);

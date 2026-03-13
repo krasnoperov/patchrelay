@@ -108,7 +108,7 @@ test("db ports preserve Linear installation linking and OAuth state lifecycle", 
 });
 
 test("db ports preserve issue workflow execution and query behavior", () => {
-  const { baseDir, stores } = createHarness();
+  const { baseDir, db, stores } = createHarness();
   try {
     const workflowCoordinator: IssueWorkflowCoordinatorProvider["workflowCoordinator"] = stores.workflowCoordinator;
     const workflowQuery: IssueWorkflowQueryStoreProvider["issueWorkflows"] = stores.issueWorkflows;
@@ -160,12 +160,15 @@ test("db ports preserve issue workflow execution and query behavior", () => {
 
     const latestStage = workflowQuery.getLatestStageRunForIssue("proj", "issue-1");
     const overview = workflowQuery.getIssueOverview("APP-1");
+    const session = db.issueSessions.getIssueSessionByThreadId("thread-1");
 
     assert.equal(latestStage?.threadId, "thread-1");
     assert.equal(latestStage?.status, "completed");
     assert.equal(overview?.issue.issueKey, "APP-1");
     assert.equal(overview?.workspace?.branchName, "app/APP-1");
     assert.equal(overview?.pipeline?.status, "completed");
+    assert.equal(session?.runLeaseId, claim.stageRun.id);
+    assert.equal(session?.source, "stage_run");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

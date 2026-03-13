@@ -1,4 +1,4 @@
-import type { EventReceiptRecord, IssueControlRecord, ObligationRecord, RunLeaseRecord, WorkspaceOwnershipRecord } from "./types.ts";
+import type { EventReceiptRecord, IssueControlRecord, IssueSessionRecord, ObligationRecord, RunLeaseRecord, WorkspaceOwnershipRecord } from "./types.ts";
 import type { IssueLifecycleStatus, WorkflowStage } from "./workflow-types.ts";
 
 export interface EventReceiptStore {
@@ -60,6 +60,26 @@ export interface WorkspaceOwnershipStoreProvider {
   workspaceOwnership: WorkspaceOwnershipStore;
 }
 
+export interface IssueSessionStore {
+  upsertIssueSession(params: {
+    projectId: string;
+    linearIssueId: string;
+    workspaceOwnershipId: number;
+    threadId: string;
+    source: IssueSessionRecord["source"];
+    runLeaseId?: number | null;
+    parentThreadId?: string | null;
+    linkedAgentSessionId?: string | null;
+  }): IssueSessionRecord;
+  getIssueSessionByThreadId(threadId: string): IssueSessionRecord | undefined;
+  listIssueSessionsForIssue(projectId: string, linearIssueId: string): IssueSessionRecord[];
+  touchIssueSession(threadId: string): IssueSessionRecord | undefined;
+}
+
+export interface IssueSessionStoreProvider {
+  issueSessions: IssueSessionStore;
+}
+
 export interface RunLeaseStore {
   createRunLease(params: {
     issueControlId: number;
@@ -119,7 +139,8 @@ export interface ObligationStoreProvider {
   obligations: ObligationStore;
 }
 
-export interface AuthoritativeLedgerStore extends EventReceiptStore, IssueControlStore, WorkspaceOwnershipStore, RunLeaseStore, ObligationStore {}
+export interface AuthoritativeLedgerStore
+  extends EventReceiptStore, IssueControlStore, WorkspaceOwnershipStore, IssueSessionStore, RunLeaseStore, ObligationStore {}
 
 export interface AuthoritativeLedgerStoreProvider {
   authoritativeLedger: AuthoritativeLedgerStore;

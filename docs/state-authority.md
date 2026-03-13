@@ -22,6 +22,7 @@ In PatchRelay, authoritative state includes:
 - active issue-to-workspace ownership
 - active issue-to-stage ownership
 - active issue-to-thread correlation
+- persisted issue-to-session handoff history used to reopen the right Codex session in the issue worktree
 - queued user or Linear input that has not yet been delivered to a live turn
 - Linear installation links, OAuth state, and encrypted installation tokens
 - service-owned workflow sync metadata such as the status comment PatchRelay is expected to refresh
@@ -97,6 +98,8 @@ The current persistence model is closest to the following split:
   service-owned Linear anchors.
 - `workspace_ownership`
   Needed for durable issue-to-worktree ownership.
+- `issue_sessions`
+  Needed for restart-safe issue-to-session handoff and deterministic `patchrelay open` behavior.
 - `run_leases`
   Needed for issue-to-thread correlation and restart-safe execution ownership.
 - `obligations`

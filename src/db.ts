@@ -15,6 +15,7 @@ export class PatchRelayDatabase {
   readonly eventReceipts: AuthoritativeLedgerStore;
   readonly issueControl: AuthoritativeLedgerStore;
   readonly workspaceOwnership: AuthoritativeLedgerStore;
+  readonly issueSessions: AuthoritativeLedgerStore;
   readonly runLeases: AuthoritativeLedgerStore;
   readonly obligations: AuthoritativeLedgerStore;
   readonly webhookEvents: WebhookEventStore;
@@ -36,6 +37,7 @@ export class PatchRelayDatabase {
     this.eventReceipts = this.authoritativeLedger;
     this.issueControl = this.authoritativeLedger;
     this.workspaceOwnership = this.authoritativeLedger;
+    this.issueSessions = this.authoritativeLedger;
     this.runLeases = this.authoritativeLedger;
     this.obligations = this.authoritativeLedger;
     this.webhookEvents = new WebhookEventStore(this.connection);
