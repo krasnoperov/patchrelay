@@ -320,6 +320,59 @@ test("webhook processor records desired stage and enqueues matching issues", asy
   }
 });
 
+test("webhook processor enqueues delegated issueCreated events when Start matches a workflow", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-processor-issue-created-"));
+  try {
+    const { config, db, processor, enqueuedIssues } = createHarness(baseDir);
+    config.projects[0]!.triggerEvents = [...config.projects[0]!.triggerEvents, "issueCreated"];
+    installPatchRelayApp(db);
+    const receipt = db.eventReceipts.insertEventReceipt({
+      source: "linear-webhook",
+      externalId: "delivery-created-start",
+      eventType: "Issue.create",
+      receivedAt: new Date().toISOString(),
+      acceptanceStatus: "accepted",
+      linearIssueId: "issue_1",
+    });
+    const event = db.webhookEvents.insertWebhookEvent({
+      webhookId: "delivery-created-start",
+      receivedAt: new Date().toISOString(),
+      eventType: "Issue.create",
+      issueId: "issue_1",
+      headersJson: "{}",
+      payloadJson: JSON.stringify({
+        action: "create",
+        type: "Issue",
+        createdAt: "2026-03-08T12:00:00.000Z",
+        webhookTimestamp: 1000,
+        data: {
+          id: "issue_1",
+          identifier: "USE-25",
+          title: "Build app server orchestration",
+          url: "https://linear.app/example/issue/USE-25",
+          team: { key: "USE" },
+          delegate: { id: "patchrelay-app", name: "PatchRelay" },
+          state: { name: "Start" },
+        },
+      }),
+      signatureValid: true,
+      dedupeStatus: "accepted",
+    });
+
+    await processor.processWebhookEvent(event.id);
+
+    const issue = db.issueWorkflows.getTrackedIssue("usertold", "issue_1");
+    const issueControl = db.issueControl.getIssueControl("usertold", "issue_1");
+    assert.equal(issue?.desiredStage, "development");
+    assert.equal(issueControl?.desiredStage, "development");
+    assert.equal(issueControl?.desiredReceiptId, receipt.id);
+    assert.equal(issueControl?.lifecycleStatus, "queued");
+    assert.deepEqual(enqueuedIssues, [{ projectId: "usertold", issueId: "issue_1" }]);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("webhook processor routes prompted agent follow-ups into the active stage", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-processor-active-"));
   try {
