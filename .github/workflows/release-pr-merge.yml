@@ -86,17 +86,22 @@ jobs:
                 '--repo',
                 repo,
                 '--state',
-                'open',
+                'all',
                 '--base',
                 'main',
                 '--json',
-                'number,title,isDraft,labels,headRefName,headRefOid,mergeStateStatus',
+                'number,title,state,isDraft,labels,headRefName,headRefOid,mergeStateStatus',
               ]);
 
               const pr = prs.find((candidate) => candidate.headRefName === headBranch);
               if (!pr) {
                 await sleep(10000);
                 continue;
+              }
+
+              if (pr.state !== 'OPEN') {
+                console.log(`Skipping ${pr.state.toLowerCase()} release PR #${pr.number} for ${headBranch}`);
+                process.exit(0);
               }
 
               if (pr.headRefOid !== headSha) {
