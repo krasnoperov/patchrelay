@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.3](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.7.2...patchrelay-v0.7.3) (2026-03-14)
+
+
+### Bug Fixes
+
+* enqueue Start workflows from issue creation by default ([#28](https://github.com/krasnoperov/patchrelay/issues/28)) ([25edf2b](https://github.com/krasnoperov/patchrelay/commit/25edf2bd5e4dc3eecc4343c8f21aa59045242c1d))
+* recover interrupted codex runs after restart ([#30](https://github.com/krasnoperov/patchrelay/issues/30)) ([38d7ddd](https://github.com/krasnoperov/patchrelay/commit/38d7dddbc3dfbc51ae5870ff801f8ff9002a149d))
+
 ## [0.7.2](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.7.1...patchrelay-v0.7.2) (2026-03-14)
 
 
