@@ -114,7 +114,7 @@ const configSchema = z.object({
 
 function defaultTriggerEvents(actor: "user" | "app"): AppConfig["projects"][number]["triggerEvents"] {
   if (actor === "app") {
-    return ["agentSessionCreated", "agentPrompted", "statusChanged"];
+    return ["issueCreated", "agentSessionCreated", "agentPrompted", "statusChanged"];
   }
 
   return ["statusChanged"];
