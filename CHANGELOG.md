@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.5](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.7.4...patchrelay-v0.7.5) (2026-03-14)
+
+
+### Bug Fixes
+
+* skip stale release-pr merge watchers ([#35](https://github.com/krasnoperov/patchrelay/issues/35)) ([7104ccc](https://github.com/krasnoperov/patchrelay/commit/7104ccc8fbe269c07032e203600e1932aa64328b))
+
 ## [0.7.4](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.7.3...patchrelay-v0.7.4) (2026-03-14)
 
 
