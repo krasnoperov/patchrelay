@@ -23,6 +23,19 @@ jobs:
     name: Release Please
     runs-on: ubuntu-latest
     steps:
+      - name: Create release app token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
+          permission-workflows: write
+
       - name: Check out repository
         uses: actions/checkout@v5
         with:
@@ -32,7 +45,7 @@ jobs:
         id: release
         uses: googleapis/release-please-action@v4.4.0
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ steps.app-token.outputs.token }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 

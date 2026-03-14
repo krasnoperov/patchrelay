@@ -29,7 +29,8 @@ Repository release means:
 
 - work lands on `main`
 - Release Please opens or updates the release PR
-- the release PR is merged
+- CI runs on the release PR branch and PR
+- the release PR is merged, either manually or by automation
 - GitHub Actions publishes the package to npm
 
 Machine upgrade means:
@@ -109,11 +110,27 @@ After the releasable commit lands on `main`, Release Please runs from:
 Expected behavior:
 
 1. Release Please opens or updates a release PR.
-2. That release PR bumps the version and changelog.
-3. Once the release PR is merged, the workflow checks out the release tag and runs:
+2. CI runs on the release PR branch and/or PR using the same required checks as any other PR to `main`.
+3. That release PR only changes the release files:
+   - `CHANGELOG.md`
+   - `package.json`
+   - `package-lock.json`
+   - `.release-please-manifest.json`
+4. Once the release PR is merged, the workflow checks out the release tag and runs:
    - `npm ci`
    - `npm run ci`
    - `npm publish --access public`
+
+In the normal automated path:
+
+- Release Please uses the configured GitHub App credentials instead of the default `GITHUB_TOKEN`
+- CI runs on the Release Please branch
+- the `Merge Release PR` workflow merges a clean release PR automatically after CI passes
+
+Required repository secrets for that automation:
+
+- `RELEASE_APP_ID`
+- `RELEASE_APP_PRIVATE_KEY`
 
 If no release PR appears:
 
@@ -246,8 +263,8 @@ Use this as the short operator checklist:
 
 1. `npm run ci`
 2. merge releasable PR to `main`
-3. wait for Release Please PR
-4. merge the release PR
+3. wait for Release Please PR and its CI
+4. confirm the release PR merged, either automatically or manually
 5. confirm `npm view patchrelay version`
 6. `npm install -g patchrelay@<published-version>`
 7. `patchrelay restart-service`
