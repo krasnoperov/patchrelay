@@ -71,7 +71,15 @@ export class ServiceStageRunner {
       return;
     }
 
-    const plan = buildStageLaunchPlan(project, issue, desiredStage);
+    const existingWorkspace = this.stores.workspaceOwnership.getWorkspaceOwnershipForIssue(item.projectId, item.issueId);
+    const defaultPlan = buildStageLaunchPlan(project, issue, desiredStage);
+    const plan = existingWorkspace
+      ? {
+          ...defaultPlan,
+          branchName: existingWorkspace.branchName,
+          worktreePath: existingWorkspace.worktreePath,
+        }
+      : defaultPlan;
     this.feed?.publish({
       level: "info",
       kind: "stage",
@@ -99,7 +107,9 @@ export class ServiceStageRunner {
     let threadLaunch;
     let turn;
     try {
-      await this.worktreeManager.ensureIssueWorktree(project.repoPath, project.worktreeRoot, plan.worktreePath, plan.branchName);
+      await this.worktreeManager.ensureIssueWorktree(project.repoPath, project.worktreeRoot, plan.worktreePath, plan.branchName, {
+        allowExistingOutsideRoot: existingWorkspace !== undefined,
+      });
       await this.lifecyclePublisher.markStageActive(project, claim.issue, claim.stageRun);
 
       threadLaunch = await this.launchStageThread(item.projectId, item.issueId, claim.stageRun.id, plan.worktreePath, issue.issueKey);

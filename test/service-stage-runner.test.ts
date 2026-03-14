@@ -380,6 +380,47 @@ test("stage runner launches a queued ledger intent and records active lease owne
   }
 });
 
+test("stage runner reuses the authoritative workspace path when config defaults drift", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-stage-runner-reuse-owned-worktree-"));
+  try {
+    const { config, db, codex, runner } = createHarness(baseDir);
+    const legacyRoot = path.join(baseDir, "legacy-worktrees");
+    const legacyPath = path.join(legacyRoot, "USE-25");
+    const branchName = "use/USE-25-build-app-server-orchestration";
+    mkdirSync(legacyRoot, { recursive: true });
+    execFileSync("git", ["-C", config.projects[0]!.repoPath, "worktree", "add", "--force", "-B", branchName, legacyPath, "HEAD"], {
+      stdio: "ignore",
+    });
+    config.projects[0]!.worktreeRoot = path.join(baseDir, "xdg-worktrees");
+    mkdirSync(config.projects[0]!.worktreeRoot, { recursive: true });
+
+    queueDesiredStage(db);
+    const workspace = db.workspaceOwnership.upsertWorkspaceOwnership({
+      projectId: "usertold",
+      linearIssueId: "issue-1",
+      branchName,
+      worktreePath: legacyPath,
+      status: "paused",
+    });
+
+    await runner.run({ projectId: "usertold", issueId: "issue-1" });
+
+    assert.equal(codex.startedThreads.length, 1);
+    assert.equal(codex.startedThreads[0]?.cwd, legacyPath);
+    assert.equal(codex.startedTurns.length, 1);
+    assert.equal(codex.startedTurns[0]?.cwd, legacyPath);
+
+    const issueControl = db.issueControl.getIssueControl("usertold", "issue-1");
+    assert.equal(issueControl?.activeWorkspaceOwnershipId, workspace.id);
+
+    const refreshedWorkspace = db.workspaceOwnership.getWorkspaceOwnership(workspace.id);
+    assert.equal(refreshedWorkspace?.worktreePath, legacyPath);
+    assert.equal(refreshedWorkspace?.branchName, branchName);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("stage runner persists and delivers pending launch input through the obligation path", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-stage-runner-pending-input-"));
   try {

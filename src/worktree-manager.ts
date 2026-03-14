@@ -6,9 +6,17 @@ import { ensureDir, execCommand } from "./utils.ts";
 export class WorktreeManager {
   constructor(private readonly config: Pick<AppConfig, "runner">) {}
 
-  async ensureIssueWorktree(repoPath: string, worktreeRoot: string, worktreePath: string, branchName: string): Promise<void> {
+  async ensureIssueWorktree(
+    repoPath: string,
+    worktreeRoot: string,
+    worktreePath: string,
+    branchName: string,
+    options?: {
+      allowExistingOutsideRoot?: boolean;
+    },
+  ): Promise<void> {
     if (existsSync(worktreePath)) {
-      await this.assertTrustedExistingWorktree(repoPath, worktreeRoot, worktreePath);
+      await this.assertTrustedExistingWorktree(repoPath, worktreeRoot, worktreePath, options);
       return;
     }
 
@@ -18,7 +26,14 @@ export class WorktreeManager {
     });
   }
 
-  private async assertTrustedExistingWorktree(repoPath: string, worktreeRoot: string, worktreePath: string): Promise<void> {
+  private async assertTrustedExistingWorktree(
+    repoPath: string,
+    worktreeRoot: string,
+    worktreePath: string,
+    options?: {
+      allowExistingOutsideRoot?: boolean;
+    },
+  ): Promise<void> {
     const worktreeStats = lstatSync(worktreePath);
     if (worktreeStats.isSymbolicLink()) {
       throw new Error(`Refusing to reuse symlinked worktree path: ${worktreePath}`);
@@ -27,10 +42,12 @@ export class WorktreeManager {
       throw new Error(`Refusing to reuse non-directory worktree path: ${worktreePath}`);
     }
 
-    const resolvedRoot = realpathSync(worktreeRoot);
     const resolvedWorktree = realpathSync(worktreePath);
-    if (!isPathWithinRoot(resolvedRoot, resolvedWorktree)) {
-      throw new Error(`Refusing to reuse worktree outside configured root: ${worktreePath}`);
+    if (!options?.allowExistingOutsideRoot) {
+      const resolvedRoot = realpathSync(worktreeRoot);
+      if (!isPathWithinRoot(resolvedRoot, resolvedWorktree)) {
+        throw new Error(`Refusing to reuse worktree outside configured root: ${worktreePath}`);
+      }
     }
 
     const listedWorktrees = await this.listRegisteredWorktrees(repoPath);
