@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.7.4](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.7.3...patchrelay-v0.7.4) (2026-03-14)
+
+
+### Bug Fixes
+
+* align release app token permissions ([#32](https://github.com/krasnoperov/patchrelay/issues/32)) ([4b89875](https://github.com/krasnoperov/patchrelay/commit/4b89875f41257acc98a5fabded29137a514902f1))
+* normalize release-please automation ([#31](https://github.com/krasnoperov/patchrelay/issues/31)) ([6a415f8](https://github.com/krasnoperov/patchrelay/commit/6a415f8d967cfa1a83bb671c69de61002bfb6ade))
+* use default release app permissions ([#33](https://github.com/krasnoperov/patchrelay/issues/33)) ([b2b3ad6](https://github.com/krasnoperov/patchrelay/commit/b2b3ad69a41621c748810546963faea0278c5c03))
+
 ## [0.7.3](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.7.2...patchrelay-v0.7.3) (2026-03-14)
 
 
