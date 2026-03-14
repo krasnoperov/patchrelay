@@ -8,6 +8,7 @@ Use these docs selectively:
 - Read [docs/module-map.md](./docs/module-map.md) before making structural or cross-module changes.
 - Read [docs/state-authority.md](./docs/state-authority.md) before changing persistence, reconciliation, or ownership logic.
 - Read [docs/persistence-audit.md](./docs/persistence-audit.md) when adding or removing stored fields, changing DB tables, or reclassifying data as authoritative versus derived.
+- Read [docs/shipping.md](./docs/shipping.md) when the task is to release PatchRelay, publish it to npm, or upgrade a live PatchRelay install.
 
 Working guidance:
 

@@ -7,6 +7,7 @@ This is the canonical install and runtime guide for PatchRelay.
 PatchRelay is designed to run on infrastructure you control, close to the repositories and deployment surface that Codex needs to access. In harness terms, self-hosting matters because PatchRelay is the execution system around the model: it routes work, prepares durable workspaces, carries forward state, and keeps runs inspectable in the real environment where the code lives.
 
 For the Linear OAuth app and delegation model, use [linear-agent-onboarding.md](./linear-agent-onboarding.md).
+For shipping updates to a live PatchRelay install, use [shipping.md](./shipping.md).
 
 ## Deployment Shape
 

@@ -12,9 +12,11 @@ import type {
 } from "../src/types.ts";
 
 class FakeCodexClient {
+  readonly resumedThreads: string[] = [];
+
   constructor(
     private readonly threads: Map<string, CodexThreadSummary>,
-    private readonly options?: { throwOnRead?: boolean },
+    private readonly options?: { throwOnRead?: boolean; resumableThreads?: Map<string, CodexThreadSummary> },
   ) {}
 
   async readThread(threadId: string): Promise<CodexThreadSummary> {
@@ -26,6 +28,16 @@ class FakeCodexClient {
       throw new Error(`Missing thread ${threadId}`);
     }
     return thread;
+  }
+
+  async resumeThread(threadId: string): Promise<CodexThreadSummary> {
+    this.resumedThreads.push(threadId);
+    const resumed = this.options?.resumableThreads?.get(threadId) ?? this.threads.get(threadId);
+    if (!resumed) {
+      throw new Error(`Unable to resume ${threadId}`);
+    }
+    this.threads.set(threadId, resumed);
+    return resumed;
   }
 }
 
@@ -274,6 +286,97 @@ test("buildReconciliationSnapshot preserves transient Codex lookup failures as r
 
   assert.equal(snapshot?.input.live?.codex?.status, "error");
   assert.match(snapshot?.input.live?.codex?.errorMessage ?? "", /Transient read failure/);
+});
+
+test("buildReconciliationSnapshot attempts to resume a missing thread from the ledger worktree", async () => {
+  const issueControl: IssueControlRecord = {
+    id: 1,
+    projectId: "proj",
+    linearIssueId: "issue-1",
+    activeRunLeaseId: 2,
+    lifecycleStatus: "running",
+    updatedAt: "2026-03-12T00:00:00.000Z",
+  };
+  const runLease: RunLeaseRecord = {
+    id: 2,
+    issueControlId: 1,
+    projectId: "proj",
+    linearIssueId: "issue-1",
+    workspaceOwnershipId: 3,
+    stage: "development",
+    status: "running",
+    threadId: "thread-1",
+    startedAt: "2026-03-12T00:00:00.000Z",
+  };
+  const workspace: WorkspaceOwnershipRecord = {
+    id: 3,
+    projectId: "proj",
+    linearIssueId: "issue-1",
+    branchName: "app/ISSUE-1",
+    worktreePath: "/tmp/worktree",
+    status: "active",
+    currentRunLeaseId: 2,
+    createdAt: "2026-03-12T00:00:00.000Z",
+    updatedAt: "2026-03-12T00:00:00.000Z",
+  };
+  const codex = new FakeCodexClient(new Map(), {
+    resumableThreads: new Map([
+      [
+        "thread-1",
+        {
+          id: "thread-1",
+          status: "idle",
+          turns: [{ id: "turn-1", status: "interrupted", items: [] }],
+        },
+      ],
+    ]),
+  });
+
+  const snapshot = await buildReconciliationSnapshot({
+    config: createConfig(),
+    stores: {
+      issueControl: {
+        getIssueControl: () => issueControl,
+        upsertIssueControl: () => issueControl,
+        listIssueControlsReadyForLaunch: () => [],
+      },
+      runLeases: {
+        getRunLease: () => runLease,
+        listActiveRunLeases: () => [runLease],
+        createRunLease: () => runLease,
+        updateRunLeaseThread: () => undefined,
+        finishRunLease: () => undefined,
+      },
+      workspaceOwnership: {
+        getWorkspaceOwnership: () => workspace,
+        getWorkspaceOwnershipForIssue: () => workspace,
+        upsertWorkspaceOwnership: () => workspace,
+      },
+      obligations: {
+        enqueueObligation: () => assert.fail("should not enqueue"),
+        getObligationByDedupeKey: () => undefined,
+        listPendingObligations: () => [],
+        updateObligationPayloadJson: () => undefined,
+        updateObligationRouting: () => undefined,
+        markObligationStatus: () => undefined,
+      },
+    },
+    codex: codex as never,
+    linearProvider: {
+      forProject: async () =>
+        ({
+          getIssue: async () => ({
+            id: "issue-1",
+            stateName: "Implementing",
+          }),
+        }) as never,
+    } satisfies LinearClientProvider,
+    runLeaseId: 2,
+  });
+
+  assert.deepEqual(codex.resumedThreads, ["thread-1"]);
+  assert.equal(snapshot?.input.live?.codex?.status, "found");
+  assert.equal(snapshot?.input.live?.codex?.thread?.turns.at(-1)?.status, "interrupted");
 });
 
 test("buildReconciliationSnapshot tolerates a missing workspace ownership record", async () => {

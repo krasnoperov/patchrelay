@@ -28,7 +28,7 @@ export async function buildReconciliationSnapshot(params: {
   config: Pick<AppConfig, "projects">;
   stores: SnapshotStores;
   linearProvider: LinearClientProvider;
-  codex: Pick<CodexAppServerClient, "readThread">;
+  codex: Pick<CodexAppServerClient, "readThread" | "resumeThread">;
   runLeaseId: number;
 }): Promise<ReconciliationSnapshot | undefined> {
   const runLease = params.stores.runLeases.getRunLease(params.runLeaseId);
@@ -66,13 +66,13 @@ export async function buildReconciliationSnapshot(params: {
           .catch(() => ({ status: "unknown" as const }))
       : ({ status: "unknown" as const });
 
-  const liveCodex =
-    runLease.threadId
-      ? await params.codex
-          .readThread(runLease.threadId, true)
-          .then((thread) => ({ status: "found" as const, thread }))
-          .catch((error) => mapCodexReadFailure(error))
-      : ({ status: "unknown" as const });
+  const liveCodex = runLease.threadId
+    ? await hydrateLiveCodexState({
+        codex: params.codex,
+        threadId: runLease.threadId,
+        ...(workspaceOwnership?.worktreePath ? { cwd: workspaceOwnership.worktreePath } : {}),
+      })
+    : ({ status: "unknown" as const });
 
   const obligations: ReconciliationObligation[] = params.stores.obligations
     .listPendingObligations({ runLeaseId: runLease.id, includeInProgress: true })
@@ -124,6 +124,48 @@ export async function buildReconciliationSnapshot(params: {
       },
     },
   };
+}
+
+async function hydrateLiveCodexState(params: {
+  codex: Pick<CodexAppServerClient, "readThread" | "resumeThread">;
+  threadId: string;
+  cwd?: string;
+}) {
+  try {
+    const thread = await params.codex.readThread(params.threadId, true);
+    if (latestThreadTurn(thread)?.status === "interrupted" && params.cwd) {
+      const resumedThread = await tryResumeThread(params.codex, params.threadId, params.cwd);
+      if (resumedThread) {
+        return { status: "found" as const, thread: resumedThread };
+      }
+    }
+    return { status: "found" as const, thread };
+  } catch (error) {
+    const mapped = mapCodexReadFailure(error);
+    if (mapped.status === "missing" && params.cwd) {
+      const resumedThread = await tryResumeThread(params.codex, params.threadId, params.cwd);
+      if (resumedThread) {
+        return { status: "found" as const, thread: resumedThread };
+      }
+    }
+    return mapped;
+  }
+}
+
+async function tryResumeThread(
+  codex: Pick<CodexAppServerClient, "resumeThread">,
+  threadId: string,
+  cwd: string,
+) {
+  try {
+    return await codex.resumeThread(threadId, cwd);
+  } catch {
+    return undefined;
+  }
+}
+
+function latestThreadTurn(thread: { turns: Array<{ status: string }> }) {
+  return thread.turns.at(-1);
 }
 
 function mapCodexReadFailure(error: unknown) {
