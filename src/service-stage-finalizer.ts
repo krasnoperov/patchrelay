@@ -5,6 +5,7 @@ import type { IssueControlStoreProvider, ObligationStoreProvider, RunLeaseStoreP
 import { ReconciliationActionApplier } from "./reconciliation-action-applier.ts";
 import { reconcileIssue } from "./reconciliation-engine.ts";
 import { buildReconciliationSnapshot } from "./reconciliation-snapshot-builder.ts";
+import type { ReconciliationSnapshot } from "./reconciliation-snapshot-builder.ts";
 import type { StageEventLogStoreProvider } from "./stage-event-ports.ts";
 import type { IssueWorkflowCoordinatorProvider, IssueWorkflowQueryStoreProvider } from "./workflow-ports.ts";
 import { syncFailedStageToLinear } from "./stage-failure.ts";
@@ -42,14 +43,13 @@ export class ServiceStageFinalizer {
     private readonly codex: CodexAppServerClient,
     private readonly linearProvider: LinearClientProvider,
     private readonly enqueueIssue: (projectId: string, issueId: string) => void,
-    logger?: Logger,
+    private readonly logger: Logger = consoleLogger(),
     private readonly feed?: OperatorEventFeed,
     runAtomically: <T>(fn: () => T) => T = (fn) => fn(),
   ) {
     this.runAtomically = runAtomically;
-    const lifecycleLogger = logger ?? consoleLogger();
-    this.inputDispatcher = new StageTurnInputDispatcher(stores, codex, lifecycleLogger);
-    this.lifecyclePublisher = new StageLifecyclePublisher(config, stores, linearProvider, lifecycleLogger, feed);
+    this.inputDispatcher = new StageTurnInputDispatcher(stores, codex, this.logger);
+    this.lifecyclePublisher = new StageLifecyclePublisher(config, stores, linearProvider, this.logger, feed);
     this.actionApplier = new ReconciliationActionApplier({
       enqueueIssue,
       deliverPendingObligations: (projectId, linearIssueId, threadId, turnId) =>
@@ -402,6 +402,11 @@ export class ServiceStageFinalizer {
     if (!snapshot) {
       return;
     }
+
+    if (await this.restartInterruptedRun(snapshot)) {
+      return;
+    }
+
     const decision = reconcileIssue(snapshot.input);
 
     if (decision.outcome === "hydrate_live_state") {
@@ -414,6 +419,77 @@ export class ServiceStageFinalizer {
       snapshot,
       decision,
     });
+  }
+
+  private async restartInterruptedRun(snapshot: ReconciliationSnapshot): Promise<boolean> {
+    const liveCodex = snapshot.input.live?.codex;
+    const latestTurn = liveCodex?.status === "found" ? liveCodex.thread?.turns.at(-1) : undefined;
+    if (latestTurn?.status !== "interrupted") {
+      return false;
+    }
+
+    if (snapshot.runLease.turnId && latestTurn.id !== snapshot.runLease.turnId) {
+      return true;
+    }
+
+    if (!snapshot.runLease.threadId || !snapshot.workspaceOwnership?.worktreePath) {
+      return false;
+    }
+
+    const stageRun = this.findStageRunForIssue(snapshot.runLease.projectId, snapshot.runLease.linearIssueId, snapshot.runLease.threadId);
+    if (!stageRun) {
+      return false;
+    }
+
+    const issue = this.stores.issueWorkflows.getTrackedIssue(stageRun.projectId, stageRun.linearIssueId);
+    const turn = await this.codex.startTurn({
+      threadId: snapshot.runLease.threadId,
+      cwd: snapshot.workspaceOwnership.worktreePath,
+      input: buildRestartRecoveryPrompt(stageRun.stage),
+    });
+
+    this.stores.workflowCoordinator.updateStageRunThread({
+      stageRunId: stageRun.id,
+      threadId: snapshot.runLease.threadId,
+      turnId: turn.turnId,
+    });
+
+    this.inputDispatcher.routePendingInputs(stageRun, snapshot.runLease.threadId, turn.turnId);
+    await this.inputDispatcher.flush(
+      {
+        id: stageRun.id,
+        projectId: stageRun.projectId,
+        linearIssueId: stageRun.linearIssueId,
+        threadId: snapshot.runLease.threadId,
+        turnId: turn.turnId,
+      },
+      {
+        logFailures: true,
+        failureMessage: "Failed to deliver queued Linear comment during interrupted-turn recovery",
+        ...(issue?.issueKey ? { issueKey: issue.issueKey } : {}),
+      },
+    );
+
+    this.logger.info(
+      {
+        issueKey: issue?.issueKey,
+        stage: stageRun.stage,
+        threadId: snapshot.runLease.threadId,
+        turnId: turn.turnId,
+      },
+      "Restarted interrupted Codex stage run during startup reconciliation",
+    );
+    this.feed?.publish({
+      level: "info",
+      kind: "stage",
+      issueKey: issue?.issueKey,
+      projectId: stageRun.projectId,
+      stage: stageRun.stage,
+      status: "running",
+      summary: `Recovered ${stageRun.stage} workflow after restart`,
+      detail: `Turn ${turn.turnId} resumed on the existing thread.`,
+    });
+    return true;
   }
 
   private completeReconciledRun(
@@ -506,4 +582,14 @@ function consoleLogger(): Logger {
     child: () => consoleLogger(),
     level: "silent",
   } as unknown as Logger;
+}
+
+function buildRestartRecoveryPrompt(stage: StageRunRecord["stage"]): string {
+  return [
+    `PatchRelay restarted while the ${stage} workflow was mid-turn.`,
+    "Resume the existing work from the current worktree state on this same thread.",
+    "Inspect any uncommitted changes you already made before continuing.",
+    "Continue from the interrupted point instead of restarting the task from scratch.",
+    "When the work is actually complete, finish the normal workflow handoff for this stage.",
+  ].join("\n");
 }

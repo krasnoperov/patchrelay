@@ -64,9 +64,11 @@ function getWorkflowFile(project: ProjectConfig, workflowId: string): string {
 class FakeCodexClient extends EventEmitter {
   readonly startedThreads: string[] = [];
   readonly forkedFrom: string[] = [];
+  readonly resumedThreads: Array<{ threadId: string; cwd?: string }> = [];
   readonly turns: Array<{ threadId: string; input: string }> = [];
   readonly steeredTurns: Array<{ threadId: string; turnId: string; input: string }> = [];
   readonly threads = new Map<string, CodexThreadSummary>();
+  readonly resumableThreads = new Map<string, CodexThreadSummary>();
   steerError?: Error;
   private nextThreadNumber = 1;
   private nextTurnNumber = 1;
@@ -88,8 +90,27 @@ class FakeCodexClient extends EventEmitter {
     return thread;
   }
 
+  async resumeThread(threadId: string, cwd?: string): Promise<CodexThreadSummary> {
+    this.resumedThreads.push({ threadId, cwd });
+    const thread = this.resumableThreads.get(threadId) ?? this.threads.get(threadId);
+    if (!thread) {
+      throw new Error(`thread not found: ${threadId}`);
+    }
+    this.threads.set(threadId, thread);
+    return thread;
+  }
+
   async startTurn(params: { threadId: string; input: string }): Promise<{ threadId: string; turnId: string; status: string }> {
     this.turns.push({ threadId: params.threadId, input: params.input });
+    const thread = this.threads.get(params.threadId);
+    if (thread) {
+      thread.status = "active";
+      thread.turns.push({
+        id: `turn-${this.nextTurnNumber}`,
+        status: "inProgress",
+        items: [],
+      });
+    }
     return {
       threadId: params.threadId,
       turnId: `turn-${this.nextTurnNumber++}`,
@@ -98,7 +119,11 @@ class FakeCodexClient extends EventEmitter {
   }
 
   async readThread(threadId: string): Promise<CodexThreadSummary> {
-    return this.threads.get(threadId)!;
+    const thread = this.threads.get(threadId);
+    if (!thread) {
+      throw new Error(`thread not found: ${threadId}`);
+    }
+    return thread;
   }
 
   async steerTurn(params: { threadId: string; turnId: string; input: string }): Promise<void> {
@@ -1724,6 +1749,55 @@ test("service restart reconciles a stage that completed while PatchRelay was dow
     const recoveredIssue = db.issueWorkflows.getTrackedIssue("usertold", "issue_4");
     assert.equal(recoveredStage?.status, "completed");
     assert.equal(recoveredIssue?.lifecycleStatus, "paused");
+
+    restarted.stop();
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("service restart resumes an interrupted stage on the existing thread", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-restart-recover-interrupted-"));
+  try {
+    const { db, codex, linear, service, config } = createService(baseDir);
+    await service.start();
+
+    recordDesiredStageWithLedger(db, {
+      projectId: "usertold",
+      linearIssueId: "issue_4",
+      issueKey: "USE-30",
+      title: "Recover interrupted stage after restart",
+      issueUrl: "https://linear.app/example/issue/USE-30",
+      currentLinearState: "Start",
+      desiredStage: "development",
+      desiredWebhookId: "delivery-start-restart-interrupted",
+      lastWebhookAt: new Date().toISOString(),
+    });
+
+    await service.processIssue({ projectId: "usertold", issueId: "issue_4" });
+    await flushQueues();
+
+    const startedIssue = db.issueWorkflows.getTrackedIssue("usertold", "issue_4");
+    const startedStageRun = db.issueWorkflows.getStageRun(startedIssue!.activeStageRunId!);
+    assert.ok(startedStageRun?.threadId);
+
+    service.stop();
+    const interruptedThread = codex.threads.get(startedStageRun!.threadId!);
+    assert.ok(interruptedThread);
+    interruptedThread.status = "idle";
+    interruptedThread.turns = [{ id: startedStageRun!.turnId!, status: "interrupted", items: [] }];
+
+    const restarted = new PatchRelayService(config, db, codex as never, linear, pino({ enabled: false }));
+    await restarted.start();
+    await flushQueues();
+
+    const recoveredStage = db.issueWorkflows.getStageRun(startedStageRun!.id);
+    const recoveredIssue = db.issueWorkflows.getTrackedIssue("usertold", "issue_4");
+    assert.equal(recoveredStage?.status, "running");
+    assert.equal(recoveredIssue?.lifecycleStatus, "running");
+    assert.equal(linear.issues.get("issue_4")?.stateName, "Implementing");
+    assert.equal(codex.resumedThreads.length, 1);
+    assert.match(codex.turns.at(-1)?.input ?? "", /PatchRelay restarted while the development workflow was mid-turn/);
 
     restarted.stop();
   } finally {

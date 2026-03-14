@@ -76,7 +76,10 @@ class FakeLinearClient implements LinearClient {
 
 class FakeCodexClient {
   readonly steerCalls: Array<{ threadId: string; turnId: string; input: string }> = [];
+  readonly resumedThreads: Array<{ threadId: string; cwd?: string }> = [];
+  readonly startedTurns: Array<{ threadId: string; cwd: string; input: string }> = [];
   readonly threads = new Map<string, CodexThreadSummary>();
+  readonly resumableThreads = new Map<string, CodexThreadSummary>();
   steerError?: Error;
 
   async readThread(threadId: string): Promise<CodexThreadSummary> {
@@ -85,6 +88,30 @@ class FakeCodexClient {
       throw new Error("thread not found");
     }
     return thread;
+  }
+
+  async resumeThread(threadId: string, cwd?: string): Promise<CodexThreadSummary> {
+    this.resumedThreads.push({ threadId, cwd });
+    const thread = this.resumableThreads.get(threadId) ?? this.threads.get(threadId);
+    if (!thread) {
+      throw new Error("thread not found");
+    }
+    this.threads.set(threadId, thread);
+    return thread;
+  }
+
+  async startTurn(params: { threadId: string; cwd: string; input: string }): Promise<{ threadId: string; turnId: string; status: string }> {
+    this.startedTurns.push(params);
+    const thread = this.threads.get(params.threadId);
+    assert.ok(thread);
+    const turnId = `turn-recovery-${this.startedTurns.length}`;
+    thread.status = "active";
+    thread.turns.push({
+      id: turnId,
+      status: "inProgress",
+      items: [],
+    });
+    return { threadId: params.threadId, turnId, status: "inProgress" };
   }
 
   async steerTurn(params: { threadId: string; turnId: string; input: string }): Promise<void> {
@@ -112,6 +139,7 @@ class FakeIssueWorkflowStore {
   readonly statusComments: Array<{ projectId: string; issueId: string; commentId?: string }> = [];
   readonly pipelineStatuses: Array<{ pipelineRunId: number; status: PipelineRunRecord["status"] }> = [];
   readonly completedPipelines: number[] = [];
+  readonly threadUpdates: Array<{ stageRunId: number; threadId: string; parentThreadId?: string; turnId?: string }> = [];
 
   getTrackedIssue(projectId: string, linearIssueId: string): TrackedIssueRecord | undefined {
     return this.issues.get(issueKey(projectId, linearIssueId));
@@ -139,6 +167,19 @@ class FakeIssueWorkflowStore {
 
   getLatestStageRunForIssue(projectId: string, linearIssueId: string): StageRunRecord | undefined {
     return this.listStageRunsForIssue(projectId, linearIssueId).at(-1);
+  }
+
+  updateStageRunThread(params: { stageRunId: number; threadId: string; parentThreadId?: string; turnId?: string }): void {
+    const stageRun = this.stageRuns.get(params.stageRunId);
+    assert.ok(stageRun);
+    stageRun.threadId = params.threadId;
+    if (params.parentThreadId !== undefined) {
+      stageRun.parentThreadId = params.parentThreadId;
+    }
+    if (params.turnId !== undefined) {
+      stageRun.turnId = params.turnId;
+    }
+    this.threadUpdates.push(params);
   }
 
   finishStageRun(params: {
@@ -608,16 +649,16 @@ function createWorkspace(overrides: Partial<WorkspaceRecord> = {}): WorkspaceRec
   };
 }
 
-function createThread(status: "completed" | "inProgress"): CodexThreadSummary {
+function createThread(status: "completed" | "inProgress" | "interrupted"): CodexThreadSummary {
   return createThreadWithId("thread-1", status);
 }
 
-function createThreadWithId(id: string, status: "completed" | "inProgress"): CodexThreadSummary {
+function createThreadWithId(id: string, status: "completed" | "inProgress" | "interrupted"): CodexThreadSummary {
   return {
     id,
     preview: "PatchRelay stage",
     cwd: "/tmp/worktrees/APP-1",
-    status: status === "completed" ? "idle" : "running",
+    status: status === "completed" ? "idle" : status === "interrupted" ? "idle" : "running",
     turns: [
       {
         id: "turn-1",
@@ -768,6 +809,34 @@ test("reconciliation leaves an active stage alone when the latest turn is still 
   assert.equal(store.getStageRun(stageRun.id)?.status, "running");
   assert.equal(linear.stateTransitions.length, 0);
   assert.equal(store.finishedStageRuns.length, 0);
+});
+
+test("reconciliation restarts an interrupted turn on the existing thread instead of failing back", async () => {
+  const { store, codex, linear, finalizer, stageRun } = createHarness({ withLedger: true });
+  codex.threads.set(stageRun.threadId!, createThread("interrupted"));
+
+  await finalizer.reconcileActiveStageRuns();
+
+  assert.deepEqual(codex.resumedThreads, [{ threadId: "thread-1", cwd: "/tmp/worktrees/APP-1" }]);
+  assert.equal(codex.startedTurns.length, 1);
+  assert.match(codex.startedTurns[0]!.input, /PatchRelay restarted while the development workflow was mid-turn/);
+  assert.equal(store.getStageRun(stageRun.id)?.status, "running");
+  assert.equal(store.getStageRun(stageRun.id)?.turnId, "turn-recovery-1");
+  assert.equal(linear.stateTransitions.length, 0);
+  assert.equal(linear.comments.length, 0);
+});
+
+test("reconciliation can recover a missing thread by resuming it from the ledger worktree", async () => {
+  const { store, codex, linear, finalizer, stageRun } = createHarness({ withLedger: true });
+  codex.resumableThreads.set(stageRun.threadId!, createThread("interrupted"));
+
+  await finalizer.reconcileActiveStageRuns();
+
+  assert.deepEqual(codex.resumedThreads, [{ threadId: "thread-1", cwd: "/tmp/worktrees/APP-1" }]);
+  assert.equal(codex.startedTurns.length, 1);
+  assert.equal(store.getStageRun(stageRun.id)?.status, "running");
+  assert.equal(store.getStageRun(stageRun.id)?.turnId, "turn-recovery-1");
+  assert.equal(linear.stateTransitions.length, 0);
 });
 
 test("reconciliation only fails back to Linear when the issue is still in the service-owned active state", async () => {
