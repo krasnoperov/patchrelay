@@ -137,6 +137,8 @@ export interface LinearIssueSnapshot {
   stateName?: string;
   teamId?: string;
   teamKey?: string;
+  delegateId?: string;
+  delegateName?: string;
   workflowStates: Array<{
     id: string;
     name: string;
