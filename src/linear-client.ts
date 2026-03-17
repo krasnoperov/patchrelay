@@ -274,7 +274,7 @@ export class LinearGraphqlClient implements LinearClient {
   async updateAgentSession(params: {
     agentSessionId: string;
     externalUrls?: Array<{ label: string; url: string }>;
-    plan?: Array<{ label: string; status: "pending" | "in_progress" | "completed" }>;
+    plan?: Array<{ content: string; status: "pending" | "inProgress" | "completed" | "canceled" }>;
   }): Promise<LinearAgentSessionUpdateResult> {
     const input: Record<string, unknown> = {};
     if ("externalUrls" in params) {

@@ -172,8 +172,8 @@ export interface LinearAgentSessionExternalUrl {
 }
 
 export interface LinearAgentSessionPlanItem {
-  label: string;
-  status: "pending" | "in_progress" | "completed";
+  content: string;
+  status: "pending" | "inProgress" | "completed" | "canceled";
 }
 
 export interface LinearAgentSessionUpdateResult {

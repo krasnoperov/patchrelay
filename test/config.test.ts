@@ -600,7 +600,7 @@ test("loadConfig applies default app-mode trigger events when trigger_events is 
       },
       () => {
         const config = loadConfig();
-        assert.deepEqual(config.projects[0]?.triggerEvents, ["issueCreated", "agentSessionCreated", "agentPrompted", "statusChanged"]);
+        assert.deepEqual(config.projects[0]?.triggerEvents, ["agentSessionCreated", "agentPrompted"]);
       },
     );
   } finally {

@@ -12,14 +12,6 @@ export function resolveProject(config: AppConfig, issue: IssueMetadata): Project
 }
 
 export function triggerEventAllowed(project: ProjectConfig, triggerEvent: TriggerEvent): boolean {
-  if (project.triggerEvents.includes(triggerEvent)) {
-    return true;
-  }
-
-  if (triggerEvent === "agentSessionCreated") {
-    return project.triggerEvents.includes("delegateChanged") || project.triggerEvents.includes("statusChanged");
-  }
-
   return project.triggerEvents.includes(triggerEvent);
 }
 

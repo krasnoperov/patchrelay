@@ -327,9 +327,9 @@ test("LinearGraphqlClient updates agent sessions with external URLs and plan rep
         { label: "Issue report", url: "https://patchrelay.example.com/issues/PR-1/report" },
       ],
       plan: [
-        { label: "Prepare workspace", status: "completed" },
-        { label: "Run development workflow", status: "in_progress" },
-        { label: "Await handoff", status: "pending" },
+        { content: "Prepare workspace", status: "completed" },
+        { content: "Run development workflow", status: "inProgress" },
+        { content: "Await handoff", status: "pending" },
       ],
     });
 
@@ -341,7 +341,7 @@ test("LinearGraphqlClient updates agent sessions with external URLs and plan rep
         id?: string;
         input?: {
           externalUrls?: Array<{ label: string; url: string }>;
-          plan?: Array<{ label: string; status: string }>;
+          plan?: Array<{ content: string; status: string }>;
         };
       };
     };
@@ -352,16 +352,16 @@ test("LinearGraphqlClient updates agent sessions with external URLs and plan rep
       { label: "Issue report", url: "https://patchrelay.example.com/issues/PR-1/report" },
     ]);
     assert.deepEqual(firstRequest.variables?.input?.plan, [
-      { label: "Prepare workspace", status: "completed" },
-      { label: "Run development workflow", status: "in_progress" },
-      { label: "Await handoff", status: "pending" },
+      { content: "Prepare workspace", status: "completed" },
+      { content: "Run development workflow", status: "inProgress" },
+      { content: "Await handoff", status: "pending" },
     ]);
 
     await assert.rejects(
       () =>
         client.updateAgentSession({
           agentSessionId: "session-1",
-          plan: [{ label: "Retry", status: "in_progress" }],
+          plan: [{ content: "Retry", status: "inProgress" }],
         }),
       /Linear rejected agent session update for session session-1/,
     );

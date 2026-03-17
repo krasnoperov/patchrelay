@@ -39,7 +39,6 @@ PatchRelay expects one app per machine-level service, not one app per repository
 Required webhook categories for PatchRelay's core loop:
 
 - issue events
-- comment events
 - agent session events
 
 Useful supplemental categories:
@@ -83,7 +82,7 @@ Follow-up instructions can arrive in two ways:
 - `AgentSessionEvent.prompted`: the native Linear agent-prompt path; PatchRelay routes this into the active Codex run
 - issue comments: PatchRelay can also forward regular issue comments into the active run while the stage is live
 
-For the standard Linear app-agent flow, you can usually omit `trigger_events` entirely. PatchRelay defaults to `agentSessionCreated`, `agentPrompted`, and `statusChanged`.
+For the standard Linear app-agent flow, you can usually omit `trigger_events` entirely. PatchRelay defaults to `agentSessionCreated` and `agentPrompted`.
 
 ## Native Agent UX
 
@@ -92,7 +91,7 @@ PatchRelay now treats the Linear agent session as the primary operator-facing su
 - `AgentSessionEvent.created` gets a native acknowledgement as early as possible so Linear does not mark the app as unresponsive
 - PatchRelay updates the session with a signed external status URL that opens a read-only PatchRelay status page
 - PatchRelay updates the Linear agent plan as a workflow moves from preparation to running to handoff or completion
-- service-owned issue comments remain available as a fallback for non-agent and legacy flows, but they are no longer the default happy-path status channel for delegated sessions
+- service-owned issue comments remain available as a fallback for non-agent and compatibility flows, but they are no longer the default happy-path status channel for delegated sessions
 
 ## Secrets And Boundaries
 
@@ -147,4 +146,4 @@ If delegation stops working, check:
 - whether a custom `trigger_events` override accidentally removed `agentSessionCreated` or `agentPrompted`
 - whether the routed project has valid workflow files and unambiguous routing keys
 
-PatchRelay also accepts supplemental Linear app webhooks such as permission-change, app-user-notification, and app-revoked events. They are useful for observability, but the core execution path still depends on issue, comment, and agent-session events.
+PatchRelay also accepts supplemental Linear app webhooks such as permission-change, app-user-notification, and app-revoked events. They are useful for observability, but the core execution path depends on agent-session events plus issue metadata for routing and workflow selection.

@@ -1,9 +1,9 @@
 import type { StageRunRecord, WorkflowStage } from "./types.ts";
 
-export type AgentSessionPlanStatus = "pending" | "in_progress" | "completed";
+export type AgentSessionPlanStatus = "pending" | "inProgress" | "completed" | "canceled";
 
 export interface AgentSessionPlanStep {
-  label: string;
+  content: string;
   status: AgentSessionPlanStatus;
 }
 
@@ -22,18 +22,18 @@ function titleCase(value: string): string {
 function buildPlan(stage: WorkflowStage, statuses: [AgentSessionPlanStatus, AgentSessionPlanStatus, AgentSessionPlanStatus]) {
   const stageLabel = titleCase(formatStageLabel(stage));
   return [
-    { label: "Prepare workspace", status: statuses[0] },
-    { label: `Run ${stageLabel} workflow`, status: statuses[1] },
-    { label: "Review next Linear step", status: statuses[2] },
+    { content: "Prepare workspace", status: statuses[0] },
+    { content: `Run ${stageLabel} workflow`, status: statuses[1] },
+    { content: "Review next Linear step", status: statuses[2] },
   ] satisfies AgentSessionPlanStep[];
 }
 
 export function buildPreparingSessionPlan(stage: WorkflowStage): AgentSessionPlanStep[] {
-  return buildPlan(stage, ["in_progress", "pending", "pending"]);
+  return buildPlan(stage, ["inProgress", "pending", "pending"]);
 }
 
 export function buildRunningSessionPlan(stage: WorkflowStage): AgentSessionPlanStep[] {
-  return buildPlan(stage, ["completed", "in_progress", "pending"]);
+  return buildPlan(stage, ["completed", "inProgress", "pending"]);
 }
 
 export function buildCompletedSessionPlan(stage: WorkflowStage): AgentSessionPlanStep[] {
@@ -41,10 +41,10 @@ export function buildCompletedSessionPlan(stage: WorkflowStage): AgentSessionPla
 }
 
 export function buildAwaitingHandoffSessionPlan(stage: WorkflowStage): AgentSessionPlanStep[] {
-  return buildPlan(stage, ["completed", "completed", "in_progress"]);
+  return buildPlan(stage, ["completed", "completed", "inProgress"]);
 }
 
 export function buildFailedSessionPlan(stage: WorkflowStage, stageRun?: Pick<StageRunRecord, "threadId" | "turnId">): AgentSessionPlanStep[] {
-  const workflowStepStatus: AgentSessionPlanStatus = stageRun?.threadId || stageRun?.turnId ? "completed" : "in_progress";
+  const workflowStepStatus: AgentSessionPlanStatus = stageRun?.threadId || stageRun?.turnId ? "completed" : "inProgress";
   return buildPlan(stage, ["completed", workflowStepStatus, "pending"]);
 }
