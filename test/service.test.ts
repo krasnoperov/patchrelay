@@ -186,7 +186,7 @@ class FakeLinearClient implements LinearClient {
   readonly agentSessionUpdates: Array<{
     agentSessionId: string;
     externalUrls?: Array<{ label: string; url: string }>;
-    plan?: Array<{ label: string; status: "pending" | "in_progress" | "completed" }>;
+    plan?: Array<{ content: string; status: "pending" | "inProgress" | "completed" | "canceled" }>;
   }> = [];
   readonly stateTransitions: Array<{ issueId: string; stateName: string }> = [];
   readonly labelUpdates: Array<{ issueId: string; addNames: string[]; removeNames: string[] }> = [];
@@ -256,7 +256,7 @@ class FakeLinearClient implements LinearClient {
   async updateAgentSession(params: {
     agentSessionId: string;
     externalUrls?: Array<{ label: string; url: string }>;
-    plan?: Array<{ label: string; status: "pending" | "in_progress" | "completed" }>;
+    plan?: Array<{ content: string; status: "pending" | "inProgress" | "completed" | "canceled" }>;
   }) {
     this.agentSessionUpdates.push(params);
     return { id: params.agentSessionId };
@@ -348,7 +348,7 @@ function createConfig(baseDir: string): AppConfig {
         issueKeyPrefixes: ["USE"],
         linearTeamIds: ["USE"],
         allowLabels: [],
-        triggerEvents: ["statusChanged", "commentCreated", "commentUpdated", "agentPrompted"],
+        triggerEvents: ["agentSessionCreated", "agentPrompted", "commentCreated", "commentUpdated"],
         branchPrefix: "use",
       },
     ],
@@ -564,27 +564,34 @@ test("service keeps one workspace and forks later stages from the prior thread",
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-service-"));
   try {
     const { db, codex, linear, service } = createService(baseDir);
+    installPatchRelayApp(db);
     await service.start();
 
     const startEvent = db.webhookEvents.insertWebhookEvent({
-      webhookId: "delivery-start",
+      webhookId: "delivery-agent-created-start",
       receivedAt: new Date().toISOString(),
-      eventType: "Issue.update",
+      eventType: "AgentSessionEvent.created",
       issueId: "issue_1",
       headersJson: "{}",
       payloadJson: JSON.stringify({
-        action: "update",
-        type: "Issue",
+        action: "created",
+        type: "AgentSessionEvent",
         createdAt: "2026-03-08T12:00:00.000Z",
         webhookTimestamp: 1000,
-        updatedFrom: { stateId: "todo" },
         data: {
-          id: "issue_1",
-          identifier: "USE-25",
-          title: "Build app server orchestration",
-          url: "https://linear.app/example/issue/USE-25",
-          team: { key: "USE" },
-          state: { name: "Start" },
+          promptContext: "Please start implementation.",
+          agentSession: {
+            id: "session-start",
+            issue: {
+              id: "issue_1",
+              identifier: "USE-25",
+              title: "Build app server orchestration",
+              url: "https://linear.app/example/issue/USE-25",
+              team: { key: "USE" },
+              delegate: { id: "patchrelay-app", name: "PatchRelay" },
+              state: { name: "Start" },
+            },
+          },
         },
       }),
       signatureValid: true,
@@ -605,14 +612,12 @@ test("service keeps one workspace and forks later stages from the prior thread",
       addNames: ["llm-working"],
       removeNames: ["llm-awaiting-handoff"],
     });
-    const runningComment = linear.comments.get(issueAfterStart?.statusCommentId ?? "")?.body ?? "";
-    assert.match(runningComment, /PatchRelay is running the development workflow/);
+    assert.equal(issueAfterStart?.statusCommentId, undefined);
     const startStageRun = db.issueWorkflows.getStageRun(issueAfterStart.activeStageRunId);
     assert.equal(startStageRun?.stage, "development");
     assert.ok(startStageRun?.threadId);
     const workspacePath = db.issueWorkflows.getActiveWorkspaceForIssue("usertold", "issue_1")?.worktreePath;
     assert.ok(workspacePath);
-    assert.equal(runningComment.includes(workspacePath), false);
     writeFileSync(path.join(workspacePath, "sentinel.txt"), "keep me\n", "utf8");
 
     recordDesiredStageWithLedger(db, {
@@ -739,7 +744,7 @@ test("service starts a workflow from a Linear agent session and forwards the ini
       linear.agentSessionUpdates.some(
         (entry) =>
           entry.agentSessionId === "session-1" &&
-          entry.plan?.some((step) => step.label === "Prepare workspace" && step.status === "in_progress"),
+          entry.plan?.some((step) => step.content === "Prepare workspace" && step.status === "inProgress"),
       ),
     );
   } finally {
@@ -2373,24 +2378,32 @@ test("service acceptWebhook rejects invalid signatures, dedupes deliveries, and 
   try {
     const { config, db, codex, service } = createService(baseDir);
     config.logging.webhookArchiveDir = path.join(baseDir, "webhook-archive");
+    installPatchRelayApp(db);
 
     const payload: LinearWebhookPayload = {
-      action: "update",
-      type: "Issue",
+      action: "created",
+      type: "AgentSessionEvent",
       createdAt: "2026-03-08T12:00:00.000Z",
       webhookTimestamp: Date.now(),
-      updatedFrom: {
-        stateId: "state_start",
-      },
       data: {
-        id: "issue_sig",
-        identifier: "USE-55",
-        title: "Deploy with wrangler",
-        team: {
-          key: "USE",
-        },
-        state: {
-          name: "Start",
+        promptContext: "Please start implementation.",
+        agentSession: {
+          id: "session_sig",
+          issue: {
+            id: "issue_sig",
+            identifier: "USE-55",
+            title: "Deploy with wrangler",
+            team: {
+              key: "USE",
+            },
+            delegate: {
+              id: "patchrelay-app",
+              name: "PatchRelay",
+            },
+            state: {
+              name: "Start",
+            },
+          },
         },
       },
     };

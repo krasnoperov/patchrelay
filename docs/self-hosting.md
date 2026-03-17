@@ -103,7 +103,7 @@ Use the log file when you want the persisted service history on disk. Use `journ
 
 Common places to look:
 
-- Linear did nothing after a state change, delegation, or mention:
+- Linear did nothing after a delegation or mention:
   check for webhook intake logs such as accepted, rejected, stale, or duplicate deliveries
 - the agent ignored a new Linear comment or prompt:
   check for queued turn-input delivery logs and any `Failed to deliver queued Linear ... to active Codex turn` warnings
@@ -179,7 +179,7 @@ PatchRelay is convention-first here:
 - by default it generates four workflow bindings per project: `development`, `review`, `deploy`, and `cleanup`
 - each binding maps one Linear state such as `Start` or `Deploy` to one repo workflow file
 - by default it looks for `IMPLEMENTATION_WORKFLOW.md`, `REVIEW_WORKFLOW.md`, `DEPLOY_WORKFLOW.md`, and `CLEANUP_WORKFLOW.md` in each repo root
-- by default it uses `agentSessionCreated`, `agentPrompted`, and `statusChanged` as trigger events for app-mode installs
+- by default it uses `agentSessionCreated` and `agentPrompted` as trigger events for app-mode installs
 - edit `projects[].workflows` when you want different state names, active states, workflow ids, or workflow file paths
 - `worktree_root` defaults to `~/.local/share/patchrelay/worktrees/<project-id>`
 - `branch_prefix` defaults to a slug of the project id
@@ -210,7 +210,7 @@ Requirement references:
 
 ## 6. Validate And Operate
 
-Before delegating work, run the built-in preflight:
+Before delegating or mentioning work, run the built-in preflight:
 
 ```bash
 patchrelay doctor

@@ -31,7 +31,7 @@ class FakeLinearClient implements LinearClient {
   readonly agentSessionUpdates: Array<{
     agentSessionId: string;
     externalUrls?: Array<{ label: string; url: string }>;
-    plan?: Array<{ label: string; status: "pending" | "in_progress" | "completed" }>;
+    plan?: Array<{ content: string; status: "pending" | "inProgress" | "completed" | "canceled" }>;
   }> = [];
   failNextCommentUpsert = false;
   failNextAgentActivity = false;
@@ -84,7 +84,7 @@ class FakeLinearClient implements LinearClient {
   async updateAgentSession(params: {
     agentSessionId: string;
     externalUrls?: Array<{ label: string; url: string }>;
-    plan?: Array<{ label: string; status: "pending" | "in_progress" | "completed" }>;
+    plan?: Array<{ content: string; status: "pending" | "inProgress" | "completed" | "canceled" }>;
   }) {
     if (this.failNextAgentSessionUpdate) {
       this.failNextAgentSessionUpdate = false;
@@ -459,7 +459,7 @@ test("publishStageCompletion pauses for handoff when Linear is still in the acti
     linear.agentSessionUpdates.some(
       (update) =>
         update.agentSessionId === "session-1" &&
-        update.plan?.some((step) => step.label === "Review next Linear step" && step.status === "in_progress"),
+        update.plan?.some((step) => step.content === "Review next Linear step" && step.status === "inProgress"),
     ),
   );
   assert.equal(linear.agentActivities.at(-1)?.content.type, "elicitation");

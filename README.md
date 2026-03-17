@@ -11,7 +11,7 @@ PatchRelay is the system around the model:
 - issue-to-repo routing
 - issue worktree and branch lifecycle
 - stage orchestration and thread continuity
-- comment forwarding into active runs
+- native Linear agent input forwarding into active runs
 - read-only inspection and stage reporting
 
 If you want Codex to work inside your real repos with your real tools, secrets, SSH access, and deployment surface, PatchRelay is the harness that makes that loop reliable.
@@ -22,7 +22,7 @@ If you want Codex to work inside your real repos with your real tools, secrets, 
 - Use your existing machine, repos, secrets, SSH config, shell tools, and deployment access.
 - Keep deterministic workflow logic outside the model: routing, staging, worktree ownership, and reporting.
 - Choose the Codex approval and sandbox settings that match your risk tolerance.
-- Let Linear drive the loop through delegation, workflow stages, and comments.
+- Let Linear drive the loop through delegation, mentions, and workflow stages.
 - Drop into the exact issue worktree and resume control manually when needed.
 
 ## What PatchRelay Owns
@@ -34,7 +34,7 @@ PatchRelay does the deterministic harness work that you do not want to re-implem
 - creates and reuses one durable worktree and branch per issue lifecycle
 - starts or forks Codex threads for the workflows you bind to Linear states
 - persists enough state to correlate the Linear issue, local workspace, stage run, and Codex thread
-- reports progress back to Linear and forwards follow-up comments into active runs
+- reports progress back to Linear and forwards follow-up agent input into active runs
 - exposes CLI and optional read-only inspection surfaces so operators can understand what happened
 
 ## System Layers
@@ -77,7 +77,7 @@ For the exact OAuth app settings and webhook categories, use the Linear onboardi
 2. PatchRelay verifies the webhook and routes the issue to the right local project.
 3. Delegated issues create or reuse the issue worktree and launch the matching workflow through `codex app-server`.
 4. PatchRelay persists thread ids, run state, and observations so the work stays inspectable and resumable.
-5. Mentions stay conversational, while delegated sessions and issue comments can steer the active run. An operator can take over from the exact same worktree when needed.
+5. Mentions stay conversational, while delegated sessions and native agent prompts can steer the active run. An operator can take over from the exact same worktree when needed.
 
 ## Restart And Reconciliation
 
@@ -221,7 +221,7 @@ Important:
 1. Delegate a Linear issue to the PatchRelay app.
 2. PatchRelay reads the current Linear state like `Start`, `Ready for QA`, or `Deploy` to choose the matching workflow.
 3. Linear sends the delegation and agent-session webhooks to PatchRelay, which creates or reuses the issue worktree and launches the matching workflow.
-4. Follow up in the issue comments to steer the active run or wake it with fresh input while it remains delegated.
+4. Follow up in the Linear agent session to steer the active run or wake it with fresh input while it remains delegated.
 5. Watch progress from the terminal or open the same worktree and take over manually.
 
 Useful commands:

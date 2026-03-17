@@ -9,7 +9,7 @@ PatchRelay is a self-hosted execution harness around Codex with seven responsibi
 3. create and maintain per-issue git worktrees
 4. drive Codex through `codex app-server`
 5. write deterministic workflow state back to Linear
-6. steer active turns with queued Linear comments
+6. steer active turns with queued Linear agent input and optional compatibility comments
 7. expose local management routes and, optionally, issue and stage inspection endpoints
 
 `codex app-server` is the source of truth for agent thread history.
@@ -66,7 +66,7 @@ Stores:
 - active pipeline id
 - active stage run id
 - latest Codex thread id
-- service-owned Linear status comment id
+- optional service-owned Linear status comment id for fallback delivery
 
 ### Workspace
 
@@ -181,6 +181,7 @@ When PatchRelay claims a stage, it also moves the issue into the matching active
 - `deploy` -> `Deploying`
 
 The service records the desired stage even if another stage is still running.
+For app-mode projects, PatchRelay only records a new desired stage from native agent-session events such as delegation or mention prompts. Bare issue state changes no longer launch work on their own.
 
 ### 4. Workspace Preparation
 
@@ -200,7 +201,7 @@ For the next stage run:
 - PatchRelay then calls `turn/start` with the issue context and workflow file contents
 - for delegated Linear agent sessions, PatchRelay first sends a native agent-session acknowledgement and refreshes session presentation such as the external status URL and workflow plan
 - while preparing the run, PatchRelay also claims the matching active Linear state and applies configured workflow labels
-- after the turn is live, PatchRelay flushes any queued Linear comments and best-effort refreshes either the native Linear agent session presentation or, for non-agent flows, the service-owned running status comment
+- after the turn is live, PatchRelay flushes any queued Linear agent input and best-effort refreshes either the native Linear agent session presentation or, for fallback flows, the service-owned running status comment
 
 The resulting thread id and turn id are persisted immediately.
 

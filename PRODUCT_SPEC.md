@@ -115,7 +115,7 @@ PatchRelay exposes:
 PatchRelay owns the deterministic workflow bookkeeping in Linear:
 
 - moving a claimed stage into the matching active state such as `Implementing`, `Reviewing`, or `Deploying`
-- maintaining one service-owned status comment per tracked issue
+- maintaining a fallback service-owned status comment when no native agent session delivery path is available
 - optionally adding and removing service-owned workflow labels such as `llm-working` and `llm-awaiting-handoff`
 - rolling the issue back to a configured fallback state such as `Human Needed` if stage launch fails
 

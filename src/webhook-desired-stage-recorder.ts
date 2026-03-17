@@ -109,25 +109,16 @@ export class WebhookDesiredStageRecorder {
       return undefined;
     }
 
-    const stageAllowed = triggerEventAllowed(project, normalized.triggerEvent);
-    let desiredStage: WorkflowStage | undefined;
+    if (normalized.triggerEvent !== "agentSessionCreated" && normalized.triggerEvent !== "agentPrompted") {
+      return undefined;
+    }
 
-    if (normalized.triggerEvent === "delegateChanged") {
-      desiredStage = delegatedToPatchRelay ? resolveWorkflowStage(project, normalizedIssue.stateName) : undefined;
-      if (!desiredStage) {
-        return undefined;
-      }
-      if (!stageAllowed && !project.triggerEvents.includes("statusChanged")) {
-        return undefined;
-      }
-    } else if (normalized.triggerEvent === "agentSessionCreated" || normalized.triggerEvent === "agentPrompted") {
-      if (!delegatedToPatchRelay || !stageAllowed) {
-        return undefined;
-      }
-      desiredStage = resolveWorkflowStage(project, normalizedIssue.stateName);
-    } else if (stageAllowed) {
-      desiredStage = resolveWorkflowStage(project, normalizedIssue.stateName);
-    } else {
+    if (!delegatedToPatchRelay || !triggerEventAllowed(project, normalized.triggerEvent)) {
+      return undefined;
+    }
+
+    const desiredStage = resolveWorkflowStage(project, normalizedIssue.stateName);
+    if (!desiredStage) {
       return undefined;
     }
 
