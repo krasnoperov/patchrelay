@@ -70,7 +70,30 @@ export async function syncFailedStageToLinear(params: {
     });
   }
 
-  if (!params.issue.activeAgentSessionId) {
+  let deliveredToSession = false;
+  if (params.issue.activeAgentSessionId) {
+    deliveredToSession =
+      (await linear
+        .updateAgentSession?.({
+          agentSessionId: params.issue.activeAgentSessionId,
+          plan: buildFailedSessionPlan(params.stageRun.stage, params.stageRun),
+        })
+        .then(() => true)
+        .catch(() => false)) ?? false;
+    deliveredToSession =
+      (await linear
+        .createAgentActivity({
+          agentSessionId: params.issue.activeAgentSessionId,
+          content: {
+            type: "error",
+            body: `PatchRelay could not complete the ${params.stageRun.stage} workflow: ${params.message}`,
+          },
+        })
+        .then(() => true)
+        .catch(() => false)) || deliveredToSession;
+  }
+
+  if (!deliveredToSession) {
     const result = await linear
       .upsertIssueComment({
         issueId: params.stageRun.linearIssueId,
@@ -87,23 +110,5 @@ export async function syncFailedStageToLinear(params: {
     if (result) {
       params.stores.workflowCoordinator.setIssueStatusComment(params.stageRun.projectId, params.stageRun.linearIssueId, result.id);
     }
-  }
-
-  if (params.issue.activeAgentSessionId) {
-    await linear
-      .updateAgentSession?.({
-        agentSessionId: params.issue.activeAgentSessionId,
-        plan: buildFailedSessionPlan(params.stageRun.stage, params.stageRun),
-      })
-      .catch(() => undefined);
-    await linear
-      .createAgentActivity({
-        agentSessionId: params.issue.activeAgentSessionId,
-        content: {
-          type: "error",
-          body: `PatchRelay could not complete the ${params.stageRun.stage} workflow: ${params.message}`,
-        },
-      })
-      .catch(() => undefined);
   }
 }

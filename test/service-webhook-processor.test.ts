@@ -320,6 +320,65 @@ test("webhook processor records desired stage and enqueues matching issues", asy
   }
 });
 
+test("webhook processor clears a stale agent session when a non-agent workflow is queued", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-processor-session-reset-"));
+  try {
+    const { db, processor } = createHarness(baseDir);
+    db.workflowCoordinator.recordDesiredStage({
+      projectId: "usertold",
+      linearIssueId: "issue_1",
+      issueKey: "USE-25",
+      title: "Build app server orchestration",
+      issueUrl: "https://linear.app/example/issue/USE-25",
+      currentLinearState: "Review",
+      activeAgentSessionId: "session-stale",
+      lastWebhookAt: new Date().toISOString(),
+    });
+    const receipt = db.eventReceipts.insertEventReceipt({
+      source: "linear-webhook",
+      externalId: "delivery-start-reset",
+      eventType: "Issue.update",
+      receivedAt: new Date().toISOString(),
+      acceptanceStatus: "accepted",
+      linearIssueId: "issue_1",
+    });
+    const event = db.webhookEvents.insertWebhookEvent({
+      webhookId: "delivery-start-reset",
+      receivedAt: new Date().toISOString(),
+      eventType: "Issue.update",
+      issueId: "issue_1",
+      headersJson: "{}",
+      payloadJson: JSON.stringify({
+        action: "update",
+        type: "Issue",
+        createdAt: "2026-03-08T12:00:00.000Z",
+        webhookTimestamp: 1000,
+        updatedFrom: { stateId: "review" },
+        data: {
+          id: "issue_1",
+          identifier: "USE-25",
+          title: "Build app server orchestration",
+          url: "https://linear.app/example/issue/USE-25",
+          team: { key: "USE" },
+          state: { name: "Start" },
+        },
+      }),
+      signatureValid: true,
+      dedupeStatus: "accepted",
+    });
+
+    await processor.processWebhookEvent(event.id);
+
+    const issue = db.issueWorkflows.getTrackedIssue("usertold", "issue_1");
+    const issueControl = db.issueControl.getIssueControl("usertold", "issue_1");
+    assert.equal(issue?.desiredStage, "development");
+    assert.equal(issueControl?.desiredReceiptId, receipt.id);
+    assert.equal(issue?.activeAgentSessionId, undefined);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("webhook processor enqueues delegated issueCreated events when Start matches a workflow", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-processor-issue-created-"));
   try {

@@ -35,6 +35,7 @@ class FakeLinearClient implements LinearClient {
   }> = [];
   failNextCommentUpsert = false;
   failNextAgentActivity = false;
+  failNextAgentSessionUpdate = false;
   failNextGetIssue = false;
 
   async getIssue(issueId: string): Promise<LinearIssueSnapshot> {
@@ -85,6 +86,10 @@ class FakeLinearClient implements LinearClient {
     externalUrls?: Array<{ label: string; url: string }>;
     plan?: Array<{ label: string; status: "pending" | "in_progress" | "completed" }>;
   }) {
+    if (this.failNextAgentSessionUpdate) {
+      this.failNextAgentSessionUpdate = false;
+      throw new Error("agent session update failed");
+    }
     this.agentSessionUpdates.push(params);
     return { id: params.agentSessionId };
   }
@@ -404,7 +409,6 @@ test("refreshRunningStatusComment writes the running comment and tracks the retu
   const { publisher, linear, store } = createHarness();
 
   store.getTrackedIssue("proj", "issue-1")!.statusCommentId = undefined;
-  store.getTrackedIssue("proj", "issue-1")!.activeAgentSessionId = undefined;
   await publisher.refreshRunningStatusComment("proj", "issue-1", 10, "APP-1");
 
   assert.equal(linear.comments.length, 1);
@@ -416,7 +420,6 @@ test("refreshRunningStatusComment tolerates comment write failures without mutat
   const { publisher, linear, store } = createHarness();
 
   linear.failNextCommentUpsert = true;
-  store.getTrackedIssue("proj", "issue-1")!.activeAgentSessionId = undefined;
   await publisher.refreshRunningStatusComment("proj", "issue-1", 10, "APP-1");
 
   assert.equal(store.statusCommentUpdates.length, 0);
@@ -556,4 +559,18 @@ test("publishStageCompletion logs when final agent activity publish fails", asyn
   assert.equal(warnings[0]?.message, "Failed to publish Linear agent activity");
   assert.equal(warnings[0]?.bindings.issueId, stageRun.linearIssueId);
   assert.equal(warnings[0]?.bindings.activityType, "response");
+});
+
+test("publishStageCompletion falls back to the awaiting handoff comment when session delivery fails", async () => {
+  const { publisher, linear, stageRun } = createHarness();
+
+  linear.failNextAgentSessionUpdate = true;
+  linear.failNextAgentActivity = true;
+
+  await publisher.publishStageCompletion(stageRun, () => {
+    throw new Error("should not enqueue");
+  });
+
+  assert.equal(linear.comments.length, 1);
+  assert.match(linear.comments[0]?.body ?? "", /awaiting-final-state/);
 });

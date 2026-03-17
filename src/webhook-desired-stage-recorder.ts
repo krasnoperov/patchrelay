@@ -47,6 +47,9 @@ export class WebhookDesiredStageRecorder {
     const stageAllowed = triggerEventAllowed(project, normalized.triggerEvent);
     const desiredStage = this.resolveDesiredStage(project, normalized, issue, activeStageRun, delegatedToPatchRelay);
     const launchInput = this.resolveLaunchInput(normalized.agentSession);
+    const activeAgentSessionId =
+      normalized.agentSession?.id ??
+      (!activeStageRun && (desiredStage || (normalized.triggerEvent === "delegateChanged" && !delegatedToPatchRelay)) ? null : undefined);
     const refreshedIssue = this.stores.workflowCoordinator.recordDesiredStage({
       projectId: project.id,
       linearIssueId: normalizedIssue.id,
@@ -56,7 +59,7 @@ export class WebhookDesiredStageRecorder {
       ...(normalizedIssue.stateName ? { currentLinearState: normalizedIssue.stateName } : {}),
       ...(desiredStage ? { desiredStage } : {}),
       ...(options?.eventReceiptId !== undefined ? { desiredReceiptId: options.eventReceiptId } : {}),
-      ...(normalized.agentSession?.id ? { activeAgentSessionId: normalized.agentSession.id } : {}),
+      ...(activeAgentSessionId !== undefined ? { activeAgentSessionId } : {}),
       lastWebhookAt: new Date().toISOString(),
     });
 

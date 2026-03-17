@@ -167,8 +167,10 @@ export class ServiceStageRunner {
         ...(claim.issue.issueKey ? { issueKey: claim.issue.issueKey } : {}),
       },
     );
-    await this.lifecyclePublisher.refreshRunningStatusComment(item.projectId, item.issueId, claim.stageRun.id, issue.issueKey);
-    await this.lifecyclePublisher.publishStageStarted(claim.issue, claim.stageRun.stage);
+    const deliveredToSession = await this.lifecyclePublisher.publishStageStarted(claim.issue, claim.stageRun.stage);
+    if (!deliveredToSession) {
+      await this.lifecyclePublisher.refreshRunningStatusComment(item.projectId, item.issueId, claim.stageRun.id, issue.issueKey);
+    }
 
     this.logger.info(
       {
