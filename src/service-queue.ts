@@ -11,13 +11,17 @@ export class SerialWorkQueue<T> {
     private readonly getKey?: (item: T) => string,
   ) {}
 
-  enqueue(item: T): void {
+  enqueue(item: T, options?: { priority?: boolean }): void {
     const key = this.getKey?.(item);
     if (key && this.queuedKeys.has(key)) {
       return;
     }
 
-    this.items.push(item);
+    if (options?.priority) {
+      this.items.unshift(item);
+    } else {
+      this.items.push(item);
+    }
     if (key) {
       this.queuedKeys.add(key);
     }

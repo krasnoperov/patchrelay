@@ -1,5 +1,11 @@
 import type { Logger } from "pino";
-import type { LinearClientProvider, TrackedIssueRecord } from "./types.ts";
+import { buildAgentSessionExternalUrls } from "./agent-session-presentation.ts";
+import type {
+  AppConfig,
+  LinearAgentSessionPlanItem,
+  LinearClientProvider,
+  TrackedIssueRecord,
+} from "./types.ts";
 
 type AgentActivityContent =
   | { type: "thought" | "elicitation" | "response" | "error"; body: string }
@@ -7,6 +13,7 @@ type AgentActivityContent =
 
 export class StageAgentActivityPublisher {
   constructor(
+    private readonly config: AppConfig,
     private readonly linearProvider: LinearClientProvider,
     private readonly logger: Logger,
   ) {}
@@ -40,5 +47,38 @@ export class StageAgentActivityPublisher {
     }
 
     await this.publishForSession(issue.projectId, issue.activeAgentSessionId, content);
+  }
+
+  async updateSession(params: {
+    projectId: string;
+    agentSessionId: string;
+    issueKey?: string;
+    plan?: LinearAgentSessionPlanItem[];
+  }): Promise<void> {
+    const linear = await this.linearProvider.forProject(params.projectId);
+    if (!linear?.updateAgentSession) {
+      return;
+    }
+
+    const externalUrls = buildAgentSessionExternalUrls(this.config, params.issueKey);
+    if (!externalUrls && !params.plan) {
+      return;
+    }
+
+    try {
+      await linear.updateAgentSession({
+        agentSessionId: params.agentSessionId,
+        ...(externalUrls ? { externalUrls } : {}),
+        ...(params.plan ? { plan: params.plan } : {}),
+      });
+    } catch (error) {
+      this.logger.warn(
+        {
+          agentSessionId: params.agentSessionId,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        "Failed to update Linear agent session",
+      );
+    }
   }
 }

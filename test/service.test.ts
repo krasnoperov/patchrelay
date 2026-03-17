@@ -183,6 +183,11 @@ class FakeLinearClient implements LinearClient {
   readonly issues = new Map<string, LinearIssueSnapshot>();
   readonly comments = new Map<string, { id: string; issueId: string; body: string }>();
   readonly agentActivities: Array<{ agentSessionId: string; content: Record<string, unknown>; ephemeral: boolean }> = [];
+  readonly agentSessionUpdates: Array<{
+    agentSessionId: string;
+    externalUrls?: Array<{ label: string; url: string }>;
+    plan?: Array<{ label: string; status: "pending" | "in_progress" | "completed" }>;
+  }> = [];
   readonly stateTransitions: Array<{ issueId: string; stateName: string }> = [];
   readonly labelUpdates: Array<{ issueId: string; addNames: string[]; removeNames: string[] }> = [];
   failNextCommentUpsert = false;
@@ -246,6 +251,15 @@ class FakeLinearClient implements LinearClient {
       ephemeral: params.ephemeral ?? false,
     });
     return { id: `agent-activity-${this.nextAgentActivityNumber++}` };
+  }
+
+  async updateAgentSession(params: {
+    agentSessionId: string;
+    externalUrls?: Array<{ label: string; url: string }>;
+    plan?: Array<{ label: string; status: "pending" | "in_progress" | "completed" }>;
+  }) {
+    this.agentSessionUpdates.push(params);
+    return { id: params.agentSessionId };
   }
 
   async updateIssueLabels(params: { issueId: string; addNames?: string[]; removeNames?: string[] }): Promise<LinearIssueSnapshot> {
@@ -704,12 +718,13 @@ test("service starts a workflow from a Linear agent session and forwards the ini
     const trackedIssue = db.issueWorkflows.getTrackedIssue("usertold", "issue_1");
     assert.equal(trackedIssue?.activeAgentSessionId, "session-1");
     assert.equal(codex.steeredTurns[0]?.input.includes("implementation plan"), true);
+    assert.equal(trackedIssue?.statusCommentId, undefined);
     assert.ok(
       linear.agentActivities.some(
         (entry) =>
           entry.agentSessionId === "session-1" &&
-          entry.content.type === "thought" &&
-          String(entry.content.body).includes("preparing the development workflow"),
+          entry.content.type === "response" &&
+          String(entry.content.body).includes("picked this up"),
       ),
     );
     assert.ok(
@@ -718,6 +733,13 @@ test("service starts a workflow from a Linear agent session and forwards the ini
           entry.agentSessionId === "session-1" &&
           entry.content.type === "action" &&
           entry.content.parameter === "development",
+      ),
+    );
+    assert.ok(
+      linear.agentSessionUpdates.some(
+        (entry) =>
+          entry.agentSessionId === "session-1" &&
+          entry.plan?.some((step) => step.label === "Prepare workspace" && step.status === "in_progress"),
       ),
     );
   } finally {

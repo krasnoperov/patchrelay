@@ -198,8 +198,9 @@ For the next stage run:
 - if this is the first stage for the issue, PatchRelay calls `thread/start`
 - if a prior stage exists, PatchRelay calls `thread/fork`
 - PatchRelay then calls `turn/start` with the issue context and workflow file contents
+- for delegated Linear agent sessions, PatchRelay first sends a native agent-session acknowledgement and refreshes session presentation such as the external status URL and workflow plan
 - while preparing the run, PatchRelay also claims the matching active Linear state and applies configured workflow labels
-- after the turn is live, PatchRelay best-effort refreshes its service-owned running status comment and flushes any queued Linear comments
+- after the turn is live, PatchRelay flushes any queued Linear comments and best-effort refreshes either the native Linear agent session presentation or, for non-agent flows, the service-owned running status comment
 
 The resulting thread id and turn id are persisted immediately.
 
@@ -222,11 +223,11 @@ On `turn/completed`, PatchRelay:
 3. synthesizes a stage report
 4. marks the stage run completed or failed
 5. re-reads Linear to see whether the agent advanced the issue to a final handoff state
-6. if the issue is still in the active state PatchRelay set, updates the service-owned Linear comment and workflow labels to flag that handoff is still needed
+6. if the issue is still in the active state PatchRelay set, updates the native Linear agent session handoff state when available, otherwise refreshes the service-owned Linear comment, and updates workflow labels to flag that handoff is still needed
 7. if the issue has already moved on, clears any service-owned workflow labels
 8. launches any queued next stage
 
-If stage launch fails before a turn is live, PatchRelay marks the stage failed locally, rolls the issue to the configured fallback Linear state such as `Human Needed`, removes service-owned workflow labels, and updates the service-owned comment with the failure. If PatchRelay later finds an unrecoverable active stage during startup reconciliation, it applies the same failure sync back to Linear only when the issue is still in the service-owned active state.
+If stage launch fails before a turn is live, PatchRelay marks the stage failed locally, rolls the issue to the configured fallback Linear state such as `Human Needed`, removes service-owned workflow labels, and publishes the failure through the native Linear agent session when available, otherwise through the service-owned comment. If PatchRelay later finds an unrecoverable active stage during startup reconciliation, it applies the same failure sync back to Linear only when the issue is still in the service-owned active state.
 
 ## Reconciliation And Restart
 

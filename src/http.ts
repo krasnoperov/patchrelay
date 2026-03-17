@@ -200,6 +200,41 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
     },
   );
 
+  app.get("/agent/session/:issueKey", async (request, reply) => {
+    const issueKey = (request.params as { issueKey: string }).issueKey;
+    const token = getQueryParam(request, "token");
+    if (!token) {
+      return reply
+        .code(401)
+        .type("text/html; charset=utf-8")
+        .send(renderAgentSessionStatusErrorPage("Missing access token."));
+    }
+
+    const status = await service.getPublicAgentSessionStatus({ issueKey, token });
+    if (status.status === "invalid_token") {
+      return reply
+        .code(401)
+        .type("text/html; charset=utf-8")
+        .send(renderAgentSessionStatusErrorPage("The access token is invalid or expired."));
+    }
+    if (status.status === "issue_not_found") {
+      return reply
+        .code(404)
+        .type("text/html; charset=utf-8")
+        .send(renderAgentSessionStatusErrorPage("Issue status is not available."));
+    }
+
+    return reply
+      .type("text/html; charset=utf-8")
+      .send(
+        renderAgentSessionStatusPage({
+          issueKey,
+          expiresAt: status.expiresAt,
+          sessionStatus: status.sessionStatus,
+        }),
+      );
+  });
+
   if (config.operatorApi.enabled) {
     app.addHook("onRequest", async (request, reply) => {
       if (!request.url.startsWith("/api/")) {
@@ -244,6 +279,22 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
         return reply.code(404).send({ ok: false, reason: "stage_run_not_found" });
       }
       return reply.send({ ok: true, ...result });
+    });
+
+    app.get("/api/issues/:issueKey/session-url", async (request, reply) => {
+      const issueKey = (request.params as { issueKey: string }).issueKey;
+      const ttlSeconds = getPositiveIntegerQueryParam(request, "ttlSeconds");
+      const issue = await service.getIssueOverview(issueKey);
+      if (!issue) {
+        return reply.code(404).send({ ok: false, reason: "issue_not_found" });
+      }
+
+      const link = service.createPublicAgentSessionStatusLink(issueKey, ttlSeconds ? { ttlSeconds } : undefined);
+      if (!link) {
+        return reply.code(503).send({ ok: false, reason: "public_base_url_not_configured" });
+      }
+
+      return reply.send({ ok: true, ...link });
     });
 
   }
@@ -424,4 +475,203 @@ function renderOAuthResult(message: string): string {
     </main>
   </body>
 </html>`;
+}
+
+function renderAgentSessionStatusErrorPage(message: string): string {
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>PatchRelay Agent Status</title>
+    <style>
+      body { font-family: Georgia, "Times New Roman", serif; background: #f7f4ef; color: #1f1d1a; margin: 0; padding: 32px; }
+      main { max-width: 720px; margin: 10vh auto; background: rgba(255,255,255,0.86); border: 1px solid rgba(31,29,26,0.12); border-radius: 20px; padding: 32px; box-shadow: 0 28px 80px rgba(49,42,30,0.10); }
+      p { font-size: 18px; line-height: 1.6; color: #4d483f; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>PatchRelay Agent Session</h1>
+      <p>${escapeHtml(message)}</p>
+    </main>
+  </body>
+</html>`;
+}
+
+function renderAgentSessionStatusPage(params: {
+  issueKey: string;
+  expiresAt: string;
+  sessionStatus: {
+    issue: {
+      issueKey?: string;
+      title?: string;
+      issueUrl?: string;
+    };
+    activeStageRun?: {
+      stage?: string;
+      status?: string;
+    };
+    latestStageRun?: {
+      stage?: string;
+      status?: string;
+    };
+    liveThread?: {
+      threadId?: string;
+      threadStatus?: string;
+    };
+    stages: Array<{
+      stageRun?: {
+        stage?: string;
+        status?: string;
+        startedAt?: string;
+        endedAt?: string;
+      };
+    }>;
+    generatedAt: string;
+  };
+}): string {
+  const issueTitle = params.sessionStatus.issue.title ?? params.sessionStatus.issue.issueKey ?? params.issueKey;
+  const issueUrl = params.sessionStatus.issue.issueUrl;
+  const activeStage = formatStageChip(params.sessionStatus.activeStageRun);
+  const latestStage = formatStageChip(params.sessionStatus.latestStageRun);
+  const threadInfo = formatThread(params.sessionStatus.liveThread);
+  const stagesRows = params.sessionStatus.stages.slice(-8).map((entry) => formatStageRow(entry.stageRun)).join("");
+
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>PatchRelay Agent Session ${escapeHtml(params.issueKey)}</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f5f1e8;
+        --panel: rgba(255,255,255,0.84);
+        --ink: #1f1d1a;
+        --muted: #5b554b;
+        --accent: #1f6d57;
+        --line: rgba(31,29,26,0.15);
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: Georgia, "Times New Roman", serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at top left, rgba(184, 139, 68, 0.22), transparent 36%),
+          radial-gradient(circle at bottom right, rgba(31, 109, 87, 0.16), transparent 30%),
+          linear-gradient(150deg, #eee3cf 0%, var(--bg) 52%, #f8f6f1 100%);
+        padding: 24px;
+      }
+      main {
+        width: min(920px, 100%);
+        margin: 0 auto;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        padding: 32px;
+        box-shadow: 0 30px 86px rgba(49,42,30,0.12);
+      }
+      h1 { margin: 0; font-size: clamp(34px, 7vw, 52px); line-height: 1.05; }
+      p { color: var(--muted); font-size: 17px; line-height: 1.6; margin: 12px 0 0; }
+      a { color: var(--accent); text-decoration: none; }
+      a:hover { text-decoration: underline; }
+      .chips { display: flex; flex-wrap: wrap; gap: 10px; margin: 20px 0 6px; }
+      .chip { border: 1px solid var(--line); border-radius: 999px; padding: 9px 14px; background: rgba(255,255,255,0.74); font-size: 14px; }
+      .section { margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--line); }
+      .section h2 { margin: 0; font-size: 22px; }
+      table { width: 100%; border-collapse: collapse; margin-top: 14px; }
+      th, td { text-align: left; border-bottom: 1px solid var(--line); padding: 10px 8px; vertical-align: top; }
+      th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: #5f594e; }
+      td { font-size: 15px; color: #2a2622; }
+      code { font-family: "SFMono-Regular", "Cascadia Code", "Fira Code", monospace; font-size: 0.95em; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>${escapeHtml(issueTitle)}</h1>
+      <p>PatchRelay read-only agent session status for <code>${escapeHtml(params.issueKey)}</code>.</p>
+      ${issueUrl ? `<p><a href="${escapeHtml(issueUrl)}" target="_blank" rel="noopener noreferrer">Open issue in Linear</a></p>` : ""}
+      <div class="chips">
+        <span class="chip"><strong>Active:</strong> ${activeStage}</span>
+        <span class="chip"><strong>Latest:</strong> ${latestStage}</span>
+        <span class="chip"><strong>Thread:</strong> ${threadInfo}</span>
+      </div>
+      <div class="section">
+        <h2>Recent Stages</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Stage</th>
+              <th>Status</th>
+              <th>Started</th>
+              <th>Ended</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${stagesRows || '<tr><td colspan="4">No completed stage runs yet.</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+      <p>Snapshot generated at <code>${escapeHtml(params.sessionStatus.generatedAt)}</code>. Link valid until <code>${escapeHtml(params.expiresAt)}</code>.</p>
+    </main>
+  </body>
+</html>`;
+}
+
+function formatStageChip(
+  stageRun:
+    | {
+        stage?: string;
+        status?: string;
+      }
+    | undefined,
+): string {
+  if (!stageRun) {
+    return "none";
+  }
+  const stage = stageRun.stage ?? "unknown";
+  const status = stageRun.status ?? "unknown";
+  return `<code>${escapeHtml(stage)}</code> (${escapeHtml(status)})`;
+}
+
+function formatThread(
+  liveThread:
+    | {
+        threadId?: string;
+        threadStatus?: string;
+      }
+    | undefined,
+): string {
+  if (!liveThread) {
+    return "idle";
+  }
+  const threadId = liveThread.threadId ?? "unknown";
+  const status = liveThread.threadStatus ?? "unknown";
+  return `<code>${escapeHtml(threadId)}</code> (${escapeHtml(status)})`;
+}
+
+function formatStageRow(
+  stageRun:
+    | {
+        stage?: string;
+        status?: string;
+        startedAt?: string;
+        endedAt?: string;
+      }
+    | undefined,
+): string {
+  if (!stageRun) {
+    return '<tr><td colspan="4">Unknown stage record</td></tr>';
+  }
+  const stage = stageRun.stage ?? "unknown";
+  const status = stageRun.status ?? "unknown";
+  const startedAt = stageRun.startedAt ?? "-";
+  const endedAt = stageRun.endedAt ?? "-";
+  return `<tr><td><code>${escapeHtml(stage)}</code></td><td>${escapeHtml(status)}</td><td><code>${escapeHtml(
+    startedAt,
+  )}</code></td><td><code>${escapeHtml(endedAt)}</code></td></tr>`;
 }

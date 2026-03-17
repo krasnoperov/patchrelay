@@ -792,7 +792,8 @@ test("reconciliation fails an active stage when the persisted thread is missing"
 
   assert.equal(store.getStageRun(stageRun.id)?.status, "failed");
   assert.deepEqual(linear.stateTransitions, [{ issueId: "issue-1", stateName: "Human Needed" }]);
-  assert.match(linear.comments[0]?.body ?? "", /thread was not found during reconciliation/);
+  assert.equal(linear.comments.length, 0);
+  assert.match(String(linear.agentActivities[0]?.content.body ?? ""), /thread was not found during reconciliation/);
   assert.deepEqual(store.lifecycleStatuses.at(-1), {
     projectId: "proj",
     issueId: "issue-1",

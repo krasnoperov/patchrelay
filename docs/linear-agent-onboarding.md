@@ -61,7 +61,7 @@ This is the normal happy path:
 5. PatchRelay resolves the matching `projects[]` entry from the issue key prefix and/or Linear team id.
 6. PatchRelay maps the issue's current Linear state such as `Start`, `Review`, or `Deploy` into the next internal stage.
 7. PatchRelay creates or reuses the issue worktree and launches the stage through `codex app-server`.
-8. PatchRelay reports progress back to Linear with service-owned status comments, workflow bookkeeping, and agent activity.
+8. PatchRelay responds through the native Linear agent session first, attaches a signed PatchRelay status URL, keeps the Linear agent plan fresh, and only falls back to service-owned issue comments when there is no active agent session.
 
 ## Mentions Vs Delegation
 
@@ -84,6 +84,15 @@ Follow-up instructions can arrive in two ways:
 - issue comments: PatchRelay can also forward regular issue comments into the active run while the stage is live
 
 For the standard Linear app-agent flow, you can usually omit `trigger_events` entirely. PatchRelay defaults to `agentSessionCreated`, `agentPrompted`, and `statusChanged`.
+
+## Native Agent UX
+
+PatchRelay now treats the Linear agent session as the primary operator-facing surface for delegated work:
+
+- `AgentSessionEvent.created` gets a native acknowledgement as early as possible so Linear does not mark the app as unresponsive
+- PatchRelay updates the session with a signed external status URL that opens a read-only PatchRelay status page
+- PatchRelay updates the Linear agent plan as a workflow moves from preparation to running to handoff or completion
+- service-owned issue comments remain available as a fallback for non-agent and legacy flows, but they are no longer the default happy-path status channel for delegated sessions
 
 ## Secrets And Boundaries
 

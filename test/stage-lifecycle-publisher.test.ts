@@ -28,6 +28,11 @@ class FakeLinearClient implements LinearClient {
   readonly labelUpdates: Array<{ issueId: string; addNames: string[]; removeNames: string[] }> = [];
   readonly comments: Array<{ issueId: string; commentId?: string; body: string }> = [];
   readonly agentActivities: Array<{ agentSessionId: string; content: LinearAgentActivityContent; ephemeral?: boolean }> = [];
+  readonly agentSessionUpdates: Array<{
+    agentSessionId: string;
+    externalUrls?: Array<{ label: string; url: string }>;
+    plan?: Array<{ label: string; status: "pending" | "in_progress" | "completed" }>;
+  }> = [];
   failNextCommentUpsert = false;
   failNextAgentActivity = false;
   failNextGetIssue = false;
@@ -73,6 +78,15 @@ class FakeLinearClient implements LinearClient {
     }
     this.agentActivities.push(params);
     return { id: `activity-${this.agentActivities.length}` };
+  }
+
+  async updateAgentSession(params: {
+    agentSessionId: string;
+    externalUrls?: Array<{ label: string; url: string }>;
+    plan?: Array<{ label: string; status: "pending" | "in_progress" | "completed" }>;
+  }) {
+    this.agentSessionUpdates.push(params);
+    return { id: params.agentSessionId };
   }
 
   async updateIssueLabels(params: { issueId: string; addNames?: string[]; removeNames?: string[] }): Promise<LinearIssueSnapshot> {
@@ -390,6 +404,7 @@ test("refreshRunningStatusComment writes the running comment and tracks the retu
   const { publisher, linear, store } = createHarness();
 
   store.getTrackedIssue("proj", "issue-1")!.statusCommentId = undefined;
+  store.getTrackedIssue("proj", "issue-1")!.activeAgentSessionId = undefined;
   await publisher.refreshRunningStatusComment("proj", "issue-1", 10, "APP-1");
 
   assert.equal(linear.comments.length, 1);
@@ -401,6 +416,7 @@ test("refreshRunningStatusComment tolerates comment write failures without mutat
   const { publisher, linear, store } = createHarness();
 
   linear.failNextCommentUpsert = true;
+  store.getTrackedIssue("proj", "issue-1")!.activeAgentSessionId = undefined;
   await publisher.refreshRunningStatusComment("proj", "issue-1", 10, "APP-1");
 
   assert.equal(store.statusCommentUpdates.length, 0);
@@ -435,7 +451,14 @@ test("publishStageCompletion pauses for handoff when Linear is still in the acti
       removeNames: ["llm-working"],
     },
   ]);
-  assert.match(linear.comments.at(-1)?.body ?? "", /awaiting-final-state/);
+  assert.equal(linear.comments.length, 0);
+  assert.ok(
+    linear.agentSessionUpdates.some(
+      (update) =>
+        update.agentSessionId === "session-1" &&
+        update.plan?.some((step) => step.label === "Review next Linear step" && step.status === "in_progress"),
+    ),
+  );
   assert.equal(linear.agentActivities.at(-1)?.content.type, "elicitation");
 });
 
@@ -457,6 +480,13 @@ test("publishStageCompletion cleans up workflow labels after Linear already move
       removeNames: ["llm-working", "llm-awaiting-handoff"],
     },
   ]);
+  assert.ok(
+    linear.agentSessionUpdates.some(
+      (update) =>
+        update.agentSessionId === "session-1" &&
+        update.plan?.every((step) => step.status === "completed"),
+    ),
+  );
   assert.equal(linear.agentActivities.at(-1)?.content.type, "response");
 });
 

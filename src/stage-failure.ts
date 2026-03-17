@@ -1,3 +1,4 @@
+import { buildFailedSessionPlan } from "./agent-session-plan.ts";
 import {
   buildStageFailedComment,
   resolveActiveLinearState,
@@ -69,24 +70,32 @@ export async function syncFailedStageToLinear(params: {
     });
   }
 
-  const result = await linear
-    .upsertIssueComment({
-      issueId: params.stageRun.linearIssueId,
-      ...(params.issue.statusCommentId ? { commentId: params.issue.statusCommentId } : {}),
-      body: buildStageFailedComment({
-        issue: params.issue,
-        stageRun: params.stageRun,
-        message: params.message,
-        ...(fallbackState ? { fallbackState } : {}),
-        ...(params.mode ? { mode: params.mode } : {}),
-      }),
-  })
-    .catch(() => undefined);
-  if (result) {
-    params.stores.workflowCoordinator.setIssueStatusComment(params.stageRun.projectId, params.stageRun.linearIssueId, result.id);
+  if (!params.issue.activeAgentSessionId) {
+    const result = await linear
+      .upsertIssueComment({
+        issueId: params.stageRun.linearIssueId,
+        ...(params.issue.statusCommentId ? { commentId: params.issue.statusCommentId } : {}),
+        body: buildStageFailedComment({
+          issue: params.issue,
+          stageRun: params.stageRun,
+          message: params.message,
+          ...(fallbackState ? { fallbackState } : {}),
+          ...(params.mode ? { mode: params.mode } : {}),
+        }),
+      })
+      .catch(() => undefined);
+    if (result) {
+      params.stores.workflowCoordinator.setIssueStatusComment(params.stageRun.projectId, params.stageRun.linearIssueId, result.id);
+    }
   }
 
   if (params.issue.activeAgentSessionId) {
+    await linear
+      .updateAgentSession?.({
+        agentSessionId: params.issue.activeAgentSessionId,
+        plan: buildFailedSessionPlan(params.stageRun.stage, params.stageRun),
+      })
+      .catch(() => undefined);
     await linear
       .createAgentActivity({
         agentSessionId: params.issue.activeAgentSessionId,

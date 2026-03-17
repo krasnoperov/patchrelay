@@ -25,7 +25,7 @@ In PatchRelay, authoritative state includes:
 - persisted issue-to-session handoff history used to reopen the right Codex session in the issue worktree
 - queued user or Linear input that has not yet been delivered to a live turn
 - Linear installation links, OAuth state, and encrypted installation tokens
-- service-owned workflow sync metadata such as the status comment PatchRelay is expected to refresh
+- service-owned workflow sync metadata such as fallback issue comments PatchRelay may still need to refresh when no native agent session is available
 
 This is the minimum harness ledger. It tells PatchRelay what work it owns, where that work is
 running, which external side effects it is responsible for, and what must happen next.

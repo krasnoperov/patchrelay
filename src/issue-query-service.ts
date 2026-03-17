@@ -76,4 +76,21 @@ export class IssueQueryService {
   async getActiveStageStatus(issueKey: string) {
     return await this.stageFinalizer.getActiveStageStatus(issueKey);
   }
+
+  async getPublicAgentSessionStatus(issueKey: string) {
+    const overview = await this.getIssueOverview(issueKey);
+    if (!overview) {
+      return undefined;
+    }
+
+    const report = await this.getIssueReport(issueKey);
+    return {
+      issue: overview.issue,
+      ...(overview.activeStageRun ? { activeStageRun: overview.activeStageRun } : {}),
+      ...(overview.latestStageRun ? { latestStageRun: overview.latestStageRun } : {}),
+      ...(overview.liveThread ? { liveThread: overview.liveThread } : {}),
+      stages: report?.stages ?? [],
+      generatedAt: new Date().toISOString(),
+    };
+  }
 }

@@ -1,4 +1,10 @@
 import type { Logger } from "pino";
+import {
+  buildAwaitingHandoffSessionPlan,
+  buildCompletedSessionPlan,
+  buildRunningSessionPlan,
+} from "./agent-session-plan.ts";
+import { buildAgentSessionExternalUrls } from "./agent-session-presentation.ts";
 import type { IssueControlStoreProvider } from "./ledger-ports.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import type { IssueWorkflowCoordinatorProvider, IssueWorkflowQueryStoreProvider } from "./workflow-ports.ts";
@@ -63,6 +69,9 @@ export class StageLifecyclePublisher {
     if (!issue || !stageRun || !workspace) {
       return;
     }
+    if (issue.activeAgentSessionId) {
+      return;
+    }
 
     try {
       const result = await linear.upsertIssueComment({
@@ -99,6 +108,12 @@ export class StageLifecyclePublisher {
     }
 
     try {
+      const externalUrls = buildAgentSessionExternalUrls(this.config, issue.issueKey);
+      await linear.updateAgentSession?.({
+        agentSessionId: issue.activeAgentSessionId,
+        ...(externalUrls ? { externalUrls } : {}),
+        plan: buildRunningSessionPlan(stage),
+      });
       await linear.createAgentActivity({
         agentSessionId: issue.activeAgentSessionId,
         content: {
@@ -163,16 +178,25 @@ export class StageLifecyclePublisher {
           this.stores.workflowCoordinator.setIssueLifecycleStatus(stageRun.projectId, stageRun.linearIssueId, "paused");
 
           const finalStageRun = this.stores.issueWorkflows.getStageRun(stageRun.id) ?? stageRun;
-          const result = await linear.upsertIssueComment({
-            issueId: stageRun.linearIssueId,
-            ...(refreshedIssue.statusCommentId ? { commentId: refreshedIssue.statusCommentId } : {}),
-            body: buildAwaitingHandoffComment({
-              issue: refreshedIssue,
-              stageRun: finalStageRun,
-              activeState,
-            }),
-          });
-          this.stores.workflowCoordinator.setIssueStatusComment(stageRun.projectId, stageRun.linearIssueId, result.id);
+          if (refreshedIssue.activeAgentSessionId) {
+            const externalUrls = buildAgentSessionExternalUrls(this.config, refreshedIssue.issueKey);
+            await linear.updateAgentSession?.({
+              agentSessionId: refreshedIssue.activeAgentSessionId,
+              ...(externalUrls ? { externalUrls } : {}),
+              plan: buildAwaitingHandoffSessionPlan(stageRun.stage),
+            });
+          } else {
+            const result = await linear.upsertIssueComment({
+              issueId: stageRun.linearIssueId,
+              ...(refreshedIssue.statusCommentId ? { commentId: refreshedIssue.statusCommentId } : {}),
+              body: buildAwaitingHandoffComment({
+                issue: refreshedIssue,
+                stageRun: finalStageRun,
+                activeState,
+              }),
+            });
+            this.stores.workflowCoordinator.setIssueStatusComment(stageRun.projectId, stageRun.linearIssueId, result.id);
+          }
           this.feed?.publish({
             level: "info",
             kind: "stage",
@@ -212,6 +236,14 @@ export class StageLifecyclePublisher {
     }
 
     if (refreshedIssue) {
+      if (refreshedIssue.activeAgentSessionId) {
+        const externalUrls = buildAgentSessionExternalUrls(this.config, refreshedIssue.issueKey);
+        await linear?.updateAgentSession?.({
+          agentSessionId: refreshedIssue.activeAgentSessionId,
+          ...(externalUrls ? { externalUrls } : {}),
+          plan: buildCompletedSessionPlan(stageRun.stage),
+        });
+      }
       this.feed?.publish({
         level: "info",
         kind: "stage",

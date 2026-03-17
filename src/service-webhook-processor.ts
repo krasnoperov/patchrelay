@@ -42,7 +42,7 @@ export class ServiceWebhookProcessor {
     private readonly feed?: OperatorEventFeed,
   ) {
     const turnInputDispatcher = new StageTurnInputDispatcher(stores, codex, logger);
-    const agentActivity = new StageAgentActivityPublisher(linearProvider, logger);
+    const agentActivity = new StageAgentActivityPublisher(config, linearProvider, logger);
     this.desiredStageRecorder = new WebhookDesiredStageRecorder(stores);
     this.agentSessionHandler = new AgentSessionWebhookHandler(stores, turnInputDispatcher, agentActivity, feed);
     this.commentHandler = new CommentWebhookHandler(stores, turnInputDispatcher, feed);

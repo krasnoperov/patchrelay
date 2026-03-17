@@ -9,6 +9,12 @@ import type { WebhookEventStoreProvider } from "./webhook-event-ports.ts";
 import { IssueQueryService } from "./issue-query-service.ts";
 import { LinearOAuthService } from "./linear-oauth-service.ts";
 import { OperatorEventFeed } from "./operator-feed.ts";
+import {
+  buildSessionStatusUrl,
+  createSessionStatusToken,
+  deriveSessionStatusSigningSecret,
+  verifySessionStatusToken,
+} from "./public-agent-session-status.ts";
 import { ServiceRuntime } from "./service-runtime.ts";
 import { ServiceStageFinalizer } from "./service-stage-finalizer.ts";
 import { type IssueQueueItem, ServiceStageRunner } from "./service-stage-runner.ts";
@@ -185,7 +191,9 @@ export class PatchRelayService {
       rawBody: params.rawBody,
     });
     if (result.accepted) {
-      this.runtime.enqueueWebhookEvent(result.accepted.id);
+      this.runtime.enqueueWebhookEvent(result.accepted.id, {
+        priority: result.accepted.normalized.triggerEvent === "agentSessionCreated",
+      });
     }
     return {
       status: result.status,
@@ -215,6 +223,65 @@ export class PatchRelayService {
 
   async getActiveStageStatus(issueKey: string) {
     return await this.queryService.getActiveStageStatus(issueKey);
+  }
+
+  createPublicAgentSessionStatusLink(
+    issueKey: string,
+    options?: { nowMs?: number; ttlSeconds?: number },
+  ): { url: string; issueKey: string; expiresAt: string } | undefined {
+    if (!this.config.server.publicBaseUrl) {
+      return undefined;
+    }
+
+    const signingSecret = deriveSessionStatusSigningSecret(this.config.linear.tokenEncryptionKey);
+    const token = createSessionStatusToken({
+      issueKey,
+      secret: signingSecret,
+      ...(options?.nowMs !== undefined ? { nowMs: options.nowMs } : {}),
+      ...(options?.ttlSeconds !== undefined ? { ttlSeconds: options.ttlSeconds } : {}),
+    });
+    return {
+      url: buildSessionStatusUrl({
+        publicBaseUrl: this.config.server.publicBaseUrl,
+        issueKey,
+        token: token.token,
+      }),
+      issueKey: token.issueKey,
+      expiresAt: token.expiresAt,
+    };
+  }
+
+  async getPublicAgentSessionStatus(params: {
+    issueKey: string;
+    token: string;
+    nowMs?: number;
+  }): Promise<
+    | { status: "invalid_token" }
+    | { status: "issue_not_found" }
+    | {
+        status: "ok";
+        issueKey: string;
+        expiresAt: string;
+        sessionStatus: NonNullable<Awaited<ReturnType<IssueQueryService["getPublicAgentSessionStatus"]>>>;
+      }
+  > {
+    const signingSecret = deriveSessionStatusSigningSecret(this.config.linear.tokenEncryptionKey);
+    const parsed = verifySessionStatusToken(params.token, signingSecret, params.nowMs);
+    if (!parsed || parsed.issueKey.trim().toLowerCase() !== params.issueKey.trim().toLowerCase()) {
+      return { status: "invalid_token" };
+    }
+
+    const sessionStatus = await this.queryService.getPublicAgentSessionStatus(params.issueKey);
+    if (!sessionStatus) {
+      return { status: "issue_not_found" };
+    }
+
+    return {
+      status: "ok",
+      issueKey: params.issueKey,
+      expiresAt: parsed.expiresAt,
+      sessionStatus,
+    };
   }
 }
 

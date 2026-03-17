@@ -23,7 +23,7 @@ The current storage story is mostly healthy:
 | `webhook_events.webhook_id`, dedupe, processing status | Authoritative | PatchRelay must know whether a delivery was already accepted and how far processing got |
 | `webhook_events.payload_json`, `headers_json` | Derived artifact | Useful for inspection and replay, but not the primary source of webhook truth after acceptance |
 | `event_receipts` | Authoritative | PatchRelay owns accepted webhook identity, dedupe correlation, and trigger linkage |
-| `issue_control` | Authoritative | It binds an issue to desired stage, active run, active workspace, and service-owned lifecycle state |
+| `issue_control` | Authoritative | It binds an issue to desired stage, active run, active workspace, native agent-session linkage, and fallback service-owned lifecycle state |
 | `workspace_ownership` | Authoritative | PatchRelay owns durable issue worktree and branch correlation |
 | `issue_sessions` | Authoritative | PatchRelay owns the issue-to-session handoff history needed to reopen the right Codex session |
 | `run_leases` active state and thread correlation | Authoritative | Restart recovery and deterministic handoff depend on them |

@@ -112,6 +112,29 @@ test("service runtime processes enqueued webhook and deduplicates identical issu
   ]);
 });
 
+test("service runtime prioritizes urgent webhook items without introducing a second processing lane", async () => {
+  const codex = new FakeCodexClient();
+  const processedWebhooks: number[] = [];
+
+  const runtime = new ServiceRuntime(
+    codex as never,
+    pino({ enabled: false }),
+    async () => undefined,
+    () => [],
+    async (eventId) => {
+      processedWebhooks.push(eventId);
+    },
+    async () => undefined,
+  );
+
+  runtime.enqueueWebhookEvent(41);
+  runtime.enqueueWebhookEvent(99, { priority: true });
+  runtime.enqueueWebhookEvent(42);
+  await flushQueue();
+
+  assert.deepEqual(processedWebhooks, [99, 41, 42]);
+});
+
 test("service runtime clears ready state on stop and preserves codex status in readiness", async () => {
   const codex = new FakeCodexClient();
   const runtime = new ServiceRuntime(
