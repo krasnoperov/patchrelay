@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.10](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.7.9...patchrelay-v0.7.10) (2026-03-17)
+
+
+### Bug Fixes
+
+* tighten delegated Linear session delivery ([#45](https://github.com/krasnoperov/patchrelay/issues/45)) ([042bb58](https://github.com/krasnoperov/patchrelay/commit/042bb585d68debcf2937139bccd3c7ce1373b6dd))
+
 ## [0.7.9](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.7.8...patchrelay-v0.7.9) (2026-03-17)
 
 
