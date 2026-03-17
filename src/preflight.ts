@@ -85,12 +85,6 @@ export async function runPreflight(config: AppConfig): Promise<PreflightReport> 
   checks.push(...checkPath("database", path.dirname(config.database.path), "directory", { createIfMissing: true, writable: true }));
   checks.push(checkDatabaseSchema(config));
   checks.push(...checkPath("logging", path.dirname(config.logging.filePath), "directory", { createIfMissing: true, writable: true }));
-  if (config.logging.webhookArchiveDir) {
-    checks.push(...checkPath("archive", config.logging.webhookArchiveDir, "directory", { createIfMissing: true, writable: true }));
-  } else {
-    checks.push(warn("archive", "Raw webhook archival is disabled"));
-  }
-
   if (config.projects.length === 0) {
     checks.push(warn("projects", "No projects are configured yet; add one with `patchrelay project apply <id> <repo-path>` before connecting Linear"));
   }

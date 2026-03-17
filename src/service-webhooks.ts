@@ -2,7 +2,6 @@ import type { Logger } from "pino";
 import type { EventReceiptStoreProvider } from "./ledger-ports.ts";
 import type { WebhookEventStoreProvider } from "./webhook-event-ports.ts";
 import type { AppConfig, LinearWebhookPayload, NormalizedEvent } from "./types.ts";
-import { archiveWebhook } from "./webhook-archive.ts";
 import { normalizeWebhook } from "./webhooks.ts";
 import { redactSensitiveHeaders, timestampMsWithinSkew, verifyHmacSha256Hex } from "./utils.ts";
 
@@ -67,15 +66,6 @@ export async function acceptIncomingWebhook(params: {
   const payloadJson = JSON.stringify(payload);
 
   logWebhookSummary(params.logger, normalized);
-  await archiveAcceptedPayload({
-    config: params.config,
-    logger: params.logger,
-    webhookId: params.webhookId,
-    receivedAt,
-    headers: params.headers,
-    rawBody: params.rawBody,
-    payload,
-  });
 
   const stored = params.stores.webhookEvents.insertWebhookEvent({
     webhookId: params.webhookId,
@@ -183,32 +173,4 @@ function logWebhookSummary(logger: Logger, normalized: NormalizedEvent): void {
     },
     "Webhook metadata",
   );
-}
-
-async function archiveAcceptedPayload(params: {
-  config: AppConfig;
-  logger: Logger;
-  webhookId: string;
-  receivedAt: string;
-  headers: Record<string, string | string[] | undefined>;
-  rawBody: Buffer;
-  payload: LinearWebhookPayload;
-}): Promise<void> {
-  if (!params.config.logging.webhookArchiveDir) {
-    return;
-  }
-
-  try {
-    const archivePath = await archiveWebhook({
-      archiveDir: params.config.logging.webhookArchiveDir,
-      webhookId: params.webhookId,
-      receivedAt: params.receivedAt,
-      headers: redactSensitiveHeaders(params.headers),
-      rawBody: params.rawBody,
-      payload: params.payload,
-    });
-    params.logger.debug({ webhookId: params.webhookId, archivePath }, "Archived webhook to local file");
-  } catch (error) {
-    params.logger.error({ webhookId: params.webhookId, error }, "Failed to archive webhook to local file");
-  }
 }

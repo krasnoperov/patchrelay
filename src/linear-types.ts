@@ -9,7 +9,7 @@ export interface LinearWebhookPayload {
   createdAt: string;
   webhookTimestamp: number;
   actor?: Record<string, unknown>;
-  data: Record<string, unknown>;
+  data?: Record<string, unknown>;
   updatedFrom?: Record<string, unknown>;
   url?: string;
 }

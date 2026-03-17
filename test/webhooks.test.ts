@@ -188,6 +188,86 @@ test("normalizeWebhook extracts agent session context from delegation webhooks",
   );
 });
 
+test("normalizeWebhook tolerates top-level agent session webhook fields", () => {
+  const payload: LinearWebhookPayload = {
+    action: "created",
+    type: "AgentSession",
+    createdAt: "2026-03-08T12:00:00.000Z",
+    webhookTimestamp: Date.now(),
+    agentSession: {
+      id: "session_top_level",
+      issue: {
+        id: "issue_agent_top_level",
+        identifier: "USE-125",
+        title: "Implement top-level agent delegation",
+        delegate: {
+          id: "app_user_1",
+          name: "PatchRelay",
+        },
+        team: {
+          id: "team_1",
+          key: "USE",
+        },
+        state: {
+          id: "state_start",
+          name: "Start",
+          type: "started",
+        },
+      },
+    } as unknown as Record<string, unknown>,
+    promptContext: "Please start implementation.",
+  } as unknown as LinearWebhookPayload;
+
+  const normalized = normalizeWebhook({
+    webhookId: "delivery_agent_session_top_level",
+    payload,
+  });
+
+  assert.equal(normalized.triggerEvent, "agentSessionCreated");
+  assert.equal(normalized.issue?.id, "issue_agent_top_level");
+  assert.equal(normalized.issue?.delegateId, "app_user_1");
+  assert.equal(normalized.agentSession?.id, "session_top_level");
+  assert.equal(normalized.agentSession?.promptContext, "Please start implementation.");
+});
+
+test("normalizeWebhook extracts nested issue metadata from root agent thread comments", () => {
+  const payload: LinearWebhookPayload = {
+    action: "create",
+    type: "Comment",
+    createdAt: "2026-03-17T09:50:10.508Z",
+    webhookTimestamp: Date.now(),
+    data: {
+      id: "comment_root",
+      body: "This thread is for an agent session with patchrelay.",
+      commentThread: {
+        issue: {
+          id: "issue_agent_thread",
+          identifier: "USE-200",
+          title: "Agent thread root comment",
+          team: {
+            id: "team_1",
+            key: "USE",
+          },
+          state: {
+            id: "state_start",
+            name: "Start",
+          },
+        },
+      },
+    },
+  };
+
+  const normalized = normalizeWebhook({
+    webhookId: "delivery_agent_thread_comment",
+    payload,
+  });
+
+  assert.equal(normalized.issue?.id, "issue_agent_thread");
+  assert.equal(normalized.issue?.identifier, "USE-200");
+  assert.equal(normalized.comment?.id, "comment_root");
+  assert.equal(normalized.triggerEvent, "commentCreated");
+});
+
 test("normalizeWebhook accepts installation permission change webhooks without issue metadata", () => {
   const payload: LinearWebhookPayload = {
     action: "teamAccessChanged",

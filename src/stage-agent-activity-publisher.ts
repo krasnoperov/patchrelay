@@ -18,7 +18,12 @@ export class StageAgentActivityPublisher {
     private readonly logger: Logger,
   ) {}
 
-  async publishForSession(projectId: string, agentSessionId: string, content: AgentActivityContent): Promise<void> {
+  async publishForSession(
+    projectId: string,
+    agentSessionId: string,
+    content: AgentActivityContent,
+    options?: { ephemeral?: boolean },
+  ): Promise<void> {
     const linear = await this.linearProvider.forProject(projectId);
     if (!linear) {
       return;
@@ -28,7 +33,7 @@ export class StageAgentActivityPublisher {
       await linear.createAgentActivity({
         agentSessionId,
         content,
-        ephemeral: content.type === "thought" || content.type === "action",
+        ephemeral: options?.ephemeral ?? (content.type === "thought" || content.type === "action"),
       });
     } catch (error) {
       this.logger.warn(
@@ -41,12 +46,12 @@ export class StageAgentActivityPublisher {
     }
   }
 
-  async publishForIssue(issue: TrackedIssueRecord, content: AgentActivityContent): Promise<void> {
+  async publishForIssue(issue: TrackedIssueRecord, content: AgentActivityContent, options?: { ephemeral?: boolean }): Promise<void> {
     if (!issue.activeAgentSessionId) {
       return;
     }
 
-    await this.publishForSession(issue.projectId, issue.activeAgentSessionId, content);
+    await this.publishForSession(issue.projectId, issue.activeAgentSessionId, content, options);
   }
 
   async updateSession(params: {

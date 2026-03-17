@@ -150,7 +150,6 @@ PatchRelay:
 - verifies the Linear HMAC signature
 - validates timestamp freshness
 - deduplicates by delivery id
-- archives the webhook payload
 - persists a webhook receipt row
 - enqueues asynchronous processing
 

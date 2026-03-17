@@ -110,9 +110,9 @@ export class AgentSessionWebhookHandler {
           ),
         );
         await this.agentActivity.publishForSession(project.id, normalized.agentSession.id, {
-          type: "response",
-          body: `PatchRelay picked this up and is preparing the ${desiredStage} workflow.`,
-        });
+          type: "thought",
+          body: `PatchRelay started working on the ${desiredStage} workflow and is preparing the workspace.`,
+        }, { ephemeral: false });
         return;
       }
 
@@ -216,9 +216,9 @@ export class AgentSessionWebhookHandler {
         ),
       );
       await this.agentActivity.publishForSession(project.id, normalized.agentSession.id, {
-        type: "response",
-        body: `PatchRelay received your prompt and is preparing the ${desiredStage} workflow.`,
-      });
+        type: "thought",
+        body: `PatchRelay is preparing the ${desiredStage} workflow from your latest prompt.`,
+      }, { ephemeral: false });
       return;
     }
 

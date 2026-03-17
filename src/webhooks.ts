@@ -9,12 +9,70 @@ import type {
   TriggerEvent,
 } from "./types.ts";
 
+function getPayloadRecord(payload: LinearWebhookPayload): Record<string, unknown> {
+  return payload as unknown as Record<string, unknown>;
+}
+
+function getPayloadData(payload: LinearWebhookPayload): Record<string, unknown> {
+  return asRecord(getPayloadRecord(payload).data) ?? getPayloadRecord(payload);
+}
+
+function getNestedRecord(record: Record<string, unknown> | undefined, path: string[]): Record<string, unknown> | undefined {
+  let current: unknown = record;
+  for (const segment of path) {
+    const currentRecord = asRecord(current);
+    if (!currentRecord) {
+      return undefined;
+    }
+    current = currentRecord[segment];
+  }
+  return asRecord(current);
+}
+
+function getFirstNestedRecord(record: Record<string, unknown> | undefined, paths: string[][]): Record<string, unknown> | undefined {
+  for (const path of paths) {
+    const candidate = getNestedRecord(record, path);
+    if (candidate) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
+function looksLikeIssueRecord(record: Record<string, unknown> | undefined): boolean {
+  if (!record) {
+    return false;
+  }
+
+  return Boolean(
+    getString(record, "identifier") ||
+      getString(record, "title") ||
+      getString(record, "delegateId") ||
+      asRecord(record.delegate) ||
+      asRecord(record.team) ||
+      asRecord(record.state) ||
+      Array.isArray(record.labels),
+  );
+}
+
 function deriveTriggerEvent(payload: LinearWebhookPayload): TriggerEvent {
-  if (payload.type === "AgentSessionEvent") {
-    if (payload.action === "created") {
+  const data = getPayloadData(payload);
+  const hasAgentSession =
+    Boolean(
+      getFirstNestedRecord(data, [
+        ["agentSession"],
+        ["session"],
+        ["agentSessionEvent", "agentSession"],
+        ["payload", "agentSession"],
+        ["resource", "agentSession"],
+      ]),
+    ) || Boolean(getString(data, "agentSessionId"));
+
+  if (payload.type === "AgentSessionEvent" || payload.type === "AgentSession" || hasAgentSession) {
+    if (payload.action === "created" || payload.action === "create") {
       return "agentSessionCreated";
     }
-    if (payload.action === "prompted") {
+    if (payload.action === "prompted" || payload.action === "prompt") {
       return "agentPrompted";
     }
     return "issueUpdated";
@@ -119,32 +177,45 @@ function extractLabelNames(record: Record<string, unknown>): string[] {
 }
 
 function extractIssueMetadata(payload: LinearWebhookPayload): IssueMetadata | undefined {
-  const data = asRecord(payload.data);
-  if (!data) {
-    return undefined;
-  }
+  const data = getPayloadData(payload);
+  const sessionRecord =
+    getFirstNestedRecord(data, [
+      ["agentSession"],
+      ["session"],
+      ["agentSessionEvent", "agentSession"],
+      ["payload", "agentSession"],
+      ["resource", "agentSession"],
+    ]) ?? data;
+  const commentRecord = getFirstNestedRecord(data, [["comment"]]);
+  const notificationRecord = getFirstNestedRecord(data, [["notification"]]) ?? data;
 
   const issueRecord =
     payload.type === "Issue"
       ? data
-      : payload.type === "AgentSessionEvent"
-        ? (() => {
-            const sessionRecord = asRecord(data.agentSession) ?? data;
-            return asRecord(sessionRecord.issue) ?? asRecord(data.issue) ?? sessionRecord;
-          })()
-        : payload.type === "AppUserNotification"
-          ? (() => {
-              const notificationRecord = asRecord(data.notification) ?? data;
-              return (
-                asRecord(notificationRecord.issue) ??
-                asRecord(asRecord(notificationRecord.comment)?.issue) ??
-                asRecord(data.issue)
-              );
-            })()
-      : (() => {
-          const nestedIssue = asRecord(data.issue);
-          return nestedIssue ?? data;
-        })();
+      : payload.type === "AppUserNotification"
+        ? getFirstNestedRecord(notificationRecord, [["issue"], ["comment", "issue"]]) ?? getFirstNestedRecord(data, [["issue"]])
+        : getFirstNestedRecord(data, [
+            ["issue"],
+            ["agentSession", "issue"],
+            ["session", "issue"],
+            ["agentSessionEvent", "issue"],
+            ["agentSessionEvent", "agentSession", "issue"],
+            ["payload", "issue"],
+            ["payload", "agentSession", "issue"],
+            ["resource", "issue"],
+            ["resource", "agentSession", "issue"],
+            ["comment", "issue"],
+            ["comment", "parent", "issue"],
+            ["comment", "commentThread", "issue"],
+            ["comment", "parentEntity", "issue"],
+            ["parent", "issue"],
+            ["commentThread", "issue"],
+            ["parentEntity", "issue"],
+            ["notification", "issue"],
+            ["notification", "comment", "issue"],
+          ]) ??
+          (looksLikeIssueRecord(sessionRecord) ? sessionRecord : undefined) ??
+          (looksLikeIssueRecord(commentRecord) ? commentRecord : undefined);
 
   if (!issueRecord) {
     return undefined;
@@ -226,18 +297,27 @@ function extractActorMetadata(payload: LinearWebhookPayload): LinearActorMetadat
 }
 
 function extractCommentMetadata(payload: LinearWebhookPayload): CommentMetadata | undefined {
-  if (payload.type !== "Comment") {
+  const data = getPayloadData(payload);
+  const commentRecord =
+    payload.type === "Comment"
+      ? data
+      : getFirstNestedRecord(data, [
+          ["comment"],
+          ["agentSession", "comment"],
+          ["session", "comment"],
+          ["agentSessionEvent", "comment"],
+          ["payload", "comment"],
+          ["resource", "comment"],
+          ["notification", "comment"],
+        ]);
+
+  if (!commentRecord) {
     return undefined;
   }
 
-  const data = asRecord(payload.data);
-  if (!data) {
-    return undefined;
-  }
-
-  const id = getString(data, "id");
-  const body = getString(data, "body");
-  const userRecord = asRecord(data.user);
+  const id = getString(commentRecord, "id");
+  const body = getString(commentRecord, "body");
+  const userRecord = asRecord(commentRecord.user);
   const userName = getString(userRecord ?? {}, "name");
   if (!id) {
     return undefined;
@@ -251,26 +331,48 @@ function extractCommentMetadata(payload: LinearWebhookPayload): CommentMetadata 
 }
 
 function extractAgentSessionMetadata(payload: LinearWebhookPayload): AgentSessionMetadata | undefined {
-  if (payload.type !== "AgentSessionEvent") {
+  const data = getPayloadData(payload);
+  const sessionRecord =
+    getFirstNestedRecord(data, [
+      ["agentSession"],
+      ["session"],
+      ["agentSessionEvent", "agentSession"],
+      ["payload", "agentSession"],
+      ["resource", "agentSession"],
+    ]) ?? (payload.type === "AgentSession" ? data : undefined);
+  if (payload.type !== "AgentSessionEvent" && payload.type !== "AgentSession" && !sessionRecord && !getString(data, "agentSessionId")) {
     return undefined;
   }
 
-  const data = asRecord(payload.data);
-  if (!data) {
-    return undefined;
-  }
-
-  const sessionRecord = asRecord(data.agentSession) ?? data;
-  const id = getString(sessionRecord, "id") ?? getString(data, "agentSessionId");
+  const id = getString(sessionRecord ?? {}, "id") ?? getString(data, "agentSessionId");
   if (!id) {
     return undefined;
   }
 
-  const agentActivity = asRecord(data.agentActivity);
-  const commentRecord = asRecord(data.comment) ?? asRecord(sessionRecord.comment);
-  const promptContext = getString(data, "promptContext") ?? getString(sessionRecord, "promptContext");
-  const promptBody = getString(agentActivity ?? {}, "body") ?? getString(commentRecord ?? {}, "body");
-  const issueCommentId = getString(commentRecord ?? {}, "id");
+  const agentActivity = getFirstNestedRecord(data, [
+    ["agentActivity"],
+    ["agentSession", "agentActivity"],
+    ["session", "agentActivity"],
+    ["agentSessionEvent", "agentActivity"],
+    ["payload", "agentActivity"],
+    ["resource", "agentActivity"],
+  ]);
+  const commentRecord =
+    getFirstNestedRecord(data, [
+      ["comment"],
+      ["agentSession", "comment"],
+      ["session", "comment"],
+      ["agentSessionEvent", "comment"],
+      ["payload", "comment"],
+      ["resource", "comment"],
+    ]) ??
+    getFirstNestedRecord(sessionRecord, [["comment"]]);
+  const promptContext = getString(data, "promptContext") ?? getString(sessionRecord ?? {}, "promptContext");
+  const promptBody =
+    getString(agentActivity ?? {}, "body") ??
+    getString(commentRecord ?? {}, "body") ??
+    getString(data, "body");
+  const issueCommentId = getString(commentRecord ?? {}, "id") ?? getString(data, "issueCommentId");
 
   return {
     id,
@@ -281,10 +383,7 @@ function extractAgentSessionMetadata(payload: LinearWebhookPayload): AgentSessio
 }
 
 function extractInstallationMetadata(payload: LinearWebhookPayload): InstallationWebhookMetadata | undefined {
-  const data = asRecord(payload.data);
-  if (!data) {
-    return undefined;
-  }
+  const data = getPayloadData(payload);
 
   if (payload.type === "PermissionChange") {
     const organizationId = getString(data, "organizationId");

@@ -42,7 +42,7 @@ In PatchRelay, derived state often includes:
 - verbose event trails used mainly for debugging
 - cached issue metadata that Linear still owns as the upstream source of truth
 - cached thread details that `codex app-server` can still return
-- historical views assembled from completed stage runs, archived webhook payloads, and worktree
+- historical views assembled from completed stage runs and worktree
   metadata
 
 Derived state can still be worth storing for speed or operator ergonomics, but it should be treated
@@ -73,9 +73,8 @@ Use SQLite for authoritative coordination state:
 - undelivered obligations
 - installation, OAuth, and token linkage
 
-Prefer reports, archives, or optional caches for derived state:
+Prefer reports or optional caches for derived state:
 
-- archived webhook payload files
 - stage reports
 - operator-facing inspection material
 - raw event logs when they are not required for restart correctness
@@ -116,8 +115,6 @@ The current persistence model is closest to the following split:
 - `run_thread_events`
   Useful for operator history, event counts, and debugging, but not required to continue or safely
   stop a run.
-- archived webhook payload files
-  Useful for debugging and audit trails, but not required for restart correctness.
 - rendered stage reports and CLI views
   Useful for inspection, but rebuildable from authoritative state plus upstream systems.
 

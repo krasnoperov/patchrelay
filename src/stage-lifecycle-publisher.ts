@@ -109,12 +109,9 @@ export class StageLifecyclePublisher {
       await linear.createAgentActivity({
         agentSessionId: issue.activeAgentSessionId,
         content: {
-          type: "action",
-          action: "running_workflow",
-          parameter: stage,
-          result: `PatchRelay started the ${stage} workflow.`,
+          type: "thought",
+          body: `PatchRelay started the ${stage} workflow and is working in the background.`,
         },
-        ephemeral: true,
       });
       return true;
     } catch (error) {

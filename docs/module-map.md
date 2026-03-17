@@ -88,7 +88,7 @@ Persistence currently crosses layers, but the intended split is:
 - coordination state in SQLite
 - execution artifacts in worktrees and Codex threads
 - integration state in Linear and OAuth/token storage
-- observability artifacts in reports, archived webhooks, and optional event history
+- observability artifacts in reports and optional event history
 
 When a new feature spans multiple layers, prefer keeping the coordination decision in the harness
 and pushing repo-specific behavior back out to workflow files or agent tools.

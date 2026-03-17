@@ -39,9 +39,6 @@ async function main(): Promise<void> {
   await enforceServiceEnvPermissions(getAdjacentEnvFilePaths(configPath).serviceEnvPath);
   await ensureDir(dirname(config.database.path));
   await ensureDir(dirname(config.logging.filePath));
-  if (config.logging.webhookArchiveDir) {
-    await ensureDir(config.logging.webhookArchiveDir);
-  }
   for (const project of config.projects) {
     await ensureDir(project.worktreeRoot);
   }

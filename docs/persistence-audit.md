@@ -49,7 +49,7 @@ The current storage story is mostly healthy:
 - thread event history
 - rendered reports and summaries
 - cached issue presentation fields in projections
-- archived webhook payload bodies beyond the minimum dedupe index
+- raw webhook payload bodies beyond the minimum dedupe index
 
 ## Near-Term Implications
 
