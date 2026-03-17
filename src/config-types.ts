@@ -32,7 +32,6 @@ export interface AppConfig {
     level: "debug" | "info" | "warn" | "error";
     format: "logfmt";
     filePath: string;
-    webhookArchiveDir?: string;
   };
   database: {
     path: string;

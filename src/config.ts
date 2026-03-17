@@ -66,7 +66,6 @@ const configSchema = z.object({
     level: z.enum(["debug", "info", "warn", "error"]).default("info"),
     format: z.literal("logfmt").default("logfmt"),
     file_path: z.string().min(1).default(getDefaultLogPath()),
-    webhook_archive_dir: z.string().optional(),
   }),
   database: z.object({
     path: z.string().min(1).default(getDefaultDatabasePath()),
@@ -379,7 +378,6 @@ export function loadConfig(
   }
 
   const logFilePath = env.PATCHRELAY_LOG_FILE ?? parsed.logging.file_path;
-  const webhookArchiveDir = env.PATCHRELAY_WEBHOOK_ARCHIVE_DIR ?? parsed.logging.webhook_archive_dir;
   const oauthRedirectUri = parsed.linear.oauth.redirect_uri ?? deriveLinearOAuthRedirectUri(parsed.server);
 
   const config: AppConfig = {
@@ -399,7 +397,6 @@ export function loadConfig(
       level: (env.PATCHRELAY_LOG_LEVEL as AppConfig["logging"]["level"] | undefined) ?? parsed.logging.level,
       format: parsed.logging.format,
       filePath: ensureAbsolutePath(logFilePath),
-      ...(webhookArchiveDir ? { webhookArchiveDir: ensureAbsolutePath(webhookArchiveDir) } : {}),
     },
     database: {
       path: ensureAbsolutePath(env.PATCHRELAY_DB_PATH ?? parsed.database.path),

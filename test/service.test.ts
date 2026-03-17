@@ -728,16 +728,16 @@ test("service starts a workflow from a Linear agent session and forwards the ini
       linear.agentActivities.some(
         (entry) =>
           entry.agentSessionId === "session-1" &&
-          entry.content.type === "response" &&
-          String(entry.content.body).includes("picked this up"),
+          entry.content.type === "thought" &&
+          String(entry.content.body).includes("started working on the development workflow"),
       ),
     );
     assert.ok(
       linear.agentActivities.some(
         (entry) =>
           entry.agentSessionId === "session-1" &&
-          entry.content.type === "action" &&
-          entry.content.parameter === "development",
+          entry.content.type === "thought" &&
+          String(entry.content.body).includes("started the development workflow"),
       ),
     );
     assert.ok(
@@ -2373,11 +2373,10 @@ test("service ignores webhook events when project routing is ambiguous", async (
   }
 });
 
-test("service acceptWebhook rejects invalid signatures, dedupes deliveries, and archives accepted payloads", async () => {
+test("service acceptWebhook rejects invalid signatures and dedupes accepted deliveries", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-accept-webhook-"));
   try {
     const { config, db, codex, service } = createService(baseDir);
-    config.logging.webhookArchiveDir = path.join(baseDir, "webhook-archive");
     installPatchRelayApp(db);
 
     const payload: LinearWebhookPayload = {
@@ -2447,11 +2446,6 @@ test("service acceptWebhook rejects invalid signatures, dedupes deliveries, and 
       assert.equal(codex.startedThreads.length, 1);
       assert.ok(stored.activeStageRunId);
     });
-
-    const archiveDir = config.logging.webhookArchiveDir!;
-    const expectedArchive = path.join(archiveDir, new Date().toISOString().slice(0, 10));
-    assert.equal(existsSync(archiveDir), true);
-    assert.equal(existsSync(expectedArchive), true);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

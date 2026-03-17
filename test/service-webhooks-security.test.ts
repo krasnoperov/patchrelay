@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
@@ -59,7 +59,6 @@ function buildConfig(baseDir: string): AppConfig {
       level: "info",
       format: "logfmt",
       filePath: path.join(baseDir, "patchrelay.log"),
-      webhookArchiveDir: path.join(baseDir, "webhook-archive"),
     },
     database: {
       path: path.join(baseDir, "patchrelay.sqlite"),
@@ -134,12 +133,32 @@ function buildPayload(timestamp = Date.now()): LinearWebhookPayload {
   };
 }
 
-function archivedFileCount(archiveDir: string): number {
-  if (!existsSync(archiveDir)) {
-    return 0;
-  }
-
-  return readdirSync(archiveDir, { recursive: true }).length;
+function buildAgentSessionPayload(timestamp = Date.now()): LinearWebhookPayload {
+  return {
+    action: "created",
+    type: "AgentSession",
+    createdAt: new Date(timestamp).toISOString(),
+    webhookTimestamp: timestamp,
+    agentSession: {
+      id: "session-1",
+      promptContext: "Please implement this",
+      issue: {
+        id: "issue-1",
+        identifier: "USE-1",
+        title: "Security test",
+        state: {
+          id: "state-1",
+          name: "Start",
+        },
+        delegateId: "patchrelay-app-user",
+        team: {
+          id: "team-1",
+          key: "USE",
+        },
+        labels: [],
+      },
+    },
+  } as LinearWebhookPayload;
 }
 
 function storedWebhookCount(db: PatchRelayDatabase): number {
@@ -152,7 +171,7 @@ function storedEventReceiptCount(db: PatchRelayDatabase): number {
   return row.count;
 }
 
-test("acceptIncomingWebhook does not persist or archive invalid signatures", async () => {
+test("acceptIncomingWebhook does not persist invalid signatures", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-security-"));
 
   try {
@@ -175,13 +194,12 @@ test("acceptIncomingWebhook does not persist or archive invalid signatures", asy
 
     assert.equal(result.status, 401);
     assert.equal(storedWebhookCount(db), 0);
-    assert.equal(archivedFileCount(config.logging.webhookArchiveDir!), 0);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
 
-test("acceptIncomingWebhook does not persist or archive stale payloads", async () => {
+test("acceptIncomingWebhook does not persist stale payloads", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-stale-"));
 
   try {
@@ -206,7 +224,6 @@ test("acceptIncomingWebhook does not persist or archive stale payloads", async (
 
     assert.equal(result.status, 401);
     assert.equal(storedWebhookCount(db), 0);
-    assert.equal(archivedFileCount(config.logging.webhookArchiveDir!), 0);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -241,7 +258,43 @@ test("acceptIncomingWebhook dual-writes authoritative event receipts for accepte
     assert.equal(receipt?.eventType, "Issue.update");
     assert.equal(receipt?.linearIssueId, "issue-1");
     assert.equal(receipt?.processingStatus, "pending");
-    assert.ok(archivedFileCount(config.logging.webhookArchiveDir!) > 0);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("acceptIncomingWebhook accepts native agent session deliveries", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-agent-session-"));
+
+  try {
+    const config = buildConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+
+    const payload = buildAgentSessionPayload();
+    const rawBody = Buffer.from(JSON.stringify(payload), "utf8");
+    const signature = crypto.createHmac("sha256", config.linear.webhookSecret).update(rawBody).digest("hex");
+    const result = await acceptIncomingWebhook({
+      config,
+      stores: db,
+      logger: pino({ enabled: false }),
+      webhookId: "delivery-agent-session",
+      headers: {
+        "linear-signature": signature,
+      },
+      rawBody,
+    });
+
+    assert.equal(result.status, 200);
+    assert.equal(storedWebhookCount(db), 1);
+    assert.equal(storedEventReceiptCount(db), 1);
+    assert.equal(result.accepted.normalized.triggerEvent, "agentSessionCreated");
+    assert.equal(result.accepted.normalized.agentSession?.id, "session-1");
+    assert.equal(result.accepted.normalized.issue?.id, "issue-1");
+    const receipt = db.eventReceipts.getEventReceiptBySourceExternalId("linear-webhook", "delivery-agent-session");
+    assert.equal(receipt?.eventType, "AgentSession.created");
+    assert.equal(receipt?.linearIssueId, "issue-1");
+    assert.equal(receipt?.processingStatus, "pending");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

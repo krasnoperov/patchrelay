@@ -103,7 +103,6 @@ test("loadConfig expands env vars, resolves paths, and honors runtime overrides"
       },
       logging: {
         file_path: "${LOG_FILE_PATH:-./logs/default.log}",
-        webhook_archive_dir: "${ARCHIVE_DIR:-./archive}",
       },
       database: {
         path: "./data/patchrelay.sqlite",
@@ -173,12 +172,10 @@ test("loadConfig expands env vars, resolves paths, and honors runtime overrides"
         PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.json"),
         PATCHRELAY_LOG_FILE: path.join(baseDir, "runtime.log"),
         PATCHRELAY_DB_PATH: path.join(baseDir, "runtime.sqlite"),
-        PATCHRELAY_WEBHOOK_ARCHIVE_DIR: path.join(baseDir, "runtime-archive"),
         CUSTOM_LINEAR_SECRET: "top-secret",
         PATCHRELAY_OPERATOR_TOKEN: "operator-secret",
         ...oauthEnv,
         LOG_FILE_PATH: path.join(baseDir, "ignored.log"),
-        ARCHIVE_DIR: path.join(baseDir, "ignored-archive"),
       },
       () => {
         process.chdir(baseDir);
@@ -188,7 +185,6 @@ test("loadConfig expands env vars, resolves paths, and honors runtime overrides"
         assert.equal(config.server.publicBaseUrl, "https://patchrelay.example.com");
         assert.equal(config.server.readinessPath, "/ready");
         assert.equal(config.logging.filePath, path.join(baseDir, "runtime.log"));
-        assert.equal(config.logging.webhookArchiveDir, path.join(baseDir, "runtime-archive"));
         assert.equal(config.database.path, path.join(baseDir, "runtime.sqlite"));
         assert.equal(config.linear.webhookSecret, "top-secret");
         assert.equal(config.linear.tokenEncryptionKey, "enc-secret");
