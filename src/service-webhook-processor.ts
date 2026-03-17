@@ -10,7 +10,7 @@ import { resolveProject, trustedActorAllowed } from "./project-resolution.ts";
 import { StageAgentActivityPublisher } from "./stage-agent-activity-publisher.ts";
 import { StageTurnInputDispatcher } from "./stage-turn-input-dispatcher.ts";
 import type { IssueQueueItem } from "./service-stage-runner.ts";
-import type { AppConfig, LinearClientProvider, LinearWebhookPayload, NormalizedEvent } from "./types.ts";
+import type { AppConfig, IssueMetadata, LinearClientProvider, LinearWebhookPayload, NormalizedEvent } from "./types.ts";
 import { safeJsonParse, sanitizeDiagnosticText } from "./utils.ts";
 import { AgentSessionWebhookHandler } from "./webhook-agent-session-handler.ts";
 import { CommentWebhookHandler } from "./webhook-comment-handler.ts";
@@ -35,7 +35,7 @@ export class ServiceWebhookProcessor {
       IssueWorkflowQueryStoreProvider &
       LinearInstallationStoreProvider &
       StageEventLogStoreProvider,
-    linearProvider: LinearClientProvider,
+    private readonly linearProvider: LinearClientProvider,
     codex: CodexAppServerClient,
     private readonly enqueueIssue: (projectId: IssueQueueItem["projectId"], issueId: IssueQueueItem["issueId"]) => void,
     private readonly logger: Logger,
@@ -148,13 +148,15 @@ export class ServiceWebhookProcessor {
 
       this.stores.webhookEvents.assignWebhookProject(webhookEventId, project.id);
       const receipt = this.ensureEventReceipt(event, project.id, normalized.issue.id);
-      const issueState = this.desiredStageRecorder.record(project, normalized, receipt ? { eventReceiptId: receipt.id } : undefined);
-      const observation = describeWebhookObservation(normalized, issueState.delegatedToPatchRelay);
+      const hydrated = await this.hydrateIssueContext(project.id, normalized);
+      const hydratedIssue = hydrated.issue ?? normalized.issue;
+      const issueState = this.desiredStageRecorder.record(project, hydrated, receipt ? { eventReceiptId: receipt.id } : undefined);
+      const observation = describeWebhookObservation(hydrated, issueState.delegatedToPatchRelay);
       if (observation) {
         this.feed?.publish({
           level: "info",
           kind: observation.kind,
-          issueKey: normalized.issue.identifier,
+          issueKey: hydratedIssue.identifier,
           projectId: project.id,
           ...(observation.status ? { status: observation.status } : {}),
           summary: observation.summary,
@@ -163,13 +165,13 @@ export class ServiceWebhookProcessor {
       }
 
       await this.agentSessionHandler.handle({
-        normalized,
+        normalized: hydrated,
         project,
         issue: issueState.issue,
         desiredStage: issueState.desiredStage,
         delegatedToPatchRelay: issueState.delegatedToPatchRelay,
       });
-      await this.commentHandler.handle(normalized, project);
+      await this.commentHandler.handle(hydrated, project);
 
       this.stores.webhookEvents.markWebhookProcessed(webhookEventId, "processed");
       this.markEventReceiptProcessed(event.webhookId, "processed");
@@ -177,26 +179,26 @@ export class ServiceWebhookProcessor {
         this.feed?.publish({
           level: "info",
           kind: "stage",
-          issueKey: normalized.issue.identifier,
+          issueKey: hydratedIssue.identifier,
           projectId: project.id,
           stage: issueState.desiredStage,
           status: "queued",
           summary: `Queued ${issueState.desiredStage} workflow`,
-          detail: `Triggered by ${normalized.triggerEvent}${normalized.issue.stateName ? ` from ${normalized.issue.stateName}` : ""}.`,
+          detail: `Triggered by ${hydrated.triggerEvent}${hydratedIssue.stateName ? ` from ${hydratedIssue.stateName}` : ""}.`,
         });
         this.logger.info(
           {
-            webhookEventId,
-            webhookId: event.webhookId,
-            projectId: project.id,
-            issueKey: normalized.issue.identifier,
-            issueId: normalized.issue.id,
-            desiredStage: issueState.desiredStage,
-            delegatedToPatchRelay: issueState.delegatedToPatchRelay,
+          webhookEventId,
+          webhookId: event.webhookId,
+          projectId: project.id,
+          issueKey: hydratedIssue.identifier,
+          issueId: hydratedIssue.id,
+          desiredStage: issueState.desiredStage,
+          delegatedToPatchRelay: issueState.delegatedToPatchRelay,
           },
           "Recorded desired stage from webhook and enqueued issue execution",
         );
-        this.enqueueIssue(project.id, normalized.issue.id);
+        this.enqueueIssue(project.id, hydratedIssue.id);
         return;
       }
 
@@ -205,9 +207,9 @@ export class ServiceWebhookProcessor {
           webhookEventId,
           webhookId: event.webhookId,
           projectId: project.id,
-          issueKey: normalized.issue.identifier,
-          issueId: normalized.issue.id,
-          triggerEvent: normalized.triggerEvent,
+          issueKey: hydratedIssue.identifier,
+          issueId: hydratedIssue.id,
+          triggerEvent: hydrated.triggerEvent,
           delegatedToPatchRelay: issueState.delegatedToPatchRelay,
         },
         "Processed webhook without enqueuing a new stage run",
@@ -236,6 +238,44 @@ export class ServiceWebhookProcessor {
         "Failed to process Linear webhook event",
       );
       throw err;
+    }
+  }
+
+  private async hydrateIssueContext(projectId: string, normalized: NormalizedEvent): Promise<NormalizedEvent> {
+    if (!normalized.issue) {
+      return normalized;
+    }
+
+    if (normalized.triggerEvent !== "agentSessionCreated" && normalized.triggerEvent !== "agentPrompted") {
+      return normalized;
+    }
+
+    if (hasCompleteIssueContext(normalized.issue)) {
+      return normalized;
+    }
+
+    const linear = await this.linearProvider.forProject(projectId);
+    if (!linear) {
+      return normalized;
+    }
+
+    try {
+      const liveIssue = await linear.getIssue(normalized.issue.id);
+      return {
+        ...normalized,
+        issue: mergeIssueMetadata(normalized.issue, liveIssue),
+      };
+    } catch (error) {
+      this.logger.warn(
+        {
+          projectId,
+          issueId: normalized.issue.id,
+          triggerEvent: normalized.triggerEvent,
+          error: sanitizeDiagnosticText(error instanceof Error ? error.message : String(error)),
+        },
+        "Failed to hydrate sparse Linear issue context for agent session webhook",
+      );
+      return normalized;
     }
   }
 
@@ -286,6 +326,41 @@ export class ServiceWebhookProcessor {
     });
     return this.stores.eventReceipts.getEventReceipt(inserted.id);
   }
+}
+
+function hasCompleteIssueContext(issue: IssueMetadata): boolean {
+  return Boolean(issue.stateName && issue.delegateId && issue.teamId && issue.teamKey);
+}
+
+function mergeIssueMetadata(
+  issue: IssueMetadata,
+  liveIssue: {
+    identifier?: string;
+    title?: string;
+    url?: string;
+    teamId?: string;
+    teamKey?: string;
+    stateId?: string;
+    stateName?: string;
+    delegateId?: string;
+    delegateName?: string;
+    labelIds?: string[];
+    labels?: Array<{ id: string; name: string }>;
+  },
+): IssueMetadata {
+  return {
+    ...issue,
+    ...(issue.identifier ? {} : liveIssue.identifier ? { identifier: liveIssue.identifier } : {}),
+    ...(issue.title ? {} : liveIssue.title ? { title: liveIssue.title } : {}),
+    ...(issue.url ? {} : liveIssue.url ? { url: liveIssue.url } : {}),
+    ...(issue.teamId ? {} : liveIssue.teamId ? { teamId: liveIssue.teamId } : {}),
+    ...(issue.teamKey ? {} : liveIssue.teamKey ? { teamKey: liveIssue.teamKey } : {}),
+    ...(issue.stateId ? {} : liveIssue.stateId ? { stateId: liveIssue.stateId } : {}),
+    ...(issue.stateName ? {} : liveIssue.stateName ? { stateName: liveIssue.stateName } : {}),
+    ...(issue.delegateId ? {} : liveIssue.delegateId ? { delegateId: liveIssue.delegateId } : {}),
+    ...(issue.delegateName ? {} : liveIssue.delegateName ? { delegateName: liveIssue.delegateName } : {}),
+    labelNames: issue.labelNames.length > 0 ? issue.labelNames : (liveIssue.labels ?? []).map((label) => label.name),
+  };
 }
 
 function describeWebhookObservation(

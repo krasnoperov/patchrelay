@@ -269,8 +269,18 @@ function listInputObligations(db: PatchRelayDatabase, runLeaseId?: number) {
 test("webhook processor records desired stage and enqueues delegated agent-session workflows", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-processor-"));
   try {
-    const { db, processor, enqueuedIssues } = createHarness(baseDir);
+    const { db, linear, processor, enqueuedIssues } = createHarness(baseDir);
     installPatchRelayApp(db);
+    linear.issues.set("issue_1", {
+      ...(linear.issues.get("issue_1") ?? {}),
+      id: "issue_1",
+      workflowStates: DEFAULT_WORKFLOW_STATES,
+      labelIds: [],
+      labels: [],
+      teamLabels: [],
+      delegateId: "patchrelay-app",
+      delegateName: "PatchRelay",
+    });
     const receipt = db.eventReceipts.insertEventReceipt({
       source: "linear-webhook",
       externalId: "delivery-agent-created",
@@ -321,6 +331,71 @@ test("webhook processor records desired stage and enqueues delegated agent-sessi
     assert.equal(db.webhookEvents.getWebhookEvent(event.id)?.processingStatus, "processed");
     assert.equal(db.eventReceipts.getEventReceipt(receipt.id)?.processingStatus, "processed");
     assert.equal(db.eventReceipts.getEventReceipt(receipt.id)?.projectId, "usertold");
+    assert.deepEqual(enqueuedIssues, [{ projectId: "usertold", issueId: "issue_1" }]);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("webhook processor hydrates sparse delegated agent-session issue context from live Linear state", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-processor-hydrate-"));
+  try {
+    const { db, linear, processor, enqueuedIssues } = createHarness(baseDir);
+    installPatchRelayApp(db);
+    linear.issues.set("issue_1", {
+      ...(linear.issues.get("issue_1") ?? {}),
+      id: "issue_1",
+      workflowStates: DEFAULT_WORKFLOW_STATES,
+      labelIds: [],
+      labels: [],
+      teamLabels: [],
+      delegateId: "patchrelay-app",
+      delegateName: "PatchRelay",
+    });
+    const receipt = db.eventReceipts.insertEventReceipt({
+      source: "linear-webhook",
+      externalId: "delivery-agent-hydrated",
+      eventType: "AgentSessionEvent.created",
+      receivedAt: new Date().toISOString(),
+      acceptanceStatus: "accepted",
+      linearIssueId: "issue_1",
+    });
+    const event = db.webhookEvents.insertWebhookEvent({
+      webhookId: "delivery-agent-hydrated",
+      receivedAt: new Date().toISOString(),
+      eventType: "AgentSessionEvent.created",
+      issueId: "issue_1",
+      headersJson: "{}",
+      payloadJson: JSON.stringify({
+        action: "created",
+        type: "AgentSessionEvent",
+        createdAt: "2026-03-17T10:32:57.000Z",
+        webhookTimestamp: 1000,
+        data: {
+          agentSession: {
+            id: "session-11",
+            issue: {
+              id: "issue_1",
+              identifier: "USE-25",
+              title: "Build app server orchestration",
+              team: { key: "USE" },
+            },
+          },
+        },
+      }),
+      signatureValid: true,
+      dedupeStatus: "accepted",
+    });
+
+    await processor.processWebhookEvent(event.id);
+
+    const issue = db.issueWorkflows.getTrackedIssue("usertold", "issue_1");
+    const issueControl = db.issueControl.getIssueControl("usertold", "issue_1");
+    assert.equal(issue?.desiredStage, "development");
+    assert.equal(issueControl?.desiredStage, "development");
+    assert.equal(issueControl?.desiredReceiptId, receipt.id);
+    assert.equal(issueControl?.lifecycleStatus, "queued");
+    assert.equal(issue?.activeAgentSessionId, "session-11");
     assert.deepEqual(enqueuedIssues, [{ projectId: "usertold", issueId: "issue_1" }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });

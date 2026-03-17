@@ -37,6 +37,7 @@ export class LinearGraphqlClient implements LinearClient {
         identifier?: string | null;
         title?: string | null;
         url?: string | null;
+        delegate?: { id?: string | null; name?: string | null } | null;
         state?: { id?: string | null; name?: string | null } | null;
         labels?: {
           nodes?: Array<{ id: string; name: string }>;
@@ -60,6 +61,10 @@ export class LinearGraphqlClient implements LinearClient {
           identifier
           title
           url
+          delegate {
+            id
+            name
+          }
           state {
             id
             name
@@ -110,14 +115,15 @@ export class LinearGraphqlClient implements LinearClient {
     const response = await this.request<{
       issueUpdate: {
         success: boolean;
-        issue?: {
-          id: string;
-          identifier?: string | null;
-          title?: string | null;
-          url?: string | null;
-          state?: { id?: string | null; name?: string | null } | null;
-          labels?: { nodes?: Array<{ id: string; name: string }> } | null;
-          team?: {
+          issue?: {
+            id: string;
+            identifier?: string | null;
+            title?: string | null;
+            url?: string | null;
+            delegate?: { id?: string | null; name?: string | null } | null;
+            state?: { id?: string | null; name?: string | null } | null;
+            labels?: { nodes?: Array<{ id: string; name: string }> } | null;
+            team?: {
             id?: string | null;
             key?: string | null;
             states?: {
@@ -139,6 +145,10 @@ export class LinearGraphqlClient implements LinearClient {
             identifier
             title
             url
+            delegate {
+              id
+              name
+            }
             state {
               id
               name
@@ -458,6 +468,7 @@ export class LinearGraphqlClient implements LinearClient {
     identifier?: string | null;
     title?: string | null;
     url?: string | null;
+    delegate?: { id?: string | null; name?: string | null } | null;
     state?: { id?: string | null; name?: string | null } | null;
     labels?: { nodes?: Array<{ id: string; name: string }> } | null;
     team?: {
@@ -482,6 +493,8 @@ export class LinearGraphqlClient implements LinearClient {
       ...(issue.state?.name ? { stateName: issue.state.name } : {}),
       ...(issue.team?.id ? { teamId: issue.team.id } : {}),
       ...(issue.team?.key ? { teamKey: issue.team.key } : {}),
+      ...(issue.delegate?.id ? { delegateId: issue.delegate.id } : {}),
+      ...(issue.delegate?.name ? { delegateName: issue.delegate.name } : {}),
       workflowStates: (issue.team?.states?.nodes ?? []).map((state) => ({
         id: state.id,
         name: state.name,
