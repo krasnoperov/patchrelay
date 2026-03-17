@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.8](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.7.7...patchrelay-v0.7.8) (2026-03-17)
+
+
+### Bug Fixes
+
+* accept delegated Linear agent sessions natively ([325643b](https://github.com/krasnoperov/patchrelay/commit/325643bb13aeb3110bc7bbe7b3f4fc353f7a7e4e))
+
 ## [0.7.7](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.7.6...patchrelay-v0.7.7) (2026-03-17)
 
 
