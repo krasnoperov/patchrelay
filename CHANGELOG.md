@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.9](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.7.8...patchrelay-v0.7.9) (2026-03-17)
+
+
+### Bug Fixes
+
+* hydrate sparse Linear agent session issues ([a43a5a2](https://github.com/krasnoperov/patchrelay/commit/a43a5a291901c0f2fcb9a7a8bd99bc0ffb93071f))
+
 ## [0.7.8](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.7.7...patchrelay-v0.7.8) (2026-03-17)
 
 
