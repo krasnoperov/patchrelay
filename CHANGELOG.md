@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.6](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.7.5...patchrelay-v0.7.6) (2026-03-17)
+
+
+### Bug Fixes
+
+* use native Linear agent sessions for delegated workflow status ([#37](https://github.com/krasnoperov/patchrelay/issues/37)) ([06c1783](https://github.com/krasnoperov/patchrelay/commit/06c1783d2d2bf1a164807922d7db18ec1fd41797))
+
 ## [0.7.5](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.7.4...patchrelay-v0.7.5) (2026-03-14)
 
 
