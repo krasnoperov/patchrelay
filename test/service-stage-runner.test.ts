@@ -431,8 +431,9 @@ test("stage runner persists and delivers pending launch input through the obliga
 
     await runner.run({ projectId: "usertold", issueId: "issue-1" });
 
-    assert.equal(codex.steeredTurns.length, 1);
-    assert.match(codex.steeredTurns[0]!.input, /deployment logs/);
+    assert.equal(codex.startedTurns.length, 1);
+    assert.match(codex.startedTurns[0]!.input, /deployment logs/);
+    assert.equal(codex.steeredTurns.length, 0);
 
     const issueControl = db.issueControl.getIssueControl("usertold", "issue-1");
     assert.ok(issueControl?.activeRunLeaseId);

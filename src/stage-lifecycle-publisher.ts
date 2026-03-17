@@ -109,7 +109,7 @@ export class StageLifecyclePublisher {
       await linear.createAgentActivity({
         agentSessionId: issue.activeAgentSessionId,
         content: {
-          type: "thought",
+          type: "response",
           body: `PatchRelay started the ${stage} workflow and is working in the background.`,
         },
       });
@@ -188,7 +188,7 @@ export class StageLifecyclePublisher {
               type: "elicitation",
               body: `PatchRelay finished the ${stageRun.stage} workflow. Move the issue to its next workflow state or leave a follow-up prompt to continue.`,
             })) || deliveredToSession;
-          if (!deliveredToSession) {
+          if (!deliveredToSession && !refreshedIssue.activeAgentSessionId) {
             const result = await linear.upsertIssueComment({
               issueId: stageRun.linearIssueId,
               ...(refreshedIssue.statusCommentId ? { commentId: refreshedIssue.statusCommentId } : {}),

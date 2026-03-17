@@ -110,7 +110,7 @@ export class AgentSessionWebhookHandler {
           ),
         );
         await this.agentActivity.publishForSession(project.id, normalized.agentSession.id, {
-          type: "thought",
+          type: "response",
           body: `PatchRelay started working on the ${desiredStage} workflow and is preparing the workspace.`,
         }, { ephemeral: false });
         return;
@@ -216,7 +216,7 @@ export class AgentSessionWebhookHandler {
         ),
       );
       await this.agentActivity.publishForSession(project.id, normalized.agentSession.id, {
-        type: "thought",
+        type: "response",
         body: `PatchRelay is preparing the ${desiredStage} workflow from your latest prompt.`,
       }, { ephemeral: false });
       return;

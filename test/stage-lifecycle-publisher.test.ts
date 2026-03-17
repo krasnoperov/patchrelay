@@ -561,7 +561,7 @@ test("publishStageCompletion logs when final agent activity publish fails", asyn
   assert.equal(warnings[0]?.bindings.activityType, "response");
 });
 
-test("publishStageCompletion falls back to the awaiting handoff comment when session delivery fails", async () => {
+test("publishStageCompletion avoids legacy awaiting handoff comments for delegated sessions when session delivery fails", async () => {
   const { publisher, linear, stageRun } = createHarness();
 
   linear.failNextAgentSessionUpdate = true;
@@ -571,6 +571,5 @@ test("publishStageCompletion falls back to the awaiting handoff comment when ses
     throw new Error("should not enqueue");
   });
 
-  assert.equal(linear.comments.length, 1);
-  assert.match(linear.comments[0]?.body ?? "", /awaiting-final-state/);
+  assert.equal(linear.comments.length, 0);
 });

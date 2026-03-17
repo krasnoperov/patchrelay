@@ -64,7 +64,7 @@ export class ServiceWebhookProcessor {
         throw new Error(`Stored webhook payload is invalid JSON: event ${webhookEventId}`);
       }
 
-      const normalized = normalizeWebhook({
+      let normalized = normalizeWebhook({
         webhookId: event.webhookId,
         payload,
       });
@@ -92,12 +92,25 @@ export class ServiceWebhookProcessor {
         return;
       }
 
-      const project = resolveProject(this.config, normalized.issue);
+      let project = resolveProject(this.config, normalized.issue);
       if (!project) {
+        const routed = await this.tryHydrateProjectRoute(normalized);
+        if (routed) {
+          normalized = routed.normalized;
+          project = routed.project;
+        }
+      }
+      if (!project) {
+        const unresolvedIssue = normalized.issue;
+        if (!unresolvedIssue) {
+          this.stores.webhookEvents.markWebhookProcessed(webhookEventId, "failed");
+          this.markEventReceiptProcessed(event.webhookId, "failed");
+          throw new Error(`Normalized issue context disappeared before routing webhook ${event.webhookId}`);
+        }
         this.feed?.publish({
           level: "warn",
           kind: "webhook",
-          issueKey: normalized.issue.identifier,
+          issueKey: unresolvedIssue.identifier,
           status: "ignored",
           summary: "Ignored webhook with no matching project route",
           detail: normalized.triggerEvent,
@@ -106,10 +119,10 @@ export class ServiceWebhookProcessor {
           {
             webhookEventId,
             webhookId: event.webhookId,
-            issueKey: normalized.issue.identifier,
-            issueId: normalized.issue.id,
-            teamId: normalized.issue.teamId,
-            teamKey: normalized.issue.teamKey,
+            issueKey: unresolvedIssue.identifier,
+            issueId: unresolvedIssue.id,
+            teamId: unresolvedIssue.teamId,
+            teamKey: unresolvedIssue.teamKey,
             triggerEvent: normalized.triggerEvent,
           },
           "Ignoring webhook because no project route matched the Linear issue",
@@ -118,12 +131,18 @@ export class ServiceWebhookProcessor {
         this.markEventReceiptProcessed(event.webhookId, "processed");
         return;
       }
+      const routedIssue = normalized.issue;
+      if (!routedIssue) {
+        this.stores.webhookEvents.markWebhookProcessed(webhookEventId, "failed");
+        this.markEventReceiptProcessed(event.webhookId, "failed");
+        throw new Error(`Normalized issue context disappeared while routing webhook ${event.webhookId}`);
+      }
 
       if (!trustedActorAllowed(project, normalized.actor)) {
         this.feed?.publish({
           level: "warn",
           kind: "webhook",
-          issueKey: normalized.issue.identifier,
+          issueKey: routedIssue.identifier,
           projectId: project.id,
           status: "ignored",
           summary: "Ignored webhook from an untrusted actor",
@@ -141,15 +160,15 @@ export class ServiceWebhookProcessor {
           "Ignoring webhook from untrusted Linear actor",
         );
         this.stores.webhookEvents.markWebhookProcessed(webhookEventId, "processed");
-        this.assignEventReceiptContext(event.webhookId, project.id, normalized.issue.id);
+        this.assignEventReceiptContext(event.webhookId, project.id, routedIssue.id);
         this.markEventReceiptProcessed(event.webhookId, "processed");
         return;
       }
 
       this.stores.webhookEvents.assignWebhookProject(webhookEventId, project.id);
-      const receipt = this.ensureEventReceipt(event, project.id, normalized.issue.id);
+      const receipt = this.ensureEventReceipt(event, project.id, routedIssue.id);
       const hydrated = await this.hydrateIssueContext(project.id, normalized);
-      const hydratedIssue = hydrated.issue ?? normalized.issue;
+      const hydratedIssue = hydrated.issue ?? routedIssue;
       const issueState = this.desiredStageRecorder.record(project, hydrated, receipt ? { eventReceiptId: receipt.id } : undefined);
       const observation = describeWebhookObservation(hydrated, issueState.delegatedToPatchRelay);
       if (observation) {
@@ -277,6 +296,52 @@ export class ServiceWebhookProcessor {
       );
       return normalized;
     }
+  }
+
+  private async tryHydrateProjectRoute(
+    normalized: NormalizedEvent,
+  ): Promise<{ project: AppConfig["projects"][number]; normalized: NormalizedEvent } | undefined> {
+    if (!normalized.issue) {
+      return undefined;
+    }
+
+    if (normalized.triggerEvent !== "agentSessionCreated" && normalized.triggerEvent !== "agentPrompted") {
+      return undefined;
+    }
+
+    for (const candidate of this.config.projects) {
+      const linear = await this.linearProvider.forProject(candidate.id);
+      if (!linear) {
+        continue;
+      }
+
+      try {
+        const liveIssue = await linear.getIssue(normalized.issue.id);
+        const hydrated = {
+          ...normalized,
+          issue: mergeIssueMetadata(normalized.issue, liveIssue),
+        };
+        const resolved = resolveProject(this.config, hydrated.issue);
+        if (resolved) {
+          return {
+            project: resolved,
+            normalized: hydrated,
+          };
+        }
+      } catch (error) {
+        this.logger.debug(
+          {
+            candidateProjectId: candidate.id,
+            issueId: normalized.issue.id,
+            triggerEvent: normalized.triggerEvent,
+            error: sanitizeDiagnosticText(error instanceof Error ? error.message : String(error)),
+          },
+          "Failed to hydrate Linear issue context while resolving project route",
+        );
+      }
+    }
+
+    return undefined;
   }
 
   private assignEventReceiptContext(webhookId: string, projectId?: string, linearIssueId?: string): void {

@@ -93,7 +93,7 @@ export async function syncFailedStageToLinear(params: {
         .catch(() => false)) || deliveredToSession;
   }
 
-  if (!deliveredToSession) {
+  if (!deliveredToSession && !params.issue.activeAgentSessionId) {
     const result = await linear
       .upsertIssueComment({
         issueId: params.stageRun.linearIssueId,

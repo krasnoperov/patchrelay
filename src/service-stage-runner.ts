@@ -15,6 +15,7 @@ import { buildFailedStageReport } from "./stage-reporting.ts";
 import { StageLifecyclePublisher } from "./stage-lifecycle-publisher.ts";
 import { StageTurnInputDispatcher } from "./stage-turn-input-dispatcher.ts";
 import type { AppConfig, LinearClientProvider, StageRunRecord, TrackedIssueRecord } from "./types.ts";
+import { safeJsonParse } from "./utils.ts";
 import { WorktreeManager } from "./worktree-manager.ts";
 
 export interface IssueQueueItem {
@@ -113,11 +114,16 @@ export class ServiceStageRunner {
       await this.lifecyclePublisher.markStageActive(project, claim.issue, claim.stageRun);
 
       threadLaunch = await this.launchStageThread(item.projectId, item.issueId, claim.stageRun.id, plan.worktreePath, issue.issueKey);
+      const pendingLaunchInput = this.collectPendingLaunchInput(item.projectId, item.issueId);
+      const initialTurnInput = pendingLaunchInput.combinedInput
+        ? [plan.prompt, "", pendingLaunchInput.combinedInput].join("\n")
+        : plan.prompt;
       turn = await this.codex.startTurn({
         threadId: threadLaunch.threadId,
         cwd: plan.worktreePath,
-        input: plan.prompt,
+        input: initialTurnInput,
       });
+      this.completeDeliveredLaunchInput(pendingLaunchInput.obligationIds, claim.stageRun.id, threadLaunch.threadId, turn.turnId);
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
       await this.markLaunchFailed(project, claim.issue, claim.stageRun, err.message, threadLaunch?.threadId);
@@ -153,22 +159,8 @@ export class ServiceStageRunner {
     });
 
     this.inputDispatcher.routePendingInputs(claim.stageRun, threadLaunch.threadId, turn.turnId);
-    await this.inputDispatcher.flush(
-      {
-        id: claim.stageRun.id,
-        projectId: claim.stageRun.projectId,
-        linearIssueId: claim.stageRun.linearIssueId,
-        threadId: threadLaunch.threadId,
-        turnId: turn.turnId,
-      },
-      {
-        logFailures: true,
-        failureMessage: "Failed to deliver queued Linear comment during stage startup",
-        ...(claim.issue.issueKey ? { issueKey: claim.issue.issueKey } : {}),
-      },
-    );
     const deliveredToSession = await this.lifecyclePublisher.publishStageStarted(claim.issue, claim.stageRun.stage);
-    if (!deliveredToSession) {
+    if (!deliveredToSession && !claim.issue.activeAgentSessionId) {
       await this.lifecyclePublisher.refreshRunningStatusComment(item.projectId, item.issueId, claim.stageRun.id, issue.issueKey);
     }
 
@@ -193,6 +185,46 @@ export class ServiceStageRunner {
       summary: `Started ${claim.stageRun.stage} workflow`,
       detail: `Turn ${turn.turnId} is running in ${plan.branchName}.`,
     });
+  }
+
+  private collectPendingLaunchInput(projectId: string, issueId: string): { combinedInput?: string; obligationIds: number[] } {
+    const obligationIds: number[] = [];
+    const bodies: string[] = [];
+    for (const obligation of this.stores.obligations.listPendingObligations({ kind: "deliver_turn_input" })) {
+      if (
+        obligation.projectId !== projectId ||
+        obligation.linearIssueId !== issueId ||
+        !obligation.source.startsWith("linear-agent-launch:")
+      ) {
+        continue;
+      }
+
+      const payload = safeJsonParse<{ body?: string }>(obligation.payloadJson);
+      const body = payload?.body?.trim();
+      if (!body) {
+        this.stores.obligations.markObligationStatus(obligation.id, "failed", "obligation payload had no deliverable body");
+        continue;
+      }
+
+      obligationIds.push(obligation.id);
+      bodies.push(body);
+    }
+
+    return {
+      ...(bodies.length > 0 ? { combinedInput: bodies.join("\n\n") } : {}),
+      obligationIds,
+    };
+  }
+
+  private completeDeliveredLaunchInput(obligationIds: number[], runLeaseId: number, threadId: string, turnId: string): void {
+    for (const obligationId of obligationIds) {
+      this.stores.obligations.updateObligationRouting(obligationId, {
+        runLeaseId,
+        threadId,
+        turnId,
+      });
+      this.stores.obligations.markObligationStatus(obligationId, "completed");
+    }
   }
 
   private async ensureLaunchIssueMirror(
