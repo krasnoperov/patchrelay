@@ -825,7 +825,7 @@ test("reconciliation fails an active stage when the persisted thread is missing"
   });
 });
 
-test("reconciliation falls back to a failure comment when the stored agent session cannot be updated", async () => {
+test("reconciliation avoids legacy failure comments when the stored agent session cannot be updated", async () => {
   const { linear, finalizer } = createHarness({ withLedger: true });
 
   linear.failNextAgentSessionUpdate = true;
@@ -833,8 +833,7 @@ test("reconciliation falls back to a failure comment when the stored agent sessi
 
   await finalizer.reconcileActiveStageRuns();
 
-  assert.equal(linear.comments.length, 1);
-  assert.match(linear.comments[0]?.body ?? "", /marked the development workflow as failed/i);
+  assert.equal(linear.comments.length, 0);
 });
 
 test("reconciliation leaves an active stage alone when the latest turn is still in progress", async () => {

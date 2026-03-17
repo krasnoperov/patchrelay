@@ -717,18 +717,18 @@ test("service starts a workflow from a Linear agent session and forwards the ini
     await waitFor(() => {
       assert.equal(codex.startedThreads.length, 1);
       assert.equal(codex.turns.length, 1);
-      assert.equal(codex.steeredTurns.length, 1);
+      assert.equal(codex.steeredTurns.length, 0);
     });
 
     const trackedIssue = db.issueWorkflows.getTrackedIssue("usertold", "issue_1");
     assert.equal(trackedIssue?.activeAgentSessionId, "session-1");
-    assert.equal(codex.steeredTurns[0]?.input.includes("implementation plan"), true);
+    assert.equal(codex.turns[0]?.input.includes("implementation plan"), true);
     assert.equal(trackedIssue?.statusCommentId, undefined);
     assert.ok(
       linear.agentActivities.some(
         (entry) =>
           entry.agentSessionId === "session-1" &&
-          entry.content.type === "thought" &&
+          entry.content.type === "response" &&
           String(entry.content.body).includes("started working on the development workflow"),
       ),
     );
@@ -736,7 +736,7 @@ test("service starts a workflow from a Linear agent session and forwards the ini
       linear.agentActivities.some(
         (entry) =>
           entry.agentSessionId === "session-1" &&
-          entry.content.type === "thought" &&
+          entry.content.type === "response" &&
           String(entry.content.body).includes("started the development workflow"),
       ),
     );
@@ -1936,9 +1936,7 @@ test("service startup launches queued ledger intent and delivers pending launch 
     await waitFor(() => {
       const issue = db.issueWorkflows.getTrackedIssue("usertold", "issue_2");
       assert.ok(issue?.activeStageRunId);
-      assert.ok(
-        codex.steeredTurns.some((entry) => entry.input.includes("validating the failing setup path")),
-      );
+      assert.ok(codex.turns.some((entry) => entry.input.includes("validating the failing setup path")));
     });
 
     const issue = db.issueWorkflows.getTrackedIssue("usertold", "issue_2");
@@ -1951,6 +1949,7 @@ test("service startup launches queued ledger intent and delivers pending launch 
     assert.equal(Number(obligation.run_lease_id), issueControl.activeRunLeaseId);
     assert.equal(String(obligation.thread_id), "thread-1");
     assert.equal(String(obligation.turn_id), "turn-1");
+    assert.equal(codex.steeredTurns.length, 0);
 
     service.stop();
   } finally {
@@ -1993,12 +1992,9 @@ test("service startup launches queued ledger intent and preserves pending launch
     assert.ok(obligation);
     assert.equal(Number(obligation.run_lease_id), issueControl.activeRunLeaseId);
     assert.match(String(obligation.payload_json), /Please keep the intro copy intact/);
-
-    if (String(obligation.status) === "completed") {
-      assert.ok(codex.steeredTurns.some((entry) => entry.input.includes("Please keep the intro copy intact.")));
-    } else {
-      assert.equal(String(obligation.status), "pending");
-    }
+    assert.equal(String(obligation.status), "completed");
+    assert.ok(codex.turns.some((entry) => entry.input.includes("Please keep the intro copy intact.")));
+    assert.equal(codex.steeredTurns.length, 0);
 
     service.stop();
   } finally {
