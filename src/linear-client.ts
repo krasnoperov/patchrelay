@@ -10,6 +10,7 @@ import type {
   LinearClient,
   LinearClientProvider,
   LinearCommentUpsertResult,
+  LinearAgentSessionUpdateResult,
   LinearIssueSnapshot,
 } from "./types.ts";
 
@@ -268,6 +269,48 @@ export class LinearGraphqlClient implements LinearClient {
     }
 
     return response.agentActivityCreate.agentActivity;
+  }
+
+  async updateAgentSession(params: {
+    agentSessionId: string;
+    externalUrls?: Array<{ label: string; url: string }>;
+    plan?: Array<{ label: string; status: "pending" | "in_progress" | "completed" }>;
+  }): Promise<LinearAgentSessionUpdateResult> {
+    const input: Record<string, unknown> = {};
+    if ("externalUrls" in params) {
+      input.externalUrls = params.externalUrls;
+    }
+    if ("plan" in params) {
+      input.plan = params.plan;
+    }
+
+    const response = await this.request<{
+      agentSessionUpdate: {
+        success: boolean;
+        agentSession?: { id: string } | null;
+      };
+    }>(
+      `
+      mutation PatchRelayUpdateAgentSession($id: String!, $input: AgentSessionUpdateInput!) {
+        agentSessionUpdate(id: $id, input: $input) {
+          success
+          agentSession {
+            id
+          }
+        }
+      }
+      `,
+      {
+        id: params.agentSessionId,
+        input,
+      },
+    );
+
+    if (!response.agentSessionUpdate.success || !response.agentSessionUpdate.agentSession) {
+      throw new Error(`Linear rejected agent session update for session ${params.agentSessionId}`);
+    }
+
+    return response.agentSessionUpdate.agentSession;
   }
 
   async updateIssueLabels(params: { issueId: string; addNames?: string[]; removeNames?: string[] }): Promise<LinearIssueSnapshot> {

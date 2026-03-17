@@ -6,6 +6,7 @@ import test from "node:test";
 import pino from "pino";
 import { getBuildInfo } from "../src/build-info.ts";
 import { buildHttpServer } from "../src/http.ts";
+import { createSessionStatusToken, deriveSessionStatusSigningSecret } from "../src/public-agent-session-status.ts";
 import type { AppConfig } from "../src/types.ts";
 
 function createWorkflows(baseDir: string) {
@@ -435,6 +436,124 @@ test("http routes handle webhook validation and issue/report/live/events lookups
     });
     assert.equal(missingEvents.statusCode, 404);
     assert.deepEqual(missingEvents.json(), { ok: false, reason: "stage_run_not_found" });
+
+    await app.close();
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("public agent session status page validates token and exposes operator session URL helper", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-http-public-session-"));
+  try {
+    const baseConfig = createConfig(baseDir);
+    const config: AppConfig = {
+      ...baseConfig,
+      server: {
+        ...baseConfig.server,
+        bind: "0.0.0.0",
+        publicBaseUrl: "https://patchrelay.example.com",
+      },
+      operatorApi: {
+        enabled: true,
+        bearerToken: "operator-token",
+      },
+    };
+    const signingSecret = deriveSessionStatusSigningSecret(config.linear.tokenEncryptionKey);
+    const validToken = createSessionStatusToken({
+      issueKey: "USE-42",
+      secret: signingSecret,
+      nowMs: Date.UTC(2026, 2, 17, 12, 0, 0),
+      ttlSeconds: 3600,
+    }).token;
+
+    const app = await buildHttpServer(
+      config,
+      {
+        acceptWebhook: async () => ({ status: 200, body: { ok: true } }),
+        getReadiness: () => ({ ready: true, codexStarted: true }),
+        getIssueOverview: async (issueKey: string) => (issueKey === "USE-42" ? { issue: { issueKey: "USE-42" } } : undefined),
+        getPublicAgentSessionStatus: async ({ issueKey, token }: { issueKey: string; token: string }) => {
+          if (token === "bad") {
+            return { status: "invalid_token" };
+          }
+          if (issueKey === "USE-404") {
+            return { status: "issue_not_found" };
+          }
+          return {
+            status: "ok",
+            issueKey,
+            expiresAt: "2026-03-17T13:00:00.000Z",
+            sessionStatus: {
+              issue: {
+                issueKey,
+                title: "Implement API endpoint",
+                issueUrl: "https://linear.app/example/issue/USE-42",
+              },
+              activeStageRun: { stage: "development", status: "running" },
+              latestStageRun: { stage: "review", status: "completed" },
+              liveThread: { threadId: "thread-1", threadStatus: "running" },
+              stages: [{ stageRun: { stage: "development", status: "running", startedAt: "2026-03-17T12:00:00.000Z" } }],
+              generatedAt: "2026-03-17T12:10:00.000Z",
+            },
+          };
+        },
+        createPublicAgentSessionStatusLink: (issueKey: string) => ({
+          issueKey,
+          expiresAt: "2026-03-17T13:00:00.000Z",
+          url: `https://patchrelay.example.com/agent/session/${issueKey}?token=${validToken}`,
+        }),
+      } as never,
+      pino({ enabled: false }),
+    );
+
+    const missingToken = await app.inject({
+      method: "GET",
+      url: "/agent/session/USE-42",
+    });
+    assert.equal(missingToken.statusCode, 401);
+    assert.match(missingToken.body, /Missing access token/);
+
+    const invalidToken = await app.inject({
+      method: "GET",
+      url: "/agent/session/USE-42?token=bad",
+    });
+    assert.equal(invalidToken.statusCode, 401);
+    assert.match(invalidToken.body, /invalid or expired/);
+
+    const notFound = await app.inject({
+      method: "GET",
+      url: `/agent/session/USE-404?token=${encodeURIComponent(validToken)}`,
+    });
+    assert.equal(notFound.statusCode, 404);
+    assert.match(notFound.body, /not available/);
+
+    const page = await app.inject({
+      method: "GET",
+      url: `/agent/session/USE-42?token=${encodeURIComponent(validToken)}`,
+    });
+    assert.equal(page.statusCode, 200);
+    assert.match(page.body, /Implement API endpoint/);
+    assert.match(page.body, /Recent Stages/);
+    assert.match(page.body, /thread-1/);
+
+    const unauthorizedHelper = await app.inject({
+      method: "GET",
+      url: "/api/issues/USE-42/session-url",
+    });
+    assert.equal(unauthorizedHelper.statusCode, 401);
+
+    const helper = await app.inject({
+      method: "GET",
+      url: "/api/issues/USE-42/session-url?ttlSeconds=1200",
+      headers: {
+        authorization: "Bearer operator-token",
+      },
+    });
+    assert.equal(helper.statusCode, 200);
+    assert.equal(helper.json().ok, true);
+    assert.equal(helper.json().issueKey, "USE-42");
+    assert.match(helper.json().url, /agent\/session\/USE-42\?token=/);
 
     await app.close();
   } finally {

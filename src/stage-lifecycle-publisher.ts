@@ -1,4 +1,10 @@
 import type { Logger } from "pino";
+import {
+  buildAwaitingHandoffSessionPlan,
+  buildCompletedSessionPlan,
+  buildRunningSessionPlan,
+} from "./agent-session-plan.ts";
+import { buildAgentSessionExternalUrls } from "./agent-session-presentation.ts";
 import type { IssueControlStoreProvider } from "./ledger-ports.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import type { IssueWorkflowCoordinatorProvider, IssueWorkflowQueryStoreProvider } from "./workflow-ports.ts";
@@ -88,16 +94,17 @@ export class StageLifecyclePublisher {
     }
   }
 
-  async publishStageStarted(issue: TrackedIssueRecord, stage: StageRunRecord["stage"]): Promise<void> {
+  async publishStageStarted(issue: TrackedIssueRecord, stage: StageRunRecord["stage"]): Promise<boolean> {
     if (!issue.activeAgentSessionId) {
-      return;
+      return false;
     }
 
     const linear = await this.linearProvider.forProject(issue.projectId);
     if (!linear) {
-      return;
+      return false;
     }
 
+    const sessionUpdated = await this.updateAgentSession(linear, issue, buildRunningSessionPlan(stage), stage);
     try {
       await linear.createAgentActivity({
         agentSessionId: issue.activeAgentSessionId,
@@ -109,6 +116,7 @@ export class StageLifecyclePublisher {
         },
         ephemeral: true,
       });
+      return true;
     } catch (error) {
       this.logger.warn(
         {
@@ -119,6 +127,7 @@ export class StageLifecyclePublisher {
         },
         "Failed to publish Linear agent activity after stage startup",
       );
+      return sessionUpdated;
     }
   }
 
@@ -163,16 +172,10 @@ export class StageLifecyclePublisher {
           this.stores.workflowCoordinator.setIssueLifecycleStatus(stageRun.projectId, stageRun.linearIssueId, "paused");
 
           const finalStageRun = this.stores.issueWorkflows.getStageRun(stageRun.id) ?? stageRun;
-          const result = await linear.upsertIssueComment({
-            issueId: stageRun.linearIssueId,
-            ...(refreshedIssue.statusCommentId ? { commentId: refreshedIssue.statusCommentId } : {}),
-            body: buildAwaitingHandoffComment({
-              issue: refreshedIssue,
-              stageRun: finalStageRun,
-              activeState,
-            }),
-          });
-          this.stores.workflowCoordinator.setIssueStatusComment(stageRun.projectId, stageRun.linearIssueId, result.id);
+          let deliveredToSession = false;
+          if (refreshedIssue.activeAgentSessionId) {
+            deliveredToSession = await this.updateAgentSession(linear, refreshedIssue, buildAwaitingHandoffSessionPlan(stageRun.stage));
+          }
           this.feed?.publish({
             level: "info",
             kind: "stage",
@@ -183,10 +186,23 @@ export class StageLifecyclePublisher {
             summary: `Completed ${stageRun.stage} workflow`,
             detail: `Waiting for a Linear state change or follow-up input while the issue remains in ${activeState}.`,
           });
-          await this.publishAgentCompletion(refreshedIssue, {
-            type: "elicitation",
-            body: `PatchRelay finished the ${stageRun.stage} workflow. Move the issue to its next workflow state or leave a follow-up prompt to continue.`,
-          });
+          deliveredToSession =
+            (await this.publishAgentCompletion(refreshedIssue, {
+              type: "elicitation",
+              body: `PatchRelay finished the ${stageRun.stage} workflow. Move the issue to its next workflow state or leave a follow-up prompt to continue.`,
+            })) || deliveredToSession;
+          if (!deliveredToSession) {
+            const result = await linear.upsertIssueComment({
+              issueId: stageRun.linearIssueId,
+              ...(refreshedIssue.statusCommentId ? { commentId: refreshedIssue.statusCommentId } : {}),
+              body: buildAwaitingHandoffComment({
+                issue: refreshedIssue,
+                stageRun: finalStageRun,
+                activeState,
+              }),
+            });
+            this.stores.workflowCoordinator.setIssueStatusComment(stageRun.projectId, stageRun.linearIssueId, result.id);
+          }
           return;
         }
 
@@ -212,6 +228,9 @@ export class StageLifecyclePublisher {
     }
 
     if (refreshedIssue) {
+      if (refreshedIssue.activeAgentSessionId && linear) {
+        await this.updateAgentSession(linear, refreshedIssue, buildCompletedSessionPlan(stageRun.stage));
+      }
       this.feed?.publish({
         level: "info",
         kind: "stage",
@@ -228,37 +247,72 @@ export class StageLifecyclePublisher {
     }
   }
 
+  private async updateAgentSession(
+    linear: NonNullable<Awaited<ReturnType<LinearClientProvider["forProject"]>>>,
+    issue: TrackedIssueRecord,
+    plan: ReturnType<typeof buildRunningSessionPlan>,
+    stage?: StageRunRecord["stage"],
+  ): Promise<boolean> {
+    if (!issue.activeAgentSessionId) {
+      return false;
+    }
+
+    try {
+      const externalUrls = buildAgentSessionExternalUrls(this.config, issue.issueKey);
+      await linear.updateAgentSession?.({
+        agentSessionId: issue.activeAgentSessionId,
+        ...(externalUrls ? { externalUrls } : {}),
+        plan,
+      });
+      return true;
+    } catch (error) {
+      this.logger.warn(
+        {
+          issueKey: issue.issueKey,
+          issueId: issue.linearIssueId,
+          ...(stage ? { stage } : {}),
+          agentSessionId: issue.activeAgentSessionId,
+          error: sanitizeDiagnosticText(error instanceof Error ? error.message : String(error)),
+        },
+        "Failed to update Linear agent session",
+      );
+      return false;
+    }
+  }
+
   private async publishAgentCompletion(
     issue: TrackedIssueRecord,
     content:
       | { type: "thought" | "elicitation" | "response" | "error"; body: string }
       | { type: "action"; action: string; parameter: string; result?: string },
-  ): Promise<void> {
+  ): Promise<boolean> {
     if (!issue.activeAgentSessionId) {
-      return;
+      return false;
     }
 
     const linear = await this.linearProvider.forProject(issue.projectId);
     if (!linear) {
-      return;
+      return false;
     }
 
-    await linear
-      .createAgentActivity({
+    try {
+      await linear.createAgentActivity({
         agentSessionId: issue.activeAgentSessionId,
         content,
-      })
-      .catch((error) => {
-        this.logger.warn(
-          {
-            issueKey: issue.issueKey,
-            issueId: issue.linearIssueId,
-            agentSessionId: issue.activeAgentSessionId,
-            activityType: content.type,
-            error: sanitizeDiagnosticText(error instanceof Error ? error.message : String(error)),
-          },
-          "Failed to publish Linear agent activity",
-        );
       });
+      return true;
+    } catch (error) {
+      this.logger.warn(
+        {
+          issueKey: issue.issueKey,
+          issueId: issue.linearIssueId,
+          agentSessionId: issue.activeAgentSessionId,
+          activityType: content.type,
+          error: sanitizeDiagnosticText(error instanceof Error ? error.message : String(error)),
+        },
+        "Failed to publish Linear agent activity",
+      );
+      return false;
+    }
   }
 }

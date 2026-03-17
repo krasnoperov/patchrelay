@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { buildPreparingSessionPlan, buildRunningSessionPlan } from "./agent-session-plan.ts";
 import type { IssueControlStoreProvider, ObligationStoreProvider, RunLeaseStoreProvider } from "./ledger-ports.ts";
 import type { IssueWorkflowQueryStoreProvider } from "./workflow-ports.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
@@ -11,6 +12,25 @@ import { listRunnableStates, resolveWorkflowStage } from "./workflow-policy.ts";
 function trimPrompt(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function buildSessionUpdateParams(
+  projectId: string,
+  agentSessionId: string,
+  issueKey: string | undefined,
+  plan: ReturnType<typeof buildPreparingSessionPlan>,
+): {
+  projectId: string;
+  agentSessionId: string;
+  issueKey?: string;
+  plan: ReturnType<typeof buildPreparingSessionPlan>;
+} {
+  return {
+    projectId,
+    agentSessionId,
+    ...(issueKey ? { issueKey } : {}),
+    plan,
+  };
 }
 
 export class AgentSessionWebhookHandler {
@@ -46,6 +66,14 @@ export class AgentSessionWebhookHandler {
     if (normalized.triggerEvent === "agentSessionCreated") {
       if (!delegatedToPatchRelay) {
         if (activeStage) {
+          await this.agentActivity.updateSession(
+            buildSessionUpdateParams(
+              project.id,
+              normalized.agentSession.id,
+              issue?.issueKey ?? normalized.issue?.identifier,
+              buildRunningSessionPlan(activeStage),
+            ),
+          );
           await this.agentActivity.publishForSession(project.id, normalized.agentSession.id, {
             type: "thought",
             body: `PatchRelay is already running the ${activeStage} workflow for this issue. Delegate it to PatchRelay if you want automation to own the workflow, or keep replying here to steer the active run.`,
@@ -73,16 +101,32 @@ export class AgentSessionWebhookHandler {
       }
 
       if (desiredStage) {
+        await this.agentActivity.updateSession(
+          buildSessionUpdateParams(
+            project.id,
+            normalized.agentSession.id,
+            issue?.issueKey ?? normalized.issue?.identifier,
+            buildPreparingSessionPlan(desiredStage),
+          ),
+        );
         await this.agentActivity.publishForSession(project.id, normalized.agentSession.id, {
-          type: "thought",
-          body: `PatchRelay received the delegation and is preparing the ${desiredStage} workflow.`,
+          type: "response",
+          body: `PatchRelay picked this up and is preparing the ${desiredStage} workflow.`,
         });
         return;
       }
 
       if (activeStage) {
+        await this.agentActivity.updateSession(
+          buildSessionUpdateParams(
+            project.id,
+            normalized.agentSession.id,
+            issue?.issueKey ?? normalized.issue?.identifier,
+            buildRunningSessionPlan(activeStage),
+          ),
+        );
         await this.agentActivity.publishForSession(project.id, normalized.agentSession.id, {
-          type: "thought",
+          type: "response",
           body: `PatchRelay is already running the ${activeStage} workflow for this issue.`,
         });
       }
@@ -163,8 +207,16 @@ export class AgentSessionWebhookHandler {
     }
 
     if (!activeRunLease && desiredStage) {
+      await this.agentActivity.updateSession(
+        buildSessionUpdateParams(
+          project.id,
+          normalized.agentSession.id,
+          issue?.issueKey ?? normalized.issue?.identifier,
+          buildPreparingSessionPlan(desiredStage),
+        ),
+      );
       await this.agentActivity.publishForSession(project.id, normalized.agentSession.id, {
-        type: "thought",
+        type: "response",
         body: `PatchRelay received your prompt and is preparing the ${desiredStage} workflow.`,
       });
       return;

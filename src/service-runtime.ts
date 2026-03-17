@@ -115,8 +115,8 @@ export class ServiceRuntime {
     void this.codex.stop();
   }
 
-  enqueueWebhookEvent(eventId: number): void {
-    this.webhookQueue.enqueue(eventId);
+  enqueueWebhookEvent(eventId: number, options?: { priority?: boolean }): void {
+    this.webhookQueue.enqueue(eventId, options);
   }
 
   enqueueIssue(projectId: string, issueId: string): void {

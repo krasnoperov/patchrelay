@@ -28,8 +28,14 @@ class FakeLinearClient implements LinearClient {
   readonly labelUpdates: Array<{ issueId: string; addNames: string[]; removeNames: string[] }> = [];
   readonly comments: Array<{ issueId: string; commentId?: string; body: string }> = [];
   readonly agentActivities: Array<{ agentSessionId: string; content: LinearAgentActivityContent; ephemeral?: boolean }> = [];
+  readonly agentSessionUpdates: Array<{
+    agentSessionId: string;
+    externalUrls?: Array<{ label: string; url: string }>;
+    plan?: Array<{ label: string; status: "pending" | "in_progress" | "completed" }>;
+  }> = [];
   failNextCommentUpsert = false;
   failNextAgentActivity = false;
+  failNextAgentSessionUpdate = false;
   failNextGetIssue = false;
 
   async getIssue(issueId: string): Promise<LinearIssueSnapshot> {
@@ -73,6 +79,19 @@ class FakeLinearClient implements LinearClient {
     }
     this.agentActivities.push(params);
     return { id: `activity-${this.agentActivities.length}` };
+  }
+
+  async updateAgentSession(params: {
+    agentSessionId: string;
+    externalUrls?: Array<{ label: string; url: string }>;
+    plan?: Array<{ label: string; status: "pending" | "in_progress" | "completed" }>;
+  }) {
+    if (this.failNextAgentSessionUpdate) {
+      this.failNextAgentSessionUpdate = false;
+      throw new Error("agent session update failed");
+    }
+    this.agentSessionUpdates.push(params);
+    return { id: params.agentSessionId };
   }
 
   async updateIssueLabels(params: { issueId: string; addNames?: string[]; removeNames?: string[] }): Promise<LinearIssueSnapshot> {
@@ -435,7 +454,14 @@ test("publishStageCompletion pauses for handoff when Linear is still in the acti
       removeNames: ["llm-working"],
     },
   ]);
-  assert.match(linear.comments.at(-1)?.body ?? "", /awaiting-final-state/);
+  assert.equal(linear.comments.length, 0);
+  assert.ok(
+    linear.agentSessionUpdates.some(
+      (update) =>
+        update.agentSessionId === "session-1" &&
+        update.plan?.some((step) => step.label === "Review next Linear step" && step.status === "in_progress"),
+    ),
+  );
   assert.equal(linear.agentActivities.at(-1)?.content.type, "elicitation");
 });
 
@@ -457,6 +483,13 @@ test("publishStageCompletion cleans up workflow labels after Linear already move
       removeNames: ["llm-working", "llm-awaiting-handoff"],
     },
   ]);
+  assert.ok(
+    linear.agentSessionUpdates.some(
+      (update) =>
+        update.agentSessionId === "session-1" &&
+        update.plan?.every((step) => step.status === "completed"),
+    ),
+  );
   assert.equal(linear.agentActivities.at(-1)?.content.type, "response");
 });
 
@@ -526,4 +559,18 @@ test("publishStageCompletion logs when final agent activity publish fails", asyn
   assert.equal(warnings[0]?.message, "Failed to publish Linear agent activity");
   assert.equal(warnings[0]?.bindings.issueId, stageRun.linearIssueId);
   assert.equal(warnings[0]?.bindings.activityType, "response");
+});
+
+test("publishStageCompletion falls back to the awaiting handoff comment when session delivery fails", async () => {
+  const { publisher, linear, stageRun } = createHarness();
+
+  linear.failNextAgentSessionUpdate = true;
+  linear.failNextAgentActivity = true;
+
+  await publisher.publishStageCompletion(stageRun, () => {
+    throw new Error("should not enqueue");
+  });
+
+  assert.equal(linear.comments.length, 1);
+  assert.match(linear.comments[0]?.body ?? "", /awaiting-final-state/);
 });

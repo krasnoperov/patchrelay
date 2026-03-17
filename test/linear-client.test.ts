@@ -276,6 +276,100 @@ test("LinearGraphqlClient updates only matching labels and skips missing ones", 
   }
 });
 
+test("LinearGraphqlClient updates agent sessions with external URLs and plan replacement", async () => {
+  const originalFetch = globalThis.fetch;
+  const requestBodies: string[] = [];
+
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const body = String(init?.body ?? "");
+    requestBodies.push(body);
+
+    if (requestBodies.length === 1) {
+      return new Response(
+        JSON.stringify({
+          data: {
+            agentSessionUpdate: {
+              success: true,
+              agentSession: { id: "session-1" },
+            },
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+
+    return new Response(
+      JSON.stringify({
+        data: {
+          agentSessionUpdate: {
+            success: false,
+            agentSession: null,
+          },
+        },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  }) as typeof fetch;
+
+  try {
+    const client = new LinearGraphqlClient(
+      {
+        accessToken: "secret-token",
+        graphqlUrl: "https://linear.example/graphql",
+      },
+      pino({ enabled: false }),
+    );
+
+    const result = await client.updateAgentSession({
+      agentSessionId: "session-1",
+      externalUrls: [
+        { label: "Live status", url: "https://patchrelay.example.com/session/session-1" },
+        { label: "Issue report", url: "https://patchrelay.example.com/issues/PR-1/report" },
+      ],
+      plan: [
+        { label: "Prepare workspace", status: "completed" },
+        { label: "Run development workflow", status: "in_progress" },
+        { label: "Await handoff", status: "pending" },
+      ],
+    });
+
+    assert.deepEqual(result, { id: "session-1" });
+
+    const firstRequest = JSON.parse(requestBodies[0] ?? "{}") as {
+      query?: string;
+      variables?: {
+        id?: string;
+        input?: {
+          externalUrls?: Array<{ label: string; url: string }>;
+          plan?: Array<{ label: string; status: string }>;
+        };
+      };
+    };
+    assert.match(firstRequest.query ?? "", /agentSessionUpdate/);
+    assert.equal(firstRequest.variables?.id, "session-1");
+    assert.deepEqual(firstRequest.variables?.input?.externalUrls, [
+      { label: "Live status", url: "https://patchrelay.example.com/session/session-1" },
+      { label: "Issue report", url: "https://patchrelay.example.com/issues/PR-1/report" },
+    ]);
+    assert.deepEqual(firstRequest.variables?.input?.plan, [
+      { label: "Prepare workspace", status: "completed" },
+      { label: "Run development workflow", status: "in_progress" },
+      { label: "Await handoff", status: "pending" },
+    ]);
+
+    await assert.rejects(
+      () =>
+        client.updateAgentSession({
+          agentSessionId: "session-1",
+          plan: [{ label: "Retry", status: "in_progress" }],
+        }),
+      /Linear rejected agent session update for session session-1/,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("DatabaseBackedLinearClientProvider refreshes expiring tokens and returns a working client", async () => {
   const originalFetch = globalThis.fetch;
   const config = createConfig();

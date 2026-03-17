@@ -166,6 +166,20 @@ export interface LinearAgentActivityResult {
   id: string;
 }
 
+export interface LinearAgentSessionExternalUrl {
+  label: string;
+  url: string;
+}
+
+export interface LinearAgentSessionPlanItem {
+  label: string;
+  status: "pending" | "in_progress" | "completed";
+}
+
+export interface LinearAgentSessionUpdateResult {
+  id: string;
+}
+
 export interface LinearClient {
   getIssue(issueId: string): Promise<LinearIssueSnapshot>;
   setIssueState(issueId: string, stateName: string): Promise<LinearIssueSnapshot>;
@@ -175,6 +189,11 @@ export interface LinearClient {
     content: LinearAgentActivityContent;
     ephemeral?: boolean;
   }): Promise<LinearAgentActivityResult>;
+  updateAgentSession?(params: {
+    agentSessionId: string;
+    externalUrls?: LinearAgentSessionExternalUrl[];
+    plan?: LinearAgentSessionPlanItem[];
+  }): Promise<LinearAgentSessionUpdateResult>;
   updateIssueLabels(params: { issueId: string; addNames?: string[]; removeNames?: string[] }): Promise<LinearIssueSnapshot>;
   getActorProfile(): Promise<LinearActorProfile>;
 }

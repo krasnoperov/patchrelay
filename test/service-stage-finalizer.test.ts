@@ -29,6 +29,13 @@ class FakeLinearClient implements LinearClient {
   readonly stateTransitions: Array<{ issueId: string; stateName: string }> = [];
   readonly comments: Array<{ issueId: string; commentId?: string; body: string }> = [];
   readonly agentActivities: Array<{ agentSessionId: string; content: LinearAgentActivityContent; ephemeral?: boolean }> = [];
+  readonly agentSessionUpdates: Array<{
+    agentSessionId: string;
+    externalUrls?: Array<{ label: string; url: string }>;
+    plan?: Array<{ label: string; status: "pending" | "in_progress" | "completed" }>;
+  }> = [];
+  failNextAgentSessionUpdate = false;
+  failNextAgentActivity = false;
 
   async getIssue(issueId: string): Promise<LinearIssueSnapshot> {
     const issue = this.issues.get(issueId);
@@ -61,8 +68,25 @@ class FakeLinearClient implements LinearClient {
     content: LinearAgentActivityContent;
     ephemeral?: boolean;
   }): Promise<{ id: string }> {
+    if (this.failNextAgentActivity) {
+      this.failNextAgentActivity = false;
+      throw new Error("agent activity failed");
+    }
     this.agentActivities.push(params);
     return { id: `activity-${this.agentActivities.length}` };
+  }
+
+  async updateAgentSession(params: {
+    agentSessionId: string;
+    externalUrls?: Array<{ label: string; url: string }>;
+    plan?: Array<{ label: string; status: "pending" | "in_progress" | "completed" }>;
+  }): Promise<{ id: string }> {
+    if (this.failNextAgentSessionUpdate) {
+      this.failNextAgentSessionUpdate = false;
+      throw new Error("agent session update failed");
+    }
+    this.agentSessionUpdates.push(params);
+    return { id: params.agentSessionId };
   }
 
   async updateIssueLabels(params: { issueId: string }): Promise<LinearIssueSnapshot> {
@@ -792,12 +816,25 @@ test("reconciliation fails an active stage when the persisted thread is missing"
 
   assert.equal(store.getStageRun(stageRun.id)?.status, "failed");
   assert.deepEqual(linear.stateTransitions, [{ issueId: "issue-1", stateName: "Human Needed" }]);
-  assert.match(linear.comments[0]?.body ?? "", /thread was not found during reconciliation/);
+  assert.equal(linear.comments.length, 0);
+  assert.match(String(linear.agentActivities[0]?.content.body ?? ""), /thread was not found during reconciliation/);
   assert.deepEqual(store.lifecycleStatuses.at(-1), {
     projectId: "proj",
     issueId: "issue-1",
     status: "failed",
   });
+});
+
+test("reconciliation falls back to a failure comment when the stored agent session cannot be updated", async () => {
+  const { linear, finalizer } = createHarness({ withLedger: true });
+
+  linear.failNextAgentSessionUpdate = true;
+  linear.failNextAgentActivity = true;
+
+  await finalizer.reconcileActiveStageRuns();
+
+  assert.equal(linear.comments.length, 1);
+  assert.match(linear.comments[0]?.body ?? "", /marked the development workflow as failed/i);
 });
 
 test("reconciliation leaves an active stage alone when the latest turn is still in progress", async () => {
