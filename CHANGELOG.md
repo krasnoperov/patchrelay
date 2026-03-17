@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.7](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.7.6...patchrelay-v0.7.7) (2026-03-17)
+
+
+### Bug Fixes
+
+* require native Linear sessions to launch workflows ([452970f](https://github.com/krasnoperov/patchrelay/commit/452970f73bf9232a2dc3900f466baabb30bd7765))
+
 ## [0.7.6](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.7.5...patchrelay-v0.7.6) (2026-03-17)
 
 
