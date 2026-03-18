@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.1](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.8.0...patchrelay-v0.8.1) (2026-03-18)
+
+
+### Bug Fixes
+
+* keep reconciling active runs after startup ([889365e](https://github.com/krasnoperov/patchrelay/commit/889365e32c731c7f90f47817cad5f2841e2ee3e2))
+
 ## [0.8.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.7.10...patchrelay-v0.8.0) (2026-03-18)
 
 
