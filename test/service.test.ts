@@ -70,11 +70,20 @@ class FakeCodexClient extends EventEmitter {
   readonly threads = new Map<string, CodexThreadSummary>();
   readonly resumableThreads = new Map<string, CodexThreadSummary>();
   steerError?: Error;
+  private started = false;
   private nextThreadNumber = 1;
   private nextTurnNumber = 1;
 
-  async start(): Promise<void> {}
-  async stop(): Promise<void> {}
+  isStarted(): boolean {
+    return this.started;
+  }
+
+  async start(): Promise<void> {
+    this.started = true;
+  }
+  async stop(): Promise<void> {
+    this.started = false;
+  }
 
   async startThread(params: { cwd: string }): Promise<CodexThreadSummary> {
     const thread = this.makeThread(`thread-${this.nextThreadNumber++}`, params.cwd);

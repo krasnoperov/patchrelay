@@ -4,6 +4,7 @@ import type { ActiveStageRunReconciler, ReadyIssueSource } from "./workflow-port
 import { SerialWorkQueue } from "./service-queue.ts";
 
 const ISSUE_KEY_DELIMITER = "::";
+const DEFAULT_RECONCILE_INTERVAL_MS = 5_000;
 
 export interface RuntimeIssueQueueItem {
   projectId: string;
@@ -16,6 +17,10 @@ export interface WebhookEventProcessor {
 
 export interface IssueExecutionProcessor {
   processIssue(item: RuntimeIssueQueueItem): Promise<void>;
+}
+
+export interface ServiceRuntimeOptions {
+  reconcileIntervalMs?: number;
 }
 
 type LegacyReconcileActiveStageRuns = () => Promise<void>;
@@ -70,6 +75,8 @@ export class ServiceRuntime {
   readonly issueQueue: SerialWorkQueue<RuntimeIssueQueueItem>;
   private ready = false;
   private startupError: string | undefined;
+  private reconcileTimer: ReturnType<typeof setTimeout> | undefined;
+  private reconcileInProgress = false;
 
   constructor(
     private readonly codex: CodexAppServerClient,
@@ -78,6 +85,7 @@ export class ServiceRuntime {
     readyIssueSource: ReadyIssueSource | LegacyListIssuesReadyForExecution,
     webhookProcessor: WebhookEventProcessor | LegacyProcessWebhookEvent,
     issueProcessor: IssueExecutionProcessor | LegacyProcessIssue,
+    private readonly options: ServiceRuntimeOptions = {},
   ) {
     this.stageRunReconciler = toReconciler(stageRunReconciler);
     this.readyIssueSource = toReadyIssueSource(readyIssueSource);
@@ -103,6 +111,7 @@ export class ServiceRuntime {
       }
       this.ready = true;
       this.startupError = undefined;
+      this.scheduleBackgroundReconcile();
     } catch (error) {
       this.ready = false;
       this.startupError = error instanceof Error ? error.message : String(error);
@@ -112,6 +121,7 @@ export class ServiceRuntime {
 
   stop(): void {
     this.ready = false;
+    this.clearBackgroundReconcile();
     void this.codex.stop();
   }
 
@@ -129,5 +139,48 @@ export class ServiceRuntime {
       codexStarted: this.codex.isStarted(),
       ...(this.startupError ? { startupError: this.startupError } : {}),
     };
+  }
+
+  private scheduleBackgroundReconcile(): void {
+    this.clearBackgroundReconcile();
+    const timer = setTimeout(() => {
+      void this.runBackgroundReconcile();
+    }, this.options.reconcileIntervalMs ?? DEFAULT_RECONCILE_INTERVAL_MS);
+    timer.unref?.();
+    this.reconcileTimer = timer;
+  }
+
+  private clearBackgroundReconcile(): void {
+    if (this.reconcileTimer !== undefined) {
+      clearTimeout(this.reconcileTimer);
+      this.reconcileTimer = undefined;
+    }
+  }
+
+  private async runBackgroundReconcile(): Promise<void> {
+    if (!this.ready || !this.codex.isStarted()) {
+      return;
+    }
+    if (this.reconcileInProgress) {
+      this.scheduleBackgroundReconcile();
+      return;
+    }
+
+    this.reconcileInProgress = true;
+    try {
+      await this.stageRunReconciler.reconcileActiveStageRuns();
+    } catch (error) {
+      this.logger.warn(
+        {
+          error: error instanceof Error ? error.message : String(error),
+        },
+        "Background active-stage reconciliation failed",
+      );
+    } finally {
+      this.reconcileInProgress = false;
+      if (this.ready) {
+        this.scheduleBackgroundReconcile();
+      }
+    }
   }
 }

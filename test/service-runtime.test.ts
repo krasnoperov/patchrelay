@@ -79,6 +79,7 @@ test("service runtime starts codex, reconciles active runs, seeds ready issues, 
     { projectId: "app", issueId: "issue-2" },
   ]);
   assert.deepEqual(runtime.getReadiness(), { ready: true, codexStarted: true });
+  runtime.stop();
 });
 
 test("service runtime processes enqueued webhook and deduplicates identical issue queue keys", async () => {
@@ -208,4 +209,27 @@ test("service runtime records startup error when reconciliation fails after code
     codexStarted: true,
     startupError: "reconcile failed",
   });
+});
+
+test("service runtime continues reconciling active runs after startup", async () => {
+  const codex = new FakeCodexClient();
+  let reconcileCalls = 0;
+
+  const runtime = new ServiceRuntime(
+    codex as never,
+    pino({ enabled: false }),
+    async () => {
+      reconcileCalls += 1;
+    },
+    () => [],
+    async () => undefined,
+    async () => undefined,
+    { reconcileIntervalMs: 5 },
+  );
+
+  await runtime.start();
+  await delay(20);
+
+  assert.ok(reconcileCalls >= 2);
+  runtime.stop();
 });
