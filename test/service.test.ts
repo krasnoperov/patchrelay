@@ -1517,7 +1517,7 @@ test("service preserves comments that arrive before thread startup finishes", as
   }
 });
 
-test("service clears service-owned labels when the agent advances Linear state", async () => {
+test("service keeps the working label while automatically advancing to the next stage", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-label-cleanup-"));
   try {
     const { db, codex, linear, service } = createService(baseDir);
@@ -1553,8 +1553,8 @@ test("service clears service-owned labels when the agent advances Linear state",
 
     assert.deepEqual(linear.labelUpdates.at(-1), {
       issueId: "issue_2",
-      addNames: [],
-      removeNames: ["llm-working", "llm-awaiting-handoff"],
+      addNames: ["llm-working"],
+      removeNames: ["llm-awaiting-handoff"],
     });
 
     service.stop();

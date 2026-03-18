@@ -112,10 +112,6 @@ export class WebhookDesiredStageRecorder {
       return undefined;
     }
 
-    if (normalized.triggerEvent !== "agentSessionCreated" && normalized.triggerEvent !== "agentPrompted") {
-      return undefined;
-    }
-
     if (!delegatedToPatchRelay || !triggerEventAllowed(project, normalized.triggerEvent)) {
       return undefined;
     }
@@ -144,10 +140,6 @@ export class WebhookDesiredStageRecorder {
     delegatedToPatchRelay: boolean,
   ): string | null | undefined {
     if (activeStageRun) {
-      return issue?.selectedWorkflowId;
-    }
-
-    if (normalized.triggerEvent !== "agentSessionCreated" && normalized.triggerEvent !== "agentPrompted") {
       return issue?.selectedWorkflowId;
     }
 

@@ -179,12 +179,12 @@ PatchRelay is convention-first here:
 - by default it generates four workflow bindings per project: `development`, `review`, `deploy`, and `cleanup`
 - each binding maps one Linear state such as `Start` or `Deploy` to one repo workflow file
 - by default it looks for `IMPLEMENTATION_WORKFLOW.md`, `REVIEW_WORKFLOW.md`, `DEPLOY_WORKFLOW.md`, and `CLEANUP_WORKFLOW.md` in each repo root
-- by default it uses `agentSessionCreated` and `agentPrompted` as trigger events for app-mode installs
+- by default it uses `delegateChanged`, `statusChanged`, `agentSessionCreated`, `agentPrompted`, `commentCreated`, and `commentUpdated` as trigger events for app-mode installs
 - edit `projects[].workflows` when you want different state names, active states, workflow ids, or workflow file paths
 - `worktree_root` defaults to `~/.local/share/patchrelay/worktrees/<project-id>`
 - `branch_prefix` defaults to a slug of the project id
 
-`projects[].trigger_events` is optional and mainly for advanced overrides. Keep it only if you want PatchRelay to react to a non-default set such as regular issue comments.
+`projects[].trigger_events` is optional and mainly for advanced overrides. Keep the default set unless you have a specific reason to narrow it, because delegation and state changes are part of the automatic pipeline contract.
 
 Workflow file paths are resolved relative to `repo_path` unless you provide an absolute path. PatchRelay chooses a workflow by matching the current Linear state to `projects[].workflows[].when_state`, then moves the issue to that workflow's `active_state` while Codex is running.
 

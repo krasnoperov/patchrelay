@@ -1002,6 +1002,38 @@ test("completed implementation auto-queues the default next stage when the hando
   assert.equal(transitionEvent?.nextStage, "review");
 });
 
+test("completed implementation still queues review when Linear already moved to Review during the stage", async () => {
+  const { store, codex, linear, finalizer, stageRun, feed } = createHarness({
+    withLedger: true,
+    issueStateName: "Review",
+  });
+  codex.threads.set(stageRun.threadId!, {
+    ...createThread("completed"),
+    turns: [
+      {
+        id: "turn-1",
+        status: "completed",
+        items: [{ type: "agentMessage", id: "assistant-1", text: "Implementation is ready for review." }],
+      },
+    ],
+  });
+
+  await finalizer.handleCodexNotification({
+    method: "turn/completed",
+    params: {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    },
+  } as never);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(store.getTrackedIssue("proj", "issue-1")?.desiredStage, "review");
+  assert.equal(store.getTrackedIssue("proj", "issue-1")?.lifecycleStatus, "queued");
+  assert.equal(linear.stateTransitions.length, 0);
+  const transitionEvent = feed.list({ issueKey: "APP-1", kind: "workflow", status: "transition_chosen" }).at(-1);
+  assert.equal(transitionEvent?.nextStage, "review");
+});
+
 test("automatic continuation stops at the transition cap and routes to Human Needed", async () => {
   const { store, codex, linear, finalizer, stageRun } = createHarness({ withLedger: true });
   store.stageRuns.delete(stageRun.id);
@@ -1037,8 +1069,8 @@ test("automatic continuation stops at the transition cap and routes to Human Nee
   assert.deepEqual(linear.stateTransitions, [{ issueId: "issue-1", stateName: "Human Needed" }]);
 });
 
-test("automatic continuation pauses when a newer human comment webhook arrived during the stage", async () => {
-  const { store, codex, linear, finalizer, stageRun, feed } = createHarness({
+test("automatic continuation ignores newer human comments and still queues the next stage", async () => {
+  const { store, codex, linear, finalizer, stageRun } = createHarness({
     withLedger: true,
     webhookEvents: [
       {
@@ -1095,14 +1127,12 @@ test("automatic continuation pauses when a newer human comment webhook arrived d
   } as never);
   await new Promise((resolve) => setTimeout(resolve, 0));
 
-  assert.equal(store.getTrackedIssue("proj", "issue-1")?.desiredStage, undefined);
-  assert.equal(store.getTrackedIssue("proj", "issue-1")?.lifecycleStatus, "paused");
+  assert.equal(store.getTrackedIssue("proj", "issue-1")?.desiredStage, "review");
+  assert.equal(store.getTrackedIssue("proj", "issue-1")?.lifecycleStatus, "queued");
   assert.equal(linear.stateTransitions.length, 0);
-  const suppressedEvent = feed.list({ issueKey: "APP-1", kind: "workflow", status: "transition_suppressed" }).at(-1);
-  assert.match(suppressedEvent?.detail ?? "", /newer human webhook/i);
 });
 
-test("automatic continuation pauses when the active agent session changed during the stage", async () => {
+test("automatic continuation ignores agent-session replacement and still queues the next stage", async () => {
   const { store, codex, linear, finalizer, stageRun } = createHarness({ withLedger: true });
   store.getTrackedIssue("proj", "issue-1")!.activeAgentSessionId = "session-2";
   codex.threads.set(stageRun.threadId!, {
@@ -1125,8 +1155,8 @@ test("automatic continuation pauses when the active agent session changed during
   } as never);
   await new Promise((resolve) => setTimeout(resolve, 0));
 
-  assert.equal(store.getTrackedIssue("proj", "issue-1")?.desiredStage, undefined);
-  assert.equal(store.getTrackedIssue("proj", "issue-1")?.lifecycleStatus, "paused");
+  assert.equal(store.getTrackedIssue("proj", "issue-1")?.desiredStage, "review");
+  assert.equal(store.getTrackedIssue("proj", "issue-1")?.lifecycleStatus, "queued");
   assert.equal(linear.stateTransitions.length, 0);
 });
 

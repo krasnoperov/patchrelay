@@ -82,7 +82,7 @@ Follow-up instructions can arrive in two ways:
 - `AgentSessionEvent.prompted`: the native Linear agent-prompt path; PatchRelay routes this into the active Codex run
 - issue comments: PatchRelay can also forward regular issue comments into the active run while the stage is live
 
-For the standard Linear app-agent flow, you can usually omit `trigger_events` entirely. PatchRelay defaults to `agentSessionCreated` and `agentPrompted`.
+For the standard Linear app-agent flow, you can usually omit `trigger_events` entirely. PatchRelay defaults to `delegateChanged`, `statusChanged`, `agentSessionCreated`, `agentPrompted`, `commentCreated`, and `commentUpdated` so delegated issues keep moving through the pipeline without waiting for a fresh session between stages.
 
 ## Native Agent UX
 
@@ -143,7 +143,7 @@ If delegation stops working, check:
 - team access on the Linear app
 - the configured webhook URL and redirect URI
 - `LINEAR_WEBHOOK_SECRET`
-- whether a custom `trigger_events` override accidentally removed `agentSessionCreated` or `agentPrompted`
+- whether a custom `trigger_events` override accidentally removed `delegateChanged`, `statusChanged`, `agentSessionCreated`, or `agentPrompted`
 - whether the routed project has valid workflow files and unambiguous routing keys
 
-PatchRelay also accepts supplemental Linear app webhooks such as permission-change, app-user-notification, and app-revoked events. They are useful for observability, but the core execution path depends on agent-session events plus issue metadata for routing and workflow selection.
+PatchRelay also accepts supplemental Linear app webhooks such as permission-change, app-user-notification, and app-revoked events. They are useful for observability, but the core execution path depends on delegation, issue state, agent-session, and comment events plus issue metadata for routing and workflow selection.

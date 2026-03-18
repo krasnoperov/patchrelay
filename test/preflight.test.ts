@@ -232,6 +232,14 @@ test("runPreflight warns when app-mode projects omit agent-session triggers", as
         (check) =>
           check.scope === "project:usertold:triggers" &&
           check.status === "warn" &&
+          check.message.includes("delegateChanged"),
+      ),
+    );
+    assert.ok(
+      report.checks.some(
+        (check) =>
+          check.scope === "project:usertold:triggers" &&
+          check.status === "warn" &&
           check.message.includes("agentSessionCreated"),
       ),
     );
