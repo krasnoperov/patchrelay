@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.3](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.8.2...patchrelay-v0.8.3) (2026-03-18)
+
+
+### Bug Fixes
+
+* preserve forward workflow progression across stage handoffs ([#55](https://github.com/krasnoperov/patchrelay/issues/55)) ([5175f2e](https://github.com/krasnoperov/patchrelay/commit/5175f2ebd312934ff7fe66abbba16141ca5147e5))
+
 ## [0.8.2](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.8.1...patchrelay-v0.8.2) (2026-03-18)
 
 
