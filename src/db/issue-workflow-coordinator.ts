@@ -293,7 +293,7 @@ export class IssueWorkflowCoordinator {
     }
 
     const workspace = this.authoritativeLedger.getWorkspaceOwnership(stageRun.workspaceId);
-    if (workspace) {
+    if (workspace && workspace.currentRunLeaseId === params.stageRunId) {
       this.authoritativeLedger.upsertWorkspaceOwnership({
         projectId: stageRun.projectId,
         linearIssueId: stageRun.linearIssueId,

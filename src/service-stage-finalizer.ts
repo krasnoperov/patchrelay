@@ -25,9 +25,7 @@ import {
 } from "./stage-reporting.ts";
 import { StageLifecyclePublisher } from "./stage-lifecycle-publisher.ts";
 import { StageTurnInputDispatcher } from "./stage-turn-input-dispatcher.ts";
-import type { AppConfig, CodexThreadSummary, LinearClientProvider, StageReport, StageRunRecord, TrackedIssueRecord } from "./types.ts";
-
-const MAX_AUTOMATIC_TRANSITION_ATTEMPTS = 3;
+import type { AppConfig, CodexThreadSummary, LinearClientProvider, StageReport, StageRunRecord, TrackedIssueRecord, WorkflowStage } from "./types.ts";
 
 export class ServiceStageFinalizer {
   private readonly inputDispatcher: StageTurnInputDispatcher;
@@ -201,6 +199,7 @@ export class ServiceStageFinalizer {
 
     this.runAtomically(() => {
       this.finishLedgerRun(stageRun.projectId, stageRun.linearIssueId, "completed", {
+        stageRunId: stageRun.id,
         threadId: params.threadId,
         ...(params.turnId ? { turnId: params.turnId } : {}),
         nextLifecycleStatus: params.nextLifecycleStatus ?? (issue.desiredStage ? "queued" : "completed"),
@@ -228,6 +227,7 @@ export class ServiceStageFinalizer {
   ): void {
     this.runAtomically(() => {
       this.finishLedgerRun(stageRun.projectId, stageRun.linearIssueId, "failed", {
+        stageRunId: stageRun.id,
         threadId,
         ...(options?.turnId ? { turnId: options.turnId } : {}),
         failureReason: message,
@@ -423,14 +423,19 @@ export class ServiceStageFinalizer {
       return;
     }
 
-    const priorAttempts = this.countPriorTransitionAttempts(stageRun.projectId, stageRun.linearIssueId, stageRun.stage, nextTarget);
-    if (priorAttempts >= MAX_AUTOMATIC_TRANSITION_ATTEMPTS) {
-      await this.routeStageToHumanNeeded(
-        project,
-        stageRun,
-        linearIssue,
-        `PatchRelay hit the automatic continuation limit for ${stageRun.stage} -> ${nextTarget}.`,
-      );
+    if (this.isTransitionAlreadyInFlight(stageRun, nextTarget)) {
+      this.feed?.publish({
+        level: "info",
+        kind: "workflow",
+        issueKey: refreshedIssue.issueKey,
+        projectId: stageRun.projectId,
+        stage: stageRun.stage,
+        ...(refreshedIssue.selectedWorkflowId ? { workflowId: refreshedIssue.selectedWorkflowId } : {}),
+        nextStage: nextTarget,
+        status: "transition_in_progress",
+        summary: `${nextTarget} is already queued or running`,
+        detail: `PatchRelay kept ${stageRun.stage} completion from re-queueing ${nextTarget}.`,
+      });
       return;
     }
 
@@ -491,24 +496,18 @@ export class ServiceStageFinalizer {
     return resolveDefaultTransitionTarget(project, stageRun.stage, workflowDefinitionId) ?? "human_needed";
   }
 
-  private countPriorTransitionAttempts(
-    projectId: string,
-    linearIssueId: string,
-    currentStage: string,
-    nextTarget: string,
-  ): number {
-    const stageHistory = this.stores.issueWorkflows
-      .listStageRunsForIssue(projectId, linearIssueId)
-      .filter((stageRun) => stageRun.status === "completed");
-    let count = 0;
-    for (let index = 0; index < stageHistory.length - 1; index += 1) {
-      const current = stageHistory[index];
-      const next = stageHistory[index + 1];
-      if (current?.stage === currentStage && next?.stage === nextTarget) {
-        count += 1;
-      }
+  private isTransitionAlreadyInFlight(stageRun: StageRunRecord, nextTarget: WorkflowStage): boolean {
+    const refreshedIssue = this.stores.issueWorkflows.getTrackedIssue(stageRun.projectId, stageRun.linearIssueId);
+    if (!refreshedIssue) {
+      return false;
     }
-    return count;
+
+    if (refreshedIssue.desiredStage === nextTarget) {
+      return true;
+    }
+
+    const activeStageRun = this.resolveActiveStageRun(refreshedIssue);
+    return activeStageRun !== undefined && activeStageRun.id !== stageRun.id && activeStageRun.stage === nextTarget;
   }
 
   private async routeStageToHumanNeeded(
@@ -561,6 +560,7 @@ export class ServiceStageFinalizer {
     linearIssueId: string,
     status: "completed" | "failed",
     params: {
+      stageRunId?: number;
       threadId?: string;
       turnId?: string;
       failureReason?: string;
@@ -568,30 +568,43 @@ export class ServiceStageFinalizer {
     },
   ): void {
     const issueControl = this.stores.issueControl.getIssueControl(projectId, linearIssueId);
-    if (!issueControl?.activeRunLeaseId) {
+    const targetRunLeaseId = params.stageRunId ?? issueControl?.activeRunLeaseId;
+    if (!targetRunLeaseId) {
+      return;
+    }
+    const targetRunLease = this.stores.runLeases.getRunLease(targetRunLeaseId);
+    if (!targetRunLease) {
       return;
     }
 
     this.stores.runLeases.finishRunLease({
-      runLeaseId: issueControl.activeRunLeaseId,
+      runLeaseId: targetRunLeaseId,
       status,
       ...(params.threadId ? { threadId: params.threadId } : {}),
       ...(params.turnId ? { turnId: params.turnId } : {}),
       ...(params.failureReason ? { failureReason: params.failureReason } : {}),
     });
 
-    if (issueControl.activeWorkspaceOwnershipId !== undefined) {
-      const workspace = this.stores.workspaceOwnership.getWorkspaceOwnership(issueControl.activeWorkspaceOwnershipId);
+    if (targetRunLease.workspaceOwnershipId !== undefined) {
+      const workspace = this.stores.workspaceOwnership.getWorkspaceOwnership(targetRunLease.workspaceOwnershipId);
       if (workspace) {
         this.stores.workspaceOwnership.upsertWorkspaceOwnership({
           projectId,
           linearIssueId,
           branchName: workspace.branchName,
           worktreePath: workspace.worktreePath,
-          status: status === "completed" ? "active" : "paused",
-          currentRunLeaseId: null,
+          status: workspace.currentRunLeaseId === targetRunLeaseId ? (status === "completed" ? "active" : "paused") : workspace.status,
+          ...(workspace.currentRunLeaseId === targetRunLeaseId
+            ? { currentRunLeaseId: null }
+            : workspace.currentRunLeaseId !== undefined
+              ? { currentRunLeaseId: workspace.currentRunLeaseId }
+              : {}),
         });
       }
+    }
+
+    if (!issueControl?.activeRunLeaseId || issueControl.activeRunLeaseId !== targetRunLeaseId) {
+      return;
     }
 
     this.stores.issueControl.upsertIssueControl({
