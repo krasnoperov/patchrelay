@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.7.10...patchrelay-v0.8.0) (2026-03-18)
+
+
+### Features
+
+* add repo-local workflows and workflow timeline ([6a3d3a4](https://github.com/krasnoperov/patchrelay/commit/6a3d3a4e8036ed783a4a22a37332242c5d73ae89))
+
 ## [0.7.10](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.7.9...patchrelay-v0.7.10) (2026-03-17)
 
 
