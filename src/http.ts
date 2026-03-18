@@ -3,6 +3,7 @@ import fastify from "fastify";
 import rawBody from "fastify-raw-body";
 import type { Logger } from "pino";
 import { getBuildInfo } from "./build-info.ts";
+import { matchesOperatorFeedEvent, type OperatorFeedQuery } from "./operator-feed.ts";
 import type { PatchRelayService } from "./service.ts";
 import type { AppConfig } from "./types.ts";
 
@@ -301,13 +302,9 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
 
   if (managementRoutesEnabled) {
     app.get("/api/feed", async (request, reply) => {
-      const limit = getPositiveIntegerQueryParam(request, "limit") ?? 50;
-      const issueKey = getQueryParam(request, "issue")?.trim() || undefined;
-      const projectId = getQueryParam(request, "project")?.trim() || undefined;
-      const feedQuery = {
-        limit,
-        ...(issueKey ? { issueKey } : {}),
-        ...(projectId ? { projectId } : {}),
+      const feedQuery: OperatorFeedQuery = {
+        limit: getPositiveIntegerQueryParam(request, "limit") ?? 50,
+        ...readFeedQueryFilters(request),
       };
       if (getQueryParam(request, "follow") !== "1") {
         return reply.send({ ok: true, events: service.listOperatorFeed(feedQuery) });
@@ -331,10 +328,7 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
       }
 
       const unsubscribe = service.subscribeOperatorFeed((event) => {
-        if (issueKey && event.issueKey !== issueKey) {
-          return;
-        }
-        if (projectId && event.projectId !== projectId) {
+        if (!matchesOperatorFeedEvent(event, feedQuery)) {
           return;
         }
         writeEvent(event);
@@ -443,6 +437,23 @@ function escapeHtml(value: string): string {
 function getQueryParam(request: FastifyRequest, key: string): string | undefined {
   const value = (request.query as Record<string, unknown> | undefined)?.[key];
   return typeof value === "string" ? value : undefined;
+}
+
+function readFeedQueryFilters(request: FastifyRequest): Omit<OperatorFeedQuery, "limit" | "afterId"> {
+  const issueKey = getQueryParam(request, "issue")?.trim() || undefined;
+  const projectId = getQueryParam(request, "project")?.trim() || undefined;
+  const kind = (getQueryParam(request, "kind")?.trim() || undefined) as OperatorFeedQuery["kind"];
+  const stage = getQueryParam(request, "stage")?.trim() || undefined;
+  const status = getQueryParam(request, "status")?.trim() || undefined;
+  const workflowId = getQueryParam(request, "workflow")?.trim() || undefined;
+  return {
+    ...(issueKey ? { issueKey } : {}),
+    ...(projectId ? { projectId } : {}),
+    ...(kind ? { kind } : {}),
+    ...(stage ? { stage } : {}),
+    ...(status ? { status } : {}),
+    ...(workflowId ? { workflowId } : {}),
+  };
 }
 
 function getPositiveIntegerQueryParam(request: FastifyRequest, key: string): number | undefined {

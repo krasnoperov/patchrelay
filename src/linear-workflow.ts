@@ -1,14 +1,14 @@
 import type { ProjectConfig, StageRunRecord, TrackedIssueRecord } from "./types.ts";
-import { resolveWorkflowById } from "./workflow-policy.ts";
+import { resolveWorkflowStageConfig } from "./workflow-policy.ts";
 
 const STATUS_MARKER = "<!-- patchrelay:status-comment -->";
 
-export function resolveActiveLinearState(project: ProjectConfig, stage: string): string | undefined {
-  return resolveWorkflowById(project, stage)?.activeState;
+export function resolveActiveLinearState(project: ProjectConfig, stage: string, workflowDefinitionId?: string): string | undefined {
+  return resolveWorkflowStageConfig(project, stage, workflowDefinitionId)?.activeState;
 }
 
-export function resolveFallbackLinearState(project: ProjectConfig, stage: string): string | undefined {
-  return resolveWorkflowById(project, stage)?.fallbackState;
+export function resolveFallbackLinearState(project: ProjectConfig, stage: string, workflowDefinitionId?: string): string | undefined {
+  return resolveWorkflowStageConfig(project, stage, workflowDefinitionId)?.fallbackState;
 }
 
 export function buildRunningStatusComment(params: {
@@ -47,6 +47,25 @@ export function buildAwaitingHandoffComment(params: {
     "- Status: `awaiting-final-state`",
     "",
     "The workflow likely finished without moving the issue to its next Linear state. Please review the thread report and update the issue state.",
+  ].join("\n");
+}
+
+export function buildHumanNeededComment(params: {
+  issue: TrackedIssueRecord;
+  stageRun: StageRunRecord;
+}): string {
+  return [
+    STATUS_MARKER,
+    `PatchRelay finished the ${params.stageRun.stage} workflow and now needs human input.`,
+    "",
+    `- Issue: \`${params.issue.issueKey ?? params.issue.linearIssueId}\``,
+    `- Workflow: \`${params.stageRun.stage}\``,
+    `- Thread: \`${params.stageRun.threadId ?? "unknown"}\``,
+    `- Turn: \`${params.stageRun.turnId ?? "unknown"}\``,
+    `- Completed: \`${params.stageRun.endedAt ?? new Date().toISOString()}\``,
+    "- Status: `human-needed`",
+    "",
+    "Review the stage report, decide the right next workflow step, and move or re-prompt the issue when ready.",
   ].join("\n");
 }
 

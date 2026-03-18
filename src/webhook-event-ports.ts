@@ -17,6 +17,7 @@ export interface WebhookEventStore {
   markWebhookProcessed(id: number, status: WebhookEventRecord["processingStatus"]): void;
   assignWebhookProject(id: number, projectId: string): void;
   getWebhookEvent(id: number): WebhookEventRecord | undefined;
+  listWebhookEventsForIssueSince(issueId: string, receivedAfter: string): WebhookEventRecord[];
 }
 
 export interface WebhookEventStoreProvider {

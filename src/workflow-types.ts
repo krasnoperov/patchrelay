@@ -29,11 +29,28 @@ export interface ProjectWorkflowConfig {
   fallbackState?: string;
 }
 
+export interface ProjectWorkflowDefinition {
+  id: string;
+  stages: ProjectWorkflowConfig[];
+}
+
+export interface ProjectWorkflowSelectionRule {
+  workflowId: string;
+  label: string;
+}
+
+export interface ProjectWorkflowSelectionConfig {
+  defaultWorkflowId?: string;
+  byLabel: ProjectWorkflowSelectionRule[];
+}
+
 export interface ProjectConfig {
   id: string;
   repoPath: string;
   worktreeRoot: string;
   workflows: ProjectWorkflowConfig[];
+  workflowDefinitions?: ProjectWorkflowDefinition[];
+  workflowSelection?: ProjectWorkflowSelectionConfig;
   workflowLabels?: {
     working?: string;
     awaitingHandoff?: string;
@@ -49,4 +66,5 @@ export interface ProjectConfig {
   };
   triggerEvents: TriggerEvent[];
   branchPrefix: string;
+  repoSettingsPath?: string;
 }

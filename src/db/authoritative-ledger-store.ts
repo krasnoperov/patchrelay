@@ -93,6 +93,7 @@ export class AuthoritativeLedgerStore implements AuthoritativeLedgerStoreContrac
   upsertIssueControl(params: {
     projectId: string;
     linearIssueId: string;
+    selectedWorkflowId?: string | null;
     desiredStage?: WorkflowStage | null;
     desiredReceiptId?: number | null;
     activeWorkspaceOwnershipId?: number | null;
@@ -106,13 +107,14 @@ export class AuthoritativeLedgerStore implements AuthoritativeLedgerStoreContrac
       .prepare(
         `
         INSERT INTO issue_control (
-          project_id, linear_issue_id, desired_stage, desired_receipt_id, active_workspace_ownership_id,
+          project_id, linear_issue_id, selected_workflow_id, desired_stage, desired_receipt_id, active_workspace_ownership_id,
           active_run_lease_id, service_owned_comment_id, active_agent_session_id, lifecycle_status, updated_at
         ) VALUES (
-          @projectId, @linearIssueId, @desiredStage, @desiredReceiptId, @activeWorkspaceOwnershipId,
+          @projectId, @linearIssueId, @selectedWorkflowId, @desiredStage, @desiredReceiptId, @activeWorkspaceOwnershipId,
           @activeRunLeaseId, @serviceOwnedCommentId, @activeAgentSessionId, @lifecycleStatus, @updatedAt
         )
         ON CONFLICT(project_id, linear_issue_id) DO UPDATE SET
+          selected_workflow_id = CASE WHEN @setSelectedWorkflowId = 1 THEN @selectedWorkflowId ELSE issue_control.selected_workflow_id END,
           desired_stage = CASE WHEN @setDesiredStage = 1 THEN @desiredStage ELSE issue_control.desired_stage END,
           desired_receipt_id = CASE WHEN @setDesiredReceiptId = 1 THEN @desiredReceiptId ELSE issue_control.desired_receipt_id END,
           active_workspace_ownership_id = CASE WHEN @setActiveWorkspaceOwnershipId = 1 THEN @activeWorkspaceOwnershipId ELSE issue_control.active_workspace_ownership_id END,
@@ -126,6 +128,7 @@ export class AuthoritativeLedgerStore implements AuthoritativeLedgerStoreContrac
       .run({
         projectId: params.projectId,
         linearIssueId: params.linearIssueId,
+        selectedWorkflowId: params.selectedWorkflowId ?? null,
         desiredStage: params.desiredStage ?? null,
         desiredReceiptId: params.desiredReceiptId ?? null,
         activeWorkspaceOwnershipId: params.activeWorkspaceOwnershipId ?? null,
@@ -134,6 +137,7 @@ export class AuthoritativeLedgerStore implements AuthoritativeLedgerStoreContrac
         activeAgentSessionId: params.activeAgentSessionId ?? null,
         lifecycleStatus: params.lifecycleStatus,
         updatedAt: now,
+        setSelectedWorkflowId: Number("selectedWorkflowId" in params),
         setDesiredStage: Number("desiredStage" in params),
         setDesiredReceiptId: Number("desiredReceiptId" in params),
         setActiveWorkspaceOwnershipId: Number("activeWorkspaceOwnershipId" in params),
@@ -638,6 +642,7 @@ function mapIssueControl(row: Record<string, unknown>): IssueControlRecord {
     id: Number(row.id),
     projectId: String(row.project_id),
     linearIssueId: String(row.linear_issue_id),
+    ...(row.selected_workflow_id === null ? {} : { selectedWorkflowId: String(row.selected_workflow_id) }),
     ...(row.desired_stage === null ? {} : { desiredStage: row.desired_stage as WorkflowStage }),
     ...(row.desired_receipt_id === null ? {} : { desiredReceiptId: Number(row.desired_receipt_id) }),
     ...(row.active_run_lease_id === null ? {} : { activeRunLeaseId: Number(row.active_run_lease_id) }),

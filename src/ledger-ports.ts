@@ -27,6 +27,7 @@ export interface IssueControlStore {
   upsertIssueControl(params: {
     projectId: string;
     linearIssueId: string;
+    selectedWorkflowId?: string | null;
     desiredStage?: WorkflowStage | null;
     desiredReceiptId?: number | null;
     activeWorkspaceOwnershipId?: number | null;

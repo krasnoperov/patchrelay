@@ -61,7 +61,15 @@ export class AgentSessionWebhookHandler {
     const issueControl = normalized.issue ? this.stores.issueControl.getIssueControl(project.id, normalized.issue.id) : undefined;
     const activeRunLease = issueControl?.activeRunLeaseId !== undefined ? this.stores.runLeases.getRunLease(issueControl.activeRunLeaseId) : undefined;
     const activeStage = activeRunLease?.stage;
-    const runnableWorkflow = normalized.issue?.stateName ? resolveWorkflowStage(project, normalized.issue.stateName) : undefined;
+    const runnableWorkflow = normalized.issue?.stateName
+      ? resolveWorkflowStage(project, normalized.issue.stateName, {
+          ...(issue?.selectedWorkflowId
+            ? { workflowDefinitionId: issue.selectedWorkflowId }
+            : normalized.issue
+              ? { issue: normalized.issue }
+              : {}),
+        })
+      : undefined;
 
     if (normalized.triggerEvent === "agentSessionCreated") {
       if (!delegatedToPatchRelay) {

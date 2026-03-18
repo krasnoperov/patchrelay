@@ -139,7 +139,13 @@ test("runPreflight fails when workflow files are missing", async () => {
     const report = await runPreflight(config);
 
     assert.equal(report.ok, false);
-    assert.ok(report.checks.some((check) => check.scope === "project:usertold:workflow:development" && check.status === "fail"));
+    assert.ok(
+      report.checks.some(
+        (check) =>
+          check.scope === "project:usertold:workflow:default:development" &&
+          check.status === "fail",
+      ),
+    );
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

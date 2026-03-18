@@ -28,10 +28,10 @@ export async function syncFailedStageToLinear(params: {
     return;
   }
 
-  const fallbackState = resolveFallbackLinearState(params.project, params.stageRun.stage);
+  const fallbackState = resolveFallbackLinearState(params.project, params.stageRun.stage, params.issue.selectedWorkflowId);
   let shouldWriteFailureState = true;
   if (params.requireActiveLinearStateMatch) {
-    const activeState = resolveActiveLinearState(params.project, params.stageRun.stage);
+    const activeState = resolveActiveLinearState(params.project, params.stageRun.stage, params.issue.selectedWorkflowId);
     if (!activeState) {
       shouldWriteFailureState = false;
     } else {

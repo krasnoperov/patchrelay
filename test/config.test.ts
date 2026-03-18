@@ -78,6 +78,13 @@ function workflowSummary(config: ReturnType<typeof loadConfig>, projectIndex: nu
   }));
 }
 
+function workflowDefinitionSummary(config: ReturnType<typeof loadConfig>, projectIndex: number) {
+  return config.projects[projectIndex]?.workflowDefinitions?.map((definition) => ({
+    id: definition.id,
+    stages: definition.stages.map((workflow) => workflow.id),
+  }));
+}
+
 function writeConfigFixture(configPath: string, value: unknown): void {
   writeFileSync(configPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
@@ -753,6 +760,119 @@ test("loadConfig resolves explicit workflows relative to each repo", () => {
             activeState: "Cleaning Up",
             workflowFile: path.join(repoPath, "automation", "CLEANUP.md"),
             fallbackState: "Human Needed",
+          },
+        ]);
+      },
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("loadConfig reads repo-local .patchrelay settings and workflow selection", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-config-repo-local-"));
+  const repoPath = path.join(baseDir, "repo");
+  const worktreeRoot = path.join(baseDir, "worktrees");
+
+  try {
+    mkdirSync(path.join(baseDir, "config"), { recursive: true });
+    mkdirSync(path.join(repoPath, ".patchrelay"), { recursive: true });
+    mkdirSync(worktreeRoot, { recursive: true });
+    writeConfigFixture(path.join(baseDir, "config", "patchrelay.json"), {
+      server: {
+        bind: "127.0.0.1",
+        port: 8787,
+      },
+      linear: {
+        webhook_secret_env: "REQUIRED_SECRET",
+        ...oauthConfig,
+      },
+      projects: [
+        {
+          id: "docs-app",
+          repo_path: repoPath,
+          worktree_root: worktreeRoot,
+          branch_prefix: "global-prefix",
+          trigger_events: ["statusChanged"],
+        },
+      ],
+    });
+    writeConfigFixture(path.join(repoPath, ".patchrelay", "project.json"), {
+      branch_prefix: "repo-local",
+      trigger_events: ["agentSessionCreated", "agentPrompted"],
+      workflow_definitions: [
+        {
+          id: "feature",
+          stages: [
+            {
+              id: "development",
+              when_state: "Start",
+              active_state: "Implementing",
+              workflow_file: "IMPLEMENTATION_WORKFLOW.md",
+            },
+            {
+              id: "review",
+              when_state: "Review",
+              active_state: "Reviewing",
+              workflow_file: "REVIEW_WORKFLOW.md",
+            },
+          ],
+        },
+        {
+          id: "docs",
+          stages: [
+            {
+              id: "write",
+              when_state: "Start",
+              active_state: "Writing Docs",
+              workflow_file: ".patchrelay/workflows/DOCS_WRITE.md",
+            },
+            {
+              id: "publish",
+              when_state: "Publish",
+              active_state: "Publishing Docs",
+              workflow_file: ".patchrelay/workflows/DOCS_PUBLISH.md",
+            },
+          ],
+        },
+      ],
+      workflow_selection: {
+        default_workflow: "feature",
+        by_label: [{ label: "docs", workflow: "docs" }],
+      },
+    });
+
+    withEnv(
+      {
+        PATCHRELAY_CONFIG: path.join(baseDir, "config", "patchrelay.json"),
+        REQUIRED_SECRET: "top-secret",
+        ...oauthEnv,
+      },
+      () => {
+        const config = loadConfig();
+        assert.equal(config.projects[0]?.branchPrefix, "repo-local");
+        assert.deepEqual(config.projects[0]?.triggerEvents, ["agentSessionCreated", "agentPrompted"]);
+        assert.equal(config.projects[0]?.repoSettingsPath, path.join(repoPath, ".patchrelay", "project.json"));
+        assert.deepEqual(workflowDefinitionSummary(config, 0), [
+          { id: "feature", stages: ["development", "review"] },
+          { id: "docs", stages: ["write", "publish"] },
+        ]);
+        assert.equal(config.projects[0]?.workflowSelection?.defaultWorkflowId, "feature");
+        assert.deepEqual(config.projects[0]?.workflowSelection?.byLabel, [{ label: "docs", workflowId: "docs" }]);
+        assert.deepEqual(workflowSummary(config, 0), [
+          {
+            id: "development",
+            whenState: "Start",
+            activeState: "Implementing",
+            workflowFile: path.join(repoPath, "IMPLEMENTATION_WORKFLOW.md"),
+            fallbackState: undefined,
+          },
+          {
+            id: "review",
+            whenState: "Review",
+            activeState: "Reviewing",
+            workflowFile: path.join(repoPath, "REVIEW_WORKFLOW.md"),
+            fallbackState: undefined,
           },
         ]);
       },

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import pino from "pino";
+import { OperatorEventFeed } from "../src/operator-feed.ts";
 import { ServiceStageFinalizer } from "../src/service-stage-finalizer.ts";
 import type {
   AppConfig,
@@ -8,12 +9,15 @@ import type {
   LinearAgentActivityContent,
   LinearClient,
   LinearIssueSnapshot,
+  LinearWebhookPayload,
   IssueControlRecord,
+  IssueSessionRecord,
   ObligationRecord,
   PipelineRunRecord,
   RunLeaseRecord,
   StageRunRecord,
   TrackedIssueRecord,
+  WebhookEventRecord,
   WorkspaceOwnershipRecord,
   WorkspaceRecord,
 } from "../src/types.ts";
@@ -21,6 +25,11 @@ import type {
 const WORKFLOW_STATES = [
   { id: "start", name: "Start" },
   { id: "implementing", name: "Implementing" },
+  { id: "review", name: "Review" },
+  { id: "reviewing", name: "Reviewing" },
+  { id: "deploy", name: "Deploy" },
+  { id: "deploying", name: "Deploying" },
+  { id: "done", name: "Done", type: "completed" },
   { id: "human-needed", name: "Human Needed" },
 ];
 
@@ -255,6 +264,21 @@ class FakeIssueWorkflowStore {
     this.lifecycleStatuses.push({ projectId, issueId: linearIssueId, status });
   }
 
+  setIssueDesiredStage(
+    projectId: string,
+    linearIssueId: string,
+    desiredStage?: StageRunRecord["stage"],
+    options?: { lifecycleStatus?: TrackedIssueRecord["lifecycleStatus"] },
+  ): void {
+    const issue = this.getTrackedIssue(projectId, linearIssueId);
+    assert.ok(issue);
+    issue.desiredStage = desiredStage;
+    if (options?.lifecycleStatus) {
+      issue.lifecycleStatus = options.lifecycleStatus;
+      this.lifecycleStatuses.push({ projectId, issueId: linearIssueId, status: options.lifecycleStatus });
+    }
+  }
+
   setIssueStatusComment(projectId: string, linearIssueId: string, commentId?: string): void {
     const issue = this.getTrackedIssue(projectId, linearIssueId);
     assert.ok(issue);
@@ -323,6 +347,7 @@ class FakeStageEventStore {
 
 class FakeLedgerStore {
   readonly issueControls = new Map<string, IssueControlRecord>();
+  readonly issueSessions = new Map<string, IssueSessionRecord>();
   readonly runLeases = new Map<number, RunLeaseRecord>();
   readonly obligations = new Map<number, ObligationRecord>();
   readonly workspaceOwnership = new Map<number, WorkspaceOwnershipRecord>();
@@ -456,6 +481,10 @@ class FakeLedgerStore {
     return this.workspaceOwnership.get(id);
   }
 
+  getIssueSessionByThreadId(threadId: string): IssueSessionRecord | undefined {
+    return this.issueSessions.get(threadId);
+  }
+
   upsertWorkspaceOwnership(params: {
     projectId: string;
     linearIssueId: string;
@@ -554,6 +583,14 @@ class FakeLedgerStore {
   }
 }
 
+class FakeWebhookEventStore {
+  readonly events: WebhookEventRecord[] = [];
+
+  listWebhookEventsForIssueSince(issueId: string, receivedAfter: string): WebhookEventRecord[] {
+    return this.events.filter((event) => event.issueId === issueId && event.receivedAt > receivedAfter);
+  }
+}
+
 function issueKey(projectId: string, issueId: string): string {
   return `${projectId}:${issueId}`;
 }
@@ -598,6 +635,20 @@ function createConfig(persistExtendedHistory: boolean): AppConfig {
             whenState: "Start",
             activeState: "Implementing",
             workflowFile: "/tmp/IMPLEMENTATION_WORKFLOW.md",
+            fallbackState: "Human Needed",
+          },
+          {
+            id: "review",
+            whenState: "Review",
+            activeState: "Reviewing",
+            workflowFile: "/tmp/REVIEW_WORKFLOW.md",
+            fallbackState: "Human Needed",
+          },
+          {
+            id: "deploy",
+            whenState: "Deploy",
+            activeState: "Deploying",
+            workflowFile: "/tmp/DEPLOY_WORKFLOW.md",
             fallbackState: "Human Needed",
           },
         ],
@@ -701,13 +752,16 @@ function createHarness(options?: {
   withoutActiveLease?: boolean;
   pendingObligationBody?: string;
   issueControlLifecycleStatus?: TrackedIssueRecord["lifecycleStatus"];
+  webhookEvents?: WebhookEventRecord[];
 }) {
   const config = createConfig(options?.persistExtendedHistory ?? true);
   const store = new FakeIssueWorkflowStore();
   const stageEvents = new FakeStageEventStore();
   const ledger = new FakeLedgerStore();
+  const webhookEvents = new FakeWebhookEventStore();
   const codex = new FakeCodexClient();
   const linear = new FakeLinearClient();
+  const feed = new OperatorEventFeed();
   const issue = createIssue();
   const stageRun = createStageRun(options?.stageRun);
   const pipeline = createPipeline();
@@ -745,6 +799,18 @@ function createHarness(options?: {
         threadId: stageRun.threadId,
         turnId: stageRun.turnId,
         startedAt: stageRun.startedAt,
+      });
+      ledger.issueSessions.set(stageRun.threadId!, {
+        id: 1,
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        workspaceOwnershipId: workspaceOwnership.id,
+        threadId: stageRun.threadId!,
+        source: "stage_run",
+        runLeaseId: 90,
+        linkedAgentSessionId: issue.activeAgentSessionId,
+        createdAt: "2026-03-12T00:00:00.000Z",
+        updatedAt: "2026-03-12T00:00:00.000Z",
       });
     }
     if (options.pendingObligationBody) {
@@ -784,6 +850,7 @@ function createHarness(options?: {
     labels: [],
     teamLabels: [],
   });
+  webhookEvents.events.push(...(options?.webhookEvents ?? []));
 
   const finalizer = new ServiceStageFinalizer(
     config,
@@ -792,9 +859,11 @@ function createHarness(options?: {
       issueWorkflows: store,
       stageEvents,
       issueControl: ledger,
+      issueSessions: ledger,
       runLeases: ledger,
       obligations: ledger,
       workspaceOwnership: ledger,
+      webhookEvents,
     },
     codex as never,
     {
@@ -804,9 +873,10 @@ function createHarness(options?: {
     },
     () => undefined,
     pino({ enabled: false }),
+    feed,
   );
 
-  return { store, stageEvents, ledger, codex, linear, finalizer, issue, stageRun };
+  return { store, stageEvents, ledger, webhookEvents, codex, linear, finalizer, issue, stageRun, feed };
 }
 
 test("reconciliation fails an active stage when the persisted thread is missing", async () => {
@@ -900,6 +970,164 @@ test("notification history is only persisted when extended history is enabled", 
   } as never);
   assert.equal(enabled.stageEvents.savedEvents.length, 1);
   assert.equal(enabled.stageEvents.savedEvents[0]?.method, "turn/started");
+});
+
+test("completed implementation auto-queues the default next stage when the handoff is otherwise clear", async () => {
+  const { store, codex, linear, finalizer, stageRun, feed } = createHarness({ withLedger: true });
+  codex.threads.set(stageRun.threadId!, {
+    ...createThread("completed"),
+    turns: [
+      {
+        id: "turn-1",
+        status: "completed",
+        items: [{ type: "agentMessage", id: "assistant-1", text: "Implementation is ready for review." }],
+      },
+    ],
+  });
+
+  await finalizer.handleCodexNotification({
+    method: "turn/completed",
+    params: {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    },
+  } as never);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(store.getTrackedIssue("proj", "issue-1")?.desiredStage, "review");
+  assert.equal(store.getTrackedIssue("proj", "issue-1")?.lifecycleStatus, "queued");
+  assert.equal(linear.stateTransitions.length, 0);
+  const transitionEvent = feed.list({ issueKey: "APP-1", kind: "workflow", status: "transition_chosen" }).at(-1);
+  assert.equal(transitionEvent?.stage, "development");
+  assert.equal(transitionEvent?.nextStage, "review");
+});
+
+test("automatic continuation stops at the transition cap and routes to Human Needed", async () => {
+  const { store, codex, linear, finalizer, stageRun } = createHarness({ withLedger: true });
+  store.stageRuns.delete(stageRun.id);
+  store.stageRuns.set(1, createStageRun({ id: 1, stage: "development", status: "completed", threadId: "thread-a", turnId: "turn-a" }));
+  store.stageRuns.set(2, createStageRun({ id: 2, stage: "review", status: "completed", threadId: "thread-b", turnId: "turn-b" }));
+  store.stageRuns.set(3, createStageRun({ id: 3, stage: "development", status: "completed", threadId: "thread-c", turnId: "turn-c" }));
+  store.stageRuns.set(4, createStageRun({ id: 4, stage: "review", status: "completed", threadId: "thread-d", turnId: "turn-d" }));
+  store.stageRuns.set(5, createStageRun({ id: 5, stage: "development", status: "completed", threadId: "thread-e", turnId: "turn-e" }));
+  store.stageRuns.set(6, createStageRun({ id: 6, stage: "review", status: "completed", threadId: "thread-f", turnId: "turn-f" }));
+  store.stageRuns.set(stageRun.id, stageRun);
+  codex.threads.set(stageRun.threadId!, {
+    ...createThread("completed"),
+    turns: [
+      {
+        id: "turn-1",
+        status: "completed",
+        items: [{ type: "agentMessage", id: "assistant-1", text: "Implementation is ready for review." }],
+      },
+    ],
+  });
+
+  await finalizer.handleCodexNotification({
+    method: "turn/completed",
+    params: {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    },
+  } as never);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(store.getTrackedIssue("proj", "issue-1")?.desiredStage, undefined);
+  assert.equal(store.getTrackedIssue("proj", "issue-1")?.lifecycleStatus, "paused");
+  assert.deepEqual(linear.stateTransitions, [{ issueId: "issue-1", stateName: "Human Needed" }]);
+});
+
+test("automatic continuation pauses when a newer human comment webhook arrived during the stage", async () => {
+  const { store, codex, linear, finalizer, stageRun, feed } = createHarness({
+    withLedger: true,
+    webhookEvents: [
+      {
+        id: 1,
+        webhookId: "delivery-comment-1",
+        receivedAt: "2026-03-12T00:05:00.000Z",
+        eventType: "Comment.create",
+        issueId: "issue-1",
+        projectId: "proj",
+        installationId: undefined,
+        headersJson: "{}",
+        payloadJson: JSON.stringify({
+          action: "create",
+          type: "Comment",
+          createdAt: "2026-03-12T00:05:00.000Z",
+          webhookTimestamp: 1000,
+          actor: { id: "human-1", name: "Human" },
+          data: {
+            id: "comment-1",
+            body: "Please wait for me before review.",
+            issue: {
+              id: "issue-1",
+              identifier: "APP-1",
+              title: "Reconcile stage",
+              team: { key: "APP" },
+              state: { name: "Implementing" },
+              delegate: { id: "patchrelay-app", name: "PatchRelay" },
+            },
+          },
+        } satisfies LinearWebhookPayload),
+        signatureValid: true,
+        dedupeStatus: "accepted",
+        processingStatus: "processed",
+      },
+    ],
+  });
+  codex.threads.set(stageRun.threadId!, {
+    ...createThread("completed"),
+    turns: [
+      {
+        id: "turn-1",
+        status: "completed",
+        items: [{ type: "agentMessage", id: "assistant-1", text: "Implementation is ready for review." }],
+      },
+    ],
+  });
+
+  await finalizer.handleCodexNotification({
+    method: "turn/completed",
+    params: {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    },
+  } as never);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(store.getTrackedIssue("proj", "issue-1")?.desiredStage, undefined);
+  assert.equal(store.getTrackedIssue("proj", "issue-1")?.lifecycleStatus, "paused");
+  assert.equal(linear.stateTransitions.length, 0);
+  const suppressedEvent = feed.list({ issueKey: "APP-1", kind: "workflow", status: "transition_suppressed" }).at(-1);
+  assert.match(suppressedEvent?.detail ?? "", /newer human webhook/i);
+});
+
+test("automatic continuation pauses when the active agent session changed during the stage", async () => {
+  const { store, codex, linear, finalizer, stageRun } = createHarness({ withLedger: true });
+  store.getTrackedIssue("proj", "issue-1")!.activeAgentSessionId = "session-2";
+  codex.threads.set(stageRun.threadId!, {
+    ...createThread("completed"),
+    turns: [
+      {
+        id: "turn-1",
+        status: "completed",
+        items: [{ type: "agentMessage", id: "assistant-1", text: "Implementation is ready for review." }],
+      },
+    ],
+  });
+
+  await finalizer.handleCodexNotification({
+    method: "turn/completed",
+    params: {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    },
+  } as never);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(store.getTrackedIssue("proj", "issue-1")?.desiredStage, undefined);
+  assert.equal(store.getTrackedIssue("proj", "issue-1")?.lifecycleStatus, "paused");
+  assert.equal(linear.stateTransitions.length, 0);
 });
 
 test("ledger reconciliation replays obligations without relying on a queued-input mirror", async () => {

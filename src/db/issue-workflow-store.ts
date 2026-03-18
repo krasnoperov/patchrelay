@@ -154,6 +154,7 @@ export class IssueWorkflowStore {
       id: issueControl?.id ?? projection?.id ?? 0,
       projectId,
       linearIssueId,
+      ...(issueControl?.selectedWorkflowId ? { selectedWorkflowId: issueControl.selectedWorkflowId } : {}),
       ...(projection?.issueKey ? { issueKey: projection.issueKey } : {}),
       ...(projection?.title ? { title: projection.title } : {}),
       ...(projection?.issueUrl ? { issueUrl: projection.issueUrl } : {}),

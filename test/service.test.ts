@@ -285,6 +285,10 @@ class FakeLinearClient implements LinearClient {
     this.issues.set(params.issueId, nextIssue);
     return nextIssue;
   }
+
+  async getActorProfile() {
+    return {};
+  }
 }
 
 function createConfig(baseDir: string): AppConfig {
@@ -560,7 +564,7 @@ async function waitFor(assertion: () => void, timeoutMs = 2000): Promise<void> {
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
-test("service keeps one workspace and forks later stages from the prior thread", async () => {
+test("service keeps one workspace and starts later stages in fresh threads with carry-forward context", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-service-"));
   try {
     const { db, codex, linear, service } = createService(baseDir);
@@ -620,23 +624,19 @@ test("service keeps one workspace and forks later stages from the prior thread",
     assert.ok(workspacePath);
     writeFileSync(path.join(workspacePath, "sentinel.txt"), "keep me\n", "utf8");
 
-    recordDesiredStageWithLedger(db, {
-      projectId: "usertold",
-      linearIssueId: "issue_1",
-      issueKey: "USE-25",
-      title: "Build app server orchestration",
-      issueUrl: "https://linear.app/example/issue/USE-25",
-      currentLinearState: "Review",
-      desiredStage: "review",
-      desiredWebhookId: "delivery-review",
-      lastWebhookAt: new Date().toISOString(),
-    });
-
     codex.completeThread(startStageRun!.threadId!, [
       {
         type: "agentMessage",
         id: "assistant-1",
-        text: "Implemented the feature and left the tree ready for review.",
+        text: [
+          "Implemented the feature and left the tree ready for review.",
+          "",
+          "Stage result:",
+          "- Completed the implementation and left the branch review-ready.",
+          "- Verified with npm test and updated the orchestration code path.",
+          "- Next likely stage: review",
+          "- Review should inspect the new carry-forward handoff and the updated service path.",
+        ].join("\n"),
       },
       {
         type: "commandExecution",
@@ -655,7 +655,7 @@ test("service keeps one workspace and forks later stages from the prior thread",
       },
     ]);
     await waitFor(() => {
-      assert.deepEqual(codex.forkedFrom, [startStageRun!.threadId!]);
+      assert.equal(codex.startedThreads.length, 2);
       assert.equal(codex.turns.length, 2);
     });
 
@@ -668,6 +668,9 @@ test("service keeps one workspace and forks later stages from the prior thread",
     const reviewStageRun = db.issueWorkflows.getStageRun(latestIssue.activeStageRunId!);
     assert.equal(reviewStageRun?.stage, "review");
     assert.equal(reviewStageRun?.parentThreadId, startStageRun?.threadId);
+    assert.deepEqual(codex.forkedFrom, []);
+    assert.match(codex.turns[1]?.input ?? "", /Carry-forward Context:/);
+    assert.match(codex.turns[1]?.input ?? "", /Completed the implementation and left the branch review-ready/);
     assert.equal(existsSync(path.join(workspacePath, "sentinel.txt")), true);
 
     service.stop();
@@ -988,7 +991,15 @@ test("service builds a read-only report from completed thread history", async ()
       {
         type: "agentMessage",
         id: "assistant-1",
-        text: "I updated the service and verified the changes.",
+        text: [
+          "I updated the service and verified the changes.",
+          "",
+          "Stage result:",
+          "- Updated the service and verified the changes locally.",
+          "- Ran npm test and changed src/http.ts.",
+          "- Next likely stage: human_needed",
+          "- A human should decide whether this branch should move to review or stop here.",
+        ].join("\n"),
       },
       {
         type: "plan",
@@ -1023,19 +1034,20 @@ test("service builds a read-only report from completed thread history", async ()
     const report = await service.getIssueReport("USE-26");
     assert.ok(report);
     assert.equal(report?.stages.length, 1);
-    assert.equal(report?.stages[0].report?.assistantMessages[0], "I updated the service and verified the changes.");
+    assert.match(report?.stages[0].report?.assistantMessages[0] ?? "", /Updated the service and verified the changes locally/);
     assert.equal(report?.stages[0].report?.commands[0].command, "npm test");
     assert.equal(report?.stages[0].report?.toolCalls[0].name, "apply_patch");
     const overview = await service.getIssueOverview("USE-26");
     assert.equal(overview?.latestStageRun?.status, "completed");
     const refreshedIssue = db.issueWorkflows.getTrackedIssue("usertold", "issue_2");
     assert.equal(db.issueWorkflows.getPipelineRun(refreshedIssue!.activePipelineRunId!)?.status, "paused");
-    assert.match(linear.comments.get(refreshedIssue?.statusCommentId ?? "")?.body ?? "", /awaiting-final-state/);
+    assert.equal(linear.issues.get("issue_2")?.stateName, "Human Needed");
+    assert.match(linear.comments.get(refreshedIssue?.statusCommentId ?? "")?.body ?? "", /human-needed/);
     assert.equal(db.issueWorkflows.getTrackedIssue("usertold", "issue_2")?.lifecycleStatus, "paused");
     assert.deepEqual(linear.labelUpdates.at(-1), {
       issueId: "issue_2",
-      addNames: ["llm-awaiting-handoff"],
-      removeNames: ["llm-working"],
+      addNames: [],
+      removeNames: ["llm-working", "llm-awaiting-handoff"],
     });
 
     service.stop();
@@ -1774,8 +1786,10 @@ test("service restart reconciles a stage that completed while PatchRelay was dow
 
     const recoveredStage = db.issueWorkflows.getStageRun(startedStageRun!.id);
     const recoveredIssue = db.issueWorkflows.getTrackedIssue("usertold", "issue_4");
+    const continuedStage = recoveredIssue?.activeStageRunId ? db.issueWorkflows.getStageRun(recoveredIssue.activeStageRunId) : undefined;
     assert.equal(recoveredStage?.status, "completed");
-    assert.equal(recoveredIssue?.lifecycleStatus, "paused");
+    assert.equal(recoveredIssue?.lifecycleStatus, "running");
+    assert.equal(continuedStage?.stage, "review");
 
     restarted.stop();
   } finally {

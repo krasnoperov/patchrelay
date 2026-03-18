@@ -573,3 +573,21 @@ test("publishStageCompletion avoids legacy awaiting handoff comments for delegat
 
   assert.equal(linear.comments.length, 0);
 });
+
+test("publishStageCompletion writes a human-needed comment when the workflow pauses without an agent session", async () => {
+  const { publisher, linear, store, stageRun } = createHarness();
+  store.getTrackedIssue("proj", "issue-1")!.activeAgentSessionId = undefined;
+  store.getTrackedIssue("proj", "issue-1")!.lifecycleStatus = "paused";
+  store.stageRuns.set(stageRun.id, { ...stageRun, endedAt: "2026-03-11T10:05:00.000Z", status: "completed" });
+  linear.issues.set("issue-1", {
+    ...(linear.issues.get("issue-1") as LinearIssueSnapshot),
+    stateName: "Human Needed",
+  });
+
+  await publisher.publishStageCompletion(stageRun, () => {
+    throw new Error("should not enqueue");
+  });
+
+  assert.equal(linear.comments.length, 1);
+  assert.match(linear.comments[0]!.body, /human-needed/);
+});

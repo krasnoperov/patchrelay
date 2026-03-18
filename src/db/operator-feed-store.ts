@@ -1,4 +1,4 @@
-import type { OperatorFeedEvent } from "../operator-feed.ts";
+import type { OperatorFeedEvent, OperatorFeedQuery } from "../operator-feed.ts";
 import { isoNow, type DatabaseConnection } from "./shared.ts";
 
 export class OperatorFeedStore {
@@ -11,8 +11,8 @@ export class OperatorFeedStore {
     const at = event.at ?? isoNow();
     const result = this.connection.prepare(
       `
-      INSERT INTO operator_feed_events (at, level, kind, summary, detail, issue_key, project_id, stage, status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO operator_feed_events (at, level, kind, summary, detail, issue_key, project_id, stage, status, workflow_id, next_stage)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
     ).run(
       at,
@@ -24,13 +24,15 @@ export class OperatorFeedStore {
       event.projectId ?? null,
       event.stage ?? null,
       event.status ?? null,
+      event.workflowId ?? null,
+      event.nextStage ?? null,
     );
     this.prune();
     const stored = this.connection.prepare("SELECT * FROM operator_feed_events WHERE id = ?").get(Number(result.lastInsertRowid));
     return mapOperatorFeedEvent(stored!);
   }
 
-  list(options?: { limit?: number; afterId?: number; issueKey?: string; projectId?: string }): OperatorFeedEvent[] {
+  list(options?: OperatorFeedQuery): OperatorFeedEvent[] {
     const clauses: string[] = [];
     const params: unknown[] = [];
     if (options?.afterId !== undefined) {
@@ -44,6 +46,22 @@ export class OperatorFeedStore {
     if (options?.projectId) {
       clauses.push("project_id = ?");
       params.push(options.projectId);
+    }
+    if (options?.kind) {
+      clauses.push("kind = ?");
+      params.push(options.kind);
+    }
+    if (options?.stage) {
+      clauses.push("stage = ?");
+      params.push(options.stage);
+    }
+    if (options?.status) {
+      clauses.push("status = ?");
+      params.push(options.status);
+    }
+    if (options?.workflowId) {
+      clauses.push("workflow_id = ?");
+      params.push(options.workflowId);
     }
 
     const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
@@ -90,5 +108,7 @@ function mapOperatorFeedEvent(row: Record<string, unknown>): OperatorFeedEvent {
     ...(row.project_id === null ? {} : { projectId: String(row.project_id) }),
     ...(row.stage === null ? {} : { stage: row.stage as OperatorFeedEvent["stage"] }),
     ...(row.status === null ? {} : { status: String(row.status) }),
+    ...(row.workflow_id === null ? {} : { workflowId: String(row.workflow_id) }),
+    ...(row.next_stage === null ? {} : { nextStage: row.next_stage as OperatorFeedEvent["nextStage"] }),
   };
 }

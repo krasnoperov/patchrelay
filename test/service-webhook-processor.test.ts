@@ -337,6 +337,94 @@ test("webhook processor records desired stage and enqueues delegated agent-sessi
   }
 });
 
+test("webhook processor selects a repo-defined workflow from labels and persists it on the issue", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-selection-"));
+  try {
+    const { config, db, linear, processor, enqueuedIssues, feed } = createHarness(baseDir);
+    config.projects[0]!.workflowDefinitions = [
+      {
+        id: "feature",
+        stages: config.projects[0]!.workflows,
+      },
+      {
+        id: "docs",
+        stages: [
+          {
+            id: "write",
+            whenState: "Start",
+            activeState: "Writing Docs",
+            workflowFile: path.join(baseDir, ".patchrelay", "DOCS_WRITE.md"),
+          },
+          {
+            id: "publish",
+            whenState: "Publish",
+            activeState: "Publishing Docs",
+            workflowFile: path.join(baseDir, ".patchrelay", "DOCS_PUBLISH.md"),
+          },
+        ],
+      },
+    ];
+    config.projects[0]!.workflowSelection = {
+      defaultWorkflowId: "feature",
+      byLabel: [{ label: "docs", workflowId: "docs" }],
+    };
+    installPatchRelayApp(db);
+    linear.issues.set("issue_1", {
+      ...(linear.issues.get("issue_1") ?? {}),
+      id: "issue_1",
+      workflowStates: DEFAULT_WORKFLOW_STATES,
+      labelIds: ["label-docs"],
+      labels: [{ id: "label-docs", name: "docs" }],
+      teamLabels: [{ id: "label-docs", name: "docs" }],
+      delegateId: "patchrelay-app",
+      delegateName: "PatchRelay",
+    });
+
+    const event = db.webhookEvents.insertWebhookEvent({
+      webhookId: "delivery-agent-created-docs",
+      receivedAt: new Date().toISOString(),
+      eventType: "AgentSessionEvent.created",
+      issueId: "issue_1",
+      headersJson: "{}",
+      payloadJson: JSON.stringify({
+        action: "created",
+        type: "AgentSessionEvent",
+        createdAt: "2026-03-08T12:00:00.000Z",
+        webhookTimestamp: 1000,
+        data: {
+          agentSession: {
+            id: "session-docs",
+            issue: {
+              id: "issue_1",
+              identifier: "USE-25",
+              title: "Build app server orchestration",
+              url: "https://linear.app/example/issue/USE-25",
+              team: { key: "USE" },
+              labels: [{ id: "label-docs", name: "docs" }],
+              delegate: { id: "patchrelay-app", name: "PatchRelay" },
+              state: { name: "Start" },
+            },
+          },
+        },
+      }),
+      signatureValid: true,
+      dedupeStatus: "accepted",
+    });
+
+    await processor.processWebhookEvent(event.id);
+
+    const issue = db.issueWorkflows.getTrackedIssue("usertold", "issue_1");
+    const issueControl = db.issueControl.getIssueControl("usertold", "issue_1");
+    assert.equal(issue?.selectedWorkflowId, "docs");
+    assert.equal(issueControl?.selectedWorkflowId, "docs");
+    assert.equal(issue?.desiredStage, "write");
+    assert.ok(feed.list({ issueKey: "USE-25", kind: "workflow", status: "selected" }).some((event) => event.workflowId === "docs"));
+    assert.deepEqual(enqueuedIssues, [{ projectId: "usertold", issueId: "issue_1" }]);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("webhook processor hydrates sparse delegated agent-session issue context from live Linear state", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-processor-hydrate-"));
   try {

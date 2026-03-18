@@ -1,14 +1,21 @@
 import type { Logger } from "pino";
 import type { CodexAppServerClient, CodexNotification } from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
-import type { EventReceiptStoreProvider, IssueControlStoreProvider, ObligationStoreProvider, RunLeaseStoreProvider, WorkspaceOwnershipStoreProvider } from "./ledger-ports.ts";
+import type {
+  EventReceiptStoreProvider,
+  IssueControlStoreProvider,
+  IssueSessionStoreProvider,
+  ObligationStoreProvider,
+  RunLeaseStoreProvider,
+  WorkspaceOwnershipStoreProvider,
+} from "./ledger-ports.ts";
 import type { LinearInstallationStoreProvider } from "./installation-ports.ts";
 import type { StageEventLogStoreProvider } from "./stage-event-ports.ts";
 import type { IssueWorkflowCoordinatorProvider, IssueWorkflowQueryStoreProvider, ReadyIssueSource } from "./workflow-ports.ts";
 import type { WebhookEventStoreProvider } from "./webhook-event-ports.ts";
 import { IssueQueryService } from "./issue-query-service.ts";
 import { LinearOAuthService } from "./linear-oauth-service.ts";
-import { OperatorEventFeed } from "./operator-feed.ts";
+import { OperatorEventFeed, type OperatorFeedQuery } from "./operator-feed.ts";
 import {
   buildSessionStatusUrl,
   createSessionStatusToken,
@@ -25,6 +32,7 @@ import type { AppConfig, LinearClient, LinearClientProvider } from "./types.ts";
 type ServiceStores = WebhookEventStoreProvider &
   EventReceiptStoreProvider &
   IssueControlStoreProvider &
+  IssueSessionStoreProvider &
   WorkspaceOwnershipStoreProvider &
   RunLeaseStoreProvider &
   ObligationStoreProvider &
@@ -38,6 +46,7 @@ function createServiceStores(db: PatchRelayDatabase): ServiceStores {
     webhookEvents: db.webhookEvents,
     eventReceipts: db.eventReceipts,
     issueControl: db.issueControl,
+    issueSessions: db.issueSessions,
     workspaceOwnership: db.workspaceOwnership,
     runLeases: db.runLeases,
     obligations: db.obligations,
@@ -163,7 +172,7 @@ export class PatchRelayService {
     return this.runtime.getReadiness();
   }
 
-  listOperatorFeed(options?: { limit?: number; afterId?: number; issueKey?: string; projectId?: string }) {
+  listOperatorFeed(options?: OperatorFeedQuery) {
     return this.feed.list(options);
   }
 

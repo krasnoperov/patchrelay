@@ -58,6 +58,22 @@ export class WebhookEventStore {
     const row = this.connection.prepare("SELECT * FROM webhook_events WHERE id = ?").get(id) as Record<string, unknown> | undefined;
     return row ? mapWebhookEvent(row) : undefined;
   }
+
+  listWebhookEventsForIssueSince(issueId: string, receivedAfter: string): WebhookEventRecord[] {
+    const rows = this.connection
+      .prepare(
+        `
+        SELECT *
+        FROM webhook_events
+        WHERE issue_id = ?
+          AND dedupe_status = 'accepted'
+          AND received_at > ?
+        ORDER BY received_at ASC, id ASC
+        `,
+      )
+      .all(issueId, receivedAfter) as Record<string, unknown>[];
+    return rows.map((row) => mapWebhookEvent(row));
+  }
 }
 
 function mapWebhookEvent(row: Record<string, unknown>): WebhookEventRecord {

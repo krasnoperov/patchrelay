@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -942,7 +942,7 @@ test("cli doctor reports deployment readiness problems", async () => {
 
     assert.equal(exitCode, 1);
     assert.match(stdout.read(), /PatchRelay doctor/);
-    assert.match(stdout.read(), /FAIL \[project:usertold:workflow:development\]/);
+    assert.match(stdout.read(), /FAIL \[project:usertold:workflow:(default:)?development\]/);
     assert.equal(stderr.read(), "");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -1048,7 +1048,7 @@ test("cli feed uses the HTTP operator client without loading sqlite", async () =
   mkdirSync(configDir, { recursive: true });
 
   const server = createServer((request, response) => {
-    assert.equal(request.url, "/api/feed?limit=1");
+    assert.equal(request.url, "/api/feed?limit=1&kind=workflow&stage=development&status=transition_chosen&workflow=default");
     response.writeHead(200, {
       "content-type": "application/json",
       connection: "close",
@@ -1059,12 +1059,16 @@ test("cli feed uses the HTTP operator client without loading sqlite", async () =
         events: [
           {
             id: 1,
-            createdAt: "2026-03-13T18:00:00.000Z",
+            at: "2026-03-13T18:00:00.000Z",
+            level: "info",
+            kind: "workflow",
             issueKey: "USE-1",
             projectId: "usertold",
-            category: "received",
-            label: "received",
-            message: "Received a Linear comment",
+            stage: "development",
+            workflowId: "default",
+            nextStage: "review",
+            status: "transition_chosen",
+            summary: "Chose development -> review",
           },
         ],
       }),
@@ -1135,15 +1139,18 @@ test("cli feed uses the HTTP operator client without loading sqlite", async () =
       "utf8",
     );
 
-    const result = await runCliProcessAsync(["feed", "--json", "--limit", "1"], {
-      env: {
-        PATCHRELAY_CONFIG: configPath,
-        LINEAR_WEBHOOK_SECRET: "webhook-secret",
-        PATCHRELAY_TOKEN_ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef",
-        LINEAR_OAUTH_CLIENT_ID: "oauth-client-id",
-        LINEAR_OAUTH_CLIENT_SECRET: "oauth-client-secret",
+    const result = await runCliProcessAsync(
+      ["feed", "--json", "--limit", "1", "--kind", "workflow", "--stage", "development", "--status", "transition_chosen", "--workflow", "default"],
+      {
+        env: {
+          PATCHRELAY_CONFIG: configPath,
+          LINEAR_WEBHOOK_SECRET: "webhook-secret",
+          PATCHRELAY_TOKEN_ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef",
+          LINEAR_OAUTH_CLIENT_ID: "oauth-client-id",
+          LINEAR_OAUTH_CLIENT_SECRET: "oauth-client-secret",
+        },
       },
-    });
+    );
 
     assert.equal(result.status, 0);
     assert.match(result.stdout, /"events":/);
@@ -1384,11 +1391,14 @@ test("cli project apply appends a minimal project to config", async () => {
         assert.match(projectOut.read(), /Linear connect was skipped because PatchRelay is not ready yet:/);
 
         const configPath = path.join(configHome, "patchrelay", "patchrelay.json");
+        const repoSettingsPath = path.join(repoPath, ".patchrelay", "project.json");
         const configContents = readFileSync(configPath, "utf8");
         assert.match(configContents, /"projects"\s*:/);
         assert.match(configContents, /"id"\s*:\s*"usertold"/);
         assert.match(configContents, /"repo_path"\s*:/);
         assert.match(configContents, /"issue_key_prefixes"\s*:/);
+        assert.equal(existsSync(repoSettingsPath), true);
+        assert.match(readFileSync(repoSettingsPath, "utf8"), /"workflow_definitions"\s*:/);
 
         const config = loadConfig(configPath, { profile: "write_config" });
         assert.equal(config.projects[0]?.id, "usertold");
@@ -1794,11 +1804,13 @@ test("cli feed renders operator observations in text and json", async () => {
               id: 1,
               at: "2026-03-13T12:34:56.000Z",
               level: "info" as const,
-              kind: "stage" as const,
+              kind: "workflow" as const,
               issueKey: "USE-54",
-              stage: "review" as const,
-              status: "running",
-              summary: "Started review workflow",
+              stage: "development" as const,
+              workflowId: "default",
+              nextStage: "review" as const,
+              status: "transition_chosen",
+              summary: "Chose development -> review",
               detail: "Turn turn-54 is now live.",
             },
           ],
@@ -1817,7 +1829,8 @@ test("cli feed renders operator observations in text and json", async () => {
       0,
     );
     assert.match(textOut.read(), /USE-54/);
-    assert.match(textOut.read(), /Started review workflow/);
+    assert.match(textOut.read(), /Chose development -> review/);
+    assert.match(textOut.read(), /workflow:default/);
 
     const jsonOut = createBufferStream();
     assert.equal(
@@ -1835,11 +1848,13 @@ test("cli feed renders operator observations in text and json", async () => {
           id: 1,
           at: "2026-03-13T12:34:56.000Z",
           level: "info",
-          kind: "stage",
+          kind: "workflow",
           issueKey: "USE-54",
-          stage: "review",
-          status: "running",
-          summary: "Started review workflow",
+          stage: "development",
+          workflowId: "default",
+          nextStage: "review",
+          status: "transition_chosen",
+          summary: "Chose development -> review",
           detail: "Turn turn-54 is now live.",
         },
       ],
@@ -1855,13 +1870,29 @@ test("cli feed forwards issue and project filters to the operator API client", a
     const config = createConfig(baseDir);
     const seen: Array<Record<string, unknown>> = [];
     const data = {
-      async listOperatorFeed(options?: { limit?: number; issueKey?: string; projectId?: string }) {
+      async listOperatorFeed(options?: {
+        limit?: number;
+        issueKey?: string;
+        projectId?: string;
+        kind?: string;
+        stage?: string;
+        status?: string;
+        workflowId?: string;
+      }) {
         seen.push(options ?? {});
         return { events: [] };
       },
       async followOperatorFeed(
         _onEvent: (event: Record<string, unknown>) => void,
-        options?: { limit?: number; issueKey?: string; projectId?: string },
+        options?: {
+          limit?: number;
+          issueKey?: string;
+          projectId?: string;
+          kind?: string;
+          stage?: string;
+          status?: string;
+          workflowId?: string;
+        },
       ) {
         seen.push(options ?? {});
       },
@@ -1879,6 +1910,23 @@ test("cli feed forwards issue and project filters to the operator API client", a
     assert.deepEqual(seen[0], { limit: 25, issueKey: "USE-54", projectId: "usertold" });
 
     assert.equal(
+      await runCli(["feed", "--kind", "workflow", "--stage", "development", "--status", "transition_chosen", "--workflow", "default"], {
+        config,
+        data,
+        stdout: createBufferStream().stream,
+        stderr: createBufferStream().stream,
+      }),
+      0,
+    );
+    assert.deepEqual(seen[1], {
+      limit: 50,
+      kind: "workflow",
+      stage: "development",
+      status: "transition_chosen",
+      workflowId: "default",
+    });
+
+    assert.equal(
       await runCli(["feed", "--follow", "--issue", "USE-54", "--project", "usertold"], {
         config,
         data,
@@ -1887,7 +1935,7 @@ test("cli feed forwards issue and project filters to the operator API client", a
       }),
       0,
     );
-    assert.deepEqual(seen[1], { limit: 50, issueKey: "USE-54", projectId: "usertold" });
+    assert.deepEqual(seen[2], { limit: 50, issueKey: "USE-54", projectId: "usertold" });
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

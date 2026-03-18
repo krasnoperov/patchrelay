@@ -55,6 +55,25 @@ function defaultProjectWorkflows(): Array<Record<string, string>> {
   ];
 }
 
+function defaultRepoProjectSettings(): Record<string, unknown> {
+  return {
+    workflow_definitions: [
+      {
+        id: "default",
+        stages: defaultProjectWorkflows(),
+      },
+    ],
+    workflow_selection: {
+      default_workflow: "default",
+      by_label: [],
+    },
+  };
+}
+
+function getRepoProjectSettingsPath(repoPath: string): string {
+  return `${repoPath}/.patchrelay/project.json`;
+}
+
 function renderTemplate(template: string, replacements?: { publicBaseUrl?: string }): string {
   const home = homedir();
   const user = basename(home);
@@ -302,10 +321,6 @@ export async function upsertProjectInConfig(options: {
     ...(existingProject ?? {}),
     id: resolvedProjectId,
     repo_path: repoPath,
-    workflows:
-      Array.isArray(existingProject?.workflows) && existingProject.workflows.length > 0
-        ? existingProject.workflows
-        : defaultProjectWorkflows(),
   };
   if (issueKeyPrefixes.length > 0) {
     nextProject.issue_key_prefixes = issueKeyPrefixes;
@@ -396,6 +411,12 @@ export async function upsertProjectInConfig(options: {
     const next = stringifyConfig(document);
     await writeFile(configPath, next, "utf8");
   }
+
+  await writeTemplateFile(
+    getRepoProjectSettingsPath(repoPath),
+    stringifyConfig(defaultRepoProjectSettings()),
+    false,
+  );
 
   try {
     loadConfig(configPath, { profile: "write_config" });
