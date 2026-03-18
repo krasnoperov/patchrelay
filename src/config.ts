@@ -148,10 +148,34 @@ const configSchema = z.object({
 
 function defaultTriggerEvents(actor: "user" | "app"): AppConfig["projects"][number]["triggerEvents"] {
   if (actor === "app") {
-    return ["agentSessionCreated", "agentPrompted"];
+    return ["delegateChanged", "statusChanged", "agentSessionCreated", "agentPrompted", "commentCreated", "commentUpdated"];
   }
 
   return ["statusChanged"];
+}
+
+function normalizeTriggerEvents(
+  actor: "user" | "app",
+  configured: AppConfig["projects"][number]["triggerEvents"] | undefined,
+): AppConfig["projects"][number]["triggerEvents"] {
+  if (actor !== "app") {
+    return configured ?? defaultTriggerEvents(actor);
+  }
+
+  const required = defaultTriggerEvents(actor);
+  if (!configured || configured.length === 0) {
+    return required;
+  }
+
+  const seen = new Set(required);
+  const extras = configured.filter((event) => {
+    if (seen.has(event)) {
+      return false;
+    }
+    seen.add(event);
+    return true;
+  });
+  return [...required, ...extras];
 }
 
 const builtinWorkflows: z.infer<typeof workflowSchema>[] = [
@@ -586,10 +610,11 @@ export function loadConfig(
         issueKeyPrefixes: project.issue_key_prefixes,
         linearTeamIds: project.linear_team_ids,
         allowLabels: project.allow_labels,
-        triggerEvents:
+        triggerEvents: normalizeTriggerEvents(
+          parsed.linear.oauth.actor,
           (repoSettings?.trigger_events as AppConfig["projects"][number]["triggerEvents"] | undefined) ??
-          (project.trigger_events as AppConfig["projects"][number]["triggerEvents"] | undefined) ??
-          defaultTriggerEvents(parsed.linear.oauth.actor),
+            (project.trigger_events as AppConfig["projects"][number]["triggerEvents"] | undefined),
+        ),
         branchPrefix: repoSettings?.branch_prefix ?? project.branch_prefix ?? defaultBranchPrefix(project.id),
         ...(repoSettings?.configPath ? { repoSettingsPath: repoSettings.configPath } : {}),
       };

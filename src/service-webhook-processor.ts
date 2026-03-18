@@ -186,8 +186,7 @@ export class ServiceWebhookProcessor {
       }
       if (
         issueState.issue?.selectedWorkflowId &&
-        issueState.issue.selectedWorkflowId !== priorIssue?.selectedWorkflowId &&
-        (hydrated.triggerEvent === "agentSessionCreated" || hydrated.triggerEvent === "agentPrompted")
+        issueState.issue.selectedWorkflowId !== priorIssue?.selectedWorkflowId
       ) {
         this.feed?.publish({
           level: "info",

@@ -8,10 +8,9 @@ import { buildReconciliationSnapshot } from "./reconciliation-snapshot-builder.t
 import type { ReconciliationSnapshot } from "./reconciliation-snapshot-builder.ts";
 import type { StageEventLogStoreProvider } from "./stage-event-ports.ts";
 import type { IssueWorkflowCoordinatorProvider, IssueWorkflowQueryStoreProvider } from "./workflow-ports.ts";
-import type { WebhookEventStoreProvider } from "./webhook-event-ports.ts";
 import { syncFailedStageToLinear } from "./stage-failure.ts";
 import { parseStageHandoff } from "./stage-handoff.ts";
-import { resolveActiveLinearState, resolveFallbackLinearState } from "./linear-workflow.ts";
+import { resolveFallbackLinearState } from "./linear-workflow.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import { resolveDefaultTransitionTarget, transitionTargetAllowed, type WorkflowTransitionTarget } from "./workflow-policy.ts";
 import {
@@ -27,8 +26,6 @@ import {
 import { StageLifecyclePublisher } from "./stage-lifecycle-publisher.ts";
 import { StageTurnInputDispatcher } from "./stage-turn-input-dispatcher.ts";
 import type { AppConfig, CodexThreadSummary, LinearClientProvider, StageReport, StageRunRecord, TrackedIssueRecord } from "./types.ts";
-import { safeJsonParse } from "./utils.ts";
-import { normalizeWebhook } from "./webhooks.ts";
 
 const MAX_AUTOMATIC_TRANSITION_ATTEMPTS = 3;
 
@@ -47,8 +44,7 @@ export class ServiceStageFinalizer {
       IssueSessionStoreProvider &
       ObligationStoreProvider &
       RunLeaseStoreProvider &
-      WorkspaceOwnershipStoreProvider &
-      WebhookEventStoreProvider,
+      WorkspaceOwnershipStoreProvider,
     private readonly codex: CodexAppServerClient,
     private readonly linearProvider: LinearClientProvider,
     private readonly enqueueIssue: (projectId: string, issueId: string) => void,
@@ -352,7 +348,6 @@ export class ServiceStageFinalizer {
     }
 
     const continuationPrecondition = await this.checkAutomaticContinuationPreconditions(
-      project,
       stageRun,
       refreshedIssue,
       linear,
@@ -458,20 +453,11 @@ export class ServiceStageFinalizer {
   }
 
   private async checkAutomaticContinuationPreconditions(
-    project: AppConfig["projects"][number],
     stageRun: StageRunRecord,
     issue: TrackedIssueRecord,
     linear: NonNullable<Awaited<ReturnType<LinearClientProvider["forProject"]>>>,
-    linearIssue: { stateName?: string; delegateId?: string; workflowStates: Array<{ name: string; type?: string }> },
+    linearIssue: { delegateId?: string },
   ): Promise<{ allowed: true } | { allowed: false; reason: string }> {
-    const activeState = resolveActiveLinearState(project, stageRun.stage, issue.selectedWorkflowId);
-    if (activeState && normalizeLinearState(linearIssue.stateName) !== normalizeLinearState(activeState)) {
-      return {
-        allowed: false,
-        reason: `Linear moved from ${activeState} to ${linearIssue.stateName ?? "an unknown state"} while the stage was running.`,
-      };
-    }
-
     const actorProfile = await linear.getActorProfile().catch(() => undefined);
     if (actorProfile?.actorId && linearIssue.delegateId && linearIssue.delegateId !== actorProfile.actorId) {
       return {
@@ -480,54 +466,7 @@ export class ServiceStageFinalizer {
       };
     }
 
-    const stageSession = stageRun.threadId ? this.stores.issueSessions.getIssueSessionByThreadId(stageRun.threadId) : undefined;
-    if (stageSession?.linkedAgentSessionId && issue.activeAgentSessionId !== stageSession.linkedAgentSessionId) {
-      return {
-        allowed: false,
-        reason: "The active Linear agent session changed while the stage was running.",
-      };
-    }
-
-    const recentInterruptions = this.listInterruptingWebhooksSince(stageRun, actorProfile?.actorId);
-    if (recentInterruptions.length > 0) {
-      return {
-        allowed: false,
-        reason: `A newer human webhook (${recentInterruptions[0]}) arrived while the stage was running.`,
-      };
-    }
-
     return { allowed: true };
-  }
-
-  private listInterruptingWebhooksSince(stageRun: StageRunRecord, patchRelayActorId?: string): string[] {
-    const events = this.stores.webhookEvents.listWebhookEventsForIssueSince(stageRun.linearIssueId, stageRun.startedAt);
-    const interrupts: string[] = [];
-    for (const event of events) {
-      const payload = safeJsonParse<Record<string, unknown>>(event.payloadJson);
-      if (!payload) {
-        continue;
-      }
-
-      const normalized = normalizeWebhook({
-        webhookId: event.webhookId,
-        payload: payload as never,
-      });
-      if (patchRelayActorId && normalized.actor?.id === patchRelayActorId) {
-        continue;
-      }
-
-      if (
-        normalized.triggerEvent === "commentCreated" ||
-        normalized.triggerEvent === "commentUpdated" ||
-        normalized.triggerEvent === "agentPrompted" ||
-        normalized.triggerEvent === "agentSessionCreated" ||
-        normalized.triggerEvent === "delegateChanged" ||
-        normalized.triggerEvent === "statusChanged"
-      ) {
-        interrupts.push(normalized.triggerEvent);
-      }
-    }
-    return interrupts;
   }
 
   private resolveTransitionTarget(

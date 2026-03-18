@@ -148,7 +148,7 @@ function createConfig(baseDir: string): AppConfig {
           emails: [],
           emailDomains: [],
         },
-        triggerEvents: ["agentSessionCreated", "agentPrompted", "commentCreated", "commentUpdated"],
+        triggerEvents: ["delegateChanged", "statusChanged", "agentSessionCreated", "agentPrompted", "commentCreated", "commentUpdated"],
         branchPrefix: "use",
       },
     ],
@@ -557,6 +557,52 @@ test("webhook processor hydrates sparse delegated agent-session issue context be
   }
 });
 
+test("webhook processor queues the next delegated stage from a status change while the current stage is still active", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-processor-status-handoff-"));
+  try {
+    const { config, db, processor, enqueuedIssues } = createHarness(baseDir);
+    installPatchRelayApp(db);
+    createActiveStageRun(db, config, { threadId: "thread-1", turnId: "turn-1" });
+
+    const event = db.webhookEvents.insertWebhookEvent({
+      webhookId: "delivery-status-review",
+      receivedAt: new Date().toISOString(),
+      eventType: "Issue.update",
+      issueId: "issue_1",
+      headersJson: "{}",
+      payloadJson: JSON.stringify({
+        action: "update",
+        type: "Issue",
+        createdAt: "2026-03-18T22:00:57.000Z",
+        webhookTimestamp: 1006,
+        updatedFrom: { stateId: "implementing" },
+        data: {
+          id: "issue_1",
+          identifier: "USE-25",
+          title: "Build app server orchestration",
+          url: "https://linear.app/example/issue/USE-25",
+          team: { key: "USE" },
+          state: { name: "Review" },
+          delegate: { id: "patchrelay-app", name: "PatchRelay" },
+        },
+      }),
+      signatureValid: true,
+      dedupeStatus: "accepted",
+    });
+
+    await processor.processWebhookEvent(event.id);
+
+    const issue = db.issueWorkflows.getTrackedIssue("usertold", "issue_1");
+    const issueControl = db.issueControl.getIssueControl("usertold", "issue_1");
+    assert.equal(issue?.desiredStage, "review");
+    assert.equal(issueControl?.desiredStage, "review");
+    assert.equal(issueControl?.lifecycleStatus, "running");
+    assert.deepEqual(enqueuedIssues, [{ projectId: "usertold", issueId: "issue_1" }]);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("webhook processor clears a stale agent session when delegation is removed", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-processor-session-reset-"));
   try {
@@ -616,7 +662,7 @@ test("webhook processor clears a stale agent session when delegation is removed"
   }
 });
 
-test("webhook processor does not enqueue delegated issueCreated events without an agent session", async () => {
+test("webhook processor can enqueue delegated issueCreated events when the trigger is enabled", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-processor-issue-created-"));
   try {
     const { config, db, processor, enqueuedIssues } = createHarness(baseDir);
@@ -659,11 +705,11 @@ test("webhook processor does not enqueue delegated issueCreated events without a
 
     const issue = db.issueWorkflows.getTrackedIssue("usertold", "issue_1");
     const issueControl = db.issueControl.getIssueControl("usertold", "issue_1");
-    assert.equal(issue?.desiredStage, undefined);
-    assert.equal(issueControl?.desiredStage, undefined);
+    assert.equal(issue?.desiredStage, "development");
+    assert.equal(issueControl?.desiredStage, "development");
     assert.equal(issueControl?.desiredReceiptId, receipt.id);
-    assert.equal(issueControl?.lifecycleStatus, "idle");
-    assert.deepEqual(enqueuedIssues, []);
+    assert.equal(issueControl?.lifecycleStatus, "queued");
+    assert.deepEqual(enqueuedIssues, [{ projectId: "usertold", issueId: "issue_1" }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

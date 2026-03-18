@@ -49,11 +49,27 @@ export async function runPreflight(config: AppConfig): Promise<PreflightReport> 
       checks.push(pass("linear_oauth", "Linear app actor includes assignable and mentionable scopes"));
     }
     for (const project of config.projects) {
+      if (!project.triggerEvents.includes("delegateChanged")) {
+        checks.push(
+          warn(
+            `project:${project.id}:triggers`,
+            "Automatic pipeline pickup works best when trigger_events includes delegateChanged",
+          ),
+        );
+      }
+      if (!project.triggerEvents.includes("statusChanged")) {
+        checks.push(
+          warn(
+            `project:${project.id}:triggers`,
+            "Automatic stage-to-stage continuation works best when trigger_events includes statusChanged",
+          ),
+        );
+      }
       if (!project.triggerEvents.includes("agentSessionCreated")) {
         checks.push(
           warn(
             `project:${project.id}:triggers`,
-            "App-mode delegation works best when trigger_events includes agentSessionCreated",
+            "Native Linear agent sessions work best when trigger_events includes agentSessionCreated",
           ),
         );
       }
