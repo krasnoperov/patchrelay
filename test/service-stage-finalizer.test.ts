@@ -782,14 +782,14 @@ function createHarness(options?: {
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       activeWorkspaceOwnershipId: workspaceOwnership.id,
-      ...(options.withoutActiveLease ? {} : { activeRunLeaseId: 90 }),
+      ...(options.withoutActiveLease ? {} : { activeRunLeaseId: stageRun.id }),
       serviceOwnedCommentId: issue.statusCommentId ?? null,
       activeAgentSessionId: issue.activeAgentSessionId ?? null,
       lifecycleStatus: options.issueControlLifecycleStatus ?? issue.lifecycleStatus,
     });
     if (!options.withoutActiveLease) {
-      ledger.runLeases.set(90, {
-        id: 90,
+      ledger.runLeases.set(stageRun.id, {
+        id: stageRun.id,
         issueControlId: issueControl.id,
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
@@ -807,7 +807,7 @@ function createHarness(options?: {
         workspaceOwnershipId: workspaceOwnership.id,
         threadId: stageRun.threadId!,
         source: "stage_run",
-        runLeaseId: 90,
+        runLeaseId: stageRun.id,
         linkedAgentSessionId: issue.activeAgentSessionId,
         createdAt: "2026-03-12T00:00:00.000Z",
         updatedAt: "2026-03-12T00:00:00.000Z",
@@ -833,7 +833,7 @@ function createHarness(options?: {
           stageRunId: stageRun.id,
           body: options.pendingObligationBody,
         }),
-        runLeaseId: 90,
+        runLeaseId: stageRun.id,
         createdAt: "2026-03-12T00:00:00.000Z",
         updatedAt: "2026-03-12T00:00:00.000Z",
       });
@@ -1034,8 +1034,8 @@ test("completed implementation still queues review when Linear already moved to 
   assert.equal(transitionEvent?.nextStage, "review");
 });
 
-test("automatic continuation stops at the transition cap and routes to Human Needed", async () => {
-  const { store, codex, linear, finalizer, stageRun } = createHarness({ withLedger: true });
+test("automatic continuation keeps queueing forward progress even after several prior development to review handoffs", async () => {
+  const { store, codex, linear, finalizer, stageRun, feed } = createHarness({ withLedger: true });
   store.stageRuns.delete(stageRun.id);
   store.stageRuns.set(1, createStageRun({ id: 1, stage: "development", status: "completed", threadId: "thread-a", turnId: "turn-a" }));
   store.stageRuns.set(2, createStageRun({ id: 2, stage: "review", status: "completed", threadId: "thread-b", turnId: "turn-b" }));
@@ -1064,9 +1064,75 @@ test("automatic continuation stops at the transition cap and routes to Human Nee
   } as never);
   await new Promise((resolve) => setTimeout(resolve, 0));
 
+  assert.equal(store.getTrackedIssue("proj", "issue-1")?.desiredStage, "review");
+  assert.equal(store.getTrackedIssue("proj", "issue-1")?.lifecycleStatus, "queued");
+  assert.deepEqual(linear.stateTransitions, []);
+  const transitionEvent = feed.list({ issueKey: "APP-1", kind: "workflow", status: "transition_chosen" }).at(-1);
+  assert.equal(transitionEvent?.nextStage, "review");
+});
+
+test("completed development does not requeue review when review is already running", async () => {
+  const { store, ledger, codex, linear, finalizer, stageRun, feed } = createHarness({ withLedger: true });
+  store.stageRuns.delete(stageRun.id);
+  store.stageRuns.set(stageRun.id, stageRun);
+  store.stageRuns.set(2, createStageRun({ id: 2, stage: "review", status: "running", threadId: "thread-review", turnId: "turn-review" }));
+  const existingIssueControl = ledger.getIssueControl("proj", "issue-1");
+  assert.ok(existingIssueControl?.activeWorkspaceOwnershipId !== undefined);
+  ledger.runLeases.set(2, {
+    id: 2,
+    issueControlId: 1,
+    projectId: "proj",
+    linearIssueId: "issue-1",
+    workspaceOwnershipId: existingIssueControl.activeWorkspaceOwnershipId,
+    stage: "review",
+    status: "running",
+    threadId: "thread-review",
+    turnId: "turn-review",
+    startedAt: "2026-03-12T00:01:00.000Z",
+  });
+  const workspace = ledger.getWorkspaceOwnership(existingIssueControl.activeWorkspaceOwnershipId);
+  assert.ok(workspace);
+  ledger.upsertWorkspaceOwnership({
+    projectId: "proj",
+    linearIssueId: "issue-1",
+    branchName: workspace.branchName,
+    worktreePath: workspace.worktreePath,
+    status: "active",
+    currentRunLeaseId: 2,
+  });
+  ledger.upsertIssueControl({
+    projectId: "proj",
+    linearIssueId: "issue-1",
+    activeWorkspaceOwnershipId: existingIssueControl.activeWorkspaceOwnershipId,
+    activeRunLeaseId: 2,
+    lifecycleStatus: "running",
+  });
+  codex.threads.set(stageRun.threadId!, {
+    ...createThread("completed"),
+    turns: [
+      {
+        id: "turn-1",
+        status: "completed",
+        items: [{ type: "agentMessage", id: "assistant-1", text: "Implementation is ready for review." }],
+      },
+    ],
+  });
+
+  await finalizer.handleCodexNotification({
+    method: "turn/completed",
+    params: {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    },
+  } as never);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
   assert.equal(store.getTrackedIssue("proj", "issue-1")?.desiredStage, undefined);
-  assert.equal(store.getTrackedIssue("proj", "issue-1")?.lifecycleStatus, "paused");
-  assert.deepEqual(linear.stateTransitions, [{ issueId: "issue-1", stateName: "Human Needed" }]);
+  assert.equal(ledger.getIssueControl("proj", "issue-1")?.activeRunLeaseId, 2);
+  assert.equal(ledger.getWorkspaceOwnership(existingIssueControl.activeWorkspaceOwnershipId)?.currentRunLeaseId, 2);
+  assert.deepEqual(linear.stateTransitions, []);
+  const transitionEvent = feed.list({ issueKey: "APP-1", kind: "workflow", status: "transition_in_progress" }).at(-1);
+  assert.equal(transitionEvent?.nextStage, "review");
 });
 
 test("automatic continuation ignores newer human comments and still queues the next stage", async () => {
@@ -1210,7 +1276,7 @@ test("ledger reconciliation uses the run lease thread snapshot instead of legacy
       turnId: "legacy-turn",
     },
   });
-  const runLease = ledger.runLeases.get(90);
+  const runLease = ledger.runLeases.get(stageRun.id);
   assert.ok(runLease);
   runLease.threadId = "ledger-thread";
   runLease.turnId = "ledger-turn";
@@ -1297,7 +1363,7 @@ test("ledger reconciliation retries in-progress obligations against the live tur
   const obligation = ledger.obligations.get(1);
   assert.ok(obligation);
   obligation.status = "in_progress";
-  const runLease = ledger.runLeases.get(90);
+  const runLease = ledger.runLeases.get(stageRun.id);
   assert.ok(runLease);
   runLease.turnId = "turn-stale";
   codex.threads.set(stageRun.threadId!, {
