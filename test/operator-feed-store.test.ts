@@ -15,10 +15,22 @@ test("operator feed persists events and supports issue/project filters across fe
     const firstFeed = new OperatorEventFeed(db.operatorFeed);
     firstFeed.publish({
       level: "info",
+      kind: "workflow",
+      issueKey: "USE-25",
+      projectId: "usertold",
+      stage: "development",
+      workflowId: "default",
+      nextStage: "review",
+      status: "transition_chosen",
+      summary: "Chose development -> review",
+    });
+    firstFeed.publish({
+      level: "info",
       kind: "stage",
       issueKey: "USE-25",
       projectId: "usertold",
       stage: "review",
+      workflowId: "default",
       status: "running",
       summary: "Started review workflow",
     });
@@ -33,15 +45,19 @@ test("operator feed persists events and supports issue/project filters across fe
 
     const secondFeed = new OperatorEventFeed(db.operatorFeed);
     const issueEvents = secondFeed.list({ issueKey: "USE-25" });
-    assert.equal(issueEvents.length, 1);
-    assert.equal(issueEvents[0]?.summary, "Started review workflow");
+    assert.equal(issueEvents.length, 2);
+    assert.equal(issueEvents[0]?.summary, "Chose development -> review");
 
     const projectEvents = secondFeed.list({ projectId: "ops" });
     assert.equal(projectEvents.length, 1);
     assert.equal(projectEvents[0]?.status, "delivery_failed");
 
+    const workflowEvents = secondFeed.list({ workflowId: "default", kind: "workflow", status: "transition_chosen" });
+    assert.equal(workflowEvents.length, 1);
+    assert.equal(workflowEvents[0]?.nextStage, "review");
+
     const allEvents = secondFeed.list({ limit: 10 });
-    assert.equal(allEvents.length, 2);
+    assert.equal(allEvents.length, 3);
     assert.ok((allEvents[0]?.id ?? 0) > 0);
     assert.ok((allEvents[1]?.id ?? 0) > (allEvents[0]?.id ?? 0));
   } finally {

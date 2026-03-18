@@ -1,5 +1,5 @@
 import type { AppConfig } from "../types.ts";
-import type { OperatorFeedEvent } from "../operator-feed.ts";
+import type { OperatorFeedEvent, OperatorFeedQuery } from "../operator-feed.ts";
 
 export interface InstallationListResult {
   installations: Array<{
@@ -58,10 +58,10 @@ export interface CliOperatorDataAccess {
   connect(projectId?: string): Promise<ConnectResult>;
   connectStatus(state: string): Promise<ConnectStateResult>;
   listInstallations(): Promise<InstallationListResult>;
-  listOperatorFeed(options?: { limit?: number; issueKey?: string; projectId?: string }): Promise<OperatorFeedResult>;
+  listOperatorFeed(options?: Omit<OperatorFeedQuery, "afterId">): Promise<OperatorFeedResult>;
   followOperatorFeed(
     onEvent: (event: OperatorFeedEvent) => void,
-    options?: { limit?: number; issueKey?: string; projectId?: string },
+    options?: Omit<OperatorFeedQuery, "afterId">,
   ): Promise<void>;
 }
 
@@ -88,17 +88,21 @@ export class CliOperatorApiClient implements CliOperatorDataAccess {
     return await this.requestJson<InstallationListResult>("/api/installations");
   }
 
-  async listOperatorFeed(options?: { limit?: number; issueKey?: string; projectId?: string }): Promise<OperatorFeedResult> {
+  async listOperatorFeed(options?: Omit<OperatorFeedQuery, "afterId">): Promise<OperatorFeedResult> {
     return await this.requestJson<OperatorFeedResult>("/api/feed", {
       ...(options?.limit && options.limit > 0 ? { limit: String(options.limit) } : {}),
       ...(options?.issueKey ? { issue: options.issueKey } : {}),
       ...(options?.projectId ? { project: options.projectId } : {}),
+      ...(options?.kind ? { kind: options.kind } : {}),
+      ...(options?.stage ? { stage: options.stage } : {}),
+      ...(options?.status ? { status: options.status } : {}),
+      ...(options?.workflowId ? { workflow: options.workflowId } : {}),
     });
   }
 
   async followOperatorFeed(
     onEvent: (event: OperatorFeedEvent) => void,
-    options?: { limit?: number; issueKey?: string; projectId?: string },
+    options?: Omit<OperatorFeedQuery, "afterId">,
   ): Promise<void> {
     const url = new URL("/api/feed", this.getOperatorBaseUrl());
     url.searchParams.set("follow", "1");
@@ -110,6 +114,18 @@ export class CliOperatorApiClient implements CliOperatorDataAccess {
     }
     if (options?.projectId) {
       url.searchParams.set("project", options.projectId);
+    }
+    if (options?.kind) {
+      url.searchParams.set("kind", options.kind);
+    }
+    if (options?.stage) {
+      url.searchParams.set("stage", options.stage);
+    }
+    if (options?.status) {
+      url.searchParams.set("status", options.status);
+    }
+    if (options?.workflowId) {
+      url.searchParams.set("workflow", options.workflowId);
     }
 
     const response = await fetch(url, {

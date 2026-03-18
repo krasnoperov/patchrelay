@@ -38,6 +38,7 @@ export class IssueWorkflowCoordinator {
   upsertTrackedIssue(params: {
     projectId: string;
     linearIssueId: string;
+    selectedWorkflowId?: string | null;
     issueKey?: string;
     title?: string;
     issueUrl?: string;
@@ -73,6 +74,7 @@ export class IssueWorkflowCoordinator {
     this.authoritativeLedger.upsertIssueControl({
       projectId: params.projectId,
       linearIssueId: params.linearIssueId,
+      ...(params.selectedWorkflowId !== undefined ? { selectedWorkflowId: params.selectedWorkflowId } : {}),
       ...(params.desiredStage !== undefined ? { desiredStage: params.desiredStage } : {}),
       ...(desiredReceiptId !== undefined ? { desiredReceiptId } : {}),
       ...(params.activeWorkspaceId !== undefined ? { activeWorkspaceOwnershipId: params.activeWorkspaceId } : {}),
@@ -88,6 +90,7 @@ export class IssueWorkflowCoordinator {
   recordDesiredStage(params: {
     projectId: string;
     linearIssueId: string;
+    selectedWorkflowId?: string | null;
     issueKey?: string;
     title?: string;
     issueUrl?: string;
@@ -127,6 +130,11 @@ export class IssueWorkflowCoordinator {
     this.authoritativeLedger.upsertIssueControl({
       projectId: params.projectId,
       linearIssueId: params.linearIssueId,
+      ...(params.selectedWorkflowId !== undefined
+        ? { selectedWorkflowId: params.selectedWorkflowId }
+        : existing?.selectedWorkflowId
+          ? { selectedWorkflowId: existing.selectedWorkflowId }
+          : {}),
       ...(params.desiredStage !== undefined ? { desiredStage: params.desiredStage } : {}),
       ...(desiredReceiptId !== undefined ? { desiredReceiptId } : {}),
       lifecycleStatus,
@@ -197,6 +205,7 @@ export class IssueWorkflowCoordinator {
       this.authoritativeLedger.upsertIssueControl({
         projectId: params.projectId,
         linearIssueId: params.linearIssueId,
+        ...(issue.selectedWorkflowId ? { selectedWorkflowId: issue.selectedWorkflowId } : {}),
         desiredStage: null,
         desiredReceiptId: null,
         activeWorkspaceOwnershipId: workspaceOwnership.id,
@@ -313,6 +322,7 @@ export class IssueWorkflowCoordinator {
     this.authoritativeLedger.upsertIssueControl({
       projectId,
       linearIssueId,
+      ...(existing?.selectedWorkflowId ? { selectedWorkflowId: existing.selectedWorkflowId } : {}),
       ...(desiredStage !== undefined ? { desiredStage } : { desiredStage: null }),
       ...(desiredReceiptId !== undefined
         ? { desiredReceiptId }
@@ -335,6 +345,7 @@ export class IssueWorkflowCoordinator {
     this.authoritativeLedger.upsertIssueControl({
       projectId,
       linearIssueId,
+      ...(existing?.selectedWorkflowId ? { selectedWorkflowId: existing.selectedWorkflowId } : {}),
       lifecycleStatus,
       ...(existing?.desiredStage ? { desiredStage: existing.desiredStage } : {}),
       ...(existingIssueControl?.desiredReceiptId !== undefined ? { desiredReceiptId: existingIssueControl.desiredReceiptId } : {}),
@@ -351,6 +362,7 @@ export class IssueWorkflowCoordinator {
     this.authoritativeLedger.upsertIssueControl({
       projectId,
       linearIssueId,
+      ...(existing?.selectedWorkflowId ? { selectedWorkflowId: existing.selectedWorkflowId } : {}),
       lifecycleStatus: existing?.lifecycleStatus ?? "idle",
       ...(existing?.desiredStage ? { desiredStage: existing.desiredStage } : {}),
       ...(existingIssueControl?.desiredReceiptId !== undefined ? { desiredReceiptId: existingIssueControl.desiredReceiptId } : {}),
@@ -367,6 +379,7 @@ export class IssueWorkflowCoordinator {
     this.authoritativeLedger.upsertIssueControl({
       projectId,
       linearIssueId,
+      ...(existing?.selectedWorkflowId ? { selectedWorkflowId: existing.selectedWorkflowId } : {}),
       lifecycleStatus: existing?.lifecycleStatus ?? "idle",
       ...(existing?.desiredStage ? { desiredStage: existing.desiredStage } : {}),
       ...(existingIssueControl?.desiredReceiptId !== undefined ? { desiredReceiptId: existingIssueControl.desiredReceiptId } : {}),

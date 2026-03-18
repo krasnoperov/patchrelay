@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS issue_control (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   project_id TEXT NOT NULL,
   linear_issue_id TEXT NOT NULL,
+  selected_workflow_id TEXT,
   desired_stage TEXT,
   desired_receipt_id INTEGER,
   active_run_lease_id INTEGER,
@@ -196,7 +197,9 @@ CREATE TABLE IF NOT EXISTS operator_feed_events (
   issue_key TEXT,
   project_id TEXT,
   stage TEXT,
-  status TEXT
+  status TEXT,
+  workflow_id TEXT,
+  next_stage TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_event_receipts_project_issue ON event_receipts(project_id, linear_issue_id);
@@ -217,4 +220,19 @@ WHERE dedupe_key IS NOT NULL;
 
 export function runPatchRelayMigrations(connection: DatabaseConnection): void {
   connection.exec(baseMigration);
+  try {
+    connection.exec("ALTER TABLE issue_control ADD COLUMN selected_workflow_id TEXT");
+  } catch {
+    // Column already exists on upgraded installs.
+  }
+  try {
+    connection.exec("ALTER TABLE operator_feed_events ADD COLUMN workflow_id TEXT");
+  } catch {
+    // Column already exists on upgraded installs.
+  }
+  try {
+    connection.exec("ALTER TABLE operator_feed_events ADD COLUMN next_stage TEXT");
+  } catch {
+    // Column already exists on upgraded installs.
+  }
 }

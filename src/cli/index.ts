@@ -103,7 +103,7 @@ function validateFlags(command: string, commandArgs: string[], parsed: ReturnTyp
       assertKnownFlags(parsed, command, ["json"]);
       return;
     case "feed":
-      assertKnownFlags(parsed, command, ["follow", "limit", "issue", "project", "json"]);
+      assertKnownFlags(parsed, command, ["follow", "limit", "issue", "project", "kind", "stage", "status", "workflow", "json"]);
       return;
     case "install-service":
       assertKnownFlags(parsed, command, ["force", "write-only", "json"]);

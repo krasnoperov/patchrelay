@@ -179,6 +179,7 @@ test("http routes handle webhook validation and issue/report/live/events lookups
         bearerToken: "operator-token",
       },
     };
+    const feedQueries: Array<Record<string, unknown>> = [];
     const app = await buildHttpServer(
       config,
       {
@@ -217,21 +218,54 @@ test("http routes handle webhook validation and issue/report/live/events lookups
                 events: [{ id: 1, method: "turn/started" }],
               }
             : undefined,
-        listOperatorFeed: ({ limit, issueKey, projectId }: { limit?: number; issueKey?: string; projectId?: string } = {}) =>
-          [
+        listOperatorFeed: (
+          {
+            limit,
+            issueKey,
+            projectId,
+            kind,
+            stage,
+            status,
+            workflowId,
+          }: {
+            limit?: number;
+            issueKey?: string;
+            projectId?: string;
+            kind?: string;
+            stage?: string;
+            status?: string;
+            workflowId?: string;
+          } = {},
+        ) => {
+          feedQueries.push({ limit, issueKey, projectId, kind, stage, status, workflowId });
+          return [
             {
               id: 2,
+              at: "2026-03-13T12:00:00.000Z",
+              level: "info",
+              kind: "workflow",
+              issueKey: "USE-42",
+              projectId: "usertold",
+              stage: "development",
+              workflowId: "default",
+              nextStage: "review",
+              status: "transition_chosen",
+              summary: `Chose development -> review${limit ? ` (${limit})` : ""}`,
+            },
+            {
+              id: 3,
               at: "2026-03-13T12:00:00.000Z",
               level: "info",
               kind: "stage",
               issueKey: "USE-42",
               projectId: "usertold",
               stage: "review",
+              workflowId: "default",
               status: "running",
-              summary: `Started review workflow${limit ? ` (${limit})` : ""}`,
+              summary: "Started review workflow",
             },
             {
-              id: 3,
+              id: 4,
               at: "2026-03-13T12:01:00.000Z",
               level: "warn",
               kind: "comment",
@@ -243,8 +277,13 @@ test("http routes handle webhook validation and issue/report/live/events lookups
           ].filter(
             (event) =>
               (!issueKey || event.issueKey === issueKey) &&
-              (!projectId || event.projectId === projectId),
-          ),
+              (!projectId || event.projectId === projectId) &&
+              (!kind || event.kind === kind) &&
+              (!stage || event.stage === stage) &&
+              (!status || event.status === status) &&
+              (!workflowId || event.workflowId === workflowId),
+          );
+        },
         subscribeOperatorFeed: () => () => undefined,
       } as never,
       pino({ enabled: false }),
@@ -383,15 +422,29 @@ test("http routes handle webhook validation and issue/report/live/events lookups
           id: 2,
           at: "2026-03-13T12:00:00.000Z",
           level: "info",
+          kind: "workflow",
+          issueKey: "USE-42",
+          projectId: "usertold",
+          stage: "development",
+          workflowId: "default",
+          nextStage: "review",
+          status: "transition_chosen",
+          summary: "Chose development -> review (10)",
+        },
+        {
+          id: 3,
+          at: "2026-03-13T12:00:00.000Z",
+          level: "info",
           kind: "stage",
           issueKey: "USE-42",
           projectId: "usertold",
           stage: "review",
+          workflowId: "default",
           status: "running",
-          summary: "Started review workflow (10)",
+          summary: "Started review workflow",
         },
         {
-          id: 3,
+          id: 4,
           at: "2026-03-13T12:01:00.000Z",
           level: "warn",
           kind: "comment",
@@ -415,7 +468,7 @@ test("http routes handle webhook validation and issue/report/live/events lookups
       ok: true,
       events: [
         {
-          id: 3,
+          id: 4,
           at: "2026-03-13T12:01:00.000Z",
           level: "warn",
           kind: "comment",
@@ -425,6 +478,42 @@ test("http routes handle webhook validation and issue/report/live/events lookups
           summary: "Could not deliver follow-up comment",
         },
       ],
+    });
+
+    const workflowFeed = await app.inject({
+      method: "GET",
+      url: "/api/feed?kind=workflow&stage=development&status=transition_chosen&workflow=default",
+      headers: {
+        authorization: "Bearer operator-token",
+      },
+    });
+    assert.equal(workflowFeed.statusCode, 200);
+    assert.deepEqual(workflowFeed.json(), {
+      ok: true,
+      events: [
+        {
+          id: 2,
+          at: "2026-03-13T12:00:00.000Z",
+          level: "info",
+          kind: "workflow",
+          issueKey: "USE-42",
+          projectId: "usertold",
+          stage: "development",
+          workflowId: "default",
+          nextStage: "review",
+          status: "transition_chosen",
+          summary: "Chose development -> review (50)",
+        },
+      ],
+    });
+    assert.deepEqual(feedQueries.at(-1), {
+      limit: 50,
+      issueKey: undefined,
+      projectId: undefined,
+      kind: "workflow",
+      stage: "development",
+      status: "transition_chosen",
+      workflowId: "default",
     });
 
     const missingEvents = await app.inject({

@@ -11,6 +11,7 @@ export interface IssueWorkflowCoordinator {
   upsertTrackedIssue(params: {
     projectId: string;
     linearIssueId: string;
+    selectedWorkflowId?: string | null;
     issueKey?: string;
     title?: string;
     issueUrl?: string;
@@ -30,6 +31,7 @@ export interface IssueWorkflowCoordinator {
   recordDesiredStage(params: {
     projectId: string;
     linearIssueId: string;
+    selectedWorkflowId?: string | null;
     issueKey?: string;
     title?: string;
     issueUrl?: string;

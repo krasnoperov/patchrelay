@@ -3,7 +3,14 @@ import path from "node:path";
 import test from "node:test";
 import { resolveProject, triggerEventAllowed } from "../src/project-resolution.ts";
 import type { AppConfig, IssueMetadata } from "../src/types.ts";
-import { resolveWorkflowStage } from "../src/workflow-policy.ts";
+import {
+  listAllowedTransitionTargets,
+  listRunnableStates,
+  resolveDefaultTransitionTarget,
+  resolveWorkflowStage,
+  resolveWorkflowStageCandidate,
+  selectWorkflowDefinition,
+} from "../src/workflow-policy.ts";
 
 function createWorkflows(repoPath: string) {
   return [
@@ -116,6 +123,69 @@ test("resolveWorkflowStage maps configured Linear states to workflow stages", ()
   assert.equal(resolveWorkflowStage(project, "DEPLOY"), "deploy");
   assert.equal(resolveWorkflowStage(project, "Cleanup"), "cleanup");
   assert.equal(resolveWorkflowStage(project, "Blocked"), undefined);
+});
+
+test("resolveWorkflowStageCandidate matches configured stage ids and workflow labels", () => {
+  const project = createConfig().projects[0]!;
+
+  assert.equal(resolveWorkflowStageCandidate(project, "development"), "development");
+  assert.equal(resolveWorkflowStageCandidate(project, "Reviewing"), "review");
+  assert.equal(resolveWorkflowStageCandidate(project, "deploy"), "deploy");
+  assert.equal(resolveWorkflowStageCandidate(project, "missing"), undefined);
+});
+
+test("default workflow policy resolves forward transitions from configured stage order", () => {
+  const project = createConfig().projects[0]!;
+
+  assert.equal(resolveDefaultTransitionTarget(project, "development"), "review");
+  assert.equal(resolveDefaultTransitionTarget(project, "review"), "deploy");
+  assert.equal(resolveDefaultTransitionTarget(project, "deploy"), "cleanup");
+  assert.equal(resolveDefaultTransitionTarget(project, "cleanup"), "done");
+});
+
+test("default workflow policy allows forward moves, loop-backs, and terminal escalation", () => {
+  const project = createConfig().projects[0]!;
+
+  assert.deepEqual(listAllowedTransitionTargets(project, "development"), ["human_needed", "review"]);
+  assert.deepEqual(listAllowedTransitionTargets(project, "review"), ["human_needed", "deploy", "development"]);
+  assert.deepEqual(listAllowedTransitionTargets(project, "deploy"), ["human_needed", "cleanup", "review", "development"]);
+});
+
+test("workflow selection chooses a repo-defined workflow from labels and resolves stages within it", () => {
+  const project = createConfig().projects[0]!;
+  project.workflowDefinitions = [
+    {
+      id: "feature",
+      stages: createWorkflows("/repos/alpha").slice(0, 3),
+    },
+    {
+      id: "docs",
+      stages: [
+        {
+          id: "write",
+          whenState: "Start",
+          activeState: "Writing",
+          workflowFile: "/repos/alpha/.patchrelay/workflows/DOCS_WRITE.md",
+        },
+        {
+          id: "publish",
+          whenState: "Publish",
+          activeState: "Publishing",
+          workflowFile: "/repos/alpha/.patchrelay/workflows/DOCS_PUBLISH.md",
+        },
+      ],
+    },
+  ];
+  project.workflowSelection = {
+    defaultWorkflowId: "feature",
+    byLabel: [{ label: "docs", workflowId: "docs" }],
+  };
+  project.workflows = project.workflowDefinitions[0]!.stages;
+
+  assert.equal(selectWorkflowDefinition(project, { labelNames: ["docs"] })?.id, "docs");
+  assert.equal(resolveWorkflowStage(project, "Start", { issue: { labelNames: ["docs"] } }), "write");
+  assert.deepEqual(listRunnableStates(project, { issue: { labelNames: ["docs"] } }), ["Start", "Publish"]);
+  assert.equal(resolveDefaultTransitionTarget(project, "write", "docs"), "publish");
 });
 
 test("resolveProject matches a single configured project only when routing constraints match", () => {

@@ -163,27 +163,41 @@ function formatFeedStatus(event: OperatorFeedEvent, color: boolean): string {
   if (event.level === "error" || raw === "failed" || raw === "delivery_failed") {
     return colorize(color, "31", padded);
   }
-  if (event.level === "warn" || raw === "ignored" || raw === "fallback" || raw === "handoff") {
+  if (event.level === "warn" || raw === "ignored" || raw === "fallback" || raw === "handoff" || raw === "transition_suppressed") {
     return colorize(color, "33", padded);
   }
-  if (raw === "running" || raw === "started" || raw === "delegated") {
+  if (raw === "running" || raw === "started" || raw === "delegated" || raw === "transition_chosen" || raw === "completed") {
     return colorize(color, "32", padded);
   }
-  if (raw === "queued") {
+  if (raw === "queued" || raw === "selected") {
     return colorize(color, "36", padded);
   }
   return colorize(color, "2", padded);
+}
+
+function formatFeedMeta(event: OperatorFeedEvent, color: boolean): string | undefined {
+  const parts = [
+    event.workflowId ? `workflow:${event.workflowId}` : undefined,
+    event.stage ? `stage:${event.stage}` : undefined,
+    event.nextStage ? `next:${event.nextStage}` : undefined,
+  ].filter(Boolean);
+  if (parts.length === 0) {
+    return undefined;
+  }
+  return colorize(color, "2", `[${parts.join(" ")}]`);
 }
 
 export function formatOperatorFeedEvent(event: OperatorFeedEvent, options?: { color?: boolean }): string {
   const color = options?.color === true;
   const timestamp = new Date(event.at).toLocaleTimeString("en-GB", { hour12: false });
   const issue = event.issueKey ?? event.projectId ?? "-";
+  const meta = formatFeedMeta(event, color);
   const line = [
     colorize(color, "2", timestamp),
     colorize(color, "1", issue.padEnd(10)),
     formatFeedStatus(event, color),
     event.summary,
+    ...(meta ? [meta] : []),
   ].join("  ");
 
   if (!event.detail) {

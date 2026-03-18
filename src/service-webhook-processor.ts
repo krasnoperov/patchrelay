@@ -169,6 +169,7 @@ export class ServiceWebhookProcessor {
       const receipt = this.ensureEventReceipt(event, project.id, routedIssue.id);
       const hydrated = await this.hydrateIssueContext(project.id, normalized);
       const hydratedIssue = hydrated.issue ?? routedIssue;
+      const priorIssue = this.stores.issueWorkflows.getTrackedIssue(project.id, hydratedIssue.id);
       const issueState = this.desiredStageRecorder.record(project, hydrated, receipt ? { eventReceiptId: receipt.id } : undefined);
       const observation = describeWebhookObservation(hydrated, issueState.delegatedToPatchRelay);
       if (observation) {
@@ -177,9 +178,29 @@ export class ServiceWebhookProcessor {
           kind: observation.kind,
           issueKey: hydratedIssue.identifier,
           projectId: project.id,
+          ...(issueState.issue?.selectedWorkflowId ? { workflowId: issueState.issue.selectedWorkflowId } : {}),
           ...(observation.status ? { status: observation.status } : {}),
           summary: observation.summary,
           ...(observation.detail ? { detail: observation.detail } : {}),
+        });
+      }
+      if (
+        issueState.issue?.selectedWorkflowId &&
+        issueState.issue.selectedWorkflowId !== priorIssue?.selectedWorkflowId &&
+        (hydrated.triggerEvent === "agentSessionCreated" || hydrated.triggerEvent === "agentPrompted")
+      ) {
+        this.feed?.publish({
+          level: "info",
+          kind: "workflow",
+          issueKey: hydratedIssue.identifier,
+          projectId: project.id,
+          workflowId: issueState.issue.selectedWorkflowId,
+          ...(issueState.desiredStage ? { nextStage: issueState.desiredStage } : {}),
+          status: "selected",
+          summary: `Selected ${issueState.issue.selectedWorkflowId} workflow`,
+          detail: issueState.desiredStage
+            ? `PatchRelay will start with ${issueState.desiredStage} from ${hydratedIssue.stateName ?? "the current Linear state"}.`
+            : undefined,
         });
       }
 
@@ -201,6 +222,7 @@ export class ServiceWebhookProcessor {
           issueKey: hydratedIssue.identifier,
           projectId: project.id,
           stage: issueState.desiredStage,
+          ...(issueState.issue?.selectedWorkflowId ? { workflowId: issueState.issue.selectedWorkflowId } : {}),
           status: "queued",
           summary: `Queued ${issueState.desiredStage} workflow`,
           detail: `Triggered by ${hydrated.triggerEvent}${hydratedIssue.stateName ? ` from ${hydratedIssue.stateName}` : ""}.`,

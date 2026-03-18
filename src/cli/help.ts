@@ -39,7 +39,7 @@ export function rootHelpText(): string {
     "  connect [--project <projectId>] [--no-open] [--timeout <seconds>] [--json]",
     "                                                          Advanced: start or reuse a Linear installation directly",
     "  installations [--json]                                 Show connected Linear installations",
-    "  feed [--follow] [--limit <count>] [--issue <issueKey>] [--project <projectId>] [--json]",
+    "  feed [--follow] [--limit <count>] [--issue <issueKey>] [--project <projectId>] [--kind <kind>] [--stage <stage>] [--status <status>] [--workflow <id>] [--json]",
     "                                                          Show a live operator feed from the daemon",
     "  serve                                                  Run the local PatchRelay service",
     "  inspect <issueKey>                                     Show the latest known issue state",

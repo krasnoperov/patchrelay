@@ -2,6 +2,7 @@ import type { Logger } from "pino";
 import {
   buildAwaitingHandoffSessionPlan,
   buildCompletedSessionPlan,
+  buildPreparingSessionPlan,
   buildRunningSessionPlan,
 } from "./agent-session-plan.ts";
 import { buildAgentSessionExternalUrls } from "./agent-session-presentation.ts";
@@ -10,6 +11,7 @@ import type { OperatorEventFeed } from "./operator-feed.ts";
 import type { IssueWorkflowCoordinatorProvider, IssueWorkflowQueryStoreProvider } from "./workflow-ports.ts";
 import {
   buildAwaitingHandoffComment,
+  buildHumanNeededComment,
   buildRunningStatusComment,
   resolveActiveLinearState,
   resolveWorkflowLabelCleanup,
@@ -32,7 +34,7 @@ export class StageLifecyclePublisher {
     issue: TrackedIssueRecord,
     stageRun: StageRunRecord,
   ): Promise<void> {
-    const activeState = resolveActiveLinearState(project, stageRun.stage);
+    const activeState = resolveActiveLinearState(project, stageRun.stage, issue.selectedWorkflowId);
     const linear = await this.linearProvider.forProject(stageRun.projectId);
     if (!activeState || !linear) {
       return;
@@ -134,25 +136,31 @@ export class StageLifecyclePublisher {
   ): Promise<void> {
     const refreshedIssue = this.stores.issueWorkflows.getTrackedIssue(stageRun.projectId, stageRun.linearIssueId);
     if (refreshedIssue?.desiredStage) {
+      const linear = await this.linearProvider.forProject(stageRun.projectId);
+      if (refreshedIssue.activeAgentSessionId && linear) {
+        await this.updateAgentSession(linear, refreshedIssue, buildPreparingSessionPlan(refreshedIssue.desiredStage), refreshedIssue.desiredStage);
+      }
       this.feed?.publish({
         level: "info",
         kind: "stage",
         issueKey: refreshedIssue.issueKey,
         projectId: refreshedIssue.projectId,
         stage: stageRun.stage,
+        ...(refreshedIssue.selectedWorkflowId ? { workflowId: refreshedIssue.selectedWorkflowId } : {}),
+        nextStage: refreshedIssue.desiredStage,
         status: "queued",
         summary: `Completed ${stageRun.stage} workflow and queued ${refreshedIssue.desiredStage}`,
       });
       await this.publishAgentCompletion(refreshedIssue, {
         type: "thought",
-        body: `The ${stageRun.stage} workflow finished. PatchRelay is preparing the next requested workflow.`,
+        body: `The ${stageRun.stage} workflow finished. PatchRelay is preparing the ${refreshedIssue.desiredStage} workflow next.`,
       });
       enqueueIssue(stageRun.projectId, stageRun.linearIssueId);
       return;
     }
 
     const project = this.config.projects.find((candidate) => candidate.id === stageRun.projectId);
-    const activeState = project ? resolveActiveLinearState(project, stageRun.stage) : undefined;
+    const activeState = project ? resolveActiveLinearState(project, stageRun.stage, refreshedIssue?.selectedWorkflowId) : undefined;
     const linear = project ? await this.linearProvider.forProject(stageRun.projectId) : undefined;
     if (refreshedIssue && linear && project && activeState) {
       try {
@@ -179,6 +187,7 @@ export class StageLifecyclePublisher {
             issueKey: refreshedIssue.issueKey,
             projectId: refreshedIssue.projectId,
             stage: stageRun.stage,
+            ...(refreshedIssue.selectedWorkflowId ? { workflowId: refreshedIssue.selectedWorkflowId } : {}),
             status: "handoff",
             summary: `Completed ${stageRun.stage} workflow`,
             detail: `Waiting for a Linear state change or follow-up input while the issue remains in ${activeState}.`,
@@ -225,8 +234,15 @@ export class StageLifecyclePublisher {
     }
 
     if (refreshedIssue) {
+      let deliveredToSession = false;
       if (refreshedIssue.activeAgentSessionId && linear) {
-        await this.updateAgentSession(linear, refreshedIssue, buildCompletedSessionPlan(stageRun.stage));
+        deliveredToSession = await this.updateAgentSession(
+          linear,
+          refreshedIssue,
+          refreshedIssue.lifecycleStatus === "paused"
+            ? buildAwaitingHandoffSessionPlan(stageRun.stage)
+            : buildCompletedSessionPlan(stageRun.stage),
+        );
       }
       this.feed?.publish({
         level: "info",
@@ -234,13 +250,29 @@ export class StageLifecyclePublisher {
         issueKey: refreshedIssue.issueKey,
         projectId: refreshedIssue.projectId,
         stage: stageRun.stage,
+        ...(refreshedIssue.selectedWorkflowId ? { workflowId: refreshedIssue.selectedWorkflowId } : {}),
         status: "completed",
         summary: `Completed ${stageRun.stage} workflow`,
       });
-      await this.publishAgentCompletion(refreshedIssue, {
-        type: "response",
-        body: `PatchRelay finished the ${stageRun.stage} workflow.`,
-      });
+      deliveredToSession =
+        (await this.publishAgentCompletion(refreshedIssue, {
+        type: refreshedIssue.lifecycleStatus === "paused" ? "elicitation" : "response",
+        body:
+          refreshedIssue.lifecycleStatus === "paused"
+            ? `PatchRelay finished the ${stageRun.stage} workflow and now needs human input before it can continue.`
+            : `PatchRelay finished the ${stageRun.stage} workflow.`,
+        })) || deliveredToSession;
+      if (refreshedIssue.lifecycleStatus === "paused" && linear && !deliveredToSession) {
+        const result = await linear.upsertIssueComment({
+          issueId: stageRun.linearIssueId,
+          ...(refreshedIssue.statusCommentId ? { commentId: refreshedIssue.statusCommentId } : {}),
+          body: buildHumanNeededComment({
+            issue: refreshedIssue,
+            stageRun: this.stores.issueWorkflows.getStageRun(stageRun.id) ?? stageRun,
+          }),
+        });
+        this.stores.workflowCoordinator.setIssueStatusComment(stageRun.projectId, stageRun.linearIssueId, result.id);
+      }
     }
   }
 

@@ -73,7 +73,20 @@ export class ServiceStageRunner {
     }
 
     const existingWorkspace = this.stores.workspaceOwnership.getWorkspaceOwnershipForIssue(item.projectId, item.issueId);
-    const defaultPlan = buildStageLaunchPlan(project, issue, desiredStage);
+    const stageHistory = this.stores.issueWorkflows.listStageRunsForIssue(item.projectId, item.issueId);
+    const previousStageRun = stageHistory.at(-1);
+    const defaultPlan = buildStageLaunchPlan(project, issue, desiredStage, {
+      ...(previousStageRun ? { previousStageRun } : {}),
+      ...(existingWorkspace
+        ? {
+            workspace: {
+              branchName: existingWorkspace.branchName,
+              worktreePath: existingWorkspace.worktreePath,
+            },
+          }
+        : {}),
+      stageHistory,
+    });
     const plan = existingWorkspace
       ? {
           ...defaultPlan,
@@ -87,6 +100,7 @@ export class ServiceStageRunner {
       issueKey: issue.issueKey,
       projectId: item.projectId,
       stage: desiredStage,
+      ...(issue.selectedWorkflowId ? { workflowId: issue.selectedWorkflowId } : {}),
       status: "starting",
       summary: `Starting ${desiredStage} workflow`,
       detail: `Preparing ${plan.branchName}`,
@@ -113,7 +127,7 @@ export class ServiceStageRunner {
       });
       await this.lifecyclePublisher.markStageActive(project, claim.issue, claim.stageRun);
 
-      threadLaunch = await this.launchStageThread(item.projectId, item.issueId, claim.stageRun.id, plan.worktreePath, issue.issueKey);
+      threadLaunch = await this.launchStageThread(item.projectId, item.issueId, claim.stageRun.id, plan.worktreePath);
       const pendingLaunchInput = this.collectPendingLaunchInput(item.projectId, item.issueId);
       const initialTurnInput = pendingLaunchInput.combinedInput
         ? [plan.prompt, "", pendingLaunchInput.combinedInput].join("\n")
@@ -181,6 +195,7 @@ export class ServiceStageRunner {
       issueKey: issue.issueKey,
       projectId: item.projectId,
       stage: claim.stageRun.stage,
+      ...(claim.issue.selectedWorkflowId ? { workflowId: claim.issue.selectedWorkflowId } : {}),
       status: "running",
       summary: `Started ${claim.stageRun.stage} workflow`,
       detail: `Turn ${turn.turnId} is running in ${plan.branchName}.`,
@@ -263,7 +278,6 @@ export class ServiceStageRunner {
     issueId: string,
     stageRunId: number,
     worktreePath: string,
-    issueKey?: string,
   ): Promise<{ threadId: string; parentThreadId?: string }> {
     const previousStageRun = this.stores.issueWorkflows
       .listStageRunsForIssue(projectId, issueId)
@@ -274,38 +288,10 @@ export class ServiceStageRunner {
         ? previousStageRun.threadId
         : undefined;
 
-    if (parentThreadId) {
-      try {
-        const thread = await this.codex.forkThread(parentThreadId, worktreePath);
-        return {
-          threadId: thread.id,
-          parentThreadId,
-        };
-      } catch (error) {
-        const err = error instanceof Error ? error : new Error(String(error));
-        this.logger.warn(
-          {
-            issueKey,
-            parentThreadId,
-            error: err.message,
-          },
-          "Falling back to a fresh Codex thread after parent thread fork failed",
-        );
-        this.feed?.publish({
-          level: "warn",
-          kind: "turn",
-          issueKey,
-          projectId,
-          status: "fallback",
-          summary: "Could not fork the previous Codex thread",
-          detail: "Starting a fresh thread instead.",
-        });
-      }
-    }
-
     const thread = await this.codex.startThread({ cwd: worktreePath });
     return {
       threadId: thread.id,
+      ...(parentThreadId ? { parentThreadId } : {}),
     };
   }
 

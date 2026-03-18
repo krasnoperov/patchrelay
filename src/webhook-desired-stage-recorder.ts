@@ -3,7 +3,7 @@ import type { LinearInstallationStoreProvider } from "./installation-ports.ts";
 import type { IssueWorkflowCoordinatorProvider, IssueWorkflowQueryStoreProvider } from "./workflow-ports.ts";
 import { triggerEventAllowed } from "./project-resolution.ts";
 import type { AgentSessionMetadata, NormalizedEvent, ProjectConfig, StageRunRecord, TrackedIssueRecord, WorkflowStage } from "./types.ts";
-import { resolveWorkflowStage } from "./workflow-policy.ts";
+import { resolveWorkflowStage, selectWorkflowDefinition } from "./workflow-policy.ts";
 
 function trimPrompt(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
@@ -45,7 +45,8 @@ export class WebhookDesiredStageRecorder {
       issueControl?.activeRunLeaseId !== undefined ? this.stores.issueWorkflows.getStageRun(issueControl.activeRunLeaseId) : undefined;
     const delegatedToPatchRelay = this.isDelegatedToPatchRelay(project, normalized);
     const stageAllowed = triggerEventAllowed(project, normalized.triggerEvent);
-    const desiredStage = this.resolveDesiredStage(project, normalized, issue, activeStageRun, delegatedToPatchRelay);
+    const selectedWorkflowId = this.resolveSelectedWorkflowId(project, normalized, issue, activeStageRun, delegatedToPatchRelay);
+    const desiredStage = this.resolveDesiredStage(project, normalized, issue, activeStageRun, delegatedToPatchRelay, selectedWorkflowId);
     const launchInput = this.resolveLaunchInput(normalized.agentSession);
     const activeAgentSessionId =
       normalized.agentSession?.id ??
@@ -57,6 +58,7 @@ export class WebhookDesiredStageRecorder {
       ...(normalizedIssue.title ? { title: normalizedIssue.title } : {}),
       ...(normalizedIssue.url ? { issueUrl: normalizedIssue.url } : {}),
       ...(normalizedIssue.stateName ? { currentLinearState: normalizedIssue.stateName } : {}),
+      ...(selectedWorkflowId !== undefined ? { selectedWorkflowId } : {}),
       ...(desiredStage ? { desiredStage } : {}),
       ...(options?.eventReceiptId !== undefined ? { desiredReceiptId: options.eventReceiptId } : {}),
       ...(activeAgentSessionId !== undefined ? { activeAgentSessionId } : {}),
@@ -103,6 +105,7 @@ export class WebhookDesiredStageRecorder {
     issue: TrackedIssueRecord | undefined,
     activeStageRun: StageRunRecord | undefined,
     delegatedToPatchRelay: boolean,
+    selectedWorkflowId: string | null | undefined,
   ): WorkflowStage | undefined {
     const normalizedIssue = normalized.issue;
     if (!normalizedIssue) {
@@ -117,7 +120,9 @@ export class WebhookDesiredStageRecorder {
       return undefined;
     }
 
-    const desiredStage = resolveWorkflowStage(project, normalizedIssue.stateName);
+    const desiredStage = resolveWorkflowStage(project, normalizedIssue.stateName, {
+      ...(selectedWorkflowId ? { workflowDefinitionId: selectedWorkflowId } : {}),
+    });
     if (!desiredStage) {
       return undefined;
     }
@@ -129,6 +134,33 @@ export class WebhookDesiredStageRecorder {
       return undefined;
     }
     return desiredStage;
+  }
+
+  private resolveSelectedWorkflowId(
+    project: ProjectConfig,
+    normalized: NormalizedEvent,
+    issue: TrackedIssueRecord | undefined,
+    activeStageRun: StageRunRecord | undefined,
+    delegatedToPatchRelay: boolean,
+  ): string | null | undefined {
+    if (activeStageRun) {
+      return issue?.selectedWorkflowId;
+    }
+
+    if (normalized.triggerEvent !== "agentSessionCreated" && normalized.triggerEvent !== "agentPrompted") {
+      return issue?.selectedWorkflowId;
+    }
+
+    if (!delegatedToPatchRelay || !triggerEventAllowed(project, normalized.triggerEvent) || !normalized.issue) {
+      return issue?.selectedWorkflowId;
+    }
+
+    const selectedWorkflow = selectWorkflowDefinition(project, normalized.issue);
+    if (selectedWorkflow) {
+      return selectedWorkflow.id;
+    }
+
+    return null;
   }
 
   private resolveLaunchInput(agentSession: AgentSessionMetadata | undefined): string | undefined {

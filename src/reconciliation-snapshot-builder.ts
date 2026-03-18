@@ -13,6 +13,7 @@ import type {
   RunLeaseRecord,
   WorkspaceOwnershipRecord,
 } from "./types.ts";
+import { resolveWorkflowStageConfig } from "./workflow-policy.ts";
 import { safeJsonParse } from "./utils.ts";
 
 export interface ReconciliationSnapshot {
@@ -43,7 +44,7 @@ export async function buildReconciliationSnapshot(params: {
 
   const workspaceOwnership = params.stores.workspaceOwnership.getWorkspaceOwnership(runLease.workspaceOwnershipId);
   const project = params.config.projects.find((candidate) => candidate.id === runLease.projectId);
-  const workflowConfig = project?.workflows.find((workflow) => workflow.id === runLease.stage);
+  const workflowConfig = project ? resolveWorkflowStageConfig(project, runLease.stage, issueControl.selectedWorkflowId) : undefined;
   const liveLinear =
     project
       ? await params.linearProvider

@@ -39,6 +39,7 @@ export interface IssueControlRecord {
   id: number;
   projectId: string;
   linearIssueId: string;
+  selectedWorkflowId?: string;
   desiredStage?: WorkflowStage;
   desiredReceiptId?: number;
   activeRunLeaseId?: number;
@@ -65,6 +66,7 @@ export interface TrackedIssueRecord {
   id: number;
   projectId: string;
   linearIssueId: string;
+  selectedWorkflowId?: string;
   issueKey?: string;
   title?: string;
   issueUrl?: string;

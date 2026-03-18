@@ -1,15 +1,19 @@
 import type { Logger } from "pino";
 import type { CodexNotification } from "./codex-app-server.ts";
 import type { CodexAppServerClient } from "./codex-app-server.ts";
-import type { IssueControlStoreProvider, ObligationStoreProvider, RunLeaseStoreProvider, WorkspaceOwnershipStoreProvider } from "./ledger-ports.ts";
+import type { IssueControlStoreProvider, IssueSessionStoreProvider, ObligationStoreProvider, RunLeaseStoreProvider, WorkspaceOwnershipStoreProvider } from "./ledger-ports.ts";
 import { ReconciliationActionApplier } from "./reconciliation-action-applier.ts";
 import { reconcileIssue } from "./reconciliation-engine.ts";
 import { buildReconciliationSnapshot } from "./reconciliation-snapshot-builder.ts";
 import type { ReconciliationSnapshot } from "./reconciliation-snapshot-builder.ts";
 import type { StageEventLogStoreProvider } from "./stage-event-ports.ts";
 import type { IssueWorkflowCoordinatorProvider, IssueWorkflowQueryStoreProvider } from "./workflow-ports.ts";
+import type { WebhookEventStoreProvider } from "./webhook-event-ports.ts";
 import { syncFailedStageToLinear } from "./stage-failure.ts";
+import { parseStageHandoff } from "./stage-handoff.ts";
+import { resolveActiveLinearState, resolveFallbackLinearState } from "./linear-workflow.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
+import { resolveDefaultTransitionTarget, transitionTargetAllowed, type WorkflowTransitionTarget } from "./workflow-policy.ts";
 import {
   buildFailedStageReport,
   buildPendingMaterializationThread,
@@ -22,8 +26,11 @@ import {
 } from "./stage-reporting.ts";
 import { StageLifecyclePublisher } from "./stage-lifecycle-publisher.ts";
 import { StageTurnInputDispatcher } from "./stage-turn-input-dispatcher.ts";
-import type { AppConfig, CodexThreadSummary, LinearClientProvider, StageRunRecord, TrackedIssueRecord } from "./types.ts";
+import type { AppConfig, CodexThreadSummary, LinearClientProvider, StageReport, StageRunRecord, TrackedIssueRecord } from "./types.ts";
+import { safeJsonParse } from "./utils.ts";
+import { normalizeWebhook } from "./webhooks.ts";
 
+const MAX_AUTOMATIC_TRANSITION_ATTEMPTS = 3;
 
 export class ServiceStageFinalizer {
   private readonly inputDispatcher: StageTurnInputDispatcher;
@@ -37,9 +44,11 @@ export class ServiceStageFinalizer {
       IssueWorkflowQueryStoreProvider &
       StageEventLogStoreProvider &
       IssueControlStoreProvider &
+      IssueSessionStoreProvider &
       ObligationStoreProvider &
       RunLeaseStoreProvider &
-      WorkspaceOwnershipStoreProvider,
+      WorkspaceOwnershipStoreProvider &
+      WebhookEventStoreProvider,
     private readonly codex: CodexAppServerClient,
     private readonly linearProvider: LinearClientProvider,
     private readonly enqueueIssue: (projectId: string, issueId: string) => void,
@@ -115,6 +124,7 @@ export class ServiceStageFinalizer {
           issueKey: issue?.issueKey,
           projectId: stageRun.projectId,
           stage: stageRun.stage,
+          ...(issue?.selectedWorkflowId ? { workflowId: issue.selectedWorkflowId } : {}),
           status: "started",
           summary: `Turn started for ${stageRun.stage}`,
           detail: turnId ? `Turn ${turnId} is now live.` : undefined,
@@ -142,6 +152,7 @@ export class ServiceStageFinalizer {
         issueKey: issue.issueKey,
         projectId: stageRun.projectId,
         stage: stageRun.stage,
+        ...(issue.selectedWorkflowId ? { workflowId: issue.selectedWorkflowId } : {}),
         status: "failed",
         summary: `Turn failed for ${stageRun.stage}`,
         detail: completedTurnId ? `Turn ${completedTurnId} completed in a failed state.` : undefined,
@@ -158,6 +169,7 @@ export class ServiceStageFinalizer {
       issueKey: issue.issueKey,
       projectId: stageRun.projectId,
       stage: stageRun.stage,
+      ...(issue.selectedWorkflowId ? { workflowId: issue.selectedWorkflowId } : {}),
       status: "completed",
       summary: `Turn completed for ${stageRun.stage}`,
       detail: summarizeCurrentThread(thread).latestAgentMessage,
@@ -207,7 +219,7 @@ export class ServiceStageFinalizer {
       });
     });
 
-    void this.advanceAfterStageCompletion(stageRun);
+    void this.advanceAfterStageCompletion(stageRun, report);
   }
 
   private failStageRun(
@@ -308,8 +320,301 @@ export class ServiceStageFinalizer {
     await this.inputDispatcher.flush(stageRun);
   }
 
-  private async advanceAfterStageCompletion(stageRun: StageRunRecord): Promise<void> {
+  private async advanceAfterStageCompletion(stageRun: StageRunRecord, report: StageReport): Promise<void> {
+    await this.maybeQueueAutomaticTransition(stageRun, report);
     await this.lifecyclePublisher.publishStageCompletion(stageRun, this.enqueueIssue);
+  }
+
+  private async maybeQueueAutomaticTransition(stageRun: StageRunRecord, report: StageReport): Promise<void> {
+    const refreshedIssue = this.stores.issueWorkflows.getTrackedIssue(stageRun.projectId, stageRun.linearIssueId);
+    if (!refreshedIssue || refreshedIssue.desiredStage) {
+      return;
+    }
+
+    const project = this.config.projects.find((candidate) => candidate.id === stageRun.projectId);
+    if (!project) {
+      return;
+    }
+
+    const handoff = parseStageHandoff(project, report.assistantMessages, refreshedIssue.selectedWorkflowId);
+    if (!handoff) {
+      return;
+    }
+
+    const linear = await this.linearProvider.forProject(stageRun.projectId);
+    if (!linear) {
+      return;
+    }
+
+    const linearIssue = await linear.getIssue(stageRun.linearIssueId).catch(() => undefined);
+    if (!linearIssue) {
+      return;
+    }
+
+    const continuationPrecondition = await this.checkAutomaticContinuationPreconditions(
+      project,
+      stageRun,
+      refreshedIssue,
+      linear,
+      linearIssue,
+    );
+    if (!continuationPrecondition.allowed) {
+      this.feed?.publish({
+        level: "info",
+        kind: "workflow",
+        issueKey: refreshedIssue.issueKey,
+        projectId: stageRun.projectId,
+        stage: stageRun.stage,
+        ...(refreshedIssue.selectedWorkflowId ? { workflowId: refreshedIssue.selectedWorkflowId } : {}),
+        status: "transition_suppressed",
+        summary: `Suppressed automatic continuation after ${stageRun.stage}`,
+        detail: continuationPrecondition.reason,
+      });
+      return;
+    }
+
+    const nextTarget = this.resolveTransitionTarget(project, stageRun, refreshedIssue.selectedWorkflowId, handoff);
+    if (nextTarget === "done") {
+      const doneState = resolveDoneLinearState(linearIssue);
+      if (!doneState) {
+        await this.routeStageToHumanNeeded(project, stageRun, linearIssue, "PatchRelay could not determine the repo's done state.");
+        return;
+      }
+
+      this.feed?.publish({
+        level: "info",
+        kind: "workflow",
+        issueKey: refreshedIssue.issueKey,
+        projectId: stageRun.projectId,
+        stage: stageRun.stage,
+        ...(refreshedIssue.selectedWorkflowId ? { workflowId: refreshedIssue.selectedWorkflowId } : {}),
+        status: "completed",
+        summary: `Completed workflow after ${stageRun.stage}`,
+      });
+      await linear.setIssueState(stageRun.linearIssueId, doneState);
+      this.stores.workflowCoordinator.setIssueDesiredStage(stageRun.projectId, stageRun.linearIssueId, undefined, {
+        lifecycleStatus: "completed",
+      });
+      this.stores.workflowCoordinator.upsertTrackedIssue({
+        projectId: stageRun.projectId,
+        linearIssueId: stageRun.linearIssueId,
+        currentLinearState: doneState,
+        lifecycleStatus: "completed",
+      });
+      return;
+    }
+
+    if (nextTarget === "human_needed") {
+      await this.routeStageToHumanNeeded(
+        project,
+        stageRun,
+        linearIssue,
+        handoff.nextLikelyStageText
+          ? `PatchRelay could not safely continue from "${handoff.nextLikelyStageText}".`
+          : handoff.suggestsHumanNeeded
+            ? "PatchRelay needs human input before the next stage is clear."
+            : `PatchRelay could not map the ${stageRun.stage} result to an allowed next transition.`,
+      );
+      return;
+    }
+
+    if (nextTarget === stageRun.stage) {
+      await this.routeStageToHumanNeeded(
+        project,
+        stageRun,
+        linearIssue,
+        `PatchRelay received ${nextTarget} as the next stage again and needs a human to confirm the intended loop.`,
+      );
+      return;
+    }
+
+    const priorAttempts = this.countPriorTransitionAttempts(stageRun.projectId, stageRun.linearIssueId, stageRun.stage, nextTarget);
+    if (priorAttempts >= MAX_AUTOMATIC_TRANSITION_ATTEMPTS) {
+      await this.routeStageToHumanNeeded(
+        project,
+        stageRun,
+        linearIssue,
+        `PatchRelay hit the automatic continuation limit for ${stageRun.stage} -> ${nextTarget}.`,
+      );
+      return;
+    }
+
+    this.feed?.publish({
+      level: "info",
+      kind: "workflow",
+      issueKey: refreshedIssue.issueKey,
+      projectId: stageRun.projectId,
+      stage: stageRun.stage,
+      ...(refreshedIssue.selectedWorkflowId ? { workflowId: refreshedIssue.selectedWorkflowId } : {}),
+      nextStage: nextTarget,
+      status: "transition_chosen",
+      summary: `Chose ${stageRun.stage} -> ${nextTarget}`,
+      detail: handoff.nextLikelyStageText ? `Stage result suggested "${handoff.nextLikelyStageText}".` : "PatchRelay used the workflow policy default.",
+    });
+    this.stores.workflowCoordinator.setIssueDesiredStage(stageRun.projectId, stageRun.linearIssueId, nextTarget, {
+      desiredWebhookId: `auto-transition:${stageRun.id}:${nextTarget}`,
+      lifecycleStatus: "queued",
+    });
+  }
+
+  private async checkAutomaticContinuationPreconditions(
+    project: AppConfig["projects"][number],
+    stageRun: StageRunRecord,
+    issue: TrackedIssueRecord,
+    linear: NonNullable<Awaited<ReturnType<LinearClientProvider["forProject"]>>>,
+    linearIssue: { stateName?: string; delegateId?: string; workflowStates: Array<{ name: string; type?: string }> },
+  ): Promise<{ allowed: true } | { allowed: false; reason: string }> {
+    const activeState = resolveActiveLinearState(project, stageRun.stage, issue.selectedWorkflowId);
+    if (activeState && normalizeLinearState(linearIssue.stateName) !== normalizeLinearState(activeState)) {
+      return {
+        allowed: false,
+        reason: `Linear moved from ${activeState} to ${linearIssue.stateName ?? "an unknown state"} while the stage was running.`,
+      };
+    }
+
+    const actorProfile = await linear.getActorProfile().catch(() => undefined);
+    if (actorProfile?.actorId && linearIssue.delegateId && linearIssue.delegateId !== actorProfile.actorId) {
+      return {
+        allowed: false,
+        reason: "The issue is no longer delegated to PatchRelay.",
+      };
+    }
+
+    const stageSession = stageRun.threadId ? this.stores.issueSessions.getIssueSessionByThreadId(stageRun.threadId) : undefined;
+    if (stageSession?.linkedAgentSessionId && issue.activeAgentSessionId !== stageSession.linkedAgentSessionId) {
+      return {
+        allowed: false,
+        reason: "The active Linear agent session changed while the stage was running.",
+      };
+    }
+
+    const recentInterruptions = this.listInterruptingWebhooksSince(stageRun, actorProfile?.actorId);
+    if (recentInterruptions.length > 0) {
+      return {
+        allowed: false,
+        reason: `A newer human webhook (${recentInterruptions[0]}) arrived while the stage was running.`,
+      };
+    }
+
+    return { allowed: true };
+  }
+
+  private listInterruptingWebhooksSince(stageRun: StageRunRecord, patchRelayActorId?: string): string[] {
+    const events = this.stores.webhookEvents.listWebhookEventsForIssueSince(stageRun.linearIssueId, stageRun.startedAt);
+    const interrupts: string[] = [];
+    for (const event of events) {
+      const payload = safeJsonParse<Record<string, unknown>>(event.payloadJson);
+      if (!payload) {
+        continue;
+      }
+
+      const normalized = normalizeWebhook({
+        webhookId: event.webhookId,
+        payload: payload as never,
+      });
+      if (patchRelayActorId && normalized.actor?.id === patchRelayActorId) {
+        continue;
+      }
+
+      if (
+        normalized.triggerEvent === "commentCreated" ||
+        normalized.triggerEvent === "commentUpdated" ||
+        normalized.triggerEvent === "agentPrompted" ||
+        normalized.triggerEvent === "agentSessionCreated" ||
+        normalized.triggerEvent === "delegateChanged" ||
+        normalized.triggerEvent === "statusChanged"
+      ) {
+        interrupts.push(normalized.triggerEvent);
+      }
+    }
+    return interrupts;
+  }
+
+  private resolveTransitionTarget(
+    project: AppConfig["projects"][number],
+    stageRun: StageRunRecord,
+    workflowDefinitionId: string | undefined,
+    handoff: ReturnType<typeof parseStageHandoff>,
+  ): WorkflowTransitionTarget {
+    if (!handoff) {
+      return "human_needed";
+    }
+
+    const requestedTarget = handoff.resolvedNextStage;
+    if (requestedTarget) {
+      return transitionTargetAllowed(project, stageRun.stage, requestedTarget, workflowDefinitionId) ? requestedTarget : "human_needed";
+    }
+
+    if (handoff.suggestsHumanNeeded) {
+      return "human_needed";
+    }
+
+    return resolveDefaultTransitionTarget(project, stageRun.stage, workflowDefinitionId) ?? "human_needed";
+  }
+
+  private countPriorTransitionAttempts(
+    projectId: string,
+    linearIssueId: string,
+    currentStage: string,
+    nextTarget: string,
+  ): number {
+    const stageHistory = this.stores.issueWorkflows
+      .listStageRunsForIssue(projectId, linearIssueId)
+      .filter((stageRun) => stageRun.status === "completed");
+    let count = 0;
+    for (let index = 0; index < stageHistory.length - 1; index += 1) {
+      const current = stageHistory[index];
+      const next = stageHistory[index + 1];
+      if (current?.stage === currentStage && next?.stage === nextTarget) {
+        count += 1;
+      }
+    }
+    return count;
+  }
+
+  private async routeStageToHumanNeeded(
+    project: AppConfig["projects"][number],
+    stageRun: StageRunRecord,
+    linearIssue: { stateName?: string; workflowStates: Array<{ name: string; type?: string }> },
+    reason: string,
+  ): Promise<void> {
+    const linear = await this.linearProvider.forProject(stageRun.projectId);
+    if (!linear) {
+      return;
+    }
+    const trackedIssue = this.stores.issueWorkflows.getTrackedIssue(stageRun.projectId, stageRun.linearIssueId);
+
+    const fallbackState =
+      resolveFallbackLinearState(
+        project,
+        stageRun.stage,
+        trackedIssue?.selectedWorkflowId,
+      ) ??
+      linearIssue.workflowStates.find((state) => normalizeLinearState(state.name) === "human needed")?.name;
+    if (fallbackState) {
+      await linear.setIssueState(stageRun.linearIssueId, fallbackState);
+    }
+
+    this.stores.workflowCoordinator.setIssueDesiredStage(stageRun.projectId, stageRun.linearIssueId, undefined, {
+      lifecycleStatus: "paused",
+    });
+    this.stores.workflowCoordinator.upsertTrackedIssue({
+      projectId: stageRun.projectId,
+      linearIssueId: stageRun.linearIssueId,
+      ...(fallbackState ? { currentLinearState: fallbackState } : linearIssue.stateName ? { currentLinearState: linearIssue.stateName } : {}),
+      lifecycleStatus: "paused",
+    });
+    this.feed?.publish({
+      level: "warn",
+      kind: "workflow",
+      issueKey: trackedIssue?.issueKey,
+      projectId: stageRun.projectId,
+      stage: stageRun.stage,
+      ...(trackedIssue?.selectedWorkflowId ? { workflowId: trackedIssue.selectedWorkflowId } : {}),
+      status: "transition_suppressed",
+      summary: `Paused after ${stageRun.stage}`,
+      detail: reason,
+    });
   }
 
   private finishLedgerRun(
@@ -485,6 +790,7 @@ export class ServiceStageFinalizer {
       issueKey: issue?.issueKey,
       projectId: stageRun.projectId,
       stage: stageRun.stage,
+      ...(issue?.selectedWorkflowId ? { workflowId: issue.selectedWorkflowId } : {}),
       status: "running",
       summary: `Recovered ${stageRun.stage} workflow after restart`,
       detail: `Turn ${turn.turnId} resumed on the existing thread.`,
@@ -592,4 +898,22 @@ function buildRestartRecoveryPrompt(stage: StageRunRecord["stage"]): string {
     "Continue from the interrupted point instead of restarting the task from scratch.",
     "When the work is actually complete, finish the normal workflow handoff for this stage.",
   ].join("\n");
+}
+
+function normalizeLinearState(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed.toLowerCase() : undefined;
+}
+
+function resolveDoneLinearState(issue: { stateName?: string; workflowStates: Array<{ name: string; type?: string }> }): string | undefined {
+  const typedMatch = issue.workflowStates.find((state) => normalizeLinearState(state.type) === "completed");
+  if (typedMatch?.name) {
+    return typedMatch.name;
+  }
+
+  const nameMatch = issue.workflowStates.find((state) => {
+    const normalized = normalizeLinearState(state.name);
+    return normalized === "done" || normalized === "completed" || normalized === "complete";
+  });
+  return nameMatch?.name;
 }
