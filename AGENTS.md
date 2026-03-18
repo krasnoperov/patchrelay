@@ -16,6 +16,14 @@ Working guidance:
 - Treat raw event history, reports, and operator-facing views as derived unless a change truly needs them for correctness.
 - Prefer small boundary-tightening changes over broad refactors.
 
+Execution defaults:
+
+- When user intent is clear and the next step is the obvious, lowest-risk, policy-compliant continuation, do it without asking.
+- Ask only when there are multiple materially different outcomes, meaningful risk of data loss, or hidden consequences the user may reasonably want to choose between.
+- Prefer the shortest compliant path that preserves a clean repo state and avoids temporary local-only states.
+- If platform or repo rules block the direct path, switch to the nearest compliant path instead of stopping for a confirmation that does not change the outcome.
+- Do not split one obvious task into multiple permission checkpoints.
+
 Release workflow guidance:
 
 - Do all development on a short-lived branch. Do not commit directly on `main`.
@@ -28,6 +36,7 @@ Release workflow guidance:
 - Prefer squash merges for releasable work. Release Please documents squash merge as the recommended mode for commit-message overrides and clean release parsing.
 - Make the squash commit or final merge-to-`main` commit use a Conventional Commit title. In this repo, `feat:` triggers the next minor release and `fix:` triggers the next patch release while still in `0.x`. `deps:` is also releasable; `chore:` alone is not.
 - Assume `main` branch protection is authoritative. Do not attempt direct pushes to `main`; open a PR and use `gh pr merge --squash --delete-branch` once checks are satisfied.
+- If the user asks to merge and `main` is protected, default to: push branch, open PR, squash merge, sync local `main`.
 - Release Please in this repo runs from `.github/workflows/release.yml` on pushes to `main`, using `release-please-config.json` and `.release-please-manifest.json`. A release PR is only opened or updated after releasable commits land on `main`.
 - `main` is protected by required GitHub checks. Keep the workflow job names `lint`, `typecheck`, and `test` stable unless you are also updating the branch protection/ruleset to match.
 - CI and Release Please run on GitHub-hosted runners for this repo. Keep workflow `runs-on` labels aligned with GitHub-hosted images unless a trusted workflow has a specific need for self-hosted infrastructure.
