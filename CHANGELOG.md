@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.2](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.8.1...patchrelay-v0.8.2) (2026-03-18)
+
+
+### Bug Fixes
+
+* keep delegated workflows advancing automatically ([#53](https://github.com/krasnoperov/patchrelay/issues/53)) ([a2d0983](https://github.com/krasnoperov/patchrelay/commit/a2d098344064aba1c9001d0480e9ed855b36ead9))
+
 ## [0.8.1](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.8.0...patchrelay-v0.8.1) (2026-03-18)
 
 
