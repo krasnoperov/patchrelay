@@ -60,7 +60,7 @@ export class WebhookDesiredStageRecorder {
       ...(normalizedIssue.stateName ? { currentLinearState: normalizedIssue.stateName } : {}),
       ...(selectedWorkflowId !== undefined ? { selectedWorkflowId } : {}),
       ...(desiredStage ? { desiredStage } : {}),
-      ...(options?.eventReceiptId !== undefined ? { desiredReceiptId: options.eventReceiptId } : {}),
+      ...(desiredStage && options?.eventReceiptId !== undefined ? { desiredReceiptId: options.eventReceiptId } : {}),
       ...(activeAgentSessionId !== undefined ? { activeAgentSessionId } : {}),
       lastWebhookAt: new Date().toISOString(),
     });
