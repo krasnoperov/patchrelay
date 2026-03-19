@@ -16,9 +16,6 @@ import {
   resolveFallbackLinearState,
   resolveWorkflowLabelCleanup,
   resolveWorkflowLabelNames,
-  buildRunningStatusComment,
-  buildAwaitingHandoffComment,
-  buildHumanNeededComment,
 } from "./linear-workflow.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import { buildStageLaunchPlan, isCodexThreadId } from "./stage-launch.ts";
@@ -210,10 +207,7 @@ export class StageExecutor {
 
     // Publish started to agent session
     const refreshedIssue = this.db.issueToTrackedIssue(this.db.getIssue(item.projectId, item.issueId)!);
-    const deliveredToSession = await this.publishStageStarted(refreshedIssue, desiredStage);
-    if (!deliveredToSession && !refreshedIssue.activeAgentSessionId) {
-      await this.refreshRunningStatusComment(item.projectId, item.issueId, run.id, issue.issueKey);
-    }
+    await this.publishStageStarted(refreshedIssue, desiredStage);
 
     this.logger.info(
       { issueKey: issue.issueKey, stage: desiredStage, threadId, turnId },
@@ -779,42 +773,6 @@ export class StageExecutor {
     }
   }
 
-  private async refreshRunningStatusComment(
-    projectId: string,
-    linearIssueId: string,
-    runId: number,
-    issueKey?: string,
-  ): Promise<void> {
-    const linear = await this.linearProvider.forProject(projectId);
-    if (!linear) return;
-    const issue = this.db.getIssue(projectId, linearIssueId);
-    const run = this.db.getRun(runId);
-    if (!issue || !run || !issue.branchName) return;
-
-    const trackedIssue = this.db.issueToTrackedIssue(issue);
-    const stageRun = this.db.runToStageRun(run);
-    try {
-      const result = await linear.upsertIssueComment({
-        issueId: linearIssueId,
-        ...(issue.statusCommentId ? { commentId: issue.statusCommentId } : {}),
-        body: buildRunningStatusComment({
-          issue: trackedIssue,
-          stageRun,
-          branchName: issue.branchName,
-        }),
-      });
-      this.db.upsertIssue({
-        projectId,
-        linearIssueId,
-        statusCommentId: result.id,
-      });
-    } catch (error) {
-      this.logger.warn(
-        { issueKey, error: error instanceof Error ? error.message : String(error) },
-        "Failed to refresh running status comment",
-      );
-    }
-  }
 
   private async publishStageCompletion(stageRun: StageRunRecord): Promise<void> {
     const issue = this.db.getIssue(stageRun.projectId, stageRun.linearIssueId);
@@ -876,19 +834,10 @@ export class StageExecutor {
             summary: `Completed ${stageRun.stage} workflow`,
             detail: `Waiting for a Linear state change while issue remains in ${activeState}.`,
           });
-          deliveredToSession = (await this.publishAgentCompletion(trackedIssue, {
+          await this.publishAgentCompletion(trackedIssue, {
             type: "elicitation",
             body: `PatchRelay finished the ${stageRun.stage} workflow. Move the issue or leave a follow-up prompt to continue.`,
-          })) || deliveredToSession;
-          if (!deliveredToSession && !trackedIssue.activeAgentSessionId) {
-            const finalStageRun = this.db.getStageRun(stageRun.id) ?? stageRun;
-            const result = await linear.upsertIssueComment({
-              issueId: stageRun.linearIssueId,
-              ...(issue.statusCommentId ? { commentId: issue.statusCommentId } : {}),
-              body: buildAwaitingHandoffComment({ issue: trackedIssue, stageRun: finalStageRun, activeState }),
-            });
-            this.db.upsertIssue({ projectId: stageRun.projectId, linearIssueId: stageRun.linearIssueId, statusCommentId: result.id });
-          }
+          });
           return;
         }
         const cleanup = resolveWorkflowLabelCleanup(project);
@@ -923,21 +872,12 @@ export class StageExecutor {
       status: "completed",
       summary: `Completed ${stageRun.stage} workflow`,
     });
-    deliveredToSession = (await this.publishAgentCompletion(trackedIssue, {
+    await this.publishAgentCompletion(trackedIssue, {
       type: trackedIssue.lifecycleStatus === "paused" ? "elicitation" : "response",
       body: trackedIssue.lifecycleStatus === "paused"
         ? `PatchRelay finished the ${stageRun.stage} workflow and now needs human input.`
         : `PatchRelay finished the ${stageRun.stage} workflow.`,
-    })) || deliveredToSession;
-    if (trackedIssue.lifecycleStatus === "paused" && linear && !deliveredToSession) {
-      const finalStageRun = this.db.getStageRun(stageRun.id) ?? stageRun;
-      const result = await linear.upsertIssueComment({
-        issueId: stageRun.linearIssueId,
-        ...(issue.statusCommentId ? { commentId: issue.statusCommentId } : {}),
-        body: buildHumanNeededComment({ issue: trackedIssue, stageRun: finalStageRun }),
-      });
-      this.db.upsertIssue({ projectId: stageRun.projectId, linearIssueId: stageRun.linearIssueId, statusCommentId: result.id });
-    }
+    });
   }
 
   private async updateAgentSession(

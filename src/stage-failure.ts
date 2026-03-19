@@ -1,6 +1,5 @@
 import { buildFailedSessionPlan } from "./agent-session-plan.ts";
 import {
-  buildStageFailedComment,
   resolveActiveLinearState,
   resolveFallbackLinearState,
   resolveWorkflowLabelCleanup,
@@ -67,45 +66,21 @@ export async function syncFailedStageToLinear(params: {
     });
   }
 
-  let deliveredToSession = false;
   if (params.issue.activeAgentSessionId) {
-    deliveredToSession =
-      (await linear
-        .updateAgentSession?.({
-          agentSessionId: params.issue.activeAgentSessionId,
-          plan: buildFailedSessionPlan(params.stageRun.stage, params.stageRun),
-        })
-        .then(() => true)
-        .catch(() => false)) ?? false;
-    deliveredToSession =
-      (await linear
-        .createAgentActivity({
-          agentSessionId: params.issue.activeAgentSessionId,
-          content: {
-            type: "error",
-            body: `PatchRelay could not complete the ${params.stageRun.stage} workflow: ${params.message}`,
-          },
-        })
-        .then(() => true)
-        .catch(() => false)) || deliveredToSession;
-  }
-
-  if (!deliveredToSession && !params.issue.activeAgentSessionId) {
-    const result = await linear
-      .upsertIssueComment({
-        issueId: params.stageRun.linearIssueId,
-        ...(params.issue.statusCommentId ? { commentId: params.issue.statusCommentId } : {}),
-        body: buildStageFailedComment({
-          issue: params.issue,
-          stageRun: params.stageRun,
-          message: params.message,
-          ...(fallbackState ? { fallbackState } : {}),
-          ...(params.mode ? { mode: params.mode } : {}),
-        }),
+    await linear
+      .updateAgentSession?.({
+        agentSessionId: params.issue.activeAgentSessionId,
+        plan: buildFailedSessionPlan(params.stageRun.stage, params.stageRun),
       })
       .catch(() => undefined);
-    if (result) {
-      params.stores.setIssueStatusComment?.(params.stageRun.projectId, params.stageRun.linearIssueId, result.id);
-    }
+    await linear
+      .createAgentActivity({
+        agentSessionId: params.issue.activeAgentSessionId,
+        content: {
+          type: "error",
+          body: `PatchRelay could not complete the ${params.stageRun.stage} workflow: ${params.message}`,
+        },
+      })
+      .catch(() => undefined);
   }
 }
