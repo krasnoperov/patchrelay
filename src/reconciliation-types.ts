@@ -44,7 +44,9 @@ export interface ReconciliationPolicy {
 
 export interface ReconciliationLiveLinearState {
   status: LiveLinearStateStatus;
-  issue?: Pick<LinearIssueSnapshot, "id" | "stateName">;
+  issue?: Pick<LinearIssueSnapshot, "id" | "stateName"> & {
+    stateType?: string;
+  };
 }
 
 export interface ReconciliationLiveCodexState {

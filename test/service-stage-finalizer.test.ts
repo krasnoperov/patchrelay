@@ -955,6 +955,25 @@ test("reconciliation only fails back to Linear when the issue is still in the se
   assert.equal(linear.comments.length, 0);
 });
 
+test("reconciliation releases stale local ownership when Linear is already done", async () => {
+  const { store, ledger, codex, linear, finalizer, issue, stageRun } = createHarness({
+    withLedger: true,
+    issueStateName: "Done",
+  });
+  codex.threads.set(stageRun.threadId!, createThread("inProgress"));
+
+  await finalizer.reconcileActiveStageRuns();
+
+  assert.equal(ledger.getIssueControl(issue.projectId, issue.linearIssueId)?.activeRunLeaseId, undefined);
+  assert.equal(ledger.getIssueControl(issue.projectId, issue.linearIssueId)?.activeWorkspaceOwnershipId, undefined);
+  assert.equal(ledger.getRunLease(stageRun.id)?.status, "released");
+  assert.equal(ledger.getWorkspaceOwnership(40)?.status, "released");
+  assert.equal(ledger.getWorkspaceOwnership(40)?.currentRunLeaseId, undefined);
+  assert.equal(store.getTrackedIssue(issue.projectId, issue.linearIssueId)?.currentLinearState, "Done");
+  assert.equal(store.getTrackedIssue(issue.projectId, issue.linearIssueId)?.lifecycleStatus, "completed");
+  assert.equal(linear.stateTransitions.length, 0);
+});
+
 test("notification history is only persisted when extended history is enabled", async () => {
   const disabled = createHarness({ persistExtendedHistory: false });
   await disabled.finalizer.handleCodexNotification({
