@@ -557,7 +557,6 @@ export class StageExecutor {
     if (!project) return;
 
     const handoff = parseStageHandoff(project, report.assistantMessages, trackedIssue.selectedWorkflowId);
-    if (!handoff) return;
 
     const linear = await this.linearProvider.forProject(stageRun.projectId);
     if (!linear) return;
@@ -613,9 +612,9 @@ export class StageExecutor {
 
     if (nextTarget === "human_needed") {
       await this.routeToHumanNeeded(project, stageRun, linearIssue,
-        handoff.nextLikelyStageText
+        handoff?.nextLikelyStageText
           ? `PatchRelay could not safely continue from "${handoff.nextLikelyStageText}".`
-          : handoff.suggestsHumanNeeded
+          : handoff?.suggestsHumanNeeded
             ? "PatchRelay needs human input before the next stage is clear."
             : `PatchRelay could not map the ${stageRun.stage} result to an allowed next transition.`,
       );
@@ -690,7 +689,7 @@ export class StageExecutor {
     workflowId: string | undefined,
     handoff: ReturnType<typeof parseStageHandoff>,
   ): WorkflowTransitionTarget {
-    if (!handoff) return "human_needed";
+    if (!handoff) return resolveDefaultTransitionTarget(project, stageRun.stage, workflowId) ?? "human_needed";
     const requested = handoff.resolvedNextStage;
     if (requested) {
       return transitionTargetAllowed(project, stageRun.stage, requested, workflowId) ? requested : "human_needed";
