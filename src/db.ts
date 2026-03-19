@@ -353,18 +353,18 @@ export class PatchRelayDatabase {
     eventJson: string;
   }): void {
     this.connection.prepare(`
-      INSERT INTO run_thread_events (run_id, thread_id, turn_id, method, event_json, created_at)
+      INSERT INTO run_thread_events (run_lease_id, thread_id, turn_id, method, event_json, created_at)
       VALUES (?, ?, ?, ?, ?, ?)
     `).run(params.runId, params.threadId, params.turnId ?? null, params.method, params.eventJson, isoNow());
   }
 
   listThreadEvents(runId: number): ThreadEventRecord[] {
     const rows = this.connection
-      .prepare("SELECT * FROM run_thread_events WHERE run_id = ? ORDER BY id")
+      .prepare("SELECT * FROM run_thread_events WHERE run_lease_id = ? ORDER BY id")
       .all(runId) as Array<Record<string, unknown>>;
     return rows.map((row) => ({
       id: Number(row.id),
-      stageRunId: Number(row.run_id),
+      stageRunId: Number(row.run_lease_id),
       threadId: String(row.thread_id),
       ...(row.turn_id !== null ? { turnId: String(row.turn_id) } : {}),
       method: String(row.method),

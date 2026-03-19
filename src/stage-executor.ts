@@ -61,10 +61,19 @@ export class StageExecutor {
 
   async run(item: { projectId: string; issueId: string }): Promise<void> {
     const project = this.config.projects.find((p) => p.id === item.projectId);
-    if (!project) return;
+    if (!project) {
+      this.logger.info({ projectId: item.projectId }, "Stage executor: no matching project config");
+      return;
+    }
 
     const issue = this.db.getIssue(item.projectId, item.issueId);
-    if (!issue?.desiredStage || issue.activeRunId !== undefined) return;
+    if (!issue?.desiredStage || issue.activeRunId !== undefined) {
+      this.logger.info(
+        { projectId: item.projectId, issueId: item.issueId, desiredStage: issue?.desiredStage, activeRunId: issue?.activeRunId, issueFound: !!issue },
+        "Stage executor: skipping issue (no desired stage or active run exists)",
+      );
+      return;
+    }
 
     const desiredStage = issue.desiredStage;
 

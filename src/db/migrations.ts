@@ -484,14 +484,14 @@ function ensureRunThreadEventsTable(connection: DatabaseConnection): void {
   connection.exec(`
     CREATE TABLE IF NOT EXISTS run_thread_events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      run_id INTEGER NOT NULL,
+      run_lease_id INTEGER NOT NULL,
       thread_id TEXT NOT NULL,
       turn_id TEXT,
       method TEXT NOT NULL,
       event_json TEXT NOT NULL,
       created_at TEXT NOT NULL
     );
-    CREATE INDEX IF NOT EXISTS idx_run_thread_events_run ON run_thread_events(run_id, id);
+    CREATE INDEX IF NOT EXISTS idx_run_thread_events_run ON run_thread_events(run_lease_id, id);
   `);
 }
 
