@@ -974,6 +974,20 @@ test("reconciliation releases stale local ownership when Linear is already done"
   assert.equal(linear.stateTransitions.length, 0);
 });
 
+test("reconciliation does not restart an interrupted turn when Linear is already done", async () => {
+  const { ledger, codex, finalizer, issue, stageRun } = createHarness({
+    withLedger: true,
+    issueStateName: "Done",
+  });
+  codex.threads.set(stageRun.threadId!, createThread("interrupted"));
+
+  await finalizer.reconcileActiveStageRuns();
+
+  assert.equal(codex.startedTurns.length, 0);
+  assert.equal(ledger.getIssueControl(issue.projectId, issue.linearIssueId)?.activeRunLeaseId, undefined);
+  assert.equal(ledger.getRunLease(stageRun.id)?.status, "released");
+});
+
 test("notification history is only persisted when extended history is enabled", async () => {
   const disabled = createHarness({ persistExtendedHistory: false });
   await disabled.finalizer.handleCodexNotification({
