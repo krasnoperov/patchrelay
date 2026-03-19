@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.4](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.8.3...patchrelay-v0.8.4) (2026-03-19)
+
+
+### Bug Fixes
+
+* honor live terminal Linear states over stale stage work ([#57](https://github.com/krasnoperov/patchrelay/issues/57)) ([b1057fc](https://github.com/krasnoperov/patchrelay/commit/b1057fc249748b4ffca7de87a67c7d3e83162523))
+
 ## [0.8.3](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.8.2...patchrelay-v0.8.3) (2026-03-18)
 
 
