@@ -13,6 +13,10 @@ const WORKFLOW_STATES = [
   { id: "start", name: "Start" },
   { id: "implementing", name: "Implementing" },
   { id: "review", name: "Review" },
+  { id: "reviewing", name: "Reviewing" },
+  { id: "deploy", name: "Deploy" },
+  { id: "deploying", name: "Deploying" },
+  { id: "done", name: "Done", type: "completed" },
   { id: "human-needed", name: "Human Needed" },
 ];
 
@@ -273,22 +277,33 @@ function createHarness(baseDir: string, options?: { runAtomically?: <T>(fn: () =
   return { config, db, codex, linear, runner };
 }
 
-function queueDesiredStage(db: PatchRelayDatabase, options?: { pendingLaunchInput?: string }) {
+function queueDesiredStage(
+  db: PatchRelayDatabase,
+  options?: {
+    desiredStage?: "development" | "review" | "deploy" | "cleanup";
+    desiredWebhookId?: string;
+    currentLinearState?: string;
+    pendingLaunchInput?: string;
+  },
+) {
+  const desiredStage = options?.desiredStage ?? "development";
+  const desiredWebhookId = options?.desiredWebhookId ?? "delivery-start";
+  const currentLinearState = options?.currentLinearState ?? "Start";
   db.workflowCoordinator.recordDesiredStage({
     projectId: "usertold",
     linearIssueId: "issue-1",
     issueKey: "USE-25",
     title: "Build app server orchestration",
     issueUrl: "https://linear.app/example/issue/USE-25",
-    currentLinearState: "Start",
-    desiredStage: "development",
-    desiredWebhookId: "delivery-start",
+    currentLinearState,
+    desiredStage,
+    desiredWebhookId,
     lastWebhookAt: "2026-03-12T10:00:00.000Z",
   });
 
   const receipt = db.eventReceipts.insertEventReceipt({
     source: "linear-webhook",
-    externalId: "delivery-start",
+    externalId: desiredWebhookId,
     eventType: "Issue.update",
     receivedAt: "2026-03-12T10:00:00.000Z",
     acceptanceStatus: "accepted",
@@ -298,7 +313,7 @@ function queueDesiredStage(db: PatchRelayDatabase, options?: { pendingLaunchInpu
   db.issueControl.upsertIssueControl({
     projectId: "usertold",
     linearIssueId: "issue-1",
-    desiredStage: "development",
+    desiredStage,
     desiredReceiptId: receipt.id,
     lifecycleStatus: "queued",
   });
@@ -562,6 +577,40 @@ test("stage runner finalizes failed launches inside the provided atomic wrapper"
     assert.deepEqual(atomicCalls, ["begin", "end"]);
     assert.equal(db.issueControl.getIssueControl("usertold", "issue-1")?.activeRunLeaseId, undefined);
     assert.equal(db.runLeases.getRunLease(1)?.status, "failed");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("stage runner skips a stale queued review when live Linear is already Done", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-stage-runner-stale-done-"));
+  try {
+    const { db, codex, linear, runner } = createHarness(baseDir);
+    queueDesiredStage(db, {
+      desiredStage: "review",
+      desiredWebhookId: "delivery-review",
+      currentLinearState: "Review",
+    });
+    linear.issues.set("issue-1", {
+      ...(linear.issues.get("issue-1")!),
+      stateId: "done",
+      stateName: "Done",
+    });
+
+    await runner.run({ projectId: "usertold", issueId: "issue-1" });
+
+    assert.equal(codex.startedThreads.length, 0);
+    assert.equal(codex.startedTurns.length, 0);
+
+    const issue = db.issueWorkflows.getTrackedIssue("usertold", "issue-1");
+    assert.equal(issue?.desiredStage, undefined);
+    assert.equal(issue?.currentLinearState, "Done");
+    assert.equal(issue?.lifecycleStatus, "completed");
+
+    const issueControl = db.issueControl.getIssueControl("usertold", "issue-1");
+    assert.equal(issueControl?.desiredStage, undefined);
+    assert.equal(issueControl?.activeRunLeaseId, undefined);
+    assert.equal(issueControl?.lifecycleStatus, "completed");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

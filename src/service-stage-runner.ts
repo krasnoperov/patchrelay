@@ -8,6 +8,7 @@ import type {
   WorkspaceOwnershipStoreProvider,
 } from "./ledger-ports.ts";
 import type { IssueWorkflowCoordinatorProvider, IssueWorkflowQueryStoreProvider } from "./workflow-ports.ts";
+import { resolveAuthoritativeLinearStopState } from "./linear-workflow.ts";
 import { buildStageLaunchPlan, isCodexThreadId } from "./stage-launch.ts";
 import { syncFailedStageToLinear } from "./stage-failure.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
@@ -69,6 +70,23 @@ export class ServiceStageRunner {
     const desiredWebhookId = receipt.externalId;
     const issue = await this.ensureLaunchIssueMirror(project, item.issueId, desiredStage, desiredWebhookId);
     if (!issue) {
+      return;
+    }
+    if (issue.lifecycleStatus === "completed" || issue.lifecycleStatus === "paused") {
+      this.feed?.publish({
+        level: "info",
+        kind: "workflow",
+        issueKey: issue.issueKey,
+        projectId: item.projectId,
+        stage: desiredStage,
+        ...(issue.selectedWorkflowId ? { workflowId: issue.selectedWorkflowId } : {}),
+        status: issue.lifecycleStatus === "completed" ? "completed" : "transition_suppressed",
+        summary:
+          issue.lifecycleStatus === "completed"
+            ? `Skipped ${desiredStage} because the issue is already complete`
+            : `Skipped ${desiredStage} because the issue is already paused`,
+        detail: issue.currentLinearState ? `Live Linear state is ${issue.currentLinearState}.` : undefined,
+      });
       return;
     }
 
@@ -249,14 +267,29 @@ export class ServiceStageRunner {
     _desiredWebhookId: string,
   ): Promise<TrackedIssueRecord | undefined> {
     const existing = this.stores.issueWorkflows.getTrackedIssue(project.id, linearIssueId);
-    if (existing?.issueKey && existing.title && existing.issueUrl && existing.currentLinearState) {
-      return existing;
-    }
-
     const liveIssue = await this.linearProvider
       .forProject(project.id)
       .then((linear) => linear?.getIssue(linearIssueId))
       .catch(() => undefined);
+    const authoritativeStopState = liveIssue ? resolveAuthoritativeLinearStopState(liveIssue) : undefined;
+    if (authoritativeStopState) {
+      this.stores.workflowCoordinator.setIssueDesiredStage(project.id, linearIssueId, undefined, {
+        lifecycleStatus: authoritativeStopState.lifecycleStatus,
+      });
+      return this.stores.workflowCoordinator.upsertTrackedIssue({
+        projectId: project.id,
+        linearIssueId,
+        ...(liveIssue?.identifier ? { issueKey: liveIssue.identifier } : existing?.issueKey ? { issueKey: existing.issueKey } : {}),
+        ...(liveIssue?.title ? { title: liveIssue.title } : existing?.title ? { title: existing.title } : {}),
+        ...(liveIssue?.url ? { issueUrl: liveIssue.url } : existing?.issueUrl ? { issueUrl: existing.issueUrl } : {}),
+        currentLinearState: authoritativeStopState.stateName,
+        lifecycleStatus: authoritativeStopState.lifecycleStatus,
+      });
+    }
+
+    if (!liveIssue && existing?.issueKey && existing.title && existing.issueUrl && existing.currentLinearState) {
+      return existing;
+    }
 
     return this.stores.workflowCoordinator.recordDesiredStage({
       projectId: project.id,
