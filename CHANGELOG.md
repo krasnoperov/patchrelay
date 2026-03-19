@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.5](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.8.4...patchrelay-v0.8.5) (2026-03-19)
+
+
+### Bug Fixes
+
+* preserve queued stage receipts across follow-up webhooks ([#59](https://github.com/krasnoperov/patchrelay/issues/59)) ([8dbdfc0](https://github.com/krasnoperov/patchrelay/commit/8dbdfc0dfe42e52d6e4ddd0140524d27b7cfc4da))
+
 ## [0.8.4](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.8.3...patchrelay-v0.8.4) (2026-03-19)
 
 
