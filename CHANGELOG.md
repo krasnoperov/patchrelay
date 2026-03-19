@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.8](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.8.7...patchrelay-v0.8.8) (2026-03-19)
+
+
+### Bug Fixes
+
+* time out hung codex app-server requests ([#65](https://github.com/krasnoperov/patchrelay/issues/65)) ([c2d5d23](https://github.com/krasnoperov/patchrelay/commit/c2d5d234edcf79342af7110d708b48d03e7969d6))
+
 ## [0.8.7](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.8.6...patchrelay-v0.8.7) (2026-03-19)
 
 
