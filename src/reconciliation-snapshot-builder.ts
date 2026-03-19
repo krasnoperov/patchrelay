@@ -58,6 +58,10 @@ export async function buildReconciliationSnapshot(params: {
                         issue: {
                           id: issue.id,
                           stateName: issue.stateName,
+                          ...(() => {
+                            const currentState = issue.workflowStates?.find((state) => state.name === issue.stateName);
+                            return currentState?.type ? { stateType: currentState.type } : {};
+                          })(),
                         },
                       }
                     : ({ status: "unknown" as const }),

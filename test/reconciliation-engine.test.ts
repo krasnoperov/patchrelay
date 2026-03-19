@@ -425,6 +425,48 @@ test("reconciliation marks a completed run and pauses for handoff when Linear st
   ]);
 });
 
+test("reconciliation releases a stale active run when Linear is already done", () => {
+  const decision = reconcileIssue({
+    issue: {
+      projectId: "proj",
+      linearIssueId: "issue-1",
+      lifecycleStatus: "running",
+      activeRun: {
+        id: 9,
+        stage: "deploy",
+        status: "running",
+        threadId: "thread-1",
+      },
+    },
+    live: {
+      linear: {
+        status: "known",
+        issue: {
+          id: "issue-1",
+          stateName: "Done",
+          stateType: "completed",
+        },
+      },
+      codex: {
+        status: "found",
+        thread: createThread({ id: "turn-2", status: "inProgress" }),
+      },
+    },
+  });
+
+  assert.equal(decision.outcome, "release");
+  assert.deepEqual(decision.actions, [
+    {
+      type: "release_issue_ownership",
+      projectId: "proj",
+      linearIssueId: "issue-1",
+      runId: 9,
+      nextLifecycleStatus: "completed",
+      reason: "live Linear state is already Done",
+    },
+  ]);
+});
+
 function createThread(turn: { id: string; status: string }): CodexThreadSummary {
   return {
     id: "thread-1",

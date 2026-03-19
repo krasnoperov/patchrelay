@@ -19,6 +19,17 @@ export interface ReconciliationActionCallbacks {
     message: string,
     options?: { turnId?: string },
   ): Promise<void>;
+  releaseRunDuringReconciliation(
+    projectId: string,
+    linearIssueId: string,
+    params: {
+      runId: number | string;
+      threadId?: string;
+      turnId?: string;
+      nextLifecycleStatus?: IssueLifecycleStatus;
+      currentLinearState?: string;
+    },
+  ): Promise<void>;
 }
 
 export class ReconciliationActionApplier {
@@ -81,6 +92,19 @@ export class ReconciliationActionApplier {
     if (decision.outcome === "fail" || decision.outcome === "release") {
       const failedAction = decision.actions.find((action) => action.type === "mark_run_failed");
       if (decision.outcome === "release" && failedAction?.type !== "mark_run_failed") {
+        const releasedAction = decision.actions.find((action) => action.type === "release_issue_ownership");
+        if (releasedAction?.type !== "release_issue_ownership") {
+          return;
+        }
+        await this.callbacks.releaseRunDuringReconciliation(snapshot.runLease.projectId, snapshot.runLease.linearIssueId, {
+          runId: snapshot.runLease.id,
+          ...(threadId ? { threadId } : {}),
+          ...(turnId ? { turnId } : {}),
+          ...(nextLifecycleStatus ? { nextLifecycleStatus } : {}),
+          ...(snapshot.input.live?.linear?.status === "known" && snapshot.input.live.linear.issue?.stateName
+            ? { currentLinearState: snapshot.input.live.linear.issue.stateName }
+            : {}),
+        });
         return;
       }
       await this.callbacks.failRunDuringReconciliation(

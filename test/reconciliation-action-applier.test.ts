@@ -73,6 +73,7 @@ test("reconciliation action applier completes a stage using the live codex threa
       calls.completed = params;
     },
     failRunDuringReconciliation: async () => assert.fail("should not fail"),
+    releaseRunDuringReconciliation: async () => assert.fail("should not release"),
   });
 
   const decision: ReconciliationDecision = {
@@ -117,6 +118,7 @@ test("reconciliation action applier fails a released run when the decision still
     failRunDuringReconciliation: async (_projectId, _linearIssueId, threadId, message, options) => {
       calls.failed = { threadId, message, ...(options?.turnId ? { turnId: options.turnId } : {}) };
     },
+    releaseRunDuringReconciliation: async () => assert.fail("should not release"),
   });
 
   const decision: ReconciliationDecision = {
@@ -161,6 +163,7 @@ test("reconciliation action applier treats release as successful completion", as
       calls.completed = params;
     },
     failRunDuringReconciliation: async () => assert.fail("should not fail"),
+    releaseRunDuringReconciliation: async () => assert.fail("should not release"),
   });
 
   const decision: ReconciliationDecision = {
@@ -205,6 +208,7 @@ test("reconciliation action applier continues delivery against the live routed t
     },
     completeRun: () => assert.fail("should not complete"),
     failRunDuringReconciliation: async () => assert.fail("should not fail"),
+    releaseRunDuringReconciliation: async () => assert.fail("should not release"),
   });
 
   const snapshot = createSnapshot();
@@ -251,5 +255,67 @@ test("reconciliation action applier continues delivery against the live routed t
   assert.deepEqual(calls.delivered, {
     threadId: "thread-live",
     turnId: "turn-live-2",
+  });
+});
+
+test("reconciliation action applier releases a stale active run when Linear is already terminal", async () => {
+  const calls: {
+    released?: {
+      runId: number | string;
+      threadId?: string;
+      turnId?: string;
+      nextLifecycleStatus?: string;
+      currentLinearState?: string;
+    };
+  } = {};
+  const applier = new ReconciliationActionApplier({
+    enqueueIssue: () => assert.fail("should not enqueue"),
+    deliverPendingObligations: async () => assert.fail("should not deliver obligations"),
+    completeRun: () => assert.fail("should not complete"),
+    failRunDuringReconciliation: async () => assert.fail("should not fail"),
+    releaseRunDuringReconciliation: async (_projectId, _linearIssueId, params) => {
+      calls.released = params;
+    },
+  });
+
+  const snapshot = createSnapshot();
+  snapshot.input.live = {
+    linear: {
+      status: "known",
+      issue: {
+        id: "issue-1",
+        stateName: "Done",
+        stateType: "completed",
+      },
+    },
+    codex: {
+      status: "found",
+      thread: createThread("inProgress"),
+    },
+  };
+
+  const decision: ReconciliationDecision = {
+    outcome: "release",
+    reasons: ["live Linear state is already Done"],
+    actions: [
+      {
+        type: "release_issue_ownership",
+        projectId: "proj",
+        linearIssueId: "issue-1",
+        runId: 90,
+        nextLifecycleStatus: "completed",
+        reason: "live Linear state is already Done",
+      },
+    ],
+  };
+
+  await applier.apply({ snapshot, decision });
+
+  assert.deepEqual(calls.released, {
+    runId: 90,
+    threadId: "thread-live",
+    turnId: "turn-live",
+    nextLifecycleStatus: "completed",
+    currentLinearState: "Done",
   });
 });

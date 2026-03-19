@@ -95,6 +95,24 @@ function reconcileActiveRun(params: {
 }): ReconciliationDecision {
   const { issue, liveLinear, liveCodex, obligations, policy } = params;
   const run = issue.activeRun!;
+  const authoritativeStopState = resolveAuthoritativeStopState(liveLinear);
+
+  if (authoritativeStopState) {
+    return {
+      outcome: "release",
+      reasons: [`live Linear state is already ${authoritativeStopState.stateName}`],
+      actions: [
+        {
+          type: "release_issue_ownership",
+          projectId: issue.projectId,
+          linearIssueId: issue.linearIssueId,
+          runId: run.id,
+          nextLifecycleStatus: authoritativeStopState.lifecycleStatus,
+          reason: `live Linear state is already ${authoritativeStopState.stateName}`,
+        },
+      ],
+    };
+  }
 
   if (run.status === "queued") {
     return {
@@ -369,6 +387,34 @@ function matchesActiveLinearOwnership(liveLinear: ReconciliationLiveLinearState,
     return false;
   }
   return liveLinear.issue?.stateName === policy.activeLinearStateName;
+}
+
+function resolveAuthoritativeStopState(
+  liveLinear: ReconciliationLiveLinearState,
+): { stateName: string; lifecycleStatus: "completed" | "paused" } | undefined {
+  if (liveLinear.status !== "known" || !liveLinear.issue?.stateName) {
+    return undefined;
+  }
+
+  const stateName = liveLinear.issue.stateName.trim();
+  const normalizedName = stateName.toLowerCase();
+  const normalizedType = liveLinear.issue.stateType?.trim().toLowerCase();
+
+  if (normalizedType === "completed" || normalizedName === "done" || normalizedName === "completed" || normalizedName === "complete") {
+    return {
+      stateName,
+      lifecycleStatus: "completed",
+    };
+  }
+
+  if (normalizedName === "human needed") {
+    return {
+      stateName,
+      lifecycleStatus: "paused",
+    };
+  }
+
+  return undefined;
 }
 
 function relevantObligations(

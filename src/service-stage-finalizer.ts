@@ -61,6 +61,8 @@ export class ServiceStageFinalizer {
         this.completeReconciledRun(projectId, linearIssueId, thread, params),
       failRunDuringReconciliation: (projectId, linearIssueId, threadId, message, options) =>
         this.failRunLeaseDuringReconciliation(projectId, linearIssueId, threadId, message, options),
+      releaseRunDuringReconciliation: (projectId, linearIssueId, params) =>
+        this.releaseRunDuringReconciliation(projectId, linearIssueId, params),
     });
   }
 
@@ -601,7 +603,7 @@ export class ServiceStageFinalizer {
   private finishLedgerRun(
     projectId: string,
     linearIssueId: string,
-    status: "completed" | "failed",
+    status: "completed" | "failed" | "released",
     params: {
       stageRunId?: number;
       threadId?: string;
@@ -631,13 +633,23 @@ export class ServiceStageFinalizer {
     if (targetRunLease.workspaceOwnershipId !== undefined) {
       const workspace = this.stores.workspaceOwnership.getWorkspaceOwnership(targetRunLease.workspaceOwnershipId);
       if (workspace) {
+        const workspaceOwnedByTargetRun =
+          workspace.currentRunLeaseId === targetRunLeaseId ||
+          (issueControl?.activeWorkspaceOwnershipId === workspace.id && issueControl.activeRunLeaseId === targetRunLeaseId);
         this.stores.workspaceOwnership.upsertWorkspaceOwnership({
           projectId,
           linearIssueId,
           branchName: workspace.branchName,
           worktreePath: workspace.worktreePath,
-          status: workspace.currentRunLeaseId === targetRunLeaseId ? (status === "completed" ? "active" : "paused") : workspace.status,
-          ...(workspace.currentRunLeaseId === targetRunLeaseId
+          status:
+            workspaceOwnedByTargetRun
+              ? status === "released"
+                ? "released"
+                : status === "completed"
+                  ? "active"
+                  : "paused"
+              : workspace.status,
+          ...(workspaceOwnedByTargetRun
             ? { currentRunLeaseId: null }
             : workspace.currentRunLeaseId !== undefined
               ? { currentRunLeaseId: workspace.currentRunLeaseId }
@@ -654,8 +666,10 @@ export class ServiceStageFinalizer {
       projectId,
       linearIssueId,
       activeRunLeaseId: null,
-      ...(issueControl.activeWorkspaceOwnershipId !== undefined
-        ? { activeWorkspaceOwnershipId: issueControl.activeWorkspaceOwnershipId }
+      ...(status === "released"
+        ? { activeWorkspaceOwnershipId: null }
+        : issueControl.activeWorkspaceOwnershipId !== undefined
+          ? { activeWorkspaceOwnershipId: issueControl.activeWorkspaceOwnershipId }
         : {}),
       ...(issueControl.serviceOwnedCommentId ? { serviceOwnedCommentId: issueControl.serviceOwnedCommentId } : {}),
       ...(issueControl.activeAgentSessionId ? { activeAgentSessionId: issueControl.activeAgentSessionId } : {}),
@@ -830,6 +844,59 @@ export class ServiceStageFinalizer {
       return;
     }
     await this.failStageRunDuringReconciliation(stageRun, threadId, message, options);
+  }
+
+  private async releaseRunDuringReconciliation(
+    projectId: string,
+    linearIssueId: string,
+    params: {
+      runId: number | string;
+      threadId?: string;
+      turnId?: string;
+      nextLifecycleStatus?: TrackedIssueRecord["lifecycleStatus"];
+      currentLinearState?: string;
+    },
+  ): Promise<void> {
+    const runId = typeof params.runId === "number" ? params.runId : Number(params.runId);
+    if (!Number.isFinite(runId)) {
+      return;
+    }
+
+    this.runAtomically(() => {
+      this.finishLedgerRun(projectId, linearIssueId, "released", {
+        stageRunId: runId,
+        ...(params.threadId ? { threadId: params.threadId } : {}),
+        ...(params.turnId ? { turnId: params.turnId } : {}),
+        nextLifecycleStatus: params.nextLifecycleStatus ?? "completed",
+      });
+
+      const existingIssue = this.stores.issueWorkflows.getTrackedIssue(projectId, linearIssueId);
+      this.stores.workflowCoordinator.upsertTrackedIssue({
+        projectId,
+        linearIssueId,
+        ...(params.currentLinearState
+          ? { currentLinearState: params.currentLinearState }
+          : existingIssue?.currentLinearState
+            ? { currentLinearState: existingIssue.currentLinearState }
+            : {}),
+        lifecycleStatus: params.nextLifecycleStatus ?? "completed",
+      });
+    });
+
+    const issue = this.stores.issueWorkflows.getTrackedIssue(projectId, linearIssueId);
+    this.feed?.publish({
+      level: "info",
+      kind: "workflow",
+      issueKey: issue?.issueKey,
+      projectId,
+      ...(issue?.selectedWorkflowId ? { workflowId: issue.selectedWorkflowId } : {}),
+      status: params.nextLifecycleStatus === "paused" ? "transition_suppressed" : "completed",
+      summary:
+        params.nextLifecycleStatus === "paused"
+          ? "Released stale run after terminal Linear pause"
+          : "Released stale run after terminal Linear completion",
+      detail: params.currentLinearState ? `Live Linear state is already ${params.currentLinearState}.` : undefined,
+    });
   }
 
   private findStageRunForIssue(projectId: string, linearIssueId: string, threadId?: string): StageRunRecord | undefined {
