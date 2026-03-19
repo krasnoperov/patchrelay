@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.6](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.8.5...patchrelay-v0.8.6) (2026-03-19)
+
+
+### Bug Fixes
+
+* release stale active runs after terminal linear state ([#61](https://github.com/krasnoperov/patchrelay/issues/61)) ([f941cbe](https://github.com/krasnoperov/patchrelay/commit/f941cbe9341e82e5730aff49f0210dfa5d05ac46))
+
 ## [0.8.5](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.8.4...patchrelay-v0.8.5) (2026-03-19)
 
 
