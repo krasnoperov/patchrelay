@@ -70,6 +70,7 @@ export function resolveCodexAppServerLaunch(config: CodexAppServerConfig): { com
 }
 
 export class CodexAppServerClient extends EventEmitter {
+  private static readonly DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
   private child: ChildProcessWithoutNullStreams | undefined;
   private nextRequestId = 1;
   private readonly pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
@@ -290,8 +291,25 @@ export class CodexAppServerClient extends EventEmitter {
     }
 
     const id = this.nextRequestId++;
+    const requestTimeoutMs = this.config.requestTimeoutMs ?? CodexAppServerClient.DEFAULT_REQUEST_TIMEOUT_MS;
     const promise = new Promise<unknown>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      const timeout = setTimeout(() => {
+        if (!this.pending.delete(id)) {
+          return;
+        }
+        reject(new Error(`Codex app-server request timed out after ${requestTimeoutMs}ms`));
+      }, requestTimeoutMs);
+      timeout.unref?.();
+      this.pending.set(id, {
+        resolve: (value) => {
+          clearTimeout(timeout);
+          resolve(value);
+        },
+        reject: (error) => {
+          clearTimeout(timeout);
+          reject(error);
+        },
+      });
     });
 
     this.writeMessage({

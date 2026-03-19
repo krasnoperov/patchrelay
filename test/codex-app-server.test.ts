@@ -160,6 +160,9 @@ class FakeChildProcess extends EventEmitter {
     }
 
     if (message.method === "thread/read") {
+      if (this.scenario === "read-timeout") {
+        return;
+      }
       if (this.scenario === "error-response") {
         this.sendStdout({
           jsonrpc: "2.0",
@@ -250,6 +253,7 @@ function createClient(
       bin: process.execPath,
       args: ["unused"],
       sourceBashrc: false,
+      requestTimeoutMs: 50,
       approvalPolicy,
       sandboxMode: "danger-full-access",
       persistExtendedHistory: false,
@@ -350,6 +354,21 @@ test("CodexAppServerClient rejects JSON-RPC error responses", async () => {
   try {
     await client.start();
     await assert.rejects(() => client.readThread("thread-1"), /thread read failed/);
+  } finally {
+    await client.stop();
+  }
+});
+
+test("CodexAppServerClient times out hung requests and remains usable afterward", async () => {
+  const { client } = createClient("read-timeout");
+
+  try {
+    await client.start();
+    await assert.rejects(() => client.readThread("thread-1"), /timed out after 50ms/);
+
+    const threads = await client.listThreads();
+    assert.equal(threads.length, 2);
+    assert.equal(threads[0]?.id, "thread-1");
   } finally {
     await client.stop();
   }
