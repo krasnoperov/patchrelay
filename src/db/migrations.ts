@@ -356,6 +356,63 @@ UPDATE issues SET active_run_id = (
 WHERE active_run_id IS NOT NULL;
 `;
 
+const trackedIssuesMigration = `
+-- Migrate from tracked_issues/stage_runs/workspaces schema to issues/runs
+INSERT OR IGNORE INTO issues (
+  project_id, linear_issue_id, issue_key, title, url,
+  current_linear_state, desired_stage,
+  branch_name, worktree_path, thread_id, active_run_id,
+  status_comment_id,
+  lifecycle_status, updated_at
+)
+SELECT
+  ti.project_id, ti.linear_issue_id, ti.issue_key, ti.title, ti.issue_url,
+  ti.current_linear_state, ti.desired_stage,
+  w.branch_name, w.worktree_path,
+  COALESCE(ti.latest_thread_id, w.last_thread_id),
+  ti.active_stage_run_id,
+  ti.status_comment_id,
+  COALESCE(ti.lifecycle_status, 'idle'),
+  ti.updated_at
+FROM tracked_issues ti
+LEFT JOIN workspaces w ON w.id = ti.active_workspace_id;
+
+INSERT OR IGNORE INTO runs (
+  issue_id, project_id, linear_issue_id, stage, status,
+  workflow_file, prompt_text, thread_id, turn_id, parent_thread_id,
+  summary_json, report_json,
+  started_at, ended_at
+)
+SELECT
+  i.id,
+  sr.project_id,
+  sr.linear_issue_id,
+  sr.stage,
+  sr.status,
+  sr.workflow_file,
+  sr.prompt_text,
+  sr.thread_id,
+  sr.turn_id,
+  sr.parent_thread_id,
+  sr.summary_json,
+  sr.report_json,
+  sr.started_at,
+  sr.ended_at
+FROM stage_runs sr
+JOIN issues i ON i.project_id = sr.project_id AND i.linear_issue_id = sr.linear_issue_id;
+
+-- Fix active_run_id to point to new runs table IDs
+UPDATE issues SET active_run_id = (
+  SELECT r.id FROM runs r
+  WHERE r.project_id = issues.project_id
+    AND r.linear_issue_id = issues.linear_issue_id
+    AND r.status IN ('queued', 'running')
+  ORDER BY r.id DESC
+  LIMIT 1
+)
+WHERE active_run_id IS NOT NULL;
+`;
+
 function hasTable(connection: DatabaseConnection, tableName: string): boolean {
   const row = connection.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(tableName);
   return row !== undefined;
@@ -383,6 +440,17 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
     connection.exec(newSchemaMigration);
     // Migrate data
     connection.exec(dataMigration);
+    return;
+  }
+
+  // Check for tracked_issues schema (intermediate schema variant)
+  if (hasTable(connection, "tracked_issues") && hasTable(connection, "stage_runs")) {
+    connection.exec(newSchemaMigration);
+    connection.exec(trackedIssuesMigration);
+    ensureAuthTables(connection);
+    ensureOperatorFeedTable(connection);
+    ensureWebhookEventsTable(connection);
+    ensureRunThreadEventsTable(connection);
     return;
   }
 
