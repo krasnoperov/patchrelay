@@ -1034,6 +1034,92 @@ test("completed implementation still queues review when Linear already moved to 
   assert.equal(transitionEvent?.nextStage, "review");
 });
 
+test("completed implementation clears a stale queued review when live Linear is already Done", async () => {
+  const { store, codex, linear, finalizer, stageRun, feed } = createHarness({
+    withLedger: true,
+    issueStateName: "Done",
+  });
+  store.getTrackedIssue("proj", "issue-1")!.desiredStage = "review";
+  store.getTrackedIssue("proj", "issue-1")!.currentLinearState = "Review";
+  store.getTrackedIssue("proj", "issue-1")!.lifecycleStatus = "queued";
+  codex.threads.set(stageRun.threadId!, {
+    ...createThread("completed"),
+    turns: [
+      {
+        id: "turn-1",
+        status: "completed",
+        items: [{ type: "agentMessage", id: "assistant-1", text: "Implementation is ready for review." }],
+      },
+    ],
+  });
+
+  await finalizer.handleCodexNotification({
+    method: "turn/completed",
+    params: {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    },
+  } as never);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(store.getTrackedIssue("proj", "issue-1")?.desiredStage, undefined);
+  assert.equal(store.getTrackedIssue("proj", "issue-1")?.currentLinearState, "Done");
+  assert.equal(store.getTrackedIssue("proj", "issue-1")?.lifecycleStatus, "completed");
+  assert.deepEqual(linear.stateTransitions, []);
+  const completionEvent = feed.list({ issueKey: "APP-1", kind: "workflow", status: "completed" }).at(-1);
+  assert.match(completionEvent?.detail ?? "", /already Done/);
+});
+
+test("stale review completion cannot move an already shipped issue to Human Needed", async () => {
+  const { store, codex, linear, finalizer, stageRun, feed } = createHarness({
+    withLedger: true,
+    issueStateName: "Done",
+    stageRun: {
+      stage: "review",
+      workflowFile: "/tmp/REVIEW_WORKFLOW.md",
+    },
+  });
+  store.getTrackedIssue("proj", "issue-1")!.currentLinearState = "Reviewing";
+  codex.threads.set(stageRun.threadId!, {
+    ...createThread("completed"),
+    turns: [
+      {
+        id: "turn-1",
+        status: "completed",
+        items: [
+          {
+            type: "agentMessage",
+            id: "assistant-1",
+            text: [
+              "Stage result:",
+              "- Confirmed the work was already merged and deployed before this stale review finished.",
+              "- No new review action remains.",
+              "- Next likely stage: human_needed",
+              "- Next attention: none",
+            ].join("\n"),
+          },
+        ],
+      },
+    ],
+  });
+
+  await finalizer.handleCodexNotification({
+    method: "turn/completed",
+    params: {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    },
+  } as never);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(store.getTrackedIssue("proj", "issue-1")?.desiredStage, undefined);
+  assert.equal(store.getTrackedIssue("proj", "issue-1")?.currentLinearState, "Done");
+  assert.equal(store.getTrackedIssue("proj", "issue-1")?.lifecycleStatus, "completed");
+  assert.deepEqual(linear.stateTransitions, []);
+  const completionEvent = feed.list({ issueKey: "APP-1", kind: "workflow", status: "completed" }).at(-1);
+  assert.match(completionEvent?.detail ?? "", /already Done/);
+});
+
 test("automatic continuation keeps queueing forward progress even after several prior development to review handoffs", async () => {
   const { store, codex, linear, finalizer, stageRun, feed } = createHarness({ withLedger: true });
   store.stageRuns.delete(stageRun.id);

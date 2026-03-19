@@ -3,12 +3,68 @@ import { resolveWorkflowStageConfig } from "./workflow-policy.ts";
 
 const STATUS_MARKER = "<!-- patchrelay:status-comment -->";
 
+function normalizeLinearState(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed.toLowerCase() : undefined;
+}
+
 export function resolveActiveLinearState(project: ProjectConfig, stage: string, workflowDefinitionId?: string): string | undefined {
   return resolveWorkflowStageConfig(project, stage, workflowDefinitionId)?.activeState;
 }
 
 export function resolveFallbackLinearState(project: ProjectConfig, stage: string, workflowDefinitionId?: string): string | undefined {
   return resolveWorkflowStageConfig(project, stage, workflowDefinitionId)?.fallbackState;
+}
+
+export function resolveDoneLinearState(issue: {
+  stateName?: string;
+  workflowStates: Array<{ name: string; type?: string }>;
+}): string | undefined {
+  const typedMatch = issue.workflowStates.find((state) => normalizeLinearState(state.type) === "completed");
+  if (typedMatch?.name) {
+    return typedMatch.name;
+  }
+
+  const nameMatch = issue.workflowStates.find((state) => {
+    const normalized = normalizeLinearState(state.name);
+    return normalized === "done" || normalized === "completed" || normalized === "complete";
+  });
+  return nameMatch?.name;
+}
+
+export function resolveAuthoritativeLinearStopState(issue: {
+  stateName?: string;
+  workflowStates: Array<{ name: string; type?: string }>;
+}): { stateName: string; lifecycleStatus: "completed" | "paused" } | undefined {
+  const currentStateName = issue.stateName?.trim();
+  const normalizedCurrentState = normalizeLinearState(currentStateName);
+  if (!currentStateName || !normalizedCurrentState) {
+    return undefined;
+  }
+
+  const currentWorkflowState = issue.workflowStates.find((state) => normalizeLinearState(state.name) === normalizedCurrentState);
+  if (normalizeLinearState(currentWorkflowState?.type) === "completed") {
+    return {
+      stateName: currentWorkflowState?.name ?? currentStateName,
+      lifecycleStatus: "completed",
+    };
+  }
+
+  if (normalizedCurrentState === "human needed") {
+    return {
+      stateName: currentStateName,
+      lifecycleStatus: "paused",
+    };
+  }
+
+  if (normalizedCurrentState === "done" || normalizedCurrentState === "completed" || normalizedCurrentState === "complete") {
+    return {
+      stateName: currentStateName,
+      lifecycleStatus: "completed",
+    };
+  }
+
+  return undefined;
 }
 
 export function buildRunningStatusComment(params: {

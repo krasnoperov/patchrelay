@@ -10,7 +10,7 @@ import type { StageEventLogStoreProvider } from "./stage-event-ports.ts";
 import type { IssueWorkflowCoordinatorProvider, IssueWorkflowQueryStoreProvider } from "./workflow-ports.ts";
 import { syncFailedStageToLinear } from "./stage-failure.ts";
 import { parseStageHandoff } from "./stage-handoff.ts";
-import { resolveFallbackLinearState } from "./linear-workflow.ts";
+import { resolveAuthoritativeLinearStopState, resolveDoneLinearState, resolveFallbackLinearState } from "./linear-workflow.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import { resolveDefaultTransitionTarget, transitionTargetAllowed, type WorkflowTransitionTarget } from "./workflow-policy.ts";
 import {
@@ -323,7 +323,7 @@ export class ServiceStageFinalizer {
 
   private async maybeQueueAutomaticTransition(stageRun: StageRunRecord, report: StageReport): Promise<void> {
     const refreshedIssue = this.stores.issueWorkflows.getTrackedIssue(stageRun.projectId, stageRun.linearIssueId);
-    if (!refreshedIssue || refreshedIssue.desiredStage) {
+    if (!refreshedIssue) {
       return;
     }
 
@@ -344,6 +344,16 @@ export class ServiceStageFinalizer {
 
     const linearIssue = await linear.getIssue(stageRun.linearIssueId).catch(() => undefined);
     if (!linearIssue) {
+      return;
+    }
+
+    const authoritativeStopState = resolveAuthoritativeLinearStopState(linearIssue);
+    if (authoritativeStopState) {
+      this.syncIssueToAuthoritativeLinearStopState(stageRun, refreshedIssue, authoritativeStopState);
+      return;
+    }
+
+    if (refreshedIssue.desiredStage) {
       return;
     }
 
@@ -454,6 +464,39 @@ export class ServiceStageFinalizer {
     this.stores.workflowCoordinator.setIssueDesiredStage(stageRun.projectId, stageRun.linearIssueId, nextTarget, {
       desiredWebhookId: `auto-transition:${stageRun.id}:${nextTarget}`,
       lifecycleStatus: "queued",
+    });
+  }
+
+  private syncIssueToAuthoritativeLinearStopState(
+    stageRun: StageRunRecord,
+    issue: TrackedIssueRecord,
+    stopState: { stateName: string; lifecycleStatus: "completed" | "paused" },
+  ): void {
+    this.stores.workflowCoordinator.setIssueDesiredStage(stageRun.projectId, stageRun.linearIssueId, undefined, {
+      lifecycleStatus: stopState.lifecycleStatus,
+    });
+    this.stores.workflowCoordinator.upsertTrackedIssue({
+      projectId: stageRun.projectId,
+      linearIssueId: stageRun.linearIssueId,
+      currentLinearState: stopState.stateName,
+      lifecycleStatus: stopState.lifecycleStatus,
+    });
+    this.feed?.publish({
+      level: "info",
+      kind: "workflow",
+      issueKey: issue.issueKey,
+      projectId: stageRun.projectId,
+      stage: stageRun.stage,
+      ...(issue.selectedWorkflowId ? { workflowId: issue.selectedWorkflowId } : {}),
+      status: stopState.lifecycleStatus === "completed" ? "completed" : "transition_suppressed",
+      summary:
+        stopState.lifecycleStatus === "completed"
+          ? `Kept workflow completed after ${stageRun.stage}`
+          : `Ignored stale ${stageRun.stage} completion`,
+      detail:
+        stopState.lifecycleStatus === "completed"
+          ? `Live Linear state is already ${stopState.stateName}, so PatchRelay kept the issue finished.`
+          : `Live Linear state is already ${stopState.stateName}, so PatchRelay kept the issue paused.`,
     });
   }
 
@@ -855,17 +898,4 @@ function buildRestartRecoveryPrompt(stage: StageRunRecord["stage"]): string {
 function normalizeLinearState(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed.toLowerCase() : undefined;
-}
-
-function resolveDoneLinearState(issue: { stateName?: string; workflowStates: Array<{ name: string; type?: string }> }): string | undefined {
-  const typedMatch = issue.workflowStates.find((state) => normalizeLinearState(state.type) === "completed");
-  if (typedMatch?.name) {
-    return typedMatch.name;
-  }
-
-  const nameMatch = issue.workflowStates.find((state) => {
-    const normalized = normalizeLinearState(state.name);
-    return normalized === "done" || normalized === "completed" || normalized === "complete";
-  });
-  return nameMatch?.name;
 }
