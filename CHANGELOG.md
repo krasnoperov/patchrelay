@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.9](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.8.8...patchrelay-v0.8.9) (2026-03-19)
+
+
+### Bug Fixes
+
+* time out background reconciliation stalls ([#67](https://github.com/krasnoperov/patchrelay/issues/67)) ([b279acc](https://github.com/krasnoperov/patchrelay/commit/b279accac0ea052acfda195d0b9ac10bcf306606))
+
 ## [0.8.8](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.8.7...patchrelay-v0.8.8) (2026-03-19)
 
 
