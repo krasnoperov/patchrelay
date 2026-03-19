@@ -737,9 +737,27 @@ export class ServiceStageFinalizer {
 
   private async restartInterruptedRun(snapshot: ReconciliationSnapshot): Promise<boolean> {
     const liveCodex = snapshot.input.live?.codex;
+    const liveLinear = snapshot.input.live?.linear;
     const latestTurn = liveCodex?.status === "found" ? liveCodex.thread?.turns.at(-1) : undefined;
     if (latestTurn?.status !== "interrupted") {
       return false;
+    }
+
+    if (liveLinear?.status === "known") {
+      const authoritativeStopState = resolveAuthoritativeLinearStopState({
+        ...(liveLinear.issue?.stateName ? { stateName: liveLinear.issue.stateName } : {}),
+        workflowStates: liveLinear.issue?.stateName
+          ? [
+              {
+                name: liveLinear.issue.stateName,
+                ...(liveLinear.issue.stateType ? { type: liveLinear.issue.stateType } : {}),
+              },
+            ]
+          : [],
+      });
+      if (authoritativeStopState) {
+        return false;
+      }
     }
 
     if (snapshot.runLease.turnId && latestTurn.id !== snapshot.runLease.turnId) {
