@@ -5,6 +5,7 @@ export interface CodexAppServerConfig {
   args: string[];
   shellBin?: string;
   sourceBashrc?: boolean;
+  requestTimeoutMs?: number;
   model?: string;
   modelProvider?: string;
   serviceName?: string;
