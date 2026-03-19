@@ -8,8 +8,6 @@ import type {
   AppConfig,
   CodexThreadItem,
   CodexThreadSummary,
-  IssueControlRecord,
-  RunLeaseRecord,
   StageReport,
   StageRunRecord,
   TrackedIssueRecord,
@@ -99,10 +97,7 @@ export interface ListResultItem {
 }
 
 function safeJsonParse(value: string | undefined): Record<string, unknown> | undefined {
-  if (!value) {
-    return undefined;
-  }
-
+  if (!value) return undefined;
   try {
     const parsed = JSON.parse(value) as unknown;
     return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : undefined;
@@ -127,22 +122,14 @@ function summarizeThread(thread: CodexThreadSummary, latestTimestampSeen?: strin
 }
 
 function latestEventTimestamp(db: PatchRelayDatabase, stageRunId: number): string | undefined {
-  const events = db.stageEvents.listThreadEvents(stageRunId);
+  const events = db.listThreadEvents(stageRunId);
   return events.at(-1)?.createdAt;
 }
 
 function resolveStageFromState(config: AppConfig, projectId: string, stateName?: string): WorkflowStage | undefined {
   const project = config.projects.find((entry) => entry.id === projectId);
-  if (!project) {
-    return undefined;
-  }
-
+  if (!project) return undefined;
   return resolveWorkflowStage(project, stateName);
-}
-
-interface LedgerIssueContext {
-  issueControl?: IssueControlRecord;
-  runLease?: RunLeaseRecord;
 }
 
 export type LiveResult = Awaited<ReturnType<CliDataAccess["live"]>> extends infer T ? Exclude<T, undefined> : never;
@@ -162,24 +149,19 @@ export class CliDataAccess extends CliOperatorApiClient {
   }
 
   close(): void {
-    if (!this.codexStarted) {
-      return;
-    }
-
+    if (!this.codexStarted) return;
     void this.codex?.stop();
     this.codexStarted = false;
   }
 
   async inspect(issueKey: string): Promise<InspectResult | undefined> {
-    const issue = this.db.issueWorkflows.getTrackedIssueByKey(issueKey);
-    if (!issue) {
-      return undefined;
-    }
+    const issue = this.db.getTrackedIssueByKey(issueKey);
+    if (!issue) return undefined;
 
-    const ledger = this.getLedgerIssueContext(issue.projectId, issue.linearIssueId);
-    const workspace = this.getWorkspaceForIssue(issue, ledger);
-    const activeStageRun = this.getActiveStageRunForIssue(issue, ledger);
-    const latestStageRun = this.db.issueWorkflows.getLatestStageRunForIssue(issue.projectId, issue.linearIssueId);
+    const dbIssue = this.db.getIssueByKey(issueKey)!;
+    const workspace = this.db.issueToWorkspace(dbIssue);
+    const activeStageRun = dbIssue.activeRunId ? this.db.getStageRun(dbIssue.activeRunId) : undefined;
+    const latestStageRun = this.db.getLatestStageRunForIssue(issue.projectId, issue.linearIssueId);
     const latestReport = latestStageRun?.reportJson ? (JSON.parse(latestStageRun.reportJson) as StageReport) : undefined;
     const latestSummary = safeJsonParse(latestStageRun?.summaryJson);
     const live =
@@ -207,49 +189,32 @@ export class CliDataAccess extends CliOperatorApiClient {
   }
 
   async live(issueKey: string): Promise<
-    | {
-        issue: TrackedIssueRecord;
-        stageRun: StageRunRecord;
-        live?: LiveSummary;
-      }
+    | { issue: TrackedIssueRecord; stageRun: StageRunRecord; live?: LiveSummary }
     | undefined
   > {
-    const issue = this.db.issueWorkflows.getTrackedIssueByKey(issueKey);
-    if (!issue) {
-      return undefined;
-    }
+    const issue = this.db.getTrackedIssueByKey(issueKey);
+    if (!issue) return undefined;
 
-    const stageRun = this.getActiveStageRunForIssue(issue);
-    if (!stageRun) {
-      return undefined;
-    }
+    const dbIssue = this.db.getIssueByKey(issueKey)!;
+    const stageRun = dbIssue.activeRunId ? this.db.getStageRun(dbIssue.activeRunId) : undefined;
+    if (!stageRun) return undefined;
 
     const live =
       stageRun.threadId &&
       (await this.readLiveSummary(stageRun.threadId, latestEventTimestamp(this.db, stageRun.id)).catch(() => undefined));
 
-    return {
-      issue,
-      stageRun,
-      ...(live ? { live } : {}),
-    };
+    return { issue, stageRun, ...(live ? { live } : {}) };
   }
 
   report(issueKey: string, options?: { stage?: WorkflowStage; stageRunId?: number }): ReportResult | undefined {
-    const issue = this.db.issueWorkflows.getTrackedIssueByKey(issueKey);
-    if (!issue) {
-      return undefined;
-    }
+    const issue = this.db.getTrackedIssueByKey(issueKey);
+    if (!issue) return undefined;
 
     const stages = this.db
-      .issueWorkflows.listStageRunsForIssue(issue.projectId, issue.linearIssueId)
+      .listStageRunsForIssue(issue.projectId, issue.linearIssueId)
       .filter((stageRun) => {
-        if (options?.stageRunId !== undefined && stageRun.id !== options.stageRunId) {
-          return false;
-        }
-        if (options?.stage !== undefined && stageRun.stage !== options.stage) {
-          return false;
-        }
+        if (options?.stageRunId !== undefined && stageRun.id !== options.stageRunId) return false;
+        if (options?.stage !== undefined && stageRun.stage !== options.stage) return false;
         return true;
       })
       .reverse()
@@ -263,21 +228,18 @@ export class CliDataAccess extends CliOperatorApiClient {
   }
 
   events(issueKey: string, options?: { stageRunId?: number; method?: string; afterId?: number }): EventsResult | undefined {
-    const issue = this.db.issueWorkflows.getTrackedIssueByKey(issueKey);
-    if (!issue) {
-      return undefined;
-    }
+    const issue = this.db.getTrackedIssueByKey(issueKey);
+    if (!issue) return undefined;
 
+    const dbIssue = this.db.getIssueByKey(issueKey)!;
     const stageRun =
-      (options?.stageRunId !== undefined ? this.db.issueWorkflows.getStageRun(options.stageRunId) : undefined) ??
-      this.getActiveStageRunForIssue(issue) ??
-      this.db.issueWorkflows.getLatestStageRunForIssue(issue.projectId, issue.linearIssueId);
-    if (!stageRun || stageRun.projectId !== issue.projectId || stageRun.linearIssueId !== issue.linearIssueId) {
-      return undefined;
-    }
+      (options?.stageRunId !== undefined ? this.db.getStageRun(options.stageRunId) : undefined) ??
+      (dbIssue.activeRunId ? this.db.getStageRun(dbIssue.activeRunId) : undefined) ??
+      this.db.getLatestStageRunForIssue(issue.projectId, issue.linearIssueId);
+    if (!stageRun || stageRun.projectId !== issue.projectId || stageRun.linearIssueId !== issue.linearIssueId) return undefined;
 
     const events = this.db
-      .stageEvents.listThreadEvents(stageRun.id)
+      .listThreadEvents(stageRun.id)
       .filter((event) => (options?.method ? event.method === options.method : true))
       .filter((event) => (options?.afterId !== undefined ? event.id > options.afterId : true))
       .map((event) => ({
@@ -289,30 +251,22 @@ export class CliDataAccess extends CliOperatorApiClient {
   }
 
   worktree(issueKey: string): WorktreeResult | undefined {
-    const issue = this.db.issueWorkflows.getTrackedIssueByKey(issueKey);
-    if (!issue) {
-      return undefined;
-    }
+    const issue = this.db.getTrackedIssueByKey(issueKey);
+    if (!issue) return undefined;
 
-    const workspace = this.getWorkspaceForIssue(issue);
-    if (!workspace) {
-      return undefined;
-    }
+    const dbIssue = this.db.getIssueByKey(issueKey)!;
+    const workspace = this.db.issueToWorkspace(dbIssue);
+    if (!workspace) return undefined;
 
-    return {
-      issue,
-      workspace,
-      repoId: issue.projectId,
-    };
+    return { issue, workspace, repoId: issue.projectId };
   }
 
   open(issueKey: string): OpenResult | undefined {
     const worktree = this.worktree(issueKey);
-    if (!worktree) {
-      return undefined;
-    }
+    if (!worktree) return undefined;
 
-    const resumeThreadId = this.getStoredOpenThreadId(worktree);
+    const dbIssue = this.db.getIssueByKey(issueKey)!;
+    const resumeThreadId = dbIssue.threadId ?? undefined;
     return {
       ...worktree,
       ...(resumeThreadId ? { resumeThreadId } : {}),
@@ -324,63 +278,42 @@ export class CliDataAccess extends CliOperatorApiClient {
     options?: { ensureWorktree?: boolean; createThreadIfMissing?: boolean },
   ): Promise<OpenResult | undefined> {
     const worktree = this.worktree(issueKey);
-    if (!worktree) {
-      return undefined;
-    }
+    if (!worktree) return undefined;
 
     if (options?.ensureWorktree) {
       await this.ensureOpenWorktree(worktree);
     }
 
-    const existingThreadId = await this.resolveStoredOpenThreadId(worktree);
-    if (existingThreadId) {
-      return {
-        ...worktree,
-        resumeThreadId: existingThreadId,
-      };
+    const dbIssue = this.db.getIssueByKey(issueKey)!;
+    const existingThreadId = dbIssue.threadId;
+    if (existingThreadId && (await this.canReadThread(existingThreadId))) {
+      return { ...worktree, resumeThreadId: existingThreadId };
     }
 
     if (!options?.createThreadIfMissing) {
-      return {
-        ...worktree,
-        needsNewSession: true,
-      };
+      return { ...worktree, needsNewSession: true };
     }
 
     const codex = await this.getCodex();
-    const thread = await codex.startThread({
-      cwd: worktree.workspace.worktreePath,
-    });
-    this.db.issueSessions.upsertIssueSession({
+    const thread = await codex.startThread({ cwd: worktree.workspace.worktreePath });
+    this.db.upsertIssue({
       projectId: worktree.issue.projectId,
       linearIssueId: worktree.issue.linearIssueId,
-      workspaceOwnershipId: worktree.workspace.id,
       threadId: thread.id,
-      source: "operator_open",
-      ...(worktree.issue.activeAgentSessionId ? { linkedAgentSessionId: worktree.issue.activeAgentSessionId } : {}),
     });
-    this.db.issueSessions.touchIssueSession(thread.id);
-
-    return {
-      ...worktree,
-      resumeThreadId: thread.id,
-    };
+    return { ...worktree, resumeThreadId: thread.id };
   }
 
   async prepareOpen(issueKey: string): Promise<OpenResult | undefined> {
-    return await this.resolveOpen(issueKey, {
-      ensureWorktree: true,
-      createThreadIfMissing: true,
-    });
+    return await this.resolveOpen(issueKey, { ensureWorktree: true, createThreadIfMissing: true });
   }
 
   retry(issueKey: string, options?: { stage?: WorkflowStage; reason?: string }): RetryResult | undefined {
-    const issue = this.db.issueWorkflows.getTrackedIssueByKey(issueKey);
-    if (!issue) {
-      return undefined;
-    }
-    const ledger = this.getLedgerIssueContext(issue.projectId, issue.linearIssueId);
-    if (ledger.issueControl?.activeRunLeaseId !== undefined) {
+    const issue = this.db.getTrackedIssueByKey(issueKey);
+    if (!issue) return undefined;
+
+    const dbIssue = this.db.getIssueByKey(issueKey)!;
+    if (dbIssue.activeRunId !== undefined) {
       throw new Error(`Issue ${issueKey} already has an active stage run.`);
     }
 
@@ -389,26 +322,14 @@ export class CliDataAccess extends CliOperatorApiClient {
       throw new Error(`Unable to infer a stage for ${issueKey}; pass --stage.`);
     }
 
-    const webhookId = `cli-retry-${Date.now()}`;
-    const receipt = this.db.eventReceipts.insertEventReceipt({
-      source: "linear-webhook",
-      externalId: webhookId,
-      eventType: "cli-retry",
-      receivedAt: new Date().toISOString(),
-      acceptanceStatus: "accepted",
+    this.db.upsertIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
-    });
-    this.db.workflowCoordinator.setIssueDesiredStage(issue.projectId, issue.linearIssueId, stage, {
-      desiredReceiptId: receipt.id,
+      desiredStage: stage,
       lifecycleStatus: "queued",
     });
-    const updated = this.db.issueWorkflows.getTrackedIssue(issue.projectId, issue.linearIssueId)!;
-    return {
-      issue: updated,
-      stage,
-      ...(options?.reason ? { reason: options.reason } : {}),
-    };
+    const updated = this.db.getTrackedIssue(issue.projectId, issue.linearIssueId)!;
+    return { issue: updated, stage, ...(options?.reason ? { reason: options.reason } : {}) };
   }
 
   list(options?: { active?: boolean; failed?: boolean; project?: string }): ListResultItem[] {
@@ -416,7 +337,7 @@ export class CliDataAccess extends CliOperatorApiClient {
     const values: Array<string> = [];
 
     if (options?.project) {
-      conditions.push("ai.project_id = ?");
+      conditions.push("i.project_id = ?");
       values.push(options.project);
     }
 
@@ -424,188 +345,47 @@ export class CliDataAccess extends CliOperatorApiClient {
     const rows = this.db.connection
       .prepare(
         `
-        WITH all_issues AS (
-          SELECT project_id, linear_issue_id FROM issue_projection
-          UNION
-          SELECT project_id, linear_issue_id FROM issue_control
-        )
         SELECT
-          ai.project_id,
-          ai.linear_issue_id,
-          ip.issue_key,
-          ip.title,
-          ip.current_linear_state,
-          COALESCE(ic.lifecycle_status, 'idle') AS lifecycle_status,
-          COALESCE(ic.updated_at, ip.updated_at) AS updated_at,
+          i.project_id,
+          i.linear_issue_id,
+          i.issue_key,
+          i.title,
+          i.current_linear_state,
+          i.lifecycle_status,
+          i.updated_at,
           active_run.stage AS active_stage,
           latest_run.stage AS latest_stage,
           latest_run.status AS latest_stage_status
-        FROM all_issues ai
-        LEFT JOIN issue_projection ip
-          ON ip.project_id = ai.project_id AND ip.linear_issue_id = ai.linear_issue_id
-        LEFT JOIN issue_control ic
-          ON ic.project_id = ai.project_id AND ic.linear_issue_id = ai.linear_issue_id
-        LEFT JOIN run_leases active_run
-          ON active_run.id = ic.active_run_lease_id
-        LEFT JOIN run_leases latest_run ON latest_run.id = (
-          SELECT rl.id
-          FROM run_leases rl
-          WHERE rl.project_id = ai.project_id AND rl.linear_issue_id = ai.linear_issue_id
-          ORDER BY rl.id DESC
-          LIMIT 1
+        FROM issues i
+        LEFT JOIN runs active_run ON active_run.id = i.active_run_id
+        LEFT JOIN runs latest_run ON latest_run.id = (
+          SELECT r.id FROM runs r
+          WHERE r.project_id = i.project_id AND r.linear_issue_id = i.linear_issue_id
+          ORDER BY r.id DESC LIMIT 1
         )
         ${whereClause}
-        ORDER BY COALESCE(ic.updated_at, ip.updated_at) DESC, ip.issue_key ASC, ai.linear_issue_id ASC
+        ORDER BY i.updated_at DESC, i.issue_key ASC
         `,
       )
       .all(...values) as Array<Record<string, unknown>>;
 
-    const items = rows.map((row) => {
-      const projectId = String(row.project_id);
-      const linearIssueId = String(row.linear_issue_id);
-      const issueKey = row.issue_key === null ? undefined : String(row.issue_key);
-      const issue = this.db.issueWorkflows.getTrackedIssue(projectId, linearIssueId);
-      const ledger = issue ? this.getLedgerIssueContext(issue.projectId, issue.linearIssueId) : undefined;
-
-      return {
-        ...(issueKey ? { issueKey } : {}),
-        ...(row.title === null ? {} : { title: String(row.title) }),
-        projectId,
-        ...(row.current_linear_state === null ? {} : { currentLinearState: String(row.current_linear_state) }),
-        lifecycleStatus: String(row.lifecycle_status),
-        ...(ledger?.runLease
-          ? { activeStage: ledger.runLease.stage }
-          : row.active_stage !== null
-            ? { activeStage: row.active_stage as WorkflowStage }
-            : {}),
-        ...(row.latest_stage !== null
-          ? { latestStage: row.latest_stage as WorkflowStage }
-          : ledger?.runLease
-            ? { latestStage: ledger.runLease.stage }
-            : {}),
-        ...(row.latest_stage_status !== null
-          ? { latestStageStatus: String(row.latest_stage_status) }
-          : ledger?.runLease
-            ? {
-                latestStageStatus:
-                  ledger.runLease.status === "failed"
-                    ? "failed"
-                    : ledger.runLease.status === "completed" || ledger.runLease.status === "released" || ledger.runLease.status === "paused"
-                      ? "completed"
-                      : "running",
-              }
-            : {}),
-        updatedAt: String(row.updated_at),
-      };
-    });
+    const items = rows.map((row) => ({
+      ...(row.issue_key !== null ? { issueKey: String(row.issue_key) } : {}),
+      ...(row.title !== null ? { title: String(row.title) } : {}),
+      projectId: String(row.project_id),
+      ...(row.current_linear_state !== null ? { currentLinearState: String(row.current_linear_state) } : {}),
+      lifecycleStatus: String(row.lifecycle_status),
+      ...(row.active_stage !== null ? { activeStage: row.active_stage as WorkflowStage } : {}),
+      ...(row.latest_stage !== null ? { latestStage: row.latest_stage as WorkflowStage } : {}),
+      ...(row.latest_stage_status !== null ? { latestStageStatus: String(row.latest_stage_status) } : {}),
+      updatedAt: String(row.updated_at),
+    }));
 
     return items.filter((item) => {
-      if (options?.active && !item.activeStage) {
-        return false;
-      }
-      if (options?.failed && item.latestStageStatus !== "failed") {
-        return false;
-      }
+      if (options?.active && !item.activeStage) return false;
+      if (options?.failed && item.latestStageStatus !== "failed") return false;
       return true;
     });
-  }
-
-  private getLedgerIssueContext(projectId: string, linearIssueId: string): LedgerIssueContext {
-    const issueControl = this.db.issueControl.getIssueControl(projectId, linearIssueId);
-    const runLease = issueControl?.activeRunLeaseId ? this.db.runLeases.getRunLease(issueControl.activeRunLeaseId) : undefined;
-
-    return {
-      ...(issueControl ? { issueControl } : {}),
-      ...(runLease ? { runLease } : {}),
-    };
-  }
-
-  private getActiveStageRunForIssue(issue: TrackedIssueRecord, ledger?: LedgerIssueContext): StageRunRecord | undefined {
-    const context = ledger ?? this.getLedgerIssueContext(issue.projectId, issue.linearIssueId);
-    const activeStageRun = context.issueControl?.activeRunLeaseId
-      ? this.db.issueWorkflows.getStageRun(context.issueControl.activeRunLeaseId)
-      : undefined;
-
-    if (!activeStageRun) {
-      return undefined;
-    }
-
-    return activeStageRun.projectId === issue.projectId && activeStageRun.linearIssueId === issue.linearIssueId
-      ? activeStageRun
-      : undefined;
-  }
-
-  private getWorkspaceForIssue(issue: TrackedIssueRecord, ledger?: LedgerIssueContext): WorkspaceRecord | undefined {
-    const context = ledger ?? this.getLedgerIssueContext(issue.projectId, issue.linearIssueId);
-    if (context.issueControl?.activeWorkspaceOwnershipId !== undefined) {
-      const activeWorkspace = this.db.issueWorkflows.getWorkspace(context.issueControl.activeWorkspaceOwnershipId);
-      if (activeWorkspace) {
-        return activeWorkspace;
-      }
-    }
-
-    return this.db.issueWorkflows.getActiveWorkspaceForIssue(issue.projectId, issue.linearIssueId);
-  }
-
-  private getStoredOpenThreadId(worktree: WorktreeResult): string | undefined {
-    return this.listOpenCandidateThreadIds(worktree).at(0);
-  }
-
-  private async resolveStoredOpenThreadId(worktree: WorktreeResult): Promise<string | undefined> {
-    for (const threadId of this.listOpenCandidateThreadIds(worktree)) {
-      if (!(await this.canReadThread(threadId))) {
-        continue;
-      }
-
-      this.recordOpenThreadForIssue(worktree, threadId);
-      return threadId;
-    }
-
-    return undefined;
-  }
-
-  private listOpenCandidateThreadIds(worktree: WorktreeResult): string[] {
-    const ledger = this.getLedgerIssueContext(worktree.issue.projectId, worktree.issue.linearIssueId);
-    const sessions = this.db.issueSessions.listIssueSessionsForIssue(worktree.issue.projectId, worktree.issue.linearIssueId);
-    const candidates = [
-      ledger.issueControl?.activeRunLeaseId ? ledger.runLease?.threadId : undefined,
-      ...sessions.map((session) => session.threadId),
-      worktree.workspace.lastThreadId,
-      worktree.issue.latestThreadId,
-      ledger.runLease?.threadId,
-    ];
-
-    const seen = new Set<string>();
-    const ordered: string[] = [];
-    for (const candidate of candidates) {
-      if (!candidate || seen.has(candidate)) {
-        continue;
-      }
-      seen.add(candidate);
-      ordered.push(candidate);
-    }
-    return ordered;
-  }
-
-  private recordOpenThreadForIssue(worktree: WorktreeResult, threadId: string): void {
-    const existing = this.db.issueSessions.getIssueSessionByThreadId(threadId);
-    if (existing) {
-      this.db.issueSessions.touchIssueSession(threadId);
-      return;
-    }
-
-    const runLease = this.db.runLeases.getRunLeaseByThreadId(threadId);
-    this.db.issueSessions.upsertIssueSession({
-      projectId: worktree.issue.projectId,
-      linearIssueId: worktree.issue.linearIssueId,
-      workspaceOwnershipId: runLease?.workspaceOwnershipId ?? worktree.workspace.id,
-      threadId,
-      source: runLease ? "stage_run" : "operator_open",
-      ...(runLease?.id !== undefined ? { runLeaseId: runLease.id } : {}),
-      ...(runLease?.parentThreadId ? { parentThreadId: runLease.parentThreadId } : {}),
-      ...(worktree.issue.activeAgentSessionId ? { linkedAgentSessionId: worktree.issue.activeAgentSessionId } : {}),
-    });
-    this.db.issueSessions.touchIssueSession(threadId);
   }
 
   private async canReadThread(threadId: string): Promise<boolean> {
@@ -619,15 +399,9 @@ export class CliDataAccess extends CliOperatorApiClient {
   }
 
   private async ensureOpenWorktree(worktree: WorktreeResult): Promise<void> {
-    if (existsSync(worktree.workspace.worktreePath)) {
-      return;
-    }
-
+    if (existsSync(worktree.workspace.worktreePath)) return;
     const project = this.config.projects.find((entry) => entry.id === worktree.repoId);
-    if (!project) {
-      throw new Error(`Project not found for ${worktree.repoId}`);
-    }
-
+    if (!project) throw new Error(`Project not found for ${worktree.repoId}`);
     const worktreeManager = new WorktreeManager(this.config);
     await worktreeManager.ensureIssueWorktree(
       project.repoPath,

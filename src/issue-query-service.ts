@@ -1,27 +1,72 @@
 import type { CodexAppServerClient } from "./codex-app-server.ts";
-import type { StageEventLogStoreProvider } from "./stage-event-ports.ts";
-import type { IssueWorkflowQueryStoreProvider } from "./workflow-ports.ts";
+import type { PatchRelayDatabase } from "./db.ts";
 import { summarizeCurrentThread } from "./stage-reporting.ts";
-import type { StageReport } from "./types.ts";
+import type { StageReport, StageRunRecord, TrackedIssueRecord } from "./types.ts";
 import { safeJsonParse } from "./utils.ts";
-import type { ServiceStageFinalizer } from "./service-stage-finalizer.ts";
+
+interface StageStatusProvider {
+  getActiveStageStatus(issueKey: string): Promise<{
+    issue: TrackedIssueRecord;
+    stageRun: StageRunRecord;
+    liveThread?: ReturnType<typeof summarizeCurrentThread>;
+  } | undefined>;
+}
+
+// Adapter interface: anything that quacks like a db for query purposes
+interface QueryStore {
+  getTrackedIssueByKey(issueKey: string): TrackedIssueRecord | undefined;
+  getTrackedIssue(projectId: string, linearIssueId: string): TrackedIssueRecord | undefined;
+  getIssueOverview(issueKey: string): {
+    issue: TrackedIssueRecord;
+    workspace?: any;
+    activeStageRun?: StageRunRecord;
+  } | undefined;
+  getStageRun(id: number): StageRunRecord | undefined;
+  listStageRunsForIssue(projectId: string, linearIssueId: string): StageRunRecord[];
+  getLatestStageRunForIssue(projectId: string, linearIssueId: string): StageRunRecord | undefined;
+  listThreadEvents(runId: number): Array<{
+    id: number;
+    stageRunId: number;
+    threadId: string;
+    turnId?: string;
+    method: string;
+    eventJson: string;
+    createdAt: string;
+  }>;
+}
 
 export class IssueQueryService {
+  private readonly store: QueryStore;
+
   constructor(
-    private readonly stores: IssueWorkflowQueryStoreProvider & StageEventLogStoreProvider,
+    store: QueryStore | { issueWorkflows: any; stageEvents: any },
     private readonly codex: CodexAppServerClient,
-    private readonly stageFinalizer: Pick<ServiceStageFinalizer, "getActiveStageStatus">,
-  ) {}
+    private readonly stageFinalizer: StageStatusProvider,
+  ) {
+    // Support both old port-based and new direct interfaces
+    if ("getTrackedIssueByKey" in store) {
+      this.store = store as QueryStore;
+    } else {
+      const s = store as { issueWorkflows: any; stageEvents: any };
+      this.store = {
+        getTrackedIssueByKey: (k: string) => s.issueWorkflows.getTrackedIssueByKey(k),
+        getTrackedIssue: (p: string, i: string) => s.issueWorkflows.getTrackedIssue(p, i),
+        getIssueOverview: (k: string) => s.issueWorkflows.getIssueOverview(k),
+        getStageRun: (id: number) => s.issueWorkflows.getStageRun(id),
+        listStageRunsForIssue: (p: string, i: string) => s.issueWorkflows.listStageRunsForIssue(p, i),
+        getLatestStageRunForIssue: (p: string, i: string) => s.issueWorkflows.getLatestStageRunForIssue(p, i),
+        listThreadEvents: (id: number) => s.stageEvents.listThreadEvents(id),
+      };
+    }
+  }
 
   async getIssueOverview(issueKey: string) {
-    const result = this.stores.issueWorkflows.getIssueOverview(issueKey);
-    if (!result) {
-      return undefined;
-    }
+    const result = this.store.getIssueOverview(issueKey);
+    if (!result) return undefined;
 
     const activeStatus = await this.stageFinalizer.getActiveStageStatus(issueKey);
     const activeStageRun = activeStatus?.stageRun ?? result.activeStageRun;
-    const latestStageRun = this.stores.issueWorkflows.getLatestStageRunForIssue(result.issue.projectId, result.issue.linearIssueId);
+    const latestStageRun = this.store.getLatestStageRunForIssue(result.issue.projectId, result.issue.linearIssueId);
     let liveThread;
     if (activeStatus?.liveThread) {
       liveThread = activeStatus.liveThread;
@@ -38,14 +83,12 @@ export class IssueQueryService {
   }
 
   async getIssueReport(issueKey: string) {
-    const issue = this.stores.issueWorkflows.getTrackedIssueByKey(issueKey);
-    if (!issue) {
-      return undefined;
-    }
+    const issue = this.store.getTrackedIssueByKey(issueKey);
+    if (!issue) return undefined;
 
     return {
       issue,
-      stages: this.stores.issueWorkflows.listStageRunsForIssue(issue.projectId, issue.linearIssueId).map((stageRun) => ({
+      stages: this.store.listStageRunsForIssue(issue.projectId, issue.linearIssueId).map((stageRun) => ({
         stageRun,
         ...(stageRun.reportJson ? { report: JSON.parse(stageRun.reportJson) as StageReport } : {}),
       })),
@@ -53,20 +96,16 @@ export class IssueQueryService {
   }
 
   async getStageEvents(issueKey: string, stageRunId: number) {
-    const issue = this.stores.issueWorkflows.getTrackedIssueByKey(issueKey);
-    if (!issue) {
-      return undefined;
-    }
+    const issue = this.store.getTrackedIssueByKey(issueKey);
+    if (!issue) return undefined;
 
-    const stageRun = this.stores.issueWorkflows.getStageRun(stageRunId);
-    if (!stageRun || stageRun.projectId !== issue.projectId || stageRun.linearIssueId !== issue.linearIssueId) {
-      return undefined;
-    }
+    const stageRun = this.store.getStageRun(stageRunId);
+    if (!stageRun || stageRun.projectId !== issue.projectId || stageRun.linearIssueId !== issue.linearIssueId) return undefined;
 
     return {
       issue,
       stageRun,
-      events: this.stores.stageEvents.listThreadEvents(stageRunId).map((event) => ({
+      events: this.store.listThreadEvents(stageRunId).map((event) => ({
         ...event,
         parsedEvent: safeJsonParse<Record<string, unknown>>(event.eventJson),
       })),
@@ -79,9 +118,7 @@ export class IssueQueryService {
 
   async getPublicAgentSessionStatus(issueKey: string) {
     const overview = await this.getIssueOverview(issueKey);
-    if (!overview) {
-      return undefined;
-    }
+    if (!overview) return undefined;
 
     const report = await this.getIssueReport(issueKey);
     return {

@@ -283,40 +283,38 @@ function createStubCodex(
 function seedDatabase(db: PatchRelayDatabase, config: AppConfig): void {
   mkdirSync(config.projects[0].worktreeRoot, { recursive: true });
 
-  db.workflowCoordinator.upsertTrackedIssue({
+  // Issue 1: USE-54 — failed deploy with a completed run
+  const issue1 = db.upsertIssue({
     projectId: "usertold",
     linearIssueId: "issue-1",
     issueKey: "USE-54",
     title: "Playback-first evidence workspace",
-    issueUrl: "https://linear.example/USE-54",
+    url: "https://linear.example/USE-54",
     currentLinearState: "Human Needed",
     desiredStage: "deploy",
-    desiredWebhookId: "delivery-1",
+    branchName: "use/USE-54-playback-first-evidence-workspace",
+    worktreePath: path.join(config.projects[0].worktreeRoot, "USE-54"),
+    threadId: "thread-54",
     lifecycleStatus: "failed",
-    lastWebhookAt: "2026-03-09T08:00:00.000Z",
   });
-  const completed = db.workflowCoordinator.claimStageRun({
+  const completedRun = db.createRun({
+    issueId: issue1.id,
     projectId: "usertold",
     linearIssueId: "issue-1",
     stage: "deploy",
-    triggerWebhookId: "delivery-1",
-    branchName: "use/USE-54-playback-first-evidence-workspace",
-    worktreePath: path.join(config.projects[0].worktreeRoot, "USE-54"),
     workflowFile: getWorkflowFile(config, "deploy"),
     promptText: "Deploy it",
   });
-  assert.ok(completed);
   mkdirSync(path.join(config.projects[0].worktreeRoot, "USE-54"), { recursive: true });
-  db.workflowCoordinator.updateStageRunThread({ stageRunId: completed.stageRun.id, threadId: "thread-54", turnId: "turn-54" });
-  db.stageEvents.saveThreadEvent({
-    stageRunId: completed.stageRun.id,
+  db.updateRunThread(completedRun.id, { threadId: "thread-54", turnId: "turn-54" });
+  db.saveThreadEvent({
+    runId: completedRun.id,
     threadId: "thread-54",
     turnId: "turn-54",
     method: "turn/started",
     eventJson: JSON.stringify({ threadId: "thread-54", turnId: "turn-54" }),
   });
-  db.workflowCoordinator.finishStageRun({
-    stageRunId: completed.stageRun.id,
+  db.finishRun(completedRun.id, {
     status: "failed",
     threadId: "thread-54",
     turnId: "turn-54",
@@ -341,41 +339,43 @@ function seedDatabase(db: PatchRelayDatabase, config: AppConfig): void {
     }),
   });
 
-  db.workflowCoordinator.upsertTrackedIssue({
+  // Issue 2: USE-55 — idle review issue, no desired stage
+  db.upsertIssue({
     projectId: "usertold",
     linearIssueId: "issue-2",
     issueKey: "USE-55",
     title: "Queued review issue",
     currentLinearState: "Review",
     lifecycleStatus: "idle",
-    lastWebhookAt: "2026-03-09T09:00:00.000Z",
   });
-  db.workflowCoordinator.setIssueDesiredStage("usertold", "issue-2", undefined);
 
-  db.workflowCoordinator.upsertTrackedIssue({
+  // Issue 3: USE-56 — running development stage with an active run
+  const issue3 = db.upsertIssue({
     projectId: "usertold",
     linearIssueId: "issue-3",
     issueKey: "USE-56",
     title: "Running stage",
     currentLinearState: "Start",
     desiredStage: "development",
-    desiredWebhookId: "delivery-3",
+    branchName: "use/USE-56-running-stage",
+    worktreePath: path.join(config.projects[0].worktreeRoot, "USE-56"),
     lifecycleStatus: "running",
-    lastWebhookAt: "2026-03-09T10:00:00.000Z",
   });
-  const running = db.workflowCoordinator.claimStageRun({
+  const runningRun = db.createRun({
+    issueId: issue3.id,
     projectId: "usertold",
     linearIssueId: "issue-3",
     stage: "development",
-    triggerWebhookId: "delivery-3",
-    branchName: "use/USE-56-running-stage",
-    worktreePath: path.join(config.projects[0].worktreeRoot, "USE-56"),
     workflowFile: getWorkflowFile(config, "development"),
     promptText: "Build it",
   });
-  assert.ok(running);
   mkdirSync(path.join(config.projects[0].worktreeRoot, "USE-56"), { recursive: true });
-  db.workflowCoordinator.updateStageRunThread({ stageRunId: running.stageRun.id, threadId: "thread-56", turnId: "turn-56" });
+  db.updateRunThread(runningRun.id, { threadId: "thread-56", turnId: "turn-56" });
+  db.upsertIssue({
+    projectId: "usertold",
+    linearIssueId: "issue-3",
+    activeRunId: runningRun.id,
+  });
 }
 
 function seedRuntimeFiles(config: AppConfig): void {
@@ -486,7 +486,7 @@ test("cli open launches codex in the issue worktree", async () => {
   }
 });
 
-test("cli open prefers the most recently reopened issue session", async () => {
+test("cli open resumes the thread stored on the issue record", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-open-session-"));
   let data: CliDataAccess | undefined;
   try {
@@ -495,23 +495,15 @@ test("cli open prefers the most recently reopened issue session", async () => {
     db.runMigrations();
     seedDatabase(db, config);
 
-    const workspace = db.issueWorkflows.getActiveWorkspaceForIssue("usertold", "issue-1");
-    assert.ok(workspace);
-    db.issueSessions.upsertIssueSession({
+    // Set a threadId directly on the issue (the new model stores it on issues)
+    db.upsertIssue({
       projectId: "usertold",
       linearIssueId: "issue-1",
-      workspaceOwnershipId: workspace.id,
-      threadId: "thread-older",
-      source: "operator_open",
-    });
-    db.issueSessions.upsertIssueSession({
-      projectId: "usertold",
-      linearIssueId: "issue-1",
-      workspaceOwnershipId: workspace.id,
       threadId: "thread-newer",
-      source: "operator_open",
     });
-    db.issueSessions.touchIssueSession("thread-newer");
+
+    const workspace = db.getWorkspaceForIssue("usertold", "issue-1");
+    assert.ok(workspace);
 
     data = new CliDataAccess(config, {
       db,
@@ -546,14 +538,16 @@ test("cli open prefers the most recently reopened issue session", async () => {
       workspace.worktreePath,
       "thread-newer",
     ]);
-    assert.ok(db.issueSessions.getIssueSessionByThreadId("thread-newer")?.lastOpenedAt);
+    // Verify the threadId is still stored on the issue
+    const updated = db.getIssue("usertold", "issue-1");
+    assert.equal(updated?.threadId, "thread-newer");
   } finally {
     data?.close();
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
 
-test("cli open creates and persists a fresh issue session when no stored session can be resumed", async () => {
+test("cli open creates a fresh thread when the stored threadId cannot be resumed", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-open-fresh-"));
   let data: CliDataAccess | undefined;
   try {
@@ -562,16 +556,15 @@ test("cli open creates and persists a fresh issue session when no stored session
     db.runMigrations();
     seedDatabase(db, config);
 
-    const workspace = db.issueWorkflows.getActiveWorkspaceForIssue("usertold", "issue-1");
-    assert.ok(workspace);
-    const existing = db.issueSessions.upsertIssueSession({
+    // Set a threadId that the stub codex will not recognise (simulates stale thread)
+    db.upsertIssue({
       projectId: "usertold",
       linearIssueId: "issue-1",
-      workspaceOwnershipId: workspace.id,
       threadId: "thread-missing",
-      source: "operator_open",
     });
-    assert.equal(existing.threadId, "thread-missing");
+
+    const workspace = db.getWorkspaceForIssue("usertold", "issue-1");
+    assert.ok(workspace);
 
     data = new CliDataAccess(config, {
       db,
@@ -599,11 +592,9 @@ test("cli open creates and persists a fresh issue session when no stored session
       "thread-created-1",
     ]);
 
-    const created = db.issueSessions.getIssueSessionByThreadId("thread-created-1");
-    assert.ok(created);
-    assert.equal(created?.source, "operator_open");
-    assert.equal(created?.workspaceOwnershipId, workspace.id);
-    assert.ok(created?.lastOpenedAt);
+    // Verify the new threadId was persisted on the issue
+    const updated = db.getIssue("usertold", "issue-1");
+    assert.equal(updated?.threadId, "thread-created-1");
   } finally {
     data?.close();
     rmSync(baseDir, { recursive: true, force: true });
@@ -619,14 +610,11 @@ test("cli open --print does not advertise a stale resume thread", async () => {
     db.runMigrations();
     seedDatabase(db, config);
 
-    const workspace = db.issueWorkflows.getActiveWorkspaceForIssue("usertold", "issue-1");
-    assert.ok(workspace);
-    db.issueSessions.upsertIssueSession({
+    // Set a threadId that the stub codex will not recognise (stale)
+    db.upsertIssue({
       projectId: "usertold",
       linearIssueId: "issue-1",
-      workspaceOwnershipId: workspace.id,
       threadId: "thread-missing",
-      source: "operator_open",
     });
 
     data = new CliDataAccess(config, {
@@ -679,12 +667,11 @@ test("cli list and retry cover operator control flows", async () => {
     );
     assert.match(retryOut.read(), /Queued stage: review/);
 
-    const updated = db.issueWorkflows.getTrackedIssue("usertold", "issue-2");
+    const updated = db.getTrackedIssue("usertold", "issue-2");
     assert.equal(updated?.desiredStage, "review");
     assert.equal(updated?.lifecycleStatus, "queued");
-    const issueControl = db.issueControl.getIssueControl("usertold", "issue-2");
-    assert.equal(issueControl?.desiredStage, "review");
-    assert.ok(issueControl?.desiredReceiptId);
+    const updatedIssue = db.getIssue("usertold", "issue-2");
+    assert.equal(updatedIssue?.desiredStage, "review");
 
     const inspectJson = createBufferStream();
     assert.equal(await runCli(["USE-54", "--json"], { config, data, stdout: inspectJson.stream, stderr: createBufferStream().stream }), 0);
@@ -738,7 +725,7 @@ test("cli rejects unknown commands, unknown flags, and invalid numeric flags", a
   }
 });
 
-test("cli retry blocks when the ledger still owns an active run lease", () => {
+test("cli retry blocks when the issue still has an active run", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-retry-ledger-active-"));
   let data: CliDataAccess | undefined;
   try {
@@ -748,55 +735,34 @@ test("cli retry blocks when the ledger still owns an active run lease", () => {
     seedDatabase(db, config);
     data = new CliDataAccess(config, { db });
 
-    const issue = db.issueWorkflows.getTrackedIssue("usertold", "issue-2");
+    // Create an active run on issue-2 and point the issue's activeRunId at it
+    const issue = db.getIssue("usertold", "issue-2");
     assert.ok(issue);
-    const control = db.issueControl.upsertIssueControl({
+    const run = db.createRun({
+      issueId: issue.id,
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
-      lifecycleStatus: "running",
+      stage: "review",
     });
-    const workspace = db.workspaceOwnership.upsertWorkspaceOwnership({
+    db.updateRunThread(run.id, { threadId: "thread-55-active" });
+    db.upsertIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       branchName: "use/USE-55-ledger-active",
       worktreePath: path.join(config.projects[0].worktreeRoot, "USE-55-ledger-active"),
-      status: "active",
-    });
-    const runLease = db.runLeases.createRunLease({
-      issueControlId: control.id,
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      workspaceOwnershipId: workspace.id,
-      stage: "review",
-      status: "running",
-    });
-    db.issueControl.upsertIssueControl({
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      activeWorkspaceOwnershipId: workspace.id,
-      activeRunLeaseId: runLease.id,
+      activeRunId: run.id,
       lifecycleStatus: "running",
-    });
-    db.workflowCoordinator.upsertTrackedIssue({
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      issueKey: issue.issueKey,
-      title: issue.title,
-      currentLinearState: issue.currentLinearState,
-      desiredStage: undefined,
-      lifecycleStatus: "running",
-      lastWebhookAt: issue.lastWebhookAt ?? "2026-03-09T09:00:00.000Z",
     });
 
-    assert.throws(() => data.retry("USE-55"), /already has an active stage run/);
+    assert.throws(() => data!.retry("USE-55"), /already has an active stage run/);
   } finally {
     data?.close();
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
 
-test("cli falls back to ledger workspace and run context when legacy active pointers are sparse", async () => {
-  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-ledger-fallback-"));
+test("cli resolves workspace, run context, and live summary from the unified issue+runs model", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-unified-model-"));
   let data: CliDataAccess | undefined;
   try {
     const config = createConfig(baseDir);
@@ -804,80 +770,47 @@ test("cli falls back to ledger workspace and run context when legacy active poin
     db.runMigrations();
     seedRuntimeFiles(config);
 
-    db.workflowCoordinator.upsertTrackedIssue({
+    // Create issue-4 with a stale completed run, then an active development run
+    const issue4 = db.upsertIssue({
       projectId: "usertold",
       linearIssueId: "issue-4",
       issueKey: "USE-57",
       title: "Ledger-backed running issue",
       currentLinearState: "Implementing",
+      branchName: "use/USE-57-ledger-backed-running-issue",
+      worktreePath: path.join(config.projects[0].worktreeRoot, "USE-57"),
       lifecycleStatus: "running",
-      lastWebhookAt: "2026-03-09T11:00:00.000Z",
     });
-    db.workflowCoordinator.setIssueDesiredStage("usertold", "issue-4", "review", { desiredWebhookId: "delivery-stale" });
-    const stale = db.workflowCoordinator.claimStageRun({
+
+    // First run: completed stale review
+    const staleRun = db.createRun({
+      issueId: issue4.id,
       projectId: "usertold",
       linearIssueId: "issue-4",
       stage: "review",
-      triggerWebhookId: "delivery-stale",
-      branchName: "use/USE-57-stale-review",
-      worktreePath: path.join(config.projects[0].worktreeRoot, "USE-57-stale"),
       workflowFile: getWorkflowFile(config, "review"),
       promptText: "Stale review run",
     });
-    assert.ok(stale);
-    db.workflowCoordinator.updateStageRunThread({
-      stageRunId: stale.stageRun.id,
-      threadId: "thread-57-stale",
-      turnId: "turn-57-stale",
-    });
-    db.workflowCoordinator.finishStageRun({
-      stageRunId: stale.stageRun.id,
+    db.updateRunThread(staleRun.id, { threadId: "thread-57-stale", turnId: "turn-57-stale" });
+    db.finishRun(staleRun.id, {
       status: "completed",
       threadId: "thread-57-stale",
       turnId: "turn-57-stale",
     });
-    const receipt = db.eventReceipts.insertEventReceipt({
-      source: "linear-webhook",
-      externalId: "delivery-ledger",
-      eventType: "Issue.update",
-      receivedAt: "2026-03-09T11:00:00.000Z",
-      acceptanceStatus: "accepted",
+
+    // Second run: active development run
+    const activeRun = db.createRun({
+      issueId: issue4.id,
       projectId: "usertold",
       linearIssueId: "issue-4",
-    });
-    const issueControl = db.issueControl.upsertIssueControl({
-      projectId: "usertold",
-      linearIssueId: "issue-4",
-      activeWorkspaceOwnershipId: null,
-      lifecycleStatus: "running",
-    });
-    const workspace = db.workspaceOwnership.upsertWorkspaceOwnership({
-      projectId: "usertold",
-      linearIssueId: "issue-4",
-      branchName: "use/USE-57-ledger-backed-running-issue",
-      worktreePath: path.join(config.projects[0].worktreeRoot, "USE-57"),
-      status: "active",
-    });
-    const runLease = db.runLeases.createRunLease({
-      issueControlId: issueControl.id,
-      projectId: "usertold",
-      linearIssueId: "issue-4",
-      workspaceOwnershipId: workspace.id,
       stage: "development",
-      triggerReceiptId: receipt.id,
-      status: "running",
     });
-    db.runLeases.updateRunLeaseThread({
-      runLeaseId: runLease.id,
-      threadId: "thread-57",
-      turnId: "turn-57",
-    });
-    db.issueControl.upsertIssueControl({
+    db.updateRunThread(activeRun.id, { threadId: "thread-57", turnId: "turn-57" });
+    db.upsertIssue({
       projectId: "usertold",
       linearIssueId: "issue-4",
-      activeWorkspaceOwnershipId: workspace.id,
-      activeRunLeaseId: runLease.id,
-      lifecycleStatus: "running",
+      activeRunId: activeRun.id,
+      threadId: "thread-57",
     });
 
     data = new CliDataAccess(config, {

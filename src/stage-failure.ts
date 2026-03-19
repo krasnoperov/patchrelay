@@ -5,7 +5,6 @@ import {
   resolveFallbackLinearState,
   resolveWorkflowLabelCleanup,
 } from "./linear-workflow.ts";
-import type { IssueWorkflowCoordinatorProvider } from "./workflow-ports.ts";
 import type { LinearClientProvider, ProjectConfig, StageRunRecord, TrackedIssueRecord } from "./types.ts";
 
 function normalizeStateName(value: string | undefined): string | undefined {
@@ -13,8 +12,15 @@ function normalizeStateName(value: string | undefined): string | undefined {
   return trimmed ? trimmed.toLowerCase() : undefined;
 }
 
+interface FailureStores {
+  upsertTrackedIssue?(params: Record<string, unknown>): void;
+  setIssueStatusComment?(projectId: string, linearIssueId: string, commentId: string): void;
+  // Accept anything that has these methods
+  [key: string]: unknown;
+}
+
 export async function syncFailedStageToLinear(params: {
-  stores: IssueWorkflowCoordinatorProvider;
+  stores: FailureStores;
   linearProvider: LinearClientProvider;
   project: ProjectConfig;
   issue: TrackedIssueRecord;
@@ -24,9 +30,7 @@ export async function syncFailedStageToLinear(params: {
   requireActiveLinearStateMatch?: boolean;
 }): Promise<void> {
   const linear = await params.linearProvider.forProject(params.stageRun.projectId);
-  if (!linear) {
-    return;
-  }
+  if (!linear) return;
 
   const fallbackState = resolveFallbackLinearState(params.project, params.stageRun.stage, params.issue.selectedWorkflowId);
   let shouldWriteFailureState = true;
@@ -47,25 +51,18 @@ export async function syncFailedStageToLinear(params: {
   const cleanup = resolveWorkflowLabelCleanup(params.project);
   if (cleanup.remove.length > 0) {
     await linear
-      .updateIssueLabels({
-        issueId: params.stageRun.linearIssueId,
-        removeNames: cleanup.remove,
-      })
+      .updateIssueLabels({ issueId: params.stageRun.linearIssueId, removeNames: cleanup.remove })
       .catch(() => undefined);
   }
 
-  if (!shouldWriteFailureState) {
-    return;
-  }
+  if (!shouldWriteFailureState) return;
 
   if (fallbackState) {
     await linear.setIssueState(params.stageRun.linearIssueId, fallbackState).catch(() => undefined);
-    params.stores.workflowCoordinator.upsertTrackedIssue({
+    params.stores.upsertTrackedIssue?.({
       projectId: params.stageRun.projectId,
       linearIssueId: params.stageRun.linearIssueId,
       currentLinearState: fallbackState,
-      statusCommentId: params.issue.statusCommentId ?? null,
-      activeAgentSessionId: params.issue.activeAgentSessionId ?? null,
       lifecycleStatus: "failed",
     });
   }
@@ -108,7 +105,7 @@ export async function syncFailedStageToLinear(params: {
       })
       .catch(() => undefined);
     if (result) {
-      params.stores.workflowCoordinator.setIssueStatusComment(params.stageRun.projectId, params.stageRun.linearIssueId, result.id);
+      params.stores.setIssueStatusComment?.(params.stageRun.projectId, params.stageRun.linearIssueId, result.id);
     }
   }
 }

@@ -26,7 +26,7 @@ export function formatInspect(result: InspectResult): string {
     value("Latest result", result.latestStageRun?.status),
     value("Workspace", result.workspace?.worktreePath),
     value("Branch", result.workspace?.branchName),
-    value("Latest thread", result.activeStageRun?.threadId ?? result.issue?.latestThreadId ?? result.workspace?.lastThreadId),
+    value("Latest thread", result.activeStageRun?.threadId ?? result.workspace?.lastThreadId),
     value("Latest turn", result.live?.latestTurnId ?? result.activeStageRun?.turnId ?? result.latestStageRun?.turnId),
     result.statusNote ? value("Status", truncateLine(result.statusNote)) : undefined,
     result.live?.latestTurnStatus ? value("Live turn", result.live.latestTurnStatus) : undefined,

@@ -90,14 +90,10 @@ test("service runtime processes enqueued webhook and deduplicates identical issu
   const runtime = new ServiceRuntime(
     codex as never,
     pino({ enabled: false }),
-    async () => undefined,
-    () => [],
-    async (eventId) => {
-      processedWebhooks.push(eventId);
-    },
-    async (item) => {
-      processedIssues.push(item);
-    },
+    { async reconcileActiveStageRuns() {} },
+    { listIssuesReadyForExecution: () => [] },
+    { async processWebhookEvent(eventId) { processedWebhooks.push(eventId); } },
+    { async processIssue(item) { processedIssues.push(item); } },
   );
 
   runtime.enqueueWebhookEvent(41);
@@ -120,12 +116,10 @@ test("service runtime prioritizes urgent webhook items without introducing a sec
   const runtime = new ServiceRuntime(
     codex as never,
     pino({ enabled: false }),
-    async () => undefined,
-    () => [],
-    async (eventId) => {
-      processedWebhooks.push(eventId);
-    },
-    async () => undefined,
+    { async reconcileActiveStageRuns() {} },
+    { listIssuesReadyForExecution: () => [] },
+    { async processWebhookEvent(eventId) { processedWebhooks.push(eventId); } },
+    { async processIssue() {} },
   );
 
   runtime.enqueueWebhookEvent(41);
@@ -141,10 +135,10 @@ test("service runtime clears ready state on stop and preserves codex status in r
   const runtime = new ServiceRuntime(
     codex as never,
     pino({ enabled: false }),
-    async () => undefined,
-    () => [],
-    async () => undefined,
-    async () => undefined,
+    { async reconcileActiveStageRuns() {} },
+    { listIssuesReadyForExecution: () => [] },
+    { async processWebhookEvent() {} },
+    { async processIssue() {} },
   );
 
   await runtime.start();
@@ -165,12 +159,10 @@ test("service runtime records startup error when codex start fails", async () =>
   const runtime = new ServiceRuntime(
     codex as never,
     pino({ enabled: false }),
-    async () => {
-      reconciled = true;
-    },
-    () => [],
-    async () => undefined,
-    async () => undefined,
+    { async reconcileActiveStageRuns() { reconciled = true; } },
+    { listIssuesReadyForExecution: () => [] },
+    { async processWebhookEvent() {} },
+    { async processIssue() {} },
   );
 
   await assert.rejects(runtime.start(), /codex offline/);
@@ -190,15 +182,10 @@ test("service runtime records startup error when reconciliation fails after code
   const runtime = new ServiceRuntime(
     codex as never,
     pino({ enabled: false }),
-    async () => {
-      throw new Error("reconcile failed");
-    },
-    () => {
-      readyIssuesCalled = true;
-      return [];
-    },
-    async () => undefined,
-    async () => undefined,
+    { async reconcileActiveStageRuns() { throw new Error("reconcile failed"); } },
+    { listIssuesReadyForExecution() { readyIssuesCalled = true; return []; } },
+    { async processWebhookEvent() {} },
+    { async processIssue() {} },
   );
 
   await assert.rejects(runtime.start(), /reconcile failed/);
@@ -218,12 +205,10 @@ test("service runtime continues reconciling active runs after startup", async ()
   const runtime = new ServiceRuntime(
     codex as never,
     pino({ enabled: false }),
-    async () => {
-      reconcileCalls += 1;
-    },
-    () => [],
-    async () => undefined,
-    async () => undefined,
+    { async reconcileActiveStageRuns() { reconcileCalls += 1; } },
+    { listIssuesReadyForExecution: () => [] },
+    { async processWebhookEvent() {} },
+    { async processIssue() {} },
     { reconcileIntervalMs: 5 },
   );
 
@@ -241,15 +226,15 @@ test("service runtime recovers after a background reconciliation timeout", async
   const runtime = new ServiceRuntime(
     codex as never,
     pino({ enabled: false }),
-    async () => {
+    { async reconcileActiveStageRuns() {
       reconcileCalls += 1;
       if (reconcileCalls === 2) {
         await delay(50);
       }
-    },
-    () => [],
-    async () => undefined,
-    async () => undefined,
+    } },
+    { listIssuesReadyForExecution: () => [] },
+    { async processWebhookEvent() {} },
+    { async processIssue() {} },
     { reconcileIntervalMs: 5, reconcileTimeoutMs: 10 },
   );
 
