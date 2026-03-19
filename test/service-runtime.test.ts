@@ -233,3 +233,29 @@ test("service runtime continues reconciling active runs after startup", async ()
   assert.ok(reconcileCalls >= 2);
   runtime.stop();
 });
+
+test("service runtime recovers after a background reconciliation timeout", async () => {
+  const codex = new FakeCodexClient();
+  let reconcileCalls = 0;
+
+  const runtime = new ServiceRuntime(
+    codex as never,
+    pino({ enabled: false }),
+    async () => {
+      reconcileCalls += 1;
+      if (reconcileCalls === 2) {
+        await delay(50);
+      }
+    },
+    () => [],
+    async () => undefined,
+    async () => undefined,
+    { reconcileIntervalMs: 5, reconcileTimeoutMs: 10 },
+  );
+
+  await runtime.start();
+  await delay(80);
+
+  assert.ok(reconcileCalls >= 2);
+  runtime.stop();
+});

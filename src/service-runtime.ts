@@ -5,6 +5,7 @@ import { SerialWorkQueue } from "./service-queue.ts";
 
 const ISSUE_KEY_DELIMITER = "::";
 const DEFAULT_RECONCILE_INTERVAL_MS = 5_000;
+const DEFAULT_RECONCILE_TIMEOUT_MS = 60_000;
 
 export interface RuntimeIssueQueueItem {
   projectId: string;
@@ -21,6 +22,7 @@ export interface IssueExecutionProcessor {
 
 export interface ServiceRuntimeOptions {
   reconcileIntervalMs?: number;
+  reconcileTimeoutMs?: number;
 }
 
 type LegacyReconcileActiveStageRuns = () => Promise<void>;
@@ -168,7 +170,11 @@ export class ServiceRuntime {
 
     this.reconcileInProgress = true;
     try {
-      await this.stageRunReconciler.reconcileActiveStageRuns();
+      await promiseWithTimeout(
+        this.stageRunReconciler.reconcileActiveStageRuns(),
+        this.options.reconcileTimeoutMs ?? DEFAULT_RECONCILE_TIMEOUT_MS,
+        "Background active-stage reconciliation",
+      );
     } catch (error) {
       this.logger.warn(
         {
@@ -183,4 +189,24 @@ export class ServiceRuntime {
       }
     }
   }
+}
+
+function promiseWithTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    timeout.unref?.();
+
+    promise.then(
+      (value) => {
+        clearTimeout(timeout);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timeout);
+        reject(error);
+      },
+    );
+  });
 }
