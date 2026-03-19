@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.7](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.8.6...patchrelay-v0.8.7) (2026-03-19)
+
+
+### Bug Fixes
+
+* skip interrupted recovery after terminal linear state ([#63](https://github.com/krasnoperov/patchrelay/issues/63)) ([d85783a](https://github.com/krasnoperov/patchrelay/commit/d85783a7a88d5e29544844d3e2ad874f86c865ae))
+
 ## [0.8.6](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.8.5...patchrelay-v0.8.6) (2026-03-19)
 
 
