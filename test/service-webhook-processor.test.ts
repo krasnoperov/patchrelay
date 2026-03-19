@@ -603,6 +603,105 @@ test("webhook processor queues the next delegated stage from a status change whi
   }
 });
 
+test("webhook processor preserves the queued launch receipt when later comments arrive before launch", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-processor-preserve-receipt-"));
+  try {
+    const { db, processor, enqueuedIssues } = createHarness(baseDir);
+    installPatchRelayApp(db);
+    const initialReceipt = db.eventReceipts.insertEventReceipt({
+      source: "linear-webhook",
+      externalId: "delivery-agent-created",
+      eventType: "AgentSessionEvent.created",
+      receivedAt: new Date().toISOString(),
+      acceptanceStatus: "accepted",
+      linearIssueId: "issue_1",
+    });
+    const initialEvent = db.webhookEvents.insertWebhookEvent({
+      webhookId: "delivery-agent-created",
+      receivedAt: new Date().toISOString(),
+      eventType: "AgentSessionEvent.created",
+      issueId: "issue_1",
+      headersJson: "{}",
+      payloadJson: JSON.stringify({
+        action: "created",
+        type: "AgentSessionEvent",
+        createdAt: "2026-03-08T12:00:00.000Z",
+        webhookTimestamp: 1000,
+        data: {
+          agentSession: {
+            id: "session-queued",
+            issue: {
+              id: "issue_1",
+              identifier: "USE-25",
+              title: "Build app server orchestration",
+              url: "https://linear.app/example/issue/USE-25",
+              team: { key: "USE" },
+              delegate: { id: "patchrelay-app", name: "PatchRelay" },
+              state: { name: "Start" },
+            },
+          },
+        },
+      }),
+      signatureValid: true,
+      dedupeStatus: "accepted",
+    });
+
+    await processor.processWebhookEvent(initialEvent.id);
+
+    const commentReceipt = db.eventReceipts.insertEventReceipt({
+      source: "linear-webhook",
+      externalId: "delivery-comment-after-queue",
+      eventType: "Comment.create",
+      receivedAt: new Date().toISOString(),
+      acceptanceStatus: "accepted",
+      linearIssueId: "issue_1",
+    });
+    const commentEvent = db.webhookEvents.insertWebhookEvent({
+      webhookId: "delivery-comment-after-queue",
+      receivedAt: new Date().toISOString(),
+      eventType: "Comment.create",
+      issueId: "issue_1",
+      headersJson: "{}",
+      payloadJson: JSON.stringify({
+        action: "create",
+        type: "Comment",
+        createdAt: "2026-03-08T12:00:05.000Z",
+        webhookTimestamp: 1001,
+        actor: { id: "human-1", name: "Human" },
+        data: {
+          id: "comment-1",
+          body: "Please start with the UI shell.",
+          issue: {
+            id: "issue_1",
+            identifier: "USE-25",
+            title: "Build app server orchestration",
+            url: "https://linear.app/example/issue/USE-25",
+            team: { key: "USE" },
+            delegate: { id: "patchrelay-app", name: "PatchRelay" },
+            state: { name: "Start" },
+          },
+        },
+      }),
+      signatureValid: true,
+      dedupeStatus: "accepted",
+    });
+
+    await processor.processWebhookEvent(commentEvent.id);
+
+    const issue = db.issueWorkflows.getTrackedIssue("usertold", "issue_1");
+    const issueControl = db.issueControl.getIssueControl("usertold", "issue_1");
+    assert.equal(issue?.desiredStage, "development");
+    assert.equal(issueControl?.desiredStage, "development");
+    assert.equal(issueControl?.desiredReceiptId, initialReceipt.id);
+    assert.notEqual(issueControl?.desiredReceiptId, commentReceipt.id);
+    assert.deepEqual(enqueuedIssues, [
+      { projectId: "usertold", issueId: "issue_1" },
+    ]);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("webhook processor clears a stale agent session when delegation is removed", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-processor-session-reset-"));
   try {
@@ -617,7 +716,7 @@ test("webhook processor clears a stale agent session when delegation is removed"
       activeAgentSessionId: "session-stale",
       lastWebhookAt: new Date().toISOString(),
     });
-    const receipt = db.eventReceipts.insertEventReceipt({
+    db.eventReceipts.insertEventReceipt({
       source: "linear-webhook",
       externalId: "delivery-start-reset",
       eventType: "Issue.update",
@@ -655,7 +754,7 @@ test("webhook processor clears a stale agent session when delegation is removed"
     const issue = db.issueWorkflows.getTrackedIssue("usertold", "issue_1");
     const issueControl = db.issueControl.getIssueControl("usertold", "issue_1");
     assert.equal(issue?.desiredStage, undefined);
-    assert.equal(issueControl?.desiredReceiptId, receipt.id);
+    assert.equal(issueControl?.desiredReceiptId, undefined);
     assert.equal(issue?.activeAgentSessionId, undefined);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
