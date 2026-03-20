@@ -64,15 +64,20 @@ export function parseStageHandoff(
   assistantMessages: string[],
   workflowDefinitionId?: string,
 ): ParsedStageHandoff | undefined {
-  const latestMessage = [...assistantMessages].reverse().find((message) => typeof message === "string" && message.trim().length > 0);
-  if (!latestMessage) {
+  // Scan all messages (latest first) for a stage result section
+  const allMessages = [...assistantMessages].reverse().filter((m) => typeof m === "string" && m.trim().length > 0);
+  if (allMessages.length === 0) {
     return undefined;
   }
+
+  // Prefer the message that contains an explicit "Stage result" marker
+  const messageWithMarker = allMessages.find((m) => /^#{0,3}\s*stage result\s*:?\s*$/im.test(m));
+  const latestMessage = messageWithMarker ?? allMessages[0]!;
 
   const lines = latestMessage
     .split(/\r?\n/)
     .map((line) => line.trimEnd());
-  const markerIndex = lines.findIndex((line) => /^stage result\s*:?\s*$/i.test(line.trim()));
+  const markerIndex = lines.findIndex((line) => /^#{0,3}\s*stage result\s*:?\s*$/i.test(line.trim()));
   const relevantLines = (markerIndex >= 0 ? lines.slice(markerIndex + 1) : lines)
     .map((line) => stripListPrefix(line.trim()))
     .filter(Boolean);
@@ -84,7 +89,7 @@ export function parseStageHandoff(
   let nextLikelyStageText: string | undefined;
   let nextAttention: string | undefined;
   for (const line of relevantLines) {
-    const nextStageMatch = line.match(/^next likely stage\s*:\s*(.+)$/i);
+    const nextStageMatch = line.match(/^next(?:\s+likely)?\s+stage\s*:\s*(.+)$/i);
     if (nextStageMatch) {
       nextLikelyStageText = nextStageMatch[1]?.trim();
       continue;
