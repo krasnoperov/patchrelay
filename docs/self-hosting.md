@@ -6,8 +6,7 @@ This is the canonical install and runtime guide for PatchRelay.
 
 PatchRelay is designed to run on infrastructure you control, close to the repositories and deployment surface that Codex needs to access. In harness terms, self-hosting matters because PatchRelay is the execution system around the model: it routes work, prepares durable workspaces, carries forward state, and keeps runs inspectable in the real environment where the code lives.
 
-For the Linear OAuth app and delegation model, use [linear-agent-onboarding.md](./linear-agent-onboarding.md).
-For shipping updates to a live PatchRelay install, use [shipping.md](./shipping.md).
+For the architecture overview, see [architecture.md](./architecture.md).
 
 ## Deployment Shape
 
@@ -144,7 +143,7 @@ Optional non-secret overrides such as `PATCHRELAY_CONFIG`, `PATCHRELAY_DB_PATH`,
 Keep these values machine-level. They belong in PatchRelay's own env files, not inside repository `.env` files.
 PatchRelay reads `runtime.env` for non-secret runtime overrides and `service.env` for service credentials. Read-only local inspection commands use local state and do not require exporting these values in your shell.
 
-For the Linear OAuth app settings and webhook categories, use [linear-agent-onboarding.md](./linear-agent-onboarding.md).
+Configure the Linear OAuth app settings and webhook categories in your Linear workspace settings.
 
 ## 4. Configure Projects
 
@@ -201,12 +200,7 @@ Each automated repository should contain:
 
 These files are the repo-local policy PatchRelay passes into each stage run. They should explain what the agent is allowed to do in that repository, what validation is required, and when final issue states should be moved.
 
-Requirement references:
-
-- [IMPLEMENTATION_WORKFLOW_REQUIREMENTS.md](./IMPLEMENTATION_WORKFLOW_REQUIREMENTS.md)
-- [REVIEW_WORKFLOW_REQUIREMENTS.md](./REVIEW_WORKFLOW_REQUIREMENTS.md)
-- [DEPLOY_WORKFLOW_REQUIREMENTS.md](./DEPLOY_WORKFLOW_REQUIREMENTS.md)
-- [CLEANUP_WORKFLOW_REQUIREMENTS.md](./CLEANUP_WORKFLOW_REQUIREMENTS.md)
+Keep workflow files short and action-oriented. Codex performs better with concise instructions than with lengthy bureaucratic rules.
 
 ## 6. Validate And Operate
 
