@@ -84,7 +84,12 @@ export function buildStagePrompt(
     stageHistory?: StageRunRecord[];
   },
 ): string {
-  const workflowBody = existsSync(workflowFile) ? readFileSync(workflowFile, "utf8").trim() : "";
+  // Prefer workflow file from worktree (has latest main merged), fall back to repo path
+  const worktreeWorkflowFile = options?.worktreePath
+    ? path.join(options.worktreePath, path.relative(project.repoPath, workflowFile))
+    : undefined;
+  const resolvedWorkflowFile = worktreeWorkflowFile && existsSync(worktreeWorkflowFile) ? worktreeWorkflowFile : workflowFile;
+  const workflowBody = existsSync(resolvedWorkflowFile) ? readFileSync(resolvedWorkflowFile, "utf8").trim() : "";
   const carryForward = buildCarryForwardPrompt({
     project,
     currentStage: stage,

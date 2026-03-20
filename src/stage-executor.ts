@@ -84,14 +84,17 @@ export class StageExecutor {
       .then((linear) => linear?.getIssue(item.issueId))
       .catch(() => undefined);
 
+    // Only block launch for truly terminal states (Done, Cancelled).
+    // "Human Needed" is NOT terminal at launch - PatchRelay explicitly queued this work
+    // and will set the active state itself.
     const authoritativeStopState = liveIssue ? resolveAuthoritativeLinearStopState(liveIssue) : undefined;
-    if (authoritativeStopState) {
+    if (authoritativeStopState?.lifecycleStatus === "completed") {
       this.db.upsertIssue({
         projectId: item.projectId,
         linearIssueId: item.issueId,
         desiredStage: null,
         currentLinearState: authoritativeStopState.stateName,
-        lifecycleStatus: authoritativeStopState.lifecycleStatus,
+        lifecycleStatus: "completed",
       });
       return;
     }
@@ -672,12 +675,6 @@ export class StageExecutor {
     // Check desired stage conflicts
     if (issue.desiredStage) {
       return { allowed: false, reason: `The issue is already queued for ${issue.desiredStage}.` };
-    }
-
-    // Check continuation barrier
-    const run = this.db.getRun(stageRun.id);
-    if (issue.continuationBarrierAt && run?.startedAt && issue.continuationBarrierAt > run.startedAt) {
-      return { allowed: false, reason: "A newer human or operator interrupt arrived after the stage started." };
     }
 
     return { allowed: true };

@@ -205,8 +205,9 @@ export class WebhookHandler {
       }
     }
 
-    // Resolve continuation barrier
-    const continuationBarrierAt = this.resolveContinuationBarrier(normalized, activeRun !== undefined);
+    // Continuation barriers removed - if a human wants to stop automation,
+    // they can undelegate or move the issue to Human Needed.
+    const continuationBarrierAt = undefined;
 
     // Resolve agent session
     const agentSessionId = normalized.agentSession?.id ??

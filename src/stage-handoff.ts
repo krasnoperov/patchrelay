@@ -89,7 +89,7 @@ export function parseStageHandoff(
   let nextLikelyStageText: string | undefined;
   let nextAttention: string | undefined;
   for (const line of relevantLines) {
-    const nextStageMatch = line.match(/^next(?:\s+likely)?\s+stage\s*:\s*(.+)$/i);
+    const nextStageMatch = line.replace(/\*\*/g, "").match(/^next(?:\s+likely)?\s+stage\s*:\s*[`"']?\s*(.+?)\s*[`"']?\s*$/i);
     if (nextStageMatch) {
       nextLikelyStageText = nextStageMatch[1]?.trim();
       continue;
