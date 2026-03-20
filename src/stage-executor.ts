@@ -256,7 +256,7 @@ export class StageExecutor {
 
     if (notification.method !== "turn/completed") return;
 
-    const thread = await this.codex.readThread(threadId, true);
+    const thread = await this.readThreadWithRetry(threadId);
     const issue = this.db.getIssue(run.projectId, run.linearIssueId);
     if (!issue) return;
 
@@ -338,9 +338,9 @@ export class StageExecutor {
     // Read Codex state
     let thread: CodexThreadSummary | undefined;
     try {
-      thread = await this.codex.readThread(run.threadId, true);
+      thread = await this.readThreadWithRetry(run.threadId);
     } catch {
-      // Thread missing - fail the run
+      // Thread missing or unreadable - fail the run
       this.failRunAndClear(run, "Codex thread not found during reconciliation");
       const project = this.config.projects.find((p) => p.id === run.projectId);
       if (project) {
@@ -888,6 +888,22 @@ export class StageExecutor {
     });
   }
 
+  private async readThreadWithRetry(threadId: string, maxRetries = 3): Promise<CodexThreadSummary> {
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        return await this.codex.readThread(threadId, true);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (attempt < maxRetries - 1 && message.includes("not materialized")) {
+          await delay(1000 * (attempt + 1));
+          continue;
+        }
+        throw error;
+      }
+    }
+    return await this.codex.readThread(threadId, true);
+  }
+
   private async updateAgentSession(
     linear: NonNullable<Awaited<ReturnType<LinearClientProvider["forProject"]>>>,
     issue: TrackedIssueRecord,
@@ -921,6 +937,10 @@ export class StageExecutor {
       return false;
     }
   }
+}
+
+async function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function buildRestartRecoveryPrompt(stage: string): string {
