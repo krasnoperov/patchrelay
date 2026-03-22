@@ -1,4 +1,3 @@
-import type { WorkflowStage } from "../types.ts";
 import type { ParsedArgs, ResolvedCommand } from "./command-types.ts";
 import { UnknownCommandError, UnknownFlagsError } from "./errors.ts";
 
@@ -85,7 +84,7 @@ export function hasHelpFlag(parsed: ParsedArgs): boolean {
   return parsed.flags.get("help") === true;
 }
 
-export function getStageFlag(value: string | boolean | undefined): WorkflowStage | undefined {
+export function getStageFlag(value: string | boolean | undefined): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }

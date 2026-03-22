@@ -1,18 +1,16 @@
 import type { Logger } from "pino";
-import type { LinearInstallationStoreProvider } from "./installation-ports.ts";
+import type { LinearInstallationStore } from "./db/linear-installation-store.ts";
 import type { AppConfig, NormalizedEvent } from "./types.ts";
 
 export class InstallationWebhookHandler {
   constructor(
     private readonly config: AppConfig,
-    private readonly stores: LinearInstallationStoreProvider,
+    private readonly stores: { linearInstallations: LinearInstallationStore },
     private readonly logger: Logger,
   ) {}
 
   handle(normalized: NormalizedEvent): void {
-    if (!normalized.installation) {
-      return;
-    }
+    if (!normalized.installation) return;
 
     if (normalized.triggerEvent === "installationPermissionsChanged") {
       const matchingInstallations = normalized.installation.appUserId
@@ -26,15 +24,9 @@ export class InstallationWebhookHandler {
           .filter((link) => link.installationId === installation.id)
           .map((link) => {
             const project = this.config.projects.find((entry) => entry.id === link.projectId);
-            const removedMatches =
-              normalized.installation?.removedTeamIds.some((teamId) => project?.linearTeamIds.includes(teamId)) ?? false;
-            const addedMatches =
-              normalized.installation?.addedTeamIds.some((teamId) => project?.linearTeamIds.includes(teamId)) ?? false;
-            return {
-              projectId: link.projectId,
-              removedMatches,
-              addedMatches,
-            };
+            const removedMatches = normalized.installation?.removedTeamIds.some((teamId) => project?.linearTeamIds.includes(teamId)) ?? false;
+            const addedMatches = normalized.installation?.addedTeamIds.some((teamId) => project?.linearTeamIds.includes(teamId)) ?? false;
+            return { projectId: link.projectId, removedMatches, addedMatches };
           }),
       );
 
@@ -57,7 +49,7 @@ export class InstallationWebhookHandler {
           organizationId: normalized.installation.organizationId,
           oauthClientId: normalized.installation.oauthClientId,
         },
-        "Linear OAuth app installation was revoked; reconnect affected projects with `patchrelay project apply <id> <repo-path>` or `patchrelay connect --project <id>`",
+        "Linear OAuth app installation was revoked; reconnect affected projects",
       );
       return;
     }

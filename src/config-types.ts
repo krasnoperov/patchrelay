@@ -26,6 +26,7 @@ export interface AppConfig {
   };
   ingress: {
     linearWebhookPath: string;
+    githubWebhookPath: string;
     maxBodyBytes: number;
     maxTimestampSkewSeconds: number;
   };

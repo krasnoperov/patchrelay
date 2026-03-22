@@ -1,5 +1,15 @@
 import type { AppConfig, IssueMetadata, LinearActorMetadata, ProjectConfig, TriggerEvent } from "./types.ts";
-import { matchesProject } from "./workflow-policy.ts";
+
+function matchesProject(issue: IssueMetadata, project: ProjectConfig): boolean {
+  if (project.issueKeyPrefixes.length > 0 && issue.identifier) {
+    const prefix = issue.identifier.split("-")[0];
+    if (prefix && project.issueKeyPrefixes.includes(prefix)) return true;
+  }
+  if (project.linearTeamIds.length > 0 && issue.teamId) {
+    if (project.linearTeamIds.includes(issue.teamId)) return true;
+  }
+  return false;
+}
 
 export function resolveProject(config: AppConfig, issue: IssueMetadata): ProjectConfig | undefined {
   const matches = config.projects.filter((project) => matchesProject(issue, project));

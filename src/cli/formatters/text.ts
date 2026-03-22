@@ -20,17 +20,11 @@ export function formatInspect(result: InspectResult): string {
   const lines = [
     header,
     value("Title", result.issue?.title),
-    value("Lifecycle", result.issue?.lifecycleStatus),
-    value("Active stage", result.activeStageRun?.stage),
-    value("Latest stage", result.latestStageRun?.stage),
-    value("Latest result", result.latestStageRun?.status),
-    value("Workspace", result.workspace?.worktreePath),
-    value("Branch", result.workspace?.branchName),
-    value("Latest thread", result.activeStageRun?.threadId ?? result.issue?.latestThreadId ?? result.workspace?.lastThreadId),
-    value("Latest turn", result.live?.latestTurnId ?? result.activeStageRun?.turnId ?? result.latestStageRun?.turnId),
+    value("State", result.issue?.factoryState),
+    result.activeRun ? value("Active run", `${result.activeRun.runType} (${result.activeRun.status})`) : undefined,
+    result.latestRun && !result.activeRun ? value("Latest run", `${result.latestRun.runType} (${result.latestRun.status})`) : undefined,
+    result.prNumber ? value("PR", `#${result.prNumber}${result.prReviewState ? ` [${result.prReviewState}]` : ""}`) : undefined,
     result.statusNote ? value("Status", truncateLine(result.statusNote)) : undefined,
-    result.live?.latestTurnStatus ? value("Live turn", result.live.latestTurnStatus) : undefined,
-    result.live?.latestAssistantMessage ? `Latest assistant message:\n${truncateLine(result.live.latestAssistantMessage)}` : undefined,
   ].filter(Boolean);
 
   return `${lines.join("\n")}\n`;
@@ -39,10 +33,10 @@ export function formatInspect(result: InspectResult): string {
 export function formatLive(result: LiveResult): string {
   const lines = [
     value("Issue", result.issue.issueKey ?? result.issue.linearIssueId),
-    value("Stage", result.stageRun.stage),
-    value("Thread", result.stageRun.threadId),
-    value("Turn", result.live?.latestTurnId ?? result.stageRun.turnId),
-    value("Turn status", result.live?.latestTurnStatus ?? result.live?.threadStatus ?? result.stageRun.status),
+    value("Run type", result.run.runType),
+    value("Thread", result.run.threadId),
+    value("Turn", result.live?.latestTurnId ?? result.run.turnId),
+    value("Turn status", result.live?.latestTurnStatus ?? result.live?.threadStatus ?? result.run.status),
     value("Latest timestamp", result.live?.latestTimestampSeen),
     result.live?.latestAssistantMessage ? `Latest assistant message:\n${truncateLine(result.live.latestAssistantMessage)}` : undefined,
   ].filter(Boolean);
@@ -50,19 +44,19 @@ export function formatLive(result: LiveResult): string {
 }
 
 export function formatReport(result: ReportResult): string {
-  const sections = result.stages.map(({ stageRun, report, summary }) => {
+  const sections = result.runs.map(({ run, report, summary }) => {
     const changedFiles = report?.fileChanges
-      .map((entry) => (typeof entry.path === "string" ? entry.path : undefined))
+      .map((entry: Record<string, unknown>) => (typeof entry.path === "string" ? entry.path : undefined))
       .filter(Boolean)
       .join(", ");
-    const commands = report?.commands.map((command) => command.command).join(" | ");
-    const tools = report?.toolCalls.map((tool) => `${tool.type}:${tool.name}`).join(", ");
+    const commands = report?.commands.map((command: { command: string }) => command.command).join(" | ");
+    const tools = report?.toolCalls.map((tool: { type: string; name: string }) => `${tool.type}:${tool.name}`).join(", ");
 
     return [
-      `${stageRun.stage} #${stageRun.id} ${stageRun.status}`,
-      value("Started", stageRun.startedAt),
-      value("Ended", stageRun.endedAt),
-      value("Thread", stageRun.threadId),
+      `${run.runType} #${run.id} ${run.status}`,
+      value("Started", run.startedAt),
+      value("Ended", run.endedAt),
+      value("Thread", run.threadId),
       summary?.latestAssistantMessage ? value("Summary", truncateLine(String(summary.latestAssistantMessage))) : undefined,
       report?.assistantMessages.at(-1) ? value("Assistant conclusion", truncateLine(report.assistantMessages.at(-1))) : undefined,
       commands ? value("Commands", commands) : undefined,
@@ -86,18 +80,18 @@ export function formatEvents(result: EventsResult): string {
     ].join("\n"),
   );
 
-  return `${value("Stage run", result.stageRun.id)}\n${value("Stage", result.stageRun.stage)}\n\n${sections.join("\n\n")}\n`;
+  return `${value("Run", result.run.id)}\n${value("Run type", result.run.runType)}\n\n${sections.join("\n\n")}\n`;
 }
 
 export function formatWorktree(result: WorktreeResult, cdOnly: boolean): string {
   if (cdOnly) {
-    return `${result.workspace.worktreePath}\n`;
+    return `${result.worktreePath}\n`;
   }
 
   return `${[
     value("Issue", result.issue.issueKey ?? result.issue.linearIssueId),
-    value("Worktree", result.workspace.worktreePath),
-    value("Branch", result.workspace.branchName),
+    value("Worktree", result.worktreePath),
+    value("Branch", result.branchName),
     value("Repo", result.repoId),
   ].join("\n")}\n`;
 }
@@ -111,7 +105,7 @@ export function formatOpen(
   command?: { command: string; args: string[] },
 ): string {
   const commands = [
-    `cd ${result.workspace.worktreePath}`,
+    `cd ${result.worktreePath}`,
     "git branch --show-current",
   ];
   if (result.needsNewSession) {
@@ -130,7 +124,7 @@ export function formatOpen(
 export function formatRetry(result: RetryResult): string {
   return `${[
     value("Issue", result.issue.issueKey ?? result.issue.linearIssueId),
-    value("Queued stage", result.stage),
+    value("Queued stage", result.runType),
     result.reason ? value("Reason", result.reason) : undefined,
   ]
     .filter(Boolean)
@@ -143,9 +137,9 @@ export function formatList(items: ListResultItem[]): string {
       [
         item.issueKey ?? "-",
         item.currentLinearState ?? "-",
-        item.lifecycleStatus,
-        item.activeStage ?? "-",
-        item.latestStage ? `${item.latestStage}:${item.latestStageStatus ?? "-"}` : "-",
+        item.factoryState,
+        item.activeRunType ?? "-",
+        item.latestRunType ? `${item.latestRunType}:${item.latestRunStatus ?? "-"}` : "-",
         item.updatedAt,
       ].join("\t"),
     )

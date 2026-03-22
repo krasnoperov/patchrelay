@@ -201,6 +201,41 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
     },
   );
 
+  app.post(
+    config.ingress.githubWebhookPath,
+    {
+      config: {
+        rawBody: true,
+      },
+    },
+    async (request, reply) => {
+      const rawBody = typeof request.rawBody === "string" ? Buffer.from(request.rawBody) : request.rawBody;
+      if (!rawBody) {
+        return reply.code(400).send({ ok: false, reason: "missing_raw_body" });
+      }
+
+      const deliveryId = getHeader(request, "x-github-delivery");
+      if (!deliveryId) {
+        return reply.code(400).send({ ok: false, reason: "missing_delivery_header" });
+      }
+
+      const eventType = getHeader(request, "x-github-event");
+      if (!eventType) {
+        return reply.code(400).send({ ok: false, reason: "missing_event_type" });
+      }
+
+      const signature = getHeader(request, "x-hub-signature-256") ?? "";
+
+      const result = await service.acceptGitHubWebhook({
+        deliveryId,
+        eventType,
+        signature,
+        rawBody,
+      });
+      return reply.code(result.status).send(result.body);
+    },
+  );
+
   app.get("/agent/session/:issueKey", async (request, reply) => {
     const issueKey = (request.params as { issueKey: string }).issueKey;
     const token = getQueryParam(request, "token");
@@ -231,7 +266,7 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
         renderAgentSessionStatusPage({
           issueKey,
           expiresAt: status.expiresAt,
-          sessionStatus: status.sessionStatus,
+          sessionStatus: status.sessionStatus as Parameters<typeof renderAgentSessionStatusPage>[0]["sessionStatus"],
         }),
       );
   });
@@ -266,18 +301,18 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
 
     app.get("/api/issues/:issueKey/live", async (request, reply) => {
       const issueKey = (request.params as { issueKey: string }).issueKey;
-      const result = await service.getActiveStageStatus(issueKey);
+      const result = await service.getActiveRunStatus(issueKey);
       if (!result) {
-        return reply.code(404).send({ ok: false, reason: "active_stage_not_found" });
+        return reply.code(404).send({ ok: false, reason: "active_run_not_found" });
       }
       return reply.send({ ok: true, ...result });
     });
 
-    app.get("/api/issues/:issueKey/stages/:stageRunId/events", async (request, reply) => {
-      const { issueKey, stageRunId } = request.params as { issueKey: string; stageRunId: string };
-      const result = await service.getStageEvents(issueKey, Number(stageRunId));
+    app.get("/api/issues/:issueKey/runs/:runId/events", async (request, reply) => {
+      const { issueKey, runId } = request.params as { issueKey: string; runId: string };
+      const result = await service.getRunEvents(issueKey, Number(runId));
       if (!result) {
-        return reply.code(404).send({ ok: false, reason: "stage_run_not_found" });
+        return reply.code(404).send({ ok: false, reason: "run_not_found" });
       }
       return reply.send({ ok: true, ...result });
     });
@@ -519,35 +554,21 @@ function renderAgentSessionStatusPage(params: {
       title?: string;
       issueUrl?: string;
     };
-    activeStageRun?: {
-      stage?: string;
-      status?: string;
-    };
-    latestStageRun?: {
-      stage?: string;
-      status?: string;
-    };
-    liveThread?: {
-      threadId?: string;
-      threadStatus?: string;
-    };
-    stages: Array<{
-      stageRun?: {
-        stage?: string;
-        status?: string;
-        startedAt?: string;
-        endedAt?: string;
-      };
+    activeRun?: { runType?: string; status?: string } | undefined;
+    latestRun?: { runType?: string; status?: string } | undefined;
+    liveThread?: { threadId?: string; threadStatus?: string } | undefined;
+    runs: Array<{
+      run?: { runType?: string; status?: string; startedAt?: string; endedAt?: string } | undefined;
     }>;
     generatedAt: string;
   };
 }): string {
   const issueTitle = params.sessionStatus.issue.title ?? params.sessionStatus.issue.issueKey ?? params.issueKey;
   const issueUrl = params.sessionStatus.issue.issueUrl;
-  const activeStage = formatStageChip(params.sessionStatus.activeStageRun);
-  const latestStage = formatStageChip(params.sessionStatus.latestStageRun);
+  const activeStage = formatStageChip(params.sessionStatus.activeRun);
+  const latestStage = formatStageChip(params.sessionStatus.latestRun);
   const threadInfo = formatThread(params.sessionStatus.liveThread);
-  const stagesRows = params.sessionStatus.stages.slice(-8).map((entry) => formatStageRow(entry.stageRun)).join("");
+  const stagesRows = params.sessionStatus.runs.slice(-8).map((entry) => formatStageRow(entry.run)).join("");
 
   return `<!doctype html>
 <html lang="en">
@@ -634,19 +655,19 @@ function renderAgentSessionStatusPage(params: {
 }
 
 function formatStageChip(
-  stageRun:
+  run:
     | {
-        stage?: string;
+        runType?: string;
         status?: string;
       }
     | undefined,
 ): string {
-  if (!stageRun) {
+  if (!run) {
     return "none";
   }
-  const stage = stageRun.stage ?? "unknown";
-  const status = stageRun.status ?? "unknown";
-  return `<code>${escapeHtml(stage)}</code> (${escapeHtml(status)})`;
+  const runType = run.runType ?? "unknown";
+  const status = run.status ?? "unknown";
+  return `<code>${escapeHtml(runType)}</code> (${escapeHtml(status)})`;
 }
 
 function formatThread(
@@ -666,23 +687,23 @@ function formatThread(
 }
 
 function formatStageRow(
-  stageRun:
+  run:
     | {
-        stage?: string;
+        runType?: string;
         status?: string;
         startedAt?: string;
         endedAt?: string;
       }
     | undefined,
 ): string {
-  if (!stageRun) {
-    return '<tr><td colspan="4">Unknown stage record</td></tr>';
+  if (!run) {
+    return '<tr><td colspan="4">Unknown run record</td></tr>';
   }
-  const stage = stageRun.stage ?? "unknown";
-  const status = stageRun.status ?? "unknown";
-  const startedAt = stageRun.startedAt ?? "-";
-  const endedAt = stageRun.endedAt ?? "-";
-  return `<tr><td><code>${escapeHtml(stage)}</code></td><td>${escapeHtml(status)}</td><td><code>${escapeHtml(
+  const runType = run.runType ?? "unknown";
+  const status = run.status ?? "unknown";
+  const startedAt = run.startedAt ?? "-";
+  const endedAt = run.endedAt ?? "-";
+  return `<tr><td><code>${escapeHtml(runType)}</code></td><td>${escapeHtml(status)}</td><td><code>${escapeHtml(
     startedAt,
   )}</code></td><td><code>${escapeHtml(endedAt)}</code></td></tr>`;
 }

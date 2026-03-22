@@ -1,11 +1,10 @@
-import type { WorkflowStage, StageRunStatus } from "./workflow-types.ts";
+import type { RunType } from "./factory-state.ts";
 
-export interface StageLaunchPlan {
+export interface RunLaunchPlan {
   branchName: string;
   worktreePath: string;
-  workflowFile: string;
   prompt: string;
-  stage: WorkflowStage;
+  runType: RunType;
 }
 
 export interface CodexThreadSummary {
@@ -47,14 +46,13 @@ export type CodexThreadItem =
   | { type: string; id: string; [key: string]: unknown };
 
 export interface StageReport {
-  issueKey?: string;
-  stage: WorkflowStage;
-  status: StageRunStatus;
-  threadId?: string;
-  parentThreadId?: string;
-  turnId?: string;
+  issueKey?: string | undefined;
+  runType: string;
+  status: string;
+  threadId?: string | undefined;
+  parentThreadId?: string | undefined;
+  turnId?: string | undefined;
   prompt: string;
-  workflowFile: string;
   assistantMessages: string[];
   plans: string[];
   reasoning: string[];

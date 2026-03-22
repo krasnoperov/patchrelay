@@ -1,5 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
-import type { AppConfig, WorkflowStage } from "../../types.ts";
+import type { AppConfig } from "../../types.ts";
 import { getStageFlag, parsePositiveIntegerFlag } from "../args.ts";
 import type { InteractiveRunner, Output, ParsedArgs } from "../command-types.ts";
 import type { CliDataAccess } from "../data.ts";
@@ -43,7 +43,7 @@ export async function handleLiveCommand(params: IssueCommandParams): Promise<num
       throw new Error(`No active stage found for ${issueKey}`);
     }
     writeOutput(params.stdout, params.json ? formatJson(result) : formatLive(result));
-    if (!watch || result.stageRun.status !== "running") {
+    if (!watch || result.run.status !== "running") {
       break;
     }
     await delay(2000);
@@ -56,14 +56,14 @@ export async function handleReportCommand(params: IssueCommandParams): Promise<n
   if (!issueKey) {
     throw new Error("report requires <issueKey>.");
   }
-  const reportOptions: { stage?: WorkflowStage; stageRunId?: number } = {};
+  const reportOptions: { runType?: string; runId?: number } = {};
   const stage = getStageFlag(params.parsed.flags.get("stage"));
   if (stage) {
-    reportOptions.stage = stage;
+    reportOptions.runType = stage;
   }
-  const stageRunId = parsePositiveIntegerFlag(params.parsed.flags.get("stage-run"), "--stage-run");
-  if (stageRunId !== undefined) {
-    reportOptions.stageRunId = stageRunId;
+  const runId = parsePositiveIntegerFlag(params.parsed.flags.get("stage-run"), "--stage-run");
+  if (runId !== undefined) {
+    reportOptions.runId = runId;
   }
   const result = params.data.report(issueKey, reportOptions);
   if (!result) {
@@ -80,22 +80,22 @@ export async function handleEventsCommand(params: IssueCommandParams): Promise<n
   }
   const follow = params.parsed.flags.get("follow") === true;
   let afterId: number | undefined;
-  let stageRunId = parsePositiveIntegerFlag(params.parsed.flags.get("stage-run"), "--stage-run");
+  let runId = parsePositiveIntegerFlag(params.parsed.flags.get("stage-run"), "--stage-run");
   do {
     const result = params.data.events(issueKey, {
-      ...(stageRunId !== undefined ? { stageRunId } : {}),
+      ...(runId !== undefined ? { runId } : {}),
       ...(typeof params.parsed.flags.get("method") === "string" ? { method: String(params.parsed.flags.get("method")) } : {}),
       ...(afterId !== undefined ? { afterId } : {}),
     });
     if (!result) {
       throw new Error(`Stage run not found for ${issueKey}`);
     }
-    stageRunId = result.stageRun.id;
+    runId = result.run.id;
     if (result.events.length > 0) {
       writeOutput(params.stdout, params.json ? formatJson(result) : formatEvents(result));
       afterId = result.events.at(-1)?.id;
     }
-    if (!follow || result.stageRun.status !== "running") {
+    if (!follow || result.run.status !== "running") {
       break;
     }
     await delay(2000);
@@ -134,7 +134,7 @@ export async function handleOpenCommand(params: IssueCommandParams): Promise<num
     if (!result) {
       throw new Error(`Workspace not found for ${issueKey}`);
     }
-    const openCommand = buildOpenCommand(params.config, result.workspace.worktreePath, result.resumeThreadId);
+    const openCommand = buildOpenCommand(params.config, result.worktreePath, result.resumeThreadId);
     writeOutput(params.stdout, formatOpen(result, openCommand));
     return 0;
   }
@@ -143,7 +143,7 @@ export async function handleOpenCommand(params: IssueCommandParams): Promise<num
   if (!result) {
     throw new Error(`Workspace not found for ${issueKey}`);
   }
-  const openCommand = buildOpenCommand(params.config, result.workspace.worktreePath, result.resumeThreadId);
+  const openCommand = buildOpenCommand(params.config, result.worktreePath, result.resumeThreadId);
   return await params.runInteractive(openCommand.command, openCommand.args);
 }
 
@@ -152,10 +152,10 @@ export async function handleRetryCommand(params: IssueCommandParams): Promise<nu
   if (!issueKey) {
     throw new Error("retry requires <issueKey>.");
   }
-  const retryOptions: { stage?: WorkflowStage; reason?: string } = {};
+  const retryOptions: { runType?: string; reason?: string } = {};
   const stage = getStageFlag(params.parsed.flags.get("stage"));
   if (stage) {
-    retryOptions.stage = stage;
+    retryOptions.runType = stage;
   }
   if (typeof params.parsed.flags.get("reason") === "string") {
     retryOptions.reason = String(params.parsed.flags.get("reason"));

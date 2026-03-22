@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import path from "node:path";
 import test from "node:test";
 import { resolveProject, triggerEventAllowed, trustedActorAllowed } from "../src/project-resolution.ts";
 import type { AppConfig, LinearWebhookPayload } from "../src/types.ts";
@@ -348,6 +347,7 @@ test("resolveProject matches by issue key prefix and team", () => {
     },
     ingress: {
       linearWebhookPath: "/webhooks/linear",
+      githubWebhookPath: "/webhooks/github",
       maxBodyBytes: 262144,
       maxTimestampSkewSeconds: 60,
     },
@@ -390,7 +390,6 @@ test("resolveProject matches by issue key prefix and team", () => {
         id: "alpha",
         repoPath: "/repos/alpha",
         worktreeRoot: "/worktrees/alpha",
-        workflows: createWorkflows("/repos/alpha"),
         issueKeyPrefixes: ["ALPHA"],
         linearTeamIds: ["OPS"],
         allowLabels: ["alpha"],
@@ -401,7 +400,6 @@ test("resolveProject matches by issue key prefix and team", () => {
         id: "usertold",
         repoPath: "/repos/usertold",
         worktreeRoot: "/worktrees/usertold",
-        workflows: createWorkflows("/repos/usertold"),
         issueKeyPrefixes: ["USE"],
         linearTeamIds: ["USE"],
         allowLabels: [],
@@ -446,7 +444,6 @@ test("trustedActorAllowed matches ids, emails, names, and trusted email domains"
     id: "usertold",
     repoPath: "/repos/usertold",
     worktreeRoot: "/worktrees/usertold",
-    workflows: createWorkflows("/repos/usertold"),
     issueKeyPrefixes: ["USE"],
     linearTeamIds: ["USE"],
     allowLabels: [],
@@ -467,31 +464,3 @@ test("trustedActorAllowed matches ids, emails, names, and trusted email domains"
   assert.equal(trustedActorAllowed(project, { email: "intruder@elsewhere.example" }), false);
   assert.equal(trustedActorAllowed(project, undefined), false);
 });
-function createWorkflows(repoPath: string) {
-  return [
-    {
-      id: "development",
-      whenState: "Start",
-      activeState: "Implementing",
-      workflowFile: path.join(repoPath, "DEVELOPMENT_WORKFLOW.md"),
-    },
-    {
-      id: "review",
-      whenState: "Review",
-      activeState: "Reviewing",
-      workflowFile: path.join(repoPath, "REVIEW_WORKFLOW.md"),
-    },
-    {
-      id: "deploy",
-      whenState: "Deploy",
-      activeState: "Deploying",
-      workflowFile: path.join(repoPath, "DEPLOY_WORKFLOW.md"),
-    },
-    {
-      id: "cleanup",
-      whenState: "Cleanup",
-      activeState: "Cleaning Up",
-      workflowFile: path.join(repoPath, "CLEANUP_WORKFLOW.md"),
-    },
-  ];
-}

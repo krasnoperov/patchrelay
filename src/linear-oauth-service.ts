@@ -1,5 +1,5 @@
 import type { Logger } from "pino";
-import type { LinearInstallationStoreProvider } from "./installation-ports.ts";
+import type { LinearInstallationStore } from "./db/linear-installation-store.ts";
 import { createLinearOAuthUrl, createOAuthStateToken, installLinearOAuthCode } from "./linear-oauth.ts";
 import type { AppConfig, LinearInstallationRecord } from "./types.ts";
 
@@ -13,7 +13,7 @@ function oauthStateExpired(createdAt: string): boolean {
 export class LinearOAuthService {
   constructor(
     private readonly config: AppConfig,
-    private readonly stores: LinearInstallationStoreProvider,
+    private readonly stores: { linearInstallations: LinearInstallationStore },
     private readonly logger: Logger,
   ) {}
 

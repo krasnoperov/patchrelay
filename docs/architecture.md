@@ -1,295 +1,237 @@
-# PatchRelay Architecture
+# PatchRelay Detailed Architecture
+
+## Purpose
+
+This document describes the target architecture for PatchRelay as a Linear-native agentic software factory.
+
+The service is not a generic prompt runner. It is the deterministic orchestration layer that turns a delegated Linear issue into a reviewed, repairable, merge-queued pull request.
+
+## External Patterns We Are Combining
+
+PatchRelay intentionally combines three patterns:
+
+1. **OpenAI harness engineering**
+   - short `AGENTS.md`
+   - repo-local docs as system of record
+   - worktree-bootable development environments
+   - strict architecture boundaries that agents can reason about
+2. **Linear official agent demo**
+   - app-backed OAuth installation
+   - webhook-driven Linear interactions
+   - native session activity model
+3. **Community long-running agent harness**
+   - durable autonomous loop
+   - resume-after-failure behavior
+   - environment and command safety hooks
+
+What we are **not** copying:
+
+- a comment-only Linear bot
+- a single monolithic instruction file
+- a polling-only backlog worker
+- a one-shot coding session without repair loops
 
-## System Shape
+## Component Topology
+
+```mermaid
+flowchart TB
+  subgraph Linear
+    LS[Agent Sessions]
+    LI[Issues / Comments]
+  end
+
+  subgraph PatchRelay
+    WH[Webhook Handler]
+    GWH[GitHub Webhook Handler]
+    RO[Run Orchestrator]
+    WM[Workspace Manager]
+    ST[State Store - SQLite]
+  end
+
+  subgraph Execution
+    CR[Codex App Server]
+    WT[Git Worktrees]
+  end
 
-PatchRelay is a self-hosted execution harness around Codex with seven responsibilities:
+  subgraph Delivery
+    GH[GitHub]
+  end
 
-1. accept and verify Linear webhooks
-2. persist issue, workspace, pipeline, stage, and observation state in SQLite
-3. create and maintain per-issue git worktrees
-4. drive Codex through `codex app-server`
-5. write deterministic workflow state back to Linear
-6. steer active turns with queued Linear agent input and optional compatibility comments
-7. expose local management routes and, optionally, issue and stage inspection endpoints
+  LS --> WH
+  LI --> WH
+  WH --> RO
+  RO --> WM
+  RO --> CR
+  WM --> WT
+  CR --> WT
+  CR --> GH
+  GH --> GWH
+  GWH --> RO
+  RO --> ST
+  ST --> RO
+  RO --> LS
+```
 
-`codex app-server` is the source of truth for agent thread history.
-PatchRelay is the source of truth for workflow policy, workspace ownership, and issue-to-thread correlation.
+## Core Responsibilities
 
-The key design constraint is that PatchRelay remains the harness around the model. It should keep deterministic workflow coordination out of the prompt layer while avoiding repo-specific business logic that belongs in workflow files or agent tools.
+### Webhook Handler (`webhook-handler.ts`)
 
-## Layer Model
+Owns:
 
-PatchRelay is easiest to reason about as five layers:
+- Linear webhook verification
+- webhook idempotency
+- OAuth app installation (via `webhook-installation-handler.ts`)
+- conversion from Linear webhook payloads to normalized events
+- delegation detection and implementation run scheduling
+- agent session acknowledgment, plan publishing, and activity emission
+- comment and prompt forwarding to active Codex runs
 
-### 1. Policy Layer
+### GitHub Webhook Handler (`github-webhook-handler.ts`)
 
-Repository-owned workflow files define stage behavior, prompt instructions, and team-specific rules.
+Owns:
 
-### 2. Coordination Layer
+- GitHub webhook signature verification
+- PR state tracking (number, URL, review state, check status)
+- factory state transitions from GitHub events
+- triggering reactive runs (ci_repair, review_fix, queue_repair)
+- repair counter management
 
-The service decides when an issue is eligible, which stage should run next, whether a run should retry, and how restart reconciliation should resolve partially completed work.
+### Run Orchestrator (`run-orchestrator.ts`)
 
-### 3. Execution Layer
+Owns:
 
-PatchRelay owns durable worktrees, Codex thread lifecycle, turn startup, and queued human follow-up input delivery.
+- run lifecycle (create, launch, complete, fail)
+- Codex thread and turn management
+- worktree preparation and setup hook execution
+- prompt construction from issue metadata and workflow files
+- retry budget enforcement and escalation
+- reconciliation of active runs after restart
+- Linear activity and plan updates during runs
 
-### 4. Integration Layer
+### Workspace Manager (`worktree-manager.ts`)
 
-PatchRelay verifies Linear webhooks, performs OAuth and installation linking, routes issues to the right project, and applies deterministic state changes back to Linear.
+Owns:
 
-### 5. Observability Layer
+- `git worktree` lifecycle
+- worktree path conventions
+- branch creation and reuse
 
-PatchRelay exposes reports, event history, active-stage inspection, and operator-facing CLI and API surfaces.
+### Codex Runtime (`codex-app-server.ts`)
 
-These layers are intentionally separate:
+Owns:
 
-- policy tells the agent how to work
-- coordination decides when work should run
-- execution performs the work in the repo
-- integration keeps external systems consistent
-- observability explains what happened
+- starting and monitoring Codex execution via JSON-RPC
+- thread start, turn start, turn steering
+- notification handling (turn/completed events)
 
-For a current file-by-file view of those boundaries, see [module-map.md](./module-map.md).
+## Issue Lifecycle
 
-## Main Entities
+### Main Flow
 
-### Tracked Issue
+```text
+Delegated in Linear
+-> Session acknowledged
+-> Plan published
+-> Worktree prepared
+-> Implementation run (Codex)
+-> PR opened (detected via GitHub webhook)
+-> Review loop
+-> Approved and checks green
+-> Merge queue
+-> Merged → done
+```
 
-One record per Linear issue per project.
+### Reactive Loops
 
-Stores:
+#### Review Fix Loop
 
-- Linear issue id and key
-- latest known Linear state
-- desired next stage
-- active workspace id
-- active pipeline id
-- active stage run id
-- latest Codex thread id
-- optional service-owned Linear status comment id for fallback delivery
+Triggered by:
 
-### Workspace
+- GitHub `review_changes_requested` event
 
-One durable git worktree and branch for an issue lifecycle.
+Behavior:
 
-Stores:
+- resume same worktree and branch
+- start a `review_fix` run with reviewer feedback as context
+- Codex addresses the feedback and pushes
 
-- branch name
-- worktree path
-- workspace status
-- last completed stage
-- last Codex thread id
+#### CI Repair Loop
 
-### Pipeline Run
+Triggered by:
 
-A logical automation lifecycle for an issue workspace.
+- GitHub `check_failed` event
 
-Stores:
+Behavior:
 
-- workspace id
-- active stage
-- pipeline status
-- start and end timestamps
+- start a `ci_repair` run in the same worktree
+- Codex reads failure logs, fixes the code, pushes
+- budget: 2 attempts before escalation
 
-### Stage Run
+#### Queue Repair Loop
 
-One concrete `development`, `review`, `deploy`, or `cleanup` execution.
+Triggered by:
 
-Stores:
+- GitHub `merge_group_failed` event
 
-- workflow stage
-- workflow file path
-- prompt text
-- Codex thread id
-- parent thread id
-- turn id
-- stage status
-- report payload
+Behavior:
 
-### Thread Event
+- start a `queue_repair` run in the same worktree
+- Codex rebases onto latest main, resolves conflicts, pushes
+- budget: 2 attempts before escalation
 
-A persisted Codex app-server notification correlated to a stage run.
+## Factory State Machine
 
-Stores:
+States as defined in `factory-state.ts`:
 
-- thread id
-- optional turn id
-- notification method
-- raw event JSON
+```text
+delegated → preparing → implementing → pr_open → awaiting_review
+  → changes_requested → implementing (review fix)
+  → repairing_ci → pr_open (CI repair)
+  → awaiting_queue → done (merged)
+  → repairing_queue → pr_open (queue repair)
+  → awaiting_input (agent needs human guidance)
+  → escalated (retry budgets exhausted)
+  → failed (unrecoverable error)
+```
 
-## Authoritative Versus Derived State
+## Failure Taxonomy
 
-PatchRelay keeps a harness ledger in SQLite, but not every artifact deserves to be authoritative state.
+### Repairable Automatically
 
-Authoritative state is the data PatchRelay must recover exactly after a restart in order to continue or safely stop automation:
+- formatting or lint failures
+- deterministic test failures
+- straightforward rebase conflicts
 
-- webhook dedupe and processing state
-- Linear installation and OAuth state
-- issue-to-workspace ownership
-- issue-to-thread and stage-run correlation
-- active and desired stage coordination
+### Escalate Quickly
 
-Derived state is anything PatchRelay can rebuild or re-read from another durable source:
+- ambiguous product decisions
+- repeated semantic integration failures
+- broken credentials or revoked installations
+- repository setup hook failures that block all progress
 
-- Codex thread transcript details
-- verbose event trails
-- rendered reports and operator views
-- current Linear issue fields that can be fetched again
+## State Storage
 
-This distinction is important when extending the service. New persistence should default to derived or cache-like storage unless the information is required for coordination, restart safety, or deterministic Linear writeback.
+PatchRelay uses SQLite with these tables:
 
-For the current classification of stored entities, see [persistence-audit.md](./persistence-audit.md).
+- `issues` — one record per tracked issue, includes factory state, PR state, run pointers, repair counters
+- `runs` — one record per Codex run (implementation, review_fix, ci_repair, queue_repair)
+- `webhook_events` — deduplication and processing status for Linear webhooks
+- `run_thread_events` — per-run transcript of Codex thread events (when extended history is enabled)
+- `linear_installations` — OAuth credentials and installation metadata
+- `operator_feed_events` — event log for operator CLI
 
-## Request Flow
+## Workflow Files
 
-### 1. Webhook Intake
+The repository should contain:
 
-PatchRelay:
+- `IMPLEMENTATION_WORKFLOW.md` — guidance for implementation, CI repair, and queue repair runs
+- `REVIEW_WORKFLOW.md` — guidance for review fix runs
 
-- reads the raw request body
-- verifies the Linear HMAC signature
-- validates timestamp freshness
-- deduplicates by delivery id
-- persists a webhook receipt row
-- enqueues asynchronous processing
+The run orchestrator reads these files and includes them in the Codex prompt. Keep them short and action-oriented.
 
-### 2. Issue Routing
+## What The Current Repo Should Optimize For
 
-PatchRelay resolves a local project from:
-
-- issue key prefix such as `USE`
-- Linear team metadata
-- optional labels
-- allowed trigger events
-
-Issue key prefix is the primary routing key.
-
-### 3. Desired Stage Recording
-
-PatchRelay maps Linear states to internal stages:
-
-- `Start` -> `development`
-- `Review` -> `review`
-- `Deploy` -> `deploy`
-- optional configured cleanup state -> `cleanup`
-
-When PatchRelay claims a stage, it also moves the issue into the matching active state:
-
-- `development` -> `Implementing`
-- `review` -> `Reviewing`
-- `deploy` -> `Deploying`
-
-The service records the desired stage even if another stage is still running.
-For app-mode projects, PatchRelay only records a new desired stage from native agent-session events such as delegation or mention prompts. Bare issue state changes no longer launch work on their own.
-
-### 4. Workspace Preparation
-
-When no active stage run exists, PatchRelay:
-
-1. computes the worktree path from the issue key
-2. computes the branch name from the configured prefix, issue key, and title
-3. reuses the existing issue worktree when present, otherwise creates it from repository `HEAD`
-4. creates or reuses the issue workspace row
-
-### 5. Codex Thread Execution
-
-For the next stage run:
-
-- if this is the first stage for the issue, PatchRelay calls `thread/start`
-- if a prior stage exists, PatchRelay calls `thread/fork`
-- PatchRelay then calls `turn/start` with the issue context and workflow file contents
-- for delegated Linear agent sessions, PatchRelay first sends a native agent-session acknowledgement and refreshes session presentation such as the external status URL and workflow plan
-- while preparing the run, PatchRelay also claims the matching active Linear state and applies configured workflow labels
-- after the turn is live, PatchRelay flushes any queued Linear agent input and best-effort refreshes either the native Linear agent session presentation or, for fallback flows, the service-owned running status comment
-
-The resulting thread id and turn id are persisted immediately.
-
-### 6. Observation And Completion
-
-PatchRelay listens to `codex app-server` notifications such as:
-
-- `turn/started`
-- `turn/completed`
-- `item/started`
-- `item/completed`
-- `item/agentMessage/delta`
-- `turn/plan/updated`
-- `turn/diff/updated`
-
-On `turn/completed`, PatchRelay:
-
-1. stores the final notification
-2. reads the full thread with `thread/read`
-3. synthesizes a stage report
-4. marks the stage run completed or failed
-5. re-reads Linear to see whether the agent advanced the issue to a final handoff state
-6. if the issue is still in the active state PatchRelay set, updates the native Linear agent session handoff state when available, otherwise refreshes the service-owned Linear comment, and updates workflow labels to flag that handoff is still needed
-7. if the issue has already moved on, clears any service-owned workflow labels
-8. launches any queued next stage
-
-If stage launch fails before a turn is live, PatchRelay marks the stage failed locally, rolls the issue to the configured fallback Linear state such as `Human Needed`, removes service-owned workflow labels, and publishes the failure through the native Linear agent session when available, otherwise through the service-owned comment. If PatchRelay later finds an unrecoverable active stage during startup reconciliation, it applies the same failure sync back to Linear only when the issue is still in the service-owned active state.
-
-## Reconciliation And Restart
-
-Restart behavior is a first-class architectural requirement.
-
-After process startup, PatchRelay must reconcile three realities:
-
-1. Linear state
-2. local harness state
-3. Codex thread and stage state
-
-The reconciliation loop should answer:
-
-- is this issue still eligible for the stage PatchRelay last claimed
-- is there an active stage that can continue, or only state that needs cleanup
-- does Linear still reflect the service-owned active state, or has a human already moved the issue on
-- should PatchRelay resume, queue follow-up work, or fail the stage back to a human-needed state
-
-This is why PatchRelay persists stage ownership and issue-to-thread correlation instead of relying only on Linear or only on Codex. Linear is the control surface, Codex is the source of thread history, and PatchRelay is the layer that makes restart recovery deterministic.
-
-## Why App-Server
-
-This design intentionally avoids terminal multiplexers as the workflow backbone.
-
-We need:
-
-- durable thread ids
-- resumable and forkable stage history
-- read-only inspection after a run finishes
-- stage sequencing independent from terminal session lifetime
-
-`codex app-server` provides those primitives directly.
-
-## Persistence Summary
-
-SQLite stores:
-
-- webhook receipts
-- issue control
-- issue projection
-- workspace ownership
-- run leases
-- obligations
-- run reports
-- run thread events
-- installation and OAuth state
-
-The database is not a copy of Codex thread history. It is the harness ledger that points to thread history and caches reports.
-
-## Operator Surface
-
-PatchRelay always exposes local management routes for:
-
-- Linear OAuth start and callback handling
-- installation listing
-- project-to-installation linking
-
-When `operator_api.enabled` is on, PatchRelay also exposes:
-
-- issue overview by issue key
-- stage reports by issue key
-- live active-stage status by issue key
-- raw stage event history by issue key and stage run id
-
-The operator can inspect what happened without attaching to a live terminal.
+- docs that an agent can navigate quickly
+- flat, direct orchestration code over layered abstractions
+- making local execution per worktree cheap and repeatable
+- keeping every important decision visible in-repo

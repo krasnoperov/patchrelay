@@ -1,48 +1,14 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { runPreflight } from "../src/preflight.ts";
 import type { AppConfig } from "../src/types.ts";
 
-function createWorkflows(baseDir: string) {
-  return [
-    {
-      id: "development",
-      whenState: "Start",
-      activeState: "Implementing",
-      workflowFile: path.join(baseDir, "IMPLEMENTATION_WORKFLOW.md"),
-      fallbackState: "Human Needed",
-    },
-    {
-      id: "review",
-      whenState: "Review",
-      activeState: "Reviewing",
-      workflowFile: path.join(baseDir, "REVIEW_WORKFLOW.md"),
-      fallbackState: "Human Needed",
-    },
-    {
-      id: "deploy",
-      whenState: "Deploy",
-      activeState: "Deploying",
-      workflowFile: path.join(baseDir, "DEPLOY_WORKFLOW.md"),
-      fallbackState: "Human Needed",
-    },
-    {
-      id: "cleanup",
-      whenState: "Cleanup",
-      activeState: "Cleaning Up",
-      workflowFile: path.join(baseDir, "CLEANUP_WORKFLOW.md"),
-      fallbackState: "Human Needed",
-    },
-  ];
-}
 
-function writeWorkflowFiles(config: AppConfig): void {
-  for (const workflow of config.projects[0].workflows) {
-    writeFileSync(workflow.workflowFile, `# ${workflow.id}\n`, "utf8");
-  }
+function writeWorkflowFiles(_config: AppConfig): void {
+  // No workflow files needed — factory state machine replaces workflow definitions
 }
 
 function createConfig(baseDir: string): AppConfig {
@@ -56,6 +22,7 @@ function createConfig(baseDir: string): AppConfig {
     },
     ingress: {
       linearWebhookPath: "/webhooks/linear",
+      githubWebhookPath: "/webhooks/github",
       maxBodyBytes: 262144,
       maxTimestampSkewSeconds: 60,
     },
@@ -98,7 +65,6 @@ function createConfig(baseDir: string): AppConfig {
         id: "usertold",
         repoPath: path.join(baseDir, "repo"),
         worktreeRoot: path.join(baseDir, "worktrees"),
-        workflows: createWorkflows(baseDir),
         issueKeyPrefixes: ["USE"],
         linearTeamIds: ["USE"],
         allowLabels: [],
@@ -124,28 +90,6 @@ test("runPreflight reports a healthy local setup", async () => {
     assert.ok(report.checks.some((check) => check.scope === "codex" && check.status === "pass"));
     assert.ok(report.checks.some((check) => check.scope === "public_url" && check.status === "pass"));
     assert.ok(report.checks.some((check) => check.scope === "database_schema" && check.status === "pass"));
-  } finally {
-    rmSync(baseDir, { recursive: true, force: true });
-  }
-});
-
-test("runPreflight fails when workflow files are missing", async () => {
-  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-preflight-missing-"));
-
-  try {
-    const config = createConfig(baseDir);
-    mkdirSync(config.projects[0].repoPath, { recursive: true });
-
-    const report = await runPreflight(config);
-
-    assert.equal(report.ok, false);
-    assert.ok(
-      report.checks.some(
-        (check) =>
-          check.scope === "project:usertold:workflow:default:development" &&
-          check.status === "fail",
-      ),
-    );
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -202,7 +146,7 @@ test("runPreflight does not require cleanup workflow files when cleanup is disab
   try {
     const config = createConfig(baseDir);
     mkdirSync(config.projects[0].repoPath, { recursive: true });
-    config.projects[0].workflows = config.projects[0].workflows.filter((workflow) => workflow.id !== "cleanup");
+    // Workflow filtering removed — no workflow definitions in factory model
     writeWorkflowFiles(config);
 
     const report = await runPreflight(config);

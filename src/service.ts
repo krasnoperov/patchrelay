@@ -1,20 +1,10 @@
 import type { Logger } from "pino";
 import type { CodexAppServerClient, CodexNotification } from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
-import type {
-  EventReceiptStoreProvider,
-  IssueControlStoreProvider,
-  IssueSessionStoreProvider,
-  ObligationStoreProvider,
-  RunLeaseStoreProvider,
-  WorkspaceOwnershipStoreProvider,
-} from "./ledger-ports.ts";
-import type { LinearInstallationStoreProvider } from "./installation-ports.ts";
-import type { StageEventLogStoreProvider } from "./stage-event-ports.ts";
-import type { IssueWorkflowCoordinatorProvider, IssueWorkflowQueryStoreProvider, ReadyIssueSource } from "./workflow-ports.ts";
-import type { WebhookEventStoreProvider } from "./webhook-event-ports.ts";
+import { GitHubWebhookHandler } from "./github-webhook-handler.ts";
 import { IssueQueryService } from "./issue-query-service.ts";
 import { LinearOAuthService } from "./linear-oauth-service.ts";
+import { RunOrchestrator } from "./run-orchestrator.ts";
 import { OperatorEventFeed, type OperatorFeedQuery } from "./operator-feed.ts";
 import {
   buildSessionStatusUrl,
@@ -23,60 +13,15 @@ import {
   verifySessionStatusToken,
 } from "./public-agent-session-status.ts";
 import { ServiceRuntime } from "./service-runtime.ts";
-import { ServiceStageFinalizer } from "./service-stage-finalizer.ts";
-import { type IssueQueueItem, ServiceStageRunner } from "./service-stage-runner.ts";
-import { ServiceWebhookProcessor } from "./service-webhook-processor.ts";
+import { WebhookHandler } from "./webhook-handler.ts";
 import { acceptIncomingWebhook } from "./service-webhooks.ts";
 import type { AppConfig, LinearClient, LinearClientProvider } from "./types.ts";
 
-type ServiceStores = WebhookEventStoreProvider &
-  EventReceiptStoreProvider &
-  IssueControlStoreProvider &
-  IssueSessionStoreProvider &
-  WorkspaceOwnershipStoreProvider &
-  RunLeaseStoreProvider &
-  ObligationStoreProvider &
-  IssueWorkflowCoordinatorProvider &
-  IssueWorkflowQueryStoreProvider &
-  StageEventLogStoreProvider &
-  LinearInstallationStoreProvider;
-
-function createServiceStores(db: PatchRelayDatabase): ServiceStores {
-  return {
-    webhookEvents: db.webhookEvents,
-    eventReceipts: db.eventReceipts,
-    issueControl: db.issueControl,
-    issueSessions: db.issueSessions,
-    workspaceOwnership: db.workspaceOwnership,
-    runLeases: db.runLeases,
-    obligations: db.obligations,
-    workflowCoordinator: db.workflowCoordinator,
-    issueWorkflows: db.issueWorkflows,
-    stageEvents: db.stageEvents,
-    linearInstallations: db.linearInstallations,
-  };
-}
-
-function createReadyIssueSource(stores: ServiceStores): ReadyIssueSource {
-  return {
-    listIssuesReadyForExecution: () =>
-      stores.issueControl.listIssueControlsReadyForLaunch().map((issue) => ({
-        projectId: issue.projectId,
-        linearIssueId: issue.linearIssueId,
-      })),
-  };
-}
-
-// PatchRelayService wires together the harness layers:
-// - integration: webhook intake, OAuth, Linear client access
-// - coordination: runtime queueing, stage launch, completion, reconciliation
-// - execution: Codex app-server and worktree-backed stage runs
-// - observability: issue/report query surfaces
 export class PatchRelayService {
   readonly linearProvider: LinearClientProvider;
-  private readonly stageRunner: ServiceStageRunner;
-  private readonly stageFinalizer: ServiceStageFinalizer;
-  private readonly webhookProcessor: ServiceWebhookProcessor;
+  private readonly orchestrator: RunOrchestrator;
+  private readonly webhookHandler: WebhookHandler;
+  private readonly githubWebhookHandler: GitHubWebhookHandler;
   private readonly oauthService: LinearOAuthService;
   private readonly queryService: IssueQueryService;
   private readonly runtime: ServiceRuntime;
@@ -91,56 +36,48 @@ export class PatchRelayService {
   ) {
     this.linearProvider = toLinearClientProvider(linearProvider);
     this.feed = new OperatorEventFeed(db.operatorFeed);
-    const stores = createServiceStores(db);
-    this.stageRunner = new ServiceStageRunner(
-      config,
-      stores,
-      codex,
-      this.linearProvider,
-      logger,
-      (fn) => db.connection.transaction(fn)(),
-      this.feed,
-    );
+
     let enqueueIssue: (projectId: string, issueId: string) => void = () => {
       throw new Error("Service runtime enqueueIssue is not initialized");
     };
 
-    this.stageFinalizer = new ServiceStageFinalizer(
-      config,
-      stores,
-      codex,
-      this.linearProvider,
-      (projectId, issueId) => enqueueIssue(projectId, issueId),
-      logger,
-      this.feed,
-      (fn) => db.connection.transaction(fn)(),
+    this.orchestrator = new RunOrchestrator(
+      config, db, codex, this.linearProvider,
+      (projectId: string, issueId: string) => enqueueIssue(projectId, issueId),
+      logger, this.feed,
     );
-    this.webhookProcessor = new ServiceWebhookProcessor(
+
+    this.webhookHandler = new WebhookHandler(
       config,
-      stores,
+      db,
       this.linearProvider,
       codex,
       (projectId, issueId) => enqueueIssue(projectId, issueId),
       logger,
       this.feed,
+    );
+
+    this.githubWebhookHandler = new GitHubWebhookHandler(
+      config, db, this.linearProvider,
+      (projectId, issueId) => enqueueIssue(projectId, issueId),
+      logger, this.feed,
     );
     const runtime = new ServiceRuntime(
       codex,
       logger,
-      this.stageFinalizer,
-      createReadyIssueSource(stores),
-      this.webhookProcessor,
-      {
-        processIssue: (item) => this.stageRunner.run(item),
-      },
+      this.orchestrator,
+      { listIssuesReadyForExecution: () => db.listIssuesReadyForExecution() },
+      this.webhookHandler,
+      { processIssue: (item: { projectId: string; issueId: string }) => this.orchestrator.run(item) },
     );
     enqueueIssue = (projectId, issueId) => runtime.enqueueIssue(projectId, issueId);
-    this.oauthService = new LinearOAuthService(config, stores, logger);
-    this.queryService = new IssueQueryService(stores, codex, this.stageFinalizer);
+
+    this.oauthService = new LinearOAuthService(config, { linearInstallations: db.linearInstallations }, logger);
+    this.queryService = new IssueQueryService(db, codex, this.orchestrator);
     this.runtime = runtime;
 
     this.codex.on("notification", (notification: CodexNotification) => {
-      void this.stageFinalizer.handleCodexNotification(notification);
+      void this.orchestrator.handleCodexNotification(notification);
     });
   }
 
@@ -191,8 +128,12 @@ export class PatchRelayService {
     const result = await acceptIncomingWebhook({
       config: this.config,
       stores: {
-        webhookEvents: this.db.webhookEvents,
-        eventReceipts: this.db.eventReceipts,
+        webhookEvents: {
+          insertWebhookEvent: (p: { webhookId: string; receivedAt: string; payloadJson: string }) => {
+            const r = this.db.insertFullWebhookEvent(p);
+            return { id: r.id, dedupeStatus: r.dedupeStatus };
+          },
+        },
       },
       logger: this.logger,
       webhookId: params.webhookId,
@@ -210,12 +151,29 @@ export class PatchRelayService {
     };
   }
 
-  async processWebhookEvent(webhookEventId: number): Promise<void> {
-    await this.webhookProcessor.processWebhookEvent(webhookEventId);
+  async acceptGitHubWebhook(params: {
+    deliveryId: string;
+    eventType: string;
+    signature: string;
+    rawBody: Buffer;
+  }): Promise<{ status: number; body: Record<string, unknown> }> {
+    const result = await this.githubWebhookHandler.acceptGitHubWebhook(params);
+    if (result.body.accepted && result.body.webhookEventId) {
+      // Process inline since GitHub events are lightweight (just PR state updates)
+      await this.githubWebhookHandler.processGitHubWebhookEvent({
+        eventType: params.eventType,
+        rawBody: params.rawBody.toString("utf8"),
+      });
+    }
+    return result;
   }
 
-  async processIssue(item: IssueQueueItem): Promise<void> {
-    await this.stageRunner.run(item);
+  async processWebhookEvent(webhookEventId: number): Promise<void> {
+    await this.webhookHandler.processWebhookEvent(webhookEventId);
+  }
+
+  async processIssue(item: { projectId: string; issueId: string }): Promise<void> {
+    await this.orchestrator.run(item);
   }
 
   async getIssueOverview(issueKey: string) {
@@ -226,22 +184,19 @@ export class PatchRelayService {
     return await this.queryService.getIssueReport(issueKey);
   }
 
-  async getStageEvents(issueKey: string, stageRunId: number) {
-    return await this.queryService.getStageEvents(issueKey, stageRunId);
+  async getRunEvents(issueKey: string, runId: number) {
+    return await this.queryService.getRunEvents(issueKey, runId);
   }
 
-  async getActiveStageStatus(issueKey: string) {
-    return await this.queryService.getActiveStageStatus(issueKey);
+  async getActiveRunStatus(issueKey: string) {
+    return await this.orchestrator.getActiveRunStatus(issueKey);
   }
 
   createPublicAgentSessionStatusLink(
     issueKey: string,
     options?: { nowMs?: number; ttlSeconds?: number },
   ): { url: string; issueKey: string; expiresAt: string } | undefined {
-    if (!this.config.server.publicBaseUrl) {
-      return undefined;
-    }
-
+    if (!this.config.server.publicBaseUrl) return undefined;
     const signingSecret = deriveSessionStatusSigningSecret(this.config.linear.tokenEncryptionKey);
     const token = createSessionStatusToken({
       issueKey,
@@ -250,11 +205,7 @@ export class PatchRelayService {
       ...(options?.ttlSeconds !== undefined ? { ttlSeconds: options.ttlSeconds } : {}),
     });
     return {
-      url: buildSessionStatusUrl({
-        publicBaseUrl: this.config.server.publicBaseUrl,
-        issueKey,
-        token: token.token,
-      }),
+      url: buildSessionStatusUrl({ publicBaseUrl: this.config.server.publicBaseUrl, issueKey, token: token.token }),
       issueKey: token.issueKey,
       expiresAt: token.expiresAt,
     };
@@ -279,12 +230,8 @@ export class PatchRelayService {
     if (!parsed || parsed.issueKey.trim().toLowerCase() !== params.issueKey.trim().toLowerCase()) {
       return { status: "invalid_token" };
     }
-
     const sessionStatus = await this.queryService.getPublicAgentSessionStatus(params.issueKey);
-    if (!sessionStatus) {
-      return { status: "issue_not_found" };
-    }
-
+    if (!sessionStatus) return { status: "issue_not_found" };
     return {
       status: "ok",
       issueKey: params.issueKey,
@@ -298,7 +245,6 @@ function toLinearClientProvider(linear: LinearClientProvider | LinearClient | un
   if (linear && typeof (linear as LinearClientProvider).forProject === "function") {
     return linear as LinearClientProvider;
   }
-
   return {
     async forProject(): Promise<LinearClient | undefined> {
       return linear as LinearClient | undefined;

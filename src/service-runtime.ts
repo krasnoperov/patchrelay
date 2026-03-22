@@ -1,6 +1,5 @@
 import type { Logger } from "pino";
 import type { CodexAppServerClient } from "./codex-app-server.ts";
-import type { ActiveStageRunReconciler, ReadyIssueSource } from "./workflow-ports.ts";
 import { SerialWorkQueue } from "./service-queue.ts";
 
 const ISSUE_KEY_DELIMITER = "::";
@@ -20,58 +19,23 @@ export interface IssueExecutionProcessor {
   processIssue(item: RuntimeIssueQueueItem): Promise<void>;
 }
 
+export interface ActiveRunReconciler {
+  reconcileActiveRuns(): Promise<void>;
+}
+
+export interface ReadyIssueSource {
+  listIssuesReadyForExecution(): Array<{ projectId: string; linearIssueId: string }>;
+}
+
 export interface ServiceRuntimeOptions {
   reconcileIntervalMs?: number;
   reconcileTimeoutMs?: number;
-}
-
-type LegacyReconcileActiveStageRuns = () => Promise<void>;
-type LegacyListIssuesReadyForExecution = () => Array<{ projectId: string; linearIssueId: string }>;
-type LegacyProcessWebhookEvent = (eventId: number) => Promise<void>;
-type LegacyProcessIssue = (item: RuntimeIssueQueueItem) => Promise<void>;
-
-function toReconciler(value: ActiveStageRunReconciler | LegacyReconcileActiveStageRuns): ActiveStageRunReconciler {
-  if (typeof value === "function") {
-    return {
-      reconcileActiveStageRuns: value,
-    };
-  }
-  return value;
-}
-
-function toReadyIssueSource(value: ReadyIssueSource | LegacyListIssuesReadyForExecution): ReadyIssueSource {
-  if (typeof value === "function") {
-    return {
-      listIssuesReadyForExecution: value,
-    };
-  }
-  return value;
-}
-
-function toWebhookProcessor(value: WebhookEventProcessor | LegacyProcessWebhookEvent): WebhookEventProcessor {
-  if (typeof value === "function") {
-    return {
-      processWebhookEvent: value,
-    };
-  }
-  return value;
-}
-
-function toIssueProcessor(value: IssueExecutionProcessor | LegacyProcessIssue): IssueExecutionProcessor {
-  if (typeof value === "function") {
-    return {
-      processIssue: value,
-    };
-  }
-  return value;
 }
 
 function makeIssueQueueKey(item: RuntimeIssueQueueItem): string {
   return `${item.projectId}${ISSUE_KEY_DELIMITER}${item.issueId}`;
 }
 
-// ServiceRuntime is the coordination seam for the harness. It is responsible for
-// startup reconciliation, queue ownership, and handing eligible work to the stage runner.
 export class ServiceRuntime {
   readonly webhookQueue: SerialWorkQueue<number>;
   readonly issueQueue: SerialWorkQueue<RuntimeIssueQueueItem>;
@@ -83,31 +47,20 @@ export class ServiceRuntime {
   constructor(
     private readonly codex: CodexAppServerClient,
     private readonly logger: Logger,
-    stageRunReconciler: ActiveStageRunReconciler | LegacyReconcileActiveStageRuns,
-    readyIssueSource: ReadyIssueSource | LegacyListIssuesReadyForExecution,
-    webhookProcessor: WebhookEventProcessor | LegacyProcessWebhookEvent,
-    issueProcessor: IssueExecutionProcessor | LegacyProcessIssue,
+    private readonly runReconciler: ActiveRunReconciler,
+    private readonly readyIssueSource: ReadyIssueSource,
+    webhookProcessor: WebhookEventProcessor,
+    issueProcessor: IssueExecutionProcessor,
     private readonly options: ServiceRuntimeOptions = {},
   ) {
-    this.stageRunReconciler = toReconciler(stageRunReconciler);
-    this.readyIssueSource = toReadyIssueSource(readyIssueSource);
-    this.webhookProcessor = toWebhookProcessor(webhookProcessor);
-    this.issueProcessor = toIssueProcessor(issueProcessor);
-    this.webhookQueue = new SerialWorkQueue((eventId) => this.webhookProcessor.processWebhookEvent(eventId), logger, (eventId) => String(eventId));
-    this.issueQueue = new SerialWorkQueue((item) => this.issueProcessor.processIssue(item), logger, makeIssueQueueKey);
+    this.webhookQueue = new SerialWorkQueue((eventId) => webhookProcessor.processWebhookEvent(eventId), logger, (eventId) => String(eventId));
+    this.issueQueue = new SerialWorkQueue((item) => issueProcessor.processIssue(item), logger, makeIssueQueueKey);
   }
-
-  private readonly stageRunReconciler: ActiveStageRunReconciler;
-  private readonly readyIssueSource: ReadyIssueSource;
-  private readonly webhookProcessor: WebhookEventProcessor;
-  private readonly issueProcessor: IssueExecutionProcessor;
 
   async start(): Promise<void> {
     try {
       await this.codex.start();
-      // Reconciliation happens before new work is enqueued so restart recovery can
-      // resolve or release any previously claimed work deterministically.
-      await this.stageRunReconciler.reconcileActiveStageRuns();
+      await this.runReconciler.reconcileActiveRuns();
       for (const issue of this.readyIssueSource.listIssuesReadyForExecution()) {
         this.enqueueIssue(issue.projectId, issue.linearIssueId);
       }
@@ -160,9 +113,7 @@ export class ServiceRuntime {
   }
 
   private async runBackgroundReconcile(): Promise<void> {
-    if (!this.ready || !this.codex.isStarted()) {
-      return;
-    }
+    if (!this.ready || !this.codex.isStarted()) return;
     if (this.reconcileInProgress) {
       this.scheduleBackgroundReconcile();
       return;
@@ -171,16 +122,14 @@ export class ServiceRuntime {
     this.reconcileInProgress = true;
     try {
       await promiseWithTimeout(
-        this.stageRunReconciler.reconcileActiveStageRuns(),
+        this.runReconciler.reconcileActiveRuns(),
         this.options.reconcileTimeoutMs ?? DEFAULT_RECONCILE_TIMEOUT_MS,
-        "Background active-stage reconciliation",
+        "Background active-run reconciliation",
       );
     } catch (error) {
       this.logger.warn(
-        {
-          error: error instanceof Error ? error.message : String(error),
-        },
-        "Background active-stage reconciliation failed",
+        { error: error instanceof Error ? error.message : String(error) },
+        "Background active-run reconciliation failed",
       );
     } finally {
       this.reconcileInProgress = false;
@@ -197,16 +146,9 @@ function promiseWithTimeout<T>(promise: Promise<T>, timeoutMs: number, label: st
       reject(new Error(`${label} timed out after ${timeoutMs}ms`));
     }, timeoutMs);
     timeout.unref?.();
-
     promise.then(
-      (value) => {
-        clearTimeout(timeout);
-        resolve(value);
-      },
-      (error) => {
-        clearTimeout(timeout);
-        reject(error);
-      },
+      (value) => { clearTimeout(timeout); resolve(value); },
+      (error) => { clearTimeout(timeout); reject(error); },
     );
   });
 }

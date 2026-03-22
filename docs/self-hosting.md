@@ -6,8 +6,7 @@ This is the canonical install and runtime guide for PatchRelay.
 
 PatchRelay is designed to run on infrastructure you control, close to the repositories and deployment surface that Codex needs to access. In harness terms, self-hosting matters because PatchRelay is the execution system around the model: it routes work, prepares durable workspaces, carries forward state, and keeps runs inspectable in the real environment where the code lives.
 
-For the Linear OAuth app and delegation model, use [linear-agent-onboarding.md](./linear-agent-onboarding.md).
-For shipping updates to a live PatchRelay install, use [shipping.md](./shipping.md).
+For the architecture overview, see [architecture.md](./architecture.md).
 
 ## Deployment Shape
 
@@ -23,8 +22,8 @@ The common production shape is:
 
 1. PatchRelay runs locally and listens on `127.0.0.1:8787`.
 2. `patchrelay` CLI drives setup, authorization, and inspection.
-3. Caddy or another reverse proxy provides the public HTTPS entrypoint Linear can reach.
-4. Only `/`, `/health`, `/ready`, `/oauth/linear/callback`, and `POST /webhooks/linear` are published.
+3. Caddy or another reverse proxy provides the public HTTPS entrypoint Linear and GitHub can reach.
+4. Only `/`, `/health`, `/ready`, `/oauth/linear/callback`, `POST /webhooks/linear`, and `POST /webhooks/github` are published.
 5. PatchRelay reads and writes local git repos and worktrees directly.
 6. Codex runs through `codex app-server` on the same machine under the same user.
 
@@ -41,7 +40,7 @@ The common production shape is:
 
 ## Public Ingress
 
-Linear cannot call a service that only exists on loopback, so the normal setup needs both:
+Linear and GitHub cannot call a service that only exists on loopback, so the normal setup needs both:
 
 - PatchRelay bound locally, usually `127.0.0.1:8787`
 - a public HTTPS domain such as `https://patchrelay.example.com` forwarded to that local service by Caddy, nginx, or a tunnel
@@ -106,11 +105,9 @@ Common places to look:
 - Linear did nothing after a delegation or mention:
   check for webhook intake logs such as accepted, rejected, stale, or duplicate deliveries
 - the agent ignored a new Linear comment or prompt:
-  check for queued turn-input delivery logs and any `Failed to deliver queued Linear ... to active Codex turn` warnings
+  check for queued turn-input delivery logs and any delivery failure warnings
 - Codex execution looks broken or stops unexpectedly:
   check for `Starting Codex app-server`, `Codex app-server request failed`, `Codex app-server stderr`, or `Codex app-server exited`
-- Codex finished but Linear comments, labels, or handoff state look wrong:
-  check for `Stage completed locally but PatchRelay could not finish the final Linear sync`
 
 The most useful correlation fields in logs are:
 
@@ -118,13 +115,12 @@ The most useful correlation fields in logs are:
 - `webhookEventId`
 - `projectId`
 - `issueKey`
-- `issueId`
-- `stageRunId`
+- `runType`
 - `threadId`
 - `turnId`
 - `agentSessionId`
 
-The generated `patchrelay.json` stays intentionally minimal. In the default setup it only needs `server.public_base_url`; PatchRelay already has built-in defaults for the local bind address, database path, logs, worktree roots, workflow filenames, workflow states, and Codex runner settings.
+The generated `patchrelay.json` stays intentionally minimal. In the default setup it only needs `server.public_base_url`; PatchRelay already has built-in defaults for the local bind address, database path, logs, worktree roots, workflow filenames, and Codex runner settings.
 
 `patchrelay init` also installs the user service and a watcher that reload-or-restarts PatchRelay whenever `patchrelay.json`, `runtime.env`, or `service.env` changes.
 
@@ -144,7 +140,7 @@ Optional non-secret overrides such as `PATCHRELAY_CONFIG`, `PATCHRELAY_DB_PATH`,
 Keep these values machine-level. They belong in PatchRelay's own env files, not inside repository `.env` files.
 PatchRelay reads `runtime.env` for non-secret runtime overrides and `service.env` for service credentials. Read-only local inspection commands use local state and do not require exporting these values in your shell.
 
-For the Linear OAuth app settings and webhook categories, use [linear-agent-onboarding.md](./linear-agent-onboarding.md).
+Configure the Linear OAuth app settings and webhook categories in your Linear workspace settings.
 
 ## 4. Configure Projects
 
@@ -174,19 +170,9 @@ Add repositories with `patchrelay project apply <id> <repo-path>`. A project onl
 - it reuses or starts the Linear authorization flow when the local setup is ready
 - if workflow files or secrets are still missing, it tells you what to fix and can be rerun safely
 
-PatchRelay is convention-first here:
+Default trigger events for app-mode installs: `delegateChanged`, `statusChanged`, `agentSessionCreated`, `agentPrompted`, `commentCreated`, and `commentUpdated`.
 
-- by default it generates four workflow bindings per project: `development`, `review`, `deploy`, and `cleanup`
-- each binding maps one Linear state such as `Start` or `Deploy` to one repo workflow file
-- by default it looks for `IMPLEMENTATION_WORKFLOW.md`, `REVIEW_WORKFLOW.md`, `DEPLOY_WORKFLOW.md`, and `CLEANUP_WORKFLOW.md` in each repo root
-- by default it uses `delegateChanged`, `statusChanged`, `agentSessionCreated`, `agentPrompted`, `commentCreated`, and `commentUpdated` as trigger events for app-mode installs
-- edit `projects[].workflows` when you want different state names, active states, workflow ids, or workflow file paths
-- `worktree_root` defaults to `~/.local/share/patchrelay/worktrees/<project-id>`
-- `branch_prefix` defaults to a slug of the project id
-
-`projects[].trigger_events` is optional and mainly for advanced overrides. Keep the default set unless you have a specific reason to narrow it, because delegation and state changes are part of the automatic pipeline contract.
-
-Workflow file paths are resolved relative to `repo_path` unless you provide an absolute path. PatchRelay chooses a workflow by matching the current Linear state to `projects[].workflows[].when_state`, then moves the issue to that workflow's `active_state` while Codex is running.
+`worktree_root` defaults to `~/.local/share/patchrelay/worktrees/<project-id>`. `branch_prefix` defaults to a slug of the project id.
 
 If you want Linear itself to be part of your trust boundary, configure `trusted_actors` on each project. That allowlist can name specific owners by `id` or `email`, or define a group-style allowlist with `email_domains`.
 
@@ -194,19 +180,12 @@ If you want Linear itself to be part of your trust boundary, configure `trusted_
 
 Each automated repository should contain:
 
-- `IMPLEMENTATION_WORKFLOW.md`
-- `REVIEW_WORKFLOW.md`
-- `DEPLOY_WORKFLOW.md`
-- `CLEANUP_WORKFLOW.md` by default
+- `IMPLEMENTATION_WORKFLOW.md` — guidance for implementation, CI repair, and queue repair runs
+- `REVIEW_WORKFLOW.md` — guidance for review fix runs
 
-These files are the repo-local policy PatchRelay passes into each stage run. They should explain what the agent is allowed to do in that repository, what validation is required, and when final issue states should be moved.
+These files are the repo-local policy PatchRelay passes into each run. They should explain what the agent is allowed to do in that repository, what validation is required, and how to finish the work.
 
-Requirement references:
-
-- [IMPLEMENTATION_WORKFLOW_REQUIREMENTS.md](./IMPLEMENTATION_WORKFLOW_REQUIREMENTS.md)
-- [REVIEW_WORKFLOW_REQUIREMENTS.md](./REVIEW_WORKFLOW_REQUIREMENTS.md)
-- [DEPLOY_WORKFLOW_REQUIREMENTS.md](./DEPLOY_WORKFLOW_REQUIREMENTS.md)
-- [CLEANUP_WORKFLOW_REQUIREMENTS.md](./CLEANUP_WORKFLOW_REQUIREMENTS.md)
+Keep workflow files short and action-oriented. Codex performs better with concise instructions than with lengthy bureaucratic rules.
 
 ## 6. Validate And Operate
 
@@ -274,7 +253,7 @@ patchrelay restart-service
 Recommended production posture:
 
 - bind to loopback unless you have a strong reason not to
-- expose only `/`, `/health`, `/ready`, `/oauth/linear/callback`, and `POST /webhooks/linear`
+- expose only `/`, `/health`, `/ready`, `/oauth/linear/callback`, `POST /webhooks/linear`, and `POST /webhooks/github`
 - leave `operator_api.enabled` disabled unless you explicitly need the HTTP operator endpoints
 - require `PATCHRELAY_OPERATOR_TOKEN` if you enable the operator API on a non-loopback bind
 - treat workflow files and Codex runtime access as privileged automation policy

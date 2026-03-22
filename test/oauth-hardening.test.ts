@@ -5,42 +5,10 @@ import path from "node:path";
 import test from "node:test";
 import pino from "pino";
 import { PatchRelayDatabase } from "../src/db.ts";
-import { buildRunningStatusComment } from "../src/linear-workflow.ts";
+// buildRunningStatusComment removed — status comments replaced by agent activities
 import { PatchRelayService } from "../src/service.ts";
 import type { AppConfig } from "../src/types.ts";
 
-function createWorkflows(baseDir: string) {
-  return [
-    {
-      id: "development",
-      whenState: "Start",
-      activeState: "Implementing",
-      workflowFile: path.join(baseDir, "IMPLEMENTATION_WORKFLOW.md"),
-      fallbackState: "Human Needed",
-    },
-    {
-      id: "review",
-      whenState: "Review",
-      activeState: "Reviewing",
-      workflowFile: path.join(baseDir, "REVIEW_WORKFLOW.md"),
-      fallbackState: "Human Needed",
-    },
-    {
-      id: "deploy",
-      whenState: "Deploy",
-      activeState: "Deploying",
-      workflowFile: path.join(baseDir, "DEPLOY_WORKFLOW.md"),
-      fallbackState: "Human Needed",
-    },
-    {
-      id: "cleanup",
-      whenState: "Cleanup",
-      activeState: "Cleaning Up",
-      workflowFile: path.join(baseDir, "CLEANUP_WORKFLOW.md"),
-      fallbackState: "Human Needed",
-    },
-  ];
-}
 
 function buildConfig(baseDir: string): AppConfig {
   return {
@@ -52,6 +20,7 @@ function buildConfig(baseDir: string): AppConfig {
     },
     ingress: {
       linearWebhookPath: "/webhooks/linear",
+      githubWebhookPath: "/webhooks/github",
       maxBodyBytes: 262144,
       maxTimestampSkewSeconds: 60,
     },
@@ -96,7 +65,6 @@ function buildConfig(baseDir: string): AppConfig {
         id: "usertold",
         repoPath: path.join(baseDir, "repo"),
         worktreeRoot: path.join(baseDir, "worktrees"),
-        workflows: createWorkflows(baseDir),
         issueKeyPrefixes: ["USE"],
         linearTeamIds: ["USE"],
         allowLabels: [],
@@ -147,35 +115,4 @@ test("completeLinearOAuth rejects expired OAuth states and marks them failed", a
   }
 });
 
-test("running status comments omit the absolute worktree path", () => {
-  const comment = buildRunningStatusComment({
-    issue: {
-      id: 1,
-      projectId: "usertold",
-      linearIssueId: "issue-1",
-      issueKey: "USE-12",
-      lifecycleStatus: "running",
-      updatedAt: new Date().toISOString(),
-    },
-    stageRun: {
-      id: 1,
-      pipelineRunId: 1,
-      projectId: "usertold",
-      linearIssueId: "issue-1",
-      workspaceId: 1,
-      stage: "development",
-      status: "running",
-      triggerWebhookId: "delivery-1",
-      workflowFile: "/tmp/workflow.md",
-      promptText: "Implement carefully",
-      threadId: "thread-1",
-      turnId: "turn-1",
-      startedAt: new Date().toISOString(),
-    },
-    branchName: "use/USE-12",
-  });
-
-  assert.match(comment, /Branch: `use\/USE-12`/);
-  assert.doesNotMatch(comment, /Worktree:/);
-  assert.doesNotMatch(comment, /\/tmp\/private\/worktrees\/USE-12/);
-});
+// Status comment test removed — status comments replaced by agent activities

@@ -4,7 +4,6 @@ import { runPatchRelayMigrations } from "./db/migrations.ts";
 import { SqliteConnection } from "./db/shared.ts";
 import type { AppConfig } from "./types.ts";
 import { execCommand } from "./utils.ts";
-import { listProjectWorkflowDefinitions } from "./workflow-policy.ts";
 
 export interface PreflightCheck {
   status: "pass" | "warn" | "fail";
@@ -109,11 +108,7 @@ export async function runPreflight(config: AppConfig): Promise<PreflightReport> 
   for (const project of config.projects) {
     checks.push(...checkPath(`project:${project.id}:repo`, project.repoPath, "directory", { writable: true }));
     checks.push(...checkPath(`project:${project.id}:worktrees`, project.worktreeRoot, "directory", { createIfMissing: true, writable: true }));
-    for (const definition of listProjectWorkflowDefinitions(project)) {
-      for (const workflow of definition.stages) {
-        checks.push(...checkPath(`project:${project.id}:workflow:${definition.id}:${workflow.id}`, workflow.workflowFile, "file", {}));
-      }
-    }
+    // Workflow file checks removed — factory state machine replaces workflow definitions
   }
 
   checks.push(await checkExecutable("git", config.runner.gitBin));

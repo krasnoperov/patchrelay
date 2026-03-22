@@ -27,6 +27,7 @@ function createConfig(): AppConfig {
     },
     ingress: {
       linearWebhookPath: "/webhooks/linear",
+      githubWebhookPath: "/webhooks/github",
       maxBodyBytes: 1024 * 1024,
       maxTimestampSkewSeconds: 300,
     },

@@ -1,9 +1,7 @@
 import type { Logger } from "pino";
-import type { EventReceiptStoreProvider } from "./ledger-ports.ts";
-import type { WebhookEventStoreProvider } from "./webhook-event-ports.ts";
 import type { AppConfig, LinearWebhookPayload, NormalizedEvent } from "./types.ts";
 import { normalizeWebhook } from "./webhooks.ts";
-import { redactSensitiveHeaders, timestampMsWithinSkew, verifyHmacSha256Hex } from "./utils.ts";
+import { timestampMsWithinSkew, verifyHmacSha256Hex } from "./utils.ts";
 
 export interface AcceptedWebhook {
   id: number;
@@ -11,9 +9,19 @@ export interface AcceptedWebhook {
   payload: LinearWebhookPayload;
 }
 
+interface WebhookEventStorelike {
+  insertWebhookEvent(params: {
+    webhookId: string;
+    receivedAt: string;
+    payloadJson: string;
+  }): { id: number; dedupeStatus?: string };
+}
+
 export async function acceptIncomingWebhook(params: {
   config: AppConfig;
-  stores: WebhookEventStoreProvider & EventReceiptStoreProvider;
+  stores: {
+    webhookEvents: WebhookEventStorelike;
+  };
   logger: Logger;
   webhookId: string;
   headers: Record<string, string | string[] | undefined>;
@@ -52,17 +60,12 @@ export async function acceptIncomingWebhook(params: {
 
   let normalized: NormalizedEvent;
   try {
-    normalized = normalizeWebhook({
-      webhookId: params.webhookId,
-      payload,
-    });
+    normalized = normalizeWebhook({ webhookId: params.webhookId, payload });
   } catch (error) {
     params.logger.warn({ webhookId: params.webhookId, error }, "Rejecting unsupported webhook payload");
     return { status: 400, body: { ok: false, reason: "unsupported_payload" } };
   }
 
-  const sanitizedHeaders = redactSensitiveHeaders(params.headers);
-  const headersJson = JSON.stringify(sanitizedHeaders);
   const payloadJson = JSON.stringify(payload);
 
   logWebhookSummary(params.logger, normalized);
@@ -70,32 +73,14 @@ export async function acceptIncomingWebhook(params: {
   const stored = params.stores.webhookEvents.insertWebhookEvent({
     webhookId: params.webhookId,
     receivedAt,
-    eventType: normalized.eventType,
-    ...(normalized.issue ? { issueId: normalized.issue.id } : {}),
-    headersJson,
     payloadJson,
-    signatureValid: true,
-    dedupeStatus: "accepted",
   });
-  if (!stored.inserted) {
-    recordEventReceipt(params.stores, {
-      webhookId: params.webhookId,
-      receivedAt,
-      normalized,
-      headersJson,
-      payloadJson,
-    });
+
+  const isDuplicate = stored.dedupeStatus === "duplicate";
+  if (isDuplicate) {
     params.logger.info({ webhookId: params.webhookId, webhookEventId: stored.id }, "Ignoring duplicate webhook delivery");
     return { status: 200, body: { ok: true, duplicate: true } };
   }
-
-  recordEventReceipt(params.stores, {
-    webhookId: params.webhookId,
-    receivedAt,
-    normalized,
-    headersJson,
-    payloadJson,
-  });
 
   params.logger.info(
     {
@@ -109,36 +94,10 @@ export async function acceptIncomingWebhook(params: {
   );
 
   return {
-    accepted: {
-      id: stored.id,
-      normalized,
-      payload,
-    },
+    accepted: { id: stored.id, normalized, payload },
     status: 200,
     body: { ok: true, accepted: true, webhookEventId: stored.id },
   };
-}
-
-function recordEventReceipt(
-  stores: EventReceiptStoreProvider,
-  params: {
-    webhookId: string;
-    receivedAt: string;
-    normalized: NormalizedEvent;
-    headersJson: string;
-    payloadJson: string;
-  },
-): void {
-  stores.eventReceipts.insertEventReceipt({
-    source: "linear-webhook",
-    externalId: params.webhookId,
-    eventType: params.normalized.eventType,
-    receivedAt: params.receivedAt,
-    acceptanceStatus: "accepted",
-    ...(params.normalized.issue ? { linearIssueId: params.normalized.issue.id } : {}),
-    headersJson: params.headersJson,
-    payloadJson: params.payloadJson,
-  });
 }
 
 function logWebhookSummary(logger: Logger, normalized: NormalizedEvent): void {
@@ -150,9 +109,7 @@ function logWebhookSummary(logger: Logger, normalized: NormalizedEvent): void {
     normalized.triggerEvent,
     stateName ? `to ${stateName}` : undefined,
     title ? `(${title})` : undefined,
-  ]
-    .filter(Boolean)
-    .join(" ");
+  ].filter(Boolean).join(" ");
 
   logger.info(
     {
@@ -166,11 +123,7 @@ function logWebhookSummary(logger: Logger, normalized: NormalizedEvent): void {
     summary,
   );
   logger.debug(
-    {
-      webhookId: normalized.webhookId,
-      eventType: normalized.eventType,
-      issueId: normalized.issue?.id,
-    },
+    { webhookId: normalized.webhookId, eventType: normalized.eventType, issueId: normalized.issue?.id },
     "Webhook metadata",
   );
 }
