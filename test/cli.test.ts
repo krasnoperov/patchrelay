@@ -795,15 +795,15 @@ test("cli resolves workspace, run context, and live summary from the unified iss
       }) as never,
     });
     const worktree = data.worktree("USE-57");
-    assert.equal(worktree?.workspace.worktreePath, path.join(config.projects[0].worktreeRoot, "USE-57"));
+    assert.equal(worktree?.worktreePath, path.join(config.projects[0].worktreeRoot, "USE-57"));
 
     const opened = data.open("USE-57");
     assert.equal(opened?.resumeThreadId, "thread-57");
 
     const inspect = await data.inspect("USE-57");
-    assert.equal(inspect?.activeStageRun?.stage, "development");
-    assert.equal(inspect?.activeStageRun?.threadId, "thread-57");
-    assert.equal(inspect?.latestStageRun?.stage, "development");
+    assert.equal(inspect?.activeRunTypeRun?.stage, "development");
+    assert.equal(inspect?.activeRunTypeRun?.threadId, "thread-57");
+    assert.equal(inspect?.latestRunTypeRun?.stage, "development");
 
     const live = await data.live("USE-57");
     assert.equal(live?.stageRun.stage, "development");
@@ -812,9 +812,9 @@ test("cli resolves workspace, run context, and live summary from the unified iss
 
     const list = data.list({ active: true });
     const listed = list.find((entry) => entry.issueKey === "USE-57");
-    assert.equal(listed?.activeStage, "development");
-    assert.equal(listed?.latestStage, "development");
-    assert.equal(listed?.latestStageStatus, "running");
+    assert.equal(listed?.activeRunType, "development");
+    assert.equal(listed?.latestRunType, "development");
+    assert.equal(listed?.latestRunTypeStatus, "running");
   } finally {
     data?.close();
     rmSync(baseDir, { recursive: true, force: true });
