@@ -84,7 +84,7 @@ export function hasHelpFlag(parsed: ParsedArgs): boolean {
   return parsed.flags.get("help") === true;
 }
 
-export function getStageFlag(value: string | boolean | undefined): string | undefined {
+export function getRunTypeFlag(value: string | boolean | undefined): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }

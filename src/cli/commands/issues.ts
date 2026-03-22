@@ -1,6 +1,6 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { AppConfig } from "../../types.ts";
-import { getStageFlag, parsePositiveIntegerFlag } from "../args.ts";
+import { getRunTypeFlag, parsePositiveIntegerFlag } from "../args.ts";
 import type { InteractiveRunner, Output, ParsedArgs } from "../command-types.ts";
 import type { CliDataAccess } from "../data.ts";
 import { formatJson } from "../formatters/json.ts";
@@ -57,11 +57,11 @@ export async function handleReportCommand(params: IssueCommandParams): Promise<n
     throw new Error("report requires <issueKey>.");
   }
   const reportOptions: { runType?: string; runId?: number } = {};
-  const stage = getStageFlag(params.parsed.flags.get("stage"));
-  if (stage) {
-    reportOptions.runType = stage;
+  const runType = getRunTypeFlag(params.parsed.flags.get("run-type"));
+  if (runType) {
+    reportOptions.runType = runType;
   }
-  const runId = parsePositiveIntegerFlag(params.parsed.flags.get("stage-run"), "--stage-run");
+  const runId = parsePositiveIntegerFlag(params.parsed.flags.get("run"), "--run");
   if (runId !== undefined) {
     reportOptions.runId = runId;
   }
@@ -80,7 +80,7 @@ export async function handleEventsCommand(params: IssueCommandParams): Promise<n
   }
   const follow = params.parsed.flags.get("follow") === true;
   let afterId: number | undefined;
-  let runId = parsePositiveIntegerFlag(params.parsed.flags.get("stage-run"), "--stage-run");
+  let runId = parsePositiveIntegerFlag(params.parsed.flags.get("run"), "--run");
   do {
     const result = params.data.events(issueKey, {
       ...(runId !== undefined ? { runId } : {}),
@@ -88,7 +88,7 @@ export async function handleEventsCommand(params: IssueCommandParams): Promise<n
       ...(afterId !== undefined ? { afterId } : {}),
     });
     if (!result) {
-      throw new Error(`Stage run not found for ${issueKey}`);
+      throw new Error(`Run not found for ${issueKey}`);
     }
     runId = result.run.id;
     if (result.events.length > 0) {
@@ -153,9 +153,9 @@ export async function handleRetryCommand(params: IssueCommandParams): Promise<nu
     throw new Error("retry requires <issueKey>.");
   }
   const retryOptions: { runType?: string; reason?: string } = {};
-  const stage = getStageFlag(params.parsed.flags.get("stage"));
-  if (stage) {
-    retryOptions.runType = stage;
+  const runType = getRunTypeFlag(params.parsed.flags.get("run-type"));
+  if (runType) {
+    retryOptions.runType = runType;
   }
   if (typeof params.parsed.flags.get("reason") === "string") {
     retryOptions.reason = String(params.parsed.flags.get("reason"));
