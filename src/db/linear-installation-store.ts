@@ -137,6 +137,21 @@ export class LinearInstallationStore {
     return this.getLinearInstallation(id);
   }
 
+  updateLinearInstallationIdentity(
+    id: number,
+    params: { workspaceName?: string; workspaceKey?: string },
+  ): void {
+    this.connection
+      .prepare(
+        `UPDATE linear_installations
+         SET workspace_name = COALESCE(?, workspace_name),
+             workspace_key = COALESCE(?, workspace_key),
+             updated_at = ?
+         WHERE id = ?`,
+      )
+      .run(params.workspaceName ?? null, params.workspaceKey ?? null, isoNow(), id);
+  }
+
   getLinearInstallation(id: number): LinearInstallationRecord | undefined {
     const row = this.connection
       .prepare("SELECT * FROM linear_installations WHERE id = ?")
