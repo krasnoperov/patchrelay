@@ -42,7 +42,7 @@ test("service runtime starts codex, reconciles active runs, seeds ready issues, 
     codex as never,
     pino({ enabled: false }),
     {
-      async reconcileActiveStageRuns() {
+      async reconcileActiveRuns() {
         calls.push("reconcile");
       },
     },
@@ -90,7 +90,7 @@ test("service runtime processes enqueued webhook and deduplicates identical issu
   const runtime = new ServiceRuntime(
     codex as never,
     pino({ enabled: false }),
-    { async reconcileActiveStageRuns() {} },
+    { async reconcileActiveRuns() {} },
     { listIssuesReadyForExecution: () => [] },
     { async processWebhookEvent(eventId) { processedWebhooks.push(eventId); } },
     { async processIssue(item) { processedIssues.push(item); } },
@@ -116,7 +116,7 @@ test("service runtime prioritizes urgent webhook items without introducing a sec
   const runtime = new ServiceRuntime(
     codex as never,
     pino({ enabled: false }),
-    { async reconcileActiveStageRuns() {} },
+    { async reconcileActiveRuns() {} },
     { listIssuesReadyForExecution: () => [] },
     { async processWebhookEvent(eventId) { processedWebhooks.push(eventId); } },
     { async processIssue() {} },
@@ -135,7 +135,7 @@ test("service runtime clears ready state on stop and preserves codex status in r
   const runtime = new ServiceRuntime(
     codex as never,
     pino({ enabled: false }),
-    { async reconcileActiveStageRuns() {} },
+    { async reconcileActiveRuns() {} },
     { listIssuesReadyForExecution: () => [] },
     { async processWebhookEvent() {} },
     { async processIssue() {} },
@@ -159,7 +159,7 @@ test("service runtime records startup error when codex start fails", async () =>
   const runtime = new ServiceRuntime(
     codex as never,
     pino({ enabled: false }),
-    { async reconcileActiveStageRuns() { reconciled = true; } },
+    { async reconcileActiveRuns() { reconciled = true; } },
     { listIssuesReadyForExecution: () => [] },
     { async processWebhookEvent() {} },
     { async processIssue() {} },
@@ -182,7 +182,7 @@ test("service runtime records startup error when reconciliation fails after code
   const runtime = new ServiceRuntime(
     codex as never,
     pino({ enabled: false }),
-    { async reconcileActiveStageRuns() { throw new Error("reconcile failed"); } },
+    { async reconcileActiveRuns() { throw new Error("reconcile failed"); } },
     { listIssuesReadyForExecution() { readyIssuesCalled = true; return []; } },
     { async processWebhookEvent() {} },
     { async processIssue() {} },
@@ -205,7 +205,7 @@ test("service runtime continues reconciling active runs after startup", async ()
   const runtime = new ServiceRuntime(
     codex as never,
     pino({ enabled: false }),
-    { async reconcileActiveStageRuns() { reconcileCalls += 1; } },
+    { async reconcileActiveRuns() { reconcileCalls += 1; } },
     { listIssuesReadyForExecution: () => [] },
     { async processWebhookEvent() {} },
     { async processIssue() {} },
@@ -226,7 +226,7 @@ test("service runtime recovers after a background reconciliation timeout", async
   const runtime = new ServiceRuntime(
     codex as never,
     pino({ enabled: false }),
-    { async reconcileActiveStageRuns() {
+    { async reconcileActiveRuns() {
       reconcileCalls += 1;
       if (reconcileCalls === 2) {
         await delay(50);

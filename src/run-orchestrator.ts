@@ -388,10 +388,6 @@ export class RunOrchestrator {
 
   // ─── Reconciliation ───────────────────────────────────────────────
 
-  async reconcileActiveStageRuns(): Promise<void> {
-    return this.reconcileActiveRuns();
-  }
-
   async reconcileActiveRuns(): Promise<void> {
     for (const run of this.db.listRunningRuns()) {
       await this.reconcileRun(run);

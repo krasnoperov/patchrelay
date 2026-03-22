@@ -94,7 +94,6 @@ export class PatchRelayDatabase {
     worktreePath?: string;
     threadId?: string | null;
     activeRunId?: number | null;
-    statusCommentId?: string | null;
     agentSessionId?: string | null;
     prNumber?: number | null;
     prUrl?: string | null;
@@ -125,7 +124,6 @@ export class PatchRelayDatabase {
       if (params.worktreePath !== undefined) { sets.push("worktree_path = COALESCE(@worktreePath, worktree_path)"); values.worktreePath = params.worktreePath; }
       if (params.threadId !== undefined) { sets.push("thread_id = @threadId"); values.threadId = params.threadId; }
       if (params.activeRunId !== undefined) { sets.push("active_run_id = @activeRunId"); values.activeRunId = params.activeRunId; }
-      if (params.statusCommentId !== undefined) { sets.push("status_comment_id = @statusCommentId"); values.statusCommentId = params.statusCommentId; }
       if (params.agentSessionId !== undefined) { sets.push("agent_session_id = @agentSessionId"); values.agentSessionId = params.agentSessionId; }
       if (params.prNumber !== undefined) { sets.push("pr_number = @prNumber"); values.prNumber = params.prNumber; }
       if (params.prUrl !== undefined) { sets.push("pr_url = @prUrl"); values.prUrl = params.prUrl; }
@@ -134,8 +132,6 @@ export class PatchRelayDatabase {
       if (params.prCheckStatus !== undefined) { sets.push("pr_check_status = @prCheckStatus"); values.prCheckStatus = params.prCheckStatus; }
       if (params.ciRepairAttempts !== undefined) { sets.push("ci_repair_attempts = @ciRepairAttempts"); values.ciRepairAttempts = params.ciRepairAttempts; }
       if (params.queueRepairAttempts !== undefined) { sets.push("queue_repair_attempts = @queueRepairAttempts"); values.queueRepairAttempts = params.queueRepairAttempts; }
-      if (params.pendingRunType !== undefined) { sets.push("pending_run_type = @pendingRunType"); values.pendingRunType = params.pendingRunType; }
-      if (params.pendingRunContextJson !== undefined) { sets.push("pending_run_context_json = @pendingRunContextJson"); values.pendingRunContextJson = params.pendingRunContextJson; }
 
       this.connection.prepare(`UPDATE issues SET ${sets.join(", ")} WHERE project_id = @projectId AND linear_issue_id = @linearIssueId`).run(values);
     } else {
@@ -144,13 +140,13 @@ export class PatchRelayDatabase {
           project_id, linear_issue_id, issue_key, title, url,
           current_linear_state, factory_state, pending_run_type, pending_run_context_json,
           branch_name, worktree_path, thread_id, active_run_id,
-          status_comment_id, agent_session_id,
+          agent_session_id,
           updated_at
         ) VALUES (
           @projectId, @linearIssueId, @issueKey, @title, @url,
           @currentLinearState, @factoryState, @pendingRunType, @pendingRunContextJson,
           @branchName, @worktreePath, @threadId, @activeRunId,
-          @statusCommentId, @agentSessionId,
+          @agentSessionId,
           @now
         )
       `).run({
@@ -167,7 +163,6 @@ export class PatchRelayDatabase {
         worktreePath: params.worktreePath ?? null,
         threadId: params.threadId ?? null,
         activeRunId: params.activeRunId ?? null,
-        statusCommentId: params.statusCommentId ?? null,
         agentSessionId: params.agentSessionId ?? null,
         now,
       });
@@ -358,7 +353,6 @@ export class PatchRelayDatabase {
       ...(issue.currentLinearState ? { currentLinearState: issue.currentLinearState } : {}),
       factoryState: issue.factoryState,
       ...(issue.activeRunId !== undefined ? { activeRunId: issue.activeRunId } : {}),
-      ...(issue.statusCommentId ? { statusCommentId: issue.statusCommentId } : {}),
       ...(issue.agentSessionId ? { activeAgentSessionId: issue.agentSessionId } : {}),
       updatedAt: issue.updatedAt,
     };
@@ -409,7 +403,6 @@ function mapIssueRow(row: Record<string, unknown>): IssueRecord {
     ...(row.worktree_path !== null ? { worktreePath: String(row.worktree_path) } : {}),
     ...(row.thread_id !== null ? { threadId: String(row.thread_id) } : {}),
     ...(row.active_run_id !== null ? { activeRunId: Number(row.active_run_id) } : {}),
-    ...(row.status_comment_id !== null ? { statusCommentId: String(row.status_comment_id) } : {}),
     ...(row.agent_session_id !== null ? { agentSessionId: String(row.agent_session_id) } : {}),
     updatedAt: String(row.updated_at),
     ...(row.pr_number !== null && row.pr_number !== undefined ? { prNumber: Number(row.pr_number) } : {}),

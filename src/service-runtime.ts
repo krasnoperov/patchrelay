@@ -19,8 +19,8 @@ export interface IssueExecutionProcessor {
   processIssue(item: RuntimeIssueQueueItem): Promise<void>;
 }
 
-export interface ActiveStageRunReconciler {
-  reconcileActiveStageRuns(): Promise<void>;
+export interface ActiveRunReconciler {
+  reconcileActiveRuns(): Promise<void>;
 }
 
 export interface ReadyIssueSource {
@@ -47,7 +47,7 @@ export class ServiceRuntime {
   constructor(
     private readonly codex: CodexAppServerClient,
     private readonly logger: Logger,
-    private readonly stageRunReconciler: ActiveStageRunReconciler,
+    private readonly runReconciler: ActiveRunReconciler,
     private readonly readyIssueSource: ReadyIssueSource,
     webhookProcessor: WebhookEventProcessor,
     issueProcessor: IssueExecutionProcessor,
@@ -60,7 +60,7 @@ export class ServiceRuntime {
   async start(): Promise<void> {
     try {
       await this.codex.start();
-      await this.stageRunReconciler.reconcileActiveStageRuns();
+      await this.runReconciler.reconcileActiveRuns();
       for (const issue of this.readyIssueSource.listIssuesReadyForExecution()) {
         this.enqueueIssue(issue.projectId, issue.linearIssueId);
       }
@@ -122,14 +122,14 @@ export class ServiceRuntime {
     this.reconcileInProgress = true;
     try {
       await promiseWithTimeout(
-        this.stageRunReconciler.reconcileActiveStageRuns(),
+        this.runReconciler.reconcileActiveRuns(),
         this.options.reconcileTimeoutMs ?? DEFAULT_RECONCILE_TIMEOUT_MS,
-        "Background active-stage reconciliation",
+        "Background active-run reconciliation",
       );
     } catch (error) {
       this.logger.warn(
         { error: error instanceof Error ? error.message : String(error) },
-        "Background active-stage reconciliation failed",
+        "Background active-run reconciliation failed",
       );
     } finally {
       this.reconcileInProgress = false;

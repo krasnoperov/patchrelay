@@ -13,7 +13,6 @@ export type FactoryState =
   | "repairing_ci"
   | "awaiting_queue"
   | "repairing_queue"
-  | "merged"
   | "awaiting_input"
   | "escalated"
   | "done"
@@ -44,32 +43,13 @@ export const ALLOWED_TRANSITIONS: Readonly<Record<FactoryState, readonly Factory
   awaiting_review: ["changes_requested", "awaiting_queue", "repairing_ci"],
   changes_requested: ["implementing", "awaiting_input", "escalated"],
   repairing_ci: ["pr_open", "awaiting_review", "escalated", "failed"],
-  awaiting_queue: ["merged", "repairing_queue", "repairing_ci"],
+  awaiting_queue: ["done", "repairing_queue", "repairing_ci"],
   repairing_queue: ["pr_open", "awaiting_review", "escalated", "failed"],
-  merged: ["done"],
   awaiting_input: ["implementing", "delegated", "escalated"],
   escalated: [],
   done: [],
   failed: ["delegated"],
 };
-
-export function transitionAllowed(from: FactoryState, to: FactoryState): boolean {
-  return ALLOWED_TRANSITIONS[from]?.includes(to) ?? false;
-}
-
-export function resolveRunTypeForState(state: FactoryState): RunType | undefined {
-  switch (state) {
-    case "implementing":
-    case "changes_requested":
-      return "implementation";
-    case "repairing_ci":
-      return "ci_repair";
-    case "repairing_queue":
-      return "queue_repair";
-    default:
-      return undefined;
-  }
-}
 
 export function resolveFactoryStateFromGitHub(
   triggerEvent: GitHubTriggerEvent,
@@ -91,7 +71,7 @@ export function resolveFactoryStateFromGitHub(
     case "check_failed":
       return current === "pr_open" || current === "awaiting_review" ? "repairing_ci" : undefined;
     case "pr_merged":
-      return "merged";
+      return "done";
     case "pr_closed":
       return "failed";
     case "merge_group_passed":

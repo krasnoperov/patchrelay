@@ -109,12 +109,8 @@ export class GitHubWebhookHandler {
     });
 
     // Drive factory state transitions from GitHub events
-    let newState = resolveFactoryStateFromGitHub(event.triggerEvent, issue.factoryState);
+    const newState = resolveFactoryStateFromGitHub(event.triggerEvent, issue.factoryState);
     if (newState) {
-      // Auto-advance merged → done (delivery is complete)
-      if (newState === "merged") {
-        newState = "done";
-      }
       this.db.upsertIssue({
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,

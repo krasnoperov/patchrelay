@@ -220,14 +220,6 @@ export class WebhookHandler {
     return normalized.issue.delegateId === installation.actorId;
   }
 
-  private resolveLaunchInput(agentSession: AgentSessionMetadata | undefined): string | undefined {
-    const body = agentSession?.promptBody?.trim();
-    if (body) return `New Linear agent input received.\n\n${body}`;
-    const context = agentSession?.promptContext?.trim();
-    if (context) return `Linear provided this initial agent context.\n\n${context}`;
-    return undefined;
-  }
-
   // ─── Agent session handling (inlined) ─────────────────────────────
 
   private async handleAgentSession(
@@ -339,14 +331,6 @@ export class WebhookHandler {
     if (!issue?.activeRunId) return;
     const run = this.db.getRun(issue.activeRunId);
     if (!run?.threadId || !run.turnId) return;
-
-    // Skip our own status comments
-    if (issue.statusCommentId && normalized.comment.id === issue.statusCommentId) {
-      return;
-    }
-    if (typeof normalized.comment.body === "string" && normalized.comment.body.includes("<!-- patchrelay:status-comment -->")) {
-      return;
-    }
 
     const body = [
       "New Linear comment received while you are working.",
