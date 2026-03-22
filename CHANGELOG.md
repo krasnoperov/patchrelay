@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.1](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.10.0...patchrelay-v0.10.1) (2026-03-22)
+
+
+### Bug Fixes
+
+* use Linear organization name for workspace identity, not first team name ([#77](https://github.com/krasnoperov/patchrelay/issues/77)) ([85abd92](https://github.com/krasnoperov/patchrelay/commit/85abd92bc01b1bb71173442d7d65252525331fe0))
+
 ## [0.10.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.9.2...patchrelay-v0.10.0) (2026-03-22)
 
 
