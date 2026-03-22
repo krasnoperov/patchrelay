@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.2](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.10.1...patchrelay-v0.10.2) (2026-03-22)
+
+
+### Bug Fixes
+
+* show project routing in patchrelay installations output ([#79](https://github.com/krasnoperov/patchrelay/issues/79)) ([fac389d](https://github.com/krasnoperov/patchrelay/commit/fac389d4e83b506f0b55ba60f7ad70aaec73ac69))
+
 ## [0.10.1](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.10.0...patchrelay-v0.10.1) (2026-03-22)
 
 
