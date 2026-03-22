@@ -1,4 +1,4 @@
-name: Merge Release PR
+name: Auto-merge Release
 
 on:
   workflow_run:
@@ -6,6 +6,8 @@ on:
       - CI
     types:
       - completed
+    branches:
+      - 'release-please--**'
 
 permissions:
   contents: write
@@ -50,11 +52,6 @@ jobs:
 
           if (!repo || !eventName || !headBranch || !headSha) {
             console.log('Skipping because workflow_run context is incomplete');
-            process.exit(0);
-          }
-
-          if (!/^release-please--/.test(headBranch)) {
-            console.log(`Skipping unrelated CI completion for ${headBranch}`);
             process.exit(0);
           }
 
