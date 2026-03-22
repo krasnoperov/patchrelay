@@ -182,9 +182,11 @@ export class WebhookHandler {
     const delegated = this.isDelegatedToPatchRelay(project, normalized);
     const triggerAllowed = triggerEventAllowed(project, normalized.triggerEvent);
 
-    // In the factory model, delegation + allowed trigger → queue an implementation run
+    // In the factory model, delegation → queue an implementation run.
+    // agentSessionCreated is itself a delegation signal (session exists because issue was delegated).
     let pendingRunType: import("./factory-state.ts").RunType | undefined;
-    if (delegated && triggerAllowed && !activeRun && !existingIssue?.pendingRunType) {
+    const isDelegationSignal = delegated || normalized.triggerEvent === "agentSessionCreated";
+    if (isDelegationSignal && triggerAllowed && !activeRun && !existingIssue?.pendingRunType) {
       pendingRunType = "implementation";
     }
 
