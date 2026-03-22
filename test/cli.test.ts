@@ -1989,20 +1989,18 @@ test("cli OAuth operator commands support json output and validation failures", 
       }),
       0,
     );
-    assert.deepEqual(JSON.parse(installationsJson.read()), {
-      installations: [
-        {
-          installation: {
-            id: 1,
-            workspaceName: "Workspace One",
-            workspaceKey: "WS1",
-            actorName: "PatchRelay App",
-            actorId: "actor-1",
-          },
-          linkedProjects: ["usertold"],
-        },
-      ],
+    const installationsResult = JSON.parse(installationsJson.read());
+    assert.equal(installationsResult.installations.length, 1);
+    assert.deepEqual(installationsResult.installations[0].installation, {
+      id: 1,
+      workspaceName: "Workspace One",
+      workspaceKey: "WS1",
+      actorName: "PatchRelay App",
+      actorId: "actor-1",
     });
+    assert.deepEqual(installationsResult.installations[0].linkedProjects, ["usertold"]);
+    assert.equal(installationsResult.installations[0].projects[0].id, "usertold");
+    assert.deepEqual(installationsResult.installations[0].projects[0].issueKeyPrefixes, ["USE"]);
 
     const connectError = createBufferStream();
     assert.equal(
