@@ -9,12 +9,9 @@ import type {
   CodexThreadItem,
   CodexThreadSummary,
   StageReport,
-  StageRunRecord,
+  RunRecord,
   TrackedIssueRecord,
-  WorkspaceRecord,
-  WorkflowStage,
 } from "../types.ts";
-import { resolveWorkflowStage } from "../workflow-policy.ts";
 export type {
   CliOperatorDataAccess,
   ConnectResult,
@@ -34,19 +31,16 @@ interface LiveSummary {
 
 export interface InspectResult {
   issue: TrackedIssueRecord | undefined;
-  workspace?: WorkspaceRecord;
-  activeStageRun?: StageRunRecord;
-  latestStageRun?: StageRunRecord;
+  activeRun?: RunRecord;
   latestReport?: StageReport;
   latestSummary?: Record<string, unknown>;
-  live?: LiveSummary;
   statusNote?: string;
 }
 
 export interface ReportResult {
   issue: TrackedIssueRecord;
-  stages: Array<{
-    stageRun: StageRunRecord;
+  runs: Array<{
+    run: RunRecord;
     report?: StageReport;
     summary?: Record<string, unknown>;
   }>;
@@ -54,10 +48,10 @@ export interface ReportResult {
 
 export interface EventsResult {
   issue: TrackedIssueRecord;
-  stageRun: StageRunRecord;
+  run: RunRecord;
   events: Array<{
     id: number;
-    stageRunId: number;
+    runId: number;
     threadId: string;
     turnId?: string;
     method: string;
@@ -69,7 +63,8 @@ export interface EventsResult {
 
 export interface WorktreeResult {
   issue: TrackedIssueRecord;
-  workspace: WorkspaceRecord;
+  branchName: string;
+  worktreePath: string;
   repoId: string;
 }
 
@@ -80,7 +75,7 @@ export interface OpenResult extends WorktreeResult {
 
 export interface RetryResult {
   issue: TrackedIssueRecord;
-  stage: WorkflowStage;
+  runType: string;
   reason?: string;
 }
 
@@ -89,10 +84,10 @@ export interface ListResultItem {
   title?: string;
   projectId: string;
   currentLinearState?: string;
-  lifecycleStatus: string;
-  activeStage?: WorkflowStage;
-  latestStage?: WorkflowStage;
-  latestStageStatus?: string;
+  factoryState: string;
+  activeRunType?: string;
+  latestRunType?: string;
+  latestRunStatus?: string;
   updatedAt: string;
 }
 
@@ -126,11 +121,7 @@ function latestEventTimestamp(db: PatchRelayDatabase, stageRunId: number): strin
   return events.at(-1)?.createdAt;
 }
 
-function resolveStageFromState(config: AppConfig, projectId: string, stateName?: string): WorkflowStage | undefined {
-  const project = config.projects.find((entry) => entry.id === projectId);
-  if (!project) return undefined;
-  return resolveWorkflowStage(project, stateName);
-}
+// resolveStageFromState removed — factory state replaces workflow stage resolution
 
 export type LiveResult = Awaited<ReturnType<CliDataAccess["live"]>> extends infer T ? Exclude<T, undefined> : never;
 
@@ -159,87 +150,78 @@ export class CliDataAccess extends CliOperatorApiClient {
     if (!issue) return undefined;
 
     const dbIssue = this.db.getIssueByKey(issueKey)!;
-    const workspace = this.db.issueToWorkspace(dbIssue);
-    const activeStageRun = dbIssue.activeRunId ? this.db.getStageRun(dbIssue.activeRunId) : undefined;
-    const latestStageRun = this.db.getLatestStageRunForIssue(issue.projectId, issue.linearIssueId);
-    const latestReport = latestStageRun?.reportJson ? (JSON.parse(latestStageRun.reportJson) as StageReport) : undefined;
-    const latestSummary = safeJsonParse(latestStageRun?.summaryJson);
-    const live =
-      activeStageRun?.threadId &&
-      (await this.readLiveSummary(activeStageRun.threadId, latestEventTimestamp(this.db, activeStageRun.id)).catch(() => undefined));
+    const activeRun = dbIssue.activeRunId ? this.db.getRun(dbIssue.activeRunId) : undefined;
+    const latestRun = this.db.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
+    const latestReport = latestRun?.reportJson ? (JSON.parse(latestRun.reportJson) as StageReport) : undefined;
+    const latestSummary = safeJsonParse(latestRun?.summaryJson);
 
     const statusNote =
-      (live && live.latestAssistantMessage) ??
       latestReport?.assistantMessages.at(-1) ??
       (typeof latestSummary?.latestAssistantMessage === "string" ? latestSummary.latestAssistantMessage : undefined) ??
-      (latestStageRun?.status === "failed" ? "Latest stage failed." : undefined) ??
-      (issue.desiredStage ? `Queued for ${issue.desiredStage}.` : undefined) ??
+      (latestRun?.status === "failed" ? "Latest run failed." : undefined) ??
       undefined;
 
     return {
       issue,
-      ...(workspace ? { workspace } : {}),
-      ...(activeStageRun ? { activeStageRun } : {}),
-      ...(latestStageRun ? { latestStageRun } : {}),
+      ...(activeRun ? { activeRun } : {}),
       ...(latestReport ? { latestReport } : {}),
       ...(latestSummary ? { latestSummary } : {}),
-      ...(live ? { live } : {}),
       ...(statusNote ? { statusNote } : {}),
     };
   }
 
   async live(issueKey: string): Promise<
-    | { issue: TrackedIssueRecord; stageRun: StageRunRecord; live?: LiveSummary }
+    | { issue: TrackedIssueRecord; run: RunRecord; live?: LiveSummary }
     | undefined
   > {
     const issue = this.db.getTrackedIssueByKey(issueKey);
     if (!issue) return undefined;
 
     const dbIssue = this.db.getIssueByKey(issueKey)!;
-    const stageRun = dbIssue.activeRunId ? this.db.getStageRun(dbIssue.activeRunId) : undefined;
-    if (!stageRun) return undefined;
+    const run = dbIssue.activeRunId ? this.db.getRun(dbIssue.activeRunId) : undefined;
+    if (!run) return undefined;
 
     const live =
-      stageRun.threadId &&
-      (await this.readLiveSummary(stageRun.threadId, latestEventTimestamp(this.db, stageRun.id)).catch(() => undefined));
+      run.threadId &&
+      (await this.readLiveSummary(run.threadId, latestEventTimestamp(this.db, run.id)).catch(() => undefined));
 
-    return { issue, stageRun, ...(live ? { live } : {}) };
+    return { issue, run, ...(live ? { live } : {}) };
   }
 
-  report(issueKey: string, options?: { stage?: WorkflowStage; stageRunId?: number }): ReportResult | undefined {
+  report(issueKey: string, options?: { runType?: string; runId?: number }): ReportResult | undefined {
     const issue = this.db.getTrackedIssueByKey(issueKey);
     if (!issue) return undefined;
 
-    const stages = this.db
-      .listStageRunsForIssue(issue.projectId, issue.linearIssueId)
-      .filter((stageRun) => {
-        if (options?.stageRunId !== undefined && stageRun.id !== options.stageRunId) return false;
-        if (options?.stage !== undefined && stageRun.stage !== options.stage) return false;
+    const runs = this.db
+      .listRunsForIssue(issue.projectId, issue.linearIssueId)
+      .filter((run) => {
+        if (options?.runId !== undefined && run.id !== options.runId) return false;
+        if (options?.runType !== undefined && run.runType !== options.runType) return false;
         return true;
       })
       .reverse()
-      .map((stageRun) => ({
-        stageRun,
-        ...(stageRun.reportJson ? { report: JSON.parse(stageRun.reportJson) as StageReport } : {}),
-        ...(safeJsonParse(stageRun.summaryJson) ? { summary: safeJsonParse(stageRun.summaryJson)! } : {}),
+      .map((run) => ({
+        run,
+        ...(run.reportJson ? { report: JSON.parse(run.reportJson) as StageReport } : {}),
+        ...(safeJsonParse(run.summaryJson) ? { summary: safeJsonParse(run.summaryJson)! } : {}),
       }));
 
-    return { issue, stages };
+    return { issue, runs };
   }
 
-  events(issueKey: string, options?: { stageRunId?: number; method?: string; afterId?: number }): EventsResult | undefined {
+  events(issueKey: string, options?: { runId?: number; method?: string; afterId?: number }): EventsResult | undefined {
     const issue = this.db.getTrackedIssueByKey(issueKey);
     if (!issue) return undefined;
 
     const dbIssue = this.db.getIssueByKey(issueKey)!;
-    const stageRun =
-      (options?.stageRunId !== undefined ? this.db.getStageRun(options.stageRunId) : undefined) ??
-      (dbIssue.activeRunId ? this.db.getStageRun(dbIssue.activeRunId) : undefined) ??
-      this.db.getLatestStageRunForIssue(issue.projectId, issue.linearIssueId);
-    if (!stageRun || stageRun.projectId !== issue.projectId || stageRun.linearIssueId !== issue.linearIssueId) return undefined;
+    const run =
+      (options?.runId !== undefined ? this.db.getRun(options.runId) : undefined) ??
+      (dbIssue.activeRunId ? this.db.getRun(dbIssue.activeRunId) : undefined) ??
+      this.db.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
+    if (!run || run.projectId !== issue.projectId || run.linearIssueId !== issue.linearIssueId) return undefined;
 
     const events = this.db
-      .listThreadEvents(stageRun.id)
+      .listThreadEvents(run.id)
       .filter((event) => (options?.method ? event.method === options.method : true))
       .filter((event) => (options?.afterId !== undefined ? event.id > options.afterId : true))
       .map((event) => ({
@@ -247,7 +229,7 @@ export class CliDataAccess extends CliOperatorApiClient {
         ...(safeJsonParse(event.eventJson) ? { parsedEvent: safeJsonParse(event.eventJson)! } : {}),
       }));
 
-    return { issue, stageRun, events };
+    return { issue, run, events };
   }
 
   worktree(issueKey: string): WorktreeResult | undefined {
@@ -255,10 +237,9 @@ export class CliDataAccess extends CliOperatorApiClient {
     if (!issue) return undefined;
 
     const dbIssue = this.db.getIssueByKey(issueKey)!;
-    const workspace = this.db.issueToWorkspace(dbIssue);
-    if (!workspace) return undefined;
+    if (!dbIssue.branchName || !dbIssue.worktreePath) return undefined;
 
-    return { issue, workspace, repoId: issue.projectId };
+    return { issue, branchName: dbIssue.branchName, worktreePath: dbIssue.worktreePath, repoId: issue.projectId };
   }
 
   open(issueKey: string): OpenResult | undefined {
@@ -308,28 +289,25 @@ export class CliDataAccess extends CliOperatorApiClient {
     return await this.resolveOpen(issueKey, { ensureWorktree: true, createThreadIfMissing: true });
   }
 
-  retry(issueKey: string, options?: { stage?: WorkflowStage; reason?: string }): RetryResult | undefined {
+  retry(issueKey: string, options?: { runType?: string; reason?: string }): RetryResult | undefined {
     const issue = this.db.getTrackedIssueByKey(issueKey);
     if (!issue) return undefined;
 
     const dbIssue = this.db.getIssueByKey(issueKey)!;
     if (dbIssue.activeRunId !== undefined) {
-      throw new Error(`Issue ${issueKey} already has an active stage run.`);
+      throw new Error(`Issue ${issueKey} already has an active run.`);
     }
 
-    const stage = options?.stage ?? resolveStageFromState(this.config, issue.projectId, issue.currentLinearState);
-    if (!stage) {
-      throw new Error(`Unable to infer a stage for ${issueKey}; pass --stage.`);
-    }
+    const runType = (options?.runType ?? "implementation") as import("../factory-state.ts").RunType;
 
     this.db.upsertIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
-      desiredStage: stage,
-      lifecycleStatus: "queued",
+      pendingRunType: runType,
+      factoryState: "delegated",
     });
     const updated = this.db.getTrackedIssue(issue.projectId, issue.linearIssueId)!;
-    return { issue: updated, stage, ...(options?.reason ? { reason: options.reason } : {}) };
+    return { issue: updated, runType, ...(options?.reason ? { reason: options.reason } : {}) };
   }
 
   list(options?: { active?: boolean; failed?: boolean; project?: string }): ListResultItem[] {
@@ -351,11 +329,11 @@ export class CliDataAccess extends CliOperatorApiClient {
           i.issue_key,
           i.title,
           i.current_linear_state,
-          i.lifecycle_status,
+          i.factory_state,
           i.updated_at,
-          active_run.stage AS active_stage,
-          latest_run.stage AS latest_stage,
-          latest_run.status AS latest_stage_status
+          active_run.run_type AS active_run_type,
+          latest_run.run_type AS latest_run_type,
+          latest_run.status AS latest_run_status
         FROM issues i
         LEFT JOIN runs active_run ON active_run.id = i.active_run_id
         LEFT JOIN runs latest_run ON latest_run.id = (
@@ -369,21 +347,21 @@ export class CliDataAccess extends CliOperatorApiClient {
       )
       .all(...values) as Array<Record<string, unknown>>;
 
-    const items = rows.map((row) => ({
+    const items: ListResultItem[] = rows.map((row) => ({
       ...(row.issue_key !== null ? { issueKey: String(row.issue_key) } : {}),
       ...(row.title !== null ? { title: String(row.title) } : {}),
       projectId: String(row.project_id),
       ...(row.current_linear_state !== null ? { currentLinearState: String(row.current_linear_state) } : {}),
-      lifecycleStatus: String(row.lifecycle_status),
-      ...(row.active_stage !== null ? { activeStage: row.active_stage as WorkflowStage } : {}),
-      ...(row.latest_stage !== null ? { latestStage: row.latest_stage as WorkflowStage } : {}),
-      ...(row.latest_stage_status !== null ? { latestStageStatus: String(row.latest_stage_status) } : {}),
+      factoryState: String(row.factory_state ?? "delegated"),
+      ...(row.active_run_type !== null ? { activeRunType: String(row.active_run_type) } : {}),
+      ...(row.latest_run_type !== null ? { latestRunType: String(row.latest_run_type) } : {}),
+      ...(row.latest_run_status !== null ? { latestRunStatus: String(row.latest_run_status) } : {}),
       updatedAt: String(row.updated_at),
     }));
 
     return items.filter((item) => {
-      if (options?.active && !item.activeStage) return false;
-      if (options?.failed && item.latestStageStatus !== "failed") return false;
+      if (options?.active && !item.activeRunType) return false;
+      if (options?.failed && item.latestRunStatus !== "failed") return false;
       return true;
     });
   }
