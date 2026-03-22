@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.6](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.10.5...patchrelay-v0.10.6) (2026-03-22)
+
+
+### Bug Fixes
+
+* prevent check event flickering, stale issue reads, and aggressive pr_closed ([#88](https://github.com/krasnoperov/patchrelay/issues/88)) ([01ce7ad](https://github.com/krasnoperov/patchrelay/commit/01ce7adb8786fa0779317760c2ab00731451a68f))
+
 ## [0.10.5](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.10.4...patchrelay-v0.10.5) (2026-03-22)
 
 
