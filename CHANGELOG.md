@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.1](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.9.0...patchrelay-v0.9.1) (2026-03-22)
+
+
+### Bug Fixes
+
+* rename CLI flags from stage terminology to run terminology ([#72](https://github.com/krasnoperov/patchrelay/issues/72)) ([ab1383f](https://github.com/krasnoperov/patchrelay/commit/ab1383fd117cd7635c9174f089e3370ce4deca24))
+
 ## [0.9.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.8.9...patchrelay-v0.9.0) (2026-03-22)
 
 
