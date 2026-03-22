@@ -127,6 +127,11 @@ export async function runCli(
   let commandArgs: string[];
   try {
     parsed = parseArgs(argv);
+    if (parsed.flags.get("version") === true) {
+      const buildInfo = getBuildInfo();
+      writeOutput(stdout, `${buildInfo.version}\n`);
+      return 0;
+    }
     ({ command, commandArgs } = resolveCommand(parsed));
     validateFlags(command, commandArgs, parsed);
   } catch (error) {
