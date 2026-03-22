@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.5](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.10.4...patchrelay-v0.10.5) (2026-03-22)
+
+
+### Bug Fixes
+
+* remove non-actionable webhook queue warning from doctor ([#85](https://github.com/krasnoperov/patchrelay/issues/85)) ([606c8b3](https://github.com/krasnoperov/patchrelay/commit/606c8b3632238594137fb3496312161a08b2e55c))
+
 ## [0.10.4](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.10.3...patchrelay-v0.10.4) (2026-03-22)
 
 
