@@ -208,7 +208,7 @@ export class PatchRelayDatabase {
     issueId: number;
     projectId: string;
     linearIssueId: string;
-    runType: import("./factory-state.ts").RunType;
+    runType: RunType;
     promptText?: string;
   }): RunRecord {
     const now = isoNow();
@@ -396,8 +396,8 @@ function mapIssueRow(row: Record<string, unknown>): IssueRecord {
     ...(row.title !== null ? { title: String(row.title) } : {}),
     ...(row.url !== null ? { url: String(row.url) } : {}),
     ...(row.current_linear_state !== null ? { currentLinearState: String(row.current_linear_state) } : {}),
-    factoryState: String(row.factory_state ?? "delegated") as import("./factory-state.ts").FactoryState,
-    ...(row.pending_run_type !== null && row.pending_run_type !== undefined ? { pendingRunType: String(row.pending_run_type) as import("./factory-state.ts").RunType } : {}),
+    factoryState: String(row.factory_state ?? "delegated") as FactoryState,
+    ...(row.pending_run_type !== null && row.pending_run_type !== undefined ? { pendingRunType: String(row.pending_run_type) as RunType } : {}),
     ...(row.pending_run_context_json !== null && row.pending_run_context_json !== undefined ? { pendingRunContextJson: String(row.pending_run_context_json) } : {}),
     ...(row.branch_name !== null ? { branchName: String(row.branch_name) } : {}),
     ...(row.worktree_path !== null ? { worktreePath: String(row.worktree_path) } : {}),
@@ -421,7 +421,7 @@ function mapRunRow(row: Record<string, unknown>): RunRecord {
     issueId: Number(row.issue_id),
     projectId: String(row.project_id),
     linearIssueId: String(row.linear_issue_id),
-    runType: String(row.run_type ?? "implementation") as import("./factory-state.ts").RunType,
+    runType: String(row.run_type ?? "implementation") as RunType,
     status: String(row.status) as RunStatus,
     ...(row.prompt_text !== null ? { promptText: String(row.prompt_text) } : {}),
     ...(row.thread_id !== null ? { threadId: String(row.thread_id) } : {}),

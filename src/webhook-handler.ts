@@ -6,14 +6,13 @@ import {
 import { buildAgentSessionExternalUrls } from "./agent-session-presentation.ts";
 import type { CodexAppServerClient } from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
+import type { RunType } from "./factory-state.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import { resolveProject, triggerEventAllowed, trustedActorAllowed } from "./project-resolution.ts";
-// linear-workflow: comment functions removed; workflow-policy: deleted
 import { normalizeWebhook } from "./webhooks.ts";
 import { InstallationWebhookHandler } from "./webhook-installation-handler.ts";
 import type {
   AppConfig,
-  AgentSessionMetadata,
   IssueMetadata,
   LinearClientProvider,
   LinearWebhookPayload,
@@ -184,7 +183,7 @@ export class WebhookHandler {
 
     // In the factory model, delegation → queue an implementation run.
     // agentSessionCreated is itself a delegation signal (session exists because issue was delegated).
-    let pendingRunType: import("./factory-state.ts").RunType | undefined;
+    let pendingRunType: RunType | undefined;
     const isDelegationSignal = delegated || normalized.triggerEvent === "agentSessionCreated";
     if (isDelegationSignal && triggerAllowed && !activeRun && !existingIssue?.pendingRunType) {
       pendingRunType = "implementation";

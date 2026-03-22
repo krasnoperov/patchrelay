@@ -4,6 +4,7 @@ import { CodexAppServerClient } from "../codex-app-server.ts";
 import { PatchRelayDatabase } from "../db.ts";
 import { WorktreeManager } from "../worktree-manager.ts";
 import { CliOperatorApiClient } from "./operator-client.ts";
+import type { RunType } from "../factory-state.ts";
 import type {
   AppConfig,
   CodexThreadItem,
@@ -304,7 +305,7 @@ export class CliDataAccess extends CliOperatorApiClient {
       throw new Error(`Issue ${issueKey} already has an active run.`);
     }
 
-    const runType = (options?.runType ?? "implementation") as import("../factory-state.ts").RunType;
+    const runType = (options?.runType ?? "implementation") as RunType;
 
     this.db.upsertIssue({
       projectId: issue.projectId,

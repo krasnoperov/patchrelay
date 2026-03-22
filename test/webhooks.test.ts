@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import path from "node:path";
 import test from "node:test";
 import { resolveProject, triggerEventAllowed, trustedActorAllowed } from "../src/project-resolution.ts";
 import type { AppConfig, LinearWebhookPayload } from "../src/types.ts";

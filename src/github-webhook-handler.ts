@@ -2,7 +2,7 @@ import type { Logger } from "pino";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord } from "./db-types.ts";
 import { resolveFactoryStateFromGitHub } from "./factory-state.ts";
-import type { NormalizedGitHubEvent } from "./github-types.ts";
+import type { GitHubWebhookPayload, NormalizedGitHubEvent } from "./github-types.ts";
 import { normalizeGitHubWebhook, verifyGitHubWebhookSignature } from "./github-webhooks.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import type { AppConfig, LinearClientProvider } from "./types.ts";
@@ -83,7 +83,7 @@ export class GitHubWebhookHandler {
 
     const event = normalizeGitHubWebhook({
       eventType: params.eventType,
-      payload: payload as import("./github-types.ts").GitHubWebhookPayload,
+      payload: payload as GitHubWebhookPayload,
     });
     if (!event) {
       this.logger.debug({ eventType: params.eventType }, "GitHub webhook: unrecognized event type or action");

@@ -3,7 +3,7 @@ import path from "node:path";
 import type { Logger } from "pino";
 import type { CodexAppServerClient, CodexNotification } from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
-import type { IssueRecord, RunRecord, TrackedIssueRecord } from "./db-types.ts";
+import type { IssueRecord, RunRecord } from "./db-types.ts";
 import type { RunType } from "./factory-state.ts";
 import { buildHookEnv, runProjectHook } from "./hook-runner.ts";
 import {
@@ -14,7 +14,6 @@ import {
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import {
   buildStageReport,
-  buildFailedStageReport,
   countEventMethods,
   extractTurnId,
   resolveRunCompletionStatus,
@@ -25,10 +24,9 @@ import type {
   AppConfig,
   CodexThreadSummary,
   LinearClientProvider,
-  StageReport,
 } from "./types.ts";
+import type { AgentSessionPlanStep } from "./agent-session-plan.ts";
 import { resolveAuthoritativeLinearStopState } from "./linear-workflow.ts";
-import { sanitizeDiagnosticText } from "./utils.ts";
 
 const DEFAULT_CI_REPAIR_BUDGET = 2;
 const DEFAULT_QUEUE_REPAIR_BUDGET = 2;
@@ -527,7 +525,7 @@ export class RunOrchestrator {
     }
   }
 
-  private async updateLinearPlan(issue: IssueRecord, plan: import("./agent-session-plan.ts").AgentSessionPlanStep[]): Promise<void> {
+  private async updateLinearPlan(issue: IssueRecord, plan: AgentSessionPlanStep[]): Promise<void> {
     if (!issue.agentSessionId) return;
     const linear = await this.linearProvider.forProject(issue.projectId);
     if (!linear?.updateAgentSession) return;
