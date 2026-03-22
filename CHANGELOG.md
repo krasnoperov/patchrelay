@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.2](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.9.1...patchrelay-v0.9.2) (2026-03-22)
+
+
+### Bug Fixes
+
+* consolidate CI into single job, support --version flag ([#74](https://github.com/krasnoperov/patchrelay/issues/74)) ([a553cad](https://github.com/krasnoperov/patchrelay/commit/a553cad7abc48652196f02ddc115443d890ae09e))
+
 ## [0.9.1](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.9.0...patchrelay-v0.9.1) (2026-03-22)
 
 
