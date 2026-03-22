@@ -82,6 +82,10 @@ const projectSchema = z.object({
   allow_labels: z.array(z.string().min(1)).default([]),
   trigger_events: z.array(z.string().min(1)).min(1).optional(),
   branch_prefix: z.string().min(1).optional(),
+  github: z.object({
+    webhook_secret: z.string().min(1).optional(),
+    repo_full_name: z.string().min(1).optional(),
+  }).optional(),
 });
 
 const configSchema = z.object({
@@ -94,6 +98,7 @@ const configSchema = z.object({
   }),
   ingress: z.object({
     linear_webhook_path: z.string().default("/webhooks/linear"),
+    github_webhook_path: z.string().default("/webhooks/github"),
     max_body_bytes: z.number().int().positive().default(262144),
     max_timestamp_skew_seconds: z.number().int().positive().default(60),
   }),
@@ -530,6 +535,7 @@ export function loadConfig(
     },
     ingress: {
       linearWebhookPath: parsed.ingress.linear_webhook_path,
+      githubWebhookPath: parsed.ingress.github_webhook_path,
       maxBodyBytes: parsed.ingress.max_body_bytes,
       maxTimestampSkewSeconds: parsed.ingress.max_timestamp_skew_seconds,
     },
@@ -619,6 +625,12 @@ export function loadConfig(
         ),
         branchPrefix: repoSettings?.branch_prefix ?? project.branch_prefix ?? defaultBranchPrefix(project.id),
         ...(repoSettings?.configPath ? { repoSettingsPath: repoSettings.configPath } : {}),
+        ...(project.github ? {
+          github: {
+            ...(project.github.webhook_secret ? { webhookSecret: project.github.webhook_secret } : {}),
+            ...(project.github.repo_full_name ? { repoFullName: project.github.repo_full_name } : {}),
+          },
+        } : {}),
       };
     }),
   };

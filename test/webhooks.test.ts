@@ -348,6 +348,7 @@ test("resolveProject matches by issue key prefix and team", () => {
     },
     ingress: {
       linearWebhookPath: "/webhooks/linear",
+      githubWebhookPath: "/webhooks/github",
       maxBodyBytes: 262144,
       maxTimestampSkewSeconds: 60,
     },

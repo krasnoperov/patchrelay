@@ -52,6 +52,7 @@ function buildConfig(baseDir: string): AppConfig {
     },
     ingress: {
       linearWebhookPath: "/webhooks/linear",
+      githubWebhookPath: "/webhooks/github",
       maxBodyBytes: 262144,
       maxTimestampSkewSeconds: 60,
     },

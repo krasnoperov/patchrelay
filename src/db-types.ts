@@ -1,6 +1,7 @@
 import type { IssueLifecycleStatus, WorkflowStage } from "./workflow-types.ts";
 
 export type RunStatus = "queued" | "running" | "completed" | "failed" | "released";
+export type RunType = "stage" | "ci_repair" | "review_fix" | "queue_repair";
 
 export interface IssueRecord {
   id: number;
@@ -21,6 +22,14 @@ export interface IssueRecord {
   continuationBarrierAt?: string;
   lifecycleStatus: IssueLifecycleStatus;
   updatedAt: string;
+  // PR tracking (Phase 1: factory control plane)
+  prNumber?: number;
+  prUrl?: string;
+  prState?: string;
+  prReviewState?: string;
+  prCheckStatus?: string;
+  ciRepairAttempts: number;
+  queueRepairAttempts: number;
 }
 
 export interface RunRecord {
@@ -30,6 +39,7 @@ export interface RunRecord {
   linearIssueId: string;
   stage: WorkflowStage;
   status: RunStatus;
+  runType: RunType;
   workflowFile?: string;
   promptText?: string;
   threadId?: string;

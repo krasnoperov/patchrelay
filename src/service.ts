@@ -1,6 +1,7 @@
 import type { Logger } from "pino";
 import type { CodexAppServerClient, CodexNotification } from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
+import { GitHubWebhookHandler } from "./github-webhook-handler.ts";
 import { IssueQueryService } from "./issue-query-service.ts";
 import { LinearOAuthService } from "./linear-oauth-service.ts";
 import { OperatorEventFeed, type OperatorFeedQuery } from "./operator-feed.ts";
@@ -20,6 +21,7 @@ export class PatchRelayService {
   readonly linearProvider: LinearClientProvider;
   private readonly stageExecutor: StageExecutor;
   private readonly webhookHandler: WebhookHandler;
+  private readonly githubWebhookHandler: GitHubWebhookHandler;
   private readonly oauthService: LinearOAuthService;
   private readonly queryService: IssueQueryService;
   private readonly runtime: ServiceRuntime;
@@ -58,6 +60,8 @@ export class PatchRelayService {
       logger,
       this.feed,
     );
+
+    this.githubWebhookHandler = new GitHubWebhookHandler(config, db, logger, this.feed);
 
     const runtime = new ServiceRuntime(
       codex,
@@ -156,6 +160,23 @@ export class PatchRelayService {
       status: result.status,
       body: result.body,
     };
+  }
+
+  async acceptGitHubWebhook(params: {
+    deliveryId: string;
+    eventType: string;
+    signature: string;
+    rawBody: Buffer;
+  }): Promise<{ status: number; body: Record<string, unknown> }> {
+    const result = await this.githubWebhookHandler.acceptGitHubWebhook(params);
+    if (result.body.accepted && result.body.webhookEventId) {
+      // Process inline since GitHub events are lightweight (just PR state updates)
+      await this.githubWebhookHandler.processGitHubWebhookEvent({
+        eventType: params.eventType,
+        rawBody: params.rawBody.toString("utf8"),
+      });
+    }
+    return result;
   }
 
   async processWebhookEvent(webhookEventId: number): Promise<void> {

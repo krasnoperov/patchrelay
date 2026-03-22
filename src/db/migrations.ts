@@ -427,6 +427,7 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
     ensureOperatorFeedTable(connection);
     ensureWebhookEventsTable(connection);
     ensureRunThreadEventsTable(connection);
+    applyFactoryColumnMigrations(connection);
     return;
   }
 
@@ -460,6 +461,7 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
   ensureOperatorFeedTable(connection);
   ensureWebhookEventsTable(connection);
   ensureRunThreadEventsTable(connection);
+  applyFactoryColumnMigrations(connection);
 }
 
 function ensureWebhookEventsTable(connection: DatabaseConnection): void {
@@ -555,6 +557,26 @@ function ensureOperatorFeedTable(connection: DatabaseConnection): void {
     CREATE INDEX IF NOT EXISTS idx_operator_feed_events_issue ON operator_feed_events(issue_key, id);
     CREATE INDEX IF NOT EXISTS idx_operator_feed_events_project ON operator_feed_events(project_id, id);
   `);
+}
+
+function applyFactoryColumnMigrations(connection: DatabaseConnection): void {
+  const alters = [
+    "ALTER TABLE issues ADD COLUMN pr_number INTEGER",
+    "ALTER TABLE issues ADD COLUMN pr_url TEXT",
+    "ALTER TABLE issues ADD COLUMN pr_state TEXT",
+    "ALTER TABLE issues ADD COLUMN pr_review_state TEXT",
+    "ALTER TABLE issues ADD COLUMN pr_check_status TEXT",
+    "ALTER TABLE issues ADD COLUMN ci_repair_attempts INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE issues ADD COLUMN queue_repair_attempts INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE runs ADD COLUMN run_type TEXT NOT NULL DEFAULT 'stage'",
+  ];
+  for (const alter of alters) {
+    try {
+      connection.exec(alter);
+    } catch {
+      // Column already exists on upgraded installs.
+    }
+  }
 }
 
 function applyLegacyAlterMigrations(connection: DatabaseConnection): void {

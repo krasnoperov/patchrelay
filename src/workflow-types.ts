@@ -67,4 +67,8 @@ export interface ProjectConfig {
   triggerEvents: TriggerEvent[];
   branchPrefix: string;
   repoSettingsPath?: string;
+  github?: {
+    webhookSecret?: string;
+    repoFullName?: string;
+  };
 }

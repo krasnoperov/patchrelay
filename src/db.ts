@@ -141,6 +141,13 @@ export class PatchRelayDatabase {
     agentSessionId?: string | null;
     continuationBarrierAt?: string | null;
     lifecycleStatus?: IssueLifecycleStatus;
+    prNumber?: number | null;
+    prUrl?: string | null;
+    prState?: string | null;
+    prReviewState?: string | null;
+    prCheckStatus?: string | null;
+    ciRepairAttempts?: number;
+    queueRepairAttempts?: number;
   }): IssueRecord {
     const now = isoNow();
     const existing = this.getIssue(params.projectId, params.linearIssueId);
@@ -166,6 +173,13 @@ export class PatchRelayDatabase {
       if (params.agentSessionId !== undefined) { sets.push("agent_session_id = @agentSessionId"); values.agentSessionId = params.agentSessionId; }
       if (params.continuationBarrierAt !== undefined) { sets.push("continuation_barrier_at = @continuationBarrierAt"); values.continuationBarrierAt = params.continuationBarrierAt; }
       if (params.lifecycleStatus !== undefined) { sets.push("lifecycle_status = @lifecycleStatus"); values.lifecycleStatus = params.lifecycleStatus; }
+      if (params.prNumber !== undefined) { sets.push("pr_number = @prNumber"); values.prNumber = params.prNumber; }
+      if (params.prUrl !== undefined) { sets.push("pr_url = @prUrl"); values.prUrl = params.prUrl; }
+      if (params.prState !== undefined) { sets.push("pr_state = @prState"); values.prState = params.prState; }
+      if (params.prReviewState !== undefined) { sets.push("pr_review_state = @prReviewState"); values.prReviewState = params.prReviewState; }
+      if (params.prCheckStatus !== undefined) { sets.push("pr_check_status = @prCheckStatus"); values.prCheckStatus = params.prCheckStatus; }
+      if (params.ciRepairAttempts !== undefined) { sets.push("ci_repair_attempts = @ciRepairAttempts"); values.ciRepairAttempts = params.ciRepairAttempts; }
+      if (params.queueRepairAttempts !== undefined) { sets.push("queue_repair_attempts = @queueRepairAttempts"); values.queueRepairAttempts = params.queueRepairAttempts; }
 
       this.connection.prepare(`UPDATE issues SET ${sets.join(", ")} WHERE project_id = @projectId AND linear_issue_id = @linearIssueId`).run(values);
     } else {
@@ -220,6 +234,11 @@ export class PatchRelayDatabase {
 
   getIssueByKey(issueKey: string): IssueRecord | undefined {
     const row = this.connection.prepare("SELECT * FROM issues WHERE issue_key = ?").get(issueKey) as Record<string, unknown> | undefined;
+    return row ? mapIssueRow(row) : undefined;
+  }
+
+  getIssueByBranch(branchName: string): IssueRecord | undefined {
+    const row = this.connection.prepare("SELECT * FROM issues WHERE branch_name = ?").get(branchName) as Record<string, unknown> | undefined;
     return row ? mapIssueRow(row) : undefined;
   }
 
@@ -518,6 +537,13 @@ function mapIssueRow(row: Record<string, unknown>): IssueRecord {
     ...(row.continuation_barrier_at !== null ? { continuationBarrierAt: String(row.continuation_barrier_at) } : {}),
     lifecycleStatus: String(row.lifecycle_status) as IssueLifecycleStatus,
     updatedAt: String(row.updated_at),
+    ...(row.pr_number !== null && row.pr_number !== undefined ? { prNumber: Number(row.pr_number) } : {}),
+    ...(row.pr_url !== null && row.pr_url !== undefined ? { prUrl: String(row.pr_url) } : {}),
+    ...(row.pr_state !== null && row.pr_state !== undefined ? { prState: String(row.pr_state) } : {}),
+    ...(row.pr_review_state !== null && row.pr_review_state !== undefined ? { prReviewState: String(row.pr_review_state) } : {}),
+    ...(row.pr_check_status !== null && row.pr_check_status !== undefined ? { prCheckStatus: String(row.pr_check_status) } : {}),
+    ciRepairAttempts: Number(row.ci_repair_attempts ?? 0),
+    queueRepairAttempts: Number(row.queue_repair_attempts ?? 0),
   };
 }
 
@@ -529,6 +555,7 @@ function mapRunRow(row: Record<string, unknown>): RunRecord {
     linearIssueId: String(row.linear_issue_id),
     stage: String(row.stage),
     status: String(row.status) as RunStatus,
+    runType: (String(row.run_type ?? "stage")) as import("./db-types.ts").RunType,
     ...(row.workflow_file !== null ? { workflowFile: String(row.workflow_file) } : {}),
     ...(row.prompt_text !== null ? { promptText: String(row.prompt_text) } : {}),
     ...(row.thread_id !== null ? { threadId: String(row.thread_id) } : {}),

@@ -201,6 +201,41 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
     },
   );
 
+  app.post(
+    config.ingress.githubWebhookPath,
+    {
+      config: {
+        rawBody: true,
+      },
+    },
+    async (request, reply) => {
+      const rawBody = typeof request.rawBody === "string" ? Buffer.from(request.rawBody) : request.rawBody;
+      if (!rawBody) {
+        return reply.code(400).send({ ok: false, reason: "missing_raw_body" });
+      }
+
+      const deliveryId = getHeader(request, "x-github-delivery");
+      if (!deliveryId) {
+        return reply.code(400).send({ ok: false, reason: "missing_delivery_header" });
+      }
+
+      const eventType = getHeader(request, "x-github-event");
+      if (!eventType) {
+        return reply.code(400).send({ ok: false, reason: "missing_event_type" });
+      }
+
+      const signature = getHeader(request, "x-hub-signature-256") ?? "";
+
+      const result = await service.acceptGitHubWebhook({
+        deliveryId,
+        eventType,
+        signature,
+        rawBody,
+      });
+      return reply.code(result.status).send(result.body);
+    },
+  );
+
   app.get("/agent/session/:issueKey", async (request, reply) => {
     const issueKey = (request.params as { issueKey: string }).issueKey;
     const token = getQueryParam(request, "token");
