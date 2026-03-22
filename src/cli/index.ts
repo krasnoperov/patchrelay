@@ -321,6 +321,7 @@ export async function runCli(
         json,
         stdout,
         data: operatorData,
+        config,
       });
     }
 
