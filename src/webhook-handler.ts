@@ -9,8 +9,7 @@ import type { CodexAppServerClient } from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import { resolveProject, triggerEventAllowed, trustedActorAllowed } from "./project-resolution.ts";
-import { isPatchRelayStatusComment } from "./linear-workflow.ts";
-import { resolveWorkflowStage, selectWorkflowDefinition, listRunnableStates } from "./workflow-policy.ts";
+// linear-workflow: comment functions removed; workflow-policy: deleted
 import { normalizeWebhook } from "./webhooks.ts";
 import { InstallationWebhookHandler } from "./webhook-installation-handler.ts";
 import type {
@@ -142,7 +141,6 @@ export class WebhookHandler {
           issueKey: issue.identifier,
           projectId: project.id,
           stage: result.desiredStage,
-          ...(trackedIssue?.selectedWorkflowId ? { workflowId: trackedIssue.selectedWorkflowId } : {}),
           status: "queued",
           summary: `Queued ${result.desiredStage} workflow`,
           detail: `Triggered by ${hydrated.triggerEvent}.`,
@@ -173,7 +171,7 @@ export class WebhookHandler {
     normalized: NormalizedEvent,
   ): {
     issue: TrackedIssueRecord | undefined;
-    desiredStage: WorkflowStage | undefined;
+    desiredStage: string | undefined;
     delegated: boolean;
   } {
     const normalizedIssue = normalized.issue;
@@ -181,37 +179,20 @@ export class WebhookHandler {
       return { issue: undefined, desiredStage: undefined, delegated: false };
     }
 
-    const existing = this.db.getTrackedIssue(project.id, normalizedIssue.id);
     const existingIssue = this.db.getIssue(project.id, normalizedIssue.id);
     const activeRun = existingIssue?.activeRunId ? this.db.getRun(existingIssue.activeRunId) : undefined;
     const delegated = this.isDelegatedToPatchRelay(project, normalized);
-    const stageAllowed = triggerEventAllowed(project, normalized.triggerEvent);
+    const triggerAllowed = triggerEventAllowed(project, normalized.triggerEvent);
 
-    // Resolve workflow selection
-    const selectedWorkflowId = activeRun
-      ? existing?.selectedWorkflowId
-      : delegated && stageAllowed && normalizedIssue
-        ? (selectWorkflowDefinition(project, normalizedIssue)?.id ?? null)
-        : existing?.selectedWorkflowId;
-
-    // Resolve desired stage
-    let desiredStage: WorkflowStage | undefined;
-    if (delegated && stageAllowed) {
-      const resolved = resolveWorkflowStage(project, normalizedIssue.stateName, {
-        ...(selectedWorkflowId ? { workflowDefinitionId: selectedWorkflowId } : {}),
-      });
-      if (resolved && resolved !== activeRun?.stage && resolved !== existing?.desiredStage) {
-        desiredStage = resolved;
-      }
+    // In the factory model, delegation + allowed trigger → queue an implementation run
+    let pendingRunType: import("./factory-state.ts").RunType | undefined;
+    if (delegated && triggerAllowed && !activeRun && !existingIssue?.pendingRunType) {
+      pendingRunType = "implementation";
     }
-
-    // Continuation barriers removed - if a human wants to stop automation,
-    // they can undelegate or move the issue to Human Needed.
-    const continuationBarrierAt = undefined;
 
     // Resolve agent session
     const agentSessionId = normalized.agentSession?.id ??
-      (!activeRun && (desiredStage || (normalized.triggerEvent === "delegateChanged" && !delegated)) ? null : undefined);
+      (!activeRun && (pendingRunType || (normalized.triggerEvent === "delegateChanged" && !delegated)) ? null : undefined);
 
     // Upsert the issue
     const issue = this.db.upsertIssue({
@@ -220,17 +201,14 @@ export class WebhookHandler {
       ...(normalizedIssue.identifier ? { issueKey: normalizedIssue.identifier } : {}),
       ...(normalizedIssue.title ? { title: normalizedIssue.title } : {}),
       ...(normalizedIssue.url ? { url: normalizedIssue.url } : {}),
-      ...(selectedWorkflowId !== undefined ? { selectedWorkflowId } : {}),
       ...(normalizedIssue.stateName ? { currentLinearState: normalizedIssue.stateName } : {}),
-      ...(desiredStage !== undefined ? { desiredStage } : {}),
-      ...(continuationBarrierAt !== undefined ? { continuationBarrierAt } : {}),
+      ...(pendingRunType ? { pendingRunType, factoryState: "delegated" as const } : {}),
       ...(agentSessionId !== undefined ? { agentSessionId } : {}),
-      ...(desiredStage ? { lifecycleStatus: "queued" as const } : {}),
     });
 
     return {
       issue: this.db.issueToTrackedIssue(issue),
-      desiredStage,
+      desiredStage: pendingRunType,
       delegated,
     };
   }
@@ -270,7 +248,7 @@ export class WebhookHandler {
     normalized: NormalizedEvent,
     project: ProjectConfig,
     trackedIssue: TrackedIssueRecord | undefined,
-    desiredStage: WorkflowStage | undefined,
+    desiredStage: string | undefined,
     delegated: boolean,
   ): Promise<void> {
     if (!normalized.agentSession?.id || !normalized.issue) return;
@@ -283,14 +261,7 @@ export class WebhookHandler {
 
     if (normalized.triggerEvent === "agentSessionCreated") {
       if (!delegated) {
-        const runnableWorkflow = normalized.issue.stateName
-          ? resolveWorkflowStage(project, normalized.issue.stateName, {
-              ...(trackedIssue?.selectedWorkflowId ? { workflowDefinitionId: trackedIssue.selectedWorkflowId } : {}),
-            })
-          : undefined;
-        const body = runnableWorkflow
-          ? `PatchRelay received your mention. Delegate the issue to PatchRelay to start the ${runnableWorkflow} workflow.`
-          : `PatchRelay received your mention, but the issue is not in a runnable workflow state. Move it to one of: ${listRunnableStates(project).join(", ")}.`;
+        const body = "PatchRelay received your mention. Delegate the issue to PatchRelay to start work.";
         await this.publishAgentActivity(linear, normalized.agentSession.id, { type: "elicitation", body });
         return;
       }
@@ -303,17 +274,16 @@ export class WebhookHandler {
         return;
       }
       if (activeRun) {
-        await this.updateAgentSessionPlan(linear, project, normalized.agentSession.id, trackedIssue, buildRunningSessionPlan(activeRun.stage));
+        await this.updateAgentSessionPlan(linear, project, normalized.agentSession.id, trackedIssue, buildRunningSessionPlan(activeRun.runType));
         await this.publishAgentActivity(linear, normalized.agentSession.id, {
           type: "response",
-          body: `PatchRelay is already running the ${activeRun.stage} workflow for this issue.`,
+          body: `PatchRelay is already running the ${activeRun.runType} workflow for this issue.`,
         });
         return;
       }
-      const runnableStates = listRunnableStates(project).join(", ");
       await this.publishAgentActivity(linear, normalized.agentSession.id, {
         type: "elicitation",
-        body: `PatchRelay is delegated, but the issue is not in a runnable workflow state. Move it to one of: ${runnableStates}.`,
+        body: "PatchRelay is delegated, but no work is queued. Delegate the issue or move it to Start to trigger implementation.",
       });
       return;
     }
@@ -332,9 +302,9 @@ export class WebhookHandler {
           kind: "agent",
           projectId: project.id,
           issueKey: trackedIssue?.issueKey,
-          stage: activeRun.stage,
+          stage: activeRun.runType,
           status: "delivered",
-          summary: `Delivered follow-up prompt to active ${activeRun.stage} workflow`,
+          summary: `Delivered follow-up prompt to active ${activeRun.runType} workflow`,
         });
       } catch {
         this.feed?.publish({
@@ -342,14 +312,14 @@ export class WebhookHandler {
           kind: "agent",
           projectId: project.id,
           issueKey: trackedIssue?.issueKey,
-          stage: activeRun.stage,
+          stage: activeRun.runType,
           status: "delivery_failed",
-          summary: `Could not deliver follow-up prompt to active ${activeRun.stage} workflow`,
+          summary: `Could not deliver follow-up prompt to active ${activeRun.runType} workflow`,
         });
       }
       await this.publishAgentActivity(linear, normalized.agentSession.id, {
         type: "thought",
-        body: `PatchRelay routed your follow-up instructions into the active ${activeRun.stage} workflow.`,
+        body: `PatchRelay routed your follow-up instructions into the active ${activeRun.runType} workflow.`,
       });
       return;
     }
@@ -384,7 +354,11 @@ export class WebhookHandler {
     const run = this.db.getRun(issue.activeRunId);
     if (!run?.threadId || !run.turnId) return;
 
-    if (isPatchRelayStatusComment(normalized.comment.id, normalized.comment.body, issue.statusCommentId)) {
+    // Skip our own status comments
+    if (issue.statusCommentId && normalized.comment.id === issue.statusCommentId) {
+      return;
+    }
+    if (typeof normalized.comment.body === "string" && normalized.comment.body.includes("<!-- patchrelay:status-comment -->")) {
       return;
     }
 
@@ -402,9 +376,9 @@ export class WebhookHandler {
         kind: "comment",
         projectId: project.id,
         issueKey: trackedIssue?.issueKey,
-        stage: run.stage,
+        stage: run.runType,
         status: "delivered",
-        summary: `Delivered follow-up comment to active ${run.stage} workflow`,
+        summary: `Delivered follow-up comment to active ${run.runType} workflow`,
       });
     } catch {
       this.feed?.publish({
@@ -412,9 +386,9 @@ export class WebhookHandler {
         kind: "comment",
         projectId: project.id,
         issueKey: trackedIssue?.issueKey,
-        stage: run.stage,
+        stage: run.runType,
         status: "delivery_failed",
-        summary: `Could not deliver follow-up comment to active ${run.stage} workflow`,
+        summary: `Could not deliver follow-up comment to active ${run.runType} workflow`,
       });
     }
   }

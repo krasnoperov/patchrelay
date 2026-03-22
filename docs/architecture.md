@@ -1,59 +1,369 @@
-# PatchRelay Architecture
+# PatchRelay Detailed Architecture
 
-## What It Does
+## Purpose
 
-PatchRelay connects Linear issue delegation to Codex worktrees. When an issue is delegated to PatchRelay and moved to a workflow state (e.g. Start), PatchRelay:
+This document describes the clean-slate target architecture for PatchRelay as a Linear-native agentic software factory.
 
-1. Creates a git worktree and branch for the issue
-2. Starts a Codex thread with the workflow instructions
-3. Updates Linear state as the stage progresses
-4. Parses the stage result and auto-transitions to the next stage
-5. Repeats until the issue reaches Done or Human Needed
+The service is not a generic prompt runner. It is the deterministic orchestration layer that turns a delegated Linear issue into a reviewed, repairable, merge-queued pull request.
 
-## Core Modules
+## External Patterns We Are Combining
 
-Three modules handle everything:
+PatchRelay intentionally combines three patterns:
 
-- **webhook-handler.ts** - receives Linear webhooks, resolves project, upserts issue, sets desired stage, delivers comments/prompts to active Codex turns
-- **stage-executor.ts** - launches Codex turns, handles completion notifications, parses handoffs, manages automatic transitions, runs startup reconciliation
-- **db.ts** - unified SQLite database with `issues` and `runs` tables plus direct query functions
+1. **OpenAI harness engineering**
+   - short `AGENTS.md`
+   - repo-local docs as system of record
+   - worktree-bootable development environments
+   - strict architecture boundaries that agents can reason about
+2. **Linear official agent demo**
+   - app-backed OAuth installation
+   - webhook-driven Linear interactions
+   - native session activity model
+3. **Community long-running agent harness**
+   - durable autonomous loop
+   - resume-after-failure behavior
+   - environment and command safety hooks
 
-## Database
+What we are **not** copying:
 
-4 core tables + 3 auth tables:
+- a comment-only Linear bot
+- a single monolithic instruction file
+- a polling-only backlog worker
+- a one-shot coding session without repair loops
 
-- **issues** - all issue state in one row (project, Linear metadata, desired stage, workspace path, active run, lifecycle status)
-- **runs** - one row per stage execution (stage, status, thread/turn IDs, report)
-- **webhook_events** - idempotent webhook intake
-- **run_thread_events** - optional extended Codex notification history
+## Component Topology
 
-Auth tables (linear_installations, project_installations, oauth_states) are unchanged.
+```mermaid
+flowchart TB
+  subgraph Linear
+    LS[Agent Sessions]
+    LI[Issues / Comments / Projects]
+  end
 
-## Request Flow
+  subgraph PatchRelay
+    LG[Linear Gateway]
+    CP[Control Plane]
+    WM[Workspace Manager]
+    RR[Run Router]
+    RS[Repair Services]
+    ST[State Store]
+  end
 
-1. Linear webhook arrives → signature verified → deduplicated → enqueued
-2. Webhook handler resolves project, checks delegation and trust, upserts issue, sets desired stage
-3. Stage executor claims the run atomically, creates worktree, starts Codex thread+turn
-4. On turn/completed: reads thread, builds report, finishes run, tries automatic transition
-5. Transition: parses "Next stage:" from output, or uses workflow default, or routes to Human Needed
+  subgraph Execution
+    CR[Codex Runtime]
+    WT[Git Worktrees]
+  end
 
-## Automatic Transitions
+  subgraph Delivery
+    GH[GitHub]
+    MQ[Merge Queue Provider]
+  end
 
-After a stage completes, PatchRelay checks:
-- Is the issue still delegated to PatchRelay?
-- Is there already a newer desired stage?
-- Did the Linear state move to a terminal state (Done, Cancelled)?
+  LS --> LG
+  LI --> LG
+  LG --> CP
+  CP --> WM
+  CP --> RR
+  RR --> CR
+  WM --> WT
+  CR --> WT
+  CR --> GH
+  GH --> CP
+  MQ --> CP
+  CP --> ST
+  ST --> CP
+  CP --> LS
+  CP --> RS
+  RS --> CR
+```
 
-If all clear, it parses the stage result for "Next stage: X" or falls back to the workflow's configured default transition (development→review→deploy→done).
+## Core Responsibilities
 
-## Reconciliation
+### Linear Gateway
 
-On startup and periodically, PatchRelay checks running runs:
-- Thread completed → complete the run and advance
-- Thread interrupted → restart with a recovery prompt
-- Thread missing → fail the run
-- Linear in terminal state → release the run
+Owns:
 
-## Kept Periphery
+- webhook verification
+- webhook idempotency
+- OAuth app installation
+- conversion from Linear webhook payloads to internal events
+- emission of activities, plans, and external links
 
-These modules are unchanged: codex-app-server, linear-client, config, worktree-manager, webhooks, http, token-crypto, project-resolution, workflow-policy, stage-launch, stage-handoff, stage-reporting, stage-failure, linear-workflow, agent-session-plan, agent-session-presentation, public-agent-session-status, service-queue, operator-feed, logging, utils.
+The gateway must emit an activity or update external URLs quickly enough to satisfy Linear’s responsiveness expectations.
+
+### Control Plane
+
+Owns:
+
+- issue-to-run ownership
+- state transitions
+- retry counters
+- escalation decisions
+- deciding which specialized run to start next
+
+The control plane should know nothing about raw HTTP, GraphQL payload shapes, or provider SDK details beyond typed adapter interfaces.
+
+### Workspace Manager
+
+Owns:
+
+- `git worktree` lifecycle
+- worktree path conventions
+- per-worktree setup hook execution
+- runtime isolation metadata
+
+Recommended path pattern:
+
+- `.trees/<issue-key>/main`
+
+Per-worktree setup should support:
+
+- shared dependency caches
+- per-worktree env files
+- deterministic port allocation
+- optional local observability bootstrapping
+
+### Run Router
+
+Owns dispatching the correct run type:
+
+- `implementation`
+- `review_fix`
+- `ci_repair`
+- `queue_repair`
+
+The run router chooses prompts, input context, retry policy, and expected outputs based on run type.
+
+### Codex Runtime
+
+Owns:
+
+- starting and monitoring Codex execution
+- streaming tool and text output for operator visibility
+- collecting structured run results
+
+Preferred path:
+
+- Codex App Server
+
+Fallback path:
+
+- Codex CLI wrapper
+
+### Delivery Adapters
+
+GitHub owns:
+
+- PR lifecycle
+- reviews
+- required checks
+- branch protection
+
+Merge Queue Provider owns:
+
+- enqueueing
+- queue status
+- integration validation
+- final landing signal
+
+## Internal Event Model
+
+PatchRelay should normalize all outside inputs into internal events.
+
+### Linear Events
+
+- `linear.session_created`
+- `linear.session_prompted`
+- `linear.issue_updated`
+- `linear.comment_received`
+
+### GitHub Events
+
+- `github.pr_opened`
+- `github.review_submitted`
+- `github.review_comment_added`
+- `github.check_suite_completed`
+- `github.check_run_completed`
+
+### Merge Queue Events
+
+- `queue.enqueued`
+- `queue.blocked`
+- `queue.failed`
+- `queue.merged`
+
+### Internal Events
+
+- `run.started`
+- `run.completed`
+- `run.failed`
+- `run.escalated`
+- `workspace.ready`
+
+All orchestration should happen from these normalized events.
+
+## Issue Lifecycle
+
+### Main Flow
+
+```text
+Delegated in Linear
+-> Session acknowledged
+-> Plan published
+-> Worktree prepared
+-> Implementation run
+-> PR opened
+-> Review loop
+-> Approved and checks green
+-> Merge queue
+-> Merged
+```
+
+### Repair Loops
+
+#### Review Loop
+
+Triggered by:
+
+- review comments
+- changes requested
+- Linear follow-up instructions
+
+Behavior:
+
+- resume same worktree and branch
+- update Linear plan if the task meaningfully changed
+- push follow-up commit
+
+#### CI Repair Loop
+
+Triggered by:
+
+- required PR checks failing
+
+Behavior:
+
+- gather failing check names and logs
+- run a specialized repair prompt
+- push fix to same branch
+- wait for checks again
+
+#### Queue Repair Loop
+
+Triggered by:
+
+- merge queue failure
+- integration rebase failure
+- batch validation failure
+
+Behavior:
+
+- treat this as an integration failure, not a normal PR failure
+- fetch the latest base branch state
+- repair in the same worktree if possible
+- return to review if the branch changed materially
+- re-enqueue after approval and checks
+
+## Failure Taxonomy
+
+### Repairable Automatically
+
+- formatting or lint failures
+- deterministic test failures
+- straightforward rebase conflicts
+- missing queue metadata or stale enqueue state
+
+### Escalate Quickly
+
+- ambiguous product decisions
+- repeated semantic integration failures
+- broken credentials or revoked installations
+- repository setup hook failures that block all progress
+
+## Provider Interfaces
+
+PatchRelay should expose explicit interfaces for:
+
+### LinearProvider
+
+- install and token management
+- session activity emission
+- plan updates
+- proactive session creation
+- issue and comment lookup
+
+### SourceControlProvider
+
+- create/update PR
+- list unresolved review comments
+- list required checks
+- fetch failing logs
+- query mergeability and branch protection status
+
+### MergeQueueProvider
+
+- enqueue
+- dequeue
+- get status
+- get blockers
+- parse failure reason
+- detect successful delivery
+
+### AgentRuntimeProvider
+
+- start run
+- stream events
+- cancel run
+- collect result summary
+
+## State Storage
+
+PatchRelay needs durable state, but only for coordination.
+
+Recommended entities:
+
+- `installations`
+- `issues`
+- `agent_sessions`
+- `workspaces`
+- `runs`
+- `pull_requests`
+- `review_events`
+- `check_events`
+- `queue_entries`
+- `escalations`
+
+Prefer storing authoritative identifiers and decisions, not large duplicated provider payloads.
+
+## Guidance Files And Repo Contracts
+
+The repository should eventually own these contracts:
+
+- `AGENTS.md`
+- `ARCHITECTURE.md`
+- `PRODUCT_SPEC.md`
+- `.factory/setup-worktree.sh`
+- `.factory/checks.yaml`
+- `.factory/review-policy.yaml`
+- `.factory/merge-queue.yaml`
+
+The service should read these contracts rather than hiding workflow logic in prompts.
+
+## Recommended Implementation Order
+
+1. Linear installation, webhook verification, and session response
+2. Worktree manager with setup hook support
+3. Codex runtime adapter
+4. GitHub PR and review adapter
+5. Control plane state machine
+6. CI repair loop
+7. Graphite queue adapter
+8. Queue repair loop
+
+## What The Current Repo Should Optimize For
+
+- docs that an agent can navigate quickly
+- strong separation between product logic and provider adapters
+- minimal historical coupling to the old stage model
+- making local execution per worktree cheap and repeatable
+- keeping every important decision visible in-repo

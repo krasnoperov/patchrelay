@@ -53,7 +53,7 @@ export interface EventsResult {
     id: number;
     runId: number;
     threadId: string;
-    turnId?: string;
+    turnId?: string | undefined;
     method: string;
     eventJson: string;
     createdAt: string;
@@ -116,8 +116,8 @@ function summarizeThread(thread: CodexThreadSummary, latestTimestampSeen?: strin
   };
 }
 
-function latestEventTimestamp(db: PatchRelayDatabase, stageRunId: number): string | undefined {
-  const events = db.listThreadEvents(stageRunId);
+function latestEventTimestamp(db: PatchRelayDatabase, runId: number): string | undefined {
+  const events = db.listThreadEvents(runId);
   return events.at(-1)?.createdAt;
 }
 
@@ -276,7 +276,7 @@ export class CliDataAccess extends CliOperatorApiClient {
     }
 
     const codex = await this.getCodex();
-    const thread = await codex.startThread({ cwd: worktree.workspace.worktreePath });
+    const thread = await codex.startThread({ cwd: worktree.worktreePath });
     this.db.upsertIssue({
       projectId: worktree.issue.projectId,
       linearIssueId: worktree.issue.linearIssueId,
@@ -377,15 +377,15 @@ export class CliDataAccess extends CliOperatorApiClient {
   }
 
   private async ensureOpenWorktree(worktree: WorktreeResult): Promise<void> {
-    if (existsSync(worktree.workspace.worktreePath)) return;
+    if (existsSync(worktree.worktreePath)) return;
     const project = this.config.projects.find((entry) => entry.id === worktree.repoId);
     if (!project) throw new Error(`Project not found for ${worktree.repoId}`);
     const worktreeManager = new WorktreeManager(this.config);
     await worktreeManager.ensureIssueWorktree(
       project.repoPath,
       project.worktreeRoot,
-      worktree.workspace.worktreePath,
-      worktree.workspace.branchName,
+      worktree.worktreePath,
+      worktree.branchName,
     );
   }
 

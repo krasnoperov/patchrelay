@@ -1,44 +1,77 @@
-# PatchRelay Agent Notes
+# PatchRelay Agent Guide
 
-PatchRelay is a harness around Codex and Linear. Keep changes aligned with the current harness
-boundaries and avoid pulling repo-specific workflow policy into the service core.
+PatchRelay is being redesigned as a **Linear-centered agentic software factory**.
+Treat this repository as a fresh-start architecture effort, not as an extension of the older staged-run design.
 
-Use these docs selectively:
+## Start Here
 
-- Read [docs/module-map.md](./docs/module-map.md) before making structural or cross-module changes.
-- Read [docs/state-authority.md](./docs/state-authority.md) before changing persistence, reconciliation, or ownership logic.
-- Read [docs/persistence-audit.md](./docs/persistence-audit.md) when adding or removing stored fields, changing DB tables, or reclassifying data as authoritative versus derived.
-- Read [docs/shipping.md](./docs/shipping.md) when the task is to release PatchRelay, publish it to npm, or upgrade a live PatchRelay install.
+Read these in order:
 
-Working guidance:
+1. [ARCHITECTURE.md](./ARCHITECTURE.md) for the system map and dependency rules.
+2. [PRODUCT_SPEC.md](./PRODUCT_SPEC.md) for product requirements and scope.
+3. [docs/design-docs/index.md](./docs/design-docs/index.md) for design principles and deeper references.
+4. [docs/architecture.md](./docs/architecture.md) for the detailed control-plane design.
+5. [docs/product-specs/index.md](./docs/product-specs/index.md) for product-facing requirements and future specs.
 
-- Keep SQLite focused on harness coordination and restart-safe ownership state.
-- Treat raw event history, reports, and operator-facing views as derived unless a change truly needs them for correctness.
-- Prefer small boundary-tightening changes over broad refactors.
+## Core Intent
 
-Execution defaults:
+PatchRelay should:
 
-- When user intent is clear and the next step is the obvious, lowest-risk, policy-compliant continuation, do it without asking.
-- Ask only when there are multiple materially different outcomes, meaningful risk of data loss, or hidden consequences the user may reasonably want to choose between.
-- Prefer the shortest compliant path that preserves a clean repo state and avoids temporary local-only states.
-- If platform or repo rules block the direct path, switch to the nearest compliant path instead of stopping for a confirmation that does not change the outcome.
-- Do not split one obvious task into multiple permission checkpoints.
+- receive delegated work through **Linear Agent Sessions**
+- orchestrate long-running work in **isolated git worktrees**
+- run implementation and repair loops through **Codex**
+- use **GitHub** as the canonical source of PR, review, and check truth
+- treat **merge queues as pluggable providers**, with Graphite as the first target
 
-Release workflow guidance:
+PatchRelay should not:
 
-- Do all development on a short-lived branch. Do not commit directly on `main`.
-- Start new work from the current `main` tip into a topic branch such as `fix/...`, `feat/...`, or `chore/...`.
-- Merge completed work back through a branch/PR flow so Release Please can see a clean releasable history on `main`.
-- Do not locally merge a topic branch into `main` before the PR merge. Keep local `main` aligned with `origin/main`, merge through GitHub, then fast-forward local `main` afterward.
-- For docs-only or other non-functional changes, prefer the shortest path: branch, commit, push, open PR, merge PR, sync local `main`.
-- Run `npm run ci` before merging a PR when the change touches code, tests, build tooling, workflows, or runtime behavior. Docs-only changes may skip the local `npm run ci` run unless explicitly requested.
-- CI should run for branch pushes, pull requests, and pushes to `main` so failures surface before and after merge.
-- Prefer squash merges for releasable work. Release Please documents squash merge as the recommended mode for commit-message overrides and clean release parsing.
-- Make the squash commit or final merge-to-`main` commit use a Conventional Commit title. In this repo, `feat:` triggers the next minor release and `fix:` triggers the next patch release while still in `0.x`. `deps:` is also releasable; `chore:` alone is not.
-- Assume `main` branch protection is authoritative. Do not attempt direct pushes to `main`; open a PR and use `gh pr merge --squash --delete-branch` once checks are satisfied.
-- If the user asks to merge and `main` is protected, default to: push branch, open PR, squash merge, sync local `main`.
-- Release Please in this repo runs from `.github/workflows/release.yml` on pushes to `main`, using `release-please-config.json` and `.release-please-manifest.json`. A release PR is only opened or updated after releasable commits land on `main`.
-- `main` is protected by required GitHub checks. Keep the workflow job names `lint`, `typecheck`, and `test` stable unless you are also updating the branch protection/ruleset to match.
-- CI and Release Please run on GitHub-hosted runners for this repo. Keep workflow `runs-on` labels aligned with GitHub-hosted images unless a trusted workflow has a specific need for self-hosted infrastructure.
-- Do not develop on or manually repurpose the `release-please--branches--main--components--patchrelay` branch. That branch is owned by Release Please.
-- If a release PR does not appear after releasable work lands on `main`, check for stale PRs or labels such as `autorelease: pending` / `autorelease: triggered`, then rerun the Release Please workflow.
+- treat Linear as only a generic issue queue
+- hide workflow state inside prompts alone
+- couple the product to one merge queue vendor
+- preserve old architecture decisions unless they survive the new design docs
+
+## Working Rules
+
+- Prefer short root docs and deeper `docs/` pages over one giant instruction file.
+- Keep human-facing progress in Linear through native session activities and plans.
+- Keep the human accountable in Linear; the agent acts as the delegate.
+- Use one owning agent per issue branch. Additional agents, if any, are helpers inside that issue workflow.
+- Reuse the same worktree for implementation, review fixes, CI fixes, and merge-queue repair.
+- Treat CI repair and queue repair as distinct loops with separate retry budgets.
+- Keep repo-specific workflow policy in versioned docs and config files, not in service code or ad hoc prompts.
+- When product or architecture behavior changes, update the docs in the same change.
+
+## Document Map
+
+- [ARCHITECTURE.md](./ARCHITECTURE.md): top-level system map
+- [PRODUCT_SPEC.md](./PRODUCT_SPEC.md): product requirements
+- [docs/design-docs/core-beliefs.md](./docs/design-docs/core-beliefs.md): agent-first principles
+- [docs/architecture.md](./docs/architecture.md): detailed component, state, and event design
+- [docs/references/external-patterns.md](./docs/references/external-patterns.md): notes from external references
+- [docs/archive/](./docs/archive): historical material only; not source of truth for the redesign
+
+## If You Are Making Changes
+
+For docs-only work:
+
+- keep `AGENTS.md` concise
+- push durable reasoning into `docs/`
+- cross-link new documents from the existing indexes
+
+For product or architecture work:
+
+- update both [PRODUCT_SPEC.md](./PRODUCT_SPEC.md) and [docs/architecture.md](./docs/architecture.md) when behavior changes
+- preserve the separation between control plane, adapters, and execution runtime
+- avoid pulling provider-specific behavior into shared orchestration logic
+
+For implementation work later:
+
+- make the app bootable per worktree
+- prefer explicit contracts over implicit prompt conventions
+- keep external integrations behind interfaces that are easy for agents to inspect
+
+## Historical Caution
+
+The repository contains older code and docs from multiple refactors.
+Assume those artifacts are useful as reference material only if they agree with the current top-level docs.
+If they disagree, the current design docs win.

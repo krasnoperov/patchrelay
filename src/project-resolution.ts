@@ -1,8 +1,8 @@
 import type { AppConfig, IssueMetadata, LinearActorMetadata, ProjectConfig, TriggerEvent } from "./types.ts";
 
 function matchesProject(issue: IssueMetadata, project: ProjectConfig): boolean {
-  if (project.issueKeyPrefixes.length > 0 && issue.key) {
-    const prefix = issue.key.split("-")[0];
+  if (project.issueKeyPrefixes.length > 0 && issue.identifier) {
+    const prefix = issue.identifier.split("-")[0];
     if (prefix && project.issueKeyPrefixes.includes(prefix)) return true;
   }
   if (project.linearTeamIds.length > 0 && issue.teamId) {

@@ -123,7 +123,7 @@ export function formatOpen(
 export function formatRetry(result: RetryResult): string {
   return `${[
     value("Issue", result.issue.issueKey ?? result.issue.linearIssueId),
-    value("Queued stage", result.stage),
+    value("Queued stage", result.runType),
     result.reason ? value("Reason", result.reason) : undefined,
   ]
     .filter(Boolean)
@@ -136,9 +136,9 @@ export function formatList(items: ListResultItem[]): string {
       [
         item.issueKey ?? "-",
         item.currentLinearState ?? "-",
-        item.lifecycleStatus,
-        item.activeStage ?? "-",
-        item.latestStage ? `${item.latestStage}:${item.latestStageStatus ?? "-"}` : "-",
+        item.factoryState,
+        item.activeRunType ?? "-",
+        item.latestRunType ? `${item.latestRunType}:${item.latestRunStatus ?? "-"}` : "-",
         item.updatedAt,
       ].join("\t"),
     )

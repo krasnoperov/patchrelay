@@ -3,8 +3,8 @@ import type { CodexAppServerClient, CodexNotification } from "./codex-app-server
 import type { PatchRelayDatabase } from "./db.ts";
 import { GitHubWebhookHandler } from "./github-webhook-handler.ts";
 import { IssueQueryService } from "./issue-query-service.ts";
-import { ReactiveExecutor } from "./reactive-executor.ts";
 import { LinearOAuthService } from "./linear-oauth-service.ts";
+import { RunOrchestrator } from "./run-orchestrator.ts";
 import { OperatorEventFeed, type OperatorFeedQuery } from "./operator-feed.ts";
 import {
   buildSessionStatusUrl,
@@ -13,17 +13,15 @@ import {
   verifySessionStatusToken,
 } from "./public-agent-session-status.ts";
 import { ServiceRuntime } from "./service-runtime.ts";
-import { StageExecutor } from "./stage-executor.ts";
 import { WebhookHandler } from "./webhook-handler.ts";
 import { acceptIncomingWebhook } from "./service-webhooks.ts";
 import type { AppConfig, LinearClient, LinearClientProvider } from "./types.ts";
 
 export class PatchRelayService {
   readonly linearProvider: LinearClientProvider;
-  private readonly stageExecutor: StageExecutor;
+  private readonly orchestrator: RunOrchestrator;
   private readonly webhookHandler: WebhookHandler;
   private readonly githubWebhookHandler: GitHubWebhookHandler;
-  private readonly reactiveExecutor: ReactiveExecutor;
   private readonly oauthService: LinearOAuthService;
   private readonly queryService: IssueQueryService;
   private readonly runtime: ServiceRuntime;
@@ -43,14 +41,10 @@ export class PatchRelayService {
       throw new Error("Service runtime enqueueIssue is not initialized");
     };
 
-    this.stageExecutor = new StageExecutor(
-      config,
-      db,
-      codex,
-      this.linearProvider,
-      (projectId, issueId) => enqueueIssue(projectId, issueId),
-      logger,
-      this.feed,
+    this.orchestrator = new RunOrchestrator(
+      config, db, codex, this.linearProvider,
+      (projectId: string, issueId: string) => enqueueIssue(projectId, issueId),
+      logger, this.feed,
     );
 
     this.webhookHandler = new WebhookHandler(
@@ -68,28 +62,22 @@ export class PatchRelayService {
       (projectId, issueId) => enqueueIssue(projectId, issueId),
       logger, this.feed,
     );
-    this.reactiveExecutor = new ReactiveExecutor(config, db, codex, logger, this.feed);
-
     const runtime = new ServiceRuntime(
       codex,
       logger,
-      this.stageExecutor,
+      this.orchestrator,
       { listIssuesReadyForExecution: () => db.listIssuesReadyForExecution() },
       this.webhookHandler,
-      { processIssue: (item) => this.stageExecutor.run(item) },
+      { processIssue: (item: { projectId: string; issueId: string }) => this.orchestrator.run(item) },
     );
     enqueueIssue = (projectId, issueId) => runtime.enqueueIssue(projectId, issueId);
 
     this.oauthService = new LinearOAuthService(config, { linearInstallations: db.linearInstallations }, logger);
-    this.queryService = new IssueQueryService(
-      { issueWorkflows: db as any, stageEvents: { listThreadEvents: (id: number) => db.listThreadEvents(id) } },
-      codex,
-      this.stageExecutor,
-    );
+    this.queryService = new IssueQueryService(db, codex, this.orchestrator);
     this.runtime = runtime;
 
     this.codex.on("notification", (notification: CodexNotification) => {
-      void this.stageExecutor.handleCodexNotification(notification);
+      void this.orchestrator.handleCodexNotification(notification);
     });
   }
 
@@ -191,14 +179,7 @@ export class PatchRelayService {
   }
 
   async processIssue(item: { projectId: string; issueId: string }): Promise<void> {
-    // Check if there's a pending reactive run (CI repair, review fix, etc.)
-    const issue = this.db.getIssue(item.projectId, item.issueId);
-    if (issue?.pendingRunType) {
-      await this.reactiveExecutor.run(item);
-      return;
-    }
-    // Otherwise, run the normal stage executor
-    await this.stageExecutor.run(item);
+    await this.orchestrator.run(item);
   }
 
   async getIssueOverview(issueKey: string) {
@@ -209,12 +190,12 @@ export class PatchRelayService {
     return await this.queryService.getIssueReport(issueKey);
   }
 
-  async getStageEvents(issueKey: string, stageRunId: number) {
-    return await this.queryService.getStageEvents(issueKey, stageRunId);
+  async getRunEvents(issueKey: string, runId: number) {
+    return await this.queryService.getRunEvents(issueKey, runId);
   }
 
-  async getActiveStageStatus(issueKey: string) {
-    return await this.stageExecutor.getActiveStageStatus(issueKey);
+  async getActiveRunStatus(issueKey: string) {
+    return await this.orchestrator.getActiveRunStatus(issueKey);
   }
 
   createPublicAgentSessionStatusLink(
