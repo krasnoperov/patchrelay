@@ -57,7 +57,7 @@ function buildRunPrompt(issue: IssueRecord, runType: RunType, repoPath: string, 
   const lines: string[] = [
     `Issue: ${issue.issueKey ?? issue.linearIssueId}`,
     issue.title ? `Title: ${issue.title}` : undefined,
-    `Branch: ${issue.branchName}`,
+    issue.branchName ? `Branch: ${issue.branchName}` : undefined,
     issue.prNumber ? `PR: #${issue.prNumber}` : undefined,
     "",
   ].filter(Boolean) as string[];
@@ -233,8 +233,9 @@ export class RunOrchestrator {
         throw new Error(`prepare-worktree hook failed (exit ${prepareResult.exitCode}): ${prepareResult.stderr?.slice(0, 500) ?? ""}`);
       }
 
-      // Start or reuse Codex thread
-      if (issue.threadId && runType !== "implementation") {
+      // Reuse the existing thread only for review_fix (reviewer context matters).
+      // Implementation, ci_repair, and queue_repair get fresh threads.
+      if (issue.threadId && runType === "review_fix") {
         threadId = issue.threadId;
       } else {
         const thread = await this.codex.startThread({ cwd: worktreePath });

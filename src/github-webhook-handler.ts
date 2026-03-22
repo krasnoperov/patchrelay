@@ -124,7 +124,7 @@ export class GitHubWebhookHandler {
         newState = undefined;
       }
 
-      if (newState) {
+      if (newState && newState !== issue.factoryState) {
         this.db.upsertIssue({
           projectId: issue.projectId,
           linearIssueId: issue.linearIssueId,
