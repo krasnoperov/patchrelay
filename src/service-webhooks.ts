@@ -1,7 +1,7 @@
 import type { Logger } from "pino";
 import type { AppConfig, LinearWebhookPayload, NormalizedEvent } from "./types.ts";
 import { normalizeWebhook } from "./webhooks.ts";
-import { redactSensitiveHeaders, timestampMsWithinSkew, verifyHmacSha256Hex } from "./utils.ts";
+import { timestampMsWithinSkew, verifyHmacSha256Hex } from "./utils.ts";
 
 export interface AcceptedWebhook {
   id: number;
@@ -13,33 +13,14 @@ interface WebhookEventStorelike {
   insertWebhookEvent(params: {
     webhookId: string;
     receivedAt: string;
-    eventType: string;
-    issueId?: string;
-    headersJson: string;
     payloadJson: string;
-    signatureValid: boolean;
-    dedupeStatus: string;
-  }): { id: number; inserted?: boolean; dedupeStatus?: string };
-}
-
-interface EventReceiptStorelike {
-  insertEventReceipt(params: {
-    source: string;
-    externalId: string;
-    eventType: string;
-    receivedAt: string;
-    acceptanceStatus: string;
-    linearIssueId?: string;
-    headersJson?: string;
-    payloadJson?: string;
-  }): { id: number; acceptanceStatus?: string };
+  }): { id: number; dedupeStatus?: string };
 }
 
 export async function acceptIncomingWebhook(params: {
   config: AppConfig;
   stores: {
     webhookEvents: WebhookEventStorelike;
-    eventReceipts: EventReceiptStorelike;
   };
   logger: Logger;
   webhookId: string;
@@ -85,8 +66,6 @@ export async function acceptIncomingWebhook(params: {
     return { status: 400, body: { ok: false, reason: "unsupported_payload" } };
   }
 
-  const sanitizedHeaders = redactSensitiveHeaders(params.headers);
-  const headersJson = JSON.stringify(sanitizedHeaders);
   const payloadJson = JSON.stringify(payload);
 
   logWebhookSummary(params.logger, normalized);
@@ -94,22 +73,14 @@ export async function acceptIncomingWebhook(params: {
   const stored = params.stores.webhookEvents.insertWebhookEvent({
     webhookId: params.webhookId,
     receivedAt,
-    eventType: normalized.eventType,
-    ...(normalized.issue ? { issueId: normalized.issue.id } : {}),
-    headersJson,
     payloadJson,
-    signatureValid: true,
-    dedupeStatus: "accepted",
   });
 
-  const isDuplicate = stored.dedupeStatus === "duplicate" || stored.inserted === false;
+  const isDuplicate = stored.dedupeStatus === "duplicate";
   if (isDuplicate) {
-    recordEventReceipt(params.stores, { webhookId: params.webhookId, receivedAt, normalized, headersJson, payloadJson });
     params.logger.info({ webhookId: params.webhookId, webhookEventId: stored.id }, "Ignoring duplicate webhook delivery");
     return { status: 200, body: { ok: true, duplicate: true } };
   }
-
-  recordEventReceipt(params.stores, { webhookId: params.webhookId, receivedAt, normalized, headersJson, payloadJson });
 
   params.logger.info(
     {
@@ -127,28 +98,6 @@ export async function acceptIncomingWebhook(params: {
     status: 200,
     body: { ok: true, accepted: true, webhookEventId: stored.id },
   };
-}
-
-function recordEventReceipt(
-  stores: { eventReceipts: EventReceiptStorelike },
-  params: {
-    webhookId: string;
-    receivedAt: string;
-    normalized: NormalizedEvent;
-    headersJson: string;
-    payloadJson: string;
-  },
-): void {
-  stores.eventReceipts.insertEventReceipt({
-    source: "linear-webhook",
-    externalId: params.webhookId,
-    eventType: params.normalized.eventType,
-    receivedAt: params.receivedAt,
-    acceptanceStatus: "accepted",
-    ...(params.normalized.issue ? { linearIssueId: params.normalized.issue.id } : {}),
-    headersJson: params.headersJson,
-    payloadJson: params.payloadJson,
-  });
 }
 
 function logWebhookSummary(logger: Logger, normalized: NormalizedEvent): void {

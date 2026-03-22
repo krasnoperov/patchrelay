@@ -44,7 +44,7 @@ export class WebhookHandler {
   }
 
   async processWebhookEvent(webhookEventId: number): Promise<void> {
-    const event = this.db.getFullWebhookEvent(webhookEventId);
+    const event = this.db.getWebhookPayload(webhookEventId);
     if (!event) {
       this.logger.warn({ webhookEventId }, "Webhook event was not found during processing");
       return;
@@ -151,7 +151,7 @@ export class WebhookHandler {
       this.feed?.publish({
         level: "error",
         kind: "webhook",
-        projectId: event.projectId ?? undefined,
+        projectId: undefined,
         status: "failed",
         summary: "Failed to process webhook",
         detail: sanitizeDiagnosticText(err.message),

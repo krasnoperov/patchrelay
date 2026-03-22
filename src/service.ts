@@ -129,15 +129,9 @@ export class PatchRelayService {
       config: this.config,
       stores: {
         webhookEvents: {
-          insertWebhookEvent: (p: any) => {
+          insertWebhookEvent: (p: { webhookId: string; receivedAt: string; payloadJson: string }) => {
             const r = this.db.insertFullWebhookEvent(p);
-            return { id: r.id, inserted: r.dedupeStatus !== "duplicate", dedupeStatus: r.dedupeStatus };
-          },
-        },
-        eventReceipts: {
-          insertEventReceipt: (p: any) => {
-            const webhookResult = this.db.insertWebhookEvent(p.externalId, p.receivedAt);
-            return { id: webhookResult.id, acceptanceStatus: webhookResult.duplicate ? "duplicate" : "accepted" };
+            return { id: r.id, dedupeStatus: r.dedupeStatus };
           },
         },
       },

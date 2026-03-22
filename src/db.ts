@@ -38,13 +38,32 @@ export class PatchRelayDatabase {
       return { id: existing.id as number, duplicate: true };
     }
     const result = this.connection
-      .prepare("INSERT INTO webhook_events (webhook_id, received_at, event_type, headers_json, payload_json, signature_valid, dedupe_status) VALUES (?, ?, '', '{}', '{}', 1, 'accepted')")
+      .prepare("INSERT INTO webhook_events (webhook_id, received_at) VALUES (?, ?)")
       .run(webhookId, receivedAt);
     return { id: Number(result.lastInsertRowid), duplicate: false };
   }
 
-  getWebhookEvent(id: number) {
-    return this.connection.prepare("SELECT * FROM webhook_events WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+  insertFullWebhookEvent(params: {
+    webhookId: string;
+    receivedAt: string;
+    payloadJson: string;
+  }): { id: number; dedupeStatus: string } {
+    const existing = this.connection
+      .prepare("SELECT id FROM webhook_events WHERE webhook_id = ?")
+      .get(params.webhookId) as { id: number } | undefined;
+    if (existing) {
+      return { id: existing.id as number, dedupeStatus: "duplicate" };
+    }
+    const result = this.connection
+      .prepare("INSERT INTO webhook_events (webhook_id, received_at, payload_json) VALUES (?, ?, ?)")
+      .run(params.webhookId, params.receivedAt, params.payloadJson);
+    return { id: Number(result.lastInsertRowid), dedupeStatus: "accepted" };
+  }
+
+  getWebhookPayload(id: number): { webhookId: string; payloadJson: string } | undefined {
+    const row = this.connection.prepare("SELECT webhook_id, payload_json FROM webhook_events WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+    if (!row || !row.payload_json) return undefined;
+    return { webhookId: String(row.webhook_id), payloadJson: String(row.payload_json) };
   }
 
   isWebhookDuplicate(webhookId: string): boolean {
@@ -57,69 +76,6 @@ export class PatchRelayDatabase {
 
   assignWebhookProject(id: number, projectId: string): void {
     this.connection.prepare("UPDATE webhook_events SET project_id = ? WHERE id = ?").run(projectId, id);
-  }
-
-  // Keep full webhook_events access for service-webhooks.ts compatibility
-  insertFullWebhookEvent(params: {
-    webhookId: string;
-    receivedAt: string;
-    eventType: string;
-    issueId?: string;
-    headersJson: string;
-    payloadJson: string;
-    signatureValid: boolean;
-    dedupeStatus: string;
-  }): { id: number; dedupeStatus: string } {
-    const existing = this.connection
-      .prepare("SELECT id FROM webhook_events WHERE webhook_id = ?")
-      .get(params.webhookId) as { id: number } | undefined;
-    if (existing) {
-      return { id: existing.id as number, dedupeStatus: "duplicate" };
-    }
-    const result = this.connection
-      .prepare(`INSERT INTO webhook_events (webhook_id, received_at, event_type, issue_id, headers_json, payload_json, signature_valid, dedupe_status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(
-        params.webhookId,
-        params.receivedAt,
-        params.eventType,
-        params.issueId ?? null,
-        params.headersJson,
-        params.payloadJson,
-        params.signatureValid ? 1 : 0,
-        params.dedupeStatus,
-      );
-    return { id: Number(result.lastInsertRowid), dedupeStatus: params.dedupeStatus };
-  }
-
-  getFullWebhookEvent(id: number): {
-    id: number;
-    webhookId: string;
-    receivedAt: string;
-    eventType: string;
-    issueId?: string;
-    projectId?: string;
-    headersJson: string;
-    payloadJson: string;
-    signatureValid: boolean;
-    dedupeStatus: string;
-    processingStatus: string;
-  } | undefined {
-    const row = this.connection.prepare("SELECT * FROM webhook_events WHERE id = ?").get(id) as Record<string, unknown> | undefined;
-    if (!row) return undefined;
-    return {
-      id: Number(row.id),
-      webhookId: String(row.webhook_id),
-      receivedAt: String(row.received_at),
-      eventType: String(row.event_type),
-      ...(row.issue_id !== null ? { issueId: String(row.issue_id) } : {}),
-      ...(row.project_id !== null ? { projectId: String(row.project_id) } : {}),
-      headersJson: String(row.headers_json),
-      payloadJson: String(row.payload_json),
-      signatureValid: row.signature_valid === 1,
-      dedupeStatus: String(row.dedupe_status),
-      processingStatus: String(row.processing_status),
-    };
   }
 
   // ─── Issues ───────────────────────────────────────────────────────
@@ -262,13 +218,12 @@ export class PatchRelayDatabase {
   }): RunRecord {
     const now = isoNow();
     const result = this.connection.prepare(`
-      INSERT INTO runs (issue_id, project_id, linear_issue_id, run_type, stage, status, prompt_text, started_at)
-      VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)
+      INSERT INTO runs (issue_id, project_id, linear_issue_id, run_type, status, prompt_text, started_at)
+      VALUES (?, ?, ?, ?, 'queued', ?, ?)
     `).run(
       params.issueId,
       params.projectId,
       params.linearIssueId,
-      params.runType,
       params.runType,
       params.promptText ?? null,
       now,
@@ -370,18 +325,18 @@ export class PatchRelayDatabase {
     eventJson: string;
   }): void {
     this.connection.prepare(`
-      INSERT INTO run_thread_events (run_lease_id, thread_id, turn_id, method, event_json, created_at)
+      INSERT INTO run_thread_events (run_id, thread_id, turn_id, method, event_json, created_at)
       VALUES (?, ?, ?, ?, ?, ?)
     `).run(params.runId, params.threadId, params.turnId ?? null, params.method, params.eventJson, isoNow());
   }
 
   listThreadEvents(runId: number): ThreadEventRecord[] {
     const rows = this.connection
-      .prepare("SELECT * FROM run_thread_events WHERE run_lease_id = ? ORDER BY id")
+      .prepare("SELECT * FROM run_thread_events WHERE run_id = ? ORDER BY id")
       .all(runId) as Array<Record<string, unknown>>;
     return rows.map((row) => ({
       id: Number(row.id),
-      runId: Number(row.run_lease_id),
+      runId: Number(row.run_id),
       threadId: String(row.thread_id),
       ...(row.turn_id !== null ? { turnId: String(row.turn_id) } : {}),
       method: String(row.method),
