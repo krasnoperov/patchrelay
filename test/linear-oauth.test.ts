@@ -168,7 +168,8 @@ test("fetchLinearViewerIdentity returns viewer and workspace details and rejects
       JSON.stringify({
         data: {
           viewer: { id: "viewer-1", name: "Ada" },
-          teams: { nodes: [{ id: "team-1", name: "Workspace One", key: "W1" }] },
+          organization: { id: "org-1", name: "Workspace One", urlKey: "workspace-one" },
+          teams: { nodes: [{ id: "team-1", name: "Team Alpha", key: "TA" }] },
         },
       }),
       { status: 200, headers: { "content-type": "application/json" } },
@@ -177,9 +178,9 @@ test("fetchLinearViewerIdentity returns viewer and workspace details and rejects
   try {
     const identity = await fetchLinearViewerIdentity("https://linear.example/graphql", "access-token", pino({ enabled: false }));
     assert.deepEqual(identity, {
-      workspaceId: "team-1",
+      workspaceId: "org-1",
       workspaceName: "Workspace One",
-      workspaceKey: "W1",
+      workspaceKey: "workspace-one",
       actorId: "viewer-1",
       actorName: "Ada",
     });
@@ -229,7 +230,8 @@ test("installLinearOAuthCode stores encrypted credentials and links the project 
       JSON.stringify({
         data: {
           viewer: { id: "viewer-1", name: "Ada" },
-          teams: { nodes: [{ id: "team-1", name: "Workspace One", key: "W1" }] },
+          organization: { id: "org-1", name: "Workspace One", urlKey: "workspace-one" },
+          teams: { nodes: [{ id: "team-1", name: "Team Alpha", key: "TA" }] },
         },
       }),
       { status: 200, headers: { "content-type": "application/json" } },
@@ -246,7 +248,7 @@ test("installLinearOAuthCode stores encrypted credentials and links the project 
       projectId: "project-1",
     });
 
-    assert.equal(installation.workspaceId, "team-1");
+    assert.equal(installation.workspaceId, "org-1");
     assert.equal(installation.workspaceName, "Workspace One");
     assert.equal(installation.actorId, "viewer-1");
     assert.equal(installation.actorName, "Ada");
