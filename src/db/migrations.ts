@@ -569,6 +569,8 @@ function applyFactoryColumnMigrations(connection: DatabaseConnection): void {
     "ALTER TABLE issues ADD COLUMN ci_repair_attempts INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE issues ADD COLUMN queue_repair_attempts INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE runs ADD COLUMN run_type TEXT NOT NULL DEFAULT 'stage'",
+    "ALTER TABLE issues ADD COLUMN pending_run_type TEXT",
+    "ALTER TABLE issues ADD COLUMN pending_run_context_json TEXT",
   ];
   for (const alter of alters) {
     try {

@@ -30,6 +30,8 @@ export interface IssueRecord {
   prCheckStatus?: string;
   ciRepairAttempts: number;
   queueRepairAttempts: number;
+  pendingRunType?: RunType | undefined;
+  pendingRunContextJson?: string | undefined;
 }
 
 export interface RunRecord {

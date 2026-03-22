@@ -3,6 +3,7 @@ import type { CodexAppServerClient, CodexNotification } from "./codex-app-server
 import type { PatchRelayDatabase } from "./db.ts";
 import { GitHubWebhookHandler } from "./github-webhook-handler.ts";
 import { IssueQueryService } from "./issue-query-service.ts";
+import { ReactiveExecutor } from "./reactive-executor.ts";
 import { LinearOAuthService } from "./linear-oauth-service.ts";
 import { OperatorEventFeed, type OperatorFeedQuery } from "./operator-feed.ts";
 import {
@@ -22,6 +23,7 @@ export class PatchRelayService {
   private readonly stageExecutor: StageExecutor;
   private readonly webhookHandler: WebhookHandler;
   private readonly githubWebhookHandler: GitHubWebhookHandler;
+  private readonly reactiveExecutor: ReactiveExecutor;
   private readonly oauthService: LinearOAuthService;
   private readonly queryService: IssueQueryService;
   private readonly runtime: ServiceRuntime;
@@ -61,7 +63,12 @@ export class PatchRelayService {
       this.feed,
     );
 
-    this.githubWebhookHandler = new GitHubWebhookHandler(config, db, logger, this.feed);
+    this.githubWebhookHandler = new GitHubWebhookHandler(
+      config, db,
+      (projectId, issueId) => enqueueIssue(projectId, issueId),
+      logger, this.feed,
+    );
+    this.reactiveExecutor = new ReactiveExecutor(config, db, codex, logger, this.feed);
 
     const runtime = new ServiceRuntime(
       codex,
@@ -184,6 +191,13 @@ export class PatchRelayService {
   }
 
   async processIssue(item: { projectId: string; issueId: string }): Promise<void> {
+    // Check if there's a pending reactive run (CI repair, review fix, etc.)
+    const issue = this.db.getIssue(item.projectId, item.issueId);
+    if (issue?.pendingRunType) {
+      await this.reactiveExecutor.run(item);
+      return;
+    }
+    // Otherwise, run the normal stage executor
     await this.stageExecutor.run(item);
   }
 

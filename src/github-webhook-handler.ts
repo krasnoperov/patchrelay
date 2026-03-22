@@ -1,5 +1,6 @@
 import type { Logger } from "pino";
 import type { PatchRelayDatabase } from "./db.ts";
+import type { IssueRecord } from "./db-types.ts";
 import type { NormalizedGitHubEvent } from "./github-types.ts";
 import { normalizeGitHubWebhook, verifyGitHubWebhookSignature } from "./github-webhooks.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
@@ -10,6 +11,7 @@ export class GitHubWebhookHandler {
   constructor(
     private readonly config: AppConfig,
     private readonly db: PatchRelayDatabase,
+    private readonly enqueueIssue: (projectId: string, issueId: string) => void,
     private readonly logger: Logger,
     private readonly feed?: OperatorEventFeed,
   ) {}
@@ -128,5 +130,54 @@ export class GitHubWebhookHandler {
       summary: `GitHub: ${event.triggerEvent}${event.prNumber ? ` on PR #${event.prNumber}` : ""}`,
       detail: event.checkName ?? event.reviewBody?.slice(0, 200) ?? undefined,
     });
+
+    // Trigger reactive runs if applicable
+    this.maybeEnqueueReactiveRun(issue, event);
+  }
+
+  private maybeEnqueueReactiveRun(issue: IssueRecord, event: NormalizedGitHubEvent): void {
+    // Don't trigger if there's already an active run
+    if (issue.activeRunId !== undefined) return;
+
+    if (event.triggerEvent === "check_failed" && issue.prState === "open") {
+      this.db.upsertIssue({
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        pendingRunType: "ci_repair",
+        pendingRunContextJson: JSON.stringify({
+          checkName: event.checkName,
+          checkUrl: event.checkUrl,
+        }),
+      });
+      this.enqueueIssue(issue.projectId, issue.linearIssueId);
+      this.logger.info({ issueKey: issue.issueKey, checkName: event.checkName }, "Enqueued CI repair run");
+    }
+
+    if (event.triggerEvent === "review_changes_requested") {
+      this.db.upsertIssue({
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        pendingRunType: "review_fix",
+        pendingRunContextJson: JSON.stringify({
+          reviewBody: event.reviewBody,
+          reviewerName: event.reviewerName,
+        }),
+      });
+      this.enqueueIssue(issue.projectId, issue.linearIssueId);
+      this.logger.info({ issueKey: issue.issueKey, reviewerName: event.reviewerName }, "Enqueued review fix run");
+    }
+
+    if (event.triggerEvent === "merge_group_failed") {
+      this.db.upsertIssue({
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        pendingRunType: "queue_repair",
+        pendingRunContextJson: JSON.stringify({
+          failureReason: event.mergeGroupFailureReason,
+        }),
+      });
+      this.enqueueIssue(issue.projectId, issue.linearIssueId);
+      this.logger.info({ issueKey: issue.issueKey }, "Enqueued merge queue repair run");
+    }
   }
 }
