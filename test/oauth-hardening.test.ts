@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import pino from "pino";
 import { PatchRelayDatabase } from "../src/db.ts";
-import { buildRunningStatusComment } from "../src/linear-workflow.ts";
+// buildRunningStatusComment removed — status comments replaced by agent activities
 import { PatchRelayService } from "../src/service.ts";
 import type { AppConfig } from "../src/types.ts";
 
@@ -115,35 +115,4 @@ test("completeLinearOAuth rejects expired OAuth states and marks them failed", a
   }
 });
 
-test("running status comments omit the absolute worktree path", () => {
-  const comment = buildRunningStatusComment({
-    issue: {
-      id: 1,
-      projectId: "usertold",
-      linearIssueId: "issue-1",
-      issueKey: "USE-12",
-      factoryState: "implementing",
-      updatedAt: new Date().toISOString(),
-    },
-    stageRun: {
-      id: 1,
-      pipelineRunId: 1,
-      projectId: "usertold",
-      linearIssueId: "issue-1",
-      workspaceId: 1,
-      stage: "development",
-      status: "running",
-      triggerWebhookId: "delivery-1",
-      workflowFile: "/tmp/workflow.md",
-      promptText: "Implement carefully",
-      threadId: "thread-1",
-      turnId: "turn-1",
-      startedAt: new Date().toISOString(),
-    },
-    branchName: "use/USE-12",
-  });
-
-  assert.match(comment, /Branch: `use\/USE-12`/);
-  assert.doesNotMatch(comment, /Worktree:/);
-  assert.doesNotMatch(comment, /\/tmp\/private\/worktrees\/USE-12/);
-});
+// Status comment test removed — status comments replaced by agent activities

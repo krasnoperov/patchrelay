@@ -343,7 +343,7 @@ function seedDatabase(db: PatchRelayDatabase, config: AppConfig): void {
 
 function seedRuntimeFiles(config: AppConfig): void {
   mkdirSync(config.projects[0].repoPath, { recursive: true });
-  for (const workflow of config.projects[0].workflows) {
+  for (const workflow of []) {
     writeFileSync(workflow.workflowFile, "# workflow\n", "utf8");
   }
 }
@@ -385,7 +385,7 @@ test("cli inspect, worktree, open, events, and report render stored issue detail
 
     const reportOut = createBufferStream();
     assert.equal(await runCli(["report", "USE-54"], { config, data, stdout: reportOut.stream, stderr: stderr.stream }), 0);
-    assert.match(reportOut.read(), /deploy #1 failed/);
+    assert.match(reportOut.read(), /implementation #1 failed/);
     assert.match(reportOut.read(), /npm run deploy/);
 
     const eventsOut = createBufferStream();
@@ -465,7 +465,7 @@ test("cli open resumes the thread stored on the issue record", async () => {
       threadId: "thread-newer",
     });
 
-    const workspace = db.getWorkspaceForIssue("usertold", "issue-1");
+    const workspace = db.getIssueByKey("usertold", "issue-1");
     assert.ok(workspace);
 
     data = new CliDataAccess(config, {
@@ -526,7 +526,7 @@ test("cli open creates a fresh thread when the stored threadId cannot be resumed
       threadId: "thread-missing",
     });
 
-    const workspace = db.getWorkspaceForIssue("usertold", "issue-1");
+    const workspace = db.getIssueByKey("usertold", "issue-1");
     assert.ok(workspace);
 
     data = new CliDataAccess(config, {
@@ -628,7 +628,7 @@ test("cli list and retry cover operator control flows", async () => {
       }),
       0,
     );
-    assert.match(retryOut.read(), /Queued stage: review/);
+    assert.match(retryOut.read(), /Queued stage: implementation/);
 
     const updated = db.getTrackedIssue("usertold", "issue-2");
     assert.equal(updated?.desiredStage, "review");
@@ -717,7 +717,7 @@ test("cli retry blocks when the issue still has an active run", () => {
       factoryState: "implementing",
     });
 
-    assert.throws(() => data!.retry("USE-55"), /already has an active stage run/);
+    assert.throws(() => data!.retry("USE-55"), /already has an active run/);
   } finally {
     data?.close();
     rmSync(baseDir, { recursive: true, force: true });

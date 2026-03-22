@@ -7,10 +7,8 @@ import { runPreflight } from "../src/preflight.ts";
 import type { AppConfig } from "../src/types.ts";
 
 
-function writeWorkflowFiles(config: AppConfig): void {
-  for (const workflow of config.projects[0].workflows) {
-    writeFileSync(workflow.workflowFile, `# ${workflow.id}\n`, "utf8");
-  }
+function writeWorkflowFiles(_config: AppConfig): void {
+  // No workflow files needed — factory state machine replaces workflow definitions
 }
 
 function createConfig(baseDir: string): AppConfig {
@@ -97,28 +95,6 @@ test("runPreflight reports a healthy local setup", async () => {
   }
 });
 
-test("runPreflight fails when workflow files are missing", async () => {
-  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-preflight-missing-"));
-
-  try {
-    const config = createConfig(baseDir);
-    mkdirSync(config.projects[0].repoPath, { recursive: true });
-
-    const report = await runPreflight(config);
-
-    assert.equal(report.ok, false);
-    assert.ok(
-      report.checks.some(
-        (check) =>
-          check.scope === "project:usertold:workflow:default:development" &&
-          check.status === "fail",
-      ),
-    );
-  } finally {
-    rmSync(baseDir, { recursive: true, force: true });
-  }
-});
-
 test("runPreflight warns when the public base URL is missing", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-preflight-public-url-"));
 
@@ -170,7 +146,7 @@ test("runPreflight does not require cleanup workflow files when cleanup is disab
   try {
     const config = createConfig(baseDir);
     mkdirSync(config.projects[0].repoPath, { recursive: true });
-    config.projects[0].workflows = config.projects[0].workflows.filter((workflow) => workflow.id !== "cleanup");
+    // Workflow filtering removed — no workflow definitions in factory model
     writeWorkflowFiles(config);
 
     const report = await runPreflight(config);
