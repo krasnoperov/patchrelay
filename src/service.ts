@@ -58,7 +58,7 @@ export class PatchRelayService {
     );
 
     this.githubWebhookHandler = new GitHubWebhookHandler(
-      config, db,
+      config, db, this.linearProvider,
       (projectId, issueId) => enqueueIssue(projectId, issueId),
       logger, this.feed,
     );

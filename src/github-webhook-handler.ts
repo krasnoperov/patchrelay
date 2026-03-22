@@ -5,13 +5,14 @@ import { resolveFactoryStateFromGitHub } from "./factory-state.ts";
 import type { NormalizedGitHubEvent } from "./github-types.ts";
 import { normalizeGitHubWebhook, verifyGitHubWebhookSignature } from "./github-webhooks.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
-import type { AppConfig } from "./types.ts";
+import type { AppConfig, LinearClientProvider } from "./types.ts";
 import { safeJsonParse } from "./utils.ts";
 
 export class GitHubWebhookHandler {
   constructor(
     private readonly config: AppConfig,
     private readonly db: PatchRelayDatabase,
+    private readonly linearProvider: LinearClientProvider,
     private readonly enqueueIssue: (projectId: string, issueId: string) => void,
     private readonly logger: Logger,
     private readonly feed?: OperatorEventFeed,
@@ -122,6 +123,9 @@ export class GitHubWebhookHandler {
         { issueKey: issue.issueKey, from: issue.factoryState, to: newState, trigger: event.triggerEvent },
         "Factory state transition from GitHub event",
       );
+
+      // Emit Linear activity for significant state changes
+      void this.emitLinearActivity(issue, newState, event);
     }
 
     // Reset repair counters on new push
@@ -197,6 +201,42 @@ export class GitHubWebhookHandler {
       });
       this.enqueueIssue(issue.projectId, issue.linearIssueId);
       this.logger.info({ issueKey: issue.issueKey }, "Enqueued merge queue repair run");
+    }
+  }
+
+  private async emitLinearActivity(
+    issue: IssueRecord,
+    newState: string,
+    event: NormalizedGitHubEvent,
+  ): Promise<void> {
+    if (!issue.agentSessionId) return;
+    const linear = await this.linearProvider.forProject(issue.projectId);
+    if (!linear?.createAgentActivity) return;
+
+    const messages: Record<string, string> = {
+      pr_open: `PR #${event.prNumber ?? ""} opened.${event.prUrl ? ` ${event.prUrl}` : ""}`,
+      awaiting_queue: "PR approved. Awaiting merge queue.",
+      changes_requested: `Review requested changes.${event.reviewerName ? ` Reviewer: ${event.reviewerName}` : ""}`,
+      repairing_ci: `CI check failed${event.checkName ? `: ${event.checkName}` : ""}. Starting repair.`,
+      repairing_queue: "Merge queue failed. Starting repair.",
+      done: `PR merged and deployed.${event.prNumber ? ` PR #${event.prNumber}` : ""}`,
+      failed: "PR was closed without merging.",
+    };
+
+    const body = messages[newState];
+    if (!body) return;
+
+    const type = newState === "failed" || newState === "repairing_ci" || newState === "repairing_queue"
+      ? "error" as const
+      : "response" as const;
+
+    try {
+      await linear.createAgentActivity({
+        agentSessionId: issue.agentSessionId,
+        content: { type, body },
+      });
+    } catch {
+      // Non-blocking — don't fail the webhook for a Linear activity error
     }
   }
 }

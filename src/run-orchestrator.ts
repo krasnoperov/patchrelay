@@ -6,6 +6,11 @@ import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord, RunRecord, TrackedIssueRecord } from "./db-types.ts";
 import type { RunType } from "./factory-state.ts";
 import { buildHookEnv, runProjectHook } from "./hook-runner.ts";
+import {
+  buildRunningSessionPlan,
+  buildCompletedSessionPlan,
+  buildFailedSessionPlan,
+} from "./agent-session-plan.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import {
   buildStageReport,
@@ -251,6 +256,8 @@ export class RunOrchestrator {
         factoryState: "failed",
       });
       this.logger.error({ issueKey: issue.issueKey, runType, error: message }, `Failed to launch ${runType} run`);
+      void this.emitLinearActivity(issue, "error", `Failed to start ${runType}: ${message}`);
+      void this.updateLinearPlan(issue, buildFailedSessionPlan(runType));
       throw error;
     }
 
@@ -260,6 +267,11 @@ export class RunOrchestrator {
       { issueKey: issue.issueKey, runType, threadId, turnId },
       `Started ${runType} run`,
     );
+
+    // Emit Linear activity + plan
+    const freshIssue = this.db.getIssue(item.projectId, item.issueId) ?? issue;
+    void this.emitLinearActivity(freshIssue, "thought", `Started ${runType} run.`, { ephemeral: true });
+    void this.updateLinearPlan(freshIssue, buildRunningSessionPlan(runType));
   }
 
   // ─── Notification handler ─────────────────────────────────────────
@@ -313,6 +325,8 @@ export class RunOrchestrator {
         status: "failed",
         summary: `Turn failed for ${run.runType}`,
       });
+      void this.emitLinearActivity(issue, "error", `${run.runType} run failed.`);
+      void this.updateLinearPlan(issue, buildFailedSessionPlan(run.runType, run));
       return;
     }
 
@@ -346,6 +360,11 @@ export class RunOrchestrator {
       detail: summarizeCurrentThread(thread).latestAgentMessage,
     });
 
+    // Emit Linear completion activity + plan
+    const completionSummary = report.assistantMessages.at(-1)?.slice(0, 300) ?? `${run.runType} completed.`;
+    const prInfo = issue.prNumber ? ` PR #${issue.prNumber}` : "";
+    void this.emitLinearActivity(issue, "response", `${run.runType} completed.${prInfo}\n\n${completionSummary}`);
+    void this.updateLinearPlan(issue, buildCompletedSessionPlan(run.runType));
   }
 
   // ─── Active status for query ──────────────────────────────────────
@@ -494,6 +513,43 @@ export class RunOrchestrator {
         factoryState: "failed",
       });
     });
+  }
+
+  private async emitLinearActivity(
+    issue: IssueRecord,
+    type: "thought" | "response" | "error" | "elicitation",
+    body: string,
+    options?: { ephemeral?: boolean },
+  ): Promise<void> {
+    if (!issue.agentSessionId) return;
+    const linear = await this.linearProvider.forProject(issue.projectId);
+    if (!linear) return;
+    try {
+      await linear.createAgentActivity({
+        agentSessionId: issue.agentSessionId,
+        content: { type, body },
+        ...(options?.ephemeral ? { ephemeral: true } : {}),
+      });
+    } catch (error) {
+      this.logger.debug(
+        { issueKey: issue.issueKey, type, error: error instanceof Error ? error.message : String(error) },
+        "Failed to emit Linear activity (non-blocking)",
+      );
+    }
+  }
+
+  private async updateLinearPlan(issue: IssueRecord, plan: import("./agent-session-plan.ts").AgentSessionPlanStep[]): Promise<void> {
+    if (!issue.agentSessionId) return;
+    const linear = await this.linearProvider.forProject(issue.projectId);
+    if (!linear?.updateAgentSession) return;
+    try {
+      await linear.updateAgentSession({ agentSessionId: issue.agentSessionId, plan });
+    } catch (error) {
+      this.logger.debug(
+        { issueKey: issue.issueKey, error: error instanceof Error ? error.message : String(error) },
+        "Failed to update Linear plan (non-blocking)",
+      );
+    }
   }
 
   private async readThreadWithRetry(threadId: string, maxRetries = 3): Promise<CodexThreadSummary> {
