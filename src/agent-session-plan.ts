@@ -1,4 +1,4 @@
-import type { StageRunRecord, WorkflowStage } from "./types.ts";
+import type { RunRecord } from "./db-types.ts";
 
 export type AgentSessionPlanStatus = "pending" | "inProgress" | "completed" | "canceled";
 
@@ -7,8 +7,8 @@ export interface AgentSessionPlanStep {
   status: AgentSessionPlanStatus;
 }
 
-function formatStageLabel(stage: WorkflowStage): string {
-  return stage.replace(/[-_]+/g, " ");
+function formatRunLabel(runType: string): string {
+  return runType.replace(/[-_]+/g, " ");
 }
 
 function titleCase(value: string): string {
@@ -19,32 +19,32 @@ function titleCase(value: string): string {
     .join(" ");
 }
 
-function buildPlan(stage: WorkflowStage, statuses: [AgentSessionPlanStatus, AgentSessionPlanStatus, AgentSessionPlanStatus]) {
-  const stageLabel = titleCase(formatStageLabel(stage));
+function buildPlan(runType: string, statuses: [AgentSessionPlanStatus, AgentSessionPlanStatus, AgentSessionPlanStatus]) {
+  const label = titleCase(formatRunLabel(runType));
   return [
     { content: "Prepare workspace", status: statuses[0] },
-    { content: `Run ${stageLabel} workflow`, status: statuses[1] },
-    { content: "Review next Linear step", status: statuses[2] },
+    { content: `Run ${label}`, status: statuses[1] },
+    { content: "Review outcome", status: statuses[2] },
   ] satisfies AgentSessionPlanStep[];
 }
 
-export function buildPreparingSessionPlan(stage: WorkflowStage): AgentSessionPlanStep[] {
-  return buildPlan(stage, ["inProgress", "pending", "pending"]);
+export function buildPreparingSessionPlan(runType: string): AgentSessionPlanStep[] {
+  return buildPlan(runType, ["inProgress", "pending", "pending"]);
 }
 
-export function buildRunningSessionPlan(stage: WorkflowStage): AgentSessionPlanStep[] {
-  return buildPlan(stage, ["completed", "inProgress", "pending"]);
+export function buildRunningSessionPlan(runType: string): AgentSessionPlanStep[] {
+  return buildPlan(runType, ["completed", "inProgress", "pending"]);
 }
 
-export function buildCompletedSessionPlan(stage: WorkflowStage): AgentSessionPlanStep[] {
-  return buildPlan(stage, ["completed", "completed", "completed"]);
+export function buildCompletedSessionPlan(runType: string): AgentSessionPlanStep[] {
+  return buildPlan(runType, ["completed", "completed", "completed"]);
 }
 
-export function buildAwaitingHandoffSessionPlan(stage: WorkflowStage): AgentSessionPlanStep[] {
-  return buildPlan(stage, ["completed", "completed", "inProgress"]);
+export function buildAwaitingHandoffSessionPlan(runType: string): AgentSessionPlanStep[] {
+  return buildPlan(runType, ["completed", "completed", "inProgress"]);
 }
 
-export function buildFailedSessionPlan(stage: WorkflowStage, stageRun?: Pick<StageRunRecord, "threadId" | "turnId">): AgentSessionPlanStep[] {
-  const workflowStepStatus: AgentSessionPlanStatus = stageRun?.threadId || stageRun?.turnId ? "completed" : "inProgress";
-  return buildPlan(stage, ["completed", workflowStepStatus, "pending"]);
+export function buildFailedSessionPlan(runType: string, run?: Pick<RunRecord, "threadId" | "turnId">): AgentSessionPlanStep[] {
+  const workflowStepStatus: AgentSessionPlanStatus = run?.threadId || run?.turnId ? "completed" : "inProgress";
+  return buildPlan(runType, ["completed", workflowStepStatus, "pending"]);
 }

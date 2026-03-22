@@ -125,7 +125,7 @@ export class GitHubWebhookHandler {
       kind: "github",
       issueKey: issue.issueKey,
       projectId: issue.projectId,
-      stage: issue.desiredStage ?? undefined,
+      stage: issue.factoryState,
       status: event.triggerEvent,
       summary: `GitHub: ${event.triggerEvent}${event.prNumber ? ` on PR #${event.prNumber}` : ""}`,
       detail: event.checkName ?? event.reviewBody?.slice(0, 200) ?? undefined,

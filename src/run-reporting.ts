@@ -1,4 +1,5 @@
-import type { CodexThreadItem, CodexThreadSummary, StageReport, StageRunRecord, ThreadEventRecord, TrackedIssueRecord } from "./types.ts";
+import type { CodexThreadItem, CodexThreadSummary, StageReport } from "./codex-types.ts";
+import type { RunRecord, ThreadEventRecord, TrackedIssueRecord } from "./db-types.ts";
 
 export function extractStageSummary(report: StageReport): Record<string, unknown> {
   return {
@@ -31,7 +32,7 @@ export function summarizeCurrentThread(thread: CodexThreadSummary): {
 }
 
 export function buildStageReport(
-  stageRun: StageRunRecord,
+  run: RunRecord,
   issue: TrackedIssueRecord,
   thread: CodexThreadSummary,
   eventCounts: Record<string, number>,
@@ -90,13 +91,12 @@ export function buildStageReport(
 
   return {
     ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
-    stage: stageRun.stage,
-    status: stageRun.status,
-    ...(stageRun.threadId ? { threadId: stageRun.threadId } : {}),
-    ...(stageRun.parentThreadId ? { parentThreadId: stageRun.parentThreadId } : {}),
-    ...(stageRun.turnId ? { turnId: stageRun.turnId } : {}),
-    prompt: stageRun.promptText,
-    workflowFile: stageRun.workflowFile,
+    runType: run.runType,
+    status: run.status,
+    ...(run.threadId ? { threadId: run.threadId } : {}),
+    ...(run.parentThreadId ? { parentThreadId: run.parentThreadId } : {}),
+    ...(run.turnId ? { turnId: run.turnId } : {}),
+    prompt: run.promptText ?? "",
     assistantMessages,
     plans,
     reasoning,
@@ -108,20 +108,19 @@ export function buildStageReport(
 }
 
 export function buildFailedStageReport(
-  stageRun: Pick<StageRunRecord, "stage" | "promptText" | "workflowFile">,
-  status: StageRunRecord["status"],
+  run: Pick<RunRecord, "runType" | "promptText">,
+  status: string,
   options?: {
     threadId?: string;
     turnId?: string;
   },
 ): StageReport {
   return {
-    stage: stageRun.stage,
+    runType: run.runType,
     status,
     ...(options?.threadId ? { threadId: options.threadId } : {}),
     ...(options?.turnId ? { turnId: options.turnId } : {}),
-    prompt: stageRun.promptText,
-    workflowFile: stageRun.workflowFile,
+    prompt: run.promptText ?? "",
     assistantMessages: [],
     plans: [],
     reasoning: [],
@@ -139,7 +138,7 @@ export function countEventMethods(events: ThreadEventRecord[]): Record<string, n
   }, {});
 }
 
-export function resolveStageRunStatus(params: Record<string, unknown>): StageRunRecord["status"] {
+export function resolveRunCompletionStatus(params: Record<string, unknown>): "completed" | "failed" {
   const turn = params.turn;
   if (!turn || typeof turn !== "object") {
     return "failed";
@@ -160,7 +159,7 @@ export function extractTurnId(params: Record<string, unknown>): string | undefin
 }
 
 export function buildPendingMaterializationThread(
-  stageRun: Pick<StageRunRecord, "threadId" | "turnId">,
+  stageRun: Pick<RunRecord, "threadId" | "turnId">,
   error: Error,
 ): CodexThreadSummary {
   return {

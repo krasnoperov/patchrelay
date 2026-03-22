@@ -17,38 +17,6 @@ const LINEAR_OAUTH_CALLBACK_PATH = "/oauth/linear/callback";
 const REPO_SETTINGS_DIRNAME = ".patchrelay";
 const REPO_SETTINGS_FILENAME = "project.json";
 
-const workflowSchema = z.object({
-  id: z.string().min(1),
-  when_state: z.string().min(1),
-  active_state: z.string().min(1),
-  workflow_file: z.string().min(1),
-  fallback_state: z.string().min(1).nullable().optional(),
-});
-
-const workflowDefinitionSchema = z.object({
-  id: z.string().min(1),
-  stages: z.array(workflowSchema).min(1),
-});
-
-const workflowSelectionSchema = z.object({
-  default_workflow: z.string().min(1).optional(),
-  by_label: z
-    .array(
-      z.object({
-        label: z.string().min(1),
-        workflow: z.string().min(1),
-      }),
-    )
-    .default([]),
-});
-
-const workflowLabelsSchema = z
-  .object({
-    working: z.string().min(1).optional(),
-    awaiting_handoff: z.string().min(1).optional(),
-  })
-  .optional();
-
 const trustedActorsSchema = z
   .object({
     ids: z.array(z.string().min(1)).default([]),
@@ -59,11 +27,6 @@ const trustedActorsSchema = z
   .optional();
 
 const repoSettingsSchema = z.object({
-  workflows: z.array(workflowSchema).min(1).optional(),
-  workflow_definitions: z.array(workflowDefinitionSchema).min(1).optional(),
-  workflow_selection: workflowSelectionSchema.optional(),
-  workflow_labels: workflowLabelsSchema,
-  trusted_actors: trustedActorsSchema,
   trigger_events: z.array(z.string().min(1)).min(1).optional(),
   branch_prefix: z.string().min(1).optional(),
 });
@@ -72,10 +35,6 @@ const projectSchema = z.object({
   id: z.string().min(1),
   repo_path: z.string().min(1),
   worktree_root: z.string().min(1).optional(),
-  workflows: z.array(workflowSchema).min(1).optional(),
-  workflow_definitions: z.array(workflowDefinitionSchema).min(1).optional(),
-  workflow_selection: workflowSelectionSchema.optional(),
-  workflow_labels: workflowLabelsSchema,
   trusted_actors: trustedActorsSchema,
   issue_key_prefixes: z.array(z.string().min(1)).default([]),
   linear_team_ids: z.array(z.string().min(1)).default([]),
@@ -183,44 +142,6 @@ function normalizeTriggerEvents(
   });
   return [...required, ...extras];
 }
-
-const builtinWorkflows: z.infer<typeof workflowSchema>[] = [
-  {
-    id: "development",
-    when_state: "Start",
-    active_state: "Implementing",
-    workflow_file: "IMPLEMENTATION_WORKFLOW.md",
-    fallback_state: "Human Needed",
-  },
-  {
-    id: "review",
-    when_state: "Review",
-    active_state: "Reviewing",
-    workflow_file: "REVIEW_WORKFLOW.md",
-    fallback_state: "Human Needed",
-  },
-  {
-    id: "deploy",
-    when_state: "Deploy",
-    active_state: "Deploying",
-    workflow_file: "DEPLOY_WORKFLOW.md",
-    fallback_state: "Human Needed",
-  },
-  {
-    id: "cleanup",
-    when_state: "Cleanup",
-    active_state: "Cleaning Up",
-    workflow_file: "CLEANUP_WORKFLOW.md",
-    fallback_state: "Human Needed",
-  },
-];
-
-const builtinWorkflowDefinitions = [
-  {
-    id: "default",
-    stages: builtinWorkflows,
-  },
-] as const;
 
 function withSectionDefaults(input: unknown): unknown {
   const source = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
@@ -347,10 +268,6 @@ function readEnvFilesForProfile(configPath: string, profile: ConfigLoadProfile):
   return Object.assign({}, ...paths.map((envPath) => readEnvFile(envPath)));
 }
 
-function resolveWorkflowFilePath(repoPath: string, workflowFile: string): string {
-  return path.isAbsolute(workflowFile) ? ensureAbsolutePath(workflowFile) : path.resolve(repoPath, workflowFile);
-}
-
 function parseJsonFile(filePath: string, label: string): unknown {
   const raw = readFileSync(filePath, "utf8");
   try {
@@ -376,69 +293,6 @@ function readRepoSettings(
   return {
     ...parsed,
     configPath,
-  };
-}
-
-function mergeWorkflowStages(
-  repoPath: string,
-  workflows: z.infer<typeof workflowSchema>[],
-): AppConfig["projects"][number]["workflows"] {
-  return workflows.map((workflow) => ({
-    id: workflow.id,
-    whenState: workflow.when_state,
-    activeState: workflow.active_state,
-    workflowFile: resolveWorkflowFilePath(repoPath, workflow.workflow_file),
-    ...(workflow.fallback_state ? { fallbackState: workflow.fallback_state } : {}),
-  }));
-}
-
-function mergeWorkflowDefinitions(
-  repoPath: string,
-  definitions: z.infer<typeof workflowDefinitionSchema>[],
-): NonNullable<AppConfig["projects"][number]["workflowDefinitions"]> {
-  return definitions.map((definition) => ({
-    id: definition.id,
-    stages: mergeWorkflowStages(repoPath, definition.stages),
-  }));
-}
-
-function resolveProjectWorkflowConfig(
-  repoPath: string,
-  project: z.infer<typeof projectSchema>,
-  repoSettings: (z.infer<typeof repoSettingsSchema> & { configPath: string }) | undefined,
-): {
-  workflows: AppConfig["projects"][number]["workflows"];
-  workflowDefinitions?: AppConfig["projects"][number]["workflowDefinitions"];
-  workflowSelection?: AppConfig["projects"][number]["workflowSelection"];
-} {
-  const selectedDefinitions =
-    repoSettings?.workflow_definitions ??
-    project.workflow_definitions ??
-    (repoSettings?.workflows
-      ? [{ id: "default", stages: repoSettings.workflows }]
-      : project.workflows
-        ? [{ id: "default", stages: project.workflows }]
-        : builtinWorkflowDefinitions.map((definition) => ({ id: definition.id, stages: [...definition.stages] })));
-  const workflowDefinitions = mergeWorkflowDefinitions(repoPath, selectedDefinitions);
-
-  const selectionSource = repoSettings?.workflow_selection ?? project.workflow_selection;
-  const defaultWorkflowId = selectionSource?.default_workflow ?? workflowDefinitions[0]?.id;
-  const workflows = workflowDefinitions.find((definition) => definition.id === defaultWorkflowId)?.stages ?? workflowDefinitions[0]?.stages ?? [];
-
-  return {
-    workflows,
-    ...(workflowDefinitions.length > 0 ? { workflowDefinitions } : {}),
-    ...(defaultWorkflowId || (selectionSource?.by_label?.length ?? 0) > 0
-      ? {
-          workflowSelection: {
-            ...(defaultWorkflowId ? { defaultWorkflowId } : {}),
-            byLabel: (selectionSource?.by_label ?? []).map((entry) => ({
-              label: entry.label,
-              workflowId: entry.workflow,
-            })),
-          },
-        }
-      : {}),
   };
 }
 
@@ -587,24 +441,11 @@ export function loadConfig(
     projects: parsed.projects.map((project) => {
       const repoPath = ensureAbsolutePath(project.repo_path);
       const repoSettings = readRepoSettings(repoPath, env);
-      const workflowConfig = resolveProjectWorkflowConfig(repoPath, project, repoSettings);
-      const workflowLabels = repoSettings?.workflow_labels ?? project.workflow_labels;
-      const trustedActors = repoSettings?.trusted_actors ?? project.trusted_actors;
+      const trustedActors = project.trusted_actors;
       return {
         id: project.id,
         repoPath,
         worktreeRoot: ensureAbsolutePath(project.worktree_root ?? defaultWorktreeRoot(project.id)),
-        workflows: workflowConfig.workflows,
-        ...(workflowConfig.workflowDefinitions ? { workflowDefinitions: workflowConfig.workflowDefinitions } : {}),
-        ...(workflowConfig.workflowSelection ? { workflowSelection: workflowConfig.workflowSelection } : {}),
-        ...(workflowLabels
-          ? {
-              workflowLabels: {
-                ...(workflowLabels.working ? { working: workflowLabels.working } : {}),
-                ...(workflowLabels.awaiting_handoff ? { awaitingHandoff: workflowLabels.awaiting_handoff } : {}),
-              },
-            }
-          : {}),
         ...(trustedActors
           ? {
               trustedActors: {
@@ -715,47 +556,6 @@ function validateConfigSemantics(
       linearTeamIds.set(teamId, project.id);
     }
 
-    const workflowDefinitions = project.workflowDefinitions ?? [{ id: "default", stages: project.workflows }];
-    const definitionIds = new Set<string>();
-    for (const definition of workflowDefinitions) {
-      const normalizedDefinitionId = definition.id.trim().toLowerCase();
-      if (definitionIds.has(normalizedDefinitionId)) {
-        throw new Error(`Workflow definition "${definition.id}" is configured more than once in project ${project.id}`);
-      }
-      definitionIds.add(normalizedDefinitionId);
-
-      const workflowIds = new Set<string>();
-      const workflowStates = new Set<string>();
-      for (const workflow of definition.stages) {
-        const normalizedWorkflowId = workflow.id.trim().toLowerCase();
-        if (workflowIds.has(normalizedWorkflowId)) {
-          throw new Error(`Workflow id "${workflow.id}" is configured more than once in project ${project.id}`);
-        }
-        workflowIds.add(normalizedWorkflowId);
-
-        const normalizedState = workflow.whenState.trim().toLowerCase();
-        if (workflowStates.has(normalizedState)) {
-          throw new Error(`Linear state "${workflow.whenState}" is configured for more than one workflow in project ${project.id}`);
-        }
-        workflowStates.add(normalizedState);
-      }
-    }
-
-    if (project.workflowSelection?.defaultWorkflowId) {
-      const normalizedDefaultWorkflowId = project.workflowSelection.defaultWorkflowId.trim().toLowerCase();
-      if (!workflowDefinitions.some((definition) => definition.id.trim().toLowerCase() === normalizedDefaultWorkflowId)) {
-        throw new Error(
-          `Default workflow "${project.workflowSelection.defaultWorkflowId}" does not exist in project ${project.id}`,
-        );
-      }
-    }
-
-    for (const rule of project.workflowSelection?.byLabel ?? []) {
-      const normalizedWorkflowId = rule.workflowId.trim().toLowerCase();
-      if (!workflowDefinitions.some((definition) => definition.id.trim().toLowerCase() === normalizedWorkflowId)) {
-        throw new Error(`Workflow selection for label "${rule.label}" points to unknown workflow "${rule.workflowId}" in project ${project.id}`);
-      }
-    }
   }
 
   if (

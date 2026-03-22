@@ -20,17 +20,10 @@ export function formatInspect(result: InspectResult): string {
   const lines = [
     header,
     value("Title", result.issue?.title),
-    value("Lifecycle", result.issue?.lifecycleStatus),
-    value("Active stage", result.activeStageRun?.stage),
-    value("Latest stage", result.latestStageRun?.stage),
-    value("Latest result", result.latestStageRun?.status),
-    value("Workspace", result.workspace?.worktreePath),
-    value("Branch", result.workspace?.branchName),
-    value("Latest thread", result.activeStageRun?.threadId ?? result.workspace?.lastThreadId),
-    value("Latest turn", result.live?.latestTurnId ?? result.activeStageRun?.turnId ?? result.latestStageRun?.turnId),
+    value("State", result.issue?.factoryState),
+    value("Active run", result.activeRun?.runType),
+    value("Active run status", result.activeRun?.status),
     result.statusNote ? value("Status", truncateLine(result.statusNote)) : undefined,
-    result.live?.latestTurnStatus ? value("Live turn", result.live.latestTurnStatus) : undefined,
-    result.live?.latestAssistantMessage ? `Latest assistant message:\n${truncateLine(result.live.latestAssistantMessage)}` : undefined,
   ].filter(Boolean);
 
   return `${lines.join("\n")}\n`;
