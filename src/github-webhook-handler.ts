@@ -1,6 +1,7 @@
 import type { Logger } from "pino";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord } from "./db-types.ts";
+import { resolveFactoryStateFromGitHub } from "./factory-state.ts";
 import type { NormalizedGitHubEvent } from "./github-types.ts";
 import { normalizeGitHubWebhook, verifyGitHubWebhookSignature } from "./github-webhooks.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
@@ -104,6 +105,24 @@ export class GitHubWebhookHandler {
       ...(event.reviewState !== undefined ? { prReviewState: event.reviewState } : {}),
       ...(event.checkStatus !== undefined ? { prCheckStatus: event.checkStatus } : {}),
     });
+
+    // Drive factory state transitions from GitHub events
+    let newState = resolveFactoryStateFromGitHub(event.triggerEvent, issue.factoryState);
+    if (newState) {
+      // Auto-advance merged → done (delivery is complete)
+      if (newState === "merged") {
+        newState = "done";
+      }
+      this.db.upsertIssue({
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        factoryState: newState,
+      });
+      this.logger.info(
+        { issueKey: issue.issueKey, from: issue.factoryState, to: newState, trigger: event.triggerEvent },
+        "Factory state transition from GitHub event",
+      );
+    }
 
     // Reset repair counters on new push
     if (event.triggerEvent === "pr_synchronize") {

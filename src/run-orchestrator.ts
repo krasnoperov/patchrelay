@@ -1,3 +1,5 @@
+import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
 import type { Logger } from "pino";
 import type { CodexAppServerClient, CodexNotification } from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
@@ -34,7 +36,21 @@ function sanitizePathSegment(value: string): string {
   return value.replace(/[^a-zA-Z0-9._-]+/g, "-");
 }
 
-function buildRunPrompt(issue: IssueRecord, runType: RunType, context?: Record<string, unknown>): string {
+const WORKFLOW_FILES: Record<RunType, string> = {
+  implementation: "IMPLEMENTATION_WORKFLOW.md",
+  review_fix: "REVIEW_WORKFLOW.md",
+  ci_repair: "IMPLEMENTATION_WORKFLOW.md",
+  queue_repair: "IMPLEMENTATION_WORKFLOW.md",
+};
+
+function readWorkflowFile(repoPath: string, runType: RunType): string | undefined {
+  const filename = WORKFLOW_FILES[runType];
+  const filePath = path.join(repoPath, filename);
+  if (!existsSync(filePath)) return undefined;
+  return readFileSync(filePath, "utf8").trim();
+}
+
+function buildRunPrompt(issue: IssueRecord, runType: RunType, repoPath: string, context?: Record<string, unknown>): string {
   const lines: string[] = [
     `Issue: ${issue.issueKey ?? issue.linearIssueId}`,
     issue.title ? `Title: ${issue.title}` : undefined,
@@ -43,15 +59,8 @@ function buildRunPrompt(issue: IssueRecord, runType: RunType, context?: Record<s
     "",
   ].filter(Boolean) as string[];
 
+  // Add run-type-specific context for reactive runs
   switch (runType) {
-    case "implementation":
-      lines.push(
-        "## Implementation",
-        "",
-        "Implement the Linear issue. Read the issue via MCP for details.",
-        "Run verification before finishing. Commit your changes.",
-      );
-      break;
     case "ci_repair":
       lines.push(
         "## CI Repair",
@@ -62,6 +71,7 @@ function buildRunPrompt(issue: IssueRecord, runType: RunType, context?: Record<s
         "",
         "Read the CI failure logs, fix the code issue, run verification, commit and push.",
         "Do not change test expectations unless the test is genuinely wrong.",
+        "",
       );
       break;
     case "review_fix":
@@ -72,7 +82,8 @@ function buildRunPrompt(issue: IssueRecord, runType: RunType, context?: Record<s
         context?.reviewerName ? `Reviewer: ${String(context.reviewerName)}` : "",
         context?.reviewBody ? `\n## Review comment\n\n${String(context.reviewBody)}` : "",
         "",
-        "Read the review feedback, address each point, run verification, commit and push.",
+        "Read the review feedback and PR comments (`gh pr view --comments`), address each point, run verification, commit and push.",
+        "",
       );
       break;
     case "queue_repair":
@@ -84,8 +95,21 @@ function buildRunPrompt(issue: IssueRecord, runType: RunType, context?: Record<s
         "",
         "Fetch and rebase onto latest main, resolve conflicts, run verification, push.",
         "If the conflict is a semantic contradiction, explain and stop.",
+        "",
       );
       break;
+  }
+
+  // Append the repo's workflow file
+  const workflowBody = readWorkflowFile(repoPath, runType);
+  if (workflowBody) {
+    lines.push(workflowBody);
+  } else if (runType === "implementation") {
+    // Fallback if no workflow file exists
+    lines.push(
+      "Implement the Linear issue. Read the issue via MCP for details.",
+      "Run verification before finishing. Commit, push, and open a PR.",
+    );
   }
 
   return lines.join("\n");
@@ -138,7 +162,7 @@ export class RunOrchestrator {
     }
 
     // Build prompt
-    const prompt = buildRunPrompt(issue, runType, context);
+    const prompt = buildRunPrompt(issue, runType, project.repoPath, context);
 
     // Resolve workspace
     const issueRef = sanitizePathSegment(issue.issueKey ?? issue.linearIssueId);
@@ -169,6 +193,7 @@ export class RunOrchestrator {
         worktreePath,
         factoryState: runType === "implementation" ? "implementing"
           : runType === "ci_repair" ? "repairing_ci"
+          : runType === "review_fix" ? "changes_requested"
           : runType === "queue_repair" ? "repairing_queue"
           : "implementing",
       });
