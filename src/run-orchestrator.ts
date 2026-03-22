@@ -321,8 +321,6 @@ export class RunOrchestrator {
       detail: summarizeCurrentThread(thread).latestAgentMessage,
     });
 
-    // Run after-{runType} hook
-    await this.runAfterHook(run, issue);
   }
 
   // ─── Active status for query ──────────────────────────────────────
@@ -436,49 +434,10 @@ export class RunOrchestrator {
           activeRunId: null,
         });
       });
-      await this.runAfterHook(run, issue);
     }
   }
 
   // ─── Internal helpers ─────────────────────────────────────────────
-
-  private async runAfterHook(run: RunRecord, issue: IssueRecord): Promise<void> {
-    const project = this.config.projects.find((p) => p.id === run.projectId);
-    if (!project || !issue.worktreePath) return;
-
-    const hookName = `after-${run.runType}`;
-    const hookEnv = buildHookEnv(
-      issue.issueKey ?? issue.linearIssueId,
-      issue.branchName ?? "",
-      run.runType,
-      issue.worktreePath,
-    );
-
-    try {
-      const result = await runProjectHook(project.repoPath, hookName, { cwd: issue.worktreePath, env: hookEnv });
-      if (!result.ran) return;
-
-      this.logger.info(
-        { issueKey: issue.issueKey, runType: run.runType, hookExitCode: result.exitCode },
-        `${hookName} hook completed`,
-      );
-      this.feed?.publish({
-        level: result.exitCode === 0 ? "info" : "warn",
-        kind: "hook",
-        issueKey: issue.issueKey,
-        projectId: run.projectId,
-        stage: run.runType,
-        status: result.exitCode === 0 ? "completed" : "failed",
-        summary: `${hookName} hook ${result.exitCode === 0 ? "succeeded" : "failed"}`,
-        detail: result.exitCode !== 0 ? result.stderr?.slice(0, 500) : undefined,
-      });
-    } catch (error) {
-      this.logger.warn(
-        { issueKey: issue.issueKey, runType: run.runType, error: error instanceof Error ? error.message : String(error) },
-        `${hookName} hook threw an error (non-blocking)`,
-      );
-    }
-  }
 
   private escalate(issue: IssueRecord, runType: string, reason: string): void {
     this.logger.warn({ issueKey: issue.issueKey, runType, reason }, "Escalating to human");
