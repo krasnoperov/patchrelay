@@ -170,7 +170,7 @@ Add repositories with `patchrelay project apply <id> <repo-path>`. A project onl
 - it reuses or starts the Linear authorization flow when the local setup is ready
 - if workflow files or secrets are still missing, it tells you what to fix and can be rerun safely
 
-Default trigger events for app-mode installs: `delegateChanged`, `agentSessionCreated`, `agentPrompted`, `commentCreated`, and `commentUpdated`.
+Default trigger events for app-mode installs: `delegateChanged`, `statusChanged`, `agentSessionCreated`, `agentPrompted`, `commentCreated`, and `commentUpdated`.
 
 `worktree_root` defaults to `~/.local/share/patchrelay/worktrees/<project-id>`. `branch_prefix` defaults to a slug of the project id.
 

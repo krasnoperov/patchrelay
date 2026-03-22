@@ -218,7 +218,7 @@ PatchRelay uses SQLite with these tables:
 - `webhook_events` — deduplication and processing status for Linear webhooks
 - `run_thread_events` — per-run transcript of Codex thread events (when extended history is enabled)
 - `linear_installations` — OAuth credentials and installation metadata
-- `operator_feed` — event log for operator CLI
+- `operator_feed_events` — event log for operator CLI
 
 ## Workflow Files
 
