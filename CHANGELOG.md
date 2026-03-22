@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.7](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.10.6...patchrelay-v0.10.7) (2026-03-22)
+
+
+### Bug Fixes
+
+* polish run behavior from USE-67 session observations ([#90](https://github.com/krasnoperov/patchrelay/issues/90)) ([16dabb8](https://github.com/krasnoperov/patchrelay/commit/16dabb8b0f9b3daf4d88bcb56ab9327b25e956f3))
+
 ## [0.10.6](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.10.5...patchrelay-v0.10.6) (2026-03-22)
 
 
