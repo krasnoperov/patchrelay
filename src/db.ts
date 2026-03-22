@@ -38,7 +38,7 @@ export class PatchRelayDatabase {
       return { id: existing.id as number, duplicate: true };
     }
     const result = this.connection
-      .prepare("INSERT INTO webhook_events (webhook_id, received_at) VALUES (?, ?)")
+      .prepare("INSERT INTO webhook_events (webhook_id, received_at, processing_status) VALUES (?, ?, 'processed')")
       .run(webhookId, receivedAt);
     return { id: Number(result.lastInsertRowid), duplicate: false };
   }
