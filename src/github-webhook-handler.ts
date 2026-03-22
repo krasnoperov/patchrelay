@@ -6,7 +6,33 @@ import type { GitHubWebhookPayload, NormalizedGitHubEvent } from "./github-types
 import { normalizeGitHubWebhook, verifyGitHubWebhookSignature } from "./github-webhooks.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import type { AppConfig, LinearClientProvider } from "./types.ts";
+import type { FactoryState } from "./factory-state.ts";
 import { safeJsonParse } from "./utils.ts";
+
+/**
+ * GitHub sends both check_run and check_suite completion events.
+ * A single CI run generates 10+ individual check_run events as each job finishes,
+ * but only 1 check_suite event when the entire suite completes. Reacting to
+ * individual check_run events causes the factory state to flicker rapidly
+ * between pr_open and repairing_ci. We only drive state transitions and reactive
+ * runs from check_suite events. Individual check_run events still update PR
+ * metadata (prCheckStatus) for observability.
+ */
+function isMetadataOnlyCheckEvent(event: NormalizedGitHubEvent): boolean {
+  return event.eventSource === "check_run"
+    && (event.triggerEvent === "check_passed" || event.triggerEvent === "check_failed");
+}
+
+/**
+ * Codex sometimes closes and immediately reopens a PR (e.g. to change the
+ * base branch or fix the title). A pr_closed event during an active run
+ * should not transition to "failed" — the reopened event will follow.
+ * Without this guard, the state gets stuck at "failed" because
+ * failed → pr_open is not an allowed transition.
+ */
+function shouldSuppressCloseTransition(newState: FactoryState | undefined, event: NormalizedGitHubEvent, issue: IssueRecord): boolean {
+  return newState === "failed" && event.triggerEvent === "pr_closed" && issue.activeRunId !== undefined;
+}
 
 export class GitHubWebhookHandler {
   constructor(
@@ -108,22 +134,14 @@ export class GitHubWebhookHandler {
       ...(event.checkStatus !== undefined ? { prCheckStatus: event.checkStatus } : {}),
     });
 
-    // Individual check_run events only update PR metadata, not factory state.
-    // State transitions and reactive runs are driven by check_suite completion
-    // to avoid flickering when multiple checks run in parallel.
-    const isIndividualCheckRun = event.eventSource === "check_run"
-      && (event.triggerEvent === "check_passed" || event.triggerEvent === "check_failed");
-
-    // Drive factory state transitions from GitHub events
-    if (!isIndividualCheckRun) {
+    if (!isMetadataOnlyCheckEvent(event)) {
       let newState = resolveFactoryStateFromGitHub(event.triggerEvent, issue.factoryState);
-
-      // Don't transition to failed on pr_closed when a run is active —
-      // Codex sometimes closes and reopens PRs during its workflow.
-      if (newState === "failed" && event.triggerEvent === "pr_closed" && issue.activeRunId !== undefined) {
+      if (shouldSuppressCloseTransition(newState, event, issue)) {
         newState = undefined;
       }
 
+      // Only transition and notify when the state actually changes.
+      // Multiple check_suite events can arrive for the same outcome.
       if (newState && newState !== issue.factoryState) {
         this.db.upsertIssue({
           projectId: issue.projectId,
@@ -169,8 +187,7 @@ export class GitHubWebhookHandler {
       detail: event.checkName ?? event.reviewBody?.slice(0, 200) ?? undefined,
     });
 
-    // Trigger reactive runs if applicable (skip individual check_run events)
-    if (!isIndividualCheckRun) {
+    if (!isMetadataOnlyCheckEvent(event)) {
       this.maybeEnqueueReactiveRun(freshIssue, event);
     }
   }
