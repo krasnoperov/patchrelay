@@ -1,7 +1,7 @@
 import type { WorkflowStage } from "./types.ts";
 
 export type OperatorFeedEventLevel = "info" | "warn" | "error";
-export type OperatorFeedEventKind = "service" | "webhook" | "agent" | "comment" | "stage" | "turn" | "workflow";
+export type OperatorFeedEventKind = "service" | "webhook" | "agent" | "comment" | "stage" | "turn" | "workflow" | "hook";
 
 export interface OperatorFeedQuery {
   limit?: number;

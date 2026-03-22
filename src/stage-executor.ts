@@ -41,6 +41,7 @@ import type {
   WorkflowStage,
 } from "./types.ts";
 import { sanitizeDiagnosticText } from "./utils.ts";
+import { buildHookEnv, runProjectHook } from "./hook-runner.ts";
 
 export class StageExecutor {
   private readonly worktreeManager: WorktreeManager;
@@ -172,6 +173,16 @@ export class StageExecutor {
         branchName,
         { allowExistingOutsideRoot: issue.branchName !== undefined },
       );
+
+      // Run prepare-worktree hook
+      const hookEnv = buildHookEnv(issue.issueKey ?? issue.linearIssueId, branchName, desiredStage, worktreePath);
+      const prepareResult = await runProjectHook(project.repoPath, "prepare-worktree", { cwd: worktreePath, env: hookEnv });
+      if (prepareResult.ran && prepareResult.exitCode !== 0) {
+        throw new Error(`prepare-worktree hook failed (exit ${prepareResult.exitCode}): ${prepareResult.stderr?.slice(0, 500) ?? ""}`);
+      }
+      if (prepareResult.ran) {
+        this.logger.info({ issueKey: issue.issueKey, stage: desiredStage }, "prepare-worktree hook completed");
+      }
 
       // Set Linear state to active
       await this.markStageActive(project, trackedIssue, desiredStage);
@@ -547,8 +558,48 @@ export class StageExecutor {
   // ─── Automatic transitions ────────────────────────────────────────
 
   private async advanceAfterStageCompletion(stageRun: StageRunRecord, issue: TrackedIssueRecord, report: StageReport): Promise<void> {
+    await this.runAfterStageHook(stageRun);
     await this.maybeQueueAutomaticTransition(stageRun, report);
     await this.publishStageCompletion(stageRun);
+  }
+
+  private async runAfterStageHook(stageRun: StageRunRecord): Promise<void> {
+    const project = this.config.projects.find((p) => p.id === stageRun.projectId);
+    const freshIssue = this.db.getIssue(stageRun.projectId, stageRun.linearIssueId);
+    if (!project || !freshIssue?.worktreePath) return;
+
+    const hookName = `after-${stageRun.stage}`;
+    const hookEnv = buildHookEnv(
+      freshIssue.issueKey ?? freshIssue.linearIssueId,
+      freshIssue.branchName ?? "",
+      stageRun.stage,
+      freshIssue.worktreePath,
+    );
+
+    try {
+      const result = await runProjectHook(project.repoPath, hookName, { cwd: freshIssue.worktreePath, env: hookEnv });
+      if (!result.ran) return;
+
+      this.logger.info(
+        { issueKey: freshIssue.issueKey, stage: stageRun.stage, hookExitCode: result.exitCode },
+        `${hookName} hook completed`,
+      );
+      this.feed?.publish({
+        level: result.exitCode === 0 ? "info" : "warn",
+        kind: "hook",
+        issueKey: freshIssue.issueKey,
+        projectId: stageRun.projectId,
+        stage: stageRun.stage,
+        status: result.exitCode === 0 ? "completed" : "failed",
+        summary: `${hookName} hook ${result.exitCode === 0 ? "succeeded" : "failed"}`,
+        detail: result.exitCode !== 0 ? result.stderr?.slice(0, 500) : undefined,
+      });
+    } catch (error) {
+      this.logger.warn(
+        { issueKey: freshIssue.issueKey, stage: stageRun.stage, error: error instanceof Error ? error.message : String(error) },
+        `${hookName} hook threw an error (non-blocking)`,
+      );
+    }
   }
 
   private async maybeQueueAutomaticTransition(stageRun: StageRunRecord, report: StageReport): Promise<void> {
