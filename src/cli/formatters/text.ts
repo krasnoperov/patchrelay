@@ -21,8 +21,9 @@ export function formatInspect(result: InspectResult): string {
     header,
     value("Title", result.issue?.title),
     value("State", result.issue?.factoryState),
-    value("Active run", result.activeRun?.runType),
-    value("Active run status", result.activeRun?.status),
+    result.activeRun ? value("Active run", `${result.activeRun.runType} (${result.activeRun.status})`) : undefined,
+    result.latestRun && !result.activeRun ? value("Latest run", `${result.latestRun.runType} (${result.latestRun.status})`) : undefined,
+    result.prNumber ? value("PR", `#${result.prNumber}${result.prReviewState ? ` [${result.prReviewState}]` : ""}`) : undefined,
     result.statusNote ? value("Status", truncateLine(result.statusNote)) : undefined,
   ].filter(Boolean);
 

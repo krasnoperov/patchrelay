@@ -31,10 +31,13 @@ interface LiveSummary {
 
 export interface InspectResult {
   issue: TrackedIssueRecord | undefined;
-  activeRun?: RunRecord;
-  latestReport?: StageReport;
-  latestSummary?: Record<string, unknown>;
-  statusNote?: string;
+  activeRun?: RunRecord | undefined;
+  latestRun?: RunRecord | undefined;
+  latestReport?: StageReport | undefined;
+  latestSummary?: Record<string, unknown> | undefined;
+  prNumber?: number | undefined;
+  prReviewState?: string | undefined;
+  statusNote?: string | undefined;
 }
 
 export interface ReportResult {
@@ -164,8 +167,11 @@ export class CliDataAccess extends CliOperatorApiClient {
     return {
       issue,
       ...(activeRun ? { activeRun } : {}),
+      ...(!activeRun && latestRun ? { latestRun } : {}),
       ...(latestReport ? { latestReport } : {}),
       ...(latestSummary ? { latestSummary } : {}),
+      ...(dbIssue.prNumber ? { prNumber: dbIssue.prNumber } : {}),
+      ...(dbIssue.prReviewState ? { prReviewState: dbIssue.prReviewState } : {}),
       ...(statusNote ? { statusNote } : {}),
     };
   }
