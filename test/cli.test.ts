@@ -661,7 +661,7 @@ test("cli rejects unknown commands, unknown flags, and invalid numeric flags", a
   assert.match(flagError.read(), /PatchRelay/);
   assert.match(flagError.read(), /Error: Unknown flag: --projct/);
 
-  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-invalid-stage-run-"));
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-invalid-run-flag-"));
   let data: CliDataAccess | undefined;
   try {
     const config = createConfig(baseDir);
@@ -670,17 +670,17 @@ test("cli rejects unknown commands, unknown flags, and invalid numeric flags", a
     seedDatabase(db, config);
     data = new CliDataAccess(config, { db });
 
-    const stageRunError = createBufferStream();
+    const runFlagError = createBufferStream();
     assert.equal(
-      await runCli(["report", "USE-54", "--stage-run", "abc"], {
+      await runCli(["report", "USE-54", "--run", "abc"], {
         config,
         data,
         stdout: createBufferStream().stream,
-        stderr: stageRunError.stream,
+        stderr: runFlagError.stream,
       }),
       1,
     );
-    assert.match(stageRunError.read(), /--stage-run must be a positive integer/);
+    assert.match(runFlagError.read(), /--run must be a positive integer/);
   } finally {
     data?.close();
     rmSync(baseDir, { recursive: true, force: true });

@@ -66,10 +66,10 @@ function validateFlags(command: string, commandArgs: string[], parsed: ReturnTyp
       assertKnownFlags(parsed, command, ["watch", "json"]);
       return;
     case "report":
-      assertKnownFlags(parsed, command, ["stage", "stage-run", "json"]);
+      assertKnownFlags(parsed, command, ["run-type", "run", "json"]);
       return;
     case "events":
-      assertKnownFlags(parsed, command, ["stage-run", "method", "follow", "json"]);
+      assertKnownFlags(parsed, command, ["run", "method", "follow", "json"]);
       return;
     case "worktree":
       assertKnownFlags(parsed, command, ["cd", "json"]);
@@ -78,7 +78,7 @@ function validateFlags(command: string, commandArgs: string[], parsed: ReturnTyp
       assertKnownFlags(parsed, command, ["print", "json"]);
       return;
     case "retry":
-      assertKnownFlags(parsed, command, ["stage", "reason", "json"]);
+      assertKnownFlags(parsed, command, ["run-type", "reason", "json"]);
       return;
     case "list":
       assertKnownFlags(parsed, command, ["active", "failed", "project", "json"]);
