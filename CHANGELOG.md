@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.4](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.10.3...patchrelay-v0.10.4) (2026-03-22)
+
+
+### Bug Fixes
+
+* mark GitHub dedupe-only webhooks as processed, clean up stale backlog ([#83](https://github.com/krasnoperov/patchrelay/issues/83)) ([5d17314](https://github.com/krasnoperov/patchrelay/commit/5d173143238ba06034e409d590041b150e9e481f))
+
 ## [0.10.3](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.10.2...patchrelay-v0.10.3) (2026-03-22)
 
 
