@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.3](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.10.2...patchrelay-v0.10.3) (2026-03-22)
+
+
+### Bug Fixes
+
+* refresh workspace identity on connect reuse, show versions in doctor ([#81](https://github.com/krasnoperov/patchrelay/issues/81)) ([0909fda](https://github.com/krasnoperov/patchrelay/commit/0909fdae7746af340605c7d596c05e940d2e0521))
+
 ## [0.10.2](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.10.1...patchrelay-v0.10.2) (2026-03-22)
 
 
