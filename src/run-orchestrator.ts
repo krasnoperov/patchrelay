@@ -440,23 +440,16 @@ export class RunOrchestrator {
 
     const latestTurn = thread.turns.at(-1);
 
-    // Handle interrupted turn - restart
+    // Handle interrupted turn — fail the run rather than retrying indefinitely.
+    // The agent may have partially completed work (commits, PR) before interruption.
+    // Reactive loops (CI repair, review fix) will handle follow-up if needed.
     if (latestTurn?.status === "interrupted") {
-      if (!issue.worktreePath) return;
-      try {
-        const turn = await this.codex.startTurn({
-          threadId: run.threadId,
-          cwd: issue.worktreePath,
-          input: `Your previous turn was interrupted. Continue the ${run.runType} work from where you left off.`,
-        });
-        this.db.updateRunTurnId(run.id, turn.turnId);
-        this.logger.info(
-          { issueKey: issue.issueKey, runType: run.runType, threadId: run.threadId, turnId: turn.turnId },
-          "Restarted interrupted run during reconciliation",
-        );
-      } catch (error) {
-        this.failRunAndClear(run, `Failed to restart interrupted turn: ${error instanceof Error ? error.message : String(error)}`);
-      }
+      this.logger.warn(
+        { issueKey: issue.issueKey, runType: run.runType, threadId: run.threadId },
+        "Run has interrupted turn — marking as failed",
+      );
+      this.failRunAndClear(run, "Codex turn was interrupted");
+      void this.emitLinearActivity(issue, "error", `${run.runType} run was interrupted.`);
       return;
     }
 
