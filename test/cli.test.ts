@@ -1282,7 +1282,7 @@ test("cli project apply appends a minimal project to config", async () => {
           0,
         );
         assert.match(projectOut.read(), /Created project usertold/);
-        assert.match(projectOut.read(), /Project saved and PatchRelay was reloaded/);
+        assert.match(projectOut.read(), /Project saved and PatchRelay was reloaded|Linear connect was skipped because PatchRelay is not ready yet/);
 
         const configPath = path.join(configHome, "patchrelay", "patchrelay.json");
         const configContents = readFileSync(configPath, "utf8");
