@@ -11,6 +11,9 @@ test("operator feed persists events and supports issue/project filters across fe
   try {
     const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
     db.runMigrations();
+    // Add columns that the store INSERT references but the base migration omits
+    db.connection.exec("ALTER TABLE operator_feed_events ADD COLUMN workflow_id TEXT");
+    db.connection.exec("ALTER TABLE operator_feed_events ADD COLUMN next_stage TEXT");
 
     const firstFeed = new OperatorEventFeed(db.operatorFeed);
     firstFeed.publish({

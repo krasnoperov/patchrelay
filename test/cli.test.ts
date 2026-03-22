@@ -465,7 +465,7 @@ test("cli open resumes the thread stored on the issue record", async () => {
       threadId: "thread-newer",
     });
 
-    const workspace = db.getIssueByKey("usertold", "issue-1");
+    const workspace = db.getIssue("usertold", "issue-1");
     assert.ok(workspace);
 
     data = new CliDataAccess(config, {
@@ -526,7 +526,7 @@ test("cli open creates a fresh thread when the stored threadId cannot be resumed
       threadId: "thread-missing",
     });
 
-    const workspace = db.getIssueByKey("usertold", "issue-1");
+    const workspace = db.getIssue("usertold", "issue-1");
     assert.ok(workspace);
 
     data = new CliDataAccess(config, {
@@ -631,10 +631,9 @@ test("cli list and retry cover operator control flows", async () => {
     assert.match(retryOut.read(), /Queued stage: implementation/);
 
     const updated = db.getTrackedIssue("usertold", "issue-2");
-    assert.equal(updated?.desiredStage, "review");
-    assert.equal(updated?.lifecycleStatus, "queued");
+    assert.equal(updated?.factoryState, "delegated");
     const updatedIssue = db.getIssue("usertold", "issue-2");
-    assert.equal(updatedIssue?.desiredStage, "review");
+    assert.equal(updatedIssue?.pendingRunType, "implementation");
 
     const inspectJson = createBufferStream();
     assert.equal(await runCli(["USE-54", "--json"], { config, data, stdout: inspectJson.stream, stderr: createBufferStream().stream }), 0);
@@ -801,20 +800,19 @@ test("cli resolves workspace, run context, and live summary from the unified iss
     assert.equal(opened?.resumeThreadId, "thread-57");
 
     const inspect = await data.inspect("USE-57");
-    assert.equal(inspect?.activeRunTypeRun?.stage, "development");
-    assert.equal(inspect?.activeRunTypeRun?.threadId, "thread-57");
-    assert.equal(inspect?.latestRunTypeRun?.stage, "development");
+    assert.equal(inspect?.activeRun?.runType, "implementation");
+    assert.equal(inspect?.activeRun?.threadId, "thread-57");
 
     const live = await data.live("USE-57");
-    assert.equal(live?.stageRun.stage, "development");
-    assert.equal(live?.stageRun.threadId, "thread-57");
+    assert.equal(live?.run.runType, "implementation");
+    assert.equal(live?.run.threadId, "thread-57");
     assert.equal(live?.live?.latestTurnStatus, "inProgress");
 
     const list = data.list({ active: true });
     const listed = list.find((entry) => entry.issueKey === "USE-57");
-    assert.equal(listed?.activeRunType, "development");
-    assert.equal(listed?.latestRunType, "development");
-    assert.equal(listed?.latestRunTypeStatus, "running");
+    assert.equal(listed?.activeRunType, "implementation");
+    assert.equal(listed?.latestRunType, "implementation");
+    assert.equal(listed?.latestRunStatus, "running");
   } finally {
     data?.close();
     rmSync(baseDir, { recursive: true, force: true });
@@ -838,7 +836,7 @@ test("cli doctor reports deployment readiness problems", async () => {
 
     assert.equal(exitCode, 1);
     assert.match(stdout.read(), /PatchRelay doctor/);
-    assert.match(stdout.read(), /FAIL \[project:usertold:workflow:(default:)?development\]/);
+    assert.match(stdout.read(), /FAIL \[linear\] LINEAR_WEBHOOK_SECRET is missing/);
     assert.equal(stderr.read(), "");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -1284,17 +1282,14 @@ test("cli project apply appends a minimal project to config", async () => {
           0,
         );
         assert.match(projectOut.read(), /Created project usertold/);
-        assert.match(projectOut.read(), /Linear connect was skipped because PatchRelay is not ready yet:/);
+        assert.match(projectOut.read(), /Project saved and PatchRelay was reloaded/);
 
         const configPath = path.join(configHome, "patchrelay", "patchrelay.json");
-        const repoSettingsPath = path.join(repoPath, ".patchrelay", "project.json");
         const configContents = readFileSync(configPath, "utf8");
         assert.match(configContents, /"projects"\s*:/);
         assert.match(configContents, /"id"\s*:\s*"usertold"/);
         assert.match(configContents, /"repo_path"\s*:/);
         assert.match(configContents, /"issue_key_prefixes"\s*:/);
-        assert.equal(existsSync(repoSettingsPath), true);
-        assert.match(readFileSync(repoSettingsPath, "utf8"), /"workflow_definitions"\s*:/);
 
         const config = loadConfig(configPath, { profile: "write_config" });
         assert.equal(config.projects[0]?.id, "usertold");
@@ -1339,6 +1334,10 @@ test("cli project apply is idempotent and can skip connect until env is ready", 
           }),
           0,
         );
+
+        // Clear service.env secrets so preflight fails and connect is skipped
+        const serviceEnvPath = path.join(configHome, "patchrelay", "service.env");
+        writeFileSync(serviceEnvPath, "# cleared for test\n", "utf8");
 
         const projectOut = createBufferStream();
         assert.equal(
@@ -1817,7 +1816,7 @@ test("cli feed forwards issue and project filters to the operator API client", a
     assert.deepEqual(seen[1], {
       limit: 50,
       kind: "workflow",
-      runType: "implementation",
+      stage: "development",
       status: "transition_chosen",
       workflowId: "default",
     });

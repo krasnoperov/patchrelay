@@ -170,19 +170,19 @@ test("http routes handle webhook validation and issue/report/live/events lookups
                 stages: [{ stageRun: { id: 7, stage: "development", status: "completed" } }],
               }
             : undefined,
-        getActiveStageStatus: async (issueKey: string) =>
+        getActiveRunStatus: async (issueKey: string) =>
           issueKey === "USE-42"
             ? {
                 issue: { issueKey: "USE-42" },
-                stageRun: { id: 8, stage: "review", status: "running" },
+                run: { id: 8, runType: "review", status: "running" },
                 liveThread: { threadId: "thread-1", threadStatus: "running" },
               }
             : undefined,
-        getStageEvents: async (issueKey: string, stageRunId: number) =>
-          issueKey === "USE-42" && stageRunId === 8
+        getRunEvents: async (issueKey: string, runId: number) =>
+          issueKey === "USE-42" && runId === 8
             ? {
                 issue: { issueKey: "USE-42" },
-                stageRun: { id: 8, stage: "review", status: "running" },
+                run: { id: 8, runType: "review", status: "running" },
                 events: [{ id: 1, method: "turn/started" }],
               }
             : undefined,
@@ -346,7 +346,7 @@ test("http routes handle webhook validation and issue/report/live/events lookups
     assert.deepEqual(live.json(), {
       ok: true,
       issue: { issueKey: "USE-42" },
-      stageRun: { id: 8, stage: "review", status: "running" },
+      run: { id: 8, runType: "review", status: "running" },
       liveThread: { threadId: "thread-1", threadStatus: "running" },
     });
 
@@ -358,11 +358,11 @@ test("http routes handle webhook validation and issue/report/live/events lookups
       },
     });
     assert.equal(missingLive.statusCode, 404);
-    assert.deepEqual(missingLive.json(), { ok: false, reason: "active_stage_not_found" });
+    assert.deepEqual(missingLive.json(), { ok: false, reason: "active_run_not_found" });
 
     const events = await app.inject({
       method: "GET",
-      url: "/api/issues/USE-42/stages/8/events",
+      url: "/api/issues/USE-42/runs/8/events",
       headers: {
         authorization: "Bearer operator-token",
       },
@@ -371,7 +371,7 @@ test("http routes handle webhook validation and issue/report/live/events lookups
     assert.deepEqual(events.json(), {
       ok: true,
       issue: { issueKey: "USE-42" },
-      stageRun: { id: 8, stage: "review", status: "running" },
+      run: { id: 8, runType: "review", status: "running" },
       events: [{ id: 1, method: "turn/started" }],
     });
 
@@ -486,13 +486,13 @@ test("http routes handle webhook validation and issue/report/live/events lookups
 
     const missingEvents = await app.inject({
       method: "GET",
-      url: "/api/issues/USE-42/stages/999/events",
+      url: "/api/issues/USE-42/runs/999/events",
       headers: {
         authorization: "Bearer operator-token",
       },
     });
     assert.equal(missingEvents.statusCode, 404);
-    assert.deepEqual(missingEvents.json(), { ok: false, reason: "stage_run_not_found" });
+    assert.deepEqual(missingEvents.json(), { ok: false, reason: "run_not_found" });
 
     await app.close();
   } finally {
@@ -547,10 +547,10 @@ test("public agent session status page validates token and exposes operator sess
                 title: "Implement API endpoint",
                 issueUrl: "https://linear.app/example/issue/USE-42",
               },
-              activeStageRun: { stage: "development", status: "running" },
-              latestStageRun: { stage: "review", status: "completed" },
+              activeRun: { runType: "implementation", status: "running" },
+              latestRun: { runType: "review_fix", status: "completed" },
               liveThread: { threadId: "thread-1", threadStatus: "running" },
-              stages: [{ stageRun: { stage: "development", status: "running", startedAt: "2026-03-17T12:00:00.000Z" } }],
+              runs: [{ run: { runType: "implementation", status: "running", startedAt: "2026-03-17T12:00:00.000Z" } }],
               generatedAt: "2026-03-17T12:10:00.000Z",
             },
           };
