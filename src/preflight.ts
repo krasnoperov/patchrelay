@@ -157,14 +157,6 @@ function checkDatabaseHealth(config: AppConfig): PreflightCheck[] {
     }
 
     checks.push(pass("database_schema", `Database opened, migrations applied, and schema is readable (${objectCount} objects)`));
-
-    // Check for stale pending webhooks
-    const pendingCount = Number(
-      (connection.prepare("SELECT COUNT(*) AS n FROM webhook_events WHERE processing_status = 'pending'").get() as { n: number })?.n ?? 0,
-    );
-    if (pendingCount > 50) {
-      checks.push(warn("webhook_queue", `${pendingCount} pending webhook events in queue`));
-    }
   } catch (error) {
     checks.push(fail("database_schema", `Unable to open or validate database schema at ${config.database.path}: ${formatError(error)}`));
   } finally {
