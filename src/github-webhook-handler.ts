@@ -50,9 +50,10 @@ export class GitHubWebhookHandler {
       ? this.config.projects.find((p) => p.github?.repoFullName === repoName)
       : undefined;
 
-    // Verify signature if project has a webhook secret
-    if (project?.github?.webhookSecret) {
-      if (!verifyGitHubWebhookSignature(params.rawBody, project.github.webhookSecret, params.signature)) {
+    // Verify signature using global GitHub App webhook secret
+    const webhookSecret = process.env.GITHUB_APP_WEBHOOK_SECRET;
+    if (webhookSecret) {
+      if (!verifyGitHubWebhookSignature(params.rawBody, webhookSecret, params.signature)) {
         return { status: 401, body: { ok: false, reason: "invalid_signature" } };
       }
     }
