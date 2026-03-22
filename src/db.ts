@@ -1,5 +1,5 @@
-import type { IssueRecord, RunRecord, RunStatus, StageRunRecord, TrackedIssueRecord, WorkspaceRecord, ThreadEventRecord } from "./db-types.ts";
-import type { IssueLifecycleStatus, WorkflowStage } from "./workflow-types.ts";
+import type { IssueRecord, RunRecord, RunStatus, TrackedIssueRecord, ThreadEventRecord } from "./db-types.ts";
+import type { FactoryState, RunType } from "./factory-state.ts";
 import { LinearInstallationStore } from "./db/linear-installation-store.ts";
 import { OperatorFeedStore } from "./db/operator-feed-store.ts";
 import { runPatchRelayMigrations } from "./db/migrations.ts";
@@ -130,17 +130,16 @@ export class PatchRelayDatabase {
     issueKey?: string;
     title?: string;
     url?: string;
-    selectedWorkflowId?: string | null;
     currentLinearState?: string;
-    desiredStage?: WorkflowStage | null;
+    factoryState?: FactoryState;
+    pendingRunType?: RunType | null;
+    pendingRunContextJson?: string | null;
     branchName?: string;
     worktreePath?: string;
     threadId?: string | null;
     activeRunId?: number | null;
     statusCommentId?: string | null;
     agentSessionId?: string | null;
-    continuationBarrierAt?: string | null;
-    lifecycleStatus?: IssueLifecycleStatus;
     prNumber?: number | null;
     prUrl?: string | null;
     prState?: string | null;
@@ -148,8 +147,6 @@ export class PatchRelayDatabase {
     prCheckStatus?: string | null;
     ciRepairAttempts?: number;
     queueRepairAttempts?: number;
-    pendingRunType?: string | null;
-    pendingRunContextJson?: string | null;
   }): IssueRecord {
     const now = isoNow();
     const existing = this.getIssue(params.projectId, params.linearIssueId);
@@ -164,17 +161,16 @@ export class PatchRelayDatabase {
       if (params.issueKey !== undefined) { sets.push("issue_key = COALESCE(@issueKey, issue_key)"); values.issueKey = params.issueKey; }
       if (params.title !== undefined) { sets.push("title = COALESCE(@title, title)"); values.title = params.title; }
       if (params.url !== undefined) { sets.push("url = COALESCE(@url, url)"); values.url = params.url; }
-      if (params.selectedWorkflowId !== undefined) { sets.push("selected_workflow_id = @selectedWorkflowId"); values.selectedWorkflowId = params.selectedWorkflowId; }
       if (params.currentLinearState !== undefined) { sets.push("current_linear_state = COALESCE(@currentLinearState, current_linear_state)"); values.currentLinearState = params.currentLinearState; }
-      if (params.desiredStage !== undefined) { sets.push("desired_stage = @desiredStage"); values.desiredStage = params.desiredStage; }
+      if (params.factoryState !== undefined) { sets.push("factory_state = @factoryState"); values.factoryState = params.factoryState; }
+      if (params.pendingRunType !== undefined) { sets.push("pending_run_type = @pendingRunType"); values.pendingRunType = params.pendingRunType; }
+      if (params.pendingRunContextJson !== undefined) { sets.push("pending_run_context_json = @pendingRunContextJson"); values.pendingRunContextJson = params.pendingRunContextJson; }
       if (params.branchName !== undefined) { sets.push("branch_name = COALESCE(@branchName, branch_name)"); values.branchName = params.branchName; }
       if (params.worktreePath !== undefined) { sets.push("worktree_path = COALESCE(@worktreePath, worktree_path)"); values.worktreePath = params.worktreePath; }
       if (params.threadId !== undefined) { sets.push("thread_id = @threadId"); values.threadId = params.threadId; }
       if (params.activeRunId !== undefined) { sets.push("active_run_id = @activeRunId"); values.activeRunId = params.activeRunId; }
       if (params.statusCommentId !== undefined) { sets.push("status_comment_id = @statusCommentId"); values.statusCommentId = params.statusCommentId; }
       if (params.agentSessionId !== undefined) { sets.push("agent_session_id = @agentSessionId"); values.agentSessionId = params.agentSessionId; }
-      if (params.continuationBarrierAt !== undefined) { sets.push("continuation_barrier_at = @continuationBarrierAt"); values.continuationBarrierAt = params.continuationBarrierAt; }
-      if (params.lifecycleStatus !== undefined) { sets.push("lifecycle_status = @lifecycleStatus"); values.lifecycleStatus = params.lifecycleStatus; }
       if (params.prNumber !== undefined) { sets.push("pr_number = @prNumber"); values.prNumber = params.prNumber; }
       if (params.prUrl !== undefined) { sets.push("pr_url = @prUrl"); values.prUrl = params.prUrl; }
       if (params.prState !== undefined) { sets.push("pr_state = @prState"); values.prState = params.prState; }
@@ -190,16 +186,16 @@ export class PatchRelayDatabase {
       this.connection.prepare(`
         INSERT INTO issues (
           project_id, linear_issue_id, issue_key, title, url,
-          selected_workflow_id, current_linear_state, desired_stage,
+          current_linear_state, factory_state, pending_run_type, pending_run_context_json,
           branch_name, worktree_path, thread_id, active_run_id,
-          status_comment_id, agent_session_id, continuation_barrier_at,
-          lifecycle_status, updated_at
+          status_comment_id, agent_session_id,
+          updated_at
         ) VALUES (
           @projectId, @linearIssueId, @issueKey, @title, @url,
-          @selectedWorkflowId, @currentLinearState, @desiredStage,
+          @currentLinearState, @factoryState, @pendingRunType, @pendingRunContextJson,
           @branchName, @worktreePath, @threadId, @activeRunId,
-          @statusCommentId, @agentSessionId, @continuationBarrierAt,
-          @lifecycleStatus, @now
+          @statusCommentId, @agentSessionId,
+          @now
         )
       `).run({
         projectId: params.projectId,
@@ -207,17 +203,16 @@ export class PatchRelayDatabase {
         issueKey: params.issueKey ?? null,
         title: params.title ?? null,
         url: params.url ?? null,
-        selectedWorkflowId: params.selectedWorkflowId ?? null,
         currentLinearState: params.currentLinearState ?? null,
-        desiredStage: params.desiredStage ?? null,
+        factoryState: params.factoryState ?? "delegated",
+        pendingRunType: params.pendingRunType ?? null,
+        pendingRunContextJson: params.pendingRunContextJson ?? null,
         branchName: params.branchName ?? null,
         worktreePath: params.worktreePath ?? null,
         threadId: params.threadId ?? null,
         activeRunId: params.activeRunId ?? null,
         statusCommentId: params.statusCommentId ?? null,
         agentSessionId: params.agentSessionId ?? null,
-        continuationBarrierAt: params.continuationBarrierAt ?? null,
-        lifecycleStatus: params.lifecycleStatus ?? "idle",
         now,
       });
     }
@@ -248,7 +243,7 @@ export class PatchRelayDatabase {
 
   listIssuesReadyForExecution(): Array<{ projectId: string; linearIssueId: string }> {
     const rows = this.connection
-      .prepare("SELECT project_id, linear_issue_id FROM issues WHERE desired_stage IS NOT NULL AND active_run_id IS NULL")
+      .prepare("SELECT project_id, linear_issue_id FROM issues WHERE pending_run_type IS NOT NULL AND active_run_id IS NULL")
       .all() as Array<Record<string, unknown>>;
     return rows.map((row) => ({
       projectId: String(row.project_id),
@@ -262,20 +257,19 @@ export class PatchRelayDatabase {
     issueId: number;
     projectId: string;
     linearIssueId: string;
-    stage: WorkflowStage;
-    workflowFile?: string;
+    runType: import("./factory-state.ts").RunType;
     promptText?: string;
   }): RunRecord {
     const now = isoNow();
     const result = this.connection.prepare(`
-      INSERT INTO runs (issue_id, project_id, linear_issue_id, stage, status, workflow_file, prompt_text, started_at)
-      VALUES (?, ?, ?, ?, 'queued', ?, ?, ?)
+      INSERT INTO runs (issue_id, project_id, linear_issue_id, run_type, stage, status, prompt_text, started_at)
+      VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)
     `).run(
       params.issueId,
       params.projectId,
       params.linearIssueId,
-      params.stage,
-      params.workflowFile ?? null,
+      params.runType,
+      params.runType, // write to legacy 'stage' column too
       params.promptText ?? null,
       now,
     );
@@ -387,7 +381,7 @@ export class PatchRelayDatabase {
       .all(runId) as Array<Record<string, unknown>>;
     return rows.map((row) => ({
       id: Number(row.id),
-      stageRunId: Number(row.run_lease_id),
+      runId: Number(row.run_lease_id),
       threadId: String(row.thread_id),
       ...(row.turn_id !== null ? { turnId: String(row.turn_id) } : {}),
       method: String(row.method),
@@ -396,24 +390,21 @@ export class PatchRelayDatabase {
     }));
   }
 
-  // ─── View builders for CLI/query compatibility ────────────────────
+  // ─── View builders ──────────────────────────────────────────────
 
   issueToTrackedIssue(issue: IssueRecord): TrackedIssueRecord {
     return {
       id: issue.id,
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
-      ...(issue.selectedWorkflowId ? { selectedWorkflowId: issue.selectedWorkflowId } : {}),
       ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
       ...(issue.title ? { title: issue.title } : {}),
       ...(issue.url ? { issueUrl: issue.url } : {}),
       ...(issue.currentLinearState ? { currentLinearState: issue.currentLinearState } : {}),
-      ...(issue.desiredStage ? { desiredStage: issue.desiredStage } : {}),
-      ...(issue.activeRunId !== undefined ? { activeStageRunId: issue.activeRunId } : {}),
+      factoryState: issue.factoryState,
+      ...(issue.activeRunId !== undefined ? { activeRunId: issue.activeRunId } : {}),
       ...(issue.statusCommentId ? { statusCommentId: issue.statusCommentId } : {}),
       ...(issue.agentSessionId ? { activeAgentSessionId: issue.agentSessionId } : {}),
-      ...(issue.continuationBarrierAt ? { continuationBarrierAt: issue.continuationBarrierAt } : {}),
-      lifecycleStatus: issue.lifecycleStatus,
       updatedAt: issue.updatedAt,
     };
   }
@@ -428,93 +419,19 @@ export class PatchRelayDatabase {
     return issue ? this.issueToTrackedIssue(issue) : undefined;
   }
 
-  runToStageRun(run: RunRecord): StageRunRecord {
-    return {
-      id: run.id,
-      pipelineRunId: run.id,
-      projectId: run.projectId,
-      linearIssueId: run.linearIssueId,
-      workspaceId: run.issueId,
-      stage: run.stage,
-      status: run.status === "failed" ? "failed" : run.status === "completed" || run.status === "released" ? "completed" : "running",
-      triggerWebhookId: `run-${run.id}`,
-      workflowFile: run.workflowFile ?? "",
-      promptText: run.promptText ?? "",
-      ...(run.threadId ? { threadId: run.threadId } : {}),
-      ...(run.parentThreadId ? { parentThreadId: run.parentThreadId } : {}),
-      ...(run.turnId ? { turnId: run.turnId } : {}),
-      ...(run.summaryJson ? { summaryJson: run.summaryJson } : {}),
-      ...(run.reportJson ? { reportJson: run.reportJson } : {}),
-      startedAt: run.startedAt,
-      ...(run.endedAt ? { endedAt: run.endedAt } : {}),
-    };
-  }
-
-  getStageRun(id: number): StageRunRecord | undefined {
-    const run = this.getRun(id);
-    return run ? this.runToStageRun(run) : undefined;
-  }
-
-  getStageRunByThreadId(threadId: string): StageRunRecord | undefined {
-    const run = this.getRunByThreadId(threadId);
-    return run ? this.runToStageRun(run) : undefined;
-  }
-
-  listStageRunsForIssue(projectId: string, linearIssueId: string): StageRunRecord[] {
-    return this.listRunsForIssue(projectId, linearIssueId).map((run) => this.runToStageRun(run));
-  }
-
-  getLatestStageRunForIssue(projectId: string, linearIssueId: string): StageRunRecord | undefined {
-    const run = this.getLatestRunForIssue(projectId, linearIssueId);
-    return run ? this.runToStageRun(run) : undefined;
-  }
-
-  issueToWorkspace(issue: IssueRecord): WorkspaceRecord | undefined {
-    if (!issue.branchName || !issue.worktreePath) {
-      return undefined;
-    }
-    const activeRun = issue.activeRunId ? this.getRun(issue.activeRunId) : undefined;
-    const latestRun = this.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
-    return {
-      id: issue.id,
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      branchName: issue.branchName,
-      worktreePath: issue.worktreePath,
-      status: issue.lifecycleStatus === "running" ? "active" : issue.lifecycleStatus === "paused" || issue.lifecycleStatus === "failed" ? "paused" : "active",
-      ...(latestRun ? { lastStage: latestRun.stage } : {}),
-      ...(activeRun?.threadId ? { lastThreadId: activeRun.threadId } : latestRun?.threadId ? { lastThreadId: latestRun.threadId } : {}),
-      createdAt: issue.updatedAt,
-      updatedAt: issue.updatedAt,
-    };
-  }
-
-  getWorkspaceForIssue(projectId: string, linearIssueId: string): WorkspaceRecord | undefined {
-    const issue = this.getIssue(projectId, linearIssueId);
-    return issue ? this.issueToWorkspace(issue) : undefined;
-  }
-
-  getWorkspaceById(id: number): WorkspaceRecord | undefined {
-    const issue = this.getIssueById(id);
-    return issue ? this.issueToWorkspace(issue) : undefined;
-  }
-
   // ─── Issue overview for query service ─────────────────────────────
 
   getIssueOverview(issueKey: string): {
     issue: TrackedIssueRecord;
-    workspace?: WorkspaceRecord;
-    activeStageRun?: StageRunRecord;
+    activeRun?: RunRecord;
   } | undefined {
     const issue = this.getIssueByKey(issueKey);
     if (!issue) return undefined;
     const tracked = this.issueToTrackedIssue(issue);
-    const workspace = this.issueToWorkspace(issue);
-    const activeStageRun = issue.activeRunId ? this.getStageRun(issue.activeRunId) : undefined;
+    const activeRun = issue.activeRunId ? this.getRun(issue.activeRunId) : undefined;
     return {
       issue: tracked,
-      ...(workspace ? { workspace } : {}),
-      ...(activeStageRun ? { activeStageRun } : {}),
+      ...(activeRun ? { activeRun } : {}),
     };
   }
 }
@@ -529,17 +446,16 @@ function mapIssueRow(row: Record<string, unknown>): IssueRecord {
     ...(row.issue_key !== null ? { issueKey: String(row.issue_key) } : {}),
     ...(row.title !== null ? { title: String(row.title) } : {}),
     ...(row.url !== null ? { url: String(row.url) } : {}),
-    ...(row.selected_workflow_id !== null ? { selectedWorkflowId: String(row.selected_workflow_id) } : {}),
     ...(row.current_linear_state !== null ? { currentLinearState: String(row.current_linear_state) } : {}),
-    ...(row.desired_stage !== null ? { desiredStage: String(row.desired_stage) } : {}),
+    factoryState: String(row.factory_state ?? "delegated") as import("./factory-state.ts").FactoryState,
+    ...(row.pending_run_type !== null && row.pending_run_type !== undefined ? { pendingRunType: String(row.pending_run_type) as import("./factory-state.ts").RunType } : {}),
+    ...(row.pending_run_context_json !== null && row.pending_run_context_json !== undefined ? { pendingRunContextJson: String(row.pending_run_context_json) } : {}),
     ...(row.branch_name !== null ? { branchName: String(row.branch_name) } : {}),
     ...(row.worktree_path !== null ? { worktreePath: String(row.worktree_path) } : {}),
     ...(row.thread_id !== null ? { threadId: String(row.thread_id) } : {}),
     ...(row.active_run_id !== null ? { activeRunId: Number(row.active_run_id) } : {}),
     ...(row.status_comment_id !== null ? { statusCommentId: String(row.status_comment_id) } : {}),
     ...(row.agent_session_id !== null ? { agentSessionId: String(row.agent_session_id) } : {}),
-    ...(row.continuation_barrier_at !== null ? { continuationBarrierAt: String(row.continuation_barrier_at) } : {}),
-    lifecycleStatus: String(row.lifecycle_status) as IssueLifecycleStatus,
     updatedAt: String(row.updated_at),
     ...(row.pr_number !== null && row.pr_number !== undefined ? { prNumber: Number(row.pr_number) } : {}),
     ...(row.pr_url !== null && row.pr_url !== undefined ? { prUrl: String(row.pr_url) } : {}),
@@ -548,8 +464,6 @@ function mapIssueRow(row: Record<string, unknown>): IssueRecord {
     ...(row.pr_check_status !== null && row.pr_check_status !== undefined ? { prCheckStatus: String(row.pr_check_status) } : {}),
     ciRepairAttempts: Number(row.ci_repair_attempts ?? 0),
     queueRepairAttempts: Number(row.queue_repair_attempts ?? 0),
-    ...(row.pending_run_type !== null && row.pending_run_type !== undefined ? { pendingRunType: String(row.pending_run_type) as import("./db-types.ts").RunType } : {}),
-    ...(row.pending_run_context_json !== null && row.pending_run_context_json !== undefined ? { pendingRunContextJson: String(row.pending_run_context_json) } : {}),
   };
 }
 
@@ -559,10 +473,8 @@ function mapRunRow(row: Record<string, unknown>): RunRecord {
     issueId: Number(row.issue_id),
     projectId: String(row.project_id),
     linearIssueId: String(row.linear_issue_id),
-    stage: String(row.stage),
+    runType: String(row.run_type ?? "implementation") as import("./factory-state.ts").RunType,
     status: String(row.status) as RunStatus,
-    runType: (String(row.run_type ?? "stage")) as import("./db-types.ts").RunType,
-    ...(row.workflow_file !== null ? { workflowFile: String(row.workflow_file) } : {}),
     ...(row.prompt_text !== null ? { promptText: String(row.prompt_text) } : {}),
     ...(row.thread_id !== null ? { threadId: String(row.thread_id) } : {}),
     ...(row.turn_id !== null ? { turnId: String(row.turn_id) } : {}),

@@ -1,3 +1,5 @@
+export type { FactoryState, RunType } from "./factory-state.ts";
+
 export type TriggerEvent =
   | "issueCreated"
   | "issueUpdated"
@@ -15,46 +17,16 @@ export type TriggerEvent =
   | "installationRevoked"
   | "appUserNotification";
 
+// Legacy aliases — kept temporarily so imports don't all break at once.
+// These will be removed once all consumers are updated.
 export type WorkflowStage = string;
-export type IssueLifecycleStatus = "idle" | "queued" | "running" | "paused" | "completed" | "failed";
-export type WorkspaceStatus = "active" | "paused" | "closing" | "closed";
-export type PipelineStatus = "active" | "completed" | "failed" | "paused";
+export type IssueLifecycleStatus = string;
 export type StageRunStatus = "running" | "completed" | "failed" | "waiting";
-
-export interface ProjectWorkflowConfig {
-  id: string;
-  whenState: string;
-  activeState: string;
-  workflowFile: string;
-  fallbackState?: string;
-}
-
-export interface ProjectWorkflowDefinition {
-  id: string;
-  stages: ProjectWorkflowConfig[];
-}
-
-export interface ProjectWorkflowSelectionRule {
-  workflowId: string;
-  label: string;
-}
-
-export interface ProjectWorkflowSelectionConfig {
-  defaultWorkflowId?: string;
-  byLabel: ProjectWorkflowSelectionRule[];
-}
 
 export interface ProjectConfig {
   id: string;
   repoPath: string;
   worktreeRoot: string;
-  workflows: ProjectWorkflowConfig[];
-  workflowDefinitions?: ProjectWorkflowDefinition[];
-  workflowSelection?: ProjectWorkflowSelectionConfig;
-  workflowLabels?: {
-    working?: string;
-    awaitingHandoff?: string;
-  };
   issueKeyPrefixes: string[];
   linearTeamIds: string[];
   allowLabels: string[];
