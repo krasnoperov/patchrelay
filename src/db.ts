@@ -269,7 +269,7 @@ export class PatchRelayDatabase {
       params.projectId,
       params.linearIssueId,
       params.runType,
-      params.runType, // write to legacy 'stage' column too
+      params.runType,
       params.promptText ?? null,
       now,
     );

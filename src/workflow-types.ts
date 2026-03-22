@@ -17,12 +17,6 @@ export type TriggerEvent =
   | "installationRevoked"
   | "appUserNotification";
 
-// Legacy aliases — kept temporarily so imports don't all break at once.
-// These will be removed once all consumers are updated.
-export type WorkflowStage = string;
-export type IssueLifecycleStatus = string;
-export type StageRunStatus = "running" | "completed" | "failed" | "waiting";
-
 export interface ProjectConfig {
   id: string;
   repoPath: string;

@@ -1,5 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
-import type { AppConfig, WorkflowStage } from "../../types.ts";
+import type { AppConfig } from "../../types.ts";
 import { getStageFlag, parsePositiveIntegerFlag } from "../args.ts";
 import type { InteractiveRunner, Output, ParsedArgs } from "../command-types.ts";
 import type { CliDataAccess } from "../data.ts";

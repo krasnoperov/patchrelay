@@ -2,7 +2,6 @@ import type { GitHubTriggerEvent } from "./github-types.ts";
 
 /**
  * Factory state machine — the single source of truth for issue lifecycle.
- * Replaces the old WorkflowStage + IssueLifecycleStatus + pendingRunType trifecta.
  */
 export type FactoryState =
   | "delegated"

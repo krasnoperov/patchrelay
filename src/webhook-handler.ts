@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type { Logger } from "pino";
 import {
   buildPreparingSessionPlan,
@@ -21,7 +20,6 @@ import type {
   NormalizedEvent,
   ProjectConfig,
   TrackedIssueRecord,
-  WorkflowStage,
 } from "./types.ts";
 import { safeJsonParse, sanitizeDiagnosticText } from "./utils.ts";
 
@@ -218,20 +216,6 @@ export class WebhookHandler {
     const installation = this.db.linearInstallations.getLinearInstallationForProject(project.id);
     if (!installation?.actorId) return false;
     return normalized.issue.delegateId === installation.actorId;
-  }
-
-  private resolveContinuationBarrier(normalized: NormalizedEvent, hasActiveRun: boolean): string | undefined {
-    if (!hasActiveRun) return undefined;
-    if (
-      (normalized.triggerEvent === "commentCreated" || normalized.triggerEvent === "commentUpdated") &&
-      normalized.comment?.body?.trim()
-    ) {
-      return new Date().toISOString();
-    }
-    if (normalized.triggerEvent === "agentPrompted" && this.resolveLaunchInput(normalized.agentSession)) {
-      return new Date().toISOString();
-    }
-    return undefined;
   }
 
   private resolveLaunchInput(agentSession: AgentSessionMetadata | undefined): string | undefined {

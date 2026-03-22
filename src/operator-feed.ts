@@ -1,4 +1,3 @@
-import type { WorkflowStage } from "./types.ts";
 
 export type OperatorFeedEventLevel = "info" | "warn" | "error";
 export type OperatorFeedEventKind = "service" | "webhook" | "agent" | "comment" | "stage" | "turn" | "workflow" | "hook" | "github";
@@ -9,7 +8,7 @@ export interface OperatorFeedQuery {
   issueKey?: string;
   projectId?: string;
   kind?: OperatorFeedEventKind;
-  stage?: WorkflowStage;
+  stage?: string;
   status?: string;
   workflowId?: string;
 }
@@ -23,10 +22,10 @@ export interface OperatorFeedEvent {
   detail?: string | undefined;
   issueKey?: string | undefined;
   projectId?: string | undefined;
-  stage?: WorkflowStage | undefined;
+  stage?: string | undefined;
   status?: string | undefined;
   workflowId?: string | undefined;
-  nextStage?: WorkflowStage | undefined;
+  nextStage?: string | undefined;
 }
 
 type OperatorFeedListener = (event: OperatorFeedEvent) => void;
