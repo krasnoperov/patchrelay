@@ -2,17 +2,18 @@
 
 PatchRelay is a self-hosted harness for Linear-driven Codex work on your own machine.
 
-It receives Linear webhooks, routes issues to the right local repository, prepares durable issue worktrees, runs staged Codex sessions through `codex app-server`, and keeps the whole run observable and resumable from the CLI.
+It receives Linear webhooks, routes issues to the right local repository, prepares durable issue worktrees, runs Codex sessions through `codex app-server`, and keeps the whole run observable and resumable from the CLI. GitHub webhooks drive reactive loops for CI repair, review fixes, and merge queue failures.
 
 PatchRelay is the system around the model:
 
-- webhook intake and verification
+- webhook intake and verification (Linear and GitHub)
 - Linear OAuth and workspace installations
 - issue-to-repo routing
 - issue worktree and branch lifecycle
-- stage orchestration and thread continuity
+- run orchestration and thread continuity
+- reactive CI repair, review fix, and merge queue repair loops
 - native Linear agent input forwarding into active runs
-- read-only inspection and stage reporting
+- read-only inspection and run reporting
 
 If you want Codex to work inside your real repos with your real tools, secrets, SSH access, and deployment surface, PatchRelay is the harness that makes that loop reliable.
 
@@ -20,20 +21,22 @@ If you want Codex to work inside your real repos with your real tools, secrets, 
 
 - Keep the agent in the real environment instead of rebuilding that environment in a hosted sandbox.
 - Use your existing machine, repos, secrets, SSH config, shell tools, and deployment access.
-- Keep deterministic workflow logic outside the model: routing, staging, worktree ownership, and reporting.
+- Keep deterministic workflow logic outside the model: routing, run orchestration, worktree ownership, and reporting.
 - Choose the Codex approval and sandbox settings that match your risk tolerance.
-- Let Linear drive the loop through delegation, mentions, and workflow stages.
+- Let Linear drive the loop through delegation and native agent sessions.
+- Let GitHub drive reactive loops through PR reviews and CI check events.
 - Drop into the exact issue worktree and resume control manually when needed.
 
 ## What PatchRelay Owns
 
 PatchRelay does the deterministic harness work that you do not want to re-implement around every model run:
 
-- verifies and deduplicates Linear webhooks
-- maps issue events to the correct local project and workflow policy
+- verifies and deduplicates Linear and GitHub webhooks
+- maps issue events to the correct local project
 - creates and reuses one durable worktree and branch per issue lifecycle
-- starts or forks Codex threads for the workflows you bind to Linear states
-- persists enough state to correlate the Linear issue, local workspace, stage run, and Codex thread
+- starts Codex threads for implementation runs
+- triggers reactive runs for CI failures, review feedback, and merge queue failures
+- persists enough state to correlate the Linear issue, local workspace, run, and Codex thread
 - reports progress back to Linear and forwards follow-up agent input into active runs
 - exposes CLI and optional read-only inspection surfaces so operators can understand what happened
 
@@ -41,10 +44,10 @@ PatchRelay does the deterministic harness work that you do not want to re-implem
 
 PatchRelay works best when read as five layers with clear ownership:
 
-- policy layer: repo workflow files and stage prompts
-- coordination layer: issue claiming, stage selection, retries, and reconciliation
+- policy layer: repo workflow files (`IMPLEMENTATION_WORKFLOW.md`, `REVIEW_WORKFLOW.md`)
+- coordination layer: issue claiming, run scheduling, retry budgets, and reconciliation
 - execution layer: durable worktrees, Codex threads, and queued turn input delivery
-- integration layer: Linear webhooks, OAuth, project routing, and deterministic state sync
+- integration layer: Linear webhooks, GitHub webhooks, OAuth, project routing, and state sync
 - observability layer: CLI inspection, reports, event trails, and operator endpoints
 
 That separation is intentional. PatchRelay is not the policy itself and it is not the coding agent. It is the harness that keeps those pieces coordinated in a real repository with real operational state.
@@ -53,11 +56,11 @@ That separation is intentional. PatchRelay is not the policy itself and it is no
 
 PatchRelay is designed for a local, operator-owned setup:
 
-- PatchRelay service runs on your machine or server
+- PatchRelay service runs on your machine or server (default `127.0.0.1:8787`)
 - Codex runs through `codex app-server`
 - Linear is the control surface
 - `patchrelay` CLI is the operator interface
-- a reverse proxy exposes the Linear-facing routes
+- a reverse proxy exposes the Linear-facing and GitHub-facing webhook routes
 
 Linux and Node.js `24+` are the intended runtime.
 
@@ -67,53 +70,59 @@ You will also need:
 - `codex`
 - a Linear OAuth app for this PatchRelay deployment
 - a Linear webhook secret
-- a public HTTPS entrypoint such as Caddy, nginx, or a tunnel so Linear can reach your PatchRelay webhook
-
-For the exact OAuth app settings and webhook categories, use the Linear onboarding guide.
+- a public HTTPS entrypoint such as Caddy, nginx, or a tunnel so Linear and GitHub can reach your PatchRelay webhooks
 
 ## How It Works
 
-1. A human delegates PatchRelay on an issue to start automation, or mentions it to start a conversational agent session.
+1. A human delegates PatchRelay on an issue to start automation.
 2. PatchRelay verifies the webhook and routes the issue to the right local project.
-3. Delegated issues create or reuse the issue worktree and launch the matching workflow through `codex app-server`.
+3. Delegated issues create or reuse the issue worktree and launch an implementation run through `codex app-server`.
 4. PatchRelay persists thread ids, run state, and observations so the work stays inspectable and resumable.
-5. Mentions stay conversational, while delegated sessions and native agent prompts can steer the active run. An operator can take over from the exact same worktree when needed.
+5. GitHub webhooks drive reactive loops: CI repair on check failures, review fix on changes requested, and merge queue repair on queue failures.
+6. Native agent prompts and Linear comments can steer the active run. An operator can take over from the exact same worktree when needed.
+
+## Factory State Machine
+
+Each issue progresses through a factory state machine:
+
+```text
+delegated → preparing → implementing → pr_open → awaiting_review
+  → changes_requested (review fix run) → back to implementing
+  → repairing_ci (CI repair run) → back to pr_open
+  → awaiting_queue → done (merged)
+  → repairing_queue (queue repair run) → back to pr_open
+  → escalated or failed (when retry budgets are exhausted)
+```
+
+Run types:
+
+- `implementation` — initial coding work
+- `review_fix` — address reviewer feedback
+- `ci_repair` — fix failing CI checks
+- `queue_repair` — fix merge queue failures
 
 ## Restart And Reconciliation
 
 PatchRelay treats restart safety as part of the harness contract, not as a best-effort extra.
 
-After a restart, the service should be able to answer:
+After a restart, the service can answer:
 
 - which issue owns each active worktree
-- which stage was running or queued
+- which run was active or queued
 - which Codex thread and turn belong to that work
 - whether the issue is still eligible to continue
 - whether the run should resume, hand off, or fail back to a human state
 
-This is why PatchRelay keeps a small harness ledger alongside Codex thread history and Linear state. The goal is not to duplicate the model transcript. The goal is to make automation restartable, inspectable, and recoverable when the process or machine is interrupted.
+This is why PatchRelay keeps a durable `issues` and `runs` table alongside Codex thread history and Linear state. The goal is not to duplicate the model transcript. The goal is to make automation restartable, inspectable, and recoverable when the process or machine is interrupted.
 
-## Workflow Configuration
+## Workflow Files
 
-PatchRelay keeps workflow configuration simple:
+PatchRelay uses repo-local workflow files as prompts for Codex runs:
 
-- route issues to a project by team, issue prefix, or labels
-- when an issue is delegated to PatchRelay, it looks at the current Linear state
-- that Linear state selects the matching workflow to run
-- that workflow selects the repo-local workflow file
+- `IMPLEMENTATION_WORKFLOW.md` — used for implementation, CI repair, and queue repair runs
+- `REVIEW_WORKFLOW.md` — used for review fix runs
 
-Most teams only configure:
-
-- which issues belong to which project
-- which Linear states should wake each workflow
-- which workflow file belongs to each workflow
-- which active state PatchRelay should set while that workflow is running
-
-Examples:
-
-- a standard project can map `Start -> development`, `Review -> review`, and `Deploy -> deploy`
-- a push-to-main project can automate implementation and review, then let GitHub Actions handle deployment while PatchRelay moves failures back to `Human Needed`
-- a project with a QA gate can add a `qa` workflow bound to `Ready for QA`
+These files define how the agent should work in that repository. Keep them short and action-oriented.
 
 ## Access Control
 
@@ -183,13 +192,11 @@ The generated `~/.config/patchrelay/patchrelay.json` is machine-level service co
 
 ### 5. Add workflow docs to the repo
 
-By default PatchRelay looks for:
+PatchRelay looks for:
 
 ```text
 IMPLEMENTATION_WORKFLOW.md
 REVIEW_WORKFLOW.md
-DEPLOY_WORKFLOW.md
-CLEANUP_WORKFLOW.md
 ```
 
 These files define how the agent should work in that repo.
@@ -214,14 +221,14 @@ Important:
 
 - Linear needs a public HTTPS URL to reach your webhook.
 - `patchrelay init <public-base-url>` writes `server.public_base_url`, which PatchRelay uses when it prints webhook URLs.
-- For ingress, OAuth app setup, and webhook details, use the self-hosting and Linear onboarding docs.
+- For ingress, OAuth app setup, and webhook details, use the self-hosting docs.
 
 ## Daily Loop
 
 1. Delegate a Linear issue to the PatchRelay app.
-2. PatchRelay reads the current Linear state like `Start`, `Ready for QA`, or `Deploy` to choose the matching workflow.
-3. Linear sends the delegation and agent-session webhooks to PatchRelay, which creates or reuses the issue worktree and launches the matching workflow.
-4. Follow up in the Linear agent session to steer the active run or wake it with fresh input while it remains delegated.
+2. Linear sends the delegation and agent-session webhooks to PatchRelay, which creates or reuses the issue worktree and launches an implementation run.
+3. Follow up in the Linear agent session to steer the active run or wake it with fresh input while it remains delegated.
+4. GitHub webhooks automatically trigger CI repair, review fix, or merge queue repair runs when needed.
 5. Watch progress from the terminal or open the same worktree and take over manually.
 
 Useful commands:
@@ -233,7 +240,7 @@ Useful commands:
 - `patchrelay events APP-123 --follow`
 - `patchrelay worktree APP-123 --cd`
 - `patchrelay open APP-123`
-- `patchrelay retry APP-123 --stage review`
+- `patchrelay retry APP-123`
 
 `patchrelay open` is the handoff bridge: it opens Codex in the issue worktree and resumes the existing thread when PatchRelay has one.
 
@@ -244,27 +251,22 @@ Today that takeover path is intentionally YOLO mode: it launches Codex with `--d
 PatchRelay keeps enough durable state to answer the questions that matter during and after a run:
 
 - which worktree and branch belong to an issue
-- which stage is active or queued
+- which run is active or queued
 - which Codex thread owns the current work
 - what the agent said
 - which commands it ran
 - which files it changed
-- whether the stage completed, failed, or needs handoff
+- whether the run completed, failed, or needs handoff
 
 ## Docs
 
 Use the README for the product overview and quick start. Use the docs for operating details:
 
-- [Self-hosting and deployment](https://github.com/krasnoperov/patchrelay/blob/main/docs/self-hosting.md)
-- [Linear agent onboarding](https://github.com/krasnoperov/patchrelay/blob/main/docs/linear-agent-onboarding.md)
-- [CLI reference](https://github.com/krasnoperov/patchrelay/blob/main/docs/cli-reference.md)
-- [Architecture](https://github.com/krasnoperov/patchrelay/blob/main/docs/architecture.md)
-- [Module map](https://github.com/krasnoperov/patchrelay/blob/main/docs/module-map.md)
-- [Authoritative vs derived state](https://github.com/krasnoperov/patchrelay/blob/main/docs/state-authority.md)
-- [Persistence audit](https://github.com/krasnoperov/patchrelay/blob/main/docs/persistence-audit.md)
-- [Codex integration details](https://github.com/krasnoperov/patchrelay/blob/main/docs/codex-workflow.md)
-- [Workflow file requirements](https://github.com/krasnoperov/patchrelay/blob/main/docs/IMPLEMENTATION_WORKFLOW_REQUIREMENTS.md)
-- [Security policy](https://github.com/krasnoperov/patchrelay/blob/main/SECURITY.md)
+- [Self-hosting and deployment](./docs/self-hosting.md)
+- [Architecture](./docs/architecture.md)
+- [Design principles](./docs/design-docs/core-beliefs.md)
+- [External reference patterns](./docs/references/external-patterns.md)
+- [Security policy](./SECURITY.md)
 
 ## Status
 

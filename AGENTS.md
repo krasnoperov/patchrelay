@@ -1,13 +1,12 @@
 # PatchRelay Agent Guide
 
-PatchRelay is being redesigned as a **Linear-centered agentic software factory**.
-Treat this repository as a fresh-start architecture effort, not as an extension of the older staged-run design.
+PatchRelay is a **Linear-centered agentic software factory**.
 
 ## Start Here
 
 Read these in order:
 
-1. [ARCHITECTURE.md](./ARCHITECTURE.md) for the system map and dependency rules.
+1. [ARCHITECTURE.md](./ARCHITECTURE.md) for the system map and source layout.
 2. [PRODUCT_SPEC.md](./PRODUCT_SPEC.md) for product requirements and scope.
 3. [docs/design-docs/index.md](./docs/design-docs/index.md) for design principles and deeper references.
 4. [docs/architecture.md](./docs/architecture.md) for the detailed control-plane design.
@@ -20,15 +19,14 @@ PatchRelay should:
 - receive delegated work through **Linear Agent Sessions**
 - orchestrate long-running work in **isolated git worktrees**
 - run implementation and repair loops through **Codex**
-- use **GitHub** as the canonical source of PR, review, and check truth
-- treat **merge queues as pluggable providers**, with Graphite as the first target
+- use **GitHub webhooks** as the canonical source of PR, review, check, and merge queue truth
+- trigger reactive repair runs automatically from GitHub events
 
 PatchRelay should not:
 
 - treat Linear as only a generic issue queue
 - hide workflow state inside prompts alone
-- couple the product to one merge queue vendor
-- preserve old architecture decisions unless they survive the new design docs
+- preserve old architecture decisions unless they survive the current design docs
 
 ## Working Rules
 
@@ -48,7 +46,7 @@ PatchRelay should not:
 - [docs/design-docs/core-beliefs.md](./docs/design-docs/core-beliefs.md): agent-first principles
 - [docs/architecture.md](./docs/architecture.md): detailed component, state, and event design
 - [docs/references/external-patterns.md](./docs/references/external-patterns.md): notes from external references
-- [docs/archive/](./docs/archive): historical material only; not source of truth for the redesign
+- [docs/archive/](./docs/archive): historical material only; not source of truth
 
 ## If You Are Making Changes
 
@@ -61,12 +59,10 @@ For docs-only work:
 For product or architecture work:
 
 - update both [PRODUCT_SPEC.md](./PRODUCT_SPEC.md) and [docs/architecture.md](./docs/architecture.md) when behavior changes
-- preserve the separation between control plane, adapters, and execution runtime
-- avoid pulling provider-specific behavior into shared orchestration logic
+- keep the factory state machine in `factory-state.ts` as the single source of truth for issue lifecycle
 
-For implementation work later:
+For implementation work:
 
-- make the app bootable per worktree
 - prefer explicit contracts over implicit prompt conventions
 - keep external integrations behind interfaces that are easy for agents to inspect
 

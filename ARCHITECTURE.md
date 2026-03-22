@@ -14,21 +14,20 @@ The architecture follows a simple rule:
 
 ```mermaid
 flowchart LR
-  L[Linear Agent Sessions] --> G[Linear Gateway]
-  G --> C[Control Plane]
-  C --> W[Workspace Manager]
-  C --> R[Run Orchestrator]
-  R --> X[Codex Runtime]
+  L[Linear Agent Sessions] --> WH[Webhook Handler]
+  WH --> RO[Run Orchestrator]
+  RO --> W[Workspace Manager]
+  RO --> X[Codex Runtime]
   X --> GH[GitHub]
-  GH --> C
-  MQ[Merge Queue Provider] --> C
-  C --> L
+  GH --> GWH[GitHub Webhook Handler]
+  GWH --> RO
+  RO --> L
 ```
 
 ## Architectural Priorities
 
 1. **Agent legibility over cleverness**
-2. **Strict boundary between orchestration and provider integrations**
+2. **Flat, direct orchestration over layered abstraction**
 3. **Persistent issue workspaces**
 4. **Repair loops as first-class workflows**
 5. **Repository-local guidance as the source of truth**
@@ -46,19 +45,19 @@ Responsible for:
 - plan updates
 - follow-up elicitation and responses
 
-This is the only domain that should know Linear webhook details directly.
+Implemented in: `webhook-handler.ts`, `webhook-installation-handler.ts`, `linear-client.ts`, `linear-oauth.ts`
 
 ### 2. Control Plane
 
 Responsible for:
 
-- issue lifecycle state
+- issue lifecycle state (factory state machine)
 - run scheduling
 - retry budgets
 - escalation policy
 - coordination across review, CI, and queue events
 
-This is the product core.
+Implemented in: `run-orchestrator.ts`, `factory-state.ts`
 
 ### 3. Workspace Management
 
@@ -67,9 +66,10 @@ Responsible for:
 - worktree allocation
 - setup hook execution
 - workspace metadata
-- cleanup policy
 
 The workspace is durable across the issue lifecycle.
+
+Implemented in: `worktree-manager.ts`, `hook-runner.ts`
 
 ### 4. Codex Runtime
 
@@ -77,55 +77,36 @@ Responsible for:
 
 - implementation runs
 - review-fix runs
-- CI-fix runs
+- CI-repair runs
 - queue-repair runs
 
-The runtime should be swappable at the boundary, but the first-class target is Codex App Server.
+The runtime communicates with Codex through `codex app-server` via JSON-RPC.
+
+Implemented in: `codex-app-server.ts`
 
 ### 5. GitHub Adapter
 
 Responsible for:
 
-- PR creation and updates
+- PR state tracking
 - review state ingestion
-- review comment ingestion
-- check status and log collection
+- check status ingestion
+- triggering reactive repair and review-fix runs
 
-GitHub is the canonical truth for code review and CI.
+Implemented in: `github-webhook-handler.ts`, `github-webhooks.ts`
 
-### 6. Merge Queue Adapter
+## Source Layout
 
-Responsible for:
+The codebase uses a flat module structure rather than a layered directory hierarchy:
 
-- enqueue and dequeue
-- queue status and blockers
-- delivery result events
-- provider-specific failure reasons
-
-The first provider is Graphite, but the control plane must not depend on Graphite-specific semantics internally.
-
-## Dependency Rules
-
-Use this layering:
-
-- `types`: shared data shapes only
-- `policies`: repo-owned workflow and escalation rules
-- `adapters`: Linear, GitHub, Graphite, Codex, filesystem, and storage integrations
-- `services`: session, workspace, run, repair, and queue orchestration logic
-- `runtime`: HTTP handlers, workers, schedulers, and CLI entrypoints
-
-Allowed direction:
-
-- `runtime -> services -> adapters`
-- `services -> policies`
-- `services -> types`
-- `adapters -> types`
-
-Disallowed direction:
-
-- `adapters -> services`
-- `adapter -> adapter` coordination without going through a service
-- provider-specific branching scattered across runtime handlers
+- `factory-state.ts` — state machine types and transitions
+- `run-orchestrator.ts` — run lifecycle, Codex thread management, reconciliation
+- `webhook-handler.ts` — Linear webhook processing, delegation, agent sessions
+- `github-webhook-handler.ts` — GitHub webhook processing, reactive run triggers
+- `service.ts` — top-level service wiring
+- `service-runtime.ts` — async queues, background reconciliation
+- `db.ts` — SQLite persistence (issues, runs, webhooks, thread events)
+- `http.ts` — Fastify HTTP server and routes
 
 ## Lifecycle Summary
 
@@ -134,32 +115,32 @@ Linear delegate event
 -> acknowledge session
 -> publish plan
 -> prepare worktree
--> run Codex
--> open or update PR
--> review loop
--> CI repair loop if needed
--> queue
--> queue repair loop if needed
--> merged or escalated
+-> run Codex (implementation)
+-> PR opened (GitHub webhook)
+-> review loop (GitHub webhook → review_fix run)
+-> CI repair loop if needed (GitHub webhook → ci_repair run)
+-> approved and enqueued
+-> queue repair loop if needed (GitHub webhook → queue_repair run)
+-> merged → done
 ```
 
 ## State Model
 
-Recommended orchestration states:
+Factory states as implemented in `factory-state.ts`:
 
 - `delegated`
-- `preparing_workspace`
+- `preparing`
 - `implementing`
-- `awaiting_user_input`
 - `pr_open`
 - `awaiting_review`
 - `changes_requested`
 - `repairing_ci`
 - `awaiting_queue`
-- `repairing_queue_failure`
-- `merged`
-- `failed_terminal`
+- `repairing_queue`
+- `awaiting_input`
 - `escalated`
+- `done`
+- `failed`
 
 ## Design Implications
 

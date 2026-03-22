@@ -4,7 +4,7 @@
 
 PatchRelay is a self-hosted control plane for a **Linear-native agentic software factory**.
 
-It receives delegated work through Linear Agent Sessions, prepares an isolated git worktree for the issue, runs Codex against that worktree, creates and updates a GitHub pull request, loops through review and CI repair, and hands approved changes to a merge queue provider such as Graphite until the change lands or escalates to a human.
+It receives delegated work through Linear Agent Sessions, prepares an isolated git worktree for the issue, runs Codex against that worktree, tracks the GitHub pull request lifecycle, loops through review and CI repair via GitHub webhooks, and handles merge queue failures until the change lands or escalates to a human.
 
 ## Product Positioning
 
@@ -14,7 +14,7 @@ It is the deterministic system around the model:
 - Linear is the human-facing control plane
 - Codex is the execution engine
 - GitHub is the source of truth for code review and CI
-- Graphite or another queue is the delivery gate
+- A merge queue provider (via GitHub merge_group events) is the delivery gate
 - PatchRelay is the stateful orchestrator that ties them together
 
 ## Primary Users
@@ -39,7 +39,7 @@ PatchRelay must:
 1. be **Linear-native** rather than treating Linear as a thin event source
 2. be **agent-first** with repository-local guidance and durable plans
 3. be **restart-safe** so long-running work survives service restarts
-4. be **provider-oriented** so GitHub, Graphite, and Codex integrations are replaceable at the boundary
+4. be **event-driven** so GitHub webhooks trigger reactive repair loops automatically
 5. keep the **human loop clear** by escalating only for meaningful ambiguity, unrecoverable failure, or policy-required approval
 
 ## Non-Goals
@@ -61,27 +61,27 @@ PatchRelay does not need to:
 3. PatchRelay emits an acknowledgment activity and publishes a plan.
 4. PatchRelay creates or restores the issue worktree.
 5. PatchRelay runs Codex in that worktree with repo guidance and issue context.
-6. PatchRelay opens or updates a GitHub PR and links it back to Linear.
+6. Codex opens or updates a GitHub PR.
 
 ### 2. Review Iteration
 
-1. A human or automated reviewer leaves comments in GitHub or Graphite, or follows up in Linear.
-2. PatchRelay normalizes the feedback into review events.
-3. PatchRelay resumes work in the same worktree and branch.
-4. PatchRelay pushes updates, resolves comments where appropriate, and posts a summary back to Linear.
+1. A reviewer requests changes on the GitHub PR.
+2. PatchRelay receives a GitHub webhook and transitions the issue to `changes_requested`.
+3. PatchRelay starts a `review_fix` run in the same worktree and branch.
+4. Codex addresses the feedback, pushes updates, and the issue returns to review.
 
 ### 3. CI Repair
 
 1. A required PR check fails.
-2. PatchRelay captures the failing jobs and logs.
-3. A specialized repair run is started in the same worktree and branch.
-4. PatchRelay pushes a fix and waits for checks again.
+2. PatchRelay receives a GitHub webhook and transitions the issue to `repairing_ci`.
+3. A `ci_repair` run is started in the same worktree and branch.
+4. Codex reads the failure logs, pushes a fix, and waits for checks again.
 
 ### 4. Merge Queue Repair
 
 1. The PR is approved and enqueued.
 2. The queue provider rebases or batches the PR against the current trunk.
-3. If queue validation fails, PatchRelay starts an integration-repair run.
+3. If queue validation fails, PatchRelay receives a `merge_group` failure event and starts a `queue_repair` run.
 4. The change returns to review if necessary and re-enters the queue.
 
 ## Functional Requirements
@@ -93,7 +93,7 @@ PatchRelay must:
 1. support Linear OAuth installation for an app-backed agent identity
 2. verify webhook signatures and timestamp freshness
 3. respond to delegated issues and follow-up prompts
-4. emit Linear activities using `thought`, `action`, `elicitation`, `response`, and `error`
+4. emit Linear activities using `thought`, `elicitation`, `response`, and `error`
 5. publish and replace structured session plans
 6. attach external links for run dashboards and pull requests
 
@@ -104,34 +104,23 @@ PatchRelay must:
 1. create one durable worktree per active issue lifecycle
 2. run a repository-defined setup hook for each worktree
 3. allow the same worktree to be resumed across iterations
-4. support Codex execution through App Server first, with CLI fallback if needed
-5. make per-worktree application runtime and observability bootable where the repo supports it
+4. support Codex execution through App Server
 
 ### GitHub Integration
 
 PatchRelay must:
 
-1. create and update branches and pull requests
-2. ingest review states and review comments
-3. ingest required check status and failure logs
+1. accept GitHub webhooks for PR, review, check, and merge_group events
+2. track PR state (number, URL, review state, check status) on the issue record
+3. trigger reactive runs (ci_repair, review_fix, queue_repair) from GitHub events
 4. treat GitHub as canonical for review and CI truth
-
-### Merge Queue Integration
-
-PatchRelay must:
-
-1. support a merge queue provider abstraction
-2. ship with Graphite as the first supported provider
-3. model queue states, blockers, and failure reasons explicitly
-4. route queue failures into a separate repair loop
-5. avoid leaking provider-specific behavior into generic orchestration logic
 
 ### Repair And Escalation
 
 PatchRelay must:
 
-1. distinguish implementation runs from review-fix runs, CI-fix runs, and queue-repair runs
-2. keep retry budgets per failure class
+1. distinguish implementation runs from review-fix runs, CI-repair runs, and queue-repair runs
+2. keep retry budgets per failure class (CI repair and queue repair have separate budgets)
 3. escalate to a human on exhausted retry budget, ambiguous product decisions, or unrecoverable infrastructure failure
 4. preserve all context needed for a human to take over
 
@@ -152,7 +141,6 @@ PatchRelay must make it easy to answer:
 - Repository-local guidance is the source of truth.
 - Short entrypoint docs, deeper linked docs.
 - Deterministic control plane around nondeterministic model behavior.
-- Strict boundaries between orchestration logic and provider adapters.
 - Repair loops are normal behavior, not exceptions.
 
 ## MVP Scope
@@ -163,11 +151,10 @@ PatchRelay must make it easy to answer:
 - session activities and plans
 - durable worktrees with setup hooks
 - Codex execution
-- GitHub PR creation and update
-- review ingestion
-- CI repair loop
-- Graphite merge queue integration
-- queue repair loop
+- GitHub webhook intake for PR, review, check, and merge_group events
+- reactive CI repair loop
+- reactive review fix loop
+- reactive queue repair loop
 - basic operator and audit surface
 
 ### Out Of Scope
@@ -176,7 +163,7 @@ PatchRelay must make it easy to answer:
 - sophisticated UI dashboards
 - arbitrary parallel agents on the same issue
 - autonomous semantic-conflict arbitration across many branches
-- multiple merge queue providers in the first release
+- Graphite-specific merge queue adapter (queue events come via GitHub merge_group)
 
 ## Success Criteria
 

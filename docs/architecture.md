@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This document describes the clean-slate target architecture for PatchRelay as a Linear-native agentic software factory.
+This document describes the target architecture for PatchRelay as a Linear-native agentic software factory.
 
 The service is not a generic prompt runner. It is the deterministic orchestration layer that turns a delegated Linear issue into a reviewed, repairable, merge-queued pull request.
 
@@ -37,170 +37,92 @@ What we are **not** copying:
 flowchart TB
   subgraph Linear
     LS[Agent Sessions]
-    LI[Issues / Comments / Projects]
+    LI[Issues / Comments]
   end
 
   subgraph PatchRelay
-    LG[Linear Gateway]
-    CP[Control Plane]
+    WH[Webhook Handler]
+    GWH[GitHub Webhook Handler]
+    RO[Run Orchestrator]
     WM[Workspace Manager]
-    RR[Run Router]
-    RS[Repair Services]
-    ST[State Store]
+    ST[State Store - SQLite]
   end
 
   subgraph Execution
-    CR[Codex Runtime]
+    CR[Codex App Server]
     WT[Git Worktrees]
   end
 
   subgraph Delivery
     GH[GitHub]
-    MQ[Merge Queue Provider]
   end
 
-  LS --> LG
-  LI --> LG
-  LG --> CP
-  CP --> WM
-  CP --> RR
-  RR --> CR
+  LS --> WH
+  LI --> WH
+  WH --> RO
+  RO --> WM
+  RO --> CR
   WM --> WT
   CR --> WT
   CR --> GH
-  GH --> CP
-  MQ --> CP
-  CP --> ST
-  ST --> CP
-  CP --> LS
-  CP --> RS
-  RS --> CR
+  GH --> GWH
+  GWH --> RO
+  RO --> ST
+  ST --> RO
+  RO --> LS
 ```
 
 ## Core Responsibilities
 
-### Linear Gateway
+### Webhook Handler (`webhook-handler.ts`)
 
 Owns:
 
-- webhook verification
+- Linear webhook verification
 - webhook idempotency
-- OAuth app installation
-- conversion from Linear webhook payloads to internal events
-- emission of activities, plans, and external links
+- OAuth app installation (via `webhook-installation-handler.ts`)
+- conversion from Linear webhook payloads to normalized events
+- delegation detection and implementation run scheduling
+- agent session acknowledgment, plan publishing, and activity emission
+- comment and prompt forwarding to active Codex runs
 
-The gateway must emit an activity or update external URLs quickly enough to satisfy Linear’s responsiveness expectations.
-
-### Control Plane
+### GitHub Webhook Handler (`github-webhook-handler.ts`)
 
 Owns:
 
-- issue-to-run ownership
-- state transitions
-- retry counters
-- escalation decisions
-- deciding which specialized run to start next
+- GitHub webhook signature verification
+- PR state tracking (number, URL, review state, check status)
+- factory state transitions from GitHub events
+- triggering reactive runs (ci_repair, review_fix, queue_repair)
+- repair counter management
 
-The control plane should know nothing about raw HTTP, GraphQL payload shapes, or provider SDK details beyond typed adapter interfaces.
+### Run Orchestrator (`run-orchestrator.ts`)
 
-### Workspace Manager
+Owns:
+
+- run lifecycle (create, launch, complete, fail)
+- Codex thread and turn management
+- worktree preparation and setup hook execution
+- prompt construction from issue metadata and workflow files
+- retry budget enforcement and escalation
+- reconciliation of active runs after restart
+- Linear activity and plan updates during runs
+
+### Workspace Manager (`worktree-manager.ts`)
 
 Owns:
 
 - `git worktree` lifecycle
 - worktree path conventions
-- per-worktree setup hook execution
-- runtime isolation metadata
+- branch creation and reuse
 
-Recommended path pattern:
-
-- `.trees/<issue-key>/main`
-
-Per-worktree setup should support:
-
-- shared dependency caches
-- per-worktree env files
-- deterministic port allocation
-- optional local observability bootstrapping
-
-### Run Router
-
-Owns dispatching the correct run type:
-
-- `implementation`
-- `review_fix`
-- `ci_repair`
-- `queue_repair`
-
-The run router chooses prompts, input context, retry policy, and expected outputs based on run type.
-
-### Codex Runtime
+### Codex Runtime (`codex-app-server.ts`)
 
 Owns:
 
-- starting and monitoring Codex execution
-- streaming tool and text output for operator visibility
-- collecting structured run results
-
-Preferred path:
-
-- Codex App Server
-
-Fallback path:
-
-- Codex CLI wrapper
-
-### Delivery Adapters
-
-GitHub owns:
-
-- PR lifecycle
-- reviews
-- required checks
-- branch protection
-
-Merge Queue Provider owns:
-
-- enqueueing
-- queue status
-- integration validation
-- final landing signal
-
-## Internal Event Model
-
-PatchRelay should normalize all outside inputs into internal events.
-
-### Linear Events
-
-- `linear.session_created`
-- `linear.session_prompted`
-- `linear.issue_updated`
-- `linear.comment_received`
-
-### GitHub Events
-
-- `github.pr_opened`
-- `github.review_submitted`
-- `github.review_comment_added`
-- `github.check_suite_completed`
-- `github.check_run_completed`
-
-### Merge Queue Events
-
-- `queue.enqueued`
-- `queue.blocked`
-- `queue.failed`
-- `queue.merged`
-
-### Internal Events
-
-- `run.started`
-- `run.completed`
-- `run.failed`
-- `run.escalated`
-- `workspace.ready`
-
-All orchestration should happen from these normalized events.
+- starting and monitoring Codex execution via JSON-RPC
+- thread start, turn start, turn steering
+- notification handling (turn/completed events)
 
 ## Issue Lifecycle
 
@@ -211,58 +133,66 @@ Delegated in Linear
 -> Session acknowledged
 -> Plan published
 -> Worktree prepared
--> Implementation run
--> PR opened
+-> Implementation run (Codex)
+-> PR opened (detected via GitHub webhook)
 -> Review loop
 -> Approved and checks green
 -> Merge queue
--> Merged
+-> Merged → done
 ```
 
-### Repair Loops
+### Reactive Loops
 
-#### Review Loop
+#### Review Fix Loop
 
 Triggered by:
 
-- review comments
-- changes requested
-- Linear follow-up instructions
+- GitHub `review_changes_requested` event
 
 Behavior:
 
 - resume same worktree and branch
-- update Linear plan if the task meaningfully changed
-- push follow-up commit
+- start a `review_fix` run with reviewer feedback as context
+- Codex addresses the feedback and pushes
 
 #### CI Repair Loop
 
 Triggered by:
 
-- required PR checks failing
+- GitHub `check_failed` event
 
 Behavior:
 
-- gather failing check names and logs
-- run a specialized repair prompt
-- push fix to same branch
-- wait for checks again
+- start a `ci_repair` run in the same worktree
+- Codex reads failure logs, fixes the code, pushes
+- budget: 2 attempts before escalation
 
 #### Queue Repair Loop
 
 Triggered by:
 
-- merge queue failure
-- integration rebase failure
-- batch validation failure
+- GitHub `merge_group_failed` event
 
 Behavior:
 
-- treat this as an integration failure, not a normal PR failure
-- fetch the latest base branch state
-- repair in the same worktree if possible
-- return to review if the branch changed materially
-- re-enqueue after approval and checks
+- start a `queue_repair` run in the same worktree
+- Codex rebases onto latest main, resolves conflicts, pushes
+- budget: 2 attempts before escalation
+
+## Factory State Machine
+
+States as defined in `factory-state.ts`:
+
+```text
+delegated → preparing → implementing → pr_open → awaiting_review
+  → changes_requested → implementing (review fix)
+  → repairing_ci → pr_open (CI repair)
+  → awaiting_queue → done (merged)
+  → repairing_queue → pr_open (queue repair)
+  → awaiting_input (agent needs human guidance)
+  → escalated (retry budgets exhausted)
+  → failed (unrecoverable error)
+```
 
 ## Failure Taxonomy
 
@@ -271,7 +201,6 @@ Behavior:
 - formatting or lint failures
 - deterministic test failures
 - straightforward rebase conflicts
-- missing queue metadata or stale enqueue state
 
 ### Escalate Quickly
 
@@ -280,90 +209,29 @@ Behavior:
 - broken credentials or revoked installations
 - repository setup hook failures that block all progress
 
-## Provider Interfaces
-
-PatchRelay should expose explicit interfaces for:
-
-### LinearProvider
-
-- install and token management
-- session activity emission
-- plan updates
-- proactive session creation
-- issue and comment lookup
-
-### SourceControlProvider
-
-- create/update PR
-- list unresolved review comments
-- list required checks
-- fetch failing logs
-- query mergeability and branch protection status
-
-### MergeQueueProvider
-
-- enqueue
-- dequeue
-- get status
-- get blockers
-- parse failure reason
-- detect successful delivery
-
-### AgentRuntimeProvider
-
-- start run
-- stream events
-- cancel run
-- collect result summary
-
 ## State Storage
 
-PatchRelay needs durable state, but only for coordination.
+PatchRelay uses SQLite with these tables:
 
-Recommended entities:
+- `issues` — one record per tracked issue, includes factory state, PR state, run pointers, repair counters
+- `runs` — one record per Codex run (implementation, review_fix, ci_repair, queue_repair)
+- `webhook_events` — deduplication and processing status for Linear webhooks
+- `run_thread_events` — per-run transcript of Codex thread events (when extended history is enabled)
+- `linear_installations` — OAuth credentials and installation metadata
+- `operator_feed` — event log for operator CLI
 
-- `installations`
-- `issues`
-- `agent_sessions`
-- `workspaces`
-- `runs`
-- `pull_requests`
-- `review_events`
-- `check_events`
-- `queue_entries`
-- `escalations`
+## Workflow Files
 
-Prefer storing authoritative identifiers and decisions, not large duplicated provider payloads.
+The repository should contain:
 
-## Guidance Files And Repo Contracts
+- `IMPLEMENTATION_WORKFLOW.md` — guidance for implementation, CI repair, and queue repair runs
+- `REVIEW_WORKFLOW.md` — guidance for review fix runs
 
-The repository should eventually own these contracts:
-
-- `AGENTS.md`
-- `ARCHITECTURE.md`
-- `PRODUCT_SPEC.md`
-- `.factory/setup-worktree.sh`
-- `.factory/checks.yaml`
-- `.factory/review-policy.yaml`
-- `.factory/merge-queue.yaml`
-
-The service should read these contracts rather than hiding workflow logic in prompts.
-
-## Recommended Implementation Order
-
-1. Linear installation, webhook verification, and session response
-2. Worktree manager with setup hook support
-3. Codex runtime adapter
-4. GitHub PR and review adapter
-5. Control plane state machine
-6. CI repair loop
-7. Graphite queue adapter
-8. Queue repair loop
+The run orchestrator reads these files and includes them in the Codex prompt. Keep them short and action-oriented.
 
 ## What The Current Repo Should Optimize For
 
 - docs that an agent can navigate quickly
-- strong separation between product logic and provider adapters
-- minimal historical coupling to the old stage model
+- flat, direct orchestration code over layered abstractions
 - making local execution per worktree cheap and repeatable
 - keeping every important decision visible in-repo
