@@ -26,6 +26,7 @@ export interface NormalizedGitHubEvent {
   reviewBody?: string | undefined;
   reviewerName?: string | undefined;
   mergeGroupFailureReason?: string | undefined;
+  eventSource?: "check_run" | "check_suite" | undefined;
 }
 
 export interface GitHubWebhookPayload {

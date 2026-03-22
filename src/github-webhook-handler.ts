@@ -108,21 +108,36 @@ export class GitHubWebhookHandler {
       ...(event.checkStatus !== undefined ? { prCheckStatus: event.checkStatus } : {}),
     });
 
-    // Drive factory state transitions from GitHub events
-    const newState = resolveFactoryStateFromGitHub(event.triggerEvent, issue.factoryState);
-    if (newState) {
-      this.db.upsertIssue({
-        projectId: issue.projectId,
-        linearIssueId: issue.linearIssueId,
-        factoryState: newState,
-      });
-      this.logger.info(
-        { issueKey: issue.issueKey, from: issue.factoryState, to: newState, trigger: event.triggerEvent },
-        "Factory state transition from GitHub event",
-      );
+    // Individual check_run events only update PR metadata, not factory state.
+    // State transitions and reactive runs are driven by check_suite completion
+    // to avoid flickering when multiple checks run in parallel.
+    const isIndividualCheckRun = event.eventSource === "check_run"
+      && (event.triggerEvent === "check_passed" || event.triggerEvent === "check_failed");
 
-      // Emit Linear activity for significant state changes
-      void this.emitLinearActivity(issue, newState, event);
+    // Drive factory state transitions from GitHub events
+    if (!isIndividualCheckRun) {
+      let newState = resolveFactoryStateFromGitHub(event.triggerEvent, issue.factoryState);
+
+      // Don't transition to failed on pr_closed when a run is active —
+      // Codex sometimes closes and reopens PRs during its workflow.
+      if (newState === "failed" && event.triggerEvent === "pr_closed" && issue.activeRunId !== undefined) {
+        newState = undefined;
+      }
+
+      if (newState) {
+        this.db.upsertIssue({
+          projectId: issue.projectId,
+          linearIssueId: issue.linearIssueId,
+          factoryState: newState,
+        });
+        this.logger.info(
+          { issueKey: issue.issueKey, from: issue.factoryState, to: newState, trigger: event.triggerEvent },
+          "Factory state transition from GitHub event",
+        );
+
+        // Emit Linear activity for significant state changes
+        void this.emitLinearActivity(issue, newState, event);
+      }
     }
 
     // Reset repair counters on new push
@@ -135,6 +150,9 @@ export class GitHubWebhookHandler {
       });
     }
 
+    // Re-read issue after all upserts so reactive run logic sees current state
+    const freshIssue = this.db.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
+
     this.logger.info(
       { issueKey: issue.issueKey, branchName: event.branchName, triggerEvent: event.triggerEvent, prNumber: event.prNumber },
       "GitHub webhook: updated issue PR state",
@@ -143,16 +161,18 @@ export class GitHubWebhookHandler {
     this.feed?.publish({
       level: event.triggerEvent.includes("failed") ? "warn" : "info",
       kind: "github",
-      issueKey: issue.issueKey,
-      projectId: issue.projectId,
-      stage: issue.factoryState,
+      issueKey: freshIssue.issueKey,
+      projectId: freshIssue.projectId,
+      stage: freshIssue.factoryState,
       status: event.triggerEvent,
       summary: `GitHub: ${event.triggerEvent}${event.prNumber ? ` on PR #${event.prNumber}` : ""}`,
       detail: event.checkName ?? event.reviewBody?.slice(0, 200) ?? undefined,
     });
 
-    // Trigger reactive runs if applicable
-    this.maybeEnqueueReactiveRun(issue, event);
+    // Trigger reactive runs if applicable (skip individual check_run events)
+    if (!isIndividualCheckRun) {
+      this.maybeEnqueueReactiveRun(freshIssue, event);
+    }
   }
 
   private maybeEnqueueReactiveRun(issue: IssueRecord, event: NormalizedGitHubEvent): void {

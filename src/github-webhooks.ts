@@ -138,6 +138,7 @@ function normalizeCheckSuiteEvent(payload: GitHubWebhookPayload, repoFullName: s
     headSha: suite.head_sha,
     prNumber: pr?.number,
     checkStatus: passed ? "success" : "failure",
+    eventSource: "check_suite",
   };
 }
 
@@ -162,6 +163,7 @@ function normalizeCheckRunEvent(payload: GitHubWebhookPayload, repoFullName: str
     checkStatus: passed ? "success" : "failure",
     checkName: run.name,
     checkUrl: run.html_url,
+    eventSource: "check_run",
   };
 }
 
