@@ -99,7 +99,7 @@ export async function runPreflight(config: AppConfig): Promise<PreflightReport> 
   checks.push(...checkOAuthRedirectUri(config));
 
   checks.push(...checkPath("database", path.dirname(config.database.path), "directory", { createIfMissing: true, writable: true }));
-  checks.push(checkDatabaseSchema(config));
+  checks.push(...checkDatabaseHealth(config));
   checks.push(...checkPath("logging", path.dirname(config.logging.filePath), "directory", { createIfMissing: true, writable: true }));
   if (config.projects.length === 0) {
     checks.push(warn("projects", "No projects are configured yet; add one with `patchrelay project apply <id> <repo-path>` before connecting Linear"));
@@ -120,7 +120,8 @@ export async function runPreflight(config: AppConfig): Promise<PreflightReport> 
   };
 }
 
-function checkDatabaseSchema(config: AppConfig): PreflightCheck {
+function checkDatabaseHealth(config: AppConfig): PreflightCheck[] {
+  const checks: PreflightCheck[] = [];
   let connection: SqliteConnection | undefined;
   try {
     connection = new SqliteConnection(config.database.path);
@@ -134,7 +135,8 @@ function checkDatabaseSchema(config: AppConfig): PreflightCheck {
     const quickCheck = connection.prepare("PRAGMA quick_check").get();
     const quickCheckResult = quickCheck ? Object.values(quickCheck)[0] : undefined;
     if (quickCheckResult !== "ok") {
-      return fail("database_schema", `SQLite quick_check failed: ${String(quickCheckResult ?? "unknown result")}`);
+      checks.push(fail("database_schema", `SQLite quick_check failed: ${String(quickCheckResult ?? "unknown result")}`));
+      return checks;
     }
 
     const schemaStats = connection
@@ -150,15 +152,25 @@ function checkDatabaseSchema(config: AppConfig): PreflightCheck {
       .get();
     const objectCount = Number(schemaStats?.object_count ?? 0);
     if (objectCount < 1) {
-      return fail("database_schema", "Database schema is empty after migrations");
+      checks.push(fail("database_schema", "Database schema is empty after migrations"));
+      return checks;
     }
 
-    return pass("database_schema", `Database opened, migrations applied, and schema is readable (${objectCount} objects)`);
+    checks.push(pass("database_schema", `Database opened, migrations applied, and schema is readable (${objectCount} objects)`));
+
+    // Check for stale pending webhooks
+    const pendingCount = Number(
+      (connection.prepare("SELECT COUNT(*) AS n FROM webhook_events WHERE processing_status = 'pending'").get() as { n: number })?.n ?? 0,
+    );
+    if (pendingCount > 50) {
+      checks.push(warn("webhook_queue", `${pendingCount} pending webhook events in queue`));
+    }
   } catch (error) {
-    return fail("database_schema", `Unable to open or validate database schema at ${config.database.path}: ${formatError(error)}`);
+    checks.push(fail("database_schema", `Unable to open or validate database schema at ${config.database.path}: ${formatError(error)}`));
   } finally {
     connection?.close();
   }
+  return checks;
 }
 
 function checkPath(

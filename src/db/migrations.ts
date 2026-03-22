@@ -130,4 +130,9 @@ CREATE INDEX IF NOT EXISTS idx_operator_feed_events_project ON operator_feed_eve
 
 export function runPatchRelayMigrations(connection: DatabaseConnection): void {
   connection.exec(schema);
+
+  // Clean up stale dedupe-only webhook records (no payload, never processable)
+  connection.prepare(
+    "UPDATE webhook_events SET processing_status = 'processed' WHERE processing_status = 'pending' AND payload_json IS NULL",
+  ).run();
 }
