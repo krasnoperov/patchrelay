@@ -1,5 +1,53 @@
 # Changelog
 
+## [0.10.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.9.2...patchrelay-v0.10.0) (2026-03-22)
+
+
+### Features
+
+* add operator feed and harden CLI flows ([#14](https://github.com/krasnoperov/patchrelay/issues/14)) ([33193e9](https://github.com/krasnoperov/patchrelay/commit/33193e99ef75566772a62f8019ce382a2203082a))
+* add public ingress configuration ([aa365d6](https://github.com/krasnoperov/patchrelay/commit/aa365d6a70c3f3d2de7cfe58b2316f229cae9ae6))
+* add repo-local workflows and workflow timeline ([6a3d3a4](https://github.com/krasnoperov/patchrelay/commit/6a3d3a4e8036ed783a4a22a37332242c5d73ae89))
+* add version CLI command ([66447c7](https://github.com/krasnoperov/patchrelay/commit/66447c7bdca8764794788d86aa1727545e3ba1e3))
+* factory control plane with reactive GitHub loops ([#70](https://github.com/krasnoperov/patchrelay/issues/70)) ([04e5cbd](https://github.com/krasnoperov/patchrelay/commit/04e5cbdc9f66f053853cbe2475c9e50a691d830b))
+* persist issue session handoff history for open ([45e6bb6](https://github.com/krasnoperov/patchrelay/commit/45e6bb6ccbfd822d12487e3ee7d52c0af7e69105))
+* refresh cli help and lazy-load sqlite ([ddc22a1](https://github.com/krasnoperov/patchrelay/commit/ddc22a1cfd89ea9b0e93776902efd6a31d89ae4a))
+* **runtime:** simplify health and zmx session naming ([602ad79](https://github.com/krasnoperov/patchrelay/commit/602ad79815b0ebeeed278db144e1137d69f4357c))
+* separate mention sessions from delegated workflows ([fa8a4a9](https://github.com/krasnoperov/patchrelay/commit/fa8a4a9ff89b32a5896e5c8aefd766b512923aad))
+* separate workflow coordination from query and cli dispatch ([e40a046](https://github.com/krasnoperov/patchrelay/commit/e40a046e95869e8f064a7a4b4bcd0e9c18e5c8f6))
+* **webhooks:** build status-driven patchrelay v1 ([ad1945a](https://github.com/krasnoperov/patchrelay/commit/ad1945a353afb77d45f5abed1c7297dbea76c69d))
+
+
+### Bug Fixes
+
+* accept delegated Linear agent sessions natively ([325643b](https://github.com/krasnoperov/patchrelay/commit/325643bb13aeb3110bc7bbe7b3f4fc353f7a7e4e))
+* align release app token permissions ([#32](https://github.com/krasnoperov/patchrelay/issues/32)) ([4b89875](https://github.com/krasnoperov/patchrelay/commit/4b89875f41257acc98a5fabded29137a514902f1))
+* complete CI pre-merge coverage ([39383f3](https://github.com/krasnoperov/patchrelay/commit/39383f307a9bb1b4cbafe1650b3c794cfbb53c3a))
+* consolidate CI into single job, support --version flag ([#74](https://github.com/krasnoperov/patchrelay/issues/74)) ([a553cad](https://github.com/krasnoperov/patchrelay/commit/a553cad7abc48652196f02ddc115443d890ae09e))
+* enqueue Start workflows from issue creation by default ([#28](https://github.com/krasnoperov/patchrelay/issues/28)) ([25edf2b](https://github.com/krasnoperov/patchrelay/commit/25edf2bd5e4dc3eecc4343c8f21aa59045242c1d))
+* honor live terminal Linear states over stale stage work ([#57](https://github.com/krasnoperov/patchrelay/issues/57)) ([b1057fc](https://github.com/krasnoperov/patchrelay/commit/b1057fc249748b4ffca7de87a67c7d3e83162523))
+* hydrate sparse Linear agent session issues ([a43a5a2](https://github.com/krasnoperov/patchrelay/commit/a43a5a291901c0f2fcb9a7a8bd99bc0ffb93071f))
+* keep delegated workflows advancing automatically ([#53](https://github.com/krasnoperov/patchrelay/issues/53)) ([a2d0983](https://github.com/krasnoperov/patchrelay/commit/a2d098344064aba1c9001d0480e9ed855b36ead9))
+* keep HTTP CLI commands free of sqlite imports ([8b221a6](https://github.com/krasnoperov/patchrelay/commit/8b221a6e20e95fcef16511b0ae80de97254e0510))
+* keep reconciling active runs after startup ([889365e](https://github.com/krasnoperov/patchrelay/commit/889365e32c731c7f90f47817cad5f2841e2ee3e2))
+* normalize release-please automation ([#31](https://github.com/krasnoperov/patchrelay/issues/31)) ([6a415f8](https://github.com/krasnoperov/patchrelay/commit/6a415f8d967cfa1a83bb671c69de61002bfb6ade))
+* prefer bundled build metadata ([9e4cadf](https://github.com/krasnoperov/patchrelay/commit/9e4cadfaefb8c64501a0d19b79f689bbc7899d32))
+* preserve forward workflow progression across stage handoffs ([#55](https://github.com/krasnoperov/patchrelay/issues/55)) ([5175f2e](https://github.com/krasnoperov/patchrelay/commit/5175f2ebd312934ff7fe66abbba16141ca5147e5))
+* preserve queued stage receipts across follow-up webhooks ([#59](https://github.com/krasnoperov/patchrelay/issues/59)) ([8dbdfc0](https://github.com/krasnoperov/patchrelay/commit/8dbdfc0dfe42e52d6e4ddd0140524d27b7cfc4da))
+* recover interrupted codex runs after restart ([#30](https://github.com/krasnoperov/patchrelay/issues/30)) ([38d7ddd](https://github.com/krasnoperov/patchrelay/commit/38d7dddbc3dfbc51ae5870ff801f8ff9002a149d))
+* release stale active runs after terminal linear state ([#61](https://github.com/krasnoperov/patchrelay/issues/61)) ([f941cbe](https://github.com/krasnoperov/patchrelay/commit/f941cbe9341e82e5730aff49f0210dfa5d05ac46))
+* rename CLI flags from stage terminology to run terminology ([#72](https://github.com/krasnoperov/patchrelay/issues/72)) ([ab1383f](https://github.com/krasnoperov/patchrelay/commit/ab1383fd117cd7635c9174f089e3370ce4deca24))
+* require native Linear sessions to launch workflows ([452970f](https://github.com/krasnoperov/patchrelay/commit/452970f73bf9232a2dc3900f466baabb30bd7765))
+* reuse owned worktrees across root drift ([7cfa308](https://github.com/krasnoperov/patchrelay/commit/7cfa308215069d0450f1154c7ab029cbadc536c6))
+* skip interrupted recovery after terminal linear state ([#63](https://github.com/krasnoperov/patchrelay/issues/63)) ([d85783a](https://github.com/krasnoperov/patchrelay/commit/d85783a7a88d5e29544844d3e2ad874f86c865ae))
+* skip stale release-pr merge watchers ([#35](https://github.com/krasnoperov/patchrelay/issues/35)) ([7104ccc](https://github.com/krasnoperov/patchrelay/commit/7104ccc8fbe269c07032e203600e1932aa64328b))
+* tighten delegated Linear session delivery ([#45](https://github.com/krasnoperov/patchrelay/issues/45)) ([042bb58](https://github.com/krasnoperov/patchrelay/commit/042bb585d68debcf2937139bccd3c7ce1373b6dd))
+* time out background reconciliation stalls ([#67](https://github.com/krasnoperov/patchrelay/issues/67)) ([b279acc](https://github.com/krasnoperov/patchrelay/commit/b279accac0ea052acfda195d0b9ac10bcf306606))
+* time out hung codex app-server requests ([#65](https://github.com/krasnoperov/patchrelay/issues/65)) ([c2d5d23](https://github.com/krasnoperov/patchrelay/commit/c2d5d234edcf79342af7110d708b48d03e7969d6))
+* use default release app permissions ([#33](https://github.com/krasnoperov/patchrelay/issues/33)) ([b2b3ad6](https://github.com/krasnoperov/patchrelay/commit/b2b3ad69a41621c748810546963faea0278c5c03))
+* use native Linear agent sessions for delegated workflow status ([#37](https://github.com/krasnoperov/patchrelay/issues/37)) ([06c1783](https://github.com/krasnoperov/patchrelay/commit/06c1783d2d2bf1a164807922d7db18ec1fd41797))
+* verify database schema health in doctor ([6c7221d](https://github.com/krasnoperov/patchrelay/commit/6c7221db17b8bf09e8b5108d98a345586eeaf923))
+
 ## [0.9.2](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.9.1...patchrelay-v0.9.2) (2026-03-22)
 
 
