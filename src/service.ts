@@ -89,8 +89,8 @@ export class PatchRelayService {
     this.runtime.stop();
   }
 
-  createLinearOAuthStart(params?: { projectId?: string }) {
-    return this.oauthService.createStart(params);
+  async createLinearOAuthStart(params?: { projectId?: string }) {
+    return await this.oauthService.createStart(params);
   }
 
   async completeLinearOAuth(params: { state: string; code: string }) {

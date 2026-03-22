@@ -1,6 +1,7 @@
 import type { Logger } from "pino";
 import type { LinearInstallationStore } from "./db/linear-installation-store.ts";
-import { createLinearOAuthUrl, createOAuthStateToken, installLinearOAuthCode } from "./linear-oauth.ts";
+import { createLinearOAuthUrl, createOAuthStateToken, fetchLinearViewerIdentity, installLinearOAuthCode } from "./linear-oauth.ts";
+import { decryptSecret } from "./token-crypto.ts";
 import type { AppConfig, LinearInstallationRecord } from "./types.ts";
 
 const LINEAR_OAUTH_STATE_TTL_MS = 15 * 60 * 1000;
@@ -17,7 +18,7 @@ export class LinearOAuthService {
     private readonly logger: Logger,
   ) {}
 
-  createStart(params?: { projectId?: string }) {
+  async createStart(params?: { projectId?: string }) {
     if (params?.projectId && !this.config.projects.some((project) => project.id === params.projectId)) {
       throw new Error(`Unknown project: ${params.projectId}`);
     }
@@ -27,11 +28,13 @@ export class LinearOAuthService {
       if (existingLink) {
         const installation = this.stores.linearInstallations.getLinearInstallation(existingLink.installationId);
         if (installation) {
+          await this.refreshInstallationIdentity(installation);
+          const updated = this.stores.linearInstallations.getLinearInstallation(installation.id) ?? installation;
           return {
             completed: true as const,
             reusedExisting: true as const,
             projectId: params.projectId,
-            installation: this.getInstallationSummary(installation),
+            installation: this.getInstallationSummary(updated),
           };
         }
       }
@@ -41,11 +44,13 @@ export class LinearOAuthService {
         const installation = installations[0];
         if (installation) {
           this.stores.linearInstallations.linkProjectInstallation(params.projectId, installation.id);
+          await this.refreshInstallationIdentity(installation);
+          const updated = this.stores.linearInstallations.getLinearInstallation(installation.id) ?? installation;
           return {
             completed: true as const,
             reusedExisting: true as const,
             projectId: params.projectId,
-            installation: this.getInstallationSummary(installation),
+            installation: this.getInstallationSummary(updated),
           };
         }
       }
@@ -129,6 +134,24 @@ export class LinearOAuthService {
       installation: this.getInstallationSummary(installation),
       linkedProjects: links.filter((link) => link.installationId === installation.id).map((link) => link.projectId),
     }));
+  }
+
+  private async refreshInstallationIdentity(installation: LinearInstallationRecord): Promise<void> {
+    try {
+      const accessToken = decryptSecret(installation.accessTokenCiphertext, this.config.linear.tokenEncryptionKey);
+      const identity = await fetchLinearViewerIdentity(this.config.linear.graphqlUrl, accessToken, this.logger);
+      if (identity.workspaceName || identity.workspaceKey) {
+        this.stores.linearInstallations.updateLinearInstallationIdentity(installation.id, {
+          ...(identity.workspaceName ? { workspaceName: identity.workspaceName } : {}),
+          ...(identity.workspaceKey ? { workspaceKey: identity.workspaceKey } : {}),
+        });
+      }
+    } catch (error) {
+      this.logger.debug(
+        { installationId: installation.id, error: error instanceof Error ? error.message : String(error) },
+        "Failed to refresh installation identity (non-blocking)",
+      );
+    }
   }
 
   getInstallationSummary(installation: LinearInstallationRecord) {

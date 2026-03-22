@@ -385,7 +385,7 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
 
     app.get("/api/oauth/linear/start", async (request, reply) => {
       const projectId = getQueryParam(request, "projectId");
-      const result = service.createLinearOAuthStart(projectId ? { projectId } : undefined);
+      const result = await service.createLinearOAuthStart(projectId ? { projectId } : undefined);
       return reply.send({ ok: true, ...result });
     });
 

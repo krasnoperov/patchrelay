@@ -237,7 +237,16 @@ export async function runCli(
     if (command === "doctor") {
       const { runPreflight } = await import("../preflight.ts");
       const report = await runPreflight(config);
-      writeOutput(stdout, json ? formatJson(report) : formatDoctor(report));
+      const cliVersion = getBuildInfo().version;
+      let serviceVersion: string | undefined;
+      try {
+        const healthUrl = `http://${config.server.bind}:${config.server.port}${config.server.healthPath}`;
+        const res = await fetch(healthUrl, { signal: AbortSignal.timeout(2000) });
+        const body = await res.json() as { version?: string };
+        serviceVersion = body.version ?? undefined;
+      } catch { /* service not reachable */ }
+      const doctorReport = { ...report, cliVersion, serviceVersion };
+      writeOutput(stdout, json ? formatJson(doctorReport) : formatDoctor(doctorReport, cliVersion, serviceVersion));
       return report.ok ? 0 : 1;
     }
 
