@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.8.9...patchrelay-v0.9.0) (2026-03-22)
+
+
+### Features
+
+* factory control plane with reactive GitHub loops ([#70](https://github.com/krasnoperov/patchrelay/issues/70)) ([04e5cbd](https://github.com/krasnoperov/patchrelay/commit/04e5cbdc9f66f053853cbe2475c9e50a691d830b))
+
 ## [0.8.9](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.8.8...patchrelay-v0.8.9) (2026-03-19)
 
 
