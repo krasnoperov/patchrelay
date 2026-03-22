@@ -14,44 +14,7 @@ import { PatchRelayDatabase } from "../src/db.ts";
 import { buildHttpServer } from "../src/http.ts";
 import type { AppConfig, CodexThreadSummary } from "../src/types.ts";
 
-function createWorkflows(baseDir: string) {
-  return [
-    {
-      id: "development",
-      whenState: "Start",
-      activeState: "Implementing",
-      workflowFile: path.join(baseDir, "DEVELOPMENT_WORKFLOW.md"),
-      fallbackState: "Human Needed",
-    },
-    {
-      id: "review",
-      whenState: "Review",
-      activeState: "Reviewing",
-      workflowFile: path.join(baseDir, "REVIEW_WORKFLOW.md"),
-      fallbackState: "Human Needed",
-    },
-    {
-      id: "deploy",
-      whenState: "Deploy",
-      activeState: "Deploying",
-      workflowFile: path.join(baseDir, "DEPLOY_WORKFLOW.md"),
-      fallbackState: "Human Needed",
-    },
-    {
-      id: "cleanup",
-      whenState: "Cleanup",
-      activeState: "Cleaning Up",
-      workflowFile: path.join(baseDir, "CLEANUP_WORKFLOW.md"),
-      fallbackState: "Human Needed",
-    },
-  ];
-}
 
-function getWorkflowFile(config: AppConfig, workflowId: string): string {
-  const workflow = config.projects[0]?.workflows.find((entry) => entry.id === workflowId);
-  assert.ok(workflow);
-  return workflow.workflowFile;
-}
 
 function createConfig(baseDir: string): AppConfig {
   return {
@@ -108,7 +71,6 @@ function createConfig(baseDir: string): AppConfig {
         id: "usertold",
         repoPath: path.join(baseDir, "repo"),
         worktreeRoot: path.join(baseDir, "worktrees"),
-        workflows: createWorkflows(baseDir),
         issueKeyPrefixes: ["USE"],
         linearTeamIds: ["USE"],
         allowLabels: [],
@@ -292,18 +254,18 @@ function seedDatabase(db: PatchRelayDatabase, config: AppConfig): void {
     title: "Playback-first evidence workspace",
     url: "https://linear.example/USE-54",
     currentLinearState: "Human Needed",
-    desiredStage: "deploy",
+    pendingRunType: "implementation",
     branchName: "use/USE-54-playback-first-evidence-workspace",
     worktreePath: path.join(config.projects[0].worktreeRoot, "USE-54"),
     threadId: "thread-54",
-    lifecycleStatus: "failed",
+    factoryState: "failed",
   });
   const completedRun = db.createRun({
     issueId: issue1.id,
     projectId: "usertold",
     linearIssueId: "issue-1",
-    stage: "deploy",
-    workflowFile: getWorkflowFile(config, "deploy"),
+    runType: "implementation",
+    
     promptText: "Deploy it",
   });
   mkdirSync(path.join(config.projects[0].worktreeRoot, "USE-54"), { recursive: true });
@@ -324,12 +286,12 @@ function seedDatabase(db: PatchRelayDatabase, config: AppConfig): void {
     }),
     reportJson: JSON.stringify({
       issueKey: "USE-54",
-      stage: "deploy",
+      runType: "implementation",
       status: "failed",
       threadId: "thread-54",
       turnId: "turn-54",
       prompt: "Deploy it",
-      workflowFile: getWorkflowFile(config, "deploy"),
+      
       assistantMessages: ["Deploy did not complete because auth was missing."],
       plans: [],
       reasoning: [],
@@ -347,7 +309,7 @@ function seedDatabase(db: PatchRelayDatabase, config: AppConfig): void {
     issueKey: "USE-55",
     title: "Queued review issue",
     currentLinearState: "Review",
-    lifecycleStatus: "idle",
+    factoryState: "delegated",
   });
 
   // Issue 3: USE-56 — running development stage with an active run
@@ -357,17 +319,17 @@ function seedDatabase(db: PatchRelayDatabase, config: AppConfig): void {
     issueKey: "USE-56",
     title: "Running stage",
     currentLinearState: "Start",
-    desiredStage: "development",
+    pendingRunType: "implementation",
     branchName: "use/USE-56-running-stage",
     worktreePath: path.join(config.projects[0].worktreeRoot, "USE-56"),
-    lifecycleStatus: "running",
+    factoryState: "implementing",
   });
   const runningRun = db.createRun({
     issueId: issue3.id,
     projectId: "usertold",
     linearIssueId: "issue-3",
-    stage: "development",
-    workflowFile: getWorkflowFile(config, "development"),
+    runType: "implementation",
+    
     promptText: "Build it",
   });
   mkdirSync(path.join(config.projects[0].worktreeRoot, "USE-56"), { recursive: true });
@@ -743,7 +705,7 @@ test("cli retry blocks when the issue still has an active run", () => {
       issueId: issue.id,
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
-      stage: "review",
+      runType: "implementation",
     });
     db.updateRunThread(run.id, { threadId: "thread-55-active" });
     db.upsertIssue({
@@ -752,7 +714,7 @@ test("cli retry blocks when the issue still has an active run", () => {
       branchName: "use/USE-55-ledger-active",
       worktreePath: path.join(config.projects[0].worktreeRoot, "USE-55-ledger-active"),
       activeRunId: run.id,
-      lifecycleStatus: "running",
+      factoryState: "implementing",
     });
 
     assert.throws(() => data!.retry("USE-55"), /already has an active stage run/);
@@ -780,7 +742,7 @@ test("cli resolves workspace, run context, and live summary from the unified iss
       currentLinearState: "Implementing",
       branchName: "use/USE-57-ledger-backed-running-issue",
       worktreePath: path.join(config.projects[0].worktreeRoot, "USE-57"),
-      lifecycleStatus: "running",
+      factoryState: "implementing",
     });
 
     // First run: completed stale review
@@ -788,8 +750,8 @@ test("cli resolves workspace, run context, and live summary from the unified iss
       issueId: issue4.id,
       projectId: "usertold",
       linearIssueId: "issue-4",
-      stage: "review",
-      workflowFile: getWorkflowFile(config, "review"),
+      runType: "implementation",
+      
       promptText: "Stale review run",
     });
     db.updateRunThread(staleRun.id, { threadId: "thread-57-stale", turnId: "turn-57-stale" });
@@ -804,7 +766,7 @@ test("cli resolves workspace, run context, and live summary from the unified iss
       issueId: issue4.id,
       projectId: "usertold",
       linearIssueId: "issue-4",
-      stage: "development",
+      runType: "implementation",
     });
     db.updateRunThread(activeRun.id, { threadId: "thread-57", turnId: "turn-57" });
     db.upsertIssue({
@@ -998,7 +960,7 @@ test("cli feed uses the HTTP operator client without loading sqlite", async () =
             kind: "workflow",
             issueKey: "USE-1",
             projectId: "usertold",
-            stage: "development",
+            runType: "implementation",
             workflowId: "default",
             nextStage: "review",
             status: "transition_chosen",
@@ -1740,7 +1702,7 @@ test("cli feed renders operator observations in text and json", async () => {
               level: "info" as const,
               kind: "workflow" as const,
               issueKey: "USE-54",
-              stage: "development" as const,
+              runType: "implementation" as const,
               workflowId: "default",
               nextStage: "review" as const,
               status: "transition_chosen",
@@ -1784,7 +1746,7 @@ test("cli feed renders operator observations in text and json", async () => {
           level: "info",
           kind: "workflow",
           issueKey: "USE-54",
-          stage: "development",
+          runType: "implementation",
           workflowId: "default",
           nextStage: "review",
           status: "transition_chosen",
@@ -1855,7 +1817,7 @@ test("cli feed forwards issue and project filters to the operator API client", a
     assert.deepEqual(seen[1], {
       limit: 50,
       kind: "workflow",
-      stage: "development",
+      runType: "implementation",
       status: "transition_chosen",
       workflowId: "default",
     });

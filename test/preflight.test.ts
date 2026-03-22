@@ -6,38 +6,6 @@ import test from "node:test";
 import { runPreflight } from "../src/preflight.ts";
 import type { AppConfig } from "../src/types.ts";
 
-function createWorkflows(baseDir: string) {
-  return [
-    {
-      id: "development",
-      whenState: "Start",
-      activeState: "Implementing",
-      workflowFile: path.join(baseDir, "IMPLEMENTATION_WORKFLOW.md"),
-      fallbackState: "Human Needed",
-    },
-    {
-      id: "review",
-      whenState: "Review",
-      activeState: "Reviewing",
-      workflowFile: path.join(baseDir, "REVIEW_WORKFLOW.md"),
-      fallbackState: "Human Needed",
-    },
-    {
-      id: "deploy",
-      whenState: "Deploy",
-      activeState: "Deploying",
-      workflowFile: path.join(baseDir, "DEPLOY_WORKFLOW.md"),
-      fallbackState: "Human Needed",
-    },
-    {
-      id: "cleanup",
-      whenState: "Cleanup",
-      activeState: "Cleaning Up",
-      workflowFile: path.join(baseDir, "CLEANUP_WORKFLOW.md"),
-      fallbackState: "Human Needed",
-    },
-  ];
-}
 
 function writeWorkflowFiles(config: AppConfig): void {
   for (const workflow of config.projects[0].workflows) {
@@ -99,7 +67,6 @@ function createConfig(baseDir: string): AppConfig {
         id: "usertold",
         repoPath: path.join(baseDir, "repo"),
         worktreeRoot: path.join(baseDir, "worktrees"),
-        workflows: createWorkflows(baseDir),
         issueKeyPrefixes: ["USE"],
         linearTeamIds: ["USE"],
         allowLabels: [],
