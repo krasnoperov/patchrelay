@@ -139,6 +139,11 @@ export async function fetchLinearViewerIdentity(
             id
             name
           }
+          organization {
+            id
+            name
+            urlKey
+          }
           teams {
             nodes {
               id
@@ -155,6 +160,7 @@ export async function fetchLinearViewerIdentity(
     | {
         data?: {
           viewer?: { id?: string | null; name?: string | null } | null;
+          organization?: { id?: string | null; name?: string | null; urlKey?: string | null } | null;
           teams?: {
             nodes?: Array<{ id?: string | null; name?: string | null; key?: string | null }>;
           } | null;
@@ -166,13 +172,14 @@ export async function fetchLinearViewerIdentity(
     throw new Error(`Linear viewer lookup failed with HTTP ${response.status}`);
   }
 
+  const org = payload.data.organization;
   const teams = payload.data.teams?.nodes ?? [];
   const firstTeam = teams.find((team) => team?.id || team?.name || team?.key);
 
   const result: LinearViewerIdentity = {
-    ...(firstTeam?.id ? { workspaceId: firstTeam.id } : {}),
-    ...(firstTeam?.name ? { workspaceName: firstTeam.name } : {}),
-    ...(firstTeam?.key ? { workspaceKey: firstTeam.key } : {}),
+    ...(org?.id ? { workspaceId: org.id } : firstTeam?.id ? { workspaceId: firstTeam.id } : {}),
+    ...(org?.name ? { workspaceName: org.name } : {}),
+    ...(org?.urlKey ? { workspaceKey: org.urlKey } : firstTeam?.key ? { workspaceKey: firstTeam.key } : {}),
     ...(payload.data.viewer?.id ? { actorId: payload.data.viewer.id } : {}),
     ...(payload.data.viewer?.name ? { actorName: payload.data.viewer.name } : {}),
   };
