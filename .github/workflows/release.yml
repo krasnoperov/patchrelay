@@ -1,4 +1,4 @@
-name: Release Please
+name: Release
 
 on:
   push:
@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   release:
-    name: Release Please
+    name: Create or publish release
     runs-on: ubuntu-latest
     steps:
       - name: Create release app token
@@ -64,7 +64,7 @@ jobs:
         if: ${{ steps.release.outputs.release_created }}
         run: npm ci
 
-      - name: Verify release candidate
+      - name: Verify release
         if: ${{ steps.release.outputs.release_created }}
         run: npm run ci
 
