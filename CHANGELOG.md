@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.10.7...patchrelay-v0.11.0) (2026-03-23)
+
+
+### Features
+
+* built-in merge queue for PatchRelay-managed PRs ([#93](https://github.com/krasnoperov/patchrelay/issues/93)) ([#93](https://github.com/krasnoperov/patchrelay/issues/93)) ([509884e](https://github.com/krasnoperov/patchrelay/commit/509884e648f4d597abf854c59d9175c91a15db72))
+
 ## [0.10.7](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.10.6...patchrelay-v0.10.7) (2026-03-22)
 
 
