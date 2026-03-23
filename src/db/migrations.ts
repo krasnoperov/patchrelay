@@ -135,4 +135,13 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
   connection.prepare(
     "UPDATE webhook_events SET processing_status = 'processed' WHERE processing_status = 'pending' AND payload_json IS NULL",
   ).run();
+
+  // Add pending_merge_prep column for merge queue stewardship
+  addColumnIfMissing(connection, "issues", "pending_merge_prep", "INTEGER NOT NULL DEFAULT 0");
+}
+
+function addColumnIfMissing(connection: DatabaseConnection, table: string, column: string, definition: string): void {
+  const cols = connection.prepare(`PRAGMA table_info(${table})`).all() as Array<Record<string, unknown>>;
+  if (cols.some((c) => c.name === column)) return;
+  connection.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }

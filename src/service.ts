@@ -4,6 +4,7 @@ import type { PatchRelayDatabase } from "./db.ts";
 import { GitHubWebhookHandler } from "./github-webhook-handler.ts";
 import { IssueQueryService } from "./issue-query-service.ts";
 import { LinearOAuthService } from "./linear-oauth-service.ts";
+import { MergeQueue } from "./merge-queue.ts";
 import { RunOrchestrator } from "./run-orchestrator.ts";
 import { OperatorEventFeed, type OperatorFeedQuery } from "./operator-feed.ts";
 import {
@@ -20,6 +21,7 @@ import type { AppConfig, LinearClient, LinearClientProvider } from "./types.ts";
 export class PatchRelayService {
   readonly linearProvider: LinearClientProvider;
   private readonly orchestrator: RunOrchestrator;
+  private readonly mergeQueue: MergeQueue;
   private readonly webhookHandler: WebhookHandler;
   private readonly githubWebhookHandler: GitHubWebhookHandler;
   private readonly oauthService: LinearOAuthService;
@@ -47,6 +49,12 @@ export class PatchRelayService {
       logger, this.feed,
     );
 
+    this.mergeQueue = new MergeQueue(
+      config, db,
+      (projectId, issueId) => enqueueIssue(projectId, issueId),
+      logger, this.feed,
+    );
+
     this.webhookHandler = new WebhookHandler(
       config,
       db,
@@ -60,6 +68,7 @@ export class PatchRelayService {
     this.githubWebhookHandler = new GitHubWebhookHandler(
       config, db, this.linearProvider,
       (projectId, issueId) => enqueueIssue(projectId, issueId),
+      this.mergeQueue,
       logger, this.feed,
     );
     const runtime = new ServiceRuntime(
@@ -68,7 +77,29 @@ export class PatchRelayService {
       this.orchestrator,
       { listIssuesReadyForExecution: () => db.listIssuesReadyForExecution() },
       this.webhookHandler,
-      { processIssue: (item: { projectId: string; issueId: string }) => this.orchestrator.run(item) },
+      {
+        processIssue: async (item: { projectId: string; issueId: string }) => {
+          const issue = db.getIssue(item.projectId, item.issueId);
+          // Repairs take priority over merge prep — a check_failed or
+          // review_changes_requested that arrived while merge prep was
+          // queued must not be swallowed.
+          if (issue?.pendingRunType) {
+            await this.orchestrator.run(item);
+            return;
+          }
+          if (issue?.pendingMergePrep) {
+            const project = config.projects.find((p) => p.id === item.projectId);
+            if (project) await this.mergeQueue.prepareForMerge(issue, project);
+            // Re-check: a repair run may have been enqueued during prep
+            const after = db.getIssue(item.projectId, item.issueId);
+            if (after?.pendingRunType) {
+              runtime.enqueueIssue(item.projectId, item.issueId);
+            }
+            return;
+          }
+          await this.orchestrator.run(item);
+        },
+      },
     );
     enqueueIssue = (projectId, issueId) => runtime.enqueueIssue(projectId, issueId);
 

@@ -44,6 +44,7 @@ const projectSchema = z.object({
   github: z.object({
     webhook_secret: z.string().min(1).optional(),
     repo_full_name: z.string().min(1).optional(),
+    base_branch: z.string().min(1).optional(),
   }).optional(),
 });
 
@@ -470,6 +471,7 @@ export function loadConfig(
           github: {
             ...(project.github.webhook_secret ? { webhookSecret: project.github.webhook_secret } : {}),
             ...(project.github.repo_full_name ? { repoFullName: project.github.repo_full_name } : {}),
+            ...(project.github.base_branch ? { baseBranch: project.github.base_branch } : {}),
           },
         } : {}),
       };
