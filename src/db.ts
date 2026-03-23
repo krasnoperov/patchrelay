@@ -102,6 +102,7 @@ export class PatchRelayDatabase {
     prCheckStatus?: string | null;
     ciRepairAttempts?: number;
     queueRepairAttempts?: number;
+    pendingMergePrep?: boolean;
   }): IssueRecord {
     const now = isoNow();
     const existing = this.getIssue(params.projectId, params.linearIssueId);
@@ -132,6 +133,7 @@ export class PatchRelayDatabase {
       if (params.prCheckStatus !== undefined) { sets.push("pr_check_status = @prCheckStatus"); values.prCheckStatus = params.prCheckStatus; }
       if (params.ciRepairAttempts !== undefined) { sets.push("ci_repair_attempts = @ciRepairAttempts"); values.ciRepairAttempts = params.ciRepairAttempts; }
       if (params.queueRepairAttempts !== undefined) { sets.push("queue_repair_attempts = @queueRepairAttempts"); values.queueRepairAttempts = params.queueRepairAttempts; }
+      if (params.pendingMergePrep !== undefined) { sets.push("pending_merge_prep = @pendingMergePrep"); values.pendingMergePrep = params.pendingMergePrep ? 1 : 0; }
 
       this.connection.prepare(`UPDATE issues SET ${sets.join(", ")} WHERE project_id = @projectId AND linear_issue_id = @linearIssueId`).run(values);
     } else {
@@ -194,12 +196,19 @@ export class PatchRelayDatabase {
 
   listIssuesReadyForExecution(): Array<{ projectId: string; linearIssueId: string }> {
     const rows = this.connection
-      .prepare("SELECT project_id, linear_issue_id FROM issues WHERE pending_run_type IS NOT NULL AND active_run_id IS NULL")
+      .prepare("SELECT project_id, linear_issue_id FROM issues WHERE (pending_run_type IS NOT NULL OR pending_merge_prep = 1) AND active_run_id IS NULL")
       .all() as Array<Record<string, unknown>>;
     return rows.map((row) => ({
       projectId: String(row.project_id),
       linearIssueId: String(row.linear_issue_id),
     }));
+  }
+
+  listIssuesByState(projectId: string, state: FactoryState): IssueRecord[] {
+    const rows = this.connection
+      .prepare("SELECT * FROM issues WHERE project_id = ? AND factory_state = ? ORDER BY pr_number ASC")
+      .all(projectId, state) as Array<Record<string, unknown>>;
+    return rows.map(mapIssueRow);
   }
 
   // ─── Runs ─────────────────────────────────────────────────────────
@@ -412,6 +421,7 @@ function mapIssueRow(row: Record<string, unknown>): IssueRecord {
     ...(row.pr_check_status !== null && row.pr_check_status !== undefined ? { prCheckStatus: String(row.pr_check_status) } : {}),
     ciRepairAttempts: Number(row.ci_repair_attempts ?? 0),
     queueRepairAttempts: Number(row.queue_repair_attempts ?? 0),
+    pendingMergePrep: Boolean(row.pending_merge_prep),
   };
 }
 

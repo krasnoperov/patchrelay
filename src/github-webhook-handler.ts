@@ -4,6 +4,7 @@ import type { IssueRecord } from "./db-types.ts";
 import { resolveFactoryStateFromGitHub } from "./factory-state.ts";
 import type { GitHubWebhookPayload, NormalizedGitHubEvent } from "./github-types.ts";
 import { normalizeGitHubWebhook, verifyGitHubWebhookSignature } from "./github-webhooks.ts";
+import type { MergeQueue } from "./merge-queue.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import type { AppConfig, LinearClientProvider } from "./types.ts";
 import type { FactoryState } from "./factory-state.ts";
@@ -34,12 +35,23 @@ function shouldSuppressCloseTransition(newState: FactoryState | undefined, event
   return newState === "failed" && event.triggerEvent === "pr_closed" && issue.activeRunId !== undefined;
 }
 
+/**
+ * After a CI repair succeeds and CI passes, the resolver returns pr_open.
+ * If the PR is already approved, fast-track to awaiting_queue so the merge
+ * queue picks it up again. This avoids a dead state where the PR is approved
+ * and CI-green but nobody advances the merge queue.
+ */
+function shouldFastTrackToQueue(newState: FactoryState | undefined, issue: IssueRecord): boolean {
+  return newState === "pr_open" && issue.prReviewState === "approved";
+}
+
 export class GitHubWebhookHandler {
   constructor(
     private readonly config: AppConfig,
     private readonly db: PatchRelayDatabase,
     private readonly linearProvider: LinearClientProvider,
     private readonly enqueueIssue: (projectId: string, issueId: string) => void,
+    private readonly mergeQueue: MergeQueue,
     private readonly logger: Logger,
     private readonly feed?: OperatorEventFeed,
   ) {}
@@ -107,6 +119,25 @@ export class GitHubWebhookHandler {
     const payload = safeJsonParse(params.rawBody);
     if (!payload || typeof payload !== "object") return;
 
+    // Push to a base branch advances the merge queue for affected projects.
+    // This catches external merges (human PRs, direct pushes) that PatchRelay
+    // does not track as issues but that make queued branches stale.
+    if (params.eventType === "push") {
+      const pushPayload = payload as { ref?: string; repository?: { full_name?: string } };
+      const ref = pushPayload.ref;
+      const repoFullName = pushPayload.repository?.full_name;
+      if (ref && repoFullName) {
+        const branchName = ref.replace("refs/heads/", "");
+        for (const project of this.config.projects) {
+          const baseBranch = project.github?.baseBranch ?? "main";
+          if (project.github?.repoFullName === repoFullName && branchName === baseBranch) {
+            this.mergeQueue.advanceQueue(project.id);
+          }
+        }
+      }
+      return;
+    }
+
     const event = normalizeGitHubWebhook({
       eventType: params.eventType,
       payload: payload as GitHubWebhookPayload,
@@ -135,26 +166,47 @@ export class GitHubWebhookHandler {
     });
 
     if (!isMetadataOnlyCheckEvent(event)) {
-      let newState = resolveFactoryStateFromGitHub(event.triggerEvent, issue.factoryState);
-      if (shouldSuppressCloseTransition(newState, event, issue)) {
+      // Re-read issue after PR metadata upsert so fast-track sees fresh prReviewState
+      const afterMetadata = this.db.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
+
+      let newState = resolveFactoryStateFromGitHub(event.triggerEvent, afterMetadata.factoryState);
+      if (shouldSuppressCloseTransition(newState, event, afterMetadata)) {
         newState = undefined;
+      }
+      if (shouldFastTrackToQueue(newState, afterMetadata)) {
+        newState = "awaiting_queue";
       }
 
       // Only transition and notify when the state actually changes.
       // Multiple check_suite events can arrive for the same outcome.
-      if (newState && newState !== issue.factoryState) {
+      if (newState && newState !== afterMetadata.factoryState) {
         this.db.upsertIssue({
           projectId: issue.projectId,
           linearIssueId: issue.linearIssueId,
           factoryState: newState,
         });
         this.logger.info(
-          { issueKey: issue.issueKey, from: issue.factoryState, to: newState, trigger: event.triggerEvent },
+          { issueKey: issue.issueKey, from: afterMetadata.factoryState, to: newState, trigger: event.triggerEvent },
           "Factory state transition from GitHub event",
         );
 
         // Emit Linear activity for significant state changes
         void this.emitLinearActivity(issue, newState, event);
+
+        // Schedule merge prep when entering awaiting_queue
+        if (newState === "awaiting_queue") {
+          this.db.upsertIssue({
+            projectId: issue.projectId,
+            linearIssueId: issue.linearIssueId,
+            pendingMergePrep: true,
+          });
+          this.enqueueIssue(issue.projectId, issue.linearIssueId);
+        }
+
+        // Advance the merge queue when a PR merges
+        if (newState === "done" && event.triggerEvent === "pr_merged") {
+          this.mergeQueue.advanceQueue(issue.projectId);
+        }
       }
     }
 
@@ -249,10 +301,10 @@ export class GitHubWebhookHandler {
 
     const messages: Record<string, string> = {
       pr_open: `PR #${event.prNumber ?? ""} opened.${event.prUrl ? ` ${event.prUrl}` : ""}`,
-      awaiting_queue: "PR approved. Awaiting merge queue.",
+      awaiting_queue: "PR approved. Preparing merge.",
       changes_requested: `Review requested changes.${event.reviewerName ? ` Reviewer: ${event.reviewerName}` : ""}`,
       repairing_ci: `CI check failed${event.checkName ? `: ${event.checkName}` : ""}. Starting repair.`,
-      repairing_queue: "Merge queue failed. Starting repair.",
+      repairing_queue: "Merge conflict with base branch. Starting repair.",
       done: `PR merged and deployed.${event.prNumber ? ` PR #${event.prNumber}` : ""}`,
       failed: "PR was closed without merging.",
     };

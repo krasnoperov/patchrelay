@@ -36,5 +36,6 @@ export interface ProjectConfig {
   github?: {
     webhookSecret?: string;
     repoFullName?: string;
+    baseBranch?: string;
   };
 }
