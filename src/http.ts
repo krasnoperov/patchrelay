@@ -382,6 +382,45 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
       request.raw.on("close", cleanup);
     });
 
+    app.get("/api/watch", async (request, reply) => {
+      reply.hijack();
+      reply.raw.writeHead(200, {
+        "content-type": "text/event-stream; charset=utf-8",
+        "cache-control": "no-cache, no-transform",
+        connection: "keep-alive",
+        "x-accel-buffering": "no",
+      });
+
+      const writeSse = (eventType: string, data: unknown) => {
+        reply.raw.write(`event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`);
+      };
+
+      // Send initial issue snapshot
+      writeSse("issues", service.listTrackedIssues());
+
+      // Stream operator feed events
+      const issueFilter = getQueryParam(request, "issue");
+      const unsubscribe = service.subscribeOperatorFeed((event) => {
+        if (issueFilter && event.issueKey !== issueFilter) {
+          return;
+        }
+        writeSse("feed", event);
+      });
+
+      const cleanup = () => {
+        clearInterval(keepAlive);
+        unsubscribe();
+        if (!reply.raw.destroyed) reply.raw.end();
+      };
+
+      const keepAlive = setInterval(() => {
+        reply.raw.write(": keepalive\n\n");
+      }, 15000);
+
+      reply.raw.on("error", cleanup);
+      request.raw.on("close", cleanup);
+    });
+
     app.get("/api/installations", async (_request, reply) => {
       return reply.send({ ok: true, installations: service.listLinearInstallations() });
     });
@@ -556,10 +595,37 @@ function renderAgentSessionStatusPage(params: {
       issueKey?: string;
       title?: string;
       issueUrl?: string;
+      currentLinearState?: string;
+      factoryState?: string;
+      prNumber?: number;
+      prUrl?: string;
+      prState?: string;
+      prReviewState?: string;
+      prCheckStatus?: string;
+      ciRepairAttempts?: number;
+      queueRepairAttempts?: number;
     };
     activeRun?: { runType?: string; status?: string } | undefined;
     latestRun?: { runType?: string; status?: string } | undefined;
-    liveThread?: { threadId?: string; threadStatus?: string } | undefined;
+    liveThread?: {
+      threadId?: string;
+      threadStatus?: string;
+      latestTurnId?: string;
+      latestTurnStatus?: string;
+      latestAgentMessage?: string;
+      latestPlan?: string;
+      activeCommand?: string;
+      commandCount?: number;
+      fileChangeCount?: number;
+      toolCallCount?: number;
+    } | undefined;
+    latestReportSummary?: {
+      assistantMessageCount?: number;
+      commandCount?: number;
+      fileChangeCount?: number;
+      toolCallCount?: number;
+      latestAssistantMessage?: string | null;
+    } | undefined;
     runs: Array<{
       run?: { runType?: string; status?: string; startedAt?: string; endedAt?: string } | undefined;
     }>;
@@ -568,10 +634,25 @@ function renderAgentSessionStatusPage(params: {
 }): string {
   const issueTitle = params.sessionStatus.issue.title ?? params.sessionStatus.issue.issueKey ?? params.issueKey;
   const issueUrl = params.sessionStatus.issue.issueUrl;
+  const prUrl = params.sessionStatus.issue.prUrl;
+  const prLabel = params.sessionStatus.issue.prNumber ? `#${params.sessionStatus.issue.prNumber}` : undefined;
   const activeStage = formatStageChip(params.sessionStatus.activeRun);
   const latestStage = formatStageChip(params.sessionStatus.latestRun);
   const threadInfo = formatThread(params.sessionStatus.liveThread);
   const stagesRows = params.sessionStatus.runs.slice(-8).map((entry) => formatStageRow(entry.run)).join("");
+  const latestAgentMessage = params.sessionStatus.liveThread?.latestAgentMessage ?? params.sessionStatus.latestReportSummary?.latestAssistantMessage ?? "No agent summary yet.";
+  const latestPlan = params.sessionStatus.liveThread?.latestPlan ?? "No live plan available.";
+  const activeCommand = params.sessionStatus.liveThread?.activeCommand ?? "idle";
+  const commandCount = params.sessionStatus.liveThread?.commandCount ?? params.sessionStatus.latestReportSummary?.commandCount ?? 0;
+  const fileChangeCount = params.sessionStatus.liveThread?.fileChangeCount ?? params.sessionStatus.latestReportSummary?.fileChangeCount ?? 0;
+  const toolCallCount = params.sessionStatus.liveThread?.toolCallCount ?? params.sessionStatus.latestReportSummary?.toolCallCount ?? 0;
+  const factoryState = params.sessionStatus.issue.factoryState ?? "unknown";
+  const linearState = params.sessionStatus.issue.currentLinearState ?? "unknown";
+  const prState = params.sessionStatus.issue.prState ?? "unknown";
+  const reviewState = params.sessionStatus.issue.prReviewState ?? "unknown";
+  const checkState = params.sessionStatus.issue.prCheckStatus ?? "unknown";
+  const ciAttempts = params.sessionStatus.issue.ciRepairAttempts ?? 0;
+  const queueAttempts = params.sessionStatus.issue.queueRepairAttempts ?? 0;
 
   return `<!doctype html>
 <html lang="en">
@@ -630,10 +711,33 @@ function renderAgentSessionStatusPage(params: {
       <h1>${escapeHtml(issueTitle)}</h1>
       <p>PatchRelay read-only agent session status for <code>${escapeHtml(params.issueKey)}</code>.</p>
       ${issueUrl ? `<p><a href="${escapeHtml(issueUrl)}" target="_blank" rel="noopener noreferrer">Open issue in Linear</a></p>` : ""}
+      ${prUrl ? `<p><a href="${escapeHtml(prUrl)}" target="_blank" rel="noopener noreferrer">Open pull request ${escapeHtml(prLabel ?? "")}</a></p>` : ""}
       <div class="chips">
+        <span class="chip"><strong>Factory:</strong> <code>${escapeHtml(factoryState)}</code></span>
+        <span class="chip"><strong>Linear:</strong> <code>${escapeHtml(linearState)}</code></span>
         <span class="chip"><strong>Active:</strong> ${activeStage}</span>
         <span class="chip"><strong>Latest:</strong> ${latestStage}</span>
         <span class="chip"><strong>Thread:</strong> ${threadInfo}</span>
+      </div>
+      <div class="section">
+        <h2>Current View</h2>
+        <table>
+          <tbody>
+            <tr><th>Pull request</th><td>${escapeHtml(prLabel ?? "none")} (${escapeHtml(prState)})</td></tr>
+            <tr><th>Review</th><td>${escapeHtml(reviewState)}</td></tr>
+            <tr><th>Checks</th><td>${escapeHtml(checkState)}</td></tr>
+            <tr><th>Latest plan</th><td>${escapeHtml(latestPlan)}</td></tr>
+            <tr><th>Active command</th><td><code>${escapeHtml(activeCommand)}</code></td></tr>
+            <tr><th>Latest summary</th><td>${escapeHtml(latestAgentMessage)}</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="chips">
+        <span class="chip"><strong>Commands:</strong> ${escapeHtml(String(commandCount))}</span>
+        <span class="chip"><strong>File changes:</strong> ${escapeHtml(String(fileChangeCount))}</span>
+        <span class="chip"><strong>Tool calls:</strong> ${escapeHtml(String(toolCallCount))}</span>
+        <span class="chip"><strong>CI repairs:</strong> ${escapeHtml(String(ciAttempts))}</span>
+        <span class="chip"><strong>Queue repairs:</strong> ${escapeHtml(String(queueAttempts))}</span>
       </div>
       <div class="section">
         <h2>Recent Stages</h2>
