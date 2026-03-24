@@ -91,10 +91,14 @@ test("review_approved while already in awaiting_queue is no-op", () => {
   assert.equal(resolve("review_approved", "awaiting_queue"), undefined);
 });
 
+test("review_approved from changes_requested → awaiting_queue (re-approval after fix)", () => {
+  // Codex addressed review feedback, pushed fix, Claude re-reviewed and approved
+  assert.equal(resolve("review_approved", "changes_requested"), "awaiting_queue");
+});
+
 test("review_approved during active runs is ignored", () => {
   assert.equal(resolve("review_approved", "repairing_ci"), undefined);
   assert.equal(resolve("review_approved", "implementing"), undefined);
-  assert.equal(resolve("review_approved", "changes_requested"), undefined);
 });
 
 // ─── check_passed edge cases ─────────────────────────────────────
