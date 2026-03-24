@@ -132,6 +132,11 @@ export class ServiceRuntime {
         this.options.reconcileTimeoutMs ?? DEFAULT_RECONCILE_TIMEOUT_MS,
         "Background active-run reconciliation",
       );
+      // Pick up issues that became ready outside the webhook path
+      // (e.g. CLI retry, manual DB edits) without requiring a restart.
+      for (const issue of this.readyIssueSource.listIssuesReadyForExecution()) {
+        this.enqueueIssue(issue.projectId, issue.linearIssueId);
+      }
     } catch (error) {
       this.logger.warn(
         { error: error instanceof Error ? error.message : String(error) },
