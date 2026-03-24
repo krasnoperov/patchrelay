@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.5](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.12.4...patchrelay-v0.12.5) (2026-03-24)
+
+
+### Bug Fixes
+
+* self-healing for zombie runs, crash-proof Linear calls, startup auth check ([#106](https://github.com/krasnoperov/patchrelay/issues/106)) ([38b5f3f](https://github.com/krasnoperov/patchrelay/commit/38b5f3ff93b5443df51ad2dac48285127ce138e2))
+
 ## [0.12.4](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.12.3...patchrelay-v0.12.4) (2026-03-24)
 
 
