@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.7](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.12.6...patchrelay-v0.12.7) (2026-03-24)
+
+
+### Bug Fixes
+
+* reconciliation picks up ready issues without restart ([#111](https://github.com/krasnoperov/patchrelay/issues/111)) ([44dd17b](https://github.com/krasnoperov/patchrelay/commit/44dd17b37fc0ab049378380975bbcbdc9656a7c3))
+
 ## [0.12.6](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.12.5...patchrelay-v0.12.6) (2026-03-24)
 
 
