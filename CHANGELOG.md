@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.4](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.12.3...patchrelay-v0.12.4) (2026-03-24)
+
+
+### Bug Fixes
+
+* trigger release for rule-based state machine refactor ([#104](https://github.com/krasnoperov/patchrelay/issues/104)) ([79a7a17](https://github.com/krasnoperov/patchrelay/commit/79a7a17c612a2832b25191af5ff9252deee2b013))
+
 ## [0.12.3](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.12.2...patchrelay-v0.12.3) (2026-03-24)
 
 
