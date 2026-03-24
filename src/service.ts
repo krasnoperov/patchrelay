@@ -127,6 +127,20 @@ export class PatchRelayService {
   }
 
   async start(): Promise<void> {
+    // Verify Linear connectivity for all configured projects before starting.
+    // Fail fast on auth errors rather than crashing mid-run.
+    for (const project of this.config.projects) {
+      try {
+        const client = await this.linearProvider.forProject(project.id);
+        if (!client) {
+          this.logger.warn({ projectId: project.id }, "No Linear installation linked — project will not receive agent session events");
+        }
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        throw new Error(`Linear auth failed for project ${project.id}: ${msg}. Re-run "patchrelay connect" to refresh the token.`, { cause: error });
+      }
+    }
+
     if (this.githubAppTokenManager) {
       await ensureGhWrapper(this.logger);
       await this.githubAppTokenManager.start();

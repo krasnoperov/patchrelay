@@ -419,25 +419,56 @@ export class RunOrchestrator {
   }
 
   private async reconcileRun(run: RunRecord): Promise<void> {
-    if (!run.threadId) {
-      this.failRunAndClear(run, "Run has no thread ID during reconciliation");
-      return;
-    }
-
     const issue = this.db.getIssue(run.projectId, run.linearIssueId);
     if (!issue) return;
 
-    // Read Codex state
+    // Zombie run: claimed in DB but Codex never started (no thread).
+    // This happens when the service crashes between claiming the run
+    // and starting the Codex turn. Re-enqueue instead of failing.
+    if (!run.threadId) {
+      this.logger.warn(
+        { issueKey: issue.issueKey, runId: run.id, runType: run.runType },
+        "Zombie run detected (no thread) — clearing and re-enqueueing",
+      );
+      this.db.transaction(() => {
+        this.db.finishRun(run.id, { status: "failed", failureReason: "Zombie: never started (no thread after restart)" });
+        this.db.upsertIssue({
+          projectId: run.projectId,
+          linearIssueId: run.linearIssueId,
+          activeRunId: null,
+          pendingRunType: run.runType,
+          pendingRunContextJson: null,
+        });
+      });
+      this.enqueueIssue(run.projectId, run.linearIssueId);
+      return;
+    }
+
+    // Read Codex state — thread may not exist after app-server restart.
     let thread: CodexThreadSummary | undefined;
     try {
       thread = await this.readThreadWithRetry(run.threadId);
     } catch {
-      this.failRunAndClear(run, "Codex thread not found during reconciliation");
+      this.logger.warn(
+        { issueKey: issue.issueKey, runId: run.id, runType: run.runType, threadId: run.threadId },
+        "Stale thread during reconciliation — clearing and re-enqueueing",
+      );
+      this.db.transaction(() => {
+        this.db.finishRun(run.id, { status: "failed", failureReason: "Stale thread after restart" });
+        this.db.upsertIssue({
+          projectId: run.projectId,
+          linearIssueId: run.linearIssueId,
+          activeRunId: null,
+          pendingRunType: run.runType,
+          pendingRunContextJson: null,
+        });
+      });
+      this.enqueueIssue(run.projectId, run.linearIssueId);
       return;
     }
 
-    // Check Linear state
-    const linear = await this.linearProvider.forProject(run.projectId);
+    // Check Linear state (non-fatal — token refresh may fail)
+    const linear = await this.linearProvider.forProject(run.projectId).catch(() => undefined);
     if (linear) {
       const linearIssue = await linear.getIssue(run.linearIssueId).catch(() => undefined);
       if (linearIssue) {
@@ -535,9 +566,9 @@ export class RunOrchestrator {
     options?: { ephemeral?: boolean },
   ): Promise<void> {
     if (!issue.agentSessionId) return;
-    const linear = await this.linearProvider.forProject(issue.projectId);
-    if (!linear) return;
     try {
+      const linear = await this.linearProvider.forProject(issue.projectId);
+      if (!linear) return;
       await linear.createAgentActivity({
         agentSessionId: issue.agentSessionId,
         content: { type, body },
@@ -553,9 +584,9 @@ export class RunOrchestrator {
 
   private async updateLinearPlan(issue: IssueRecord, plan: AgentSessionPlanStep[]): Promise<void> {
     if (!issue.agentSessionId) return;
-    const linear = await this.linearProvider.forProject(issue.projectId);
-    if (!linear?.updateAgentSession) return;
     try {
+      const linear = await this.linearProvider.forProject(issue.projectId);
+      if (!linear?.updateAgentSession) return;
       await linear.updateAgentSession({ agentSessionId: issue.agentSessionId, plan });
     } catch (error) {
       this.logger.debug(
