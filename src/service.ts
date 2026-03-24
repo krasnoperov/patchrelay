@@ -122,24 +122,35 @@ export class PatchRelayService {
     }
 
     this.codex.on("notification", (notification: CodexNotification) => {
-      void this.orchestrator.handleCodexNotification(notification);
+      this.orchestrator.handleCodexNotification(notification).catch((error) => {
+        const msg = error instanceof Error ? error.message : String(error);
+        logger.error({ method: notification.method, error: msg }, "Unhandled error in Codex notification handler");
+      });
     });
   }
 
   async start(): Promise<void> {
     // Verify Linear connectivity for all configured projects before starting.
-    // Warn on auth errors so the operator can re-authorize via the running
-    // service's OAuth flow — the service must be running for `patchrelay connect`.
+    // Auth errors do not prevent startup (the OAuth callback must be reachable
+    // for `patchrelay connect`), but the service reports NOT READY until at
+    // least one project has a working Linear token.
+    let anyLinearConnected = false;
     for (const project of this.config.projects) {
       try {
         const client = await this.linearProvider.forProject(project.id);
-        if (!client) {
+        if (client) {
+          anyLinearConnected = true;
+        } else {
           this.logger.warn({ projectId: project.id }, "No Linear installation linked — run 'patchrelay connect' to authorize");
         }
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         this.logger.error({ projectId: project.id, error: msg }, "Linear auth failed — run 'patchrelay connect' to refresh the token. Runs for this project will fail until re-authorized.");
       }
+    }
+    this.runtime.setLinearConnected(anyLinearConnected);
+    if (!anyLinearConnected && this.config.projects.length > 0) {
+      this.logger.error("No projects have working Linear auth — service is NOT READY. Run 'patchrelay connect' to authorize.");
     }
 
     if (this.githubAppTokenManager) {
@@ -164,7 +175,11 @@ export class PatchRelayService {
   }
 
   async completeLinearOAuth(params: { state: string; code: string }) {
-    return await this.oauthService.complete(params);
+    const result = await this.oauthService.complete(params);
+    // A successful OAuth completion means at least one project now has
+    // working Linear auth — update readiness.
+    this.runtime.setLinearConnected(true);
+    return result;
   }
 
   getLinearOAuthStateStatus(state: string) {

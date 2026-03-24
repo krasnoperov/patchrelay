@@ -67,8 +67,9 @@ test("service runtime starts codex, reconciles active runs, seeds ready issues, 
     },
   );
 
-  assert.deepEqual(runtime.getReadiness(), { ready: false, codexStarted: false });
+  assert.deepEqual(runtime.getReadiness(), { ready: false, codexStarted: false, linearConnected: false });
 
+  runtime.setLinearConnected(true);
   await runtime.start();
   await flushQueue();
 
@@ -78,7 +79,7 @@ test("service runtime starts codex, reconciles active runs, seeds ready issues, 
     { projectId: "app", issueId: "issue-1" },
     { projectId: "app", issueId: "issue-2" },
   ]);
-  assert.deepEqual(runtime.getReadiness(), { ready: true, codexStarted: true });
+  assert.deepEqual(runtime.getReadiness(), { ready: true, codexStarted: true, linearConnected: true });
   runtime.stop();
 });
 
@@ -141,14 +142,15 @@ test("service runtime clears ready state on stop and preserves codex status in r
     { async processIssue() {} },
   );
 
+  runtime.setLinearConnected(true);
   await runtime.start();
-  assert.deepEqual(runtime.getReadiness(), { ready: true, codexStarted: true });
+  assert.deepEqual(runtime.getReadiness(), { ready: true, codexStarted: true, linearConnected: true });
 
   runtime.stop();
   await flushQueue();
 
   assert.equal(codex.stopCalls, 1);
-  assert.deepEqual(runtime.getReadiness(), { ready: false, codexStarted: false });
+  assert.deepEqual(runtime.getReadiness(), { ready: false, codexStarted: false, linearConnected: true });
 });
 
 test("service runtime records startup error when codex start fails", async () => {
@@ -171,6 +173,7 @@ test("service runtime records startup error when codex start fails", async () =>
   assert.deepEqual(runtime.getReadiness(), {
     ready: false,
     codexStarted: false,
+    linearConnected: false,
     startupError: "codex offline",
   });
 });
@@ -194,6 +197,7 @@ test("service runtime records startup error when reconciliation fails after code
   assert.deepEqual(runtime.getReadiness(), {
     ready: false,
     codexStarted: true,
+    linearConnected: false,
     startupError: "reconcile failed",
   });
 });

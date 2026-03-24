@@ -40,6 +40,7 @@ export class ServiceRuntime {
   readonly webhookQueue: SerialWorkQueue<number>;
   readonly issueQueue: SerialWorkQueue<RuntimeIssueQueueItem>;
   private ready = false;
+  private linearConnected = false;
   private startupError: string | undefined;
   private reconcileTimer: ReturnType<typeof setTimeout> | undefined;
   private reconcileInProgress = false;
@@ -88,10 +89,15 @@ export class ServiceRuntime {
     this.issueQueue.enqueue({ projectId, issueId });
   }
 
+  setLinearConnected(connected: boolean): void {
+    this.linearConnected = connected;
+  }
+
   getReadiness() {
     return {
-      ready: this.ready && this.codex.isStarted(),
+      ready: this.ready && this.codex.isStarted() && this.linearConnected,
       codexStarted: this.codex.isStarted(),
+      linearConnected: this.linearConnected,
       ...(this.startupError ? { startupError: this.startupError } : {}),
     };
   }
