@@ -11,6 +11,7 @@ import {
   getDefaultServiceEnvPath,
   getPatchRelayDataDir,
 } from "./runtime-paths.ts";
+import { resolveSecret } from "./resolve-secret.ts";
 import { ensureAbsolutePath } from "./utils.ts";
 
 const LINEAR_OAUTH_CALLBACK_PATH = "/oauth/linear/callback";
@@ -357,12 +358,12 @@ export function loadConfig(
   const parsed = configSchema.parse(withSectionDefaults(expandEnv(parsedFile, env)));
 
   const requirements = getLoadProfileRequirements(profile);
-  const webhookSecret = env[parsed.linear.webhook_secret_env];
-  const tokenEncryptionKey = env[parsed.linear.token_encryption_key_env];
-  const oauthClientId = env[parsed.linear.oauth.client_id_env];
-  const oauthClientSecret = env[parsed.linear.oauth.client_secret_env];
+  const webhookSecret = resolveSecret("linear-webhook-secret", parsed.linear.webhook_secret_env, env);
+  const tokenEncryptionKey = resolveSecret("token-encryption-key", parsed.linear.token_encryption_key_env, env);
+  const oauthClientId = resolveSecret("linear-oauth-client-id", parsed.linear.oauth.client_id_env, env);
+  const oauthClientSecret = resolveSecret("linear-oauth-client-secret", parsed.linear.oauth.client_secret_env, env);
   const operatorApiToken = parsed.operator_api.bearer_token_env
-    ? env[parsed.operator_api.bearer_token_env]
+    ? resolveSecret("operator-api-token", parsed.operator_api.bearer_token_env, env)
     : undefined;
   if (requirements.requireWebhookSecret && !webhookSecret) {
     throw new Error(`Missing env var ${parsed.linear.webhook_secret_env}`);

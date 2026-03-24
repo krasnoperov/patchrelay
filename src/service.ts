@@ -1,6 +1,12 @@
 import type { Logger } from "pino";
 import type { CodexAppServerClient, CodexNotification } from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
+import {
+  resolveGitHubAppCredentials,
+  createGitHubAppTokenManager,
+  ensureGhWrapper,
+  type GitHubAppTokenManager,
+} from "./github-app-token.ts";
 import { GitHubWebhookHandler } from "./github-webhook-handler.ts";
 import { IssueQueryService } from "./issue-query-service.ts";
 import { LinearOAuthService } from "./linear-oauth-service.ts";
@@ -22,6 +28,7 @@ export class PatchRelayService {
   readonly linearProvider: LinearClientProvider;
   private readonly orchestrator: RunOrchestrator;
   private readonly mergeQueue: MergeQueue;
+  private readonly githubAppTokenManager?: GitHubAppTokenManager;
   private readonly webhookHandler: WebhookHandler;
   private readonly githubWebhookHandler: GitHubWebhookHandler;
   private readonly oauthService: LinearOAuthService;
@@ -107,16 +114,32 @@ export class PatchRelayService {
     this.queryService = new IssueQueryService(db, codex, this.orchestrator);
     this.runtime = runtime;
 
+    // Optional GitHub App token management for bot identity
+    const ghAppCredentials = resolveGitHubAppCredentials();
+    if (ghAppCredentials) {
+      this.githubAppTokenManager = createGitHubAppTokenManager(ghAppCredentials, logger);
+    }
+
     this.codex.on("notification", (notification: CodexNotification) => {
       void this.orchestrator.handleCodexNotification(notification);
     });
   }
 
   async start(): Promise<void> {
+    if (this.githubAppTokenManager) {
+      await ensureGhWrapper(this.logger);
+      await this.githubAppTokenManager.start();
+      const identity = this.githubAppTokenManager.botIdentity();
+      if (identity) {
+        this.orchestrator.botIdentity = identity;
+      }
+    }
     await this.runtime.start();
+    this.mergeQueue.seedOnStartup();
   }
 
   stop(): void {
+    this.githubAppTokenManager?.stop();
     this.runtime.stop();
   }
 

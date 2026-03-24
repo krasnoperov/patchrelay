@@ -126,7 +126,9 @@ The generated `patchrelay.json` stays intentionally minimal. In the default setu
 
 ## 3. Configure Machine-Level Secrets
 
-Edit `~/.config/patchrelay/service.env` and keep the generated webhook secret and token-encryption key:
+PatchRelay resolves secrets through a provider-agnostic fallback chain — see [secrets.md](./secrets.md) for the full reference.
+
+**Quick start (dev / getting started):** edit `~/.config/patchrelay/service.env`:
 
 ```bash
 LINEAR_WEBHOOK_SECRET=generated-by-patchrelay-init
@@ -135,10 +137,11 @@ LINEAR_OAUTH_CLIENT_ID=replace-with-linear-oauth-client-id
 LINEAR_OAUTH_CLIENT_SECRET=replace-with-linear-oauth-client-secret
 ```
 
+**Production:** encrypt secrets with `systemd-creds` and load them via `LoadCredentialEncrypted=` in the system service unit. This removes all plaintext secrets from disk and makes them invisible to user-level processes. See [secrets.md](./secrets.md) for step-by-step setup and rotation.
+
 Optional non-secret overrides such as `PATCHRELAY_CONFIG`, `PATCHRELAY_DB_PATH`, and `PATCHRELAY_LOG_FILE` belong in `~/.config/patchrelay/runtime.env`. In personal-mode, prefer user-owned paths over `/opt` or `/var` paths.
 
-Keep these values machine-level. They belong in PatchRelay's own env files, not inside repository `.env` files.
-PatchRelay reads `runtime.env` for non-secret runtime overrides and `service.env` for service credentials. Read-only local inspection commands use local state and do not require exporting these values in your shell.
+Keep these values machine-level. They belong in PatchRelay's own config files, not inside repository `.env` files.
 
 Configure the Linear OAuth app settings and webhook categories in your Linear workspace settings.
 
