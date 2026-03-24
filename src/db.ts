@@ -268,7 +268,7 @@ export class PatchRelayDatabase {
 
   listRunningRuns(): RunRecord[] {
     const rows = this.connection
-      .prepare("SELECT * FROM runs WHERE status = 'running'")
+      .prepare("SELECT * FROM runs WHERE status IN ('running', 'queued')")
       .all() as Array<Record<string, unknown>>;
     return rows.map(mapRunRow);
   }
