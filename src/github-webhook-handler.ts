@@ -8,7 +8,6 @@ import type { MergeQueue } from "./merge-queue.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import { resolveSecret } from "./resolve-secret.ts";
 import type { AppConfig, LinearClientProvider } from "./types.ts";
-import type { FactoryState } from "./factory-state.ts";
 import { safeJsonParse } from "./utils.ts";
 
 /**
@@ -23,27 +22,6 @@ import { safeJsonParse } from "./utils.ts";
 function isMetadataOnlyCheckEvent(event: NormalizedGitHubEvent): boolean {
   return event.eventSource === "check_run"
     && (event.triggerEvent === "check_passed" || event.triggerEvent === "check_failed");
-}
-
-/**
- * Codex sometimes closes and immediately reopens a PR (e.g. to change the
- * base branch or fix the title). A pr_closed event during an active run
- * should not transition to "failed" — the reopened event will follow.
- * Without this guard, the state gets stuck at "failed" because
- * failed → pr_open is not an allowed transition.
- */
-function shouldSuppressCloseTransition(newState: FactoryState | undefined, event: NormalizedGitHubEvent, issue: IssueRecord): boolean {
-  return newState === "failed" && event.triggerEvent === "pr_closed" && issue.activeRunId !== undefined;
-}
-
-/**
- * After a CI repair succeeds and CI passes, the resolver returns pr_open.
- * If the PR is already approved, fast-track to awaiting_queue so the merge
- * queue picks it up again. This avoids a dead state where the PR is approved
- * and CI-green but nobody advances the merge queue.
- */
-function shouldFastTrackToQueue(newState: FactoryState | undefined, issue: IssueRecord): boolean {
-  return newState === "pr_open" && issue.prReviewState === "approved";
 }
 
 export class GitHubWebhookHandler {
@@ -167,16 +145,13 @@ export class GitHubWebhookHandler {
     });
 
     if (!isMetadataOnlyCheckEvent(event)) {
-      // Re-read issue after PR metadata upsert so fast-track sees fresh prReviewState
+      // Re-read issue after PR metadata upsert so guards see fresh prReviewState
       const afterMetadata = this.db.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
 
-      let newState = resolveFactoryStateFromGitHub(event.triggerEvent, afterMetadata.factoryState);
-      if (shouldSuppressCloseTransition(newState, event, afterMetadata)) {
-        newState = undefined;
-      }
-      if (shouldFastTrackToQueue(newState, afterMetadata)) {
-        newState = "awaiting_queue";
-      }
+      const newState = resolveFactoryStateFromGitHub(event.triggerEvent, afterMetadata.factoryState, {
+        prReviewState: afterMetadata.prReviewState,
+        activeRunId: afterMetadata.activeRunId,
+      });
 
       // Only transition and notify when the state actually changes.
       // Multiple check_suite events can arrive for the same outcome.
