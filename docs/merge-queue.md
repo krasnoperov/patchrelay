@@ -61,17 +61,22 @@ Configure branch protection on your base branch (e.g., `main`):
 
 **Why "Require approval of the most recent reviewable push" must be disabled:** PatchRelay's merge prep and repair runs push commits. This setting would require re-approval after each push.
 
-### 3. GitHub Token
+### 3. GitHub CLI Auth
 
-Add `GITHUB_TOKEN` to PatchRelay's `~/.config/patchrelay/service.env`:
+PatchRelay uses the host's `gh` CLI authentication to enable auto-merge and create PRs.
+
+**Default (no App configured):** Uses the host's existing `gh auth` session. Ensure `gh auth status` shows a logged-in account with `repo` scope.
+
+**With GitHub App identity (optional):** PatchRelay can operate as a bot (`app-name[bot]`) instead of your personal account. Add to `~/.config/patchrelay/service.env`:
 
 ```bash
-GITHUB_TOKEN=ghp_your_personal_access_token
+PATCHRELAY_GITHUB_APP_ID=123456
+PATCHRELAY_GITHUB_APP_PRIVATE_KEY_FILE=/home/your-user/.config/patchrelay/github-app.pem
 ```
 
-This token is used for `gh pr merge --auto --squash`. It needs `repo` scope (classic PAT) or `contents: write` + `pull_requests: write` (fine-grained PAT).
+PatchRelay generates short-lived installation tokens, writes them to `~/.local/share/patchrelay/gh-token`, and installs a `gh` wrapper at `~/.local/share/patchrelay/bin/gh` that reads the token. Codex picks up the wrapper via PATH. Your personal `gh` auth is untouched — the wrapper only activates when the token file exists.
 
-Git push uses the PatchRelay host's existing SSH keys, which trigger CI. The `GITHUB_TOKEN` is not used for push.
+Git push uses the host's existing git credentials (SSH keys or credential helper). Commit authorship is independent of push credentials.
 
 ### 4. Project Config
 

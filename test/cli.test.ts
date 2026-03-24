@@ -1156,7 +1156,7 @@ test("cli init writes XDG config files and install-service manages the user unit
         assert.match(unit, /ExecStart=\/usr\/bin\/env patchrelay serve/);
         assert.match(unit, new RegExp(`Environment=PATCHRELAY_CONFIG=${configPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
         assert.match(unit, /EnvironmentFile=-.*runtime\.env/);
-        assert.match(unit, /EnvironmentFile=.*service\.env/);
+        assert.match(unit, /LoadCredentialEncrypted=linear-webhook-secret/);
         assert.match(reloadUnit, /reload-or-restart patchrelay\.service/);
         assert.match(pathUnit, /Unit=patchrelay-reload\.service/);
         assert.match(pathUnit, /PathChanged=.*runtime\.env/);

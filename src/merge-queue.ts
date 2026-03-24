@@ -110,7 +110,7 @@ export class MergeQueue {
           projectId: issue.projectId,
           stage: "awaiting_queue",
           status: "blocked",
-          summary: "Branch up to date but auto-merge not enabled — set GITHUB_TOKEN to unblock",
+          summary: "Branch up to date but auto-merge not enabled — check gh auth and repo settings",
         });
       }
       return;
@@ -142,8 +142,19 @@ export class MergeQueue {
   }
 
   /**
+   * Seed the merge queue on startup: for each project, ensure the front-of-queue
+   * issue has pendingMergePrep set. Catches issues that entered awaiting_queue
+   * but whose merge prep was never triggered or was lost to a crash/restart.
+   */
+  seedOnStartup(): void {
+    for (const project of this.config.projects) {
+      this.advanceQueue(project.id);
+    }
+  }
+
+  /**
    * Advance the queue: find the next awaiting_queue issue and prepare it.
-   * Called when a PR merges (pr_merged event).
+   * Called when a PR merges (pr_merged event) and on startup.
    */
   advanceQueue(projectId: string): void {
     const queue = this.db.listIssuesByState(projectId, "awaiting_queue");
@@ -158,15 +169,9 @@ export class MergeQueue {
 
   /** Returns true if auto-merge was successfully enabled (or already enabled). */
   private async enableAutoMerge(issue: IssueRecord, repoFullName: string): Promise<boolean> {
-    const token = process.env.GITHUB_TOKEN;
-    if (!token) {
-      this.logger.warn({ issueKey: issue.issueKey }, "Merge prep: GITHUB_TOKEN not set — auto-merge cannot be enabled");
-      return false;
-    }
-
+    // Uses the host's existing gh auth — same credentials Codex uses to create PRs.
     const result = await execCommand("gh", ["pr", "merge", String(issue.prNumber), "--repo", repoFullName, "--auto", "--squash"], {
       timeoutMs: 30_000,
-      env: { ...process.env, GH_TOKEN: token },
     });
 
     if (result.exitCode !== 0) {

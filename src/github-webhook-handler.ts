@@ -6,6 +6,7 @@ import type { GitHubWebhookPayload, NormalizedGitHubEvent } from "./github-types
 import { normalizeGitHubWebhook, verifyGitHubWebhookSignature } from "./github-webhooks.ts";
 import type { MergeQueue } from "./merge-queue.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
+import { resolveSecret } from "./resolve-secret.ts";
 import type { AppConfig, LinearClientProvider } from "./types.ts";
 import type { FactoryState } from "./factory-state.ts";
 import { safeJsonParse } from "./utils.ts";
@@ -89,7 +90,7 @@ export class GitHubWebhookHandler {
       : undefined;
 
     // Verify signature using global GitHub App webhook secret
-    const webhookSecret = process.env.GITHUB_APP_WEBHOOK_SECRET;
+    const webhookSecret = resolveSecret("github-app-webhook-secret", "GITHUB_APP_WEBHOOK_SECRET");
     if (webhookSecret) {
       if (!verifyGitHubWebhookSignature(params.rawBody, webhookSecret, params.signature)) {
         return { status: 401, body: { ok: false, reason: "invalid_signature" } };

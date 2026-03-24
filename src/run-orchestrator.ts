@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import type { Logger } from "pino";
+import type { GitHubAppBotIdentity } from "./github-app-token.ts";
 import type { CodexAppServerClient, CodexNotification } from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord, RunRecord } from "./db-types.ts";
@@ -27,6 +28,7 @@ import type {
 } from "./types.ts";
 import type { AgentSessionPlanStep } from "./agent-session-plan.ts";
 import { resolveAuthoritativeLinearStopState } from "./linear-workflow.ts";
+import { execCommand } from "./utils.ts";
 
 const DEFAULT_CI_REPAIR_BUDGET = 2;
 const DEFAULT_QUEUE_REPAIR_BUDGET = 2;
@@ -120,6 +122,7 @@ function buildRunPrompt(issue: IssueRecord, runType: RunType, repoPath: string, 
 
 export class RunOrchestrator {
   private readonly worktreeManager: WorktreeManager;
+  botIdentity?: GitHubAppBotIdentity;
 
   constructor(
     private readonly config: AppConfig,
@@ -225,6 +228,13 @@ export class RunOrchestrator {
         branchName,
         { allowExistingOutsideRoot: issue.branchName !== undefined },
       );
+
+      // Set bot git identity when GitHub App is configured
+      if (this.botIdentity) {
+        const gitBin = this.config.runner.gitBin;
+        await execCommand(gitBin, ["-C", worktreePath, "config", "user.name", this.botIdentity.name], { timeoutMs: 5_000 });
+        await execCommand(gitBin, ["-C", worktreePath, "config", "user.email", this.botIdentity.email], { timeoutMs: 5_000 });
+      }
 
       // Run prepare-worktree hook
       const hookEnv = buildHookEnv(issue.issueKey ?? issue.linearIssueId, branchName, runType, worktreePath);

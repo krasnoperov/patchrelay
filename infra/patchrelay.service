@@ -1,5 +1,5 @@
 [Unit]
-Description=PatchRelay (systemd user service)
+Description=PatchRelay
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=60
@@ -7,24 +7,47 @@ StartLimitBurst=8
 
 [Service]
 Type=simple
+User=your-user
+Group=your-user
 WorkingDirectory=/home/your-user
+
+# Non-secret config: runtime overrides (paths, log level) and
+# service-only identifiers (GitHub App IDs, etc.)
 EnvironmentFile=-/home/your-user/.config/patchrelay/runtime.env
-EnvironmentFile=/home/your-user/.config/patchrelay/service.env
+EnvironmentFile=-/home/your-user/.config/patchrelay/service.env
 Environment=NODE_ENV=production
 Environment=PATCHRELAY_CONFIG=/home/your-user/.config/patchrelay/patchrelay.json
-Environment=PATH=/home/your-user/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PATH=/home/your-user/.local/share/patchrelay/bin:/home/your-user/.local/bin:/usr/local/bin:/usr/bin:/bin
+
+# Secrets — encrypted at rest via systemd-creds, decrypted into a private
+# ramfs at $CREDENTIALS_DIRECTORY visible only to this service.
+# See docs/secrets.md for setup instructions.
+#
+# When credstore is not configured, PatchRelay falls back to reading secrets
+# from env vars (EnvironmentFile, op run, etc.) via the resolve-secret module.
+LoadCredentialEncrypted=linear-webhook-secret
+LoadCredentialEncrypted=token-encryption-key
+LoadCredentialEncrypted=linear-oauth-client-id
+LoadCredentialEncrypted=linear-oauth-client-secret
+# Uncomment when GitHub App integration is configured:
+# LoadCredentialEncrypted=github-app-pem
+# LoadCredentialEncrypted=github-app-webhook-secret
+
 ExecStart=/usr/bin/env patchrelay serve
 Restart=on-failure
 RestartSec=5
+
+# Hardening
 NoNewPrivileges=true
 PrivateTmp=true
-ProtectSystem=full
+PrivateMounts=true
+ProtectSystem=strict
 ProtectHome=false
 ReadWritePaths=/home/your-user/.config/patchrelay /home/your-user/.local/state/patchrelay /home/your-user/.local/share/patchrelay
 
-# PatchRelay is intended to run as your real user so Codex inherits your
-# existing git, SSH, and local tool permissions.
-# Add your managed repository roots to ReadWritePaths if you keep hardening enabled.
+# PatchRelay runs as your real user so Codex inherits your existing git,
+# SSH, and local tool permissions.
+# Add your managed repository roots to ReadWritePaths.
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target
