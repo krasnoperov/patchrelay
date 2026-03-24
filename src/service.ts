@@ -243,6 +243,36 @@ export class PatchRelayService {
     }));
   }
 
+  subscribeCodexNotifications(
+    listener: (event: { method: string; params: Record<string, unknown>; issueKey?: string; runId?: number }) => void,
+  ): () => void {
+    const handler = (notification: CodexNotification) => {
+      const threadId = typeof notification.params.threadId === "string"
+        ? notification.params.threadId
+        : typeof notification.params.thread === "object" && notification.params.thread !== null && "id" in (notification.params.thread as Record<string, unknown>)
+          ? String((notification.params.thread as Record<string, unknown>).id)
+          : undefined;
+      let issueKey: string | undefined;
+      let runId: number | undefined;
+      if (threadId) {
+        const run = this.db.getRunByThreadId(threadId);
+        if (run) {
+          runId = run.id;
+          const issue = this.db.getIssue(run.projectId, run.linearIssueId);
+          issueKey = issue?.issueKey ?? undefined;
+        }
+      }
+      listener({
+        method: notification.method,
+        params: notification.params,
+        ...(issueKey ? { issueKey } : {}),
+        ...(runId !== undefined ? { runId } : {}),
+      });
+    };
+    this.codex.on("notification", handler);
+    return () => { this.codex.off("notification", handler); };
+  }
+
   listOperatorFeed(options?: OperatorFeedQuery) {
     return this.feed.list(options);
   }

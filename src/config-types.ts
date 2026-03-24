@@ -15,6 +15,7 @@ export interface CodexAppServerConfig {
   approvalPolicy: "never" | "on-request" | "on-failure" | "untrusted";
   sandboxMode: "danger-full-access" | "workspace-write" | "read-only";
   persistExtendedHistory: boolean;
+  experimentalRawEvents?: boolean;
 }
 
 export interface AppConfig {

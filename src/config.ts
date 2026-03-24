@@ -108,6 +108,7 @@ const configSchema = z.object({
       approval_policy: z.enum(["never", "on-request", "on-failure", "untrusted"]).default("never"),
       sandbox_mode: z.enum(["danger-full-access", "workspace-write", "read-only"]).default("danger-full-access"),
       persist_extended_history: z.boolean().default(false),
+      experimental_raw_events: z.boolean().default(false),
     }),
   }),
   projects: z.array(projectSchema).default([]),
@@ -443,6 +444,7 @@ export function loadConfig(
         approvalPolicy: parsed.runner.codex.approval_policy,
         sandboxMode: parsed.runner.codex.sandbox_mode,
         persistExtendedHistory: parsed.runner.codex.persist_extended_history,
+        experimentalRawEvents: parsed.runner.codex.experimental_raw_events,
       },
     },
     projects: parsed.projects.map((project) => {

@@ -1,0 +1,127 @@
+import { Box, Text } from "ink";
+import type { WatchTurnItem } from "./watch-state.ts";
+
+interface ItemLineProps {
+  item: WatchTurnItem;
+  isLast: boolean;
+}
+
+const STATUS_SYMBOL: Record<string, string> = {
+  completed: "\u2713",
+  failed: "\u2717",
+  declined: "\u2717",
+  inProgress: "\u25cf",
+};
+
+function statusChar(status: string): string {
+  return STATUS_SYMBOL[status] ?? " ";
+}
+
+function statusColor(status: string): string {
+  if (status === "completed") return "green";
+  if (status === "failed" || status === "declined") return "red";
+  if (status === "inProgress") return "yellow";
+  return "white";
+}
+
+function truncate(text: string, max: number): string {
+  const line = text.replace(/\n/g, " ").trim();
+  return line.length > max ? `${line.slice(0, max - 3)}...` : line;
+}
+
+function renderAgentMessage(item: WatchTurnItem): React.JSX.Element {
+  return (
+    <Text>
+      <Text dimColor>message: </Text>
+      <Text>{truncate(item.text ?? "", 120)}</Text>
+    </Text>
+  );
+}
+
+function renderCommand(item: WatchTurnItem): React.JSX.Element {
+  const cmd = item.command ?? "?";
+  const exit = item.exitCode !== undefined ? ` exit:${item.exitCode}` : "";
+  const duration = item.durationMs !== undefined ? ` ${(item.durationMs / 1000).toFixed(1)}s` : "";
+  return (
+    <Box flexDirection="column">
+      <Text>
+        <Text dimColor>$ </Text>
+        <Text>{truncate(cmd, 60)}</Text>
+        {exit && <Text dimColor>{exit}</Text>}
+        {duration && <Text dimColor>{duration}</Text>}
+      </Text>
+      {item.output && item.status === "inProgress" && (
+        <Text dimColor>  {truncate(item.output.split("\n").filter(Boolean).at(-1) ?? "", 100)}</Text>
+      )}
+    </Box>
+  );
+}
+
+function renderFileChange(item: WatchTurnItem): React.JSX.Element {
+  const count = item.changes?.length ?? 0;
+  return (
+    <Text>
+      <Text dimColor>files: </Text>
+      <Text>{count} change{count !== 1 ? "s" : ""}</Text>
+    </Text>
+  );
+}
+
+function renderToolCall(item: WatchTurnItem): React.JSX.Element {
+  return (
+    <Text>
+      <Text dimColor>tool: </Text>
+      <Text>{item.toolName ?? item.type}</Text>
+    </Text>
+  );
+}
+
+function renderPlan(item: WatchTurnItem): React.JSX.Element {
+  return (
+    <Text>
+      <Text dimColor>plan: </Text>
+      <Text>{truncate(item.text ?? "", 120)}</Text>
+    </Text>
+  );
+}
+
+function renderDefault(item: WatchTurnItem): React.JSX.Element {
+  return (
+    <Text dimColor>{item.type}{item.text ? `: ${truncate(item.text, 80)}` : ""}</Text>
+  );
+}
+
+export function ItemLine({ item, isLast }: ItemLineProps): React.JSX.Element {
+  const prefix = isLast ? "\u2514" : "\u251c";
+  let content: React.JSX.Element;
+
+  switch (item.type) {
+    case "agentMessage":
+      content = renderAgentMessage(item);
+      break;
+    case "commandExecution":
+      content = renderCommand(item);
+      break;
+    case "fileChange":
+      content = renderFileChange(item);
+      break;
+    case "mcpToolCall":
+    case "dynamicToolCall":
+      content = renderToolCall(item);
+      break;
+    case "plan":
+      content = renderPlan(item);
+      break;
+    default:
+      content = renderDefault(item);
+      break;
+  }
+
+  return (
+    <Box gap={1}>
+      <Text dimColor>{prefix}</Text>
+      <Text color={statusColor(item.status)}>{statusChar(item.status)}</Text>
+      {content}
+    </Box>
+  );
+}

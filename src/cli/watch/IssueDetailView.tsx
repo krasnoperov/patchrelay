@@ -1,12 +1,14 @@
 import { Box, Text } from "ink";
-import type { WatchIssue } from "./watch-state.ts";
+import type { WatchIssue, WatchThread } from "./watch-state.ts";
+import { ThreadView } from "./ThreadView.tsx";
 import { HelpBar } from "./HelpBar.tsx";
 
 interface IssueDetailViewProps {
   issue: WatchIssue | undefined;
+  thread: WatchThread | null;
 }
 
-export function IssueDetailView({ issue }: IssueDetailViewProps): React.JSX.Element {
+export function IssueDetailView({ issue, thread }: IssueDetailViewProps): React.JSX.Element {
   if (!issue) {
     return (
       <Box flexDirection="column">
@@ -28,15 +30,13 @@ export function IssueDetailView({ issue }: IssueDetailViewProps): React.JSX.Elem
       </Box>
       {issue.title && <Text dimColor>{issue.title}</Text>}
       <Text dimColor>{"─".repeat(72)}</Text>
-      <Text dimColor>
-        Detail view with live thread items will be available in Phase 2.
-      </Text>
-      <Text dimColor>
-        Current state: {issue.factoryState}
-        {issue.latestRunStatus ? ` | Latest run: ${issue.latestRunType}:${issue.latestRunStatus}` : ""}
-        {issue.prCheckStatus ? ` | Checks: ${issue.prCheckStatus}` : ""}
-        {issue.prReviewState ? ` | Review: ${issue.prReviewState}` : ""}
-      </Text>
+
+      {thread ? (
+        <ThreadView thread={thread} />
+      ) : (
+        <Text dimColor>Waiting for thread data...</Text>
+      )}
+
       <Text dimColor>{"─".repeat(72)}</Text>
       <HelpBar view="detail" />
     </Box>

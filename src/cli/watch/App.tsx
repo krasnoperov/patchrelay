@@ -2,6 +2,7 @@ import { useReducer } from "react";
 import { Box, useApp, useInput } from "ink";
 import { watchReducer, initialWatchState } from "./watch-state.ts";
 import { useWatchStream } from "./use-watch-stream.ts";
+import { useDetailStream } from "./use-detail-stream.ts";
 import { IssueListView } from "./IssueListView.tsx";
 import { IssueDetailView } from "./IssueDetailView.tsx";
 
@@ -19,6 +20,7 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
   });
 
   useWatchStream({ baseUrl, bearerToken, dispatch });
+  useDetailStream({ baseUrl, bearerToken, issueKey: state.activeDetailKey, dispatch });
 
   useInput((input, key) => {
     if (input === "q") {
@@ -51,6 +53,7 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
       ) : (
         <IssueDetailView
           issue={state.issues.find((i) => i.issueKey === state.activeDetailKey)}
+          thread={state.thread}
         />
       )}
     </Box>

@@ -400,16 +400,27 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
 
       // Stream operator feed events
       const issueFilter = getQueryParam(request, "issue");
-      const unsubscribe = service.subscribeOperatorFeed((event) => {
+      const unsubscribeFeed = service.subscribeOperatorFeed((event) => {
         if (issueFilter && event.issueKey !== issueFilter) {
           return;
         }
         writeSse("feed", event);
       });
 
+      // When filtered to a specific issue, also stream codex notifications
+      const unsubscribeCodex = issueFilter
+        ? service.subscribeCodexNotifications((event) => {
+            if (event.issueKey !== issueFilter) {
+              return;
+            }
+            writeSse("codex", { method: event.method, params: event.params });
+          })
+        : undefined;
+
       const cleanup = () => {
         clearInterval(keepAlive);
-        unsubscribe();
+        unsubscribeFeed();
+        unsubscribeCodex?.();
         if (!reply.raw.destroyed) reply.raw.end();
       };
 
