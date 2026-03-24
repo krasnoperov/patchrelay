@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.9](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.12.8...patchrelay-v0.12.9) (2026-03-24)
+
+
+### Bug Fixes
+
+* escalate Linear API failures to warn level and operator feed ([#115](https://github.com/krasnoperov/patchrelay/issues/115)) ([5d4649d](https://github.com/krasnoperov/patchrelay/commit/5d4649df95c7b322fc7db172bacbe49e4e19cc8d))
+
 ## [0.12.8](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.12.7...patchrelay-v0.12.8) (2026-03-24)
 
 
