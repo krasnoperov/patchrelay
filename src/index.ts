@@ -84,6 +84,7 @@ async function main(): Promise<void> {
       port: config.server.port,
       webhookPath: config.ingress.linearWebhookPath,
       configPath: process.env.PATCHRELAY_CONFIG,
+      secrets: config.secretSources,
     },
     "PatchRelay started",
   );

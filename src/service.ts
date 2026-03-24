@@ -117,6 +117,7 @@ export class PatchRelayService {
     // Optional GitHub App token management for bot identity
     const ghAppCredentials = resolveGitHubAppCredentials();
     if (ghAppCredentials) {
+      Object.assign(config.secretSources, ghAppCredentials.secretSources);
       this.githubAppTokenManager = createGitHubAppTokenManager(ghAppCredentials, logger);
     }
 

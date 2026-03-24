@@ -245,25 +245,31 @@ export class RunOrchestrator {
 
       // Reuse the existing thread only for review_fix (reviewer context matters).
       // Implementation, ci_repair, and queue_repair get fresh threads.
-      // Fall back to a fresh thread if the stored one is stale (e.g. after app-server restart).
       if (issue.threadId && runType === "review_fix") {
-        try {
-          await this.codex.readThread(issue.threadId, false);
-          threadId = issue.threadId;
-        } catch {
-          this.logger.info({ issueKey: issue.issueKey, staleThreadId: issue.threadId }, "Stored thread is stale, starting fresh for review_fix");
-          const thread = await this.codex.startThread({ cwd: worktreePath });
-          threadId = thread.id;
-          this.db.upsertIssue({ projectId: item.projectId, linearIssueId: item.issueId, threadId });
-        }
+        threadId = issue.threadId;
       } else {
         const thread = await this.codex.startThread({ cwd: worktreePath });
         threadId = thread.id;
         this.db.upsertIssue({ projectId: item.projectId, linearIssueId: item.issueId, threadId });
       }
 
-      const turn = await this.codex.startTurn({ threadId, cwd: worktreePath, input: prompt });
-      turnId = turn.turnId;
+      try {
+        const turn = await this.codex.startTurn({ threadId, cwd: worktreePath, input: prompt });
+        turnId = turn.turnId;
+      } catch (turnError) {
+        // If the thread is stale (e.g. after app-server restart), start fresh and retry once.
+        const msg = turnError instanceof Error ? turnError.message : String(turnError);
+        if (msg.includes("thread not found") || msg.includes("not materialized")) {
+          this.logger.info({ issueKey: issue.issueKey, staleThreadId: threadId }, "Thread is stale, retrying with fresh thread");
+          const thread = await this.codex.startThread({ cwd: worktreePath });
+          threadId = thread.id;
+          this.db.upsertIssue({ projectId: item.projectId, linearIssueId: item.issueId, threadId });
+          const turn = await this.codex.startTurn({ threadId, cwd: worktreePath, input: prompt });
+          turnId = turn.turnId;
+        } else {
+          throw turnError;
+        }
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.db.finishRun(run.id, { status: "failed", failureReason: message });
