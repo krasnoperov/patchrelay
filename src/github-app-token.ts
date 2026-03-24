@@ -2,7 +2,7 @@ import { createSign } from "node:crypto";
 import { writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Logger } from "pino";
-import { resolveSecret, resolveSecretWithSource, type SecretSource } from "./resolve-secret.ts";
+import { resolveSecretWithSource, type SecretSource } from "./resolve-secret.ts";
 import { getPatchRelayDataDir } from "./runtime-paths.ts";
 
 const TOKEN_REFRESH_MS = 30 * 60_000; // 30 minutes (tokens last 1 hour)

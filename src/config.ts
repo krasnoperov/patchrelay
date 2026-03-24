@@ -11,7 +11,7 @@ import {
   getDefaultServiceEnvPath,
   getPatchRelayDataDir,
 } from "./runtime-paths.ts";
-import { resolveSecret, resolveSecretWithSource, type SecretSource } from "./resolve-secret.ts";
+import { resolveSecretWithSource } from "./resolve-secret.ts";
 import { ensureAbsolutePath } from "./utils.ts";
 
 const LINEAR_OAUTH_CALLBACK_PATH = "/oauth/linear/callback";
