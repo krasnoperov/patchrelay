@@ -90,15 +90,16 @@ async function main(): Promise<void> {
   );
 
   const shutdown = async (): Promise<void> => {
-    service.stop();
+    await service.stop();
     await app.close();
   };
-  process.once("SIGINT", () => {
-    void shutdown();
-  });
-  process.once("SIGTERM", () => {
-    void shutdown();
-  });
+  const onSignal = (signal: string) => {
+    shutdown().catch((error) => {
+      logger.error({ signal, error: error instanceof Error ? error.message : String(error) }, "Shutdown error");
+    }).finally(() => { process.exitCode ??= 0; });
+  };
+  process.once("SIGINT", () => onSignal("SIGINT"));
+  process.once("SIGTERM", () => onSignal("SIGTERM"));
 }
 
 main().catch((error) => {

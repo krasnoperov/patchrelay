@@ -362,6 +362,12 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
         writeEvent(event);
       }
 
+      const cleanup = () => {
+        clearInterval(keepAlive);
+        unsubscribe();
+        if (!reply.raw.destroyed) reply.raw.end();
+      };
+
       const unsubscribe = service.subscribeOperatorFeed((event) => {
         if (!matchesOperatorFeedEvent(event, feedQuery)) {
           return;
@@ -372,11 +378,8 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
         reply.raw.write(": keepalive\n\n");
       }, 15000);
 
-      request.raw.on("close", () => {
-        clearInterval(keepAlive);
-        unsubscribe();
-        reply.raw.end();
-      });
+      reply.raw.on("error", cleanup);
+      request.raw.on("close", cleanup);
     });
 
     app.get("/api/installations", async (_request, reply) => {

@@ -75,10 +75,10 @@ export class ServiceRuntime {
     }
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     this.ready = false;
     this.clearBackgroundReconcile();
-    void this.codex.stop();
+    await this.codex.stop();
   }
 
   enqueueWebhookEvent(eventId: number, options?: { priority?: boolean }): void {

@@ -283,7 +283,8 @@ export class WebhookHandler {
           status: "delivered",
           summary: `Delivered follow-up prompt to active ${activeRun.runType} workflow`,
         });
-      } catch {
+      } catch (error) {
+        this.logger.warn({ issueKey: trackedIssue?.issueKey, error: error instanceof Error ? error.message : String(error) }, "Failed to deliver follow-up prompt");
         this.feed?.publish({
           level: "warn",
           kind: "agent",
@@ -349,7 +350,8 @@ export class WebhookHandler {
         status: "delivered",
         summary: `Delivered follow-up comment to active ${run.runType} workflow`,
       });
-    } catch {
+    } catch (error) {
+      this.logger.warn({ issueKey: trackedIssue?.issueKey, error: error instanceof Error ? error.message : String(error) }, "Failed to deliver follow-up comment");
       this.feed?.publish({
         level: "warn",
         kind: "comment",
