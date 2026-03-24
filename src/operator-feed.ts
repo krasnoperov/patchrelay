@@ -1,6 +1,6 @@
 
 export type OperatorFeedEventLevel = "info" | "warn" | "error";
-export type OperatorFeedEventKind = "service" | "webhook" | "agent" | "comment" | "stage" | "turn" | "workflow" | "hook" | "github";
+export type OperatorFeedEventKind = "service" | "webhook" | "agent" | "comment" | "stage" | "turn" | "workflow" | "hook" | "github" | "linear";
 
 export interface OperatorFeedQuery {
   limit?: number;
