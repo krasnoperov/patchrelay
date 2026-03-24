@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.8](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.12.7...patchrelay-v0.12.8) (2026-03-24)
+
+
+### Bug Fixes
+
+* graceful shutdown and idle issue self-healing ([#113](https://github.com/krasnoperov/patchrelay/issues/113)) ([8864f75](https://github.com/krasnoperov/patchrelay/commit/8864f75f69db517d396b96fb64398dab423aa0f7))
+
 ## [0.12.7](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.12.6...patchrelay-v0.12.7) (2026-03-24)
 
 
