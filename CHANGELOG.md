@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.11.0...patchrelay-v0.12.0) (2026-03-24)
+
+
+### Features
+
+* GitHub App bot identity and provider-agnostic secrets ([#95](https://github.com/krasnoperov/patchrelay/issues/95)) ([#95](https://github.com/krasnoperov/patchrelay/issues/95)) ([a8fcbb0](https://github.com/krasnoperov/patchrelay/commit/a8fcbb0df5b6125aa433d5d7b6a57613fe13a864))
+
 ## [0.11.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.10.7...patchrelay-v0.11.0) (2026-03-23)
 
 
