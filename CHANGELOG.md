@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.2](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.12.1...patchrelay-v0.12.2) (2026-03-24)
+
+
+### Bug Fixes
+
+* retry with fresh thread on stale thread during startTurn ([#99](https://github.com/krasnoperov/patchrelay/issues/99)) ([a9375bf](https://github.com/krasnoperov/patchrelay/commit/a9375bf47cd5c09a5015fc3bfedbec16025e7825))
+
 ## [0.12.1](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.12.0...patchrelay-v0.12.1) (2026-03-24)
 
 
