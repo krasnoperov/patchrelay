@@ -93,12 +93,13 @@ async function main(): Promise<void> {
     await service.stop();
     await app.close();
   };
-  process.once("SIGINT", () => {
-    shutdown().catch(() => {}).finally(() => { process.exitCode ??= 0; });
-  });
-  process.once("SIGTERM", () => {
-    shutdown().catch(() => {}).finally(() => { process.exitCode ??= 0; });
-  });
+  const onSignal = (signal: string) => {
+    shutdown().catch((error) => {
+      logger.error({ signal, error: error instanceof Error ? error.message : String(error) }, "Shutdown error");
+    }).finally(() => { process.exitCode ??= 0; });
+  };
+  process.once("SIGINT", () => onSignal("SIGINT"));
+  process.once("SIGTERM", () => onSignal("SIGTERM"));
 }
 
 main().catch((error) => {

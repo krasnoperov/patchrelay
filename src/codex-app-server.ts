@@ -102,6 +102,16 @@ export class CodexAppServerClient extends EventEmitter {
       stdio: ["pipe", "pipe", "pipe"],
     }) as ChildProcessWithoutNullStreams;
 
+    this.child.stdin.on("error", (error) => {
+      this.logger.error({ error: sanitizeDiagnosticText(error.message) }, "Codex app-server stdin error");
+    });
+    this.child.stdout.on("error", (error) => {
+      this.logger.error({ error: sanitizeDiagnosticText(error.message) }, "Codex app-server stdout error");
+    });
+    this.child.stderr.on("error", (error) => {
+      this.logger.error({ error: sanitizeDiagnosticText(error.message) }, "Codex app-server stderr error");
+    });
+
     this.child.stderr.on("data", (chunk) => {
       const line = chunk.toString().trim();
       if (line) {
@@ -138,6 +148,13 @@ export class CodexAppServerClient extends EventEmitter {
 
     this.child.stdout.on("data", (chunk) => {
       this.stdoutBuffer += chunk.toString("utf8");
+      if (this.stdoutBuffer.length > 50 * 1024 * 1024) {
+        this.logger.error({ bufferSize: this.stdoutBuffer.length }, "Codex app-server stdout buffer exceeded 50 MB — killing process");
+        this.stdoutBuffer = "";
+        this.rejectAllPending(new Error("Codex app-server stdout buffer overflow"));
+        this.child?.kill("SIGTERM");
+        return;
+      }
       this.drainMessages();
     });
 
