@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.3](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.12.2...patchrelay-v0.12.3) (2026-03-24)
+
+
+### Bug Fixes
+
+* review_approved from changes_requested transitions to awaiting_queue ([#101](https://github.com/krasnoperov/patchrelay/issues/101)) ([fd91252](https://github.com/krasnoperov/patchrelay/commit/fd912527d4a060990078ef9ea93acc2bb094e58c))
+
 ## [0.12.2](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.12.1...patchrelay-v0.12.2) (2026-03-24)
 
 
