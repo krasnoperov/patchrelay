@@ -1,4 +1,5 @@
-import type { RunRecord } from "./db-types.ts";
+import type { IssueRecord, RunRecord } from "./db-types.ts";
+import type { FactoryState, RunType } from "./factory-state.ts";
 
 export type AgentSessionPlanStatus = "pending" | "inProgress" | "completed" | "canceled";
 
@@ -19,32 +20,211 @@ function titleCase(value: string): string {
     .join(" ");
 }
 
-function buildPlan(runType: string, statuses: [AgentSessionPlanStatus, AgentSessionPlanStatus, AgentSessionPlanStatus]) {
-  const label = titleCase(formatRunLabel(runType));
+export function formatRunTypeLabel(runType: string): string {
+  return titleCase(formatRunLabel(runType));
+}
+
+function implementationPlan(): AgentSessionPlanStep[] {
   return [
-    { content: "Prepare workspace", status: statuses[0] },
-    { content: `Run ${label}`, status: statuses[1] },
-    { content: "Review outcome", status: statuses[2] },
-  ] satisfies AgentSessionPlanStep[];
+    { content: "Prepare workspace", status: "pending" },
+    { content: "Implement or update branch", status: "pending" },
+    { content: "Await review", status: "pending" },
+    { content: "Land change", status: "pending" },
+  ];
+}
+
+function reviewFixPlan(): AgentSessionPlanStep[] {
+  return [
+    { content: "Prepare workspace", status: "completed" },
+    { content: "Address review feedback", status: "pending" },
+    { content: "Await re-review", status: "pending" },
+    { content: "Land change", status: "pending" },
+  ];
+}
+
+function ciRepairPlan(attempt: number): AgentSessionPlanStep[] {
+  return [
+    { content: "Prepare workspace", status: "completed" },
+    { content: "Implement or update branch", status: "completed" },
+    { content: `Repair failing checks (${attemptLabel(attempt)})`, status: "pending" },
+    { content: "Return to merge flow", status: "pending" },
+  ];
+}
+
+function queueRepairPlan(attempt: number): AgentSessionPlanStep[] {
+  return [
+    { content: "Prepare workspace", status: "completed" },
+    { content: "Implement or update branch", status: "completed" },
+    { content: "Review approved", status: "completed" },
+    { content: `Repair merge queue (${attemptLabel(attempt)})`, status: "pending" },
+  ];
+}
+
+function awaitingInputPlan(): AgentSessionPlanStep[] {
+  return [
+    { content: "Prepare workspace", status: "completed" },
+    { content: "Implement or update branch", status: "completed" },
+    { content: "Review approved", status: "completed" },
+    { content: "Waiting for guidance", status: "inProgress" },
+  ];
+}
+
+function failedPlan(label: string): AgentSessionPlanStep[] {
+  return [
+    { content: "Prepare workspace", status: "completed" },
+    { content: "Implement or update branch", status: "completed" },
+    { content: "Review approved", status: "completed" },
+    { content: label, status: "inProgress" },
+  ];
+}
+
+function attemptLabel(attempt: number): string {
+  const safeAttempt = Math.max(1, attempt);
+  return `attempt ${safeAttempt}`;
+}
+
+function setStatuses(
+  plan: AgentSessionPlanStep[],
+  statuses: [AgentSessionPlanStatus, AgentSessionPlanStatus, AgentSessionPlanStatus, AgentSessionPlanStatus],
+): AgentSessionPlanStep[] {
+  return plan.map((step, index) => ({ ...step, status: statuses[index] ?? step.status }));
+}
+
+function resolvePlanRunType(params: {
+  factoryState: FactoryState;
+  activeRunType?: RunType;
+  pendingRunType?: RunType;
+}): RunType {
+  if (params.activeRunType) {
+    return params.activeRunType;
+  }
+  if (params.pendingRunType) {
+    return params.pendingRunType;
+  }
+  switch (params.factoryState) {
+    case "changes_requested":
+      return "review_fix";
+    case "repairing_ci":
+      return "ci_repair";
+    case "repairing_queue":
+      return "queue_repair";
+    default:
+      return "implementation";
+  }
+}
+
+export function buildAgentSessionPlan(params: {
+  factoryState: FactoryState;
+  activeRunType?: RunType;
+  pendingRunType?: RunType;
+  ciRepairAttempts?: number;
+  queueRepairAttempts?: number;
+}): AgentSessionPlanStep[] {
+  const runType = resolvePlanRunType(params);
+
+  switch (params.factoryState) {
+    case "delegated":
+    case "preparing":
+      return setStatuses(planForRunType(runType, params), ["inProgress", "pending", "pending", "pending"]);
+    case "implementing":
+      return setStatuses(planForRunType("implementation", params), ["completed", "inProgress", "pending", "pending"]);
+    case "pr_open":
+    case "awaiting_review":
+      return setStatuses(implementationPlan(), ["completed", "completed", "inProgress", "pending"]);
+    case "changes_requested":
+      return setStatuses(reviewFixPlan(), ["completed", "inProgress", "pending", "pending"]);
+    case "repairing_ci":
+      return setStatuses(ciRepairPlan(params.ciRepairAttempts ?? 1), ["completed", "completed", "inProgress", "pending"]);
+    case "awaiting_queue":
+      return setStatuses([
+        { content: "Prepare workspace", status: "completed" },
+        { content: "Implement or update branch", status: "completed" },
+        { content: "Review approved", status: "completed" },
+        { content: "Queued for merge", status: "inProgress" },
+      ], ["completed", "completed", "completed", "inProgress"]);
+    case "repairing_queue":
+      return setStatuses(queueRepairPlan(params.queueRepairAttempts ?? 1), ["completed", "completed", "completed", "inProgress"]);
+    case "awaiting_input":
+      return awaitingInputPlan();
+    case "escalated":
+      return failedPlan("Needs human help");
+    case "failed":
+      return failedPlan("Recovery needed");
+    case "done":
+      return setStatuses([
+        { content: "Prepare workspace", status: "completed" },
+        { content: "Implement or update branch", status: "completed" },
+        { content: "Review approved", status: "completed" },
+        { content: "Merged", status: "completed" },
+      ], ["completed", "completed", "completed", "completed"]);
+  }
+}
+
+function planForRunType(
+  runType: RunType,
+  params: {
+    ciRepairAttempts?: number;
+    queueRepairAttempts?: number;
+  },
+): AgentSessionPlanStep[] {
+  switch (runType) {
+    case "review_fix":
+      return reviewFixPlan();
+    case "ci_repair":
+      return ciRepairPlan(params.ciRepairAttempts ?? 1);
+    case "queue_repair":
+      return queueRepairPlan(params.queueRepairAttempts ?? 1);
+    case "implementation":
+    default:
+      return implementationPlan();
+  }
+}
+
+export function buildAgentSessionPlanForIssue(
+  issue: Pick<IssueRecord, "factoryState" | "pendingRunType" | "ciRepairAttempts" | "queueRepairAttempts">,
+  options?: { activeRunType?: RunType },
+): AgentSessionPlanStep[] {
+  return buildAgentSessionPlan({
+    factoryState: issue.factoryState,
+    ciRepairAttempts: issue.ciRepairAttempts,
+    queueRepairAttempts: issue.queueRepairAttempts,
+    ...(issue.pendingRunType ? { pendingRunType: issue.pendingRunType } : {}),
+    ...(options?.activeRunType ? { activeRunType: options.activeRunType } : {}),
+  });
 }
 
 export function buildPreparingSessionPlan(runType: string): AgentSessionPlanStep[] {
-  return buildPlan(runType, ["inProgress", "pending", "pending"]);
+  return buildAgentSessionPlan({
+    factoryState: "preparing",
+    pendingRunType: runType as RunType,
+  });
 }
 
 export function buildRunningSessionPlan(runType: string): AgentSessionPlanStep[] {
-  return buildPlan(runType, ["completed", "inProgress", "pending"]);
+  return buildAgentSessionPlan({
+    factoryState: runType === "ci_repair" ? "repairing_ci"
+      : runType === "review_fix" ? "changes_requested"
+      : runType === "queue_repair" ? "repairing_queue"
+      : "implementing",
+    activeRunType: runType as RunType,
+  });
 }
 
 export function buildCompletedSessionPlan(runType: string): AgentSessionPlanStep[] {
-  return buildPlan(runType, ["completed", "completed", "completed"]);
+  if (runType === "ci_repair" || runType === "queue_repair") {
+    return buildAgentSessionPlan({ factoryState: "awaiting_queue" });
+  }
+  return buildAgentSessionPlan({ factoryState: "awaiting_review" });
 }
 
 export function buildAwaitingHandoffSessionPlan(runType: string): AgentSessionPlanStep[] {
-  return buildPlan(runType, ["completed", "completed", "inProgress"]);
+  return buildCompletedSessionPlan(runType);
 }
 
 export function buildFailedSessionPlan(runType: string, run?: Pick<RunRecord, "threadId" | "turnId">): AgentSessionPlanStep[] {
-  const workflowStepStatus: AgentSessionPlanStatus = run?.threadId || run?.turnId ? "completed" : "inProgress";
-  return buildPlan(runType, ["completed", workflowStepStatus, "pending"]);
+  void run;
+  return buildAgentSessionPlan({
+    factoryState: "failed",
+    activeRunType: runType as RunType,
+  });
 }

@@ -93,9 +93,11 @@ PatchRelay must:
 1. support Linear OAuth installation for an app-backed agent identity
 2. verify webhook signatures and timestamp freshness
 3. respond to delegated issues and follow-up prompts
-4. emit Linear activities using `thought`, `elicitation`, `response`, and `error`
-5. publish and replace structured session plans
-6. attach external links for run dashboards and pull requests
+4. emit Linear activities using `thought`, `action`, `elicitation`, `response`, and `error`
+5. acknowledge new agent sessions quickly with an immediate in-flight signal
+6. publish and replace structured session plans that reflect the current lifecycle stage
+7. attach external links for the PatchRelay status view and pull requests
+8. keep Linear updates high-signal by surfacing progress, blockers, and next state without dumping raw trace detail
 
 ### Worktree And Runtime Management
 
@@ -134,6 +136,7 @@ PatchRelay must make it easy to answer:
 - what the current plan is
 - what the last successful and failing runs did
 - why a repair loop escalated
+- what the agent is doing right now at a glance, with deeper status available through the session link
 
 ## Product Principles
 
