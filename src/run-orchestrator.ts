@@ -653,10 +653,16 @@ export class RunOrchestrator {
         ...(options?.ephemeral ? { ephemeral: true } : {}),
       });
     } catch (error) {
-      this.logger.debug(
-        { issueKey: issue.issueKey, type, error: error instanceof Error ? error.message : String(error) },
-        "Failed to emit Linear activity (non-blocking)",
-      );
+      const msg = error instanceof Error ? error.message : String(error);
+      this.logger.warn({ issueKey: issue.issueKey, type, error: msg }, "Failed to emit Linear activity");
+      this.feed?.publish({
+        level: "warn",
+        kind: "linear",
+        issueKey: issue.issueKey,
+        projectId: issue.projectId,
+        status: "linear_error",
+        summary: `Linear activity failed: ${msg}`,
+      });
     }
   }
 
@@ -667,10 +673,8 @@ export class RunOrchestrator {
       if (!linear?.updateAgentSession) return;
       await linear.updateAgentSession({ agentSessionId: issue.agentSessionId, plan });
     } catch (error) {
-      this.logger.debug(
-        { issueKey: issue.issueKey, error: error instanceof Error ? error.message : String(error) },
-        "Failed to update Linear plan (non-blocking)",
-      );
+      const msg = error instanceof Error ? error.message : String(error);
+      this.logger.warn({ issueKey: issue.issueKey, error: msg }, "Failed to update Linear plan");
     }
   }
 

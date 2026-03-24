@@ -297,8 +297,17 @@ export class GitHubWebhookHandler {
         agentSessionId: issue.agentSessionId,
         content: { type, body },
       });
-    } catch {
-      // Non-blocking — don't crash the webhook handler for a Linear activity error
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      this.logger.warn({ issueKey: issue.issueKey, newState, error: msg }, "Failed to emit Linear activity from GitHub webhook");
+      this.feed?.publish({
+        level: "warn",
+        kind: "linear",
+        issueKey: issue.issueKey,
+        projectId: issue.projectId,
+        status: "linear_error",
+        summary: `Linear activity failed: ${msg}`,
+      });
     }
   }
 }
