@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.6](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.12.5...patchrelay-v0.12.6) (2026-03-24)
+
+
+### Bug Fixes
+
+* crash-proof Linear auth and add connectivity to readiness probe ([#109](https://github.com/krasnoperov/patchrelay/issues/109)) ([23a323d](https://github.com/krasnoperov/patchrelay/commit/23a323d02a25da58a417fcb1a0663266f044f5fc))
+
 ## [0.12.5](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.12.4...patchrelay-v0.12.5) (2026-03-24)
 
 
