@@ -245,8 +245,17 @@ export class RunOrchestrator {
 
       // Reuse the existing thread only for review_fix (reviewer context matters).
       // Implementation, ci_repair, and queue_repair get fresh threads.
+      // Fall back to a fresh thread if the stored one is stale (e.g. after app-server restart).
       if (issue.threadId && runType === "review_fix") {
-        threadId = issue.threadId;
+        try {
+          await this.codex.readThread(issue.threadId, false);
+          threadId = issue.threadId;
+        } catch {
+          this.logger.info({ issueKey: issue.issueKey, staleThreadId: issue.threadId }, "Stored thread is stale, starting fresh for review_fix");
+          const thread = await this.codex.startThread({ cwd: worktreePath });
+          threadId = thread.id;
+          this.db.upsertIssue({ projectId: item.projectId, linearIssueId: item.issueId, threadId });
+        }
       } else {
         const thread = await this.codex.startThread({ cwd: worktreePath });
         threadId = thread.id;

@@ -39,11 +39,11 @@ export const ALLOWED_TRANSITIONS: Readonly<Record<FactoryState, readonly Factory
   delegated: ["preparing", "failed"],
   preparing: ["implementing", "failed"],
   implementing: ["pr_open", "awaiting_input", "failed", "escalated"],
-  pr_open: ["awaiting_review", "repairing_ci", "failed"],
+  pr_open: ["awaiting_review", "awaiting_queue", "changes_requested", "repairing_ci", "failed"],
   awaiting_review: ["changes_requested", "awaiting_queue", "repairing_ci"],
   changes_requested: ["implementing", "awaiting_input", "escalated"],
   repairing_ci: ["pr_open", "awaiting_review", "escalated", "failed"],
-  awaiting_queue: ["done", "repairing_queue", "repairing_ci"],
+  awaiting_queue: ["done", "repairing_queue", "repairing_ci", "changes_requested"],
   repairing_queue: ["pr_open", "awaiting_review", "awaiting_queue", "escalated", "failed"],
   awaiting_input: ["implementing", "delegated", "escalated"],
   escalated: [],
@@ -63,7 +63,9 @@ export function resolveFactoryStateFromGitHub(
     case "review_approved":
       return current === "awaiting_review" || current === "pr_open" ? "awaiting_queue" : undefined;
     case "review_changes_requested":
-      return current === "awaiting_review" || current === "pr_open" ? "changes_requested" : undefined;
+      return current === "awaiting_review" || current === "pr_open" || current === "awaiting_queue"
+        ? "changes_requested"
+        : undefined;
     case "review_commented":
       return undefined; // informational only
     case "check_passed":
