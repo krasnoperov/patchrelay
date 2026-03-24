@@ -438,6 +438,62 @@ export class RunOrchestrator {
     for (const run of this.db.listRunningRuns()) {
       await this.reconcileRun(run);
     }
+    // Advance issues stuck in pr_open whose stored PR metadata already
+    // shows they should transition (e.g. approved PR, missed webhook).
+    await this.reconcileIdlePrOpenIssues();
+  }
+
+  private async reconcileIdlePrOpenIssues(): Promise<void> {
+    for (const issue of this.db.listIdlePrOpenIssues()) {
+      if (issue.prState === "merged") {
+        this.advanceIdleIssue(issue, "done");
+        continue;
+      }
+      if (issue.prReviewState === "approved") {
+        this.advanceIdleIssue(issue, "awaiting_queue");
+        continue;
+      }
+      // Stored metadata may be stale (missed webhooks during downtime).
+      // Query GitHub for the actual PR review state.
+      const project = this.config.projects.find((p) => p.id === issue.projectId);
+      if (!project?.github?.repoFullName || !issue.prNumber) continue;
+      try {
+        const { stdout } = await execCommand("gh", [
+          "pr", "view", String(issue.prNumber),
+          "--repo", project.github.repoFullName,
+          "--json", "state,reviewDecision",
+        ], { timeoutMs: 10_000 });
+        const pr = JSON.parse(stdout) as { state?: string; reviewDecision?: string };
+        if (pr.state === "MERGED") {
+          this.db.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, prState: "merged" });
+          this.advanceIdleIssue(issue, "done");
+        } else if (pr.reviewDecision === "APPROVED") {
+          this.db.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, prReviewState: "approved" });
+          this.advanceIdleIssue(issue, "awaiting_queue");
+        }
+      } catch (error) {
+        this.logger.debug(
+          { issueKey: issue.issueKey, error: error instanceof Error ? error.message : String(error) },
+          "Failed to query GitHub PR state during reconciliation",
+        );
+      }
+    }
+  }
+
+  private advanceIdleIssue(issue: IssueRecord, newState: FactoryState): void {
+    this.logger.info(
+      { issueKey: issue.issueKey, from: issue.factoryState, to: newState },
+      "Reconciliation: advancing idle issue from stored PR metadata",
+    );
+    this.db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      factoryState: newState,
+      ...(newState === "awaiting_queue" ? { pendingMergePrep: true } : {}),
+    });
+    if (newState === "awaiting_queue") {
+      this.enqueueIssue(issue.projectId, issue.linearIssueId);
+    }
   }
 
   private async reconcileRun(run: RunRecord): Promise<void> {
