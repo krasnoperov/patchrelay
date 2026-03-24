@@ -11,7 +11,7 @@ import {
   getDefaultServiceEnvPath,
   getPatchRelayDataDir,
 } from "./runtime-paths.ts";
-import { resolveSecret } from "./resolve-secret.ts";
+import { resolveSecret, resolveSecretWithSource, type SecretSource } from "./resolve-secret.ts";
 import { ensureAbsolutePath } from "./utils.ts";
 
 const LINEAR_OAUTH_CALLBACK_PATH = "/oauth/linear/callback";
@@ -358,13 +358,18 @@ export function loadConfig(
   const parsed = configSchema.parse(withSectionDefaults(expandEnv(parsedFile, env)));
 
   const requirements = getLoadProfileRequirements(profile);
-  const webhookSecret = resolveSecret("linear-webhook-secret", parsed.linear.webhook_secret_env, env);
-  const tokenEncryptionKey = resolveSecret("token-encryption-key", parsed.linear.token_encryption_key_env, env);
-  const oauthClientId = resolveSecret("linear-oauth-client-id", parsed.linear.oauth.client_id_env, env);
-  const oauthClientSecret = resolveSecret("linear-oauth-client-secret", parsed.linear.oauth.client_secret_env, env);
-  const operatorApiToken = parsed.operator_api.bearer_token_env
-    ? resolveSecret("operator-api-token", parsed.operator_api.bearer_token_env, env)
+  const rWebhookSecret = resolveSecretWithSource("linear-webhook-secret", parsed.linear.webhook_secret_env, env);
+  const rTokenEncryptionKey = resolveSecretWithSource("token-encryption-key", parsed.linear.token_encryption_key_env, env);
+  const rOAuthClientId = resolveSecretWithSource("linear-oauth-client-id", parsed.linear.oauth.client_id_env, env);
+  const rOAuthClientSecret = resolveSecretWithSource("linear-oauth-client-secret", parsed.linear.oauth.client_secret_env, env);
+  const rOperatorApiToken = parsed.operator_api.bearer_token_env
+    ? resolveSecretWithSource("operator-api-token", parsed.operator_api.bearer_token_env, env)
     : undefined;
+  const webhookSecret = rWebhookSecret.value;
+  const tokenEncryptionKey = rTokenEncryptionKey.value;
+  const oauthClientId = rOAuthClientId.value;
+  const oauthClientSecret = rOAuthClientSecret.value;
+  const operatorApiToken = rOperatorApiToken?.value;
   if (requirements.requireWebhookSecret && !webhookSecret) {
     throw new Error(`Missing env var ${parsed.linear.webhook_secret_env}`);
   }
@@ -477,6 +482,13 @@ export function loadConfig(
         } : {}),
       };
     }),
+    secretSources: {
+      "linear-webhook-secret": rWebhookSecret.source,
+      "token-encryption-key": rTokenEncryptionKey.source,
+      "linear-oauth-client-id": rOAuthClientId.source,
+      "linear-oauth-client-secret": rOAuthClientSecret.source,
+      ...(rOperatorApiToken ? { "operator-api-token": rOperatorApiToken.source } : {}),
+    },
   };
 
   validateConfigSemantics(config, {

@@ -2,7 +2,7 @@ import { createSign } from "node:crypto";
 import { writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Logger } from "pino";
-import { resolveSecret } from "./resolve-secret.ts";
+import { resolveSecret, resolveSecretWithSource, type SecretSource } from "./resolve-secret.ts";
 import { getPatchRelayDataDir } from "./runtime-paths.ts";
 
 const TOKEN_REFRESH_MS = 30 * 60_000; // 30 minutes (tokens last 1 hour)
@@ -38,15 +38,20 @@ export interface GitHubAppTokenManager {
  *   2. `$PATCHRELAY_GITHUB_APP_PRIVATE_KEY_FILE` (explicit file path)
  *   3. `$PATCHRELAY_GITHUB_APP_PRIVATE_KEY`      (direct env var)
  */
-export function resolveGitHubAppCredentials(): GitHubAppCredentials | undefined {
+export function resolveGitHubAppCredentials(): (GitHubAppCredentials & { secretSources: Record<string, SecretSource> }) | undefined {
   const appId = process.env.PATCHRELAY_GITHUB_APP_ID;
-  const privateKey = resolveSecret("github-app-pem", "PATCHRELAY_GITHUB_APP_PRIVATE_KEY");
-  if (!appId || !privateKey) return undefined;
+  const rPrivateKey = resolveSecretWithSource("github-app-pem", "PATCHRELAY_GITHUB_APP_PRIVATE_KEY");
+  const rWebhookSecret = resolveSecretWithSource("github-app-webhook-secret", "GITHUB_APP_WEBHOOK_SECRET");
+  if (!appId || !rPrivateKey.value) return undefined;
   const installationId = process.env.PATCHRELAY_GITHUB_APP_INSTALLATION_ID;
   return {
     appId,
-    privateKey,
+    privateKey: rPrivateKey.value,
     ...(installationId ? { installationId } : {}),
+    secretSources: {
+      "github-app-pem": rPrivateKey.source,
+      ...(rWebhookSecret.value ? { "github-app-webhook-secret": rWebhookSecret.source } : {}),
+    },
   };
 }
 

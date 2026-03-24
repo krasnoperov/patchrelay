@@ -78,6 +78,7 @@ function createConfig(baseDir: string): AppConfig {
         branchPrefix: "use",
       },
     ],
+    secretSources: {},
   };
 }
 

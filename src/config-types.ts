@@ -1,3 +1,4 @@
+import type { SecretSource } from "./resolve-secret.ts";
 import type { ProjectConfig } from "./workflow-types.ts";
 
 export interface CodexAppServerConfig {
@@ -60,4 +61,6 @@ export interface AppConfig {
     codex: CodexAppServerConfig;
   };
   projects: ProjectConfig[];
+  /** How each secret was resolved — for startup diagnostics. */
+  secretSources: Record<string, SecretSource>;
 }

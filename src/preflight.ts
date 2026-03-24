@@ -2,6 +2,7 @@ import { accessSync, constants, existsSync, mkdirSync, statSync } from "node:fs"
 import path from "node:path";
 import { runPatchRelayMigrations } from "./db/migrations.ts";
 import { SqliteConnection } from "./db/shared.ts";
+import { resolveSecret } from "./resolve-secret.ts";
 import type { AppConfig } from "./types.ts";
 import { execCommand } from "./utils.ts";
 
@@ -16,7 +17,8 @@ export interface PreflightReport {
   ok: boolean;
 }
 
-export async function runPreflight(config: AppConfig): Promise<PreflightReport> {
+export async function runPreflight(config: AppConfig, options?: { connectivity?: boolean }): Promise<PreflightReport> {
+  const connectivity = options?.connectivity ?? true;
   const checks: PreflightCheck[] = [];
 
   if (!config.linear.webhookSecret) {
@@ -114,10 +116,80 @@ export async function runPreflight(config: AppConfig): Promise<PreflightReport> 
   checks.push(await checkExecutable("git", config.runner.gitBin));
   checks.push(await checkExecutable("codex", config.runner.codex.bin));
 
+  // Connectivity checks — verify secrets actually work against live APIs.
+  // Skipped when graphqlUrl uses a non-routable domain (.example, .test, .invalid).
+  const skipConnectivity = !connectivity || isNonRoutableDomain(config.linear.graphqlUrl);
+  if (!skipConnectivity) {
+    if (config.linear.oauth.clientId && config.linear.oauth.clientSecret) {
+      checks.push(await checkLinearApi(config.linear.graphqlUrl));
+    }
+
+    const ghAppId = process.env.PATCHRELAY_GITHUB_APP_ID;
+    const ghAppKey = resolveSecret("github-app-pem", "PATCHRELAY_GITHUB_APP_PRIVATE_KEY");
+    if (ghAppId && ghAppKey) {
+      checks.push(await checkGitHubApp(ghAppId, ghAppKey));
+    }
+  }
+
   return {
     checks,
     ok: checks.every((check) => check.status !== "fail"),
   };
+}
+
+async function checkLinearApi(graphqlUrl: string): Promise<PreflightCheck> {
+  try {
+    const response = await fetch(graphqlUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: "{ __typename }" }),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (response.ok) {
+      return pass("linear_api", `Linear GraphQL API is reachable at ${graphqlUrl}`);
+    }
+    return warn("linear_api", `Linear GraphQL API returned ${response.status} — may be unreachable or rate-limited`);
+  } catch (error) {
+    return fail("linear_api", `Linear GraphQL API is unreachable at ${graphqlUrl}: ${formatError(error)}`);
+  }
+}
+
+async function checkGitHubApp(appId: string, privateKey: string): Promise<PreflightCheck> {
+  try {
+    const { createSign } = await import("node:crypto");
+    const now = Math.floor(Date.now() / 1000);
+    const header = Buffer.from(JSON.stringify({ alg: "RS256", typ: "JWT" })).toString("base64url");
+    const payload = Buffer.from(JSON.stringify({ iat: now - 60, exp: now + 120, iss: appId })).toString("base64url");
+    const signer = createSign("RSA-SHA256");
+    signer.update(`${header}.${payload}`);
+    let signature: string;
+    try {
+      signature = signer.sign(privateKey, "base64url");
+    } catch (error) {
+      return fail("github_app", `GitHub App private key is invalid: ${formatError(error)}`);
+    }
+    const jwt = `${header}.${payload}.${signature}`;
+
+    const response = await fetch("https://api.github.com/app", {
+      headers: {
+        Authorization: `Bearer ${jwt}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (response.ok) {
+      const app = await response.json() as { slug?: string; name?: string };
+      const label = app.slug ?? app.name ?? appId;
+      return pass("github_app", `GitHub App authenticated as "${label}"`);
+    }
+    if (response.status === 401) {
+      return fail("github_app", "GitHub App authentication failed — check APP_ID and private key");
+    }
+    return warn("github_app", `GitHub App API returned ${response.status}`);
+  } catch (error) {
+    return fail("github_app", `GitHub API is unreachable: ${formatError(error)}`);
+  }
 }
 
 function checkDatabaseHealth(config: AppConfig): PreflightCheck[] {
@@ -296,6 +368,15 @@ function checkOAuthRedirectUri(config: AppConfig): PreflightCheck[] {
 
 function isLoopbackHost(host: string): boolean {
   return host === "127.0.0.1" || host === "::1" || host === "localhost";
+}
+
+function isNonRoutableDomain(url: string): boolean {
+  try {
+    const hostname = new URL(url).hostname;
+    return /\.(example|test|invalid|localhost)$/i.test(hostname);
+  } catch {
+    return false;
+  }
 }
 
 function formatError(error: unknown): string {
