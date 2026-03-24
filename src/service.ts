@@ -165,9 +165,9 @@ export class PatchRelayService {
     this.mergeQueue.seedOnStartup();
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     this.githubAppTokenManager?.stop();
-    this.runtime.stop();
+    await this.runtime.stop();
   }
 
   async createLinearOAuthStart(params?: { projectId?: string }) {

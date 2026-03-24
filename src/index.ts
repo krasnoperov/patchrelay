@@ -90,14 +90,14 @@ async function main(): Promise<void> {
   );
 
   const shutdown = async (): Promise<void> => {
-    service.stop();
+    await service.stop();
     await app.close();
   };
   process.once("SIGINT", () => {
-    void shutdown();
+    shutdown().catch(() => {}).finally(() => { process.exitCode ??= 0; });
   });
   process.once("SIGTERM", () => {
-    void shutdown();
+    shutdown().catch(() => {}).finally(() => { process.exitCode ??= 0; });
   });
 }
 

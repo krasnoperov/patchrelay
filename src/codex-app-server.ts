@@ -165,15 +165,27 @@ export class CodexAppServerClient extends EventEmitter {
   }
 
   async stop(): Promise<void> {
-    if (!this.child) {
+    const child = this.child;
+    if (!child) {
       return;
     }
 
     this.logger.info("Stopping Codex app-server");
     this.stopping = true;
-    this.child.kill("SIGTERM");
-    this.child = undefined;
     this.started = false;
+
+    const exited = new Promise<void>((resolve) => {
+      child.on("close", () => resolve());
+    });
+    child.kill("SIGTERM");
+    this.child = undefined;
+
+    // Wait for the child to exit, but don't block shutdown forever.
+    const timeout = new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, 10_000);
+      timer.unref?.();
+    });
+    await Promise.race([exited, timeout]);
   }
 
   async startThread(options: StartThreadOptions): Promise<CodexThreadSummary> {
