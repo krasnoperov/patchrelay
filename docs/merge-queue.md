@@ -93,16 +93,19 @@ Add `baseBranch` to the project's GitHub config (defaults to `main` if omitted):
 }
 ```
 
-### 5. GitHub Webhook
+### 5. GitHub App Events
 
-Configure the repository webhook to send events to PatchRelay:
+The PatchRelay GitHub App receives webhook events for all repos it's installed on. Configure the subscribed events in the App settings at `Settings → Developer settings → GitHub Apps → PatchRelay → Permissions & events → Subscribe to events`:
 
-| Field | Value |
+| Event | Required for |
 |-|-|
-| Payload URL | `https://<your-patchrelay-host>/webhooks/github` |
-| Content type | `application/json` |
-| Secret | Your `GITHUB_APP_WEBHOOK_SECRET` value |
-| Events | Push, Pull requests, Pull request reviews, Check suites, Check runs |
+| Push | Advancing the merge queue when main updates |
+| Pull request | PR opened/closed/merged state tracking |
+| Pull request review | Approval and change-request detection |
+| Check suite | CI pass/fail state transitions |
+| Check run | PR metadata (observability) |
+
+The webhook URL (`https://<your-patchrelay-host>/webhooks/github`) and secret (`GITHUB_APP_WEBHOOK_SECRET`) are configured in the App's "General" settings.
 
 ### 6. Workflow Files
 
