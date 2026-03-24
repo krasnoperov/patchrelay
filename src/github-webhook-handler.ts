@@ -272,33 +272,33 @@ export class GitHubWebhookHandler {
     event: NormalizedGitHubEvent,
   ): Promise<void> {
     if (!issue.agentSessionId) return;
-    const linear = await this.linearProvider.forProject(issue.projectId);
-    if (!linear?.createAgentActivity) return;
-
-    const messages: Record<string, string> = {
-      pr_open: `PR #${event.prNumber ?? ""} opened.${event.prUrl ? ` ${event.prUrl}` : ""}`,
-      awaiting_queue: "PR approved. Preparing merge.",
-      changes_requested: `Review requested changes.${event.reviewerName ? ` Reviewer: ${event.reviewerName}` : ""}`,
-      repairing_ci: `CI check failed${event.checkName ? `: ${event.checkName}` : ""}. Starting repair.`,
-      repairing_queue: "Merge conflict with base branch. Starting repair.",
-      done: `PR merged and deployed.${event.prNumber ? ` PR #${event.prNumber}` : ""}`,
-      failed: "PR was closed without merging.",
-    };
-
-    const body = messages[newState];
-    if (!body) return;
-
-    const type = newState === "failed" || newState === "repairing_ci" || newState === "repairing_queue"
-      ? "error" as const
-      : "response" as const;
-
     try {
+      const linear = await this.linearProvider.forProject(issue.projectId);
+      if (!linear?.createAgentActivity) return;
+
+      const messages: Record<string, string> = {
+        pr_open: `PR #${event.prNumber ?? ""} opened.${event.prUrl ? ` ${event.prUrl}` : ""}`,
+        awaiting_queue: "PR approved. Preparing merge.",
+        changes_requested: `Review requested changes.${event.reviewerName ? ` Reviewer: ${event.reviewerName}` : ""}`,
+        repairing_ci: `CI check failed${event.checkName ? `: ${event.checkName}` : ""}. Starting repair.`,
+        repairing_queue: "Merge conflict with base branch. Starting repair.",
+        done: `PR merged and deployed.${event.prNumber ? ` PR #${event.prNumber}` : ""}`,
+        failed: "PR was closed without merging.",
+      };
+
+      const body = messages[newState];
+      if (!body) return;
+
+      const type = newState === "failed" || newState === "repairing_ci" || newState === "repairing_queue"
+        ? "error" as const
+        : "response" as const;
+
       await linear.createAgentActivity({
         agentSessionId: issue.agentSessionId,
         content: { type, body },
       });
     } catch {
-      // Non-blocking — don't fail the webhook for a Linear activity error
+      // Non-blocking — don't crash the webhook handler for a Linear activity error
     }
   }
 }

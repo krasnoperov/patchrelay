@@ -2049,7 +2049,7 @@ test("cli installation commands use the local HTTP service end to end", async (t
       config,
       {
         acceptWebhook: async () => ({ status: 200, body: { ok: true } }),
-        getReadiness: () => ({ ready: true, codexStarted: true }),
+        getReadiness: () => ({ ready: true, codexStarted: true, linearConnected: true }),
         createLinearOAuthStart: ({ projectId }: { projectId?: string } = {}) => ({
           state: "state-http",
           authorizeUrl: "https://linear.app/oauth/authorize?state=state-http",

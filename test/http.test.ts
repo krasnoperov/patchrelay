@@ -84,7 +84,7 @@ test("health endpoint includes build version metadata from the built artifact", 
       config,
       {
         acceptWebhook: async () => ({ status: 200, body: { ok: true } }),
-        getReadiness: () => ({ ready: true, codexStarted: true }),
+        getReadiness: () => ({ ready: true, codexStarted: true, linearConnected: true }),
         getIssueOverview: async () => undefined,
         getIssueReport: async () => undefined,
       } as never,
@@ -114,6 +114,7 @@ test("health endpoint includes build version metadata from the built artifact", 
       ok: true,
       ready: true,
       codexStarted: true,
+      linearConnected: true,
       service: buildInfo.service,
       version: buildInfo.version,
       commit: buildInfo.commit,
@@ -155,7 +156,7 @@ test("http routes handle webhook validation and issue/report/live/events lookups
           status: 202,
           body: { ok: true, webhookId },
         }),
-        getReadiness: () => ({ ready: false, codexStarted: false, startupError: "codex offline" }),
+        getReadiness: () => ({ ready: false, codexStarted: false, linearConnected: false, startupError: "codex offline" }),
         getIssueOverview: async (issueKey: string) =>
           issueKey === "USE-42"
             ? {
@@ -528,7 +529,7 @@ test("public agent session status page validates token and exposes operator sess
       config,
       {
         acceptWebhook: async () => ({ status: 200, body: { ok: true } }),
-        getReadiness: () => ({ ready: true, codexStarted: true }),
+        getReadiness: () => ({ ready: true, codexStarted: true, linearConnected: true }),
         getIssueOverview: async (issueKey: string) => (issueKey === "USE-42" ? { issue: { issueKey: "USE-42" } } : undefined),
         getPublicAgentSessionStatus: async ({ issueKey, token }: { issueKey: string; token: string }) => {
           if (token === "bad") {
@@ -627,7 +628,7 @@ test("internal operator routes stay disabled by default", async () => {
       config,
       {
         acceptWebhook: async () => ({ status: 200, body: { ok: true } }),
-        getReadiness: () => ({ ready: true, codexStarted: true }),
+        getReadiness: () => ({ ready: true, codexStarted: true, linearConnected: true }),
       } as never,
       pino({ enabled: false }),
     );
@@ -671,7 +672,7 @@ test("loopback OAuth setup routes stay available for local setup", async () => {
       config,
       {
         acceptWebhook: async () => ({ status: 200, body: { ok: true } }),
-        getReadiness: () => ({ ready: true, codexStarted: true }),
+        getReadiness: () => ({ ready: true, codexStarted: true, linearConnected: true }),
         listLinearInstallations: () => [
           {
             installation: { id: 1, workspaceName: "Workspace One" },
@@ -739,7 +740,7 @@ test("http OAuth and installation routes support setup flows", async () => {
       config,
       {
         acceptWebhook: async () => ({ status: 200, body: { ok: true } }),
-        getReadiness: () => ({ ready: true, codexStarted: true }),
+        getReadiness: () => ({ ready: true, codexStarted: true, linearConnected: true }),
         listLinearInstallations: () => [
           {
             installation: { id: 7, workspaceName: "Acme" },
@@ -806,7 +807,7 @@ test("http OAuth start returns reused installation details when a project can li
       config,
       {
         acceptWebhook: async () => ({ status: 200, body: { ok: true } }),
-        getReadiness: () => ({ ready: true, codexStarted: true }),
+        getReadiness: () => ({ ready: true, codexStarted: true, linearConnected: true }),
         listLinearInstallations: () => [],
         createLinearOAuthStart: ({ projectId }: { projectId?: string }) => ({
           completed: true,
@@ -867,7 +868,7 @@ test("localhost operator OAuth APIs stay usable without a bearer token when oper
       config,
       {
         acceptWebhook: async () => ({ status: 200, body: { ok: true } }),
-        getReadiness: () => ({ ready: true, codexStarted: true }),
+        getReadiness: () => ({ ready: true, codexStarted: true, linearConnected: true }),
         listLinearInstallations: () => [
           {
             installation: { id: 7, workspaceName: "Acme" },
@@ -935,7 +936,7 @@ test("remote operator OAuth APIs require bearer auth when operator API is enable
       config,
       {
         acceptWebhook: async () => ({ status: 200, body: { ok: true } }),
-        getReadiness: () => ({ ready: true, codexStarted: true }),
+        getReadiness: () => ({ ready: true, codexStarted: true, linearConnected: true }),
         listLinearInstallations: () => [],
         createLinearOAuthStart: () => ({
           state: "state-remote",
@@ -1000,7 +1001,7 @@ test("http exposes OAuth state polling for CLI-driven OAuth completion", async (
       config,
       {
         acceptWebhook: async () => ({ status: 200, body: { ok: true } }),
-        getReadiness: () => ({ ready: true, codexStarted: true }),
+        getReadiness: () => ({ ready: true, codexStarted: true, linearConnected: true }),
         listLinearInstallations: () => [],
         createLinearOAuthStart: () => ({
           state: "state-1",

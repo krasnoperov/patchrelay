@@ -5,7 +5,7 @@ import type { GitHubAppBotIdentity } from "./github-app-token.ts";
 import type { CodexAppServerClient, CodexNotification } from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord, RunRecord } from "./db-types.ts";
-import type { RunType } from "./factory-state.ts";
+import { ACTIVE_RUN_STATES, type FactoryState, type RunType } from "./factory-state.ts";
 import { buildHookEnv, runProjectHook } from "./hook-runner.ts";
 import {
   buildRunningSessionPlan,
@@ -358,6 +358,21 @@ export class RunOrchestrator {
     const trackedIssue = this.db.issueToTrackedIssue(issue);
     const report = buildStageReport(run, trackedIssue, thread, countEventMethods(this.db.listThreadEvents(run.id)));
 
+    // Determine post-run state. When a re-run finds the PR already exists
+    // and makes no changes, no pr_opened webhook arrives — the state would
+    // stay in the active-run state forever. Advance based on PR metadata.
+    const freshIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
+    let postRunState: FactoryState | undefined;
+    if (ACTIVE_RUN_STATES.has(freshIssue.factoryState) && freshIssue.prNumber) {
+      if (freshIssue.prReviewState === "approved") {
+        postRunState = "awaiting_queue";
+      } else if (freshIssue.prState === "merged") {
+        postRunState = "done";
+      } else {
+        postRunState = "pr_open";
+      }
+    }
+
     this.db.transaction(() => {
       this.db.finishRun(run.id, {
         status: "completed",
@@ -370,8 +385,15 @@ export class RunOrchestrator {
         projectId: run.projectId,
         linearIssueId: run.linearIssueId,
         activeRunId: null,
+        ...(postRunState ? { factoryState: postRunState } : {}),
+        ...(postRunState === "awaiting_queue" ? { pendingMergePrep: true } : {}),
       });
     });
+
+    // If we advanced to awaiting_queue, enqueue for merge prep
+    if (postRunState === "awaiting_queue") {
+      this.enqueueIssue(run.projectId, run.linearIssueId);
+    }
 
     this.feed?.publish({
       level: "info",
