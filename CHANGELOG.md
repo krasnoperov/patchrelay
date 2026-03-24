@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.1](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.12.0...patchrelay-v0.12.1) (2026-03-24)
+
+
+### Bug Fixes
+
+* handle late review in awaiting_queue and stale thread fallback ([#97](https://github.com/krasnoperov/patchrelay/issues/97)) ([#97](https://github.com/krasnoperov/patchrelay/issues/97)) ([35e57ef](https://github.com/krasnoperov/patchrelay/commit/35e57efd2d58d75753d208a54ab32878d26373db))
+
 ## [0.12.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.11.0...patchrelay-v0.12.0) (2026-03-24)
 
 
