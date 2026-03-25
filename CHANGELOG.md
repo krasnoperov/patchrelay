@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.18.0...patchrelay-v0.19.0) (2026-03-25)
+
+
+### Features
+
+* expanded reconciliation, check classification, display alignment ([#137](https://github.com/krasnoperov/patchrelay/issues/137)) ([9d890d4](https://github.com/krasnoperov/patchrelay/commit/9d890d48aa8a8c5daadc465ef29df257c067d55d))
+
 ## [0.18.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.17.1...patchrelay-v0.18.0) (2026-03-25)
 
 
