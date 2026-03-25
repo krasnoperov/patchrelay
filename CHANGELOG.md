@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.5](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.20.4...patchrelay-v0.20.5) (2026-03-25)
+
+
+### Bug Fixes
+
+* TUI rendering — remove sidebar, viewport scrolling, full messages ([#149](https://github.com/krasnoperov/patchrelay/issues/149)) ([77e7f84](https://github.com/krasnoperov/patchrelay/commit/77e7f84f5966c42cac7c74ed0fdbb2a229bfaa1c))
+
 ## [0.20.4](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.20.3...patchrelay-v0.20.4) (2026-03-25)
 
 
