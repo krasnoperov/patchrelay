@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.17.1...patchrelay-v0.18.0) (2026-03-25)
+
+
+### Features
+
+* watch TUI mission-control enhancements and Linear context enrichment ([#135](https://github.com/krasnoperov/patchrelay/issues/135)) ([977861b](https://github.com/krasnoperov/patchrelay/commit/977861b46176207fa2d1ba73d5f299b449746a7c))
+
 ## [0.17.1](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.17.0...patchrelay-v0.17.1) (2026-03-25)
 
 
