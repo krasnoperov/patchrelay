@@ -71,6 +71,33 @@ export class IssueQueryService {
     };
   }
 
+  async getIssueTimeline(issueKey: string) {
+    const issue = this.db.getTrackedIssueByKey(issueKey);
+    if (!issue) return undefined;
+
+    const fullIssue = this.db.getIssueByKey(issueKey);
+    const runs = this.db.listRunsForIssue(issue.projectId, issue.linearIssueId).map((run) => ({
+      id: run.id,
+      runType: run.runType,
+      status: run.status,
+      startedAt: run.startedAt,
+      endedAt: run.endedAt,
+      threadId: run.threadId,
+      ...(run.reportJson ? { report: JSON.parse(run.reportJson) as StageReport } : {}),
+    }));
+
+    const feedEvents = this.db.operatorFeed.list({ issueKey, limit: 500 });
+
+    let liveThread = undefined;
+    const activeRunId = fullIssue?.activeRunId;
+    const activeRun = activeRunId !== undefined ? runs.find((r) => r.id === activeRunId) : undefined;
+    if (activeRun?.threadId) {
+      liveThread = await this.codex.readThread(activeRun.threadId, true).catch(() => undefined);
+    }
+
+    return { issue, runs, feedEvents, liveThread, activeRunId };
+  }
+
   async getActiveRunStatus(issueKey: string) {
     return await this.runStatusProvider.getActiveRunStatus(issueKey);
   }

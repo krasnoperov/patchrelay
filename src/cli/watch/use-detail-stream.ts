@@ -1,6 +1,8 @@
 import { useEffect, useRef, type Dispatch } from "react";
-import type { WatchAction, WatchReport, WatchThread, WatchTurn, WatchTurnItem } from "./watch-state.ts";
-import type { CodexThreadSummary, CodexThreadItem, StageReport } from "../../types.ts";
+import type { WatchAction } from "./watch-state.ts";
+import type { TimelineRunInput } from "./timeline-builder.ts";
+import type { OperatorFeedEvent } from "../../operator-feed.ts";
+import type { CodexThreadSummary, StageReport } from "../../types.ts";
 
 interface DetailStreamOptions {
   baseUrl: string;
@@ -20,22 +22,24 @@ export function useDetailStream(options: DetailStreamOptions): void {
     const abortController = new AbortController();
     const { baseUrl, bearerToken, dispatch } = optionsRef.current;
 
-    const headers: Record<string, string> = { accept: "application/json" };
+    const headers: Record<string, string> = {};
     if (bearerToken) {
       headers.authorization = `Bearer ${bearerToken}`;
     }
 
-    // Rehydrate from thread/read via /api/issues/:key/live
+    // Rehydrate from timeline endpoint
     void rehydrate(baseUrl, issueKey, headers, abortController.signal, dispatch);
 
-    // Stream codex notifications via filtered SSE
-    void streamCodexEvents(baseUrl, issueKey, headers, abortController.signal, dispatch);
+    // Stream codex notifications + feed events via filtered SSE
+    void streamEvents(baseUrl, issueKey, headers, abortController.signal, dispatch);
 
     return () => {
       abortController.abort();
     };
   }, [options.issueKey]);
 }
+
+// ─── Rehydration ──────────────────────────────────────────────────
 
 async function rehydrate(
   baseUrl: string,
@@ -45,73 +49,51 @@ async function rehydrate(
   dispatch: Dispatch<WatchAction>,
 ): Promise<void> {
   try {
-    const url = new URL(`/api/issues/${encodeURIComponent(issueKey)}/live`, baseUrl);
-    const response = await fetch(url, { headers, signal });
+    const url = new URL(`/api/issues/${encodeURIComponent(issueKey)}/timeline`, baseUrl);
+    const response = await fetch(url, { headers: { ...headers, accept: "application/json" }, signal });
     if (!response.ok) return;
 
     const data = await response.json() as {
       ok?: boolean;
-      run?: { threadId?: string };
-      live?: { threadId?: string; threadStatus?: string };
-      thread?: CodexThreadSummary;
+      runs?: Array<{
+        id: number;
+        runType: string;
+        status: string;
+        startedAt: string;
+        endedAt?: string;
+        threadId?: string;
+        report?: StageReport;
+      }>;
+      feedEvents?: OperatorFeedEvent[];
+      liveThread?: CodexThreadSummary;
+      activeRunId?: number;
     };
 
-    const threadData = data.thread;
-    if (threadData) {
-      dispatch({ type: "thread-snapshot", thread: materializeThread(threadData) });
-      return;
-    }
+    const runs: TimelineRunInput[] = (data.runs ?? []).map((r) => ({
+      id: r.id,
+      runType: r.runType,
+      status: r.status,
+      startedAt: r.startedAt,
+      endedAt: r.endedAt,
+      threadId: r.threadId,
+      ...(r.report ? { report: r.report } : {}),
+    }));
 
-    // No active thread — fall back to latest run report
-    await rehydrateFromReport(baseUrl, issueKey, headers, signal, dispatch);
+    dispatch({
+      type: "timeline-rehydrate",
+      runs,
+      feedEvents: data.feedEvents ?? [],
+      liveThread: data.liveThread ?? null,
+      activeRunId: data.activeRunId ?? null,
+    });
   } catch {
-    // Rehydration is best-effort — SSE stream will provide updates
+    // Rehydration is best-effort
   }
 }
 
-async function rehydrateFromReport(
-  baseUrl: string,
-  issueKey: string,
-  headers: Record<string, string>,
-  signal: AbortSignal,
-  dispatch: Dispatch<WatchAction>,
-): Promise<void> {
-  try {
-    const url = new URL(`/api/issues/${encodeURIComponent(issueKey)}/report`, baseUrl);
-    const response = await fetch(url, { headers, signal });
-    if (!response.ok) return;
+// ─── Live SSE Stream ──────────────────────────────────────────────
 
-    const data = await response.json() as {
-      ok?: boolean;
-      runs?: Array<{ run: { runType: string; status: string }; report?: StageReport; summary?: Record<string, unknown> }>;
-    };
-
-    const latest = data.runs?.[0];
-    if (!latest) return;
-
-    const report: WatchReport = {
-      runType: latest.run.runType,
-      status: latest.run.status,
-      summary: typeof latest.summary?.latestAssistantMessage === "string"
-        ? latest.summary.latestAssistantMessage
-        : latest.report?.assistantMessages.at(-1),
-      commands: latest.report?.commands.map((c) => ({
-        command: c.command,
-        ...(typeof c.exitCode === "number" ? { exitCode: c.exitCode } : {}),
-        ...(typeof c.durationMs === "number" ? { durationMs: c.durationMs } : {}),
-      })) ?? [],
-      fileChanges: latest.report?.fileChanges.length ?? 0,
-      toolCalls: latest.report?.toolCalls.length ?? 0,
-      assistantMessages: latest.report?.assistantMessages ?? [],
-    };
-
-    dispatch({ type: "report-snapshot", report });
-  } catch {
-    // Report fetch is best-effort
-  }
-}
-
-async function streamCodexEvents(
+async function streamEvents(
   baseUrl: string,
   issueKey: string,
   baseHeaders: Record<string, string>,
@@ -145,7 +127,7 @@ async function streamCodexEvents(
 
         if (!line) {
           if (dataLines.length > 0) {
-            processDetailEvent(dispatch, eventType, dataLines.join("\n"));
+            processEvent(dispatch, eventType, dataLines.join("\n"));
             dataLines = [];
             eventType = "";
           }
@@ -171,77 +153,14 @@ async function streamCodexEvents(
   }
 }
 
-function processDetailEvent(dispatch: Dispatch<WatchAction>, eventType: string, data: string): void {
+function processEvent(dispatch: Dispatch<WatchAction>, eventType: string, data: string): void {
   try {
     if (eventType === "codex") {
       const parsed = JSON.parse(data) as { method: string; params: Record<string, unknown> };
       dispatch({ type: "codex-notification", method: parsed.method, params: parsed.params });
     }
-    // Feed events are already handled by the main watch stream
+    // Feed events are handled by the main watch stream
   } catch {
     // Ignore parse errors
-  }
-}
-
-// ─── Thread Materialization from thread/read ──────────────────────
-
-function materializeThread(summary: CodexThreadSummary): WatchThread {
-  return {
-    threadId: summary.id,
-    status: summary.status,
-    turns: summary.turns.map(materializeTurn),
-  };
-}
-
-function materializeTurn(turn: { id: string; status: string; items: CodexThreadItem[] }): WatchTurn {
-  return {
-    id: turn.id,
-    status: turn.status,
-    items: turn.items.map(materializeItem),
-  };
-}
-
-function materializeItem(item: CodexThreadItem): WatchTurnItem {
-  // CodexThreadItem has an index-signature catch-all that defeats narrowing.
-  // Access fields via Record<string, unknown> and coerce explicitly.
-  const r = item as Record<string, unknown>;
-  const id = String(r.id ?? "unknown");
-  const type = String(r.type ?? "unknown");
-  const base: WatchTurnItem = { id, type, status: "completed" };
-
-  switch (type) {
-    case "agentMessage":
-      return { ...base, text: String(r.text ?? "") };
-    case "commandExecution":
-      return {
-        ...base,
-        command: String(r.command ?? ""),
-        status: String(r.status ?? "completed"),
-        ...(typeof r.exitCode === "number" ? { exitCode: r.exitCode } : {}),
-        ...(typeof r.durationMs === "number" ? { durationMs: r.durationMs } : {}),
-        ...(typeof r.aggregatedOutput === "string" ? { output: r.aggregatedOutput } : {}),
-      };
-    case "fileChange":
-      return { ...base, status: String(r.status ?? "completed"), changes: Array.isArray(r.changes) ? r.changes as unknown[] : [] };
-    case "mcpToolCall":
-      return {
-        ...base,
-        status: String(r.status ?? "completed"),
-        toolName: `${String(r.server ?? "")}/${String(r.tool ?? "")}`,
-        ...(typeof r.durationMs === "number" ? { durationMs: r.durationMs } : {}),
-      };
-    case "dynamicToolCall":
-      return {
-        ...base,
-        status: String(r.status ?? "completed"),
-        toolName: String(r.tool ?? ""),
-        ...(typeof r.durationMs === "number" ? { durationMs: r.durationMs } : {}),
-      };
-    case "plan":
-      return { ...base, text: String(r.text ?? "") };
-    case "reasoning":
-      return { ...base, text: Array.isArray(r.summary) ? (r.summary as string[]).join("\n") : "" };
-    default:
-      return base;
   }
 }
