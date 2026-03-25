@@ -94,7 +94,7 @@ export class PatchRelayService {
       config, db, this.linearProvider,
       (projectId, issueId) => enqueueIssue(projectId, issueId),
       this.mergeQueue,
-      logger, this.feed,
+      logger, codex, this.feed,
     );
     const runtime = new ServiceRuntime(
       codex,
@@ -289,6 +289,21 @@ export class PatchRelayService {
     };
     this.codex.on("notification", handler);
     return () => { this.codex.off("notification", handler); };
+  }
+
+  async promptIssue(issueKey: string, text: string): Promise<{ delivered: boolean } | { error: string } | undefined> {
+    const issue = this.db.getIssueByKey(issueKey);
+    if (!issue) return undefined;
+    if (!issue.activeRunId) return { error: "No active run" };
+    const run = this.db.getRun(issue.activeRunId);
+    if (!run?.threadId || !run.turnId) return { error: "No active thread or turn" };
+    try {
+      await this.codex.steerTurn({ threadId: run.threadId, turnId: run.turnId, input: `Operator prompt from watch TUI:\n\n${text}` });
+      return { delivered: true };
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      return { error: `Failed to deliver prompt: ${msg}` };
+    }
   }
 
   retryIssue(issueKey: string): { issueKey: string; runType: string } | { error: string } | undefined {

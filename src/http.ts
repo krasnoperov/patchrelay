@@ -357,6 +357,23 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
       return reply.send({ ok: true, ...result });
     });
 
+    app.post("/api/issues/:issueKey/prompt", async (request, reply) => {
+      const issueKey = (request.params as { issueKey: string }).issueKey;
+      const body = request.body as { text?: string } | undefined;
+      const text = body?.text;
+      if (!text || typeof text !== "string") {
+        return reply.code(400).send({ ok: false, reason: "missing text field" });
+      }
+      const result = await service.promptIssue(issueKey, text);
+      if (!result) {
+        return reply.code(404).send({ ok: false, reason: "issue_not_found" });
+      }
+      if ("error" in result) {
+        return reply.code(409).send({ ok: false, reason: result.error });
+      }
+      return reply.send({ ok: true, delivered: true });
+    });
+
     app.get("/api/feed", async (request, reply) => {
       const feedQuery: OperatorFeedQuery = {
         limit: getPositiveIntegerQueryParam(request, "limit") ?? 50,
