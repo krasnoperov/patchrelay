@@ -13,6 +13,7 @@ export type TriggerEvent =
   | "delegateChanged"
   | "agentSessionCreated"
   | "agentPrompted"
+  | "agentSignal"
   | "installationPermissionsChanged"
   | "installationRevoked"
   | "appUserNotification";

@@ -11,7 +11,7 @@ export function HelpBar({ view, follow }: HelpBarProps): React.JSX.Element {
       <Text dimColor>
         {view === "list"
           ? "j/k: navigate  Enter: detail  Tab: filter  q: quit"
-          : `Esc: back  f: follow ${follow ? "on" : "off"}  q: quit`}
+          : `Esc: back  f: follow ${follow ? "on" : "off"}  r: retry  q: quit`}
       </Text>
     </Box>
   );

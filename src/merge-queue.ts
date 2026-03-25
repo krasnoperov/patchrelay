@@ -1,10 +1,20 @@
 import type { Logger } from "pino";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord } from "./db-types.ts";
+import type { LinearAgentActivityContent } from "./linear-types.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import type { AppConfig } from "./types.ts";
 import type { ProjectConfig } from "./workflow-types.ts";
+import { buildMergePrepActivity, buildMergePrepEscalationActivity } from "./linear-session-reporting.ts";
 import { execCommand } from "./utils.ts";
+
+export type MergeQueueLinearActivityCallback = (
+  issue: IssueRecord,
+  content: LinearAgentActivityContent,
+  options?: { ephemeral?: boolean },
+) => void;
+
+const DEFAULT_MERGE_PREP_BUDGET = 3;
 
 /**
  * Merge queue steward — keeps PatchRelay-managed PR branches up to date
@@ -22,6 +32,7 @@ export class MergeQueue {
     private readonly enqueueIssue: (projectId: string, issueId: string) => void,
     private readonly logger: Logger,
     private readonly feed?: OperatorEventFeed,
+    private readonly onLinearActivity?: MergeQueueLinearActivityCallback,
   ) {}
 
   /**
@@ -48,12 +59,40 @@ export class MergeQueue {
       return;
     }
 
+    // Retry budget — escalate after repeated infrastructure failures
+    const attempts = issue.mergePrepAttempts + 1;
+    this.db.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, mergePrepAttempts: attempts });
+
+    if (attempts > DEFAULT_MERGE_PREP_BUDGET) {
+      this.logger.warn({ issueKey: issue.issueKey, attempts }, "Merge prep budget exhausted, escalating");
+      this.db.upsertIssue({
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        factoryState: "escalated",
+        pendingMergePrep: false,
+      });
+      this.feed?.publish({
+        level: "error",
+        kind: "workflow",
+        issueKey: issue.issueKey,
+        projectId: issue.projectId,
+        stage: "awaiting_queue",
+        status: "escalated",
+        summary: `Merge prep failed ${attempts - 1} times — escalating for human help`,
+      });
+      this.onLinearActivity?.(issue, buildMergePrepEscalationActivity(attempts - 1));
+      return;
+    }
+
     const repoFullName = project.github?.repoFullName;
     const baseBranch = project.github?.baseBranch ?? "main";
     const gitBin = this.config.runner.gitBin;
 
     // Enable auto-merge (idempotent)
     const autoMergeOk = repoFullName ? await this.enableAutoMerge(issue, repoFullName) : false;
+    if (autoMergeOk) {
+      this.onLinearActivity?.(issue, buildMergePrepActivity("auto_merge"), { ephemeral: true });
+    }
 
     // Fetch latest base branch
     const fetchResult = await execCommand(gitBin, ["-C", issue.worktreePath, "fetch", "origin", baseBranch], {
@@ -62,6 +101,7 @@ export class MergeQueue {
     if (fetchResult.exitCode !== 0) {
       // Transient failure — leave pendingMergePrep set so the next event retries.
       this.logger.warn({ issueKey: issue.issueKey, stderr: fetchResult.stderr?.slice(0, 300) }, "Merge prep: fetch failed, will retry on next event");
+      this.onLinearActivity?.(issue, buildMergePrepActivity("fetch_retry"), { ephemeral: true });
       return;
     }
 
@@ -82,6 +122,7 @@ export class MergeQueue {
         pendingRunType: "queue_repair",
         pendingRunContextJson: JSON.stringify({ failureReason: "merge_conflict" }),
         pendingMergePrep: false,
+        mergePrepAttempts: 0,
       });
       this.enqueueIssue(issue.projectId, issue.linearIssueId);
 
@@ -94,13 +135,14 @@ export class MergeQueue {
         status: "conflict",
         summary: `Merge conflict with ${baseBranch} — queue repair enqueued`,
       });
+      this.onLinearActivity?.(issue, buildMergePrepActivity("conflict"));
       return;
     }
 
     // Check if merge was a no-op (already up to date)
     if (mergeResult.stdout?.includes("Already up to date")) {
       this.logger.debug({ issueKey: issue.issueKey }, "Merge prep: branch already up to date");
-      this.db.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, pendingMergePrep: false });
+      this.db.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, pendingMergePrep: false, mergePrepAttempts: 0 });
 
       if (!autoMergeOk) {
         this.feed?.publish({
@@ -112,6 +154,7 @@ export class MergeQueue {
           status: "blocked",
           summary: "Branch up to date but auto-merge not enabled — check gh auth and repo settings",
         });
+        this.onLinearActivity?.(issue, buildMergePrepActivity("blocked"));
       }
       return;
     }
@@ -124,11 +167,12 @@ export class MergeQueue {
     if (pushResult.exitCode !== 0) {
       // Push failed — leave pendingMergePrep set so the next event retries.
       this.logger.warn({ issueKey: issue.issueKey, stderr: pushResult.stderr?.slice(0, 300) }, "Merge prep: push failed, will retry on next event");
+      this.onLinearActivity?.(issue, buildMergePrepActivity("push_retry"), { ephemeral: true });
       return;
     }
 
     this.logger.info({ issueKey: issue.issueKey, baseBranch }, "Merge prep: branch updated and pushed");
-    this.db.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, pendingMergePrep: false });
+    this.db.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, pendingMergePrep: false, mergePrepAttempts: 0 });
 
     this.feed?.publish({
       level: "info",
@@ -139,6 +183,7 @@ export class MergeQueue {
       status: "prepared",
       summary: `Branch updated to latest ${baseBranch} — CI will run`,
     });
+    this.onLinearActivity?.(issue, buildMergePrepActivity("branch_update", baseBranch), { ephemeral: true });
   }
 
   /**

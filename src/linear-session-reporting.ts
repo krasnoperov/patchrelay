@@ -101,6 +101,13 @@ export function buildRunFailureActivity(runType: RunType, reason?: string): Line
   };
 }
 
+export function buildStopConfirmationActivity(): LinearAgentActivityContent {
+  return {
+    type: "response",
+    body: "PatchRelay has stopped work as requested. Delegate the issue again or provide new instructions to resume.",
+  };
+}
+
 export function buildGitHubStateActivity(
   newState: FactoryState,
   event: NormalizedGitHubEvent,
@@ -140,6 +147,30 @@ export function buildGitHubStateActivity(
     default:
       return undefined;
   }
+}
+
+export function buildMergePrepActivity(step: "auto_merge" | "branch_update" | "conflict" | "blocked" | "fetch_retry" | "push_retry", detail?: string): LinearAgentActivityContent {
+  switch (step) {
+    case "auto_merge":
+      return { type: "action", action: "Enabling", parameter: "auto-merge" };
+    case "branch_update":
+      return { type: "action", action: "Updating", parameter: detail ? `branch to latest ${detail}` : "branch to latest base" };
+    case "conflict":
+      return { type: "action", action: "Repairing", parameter: "merge conflict with base branch" };
+    case "blocked":
+      return { type: "error", body: "Branch is up to date but auto-merge could not be enabled — check repository settings." };
+    case "fetch_retry":
+      return { type: "thought", body: "Merge prep: fetch failed, will retry." };
+    case "push_retry":
+      return { type: "thought", body: "Merge prep: push failed, will retry." };
+  }
+}
+
+export function buildMergePrepEscalationActivity(attempts: number): LinearAgentActivityContent {
+  return {
+    type: "error",
+    body: `Merge preparation failed ${attempts} times due to infrastructure issues. PatchRelay needs human help to continue.`,
+  };
 }
 
 export function summarizeIssueStateForLinear(issue: Pick<IssueRecord, "factoryState" | "prNumber" | "prState" | "prReviewState" | "prCheckStatus">): string | undefined {

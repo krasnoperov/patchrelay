@@ -10,6 +10,7 @@ import {
   buildAlreadyRunningThought,
   buildDelegationThought,
   buildPromptDeliveredThought,
+  buildStopConfirmationActivity,
 } from "./linear-session-reporting.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import { resolveProject, triggerEventAllowed, trustedActorAllowed } from "./project-resolution.ts";
@@ -269,6 +270,12 @@ export class WebhookHandler {
       return;
     }
 
+    // Stop signal — halt active work and confirm disengagement
+    if (normalized.triggerEvent === "agentSignal" && normalized.agentSession.signal === "stop") {
+      await this.handleStopSignal(normalized, project, trackedIssue, existingIssue, activeRun, linear);
+      return;
+    }
+
     if (normalized.triggerEvent !== "agentPrompted") return;
     if (!triggerEventAllowed(project, normalized.triggerEvent)) return;
 
@@ -308,6 +315,56 @@ export class WebhookHandler {
       await this.syncAgentSession(linear, normalized.agentSession.id, latestIssue ?? trackedIssue, { pendingRunType: desiredStage });
       await this.publishAgentActivity(linear, normalized.agentSession.id, buildDelegationThought(desiredStage, "prompt"), { ephemeral: true });
     }
+  }
+
+  // ─── Stop signal handling ────────────────────────────────────────
+
+  private async handleStopSignal(
+    normalized: NormalizedEvent,
+    project: ProjectConfig,
+    trackedIssue: TrackedIssueRecord | undefined,
+    existingIssue: ReturnType<PatchRelayDatabase["getIssue"]>,
+    activeRun: ReturnType<PatchRelayDatabase["getRun"]>,
+    linear: NonNullable<Awaited<ReturnType<LinearClientProvider["forProject"]>>>,
+  ): Promise<void> {
+    const issueId = normalized.issue!.id;
+    const sessionId = normalized.agentSession!.id;
+
+    // Best-effort halt: steer the active Codex turn with a stop instruction
+    if (activeRun?.threadId && activeRun.turnId) {
+      try {
+        await this.codex.steerTurn({
+          threadId: activeRun.threadId,
+          turnId: activeRun.turnId,
+          input: "STOP: The user has requested you stop working immediately. Do not make further changes. Wrap up and exit.",
+        });
+      } catch (error) {
+        this.logger.warn({ issueKey: trackedIssue?.issueKey, error: error instanceof Error ? error.message : String(error) }, "Failed to steer Codex turn for stop signal");
+      }
+
+      this.db.finishRun(activeRun.id, { status: "released", threadId: activeRun.threadId, turnId: activeRun.turnId });
+    }
+
+    this.db.upsertIssue({
+      projectId: project.id,
+      linearIssueId: issueId,
+      activeRunId: null,
+      factoryState: "awaiting_input",
+      agentSessionId: sessionId,
+    });
+
+    this.feed?.publish({
+      level: "info",
+      kind: "agent",
+      projectId: project.id,
+      issueKey: trackedIssue?.issueKey,
+      status: "stopped",
+      summary: "Stop signal received — work halted",
+    });
+
+    const updatedIssue = this.db.getIssue(project.id, issueId);
+    await this.publishAgentActivity(linear, sessionId, buildStopConfirmationActivity());
+    await this.syncAgentSession(linear, sessionId, updatedIssue ?? trackedIssue);
   }
 
   // ─── Comment handling (inlined) ───────────────────────────────────

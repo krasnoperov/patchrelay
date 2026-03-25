@@ -69,6 +69,19 @@ function deriveTriggerEvent(payload: LinearWebhookPayload): TriggerEvent {
     ) || Boolean(getString(data, "agentSessionId"));
 
   if (payload.type === "AgentSessionEvent" || payload.type === "AgentSession" || hasAgentSession) {
+    // Detect signal-bearing payloads (e.g. stop signal from Linear)
+    const agentActivityForSignal = getFirstNestedRecord(data, [
+      ["agentActivity"],
+      ["agentSession", "agentActivity"],
+      ["session", "agentActivity"],
+      ["agentSessionEvent", "agentActivity"],
+      ["payload", "agentActivity"],
+      ["resource", "agentActivity"],
+    ]);
+    if (agentActivityForSignal && getString(agentActivityForSignal, "signal")) {
+      return "agentSignal";
+    }
+
     if (payload.action === "created" || payload.action === "create") {
       return "agentSessionCreated";
     }
@@ -373,12 +386,16 @@ function extractAgentSessionMetadata(payload: LinearWebhookPayload): AgentSessio
     getString(commentRecord ?? {}, "body") ??
     getString(data, "body");
   const issueCommentId = getString(commentRecord ?? {}, "id") ?? getString(data, "issueCommentId");
+  const signal = getString(agentActivity ?? {}, "signal");
+  const signalMetadata = asRecord((agentActivity ?? {} as Record<string, unknown>).signalMetadata);
 
   return {
     id,
     ...(promptContext ? { promptContext } : {}),
     ...(promptBody ? { promptBody } : {}),
     ...(issueCommentId ? { issueCommentId } : {}),
+    ...(signal ? { signal } : {}),
+    ...(signalMetadata ? { signalMetadata } : {}),
   };
 }
 
