@@ -35,14 +35,19 @@ async function postPrompt(
   }
 }
 
-async function postRetry(baseUrl: string, issueKey: string, bearerToken?: string): Promise<void> {
+async function postRetry(baseUrl: string, issueKey: string, bearerToken?: string): Promise<{ ok?: boolean; reason?: string }> {
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (bearerToken) headers.authorization = `Bearer ${bearerToken}`;
-  await fetch(new URL(`/api/issues/${encodeURIComponent(issueKey)}/retry`, baseUrl), {
-    method: "POST",
-    headers,
-    signal: AbortSignal.timeout(5000),
-  }).catch(() => {});
+  try {
+    const response = await fetch(new URL(`/api/issues/${encodeURIComponent(issueKey)}/retry`, baseUrl), {
+      method: "POST",
+      headers,
+      signal: AbortSignal.timeout(5000),
+    });
+    return await response.json() as { ok?: boolean; reason?: string };
+  } catch {
+    return { reason: "request failed" };
+  }
 }
 
 export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.JSX.Element {
@@ -62,9 +67,12 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
   const [promptBuffer, setPromptBuffer] = useState("");
 
   const handleRetry = useCallback(() => {
-    if (state.activeDetailKey) {
-      void postRetry(baseUrl, state.activeDetailKey, bearerToken);
-    }
+    if (!state.activeDetailKey) return;
+    setPromptStatus("retrying...");
+    void postRetry(baseUrl, state.activeDetailKey, bearerToken).then((result) => {
+      setPromptStatus(result.ok ? "retry queued" : `retry failed: ${result.reason ?? "unknown"}`);
+      setTimeout(() => setPromptStatus(null), 3000);
+    });
   }, [baseUrl, bearerToken, state.activeDetailKey]);
 
   const [promptStatus, setPromptStatus] = useState<string | null>(null);
