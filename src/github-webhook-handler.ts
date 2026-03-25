@@ -36,6 +36,7 @@ export class GitHubWebhookHandler {
     private readonly enqueueIssue: (projectId: string, issueId: string) => void,
     private readonly mergeQueue: MergeQueue,
     private readonly logger: Logger,
+    private readonly codex: { steerTurn(options: { threadId: string; turnId: string; input: string }): Promise<void> },
     private readonly feed?: OperatorEventFeed,
   ) {}
 
@@ -118,6 +119,11 @@ export class GitHubWebhookHandler {
           }
         }
       }
+      return;
+    }
+
+    if (params.eventType === "issue_comment") {
+      await this.handlePrComment(payload as Record<string, unknown>);
       return;
     }
 
@@ -322,6 +328,51 @@ export class GitHubWebhookHandler {
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       this.logger.warn({ issueKey: issue.issueKey, error: msg }, "Failed to sync Linear session from GitHub webhook");
+    }
+  }
+
+  private async handlePrComment(payload: Record<string, unknown>): Promise<void> {
+    if (payload.action !== "created") return;
+    const issuePayload = payload.issue as Record<string, unknown> | undefined;
+    const comment = payload.comment as Record<string, unknown> | undefined;
+    if (!issuePayload || !comment) return;
+    if (!issuePayload.pull_request) return; // only PR comments
+    const body = typeof comment.body === "string" ? comment.body : "";
+    if (!body.trim()) return;
+    const user = comment.user as Record<string, unknown> | undefined;
+    const author = typeof user?.login === "string" ? user.login : "unknown";
+    if (typeof user?.type === "string" && user.type === "Bot") return;
+    const prNumber = typeof issuePayload.number === "number" ? issuePayload.number : undefined;
+    if (!prNumber) return;
+    const issue = this.db.getIssueByPrNumber(prNumber);
+    if (!issue) return;
+
+    this.feed?.publish({
+      level: "info",
+      kind: "comment",
+      issueKey: issue.issueKey,
+      projectId: issue.projectId,
+      stage: issue.factoryState,
+      status: "pr_comment",
+      summary: `GitHub PR comment from ${author}`,
+      detail: body.slice(0, 200),
+    });
+
+    if (issue.activeRunId) {
+      const run = this.db.getRun(issue.activeRunId);
+      if (run?.threadId && run.turnId) {
+        try {
+          await this.codex.steerTurn({
+            threadId: run.threadId,
+            turnId: run.turnId,
+            input: `GitHub PR comment from ${author}:\n\n${body}`,
+          });
+          this.logger.info({ issueKey: issue.issueKey, author }, "Forwarded GitHub PR comment to active run");
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          this.logger.warn({ issueKey: issue.issueKey, error: msg }, "Failed to forward GitHub PR comment");
+        }
+      }
     }
   }
 }

@@ -209,6 +209,11 @@ export class PatchRelayDatabase {
     return row ? mapIssueRow(row) : undefined;
   }
 
+  getIssueByPrNumber(prNumber: number): IssueRecord | undefined {
+    const row = this.connection.prepare("SELECT * FROM issues WHERE pr_number = ?").get(prNumber) as Record<string, unknown> | undefined;
+    return row ? mapIssueRow(row) : undefined;
+  }
+
   listIssuesReadyForExecution(): Array<{ projectId: string; linearIssueId: string }> {
     const rows = this.connection
       .prepare("SELECT project_id, linear_issue_id FROM issues WHERE (pending_run_type IS NOT NULL OR pending_merge_prep = 1) AND active_run_id IS NULL")

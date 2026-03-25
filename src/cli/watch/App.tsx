@@ -1,5 +1,5 @@
-import { useReducer, useMemo, useCallback } from "react";
-import { Box, useApp, useInput } from "ink";
+import { useReducer, useMemo, useCallback, useState } from "react";
+import { Box, Text, useApp, useInput } from "ink";
 import { watchReducer, initialWatchState, filterIssues } from "./watch-state.ts";
 import { useWatchStream } from "./use-watch-stream.ts";
 import { useDetailStream } from "./use-detail-stream.ts";
@@ -12,6 +12,17 @@ interface AppProps {
   baseUrl: string;
   bearerToken?: string | undefined;
   initialIssueKey?: string | undefined;
+}
+
+async function postPrompt(baseUrl: string, issueKey: string, text: string, bearerToken?: string): Promise<void> {
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (bearerToken) headers.authorization = `Bearer ${bearerToken}`;
+  await fetch(new URL(`/api/issues/${encodeURIComponent(issueKey)}/prompt`, baseUrl), {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ text }),
+    signal: AbortSignal.timeout(5000),
+  }).catch(() => {});
 }
 
 async function postRetry(baseUrl: string, issueKey: string, bearerToken?: string): Promise<void> {
@@ -37,13 +48,32 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
   useDetailStream({ baseUrl, bearerToken, issueKey: state.activeDetailKey, dispatch });
   useFeedStream({ baseUrl, bearerToken, active: state.view === "feed", dispatch });
 
+  const [promptMode, setPromptMode] = useState(false);
+  const [promptBuffer, setPromptBuffer] = useState("");
+
   const handleRetry = useCallback(() => {
     if (state.activeDetailKey) {
       void postRetry(baseUrl, state.activeDetailKey, bearerToken);
     }
   }, [baseUrl, bearerToken, state.activeDetailKey]);
 
+  const handlePromptSubmit = useCallback(() => {
+    if (state.activeDetailKey && promptBuffer.trim()) {
+      void postPrompt(baseUrl, state.activeDetailKey, promptBuffer.trim(), bearerToken);
+    }
+    setPromptMode(false);
+    setPromptBuffer("");
+  }, [baseUrl, bearerToken, state.activeDetailKey, promptBuffer]);
+
   useInput((input, key) => {
+    if (promptMode) {
+      if (key.escape) { setPromptMode(false); setPromptBuffer(""); }
+      else if (key.return) { handlePromptSubmit(); }
+      else if (key.backspace || key.delete) { setPromptBuffer((b) => b.slice(0, -1)); }
+      else if (input && !key.ctrl && !key.meta) { setPromptBuffer((b) => b + input); }
+      return;
+    }
+
     if (input === "q") {
       exit();
       return;
@@ -71,6 +101,8 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
         dispatch({ type: "toggle-follow" });
       } else if (input === "r") {
         handleRetry();
+      } else if (input === "p") {
+        setPromptMode(true);
       } else if (input === "j" || key.downArrow) {
         dispatch({ type: "detail-navigate", direction: "next", filtered });
       } else if (input === "k" || key.upArrow) {
@@ -95,6 +127,7 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
           totalCount={state.issues.length}
         />
       ) : state.view === "detail" ? (
+        <Box flexDirection="column">
         <IssueDetailView
           issue={state.issues.find((i) => i.issueKey === state.activeDetailKey)}
           timeline={state.timeline}
@@ -107,6 +140,14 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
           allIssues={filtered}
           activeDetailKey={state.activeDetailKey}
         />
+        {promptMode && (
+          <Box>
+            <Text color="yellow">prompt&gt; </Text>
+            <Text>{promptBuffer}</Text>
+            <Text dimColor>_</Text>
+          </Box>
+        )}
+        </Box>
       ) : (
         <FeedView events={state.feedEvents} connected={state.connected} />
       )}
