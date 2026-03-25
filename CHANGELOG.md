@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.19.0...patchrelay-v0.20.0) (2026-03-25)
+
+
+### Features
+
+* user input — watch prompt, GitHub PR comment forwarding ([#139](https://github.com/krasnoperov/patchrelay/issues/139)) ([cb4cd4b](https://github.com/krasnoperov/patchrelay/commit/cb4cd4bb3f6758f818d3633b0136dccd6059cf99))
+
 ## [0.19.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.18.0...patchrelay-v0.19.0) (2026-03-25)
 
 
