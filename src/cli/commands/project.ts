@@ -1,5 +1,5 @@
 import { loadConfig } from "../../config.ts";
-import { installUserServiceUnits, upsertProjectInConfig } from "../../install.ts";
+import { installServiceUnits, upsertProjectInConfig } from "../../install.ts";
 import type { AppConfig } from "../../types.ts";
 import { hasHelpFlag, parseCsvFlag } from "../args.ts";
 import type { InteractiveRunner, Output, ParsedArgs, RunCliOptions } from "../command-types.ts";
@@ -48,7 +48,7 @@ export async function handleProjectCommand(params: ProjectCommandParams): Promis
     issueKeyPrefixes: parseCsvFlag(params.parsed.flags.get("issue-prefix")),
     linearTeamIds: parseCsvFlag(params.parsed.flags.get("team-id")),
   });
-  const serviceUnits = await installUserServiceUnits();
+  const serviceUnits = await installServiceUnits();
   const noConnect = params.parsed.flags.get("no-connect") === true;
 
   const lines = [

@@ -2,11 +2,11 @@ import {
   getDefaultConfigPath,
   getDefaultRuntimeEnvPath,
   getDefaultServiceEnvPath,
-  getSystemdUserPathUnitPath,
-  getSystemdUserReloadUnitPath,
-  getSystemdUserUnitPath,
+  getSystemdPathUnitPath,
+  getSystemdReloadUnitPath,
+  getSystemdUnitPath,
 } from "../../runtime-paths.ts";
-import { initializePatchRelayHome, installUserServiceUnits } from "../../install.ts";
+import { initializePatchRelayHome, installServiceUnits } from "../../install.ts";
 import type { InteractiveRunner, Output, ParsedArgs } from "../command-types.ts";
 import { formatJson } from "../formatters/json.ts";
 import { writeOutput } from "../output.ts";
@@ -41,7 +41,7 @@ export async function handleInitCommand(params: SetupCommandParams): Promise<num
       force: params.parsed.flags.get("force") === true,
       publicBaseUrl,
     });
-    const serviceUnits = await installUserServiceUnits({ force: params.parsed.flags.get("force") === true });
+    const serviceUnits = await installServiceUnits({ force: params.parsed.flags.get("force") === true });
     const serviceState = await tryManageService(params.runInteractive, installServiceCommands());
     writeOutput(
       params.stdout,
@@ -66,7 +66,7 @@ export async function handleInitCommand(params: SetupCommandParams): Promise<num
             "Created with defaults:",
             `- Config file contains only machine-level essentials such as server.public_base_url`,
             `- Database, logs, bind address, and worktree roots use built-in defaults`,
-            `- The user service and config watcher are installed for you`,
+            `- The system service and config watcher are installed for you`,
             "",
             "Register the app in Linear:",
             "- Open Linear Settings > API > Applications",
@@ -109,7 +109,7 @@ export async function handleInitCommand(params: SetupCommandParams): Promise<num
 
 export async function handleInstallServiceCommand(params: SetupCommandParams): Promise<number> {
   try {
-    const result = await installUserServiceUnits({ force: params.parsed.flags.get("force") === true });
+    const result = await installServiceUnits({ force: params.parsed.flags.get("force") === true });
     const writeOnly = params.parsed.flags.get("write-only") === true;
     if (!writeOnly) {
       await runServiceCommands(params.runInteractive, installServiceCommands());
@@ -126,8 +126,8 @@ export async function handleInstallServiceCommand(params: SetupCommandParams): P
             `Service env: ${result.serviceEnvPath}`,
             `Config file: ${result.configPath}`,
             writeOnly
-              ? "Service units written. Start them with: systemctl --user daemon-reload && systemctl --user enable --now patchrelay.path && systemctl --user enable patchrelay.service && systemctl --user reload-or-restart patchrelay.service"
-              : "PatchRelay user service and config watcher are installed and running.",
+              ? "Service units written. Start them with: sudo systemctl daemon-reload && sudo systemctl enable --now patchrelay.path && sudo systemctl enable patchrelay.service && sudo systemctl reload-or-restart patchrelay.service"
+              : "PatchRelay system service and config watcher are installed and running.",
             "After package updates, run: patchrelay restart-service",
           ].join("\n") + "\n",
     );
@@ -146,15 +146,15 @@ export async function handleRestartServiceCommand(params: SetupCommandParams): P
       params.json
         ? formatJson({
             service: "patchrelay",
-            unitPath: getSystemdUserUnitPath(),
-            reloadUnitPath: getSystemdUserReloadUnitPath(),
-            pathUnitPath: getSystemdUserPathUnitPath(),
+            unitPath: getSystemdUnitPath(),
+            reloadUnitPath: getSystemdReloadUnitPath(),
+            pathUnitPath: getSystemdPathUnitPath(),
             runtimeEnvPath: getDefaultRuntimeEnvPath(),
             serviceEnvPath: getDefaultServiceEnvPath(),
             configPath: getDefaultConfigPath(),
             restarted: true,
           })
-        : "Reloaded systemd user units and reload-or-restart was requested for PatchRelay.\n",
+        : "Reloaded systemd units and reload-or-restart was requested for PatchRelay.\n",
     );
     return 0;
   } catch (error) {

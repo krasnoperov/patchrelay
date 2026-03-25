@@ -13,9 +13,9 @@ import {
   getPatchRelayConfigDir,
   getPatchRelayDataDir,
   getPatchRelayStateDir,
-  getSystemdUserPathUnitPath,
-  getSystemdUserReloadUnitPath,
-  getSystemdUserUnitPath,
+  getSystemdPathUnitPath,
+  getSystemdReloadUnitPath,
+  getSystemdUnitPath,
   readBundledAsset,
 } from "./runtime-paths.ts";
 import { loadConfig } from "./config.ts";
@@ -243,7 +243,7 @@ export async function initializePatchRelayHome(options?: { force?: boolean; publ
   };
 }
 
-export async function installUserServiceUnits(options?: { force?: boolean }): Promise<{
+export async function installServiceUnits(options?: { force?: boolean }): Promise<{
   unitPath: string;
   reloadUnitPath: string;
   pathUnitPath: string;
@@ -255,9 +255,9 @@ export async function installUserServiceUnits(options?: { force?: boolean }): Pr
   pathStatus: "created" | "skipped";
 }> {
   const force = options?.force ?? false;
-  const unitPath = getSystemdUserUnitPath();
-  const reloadUnitPath = getSystemdUserReloadUnitPath();
-  const pathUnitPath = getSystemdUserPathUnitPath();
+  const unitPath = getSystemdUnitPath();
+  const reloadUnitPath = getSystemdReloadUnitPath();
+  const pathUnitPath = getSystemdPathUnitPath();
   const serviceStatus = await writeTemplateFile(unitPath, renderTemplate(readBundledAsset("infra/patchrelay.service")), force);
   const reloadStatus = await writeTemplateFile(
     reloadUnitPath,

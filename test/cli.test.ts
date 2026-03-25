@@ -1077,11 +1077,12 @@ test("cli version prints the installed build version in text and json", async ()
   assert.match(jsonOut.read(), new RegExp(`"version":\\s*"${buildInfo.version.replaceAll(".", "\\.")}"`));
 });
 
-test("cli init writes XDG config files and install-service manages the user unit", async () => {
+test("cli init writes XDG config files and install-service manages the system unit", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-init-"));
   const configHome = path.join(baseDir, ".config");
   const stateHome = path.join(baseDir, ".state");
   const dataHome = path.join(baseDir, ".share");
+  const systemdDir = path.join(baseDir, "systemd");
 
   try {
     await withEnv(
@@ -1089,6 +1090,7 @@ test("cli init writes XDG config files and install-service manages the user unit
         XDG_CONFIG_HOME: configHome,
         XDG_STATE_HOME: stateHome,
         XDG_DATA_HOME: dataHome,
+        PATCHRELAY_SYSTEMD_DIR: systemdDir,
         PATCHRELAY_CONFIG: undefined,
         PATCHRELAY_DB_PATH: undefined,
         PATCHRELAY_LOG_FILE: undefined,
@@ -1112,7 +1114,7 @@ test("cli init writes XDG config files and install-service manages the user unit
         assert.match(initText, /Public base URL: https:\/\/patchrelay\.example\.com/);
         assert.match(initText, /Webhook URL: https:\/\/patchrelay\.example\.com\/webhooks\/linear/);
         assert.match(initText, /Config file contains only machine-level essentials/);
-        assert.match(initText, /The user service and config watcher are installed for you/);
+        assert.match(initText, /The system service and config watcher are installed for you/);
         assert.match(initText, /Open Linear Settings > API > Applications/);
         assert.match(initText, /Run `patchrelay project apply <id> <repo-path>`/);
 
@@ -1134,10 +1136,10 @@ test("cli init writes XDG config files and install-service manages the user unit
         assert.equal(configContents.includes('"projects"'), false);
         assert.equal(configContents.includes(path.join(dataHome, "patchrelay", "worktrees")), false);
         assert.deepEqual(initCommands, [
-          "systemctl --user daemon-reload",
-          "systemctl --user enable --now patchrelay.path",
-          "systemctl --user enable patchrelay.service",
-          "systemctl --user reload-or-restart patchrelay.service",
+          "sudo systemctl daemon-reload",
+          "sudo systemctl enable --now patchrelay.path",
+          "sudo systemctl enable patchrelay.service",
+          "sudo systemctl reload-or-restart patchrelay.service",
         ]);
 
         const installOut = createBufferStream();
@@ -1148,9 +1150,9 @@ test("cli init writes XDG config files and install-service manages the user unit
           }),
           0,
         );
-        const unitPath = path.join(configHome, "systemd", "user", "patchrelay.service");
-        const reloadUnitPath = path.join(configHome, "systemd", "user", "patchrelay-reload.service");
-        const pathUnitPath = path.join(configHome, "systemd", "user", "patchrelay.path");
+        const unitPath = path.join(systemdDir, "patchrelay.service");
+        const reloadUnitPath = path.join(systemdDir, "patchrelay-reload.service");
+        const pathUnitPath = path.join(systemdDir, "patchrelay.path");
         const unit = readFileSync(unitPath, "utf8");
         const reloadUnit = readFileSync(reloadUnitPath, "utf8");
         const pathUnit = readFileSync(pathUnitPath, "utf8");
@@ -1176,8 +1178,8 @@ test("cli init writes XDG config files and install-service manages the user unit
           0,
         );
         assert.deepEqual(commands, [
-          "systemctl --user daemon-reload",
-          "systemctl --user reload-or-restart patchrelay.service",
+          "sudo systemctl daemon-reload",
+          "sudo systemctl reload-or-restart patchrelay.service",
         ]);
       },
     );
@@ -1205,6 +1207,7 @@ test("cli init updates the saved public base URL on rerun", async () => {
         XDG_CONFIG_HOME: configHome,
         XDG_STATE_HOME: stateHome,
         XDG_DATA_HOME: dataHome,
+        PATCHRELAY_SYSTEMD_DIR: path.join(baseDir, "systemd"),
         PATCHRELAY_CONFIG: undefined,
         PATCHRELAY_DB_PATH: undefined,
         PATCHRELAY_LOG_FILE: undefined,
@@ -1247,6 +1250,7 @@ test("cli init updates the saved public base URL on rerun", async () => {
 
 test("cli project apply appends a minimal project to config", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-project-add-"));
+  const systemdDir = path.join(baseDir, "systemd");
   const configHome = path.join(baseDir, ".config");
   const stateHome = path.join(baseDir, ".state");
   const dataHome = path.join(baseDir, ".share");
@@ -1259,6 +1263,7 @@ test("cli project apply appends a minimal project to config", async () => {
         XDG_CONFIG_HOME: configHome,
         XDG_STATE_HOME: stateHome,
         XDG_DATA_HOME: dataHome,
+        PATCHRELAY_SYSTEMD_DIR: systemdDir,
         PATCHRELAY_CONFIG: undefined,
         PATCHRELAY_DB_PATH: undefined,
         PATCHRELAY_LOG_FILE: undefined,
@@ -1307,6 +1312,7 @@ test("cli project apply appends a minimal project to config", async () => {
 test("cli project apply is idempotent and can skip connect until env is ready", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-project-apply-idempotent-"));
   const configHome = path.join(baseDir, ".config");
+  const systemdDir = path.join(baseDir, "systemd");
   const stateHome = path.join(baseDir, ".state");
   const dataHome = path.join(baseDir, ".share");
   const repoPath = path.join(baseDir, "repo");
@@ -1318,6 +1324,7 @@ test("cli project apply is idempotent and can skip connect until env is ready", 
         XDG_CONFIG_HOME: configHome,
         XDG_STATE_HOME: stateHome,
         XDG_DATA_HOME: dataHome,
+        PATCHRELAY_SYSTEMD_DIR: systemdDir,
         PATCHRELAY_CONFIG: undefined,
         PATCHRELAY_DB_PATH: undefined,
         PATCHRELAY_LOG_FILE: undefined,
@@ -1383,6 +1390,7 @@ test("cli project apply requires routing when adding a second project", async ()
         XDG_CONFIG_HOME: configHome,
         XDG_STATE_HOME: stateHome,
         XDG_DATA_HOME: dataHome,
+        PATCHRELAY_SYSTEMD_DIR: path.join(baseDir, "systemd"),
         PATCHRELAY_CONFIG: undefined,
         PATCHRELAY_DB_PATH: undefined,
         PATCHRELAY_LOG_FILE: undefined,
@@ -1440,6 +1448,7 @@ test("cli project apply can auto-connect using the default service.env file", as
         XDG_CONFIG_HOME: configHome,
         XDG_STATE_HOME: stateHome,
         XDG_DATA_HOME: dataHome,
+        PATCHRELAY_SYSTEMD_DIR: path.join(baseDir, "systemd"),
         PATCHRELAY_CONFIG: undefined,
         PATCHRELAY_DB_PATH: undefined,
         PATCHRELAY_LOG_FILE: undefined,
@@ -1501,10 +1510,10 @@ test("cli project apply can auto-connect using the default service.env file", as
         assert.match(projectOut.read(), /Created project usertold/);
         assert.match(projectOut.read(), /Linked project usertold to existing Linear installation 7/);
         assert.deepEqual(commands, [
-          "systemctl --user daemon-reload",
-          "systemctl --user enable --now patchrelay.path",
-          "systemctl --user enable patchrelay.service",
-          "systemctl --user reload-or-restart patchrelay.service",
+          "sudo systemctl daemon-reload",
+          "sudo systemctl enable --now patchrelay.path",
+          "sudo systemctl enable patchrelay.service",
+          "sudo systemctl reload-or-restart patchrelay.service",
         ]);
       },
     );
@@ -1532,6 +1541,7 @@ test("cli project apply json performs the workflow and returns structured connec
         XDG_CONFIG_HOME: configHome,
         XDG_STATE_HOME: stateHome,
         XDG_DATA_HOME: dataHome,
+        PATCHRELAY_SYSTEMD_DIR: path.join(baseDir, "systemd"),
         PATCHRELAY_CONFIG: undefined,
         PATCHRELAY_DB_PATH: undefined,
         PATCHRELAY_LOG_FILE: undefined,

@@ -80,9 +80,9 @@ It creates:
 - `~/.config/patchrelay/runtime.env`
 - `~/.config/patchrelay/service.env`
 - `~/.config/patchrelay/patchrelay.json`
-- `~/.config/systemd/user/patchrelay.service`
-- `~/.config/systemd/user/patchrelay-reload.service`
-- `~/.config/systemd/user/patchrelay.path`
+- `/etc/systemd/system/patchrelay.service`
+- `/etc/systemd/system/patchrelay-reload.service`
+- `/etc/systemd/system/patchrelay.path`
 
 Default runtime paths are:
 
@@ -96,7 +96,7 @@ Default runtime paths are:
 When something looks stuck or inconsistent, start with the local PatchRelay logs:
 
 - log file: `~/.local/state/patchrelay/patchrelay.log`
-- user service logs: `journalctl --user -u patchrelay.service -f`
+- system service logs: `journalctl -u patchrelay.service -f`
 
 Use the log file when you want the persisted service history on disk. Use `journalctl` when you want the live user-service stream managed by systemd.
 
@@ -122,7 +122,7 @@ The most useful correlation fields in logs are:
 
 The generated `patchrelay.json` stays intentionally minimal. In the default setup it only needs `server.public_base_url`; PatchRelay already has built-in defaults for the local bind address, database path, logs, worktree roots, workflow filenames, and Codex runner settings.
 
-`patchrelay init` also installs the user service and a watcher that reload-or-restarts PatchRelay whenever `patchrelay.json`, `runtime.env`, or `service.env` changes.
+`patchrelay init` also installs the system service and a watcher that reload-or-restarts PatchRelay whenever `patchrelay.json`, `runtime.env`, or `service.env` changes.
 
 ## 3. Configure Machine-Level Secrets
 
@@ -216,7 +216,7 @@ patchrelay inspect APP-123
 
 ## 7. Run As A Service
 
-Create and start the user service with:
+Create and start the system service with:
 
 ```bash
 patchrelay install-service
@@ -224,25 +224,25 @@ patchrelay install-service
 
 That writes:
 
-- `~/.config/systemd/user/patchrelay.service`
-- `~/.config/systemd/user/patchrelay-reload.service`
-- `~/.config/systemd/user/patchrelay.path`
+- `/etc/systemd/system/patchrelay.service`
+- `/etc/systemd/system/patchrelay-reload.service`
+- `/etc/systemd/system/patchrelay.path`
 
 And then runs:
 
-- `systemctl --user daemon-reload`
-- `systemctl --user enable --now patchrelay.path`
-- `systemctl --user enable patchrelay.service`
-- `systemctl --user reload-or-restart patchrelay.service`
+- `sudo systemctl daemon-reload`
+- `sudo systemctl enable --now patchrelay.path`
+- `sudo systemctl enable patchrelay.service`
+- `sudo systemctl reload-or-restart patchrelay.service`
 
 If you only want to write the unit files without starting them yet:
 
 ```bash
 patchrelay install-service --write-only
-systemctl --user daemon-reload
-systemctl --user enable --now patchrelay.path
-systemctl --user enable patchrelay.service
-systemctl --user reload-or-restart patchrelay.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now patchrelay.path
+sudo systemctl enable patchrelay.service
+sudo systemctl reload-or-restart patchrelay.service
 ```
 
 After package updates, restart PatchRelay with:

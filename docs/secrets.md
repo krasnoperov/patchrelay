@@ -197,4 +197,4 @@ After credstore:
   └── decrypted at service start → $CREDENTIALS_DIRECTORY/linear-webhook-secret
 ```
 
-The service.env file can still be used for backwards compatibility — if `$CREDENTIALS_DIRECTORY` is not set (user service, dev mode), PatchRelay falls through to the env var layer. To complete the migration, remove the plaintext file after verifying credstore works.
+The service.env file can still be used for backwards compatibility — if `$CREDENTIALS_DIRECTORY` is not set (dev mode without credstore), PatchRelay falls through to the env var layer. To complete the migration, remove the plaintext file after verifying credstore works.

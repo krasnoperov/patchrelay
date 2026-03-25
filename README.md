@@ -150,14 +150,14 @@ patchrelay init https://patchrelay.example.com
 
 `patchrelay init` requires the public HTTPS origin up front because Linear needs a fixed webhook URL and OAuth callback URL for this PatchRelay instance.
 
-It creates the local config, env file, and user service units:
+It creates the local config, env file, and system service units:
 
 - `~/.config/patchrelay/runtime.env`
 - `~/.config/patchrelay/service.env`
 - `~/.config/patchrelay/patchrelay.json`
-- `~/.config/systemd/user/patchrelay.service`
-- `~/.config/systemd/user/patchrelay-reload.service`
-- `~/.config/systemd/user/patchrelay.path`
+- `/etc/systemd/system/patchrelay.service`
+- `/etc/systemd/system/patchrelay-reload.service`
+- `/etc/systemd/system/patchrelay.path`
 
 The generated `patchrelay.json` is intentionally minimal, and `patchrelay init` prints the webhook URL, OAuth callback URL, and the Linear app values you need next.
 
