@@ -336,6 +336,18 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
   }
 
   if (managementRoutesEnabled) {
+    app.post("/api/issues/:issueKey/retry", async (request, reply) => {
+      const issueKey = (request.params as { issueKey: string }).issueKey;
+      const result = service.retryIssue(issueKey);
+      if (!result) {
+        return reply.code(404).send({ ok: false, reason: "issue_not_found" });
+      }
+      if ("error" in result) {
+        return reply.code(409).send({ ok: false, reason: result.error });
+      }
+      return reply.send({ ok: true, ...result });
+    });
+
     app.get("/api/feed", async (request, reply) => {
       const feedQuery: OperatorFeedQuery = {
         limit: getPositiveIntegerQueryParam(request, "limit") ?? 50,

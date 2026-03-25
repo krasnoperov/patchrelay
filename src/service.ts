@@ -60,6 +60,24 @@ export class PatchRelayService {
       config, db,
       (projectId, issueId) => enqueueIssue(projectId, issueId),
       logger, this.feed,
+      (issue, content, options) => {
+        if (!issue.agentSessionId) return;
+        void (async () => {
+          try {
+            const linear = await this.linearProvider.forProject(issue.projectId);
+            if (!linear) return;
+            const allowEphemeral = content.type === "thought" || content.type === "action";
+            await linear.createAgentActivity({
+              agentSessionId: issue.agentSessionId!,
+              content,
+              ...(options?.ephemeral && allowEphemeral ? { ephemeral: true } : {}),
+            });
+          } catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            logger.warn({ issueKey: issue.issueKey, type: content.type, error: msg }, "Failed to emit merge-prep Linear activity");
+          }
+        })();
+      },
     );
 
     this.webhookHandler = new WebhookHandler(
@@ -271,6 +289,21 @@ export class PatchRelayService {
     };
     this.codex.on("notification", handler);
     return () => { this.codex.off("notification", handler); };
+  }
+
+  retryIssue(issueKey: string): { issueKey: string; runType: string } | { error: string } | undefined {
+    const issue = this.db.getIssueByKey(issueKey);
+    if (!issue) return undefined;
+    if (issue.activeRunId) return { error: "Issue already has an active run" };
+    const runType = "implementation";
+    this.db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      pendingRunType: runType as never,
+      factoryState: "delegated" as never,
+    });
+    this.runtime.enqueueIssue(issue.projectId, issue.linearIssueId);
+    return { issueKey, runType };
   }
 
   listOperatorFeed(options?: OperatorFeedQuery) {

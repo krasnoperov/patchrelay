@@ -73,6 +73,14 @@ export interface WatchReport {
 
 export type WatchFilter = "all" | "active" | "non-done";
 
+export interface WatchFeedEntry {
+  at: string;
+  kind: string;
+  summary: string;
+  status?: string | undefined;
+  detail?: string | undefined;
+}
+
 export interface WatchState {
   connected: boolean;
   issues: WatchIssue[];
@@ -83,6 +91,7 @@ export interface WatchState {
   report: WatchReport | null;
   filter: WatchFilter;
   follow: boolean;
+  detailFeed: WatchFeedEntry[];
 }
 
 export type WatchAction =
@@ -109,6 +118,7 @@ export const initialWatchState: WatchState = {
   report: null,
   filter: "non-done",
   follow: true,
+  detailFeed: [],
 };
 
 const TERMINAL_FACTORY_STATES = new Set(["done", "failed"]);
@@ -157,10 +167,10 @@ export function watchReducer(state: WatchState, action: WatchAction): WatchState
       };
 
     case "enter-detail":
-      return { ...state, view: "detail", activeDetailKey: action.issueKey, thread: null, report: null };
+      return { ...state, view: "detail", activeDetailKey: action.issueKey, thread: null, report: null, detailFeed: [] };
 
     case "exit-detail":
-      return { ...state, view: "list", activeDetailKey: null, thread: null, report: null };
+      return { ...state, view: "list", activeDetailKey: null, thread: null, report: null, detailFeed: [] };
 
     case "thread-snapshot":
       return { ...state, thread: action.thread };
@@ -215,7 +225,18 @@ function applyFeedEvent(state: WatchState, event: OperatorFeedEvent): WatchState
   issue.updatedAt = event.at;
   updated[index] = issue;
 
-  return { ...state, issues: updated };
+  // Append to detail feed if this event matches the active detail issue
+  const detailFeed = state.view === "detail" && state.activeDetailKey === event.issueKey
+    ? [...state.detailFeed, {
+        at: event.at,
+        kind: event.kind,
+        summary: event.summary,
+        ...(event.status ? { status: event.status } : {}),
+        ...(event.detail ? { detail: event.detail } : {}),
+      }]
+    : state.detailFeed;
+
+  return { ...state, issues: updated, detailFeed };
 }
 
 // ─── Codex Notification Application ───────────────────────────────

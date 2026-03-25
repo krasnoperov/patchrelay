@@ -108,7 +108,7 @@ const configSchema = z.object({
       approval_policy: z.enum(["never", "on-request", "on-failure", "untrusted"]).default("never"),
       sandbox_mode: z.enum(["danger-full-access", "workspace-write", "read-only"]).default("danger-full-access"),
       persist_extended_history: z.boolean().default(false),
-      experimental_raw_events: z.boolean().default(false),
+      experimental_raw_events: z.boolean().default(true),
     }),
   }),
   projects: z.array(projectSchema).default([]),

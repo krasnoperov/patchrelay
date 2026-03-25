@@ -1,4 +1,4 @@
-import { useReducer, useMemo } from "react";
+import { useReducer, useMemo, useCallback } from "react";
 import { Box, useApp, useInput } from "ink";
 import { watchReducer, initialWatchState, filterIssues } from "./watch-state.ts";
 import { useWatchStream } from "./use-watch-stream.ts";
@@ -12,6 +12,16 @@ interface AppProps {
   initialIssueKey?: string | undefined;
 }
 
+async function postRetry(baseUrl: string, issueKey: string, bearerToken?: string): Promise<void> {
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (bearerToken) headers.authorization = `Bearer ${bearerToken}`;
+  await fetch(new URL(`/api/issues/${encodeURIComponent(issueKey)}/retry`, baseUrl), {
+    method: "POST",
+    headers,
+    signal: AbortSignal.timeout(5000),
+  }).catch(() => {});
+}
+
 export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.JSX.Element {
   const { exit } = useApp();
   const [state, dispatch] = useReducer(watchReducer, {
@@ -23,6 +33,12 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
 
   useWatchStream({ baseUrl, bearerToken, dispatch });
   useDetailStream({ baseUrl, bearerToken, issueKey: state.activeDetailKey, dispatch });
+
+  const handleRetry = useCallback(() => {
+    if (state.activeDetailKey) {
+      void postRetry(baseUrl, state.activeDetailKey, bearerToken);
+    }
+  }, [baseUrl, bearerToken, state.activeDetailKey]);
 
   useInput((input, key) => {
     if (input === "q") {
@@ -48,6 +64,8 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
         dispatch({ type: "exit-detail" });
       } else if (input === "f") {
         dispatch({ type: "toggle-follow" });
+      } else if (input === "r") {
+        handleRetry();
       }
     }
   });
@@ -62,6 +80,7 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
           thread={state.thread}
           report={state.report}
           follow={state.follow}
+          feedEntries={state.detailFeed}
         />
       )}
     </Box>

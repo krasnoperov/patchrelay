@@ -388,7 +388,7 @@ export class RunOrchestrator {
       } else if (freshIssue.prState === "merged") {
         postRunState = "done";
       } else {
-        postRunState = "pr_open";
+        postRunState = "awaiting_review";
       }
     }
 

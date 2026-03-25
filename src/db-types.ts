@@ -25,6 +25,7 @@ export interface IssueRecord {
   prCheckStatus?: string | undefined;
   ciRepairAttempts: number;
   queueRepairAttempts: number;
+  mergePrepAttempts: number;
   pendingMergePrep: boolean;
   updatedAt: string;
 }

@@ -1,6 +1,7 @@
 import { Box, Text } from "ink";
-import type { WatchIssue, WatchReport, WatchThread } from "./watch-state.ts";
+import type { WatchFeedEntry, WatchIssue, WatchReport, WatchThread } from "./watch-state.ts";
 import { ThreadView } from "./ThreadView.tsx";
+import { FeedTimeline } from "./FeedTimeline.tsx";
 import { HelpBar } from "./HelpBar.tsx";
 
 interface IssueDetailViewProps {
@@ -8,6 +9,7 @@ interface IssueDetailViewProps {
   thread: WatchThread | null;
   report: WatchReport | null;
   follow: boolean;
+  feedEntries: WatchFeedEntry[];
 }
 
 function truncate(text: string, max: number): string {
@@ -81,7 +83,7 @@ function ReportView({ report }: { report: WatchReport }): React.JSX.Element {
   );
 }
 
-export function IssueDetailView({ issue, thread, report, follow }: IssueDetailViewProps): React.JSX.Element {
+export function IssueDetailView({ issue, thread, report, follow, feedEntries }: IssueDetailViewProps): React.JSX.Element {
   if (!issue) {
     return (
       <Box flexDirection="column">
@@ -113,6 +115,13 @@ export function IssueDetailView({ issue, thread, report, follow }: IssueDetailVi
         <Text dimColor>Loading...</Text>
       )}
 
+      {feedEntries.length > 0 && (
+        <>
+          <Text dimColor>{"─".repeat(72)}</Text>
+          <Text bold dimColor>Events:</Text>
+          <FeedTimeline entries={feedEntries} maxEntries={follow ? 5 : undefined} />
+        </>
+      )}
       <Text dimColor>{"─".repeat(72)}</Text>
       <HelpBar view="detail" follow={follow} />
     </Box>

@@ -102,6 +102,7 @@ export class PatchRelayDatabase {
     prCheckStatus?: string | null;
     ciRepairAttempts?: number;
     queueRepairAttempts?: number;
+    mergePrepAttempts?: number;
     pendingMergePrep?: boolean;
   }): IssueRecord {
     const now = isoNow();
@@ -133,6 +134,7 @@ export class PatchRelayDatabase {
       if (params.prCheckStatus !== undefined) { sets.push("pr_check_status = @prCheckStatus"); values.prCheckStatus = params.prCheckStatus; }
       if (params.ciRepairAttempts !== undefined) { sets.push("ci_repair_attempts = @ciRepairAttempts"); values.ciRepairAttempts = params.ciRepairAttempts; }
       if (params.queueRepairAttempts !== undefined) { sets.push("queue_repair_attempts = @queueRepairAttempts"); values.queueRepairAttempts = params.queueRepairAttempts; }
+      if (params.mergePrepAttempts !== undefined) { sets.push("merge_prep_attempts = @mergePrepAttempts"); values.mergePrepAttempts = params.mergePrepAttempts; }
       if (params.pendingMergePrep !== undefined) { sets.push("pending_merge_prep = @pendingMergePrep"); values.pendingMergePrep = params.pendingMergePrep ? 1 : 0; }
 
       this.connection.prepare(`UPDATE issues SET ${sets.join(", ")} WHERE project_id = @projectId AND linear_issue_id = @linearIssueId`).run(values);
@@ -432,6 +434,7 @@ function mapIssueRow(row: Record<string, unknown>): IssueRecord {
     ...(row.pr_check_status !== null && row.pr_check_status !== undefined ? { prCheckStatus: String(row.pr_check_status) } : {}),
     ciRepairAttempts: Number(row.ci_repair_attempts ?? 0),
     queueRepairAttempts: Number(row.queue_repair_attempts ?? 0),
+    mergePrepAttempts: Number(row.merge_prep_attempts ?? 0),
     pendingMergePrep: Boolean(row.pending_merge_prep),
   };
 }

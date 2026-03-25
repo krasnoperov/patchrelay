@@ -138,6 +138,9 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
 
   // Add pending_merge_prep column for merge queue stewardship
   addColumnIfMissing(connection, "issues", "pending_merge_prep", "INTEGER NOT NULL DEFAULT 0");
+
+  // Add merge_prep_attempts for retry budget / escalation
+  addColumnIfMissing(connection, "issues", "merge_prep_attempts", "INTEGER NOT NULL DEFAULT 0");
 }
 
 function addColumnIfMissing(connection: DatabaseConnection, table: string, column: string, definition: string): void {

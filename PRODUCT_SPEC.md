@@ -6,10 +6,17 @@ PatchRelay is a self-hosted control plane for a **Linear-native agentic software
 
 It receives delegated work through Linear Agent Sessions, prepares an isolated git worktree for the issue, runs Codex against that worktree, tracks the GitHub pull request lifecycle, loops through review and CI repair via GitHub webhooks, and handles merge queue failures until the change lands or escalates to a human.
 
+PatchRelay should be understood as the system that manages a **controlled coding loop per issue**:
+
+- gather the right context
+- take action inside the issue worktree
+- verify through repository checks, GitHub review, and queue outcomes
+- repeat, retry, or escalate with explicit state
+
 ## Product Positioning
 
 PatchRelay is not just a webhook relay and not just a single-run coding bot.
-It is the deterministic system around the model:
+It is the deterministic system around the model and around the loop:
 
 - Linear is the human-facing control plane
 - Codex is the execution engine
@@ -41,6 +48,7 @@ PatchRelay must:
 3. be **restart-safe** so long-running work survives service restarts
 4. be **event-driven** so GitHub webhooks trigger reactive repair loops automatically
 5. keep the **human loop clear** by escalating only for meaningful ambiguity, unrecoverable failure, or policy-required approval
+6. treat **context, verification, and repair** as first-class workflow concerns rather than as prompt-only concerns
 
 ## Non-Goals
 
@@ -60,8 +68,9 @@ PatchRelay does not need to:
 2. PatchRelay receives an `AgentSessionEvent`.
 3. PatchRelay emits an acknowledgment activity and publishes a plan.
 4. PatchRelay creates or restores the issue worktree.
-5. PatchRelay runs Codex in that worktree with repo guidance and issue context.
-6. Codex opens or updates a GitHub PR.
+5. PatchRelay packages the issue context, repository guidance, and workflow-specific instructions for the first loop.
+6. PatchRelay runs Codex in that worktree with that context.
+7. Codex opens or updates a GitHub PR.
 
 ### 2. Review Iteration
 
@@ -107,6 +116,7 @@ PatchRelay must:
 2. run a repository-defined setup hook for each worktree
 3. allow the same worktree to be resumed across iterations
 4. support Codex execution through App Server
+5. treat the worktree as the default action boundary for the issue loop
 
 ### GitHub Integration
 
@@ -125,6 +135,7 @@ PatchRelay must:
 2. keep retry budgets per failure class (CI repair and queue repair have separate budgets)
 3. escalate to a human on exhausted retry budget, ambiguous product decisions, or unrecoverable infrastructure failure
 4. preserve all context needed for a human to take over
+5. keep verification as an explicit part of the lifecycle rather than assuming code generation is sufficient
 
 ### Auditability And Observability
 
@@ -145,6 +156,8 @@ PatchRelay must make it easy to answer:
 - Short entrypoint docs, deeper linked docs.
 - Deterministic control plane around nondeterministic model behavior.
 - Repair loops are normal behavior, not exceptions.
+- Distinct loop types beat one generic rerun.
+- Context is a product feature, not just prompt text.
 
 ## MVP Scope
 

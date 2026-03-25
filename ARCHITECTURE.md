@@ -1,6 +1,7 @@
 # PatchRelay Architecture Map
 
 PatchRelay is a **Linear-centered orchestration layer** for agentic software delivery.
+It manages a controlled issue loop of context, action, verification, and repair.
 
 The architecture follows a simple rule:
 
@@ -154,5 +155,6 @@ Factory states as implemented in `factory-state.ts`:
 
 - [PRODUCT_SPEC.md](./PRODUCT_SPEC.md)
 - [docs/design-docs/core-beliefs.md](./docs/design-docs/core-beliefs.md)
+- [docs/design-docs/agentic-loop-principles.md](./docs/design-docs/agentic-loop-principles.md)
 - [docs/architecture.md](./docs/architecture.md)
 - [docs/references/external-patterns.md](./docs/references/external-patterns.md)

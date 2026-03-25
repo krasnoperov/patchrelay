@@ -47,6 +47,8 @@ export interface AgentSessionMetadata {
   promptContext?: string;
   promptBody?: string;
   issueCommentId?: string;
+  signal?: string;
+  signalMetadata?: Record<string, unknown>;
 }
 
 export interface InstallationWebhookMetadata {
