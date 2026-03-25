@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.16.0...patchrelay-v0.17.0) (2026-03-25)
+
+
+### Features
+
+* unified lifecycle timeline in watch detail view ([#131](https://github.com/krasnoperov/patchrelay/issues/131)) ([e890f3e](https://github.com/krasnoperov/patchrelay/commit/e890f3e09bcc42b60c0b3dd273cb66b0e767a5c1))
+
 ## [0.16.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.15.0...patchrelay-v0.16.0) (2026-03-25)
 
 
