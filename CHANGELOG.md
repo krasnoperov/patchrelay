@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.13.0...patchrelay-v0.14.0) (2026-03-25)
+
+
+### Features
+
+* Phase 3 polish — report fallback, titles, relative times, filters ([#121](https://github.com/krasnoperov/patchrelay/issues/121)) ([f201d1c](https://github.com/krasnoperov/patchrelay/commit/f201d1cf1d513c1344e8133cbebb0d5999a20692))
+
 ## [0.13.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.12.9...patchrelay-v0.13.0) (2026-03-25)
 
 
