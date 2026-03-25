@@ -3,8 +3,10 @@ import { Box, useApp, useInput } from "ink";
 import { watchReducer, initialWatchState, filterIssues } from "./watch-state.ts";
 import { useWatchStream } from "./use-watch-stream.ts";
 import { useDetailStream } from "./use-detail-stream.ts";
+import { useFeedStream } from "./use-feed-stream.ts";
 import { IssueListView } from "./IssueListView.tsx";
 import { IssueDetailView } from "./IssueDetailView.tsx";
+import { FeedView } from "./FeedView.tsx";
 
 interface AppProps {
   baseUrl: string;
@@ -33,6 +35,7 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
 
   useWatchStream({ baseUrl, bearerToken, dispatch });
   useDetailStream({ baseUrl, bearerToken, issueKey: state.activeDetailKey, dispatch });
+  useFeedStream({ baseUrl, bearerToken, active: state.view === "feed", dispatch });
 
   const handleRetry = useCallback(() => {
     if (state.activeDetailKey) {
@@ -58,6 +61,8 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
         }
       } else if (key.tab) {
         dispatch({ type: "cycle-filter" });
+      } else if (input === "F" || input === "f") {
+        dispatch({ type: "enter-feed" });
       }
     } else if (state.view === "detail") {
       if (key.escape || key.backspace || key.delete) {
@@ -66,6 +71,14 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
         dispatch({ type: "toggle-follow" });
       } else if (input === "r") {
         handleRetry();
+      } else if (input === "j" || key.downArrow) {
+        dispatch({ type: "detail-navigate", direction: "next", filtered });
+      } else if (input === "k" || key.upArrow) {
+        dispatch({ type: "detail-navigate", direction: "prev", filtered });
+      }
+    } else if (state.view === "feed") {
+      if (key.escape || key.backspace || key.delete) {
+        dispatch({ type: "exit-feed" });
       }
     }
   });
@@ -73,8 +86,15 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
   return (
     <Box flexDirection="column">
       {state.view === "list" ? (
-        <IssueListView issues={filtered} selectedIndex={state.selectedIndex} connected={state.connected} filter={state.filter} totalCount={state.issues.length} />
-      ) : (
+        <IssueListView
+          issues={filtered}
+          allIssues={state.issues}
+          selectedIndex={state.selectedIndex}
+          connected={state.connected}
+          filter={state.filter}
+          totalCount={state.issues.length}
+        />
+      ) : state.view === "detail" ? (
         <IssueDetailView
           issue={state.issues.find((i) => i.issueKey === state.activeDetailKey)}
           timeline={state.timeline}
@@ -83,7 +103,12 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
           tokenUsage={state.tokenUsage}
           diffSummary={state.diffSummary}
           plan={state.plan}
+          issueContext={state.issueContext}
+          allIssues={filtered}
+          activeDetailKey={state.activeDetailKey}
         />
+      ) : (
+        <FeedView events={state.feedEvents} connected={state.connected} />
       )}
     </Box>
   );

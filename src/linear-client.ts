@@ -21,6 +21,29 @@ interface GraphqlResponse<T> {
   }>;
 }
 
+interface LinearIssueRawFields {
+  id: string;
+  identifier?: string | null;
+  title?: string | null;
+  description?: string | null;
+  url?: string | null;
+  priority?: number | null;
+  estimate?: number | null;
+  delegate?: { id?: string | null; name?: string | null } | null;
+  state?: { id?: string | null; name?: string | null } | null;
+  labels?: { nodes?: Array<{ id: string; name: string }> } | null;
+  team?: {
+    id?: string | null;
+    key?: string | null;
+    states?: {
+      nodes?: Array<{ id: string; name: string; type?: string | null }>;
+    } | null;
+    labels?: {
+      nodes?: Array<{ id: string; name: string }>;
+    } | null;
+  } | null;
+}
+
 export class LinearGraphqlClient implements LinearClient {
   constructor(
     private readonly options: {
@@ -32,27 +55,7 @@ export class LinearGraphqlClient implements LinearClient {
 
   async getIssue(issueId: string): Promise<LinearIssueSnapshot> {
     const response = await this.request<{
-      issue: {
-        id: string;
-        identifier?: string | null;
-        title?: string | null;
-        url?: string | null;
-        delegate?: { id?: string | null; name?: string | null } | null;
-        state?: { id?: string | null; name?: string | null } | null;
-        labels?: {
-          nodes?: Array<{ id: string; name: string }>;
-        } | null;
-        team?: {
-          id?: string | null;
-          key?: string | null;
-          states?: {
-            nodes?: Array<{ id: string; name: string; type?: string | null }>;
-          } | null;
-          labels?: {
-            nodes?: Array<{ id: string; name: string }>;
-          } | null;
-        } | null;
-      } | null;
+      issue: LinearIssueRawFields | null;
     }>(
       `
       query PatchRelayIssue($id: String!) {
@@ -60,7 +63,10 @@ export class LinearGraphqlClient implements LinearClient {
           id
           identifier
           title
+          description
           url
+          priority
+          estimate
           delegate {
             id
             name
@@ -115,25 +121,7 @@ export class LinearGraphqlClient implements LinearClient {
     const response = await this.request<{
       issueUpdate: {
         success: boolean;
-          issue?: {
-            id: string;
-            identifier?: string | null;
-            title?: string | null;
-            url?: string | null;
-            delegate?: { id?: string | null; name?: string | null } | null;
-            state?: { id?: string | null; name?: string | null } | null;
-            labels?: { nodes?: Array<{ id: string; name: string }> } | null;
-            team?: {
-            id?: string | null;
-            key?: string | null;
-            states?: {
-              nodes?: Array<{ id: string; name: string; type?: string | null }>;
-            } | null;
-            labels?: {
-              nodes?: Array<{ id: string; name: string }>;
-            } | null;
-          } | null;
-        } | null;
+        issue?: LinearIssueRawFields | null;
       };
     }>(
       `
@@ -144,7 +132,10 @@ export class LinearGraphqlClient implements LinearClient {
             id
             identifier
             title
+            description
             url
+            priority
+            estimate
             delegate {
               id
               name
@@ -334,24 +325,7 @@ export class LinearGraphqlClient implements LinearClient {
     const response = await this.request<{
       issueUpdate: {
         success: boolean;
-        issue?: {
-          id: string;
-          identifier?: string | null;
-          title?: string | null;
-          url?: string | null;
-          state?: { id?: string | null; name?: string | null } | null;
-          labels?: { nodes?: Array<{ id: string; name: string }> } | null;
-          team?: {
-            id?: string | null;
-            key?: string | null;
-            states?: {
-              nodes?: Array<{ id: string; name: string; type?: string | null }>;
-            } | null;
-            labels?: {
-              nodes?: Array<{ id: string; name: string }>;
-            } | null;
-          } | null;
-        } | null;
+        issue?: LinearIssueRawFields | null;
       };
     }>(
       `
@@ -362,7 +336,10 @@ export class LinearGraphqlClient implements LinearClient {
             id
             identifier
             title
+            description
             url
+            priority
+            estimate
             state {
               id
               name
@@ -463,32 +440,17 @@ export class LinearGraphqlClient implements LinearClient {
     return payload.data;
   }
 
-  private mapIssue(issue: {
-    id: string;
-    identifier?: string | null;
-    title?: string | null;
-    url?: string | null;
-    delegate?: { id?: string | null; name?: string | null } | null;
-    state?: { id?: string | null; name?: string | null } | null;
-    labels?: { nodes?: Array<{ id: string; name: string }> } | null;
-    team?: {
-      id?: string | null;
-      key?: string | null;
-      states?: {
-        nodes?: Array<{ id: string; name: string; type?: string | null }>;
-      } | null;
-      labels?: {
-        nodes?: Array<{ id: string; name: string }>;
-      } | null;
-    } | null;
-  }): LinearIssueSnapshot {
+  private mapIssue(issue: LinearIssueRawFields): LinearIssueSnapshot {
     const labels = (issue.labels?.nodes ?? []).map((label) => ({ id: label.id, name: label.name }));
     const teamLabels = (issue.team?.labels?.nodes ?? []).map((label) => ({ id: label.id, name: label.name }));
     return {
       id: issue.id,
       ...(issue.identifier ? { identifier: issue.identifier } : {}),
       ...(issue.title ? { title: issue.title } : {}),
+      ...(issue.description ? { description: issue.description } : {}),
       ...(issue.url ? { url: issue.url } : {}),
+      ...(issue.priority != null ? { priority: issue.priority } : {}),
+      ...(issue.estimate != null ? { estimate: issue.estimate } : {}),
       ...(issue.state?.id ? { stateId: issue.state.id } : {}),
       ...(issue.state?.name ? { stateName: issue.state.name } : {}),
       ...(issue.team?.id ? { teamId: issue.team.id } : {}),

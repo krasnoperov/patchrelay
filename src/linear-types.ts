@@ -25,6 +25,7 @@ export interface IssueMetadata {
   id: string;
   identifier?: string;
   title?: string;
+  description?: string;
   url?: string;
   teamId?: string;
   teamKey?: string;
@@ -33,6 +34,8 @@ export interface IssueMetadata {
   stateType?: string;
   delegateId?: string;
   delegateName?: string;
+  priority?: number;
+  estimate?: number;
   labelNames: string[];
 }
 
@@ -134,7 +137,10 @@ export interface LinearIssueSnapshot {
   id: string;
   identifier?: string;
   title?: string;
+  description?: string;
   url?: string;
+  priority?: number;
+  estimate?: number;
   stateId?: string;
   stateName?: string;
   teamId?: string;

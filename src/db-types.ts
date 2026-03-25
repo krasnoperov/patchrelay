@@ -8,7 +8,10 @@ export interface IssueRecord {
   linearIssueId: string;
   issueKey?: string | undefined;
   title?: string | undefined;
+  description?: string | undefined;
   url?: string | undefined;
+  priority?: number | undefined;
+  estimate?: number | undefined;
   currentLinearState?: string | undefined;
   factoryState: FactoryState;
   pendingRunType?: RunType | undefined;

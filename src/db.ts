@@ -85,7 +85,10 @@ export class PatchRelayDatabase {
     linearIssueId: string;
     issueKey?: string;
     title?: string;
+    description?: string;
     url?: string;
+    priority?: number | null;
+    estimate?: number | null;
     currentLinearState?: string;
     factoryState?: FactoryState;
     pendingRunType?: RunType | null;
@@ -118,7 +121,10 @@ export class PatchRelayDatabase {
       };
       if (params.issueKey !== undefined) { sets.push("issue_key = COALESCE(@issueKey, issue_key)"); values.issueKey = params.issueKey; }
       if (params.title !== undefined) { sets.push("title = COALESCE(@title, title)"); values.title = params.title; }
+      if (params.description !== undefined) { sets.push("description = COALESCE(@description, description)"); values.description = params.description; }
       if (params.url !== undefined) { sets.push("url = COALESCE(@url, url)"); values.url = params.url; }
+      if (params.priority !== undefined) { sets.push("priority = @priority"); values.priority = params.priority; }
+      if (params.estimate !== undefined) { sets.push("estimate = @estimate"); values.estimate = params.estimate; }
       if (params.currentLinearState !== undefined) { sets.push("current_linear_state = COALESCE(@currentLinearState, current_linear_state)"); values.currentLinearState = params.currentLinearState; }
       if (params.factoryState !== undefined) { sets.push("factory_state = @factoryState"); values.factoryState = params.factoryState; }
       if (params.pendingRunType !== undefined) { sets.push("pending_run_type = @pendingRunType"); values.pendingRunType = params.pendingRunType; }
@@ -143,13 +149,15 @@ export class PatchRelayDatabase {
     } else {
       this.connection.prepare(`
         INSERT INTO issues (
-          project_id, linear_issue_id, issue_key, title, url,
+          project_id, linear_issue_id, issue_key, title, description, url,
+          priority, estimate,
           current_linear_state, factory_state, pending_run_type, pending_run_context_json,
           branch_name, worktree_path, thread_id, active_run_id,
           agent_session_id,
           updated_at
         ) VALUES (
-          @projectId, @linearIssueId, @issueKey, @title, @url,
+          @projectId, @linearIssueId, @issueKey, @title, @description, @url,
+          @priority, @estimate,
           @currentLinearState, @factoryState, @pendingRunType, @pendingRunContextJson,
           @branchName, @worktreePath, @threadId, @activeRunId,
           @agentSessionId,
@@ -160,7 +168,10 @@ export class PatchRelayDatabase {
         linearIssueId: params.linearIssueId,
         issueKey: params.issueKey ?? null,
         title: params.title ?? null,
+        description: params.description ?? null,
         url: params.url ?? null,
+        priority: params.priority ?? null,
+        estimate: params.estimate ?? null,
         currentLinearState: params.currentLinearState ?? null,
         factoryState: params.factoryState ?? "delegated",
         pendingRunType: params.pendingRunType ?? null,
@@ -418,7 +429,10 @@ function mapIssueRow(row: Record<string, unknown>): IssueRecord {
     linearIssueId: String(row.linear_issue_id),
     ...(row.issue_key !== null ? { issueKey: String(row.issue_key) } : {}),
     ...(row.title !== null ? { title: String(row.title) } : {}),
+    ...(row.description !== null && row.description !== undefined ? { description: String(row.description) } : {}),
     ...(row.url !== null ? { url: String(row.url) } : {}),
+    ...(row.priority !== null && row.priority !== undefined ? { priority: Number(row.priority) } : {}),
+    ...(row.estimate !== null && row.estimate !== undefined ? { estimate: Number(row.estimate) } : {}),
     ...(row.current_linear_state !== null ? { currentLinearState: String(row.current_linear_state) } : {}),
     factoryState: String(row.factory_state ?? "delegated") as FactoryState,
     ...(row.pending_run_type !== null && row.pending_run_type !== undefined ? { pendingRunType: String(row.pending_run_type) as RunType } : {}),

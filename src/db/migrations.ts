@@ -147,6 +147,11 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
 
   // Collapse awaiting_review into pr_open (state normalization)
   connection.prepare("UPDATE issues SET factory_state = 'pr_open' WHERE factory_state = 'awaiting_review'").run();
+
+  // Add Linear issue description, priority, estimate
+  addColumnIfMissing(connection, "issues", "description", "TEXT");
+  addColumnIfMissing(connection, "issues", "priority", "INTEGER");
+  addColumnIfMissing(connection, "issues", "estimate", "REAL");
 }
 
 function addColumnIfMissing(connection: DatabaseConnection, table: string, column: string, definition: string): void {

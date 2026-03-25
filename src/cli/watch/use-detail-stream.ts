@@ -1,8 +1,8 @@
 import { useEffect, useRef, type Dispatch } from "react";
-import type { WatchAction } from "./watch-state.ts";
+import type { WatchAction, WatchIssueContext } from "./watch-state.ts";
 import type { TimelineRunInput } from "./timeline-builder.ts";
 import type { OperatorFeedEvent } from "../../operator-feed.ts";
-import type { CodexThreadSummary, StageReport } from "../../types.ts";
+import type { CodexThreadSummary, StageReport, TrackedIssueRecord } from "../../types.ts";
 
 interface DetailStreamOptions {
   baseUrl: string;
@@ -55,6 +55,7 @@ async function rehydrate(
 
     const data = await response.json() as {
       ok?: boolean;
+      issue?: TrackedIssueRecord;
       runs?: Array<{
         id: number;
         runType: string;
@@ -79,12 +80,32 @@ async function rehydrate(
       ...(r.report ? { report: r.report } : {}),
     }));
 
+    let issueContext: WatchIssueContext | null = null;
+    if (data.issue) {
+      const i = data.issue as unknown as Record<string, unknown>;
+      issueContext = {
+        description: typeof i.description === "string" ? i.description : undefined,
+        currentLinearState: typeof i.currentLinearState === "string" ? i.currentLinearState : undefined,
+        issueUrl: typeof i.issueUrl === "string" ? i.issueUrl : undefined,
+        worktreePath: typeof i.worktreePath === "string" ? i.worktreePath : undefined,
+        branchName: typeof i.branchName === "string" ? i.branchName : undefined,
+        prUrl: typeof i.prUrl === "string" ? i.prUrl : undefined,
+        priority: typeof i.priority === "number" ? i.priority : undefined,
+        estimate: typeof i.estimate === "number" ? i.estimate : undefined,
+        ciRepairAttempts: typeof i.ciRepairAttempts === "number" ? i.ciRepairAttempts : 0,
+        queueRepairAttempts: typeof i.queueRepairAttempts === "number" ? i.queueRepairAttempts : 0,
+        reviewFixAttempts: typeof i.reviewFixAttempts === "number" ? i.reviewFixAttempts : 0,
+        runCount: runs.length,
+      };
+    }
+
     dispatch({
       type: "timeline-rehydrate",
       runs,
       feedEvents: data.feedEvents ?? [],
       liveThread: data.liveThread ?? null,
       activeRunId: data.activeRunId ?? null,
+      issueContext,
     });
   } catch {
     // Rehydration is best-effort

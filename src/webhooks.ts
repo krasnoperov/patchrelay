@@ -252,11 +252,17 @@ function extractIssueMetadata(payload: LinearWebhookPayload): IssueMetadata | un
   const stateType = getString(stateRecord ?? {}, "type");
   const delegateId = getString(issueRecord, "delegateId") ?? getString(delegateRecord ?? {}, "id");
   const delegateName = getString(delegateRecord ?? {}, "name");
+  const description = getString(issueRecord, "description");
+  const rawPriority = issueRecord.priority;
+  const priority = typeof rawPriority === "number" ? rawPriority : undefined;
+  const rawEstimate = issueRecord.estimate;
+  const estimate = typeof rawEstimate === "number" ? rawEstimate : undefined;
 
   return {
     id,
     ...(identifier ? { identifier } : {}),
     ...(title ? { title } : {}),
+    ...(description ? { description } : {}),
     ...(url ? { url } : {}),
     ...(teamId ? { teamId } : {}),
     ...(teamKey ? { teamKey } : {}),
@@ -265,6 +271,8 @@ function extractIssueMetadata(payload: LinearWebhookPayload): IssueMetadata | un
     ...(stateType ? { stateType } : {}),
     ...(delegateId ? { delegateId } : {}),
     ...(delegateName ? { delegateName } : {}),
+    ...(priority != null ? { priority } : {}),
+    ...(estimate != null ? { estimate } : {}),
     labelNames: extractLabelNames(issueRecord),
   };
 }

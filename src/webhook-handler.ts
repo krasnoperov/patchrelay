@@ -205,7 +205,10 @@ export class WebhookHandler {
       linearIssueId: normalizedIssue.id,
       ...(normalizedIssue.identifier ? { issueKey: normalizedIssue.identifier } : {}),
       ...(normalizedIssue.title ? { title: normalizedIssue.title } : {}),
+      ...(normalizedIssue.description ? { description: normalizedIssue.description } : {}),
       ...(normalizedIssue.url ? { url: normalizedIssue.url } : {}),
+      ...(normalizedIssue.priority != null ? { priority: normalizedIssue.priority } : {}),
+      ...(normalizedIssue.estimate != null ? { estimate: normalizedIssue.estimate } : {}),
       ...(normalizedIssue.stateName ? { currentLinearState: normalizedIssue.stateName } : {}),
       ...(pendingRunType ? { pendingRunType, factoryState: "delegated" as const } : {}),
       ...((pendingRunType || existingIssue?.pendingRunType === "implementation") && pendingRunContextJson
