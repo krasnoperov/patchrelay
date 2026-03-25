@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.1](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.20.0...patchrelay-v0.20.1) (2026-03-25)
+
+
+### Bug Fixes
+
+* prompt input improvements — visibility, queuing, cross-publish ([#141](https://github.com/krasnoperov/patchrelay/issues/141)) ([f14c61f](https://github.com/krasnoperov/patchrelay/commit/f14c61f547ef267e5fe52e499c35f7ddec13d22d))
+
 ## [0.20.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.19.0...patchrelay-v0.20.0) (2026-03-25)
 
 
