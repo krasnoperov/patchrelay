@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.2](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.20.1...patchrelay-v0.20.2) (2026-03-25)
+
+
+### Bug Fixes
+
+* TUI layout polish — remove borders, compact statuses, responsive ([#143](https://github.com/krasnoperov/patchrelay/issues/143)) ([2b39130](https://github.com/krasnoperov/patchrelay/commit/2b391300c11379ebf1815f726527d1383342f83a))
+
 ## [0.20.1](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.20.0...patchrelay-v0.20.1) (2026-03-25)
 
 
