@@ -2,7 +2,6 @@ import type { OperatorFeedEvent } from "../../operator-feed.ts";
 import type {
   TimelineEntry,
   TimelineRunInput,
-  TimelineItemPayload,
 } from "./timeline-builder.ts";
 import {
   buildTimelineFromRehydration,
