@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.1](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.14.0...patchrelay-v0.14.1) (2026-03-25)
+
+
+### Bug Fixes
+
+* migrate to system service and service-aware doctor ([#123](https://github.com/krasnoperov/patchrelay/issues/123)) ([21e9780](https://github.com/krasnoperov/patchrelay/commit/21e9780c07bb37552a6d97ae8482cad6789bbfb0))
+
 ## [0.14.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.13.0...patchrelay-v0.14.0) (2026-03-25)
 
 
