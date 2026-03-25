@@ -42,6 +42,10 @@ const projectSchema = z.object({
   allow_labels: z.array(z.string().min(1)).default([]),
   trigger_events: z.array(z.string().min(1)).min(1).optional(),
   branch_prefix: z.string().min(1).optional(),
+  /** Check names that are review gates (AI Review, quality analysis). Default: code class. */
+  review_checks: z.array(z.string().min(1)).default([]),
+  /** Check names that are policy gates (conventional title, release policy). Default: code class. */
+  gate_checks: z.array(z.string().min(1)).default([]),
   github: z.object({
     webhook_secret: z.string().min(1).optional(),
     repo_full_name: z.string().min(1).optional(),
@@ -468,6 +472,8 @@ export function loadConfig(
         issueKeyPrefixes: project.issue_key_prefixes,
         linearTeamIds: project.linear_team_ids,
         allowLabels: project.allow_labels,
+        reviewChecks: project.review_checks,
+        gateChecks: project.gate_checks,
         triggerEvents: normalizeTriggerEvents(
           parsed.linear.oauth.actor,
           (repoSettings?.trigger_events as AppConfig["projects"][number]["triggerEvents"] | undefined) ??

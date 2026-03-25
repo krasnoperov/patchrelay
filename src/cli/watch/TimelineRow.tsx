@@ -43,13 +43,24 @@ function FeedRow({ entry }: { entry: TimelineEntry }): React.JSX.Element {
   );
 }
 
+const RUN_TYPE_LABELS: Record<string, string> = {
+  implementation: "implementing",
+  ci_repair: "repairing checks",
+  review_fix: "addressing feedback",
+  queue_repair: "repairing merge",
+};
+
+function runLabel(runType: string): string {
+  return RUN_TYPE_LABELS[runType] ?? runType;
+}
+
 function RunStartRow({ entry }: { entry: TimelineEntry }): React.JSX.Element {
   const run = entry.run!;
   return (
     <Box gap={1}>
       <Text dimColor>{formatTime(entry.at)}</Text>
-      <Text bold color="yellow">{run.runType.padEnd(16)}</Text>
-      <Text bold>run started</Text>
+      <Text bold color="yellow">{runLabel(run.runType).padEnd(20)}</Text>
+      <Text bold>started</Text>
     </Box>
   );
 }
@@ -61,7 +72,7 @@ function RunEndRow({ entry }: { entry: TimelineEntry }): React.JSX.Element {
   return (
     <Box gap={1}>
       <Text dimColor>{formatTime(entry.at)}</Text>
-      <Text bold color={color}>{run.runType.padEnd(16)}</Text>
+      <Text bold color={color}>{runLabel(run.runType).padEnd(20)}</Text>
       <Text bold color={color}>{run.status}</Text>
       {duration ? <Text dimColor>({duration})</Text> : null}
     </Box>
