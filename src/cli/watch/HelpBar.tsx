@@ -9,7 +9,7 @@ export function HelpBar({ view }: HelpBarProps): React.JSX.Element {
     <Box>
       <Text dimColor>
         {view === "list"
-          ? "j/k: navigate  Enter: detail  q: quit"
+          ? "j/k: navigate  Enter: detail  Tab: filter  q: quit"
           : "Esc: back  q: quit"}
       </Text>
     </Box>

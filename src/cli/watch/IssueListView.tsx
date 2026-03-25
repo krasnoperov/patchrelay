@@ -1,22 +1,24 @@
 import { Box, Text } from "ink";
-import type { WatchState } from "./watch-state.ts";
+import type { WatchFilter, WatchIssue } from "./watch-state.ts";
 import { IssueRow } from "./IssueRow.tsx";
 import { StatusBar } from "./StatusBar.tsx";
 import { HelpBar } from "./HelpBar.tsx";
 
 interface IssueListViewProps {
-  state: WatchState;
+  issues: WatchIssue[];
+  selectedIndex: number;
+  connected: boolean;
+  filter: WatchFilter;
+  totalCount: number;
 }
 
-export function IssueListView({ state }: IssueListViewProps): React.JSX.Element {
-  const { issues, selectedIndex, connected } = state;
-
+export function IssueListView({ issues, selectedIndex, connected, filter, totalCount }: IssueListViewProps): React.JSX.Element {
   return (
     <Box flexDirection="column">
-      <StatusBar issues={issues} connected={connected} />
+      <StatusBar issues={issues} totalCount={totalCount} filter={filter} connected={connected} />
       <Text dimColor>{"─".repeat(72)}</Text>
       {issues.length === 0 ? (
-        <Text dimColor>No tracked issues.</Text>
+        <Text dimColor>No issues match the current filter.</Text>
       ) : (
         <Box flexDirection="column">
           {issues.map((issue, index) => (
