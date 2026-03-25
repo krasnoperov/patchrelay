@@ -28,16 +28,16 @@ export async function tryManageService(
 
 export function installServiceCommands(): ServiceCommand[] {
   return [
-    { command: "systemctl", args: ["--user", "daemon-reload"] },
-    { command: "systemctl", args: ["--user", "enable", "--now", "patchrelay.path"] },
-    { command: "systemctl", args: ["--user", "enable", "patchrelay.service"] },
-    { command: "systemctl", args: ["--user", "reload-or-restart", "patchrelay.service"] },
+    { command: "sudo", args: ["systemctl", "daemon-reload"] },
+    { command: "sudo", args: ["systemctl", "enable", "--now", "patchrelay.path"] },
+    { command: "sudo", args: ["systemctl", "enable", "patchrelay.service"] },
+    { command: "sudo", args: ["systemctl", "reload-or-restart", "patchrelay.service"] },
   ];
 }
 
 export function restartServiceCommands(): ServiceCommand[] {
   return [
-    { command: "systemctl", args: ["--user", "daemon-reload"] },
-    { command: "systemctl", args: ["--user", "reload-or-restart", "patchrelay.service"] },
+    { command: "sudo", args: ["systemctl", "daemon-reload"] },
+    { command: "sudo", args: ["systemctl", "reload-or-restart", "patchrelay.service"] },
   ];
 }

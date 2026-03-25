@@ -14,7 +14,7 @@ export interface PatchRelayPathLayout {
   shareDir: string;
   databasePath: string;
   logFilePath: string;
-  systemdUserDir: string;
+  systemdDir: string;
   systemdUnitPath: string;
   systemdReloadUnitPath: string;
   systemdPathUnitPath: string;
@@ -32,7 +32,7 @@ export function getPatchRelayPathLayout(): PatchRelayPathLayout {
   const serviceEnvPath = path.join(configDir, "service.env");
   const stateDir = path.join(xdgStateHome, "patchrelay");
   const shareDir = path.join(xdgDataHome, "patchrelay");
-  const systemdUserDir = path.join(xdgConfigHome, "systemd", "user");
+  const systemdDir = process.env.PATCHRELAY_SYSTEMD_DIR ?? "/etc/systemd/system";
 
   return {
     homeDir,
@@ -44,10 +44,10 @@ export function getPatchRelayPathLayout(): PatchRelayPathLayout {
     shareDir,
     databasePath: ensureAbsolutePath(process.env.PATCHRELAY_DB_PATH ?? path.join(stateDir, "patchrelay.sqlite")),
     logFilePath: ensureAbsolutePath(process.env.PATCHRELAY_LOG_FILE ?? path.join(stateDir, "patchrelay.log")),
-    systemdUserDir,
-    systemdUnitPath: path.join(systemdUserDir, "patchrelay.service"),
-    systemdReloadUnitPath: path.join(systemdUserDir, "patchrelay-reload.service"),
-    systemdPathUnitPath: path.join(systemdUserDir, "patchrelay.path"),
+    systemdDir,
+    systemdUnitPath: path.join(systemdDir, "patchrelay.service"),
+    systemdReloadUnitPath: path.join(systemdDir, "patchrelay-reload.service"),
+    systemdPathUnitPath: path.join(systemdDir, "patchrelay.path"),
   };
 }
 
@@ -87,15 +87,15 @@ export function getDefaultWebhookArchiveDir(): string {
   return path.join(getPatchRelayStateDir(), "webhooks");
 }
 
-export function getSystemdUserUnitPath(): string {
+export function getSystemdUnitPath(): string {
   return getPatchRelayPathLayout().systemdUnitPath;
 }
 
-export function getSystemdUserReloadUnitPath(): string {
+export function getSystemdReloadUnitPath(): string {
   return getPatchRelayPathLayout().systemdReloadUnitPath;
 }
 
-export function getSystemdUserPathUnitPath(): string {
+export function getSystemdPathUnitPath(): string {
   return getPatchRelayPathLayout().systemdPathUnitPath;
 }
 

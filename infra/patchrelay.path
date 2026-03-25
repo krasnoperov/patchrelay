@@ -10,4 +10,4 @@ TriggerLimitIntervalSec=5
 TriggerLimitBurst=1
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target
