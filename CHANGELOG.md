@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.4](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.20.3...patchrelay-v0.20.4) (2026-03-25)
+
+
+### Bug Fixes
+
+* show retry/prompt status feedback in watch TUI ([#147](https://github.com/krasnoperov/patchrelay/issues/147)) ([87b0258](https://github.com/krasnoperov/patchrelay/commit/87b025863944b7c51a88100aceb4f16a3f5e43e7))
+
 ## [0.20.3](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.20.2...patchrelay-v0.20.3) (2026-03-25)
 
 
