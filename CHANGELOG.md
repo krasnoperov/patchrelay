@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.1](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.17.0...patchrelay-v0.17.1) (2026-03-25)
+
+
+### Bug Fixes
+
+* state machine hardening — terminal states, budgets, reconciliation ([#133](https://github.com/krasnoperov/patchrelay/issues/133)) ([7e93c29](https://github.com/krasnoperov/patchrelay/commit/7e93c29d3eded348aae826a2e5751d4c604dbc8c))
+
 ## [0.17.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.16.0...patchrelay-v0.17.0) (2026-03-25)
 
 
