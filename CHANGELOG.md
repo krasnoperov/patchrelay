@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.2](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.14.1...patchrelay-v0.14.2) (2026-03-25)
+
+
+### Bug Fixes
+
+* skip service readiness check during serve startup preflight ([#125](https://github.com/krasnoperov/patchrelay/issues/125)) ([d086d07](https://github.com/krasnoperov/patchrelay/commit/d086d077ce04a21979d68af6dfd8878461eccebe))
+
 ## [0.14.1](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.14.0...patchrelay-v0.14.1) (2026-03-25)
 
 
