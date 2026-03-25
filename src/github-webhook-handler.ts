@@ -190,8 +190,12 @@ export class GitHubWebhookHandler {
       }
     }
 
-    // Reset repair counters on new push
-    if (event.triggerEvent === "pr_synchronize") {
+    // Re-read issue after all upserts so reactive run logic sees current state
+    const freshIssue = this.db.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
+
+    // Reset repair counters on new push — but only when no repair run is active,
+    // since Codex pushes during repair and resetting mid-run would bypass budgets.
+    if (event.triggerEvent === "pr_synchronize" && !freshIssue.activeRunId) {
       this.db.upsertIssue({
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
@@ -199,9 +203,6 @@ export class GitHubWebhookHandler {
         queueRepairAttempts: 0,
       });
     }
-
-    // Re-read issue after all upserts so reactive run logic sees current state
-    const freshIssue = this.db.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
 
     this.logger.info(
       { issueKey: issue.issueKey, branchName: event.branchName, triggerEvent: event.triggerEvent, prNumber: event.prNumber },

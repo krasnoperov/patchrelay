@@ -11,7 +11,6 @@ const STATE_COLORS: Record<string, string> = {
   preparing: "blue",
   implementing: "yellow",
   pr_open: "cyan",
-  awaiting_review: "cyan",
   changes_requested: "magenta",
   repairing_ci: "magenta",
   awaiting_queue: "green",

@@ -129,7 +129,6 @@ export function buildAgentSessionPlan(params: {
     case "implementing":
       return setStatuses(planForRunType("implementation", params), ["completed", "inProgress", "pending", "pending"]);
     case "pr_open":
-    case "awaiting_review":
       return setStatuses(implementationPlan(), ["completed", "completed", "inProgress", "pending"]);
     case "changes_requested":
       return setStatuses(reviewFixPlan(), ["completed", "inProgress", "pending", "pending"]);
@@ -214,7 +213,7 @@ export function buildCompletedSessionPlan(runType: string): AgentSessionPlanStep
   if (runType === "ci_repair" || runType === "queue_repair") {
     return buildAgentSessionPlan({ factoryState: "awaiting_queue" });
   }
-  return buildAgentSessionPlan({ factoryState: "awaiting_review" });
+  return buildAgentSessionPlan({ factoryState: "pr_open" });
 }
 
 export function buildAwaitingHandoffSessionPlan(runType: string): AgentSessionPlanStep[] {

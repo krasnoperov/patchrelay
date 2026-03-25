@@ -13,7 +13,7 @@ import type { GitHubTriggerEvent } from "../src/github-types.ts";
 // ─── Helpers ──────────────────────────────────────────────────────
 
 const ALL_STATES: FactoryState[] = [
-  "delegated", "preparing", "implementing", "pr_open", "awaiting_review",
+  "delegated", "preparing", "implementing", "pr_open",
   "changes_requested", "repairing_ci", "awaiting_queue", "repairing_queue",
   "awaiting_input", "escalated", "done", "failed",
 ];

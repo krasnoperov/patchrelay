@@ -141,6 +141,12 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
 
   // Add merge_prep_attempts for retry budget / escalation
   addColumnIfMissing(connection, "issues", "merge_prep_attempts", "INTEGER NOT NULL DEFAULT 0");
+
+  // Add review_fix_attempts counter
+  addColumnIfMissing(connection, "issues", "review_fix_attempts", "INTEGER NOT NULL DEFAULT 0");
+
+  // Collapse awaiting_review into pr_open (state normalization)
+  connection.prepare("UPDATE issues SET factory_state = 'pr_open' WHERE factory_state = 'awaiting_review'").run();
 }
 
 function addColumnIfMissing(connection: DatabaseConnection, table: string, column: string, definition: string): void {
