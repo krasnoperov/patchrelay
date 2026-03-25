@@ -7,11 +7,37 @@ interface IssueDetailViewProps {
   issue: WatchIssue | undefined;
   thread: WatchThread | null;
   report: WatchReport | null;
+  follow: boolean;
 }
 
 function truncate(text: string, max: number): string {
   const line = text.replace(/\n/g, " ").trim();
   return line.length > max ? `${line.slice(0, max - 3)}...` : line;
+}
+
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return String(n);
+}
+
+function ThreadStatusBar({ thread, follow }: { thread: WatchThread; follow: boolean }): React.JSX.Element {
+  return (
+    <Box gap={2}>
+      {thread.tokenUsage && (
+        <Text dimColor>
+          tokens: {formatTokens(thread.tokenUsage.inputTokens)} in / {formatTokens(thread.tokenUsage.outputTokens)} out
+        </Text>
+      )}
+      {thread.diffSummary && thread.diffSummary.filesChanged > 0 && (
+        <Text dimColor>
+          diff: {thread.diffSummary.filesChanged} file{thread.diffSummary.filesChanged !== 1 ? "s" : ""}
+          {" "}+{thread.diffSummary.linesAdded} -{thread.diffSummary.linesRemoved}
+        </Text>
+      )}
+      {follow && <Text color="yellow">follow</Text>}
+    </Box>
+  );
 }
 
 function ReportView({ report }: { report: WatchReport }): React.JSX.Element {
@@ -55,12 +81,12 @@ function ReportView({ report }: { report: WatchReport }): React.JSX.Element {
   );
 }
 
-export function IssueDetailView({ issue, thread, report }: IssueDetailViewProps): React.JSX.Element {
+export function IssueDetailView({ issue, thread, report, follow }: IssueDetailViewProps): React.JSX.Element {
   if (!issue) {
     return (
       <Box flexDirection="column">
         <Text color="red">Issue not found.</Text>
-        <HelpBar view="detail" />
+        <HelpBar view="detail" follow={follow} />
       </Box>
     );
   }
@@ -76,10 +102,11 @@ export function IssueDetailView({ issue, thread, report }: IssueDetailViewProps)
         {issue.prNumber !== undefined && <Text dimColor>PR #{issue.prNumber}</Text>}
       </Box>
       {issue.title && <Text dimColor>{issue.title}</Text>}
+      {thread && <ThreadStatusBar thread={thread} follow={follow} />}
       <Text dimColor>{"─".repeat(72)}</Text>
 
       {thread ? (
-        <ThreadView thread={thread} />
+        <ThreadView thread={thread} follow={follow} />
       ) : report ? (
         <ReportView report={report} />
       ) : (
@@ -87,7 +114,7 @@ export function IssueDetailView({ issue, thread, report }: IssueDetailViewProps)
       )}
 
       <Text dimColor>{"─".repeat(72)}</Text>
-      <HelpBar view="detail" />
+      <HelpBar view="detail" follow={follow} />
     </Box>
   );
 }

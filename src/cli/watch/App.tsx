@@ -46,6 +46,8 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
     } else if (state.view === "detail") {
       if (key.escape || key.backspace || key.delete) {
         dispatch({ type: "exit-detail" });
+      } else if (input === "f") {
+        dispatch({ type: "toggle-follow" });
       }
     }
   });
@@ -59,6 +61,7 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
           issue={state.issues.find((i) => i.issueKey === state.activeDetailKey)}
           thread={state.thread}
           report={state.report}
+          follow={state.follow}
         />
       )}
     </Box>

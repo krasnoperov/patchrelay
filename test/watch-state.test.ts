@@ -588,3 +588,64 @@ test("codex-notification without thread is a no-op for non-turn/started", () => 
   });
   assert.equal(state.thread, null);
 });
+
+// ─── Token Usage ──────────────────────────────────────────────────
+
+test("thread/tokenUsage/updated sets token counts", () => {
+  const initial = stateWith({ thread: makeThread() });
+  const state = reduce(initial, {
+    type: "codex-notification",
+    method: "thread/tokenUsage/updated",
+    params: { usage: { inputTokens: 12400, outputTokens: 3200 } },
+  });
+  assert.equal(state.thread?.tokenUsage?.inputTokens, 12400);
+  assert.equal(state.thread?.tokenUsage?.outputTokens, 3200);
+});
+
+test("thread/tokenUsage/updated handles snake_case fields", () => {
+  const initial = stateWith({ thread: makeThread() });
+  const state = reduce(initial, {
+    type: "codex-notification",
+    method: "thread/tokenUsage/updated",
+    params: { usage: { input_tokens: 5000, output_tokens: 1000 } },
+  });
+  assert.equal(state.thread?.tokenUsage?.inputTokens, 5000);
+  assert.equal(state.thread?.tokenUsage?.outputTokens, 1000);
+});
+
+// ─── Diff Summary ─────────────────────────────────────────────────
+
+test("turn/diff/updated computes diff summary", () => {
+  const initial = stateWith({ thread: makeThread() });
+  const diff = [
+    "--- a/src/handler.ts",
+    "+++ b/src/handler.ts",
+    "@@ -1,3 +1,5 @@",
+    " const x = 1;",
+    "-const y = 2;",
+    "+const y = 3;",
+    "+const z = 4;",
+    "--- a/src/config.ts",
+    "+++ b/src/config.ts",
+    "@@ -1 +1 @@",
+    "-old",
+    "+new",
+  ].join("\n");
+  const state = reduce(initial, {
+    type: "codex-notification",
+    method: "turn/diff/updated",
+    params: { diff },
+  });
+  assert.equal(state.thread?.diffSummary?.filesChanged, 2);
+  assert.equal(state.thread?.diffSummary?.linesAdded, 3);
+  assert.equal(state.thread?.diffSummary?.linesRemoved, 2);
+});
+
+// ─── Follow Mode ──────────────────────────────────────────────────
+
+test("toggle-follow flips follow state", () => {
+  const s1 = reduce(initialWatchState, { type: "toggle-follow" });
+  assert.equal(s1.follow, false);
+  const s2 = reduce(s1, { type: "toggle-follow" });
+  assert.equal(s2.follow, true);
+});

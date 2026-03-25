@@ -36,12 +36,25 @@ export interface WatchTurn {
   items: WatchTurnItem[];
 }
 
+export interface WatchTokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+}
+
+export interface WatchDiffSummary {
+  filesChanged: number;
+  linesAdded: number;
+  linesRemoved: number;
+}
+
 export interface WatchThread {
   threadId: string;
   status: string;
   turns: WatchTurn[];
   plan?: Array<{ step: string; status: string }> | undefined;
   diff?: string | undefined;
+  diffSummary?: WatchDiffSummary | undefined;
+  tokenUsage?: WatchTokenUsage | undefined;
 }
 
 // ─── Report (historical, for completed runs) ─────────────────────
@@ -69,6 +82,7 @@ export interface WatchState {
   thread: WatchThread | null;
   report: WatchReport | null;
   filter: WatchFilter;
+  follow: boolean;
 }
 
 export type WatchAction =
@@ -82,7 +96,8 @@ export type WatchAction =
   | { type: "thread-snapshot"; thread: WatchThread }
   | { type: "report-snapshot"; report: WatchReport }
   | { type: "codex-notification"; method: string; params: Record<string, unknown> }
-  | { type: "cycle-filter" };
+  | { type: "cycle-filter" }
+  | { type: "toggle-follow" };
 
 export const initialWatchState: WatchState = {
   connected: false,
@@ -93,6 +108,7 @@ export const initialWatchState: WatchState = {
   thread: null,
   report: null,
   filter: "non-done",
+  follow: true,
 };
 
 const TERMINAL_FACTORY_STATES = new Set(["done", "failed"]);
@@ -157,6 +173,9 @@ export function watchReducer(state: WatchState, action: WatchAction): WatchState
 
     case "cycle-filter":
       return { ...state, filter: nextFilter(state.filter), selectedIndex: 0 };
+
+    case "toggle-follow":
+      return { ...state, follow: !state.follow };
   }
 }
 
@@ -237,6 +256,8 @@ function applyCodexNotification(
       return withThread(state, appendItemText(state.thread, params));
     case "thread/status/changed":
       return withThread(state, updateThreadStatus(state.thread, params));
+    case "thread/tokenUsage/updated":
+      return withThread(state, updateTokenUsage(state.thread, params));
     default:
       return state;
   }
@@ -306,7 +327,33 @@ function updatePlan(thread: WatchThread, params: Record<string, unknown>): Watch
 
 function updateDiff(thread: WatchThread, params: Record<string, unknown>): WatchThread {
   const diff = typeof params.diff === "string" ? params.diff : undefined;
-  return { ...thread, diff };
+  return { ...thread, diff, diffSummary: diff ? parseDiffSummary(diff) : undefined };
+}
+
+function parseDiffSummary(diff: string): WatchDiffSummary {
+  const files = new Set<string>();
+  let added = 0;
+  let removed = 0;
+  for (const line of diff.split("\n")) {
+    if (line.startsWith("+++ b/")) {
+      files.add(line.slice(6));
+    } else if (line.startsWith("+") && !line.startsWith("+++")) {
+      added += 1;
+    } else if (line.startsWith("-") && !line.startsWith("---")) {
+      removed += 1;
+    }
+  }
+  return { filesChanged: files.size, linesAdded: added, linesRemoved: removed };
+}
+
+function updateTokenUsage(thread: WatchThread, params: Record<string, unknown>): WatchThread {
+  const usage = params.usage as Record<string, unknown> | undefined;
+  if (!usage) return thread;
+  const inputTokens = typeof usage.inputTokens === "number" ? usage.inputTokens
+    : typeof usage.input_tokens === "number" ? usage.input_tokens : 0;
+  const outputTokens = typeof usage.outputTokens === "number" ? usage.outputTokens
+    : typeof usage.output_tokens === "number" ? usage.output_tokens : 0;
+  return { ...thread, tokenUsage: { inputTokens, outputTokens } };
 }
 
 function updateThreadStatus(thread: WatchThread, params: Record<string, unknown>): WatchThread {

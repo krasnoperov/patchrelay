@@ -2,15 +2,16 @@ import { Box, Text } from "ink";
 
 interface HelpBarProps {
   view: "list" | "detail";
+  follow?: boolean | undefined;
 }
 
-export function HelpBar({ view }: HelpBarProps): React.JSX.Element {
+export function HelpBar({ view, follow }: HelpBarProps): React.JSX.Element {
   return (
     <Box>
       <Text dimColor>
         {view === "list"
           ? "j/k: navigate  Enter: detail  Tab: filter  q: quit"
-          : "Esc: back  q: quit"}
+          : `Esc: back  f: follow ${follow ? "on" : "off"}  q: quit`}
       </Text>
     </Box>
   );

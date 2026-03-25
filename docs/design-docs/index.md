@@ -5,8 +5,9 @@ This directory holds the durable design guidance for PatchRelay.
 Read order:
 
 1. [core-beliefs.md](./core-beliefs.md)
-2. [../architecture.md](../architecture.md)
-3. [../references/external-patterns.md](../references/external-patterns.md)
+2. [agentic-loop-principles.md](./agentic-loop-principles.md)
+3. [../architecture.md](../architecture.md)
+4. [../references/external-patterns.md](../references/external-patterns.md)
 
 Use this directory for:
 

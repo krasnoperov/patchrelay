@@ -5,6 +5,7 @@ import { ItemLine } from "./ItemLine.tsx";
 interface TurnSectionProps {
   turn: WatchTurn;
   index: number;
+  follow: boolean;
 }
 
 function turnStatusColor(status: string): string {
@@ -14,7 +15,14 @@ function turnStatusColor(status: string): string {
   return "white";
 }
 
-export function TurnSection({ turn, index }: TurnSectionProps): React.JSX.Element {
+const FOLLOW_TAIL_SIZE = 8;
+
+export function TurnSection({ turn, index, follow }: TurnSectionProps): React.JSX.Element {
+  const items = follow && turn.items.length > FOLLOW_TAIL_SIZE
+    ? turn.items.slice(-FOLLOW_TAIL_SIZE)
+    : turn.items;
+  const skipped = turn.items.length - items.length;
+
   return (
     <Box flexDirection="column">
       <Box gap={1}>
@@ -22,11 +30,12 @@ export function TurnSection({ turn, index }: TurnSectionProps): React.JSX.Elemen
         <Text color={turnStatusColor(turn.status)}>{turn.status}</Text>
         <Text dimColor>({turn.items.length} items)</Text>
       </Box>
-      {turn.items.map((item, i) => (
+      {skipped > 0 && <Text dimColor>  ... {skipped} earlier items</Text>}
+      {items.map((item, i) => (
         <ItemLine
           key={item.id}
           item={item}
-          isLast={i === turn.items.length - 1}
+          isLast={i === items.length - 1}
         />
       ))}
     </Box>

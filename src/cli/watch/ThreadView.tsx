@@ -4,6 +4,7 @@ import { TurnSection } from "./TurnSection.tsx";
 
 interface ThreadViewProps {
   thread: WatchThread;
+  follow: boolean;
 }
 
 function planStepSymbol(status: string): string {
@@ -18,7 +19,14 @@ function planStepColor(status: string): string {
   return "white";
 }
 
-export function ThreadView({ thread }: ThreadViewProps): React.JSX.Element {
+export function ThreadView({ thread, follow }: ThreadViewProps): React.JSX.Element {
+  const visibleTurns = follow && thread.turns.length > 1
+    ? thread.turns.slice(-1)
+    : thread.turns;
+  const turnOffset = follow && thread.turns.length > 1
+    ? thread.turns.length - 1
+    : 0;
+
   return (
     <Box flexDirection="column">
       <Box gap={2}>
@@ -40,8 +48,8 @@ export function ThreadView({ thread }: ThreadViewProps): React.JSX.Element {
       )}
 
       <Box flexDirection="column" marginTop={1}>
-        {thread.turns.map((turn, i) => (
-          <TurnSection key={turn.id} turn={turn} index={i} />
+        {visibleTurns.map((turn, i) => (
+          <TurnSection key={turn.id} turn={turn} index={i + turnOffset} follow={follow} />
         ))}
       </Box>
     </Box>
