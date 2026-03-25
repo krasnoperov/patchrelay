@@ -8,7 +8,6 @@ export type FactoryState =
   | "preparing"
   | "implementing"
   | "pr_open"
-  | "awaiting_review"
   | "changes_requested"
   | "repairing_ci"
   | "awaiting_queue"
@@ -29,10 +28,12 @@ export const ACTIVE_RUN_STATES: ReadonlySet<FactoryState> = new Set([
   "repairing_queue",
 ]);
 
-/** Which factory states are terminal (no further transitions possible). */
+/** Which factory states are terminal (no further transitions possible except pr_merged → done). */
 export const TERMINAL_STATES: ReadonlySet<FactoryState> = new Set([
   "done",
   "escalated",
+  "failed",
+  "awaiting_input",
 ]);
 
 // ─── Semantic guards ─────────────────────────────────────────────

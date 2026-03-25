@@ -20,7 +20,6 @@ function describeNextState(state: FactoryState | undefined, prNumber?: number): 
   const prLabel = prNumber ? `PR #${prNumber}` : "the pull request";
   switch (state) {
     case "pr_open":
-    case "awaiting_review":
       return `${prLabel} is ready for review.`;
     case "awaiting_queue":
       return `${prLabel} is approved and back in the merge flow.`;
@@ -175,7 +174,6 @@ export function buildMergePrepEscalationActivity(attempts: number): LinearAgentA
 
 export function summarizeIssueStateForLinear(issue: Pick<IssueRecord, "factoryState" | "prNumber" | "prState" | "prReviewState" | "prCheckStatus">): string | undefined {
   switch (issue.factoryState) {
-    case "awaiting_review":
     case "pr_open":
       return issue.prNumber ? `PR #${issue.prNumber} is awaiting review.` : "Awaiting review.";
     case "awaiting_queue":

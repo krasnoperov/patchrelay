@@ -122,7 +122,6 @@ export class MergeQueue {
         pendingRunType: "queue_repair",
         pendingRunContextJson: JSON.stringify({ failureReason: "merge_conflict" }),
         pendingMergePrep: false,
-        mergePrepAttempts: 0,
       });
       this.enqueueIssue(issue.projectId, issue.linearIssueId);
 

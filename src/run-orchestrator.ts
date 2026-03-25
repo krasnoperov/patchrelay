@@ -34,8 +34,9 @@ import type {
 import { resolveAuthoritativeLinearStopState } from "./linear-workflow.ts";
 import { execCommand } from "./utils.ts";
 
-const DEFAULT_CI_REPAIR_BUDGET = 2;
-const DEFAULT_QUEUE_REPAIR_BUDGET = 2;
+const DEFAULT_CI_REPAIR_BUDGET = 3;
+const DEFAULT_QUEUE_REPAIR_BUDGET = 3;
+const DEFAULT_REVIEW_FIX_BUDGET = 3;
 
 function slugify(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
@@ -178,6 +179,10 @@ export class RunOrchestrator {
       this.escalate(issue, runType, `Queue repair budget exhausted (${DEFAULT_QUEUE_REPAIR_BUDGET} attempts)`);
       return;
     }
+    if (runType === "review_fix" && issue.reviewFixAttempts >= DEFAULT_REVIEW_FIX_BUDGET) {
+      this.escalate(issue, runType, `Review fix budget exhausted (${DEFAULT_REVIEW_FIX_BUDGET} attempts)`);
+      return;
+    }
 
     // Increment repair counters
     if (runType === "ci_repair") {
@@ -185,6 +190,9 @@ export class RunOrchestrator {
     }
     if (runType === "queue_repair") {
       this.db.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, queueRepairAttempts: issue.queueRepairAttempts + 1 });
+    }
+    if (runType === "review_fix") {
+      this.db.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, reviewFixAttempts: issue.reviewFixAttempts + 1 });
     }
 
     // Build prompt
@@ -384,20 +392,9 @@ export class RunOrchestrator {
     const trackedIssue = this.db.issueToTrackedIssue(issue);
     const report = buildStageReport(run, trackedIssue, thread, countEventMethods(this.db.listThreadEvents(run.id)));
 
-    // Determine post-run state. When a re-run finds the PR already exists
-    // and makes no changes, no pr_opened webhook arrives — the state would
-    // stay in the active-run state forever. Advance based on PR metadata.
+    // Determine post-run state based on current PR metadata.
     const freshIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
-    let postRunState: FactoryState | undefined;
-    if (ACTIVE_RUN_STATES.has(freshIssue.factoryState) && freshIssue.prNumber) {
-      if (freshIssue.prReviewState === "approved") {
-        postRunState = "awaiting_queue";
-      } else if (freshIssue.prState === "merged") {
-        postRunState = "done";
-      } else {
-        postRunState = "awaiting_review";
-      }
-    }
+    const postRunState = resolvePostRunState(freshIssue);
 
     this.db.transaction(() => {
       this.db.finishRun(run.id, {
@@ -661,6 +658,8 @@ export class RunOrchestrator {
     if (latestTurn?.status === "completed") {
       const trackedIssue = this.db.issueToTrackedIssue(issue);
       const report = buildStageReport(run, trackedIssue, thread, countEventMethods(this.db.listThreadEvents(run.id)));
+      const freshIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
+      const postRunState = resolvePostRunState(freshIssue);
       this.db.transaction(() => {
         this.db.finishRun(run.id, {
           status: "completed",
@@ -673,8 +672,13 @@ export class RunOrchestrator {
           projectId: run.projectId,
           linearIssueId: run.linearIssueId,
           activeRunId: null,
+          ...(postRunState ? { factoryState: postRunState } : {}),
+          ...(postRunState === "awaiting_queue" ? { pendingMergePrep: true } : {}),
         });
       });
+      if (postRunState === "awaiting_queue") {
+        this.enqueueIssue(run.projectId, run.linearIssueId);
+      }
     }
   }
 
@@ -778,4 +782,17 @@ export class RunOrchestrator {
     }
     throw new Error(`Failed to read thread ${threadId}`);
   }
+}
+
+/**
+ * Determine post-run factory state from current PR metadata.
+ * Used by both the normal completion path and reconciliation.
+ */
+function resolvePostRunState(issue: IssueRecord): FactoryState | undefined {
+  if (ACTIVE_RUN_STATES.has(issue.factoryState) && issue.prNumber) {
+    if (issue.prReviewState === "approved") return "awaiting_queue";
+    if (issue.prState === "merged") return "done";
+    return "pr_open";
+  }
+  return undefined;
 }

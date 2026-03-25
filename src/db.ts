@@ -102,6 +102,7 @@ export class PatchRelayDatabase {
     prCheckStatus?: string | null;
     ciRepairAttempts?: number;
     queueRepairAttempts?: number;
+    reviewFixAttempts?: number;
     mergePrepAttempts?: number;
     pendingMergePrep?: boolean;
   }): IssueRecord {
@@ -134,6 +135,7 @@ export class PatchRelayDatabase {
       if (params.prCheckStatus !== undefined) { sets.push("pr_check_status = @prCheckStatus"); values.prCheckStatus = params.prCheckStatus; }
       if (params.ciRepairAttempts !== undefined) { sets.push("ci_repair_attempts = @ciRepairAttempts"); values.ciRepairAttempts = params.ciRepairAttempts; }
       if (params.queueRepairAttempts !== undefined) { sets.push("queue_repair_attempts = @queueRepairAttempts"); values.queueRepairAttempts = params.queueRepairAttempts; }
+      if (params.reviewFixAttempts !== undefined) { sets.push("review_fix_attempts = @reviewFixAttempts"); values.reviewFixAttempts = params.reviewFixAttempts; }
       if (params.mergePrepAttempts !== undefined) { sets.push("merge_prep_attempts = @mergePrepAttempts"); values.mergePrepAttempts = params.mergePrepAttempts; }
       if (params.pendingMergePrep !== undefined) { sets.push("pending_merge_prep = @pendingMergePrep"); values.pendingMergePrep = params.pendingMergePrep ? 1 : 0; }
 
@@ -434,6 +436,7 @@ function mapIssueRow(row: Record<string, unknown>): IssueRecord {
     ...(row.pr_check_status !== null && row.pr_check_status !== undefined ? { prCheckStatus: String(row.pr_check_status) } : {}),
     ciRepairAttempts: Number(row.ci_repair_attempts ?? 0),
     queueRepairAttempts: Number(row.queue_repair_attempts ?? 0),
+    reviewFixAttempts: Number(row.review_fix_attempts ?? 0),
     mergePrepAttempts: Number(row.merge_prep_attempts ?? 0),
     pendingMergePrep: Boolean(row.pending_merge_prep),
   };
