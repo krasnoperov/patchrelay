@@ -291,18 +291,64 @@ export class PatchRelayService {
     return () => { this.codex.off("notification", handler); };
   }
 
-  async promptIssue(issueKey: string, text: string): Promise<{ delivered: boolean } | { error: string } | undefined> {
+  async promptIssue(
+    issueKey: string,
+    text: string,
+    source: string = "watch",
+  ): Promise<{ delivered: boolean; queued?: boolean } | { error: string } | undefined> {
     const issue = this.db.getIssueByKey(issueKey);
     if (!issue) return undefined;
-    if (!issue.activeRunId) return { error: "No active run" };
+
+    // Publish to operator feed so all clients see the prompt
+    this.feed.publish({
+      level: "info",
+      kind: "comment",
+      issueKey: issue.issueKey,
+      projectId: issue.projectId,
+      stage: issue.factoryState,
+      status: "operator_prompt",
+      summary: `Operator prompt (${source})`,
+      detail: text.slice(0, 200),
+    });
+
+    // If no active run, queue as pending context for the next run
+    if (!issue.activeRunId) {
+      const existing = issue.pendingRunContextJson
+        ? JSON.parse(issue.pendingRunContextJson) as Record<string, unknown>
+        : {};
+      this.db.upsertIssue({
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        pendingRunContextJson: JSON.stringify({ ...existing, operatorPrompt: text }),
+      });
+      return { delivered: false, queued: true };
+    }
+
     const run = this.db.getRun(issue.activeRunId);
-    if (!run?.threadId || !run.turnId) return { error: "No active thread or turn" };
+    if (!run?.threadId || !run.turnId) {
+      return { error: "Active run has no thread or turn yet" };
+    }
+
     try {
-      await this.codex.steerTurn({ threadId: run.threadId, turnId: run.turnId, input: `Operator prompt from watch TUI:\n\n${text}` });
+      await this.codex.steerTurn({
+        threadId: run.threadId,
+        turnId: run.turnId,
+        input: `Operator prompt (${source}):\n\n${text}`,
+      });
       return { delivered: true };
     } catch (error) {
+      // Turn may have completed between check and steer — queue for next run
       const msg = error instanceof Error ? error.message : String(error);
-      return { error: `Failed to deliver prompt: ${msg}` };
+      this.logger.warn({ issueKey, error: msg }, "steerTurn failed, queuing prompt for next run");
+      const existing = issue.pendingRunContextJson
+        ? JSON.parse(issue.pendingRunContextJson) as Record<string, unknown>
+        : {};
+      this.db.upsertIssue({
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        pendingRunContextJson: JSON.stringify({ ...existing, operatorPrompt: text }),
+      });
+      return { delivered: false, queued: true };
     }
   }
 

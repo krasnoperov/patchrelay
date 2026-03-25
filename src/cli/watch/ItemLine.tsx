@@ -112,6 +112,14 @@ export function ItemLine({ item, isLast }: ItemLineProps): React.JSX.Element {
     case "plan":
       content = renderPlan(item);
       break;
+    case "userMessage":
+      content = (
+        <Text>
+          <Text color="yellow">you: </Text>
+          <Text>{truncate(item.text ?? "", 120)}</Text>
+        </Text>
+      );
+      break;
     default:
       content = renderDefault(item);
       break;

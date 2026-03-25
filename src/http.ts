@@ -371,7 +371,7 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
       if ("error" in result) {
         return reply.code(409).send({ ok: false, reason: result.error });
       }
-      return reply.send({ ok: true, delivered: true });
+      return reply.send({ ok: true, ...result });
     });
 
     app.get("/api/feed", async (request, reply) => {
