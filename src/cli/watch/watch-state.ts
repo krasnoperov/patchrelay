@@ -44,7 +44,21 @@ export interface WatchThread {
   diff?: string | undefined;
 }
 
+// ─── Report (historical, for completed runs) ─────────────────────
+
+export interface WatchReport {
+  runType: string;
+  status: string;
+  summary?: string | undefined;
+  commands: Array<{ command: string; exitCode?: number | undefined; durationMs?: number | undefined }>;
+  fileChanges: number;
+  toolCalls: number;
+  assistantMessages: string[];
+}
+
 // ─── Top-level State ──────────────────────────────────────────────
+
+export type WatchFilter = "all" | "active" | "non-done";
 
 export interface WatchState {
   connected: boolean;
@@ -53,6 +67,8 @@ export interface WatchState {
   view: "list" | "detail";
   activeDetailKey: string | null;
   thread: WatchThread | null;
+  report: WatchReport | null;
+  filter: WatchFilter;
 }
 
 export type WatchAction =
@@ -64,7 +80,9 @@ export type WatchAction =
   | { type: "enter-detail"; issueKey: string }
   | { type: "exit-detail" }
   | { type: "thread-snapshot"; thread: WatchThread }
-  | { type: "codex-notification"; method: string; params: Record<string, unknown> };
+  | { type: "report-snapshot"; report: WatchReport }
+  | { type: "codex-notification"; method: string; params: Record<string, unknown> }
+  | { type: "cycle-filter" };
 
 export const initialWatchState: WatchState = {
   connected: false,
@@ -73,7 +91,30 @@ export const initialWatchState: WatchState = {
   view: "list",
   activeDetailKey: null,
   thread: null,
+  report: null,
+  filter: "non-done",
 };
+
+const TERMINAL_FACTORY_STATES = new Set(["done", "failed"]);
+
+export function filterIssues(issues: WatchIssue[], filter: WatchFilter): WatchIssue[] {
+  switch (filter) {
+    case "all":
+      return issues;
+    case "active":
+      return issues.filter((i) => i.activeRunType !== undefined);
+    case "non-done":
+      return issues.filter((i) => !TERMINAL_FACTORY_STATES.has(i.factoryState));
+  }
+}
+
+function nextFilter(filter: WatchFilter): WatchFilter {
+  switch (filter) {
+    case "non-done": return "active";
+    case "active": return "all";
+    case "all": return "non-done";
+  }
+}
 
 export function watchReducer(state: WatchState, action: WatchAction): WatchState {
   switch (action.type) {
@@ -100,16 +141,22 @@ export function watchReducer(state: WatchState, action: WatchAction): WatchState
       };
 
     case "enter-detail":
-      return { ...state, view: "detail", activeDetailKey: action.issueKey, thread: null };
+      return { ...state, view: "detail", activeDetailKey: action.issueKey, thread: null, report: null };
 
     case "exit-detail":
-      return { ...state, view: "list", activeDetailKey: null, thread: null };
+      return { ...state, view: "list", activeDetailKey: null, thread: null, report: null };
 
     case "thread-snapshot":
       return { ...state, thread: action.thread };
 
+    case "report-snapshot":
+      return { ...state, report: action.report };
+
     case "codex-notification":
       return applyCodexNotification(state, action.method, action.params);
+
+    case "cycle-filter":
+      return { ...state, filter: nextFilter(state.filter), selectedIndex: 0 };
   }
 }
 

@@ -1,6 +1,6 @@
 import { useEffect, useRef, type Dispatch } from "react";
-import type { WatchAction, WatchThread, WatchTurn, WatchTurnItem } from "./watch-state.ts";
-import type { CodexThreadSummary, CodexThreadItem } from "../../types.ts";
+import type { WatchAction, WatchReport, WatchThread, WatchTurn, WatchTurnItem } from "./watch-state.ts";
+import type { CodexThreadSummary, CodexThreadItem, StageReport } from "../../types.ts";
 
 interface DetailStreamOptions {
   baseUrl: string;
@@ -57,12 +57,57 @@ async function rehydrate(
     };
 
     const threadData = data.thread;
-    if (!threadData) return;
+    if (threadData) {
+      dispatch({ type: "thread-snapshot", thread: materializeThread(threadData) });
+      return;
+    }
 
-    const thread = materializeThread(threadData);
-    dispatch({ type: "thread-snapshot", thread });
+    // No active thread — fall back to latest run report
+    await rehydrateFromReport(baseUrl, issueKey, headers, signal, dispatch);
   } catch {
     // Rehydration is best-effort — SSE stream will provide updates
+  }
+}
+
+async function rehydrateFromReport(
+  baseUrl: string,
+  issueKey: string,
+  headers: Record<string, string>,
+  signal: AbortSignal,
+  dispatch: Dispatch<WatchAction>,
+): Promise<void> {
+  try {
+    const url = new URL(`/api/issues/${encodeURIComponent(issueKey)}/report`, baseUrl);
+    const response = await fetch(url, { headers, signal });
+    if (!response.ok) return;
+
+    const data = await response.json() as {
+      ok?: boolean;
+      runs?: Array<{ run: { runType: string; status: string }; report?: StageReport; summary?: Record<string, unknown> }>;
+    };
+
+    const latest = data.runs?.[0];
+    if (!latest) return;
+
+    const report: WatchReport = {
+      runType: latest.run.runType,
+      status: latest.run.status,
+      summary: typeof latest.summary?.latestAssistantMessage === "string"
+        ? latest.summary.latestAssistantMessage
+        : latest.report?.assistantMessages.at(-1),
+      commands: latest.report?.commands.map((c) => ({
+        command: c.command,
+        ...(typeof c.exitCode === "number" ? { exitCode: c.exitCode } : {}),
+        ...(typeof c.durationMs === "number" ? { durationMs: c.durationMs } : {}),
+      })) ?? [],
+      fileChanges: latest.report?.fileChanges.length ?? 0,
+      toolCalls: latest.report?.toolCalls.length ?? 0,
+      assistantMessages: latest.report?.assistantMessages ?? [],
+    };
+
+    dispatch({ type: "report-snapshot", report });
+  } catch {
+    // Report fetch is best-effort
   }
 }
 
