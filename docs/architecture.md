@@ -85,6 +85,7 @@ Owns:
 - delegation detection and implementation run scheduling
 - agent session acknowledgment, plan publishing, and activity emission
 - comment and prompt forwarding to active Codex runs
+- preserving high-signal session context from Linear webhooks for run startup
 
 ### GitHub Webhook Handler (`github-webhook-handler.ts`)
 
@@ -107,6 +108,7 @@ Owns:
 - retry budget enforcement and escalation
 - reconciliation of active runs after restart
 - Linear activity and plan updates during runs
+- translating Codex run outcomes into concise Linear-visible state summaries
 
 ### Workspace Manager (`worktree-manager.ts`)
 
@@ -123,6 +125,7 @@ Owns:
 - starting and monitoring Codex execution via JSON-RPC
 - thread start, turn start, turn steering
 - notification handling (turn/completed events)
+- exposing thread, turn, and item state that can be reduced into human-facing status summaries
 
 ## Issue Lifecycle
 
@@ -235,3 +238,4 @@ The run orchestrator reads these files and includes them in the Codex prompt. Ke
 - flat, direct orchestration code over layered abstractions
 - making local execution per worktree cheap and repeatable
 - keeping every important decision visible in-repo
+- high-signal Linear communication: immediate acknowledgment, concise in-flight activity, lifecycle-aware plans, and deeper status behind session links rather than noisy transcript dumps

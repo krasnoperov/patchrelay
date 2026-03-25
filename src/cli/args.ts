@@ -18,6 +18,7 @@ export const KNOWN_COMMANDS = new Set([
   "connect",
   "installations",
   "feed",
+  "watch",
   "install-service",
   "restart-service",
   "help",

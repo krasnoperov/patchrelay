@@ -8,9 +8,7 @@ import type { IssueRecord, RunRecord } from "./db-types.ts";
 import { ACTIVE_RUN_STATES, type FactoryState, type RunType } from "./factory-state.ts";
 import { buildHookEnv, runProjectHook } from "./hook-runner.ts";
 import {
-  buildRunningSessionPlan,
-  buildCompletedSessionPlan,
-  buildFailedSessionPlan,
+  buildAgentSessionPlanForIssue,
 } from "./agent-session-plan.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import {
@@ -20,13 +18,19 @@ import {
   resolveRunCompletionStatus,
   summarizeCurrentThread,
 } from "./run-reporting.ts";
+import {
+  buildRunCompletedActivity,
+  buildRunFailureActivity,
+  buildRunStartedActivity,
+} from "./linear-session-reporting.ts";
+import { buildAgentSessionExternalUrls } from "./agent-session-presentation.ts";
 import { WorktreeManager } from "./worktree-manager.ts";
 import type {
   AppConfig,
   CodexThreadSummary,
   LinearClientProvider,
+  LinearAgentActivityContent,
 } from "./types.ts";
-import type { AgentSessionPlanStep } from "./agent-session-plan.ts";
 import { resolveAuthoritativeLinearStopState } from "./linear-workflow.ts";
 import { execCommand } from "./utils.ts";
 
@@ -39,6 +43,10 @@ function slugify(value: string): string {
 
 function sanitizePathSegment(value: string): string {
   return value.replace(/[^a-zA-Z0-9._-]+/g, "-");
+}
+
+function lowerCaseFirst(value: string): string {
+  return value ? `${value.slice(0, 1).toLowerCase()}${value.slice(1)}` : value;
 }
 
 const WORKFLOW_FILES: Record<RunType, string> = {
@@ -63,6 +71,15 @@ function buildRunPrompt(issue: IssueRecord, runType: RunType, repoPath: string, 
     issue.prNumber ? `PR: #${issue.prNumber}` : undefined,
     "",
   ].filter(Boolean) as string[];
+
+  const promptContext = typeof context?.promptContext === "string" ? context.promptContext.trim() : "";
+  const latestPrompt = typeof context?.promptBody === "string" ? context.promptBody.trim() : "";
+  if (promptContext) {
+    lines.push("## Linear Session Context", "", promptContext, "");
+  }
+  if (latestPrompt) {
+    lines.push("## Latest Human Instruction", "", latestPrompt, "");
+  }
 
   // Add run-type-specific context for reactive runs
   switch (runType) {
@@ -280,8 +297,9 @@ export class RunOrchestrator {
         factoryState: "failed",
       });
       this.logger.error({ issueKey: issue.issueKey, runType, error: message }, `Failed to launch ${runType} run`);
-      void this.emitLinearActivity(issue, "error", `Failed to start ${runType}: ${message}`);
-      void this.updateLinearPlan(issue, buildFailedSessionPlan(runType));
+      const failedIssue = this.db.getIssue(item.projectId, item.issueId) ?? issue;
+      void this.emitLinearActivity(failedIssue, buildRunFailureActivity(runType, `Failed to start ${lowerCaseFirst(message)}`));
+      void this.syncLinearSession(failedIssue, { activeRunType: runType });
       throw error;
     }
 
@@ -294,8 +312,8 @@ export class RunOrchestrator {
 
     // Emit Linear activity + plan
     const freshIssue = this.db.getIssue(item.projectId, item.issueId) ?? issue;
-    void this.emitLinearActivity(freshIssue, "thought", `Started ${runType} run.`, { ephemeral: true });
-    void this.updateLinearPlan(freshIssue, buildRunningSessionPlan(runType));
+    void this.emitLinearActivity(freshIssue, buildRunStartedActivity(runType));
+    void this.syncLinearSession(freshIssue, { activeRunType: runType });
   }
 
   // ─── Notification handler ─────────────────────────────────────────
@@ -349,8 +367,9 @@ export class RunOrchestrator {
         status: "failed",
         summary: `Turn failed for ${run.runType}`,
       });
-      void this.emitLinearActivity(issue, "error", `${run.runType} run failed.`);
-      void this.updateLinearPlan(issue, buildFailedSessionPlan(run.runType, run));
+      const failedIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
+      void this.emitLinearActivity(failedIssue, buildRunFailureActivity(run.runType));
+      void this.syncLinearSession(failedIssue, { activeRunType: run.runType });
       return;
     }
 
@@ -407,10 +426,15 @@ export class RunOrchestrator {
     });
 
     // Emit Linear completion activity + plan
+    const updatedIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
     const completionSummary = report.assistantMessages.at(-1)?.slice(0, 300) ?? `${run.runType} completed.`;
-    const prInfo = issue.prNumber ? ` PR #${issue.prNumber}` : "";
-    void this.emitLinearActivity(issue, "response", `${run.runType} completed.${prInfo}\n\n${completionSummary}`);
-    void this.updateLinearPlan(issue, buildCompletedSessionPlan(run.runType));
+    void this.emitLinearActivity(updatedIssue, buildRunCompletedActivity({
+      runType: run.runType,
+      completionSummary,
+      postRunState: updatedIssue.factoryState,
+      ...(updatedIssue.prNumber !== undefined ? { prNumber: updatedIssue.prNumber } : {}),
+    }));
+    void this.syncLinearSession(updatedIssue);
   }
 
   // ─── Active status for query ──────────────────────────────────────
@@ -578,7 +602,9 @@ export class RunOrchestrator {
         "Run has interrupted turn — marking as failed",
       );
       this.failRunAndClear(run, "Codex turn was interrupted");
-      void this.emitLinearActivity(issue, "error", `${run.runType} run was interrupted.`);
+      const failedIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
+      void this.emitLinearActivity(failedIssue, buildRunFailureActivity(run.runType, "The Codex turn was interrupted."));
+      void this.syncLinearSession(failedIssue, { activeRunType: run.runType });
       return;
     }
 
@@ -623,6 +649,12 @@ export class RunOrchestrator {
       status: "escalated",
       summary: `Escalated: ${reason}`,
     });
+    const escalatedIssue = this.db.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
+    void this.emitLinearActivity(escalatedIssue, {
+      type: "error",
+      body: `PatchRelay needs human help to continue.\n\n${reason}`,
+    });
+    void this.syncLinearSession(escalatedIssue);
   }
 
   private failRunAndClear(run: RunRecord, message: string): void {
@@ -639,22 +671,22 @@ export class RunOrchestrator {
 
   private async emitLinearActivity(
     issue: IssueRecord,
-    type: "thought" | "response" | "error" | "elicitation",
-    body: string,
+    content: LinearAgentActivityContent,
     options?: { ephemeral?: boolean },
   ): Promise<void> {
     if (!issue.agentSessionId) return;
     try {
       const linear = await this.linearProvider.forProject(issue.projectId);
       if (!linear) return;
+      const allowEphemeral = content.type === "thought" || content.type === "action";
       await linear.createAgentActivity({
         agentSessionId: issue.agentSessionId,
-        content: { type, body },
-        ...(options?.ephemeral ? { ephemeral: true } : {}),
+        content,
+        ...(options?.ephemeral && allowEphemeral ? { ephemeral: true } : {}),
       });
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
-      this.logger.warn({ issueKey: issue.issueKey, type, error: msg }, "Failed to emit Linear activity");
+      this.logger.warn({ issueKey: issue.issueKey, type: content.type, error: msg }, "Failed to emit Linear activity");
       this.feed?.publish({
         level: "warn",
         kind: "linear",
@@ -666,12 +698,20 @@ export class RunOrchestrator {
     }
   }
 
-  private async updateLinearPlan(issue: IssueRecord, plan: AgentSessionPlanStep[]): Promise<void> {
+  private async syncLinearSession(issue: IssueRecord, options?: { activeRunType?: RunType }): Promise<void> {
     if (!issue.agentSessionId) return;
     try {
       const linear = await this.linearProvider.forProject(issue.projectId);
       if (!linear?.updateAgentSession) return;
-      await linear.updateAgentSession({ agentSessionId: issue.agentSessionId, plan });
+      const externalUrls = buildAgentSessionExternalUrls(this.config, {
+        ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
+        ...(issue.prUrl ? { prUrl: issue.prUrl } : {}),
+      });
+      await linear.updateAgentSession({
+        agentSessionId: issue.agentSessionId,
+        plan: buildAgentSessionPlanForIssue(issue, options),
+        ...(externalUrls ? { externalUrls } : {}),
+      });
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       this.logger.warn({ issueKey: issue.issueKey, error: msg }, "Failed to update Linear plan");

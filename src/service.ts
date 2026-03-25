@@ -194,6 +194,85 @@ export class PatchRelayService {
     return this.runtime.getReadiness();
   }
 
+  listTrackedIssues(): Array<{
+    issueKey?: string;
+    title?: string;
+    projectId: string;
+    factoryState: string;
+    currentLinearState?: string;
+    activeRunType?: string;
+    latestRunType?: string;
+    latestRunStatus?: string;
+    prNumber?: number;
+    prReviewState?: string;
+    prCheckStatus?: string;
+    updatedAt: string;
+  }> {
+    const rows = this.db.connection
+      .prepare(
+        `SELECT
+          i.project_id, i.linear_issue_id, i.issue_key, i.title,
+          i.current_linear_state, i.factory_state, i.updated_at,
+          i.pr_number, i.pr_review_state, i.pr_check_status,
+          active_run.run_type AS active_run_type,
+          latest_run.run_type AS latest_run_type,
+          latest_run.status AS latest_run_status
+        FROM issues i
+        LEFT JOIN runs active_run ON active_run.id = i.active_run_id
+        LEFT JOIN runs latest_run ON latest_run.id = (
+          SELECT r.id FROM runs r
+          WHERE r.project_id = i.project_id AND r.linear_issue_id = i.linear_issue_id
+          ORDER BY r.id DESC LIMIT 1
+        )
+        ORDER BY i.updated_at DESC, i.issue_key ASC`,
+      )
+      .all() as Array<Record<string, unknown>>;
+    return rows.map((row) => ({
+      ...(row.issue_key !== null ? { issueKey: String(row.issue_key) } : {}),
+      ...(row.title !== null ? { title: String(row.title) } : {}),
+      projectId: String(row.project_id),
+      factoryState: String(row.factory_state ?? "delegated"),
+      ...(row.current_linear_state !== null ? { currentLinearState: String(row.current_linear_state) } : {}),
+      ...(row.active_run_type !== null ? { activeRunType: String(row.active_run_type) } : {}),
+      ...(row.latest_run_type !== null ? { latestRunType: String(row.latest_run_type) } : {}),
+      ...(row.latest_run_status !== null ? { latestRunStatus: String(row.latest_run_status) } : {}),
+      ...(row.pr_number !== null ? { prNumber: Number(row.pr_number) } : {}),
+      ...(row.pr_review_state !== null ? { prReviewState: String(row.pr_review_state) } : {}),
+      ...(row.pr_check_status !== null ? { prCheckStatus: String(row.pr_check_status) } : {}),
+      updatedAt: String(row.updated_at),
+    }));
+  }
+
+  subscribeCodexNotifications(
+    listener: (event: { method: string; params: Record<string, unknown>; issueKey?: string; runId?: number }) => void,
+  ): () => void {
+    const handler = (notification: CodexNotification) => {
+      const threadId = typeof notification.params.threadId === "string"
+        ? notification.params.threadId
+        : typeof notification.params.thread === "object" && notification.params.thread !== null && "id" in (notification.params.thread as Record<string, unknown>)
+          ? String((notification.params.thread as Record<string, unknown>).id)
+          : undefined;
+      let issueKey: string | undefined;
+      let runId: number | undefined;
+      if (threadId) {
+        const run = this.db.getRunByThreadId(threadId);
+        if (run) {
+          runId = run.id;
+          const issue = this.db.getIssue(run.projectId, run.linearIssueId);
+          issueKey = issue?.issueKey ?? undefined;
+        }
+      }
+      listener({
+        method: notification.method,
+        params: notification.params,
+        ...(issueKey ? { issueKey } : {}),
+        ...(runId !== undefined ? { runId } : {}),
+      });
+    };
+    this.codex.on("notification", handler);
+    return () => { this.codex.off("notification", handler); };
+  }
+
   listOperatorFeed(options?: OperatorFeedQuery) {
     return this.feed.list(options);
   }

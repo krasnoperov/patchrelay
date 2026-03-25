@@ -215,11 +215,8 @@ export class CodexAppServerClient extends EventEmitter {
       modelProvider: this.config.modelProvider ?? null,
       baseInstructions: this.config.baseInstructions ?? null,
       developerInstructions: this.config.developerInstructions ?? null,
-      experimentalRawEvents: false,
+      experimentalRawEvents: this.config.experimentalRawEvents ?? false,
     };
-    if (this.config.persistExtendedHistory) {
-      this.logger.warn("persistExtendedHistory is requested but not enabled in the active app-server capability handshake; ignoring");
-    }
     const response = (await this.sendRequest("thread/start", params)) as { thread: Record<string, unknown> };
     return this.mapThread(response.thread);
   }

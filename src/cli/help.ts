@@ -41,6 +41,7 @@ export function rootHelpText(): string {
     "  installations [--json]                                 Show connected Linear installations",
     "  feed [--follow] [--limit <count>] [--issue <issueKey>] [--project <projectId>] [--kind <kind>] [--stage <stage>] [--status <status>] [--workflow <id>] [--json]",
     "                                                          Show a live operator feed from the daemon",
+    "  watch [--issue <issueKey>]                              Live TUI dashboard of issues and runs",
     "  serve                                                  Run the local PatchRelay service",
     "  inspect <issueKey>                                     Show the latest known issue state",
     "  live <issueKey> [--watch] [--json]                     Show the active run status",

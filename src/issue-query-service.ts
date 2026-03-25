@@ -1,6 +1,6 @@
 import type { CodexAppServerClient } from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
-import { summarizeCurrentThread } from "./run-reporting.ts";
+import { extractStageSummary, summarizeCurrentThread } from "./run-reporting.ts";
 import type { StageReport, RunRecord, TrackedIssueRecord } from "./types.ts";
 import { safeJsonParse } from "./utils.ts";
 
@@ -79,12 +79,27 @@ export class IssueQueryService {
     const overview = await this.getIssueOverview(issueKey);
     if (!overview) return undefined;
 
+    const issueRecord = this.db.getIssueByKey(issueKey);
     const report = await this.getIssueReport(issueKey);
+    const latestRunReport = report?.runs.at(-1)?.report;
     return {
-      issue: overview.issue,
+      issue: {
+        issueKey: overview.issue.issueKey,
+        title: overview.issue.title,
+        issueUrl: overview.issue.issueUrl,
+        currentLinearState: overview.issue.currentLinearState,
+        factoryState: overview.issue.factoryState,
+        ...(issueRecord?.prNumber !== undefined ? { prNumber: issueRecord.prNumber } : {}),
+        ...(issueRecord?.prUrl ? { prUrl: issueRecord.prUrl } : {}),
+        ...(issueRecord?.prState ? { prState: issueRecord.prState } : {}),
+        ...(issueRecord?.prReviewState ? { prReviewState: issueRecord.prReviewState } : {}),
+        ...(issueRecord?.prCheckStatus ? { prCheckStatus: issueRecord.prCheckStatus } : {}),
+        ...(issueRecord ? { ciRepairAttempts: issueRecord.ciRepairAttempts, queueRepairAttempts: issueRecord.queueRepairAttempts } : {}),
+      },
       ...(overview.activeRun ? { activeRun: overview.activeRun } : {}),
       ...(overview.latestRun ? { latestRun: overview.latestRun } : {}),
       ...(overview.liveThread ? { liveThread: overview.liveThread } : {}),
+      ...(latestRunReport ? { latestReportSummary: extractStageSummary(latestRunReport) } : {}),
       runs: report?.runs ?? [],
       generatedAt: new Date().toISOString(),
     };

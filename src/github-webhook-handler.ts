@@ -4,6 +4,9 @@ import type { IssueRecord } from "./db-types.ts";
 import { resolveFactoryStateFromGitHub } from "./factory-state.ts";
 import type { GitHubWebhookPayload, NormalizedGitHubEvent } from "./github-types.ts";
 import { normalizeGitHubWebhook, verifyGitHubWebhookSignature } from "./github-webhooks.ts";
+import { buildAgentSessionPlanForIssue } from "./agent-session-plan.ts";
+import { buildAgentSessionExternalUrls } from "./agent-session-presentation.ts";
+import { buildGitHubStateActivity } from "./linear-session-reporting.ts";
 import type { MergeQueue } from "./merge-queue.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import { resolveSecret } from "./resolve-secret.ts";
@@ -166,8 +169,9 @@ export class GitHubWebhookHandler {
           "Factory state transition from GitHub event",
         );
 
-        // Emit Linear activity for significant state changes
-        void this.emitLinearActivity(issue, newState, event);
+        const transitionedIssue = this.db.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
+        void this.emitLinearActivity(transitionedIssue, newState, event);
+        void this.syncLinearSession(transitionedIssue);
 
         // Schedule merge prep when entering awaiting_queue
         if (newState === "awaiting_queue") {
@@ -275,27 +279,13 @@ export class GitHubWebhookHandler {
     try {
       const linear = await this.linearProvider.forProject(issue.projectId);
       if (!linear?.createAgentActivity) return;
-
-      const messages: Record<string, string> = {
-        pr_open: `PR #${event.prNumber ?? ""} opened.${event.prUrl ? ` ${event.prUrl}` : ""}`,
-        awaiting_queue: "PR approved. Preparing merge.",
-        changes_requested: `Review requested changes.${event.reviewerName ? ` Reviewer: ${event.reviewerName}` : ""}`,
-        repairing_ci: `CI check failed${event.checkName ? `: ${event.checkName}` : ""}. Starting repair.`,
-        repairing_queue: "Merge conflict with base branch. Starting repair.",
-        done: `PR merged and deployed.${event.prNumber ? ` PR #${event.prNumber}` : ""}`,
-        failed: "PR was closed without merging.",
-      };
-
-      const body = messages[newState];
-      if (!body) return;
-
-      const type = newState === "failed" || newState === "repairing_ci" || newState === "repairing_queue"
-        ? "error" as const
-        : "response" as const;
-
+      const content = buildGitHubStateActivity(issue.factoryState, event);
+      if (!content) return;
+      const allowEphemeral = content.type === "thought" || content.type === "action";
       await linear.createAgentActivity({
         agentSessionId: issue.agentSessionId,
-        content: { type, body },
+        content,
+        ...(allowEphemeral ? { ephemeral: false } : {}),
       });
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -308,6 +298,26 @@ export class GitHubWebhookHandler {
         status: "linear_error",
         summary: `Linear activity failed: ${msg}`,
       });
+    }
+  }
+
+  private async syncLinearSession(issue: IssueRecord): Promise<void> {
+    if (!issue.agentSessionId) return;
+    try {
+      const linear = await this.linearProvider.forProject(issue.projectId);
+      if (!linear?.updateAgentSession) return;
+      const externalUrls = buildAgentSessionExternalUrls(this.config, {
+        ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
+        ...(issue.prUrl ? { prUrl: issue.prUrl } : {}),
+      });
+      await linear.updateAgentSession({
+        agentSessionId: issue.agentSessionId,
+        plan: buildAgentSessionPlanForIssue(issue),
+        ...(externalUrls ? { externalUrls } : {}),
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      this.logger.warn({ issueKey: issue.issueKey, error: msg }, "Failed to sync Linear session from GitHub webhook");
     }
   }
 }

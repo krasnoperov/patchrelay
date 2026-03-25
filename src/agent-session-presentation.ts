@@ -9,26 +9,36 @@ const SESSION_STATUS_TTL_SECONDS = 60 * 60 * 24 * 7;
 
 export function buildAgentSessionExternalUrls(
   config: AppConfig,
-  issueKey: string | undefined,
+  params: {
+    issueKey?: string;
+    prUrl?: string;
+  },
 ): LinearAgentSessionExternalUrl[] | undefined {
-  if (!issueKey || !config.server.publicBaseUrl) {
-    return undefined;
-  }
+  const urls: LinearAgentSessionExternalUrl[] = [];
 
-  const token = createSessionStatusToken({
-    issueKey,
-    secret: deriveSessionStatusSigningSecret(config.linear.tokenEncryptionKey),
-    ttlSeconds: SESSION_STATUS_TTL_SECONDS,
-  });
+  if (params.issueKey && config.server.publicBaseUrl) {
+    const token = createSessionStatusToken({
+      issueKey: params.issueKey,
+      secret: deriveSessionStatusSigningSecret(config.linear.tokenEncryptionKey),
+      ttlSeconds: SESSION_STATUS_TTL_SECONDS,
+    });
 
-  return [
-    {
+    urls.push({
       label: "PatchRelay status",
       url: buildSessionStatusUrl({
         publicBaseUrl: config.server.publicBaseUrl,
-        issueKey,
+        issueKey: params.issueKey,
         token: token.token,
       }),
-    },
-  ];
+    });
+  }
+
+  if (params.prUrl) {
+    urls.push({
+      label: "Pull request",
+      url: params.prUrl,
+    });
+  }
+
+  return urls.length > 0 ? urls : undefined;
 }

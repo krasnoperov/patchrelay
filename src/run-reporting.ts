@@ -17,17 +17,52 @@ export function summarizeCurrentThread(thread: CodexThreadSummary): {
   latestTurnId?: string;
   latestTurnStatus?: string;
   latestAgentMessage?: string;
+  latestPlan?: string;
+  activeCommand?: string;
+  commandCount: number;
+  fileChangeCount: number;
+  toolCallCount: number;
 } {
   const latestTurn = thread.turns.at(-1);
   const latestAgentMessage = latestTurn?.items
     .filter((item): item is Extract<CodexThreadItem, { type: "agentMessage" }> => item.type === "agentMessage")
     .at(-1)?.text;
+  const latestPlan = latestTurn?.items
+    .filter((item): item is Extract<CodexThreadItem, { type: "plan" }> => item.type === "plan")
+    .at(-1)?.text;
+  const activeCommand = latestTurn?.items
+    .filter((item): item is Extract<CodexThreadItem, { type: "commandExecution" }> => item.type === "commandExecution")
+    .filter((item) => item.status === "inProgress" || item.status === "running")
+    .at(-1)?.command
+    ?? latestTurn?.items
+      .filter((item): item is Extract<CodexThreadItem, { type: "commandExecution" }> => item.type === "commandExecution")
+      .at(-1)?.command;
+  let commandCount = 0;
+  let fileChangeCount = 0;
+  let toolCallCount = 0;
+
+  for (const turn of thread.turns) {
+    for (const item of turn.items as CodexThreadItem[]) {
+      if (item.type === "commandExecution") {
+        commandCount += 1;
+      } else if (item.type === "fileChange" && Array.isArray(item.changes)) {
+        fileChangeCount += item.changes.length;
+      } else if (item.type === "mcpToolCall" || item.type === "dynamicToolCall") {
+        toolCallCount += 1;
+      }
+    }
+  }
 
   return {
     threadId: thread.id,
     threadStatus: thread.status,
+    commandCount,
+    fileChangeCount,
+    toolCallCount,
     ...(latestTurn ? { latestTurnId: latestTurn.id, latestTurnStatus: latestTurn.status } : {}),
     ...(latestAgentMessage ? { latestAgentMessage } : {}),
+    ...(latestPlan ? { latestPlan } : {}),
+    ...(activeCommand ? { activeCommand } : {}),
   };
 }
 

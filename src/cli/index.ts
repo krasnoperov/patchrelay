@@ -35,6 +35,7 @@ function getCommandConfigProfile(command: string): ConfigLoadProfile {
     case "connect":
     case "installations":
     case "feed":
+    case "watch":
       return "operator_cli";
     case "inspect":
     case "live":
@@ -104,6 +105,9 @@ function validateFlags(command: string, commandArgs: string[], parsed: ReturnTyp
       return;
     case "feed":
       assertKnownFlags(parsed, command, ["follow", "limit", "issue", "project", "kind", "stage", "status", "workflow", "json"]);
+      return;
+    case "watch":
+      assertKnownFlags(parsed, command, ["issue"]);
       return;
     case "install-service":
       assertKnownFlags(parsed, command, ["force", "write-only", "json"]);
@@ -348,6 +352,11 @@ export async function runCli(
         stdout,
         data: operatorData,
       });
+    }
+
+    if (command === "watch") {
+      const { handleWatchCommand } = await import("./commands/watch.ts");
+      return await handleWatchCommand({ config, parsed });
     }
 
     if (command === "retry") {

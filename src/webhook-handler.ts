@@ -1,12 +1,16 @@
 import type { Logger } from "pino";
 import {
-  buildPreparingSessionPlan,
-  buildRunningSessionPlan,
+  buildAgentSessionPlanForIssue,
 } from "./agent-session-plan.ts";
 import { buildAgentSessionExternalUrls } from "./agent-session-presentation.ts";
 import type { CodexAppServerClient } from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { RunType } from "./factory-state.ts";
+import {
+  buildAlreadyRunningThought,
+  buildDelegationThought,
+  buildPromptDeliveredThought,
+} from "./linear-session-reporting.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import { resolveProject, triggerEventAllowed, trustedActorAllowed } from "./project-resolution.ts";
 import { normalizeWebhook } from "./webhooks.ts";
@@ -19,6 +23,7 @@ import type {
   NormalizedEvent,
   ProjectConfig,
   TrackedIssueRecord,
+  LinearAgentActivityContent,
 } from "./types.ts";
 import { safeJsonParse, sanitizeDiagnosticText } from "./utils.ts";
 
@@ -168,7 +173,7 @@ export class WebhookHandler {
     normalized: NormalizedEvent,
   ): {
     issue: TrackedIssueRecord | undefined;
-    desiredStage: string | undefined;
+    desiredStage: RunType | undefined;
     delegated: boolean;
   } {
     const normalizedIssue = normalized.issue;
@@ -180,11 +185,11 @@ export class WebhookHandler {
     const activeRun = existingIssue?.activeRunId ? this.db.getRun(existingIssue.activeRunId) : undefined;
     const delegated = this.isDelegatedToPatchRelay(project, normalized);
     const triggerAllowed = triggerEventAllowed(project, normalized.triggerEvent);
+    const pendingRunContextJson = mergePendingImplementationContext(existingIssue?.pendingRunContextJson, normalized);
 
-    // In the factory model, delegation → queue an implementation run.
-    // agentSessionCreated is itself a delegation signal (session exists because issue was delegated).
+    // In the factory model, only a true delegation queues implementation work.
     let pendingRunType: RunType | undefined;
-    const isDelegationSignal = delegated || normalized.triggerEvent === "agentSessionCreated";
+    const isDelegationSignal = delegated;
     if (isDelegationSignal && triggerAllowed && !activeRun && !existingIssue?.pendingRunType) {
       pendingRunType = "implementation";
     }
@@ -202,6 +207,9 @@ export class WebhookHandler {
       ...(normalizedIssue.url ? { url: normalizedIssue.url } : {}),
       ...(normalizedIssue.stateName ? { currentLinearState: normalizedIssue.stateName } : {}),
       ...(pendingRunType ? { pendingRunType, factoryState: "delegated" as const } : {}),
+      ...((pendingRunType || existingIssue?.pendingRunType === "implementation") && pendingRunContextJson
+        ? { pendingRunContextJson }
+        : {}),
       ...(agentSessionId !== undefined ? { agentSessionId } : {}),
     });
 
@@ -225,7 +233,7 @@ export class WebhookHandler {
     normalized: NormalizedEvent,
     project: ProjectConfig,
     trackedIssue: TrackedIssueRecord | undefined,
-    desiredStage: string | undefined,
+    desiredStage: RunType | undefined,
     delegated: boolean,
   ): Promise<void> {
     if (!normalized.agentSession?.id || !normalized.issue) return;
@@ -243,19 +251,15 @@ export class WebhookHandler {
         return;
       }
       if (desiredStage) {
-        await this.updateAgentSessionPlan(linear, project, normalized.agentSession.id, trackedIssue, buildPreparingSessionPlan(desiredStage));
-        await this.publishAgentActivity(linear, normalized.agentSession.id, {
-          type: "response",
-          body: `PatchRelay started working on the ${desiredStage} workflow.`,
-        });
+        const latestIssue = this.db.getIssue(project.id, normalized.issue.id);
+        await this.syncAgentSession(linear, normalized.agentSession.id, latestIssue ?? trackedIssue, { pendingRunType: desiredStage });
+        await this.publishAgentActivity(linear, normalized.agentSession.id, buildDelegationThought(desiredStage));
         return;
       }
       if (activeRun) {
-        await this.updateAgentSessionPlan(linear, project, normalized.agentSession.id, trackedIssue, buildRunningSessionPlan(activeRun.runType));
-        await this.publishAgentActivity(linear, normalized.agentSession.id, {
-          type: "response",
-          body: `PatchRelay is already running the ${activeRun.runType} workflow for this issue.`,
-        });
+        const latestIssue = this.db.getIssue(project.id, normalized.issue.id);
+        await this.syncAgentSession(linear, normalized.agentSession.id, latestIssue ?? trackedIssue, { activeRunType: activeRun.runType });
+        await this.publishAgentActivity(linear, normalized.agentSession.id, buildAlreadyRunningThought(activeRun.runType));
         return;
       }
       await this.publishAgentActivity(linear, normalized.agentSession.id, {
@@ -295,19 +299,14 @@ export class WebhookHandler {
           summary: `Could not deliver follow-up prompt to active ${activeRun.runType} workflow`,
         });
       }
-      await this.publishAgentActivity(linear, normalized.agentSession.id, {
-        type: "thought",
-        body: `PatchRelay routed your follow-up instructions into the active ${activeRun.runType} workflow.`,
-      });
+      await this.publishAgentActivity(linear, normalized.agentSession.id, buildPromptDeliveredThought(activeRun.runType), { ephemeral: true });
       return;
     }
 
     if (desiredStage) {
-      await this.updateAgentSessionPlan(linear, project, normalized.agentSession.id, trackedIssue, buildPreparingSessionPlan(desiredStage));
-      await this.publishAgentActivity(linear, normalized.agentSession.id, {
-        type: "response",
-        body: `PatchRelay is preparing the ${desiredStage} workflow from your latest prompt.`,
-      });
+      const latestIssue = this.db.getIssue(project.id, normalized.issue.id);
+      await this.syncAgentSession(linear, normalized.agentSession.id, latestIssue ?? trackedIssue, { pendingRunType: desiredStage });
+      await this.publishAgentActivity(linear, normalized.agentSession.id, buildDelegationThought(desiredStage, "prompt"), { ephemeral: true });
     }
   }
 
@@ -369,13 +368,14 @@ export class WebhookHandler {
   private async publishAgentActivity(
     linear: NonNullable<Awaited<ReturnType<LinearClientProvider["forProject"]>>>,
     agentSessionId: string,
-    content: { type: "thought" | "elicitation" | "response" | "error"; body: string },
+    content: LinearAgentActivityContent,
+    options?: { ephemeral?: boolean },
   ): Promise<void> {
     try {
       await linear.createAgentActivity({
         agentSessionId,
         content,
-        ephemeral: content.type === "thought",
+        ephemeral: options?.ephemeral ?? content.type === "thought",
       });
     } catch (error) {
       this.logger.warn(
@@ -385,20 +385,35 @@ export class WebhookHandler {
     }
   }
 
-  private async updateAgentSessionPlan(
+  private async syncAgentSession(
     linear: NonNullable<Awaited<ReturnType<LinearClientProvider["forProject"]>>>,
-    project: ProjectConfig,
     agentSessionId: string,
-    issue: TrackedIssueRecord | undefined,
-    plan: ReturnType<typeof buildPreparingSessionPlan>,
+    issue: TrackedIssueRecord | ReturnType<PatchRelayDatabase["getIssue"]> | undefined,
+    options?: { activeRunType?: RunType; pendingRunType?: RunType },
   ): Promise<void> {
     if (!linear.updateAgentSession) return;
     try {
-      const externalUrls = buildAgentSessionExternalUrls(this.config, issue?.issueKey);
+      const prUrl = issue && "prUrl" in issue ? issue.prUrl : undefined;
+      const externalUrls = buildAgentSessionExternalUrls(this.config, {
+        ...(issue?.issueKey ? { issueKey: issue.issueKey } : {}),
+        ...(prUrl ? { prUrl } : {}),
+      });
       await linear.updateAgentSession({
         agentSessionId,
         ...(externalUrls ? { externalUrls } : {}),
-        plan,
+        ...(issue
+          ? {
+              plan: buildAgentSessionPlanForIssue(
+                {
+                  factoryState: issue.factoryState,
+                  pendingRunType: options?.pendingRunType ?? ("pendingRunType" in issue ? issue.pendingRunType : undefined),
+                  ciRepairAttempts: "ciRepairAttempts" in issue ? issue.ciRepairAttempts : 0,
+                  queueRepairAttempts: "queueRepairAttempts" in issue ? issue.queueRepairAttempts : 0,
+                },
+                options?.activeRunType ? { activeRunType: options.activeRunType } : undefined,
+              ),
+            }
+          : {}),
       });
     } catch (error) {
       this.logger.warn(
@@ -446,6 +461,25 @@ export class WebhookHandler {
 
 function hasCompleteIssueContext(issue: IssueMetadata): boolean {
   return Boolean(issue.stateName && issue.delegateId && issue.teamId && issue.teamKey);
+}
+
+function mergePendingImplementationContext(
+  existingJson: string | undefined,
+  normalized: NormalizedEvent,
+): string | undefined {
+  const existing = existingJson ? safeJsonParse<Record<string, unknown>>(existingJson) ?? {} : {};
+  const next: Record<string, unknown> = { ...existing };
+  const promptContext = normalized.agentSession?.promptContext?.trim();
+  const promptBody = normalized.agentSession?.promptBody?.trim();
+
+  if (promptContext) {
+    next.promptContext = promptContext;
+  }
+  if (promptBody) {
+    next.promptBody = promptBody;
+  }
+
+  return Object.keys(next).length > 0 ? JSON.stringify(next) : undefined;
 }
 
 function mergeIssueMetadata(
