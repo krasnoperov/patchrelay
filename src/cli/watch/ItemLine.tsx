@@ -33,7 +33,7 @@ function renderAgentMessage(item: TimelineItemPayload): React.JSX.Element {
   return (
     <Text>
       <Text dimColor>message: </Text>
-      <Text>{truncate(item.text ?? "", 120)}</Text>
+      <Text wrap="wrap">{item.text ?? ""}</Text>
     </Text>
   );
 }
@@ -112,14 +112,17 @@ export function ItemLine({ item, isLast }: ItemLineProps): React.JSX.Element {
     case "plan":
       content = renderPlan(item);
       break;
-    case "userMessage":
+    case "userMessage": {
+      const userText = item.text?.trim();
+      if (!userText) return <></>;
       content = (
         <Text>
           <Text color="yellow">you: </Text>
-          <Text>{truncate(item.text ?? "", 120)}</Text>
+          <Text wrap="wrap">{userText}</Text>
         </Text>
       );
       break;
+    }
     default:
       content = renderDefault(item);
       break;
