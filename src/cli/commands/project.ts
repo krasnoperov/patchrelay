@@ -89,7 +89,7 @@ export async function handleProjectCommand(params: ProjectCommandParams): Promis
   }
 
   const { runPreflight } = await import("../../preflight.ts");
-  const report = await runPreflight(fullConfig);
+  const report = await runPreflight(fullConfig, { skipServiceCheck: true });
   const failedChecks = report.checks.filter((check) => check.status === "fail");
   if (failedChecks.length > 0) {
     if (params.json) {
