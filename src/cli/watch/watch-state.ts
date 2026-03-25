@@ -14,6 +14,7 @@ import type { CodexThreadSummary } from "../../types.ts";
 
 // Re-export for consumers
 export type { TimelineEntry, TimelineItemPayload } from "./timeline-builder.ts";
+export type { OperatorFeedEvent } from "../../operator-feed.ts";
 
 // ─── Issue (list view) ────────────────────────────────────────────
 
@@ -45,15 +46,32 @@ export interface WatchDiffSummary {
   linesRemoved: number;
 }
 
+export interface WatchIssueContext {
+  description?: string | undefined;
+  currentLinearState?: string | undefined;
+  issueUrl?: string | undefined;
+  worktreePath?: string | undefined;
+  branchName?: string | undefined;
+  prUrl?: string | undefined;
+  priority?: number | undefined;
+  estimate?: number | undefined;
+  ciRepairAttempts: number;
+  queueRepairAttempts: number;
+  reviewFixAttempts: number;
+  runCount: number;
+}
+
 // ─── Top-level State ──────────────────────────────────────────────
 
 export type WatchFilter = "all" | "active" | "non-done";
+
+export type WatchView = "list" | "detail" | "feed";
 
 export interface WatchState {
   connected: boolean;
   issues: WatchIssue[];
   selectedIndex: number;
-  view: "list" | "detail";
+  view: WatchView;
   activeDetailKey: string | null;
   filter: WatchFilter;
   follow: boolean;
@@ -64,6 +82,9 @@ export interface WatchState {
   tokenUsage: WatchTokenUsage | null;
   diffSummary: WatchDiffSummary | null;
   plan: Array<{ step: string; status: string }> | null;
+  issueContext: WatchIssueContext | null;
+  // Feed view state
+  feedEvents: OperatorFeedEvent[];
 }
 
 export type WatchAction =
@@ -74,10 +95,15 @@ export type WatchAction =
   | { type: "select"; index: number }
   | { type: "enter-detail"; issueKey: string }
   | { type: "exit-detail" }
-  | { type: "timeline-rehydrate"; runs: TimelineRunInput[]; feedEvents: OperatorFeedEvent[]; liveThread: CodexThreadSummary | null; activeRunId: number | null }
+  | { type: "detail-navigate"; direction: "next" | "prev"; filtered: WatchIssue[] }
+  | { type: "timeline-rehydrate"; runs: TimelineRunInput[]; feedEvents: OperatorFeedEvent[]; liveThread: CodexThreadSummary | null; activeRunId: number | null; issueContext: WatchIssueContext | null }
   | { type: "codex-notification"; method: string; params: Record<string, unknown> }
   | { type: "cycle-filter" }
-  | { type: "toggle-follow" };
+  | { type: "toggle-follow" }
+  | { type: "enter-feed" }
+  | { type: "exit-feed" }
+  | { type: "feed-snapshot"; events: OperatorFeedEvent[] }
+  | { type: "feed-new-event"; event: OperatorFeedEvent };
 
 const DETAIL_INITIAL = {
   timeline: [] as TimelineEntry[],
@@ -86,6 +112,7 @@ const DETAIL_INITIAL = {
   tokenUsage: null as WatchTokenUsage | null,
   diffSummary: null as WatchDiffSummary | null,
   plan: null as Array<{ step: string; status: string }> | null,
+  issueContext: null as WatchIssueContext | null,
 };
 
 export const initialWatchState: WatchState = {
@@ -97,6 +124,7 @@ export const initialWatchState: WatchState = {
   filter: "non-done",
   follow: true,
   ...DETAIL_INITIAL,
+  feedEvents: [],
 };
 
 const TERMINAL_FACTORY_STATES = new Set(["done", "failed"]);
@@ -110,6 +138,28 @@ export function filterIssues(issues: WatchIssue[], filter: WatchFilter): WatchIs
     case "non-done":
       return issues.filter((i) => !TERMINAL_FACTORY_STATES.has(i.factoryState));
   }
+}
+
+export interface IssueAggregates {
+  active: number;
+  done: number;
+  failed: number;
+  total: number;
+}
+
+const DONE_STATES = new Set(["done"]);
+const FAILED_STATES = new Set(["failed", "escalated"]);
+
+export function computeAggregates(issues: WatchIssue[]): IssueAggregates {
+  let active = 0;
+  let done = 0;
+  let failed = 0;
+  for (const issue of issues) {
+    if (issue.activeRunType) active++;
+    if (DONE_STATES.has(issue.factoryState)) done++;
+    if (FAILED_STATES.has(issue.factoryState)) failed++;
+  }
+  return { active, done, failed, total: issues.length };
 }
 
 function nextFilter(filter: WatchFilter): WatchFilter {
@@ -152,6 +202,18 @@ export function watchReducer(state: WatchState, action: WatchAction): WatchState
     case "exit-detail":
       return { ...state, view: "list", activeDetailKey: null, ...DETAIL_INITIAL };
 
+    case "detail-navigate": {
+      const list = action.filtered;
+      if (list.length === 0) return state;
+      const curIdx = list.findIndex((i) => i.issueKey === state.activeDetailKey);
+      const nextIdx = action.direction === "next"
+        ? (curIdx + 1) % list.length
+        : (curIdx - 1 + list.length) % list.length;
+      const nextIssue = list[nextIdx];
+      if (!nextIssue?.issueKey || nextIssue.issueKey === state.activeDetailKey) return state;
+      return { ...state, activeDetailKey: nextIssue.issueKey, selectedIndex: nextIdx, ...DETAIL_INITIAL };
+    }
+
     case "timeline-rehydrate": {
       const timeline = buildTimelineFromRehydration(
         action.runs,
@@ -165,6 +227,7 @@ export function watchReducer(state: WatchState, action: WatchAction): WatchState
         timeline,
         activeRunId: action.activeRunId,
         activeRunStartedAt: activeRun?.startedAt ?? null,
+        issueContext: action.issueContext,
       };
     }
 
@@ -176,6 +239,18 @@ export function watchReducer(state: WatchState, action: WatchAction): WatchState
 
     case "toggle-follow":
       return { ...state, follow: !state.follow };
+
+    case "enter-feed":
+      return { ...state, view: "feed", activeDetailKey: null, ...DETAIL_INITIAL };
+
+    case "exit-feed":
+      return { ...state, view: "list" };
+
+    case "feed-snapshot":
+      return { ...state, feedEvents: action.events };
+
+    case "feed-new-event":
+      return { ...state, feedEvents: [...state.feedEvents, action.event] };
   }
 }
 

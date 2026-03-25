@@ -6,17 +6,18 @@ import { HelpBar } from "./HelpBar.tsx";
 
 interface IssueListViewProps {
   issues: WatchIssue[];
+  allIssues: WatchIssue[];
   selectedIndex: number;
   connected: boolean;
   filter: WatchFilter;
   totalCount: number;
 }
 
-export function IssueListView({ issues, selectedIndex, connected, filter, totalCount }: IssueListViewProps): React.JSX.Element {
+export function IssueListView({ issues, allIssues, selectedIndex, connected, filter, totalCount }: IssueListViewProps): React.JSX.Element {
   return (
     <Box flexDirection="column">
-      <StatusBar issues={issues} totalCount={totalCount} filter={filter} connected={connected} />
-      <Text dimColor>{"─".repeat(72)}</Text>
+      <StatusBar issues={issues} totalCount={totalCount} filter={filter} connected={connected} allIssues={allIssues} />
+      <Text dimColor>{"\u2500".repeat(72)}</Text>
       {issues.length === 0 ? (
         <Text dimColor>No issues match the current filter.</Text>
       ) : (
@@ -30,7 +31,7 @@ export function IssueListView({ issues, selectedIndex, connected, filter, totalC
           ))}
         </Box>
       )}
-      <Text dimColor>{"─".repeat(72)}</Text>
+      <Text dimColor>{"\u2500".repeat(72)}</Text>
       <HelpBar view="list" />
     </Box>
   );

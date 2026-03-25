@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   watchReducer,
   initialWatchState,
+  computeAggregates,
   type WatchAction,
   type WatchIssue,
   type WatchState,
@@ -96,6 +97,55 @@ test("exit-detail returns to list view and clears timeline", () => {
   assert.equal(state.activeDetailKey, null);
 });
 
+test("enter-feed switches to feed view and clears detail state", () => {
+  const initial = stateWith({ view: "detail", activeDetailKey: "USE-74" });
+  const state = reduce(initial, { type: "enter-feed" });
+  assert.equal(state.view, "feed");
+  assert.equal(state.activeDetailKey, null);
+});
+
+test("exit-feed returns to list view", () => {
+  const initial = stateWith({ view: "feed" });
+  const state = reduce(initial, { type: "exit-feed" });
+  assert.equal(state.view, "list");
+});
+
+test("detail-navigate cycles through filtered issues", () => {
+  const issues = [makeIssue("USE-1"), makeIssue("USE-2"), makeIssue("USE-3")];
+  const initial = stateWith({ view: "detail", activeDetailKey: "USE-1", issues });
+
+  const next = reduce(initial, { type: "detail-navigate", direction: "next", filtered: issues });
+  assert.equal(next.activeDetailKey, "USE-2");
+
+  const prev = reduce(initial, { type: "detail-navigate", direction: "prev", filtered: issues });
+  assert.equal(prev.activeDetailKey, "USE-3"); // wraps around
+});
+
+test("detail-navigate wraps forward from last to first", () => {
+  const issues = [makeIssue("USE-1"), makeIssue("USE-2")];
+  const initial = stateWith({ view: "detail", activeDetailKey: "USE-2", issues });
+  const state = reduce(initial, { type: "detail-navigate", direction: "next", filtered: issues });
+  assert.equal(state.activeDetailKey, "USE-1");
+});
+
+test("detail-navigate is no-op with empty list", () => {
+  const initial = stateWith({ view: "detail", activeDetailKey: "USE-1" });
+  const state = reduce(initial, { type: "detail-navigate", direction: "next", filtered: [] });
+  assert.equal(state.activeDetailKey, "USE-1");
+});
+
+test("detail-navigate clears timeline for rehydration", () => {
+  const issues = [makeIssue("USE-1"), makeIssue("USE-2")];
+  const initial = stateWith({
+    view: "detail",
+    activeDetailKey: "USE-1",
+    issues,
+    timeline: [{ id: "t1", at: "2026-03-25T10:00:00.000Z", kind: "feed" as const }],
+  });
+  const state = reduce(initial, { type: "detail-navigate", direction: "next", filtered: issues });
+  assert.deepEqual(state.timeline, []);
+});
+
 // ─── Feed Event → Issue Update ────────────────────────────────────
 
 test("feed-event with stage kind updates factoryState", () => {
@@ -183,6 +233,7 @@ test("timeline-rehydrate builds entries from runs and feed events", () => {
     feedEvents,
     liveThread: null,
     activeRunId: null,
+    issueContext: null,
   });
 
   assert.ok(state.timeline.length > 0);
@@ -208,6 +259,7 @@ test("timeline-rehydrate sets activeRunId and startedAt", () => {
     feedEvents: [],
     liveThread: null,
     activeRunId: 42,
+    issueContext: null,
   });
 
   assert.equal(state.activeRunId, 42);
@@ -361,6 +413,69 @@ test("buildTimelineFromRehydration aggregates CI checks from feed", () => {
   assert.equal(ciEntries.length, 1);
   assert.equal(ciEntries[0]?.ciChecks?.checks.length, 3);
   assert.equal(ciEntries[0]?.ciChecks?.overall, "failed");
+});
+
+// ─── Feed Events ─────────────────────────────────────────────
+
+test("feed-snapshot sets feed events", () => {
+  const events = [makeFeedEvent({ id: 1 }), makeFeedEvent({ id: 2 })];
+  const state = reduce(initialWatchState, { type: "feed-snapshot", events });
+  assert.equal(state.feedEvents.length, 2);
+});
+
+test("feed-new-event appends to feed events", () => {
+  const initial = stateWith({ feedEvents: [makeFeedEvent({ id: 1 })] });
+  const state = reduce(initial, { type: "feed-new-event", event: makeFeedEvent({ id: 2 }) });
+  assert.equal(state.feedEvents.length, 2);
+});
+
+// ─── Aggregates ──────────────────────────────────────────────
+
+test("computeAggregates counts active, done, failed", () => {
+  const issues = [
+    makeIssue("USE-1", { factoryState: "implementing", activeRunType: "implementation" }),
+    makeIssue("USE-2", { factoryState: "done" }),
+    makeIssue("USE-3", { factoryState: "failed" }),
+    makeIssue("USE-4", { factoryState: "escalated" }),
+    makeIssue("USE-5", { factoryState: "pr_open" }),
+    makeIssue("USE-6", { factoryState: "implementing", activeRunType: "implementation" }),
+  ];
+  const agg = computeAggregates(issues);
+  assert.equal(agg.active, 2);
+  assert.equal(agg.done, 1);
+  assert.equal(agg.failed, 2); // failed + escalated
+  assert.equal(agg.total, 6);
+});
+
+test("computeAggregates returns zeros for empty list", () => {
+  const agg = computeAggregates([]);
+  assert.deepEqual(agg, { active: 0, done: 0, failed: 0, total: 0 });
+});
+
+// ─── Timeline Rehydration with Issue Context ─────────────────
+
+test("timeline-rehydrate stores issueContext", () => {
+  const ctx = {
+    description: "Fix the widget",
+    currentLinearState: "In Progress",
+    priority: 2,
+    estimate: 3,
+    ciRepairAttempts: 0,
+    queueRepairAttempts: 0,
+    reviewFixAttempts: 0,
+    runCount: 1,
+  };
+  const state = reduce(initialWatchState, {
+    type: "timeline-rehydrate",
+    runs: [],
+    feedEvents: [],
+    liveThread: null,
+    activeRunId: null,
+    issueContext: ctx,
+  });
+  assert.equal(state.issueContext?.description, "Fix the widget");
+  assert.equal(state.issueContext?.priority, 2);
+  assert.equal(state.issueContext?.estimate, 3);
 });
 
 // ─── Immutability ─────────────────────────────────────────────────

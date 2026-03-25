@@ -95,7 +95,24 @@ export class IssueQueryService {
       liveThread = await this.codex.readThread(activeRun.threadId, true).catch(() => undefined);
     }
 
-    return { issue, runs, feedEvents, liveThread, activeRunId };
+    return {
+      issue: {
+        ...issue,
+        ...(fullIssue?.description ? { description: fullIssue.description } : {}),
+        ...(fullIssue?.branchName ? { branchName: fullIssue.branchName } : {}),
+        ...(fullIssue?.worktreePath ? { worktreePath: fullIssue.worktreePath } : {}),
+        ...(fullIssue?.prUrl ? { prUrl: fullIssue.prUrl } : {}),
+        ...(fullIssue?.priority != null ? { priority: fullIssue.priority } : {}),
+        ...(fullIssue?.estimate != null ? { estimate: fullIssue.estimate } : {}),
+        ciRepairAttempts: fullIssue?.ciRepairAttempts ?? 0,
+        queueRepairAttempts: fullIssue?.queueRepairAttempts ?? 0,
+        reviewFixAttempts: fullIssue?.reviewFixAttempts ?? 0,
+      },
+      runs,
+      feedEvents,
+      liveThread,
+      activeRunId,
+    };
   }
 
   async getActiveRunStatus(issueKey: string) {
