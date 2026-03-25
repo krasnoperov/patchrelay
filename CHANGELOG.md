@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.3](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.20.2...patchrelay-v0.20.3) (2026-03-25)
+
+
+### Bug Fixes
+
+* declare experimentalApi capability in initialize handshake ([#145](https://github.com/krasnoperov/patchrelay/issues/145)) ([3883483](https://github.com/krasnoperov/patchrelay/commit/38834835588c58b38239961043c63e2fd4f37df9))
+
 ## [0.20.2](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.20.1...patchrelay-v0.20.2) (2026-03-25)
 
 
