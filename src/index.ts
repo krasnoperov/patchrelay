@@ -44,7 +44,7 @@ async function main(): Promise<void> {
   }
   await enforceRuntimeFilePermissions(config);
 
-  const preflight = await runPreflight(config);
+  const preflight = await runPreflight(config, { skipServiceCheck: true });
   const failedChecks = preflight.checks.filter((check) => check.status === "fail");
   if (failedChecks.length > 0) {
     throw new Error(
