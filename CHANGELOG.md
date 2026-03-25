@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.12.9...patchrelay-v0.13.0) (2026-03-25)
+
+
+### Features
+
+* patchrelay watch — real-time TUI dashboard ([#118](https://github.com/krasnoperov/patchrelay/issues/118)) ([7c5b108](https://github.com/krasnoperov/patchrelay/commit/7c5b108e010310211a8c6ed8270a62fc2e7ccf0e))
+
 ## [0.12.9](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.12.8...patchrelay-v0.12.9) (2026-03-24)
 
 
