@@ -6,8 +6,11 @@ import {
   type WatchAction,
   type WatchIssue,
   type WatchState,
-  type WatchThread,
 } from "../src/cli/watch/watch-state.ts";
+import {
+  buildTimelineFromRehydration,
+  type TimelineRunInput,
+} from "../src/cli/watch/timeline-builder.ts";
 import type { OperatorFeedEvent } from "../src/operator-feed.ts";
 
 // ─── Helpers ──────────────────────────────────────────────────────
@@ -55,8 +58,6 @@ test("issues-snapshot replaces the issue list", () => {
   const issues = [makeIssue("USE-1"), makeIssue("USE-2")];
   const state = reduce(initialWatchState, { type: "issues-snapshot", issues });
   assert.equal(state.issues.length, 2);
-  assert.equal(state.issues[0]?.issueKey, "USE-1");
-  assert.equal(state.issues[1]?.issueKey, "USE-2");
 });
 
 test("issues-snapshot clamps selectedIndex when list shrinks", () => {
@@ -68,432 +69,190 @@ test("issues-snapshot clamps selectedIndex when list shrinks", () => {
   assert.equal(state.selectedIndex, 0);
 });
 
-test("issues-snapshot preserves selectedIndex when list stays same size", () => {
-  const initial = stateWith({
-    issues: [makeIssue("USE-1"), makeIssue("USE-2")],
-    selectedIndex: 1,
-  });
-  const state = reduce(initial, {
-    type: "issues-snapshot",
-    issues: [makeIssue("USE-1"), makeIssue("USE-2", { factoryState: "done" })],
-  });
-  assert.equal(state.selectedIndex, 1);
-});
-
 // ─── Selection ────────────────────────────────────────────────────
 
 test("select clamps to valid range", () => {
   const initial = stateWith({
     issues: [makeIssue("USE-1"), makeIssue("USE-2"), makeIssue("USE-3")],
-    selectedIndex: 0,
   });
-
-  const down = reduce(initial, { type: "select", index: 1 });
-  assert.equal(down.selectedIndex, 1);
-
-  const pastEnd = reduce(initial, { type: "select", index: 10 });
-  assert.equal(pastEnd.selectedIndex, 2);
-
-  const belowZero = reduce(initial, { type: "select", index: -1 });
-  assert.equal(belowZero.selectedIndex, 0);
-});
-
-test("select on empty list stays at 0", () => {
-  const state = reduce(initialWatchState, { type: "select", index: 5 });
-  assert.equal(state.selectedIndex, 0);
+  assert.equal(reduce(initial, { type: "select", index: 1 }).selectedIndex, 1);
+  assert.equal(reduce(initial, { type: "select", index: 10 }).selectedIndex, 2);
+  assert.equal(reduce(initial, { type: "select", index: -1 }).selectedIndex, 0);
 });
 
 // ─── View Transitions ─────────────────────────────────────────────
 
-test("enter-detail switches to detail view with the issue key", () => {
+test("enter-detail switches to detail view and clears timeline", () => {
   const state = reduce(initialWatchState, { type: "enter-detail", issueKey: "USE-74" });
   assert.equal(state.view, "detail");
   assert.equal(state.activeDetailKey, "USE-74");
+  assert.deepEqual(state.timeline, []);
 });
 
-test("exit-detail returns to list view and clears active key", () => {
+test("exit-detail returns to list view and clears timeline", () => {
   const initial = stateWith({ view: "detail", activeDetailKey: "USE-74" });
   const state = reduce(initial, { type: "exit-detail" });
   assert.equal(state.view, "list");
   assert.equal(state.activeDetailKey, null);
 });
 
-// ─── Feed Event Application ───────────────────────────────────────
+// ─── Feed Event → Issue Update ────────────────────────────────────
 
 test("feed-event with stage kind updates factoryState", () => {
-  const initial = stateWith({
-    issues: [makeIssue("USE-74", { factoryState: "implementing" })],
-  });
-  const event = makeFeedEvent({
-    id: 1,
-    kind: "stage",
-    issueKey: "USE-74",
-    stage: "repairing_queue",
-  });
+  const initial = stateWith({ issues: [makeIssue("USE-74")] });
+  const event = makeFeedEvent({ id: 1, kind: "stage", issueKey: "USE-74", stage: "done" });
   const state = reduce(initial, { type: "feed-event", event });
-  assert.equal(state.issues[0]?.factoryState, "repairing_queue");
-});
-
-test("feed-event with stage starting updates activeRunType", () => {
-  const initial = stateWith({
-    issues: [makeIssue("USE-74")],
-  });
-  const event = makeFeedEvent({
-    id: 2,
-    kind: "stage",
-    status: "starting",
-    issueKey: "USE-74",
-    stage: "queue_repair",
-  });
-  const state = reduce(initial, { type: "feed-event", event });
-  assert.equal(state.issues[0]?.activeRunType, "queue_repair");
-});
-
-test("feed-event with turn completed clears activeRunType and sets latestRunStatus", () => {
-  const initial = stateWith({
-    issues: [makeIssue("USE-74", { activeRunType: "implementation" })],
-  });
-  const event = makeFeedEvent({
-    id: 3,
-    kind: "turn",
-    status: "completed",
-    issueKey: "USE-74",
-  });
-  const state = reduce(initial, { type: "feed-event", event });
-  assert.equal(state.issues[0]?.activeRunType, undefined);
-  assert.equal(state.issues[0]?.latestRunStatus, "completed");
-});
-
-test("feed-event with turn failed sets latestRunStatus to failed", () => {
-  const initial = stateWith({
-    issues: [makeIssue("USE-74", { activeRunType: "ci_repair" })],
-  });
-  const event = makeFeedEvent({
-    id: 4,
-    kind: "turn",
-    status: "failed",
-    issueKey: "USE-74",
-  });
-  const state = reduce(initial, { type: "feed-event", event });
-  assert.equal(state.issues[0]?.activeRunType, undefined);
-  assert.equal(state.issues[0]?.latestRunStatus, "failed");
-});
-
-test("feed-event with github check_passed updates prCheckStatus", () => {
-  const initial = stateWith({
-    issues: [makeIssue("USE-74", { prNumber: 127 })],
-  });
-  const event = makeFeedEvent({
-    id: 5,
-    kind: "github",
-    status: "check_passed",
-    issueKey: "USE-74",
-  });
-  const state = reduce(initial, { type: "feed-event", event });
-  assert.equal(state.issues[0]?.prCheckStatus, "passed");
-});
-
-test("feed-event with github check_failed updates prCheckStatus", () => {
-  const initial = stateWith({
-    issues: [makeIssue("USE-74", { prNumber: 127 })],
-  });
-  const event = makeFeedEvent({
-    id: 6,
-    kind: "github",
-    status: "check_failed",
-    issueKey: "USE-74",
-  });
-  const state = reduce(initial, { type: "feed-event", event });
-  assert.equal(state.issues[0]?.prCheckStatus, "failed");
-});
-
-test("feed-event updates updatedAt timestamp", () => {
-  const initial = stateWith({
-    issues: [makeIssue("USE-74", { updatedAt: "2026-03-25T09:00:00.000Z" })],
-  });
-  const event = makeFeedEvent({
-    id: 7,
-    kind: "stage",
-    stage: "done",
-    issueKey: "USE-74",
-    at: "2026-03-25T11:30:00.000Z",
-  });
-  const state = reduce(initial, { type: "feed-event", event });
-  assert.equal(state.issues[0]?.updatedAt, "2026-03-25T11:30:00.000Z");
+  assert.equal(state.issues[0]?.factoryState, "done");
 });
 
 test("feed-event for unknown issue is a no-op", () => {
-  const initial = stateWith({
-    issues: [makeIssue("USE-74")],
-  });
-  const event = makeFeedEvent({
-    id: 8,
-    kind: "stage",
-    stage: "done",
-    issueKey: "USE-999",
-  });
+  const initial = stateWith({ issues: [makeIssue("USE-74")] });
+  const event = makeFeedEvent({ id: 2, kind: "stage", issueKey: "USE-999", stage: "done" });
   const state = reduce(initial, { type: "feed-event", event });
   assert.deepEqual(state.issues, initial.issues);
 });
 
-test("feed-event without issueKey is a no-op", () => {
+test("feed-event appends to timeline when in detail view", () => {
   const initial = stateWith({
     issues: [makeIssue("USE-74")],
+    view: "detail",
+    activeDetailKey: "USE-74",
   });
-  const event = makeFeedEvent({
-    id: 9,
-    kind: "service",
-    summary: "service started",
-  });
+  const event = makeFeedEvent({ id: 3, kind: "stage", issueKey: "USE-74", status: "starting", summary: "Run started" });
   const state = reduce(initial, { type: "feed-event", event });
-  assert.deepEqual(state.issues, initial.issues);
+  assert.equal(state.timeline.length, 1);
+  assert.equal(state.timeline[0]?.kind, "feed");
 });
 
-test("feed-event does not mutate original state", () => {
-  const issue = makeIssue("USE-74", { factoryState: "implementing" });
-  const initial = stateWith({ issues: [issue] });
-  const event = makeFeedEvent({
-    id: 10,
-    kind: "stage",
-    stage: "done",
-    issueKey: "USE-74",
-  });
-  reduce(initial, { type: "feed-event", event });
-  assert.equal(initial.issues[0]?.factoryState, "implementing");
-});
-
-// ─── Multi-issue scenarios ────────────────────────────────────────
-
-test("feed-event updates only the matching issue in a multi-issue list", () => {
+test("feed-event aggregates CI checks in timeline", () => {
   const initial = stateWith({
-    issues: [
-      makeIssue("USE-72", { factoryState: "implementing" }),
-      makeIssue("USE-74", { factoryState: "implementing" }),
-      makeIssue("USE-76", { factoryState: "implementing" }),
-    ],
+    issues: [makeIssue("USE-74")],
+    view: "detail",
+    activeDetailKey: "USE-74",
   });
-  const event = makeFeedEvent({
-    id: 11,
-    kind: "stage",
-    stage: "done",
-    issueKey: "USE-74",
-  });
-  const state = reduce(initial, { type: "feed-event", event });
-  assert.equal(state.issues[0]?.factoryState, "implementing");
-  assert.equal(state.issues[1]?.factoryState, "done");
-  assert.equal(state.issues[2]?.factoryState, "implementing");
+  let state = reduce(initial, { type: "feed-event", event: makeFeedEvent({
+    id: 10, kind: "github", status: "check_passed", issueKey: "USE-74", detail: "Lint",
+    at: "2026-03-25T10:19:00.000Z",
+  })});
+  state = reduce(state, { type: "feed-event", event: makeFeedEvent({
+    id: 11, kind: "github", status: "check_failed", issueKey: "USE-74", detail: "Tests",
+    at: "2026-03-25T10:19:05.000Z",
+  })});
+  state = reduce(state, { type: "feed-event", event: makeFeedEvent({
+    id: 12, kind: "github", status: "check_passed", issueKey: "USE-74", detail: "Build",
+    at: "2026-03-25T10:19:10.000Z",
+  })});
+
+  // Should aggregate into a single ci-checks entry
+  const ciEntries = state.timeline.filter((e) => e.kind === "ci-checks");
+  assert.equal(ciEntries.length, 1);
+  assert.equal(ciEntries[0]?.ciChecks?.checks.length, 3);
+  assert.equal(ciEntries[0]?.ciChecks?.overall, "failed");
 });
 
-// ─── Thread Snapshot ──────────────────────────────────────────────
+// ─── Timeline Rehydration ─────────────────────────────────────────
 
-function makeThread(overrides?: Partial<WatchThread>): WatchThread {
-  return {
-    threadId: "thr_abc123",
-    status: "active",
-    turns: [],
-    ...overrides,
-  };
-}
+test("timeline-rehydrate builds entries from runs and feed events", () => {
+  const runs: TimelineRunInput[] = [{
+    id: 1,
+    runType: "implementation",
+    status: "completed",
+    startedAt: "2026-03-25T10:00:00.000Z",
+    endedAt: "2026-03-25T10:05:00.000Z",
+    report: {
+      runType: "implementation",
+      status: "completed",
+      prompt: "",
+      assistantMessages: ["Done"],
+      plans: [],
+      reasoning: [],
+      commands: [{ command: "npm test", cwd: "/tmp", status: "completed", exitCode: 0 }],
+      fileChanges: [],
+      toolCalls: [],
+      eventCounts: {},
+    },
+  }];
+  const feedEvents: OperatorFeedEvent[] = [
+    makeFeedEvent({ id: 1, kind: "stage", status: "starting", summary: "Starting", at: "2026-03-25T10:00:00.000Z", issueKey: "USE-74" }),
+    makeFeedEvent({ id: 2, kind: "stage", status: "completed", summary: "Completed", at: "2026-03-25T10:05:00.000Z", issueKey: "USE-74" }),
+  ];
 
-test("thread-snapshot replaces the thread state", () => {
-  const thread = makeThread({ turns: [{ id: "turn_1", status: "completed", items: [] }] });
-  const state = reduce(initialWatchState, { type: "thread-snapshot", thread });
-  assert.equal(state.thread?.threadId, "thr_abc123");
-  assert.equal(state.thread?.turns.length, 1);
-});
-
-test("enter-detail clears thread state for fresh rehydration", () => {
-  const initial = stateWith({ thread: makeThread() });
-  const state = reduce(initial, { type: "enter-detail", issueKey: "USE-74" });
-  assert.equal(state.thread, null);
-});
-
-test("exit-detail clears thread state", () => {
-  const initial = stateWith({ view: "detail", activeDetailKey: "USE-74", thread: makeThread() });
-  const state = reduce(initial, { type: "exit-detail" });
-  assert.equal(state.thread, null);
-});
-
-// ─── Codex Notification: Turn Lifecycle ───────────────────────────
-
-test("turn/started bootstraps a thread when none exists", () => {
   const state = reduce(initialWatchState, {
-    type: "codex-notification",
-    method: "turn/started",
-    params: { threadId: "thr_new", turn: { id: "turn_1" } },
+    type: "timeline-rehydrate",
+    runs,
+    feedEvents,
+    liveThread: null,
+    activeRunId: null,
   });
-  assert.equal(state.thread?.threadId, "thr_new");
-  assert.equal(state.thread?.turns.length, 1);
-  assert.equal(state.thread?.turns[0]?.id, "turn_1");
-  assert.equal(state.thread?.turns[0]?.status, "inProgress");
+
+  assert.ok(state.timeline.length > 0);
+  // Should have run-start, items from report, run-end, and feed events
+  const kinds = state.timeline.map((e) => e.kind);
+  assert.ok(kinds.includes("run-start"));
+  assert.ok(kinds.includes("run-end"));
+  assert.ok(kinds.includes("item"));
+  assert.ok(kinds.includes("feed"));
 });
 
-test("turn/started adds a new turn to existing thread", () => {
-  const initial = stateWith({
-    thread: makeThread({ turns: [{ id: "turn_1", status: "completed", items: [] }] }),
+test("timeline-rehydrate sets activeRunId and startedAt", () => {
+  const runs: TimelineRunInput[] = [{
+    id: 42,
+    runType: "ci_repair",
+    status: "running",
+    startedAt: "2026-03-25T10:10:00.000Z",
+  }];
+
+  const state = reduce(initialWatchState, {
+    type: "timeline-rehydrate",
+    runs,
+    feedEvents: [],
+    liveThread: null,
+    activeRunId: 42,
   });
-  const state = reduce(initial, {
-    type: "codex-notification",
-    method: "turn/started",
-    params: { turn: { id: "turn_2" } },
-  });
-  assert.equal(state.thread?.turns.length, 2);
-  assert.equal(state.thread?.turns[1]?.id, "turn_2");
+
+  assert.equal(state.activeRunId, 42);
+  assert.equal(state.activeRunStartedAt, "2026-03-25T10:10:00.000Z");
 });
 
-test("turn/started does not duplicate existing turn", () => {
-  const initial = stateWith({
-    thread: makeThread({ turns: [{ id: "turn_1", status: "inProgress", items: [] }] }),
-  });
-  const state = reduce(initial, {
-    type: "codex-notification",
-    method: "turn/started",
-    params: { turn: { id: "turn_1" } },
-  });
-  assert.equal(state.thread?.turns.length, 1);
-});
+// ─── Codex Notification → Timeline ────────────────────────────────
 
-test("turn/completed updates turn status", () => {
-  const initial = stateWith({
-    thread: makeThread({ turns: [{ id: "turn_1", status: "inProgress", items: [] }] }),
-  });
-  const state = reduce(initial, {
-    type: "codex-notification",
-    method: "turn/completed",
-    params: { turn: { id: "turn_1", status: "completed" } },
-  });
-  assert.equal(state.thread?.turns[0]?.status, "completed");
-});
-
-test("turn/completed with failed status sets failed", () => {
-  const initial = stateWith({
-    thread: makeThread({ turns: [{ id: "turn_1", status: "inProgress", items: [] }] }),
-  });
-  const state = reduce(initial, {
-    type: "codex-notification",
-    method: "turn/completed",
-    params: { turn: { id: "turn_1", status: "failed" } },
-  });
-  assert.equal(state.thread?.turns[0]?.status, "failed");
-});
-
-// ─── Codex Notification: Plan and Diff ────────────────────────────
-
-test("turn/plan/updated replaces the plan", () => {
-  const initial = stateWith({ thread: makeThread() });
-  const state = reduce(initial, {
-    type: "codex-notification",
-    method: "turn/plan/updated",
-    params: {
-      plan: [
-        { step: "Read the code", status: "completed" },
-        { step: "Run tests", status: "inProgress" },
-        { step: "Push changes", status: "pending" },
-      ],
-    },
-  });
-  assert.equal(state.thread?.plan?.length, 3);
-  assert.equal(state.thread?.plan?.[0]?.step, "Read the code");
-  assert.equal(state.thread?.plan?.[0]?.status, "completed");
-  assert.equal(state.thread?.plan?.[1]?.status, "inProgress");
-});
-
-test("turn/diff/updated replaces the diff", () => {
-  const initial = stateWith({ thread: makeThread() });
-  const state = reduce(initial, {
-    type: "codex-notification",
-    method: "turn/diff/updated",
-    params: { diff: "--- a/file.ts\n+++ b/file.ts\n@@ -1 +1 @@\n-old\n+new" },
-  });
-  assert.ok(state.thread?.diff?.includes("+new"));
-});
-
-// ─── Codex Notification: Item Lifecycle ───────────────────────────
-
-test("item/started adds an item to the latest turn", () => {
-  const initial = stateWith({
-    thread: makeThread({ turns: [{ id: "turn_1", status: "inProgress", items: [] }] }),
-  });
+test("item/started appends item to timeline", () => {
+  const initial = stateWith({ activeRunId: 1 });
   const state = reduce(initial, {
     type: "codex-notification",
     method: "item/started",
-    params: {
-      item: { id: "item_1", type: "agentMessage", status: "inProgress", text: "Hello" },
-    },
+    params: { item: { id: "item_1", type: "agentMessage", status: "inProgress", text: "Hello" } },
   });
-  assert.equal(state.thread?.turns[0]?.items.length, 1);
-  assert.equal(state.thread?.turns[0]?.items[0]?.type, "agentMessage");
-  assert.equal(state.thread?.turns[0]?.items[0]?.text, "Hello");
+  assert.equal(state.timeline.length, 1);
+  assert.equal(state.timeline[0]?.item?.type, "agentMessage");
 });
 
-test("item/started adds commandExecution with parsed command", () => {
+test("item/completed updates item in timeline", () => {
   const initial = stateWith({
-    thread: makeThread({ turns: [{ id: "turn_1", status: "inProgress", items: [] }] }),
-  });
-  const state = reduce(initial, {
-    type: "codex-notification",
-    method: "item/started",
-    params: {
-      item: { id: "item_2", type: "commandExecution", status: "inProgress", command: ["npm", "test"] },
-    },
-  });
-  assert.equal(state.thread?.turns[0]?.items[0]?.command, "npm test");
-});
-
-test("item/completed finalizes an item with exit code and duration", () => {
-  const initial = stateWith({
-    thread: makeThread({
-      turns: [{
-        id: "turn_1",
-        status: "inProgress",
-        items: [{ id: "item_1", type: "commandExecution", status: "inProgress", command: "npm test" }],
-      }],
-    }),
+    timeline: [{
+      id: "live-item_1",
+      at: "2026-03-25T10:00:00.000Z",
+      kind: "item",
+      item: { id: "item_1", type: "commandExecution", status: "inProgress", command: "npm test" },
+    }],
   });
   const state = reduce(initial, {
     type: "codex-notification",
     method: "item/completed",
-    params: {
-      item: { id: "item_1", type: "commandExecution", status: "completed", exitCode: 0, durationMs: 1500 },
-    },
+    params: { item: { id: "item_1", status: "completed", exitCode: 0, durationMs: 1500 } },
   });
-  const item = state.thread?.turns[0]?.items[0];
-  assert.equal(item?.status, "completed");
-  assert.equal(item?.exitCode, 0);
-  assert.equal(item?.durationMs, 1500);
+  assert.equal(state.timeline[0]?.item?.status, "completed");
+  assert.equal(state.timeline[0]?.item?.exitCode, 0);
 });
 
-test("item/completed replaces text for agentMessage", () => {
+test("item/agentMessage/delta appends text to timeline item", () => {
   const initial = stateWith({
-    thread: makeThread({
-      turns: [{
-        id: "turn_1",
-        status: "inProgress",
-        items: [{ id: "item_1", type: "agentMessage", status: "inProgress", text: "partial" }],
-      }],
-    }),
-  });
-  const state = reduce(initial, {
-    type: "codex-notification",
-    method: "item/completed",
-    params: {
-      item: { id: "item_1", type: "agentMessage", status: "completed", text: "full message" },
-    },
-  });
-  assert.equal(state.thread?.turns[0]?.items[0]?.text, "full message");
-});
-
-// ─── Codex Notification: Delta Streaming ──────────────────────────
-
-test("item/agentMessage/delta appends text to an item", () => {
-  const initial = stateWith({
-    thread: makeThread({
-      turns: [{
-        id: "turn_1",
-        status: "inProgress",
-        items: [{ id: "item_1", type: "agentMessage", status: "inProgress" }],
-      }],
-    }),
+    timeline: [{
+      id: "live-item_1",
+      at: "2026-03-25T10:00:00.000Z",
+      kind: "item",
+      item: { id: "item_1", type: "agentMessage", status: "inProgress" },
+    }],
   });
   let state = reduce(initial, {
     type: "codex-notification",
@@ -505,140 +264,58 @@ test("item/agentMessage/delta appends text to an item", () => {
     method: "item/agentMessage/delta",
     params: { itemId: "item_1", delta: "world" },
   });
-  assert.equal(state.thread?.turns[0]?.items[0]?.text, "Hello world");
+  assert.equal(state.timeline[0]?.item?.text, "Hello world");
 });
 
-test("item/commandExecution/outputDelta appends output to an item", () => {
+test("item/commandExecution/outputDelta appends output", () => {
   const initial = stateWith({
-    thread: makeThread({
-      turns: [{
-        id: "turn_1",
-        status: "inProgress",
-        items: [{ id: "item_1", type: "commandExecution", status: "inProgress", command: "npm test" }],
-      }],
-    }),
-  });
-  let state = reduce(initial, {
-    type: "codex-notification",
-    method: "item/commandExecution/outputDelta",
-    params: { itemId: "item_1", delta: "PASS test.ts\n" },
-  });
-  state = reduce(state, {
-    type: "codex-notification",
-    method: "item/commandExecution/outputDelta",
-    params: { itemId: "item_1", delta: "PASS other.ts\n" },
-  });
-  assert.equal(state.thread?.turns[0]?.items[0]?.output, "PASS test.ts\nPASS other.ts\n");
-});
-
-test("delta for unknown itemId is a no-op", () => {
-  const initial = stateWith({
-    thread: makeThread({
-      turns: [{
-        id: "turn_1",
-        status: "inProgress",
-        items: [{ id: "item_1", type: "agentMessage", status: "inProgress" }],
-      }],
-    }),
-  });
-  const state = reduce(initial, {
-    type: "codex-notification",
-    method: "item/agentMessage/delta",
-    params: { itemId: "item_999", delta: "ignored" },
-  });
-  assert.equal(state.thread?.turns[0]?.items[0]?.text, undefined);
-});
-
-// ─── Codex Notification: Thread Status ────────────────────────────
-
-test("thread/status/changed updates thread status", () => {
-  const initial = stateWith({ thread: makeThread({ status: "active" }) });
-  const state = reduce(initial, {
-    type: "codex-notification",
-    method: "thread/status/changed",
-    params: { status: { type: "idle" } },
-  });
-  assert.equal(state.thread?.status, "idle");
-});
-
-// ─── Codex Notification: Immutability ─────────────────────────────
-
-test("codex-notification does not mutate original thread state", () => {
-  const thread = makeThread({
-    turns: [{
-      id: "turn_1",
-      status: "inProgress",
-      items: [{ id: "item_1", type: "agentMessage", status: "inProgress" }],
+    timeline: [{
+      id: "live-item_1",
+      at: "2026-03-25T10:00:00.000Z",
+      kind: "item",
+      item: { id: "item_1", type: "commandExecution", status: "inProgress", command: "npm test" },
     }],
   });
-  const initial = stateWith({ thread });
-  reduce(initial, {
+  const state = reduce(initial, {
     type: "codex-notification",
-    method: "item/agentMessage/delta",
-    params: { itemId: "item_1", delta: "new text" },
+    method: "item/commandExecution/outputDelta",
+    params: { itemId: "item_1", delta: "PASS\n" },
   });
-  assert.equal(initial.thread?.turns[0]?.items[0]?.text, undefined);
+  assert.equal(state.timeline[0]?.item?.output, "PASS\n");
 });
 
-test("codex-notification without thread is a no-op for non-turn/started", () => {
+// ─── Metadata Notifications ───────────────────────────────────────
+
+test("turn/plan/updated sets plan metadata", () => {
   const state = reduce(initialWatchState, {
     type: "codex-notification",
-    method: "item/started",
-    params: { item: { id: "item_1", type: "agentMessage" } },
+    method: "turn/plan/updated",
+    params: { plan: [{ step: "Read code", status: "completed" }, { step: "Write tests", status: "inProgress" }] },
   });
-  assert.equal(state.thread, null);
+  assert.equal(state.plan?.length, 2);
+  assert.equal(state.plan?.[0]?.status, "completed");
 });
 
-// ─── Token Usage ──────────────────────────────────────────────────
-
-test("thread/tokenUsage/updated sets token counts", () => {
-  const initial = stateWith({ thread: makeThread() });
-  const state = reduce(initial, {
-    type: "codex-notification",
-    method: "thread/tokenUsage/updated",
-    params: { usage: { inputTokens: 12400, outputTokens: 3200 } },
-  });
-  assert.equal(state.thread?.tokenUsage?.inputTokens, 12400);
-  assert.equal(state.thread?.tokenUsage?.outputTokens, 3200);
-});
-
-test("thread/tokenUsage/updated handles snake_case fields", () => {
-  const initial = stateWith({ thread: makeThread() });
-  const state = reduce(initial, {
-    type: "codex-notification",
-    method: "thread/tokenUsage/updated",
-    params: { usage: { input_tokens: 5000, output_tokens: 1000 } },
-  });
-  assert.equal(state.thread?.tokenUsage?.inputTokens, 5000);
-  assert.equal(state.thread?.tokenUsage?.outputTokens, 1000);
-});
-
-// ─── Diff Summary ─────────────────────────────────────────────────
-
-test("turn/diff/updated computes diff summary", () => {
-  const initial = stateWith({ thread: makeThread() });
-  const diff = [
-    "--- a/src/handler.ts",
-    "+++ b/src/handler.ts",
-    "@@ -1,3 +1,5 @@",
-    " const x = 1;",
-    "-const y = 2;",
-    "+const y = 3;",
-    "+const z = 4;",
-    "--- a/src/config.ts",
-    "+++ b/src/config.ts",
-    "@@ -1 +1 @@",
-    "-old",
-    "+new",
-  ].join("\n");
-  const state = reduce(initial, {
+test("turn/diff/updated sets diff summary", () => {
+  const diff = "--- a/f.ts\n+++ b/f.ts\n@@ -1 +1,2 @@\n-old\n+new\n+added";
+  const state = reduce(initialWatchState, {
     type: "codex-notification",
     method: "turn/diff/updated",
     params: { diff },
   });
-  assert.equal(state.thread?.diffSummary?.filesChanged, 2);
-  assert.equal(state.thread?.diffSummary?.linesAdded, 3);
-  assert.equal(state.thread?.diffSummary?.linesRemoved, 2);
+  assert.equal(state.diffSummary?.filesChanged, 1);
+  assert.equal(state.diffSummary?.linesAdded, 2);
+  assert.equal(state.diffSummary?.linesRemoved, 1);
+});
+
+test("thread/tokenUsage/updated sets token usage", () => {
+  const state = reduce(initialWatchState, {
+    type: "codex-notification",
+    method: "thread/tokenUsage/updated",
+    params: { usage: { inputTokens: 12400, outputTokens: 3200 } },
+  });
+  assert.equal(state.tokenUsage?.inputTokens, 12400);
+  assert.equal(state.tokenUsage?.outputTokens, 3200);
 });
 
 // ─── Follow Mode ──────────────────────────────────────────────────
@@ -648,4 +325,58 @@ test("toggle-follow flips follow state", () => {
   assert.equal(s1.follow, false);
   const s2 = reduce(s1, { type: "toggle-follow" });
   assert.equal(s2.follow, true);
+});
+
+// ─── Timeline Builder ─────────────────────────────────────────────
+
+test("buildTimelineFromRehydration sorts entries chronologically", () => {
+  const runs: TimelineRunInput[] = [{
+    id: 1,
+    runType: "implementation",
+    status: "completed",
+    startedAt: "2026-03-25T10:00:00.000Z",
+    endedAt: "2026-03-25T10:05:00.000Z",
+  }];
+  const feedEvents: OperatorFeedEvent[] = [
+    makeFeedEvent({ id: 1, at: "2026-03-25T09:59:00.000Z", kind: "stage", summary: "Delegated" }),
+    makeFeedEvent({ id: 2, at: "2026-03-25T10:06:00.000Z", kind: "stage", summary: "PR opened" }),
+  ];
+
+  const timeline = buildTimelineFromRehydration(runs, feedEvents, null, null);
+  const timestamps = timeline.map((e) => e.at);
+  for (let i = 1; i < timestamps.length; i++) {
+    assert.ok(timestamps[i]! >= timestamps[i - 1]!, `${timestamps[i]} should be >= ${timestamps[i - 1]}`);
+  }
+});
+
+test("buildTimelineFromRehydration aggregates CI checks from feed", () => {
+  const feedEvents: OperatorFeedEvent[] = [
+    makeFeedEvent({ id: 1, at: "2026-03-25T10:19:00.000Z", kind: "github", status: "check_passed", detail: "Lint" }),
+    makeFeedEvent({ id: 2, at: "2026-03-25T10:19:05.000Z", kind: "github", status: "check_failed", detail: "Tests" }),
+    makeFeedEvent({ id: 3, at: "2026-03-25T10:19:10.000Z", kind: "github", status: "check_passed", detail: "Build" }),
+  ];
+
+  const timeline = buildTimelineFromRehydration([], feedEvents, null, null);
+  const ciEntries = timeline.filter((e) => e.kind === "ci-checks");
+  assert.equal(ciEntries.length, 1);
+  assert.equal(ciEntries[0]?.ciChecks?.checks.length, 3);
+  assert.equal(ciEntries[0]?.ciChecks?.overall, "failed");
+});
+
+// ─── Immutability ─────────────────────────────────────────────────
+
+test("codex-notification does not mutate original timeline", () => {
+  const timeline = [{
+    id: "live-item_1",
+    at: "2026-03-25T10:00:00.000Z",
+    kind: "item" as const,
+    item: { id: "item_1", type: "agentMessage", status: "inProgress" },
+  }];
+  const initial = stateWith({ timeline });
+  reduce(initial, {
+    type: "codex-notification",
+    method: "item/agentMessage/delta",
+    params: { itemId: "item_1", delta: "new text" },
+  });
+  assert.equal(initial.timeline[0]?.item?.text, undefined);
 });

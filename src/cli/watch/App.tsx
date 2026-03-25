@@ -77,10 +77,12 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
       ) : (
         <IssueDetailView
           issue={state.issues.find((i) => i.issueKey === state.activeDetailKey)}
-          thread={state.thread}
-          report={state.report}
+          timeline={state.timeline}
           follow={state.follow}
-          feedEntries={state.detailFeed}
+          activeRunStartedAt={state.activeRunStartedAt}
+          tokenUsage={state.tokenUsage}
+          diffSummary={state.diffSummary}
+          plan={state.plan}
         />
       )}
     </Box>

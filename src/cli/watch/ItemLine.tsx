@@ -1,8 +1,8 @@
 import { Box, Text } from "ink";
-import type { WatchTurnItem } from "./watch-state.ts";
+import type { TimelineItemPayload } from "./watch-state.ts";
 
 interface ItemLineProps {
-  item: WatchTurnItem;
+  item: TimelineItemPayload;
   isLast: boolean;
 }
 
@@ -29,7 +29,7 @@ function truncate(text: string, max: number): string {
   return line.length > max ? `${line.slice(0, max - 3)}...` : line;
 }
 
-function renderAgentMessage(item: WatchTurnItem): React.JSX.Element {
+function renderAgentMessage(item: TimelineItemPayload): React.JSX.Element {
   return (
     <Text>
       <Text dimColor>message: </Text>
@@ -38,7 +38,7 @@ function renderAgentMessage(item: WatchTurnItem): React.JSX.Element {
   );
 }
 
-function renderCommand(item: WatchTurnItem): React.JSX.Element {
+function renderCommand(item: TimelineItemPayload): React.JSX.Element {
   const cmd = item.command ?? "?";
   const exit = item.exitCode !== undefined ? ` exit:${item.exitCode}` : "";
   const duration = item.durationMs !== undefined ? ` ${(item.durationMs / 1000).toFixed(1)}s` : "";
@@ -57,7 +57,7 @@ function renderCommand(item: WatchTurnItem): React.JSX.Element {
   );
 }
 
-function renderFileChange(item: WatchTurnItem): React.JSX.Element {
+function renderFileChange(item: TimelineItemPayload): React.JSX.Element {
   const count = item.changes?.length ?? 0;
   return (
     <Text>
@@ -67,7 +67,7 @@ function renderFileChange(item: WatchTurnItem): React.JSX.Element {
   );
 }
 
-function renderToolCall(item: WatchTurnItem): React.JSX.Element {
+function renderToolCall(item: TimelineItemPayload): React.JSX.Element {
   return (
     <Text>
       <Text dimColor>tool: </Text>
@@ -76,7 +76,7 @@ function renderToolCall(item: WatchTurnItem): React.JSX.Element {
   );
 }
 
-function renderPlan(item: WatchTurnItem): React.JSX.Element {
+function renderPlan(item: TimelineItemPayload): React.JSX.Element {
   return (
     <Text>
       <Text dimColor>plan: </Text>
@@ -85,7 +85,7 @@ function renderPlan(item: WatchTurnItem): React.JSX.Element {
   );
 }
 
-function renderDefault(item: WatchTurnItem): React.JSX.Element {
+function renderDefault(item: TimelineItemPayload): React.JSX.Element {
   return (
     <Text dimColor>{item.type}{item.text ? `: ${truncate(item.text, 80)}` : ""}</Text>
   );

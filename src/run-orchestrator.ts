@@ -137,8 +137,11 @@ function buildRunPrompt(issue: IssueRecord, runType: RunType, repoPath: string, 
   return lines.join("\n");
 }
 
+const PROGRESS_THROTTLE_MS = 10_000;
+
 export class RunOrchestrator {
   private readonly worktreeManager: WorktreeManager;
+  private readonly progressThrottle = new Map<number, number>();
   botIdentity?: GitHubAppBotIdentity;
 
   constructor(
@@ -336,6 +339,9 @@ export class RunOrchestrator {
       });
     }
 
+    // Emit ephemeral progress activity to Linear for notable in-flight events
+    this.maybeEmitProgressActivity(notification, run);
+
     if (notification.method !== "turn/completed") return;
 
     const thread = await this.readThreadWithRetry(threadId);
@@ -370,6 +376,7 @@ export class RunOrchestrator {
       const failedIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
       void this.emitLinearActivity(failedIssue, buildRunFailureActivity(run.runType));
       void this.syncLinearSession(failedIssue, { activeRunType: run.runType });
+      this.progressThrottle.delete(run.id);
       return;
     }
 
@@ -435,6 +442,48 @@ export class RunOrchestrator {
       ...(updatedIssue.prNumber !== undefined ? { prNumber: updatedIssue.prNumber } : {}),
     }));
     void this.syncLinearSession(updatedIssue);
+    this.progressThrottle.delete(run.id);
+  }
+
+  // ─── In-flight progress ──────────────────────────────────────────
+
+  private maybeEmitProgressActivity(notification: CodexNotification, run: RunRecord): void {
+    const activity = this.resolveProgressActivity(notification);
+    if (!activity) return;
+
+    const now = Date.now();
+    const lastEmit = this.progressThrottle.get(run.id) ?? 0;
+    if (now - lastEmit < PROGRESS_THROTTLE_MS) return;
+    this.progressThrottle.set(run.id, now);
+
+    const issue = this.db.getIssue(run.projectId, run.linearIssueId);
+    if (issue) {
+      void this.emitLinearActivity(issue, activity, { ephemeral: true });
+    }
+  }
+
+  private resolveProgressActivity(notification: CodexNotification): LinearAgentActivityContent | undefined {
+    if (notification.method === "item/started") {
+      const item = notification.params.item as Record<string, unknown> | undefined;
+      if (!item) return undefined;
+      const type = typeof item.type === "string" ? item.type : undefined;
+
+      if (type === "commandExecution") {
+        const cmd = item.command;
+        const cmdStr = Array.isArray(cmd) ? cmd.join(" ") : typeof cmd === "string" ? cmd : undefined;
+        return { type: "action", action: "Running", parameter: cmdStr?.slice(0, 120) ?? "command" };
+      }
+      if (type === "mcpToolCall") {
+        const server = typeof item.server === "string" ? item.server : "";
+        const tool = typeof item.tool === "string" ? item.tool : "";
+        return { type: "action", action: "Using", parameter: `${server}/${tool}` };
+      }
+      if (type === "dynamicToolCall") {
+        const tool = typeof item.tool === "string" ? item.tool : "tool";
+        return { type: "action", action: "Using", parameter: tool };
+      }
+    }
+    return undefined;
   }
 
   // ─── Active status for query ──────────────────────────────────────

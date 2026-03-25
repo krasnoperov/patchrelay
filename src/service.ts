@@ -381,6 +381,10 @@ export class PatchRelayService {
     return await this.queryService.getIssueReport(issueKey);
   }
 
+  async getIssueTimeline(issueKey: string) {
+    return await this.queryService.getIssueTimeline(issueKey);
+  }
+
   async getRunEvents(issueKey: string, runId: number) {
     return await this.queryService.getRunEvents(issueKey, runId);
   }

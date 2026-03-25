@@ -299,6 +299,15 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
       return reply.send({ ok: true, ...result });
     });
 
+    app.get("/api/issues/:issueKey/timeline", async (request, reply) => {
+      const issueKey = (request.params as { issueKey: string }).issueKey;
+      const result = await service.getIssueTimeline(issueKey);
+      if (!result) {
+        return reply.code(404).send({ ok: false, reason: "issue_not_found" });
+      }
+      return reply.send({ ok: true, ...result });
+    });
+
     app.get("/api/issues/:issueKey/live", async (request, reply) => {
       const issueKey = (request.params as { issueKey: string }).issueKey;
       const result = await service.getActiveRunStatus(issueKey);
