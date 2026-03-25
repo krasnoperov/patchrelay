@@ -414,7 +414,7 @@ export function appendCodexItemToTimeline(
   const status = typeof itemObj.status === "string" ? itemObj.status : "inProgress";
 
   const item: TimelineItemPayload = { id, type, status };
-  if (type === "agentMessage" && typeof itemObj.text === "string") item.text = itemObj.text;
+  if ((type === "agentMessage" || type === "userMessage") && typeof itemObj.text === "string") item.text = itemObj.text;
   if (type === "commandExecution") {
     const cmd = itemObj.command;
     item.command = Array.isArray(cmd) ? cmd.join(" ") : typeof cmd === "string" ? cmd : undefined;

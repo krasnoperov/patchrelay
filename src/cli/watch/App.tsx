@@ -14,15 +14,25 @@ interface AppProps {
   initialIssueKey?: string | undefined;
 }
 
-async function postPrompt(baseUrl: string, issueKey: string, text: string, bearerToken?: string): Promise<void> {
+async function postPrompt(
+  baseUrl: string,
+  issueKey: string,
+  text: string,
+  bearerToken?: string,
+): Promise<{ delivered?: boolean; queued?: boolean; reason?: string }> {
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (bearerToken) headers.authorization = `Bearer ${bearerToken}`;
-  await fetch(new URL(`/api/issues/${encodeURIComponent(issueKey)}/prompt`, baseUrl), {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ text }),
-    signal: AbortSignal.timeout(5000),
-  }).catch(() => {});
+  try {
+    const response = await fetch(new URL(`/api/issues/${encodeURIComponent(issueKey)}/prompt`, baseUrl), {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ text }),
+      signal: AbortSignal.timeout(5000),
+    });
+    return await response.json() as { delivered?: boolean; queued?: boolean; reason?: string };
+  } catch {
+    return { reason: "Request failed" };
+  }
 }
 
 async function postRetry(baseUrl: string, issueKey: string, bearerToken?: string): Promise<void> {
@@ -57,12 +67,37 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
     }
   }, [baseUrl, bearerToken, state.activeDetailKey]);
 
+  const [promptStatus, setPromptStatus] = useState<string | null>(null);
+
   const handlePromptSubmit = useCallback(() => {
-    if (state.activeDetailKey && promptBuffer.trim()) {
-      void postPrompt(baseUrl, state.activeDetailKey, promptBuffer.trim(), bearerToken);
+    const text = promptBuffer.trim();
+    if (!state.activeDetailKey || !text) {
+      setPromptMode(false);
+      setPromptBuffer("");
+      return;
     }
+
+    // Add synthetic userMessage to timeline immediately
+    dispatch({
+      type: "codex-notification",
+      method: "item/started",
+      params: { item: { id: `prompt-${Date.now()}`, type: "userMessage", status: "completed", text } },
+    });
+
     setPromptMode(false);
     setPromptBuffer("");
+    setPromptStatus("sending...");
+
+    void postPrompt(baseUrl, state.activeDetailKey, text, bearerToken).then((result) => {
+      if (result.delivered) {
+        setPromptStatus("delivered");
+      } else if (result.queued) {
+        setPromptStatus("queued for next run");
+      } else if (result.reason) {
+        setPromptStatus(`failed: ${result.reason}`);
+      }
+      setTimeout(() => setPromptStatus(null), 3000);
+    });
   }, [baseUrl, bearerToken, state.activeDetailKey, promptBuffer]);
 
   useInput((input, key) => {
@@ -146,6 +181,9 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
             <Text>{promptBuffer}</Text>
             <Text dimColor>_</Text>
           </Box>
+        )}
+        {promptStatus && !promptMode && (
+          <Text dimColor>{promptStatus}</Text>
         )}
         </Box>
       ) : (
