@@ -66,9 +66,9 @@ test("agent session plans reflect queued, review, and repair states", () => {
     }),
     [
       { content: "Prepare workspace", status: "inProgress" },
-      { content: "Implement or update branch", status: "pending" },
-      { content: "Await review", status: "pending" },
-      { content: "Land change", status: "pending" },
+      { content: "Implementing", status: "pending" },
+      { content: "Awaiting verification", status: "pending" },
+      { content: "Merge", status: "pending" },
     ],
   );
 
@@ -80,9 +80,9 @@ test("agent session plans reflect queued, review, and repair states", () => {
     }),
     [
       { content: "Prepare workspace", status: "completed" },
-      { content: "Implement or update branch", status: "completed" },
-      { content: "Repair failing checks (attempt 2)", status: "inProgress" },
-      { content: "Return to merge flow", status: "pending" },
+      { content: "Implementing", status: "completed" },
+      { content: "Repairing checks (attempt 2)", status: "inProgress" },
+      { content: "Merge", status: "pending" },
     ],
   );
 
@@ -94,9 +94,9 @@ test("agent session plans reflect queued, review, and repair states", () => {
     }),
     [
       { content: "Prepare workspace", status: "completed" },
-      { content: "Implement or update branch", status: "completed" },
-      { content: "Review approved", status: "completed" },
-      { content: "Queued for merge", status: "inProgress" },
+      { content: "Implementing", status: "completed" },
+      { content: "Verification passed", status: "completed" },
+      { content: "Awaiting merge", status: "inProgress" },
     ],
   );
 });

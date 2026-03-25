@@ -11,6 +11,7 @@ import type { MergeQueue } from "./merge-queue.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import { resolveSecret } from "./resolve-secret.ts";
 import type { AppConfig, LinearClientProvider } from "./types.ts";
+import type { ProjectConfig } from "./workflow-types.ts";
 import { safeJsonParse } from "./utils.ts";
 
 /**
@@ -221,11 +222,12 @@ export class GitHubWebhookHandler {
     });
 
     if (!isMetadataOnlyCheckEvent(event)) {
-      this.maybeEnqueueReactiveRun(freshIssue, event);
+      const project = this.config.projects.find((p) => p.id === freshIssue.projectId);
+      this.maybeEnqueueReactiveRun(freshIssue, event, project);
     }
   }
 
-  private maybeEnqueueReactiveRun(issue: IssueRecord, event: NormalizedGitHubEvent): void {
+  private maybeEnqueueReactiveRun(issue: IssueRecord, event: NormalizedGitHubEvent, project?: ProjectConfig): void {
     // Don't trigger if there's already an active run
     if (issue.activeRunId !== undefined) return;
 
@@ -237,6 +239,7 @@ export class GitHubWebhookHandler {
         pendingRunContextJson: JSON.stringify({
           checkName: event.checkName,
           checkUrl: event.checkUrl,
+          checkClass: resolveCheckClass(event.checkName, project),
         }),
       });
       this.enqueueIssue(issue.projectId, issue.linearIssueId);
@@ -321,4 +324,14 @@ export class GitHubWebhookHandler {
       this.logger.warn({ issueKey: issue.issueKey, error: msg }, "Failed to sync Linear session from GitHub webhook");
     }
   }
+}
+
+function resolveCheckClass(
+  checkName: string | undefined,
+  project: ProjectConfig | undefined,
+): "code" | "review" | "gate" {
+  if (!checkName || !project) return "code";
+  if (project.reviewChecks.some((name) => checkName.includes(name))) return "review";
+  if (project.gateChecks.some((name) => checkName.includes(name))) return "gate";
+  return "code";
 }

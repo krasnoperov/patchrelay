@@ -223,9 +223,15 @@ export class PatchRelayDatabase {
    * Issues idle in pr_open with no active run — candidates for state
    * advancement based on stored PR metadata (missed GitHub webhooks).
    */
-  listIdlePrOpenIssues(): IssueRecord[] {
+  listIdleNonTerminalIssues(): IssueRecord[] {
     const rows = this.connection
-      .prepare("SELECT * FROM issues WHERE factory_state = 'pr_open' AND active_run_id IS NULL AND pending_run_type IS NULL AND pr_number IS NOT NULL")
+      .prepare(
+        `SELECT * FROM issues
+         WHERE factory_state NOT IN ('done', 'escalated', 'failed', 'awaiting_input')
+         AND active_run_id IS NULL
+         AND pending_run_type IS NULL
+         AND pr_number IS NOT NULL`,
+      )
       .all() as Array<Record<string, unknown>>;
     return rows.map(mapIssueRow);
   }

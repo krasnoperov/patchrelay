@@ -27,36 +27,36 @@ export function formatRunTypeLabel(runType: string): string {
 function implementationPlan(): AgentSessionPlanStep[] {
   return [
     { content: "Prepare workspace", status: "pending" },
-    { content: "Implement or update branch", status: "pending" },
-    { content: "Await review", status: "pending" },
-    { content: "Land change", status: "pending" },
+    { content: "Implementing", status: "pending" },
+    { content: "Awaiting verification", status: "pending" },
+    { content: "Merge", status: "pending" },
   ];
 }
 
 function reviewFixPlan(): AgentSessionPlanStep[] {
   return [
     { content: "Prepare workspace", status: "completed" },
-    { content: "Address review feedback", status: "pending" },
-    { content: "Await re-review", status: "pending" },
-    { content: "Land change", status: "pending" },
+    { content: "Addressing review feedback", status: "pending" },
+    { content: "Awaiting re-verification", status: "pending" },
+    { content: "Merge", status: "pending" },
   ];
 }
 
 function ciRepairPlan(attempt: number): AgentSessionPlanStep[] {
   return [
     { content: "Prepare workspace", status: "completed" },
-    { content: "Implement or update branch", status: "completed" },
-    { content: `Repair failing checks (${attemptLabel(attempt)})`, status: "pending" },
-    { content: "Return to merge flow", status: "pending" },
+    { content: "Implementing", status: "completed" },
+    { content: `Repairing checks (${attemptLabel(attempt)})`, status: "pending" },
+    { content: "Merge", status: "pending" },
   ];
 }
 
 function queueRepairPlan(attempt: number): AgentSessionPlanStep[] {
   return [
     { content: "Prepare workspace", status: "completed" },
-    { content: "Implement or update branch", status: "completed" },
-    { content: "Review approved", status: "completed" },
-    { content: `Repair merge queue (${attemptLabel(attempt)})`, status: "pending" },
+    { content: "Implementing", status: "completed" },
+    { content: "Verification passed", status: "completed" },
+    { content: `Repairing merge (${attemptLabel(attempt)})`, status: "pending" },
   ];
 }
 
@@ -137,9 +137,9 @@ export function buildAgentSessionPlan(params: {
     case "awaiting_queue":
       return setStatuses([
         { content: "Prepare workspace", status: "completed" },
-        { content: "Implement or update branch", status: "completed" },
-        { content: "Review approved", status: "completed" },
-        { content: "Queued for merge", status: "inProgress" },
+        { content: "Implementing", status: "completed" },
+        { content: "Verification passed", status: "completed" },
+        { content: "Awaiting merge", status: "inProgress" },
       ], ["completed", "completed", "completed", "inProgress"]);
     case "repairing_queue":
       return setStatuses(queueRepairPlan(params.queueRepairAttempts ?? 1), ["completed", "completed", "completed", "inProgress"]);
@@ -152,8 +152,8 @@ export function buildAgentSessionPlan(params: {
     case "done":
       return setStatuses([
         { content: "Prepare workspace", status: "completed" },
-        { content: "Implement or update branch", status: "completed" },
-        { content: "Review approved", status: "completed" },
+        { content: "Implementing", status: "completed" },
+        { content: "Verification passed", status: "completed" },
         { content: "Merged", status: "completed" },
       ], ["completed", "completed", "completed", "completed"]);
   }

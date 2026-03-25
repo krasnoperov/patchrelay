@@ -25,6 +25,8 @@ export interface ProjectConfig {
   issueKeyPrefixes: string[];
   linearTeamIds: string[];
   allowLabels: string[];
+  reviewChecks: string[];
+  gateChecks: string[];
   trustedActors?: {
     ids: string[];
     names: string[];
