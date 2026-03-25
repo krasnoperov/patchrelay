@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.15.0...patchrelay-v0.16.0) (2026-03-25)
+
+
+### Features
+
+* watch TUI operational parity with Linear observability ([#129](https://github.com/krasnoperov/patchrelay/issues/129)) ([b5b7652](https://github.com/krasnoperov/patchrelay/commit/b5b7652ce1d7fe87a396c1bfd348121d4305771b))
+
 ## [0.15.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.14.2...patchrelay-v0.15.0) (2026-03-25)
 
 
