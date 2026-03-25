@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.14.2...patchrelay-v0.15.0) (2026-03-25)
+
+
+### Features
+
+* watch TUI — token usage, diff summary, follow mode ([#127](https://github.com/krasnoperov/patchrelay/issues/127)) ([e3f05a5](https://github.com/krasnoperov/patchrelay/commit/e3f05a59826a36c1b63398896f5d6c2a0c88727f))
+
 ## [0.14.2](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.14.1...patchrelay-v0.14.2) (2026-03-25)
 
 
