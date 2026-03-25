@@ -84,7 +84,7 @@ test("runPreflight reports a healthy local setup", async () => {
     mkdirSync(config.projects[0].repoPath, { recursive: true });
     writeWorkflowFiles(config);
 
-    const report = await runPreflight(config, { connectivity: false });
+    const report = await runPreflight(config, { connectivity: false, skipServiceCheck: true });
 
     assert.equal(report.ok, true);
     assert.ok(report.checks.some((check) => check.scope === "git" && check.status === "pass"));
@@ -105,7 +105,7 @@ test("runPreflight warns when the public base URL is missing", async () => {
     writeWorkflowFiles(config);
     delete config.server.publicBaseUrl;
 
-    const report = await runPreflight(config, { connectivity: false });
+    const report = await runPreflight(config, { connectivity: false, skipServiceCheck: true });
 
     assert.equal(report.ok, true);
     assert.ok(
@@ -128,7 +128,7 @@ test("runPreflight warns when no projects are configured yet", async () => {
     const config = createConfig(baseDir);
     config.projects = [];
 
-    const report = await runPreflight(config, { connectivity: false });
+    const report = await runPreflight(config, { connectivity: false, skipServiceCheck: true });
 
     assert.equal(report.ok, true);
     assert.ok(
@@ -150,7 +150,7 @@ test("runPreflight does not require cleanup workflow files when cleanup is disab
     // Workflow filtering removed — no workflow definitions in factory model
     writeWorkflowFiles(config);
 
-    const report = await runPreflight(config, { connectivity: false });
+    const report = await runPreflight(config, { connectivity: false, skipServiceCheck: true });
 
     assert.equal(report.ok, true);
     assert.ok(report.checks.every((check) => check.scope !== "project:usertold:workflow:cleanup"));
@@ -169,7 +169,7 @@ test("runPreflight warns when app-mode projects omit agent-session triggers", as
     mkdirSync(config.projects[0].repoPath, { recursive: true });
     writeWorkflowFiles(config);
 
-    const report = await runPreflight(config, { connectivity: false });
+    const report = await runPreflight(config, { connectivity: false, skipServiceCheck: true });
 
     assert.equal(report.ok, true);
     assert.ok(
@@ -210,7 +210,7 @@ test("runPreflight fails when the configured database path cannot host a SQLite 
     writeWorkflowFiles(config);
     mkdirSync(config.database.path, { recursive: true });
 
-    const report = await runPreflight(config, { connectivity: false });
+    const report = await runPreflight(config, { connectivity: false, skipServiceCheck: true });
 
     assert.equal(report.ok, false);
     assert.ok(
