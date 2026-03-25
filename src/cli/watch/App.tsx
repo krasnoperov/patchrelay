@@ -180,8 +180,6 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
           diffSummary={state.diffSummary}
           plan={state.plan}
           issueContext={state.issueContext}
-          allIssues={filtered}
-          activeDetailKey={state.activeDetailKey}
         />
         {promptMode && (
           <Box>

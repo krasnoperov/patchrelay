@@ -1,4 +1,4 @@
-import { Box, Text } from "ink";
+import { Box, Text, useStdout } from "ink";
 import type { TimelineEntry } from "./timeline-builder.ts";
 import { TimelineRow } from "./TimelineRow.tsx";
 
@@ -7,12 +7,15 @@ interface TimelineProps {
   follow: boolean;
 }
 
-const FOLLOW_TAIL_SIZE = 20;
+const DETAIL_CHROME_ROWS = 10;
 
 export function Timeline({ entries, follow }: TimelineProps): React.JSX.Element {
-  const visible = follow && entries.length > FOLLOW_TAIL_SIZE
-    ? entries.slice(-FOLLOW_TAIL_SIZE)
-    : entries;
+  const { stdout } = useStdout();
+  const rows = stdout?.rows ?? 24;
+  const maxVisible = Math.max(5, rows - DETAIL_CHROME_ROWS);
+
+  const tailSize = follow ? Math.min(maxVisible, entries.length) : Math.min(maxVisible, entries.length);
+  const visible = entries.length > tailSize ? entries.slice(-tailSize) : entries;
   const skipped = entries.length - visible.length;
 
   if (entries.length === 0) {
@@ -21,7 +24,7 @@ export function Timeline({ entries, follow }: TimelineProps): React.JSX.Element 
 
   return (
     <Box flexDirection="column">
-      {skipped > 0 && <Text dimColor>  ... {skipped} earlier events</Text>}
+      {skipped > 0 && <Text dimColor>  ... {skipped} earlier</Text>}
       {visible.map((entry) => (
         <TimelineRow key={entry.id} entry={entry} />
       ))}

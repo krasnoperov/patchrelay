@@ -13,13 +13,23 @@ interface IssueListViewProps {
   totalCount: number;
 }
 
-// Fixed columns: selector(2) + key(10) + state(11) + run(11) + pr(7) + ago(4) + gaps(6) = ~51
 const FIXED_COLS = 51;
+const CHROME_ROWS = 4;
 
 export function IssueListView({ issues, allIssues, selectedIndex, connected, filter, totalCount }: IssueListViewProps): React.JSX.Element {
   const { stdout } = useStdout();
   const cols = stdout?.columns ?? 80;
+  const rows = stdout?.rows ?? 24;
   const titleWidth = Math.max(0, cols - FIXED_COLS);
+  const maxVisible = Math.max(1, rows - CHROME_ROWS);
+
+  let startIndex = 0;
+  if (issues.length > maxVisible) {
+    startIndex = Math.max(0, Math.min(selectedIndex - Math.floor(maxVisible / 2), issues.length - maxVisible));
+  }
+  const visible = issues.slice(startIndex, startIndex + maxVisible);
+  const hiddenAbove = startIndex;
+  const hiddenBelow = Math.max(0, issues.length - startIndex - maxVisible);
 
   return (
     <Box flexDirection="column">
@@ -28,14 +38,18 @@ export function IssueListView({ issues, allIssues, selectedIndex, connected, fil
         {issues.length === 0 ? (
           <Text dimColor>No issues match the current filter.</Text>
         ) : (
-          issues.map((issue, index) => (
-            <IssueRow
-              key={issue.issueKey ?? `${issue.projectId}-${index}`}
-              issue={issue}
-              selected={index === selectedIndex}
-              titleWidth={titleWidth}
-            />
-          ))
+          <>
+            {hiddenAbove > 0 && <Text dimColor>  {hiddenAbove} more above</Text>}
+            {visible.map((issue, i) => (
+              <IssueRow
+                key={issue.issueKey ?? `${issue.projectId}-${startIndex + i}`}
+                issue={issue}
+                selected={startIndex + i === selectedIndex}
+                titleWidth={titleWidth}
+              />
+            ))}
+            {hiddenBelow > 0 && <Text dimColor>  {hiddenBelow} more below</Text>}
+          </>
         )}
       </Box>
       <Box marginTop={1}>
