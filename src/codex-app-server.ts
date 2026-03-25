@@ -164,7 +164,9 @@ export class CodexAppServerClient extends EventEmitter {
         title: "PatchRelay",
         version: "0.1.0",
       },
-      capabilities: null,
+      capabilities: {
+        experimentalApi: true,
+      },
     });
     const serverInfo =
       initializeResponse && typeof initializeResponse === "object" && "serverInfo" in (initializeResponse as Record<string, unknown>)
