@@ -1,4 +1,4 @@
-import { Box, Text } from "ink";
+import { Box, Text, useStdout } from "ink";
 import type { WatchFilter, WatchIssue } from "./watch-state.ts";
 import { IssueRow } from "./IssueRow.tsx";
 import { StatusBar } from "./StatusBar.tsx";
@@ -13,26 +13,34 @@ interface IssueListViewProps {
   totalCount: number;
 }
 
+// Fixed columns: selector(2) + key(10) + state(11) + run(11) + pr(7) + ago(4) + gaps(6) = ~51
+const FIXED_COLS = 51;
+
 export function IssueListView({ issues, allIssues, selectedIndex, connected, filter, totalCount }: IssueListViewProps): React.JSX.Element {
+  const { stdout } = useStdout();
+  const cols = stdout?.columns ?? 80;
+  const titleWidth = Math.max(0, cols - FIXED_COLS);
+
   return (
     <Box flexDirection="column">
       <StatusBar issues={issues} totalCount={totalCount} filter={filter} connected={connected} allIssues={allIssues} />
-      <Text dimColor>{"\u2500".repeat(72)}</Text>
-      {issues.length === 0 ? (
-        <Text dimColor>No issues match the current filter.</Text>
-      ) : (
-        <Box flexDirection="column">
-          {issues.map((issue, index) => (
+      <Box marginTop={1} flexDirection="column">
+        {issues.length === 0 ? (
+          <Text dimColor>No issues match the current filter.</Text>
+        ) : (
+          issues.map((issue, index) => (
             <IssueRow
               key={issue.issueKey ?? `${issue.projectId}-${index}`}
               issue={issue}
               selected={index === selectedIndex}
+              titleWidth={titleWidth}
             />
-          ))}
-        </Box>
-      )}
-      <Text dimColor>{"\u2500".repeat(72)}</Text>
-      <HelpBar view="list" />
+          ))
+        )}
+      </Box>
+      <Box marginTop={1}>
+        <HelpBar view="list" />
+      </Box>
     </Box>
   );
 }
