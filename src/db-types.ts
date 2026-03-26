@@ -31,6 +31,8 @@ export interface IssueRecord {
   reviewFixAttempts: number;
   mergePrepAttempts: number;
   pendingMergePrep: boolean;
+  zombieRecoveryAttempts: number;
+  lastZombieRecoveryAt?: string | undefined;
   updatedAt: string;
 }
 

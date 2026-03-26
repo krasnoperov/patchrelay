@@ -1,7 +1,7 @@
 import type { Logger } from "pino";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord } from "./db-types.ts";
-import { resolveFactoryStateFromGitHub } from "./factory-state.ts";
+import { resolveFactoryStateFromGitHub, TERMINAL_STATES, type FactoryState } from "./factory-state.ts";
 import type { GitHubWebhookPayload, NormalizedGitHubEvent } from "./github-types.ts";
 import { normalizeGitHubWebhook, verifyGitHubWebhookSignature } from "./github-webhooks.ts";
 import { buildAgentSessionPlanForIssue } from "./agent-session-plan.ts";
@@ -243,6 +243,10 @@ export class GitHubWebhookHandler {
   private maybeEnqueueReactiveRun(issue: IssueRecord, event: NormalizedGitHubEvent, project?: ProjectConfig): void {
     // Don't trigger if there's already an active run
     if (issue.activeRunId !== undefined) return;
+
+    // Don't trigger on terminal issues — late-arriving webhooks (e.g.
+    // merge_group_failed after pr_merged) must not resurrect done issues.
+    if (TERMINAL_STATES.has(issue.factoryState as FactoryState)) return;
 
     if (event.triggerEvent === "check_failed" && issue.prState === "open") {
       this.db.upsertIssue({

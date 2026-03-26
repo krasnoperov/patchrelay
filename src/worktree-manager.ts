@@ -21,7 +21,13 @@ export class WorktreeManager {
     }
 
     await ensureDir(path.dirname(worktreePath));
-    await execCommand(this.config.runner.gitBin, ["-C", repoPath, "worktree", "add", "--force", "-B", branchName, worktreePath, "HEAD"], {
+    // Fetch latest main so the branch forks from a clean, up-to-date base.
+    // This prevents branch contamination when local HEAD has drifted.
+    // freshenWorktree in run-orchestrator acts as a secondary safety net.
+    await execCommand(this.config.runner.gitBin, ["-C", repoPath, "fetch", "origin", "main"], {
+      timeoutMs: 60_000,
+    });
+    await execCommand(this.config.runner.gitBin, ["-C", repoPath, "worktree", "add", "--force", "-B", branchName, worktreePath, "origin/main"], {
       timeoutMs: 120_000,
     });
   }
