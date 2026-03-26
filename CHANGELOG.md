@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.25.4](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.25.3...patchrelay-v0.25.4) (2026-03-26)
+
+
+### Bug Fixes
+
+* improve watch timeline presentation and replay ([#193](https://github.com/krasnoperov/patchrelay/issues/193)) ([813ee07](https://github.com/krasnoperov/patchrelay/commit/813ee07cbd37cc5f253b99c046cc1baee20ab466))
+
 ## [0.25.3](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.25.2...patchrelay-v0.25.3) (2026-03-26)
 
 
