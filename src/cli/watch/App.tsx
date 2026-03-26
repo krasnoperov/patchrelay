@@ -169,6 +169,10 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
             setTimeout(() => setPromptStatus(null), 3000);
           });
         }
+      } else if (input === "h") {
+        dispatch({ type: "switch-detail-tab", tab: "history" });
+      } else if (input === "t") {
+        dispatch({ type: "switch-detail-tab", tab: "timeline" });
       } else if (input === "j" || key.downArrow) {
         dispatch({ type: "detail-navigate", direction: "next", filtered });
       } else if (input === "k" || key.upArrow) {
@@ -199,10 +203,14 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
           timeline={state.timeline}
           follow={state.follow}
           activeRunStartedAt={state.activeRunStartedAt}
+          activeRunId={state.activeRunId}
           tokenUsage={state.tokenUsage}
           diffSummary={state.diffSummary}
           plan={state.plan}
           issueContext={state.issueContext}
+          detailTab={state.detailTab}
+          rawRuns={state.rawRuns}
+          rawFeedEvents={state.rawFeedEvents}
         />
         {promptMode && (
           <Box>
