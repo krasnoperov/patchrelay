@@ -56,6 +56,28 @@ function detailPrefix(detail: TimelineRunDetail): string {
   return "";
 }
 
+function verboseItemLabel(type: string): string {
+  switch (type) {
+    case "agentMessage":
+      return "message";
+    case "commandExecution":
+      return "command";
+    case "fileChange":
+      return "files";
+    case "mcpToolCall":
+    case "dynamicToolCall":
+      return "tool";
+    case "userMessage":
+      return "you";
+    case "plan":
+      return "plan";
+    case "reasoning":
+      return "reasoning";
+    default:
+      return type;
+  }
+}
+
 function FeedRow({ entry }: { entry: Extract<TimelineDisplayRow, { kind: "feed" }> }): React.JSX.Element {
   const label = entry.feed.status ?? entry.feed.feedKind;
   return (
@@ -71,10 +93,17 @@ function FeedRow({ entry }: { entry: Extract<TimelineDisplayRow, { kind: "feed" 
   );
 }
 
-function RunRow({ entry }: { entry: Extract<TimelineDisplayRow, { kind: "run" }> }): React.JSX.Element {
+function RunRow({
+  entry,
+  mode,
+}: {
+  entry: Extract<TimelineDisplayRow, { kind: "run" }>;
+  mode: TimelineMode;
+}): React.JSX.Element {
   const run = entry.run;
   const color = runStatusColor(run.status);
   const duration = run.endedAt ? formatDuration(run.startedAt, run.endedAt) : undefined;
+  const showVerboseItems = mode === "verbose" && entry.items.length > 0;
 
   return (
     <Box flexDirection="column" marginBottom={1}>
@@ -90,6 +119,18 @@ function RunRow({ entry }: { entry: Extract<TimelineDisplayRow, { kind: "run" }>
           <Text wrap="wrap" {...(detailColor(detail) ? { color: detailColor(detail)! } : {})} bold={detail.tone === "message"}>
             {detailPrefix(detail)}{detail.text}
           </Text>
+        </Box>
+      ))}
+      {showVerboseItems && <Text> </Text>}
+      {showVerboseItems && entry.items.map((itemEntry, index) => (
+        <Box key={`${entry.id}-item-${index}`} flexDirection="column" paddingLeft={6} marginBottom={index === entry.items.length - 1 ? 0 : 1}>
+          <Box marginBottom={1}>
+            <Text dimColor>{formatTime(itemEntry.at)} </Text>
+            <Text dimColor>{verboseItemLabel(itemEntry.item.type)}</Text>
+          </Box>
+          <Box paddingLeft={2}>
+            <ItemLine item={itemEntry.item} />
+          </Box>
         </Box>
       ))}
     </Box>
@@ -141,7 +182,7 @@ export function TimelineRow({ entry, mode }: TimelineRowProps): React.JSX.Elemen
     case "feed":
       return <FeedRow entry={entry} />;
     case "run":
-      return <RunRow entry={entry} />;
+      return <RunRow entry={entry} mode={mode} />;
     case "item":
       return <ItemRow entry={entry} mode={mode} />;
     case "ci-checks":
