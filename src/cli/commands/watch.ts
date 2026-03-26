@@ -34,6 +34,7 @@ export async function handleWatchCommand(params: WatchCommandParams): Promise<nu
 
   const instance = render(
     createElement(App, { baseUrl, bearerToken, initialIssueKey: issueKey }),
+    { stdout: process.stderr, stdin: process.stdin, patchConsole: false },
   );
 
   await instance.waitUntilExit();
