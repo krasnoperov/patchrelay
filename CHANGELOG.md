@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.23.4](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.23.3...patchrelay-v0.23.4) (2026-03-26)
+
+
+### Bug Fixes
+
+* complete feed event coverage for all state transitions ([#173](https://github.com/krasnoperov/patchrelay/issues/173)) ([6596305](https://github.com/krasnoperov/patchrelay/commit/659630595b0529bd3d9d0a7cfceb13419009d344))
+
 ## [0.23.3](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.23.2...patchrelay-v0.23.3) (2026-03-26)
 
 
