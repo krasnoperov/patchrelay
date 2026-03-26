@@ -90,18 +90,16 @@ function truncate(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1)}\u2026` : text;
 }
 
+const TERMINAL_STATES = new Set(["done", "failed", "escalated", "awaiting_input"]);
+
 function formatStatus(issue: WatchIssue): string {
   const state = STATE_SHORT[issue.factoryState] ?? issue.factoryState;
-  const run = issue.activeRunType ?? issue.latestRunType;
-  const runLabel = run ? (RUN_SHORT[run] ?? run) : "";
+  // Terminal states: just the label, no run symbol
+  if (TERMINAL_STATES.has(issue.factoryState)) return state;
+  // Active/in-progress: show run status symbol
   const status = issue.activeRunType ? "running" : issue.latestRunStatus;
   const statusSym = status ? (STATUS_SHORT[status] ?? "") : "";
-
-  // If run type matches state, just show state + status symbol
-  if (runLabel && state === (STATE_SHORT[issue.factoryState] ?? issue.factoryState)) {
-    if (issue.activeRunType) return `${state} ${statusSym}`;
-    if (status) return `${state} ${statusSym}`;
-  }
+  if (statusSym) return `${state} ${statusSym}`;
   return state;
 }
 
