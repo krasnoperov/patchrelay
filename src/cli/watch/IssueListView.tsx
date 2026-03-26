@@ -1,3 +1,4 @@
+import { useEffect, useReducer } from "react";
 import { Box, Text, useStdout } from "ink";
 import type { WatchFilter, WatchIssue } from "./watch-state.ts";
 import { IssueRow } from "./IssueRow.tsx";
@@ -13,7 +14,8 @@ interface IssueListViewProps {
   totalCount: number;
 }
 
-const FIXED_COLS = 51;
+// selector(2) + key(10) + status(13) + pr(7) + ago(4) + gaps = ~36
+const FIXED_COLS = 40;
 const CHROME_ROWS = 4;
 
 export function IssueListView({ issues, allIssues, selectedIndex, connected, filter, totalCount }: IssueListViewProps): React.JSX.Element {
@@ -22,6 +24,10 @@ export function IssueListView({ issues, allIssues, selectedIndex, connected, fil
   const rows = stdout?.rows ?? 24;
   const titleWidth = Math.max(0, cols - FIXED_COLS);
   const maxVisible = Math.max(1, rows - CHROME_ROWS);
+
+  // Periodic refresh for elapsed times
+  const [, tick] = useReducer((c: number) => c + 1, 0);
+  useEffect(() => { const id = setInterval(tick, 5000); return () => clearInterval(id); }, []);
 
   let startIndex = 0;
   if (issues.length > maxVisible) {
