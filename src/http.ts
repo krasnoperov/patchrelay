@@ -280,7 +280,9 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
         return reply.code(401).send({ ok: false, reason: "operator_auth_required" });
       }
     });
+  }
 
+  if (managementRoutesEnabled) {
     app.get("/api/issues/:issueKey", async (request, reply) => {
       const issueKey = (request.params as { issueKey: string }).issueKey;
       const result = await service.getIssueOverview(issueKey);
@@ -342,9 +344,6 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
       return reply.send({ ok: true, ...link });
     });
 
-  }
-
-  if (managementRoutesEnabled) {
     app.post("/api/issues/:issueKey/retry", async (request, reply) => {
       const issueKey = (request.params as { issueKey: string }).issueKey;
       const result = service.retryIssue(issueKey);

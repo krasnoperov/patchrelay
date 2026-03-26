@@ -356,12 +356,27 @@ export class PatchRelayService {
     const issue = this.db.getIssueByKey(issueKey);
     if (!issue) return undefined;
     if (issue.activeRunId) return { error: "Issue already has an active run" };
-    const runType = "implementation";
+
+    // Infer run type from current state instead of always resetting to implementation
+    let runType = "implementation";
+    let factoryState: string = "delegated";
+    if (issue.prNumber && issue.prCheckStatus === "failed") {
+      runType = "ci_repair";
+      factoryState = "repairing_ci";
+    } else if (issue.prNumber && issue.prReviewState === "changes_requested") {
+      runType = "review_fix";
+      factoryState = "changes_requested";
+    } else if (issue.prNumber) {
+      // PR exists but no specific failure — re-run implementation
+      runType = "implementation";
+      factoryState = "implementing";
+    }
+
     this.db.upsertIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       pendingRunType: runType as never,
-      factoryState: "delegated" as never,
+      factoryState: factoryState as never,
     });
     this.runtime.enqueueIssue(issue.projectId, issue.linearIssueId);
     return { issueKey, runType };
