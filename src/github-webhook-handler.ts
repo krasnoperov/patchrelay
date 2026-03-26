@@ -195,6 +195,13 @@ export class GitHubWebhookHandler {
           this.mergeQueue.advanceQueue(issue.projectId);
         }
       }
+
+      // Advance the merge queue even when the state transition was suppressed
+      // (e.g., pr_merged during an active run). The PR is factually merged —
+      // the next queued issue should not wait for the active run to finish.
+      if (!newState && event.triggerEvent === "pr_merged") {
+        this.mergeQueue.advanceQueue(issue.projectId);
+      }
     }
 
     // Re-read issue after all upserts so reactive run logic sees current state

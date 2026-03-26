@@ -18,7 +18,8 @@ const DEFAULT_MERGE_PREP_BUDGET = 3;
 
 /**
  * Merge queue steward — keeps PatchRelay-managed PR branches up to date
- * with the base branch and enables auto-merge so GitHub merges when CI passes.
+ * with the base branch via rebase and enables auto-merge so GitHub merges
+ * when CI passes. Uses rebase (not merge) to maintain linear history.
  *
  * Serialization: all calls are routed through the issue queue, and
  * prepareForMerge checks front-of-queue before acting. The issue processor
@@ -38,10 +39,10 @@ export class MergeQueue {
   /**
    * Prepare the front-of-queue issue for merge:
    * 1. Enable auto-merge
-   * 2. Update the branch to latest base (git merge)
-   * 3. Push (triggers CI; auto-merge fires when CI passes)
+   * 2. Rebase the branch onto latest base
+   * 3. Force-push (triggers CI; auto-merge fires when CI passes)
    *
-   * On conflict: abort merge, transition to repairing_queue, enqueue queue_repair.
+   * On conflict: abort rebase, transition to repairing_queue, enqueue queue_repair.
    * On transient failure: leave pendingMergePrep set so the next event retries.
    */
   async prepareForMerge(issue: IssueRecord, project: ProjectConfig): Promise<void> {
@@ -105,41 +106,11 @@ export class MergeQueue {
       return;
     }
 
-    // Merge base branch into the PR branch
-    const mergeResult = await execCommand(gitBin, ["-C", issue.worktreePath, "merge", `origin/${baseBranch}`, "--no-edit"], {
-      timeoutMs: 60_000,
+    // Check if rebase is needed: is HEAD already on top of origin/baseBranch?
+    const mergeBaseResult = await execCommand(gitBin, ["-C", issue.worktreePath, "merge-base", "--is-ancestor", `origin/${baseBranch}`, "HEAD"], {
+      timeoutMs: 10_000,
     });
-
-    if (mergeResult.exitCode !== 0) {
-      // Conflict — abort and trigger queue_repair
-      await execCommand(gitBin, ["-C", issue.worktreePath, "merge", "--abort"], { timeoutMs: 10_000 });
-
-      this.logger.info({ issueKey: issue.issueKey }, "Merge prep: conflict detected, triggering queue repair");
-      this.db.upsertIssue({
-        projectId: issue.projectId,
-        linearIssueId: issue.linearIssueId,
-        factoryState: "repairing_queue",
-        pendingRunType: "queue_repair",
-        pendingRunContextJson: JSON.stringify({ failureReason: "merge_conflict" }),
-        pendingMergePrep: false,
-      });
-      this.enqueueIssue(issue.projectId, issue.linearIssueId);
-
-      this.feed?.publish({
-        level: "warn",
-        kind: "workflow",
-        issueKey: issue.issueKey,
-        projectId: issue.projectId,
-        stage: "repairing_queue",
-        status: "conflict",
-        summary: `Merge conflict with ${baseBranch} — queue repair enqueued`,
-      });
-      this.onLinearActivity?.(issue, buildMergePrepActivity("conflict"));
-      return;
-    }
-
-    // Check if merge was a no-op (already up to date)
-    if (mergeResult.stdout?.includes("Already up to date")) {
+    if (mergeBaseResult.exitCode === 0) {
       this.logger.debug({ issueKey: issue.issueKey }, "Merge prep: branch already up to date");
       this.db.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, pendingMergePrep: false, mergePrepAttempts: 0 });
 
@@ -158,8 +129,41 @@ export class MergeQueue {
       return;
     }
 
-    // Push the merged branch
-    const pushResult = await execCommand(gitBin, ["-C", issue.worktreePath, "push"], {
+    // Rebase onto latest base branch (clean linear history, no merge commits)
+    const rebaseResult = await execCommand(gitBin, ["-C", issue.worktreePath, "rebase", `origin/${baseBranch}`], {
+      timeoutMs: 120_000,
+    });
+
+    if (rebaseResult.exitCode !== 0) {
+      // Conflict — abort and trigger queue_repair
+      await execCommand(gitBin, ["-C", issue.worktreePath, "rebase", "--abort"], { timeoutMs: 10_000 });
+
+      this.logger.info({ issueKey: issue.issueKey }, "Merge prep: rebase conflict detected, triggering queue repair");
+      this.db.upsertIssue({
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        factoryState: "repairing_queue",
+        pendingRunType: "queue_repair",
+        pendingRunContextJson: JSON.stringify({ failureReason: "rebase_conflict" }),
+        pendingMergePrep: false,
+      });
+      this.enqueueIssue(issue.projectId, issue.linearIssueId);
+
+      this.feed?.publish({
+        level: "warn",
+        kind: "workflow",
+        issueKey: issue.issueKey,
+        projectId: issue.projectId,
+        stage: "repairing_queue",
+        status: "conflict",
+        summary: `Rebase conflict with ${baseBranch} — queue repair enqueued`,
+      });
+      this.onLinearActivity?.(issue, buildMergePrepActivity("conflict"));
+      return;
+    }
+
+    // Push the rebased branch (force-with-lease to protect against concurrent changes)
+    const pushResult = await execCommand(gitBin, ["-C", issue.worktreePath, "push", "--force-with-lease"], {
       timeoutMs: 60_000,
     });
 
@@ -170,7 +174,7 @@ export class MergeQueue {
       return;
     }
 
-    this.logger.info({ issueKey: issue.issueKey, baseBranch }, "Merge prep: branch updated and pushed");
+    this.logger.info({ issueKey: issue.issueKey, baseBranch }, "Merge prep: rebased and pushed");
     this.db.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, pendingMergePrep: false, mergePrepAttempts: 0 });
 
     this.feed?.publish({
@@ -180,7 +184,7 @@ export class MergeQueue {
       projectId: issue.projectId,
       stage: "awaiting_queue",
       status: "prepared",
-      summary: `Branch updated to latest ${baseBranch} — CI will run`,
+      summary: `Branch rebased onto latest ${baseBranch} — CI will run`,
     });
     this.onLinearActivity?.(issue, buildMergePrepActivity("branch_update", baseBranch), { ephemeral: true });
   }
