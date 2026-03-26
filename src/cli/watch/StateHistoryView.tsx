@@ -61,20 +61,35 @@ const STATE_LABELS: Record<string, string> = {
 
 // ─── Sub-components ──────────────────────────────────────────────
 
-function RunLine({ run, index }: { run: HistoryRunInfo; index: number }): React.JSX.Element {
+function RunLine({ run, index, gutter }: { run: HistoryRunInfo; index: number; gutter: string }): React.JSX.Element {
   const label = RUN_LABELS[run.runType] ?? run.runType;
   const dur = run.endedAt
     ? formatDuration(run.startedAt, run.endedAt)
     : undefined;
   const isActive = run.status === "running";
 
+  // Report stats
+  const stats: string[] = [];
+  if (run.messageCount !== undefined) stats.push(`${run.messageCount} msgs`);
+  if (run.commandCount) stats.push(`${run.commandCount} cmds`);
+  if (run.fileChangeCount) stats.push(`${run.fileChangeCount} files`);
+
   return (
-    <Box>
-      <Text color={runStatusColor(run.status)}>{runStatusSymbol(run.status)} </Text>
-      <Text dimColor>#{index + 1} </Text>
-      <Text>({label})</Text>
-      {dur && <Text dimColor> {dur}</Text>}
-      {isActive && <Text dimColor> ...</Text>}
+    <Box flexDirection="column">
+      <Box>
+        <Text color={runStatusColor(run.status)}>{runStatusSymbol(run.status)} </Text>
+        <Text dimColor>#{index + 1} </Text>
+        <Text>({label})</Text>
+        {dur && <Text dimColor> {dur}</Text>}
+        {isActive && <Text dimColor> ...</Text>}
+        {stats.length > 0 && <Text dimColor>  {stats.join(", ")}</Text>}
+      </Box>
+      {run.lastMessage && (
+        <Box>
+          <Text dimColor>{gutter}  </Text>
+          <Text dimColor wrap="truncate">{run.lastMessage.slice(0, 120)}</Text>
+        </Box>
+      )}
     </Box>
   );
 }
@@ -136,7 +151,7 @@ function SideTripBlock({
       {trip.runs.map((run, ri) => (
         <Box key={`st-run-${run.id}`}>
           <Text dimColor>{" \u2502  \u2502 "}</Text>
-          <RunLine run={run} index={runOffset + ri} />
+          <RunLine run={run} index={runOffset + ri} gutter={" \u2502  \u2502"} />
         </Box>
       ))}
 
@@ -209,7 +224,7 @@ function MainPathNode({
         <Box key={`run-${run.id}`} flexDirection="column">
           <Box>
             <Text dimColor>{gutter}</Text>
-            <RunLine run={run} index={runOffset + ri} />
+            <RunLine run={run} index={runOffset + ri} gutter={gutter} />
           </Box>
           {run.id === activeRunId && plan && plan.length > 0 && (
             <Box>

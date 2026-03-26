@@ -9,6 +9,11 @@ export interface HistoryRunInfo {
   status: string; // "completed" | "failed" | "running" | "queued" | "released"
   startedAt: string;
   endedAt?: string | undefined;
+  // Report summary (when available)
+  messageCount?: number | undefined;
+  commandCount?: number | undefined;
+  fileChangeCount?: number | undefined;
+  lastMessage?: string | undefined;
 }
 
 export interface SideTripNode {
@@ -85,13 +90,25 @@ function extractTransitions(feedEvents: OperatorFeedEvent[]): StateTransition[] 
 // ─── Run helpers ─────────────────────────────────────────────────
 
 function toRunInfo(run: TimelineRunInput): HistoryRunInfo {
-  return {
+  const info: HistoryRunInfo = {
     id: run.id,
     runType: run.runType,
     status: run.status,
     startedAt: run.startedAt,
     endedAt: run.endedAt,
   };
+
+  if (run.report) {
+    info.messageCount = run.report.assistantMessages.length;
+    info.commandCount = run.report.commands.length;
+    info.fileChangeCount = run.report.fileChanges.length;
+    const lastMsg = run.report.assistantMessages[run.report.assistantMessages.length - 1];
+    if (lastMsg) {
+      info.lastMessage = lastMsg;
+    }
+  }
+
+  return info;
 }
 
 function runToState(run: TimelineRunInput): string {
