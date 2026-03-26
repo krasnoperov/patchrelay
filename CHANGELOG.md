@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.25.3](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.25.2...patchrelay-v0.25.3) (2026-03-26)
+
+
+### Bug Fixes
+
+* ignore own comments to prevent self-triggering run cascade ([#190](https://github.com/krasnoperov/patchrelay/issues/190)) ([d3be2bb](https://github.com/krasnoperov/patchrelay/commit/d3be2bb87f65e92b4269b0e262de8dafbfe4efec))
+
 ## [0.25.2](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.25.1...patchrelay-v0.25.2) (2026-03-26)
 
 
