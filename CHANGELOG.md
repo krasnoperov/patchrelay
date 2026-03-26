@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.25.1](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.25.0...patchrelay-v0.25.1) (2026-03-26)
+
+
+### Bug Fixes
+
+* render watch TUI to stderr to avoid stdout contamination ([#186](https://github.com/krasnoperov/patchrelay/issues/186)) ([f8b0eb7](https://github.com/krasnoperov/patchrelay/commit/f8b0eb7081d8eb2bc46f3835b97c3fe19aa79c05))
+
 ## [0.25.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.24.2...patchrelay-v0.25.0) (2026-03-26)
 
 
