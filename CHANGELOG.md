@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.25.6](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.25.5...patchrelay-v0.25.6) (2026-03-26)
+
+
+### Bug Fixes
+
+* render verbose watch timeline items ([#197](https://github.com/krasnoperov/patchrelay/issues/197)) ([6b4ba44](https://github.com/krasnoperov/patchrelay/commit/6b4ba44397dc232941834148dad4d89b161af132))
+
 ## [0.25.5](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.25.4...patchrelay-v0.25.5) (2026-03-26)
 
 
