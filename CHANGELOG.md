@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.7](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.20.6...patchrelay-v0.20.7) (2026-03-26)
+
+
+### Bug Fixes
+
+* consistent item prefix spacing in timeline ([#153](https://github.com/krasnoperov/patchrelay/issues/153)) ([ec47161](https://github.com/krasnoperov/patchrelay/commit/ec47161267928922cb2d2579dde4db17c1c3ec76))
+
 ## [0.20.6](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.20.5...patchrelay-v0.20.6) (2026-03-26)
 
 
