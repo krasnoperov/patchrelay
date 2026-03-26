@@ -79,8 +79,6 @@ function RunLine({ run, index }: { run: HistoryRunInfo; index: number }): React.
   );
 }
 
-const MAX_VISIBLE_RUNS = 5;
-
 function RunSummary({ runs }: { runs: HistoryRunInfo[] }): React.JSX.Element {
   const completed = runs.filter((r) => r.status === "completed").length;
   const failed = runs.filter((r) => r.status === "failed").length;
@@ -201,43 +199,26 @@ function MainPathNode({
       )}
 
       {/* Runs */}
-      {node.runs.length > MAX_VISIBLE_RUNS ? (
-        <Box flexDirection="column">
-          <Box>
-            <Text dimColor>{gutter}</Text>
-            <RunSummary runs={node.runs} />
-          </Box>
-          {node.runs.slice(0, 3).map((run, ri) => (
-            <Box key={`run-${run.id}`}>
-              <Text dimColor>{gutter}</Text>
-              <RunLine run={run} index={runOffset + ri} />
-            </Box>
-          ))}
-          <Box>
-            <Text dimColor>{gutter}  ... {node.runs.length - 4} more</Text>
-          </Box>
-          <Box key={`run-${node.runs[node.runs.length - 1]!.id}`}>
-            <Text dimColor>{gutter}</Text>
-            <RunLine run={node.runs[node.runs.length - 1]!} index={runOffset + node.runs.length - 1} />
-          </Box>
+      {node.runs.length > 5 && (
+        <Box>
+          <Text dimColor>{gutter}</Text>
+          <RunSummary runs={node.runs} />
         </Box>
-      ) : (
-        node.runs.map((run, ri) => (
-          <Box key={`run-${run.id}`} flexDirection="column">
+      )}
+      {node.runs.map((run, ri) => (
+        <Box key={`run-${run.id}`} flexDirection="column">
+          <Box>
+            <Text dimColor>{gutter}</Text>
+            <RunLine run={run} index={runOffset + ri} />
+          </Box>
+          {run.id === activeRunId && plan && plan.length > 0 && (
             <Box>
               <Text dimColor>{gutter}</Text>
-              <RunLine run={run} index={runOffset + ri} />
+              <PlanSteps plan={plan} />
             </Box>
-            {/* Show plan for active run */}
-            {run.id === activeRunId && plan && plan.length > 0 && (
-              <Box>
-                <Text dimColor>{gutter}</Text>
-                <PlanSteps plan={plan} />
-              </Box>
-            )}
-          </Box>
-        ))
-      )}
+          )}
+        </Box>
+      ))}
 
       {/* Side-trips */}
       {node.sideTrips.length > 0 && (
