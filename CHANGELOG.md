@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.21.2...patchrelay-v0.22.0) (2026-03-26)
+
+
+### Features
+
+* Static scrollback, compact status, periodic refresh ([#163](https://github.com/krasnoperov/patchrelay/issues/163)) ([40b66ba](https://github.com/krasnoperov/patchrelay/commit/40b66ba3886ac9e641a5766ff35b34e7b74e6628))
+
 ## [0.21.2](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.21.1...patchrelay-v0.21.2) (2026-03-26)
 
 
