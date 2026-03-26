@@ -365,7 +365,7 @@ export class RunOrchestrator {
     if (notification.method === "turn/plan/updated") {
       const issue = this.db.getIssue(run.projectId, run.linearIssueId);
       if (issue) {
-        void this.syncLinearSessionWithCodexPlan(issue, notification.params, run.runType);
+        void this.syncLinearSessionWithCodexPlan(issue, notification.params);
       }
     }
 
@@ -825,7 +825,6 @@ export class RunOrchestrator {
   private async syncLinearSessionWithCodexPlan(
     issue: IssueRecord,
     params: Record<string, unknown>,
-    runType: string,
   ): Promise<void> {
     if (!issue.agentSessionId) return;
     const plan = params.plan;
