@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.24.2](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.24.1...patchrelay-v0.24.2) (2026-03-26)
+
+
+### Bug Fixes
+
+* show all runs in history view, no truncation ([#182](https://github.com/krasnoperov/patchrelay/issues/182)) ([c9e6690](https://github.com/krasnoperov/patchrelay/commit/c9e6690dcc92608cd43371b97453adc46a483dd7))
+
 ## [0.24.1](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.24.0...patchrelay-v0.24.1) (2026-03-26)
 
 
