@@ -249,7 +249,7 @@ function buildCompactTimelineRows(entries: TimelineEntry[]): TimelineDisplayRow[
       at: run.at,
       finalized: status !== "running",
       run: { ...run.run, status, ...(run.endedAt ? { endedAt: run.endedAt } : {}) },
-      details: summarizeRunDetails(run.items, status),
+      details: summarizeRunDetails(run.items),
       items: [],
     });
   }
@@ -285,7 +285,7 @@ function resolveCompactRunStatus(run: TimelineRunPayload, items: TimelineItemPay
   return run.status === "queued" ? "queued" : "running";
 }
 
-function summarizeRunDetails(items: TimelineItemPayload[], status: string): TimelineRunDetail[] {
+function summarizeRunDetails(items: TimelineItemPayload[]): TimelineRunDetail[] {
   const details: TimelineRunDetail[] = [];
 
   const latestAgentMessage = findLatest(items, (item) => item.type === "agentMessage" && Boolean(item.text?.trim()));
