@@ -260,6 +260,29 @@ test("fallback: runs exist but no feed events", () => {
   assert.equal(history[1]!.runs.length, 1);
 });
 
+// ─── Many runs, no events (pruned feed store) ───────────────────
+
+test("fallback: many runs with no events shows all runs and final state", () => {
+  const runs: TimelineRunInput[] = [];
+  for (let i = 1; i <= 10; i++) {
+    runs.push(run({
+      id: i,
+      status: i <= 2 ? "completed" : "failed",
+      startedAt: `2026-03-25T10:${String(i).padStart(2, "0")}:00.000Z`,
+      endedAt: `2026-03-25T10:${String(i + 10).padStart(2, "0")}:00.000Z`,
+    }));
+  }
+
+  const history = buildStateHistory(runs, [], "failed", null);
+
+  // delegated + implementing + failed
+  assert.equal(history[0]!.state, "delegated");
+  assert.equal(history[1]!.state, "implementing");
+  assert.equal(history[1]!.runs.length, 10); // ALL runs attached
+  assert.equal(history[history.length - 1]!.state, "failed");
+  assert.equal(history[history.length - 1]!.isCurrent, true);
+});
+
 // ─── Active side-trip (currently in repairing_ci) ────────────────
 
 test("active side-trip: currently in repairing_ci", () => {
