@@ -129,9 +129,9 @@ export function ItemLine({ item, isLast }: ItemLineProps): React.JSX.Element {
   }
 
   return (
-    <Box gap={1}>
-      <Text dimColor>{prefix}</Text>
-      <Text color={statusColor(item.status)}>{statusChar(item.status)}</Text>
+    <Box>
+      <Text dimColor>{prefix} </Text>
+      <Text color={statusColor(item.status)}>{statusChar(item.status)} </Text>
       {content}
     </Box>
   );
