@@ -274,7 +274,10 @@ export class RunOrchestrator {
       // Freshen the worktree: fetch + rebase onto latest base branch.
       // This prevents branch contamination when local main has drifted
       // and avoids scope-bundling review rejections from stale commits.
-      await this.freshenWorktree(worktreePath, project, issue);
+      // Skip for queue_repair — its entire purpose is to resolve rebase conflicts.
+      if (runType !== "queue_repair") {
+        await this.freshenWorktree(worktreePath, project, issue);
+      }
 
       // Run prepare-worktree hook
       const hookEnv = buildHookEnv(issue.issueKey ?? issue.linearIssueId, branchName, runType, worktreePath);
@@ -382,10 +385,13 @@ export class RunOrchestrator {
     // Rebase onto latest base
     const rebaseResult = await execCommand(gitBin, ["-C", worktreePath, "rebase", `origin/${baseBranch}`], { timeoutMs: 120_000 });
     if (rebaseResult.exitCode !== 0) {
-      // Abort the failed rebase and restore state
+      // Abort the failed rebase and restore state — then let the agent run
+      // proceed. The agent can resolve the conflict itself (the workflow
+      // prompt tells it to rebase and handle conflicts).
       await execCommand(gitBin, ["-C", worktreePath, "rebase", "--abort"], { timeoutMs: 10_000 });
       if (didStash) await execCommand(gitBin, ["-C", worktreePath, "stash", "pop"], { timeoutMs: 10_000 });
-      throw new Error(`Pre-run rebase onto origin/${baseBranch} failed with conflicts — escalate or resolve manually`);
+      this.logger.warn({ issueKey: issue.issueKey, baseBranch }, "Pre-run freshen: rebase conflict, agent will resolve");
+      return;
     }
 
     // Push the rebased branch (force-with-lease to protect against concurrent pushes)
