@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.25.5](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.25.4...patchrelay-v0.25.5) (2026-03-26)
+
+
+### Bug Fixes
+
+* improve watch timeline rhythm and wrapping ([#195](https://github.com/krasnoperov/patchrelay/issues/195)) ([8c57b3c](https://github.com/krasnoperov/patchrelay/commit/8c57b3c30940d61cc49f64b41489471cc8e44a79))
+
 ## [0.25.4](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.25.3...patchrelay-v0.25.4) (2026-03-26)
 
 
