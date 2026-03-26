@@ -119,7 +119,9 @@ export function buildTimelineFromRehydration(
     const cmp = a.at.localeCompare(b.at);
     if (cmp !== 0) return cmp;
     // Within same timestamp: run-start before items, items before run-end
-    return kindOrder(a.kind) - kindOrder(b.kind);
+    const kindCmp = kindOrder(a.kind) - kindOrder(b.kind);
+    if (kindCmp !== 0) return kindCmp;
+    return a.id.localeCompare(b.id);
   });
 
   return entries;

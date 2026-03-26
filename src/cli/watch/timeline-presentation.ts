@@ -200,7 +200,9 @@ function buildCompactTimelineRows(entries: TimelineEntry[]): TimelineDisplayRow[
   rows.sort((left, right) => {
     const cmp = left.at.localeCompare(right.at);
     if (cmp !== 0) return cmp;
-    return rowKindOrder(left.kind) - rowKindOrder(right.kind);
+    const kindCmp = rowKindOrder(left.kind) - rowKindOrder(right.kind);
+    if (kindCmp !== 0) return kindCmp;
+    return left.id.localeCompare(right.id);
   });
 
   return rows;

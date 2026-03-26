@@ -12,6 +12,7 @@ import {
   buildTimelineFromRehydration,
   type TimelineRunInput,
 } from "../src/cli/watch/timeline-builder.ts";
+import { buildTimelineRows } from "../src/cli/watch/timeline-presentation.ts";
 import type { OperatorFeedEvent } from "../src/operator-feed.ts";
 
 // ─── Helpers ──────────────────────────────────────────────────────
@@ -489,6 +490,31 @@ test("buildTimelineFromRehydration replays completed run items from persisted th
   assert.equal(items[1]?.item?.output, "PASS signals\n");
   assert.equal(items[1]?.item?.exitCode, 0);
   assert.equal(items[1]?.item?.status, "completed");
+});
+
+test("buildTimelineRows sorts compact rows deterministically when timestamps match", () => {
+  const timeline = buildTimelineFromRehydration(
+    [{
+      id: 2,
+      runType: "implementation",
+      status: "completed",
+      startedAt: "2026-03-25T10:00:00.000Z",
+      endedAt: "2026-03-25T10:00:05.000Z",
+    }, {
+      id: 1,
+      runType: "review_fix",
+      status: "completed",
+      startedAt: "2026-03-25T10:00:00.000Z",
+      endedAt: "2026-03-25T10:00:03.000Z",
+    }],
+    [],
+    null,
+    null,
+  );
+
+  const rows = buildTimelineRows(timeline, "compact").filter((row) => row.kind === "run");
+  assert.equal(rows[0]?.id, "run-1");
+  assert.equal(rows[1]?.id, "run-2");
 });
 
 // ─── Feed Events ─────────────────────────────────────────────
