@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.23.2](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.23.1...patchrelay-v0.23.2) (2026-03-26)
+
+
+### Bug Fixes
+
+* clearer state labels — 'review fix' not 'changes', 'paused' not 'input' ([#168](https://github.com/krasnoperov/patchrelay/issues/168)) ([0159bff](https://github.com/krasnoperov/patchrelay/commit/0159bff622e8b8d78e24169ce3d0b06860e16ce4))
+* release active run on escalation ([#170](https://github.com/krasnoperov/patchrelay/issues/170)) ([5c08462](https://github.com/krasnoperov/patchrelay/commit/5c0846203b1a69172a07ac5acef18de56f8f951b))
+
 ## [0.23.1](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.23.0...patchrelay-v0.23.1) (2026-03-26)
 
 
