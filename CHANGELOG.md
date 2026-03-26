@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.21.2](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.21.1...patchrelay-v0.21.2) (2026-03-26)
+
+
+### Bug Fixes
+
+* full commands, sync codex plan to Linear ([#161](https://github.com/krasnoperov/patchrelay/issues/161)) ([3bfa748](https://github.com/krasnoperov/patchrelay/commit/3bfa7489abd835a15a915675c7583a83978fc10c))
+
 ## [0.21.1](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.21.0...patchrelay-v0.21.1) (2026-03-26)
 
 
