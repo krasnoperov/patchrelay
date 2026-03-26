@@ -669,6 +669,14 @@ export class RunOrchestrator {
         { issueKey: issue.issueKey, runType: run.runType, threadId: run.threadId },
         "Run has interrupted turn — marking as failed",
       );
+      // Interrupted runs are not real failures — undo the budget increment.
+      if (run.runType === "ci_repair" && issue.ciRepairAttempts > 0) {
+        this.db.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, ciRepairAttempts: issue.ciRepairAttempts - 1 });
+      } else if (run.runType === "queue_repair" && issue.queueRepairAttempts > 0) {
+        this.db.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, queueRepairAttempts: issue.queueRepairAttempts - 1 });
+      } else if (run.runType === "review_fix" && issue.reviewFixAttempts > 0) {
+        this.db.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, reviewFixAttempts: issue.reviewFixAttempts - 1 });
+      }
       this.failRunAndClear(run, "Codex turn was interrupted");
       const failedIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
       void this.emitLinearActivity(failedIssue, buildRunFailureActivity(run.runType, "The Codex turn was interrupted."));
