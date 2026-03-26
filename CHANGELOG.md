@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.21.1](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.21.0...patchrelay-v0.21.1) (2026-03-26)
+
+
+### Bug Fixes
+
+* strip bash wrapper from command display, hide exit:0 ([#159](https://github.com/krasnoperov/patchrelay/issues/159)) ([083f166](https://github.com/krasnoperov/patchrelay/commit/083f166e461789c74ecc255e15788fef3588a50e))
+
 ## [0.21.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.20.8...patchrelay-v0.21.0) (2026-03-26)
 
 
