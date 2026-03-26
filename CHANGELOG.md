@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.8](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.20.7...patchrelay-v0.20.8) (2026-03-26)
+
+
+### Bug Fixes
+
+* follow OFF shows full timeline, follow ON tails to screen height ([#155](https://github.com/krasnoperov/patchrelay/issues/155)) ([9344b3f](https://github.com/krasnoperov/patchrelay/commit/9344b3fec3cbace1b89f18880bf5494ad0bf5802))
+
 ## [0.20.7](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.20.6...patchrelay-v0.20.7) (2026-03-26)
 
 
