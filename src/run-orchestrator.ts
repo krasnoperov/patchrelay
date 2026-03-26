@@ -756,6 +756,15 @@ export class RunOrchestrator {
               factoryState: "done",
             });
           });
+          this.feed?.publish({
+            level: "info",
+            kind: "stage",
+            issueKey: issue.issueKey,
+            projectId: run.projectId,
+            stage: "done",
+            status: "reconciled",
+            summary: `Linear state ${stopState.stateName} \u2192 done`,
+          });
           return;
         }
       }
@@ -808,6 +817,17 @@ export class RunOrchestrator {
           ...(postRunState === "awaiting_queue" ? { pendingMergePrep: true } : {}),
         });
       });
+      if (postRunState) {
+        this.feed?.publish({
+          level: "info",
+          kind: "turn",
+          issueKey: issue.issueKey,
+          projectId: run.projectId,
+          stage: run.runType,
+          status: "completed",
+          summary: `Reconciliation: ${run.runType} completed \u2192 ${postRunState}`,
+        });
+      }
       if (postRunState === "awaiting_queue") {
         this.enqueueIssue(run.projectId, run.linearIssueId);
       }

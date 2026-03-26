@@ -65,8 +65,12 @@ interface TransitionRule {
 
 const TRANSITION_RULES: readonly TransitionRule[] = [
   // ── Terminal events ────────────────────────────────────────────
-  // pr_merged is unconditional — PR is merged, we're done.
+  // pr_merged transitions to done only when no agent run is active.
+  // If an active run exists, suppress the transition — the run's
+  // completion handler will detect the merged PR and advance to done.
+  // This prevents orphaning agent work (e.g. pending follow-up fixes).
   { event: "pr_merged",
+    guard: (_, ctx) => ctx.activeRunId === undefined,
     to: "done" },
 
   // pr_closed during an active run is suppressed — Codex may reopen.

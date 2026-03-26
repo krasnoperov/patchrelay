@@ -419,6 +419,15 @@ export class PatchRelayService {
       pendingRunType: runType as never,
       factoryState: factoryState as never,
     });
+    this.feed.publish({
+      level: "info",
+      kind: "stage",
+      issueKey: issue.issueKey,
+      projectId: issue.projectId,
+      stage: factoryState,
+      status: "retry",
+      summary: `Retry queued: ${runType}`,
+    });
     this.runtime.enqueueIssue(issue.projectId, issue.linearIssueId);
     return { issueKey, runType };
   }
