@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.25.2](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.25.1...patchrelay-v0.25.2) (2026-03-26)
+
+
+### Bug Fixes
+
+* cap watch TUI arrays to prevent OOM ([#188](https://github.com/krasnoperov/patchrelay/issues/188)) ([cfab830](https://github.com/krasnoperov/patchrelay/commit/cfab83040644c2a92b6a21666dc406d1f31c70f9))
+
 ## [0.25.1](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.25.0...patchrelay-v0.25.1) (2026-03-26)
 
 
