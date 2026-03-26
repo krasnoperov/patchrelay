@@ -386,6 +386,14 @@ export class WebhookHandler {
     }
     if (!triggerEventAllowed(project, normalized.triggerEvent)) return;
 
+    // Ignore PatchRelay's own comments to prevent self-triggering feedback loops.
+    // When a run completes, PatchRelay posts an activity to Linear, which fires a
+    // commentCreated webhook back — without this guard that re-enqueues a new run.
+    const installation = this.db.linearInstallations.getLinearInstallationForProject(project.id);
+    if (installation?.actorId && normalized.actor?.id === installation.actorId) {
+      return;
+    }
+
     const issue = this.db.getIssue(project.id, normalized.issue.id);
     if (!issue) return;
 
