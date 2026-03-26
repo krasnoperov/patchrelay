@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.25.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.24.2...patchrelay-v0.25.0) (2026-03-26)
+
+
+### Features
+
+* show run report details in history view ([#184](https://github.com/krasnoperov/patchrelay/issues/184)) ([2720154](https://github.com/krasnoperov/patchrelay/commit/272015413d7b03325d681ede7281feb9201bfef1))
+
 ## [0.24.2](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.24.1...patchrelay-v0.24.2) (2026-03-26)
 
 
