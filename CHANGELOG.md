@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.23.5](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.23.4...patchrelay-v0.23.5) (2026-03-26)
+
+
+### Bug Fixes
+
+* terminal state guards, zombie recovery backoff, worktree fork point ([#176](https://github.com/krasnoperov/patchrelay/issues/176)) ([c3d628a](https://github.com/krasnoperov/patchrelay/commit/c3d628adf8f89c7dee5285297c2e70e63a18649f))
+
 ## [0.23.4](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.23.3...patchrelay-v0.23.4) (2026-03-26)
 
 
