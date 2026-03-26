@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.23.3](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.23.2...patchrelay-v0.23.3) (2026-03-26)
+
+
+### Bug Fixes
+
+* publish feed events on reconciliation state transitions ([#171](https://github.com/krasnoperov/patchrelay/issues/171)) ([b872702](https://github.com/krasnoperov/patchrelay/commit/b8727025f1580ed17c8ad8dbaa5d755423c9cd73))
+
 ## [0.23.2](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.23.1...patchrelay-v0.23.2) (2026-03-26)
 
 
