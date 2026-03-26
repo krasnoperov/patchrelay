@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.6](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.20.5...patchrelay-v0.20.6) (2026-03-26)
+
+
+### Bug Fixes
+
+* issue routes on loopback, interrupt budgets, smart retry ([#151](https://github.com/krasnoperov/patchrelay/issues/151)) ([798a97f](https://github.com/krasnoperov/patchrelay/commit/798a97fa23712677ef353376541ddefaf2672a24))
+
 ## [0.20.5](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.20.4...patchrelay-v0.20.5) (2026-03-25)
 
 
