@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.23.1](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.23.0...patchrelay-v0.23.1) (2026-03-26)
+
+
+### Bug Fixes
+
+* hide run status symbol for terminal states ([#166](https://github.com/krasnoperov/patchrelay/issues/166)) ([459092b](https://github.com/krasnoperov/patchrelay/commit/459092b2a4d615fad83f4adc14bd7c10ebd3bba7))
+
 ## [0.23.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.22.0...patchrelay-v0.23.0) (2026-03-26)
 
 
