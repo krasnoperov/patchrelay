@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.21.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.20.8...patchrelay-v0.21.0) (2026-03-26)
+
+
+### Features
+
+* Linear progress fix, stop command, comment-triggered runs ([#157](https://github.com/krasnoperov/patchrelay/issues/157)) ([c2abed3](https://github.com/krasnoperov/patchrelay/commit/c2abed39447e48e26556e9ebe1471b02f0a75d27))
+
 ## [0.20.8](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.20.7...patchrelay-v0.20.8) (2026-03-26)
 
 
