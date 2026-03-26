@@ -111,6 +111,16 @@ export type WatchAction =
   | { type: "feed-new-event"; event: OperatorFeedEvent }
   | { type: "switch-detail-tab"; tab: DetailTab };
 
+// ─── Array size caps (prevent OOM) ───────────────────────────────
+
+const MAX_TIMELINE_ENTRIES = 2000;
+const MAX_RAW_FEED_EVENTS = 2000;
+const MAX_FEED_EVENTS = 1000;
+
+function capArray<T>(arr: T[], max: number): T[] {
+  return arr.length > max ? arr.slice(arr.length - max) : arr;
+}
+
 const DETAIL_INITIAL = {
   detailTab: "timeline" as DetailTab,
   timeline: [] as TimelineEntry[],
@@ -261,7 +271,7 @@ export function watchReducer(state: WatchState, action: WatchAction): WatchState
       return { ...state, feedEvents: action.events };
 
     case "feed-new-event":
-      return { ...state, feedEvents: [...state.feedEvents, action.event] };
+      return { ...state, feedEvents: capArray([...state.feedEvents, action.event], MAX_FEED_EVENTS) };
 
     case "switch-detail-tab":
       return { ...state, detailTab: action.tab };
@@ -307,10 +317,10 @@ function applyFeedEvent(state: WatchState, event: OperatorFeedEvent): WatchState
   // Append to timeline and raw feed events if this event matches the active detail issue
   const isActiveDetail = state.view === "detail" && state.activeDetailKey === event.issueKey;
   const timeline = isActiveDetail
-    ? appendFeedToTimeline(state.timeline, event)
+    ? capArray(appendFeedToTimeline(state.timeline, event), MAX_TIMELINE_ENTRIES)
     : state.timeline;
   const rawFeedEvents = isActiveDetail
-    ? [...state.rawFeedEvents, event]
+    ? capArray([...state.rawFeedEvents, event], MAX_RAW_FEED_EVENTS)
     : state.rawFeedEvents;
 
   return { ...state, issues: updated, timeline, rawFeedEvents };
@@ -325,7 +335,7 @@ function applyCodexNotification(
 ): WatchState {
   switch (method) {
     case "item/started":
-      return { ...state, timeline: appendCodexItemToTimeline(state.timeline, params, state.activeRunId) };
+      return { ...state, timeline: capArray(appendCodexItemToTimeline(state.timeline, params, state.activeRunId), MAX_TIMELINE_ENTRIES) };
 
     case "item/completed":
       return { ...state, timeline: completeCodexItemInTimeline(state.timeline, params) };
