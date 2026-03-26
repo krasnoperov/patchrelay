@@ -737,11 +737,15 @@ export class RunOrchestrator {
 
   private escalate(issue: IssueRecord, runType: string, reason: string): void {
     this.logger.warn({ issueKey: issue.issueKey, runType, reason }, "Escalating to human");
+    if (issue.activeRunId) {
+      this.db.finishRun(issue.activeRunId, { status: "released" });
+    }
     this.db.upsertIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       pendingRunType: null,
       pendingRunContextJson: null,
+      activeRunId: null,
       factoryState: "escalated",
     });
     this.feed?.publish({
