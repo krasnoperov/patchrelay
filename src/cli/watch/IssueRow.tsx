@@ -27,14 +27,14 @@ const STATE_SHORT: Record<string, string> = {
   preparing: "prep",
   implementing: "impl",
   pr_open: "pr open",
-  changes_requested: "changes",
+  changes_requested: "review fix",
   repairing_ci: "ci fix",
   awaiting_queue: "merging",
   repairing_queue: "merge fix",
   done: "done",
   failed: "failed",
   escalated: "escalated",
-  awaiting_input: "input",
+  awaiting_input: "paused",
 };
 
 const RUN_SHORT: Record<string, string> = {
