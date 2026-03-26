@@ -59,7 +59,6 @@ function extractTransitions(feedEvents: OperatorFeedEvent[]): StateTransition[] 
 
     if (event.kind === "stage") {
       if (event.status === "starting") {
-        // stage field is runType, map to factory state
         state = RUN_TYPE_TO_STATE[event.stage] ?? event.stage;
         reason = event.summary;
       } else if (event.status === "reconciled" || event.status === "retry" || event.status === "queued") {
@@ -67,7 +66,6 @@ function extractTransitions(feedEvents: OperatorFeedEvent[]): StateTransition[] 
         reason = event.summary;
       }
     } else if (event.kind === "github") {
-      // stage field is the factory state AFTER the transition
       state = event.stage;
       reason = event.summary;
     }
@@ -84,64 +82,116 @@ function extractTransitions(feedEvents: OperatorFeedEvent[]): StateTransition[] 
   return transitions;
 }
 
-// ─── Run matching ────────────────────────────────────────────────
+// ─── Run helpers ─────────────────────────────────────────────────
 
-function buildRunQueue(runs: TimelineRunInput[]): Map<string, HistoryRunInfo[]> {
-  // Group runs by their corresponding factory state, preserving chronological order.
-  // Each call to consumeNextRun() pops from the front.
-  const map = new Map<string, HistoryRunInfo[]>();
+function toRunInfo(run: TimelineRunInput): HistoryRunInfo {
+  return {
+    id: run.id,
+    runType: run.runType,
+    status: run.status,
+    startedAt: run.startedAt,
+    endedAt: run.endedAt,
+  };
+}
+
+function runToState(run: TimelineRunInput): string {
+  return RUN_TYPE_TO_STATE[run.runType] ?? run.runType;
+}
+
+// ─── Build from runs only (no feed events) ───────────────────────
+
+function buildFromRuns(
+  runs: TimelineRunInput[],
+  currentFactoryState: string,
+): StateHistoryNode[] {
+  if (runs.length === 0) return [];
+
+  const nodes: StateHistoryNode[] = [];
+  const earliest = runs[0]!;
+
+  // Seed with delegated
+  nodes.push({
+    state: "delegated",
+    enteredAt: earliest.startedAt,
+    isCurrent: false,
+    runs: [],
+    sideTrips: [],
+  });
+
+  // Group consecutive runs by their mapped state.
+  // When the state changes, create a new node.
+  let currentState = "";
+  let currentNode: StateHistoryNode | null = null;
 
   for (const run of runs) {
-    const state = RUN_TYPE_TO_STATE[run.runType] ?? run.runType;
-    const info: HistoryRunInfo = {
-      id: run.id,
-      runType: run.runType,
-      status: run.status,
-      startedAt: run.startedAt,
-      endedAt: run.endedAt,
-    };
-    const list = map.get(state);
-    if (list) {
-      list.push(info);
+    const state = runToState(run);
+
+    if (state !== currentState) {
+      currentState = state;
+      currentNode = {
+        state,
+        enteredAt: run.startedAt,
+        isCurrent: false,
+        runs: [toRunInfo(run)],
+        sideTrips: [],
+      };
+      nodes.push(currentNode);
     } else {
-      map.set(state, [info]);
+      currentNode!.runs.push(toRunInfo(run));
     }
   }
 
-  return map;
-}
-
-// ─── Tree builder ────────────────────────────────────────────────
-
-export function buildStateHistory(
-  runs: TimelineRunInput[],
-  feedEvents: OperatorFeedEvent[],
-  currentFactoryState: string,
-  activeRunId: number | null,
-): StateHistoryNode[] {
-  const transitions = extractTransitions(feedEvents);
-  const runQueue = buildRunQueue(runs);
-
-  function consumeNextRun(state: string): HistoryRunInfo[] {
-    const queue = runQueue.get(state);
-    if (!queue || queue.length === 0) return [];
-    const run = queue.shift();
-    return run ? [run] : [];
+  // If the current factory state differs from the last node's state,
+  // add a final node (e.g., implementing → failed)
+  const lastNodeState = nodes[nodes.length - 1]!.state;
+  if (currentFactoryState !== lastNodeState && currentFactoryState !== "delegated") {
+    const lastRun = runs[runs.length - 1]!;
+    nodes.push({
+      state: currentFactoryState,
+      enteredAt: lastRun.endedAt ?? lastRun.startedAt,
+      isCurrent: false,
+      runs: [],
+      sideTrips: [],
+    });
   }
 
-  // Walk transitions and build nodes
+  return nodes;
+}
+
+// ─── Build from events + runs ────────────────────────────────────
+
+function buildFromEvents(
+  runs: TimelineRunInput[],
+  transitions: StateTransition[],
+  currentFactoryState: string,
+): StateHistoryNode[] {
+  // Build a chronological queue of runs per state
+  const runQueues = new Map<string, HistoryRunInfo[]>();
+  for (const run of runs) {
+    const state = runToState(run);
+    const queue = runQueues.get(state);
+    if (queue) {
+      queue.push(toRunInfo(run));
+    } else {
+      runQueues.set(state, [toRunInfo(run)]);
+    }
+  }
+
+  function consumeNextRun(state: string): HistoryRunInfo[] {
+    const queue = runQueues.get(state);
+    if (!queue || queue.length === 0) return [];
+    return [queue.shift()!];
+  }
+
   const nodes: StateHistoryNode[] = [];
   let currentMainNode: StateHistoryNode | null = null;
   let currentSideTrip: SideTripNode | null = null;
 
-  for (let i = 0; i < transitions.length; i++) {
-    const t = transitions[i]!;
+  for (const t of transitions) {
     const isSideTrip = SIDE_TRIP_STATES.has(t.state);
 
     if (isSideTrip) {
-      // Start or continue a side-trip
       if (currentSideTrip) {
-        // Close previous side-trip first (nested side-trip is rare but handle it)
         closeSideTrip(currentMainNode, currentSideTrip, t.state, t.at);
       }
       currentSideTrip = {
@@ -152,10 +202,7 @@ export function buildStateHistory(
         runs: [],
       };
     } else {
-      // Main-path state
       if (currentSideTrip && currentMainNode) {
-        // Close the active side-trip — we're returning to the main path
-        // Consume runs for the side-trip state now
         currentSideTrip.runs = consumeNextRun(currentSideTrip.state);
         currentSideTrip.returnState = t.state;
         currentSideTrip.returnedAt = t.at;
@@ -163,9 +210,8 @@ export function buildStateHistory(
         currentSideTrip = null;
       }
 
-      // Skip duplicate main-path nodes if returning to the same state (e.g., pr_open → changes_requested → pr_open)
+      // Skip duplicate when returning from a side-trip to the same state
       if (currentMainNode && currentMainNode.state === t.state) {
-        // Same main-path state revisited — don't create a new node
         continue;
       }
 
@@ -181,45 +227,63 @@ export function buildStateHistory(
     }
   }
 
-  // If we ended in a side-trip (e.g., currently repairing_ci), close it
+  // Close any open side-trip
   if (currentSideTrip && currentMainNode) {
     currentSideTrip.runs = consumeNextRun(currentSideTrip.state);
     currentSideTrip.returnState = currentFactoryState;
     currentMainNode.sideTrips.push(currentSideTrip);
   }
 
-  // Handle edge case: no transitions extracted but we have runs
-  if (nodes.length === 0 && runs.length > 0) {
-    // Seed with delegated state from earliest run
-    const earliest = runs[0]!;
-    nodes.push({
-      state: "delegated",
-      enteredAt: earliest.startedAt,
-      isCurrent: currentFactoryState === "delegated",
-      runs: [],
-      sideTrips: [],
-    });
+  // Distribute remaining unconsumed runs to matching nodes
+  for (const [state, remaining] of runQueues) {
+    if (remaining.length === 0) continue;
 
-    const implState = RUN_TYPE_TO_STATE[earliest.runType] ?? "implementing";
-    nodes.push({
-      state: implState,
-      enteredAt: earliest.startedAt,
-      isCurrent: currentFactoryState === implState,
-      runs: consumeNextRun(implState),
-      sideTrips: [],
-    });
+    // Find the last node (or side-trip) matching this state
+    let target: StateHistoryNode | SideTripNode | undefined;
+    for (let i = nodes.length - 1; i >= 0; i--) {
+      const node = nodes[i]!;
+      if (node.state === state) { target = node; break; }
+      for (let j = node.sideTrips.length - 1; j >= 0; j--) {
+        if (node.sideTrips[j]!.state === state) { target = node.sideTrips[j]; break; }
+      }
+      if (target) break;
+    }
+
+    if (target) {
+      target.runs.push(...remaining);
+    }
+    remaining.length = 0;
   }
 
-  // Mark the current state
+  return nodes;
+}
+
+// ─── Main entry point ────────────────────────────────────────────
+
+export function buildStateHistory(
+  runs: TimelineRunInput[],
+  feedEvents: OperatorFeedEvent[],
+  currentFactoryState: string,
+  activeRunId: number | null,
+): StateHistoryNode[] {
+  const transitions = extractTransitions(feedEvents);
+
+  const nodes = transitions.length > 0
+    ? buildFromEvents(runs, transitions, currentFactoryState)
+    : buildFromRuns(runs, currentFactoryState);
+
+  if (nodes.length === 0) return [];
+
   markCurrent(nodes, currentFactoryState);
 
-  // Mark active run
   if (activeRunId !== null) {
     markActiveRun(nodes, activeRunId);
   }
 
   return nodes;
 }
+
+// ─── Helpers ─────────────────────────────────────────────────────
 
 function closeSideTrip(
   mainNode: StateHistoryNode | null,
@@ -234,8 +298,6 @@ function closeSideTrip(
 }
 
 function markCurrent(nodes: StateHistoryNode[], currentState: string): void {
-  // If current state is a side-trip state, mark the last main node as current
-  // (the side-trip is "in progress" from that main node)
   if (SIDE_TRIP_STATES.has(currentState)) {
     if (nodes.length > 0) {
       nodes[nodes.length - 1]!.isCurrent = true;
@@ -243,7 +305,6 @@ function markCurrent(nodes: StateHistoryNode[], currentState: string): void {
     return;
   }
 
-  // Find the last node matching the current state
   for (let i = nodes.length - 1; i >= 0; i--) {
     if (nodes[i]!.state === currentState) {
       nodes[i]!.isCurrent = true;
@@ -251,7 +312,6 @@ function markCurrent(nodes: StateHistoryNode[], currentState: string): void {
     }
   }
 
-  // Fallback: mark the last node
   if (nodes.length > 0) {
     nodes[nodes.length - 1]!.isCurrent = true;
   }

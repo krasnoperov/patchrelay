@@ -71,12 +71,25 @@ function RunLine({ run, index }: { run: HistoryRunInfo; index: number }): React.
   return (
     <Box>
       <Text color={runStatusColor(run.status)}>{runStatusSymbol(run.status)} </Text>
-      <Text dimColor>run #{index + 1} </Text>
+      <Text dimColor>#{index + 1} </Text>
       <Text>({label})</Text>
       {dur && <Text dimColor> {dur}</Text>}
       {isActive && <Text dimColor> ...</Text>}
     </Box>
   );
+}
+
+const MAX_VISIBLE_RUNS = 5;
+
+function RunSummary({ runs }: { runs: HistoryRunInfo[] }): React.JSX.Element {
+  const completed = runs.filter((r) => r.status === "completed").length;
+  const failed = runs.filter((r) => r.status === "failed").length;
+  const running = runs.filter((r) => r.status === "running").length;
+  const parts: string[] = [];
+  if (completed > 0) parts.push(`${completed} completed`);
+  if (failed > 0) parts.push(`${failed} failed`);
+  if (running > 0) parts.push(`${running} active`);
+  return <Text dimColor>{runs.length} runs: {parts.join(", ")}</Text>;
 }
 
 function PlanSteps({ plan }: { plan: Array<{ step: string; status: string }> }): React.JSX.Element {
@@ -168,6 +181,7 @@ function MainPathNode({
   const marker = node.isCurrent ? "\u25c9" : "\u25cb";
   const stateColor = node.isCurrent ? "green" : "white";
   const hasActiveRun = node.runs.some((r) => r.id === activeRunId);
+  const gutter = isLast && node.sideTrips.length === 0 ? "   " : " \u2502 ";
 
   return (
     <Box flexDirection="column">
@@ -181,27 +195,49 @@ function MainPathNode({
       {/* Reason (for non-initial states) */}
       {node.reason && (
         <Box>
-          <Text dimColor>{isLast && node.sideTrips.length === 0 ? "   " : " \u2502 "}</Text>
+          <Text dimColor>{gutter}</Text>
           <Text dimColor>{node.reason}</Text>
         </Box>
       )}
 
       {/* Runs */}
-      {node.runs.map((run, ri) => (
-        <Box key={`run-${run.id}`} flexDirection="column">
+      {node.runs.length > MAX_VISIBLE_RUNS ? (
+        <Box flexDirection="column">
           <Box>
-            <Text dimColor>{isLast && node.sideTrips.length === 0 ? "   " : " \u2502 "}</Text>
-            <RunLine run={run} index={runOffset + ri} />
+            <Text dimColor>{gutter}</Text>
+            <RunSummary runs={node.runs} />
           </Box>
-          {/* Show plan for active run */}
-          {run.id === activeRunId && plan && plan.length > 0 && (
-            <Box>
-              <Text dimColor>{isLast ? "   " : " \u2502 "}</Text>
-              <PlanSteps plan={plan} />
+          {node.runs.slice(0, 3).map((run, ri) => (
+            <Box key={`run-${run.id}`}>
+              <Text dimColor>{gutter}</Text>
+              <RunLine run={run} index={runOffset + ri} />
             </Box>
-          )}
+          ))}
+          <Box>
+            <Text dimColor>{gutter}  ... {node.runs.length - 4} more</Text>
+          </Box>
+          <Box key={`run-${node.runs[node.runs.length - 1]!.id}`}>
+            <Text dimColor>{gutter}</Text>
+            <RunLine run={node.runs[node.runs.length - 1]!} index={runOffset + node.runs.length - 1} />
+          </Box>
         </Box>
-      ))}
+      ) : (
+        node.runs.map((run, ri) => (
+          <Box key={`run-${run.id}`} flexDirection="column">
+            <Box>
+              <Text dimColor>{gutter}</Text>
+              <RunLine run={run} index={runOffset + ri} />
+            </Box>
+            {/* Show plan for active run */}
+            {run.id === activeRunId && plan && plan.length > 0 && (
+              <Box>
+                <Text dimColor>{gutter}</Text>
+                <PlanSteps plan={plan} />
+              </Box>
+            )}
+          </Box>
+        ))
+      )}
 
       {/* Side-trips */}
       {node.sideTrips.length > 0 && (
