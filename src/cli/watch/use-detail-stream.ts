@@ -64,6 +64,12 @@ async function rehydrate(
         endedAt?: string;
         threadId?: string;
         report?: StageReport;
+        events?: Array<{
+          id: number;
+          method: string;
+          createdAt: string;
+          parsedEvent?: Record<string, unknown>;
+        }>;
       }>;
       feedEvents?: OperatorFeedEvent[];
       liveThread?: CodexThreadSummary;
@@ -77,6 +83,7 @@ async function rehydrate(
       startedAt: r.startedAt,
       endedAt: r.endedAt,
       threadId: r.threadId,
+      ...(r.events ? { events: r.events } : {}),
       ...(r.report ? { report: r.report } : {}),
     }));
 

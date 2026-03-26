@@ -1,9 +1,9 @@
 import { Box, Text } from "ink";
-import type { TimelineEntry } from "./timeline-builder.ts";
+import type { TimelineDisplayRow, TimelineRunDetail } from "./timeline-presentation.ts";
 import { ItemLine } from "./ItemLine.tsx";
 
 interface TimelineRowProps {
-  entry: TimelineEntry;
+  entry: TimelineDisplayRow;
 }
 
 function formatTime(iso: string): string {
@@ -16,7 +16,7 @@ function formatDuration(startedAt: string, endedAt: string): string {
   if (seconds < 60) return `${seconds}s`;
   const minutes = Math.floor(seconds / 60);
   const s = seconds % 60;
-  return `${minutes}m${s > 0 ? ` ${s}s` : ""}`;
+  return `${minutes}m ${String(s).padStart(2, "0")}s`;
 }
 
 const CHECK_SYMBOLS: Record<string, string> = { passed: "\u2713", failed: "\u2717", pending: "\u25cf" };
@@ -29,57 +29,81 @@ const RUN_LABELS: Record<string, string> = {
   queue_repair: "merge fix",
 };
 
-function FeedRow({ entry }: { entry: TimelineEntry }): React.JSX.Element {
-  const feed = entry.feed!;
-  const label = feed.status ?? feed.feedKind;
+function runStatusColor(status: string): string {
+  if (status === "completed") return "green";
+  if (status === "failed") return "red";
+  if (status === "released") return "magenta";
+  if (status === "running") return "yellow";
+  return "white";
+}
+
+function runStatusLabel(status: string): string {
+  if (status === "running") return "running";
+  if (status === "released") return "released";
+  return status;
+}
+
+function detailColor(detail: TimelineRunDetail): string | undefined {
+  if (detail.tone === "command") return "white";
+  if (detail.tone === "user") return "yellow";
+  return undefined;
+}
+
+function detailPrefix(detail: TimelineRunDetail): string {
+  if (detail.tone === "command") return "$ ";
+  return "";
+}
+
+function FeedRow({ entry }: { entry: Extract<TimelineDisplayRow, { kind: "feed" }> }): React.JSX.Element {
+  const label = entry.feed.status ?? entry.feed.feedKind;
   return (
     <Box>
       <Text dimColor>{formatTime(entry.at)} </Text>
-      <Text color="cyan">{label.padEnd(14)}</Text>
-      <Text> {feed.summary}</Text>
+      <Text color="cyan">{label.padEnd(12)}</Text>
+      <Text> {entry.feed.summary}</Text>
     </Box>
   );
 }
 
-function RunStartRow({ entry }: { entry: TimelineEntry }): React.JSX.Element {
-  const run = entry.run!;
+function RunRow({ entry }: { entry: Extract<TimelineDisplayRow, { kind: "run" }> }): React.JSX.Element {
+  const run = entry.run;
+  const color = runStatusColor(run.status);
+  const duration = run.endedAt ? formatDuration(run.startedAt, run.endedAt) : undefined;
+
   return (
-    <Box>
-      <Text dimColor>{formatTime(entry.at)} </Text>
-      <Text bold color="yellow">{(RUN_LABELS[run.runType] ?? run.runType).padEnd(14)}</Text>
-      <Text bold> started</Text>
+    <Box flexDirection="column">
+      <Box>
+        <Text dimColor>{formatTime(entry.at)} </Text>
+        <Text bold color="yellow">{(RUN_LABELS[run.runType] ?? run.runType).padEnd(12)}</Text>
+        <Text color={color}> {runStatusLabel(run.status)}</Text>
+        {duration ? <Text dimColor>{` ${duration}`}</Text> : null}
+      </Box>
+      {entry.details.map((detail, index) => (
+        <Box key={`${entry.id}-detail-${index}`} paddingLeft={6}>
+          <Text dimColor>  </Text>
+          <Text wrap="wrap" {...(detailColor(detail) ? { color: detailColor(detail)! } : {})}>
+            {detailPrefix(detail)}{detail.text}
+          </Text>
+        </Box>
+      ))}
     </Box>
   );
 }
 
-function RunEndRow({ entry }: { entry: TimelineEntry }): React.JSX.Element {
-  const run = entry.run!;
-  const color = run.status === "completed" ? "green" : "red";
-  const dur = run.endedAt ? ` ${formatDuration(run.startedAt, run.endedAt)}` : "";
+function ItemRow({ entry }: { entry: Extract<TimelineDisplayRow, { kind: "item" }> }): React.JSX.Element {
   return (
-    <Box>
-      <Text dimColor>{formatTime(entry.at)} </Text>
-      <Text bold color={color}>{(RUN_LABELS[run.runType] ?? run.runType).padEnd(14)}</Text>
-      <Text bold color={color}> {run.status}</Text>
-      {dur ? <Text dimColor>{dur}</Text> : null}
+    <Box paddingLeft={6}>
+      <ItemLine item={entry.item} />
     </Box>
   );
 }
 
-function ItemRow({ entry }: { entry: TimelineEntry }): React.JSX.Element {
-  return (
-    <Box paddingLeft={2}>
-      <ItemLine item={entry.item!} isLast={false} />
-    </Box>
-  );
-}
-
-function CIChecksRow({ entry }: { entry: TimelineEntry }): React.JSX.Element {
-  const ci = entry.ciChecks!;
+function CIChecksRow({ entry }: { entry: Extract<TimelineDisplayRow, { kind: "ci-checks" }> }): React.JSX.Element {
+  const ci = entry.ciChecks;
   return (
     <Box>
       <Text dimColor>{formatTime(entry.at)} </Text>
-      <Text color={CHECK_COLORS[ci.overall] ?? "white"}>{"checks".padEnd(14)}</Text>
+      <Text color={CHECK_COLORS[ci.overall] ?? "white"}>{"checks".padEnd(12)}</Text>
       <Text> </Text>
       {ci.checks.map((check, i) => (
         <Text key={`c-${i}`}>
@@ -93,10 +117,13 @@ function CIChecksRow({ entry }: { entry: TimelineEntry }): React.JSX.Element {
 
 export function TimelineRow({ entry }: TimelineRowProps): React.JSX.Element {
   switch (entry.kind) {
-    case "feed": return <FeedRow entry={entry} />;
-    case "run-start": return <RunStartRow entry={entry} />;
-    case "run-end": return <RunEndRow entry={entry} />;
-    case "item": return <ItemRow entry={entry} />;
-    case "ci-checks": return <CIChecksRow entry={entry} />;
+    case "feed":
+      return <FeedRow entry={entry} />;
+    case "run":
+      return <RunRow entry={entry} />;
+    case "item":
+      return <ItemRow entry={entry} />;
+    case "ci-checks":
+      return <CIChecksRow entry={entry} />;
   }
 }

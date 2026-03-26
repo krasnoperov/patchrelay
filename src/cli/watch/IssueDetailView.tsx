@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useReducer } from "react";
 import { Box, Text } from "ink";
 import type { TimelineEntry, TimelineRunInput } from "./timeline-builder.ts";
-import type { DetailTab, WatchDiffSummary, WatchIssue, WatchIssueContext, WatchTokenUsage, OperatorFeedEvent } from "./watch-state.ts";
+import type { DetailTab, TimelineMode, WatchDiffSummary, WatchIssue, WatchIssueContext, WatchTokenUsage, OperatorFeedEvent } from "./watch-state.ts";
 import { Timeline } from "./Timeline.tsx";
 import { StateHistoryView } from "./StateHistoryView.tsx";
 import { buildStateHistory } from "./history-builder.ts";
@@ -19,6 +19,7 @@ interface IssueDetailViewProps {
   plan: Array<{ step: string; status: string }> | null;
   issueContext: WatchIssueContext | null;
   detailTab: DetailTab;
+  timelineMode: TimelineMode;
   rawRuns: TimelineRunInput[];
   rawFeedEvents: OperatorFeedEvent[];
 }
@@ -43,13 +44,13 @@ function ElapsedTime({ startedAt }: { startedAt: string }): React.JSX.Element {
 
 export function IssueDetailView({
   issue, timeline, follow, activeRunStartedAt, activeRunId, tokenUsage, diffSummary, plan, issueContext,
-  detailTab, rawRuns, rawFeedEvents,
+  detailTab, timelineMode, rawRuns, rawFeedEvents,
 }: IssueDetailViewProps): React.JSX.Element {
   if (!issue) {
     return (
       <Box flexDirection="column">
         <Text color="red">Issue not found.</Text>
-        <HelpBar view="detail" follow={follow} detailTab={detailTab} />
+        <HelpBar view="detail" follow={follow} detailTab={detailTab} timelineMode={timelineMode} />
       </Box>
     );
   }
@@ -74,6 +75,7 @@ export function IssueDetailView({
         {issue.prNumber !== undefined && <Text dimColor>#{issue.prNumber}</Text>}
         {activeRunStartedAt && <ElapsedTime startedAt={activeRunStartedAt} />}
         {meta.length > 0 && <Text dimColor>{meta.join("  ")}</Text>}
+        {detailTab === "timeline" && <Text dimColor>{timelineMode}</Text>}
         {follow && <Text color="yellow">follow</Text>}
       </Box>
       {issue.title && <Text>{issue.title}</Text>}
@@ -92,7 +94,7 @@ export function IssueDetailView({
           )}
 
           <Box marginTop={1} flexDirection="column">
-            <Timeline entries={timeline} follow={follow} />
+            <Timeline entries={timeline} follow={follow} mode={timelineMode} />
           </Box>
         </>
       ) : (
@@ -100,7 +102,7 @@ export function IssueDetailView({
       )}
 
       <Box marginTop={1}>
-        <HelpBar view="detail" follow={follow} detailTab={detailTab} />
+        <HelpBar view="detail" follow={follow} detailTab={detailTab} timelineMode={timelineMode} />
       </Box>
     </Box>
   );
