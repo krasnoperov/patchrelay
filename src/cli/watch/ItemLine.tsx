@@ -51,18 +51,19 @@ function cleanCommand(raw: string): string {
 function renderCommand(item: TimelineItemPayload): React.JSX.Element {
   const cmd = cleanCommand(item.command ?? "?");
   const exitCode = item.exitCode;
-  const exitLabel = exitCode !== undefined ? (exitCode === 0 ? "" : ` exit:${exitCode}`) : "";
+  const exitLabel = exitCode !== undefined && exitCode !== 0 ? ` exit:${exitCode}` : "";
   const duration = item.durationMs !== undefined ? ` ${(item.durationMs / 1000).toFixed(1)}s` : "";
+  const suffix = `${exitLabel}${duration}`;
   return (
     <Box flexDirection="column">
-      <Text>
+      <Text wrap="truncate-end">
         <Text dimColor>$ </Text>
-        <Text>{truncate(cmd, 80)}</Text>
+        <Text>{cmd}</Text>
         {exitLabel && <Text color="red">{exitLabel}</Text>}
-        {duration && <Text dimColor>{duration}</Text>}
+        {!exitLabel && suffix && <Text dimColor>{suffix}</Text>}
       </Text>
       {item.output && item.status === "inProgress" && (
-        <Text dimColor>  {truncate(item.output.split("\n").filter(Boolean).at(-1) ?? "", 100)}</Text>
+        <Text dimColor wrap="truncate-end">  {item.output.split("\n").filter(Boolean).at(-1) ?? ""}</Text>
       )}
     </Box>
   );

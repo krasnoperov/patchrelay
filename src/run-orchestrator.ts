@@ -361,6 +361,14 @@ export class RunOrchestrator {
     // Emit ephemeral progress activity to Linear for notable in-flight events
     this.maybeEmitProgressActivity(notification, run);
 
+    // Sync codex plan to Linear session when it updates
+    if (notification.method === "turn/plan/updated") {
+      const issue = this.db.getIssue(run.projectId, run.linearIssueId);
+      if (issue) {
+        void this.syncLinearSessionWithCodexPlan(issue, notification.params);
+      }
+    }
+
     if (notification.method !== "turn/completed") return;
 
     const thread = await this.readThreadWithRetry(threadId);
@@ -811,6 +819,48 @@ export class RunOrchestrator {
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       this.logger.warn({ issueKey: issue.issueKey, error: msg }, "Failed to update Linear plan");
+    }
+  }
+
+  private async syncLinearSessionWithCodexPlan(
+    issue: IssueRecord,
+    params: Record<string, unknown>,
+  ): Promise<void> {
+    if (!issue.agentSessionId) return;
+    const plan = params.plan;
+    if (!Array.isArray(plan)) return;
+
+    const STATUS_MAP: Record<string, "pending" | "inProgress" | "completed"> = {
+      pending: "pending",
+      inProgress: "inProgress",
+      completed: "completed",
+    };
+
+    const steps = plan.map((entry) => {
+      const e = entry as Record<string, unknown>;
+      const step = typeof e.step === "string" ? e.step : String(e.step ?? "");
+      const status = typeof e.status === "string" ? (STATUS_MAP[e.status] ?? "pending") : "pending";
+      return { content: step, status };
+    });
+
+    // Prepend a "Prepare workspace" completed step and append a "Merge" pending step
+    // to frame the codex plan within the PatchRelay lifecycle
+    const fullPlan = [
+      { content: "Prepare workspace", status: "completed" as const },
+      ...steps,
+      { content: "Merge", status: "pending" as const },
+    ];
+
+    try {
+      const linear = await this.linearProvider.forProject(issue.projectId);
+      if (!linear?.updateAgentSession) return;
+      await linear.updateAgentSession({
+        agentSessionId: issue.agentSessionId,
+        plan: fullPlan,
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      this.logger.warn({ issueKey: issue.issueKey, error: msg }, "Failed to sync codex plan to Linear");
     }
   }
 
