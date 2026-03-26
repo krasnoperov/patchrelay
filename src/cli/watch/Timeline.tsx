@@ -36,11 +36,11 @@ export function Timeline({ entries, follow, mode }: TimelineProps): React.JSX.El
     <Box flexDirection="column">
       {finalized.length > 0 && (
         <Static items={finalized}>
-          {(entry) => <TimelineRow key={entry.id} entry={entry} />}
+          {(entry) => <TimelineRow key={entry.id} entry={entry} mode={mode} />}
         </Static>
       )}
       {active.map((entry) => (
-        <TimelineRow key={entry.id} entry={entry} />
+        <TimelineRow key={entry.id} entry={entry} mode={mode} />
       ))}
     </Box>
   );

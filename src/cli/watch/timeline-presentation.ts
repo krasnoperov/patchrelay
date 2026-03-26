@@ -16,6 +16,7 @@ export type TimelineDisplayRow =
       finalized: boolean;
       run: TimelineRunPayload;
       details: TimelineRunDetail[];
+      items: TimelineVerboseItem[];
     }
   | {
       id: string;
@@ -44,7 +45,12 @@ export interface TimelineRunDetail {
   text: string;
 }
 
-interface CompactRunAccumulator {
+export interface TimelineVerboseItem {
+  at: string;
+  item: TimelineItemPayload;
+}
+
+interface RunAccumulator {
   id: string;
   at: string;
   run: TimelineRunPayload;
@@ -57,57 +63,107 @@ export function buildTimelineRows(entries: TimelineEntry[], mode: TimelineMode):
 }
 
 function buildVerboseTimelineRows(entries: TimelineEntry[]): TimelineDisplayRow[] {
-  return entries.flatMap<TimelineDisplayRow>((entry) => {
+  const rows: TimelineDisplayRow[] = [];
+  const runs = new Map<number, RunAccumulator>();
+
+  for (const entry of entries) {
+    if (entry.kind === "run-start" && entry.runId !== undefined) {
+      const existing = runs.get(entry.runId);
+      if (!existing) {
+        const run = { ...entry.run! };
+        runs.set(entry.runId, {
+          id: `run-${entry.runId}`,
+          at: run.startedAt,
+          run,
+          items: [],
+          endedAt: run.endedAt,
+        });
+      }
+      continue;
+    }
+
+    if (entry.kind === "run-end" && entry.runId !== undefined) {
+      const existing = runs.get(entry.runId);
+      if (existing) {
+        existing.run = { ...entry.run! };
+        existing.endedAt = entry.run?.endedAt;
+      } else {
+        const run = { ...entry.run! };
+        runs.set(entry.runId, {
+          id: `run-${entry.runId}`,
+          at: run.startedAt,
+          run,
+          items: [],
+          endedAt: run.endedAt,
+        });
+      }
+      continue;
+    }
+
+    if (entry.kind === "item" && entry.runId !== undefined && runs.has(entry.runId)) {
+      runs.get(entry.runId)!.items.push(entry.item!);
+      continue;
+    }
+
     switch (entry.kind) {
-      case "run-start":
-        return [{
-          id: entry.id,
-          kind: "run",
-          at: entry.at,
-          finalized: false,
-          run: entry.run!,
-          details: [],
-        }];
-      case "run-end":
-        return [{
-          id: entry.id,
-          kind: "run",
-          at: entry.at,
-          finalized: true,
-          run: entry.run!,
-          details: [],
-        }];
       case "feed":
-        return [{
+        rows.push({
           id: entry.id,
           kind: "feed",
           at: entry.at,
           finalized: true,
           feed: entry.feed!,
-        }];
+        });
+        break;
       case "ci-checks":
-        return [{
+        rows.push({
           id: entry.id,
           kind: "ci-checks",
           at: entry.at,
           finalized: true,
           ciChecks: entry.ciChecks!,
-        }];
+        });
+        break;
       case "item":
-        return [{
+        rows.push({
           id: entry.id,
           kind: "item",
           at: entry.at,
           finalized: entry.item?.status !== "inProgress",
           item: entry.item!,
-        }];
+        });
+        break;
     }
+  }
+
+  for (const [runId, run] of runs) {
+    rows.push({
+      id: run.id,
+      kind: "run",
+      at: run.at,
+      finalized: run.items.every((item) => item.status !== "inProgress") && run.run.status !== "running",
+      run: { ...run.run, ...(run.endedAt ? { endedAt: run.endedAt } : {}) },
+      details: [],
+      items: entries
+        .filter((entry) => entry.kind === "item" && entry.runId === runId)
+        .map((entry) => ({ at: entry.at, item: entry.item! })),
+    });
+  }
+
+  rows.sort((left, right) => {
+    const cmp = left.at.localeCompare(right.at);
+    if (cmp !== 0) return cmp;
+    const kindCmp = rowKindOrder(left.kind) - rowKindOrder(right.kind);
+    if (kindCmp !== 0) return kindCmp;
+    return left.id.localeCompare(right.id);
   });
+
+  return rows;
 }
 
 function buildCompactTimelineRows(entries: TimelineEntry[]): TimelineDisplayRow[] {
   const rows: TimelineDisplayRow[] = [];
-  const runs = new Map<number, CompactRunAccumulator>();
+  const runs = new Map<number, RunAccumulator>();
 
   for (const entry of entries) {
     if (entry.kind === "run-start" && entry.runId !== undefined) {
@@ -193,7 +249,8 @@ function buildCompactTimelineRows(entries: TimelineEntry[]): TimelineDisplayRow[
       at: run.at,
       finalized: status !== "running",
       run: { ...run.run, status, ...(run.endedAt ? { endedAt: run.endedAt } : {}) },
-      details: summarizeRunDetails(run.items, status),
+      details: summarizeRunDetails(run.items),
+      items: [],
     });
   }
 
@@ -228,7 +285,7 @@ function resolveCompactRunStatus(run: TimelineRunPayload, items: TimelineItemPay
   return run.status === "queued" ? "queued" : "running";
 }
 
-function summarizeRunDetails(items: TimelineItemPayload[], status: string): TimelineRunDetail[] {
+function summarizeRunDetails(items: TimelineItemPayload[]): TimelineRunDetail[] {
   const details: TimelineRunDetail[] = [];
 
   const latestAgentMessage = findLatest(items, (item) => item.type === "agentMessage" && Boolean(item.text?.trim()));
@@ -240,14 +297,14 @@ function summarizeRunDetails(items: TimelineItemPayload[], status: string): Time
   if (latestUserMessage && !latestAgentMessage) {
     details.push({
       tone: "user",
-      text: `you: ${summarizeNarrative(latestUserMessage.text ?? "", 120)}`,
+      text: `you: ${summarizeNarrative(latestUserMessage.text ?? "")}`,
     });
   }
 
   if (latestAgentMessage) {
     details.push({
       tone: "message",
-      text: summarizeNarrative(latestAgentMessage.text ?? "", status === "running" ? 140 : 180),
+      text: summarizeNarrative(latestAgentMessage.text ?? ""),
     });
   }
 
@@ -276,7 +333,7 @@ function summarizeRunDetails(items: TimelineItemPayload[], status: string): Time
   return dedupeDetails(details).slice(0, 3);
 }
 
-function summarizeNarrative(input: string, max: number): string {
+function summarizeNarrative(input: string): string {
   const normalized = input
     .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
     .replace(/`([^`]+)`/g, "$1")
@@ -284,8 +341,7 @@ function summarizeNarrative(input: string, max: number): string {
     .trim();
   if (!normalized) return "";
 
-  const sentence = normalized.match(/^(.+?[.!?])(?:\s|$)/)?.[1] ?? normalized;
-  return truncate(sentence, max);
+  return normalized.match(/^(.+?[.!?])(?:\s|$)/)?.[1] ?? normalized;
 }
 
 function summarizeFileChanges(changes: unknown[]): string {
@@ -361,14 +417,10 @@ function rowKindOrder(kind: TimelineDisplayRow["kind"]): number {
   }
 }
 
-function truncate(text: string, max: number): string {
-  return text.length > max ? `${text.slice(0, Math.max(0, max - 3))}...` : text;
-}
-
 function cleanCommand(raw: string): string {
   const bashMatch = raw.match(/^\/bin\/(?:ba)?sh\s+-\w*c\s+['"](.+?)['"]$/s);
-  if (bashMatch?.[1]) return truncate(bashMatch[1], 120);
+  if (bashMatch?.[1]) return bashMatch[1];
   const bashMatch2 = raw.match(/^\/bin\/(?:ba)?sh\s+-\w*c\s+"(.+?)"$/s);
-  if (bashMatch2?.[1]) return truncate(bashMatch2[1], 120);
-  return truncate(raw, 120);
+  if (bashMatch2?.[1]) return bashMatch2[1];
+  return raw;
 }

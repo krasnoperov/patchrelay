@@ -5,11 +5,6 @@ interface ItemLineProps {
   item: TimelineItemPayload;
 }
 
-function truncate(text: string, max: number): string {
-  const line = text.replace(/\s+/g, " ").trim();
-  return line.length > max ? `${line.slice(0, Math.max(0, max - 3))}...` : line;
-}
-
 function cleanCommand(raw: string): string {
   const bashMatch = raw.match(/^\/bin\/(?:ba)?sh\s+-\w*c\s+['"](.+?)['"]$/s);
   if (bashMatch?.[1]) return bashMatch[1];
@@ -28,7 +23,7 @@ function summarizeToolCall(item: TimelineItemPayload): string {
 }
 
 function summarizeText(item: TimelineItemPayload): string {
-  return truncate(item.text ?? "", 160);
+  return (item.text ?? "").replace(/\s+/g, " ").trim();
 }
 
 function itemPrefix(item: TimelineItemPayload): string {
@@ -43,7 +38,7 @@ function itemText(item: TimelineItemPayload): string | undefined {
     case "reasoning":
       return summarizeText(item);
     case "commandExecution":
-      return truncate(cleanCommand(item.command ?? "?"), 140);
+      return cleanCommand(item.command ?? "?");
     case "fileChange":
       return summarizeFileChange(item);
     case "mcpToolCall":
@@ -71,12 +66,14 @@ export function ItemLine({ item }: ItemLineProps): React.JSX.Element {
   const color = itemColor(item);
 
   return (
-    <Box flexDirection="column">
-      <Text wrap="wrap" {...(color ? { color } : {})}>
+    <Box flexDirection="column" gap={1}>
+      <Text wrap="wrap" bold={item.type === "agentMessage"} {...(color ? { color } : {})}>
         {itemPrefix(item)}{text}
       </Text>
       {item.output && item.status === "inProgress" && (
-        <Text dimColor wrap="truncate-end">{truncate(item.output.split("\n").filter(Boolean).at(-1) ?? "", 120)}</Text>
+        <Box paddingLeft={2}>
+          <Text dimColor wrap="wrap">{item.output.split("\n").filter(Boolean).at(-1) ?? ""}</Text>
+        </Box>
       )}
     </Box>
   );

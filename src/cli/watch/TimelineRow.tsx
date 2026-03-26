@@ -1,9 +1,11 @@
 import { Box, Text } from "ink";
+import type { TimelineMode } from "./timeline-presentation.ts";
 import type { TimelineDisplayRow, TimelineRunDetail } from "./timeline-presentation.ts";
 import { ItemLine } from "./ItemLine.tsx";
 
 interface TimelineRowProps {
   entry: TimelineDisplayRow;
+  mode: TimelineMode;
 }
 
 function formatTime(iso: string): string {
@@ -57,10 +59,14 @@ function detailPrefix(detail: TimelineRunDetail): string {
 function FeedRow({ entry }: { entry: Extract<TimelineDisplayRow, { kind: "feed" }> }): React.JSX.Element {
   const label = entry.feed.status ?? entry.feed.feedKind;
   return (
-    <Box>
-      <Text dimColor>{formatTime(entry.at)} </Text>
-      <Text color="cyan">{label.padEnd(12)}</Text>
-      <Text> {entry.feed.summary}</Text>
+    <Box flexDirection="column" marginBottom={1}>
+      <Box>
+        <Text dimColor>{formatTime(entry.at)} </Text>
+        <Text color="cyan" bold>{label.padEnd(12)}</Text>
+      </Box>
+      <Box paddingLeft={6}>
+        <Text wrap="wrap">{entry.feed.summary}</Text>
+      </Box>
     </Box>
   );
 }
@@ -71,17 +77,17 @@ function RunRow({ entry }: { entry: Extract<TimelineDisplayRow, { kind: "run" }>
   const duration = run.endedAt ? formatDuration(run.startedAt, run.endedAt) : undefined;
 
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" marginBottom={1}>
       <Box>
         <Text dimColor>{formatTime(entry.at)} </Text>
         <Text bold color="yellow">{(RUN_LABELS[run.runType] ?? run.runType).padEnd(12)}</Text>
-        <Text color={color}> {runStatusLabel(run.status)}</Text>
+        <Text bold color={color}> {runStatusLabel(run.status)}</Text>
         {duration ? <Text dimColor>{` ${duration}`}</Text> : null}
       </Box>
+      {entry.details.length > 0 && <Text> </Text>}
       {entry.details.map((detail, index) => (
-        <Box key={`${entry.id}-detail-${index}`} paddingLeft={6}>
-          <Text dimColor>  </Text>
-          <Text wrap="wrap" {...(detailColor(detail) ? { color: detailColor(detail)! } : {})}>
+        <Box key={`${entry.id}-detail-${index}`} paddingLeft={6} marginBottom={index === entry.details.length - 1 ? 0 : 1}>
+          <Text wrap="wrap" {...(detailColor(detail) ? { color: detailColor(detail)! } : {})} bold={detail.tone === "message"}>
             {detailPrefix(detail)}{detail.text}
           </Text>
         </Box>
@@ -90,10 +96,22 @@ function RunRow({ entry }: { entry: Extract<TimelineDisplayRow, { kind: "run" }>
   );
 }
 
-function ItemRow({ entry }: { entry: Extract<TimelineDisplayRow, { kind: "item" }> }): React.JSX.Element {
+function ItemRow({
+  entry,
+  mode,
+}: {
+  entry: Extract<TimelineDisplayRow, { kind: "item" }>;
+  mode: TimelineMode;
+}): React.JSX.Element {
   return (
-    <Box paddingLeft={6}>
-      <ItemLine item={entry.item} />
+    <Box flexDirection="column" paddingLeft={6} marginBottom={mode === "verbose" ? 1 : 0}>
+      <Box marginBottom={1}>
+        <Text dimColor>{formatTime(entry.at)} </Text>
+        <Text dimColor>{entry.item.type}</Text>
+      </Box>
+      <Box paddingLeft={2}>
+        <ItemLine item={entry.item} />
+      </Box>
     </Box>
   );
 }
@@ -101,28 +119,31 @@ function ItemRow({ entry }: { entry: Extract<TimelineDisplayRow, { kind: "item" 
 function CIChecksRow({ entry }: { entry: Extract<TimelineDisplayRow, { kind: "ci-checks" }> }): React.JSX.Element {
   const ci = entry.ciChecks;
   return (
-    <Box>
-      <Text dimColor>{formatTime(entry.at)} </Text>
-      <Text color={CHECK_COLORS[ci.overall] ?? "white"}>{"checks".padEnd(12)}</Text>
-      <Text> </Text>
-      {ci.checks.map((check, i) => (
-        <Text key={`c-${i}`}>
-          <Text color={CHECK_COLORS[check.status] ?? "white"}>{CHECK_SYMBOLS[check.status] ?? " "}</Text>
-          <Text dimColor>{check.name} </Text>
-        </Text>
-      ))}
+    <Box flexDirection="column" marginBottom={1}>
+      <Box>
+        <Text dimColor>{formatTime(entry.at)} </Text>
+        <Text color={CHECK_COLORS[ci.overall] ?? "white"} bold>{"checks".padEnd(12)}</Text>
+      </Box>
+      <Box paddingLeft={6} gap={2} flexWrap="wrap">
+        {ci.checks.map((check, i) => (
+          <Text key={`c-${i}`}>
+            <Text color={CHECK_COLORS[check.status] ?? "white"}>{CHECK_SYMBOLS[check.status] ?? " "}</Text>
+            <Text dimColor>{check.name}</Text>
+          </Text>
+        ))}
+      </Box>
     </Box>
   );
 }
 
-export function TimelineRow({ entry }: TimelineRowProps): React.JSX.Element {
+export function TimelineRow({ entry, mode }: TimelineRowProps): React.JSX.Element {
   switch (entry.kind) {
     case "feed":
       return <FeedRow entry={entry} />;
     case "run":
       return <RunRow entry={entry} />;
     case "item":
-      return <ItemRow entry={entry} />;
+      return <ItemRow entry={entry} mode={mode} />;
     case "ci-checks":
       return <CIChecksRow entry={entry} />;
   }
