@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.24.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.23.5...patchrelay-v0.24.0) (2026-03-26)
+
+
+### Features
+
+* add state history view to watch TUI ([#178](https://github.com/krasnoperov/patchrelay/issues/178)) ([a522fc8](https://github.com/krasnoperov/patchrelay/commit/a522fc8be27bfb51b464af0874fb80c3e4c0887c))
+
 ## [0.23.5](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.23.4...patchrelay-v0.23.5) (2026-03-26)
 
 
