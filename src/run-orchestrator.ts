@@ -105,7 +105,13 @@ function buildRunPrompt(issue: IssueRecord, runType: RunType, repoPath: string, 
         context?.reviewerName ? `Reviewer: ${String(context.reviewerName)}` : "",
         context?.reviewBody ? `\n## Review comment\n\n${String(context.reviewBody)}` : "",
         "",
-        "Read the review feedback and PR comments (`gh pr view --comments`), address each point, run verification, commit and push.",
+        "Steps:",
+        "1. Read the review feedback and PR comments (`gh pr view --comments`).",
+        "2. Check the current diff (`git diff origin/main`) — a prior rebase may have already resolved some concerns (e.g., scope-bundling from stale commits).",
+        "3. For each review point: if already resolved, note why. If not, fix it.",
+        "4. Run verification, commit and push.",
+        "5. If you believe all concerns are resolved, request a re-review: `gh pr edit <PR#> --add-reviewer <reviewer>`.",
+        "   Do NOT just post a comment saying \"resolved\" — the reviewer must re-review to dismiss the CHANGES_REQUESTED state.",
         "",
       );
       break;
@@ -265,6 +271,11 @@ export class RunOrchestrator {
         await execCommand(gitBin, ["-C", worktreePath, "config", "user.email", this.botIdentity.email], { timeoutMs: 5_000 });
       }
 
+      // Freshen the worktree: fetch + rebase onto latest base branch.
+      // This prevents branch contamination when local main has drifted
+      // and avoids scope-bundling review rejections from stale commits.
+      await this.freshenWorktree(worktreePath, project, issue);
+
       // Run prepare-worktree hook
       const hookEnv = buildHookEnv(issue.issueKey ?? issue.linearIssueId, branchName, runType, worktreePath);
       const prepareResult = await runProjectHook(project.repoPath, "prepare-worktree", { cwd: worktreePath, env: hookEnv });
@@ -326,6 +337,67 @@ export class RunOrchestrator {
     const freshIssue = this.db.getIssue(item.projectId, item.issueId) ?? issue;
     void this.emitLinearActivity(freshIssue, buildRunStartedActivity(runType));
     void this.syncLinearSession(freshIssue, { activeRunType: runType });
+  }
+
+  // ─── Pre-run branch freshening ────────────────────────────────────
+
+  /**
+   * Fetch origin and rebase the worktree onto the latest base branch.
+   *
+   * Risks mitigated:
+   * - Dirty worktree from interrupted run → stash before, pop after
+   * - Conflicts → abort rebase, throw so the run fails with a clear reason
+   * - Already up-to-date → no-op, no force-push needed
+   * - Force-push invalidates reviews → only push if rebase actually moved commits
+   */
+  private async freshenWorktree(
+    worktreePath: string,
+    project: { github?: { baseBranch?: string }; repoPath: string },
+    issue: IssueRecord,
+  ): Promise<void> {
+    const gitBin = this.config.runner.gitBin;
+    const baseBranch = project.github?.baseBranch ?? "main";
+
+    // Stash any uncommitted changes from a previous interrupted run
+    const stashResult = await execCommand(gitBin, ["-C", worktreePath, "stash"], { timeoutMs: 30_000 });
+    const didStash = stashResult.exitCode === 0 && !stashResult.stdout?.includes("No local changes");
+
+    // Fetch latest base
+    const fetchResult = await execCommand(gitBin, ["-C", worktreePath, "fetch", "origin", baseBranch], { timeoutMs: 60_000 });
+    if (fetchResult.exitCode !== 0) {
+      this.logger.warn({ issueKey: issue.issueKey, stderr: fetchResult.stderr?.slice(0, 300) }, "Pre-run fetch failed, proceeding with current base");
+      if (didStash) await execCommand(gitBin, ["-C", worktreePath, "stash", "pop"], { timeoutMs: 10_000 });
+      return;
+    }
+
+    // Check if rebase is needed: is HEAD already on top of origin/baseBranch?
+    const mergeBaseResult = await execCommand(gitBin, ["-C", worktreePath, "merge-base", "--is-ancestor", `origin/${baseBranch}`, "HEAD"], { timeoutMs: 10_000 });
+    if (mergeBaseResult.exitCode === 0) {
+      // Already up-to-date — no rebase needed
+      this.logger.debug({ issueKey: issue.issueKey }, "Pre-run freshen: branch already up to date");
+      if (didStash) await execCommand(gitBin, ["-C", worktreePath, "stash", "pop"], { timeoutMs: 10_000 });
+      return;
+    }
+
+    // Rebase onto latest base
+    const rebaseResult = await execCommand(gitBin, ["-C", worktreePath, "rebase", `origin/${baseBranch}`], { timeoutMs: 120_000 });
+    if (rebaseResult.exitCode !== 0) {
+      // Abort the failed rebase and restore state
+      await execCommand(gitBin, ["-C", worktreePath, "rebase", "--abort"], { timeoutMs: 10_000 });
+      if (didStash) await execCommand(gitBin, ["-C", worktreePath, "stash", "pop"], { timeoutMs: 10_000 });
+      throw new Error(`Pre-run rebase onto origin/${baseBranch} failed with conflicts — escalate or resolve manually`);
+    }
+
+    // Push the rebased branch (force-with-lease to protect against concurrent pushes)
+    const pushResult = await execCommand(gitBin, ["-C", worktreePath, "push", "--force-with-lease"], { timeoutMs: 60_000 });
+    if (pushResult.exitCode !== 0) {
+      this.logger.warn({ issueKey: issue.issueKey, stderr: pushResult.stderr?.slice(0, 300) }, "Pre-run rebase push failed, proceeding anyway");
+    } else {
+      this.logger.info({ issueKey: issue.issueKey, baseBranch }, "Pre-run freshen: rebased and pushed onto latest base");
+    }
+
+    // Restore stashed changes
+    if (didStash) await execCommand(gitBin, ["-C", worktreePath, "stash", "pop"], { timeoutMs: 10_000 });
   }
 
   // ─── Notification handler ─────────────────────────────────────────
@@ -603,6 +675,15 @@ export class RunOrchestrator {
       factoryState: newState,
       ...(newState === "awaiting_queue" ? { pendingMergePrep: true } : {}),
       ...(pendingRunType ? { pendingRunType: pendingRunType as never } : {}),
+    });
+    this.feed?.publish({
+      level: "info",
+      kind: "stage",
+      issueKey: issue.issueKey,
+      projectId: issue.projectId,
+      stage: newState,
+      status: "reconciled",
+      summary: `Reconciliation: ${issue.factoryState} \u2192 ${newState}`,
     });
     if (newState === "awaiting_queue" || pendingRunType) {
       this.enqueueIssue(issue.projectId, issue.linearIssueId);
@@ -887,8 +968,10 @@ export class RunOrchestrator {
  */
 function resolvePostRunState(issue: IssueRecord): FactoryState | undefined {
   if (ACTIVE_RUN_STATES.has(issue.factoryState) && issue.prNumber) {
-    if (issue.prReviewState === "approved") return "awaiting_queue";
+    // Check merged first — a merged PR is both approved and merged,
+    // and "done" must take priority over "awaiting_queue".
     if (issue.prState === "merged") return "done";
+    if (issue.prReviewState === "approved") return "awaiting_queue";
     return "pr_open";
   }
   return undefined;
