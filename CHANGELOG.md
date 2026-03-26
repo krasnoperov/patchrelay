@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.24.1](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.24.0...patchrelay-v0.24.1) (2026-03-26)
+
+
+### Bug Fixes
+
+* history view handles many runs and missing feed events ([#180](https://github.com/krasnoperov/patchrelay/issues/180)) ([8b0c1c6](https://github.com/krasnoperov/patchrelay/commit/8b0c1c6de1c06757865f49c4112a97b2e9297099))
+
 ## [0.24.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.23.5...patchrelay-v0.24.0) (2026-03-26)
 
 
