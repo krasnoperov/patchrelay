@@ -619,8 +619,8 @@ test("public agent session status page validates token and exposes operator sess
   }
 });
 
-test("internal operator routes stay disabled by default", async () => {
-  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-http-disabled-"));
+test("issue routes are available on loopback without explicit operator API", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-http-loopback-"));
 
   try {
     const config = createConfig(baseDir);
@@ -629,6 +629,7 @@ test("internal operator routes stay disabled by default", async () => {
       {
         acceptWebhook: async () => ({ status: 200, body: { ok: true } }),
         getReadiness: () => ({ ready: true, codexStarted: true, linearConnected: true }),
+        getIssueOverview: async () => undefined,
       } as never,
       pino({ enabled: false }),
     );
@@ -637,6 +638,7 @@ test("internal operator routes stay disabled by default", async () => {
       method: "GET",
       url: "/api/issues/USE-42",
     });
+    // Route exists (management routes on loopback) but issue not found
     assert.equal(response.statusCode, 404);
 
     await app.close();
