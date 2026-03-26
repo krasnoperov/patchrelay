@@ -14,7 +14,7 @@ const HELP_TEXT: Record<WatchView, string> = {
 
 export function HelpBar({ view, follow }: HelpBarProps): React.JSX.Element {
   const text = view === "detail"
-    ? `j/k: prev/next  Esc: list  f: follow ${follow ? "on" : "off"}  p: prompt  r: retry  q: quit`
+    ? `j/k: prev/next  Esc: list  f: follow ${follow ? "on" : "off"}  p: prompt  s: stop  r: retry  q: quit`
     : HELP_TEXT[view];
   return (
     <Box>
