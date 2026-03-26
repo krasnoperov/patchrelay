@@ -38,16 +38,27 @@ function renderAgentMessage(item: TimelineItemPayload): React.JSX.Element {
   );
 }
 
+function cleanCommand(raw: string): string {
+  // Strip /bin/bash -lc '...' wrapper — show the inner command
+  const bashMatch = raw.match(/^\/bin\/(?:ba)?sh\s+-\w*c\s+['"](.+?)['"]$/s);
+  if (bashMatch?.[1]) return bashMatch[1];
+  // Strip /bin/bash -lc "..." (double quotes)
+  const bashMatch2 = raw.match(/^\/bin\/(?:ba)?sh\s+-\w*c\s+"(.+?)"$/s);
+  if (bashMatch2?.[1]) return bashMatch2[1];
+  return raw;
+}
+
 function renderCommand(item: TimelineItemPayload): React.JSX.Element {
-  const cmd = item.command ?? "?";
-  const exit = item.exitCode !== undefined ? ` exit:${item.exitCode}` : "";
+  const cmd = cleanCommand(item.command ?? "?");
+  const exitCode = item.exitCode;
+  const exitLabel = exitCode !== undefined ? (exitCode === 0 ? "" : ` exit:${exitCode}`) : "";
   const duration = item.durationMs !== undefined ? ` ${(item.durationMs / 1000).toFixed(1)}s` : "";
   return (
     <Box flexDirection="column">
       <Text>
         <Text dimColor>$ </Text>
-        <Text>{truncate(cmd, 60)}</Text>
-        {exit && <Text dimColor>{exit}</Text>}
+        <Text>{truncate(cmd, 80)}</Text>
+        {exitLabel && <Text color="red">{exitLabel}</Text>}
         {duration && <Text dimColor>{duration}</Text>}
       </Text>
       {item.output && item.status === "inProgress" && (
