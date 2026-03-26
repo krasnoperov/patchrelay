@@ -387,7 +387,33 @@ export class WebhookHandler {
     if (!triggerEventAllowed(project, normalized.triggerEvent)) return;
 
     const issue = this.db.getIssue(project.id, normalized.issue.id);
-    if (!issue?.activeRunId) return;
+    if (!issue) return;
+
+    // No active run — enqueue a run with the comment as context if appropriate
+    if (!issue.activeRunId) {
+      const ENQUEUEABLE_STATES = new Set(["pr_open", "changes_requested", "implementing", "delegated"]);
+      if (ENQUEUEABLE_STATES.has(issue.factoryState)) {
+        const runType = issue.prReviewState === "changes_requested" ? "review_fix" : "implementation";
+        this.db.upsertIssue({
+          projectId: project.id,
+          linearIssueId: normalized.issue.id,
+          pendingRunType: runType as never,
+          pendingRunContextJson: JSON.stringify({ userComment: normalized.comment.body.trim() }),
+        });
+        this.enqueueIssue(project.id, normalized.issue.id);
+        this.feed?.publish({
+          level: "info",
+          kind: "comment",
+          projectId: project.id,
+          issueKey: trackedIssue?.issueKey,
+          status: "enqueued",
+          summary: `Comment enqueued ${runType} run`,
+          detail: normalized.comment.body.slice(0, 200),
+        });
+      }
+      return;
+    }
+
     const run = this.db.getRun(issue.activeRunId);
     if (!run?.threadId || !run.turnId) return;
 

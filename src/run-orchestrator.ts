@@ -143,6 +143,7 @@ const PROGRESS_THROTTLE_MS = 10_000;
 export class RunOrchestrator {
   private readonly worktreeManager: WorktreeManager;
   private readonly progressThrottle = new Map<number, number>();
+  private activeThreadId: string | undefined;
   botIdentity?: GitHubAppBotIdentity;
 
   constructor(
@@ -330,8 +331,18 @@ export class RunOrchestrator {
   // ─── Notification handler ─────────────────────────────────────────
 
   async handleCodexNotification(notification: CodexNotification): Promise<void> {
-    const threadId = typeof notification.params.threadId === "string" ? notification.params.threadId : undefined;
+    // threadId is present on turn-level notifications but NOT on item-level ones.
+    // Fall back to the tracked active thread for item/delta notifications.
+    let threadId = typeof notification.params.threadId === "string" ? notification.params.threadId : undefined;
+    if (!threadId) {
+      threadId = this.activeThreadId;
+    }
     if (!threadId) return;
+
+    // Track the active thread from turn/started so item notifications can find it
+    if (notification.method === "turn/started" && threadId) {
+      this.activeThreadId = threadId;
+    }
 
     const run = this.db.getRunByThreadId(threadId);
     if (!run) return;
@@ -385,6 +396,7 @@ export class RunOrchestrator {
       void this.emitLinearActivity(failedIssue, buildRunFailureActivity(run.runType));
       void this.syncLinearSession(failedIssue, { activeRunType: run.runType });
       this.progressThrottle.delete(run.id);
+      this.activeThreadId = undefined;
       return;
     }
 
@@ -440,6 +452,7 @@ export class RunOrchestrator {
     }));
     void this.syncLinearSession(updatedIssue);
     this.progressThrottle.delete(run.id);
+    this.activeThreadId = undefined;
   }
 
   // ─── In-flight progress ──────────────────────────────────────────

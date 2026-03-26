@@ -264,12 +264,17 @@ export class PatchRelayService {
   subscribeCodexNotifications(
     listener: (event: { method: string; params: Record<string, unknown>; issueKey?: string; runId?: number }) => void,
   ): () => void {
+    let trackedThreadId: string | undefined;
     const handler = (notification: CodexNotification) => {
-      const threadId = typeof notification.params.threadId === "string"
+      let threadId = typeof notification.params.threadId === "string"
         ? notification.params.threadId
         : typeof notification.params.thread === "object" && notification.params.thread !== null && "id" in (notification.params.thread as Record<string, unknown>)
           ? String((notification.params.thread as Record<string, unknown>).id)
           : undefined;
+      // Item-level notifications lack threadId — use the tracked one from turn/started
+      if (!threadId) threadId = trackedThreadId;
+      if (notification.method === "turn/started" && threadId) trackedThreadId = threadId;
+      if (notification.method === "turn/completed") trackedThreadId = undefined;
       let issueKey: string | undefined;
       let runId: number | undefined;
       if (threadId) {
@@ -350,6 +355,42 @@ export class PatchRelayService {
       });
       return { delivered: false, queued: true };
     }
+  }
+
+  async stopIssue(issueKey: string): Promise<{ stopped: boolean } | { error: string } | undefined> {
+    const issue = this.db.getIssueByKey(issueKey);
+    if (!issue) return undefined;
+    if (!issue.activeRunId) return { error: "No active run to stop" };
+
+    const run = this.db.getRun(issue.activeRunId);
+    if (run?.threadId && run.turnId) {
+      try {
+        await this.codex.steerTurn({
+          threadId: run.threadId,
+          turnId: run.turnId,
+          input: "STOP: The operator has requested this run to halt immediately. Finish your current action, commit any partial progress, and stop.",
+        });
+      } catch {
+        // Turn may already be done
+      }
+    }
+
+    this.db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      factoryState: "awaiting_input" as never,
+    });
+
+    this.feed.publish({
+      level: "warn",
+      kind: "workflow",
+      issueKey: issue.issueKey,
+      projectId: issue.projectId,
+      status: "stopped",
+      summary: "Operator stopped the run",
+    });
+
+    return { stopped: true };
   }
 
   retryIssue(issueKey: string): { issueKey: string; runType: string } | { error: string } | undefined {
