@@ -14,8 +14,10 @@ export function Timeline({ entries, follow }: TimelineProps): React.JSX.Element 
   const rows = stdout?.rows ?? 24;
   const maxVisible = Math.max(5, rows - DETAIL_CHROME_ROWS);
 
-  const tailSize = follow ? Math.min(maxVisible, entries.length) : Math.min(maxVisible, entries.length);
-  const visible = entries.length > tailSize ? entries.slice(-tailSize) : entries;
+  // Follow mode: tail to screen height. Off: show everything.
+  const visible = follow && entries.length > maxVisible
+    ? entries.slice(-maxVisible)
+    : entries;
   const skipped = entries.length - visible.length;
 
   if (entries.length === 0) {
