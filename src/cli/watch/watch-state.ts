@@ -13,7 +13,7 @@ import {
 import type { CodexThreadSummary } from "../../types.ts";
 
 // Re-export for consumers
-export type { TimelineEntry, TimelineItemPayload } from "./timeline-builder.ts";
+export type { TimelineEntry, TimelineItemPayload, TimelineRunInput } from "./timeline-builder.ts";
 export type { OperatorFeedEvent } from "../../operator-feed.ts";
 
 // ─── Issue (list view) ────────────────────────────────────────────
@@ -67,6 +67,8 @@ export type WatchFilter = "all" | "active" | "non-done";
 
 export type WatchView = "list" | "detail" | "feed";
 
+export type DetailTab = "timeline" | "history";
+
 export interface WatchState {
   connected: boolean;
   issues: WatchIssue[];
@@ -76,7 +78,10 @@ export interface WatchState {
   filter: WatchFilter;
   follow: boolean;
   // Detail view state
+  detailTab: DetailTab;
   timeline: TimelineEntry[];
+  rawRuns: TimelineRunInput[];
+  rawFeedEvents: OperatorFeedEvent[];
   activeRunId: number | null;
   activeRunStartedAt: string | null;
   tokenUsage: WatchTokenUsage | null;
@@ -103,10 +108,14 @@ export type WatchAction =
   | { type: "enter-feed" }
   | { type: "exit-feed" }
   | { type: "feed-snapshot"; events: OperatorFeedEvent[] }
-  | { type: "feed-new-event"; event: OperatorFeedEvent };
+  | { type: "feed-new-event"; event: OperatorFeedEvent }
+  | { type: "switch-detail-tab"; tab: DetailTab };
 
 const DETAIL_INITIAL = {
+  detailTab: "timeline" as DetailTab,
   timeline: [] as TimelineEntry[],
+  rawRuns: [] as TimelineRunInput[],
+  rawFeedEvents: [] as OperatorFeedEvent[],
   activeRunId: null as number | null,
   activeRunStartedAt: null as string | null,
   tokenUsage: null as WatchTokenUsage | null,
@@ -225,6 +234,8 @@ export function watchReducer(state: WatchState, action: WatchAction): WatchState
       return {
         ...state,
         timeline,
+        rawRuns: action.runs,
+        rawFeedEvents: action.feedEvents,
         activeRunId: action.activeRunId,
         activeRunStartedAt: activeRun?.startedAt ?? null,
         issueContext: action.issueContext,
@@ -251,6 +262,9 @@ export function watchReducer(state: WatchState, action: WatchAction): WatchState
 
     case "feed-new-event":
       return { ...state, feedEvents: [...state.feedEvents, action.event] };
+
+    case "switch-detail-tab":
+      return { ...state, detailTab: action.tab };
   }
 }
 
@@ -290,12 +304,16 @@ function applyFeedEvent(state: WatchState, event: OperatorFeedEvent): WatchState
   issue.updatedAt = event.at;
   updated[index] = issue;
 
-  // Append to timeline if this event matches the active detail issue
-  const timeline = state.view === "detail" && state.activeDetailKey === event.issueKey
+  // Append to timeline and raw feed events if this event matches the active detail issue
+  const isActiveDetail = state.view === "detail" && state.activeDetailKey === event.issueKey;
+  const timeline = isActiveDetail
     ? appendFeedToTimeline(state.timeline, event)
     : state.timeline;
+  const rawFeedEvents = isActiveDetail
+    ? [...state.rawFeedEvents, event]
+    : state.rawFeedEvents;
 
-  return { ...state, issues: updated, timeline };
+  return { ...state, issues: updated, timeline, rawFeedEvents };
 }
 
 // ─── Codex Notification → Timeline + Metadata ─────────────────────

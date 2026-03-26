@@ -1,19 +1,26 @@
-import { useEffect, useReducer } from "react";
+import { useEffect, useMemo, useReducer } from "react";
 import { Box, Text } from "ink";
-import type { TimelineEntry } from "./timeline-builder.ts";
-import type { WatchDiffSummary, WatchIssue, WatchIssueContext, WatchTokenUsage } from "./watch-state.ts";
+import type { TimelineEntry, TimelineRunInput } from "./timeline-builder.ts";
+import type { DetailTab, WatchDiffSummary, WatchIssue, WatchIssueContext, WatchTokenUsage, OperatorFeedEvent } from "./watch-state.ts";
 import { Timeline } from "./Timeline.tsx";
+import { StateHistoryView } from "./StateHistoryView.tsx";
+import { buildStateHistory } from "./history-builder.ts";
 import { HelpBar } from "./HelpBar.tsx";
+import { planStepSymbol, planStepColor } from "./plan-helpers.ts";
 
 interface IssueDetailViewProps {
   issue: WatchIssue | undefined;
   timeline: TimelineEntry[];
   follow: boolean;
   activeRunStartedAt: string | null;
+  activeRunId: number | null;
   tokenUsage: WatchTokenUsage | null;
   diffSummary: WatchDiffSummary | null;
   plan: Array<{ step: string; status: string }> | null;
   issueContext: WatchIssueContext | null;
+  detailTab: DetailTab;
+  rawRuns: TimelineRunInput[];
+  rawFeedEvents: OperatorFeedEvent[];
 }
 
 function formatTokens(n: number): string {
@@ -34,26 +41,15 @@ function ElapsedTime({ startedAt }: { startedAt: string }): React.JSX.Element {
   return <Text dimColor>{minutes}m {String(seconds).padStart(2, "0")}s</Text>;
 }
 
-function planStepSymbol(status: string): string {
-  if (status === "completed") return "\u2713";
-  if (status === "inProgress") return "\u25b8";
-  return " ";
-}
-
-function planStepColor(status: string): string {
-  if (status === "completed") return "green";
-  if (status === "inProgress") return "yellow";
-  return "white";
-}
-
 export function IssueDetailView({
-  issue, timeline, follow, activeRunStartedAt, tokenUsage, diffSummary, plan, issueContext,
+  issue, timeline, follow, activeRunStartedAt, activeRunId, tokenUsage, diffSummary, plan, issueContext,
+  detailTab, rawRuns, rawFeedEvents,
 }: IssueDetailViewProps): React.JSX.Element {
   if (!issue) {
     return (
       <Box flexDirection="column">
         <Text color="red">Issue not found.</Text>
-        <HelpBar view="detail" follow={follow} />
+        <HelpBar view="detail" follow={follow} detailTab={detailTab} />
       </Box>
     );
   }
@@ -63,6 +59,11 @@ export function IssueDetailView({
   if (tokenUsage) meta.push(`${formatTokens(tokenUsage.inputTokens)} in / ${formatTokens(tokenUsage.outputTokens)} out`);
   if (diffSummary && diffSummary.filesChanged > 0) meta.push(`${diffSummary.filesChanged}f +${diffSummary.linesAdded} -${diffSummary.linesRemoved}`);
   if (issueContext?.runCount) meta.push(`${issueContext.runCount} runs`);
+
+  const history = useMemo(
+    () => buildStateHistory(rawRuns, rawFeedEvents, issue.factoryState, activeRunId),
+    [rawRuns, rawFeedEvents, issue.factoryState, activeRunId],
+  );
 
   return (
     <Box flexDirection="column">
@@ -77,23 +78,29 @@ export function IssueDetailView({
       </Box>
       {issue.title && <Text>{issue.title}</Text>}
 
-      {plan && plan.length > 0 && (
-        <Box flexDirection="column" marginTop={1}>
-          {plan.map((entry, i) => (
-            <Box key={`plan-${i}`} gap={1}>
-              <Text color={planStepColor(entry.status)}>[{planStepSymbol(entry.status)}]</Text>
-              <Text>{entry.step}</Text>
+      {detailTab === "timeline" ? (
+        <>
+          {plan && plan.length > 0 && (
+            <Box flexDirection="column" marginTop={1}>
+              {plan.map((entry, i) => (
+                <Box key={`plan-${i}`} gap={1}>
+                  <Text color={planStepColor(entry.status)}>[{planStepSymbol(entry.status)}]</Text>
+                  <Text>{entry.step}</Text>
+                </Box>
+              ))}
             </Box>
-          ))}
-        </Box>
+          )}
+
+          <Box marginTop={1} flexDirection="column">
+            <Timeline entries={timeline} follow={follow} />
+          </Box>
+        </>
+      ) : (
+        <StateHistoryView history={history} plan={plan} activeRunId={activeRunId} />
       )}
 
-      <Box marginTop={1} flexDirection="column">
-        <Timeline entries={timeline} follow={follow} />
-      </Box>
-
       <Box marginTop={1}>
-        <HelpBar view="detail" follow={follow} />
+        <HelpBar view="detail" follow={follow} detailTab={detailTab} />
       </Box>
     </Box>
   );
