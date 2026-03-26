@@ -108,6 +108,8 @@ export class PatchRelayDatabase {
     reviewFixAttempts?: number;
     mergePrepAttempts?: number;
     pendingMergePrep?: boolean;
+    zombieRecoveryAttempts?: number;
+    lastZombieRecoveryAt?: string | null;
   }): IssueRecord {
     const now = isoNow();
     const existing = this.getIssue(params.projectId, params.linearIssueId);
@@ -144,6 +146,8 @@ export class PatchRelayDatabase {
       if (params.reviewFixAttempts !== undefined) { sets.push("review_fix_attempts = @reviewFixAttempts"); values.reviewFixAttempts = params.reviewFixAttempts; }
       if (params.mergePrepAttempts !== undefined) { sets.push("merge_prep_attempts = @mergePrepAttempts"); values.mergePrepAttempts = params.mergePrepAttempts; }
       if (params.pendingMergePrep !== undefined) { sets.push("pending_merge_prep = @pendingMergePrep"); values.pendingMergePrep = params.pendingMergePrep ? 1 : 0; }
+      if (params.zombieRecoveryAttempts !== undefined) { sets.push("zombie_recovery_attempts = @zombieRecoveryAttempts"); values.zombieRecoveryAttempts = params.zombieRecoveryAttempts; }
+      if (params.lastZombieRecoveryAt !== undefined) { sets.push("last_zombie_recovery_at = @lastZombieRecoveryAt"); values.lastZombieRecoveryAt = params.lastZombieRecoveryAt; }
 
       this.connection.prepare(`UPDATE issues SET ${sets.join(", ")} WHERE project_id = @projectId AND linear_issue_id = @linearIssueId`).run(values);
     } else {
@@ -464,6 +468,8 @@ function mapIssueRow(row: Record<string, unknown>): IssueRecord {
     reviewFixAttempts: Number(row.review_fix_attempts ?? 0),
     mergePrepAttempts: Number(row.merge_prep_attempts ?? 0),
     pendingMergePrep: Boolean(row.pending_merge_prep),
+    zombieRecoveryAttempts: Number(row.zombie_recovery_attempts ?? 0),
+    ...(row.last_zombie_recovery_at !== null && row.last_zombie_recovery_at !== undefined ? { lastZombieRecoveryAt: String(row.last_zombie_recovery_at) } : {}),
   };
 }
 

@@ -152,6 +152,10 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
   addColumnIfMissing(connection, "issues", "description", "TEXT");
   addColumnIfMissing(connection, "issues", "priority", "INTEGER");
   addColumnIfMissing(connection, "issues", "estimate", "REAL");
+
+  // Zombie/stale recovery backoff
+  addColumnIfMissing(connection, "issues", "zombie_recovery_attempts", "INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(connection, "issues", "last_zombie_recovery_at", "TEXT");
 }
 
 function addColumnIfMissing(connection: DatabaseConnection, table: string, column: string, definition: string): void {

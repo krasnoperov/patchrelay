@@ -5,7 +5,7 @@ import type { GitHubAppBotIdentity } from "./github-app-token.ts";
 import type { CodexAppServerClient, CodexNotification } from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord, RunRecord } from "./db-types.ts";
-import { ACTIVE_RUN_STATES, type FactoryState, type RunType } from "./factory-state.ts";
+import { ACTIVE_RUN_STATES, TERMINAL_STATES, type FactoryState, type RunType } from "./factory-state.ts";
 import { buildHookEnv, runProjectHook } from "./hook-runner.ts";
 import {
   buildAgentSessionPlanForIssue,
@@ -37,6 +37,8 @@ import { execCommand } from "./utils.ts";
 const DEFAULT_CI_REPAIR_BUDGET = 3;
 const DEFAULT_QUEUE_REPAIR_BUDGET = 3;
 const DEFAULT_REVIEW_FIX_BUDGET = 3;
+const DEFAULT_ZOMBIE_RECOVERY_BUDGET = 5;
+const ZOMBIE_RECOVERY_BASE_DELAY_MS = 15_000; // 15s, 30s, 60s, 120s, 240s
 
 function slugify(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
@@ -330,6 +332,16 @@ export class RunOrchestrator {
     }
 
     this.db.updateRunThread(run.id, { threadId, turnId });
+
+    // Reset zombie recovery counter — this run started successfully
+    if (issue.zombieRecoveryAttempts > 0) {
+      this.db.upsertIssue({
+        projectId: item.projectId,
+        linearIssueId: item.issueId,
+        zombieRecoveryAttempts: 0,
+        lastZombieRecoveryAt: null,
+      });
+    }
 
     this.logger.info(
       { issueKey: issue.issueKey, runType, threadId, turnId },
@@ -696,29 +708,99 @@ export class RunOrchestrator {
     }
   }
 
+  /**
+   * After a zombie/stale run is cleared, decide whether to re-enqueue
+   * or escalate. Checks: PR already merged → done; budget exhausted →
+   * escalate; backoff delay not elapsed → skip.
+   */
+  private recoverOrEscalate(issue: IssueRecord, runType: RunType, reason: string): void {
+    // Re-read issue after the run was cleared (activeRunId is now null)
+    const fresh = this.db.getIssue(issue.projectId, issue.linearIssueId);
+    if (!fresh) return;
+
+    // If PR already merged, transition to done — no retry needed
+    if (fresh.prState === "merged") {
+      this.db.upsertIssue({
+        projectId: fresh.projectId,
+        linearIssueId: fresh.linearIssueId,
+        factoryState: "done",
+        zombieRecoveryAttempts: 0,
+        lastZombieRecoveryAt: null,
+      });
+      this.logger.info({ issueKey: fresh.issueKey, reason }, "Recovery: PR already merged — transitioning to done");
+      return;
+    }
+
+    // Budget check
+    const attempts = fresh.zombieRecoveryAttempts + 1;
+    if (attempts > DEFAULT_ZOMBIE_RECOVERY_BUDGET) {
+      this.db.upsertIssue({
+        projectId: fresh.projectId,
+        linearIssueId: fresh.linearIssueId,
+        factoryState: "escalated",
+      });
+      this.logger.warn({ issueKey: fresh.issueKey, attempts, reason }, "Recovery: budget exhausted — escalating");
+      this.feed?.publish({
+        level: "error",
+        kind: "workflow",
+        issueKey: fresh.issueKey,
+        projectId: fresh.projectId,
+        stage: "escalated",
+        status: "budget_exhausted",
+        summary: `${reason} recovery failed after ${DEFAULT_ZOMBIE_RECOVERY_BUDGET} attempts`,
+      });
+      return;
+    }
+
+    // Exponential backoff — skip if delay hasn't elapsed
+    if (fresh.lastZombieRecoveryAt) {
+      const elapsed = Date.now() - new Date(fresh.lastZombieRecoveryAt).getTime();
+      const delay = ZOMBIE_RECOVERY_BASE_DELAY_MS * Math.pow(2, fresh.zombieRecoveryAttempts);
+      if (elapsed < delay) {
+        this.logger.debug({ issueKey: fresh.issueKey, attempts: fresh.zombieRecoveryAttempts, delay, elapsed }, "Recovery: backoff not elapsed, skipping");
+        return;
+      }
+    }
+
+    // Re-enqueue with backoff tracking
+    this.db.upsertIssue({
+      projectId: fresh.projectId,
+      linearIssueId: fresh.linearIssueId,
+      pendingRunType: runType,
+      pendingRunContextJson: null,
+      zombieRecoveryAttempts: attempts,
+      lastZombieRecoveryAt: new Date().toISOString(),
+    });
+    this.enqueueIssue(fresh.projectId, fresh.linearIssueId);
+    this.logger.info({ issueKey: fresh.issueKey, attempts, reason }, "Recovery: re-enqueued with backoff");
+  }
+
   private async reconcileRun(run: RunRecord): Promise<void> {
     const issue = this.db.getIssue(run.projectId, run.linearIssueId);
     if (!issue) return;
 
+    // If the issue reached a terminal state while this run was active
+    // (e.g. pr_merged processed, DB manually edited), just release the run.
+    if (TERMINAL_STATES.has(issue.factoryState)) {
+      this.db.transaction(() => {
+        this.db.finishRun(run.id, { status: "released", failureReason: "Issue reached terminal state during active run" });
+        this.db.upsertIssue({ projectId: run.projectId, linearIssueId: run.linearIssueId, activeRunId: null });
+      });
+      this.logger.info({ issueKey: issue.issueKey, runId: run.id, factoryState: issue.factoryState }, "Reconciliation: released run on terminal issue");
+      return;
+    }
+
     // Zombie run: claimed in DB but Codex never started (no thread).
-    // This happens when the service crashes between claiming the run
-    // and starting the Codex turn. Re-enqueue instead of failing.
     if (!run.threadId) {
       this.logger.warn(
         { issueKey: issue.issueKey, runId: run.id, runType: run.runType },
-        "Zombie run detected (no thread) — clearing and re-enqueueing",
+        "Zombie run detected (no thread)",
       );
       this.db.transaction(() => {
         this.db.finishRun(run.id, { status: "failed", failureReason: "Zombie: never started (no thread after restart)" });
-        this.db.upsertIssue({
-          projectId: run.projectId,
-          linearIssueId: run.linearIssueId,
-          activeRunId: null,
-          pendingRunType: run.runType,
-          pendingRunContextJson: null,
-        });
+        this.db.upsertIssue({ projectId: run.projectId, linearIssueId: run.linearIssueId, activeRunId: null });
       });
-      this.enqueueIssue(run.projectId, run.linearIssueId);
+      this.recoverOrEscalate(issue, run.runType, "zombie");
       return;
     }
 
@@ -729,19 +811,13 @@ export class RunOrchestrator {
     } catch {
       this.logger.warn(
         { issueKey: issue.issueKey, runId: run.id, runType: run.runType, threadId: run.threadId },
-        "Stale thread during reconciliation — clearing and re-enqueueing",
+        "Stale thread during reconciliation",
       );
       this.db.transaction(() => {
         this.db.finishRun(run.id, { status: "failed", failureReason: "Stale thread after restart" });
-        this.db.upsertIssue({
-          projectId: run.projectId,
-          linearIssueId: run.linearIssueId,
-          activeRunId: null,
-          pendingRunType: run.runType,
-          pendingRunContextJson: null,
-        });
+        this.db.upsertIssue({ projectId: run.projectId, linearIssueId: run.linearIssueId, activeRunId: null });
       });
-      this.enqueueIssue(run.projectId, run.linearIssueId);
+      this.recoverOrEscalate(issue, run.runType, "stale_thread");
       return;
     }
 
