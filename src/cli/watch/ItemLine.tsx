@@ -3,148 +3,81 @@ import type { TimelineItemPayload } from "./watch-state.ts";
 
 interface ItemLineProps {
   item: TimelineItemPayload;
-  isLast: boolean;
-}
-
-const STATUS_SYMBOL: Record<string, string> = {
-  completed: "\u2713",
-  failed: "\u2717",
-  declined: "\u2717",
-  inProgress: "\u25cf",
-};
-
-function statusChar(status: string): string {
-  return STATUS_SYMBOL[status] ?? " ";
-}
-
-function statusColor(status: string): string {
-  if (status === "completed") return "green";
-  if (status === "failed" || status === "declined") return "red";
-  if (status === "inProgress") return "yellow";
-  return "white";
 }
 
 function truncate(text: string, max: number): string {
-  const line = text.replace(/\n/g, " ").trim();
-  return line.length > max ? `${line.slice(0, max - 3)}...` : line;
-}
-
-function renderAgentMessage(item: TimelineItemPayload): React.JSX.Element {
-  return (
-    <Text>
-      <Text dimColor>message: </Text>
-      <Text wrap="wrap">{item.text ?? ""}</Text>
-    </Text>
-  );
+  const line = text.replace(/\s+/g, " ").trim();
+  return line.length > max ? `${line.slice(0, Math.max(0, max - 3))}...` : line;
 }
 
 function cleanCommand(raw: string): string {
-  // Strip /bin/bash -lc '...' wrapper — show the inner command
   const bashMatch = raw.match(/^\/bin\/(?:ba)?sh\s+-\w*c\s+['"](.+?)['"]$/s);
   if (bashMatch?.[1]) return bashMatch[1];
-  // Strip /bin/bash -lc "..." (double quotes)
   const bashMatch2 = raw.match(/^\/bin\/(?:ba)?sh\s+-\w*c\s+"(.+?)"$/s);
   if (bashMatch2?.[1]) return bashMatch2[1];
   return raw;
 }
 
-function renderCommand(item: TimelineItemPayload): React.JSX.Element {
-  const cmd = cleanCommand(item.command ?? "?");
-  const exitCode = item.exitCode;
-  const exitLabel = exitCode !== undefined && exitCode !== 0 ? ` exit:${exitCode}` : "";
-  const duration = item.durationMs !== undefined ? ` ${(item.durationMs / 1000).toFixed(1)}s` : "";
-  const suffix = `${exitLabel}${duration}`;
-  return (
-    <Box flexDirection="column">
-      <Text wrap="truncate-end">
-        <Text dimColor>$ </Text>
-        <Text>{cmd}</Text>
-        {exitLabel && <Text color="red">{exitLabel}</Text>}
-        {!exitLabel && suffix && <Text dimColor>{suffix}</Text>}
-      </Text>
-      {item.output && item.status === "inProgress" && (
-        <Text dimColor wrap="truncate-end">  {item.output.split("\n").filter(Boolean).at(-1) ?? ""}</Text>
-      )}
-    </Box>
-  );
-}
-
-function renderFileChange(item: TimelineItemPayload): React.JSX.Element {
+function summarizeFileChange(item: TimelineItemPayload): string {
   const count = item.changes?.length ?? 0;
-  return (
-    <Text>
-      <Text dimColor>files: </Text>
-      <Text>{count} change{count !== 1 ? "s" : ""}</Text>
-    </Text>
-  );
+  return `updated ${count} file${count === 1 ? "" : "s"}`;
 }
 
-function renderToolCall(item: TimelineItemPayload): React.JSX.Element {
-  return (
-    <Text>
-      <Text dimColor>tool: </Text>
-      <Text>{item.toolName ?? item.type}</Text>
-    </Text>
-  );
+function summarizeToolCall(item: TimelineItemPayload): string {
+  return `used ${item.toolName ?? item.type}`;
 }
 
-function renderPlan(item: TimelineItemPayload): React.JSX.Element {
-  return (
-    <Text>
-      <Text dimColor>plan: </Text>
-      <Text>{truncate(item.text ?? "", 120)}</Text>
-    </Text>
-  );
+function summarizeText(item: TimelineItemPayload): string {
+  return truncate(item.text ?? "", 160);
 }
 
-function renderDefault(item: TimelineItemPayload): React.JSX.Element {
-  return (
-    <Text dimColor>{item.type}{item.text ? `: ${truncate(item.text, 80)}` : ""}</Text>
-  );
+function itemPrefix(item: TimelineItemPayload): string {
+  if (item.type === "commandExecution") return "$ ";
+  return "";
 }
 
-export function ItemLine({ item, isLast }: ItemLineProps): React.JSX.Element {
-  const prefix = isLast ? "\u2514" : "\u251c";
-  let content: React.JSX.Element;
-
+function itemText(item: TimelineItemPayload): string | undefined {
   switch (item.type) {
     case "agentMessage":
-      content = renderAgentMessage(item);
-      break;
+    case "plan":
+    case "reasoning":
+      return summarizeText(item);
     case "commandExecution":
-      content = renderCommand(item);
-      break;
+      return truncate(cleanCommand(item.command ?? "?"), 140);
     case "fileChange":
-      content = renderFileChange(item);
-      break;
+      return summarizeFileChange(item);
     case "mcpToolCall":
     case "dynamicToolCall":
-      content = renderToolCall(item);
-      break;
-    case "plan":
-      content = renderPlan(item);
-      break;
-    case "userMessage": {
-      const userText = item.text?.trim();
-      if (!userText) return <></>;
-      content = (
-        <Text>
-          <Text color="yellow">you: </Text>
-          <Text wrap="wrap">{userText}</Text>
-        </Text>
-      );
-      break;
-    }
+      return summarizeToolCall(item);
+    case "userMessage":
+      return `you: ${summarizeText(item)}`;
     default:
-      content = renderDefault(item);
-      break;
+      return item.text ? summarizeText(item) : item.type;
   }
+}
+
+function itemColor(item: TimelineItemPayload): string | undefined {
+  if (item.status === "failed" || item.status === "declined") return "red";
+  if (item.status === "inProgress") return "yellow";
+  if (item.type === "userMessage") return "yellow";
+  return undefined;
+}
+
+export function ItemLine({ item }: ItemLineProps): React.JSX.Element {
+  const text = itemText(item);
+  if (!text) {
+    return <></>;
+  }
+  const color = itemColor(item);
 
   return (
-    <Box>
-      <Text dimColor>{prefix} </Text>
-      <Text color={statusColor(item.status)}>{statusChar(item.status)} </Text>
-      {content}
+    <Box flexDirection="column">
+      <Text wrap="wrap" {...(color ? { color } : {})}>
+        {itemPrefix(item)}{text}
+      </Text>
+      {item.output && item.status === "inProgress" && (
+        <Text dimColor wrap="truncate-end">{truncate(item.output.split("\n").filter(Boolean).at(-1) ?? "", 120)}</Text>
+      )}
     </Box>
   );
 }

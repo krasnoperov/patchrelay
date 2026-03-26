@@ -83,6 +83,12 @@ export class IssueQueryService {
       startedAt: run.startedAt,
       endedAt: run.endedAt,
       threadId: run.threadId,
+      events: this.db.listThreadEvents(run.id).map((event) => ({
+        id: event.id,
+        method: event.method,
+        createdAt: event.createdAt,
+        parsedEvent: safeJsonParse<Record<string, unknown>>(event.eventJson),
+      })),
       ...(run.reportJson ? { report: JSON.parse(run.reportJson) as StageReport } : {}),
     }));
 

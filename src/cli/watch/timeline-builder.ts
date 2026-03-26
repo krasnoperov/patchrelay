@@ -56,6 +56,14 @@ export interface TimelineRunInput {
   endedAt?: string | undefined;
   threadId?: string | undefined;
   report?: StageReport | undefined;
+  events?: TimelineThreadEventInput[] | undefined;
+}
+
+export interface TimelineThreadEventInput {
+  id: number;
+  method: string;
+  createdAt: string;
+  parsedEvent?: Record<string, unknown> | undefined;
 }
 
 // ─── Build Timeline from Rehydration Data ─────────────────────────
@@ -88,9 +96,13 @@ export function buildTimelineFromRehydration(
       });
     }
 
-    // Items from completed run reports
-    if (run.report && run.id !== activeRunId) {
-      entries.push(...itemsFromReport(run.id, run.report, run.startedAt, run.endedAt));
+    // Items from completed run event history, with report fallback
+    if (run.id !== activeRunId) {
+      if (run.events && run.events.length > 0) {
+        entries.push(...itemsFromThreadEvents(run.id, run.events));
+      } else if (run.report) {
+        entries.push(...itemsFromReport(run.id, run.report, run.startedAt, run.endedAt));
+      }
     }
   }
 
@@ -266,6 +278,179 @@ function materializeItem(item: CodexThreadItem): TimelineItemPayload {
     default:
       return base;
   }
+}
+
+function itemsFromThreadEvents(runId: number, events: TimelineThreadEventInput[]): TimelineEntry[] {
+  const entries: TimelineEntry[] = [];
+
+  for (const event of events) {
+    const params = event.parsedEvent;
+    if (!params) continue;
+
+    switch (event.method) {
+      case "item/started": {
+        const item = materializeNotificationItem(params.item);
+        if (!item) break;
+        entries.push({
+          id: `event-${event.id}-item-${item.id}`,
+          at: event.createdAt,
+          kind: "item",
+          runId,
+          item,
+        });
+        break;
+      }
+
+      case "item/completed": {
+        const item = materializeNotificationItem(params.item);
+        if (!item) break;
+        const existing = findTimelineItem(entries, item.id);
+        if (existing) {
+          existing.item = mergeDefinedItemFields(existing.item!, item);
+        } else {
+          entries.push({
+            id: `event-${event.id}-item-${item.id}`,
+            at: event.createdAt,
+            kind: "item",
+            runId,
+            item,
+          });
+        }
+        break;
+      }
+
+      case "item/agentMessage/delta":
+      case "item/plan/delta":
+      case "item/reasoning/summaryTextDelta": {
+        const itemId = typeof params.itemId === "string" ? params.itemId : undefined;
+        const delta = typeof params.delta === "string" ? params.delta : undefined;
+        if (!itemId || !delta) break;
+        const existing = findTimelineItem(entries, itemId);
+        const target = existing ?? createReplayPlaceholder(entries, runId, event.createdAt, event.id, itemId, inferItemTypeFromDeltaMethod(event.method));
+        target.item = {
+          ...target.item!,
+          text: `${target.item?.text ?? ""}${delta}`,
+        };
+        break;
+      }
+
+      case "item/commandExecution/outputDelta": {
+        const itemId = typeof params.itemId === "string" ? params.itemId : undefined;
+        const delta = typeof params.delta === "string" ? params.delta : undefined;
+        if (!itemId || !delta) break;
+        const existing = findTimelineItem(entries, itemId);
+        const target = existing ?? createReplayPlaceholder(entries, runId, event.createdAt, event.id, itemId, "commandExecution");
+        target.item = {
+          ...target.item!,
+          output: `${target.item?.output ?? ""}${delta}`,
+        };
+        break;
+      }
+    }
+  }
+
+  return entries;
+}
+
+function findTimelineItem(entries: TimelineEntry[], itemId: string): TimelineEntry | undefined {
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const entry = entries[i]!;
+    if (entry.kind === "item" && entry.item?.id === itemId) {
+      return entry;
+    }
+  }
+  return undefined;
+}
+
+function createReplayPlaceholder(
+  entries: TimelineEntry[],
+  runId: number,
+  at: string,
+  eventId: number,
+  itemId: string,
+  type: string,
+): TimelineEntry {
+  const entry: TimelineEntry = {
+    id: `event-${eventId}-item-${itemId}`,
+    at,
+    kind: "item",
+    runId,
+    item: { id: itemId, type, status: "inProgress" },
+  };
+  entries.push(entry);
+  return entry;
+}
+
+function inferItemTypeFromDeltaMethod(method: string): string {
+  switch (method) {
+    case "item/agentMessage/delta":
+      return "agentMessage";
+    case "item/plan/delta":
+      return "plan";
+    case "item/reasoning/summaryTextDelta":
+      return "reasoning";
+    default:
+      return "unknown";
+  }
+}
+
+function materializeNotificationItem(raw: unknown): TimelineItemPayload | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const itemObj = raw as Record<string, unknown>;
+  const id = typeof itemObj.id === "string" ? itemObj.id : undefined;
+  const type = typeof itemObj.type === "string" ? itemObj.type : "unknown";
+  if (!id) return undefined;
+
+  const item: TimelineItemPayload = {
+    id,
+    type,
+    status: typeof itemObj.status === "string" ? itemObj.status : "inProgress",
+  };
+
+  if ((type === "agentMessage" || type === "userMessage" || type === "plan") && typeof itemObj.text === "string") {
+    item.text = itemObj.text;
+  }
+  if (type === "reasoning") {
+    if (Array.isArray(itemObj.summary)) {
+      item.text = (itemObj.summary as string[]).join("\n");
+    } else if (typeof itemObj.text === "string") {
+      item.text = itemObj.text;
+    }
+  }
+  if (type === "commandExecution") {
+    const cmd = itemObj.command;
+    item.command = Array.isArray(cmd) ? cmd.join(" ") : typeof cmd === "string" ? cmd : undefined;
+    if (typeof itemObj.aggregatedOutput === "string") item.output = itemObj.aggregatedOutput;
+  }
+  if (type === "fileChange" && Array.isArray(itemObj.changes)) {
+    item.changes = itemObj.changes as unknown[];
+  }
+  if (type === "mcpToolCall") {
+    item.toolName = `${String(itemObj.server ?? "")}/${String(itemObj.tool ?? "")}`;
+  }
+  if (type === "dynamicToolCall" && typeof itemObj.tool === "string") {
+    item.toolName = itemObj.tool;
+  }
+  if (typeof itemObj.exitCode === "number") item.exitCode = itemObj.exitCode;
+  if (typeof itemObj.durationMs === "number") item.durationMs = itemObj.durationMs;
+
+  return item;
+}
+
+function mergeDefinedItemFields(base: TimelineItemPayload, patch: TimelineItemPayload): TimelineItemPayload {
+  return {
+    ...base,
+    id: patch.id,
+    type: patch.type,
+    status: patch.status,
+    ...(patch.text !== undefined ? { text: patch.text } : {}),
+    ...(patch.command !== undefined ? { command: patch.command } : {}),
+    ...(patch.output !== undefined ? { output: patch.output } : {}),
+    ...(patch.exitCode !== undefined ? { exitCode: patch.exitCode } : {}),
+    ...(patch.durationMs !== undefined ? { durationMs: patch.durationMs } : {}),
+    ...(patch.changes !== undefined ? { changes: patch.changes } : {}),
+    ...(patch.toolName !== undefined ? { toolName: patch.toolName } : {}),
+  };
 }
 
 // ─── Feed Events to Timeline Entries ──────────────────────────────

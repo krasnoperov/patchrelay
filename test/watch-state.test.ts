@@ -379,6 +379,13 @@ test("toggle-follow flips follow state", () => {
   assert.equal(s2.follow, true);
 });
 
+test("toggle-timeline-mode flips compact and verbose", () => {
+  const s1 = reduce(initialWatchState, { type: "toggle-timeline-mode" });
+  assert.equal(s1.timelineMode, "verbose");
+  const s2 = reduce(s1, { type: "toggle-timeline-mode" });
+  assert.equal(s2.timelineMode, "compact");
+});
+
 // ─── Timeline Builder ─────────────────────────────────────────────
 
 test("buildTimelineFromRehydration sorts entries chronologically", () => {
@@ -413,6 +420,75 @@ test("buildTimelineFromRehydration aggregates CI checks from feed", () => {
   assert.equal(ciEntries.length, 1);
   assert.equal(ciEntries[0]?.ciChecks?.checks.length, 3);
   assert.equal(ciEntries[0]?.ciChecks?.overall, "failed");
+});
+
+test("buildTimelineFromRehydration replays completed run items from persisted thread events", () => {
+  const runs: TimelineRunInput[] = [{
+    id: 7,
+    runType: "implementation",
+    status: "completed",
+    startedAt: "2026-03-25T10:00:00.000Z",
+    endedAt: "2026-03-25T10:05:00.000Z",
+    events: [
+      {
+        id: 1,
+        method: "item/started",
+        createdAt: "2026-03-25T10:00:10.000Z",
+        parsedEvent: {
+          item: { id: "msg_1", type: "agentMessage", status: "inProgress" },
+        },
+      },
+      {
+        id: 2,
+        method: "item/agentMessage/delta",
+        createdAt: "2026-03-25T10:00:11.000Z",
+        parsedEvent: { itemId: "msg_1", delta: "Working through the issue." },
+      },
+      {
+        id: 3,
+        method: "item/completed",
+        createdAt: "2026-03-25T10:00:12.000Z",
+        parsedEvent: {
+          item: { id: "msg_1", type: "agentMessage", status: "completed" },
+        },
+      },
+      {
+        id: 4,
+        method: "item/started",
+        createdAt: "2026-03-25T10:00:20.000Z",
+        parsedEvent: {
+          item: { id: "cmd_1", type: "commandExecution", status: "inProgress", command: ["npm", "test"] },
+        },
+      },
+      {
+        id: 5,
+        method: "item/commandExecution/outputDelta",
+        createdAt: "2026-03-25T10:00:21.000Z",
+        parsedEvent: { itemId: "cmd_1", delta: "PASS signals\n" },
+      },
+      {
+        id: 6,
+        method: "item/completed",
+        createdAt: "2026-03-25T10:00:25.000Z",
+        parsedEvent: {
+          item: { id: "cmd_1", type: "commandExecution", status: "completed", exitCode: 0, durationMs: 5000 },
+        },
+      },
+    ],
+  }];
+
+  const timeline = buildTimelineFromRehydration(runs, [], null, null);
+  const items = timeline.filter((entry) => entry.kind === "item");
+
+  assert.equal(items.length, 2);
+  assert.equal(items[0]?.item?.id, "msg_1");
+  assert.equal(items[0]?.item?.text, "Working through the issue.");
+  assert.equal(items[0]?.item?.status, "completed");
+  assert.equal(items[1]?.item?.id, "cmd_1");
+  assert.equal(items[1]?.item?.command, "npm test");
+  assert.equal(items[1]?.item?.output, "PASS signals\n");
+  assert.equal(items[1]?.item?.exitCode, 0);
+  assert.equal(items[1]?.item?.status, "completed");
 });
 
 // ─── Feed Events ─────────────────────────────────────────────
