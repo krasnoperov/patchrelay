@@ -30,7 +30,7 @@ export async function buildHttpServer(
   app.get("/health", async () => ({ ok: true }));
 
   // --- GitHub webhook endpoint ---
-  app.post("/webhooks/github", {
+  app.post(config.webhookPath, {
     config: { rawBody: true },
   }, async (request, reply) => {
     if (config.webhookSecret) {

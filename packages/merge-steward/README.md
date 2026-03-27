@@ -59,13 +59,14 @@ Copy `config/steward.example.json` and adjust:
 | `requiredChecks` | Check names that must pass for admission (empty = any green) |
 | `pollIntervalMs` | Reconciliation loop interval |
 | `admissionLabel` | GitHub label that triggers queue admission |
+| `webhookPath` | Webhook endpoint path (default `/webhooks/steward`) |
 | `webhookSecret` | GitHub webhook secret for signature verification |
 
 ### GitHub Webhook
 
 Configure a webhook on the repository:
 
-- **Payload URL:** `http://your-host:8790/webhooks/github`
+- **Payload URL:** `http://your-host:8790/webhooks/steward`
 - **Content type:** `application/json`
 - **Secret:** same as `webhookSecret` in config
 - **Events:** Pull requests, Pull request reviews, Check suites, Pushes
@@ -111,7 +112,7 @@ WantedBy=multi-user.target
 | `/queue/entries/:id/update-head` | POST | Update head SHA (force-push) |
 | `/queue/incidents/:id` | GET | Get incident details |
 | `/queue/entries/:id/incidents` | GET | List incidents for an entry |
-| `/webhooks/github` | POST | GitHub webhook receiver |
+| `/webhooks/steward` | POST | GitHub webhook receiver (configurable via `webhookPath`) |
 
 ## Queue state machine
 
