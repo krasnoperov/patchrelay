@@ -519,7 +519,6 @@ export class RunOrchestrator {
         linearIssueId: run.linearIssueId,
         activeRunId: null,
         ...(postRunState ? { factoryState: postRunState } : {}),
-        ...(postRunState === "awaiting_queue" ? { pendingMergePrep: true } : {}),
       });
     });
 
@@ -645,12 +644,6 @@ export class RunOrchestrator {
         continue;
       }
 
-      // Awaiting queue with stale pending merge prep — re-enqueue
-      if (issue.factoryState === "awaiting_queue" && issue.pendingMergePrep) {
-        this.enqueueIssue(issue.projectId, issue.linearIssueId);
-        continue;
-      }
-
       // For pr_open issues with no review decision, check GitHub for stale metadata
       if (issue.factoryState === "pr_open" && !issue.prReviewState) {
         await this.reconcileFromGitHub(issue);
@@ -692,7 +685,6 @@ export class RunOrchestrator {
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       factoryState: newState,
-      ...(newState === "awaiting_queue" ? { pendingMergePrep: true } : {}),
       ...(pendingRunType ? { pendingRunType: pendingRunType as never } : {}),
     });
     this.feed?.publish({
@@ -897,8 +889,7 @@ export class RunOrchestrator {
           linearIssueId: run.linearIssueId,
           activeRunId: null,
           ...(postRunState ? { factoryState: postRunState } : {}),
-          ...(postRunState === "awaiting_queue" ? { pendingMergePrep: true } : {}),
-        });
+          });
       });
       if (postRunState) {
         this.feed?.publish({
@@ -952,7 +943,7 @@ export class RunOrchestrator {
   /** Add the merge queue admission label for external-queue projects (best-effort). */
   private maybeAddMergeQueueLabel(issue: IssueRecord, projectId: string): void {
     const project = this.config.projects.find((p) => p.id === projectId);
-    if (!project?.github?.useExternalMergeQueue || !issue.prNumber) return;
+    if (!project?.github?.repoFullName || !issue.prNumber) return;
     const label = project.github.mergeQueueLabel ?? "queue";
     const repo = project.github.repoFullName;
     if (!repo) return;

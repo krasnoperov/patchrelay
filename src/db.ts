@@ -106,8 +106,6 @@ export class PatchRelayDatabase {
     ciRepairAttempts?: number;
     queueRepairAttempts?: number;
     reviewFixAttempts?: number;
-    mergePrepAttempts?: number;
-    pendingMergePrep?: boolean;
     zombieRecoveryAttempts?: number;
     lastZombieRecoveryAt?: string | null;
   }): IssueRecord {
@@ -144,8 +142,6 @@ export class PatchRelayDatabase {
       if (params.ciRepairAttempts !== undefined) { sets.push("ci_repair_attempts = @ciRepairAttempts"); values.ciRepairAttempts = params.ciRepairAttempts; }
       if (params.queueRepairAttempts !== undefined) { sets.push("queue_repair_attempts = @queueRepairAttempts"); values.queueRepairAttempts = params.queueRepairAttempts; }
       if (params.reviewFixAttempts !== undefined) { sets.push("review_fix_attempts = @reviewFixAttempts"); values.reviewFixAttempts = params.reviewFixAttempts; }
-      if (params.mergePrepAttempts !== undefined) { sets.push("merge_prep_attempts = @mergePrepAttempts"); values.mergePrepAttempts = params.mergePrepAttempts; }
-      if (params.pendingMergePrep !== undefined) { sets.push("pending_merge_prep = @pendingMergePrep"); values.pendingMergePrep = params.pendingMergePrep ? 1 : 0; }
       if (params.zombieRecoveryAttempts !== undefined) { sets.push("zombie_recovery_attempts = @zombieRecoveryAttempts"); values.zombieRecoveryAttempts = params.zombieRecoveryAttempts; }
       if (params.lastZombieRecoveryAt !== undefined) { sets.push("last_zombie_recovery_at = @lastZombieRecoveryAt"); values.lastZombieRecoveryAt = params.lastZombieRecoveryAt; }
 
@@ -220,7 +216,7 @@ export class PatchRelayDatabase {
 
   listIssuesReadyForExecution(): Array<{ projectId: string; linearIssueId: string }> {
     const rows = this.connection
-      .prepare("SELECT project_id, linear_issue_id FROM issues WHERE (pending_run_type IS NOT NULL OR pending_merge_prep = 1) AND active_run_id IS NULL")
+      .prepare("SELECT project_id, linear_issue_id FROM issues WHERE pending_run_type IS NOT NULL AND active_run_id IS NULL")
       .all() as Array<Record<string, unknown>>;
     return rows.map((row) => ({
       projectId: String(row.project_id),
@@ -466,8 +462,6 @@ function mapIssueRow(row: Record<string, unknown>): IssueRecord {
     ciRepairAttempts: Number(row.ci_repair_attempts ?? 0),
     queueRepairAttempts: Number(row.queue_repair_attempts ?? 0),
     reviewFixAttempts: Number(row.review_fix_attempts ?? 0),
-    mergePrepAttempts: Number(row.merge_prep_attempts ?? 0),
-    pendingMergePrep: Boolean(row.pending_merge_prep),
     zombieRecoveryAttempts: Number(row.zombie_recovery_attempts ?? 0),
     ...(row.last_zombie_recovery_at !== null && row.last_zombie_recovery_at !== undefined ? { lastZombieRecoveryAt: String(row.last_zombie_recovery_at) } : {}),
   };
