@@ -23,6 +23,8 @@ export interface CIRunner {
   triggerRun(branch: string, sha: string): Promise<string>;
   getStatus(runId: string): Promise<CIStatus>;
   cancelRun(runId: string): Promise<void>;
+  /** Optional: check if the base branch CI is green. */
+  getMainStatus?(baseBranch: string): Promise<CIStatus>;
 }
 
 /**

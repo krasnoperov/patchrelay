@@ -85,6 +85,15 @@ export class Harness {
         return [];
       }
     };
+
+    // Sync GitHubSim SHA when git pushes (needed for revalidation).
+    this.gitSim.onPush = (branch: string, sha: string) => {
+      for (const entry of this.store.listAll(this.repoId)) {
+        if (entry.branch === branch) {
+          this.githubSim.updateSha(entry.prNumber, sha);
+        }
+      }
+    };
   }
 
   async init(): Promise<void> {

@@ -1,7 +1,8 @@
 import type { GitOperations, CIRunner, GitHubPRApi, RepairDispatcher } from "./interfaces.ts";
 import type { QueueStore } from "./store.ts";
-import type { QueueEntry, QueueEntryStatus } from "./types.ts";
+import type { QueueEntry, QueueEntryStatus, FailureClass } from "./types.ts";
 import { TERMINAL_STATUSES } from "./types.ts";
+import { classifyFailure } from "./classify.ts";
 
 export interface ReconcileContext {
   store: QueueStore;
@@ -80,6 +81,15 @@ export async function reconcile(ctx: ReconcileContext): Promise<void> {
  * On conflict: transition to repair_requested.
  */
 async function prepareHead(ctx: ReconcileContext, entry: QueueEntry): Promise<void> {
+  // Check if main CI is green before rebasing.
+  if (ctx.ci.getMainStatus) {
+    const mainStatus = await ctx.ci.getMainStatus(ctx.baseBranch);
+    if (mainStatus === "fail") {
+      ctx.onMainBroken();
+      return; // Stay in preparing_head, retry next tick.
+    }
+  }
+
   const result = await ctx.git.rebase(entry.branch, ctx.baseBranch);
 
   if (result.success) {
@@ -144,6 +154,28 @@ async function checkValidation(ctx: ReconcileContext, entry: QueueEntry): Promis
  * Merge the head PR into the base branch.
  */
 async function mergeHead(ctx: ReconcileContext, entry: QueueEntry): Promise<void> {
+  // Revalidation: check PR is still in a mergeable state.
+  const prStatus = await ctx.github.getStatus(entry.prNumber);
+
+  if (prStatus.merged) {
+    // Already merged externally — acknowledge.
+    ctx.store.transition(entry.id, "merged");
+    ctx.onMerged(entry.prNumber);
+    return;
+  }
+
+  if (!prStatus.reviewApproved) {
+    // Approval withdrawn.
+    ctx.store.transition(entry.id, "evicted");
+    return;
+  }
+
+  if (prStatus.headSha !== entry.headSha) {
+    // PR was force-pushed since validation. Reset.
+    ctx.store.updateHead(entry.id, prStatus.headSha);
+    return;
+  }
+
   const result = await ctx.git.merge(entry.branch, ctx.baseBranch);
   if (!result.success) {
     if (entry.repairAttempts >= entry.maxRepairAttempts) {
@@ -182,15 +214,29 @@ async function handleRepairRequest(ctx: ReconcileContext, entry: QueueEntry): Pr
     .filter((e) => e.position > updated.position)
     .map((e) => e.prNumber);
 
+  // Gather check data for classification and repair context.
+  const branchChecks = await ctx.github.listChecks(updated.prNumber);
+  const failedChecks = branchChecks
+    .filter((c) => c.conclusion === "failure" || c.conclusion === "timed_out" || c.conclusion === "cancelled")
+    .map((c) => ({ name: c.name, url: c.url, conclusion: c.conclusion as "failure" | "timed_out" | "cancelled" }));
+
+  const failureClass: FailureClass = failedChecks.length > 0
+    ? classifyFailure(branchChecks, []) // main baseline populated when real adapters land
+    : "integration_conflict";
+
+  const repairKind = failureClass === "branch_local" ? "ci_repair" as const : "queue_repair" as const;
+
   const repairReq = {
     id: `rr-${updated.id}-${newAttempts}`,
     entryId: updated.id,
     at: new Date().toISOString(),
-    kind: "queue_repair" as const,
-    failureClass: "integration_conflict" as const,
+    kind: repairKind,
+    failureClass,
     outcome: "pending" as const,
   };
   ctx.store.insertRepairRequest(repairReq);
+
+  const repairFailureClass = failureClass === "branch_local" ? "branch_local" as const : "integration_conflict" as const;
 
   await ctx.repair.requestRepair({
     queueEntryId: updated.id,
@@ -198,8 +244,8 @@ async function handleRepairRequest(ctx: ReconcileContext, entry: QueueEntry): Pr
     prNumber: updated.prNumber,
     prHeadSha: updated.headSha,
     baseSha: updated.baseSha,
-    failureClass: "integration_conflict",
-    failedChecks: [],
+    failureClass: repairFailureClass,
+    failedChecks,
     baselineChecksOnMain: [],
     queuePosition: updated.position,
     aheadPrNumbers: ahead,

@@ -29,6 +29,12 @@ export class GitHubSim implements GitHubPRApi {
     });
   }
 
+  /** Set review approval state. */
+  setReviewApproved(prNumber: number, approved: boolean): void {
+    const pr = this.prs.get(prNumber);
+    if (pr) pr.reviewApproved = approved;
+  }
+
   /** Update head SHA (e.g., after rebase/push). */
   updateSha(prNumber: number, sha: string): void {
     const pr = this.prs.get(prNumber);

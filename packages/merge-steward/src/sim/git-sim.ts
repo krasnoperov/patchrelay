@@ -31,6 +31,9 @@ export class GitSim implements GitOperations {
     return this.dir;
   }
 
+  /** Called after push — harness wires this to sync GitHubSim SHA. */
+  onPush: ((branch: string, sha: string) => void) | null = null;
+
   /** Initialize the repo with an initial commit on the base branch. */
   async init(baseBranch: string): Promise<string> {
     await this.vol.promises.mkdir(this.dir, { recursive: true });
@@ -177,8 +180,17 @@ export class GitSim implements GitOperations {
     }
   }
 
-  async push(): Promise<void> {
-    // No-op in sim — no remote.
+  async push(branch?: string): Promise<void> {
+    // No real remote in sim, but notify the onPush callback so
+    // GitHubSim can sync the SHA.
+    if (this.onPush && branch) {
+      try {
+        const sha = await this.headSha(branch);
+        this.onPush(branch, sha);
+      } catch {
+        // Branch may not exist in some edge cases.
+      }
+    }
   }
 
   async createBranch(name: string, from: string): Promise<void> {
