@@ -21,7 +21,7 @@ const nodeGlobals = {
 
 export default tseslint.config(
   {
-    ignores: ["dist/**", "node_modules/**", "*.tgz"],
+    ignores: ["dist/**", "node_modules/**", "*.tgz", "packages/*/dist/**"],
   },
   {
     files: ["**/*.js", "**/*.mjs"],
