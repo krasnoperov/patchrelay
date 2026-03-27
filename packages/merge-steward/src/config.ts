@@ -5,7 +5,8 @@ export const stewardConfigSchema = z.object({
   repoId: z.string().min(1),
   repoFullName: z.string().min(1),
   baseBranch: z.string().default("main"),
-  worktreeRoot: z.string().min(1),
+  /** Path to the steward's local clone of the repository. */
+  clonePath: z.string().min(1),
   gitBin: z.string().default("git"),
   maxRetries: z.number().int().min(0).default(2),
   flakyRetries: z.number().int().min(0).default(1),

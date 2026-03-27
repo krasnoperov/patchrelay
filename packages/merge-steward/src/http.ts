@@ -2,6 +2,8 @@ import fastify from "fastify";
 import type { Logger } from "pino";
 import { z } from "zod";
 import type { MergeStewardService } from "./service.ts";
+import type { StewardConfig } from "./config.ts";
+import { verifySignature, normalizeWebhook, processWebhookEvent } from "./webhook-handler.ts";
 
 const enqueueBody = z.object({
   prNumber: z.number().int(),
@@ -18,11 +20,43 @@ const updateHeadBody = z.object({
 
 export async function buildHttpServer(
   service: MergeStewardService,
+  config: StewardConfig,
   logger: Logger,
 ) {
   const app = fastify({ loggerInstance: logger, disableRequestLogging: true });
 
   app.get("/health", async () => ({ ok: true }));
+
+  // --- GitHub webhook endpoint ---
+  app.post("/webhooks/github", {
+    config: { rawBody: true },
+  }, async (request, reply) => {
+    if (config.webhookSecret) {
+      const sig = request.headers["x-hub-signature-256"] as string | undefined;
+      const body = (request as unknown as { rawBody?: Buffer }).rawBody ?? JSON.stringify(request.body);
+      if (!verifySignature(body, sig, config.webhookSecret)) {
+        return reply.status(401).send({ ok: false, error: "Invalid signature" });
+      }
+    }
+
+    const eventType = request.headers["x-github-event"] as string | undefined;
+    if (!eventType) {
+      return reply.status(400).send({ ok: false, error: "Missing x-github-event header" });
+    }
+
+    const event = normalizeWebhook(eventType, request.body as Record<string, unknown>);
+    if (!event) {
+      return { ok: true, ignored: true };
+    }
+
+    await processWebhookEvent(event, service, {
+      admissionLabel: config.admissionLabel,
+      baseBranch: config.baseBranch,
+      repoFullName: config.repoFullName,
+    }, logger);
+
+    return { ok: true };
+  });
 
   app.get("/queue/status", async () => ({
     entries: service.getStatus(),

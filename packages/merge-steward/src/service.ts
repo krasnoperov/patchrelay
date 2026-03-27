@@ -111,6 +111,77 @@ export class MergeStewardService {
     return this.store.listIncidents(entryId);
   }
 
+  /**
+   * Try to admit a PR into the queue. Checks:
+   * - Not already queued
+   * - PR has admission label (caller already verified)
+   * - PR is approved
+   * - Required checks are green
+   * Called from webhook handler on label add or review approved.
+   */
+  async tryAdmit(prNumber: number, branch: string, headSha: string): Promise<boolean> {
+    // Already queued?
+    const existing = this.store.getEntryByPR(this.config.repoId, prNumber);
+    if (existing) {
+      this.logger.debug({ prNumber }, "PR already queued, skipping admission");
+      return false;
+    }
+
+    // Check approval and CI via GitHub API.
+    try {
+      const status = await this.github.getStatus(prNumber);
+      if (!status.reviewApproved) {
+        this.logger.debug({ prNumber }, "PR not approved, skipping admission");
+        return false;
+      }
+
+      // Check if required checks pass. If no required checks configured,
+      // we accept any approved PR with the label.
+      if (this.config.requiredChecks.length > 0) {
+        const checks = await this.github.listChecks(prNumber);
+        const required = new Set(this.config.requiredChecks);
+        const passing = checks.filter((c) => c.conclusion === "success" && required.has(c.name));
+        if (passing.length < required.size) {
+          this.logger.debug({ prNumber, passing: passing.length, required: required.size }, "Required checks not all green");
+          return false;
+        }
+      }
+
+      this.enqueue({ prNumber, branch, headSha });
+      return true;
+    } catch (err) {
+      this.logger.warn({ prNumber, err }, "Failed to check admission eligibility");
+      return false;
+    }
+  }
+
+  /** Dequeue by PR number (webhook: PR closed or label removed). */
+  dequeueByPR(prNumber: number): void {
+    const entry = this.store.getEntryByPR(this.config.repoId, prNumber);
+    if (entry) {
+      this.store.dequeue(entry.id);
+      this.logger.info({ prNumber, entryId: entry.id }, "PR dequeued");
+    }
+  }
+
+  /** Update head SHA by PR number (webhook: PR force-pushed). */
+  updateHeadByPR(prNumber: number, headSha: string): void {
+    const entry = this.store.getEntryByPR(this.config.repoId, prNumber);
+    if (entry) {
+      this.store.updateHead(entry.id, headSha);
+      this.logger.info({ prNumber, entryId: entry.id, headSha }, "PR head updated via webhook");
+    }
+  }
+
+  /** Acknowledge an external merge (webhook: PR merged outside queue). */
+  acknowledgeExternalMerge(prNumber: number): void {
+    const entry = this.store.getEntryByPR(this.config.repoId, prNumber);
+    if (entry) {
+      this.store.transition(entry.id, "merged");
+      this.logger.info({ prNumber, entryId: entry.id }, "External merge acknowledged");
+    }
+  }
+
   private async runTick(): Promise<void> {
     if (this.tickInProgress) return;
     this.tickInProgress = true;

@@ -3,17 +3,17 @@ import type { MergeResult, RebaseResult } from "../types.ts";
 import { exec } from "../exec.ts";
 
 /**
- * Real git operations via shell git binary. Operates in a PatchRelay-managed
- * worktree. The worktree path is set at construction time.
+ * Real git operations via shell git binary. Operates in the steward's
+ * own local clone. The clone path is set at construction time.
  */
 export class ShellGitOperations implements GitOperations {
   constructor(
-    private readonly worktreePath: string,
+    private readonly clonePath: string,
     private readonly gitBin: string = "git",
   ) {}
 
   private git(args: string[], opts?: { allowNonZero?: boolean; timeoutMs?: number }) {
-    return exec(this.gitBin, ["-C", this.worktreePath, ...args], {
+    return exec(this.gitBin, ["-C", this.clonePath, ...args], {
       timeoutMs: opts?.timeoutMs ?? 120_000,
       allowNonZero: opts?.allowNonZero,
     });
