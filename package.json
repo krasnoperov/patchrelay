@@ -26,6 +26,9 @@
   "engines": {
     "node": ">=24.0.0"
   },
+  "workspaces": [
+    "packages/merge-steward"
+  ],
   "scripts": {
     "dev": "node --watch --experimental-transform-types src/index.ts",
     "build": "rm -rf dist && tsc -p tsconfig.json && chmod +x dist/index.js && node scripts/write-build-info.mjs",
