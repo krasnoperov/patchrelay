@@ -188,6 +188,53 @@ export class Harness {
     this.tickCount = 0;
   }
 
+  /** Push a new commit to main — advances the base SHA for non-spinning retries. */
+  async advanceMain(): Promise<void> {
+    await git.checkout({
+      fs: this.gitSim.volume,
+      dir: this.gitSim.repoDir,
+      ref: this.baseBranch,
+      force: true,
+    });
+    await this.gitSim.commitFile(
+      `main-advance-${Date.now()}.ts`,
+      `advance-${Date.now()}`,
+      "advance main",
+    );
+  }
+
+  /** Simulate an external force-push on a queued PR's branch. */
+  async forcePush(prNumber: number): Promise<void> {
+    const entry = this.store.getEntryByPR(this.repoId, prNumber);
+    if (!entry) return;
+    await git.checkout({
+      fs: this.gitSim.volume,
+      dir: this.gitSim.repoDir,
+      ref: entry.branch,
+      force: true,
+    });
+    await this.gitSim.commitFile(
+      `force-push-${Date.now()}.ts`,
+      `force-${Date.now()}`,
+      "external force-push",
+    );
+    const newSha = await this.gitSim.headSha(entry.branch);
+    this.githubSim.updateSha(prNumber, newSha);
+    this.store.updateHead(entry.id, newSha);
+    await git.checkout({
+      fs: this.gitSim.volume,
+      dir: this.gitSim.repoDir,
+      ref: this.baseBranch,
+      force: true,
+    });
+  }
+
+  /** Dequeue a PR (simulates label removal). */
+  dequeueByPR(prNumber: number): void {
+    const entry = this.store.getEntryByPR(this.repoId, prNumber);
+    if (entry) this.store.dequeue(entry.id);
+  }
+
   private buildContext(): ReconcileContext {
     return {
       store: this.store,
