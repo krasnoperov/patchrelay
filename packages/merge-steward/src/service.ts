@@ -114,7 +114,7 @@ export class MergeStewardService {
   /**
    * Try to admit a PR into the queue. Checks:
    * - Not already queued
-   * - PR has admission label (caller already verified)
+   * - PR has admission label
    * - PR is approved
    * - Required checks are green
    * Called from webhook handler on label add or review approved.
@@ -127,8 +127,15 @@ export class MergeStewardService {
       return false;
     }
 
-    // Check approval and CI via GitHub API.
+    // Check approval, label, and CI via GitHub API.
     try {
+      // Verify admission label is present.
+      const labels = await this.github.listLabels(prNumber);
+      if (!labels.includes(this.config.admissionLabel)) {
+        this.logger.debug({ prNumber }, "PR missing admission label, skipping");
+        return false;
+      }
+
       const status = await this.github.getStatus(prNumber);
       if (!status.reviewApproved) {
         this.logger.debug({ prNumber }, "PR not approved, skipping admission");

@@ -35,6 +35,7 @@ export interface GitHubPRApi {
   mergePR(prNumber: number, method: "squash" | "merge"): Promise<void>;
   getStatus(prNumber: number): Promise<PRStatus>;
   listChecks(prNumber: number): Promise<CheckResult[]>;
+  listLabels(prNumber: number): Promise<string[]>;
 }
 
 /**

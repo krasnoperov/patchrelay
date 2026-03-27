@@ -8,6 +8,7 @@ interface SimPR {
   merged: boolean;
   reviewApproved: boolean;
   checks: CheckResult[];
+  labels: string[];
 }
 
 /**
@@ -18,7 +19,7 @@ export class GitHubSim implements GitHubPRApi {
   private prs = new Map<number, SimPR>();
 
   /** Register a PR for simulation. */
-  addPR(pr: { number: number; branch: string; headSha: string; reviewApproved?: boolean }): void {
+  addPR(pr: { number: number; branch: string; headSha: string; reviewApproved?: boolean; labels?: string[] }): void {
     this.prs.set(pr.number, {
       number: pr.number,
       branch: pr.branch,
@@ -26,6 +27,7 @@ export class GitHubSim implements GitHubPRApi {
       merged: false,
       reviewApproved: pr.reviewApproved ?? true,
       checks: [],
+      labels: pr.labels ?? [],
     });
   }
 
@@ -73,6 +75,24 @@ export class GitHubSim implements GitHubPRApi {
     const pr = this.prs.get(prNumber);
     if (!pr) return [];
     return pr.checks;
+  }
+
+  async listLabels(prNumber: number): Promise<string[]> {
+    const pr = this.prs.get(prNumber);
+    if (!pr) return [];
+    return [...pr.labels];
+  }
+
+  /** Add a label to a PR. */
+  addLabel(prNumber: number, label: string): void {
+    const pr = this.prs.get(prNumber);
+    if (pr && !pr.labels.includes(label)) pr.labels.push(label);
+  }
+
+  /** Remove a label from a PR. */
+  removeLabel(prNumber: number, label: string): void {
+    const pr = this.prs.get(prNumber);
+    if (pr) pr.labels = pr.labels.filter((l) => l !== label);
   }
 }
 

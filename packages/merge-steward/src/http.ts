@@ -1,4 +1,5 @@
 import fastify from "fastify";
+import rawBody from "fastify-raw-body";
 import type { Logger } from "pino";
 import { z } from "zod";
 import type { MergeStewardService } from "./service.ts";
@@ -24,6 +25,7 @@ export async function buildHttpServer(
   logger: Logger,
 ) {
   const app = fastify({ loggerInstance: logger, disableRequestLogging: true });
+  await app.register(rawBody, { runFirst: true });
 
   app.get("/health", async () => ({ ok: true }));
 

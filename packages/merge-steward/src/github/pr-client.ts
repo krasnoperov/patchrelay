@@ -66,6 +66,25 @@ export class GitHubPRClient implements GitHubPRApi {
       return [];
     }
   }
+
+  async listLabels(prNumber: number): Promise<string[]> {
+    const result = await exec("gh", [
+      "pr", "view", String(prNumber),
+      "--repo", this.repoFullName,
+      "--json", "labels",
+    ], { allowNonZero: true });
+
+    if (result.exitCode !== 0) return [];
+
+    try {
+      const data = JSON.parse(result.stdout) as {
+        labels: Array<{ name: string }>;
+      };
+      return data.labels.map((l) => l.name);
+    } catch {
+      return [];
+    }
+  }
 }
 
 function mapConclusion(gh: string): CheckResult["conclusion"] {

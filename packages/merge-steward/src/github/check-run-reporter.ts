@@ -1,3 +1,7 @@
+import { writeFileSync, unlinkSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { randomUUID } from "node:crypto";
 import type { EvictionReporter } from "../interfaces.ts";
 import type { QueueEntry, IncidentRecord } from "../types.ts";
 import { exec } from "../exec.ts";
@@ -32,18 +36,22 @@ export class GitHubCheckRunReporter implements EvictionReporter {
       },
     });
 
-    await exec("gh", [
-      "api",
-      `repos/${this.repoFullName}/check-runs`,
-      "--method", "POST",
-      "--input", "-",
-    ], {
-      timeoutMs: 30_000,
-      env: { ...process.env, GH_INPUT: body },
-    }).catch(() => {
+    // gh api --input requires a file path (execFile can't pipe stdin).
+    // Write to temp file, pass path, clean up.
+    const tmpPath = join(tmpdir(), `steward-checkrun-${randomUUID()}.json`);
+    try {
+      writeFileSync(tmpPath, body);
+      await exec("gh", [
+        "api",
+        `repos/${this.repoFullName}/check-runs`,
+        "--method", "POST",
+        "--input", tmpPath,
+      ], { timeoutMs: 30_000 });
+    } catch {
       // Best-effort — the incident record is the source of truth.
-      // If the check run fails to create, the incident is still persisted.
-    });
+    } finally {
+      try { unlinkSync(tmpPath); } catch {}
+    }
 
     // Also try to remove the admission label (best-effort).
     await exec("gh", [
