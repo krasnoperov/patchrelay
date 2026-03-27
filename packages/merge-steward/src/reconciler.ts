@@ -82,6 +82,19 @@ async function prepareHead(ctx: ReconcileContext, entry: QueueEntry): Promise<vo
   }
 
   const currentBaseSha = await ctx.git.headSha(ctx.baseBranch);
+
+  // Budget exhausted — evict regardless of base change.
+  if (entry.retryAttempts >= entry.maxRetries && entry.lastFailedBaseSha !== null) {
+    await evictEntry(ctx, entry, "integration_conflict");
+    return;
+  }
+
+  // Non-spinning: if the last conflict was on this same base, skip the
+  // rebase entirely. Wait for main to advance before trying again.
+  if (entry.lastFailedBaseSha === currentBaseSha) {
+    return;
+  }
+
   const result = await ctx.git.rebase(entry.branch, ctx.baseBranch);
 
   if (result.success) {
@@ -99,11 +112,8 @@ async function prepareHead(ctx: ReconcileContext, entry: QueueEntry): Promise<vo
     if (entry.retryAttempts >= entry.maxRetries) {
       await evictEntry(ctx, entry, "integration_conflict",
         result.conflictFiles ? { conflictFiles: result.conflictFiles } : undefined);
-    } else if (entry.lastFailedBaseSha === currentBaseSha) {
-      // Same base as last conflict — don't spin. Wait for main to advance.
-      return;
     } else {
-      // Record this conflict and retry on next tick (after main changes).
+      // Record this conflict. Next tick will skip rebase until base changes.
       ctx.store.transition(entry.id, "preparing_head", {
         retryAttempts: entry.retryAttempts + 1,
         lastFailedBaseSha: currentBaseSha,

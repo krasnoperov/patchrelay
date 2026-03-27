@@ -34,7 +34,18 @@ export async function exec(
         maxBuffer: 10 * 1024 * 1024,
       },
       (error, stdout, stderr) => {
-        const exitCode = error && "code" in error ? (error.code as number) : 0;
+        // Timeouts always reject regardless of allowNonZero.
+        // When execFile times out, error.killed is true and error.code is null.
+        if (error && (error.killed || error.signal)) {
+          reject(new Error(
+            `Command timed out: ${command} ${args.join(" ")}\n` +
+            `Signal: ${error.signal ?? "SIGTERM"}\n` +
+            `stderr: ${stderr.slice(0, 500)}`,
+          ));
+          return;
+        }
+
+        const exitCode = error && typeof error.code === "number" ? error.code : 0;
         const result = { stdout, stderr, exitCode };
 
         if (error && !options?.allowNonZero) {
