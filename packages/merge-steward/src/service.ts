@@ -120,6 +120,12 @@ export class MergeStewardService {
    * Called from webhook handler on label add or review approved.
    */
   async tryAdmit(prNumber: number, branch: string, headSha: string): Promise<boolean> {
+    // Excluded branch?
+    if (this.config.excludeBranches.some((pattern) => matchGlob(pattern, branch))) {
+      this.logger.debug({ prNumber, branch }, "Branch excluded from admission");
+      return false;
+    }
+
     // Already queued?
     const existing = this.store.getEntryByPR(this.config.repoId, prNumber);
     if (existing) {
@@ -197,6 +203,7 @@ export class MergeStewardService {
         store: this.store,
         repoId: this.config.repoId,
         baseBranch: this.config.baseBranch,
+        remotePrefix: "origin/",
         git: this.git,
         ci: this.ci,
         github: this.github,
@@ -225,4 +232,10 @@ export class MergeStewardService {
     this.tickTimer = setTimeout(() => void this.runTick(), this.config.pollIntervalMs);
     this.tickTimer.unref?.();
   }
+}
+
+/** Simple glob match: supports * as wildcard. */
+function matchGlob(pattern: string, value: string): boolean {
+  const regex = new RegExp("^" + pattern.replace(/\*/g, ".*") + "$");
+  return regex.test(value);
 }

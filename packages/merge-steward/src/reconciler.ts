@@ -8,6 +8,8 @@ export interface ReconcileContext {
   store: QueueStore;
   repoId: string;
   baseBranch: string;
+  /** Prefix for remote refs. Production: "origin/". Sim: "". */
+  remotePrefix: string;
   git: GitOperations;
   ci: CIRunner;
   github: GitHubPRApi;
@@ -66,6 +68,11 @@ export async function reconcile(ctx: ReconcileContext): Promise<void> {
  * as last time, do nothing — wait for main to advance.
  */
 async function prepareHead(ctx: ReconcileContext, entry: QueueEntry): Promise<void> {
+  const r = ctx.remotePrefix; // "origin/" in production, "" in sim
+
+  // Fetch latest from remote before any ref resolution.
+  await ctx.git.fetch();
+
   // Check if main CI is green before rebasing.
   if (ctx.ci.getMainStatus) {
     const mainStatus = await ctx.ci.getMainStatus(ctx.baseBranch);
@@ -76,13 +83,13 @@ async function prepareHead(ctx: ReconcileContext, entry: QueueEntry): Promise<vo
   }
 
   // Branch ownership: verify head SHA matches what we expect.
-  const currentRef = await ctx.git.headSha(entry.branch);
+  const currentRef = await ctx.git.headSha(r + entry.branch);
   if (currentRef !== entry.headSha) {
     ctx.store.updateHead(entry.id, currentRef);
     return;
   }
 
-  const currentBaseSha = await ctx.git.headSha(ctx.baseBranch);
+  const currentBaseSha = await ctx.git.headSha(r + ctx.baseBranch);
 
   // Budget exhausted — evict regardless of base change.
   if (entry.retryAttempts >= entry.maxRetries && entry.lastFailedBaseSha !== null) {
@@ -96,7 +103,7 @@ async function prepareHead(ctx: ReconcileContext, entry: QueueEntry): Promise<vo
     return;
   }
 
-  const result = await ctx.git.rebase(entry.branch, ctx.baseBranch);
+  const result = await ctx.git.rebase(entry.branch, r + ctx.baseBranch);
 
   if (result.success) {
     const newHeadSha = result.newHeadSha ?? entry.headSha;

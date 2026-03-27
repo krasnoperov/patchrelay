@@ -5,10 +5,11 @@
   "clonePath": "/home/alv/.local/state/merge-steward/repos/usertold",
   "maxRetries": 2,
   "flakyRetries": 1,
-  "requiredChecks": [],
+  "requiredChecks": ["checks", "test-ui", "test-integration"],
   "pollIntervalMs": 30000,
   "mergeMethod": "merge",
   "admissionLabel": "queue",
+  "excludeBranches": ["release-please--*"],
   "webhookPath": "/webhooks/github/queue",
   "server": {
     "bind": "127.0.0.1",

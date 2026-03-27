@@ -5,6 +5,8 @@ import { exec } from "../exec.ts";
 /**
  * CI runner that polls GitHub Actions via the gh CLI.
  * triggerRun is a no-op — force-pushing the branch triggers CI automatically.
+ * Polls by commit SHA (not branch name) to avoid URL-encoding issues with
+ * branch names containing slashes and to avoid stale results after force-push.
  */
 export class GitHubActionsRunner implements CIRunner {
   constructor(
@@ -12,20 +14,17 @@ export class GitHubActionsRunner implements CIRunner {
     private readonly requiredChecks: string[] = [],
   ) {}
 
-  async triggerRun(branch: string, _sha: string): Promise<string> {
-    // CI is triggered by the push in ShellGitOperations. We just need
-    // an ID to poll. Use the branch name as a synthetic run ID — we'll
-    // poll by branch, not by run ID.
-    return `branch:${branch}`;
+  async triggerRun(_branch: string, sha: string): Promise<string> {
+    // CI is triggered by the push. Return the SHA as the poll key.
+    return `sha:${sha}`;
   }
 
   async getStatus(runId: string): Promise<CIStatus> {
-    // runId format: "branch:{branchName}"
-    const branch = runId.replace(/^branch:/, "");
+    const sha = runId.replace(/^sha:/, "");
 
     const result = await exec("gh", [
       "api",
-      `repos/${this.repoFullName}/commits/${branch}/check-runs`,
+      `repos/${this.repoFullName}/commits/${sha}/check-runs`,
       "--jq", ".check_runs",
     ], { allowNonZero: true });
 
@@ -46,13 +45,9 @@ export class GitHubActionsRunner implements CIRunner {
 
       if (relevant.length === 0) return "pending";
 
-      // If any are still running, the overall status is pending.
       if (relevant.some((c) => c.status !== "completed")) return "pending";
-
-      // If any failed, the overall status is fail.
       if (relevant.some((c) => c.conclusion === "failure" || c.conclusion === "timed_out")) return "fail";
 
-      // All completed and none failed.
       return "pass";
     } catch {
       return "pending";
@@ -61,10 +56,18 @@ export class GitHubActionsRunner implements CIRunner {
 
   async cancelRun(_runId: string): Promise<void> {
     // GitHub Actions runs cancel automatically when the branch is force-pushed.
-    // No explicit cancel needed for Phase 1.
   }
 
   async getMainStatus(baseBranch: string): Promise<CIStatus> {
-    return this.getStatus(`branch:${baseBranch}`);
+    // For main branch, we need to resolve the SHA first since we can't
+    // use branch name in the URL (may contain slashes).
+    const result = await exec("gh", [
+      "api",
+      `repos/${this.repoFullName}/git/ref/heads/${encodeURIComponent(baseBranch)}`,
+      "--jq", ".object.sha",
+    ], { allowNonZero: true });
+
+    if (result.exitCode !== 0 || !result.stdout.trim()) return "pending";
+    return this.getStatus(`sha:${result.stdout.trim()}`);
   }
 }

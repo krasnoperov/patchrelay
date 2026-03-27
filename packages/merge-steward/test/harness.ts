@@ -193,6 +193,7 @@ export class Harness {
       store: this.store,
       repoId: this.repoId,
       baseBranch: this.baseBranch,
+      remotePrefix: "",
       git: this.gitSim,
       ci: this.ciSim,
       github: this.githubSim,

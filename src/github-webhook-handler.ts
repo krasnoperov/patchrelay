@@ -12,7 +12,7 @@ import type { OperatorEventFeed } from "./operator-feed.ts";
 import { resolveSecret } from "./resolve-secret.ts";
 import type { AppConfig, LinearClientProvider } from "./types.ts";
 import type { ProjectConfig } from "./workflow-types.ts";
-import { safeJsonParse } from "./utils.ts";
+import { safeJsonParse, execCommand } from "./utils.ts";
 
 /**
  * GitHub sends both check_run and check_suite completion events.
@@ -182,6 +182,20 @@ export class GitHubWebhookHandler {
 
         // Schedule merge prep when entering awaiting_queue
         if (newState === "awaiting_queue") {
+          const proj = this.config.projects.find((p) => p.id === issue.projectId);
+          if (proj?.github?.useExternalMergeQueue && transitionedIssue.prNumber) {
+            // Add the admission label so the external queue picks up this PR.
+            const label = proj.github.mergeQueueLabel ?? "queue";
+            const repo = proj.github.repoFullName;
+            if (repo) {
+              void execCommand(this.config.runner.gitBin === "git" ? "gh" : "gh", [
+                "pr", "edit", String(transitionedIssue.prNumber),
+                "--repo", repo, "--add-label", label,
+              ], { timeoutMs: 15_000 }).catch((err) => {
+                this.logger.warn({ issueKey: issue.issueKey, err }, "Failed to add merge queue label");
+              });
+            }
+          }
           this.db.upsertIssue({
             projectId: issue.projectId,
             linearIssueId: issue.linearIssueId,
@@ -234,8 +248,14 @@ export class GitHubWebhookHandler {
       detail: event.checkName ?? event.reviewBody?.slice(0, 200) ?? undefined,
     });
 
-    if (!isMetadataOnlyCheckEvent(event)) {
-      const project = this.config.projects.find((p) => p.id === freshIssue.projectId);
+    // Queue eviction check runs bypass the metadata-only filter because
+    // they're individual check_run events (not check_suite), but they
+    // must drive state transitions.
+    const project = this.config.projects.find((p) => p.id === freshIssue.projectId);
+    const queueCheckName = project?.github?.mergeQueueCheckName ?? "merge-steward/queue";
+    if (event.eventSource === "check_run" && event.checkName === queueCheckName) {
+      this.maybeEnqueueReactiveRun(freshIssue, event, project);
+    } else if (!isMetadataOnlyCheckEvent(event)) {
       this.maybeEnqueueReactiveRun(freshIssue, event, project);
     }
   }
@@ -249,11 +269,12 @@ export class GitHubWebhookHandler {
     if (TERMINAL_STATES.has(issue.factoryState as FactoryState)) return;
 
     if (event.triggerEvent === "check_failed" && issue.prState === "open") {
-      // When an external merge queue manages this project and the issue
-      // is awaiting queue, any check failure is a queue eviction signal.
-      // This is implementation-agnostic: works with merge-steward,
-      // Graphite, Mergify, or any queue that creates check runs.
-      if (project?.github?.useMergeSteward && issue.factoryState === "awaiting_queue") {
+      // External merge queue eviction: react only to the configured check
+      // name, not to any CI failure. Regular CI failures still get ci_repair.
+      const queueCheckName = project?.github?.mergeQueueCheckName ?? "merge-steward/queue";
+      if (project?.github?.useExternalMergeQueue
+        && issue.factoryState === "awaiting_queue"
+        && event.checkName === queueCheckName) {
         this.db.upsertIssue({
           projectId: issue.projectId,
           linearIssueId: issue.linearIssueId,

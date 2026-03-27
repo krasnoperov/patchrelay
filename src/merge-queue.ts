@@ -47,7 +47,7 @@ export class MergeQueue {
    */
   async prepareForMerge(issue: IssueRecord, project: ProjectConfig): Promise<void> {
     // Skip merge prep for steward-managed projects.
-    if (project.github?.useMergeSteward) {
+    if (project.github?.useExternalMergeQueue) {
       this.db.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, pendingMergePrep: false });
       return;
     }
@@ -212,7 +212,7 @@ export class MergeQueue {
    */
   advanceQueue(projectId: string): void {
     const project = this.config.projects.find((p) => p.id === projectId);
-    if (project?.github?.useMergeSteward) return;
+    if (project?.github?.useExternalMergeQueue) return;
 
     const queue = this.db.listIssuesByState(projectId, "awaiting_queue");
     const next = queue.find((i) => i.activeRunId === undefined && i.pendingRunType === undefined && !i.pendingMergePrep);

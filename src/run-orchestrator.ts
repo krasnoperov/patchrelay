@@ -526,6 +526,7 @@ export class RunOrchestrator {
     // If we advanced to awaiting_queue, enqueue for merge prep
     if (postRunState === "awaiting_queue") {
       this.enqueueIssue(run.projectId, run.linearIssueId);
+      this.maybeAddMergeQueueLabel(issue, run.projectId);
     }
 
     this.feed?.publish({
@@ -946,6 +947,21 @@ export class RunOrchestrator {
       body: `PatchRelay needs human help to continue.\n\n${reason}`,
     });
     void this.syncLinearSession(escalatedIssue);
+  }
+
+  /** Add the merge queue admission label for external-queue projects (best-effort). */
+  private maybeAddMergeQueueLabel(issue: IssueRecord, projectId: string): void {
+    const project = this.config.projects.find((p) => p.id === projectId);
+    if (!project?.github?.useExternalMergeQueue || !issue.prNumber) return;
+    const label = project.github.mergeQueueLabel ?? "queue";
+    const repo = project.github.repoFullName;
+    if (!repo) return;
+    void execCommand("gh", [
+      "pr", "edit", String(issue.prNumber),
+      "--repo", repo, "--add-label", label,
+    ], { timeoutMs: 15_000 }).catch((err) => {
+      this.logger.warn({ issueKey: issue.issueKey, err }, "Failed to add merge queue label");
+    });
   }
 
   private failRunAndClear(run: RunRecord, message: string): void {

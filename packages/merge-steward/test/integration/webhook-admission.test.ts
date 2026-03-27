@@ -23,6 +23,7 @@ const config: StewardConfig = {
   requiredChecks: [],
   pollIntervalMs: 60_000, // Long interval — we don't want ticks during test
   admissionLabel: "queue",
+  excludeBranches: [],
   webhookPath: "/webhooks/github/queue",
   webhookSecret: WEBHOOK_SECRET,
   server: { bind: "127.0.0.1", port: 0 },

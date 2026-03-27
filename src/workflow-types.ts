@@ -40,7 +40,11 @@ export interface ProjectConfig {
     webhookSecret?: string;
     repoFullName?: string;
     baseBranch?: string;
-    /** When true, merge-steward handles queue ordering and merging. PatchRelay skips merge-prep. */
-    useMergeSteward?: boolean;
+    /** When true, an external merge queue handles ordering and merging. PatchRelay skips merge-prep. */
+    useExternalMergeQueue?: boolean;
+    /** GitHub label to add when entering awaiting_queue (default: "queue"). */
+    mergeQueueLabel?: string;
+    /** Check run name pattern that signals queue eviction (default: "merge-steward/queue"). */
+    mergeQueueCheckName?: string;
   };
 }
