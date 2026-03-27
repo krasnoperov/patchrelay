@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.25.6...patchrelay-v0.26.0) (2026-03-27)
+
+
+### Features
+
+* show status note for selected issue in watch TUI ([#199](https://github.com/krasnoperov/patchrelay/issues/199)) ([c7d2dcf](https://github.com/krasnoperov/patchrelay/commit/c7d2dcf44ab2cea4403de1e37dba8cb87f6808b2))
+
 ## [0.25.6](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.25.5...patchrelay-v0.25.6) (2026-03-26)
 
 
