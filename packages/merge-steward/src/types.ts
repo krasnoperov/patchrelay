@@ -1,18 +1,19 @@
 /**
- * Queue entry statuses — from design doc lifecycle.
+ * Queue entry statuses — Phase 1 lifecycle.
  *
- * queued → waiting_head → preparing_head → validating → passed → merging → merged
+ * queued → preparing_head → validating → merging → merged
  *
  * Failure paths:
- *   preparing_head → repair_requested
- *   validating     → repair_requested | evicted | paused
+ *   preparing_head   → repair_requested → repair_in_progress → preparing_head
+ *   validating       → repair_requested (CI failure, retries exhausted)
+ *   repair_requested → evicted (budget exhausted)
+ *
+ * paused: reserved for Phase 2 (policy_blocked — no approval, manual hold).
  */
 export type QueueEntryStatus =
   | "queued"
-  | "waiting_head"
   | "preparing_head"
   | "validating"
-  | "passed"
   | "merging"
   | "repair_requested"
   | "repair_in_progress"

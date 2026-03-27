@@ -2,7 +2,7 @@ import git from "isomorphic-git";
 import { GitSim } from "../src/sim/git-sim.ts";
 import { CISim, type CIRule } from "../src/sim/ci-sim.ts";
 import { GitHubSim, RepairSim } from "../src/sim/github-sim.ts";
-import { reconcile } from "../src/reconciler.ts";
+import { reconcile, completeRepair } from "../src/reconciler.ts";
 import type { QueueEntry, QueueEntryStatus, CIStatus } from "../src/types.ts";
 import { assertInvariants } from "./invariants.ts";
 
@@ -17,6 +17,13 @@ export interface HarnessOptions {
   ciRule?: CIRule;
   flakyRetries?: number;
   repairBudget?: number;
+  /**
+   * When true (default), the harness automatically completes any
+   * repair_in_progress entry before each tick, simulating instant
+   * PatchRelay repair. Set to false to manually control repair timing
+   * via completeRepair().
+   */
+  autoCompleteRepairs?: boolean;
 }
 
 /**
@@ -36,15 +43,23 @@ export class Harness {
   /** All queue entries, past and present. */
   readonly entries: QueueEntry[] = [];
 
+  /** All entry IDs ever created — for no-loss invariant. */
+  readonly allEntryIds: Set<string> = new Set();
+
   /** PRs merged to main in order. */
   readonly mergedPRs: number[] = [];
 
   /** Whether main has ever had a bad merge. */
   mainGreen = true;
 
+  /** Previous tick snapshot for monotonic progress detection. */
+  private previousSnapshot: string | null = null;
+  private staleTicks = 0;
+
   private readonly baseBranch: string;
   private readonly flakyRetries: number;
   private readonly repairBudget: number;
+  private readonly autoCompleteRepairs: boolean;
   private nextPosition = 1;
   private nextEntryId = 1;
   private tickCount = 0;
@@ -62,6 +77,7 @@ export class Harness {
     this.baseBranch = options.baseBranch ?? "main";
     this.flakyRetries = options.flakyRetries ?? 0;
     this.repairBudget = options.repairBudget ?? 3;
+    this.autoCompleteRepairs = options.autoCompleteRepairs ?? true;
 
     this.gitSim = new GitSim();
     this.ciSim = new CISim(options.ciRule ?? (() => "pass"));
@@ -141,6 +157,7 @@ export class Harness {
       updatedAt: new Date().toISOString(),
     };
     this.entries.push(entry);
+    this.allEntryIds.add(entry.id);
     return entry;
   }
 
@@ -148,7 +165,27 @@ export class Harness {
   async tick(): Promise<void> {
     this.tickCount++;
     if (!this.reconcile) return;
+
+    // If auto-complete is on, resolve any repair_in_progress entries
+    // before the reconciler runs (simulates PatchRelay completing repair
+    // between ticks).
+    if (this.autoCompleteRepairs) {
+      for (const entry of this.entries) {
+        if (entry.status === "repair_in_progress") {
+          completeRepair(this.entries, entry.id);
+        }
+      }
+    }
+
     await this.reconcile(this.buildContext());
+  }
+
+  /**
+   * Manually complete a repair for a specific entry.
+   * Use with autoCompleteRepairs: false to control repair timing.
+   */
+  completeRepair(queueEntryId: string): boolean {
+    return completeRepair(this.entries, queueEntryId);
   }
 
   /** Run ticks until no more progress or maxTicks reached. */
@@ -164,7 +201,7 @@ export class Harness {
 
   /** Assert all 6 invariants. */
   assertInvariants(): void {
-    assertInvariants(this.entries, this.mergedPRs, this.mainGreen);
+    assertInvariants(this.entries, this.mergedPRs, this.mainGreen, this.allEntryIds);
   }
 
   /** Get the status of a specific entry by PR number. */

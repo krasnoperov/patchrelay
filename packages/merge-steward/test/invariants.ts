@@ -4,10 +4,8 @@ import type { QueueEntry, QueueEntryStatus } from "../src/types.ts";
 const TERMINAL: QueueEntryStatus[] = ["merged", "evicted"];
 const ACTIVE: QueueEntryStatus[] = [
   "queued",
-  "waiting_head",
   "preparing_head",
   "validating",
-  "passed",
   "merging",
   "repair_requested",
   "repair_in_progress",
@@ -21,10 +19,11 @@ export function assertInvariants(
   entries: QueueEntry[],
   mergedPRs: number[],
   mainIsGreen: boolean,
+  allEntryIds: Set<string>,
 ): void {
-  assertSerialization(entries, mergedPRs);
-  assertGreenMain(mainIsGreen);
-  assertNoLoss(entries);
+  assertSerialization(entries);
+  assertGreenMain(entries, mainIsGreen);
+  assertNoLoss(entries, allEntryIds);
   assertSingleHead(entries);
   assertBoundedRepair(entries);
   assertMonotonicProgress(entries);
@@ -32,15 +31,14 @@ export function assertInvariants(
 
 /**
  * 1. Serialization: merged PRs appear in queue-position order.
+ * No position inversion among merged entries.
  */
-function assertSerialization(entries: QueueEntry[], mergedPRs: number[]): void {
+function assertSerialization(entries: QueueEntry[]): void {
   const mergedEntries = entries
     .filter((e) => e.status === "merged")
     .sort((a, b) => a.position - b.position);
-  const mergedNumbers = mergedEntries.map((e) => e.prNumber);
 
-  // Merged PRs should appear in position order (no inversions).
-  for (let i = 1; i < mergedNumbers.length; i++) {
+  for (let i = 1; i < mergedEntries.length; i++) {
     const prev = mergedEntries[i - 1]!;
     const curr = mergedEntries[i]!;
     assert.ok(
@@ -51,30 +49,52 @@ function assertSerialization(entries: QueueEntry[], mergedPRs: number[]): void {
 }
 
 /**
- * 2. Green-main: main must always be green (every merge had passing CI).
+ * 2. Green-main: every merged entry must have had a passing CI run.
+ * The mainIsGreen flag tracks whether onMainBroken was ever called.
+ * Additionally: no entry with status "merged" should have a null ciRunId
+ * (meaning it was merged without ever running CI).
  */
-function assertGreenMain(mainIsGreen: boolean): void {
-  assert.ok(mainIsGreen, "Main branch is not green after merge");
+function assertGreenMain(entries: QueueEntry[], mainIsGreen: boolean): void {
+  assert.ok(mainIsGreen, "Main branch is not green — onMainBroken was called");
+
+  for (const entry of entries) {
+    if (entry.status === "merged") {
+      assert.ok(
+        entry.ciRunId !== null,
+        `PR #${entry.prNumber} was merged without a CI run (ciRunId is null)`,
+      );
+    }
+  }
 }
 
 /**
- * 3. No-loss: every entry is in a known state. No entry has disappeared.
+ * 3. No-loss: every entry ID that was ever enqueued must still exist
+ * in the entries array with a known status. No entry can vanish.
  */
-function assertNoLoss(entries: QueueEntry[]): void {
+function assertNoLoss(entries: QueueEntry[], allEntryIds: Set<string>): void {
+  const currentIds = new Set(entries.map((e) => e.id));
+
+  for (const id of allEntryIds) {
+    assert.ok(
+      currentIds.has(id),
+      `Entry ${id} was enqueued but is no longer in the entries array`,
+    );
+  }
+
   for (const entry of entries) {
-    const allStatuses = [...TERMINAL, ...ACTIVE];
+    const allStatuses: QueueEntryStatus[] = [...TERMINAL, ...ACTIVE];
     assert.ok(
       allStatuses.includes(entry.status),
-      `Entry ${entry.id} has unknown status: ${entry.status}`,
+      `Entry ${entry.id} (PR #${entry.prNumber}) has unknown status: ${entry.status}`,
     );
   }
 }
 
 /**
- * 4. Single head: at most one entry is in preparing_head or validating.
+ * 4. Single head: at most one entry is actively being processed.
  */
 function assertSingleHead(entries: QueueEntry[]): void {
-  const headStatuses: QueueEntryStatus[] = ["preparing_head", "validating", "passed", "merging"];
+  const headStatuses: QueueEntryStatus[] = ["preparing_head", "validating", "merging"];
   const heads = entries.filter((e) => headStatuses.includes(e.status));
   assert.ok(
     heads.length <= 1,
@@ -83,7 +103,7 @@ function assertSingleHead(entries: QueueEntry[]): void {
 }
 
 /**
- * 5. Bounded repair: no entry exceeds its repair budget.
+ * 5. Bounded repair: no entry has more repair attempts than its budget allows.
  */
 function assertBoundedRepair(entries: QueueEntry[]): void {
   for (const entry of entries) {
@@ -95,28 +115,39 @@ function assertBoundedRepair(entries: QueueEntry[]): void {
 }
 
 /**
- * 6. Monotonic progress: no active (non-terminal) entry should exist
- *    with the same state across consecutive invariant checks without
- *    the queue making some forward progress. This is checked by the
- *    harness over multiple ticks, not as a single-snapshot assertion.
- *    Here we just verify the basic structural constraint: if the queue
- *    has active entries, at least one must be the head.
+ * 6. Monotonic progress: if there are active (non-terminal) entries,
+ * at least one must be in a head-like processing state or all must be
+ * legitimately waiting (queued behind a head, or paused, or awaiting
+ * external repair completion).
  */
 function assertMonotonicProgress(entries: QueueEntry[]): void {
   const active = entries.filter((e) => ACTIVE.includes(e.status));
-  if (active.length === 0) return; // queue is drained, ok
+  if (active.length === 0) return;
 
-  const headLike = active.filter((e) =>
-    ["preparing_head", "validating", "passed", "merging", "repair_requested", "repair_in_progress"].includes(e.status),
+  const processing = active.filter((e) =>
+    ["preparing_head", "validating", "merging"].includes(e.status),
+  );
+  const waitingForExternal = active.filter((e) =>
+    ["repair_requested", "repair_in_progress", "paused"].includes(e.status),
+  );
+  const waitingInLine = active.filter((e) =>
+    e.status === "queued",
   );
 
-  // If there are active entries, at least one should be progressing
-  // (not all stuck in "queued" or "waiting_head").
-  const progressing = headLike.length > 0;
-  const allWaiting = active.every((e) => e.status === "queued" || e.status === "waiting_head" || e.status === "paused");
+  // Valid states:
+  // - At least one entry is processing (head is active), OR
+  // - All active entries are waiting for external input, OR
+  // - All active entries are in line (queued/waiting_head), possibly
+  //   behind a head that is waiting for external repair, OR
+  // - All entries are freshly queued (reconciler hasn't ticked yet)
+  const headActive = processing.length > 0;
+  const allExternalWait = active.length === waitingForExternal.length;
+  const allInLine = active.length === waitingInLine.length;
+  const headExternalRest = waitingForExternal.length > 0 &&
+    active.length === waitingForExternal.length + waitingInLine.length;
 
   assert.ok(
-    progressing || allWaiting,
-    `Active entries exist but none are progressing: ${active.map((e) => `PR #${e.prNumber} (${e.status})`).join(", ")}`,
+    headActive || allExternalWait || allInLine || headExternalRest,
+    `Queue stuck: ${active.length} active entries but none progressing: ${active.map((e) => `PR #${e.prNumber} (${e.status})`).join(", ")}`,
   );
 }

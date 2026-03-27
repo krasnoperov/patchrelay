@@ -25,10 +25,14 @@ export interface ReconcileContext {
  *   queued → preparing_head → validating → merging → merged
  *
  * Failure branches:
- *   preparing_head → repair_requested  (conflict during rebase)
- *   validating     → validating        (flaky retry)
- *   validating     → repair_requested  (CI failure, retries exhausted)
- *   repair_requested → evicted         (repair budget exhausted)
+ *   preparing_head   → repair_requested   (conflict during rebase)
+ *   validating       → validating         (flaky retry)
+ *   validating       → repair_requested   (CI failure, retries exhausted)
+ *   repair_requested → repair_in_progress (dispatch to PatchRelay)
+ *   repair_requested → evicted            (repair budget exhausted)
+ *
+ * The queue pauses at repair_in_progress until an external callback
+ * (completeRepair) transitions the entry back to preparing_head.
  */
 export async function reconcile(ctx: ReconcileContext): Promise<void> {
   const head = findHead(ctx.entries);
@@ -48,10 +52,6 @@ export async function reconcile(ctx: ReconcileContext): Promise<void> {
       await checkValidation(ctx, head);
       break;
 
-    case "passed":
-      transition(head, "merging");
-      break;
-
     case "merging":
       await mergeHead(ctx, head);
       break;
@@ -61,15 +61,15 @@ export async function reconcile(ctx: ReconcileContext): Promise<void> {
       break;
 
     case "repair_in_progress":
-      // Waiting for PatchRelay. No action this tick.
+      // Waiting for external completeRepair() callback. No action.
       break;
 
     case "paused":
-      // Manual intervention needed. No action.
+      // Reserved for Phase 2 (policy_blocked). No action.
       break;
 
     default:
-      // waiting_head, merged, evicted — no action for head.
+      // merged, evicted — terminal, no action for head.
       break;
   }
 }
@@ -217,12 +217,22 @@ async function handleRepairRequest(ctx: ReconcileContext, entry: QueueEntry): Pr
     },
   });
 
-  // In simulation, repair is instant (no async wait).
-  // After dispatching, the entry should go back to preparing_head
-  // so the next tick retries the rebase.
-  // In production, this would transition to repair_in_progress and
-  // wait for PatchRelay's callback.
+  // Queue pauses here until completeRepair() is called externally.
+  transition(entry, "repair_in_progress");
+}
+
+/**
+ * External callback: repair is complete, resume the entry.
+ * Called by PatchRelay (or the test harness) when a repair run finishes.
+ * Resets CI state so the next tick retries rebase + CI from scratch.
+ */
+export function completeRepair(entries: QueueEntry[], queueEntryId: string): boolean {
+  const entry = entries.find((e) => e.id === queueEntryId);
+  if (!entry || entry.status !== "repair_in_progress") return false;
+  entry.ciRunId = null;
+  entry.ciRetries = 0;
   transition(entry, "preparing_head");
+  return true;
 }
 
 function transition(entry: QueueEntry, to: QueueEntryStatus): void {
