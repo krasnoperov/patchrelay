@@ -1,5 +1,6 @@
 import { Box, Text } from "ink";
 import type { WatchIssue } from "./watch-state.ts";
+import { summarizeIssueStatusNote } from "./issue-status-note.ts";
 
 interface IssueRowProps {
   issue: WatchIssue;
@@ -37,13 +38,6 @@ const STATE_SHORT: Record<string, string> = {
   awaiting_input: "paused",
 };
 
-const RUN_SHORT: Record<string, string> = {
-  implementation: "impl",
-  ci_repair: "ci",
-  review_fix: "review",
-  queue_repair: "merge",
-};
-
 const STATUS_SHORT: Record<string, string> = {
   running: "\u25b8",
   completed: "\u2713",
@@ -53,15 +47,6 @@ const STATUS_SHORT: Record<string, string> = {
 
 function stateColor(state: string): string {
   return STATE_COLORS[state] ?? "white";
-}
-
-function formatRun(issue: WatchIssue): string {
-  const run = issue.activeRunType ?? issue.latestRunType;
-  if (!run) return "";
-  const runLabel = RUN_SHORT[run] ?? run;
-  const status = issue.activeRunType ? "running" : issue.latestRunStatus;
-  const statusLabel = status ? STATUS_SHORT[status] ?? status : "";
-  return `${runLabel} ${statusLabel}`;
 }
 
 function formatPr(issue: WatchIssue): string {
@@ -87,7 +72,7 @@ function relativeTime(iso: string): string {
 
 function truncate(text: string, max: number): string {
   if (max <= 0) return "";
-  return text.length > max ? `${text.slice(0, max - 1)}\u2026` : text;
+  return text.length > max ? text.slice(0, max) : text;
 }
 
 const TERMINAL_STATES = new Set(["done", "failed", "escalated", "awaiting_input"]);
@@ -110,17 +95,25 @@ export function IssueRow({ issue, selected, titleWidth }: IssueRowProps): React.
   const ago = relativeTime(issue.updatedAt);
   const tw = titleWidth ?? 30;
   const title = issue.title ? truncate(issue.title, tw) : "";
+  const detail = selected ? summarizeIssueStatusNote(issue.statusNote) : undefined;
 
   return (
-    <Box>
-      <Text color={selected ? "blueBright" : "white"} bold={selected}>
-        {selected ? "\u25b8" : " "}
-      </Text>
-      <Text bold>{` ${key.padEnd(9)}`}</Text>
-      <Text color={stateColor(issue.factoryState)}>{` ${status.padEnd(12)}`}</Text>
-      <Text dimColor>{` ${pr.padEnd(6)}`}</Text>
-      <Text dimColor>{` ${ago.padStart(3)}`}</Text>
-      {title ? <Text dimColor>{` ${title}`}</Text> : null}
+    <Box flexDirection="column" marginBottom={detail ? 1 : 0}>
+      <Box>
+        <Text color={selected ? "blueBright" : "white"} bold={selected}>
+          {selected ? "\u25b8" : " "}
+        </Text>
+        <Text bold>{` ${key.padEnd(9)}`}</Text>
+        <Text color={stateColor(issue.factoryState)}>{` ${status.padEnd(12)}`}</Text>
+        <Text dimColor>{` ${pr.padEnd(6)}`}</Text>
+        <Text dimColor>{` ${ago.padStart(3)}`}</Text>
+        {title ? <Text dimColor>{` ${title}`}</Text> : null}
+      </Box>
+      {detail ? (
+        <Box paddingLeft={4}>
+          <Text dimColor wrap="wrap">{detail}</Text>
+        </Box>
+      ) : null}
     </Box>
   );
 }

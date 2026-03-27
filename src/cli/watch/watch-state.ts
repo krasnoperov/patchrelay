@@ -23,6 +23,7 @@ export type { TimelineMode } from "./timeline-presentation.ts";
 export interface WatchIssue {
   issueKey?: string | undefined;
   title?: string | undefined;
+  statusNote?: string | undefined;
   projectId: string;
   factoryState: string;
   currentLinearState?: string | undefined;
