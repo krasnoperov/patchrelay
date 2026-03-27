@@ -8,72 +8,29 @@ describe("PR update (force-push) handling", () => {
     const prA: SimPR = { number: 1, branch: "feat-a", files: [{ path: "a.ts", content: "a" }] };
     await h.enqueue(prA);
 
-    // Advance to validating.
     await h.tick(); // queued → preparing_head
     await h.tick(); // preparing_head → validating
 
     const before = h.entries.find((e) => e.prNumber === 1)!;
     assert.strictEqual(before.status, "validating");
-    assert.ok(before.ciRunId !== null, "Should have a CI run");
+    assert.ok(before.ciRunId !== null);
     assert.strictEqual(before.generation, 0);
 
-    // Simulate force-push: update head SHA.
     h.store.updateHead(before.id, "new-sha-after-force-push");
 
     const after = h.entries.find((e) => e.prNumber === 1)!;
-    assert.strictEqual(after.status, "queued", "Should reset to queued");
-    assert.strictEqual(after.generation, 1, "Generation should increment");
+    assert.strictEqual(after.status, "queued");
+    assert.strictEqual(after.generation, 1);
     assert.strictEqual(after.headSha, "new-sha-after-force-push");
-    assert.strictEqual(after.ciRunId, null, "ciRunId should be cleared");
-    assert.strictEqual(after.ciRetries, 0, "ciRetries should be reset");
-    assert.strictEqual(after.repairAttempts, 0, "repairAttempts should be reset");
+    assert.strictEqual(after.ciRunId, null);
+    assert.strictEqual(after.ciRetries, 0);
+    assert.strictEqual(after.retryAttempts, 0);
+    assert.strictEqual(after.lastFailedBaseSha, null);
 
-    // Events should show the reset.
     const events = h.store.listEvents(before.id);
     const lastEvent = events[events.length - 1]!;
     assert.strictEqual(lastEvent.toStatus, "queued");
     assert.ok(lastEvent.detail?.includes("generation 1"));
-
-    h.assertInvariants();
-  });
-
-  it("updateHead abandons pending repair requests", async () => {
-    const prA: SimPR = {
-      number: 1,
-      branch: "feat-a",
-      files: [{ path: "shared.ts", content: "version A" }],
-    };
-    const prB: SimPR = {
-      number: 2,
-      branch: "feat-b",
-      files: [{ path: "shared.ts", content: "version B" }],
-    };
-
-    const h = await createHarness({
-      ciRule: () => "pass",
-      repairBudget: 3,
-      autoCompleteRepairs: false,
-    });
-    await h.enqueue(prA);
-    await h.enqueue(prB);
-
-    // Run until B hits repair_in_progress.
-    for (let i = 0; i < 20; i++) await h.tick();
-    assert.ok(h.merged.includes(1));
-    const bEntry = h.entries.find((e) => e.prNumber === 2)!;
-    assert.strictEqual(bEntry.status, "repair_in_progress");
-
-    // Force-push on B.
-    h.store.updateHead(bEntry.id, "new-b-sha");
-
-    const updated = h.entries.find((e) => e.prNumber === 2)!;
-    assert.strictEqual(updated.status, "queued");
-    assert.strictEqual(updated.repairAttempts, 0, "Repair budget should reset per-generation");
-
-    // Check repair request was abandoned.
-    const repairs = h.store.listRepairRequests(bEntry.id);
-    assert.ok(repairs.length > 0);
-    assert.ok(repairs.every((r) => r.outcome !== "pending"), "All repair requests should be abandoned");
 
     h.assertInvariants();
   });
@@ -89,7 +46,7 @@ describe("PR update (force-push) handling", () => {
 
     h.store.updateHead(h.entries[0]!.id, "should-not-apply");
 
-    assert.strictEqual(h.entries[0]!.status, "merged", "Terminal entry should not change");
-    assert.strictEqual(h.entries[0]!.headSha, sha, "SHA should not change on terminal");
+    assert.strictEqual(h.entries[0]!.status, "merged");
+    assert.strictEqual(h.entries[0]!.headSha, sha);
   });
 });

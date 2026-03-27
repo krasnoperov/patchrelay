@@ -15,8 +15,9 @@ export function runMigrations(connection: DatabaseConnection): void {
       generation INTEGER NOT NULL DEFAULT 0,
       ci_run_id TEXT,
       ci_retries INTEGER NOT NULL DEFAULT 0,
-      repair_attempts INTEGER NOT NULL DEFAULT 0,
-      max_repair_attempts INTEGER NOT NULL DEFAULT 3,
+      retry_attempts INTEGER NOT NULL DEFAULT 0,
+      max_retries INTEGER NOT NULL DEFAULT 3,
+      last_failed_base_sha TEXT,
       issue_key TEXT,
       worktree_path TEXT,
       enqueued_at TEXT NOT NULL,
@@ -25,15 +26,13 @@ export function runMigrations(connection: DatabaseConnection): void {
   `);
 
   connection.exec(`
-    CREATE TABLE IF NOT EXISTS repair_requests (
+    CREATE TABLE IF NOT EXISTS queue_incidents (
       id TEXT PRIMARY KEY,
       entry_id TEXT NOT NULL REFERENCES queue_entries(id),
       at TEXT NOT NULL,
-      kind TEXT NOT NULL,
       failure_class TEXT NOT NULL,
-      summary TEXT,
-      outcome TEXT NOT NULL DEFAULT 'pending',
-      updated_at TEXT NOT NULL
+      context_json TEXT NOT NULL,
+      outcome TEXT NOT NULL DEFAULT 'open'
     )
   `);
 
@@ -48,7 +47,6 @@ export function runMigrations(connection: DatabaseConnection): void {
     )
   `);
 
-  // Indexes
   connection.exec(`
     CREATE INDEX IF NOT EXISTS idx_queue_entries_repo_status
       ON queue_entries(repo_id, status)
@@ -58,15 +56,13 @@ export function runMigrations(connection: DatabaseConnection): void {
       ON queue_entries(repo_id, position)
   `);
   connection.exec(`
-    CREATE INDEX IF NOT EXISTS idx_repair_requests_entry
-      ON repair_requests(entry_id)
+    CREATE INDEX IF NOT EXISTS idx_queue_incidents_entry
+      ON queue_incidents(entry_id)
   `);
   connection.exec(`
     CREATE INDEX IF NOT EXISTS idx_queue_events_entry
       ON queue_events(entry_id, id)
   `);
-
-  // One active entry per PR per repo.
   connection.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_one_active_per_pr
       ON queue_entries(repo_id, pr_number)

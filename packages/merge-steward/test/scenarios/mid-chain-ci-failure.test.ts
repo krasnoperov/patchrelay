@@ -11,7 +11,7 @@ describe("mid-chain CI failure", () => {
     const h = await createHarness({
       // b.ts always fails CI.
       ciRule: (files) => (files.includes("b.ts") ? "fail" : "pass"),
-      repairBudget: 2,
+      maxRetries: 2,
     });
     await h.enqueue(prA);
     await h.enqueue(prB);

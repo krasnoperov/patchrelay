@@ -10,7 +10,7 @@ describe("queue drain under adversarial conditions", () => {
   it("drains queue via eviction when all PRs fail CI", async () => {
     const h = await createHarness({
       ciRule: () => "fail",
-      repairBudget: 1,
+      maxRetries: 1,
       flakyRetries: 0,
     });
     await h.enqueue(prA);
@@ -32,7 +32,7 @@ describe("queue drain under adversarial conditions", () => {
         if (files.includes("b.ts")) return "fail";
         return "pass";
       },
-      repairBudget: 0, // Evict immediately on failure.
+      maxRetries: 0, // Evict immediately on failure.
     });
     await h.enqueue(prA);
     await h.enqueue(prB);

@@ -51,17 +51,6 @@ export async function buildHttpServer(
   });
 
   app.post<{ Params: { entryId: string } }>(
-    "/queue/entries/:entryId/repair-complete",
-    async (request, reply) => {
-      const ok = service.repairComplete(request.params.entryId);
-      if (!ok) {
-        return reply.status(404).send({ ok: false, error: "Entry not found or not in repair_in_progress" });
-      }
-      return { ok: true };
-    },
-  );
-
-  app.post<{ Params: { entryId: string } }>(
     "/queue/entries/:entryId/dequeue",
     async (request, reply) => {
       const ok = service.dequeueEntry(request.params.entryId);
@@ -81,6 +70,24 @@ export async function buildHttpServer(
         return reply.status(404).send({ ok: false, error: "Entry not found" });
       }
       return { ok: true };
+    },
+  );
+
+  app.get<{ Params: { incidentId: string } }>(
+    "/queue/incidents/:incidentId",
+    async (request, reply) => {
+      const incident = service.getIncident(request.params.incidentId);
+      if (!incident) {
+        return reply.status(404).send({ ok: false, error: "Incident not found" });
+      }
+      return incident;
+    },
+  );
+
+  app.get<{ Params: { entryId: string } }>(
+    "/queue/entries/:entryId/incidents",
+    async (request, reply) => {
+      return { incidents: service.listIncidents(request.params.entryId) };
     },
   );
 

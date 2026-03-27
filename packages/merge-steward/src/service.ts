@@ -1,9 +1,9 @@
 import type { Logger } from "pino";
-import type { GitOperations, CIRunner, GitHubPRApi, RepairDispatcher } from "./interfaces.ts";
+import type { GitOperations, CIRunner, GitHubPRApi, EvictionReporter } from "./interfaces.ts";
 import type { QueueStore } from "./store.ts";
-import type { QueueEntry } from "./types.ts";
+import type { QueueEntry, IncidentRecord } from "./types.ts";
 import type { StewardConfig } from "./config.ts";
-import { reconcile, completeRepair } from "./reconciler.ts";
+import { reconcile } from "./reconciler.ts";
 import { randomUUID } from "node:crypto";
 
 /**
@@ -21,10 +21,9 @@ export class MergeStewardService {
     private readonly git: GitOperations,
     private readonly ci: CIRunner,
     private readonly github: GitHubPRApi,
-    private readonly repair: RepairDispatcher,
+    private readonly eviction: EvictionReporter,
     private readonly logger: Logger,
   ) {
-    // Initialize position counter from existing entries.
     const existing = store.listAll(config.repoId);
     for (const e of existing) {
       if (e.position >= this.nextPosition) {
@@ -43,15 +42,12 @@ export class MergeStewardService {
       clearTimeout(this.tickTimer);
       this.tickTimer = undefined;
     }
-    // Wait for in-progress tick (bounded).
     const deadline = Date.now() + 10_000;
     while (this.tickInProgress && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 100));
     }
     this.logger.info("Steward service stopped");
   }
-
-  // --- HTTP handler methods ---
 
   enqueue(params: {
     prNumber: number;
@@ -74,8 +70,9 @@ export class MergeStewardService {
       generation: 0,
       ciRunId: null,
       ciRetries: 0,
-      repairAttempts: 0,
-      maxRepairAttempts: this.config.maxRepairAttempts,
+      retryAttempts: 0,
+      maxRetries: this.config.maxRetries,
+      lastFailedBaseSha: null,
       issueKey: params.issueKey ?? null,
       worktreePath: params.worktreePath ?? null,
       enqueuedAt: new Date().toISOString(),
@@ -84,12 +81,6 @@ export class MergeStewardService {
     this.store.insert(entry);
     this.logger.info({ prNumber: params.prNumber, entryId: entry.id }, "PR enqueued");
     return entry;
-  }
-
-  repairComplete(entryId: string): boolean {
-    const ok = completeRepair(this.store, entryId);
-    if (ok) this.logger.info({ entryId }, "Repair completed");
-    return ok;
   }
 
   dequeueEntry(entryId: string): boolean {
@@ -112,7 +103,13 @@ export class MergeStewardService {
     return this.store.listAll(this.config.repoId);
   }
 
-  // --- Internal ---
+  getIncident(incidentId: string): IncidentRecord | undefined {
+    return this.store.getIncident(incidentId);
+  }
+
+  listIncidents(entryId: string): IncidentRecord[] {
+    return this.store.listIncidents(entryId);
+  }
 
   private async runTick(): Promise<void> {
     if (this.tickInProgress) return;
@@ -125,10 +122,13 @@ export class MergeStewardService {
         git: this.git,
         ci: this.ci,
         github: this.github,
-        repair: this.repair,
+        eviction: this.eviction,
         flakyRetries: this.config.flakyRetries,
         onMerged: (prNumber) => {
           this.logger.info({ prNumber }, "PR merged via queue");
+        },
+        onEvicted: (prNumber, context) => {
+          this.logger.warn({ prNumber, failureClass: context.failureClass }, "PR evicted from queue");
         },
         onMainBroken: () => {
           this.logger.warn("Main branch CI is failing — queue paused");

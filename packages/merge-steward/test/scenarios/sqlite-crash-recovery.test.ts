@@ -7,9 +7,8 @@ import { unlinkSync } from "node:fs";
 import { SqliteStore } from "../../src/db/sqlite-store.ts";
 import { GitSim } from "../../src/sim/git-sim.ts";
 import { CISim } from "../../src/sim/ci-sim.ts";
-import { GitHubSim, RepairSim } from "../../src/sim/github-sim.ts";
-import { reconcile, completeRepair } from "../../src/reconciler.ts";
-import type { ReconcileContext } from "../../src/reconciler.ts";
+import { GitHubSim, EvictionReporterSim } from "../../src/sim/github-sim.ts";
+import { reconcile } from "../../src/reconciler.ts";
 import type { QueueEntry } from "../../src/types.ts";
 import { assertInvariants } from "../invariants.ts";
 
@@ -31,8 +30,9 @@ function makeEntry(id: string, prNumber: number, position: number): QueueEntry {
     generation: 0,
     ciRunId: null,
     ciRetries: 0,
-    repairAttempts: 0,
-    maxRepairAttempts: 3,
+    retryAttempts: 0,
+    maxRetries: 3,
+    lastFailedBaseSha: null,
     issueKey: null,
     worktreePath: null,
     enqueuedAt: new Date().toISOString(),

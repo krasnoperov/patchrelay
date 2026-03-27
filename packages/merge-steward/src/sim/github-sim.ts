@@ -1,5 +1,5 @@
-import type { GitHubPRApi, RepairDispatcher } from "../interfaces.ts";
-import type { CheckConclusion, CheckResult, PRStatus, QueueRepairContext } from "../types.ts";
+import type { GitHubPRApi, EvictionReporter } from "../interfaces.ts";
+import type { CheckResult, IncidentRecord, PRStatus, QueueEntry } from "../types.ts";
 
 interface SimPR {
   number: number;
@@ -40,7 +40,7 @@ export class GitHubSim implements GitHubPRApi {
     const pr = this.prs.get(prNumber);
     if (pr) {
       pr.headSha = sha;
-      pr.checks = []; // checks reset on new SHA
+      pr.checks = [];
     }
   }
 
@@ -77,20 +77,12 @@ export class GitHubSim implements GitHubPRApi {
 }
 
 /**
- * In-memory repair dispatcher that records requests for test assertion.
+ * In-memory eviction reporter that records evictions for test assertion.
  */
-export class RepairSim implements RepairDispatcher {
-  readonly requests: QueueRepairContext[] = [];
-  readonly cancellations: string[] = [];
+export class EvictionReporterSim implements EvictionReporter {
+  readonly evictions: Array<{ entry: QueueEntry; incident: IncidentRecord }> = [];
 
-  /** Configurable auto-resolve: if set, repair "completes" immediately. */
-  autoResolve: boolean = false;
-
-  async requestRepair(context: QueueRepairContext): Promise<void> {
-    this.requests.push(context);
-  }
-
-  async cancelRepair(queueEntryId: string): Promise<void> {
-    this.cancellations.push(queueEntryId);
+  async reportEviction(entry: QueueEntry, incident: IncidentRecord): Promise<void> {
+    this.evictions.push({ entry: { ...entry }, incident: { ...incident } });
   }
 }

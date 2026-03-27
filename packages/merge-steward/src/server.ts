@@ -4,8 +4,7 @@ import { SqliteStore } from "./db/sqlite-store.ts";
 import { ShellGitOperations } from "./github/shell-git.ts";
 import { GitHubActionsRunner } from "./github/actions-runner.ts";
 import { GitHubPRClient } from "./github/pr-client.ts";
-import { PatchRelayLease, AlwaysAvailableLease } from "./github/worktree-lease.ts";
-import { RepairSim } from "./sim/github-sim.ts";
+import { EvictionReporterSim } from "./sim/github-sim.ts";
 import { MergeStewardService } from "./service.ts";
 import { buildHttpServer } from "./http.ts";
 
@@ -23,21 +22,16 @@ export async function startServer(configPath?: string): Promise<void> {
   const ci = new GitHubActionsRunner(config.repoFullName, config.requiredChecks);
   const github = new GitHubPRClient(config.repoFullName);
 
-  // Repair dispatcher: in Phase 1, log the request. PatchRelay integration
-  // will replace this with an HTTP call to PatchRelay's API.
-  const repair = new RepairSim();
-
-  const _lease = config.patchrelayApiUrl
-    ? new PatchRelayLease(config.patchrelayApiUrl)
-    : new AlwaysAvailableLease();
+  // Eviction reporter: logs evictions for now. Real implementation will
+  // create GitHub check runs (next PR).
+  const eviction = new EvictionReporterSim();
 
   const service = new MergeStewardService(
-    config, store, git, ci, github, repair, logger,
+    config, store, git, ci, github, eviction, logger,
   );
 
   const app = await buildHttpServer(service, logger);
 
-  // Shutdown handling.
   const shutdown = async () => {
     logger.info("Shutting down...");
     await service.stop();

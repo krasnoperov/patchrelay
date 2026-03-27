@@ -3,7 +3,7 @@ import type {
   QueueEntry,
   QueueEntryStatus,
   QueueEventRecord,
-  RepairRequestRecord,
+  IncidentRecord,
 } from "./types.ts";
 import { TERMINAL_STATUSES } from "./types.ts";
 
@@ -17,7 +17,7 @@ function isoNow(): string {
  */
 export class MemoryStore implements QueueStore {
   private readonly entries = new Map<string, QueueEntry>();
-  private readonly repairRequests: RepairRequestRecord[] = [];
+  private readonly incidents: IncidentRecord[] = [];
   private readonly events: QueueEventRecord[] = [];
   private nextEventId = 1;
 
@@ -61,7 +61,7 @@ export class MemoryStore implements QueueStore {
   transition(
     entryId: string,
     to: QueueEntryStatus,
-    patch?: Partial<Pick<QueueEntry, "headSha" | "baseSha" | "ciRunId" | "ciRetries" | "repairAttempts">>,
+    patch?: Partial<Pick<QueueEntry, "headSha" | "baseSha" | "ciRunId" | "ciRetries" | "retryAttempts" | "lastFailedBaseSha">>,
   ): void {
     const entry = this.entries.get(entryId);
     if (!entry) return;
@@ -73,7 +73,8 @@ export class MemoryStore implements QueueStore {
       if (patch.baseSha !== undefined) entry.baseSha = patch.baseSha;
       if (patch.ciRunId !== undefined) entry.ciRunId = patch.ciRunId;
       if (patch.ciRetries !== undefined) entry.ciRetries = patch.ciRetries;
-      if (patch.repairAttempts !== undefined) entry.repairAttempts = patch.repairAttempts;
+      if (patch.retryAttempts !== undefined) entry.retryAttempts = patch.retryAttempts;
+      if (patch.lastFailedBaseSha !== undefined) entry.lastFailedBaseSha = patch.lastFailedBaseSha;
     }
     this.appendEvent(entryId, from, to);
   }
@@ -91,25 +92,24 @@ export class MemoryStore implements QueueStore {
     entry.generation++;
     entry.ciRunId = null;
     entry.ciRetries = 0;
-    entry.repairAttempts = 0;
+    entry.retryAttempts = 0;
+    entry.lastFailedBaseSha = null;
     entry.updatedAt = isoNow();
-    // Abandon pending repair requests.
-    for (const req of this.repairRequests) {
-      if (req.entryId === entryId && req.outcome === "pending") {
-        req.outcome = "abandoned";
-      }
-    }
     this.appendEvent(entryId, from, "queued", `updateHead: generation ${entry.generation}`);
   }
 
-  insertRepairRequest(req: RepairRequestRecord): void {
-    this.repairRequests.push({ ...req });
+  insertIncident(incident: IncidentRecord): void {
+    this.incidents.push({ ...incident });
   }
 
-  listRepairRequests(entryId: string): RepairRequestRecord[] {
-    return this.repairRequests
-      .filter((r) => r.entryId === entryId)
+  listIncidents(entryId: string): IncidentRecord[] {
+    return this.incidents
+      .filter((i) => i.entryId === entryId)
       .sort((a, b) => a.at.localeCompare(b.at));
+  }
+
+  getIncident(incidentId: string): IncidentRecord | undefined {
+    return this.incidents.find((i) => i.id === incidentId);
   }
 
   listEvents(entryId: string, opts?: { limit?: number }): QueueEventRecord[] {

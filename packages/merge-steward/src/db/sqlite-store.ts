@@ -3,7 +3,8 @@ import type {
   QueueEntry,
   QueueEntryStatus,
   QueueEventRecord,
-  RepairRequestRecord,
+  IncidentRecord,
+  EvictionContext,
 } from "../types.ts";
 import { TERMINAL_STATUSES } from "../types.ts";
 import type { DatabaseConnection } from "./shared.ts";
@@ -24,8 +25,9 @@ function mapEntry(row: Record<string, unknown>): QueueEntry {
     generation: Number(row.generation),
     ciRunId: row.ci_run_id === null ? null : String(row.ci_run_id),
     ciRetries: Number(row.ci_retries),
-    repairAttempts: Number(row.repair_attempts),
-    maxRepairAttempts: Number(row.max_repair_attempts),
+    retryAttempts: Number(row.retry_attempts),
+    maxRetries: Number(row.max_retries),
+    lastFailedBaseSha: row.last_failed_base_sha === null ? null : String(row.last_failed_base_sha),
     issueKey: row.issue_key === null ? null : String(row.issue_key),
     worktreePath: row.worktree_path === null ? null : String(row.worktree_path),
     enqueuedAt: String(row.enqueued_at),
@@ -33,15 +35,14 @@ function mapEntry(row: Record<string, unknown>): QueueEntry {
   };
 }
 
-function mapRepairRequest(row: Record<string, unknown>): RepairRequestRecord {
+function mapIncident(row: Record<string, unknown>): IncidentRecord {
   return {
     id: String(row.id),
     entryId: String(row.entry_id),
     at: String(row.at),
-    kind: String(row.kind) as RepairRequestRecord["kind"],
-    failureClass: String(row.failure_class) as RepairRequestRecord["failureClass"],
-    summary: row.summary === null ? undefined : String(row.summary),
-    outcome: String(row.outcome) as RepairRequestRecord["outcome"],
+    failureClass: String(row.failure_class) as IncidentRecord["failureClass"],
+    context: JSON.parse(String(row.context_json)) as EvictionContext,
+    outcome: String(row.outcome) as IncidentRecord["outcome"],
   };
 }
 
@@ -128,15 +129,15 @@ export class SqliteStore implements QueueStore {
       this.conn.prepare(
         `INSERT INTO queue_entries
          (id, repo_id, pr_number, branch, head_sha, base_sha, status, position,
-          priority, generation, ci_run_id, ci_retries, repair_attempts,
-          max_repair_attempts, issue_key, worktree_path, enqueued_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          priority, generation, ci_run_id, ci_retries, retry_attempts,
+          max_retries, last_failed_base_sha, issue_key, worktree_path, enqueued_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         entry.id, entry.repoId, entry.prNumber, entry.branch,
         entry.headSha, entry.baseSha, entry.status, entry.position,
         entry.priority, entry.generation, entry.ciRunId, entry.ciRetries,
-        entry.repairAttempts, entry.maxRepairAttempts, entry.issueKey,
-        entry.worktreePath, entry.enqueuedAt, entry.updatedAt,
+        entry.retryAttempts, entry.maxRetries, entry.lastFailedBaseSha,
+        entry.issueKey, entry.worktreePath, entry.enqueuedAt, entry.updatedAt,
       );
       this.writeEvent(entry.id, null, entry.status);
     })();
@@ -145,7 +146,7 @@ export class SqliteStore implements QueueStore {
   transition(
     entryId: string,
     to: QueueEntryStatus,
-    patch?: Partial<Pick<QueueEntry, "headSha" | "baseSha" | "ciRunId" | "ciRetries" | "repairAttempts">>,
+    patch?: Partial<Pick<QueueEntry, "headSha" | "baseSha" | "ciRunId" | "ciRetries" | "retryAttempts" | "lastFailedBaseSha">>,
   ): void {
     this.conn.transaction(() => {
       const current = this.conn.prepare("SELECT status FROM queue_entries WHERE id = ?").get(entryId);
@@ -158,7 +159,8 @@ export class SqliteStore implements QueueStore {
       if (patch?.baseSha !== undefined) { sets.push("base_sha = ?"); values.push(patch.baseSha); }
       if (patch?.ciRunId !== undefined) { sets.push("ci_run_id = ?"); values.push(patch.ciRunId); }
       if (patch?.ciRetries !== undefined) { sets.push("ci_retries = ?"); values.push(patch.ciRetries); }
-      if (patch?.repairAttempts !== undefined) { sets.push("repair_attempts = ?"); values.push(patch.repairAttempts); }
+      if (patch?.retryAttempts !== undefined) { sets.push("retry_attempts = ?"); values.push(patch.retryAttempts); }
+      if (patch?.lastFailedBaseSha !== undefined) { sets.push("last_failed_base_sha = ?"); values.push(patch.lastFailedBaseSha); }
 
       this.conn.prepare(
         `UPDATE queue_entries SET ${sets.join(", ")} WHERE id = ?`,
@@ -182,33 +184,37 @@ export class SqliteStore implements QueueStore {
       this.conn.prepare(
         `UPDATE queue_entries SET
           head_sha = ?, status = 'queued', generation = ?,
-          ci_run_id = NULL, ci_retries = 0, repair_attempts = 0,
-          updated_at = ?
+          ci_run_id = NULL, ci_retries = 0, retry_attempts = 0,
+          last_failed_base_sha = NULL, updated_at = ?
          WHERE id = ?`,
       ).run(newHeadSha, newGen, isoNow(), entryId);
-
-      // Abandon pending repair requests.
-      this.conn.prepare(
-        `UPDATE repair_requests SET outcome = 'abandoned', updated_at = ?
-         WHERE entry_id = ? AND outcome = 'pending'`,
-      ).run(isoNow(), entryId);
 
       this.writeEvent(entryId, from, "queued", `updateHead: generation ${newGen}`);
     })();
   }
 
-  insertRepairRequest(req: RepairRequestRecord): void {
+  insertIncident(incident: IncidentRecord): void {
     this.conn.prepare(
-      `INSERT INTO repair_requests (id, entry_id, at, kind, failure_class, summary, outcome, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(req.id, req.entryId, req.at, req.kind, req.failureClass, req.summary ?? null, req.outcome, isoNow());
+      `INSERT INTO queue_incidents (id, entry_id, at, failure_class, context_json, outcome)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(
+      incident.id, incident.entryId, incident.at,
+      incident.failureClass, JSON.stringify(incident.context), incident.outcome,
+    );
   }
 
-  listRepairRequests(entryId: string): RepairRequestRecord[] {
+  listIncidents(entryId: string): IncidentRecord[] {
     const rows = this.conn.prepare(
-      "SELECT * FROM repair_requests WHERE entry_id = ? ORDER BY at ASC",
+      "SELECT * FROM queue_incidents WHERE entry_id = ? ORDER BY at ASC",
     ).all(entryId);
-    return rows.map(mapRepairRequest);
+    return rows.map(mapIncident);
+  }
+
+  getIncident(incidentId: string): IncidentRecord | undefined {
+    const row = this.conn.prepare(
+      "SELECT * FROM queue_incidents WHERE id = ?",
+    ).get(incidentId);
+    return row ? mapIncident(row) : undefined;
   }
 
   listEvents(entryId: string, opts?: { limit?: number }): QueueEventRecord[] {

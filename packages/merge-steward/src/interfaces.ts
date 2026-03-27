@@ -1,4 +1,4 @@
-import type { CIStatus, CheckResult, MergeResult, PRStatus, RebaseResult } from "./types.ts";
+import type { CIStatus, CheckResult, IncidentRecord, MergeResult, PRStatus, QueueEntry, RebaseResult } from "./types.ts";
 
 /**
  * Git operations seam — swappable between real git (shell exec) and
@@ -38,10 +38,10 @@ export interface GitHubPRApi {
 }
 
 /**
- * Repair callback — the steward calls this to ask PatchRelay (or a stub)
- * to run a repair. The steward does not own agent execution.
+ * Reports evictions to external systems. The production implementation
+ * creates a GitHub check run; the sim records evictions for test assertion.
+ * The incident record is the source of truth; the check run is a projection.
  */
-export interface RepairDispatcher {
-  requestRepair(context: import("./types.ts").QueueRepairContext): Promise<void>;
-  cancelRepair(queueEntryId: string): Promise<void>;
+export interface EvictionReporter {
+  reportEviction(entry: QueueEntry, incident: IncidentRecord): Promise<void>;
 }

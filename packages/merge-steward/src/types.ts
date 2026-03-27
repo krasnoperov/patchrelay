@@ -1,23 +1,19 @@
 /**
- * Queue entry statuses — Phase 1 lifecycle.
+ * Queue entry statuses.
  *
  * queued → preparing_head → validating → merging → merged
  *
- * Failure paths:
- *   preparing_head   → repair_requested → repair_in_progress → preparing_head
- *   validating       → repair_requested (CI failure, retries exhausted)
- *   repair_requested → evicted (budget exhausted)
+ * Failure: any state → evicted (after retry budget exhausted).
+ * Conflict retries are gated on base SHA change (non-spinning).
  *
  * Terminal states: merged, evicted, dequeued.
- * paused: reserved for Phase 2 (policy_blocked — no approval, manual hold).
+ * paused: reserved for future use (policy_blocked).
  */
 export type QueueEntryStatus =
   | "queued"
   | "preparing_head"
   | "validating"
   | "merging"
-  | "repair_requested"
-  | "repair_in_progress"
   | "paused"
   | "evicted"
   | "merged"
@@ -38,8 +34,10 @@ export interface QueueEntry {
   generation: number;
   ciRunId: string | null;
   ciRetries: number;
-  repairAttempts: number;
-  maxRepairAttempts: number;
+  retryAttempts: number;
+  maxRetries: number;
+  /** Base SHA at the time of last conflict — gates non-spinning retries. */
+  lastFailedBaseSha: string | null;
   issueKey: string | null;
   worktreePath: string | null;
   enqueuedAt: string;
@@ -66,47 +64,33 @@ export interface CheckResult {
   url?: string | undefined;
 }
 
-export interface QueueRepairContext {
-  queueEntryId: string;
-  issueKey: string | null;
-  prNumber: number;
-  prHeadSha: string;
+/**
+ * Context attached to an eviction incident. Structured data that any
+ * external agent can use to understand and potentially repair the failure.
+ * The GitHub check run output is a projection of this record.
+ */
+export interface EvictionContext {
+  version: 1;
+  failureClass: FailureClass;
+  conflictFiles?: string[] | undefined;
+  failedChecks?: Array<{ name: string; conclusion: string }> | undefined;
   baseSha: string;
-  failureClass: "branch_local" | "integration_conflict";
-  failedChecks: Array<{
-    name: string;
-    url?: string | undefined;
-    conclusion: "failure" | "timed_out" | "cancelled";
-  }>;
-  baselineChecksOnMain: Array<{
-    name: string;
-    conclusion: "success" | "failure";
-  }>;
-  isolatedDiffSummary?: string | undefined;
-  compoundDiffSummary?: string | undefined;
+  prHeadSha: string;
   queuePosition: number;
-  aheadPrNumbers: number[];
-  behindPrNumbers: number[];
-  priorAttempts: Array<{
-    at: string;
-    kind: "ci_repair" | "queue_repair";
-    summary?: string | undefined;
-    outcome: "failed" | "succeeded" | "abandoned";
-  }>;
-  attemptBudget: {
-    current: number;
-    max: number;
-  };
+  retryHistory: Array<{ at: string; baseSha: string; outcome: string }>;
 }
 
-export interface RepairRequestRecord {
+/**
+ * Durable eviction/incident record. Source of truth — the GitHub check
+ * run is a projection of this. Persists in queue_incidents table.
+ */
+export interface IncidentRecord {
   id: string;
   entryId: string;
   at: string;
-  kind: "ci_repair" | "queue_repair";
   failureClass: FailureClass;
-  summary?: string | undefined;
-  outcome: "pending" | "failed" | "succeeded" | "abandoned";
+  context: EvictionContext;
+  outcome: "open" | "resolved" | "superseded";
 }
 
 export interface QueueEventRecord {
@@ -144,7 +128,7 @@ export interface PRStatus {
 export interface QueueConfig {
   repoId: string;
   baseBranch: string;
-  maxRepairAttempts: number;
+  maxRetries: number;
   flakyRetries: number;
   pollIntervalMs: number;
   requiredChecks: string[];

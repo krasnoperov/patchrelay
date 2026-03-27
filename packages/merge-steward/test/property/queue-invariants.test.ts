@@ -64,7 +64,7 @@ describe("property: queue invariants under random commands", () => {
       fc.asyncProperty(
         fc.array(arbCommand(6), { minLength: 3, maxLength: 30 }),
         async (commands) => {
-          const h = new Harness({ ciRule: () => "pass", repairBudget: 2 });
+          const h = new Harness({ ciRule: () => "pass", maxRetries: 2 });
           await h.init();
 
           const enqueued = new Set<number>();
@@ -101,7 +101,7 @@ describe("property: queue invariants under random commands", () => {
         async (ciMode, failCount, commands) => {
           const h = new Harness({
             ciRule: ciRuleForMode(ciMode, failCount),
-            repairBudget: 2,
+            maxRetries: 2,
             flakyRetries: 1,
           });
           await h.init();
@@ -139,7 +139,7 @@ describe("property: queue invariants under random commands", () => {
         async (ciMode, prCount) => {
           const h = new Harness({
             ciRule: ciRuleForMode(ciMode, 0),
-            repairBudget: 1,
+            maxRetries: 1,
             flakyRetries: 0,
           });
           await h.init();
@@ -178,7 +178,7 @@ describe("property: queue invariants under random commands", () => {
         async (ciMode, failCount, prCount) => {
           const h = new Harness({
             ciRule: ciRuleForMode(ciMode, failCount),
-            repairBudget: 1,
+            maxRetries: 1,
             flakyRetries: 1,
           });
           await h.init();
@@ -211,7 +211,7 @@ describe("property: queue invariants under random commands", () => {
       fc.asyncProperty(
         fc.shuffledSubarray([1, 2, 3, 4, 5, 6], { minLength: 2, maxLength: 6 }),
         async (prOrder) => {
-          const h = new Harness({ ciRule: () => "pass", repairBudget: 1 });
+          const h = new Harness({ ciRule: () => "pass", maxRetries: 1 });
           await h.init();
 
           // Enqueue in the given (shuffled) order.

@@ -7,7 +7,7 @@ export const stewardConfigSchema = z.object({
   baseBranch: z.string().default("main"),
   worktreeRoot: z.string().min(1),
   gitBin: z.string().default("git"),
-  maxRepairAttempts: z.number().int().min(0).default(3),
+  maxRetries: z.number().int().min(0).default(2),
   flakyRetries: z.number().int().min(0).default(1),
   requiredChecks: z.array(z.string()).default([]),
   pollIntervalMs: z.number().int().min(1000).default(30_000),
@@ -22,7 +22,8 @@ export const stewardConfigSchema = z.object({
   logging: z.object({
     level: z.enum(["debug", "info", "warn", "error"]).default("info"),
   }).default({ level: "info" }),
-  patchrelayApiUrl: z.string().url().optional(),
+  admissionLabel: z.string().default("queue"),
+  webhookSecret: z.string().optional(),
 });
 
 export type StewardConfig = z.infer<typeof stewardConfigSchema>;

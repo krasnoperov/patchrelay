@@ -8,14 +8,9 @@ const ACTIVE: QueueEntryStatus[] = [
   "preparing_head",
   "validating",
   "merging",
-  "repair_requested",
-  "repair_in_progress",
   "paused",
 ];
 
-/**
- * The 6 invariants from the design doc. Run after every state transition.
- */
 export function assertInvariants(
   entries: QueueEntry[],
   mergedPRs: number[],
@@ -26,14 +21,10 @@ export function assertInvariants(
   assertGreenMain(entries, mainIsGreen);
   assertNoLoss(entries, allEntryIds);
   assertSingleHead(entries);
-  assertBoundedRepair(entries);
+  assertBoundedRetries(entries);
   assertMonotonicProgress(entries);
 }
 
-/**
- * 1. Serialization: merged PRs appear in queue-position order.
- * No position inversion among merged entries.
- */
 function assertSerialization(entries: QueueEntry[]): void {
   const mergedEntries = entries
     .filter((e) => e.status === "merged")
@@ -49,12 +40,6 @@ function assertSerialization(entries: QueueEntry[]): void {
   }
 }
 
-/**
- * 2. Green-main: every merged entry must have had a passing CI run.
- * The mainIsGreen flag tracks whether onMainBroken was ever called.
- * Additionally: no entry with status "merged" should have a null ciRunId
- * (meaning it was merged without ever running CI).
- */
 function assertGreenMain(entries: QueueEntry[], mainIsGreen: boolean): void {
   assert.ok(mainIsGreen, "Main branch is not green — onMainBroken was called");
 
@@ -68,10 +53,6 @@ function assertGreenMain(entries: QueueEntry[], mainIsGreen: boolean): void {
   }
 }
 
-/**
- * 3. No-loss: every entry ID that was ever enqueued must still exist
- * in the entries array with a known status. No entry can vanish.
- */
 function assertNoLoss(entries: QueueEntry[], allEntryIds: Set<string>): void {
   const currentIds = new Set(entries.map((e) => e.id));
 
@@ -91,9 +72,6 @@ function assertNoLoss(entries: QueueEntry[], allEntryIds: Set<string>): void {
   }
 }
 
-/**
- * 4. Single head: at most one entry is actively being processed.
- */
 function assertSingleHead(entries: QueueEntry[]): void {
   const headStatuses: QueueEntryStatus[] = ["preparing_head", "validating", "merging"];
   const heads = entries.filter((e) => headStatuses.includes(e.status));
@@ -103,24 +81,15 @@ function assertSingleHead(entries: QueueEntry[]): void {
   );
 }
 
-/**
- * 5. Bounded repair: no entry has more repair attempts than its budget allows.
- */
-function assertBoundedRepair(entries: QueueEntry[]): void {
+function assertBoundedRetries(entries: QueueEntry[]): void {
   for (const entry of entries) {
     assert.ok(
-      entry.repairAttempts <= entry.maxRepairAttempts,
-      `PR #${entry.prNumber} exceeded repair budget: ${entry.repairAttempts} > ${entry.maxRepairAttempts}`,
+      entry.retryAttempts <= entry.maxRetries,
+      `PR #${entry.prNumber} exceeded retry budget: ${entry.retryAttempts} > ${entry.maxRetries}`,
     );
   }
 }
 
-/**
- * 6. Monotonic progress: if there are active (non-terminal) entries,
- * at least one must be in a head-like processing state or all must be
- * legitimately waiting (queued behind a head, or paused, or awaiting
- * external repair completion).
- */
 function assertMonotonicProgress(entries: QueueEntry[]): void {
   const active = entries.filter((e) => ACTIVE.includes(e.status));
   if (active.length === 0) return;
@@ -129,18 +98,12 @@ function assertMonotonicProgress(entries: QueueEntry[]): void {
     ["preparing_head", "validating", "merging"].includes(e.status),
   );
   const waitingForExternal = active.filter((e) =>
-    ["repair_requested", "repair_in_progress", "paused"].includes(e.status),
+    e.status === "paused",
   );
   const waitingInLine = active.filter((e) =>
     e.status === "queued",
   );
 
-  // Valid states:
-  // - At least one entry is processing (head is active), OR
-  // - All active entries are waiting for external input, OR
-  // - All active entries are in line (queued/waiting_head), possibly
-  //   behind a head that is waiting for external repair, OR
-  // - All entries are freshly queued (reconciler hasn't ticked yet)
   const headActive = processing.length > 0;
   const allExternalWait = active.length === waitingForExternal.length;
   const allInLine = active.length === waitingInLine.length;

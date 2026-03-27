@@ -1,11 +1,11 @@
 import git from "isomorphic-git";
 import { GitSim } from "../src/sim/git-sim.ts";
 import { CISim, type CIRule } from "../src/sim/ci-sim.ts";
-import { GitHubSim, RepairSim } from "../src/sim/github-sim.ts";
+import { GitHubSim, EvictionReporterSim } from "../src/sim/github-sim.ts";
 import { MemoryStore } from "../src/memory-store.ts";
-import { reconcile, completeRepair } from "../src/reconciler.ts";
+import { reconcile } from "../src/reconciler.ts";
 import type { ReconcileContext } from "../src/reconciler.ts";
-import type { QueueEntry, QueueEntryStatus } from "../src/types.ts";
+import type { QueueEntry, QueueEntryStatus, EvictionContext } from "../src/types.ts";
 import { TERMINAL_STATUSES } from "../src/types.ts";
 import { assertInvariants } from "./invariants.ts";
 
@@ -19,49 +19,28 @@ export interface HarnessOptions {
   baseBranch?: string;
   ciRule?: CIRule;
   flakyRetries?: number;
-  repairBudget?: number;
-  /**
-   * When true (default), the harness automatically completes any
-   * repair_in_progress entry before each tick, simulating instant
-   * PatchRelay repair. Set to false to manually control repair timing
-   * via completeRepair().
-   */
-  autoCompleteRepairs?: boolean;
+  maxRetries?: number;
 }
 
-/**
- * Test harness that wires GitSim + CISim + GitHubSim + MemoryStore
- * together with the reconciler under test.
- */
 export class Harness {
   readonly gitSim: GitSim;
   readonly ciSim: CISim;
   readonly githubSim: GitHubSim;
-  readonly repairSim: RepairSim;
+  readonly evictionSim: EvictionReporterSim;
   readonly store: MemoryStore;
 
-  /** All entry IDs ever created — for no-loss invariant. */
   readonly allEntryIds: Set<string> = new Set();
-
-  /** PRs merged to main in order. */
   readonly mergedPRs: number[] = [];
-
-  /** Whether main has ever had a bad merge. */
   mainGreen = true;
 
   private readonly baseBranch: string;
   private readonly repoId = "test-repo";
   private readonly flakyRetries: number;
-  private readonly repairBudget: number;
-  private readonly autoCompleteRepairs: boolean;
+  private readonly maxRetries: number;
   private nextPosition = 1;
   private nextEntryId = 1;
   private tickCount = 0;
 
-  /**
-   * The reconciler function — the thing under test.
-   * Defaults to the real reconciler implementation.
-   */
   reconcileFn:
     | ((ctx: ReconcileContext) => Promise<void>)
     | null = reconcile;
@@ -69,13 +48,12 @@ export class Harness {
   constructor(options: HarnessOptions = {}) {
     this.baseBranch = options.baseBranch ?? "main";
     this.flakyRetries = options.flakyRetries ?? 0;
-    this.repairBudget = options.repairBudget ?? 3;
-    this.autoCompleteRepairs = options.autoCompleteRepairs ?? true;
+    this.maxRetries = options.maxRetries ?? 3;
 
     this.gitSim = new GitSim();
     this.ciSim = new CISim(options.ciRule ?? (() => "pass"));
     this.githubSim = new GitHubSim();
-    this.repairSim = new RepairSim();
+    this.evictionSim = new EvictionReporterSim();
     this.store = new MemoryStore();
 
     this.ciSim.resolveFiles = async (branch: string) => {
@@ -86,7 +64,6 @@ export class Harness {
       }
     };
 
-    // Sync GitHubSim SHA when git pushes (needed for revalidation).
     this.gitSim.onPush = (branch: string, sha: string) => {
       for (const entry of this.store.listAll(this.repoId)) {
         if (entry.branch === branch) {
@@ -100,9 +77,6 @@ export class Harness {
     await this.gitSim.init(this.baseBranch);
   }
 
-  /**
-   * Create a PR branch with files and enqueue it.
-   */
   async enqueue(pr: SimPR): Promise<QueueEntry> {
     await this.gitSim.createBranch(pr.branch, this.baseBranch);
     await git.checkout({
@@ -146,8 +120,9 @@ export class Harness {
       generation: 0,
       ciRunId: null,
       ciRetries: 0,
-      repairAttempts: 0,
-      maxRepairAttempts: this.repairBudget,
+      retryAttempts: 0,
+      maxRetries: this.maxRetries,
+      lastFailedBaseSha: null,
       issueKey: null,
       worktreePath: null,
       enqueuedAt: new Date().toISOString(),
@@ -159,31 +134,12 @@ export class Harness {
     return entry;
   }
 
-  /** Run one reconciliation tick. */
   async tick(): Promise<void> {
     this.tickCount++;
     if (!this.reconcileFn) return;
-
-    if (this.autoCompleteRepairs) {
-      for (const entry of this.store.listActive(this.repoId)) {
-        if (entry.status === "repair_in_progress") {
-          completeRepair(this.store, entry.id);
-        }
-      }
-    }
-
     await this.reconcileFn(this.buildContext());
   }
 
-  /**
-   * Manually complete a repair for a specific entry.
-   * Use with autoCompleteRepairs: false to control repair timing.
-   */
-  completeRepair(queueEntryId: string): boolean {
-    return completeRepair(this.store, queueEntryId);
-  }
-
-  /** Run ticks until no more progress or maxTicks reached. */
   async runUntilStable(options?: { maxTicks?: number }): Promise<void> {
     const max = options?.maxTicks ?? 100;
     for (let i = 0; i < max; i++) {
@@ -194,47 +150,37 @@ export class Harness {
     }
   }
 
-  /** Assert all 6 invariants. */
   assertInvariants(): void {
     assertInvariants(this.entries, this.mergedPRs, this.mainGreen, this.allEntryIds);
   }
 
-  /** All entries (view from store). */
   get entries(): QueueEntry[] {
     return this.store.listAll(this.repoId);
   }
 
-  /** Get the status of a specific entry by PR number. */
   entryStatus(pr: SimPR): QueueEntryStatus | undefined {
     return this.entries.find((e) => e.prNumber === pr.number)?.status;
   }
 
-  /** Get merged PR numbers in merge order. */
   get merged(): number[] {
     return [...this.mergedPRs];
   }
 
-  /** Get evicted PR numbers. */
   get evicted(): number[] {
     return this.entries.filter((e) => e.status === "evicted").map((e) => e.prNumber);
   }
 
-  /** Get entries still active (not terminal). */
   get activeEntries(): QueueEntry[] {
     return this.store.listActive(this.repoId);
   }
 
-  /** Repair requests dispatched to PatchRelay. */
-  get repairRequests() {
-    return this.repairSim.requests;
+  get evictions() {
+    return this.evictionSim.evictions;
   }
 
-  /** Simulate a process crash + restart — reset transient state. */
   restart(): void {
     this.tickCount = 0;
   }
-
-  // --- Internal helpers ---
 
   private buildContext(): ReconcileContext {
     return {
@@ -244,11 +190,12 @@ export class Harness {
       git: this.gitSim,
       ci: this.ciSim,
       github: this.githubSim,
-      repair: this.repairSim,
+      eviction: this.evictionSim,
       flakyRetries: this.flakyRetries,
       onMerged: (prNumber: number) => {
         this.mergedPRs.push(prNumber);
       },
+      onEvicted: (_prNumber: number, _context: EvictionContext) => {},
       onMainBroken: () => {
         this.mainGreen = false;
       },
@@ -266,9 +213,6 @@ export class Harness {
   }
 }
 
-/**
- * Convenience factory for tests.
- */
 export async function createHarness(options?: HarnessOptions): Promise<Harness> {
   const h = new Harness(options);
   await h.init();
