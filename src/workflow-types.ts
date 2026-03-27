@@ -40,5 +40,7 @@ export interface ProjectConfig {
     webhookSecret?: string;
     repoFullName?: string;
     baseBranch?: string;
+    /** When true, merge-steward handles queue ordering and merging. PatchRelay skips merge-prep. */
+    useMergeSteward?: boolean;
   };
 }

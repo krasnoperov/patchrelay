@@ -24,6 +24,10 @@ import { safeJsonParse } from "./utils.ts";
  * metadata (prCheckStatus) for observability.
  */
 function isMetadataOnlyCheckEvent(event: NormalizedGitHubEvent): boolean {
+  // Steward's merge queue check drives state transitions, not metadata-only.
+  if (event.eventSource === "check_run" && event.checkName?.startsWith("merge-steward/")) {
+    return false;
+  }
   return event.eventSource === "check_run"
     && (event.triggerEvent === "check_passed" || event.triggerEvent === "check_failed");
 }
@@ -249,18 +253,34 @@ export class GitHubWebhookHandler {
     if (TERMINAL_STATES.has(issue.factoryState as FactoryState)) return;
 
     if (event.triggerEvent === "check_failed" && issue.prState === "open") {
-      this.db.upsertIssue({
-        projectId: issue.projectId,
-        linearIssueId: issue.linearIssueId,
-        pendingRunType: "ci_repair",
-        pendingRunContextJson: JSON.stringify({
-          checkName: event.checkName,
-          checkUrl: event.checkUrl,
-          checkClass: resolveCheckClass(event.checkName, project),
-        }),
-      });
-      this.enqueueIssue(issue.projectId, issue.linearIssueId);
-      this.logger.info({ issueKey: issue.issueKey, checkName: event.checkName }, "Enqueued CI repair run");
+      // Steward merge queue eviction — trigger queue_repair instead of ci_repair.
+      if (event.checkName?.startsWith("merge-steward/") && project?.github?.useMergeSteward) {
+        this.db.upsertIssue({
+          projectId: issue.projectId,
+          linearIssueId: issue.linearIssueId,
+          pendingRunType: "queue_repair",
+          pendingRunContextJson: JSON.stringify({
+            failureReason: "steward_eviction",
+            checkName: event.checkName,
+            checkUrl: event.checkUrl,
+          }),
+        });
+        this.enqueueIssue(issue.projectId, issue.linearIssueId);
+        this.logger.info({ issueKey: issue.issueKey, checkName: event.checkName }, "Steward eviction detected, enqueued queue repair");
+      } else {
+        this.db.upsertIssue({
+          projectId: issue.projectId,
+          linearIssueId: issue.linearIssueId,
+          pendingRunType: "ci_repair",
+          pendingRunContextJson: JSON.stringify({
+            checkName: event.checkName,
+            checkUrl: event.checkUrl,
+            checkClass: resolveCheckClass(event.checkName, project),
+          }),
+        });
+        this.enqueueIssue(issue.projectId, issue.linearIssueId);
+        this.logger.info({ issueKey: issue.issueKey, checkName: event.checkName }, "Enqueued CI repair run");
+      }
     }
 
     if (event.triggerEvent === "review_changes_requested") {

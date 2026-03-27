@@ -46,6 +46,12 @@ export class MergeQueue {
    * On transient failure: leave pendingMergePrep set so the next event retries.
    */
   async prepareForMerge(issue: IssueRecord, project: ProjectConfig): Promise<void> {
+    // Skip merge prep for steward-managed projects.
+    if (project.github?.useMergeSteward) {
+      this.db.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, pendingMergePrep: false });
+      return;
+    }
+
     // Only prepare the front-of-queue issue for this project
     const queue = this.db.listIssuesByState(project.id, "awaiting_queue");
     const front = queue.find((i) => i.activeRunId === undefined && i.pendingRunType === undefined);
@@ -205,6 +211,9 @@ export class MergeQueue {
    * Called when a PR merges (pr_merged event) and on startup.
    */
   advanceQueue(projectId: string): void {
+    const project = this.config.projects.find((p) => p.id === projectId);
+    if (project?.github?.useMergeSteward) return;
+
     const queue = this.db.listIssuesByState(projectId, "awaiting_queue");
     const next = queue.find((i) => i.activeRunId === undefined && i.pendingRunType === undefined && !i.pendingMergePrep);
 
