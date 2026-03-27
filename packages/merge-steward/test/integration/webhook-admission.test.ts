@@ -23,7 +23,7 @@ const config: StewardConfig = {
   requiredChecks: [],
   pollIntervalMs: 60_000, // Long interval — we don't want ticks during test
   admissionLabel: "queue",
-  webhookPath: "/webhooks/steward",
+  webhookPath: "/webhooks/github/queue",
   webhookSecret: WEBHOOK_SECRET,
   server: { bind: "127.0.0.1", port: 0 },
   database: { path: ":memory:", wal: true },
@@ -69,7 +69,7 @@ describe("webhook admission integration", () => {
       },
     });
 
-    const labelResp = await fetch(`${baseUrl}/webhooks/steward`, {
+    const labelResp = await fetch(`${baseUrl}/webhooks/github/queue`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -96,7 +96,7 @@ describe("webhook admission integration", () => {
       },
     });
 
-    await fetch(`${baseUrl}/webhooks/steward`, {
+    await fetch(`${baseUrl}/webhooks/github/queue`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -121,7 +121,7 @@ describe("webhook admission integration", () => {
       },
     });
 
-    await fetch(`${baseUrl}/webhooks/steward`, {
+    await fetch(`${baseUrl}/webhooks/github/queue`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -154,7 +154,7 @@ describe("webhook admission integration", () => {
     after(async () => { await app.close(); });
 
     const body = JSON.stringify({ action: "labeled" });
-    const resp = await fetch(`${address}/webhooks/steward`, {
+    const resp = await fetch(`${address}/webhooks/github/queue`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -196,7 +196,7 @@ describe("webhook admission integration", () => {
       },
     });
 
-    await fetch(`${address}/webhooks/steward`, {
+    await fetch(`${address}/webhooks/github/queue`, {
       method: "POST",
       headers: {
         "content-type": "application/json",

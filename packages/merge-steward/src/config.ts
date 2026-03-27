@@ -24,7 +24,7 @@ export const stewardConfigSchema = z.object({
     level: z.enum(["debug", "info", "warn", "error"]).default("info"),
   }).default({ level: "info" }),
   admissionLabel: z.string().default("queue"),
-  webhookPath: z.string().default("/webhooks/steward"),
+  webhookPath: z.string().default("/webhooks/github/queue"),
   webhookSecret: z.string().optional(),
 });
 

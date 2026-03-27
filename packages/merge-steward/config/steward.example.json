@@ -8,7 +8,7 @@
   "requiredChecks": [],
   "pollIntervalMs": 30000,
   "admissionLabel": "queue",
-  "webhookPath": "/webhooks/steward",
+  "webhookPath": "/webhooks/github/queue",
   "server": {
     "bind": "127.0.0.1",
     "port": 8790
