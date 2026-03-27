@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import type { QueueEntry, QueueEntryStatus } from "../src/types.ts";
+import { TERMINAL_STATUSES } from "../src/types.ts";
 
-const TERMINAL: QueueEntryStatus[] = ["merged", "evicted"];
+const TERMINAL = TERMINAL_STATUSES;
 const ACTIVE: QueueEntryStatus[] = [
   "queued",
   "preparing_head",

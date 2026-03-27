@@ -2,8 +2,11 @@ import git from "isomorphic-git";
 import { GitSim } from "../src/sim/git-sim.ts";
 import { CISim, type CIRule } from "../src/sim/ci-sim.ts";
 import { GitHubSim, RepairSim } from "../src/sim/github-sim.ts";
+import { MemoryStore } from "../src/memory-store.ts";
 import { reconcile, completeRepair } from "../src/reconciler.ts";
-import type { QueueEntry, QueueEntryStatus, CIStatus } from "../src/types.ts";
+import type { ReconcileContext } from "../src/reconciler.ts";
+import type { QueueEntry, QueueEntryStatus } from "../src/types.ts";
+import { TERMINAL_STATUSES } from "../src/types.ts";
 import { assertInvariants } from "./invariants.ts";
 
 export interface SimPR {
@@ -27,21 +30,15 @@ export interface HarnessOptions {
 }
 
 /**
- * Test harness that wires GitSim + CISim + GitHubSim together with a
- * queue under test. Provides enqueue/tick/runUntilStable for scenario
- * tests and assertInvariants for correctness checking.
- *
- * The reconciler is pluggable — initially null (tests will fail),
- * replaced with the real implementation as it's built.
+ * Test harness that wires GitSim + CISim + GitHubSim + MemoryStore
+ * together with the reconciler under test.
  */
 export class Harness {
   readonly gitSim: GitSim;
   readonly ciSim: CISim;
   readonly githubSim: GitHubSim;
   readonly repairSim: RepairSim;
-
-  /** All queue entries, past and present. */
-  readonly entries: QueueEntry[] = [];
+  readonly store: MemoryStore;
 
   /** All entry IDs ever created — for no-loss invariant. */
   readonly allEntryIds: Set<string> = new Set();
@@ -52,11 +49,8 @@ export class Harness {
   /** Whether main has ever had a bad merge. */
   mainGreen = true;
 
-  /** Previous tick snapshot for monotonic progress detection. */
-  private previousSnapshot: string | null = null;
-  private staleTicks = 0;
-
   private readonly baseBranch: string;
+  private readonly repoId = "test-repo";
   private readonly flakyRetries: number;
   private readonly repairBudget: number;
   private readonly autoCompleteRepairs: boolean;
@@ -67,9 +61,8 @@ export class Harness {
   /**
    * The reconciler function — the thing under test.
    * Defaults to the real reconciler implementation.
-   * Set to null to test harness behavior without a reconciler.
    */
-  reconcile:
+  reconcileFn:
     | ((ctx: ReconcileContext) => Promise<void>)
     | null = reconcile;
 
@@ -83,8 +76,8 @@ export class Harness {
     this.ciSim = new CISim(options.ciRule ?? (() => "pass"));
     this.githubSim = new GitHubSim();
     this.repairSim = new RepairSim();
+    this.store = new MemoryStore();
 
-    // Wire CI sim to resolve files from git sim.
     this.ciSim.resolveFiles = async (branch: string) => {
       try {
         return await this.gitSim.changedFiles(branch, this.baseBranch);
@@ -94,18 +87,14 @@ export class Harness {
     };
   }
 
-  /** Initialize the repo and base branch. */
   async init(): Promise<void> {
     await this.gitSim.init(this.baseBranch);
   }
 
   /**
    * Create a PR branch with files and enqueue it.
-   * Simulates: developer created a branch, pushed it, opened a PR,
-   * got it approved with green branch CI.
    */
   async enqueue(pr: SimPR): Promise<QueueEntry> {
-    // Create branch from current main.
     await this.gitSim.createBranch(pr.branch, this.baseBranch);
     await git.checkout({
       fs: this.gitSim.volume,
@@ -114,12 +103,10 @@ export class Harness {
       force: true,
     });
 
-    // Commit files.
     for (const file of pr.files) {
       await this.gitSim.commitFile(file.path, file.content, `add ${file.path}`);
     }
 
-    // Switch back to base.
     await git.checkout({
       fs: this.gitSim.volume,
       dir: this.gitSim.repoDir,
@@ -130,7 +117,6 @@ export class Harness {
     const headSha = await this.gitSim.headSha(pr.branch);
     const baseSha = await this.gitSim.headSha(this.baseBranch);
 
-    // Register in GitHub sim.
     this.githubSim.addPR({
       number: pr.number,
       branch: pr.branch,
@@ -138,10 +124,9 @@ export class Harness {
       reviewApproved: true,
     });
 
-    // Create queue entry.
     const entry: QueueEntry = {
       id: `qe-${this.nextEntryId++}`,
-      repoId: "test-repo",
+      repoId: this.repoId,
       prNumber: pr.number,
       branch: pr.branch,
       headSha,
@@ -149,14 +134,18 @@ export class Harness {
       status: "queued",
       position: this.nextPosition++,
       priority: 0,
+      generation: 0,
       ciRunId: null,
       ciRetries: 0,
       repairAttempts: 0,
       maxRepairAttempts: this.repairBudget,
+      issueKey: null,
+      worktreePath: null,
       enqueuedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
-    this.entries.push(entry);
+
+    this.store.insert(entry);
     this.allEntryIds.add(entry.id);
     return entry;
   }
@@ -164,20 +153,17 @@ export class Harness {
   /** Run one reconciliation tick. */
   async tick(): Promise<void> {
     this.tickCount++;
-    if (!this.reconcile) return;
+    if (!this.reconcileFn) return;
 
-    // If auto-complete is on, resolve any repair_in_progress entries
-    // before the reconciler runs (simulates PatchRelay completing repair
-    // between ticks).
     if (this.autoCompleteRepairs) {
-      for (const entry of this.entries) {
+      for (const entry of this.store.listActive(this.repoId)) {
         if (entry.status === "repair_in_progress") {
-          completeRepair(this.entries, entry.id);
+          completeRepair(this.store, entry.id);
         }
       }
     }
 
-    await this.reconcile(this.buildContext());
+    await this.reconcileFn(this.buildContext());
   }
 
   /**
@@ -185,7 +171,7 @@ export class Harness {
    * Use with autoCompleteRepairs: false to control repair timing.
    */
   completeRepair(queueEntryId: string): boolean {
-    return completeRepair(this.entries, queueEntryId);
+    return completeRepair(this.store, queueEntryId);
   }
 
   /** Run ticks until no more progress or maxTicks reached. */
@@ -202,6 +188,11 @@ export class Harness {
   /** Assert all 6 invariants. */
   assertInvariants(): void {
     assertInvariants(this.entries, this.mergedPRs, this.mainGreen, this.allEntryIds);
+  }
+
+  /** All entries (view from store). */
+  get entries(): QueueEntry[] {
+    return this.store.listAll(this.repoId);
   }
 
   /** Get the status of a specific entry by PR number. */
@@ -221,9 +212,7 @@ export class Harness {
 
   /** Get entries still active (not terminal). */
   get activeEntries(): QueueEntry[] {
-    return this.entries.filter(
-      (e) => e.status !== "merged" && e.status !== "evicted",
-    );
+    return this.store.listActive(this.repoId);
   }
 
   /** Repair requests dispatched to PatchRelay. */
@@ -233,8 +222,6 @@ export class Harness {
 
   /** Simulate a process crash + restart — reset transient state. */
   restart(): void {
-    // The reconciler should be idempotent — restarting and re-running
-    // should converge to the same state. Entries persist (they're the "DB").
     this.tickCount = 0;
   }
 
@@ -242,7 +229,8 @@ export class Harness {
 
   private buildContext(): ReconcileContext {
     return {
-      entries: this.entries,
+      store: this.store,
+      repoId: this.repoId,
       baseBranch: this.baseBranch,
       git: this.gitSim,
       ci: this.ciSim,
@@ -264,27 +252,9 @@ export class Harness {
 
   private hasActiveWork(): boolean {
     return this.entries.some(
-      (e) =>
-        e.status !== "merged" &&
-        e.status !== "evicted" &&
-        e.status !== "paused",
+      (e) => !TERMINAL_STATUSES.includes(e.status) && e.status !== "paused",
     );
   }
-}
-
-/**
- * Context passed to the reconciler on each tick.
- */
-export interface ReconcileContext {
-  entries: QueueEntry[];
-  baseBranch: string;
-  git: GitSim;
-  ci: CISim;
-  github: GitHubSim;
-  repair: RepairSim;
-  flakyRetries: number;
-  onMerged: (prNumber: number) => void;
-  onMainBroken: () => void;
 }
 
 /**

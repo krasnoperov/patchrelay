@@ -2,6 +2,16 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { createHarness, type SimPR } from "../harness.ts";
 
+const prB: SimPR = {
+  number: 2,
+  branch: "feat-b",
+  files: [{ path: "readme.md", content: "version B" }],
+};
+
+function getEntry(h: ReturnType<Awaited<typeof createHarness>>, prNumber: number) {
+  return h.entries.find((e) => e.prNumber === prNumber)!;
+}
+
 describe("repair lifecycle", () => {
   it("queue pauses at repair_in_progress until completeRepair is called", async () => {
     const prA: SimPR = {
@@ -9,13 +19,7 @@ describe("repair lifecycle", () => {
       branch: "feat-a",
       files: [{ path: "readme.md", content: "version A" }],
     };
-    const prB: SimPR = {
-      number: 2,
-      branch: "feat-b",
-      files: [{ path: "readme.md", content: "version B" }],
-    };
 
-    // autoCompleteRepairs OFF — we control repair timing.
     const h = await createHarness({
       ciRule: () => "pass",
       repairBudget: 2,
@@ -24,29 +28,23 @@ describe("repair lifecycle", () => {
     await h.enqueue(prA);
     await h.enqueue(prB);
 
-    // Run until A merges and B hits the conflict.
     for (let i = 0; i < 20; i++) await h.tick();
 
     assert.ok(h.merged.includes(1), "PR #1 should merge");
-    const bEntry = h.entries.find((e) => e.prNumber === 2)!;
-    assert.strictEqual(bEntry.status, "repair_in_progress",
+    assert.strictEqual(getEntry(h, 2).status, "repair_in_progress",
       "PR #2 should be paused in repair_in_progress");
 
     // Tick several more times — queue should NOT advance.
-    const statusBefore = bEntry.status;
     await h.tick();
     await h.tick();
     await h.tick();
-    assert.strictEqual(bEntry.status, "repair_in_progress",
+    assert.strictEqual(getEntry(h, 2).status, "repair_in_progress",
       "PR #2 should still be in repair_in_progress after multiple ticks");
 
-    // Verify a repair request was dispatched.
     assert.ok(h.repairRequests.length > 0, "Should have dispatched repair");
     assert.strictEqual(h.repairRequests[0]!.failureClass, "integration_conflict");
 
-    // Now simulate PatchRelay completing the repair.
-    // (In reality, the agent would fix the branch and call back.)
-    // We still need to fix the actual conflict in git for the rebase to succeed.
+    // Fix the conflict in git, then complete repair.
     const git = await import("isomorphic-git");
     const vol = h.gitSim.volume;
     const dir = h.gitSim.repoDir;
@@ -57,13 +55,12 @@ describe("repair lifecycle", () => {
     await h.gitSim.commitFile("readme.md", "version A + B", "resolve conflict");
     await git.default.checkout({ fs: vol, dir, ref: "main", force: true });
 
-    // Complete the repair via callback.
-    const completed = h.completeRepair(bEntry.id);
+    const entryId = getEntry(h, 2).id;
+    const completed = h.completeRepair(entryId);
     assert.ok(completed, "completeRepair should return true");
-    assert.strictEqual(bEntry.status, "preparing_head",
+    assert.strictEqual(getEntry(h, 2).status, "preparing_head",
       "PR #2 should be back to preparing_head after repair");
 
-    // Now run to completion.
     for (let i = 0; i < 20; i++) await h.tick();
     assert.ok(h.merged.includes(2), "PR #2 should merge after repair");
 
@@ -89,35 +86,31 @@ describe("repair lifecycle", () => {
       branch: "feat-a",
       files: [{ path: "shared.ts", content: "version A" }],
     };
-    const prB: SimPR = {
+    const prBShared: SimPR = {
       number: 2,
-      branch: "feat-b",
+      branch: "feat-b-shared",
       files: [{ path: "shared.ts", content: "version B" }],
     };
 
-    // Budget of 1 — one repair attempt, then evict.
     const h = await createHarness({
       ciRule: () => "pass",
       repairBudget: 1,
       autoCompleteRepairs: false,
     });
     await h.enqueue(prA);
-    await h.enqueue(prB);
+    await h.enqueue(prBShared);
 
-    // Run until B hits repair_in_progress.
     for (let i = 0; i < 20; i++) await h.tick();
     assert.ok(h.merged.includes(1), "PR #1 should merge");
-    const bEntry = h.entries.find((e) => e.prNumber === 2)!;
-    assert.strictEqual(bEntry.status, "repair_in_progress");
-    assert.strictEqual(bEntry.repairAttempts, 1);
+    assert.strictEqual(getEntry(h, 2).status, "repair_in_progress");
+    assert.strictEqual(getEntry(h, 2).repairAttempts, 1);
 
-    // Complete repair but DON'T fix the conflict — branch still conflicts.
-    h.completeRepair(bEntry.id);
+    // Complete repair but DON'T fix the conflict.
+    h.completeRepair(getEntry(h, 2).id);
 
-    // Run more ticks — B should hit repair_requested again but now
-    // budget is exhausted, so it goes to evicted.
+    // B should hit repair_requested again but budget is exhausted → evicted.
     for (let i = 0; i < 20; i++) await h.tick();
-    assert.strictEqual(bEntry.status, "evicted",
+    assert.strictEqual(getEntry(h, 2).status, "evicted",
       "PR #2 should be evicted after repair budget exhausted");
 
     h.assertInvariants();

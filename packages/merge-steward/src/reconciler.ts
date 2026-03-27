@@ -1,10 +1,11 @@
 import type { GitOperations, CIRunner, GitHubPRApi, RepairDispatcher } from "./interfaces.ts";
+import type { QueueStore } from "./store.ts";
 import type { QueueEntry, QueueEntryStatus } from "./types.ts";
-
-const TERMINAL: QueueEntryStatus[] = ["merged", "evicted"];
+import { TERMINAL_STATUSES } from "./types.ts";
 
 export interface ReconcileContext {
-  entries: QueueEntry[];
+  store: QueueStore;
+  repoId: string;
   baseBranch: string;
   git: GitOperations;
   ci: CIRunner;
@@ -35,13 +36,12 @@ export interface ReconcileContext {
  * (completeRepair) transitions the entry back to preparing_head.
  */
 export async function reconcile(ctx: ReconcileContext): Promise<void> {
-  const head = findHead(ctx.entries);
+  const head = ctx.store.getHead(ctx.repoId);
   if (!head) return;
 
   switch (head.status) {
     case "queued":
-      // Promote to preparing_head — this is the head now.
-      transition(head, "preparing_head");
+      ctx.store.transition(head.id, "preparing_head");
       break;
 
     case "preparing_head":
@@ -69,18 +69,9 @@ export async function reconcile(ctx: ReconcileContext): Promise<void> {
       break;
 
     default:
-      // merged, evicted — terminal, no action for head.
+      // merged, evicted, dequeued — terminal, no action.
       break;
   }
-}
-
-/**
- * Find the current queue head: the first non-terminal entry by position.
- */
-function findHead(entries: QueueEntry[]): QueueEntry | undefined {
-  return entries
-    .filter((e) => !TERMINAL.includes(e.status))
-    .sort((a, b) => a.position - b.position)[0];
 }
 
 /**
@@ -92,21 +83,20 @@ async function prepareHead(ctx: ReconcileContext, entry: QueueEntry): Promise<vo
   const result = await ctx.git.rebase(entry.branch, ctx.baseBranch);
 
   if (result.success) {
-    if (result.newHeadSha) {
-      entry.headSha = result.newHeadSha;
-    }
-    entry.baseSha = await ctx.git.headSha(ctx.baseBranch);
+    const newHeadSha = result.newHeadSha ?? entry.headSha;
+    const baseSha = await ctx.git.headSha(ctx.baseBranch);
     await ctx.git.push(entry.branch, true);
-    // Trigger CI.
-    const runId = await ctx.ci.triggerRun(entry.branch, entry.headSha);
-    entry.ciRunId = runId;
-    transition(entry, "validating");
+    const runId = await ctx.ci.triggerRun(entry.branch, newHeadSha);
+    ctx.store.transition(entry.id, "validating", {
+      headSha: newHeadSha,
+      baseSha,
+      ciRunId: runId,
+    });
   } else {
-    // Conflict — need repair or eviction.
     if (entry.repairAttempts >= entry.maxRepairAttempts) {
-      transition(entry, "evicted");
+      ctx.store.transition(entry.id, "evicted");
     } else {
-      transition(entry, "repair_requested");
+      ctx.store.transition(entry.id, "repair_requested");
     }
   }
 }
@@ -117,9 +107,8 @@ async function prepareHead(ctx: ReconcileContext, entry: QueueEntry): Promise<vo
  */
 async function checkValidation(ctx: ReconcileContext, entry: QueueEntry): Promise<void> {
   if (!entry.ciRunId) {
-    // No CI run — trigger one.
     const runId = await ctx.ci.triggerRun(entry.branch, entry.headSha);
-    entry.ciRunId = runId;
+    ctx.store.transition(entry.id, "validating", { ciRunId: runId });
     return;
   }
 
@@ -127,27 +116,24 @@ async function checkValidation(ctx: ReconcileContext, entry: QueueEntry): Promis
 
   switch (status) {
     case "pending":
-      // Still running — wait for next tick.
       break;
 
     case "pass":
-      transition(entry, "merging");
+      ctx.store.transition(entry.id, "merging");
       break;
 
     case "fail":
-      // Can we retry as flaky?
       if (entry.ciRetries < ctx.flakyRetries) {
-        entry.ciRetries++;
-        // Trigger a new CI run.
         const runId = await ctx.ci.triggerRun(entry.branch, entry.headSha);
-        entry.ciRunId = runId;
-        // Stay in validating.
+        ctx.store.transition(entry.id, "validating", {
+          ciRunId: runId,
+          ciRetries: entry.ciRetries + 1,
+        });
       } else {
-        // Flaky retries exhausted — escalate.
         if (entry.repairAttempts >= entry.maxRepairAttempts) {
-          transition(entry, "evicted");
+          ctx.store.transition(entry.id, "evicted");
         } else {
-          transition(entry, "repair_requested");
+          ctx.store.transition(entry.id, "repair_requested");
         }
       }
       break;
@@ -158,23 +144,18 @@ async function checkValidation(ctx: ReconcileContext, entry: QueueEntry): Promis
  * Merge the head PR into the base branch.
  */
 async function mergeHead(ctx: ReconcileContext, entry: QueueEntry): Promise<void> {
-  // Merge the branch into base in git.
   const result = await ctx.git.merge(entry.branch, ctx.baseBranch);
   if (!result.success) {
-    // Merge failed at merge time — shouldn't happen if rebase succeeded,
-    // but handle defensively.
     if (entry.repairAttempts >= entry.maxRepairAttempts) {
-      transition(entry, "evicted");
+      ctx.store.transition(entry.id, "evicted");
     } else {
-      transition(entry, "repair_requested");
+      ctx.store.transition(entry.id, "repair_requested");
     }
     return;
   }
 
-  // Notify GitHub to mark PR as merged.
   await ctx.github.mergePR(entry.prNumber, "squash");
-
-  transition(entry, "merged");
+  ctx.store.transition(entry.id, "merged");
   ctx.onMerged(entry.prNumber);
 }
 
@@ -183,42 +164,59 @@ async function mergeHead(ctx: ReconcileContext, entry: QueueEntry): Promise<void
  */
 async function handleRepairRequest(ctx: ReconcileContext, entry: QueueEntry): Promise<void> {
   if (entry.repairAttempts >= entry.maxRepairAttempts) {
-    transition(entry, "evicted");
+    ctx.store.transition(entry.id, "evicted");
     return;
   }
 
-  entry.repairAttempts++;
+  const newAttempts = entry.repairAttempts + 1;
+  ctx.store.transition(entry.id, "repair_in_progress", { repairAttempts: newAttempts });
 
-  // Build the repair context.
-  const allEntries = ctx.entries;
-  const ahead = allEntries
-    .filter((e) => e.position < entry.position && !TERMINAL.includes(e.status))
+  // Read the updated entry for the repair context.
+  const updated = ctx.store.getEntry(entry.id)!;
+
+  const allActive = ctx.store.listActive(ctx.repoId);
+  const ahead = allActive
+    .filter((e) => e.position < updated.position)
     .map((e) => e.prNumber);
-  const behind = allEntries
-    .filter((e) => e.position > entry.position && !TERMINAL.includes(e.status))
+  const behind = allActive
+    .filter((e) => e.position > updated.position)
     .map((e) => e.prNumber);
+
+  const repairReq = {
+    id: `rr-${updated.id}-${newAttempts}`,
+    entryId: updated.id,
+    at: new Date().toISOString(),
+    kind: "queue_repair" as const,
+    failureClass: "integration_conflict" as const,
+    outcome: "pending" as const,
+  };
+  ctx.store.insertRepairRequest(repairReq);
 
   await ctx.repair.requestRepair({
-    queueEntryId: entry.id,
-    issueId: entry.id, // In sim, issue ID = entry ID.
-    prNumber: entry.prNumber,
-    prHeadSha: entry.headSha,
-    baseSha: entry.baseSha,
+    queueEntryId: updated.id,
+    issueKey: updated.issueKey,
+    prNumber: updated.prNumber,
+    prHeadSha: updated.headSha,
+    baseSha: updated.baseSha,
     failureClass: "integration_conflict",
     failedChecks: [],
     baselineChecksOnMain: [],
-    queuePosition: entry.position,
+    queuePosition: updated.position,
     aheadPrNumbers: ahead,
     behindPrNumbers: behind,
-    priorAttempts: [],
+    priorAttempts: ctx.store.listRepairRequests(updated.id)
+      .filter((r) => r.outcome !== "pending")
+      .map((r) => ({
+        at: r.at,
+        kind: r.kind,
+        summary: r.summary,
+        outcome: r.outcome as "failed" | "succeeded" | "abandoned",
+      })),
     attemptBudget: {
-      current: entry.repairAttempts,
-      max: entry.maxRepairAttempts,
+      current: newAttempts,
+      max: updated.maxRepairAttempts,
     },
   });
-
-  // Queue pauses here until completeRepair() is called externally.
-  transition(entry, "repair_in_progress");
 }
 
 /**
@@ -226,16 +224,9 @@ async function handleRepairRequest(ctx: ReconcileContext, entry: QueueEntry): Pr
  * Called by PatchRelay (or the test harness) when a repair run finishes.
  * Resets CI state so the next tick retries rebase + CI from scratch.
  */
-export function completeRepair(entries: QueueEntry[], queueEntryId: string): boolean {
-  const entry = entries.find((e) => e.id === queueEntryId);
+export function completeRepair(store: QueueStore, queueEntryId: string): boolean {
+  const entry = store.getEntry(queueEntryId);
   if (!entry || entry.status !== "repair_in_progress") return false;
-  entry.ciRunId = null;
-  entry.ciRetries = 0;
-  transition(entry, "preparing_head");
+  store.transition(entry.id, "preparing_head", { ciRunId: null, ciRetries: 0 });
   return true;
-}
-
-function transition(entry: QueueEntry, to: QueueEntryStatus): void {
-  entry.status = to;
-  entry.updatedAt = new Date().toISOString();
 }

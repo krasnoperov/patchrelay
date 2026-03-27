@@ -8,6 +8,7 @@
  *   validating       → repair_requested (CI failure, retries exhausted)
  *   repair_requested → evicted (budget exhausted)
  *
+ * Terminal states: merged, evicted, dequeued.
  * paused: reserved for Phase 2 (policy_blocked — no approval, manual hold).
  */
 export type QueueEntryStatus =
@@ -19,7 +20,10 @@ export type QueueEntryStatus =
   | "repair_in_progress"
   | "paused"
   | "evicted"
-  | "merged";
+  | "merged"
+  | "dequeued";
+
+export const TERMINAL_STATUSES: QueueEntryStatus[] = ["merged", "evicted", "dequeued"];
 
 export interface QueueEntry {
   id: string;
@@ -31,10 +35,13 @@ export interface QueueEntry {
   status: QueueEntryStatus;
   position: number;
   priority: number;
+  generation: number;
   ciRunId: string | null;
   ciRetries: number;
   repairAttempts: number;
   maxRepairAttempts: number;
+  issueKey: string | null;
+  worktreePath: string | null;
   enqueuedAt: string;
   updatedAt: string;
 }
@@ -61,7 +68,7 @@ export interface CheckResult {
 
 export interface QueueRepairContext {
   queueEntryId: string;
-  issueId: string;
+  issueKey: string | null;
   prNumber: number;
   prHeadSha: string;
   baseSha: string;
@@ -90,6 +97,25 @@ export interface QueueRepairContext {
     current: number;
     max: number;
   };
+}
+
+export interface RepairRequestRecord {
+  id: string;
+  entryId: string;
+  at: string;
+  kind: "ci_repair" | "queue_repair";
+  failureClass: FailureClass;
+  summary?: string | undefined;
+  outcome: "pending" | "failed" | "succeeded" | "abandoned";
+}
+
+export interface QueueEventRecord {
+  id?: number | undefined;
+  entryId: string;
+  at: string;
+  fromStatus: QueueEntryStatus | null;
+  toStatus: QueueEntryStatus;
+  detail?: string | undefined;
 }
 
 export interface RebaseResult {
