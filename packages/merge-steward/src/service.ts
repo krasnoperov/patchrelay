@@ -202,6 +202,7 @@ export class MergeStewardService {
         github: this.github,
         eviction: this.eviction,
         flakyRetries: this.config.flakyRetries,
+        mergeMethod: this.config.mergeMethod,
         onMerged: (prNumber) => {
           this.logger.info({ prNumber }, "PR merged via queue");
         },

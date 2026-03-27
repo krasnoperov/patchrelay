@@ -23,6 +23,7 @@ export const stewardConfigSchema = z.object({
   logging: z.object({
     level: z.enum(["debug", "info", "warn", "error"]).default("info"),
   }).default({ level: "info" }),
+  mergeMethod: z.enum(["merge", "squash"]).default("merge"),
   admissionLabel: z.string().default("queue"),
   webhookPath: z.string().default("/webhooks/github/queue"),
   webhookSecret: z.string().optional(),

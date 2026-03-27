@@ -52,10 +52,14 @@ export class GitHubSim implements GitHubPRApi {
     if (pr) pr.checks = checks;
   }
 
+  /** Called after mergePR to sync git state in tests. */
+  onMerge: ((prNumber: number, branch: string) => Promise<void>) | null = null;
+
   async mergePR(prNumber: number): Promise<void> {
     const pr = this.prs.get(prNumber);
     if (!pr) throw new Error(`PR #${prNumber} not found`);
     pr.merged = true;
+    if (this.onMerge) await this.onMerge(prNumber, pr.branch);
   }
 
   async getStatus(prNumber: number): Promise<PRStatus> {

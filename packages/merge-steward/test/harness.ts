@@ -71,6 +71,12 @@ export class Harness {
         }
       }
     };
+
+    // When GitHub "merges" a PR, actually merge the branch into main
+    // in the git sim so subsequent rebases see the merged content.
+    this.githubSim.onMerge = async (_prNumber: number, branch: string) => {
+      await this.gitSim.merge(branch, this.baseBranch);
+    };
   }
 
   async init(): Promise<void> {
@@ -192,6 +198,7 @@ export class Harness {
       github: this.githubSim,
       eviction: this.evictionSim,
       flakyRetries: this.flakyRetries,
+      mergeMethod: "merge",
       onMerged: (prNumber: number) => {
         this.mergedPRs.push(prNumber);
       },

@@ -13,6 +13,7 @@ export interface ReconcileContext {
   github: GitHubPRApi;
   eviction: EvictionReporter;
   flakyRetries: number;
+  mergeMethod: "merge" | "squash";
   onMerged: (prNumber: number) => void;
   onEvicted: (prNumber: number, context: EvictionContext) => void;
   onMainBroken: () => void;
@@ -194,8 +195,12 @@ async function mergeHead(ctx: ReconcileContext, entry: QueueEntry): Promise<void
     return;
   }
 
-  const result = await ctx.git.merge(entry.branch, ctx.baseBranch);
-  if (!result.success) {
+  // Merge via GitHub API. No local merge needed — the steward's clone
+  // is for rebasing only. GitHub handles the actual merge to main.
+  try {
+    await ctx.github.mergePR(entry.prNumber, ctx.mergeMethod);
+  } catch {
+    // GitHub rejected the merge (branch protection, conflicts, etc.).
     if (entry.retryAttempts >= entry.maxRetries) {
       await evictEntry(ctx, entry, "integration_conflict");
     } else {
@@ -207,8 +212,6 @@ async function mergeHead(ctx: ReconcileContext, entry: QueueEntry): Promise<void
     }
     return;
   }
-
-  await ctx.github.mergePR(entry.prNumber, "squash");
   ctx.store.transition(entry.id, "merged");
   ctx.onMerged(entry.prNumber);
 }
