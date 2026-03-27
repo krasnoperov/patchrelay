@@ -5,6 +5,11 @@ import type { MergeResult, RebaseResult } from "../types.ts";
 
 const AUTHOR = { name: "steward-sim", email: "sim@test" };
 
+function isMergeConflict(err: unknown): boolean {
+  const code = (err as { code?: string }).code;
+  return code === "MergeConflictError" || code === "MergeNotSupportedError";
+}
+
 /**
  * In-memory git implementation using isomorphic-git + memfs.
  * Rebase is simulated as merge (same end-state, different history shape).
@@ -130,10 +135,8 @@ export class GitSim implements GitOperations {
       await git.checkout({ fs: this.vol, dir: this.dir, ref: branch, force: true });
       return { success: true, newHeadSha: result.oid };
     } catch (err: unknown) {
-      const error = err as { code?: string };
-      if (error.code === "MergeConflictError") {
+      if (isMergeConflict(err)) {
         // Reset to pre-merge state
-        const sha = await this.headSha(branch);
         await git.checkout({ fs: this.vol, dir: this.dir, ref: branch, force: true });
         // Detect which files conflict
         const branchFiles = await this.changedFiles(branch, onto);
@@ -166,8 +169,7 @@ export class GitSim implements GitOperations {
       await git.checkout({ fs: this.vol, dir: this.dir, ref: into, force: true });
       return { success: true, sha: result.oid };
     } catch (err: unknown) {
-      const error = err as { code?: string };
-      if (error.code === "MergeConflictError") {
+      if (isMergeConflict(err)) {
         await git.checkout({ fs: this.vol, dir: this.dir, ref: into, force: true });
         return { success: false };
       }
