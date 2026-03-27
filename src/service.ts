@@ -24,6 +24,32 @@ import { WebhookHandler } from "./webhook-handler.ts";
 import { acceptIncomingWebhook } from "./service-webhooks.ts";
 import type { AppConfig, LinearClient, LinearClientProvider } from "./types.ts";
 
+function parseObjectJson(value: string | undefined): Record<string, unknown> | undefined {
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function extractStatusNote(summaryJson?: string, reportJson?: string): string | undefined {
+  const summary = parseObjectJson(summaryJson);
+  if (typeof summary?.latestAssistantMessage === "string" && summary.latestAssistantMessage.trim()) {
+    return summary.latestAssistantMessage;
+  }
+
+  const report = parseObjectJson(reportJson);
+  const assistantMessages = report?.assistantMessages;
+  if (Array.isArray(assistantMessages)) {
+    const latest = assistantMessages.findLast((value) => typeof value === "string" && value.trim().length > 0);
+    if (typeof latest === "string") return latest;
+  }
+
+  return undefined;
+}
+
 export class PatchRelayService {
   readonly linearProvider: LinearClientProvider;
   private readonly orchestrator: RunOrchestrator;
@@ -215,6 +241,7 @@ export class PatchRelayService {
   listTrackedIssues(): Array<{
     issueKey?: string;
     title?: string;
+    statusNote?: string;
     projectId: string;
     factoryState: string;
     currentLinearState?: string;
@@ -234,7 +261,9 @@ export class PatchRelayService {
           i.pr_number, i.pr_review_state, i.pr_check_status,
           active_run.run_type AS active_run_type,
           latest_run.run_type AS latest_run_type,
-          latest_run.status AS latest_run_status
+          latest_run.status AS latest_run_status,
+          latest_run.summary_json AS latest_run_summary_json,
+          latest_run.report_json AS latest_run_report_json
         FROM issues i
         LEFT JOIN runs active_run ON active_run.id = i.active_run_id
         LEFT JOIN runs latest_run ON latest_run.id = (
@@ -245,20 +274,28 @@ export class PatchRelayService {
         ORDER BY i.updated_at DESC, i.issue_key ASC`,
       )
       .all() as Array<Record<string, unknown>>;
-    return rows.map((row) => ({
-      ...(row.issue_key !== null ? { issueKey: String(row.issue_key) } : {}),
-      ...(row.title !== null ? { title: String(row.title) } : {}),
-      projectId: String(row.project_id),
-      factoryState: String(row.factory_state ?? "delegated"),
-      ...(row.current_linear_state !== null ? { currentLinearState: String(row.current_linear_state) } : {}),
-      ...(row.active_run_type !== null ? { activeRunType: String(row.active_run_type) } : {}),
-      ...(row.latest_run_type !== null ? { latestRunType: String(row.latest_run_type) } : {}),
-      ...(row.latest_run_status !== null ? { latestRunStatus: String(row.latest_run_status) } : {}),
-      ...(row.pr_number !== null ? { prNumber: Number(row.pr_number) } : {}),
-      ...(row.pr_review_state !== null ? { prReviewState: String(row.pr_review_state) } : {}),
-      ...(row.pr_check_status !== null ? { prCheckStatus: String(row.pr_check_status) } : {}),
-      updatedAt: String(row.updated_at),
-    }));
+    return rows.map((row) => {
+      const statusNote = extractStatusNote(
+        typeof row.latest_run_summary_json === "string" ? row.latest_run_summary_json : undefined,
+        typeof row.latest_run_report_json === "string" ? row.latest_run_report_json : undefined,
+      );
+
+      return {
+        ...(row.issue_key !== null ? { issueKey: String(row.issue_key) } : {}),
+        ...(row.title !== null ? { title: String(row.title) } : {}),
+        ...(statusNote ? { statusNote } : {}),
+        projectId: String(row.project_id),
+        factoryState: String(row.factory_state ?? "delegated"),
+        ...(row.current_linear_state !== null ? { currentLinearState: String(row.current_linear_state) } : {}),
+        ...(row.active_run_type !== null ? { activeRunType: String(row.active_run_type) } : {}),
+        ...(row.latest_run_type !== null ? { latestRunType: String(row.latest_run_type) } : {}),
+        ...(row.latest_run_status !== null ? { latestRunStatus: String(row.latest_run_status) } : {}),
+        ...(row.pr_number !== null ? { prNumber: Number(row.pr_number) } : {}),
+        ...(row.pr_review_state !== null ? { prReviewState: String(row.pr_review_state) } : {}),
+        ...(row.pr_check_status !== null ? { prCheckStatus: String(row.pr_check_status) } : {}),
+        updatedAt: String(row.updated_at),
+      };
+    });
   }
 
   subscribeCodexNotifications(
