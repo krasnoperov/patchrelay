@@ -81,6 +81,17 @@ export class GitHubSim implements GitHubPRApi {
     return pr.checks;
   }
 
+  /** Configurable main/ref checks for failure classification. */
+  private refChecks = new Map<string, CheckResult[]>();
+
+  setRefChecks(ref: string, checks: CheckResult[]): void {
+    this.refChecks.set(ref, checks);
+  }
+
+  async listChecksForRef(ref: string): Promise<CheckResult[]> {
+    return this.refChecks.get(ref) ?? [];
+  }
+
   async listLabels(prNumber: number): Promise<string[]> {
     const pr = this.prs.get(prNumber);
     if (!pr) return [];

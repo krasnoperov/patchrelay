@@ -42,6 +42,7 @@ export interface GitHubPRApi {
   mergePR(prNumber: number): Promise<void>;
   getStatus(prNumber: number): Promise<PRStatus>;
   listChecks(prNumber: number): Promise<CheckResult[]>;
+  listChecksForRef(ref: string): Promise<CheckResult[]>;
   listLabels(prNumber: number): Promise<string[]>;
 }
 

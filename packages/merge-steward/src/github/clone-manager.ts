@@ -27,6 +27,12 @@ export class CloneManager {
     await exec(this.gitBin, ["clone", this.repoUrl, this.clonePath], {
       timeoutMs: 300_000,
     });
+
+    // Configure merge quality settings.
+    const gitC = ["-C", this.clonePath, "config"];
+    await exec(this.gitBin, [...gitC, "merge.conflictStyle", "zdiff3"], {}).catch(() => {});
+    await exec(this.gitBin, [...gitC, "rerere.enabled", "true"], {}).catch(() => {});
+
     this.logger?.info("Clone complete");
   }
 

@@ -1,6 +1,6 @@
 import type { GitOperations, CIRunner, GitHubPRApi, EvictionReporter, SpeculativeBranchBuilder } from "./interfaces.ts";
 import type { QueueStore } from "./store.ts";
-import type { QueueEntry, EvictionContext, FailureClass, ReconcileEvent, ReconcileAction } from "./types.ts";
+import type { QueueEntry, EvictionContext, FailureClass, MergeResult, ReconcileEvent, ReconcileAction } from "./types.ts";
 import { TERMINAL_STATUSES } from "./types.ts";
 import { classifyFailure } from "./classify.ts";
 import { randomUUID } from "node:crypto";
@@ -205,7 +205,17 @@ async function prepareSpeculative(ctx: ReconcileContext, entry: QueueEntry, prev
   const specName = specBranchName(entry.id);
   emit(ctx, entry, "spec_build_started", { specBranch: specName, dependsOn: prevEntry.id });
 
-  const result = await ctx.specBuilder.buildSpeculative(entry.branch, prevEntry.specBranch, specName);
+  let result: MergeResult;
+  try {
+    result = await ctx.specBuilder.buildSpeculative(entry.branch, prevEntry.specBranch, specName);
+  } catch {
+    // Stale spec branch — the previous entry's branch doesn't exist
+    // (e.g., after restart with fresh clone). Reset both entries.
+    emit(ctx, entry, "invalidated", { detail: "stale spec branch, rebuilding" });
+    ctx.store.transition(prevEntry.id, "preparing_head", { ...CLEAN_CI, ...CLEAN_SPEC }, "spec branch missing, rebuilding");
+    ctx.store.transition(entry.id, "preparing_head", { ...CLEAN_CI, ...CLEAN_SPEC }, "stale dependency, rebuilding");
+    return;
+  }
   if (result.success) {
     const specSha = result.sha ?? entry.headSha;
     emit(ctx, entry, "spec_build_succeeded", { specBranch: specName, dependsOn: prevEntry.id });
@@ -264,10 +274,11 @@ async function checkValidation(ctx: ReconcileContext, entry: QueueEntry, allActi
       } else if (isBudgetExhausted(entry)) {
         emit(ctx, entry, "budget_exhausted");
         const branchChecks = await ctx.github.listChecks(entry.prNumber);
+        const mainChecks = await ctx.github.listChecksForRef(ref(ctx, ctx.baseBranch));
         const failedChecks = branchChecks
           .filter((c) => FAILED_CONCLUSIONS.has(c.conclusion))
           .map((c) => ({ name: c.name, conclusion: c.conclusion }));
-        await evictEntry(ctx, entry, classifyFailure(branchChecks, []), { failedChecks });
+        await evictEntry(ctx, entry, classifyFailure(branchChecks, mainChecks), { failedChecks });
         await invalidateDownstream(ctx, allActive, index);
       } else {
         ctx.store.transition(entry.id, "preparing_head", {
@@ -377,10 +388,23 @@ async function evictEntry(
     try { baseSha = await ctx.git.headSha(ref(ctx, ctx.baseBranch)); } catch { baseSha = "unknown"; }
   }
 
+  // Build retry history from queue events.
+  const events = ctx.store.listEvents(entry.id);
+  const retryHistory: EvictionContext["retryHistory"] = [];
+  for (const event of events) {
+    if (event.fromStatus === "preparing_head" && event.toStatus === "validating") {
+      retryHistory.push({ at: event.at, baseSha: entry.baseSha || "unknown", outcome: "passed_to_validation" });
+    } else if (event.fromStatus === "validating" && event.toStatus === "preparing_head") {
+      retryHistory.push({ at: event.at, baseSha: entry.baseSha || "unknown", outcome: "ci_failed_retry" });
+    } else if (event.fromStatus === "preparing_head" && event.toStatus === "preparing_head") {
+      retryHistory.push({ at: event.at, baseSha: entry.baseSha || "unknown", outcome: "conflict_retry" });
+    }
+  }
+
   const context: EvictionContext = {
     version: 1, failureClass, baseSha, prHeadSha: entry.headSha,
     queuePosition: entry.position, conflictFiles: extra?.conflictFiles,
-    failedChecks: extra?.failedChecks, retryHistory: [],
+    failedChecks: extra?.failedChecks, retryHistory,
   };
 
   const incident = {
