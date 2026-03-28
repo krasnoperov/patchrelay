@@ -82,7 +82,30 @@ MERGE_STEWARD_CONFIG=config/steward.json merge-steward serve
 
 # Or with --config flag
 merge-steward serve --config config/steward.json
+
+# Live queue watch TUI
+merge-steward watch --config config/steward.json
 ```
+
+### Watch TUI
+
+`merge-steward watch` gives you a terminal view of the queue:
+
+- which PRs are currently queued
+- which PR is head-of-line
+- current steward tick state
+- recent queue transitions
+- per-PR detail with incidents and event history
+
+Controls:
+
+- `j` / `k` or arrows — move selection
+- `Enter` — open selected PR detail
+- `Esc` — return to queue view
+- `a` — toggle `active` vs `all`
+- `r` — run a reconcile tick now
+- `d` — dequeue the selected PR
+- `q` — quit
 
 ### systemd
 
@@ -107,7 +130,10 @@ WantedBy=multi-user.target
 |-|-|-|
 | `/health` | GET | Liveness check |
 | `/queue/status` | GET | All queue entries |
+| `/queue/watch` | GET | Queue snapshot for the operator TUI |
 | `/queue/enqueue` | POST | Manually enqueue a PR |
+| `/queue/reconcile` | POST | Trigger one reconcile tick immediately |
+| `/queue/entries/:id/detail` | GET | Entry detail with recent events and incidents |
 | `/queue/entries/:id/dequeue` | POST | Remove from queue (non-destructive) |
 | `/queue/entries/:id/update-head` | POST | Update head SHA (force-push) |
 | `/queue/incidents/:id` | GET | Get incident details |
@@ -140,3 +166,25 @@ The steward and PatchRelay are independent services that communicate through Git
 - The steward re-admits the PR
 
 Neither service calls the other's API. GitHub is the shared bus.
+
+## Current scope (Phase 1)
+
+This is a **serial merge queue**. One PR is processed at a time.
+
+What's implemented:
+- Serial queue: rebase → CI → merge, one head at a time
+- Non-spinning conflict retry: gated on base SHA change (won't rebase repeatedly against the same broken base)
+- Flaky CI retry budget (separate from retry budget)
+- Revalidation before merge (approval, SHA, external merge)
+- Durable incident records on eviction
+- GitHub check run as eviction signal
+- Label-based admission and re-admission
+
+What's deliberately not built yet (Phase 2/3 in the [design doc](../../docs/design-docs/merge-steward.md)):
+- Speculative execution (cumulative branches `main+A+B+C` tested in parallel)
+- Binary bisection on batch failure
+- File-path conflict detection for parallel lanes
+- Flaky test learning (only retry budget, no historical analysis)
+- Priority reordering after enqueue
+
+The serial queue is correct for usertold's scale (5-20 PRs/day). Speculative execution is a throughput optimization for higher volumes.

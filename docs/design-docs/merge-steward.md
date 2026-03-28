@@ -92,35 +92,30 @@ The system needs first-class queue records and PR-attempt history so it can answ
 
 ## Steward Model
 
-## Queue Entry Lifecycle
+## Queue Entry Lifecycle (as shipped)
 
 ```text
-queued
--> waiting_head
--> preparing_head
--> validating
--> passed
--> merging
--> merged
+queued → preparing_head → validating → merging → merged
 
-failure paths:
-validating -> repair_requested
-validating -> evicted
-validating -> paused
-preparing_head -> repair_requested
+failure: any state → evicted (after retry budget exhausted)
+dequeued: non-destructive removal via API
 ```
 
-Suggested queue-entry statuses:
+Statuses:
 
-- `queued`
-- `waiting_head`
-- `preparing_head`
-- `validating`
-- `repair_requested`
-- `repair_in_progress`
-- `paused`
-- `evicted`
-- `merged`
+- `queued` — waiting in line
+- `preparing_head` — fetch + rebase onto base branch
+- `validating` — CI running
+- `merging` — revalidation + merge via GitHub API
+- `merged` — done (terminal)
+- `evicted` — failed after retries, incident created (terminal)
+- `dequeued` — manually removed (terminal)
+
+Design decisions that differ from the original proposal:
+
+- `waiting_head` was removed — `queued` is sufficient for serial Phase 1
+- `repair_requested` / `repair_in_progress` / `paused` were removed — the steward evicts on failure instead of orchestrating repair. PatchRelay observes the eviction via GitHub check run and repairs independently.
+- Non-spinning conflict retries are gated on `lastFailedBaseSha` — the reconciler skips rebase when the base hasn't changed since the last conflict, preventing idle spinning.
 
 ## Phase 1: Strict Serial Steward
 
@@ -138,6 +133,8 @@ This phase delivers the main operational win:
 - no parallel branch refresh
 - no redundant retesting of non-head PRs
 - clear ownership of queue progress
+
+**Status: shipped.** See `packages/merge-steward/` for the implementation.
 
 ## Phase 2: Speculative Validation
 
@@ -167,48 +164,26 @@ After speculative validation works reliably:
 
 Until then, one queue lane per repository is the default.
 
-## Repair Handoff Contract
+## Eviction and Repair Contract (as shipped)
 
-When the steward needs PatchRelay to repair an item, it should send a typed repair request rather than a vague "fix CI" instruction.
+The steward does not call PatchRelay directly. When a PR fails after retries, the steward:
 
-Suggested contract:
+1. Creates a durable `IncidentRecord` in its SQLite database
+2. Creates a `merge-steward/queue` GitHub check run with the incident context as JSON in `output.text`
+3. Removes the admission label from the PR
+4. Transitions the entry to `evicted`
 
-```ts
-interface QueueRepairContext {
-  queueEntryId: string;
-  issueId: string;
-  prNumber: number;
-  prHeadSha: string;
-  baseSha: string;
-  failureClass: "branch_local" | "integration_conflict";
-  failedChecks: Array<{
-    name: string;
-    url?: string;
-    conclusion: "failure" | "timed_out" | "cancelled";
-  }>;
-  baselineChecksOnMain: Array<{
-    name: string;
-    conclusion: "success" | "failure";
-  }>;
-  isolatedDiffSummary?: string;
-  compoundDiffSummary?: string;
-  queuePosition: number;
-  aheadPrNumbers: number[];
-  behindPrNumbers: number[];
-  priorAttempts: Array<{
-    at: string;
-    kind: "ci_repair" | "queue_repair";
-    summary?: string;
-    outcome: "failed" | "succeeded" | "abandoned";
-  }>;
-  attemptBudget: {
-    current: number;
-    max: number;
-  };
-}
-```
+PatchRelay observes the check run failure via its GitHub webhook handler and triggers `queue_repair` if the check name matches `mergeQueueCheckName` (configurable, default `merge-steward/queue`).
 
-The steward should never ask PatchRelay to repair blindly.
+The incident context (`EvictionContext`) includes:
+
+- `failureClass`: `main_broken`, `branch_local`, `integration_conflict`, or `policy_blocked`
+- `conflictFiles`: files that conflicted during rebase (if applicable)
+- `failedChecks`: CI checks that failed (if applicable)
+- `baseSha`, `prHeadSha`, `queuePosition`
+- `retryHistory`: previous retry attempts
+
+Phase 2 may enrich this with `baselineTestResults` (main's check state) and `compoundDiff` / `isolatedDiff` (when speculative branches exist). Phase 1 does not have these because there are no compound branches.
 
 ## Data Model
 
@@ -230,70 +205,57 @@ Suggested tables:
 - `queue_events`
   - append-only audit trail for operator visibility
 
+The steward should also expose that queue state through a lightweight operator surface:
+
+- a current snapshot of queue entries and head-of-line state
+- recent queue events so humans can see how the queue is advancing
+- per-entry detail with incidents and transition history
+- safe controls such as manual reconcile and dequeue
+
 PatchRelay should eventually retain a matching `pr_attempts` concept so issue history is not collapsed to one PR pointer.
 
-## Integration With PatchRelay
+## Integration With PatchRelay (as shipped)
 
-### From PatchRelay To Steward
+The two services communicate only through GitHub. No direct API calls.
 
-PatchRelay notifies the steward when:
+**PatchRelay → GitHub → Steward:**
+- PatchRelay adds the `queue` label (configurable via `mergeQueueLabel`) when an issue enters `awaiting_queue`
+- GitHub sends a `pull_request.labeled` webhook to the steward
+- The steward admits the PR if it's approved + CI green
 
-- a PR becomes approved and branch-green
-- a PR is updated and must be re-evaluated
-- a PR is closed or merged outside the queue
-- a repair run completes
+**Steward → GitHub → PatchRelay:**
+- The steward creates a `merge-steward/queue` check run on eviction
+- GitHub sends a `check_run` webhook to PatchRelay
+- PatchRelay triggers `queue_repair` if the check name matches `mergeQueueCheckName`
+- After repair, PatchRelay re-adds the `queue` label → steward re-admits
 
-### From Steward To PatchRelay
-
-The steward asks PatchRelay to:
-
-- run `ci_repair` for a branch-local failure
-- run `queue_repair` for an integration conflict
-- cancel stale repair attempts when the queue context changes
+**Steward → GitHub (success):**
+- The steward merges the PR via `gh pr merge`
+- GitHub sends `pull_request.closed` (merged) to PatchRelay
+- PatchRelay transitions the issue to `done`
 
 ## Required Invariants
 
-The steward must preserve these invariants:
-
 1. `main` only advances from validated queue states.
-2. At most one queue head is in refresh / validation at a time per repository.
-3. Every queued PR is either active, merged, evicted, paused, or explicitly removed.
+2. At most one queue head is in refresh/validation at a time per repository.
+3. Every queued PR is either active, merged, evicted, or explicitly dequeued.
 4. Reconciliation is idempotent.
-5. Repair attempts are bounded per failure class and per queue context.
-6. A newer head SHA invalidates older repair attempts for the same PR.
+5. Retry attempts are bounded per entry. Conflict retries are gated on base SHA change.
+6. A newer head SHA (external push) invalidates the current entry state.
 
-## Testing Strategy
+## Testing Strategy (as shipped)
 
-The steward should be built with a deterministic simulation harness before production rollout.
+The harness uses:
+- `isomorphic-git` + `memfs` for in-memory git operations
+- `fast-check` for property-based testing (800+ random runs)
+- 6 invariant assertions checked after every state transition
 
-Recommended stack:
+50 tests cover: happy path, conflict chains, CI recovery, flaky tolerance, non-spinning retry, branch ownership, crash recovery, SQLite persistence, interleaved enqueue, eviction reporting, webhook admission.
 
-- `isomorphic-git`
-- `memfs`
-- `fast-check`
+## Migration Status
 
-The harness should model:
-
-- queue ordering
-- speculative branch creation
-- conflicts
-- CI pass/fail/flaky outcomes
-- dequeue and reprioritization
-- crash recovery and repeated reconciliation
-
-The goal is to prove queue invariants without depending on live GitHub or live CI.
-
-## Migration Plan
-
-1. Freeze PatchRelay's built-in merge-prep logic as legacy behavior.
-2. Introduce `merge-steward` as the sole queue owner for new projects.
-3. Keep PatchRelay's queue-repair run type, but only as an execution target invoked by the steward.
-4. Move queue ordering, queue retries, and freshness decisions out of PatchRelay.
-5. Retain GitHub webhooks as canonical state input for both services.
-
-## Summary
-
-PatchRelay should remain the deterministic harness around agentic development.
-The merge queue should become a separate deterministic harness around integration.
-
-That split keeps the model where it helps and removes it from the part of the system that most needs simple, restart-safe, auditable control.
+1. ~~Freeze PatchRelay's built-in merge-prep logic~~ → **Done.** `MergeQueue` class and `pendingMergePrep` field deleted.
+2. ~~Introduce merge-steward as sole queue owner~~ → **Done.** Deployed as `packages/merge-steward/`.
+3. PatchRelay's `queue_repair` run type is retained as the repair execution target.
+4. ~~Move queue ordering out of PatchRelay~~ → **Done.**
+5. GitHub webhooks are the canonical state input for both services. ✓
