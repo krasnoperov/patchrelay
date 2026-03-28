@@ -65,6 +65,8 @@ jobs:
             'package.json',
             'package-lock.json',
             '.release-please-manifest.json',
+            'packages/merge-steward/CHANGELOG.md',
+            'packages/merge-steward/package.json',
           ]);
 
           function ghJson(args) {

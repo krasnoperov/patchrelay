@@ -1,8 +1,10 @@
 {
   "name": "merge-steward",
   "version": "0.0.1",
-  "private": true,
   "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
   "files": [
     "dist",
     "runtime.env.example",
@@ -17,6 +19,7 @@
   },
   "scripts": {
     "dev": "node --watch --experimental-transform-types src/index.ts",
+    "prepack": "npm run build",
     "build": "tsc -p tsconfig.json && chmod +x dist/index.js",
     "start": "node dist/index.js serve",
     "typecheck": "tsc -p tsconfig.json --noEmit",

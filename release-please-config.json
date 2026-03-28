@@ -5,6 +5,14 @@
       "release-type": "node",
       "changelog-path": "CHANGELOG.md",
       "bump-minor-pre-major": true,
+      "bump-patch-for-minor-pre-major": false,
+      "exclude-paths": ["packages/merge-steward"]
+    },
+    "packages/merge-steward": {
+      "release-type": "node",
+      "component": "merge-steward",
+      "changelog-path": "CHANGELOG.md",
+      "bump-minor-pre-major": true,
       "bump-patch-for-minor-pre-major": false
     }
   }

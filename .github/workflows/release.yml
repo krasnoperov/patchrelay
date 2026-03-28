@@ -45,15 +45,8 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
-      - name: Check out released tag
-        if: ${{ steps.release.outputs.release_created }}
-        uses: actions/checkout@v5
-        with:
-          ref: ${{ steps.release.outputs.tag_name }}
-          fetch-depth: 0
-
       - name: Set up Node.js
-        if: ${{ steps.release.outputs.release_created }}
+        if: ${{ steps.release.outputs.releases_created }}
         uses: actions/setup-node@v5
         with:
           node-version: 24
@@ -61,13 +54,21 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       - name: Install dependencies
-        if: ${{ steps.release.outputs.release_created }}
+        if: ${{ steps.release.outputs.releases_created }}
         run: npm ci
 
-      - name: Verify release
-        if: ${{ steps.release.outputs.release_created }}
+      - name: Verify patchrelay
+        if: ${{ steps.release.outputs['.--release_created'] }}
         run: npm run ci
 
-      - name: Publish to npm
-        if: ${{ steps.release.outputs.release_created }}
+      - name: Publish patchrelay
+        if: ${{ steps.release.outputs['.--release_created'] }}
         run: npm publish --access public
+
+      - name: Verify merge-steward
+        if: ${{ steps.release.outputs['packages/merge-steward--release_created'] }}
+        run: npm run -w packages/merge-steward test && npm run -w packages/merge-steward build
+
+      - name: Publish merge-steward
+        if: ${{ steps.release.outputs['packages/merge-steward--release_created'] }}
+        run: npm publish -w packages/merge-steward --access public
