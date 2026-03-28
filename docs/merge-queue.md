@@ -1,49 +1,62 @@
 # Merge Queue
 
-PatchRelay includes a built-in serial merge queue that updates PR branches to the latest base branch, handles merge conflicts via Codex, and merges via GitHub auto-merge. No external merge queue service or GitHub Actions workflow is needed.
+PatchRelay and Merge Steward are two independent services with distinct responsibilities:
 
-## How It Works
+- **PatchRelay** develops code and delivers pull requests — it owns issue worktrees, agent runs (implementation, review fix, CI repair), and Linear session UX
+- **Merge Steward** delivers pull requests into production — it owns queue ordering, branch freshness, CI validation, merge decisions, and retry/eviction policy
 
-When the AI Review Action approves a PR, PatchRelay:
+Neither service calls the other's API. GitHub is the shared bus — labels, check runs, and PR state changes are the protocol.
 
-1. Enables auto-merge (`gh pr merge --auto --squash`)
-2. Updates the PR branch by merging the latest base branch in the worktree
-3. Pushes the updated branch (triggering CI)
-4. GitHub auto-merge fires when CI passes, approval is valid, and the branch is up-to-date
+## Why Two Services
 
-When one PR merges, PatchRelay advances the queue — finding the next approved PR and updating its branch.
+The merge queue is a deterministic control problem that should keep making progress even when agent execution is unavailable, degraded, or expensive.
 
-### Serialization
+Observed behavior showed PatchRelay spent far more work on orchestration churn (173/232 runs in an early batch) than on real code repair. Splitting the queue from the agent harness:
 
-Only the front-of-queue PR (lowest PR number in `awaiting_queue`) gets its branch updated. Other approved PRs wait. After the front PR merges, PatchRelay advances the next one. This prevents wasted CI runs and ensures each PR is tested against the true state of the base branch.
+- keeps the model where it helps (issue implementation and repair)
+- removes it from the part that most needs simple, restart-safe, auditable control (queue advancement)
+- allows the steward to be a pure reconciliation loop
 
-### Merge Conflicts
+See [design rationale](./design-docs/merge-steward.md) for the full analysis.
 
-When the base branch merge fails in the worktree:
+## Queue Lifecycle
 
-1. PatchRelay aborts the merge and transitions to `repairing_queue`
-2. A `queue_repair` run starts — Codex rebases onto the base branch, resolves conflicts, and pushes
-3. CI runs on the resolved code
-4. The issue returns to `awaiting_queue` and the merge queue re-prepares it
+1. A PR gets the `queue` label (added by PatchRelay when an issue reaches `awaiting_queue`, or manually by any automation)
+2. The steward sees the label via GitHub webhook
+3. If the PR is approved and CI is green, it enters the queue
+4. The steward processes the queue head: fetch → rebase onto main → push → wait for CI → merge
+5. Non-head entries remain frozen until the queue advances — no wasted CI runs
+6. After the head merges, the steward advances to the next entry
 
-No conflict markers are committed. Codex resolves conflicts in PatchRelay's durable worktree with full git history and Linear issue context.
+```text
+queued → preparing_head → validating → merging → merged
+                                              → evicted (on failure after retries)
+```
 
-### CI Failures After Branch Update
+## Failure And Repair Handoff
 
-If CI fails after the branch is updated:
+When the queue head fails, the steward classifies the failure before acting:
 
-1. PatchRelay transitions to `repairing_ci`
-2. Codex reads CI logs, fixes the code, and pushes
-3. CI passes → PatchRelay fast-tracks the issue back to `awaiting_queue` (the PR is already approved)
-4. The merge queue re-prepares the branch if needed
+- **Flaky / infra** — retry CI without agent repair
+- **Branch-local** — evict and report via `merge-steward/queue` check run
+- **Integration conflict** — evict and report via check run
 
-## Setup
+On eviction, the steward creates a durable incident record and a GitHub check run with failure details. PatchRelay (or any agent) sees the check run failure, triggers a `queue_repair` run, fixes the branch, and re-adds the `queue` label. The steward re-admits the PR.
 
-### 1. Repository Settings
+```text
+Steward evicts PR → creates check run with failure context
+PatchRelay sees check run failure → triggers queue_repair run
+Agent fixes the branch → PatchRelay re-adds queue label
+Steward re-admits the PR
+```
 
-- **Allow auto-merge**: Enable in Settings → General
+## Repository Settings
 
-### 2. Branch Protection Rules
+### Allow Auto-Merge
+
+Enable in Settings → General.
+
+### Branch Protection Rules
 
 Configure branch protection on your base branch (e.g., `main`):
 
@@ -57,74 +70,38 @@ Configure branch protection on your base branch (e.g., `main`):
 | Dismiss stale pull request approvals when new commits are pushed | **Disabled** |
 | Require approval of the most recent reviewable push | **Disabled** |
 
-**Why "Dismiss stale approvals" must be disabled:** Branch updates must not invalidate the AI review approval.
+**Why "Dismiss stale approvals" must be disabled:** The steward rebases and pushes the branch — that must not invalidate the existing approval.
 
-**Why "Require approval of the most recent reviewable push" must be disabled:** PatchRelay's merge prep and repair runs push commits. This setting would require re-approval after each push.
+**Why "Require approval of the most recent reviewable push" must be disabled:** The steward's rebase push is a mechanical branch update, not a reviewable change.
 
-### 3. GitHub CLI Auth
+### GitHub Webhook
 
-PatchRelay uses the host's `gh` CLI authentication to enable auto-merge and create PRs.
+Configure a webhook on the repository pointing to the steward:
 
-**Default (no App configured):** Uses the host's existing `gh auth` session. Ensure `gh auth status` shows a logged-in account with `repo` scope.
+- **Payload URL:** `http://your-host:8790/webhooks/github/queue`
+- **Content type:** `application/json`
+- **Secret:** same as `webhookSecret` in steward config
+- **Events:** Pull requests, Pull request reviews, Check suites, Pushes
 
-**With GitHub App identity (optional):** PatchRelay can operate as a bot (`app-name[bot]`) instead of your personal account. Add to `~/.config/patchrelay/service.env`:
+PatchRelay needs its own separate GitHub webhook for PR, review, and check events that drive reactive repair loops.
 
-```bash
-PATCHRELAY_GITHUB_APP_ID=123456
-PATCHRELAY_GITHUB_APP_PRIVATE_KEY_FILE=/home/your-user/.config/patchrelay/github-app.pem
-```
+### GitHub App Events (PatchRelay)
 
-PatchRelay generates short-lived installation tokens, writes them to `~/.local/share/patchrelay/gh-token`, and installs a `gh` wrapper at `~/.local/share/patchrelay/bin/gh` that reads the token. Codex picks up the wrapper via PATH. Your personal `gh` auth is untouched — the wrapper only activates when the token file exists.
-
-Git push uses the host's existing git credentials (SSH keys or credential helper). Commit authorship is independent of push credentials.
-
-### 4. Project Config
-
-Add `baseBranch` to the project's GitHub config (defaults to `main` if omitted):
-
-```json
-{
-  "id": "your-project",
-  "repoPath": "/path/to/repo",
-  "github": {
-    "repoFullName": "owner/repo",
-    "baseBranch": "main"
-  }
-}
-```
-
-### 5. GitHub App Events
-
-The PatchRelay GitHub App receives webhook events for all repos it's installed on. Configure the subscribed events in the App settings at `Settings → Developer settings → GitHub Apps → PatchRelay → Permissions & events → Subscribe to events`:
+If using a GitHub App for PatchRelay, subscribe to these events:
 
 | Event | Required for |
 |-|-|
-| Push | Advancing the merge queue when main updates |
+| Push | Detecting base branch updates |
 | Pull request | PR opened/closed/merged state tracking |
 | Pull request review | Approval and change-request detection |
 | Check suite | CI pass/fail state transitions |
-| Check run | PR metadata (observability) |
+| Check run | Steward eviction detection (triggers queue repair) |
 
-The webhook URL (`https://<your-patchrelay-host>/webhooks/github`) and secret (`GITHUB_APP_WEBHOOK_SECRET`) are configured in the App's "General" settings.
+## Running Merge Steward
 
-### 6. Workflow Files
+See [packages/merge-steward/README.md](../packages/merge-steward/README.md) for configuration, API reference, watch TUI, and systemd setup.
 
-The target repository should contain:
+## Read More
 
-- **`IMPLEMENTATION_WORKFLOW.md`** — guidance for implementation, CI repair, and queue repair runs
-- **`REVIEW_WORKFLOW.md`** — guidance for review fix runs
-
-## Flow Summary
-
-```
-Linear issue delegated to PatchRelay
-  → Codex implements, opens PR, pushes
-  → CI runs → green
-  → AI Review approves PR
-  → PatchRelay: awaiting_queue
-    → enables auto-merge
-    → merges base branch into worktree, pushes
-  → CI runs on updated branch → green
-  → GitHub auto-merge merges the PR
-  → PatchRelay: done → advances next PR
-```
+- [Merge Steward README](../packages/merge-steward/README.md) — operational docs
+- [Merge Steward design rationale](./design-docs/merge-steward.md) — why the split, phased roadmap, repair contract

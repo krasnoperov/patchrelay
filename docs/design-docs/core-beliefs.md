@@ -50,7 +50,7 @@ PatchRelay should reflect that truth back into Linear rather than inventing a pa
 ## Queue failures are first-class
 
 A change is not finished when the PR is green.
-PatchRelay must model merge queue behavior directly and treat queue failures as a normal part of the lifecycle.
+Merge Steward owns queue ordering and landing. PatchRelay must treat queue failures as a normal part of the issue lifecycle and react to steward evictions with repair runs.
 
 ## Strict boundaries help agents move faster
 

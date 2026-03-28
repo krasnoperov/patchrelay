@@ -2,7 +2,7 @@
 
 PatchRelay is a self-hosted harness for running a controlled coding loop per Linear issue on your own machine.
 
-It receives Linear webhooks, routes issues to the right local repository, prepares durable issue worktrees, runs Codex sessions through `codex app-server`, and keeps the whole issue loop observable and resumable from the CLI. GitHub webhooks drive reactive loops for CI repair, review fixes, and merge queue failures.
+It receives Linear webhooks, routes issues to the right local repository, prepares durable issue worktrees, runs Codex sessions through `codex app-server`, and keeps the whole issue loop observable and resumable from the CLI. GitHub webhooks drive reactive loops for CI repair and review fixes. A separate [Merge Steward](./packages/merge-steward) service handles serial queue integration and landing.
 
 PatchRelay is the system around the model:
 
@@ -11,7 +11,8 @@ PatchRelay is the system around the model:
 - issue-to-repo routing
 - issue worktree and branch lifecycle
 - context packaging, run orchestration, and thread continuity
-- reactive CI repair, review fix, and merge queue repair loops
+- reactive CI repair and review fix loops
+- queue repair runs triggered by Merge Steward evictions
 - native Linear agent input forwarding into active runs
 - read-only inspection and run reporting
 
@@ -36,7 +37,7 @@ PatchRelay does the deterministic harness work that you do not want to re-implem
 - packages the right issue, repo, review, and failure context for each loop
 - creates and reuses one durable worktree and branch per issue lifecycle
 - starts Codex threads for implementation runs
-- triggers reactive runs for CI failures, review feedback, and merge queue failures
+- triggers reactive runs for CI failures, review feedback, and Merge Steward evictions
 - persists enough state to correlate the Linear issue, local workspace, run, and Codex thread
 - reports progress back to Linear and forwards follow-up agent input into active runs
 - exposes CLI and optional read-only inspection surfaces so operators can understand what happened
@@ -79,8 +80,9 @@ You will also need:
 2. PatchRelay verifies the webhook, routes the issue to the right local project, and packages the issue context for the first loop.
 3. Delegated issues create or reuse the issue worktree and launch an implementation run through `codex app-server`.
 4. PatchRelay persists thread ids, run state, and observations so the work stays inspectable and resumable.
-5. GitHub webhooks drive reactive verification and repair loops: CI repair on check failures, review fix on changes requested, and merge queue repair on queue failures.
-6. Native agent prompts and Linear comments can steer the active run. An operator can take over from the exact same worktree when needed.
+5. GitHub webhooks drive reactive verification and repair loops: CI repair on check failures and review fix on changes requested.
+6. When the PR is approved and CI is green, PatchRelay adds the `queue` label. Merge Steward takes over — rebasing, validating, and merging the PR. If the steward evicts the PR, PatchRelay triggers a queue repair run.
+7. Native agent prompts and Linear comments can steer the active run. An operator can take over from the exact same worktree when needed.
 
 ## Factory State Machine
 
@@ -261,10 +263,19 @@ PatchRelay keeps enough durable state to answer the questions that matter during
 - which files it changed
 - whether the run completed, failed, or needs handoff
 
+## Merge Steward
+
+[Merge Steward](./packages/merge-steward) is a separate service that owns serial merge queue integration. PatchRelay develops code and produces pull requests. Merge Steward delivers those PRs into production — rebasing onto main, waiting for CI, and merging when green.
+
+The two services communicate through GitHub. PatchRelay adds a `queue` label when a PR is ready. The steward processes the queue. On failure, the steward evicts the PR with a check run report, and PatchRelay can trigger a queue repair run in response.
+
+See [Merge queue](./docs/merge-queue.md) for the full two-service overview and [Merge Steward README](./packages/merge-steward/README.md) for operational details.
+
 ## Docs
 
 Use the README for the product overview and quick start. Use the docs for operating details:
 
+- [Merge queue and delivery](./docs/merge-queue.md)
 - [Self-hosting and deployment](./docs/self-hosting.md)
 - [Architecture](./docs/architecture.md)
 - [Design principles](./docs/design-docs/core-beliefs.md)
