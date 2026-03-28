@@ -27,7 +27,7 @@ The shipped steward is still a strict serial queue:
 
 Important implementation details in the current code:
 
-- production still runs in serial mode even though the reconciler has speculative hooks; `MergeStewardService` passes `specBuilder: null`
+- speculative execution is available in the standalone steward server path when `speculativeDepth > 1`
 - the real git path uses `git rebase` directly in a mutable clone
 - the steward merges through `gh pr merge` with either `merge` or `squash`
 - PatchRelay repairs queue evictions by starting a `queue_repair` run after the steward check run fails
@@ -175,20 +175,19 @@ In practice:
 
 ### Docs Gaps
 
-1. The design docs correctly say speculative validation is Phase 2, but the implementation docs do not clearly call out that production currently ignores `speculativeDepth` because `specBuilder` is not wired.
-2. The docs do not yet define a preferred merge method for the delivery model, even though the implementation already exposes `merge` vs `squash`.
-3. The docs describe queue eviction context at a high level, but they do not define the minimum evidence package needed for semantic conflicts.
-4. The docs do not standardize operator diff views such as first-parent, remerge-diff, and range-diff.
+1. The docs do not yet define a preferred merge method for the delivery model, even though the implementation already exposes `merge` vs `squash`.
+2. The docs describe queue eviction context at a high level, but they do not define the minimum evidence package needed for semantic conflicts.
+3. The docs do not standardize operator diff views such as first-parent, remerge-diff, and range-diff.
+4. The docs should say explicitly that speculative validation is available only when the steward server is configured with `speculativeDepth > 1`.
 
 ### Code Gaps
 
 1. The steward performs a mutable `git rebase` immediately instead of first using `git merge-tree` to classify conflicts without touching the checkout.
-2. The production service always disables speculative execution by passing `specBuilder: null`, while config still exposes `speculativeDepth`.
-3. Merge revalidation does not re-check the current base SHA before merging; it only re-checks PR approval, merge state, and head SHA.
-4. CI failure classification currently calls `classifyFailure(branchChecks, [])`, so production never supplies a real main-branch baseline during eviction.
-5. Eviction context is too thin for semantic conflicts. It does not currently include refreshed head SHA, merge-tree conflict type, diff summary, or a bounded semantic-repair hint.
-6. PatchRelay queue-repair prompts currently say "rebase onto latest main and fix conflicts," but they do not pass through the steward's structured incident JSON for richer repair behavior.
-7. PatchRelay adds the queue label in two places. The duplication is survivable but makes admission behavior less explicit than it could be.
+2. Merge revalidation does not re-check the current base SHA before merging; it only re-checks PR approval, merge state, and head SHA.
+3. CI failure classification currently calls `classifyFailure(branchChecks, [])`, so production never supplies a real main-branch baseline during eviction.
+4. Eviction context is too thin for semantic conflicts. It does not currently include refreshed head SHA, merge-tree conflict type, diff summary, or a bounded semantic-repair hint.
+5. PatchRelay queue-repair prompts currently say "rebase onto latest main and fix conflicts," but they do not pass through the steward's structured incident JSON for richer repair behavior.
+6. PatchRelay adds the queue label in two places. The duplication is survivable and mostly idempotent, but it still makes admission behavior less explicit than it could be.
 
 ### Test Gaps
 
