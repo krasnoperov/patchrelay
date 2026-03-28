@@ -69,6 +69,7 @@ function mapEventSummary(row: Record<string, unknown>): QueueEventSummary {
     fromStatus: row.from_status === null ? null : (String(row.from_status) as QueueEntryStatus),
     toStatus: String(row.to_status) as QueueEntryStatus,
     detail: row.detail === null ? undefined : String(row.detail),
+    baseSha: row.base_sha === null || row.base_sha === undefined ? undefined : String(row.base_sha),
     prNumber: Number(row.pr_number),
     branch: String(row.branch),
     issueKey: row.issue_key === null ? null : String(row.issue_key),
@@ -207,7 +208,9 @@ export class SqliteStore implements QueueStore {
         `UPDATE queue_entries SET
           head_sha = ?, status = 'queued', generation = ?,
           ci_run_id = NULL, ci_retries = 0, retry_attempts = 0,
-          last_failed_base_sha = NULL, updated_at = ?
+          last_failed_base_sha = NULL,
+          spec_branch = NULL, spec_sha = NULL, spec_based_on = NULL,
+          updated_at = ?
          WHERE id = ?`,
       ).run(newHeadSha, newGen, isoNow(), entryId);
 
@@ -263,6 +266,7 @@ export class SqliteStore implements QueueStore {
          queue_events.from_status,
          queue_events.to_status,
          queue_events.detail,
+         queue_events.base_sha,
          queue_entries.pr_number,
          queue_entries.branch,
          queue_entries.issue_key

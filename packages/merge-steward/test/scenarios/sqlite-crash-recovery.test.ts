@@ -116,6 +116,44 @@ describe("SQLite crash recovery", () => {
     store.close();
   });
 
+  it("updateHead clears speculative metadata and CI state", () => {
+    const dbPath = tempDbPath();
+    after(() => { try { unlinkSync(dbPath); } catch {} });
+
+    const store = new SqliteStore(dbPath);
+    store.insert(makeEntry("e1", 1, 1));
+
+    // Advance to validating with speculative metadata.
+    store.transition("e1", "preparing_head");
+    store.transition("e1", "validating", {
+      ciRunId: "ci-1",
+      ciRetries: 1,
+      retryAttempts: 2,
+      baseSha: "base-1",
+      lastFailedBaseSha: "old-base",
+      specBranch: "mq-spec-e1",
+      specSha: "spec-sha-1",
+      specBasedOn: "e0",
+    });
+
+    // Force-push resets via updateHead.
+    store.updateHead("e1", "new-sha-after-push");
+
+    const entry = store.getEntry("e1")!;
+    assert.strictEqual(entry.status, "queued");
+    assert.strictEqual(entry.headSha, "new-sha-after-push");
+    assert.strictEqual(entry.generation, 1);
+    assert.strictEqual(entry.ciRunId, null);
+    assert.strictEqual(entry.ciRetries, 0);
+    assert.strictEqual(entry.retryAttempts, 0);
+    assert.strictEqual(entry.lastFailedBaseSha, null);
+    assert.strictEqual(entry.specBranch, null, "specBranch must be cleared");
+    assert.strictEqual(entry.specSha, null, "specSha must be cleared");
+    assert.strictEqual(entry.specBasedOn, null, "specBasedOn must be cleared");
+
+    store.close();
+  });
+
   it("one active entry per PR enforced by unique index", () => {
     const dbPath = tempDbPath();
     after(() => { try { unlinkSync(dbPath); } catch {} });
