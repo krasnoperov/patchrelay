@@ -220,6 +220,14 @@ export function App({ baseUrl, initialPrNumber }: AppProps): React.JSX.Element {
         lastSnapshotReceivedAt={lastSnapshotReceivedAt}
         expectedFreshMs={REFRESH_INTERVAL_MS * 2}
       />
+      {view === "detail" && selectedEntry && (
+        <Box>
+          <Text dimColor>Queue</Text>
+          <Text dimColor> › </Text>
+          <Text bold>#{selectedEntry.prNumber}</Text>
+          <Text dimColor> ({selectedEntry.status})</Text>
+        </Box>
+      )}
       {view === "list" ? (
         <QueueListView
           entries={visibleEntries}

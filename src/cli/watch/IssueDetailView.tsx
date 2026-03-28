@@ -7,6 +7,7 @@ import { StateHistoryView } from "./StateHistoryView.tsx";
 import { buildStateHistory } from "./history-builder.ts";
 import { HelpBar } from "./HelpBar.tsx";
 import { planStepSymbol, planStepColor } from "./plan-helpers.ts";
+import { progressBar } from "./format-utils.ts";
 import { FactoryStateGraph } from "./FactoryStateGraph.tsx";
 import { QueueObservationView } from "./QueueObservationView.tsx";
 import { buildPatchRelayQueueObservations, buildPatchRelayStateGraph } from "./state-visualization.ts";
@@ -99,6 +100,11 @@ export function IssueDetailView({
         <>
           {plan && plan.length > 0 && (
             <Box flexDirection="column" marginTop={1}>
+              <Box gap={1}>
+                <Text dimColor>Plan</Text>
+                <Text>{progressBar(plan.filter((s) => s.status === "completed").length, plan.length, 16)}</Text>
+                <Text dimColor>{plan.filter((s) => s.status === "completed").length}/{plan.length}</Text>
+              </Box>
               {plan.map((entry, i) => (
                 <Box key={`plan-${i}`} gap={1}>
                   <Text color={planStepColor(entry.status)}>[{planStepSymbol(entry.status)}]</Text>

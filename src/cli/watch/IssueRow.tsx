@@ -9,13 +9,13 @@ interface IssueRowProps {
 }
 
 const STATE_COLORS: Record<string, string> = {
-  delegated: "blue",
-  implementing: "yellow",
+  delegated: "cyan",
+  implementing: "cyan",
   pr_open: "cyan",
-  changes_requested: "magenta",
-  repairing_ci: "magenta",
-  awaiting_queue: "green",
-  repairing_queue: "magenta",
+  changes_requested: "yellow",
+  repairing_ci: "cyan",
+  awaiting_queue: "cyan",
+  repairing_queue: "cyan",
   done: "green",
   failed: "red",
   escalated: "red",

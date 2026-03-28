@@ -22,16 +22,14 @@ export function relativeTime(iso: string | null | undefined): string {
   return `${days}d`;
 }
 
-export function statusColor(status: QueueEntryStatus): "yellow" | "cyan" | "magenta" | "green" | "red" | "gray" {
+export function statusColor(status: QueueEntryStatus): "yellow" | "cyan" | "green" | "red" | "gray" {
   switch (status) {
     case "queued":
       return "yellow";
     case "preparing_head":
-      return "cyan";
     case "validating":
-      return "magenta";
     case "merging":
-      return "green";
+      return "cyan";
     case "merged":
       return "green";
     case "evicted":
@@ -59,6 +57,21 @@ export function formatEventSummary(event: QueueEventSummary): string {
 export function formatEntryEvent(event: QueueEventRecord): string {
   const transition = event.fromStatus ? `${event.fromStatus} -> ${event.toStatus}` : `entered ${event.toStatus}`;
   return `${transition}${event.detail ? ` (${event.detail})` : ""}`;
+}
+
+export function formatDuration(ms: number): string {
+  const seconds = Math.floor(ms / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h`;
+}
+
+export function progressBar(current: number, total: number, width: number): string {
+  if (total <= 0 || width <= 0) return "\u2591".repeat(width);
+  const filled = Math.min(width, Math.round((current / total) * width));
+  return "\u2588".repeat(filled) + "\u2591".repeat(width - filled);
 }
 
 export function truncate(value: string, width: number): string {

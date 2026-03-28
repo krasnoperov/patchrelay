@@ -1,6 +1,6 @@
 import { Box, Text } from "ink";
 import type { QueueEntryDetail } from "../types.ts";
-import { formatEntryEvent, relativeTime, shortSha, statusColor } from "./format.ts";
+import { formatEntryEvent, progressBar, relativeTime, shortSha, statusColor } from "./format.ts";
 import { EntryStateGraph } from "./EntryStateGraph.tsx";
 import { ExternalRepairObservation } from "./ExternalRepairObservation.tsx";
 import { buildEntryStateGraph, buildExternalRepairObservations } from "./state-visualization.ts";
@@ -51,6 +51,14 @@ export function DetailView({
         <Text dimColor>base {shortSha(entry.baseSha)}</Text>
         {entry.issueKey && <Text dimColor>{entry.issueKey}</Text>}
       </Box>
+
+      {entry.maxRetries > 0 && (
+        <Box gap={1} marginTop={1}>
+          <Text dimColor>retry</Text>
+          <Text>{progressBar(entry.retryAttempts, entry.maxRetries, 10)}</Text>
+          <Text dimColor>{entry.retryAttempts}/{entry.maxRetries}</Text>
+        </Box>
+      )}
 
       <EntryStateGraph main={graph.main} exits={graph.exits} />
       <ExternalRepairObservation observations={observations} />

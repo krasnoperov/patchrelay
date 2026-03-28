@@ -33,6 +33,13 @@ export function formatTokens(n: number): string {
   return String(n);
 }
 
+/** Render a progress bar: ████░░░░ */
+export function progressBar(current: number, total: number, width: number): string {
+  if (total <= 0 || width <= 0) return "\u2591".repeat(width);
+  const filled = Math.min(width, Math.round((current / total) * width));
+  return "\u2588".repeat(filled) + "\u2591".repeat(width - filled);
+}
+
 /** Truncate text to max length with ellipsis. Collapses newlines. */
 export function truncate(text: string, max: number): string {
   const line = text.replace(/\n/g, " ").trim();

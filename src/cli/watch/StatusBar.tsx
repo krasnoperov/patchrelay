@@ -28,13 +28,17 @@ export function StatusBar({
 }: StatusBarProps): React.JSX.Element {
   const showing = filter === "all" ? `${totalCount} issues` : `${issues.length}/${totalCount} issues`;
   const agg = computeAggregates(allIssues);
+  const withPr = allIssues.filter((i) => i.prNumber !== undefined).length;
+  const awaitingInput = allIssues.filter((i) => i.factoryState === "awaiting_input").length;
   return (
     <Box justifyContent="space-between">
       <Box gap={1}>
         <Text bold>{showing}</Text>
         <Text dimColor>[{FILTER_LABELS[filter]}]</Text>
         <Text dimColor>|</Text>
-        {agg.active > 0 && <Text color="yellow">{agg.active} active</Text>}
+        {agg.active > 0 && <Text color="cyan">{agg.active} active</Text>}
+        {withPr > 0 && <Text dimColor>{withPr} PRs</Text>}
+        {awaitingInput > 0 && <Text color="yellow">{awaitingInput} awaiting input</Text>}
         {agg.done > 0 && <Text color="green">{agg.done} done</Text>}
         {agg.failed > 0 && <Text color="red">{agg.failed} failed</Text>}
       </Box>
