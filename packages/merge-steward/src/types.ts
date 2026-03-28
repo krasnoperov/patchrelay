@@ -7,14 +7,12 @@
  * Conflict retries are gated on base SHA change (non-spinning).
  *
  * Terminal states: merged, evicted, dequeued.
- * paused: reserved for future use (policy_blocked).
  */
 export type QueueEntryStatus =
   | "queued"
   | "preparing_head"
   | "validating"
   | "merging"
-  | "paused"
   | "evicted"
   | "merged"
   | "dequeued";
@@ -39,14 +37,12 @@ export interface QueueEntry {
   /** Base SHA at the time of last conflict — gates non-spinning retries. */
   lastFailedBaseSha: string | null;
   issueKey: string | null;
-  worktreePath: string | null;
   enqueuedAt: string;
   updatedAt: string;
 }
 
 export type FailureClass =
   | "main_broken"
-  | "flaky_or_infra"
   | "branch_local"
   | "integration_conflict"
   | "policy_blocked";
@@ -100,6 +96,50 @@ export interface QueueEventRecord {
   fromStatus: QueueEntryStatus | null;
   toStatus: QueueEntryStatus;
   detail?: string | undefined;
+}
+
+export interface QueueEventSummary extends QueueEventRecord {
+  prNumber: number;
+  branch: string;
+  issueKey: string | null;
+}
+
+export interface QueueRuntimeStatus {
+  tickInProgress: boolean;
+  lastTickStartedAt: string | null;
+  lastTickCompletedAt: string | null;
+  lastTickOutcome: "idle" | "running" | "succeeded" | "failed";
+  lastTickError: string | null;
+}
+
+export interface QueueStatusSummary {
+  total: number;
+  active: number;
+  queued: number;
+  preparingHead: number;
+  validating: number;
+  merging: number;
+  merged: number;
+  evicted: number;
+  dequeued: number;
+  headEntryId: string | null;
+  headPrNumber: number | null;
+}
+
+export interface QueueWatchSnapshot {
+  repoId: string;
+  repoFullName: string;
+  baseBranch: string;
+  summary: QueueStatusSummary;
+  runtime: QueueRuntimeStatus;
+  entries: QueueEntry[];
+  recentEvents: QueueEventSummary[];
+}
+
+export interface QueueEntryDetail {
+  entry: QueueEntry;
+  events: QueueEventRecord[];
+  incidents: IncidentRecord[];
 }
 
 export interface RebaseResult {

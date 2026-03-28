@@ -291,18 +291,6 @@ export class GitHubWebhookHandler {
       this.logger.info({ issueKey: issue.issueKey, reviewerName: event.reviewerName }, "Enqueued review fix run");
     }
 
-    if (event.triggerEvent === "merge_group_failed") {
-      this.db.upsertIssue({
-        projectId: issue.projectId,
-        linearIssueId: issue.linearIssueId,
-        pendingRunType: "queue_repair",
-        pendingRunContextJson: JSON.stringify({
-          failureReason: event.mergeGroupFailureReason,
-        }),
-      });
-      this.enqueueIssue(issue.projectId, issue.linearIssueId);
-      this.logger.info({ issueKey: issue.issueKey }, "Enqueued merge queue repair run");
-    }
   }
 
   private async emitLinearActivity(

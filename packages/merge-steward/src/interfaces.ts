@@ -1,18 +1,14 @@
-import type { CIStatus, CheckResult, IncidentRecord, MergeResult, PRStatus, QueueEntry, RebaseResult } from "./types.ts";
+import type { CIStatus, CheckResult, IncidentRecord, PRStatus, QueueEntry, RebaseResult } from "./types.ts";
 
 /**
- * Git operations seam — swappable between real git (shell exec) and
- * isomorphic-git + memfs for testing.
+ * Git operations needed by the reconciler. The sim (GitSim) implements
+ * additional methods for test harness setup, but the reconciler only uses these.
  */
 export interface GitOperations {
   fetch(remote?: string): Promise<void>;
   headSha(branch: string): Promise<string>;
-  changedFiles(branch: string, base: string): Promise<string[]>;
   rebase(branch: string, onto: string): Promise<RebaseResult>;
-  merge(source: string, into: string): Promise<MergeResult>;
   push(branch: string, force?: boolean): Promise<void>;
-  createBranch(name: string, from: string): Promise<void>;
-  deleteBranch(name: string): Promise<void>;
 }
 
 /**

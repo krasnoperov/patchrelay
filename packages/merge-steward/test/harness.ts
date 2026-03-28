@@ -130,7 +130,7 @@ export class Harness {
       maxRetries: this.maxRetries,
       lastFailedBaseSha: null,
       issueKey: null,
-      worktreePath: null,
+
       enqueuedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -263,7 +263,7 @@ export class Harness {
 
   private hasActiveWork(): boolean {
     return this.entries.some(
-      (e) => !TERMINAL_STATUSES.includes(e.status) && e.status !== "paused",
+      (e) => !TERMINAL_STATUSES.includes(e.status),
     );
   }
 }

@@ -10,7 +10,6 @@ interface IssueRowProps {
 
 const STATE_COLORS: Record<string, string> = {
   delegated: "blue",
-  preparing: "blue",
   implementing: "yellow",
   pr_open: "cyan",
   changes_requested: "magenta",
@@ -25,7 +24,6 @@ const STATE_COLORS: Record<string, string> = {
 
 const STATE_SHORT: Record<string, string> = {
   delegated: "queued",
-  preparing: "prep",
   implementing: "impl",
   pr_open: "pr open",
   changes_requested: "review fix",

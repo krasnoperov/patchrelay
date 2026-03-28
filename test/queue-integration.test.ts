@@ -64,33 +64,37 @@ test("check_failed does NOT transition awaiting_queue via factory state rules", 
   );
 });
 
-// --- Queue repair cycle ---
-
-test("merge_group_failed from awaiting_queue transitions to repairing_queue", () => {
-  assert.equal(resolve("merge_group_failed", "awaiting_queue"), "repairing_queue");
-});
+// --- Queue repair cycle (via steward check-run eviction) ---
+// Note: merge_group_failed is no longer in the state machine. Queue eviction
+// is handled by the webhook handler reacting to the steward's check run,
+// which directly sets pendingRunType: "queue_repair". The factory state
+// enters repairing_queue via check_failed (the normal CI path), then
+// check_passed returns to awaiting_queue.
 
 test("check_passed from repairing_queue returns to awaiting_queue", () => {
   assert.equal(resolve("check_passed", "repairing_queue"), "awaiting_queue");
 });
 
-// --- Full queue repair cycle ---
+test("merge_group events are no-ops (external queue handles merging)", () => {
+  assert.equal(resolve("merge_group_failed", "awaiting_queue"), undefined);
+  assert.equal(resolve("merge_group_passed", "awaiting_queue"), undefined);
+});
 
-test("full cycle: awaiting_queue → repair → awaiting_queue", () => {
-  // Issue enters awaiting_queue (label added, external queue picks it up)
+test("full cycle: awaiting_queue → CI repair → awaiting_queue → done", () => {
   let state: FactoryState = "awaiting_queue";
 
-  // Queue eviction: merge_group_failed → repairing_queue
-  const afterEviction = resolve("merge_group_failed", state);
-  assert.equal(afterEviction, "repairing_queue");
-  state = afterEviction!;
+  // Steward eviction triggers check_failed → webhook handler sets queue_repair.
+  // The factory state sees check_failed on an open state → repairing_ci.
+  const afterFail = resolve("check_failed", state);
+  assert.equal(afterFail, "repairing_ci");
+  state = afterFail!;
 
-  // Queue repair: agent fixes, CI passes → awaiting_queue
-  const afterRepair = resolve("check_passed", state);
-  assert.equal(afterRepair, "awaiting_queue");
-  state = afterRepair!;
+  // Agent fixes, CI passes. Since PR is approved → awaiting_queue.
+  const afterPass = resolve("check_passed", state, { prReviewState: "approved" });
+  assert.equal(afterPass, "awaiting_queue");
+  state = afterPass!;
 
-  // External queue merges → done
+  // External queue merges → done.
   const afterMerge = resolve("pr_merged", state);
   assert.equal(afterMerge, "done");
 });

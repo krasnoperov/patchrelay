@@ -3,6 +3,7 @@ import type {
   QueueEntry,
   QueueEntryStatus,
   QueueEventRecord,
+  QueueEventSummary,
   IncidentRecord,
 } from "./types.ts";
 import { TERMINAL_STATUSES } from "./types.ts";
@@ -116,6 +117,25 @@ export class MemoryStore implements QueueStore {
     const filtered = this.events.filter((e) => e.entryId === entryId);
     if (opts?.limit) return filtered.slice(-opts.limit);
     return filtered;
+  }
+
+  listRecentEvents(repoId: string, opts?: { limit?: number }): QueueEventSummary[] {
+    const filtered = this.events
+      .map((event) => {
+        const entry = this.entries.get(event.entryId);
+        if (!entry || entry.repoId !== repoId) {
+          return null;
+        }
+        return {
+          ...event,
+          prNumber: entry.prNumber,
+          branch: entry.branch,
+          issueKey: entry.issueKey,
+        };
+      })
+      .filter((event): event is QueueEventSummary => event !== null);
+    const limited = opts?.limit ? filtered.slice(-opts.limit) : filtered;
+    return limited;
   }
 
   private appendEvent(

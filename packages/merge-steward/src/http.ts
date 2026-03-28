@@ -11,12 +11,19 @@ const enqueueBody = z.object({
   branch: z.string().min(1),
   headSha: z.string().min(1),
   issueKey: z.string().optional(),
-  worktreePath: z.string().optional(),
   priority: z.number().int().optional(),
 });
 
 const updateHeadBody = z.object({
   headSha: z.string().min(1),
+});
+
+const watchQuery = z.object({
+  eventLimit: z.coerce.number().int().min(1).max(200).optional(),
+});
+
+const detailQuery = z.object({
+  eventLimit: z.coerce.number().int().min(1).max(500).optional(),
 });
 
 export async function buildHttpServer(
@@ -64,6 +71,33 @@ export async function buildHttpServer(
     entries: service.getStatus(),
   }));
 
+  app.get("/queue/watch", async (request) => {
+    const query = watchQuery.parse(request.query ?? {});
+    return service.getWatchSnapshot(
+      query.eventLimit !== undefined ? { eventLimit: query.eventLimit } : undefined,
+    );
+  });
+
+  app.get<{ Params: { entryId: string } }>(
+    "/queue/entries/:entryId/detail",
+    async (request, reply) => {
+      const query = detailQuery.parse(request.query ?? {});
+      const detail = service.getEntryDetail(
+        request.params.entryId,
+        query.eventLimit !== undefined ? { eventLimit: query.eventLimit } : undefined,
+      );
+      if (!detail) {
+        return reply.status(404).send({ ok: false, error: "Entry not found" });
+      }
+      return detail;
+    },
+  );
+
+  app.post("/queue/reconcile", async () => {
+    const result = await service.triggerReconcile();
+    return { ok: true, ...result };
+  });
+
   app.post("/queue/enqueue", async (request, reply) => {
     const body = enqueueBody.parse(request.body);
     try {
@@ -73,7 +107,6 @@ export async function buildHttpServer(
         headSha: body.headSha,
       };
       if (body.issueKey !== undefined) params.issueKey = body.issueKey;
-      if (body.worktreePath !== undefined) params.worktreePath = body.worktreePath;
       if (body.priority !== undefined) params.priority = body.priority;
       const entry = service.enqueue(params);
       return reply.status(201).send({ ok: true, entryId: entry.id });

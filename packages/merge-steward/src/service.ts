@@ -1,7 +1,14 @@
 import type { Logger } from "pino";
 import type { GitOperations, CIRunner, GitHubPRApi, EvictionReporter } from "./interfaces.ts";
 import type { QueueStore } from "./store.ts";
-import type { QueueEntry, IncidentRecord } from "./types.ts";
+import type {
+  QueueEntry,
+  IncidentRecord,
+  QueueEntryDetail,
+  QueueRuntimeStatus,
+  QueueStatusSummary,
+  QueueWatchSnapshot,
+} from "./types.ts";
 import type { StewardConfig } from "./config.ts";
 import { reconcile } from "./reconciler.ts";
 import { randomUUID } from "node:crypto";
@@ -14,6 +21,11 @@ export class MergeStewardService {
   private tickTimer: ReturnType<typeof setTimeout> | undefined;
   private tickInProgress = false;
   private nextPosition = 1;
+  private lastTickStartedAt: string | null = null;
+  private lastTickCompletedAt: string | null = null;
+  private lastTickOutcome: QueueRuntimeStatus["lastTickOutcome"] = "idle";
+  private lastTickError: string | null = null;
+  private mainBrokenReported = false;
 
   constructor(
     private readonly config: StewardConfig,
@@ -54,7 +66,6 @@ export class MergeStewardService {
     branch: string;
     headSha: string;
     issueKey?: string;
-    worktreePath?: string;
     priority?: number;
   }): QueueEntry {
     const entry: QueueEntry = {
@@ -74,7 +85,6 @@ export class MergeStewardService {
       maxRetries: this.config.maxRetries,
       lastFailedBaseSha: null,
       issueKey: params.issueKey ?? null,
-      worktreePath: params.worktreePath ?? null,
       enqueuedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -109,6 +119,49 @@ export class MergeStewardService {
 
   listIncidents(entryId: string): IncidentRecord[] {
     return this.store.listIncidents(entryId);
+  }
+
+  getRuntimeStatus(): QueueRuntimeStatus {
+    return {
+      tickInProgress: this.tickInProgress,
+      lastTickStartedAt: this.lastTickStartedAt,
+      lastTickCompletedAt: this.lastTickCompletedAt,
+      lastTickOutcome: this.lastTickOutcome,
+      lastTickError: this.lastTickError,
+    };
+  }
+
+  getWatchSnapshot(options?: { eventLimit?: number }): QueueWatchSnapshot {
+    const entries = this.store.listAll(this.config.repoId);
+    return {
+      repoId: this.config.repoId,
+      repoFullName: this.config.repoFullName,
+      baseBranch: this.config.baseBranch,
+      summary: buildSummary(entries),
+      runtime: this.getRuntimeStatus(),
+      entries,
+      recentEvents: this.store.listRecentEvents(this.config.repoId, { limit: options?.eventLimit ?? 40 }),
+    };
+  }
+
+  getEntryDetail(entryId: string, options?: { eventLimit?: number }): QueueEntryDetail | undefined {
+    const entry = this.store.getEntry(entryId);
+    if (!entry || entry.repoId !== this.config.repoId) {
+      return undefined;
+    }
+    return {
+      entry,
+      events: this.store.listEvents(entryId, { limit: options?.eventLimit ?? 200 }),
+      incidents: this.store.listIncidents(entryId),
+    };
+  }
+
+  async triggerReconcile(): Promise<{ started: boolean; runtime: QueueRuntimeStatus }> {
+    const started = await this.runTick();
+    return {
+      started,
+      runtime: this.getRuntimeStatus(),
+    };
   }
 
   /**
@@ -195,9 +248,12 @@ export class MergeStewardService {
     }
   }
 
-  private async runTick(): Promise<void> {
-    if (this.tickInProgress) return;
+  private async runTick(): Promise<boolean> {
+    if (this.tickInProgress) return false;
     this.tickInProgress = true;
+    this.lastTickStartedAt = new Date().toISOString();
+    this.lastTickOutcome = "running";
+    this.lastTickError = null;
     try {
       await reconcile({
         store: this.store,
@@ -217,18 +273,30 @@ export class MergeStewardService {
           this.logger.warn({ prNumber, failureClass: context.failureClass }, "PR evicted from queue");
         },
         onMainBroken: () => {
-          this.logger.warn("Main branch CI is failing — queue paused");
+          if (!this.mainBrokenReported) {
+            this.mainBrokenReported = true;
+            this.logger.warn("Main branch CI is failing — queue paused");
+          }
         },
       });
+      this.mainBrokenReported = false; // Reset after successful tick.
+      this.lastTickOutcome = "succeeded";
     } catch (error) {
+      this.lastTickOutcome = "failed";
+      this.lastTickError = error instanceof Error ? error.message : String(error);
       this.logger.error({ error }, "Reconcile tick failed");
     } finally {
       this.tickInProgress = false;
+      this.lastTickCompletedAt = new Date().toISOString();
       this.scheduleNextTick();
     }
+    return true;
   }
 
   private scheduleNextTick(): void {
+    if (this.tickTimer) {
+      clearTimeout(this.tickTimer);
+    }
     this.tickTimer = setTimeout(() => void this.runTick(), this.config.pollIntervalMs);
     this.tickTimer.unref?.();
   }
@@ -238,4 +306,55 @@ export class MergeStewardService {
 function matchGlob(pattern: string, value: string): boolean {
   const regex = new RegExp("^" + pattern.replace(/\*/g, ".*") + "$");
   return regex.test(value);
+}
+
+function buildSummary(entries: QueueEntry[]): QueueStatusSummary {
+  const summary: QueueStatusSummary = {
+    total: entries.length,
+    active: 0,
+    queued: 0,
+    preparingHead: 0,
+    validating: 0,
+    merging: 0,
+    merged: 0,
+    evicted: 0,
+    dequeued: 0,
+    headEntryId: null,
+    headPrNumber: null,
+  };
+
+  const activeEntries = entries.filter((entry) => !["merged", "evicted", "dequeued"].includes(entry.status));
+  if (activeEntries.length > 0) {
+    summary.headEntryId = activeEntries[0]!.id;
+    summary.headPrNumber = activeEntries[0]!.prNumber;
+    summary.active = activeEntries.length;
+  }
+
+  for (const entry of entries) {
+    switch (entry.status) {
+      case "queued":
+        summary.queued += 1;
+        break;
+      case "preparing_head":
+        summary.preparingHead += 1;
+        break;
+      case "validating":
+        summary.validating += 1;
+        break;
+      case "merging":
+        summary.merging += 1;
+        break;
+      case "merged":
+        summary.merged += 1;
+        break;
+      case "evicted":
+        summary.evicted += 1;
+        break;
+      case "dequeued":
+        summary.dequeued += 1;
+        break;
+    }
+  }
+
+  return summary;
 }

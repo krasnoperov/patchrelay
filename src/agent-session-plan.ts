@@ -124,7 +124,6 @@ export function buildAgentSessionPlan(params: {
 
   switch (params.factoryState) {
     case "delegated":
-    case "preparing":
       return setStatuses(planForRunType(runType, params), ["inProgress", "pending", "pending", "pending"]);
     case "implementing":
       return setStatuses(planForRunType("implementation", params), ["completed", "inProgress", "pending", "pending"]);
@@ -189,13 +188,6 @@ export function buildAgentSessionPlanForIssue(
     queueRepairAttempts: issue.queueRepairAttempts,
     ...(issue.pendingRunType ? { pendingRunType: issue.pendingRunType } : {}),
     ...(options?.activeRunType ? { activeRunType: options.activeRunType } : {}),
-  });
-}
-
-export function buildPreparingSessionPlan(runType: string): AgentSessionPlanStep[] {
-  return buildAgentSessionPlan({
-    factoryState: "preparing",
-    pendingRunType: runType as RunType,
   });
 }
 

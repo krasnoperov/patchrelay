@@ -70,8 +70,6 @@ function formatTitle(incident: IncidentRecord): string {
       return "Queue eviction: CI failure (branch-specific)";
     case "main_broken":
       return "Queue eviction: main branch CI failing";
-    case "flaky_or_infra":
-      return "Queue eviction: CI failure (possible flaky)";
     case "policy_blocked":
       return "Queue eviction: approval withdrawn";
     default:

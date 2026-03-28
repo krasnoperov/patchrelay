@@ -1,5 +1,5 @@
 import type { GitOperations } from "../interfaces.ts";
-import type { MergeResult, RebaseResult } from "../types.ts";
+import type { RebaseResult } from "../types.ts";
 import { exec } from "../exec.ts";
 
 /**
@@ -28,11 +28,6 @@ export class ShellGitOperations implements GitOperations {
     return result.stdout.trim();
   }
 
-  async changedFiles(branch: string, base: string): Promise<string[]> {
-    const result = await this.git(["diff", "--name-only", `${base}...${branch}`]);
-    return result.stdout.trim().split("\n").filter(Boolean);
-  }
-
   async rebase(branch: string, onto: string): Promise<RebaseResult> {
     await this.git(["checkout", branch]);
     const result = await this.git(["rebase", onto], { allowNonZero: true });
@@ -52,17 +47,6 @@ export class ShellGitOperations implements GitOperations {
     return { success: true, newHeadSha: newSha };
   }
 
-  async merge(source: string, into: string): Promise<MergeResult> {
-    await this.git(["checkout", into]);
-    const result = await this.git(["merge", "--no-ff", source], { allowNonZero: true });
-    if (result.exitCode !== 0) {
-      await this.git(["merge", "--abort"], { allowNonZero: true });
-      return { success: false };
-    }
-    const sha = await this.headSha("HEAD");
-    return { success: true, sha };
-  }
-
   async push(branch: string, force = false): Promise<void> {
     const args = ["push"];
     if (force) args.push("--force-with-lease");
@@ -70,11 +54,4 @@ export class ShellGitOperations implements GitOperations {
     await this.git(args, { timeoutMs: 60_000 });
   }
 
-  async createBranch(name: string, from: string): Promise<void> {
-    await this.git(["branch", name, from]);
-  }
-
-  async deleteBranch(name: string): Promise<void> {
-    await this.git(["branch", "-D", name]);
-  }
 }

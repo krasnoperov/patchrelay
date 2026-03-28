@@ -5,7 +5,6 @@ import type { GitHubTriggerEvent } from "./github-types.ts";
  */
 export type FactoryState =
   | "delegated"
-  | "preparing"
   | "implementing"
   | "pr_open"
   | "changes_requested"
@@ -115,13 +114,8 @@ const TRANSITION_RULES: readonly TransitionRule[] = [
     guard: (s, ctx) => isOpen(s) && ctx.activeRunId === undefined,
     to: "repairing_ci" },
 
-  // ── Merge queue events ─────────────────────────────────────────
-  { event: "merge_group_failed",
-    guard: (s) => s === "awaiting_queue",
-    to: "repairing_queue" },
-
-  // merge_group_passed: no rule → no transition (merge event follows)
   // pr_synchronize: no rule → no transition (resets counters only)
+  // merge_group events: not used — merge queue is handled by external steward
 ];
 
 /**

@@ -53,9 +53,6 @@ export async function reconcile(ctx: ReconcileContext): Promise<void> {
       await mergeHead(ctx, head);
       break;
 
-    case "paused":
-      break;
-
     default:
       break;
   }

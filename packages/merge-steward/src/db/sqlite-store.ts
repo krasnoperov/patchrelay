@@ -3,6 +3,7 @@ import type {
   QueueEntry,
   QueueEntryStatus,
   QueueEventRecord,
+  QueueEventSummary,
   IncidentRecord,
   EvictionContext,
 } from "../types.ts";
@@ -29,7 +30,6 @@ function mapEntry(row: Record<string, unknown>): QueueEntry {
     maxRetries: Number(row.max_retries),
     lastFailedBaseSha: row.last_failed_base_sha === null ? null : String(row.last_failed_base_sha),
     issueKey: row.issue_key === null ? null : String(row.issue_key),
-    worktreePath: row.worktree_path === null ? null : String(row.worktree_path),
     enqueuedAt: String(row.enqueued_at),
     updatedAt: String(row.updated_at),
   };
@@ -54,6 +54,20 @@ function mapEvent(row: Record<string, unknown>): QueueEventRecord {
     fromStatus: row.from_status === null ? null : (String(row.from_status) as QueueEntryStatus),
     toStatus: String(row.to_status) as QueueEntryStatus,
     detail: row.detail === null ? undefined : String(row.detail),
+  };
+}
+
+function mapEventSummary(row: Record<string, unknown>): QueueEventSummary {
+  return {
+    id: Number(row.id),
+    entryId: String(row.entry_id),
+    at: String(row.at),
+    fromStatus: row.from_status === null ? null : (String(row.from_status) as QueueEntryStatus),
+    toStatus: String(row.to_status) as QueueEntryStatus,
+    detail: row.detail === null ? undefined : String(row.detail),
+    prNumber: Number(row.pr_number),
+    branch: String(row.branch),
+    issueKey: row.issue_key === null ? null : String(row.issue_key),
   };
 }
 
@@ -130,14 +144,14 @@ export class SqliteStore implements QueueStore {
         `INSERT INTO queue_entries
          (id, repo_id, pr_number, branch, head_sha, base_sha, status, position,
           priority, generation, ci_run_id, ci_retries, retry_attempts,
-          max_retries, last_failed_base_sha, issue_key, worktree_path, enqueued_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          max_retries, last_failed_base_sha, issue_key, enqueued_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         entry.id, entry.repoId, entry.prNumber, entry.branch,
         entry.headSha, entry.baseSha, entry.status, entry.position,
         entry.priority, entry.generation, entry.ciRunId, entry.ciRetries,
         entry.retryAttempts, entry.maxRetries, entry.lastFailedBaseSha,
-        entry.issueKey, entry.worktreePath, entry.enqueuedAt, entry.updatedAt,
+        entry.issueKey, entry.enqueuedAt, entry.updatedAt,
       );
       this.writeEvent(entry.id, null, entry.status);
     })();
@@ -220,9 +234,37 @@ export class SqliteStore implements QueueStore {
   listEvents(entryId: string, opts?: { limit?: number }): QueueEventRecord[] {
     const limit = opts?.limit ?? 1000;
     const rows = this.conn.prepare(
-      "SELECT * FROM queue_events WHERE entry_id = ? ORDER BY id ASC LIMIT ?",
+      `SELECT * FROM (
+         SELECT * FROM queue_events
+         WHERE entry_id = ?
+         ORDER BY id DESC
+         LIMIT ?
+       )
+       ORDER BY id ASC`,
     ).all(entryId, limit);
     return rows.map(mapEvent);
+  }
+
+  listRecentEvents(repoId: string, opts?: { limit?: number }): QueueEventSummary[] {
+    const limit = opts?.limit ?? 100;
+    const rows = this.conn.prepare(
+      `SELECT
+         queue_events.id,
+         queue_events.entry_id,
+         queue_events.at,
+         queue_events.from_status,
+         queue_events.to_status,
+         queue_events.detail,
+         queue_entries.pr_number,
+         queue_entries.branch,
+         queue_entries.issue_key
+       FROM queue_events
+       INNER JOIN queue_entries ON queue_entries.id = queue_events.entry_id
+       WHERE queue_entries.repo_id = ?
+       ORDER BY queue_events.id DESC
+       LIMIT ?`,
+    ).all(repoId, limit);
+    return rows.reverse().map(mapEventSummary);
   }
 
   private writeEvent(

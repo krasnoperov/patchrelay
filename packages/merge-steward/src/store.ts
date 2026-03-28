@@ -2,6 +2,7 @@ import type {
   QueueEntry,
   QueueEntryStatus,
   QueueEventRecord,
+  QueueEventSummary,
   IncidentRecord,
 } from "./types.ts";
 
@@ -37,4 +38,5 @@ export interface QueueStore {
 
   // === Audit (read-only — writes folded into mutations above) ===
   listEvents(entryId: string, opts?: { limit?: number }): QueueEventRecord[];
+  listRecentEvents(repoId: string, opts?: { limit?: number }): QueueEventSummary[];
 }

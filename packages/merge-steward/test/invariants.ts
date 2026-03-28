@@ -8,7 +8,6 @@ const ACTIVE: QueueEntryStatus[] = [
   "preparing_head",
   "validating",
   "merging",
-  "paused",
 ];
 
 export function assertInvariants(
@@ -97,21 +96,16 @@ function assertMonotonicProgress(entries: QueueEntry[]): void {
   const processing = active.filter((e) =>
     ["preparing_head", "validating", "merging"].includes(e.status),
   );
-  const waitingForExternal = active.filter((e) =>
-    e.status === "paused",
-  );
   const waitingInLine = active.filter((e) =>
     e.status === "queued",
   );
 
+  // Valid: at least one entry is processing, or all are freshly queued.
   const headActive = processing.length > 0;
-  const allExternalWait = active.length === waitingForExternal.length;
   const allInLine = active.length === waitingInLine.length;
-  const headExternalRest = waitingForExternal.length > 0 &&
-    active.length === waitingForExternal.length + waitingInLine.length;
 
   assert.ok(
-    headActive || allExternalWait || allInLine || headExternalRest,
+    headActive || allInLine,
     `Queue stuck: ${active.length} active entries but none progressing: ${active.map((e) => `PR #${e.prNumber} (${e.status})`).join(", ")}`,
   );
 }

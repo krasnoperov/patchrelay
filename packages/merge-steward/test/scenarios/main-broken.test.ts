@@ -28,7 +28,7 @@ describe("main branch broken", () => {
     assert.strictEqual(h.entries[0]!.status, "preparing_head",
       "Should stay in preparing_head when main is broken");
 
-    // Tick again — still paused.
+    // Tick again — still waiting for main to recover.
     await h.tick();
     assert.strictEqual(h.entries[0]!.status, "preparing_head");
 

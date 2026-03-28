@@ -2,7 +2,6 @@
 
 export const FACTORY_STATE_COLORS: Record<string, string> = {
   delegated: "blue",
-  preparing: "blue",
   implementing: "yellow",
   awaiting_input: "yellow",
   pr_open: "cyan",

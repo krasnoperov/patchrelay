@@ -13,7 +13,7 @@ import type { GitHubTriggerEvent } from "../src/github-types.ts";
 // ─── Helpers ──────────────────────────────────────────────────────
 
 const ALL_STATES: FactoryState[] = [
-  "delegated", "preparing", "implementing", "pr_open",
+  "delegated", "implementing", "pr_open",
   "changes_requested", "repairing_ci", "awaiting_queue", "repairing_queue",
   "awaiting_input", "escalated", "done", "failed",
 ];
@@ -145,33 +145,23 @@ test("pr_synchronize never changes state", () => {
   }
 });
 
-// ─── Merge queue events ──────────────────────────────────────────
+// ─── Merge queue events (handled by external steward) ────────────
 
-test("merge_group_failed from awaiting_queue → repairing_queue", () => {
-  assert.equal(resolve("merge_group_failed", "awaiting_queue"), "repairing_queue");
-});
-
-test("merge_group_failed from non-queue states is no-op", () => {
-  for (const state of ALL_STATES.filter((s) => s !== "awaiting_queue")) {
-    assert.equal(resolve("merge_group_failed", state), undefined, `merge_group_failed from ${state}`);
-  }
-});
-
-test("merge_group_passed is always no-op", () => {
+test("merge_group events are no-ops (queue managed by external steward)", () => {
   for (const state of ALL_STATES) {
+    assert.equal(resolve("merge_group_failed", state), undefined, `merge_group_failed from ${state}`);
     assert.equal(resolve("merge_group_passed", state), undefined, `merge_group_passed from ${state}`);
   }
 });
 
 // ─── End-to-end scenarios ────────────────────────────────────────
 
-test("full cycle: implement → CI fail → repair → approve → conflict → queue repair → merge", () => {
+test("full cycle: implement → CI fail → repair → approve → merge", () => {
   assert.equal(resolve("pr_opened", "implementing"), "pr_open");
   assert.equal(resolve("check_failed", "pr_open"), "repairing_ci");
   assert.equal(resolve("check_passed", "repairing_ci"), "pr_open");
   assert.equal(resolve("review_approved", "pr_open"), "awaiting_queue");
-  assert.equal(resolve("merge_group_failed", "awaiting_queue"), "repairing_queue");
-  assert.equal(resolve("check_passed", "repairing_queue"), "awaiting_queue");
+  // External steward handles queue → merge. PatchRelay sees pr_merged.
   assert.equal(resolve("pr_merged", "awaiting_queue"), "done");
 });
 
