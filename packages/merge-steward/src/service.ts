@@ -9,6 +9,7 @@ import type {
   QueueStatusSummary,
   QueueWatchSnapshot,
 } from "./types.ts";
+import { TERMINAL_STATUSES } from "./types.ts";
 import type { StewardConfig } from "./config.ts";
 import { reconcile } from "./reconciler.ts";
 import { randomUUID } from "node:crypto";
@@ -329,7 +330,7 @@ export function buildSummary(entries: QueueEntry[]): QueueStatusSummary {
     headPrNumber: null,
   };
 
-  const activeEntries = entries.filter((entry) => !["merged", "evicted", "dequeued"].includes(entry.status));
+  const activeEntries = entries.filter((entry) => !TERMINAL_STATUSES.includes(entry.status));
   if (activeEntries.length > 0) {
     summary.headEntryId = activeEntries[0]!.id;
     summary.headPrNumber = activeEntries[0]!.prNumber;

@@ -5,6 +5,15 @@ import { TERMINAL_STATUSES } from "./types.ts";
 import { classifyFailure } from "./classify.ts";
 import { randomUUID } from "node:crypto";
 
+// ─── Constants ──────────────────────────────────────────────────
+
+const SPEC_BRANCH_PREFIX = "mq-spec-";
+const FAILED_CONCLUSIONS = new Set(["failure", "timed_out", "cancelled"]);
+const CLEAN_SPEC = { specBranch: null, specSha: null, specBasedOn: null } as const;
+const CLEAN_CI = { ciRunId: null, ciRetries: 0 } as const;
+
+// ─── Context ────────────────────────────────────────────────────
+
 export interface ReconcileContext {
   store: QueueStore;
   repoId: string;
@@ -21,19 +30,38 @@ export interface ReconcileContext {
   onEvent: (event: ReconcileEvent) => void;
 }
 
+// ─── Helpers ────────────────────────────────────────────────────
+
 function emit(ctx: ReconcileContext, entry: QueueEntry, action: ReconcileAction, extra?: Partial<ReconcileEvent>): void {
-  ctx.onEvent({
-    at: new Date().toISOString(),
-    entryId: entry.id,
-    prNumber: entry.prNumber,
-    action,
-    ...extra,
-  });
+  ctx.onEvent({ at: new Date().toISOString(), entryId: entry.id, prNumber: entry.prNumber, action, ...extra });
 }
 
-/**
- * Reconciler with speculative execution and structured event stream.
- */
+function ref(ctx: ReconcileContext, name: string): string {
+  return ctx.remotePrefix + name;
+}
+
+function specBranchName(entryId: string): string {
+  return `${SPEC_BRANCH_PREFIX}${entryId}`;
+}
+
+function isBudgetExhausted(entry: QueueEntry): boolean {
+  return entry.retryAttempts >= entry.maxRetries;
+}
+
+function isRetryGated(entry: QueueEntry, currentBaseSha: string): boolean {
+  return entry.lastFailedBaseSha === currentBaseSha;
+}
+
+/** The branch and SHA to use for CI — spec branch if available, else PR branch. */
+function ciTarget(entry: QueueEntry): { branch: string; sha: string } {
+  return {
+    branch: entry.specBranch ?? entry.branch,
+    sha: entry.specSha ?? entry.headSha,
+  };
+}
+
+// ─── Main reconcile loop ────────────────────────────────────────
+
 export async function reconcile(ctx: ReconcileContext): Promise<void> {
   const allActive = ctx.store.listActive(ctx.repoId);
   if (allActive.length === 0) return;
@@ -44,9 +72,9 @@ export async function reconcile(ctx: ReconcileContext): Promise<void> {
     const entryId = allActive[i]!.id;
     const entry = ctx.store.getEntry(entryId);
     if (!entry || TERMINAL_STATUSES.includes(entry.status)) continue;
+
     const isHead = i === 0;
-    const prevEntryId = i > 0 ? allActive[i - 1]!.id : null;
-    const prevEntry = prevEntryId ? ctx.store.getEntry(prevEntryId) : null;
+    const prevEntry = i > 0 ? ctx.store.getEntry(allActive[i - 1]!.id) : null;
 
     switch (entry.status) {
       case "queued":
@@ -64,15 +92,14 @@ export async function reconcile(ctx: ReconcileContext): Promise<void> {
 
       case "validating": {
         const freshActive = ctx.store.listActive(ctx.repoId);
-        const freshIndex = freshActive.findIndex((e) => e.id === entry.id);
-        await checkValidation(ctx, entry, freshActive, freshIndex >= 0 ? freshIndex : i);
+        const freshIdx = freshActive.findIndex((e) => e.id === entry.id);
+        await checkValidation(ctx, entry, freshActive, freshIdx >= 0 ? freshIdx : i);
         break;
       }
 
       case "merging":
         if (isHead) {
-          const freshActive = ctx.store.listActive(ctx.repoId);
-          await mergeHead(ctx, entry, freshActive);
+          await mergeHead(ctx, entry, ctx.store.listActive(ctx.repoId));
         }
         break;
 
@@ -82,14 +109,13 @@ export async function reconcile(ctx: ReconcileContext): Promise<void> {
   }
 }
 
-// ─── Head entry: rebase onto main ───────────────────────────────
+// ─── Head entry: fetch + gate + rebase ──────────────────────────
 
 async function prepareHead(ctx: ReconcileContext, entry: QueueEntry): Promise<void> {
-  const r = ctx.remotePrefix;
-
   emit(ctx, entry, "fetch_started");
   await ctx.git.fetch();
 
+  // Gate: main CI must be green.
   if (ctx.ci.getMainStatus) {
     const mainStatus = await ctx.ci.getMainStatus(ctx.baseBranch);
     if (mainStatus === "fail") {
@@ -98,66 +124,78 @@ async function prepareHead(ctx: ReconcileContext, entry: QueueEntry): Promise<vo
     }
   }
 
-  const currentRef = await ctx.git.headSha(r + entry.branch);
+  // Gate: branch must match expected SHA (detect external pushes).
+  const currentRef = await ctx.git.headSha(ref(ctx, entry.branch));
   if (currentRef !== entry.headSha) {
-    emit(ctx, entry, "branch_mismatch", { detail: `expected ${entry.headSha}, got ${currentRef}` });
+    emit(ctx, entry, "branch_mismatch", { detail: `expected ${entry.headSha.slice(0, 8)}, got ${currentRef.slice(0, 8)}` });
     ctx.store.updateHead(entry.id, currentRef);
     return;
   }
 
-  const currentBaseSha = await ctx.git.headSha(r + ctx.baseBranch);
+  const baseSha = await ctx.git.headSha(ref(ctx, ctx.baseBranch));
 
-  if (entry.retryAttempts >= entry.maxRetries && entry.lastFailedBaseSha !== null) {
-    emit(ctx, entry, "budget_exhausted", { baseSha: currentBaseSha });
+  // Gate: budget exhausted after previous conflict.
+  if (isBudgetExhausted(entry) && entry.lastFailedBaseSha !== null) {
+    emit(ctx, entry, "budget_exhausted", { baseSha });
     await evictEntry(ctx, entry, "integration_conflict");
     return;
   }
 
-  if (entry.lastFailedBaseSha === currentBaseSha) {
-    emit(ctx, entry, "retry_gated", { baseSha: currentBaseSha, detail: "base unchanged since last conflict" });
+  // Gate: non-spinning — skip if base hasn't changed since last conflict.
+  if (isRetryGated(entry, baseSha)) {
+    emit(ctx, entry, "retry_gated", { baseSha, detail: "base unchanged since last conflict" });
     return;
   }
 
-  emit(ctx, entry, "rebase_started", { baseSha: currentBaseSha });
-  const result = await ctx.git.rebase(entry.branch, r + ctx.baseBranch);
+  await performRebase(ctx, entry, baseSha);
+}
 
-  if (result.success) {
-    const newHeadSha = result.newHeadSha ?? entry.headSha;
-    await ctx.git.push(entry.branch, true);
-    emit(ctx, entry, "rebase_succeeded", { baseSha: currentBaseSha });
+async function performRebase(ctx: ReconcileContext, entry: QueueEntry, baseSha: string): Promise<void> {
+  emit(ctx, entry, "rebase_started", { baseSha });
+  const result = await ctx.git.rebase(entry.branch, ref(ctx, ctx.baseBranch));
 
-    let specBranch: string | null = null;
-    let specSha: string | null = null;
-    if (ctx.specBuilder) {
-      specBranch = `mq-spec-${entry.id}`;
-      emit(ctx, entry, "spec_build_started", { specBranch, baseSha: currentBaseSha });
-      const specResult = await ctx.specBuilder.buildSpeculative(entry.branch, r + ctx.baseBranch, specBranch);
-      specSha = specResult.success ? (specResult.sha ?? newHeadSha) : null;
-      if (specResult.success) {
-        emit(ctx, entry, "spec_build_succeeded", { specBranch, baseSha: currentBaseSha });
-      } else {
-        emit(ctx, entry, "spec_build_conflict", { specBranch });
-        specBranch = null;
-      }
-    }
-
-    const runId = await ctx.ci.triggerRun(entry.branch, newHeadSha);
-    emit(ctx, entry, "ci_triggered", { ciRunId: runId });
-    ctx.store.transition(entry.id, "validating", {
-      headSha: newHeadSha, baseSha: currentBaseSha, ciRunId: runId,
-      lastFailedBaseSha: null, specBranch, specSha, specBasedOn: null,
-    }, `rebase onto ${currentBaseSha.slice(0, 8)}, CI ${runId}`);
-  } else {
-    emit(ctx, entry, "rebase_conflict", { baseSha: currentBaseSha, conflictFiles: result.conflictFiles });
-    if (entry.retryAttempts >= entry.maxRetries) {
+  if (!result.success) {
+    emit(ctx, entry, "rebase_conflict", { baseSha, conflictFiles: result.conflictFiles });
+    if (isBudgetExhausted(entry)) {
+      emit(ctx, entry, "budget_exhausted");
       await evictEntry(ctx, entry, "integration_conflict",
         result.conflictFiles ? { conflictFiles: result.conflictFiles } : undefined);
     } else {
       ctx.store.transition(entry.id, "preparing_head", {
-        retryAttempts: entry.retryAttempts + 1, lastFailedBaseSha: currentBaseSha,
-      }, `conflict, retry ${entry.retryAttempts + 1}/${entry.maxRetries}`);
+        retryAttempts: entry.retryAttempts + 1,
+        lastFailedBaseSha: baseSha,
+        ...CLEAN_CI, ...CLEAN_SPEC,
+      }, `conflict on ${baseSha.slice(0, 8)}, retry ${entry.retryAttempts + 1}/${entry.maxRetries}`);
+    }
+    return;
+  }
+
+  const headSha = result.newHeadSha ?? entry.headSha;
+  await ctx.git.push(entry.branch, true);
+  emit(ctx, entry, "rebase_succeeded", { baseSha });
+
+  // Build speculative branch for downstream entries.
+  let specBranch: string | null = null;
+  let specSha: string | null = null;
+  if (ctx.specBuilder) {
+    specBranch = specBranchName(entry.id);
+    emit(ctx, entry, "spec_build_started", { specBranch, baseSha });
+    const specResult = await ctx.specBuilder.buildSpeculative(entry.branch, ref(ctx, ctx.baseBranch), specBranch);
+    if (specResult.success) {
+      specSha = specResult.sha ?? headSha;
+      emit(ctx, entry, "spec_build_succeeded", { specBranch });
+    } else {
+      emit(ctx, entry, "spec_build_conflict", { specBranch });
+      specBranch = null;
     }
   }
+
+  const runId = await ctx.ci.triggerRun(entry.branch, headSha);
+  emit(ctx, entry, "ci_triggered", { ciRunId: runId });
+  ctx.store.transition(entry.id, "validating", {
+    headSha, baseSha, ciRunId: runId, lastFailedBaseSha: null,
+    specBranch, specSha, specBasedOn: null,
+  }, `rebase onto ${baseSha.slice(0, 8)}, CI ${runId}`);
 }
 
 // ─── Non-head entry: speculative branch ─────────────────────────
@@ -165,10 +203,10 @@ async function prepareHead(ctx: ReconcileContext, entry: QueueEntry): Promise<vo
 async function prepareSpeculative(ctx: ReconcileContext, entry: QueueEntry, prevEntry: QueueEntry): Promise<void> {
   if (!ctx.specBuilder || !prevEntry.specBranch) return;
 
-  const specName = `mq-spec-${entry.id}`;
+  const specName = specBranchName(entry.id);
   emit(ctx, entry, "spec_build_started", { specBranch: specName, dependsOn: prevEntry.id });
-  const result = await ctx.specBuilder.buildSpeculative(entry.branch, prevEntry.specBranch, specName);
 
+  const result = await ctx.specBuilder.buildSpeculative(entry.branch, prevEntry.specBranch, specName);
   if (result.success) {
     const specSha = result.sha ?? entry.headSha;
     emit(ctx, entry, "spec_build_succeeded", { specBranch: specName, dependsOn: prevEntry.id });
@@ -179,12 +217,12 @@ async function prepareSpeculative(ctx: ReconcileContext, entry: QueueEntry, prev
     }, `spec ${specName} based on ${prevEntry.id}, CI ${runId}`);
   } else {
     emit(ctx, entry, "spec_build_conflict", { specBranch: specName, dependsOn: prevEntry.id });
-    if (entry.retryAttempts >= entry.maxRetries) {
-      await evictEntry(ctx, entry, "integration_conflict");
-    } else {
+    if (!isBudgetExhausted(entry)) {
       ctx.store.transition(entry.id, "preparing_head", {
         retryAttempts: entry.retryAttempts + 1, lastFailedBaseSha: prevEntry.specSha,
       }, `spec conflict, retry ${entry.retryAttempts + 1}/${entry.maxRetries}`);
+    } else {
+      await evictEntry(ctx, entry, "integration_conflict");
     }
   }
 }
@@ -193,9 +231,8 @@ async function prepareSpeculative(ctx: ReconcileContext, entry: QueueEntry, prev
 
 async function checkValidation(ctx: ReconcileContext, entry: QueueEntry, allActive: QueueEntry[], index: number): Promise<void> {
   if (!entry.ciRunId) {
-    const branch = entry.specBranch ?? entry.branch;
-    const sha = entry.specSha ?? entry.headSha;
-    const runId = await ctx.ci.triggerRun(branch, sha);
+    const target = ciTarget(entry);
+    const runId = await ctx.ci.triggerRun(target.branch, target.sha);
     emit(ctx, entry, "ci_triggered", { ciRunId: runId });
     ctx.store.transition(entry.id, "validating", { ciRunId: runId }, `CI triggered: ${runId}`);
     return;
@@ -213,31 +250,29 @@ async function checkValidation(ctx: ReconcileContext, entry: QueueEntry, allActi
       if (index === 0) {
         ctx.store.transition(entry.id, "merging", undefined, "CI passed, ready to merge");
       }
+      // Non-head: stay in validating (speculative consistency).
       break;
 
     case "fail": {
       emit(ctx, entry, "ci_failed", { ciRunId: entry.ciRunId });
       if (entry.ciRetries < ctx.flakyRetries) {
         emit(ctx, entry, "ci_flaky_retry", { detail: `retry ${entry.ciRetries + 1}/${ctx.flakyRetries}` });
-        const branch = entry.specBranch ?? entry.branch;
-        const sha = entry.specSha ?? entry.headSha;
-        const runId = await ctx.ci.triggerRun(branch, sha);
+        const target = ciTarget(entry);
+        const runId = await ctx.ci.triggerRun(target.branch, target.sha);
         ctx.store.transition(entry.id, "validating", {
           ciRunId: runId, ciRetries: entry.ciRetries + 1,
         }, `flaky retry ${entry.ciRetries + 1}/${ctx.flakyRetries}`);
-      } else if (entry.retryAttempts >= entry.maxRetries) {
+      } else if (isBudgetExhausted(entry)) {
         emit(ctx, entry, "budget_exhausted");
         const branchChecks = await ctx.github.listChecks(entry.prNumber);
         const failedChecks = branchChecks
-          .filter((c) => c.conclusion === "failure" || c.conclusion === "timed_out" || c.conclusion === "cancelled")
+          .filter((c) => FAILED_CONCLUSIONS.has(c.conclusion))
           .map((c) => ({ name: c.name, conclusion: c.conclusion }));
-        const failureClass = classifyFailure(branchChecks, []);
-        await evictEntry(ctx, entry, failureClass, { failedChecks });
+        await evictEntry(ctx, entry, classifyFailure(branchChecks, []), { failedChecks });
         await invalidateDownstream(ctx, allActive, index);
       } else {
         ctx.store.transition(entry.id, "preparing_head", {
-          retryAttempts: entry.retryAttempts + 1, ciRunId: null, ciRetries: 0,
-          specBranch: null, specSha: null, specBasedOn: null,
+          retryAttempts: entry.retryAttempts + 1, ...CLEAN_CI, ...CLEAN_SPEC,
         }, `CI failed, retry ${entry.retryAttempts + 1}/${entry.maxRetries}`);
         await invalidateDownstream(ctx, allActive, index);
       }
@@ -254,8 +289,8 @@ async function mergeHead(ctx: ReconcileContext, entry: QueueEntry, allActive: Qu
 
   if (prStatus.merged) {
     emit(ctx, entry, "merge_external");
-    ctx.store.transition(entry.id, "merged", { specBranch: null, specSha: null, specBasedOn: null }, "merged externally");
-    await cleanupSpecBranch(ctx, entry);
+    ctx.store.transition(entry.id, "merged", CLEAN_SPEC, "merged externally");
+    await cleanupSpec(ctx, entry);
     return;
   }
 
@@ -267,7 +302,7 @@ async function mergeHead(ctx: ReconcileContext, entry: QueueEntry, allActive: Qu
   }
 
   if (prStatus.headSha !== entry.headSha) {
-    emit(ctx, entry, "branch_mismatch", { detail: `expected ${entry.headSha}, got ${prStatus.headSha}` });
+    emit(ctx, entry, "branch_mismatch", { detail: `expected ${entry.headSha.slice(0, 8)}, got ${prStatus.headSha.slice(0, 8)}` });
     ctx.store.updateHead(entry.id, prStatus.headSha);
     await invalidateDownstream(ctx, allActive, 0);
     return;
@@ -277,41 +312,40 @@ async function mergeHead(ctx: ReconcileContext, entry: QueueEntry, allActive: Qu
     await ctx.github.mergePR(entry.prNumber, ctx.mergeMethod);
   } catch {
     emit(ctx, entry, "merge_rejected", { detail: "GitHub API rejected merge" });
-    if (entry.retryAttempts >= entry.maxRetries) {
+    if (isBudgetExhausted(entry)) {
+      emit(ctx, entry, "budget_exhausted");
       await evictEntry(ctx, entry, "integration_conflict");
-      await invalidateDownstream(ctx, allActive, 0);
     } else {
       ctx.store.transition(entry.id, "preparing_head", {
-        retryAttempts: entry.retryAttempts + 1, ciRunId: null, ciRetries: 0,
-        specBranch: null, specSha: null, specBasedOn: null,
+        retryAttempts: entry.retryAttempts + 1, ...CLEAN_CI, ...CLEAN_SPEC,
       }, `merge rejected, retry ${entry.retryAttempts + 1}/${entry.maxRetries}`);
-      await invalidateDownstream(ctx, allActive, 0);
     }
+    await invalidateDownstream(ctx, allActive, 0);
     return;
   }
 
   emit(ctx, entry, "merge_succeeded");
-  ctx.store.transition(entry.id, "merged", { specBranch: null, specSha: null, specBasedOn: null }, "merged to main");
-  await cleanupSpecBranch(ctx, entry);
+  ctx.store.transition(entry.id, "merged", CLEAN_SPEC, "merged to main");
+  await cleanupSpec(ctx, entry);
 }
 
-// ─── Helpers ────────────────────────────────────────────────────
+// ─── Invalidation + eviction ────────────────────────────────────
 
 async function invalidateDownstream(ctx: ReconcileContext, allActive: QueueEntry[], afterIndex: number): Promise<void> {
   for (let i = afterIndex + 1; i < allActive.length; i++) {
     const downstream = allActive[i]!;
     if (TERMINAL_STATUSES.includes(downstream.status)) continue;
-    emit(ctx, downstream, "invalidated", { detail: `base changed after entry at position ${afterIndex}` });
-    await cleanupSpecBranch(ctx, downstream);
-    ctx.store.transition(downstream.id, "preparing_head", {
-      ciRunId: null, ciRetries: 0, specBranch: null, specSha: null, specBasedOn: null,
-    }, "invalidated: base changed");
+    emit(ctx, downstream, "invalidated", { detail: `base changed after position ${afterIndex}` });
+    await cleanupSpec(ctx, downstream);
+    ctx.store.transition(downstream.id, "preparing_head", { ...CLEAN_CI, ...CLEAN_SPEC }, "invalidated: base changed");
   }
 }
 
-async function cleanupSpecBranch(ctx: ReconcileContext, entry: QueueEntry): Promise<void> {
+async function cleanupSpec(ctx: ReconcileContext, entry: QueueEntry): Promise<void> {
   if (entry.specBranch && ctx.specBuilder) {
-    await ctx.specBuilder.deleteSpeculative(entry.specBranch).catch(() => {});
+    await ctx.specBuilder.deleteSpeculative(entry.specBranch).catch(() => {
+      // Best-effort cleanup — branch may not exist.
+    });
   }
 }
 
@@ -321,7 +355,7 @@ async function evictEntry(
   failureClass: FailureClass,
   extra?: { conflictFiles?: string[]; failedChecks?: Array<{ name: string; conclusion: string }> },
 ): Promise<void> {
-  await cleanupSpecBranch(ctx, entry);
+  await cleanupSpec(ctx, entry);
 
   const context: EvictionContext = {
     version: 1, failureClass, baseSha: entry.baseSha, prHeadSha: entry.headSha,
@@ -336,6 +370,6 @@ async function evictEntry(
 
   ctx.store.insertIncident(incident);
   emit(ctx, entry, "evicted", { failureClass });
-  ctx.store.transition(entry.id, "evicted", { specBranch: null, specSha: null, specBasedOn: null }, `evicted: ${failureClass}`);
+  ctx.store.transition(entry.id, "evicted", CLEAN_SPEC, `evicted: ${failureClass}`);
   await ctx.eviction.reportEviction(entry, incident);
 }
