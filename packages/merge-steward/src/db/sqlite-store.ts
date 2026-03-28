@@ -30,6 +30,9 @@ function mapEntry(row: Record<string, unknown>): QueueEntry {
     maxRetries: Number(row.max_retries),
     lastFailedBaseSha: row.last_failed_base_sha === null ? null : String(row.last_failed_base_sha),
     issueKey: row.issue_key === null ? null : String(row.issue_key),
+    specBranch: row.spec_branch === null || row.spec_branch === undefined ? null : String(row.spec_branch),
+    specSha: row.spec_sha === null || row.spec_sha === undefined ? null : String(row.spec_sha),
+    specBasedOn: row.spec_based_on === null || row.spec_based_on === undefined ? null : String(row.spec_based_on),
     enqueuedAt: String(row.enqueued_at),
     updatedAt: String(row.updated_at),
   };

@@ -62,7 +62,7 @@ export class MemoryStore implements QueueStore {
   transition(
     entryId: string,
     to: QueueEntryStatus,
-    patch?: Partial<Pick<QueueEntry, "headSha" | "baseSha" | "ciRunId" | "ciRetries" | "retryAttempts" | "lastFailedBaseSha">>,
+    patch?: Partial<Pick<QueueEntry, "headSha" | "baseSha" | "ciRunId" | "ciRetries" | "retryAttempts" | "lastFailedBaseSha" | "specBranch" | "specSha" | "specBasedOn">>,
   ): void {
     const entry = this.entries.get(entryId);
     if (!entry) return;
@@ -76,6 +76,9 @@ export class MemoryStore implements QueueStore {
       if (patch.ciRetries !== undefined) entry.ciRetries = patch.ciRetries;
       if (patch.retryAttempts !== undefined) entry.retryAttempts = patch.retryAttempts;
       if (patch.lastFailedBaseSha !== undefined) entry.lastFailedBaseSha = patch.lastFailedBaseSha;
+      if (patch.specBranch !== undefined) entry.specBranch = patch.specBranch;
+      if (patch.specSha !== undefined) entry.specSha = patch.specSha;
+      if (patch.specBasedOn !== undefined) entry.specBasedOn = patch.specBasedOn;
     }
     this.appendEvent(entryId, from, to);
   }
@@ -95,6 +98,9 @@ export class MemoryStore implements QueueStore {
     entry.ciRetries = 0;
     entry.retryAttempts = 0;
     entry.lastFailedBaseSha = null;
+    entry.specBranch = null;
+    entry.specSha = null;
+    entry.specBasedOn = null;
     entry.updatedAt = isoNow();
     this.appendEvent(entryId, from, "queued", `updateHead: generation ${entry.generation}`);
   }

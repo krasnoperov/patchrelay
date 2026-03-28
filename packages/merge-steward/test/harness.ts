@@ -20,6 +20,7 @@ export interface HarnessOptions {
   ciRule?: CIRule;
   flakyRetries?: number;
   maxRetries?: number;
+  speculativeDepth?: number;
 }
 
 export class Harness {
@@ -37,6 +38,7 @@ export class Harness {
   private readonly repoId = "test-repo";
   private readonly flakyRetries: number;
   private readonly maxRetries: number;
+  private readonly speculativeDepth: number;
   private nextPosition = 1;
   private nextEntryId = 1;
   private tickCount = 0;
@@ -49,6 +51,7 @@ export class Harness {
     this.baseBranch = options.baseBranch ?? "main";
     this.flakyRetries = options.flakyRetries ?? 0;
     this.maxRetries = options.maxRetries ?? 3;
+    this.speculativeDepth = options.speculativeDepth ?? 1;
 
     this.gitSim = new GitSim();
     this.ciSim = new CISim(options.ciRule ?? (() => "pass"));
@@ -130,7 +133,9 @@ export class Harness {
       maxRetries: this.maxRetries,
       lastFailedBaseSha: null,
       issueKey: null,
-
+      specBranch: null,
+      specSha: null,
+      specBasedOn: null,
       enqueuedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -245,6 +250,8 @@ export class Harness {
       ci: this.ciSim,
       github: this.githubSim,
       eviction: this.evictionSim,
+      specBuilder: this.speculativeDepth > 1 ? this.gitSim : null,
+      speculativeDepth: this.speculativeDepth,
       flakyRetries: this.flakyRetries,
       mergeMethod: "merge",
       onMerged: (prNumber: number) => {

@@ -85,6 +85,9 @@ export class MergeStewardService {
       maxRetries: this.config.maxRetries,
       lastFailedBaseSha: null,
       issueKey: params.issueKey ?? null,
+      specBranch: null,
+      specSha: null,
+      specBasedOn: null,
       enqueuedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -263,6 +266,8 @@ export class MergeStewardService {
         git: this.git,
         ci: this.ci,
         github: this.github,
+        specBuilder: null, // TODO: wire real SpeculativeBranchBuilder for Phase 2
+        speculativeDepth: this.config.speculativeDepth,
         eviction: this.eviction,
         flakyRetries: this.config.flakyRetries,
         mergeMethod: this.config.mergeMethod,

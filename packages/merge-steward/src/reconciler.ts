@@ -1,4 +1,4 @@
-import type { GitOperations, CIRunner, GitHubPRApi, EvictionReporter } from "./interfaces.ts";
+import type { GitOperations, CIRunner, GitHubPRApi, EvictionReporter, SpeculativeBranchBuilder } from "./interfaces.ts";
 import type { QueueStore } from "./store.ts";
 import type { QueueEntry, EvictionContext, FailureClass } from "./types.ts";
 import { classifyFailure } from "./classify.ts";
@@ -14,6 +14,8 @@ export interface ReconcileContext {
   ci: CIRunner;
   github: GitHubPRApi;
   eviction: EvictionReporter;
+  specBuilder: SpeculativeBranchBuilder | null;
+  speculativeDepth: number;
   flakyRetries: number;
   mergeMethod: "merge" | "squash";
   onMerged: (prNumber: number) => void;

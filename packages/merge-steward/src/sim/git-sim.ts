@@ -1,6 +1,6 @@
 import git from "isomorphic-git";
 import { Volume } from "memfs";
-import type { GitOperations } from "../interfaces.ts";
+import type { GitOperations, SpeculativeBranchBuilder } from "../interfaces.ts";
 import type { MergeResult, RebaseResult } from "../types.ts";
 
 const AUTHOR = { name: "steward-sim", email: "sim@test" };
@@ -200,5 +200,23 @@ export class GitSim implements GitOperations {
 
   async deleteBranch(name: string): Promise<void> {
     await git.deleteBranch({ fs: this.vol, dir: this.dir, ref: name });
+  }
+
+  // --- SpeculativeBranchBuilder ---
+
+  async buildSpeculative(prBranch: string, baseBranch: string, specName: string): Promise<MergeResult> {
+    // Create spec branch from base, then merge PR into it.
+    try {
+      await this.deleteBranch(specName);
+    } catch { /* may not exist */ }
+    await this.createBranch(specName, baseBranch);
+    const result = await this.merge(prBranch, specName);
+    return result;
+  }
+
+  async deleteSpeculative(specName: string): Promise<void> {
+    try {
+      await this.deleteBranch(specName);
+    } catch { /* may not exist */ }
   }
 }

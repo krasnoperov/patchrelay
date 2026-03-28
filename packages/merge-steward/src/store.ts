@@ -25,7 +25,7 @@ export interface QueueStore {
     entryId: string,
     to: QueueEntryStatus,
     patch?: Partial<Pick<QueueEntry,
-      "headSha" | "baseSha" | "ciRunId" | "ciRetries" | "retryAttempts" | "lastFailedBaseSha"
+      "headSha" | "baseSha" | "ciRunId" | "ciRetries" | "retryAttempts" | "lastFailedBaseSha" | "specBranch" | "specSha" | "specBasedOn"
     >>,
   ): void;
   dequeue(entryId: string): void;

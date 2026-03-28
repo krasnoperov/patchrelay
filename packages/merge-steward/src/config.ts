@@ -10,6 +10,8 @@ export const stewardConfigSchema = z.object({
   gitBin: z.string().default("git"),
   maxRetries: z.number().int().min(0).default(2),
   flakyRetries: z.number().int().min(0).default(1),
+  /** Max speculative branches to maintain in parallel. 1 = serial mode. */
+  speculativeDepth: z.number().int().min(1).default(3),
   requiredChecks: z.array(z.string()).default([]),
   pollIntervalMs: z.number().int().min(1000).default(30_000),
   server: z.object({

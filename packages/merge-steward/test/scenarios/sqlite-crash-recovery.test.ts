@@ -34,6 +34,9 @@ function makeEntry(id: string, prNumber: number, position: number): QueueEntry {
     maxRetries: 3,
     lastFailedBaseSha: null,
     issueKey: null,
+    specBranch: null,
+    specSha: null,
+    specBasedOn: null,
     enqueuedAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };

@@ -1,4 +1,4 @@
-import type { CIStatus, CheckResult, IncidentRecord, PRStatus, QueueEntry, RebaseResult } from "./types.ts";
+import type { CIStatus, CheckResult, IncidentRecord, MergeResult, PRStatus, QueueEntry, RebaseResult } from "./types.ts";
 
 /**
  * Git operations needed by the reconciler. The sim (GitSim) implements
@@ -9,6 +9,17 @@ export interface GitOperations {
   headSha(branch: string): Promise<string>;
   rebase(branch: string, onto: string): Promise<RebaseResult>;
   push(branch: string, force?: boolean): Promise<void>;
+}
+
+/**
+ * Builds and manages speculative cumulative branches for Phase 2.
+ * Separate from GitOperations to keep the core interface minimal.
+ */
+export interface SpeculativeBranchBuilder {
+  /** Merge prBranch into baseBranch, store result as specName. */
+  buildSpeculative(prBranch: string, baseBranch: string, specName: string): Promise<MergeResult>;
+  /** Delete a speculative branch (cleanup after merge/eviction). */
+  deleteSpeculative(specName: string): Promise<void>;
 }
 
 /**

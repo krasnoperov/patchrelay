@@ -37,6 +37,12 @@ export interface QueueEntry {
   /** Base SHA at the time of last conflict — gates non-spinning retries. */
   lastFailedBaseSha: string | null;
   issueKey: string | null;
+  /** Speculative branch name (e.g., mq/spec-{entryId}). Null if not yet built. */
+  specBranch: string | null;
+  /** SHA of the speculative branch head. */
+  specSha: string | null;
+  /** Entry ID of the previous entry this spec branch is based on. Null if based on main. */
+  specBasedOn: string | null;
   enqueuedAt: string;
   updatedAt: string;
 }
