@@ -302,10 +302,25 @@ async function mergeHead(ctx: ReconcileContext, entry: QueueEntry, allActive: Qu
   }
 
   if (prStatus.headSha !== entry.headSha) {
-    emit(ctx, entry, "branch_mismatch", { detail: `expected ${entry.headSha.slice(0, 8)}, got ${prStatus.headSha.slice(0, 8)}` });
+    emit(ctx, entry, "branch_mismatch", { detail: `PR head: expected ${entry.headSha.slice(0, 8)}, got ${prStatus.headSha.slice(0, 8)}` });
     ctx.store.updateHead(entry.id, prStatus.headSha);
     await invalidateDownstream(ctx, allActive, 0);
     return;
+  }
+
+  // Check if base branch moved since validation — if so, re-prepare.
+  if (entry.baseSha) {
+    try {
+      const currentBase = await ctx.git.headSha(ref(ctx, ctx.baseBranch));
+      if (currentBase !== entry.baseSha) {
+        emit(ctx, entry, "branch_mismatch", { detail: `base: expected ${entry.baseSha.slice(0, 8)}, got ${currentBase.slice(0, 8)}` });
+        ctx.store.transition(entry.id, "preparing_head", { ...CLEAN_CI, ...CLEAN_SPEC }, "base moved, re-prepare");
+        await invalidateDownstream(ctx, allActive, 0);
+        return;
+      }
+    } catch {
+      // Can't resolve base — proceed and let GitHub enforce.
+    }
   }
 
   try {
@@ -357,8 +372,14 @@ async function evictEntry(
 ): Promise<void> {
   await cleanupSpec(ctx, entry);
 
+  // Use recorded baseSha if available, else resolve current base.
+  let baseSha = entry.baseSha;
+  if (!baseSha) {
+    try { baseSha = await ctx.git.headSha(ref(ctx, ctx.baseBranch)); } catch { baseSha = "unknown"; }
+  }
+
   const context: EvictionContext = {
-    version: 1, failureClass, baseSha: entry.baseSha, prHeadSha: entry.headSha,
+    version: 1, failureClass, baseSha, prHeadSha: entry.headSha,
     queuePosition: entry.position, conflictFiles: extra?.conflictFiles,
     failedChecks: extra?.failedChecks, retryHistory: [],
   };

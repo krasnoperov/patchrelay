@@ -17,6 +17,7 @@ export class GitHubCheckRunReporter implements EvictionReporter {
     private readonly serverHost: string,
     private readonly serverPort: number,
     private readonly publicBaseUrl?: string,
+    private readonly admissionLabel: string = "queue",
   ) {}
 
   async reportEviction(entry: QueueEntry, incident: IncidentRecord): Promise<void> {
@@ -60,7 +61,7 @@ export class GitHubCheckRunReporter implements EvictionReporter {
     await exec("gh", [
       "pr", "edit", String(entry.prNumber),
       "--repo", this.repoFullName,
-      "--remove-label", "queue",
+      "--remove-label", this.admissionLabel,
     ], { timeoutMs: 15_000 }).catch(() => {});
   }
 }

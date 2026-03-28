@@ -206,14 +206,21 @@ export class MergeStewardService {
         return false;
       }
 
-      // Check if required checks pass. If no required checks configured,
-      // we accept any approved PR with the label.
+      // Check CI status. If requiredChecks is configured, all must pass.
+      // If empty, at least one non-steward check must be green.
+      const checks = await this.github.listChecks(prNumber);
       if (this.config.requiredChecks.length > 0) {
-        const checks = await this.github.listChecks(prNumber);
         const required = new Set(this.config.requiredChecks);
         const passing = checks.filter((c) => c.conclusion === "success" && required.has(c.name));
         if (passing.length < required.size) {
           this.logger.debug({ prNumber, passing: passing.length, required: required.size }, "Required checks not all green");
+          return false;
+        }
+      } else {
+        const nonSteward = checks.filter((c) => !c.name.startsWith("merge-steward"));
+        const hasGreen = nonSteward.some((c) => c.conclusion === "success");
+        if (!hasGreen) {
+          this.logger.debug({ prNumber }, "No green CI checks, skipping admission");
           return false;
         }
       }

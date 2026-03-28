@@ -12,7 +12,7 @@ export type StewardWebhookEvent =
   | { type: "pr_closed"; prNumber: number }
   | { type: "pr_synchronize"; prNumber: number; branch: string; headSha: string }
   | { type: "review_approved"; prNumber: number; branch: string; headSha: string }
-  | { type: "check_suite_completed"; branch: string; headSha: string; conclusion: string }
+  | { type: "check_suite_completed"; prNumber: number | null; branch: string; headSha: string; conclusion: string }
   | { type: "push"; ref: string; headSha: string };
 
 /**
@@ -88,8 +88,11 @@ export function normalizeWebhook(
       const action = payload.action as string;
       if (action !== "completed") return undefined;
       const suite = payload.check_suite as Record<string, unknown>;
+      const pullRequests = suite.pull_requests as Array<Record<string, unknown>> | undefined;
+      const firstPR = pullRequests?.[0];
       return {
         type: "check_suite_completed",
+        prNumber: firstPR ? Number(firstPR.number) : null,
         branch: String(suite.head_branch),
         headSha: String(suite.head_sha),
         conclusion: String(suite.conclusion),
@@ -157,13 +160,9 @@ export async function processWebhookEvent(
     }
 
     case "check_suite_completed": {
-      // CI completed — if it's for a queued branch, the reconciler will
-      // pick it up on the next tick. If it's for a branch with the
-      // admission label, try to admit.
-      if (event.conclusion === "success") {
-        logger.debug({ branch: event.branch }, "Check suite passed");
-        // The reconciler polls CI status, so we don't need to do anything
-        // for queued entries. For admission, tryAdmit checks CI status.
+      if (event.conclusion === "success" && event.prNumber) {
+        logger.info({ prNumber: event.prNumber, branch: event.branch }, "Check suite passed, checking admission");
+        await service.tryAdmit(event.prNumber, event.branch, event.headSha);
       }
       break;
     }

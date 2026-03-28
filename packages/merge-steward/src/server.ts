@@ -34,6 +34,7 @@ export async function startServer(configPath?: string): Promise<void> {
     config.server.bind,
     config.server.port,
     config.server.publicBaseUrl,
+    config.admissionLabel,
   );
 
   const specBuilder = config.speculativeDepth > 1 ? git : null;

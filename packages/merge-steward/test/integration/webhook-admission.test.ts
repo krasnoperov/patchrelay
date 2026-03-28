@@ -43,8 +43,9 @@ describe("webhook admission integration", () => {
     const evictionSim = new EvictionReporterSim();
     const logger = pino({ level: "silent" });
 
-    // Register a PR in the sim with label + approved.
+    // Register a PR in the sim with label + approved + green CI.
     githubSim.addPR({ number: 42, branch: "feat-x", headSha: "sha-42", reviewApproved: true, labels: ["queue"] });
+    githubSim.setChecks(42, [{ name: "checks", conclusion: "success" }]);
 
     const service = new MergeStewardService(
       config, store,
