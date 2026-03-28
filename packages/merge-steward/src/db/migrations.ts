@@ -65,6 +65,7 @@ export function runMigrations(connection: DatabaseConnection): void {
     CREATE INDEX IF NOT EXISTS idx_queue_events_entry
       ON queue_events(entry_id, id)
   `);
+  // Must match TERMINAL_STATUSES in types.ts: merged, evicted, dequeued
   connection.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_one_active_per_pr
       ON queue_entries(repo_id, pr_number)

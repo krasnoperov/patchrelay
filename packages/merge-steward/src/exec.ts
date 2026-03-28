@@ -60,13 +60,11 @@ export async function exec(
         const result = { stdout, stderr, exitCode };
 
         if (error && !options?.allowNonZero) {
-          const err = new Error(
+          reject(new Error(
             `Command failed: ${command} ${args.join(" ")}\n` +
             `Exit code: ${exitCode}\n` +
             `stderr: ${stderr.slice(0, 500)}`,
-          );
-          (err as unknown as { result: ExecResult }).result = result;
-          reject(err);
+          ));
         } else {
           resolve(result);
         }
