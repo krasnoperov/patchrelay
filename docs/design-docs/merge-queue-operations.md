@@ -171,57 +171,37 @@ In practice:
 - "semantic conflict" should not mean "keep retrying until the model guesses right"
 - it should mean "record the integration evidence, try once if the fix is local, then escalate"
 
-## Gaps In The Current Repository
+## Current Status
 
-### Docs Gaps
+### Shipped
 
-1. ~~The docs do not yet define a preferred merge method~~ — resolved: merge-only, squash removed.
-2. The docs describe queue eviction context at a high level, but they do not define the minimum evidence package needed for semantic conflicts.
-3. The docs do not standardize operator diff views such as first-parent, remerge-diff, and range-diff.
-4. The docs should say explicitly that speculative validation is available only when the steward server is configured with `speculativeDepth > 1`.
+- Merge-only delivery (squash removed)
+- CI failure classification against real main baseline via `listChecksForRef`
+- Speculative execution with cumulative branches (`speculativeDepth > 1`)
+- Structured eviction incidents with retry history and per-transition baseSha
+- GitHub adapter: `bucket` for gh CLI checks, REST API for ref check-runs
+- Webhook admission with branch→PR fallback for empty `pull_requests`
 
-### Code Gaps
+### Remaining Gaps
 
-1. The steward performs a mutable `git rebase` immediately instead of first using `git merge-tree` to classify conflicts without touching the checkout.
-2. Merge revalidation does not re-check the current base SHA before merging; it only re-checks PR approval, merge state, and head SHA.
-3. ~~CI failure classification currently calls `classifyFailure(branchChecks, [])`~~ — resolved: `listChecksForRef` queries main baseline.
-4. Eviction context is too thin for semantic conflicts. It does not currently include refreshed head SHA, merge-tree conflict type, diff summary, or a bounded semantic-repair hint.
-5. PatchRelay queue-repair prompts currently say "rebase onto latest main and fix conflicts," but they do not pass through the steward's structured incident JSON for richer repair behavior.
-6. PatchRelay adds the queue label in two places. The duplication is survivable and mostly idempotent, but it still makes admission behavior less explicit than it could be.
+#### Docs
 
-### Test Gaps
+1. Define the minimum evidence package for semantic-conflict incidents (refreshed head SHA, diff summary, escalation threshold).
+2. Standardize operator diff views: `--first-parent`, `--diff-merges=remerge`, `git range-diff`.
 
-1. Steward tests are strong on state-machine invariants, but there are no production-path tests for `git merge-tree` preflight because that path does not exist yet.
-2. There are no tests that assert merge refusal when the base branch moves after validation but before final merge.
-3. There are no tests that prove CI failure classification against a real main baseline.
-4. There are no tests for semantic-conflict escalation policy at the PatchRelay boundary.
-5. Queue integration tests in PatchRelay still reflect some ambiguity about whether `check_failed` in `awaiting_queue` is a normal CI transition or a queue-specific repair handoff.
+#### Code
 
-## Recommended Next Steps
+1. Add `git merge-tree --write-tree` preflight before mutable rebase to classify conflicts without touching the checkout.
+2. Extend eviction context with refreshed-head metadata and merge-tree conflict details.
+3. Pass the steward's structured incident JSON through to PatchRelay queue-repair runs.
+4. Collapse queue-label application in PatchRelay into one owned path.
 
-### Docs First
+#### Tests
 
-1. Update merge-steward docs to state clearly that Phase 1 production is serial-only and that `speculativeDepth` is inactive until a real speculative builder ships.
-2. ~~Document the recommended default merge method~~ — resolved: merge-only, squash removed from steward.
-3. Add an explicit "semantic conflict" incident contract: required evidence, retry budget, and escalation threshold.
-4. Document standard operator diff commands for landed merges, repaired rebases, and suspicious queue outcomes.
-
-### Then Code
-
-1. Add a preflight merge-analysis layer using `git merge-tree --write-tree`.
-2. Extend eviction context with refreshed-head metadata and merge-analysis details.
-3. Revalidate base SHA immediately before merge and bounce the entry back to preparation if `origin/<base>` moved.
-4. Feed real main-branch check snapshots into CI failure classification.
-5. Pass the steward's structured incident JSON through to PatchRelay queue-repair runs, not just the check name and URL.
-6. Collapse queue-label application into one owned path, or make the duplication an explicit idempotent helper with shared reporting.
-
-### Then Tests
-
-1. Add steward tests for merge-tree preflight clean vs conflict cases, including rename conflicts.
-2. Add a race test for "base advanced after CI passed but before merge."
-3. Add classification tests with real main baseline snapshots for `main_broken`, `branch_local`, and mixed failures.
-4. Add PatchRelay tests that verify semantic-conflict incidents cause fast escalation after one bounded repair attempt.
-5. Tighten queue integration tests so queue eviction behavior is asserted through the webhook-handler contract, not through ambiguous factory-state expectations.
+1. Merge-tree preflight: clean vs conflict cases including rename conflicts.
+2. Base-advanced-after-validation race: assert re-preparation when `origin/<base>` moves between CI pass and merge.
+3. PatchRelay semantic-conflict escalation: fast escalation after one bounded repair attempt.
+4. Tighten PatchRelay queue integration tests to assert eviction through the webhook-handler contract.
 
 ## Source Notes
 

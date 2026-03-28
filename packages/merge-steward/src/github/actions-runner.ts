@@ -46,7 +46,8 @@ export class GitHubActionsRunner implements CIRunner {
       if (relevant.length === 0) return "pending";
 
       if (relevant.some((c) => c.status !== "completed")) return "pending";
-      if (relevant.some((c) => c.conclusion === "failure" || c.conclusion === "cancelled" || c.conclusion === "timed_out")) return "fail";
+      // REST API returns lowercase conclusions; any non-success completed check is a failure.
+      if (relevant.some((c) => c.conclusion !== "success" && c.conclusion !== "neutral" && c.conclusion !== "skipped")) return "fail";
 
       return "pass";
     } catch {

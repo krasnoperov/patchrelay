@@ -3,7 +3,13 @@ import type { CheckResult, PRStatus } from "../types.ts";
 import { exec } from "../exec.ts";
 
 /**
- * GitHub PR operations via gh CLI.
+ * GitHub PR operations via gh CLI and REST API.
+ *
+ * Two external contracts:
+ *  - gh pr checks: uses `bucket` (pass/fail/pending/skipping) for classification.
+ *  - REST check-runs API: uses lowercase `conclusion` (success/failure/cancelled/…).
+ *
+ * Both map to the internal CheckConclusion union: success | failure | pending.
  */
 export class GitHubPRClient implements GitHubPRApi {
   constructor(private readonly repoFullName: string) {}
