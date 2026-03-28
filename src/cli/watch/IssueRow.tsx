@@ -23,17 +23,17 @@ const STATE_COLORS: Record<string, string> = {
 };
 
 const STATE_SHORT: Record<string, string> = {
-  delegated: "queued",
+  delegated: "delegated",
   implementing: "impl",
   pr_open: "pr open",
   changes_requested: "review fix",
   repairing_ci: "ci fix",
-  awaiting_queue: "merging",
+  awaiting_queue: "await queue",
   repairing_queue: "merge fix",
   done: "done",
   failed: "failed",
   escalated: "escalated",
-  awaiting_input: "paused",
+  awaiting_input: "await input",
 };
 
 const STATUS_SHORT: Record<string, string> = {

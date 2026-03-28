@@ -10,6 +10,7 @@ interface IssueListViewProps {
   allIssues: WatchIssue[];
   selectedIndex: number;
   connected: boolean;
+  lastServerMessageAt: number | null;
   filter: WatchFilter;
   totalCount: number;
 }
@@ -18,7 +19,15 @@ interface IssueListViewProps {
 const FIXED_COLS = 40;
 const CHROME_ROWS = 4;
 
-export function IssueListView({ issues, allIssues, selectedIndex, connected, filter, totalCount }: IssueListViewProps): React.JSX.Element {
+export function IssueListView({
+  issues,
+  allIssues,
+  selectedIndex,
+  connected,
+  lastServerMessageAt,
+  filter,
+  totalCount,
+}: IssueListViewProps): React.JSX.Element {
   const { stdout } = useStdout();
   const cols = stdout?.columns ?? 80;
   const rows = stdout?.rows ?? 24;
@@ -39,7 +48,14 @@ export function IssueListView({ issues, allIssues, selectedIndex, connected, fil
 
   return (
     <Box flexDirection="column">
-      <StatusBar issues={issues} totalCount={totalCount} filter={filter} connected={connected} allIssues={allIssues} />
+      <StatusBar
+        issues={issues}
+        totalCount={totalCount}
+        filter={filter}
+        connected={connected}
+        lastServerMessageAt={lastServerMessageAt}
+        allIssues={allIssues}
+      />
       <Box marginTop={1} flexDirection="column">
         {issues.length === 0 ? (
           <Text dimColor>No issues match the current filter.</Text>

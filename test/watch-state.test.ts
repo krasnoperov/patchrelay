@@ -45,6 +45,8 @@ function reduce(state: WatchState, action: WatchAction): WatchState {
   return watchReducer(state, action);
 }
 
+const RECEIVED_AT = 1_711_620_000_000;
+
 // ─── Connection State ─────────────────────────────────────────────
 
 test("connected and disconnected toggle the connected flag", () => {
@@ -58,8 +60,9 @@ test("connected and disconnected toggle the connected flag", () => {
 
 test("issues-snapshot replaces the issue list", () => {
   const issues = [makeIssue("USE-1"), makeIssue("USE-2")];
-  const state = reduce(initialWatchState, { type: "issues-snapshot", issues });
+  const state = reduce(initialWatchState, { type: "issues-snapshot", issues, receivedAt: RECEIVED_AT });
   assert.equal(state.issues.length, 2);
+  assert.equal(state.lastServerMessageAt, RECEIVED_AT);
 });
 
 test("issues-snapshot clamps selectedIndex when list shrinks", () => {
@@ -67,8 +70,15 @@ test("issues-snapshot clamps selectedIndex when list shrinks", () => {
     issues: [makeIssue("USE-1"), makeIssue("USE-2"), makeIssue("USE-3")],
     selectedIndex: 2,
   });
-  const state = reduce(initial, { type: "issues-snapshot", issues: [makeIssue("USE-1")] });
+  const state = reduce(initial, { type: "issues-snapshot", issues: [makeIssue("USE-1")], receivedAt: RECEIVED_AT });
   assert.equal(state.selectedIndex, 0);
+});
+
+test("stream-heartbeat updates freshness without mutating issues", () => {
+  const initial = stateWith({ issues: [makeIssue("USE-1")] });
+  const state = reduce(initial, { type: "stream-heartbeat", receivedAt: RECEIVED_AT });
+  assert.equal(state.lastServerMessageAt, RECEIVED_AT);
+  assert.deepEqual(state.issues, initial.issues);
 });
 
 // ─── Selection ────────────────────────────────────────────────────
@@ -152,15 +162,17 @@ test("detail-navigate clears timeline for rehydration", () => {
 test("feed-event with stage kind updates factoryState", () => {
   const initial = stateWith({ issues: [makeIssue("USE-74")] });
   const event = makeFeedEvent({ id: 1, kind: "stage", issueKey: "USE-74", stage: "done" });
-  const state = reduce(initial, { type: "feed-event", event });
+  const state = reduce(initial, { type: "feed-event", event, receivedAt: RECEIVED_AT });
   assert.equal(state.issues[0]?.factoryState, "done");
+  assert.equal(state.lastServerMessageAt, RECEIVED_AT);
 });
 
 test("feed-event for unknown issue is a no-op", () => {
   const initial = stateWith({ issues: [makeIssue("USE-74")] });
   const event = makeFeedEvent({ id: 2, kind: "stage", issueKey: "USE-999", stage: "done" });
-  const state = reduce(initial, { type: "feed-event", event });
+  const state = reduce(initial, { type: "feed-event", event, receivedAt: RECEIVED_AT });
   assert.deepEqual(state.issues, initial.issues);
+  assert.equal(state.lastServerMessageAt, RECEIVED_AT);
 });
 
 test("feed-event appends to timeline when in detail view", () => {
@@ -170,7 +182,7 @@ test("feed-event appends to timeline when in detail view", () => {
     activeDetailKey: "USE-74",
   });
   const event = makeFeedEvent({ id: 3, kind: "stage", issueKey: "USE-74", status: "starting", summary: "Run started" });
-  const state = reduce(initial, { type: "feed-event", event });
+  const state = reduce(initial, { type: "feed-event", event, receivedAt: RECEIVED_AT });
   assert.equal(state.timeline.length, 1);
   assert.equal(state.timeline[0]?.kind, "feed");
 });
@@ -181,15 +193,15 @@ test("feed-event aggregates CI checks in timeline", () => {
     view: "detail",
     activeDetailKey: "USE-74",
   });
-  let state = reduce(initial, { type: "feed-event", event: makeFeedEvent({
+  let state = reduce(initial, { type: "feed-event", receivedAt: RECEIVED_AT, event: makeFeedEvent({
     id: 10, kind: "github", status: "check_passed", issueKey: "USE-74", detail: "Lint",
     at: "2026-03-25T10:19:00.000Z",
   })});
-  state = reduce(state, { type: "feed-event", event: makeFeedEvent({
+  state = reduce(state, { type: "feed-event", receivedAt: RECEIVED_AT + 1_000, event: makeFeedEvent({
     id: 11, kind: "github", status: "check_failed", issueKey: "USE-74", detail: "Tests",
     at: "2026-03-25T10:19:05.000Z",
   })});
-  state = reduce(state, { type: "feed-event", event: makeFeedEvent({
+  state = reduce(state, { type: "feed-event", receivedAt: RECEIVED_AT + 2_000, event: makeFeedEvent({
     id: 12, kind: "github", status: "check_passed", issueKey: "USE-74", detail: "Build",
     at: "2026-03-25T10:19:10.000Z",
   })});

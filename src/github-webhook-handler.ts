@@ -180,12 +180,43 @@ export class GitHubWebhookHandler {
             const label = proj?.github?.mergeQueueLabel ?? "queue";
             const repo = proj?.github?.repoFullName;
             if (repo) {
+              this.feed?.publish({
+                level: "info",
+                kind: "github",
+                issueKey: transitionedIssue.issueKey,
+                projectId: transitionedIssue.projectId,
+                stage: "awaiting_queue",
+                status: "queue_label_requested",
+                summary: `Queue hand-off requested via label "${label}" on PR #${transitionedIssue.prNumber}`,
+              });
               void execCommand("gh", [
                 "pr", "edit", String(transitionedIssue.prNumber),
                 "--repo", repo, "--add-label", label,
-              ], { timeoutMs: 15_000 }).catch((err) => {
-                this.logger.warn({ issueKey: issue.issueKey, err }, "Failed to add merge queue label");
-              });
+              ], { timeoutMs: 15_000 })
+                .then(() => {
+                  this.feed?.publish({
+                    level: "info",
+                    kind: "github",
+                    issueKey: transitionedIssue.issueKey,
+                    projectId: transitionedIssue.projectId,
+                    stage: "awaiting_queue",
+                    status: "queue_label_applied",
+                    summary: `Queue label "${label}" applied to PR #${transitionedIssue.prNumber}`,
+                  });
+                })
+                .catch((err) => {
+                  this.logger.warn({ issueKey: issue.issueKey, err }, "Failed to add merge queue label");
+                  this.feed?.publish({
+                    level: "warn",
+                    kind: "github",
+                    issueKey: transitionedIssue.issueKey,
+                    projectId: transitionedIssue.projectId,
+                    stage: "awaiting_queue",
+                    status: "queue_label_failed",
+                    summary: `Queue hand-off failed while adding label "${label}" to PR #${transitionedIssue.prNumber}`,
+                    detail: err instanceof Error ? err.message : String(err),
+                  });
+                });
             }
           }
         }
@@ -261,6 +292,16 @@ export class GitHubWebhookHandler {
         });
         this.enqueueIssue(issue.projectId, issue.linearIssueId);
         this.logger.info({ issueKey: issue.issueKey, checkName: event.checkName }, "Queue eviction detected, enqueued queue repair");
+        this.feed?.publish({
+          level: "warn",
+          kind: "github",
+          issueKey: issue.issueKey,
+          projectId: issue.projectId,
+          stage: "repairing_queue",
+          status: "queue_repair_queued",
+          summary: `Queue repair queued after external failure from ${event.checkName}`,
+          detail: event.checkUrl,
+        });
       } else {
         this.db.upsertIssue({
           projectId: issue.projectId,

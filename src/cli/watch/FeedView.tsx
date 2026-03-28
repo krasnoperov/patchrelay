@@ -1,10 +1,12 @@
 import { Box, Text } from "ink";
 import type { OperatorFeedEvent } from "../../operator-feed.ts";
 import { HelpBar } from "./HelpBar.tsx";
+import { FreshnessBadge } from "./FreshnessBadge.tsx";
 
 interface FeedViewProps {
   events: OperatorFeedEvent[];
   connected: boolean;
+  lastServerMessageAt: number | null;
 }
 
 const TAIL_SIZE = 30;
@@ -37,7 +39,7 @@ function FeedEventRow({ event }: { event: OperatorFeedEvent }): React.JSX.Elemen
   );
 }
 
-export function FeedView({ events, connected }: FeedViewProps): React.JSX.Element {
+export function FeedView({ events, connected, lastServerMessageAt }: FeedViewProps): React.JSX.Element {
   const visible = events.length > TAIL_SIZE ? events.slice(-TAIL_SIZE) : events;
   const skipped = events.length - visible.length;
 
@@ -45,9 +47,7 @@ export function FeedView({ events, connected }: FeedViewProps): React.JSX.Elemen
     <Box flexDirection="column">
       <Box justifyContent="space-between">
         <Text bold>Operator Feed</Text>
-        <Text color={connected ? "green" : "red"}>
-          {connected ? "\u25cf connected" : "\u25cb disconnected"}
-        </Text>
+        <FreshnessBadge connected={connected} lastServerMessageAt={lastServerMessageAt} />
       </Box>
       <Box marginTop={1} flexDirection="column">
         {events.length === 0 ? (

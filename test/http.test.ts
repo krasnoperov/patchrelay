@@ -547,11 +547,51 @@ test("public agent session status page validates token and exposes operator sess
                 issueKey,
                 title: "Implement API endpoint",
                 issueUrl: "https://linear.app/example/issue/USE-42",
+                factoryState: "awaiting_queue",
+                prNumber: 42,
+                prReviewState: "approved",
               },
               activeRun: { runType: "implementation", status: "running" },
               latestRun: { runType: "review_fix", status: "completed" },
               liveThread: { threadId: "thread-1", threadStatus: "running" },
-              runs: [{ run: { runType: "implementation", status: "running", startedAt: "2026-03-17T12:00:00.000Z" } }],
+              activeRunId: 1,
+              feedEvents: [
+                {
+                  id: 1,
+                  at: "2026-03-17T12:00:00.000Z",
+                  level: "info",
+                  kind: "stage",
+                  stage: "implementation",
+                  status: "starting",
+                  summary: "Starting implementation run",
+                },
+                {
+                  id: 2,
+                  at: "2026-03-17T12:05:00.000Z",
+                  level: "info",
+                  kind: "github",
+                  stage: "pr_open",
+                  status: "pr_opened",
+                  summary: "GitHub: pr_opened",
+                },
+                {
+                  id: 3,
+                  at: "2026-03-17T12:09:00.000Z",
+                  level: "info",
+                  kind: "github",
+                  stage: "awaiting_queue",
+                  status: "review_approved",
+                  summary: "GitHub: review_approved",
+                },
+              ],
+              runs: [{
+                run: { id: 1, runType: "implementation", status: "running", startedAt: "2026-03-17T12:00:00.000Z" },
+                report: {
+                  assistantMessages: ["Opened the PR and waiting for queue hand-off."],
+                  commands: [],
+                  fileChanges: [],
+                },
+              }],
               generatedAt: "2026-03-17T12:10:00.000Z",
             },
           };
@@ -592,6 +632,9 @@ test("public agent session status page validates token and exposes operator sess
     });
     assert.equal(page.statusCode, 200);
     assert.match(page.body, /Implement API endpoint/);
+    assert.match(page.body, /State Path/);
+    assert.match(page.body, /Queue Observation/);
+    assert.match(page.body, /awaiting_queue/);
     assert.match(page.body, /Recent Stages/);
     assert.match(page.body, /thread-1/);
 

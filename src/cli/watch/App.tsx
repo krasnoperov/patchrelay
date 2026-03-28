@@ -195,6 +195,7 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
           allIssues={state.issues}
           selectedIndex={state.selectedIndex}
           connected={state.connected}
+          lastServerMessageAt={state.lastServerMessageAt}
           filter={state.filter}
           totalCount={state.issues.length}
         />
@@ -214,6 +215,8 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
           timelineMode={state.timelineMode}
           rawRuns={state.rawRuns}
           rawFeedEvents={state.rawFeedEvents}
+          connected={state.connected}
+          lastServerMessageAt={state.lastServerMessageAt}
         />
         {promptMode && (
           <Box>
@@ -227,7 +230,11 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
         )}
         </Box>
       ) : (
-        <FeedView events={state.feedEvents} connected={state.connected} />
+        <FeedView
+          events={state.feedEvents}
+          connected={state.connected}
+          lastServerMessageAt={state.lastServerMessageAt}
+        />
       )}
     </Box>
   );

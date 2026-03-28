@@ -1,12 +1,14 @@
 import { Box, Text } from "ink";
 import type { WatchFilter, WatchIssue } from "./watch-state.ts";
 import { computeAggregates } from "./watch-state.ts";
+import { FreshnessBadge } from "./FreshnessBadge.tsx";
 
 interface StatusBarProps {
   issues: WatchIssue[];
   totalCount: number;
   filter: WatchFilter;
   connected: boolean;
+  lastServerMessageAt: number | null;
   allIssues: WatchIssue[];
 }
 
@@ -16,7 +18,14 @@ const FILTER_LABELS: Record<WatchFilter, string> = {
   "non-done": "in progress",
 };
 
-export function StatusBar({ issues, totalCount, filter, connected, allIssues }: StatusBarProps): React.JSX.Element {
+export function StatusBar({
+  issues,
+  totalCount,
+  filter,
+  connected,
+  lastServerMessageAt,
+  allIssues,
+}: StatusBarProps): React.JSX.Element {
   const showing = filter === "all" ? `${totalCount} issues` : `${issues.length}/${totalCount} issues`;
   const agg = computeAggregates(allIssues);
   return (
@@ -29,9 +38,7 @@ export function StatusBar({ issues, totalCount, filter, connected, allIssues }: 
         {agg.done > 0 && <Text color="green">{agg.done} done</Text>}
         {agg.failed > 0 && <Text color="red">{agg.failed} failed</Text>}
       </Box>
-      <Text color={connected ? "green" : "red"}>
-        {connected ? "\u25cf connected" : "\u25cb disconnected"}
-      </Text>
+      <FreshnessBadge connected={connected} lastServerMessageAt={lastServerMessageAt} />
     </Box>
   );
 }

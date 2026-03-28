@@ -69,6 +69,9 @@ export function useWatchStream(options: WatchStreamOptions): void {
               }
 
               if (line.startsWith(":")) {
+                if (line.includes("keepalive")) {
+                  dispatch({ type: "stream-heartbeat", receivedAt: Date.now() });
+                }
                 newlineIndex = buffer.indexOf("\n");
                 continue;
               }
@@ -110,10 +113,10 @@ function processEvent(dispatch: Dispatch<WatchAction>, eventType: string, data: 
   try {
     if (eventType === "issues") {
       const issues = JSON.parse(data) as WatchIssue[];
-      dispatch({ type: "issues-snapshot", issues });
+      dispatch({ type: "issues-snapshot", issues, receivedAt: Date.now() });
     } else if (eventType === "feed") {
       const event = JSON.parse(data) as OperatorFeedEvent;
-      dispatch({ type: "feed-event", event });
+      dispatch({ type: "feed-event", event, receivedAt: Date.now() });
     }
   } catch {
     // Ignore parse errors from malformed events
