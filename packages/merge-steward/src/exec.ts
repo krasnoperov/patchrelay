@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { resolveSecret } from "./resolve-secret.ts";
 
 export interface ExecResult {
   stdout: string;
@@ -23,13 +24,23 @@ export async function exec(
   args: string[],
   options?: ExecOptions,
 ): Promise<ExecResult> {
+  const githubToken = command === "gh"
+    ? resolveSecret("merge-steward-github-token", "MERGE_STEWARD_GITHUB_TOKEN")
+      ?? process.env.GH_TOKEN
+      ?? process.env.GITHUB_TOKEN
+    : undefined;
+
   return new Promise((resolve, reject) => {
     const child = execFile(
       command,
       args,
       {
         cwd: options?.cwd,
-        env: options?.env,
+        env: {
+          ...process.env,
+          ...(options?.env ?? {}),
+          ...(githubToken ? { GH_TOKEN: githubToken, GITHUB_TOKEN: githubToken } : {}),
+        },
         timeout: options?.timeoutMs ?? 120_000,
         maxBuffer: 10 * 1024 * 1024,
       },

@@ -161,8 +161,6 @@ It creates the local config, env file, and system service units:
 - `~/.config/patchrelay/service.env`
 - `~/.config/patchrelay/patchrelay.json`
 - `/etc/systemd/system/patchrelay.service`
-- `/etc/systemd/system/patchrelay-reload.service`
-- `/etc/systemd/system/patchrelay.path`
 
 The generated `patchrelay.json` is intentionally minimal, and `patchrelay init` prints the webhook URL, OAuth callback URL, and the Linear app values you need next.
 
@@ -179,17 +177,17 @@ LINEAR_OAUTH_CLIENT_SECRET=replace-with-linear-oauth-client-secret
 
 Keep service secrets in `service.env`. `runtime.env` is for non-secret overrides such as `PATCHRELAY_DB_PATH` or `PATCHRELAY_LOG_FILE`. Everyday local inspection commands do not require exporting these values in your shell.
 
-### 4. Configure a project
+### 4. Attach a repo
 
-Add repositories after `patchrelay init` with `patchrelay project apply <id> <repo-path>`.
+Add repositories after `patchrelay init` with `patchrelay attach <id>` from the repo root. If you need to point somewhere else, use `--path <path>`.
 
 For a single project, that is usually enough. For multiple projects, add routing with `--issue-prefix APP` or `--team-id <linear-team-id>`.
 
-The generated `~/.config/patchrelay/patchrelay.json` is machine-level service config only. Project entries should be created with the CLI, not by hand-editing a placeholder template.
+The generated `~/.config/patchrelay/patchrelay.json` is machine-level service config only. Repo entries should be created with the CLI, not by hand-editing a placeholder template.
 
-`patchrelay project apply` is idempotent:
+`patchrelay attach` is idempotent:
 
-- it creates or updates the local project entry
+- it creates or updates the local repo entry
 - it checks whether PatchRelay is ready
 - it reloads the service when it can
 - it reuses or starts the Linear connect flow when the local setup is ready
@@ -210,6 +208,7 @@ These files define how the agent should work in that repo.
 
 ```bash
 patchrelay doctor
+patchrelay service status
 ```
 
 ### 7. Check the installation
@@ -218,9 +217,9 @@ patchrelay doctor
 patchrelay installations
 ```
 
-In the normal happy path, the earlier `patchrelay project apply <id> <repo-path>` command already handles the connect step for you. `patchrelay connect --project <id>` still exists as the advanced/manual command when you want to retry or debug only the Linear authorization layer.
+In the normal happy path, the earlier `patchrelay attach <id>` command already handles the connect step for you. `patchrelay connect --repo <id>` is the advanced/manual command when you want to retry or debug only the Linear authorization layer.
 
-If you later add another local repo that should use the same Linear installation, run `patchrelay project apply <id> <repo-path>` for that repo too. PatchRelay now reuses the single saved installation automatically when there is no ambiguity, so you usually will not need another browser approval.
+If you later add another local repo that should use the same Linear installation, run `patchrelay attach <id>` in that repo too, or pass `--path <path>`. PatchRelay now reuses the single saved installation automatically when there is no ambiguity, so you usually will not need another browser approval.
 
 Important:
 
@@ -238,16 +237,18 @@ Important:
 
 Useful commands:
 
-- `patchrelay list --active`
-- `patchrelay inspect APP-123`
-- `patchrelay live APP-123 --watch`
-- `patchrelay report APP-123`
-- `patchrelay events APP-123 --follow`
-- `patchrelay worktree APP-123 --cd`
-- `patchrelay open APP-123`
-- `patchrelay retry APP-123`
+- `patchrelay issue list --active`
+- `patchrelay issue show APP-123`
+- `patchrelay issue watch APP-123`
+- `patchrelay dashboard`
+- `patchrelay issue report APP-123`
+- `patchrelay issue events APP-123 --follow`
+- `patchrelay issue path APP-123 --cd`
+- `patchrelay issue open APP-123`
+- `patchrelay issue retry APP-123`
+- `patchrelay service logs --lines 100`
 
-`patchrelay open` is the handoff bridge: it opens Codex in the issue worktree and resumes the existing thread when PatchRelay has one.
+`patchrelay issue open` is the handoff bridge: it opens Codex in the issue worktree and resumes the existing thread when PatchRelay has one.
 
 Today that takeover path is intentionally YOLO mode: it launches Codex with `--dangerously-bypass-approvals-and-sandbox`.
 
@@ -268,6 +269,16 @@ PatchRelay keeps enough durable state to answer the questions that matter during
 [Merge Steward](./packages/merge-steward) is a separate service that owns serial merge queue integration. PatchRelay develops code and produces pull requests. Merge Steward delivers those PRs into production — rebasing onto main, waiting for CI, and merging when green.
 
 The two services communicate through GitHub. PatchRelay adds a `queue` label when a PR is ready. The steward processes the queue. On failure, the steward evicts the PR with a check run report, and PatchRelay can trigger a queue repair run in response.
+
+The steward now has its own bootstrap flow:
+
+```bash
+merge-steward init https://queue.example.com
+merge-steward attach app owner/repo --base-branch main --required-check test,lint
+merge-steward doctor --repo app
+merge-steward service status app
+merge-steward queue status --repo app
+```
 
 See [Merge queue](./docs/merge-queue.md) for the full two-service overview and [Merge Steward README](./packages/merge-steward/README.md) for operational details.
 

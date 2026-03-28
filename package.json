@@ -18,9 +18,7 @@
     "runtime.env.example",
     "service.env.example",
     "config/patchrelay.example.json",
-    "infra/patchrelay.service",
-    "infra/patchrelay-reload.service",
-    "infra/patchrelay.path"
+    "infra/patchrelay.service"
   ],
   "description": "Self-hosted harness for Linear-driven Codex work with durable issue worktrees, staged runs, and inspection.",
   "engines": {

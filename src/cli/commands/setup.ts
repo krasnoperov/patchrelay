@@ -2,12 +2,13 @@ import {
   getDefaultConfigPath,
   getDefaultRuntimeEnvPath,
   getDefaultServiceEnvPath,
-  getSystemdPathUnitPath,
-  getSystemdReloadUnitPath,
   getSystemdUnitPath,
 } from "../../runtime-paths.ts";
 import { initializePatchRelayHome, installServiceUnits } from "../../install.ts";
-import type { InteractiveRunner, Output, ParsedArgs } from "../command-types.ts";
+import { loadConfig } from "../../config.ts";
+import { parsePositiveIntegerFlag } from "../args.ts";
+import type { CommandRunner, InteractiveRunner, Output, ParsedArgs } from "../command-types.ts";
+import { CliUsageError } from "../errors.ts";
 import { formatJson } from "../formatters/json.ts";
 import { writeOutput } from "../output.ts";
 import { installServiceCommands, restartServiceCommands, runServiceCommands, tryManageService } from "../service-commands.ts";
@@ -19,6 +20,7 @@ interface SetupCommandParams {
   stdout: Output;
   stderr: Output;
   runInteractive: InteractiveRunner;
+  runCommand: CommandRunner;
 }
 
 export async function handleInitCommand(params: SetupCommandParams): Promise<number> {
@@ -42,7 +44,7 @@ export async function handleInitCommand(params: SetupCommandParams): Promise<num
       publicBaseUrl,
     });
     const serviceUnits = await installServiceUnits({ force: params.parsed.flags.get("force") === true });
-    const serviceState = await tryManageService(params.runInteractive, installServiceCommands());
+    const serviceState = await tryManageService(params.runCommand, installServiceCommands());
     writeOutput(
       params.stdout,
       params.json
@@ -55,8 +57,6 @@ export async function handleInitCommand(params: SetupCommandParams): Promise<num
             `State directory: ${result.stateDir}`,
             `Data directory: ${result.dataDir}`,
             `Service unit: ${serviceUnits.unitPath} (${serviceUnits.serviceStatus})`,
-            `Reload unit: ${serviceUnits.reloadUnitPath} (${serviceUnits.reloadStatus})`,
-            `Watcher unit: ${serviceUnits.pathUnitPath} (${serviceUnits.pathStatus})`,
             "",
             "PatchRelay public URLs:",
             `- Public base URL: ${result.publicBaseUrl}`,
@@ -64,9 +64,9 @@ export async function handleInitCommand(params: SetupCommandParams): Promise<num
             `- OAuth callback: ${result.oauthCallbackUrl}`,
             "",
             "Created with defaults:",
-            `- Config file contains only machine-level essentials such as server.public_base_url`,
-            `- Database, logs, bind address, and worktree roots use built-in defaults`,
-            `- The system service and config watcher are installed for you`,
+            "- Config file contains only machine-level essentials such as server.public_base_url",
+            "- Database, logs, bind address, and worktree roots use built-in defaults",
+            "- The system service is installed for you",
             "",
             "Register the app in Linear:",
             "- Open Linear Settings > API > Applications",
@@ -83,19 +83,20 @@ export async function handleInitCommand(params: SetupCommandParams): Promise<num
             "",
             "Service status:",
             serviceState.ok
-              ? "PatchRelay service and config watcher are installed and reload-or-restart has been requested."
+              ? "PatchRelay service is installed and reload-or-restart has been requested."
               : `PatchRelay service units were installed, but the service could not be started yet: ${serviceState.error}`,
             !serviceState.ok
-              ? "This is expected until the required env vars and at least one valid project workflow are in place. The watcher will retry when config or env files change."
+              ? "This is expected until the required env vars and at least one valid repo workflow are in place. Rerun `patchrelay service restart` after updating config or env files."
               : undefined,
             "",
             "Next steps:",
             `1. Edit ${result.serviceEnvPath}`,
             "2. Paste your Linear OAuth client id and client secret into service.env and keep the generated webhook secret and token encryption key",
             "3. Paste LINEAR_WEBHOOK_SECRET from service.env into the Linear OAuth app webhook signing secret",
-            "4. Run `patchrelay project apply <id> <repo-path>`",
-            "5. Edit the generated project workflows if you want custom state names or workflow files, then add those workflow files to the repo",
+            "4. Run `patchrelay attach <id>` from the repo root, or pass `--path /path/to/repo`",
+            "5. Edit the generated repo workflows if you want custom state names or workflow files, then add those workflow files to the repo",
             "6. Run `patchrelay doctor`",
+            "7. Run `patchrelay service status`",
           ]
             .filter(Boolean)
             .join("\n") + "\n",
@@ -112,7 +113,7 @@ export async function handleInstallServiceCommand(params: SetupCommandParams): P
     const result = await installServiceUnits({ force: params.parsed.flags.get("force") === true });
     const writeOnly = params.parsed.flags.get("write-only") === true;
     if (!writeOnly) {
-      await runServiceCommands(params.runInteractive, installServiceCommands());
+      await runServiceCommands(params.runCommand, installServiceCommands());
     }
     writeOutput(
       params.stdout,
@@ -120,15 +121,13 @@ export async function handleInstallServiceCommand(params: SetupCommandParams): P
         ? formatJson({ ...result, writeOnly })
         : [
             `Service unit: ${result.unitPath} (${result.serviceStatus})`,
-            `Reload unit: ${result.reloadUnitPath} (${result.reloadStatus})`,
-            `Watcher unit: ${result.pathUnitPath} (${result.pathStatus})`,
             `Runtime env: ${result.runtimeEnvPath}`,
             `Service env: ${result.serviceEnvPath}`,
             `Config file: ${result.configPath}`,
             writeOnly
-              ? "Service units written. Start them with: sudo systemctl daemon-reload && sudo systemctl enable --now patchrelay.path && sudo systemctl enable patchrelay.service && sudo systemctl reload-or-restart patchrelay.service"
-              : "PatchRelay system service and config watcher are installed and running.",
-            "After package updates, run: patchrelay restart-service",
+              ? "Service unit written. Start it with: sudo systemctl daemon-reload && sudo systemctl enable patchrelay.service && sudo systemctl reload-or-restart patchrelay.service"
+              : "PatchRelay system service is installed and running.",
+            "After package updates, run: patchrelay service restart",
           ].join("\n") + "\n",
     );
     return 0;
@@ -140,15 +139,13 @@ export async function handleInstallServiceCommand(params: SetupCommandParams): P
 
 export async function handleRestartServiceCommand(params: SetupCommandParams): Promise<number> {
   try {
-    await runServiceCommands(params.runInteractive, restartServiceCommands());
+    await runServiceCommands(params.runCommand, restartServiceCommands());
     writeOutput(
       params.stdout,
       params.json
         ? formatJson({
             service: "patchrelay",
             unitPath: getSystemdUnitPath(),
-            reloadUnitPath: getSystemdReloadUnitPath(),
-            pathUnitPath: getSystemdPathUnitPath(),
             runtimeEnvPath: getDefaultRuntimeEnvPath(),
             serviceEnvPath: getDefaultServiceEnvPath(),
             configPath: getDefaultConfigPath(),
@@ -161,6 +158,146 @@ export async function handleRestartServiceCommand(params: SetupCommandParams): P
     writeOutput(params.stderr, `${error instanceof Error ? error.message : String(error)}\n`);
     return 1;
   }
+}
+
+function parseSystemctlShowOutput(raw: string): Record<string, string> {
+  const properties: Record<string, string> = {};
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const separator = trimmed.indexOf("=");
+    if (separator <= 0) continue;
+    properties[trimmed.slice(0, separator)] = trimmed.slice(separator + 1);
+  }
+  return properties;
+}
+
+async function readPatchRelayHealth(): Promise<
+  | {
+      reachable: true;
+      status: number;
+      body?: Record<string, unknown>;
+    }
+  | {
+      reachable: false;
+      error: string;
+    }
+> {
+  try {
+    const config = loadConfig(undefined, { profile: "doctor" });
+    const response = await fetch(
+      `http://${config.server.bind}:${config.server.port}${config.server.healthPath}`,
+      { signal: AbortSignal.timeout(2000) },
+    );
+    let body: Record<string, unknown> | undefined;
+    try {
+      body = await response.json() as Record<string, unknown>;
+    } catch {
+      body = undefined;
+    }
+    return {
+      reachable: true,
+      status: response.status,
+      ...(body ? { body } : {}),
+    };
+  } catch (error) {
+    return {
+      reachable: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+export async function handleServiceCommand(params: SetupCommandParams): Promise<number> {
+  if (params.commandArgs.length === 0) {
+    throw new CliUsageError("patchrelay service requires a subcommand.", "service");
+  }
+
+  const subcommand = params.commandArgs[0];
+  if (subcommand === "install") {
+    return await handleInstallServiceCommand({
+      ...params,
+      commandArgs: params.commandArgs.slice(1),
+    });
+  }
+  if (subcommand === "restart") {
+    return await handleRestartServiceCommand({
+      ...params,
+      commandArgs: params.commandArgs.slice(1),
+    });
+  }
+  if (subcommand === "status") {
+    const result = await params.runCommand("sudo", [
+      "systemctl",
+      "show",
+      "patchrelay.service",
+      "--property=Id,LoadState,UnitFileState,ActiveState,SubState,FragmentPath,ExecMainPID",
+    ]);
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr.trim() || result.stdout.trim() || "Unable to read patchrelay.service status.");
+    }
+    const properties = parseSystemctlShowOutput(result.stdout);
+    const health = await readPatchRelayHealth();
+    const payload = {
+      service: "patchrelay",
+      unit: "patchrelay.service",
+      unitPath: getSystemdUnitPath(),
+      systemd: properties,
+      health,
+    };
+    writeOutput(
+      params.stdout,
+      params.json
+        ? formatJson(payload)
+        : [
+            "PatchRelay service",
+            "",
+            `Unit: ${properties.Id ?? "patchrelay.service"}`,
+            `Load state: ${properties.LoadState ?? "unknown"}`,
+            `Enabled: ${properties.UnitFileState ?? "unknown"}`,
+            `Active: ${properties.ActiveState ?? "unknown"}${properties.SubState ? ` (${properties.SubState})` : ""}`,
+            `Unit path: ${properties.FragmentPath || getSystemdUnitPath()}`,
+            properties.ExecMainPID ? `Main PID: ${properties.ExecMainPID}` : undefined,
+            health.reachable
+              ? `Health: reachable (HTTP ${health.status})${typeof health.body?.version === "string" ? ` version ${health.body.version}` : ""}`
+              : `Health: not reachable (${health.error})`,
+          ]
+            .filter(Boolean)
+            .join("\n") + "\n",
+    );
+    return 0;
+  }
+  if (subcommand === "logs") {
+    const lines = parsePositiveIntegerFlag(params.parsed.flags.get("lines"), "--lines") ?? 50;
+    const result = await params.runCommand("sudo", [
+      "journalctl",
+      "-u",
+      "patchrelay.service",
+      "-n",
+      String(lines),
+      "--no-pager",
+      "-o",
+      "short-iso",
+    ]);
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr.trim() || result.stdout.trim() || "Unable to read PatchRelay logs.");
+    }
+    const logs = result.stdout.split(/\r?\n/).filter(Boolean);
+    writeOutput(
+      params.stdout,
+      params.json
+        ? formatJson({
+            service: "patchrelay",
+            unit: "patchrelay.service",
+            lines,
+            logs,
+          })
+        : `${result.stdout}${result.stdout.endsWith("\n") || result.stdout.length === 0 ? "" : "\n"}`,
+    );
+    return 0;
+  }
+
+  throw new CliUsageError(`Unknown service command: ${subcommand}`, "service");
 }
 
 function normalizePublicBaseUrl(value: string): string {

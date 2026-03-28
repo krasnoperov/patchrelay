@@ -372,25 +372,25 @@ test("cli inspect, worktree, open, events, and report render stored issue detail
 
     const stdout = createBufferStream();
     const stderr = createBufferStream();
-    assert.equal(await runCli(["inspect", "USE-54"], { config, data, stdout: stdout.stream, stderr: stderr.stream }), 0);
+    assert.equal(await runCli(["issue", "show", "USE-54"], { config, data, stdout: stdout.stream, stderr: stderr.stream }), 0);
     assert.match(stdout.read(), /USE-54 {2}Human Needed/);
     assert.match(stdout.read(), /Deploy did not complete because auth was missing/);
 
     const worktreeOut = createBufferStream();
-    assert.equal(await runCli(["worktree", "USE-54", "--cd"], { config, data, stdout: worktreeOut.stream, stderr: stderr.stream }), 0);
+    assert.equal(await runCli(["issue", "path", "USE-54", "--cd"], { config, data, stdout: worktreeOut.stream, stderr: stderr.stream }), 0);
     assert.equal(worktreeOut.read().trim(), path.join(config.projects[0].worktreeRoot, "USE-54"));
 
     const openOut = createBufferStream();
-    assert.equal(await runCli(["open", "USE-54", "--print"], { config, data, stdout: openOut.stream, stderr: stderr.stream }), 0);
+    assert.equal(await runCli(["issue", "open", "USE-54", "--print"], { config, data, stdout: openOut.stream, stderr: stderr.stream }), 0);
     assert.match(openOut.read(), /codex --dangerously-bypass-approvals-and-sandbox resume -C .*USE-54 thread-54/);
 
     const reportOut = createBufferStream();
-    assert.equal(await runCli(["report", "USE-54"], { config, data, stdout: reportOut.stream, stderr: stderr.stream }), 0);
+    assert.equal(await runCli(["issue", "report", "USE-54"], { config, data, stdout: reportOut.stream, stderr: stderr.stream }), 0);
     assert.match(reportOut.read(), /implementation #1 failed/);
     assert.match(reportOut.read(), /npm run deploy/);
 
     const eventsOut = createBufferStream();
-    assert.equal(await runCli(["events", "USE-54"], { config, data, stdout: eventsOut.stream, stderr: stderr.stream }), 0);
+    assert.equal(await runCli(["issue", "events", "USE-54"], { config, data, stdout: eventsOut.stream, stderr: stderr.stream }), 0);
     assert.match(eventsOut.read(), /turn\/started/);
   } finally {
     data?.close();
@@ -420,7 +420,7 @@ test("cli open launches codex in the issue worktree", async () => {
     });
 
     const calls: Array<{ command: string; args: string[] }> = [];
-    const exitCode = await runCli(["open", "USE-54"], {
+    const exitCode = await runCli(["issue", "open", "USE-54"], {
       config,
       data,
       stdout: createBufferStream().stream,
@@ -483,7 +483,7 @@ test("cli open resumes the thread stored on the issue record", async () => {
     });
 
     const calls: Array<{ command: string; args: string[] }> = [];
-    const exitCode = await runCli(["open", "USE-54"], {
+    const exitCode = await runCli(["issue", "open", "USE-54"], {
       config,
       data,
       stdout: createBufferStream().stream,
@@ -536,7 +536,7 @@ test("cli open creates a fresh thread when the stored threadId cannot be resumed
     });
 
     const calls: Array<{ command: string; args: string[] }> = [];
-    const exitCode = await runCli(["open", "USE-54"], {
+    const exitCode = await runCli(["issue", "open", "USE-54"], {
       config,
       data,
       stdout: createBufferStream().stream,
@@ -587,7 +587,7 @@ test("cli open --print does not advertise a stale resume thread", async () => {
     });
 
     const stdout = createBufferStream();
-    const exitCode = await runCli(["open", "USE-54", "--print"], {
+    const exitCode = await runCli(["issue", "open", "USE-54", "--print"], {
       config,
       data,
       stdout: stdout.stream,
@@ -615,13 +615,13 @@ test("cli list and retry cover operator control flows", async () => {
     data = new CliDataAccess(config, { db });
 
     const failedList = createBufferStream();
-    assert.equal(await runCli(["list", "--failed"], { config, data, stdout: failedList.stream, stderr: createBufferStream().stream }), 0);
+    assert.equal(await runCli(["issue", "list", "--failed"], { config, data, stdout: failedList.stream, stderr: createBufferStream().stream }), 0);
     assert.match(failedList.read(), /USE-54/);
     assert.doesNotMatch(failedList.read(), /USE-55/);
 
     const retryOut = createBufferStream();
     assert.equal(
-      await runCli(["retry", "USE-55", "--reason", "operator retry"], {
+      await runCli(["issue", "retry", "USE-55", "--reason", "operator retry"], {
         config,
         data,
         stdout: retryOut.stream,
@@ -637,7 +637,7 @@ test("cli list and retry cover operator control flows", async () => {
     assert.equal(updatedIssue?.pendingRunType, "implementation");
 
     const inspectJson = createBufferStream();
-    assert.equal(await runCli(["USE-54", "--json"], { config, data, stdout: inspectJson.stream, stderr: createBufferStream().stream }), 0);
+    assert.equal(await runCli(["issue", "show", "USE-54", "--json"], { config, data, stdout: inspectJson.stream, stderr: createBufferStream().stream }), 0);
     assert.match(inspectJson.read(), /"issueKey": "USE-54"/);
   } finally {
     data?.close();
@@ -673,7 +673,7 @@ test("cli rejects unknown commands, unknown flags, and invalid numeric flags", a
 
     const runFlagError = createBufferStream();
     assert.equal(
-      await runCli(["report", "USE-54", "--run", "abc"], {
+      await runCli(["issue", "report", "USE-54", "--run", "abc"], {
         config,
         data,
         stdout: createBufferStream().stream,
@@ -889,39 +889,153 @@ test("cli help explains the setup sequence and default behavior", async () => {
 
   assert.equal(await runCli([], { stdout: stdout.stream, stderr: stderr.stream }), 0);
   assert.equal(stderr.read(), "");
-  assert.match(stdout.read(), /First-time setup:/);
-  assert.match(stdout.read(), /version \[--json\]/);
+  assert.match(stdout.read(), /Happy path:/);
+  assert.match(stdout.read(), /patchrelay version --json/);
   assert.match(stdout.read(), /patchrelay init <public-https-url>/);
-  assert.match(stdout.read(), /patchrelay project apply <id> <repo-path>/);
+  assert.match(stdout.read(), /patchrelay attach <id>/);
+  assert.match(stdout.read(), /dashboard \[--issue <issueKey>\]/);
+  assert.match(stdout.read(), /service status \[--json\]/);
+  assert.match(stdout.read(), /issue watch <issueKey>/);
   assert.match(stdout.read(), /Automation env vars:/);
   assert.match(stdout.read(), /Examples:/);
-  assert.match(
-    stdout.read(),
-    /In the normal\s+case you only need the public URL, the required secrets, and at least one project\./,
-  );
+  assert.match(stdout.read(), /Mental model:/);
 });
 
-test("cli project help prints command-specific usage and errors", async () => {
+test("cli attach and repos help print command-specific usage and errors", async () => {
   const helpOut = createBufferStream();
-  assert.equal(await runCli(["project", "--help"], { stdout: helpOut.stream, stderr: createBufferStream().stream }), 0);
-  assert.match(helpOut.read(), /patchrelay project apply <id> <repo-path>/);
+  assert.equal(await runCli(["attach", "--help"], { stdout: helpOut.stream, stderr: createBufferStream().stream }), 0);
+  assert.match(helpOut.read(), /patchrelay attach <id>/);
   assert.match(helpOut.read(), /Behavior:/);
 
   const usageError = createBufferStream();
-  assert.equal(await runCli(["project"], { stdout: createBufferStream().stream, stderr: usageError.stream }), 1);
-  assert.match(usageError.read(), /patchrelay project apply <id> <repo-path>/);
-  assert.match(usageError.read(), /Error: patchrelay project requires a subcommand\./);
+  assert.equal(await runCli(["attach"], { stdout: createBufferStream().stream, stderr: usageError.stream }), 1);
+  assert.match(usageError.read(), /patchrelay attach <id>/);
+  assert.match(usageError.read(), /Error: patchrelay attach requires <id>\./);
 
   const flagError = createBufferStream();
   assert.equal(
-    await runCli(["project", "apply", "demo", "/tmp/demo", "--bogus"], {
+    await runCli(["attach", "demo", "/tmp/demo", "--bogus"], {
       stdout: createBufferStream().stream,
       stderr: flagError.stream,
     }),
     1,
   );
-  assert.match(flagError.read(), /patchrelay project apply <id> <repo-path>/);
+  assert.match(flagError.read(), /patchrelay attach <id>/);
   assert.match(flagError.read(), /Error: Unknown flag: --bogus/);
+});
+
+test("cli attach defaults to cwd and supports --path overrides", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-project-cwd-"));
+  const configHome = path.join(baseDir, ".config");
+  const stateHome = path.join(baseDir, ".state");
+  const dataHome = path.join(baseDir, ".share");
+  const repoPath = path.join(baseDir, "repo");
+  const originalCwd = process.cwd();
+
+  try {
+    mkdirSync(repoPath, { recursive: true });
+    await withEnv(
+      {
+        XDG_CONFIG_HOME: configHome,
+        XDG_STATE_HOME: stateHome,
+        XDG_DATA_HOME: dataHome,
+        PATCHRELAY_SYSTEMD_DIR: path.join(baseDir, "systemd"),
+        PATCHRELAY_CONFIG: undefined,
+        PATCHRELAY_DB_PATH: undefined,
+        PATCHRELAY_LOG_FILE: undefined,
+      },
+      async () => {
+        assert.equal(
+          await runCli(["init", "relay.example.com"], {
+            stdout: createBufferStream().stream,
+            stderr: createBufferStream().stream,
+            runInteractive: async () => 0,
+          }),
+          0,
+        );
+
+        process.chdir(repoPath);
+        assert.equal(
+          await runCli(["attach", "cwd-project", "--prefix", "CWD", "--no-auth"], {
+            stdout: createBufferStream().stream,
+            stderr: createBufferStream().stream,
+            runInteractive: async () => 0,
+          }),
+          0,
+        );
+
+        process.chdir(originalCwd);
+        assert.equal(
+          await runCli(["attach", "flag-project", "--path", repoPath, "--prefix", "FLG", "--no-auth"], {
+            stdout: createBufferStream().stream,
+            stderr: createBufferStream().stream,
+            runInteractive: async () => 0,
+          }),
+          0,
+        );
+
+        const config = loadConfig(path.join(configHome, "patchrelay", "patchrelay.json"), { profile: "write_config" });
+        assert.equal(config.projects.find((project) => project.id === "cwd-project")?.repoPath, repoPath);
+        assert.equal(config.projects.find((project) => project.id === "flag-project")?.repoPath, repoPath);
+      },
+    );
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("cli issue and service groups expose the supported operator flow", async () => {
+  const issueHelp = createBufferStream();
+  assert.equal(await runCli(["issue", "--help"], { stdout: issueHelp.stream, stderr: createBufferStream().stream }), 0);
+  assert.match(issueHelp.read(), /patchrelay issue <command>/);
+  assert.match(issueHelp.read(), /watch <issueKey>/);
+
+  const serviceHelp = createBufferStream();
+  assert.equal(await runCli(["service", "--help"], { stdout: serviceHelp.stream, stderr: createBufferStream().stream }), 0);
+  assert.match(serviceHelp.read(), /patchrelay service <command>/);
+  assert.match(serviceHelp.read(), /status \[--json\]/);
+
+  const serviceJson = createBufferStream();
+  assert.equal(
+    await runCli(["service", "status", "--json"], {
+      stdout: serviceJson.stream,
+      stderr: createBufferStream().stream,
+      runCommand: async (_command, args) => {
+        if (args[0] === "systemctl") {
+          return {
+            exitCode: 0,
+            stdout: [
+              "Id=patchrelay.service",
+              "LoadState=loaded",
+              "UnitFileState=enabled",
+              "ActiveState=active",
+              "SubState=running",
+              "FragmentPath=/etc/systemd/system/patchrelay.service",
+              "ExecMainPID=4242",
+            ].join("\n"),
+            stderr: "",
+          };
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    }),
+    0,
+  );
+  const parsed = JSON.parse(serviceJson.read()) as Record<string, unknown>;
+  assert.equal(parsed.service, "patchrelay");
+  assert.equal(parsed.unit, "patchrelay.service");
+  assert.equal((parsed.systemd as Record<string, unknown>).ActiveState, "active");
+  assert.equal((parsed.systemd as Record<string, unknown>).ExecMainPID, "4242");
+  assert.equal((parsed.health as { reachable?: boolean }).reachable, false);
+});
+
+test("cli dashboard aliases resolve to the TUI command", async () => {
+  for (const command of [["dashboard"], ["dash"], ["d"]] as const) {
+    const helpOut = createBufferStream();
+    assert.equal(await runCli([...command, "--help"], { stdout: helpOut.stream, stderr: createBufferStream().stream }), 0);
+    assert.match(helpOut.read(), /dashboard \[--issue <issueKey>\]/);
+  }
 });
 
 test("cli process paths avoid sqlite warnings until sqlite-backed commands run", () => {
@@ -1080,7 +1194,7 @@ test("cli version prints the installed build version in text and json", async ()
   assert.match(jsonOut.read(), new RegExp(`"version":\\s*"${buildInfo.version.replaceAll(".", "\\.")}"`));
 });
 
-test("cli init writes XDG config files and install-service manages the system unit", async () => {
+test("cli init writes XDG config files and service install manages the system unit", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-init-"));
   const configHome = path.join(baseDir, ".config");
   const stateHome = path.join(baseDir, ".state");
@@ -1117,9 +1231,9 @@ test("cli init writes XDG config files and install-service manages the system un
         assert.match(initText, /Public base URL: https:\/\/patchrelay\.example\.com/);
         assert.match(initText, /Webhook URL: https:\/\/patchrelay\.example\.com\/webhooks\/linear/);
         assert.match(initText, /Config file contains only machine-level essentials/);
-        assert.match(initText, /The system service and config watcher are installed for you/);
+        assert.match(initText, /The system service is installed for you/);
         assert.match(initText, /Open Linear Settings > API > Applications/);
-        assert.match(initText, /Run `patchrelay project apply <id> <repo-path>`/);
+        assert.match(initText, /Run `patchrelay attach <id>` from the repo root/);
 
         const runtimeEnvPath = path.join(configHome, "patchrelay", "runtime.env");
         const serviceEnvPath = path.join(configHome, "patchrelay", "service.env");
@@ -1140,37 +1254,28 @@ test("cli init writes XDG config files and install-service manages the system un
         assert.equal(configContents.includes(path.join(dataHome, "patchrelay", "worktrees")), false);
         assert.deepEqual(initCommands, [
           "sudo systemctl daemon-reload",
-          "sudo systemctl enable --now patchrelay.path",
           "sudo systemctl enable patchrelay.service",
           "sudo systemctl reload-or-restart patchrelay.service",
         ]);
 
         const installOut = createBufferStream();
         assert.equal(
-          await runCli(["install-service", "--write-only"], {
+          await runCli(["service", "install", "--write-only"], {
             stdout: installOut.stream,
             stderr: createBufferStream().stream,
           }),
           0,
         );
         const unitPath = path.join(systemdDir, "patchrelay.service");
-        const reloadUnitPath = path.join(systemdDir, "patchrelay-reload.service");
-        const pathUnitPath = path.join(systemdDir, "patchrelay.path");
         const unit = readFileSync(unitPath, "utf8");
-        const reloadUnit = readFileSync(reloadUnitPath, "utf8");
-        const pathUnit = readFileSync(pathUnitPath, "utf8");
         assert.match(unit, /ExecStart=\/usr\/bin\/env patchrelay serve/);
         assert.match(unit, new RegExp(`Environment=PATCHRELAY_CONFIG=${configPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
         assert.match(unit, /EnvironmentFile=-.*runtime\.env/);
         assert.match(unit, /LoadCredentialEncrypted=linear-webhook-secret/);
-        assert.match(reloadUnit, /reload-or-restart patchrelay\.service/);
-        assert.match(pathUnit, /Unit=patchrelay-reload\.service/);
-        assert.match(pathUnit, /PathChanged=.*runtime\.env/);
-        assert.match(pathUnit, /PathChanged=.*service\.env/);
 
         const commands: string[] = [];
         assert.equal(
-          await runCli(["restart-service", "--json"], {
+          await runCli(["service", "restart", "--json"], {
             stdout: createBufferStream().stream,
             stderr: createBufferStream().stream,
             runInteractive: async (command, args) => {
@@ -1251,7 +1356,7 @@ test("cli init updates the saved public base URL on rerun", async () => {
   }
 });
 
-test("cli project apply appends a minimal project to config", async () => {
+test("cli attach appends a minimal repo to config", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-project-add-"));
   const systemdDir = path.join(baseDir, "systemd");
   const configHome = path.join(baseDir, ".config");
@@ -1281,17 +1386,17 @@ test("cli project apply appends a minimal project to config", async () => {
           0,
         );
 
-        const projectOut = createBufferStream();
+        const attachOut = createBufferStream();
         assert.equal(
-          await runCli(["project", "apply", "usertold", repoPath, "--issue-prefix", "USE", "--no-connect"], {
-            stdout: projectOut.stream,
+          await runCli(["attach", "usertold", repoPath, "--prefix", "USE", "--no-auth"], {
+            stdout: attachOut.stream,
             stderr: createBufferStream().stream,
             runInteractive: async () => 0,
           }),
           0,
         );
-        assert.match(projectOut.read(), /Created project usertold/);
-        assert.match(projectOut.read(), /Project saved and PatchRelay was reloaded|Linear connect was skipped because PatchRelay is not ready yet/);
+        assert.match(attachOut.read(), /Attached repo usertold/);
+        assert.match(attachOut.read(), /Repo attached and PatchRelay was reloaded|Linear auth was skipped:/);
 
         const configPath = path.join(configHome, "patchrelay", "patchrelay.json");
         const configContents = readFileSync(configPath, "utf8");
@@ -1312,7 +1417,7 @@ test("cli project apply appends a minimal project to config", async () => {
   }
 });
 
-test("cli project apply is idempotent and can skip connect until env is ready", async () => {
+test("cli attach is idempotent and can skip connect until env is ready", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-project-apply-idempotent-"));
   const configHome = path.join(baseDir, ".config");
   const systemdDir = path.join(baseDir, "systemd");
@@ -1346,12 +1451,12 @@ test("cli project apply is idempotent and can skip connect until env is ready", 
           0,
         );
 
-        // Service is running on port 8787 (real), but project apply still succeeds.
+        // Service is running on port 8787 (real), but attach still succeeds.
         // The runInteractive mock prevents actual sudo systemctl calls.
-        const projectOut = createBufferStream();
+        const attachOut = createBufferStream();
         assert.equal(
-          await runCli(["project", "apply", "usertold", repoPath, "--issue-prefix", "USE", "--no-connect"], {
-            stdout: projectOut.stream,
+          await runCli(["attach", "usertold", repoPath, "--prefix", "USE", "--no-auth"], {
+            stdout: attachOut.stream,
             stderr: createBufferStream().stream,
             runInteractive: async () => 0,
           }),
@@ -1360,14 +1465,14 @@ test("cli project apply is idempotent and can skip connect until env is ready", 
 
         const rerunOut = createBufferStream();
         assert.equal(
-          await runCli(["project", "apply", "usertold", repoPath, "--issue-prefix", "USE", "--no-connect"], {
+          await runCli(["attach", "usertold", repoPath, "--prefix", "USE", "--no-auth"], {
             stdout: rerunOut.stream,
             stderr: createBufferStream().stream,
             runInteractive: async () => 0,
           }),
           0,
         );
-        assert.match(rerunOut.read(), /Verified project usertold/);
+        assert.match(rerunOut.read(), /Verified repo usertold/);
       },
     );
   } finally {
@@ -1375,7 +1480,7 @@ test("cli project apply is idempotent and can skip connect until env is ready", 
   }
 });
 
-test("cli project apply requires routing when adding a second project", async () => {
+test("cli attach requires routing when adding a second repo", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-project-add-routing-"));
   const configHome = path.join(baseDir, ".config");
   const stateHome = path.join(baseDir, ".state");
@@ -1406,7 +1511,7 @@ test("cli project apply requires routing when adding a second project", async ()
           0,
         );
         assert.equal(
-          await runCli(["project", "apply", "one", firstRepoPath, "--issue-prefix", "ONE", "--no-connect"], {
+          await runCli(["attach", "one", firstRepoPath, "--prefix", "ONE", "--no-auth"], {
             stdout: createBufferStream().stream,
             stderr: createBufferStream().stream,
             runInteractive: async () => 0,
@@ -1416,7 +1521,7 @@ test("cli project apply requires routing when adding a second project", async ()
 
         const stderr = createBufferStream();
         assert.equal(
-          await runCli(["project", "apply", "two", secondRepoPath], {
+          await runCli(["attach", "two", secondRepoPath], {
             stdout: createBufferStream().stream,
             stderr: stderr.stream,
           }),
@@ -1430,7 +1535,7 @@ test("cli project apply requires routing when adding a second project", async ()
   }
 });
 
-test("cli project apply can auto-connect using the default service.env file", async () => {
+test("cli attach can auto-connect using the default service.env file", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-project-apply-connect-"));
   const configHome = path.join(baseDir, ".config");
   const stateHome = path.join(baseDir, ".state");
@@ -1494,11 +1599,11 @@ test("cli project apply can auto-connect using the default service.env file", as
           },
         } as unknown as CliDataAccess;
 
-        const projectOut = createBufferStream();
+        const attachOut = createBufferStream();
         const commands: string[] = [];
         assert.equal(
-          await runCli(["project", "apply", "usertold", repoPath, "--issue-prefix", "USE"], {
-            stdout: projectOut.stream,
+          await runCli(["attach", "usertold", repoPath, "--prefix", "USE"], {
+            stdout: attachOut.stream,
             stderr: createBufferStream().stream,
             data: connectData,
             runInteractive: async (command, args) => {
@@ -1508,11 +1613,10 @@ test("cli project apply can auto-connect using the default service.env file", as
           }),
           0,
         );
-        assert.match(projectOut.read(), /Created project usertold/);
-        assert.match(projectOut.read(), /Linked project usertold to existing Linear installation 7/);
+        assert.match(attachOut.read(), /Attached repo usertold/);
+        assert.match(attachOut.read(), /Linked repo usertold to existing Linear installation 7/);
         assert.deepEqual(commands, [
           "sudo systemctl daemon-reload",
-          "sudo systemctl enable --now patchrelay.path",
           "sudo systemctl enable patchrelay.service",
           "sudo systemctl reload-or-restart patchrelay.service",
         ]);
@@ -1523,7 +1627,7 @@ test("cli project apply can auto-connect using the default service.env file", as
   }
 });
 
-test("cli project apply json performs the workflow and returns structured connect state", async () => {
+test("cli attach json performs the workflow and returns structured auth state", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-project-apply-json-"));
   const configHome = path.join(baseDir, ".config");
   const stateHome = path.join(baseDir, ".state");
@@ -1585,10 +1689,10 @@ test("cli project apply json performs the workflow and returns structured connec
           },
         } as unknown as CliDataAccess;
 
-        const projectOut = createBufferStream();
+        const attachOut = createBufferStream();
         assert.equal(
-          await runCli(["project", "apply", "usertold", repoPath, "--issue-prefix", "USE", "--json"], {
-            stdout: projectOut.stream,
+          await runCli(["attach", "usertold", repoPath, "--prefix", "USE", "--json"], {
+            stdout: attachOut.stream,
             stderr: createBufferStream().stream,
             data: connectData,
             runInteractive: async () => 0,
@@ -1596,11 +1700,11 @@ test("cli project apply json performs the workflow and returns structured connec
           0,
         );
 
-        const parsed = JSON.parse(projectOut.read()) as Record<string, unknown>;
+        const parsed = JSON.parse(attachOut.read()) as Record<string, unknown>;
         assert.equal(parsed.status, "created");
         assert.equal((parsed.serviceReloaded as boolean | undefined) ?? false, true);
         assert.equal(((parsed.readiness as { ok?: boolean }).ok ?? false), true);
-        assert.deepEqual(parsed.connect, {
+        assert.deepEqual(parsed.auth, {
           attempted: true,
           result: {
             completed: true,
@@ -1670,7 +1774,7 @@ test("cli connect and installations cover OAuth installation flows", async () =>
 
     const connectOut = createBufferStream();
     assert.equal(
-      await runCli(["connect", "--project", "usertold"], {
+      await runCli(["connect", "--repo", "usertold"], {
         config,
         data,
         stdout: connectOut.stream,
@@ -1681,7 +1785,7 @@ test("cli connect and installations cover OAuth installation flows", async () =>
       0,
     );
     assert.match(connectOut.read(), /Opened browser for Linear OAuth/);
-    assert.match(connectOut.read(), /Connected Workspace One for project usertold/);
+    assert.match(connectOut.read(), /Connected Workspace One for repo usertold/);
 
     const installationsOut = createBufferStream();
     assert.equal(
@@ -1771,7 +1875,7 @@ test("cli feed renders operator observations in text and json", async () => {
   }
 });
 
-test("cli feed forwards issue and project filters to the operator API client", async () => {
+test("cli feed forwards issue and repo filters to the operator API client", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-feed-filters-"));
   try {
     const config = createConfig(baseDir);
@@ -1806,7 +1910,7 @@ test("cli feed forwards issue and project filters to the operator API client", a
     } as unknown as CliDataAccess;
 
     assert.equal(
-      await runCli(["feed", "--issue", "USE-54", "--project", "usertold", "--limit", "25"], {
+      await runCli(["feed", "--issue", "USE-54", "--repo", "usertold", "--limit", "25"], {
         config,
         data,
         stdout: createBufferStream().stream,
@@ -1834,7 +1938,7 @@ test("cli feed forwards issue and project filters to the operator API client", a
     });
 
     assert.equal(
-      await runCli(["feed", "--follow", "--issue", "USE-54", "--project", "usertold"], {
+      await runCli(["feed", "--follow", "--issue", "USE-54", "--repo", "usertold"], {
         config,
         data,
         stdout: createBufferStream().stream,
@@ -1882,7 +1986,7 @@ test("cli feed --follow streams live operator observations", async () => {
   }
 });
 
-test("cli connect reuses an existing installation when the project can be linked locally", async () => {
+test("cli connect reuses an existing installation when the repo can be linked locally", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-connect-reuse-"));
   try {
     const config = {
@@ -1912,7 +2016,7 @@ test("cli connect reuses an existing installation when the project can be linked
 
     const connectOut = createBufferStream();
     assert.equal(
-      await runCli(["connect", "--project", "usertold"], {
+      await runCli(["connect", "--repo", "usertold"], {
         config,
         data,
         stdout: connectOut.stream,
@@ -1920,7 +2024,7 @@ test("cli connect reuses an existing installation when the project can be linked
       }),
       0,
     );
-    assert.match(connectOut.read(), /Linked project usertold to existing Linear installation 7/);
+    assert.match(connectOut.read(), /Linked repo usertold to existing Linear installation 7/);
     assert.match(connectOut.read(), /No new OAuth approval was needed/);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -1976,7 +2080,7 @@ test("cli OAuth operator commands support json output and validation failures", 
 
     const connectJson = createBufferStream();
     assert.equal(
-      await runCli(["connect", "--project", "usertold", "--json"], {
+      await runCli(["connect", "--repo", "usertold", "--json"], {
         config,
         data,
         stdout: connectJson.stream,
@@ -2016,7 +2120,7 @@ test("cli OAuth operator commands support json output and validation failures", 
 
     const connectError = createBufferStream();
     assert.equal(
-      await runCli(["connect", "--project", "missing-project"], {
+      await runCli(["connect", "--repo", "missing-project"], {
         config,
         data,
         stdout: createBufferStream().stream,
@@ -2110,7 +2214,7 @@ test("cli installation commands use the local HTTP service end to end", async (t
 
     const connectOut = createBufferStream();
     assert.equal(
-      await runCli(["connect", "--project", "usertold", "--no-open"], {
+      await runCli(["connect", "--repo", "usertold", "--no-open"], {
         config,
         data,
         stdout: connectOut.stream,
@@ -2119,7 +2223,7 @@ test("cli installation commands use the local HTTP service end to end", async (t
       }),
       0,
     );
-    assert.match(connectOut.read(), /Connected Workspace Seven for project usertold/);
+    assert.match(connectOut.read(), /Connected Workspace Seven for repo usertold/);
     assert.equal(links.get("usertold"), 7);
 
     const installationsOut = createBufferStream();
@@ -2133,7 +2237,7 @@ test("cli installation commands use the local HTTP service end to end", async (t
       0,
     );
     assert.match(installationsOut.read(), /Workspace Seven/);
-    assert.match(installationsOut.read(), /projects=usertold/);
+    assert.match(installationsOut.read(), /repos=usertold/);
 
     data.close();
     await app.close();

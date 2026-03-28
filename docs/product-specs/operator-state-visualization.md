@@ -42,7 +42,7 @@ PatchRelay's native issue lifecycle is the `FactoryState` union in `src/factory-
 
 ### Native Graph
 
-PatchRelay watch should render a compact native-state graph for the selected issue.
+The PatchRelay dashboard should render a compact native-state graph for the selected issue.
 
 Main path:
 
@@ -70,7 +70,7 @@ The graph should show:
 
 ### External Queue Observation
 
-PatchRelay watch should show a separate `Queue Observation` block beside or below the native graph.
+The PatchRelay dashboard should show a separate `Queue Observation` block beside or below the native graph.
 
 This block is derived from:
 
@@ -110,7 +110,7 @@ merge-steward's native queue-entry lifecycle is the `QueueEntryStatus` union in 
 
 merge-steward handles several PRs at once as an ordered queue, but only one head advances at a time.
 
-The top-level watch view must therefore remain a queue list.
+The top-level dashboard view must therefore remain a queue list.
 It should prioritize:
 
 - queue order
@@ -163,7 +163,7 @@ Example observations:
 
 ## UI Layout
 
-### PatchRelay watch detail
+### PatchRelay dashboard detail
 
 Recommended structure:
 

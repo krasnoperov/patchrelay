@@ -3,6 +3,12 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
+  "files": [
+    "dist",
+    "runtime.env.example",
+    "service.env.example",
+    "infra/merge-steward@.service"
+  ],
   "engines": {
     "node": ">=24.0.0"
   },

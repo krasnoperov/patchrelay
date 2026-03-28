@@ -78,9 +78,9 @@ Configure branch protection on your base branch (e.g., `main`):
 
 Configure a webhook on the repository pointing to the steward:
 
-- **Payload URL:** `http://your-host:8790/webhooks/github/queue`
+- **Payload URL:** the repo-specific URL printed by `merge-steward attach <id> <owner/repo>`, for example `https://queue.example.com/webhooks/github/queue/app`
 - **Content type:** `application/json`
-- **Secret:** same as `webhookSecret` in steward config
+- **Secret:** same as `MERGE_STEWARD_WEBHOOK_SECRET` or the `merge-steward-webhook-secret` systemd credential
 - **Events:** Pull requests, Pull request reviews, Check suites, Pushes
 
 PatchRelay needs its own separate GitHub webhook for PR, review, and check events that drive reactive repair loops.
@@ -98,6 +98,16 @@ If using a GitHub App for PatchRelay, subscribe to these events:
 | Check run | Steward eviction detection (triggers queue repair) |
 
 ## Running Merge Steward
+
+The happy-path bootstrap is:
+
+```bash
+merge-steward init https://queue.example.com
+merge-steward attach app owner/repo --base-branch main --required-check test,lint
+merge-steward doctor --repo app
+merge-steward service status app
+merge-steward queue status --repo app
+```
 
 See [packages/merge-steward/README.md](../packages/merge-steward/README.md) for configuration, API reference, watch TUI, and systemd setup.
 

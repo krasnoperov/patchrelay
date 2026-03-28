@@ -16,12 +16,15 @@ export class GitHubCheckRunReporter implements EvictionReporter {
     private readonly repoFullName: string,
     private readonly serverHost: string,
     private readonly serverPort: number,
+    private readonly publicBaseUrl?: string,
   ) {}
 
   async reportEviction(entry: QueueEntry, incident: IncidentRecord): Promise<void> {
     const title = formatTitle(incident);
     const summary = formatSummary(entry, incident);
-    const detailsUrl = `http://${this.serverHost}:${this.serverPort}/queue/incidents/${incident.id}`;
+    const detailsUrl = this.publicBaseUrl
+      ? new URL(`/queue/incidents/${incident.id}`, this.publicBaseUrl).toString()
+      : `http://${this.serverHost}:${this.serverPort}/queue/incidents/${incident.id}`;
 
     const body = JSON.stringify({
       name: "merge-steward/queue",
