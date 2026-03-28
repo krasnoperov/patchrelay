@@ -7,7 +7,6 @@
   "flakyRetries": 1,
   "requiredChecks": ["checks", "test-ui", "test-integration"],
   "pollIntervalMs": 30000,
-  "mergeMethod": "merge",
   "admissionLabel": "queue",
   "excludeBranches": ["release-please--*"],
   "webhookPath": "/webhooks/github/queue/usertold",

@@ -39,7 +39,7 @@ export interface CIRunner {
  * implementation uses gh CLI or REST API; test implementation is in-memory.
  */
 export interface GitHubPRApi {
-  mergePR(prNumber: number, method: "squash" | "merge"): Promise<void>;
+  mergePR(prNumber: number): Promise<void>;
   getStatus(prNumber: number): Promise<PRStatus>;
   listChecks(prNumber: number): Promise<CheckResult[]>;
   listLabels(prNumber: number): Promise<string[]>;

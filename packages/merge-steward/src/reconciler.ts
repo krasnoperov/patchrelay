@@ -26,7 +26,6 @@ export interface ReconcileContext {
   specBuilder: SpeculativeBranchBuilder | null;
   speculativeDepth: number;
   flakyRetries: number;
-  mergeMethod: "merge" | "squash";
   onEvent: (event: ReconcileEvent) => void;
 }
 
@@ -324,7 +323,7 @@ async function mergeHead(ctx: ReconcileContext, entry: QueueEntry, allActive: Qu
   }
 
   try {
-    await ctx.github.mergePR(entry.prNumber, ctx.mergeMethod);
+    await ctx.github.mergePR(entry.prNumber);
   } catch {
     emit(ctx, entry, "merge_rejected", { detail: "GitHub API rejected merge" });
     if (isBudgetExhausted(entry)) {

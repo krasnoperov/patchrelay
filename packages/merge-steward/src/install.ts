@@ -190,7 +190,6 @@ export async function upsertRepoConfig(options: {
   baseBranch?: string;
   requiredChecks?: string[];
   admissionLabel?: string;
-  mergeMethod?: "merge" | "squash";
 }): Promise<{
   configPath: string;
   status: "created" | "updated" | "unchanged";
@@ -222,7 +221,6 @@ export async function upsertRepoConfig(options: {
   const requiredChecks = [...new Set((options.requiredChecks ?? existing?.requiredChecks ?? []).map((entry) => entry.trim()).filter(Boolean))];
   const baseBranch = options.baseBranch?.trim() || existing?.baseBranch || "main";
   const admissionLabel = options.admissionLabel?.trim() || existing?.admissionLabel || "queue";
-  const mergeMethod = options.mergeMethod ?? existing?.mergeMethod ?? "merge";
   const existingPorts = await listRepoConfigPorts(layout.repoConfigDir);
   const port = existing?.server.port ?? nextAvailablePort(existingPorts, homeConfig.server?.port_base ?? 8790);
   const webhookPath = existing?.webhookPath ?? `/webhooks/github/queue/${id}`;
@@ -250,7 +248,6 @@ export async function upsertRepoConfig(options: {
     logging: {
       level: existing?.logging.level ?? (homeConfig.logging?.level ?? "info"),
     },
-    mergeMethod,
     admissionLabel,
     excludeBranches: existing?.excludeBranches ?? ["release-please--*"],
     webhookPath,

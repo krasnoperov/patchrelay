@@ -64,7 +64,7 @@ describe("revalidation before merge", () => {
     await h.tick(); // validating → merging
 
     // Mark as merged externally (e.g., someone merged via GitHub UI).
-    await h.githubSim.mergePR(1, "squash");
+    await h.githubSim.mergePR(1);
 
     // Tick — revalidation should acknowledge the external merge.
     await h.tick();

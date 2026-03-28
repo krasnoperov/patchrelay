@@ -254,7 +254,6 @@ export class Harness {
       specBuilder: this.speculativeDepth > 1 ? this.gitSim : null,
       speculativeDepth: this.speculativeDepth,
       flakyRetries: this.flakyRetries,
-      mergeMethod: "merge",
       onEvent: (event: ReconcileEvent) => {
         this.reconcileEvents.push(event);
         if (event.action === "merge_succeeded" || event.action === "merge_external") {

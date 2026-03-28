@@ -116,7 +116,7 @@ function validateFlags(parsed: ParsedArgs): void {
       assertKnownFlags(parsed, "root", ["config", "repo"]);
       return;
     case "attach":
-      assertKnownFlags(parsed, "repos", ["base-branch", "required-check", "label", "merge-method", "json"]);
+      assertKnownFlags(parsed, "repos", ["base-branch", "required-check", "label", "json"]);
       return;
     case "repos":
       assertKnownFlags(parsed, "repos", ["json"]);
@@ -243,7 +243,7 @@ function rootHelpText(): string {
     "  5. merge-steward queue status --repo <id>",
     "",
     "Everyday commands:",
-    "  attach <id> <owner/repo> [--base-branch <branch>] [--required-check <checks>] [--label <label>] [--merge-method merge|squash] [--json]",
+    "  attach <id> <owner/repo> [--base-branch <branch>] [--required-check <checks>] [--label <label>] [--json]",
     "                                                          Create or update one repo-scoped steward config and restart its service",
     "  repos [<id>] [--json]                                  List attached repositories or show one repo config and webhook URL",
     "  doctor [--repo <id>] [--json]                          Validate config, secrets, auth, and required binaries",
@@ -284,7 +284,6 @@ function reposHelpText(): string {
     "  --base-branch <branch>       Base branch to land into (default: main)",
     "  --required-check <checks>    Comma-separated required check names",
     "  --label <label>              Admission label (default: queue)",
-    "  --merge-method <method>      merge or squash",
     "  --json                       Emit structured JSON",
     "",
     "Examples:",
@@ -627,7 +626,6 @@ async function handleRepos(parsed: ParsedArgs, stdout: Output): Promise<number> 
     baseBranch: config.baseBranch,
     requiredChecks: config.requiredChecks,
     admissionLabel: config.admissionLabel,
-    mergeMethod: config.mergeMethod,
     configPath,
     clonePath: config.clonePath,
     databasePath: config.database.path,
@@ -649,7 +647,6 @@ async function handleRepos(parsed: ParsedArgs, stdout: Output): Promise<number> 
       `Base branch: ${config.baseBranch}`,
       `Required checks: ${config.requiredChecks.length > 0 ? config.requiredChecks.join(", ") : "(any green check)"}`,
       `Admission label: ${config.admissionLabel}`,
-      `Merge method: ${config.mergeMethod}`,
       `Local address: http://${config.server.bind}:${config.server.port}`,
       `Webhook path: ${config.webhookPath}`,
       buildWebhookUrl(config) ? `Webhook URL: ${buildWebhookUrl(config)}` : undefined,
@@ -667,11 +664,6 @@ async function handleAttach(parsed: ParsedArgs, stdout: Output, runCommand: Comm
     throw new UsageError("merge-steward attach requires <id> and <owner/repo>.", "repos");
   }
 
-  const mergeMethodFlag = parsed.flags.get("merge-method");
-  const mergeMethod =
-    mergeMethodFlag === "merge" || mergeMethodFlag === "squash"
-      ? mergeMethodFlag
-      : undefined;
   const baseBranch = typeof parsed.flags.get("base-branch") === "string" ? String(parsed.flags.get("base-branch")) : undefined;
   const admissionLabel = typeof parsed.flags.get("label") === "string" ? String(parsed.flags.get("label")) : undefined;
 
@@ -683,7 +675,6 @@ async function handleAttach(parsed: ParsedArgs, stdout: Output, runCommand: Comm
       ? { requiredChecks: parseCsvFlag(parsed.flags.get("required-check")) }
       : {}),
     ...(admissionLabel ? { admissionLabel } : {}),
-    ...(mergeMethod ? { mergeMethod } : {}),
   });
 
   const unitInstall = await installServiceUnit();

@@ -8,12 +8,12 @@ import { exec } from "../exec.ts";
 export class GitHubPRClient implements GitHubPRApi {
   constructor(private readonly repoFullName: string) {}
 
-  async mergePR(prNumber: number, method: "squash" | "merge"): Promise<void> {
-    const args = ["pr", "merge", String(prNumber), "--repo", this.repoFullName];
-    if (method === "squash") args.push("--squash");
-    else args.push("--merge");
-    args.push("--delete-branch");
-    await exec("gh", args, { timeoutMs: 60_000 });
+  async mergePR(prNumber: number): Promise<void> {
+    await exec("gh", [
+      "pr", "merge", String(prNumber),
+      "--repo", this.repoFullName,
+      "--merge", "--delete-branch",
+    ], { timeoutMs: 60_000 });
   }
 
   async getStatus(prNumber: number): Promise<PRStatus> {

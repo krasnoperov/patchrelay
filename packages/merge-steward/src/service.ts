@@ -279,7 +279,6 @@ export class MergeStewardService {
         speculativeDepth: this.config.speculativeDepth,
         eviction: this.eviction,
         flakyRetries: this.config.flakyRetries,
-        mergeMethod: this.config.mergeMethod,
         onEvent: (event) => {
           const isWarn = event.action === "evicted" || event.action === "rebase_conflict"
             || event.action === "spec_build_conflict" || event.action === "ci_failed"

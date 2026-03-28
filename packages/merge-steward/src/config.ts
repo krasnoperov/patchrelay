@@ -29,7 +29,6 @@ export const stewardConfigSchema = z.object({
   logging: z.object({
     level: z.enum(["debug", "info", "warn", "error"]).default("info"),
   }).default({ level: "info" }),
-  mergeMethod: z.enum(["merge", "squash"]).default("merge"),
   admissionLabel: z.string().default("queue"),
   /** Branch name patterns to exclude from admission (glob-style). */
   excludeBranches: z.array(z.string()).default(["release-please--*"]),
