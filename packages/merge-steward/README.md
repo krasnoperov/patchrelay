@@ -19,31 +19,83 @@ Fully independent of PatchRelay. Communicates through GitHub — PRs, labels, ch
 ### Prerequisites
 
 - Node.js 24+
-- `gh` CLI authenticated (for GitHub API operations)
+- `gh` CLI available in `PATH`
 - `git` binary
 
-### Configuration
+### Bootstrap
 
-Copy `config/steward.example.json` and adjust:
+Initialize the machine-level steward home once:
+
+```bash
+merge-steward init https://queue.example.com
+```
+
+That creates:
+
+- `~/.config/merge-steward/runtime.env`
+- `~/.config/merge-steward/service.env`
+- `~/.config/merge-steward/merge-steward.json`
+- `~/.config/merge-steward/repos/`
+- `/etc/systemd/system/merge-steward@.service`
+
+Add one repo-scoped steward instance:
+
+```bash
+merge-steward attach app owner/repo --base-branch main --required-check test,lint
+```
+
+That writes `~/.config/merge-steward/repos/app.json`, enables `merge-steward@app.service`, and prints the repo-specific webhook URL.
+
+Validate the setup:
+
+```bash
+merge-steward doctor --repo app
+merge-steward service status app
+merge-steward queue status --repo app
+```
+
+### Secrets
+
+For dev, `service.env` can contain:
+
+```bash
+MERGE_STEWARD_WEBHOOK_SECRET=replace-with-webhook-secret
+MERGE_STEWARD_GITHUB_TOKEN=replace-with-github-token
+```
+
+For production, prefer `systemd-creds` with:
+
+- `LoadCredentialEncrypted=merge-steward-webhook-secret`
+- `LoadCredentialEncrypted=merge-steward-github-token`
+
+The steward resolves secrets in this order:
+
+1. `$CREDENTIALS_DIRECTORY/<name>`
+2. `${ENV_KEY}_FILE`
+3. `${ENV_KEY}`
+
+### Repo Config
+
+`merge-steward attach` writes a repo-scoped config like:
 
 ```json
 {
-  "repoId": "my-project",
+  "repoId": "app",
   "repoFullName": "owner/repo",
   "baseBranch": "main",
-  "clonePath": "~/.local/state/merge-steward/repos/my-project",
+  "clonePath": "~/.local/state/merge-steward/repos/app",
   "maxRetries": 2,
   "flakyRetries": 1,
-  "requiredChecks": [],
+  "requiredChecks": ["test", "lint"],
   "pollIntervalMs": 30000,
   "admissionLabel": "queue",
-  "webhookSecret": "your-webhook-secret",
+  "webhookPath": "/webhooks/github/queue/app",
   "server": {
     "bind": "127.0.0.1",
     "port": 8790
   },
   "database": {
-    "path": "~/.local/state/merge-steward/steward.sqlite"
+    "path": "~/.local/state/merge-steward/app.sqlite"
   }
 }
 ```
@@ -59,37 +111,38 @@ Copy `config/steward.example.json` and adjust:
 | `requiredChecks` | Check names that must pass for admission (empty = any green) |
 | `pollIntervalMs` | Reconciliation loop interval |
 | `admissionLabel` | GitHub label that triggers queue admission |
-| `webhookPath` | Webhook endpoint path (default `/webhooks/github/queue`) |
-| `webhookSecret` | GitHub webhook secret for signature verification |
+| `webhookPath` | Repo-specific webhook endpoint path |
 
 ### GitHub Webhook
 
 Configure a webhook on the repository:
 
-- **Payload URL:** `http://your-host:8790/webhooks/github/queue`
+- **Payload URL:** the repo-specific URL printed by `merge-steward attach`, for example `https://queue.example.com/webhooks/github/queue/app`
 - **Content type:** `application/json`
-- **Secret:** same as `webhookSecret` in config
+- **Secret:** same as `MERGE_STEWARD_WEBHOOK_SECRET`
 - **Events:** Pull requests, Pull request reviews, Check suites, Pushes
 
 ### Running
 
 ```bash
-# Build
-npm run build -w merge-steward
+# Happy path
+merge-steward init https://queue.example.com
+merge-steward attach app owner/repo --base-branch main --required-check test,lint
+merge-steward doctor --repo app
+merge-steward service status app
+merge-steward queue status --repo app
+merge-steward queue show --repo app --pr 123
 
-# Start
-MERGE_STEWARD_CONFIG=config/steward.json merge-steward serve
-
-# Or with --config flag
-merge-steward serve --config config/steward.json
+# Manual foreground start
+merge-steward serve --repo app
 
 # Live queue watch TUI
-merge-steward watch --config config/steward.json
+merge-steward queue watch --repo app
 ```
 
 ### Watch TUI
 
-`merge-steward watch` gives you a terminal view of the queue:
+`merge-steward queue watch --repo <id>` gives you a terminal view of the queue:
 
 - which PRs are currently queued
 - which PR is head-of-line
@@ -111,12 +164,17 @@ Controls:
 
 ```ini
 [Unit]
-Description=merge-steward
-After=network.target
+Description=merge-steward (%i)
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/env merge-steward serve --config /etc/merge-steward/steward.json
+EnvironmentFile=-/home/your-user/.config/merge-steward/runtime.env
+EnvironmentFile=-/home/your-user/.config/merge-steward/service.env
+LoadCredentialEncrypted=merge-steward-webhook-secret
+LoadCredentialEncrypted=merge-steward-github-token
+ExecStart=/usr/bin/env merge-steward serve --repo %i
 Restart=on-failure
 RestartSec=5s
 
@@ -167,24 +225,22 @@ The steward and PatchRelay are independent services that communicate through Git
 
 Neither service calls the other's API. GitHub is the shared bus.
 
-## Current scope (Phase 1)
-
-This is a **serial merge queue**. One PR is processed at a time.
+## Current scope
 
 What's implemented:
-- Serial queue: rebase → CI → merge, one head at a time
-- Non-spinning conflict retry: gated on base SHA change (won't rebase repeatedly against the same broken base)
+- **Speculative execution**: cumulative branches (`main+A`, `main+A+B`, `main+A+B+C`) tested in parallel. Configurable depth (default 3, set `speculativeDepth: 1` for serial mode).
+- **Speculative consistency**: when head merges, downstream entries that already passed don't re-test.
+- **Cascade invalidation**: when mid-chain entry fails, downstream speculative branches are rebuilt without it.
+- Non-spinning conflict retry: gated on base SHA change
 - Flaky CI retry budget (separate from retry budget)
 - Revalidation before merge (approval, SHA, external merge)
 - Durable incident records on eviction
 - GitHub check run as eviction signal
 - Label-based admission and re-admission
+- Structured reconciler event stream for observability
 
-What's deliberately not built yet (Phase 2/3 in the [design doc](../../docs/design-docs/merge-steward.md)):
-- Speculative execution (cumulative branches `main+A+B+C` tested in parallel)
+What's not built yet (see [design doc](../../docs/design-docs/merge-steward.md)):
 - Binary bisection on batch failure
 - File-path conflict detection for parallel lanes
 - Flaky test learning (only retry budget, no historical analysis)
 - Priority reordering after enqueue
-
-The serial queue is correct for usertold's scale (5-20 PRs/day). Speculative execution is a throughput optimization for higher volumes.

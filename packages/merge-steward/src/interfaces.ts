@@ -12,7 +12,7 @@ export interface GitOperations {
 }
 
 /**
- * Builds and manages speculative cumulative branches for Phase 2.
+ * Builds and manages speculative cumulative branches.
  * Separate from GitOperations to keep the core interface minimal.
  */
 export interface SpeculativeBranchBuilder {

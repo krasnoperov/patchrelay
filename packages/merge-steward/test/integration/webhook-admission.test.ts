@@ -52,6 +52,7 @@ describe("webhook admission integration", () => {
       new CISim(() => "pass") as any,
       githubSim,
       evictionSim,
+      null, // specBuilder
       logger,
     );
 
@@ -148,6 +149,7 @@ describe("webhook admission integration", () => {
       new CISim(() => "pass") as any,
       new GitHubSim(),
       new EvictionReporterSim(),
+      null, // specBuilder
       logger,
     );
 
@@ -182,6 +184,7 @@ describe("webhook admission integration", () => {
       new CISim(() => "pass") as any,
       githubSim,
       new EvictionReporterSim(),
+      null, // specBuilder
       logger,
     );
 
@@ -227,6 +230,7 @@ describe("webhook admission integration", () => {
       new CISim(() => "pass") as any,
       githubSim,
       new EvictionReporterSim(),
+      null, // specBuilder
       logger,
     );
 
@@ -296,6 +300,7 @@ describe("webhook admission integration", () => {
       new CISim(() => "pass") as any,
       new GitHubSim(),
       new EvictionReporterSim(),
+      null, // specBuilder
       logger,
     );
 

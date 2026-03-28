@@ -35,6 +35,7 @@ export class MergeStewardService {
     private readonly ci: CIRunner,
     private readonly github: GitHubPRApi,
     private readonly eviction: EvictionReporter,
+    private readonly specBuilder: import("./interfaces.ts").SpeculativeBranchBuilder | null,
     private readonly logger: Logger,
   ) {
     const existing = store.listAll(config.repoId);
@@ -267,7 +268,7 @@ export class MergeStewardService {
         git: this.git,
         ci: this.ci,
         github: this.github,
-        specBuilder: null, // TODO: wire real SpeculativeBranchBuilder for Phase 2
+        specBuilder: this.specBuilder,
         speculativeDepth: this.config.speculativeDepth,
         eviction: this.eviction,
         flakyRetries: this.config.flakyRetries,

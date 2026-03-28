@@ -1,12 +1,12 @@
-import type { GitOperations } from "../interfaces.ts";
-import type { RebaseResult } from "../types.ts";
+import type { GitOperations, SpeculativeBranchBuilder } from "../interfaces.ts";
+import type { MergeResult, RebaseResult } from "../types.ts";
 import { exec } from "../exec.ts";
 
 /**
  * Real git operations via shell git binary. Operates in the steward's
  * own local clone. The clone path is set at construction time.
  */
-export class ShellGitOperations implements GitOperations {
+export class ShellGitOperations implements GitOperations, SpeculativeBranchBuilder {
   constructor(
     private readonly clonePath: string,
     private readonly gitBin: string = "git",
@@ -54,4 +54,29 @@ export class ShellGitOperations implements GitOperations {
     await this.git(args, { timeoutMs: 60_000 });
   }
 
+  // ─── SpeculativeBranchBuilder ───────────────────────────────
+
+  async buildSpeculative(prBranch: string, baseBranch: string, specName: string): Promise<MergeResult> {
+    // Delete existing spec branch if any.
+    await this.git(["branch", "-D", specName], { allowNonZero: true });
+
+    // Create spec branch from base.
+    await this.git(["checkout", "-B", specName, baseBranch]);
+
+    // Merge the PR branch into it.
+    const result = await this.git(["merge", "--no-ff", prBranch], { allowNonZero: true });
+    if (result.exitCode !== 0) {
+      await this.git(["merge", "--abort"], { allowNonZero: true });
+      await this.git(["checkout", "-"], { allowNonZero: true });
+      return { success: false };
+    }
+
+    const sha = (await this.git(["rev-parse", "HEAD"])).stdout.trim();
+    await this.git(["checkout", "-"], { allowNonZero: true });
+    return { success: true, sha };
+  }
+
+  async deleteSpeculative(specName: string): Promise<void> {
+    await this.git(["branch", "-D", specName], { allowNonZero: true });
+  }
 }

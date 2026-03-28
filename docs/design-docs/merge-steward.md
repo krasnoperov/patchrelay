@@ -136,31 +136,28 @@ This phase delivers the main operational win:
 
 **Status: shipped.** See `packages/merge-steward/` for the implementation.
 
-## Phase 2: Speculative Validation
+## Speculative Validation
 
-Once the serial steward is stable, add speculative cumulative branches:
+**Status: shipped.** Configurable via `speculativeDepth` (default 3, set to 1 for serial mode).
+
+The steward builds cumulative speculative branches:
 
 ```text
-main + A
-main + A + B
-main + A + B + C
+main + A         → CI in parallel
+main + A + B     → CI in parallel
+main + A + B + C → CI in parallel
 ```
 
-The purpose of these branches is validation, not authorship.
-They are temporary queue artifacts that let the steward learn whether downstream items are likely to pass after upstream merges.
+These branches are validation artifacts, not authorship. The actual merge uses `gh pr merge` on the real PR branch. Speculative consistency: when head A merges, downstream B's speculative result (which included A) is still valid — B merges without re-testing.
 
-Important rule:
+Cascade invalidation: when mid-chain entry B is evicted, downstream C's speculative branch is rebuilt without B.
 
-- do not rely on merging the speculative branch itself as the repository-facing source of truth
+## Future: Bisection And Independent Lanes
 
-The default landing path should still be to merge the actual queued PR at the head once its validated state is satisfied.
+Not yet implemented:
 
-## Phase 3: Failure Isolation And Independent Lanes
-
-After speculative validation works reliably:
-
-- use binary bisection for failing cumulative batches
-- optionally add file-path or target-based conflict lanes for independent PRs
+- Binary bisection for failing cumulative batches (isolate failure in O(log n) runs)
+- File-path conflict lanes for independent PRs (parallel lanes for non-overlapping changes)
 
 Until then, one queue lane per repository is the default.
 
@@ -183,7 +180,7 @@ The incident context (`EvictionContext`) includes:
 - `baseSha`, `prHeadSha`, `queuePosition`
 - `retryHistory`: previous retry attempts
 
-Phase 2 may enrich this with `baselineTestResults` (main's check state) and `compoundDiff` / `isolatedDiff` (when speculative branches exist). Phase 1 does not have these because there are no compound branches.
+Future enrichment: `baselineTestResults` (main's check state) and `compoundDiff` / `isolatedDiff` for speculative failure diagnosis.
 
 ## Data Model
 

@@ -33,10 +33,13 @@ export async function startServer(configPath?: string): Promise<void> {
     config.repoFullName,
     config.server.bind,
     config.server.port,
+    config.server.publicBaseUrl,
   );
 
+  const specBuilder = config.speculativeDepth > 1 ? git : null;
+
   const service = new MergeStewardService(
-    config, store, git, ci, github, eviction, logger,
+    config, store, git, ci, github, eviction, specBuilder, logger,
   );
 
   const app = await buildHttpServer(service, config, logger);
