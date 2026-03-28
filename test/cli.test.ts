@@ -1396,7 +1396,7 @@ test("cli attach appends a minimal repo to config", async () => {
           0,
         );
         assert.match(attachOut.read(), /Attached repo usertold/);
-        assert.match(attachOut.read(), /Repo attached and PatchRelay was reloaded|Linear auth was skipped:/);
+        assert.match(attachOut.read(), /Repo attached and PatchRelay was reloaded|Linear auth was skipped/);
 
         const configPath = path.join(configHome, "patchrelay", "patchrelay.json");
         const configContents = readFileSync(configPath, "utf8");
