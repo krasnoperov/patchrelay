@@ -19,7 +19,9 @@ export function runMigrations(connection: DatabaseConnection): void {
       max_retries INTEGER NOT NULL DEFAULT 3,
       last_failed_base_sha TEXT,
       issue_key TEXT,
-
+      spec_branch TEXT,
+      spec_sha TEXT,
+      spec_based_on TEXT,
       enqueued_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     )

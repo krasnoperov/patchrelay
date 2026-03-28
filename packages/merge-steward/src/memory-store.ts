@@ -63,6 +63,7 @@ export class MemoryStore implements QueueStore {
     entryId: string,
     to: QueueEntryStatus,
     patch?: Partial<Pick<QueueEntry, "headSha" | "baseSha" | "ciRunId" | "ciRetries" | "retryAttempts" | "lastFailedBaseSha" | "specBranch" | "specSha" | "specBasedOn">>,
+    detail?: string,
   ): void {
     const entry = this.entries.get(entryId);
     if (!entry) return;
@@ -80,7 +81,7 @@ export class MemoryStore implements QueueStore {
       if (patch.specSha !== undefined) entry.specSha = patch.specSha;
       if (patch.specBasedOn !== undefined) entry.specBasedOn = patch.specBasedOn;
     }
-    this.appendEvent(entryId, from, to);
+    this.appendEvent(entryId, from, to, detail);
   }
 
   dequeue(entryId: string): void {

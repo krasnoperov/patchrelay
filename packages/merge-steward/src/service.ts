@@ -271,16 +271,17 @@ export class MergeStewardService {
         eviction: this.eviction,
         flakyRetries: this.config.flakyRetries,
         mergeMethod: this.config.mergeMethod,
-        onMerged: (prNumber) => {
-          this.logger.info({ prNumber }, "PR merged via queue");
-        },
-        onEvicted: (prNumber, context) => {
-          this.logger.warn({ prNumber, failureClass: context.failureClass }, "PR evicted from queue");
-        },
-        onMainBroken: () => {
-          if (!this.mainBrokenReported) {
+        onEvent: (event) => {
+          const isWarn = event.action === "evicted" || event.action === "rebase_conflict"
+            || event.action === "spec_build_conflict" || event.action === "ci_failed"
+            || event.action === "merge_rejected" || event.action === "budget_exhausted";
+          const isDebug = event.action === "ci_pending" || event.action === "retry_gated"
+            || event.action === "fetch_started";
+          const level = isWarn ? "warn" : isDebug ? "debug" : "info";
+          this.logger[level]({ ...event }, `Queue: ${event.action} PR #${event.prNumber}`);
+
+          if (event.action === "main_broken" && !this.mainBrokenReported) {
             this.mainBrokenReported = true;
-            this.logger.warn("Main branch CI is failing — queue paused");
           }
         },
       });
@@ -313,7 +314,7 @@ function matchGlob(pattern: string, value: string): boolean {
   return regex.test(value);
 }
 
-function buildSummary(entries: QueueEntry[]): QueueStatusSummary {
+export function buildSummary(entries: QueueEntry[]): QueueStatusSummary {
   const summary: QueueStatusSummary = {
     total: entries.length,
     active: 0,

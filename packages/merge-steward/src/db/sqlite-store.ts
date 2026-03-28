@@ -163,7 +163,8 @@ export class SqliteStore implements QueueStore {
   transition(
     entryId: string,
     to: QueueEntryStatus,
-    patch?: Partial<Pick<QueueEntry, "headSha" | "baseSha" | "ciRunId" | "ciRetries" | "retryAttempts" | "lastFailedBaseSha">>,
+    patch?: Partial<Pick<QueueEntry, "headSha" | "baseSha" | "ciRunId" | "ciRetries" | "retryAttempts" | "lastFailedBaseSha" | "specBranch" | "specSha" | "specBasedOn">>,
+    detail?: string,
   ): void {
     this.conn.transaction(() => {
       const current = this.conn.prepare("SELECT status FROM queue_entries WHERE id = ?").get(entryId);
@@ -178,11 +179,14 @@ export class SqliteStore implements QueueStore {
       if (patch?.ciRetries !== undefined) { sets.push("ci_retries = ?"); values.push(patch.ciRetries); }
       if (patch?.retryAttempts !== undefined) { sets.push("retry_attempts = ?"); values.push(patch.retryAttempts); }
       if (patch?.lastFailedBaseSha !== undefined) { sets.push("last_failed_base_sha = ?"); values.push(patch.lastFailedBaseSha); }
+      if (patch?.specBranch !== undefined) { sets.push("spec_branch = ?"); values.push(patch.specBranch); }
+      if (patch?.specSha !== undefined) { sets.push("spec_sha = ?"); values.push(patch.specSha); }
+      if (patch?.specBasedOn !== undefined) { sets.push("spec_based_on = ?"); values.push(patch.specBasedOn); }
 
       this.conn.prepare(
         `UPDATE queue_entries SET ${sets.join(", ")} WHERE id = ?`,
       ).run(...values, entryId);
-      this.writeEvent(entryId, from, to);
+      this.writeEvent(entryId, from, to, detail);
     })();
   }
 

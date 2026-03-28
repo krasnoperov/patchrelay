@@ -27,6 +27,7 @@ export interface QueueStore {
     patch?: Partial<Pick<QueueEntry,
       "headSha" | "baseSha" | "ciRunId" | "ciRetries" | "retryAttempts" | "lastFailedBaseSha" | "specBranch" | "specSha" | "specBasedOn"
     >>,
+    detail?: string,
   ): void;
   dequeue(entryId: string): void;
   updateHead(entryId: string, newHeadSha: string): void;

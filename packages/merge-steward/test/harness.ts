@@ -5,7 +5,7 @@ import { GitHubSim, EvictionReporterSim } from "../src/sim/github-sim.ts";
 import { MemoryStore } from "../src/memory-store.ts";
 import { reconcile } from "../src/reconciler.ts";
 import type { ReconcileContext } from "../src/reconciler.ts";
-import type { QueueEntry, QueueEntryStatus, EvictionContext } from "../src/types.ts";
+import type { QueueEntry, QueueEntryStatus, ReconcileEvent } from "../src/types.ts";
 import { TERMINAL_STATUSES } from "../src/types.ts";
 import { assertInvariants } from "./invariants.ts";
 
@@ -32,6 +32,7 @@ export class Harness {
 
   readonly allEntryIds: Set<string> = new Set();
   readonly mergedPRs: number[] = [];
+  readonly reconcileEvents: ReconcileEvent[] = [];
   mainGreen = true;
 
   private readonly baseBranch: string;
@@ -254,12 +255,14 @@ export class Harness {
       speculativeDepth: this.speculativeDepth,
       flakyRetries: this.flakyRetries,
       mergeMethod: "merge",
-      onMerged: (prNumber: number) => {
-        this.mergedPRs.push(prNumber);
-      },
-      onEvicted: (_prNumber: number, _context: EvictionContext) => {},
-      onMainBroken: () => {
-        this.mainGreen = false;
+      onEvent: (event: ReconcileEvent) => {
+        this.reconcileEvents.push(event);
+        if (event.action === "merge_succeeded" || event.action === "merge_external") {
+          this.mergedPRs.push(event.prNumber);
+        }
+        if (event.action === "main_broken") {
+          this.mainGreen = false;
+        }
       },
     };
   }

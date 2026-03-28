@@ -179,3 +179,44 @@ export interface QueueConfig {
   pollIntervalMs: number;
   requiredChecks: string[];
 }
+
+// ─── Reconciler Event Stream ────────────────────────────────────
+
+export type ReconcileAction =
+  | "promoted"             // queued → preparing_head
+  | "fetch_started"
+  | "main_broken"
+  | "branch_mismatch"     // external push detected
+  | "rebase_started"
+  | "rebase_succeeded"
+  | "rebase_conflict"
+  | "spec_build_started"
+  | "spec_build_succeeded"
+  | "spec_build_conflict"
+  | "ci_triggered"
+  | "ci_pending"
+  | "ci_passed"
+  | "ci_failed"
+  | "ci_flaky_retry"
+  | "merge_revalidating"
+  | "merge_succeeded"
+  | "merge_rejected"
+  | "merge_external"      // already merged outside queue
+  | "evicted"
+  | "invalidated"         // downstream entry reset due to base change
+  | "retry_gated"         // non-spinning, waiting for base change
+  | "budget_exhausted";
+
+export interface ReconcileEvent {
+  at: string;
+  entryId: string;
+  prNumber: number;
+  action: ReconcileAction;
+  detail?: string | undefined;
+  specBranch?: string | undefined;
+  baseSha?: string | undefined;
+  ciRunId?: string | undefined;
+  conflictFiles?: string[] | undefined;
+  failureClass?: string | undefined;
+  dependsOn?: string | undefined;
+}
