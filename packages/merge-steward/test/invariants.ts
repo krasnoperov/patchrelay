@@ -71,12 +71,15 @@ function assertNoLoss(entries: QueueEntry[], allEntryIds: Set<string>): void {
   }
 }
 
+/**
+ * 4. Single merge head: at most one entry in merging at a time.
+ * Multiple entries CAN be in preparing_head/validating (speculative execution).
+ */
 function assertSingleHead(entries: QueueEntry[]): void {
-  const headStatuses: QueueEntryStatus[] = ["preparing_head", "validating", "merging"];
-  const heads = entries.filter((e) => headStatuses.includes(e.status));
+  const merging = entries.filter((e) => e.status === "merging");
   assert.ok(
-    heads.length <= 1,
-    `Multiple heads active: ${heads.map((h) => `PR #${h.prNumber} (${h.status})`).join(", ")}`,
+    merging.length <= 1,
+    `Multiple entries merging: ${merging.map((h) => `PR #${h.prNumber}`).join(", ")}`,
   );
 }
 
