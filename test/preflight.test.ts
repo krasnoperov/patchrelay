@@ -133,7 +133,7 @@ test("runPreflight warns when no projects are configured yet", async () => {
     assert.equal(report.ok, true);
     assert.ok(
       report.checks.some(
-        (check) => check.scope === "projects" && check.status === "warn" && check.message.includes("No projects are configured yet"),
+        (check) => check.scope === "projects" && check.status === "warn" && check.message.includes("No repos are configured yet"),
       ),
     );
   } finally {

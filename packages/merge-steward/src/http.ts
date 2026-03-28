@@ -62,6 +62,7 @@ export async function buildHttpServer(
       admissionLabel: config.admissionLabel,
       baseBranch: config.baseBranch,
       repoFullName: config.repoFullName,
+      github: service.githubApi,
     }, logger);
 
     return { ok: true };

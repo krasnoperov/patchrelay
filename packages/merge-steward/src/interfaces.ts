@@ -44,6 +44,8 @@ export interface GitHubPRApi {
   listChecks(prNumber: number): Promise<CheckResult[]>;
   listChecksForRef(ref: string): Promise<CheckResult[]>;
   listLabels(prNumber: number): Promise<string[]>;
+  /** Find the open PR number for a branch, or null if none exists. */
+  findPRByBranch(branch: string): Promise<number | null>;
 }
 
 /**

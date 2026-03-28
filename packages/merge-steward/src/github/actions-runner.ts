@@ -46,7 +46,7 @@ export class GitHubActionsRunner implements CIRunner {
       if (relevant.length === 0) return "pending";
 
       if (relevant.some((c) => c.status !== "completed")) return "pending";
-      if (relevant.some((c) => c.conclusion === "failure" || c.conclusion === "timed_out" || c.conclusion === "cancelled")) return "fail";
+      if (relevant.some((c) => c.conclusion === "failure" || c.conclusion === "cancelled" || c.conclusion === "timed_out")) return "fail";
 
       return "pass";
     } catch {

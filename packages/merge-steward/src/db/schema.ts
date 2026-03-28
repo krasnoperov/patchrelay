@@ -1,6 +1,10 @@
 import type { DatabaseConnection } from "./shared.ts";
 
-export function runMigrations(connection: DatabaseConnection): void {
+/**
+ * Create the steward's SQLite schema. Idempotent — safe to call on every startup.
+ * No migration path: this is the final shape. There are no legacy installations.
+ */
+export function ensureSchema(connection: DatabaseConnection): void {
   connection.exec(`
     CREATE TABLE IF NOT EXISTS queue_entries (
       id TEXT PRIMARY KEY,
@@ -45,7 +49,8 @@ export function runMigrations(connection: DatabaseConnection): void {
       at TEXT NOT NULL,
       from_status TEXT,
       to_status TEXT NOT NULL,
-      detail TEXT
+      detail TEXT,
+      base_sha TEXT
     )
   `);
 

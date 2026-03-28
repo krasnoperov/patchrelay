@@ -53,12 +53,7 @@ export type FailureClass =
   | "integration_conflict"
   | "policy_blocked";
 
-export type CheckConclusion =
-  | "success"
-  | "failure"
-  | "timed_out"
-  | "cancelled"
-  | "pending";
+export type CheckConclusion = "success" | "failure" | "pending";
 
 export interface CheckResult {
   name: string;
@@ -102,6 +97,8 @@ export interface QueueEventRecord {
   fromStatus: QueueEntryStatus | null;
   toStatus: QueueEntryStatus;
   detail?: string | undefined;
+  /** Snapshot of entry.baseSha at transition time. */
+  baseSha?: string | undefined;
 }
 
 export interface QueueEventSummary extends QueueEventRecord {

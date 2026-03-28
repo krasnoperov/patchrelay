@@ -29,7 +29,7 @@ Important implementation details in the current code:
 
 - speculative execution is available in the standalone steward server path when `speculativeDepth > 1`
 - the real git path uses `git rebase` directly in a mutable clone
-- the steward merges through `gh pr merge` with either `merge` or `squash`
+- the steward merges through `gh pr merge --merge` (merge-only — squash was removed)
 - PatchRelay repairs queue evictions by starting a `queue_repair` run after the steward check run fails
 
 ## External Guidance
@@ -102,14 +102,14 @@ Why:
 
 Recommended default merge method: `merge`.
 
-Why `merge` fits PatchRelay better than `squash` as the default:
+Why `merge` is the only method for this delivery model:
 
 - one issue branch maps cleanly to one integration event
 - first-parent history stays easy to audit
 - merge commits work naturally with `--diff-merges=first-parent` and `--diff-merges=remerge`
 - queue incidents and later reverts can point at an explicit landing commit
 
-`squash` should remain a supported repo policy, but it is a policy override rather than the ideal default for this factory model.
+Squash was removed from the steward. Merge commits are the only delivery method — this simplifies history, enables cherry-picking for repairs, and avoids false conflicts on rebase.
 
 ### 4. Standardize Diff Modes For Humans And Agents
 
@@ -175,7 +175,7 @@ In practice:
 
 ### Docs Gaps
 
-1. The docs do not yet define a preferred merge method for the delivery model, even though the implementation already exposes `merge` vs `squash`.
+1. ~~The docs do not yet define a preferred merge method~~ — resolved: merge-only, squash removed.
 2. The docs describe queue eviction context at a high level, but they do not define the minimum evidence package needed for semantic conflicts.
 3. The docs do not standardize operator diff views such as first-parent, remerge-diff, and range-diff.
 4. The docs should say explicitly that speculative validation is available only when the steward server is configured with `speculativeDepth > 1`.
@@ -184,7 +184,7 @@ In practice:
 
 1. The steward performs a mutable `git rebase` immediately instead of first using `git merge-tree` to classify conflicts without touching the checkout.
 2. Merge revalidation does not re-check the current base SHA before merging; it only re-checks PR approval, merge state, and head SHA.
-3. CI failure classification currently calls `classifyFailure(branchChecks, [])`, so production never supplies a real main-branch baseline during eviction.
+3. ~~CI failure classification currently calls `classifyFailure(branchChecks, [])`~~ — resolved: `listChecksForRef` queries main baseline.
 4. Eviction context is too thin for semantic conflicts. It does not currently include refreshed head SHA, merge-tree conflict type, diff summary, or a bounded semantic-repair hint.
 5. PatchRelay queue-repair prompts currently say "rebase onto latest main and fix conflicts," but they do not pass through the steward's structured incident JSON for richer repair behavior.
 6. PatchRelay adds the queue label in two places. The duplication is survivable and mostly idempotent, but it still makes admission behavior less explicit than it could be.
@@ -202,7 +202,7 @@ In practice:
 ### Docs First
 
 1. Update merge-steward docs to state clearly that Phase 1 production is serial-only and that `speculativeDepth` is inactive until a real speculative builder ships.
-2. Document the recommended default merge method as `merge`, with `squash` as a repo-policy override.
+2. ~~Document the recommended default merge method~~ — resolved: merge-only, squash removed from steward.
 3. Add an explicit "semantic conflict" incident contract: required evidence, retry budget, and escalation threshold.
 4. Document standard operator diff commands for landed merges, repaired rebases, and suspicious queue outcomes.
 

@@ -10,7 +10,7 @@ import type {
 import { TERMINAL_STATUSES } from "../types.ts";
 import type { DatabaseConnection } from "./shared.ts";
 import { SqliteConnection, isoNow } from "./shared.ts";
-import { runMigrations } from "./migrations.ts";
+import { ensureSchema } from "./schema.ts";
 
 function mapEntry(row: Record<string, unknown>): QueueEntry {
   return {
@@ -57,6 +57,7 @@ function mapEvent(row: Record<string, unknown>): QueueEventRecord {
     fromStatus: row.from_status === null ? null : (String(row.from_status) as QueueEntryStatus),
     toStatus: String(row.to_status) as QueueEntryStatus,
     detail: row.detail === null ? undefined : String(row.detail),
+    baseSha: row.base_sha === null || row.base_sha === undefined ? undefined : String(row.base_sha),
   };
 }
 
@@ -91,7 +92,7 @@ export class SqliteStore implements QueueStore {
       this.conn = pathOrConnection;
       this.ownsConnection = false;
     }
-    runMigrations(this.conn);
+    ensureSchema(this.conn);
   }
 
   close(): void {
@@ -280,9 +281,11 @@ export class SqliteStore implements QueueStore {
     toStatus: QueueEntryStatus,
     detail?: string,
   ): void {
+    const entry = this.conn.prepare("SELECT base_sha FROM queue_entries WHERE id = ?").get(entryId);
+    const baseSha = entry ? (entry.base_sha as string) || null : null;
     this.conn.prepare(
-      `INSERT INTO queue_events (entry_id, at, from_status, to_status, detail)
-       VALUES (?, ?, ?, ?, ?)`,
-    ).run(entryId, isoNow(), fromStatus, toStatus, detail ?? null);
+      `INSERT INTO queue_events (entry_id, at, from_status, to_status, detail, base_sha)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(entryId, isoNow(), fromStatus, toStatus, detail ?? null, baseSha);
   }
 }

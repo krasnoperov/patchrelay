@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { Logger } from "pino";
 import type { MergeStewardService } from "./service.ts";
+import type { GitHubPRApi } from "./interfaces.ts";
 
 /**
  * Normalized webhook event — the subset the steward cares about.
@@ -118,7 +119,7 @@ export function normalizeWebhook(
 export async function processWebhookEvent(
   event: StewardWebhookEvent,
   service: MergeStewardService,
-  config: { admissionLabel: string; baseBranch: string; repoFullName: string },
+  config: { admissionLabel: string; baseBranch: string; repoFullName: string; github?: GitHubPRApi },
   logger: Logger,
 ): Promise<void> {
   switch (event.type) {
@@ -160,9 +161,14 @@ export async function processWebhookEvent(
     }
 
     case "check_suite_completed": {
-      if (event.conclusion === "success" && event.prNumber) {
-        logger.info({ prNumber: event.prNumber, branch: event.branch }, "Check suite passed, checking admission");
-        await service.tryAdmit(event.prNumber, event.branch, event.headSha);
+      if (event.conclusion !== "success") break;
+      let prNumber = event.prNumber;
+      if (!prNumber && event.branch && config.github) {
+        prNumber = await config.github.findPRByBranch(event.branch);
+      }
+      if (prNumber) {
+        logger.info({ prNumber, branch: event.branch }, "Check suite passed, checking admission");
+        await service.tryAdmit(prNumber, event.branch, event.headSha);
       }
       break;
     }

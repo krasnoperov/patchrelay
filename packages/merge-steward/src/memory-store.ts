@@ -151,6 +151,7 @@ export class MemoryStore implements QueueStore {
     toStatus: QueueEntryStatus,
     detail?: string,
   ): void {
+    const entry = this.entries.get(entryId);
     this.events.push({
       id: this.nextEventId++,
       entryId,
@@ -158,6 +159,7 @@ export class MemoryStore implements QueueStore {
       fromStatus,
       toStatus,
       detail,
+      baseSha: entry?.baseSha || undefined,
     });
   }
 }

@@ -46,6 +46,11 @@ export class MergeStewardService {
     }
   }
 
+  /** Expose the GitHub client for webhook handler branch→PR lookups. */
+  get githubApi(): GitHubPRApi {
+    return this.github;
+  }
+
   start(): void {
     this.logger.info({ pollIntervalMs: this.config.pollIntervalMs }, "Steward service starting");
     this.scheduleNextTick();

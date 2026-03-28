@@ -45,7 +45,7 @@ export class GitHubPRClient implements GitHubPRApi {
     const result = await exec("gh", [
       "pr", "checks", String(prNumber),
       "--repo", this.repoFullName,
-      "--json", "name,conclusion,detailsUrl",
+      "--json", "name,bucket,link",
     ], { allowNonZero: true });
 
     if (result.exitCode !== 0) return [];
@@ -53,14 +53,14 @@ export class GitHubPRClient implements GitHubPRApi {
     try {
       const checks = JSON.parse(result.stdout) as Array<{
         name: string;
-        conclusion: string;
-        detailsUrl?: string;
+        bucket: string;
+        link?: string;
       }>;
 
       return checks.map((c) => ({
         name: c.name,
-        conclusion: mapConclusion(c.conclusion),
-        url: c.detailsUrl,
+        conclusion: mapBucket(c.bucket),
+        url: c.link,
       }));
     } catch {
       return [];
@@ -68,9 +68,11 @@ export class GitHubPRClient implements GitHubPRApi {
   }
 
   async listChecksForRef(ref: string): Promise<CheckResult[]> {
+    // Callers pass remote-tracking refs like "origin/main"; the API needs "main" or a SHA.
+    const apiRef = ref.replace(/^origin\//, "");
     const result = await exec("gh", [
       "api",
-      `repos/${this.repoFullName}/commits/${ref}/check-runs`,
+      `repos/${this.repoFullName}/commits/${apiRef}/check-runs`,
       "--jq", ".check_runs",
     ], { allowNonZero: true });
 
@@ -85,10 +87,30 @@ export class GitHubPRClient implements GitHubPRApi {
         .filter((c) => c.conclusion !== null)
         .map((c) => ({
           name: c.name,
-          conclusion: mapConclusion(c.conclusion!),
+          conclusion: mapRestConclusion(c.conclusion!),
         }));
     } catch {
       return [];
+    }
+  }
+
+  async findPRByBranch(branch: string): Promise<number | null> {
+    const result = await exec("gh", [
+      "pr", "list",
+      "--repo", this.repoFullName,
+      "--head", branch,
+      "--state", "open",
+      "--json", "number",
+      "--limit", "1",
+    ], { allowNonZero: true });
+
+    if (result.exitCode !== 0) return null;
+
+    try {
+      const prs = JSON.parse(result.stdout) as Array<{ number: number }>;
+      return prs[0]?.number ?? null;
+    } catch {
+      return null;
     }
   }
 
@@ -112,12 +134,21 @@ export class GitHubPRClient implements GitHubPRApi {
   }
 }
 
-function mapConclusion(gh: string): CheckResult["conclusion"] {
-  switch (gh) {
-    case "SUCCESS": return "success";
-    case "FAILURE": return "failure";
-    case "TIMED_OUT": return "timed_out";
-    case "CANCELLED": return "cancelled";
+/** Map gh pr checks bucket field (pass/fail/pending/skipping) to our union. */
+function mapBucket(bucket: string): CheckResult["conclusion"] {
+  switch (bucket) {
+    case "pass": return "success";
+    case "fail": return "failure";
+    default: return "pending";
+  }
+}
+
+/** Map GitHub REST API check-run conclusion (lowercase) to our union. */
+function mapRestConclusion(conclusion: string): CheckResult["conclusion"] {
+  switch (conclusion) {
+    case "success": case "neutral": case "skipped": return "success";
+    case "failure": case "cancelled": case "timed_out":
+    case "stale": case "action_required": return "failure";
     default: return "pending";
   }
 }

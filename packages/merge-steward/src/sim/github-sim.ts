@@ -89,7 +89,16 @@ export class GitHubSim implements GitHubPRApi {
   }
 
   async listChecksForRef(ref: string): Promise<CheckResult[]> {
-    return this.refChecks.get(ref) ?? [];
+    // Strip origin/ prefix — matches production client behavior.
+    const normalized = ref.replace(/^origin\//, "");
+    return this.refChecks.get(normalized) ?? [];
+  }
+
+  async findPRByBranch(branch: string): Promise<number | null> {
+    for (const pr of this.prs.values()) {
+      if (pr.branch === branch && !pr.merged) return pr.number;
+    }
+    return null;
   }
 
   async listLabels(prNumber: number): Promise<string[]> {

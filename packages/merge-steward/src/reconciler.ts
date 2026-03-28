@@ -8,7 +8,7 @@ import { randomUUID } from "node:crypto";
 // ─── Constants ──────────────────────────────────────────────────
 
 const SPEC_BRANCH_PREFIX = "mq-spec-";
-const FAILED_CONCLUSIONS = new Set(["failure", "timed_out", "cancelled"]);
+const FAILED_CONCLUSIONS = new Set<string>(["failure"]);
 const CLEAN_SPEC = { specBranch: null, specSha: null, specBasedOn: null } as const;
 const CLEAN_CI = { ciRunId: null, ciRetries: 0 } as const;
 
@@ -388,16 +388,17 @@ async function evictEntry(
     try { baseSha = await ctx.git.headSha(ref(ctx, ctx.baseBranch)); } catch { baseSha = "unknown"; }
   }
 
-  // Build retry history from queue events.
+  // Build retry history from queue events (each event snapshots baseSha at transition time).
   const events = ctx.store.listEvents(entry.id);
   const retryHistory: EvictionContext["retryHistory"] = [];
   for (const event of events) {
+    const eventBaseSha = event.baseSha || "unknown";
     if (event.fromStatus === "preparing_head" && event.toStatus === "validating") {
-      retryHistory.push({ at: event.at, baseSha: entry.baseSha || "unknown", outcome: "passed_to_validation" });
+      retryHistory.push({ at: event.at, baseSha: eventBaseSha, outcome: "passed_to_validation" });
     } else if (event.fromStatus === "validating" && event.toStatus === "preparing_head") {
-      retryHistory.push({ at: event.at, baseSha: entry.baseSha || "unknown", outcome: "ci_failed_retry" });
+      retryHistory.push({ at: event.at, baseSha: eventBaseSha, outcome: "ci_failed_retry" });
     } else if (event.fromStatus === "preparing_head" && event.toStatus === "preparing_head") {
-      retryHistory.push({ at: event.at, baseSha: entry.baseSha || "unknown", outcome: "conflict_retry" });
+      retryHistory.push({ at: event.at, baseSha: eventBaseSha, outcome: "conflict_retry" });
     }
   }
 
