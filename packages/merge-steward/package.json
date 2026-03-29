@@ -41,6 +41,6 @@
     "fast-check": "^4.6.0",
     "isomorphic-git": "^1.27.1",
     "memfs": "^4.17.0",
-    "typescript": "^6.0.2"
+    "typescript": "^5.8.3"
   }
 }
