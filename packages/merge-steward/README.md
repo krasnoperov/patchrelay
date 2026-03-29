@@ -239,7 +239,7 @@ What's implemented:
 - Label-based admission and re-admission
 - Structured reconciler event stream for observability
 
-What's not built yet (see [design doc](../../docs/design-docs/merge-steward.md)):
+What's not built yet (see [design doc](https://github.com/krasnoperov/patchrelay/blob/main/docs/design-docs/merge-steward.md)):
 - Binary bisection on batch failure
 - File-path conflict detection for parallel lanes
 - Flaky test learning (only retry budget, no historical analysis)
