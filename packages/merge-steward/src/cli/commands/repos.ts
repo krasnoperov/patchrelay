@@ -17,13 +17,14 @@ export async function handleRepos(parsed: ParsedArgs, stdout: Output): Promise<n
     writeOutput(
       stdout,
       repos
-        .map((repo) => `${repo.repoId}  ${repo.repoFullName}  base=${repo.baseBranch}  port=${repo.port}`)
+        .map((repo) => `${repo.repoId}  ${repo.repoFullName}  base=${repo.baseBranch}`)
         .join("\n") + "\n",
     );
     return 0;
   }
 
   const { configPath, config } = loadRepoConfigById(repoId);
+  const webhookUrl = buildWebhookUrl();
   const payload = {
     repoId: config.repoId,
     repoFullName: config.repoFullName,
@@ -33,10 +34,7 @@ export async function handleRepos(parsed: ParsedArgs, stdout: Output): Promise<n
     configPath,
     clonePath: config.clonePath,
     databasePath: config.database.path,
-    bind: config.server.bind,
-    port: config.server.port,
-    webhookPath: config.webhookPath,
-    ...(buildWebhookUrl(config) ? { webhookUrl: buildWebhookUrl(config) } : {}),
+    ...(webhookUrl ? { webhookUrl } : {}),
   };
   if (parsed.flags.get("json") === true) {
     writeOutput(stdout, formatJson(payload));
@@ -51,9 +49,7 @@ export async function handleRepos(parsed: ParsedArgs, stdout: Output): Promise<n
       `Base branch: ${config.baseBranch}`,
       `Required checks: ${config.requiredChecks.length > 0 ? config.requiredChecks.join(", ") : "(any green check)"}`,
       `Admission label: ${config.admissionLabel}`,
-      `Local address: http://${config.server.bind}:${config.server.port}`,
-      `Webhook path: ${config.webhookPath}`,
-      buildWebhookUrl(config) ? `Webhook URL: ${buildWebhookUrl(config)}` : undefined,
+      webhookUrl ? `Webhook URL: ${webhookUrl}` : undefined,
     ]
       .filter(Boolean)
       .join("\n") + "\n",

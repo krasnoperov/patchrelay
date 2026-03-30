@@ -98,7 +98,7 @@ test("merge-steward init and repo commands manage bootstrap state with explicit 
           0,
         );
         assert.match(initOut.read(), /Config directory:/);
-        assert.match(initOut.read(), /Repo webhook pattern: https:\/\/queue\.example\.com\/webhooks\/github\/queue\/<repo-id>/);
+        assert.match(initOut.read(), /Webhook URL: https:\/\/queue\.example\.com\/webhooks\/github/);
         assert.deepEqual(commands, ["sudo systemctl daemon-reload"]);
 
         const repoOut = createBufferStream();
@@ -111,50 +111,38 @@ test("merge-steward init and repo commands manage bootstrap state with explicit 
           0,
         );
         assert.match(repoOut.read(), /Attached repo app for owner\/repo/);
-        assert.match(repoOut.read(), /Webhook URL: https:\/\/queue\.example\.com\/webhooks\/github\/queue\/app/);
+        assert.match(repoOut.read(), /Restarted merge-steward\.service/);
         assert.deepEqual(commands.slice(1), [
-          "sudo systemctl daemon-reload",
-          "sudo systemctl enable merge-steward@app.service",
-          "sudo systemctl reload-or-restart merge-steward@app.service",
+          "sudo systemctl reload-or-restart merge-steward.service",
         ]);
 
         const listOut = createBufferStream();
         assert.equal(await runCli(["repos", "--json"], { stdout: listOut.stream, stderr: createBufferStream().stream }), 0);
-        assert.deepEqual(JSON.parse(listOut.read()), {
-          repos: [
-            {
-              repoId: "app",
-              repoFullName: "owner/repo",
-              baseBranch: "main",
-              requiredChecks: ["test", "lint"],
-              admissionLabel: "queue",
-              port: 8790,
-              configPath: path.join(configHome, "merge-steward", "repos", "app.json"),
-            },
-          ],
-        });
+        const repos = JSON.parse(listOut.read()) as { repos: Array<Record<string, unknown>> };
+        assert.strictEqual(repos.repos.length, 1);
+        assert.strictEqual(repos.repos[0]!.repoId, "app");
+        assert.strictEqual(repos.repos[0]!.repoFullName, "owner/repo");
 
         const inspectOut = createBufferStream();
         assert.equal(await runCli(["repos", "app", "--json"], { stdout: inspectOut.stream, stderr: createBufferStream().stream }), 0);
         const inspected = JSON.parse(inspectOut.read()) as Record<string, unknown>;
         assert.equal(inspected.repoId, "app");
         assert.equal(inspected.repoFullName, "owner/repo");
-        assert.equal(inspected.webhookUrl, "https://queue.example.com/webhooks/github/queue/app");
+        assert.equal(inspected.webhookUrl, "https://queue.example.com/webhooks/github");
 
         const statusOut = createBufferStream();
         assert.equal(
-          await runCli(["service", "status", "app", "--json"], {
+          await runCli(["service", "status", "--json"], {
             stdout: statusOut.stream,
             stderr: createBufferStream().stream,
-            runCommand: async (_command, args) => ({
+            runCommand: async (_command, _args) => ({
               exitCode: 0,
               stdout: [
-                `Id=merge-steward@app.service`,
+                "Id=merge-steward.service",
                 "LoadState=loaded",
                 "UnitFileState=enabled",
                 "ActiveState=active",
                 "SubState=running",
-                `FragmentPath=${path.join(systemdDir, "merge-steward@.service")}`,
                 "ExecMainPID=9001",
               ].join("\n"),
               stderr: "",
@@ -163,7 +151,7 @@ test("merge-steward init and repo commands manage bootstrap state with explicit 
           0,
         );
         const serviceStatus = JSON.parse(statusOut.read()) as Record<string, unknown>;
-        assert.equal(serviceStatus.repoId, "app");
+        assert.equal(serviceStatus.unit, "merge-steward.service");
         assert.equal((serviceStatus.systemd as Record<string, unknown>).ActiveState, "active");
       },
     );

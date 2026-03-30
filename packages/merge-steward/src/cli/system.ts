@@ -100,18 +100,14 @@ export function loadRepoConfigById(repoId: string): { configPath: string; config
   };
 }
 
-export function buildWebhookUrl(config: StewardConfig): string | undefined {
+export function buildWebhookUrl(): string | undefined {
   const homeConfigPath = getDefaultConfigPath();
   if (!existsSync(homeConfigPath)) {
     return undefined;
   }
   const homeConfig = parseHomeConfigObject(readFileSync(homeConfigPath, "utf8"), homeConfigPath);
-  const publicBaseUrl = config.server.publicBaseUrl ?? homeConfig.server.public_base_url;
-  return publicBaseUrl ? new URL(config.webhookPath, publicBaseUrl).toString() : undefined;
-}
-
-export function buildWebhookPattern(publicBaseUrl: string): string {
-  return `${publicBaseUrl.replace(/\/$/, "")}/webhooks/github/queue/<repo-id>`;
+  const publicBaseUrl = homeConfig.server.public_base_url;
+  return publicBaseUrl ? `${publicBaseUrl.replace(/\/$/, "")}/webhooks/github` : undefined;
 }
 
 export function resolveRepoId(parsed: ParsedArgs, positionalIndex = 2, helpTopic: HelpTopic = "root"): string {
@@ -124,18 +120,6 @@ export function resolveRepoId(parsed: ParsedArgs, positionalIndex = 2, helpTopic
     return flagged.trim();
   }
   throw new UsageError("Repo id is required.", helpTopic);
-}
-
-export function resolveConfigPath(flags: Map<string, string | boolean>): string | undefined {
-  const explicit = flags.get("config");
-  if (typeof explicit === "string") {
-    return explicit;
-  }
-  const repoId = flags.get("repo");
-  if (typeof repoId === "string") {
-    return getRepoConfigPath(repoId);
-  }
-  return undefined;
 }
 
 export function defaultRunCommand(command: string, args: string[]): Promise<CommandResult> {
@@ -180,16 +164,26 @@ export async function runSystemctl(runCommand: CommandRunner, args: string[]): P
   };
 }
 
-export async function fetchLocalJson<T>(config: StewardConfig, relativePath: string, options?: { method?: string }): Promise<T> {
-  const response = await fetch(
-    `http://${config.server.bind}:${config.server.port}${relativePath}`,
-    {
-      method: options?.method ?? "GET",
-      signal: AbortSignal.timeout(2000),
-    },
-  );
+export function getGatewayBaseUrl(): string {
+  const homeConfigPath = getDefaultConfigPath();
+  if (!existsSync(homeConfigPath)) {
+    throw new Error("merge-steward home not initialized.");
+  }
+  const homeConfig = parseHomeConfigObject(readFileSync(homeConfigPath, "utf8"), homeConfigPath);
+  const bind = homeConfig.server.bind;
+  const port = homeConfig.server.gateway_port ?? (homeConfig.server.port_base - 1);
+  return `http://${bind}:${port}`;
+}
+
+export async function fetchLocalJson<T>(repoId: string, relativePath: string, options?: { method?: string }): Promise<T> {
+  const base = getGatewayBaseUrl();
+  const url = `${base}/repos/${repoId}${relativePath}`;
+  const response = await fetch(url, {
+    method: options?.method ?? "GET",
+    signal: AbortSignal.timeout(2000),
+  });
   if (!response.ok) {
-    throw new Error(`HTTP ${response.status} from ${relativePath}`);
+    throw new Error(`HTTP ${response.status} from ${url}`);
   }
   return await response.json() as T;
 }

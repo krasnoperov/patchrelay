@@ -24,7 +24,6 @@ const testConfig: StewardConfig = {
   pollIntervalMs: 600_000,
   admissionLabel: "queue",
   excludeBranches: [],
-  webhookPath: "/webhooks/github/queue",
   server: { bind: "127.0.0.1", port: 0 },
   database: { path: ":memory:", wal: true },
   logging: { level: "silent" },

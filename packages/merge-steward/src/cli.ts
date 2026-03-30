@@ -1,7 +1,7 @@
 import { parseArgs, hasHelpFlag, validateFlags } from "./cli/args.ts";
 import { helpTextFor } from "./cli/help.ts";
 import { writeOutput, writeUsageError } from "./cli/output.ts";
-import { resolveConfigPath, defaultRunCommand } from "./cli/system.ts";
+import { defaultRunCommand } from "./cli/system.ts";
 import { UsageError } from "./cli/types.ts";
 import type { RunCliOptions } from "./cli/types.ts";
 
@@ -41,7 +41,7 @@ export async function runCli(argv: string[], options?: RunCliOptions): Promise<n
 
     switch (command) {
       case "serve":
-        await (await import("./server.ts")).startServer(resolveConfigPath(parsed.flags));
+        await (await import("./server.ts")).startMultiServer();
         return 0;
       case "init":
         return await handleInit(parsed, stdout, runCommand);
