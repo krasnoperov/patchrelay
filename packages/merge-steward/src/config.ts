@@ -32,7 +32,6 @@ export const stewardConfigSchema = z.object({
   admissionLabel: z.string().default("queue"),
   /** Branch name patterns to exclude from admission (glob-style). */
   excludeBranches: z.array(z.string()).default(["release-please--*"]),
-  webhookPath: z.string().default("/webhooks/github/queue"),
   webhookSecret: z.string().optional(),
 });
 

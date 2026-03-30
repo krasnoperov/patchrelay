@@ -199,7 +199,6 @@ export async function upsertRepoConfig(options: {
     baseBranch: string;
     requiredChecks: string[];
     admissionLabel: string;
-    webhookPath: string;
     port: number;
   };
 }> {
@@ -223,7 +222,6 @@ export async function upsertRepoConfig(options: {
   const admissionLabel = options.admissionLabel?.trim() || existing?.admissionLabel || "queue";
   const existingPorts = await listRepoConfigPorts(layout.repoConfigDir);
   const port = existing?.server.port ?? nextAvailablePort(existingPorts, homeConfig.server?.port_base ?? 8790);
-  const webhookPath = existing?.webhookPath ?? `/webhooks/github/queue/${id}`;
 
   const next = {
     repoId: id,
@@ -250,7 +248,6 @@ export async function upsertRepoConfig(options: {
     },
     admissionLabel,
     excludeBranches: existing?.excludeBranches ?? ["release-please--*"],
-    webhookPath,
   };
 
   const rendered = stringifyJson(next as unknown as Record<string, unknown>);
@@ -270,8 +267,27 @@ export async function upsertRepoConfig(options: {
       baseBranch,
       requiredChecks,
       admissionLabel,
-      webhookPath,
       port,
     },
   };
+}
+
+/**
+ * Read all repo configs from the standard repo config directory.
+ */
+export async function loadAllRepoConfigs(): Promise<StewardConfig[]> {
+  const layout = getMergeStewardPathLayout();
+  if (!existsSync(layout.repoConfigDir)) return [];
+  const names = await readdir(layout.repoConfigDir);
+  const configs: StewardConfig[] = [];
+  for (const name of names) {
+    if (!name.endsWith(".json")) continue;
+    try {
+      const raw = await readFile(`${layout.repoConfigDir}/${name}`, "utf8");
+      configs.push(parseConfig(raw, { configPath: `${layout.repoConfigDir}/${name}` }));
+    } catch {
+      // Skip broken configs — doctor will surface them.
+    }
+  }
+  return configs;
 }

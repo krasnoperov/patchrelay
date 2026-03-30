@@ -94,7 +94,7 @@ test("service logs outputs journalctl content", async () => {
       };
 
       const stdout = createBufferStream();
-      const code = await runCli(["service", "logs", "app"], {
+      const code = await runCli(["service", "logs"], {
         stdout: stdout.stream,
         stderr: createBufferStream().stream,
         runCommand,
@@ -102,7 +102,6 @@ test("service logs outputs journalctl content", async () => {
       assert.equal(code, 0);
       assert.match(stdout.read(), /tick started/);
       assert.match(stdout.read(), /tick completed/);
-      // default 50 lines
       const journalArgs = commands.find((a) => a.includes("journalctl"))!;
       assert.ok(journalArgs.includes("50"));
     });
@@ -123,7 +122,7 @@ test("service logs --lines passes custom line count", async () => {
         return { exitCode: 0, stdout: "log line\n", stderr: "" };
       };
 
-      const code = await runCli(["service", "logs", "app", "--lines", "10"], {
+      const code = await runCli(["service", "logs", "--lines", "10"], {
         stdout: createBufferStream().stream,
         stderr: createBufferStream().stream,
         runCommand,
@@ -150,15 +149,14 @@ test("service logs --json emits structured output", async () => {
       });
 
       const stdout = createBufferStream();
-      const code = await runCli(["service", "logs", "app", "--json"], {
+      const code = await runCli(["service", "logs", "--json"], {
         stdout: stdout.stream,
         stderr: createBufferStream().stream,
         runCommand,
       });
       assert.equal(code, 0);
-      const result = JSON.parse(stdout.read()) as { repoId: string; unit: string; lines: number; logs: string[] };
-      assert.equal(result.repoId, "app");
-      assert.match(result.unit, /merge-steward@app/);
+      const result = JSON.parse(stdout.read()) as { unit: string; lines: number; logs: string[] };
+      assert.equal(result.unit, "merge-steward.service");
       assert.equal(result.lines, 50);
       assert.deepEqual(result.logs, ["line-one", "line-two"]);
     });
@@ -181,7 +179,7 @@ test("service logs reports error on journalctl failure", async () => {
       };
 
       const stderr = createBufferStream();
-      const code = await runCli(["service", "logs", "app"], {
+      const code = await runCli(["service", "logs"], {
         stdout: createBufferStream().stream,
         stderr: stderr.stream,
         runCommand,
@@ -201,7 +199,7 @@ test("service restart outputs daemon-reload and restart result", async () => {
       await initAndAttach(baseDir);
 
       const stdout = createBufferStream();
-      const code = await runCli(["service", "restart", "app"], {
+      const code = await runCli(["service", "restart"], {
         stdout: stdout.stream,
         stderr: createBufferStream().stream,
         runCommand: noop,
@@ -209,7 +207,7 @@ test("service restart outputs daemon-reload and restart result", async () => {
       assert.equal(code, 0);
       const text = stdout.read();
       assert.match(text, /daemon-reload completed/);
-      assert.match(text, /Restarted merge-steward@app/);
+      assert.match(text, /Restarted merge-steward\.service/);
     });
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -223,14 +221,13 @@ test("service restart --json emits structured output", async () => {
       await initAndAttach(baseDir);
 
       const stdout = createBufferStream();
-      const code = await runCli(["service", "restart", "app", "--json"], {
+      const code = await runCli(["service", "restart", "--json"], {
         stdout: stdout.stream,
         stderr: createBufferStream().stream,
         runCommand: noop,
       });
       assert.equal(code, 0);
-      const result = JSON.parse(stdout.read()) as { repoId: string; daemonReloaded: boolean; restarted: boolean };
-      assert.equal(result.repoId, "app");
+      const result = JSON.parse(stdout.read()) as { daemonReloaded: boolean; restarted: boolean };
       assert.equal(result.daemonReloaded, true);
       assert.equal(result.restarted, true);
     });

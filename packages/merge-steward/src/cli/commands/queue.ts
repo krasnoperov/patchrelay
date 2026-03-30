@@ -12,7 +12,7 @@ import { loadRepoConfigById, resolveRepoId, fetchLocalJson } from "../system.ts"
 async function readQueueSnapshot(config: StewardConfig, eventLimit: number): Promise<{ source: "service" | "database"; snapshot: QueueWatchSnapshot }> {
   try {
     const query = new URLSearchParams({ eventLimit: String(eventLimit) });
-    const snapshot = await fetchLocalJson<QueueWatchSnapshot>(config, `/queue/watch?${query.toString()}`);
+    const snapshot = await fetchLocalJson<QueueWatchSnapshot>(config.repoId, `/queue/watch?${query.toString()}`);
     return { source: "service", snapshot };
   } catch {
     const store = new SqliteStore(config.database.path);
@@ -166,7 +166,7 @@ export async function handleQueue(parsed: ParsedArgs, stdout: Output): Promise<n
   if (subcommand === "reconcile") {
     try {
       const result = await fetchLocalJson<{ ok: boolean; started: boolean; runtime: QueueWatchSnapshot["runtime"] }>(
-        config,
+        config.repoId,
         "/queue/reconcile",
         { method: "POST" },
       );

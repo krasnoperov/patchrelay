@@ -2,23 +2,27 @@ import { createElement } from "react";
 import { render } from "ink";
 import { loadConfig } from "../config.ts";
 import { App } from "./App.tsx";
+import { parseHomeConfigObject } from "../steward-home.ts";
+import { getDefaultConfigPath } from "../runtime-paths.ts";
+import { readFileSync, existsSync } from "node:fs";
 
-function resolveBaseUrl(bind: string, port: number): string {
-  if (bind === "0.0.0.0") {
-    return `http://127.0.0.1:${port}`;
+function resolveGatewayBaseUrl(): string {
+  const configPath = getDefaultConfigPath();
+  if (!existsSync(configPath)) {
+    throw new Error("merge-steward home not initialized. Run `merge-steward init` first.");
   }
-  if (bind === "::") {
-    return `http://[::1]:${port}`;
-  }
-  if (bind.includes(":") && !bind.startsWith("[")) {
-    return `http://[${bind}]:${port}`;
-  }
+  const homeConfig = parseHomeConfigObject(readFileSync(configPath, "utf8"), configPath);
+  const bind = homeConfig.server.bind === "0.0.0.0" ? "127.0.0.1"
+    : homeConfig.server.bind === "::" ? "[::1]"
+    : homeConfig.server.bind;
+  const port = homeConfig.server.gateway_port ?? (homeConfig.server.port_base - 1);
   return `http://${bind}:${port}`;
 }
 
 export async function startWatch(configPath?: string, initialPrNumber?: number): Promise<void> {
   const config = loadConfig(configPath);
-  const baseUrl = resolveBaseUrl(config.server.bind, config.server.port);
+  const gatewayBase = resolveGatewayBaseUrl();
+  const baseUrl = `${gatewayBase}/repos/${config.repoId}`;
 
   const instance = render(
     createElement(App, { baseUrl, ...(initialPrNumber !== undefined ? { initialPrNumber } : {}) }),

@@ -1,6 +1,6 @@
 import type { QueueEntryDetail, QueueWatchSnapshot } from "../types.ts";
 
-async function requestJson<T>(url: URL, init?: RequestInit): Promise<T> {
+async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
     ...init,
     headers: {
@@ -26,24 +26,29 @@ function readErrorMessage(body: string): string | undefined {
   }
 }
 
+function buildUrl(baseUrl: string, path: string, params?: Record<string, string>): string {
+  const base = baseUrl.replace(/\/$/, "");
+  const url = new URL(`${base}${path}`);
+  if (params) {
+    for (const [key, value] of Object.entries(params)) {
+      url.searchParams.set(key, value);
+    }
+  }
+  return url.toString();
+}
+
 export async function fetchSnapshot(baseUrl: string): Promise<QueueWatchSnapshot> {
-  const url = new URL("/queue/watch", baseUrl);
-  url.searchParams.set("eventLimit", "40");
-  return await requestJson<QueueWatchSnapshot>(url);
+  return await requestJson<QueueWatchSnapshot>(buildUrl(baseUrl, "/queue/watch", { eventLimit: "40" }));
 }
 
 export async function fetchEntryDetail(baseUrl: string, entryId: string): Promise<QueueEntryDetail> {
-  const url = new URL(`/queue/entries/${encodeURIComponent(entryId)}/detail`, baseUrl);
-  url.searchParams.set("eventLimit", "120");
-  return await requestJson<QueueEntryDetail>(url);
+  return await requestJson<QueueEntryDetail>(buildUrl(baseUrl, `/queue/entries/${encodeURIComponent(entryId)}/detail`, { eventLimit: "120" }));
 }
 
 export async function triggerReconcile(baseUrl: string): Promise<{ ok: true; started: boolean }> {
-  const url = new URL("/queue/reconcile", baseUrl);
-  return await requestJson<{ ok: true; started: boolean }>(url, { method: "POST" });
+  return await requestJson<{ ok: true; started: boolean }>(buildUrl(baseUrl, "/queue/reconcile"), { method: "POST" });
 }
 
 export async function dequeueEntry(baseUrl: string, entryId: string): Promise<void> {
-  const url = new URL(`/queue/entries/${encodeURIComponent(entryId)}/dequeue`, baseUrl);
-  await requestJson<{ ok: true }>(url, { method: "POST" });
+  await requestJson<{ ok: true }>(buildUrl(baseUrl, `/queue/entries/${encodeURIComponent(entryId)}/dequeue`), { method: "POST" });
 }

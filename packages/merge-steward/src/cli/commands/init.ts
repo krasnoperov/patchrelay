@@ -1,7 +1,7 @@
 import { initializeMergeStewardHome, installServiceUnit } from "../../install.ts";
 import type { ParsedArgs, Output, CommandRunner } from "../types.ts";
 import { normalizePublicBaseUrl, formatJson, writeOutput } from "../output.ts";
-import { buildWebhookPattern, runSystemctl } from "../system.ts";
+import { runSystemctl } from "../system.ts";
 import { UsageError } from "../types.ts";
 
 export async function handleInit(parsed: ParsedArgs, stdout: Output, runCommand: CommandRunner): Promise<number> {
@@ -16,12 +16,13 @@ export async function handleInit(parsed: ParsedArgs, stdout: Output, runCommand:
   });
   const unit = await installServiceUnit({ force: parsed.flags.get("force") === true });
   const reloadState = await runSystemctl(runCommand, ["daemon-reload"]);
+  const webhookUrl = `${publicBaseUrl.replace(/\/$/, "")}/webhooks/github`;
 
   const payload = {
     ...home,
     unitTemplatePath: unit.unitTemplatePath,
     serviceUnitStatus: unit.status,
-    webhookBaseUrl: buildWebhookPattern(publicBaseUrl),
+    webhookUrl,
     serviceReloaded: reloadState.ok,
     ...(reloadState.ok ? {} : { serviceReloadError: reloadState.error }),
   };
@@ -45,7 +46,7 @@ export async function handleInit(parsed: ParsedArgs, stdout: Output, runCommand:
       "",
       "Public URLs:",
       `- Base URL: ${publicBaseUrl}`,
-      `- Repo webhook pattern: ${buildWebhookPattern(publicBaseUrl)}`,
+      `- Webhook URL: ${webhookUrl}`,
       "",
       reloadState.ok
         ? "systemd daemon-reload completed."
@@ -54,9 +55,8 @@ export async function handleInit(parsed: ParsedArgs, stdout: Output, runCommand:
       "Next steps:",
       `1. Put secrets into ${home.serviceEnvPath} for dev or systemd-creds for prod`,
       "2. Run `merge-steward attach <id> <owner/repo>`",
-      "3. Point the repository webhook at the printed repo-specific URL",
+      "3. Configure your GitHub App webhook URL to the webhook URL above",
       "4. Run `merge-steward doctor --repo <id>`",
-      "5. Run `merge-steward service status <id>`",
     ].join("\n") + "\n",
   );
   return 0;
