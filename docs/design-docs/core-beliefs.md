@@ -16,6 +16,11 @@ Important product rules, architecture choices, and workflow contracts must live 
 `AGENTS.md` should stay short and navigational.
 The deeper documents in `docs/` are the authoritative system of record.
 
+## Progressive disclosure beats giant manuals
+
+Agents should start from a small map and fetch deeper context deliberately.
+When everything is injected up front, the real task gets crowded out and the repo becomes harder to navigate.
+
 ## Deterministic scaffolding beats prompt cleverness
 
 Prompt quality matters, but reliability comes from the system around the model:
@@ -25,6 +30,11 @@ Prompt quality matters, but reliability comes from the system around the model:
 - typed provider adapters
 - repair loops
 - clear escalation rules
+
+## Legibility includes validation surfaces
+
+Agents should be able to see not just instructions, but also the evidence needed to judge whether work succeeded.
+Checks, failure reports, review feedback, and queue incidents should be compact, durable, and easy to route back into the next run.
 
 ## Linear is the human-facing control plane
 
@@ -56,6 +66,11 @@ Merge Steward owns queue ordering and landing. PatchRelay must treat queue failu
 
 The architecture should make it obvious where logic belongs.
 When providers, orchestration, and runtime concerns are mixed together, agents lose the map and the codebase decays.
+
+## Encode taste and cleanup into the system
+
+If we care about a rule repeatedly, we should prefer to encode it in docs, lints, templates, or recurring cleanup work.
+Human taste should compound through the harness instead of being re-explained in every run.
 
 ## Historical artifacts are references, not constraints
 

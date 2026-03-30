@@ -129,6 +129,22 @@ PatchRelay uses repo-local workflow files as prompts for Codex runs:
 
 These files define how the agent should work in that repository. Keep them short, action-oriented, and human-authored.
 
+## Knowledge And Validation Surfaces
+
+PatchRelay works best when repository guidance follows progressive disclosure:
+
+- keep the root entrypoints short and navigational
+- treat deeper `docs/` content as the durable system of record
+- capture architecture, workflow, and product decisions in versioned files instead of chat history or operator memory
+
+PatchRelay should also help agents validate their own work inside the issue loop:
+
+- package the smallest useful context for the current run instead of replaying ever-growing transcript history
+- preserve high-signal failure evidence such as review feedback, failing checks, and queue incidents
+- make repo-local validation surfaces legible per worktree so the next run can see what passed, what failed, and what needs repair
+
+Keeping those knowledge and validation surfaces clean is part of the harness, not optional documentation polish.
+
 ## Access Control
 
 PatchRelay reacts only for issues that route to a configured project.
@@ -289,6 +305,7 @@ Use the README for the product overview and quick start. Use the docs for operat
 - [Merge queue and delivery](./docs/merge-queue.md)
 - [Self-hosting and deployment](./docs/self-hosting.md)
 - [Architecture](./docs/architecture.md)
+- [Design docs index](./docs/design-docs/index.md)
 - [Design principles](./docs/design-docs/core-beliefs.md)
 - [External reference patterns](./docs/references/external-patterns.md)
 - [Security policy](./SECURITY.md)

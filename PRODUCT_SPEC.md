@@ -49,6 +49,7 @@ PatchRelay must:
 4. be **event-driven** so GitHub webhooks trigger reactive repair loops automatically
 5. keep the **human loop clear** by escalating only for meaningful ambiguity, unrecoverable failure, or policy-required approval
 6. treat **context, verification, and repair** as first-class workflow concerns rather than as prompt-only concerns
+7. keep repository guidance **progressively disclosed and discoverable** through short entrypoints and deeper versioned docs
 
 ## Non-Goals
 
@@ -117,6 +118,16 @@ PatchRelay must:
 3. allow the same worktree to be resumed across iterations
 4. support Codex execution through App Server
 5. treat the worktree as the default action boundary for the issue loop
+6. preserve the verification evidence needed for the next run, not just the raw transcript
+
+### Repository Knowledge And Guidance
+
+PatchRelay must:
+
+1. assume repo-local docs are the durable source of truth for workflow and architecture guidance
+2. keep root-level entrypoints short and linked, not monolithic
+3. support workflow-specific context packaging so each run gets the smallest useful slice of guidance
+4. make it practical to maintain and refresh docs as the harness evolves
 
 ### GitHub Integration
 
@@ -146,6 +157,7 @@ PatchRelay must make it easy to answer:
 - which PR maps to the issue
 - what the current plan is
 - what the last successful and failing runs did
+- what evidence verified or blocked the latest run
 - why a repair loop escalated
 - what the agent is doing right now at a glance, with deeper status available through the session link
 
@@ -154,6 +166,7 @@ PatchRelay must make it easy to answer:
 - Humans steer, agents execute.
 - Repository-local guidance is the source of truth.
 - Short entrypoint docs, deeper linked docs.
+- Progressive disclosure beats giant instruction blobs.
 - Deterministic control plane around nondeterministic model behavior.
 - Repair loops are normal behavior, not exceptions.
 - Distinct loop types beat one generic rerun.

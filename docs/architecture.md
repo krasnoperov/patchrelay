@@ -13,8 +13,11 @@ PatchRelay intentionally combines three patterns:
 1. **OpenAI harness engineering**
    - short `AGENTS.md`
    - repo-local docs as system of record
+   - progressive disclosure through linked docs
    - worktree-bootable development environments
+   - agent-legible validation signals
    - strict architecture boundaries that agents can reason about
+   - recurring garbage collection for drift
 2. **Linear official agent demo**
    - app-backed OAuth installation
    - webhook-driven Linear interactions
@@ -108,6 +111,7 @@ Owns:
 - Codex thread and turn management
 - worktree preparation and setup hook execution
 - prompt construction from issue metadata and workflow files
+- packaging verification evidence for the current run type
 - retry budget enforcement and escalation
 - reconciliation of active runs after restart
 - Linear activity and plan updates during runs
@@ -233,6 +237,17 @@ PatchRelay uses SQLite with these tables:
 - `linear_installations` — OAuth credentials and installation metadata
 - `operator_feed_events` — event log for operator CLI
 
+## Knowledge Layout
+
+PatchRelay should keep repository knowledge organized for progressive disclosure:
+
+- root docs provide the product map and link deeper references
+- `docs/design-docs/` holds durable design rules and boundary decisions
+- `docs/` operating guides explain runtime, deployment, and queue behavior
+- archived material is clearly marked non-authoritative
+
+This layout matters because the repository is part of the harness. If an agent cannot rediscover a rule in-repo, the rule is operationally weak.
+
 ## Workflow Files
 
 The repository should contain:
@@ -248,4 +263,6 @@ The run orchestrator reads these files and includes them in the Codex prompt. Ke
 - flat, direct orchestration code over layered abstractions
 - making local execution per worktree cheap and repeatable
 - keeping every important decision visible in-repo
+- preserving compact verification evidence that explains why a loop advanced or failed
+- recurring cleanup of stale docs and weak patterns before they spread
 - high-signal Linear communication: immediate acknowledgment, concise in-flight activity, lifecycle-aware plans, and deeper status behind session links rather than noisy transcript dumps
