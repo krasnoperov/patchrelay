@@ -38,8 +38,17 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Typecheck merge-steward
+        run: npm run -w packages/merge-steward typecheck
+
       - name: Test
         run: npm test
 
+      - name: Test merge-steward
+        run: npm run -w packages/merge-steward test
+
       - name: Build
         run: npm run build
+
+      - name: Build merge-steward
+        run: npm run -w packages/merge-steward build
