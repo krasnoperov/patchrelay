@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.27.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.26.0...patchrelay-v0.27.0) (2026-03-30)
+
+
+### Features
+
+* merge-steward workspace with Phase 1 serial reconciler ([#201](https://github.com/krasnoperov/patchrelay/issues/201)) ([8df250e](https://github.com/krasnoperov/patchrelay/commit/8df250ec66bbe37add1746674fb6ffaf7a1ecddf))
+
 ## [0.26.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.25.6...patchrelay-v0.26.0) (2026-03-27)
 
 
