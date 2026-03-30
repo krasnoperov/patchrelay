@@ -109,7 +109,7 @@ export function formatOpen(
     "git branch --show-current",
   ];
   if (result.needsNewSession) {
-    commands.push(`# No resumable thread found; \`patchrelay open ${result.issue.issueKey ?? result.issue.linearIssueId}\` will create a fresh session.`);
+    commands.push(`# No resumable thread found; \`patchrelay issue open ${result.issue.issueKey ?? result.issue.linearIssueId}\` will create a fresh session.`);
   }
   commands.push(
     command

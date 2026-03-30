@@ -74,6 +74,7 @@ export type DetailTab = "timeline" | "history";
 
 export interface WatchState {
   connected: boolean;
+  lastServerMessageAt: number | null;
   issues: WatchIssue[];
   selectedIndex: number;
   view: WatchView;
@@ -99,8 +100,9 @@ export interface WatchState {
 export type WatchAction =
   | { type: "connected" }
   | { type: "disconnected" }
-  | { type: "issues-snapshot"; issues: WatchIssue[] }
-  | { type: "feed-event"; event: OperatorFeedEvent }
+  | { type: "stream-heartbeat"; receivedAt: number }
+  | { type: "issues-snapshot"; issues: WatchIssue[]; receivedAt: number }
+  | { type: "feed-event"; event: OperatorFeedEvent; receivedAt: number }
   | { type: "select"; index: number }
   | { type: "enter-detail"; issueKey: string }
   | { type: "exit-detail" }
@@ -142,6 +144,7 @@ const DETAIL_INITIAL = {
 
 export const initialWatchState: WatchState = {
   connected: false,
+  lastServerMessageAt: null,
   issues: [],
   selectedIndex: 0,
   view: "list",
@@ -205,15 +208,19 @@ export function watchReducer(state: WatchState, action: WatchAction): WatchState
     case "disconnected":
       return { ...state, connected: false };
 
+    case "stream-heartbeat":
+      return { ...state, lastServerMessageAt: action.receivedAt };
+
     case "issues-snapshot":
       return {
         ...state,
+        lastServerMessageAt: action.receivedAt,
         issues: action.issues,
         selectedIndex: Math.min(state.selectedIndex, Math.max(0, action.issues.length - 1)),
       };
 
     case "feed-event":
-      return applyFeedEvent(state, action.event);
+      return applyFeedEvent(state, action.event, action.receivedAt);
 
     case "select":
       return {
@@ -289,14 +296,14 @@ export function watchReducer(state: WatchState, action: WatchAction): WatchState
 
 // ─── Feed Event → Issue List + Timeline ───────────────────────────
 
-function applyFeedEvent(state: WatchState, event: OperatorFeedEvent): WatchState {
+function applyFeedEvent(state: WatchState, event: OperatorFeedEvent, receivedAt: number): WatchState {
   if (!event.issueKey) {
-    return state;
+    return { ...state, lastServerMessageAt: receivedAt };
   }
 
   const index = state.issues.findIndex((issue) => issue.issueKey === event.issueKey);
   if (index === -1) {
-    return state;
+    return { ...state, lastServerMessageAt: receivedAt };
   }
 
   const updated = [...state.issues];
@@ -332,7 +339,7 @@ function applyFeedEvent(state: WatchState, event: OperatorFeedEvent): WatchState
     ? capArray([...state.rawFeedEvents, event], MAX_RAW_FEED_EVENTS)
     : state.rawFeedEvents;
 
-  return { ...state, issues: updated, timeline, rawFeedEvents };
+  return { ...state, lastServerMessageAt: receivedAt, issues: updated, timeline, rawFeedEvents };
 }
 
 // ─── Codex Notification → Timeline + Metadata ─────────────────────

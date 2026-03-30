@@ -2,62 +2,118 @@ import { loadConfig } from "../../config.ts";
 import { installServiceUnits, upsertProjectInConfig } from "../../install.ts";
 import type { AppConfig } from "../../types.ts";
 import { hasHelpFlag, parseCsvFlag } from "../args.ts";
-import type { InteractiveRunner, Output, ParsedArgs, RunCliOptions } from "../command-types.ts";
+import type { CommandRunner, InteractiveRunner, Output, ParsedArgs, RunCliOptions } from "../command-types.ts";
 import { runConnectFlow, parseTimeoutSeconds } from "../connect-flow.ts";
 import { CliUsageError } from "../errors.ts";
 import { formatJson } from "../formatters/json.ts";
-import { projectHelpText } from "../help.ts";
+import { reposHelpText } from "../help.ts";
 import type { CliOperatorDataAccess } from "../operator-client.ts";
 import { writeOutput } from "../output.ts";
 import { installServiceCommands, tryManageService } from "../service-commands.ts";
 
-interface ProjectCommandParams {
+interface AttachCommandParams {
   commandArgs: string[];
   parsed: ParsedArgs;
   json: boolean;
   stdout: Output;
-  stderr: Output;
   runInteractive: InteractiveRunner;
+  runCommand: CommandRunner;
   options?: RunCliOptions;
 }
 
-export async function handleProjectCommand(params: ProjectCommandParams): Promise<number> {
+interface ReposCommandParams {
+  commandArgs: string[];
+  parsed: ParsedArgs;
+  json: boolean;
+  stdout: Output;
+}
+
+export async function handleReposCommand(params: ReposCommandParams): Promise<number> {
   if (hasHelpFlag(params.parsed)) {
-    writeOutput(params.stdout, `${projectHelpText()}\n`);
+    writeOutput(params.stdout, `${reposHelpText()}\n`);
     return 0;
   }
 
-  if (params.commandArgs.length === 0) {
-    throw new CliUsageError("patchrelay project requires a subcommand.", "project");
+  const config = loadConfig(undefined, { profile: "service" });
+  const repoId = params.commandArgs[0];
+
+  if (!repoId) {
+    const repos = config.projects.map((project) => ({
+      id: project.id,
+      repoPath: project.repoPath,
+      issueKeyPrefixes: project.issueKeyPrefixes,
+      linearTeamIds: project.linearTeamIds,
+    }));
+    writeOutput(
+      params.stdout,
+      params.json
+        ? formatJson({ repos })
+        : repos.length === 0
+          ? "No repos configured yet.\n"
+          : `${repos.map((repo) => `${repo.id}  ${repo.repoPath}`).join("\n")}\n`,
+    );
+    return 0;
   }
 
-  const subcommand = params.commandArgs[0];
-  if (subcommand !== "apply") {
-    throw new CliUsageError(`Unknown project command: ${subcommand}`, "project");
+  const repo = config.projects.find((project) => project.id === repoId);
+  if (!repo) {
+    throw new Error(`Repo not found: ${repoId}`);
+  }
+  const payload = {
+    id: repo.id,
+    repoPath: repo.repoPath,
+    issueKeyPrefixes: repo.issueKeyPrefixes,
+    linearTeamIds: repo.linearTeamIds,
+  };
+  writeOutput(
+    params.stdout,
+    params.json
+      ? formatJson(payload)
+      : [
+          `Repo: ${repo.id}`,
+          `Path: ${repo.repoPath}`,
+          `Issue key prefixes: ${repo.issueKeyPrefixes.join(", ") || "-"}`,
+          `Linear team ids: ${repo.linearTeamIds.join(", ") || "-"}`,
+        ].join("\n") + "\n",
+  );
+  return 0;
+}
+
+export async function handleAttachCommand(params: AttachCommandParams): Promise<number> {
+  if (hasHelpFlag(params.parsed)) {
+    writeOutput(params.stdout, `${reposHelpText()}\n`);
+    return 0;
   }
 
-  const projectId = params.commandArgs[1];
-  const repoPath = params.commandArgs[2];
-  if (!projectId || !repoPath) {
-    throw new CliUsageError("patchrelay project apply requires <id> and <repo-path>.", "project");
+  const repoId = params.commandArgs[0];
+  const positionalRepoPath = params.commandArgs[1];
+  const flaggedRepoPath =
+    typeof params.parsed.flags.get("path") === "string"
+      ? String(params.parsed.flags.get("path"))
+      : undefined;
+  if (!repoId) {
+    throw new CliUsageError("patchrelay attach requires <id>.", "repos");
   }
+  if (positionalRepoPath && flaggedRepoPath) {
+    throw new CliUsageError("patchrelay attach accepts either [path] or --path <path>, not both.", "repos");
+  }
+  const repoPath = flaggedRepoPath ?? positionalRepoPath ?? process.cwd();
 
   const result = await upsertProjectInConfig({
-    id: projectId,
+    id: repoId,
     repoPath,
-    issueKeyPrefixes: parseCsvFlag(params.parsed.flags.get("issue-prefix")),
-    linearTeamIds: parseCsvFlag(params.parsed.flags.get("team-id")),
+    issueKeyPrefixes: parseCsvFlag(params.parsed.flags.get("prefix")),
+    linearTeamIds: parseCsvFlag(params.parsed.flags.get("team")),
   });
   const serviceUnits = await installServiceUnits();
-  const noConnect = params.parsed.flags.get("no-connect") === true;
+  const noAuth = params.parsed.flags.get("no-auth") === true;
 
   const lines = [
     `Config file: ${result.configPath}`,
-    `${result.status === "created" ? "Created" : result.status === "updated" ? "Updated" : "Verified"} project ${result.project.id} for ${result.project.repoPath}`,
+    `${result.status === "created" ? "Attached" : result.status === "updated" ? "Updated" : "Verified"} repo ${result.project.id} for ${result.project.repoPath}`,
     result.project.issueKeyPrefixes.length > 0 ? `Issue key prefixes: ${result.project.issueKeyPrefixes.join(", ")}` : undefined,
     result.project.linearTeamIds.length > 0 ? `Linear team ids: ${result.project.linearTeamIds.join(", ")}` : undefined,
     `Service unit: ${serviceUnits.unitPath} (${serviceUnits.serviceStatus})`,
-    `Watcher unit: ${serviceUnits.pathUnitPath} (${serviceUnits.pathStatus})`,
   ].filter(Boolean) as string[];
 
   let fullConfig: AppConfig;
@@ -74,7 +130,7 @@ export async function handleProjectCommand(params: ProjectCommandParams): Promis
             ok: false,
             error: error instanceof Error ? error.message : String(error),
           },
-          connect: {
+          auth: {
             attempted: false,
             skipped: "missing_env",
           },
@@ -82,8 +138,8 @@ export async function handleProjectCommand(params: ProjectCommandParams): Promis
       );
       return 0;
     }
-    lines.push(`Linear connect was skipped: ${error instanceof Error ? error.message : String(error)}`);
-    lines.push("Finish the required env vars and rerun `patchrelay project apply`.");
+    lines.push(`Linear auth was skipped: ${error instanceof Error ? error.message : String(error)}`);
+    lines.push("Finish the required env vars and rerun `patchrelay attach`.");
     writeOutput(params.stdout, `${lines.join("\n")}\n`);
     return 0;
   }
@@ -99,7 +155,7 @@ export async function handleProjectCommand(params: ProjectCommandParams): Promis
           ...result,
           serviceUnits,
           readiness: report,
-          connect: {
+          auth: {
             attempted: false,
             skipped: "preflight_failed",
           },
@@ -107,22 +163,22 @@ export async function handleProjectCommand(params: ProjectCommandParams): Promis
       );
       return 0;
     }
-    lines.push("Linear connect was skipped because PatchRelay is not ready yet:");
+    lines.push("Linear auth was skipped because PatchRelay is not ready yet:");
     lines.push(...failedChecks.map((check) => `- [${check.scope}] ${check.message}`));
-    lines.push("Fix the failures above and rerun `patchrelay project apply`.");
+    lines.push("Fix the failures above and rerun `patchrelay attach`.");
     writeOutput(params.stdout, `${lines.join("\n")}\n`);
     return 0;
   }
 
-  const serviceState = await tryManageService(params.runInteractive, installServiceCommands());
+  const serviceState = await tryManageService(params.runCommand, installServiceCommands());
   if (!serviceState.ok) {
-    throw new Error(`Project was saved, but PatchRelay could not be reloaded: ${serviceState.error}`);
+    throw new Error(`Repo was saved, but PatchRelay could not be reloaded: ${serviceState.error}`);
   }
 
   const cliData = params.options?.data ?? (await createCliOperatorDataAccess(fullConfig));
   try {
     if (params.json) {
-      const connectResult = noConnect ? undefined : await cliData.connect(projectId);
+      const authResult = noAuth ? undefined : await cliData.connect(repoId);
       writeOutput(
         params.stdout,
         formatJson({
@@ -130,17 +186,17 @@ export async function handleProjectCommand(params: ProjectCommandParams): Promis
           serviceUnits,
           readiness: report,
           serviceReloaded: true,
-          ...(noConnect
+          ...(noAuth
             ? {
-                connect: {
+                auth: {
                   attempted: false,
-                  skipped: "no_connect",
+                  skipped: "no_auth",
                 },
               }
             : {
-                connect: {
+                auth: {
                   attempted: true,
-                  result: connectResult,
+                  result: authResult,
                 },
               }),
         }),
@@ -148,9 +204,9 @@ export async function handleProjectCommand(params: ProjectCommandParams): Promis
       return 0;
     }
 
-    if (noConnect) {
-      lines.push("Project saved and PatchRelay was reloaded.");
-      lines.push(`Next: patchrelay connect --project ${result.project.id}`);
+    if (noAuth) {
+      lines.push("Repo attached and PatchRelay was reloaded.");
+      lines.push(`Next: patchrelay connect --repo ${result.project.id}`);
       writeOutput(params.stdout, `${lines.join("\n")}\n`);
       return 0;
     }
@@ -161,8 +217,8 @@ export async function handleProjectCommand(params: ProjectCommandParams): Promis
       data: cliData,
       stdout: params.stdout,
       noOpen: params.parsed.flags.get("no-open") === true,
-      timeoutSeconds: parseTimeoutSeconds(params.parsed.flags.get("timeout"), "project apply"),
-      projectId,
+      timeoutSeconds: parseTimeoutSeconds(params.parsed.flags.get("timeout"), "attach"),
+      projectId: repoId,
       ...(params.options?.openExternal ? { openExternal: params.options.openExternal } : {}),
       ...(params.options?.connectPollIntervalMs !== undefined ? { connectPollIntervalMs: params.options.connectPollIntervalMs } : {}),
     });

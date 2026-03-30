@@ -4,7 +4,7 @@
 
 This document describes the target architecture for PatchRelay as a Linear-native agentic software factory.
 
-The service is not a generic prompt runner. It is the deterministic orchestration layer that turns a delegated Linear issue into a reviewed, repairable, merge-queued pull request.
+The service is not a generic prompt runner. It is the deterministic orchestration layer that turns a delegated Linear issue into a reviewed, repairable pull request. A separate [Merge Steward](../packages/merge-steward) service owns serial queue integration and landing — PatchRelay develops code, Merge Steward delivers it.
 
 ## External Patterns We Are Combining
 
@@ -55,6 +55,7 @@ flowchart TB
 
   subgraph Delivery
     GH[GitHub]
+    MS[Merge Steward]
   end
 
   LS --> WH
@@ -70,6 +71,8 @@ flowchart TB
   RO --> ST
   ST --> RO
   RO --> LS
+  RO -->|queue label| MS
+  MS -->|merge / evict| GH
 ```
 
 ## Core Responsibilities
@@ -140,7 +143,8 @@ Delegated in Linear
 -> PR opened (detected via GitHub webhook)
 -> Review loop
 -> Approved and checks green
--> Merge queue
+-> PatchRelay adds queue label → Merge Steward takes over
+-> Steward: rebase → CI → merge (or evict → PatchRelay queue_repair → re-label)
 -> Merged → done
 ```
 
@@ -174,12 +178,13 @@ Behavior:
 
 Triggered by:
 
-- GitHub `merge_group_failed` event
+- Merge Steward eviction — a `merge-steward/queue` check run with failure status
 
 Behavior:
 
-- start a `queue_repair` run in the same worktree
-- Codex rebases onto latest main, resolves conflicts, pushes
+- PatchRelay detects the check run failure and starts a `queue_repair` run in the same worktree
+- Codex reads the steward's failure context, fixes the code, pushes
+- PatchRelay re-adds the `queue` label so the steward can re-admit the PR
 - budget: 2 attempts before escalation
 
 ## Factory State Machine
@@ -187,15 +192,20 @@ Behavior:
 States as defined in `factory-state.ts`:
 
 ```text
-delegated → preparing → implementing → pr_open → awaiting_review
-  → changes_requested → implementing (review fix)
-  → repairing_ci → pr_open (CI repair)
-  → awaiting_queue → done (merged)
-  → repairing_queue → pr_open (queue repair)
-  → awaiting_input (agent needs human guidance)
-  → escalated (retry budgets exhausted)
-  → failed (unrecoverable error)
+delegated → implementing → pr_open → awaiting_queue → done
+             ↘ changes_requested ↗
+             ↘ repairing_ci ↗
+awaiting_queue ↘ repairing_queue ↗
+
+terminal exits:
+- awaiting_input
+- escalated
+- failed
 ```
+
+`changes_requested`, `repairing_ci`, and `repairing_queue` are native PatchRelay states.
+They do not mean the external queue owns the issue state.
+PatchRelay and Merge Steward remain isolated services and communicate only through GitHub-observed labels, checks, and merge events.
 
 ## Failure Taxonomy
 

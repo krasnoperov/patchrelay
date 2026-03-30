@@ -1,0 +1,34 @@
+[Unit]
+Description=merge-steward (%i)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=8
+
+[Service]
+Type=simple
+User=your-user
+Group=your-user
+WorkingDirectory=/home/your-user
+
+EnvironmentFile=-/home/your-user/.config/merge-steward/runtime.env
+EnvironmentFile=-/home/your-user/.config/merge-steward/service.env
+Environment=NODE_ENV=production
+Environment=PATH=/home/your-user/.local/bin:/usr/local/bin:/usr/bin:/bin
+
+LoadCredentialEncrypted=merge-steward-webhook-secret
+LoadCredentialEncrypted=merge-steward-github-token
+
+ExecStart=/usr/bin/env merge-steward serve --repo %i
+Restart=on-failure
+RestartSec=5
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateMounts=true
+ProtectSystem=strict
+ProtectHome=false
+ReadWritePaths=/home/your-user/.config/merge-steward /home/your-user/.local/state/merge-steward /home/your-user/.local/share/merge-steward
+
+[Install]
+WantedBy=multi-user.target

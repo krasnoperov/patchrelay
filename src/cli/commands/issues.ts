@@ -3,6 +3,7 @@ import type { AppConfig } from "../../types.ts";
 import { getRunTypeFlag, parsePositiveIntegerFlag } from "../args.ts";
 import type { InteractiveRunner, Output, ParsedArgs } from "../command-types.ts";
 import type { CliDataAccess } from "../data.ts";
+import { CliUsageError } from "../errors.ts";
 import { formatJson } from "../formatters/json.ts";
 import { formatEvents, formatInspect, formatList, formatLive, formatOpen, formatReport, formatRetry, formatWorktree } from "../formatters/text.ts";
 import { buildOpenCommand } from "../interactive.ts";
@@ -18,10 +19,52 @@ interface IssueCommandParams {
   runInteractive: InteractiveRunner;
 }
 
+export async function handleIssueCommand(params: IssueCommandParams): Promise<number> {
+  const subcommand = params.commandArgs[0];
+  if (!subcommand) {
+    throw new CliUsageError("patchrelay issue requires a subcommand.", "issue");
+  }
+
+  const nested = {
+    ...params,
+    commandArgs: params.commandArgs.slice(1),
+  };
+
+  switch (subcommand) {
+    case "show":
+      return await handleInspectCommand(nested);
+    case "list":
+      return await handleListCommand(nested);
+    case "watch": {
+      const flags = new Map(params.parsed.flags);
+      flags.set("watch", true);
+      return await handleLiveCommand({
+        ...nested,
+        parsed: {
+          ...params.parsed,
+          flags,
+        },
+      });
+    }
+    case "report":
+      return await handleReportCommand(nested);
+    case "events":
+      return await handleEventsCommand(nested);
+    case "path":
+      return await handleWorktreeCommand(nested);
+    case "open":
+      return await handleOpenCommand(nested);
+    case "retry":
+      return await handleRetryCommand(nested);
+    default:
+      throw new CliUsageError(`Unknown issue command: ${subcommand}`, "issue");
+  }
+}
+
 export async function handleInspectCommand(params: IssueCommandParams): Promise<number> {
   const issueKey = params.commandArgs[0];
   if (!issueKey) {
-    throw new Error("inspect requires <issueKey>.");
+    throw new Error("show requires <issueKey>.");
   }
   const result = await params.data.inspect(issueKey);
   if (!result) {
@@ -34,7 +77,7 @@ export async function handleInspectCommand(params: IssueCommandParams): Promise<
 export async function handleLiveCommand(params: IssueCommandParams): Promise<number> {
   const issueKey = params.commandArgs[0];
   if (!issueKey) {
-    throw new Error("live requires <issueKey>.");
+    throw new Error(`${params.parsed.flags.get("watch") === true ? "watch" : "status"} requires <issueKey>.`);
   }
   const watch = params.parsed.flags.get("watch") === true;
   do {
@@ -106,7 +149,7 @@ export async function handleEventsCommand(params: IssueCommandParams): Promise<n
 export async function handleWorktreeCommand(params: IssueCommandParams): Promise<number> {
   const issueKey = params.commandArgs[0];
   if (!issueKey) {
-    throw new Error("worktree requires <issueKey>.");
+    throw new Error("path requires <issueKey>.");
   }
   const result = params.data.worktree(issueKey);
   if (!result) {
@@ -172,7 +215,7 @@ export async function handleListCommand(params: IssueCommandParams): Promise<num
   const result = params.data.list({
     active: params.parsed.flags.get("active") === true,
     failed: params.parsed.flags.get("failed") === true,
-    ...(typeof params.parsed.flags.get("project") === "string" ? { project: String(params.parsed.flags.get("project")) } : {}),
+    ...(typeof params.parsed.flags.get("repo") === "string" ? { project: String(params.parsed.flags.get("repo")) } : {}),
   });
   writeOutput(params.stdout, params.json ? formatJson(result) : formatList(result));
   return 0;

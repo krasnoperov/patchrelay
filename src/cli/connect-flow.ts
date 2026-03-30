@@ -34,7 +34,7 @@ export async function runConnectFlow(params: {
     const label = result.installation.workspaceName ?? result.installation.actorName ?? `installation #${result.installation.id}`;
     writeOutput(
       params.stdout,
-      `Linked project ${result.projectId} to existing Linear installation ${result.installation.id} (${label}). No new OAuth approval was needed.\n`,
+      `Linked repo ${result.projectId} to existing Linear installation ${result.installation.id} (${label}). No new OAuth approval was needed.\n`,
     );
     return 0;
   }
@@ -46,7 +46,7 @@ export async function runConnectFlow(params: {
   const opened = params.noOpen || !opener ? false : await opener(result.authorizeUrl);
   writeOutput(
     params.stdout,
-    `${result.projectId ? `Project: ${result.projectId}\n` : ""}${opened ? "Opened browser for Linear OAuth.\n" : "Open this URL in a browser:\n"}${opened ? result.authorizeUrl : `${result.authorizeUrl}\n`}Waiting for OAuth approval...\n`,
+    `${result.projectId ? `Repo: ${result.projectId}\n` : ""}${opened ? "Opened browser for Linear OAuth.\n" : "Open this URL in a browser:\n"}${opened ? result.authorizeUrl : `${result.authorizeUrl}\n`}Waiting for OAuth approval...\n`,
   );
 
   const deadline = Date.now() + (params.timeoutSeconds ?? 180) * 1000;
@@ -58,7 +58,7 @@ export async function runConnectFlow(params: {
       writeOutput(
         params.stdout,
         [
-          `Connected ${label}${status.projectId ? ` for project ${status.projectId}` : ""}.${status.installation?.id ? ` Installation ${status.installation.id}.` : ""}`,
+          `Connected ${label}${status.projectId ? ` for repo ${status.projectId}` : ""}.${status.installation?.id ? ` Installation ${status.installation.id}.` : ""}`,
           params.config.linear.oauth.actor === "app"
             ? "If your Linear OAuth app webhook settings are configured, Linear has now provisioned the workspace webhook automatically."
             : undefined,

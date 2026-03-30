@@ -1,15 +1,14 @@
 // ─── Factory State Colors ─────────────────────────────────────────
 
 export const FACTORY_STATE_COLORS: Record<string, string> = {
-  delegated: "blue",
-  preparing: "blue",
-  implementing: "yellow",
+  delegated: "cyan",
+  implementing: "cyan",
   awaiting_input: "yellow",
   pr_open: "cyan",
-  changes_requested: "magenta",
-  repairing_ci: "magenta",
-  repairing_queue: "magenta",
-  awaiting_queue: "green",
+  changes_requested: "yellow",
+  repairing_ci: "cyan",
+  repairing_queue: "cyan",
+  awaiting_queue: "cyan",
   done: "green",
   failed: "red",
   escalated: "red",

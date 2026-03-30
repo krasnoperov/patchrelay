@@ -4,27 +4,20 @@ import { UnknownCommandError, UnknownFlagsError } from "./errors.ts";
 export const KNOWN_COMMANDS = new Set([
   "version",
   "serve",
-  "inspect",
-  "live",
-  "report",
-  "events",
-  "worktree",
-  "open",
-  "retry",
-  "list",
+  "issue",
   "doctor",
   "init",
-  "project",
+  "attach",
+  "repos",
+  "dashboard",
+  "dash",
+  "d",
+  "service",
   "connect",
   "installations",
   "feed",
-  "watch",
-  "install-service",
-  "restart-service",
   "help",
 ]);
-
-const ISSUE_KEY_PATTERN = /^[A-Za-z][A-Za-z0-9]*-\d+$/;
 
 export function parseArgs(argv: string[]): ParsedArgs {
   const positionals: string[] = [];
@@ -71,11 +64,11 @@ export function resolveCommand(parsed: ParsedArgs): ResolvedCommand {
   }
 
   if (KNOWN_COMMANDS.has(requestedCommand)) {
-    return { command: requestedCommand, commandArgs: parsed.positionals.slice(1) };
-  }
-
-  if (ISSUE_KEY_PATTERN.test(requestedCommand)) {
-    return { command: "inspect", commandArgs: parsed.positionals };
+    const command =
+      requestedCommand === "dash" || requestedCommand === "d"
+        ? "dashboard"
+        : requestedCommand;
+    return { command, commandArgs: parsed.positionals.slice(1) };
   }
 
   throw new UnknownCommandError(requestedCommand);
@@ -111,7 +104,16 @@ export function assertKnownFlags(parsed: ParsedArgs, command: string, allowedFla
     return;
   }
 
-  throw new UnknownFlagsError(unknownFlags, command === "project" || command === "project apply" ? "project" : "root");
+  throw new UnknownFlagsError(
+    unknownFlags,
+    command === "attach" || command === "repos"
+      ? "repos"
+      : command === "issue"
+        ? "issue"
+        : command === "service"
+          ? "service"
+          : "root",
+  );
 }
 
 export function parsePositiveIntegerFlag(

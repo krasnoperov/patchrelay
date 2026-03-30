@@ -6,8 +6,10 @@ Read order:
 
 1. [core-beliefs.md](./core-beliefs.md)
 2. [agentic-loop-principles.md](./agentic-loop-principles.md)
-3. [../architecture.md](../architecture.md)
-4. [../references/external-patterns.md](../references/external-patterns.md)
+3. [merge-steward.md](./merge-steward.md)
+4. [merge-queue-operations.md](./merge-queue-operations.md)
+5. [../architecture.md](../architecture.md)
+6. [../references/external-patterns.md](../references/external-patterns.md)
 
 Use this directory for:
 

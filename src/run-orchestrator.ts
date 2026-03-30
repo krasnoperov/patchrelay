@@ -519,13 +519,13 @@ export class RunOrchestrator {
         linearIssueId: run.linearIssueId,
         activeRunId: null,
         ...(postRunState ? { factoryState: postRunState } : {}),
-        ...(postRunState === "awaiting_queue" ? { pendingMergePrep: true } : {}),
       });
     });
 
     // If we advanced to awaiting_queue, enqueue for merge prep
     if (postRunState === "awaiting_queue") {
       this.enqueueIssue(run.projectId, run.linearIssueId);
+      this.maybeAddMergeQueueLabel(issue, run.projectId);
     }
 
     this.feed?.publish({
@@ -644,12 +644,6 @@ export class RunOrchestrator {
         continue;
       }
 
-      // Awaiting queue with stale pending merge prep — re-enqueue
-      if (issue.factoryState === "awaiting_queue" && issue.pendingMergePrep) {
-        this.enqueueIssue(issue.projectId, issue.linearIssueId);
-        continue;
-      }
-
       // For pr_open issues with no review decision, check GitHub for stale metadata
       if (issue.factoryState === "pr_open" && !issue.prReviewState) {
         await this.reconcileFromGitHub(issue);
@@ -691,7 +685,6 @@ export class RunOrchestrator {
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       factoryState: newState,
-      ...(newState === "awaiting_queue" ? { pendingMergePrep: true } : {}),
       ...(pendingRunType ? { pendingRunType: pendingRunType as never } : {}),
     });
     this.feed?.publish({
@@ -896,8 +889,7 @@ export class RunOrchestrator {
           linearIssueId: run.linearIssueId,
           activeRunId: null,
           ...(postRunState ? { factoryState: postRunState } : {}),
-          ...(postRunState === "awaiting_queue" ? { pendingMergePrep: true } : {}),
-        });
+          });
       });
       if (postRunState) {
         this.feed?.publish({
@@ -946,6 +938,21 @@ export class RunOrchestrator {
       body: `PatchRelay needs human help to continue.\n\n${reason}`,
     });
     void this.syncLinearSession(escalatedIssue);
+  }
+
+  /** Add the merge queue admission label for external-queue projects (best-effort). */
+  private maybeAddMergeQueueLabel(issue: IssueRecord, projectId: string): void {
+    const project = this.config.projects.find((p) => p.id === projectId);
+    if (!project?.github?.repoFullName || !issue.prNumber) return;
+    const label = project.github.mergeQueueLabel ?? "queue";
+    const repo = project.github.repoFullName;
+    if (!repo) return;
+    void execCommand("gh", [
+      "pr", "edit", String(issue.prNumber),
+      "--repo", repo, "--add-label", label,
+    ], { timeoutMs: 15_000 }).catch((err) => {
+      this.logger.warn({ issueKey: issue.issueKey, err }, "Failed to add merge queue label");
+    });
   }
 
   private failRunAndClear(run: RunRecord, message: string): void {

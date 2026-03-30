@@ -46,7 +46,6 @@ function runStatusColor(status: string): string {
 
 const STATE_LABELS: Record<string, string> = {
   delegated: "delegated",
-  preparing: "preparing",
   implementing: "implementing",
   pr_open: "pr open",
   changes_requested: "changes requested",

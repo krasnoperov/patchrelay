@@ -150,6 +150,8 @@ export class IssueQueryService {
       ...(overview.latestRun ? { latestRun: overview.latestRun } : {}),
       ...(overview.liveThread ? { liveThread: overview.liveThread } : {}),
       ...(latestRunReport ? { latestReportSummary: extractStageSummary(latestRunReport) } : {}),
+      feedEvents: this.db.operatorFeed.list({ issueKey, limit: 500 }),
+      activeRunId: issueRecord?.activeRunId ?? null,
       runs: report?.runs ?? [],
       generatedAt: new Date().toISOString(),
     };

@@ -5,6 +5,13 @@ import type { CliOperatorDataAccess } from "./operator-client.ts";
 export type Output = Pick<NodeJS.WriteStream, "write">;
 
 export type InteractiveRunner = (command: string, args: string[]) => Promise<number>;
+export interface CommandRunnerResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}
+
+export type CommandRunner = (command: string, args: string[]) => Promise<CommandRunnerResult>;
 
 export interface ParsedArgs {
   positionals: string[];
@@ -22,6 +29,7 @@ export interface RunCliOptions {
   config?: AppConfig;
   data?: CliDataAccess | CliOperatorDataAccess;
   runInteractive?: InteractiveRunner;
+  runCommand?: CommandRunner;
   openExternal?: (url: string) => Promise<boolean>;
   connectPollIntervalMs?: number;
 }

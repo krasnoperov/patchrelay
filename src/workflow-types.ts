@@ -40,5 +40,9 @@ export interface ProjectConfig {
     webhookSecret?: string;
     repoFullName?: string;
     baseBranch?: string;
+    /** GitHub label to add when entering awaiting_queue (default: "queue"). */
+    mergeQueueLabel?: string;
+    /** Check run name that signals queue eviction (default: "merge-steward/queue"). */
+    mergeQueueCheckName?: string;
   };
 }

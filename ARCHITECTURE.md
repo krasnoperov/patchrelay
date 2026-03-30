@@ -6,10 +6,10 @@ It manages a controlled issue loop of context, action, verification, and repair.
 The architecture follows a simple rule:
 
 - **Linear owns the human conversation**
-- **PatchRelay owns deterministic orchestration**
+- **PatchRelay owns deterministic orchestration** (issue → PR)
 - **Codex owns code generation and repair execution**
 - **GitHub owns review and CI truth**
-- **A merge queue provider owns final landing**
+- **Merge Steward owns serial integration and landing** (queue → merge)
 
 ## System Shape
 
@@ -23,6 +23,8 @@ flowchart LR
   GH --> GWH[GitHub Webhook Handler]
   GWH --> RO
   RO --> L
+  RO -->|queue label| MS[Merge Steward]
+  MS -->|merge / evict| GH
 ```
 
 ## Architectural Priorities
@@ -120,8 +122,9 @@ Linear delegate event
 -> PR opened (GitHub webhook)
 -> review loop (GitHub webhook → review_fix run)
 -> CI repair loop if needed (GitHub webhook → ci_repair run)
--> approved and enqueued
--> queue repair loop if needed (GitHub webhook → queue_repair run)
+-> approved → PatchRelay adds queue label
+-> Merge Steward takes over (rebase → CI → merge)
+-> queue repair if steward evicts (check run → queue_repair run → re-label)
 -> merged → done
 ```
 
@@ -130,10 +133,8 @@ Linear delegate event
 Factory states as implemented in `factory-state.ts`:
 
 - `delegated`
-- `preparing`
 - `implementing`
 - `pr_open`
-- `awaiting_review`
 - `changes_requested`
 - `repairing_ci`
 - `awaiting_queue`

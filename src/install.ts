@@ -13,8 +13,6 @@ import {
   getPatchRelayConfigDir,
   getPatchRelayDataDir,
   getPatchRelayStateDir,
-  getSystemdPathUnitPath,
-  getSystemdReloadUnitPath,
   getSystemdUnitPath,
   readBundledAsset,
 } from "./runtime-paths.ts";
@@ -245,36 +243,20 @@ export async function initializePatchRelayHome(options?: { force?: boolean; publ
 
 export async function installServiceUnits(options?: { force?: boolean }): Promise<{
   unitPath: string;
-  reloadUnitPath: string;
-  pathUnitPath: string;
   runtimeEnvPath: string;
   serviceEnvPath: string;
   configPath: string;
   serviceStatus: "created" | "skipped";
-  reloadStatus: "created" | "skipped";
-  pathStatus: "created" | "skipped";
 }> {
   const force = options?.force ?? false;
   const unitPath = getSystemdUnitPath();
-  const reloadUnitPath = getSystemdReloadUnitPath();
-  const pathUnitPath = getSystemdPathUnitPath();
   const serviceStatus = await writeTemplateFile(unitPath, renderTemplate(readBundledAsset("infra/patchrelay.service")), force);
-  const reloadStatus = await writeTemplateFile(
-    reloadUnitPath,
-    renderTemplate(readBundledAsset("infra/patchrelay-reload.service")),
-    force,
-  );
-  const pathStatus = await writeTemplateFile(pathUnitPath, renderTemplate(readBundledAsset("infra/patchrelay.path")), force);
   return {
     unitPath,
-    reloadUnitPath,
-    pathUnitPath,
     runtimeEnvPath: getDefaultRuntimeEnvPath(),
     serviceEnvPath: getDefaultServiceEnvPath(),
     configPath: getDefaultConfigPath(),
     serviceStatus,
-    reloadStatus,
-    pathStatus,
   };
 }
 
@@ -334,7 +316,7 @@ export async function upsertProjectInConfig(options: {
   }
 
   if (existingProjects.length - (existingProject ? 1 : 0) > 0 && issueKeyPrefixes.length === 0 && linearTeamIds.length === 0) {
-    throw new Error("Adding or updating a project in a multi-project config requires routing. Use --issue-prefix or --team-id.");
+    throw new Error("Adding or updating a repo in a multi-repo config requires routing. Use --prefix or --team.");
   }
 
   if (existingProjects.length - (existingProject ? 1 : 0) > 0) {
@@ -349,7 +331,7 @@ export async function upsertProjectInConfig(options: {
     });
     if (unscoped) {
       throw new Error(
-        `Existing project ${String(unscoped.id ?? "unknown")} has no routing configured. Add routing before configuring multiple projects.`,
+        `Existing repo ${String(unscoped.id ?? "unknown")} has no routing configured. Add routing before configuring multiple repos.`,
       );
     }
   }
@@ -361,7 +343,7 @@ export async function upsertProjectInConfig(options: {
       project.issue_key_prefixes.map(String).includes(prefix),
     );
     if (owner) {
-      throw new Error(`Issue key prefix "${prefix}" is already configured for project ${String(owner.id ?? "unknown")}`);
+      throw new Error(`Issue key prefix "${prefix}" is already configured for repo ${String(owner.id ?? "unknown")}`);
     }
   }
 
@@ -372,7 +354,7 @@ export async function upsertProjectInConfig(options: {
       project.linear_team_ids.map(String).includes(teamId),
     );
     if (owner) {
-      throw new Error(`Linear team id "${teamId}" is already configured for project ${String(owner.id ?? "unknown")}`);
+      throw new Error(`Linear team id "${teamId}" is already configured for repo ${String(owner.id ?? "unknown")}`);
     }
   }
 

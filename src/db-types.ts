@@ -29,8 +29,6 @@ export interface IssueRecord {
   ciRepairAttempts: number;
   queueRepairAttempts: number;
   reviewFixAttempts: number;
-  mergePrepAttempts: number;
-  pendingMergePrep: boolean;
   zombieRecoveryAttempts: number;
   lastZombieRecoveryAt?: string | undefined;
   updatedAt: string;

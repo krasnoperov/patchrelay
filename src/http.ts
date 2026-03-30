@@ -3,7 +3,9 @@ import fastify from "fastify";
 import rawBody from "fastify-raw-body";
 import type { Logger } from "pino";
 import { getBuildInfo } from "./build-info.ts";
-import { matchesOperatorFeedEvent, type OperatorFeedQuery } from "./operator-feed.ts";
+import { matchesOperatorFeedEvent, type OperatorFeedEvent, type OperatorFeedQuery } from "./operator-feed.ts";
+import { buildStateHistory, type StateHistoryNode } from "./cli/watch/history-builder.ts";
+import { buildPatchRelayQueueObservations, buildPatchRelayStateGraph, type ObservationLine, type VisualizationNode } from "./cli/watch/state-visualization.ts";
 import type { PatchRelayService } from "./service.ts";
 import type { AppConfig } from "./types.ts";
 
@@ -686,8 +688,28 @@ function renderAgentSessionStatusPage(params: {
       toolCallCount?: number;
       latestAssistantMessage?: string | null;
     } | undefined;
+    feedEvents?: Array<{
+      id?: number;
+      at: string;
+      level?: string;
+      kind?: string;
+      summary?: string;
+      detail?: string;
+      issueKey?: string;
+      projectId?: string;
+      stage?: string;
+      status?: string;
+      workflowId?: string;
+      nextStage?: string;
+    }> | undefined;
+    activeRunId?: number | null;
     runs: Array<{
-      run?: { runType?: string; status?: string; startedAt?: string; endedAt?: string } | undefined;
+      run?: { id?: number; runType?: string; status?: string; startedAt?: string; endedAt?: string } | undefined;
+      report?: {
+        assistantMessages?: string[];
+        commands?: unknown[];
+        fileChanges?: unknown[];
+      } | undefined;
     }>;
     generatedAt: string;
   };
@@ -713,6 +735,22 @@ function renderAgentSessionStatusPage(params: {
   const checkState = params.sessionStatus.issue.prCheckStatus ?? "unknown";
   const ciAttempts = params.sessionStatus.issue.ciRepairAttempts ?? 0;
   const queueAttempts = params.sessionStatus.issue.queueRepairAttempts ?? 0;
+  const history = buildPublicStateHistory({
+    currentFactoryState: factoryState,
+    activeRunId: params.sessionStatus.activeRunId ?? null,
+    ...(params.sessionStatus.feedEvents ? { feedEvents: params.sessionStatus.feedEvents } : {}),
+    runs: params.sessionStatus.runs,
+  });
+  const graph = buildPatchRelayStateGraph(history, factoryState);
+  const queueObservations = buildPatchRelayQueueObservations({
+    factoryState,
+    ...(params.sessionStatus.activeRun?.runType ? { activeRunType: params.sessionStatus.activeRun.runType } : {}),
+    ...(params.sessionStatus.issue.prNumber !== undefined ? { prNumber: params.sessionStatus.issue.prNumber } : {}),
+    ...(params.sessionStatus.issue.prReviewState ? { prReviewState: params.sessionStatus.issue.prReviewState } : {}),
+  }, normalizeFeedEvents(params.sessionStatus.feedEvents));
+  const pathHtml = renderStatePath(history, factoryState);
+  const graphHtml = renderStateGraph(graph.main, graph.prLoops, graph.queueLoop, graph.exits);
+  const observationsHtml = renderObservationList(queueObservations);
 
   return `<!doctype html>
 <html lang="en">
@@ -759,6 +797,20 @@ function renderAgentSessionStatusPage(params: {
       .chip { border: 1px solid var(--line); border-radius: 999px; padding: 9px 14px; background: rgba(255,255,255,0.74); font-size: 14px; }
       .section { margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--line); }
       .section h2 { margin: 0; font-size: 22px; }
+      .grid { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); margin-top: 14px; }
+      .card { border: 1px solid var(--line); border-radius: 18px; background: rgba(255,255,255,0.56); padding: 16px; }
+      .card h3 { margin: 0 0 10px; font-size: 16px; }
+      .graph-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+      .graph-connector { color: var(--muted); }
+      .node { display: inline-flex; border-radius: 999px; padding: 6px 10px; font-size: 13px; border: 1px solid var(--line); background: rgba(255,255,255,0.72); }
+      .node.current { border-color: rgba(31,109,87,0.45); background: rgba(31,109,87,0.12); color: #164c3d; }
+      .node.visited { border-color: rgba(31,109,87,0.28); color: #275546; }
+      .node.upcoming { color: #6f695f; }
+      .path-list, .observation-list { margin: 0; padding-left: 18px; color: var(--muted); }
+      .path-list li, .observation-list li { margin-top: 8px; }
+      .tone-warn { color: #8d5c10; }
+      .tone-success { color: #1f6d57; }
+      .tone-info { color: var(--muted); }
       table { width: 100%; border-collapse: collapse; margin-top: 14px; }
       th, td { text-align: left; border-bottom: 1px solid var(--line); padding: 10px 8px; vertical-align: top; }
       th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: #5f594e; }
@@ -798,6 +850,23 @@ function renderAgentSessionStatusPage(params: {
         <span class="chip"><strong>Tool calls:</strong> ${escapeHtml(String(toolCallCount))}</span>
         <span class="chip"><strong>CI repairs:</strong> ${escapeHtml(String(ciAttempts))}</span>
         <span class="chip"><strong>Queue repairs:</strong> ${escapeHtml(String(queueAttempts))}</span>
+      </div>
+      <div class="section">
+        <h2>State Path</h2>
+        <div class="grid">
+          <div class="card">
+            <h3>Native Graph</h3>
+            ${graphHtml}
+          </div>
+          <div class="card">
+            <h3>Queue Observation</h3>
+            ${observationsHtml}
+          </div>
+        </div>
+        <div class="card" style="margin-top: 18px;">
+          <h3>Observed Path</h3>
+          ${pathHtml}
+        </div>
       </div>
       <div class="section">
         <h2>Recent Stages</h2>
@@ -856,6 +925,7 @@ function formatThread(
 function formatStageRow(
   run:
     | {
+        id?: number;
         runType?: string;
         status?: string;
         startedAt?: string;
@@ -873,4 +943,155 @@ function formatStageRow(
   return `<tr><td><code>${escapeHtml(runType)}</code></td><td>${escapeHtml(status)}</td><td><code>${escapeHtml(
     startedAt,
   )}</code></td><td><code>${escapeHtml(endedAt)}</code></td></tr>`;
+}
+
+function normalizeFeedEvents(
+  feedEvents:
+    | Array<{
+        id?: number;
+        at: string;
+        level?: string;
+        kind?: string;
+        summary?: string;
+        detail?: string;
+        issueKey?: string;
+        projectId?: string;
+        stage?: string;
+        status?: string;
+        workflowId?: string;
+        nextStage?: string;
+      }>
+    | undefined,
+): OperatorFeedEvent[] {
+  return (feedEvents ?? []).map((event, index) => ({
+    id: event.id ?? -(index + 1),
+    at: event.at,
+    level: event.level === "warn" || event.level === "error" ? event.level : "info",
+    kind: event.kind === "service"
+      || event.kind === "webhook"
+      || event.kind === "agent"
+      || event.kind === "comment"
+      || event.kind === "stage"
+      || event.kind === "turn"
+      || event.kind === "workflow"
+      || event.kind === "hook"
+      || event.kind === "github"
+      || event.kind === "linear"
+      ? event.kind
+      : "service",
+    summary: event.summary ?? "",
+    ...(event.detail ? { detail: event.detail } : {}),
+    ...(event.issueKey ? { issueKey: event.issueKey } : {}),
+    ...(event.projectId ? { projectId: event.projectId } : {}),
+    ...(event.stage ? { stage: event.stage } : {}),
+    ...(event.status ? { status: event.status } : {}),
+    ...(event.workflowId ? { workflowId: event.workflowId } : {}),
+    ...(event.nextStage ? { nextStage: event.nextStage } : {}),
+  }));
+}
+
+function buildPublicStateHistory(params: {
+  currentFactoryState: string;
+  activeRunId: number | null;
+  feedEvents?: Array<{
+    id?: number;
+    at: string;
+    level?: string;
+    kind?: string;
+    summary?: string;
+    detail?: string;
+    issueKey?: string;
+    projectId?: string;
+    stage?: string;
+    status?: string;
+    workflowId?: string;
+    nextStage?: string;
+  }>;
+  runs: Array<{
+    run?: { id?: number; runType?: string; status?: string; startedAt?: string; endedAt?: string } | undefined;
+    report?: {
+      assistantMessages?: string[];
+      commands?: unknown[];
+      fileChanges?: unknown[];
+    } | undefined;
+  }>;
+}): StateHistoryNode[] {
+  const runs = params.runs.flatMap((entry, index) => {
+    if (!entry.run?.runType || !entry.run?.status || !entry.run?.startedAt) {
+      return [];
+    }
+    return [{
+      id: entry.run.id ?? index + 1,
+      runType: entry.run.runType,
+      status: entry.run.status,
+      startedAt: entry.run.startedAt,
+      endedAt: entry.run.endedAt,
+      ...(entry.report ? {
+        report: {
+          runType: entry.run.runType,
+          status: entry.run.status,
+          prompt: "",
+          assistantMessages: entry.report.assistantMessages ?? [],
+          plans: [],
+          reasoning: [],
+          commands: (entry.report.commands ?? []) as Array<{ command: string; cwd: string; status: string; exitCode?: number }>,
+          fileChanges: (entry.report.fileChanges ?? []) as Array<{ path: string; changeType: string }>,
+          toolCalls: [],
+          eventCounts: {},
+        },
+      } : {}),
+    }];
+  });
+
+  return buildStateHistory(
+    runs,
+    normalizeFeedEvents(params.feedEvents),
+    params.currentFactoryState,
+    params.activeRunId,
+  );
+}
+
+function renderStateGraph(
+  main: VisualizationNode[],
+  prLoops: VisualizationNode[],
+  queueLoop: VisualizationNode[],
+  exits: VisualizationNode[],
+): string {
+  return [
+    renderGraphRow("main", main, true),
+    renderGraphRow("pr loops", prLoops, false),
+    renderGraphRow("queue loop", queueLoop, false),
+    renderGraphRow("exits", exits, false),
+  ].join("");
+}
+
+function renderGraphRow(label: string, nodes: VisualizationNode[], withConnectors: boolean): string {
+  const items = nodes.map((node, index) => {
+    const connector = withConnectors && index > 0 ? '<span class="graph-connector">→</span>' : "";
+    return `${connector}<span class="node ${escapeHtml(node.status)}">${escapeHtml(node.label)}</span>`;
+  }).join("");
+  return `<div class="graph-row"><strong>${escapeHtml(label)}:</strong> ${items}</div>`;
+}
+
+function renderObservationList(observations: ObservationLine[]): string {
+  if (observations.length === 0) {
+    return '<p>No queue observation is available yet.</p>';
+  }
+  return `<ul class="observation-list">${observations.map((observation) =>
+    `<li class="tone-${escapeHtml(observation.tone)}">${escapeHtml(observation.text)}</li>`).join("")}</ul>`;
+}
+
+function renderStatePath(history: StateHistoryNode[], currentFactoryState: string): string {
+  if (history.length === 0) {
+    return `<p>Current native state: <code>${escapeHtml(currentFactoryState)}</code>.</p>`;
+  }
+  const items: string[] = [];
+  for (const node of history) {
+    items.push(`<li><code>${escapeHtml(node.state)}</code>${node.reason ? ` — ${escapeHtml(node.reason)}` : ""}${node.isCurrent ? " (current)" : ""}</li>`);
+    for (const trip of node.sideTrips) {
+      const returnText = trip.returnState ? ` → ${trip.returnedAt ? escapeHtml(trip.returnState) : escapeHtml(trip.returnState)}` : "";
+      items.push(`<li><code>${escapeHtml(trip.state)}</code> side trip${trip.reason ? ` — ${escapeHtml(trip.reason)}` : ""}${returnText ? ` ${returnText}` : ""}</li>`);
+    }
+  }
+  return `<ul class="path-list">${items.join("")}</ul>`;
 }

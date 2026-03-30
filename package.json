@@ -18,14 +18,15 @@
     "runtime.env.example",
     "service.env.example",
     "config/patchrelay.example.json",
-    "infra/patchrelay.service",
-    "infra/patchrelay-reload.service",
-    "infra/patchrelay.path"
+    "infra/patchrelay.service"
   ],
   "description": "Self-hosted harness for Linear-driven Codex work with durable issue worktrees, staged runs, and inspection.",
   "engines": {
     "node": ">=24.0.0"
   },
+  "workspaces": [
+    "packages/merge-steward"
+  ],
   "scripts": {
     "dev": "node --watch --experimental-transform-types src/index.ts",
     "build": "rm -rf dist && tsc -p tsconfig.json && chmod +x dist/index.js && node scripts/write-build-info.mjs",
@@ -51,10 +52,10 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@types/node": "^24.12.0",
+    "@types/node": "^25.5.0",
     "@types/react": "^19.2.14",
     "eslint": "^10.0.3",
-    "typescript": "^5.9.3",
+    "typescript": "^5.8.3",
     "typescript-eslint": "^8.57.0"
   }
 }

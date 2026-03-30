@@ -25,7 +25,7 @@ export async function handleConnectCommand(params: ConnectCommandParams): Promis
     json: params.json,
     openExternal: params.options?.openExternal ?? openExternalUrl,
     ...(params.options?.connectPollIntervalMs !== undefined ? { connectPollIntervalMs: params.options.connectPollIntervalMs } : {}),
-    ...(typeof params.parsed.flags.get("project") === "string" ? { projectId: String(params.parsed.flags.get("project")) } : {}),
+    ...(typeof params.parsed.flags.get("repo") === "string" ? { projectId: String(params.parsed.flags.get("repo")) } : {}),
   });
 }
 
@@ -58,7 +58,7 @@ export async function handleInstallationsCommand(params: InstallationsCommandPar
   const lines: string[] = [];
   for (const item of result.installations) {
     const label = item.installation.workspaceName ?? item.installation.actorName ?? "-";
-    lines.push(`${item.installation.id}  ${label}  projects=${item.linkedProjects.join(",") || "-"}`);
+    lines.push(`${item.installation.id}  ${label}  repos=${item.linkedProjects.join(",") || "-"}`);
     for (const projectId of item.linkedProjects) {
       const p = params.config.projects.find((proj) => proj.id === projectId);
       if (!p) continue;

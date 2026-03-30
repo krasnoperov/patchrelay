@@ -1,0 +1,63 @@
+{
+  "name": "merge-steward",
+  "version": "0.0.1",
+  "description": "Serial merge queue for GitHub — rebase, CI-gate, and merge PRs one at a time",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/krasnoperov/patchrelay.git",
+    "directory": "packages/merge-steward"
+  },
+  "homepage": "https://github.com/krasnoperov/patchrelay/tree/main/packages/merge-steward#readme",
+  "keywords": [
+    "merge-queue",
+    "github",
+    "ci",
+    "serial-merge",
+    "rebase",
+    "pull-request"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist",
+    "!dist/sim",
+    "!dist/memory-store.*",
+    "runtime.env.example",
+    "service.env.example",
+    "infra/merge-steward@.service"
+  ],
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "bin": {
+    "merge-steward": "dist/index.js"
+  },
+  "scripts": {
+    "dev": "node --watch --experimental-transform-types src/index.ts",
+    "prepack": "npm run build",
+    "build": "rm -rf dist && tsc -p tsconfig.json && chmod +x dist/index.js",
+    "start": "node dist/index.js serve",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --experimental-transform-types --test test/**/*.test.ts",
+    "test:scenarios": "node --experimental-transform-types --test test/scenarios/*.test.ts",
+    "test:property": "node --experimental-transform-types --test test/property/*.test.ts"
+  },
+  "dependencies": {
+    "fastify": "^5.8.2",
+    "fastify-raw-body": "^5.0.0",
+    "ink": "^6.8.0",
+    "pino": "^10.3.1",
+    "react": "^19.2.4",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "@types/react": "^19.2.14",
+    "fast-check": "^4.6.0",
+    "isomorphic-git": "^1.27.1",
+    "memfs": "^4.17.0",
+    "typescript": "^5.8.3"
+  }
+}

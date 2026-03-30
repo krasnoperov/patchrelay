@@ -8,5 +8,10 @@ This directory is for deeper product specs later, such as:
 - operator workflows
 - review and repair UX
 - merge queue provider behavior
+- state visualization and queue hand-off UX
 
 Until those docs exist, treat the root product spec and [../architecture.md](../architecture.md) as authoritative.
+
+Available deeper specs:
+
+- [operator-state-visualization.md](./operator-state-visualization.md) - native state graphs and external observation panels for the PatchRelay dashboard and merge-steward watch

@@ -81,8 +81,6 @@ It creates:
 - `~/.config/patchrelay/service.env`
 - `~/.config/patchrelay/patchrelay.json`
 - `/etc/systemd/system/patchrelay.service`
-- `/etc/systemd/system/patchrelay-reload.service`
-- `/etc/systemd/system/patchrelay.path`
 
 Default runtime paths are:
 
@@ -122,8 +120,6 @@ The most useful correlation fields in logs are:
 
 The generated `patchrelay.json` stays intentionally minimal. In the default setup it only needs `server.public_base_url`; PatchRelay already has built-in defaults for the local bind address, database path, logs, worktree roots, workflow filenames, and Codex runner settings.
 
-`patchrelay init` also installs the system service and a watcher that reload-or-restarts PatchRelay whenever `patchrelay.json`, `runtime.env`, or `service.env` changes.
-
 ## 3. Configure Machine-Level Secrets
 
 PatchRelay resolves secrets through a provider-agnostic fallback chain — see [secrets.md](./secrets.md) for the full reference.
@@ -159,13 +155,13 @@ At the top level, configure the public HTTPS origin that Linear should use:
 }
 ```
 
-Add repositories with `patchrelay project apply <id> <repo-path>`. A project only needs:
+Add repositories with `patchrelay attach <id>` from the repo root, or pass `--path <path>` if you are attaching a different working tree. A project only needs:
 
 - `id`
 - `repo_path`
 - one routing key when you have multiple projects: `issue_key_prefixes` or `linear_team_ids`
 
-`patchrelay project apply` is the idempotent happy-path command:
+`patchrelay attach` is the idempotent happy-path command:
 
 - it creates or updates the local project entry
 - it checks whether PatchRelay is ready to start with that project
@@ -207,40 +203,37 @@ patchrelay serve
 Stay in the terminal:
 
 ```bash
-patchrelay project apply your-project /absolute/path/to/repo
+patchrelay attach your-project
+patchrelay attach your-project --path /absolute/path/to/repo
 patchrelay installations
-patchrelay inspect APP-123
+patchrelay issue show APP-123
 ```
 
-`patchrelay project apply` opens the browser only long enough to approve the Linear OAuth app when it needs a fresh installation, then returns to the CLI workflow.
+`patchrelay attach` opens the browser only long enough to approve the Linear OAuth app when it needs a fresh installation, then returns to the CLI workflow.
 
 ## 7. Run As A Service
 
 Create and start the system service with:
 
 ```bash
-patchrelay install-service
+patchrelay service install
 ```
 
 That writes:
 
 - `/etc/systemd/system/patchrelay.service`
-- `/etc/systemd/system/patchrelay-reload.service`
-- `/etc/systemd/system/patchrelay.path`
 
 And then runs:
 
 - `sudo systemctl daemon-reload`
-- `sudo systemctl enable --now patchrelay.path`
 - `sudo systemctl enable patchrelay.service`
 - `sudo systemctl reload-or-restart patchrelay.service`
 
 If you only want to write the unit files without starting them yet:
 
 ```bash
-patchrelay install-service --write-only
+patchrelay service install --write-only
 sudo systemctl daemon-reload
-sudo systemctl enable --now patchrelay.path
 sudo systemctl enable patchrelay.service
 sudo systemctl reload-or-restart patchrelay.service
 ```
@@ -248,7 +241,7 @@ sudo systemctl reload-or-restart patchrelay.service
 After package updates, restart PatchRelay with:
 
 ```bash
-patchrelay restart-service
+patchrelay service restart
 ```
 
 ## 8. Security Posture

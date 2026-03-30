@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import type { AppConfig } from "../types.ts";
+import type { CommandRunnerResult } from "./command-types.ts";
 
 export function buildOpenCommand(config: AppConfig, worktreePath: string, resumeThreadId?: string): { command: string; args: string[] } {
   const args = ["--dangerously-bypass-approvals-and-sandbox"];
@@ -28,6 +29,35 @@ export async function runInteractiveCommand(command: string, args: string[]): Pr
         return;
       }
       resolve(code ?? 0);
+    });
+  });
+}
+
+export async function runBufferedCommand(command: string, args: string[]): Promise<CommandRunnerResult> {
+  return await new Promise<CommandRunnerResult>((resolve, reject) => {
+    const child = spawn(command, args, {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr?.on("data", (chunk) => {
+      stderr += chunk;
+    });
+
+    child.on("error", reject);
+    child.on("exit", (code, signal) => {
+      resolve({
+        exitCode: signal ? 1 : (code ?? 0),
+        stdout,
+        stderr,
+      });
     });
   });
 }

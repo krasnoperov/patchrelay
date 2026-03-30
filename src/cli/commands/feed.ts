@@ -41,7 +41,7 @@ export async function handleFeedCommand(params: FeedCommandParams): Promise<numb
   const limit = parseLimit(params.parsed.flags.get("limit"));
   const follow = params.parsed.flags.get("follow") === true;
   const issueKey = readOptionalStringFlag(params.parsed, "issue");
-  const projectId = readOptionalStringFlag(params.parsed, "project");
+  const projectId = readOptionalStringFlag(params.parsed, "repo");
   const kind = readOptionalStringFlag(params.parsed, "kind") as OperatorFeedQuery["kind"];
   const stage = readOptionalStringFlag(params.parsed, "stage");
   const status = readOptionalStringFlag(params.parsed, "status");

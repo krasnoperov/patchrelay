@@ -7,6 +7,11 @@ import { StateHistoryView } from "./StateHistoryView.tsx";
 import { buildStateHistory } from "./history-builder.ts";
 import { HelpBar } from "./HelpBar.tsx";
 import { planStepSymbol, planStepColor } from "./plan-helpers.ts";
+import { progressBar } from "./format-utils.ts";
+import { FactoryStateGraph } from "./FactoryStateGraph.tsx";
+import { QueueObservationView } from "./QueueObservationView.tsx";
+import { buildPatchRelayQueueObservations, buildPatchRelayStateGraph } from "./state-visualization.ts";
+import { FreshnessBadge } from "./FreshnessBadge.tsx";
 
 interface IssueDetailViewProps {
   issue: WatchIssue | undefined;
@@ -22,6 +27,8 @@ interface IssueDetailViewProps {
   timelineMode: TimelineMode;
   rawRuns: TimelineRunInput[];
   rawFeedEvents: OperatorFeedEvent[];
+  connected: boolean;
+  lastServerMessageAt: number | null;
 }
 
 function formatTokens(n: number): string {
@@ -44,7 +51,7 @@ function ElapsedTime({ startedAt }: { startedAt: string }): React.JSX.Element {
 
 export function IssueDetailView({
   issue, timeline, follow, activeRunStartedAt, activeRunId, tokenUsage, diffSummary, plan, issueContext,
-  detailTab, timelineMode, rawRuns, rawFeedEvents,
+  detailTab, timelineMode, rawRuns, rawFeedEvents, connected, lastServerMessageAt,
 }: IssueDetailViewProps): React.JSX.Element {
   if (!issue) {
     return (
@@ -65,6 +72,14 @@ export function IssueDetailView({
     () => buildStateHistory(rawRuns, rawFeedEvents, issue.factoryState, activeRunId),
     [rawRuns, rawFeedEvents, issue.factoryState, activeRunId],
   );
+  const graph = useMemo(
+    () => buildPatchRelayStateGraph(history, issue.factoryState),
+    [history, issue.factoryState],
+  );
+  const queueObservations = useMemo(
+    () => buildPatchRelayQueueObservations(issue, rawFeedEvents),
+    [issue, rawFeedEvents],
+  );
 
   return (
     <Box flexDirection="column">
@@ -77,6 +92,7 @@ export function IssueDetailView({
         {meta.length > 0 && <Text dimColor>{meta.join("  ")}</Text>}
         {detailTab === "timeline" && <Text dimColor>{timelineMode}</Text>}
         {follow && <Text color="yellow">follow</Text>}
+        <FreshnessBadge connected={connected} lastServerMessageAt={lastServerMessageAt} />
       </Box>
       {issue.title && <Text>{issue.title}</Text>}
 
@@ -84,6 +100,11 @@ export function IssueDetailView({
         <>
           {plan && plan.length > 0 && (
             <Box flexDirection="column" marginTop={1}>
+              <Box gap={1}>
+                <Text dimColor>Plan</Text>
+                <Text>{progressBar(plan.filter((s) => s.status === "completed").length, plan.length, 16)}</Text>
+                <Text dimColor>{plan.filter((s) => s.status === "completed").length}/{plan.length}</Text>
+              </Box>
               {plan.map((entry, i) => (
                 <Box key={`plan-${i}`} gap={1}>
                   <Text color={planStepColor(entry.status)}>[{planStepSymbol(entry.status)}]</Text>
@@ -98,7 +119,18 @@ export function IssueDetailView({
           </Box>
         </>
       ) : (
-        <StateHistoryView history={history} plan={plan} activeRunId={activeRunId} />
+        <>
+          <FactoryStateGraph
+            main={graph.main}
+            prLoops={graph.prLoops}
+            queueLoop={graph.queueLoop}
+            exits={graph.exits}
+          />
+          <QueueObservationView observations={queueObservations} />
+          <Box marginTop={1}>
+            <StateHistoryView history={history} plan={plan} activeRunId={activeRunId} />
+          </Box>
+        </>
       )}
 
       <Box marginTop={1}>

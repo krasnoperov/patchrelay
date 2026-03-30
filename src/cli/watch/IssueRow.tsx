@@ -9,14 +9,13 @@ interface IssueRowProps {
 }
 
 const STATE_COLORS: Record<string, string> = {
-  delegated: "blue",
-  preparing: "blue",
-  implementing: "yellow",
+  delegated: "cyan",
+  implementing: "cyan",
   pr_open: "cyan",
-  changes_requested: "magenta",
-  repairing_ci: "magenta",
-  awaiting_queue: "green",
-  repairing_queue: "magenta",
+  changes_requested: "yellow",
+  repairing_ci: "cyan",
+  awaiting_queue: "cyan",
+  repairing_queue: "cyan",
   done: "green",
   failed: "red",
   escalated: "red",
@@ -24,18 +23,17 @@ const STATE_COLORS: Record<string, string> = {
 };
 
 const STATE_SHORT: Record<string, string> = {
-  delegated: "queued",
-  preparing: "prep",
+  delegated: "delegated",
   implementing: "impl",
   pr_open: "pr open",
   changes_requested: "review fix",
   repairing_ci: "ci fix",
-  awaiting_queue: "merging",
+  awaiting_queue: "await queue",
   repairing_queue: "merge fix",
   done: "done",
   failed: "failed",
   escalated: "escalated",
-  awaiting_input: "paused",
+  awaiting_input: "await input",
 };
 
 const STATUS_SHORT: Record<string, string> = {

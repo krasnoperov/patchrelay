@@ -10,7 +10,6 @@ import {
 import { GitHubWebhookHandler } from "./github-webhook-handler.ts";
 import { IssueQueryService } from "./issue-query-service.ts";
 import { LinearOAuthService } from "./linear-oauth-service.ts";
-import { MergeQueue } from "./merge-queue.ts";
 import { RunOrchestrator } from "./run-orchestrator.ts";
 import { OperatorEventFeed, type OperatorFeedQuery } from "./operator-feed.ts";
 import {
@@ -53,7 +52,6 @@ function extractStatusNote(summaryJson?: string, reportJson?: string): string | 
 export class PatchRelayService {
   readonly linearProvider: LinearClientProvider;
   private readonly orchestrator: RunOrchestrator;
-  private readonly mergeQueue: MergeQueue;
   private readonly githubAppTokenManager?: GitHubAppTokenManager;
   private readonly webhookHandler: WebhookHandler;
   private readonly githubWebhookHandler: GitHubWebhookHandler;
@@ -82,30 +80,6 @@ export class PatchRelayService {
       logger, this.feed,
     );
 
-    this.mergeQueue = new MergeQueue(
-      config, db,
-      (projectId, issueId) => enqueueIssue(projectId, issueId),
-      logger, this.feed,
-      (issue, content, options) => {
-        if (!issue.agentSessionId) return;
-        void (async () => {
-          try {
-            const linear = await this.linearProvider.forProject(issue.projectId);
-            if (!linear) return;
-            const allowEphemeral = content.type === "thought" || content.type === "action";
-            await linear.createAgentActivity({
-              agentSessionId: issue.agentSessionId!,
-              content,
-              ...(options?.ephemeral && allowEphemeral ? { ephemeral: true } : {}),
-            });
-          } catch (error) {
-            const msg = error instanceof Error ? error.message : String(error);
-            logger.warn({ issueKey: issue.issueKey, type: content.type, error: msg }, "Failed to emit merge-prep Linear activity");
-          }
-        })();
-      },
-    );
-
     this.webhookHandler = new WebhookHandler(
       config,
       db,
@@ -119,7 +93,6 @@ export class PatchRelayService {
     this.githubWebhookHandler = new GitHubWebhookHandler(
       config, db, this.linearProvider,
       (projectId, issueId) => enqueueIssue(projectId, issueId),
-      this.mergeQueue,
       logger, codex, this.feed,
     );
     const runtime = new ServiceRuntime(
@@ -130,24 +103,6 @@ export class PatchRelayService {
       this.webhookHandler,
       {
         processIssue: async (item: { projectId: string; issueId: string }) => {
-          const issue = db.getIssue(item.projectId, item.issueId);
-          // Repairs take priority over merge prep — a check_failed or
-          // review_changes_requested that arrived while merge prep was
-          // queued must not be swallowed.
-          if (issue?.pendingRunType) {
-            await this.orchestrator.run(item);
-            return;
-          }
-          if (issue?.pendingMergePrep) {
-            const project = config.projects.find((p) => p.id === item.projectId);
-            if (project) await this.mergeQueue.prepareForMerge(issue, project);
-            // Re-check: a repair run may have been enqueued during prep
-            const after = db.getIssue(item.projectId, item.issueId);
-            if (after?.pendingRunType) {
-              runtime.enqueueIssue(item.projectId, item.issueId);
-            }
-            return;
-          }
           await this.orchestrator.run(item);
         },
       },
@@ -206,7 +161,6 @@ export class PatchRelayService {
       }
     }
     await this.runtime.start();
-    this.mergeQueue.seedOnStartup();
   }
 
   async stop(): Promise<void> {

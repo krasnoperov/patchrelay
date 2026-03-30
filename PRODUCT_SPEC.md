@@ -21,8 +21,8 @@ It is the deterministic system around the model and around the loop:
 - Linear is the human-facing control plane
 - Codex is the execution engine
 - GitHub is the source of truth for code review and CI
-- A merge queue provider (via GitHub merge_group events) is the delivery gate
-- PatchRelay is the stateful orchestrator that ties them together
+- Merge Steward is the delivery gate — a separate service that owns serial queue integration and landing
+- PatchRelay is the stateful orchestrator that ties issue delegation to reviewed pull requests
 
 ## Primary Users
 
@@ -86,12 +86,12 @@ PatchRelay does not need to:
 3. A `ci_repair` run is started in the same worktree and branch.
 4. Codex reads the failure logs, pushes a fix, and waits for checks again.
 
-### 4. Merge Queue Repair
+### 4. Merge Queue Delivery And Repair
 
-1. The PR is approved and enqueued.
-2. The queue provider rebases or batches the PR against the current trunk.
-3. If queue validation fails, PatchRelay receives a `merge_group` failure event and starts a `queue_repair` run.
-4. The change returns to review if necessary and re-enters the queue.
+1. The PR is approved and CI is green. PatchRelay adds the `queue` label.
+2. Merge Steward admits the PR, rebases onto main, waits for CI, and merges when green.
+3. If the steward evicts the PR (rebase conflict, CI failure after retries), it creates a `merge-steward/queue` check run with failure context.
+4. PatchRelay detects the check run failure, starts a `queue_repair` run, and re-adds the `queue` label after the fix.
 
 ## Functional Requirements
 
@@ -122,7 +122,7 @@ PatchRelay must:
 
 PatchRelay must:
 
-1. accept GitHub webhooks for PR, review, check, and merge_group events
+1. accept GitHub webhooks for PR, review, and check events
 2. track PR state (number, URL, review state, check status) on the issue record
 3. trigger reactive runs (ci_repair, review_fix, queue_repair) from GitHub events
 4. treat GitHub as canonical for review and CI truth
@@ -167,7 +167,7 @@ PatchRelay must make it easy to answer:
 - session activities and plans
 - durable worktrees with setup hooks
 - Codex execution
-- GitHub webhook intake for PR, review, check, and merge_group events
+- GitHub webhook intake for PR, review, and check events
 - reactive CI repair loop
 - reactive review fix loop
 - reactive queue repair loop
@@ -179,7 +179,7 @@ PatchRelay must make it easy to answer:
 - sophisticated UI dashboards
 - arbitrary parallel agents on the same issue
 - autonomous semantic-conflict arbitration across many branches
-- Graphite-specific merge queue adapter (queue events come via GitHub merge_group)
+- third-party merge queue adapters (Merge Steward is the queue)
 
 ## Success Criteria
 
