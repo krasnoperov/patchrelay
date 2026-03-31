@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.28.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.27.0...patchrelay-v0.28.0) (2026-03-31)
+
+
+### Features
+
+* harden merge queue contract and repair handoff ([8c41ee3](https://github.com/krasnoperov/patchrelay/commit/8c41ee3296618dc38fa6f0d5c27ac4addad21714))
+* harden merge queue contract and repair handoff ([efa56fb](https://github.com/krasnoperov/patchrelay/commit/efa56fbb3a274c17591790dec13e374bd9672f50))
+
 ## [0.27.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.26.0...patchrelay-v0.27.0) (2026-03-30)
 
 
