@@ -9,6 +9,8 @@ export const KNOWN_COMMANDS = new Set([
   "init",
   "attach",
   "repos",
+  "linear",
+  "repo",
   "dashboard",
   "dash",
   "d",
@@ -106,8 +108,10 @@ export function assertKnownFlags(parsed: ParsedArgs, command: string, allowedFla
 
   throw new UnknownFlagsError(
     unknownFlags,
-    command === "attach" || command === "repos"
-      ? "repos"
+    command === "repo"
+      ? "repo"
+      : command === "linear"
+        ? "linear"
       : command === "issue"
         ? "issue"
         : command === "service"

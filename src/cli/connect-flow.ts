@@ -34,7 +34,9 @@ export async function runConnectFlow(params: {
     const label = result.installation.workspaceName ?? result.installation.actorName ?? `installation #${result.installation.id}`;
     writeOutput(
       params.stdout,
-      `Linked repo ${result.projectId} to existing Linear installation ${result.installation.id} (${label}). No new OAuth approval was needed.\n`,
+      result.projectId
+        ? `Linked repo ${result.projectId} to existing Linear installation ${result.installation.id} (${label}). No new OAuth approval was needed.\n`
+        : `Reused existing Linear installation ${result.installation.id} (${label}). No new OAuth approval was needed.\n`,
     );
     return 0;
   }

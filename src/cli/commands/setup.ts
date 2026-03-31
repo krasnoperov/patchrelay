@@ -93,10 +93,11 @@ export async function handleInitCommand(params: SetupCommandParams): Promise<num
             `1. Edit ${result.serviceEnvPath}`,
             "2. Paste your Linear OAuth client id and client secret into service.env and keep the generated webhook secret and token encryption key",
             "3. Paste LINEAR_WEBHOOK_SECRET from service.env into the Linear OAuth app webhook signing secret",
-            "4. Run `patchrelay attach <id>` from the repo root, or pass `--path /path/to/repo`",
-            "5. Edit the generated repo workflows if you want custom state names or workflow files, then add those workflow files to the repo",
-            "6. Run `patchrelay doctor`",
-            "7. Run `patchrelay service status`",
+            "4. Run `patchrelay linear connect`",
+            "5. Run `patchrelay linear sync`",
+            "6. Run `patchrelay repo link <owner/repo> --workspace <workspace> --team <team>`",
+            "7. Add the workflow files your repo needs, then run `patchrelay doctor`",
+            "8. Run `patchrelay service status`",
           ]
             .filter(Boolean)
             .join("\n") + "\n",

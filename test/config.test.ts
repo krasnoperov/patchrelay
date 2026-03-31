@@ -595,6 +595,62 @@ test("loadConfig derives project worktree_root and branch_prefix when omitted", 
   }
 });
 
+test("loadConfig derives runtime projects from repository-first config", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-config-repositories-"));
+  const configPath = path.join(baseDir, "config", "patchrelay.json");
+  const repoRoot = path.join(baseDir, "repos");
+  const repoPath = path.join(repoRoot, "usertold");
+
+  try {
+    mkdirSync(path.dirname(configPath), { recursive: true });
+    mkdirSync(repoPath, { recursive: true });
+    writeConfigFixture(configPath, {
+      server: {
+        public_base_url: "https://patchrelay.example.com",
+      },
+      repos: {
+        root: repoRoot,
+      },
+      linear: {
+        webhook_secret_env: "REQUIRED_SECRET",
+        ...oauthConfig,
+      },
+      repositories: [
+        {
+          github_repo: "krasnoperov/usertold",
+          workspace: "usertold",
+          local_path: repoPath,
+          linear_team_ids: ["team-use"],
+          linear_project_ids: ["project-site"],
+          issue_key_prefixes: ["USE"],
+        },
+      ],
+    });
+
+    withEnv(
+      {
+        PATCHRELAY_CONFIG: configPath,
+        REQUIRED_SECRET: "top-secret",
+        ...oauthEnv,
+      },
+      () => {
+        const config = loadConfig();
+        assert.equal(config.repos.root, repoRoot);
+        assert.equal(config.repositories.length, 1);
+        assert.equal(config.repositories[0]?.githubRepo, "krasnoperov/usertold");
+        assert.equal(config.repositories[0]?.workspace, "usertold");
+        assert.deepEqual(config.repositories[0]?.linearProjectIds, ["project-site"]);
+        assert.equal(config.projects[0]?.id, "krasnoperov/usertold");
+        assert.equal(config.projects[0]?.repoPath, repoPath);
+        assert.deepEqual(config.projects[0]?.linearTeamIds, ["team-use"]);
+        assert.equal(config.projects[0]?.github?.repoFullName, "krasnoperov/usertold");
+      },
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 
 
 

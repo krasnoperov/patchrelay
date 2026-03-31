@@ -155,23 +155,37 @@ At the top level, configure the public HTTPS origin that Linear should use:
 }
 ```
 
-Add repositories with `patchrelay attach <id>` from the repo root, or pass `--path <path>` if you are attaching a different working tree. A project only needs:
+Connect PatchRelay to a Linear workspace first:
 
-- `id`
-- `repo_path`
-- one routing key when you have multiple projects: `issue_key_prefixes` or `linear_team_ids`
+```bash
+patchrelay linear connect
+patchrelay linear sync
+```
 
-`patchrelay attach` is the idempotent happy-path command:
+Then link repositories by GitHub repo identity:
 
-- it creates or updates the local project entry
-- it checks whether PatchRelay is ready to start with that project
+```bash
+patchrelay repo link krasnoperov/usertold --workspace usertold --team USE
+```
+
+A linked repository needs:
+
+- `github_repo`
+- `local_path` (managed automatically unless you override it with `--path`)
+- the Linear workspace name/key/id
+- one or more routing keys: `linear_team_ids`, and optionally `linear_project_ids`
+
+`patchrelay repo link` is the idempotent happy-path command:
+
+- it creates or updates the local repository entry
+- it refreshes the chosen Linear workspace catalog before resolving teams/projects
+- it verifies or creates the managed local clone
 - it reloads the service when it can
-- it reuses or starts the Linear authorization flow when the local setup is ready
 - if workflow files or secrets are still missing, it tells you what to fix and can be rerun safely
 
 Default trigger events for app-mode installs: `delegateChanged`, `statusChanged`, `agentSessionCreated`, `agentPrompted`, `commentCreated`, and `commentUpdated`.
 
-`worktree_root` defaults to `~/.local/share/patchrelay/worktrees/<project-id>`. `branch_prefix` defaults to a slug of the project id.
+The managed local clone root defaults to `~/projects`. Issue worktrees still default to `~/.local/share/patchrelay/worktrees/<repo-name>`. `branch_prefix` defaults to the GitHub repo name.
 
 If you want Linear itself to be part of your trust boundary, configure `trusted_actors` on each project. That allowlist can name specific owners by `id` or `email`, or define a group-style allowlist with `email_domains`.
 
@@ -203,13 +217,13 @@ patchrelay serve
 Stay in the terminal:
 
 ```bash
-patchrelay attach your-project
-patchrelay attach your-project --path /absolute/path/to/repo
-patchrelay installations
+patchrelay linear list
+patchrelay repo link krasnoperov/usertold --workspace usertold --team USE
+patchrelay repo list
 patchrelay issue show APP-123
 ```
 
-`patchrelay attach` opens the browser only long enough to approve the Linear OAuth app when it needs a fresh installation, then returns to the CLI workflow.
+`patchrelay linear connect` opens the browser only long enough to approve the Linear OAuth app when it needs a fresh workspace installation, then returns to the CLI workflow. `patchrelay repo link` reuses that saved workspace installation without opening the browser again.
 
 ## 7. Run As A Service
 

@@ -9,6 +9,7 @@ import {
 } from "./github-app-token.ts";
 import { GitHubWebhookHandler } from "./github-webhook-handler.ts";
 import { IssueQueryService } from "./issue-query-service.ts";
+import { DatabaseBackedLinearClientProvider } from "./linear-client.ts";
 import { LinearOAuthService } from "./linear-oauth-service.ts";
 import { RunOrchestrator } from "./run-orchestrator.ts";
 import { OperatorEventFeed, type OperatorFeedQuery } from "./operator-feed.ts";
@@ -131,7 +132,7 @@ export class PatchRelayService {
   async start(): Promise<void> {
     // Verify Linear connectivity for all configured projects before starting.
     // Auth errors do not prevent startup (the OAuth callback must be reachable
-    // for `patchrelay connect`), but the service reports NOT READY until at
+    // for `patchrelay linear connect`), but the service reports NOT READY until at
     // least one project has a working Linear token.
     let anyLinearConnected = false;
     for (const project of this.config.projects) {
@@ -140,16 +141,16 @@ export class PatchRelayService {
         if (client) {
           anyLinearConnected = true;
         } else {
-          this.logger.warn({ projectId: project.id }, "No Linear installation linked — run 'patchrelay connect' to authorize");
+          this.logger.warn({ projectId: project.id }, "No Linear installation linked — run 'patchrelay linear connect' and then 'patchrelay repo link' to authorize");
         }
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
-        this.logger.error({ projectId: project.id, error: msg }, "Linear auth failed — run 'patchrelay connect' to refresh the token. Runs for this project will fail until re-authorized.");
+        this.logger.error({ projectId: project.id, error: msg }, "Linear auth failed — run 'patchrelay linear connect' to refresh the token. Runs for this project will fail until re-authorized.");
       }
     }
     this.runtime.setLinearConnected(anyLinearConnected);
     if (!anyLinearConnected && this.config.projects.length > 0) {
-      this.logger.error("No projects have working Linear auth — service is NOT READY. Run 'patchrelay connect' to authorize.");
+      this.logger.error("No projects have working Linear auth — service is NOT READY. Run 'patchrelay linear connect' to authorize.");
     }
 
     if (this.githubAppTokenManager) {
@@ -172,6 +173,10 @@ export class PatchRelayService {
     return await this.oauthService.createStart(params);
   }
 
+  async createLinearWorkspaceOAuthStart() {
+    return await this.oauthService.createStart();
+  }
+
   async completeLinearOAuth(params: { state: string; code: string }) {
     const result = await this.oauthService.complete(params);
     // A successful OAuth completion means at least one project now has
@@ -186,6 +191,74 @@ export class PatchRelayService {
 
   listLinearInstallations() {
     return this.oauthService.listInstallations();
+  }
+
+  listLinearWorkspaces() {
+    return this.db.linearInstallations.listLinearInstallations().map((installation) => {
+      const linkedRepos = this.config.repositories
+        .filter((repository) => repository.workspace && workspaceMatches(repository.workspace, installation))
+        .map((repository) => repository.githubRepo);
+      const teams = this.db.repositories.listCatalogTeams(installation.id).map((team) => ({
+        id: team.teamId,
+        ...(team.key ? { key: team.key } : {}),
+        ...(team.name ? { name: team.name } : {}),
+      }));
+      const projects = this.db.repositories.listCatalogProjects(installation.id).map((project) => ({
+        id: project.projectId,
+        ...(project.name ? { name: project.name } : {}),
+        teamIds: parseStringArray(project.teamIdsJson),
+      }));
+      return {
+        installation: this.oauthService.getInstallationSummary(installation),
+        linkedRepos,
+        teams,
+        projects,
+      };
+    });
+  }
+
+  async syncLinearWorkspace(workspace?: string) {
+    const installation = workspace
+      ? this.db.linearInstallations.findLinearInstallationByWorkspace(workspace)
+      : this.db.linearInstallations.listLinearInstallations()[0];
+    if (!installation) {
+      throw new Error(workspace ? `Workspace not found: ${workspace}` : "No Linear workspace connected");
+    }
+    const provider = this.linearProvider instanceof DatabaseBackedLinearClientProvider ? this.linearProvider : undefined;
+    if (!provider) {
+      throw new Error("Linear provider does not support installation sync");
+    }
+    const client = await provider.forInstallationId(installation.id);
+    if (!client) {
+      throw new Error(`Linear installation ${installation.id} is unavailable`);
+    }
+    const catalog = await client.getWorkspaceCatalog();
+    this.db.repositories.replaceCatalog({
+      installationId: installation.id,
+      teams: catalog.teams,
+      projects: catalog.projects,
+    });
+    return {
+      installation: this.oauthService.getInstallationSummary(installation),
+      teams: catalog.teams,
+      projects: catalog.projects,
+    };
+  }
+
+  disconnectLinearWorkspace(workspace: string) {
+    const installation = this.db.linearInstallations.findLinearInstallationByWorkspace(workspace);
+    if (!installation) {
+      throw new Error(`Workspace not found: ${workspace}`);
+    }
+    this.db.transaction(() => {
+      this.db.linearInstallations.unlinkInstallationProjects(installation.id);
+      this.db.connection.prepare("DELETE FROM linear_catalog_teams WHERE installation_id = ?").run(installation.id);
+      this.db.connection.prepare("DELETE FROM linear_catalog_projects WHERE installation_id = ?").run(installation.id);
+      this.db.linearInstallations.deleteLinearInstallation(installation.id);
+    });
+    return {
+      installation: this.oauthService.getInstallationSummary(installation),
+    };
   }
 
   getReadiness() {
@@ -568,4 +641,23 @@ function toLinearClientProvider(linear: LinearClientProvider | LinearClient | un
       return linear as LinearClient | undefined;
     },
   };
+}
+
+function parseStringArray(value: string | undefined): string[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) ? parsed.filter((entry): entry is string => typeof entry === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function workspaceMatches(workspace: string, installation: { workspaceKey?: string; workspaceName?: string; workspaceId?: string }): boolean {
+  const normalized = workspace.trim().toLowerCase();
+  return [
+    installation.workspaceKey,
+    installation.workspaceName,
+    installation.workspaceId,
+  ].some((value) => value?.trim().toLowerCase() === normalized);
 }

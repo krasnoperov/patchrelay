@@ -1,6 +1,15 @@
 import type { SecretSource } from "./resolve-secret.ts";
 import type { ProjectConfig } from "./workflow-types.ts";
 
+export interface RepositoryConfig {
+  githubRepo: string;
+  localPath: string;
+  workspace?: string;
+  linearTeamIds: string[];
+  linearProjectIds: string[];
+  issueKeyPrefixes: string[];
+}
+
 export interface CodexAppServerConfig {
   bin: string;
   args: string[];
@@ -61,6 +70,10 @@ export interface AppConfig {
     gitBin: string;
     codex: CodexAppServerConfig;
   };
+  repos: {
+    root: string;
+  };
+  repositories: RepositoryConfig[];
   projects: ProjectConfig[];
   /** How each secret was resolved — for startup diagnostics. */
   secretSources: Record<string, SecretSource>;

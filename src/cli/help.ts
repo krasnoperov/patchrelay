@@ -1,4 +1,4 @@
-export type CliHelpTopic = "root" | "repos" | "issue" | "service";
+export type CliHelpTopic = "root" | "linear" | "repo" | "issue" | "service";
 
 export function rootHelpText(): string {
   return [
@@ -14,17 +14,25 @@ export function rootHelpText(): string {
     "Happy path:",
     "  1. patchrelay init <public-https-url>",
     "  2. Fill in ~/.config/patchrelay/service.env",
-    "  3. patchrelay attach <id>             # run from the repo root, or pass --path /path/to/repo",
-    "  4. Add IMPLEMENTATION_WORKFLOW.md and REVIEW_WORKFLOW.md to the repo",
-    "  5. patchrelay doctor",
-    "  6. patchrelay service status",
+    "  3. patchrelay linear connect",
+    "  4. patchrelay linear sync",
+    "  5. patchrelay repo link krasnoperov/usertold --workspace usertold --team USE",
+    "  6. patchrelay doctor",
+    "  7. patchrelay service status",
     "",
     "Core commands:",
     "  init <public-base-url> [--force] [--json]               Bootstrap the machine-level PatchRelay home",
     "  doctor [--json]                                         Check secrets, paths, git, codex, and service reachability",
-    "  attach <id> [path] [--path <path>] [--prefix <prefixes>] [--team <ids>] [--no-auth] [--no-open] [--timeout <seconds>] [--json]",
-    "                                                          Attach one local repository and prepare Linear auth when ready",
-    "  repos [<id>] [--json]                                   List attached repositories or show one attached repository",
+    "  linear connect [--no-open] [--timeout <seconds>] [--json]  Connect PatchRelay to one Linear workspace",
+    "  linear list [--json]                                      List connected Linear workspaces",
+    "  linear sync [workspace] [--json]                          Refresh teams and projects from Linear",
+    "  linear disconnect <workspace> [--json]                    Remove one connected Linear workspace",
+    "  repo link <github-repo> --workspace <workspace> --team <team>[,...] [--project <project>[,...]] [--prefix <prefix>[,...]] [--path <path>] [--json]",
+    "                                                            Link one GitHub repo to a Linear workspace/team and clone or reuse it locally",
+    "  repo list [--json]                                        List linked repositories",
+    "  repo show <github-repo> [--json]                          Show one linked repository",
+    "  repo unlink <github-repo> [--json]                        Remove one linked repository",
+    "  repo sync [github-repo] [--json]                          Clone missing repositories or fetch origin",
     "  issue list [--active] [--failed] [--repo <id>] [--json]",
     "                                                          List tracked issues",
     "  issue show <issueKey> [--json]                          Show the latest known issue state",
@@ -34,9 +42,6 @@ export function rootHelpText(): string {
     "  service logs [--lines <count>] [--json]                 Show recent service logs",
     "",
     "Operator commands:",
-    "  connect [--repo <id>] [--no-open] [--timeout <seconds>] [--json]",
-    "                                                          Start or reuse a Linear installation directly",
-    "  installations [--json]                                  Show connected Linear installations",
     "  feed [--follow] [--limit <count>] [--issue <issueKey>] [--repo <id>] [--kind <kind>] [--stage <stage>] [--status <status>] [--workflow <id>] [--json]",
     "                                                          Show operator activity from the daemon",
     "  dashboard [--issue <issueKey>]                           Open the TUI dashboard of issues and runs",
@@ -53,9 +58,10 @@ export function rootHelpText(): string {
     "",
     "Examples:",
     "  patchrelay init https://patchrelay.example.com",
-    "  patchrelay attach app",
-    "  patchrelay attach app --path /absolute/path/to/repo",
-    "  patchrelay repos",
+    "  patchrelay linear connect",
+    "  patchrelay linear sync",
+    "  patchrelay repo link krasnoperov/usertold --workspace usertold --team USE",
+    "  patchrelay repo list",
     "  patchrelay issue list --active",
     "  patchrelay issue watch USE-54",
     "  patchrelay dashboard",
@@ -64,40 +70,64 @@ export function rootHelpText(): string {
     "",
     "Command help:",
     "  patchrelay help",
-    "  patchrelay help repos",
+    "  patchrelay help linear",
+    "  patchrelay help repo",
     "  patchrelay help issue",
     "  patchrelay help service",
   ].join("\n");
 }
 
-export function reposHelpText(): string {
+export function linearHelpText(): string {
   return [
     "Usage:",
-    "  patchrelay attach <id> [path] [options]",
-    "  patchrelay repos [<id>] [--json]",
+    "  patchrelay linear connect [options]",
+    "  patchrelay linear list [--json]",
+    "  patchrelay linear sync [workspace] [--json]",
+    "  patchrelay linear disconnect <workspace> [--json]",
     "",
-    "Options for `attach`:",
-    "  --path <path>              Override the repository path instead of using the current working tree",
-    "  --prefix <prefixes>        Comma-separated issue key prefixes for routing",
-    "  --team <ids>               Comma-separated Linear team ids for routing",
-    "  --no-auth                  Save the repo without starting or reusing Linear OAuth",
+    "Options for `linear connect`:",
     "  --no-open                  Do not open the browser during connect",
     "  --timeout <seconds>        Override the connect wait timeout",
     "  --json                     Emit structured JSON output",
     "  --help, -h                 Show this help",
     "",
     "Behavior:",
-    "  `patchrelay attach` is the idempotent happy-path command. It defaults to",
-    "  the current working tree when `[path]` is omitted, updates the local config,",
-    "  reruns readiness checks, reloads the service when ready, and reuses or starts",
-    "  the Linear connect flow unless `--no-auth` is set.",
+    "  `patchrelay linear connect` authorizes one Linear workspace for PatchRelay.",
+    "  `patchrelay linear sync` refreshes that workspace's teams and projects.",
     "",
     "Examples:",
-    "  patchrelay attach app",
-    "  patchrelay attach app --prefix APP",
-    "  patchrelay attach app --path /absolute/path/to/repo --team team-123 --no-auth",
-    "  patchrelay repos",
-    "  patchrelay repos app",
+    "  patchrelay linear connect",
+    "  patchrelay linear list",
+    "  patchrelay linear sync usertold",
+  ].join("\n");
+}
+
+export function repoHelpText(): string {
+  return [
+    "Usage:",
+    "  patchrelay repo link <github-repo> --workspace <workspace> --team <team>[,...] [options]",
+    "  patchrelay repo list [--json]",
+    "  patchrelay repo show <github-repo> [--json]",
+    "  patchrelay repo unlink <github-repo> [--json]",
+    "  patchrelay repo sync [github-repo] [--json]",
+    "",
+    "Options for `repo link`:",
+    "  --workspace <workspace>    Connected Linear workspace key/name/id",
+    "  --team <team>[,...]        Linear team key, name, or id",
+    "  --project <project>[,...]  Optional Linear project name or id",
+    "  --prefix <prefix>[,...]    Optional issue key prefixes (defaults from team keys when available)",
+    "  --path <path>              Override the managed local clone path",
+    "  --json                     Emit structured JSON output",
+    "  --help, -h                 Show this help",
+    "",
+    "Behavior:",
+    "  `patchrelay repo link` uses the GitHub repo as the source of truth. It reuses",
+    "  an existing local clone when origin matches, or clones into the managed repo root.",
+    "",
+    "Examples:",
+    "  patchrelay repo link krasnoperov/usertold --workspace usertold --team USE",
+    "  patchrelay repo show krasnoperov/usertold",
+    "  patchrelay repo sync",
   ].join("\n");
 }
 
@@ -143,8 +173,10 @@ export function serviceHelpText(): string {
 
 export function helpTextFor(topic: CliHelpTopic): string {
   switch (topic) {
-    case "repos":
-      return reposHelpText();
+    case "linear":
+      return linearHelpText();
+    case "repo":
+      return repoHelpText();
     case "issue":
       return issueHelpText();
     case "service":

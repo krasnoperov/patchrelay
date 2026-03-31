@@ -254,6 +254,25 @@ test("http routes handle webhook validation and issue/report/live/events lookups
           );
         },
         subscribeOperatorFeed: () => () => undefined,
+        listLinearWorkspaces: () => [
+          {
+            installation: {
+              id: 2,
+              workspaceKey: "usertold",
+            },
+            linkedRepos: ["krasnoperov/usertold"],
+            teams: [{ id: "team-1", key: "USE", name: "Usertold" }],
+            projects: [{ id: "project-1", name: "Website", teamIds: ["team-1"] }],
+          },
+        ],
+        syncLinearWorkspace: async () => ({
+          installation: { id: 2, workspaceKey: "usertold" },
+          teams: [{ id: "team-1", key: "USE", name: "Usertold" }],
+          projects: [{ id: "project-1", name: "Website", teamIds: ["team-1"] }],
+        }),
+        disconnectLinearWorkspace: () => ({
+          installation: { id: 2, workspaceKey: "usertold" },
+        }),
       } as never,
       pino({ enabled: false }),
     );
@@ -484,6 +503,36 @@ test("http routes handle webhook validation and issue/report/live/events lookups
       status: "transition_chosen",
       workflowId: "default",
     });
+
+    const workspaces = await app.inject({
+      method: "GET",
+      url: "/api/linear/workspaces",
+      headers: {
+        authorization: "Bearer operator-token",
+      },
+    });
+    assert.equal(workspaces.statusCode, 200);
+    assert.equal(workspaces.json().workspaces[0].linkedRepos[0], "krasnoperov/usertold");
+
+    const syncWorkspace = await app.inject({
+      method: "POST",
+      url: "/api/linear/workspaces/sync?workspace=usertold",
+      headers: {
+        authorization: "Bearer operator-token",
+      },
+    });
+    assert.equal(syncWorkspace.statusCode, 200);
+    assert.equal(syncWorkspace.json().teams[0].key, "USE");
+
+    const disconnectWorkspace = await app.inject({
+      method: "DELETE",
+      url: "/api/linear/workspaces/usertold",
+      headers: {
+        authorization: "Bearer operator-token",
+      },
+    });
+    assert.equal(disconnectWorkspace.statusCode, 200);
+    assert.equal(disconnectWorkspace.json().installation.workspaceKey, "usertold");
 
     const missingEvents = await app.inject({
       method: "GET",

@@ -420,3 +420,130 @@ export async function upsertProjectInConfig(options: {
     },
   };
 }
+
+export async function upsertRepositoryInConfig(options: {
+  githubRepo: string;
+  localPath: string;
+  workspace?: string;
+  linearTeamIds: string[];
+  linearProjectIds?: string[];
+  issueKeyPrefixes?: string[];
+  configPath?: string;
+}): Promise<{
+  configPath: string;
+  status: "created" | "updated" | "unchanged";
+  repository: {
+    githubRepo: string;
+    localPath: string;
+    workspace?: string;
+    linearTeamIds: string[];
+    linearProjectIds: string[];
+    issueKeyPrefixes: string[];
+  };
+}> {
+  const configPath = options.configPath ?? getDefaultConfigPath();
+  if (!existsSync(configPath)) {
+    throw new Error(`Config file not found: ${configPath}. Run "patchrelay init" first.`);
+  }
+
+  const githubRepo = options.githubRepo.trim();
+  if (!githubRepo) {
+    throw new Error("githubRepo is required.");
+  }
+
+  const localPath = ensureAbsolutePath(options.localPath);
+  const workspace = options.workspace?.trim() || undefined;
+  const linearTeamIds = [...new Set(options.linearTeamIds.map((value) => value.trim()).filter(Boolean))];
+  const linearProjectIds = [...new Set((options.linearProjectIds ?? []).map((value) => value.trim()).filter(Boolean))];
+  const issueKeyPrefixes = [...new Set((options.issueKeyPrefixes ?? []).map((value) => value.trim()).filter(Boolean))];
+
+  const original = await readFile(configPath, "utf8");
+  const parsed = parseConfigObject(original, configPath) as { repositories?: Array<Record<string, unknown>> };
+  const existingRepositories = Array.isArray(parsed.repositories) ? parsed.repositories : [];
+  const existingIndex = existingRepositories.findIndex((repository) => String(repository.github_repo ?? "") === githubRepo);
+  const existing = existingIndex >= 0 ? existingRepositories[existingIndex] : undefined;
+
+  const nextRepository: Record<string, unknown> = {
+    ...(existing ?? {}),
+    github_repo: githubRepo,
+    local_path: localPath,
+    ...(workspace ? { workspace } : {}),
+    linear_team_ids: linearTeamIds,
+    linear_project_ids: linearProjectIds,
+    issue_key_prefixes: issueKeyPrefixes,
+  };
+
+  const normalizedExisting = existing && JSON.stringify(existing);
+  const normalizedNext = JSON.stringify(nextRepository);
+  const status: "created" | "updated" | "unchanged" =
+    existing === undefined ? "created" : normalizedExisting === normalizedNext ? "unchanged" : "updated";
+
+  const document = parseConfigObject(original, configPath);
+  if ("repositories" in document && document.repositories !== undefined && !Array.isArray(document.repositories)) {
+    throw new Error(`Config file field "repositories" must be a JSON array: ${configPath}`);
+  }
+
+  if (status !== "unchanged") {
+    const nextRepositories = [...existingRepositories];
+    if (existingIndex >= 0) {
+      nextRepositories[existingIndex] = nextRepository;
+    } else {
+      nextRepositories.push(nextRepository);
+    }
+    document.repositories = nextRepositories;
+    const next = stringifyConfig(document);
+    await writeFile(configPath, next, "utf8");
+  }
+
+  try {
+    loadConfig(configPath, { profile: "write_config" });
+  } catch (error) {
+    if (status !== "unchanged") {
+      await writeFile(configPath, original, "utf8");
+    }
+    throw error;
+  }
+
+  return {
+    configPath,
+    status,
+    repository: {
+      githubRepo,
+      localPath,
+      ...(workspace ? { workspace } : {}),
+      linearTeamIds,
+      linearProjectIds,
+      issueKeyPrefixes,
+    },
+  };
+}
+
+export async function removeRepositoryFromConfig(options: {
+  githubRepo: string;
+  configPath?: string;
+}): Promise<{ configPath: string; removed: boolean }> {
+  const configPath = options.configPath ?? getDefaultConfigPath();
+  if (!existsSync(configPath)) {
+    throw new Error(`Config file not found: ${configPath}. Run "patchrelay init" first.`);
+  }
+
+  const original = await readFile(configPath, "utf8");
+  const document = parseConfigObject(original, configPath) as { repositories?: Array<Record<string, unknown>> };
+  const existingRepositories = Array.isArray(document.repositories) ? document.repositories : [];
+  const nextRepositories = existingRepositories.filter((repository) => String(repository.github_repo ?? "") !== options.githubRepo);
+  if (nextRepositories.length === existingRepositories.length) {
+    return { configPath, removed: false };
+  }
+
+  document.repositories = nextRepositories;
+  await writeFile(configPath, stringifyConfig(document), "utf8");
+  return { configPath, removed: true };
+}
+
+export async function ensureRepositoryProjectSettings(repoPath: string): Promise<void> {
+  await writeTemplateFile(
+    getRepoProjectSettingsPath(ensureAbsolutePath(repoPath)),
+    stringifyConfig(defaultRepoProjectSettings()),
+    false,
+  );
+}
