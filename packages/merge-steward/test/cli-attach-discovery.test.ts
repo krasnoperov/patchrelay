@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { generateKeyPairSync } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -60,11 +59,6 @@ function createJsonResponse(body: unknown): Response {
   });
 }
 
-function createPrivateKeyPem(): string {
-  const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 1024 });
-  return privateKey.export({ type: "pkcs1", format: "pem" }).toString();
-}
-
 const noop = async () => ({ exitCode: 0, stdout: "", stderr: "" });
 
 test("attach owner/repo auto-discovers repo settings and derives the repo id", async () => {
@@ -72,22 +66,17 @@ test("attach owner/repo auto-discovers repo settings and derives the repo id", a
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (input, init) => {
     const url = String(input);
-    if (url.endsWith("/app/installations/123/access_tokens")) {
+    if (url.endsWith("/admin/github/discover")) {
       assert.equal(init?.method, "POST");
-      return createJsonResponse({ token: "installation-token" });
-    }
-    if (url.endsWith("/repos/example/api-service")) {
-      return createJsonResponse({ default_branch: "trunk" });
-    }
-    if (url.endsWith("/repos/example/api-service/rules/branches/trunk")) {
-      return createJsonResponse([
-        {
-          type: "required_status_checks",
-          parameters: {
-            required_status_checks: [{ context: "lint" }, { context: "test" }],
-          },
+      return createJsonResponse({
+        ok: true,
+        discovery: {
+          defaultBranch: "trunk",
+          branch: "trunk",
+          requiredChecks: ["lint", "test"],
+          warnings: [],
         },
-      ]);
+      });
     }
     throw new Error(`Unexpected fetch URL: ${url}`);
   };
@@ -99,9 +88,6 @@ test("attach owner/repo auto-discovers repo settings and derives the repo id", a
         XDG_STATE_HOME: path.join(baseDir, ".state"),
         XDG_DATA_HOME: path.join(baseDir, ".share"),
         MERGE_STEWARD_SYSTEMD_DIR: path.join(baseDir, "systemd"),
-        MERGE_STEWARD_GITHUB_APP_ID: "123456",
-        MERGE_STEWARD_GITHUB_APP_INSTALLATION_ID: "123",
-        MERGE_STEWARD_GITHUB_APP_PRIVATE_KEY: createPrivateKeyPem(),
       },
       async () => {
         await runCli(["init", "queue.example.com"], {
@@ -138,22 +124,17 @@ test("attach --refresh re-discovers required checks for an existing repo", async
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (input, init) => {
     const url = String(input);
-    if (url.endsWith("/app/installations/123/access_tokens")) {
+    if (url.endsWith("/admin/github/discover")) {
       assert.equal(init?.method, "POST");
-      return createJsonResponse({ token: "installation-token" });
-    }
-    if (url.endsWith("/repos/example/repo")) {
-      return createJsonResponse({ default_branch: "main" });
-    }
-    if (url.endsWith("/repos/example/repo/rules/branches/main")) {
-      return createJsonResponse([
-        {
-          type: "required_status_checks",
-          parameters: {
-            required_status_checks: [{ context: "test" }],
-          },
+      return createJsonResponse({
+        ok: true,
+        discovery: {
+          defaultBranch: "main",
+          branch: "main",
+          requiredChecks: ["test"],
+          warnings: [],
         },
-      ]);
+      });
     }
     throw new Error(`Unexpected fetch URL: ${url}`);
   };
@@ -165,9 +146,6 @@ test("attach --refresh re-discovers required checks for an existing repo", async
         XDG_STATE_HOME: path.join(baseDir, ".state"),
         XDG_DATA_HOME: path.join(baseDir, ".share"),
         MERGE_STEWARD_SYSTEMD_DIR: path.join(baseDir, "systemd"),
-        MERGE_STEWARD_GITHUB_APP_ID: "123456",
-        MERGE_STEWARD_GITHUB_APP_INSTALLATION_ID: "123",
-        MERGE_STEWARD_GITHUB_APP_PRIVATE_KEY: createPrivateKeyPem(),
       },
       async () => {
         await runCli(["init", "queue.example.com"], {

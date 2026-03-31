@@ -10,6 +10,7 @@ import {
   getRepoConfigPath,
 } from "../runtime-paths.ts";
 import { parseHomeConfigObject } from "../steward-home.ts";
+import type { ServiceErrorResponse, ServiceGitHubAuthStatus, ServiceGitHubDiscoverResponse } from "../admin-types.ts";
 import type { ParsedArgs, HelpTopic, CommandResult, CommandRunner } from "./types.ts";
 import { UsageError } from "./types.ts";
 
@@ -177,15 +178,52 @@ export function getGatewayBaseUrl(): string {
   return `http://${bind}:${port}`;
 }
 
-export async function fetchLocalJson<T>(repoId: string, relativePath: string, options?: { method?: string }): Promise<T> {
-  const base = getGatewayBaseUrl();
-  const url = `${base}/repos/${repoId}${relativePath}`;
+async function requestGatewayJson<T>(url: string, options?: { method?: string; body?: unknown }): Promise<T> {
   const response = await fetch(url, {
     method: options?.method ?? "GET",
+    ...(options?.body !== undefined ? { headers: { "content-type": "application/json" } } : {}),
+    ...(options?.body !== undefined ? { body: JSON.stringify(options.body) } : {}),
     signal: AbortSignal.timeout(2000),
   });
+  const text = await response.text();
   if (!response.ok) {
+    try {
+      const payload = JSON.parse(text) as Partial<ServiceErrorResponse>;
+      if (typeof payload.error === "string" && payload.error) {
+        throw new Error(payload.error);
+      }
+    } catch (error) {
+      if (error instanceof Error) {
+        throw error;
+      }
+    }
     throw new Error(`HTTP ${response.status} from ${url}`);
   }
-  return await response.json() as T;
+  return JSON.parse(text) as T;
+}
+
+export async function fetchGatewayJson<T>(relativePath: string, options?: { method?: string; body?: unknown }): Promise<T> {
+  const base = getGatewayBaseUrl();
+  return await requestGatewayJson<T>(`${base}${relativePath}`, options);
+}
+
+export async function fetchLocalJson<T>(repoId: string, relativePath: string, options?: { method?: string }): Promise<T> {
+  return await fetchGatewayJson<T>(`/repos/${repoId}${relativePath}`, options);
+}
+
+export async function fetchServiceGitHubAuthStatus(): Promise<ServiceGitHubAuthStatus> {
+  return await fetchGatewayJson<ServiceGitHubAuthStatus>("/admin/runtime/auth");
+}
+
+export async function fetchServiceRepoDiscovery(
+  repoFullName: string,
+  options?: { baseBranch?: string },
+): Promise<ServiceGitHubDiscoverResponse> {
+  return await fetchGatewayJson<ServiceGitHubDiscoverResponse>("/admin/github/discover", {
+    method: "POST",
+    body: {
+      repoFullName,
+      ...(options?.baseBranch ? { baseBranch: options.baseBranch } : {}),
+    },
+  });
 }

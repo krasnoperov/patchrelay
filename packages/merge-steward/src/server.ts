@@ -12,10 +12,12 @@ import { loadAllRepoConfigs } from "./install.ts";
 import { parseHomeConfigObject } from "./steward-home.ts";
 import { getMergeStewardPathLayout } from "./runtime-paths.ts";
 import { createGitHubAppTokenManager, resolveGitHubAuthConfig, type GitHubAppTokenManager } from "./github-auth.ts";
+import { discoverRepoSettings } from "./github-repo-discovery.ts";
 import { resolveSecret } from "./resolve-secret.ts";
 import { setRuntimeGitHubAuthProvider } from "./exec.ts";
 import { readFileSync, existsSync } from "node:fs";
 import type { Logger } from "pino";
+import type { ServiceGitHubAuthStatus } from "./admin-types.ts";
 
 export interface RepoInstance {
   config: StewardConfig;
@@ -62,6 +64,12 @@ export async function startMultiServer(): Promise<void> {
   const configs = await loadAllRepoConfigs();
   const githubAuth = resolveGitHubAuthConfig();
   let githubAppTokenManager: GitHubAppTokenManager | undefined;
+  let githubRuntimeStatus: ServiceGitHubAuthStatus = {
+    mode: "none",
+    configured: false,
+    ready: false,
+    webhookSecretConfigured: Boolean(webhookSecret),
+  };
   setRuntimeGitHubAuthProvider(undefined);
 
   if (configs.length === 0) {
@@ -69,15 +77,43 @@ export async function startMultiServer(): Promise<void> {
   }
 
   if (githubAuth.mode === "app") {
+    githubRuntimeStatus = {
+      mode: "app",
+      configured: true,
+      ready: false,
+      webhookSecretConfigured: Boolean(webhookSecret),
+      appId: githubAuth.credentials.appId,
+      installationMode: githubAuth.credentials.installationId ? "pinned" : "per_repo",
+    };
     githubAppTokenManager = createGitHubAppTokenManager(
       githubAuth.credentials,
       configs.map((config) => config.repoFullName),
       logger.child({ component: "github-auth" }),
     );
     setRuntimeGitHubAuthProvider(githubAppTokenManager);
-    await githubAppTokenManager.start();
-    logger.info({ mode: "app" }, "Using GitHub App authentication");
+    try {
+      await githubAppTokenManager.start();
+      githubRuntimeStatus = {
+        ...githubRuntimeStatus,
+        ready: true,
+      };
+      logger.info({ mode: "app" }, "Using GitHub App authentication");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      githubRuntimeStatus = {
+        ...githubRuntimeStatus,
+        ready: false,
+        error: message,
+      };
+      githubAppTokenManager = undefined;
+      setRuntimeGitHubAuthProvider(undefined);
+      logger.warn({ error: message }, "GitHub App auth is configured but not ready");
+    }
   } else {
+    githubRuntimeStatus = {
+      ...githubRuntimeStatus,
+      error: "GitHub App auth is not configured",
+    };
     logger.warn("No GitHub App auth configured. GitHub operations will fail until auth is configured.");
   }
 
@@ -94,7 +130,22 @@ export async function startMultiServer(): Promise<void> {
     instances.set(config.repoFullName, instance);
   }
 
-  const app = await buildMultiRepoHttpServer({ instances, webhookSecret, logger });
+  const app = await buildMultiRepoHttpServer({
+    instances,
+    webhookSecret,
+    githubAdmin: {
+      getStatus: () => githubRuntimeStatus,
+      async discoverRepoSettings(params) {
+        if (githubAuth.mode !== "app") {
+          throw new Error("GitHub App auth is not configured in the merge-steward service.");
+        }
+        return await discoverRepoSettings(githubAuth.credentials, params.repoFullName, {
+          ...(params.baseBranch ? { baseBranch: params.baseBranch } : {}),
+        });
+      },
+    },
+    logger,
+  });
 
   const shutdown = async () => {
     logger.info("Shutting down...");

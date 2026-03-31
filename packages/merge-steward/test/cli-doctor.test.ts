@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { generateKeyPairSync } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -55,11 +54,6 @@ function withEnv(values: Record<string, string | undefined>, run: () => Promise<
 
 const noop = async () => ({ exitCode: 0, stdout: "", stderr: "" });
 
-function createPrivateKeyPem(): string {
-  const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 1024 });
-  return privateKey.export({ type: "pkcs1", format: "pem" }).toString();
-}
-
 function createJsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {
     status: 200,
@@ -76,7 +70,6 @@ test("doctor without init reports failing home-config check", async () => {
         XDG_STATE_HOME: path.join(baseDir, ".state"),
         XDG_DATA_HOME: path.join(baseDir, ".share"),
         MERGE_STEWARD_SYSTEMD_DIR: path.join(baseDir, "systemd"),
-        MERGE_STEWARD_WEBHOOK_SECRET: undefined,
       },
       async () => {
         const stdout = createBufferStream();
@@ -87,6 +80,7 @@ test("doctor without init reports failing home-config check", async () => {
         assert.equal(code, 1);
         const text = stdout.read();
         assert.match(text, /\[fail\] home-config:/);
+        assert.match(text, /\[fail\] github-app-id:/);
         assert.match(text, /\[fail\] github-auth:/);
       },
     );
@@ -104,7 +98,6 @@ test("doctor after init passes home and path checks", async () => {
         XDG_STATE_HOME: path.join(baseDir, ".state"),
         XDG_DATA_HOME: path.join(baseDir, ".share"),
         MERGE_STEWARD_SYSTEMD_DIR: path.join(baseDir, "systemd"),
-        MERGE_STEWARD_WEBHOOK_SECRET: undefined,
       },
       async () => {
         await runCli(["init", "queue.example.com"], {
@@ -125,7 +118,8 @@ test("doctor after init passes home and path checks", async () => {
         assert.match(text, /\[pass\] repo-config-dir:/);
         assert.match(text, /\[pass\] state-dir:/);
         assert.match(text, /\[pass\] systemd-unit:/);
-        assert.match(text, /\[warn\] webhook-secret:/);
+        assert.match(text, /\[fail\] github-app-id:/);
+        assert.match(text, /\[warn\] service-admin:/);
         assert.match(text, /\[fail\] github-auth:/);
       },
     );
@@ -143,7 +137,6 @@ test("doctor --json emits structured output", async () => {
         XDG_STATE_HOME: path.join(baseDir, ".state"),
         XDG_DATA_HOME: path.join(baseDir, ".share"),
         MERGE_STEWARD_SYSTEMD_DIR: path.join(baseDir, "systemd"),
-        MERGE_STEWARD_WEBHOOK_SECRET: undefined,
       },
       async () => {
         await runCli(["init", "queue.example.com"], {
@@ -180,7 +173,6 @@ test("doctor with --repo validates repo config", async () => {
         XDG_STATE_HOME: path.join(baseDir, ".state"),
         XDG_DATA_HOME: path.join(baseDir, ".share"),
         MERGE_STEWARD_SYSTEMD_DIR: path.join(baseDir, "systemd"),
-        MERGE_STEWARD_WEBHOOK_SECRET: undefined,
       },
       async () => {
         await runCli(["init", "queue.example.com"], {
@@ -203,6 +195,7 @@ test("doctor with --repo validates repo config", async () => {
         assert.match(text, /\[pass\] repo:app:.*valid for owner\/repo/);
         assert.match(text, /\[pass\] repo:app:database-dir/);
         assert.match(text, /\[pass\] repo:app:clone-parent/);
+        assert.match(text, /\[warn\] repo:app:github-discovery:/);
       },
     );
   } finally {
@@ -219,7 +212,6 @@ test("doctor reports the configured queue eviction check", async () => {
         XDG_STATE_HOME: path.join(baseDir, ".state"),
         XDG_DATA_HOME: path.join(baseDir, ".share"),
         MERGE_STEWARD_SYSTEMD_DIR: path.join(baseDir, "systemd"),
-        MERGE_STEWARD_WEBHOOK_SECRET: undefined,
       },
       async () => {
         await runCli(["init", "queue.example.com"], {
@@ -262,7 +254,6 @@ test("doctor --repo with nonexistent repo reports failure", async () => {
         XDG_STATE_HOME: path.join(baseDir, ".state"),
         XDG_DATA_HOME: path.join(baseDir, ".share"),
         MERGE_STEWARD_SYSTEMD_DIR: path.join(baseDir, "systemd"),
-        MERGE_STEWARD_WEBHOOK_SECRET: undefined,
       },
       async () => {
         await runCli(["init", "queue.example.com"], {
@@ -285,8 +276,23 @@ test("doctor --repo with nonexistent repo reports failure", async () => {
   }
 });
 
-test("doctor passes webhook-secret and GitHub App checks when env vars are set", async () => {
-  const baseDir = mkdtempSync(path.join(tmpdir(), "ms-doctor-secret-"));
+test("doctor reads webhook and GitHub auth status from the running service", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "ms-doctor-service-auth-"));
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.endsWith("/admin/runtime/auth")) {
+      return createJsonResponse({
+        mode: "app",
+        configured: true,
+        ready: true,
+        webhookSecretConfigured: true,
+        appId: "123456",
+        installationMode: "per_repo",
+      });
+    }
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  };
   try {
     await withEnv(
       {
@@ -294,9 +300,7 @@ test("doctor passes webhook-secret and GitHub App checks when env vars are set",
         XDG_STATE_HOME: path.join(baseDir, ".state"),
         XDG_DATA_HOME: path.join(baseDir, ".share"),
         MERGE_STEWARD_SYSTEMD_DIR: path.join(baseDir, "systemd"),
-        MERGE_STEWARD_WEBHOOK_SECRET: "test-secret",
         MERGE_STEWARD_GITHUB_APP_ID: "123456",
-        MERGE_STEWARD_GITHUB_APP_PRIVATE_KEY: "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----",
       },
       async () => {
         await runCli(["init", "queue.example.com"], {
@@ -310,22 +314,41 @@ test("doctor passes webhook-secret and GitHub App checks when env vars are set",
           stdout: stdout.stream,
           stderr: createBufferStream().stream,
         });
-        const result = JSON.parse(stdout.read()) as { checks: Array<{ status: string; scope: string }> };
+        const result = JSON.parse(stdout.read()) as { checks: Array<{ status: string; scope: string; message: string }> };
         const secretCheck = result.checks.find((c) => c.scope === "webhook-secret");
         const authCheck = result.checks.find((c) => c.scope === "github-auth");
         const appCheck = result.checks.find((c) => c.scope === "github-app");
+        const serviceCheck = result.checks.find((c) => c.scope === "service-admin");
+        assert.equal(serviceCheck?.status, "pass");
         assert.equal(secretCheck?.status, "pass");
         assert.equal(authCheck?.status, "pass");
         assert.equal(appCheck?.status, "pass");
+        assert.match(appCheck?.message ?? "", /per repository/i);
       },
     );
   } finally {
+    globalThis.fetch = originalFetch;
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
 
-test("doctor accepts GitHub App credentials without a direct token", async () => {
+test("doctor reports pinned GitHub App installation mode from the running service", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "ms-doctor-app-auth-"));
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.endsWith("/admin/runtime/auth")) {
+      return createJsonResponse({
+        mode: "app",
+        configured: true,
+        ready: true,
+        webhookSecretConfigured: true,
+        appId: "123456",
+        installationMode: "pinned",
+      });
+    }
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  };
   try {
     await withEnv(
       {
@@ -333,10 +356,7 @@ test("doctor accepts GitHub App credentials without a direct token", async () =>
         XDG_STATE_HOME: path.join(baseDir, ".state"),
         XDG_DATA_HOME: path.join(baseDir, ".share"),
         MERGE_STEWARD_SYSTEMD_DIR: path.join(baseDir, "systemd"),
-        MERGE_STEWARD_WEBHOOK_SECRET: "test-secret",
         MERGE_STEWARD_GITHUB_APP_ID: "123456",
-        MERGE_STEWARD_GITHUB_APP_INSTALLATION_ID: "987654",
-        MERGE_STEWARD_GITHUB_APP_PRIVATE_KEY: "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----",
       },
       async () => {
         await runCli(["init", "queue.example.com"], {
@@ -357,10 +377,11 @@ test("doctor accepts GitHub App credentials without a direct token", async () =>
         const appCheck = result.checks.find((c) => c.scope === "github-app");
         assert.equal(authCheck?.status, "pass");
         assert.equal(appCheck?.status, "pass");
-        assert.match(appCheck?.message ?? "", /987654/);
+        assert.match(appCheck?.message ?? "", /pinned/i);
       },
     );
   } finally {
+    globalThis.fetch = originalFetch;
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
@@ -370,22 +391,27 @@ test("doctor warns when local base branch and required checks drift from GitHub"
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (input, init) => {
     const url = String(input);
-    if (url.endsWith("/app/installations/987654/access_tokens")) {
+    if (url.endsWith("/admin/runtime/auth")) {
+      return createJsonResponse({
+        mode: "app",
+        configured: true,
+        ready: true,
+        webhookSecretConfigured: true,
+        appId: "123456",
+        installationMode: "per_repo",
+      });
+    }
+    if (url.endsWith("/admin/github/discover")) {
       assert.equal(init?.method, "POST");
-      return createJsonResponse({ token: "installation-token" });
-    }
-    if (url.endsWith("/repos/owner/repo")) {
-      return createJsonResponse({ default_branch: "main" });
-    }
-    if (url.endsWith("/repos/owner/repo/rules/branches/release")) {
-      return createJsonResponse([
-        {
-          type: "required_status_checks",
-          parameters: {
-            required_status_checks: [{ context: "test" }],
-          },
+      return createJsonResponse({
+        ok: true,
+        discovery: {
+          defaultBranch: "main",
+          branch: "release",
+          requiredChecks: ["test"],
+          warnings: [],
         },
-      ]);
+      });
     }
     throw new Error(`Unexpected fetch URL: ${url}`);
   };
@@ -397,10 +423,7 @@ test("doctor warns when local base branch and required checks drift from GitHub"
         XDG_STATE_HOME: path.join(baseDir, ".state"),
         XDG_DATA_HOME: path.join(baseDir, ".share"),
         MERGE_STEWARD_SYSTEMD_DIR: path.join(baseDir, "systemd"),
-        MERGE_STEWARD_WEBHOOK_SECRET: "test-secret",
         MERGE_STEWARD_GITHUB_APP_ID: "123456",
-        MERGE_STEWARD_GITHUB_APP_INSTALLATION_ID: "987654",
-        MERGE_STEWARD_GITHUB_APP_PRIVATE_KEY: createPrivateKeyPem(),
       },
       async () => {
         await runCli(["init", "queue.example.com"], {

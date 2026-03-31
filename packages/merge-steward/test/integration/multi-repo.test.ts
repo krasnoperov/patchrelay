@@ -12,6 +12,26 @@ import pino from "pino";
 
 const WEBHOOK_SECRET = "multi-repo-test-secret";
 const logger = pino({ level: "silent" });
+const githubAdmin = {
+  getStatus() {
+    return {
+      mode: "app" as const,
+      configured: true,
+      ready: true,
+      webhookSecretConfigured: true,
+      appId: "123456",
+      installationMode: "per_repo" as const,
+    };
+  },
+  async discoverRepoSettings() {
+    return {
+      defaultBranch: "main",
+      branch: "main",
+      requiredChecks: ["ci"],
+      warnings: [],
+    };
+  },
+};
 
 function makeConfig(repoId: string, repoFullName: string): StewardConfig {
   return {
@@ -39,7 +59,8 @@ function makeServiceAndConfig(repoId: string, repoFullName: string) {
   const store = new MemoryStore();
   const githubSim = new GitHubSim();
   const service = new MergeStewardService(
-    config, store,
+    config,
+    store,
     new GitSim() as any,
     new CISim(() => "pass") as any,
     githubSim,
@@ -75,7 +96,7 @@ describe("multi-repo HTTP server", () => {
       ["org/repo-a", { config: a.config, service: a.service }],
       ["org/repo-b", { config: b.config, service: b.service }],
     ]);
-    const app = await buildMultiRepoHttpServer({ instances, webhookSecret: WEBHOOK_SECRET, logger });
+    const app = await buildMultiRepoHttpServer({ instances, webhookSecret: WEBHOOK_SECRET, githubAdmin, logger });
     const address = await app.listen({ port: 0 });
     after(async () => { await app.close(); });
 
@@ -94,12 +115,10 @@ describe("multi-repo HTTP server", () => {
     const result = await resp.json() as { ok: boolean; repo: string };
     assert.strictEqual(result.repo, "org/repo-a");
 
-    // repo-a has the entry
     const statusA = await (await fetch(`${address}/repos/repo-a/queue/status`)).json() as { entries: Array<{ prNumber: number }> };
     assert.strictEqual(statusA.entries.length, 1);
     assert.strictEqual(statusA.entries[0]!.prNumber, 1);
 
-    // repo-b is empty
     const statusB = await (await fetch(`${address}/repos/repo-b/queue/status`)).json() as { entries: unknown[] };
     assert.strictEqual(statusB.entries.length, 0);
   });
@@ -107,7 +126,7 @@ describe("multi-repo HTTP server", () => {
   it("ignores webhook for unknown repo", async () => {
     const a = makeServiceAndConfig("repo-a", "org/repo-a");
     const instances = new Map([["org/repo-a", { config: a.config, service: a.service }]]);
-    const app = await buildMultiRepoHttpServer({ instances, webhookSecret: WEBHOOK_SECRET, logger });
+    const app = await buildMultiRepoHttpServer({ instances, webhookSecret: WEBHOOK_SECRET, githubAdmin, logger });
     const address = await app.listen({ port: 0 });
     after(async () => { await app.close(); });
 
@@ -133,7 +152,7 @@ describe("multi-repo HTTP server", () => {
   it("rejects webhook with invalid signature", async () => {
     const a = makeServiceAndConfig("repo-a", "org/repo-a");
     const instances = new Map([["org/repo-a", { config: a.config, service: a.service }]]);
-    const app = await buildMultiRepoHttpServer({ instances, webhookSecret: WEBHOOK_SECRET, logger });
+    const app = await buildMultiRepoHttpServer({ instances, webhookSecret: WEBHOOK_SECRET, githubAdmin, logger });
     const address = await app.listen({ port: 0 });
     after(async () => { await app.close(); });
 
@@ -156,7 +175,7 @@ describe("multi-repo HTTP server", () => {
     a.githubSim.setChecks(1, [{ name: "ci", conclusion: "success" }]);
 
     const instances = new Map([["org/repo-a", { config: a.config, service: a.service }]]);
-    const app = await buildMultiRepoHttpServer({ instances, webhookSecret: undefined, logger });
+    const app = await buildMultiRepoHttpServer({ instances, webhookSecret: undefined, githubAdmin, logger });
     const address = await app.listen({ port: 0 });
     after(async () => { await app.close(); });
 
@@ -182,7 +201,7 @@ describe("multi-repo HTTP server", () => {
       ["org/repo-a", { config: a.config, service: a.service }],
       ["org/repo-b", { config: b.config, service: b.service }],
     ]);
-    const app = await buildMultiRepoHttpServer({ instances, webhookSecret: undefined, logger });
+    const app = await buildMultiRepoHttpServer({ instances, webhookSecret: undefined, githubAdmin, logger });
     const address = await app.listen({ port: 0 });
     after(async () => { await app.close(); });
 
@@ -207,26 +226,23 @@ describe("multi-repo HTTP server", () => {
       ["org/repo-a", { config: a.config, service: a.service }],
       ["org/repo-b", { config: b.config, service: b.service }],
     ]);
-    const app = await buildMultiRepoHttpServer({ instances, webhookSecret: undefined, logger });
+    const app = await buildMultiRepoHttpServer({ instances, webhookSecret: undefined, githubAdmin, logger });
     const address = await app.listen({ port: 0 });
     after(async () => { await app.close(); });
 
-    // Reconcile only repo-a
     await fetch(`${address}/repos/repo-a/queue/reconcile`, { method: "POST" });
 
     const statusA = await (await fetch(`${address}/repos/repo-a/queue/status`)).json() as { entries: Array<{ status: string }> };
     const statusB = await (await fetch(`${address}/repos/repo-b/queue/status`)).json() as { entries: Array<{ status: string }> };
 
-    // repo-a's entry advanced (preparing_head or beyond)
     assert.notStrictEqual(statusA.entries[0]!.status, "queued", "repo-a should have advanced");
-    // repo-b's entry stayed queued
     assert.strictEqual(statusB.entries[0]!.status, "queued", "repo-b should not have advanced");
   });
 
   it("returns 404 for unknown repoId", async () => {
     const a = makeServiceAndConfig("repo-a", "org/repo-a");
     const instances = new Map([["org/repo-a", { config: a.config, service: a.service }]]);
-    const app = await buildMultiRepoHttpServer({ instances, webhookSecret: undefined, logger });
+    const app = await buildMultiRepoHttpServer({ instances, webhookSecret: undefined, githubAdmin, logger });
     const address = await app.listen({ port: 0 });
     after(async () => { await app.close(); });
 
@@ -237,7 +253,7 @@ describe("multi-repo HTTP server", () => {
   it("rejects webhook missing x-github-event header", async () => {
     const a = makeServiceAndConfig("repo-a", "org/repo-a");
     const instances = new Map([["org/repo-a", { config: a.config, service: a.service }]]);
-    const app = await buildMultiRepoHttpServer({ instances, webhookSecret: undefined, logger });
+    const app = await buildMultiRepoHttpServer({ instances, webhookSecret: undefined, githubAdmin, logger });
     const address = await app.listen({ port: 0 });
     after(async () => { await app.close(); });
 
@@ -247,5 +263,75 @@ describe("multi-repo HTTP server", () => {
       body: JSON.stringify({ repository: { full_name: "org/repo-a" } }),
     });
     assert.strictEqual(resp.status, 400);
+  });
+
+  it("exposes service runtime auth status through the admin endpoint", async () => {
+    const a = makeServiceAndConfig("repo-a", "org/repo-a");
+    const instances = new Map([["org/repo-a", { config: a.config, service: a.service }]]);
+    const app = await buildMultiRepoHttpServer({ instances, webhookSecret: undefined, githubAdmin, logger });
+    const address = await app.listen({ port: 0 });
+    after(async () => { await app.close(); });
+
+    const result = await (await fetch(`${address}/admin/runtime/auth`)).json() as {
+      mode: string;
+      ready: boolean;
+      webhookSecretConfigured: boolean;
+      appId?: string;
+    };
+    assert.strictEqual(result.mode, "app");
+    assert.strictEqual(result.ready, true);
+    assert.strictEqual(result.webhookSecretConfigured, true);
+    assert.strictEqual(result.appId, "123456");
+  });
+
+  it("exposes repo discovery through the admin endpoint", async () => {
+    const a = makeServiceAndConfig("repo-a", "org/repo-a");
+    const instances = new Map([["org/repo-a", { config: a.config, service: a.service }]]);
+    const app = await buildMultiRepoHttpServer({ instances, webhookSecret: undefined, githubAdmin, logger });
+    const address = await app.listen({ port: 0 });
+    after(async () => { await app.close(); });
+
+    const resp = await fetch(`${address}/admin/github/discover`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ repoFullName: "org/repo-a", baseBranch: "main" }),
+    });
+    assert.strictEqual(resp.status, 200);
+    const result = await resp.json() as {
+      ok: boolean;
+      discovery: { defaultBranch: string; branch: string; requiredChecks: string[] };
+    };
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(result.discovery.defaultBranch, "main");
+    assert.strictEqual(result.discovery.branch, "main");
+    assert.deepStrictEqual(result.discovery.requiredChecks, ["ci"]);
+  });
+
+  it("returns 503 when repo discovery fails", async () => {
+    const a = makeServiceAndConfig("repo-a", "org/repo-a");
+    const instances = new Map([["org/repo-a", { config: a.config, service: a.service }]]);
+    const app = await buildMultiRepoHttpServer({
+      instances,
+      webhookSecret: undefined,
+      githubAdmin: {
+        ...githubAdmin,
+        async discoverRepoSettings() {
+          throw new Error("GitHub App auth is not ready");
+        },
+      },
+      logger,
+    });
+    const address = await app.listen({ port: 0 });
+    after(async () => { await app.close(); });
+
+    const resp = await fetch(`${address}/admin/github/discover`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ repoFullName: "org/repo-a" }),
+    });
+    assert.strictEqual(resp.status, 503);
+    const result = await resp.json() as { ok: boolean; error: string };
+    assert.strictEqual(result.ok, false);
+    assert.match(result.error, /not ready/);
   });
 });

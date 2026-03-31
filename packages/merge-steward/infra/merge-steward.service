@@ -16,9 +16,9 @@ EnvironmentFile=-/home/your-user/.config/merge-steward/service.env
 Environment=NODE_ENV=production
 Environment=PATH=/home/your-user/.local/bin:/usr/local/bin:/usr/bin:/bin
 
-# Uncomment the secrets you actually use with systemd-creds:
-# LoadCredentialEncrypted=merge-steward-webhook-secret
-# LoadCredentialEncrypted=merge-steward-github-app-pem
+# Service-owned secrets live in encrypted systemd credentials.
+LoadCredentialEncrypted=merge-steward-webhook-secret:/etc/credstore.encrypted/merge-steward-webhook-secret.cred
+LoadCredentialEncrypted=merge-steward-github-app-pem:/etc/credstore.encrypted/merge-steward-github-app-pem.cred
 
 ExecStart=/usr/bin/env merge-steward serve
 Restart=on-failure

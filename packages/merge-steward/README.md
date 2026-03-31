@@ -56,39 +56,36 @@ merge-steward queue status --repo repo
 
 ### Secrets
 
-For local/dev use, put secrets in:
+Keep only non-secret identifiers in:
 
 - `~/.config/merge-steward/service.env`
 
 Example:
 
 ```bash
-MERGE_STEWARD_WEBHOOK_SECRET=replace-with-webhook-secret
-
 MERGE_STEWARD_GITHUB_APP_ID=123456
 MERGE_STEWARD_GITHUB_APP_INSTALLATION_ID=12345678
-MERGE_STEWARD_GITHUB_APP_PRIVATE_KEY_FILE=/path/to/merge-steward-github-app.pem
 ```
 
-For production/systemd, prefer encrypted credentials instead of plain env files:
+Store secrets in encrypted systemd credentials:
 
-- Uncomment `LoadCredentialEncrypted=merge-steward-webhook-secret`
-- Uncomment `LoadCredentialEncrypted=merge-steward-github-app-pem`
+- `/etc/credstore.encrypted/merge-steward-webhook-secret.cred`
+- `/etc/credstore.encrypted/merge-steward-github-app-pem.cred`
 
-The steward resolves the webhook secret in this order:
+The running service resolves the webhook secret in this order:
 
 1. `$CREDENTIALS_DIRECTORY/<name>`
 2. `${ENV_KEY}_FILE`
 3. `${ENV_KEY}`
 
-GitHub auth resolves in this order:
+The running service resolves GitHub auth in this order:
 
 1. `MERGE_STEWARD_GITHUB_APP_ID` + `merge-steward-github-app-pem` / `MERGE_STEWARD_GITHUB_APP_PRIVATE_KEY`
 
 In practice, use:
 
-- `MERGE_STEWARD_WEBHOOK_SECRET` for validating incoming GitHub webhooks
-- `MERGE_STEWARD_GITHUB_APP_ID` plus `merge-steward-github-app-pem` / `MERGE_STEWARD_GITHUB_APP_PRIVATE_KEY` for production GitHub auth
+- `merge-steward-webhook-secret` for validating incoming GitHub webhooks
+- `MERGE_STEWARD_GITHUB_APP_ID` plus `merge-steward-github-app-pem` for production GitHub auth
 - `MERGE_STEWARD_GITHUB_APP_INSTALLATION_ID` if you want to pin a single installation instead of resolving one per repo
 
 When GitHub App auth is configured, Merge Steward mints short-lived installation tokens and uses them for both `gh` API calls and `git clone/fetch/push` over HTTPS. In multi-repo setups it resolves the installation per repository, so repos in different GitHub App installations can still coexist.
@@ -99,7 +96,8 @@ The machine-level env files created by `merge-steward init` are:
 - `~/.config/merge-steward/service.env`
 
 `runtime.env` is for non-secret runtime settings.
-`service.env` is the normal place for secrets in local/dev installs.
+`service.env` is for non-secret machine-level service config like `MERGE_STEWARD_GITHUB_APP_ID`.
+The CLI is a thin local client and does not need direct access to secret credentials.
 
 ### Repo Config
 
@@ -209,9 +207,8 @@ Wants=network-online.target
 Type=simple
 EnvironmentFile=-/home/your-user/.config/merge-steward/runtime.env
 EnvironmentFile=-/home/your-user/.config/merge-steward/service.env
-# Uncomment the secrets you actually use with systemd-creds:
-# LoadCredentialEncrypted=merge-steward-webhook-secret
-# LoadCredentialEncrypted=merge-steward-github-app-pem
+LoadCredentialEncrypted=merge-steward-webhook-secret:/etc/credstore.encrypted/merge-steward-webhook-secret.cred
+LoadCredentialEncrypted=merge-steward-github-app-pem:/etc/credstore.encrypted/merge-steward-github-app-pem.cred
 ExecStart=/usr/bin/env merge-steward serve
 Restart=on-failure
 RestartSec=5s

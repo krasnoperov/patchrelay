@@ -1,12 +1,10 @@
 import { upsertRepoConfig } from "../../install.ts";
-import { resolveGitHubAuthConfig } from "../../github-auth.ts";
-import { discoverRepoSettings } from "../../github-repo-discovery.ts";
 import type { ParsedArgs, Output, CommandRunner } from "../types.ts";
 import { UsageError } from "../types.ts";
 import { parseCsvFlag } from "../args.ts";
 import { formatJson, writeOutput } from "../output.ts";
 import { runSystemctl } from "../system.ts";
-import { listRepoConfigs } from "../system.ts";
+import { fetchServiceRepoDiscovery, listRepoConfigs } from "../system.ts";
 
 function deriveRepoId(repoFullName: string): string {
   const repoName = repoFullName.split("/")[1]?.trim().toLowerCase() ?? "";
@@ -62,20 +60,29 @@ export async function handleAttach(parsed: ParsedArgs, stdout: Output, runComman
   const shouldDiscoverRequiredChecks = explicitRequiredChecks.length === 0 && (!existing || refresh || !!explicitBaseBranch);
   const needsDiscovery = shouldDiscoverBaseBranch || shouldDiscoverRequiredChecks;
 
-  let discovered: Awaited<ReturnType<typeof discoverRepoSettings>> | undefined;
+  let discovered:
+    | {
+      defaultBranch: string;
+      branch: string;
+      requiredChecks: string[];
+      warnings: string[];
+    }
+    | undefined;
   const warnings: string[] = [];
   if (needsDiscovery) {
-    const githubAuth = resolveGitHubAuthConfig();
-    if (githubAuth.mode === "app") {
-      discovered = await discoverRepoSettings(githubAuth.credentials, repoFullName, {
+    try {
+      const response = await fetchServiceRepoDiscovery(repoFullName, {
         ...(explicitBaseBranch
           ? { baseBranch: explicitBaseBranch }
           : existing?.baseBranch && !shouldDiscoverBaseBranch
             ? { baseBranch: existing.baseBranch }
             : {}),
       });
-    } else {
-      warnings.push("GitHub App auth is not configured, so attach used local defaults instead of discovering base branch and required checks from GitHub.");
+      discovered = response.discovery;
+    } catch (error) {
+      warnings.push(
+        `Could not discover GitHub defaults from the local merge-steward service: ${error instanceof Error ? error.message : String(error)}. Using local defaults instead.`,
+      );
     }
   }
 

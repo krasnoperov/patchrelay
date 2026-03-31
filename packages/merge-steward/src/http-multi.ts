@@ -2,6 +2,8 @@ import fastify from "fastify";
 import rawBody from "fastify-raw-body";
 import type { Logger } from "pino";
 import { z } from "zod";
+import type { ServiceGitHubAuthStatus } from "./admin-types.ts";
+import type { DiscoveredRepoSettings } from "./github-repo-discovery.ts";
 import type { MergeStewardService } from "./service.ts";
 import type { StewardConfig } from "./config.ts";
 import { verifySignature, normalizeWebhook, processWebhookEvent } from "./webhook-handler.ts";
@@ -31,12 +33,21 @@ const detailQuery = z.object({
   eventLimit: z.coerce.number().int().min(1).max(500).optional(),
 });
 
+const discoverRepoBody = z.object({
+  repoFullName: z.string().min(1),
+  baseBranch: z.string().min(1).optional(),
+});
+
 export async function buildMultiRepoHttpServer(options: {
   instances: Map<string, RepoInstance>;
   webhookSecret: string | undefined;
+  githubAdmin: {
+    getStatus(): ServiceGitHubAuthStatus;
+    discoverRepoSettings(params: { repoFullName: string; baseBranch?: string }): Promise<DiscoveredRepoSettings>;
+  };
   logger: Logger;
 }) {
-  const { instances, webhookSecret, logger } = options;
+  const { instances, webhookSecret, githubAdmin, logger } = options;
 
   // Build a repoId → instance lookup for the /repos/:repoId routes.
   const byRepoId = new Map<string, RepoInstance>();
@@ -55,6 +66,24 @@ export async function buildMultiRepoHttpServer(options: {
       repoFullName: fullName,
     })),
   }));
+
+  app.get("/admin/runtime/auth", async () => githubAdmin.getStatus());
+
+  app.post("/admin/github/discover", async (request, reply) => {
+    const body = discoverRepoBody.parse(request.body);
+    try {
+      const discovery = await githubAdmin.discoverRepoSettings({
+        repoFullName: body.repoFullName,
+        ...(body.baseBranch ? { baseBranch: body.baseBranch } : {}),
+      });
+      return { ok: true, discovery };
+    } catch (error) {
+      return reply.status(503).send({
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
 
   // --- Single webhook endpoint for all repos ---
   app.post("/webhooks/github", {

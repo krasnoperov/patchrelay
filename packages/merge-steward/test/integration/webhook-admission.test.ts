@@ -12,6 +12,26 @@ import pino from "pino";
 import { SqliteStore } from "../../src/db/sqlite-store.ts";
 
 const WEBHOOK_SECRET = "test-secret-123";
+const githubAdmin = {
+  getStatus() {
+    return {
+      mode: "app" as const,
+      configured: true,
+      ready: true,
+      webhookSecretConfigured: true,
+      appId: "123456",
+      installationMode: "per_repo" as const,
+    };
+  },
+  async discoverRepoSettings() {
+    return {
+      defaultBranch: "main",
+      branch: "main",
+      requiredChecks: [],
+      warnings: [],
+    };
+  },
+};
 
 const config: StewardConfig = {
   repoId: "test-repo",
@@ -38,7 +58,12 @@ function sign(body: string): string {
 
 function makeApp(service: MergeStewardService) {
   const instances = new Map([["test/repo", { config, service }]]);
-  return buildMultiRepoHttpServer({ instances, webhookSecret: WEBHOOK_SECRET, logger: pino({ level: "silent" }) });
+  return buildMultiRepoHttpServer({
+    instances,
+    webhookSecret: WEBHOOK_SECRET,
+    githubAdmin,
+    logger: pino({ level: "silent" }),
+  });
 }
 
 function webhookBody(payload: Record<string, unknown>): string {
@@ -242,7 +267,12 @@ describe("webhook admission integration", () => {
     store.transition(entry.id, "merging");
 
     const instances = new Map([["test/repo", { config, service }]]);
-    const app = await buildMultiRepoHttpServer({ instances, webhookSecret: WEBHOOK_SECRET, logger });
+    const app = await buildMultiRepoHttpServer({
+      instances,
+      webhookSecret: WEBHOOK_SECRET,
+      githubAdmin,
+      logger,
+    });
     const address = await app.listen({ port: 0 });
     after(async () => { await app.close(); store.close(); });
 

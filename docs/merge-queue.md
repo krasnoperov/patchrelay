@@ -87,21 +87,19 @@ Configure a webhook on the repository pointing to the steward:
 
 Merge Steward now uses one unified multi-repo webhook endpoint and routes by `repository.full_name`.
 
-Set the steward secrets in one of these places:
+Set the steward config and secrets like this:
 
-- local/dev: `~/.config/merge-steward/service.env`
-- production/systemd: uncomment the matching `LoadCredentialEncrypted=` lines in the unit and provide encrypted credentials `merge-steward-webhook-secret` and `merge-steward-github-app-pem`
+- machine-level non-secret config: `~/.config/merge-steward/service.env`
+- production/systemd secrets: provide `/etc/credstore.encrypted/merge-steward-webhook-secret.cred` and `/etc/credstore.encrypted/merge-steward-github-app-pem.cred`; the service unit loads them directly
 
 Typical local `service.env`:
 
 ```bash
-MERGE_STEWARD_WEBHOOK_SECRET=replace-with-webhook-secret
 MERGE_STEWARD_GITHUB_APP_ID=123456
 MERGE_STEWARD_GITHUB_APP_INSTALLATION_ID=12345678
-MERGE_STEWARD_GITHUB_APP_PRIVATE_KEY_FILE=/path/to/merge-steward-github-app.pem
 ```
 
-GitHub App auth is the production path. Merge Steward mints short-lived installation tokens from the app private key and uses them for PR reads, check reads, queue eviction check runs, label removal, merges, and HTTPS git operations.
+GitHub App auth is the production path. Merge Steward mints short-lived installation tokens from the service-owned app private key and uses them for PR reads, check reads, queue eviction check runs, label removal, merges, and HTTPS git operations. The CLI talks to the local service for GitHub-backed discovery and doctor checks instead of reading secret credentials itself.
 
 PatchRelay needs its own separate GitHub webhook for PR, review, and check events that drive reactive repair loops.
 
