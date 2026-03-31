@@ -8,10 +8,15 @@ import { buildAgentSessionPlanForIssue } from "./agent-session-plan.ts";
 import { buildAgentSessionExternalUrls } from "./agent-session-presentation.ts";
 import { buildGitHubStateActivity } from "./linear-session-reporting.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
+import {
+  requestMergeQueueAdmission,
+  resolveMergeQueueProtocol,
+} from "./merge-queue-protocol.ts";
+import { buildQueueRepairContextFromEvent } from "./merge-queue-incident.ts";
 import { resolveSecret } from "./resolve-secret.ts";
 import type { AppConfig, LinearClientProvider } from "./types.ts";
 import type { ProjectConfig } from "./workflow-types.ts";
-import { safeJsonParse, execCommand } from "./utils.ts";
+import { safeJsonParse } from "./utils.ts";
 
 /**
  * GitHub sends both check_run and check_suite completion events.
@@ -145,6 +150,7 @@ export class GitHubWebhookHandler {
       ...(event.reviewState !== undefined ? { prReviewState: event.reviewState } : {}),
       ...(event.checkStatus !== undefined ? { prCheckStatus: event.checkStatus } : {}),
     });
+    this.updateFailureProvenance(issue, event);
 
     if (!isMetadataOnlyCheckEvent(event)) {
       // Re-read issue after PR metadata upsert so guards see fresh prReviewState
@@ -175,50 +181,13 @@ export class GitHubWebhookHandler {
         // Schedule merge prep when entering awaiting_queue
         if (newState === "awaiting_queue") {
           const proj = this.config.projects.find((p) => p.id === issue.projectId);
-          // Add the admission label so the external queue picks up this PR.
-          if (transitionedIssue.prNumber) {
-            const label = proj?.github?.mergeQueueLabel ?? "queue";
-            const repo = proj?.github?.repoFullName;
-            if (repo) {
-              this.feed?.publish({
-                level: "info",
-                kind: "github",
-                issueKey: transitionedIssue.issueKey,
-                projectId: transitionedIssue.projectId,
-                stage: "awaiting_queue",
-                status: "queue_label_requested",
-                summary: `Queue hand-off requested via label "${label}" on PR #${transitionedIssue.prNumber}`,
-              });
-              void execCommand("gh", [
-                "pr", "edit", String(transitionedIssue.prNumber),
-                "--repo", repo, "--add-label", label,
-              ], { timeoutMs: 15_000 })
-                .then(() => {
-                  this.feed?.publish({
-                    level: "info",
-                    kind: "github",
-                    issueKey: transitionedIssue.issueKey,
-                    projectId: transitionedIssue.projectId,
-                    stage: "awaiting_queue",
-                    status: "queue_label_applied",
-                    summary: `Queue label "${label}" applied to PR #${transitionedIssue.prNumber}`,
-                  });
-                })
-                .catch((err) => {
-                  this.logger.warn({ issueKey: issue.issueKey, err }, "Failed to add merge queue label");
-                  this.feed?.publish({
-                    level: "warn",
-                    kind: "github",
-                    issueKey: transitionedIssue.issueKey,
-                    projectId: transitionedIssue.projectId,
-                    stage: "awaiting_queue",
-                    status: "queue_label_failed",
-                    summary: `Queue hand-off failed while adding label "${label}" to PR #${transitionedIssue.prNumber}`,
-                    detail: err instanceof Error ? err.message : String(err),
-                  });
-                });
-            }
-          }
+          const protocol = resolveMergeQueueProtocol(proj);
+          void requestMergeQueueAdmission({
+            issue: transitionedIssue,
+            protocol,
+            logger: this.logger,
+            feed: this.feed,
+          });
         }
 
       }
@@ -235,6 +204,11 @@ export class GitHubWebhookHandler {
         linearIssueId: issue.linearIssueId,
         ciRepairAttempts: 0,
         queueRepairAttempts: 0,
+        lastGitHubFailureSource: null,
+        lastGitHubFailureCheckName: null,
+        lastGitHubFailureCheckUrl: null,
+        lastGitHubFailureAt: null,
+        lastQueueIncidentJson: null,
       });
     }
 
@@ -258,8 +232,8 @@ export class GitHubWebhookHandler {
     // they're individual check_run events (not check_suite), but they
     // must drive state transitions.
     const project = this.config.projects.find((p) => p.id === freshIssue.projectId);
-    const queueCheckName = project?.github?.mergeQueueCheckName ?? "merge-steward/queue";
-    if (event.eventSource === "check_run" && event.checkName === queueCheckName) {
+    const protocol = resolveMergeQueueProtocol(project);
+    if (event.eventSource === "check_run" && event.checkName === protocol.evictionCheckName) {
       this.maybeEnqueueReactiveRun(freshIssue, event, project);
     } else if (!isMetadataOnlyCheckEvent(event)) {
       this.maybeEnqueueReactiveRun(freshIssue, event, project);
@@ -277,18 +251,22 @@ export class GitHubWebhookHandler {
     if (event.triggerEvent === "check_failed" && issue.prState === "open") {
       // External merge queue eviction: react only to the configured check
       // name, not to any CI failure. Regular CI failures still get ci_repair.
-      const queueCheckName = project?.github?.mergeQueueCheckName ?? "merge-steward/queue";
+      const protocol = resolveMergeQueueProtocol(project);
+      const queueCheckName = protocol.evictionCheckName;
       if (issue.factoryState === "awaiting_queue"
         && event.checkName === queueCheckName) {
+        const queueRepairContext = buildQueueRepairContextFromEvent(event);
         this.db.upsertIssue({
           projectId: issue.projectId,
           linearIssueId: issue.linearIssueId,
           pendingRunType: "queue_repair",
-          pendingRunContextJson: JSON.stringify({
-            failureReason: "queue_eviction",
-            checkName: event.checkName,
-            checkUrl: event.checkUrl,
-          }),
+          pendingRunContextJson: JSON.stringify(queueRepairContext),
+          lastGitHubFailureSource: "queue_eviction",
+          lastGitHubFailureCheckName: event.checkName ?? null,
+          lastGitHubFailureCheckUrl: event.checkUrl ?? null,
+          lastGitHubFailureAt: new Date().toISOString(),
+          lastQueueSignalAt: new Date().toISOString(),
+          lastQueueIncidentJson: JSON.stringify(queueRepairContext),
         });
         this.enqueueIssue(issue.projectId, issue.linearIssueId);
         this.logger.info({ issueKey: issue.issueKey, checkName: event.checkName }, "Queue eviction detected, enqueued queue repair");
@@ -300,7 +278,7 @@ export class GitHubWebhookHandler {
           stage: "repairing_queue",
           status: "queue_repair_queued",
           summary: `Queue repair queued after external failure from ${event.checkName}`,
-          detail: event.checkUrl,
+          detail: queueRepairContext.incidentSummary ?? queueRepairContext.incidentUrl ?? event.checkUrl,
         });
       } else {
         this.db.upsertIssue({
@@ -312,6 +290,11 @@ export class GitHubWebhookHandler {
             checkUrl: event.checkUrl,
             checkClass: resolveCheckClass(event.checkName, project),
           }),
+          lastGitHubFailureSource: "branch_ci",
+          lastGitHubFailureCheckName: event.checkName ?? null,
+          lastGitHubFailureCheckUrl: event.checkUrl ?? null,
+          lastGitHubFailureAt: new Date().toISOString(),
+          lastQueueIncidentJson: null,
         });
         this.enqueueIssue(issue.projectId, issue.linearIssueId);
         this.logger.info({ issueKey: issue.issueKey, checkName: event.checkName }, "Enqueued CI repair run");
@@ -332,6 +315,54 @@ export class GitHubWebhookHandler {
       this.logger.info({ issueKey: issue.issueKey, reviewerName: event.reviewerName }, "Enqueued review fix run");
     }
 
+  }
+
+  private updateFailureProvenance(issue: IssueRecord, event: NormalizedGitHubEvent): void {
+    const project = this.config.projects.find((p) => p.id === issue.projectId);
+    const protocol = resolveMergeQueueProtocol(project);
+    const isQueueEvictionCheck = event.eventSource === "check_run" && event.checkName === protocol.evictionCheckName;
+
+    if (event.triggerEvent === "check_failed" && issue.prState === "open") {
+      if (isMetadataOnlyCheckEvent(event) && !isQueueEvictionCheck) {
+        return;
+      }
+      const source = issue.factoryState === "awaiting_queue" && isQueueEvictionCheck
+        ? "queue_eviction"
+        : "branch_ci";
+      this.db.upsertIssue({
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        lastGitHubFailureSource: source,
+        lastGitHubFailureCheckName: event.checkName ?? null,
+        lastGitHubFailureCheckUrl: event.checkUrl ?? null,
+        lastGitHubFailureAt: new Date().toISOString(),
+        ...(source === "queue_eviction"
+          ? {
+              lastQueueSignalAt: new Date().toISOString(),
+              lastQueueIncidentJson: JSON.stringify(buildQueueRepairContextFromEvent(event)),
+            }
+          : {
+              lastQueueIncidentJson: null,
+            }),
+      });
+      return;
+    }
+
+    if (
+      (event.triggerEvent === "check_passed" && (!isMetadataOnlyCheckEvent(event) || isQueueEvictionCheck))
+      || event.triggerEvent === "pr_synchronize"
+      || event.triggerEvent === "pr_merged"
+    ) {
+      this.db.upsertIssue({
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        lastGitHubFailureSource: null,
+        lastGitHubFailureCheckName: null,
+        lastGitHubFailureCheckUrl: null,
+        lastGitHubFailureAt: null,
+        lastQueueIncidentJson: null,
+      });
+    }
   }
 
   private async emitLinearActivity(

@@ -7,6 +7,8 @@ PatchRelay and Merge Steward are two independent services with distinct responsi
 
 Neither service calls the other's API. GitHub is the shared bus — labels, check runs, and PR state changes are the protocol.
 
+See [GitHub queue contract](./github-queue-contract.md) for the concrete shared artifacts and ownership boundaries.
+
 ## Why Two Services
 
 The merge queue is a deterministic control problem that should keep making progress even when agent execution is unavailable, degraded, or expensive.
@@ -114,4 +116,5 @@ See [packages/merge-steward/README.md](../packages/merge-steward/README.md) for 
 ## Read More
 
 - [Merge Steward README](../packages/merge-steward/README.md) — operational docs
+- [Merge queue runbook](./merge-queue-runbook.md) — happy path, conflicts, failures, repair handoff, and operator surfaces
 - [Merge Steward design rationale](./design-docs/merge-steward.md) — why the split, phased roadmap, repair contract

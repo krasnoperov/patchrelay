@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import type { EvictionReporter } from "../interfaces.ts";
 import type { QueueEntry, IncidentRecord } from "../types.ts";
 import { exec } from "../exec.ts";
+import { DEFAULT_MERGE_QUEUE_CHECK_NAME } from "../config.ts";
 
 /**
  * Reports evictions by creating a GitHub check run on the PR's head SHA.
@@ -18,6 +19,7 @@ export class GitHubCheckRunReporter implements EvictionReporter {
     private readonly serverPort: number,
     private readonly publicBaseUrl?: string,
     private readonly admissionLabel: string = "queue",
+    private readonly mergeQueueCheckName: string = DEFAULT_MERGE_QUEUE_CHECK_NAME,
   ) {}
 
   async reportEviction(entry: QueueEntry, incident: IncidentRecord): Promise<void> {
@@ -28,7 +30,7 @@ export class GitHubCheckRunReporter implements EvictionReporter {
       : `http://${this.serverHost}:${this.serverPort}/queue/incidents/${incident.id}`;
 
     const body = JSON.stringify({
-      name: "merge-steward/queue",
+      name: this.mergeQueueCheckName,
       head_sha: entry.headSha,
       status: "completed",
       conclusion: "failure",
@@ -36,7 +38,7 @@ export class GitHubCheckRunReporter implements EvictionReporter {
       output: {
         title,
         summary,
-        text: JSON.stringify(incident.context),
+        text: JSON.stringify(buildIncidentProjection(incident, detailsUrl)),
       },
     });
 
@@ -64,6 +66,15 @@ export class GitHubCheckRunReporter implements EvictionReporter {
       "--remove-label", this.admissionLabel,
     ], { timeoutMs: 15_000 }).catch(() => {});
   }
+}
+
+function buildIncidentProjection(incident: IncidentRecord, detailsUrl: string): Record<string, unknown> {
+  return {
+    incidentId: incident.id,
+    incidentAt: incident.at,
+    incidentUrl: detailsUrl,
+    ...incident.context,
+  };
 }
 
 function formatTitle(incident: IncidentRecord): string {

@@ -1,4 +1,11 @@
-import type { IssueRecord, RunRecord, RunStatus, TrackedIssueRecord, ThreadEventRecord } from "./db-types.ts";
+import type {
+  GitHubFailureSource,
+  IssueRecord,
+  RunRecord,
+  RunStatus,
+  TrackedIssueRecord,
+  ThreadEventRecord,
+} from "./db-types.ts";
 import type { FactoryState, RunType } from "./factory-state.ts";
 import { LinearInstallationStore } from "./db/linear-installation-store.ts";
 import { OperatorFeedStore } from "./db/operator-feed-store.ts";
@@ -103,6 +110,12 @@ export class PatchRelayDatabase {
     prState?: string | null;
     prReviewState?: string | null;
     prCheckStatus?: string | null;
+    lastGitHubFailureSource?: GitHubFailureSource | null;
+    lastGitHubFailureCheckName?: string | null;
+    lastGitHubFailureCheckUrl?: string | null;
+    lastGitHubFailureAt?: string | null;
+    lastQueueSignalAt?: string | null;
+    lastQueueIncidentJson?: string | null;
     ciRepairAttempts?: number;
     queueRepairAttempts?: number;
     reviewFixAttempts?: number;
@@ -139,6 +152,12 @@ export class PatchRelayDatabase {
       if (params.prState !== undefined) { sets.push("pr_state = @prState"); values.prState = params.prState; }
       if (params.prReviewState !== undefined) { sets.push("pr_review_state = @prReviewState"); values.prReviewState = params.prReviewState; }
       if (params.prCheckStatus !== undefined) { sets.push("pr_check_status = @prCheckStatus"); values.prCheckStatus = params.prCheckStatus; }
+      if (params.lastGitHubFailureSource !== undefined) { sets.push("last_github_failure_source = @lastGitHubFailureSource"); values.lastGitHubFailureSource = params.lastGitHubFailureSource; }
+      if (params.lastGitHubFailureCheckName !== undefined) { sets.push("last_github_failure_check_name = @lastGitHubFailureCheckName"); values.lastGitHubFailureCheckName = params.lastGitHubFailureCheckName; }
+      if (params.lastGitHubFailureCheckUrl !== undefined) { sets.push("last_github_failure_check_url = @lastGitHubFailureCheckUrl"); values.lastGitHubFailureCheckUrl = params.lastGitHubFailureCheckUrl; }
+      if (params.lastGitHubFailureAt !== undefined) { sets.push("last_github_failure_at = @lastGitHubFailureAt"); values.lastGitHubFailureAt = params.lastGitHubFailureAt; }
+      if (params.lastQueueSignalAt !== undefined) { sets.push("last_queue_signal_at = @lastQueueSignalAt"); values.lastQueueSignalAt = params.lastQueueSignalAt; }
+      if (params.lastQueueIncidentJson !== undefined) { sets.push("last_queue_incident_json = @lastQueueIncidentJson"); values.lastQueueIncidentJson = params.lastQueueIncidentJson; }
       if (params.ciRepairAttempts !== undefined) { sets.push("ci_repair_attempts = @ciRepairAttempts"); values.ciRepairAttempts = params.ciRepairAttempts; }
       if (params.queueRepairAttempts !== undefined) { sets.push("queue_repair_attempts = @queueRepairAttempts"); values.queueRepairAttempts = params.queueRepairAttempts; }
       if (params.reviewFixAttempts !== undefined) { sets.push("review_fix_attempts = @reviewFixAttempts"); values.reviewFixAttempts = params.reviewFixAttempts; }
@@ -154,6 +173,8 @@ export class PatchRelayDatabase {
           current_linear_state, factory_state, pending_run_type, pending_run_context_json,
           branch_name, worktree_path, thread_id, active_run_id,
           agent_session_id,
+          pr_number, pr_url, pr_state, pr_review_state, pr_check_status,
+          last_github_failure_source, last_github_failure_check_name, last_github_failure_check_url, last_github_failure_at, last_queue_signal_at, last_queue_incident_json,
           updated_at
         ) VALUES (
           @projectId, @linearIssueId, @issueKey, @title, @description, @url,
@@ -161,6 +182,8 @@ export class PatchRelayDatabase {
           @currentLinearState, @factoryState, @pendingRunType, @pendingRunContextJson,
           @branchName, @worktreePath, @threadId, @activeRunId,
           @agentSessionId,
+          @prNumber, @prUrl, @prState, @prReviewState, @prCheckStatus,
+          @lastGitHubFailureSource, @lastGitHubFailureCheckName, @lastGitHubFailureCheckUrl, @lastGitHubFailureAt, @lastQueueSignalAt, @lastQueueIncidentJson,
           @now
         )
       `).run({
@@ -181,6 +204,17 @@ export class PatchRelayDatabase {
         threadId: params.threadId ?? null,
         activeRunId: params.activeRunId ?? null,
         agentSessionId: params.agentSessionId ?? null,
+        prNumber: params.prNumber ?? null,
+        prUrl: params.prUrl ?? null,
+        prState: params.prState ?? null,
+        prReviewState: params.prReviewState ?? null,
+        prCheckStatus: params.prCheckStatus ?? null,
+        lastGitHubFailureSource: params.lastGitHubFailureSource ?? null,
+        lastGitHubFailureCheckName: params.lastGitHubFailureCheckName ?? null,
+        lastGitHubFailureCheckUrl: params.lastGitHubFailureCheckUrl ?? null,
+        lastGitHubFailureAt: params.lastGitHubFailureAt ?? null,
+        lastQueueSignalAt: params.lastQueueSignalAt ?? null,
+        lastQueueIncidentJson: params.lastQueueIncidentJson ?? null,
         now,
       });
     }
@@ -459,6 +493,24 @@ function mapIssueRow(row: Record<string, unknown>): IssueRecord {
     ...(row.pr_state !== null && row.pr_state !== undefined ? { prState: String(row.pr_state) } : {}),
     ...(row.pr_review_state !== null && row.pr_review_state !== undefined ? { prReviewState: String(row.pr_review_state) } : {}),
     ...(row.pr_check_status !== null && row.pr_check_status !== undefined ? { prCheckStatus: String(row.pr_check_status) } : {}),
+    ...(row.last_github_failure_source !== null && row.last_github_failure_source !== undefined
+      ? { lastGitHubFailureSource: String(row.last_github_failure_source) as GitHubFailureSource }
+      : {}),
+    ...(row.last_github_failure_check_name !== null && row.last_github_failure_check_name !== undefined
+      ? { lastGitHubFailureCheckName: String(row.last_github_failure_check_name) }
+      : {}),
+    ...(row.last_github_failure_check_url !== null && row.last_github_failure_check_url !== undefined
+      ? { lastGitHubFailureCheckUrl: String(row.last_github_failure_check_url) }
+      : {}),
+    ...(row.last_github_failure_at !== null && row.last_github_failure_at !== undefined
+      ? { lastGitHubFailureAt: String(row.last_github_failure_at) }
+      : {}),
+    ...(row.last_queue_signal_at !== null && row.last_queue_signal_at !== undefined
+      ? { lastQueueSignalAt: String(row.last_queue_signal_at) }
+      : {}),
+    ...(row.last_queue_incident_json !== null && row.last_queue_incident_json !== undefined
+      ? { lastQueueIncidentJson: String(row.last_queue_incident_json) }
+      : {}),
     ciRepairAttempts: Number(row.ci_repair_attempts ?? 0),
     queueRepairAttempts: Number(row.queue_repair_attempts ?? 0),
     reviewFixAttempts: Number(row.review_fix_attempts ?? 0),

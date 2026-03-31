@@ -156,6 +156,15 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
   // Zombie/stale recovery backoff
   addColumnIfMissing(connection, "issues", "zombie_recovery_attempts", "INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing(connection, "issues", "last_zombie_recovery_at", "TEXT");
+
+  // Preserve GitHub failure provenance so reconciliation can distinguish
+  // branch CI failures from merge-queue evictions after webhook delivery.
+  addColumnIfMissing(connection, "issues", "last_github_failure_source", "TEXT");
+  addColumnIfMissing(connection, "issues", "last_github_failure_check_name", "TEXT");
+  addColumnIfMissing(connection, "issues", "last_github_failure_check_url", "TEXT");
+  addColumnIfMissing(connection, "issues", "last_github_failure_at", "TEXT");
+  addColumnIfMissing(connection, "issues", "last_queue_signal_at", "TEXT");
+  addColumnIfMissing(connection, "issues", "last_queue_incident_json", "TEXT");
 }
 
 function addColumnIfMissing(connection: DatabaseConnection, table: string, column: string, definition: string): void {

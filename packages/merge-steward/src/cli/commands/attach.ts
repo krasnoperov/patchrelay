@@ -14,6 +14,9 @@ export async function handleAttach(parsed: ParsedArgs, stdout: Output, runComman
 
   const baseBranch = typeof parsed.flags.get("base-branch") === "string" ? String(parsed.flags.get("base-branch")) : undefined;
   const admissionLabel = typeof parsed.flags.get("label") === "string" ? String(parsed.flags.get("label")) : undefined;
+  const mergeQueueCheckName = typeof parsed.flags.get("merge-queue-check-name") === "string"
+    ? String(parsed.flags.get("merge-queue-check-name"))
+    : undefined;
 
   const result = await upsertRepoConfig({
     id: repoId,
@@ -23,6 +26,7 @@ export async function handleAttach(parsed: ParsedArgs, stdout: Output, runComman
       ? { requiredChecks: parseCsvFlag(parsed.flags.get("required-check")) }
       : {}),
     ...(admissionLabel ? { admissionLabel } : {}),
+    ...(mergeQueueCheckName ? { mergeQueueCheckName } : {}),
   });
 
   // Restart the merge-steward service so it picks up the new repo config.
@@ -44,6 +48,7 @@ export async function handleAttach(parsed: ParsedArgs, stdout: Output, runComman
       `${result.status === "created" ? "Attached" : result.status === "updated" ? "Updated" : "Verified"} repo ${result.repo.id} for ${result.repo.repoFullName}`,
       `Base branch: ${result.repo.baseBranch}`,
       `Admission label: ${result.repo.admissionLabel}`,
+      `Queue eviction check: ${result.repo.mergeQueueCheckName}`,
       `Required checks: ${result.repo.requiredChecks.length > 0 ? result.repo.requiredChecks.join(", ") : "(any green check)"}`,
       restartState.ok
         ? "Restarted merge-steward.service"

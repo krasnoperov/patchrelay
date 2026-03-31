@@ -64,6 +64,7 @@ export function listRepoConfigs(): Array<{
   baseBranch: string;
   requiredChecks: string[];
   admissionLabel: string;
+  mergeQueueCheckName: string;
   port: number;
   configPath: string;
 }> {
@@ -83,6 +84,7 @@ export function listRepoConfigs(): Array<{
         baseBranch: config.baseBranch,
         requiredChecks: config.requiredChecks,
         admissionLabel: config.admissionLabel,
+        mergeQueueCheckName: config.mergeQueueCheckName,
         port: config.server.port,
         configPath,
       };

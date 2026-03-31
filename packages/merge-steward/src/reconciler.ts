@@ -277,7 +277,7 @@ async function checkValidation(ctx: ReconcileContext, entry: QueueEntry, allActi
         const mainChecks = await ctx.github.listChecksForRef(ref(ctx, ctx.baseBranch));
         const failedChecks = branchChecks
           .filter((c) => FAILED_CONCLUSIONS.has(c.conclusion))
-          .map((c) => ({ name: c.name, conclusion: c.conclusion }));
+          .map((c) => ({ name: c.name, conclusion: c.conclusion, ...(c.url ? { url: c.url } : {}) }));
         await evictEntry(ctx, entry, classifyFailure(branchChecks, mainChecks), { failedChecks });
         await invalidateDownstream(ctx, allActive, index);
       } else {
@@ -378,7 +378,7 @@ async function evictEntry(
   ctx: ReconcileContext,
   entry: QueueEntry,
   failureClass: FailureClass,
-  extra?: { conflictFiles?: string[]; failedChecks?: Array<{ name: string; conclusion: string }> },
+  extra?: { conflictFiles?: string[]; failedChecks?: Array<{ name: string; conclusion: string; url?: string }> },
 ): Promise<void> {
   await cleanupSpec(ctx, entry);
 
@@ -405,7 +405,11 @@ async function evictEntry(
   const context: EvictionContext = {
     version: 1, failureClass, baseSha, prHeadSha: entry.headSha,
     queuePosition: entry.position, conflictFiles: extra?.conflictFiles,
-    failedChecks: extra?.failedChecks, retryHistory,
+    failedChecks: extra?.failedChecks,
+    baseBranch: ctx.baseBranch,
+    branch: entry.branch,
+    issueKey: entry.issueKey,
+    retryHistory,
   };
 
   const incident = {

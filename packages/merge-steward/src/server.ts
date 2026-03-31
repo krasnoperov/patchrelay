@@ -37,6 +37,7 @@ async function createRepoInstance(config: StewardConfig, logger: Logger): Promis
     config.server.port,
     config.server.publicBaseUrl,
     config.admissionLabel,
+    config.mergeQueueCheckName,
   );
   const specBuilder = config.speculativeDepth > 1 ? git : null;
   const service = new MergeStewardService(config, store, git, ci, github, eviction, specBuilder, logger);

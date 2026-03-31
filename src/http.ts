@@ -666,6 +666,21 @@ function renderAgentSessionStatusPage(params: {
       prCheckStatus?: string;
       ciRepairAttempts?: number;
       queueRepairAttempts?: number;
+      queueProtocol?: {
+        repoFullName?: string | null;
+        baseBranch?: string | null;
+        admissionLabel?: string | null;
+        evictionCheckName?: string | null;
+        lastFailureSource?: string | null;
+        lastFailureCheckName?: string | null;
+        lastFailureCheckUrl?: string | null;
+        lastFailureAt?: string | null;
+        lastQueueSignalAt?: string | null;
+        lastIncidentId?: string | null;
+        lastIncidentUrl?: string | null;
+        lastIncidentFailureClass?: string | null;
+        lastIncidentSummary?: string | null;
+      } | undefined;
     };
     activeRun?: { runType?: string; status?: string } | undefined;
     latestRun?: { runType?: string; status?: string } | undefined;
@@ -735,6 +750,7 @@ function renderAgentSessionStatusPage(params: {
   const checkState = params.sessionStatus.issue.prCheckStatus ?? "unknown";
   const ciAttempts = params.sessionStatus.issue.ciRepairAttempts ?? 0;
   const queueAttempts = params.sessionStatus.issue.queueRepairAttempts ?? 0;
+  const queueProtocol = params.sessionStatus.issue.queueProtocol;
   const history = buildPublicStateHistory({
     currentFactoryState: factoryState,
     activeRunId: params.sessionStatus.activeRunId ?? null,
@@ -838,6 +854,14 @@ function renderAgentSessionStatusPage(params: {
             <tr><th>Pull request</th><td>${escapeHtml(prLabel ?? "none")} (${escapeHtml(prState)})</td></tr>
             <tr><th>Review</th><td>${escapeHtml(reviewState)}</td></tr>
             <tr><th>Checks</th><td>${escapeHtml(checkState)}</td></tr>
+            <tr><th>Queue label</th><td><code>${escapeHtml(queueProtocol?.admissionLabel ?? "queue")}</code></td></tr>
+            <tr><th>Queue check</th><td><code>${escapeHtml(queueProtocol?.evictionCheckName ?? "merge-steward/queue")}</code></td></tr>
+            <tr><th>Last queue signal</th><td><code>${escapeHtml(queueProtocol?.lastQueueSignalAt ?? queueProtocol?.lastFailureAt ?? "none")}</code></td></tr>
+            <tr><th>Last queue incident</th><td>${queueProtocol?.lastIncidentUrl
+              ? `<a href="${escapeHtml(queueProtocol.lastIncidentUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(queueProtocol.lastIncidentId ?? queueProtocol.lastIncidentUrl)}</a>`
+              : escapeHtml(queueProtocol?.lastIncidentId ?? "none")}</td></tr>
+            <tr><th>Queue failure class</th><td><code>${escapeHtml(queueProtocol?.lastIncidentFailureClass ?? "unknown")}</code></td></tr>
+            <tr><th>Queue incident summary</th><td>${escapeHtml(queueProtocol?.lastIncidentSummary ?? "none")}</td></tr>
             <tr><th>Latest plan</th><td>${escapeHtml(latestPlan)}</td></tr>
             <tr><th>Active command</th><td><code>${escapeHtml(activeCommand)}</code></td></tr>
             <tr><th>Latest summary</th><td>${escapeHtml(latestAgentMessage)}</td></tr>

@@ -2,7 +2,7 @@ import { basename, dirname } from "node:path";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
-import { parseConfig, type StewardConfig } from "./config.ts";
+import { DEFAULT_MERGE_QUEUE_CHECK_NAME, parseConfig, type StewardConfig } from "./config.ts";
 import { getBuiltCliEntryPath, getDefaultConfigPath, getDefaultRepoConfigDir, getDefaultRuntimeEnvPath, getDefaultServiceEnvPath, getDefaultStateDir, getMergeStewardPathLayout, getRepoConfigPath, getSystemdUnitTemplatePath, readBundledAsset } from "./runtime-paths.ts";
 import { parseHomeConfigObject, stringifyJson, type StewardHomeConfig } from "./steward-home.ts";
 
@@ -190,6 +190,7 @@ export async function upsertRepoConfig(options: {
   baseBranch?: string;
   requiredChecks?: string[];
   admissionLabel?: string;
+  mergeQueueCheckName?: string;
 }): Promise<{
   configPath: string;
   status: "created" | "updated" | "unchanged";
@@ -199,6 +200,7 @@ export async function upsertRepoConfig(options: {
     baseBranch: string;
     requiredChecks: string[];
     admissionLabel: string;
+    mergeQueueCheckName: string;
     port: number;
   };
 }> {
@@ -220,6 +222,7 @@ export async function upsertRepoConfig(options: {
   const requiredChecks = [...new Set((options.requiredChecks ?? existing?.requiredChecks ?? []).map((entry) => entry.trim()).filter(Boolean))];
   const baseBranch = options.baseBranch?.trim() || existing?.baseBranch || "main";
   const admissionLabel = options.admissionLabel?.trim() || existing?.admissionLabel || "queue";
+  const mergeQueueCheckName = options.mergeQueueCheckName?.trim() || existing?.mergeQueueCheckName || DEFAULT_MERGE_QUEUE_CHECK_NAME;
   const existingPorts = await listRepoConfigPorts(layout.repoConfigDir);
   const port = existing?.server.port ?? nextAvailablePort(existingPorts, homeConfig.server?.port_base ?? 8790);
 
@@ -247,6 +250,7 @@ export async function upsertRepoConfig(options: {
       level: existing?.logging.level ?? (homeConfig.logging?.level ?? "info"),
     },
     admissionLabel,
+    mergeQueueCheckName,
     excludeBranches: existing?.excludeBranches ?? ["release-please--*"],
   };
 
@@ -267,6 +271,7 @@ export async function upsertRepoConfig(options: {
       baseBranch,
       requiredChecks,
       admissionLabel,
+      mergeQueueCheckName,
       port,
     },
   };

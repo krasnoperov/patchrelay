@@ -1,6 +1,7 @@
 import { accessSync, constants, existsSync, mkdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { runPatchRelayMigrations } from "./db/migrations.ts";
+import { resolveMergeQueueProtocol } from "./merge-queue-protocol.ts";
 import { SqliteConnection } from "./db/shared.ts";
 import type { AppConfig } from "./types.ts";
 import { execCommand } from "./utils.ts";
@@ -95,6 +96,7 @@ export async function runPreflight(config: AppConfig, options?: { connectivity?:
   for (const project of config.projects) {
     checks.push(...checkPath(`project:${project.id}:repo`, project.repoPath, "directory", { writable: true }));
     checks.push(...checkPath(`project:${project.id}:worktrees`, project.worktreeRoot, "directory", { createIfMissing: true, writable: true }));
+    checks.push(...checkGitHubProtocol(project, config.server.publicBaseUrl));
     // Workflow file checks removed — factory state machine replaces workflow definitions
   }
 
@@ -331,6 +333,41 @@ function checkOAuthRedirectUri(config: AppConfig): PreflightCheck[] {
   } catch (error) {
     return [fail("linear_oauth", `Invalid linear.oauth.redirect_uri: ${formatError(error)}`)];
   }
+}
+
+function checkGitHubProtocol(project: AppConfig["projects"][number], publicBaseUrl?: string): PreflightCheck[] {
+  const protocol = resolveMergeQueueProtocol(project);
+  const scope = `project:${project.id}:github_protocol`;
+  if (!protocol.repoFullName) {
+    return [
+      warn(
+        scope,
+        "GitHub repo is not configured; PR state tracking, queue hand-off, and queue repair automation are disabled for this project",
+      ),
+    ];
+  }
+
+  const checks: PreflightCheck[] = [
+    pass(
+      scope,
+      `GitHub protocol configured for ${protocol.repoFullName} (label "${protocol.admissionLabel}", eviction check "${protocol.evictionCheckName}")`,
+    ),
+  ];
+
+  if (!publicBaseUrl) {
+    checks.push(warn(scope, "PatchRelay public base URL is not configured; public operator/session links will be incomplete"));
+  }
+  if (!protocol.baseBranch) {
+    checks.push(warn(scope, "GitHub base branch is not configured; defaults may diverge from the target repository"));
+  }
+  if (!protocol.admissionLabel.trim()) {
+    checks.push(fail(scope, "Merge queue admission label must not be empty"));
+  }
+  if (!protocol.evictionCheckName.trim()) {
+    checks.push(fail(scope, "Merge queue eviction check name must not be empty"));
+  }
+
+  return checks;
 }
 
 function isLoopbackHost(host: string): boolean {

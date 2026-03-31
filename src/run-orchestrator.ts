@@ -23,6 +23,11 @@ import {
   buildRunFailureActivity,
   buildRunStartedActivity,
 } from "./linear-session-reporting.ts";
+import {
+  requestMergeQueueAdmission,
+  resolveMergeQueueProtocol,
+} from "./merge-queue-protocol.ts";
+import { parseStoredQueueRepairContext } from "./merge-queue-incident.ts";
 import { buildAgentSessionExternalUrls } from "./agent-session-presentation.ts";
 import { WorktreeManager } from "./worktree-manager.ts";
 import type {
@@ -118,6 +123,7 @@ function buildRunPrompt(issue: IssueRecord, runType: RunType, repoPath: string, 
       );
       break;
     case "queue_repair":
+      appendQueueRepairContext(lines, context);
       lines.push(
         "## Merge Queue Failure",
         "",
@@ -519,13 +525,21 @@ export class RunOrchestrator {
         linearIssueId: run.linearIssueId,
         activeRunId: null,
         ...(postRunState ? { factoryState: postRunState } : {}),
+        ...(postRunState === "awaiting_queue" || postRunState === "done"
+          ? {
+              lastGitHubFailureSource: null,
+              lastGitHubFailureCheckName: null,
+              lastGitHubFailureCheckUrl: null,
+              lastGitHubFailureAt: null,
+              lastQueueIncidentJson: null,
+            }
+          : {}),
       });
     });
 
     // If we advanced to awaiting_queue, enqueue for merge prep
     if (postRunState === "awaiting_queue") {
-      this.enqueueIssue(run.projectId, run.linearIssueId);
-      this.maybeAddMergeQueueLabel(issue, run.projectId);
+      this.requestMergeQueueAdmission(issue, run.projectId);
     }
 
     this.feed?.publish({
@@ -628,19 +642,64 @@ export class RunOrchestrator {
     for (const issue of this.db.listIdleNonTerminalIssues()) {
       // PR already merged — advance to done regardless of current state
       if (issue.prState === "merged") {
-        this.advanceIdleIssue(issue, "done");
+        this.advanceIdleIssue(issue, "done", { clearFailureProvenance: true });
         continue;
       }
 
       // Review approved + checks not failed — advance to awaiting_queue
       if (issue.prReviewState === "approved" && issue.prCheckStatus !== "failed") {
-        this.advanceIdleIssue(issue, "awaiting_queue");
+        this.advanceIdleIssue(issue, "awaiting_queue", { clearFailureProvenance: true });
         continue;
       }
 
-      // Checks failed + idle (not already in a repair state) — enqueue ci_repair
-      if (issue.prCheckStatus === "failed" && issue.factoryState !== "repairing_ci") {
-        this.advanceIdleIssue(issue, "repairing_ci", "ci_repair");
+      // Checks failed + idle — route based on durable GitHub failure provenance.
+      if (issue.prCheckStatus === "failed") {
+        if (issue.lastGitHubFailureSource === "queue_eviction") {
+          if (issue.factoryState !== "repairing_queue") {
+            const pendingRunContext = buildFailureContext(issue);
+            this.advanceIdleIssue(issue, "repairing_queue", {
+              pendingRunType: "queue_repair",
+              ...(pendingRunContext ? { pendingRunContext } : {}),
+            });
+          }
+          continue;
+        }
+
+        if (issue.lastGitHubFailureSource === "branch_ci") {
+          if (issue.factoryState !== "repairing_ci") {
+            const pendingRunContext = buildFailureContext(issue);
+            this.advanceIdleIssue(issue, "repairing_ci", {
+              pendingRunType: "ci_repair",
+              ...(pendingRunContext ? { pendingRunContext } : {}),
+            });
+          }
+          continue;
+        }
+
+        if (issue.factoryState === "awaiting_queue") {
+          this.logger.warn(
+            { issueKey: issue.issueKey, prNumber: issue.prNumber },
+            "Reconciliation skipped failed awaiting_queue issue with unknown failure provenance",
+          );
+          this.feed?.publish({
+            level: "warn",
+            kind: "github",
+            issueKey: issue.issueKey,
+            projectId: issue.projectId,
+            stage: issue.factoryState,
+            status: "failure_source_unknown",
+            summary: "Reconciliation saw failed checks but could not determine whether the failure came from CI or the merge queue",
+          });
+          continue;
+        }
+
+        if (issue.factoryState !== "repairing_ci") {
+          const pendingRunContext = buildFailureContext(issue);
+          this.advanceIdleIssue(issue, "repairing_ci", {
+            pendingRunType: "ci_repair",
+            ...(pendingRunContext ? { pendingRunContext } : {}),
+          });
+        }
         continue;
       }
 
@@ -663,10 +722,10 @@ export class RunOrchestrator {
       const pr = JSON.parse(stdout) as { state?: string; reviewDecision?: string };
       if (pr.state === "MERGED") {
         this.db.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, prState: "merged" });
-        this.advanceIdleIssue(issue, "done");
+        this.advanceIdleIssue(issue, "done", { clearFailureProvenance: true });
       } else if (pr.reviewDecision === "APPROVED") {
         this.db.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, prReviewState: "approved" });
-        this.advanceIdleIssue(issue, "awaiting_queue");
+        this.advanceIdleIssue(issue, "awaiting_queue", { clearFailureProvenance: true });
       }
     } catch (error) {
       this.logger.debug(
@@ -676,16 +735,38 @@ export class RunOrchestrator {
     }
   }
 
-  private advanceIdleIssue(issue: IssueRecord, newState: FactoryState, pendingRunType?: string): void {
+  private advanceIdleIssue(
+    issue: IssueRecord,
+    newState: FactoryState,
+    options?: {
+      pendingRunType?: RunType;
+      pendingRunContext?: Record<string, unknown>;
+      clearFailureProvenance?: boolean;
+    },
+  ): void {
     this.logger.info(
-      { issueKey: issue.issueKey, from: issue.factoryState, to: newState, pendingRunType },
+      { issueKey: issue.issueKey, from: issue.factoryState, to: newState, pendingRunType: options?.pendingRunType },
       "Reconciliation: advancing idle issue",
     );
     this.db.upsertIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       factoryState: newState,
-      ...(pendingRunType ? { pendingRunType: pendingRunType as never } : {}),
+      ...(options?.pendingRunType ? { pendingRunType: options.pendingRunType } : {}),
+      ...(options?.pendingRunType
+        ? {
+            pendingRunContextJson: options.pendingRunContext ? JSON.stringify(options.pendingRunContext) : null,
+          }
+        : {}),
+      ...(options?.clearFailureProvenance
+        ? {
+            lastGitHubFailureSource: null,
+            lastGitHubFailureCheckName: null,
+            lastGitHubFailureCheckUrl: null,
+            lastGitHubFailureAt: null,
+            lastQueueIncidentJson: null,
+          }
+        : {}),
     });
     this.feed?.publish({
       level: "info",
@@ -696,7 +777,10 @@ export class RunOrchestrator {
       status: "reconciled",
       summary: `Reconciliation: ${issue.factoryState} \u2192 ${newState}`,
     });
-    if (newState === "awaiting_queue" || pendingRunType) {
+    if (newState === "awaiting_queue") {
+      this.requestMergeQueueAdmission(issue, issue.projectId);
+    }
+    if (options?.pendingRunType) {
       this.enqueueIssue(issue.projectId, issue.linearIssueId);
     }
   }
@@ -889,6 +973,15 @@ export class RunOrchestrator {
           linearIssueId: run.linearIssueId,
           activeRunId: null,
           ...(postRunState ? { factoryState: postRunState } : {}),
+          ...(postRunState === "awaiting_queue" || postRunState === "done"
+            ? {
+                lastGitHubFailureSource: null,
+                lastGitHubFailureCheckName: null,
+                lastGitHubFailureCheckUrl: null,
+                lastGitHubFailureAt: null,
+                lastQueueIncidentJson: null,
+              }
+            : {}),
           });
       });
       if (postRunState) {
@@ -903,7 +996,7 @@ export class RunOrchestrator {
         });
       }
       if (postRunState === "awaiting_queue") {
-        this.enqueueIssue(run.projectId, run.linearIssueId);
+        this.requestMergeQueueAdmission(issue, run.projectId);
       }
     }
   }
@@ -941,17 +1034,14 @@ export class RunOrchestrator {
   }
 
   /** Add the merge queue admission label for external-queue projects (best-effort). */
-  private maybeAddMergeQueueLabel(issue: IssueRecord, projectId: string): void {
+  private requestMergeQueueAdmission(issue: IssueRecord, projectId: string): void {
     const project = this.config.projects.find((p) => p.id === projectId);
-    if (!project?.github?.repoFullName || !issue.prNumber) return;
-    const label = project.github.mergeQueueLabel ?? "queue";
-    const repo = project.github.repoFullName;
-    if (!repo) return;
-    void execCommand("gh", [
-      "pr", "edit", String(issue.prNumber),
-      "--repo", repo, "--add-label", label,
-    ], { timeoutMs: 15_000 }).catch((err) => {
-      this.logger.warn({ issueKey: issue.issueKey, err }, "Failed to add merge queue label");
+    const protocol = resolveMergeQueueProtocol(project);
+    void requestMergeQueueAdmission({
+      issue,
+      protocol,
+      logger: this.logger,
+      feed: this.feed,
     });
   }
 
@@ -1084,4 +1174,100 @@ function resolvePostRunState(issue: IssueRecord): FactoryState | undefined {
     return "pr_open";
   }
   return undefined;
+}
+
+function buildFailureContext(issue: Pick<
+  IssueRecord,
+  "lastGitHubFailureSource" | "lastGitHubFailureCheckName" | "lastGitHubFailureCheckUrl" | "lastQueueIncidentJson"
+>): Record<string, unknown> | undefined {
+  const queueRepairContext = issue.lastQueueIncidentJson
+    ? parseStoredQueueRepairContext(issue.lastQueueIncidentJson)
+    : undefined;
+  if (!queueRepairContext
+    && !issue.lastGitHubFailureSource
+    && !issue.lastGitHubFailureCheckName
+    && !issue.lastGitHubFailureCheckUrl) {
+    return undefined;
+  }
+  return {
+    ...(issue.lastGitHubFailureSource ? { failureReason: issue.lastGitHubFailureSource } : {}),
+    ...(issue.lastGitHubFailureCheckName ? { checkName: issue.lastGitHubFailureCheckName } : {}),
+    ...(issue.lastGitHubFailureCheckUrl ? { checkUrl: issue.lastGitHubFailureCheckUrl } : {}),
+    ...(queueRepairContext ? queueRepairContext : {}),
+  };
+}
+
+function appendQueueRepairContext(lines: string[], context?: Record<string, unknown>): void {
+  const incidentTitle = typeof context?.incidentTitle === "string" ? context.incidentTitle.trim() : "";
+  const incidentSummary = typeof context?.incidentSummary === "string" ? context.incidentSummary.trim() : "";
+  const incidentId = typeof context?.incidentId === "string" ? context.incidentId.trim() : "";
+  const incidentUrl = typeof context?.incidentUrl === "string" ? context.incidentUrl.trim() : "";
+  const incidentContext = context?.incidentContext && typeof context.incidentContext === "object"
+    ? context.incidentContext as Record<string, unknown>
+    : undefined;
+  const failureClass = typeof incidentContext?.failureClass === "string" ? incidentContext.failureClass : "";
+  const baseSha = typeof incidentContext?.baseSha === "string" ? incidentContext.baseSha : "";
+  const prHeadSha = typeof incidentContext?.prHeadSha === "string" ? incidentContext.prHeadSha : "";
+  const baseBranch = typeof incidentContext?.baseBranch === "string" ? incidentContext.baseBranch : "";
+  const branch = typeof incidentContext?.branch === "string" ? incidentContext.branch : "";
+  const queuePosition = typeof incidentContext?.queuePosition === "number" ? String(incidentContext.queuePosition) : "";
+  const conflictFiles = Array.isArray(incidentContext?.conflictFiles)
+    ? incidentContext.conflictFiles.filter((entry): entry is string => typeof entry === "string")
+    : [];
+  const failedChecks = Array.isArray(incidentContext?.failedChecks)
+    ? incidentContext.failedChecks
+      .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
+      .map((entry) => ({
+        name: typeof entry.name === "string" ? entry.name : "unknown",
+        conclusion: typeof entry.conclusion === "string" ? entry.conclusion : "unknown",
+        ...(typeof entry.url === "string" ? { url: entry.url } : {}),
+      }))
+    : [];
+  const retryHistory = Array.isArray(incidentContext?.retryHistory)
+    ? incidentContext.retryHistory
+      .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
+      .map((entry) => ({
+        at: typeof entry.at === "string" ? entry.at : "unknown",
+        baseSha: typeof entry.baseSha === "string" ? entry.baseSha : "unknown",
+        outcome: typeof entry.outcome === "string" ? entry.outcome : "unknown",
+      }))
+    : [];
+
+  if (!incidentTitle && !incidentSummary && !incidentId && !incidentUrl && !failureClass && !baseSha && !prHeadSha
+    && !queuePosition && conflictFiles.length === 0 && failedChecks.length === 0 && retryHistory.length === 0) {
+    return;
+  }
+
+  lines.push("## Queue Incident Context", "");
+  if (incidentTitle) lines.push(`Incident: ${incidentTitle}`);
+  if (incidentId) lines.push(`Incident ID: ${incidentId}`);
+  if (incidentUrl) lines.push(`Incident URL: ${incidentUrl}`);
+  if (incidentSummary) lines.push("", incidentSummary, "");
+  if (failureClass) lines.push(`Failure class: ${failureClass}`);
+  if (baseBranch) lines.push(`Base branch: ${baseBranch}`);
+  if (baseSha) lines.push(`Base SHA: ${baseSha}`);
+  if (branch) lines.push(`Queue branch: ${branch}`);
+  if (prHeadSha) lines.push(`Queue branch head SHA: ${prHeadSha}`);
+  if (queuePosition) lines.push(`Queue position at eviction: ${queuePosition}`);
+
+  if (conflictFiles.length > 0) {
+    lines.push("", "Conflicting files:");
+    for (const file of conflictFiles) lines.push(`- ${file}`);
+  }
+
+  if (failedChecks.length > 0) {
+    lines.push("", "Failed checks:");
+    for (const check of failedChecks) {
+      lines.push(`- ${check.name} (${check.conclusion})${check.url ? ` ${check.url}` : ""}`);
+    }
+  }
+
+  if (retryHistory.length > 0) {
+    lines.push("", "Retry history:");
+    for (const retry of retryHistory) {
+      lines.push(`- ${retry.at}: ${retry.outcome} on base ${retry.baseSha}`);
+    }
+  }
+
+  lines.push("");
 }

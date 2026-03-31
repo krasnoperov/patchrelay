@@ -110,7 +110,7 @@ export class PatchRelayService {
     enqueueIssue = (projectId, issueId) => runtime.enqueueIssue(projectId, issueId);
 
     this.oauthService = new LinearOAuthService(config, { linearInstallations: db.linearInstallations }, logger);
-    this.queryService = new IssueQueryService(db, codex, this.orchestrator);
+    this.queryService = new IssueQueryService(config, db, codex, this.orchestrator);
     this.runtime = runtime;
 
     // Optional GitHub App token management for bot identity

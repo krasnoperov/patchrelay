@@ -1,7 +1,9 @@
 import type { CodexAppServerClient } from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
+import { parseStoredQueueRepairContext } from "./merge-queue-incident.ts";
+import { resolveMergeQueueProtocol } from "./merge-queue-protocol.ts";
 import { extractStageSummary, summarizeCurrentThread } from "./run-reporting.ts";
-import type { StageReport, RunRecord, TrackedIssueRecord } from "./types.ts";
+import type { AppConfig, StageReport, RunRecord, TrackedIssueRecord } from "./types.ts";
 import { safeJsonParse } from "./utils.ts";
 
 interface RunStatusProvider {
@@ -14,6 +16,7 @@ interface RunStatusProvider {
 
 export class IssueQueryService {
   constructor(
+    private readonly config: AppConfig,
     private readonly db: PatchRelayDatabase,
     private readonly codex: CodexAppServerClient,
     private readonly runStatusProvider: RunStatusProvider,
@@ -23,6 +26,7 @@ export class IssueQueryService {
     const result = this.db.getIssueOverview(issueKey);
     if (!result) return undefined;
 
+    const issueRecord = this.db.getIssueByKey(issueKey);
     const activeStatus = await this.runStatusProvider.getActiveRunStatus(issueKey);
     const activeRun = activeStatus?.run ?? result.activeRun;
     const latestRun = this.db.getLatestRunForIssue(result.issue.projectId, result.issue.linearIssueId);
@@ -35,6 +39,7 @@ export class IssueQueryService {
 
     return {
       ...result,
+      issue: issueRecord ? { ...result.issue, queueProtocol: this.buildQueueProtocol(issueRecord.projectId, issueRecord) } : result.issue,
       ...(activeRun ? { activeRun } : {}),
       ...(latestRun ? { latestRun } : {}),
       ...(liveThread ? { liveThread } : {}),
@@ -113,6 +118,7 @@ export class IssueQueryService {
         ciRepairAttempts: fullIssue?.ciRepairAttempts ?? 0,
         queueRepairAttempts: fullIssue?.queueRepairAttempts ?? 0,
         reviewFixAttempts: fullIssue?.reviewFixAttempts ?? 0,
+        ...(fullIssue ? { queueProtocol: this.buildQueueProtocol(fullIssue.projectId, fullIssue) } : {}),
       },
       runs,
       feedEvents,
@@ -145,6 +151,7 @@ export class IssueQueryService {
         ...(issueRecord?.prReviewState ? { prReviewState: issueRecord.prReviewState } : {}),
         ...(issueRecord?.prCheckStatus ? { prCheckStatus: issueRecord.prCheckStatus } : {}),
         ...(issueRecord ? { ciRepairAttempts: issueRecord.ciRepairAttempts, queueRepairAttempts: issueRecord.queueRepairAttempts } : {}),
+        ...(issueRecord ? { queueProtocol: this.buildQueueProtocol(issueRecord.projectId, issueRecord) } : {}),
       },
       ...(overview.activeRun ? { activeRun: overview.activeRun } : {}),
       ...(overview.latestRun ? { latestRun: overview.latestRun } : {}),
@@ -154,6 +161,41 @@ export class IssueQueryService {
       activeRunId: issueRecord?.activeRunId ?? null,
       runs: report?.runs ?? [],
       generatedAt: new Date().toISOString(),
+    };
+  }
+
+  private buildQueueProtocol(
+    projectId: string,
+    issue: {
+      prNumber?: number | undefined;
+      lastGitHubFailureSource?: string | undefined;
+      lastGitHubFailureCheckName?: string | undefined;
+      lastGitHubFailureCheckUrl?: string | undefined;
+      lastGitHubFailureAt?: string | undefined;
+      lastQueueSignalAt?: string | undefined;
+      lastQueueIncidentJson?: string | undefined;
+    },
+  ) {
+    const project = this.config.projects.find((entry) => entry.id === projectId);
+    const protocol = resolveMergeQueueProtocol(project);
+    const queueIncident = issue.lastQueueIncidentJson
+      ? parseStoredQueueRepairContext(issue.lastQueueIncidentJson)
+      : undefined;
+    return {
+      repoFullName: protocol.repoFullName,
+      baseBranch: protocol.baseBranch,
+      admissionLabel: protocol.admissionLabel,
+      evictionCheckName: protocol.evictionCheckName,
+      prNumber: issue.prNumber ?? null,
+      lastFailureSource: issue.lastGitHubFailureSource ?? null,
+      lastFailureCheckName: issue.lastGitHubFailureCheckName ?? null,
+      lastFailureCheckUrl: issue.lastGitHubFailureCheckUrl ?? null,
+      lastFailureAt: issue.lastGitHubFailureAt ?? null,
+      lastQueueSignalAt: issue.lastQueueSignalAt ?? null,
+      lastIncidentId: queueIncident?.incidentId ?? null,
+      lastIncidentUrl: queueIncident?.incidentUrl ?? null,
+      lastIncidentFailureClass: queueIncident?.incidentContext?.failureClass ?? null,
+      lastIncidentSummary: queueIncident?.incidentSummary ?? null,
     };
   }
 }

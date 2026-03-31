@@ -70,10 +70,13 @@ export interface EvictionContext {
   version: 1;
   failureClass: FailureClass;
   conflictFiles?: string[] | undefined;
-  failedChecks?: Array<{ name: string; conclusion: string }> | undefined;
+  failedChecks?: Array<{ name: string; conclusion: string; url?: string }> | undefined;
   baseSha: string;
   prHeadSha: string;
   queuePosition: number;
+  baseBranch?: string | undefined;
+  branch?: string | undefined;
+  issueKey?: string | null | undefined;
   retryHistory: Array<{ at: string; baseSha: string; outcome: string }>;
 }
 

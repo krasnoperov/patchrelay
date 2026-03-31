@@ -17,7 +17,7 @@ export async function handleRepos(parsed: ParsedArgs, stdout: Output): Promise<n
     writeOutput(
       stdout,
       repos
-        .map((repo) => `${repo.repoId}  ${repo.repoFullName}  base=${repo.baseBranch}`)
+        .map((repo) => `${repo.repoId}  ${repo.repoFullName}  base=${repo.baseBranch}  queue=${repo.mergeQueueCheckName}`)
         .join("\n") + "\n",
     );
     return 0;
@@ -31,6 +31,7 @@ export async function handleRepos(parsed: ParsedArgs, stdout: Output): Promise<n
     baseBranch: config.baseBranch,
     requiredChecks: config.requiredChecks,
     admissionLabel: config.admissionLabel,
+    mergeQueueCheckName: config.mergeQueueCheckName,
     configPath,
     clonePath: config.clonePath,
     databasePath: config.database.path,
@@ -49,6 +50,7 @@ export async function handleRepos(parsed: ParsedArgs, stdout: Output): Promise<n
       `Base branch: ${config.baseBranch}`,
       `Required checks: ${config.requiredChecks.length > 0 ? config.requiredChecks.join(", ") : "(any green check)"}`,
       `Admission label: ${config.admissionLabel}`,
+      `Queue eviction check: ${config.mergeQueueCheckName}`,
       webhookUrl ? `Webhook URL: ${webhookUrl}` : undefined,
     ]
       .filter(Boolean)
