@@ -1,9 +1,10 @@
 import { existsSync } from "node:fs";
+import { dirname } from "node:path";
 import { loadConfig } from "../../config.ts";
 import { ensureRepositoryProjectSettings, removeRepositoryFromConfig, upsertRepositoryInConfig } from "../../install.ts";
 import { defaultLocalRepoPath, ensureLocalRepository, normalizeGitHubRepo } from "../../repository-linking.ts";
 import type { AppConfig } from "../../types.ts";
-import { execCommand } from "../../utils.ts";
+import { ensureDir, execCommand } from "../../utils.ts";
 import { parseCsvFlag } from "../args.ts";
 import type { CommandRunner, Output, ParsedArgs, RunCliOptions } from "../command-types.ts";
 import type { CliOperatorDataAccess } from "../operator-client.ts";
@@ -121,6 +122,7 @@ async function handleRepoLink(params: RepoCommandParams): Promise<number> {
     });
 
     const { PatchRelayDatabase } = await import("../../db.ts");
+    await ensureDir(dirname(config.database.path));
     const db = new PatchRelayDatabase(config.database.path, config.database.wal);
     try {
       db.runMigrations();
@@ -172,6 +174,7 @@ async function handleRepoUnlink(params: RepoCommandParams): Promise<number> {
   const result = await removeRepositoryFromConfig({ githubRepo });
 
   const { PatchRelayDatabase } = await import("../../db.ts");
+  await ensureDir(dirname(config.database.path));
   const db = new PatchRelayDatabase(config.database.path, config.database.wal);
   try {
     db.runMigrations();

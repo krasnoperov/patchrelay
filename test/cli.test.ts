@@ -1083,36 +1083,46 @@ test("cli repo link reuses the managed local clone root and supports --path over
           },
         } as unknown as CliDataAccess;
 
-        assert.equal(
-          await runCli(["repo", "link", "krasnoperov/usertold", "--workspace", "usertold", "--team", "USE"], {
-            stdout: createBufferStream().stream,
-            stderr: createBufferStream().stream,
-            data: operatorData,
-            runInteractive: async () => 0,
-          }),
-          0,
-        );
-        assert.equal(
-          await runCli([
-            "repo",
-            "link",
-            "krasnoperov/mafia",
-            "--workspace",
-            "usertold",
-            "--team",
-            "MAF",
-            "--project",
-            "Website",
-            "--path",
-            overrideRepoPath,
-          ], {
-            stdout: createBufferStream().stream,
-            stderr: createBufferStream().stream,
-            data: operatorData,
-            runInteractive: async () => 0,
-          }),
-          0,
-        );
+        {
+          const stdout = createBufferStream();
+          const stderr = createBufferStream();
+          assert.equal(
+            await runCli(["repo", "link", "krasnoperov/usertold", "--workspace", "usertold", "--team", "USE"], {
+              stdout: stdout.stream,
+              stderr: stderr.stream,
+              data: operatorData,
+              runInteractive: async () => 0,
+            }),
+            0,
+            stderr.read(),
+          );
+        }
+        {
+          const stdout = createBufferStream();
+          const stderr = createBufferStream();
+          assert.equal(
+            await runCli([
+              "repo",
+              "link",
+              "krasnoperov/mafia",
+              "--workspace",
+              "usertold",
+              "--team",
+              "MAF",
+              "--project",
+              "Website",
+              "--path",
+              overrideRepoPath,
+            ], {
+              stdout: stdout.stream,
+              stderr: stderr.stream,
+              data: operatorData,
+              runInteractive: async () => 0,
+            }),
+            0,
+            stderr.read(),
+          );
+        }
 
         const config = loadConfig(configPath, { profile: "write_config" });
         assert.equal(config.repositories.find((repository) => repository.githubRepo === "krasnoperov/usertold")?.localPath, reusedRepoPath);
@@ -1539,15 +1549,19 @@ test("cli repo link writes repository-first config and reuses existing clones", 
         } as const;
 
         const linkOut = createBufferStream();
-        assert.equal(
-          await runCli(["repo", "link", "krasnoperov/usertold", "--workspace", "usertold", "--team", "USE"], {
-            stdout: linkOut.stream,
-            stderr: createBufferStream().stream,
-            data: operatorData as unknown as CliDataAccess,
-            runInteractive: async () => 0,
-          }),
-          0,
-        );
+        {
+          const stderr = createBufferStream();
+          assert.equal(
+            await runCli(["repo", "link", "krasnoperov/usertold", "--workspace", "usertold", "--team", "USE"], {
+              stdout: linkOut.stream,
+              stderr: stderr.stream,
+              data: operatorData as unknown as CliDataAccess,
+              runInteractive: async () => 0,
+            }),
+            0,
+            stderr.read(),
+          );
+        }
         assert.match(linkOut.read(), /Linked krasnoperov\/usertold|Verified krasnoperov\/usertold/);
         assert.match(linkOut.read(), /Path: .* \(reused\)/);
 
@@ -1613,15 +1627,20 @@ test("cli repo list, show, and unlink use repository-first identities", { concur
           },
         } as const;
 
-        assert.equal(
-          await runCli(["repo", "link", "krasnoperov/usertold", "--workspace", "usertold", "--team", "USE"], {
-            stdout: createBufferStream().stream,
-            stderr: createBufferStream().stream,
-            data: operatorData as unknown as CliDataAccess,
-            runInteractive: async () => 0,
-          }),
-          0,
-        );
+        {
+          const stdout = createBufferStream();
+          const stderr = createBufferStream();
+          assert.equal(
+            await runCli(["repo", "link", "krasnoperov/usertold", "--workspace", "usertold", "--team", "USE"], {
+              stdout: stdout.stream,
+              stderr: stderr.stream,
+              data: operatorData as unknown as CliDataAccess,
+              runInteractive: async () => 0,
+            }),
+            0,
+            stderr.read(),
+          );
+        }
 
         const listOut = createBufferStream();
         assert.equal(await runCli(["repo", "list"], { stdout: listOut.stream, stderr: createBufferStream().stream }), 0);
