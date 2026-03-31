@@ -57,11 +57,23 @@ jobs:
         env:
           ROOT_RELEASE_CREATED: ${{ steps.release.outputs.release_created }}
           STEWARD_RELEASE_CREATED: ${{ steps.release.outputs['packages/merge-steward--release_created'] }}
-          MANUAL_PUBLISH_UNPUBLISHED: ${{ github.event.inputs.publish_unpublished == 'true' }}
-          IS_RELEASE_COMMIT: ${{ github.event_name == 'push' && startsWith(github.event.head_commit.message, 'chore: release ') }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_EVENT_PATH: ${{ github.event_path }}
         shell: bash
         run: |
           set -euo pipefail
+
+          event_json="$(cat "${GITHUB_EVENT_PATH}")"
+          manual_publish_unpublished=false
+          is_release_commit=false
+
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            manual_publish_unpublished="$(node -e "const event = JSON.parse(process.argv[1]); process.stdout.write(String(event.inputs?.publish_unpublished === 'true' || event.inputs?.publish_unpublished === true));" "${event_json}")"
+          fi
+
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            is_release_commit="$(node -e "const event = JSON.parse(process.argv[1]); process.stdout.write(String((event.head_commit?.message ?? '').startsWith('chore: release ')));" "${event_json}")"
+          fi
 
           root_version="$(node -p "require('./package.json').version")"
           steward_version="$(node -p "require('./packages/merge-steward/package.json').version")"
@@ -86,13 +98,13 @@ jobs:
 
           if [[ "${ROOT_RELEASE_CREATED}" == "true" ]]; then
             root_should_publish=true
-          elif [[ "${root_missing}" == "true" && ( "${IS_RELEASE_COMMIT}" == "true" || "${MANUAL_PUBLISH_UNPUBLISHED}" == "true" ) ]]; then
+          elif [[ "${root_missing}" == "true" && ( "${is_release_commit}" == "true" || "${manual_publish_unpublished}" == "true" ) ]]; then
             root_should_publish=true
           fi
 
           if [[ "${STEWARD_RELEASE_CREATED}" == "true" ]]; then
             steward_should_publish=true
-          elif [[ "${steward_missing}" == "true" && ( "${IS_RELEASE_COMMIT}" == "true" || "${MANUAL_PUBLISH_UNPUBLISHED}" == "true" ) ]]; then
+          elif [[ "${steward_missing}" == "true" && ( "${is_release_commit}" == "true" || "${manual_publish_unpublished}" == "true" ) ]]; then
             steward_should_publish=true
           fi
 
