@@ -1033,7 +1033,7 @@ test("cli linear and repo help print command-specific usage and removed commands
   assert.match(flagError.read(), /Error: Unknown flag: --bogus/);
 });
 
-test("cli repo link reuses the managed local clone root and supports --path overrides", async () => {
+test("cli repo link reuses the managed local clone root and supports --path overrides", { concurrency: false }, async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-repo-link-"));
   const configHome = path.join(baseDir, ".config");
   const stateHome = path.join(baseDir, ".state");
@@ -1492,7 +1492,7 @@ test("cli init updates the saved public base URL on rerun", async () => {
   }
 });
 
-test("cli repo link writes repository-first config and reuses existing clones", async () => {
+test("cli repo link writes repository-first config and reuses existing clones", { concurrency: false }, async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-repo-config-"));
   const systemdDir = path.join(baseDir, "systemd");
   const configHome = path.join(baseDir, ".config");
@@ -1568,7 +1568,7 @@ test("cli repo link writes repository-first config and reuses existing clones", 
   }
 });
 
-test("cli repo list, show, and unlink use repository-first identities", async () => {
+test("cli repo list, show, and unlink use repository-first identities", { concurrency: false }, async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-repo-ops-"));
   const configHome = path.join(baseDir, ".config");
   const stateHome = path.join(baseDir, ".state");
