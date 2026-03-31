@@ -228,14 +228,6 @@ function writeRunnerBinaries(configPath: string, binaries: { gitBin?: string; co
   writeFileSync(configPath, `${JSON.stringify(raw, null, 2)}\n`, "utf8");
 }
 
-function initGitRepoWithOrigin(repoPath: string, originUrl: string): void {
-  mkdirSync(repoPath, { recursive: true });
-  const initResult = spawnSync("git", ["init", repoPath], { encoding: "utf8" });
-  assert.equal(initResult.status, 0, initResult.stderr || initResult.stdout);
-  const remoteResult = spawnSync("git", ["-C", repoPath, "remote", "add", "origin", originUrl], { encoding: "utf8" });
-  assert.equal(remoteResult.status, 0, remoteResult.stderr || remoteResult.stdout);
-}
-
 function setReposRoot(configPath: string, reposRoot: string): void {
   const raw = JSON.parse(readFileSync(configPath, "utf8")) as {
     repos?: {
@@ -1743,7 +1735,7 @@ test("cli linear commands cover workspace OAuth flows", async () => {
 
         const listOut = createBufferStream();
         assert.equal(await runCli(["linear", "list"], { stdout: listOut.stream, stderr: createBufferStream().stream, data: data as unknown as CliDataAccess }), 0);
-        assert.match(listOut.read(), /WS1  repos=1 teams=1 projects=1/);
+        assert.match(listOut.read(), /WS1 {2}repos=1 teams=1 projects=1/);
 
         const syncJson = createBufferStream();
         assert.equal(await runCli(["linear", "sync", "usertold", "--json"], { stdout: syncJson.stream, stderr: createBufferStream().stream, data: data as unknown as CliDataAccess }), 0);
