@@ -11,6 +11,7 @@ export class CloneManager {
   constructor(
     private readonly clonePath: string,
     private readonly repoUrl: string,
+    private readonly repoFullName: string,
     private readonly gitBin: string = "git",
     private readonly logger?: Logger,
   ) {}
@@ -26,12 +27,17 @@ export class CloneManager {
     mkdirSync(dirname(this.clonePath), { recursive: true });
     await exec(this.gitBin, ["clone", this.repoUrl, this.clonePath], {
       timeoutMs: 300_000,
+      githubRepoFullName: this.repoFullName,
     });
 
     // Configure merge quality settings.
     const gitC = ["-C", this.clonePath, "config"];
-    await exec(this.gitBin, [...gitC, "merge.conflictStyle", "zdiff3"], {}).catch(() => {});
-    await exec(this.gitBin, [...gitC, "rerere.enabled", "true"], {}).catch(() => {});
+    await exec(this.gitBin, [...gitC, "merge.conflictStyle", "zdiff3"], {
+      githubRepoFullName: this.repoFullName,
+    }).catch(() => {});
+    await exec(this.gitBin, [...gitC, "rerere.enabled", "true"], {
+      githubRepoFullName: this.repoFullName,
+    }).catch(() => {});
 
     this.logger?.info("Clone complete");
   }
@@ -41,6 +47,7 @@ export class CloneManager {
     this.logger?.debug("Fetching origin");
     await exec(this.gitBin, ["-C", this.clonePath, "fetch", "origin", "--prune"], {
       timeoutMs: 60_000,
+      githubRepoFullName: this.repoFullName,
     });
   }
 

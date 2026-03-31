@@ -11,7 +11,9 @@ import { buildMultiRepoHttpServer } from "./http-multi.ts";
 import { loadAllRepoConfigs } from "./install.ts";
 import { parseHomeConfigObject } from "./steward-home.ts";
 import { getMergeStewardPathLayout } from "./runtime-paths.ts";
+import { createGitHubAppTokenManager, resolveGitHubAuthConfig, type GitHubAppTokenManager } from "./github-auth.ts";
 import { resolveSecret } from "./resolve-secret.ts";
+import { setRuntimeGitHubAuthProvider } from "./exec.ts";
 import { readFileSync, existsSync } from "node:fs";
 import type { Logger } from "pino";
 
@@ -23,12 +25,12 @@ export interface RepoInstance {
 
 async function createRepoInstance(config: StewardConfig, logger: Logger): Promise<RepoInstance> {
   const repoUrl = `https://github.com/${config.repoFullName}.git`;
-  const clone = new CloneManager(config.clonePath, repoUrl, config.gitBin, logger);
+  const clone = new CloneManager(config.clonePath, repoUrl, config.repoFullName, config.gitBin, logger);
   await clone.ensureClone();
   await clone.fetch();
 
   const store = new SqliteStore(config.database.path);
-  const git = new ShellGitOperations(clone.path, config.gitBin);
+  const git = new ShellGitOperations(clone.path, config.repoFullName, config.gitBin);
   const ci = new GitHubActionsRunner(config.repoFullName, config.requiredChecks);
   const github = new GitHubPRClient(config.repoFullName);
   const eviction = new GitHubCheckRunReporter(
@@ -58,9 +60,25 @@ export async function startMultiServer(): Promise<void> {
 
   const logger = pino({ level: logLevel });
   const configs = await loadAllRepoConfigs();
+  const githubAuth = resolveGitHubAuthConfig();
+  let githubAppTokenManager: GitHubAppTokenManager | undefined;
+  setRuntimeGitHubAuthProvider(undefined);
 
   if (configs.length === 0) {
-    logger.warn("No repo configs found. Run `merge-steward attach <id> <owner/repo>` to add repos.");
+    logger.warn("No repo configs found. Run `merge-steward attach <owner/repo>` to add repos.");
+  }
+
+  if (githubAuth.mode === "app") {
+    githubAppTokenManager = createGitHubAppTokenManager(
+      githubAuth.credentials,
+      configs.map((config) => config.repoFullName),
+      logger.child({ component: "github-auth" }),
+    );
+    setRuntimeGitHubAuthProvider(githubAppTokenManager);
+    await githubAppTokenManager.start();
+    logger.info({ mode: "app" }, "Using GitHub App authentication");
+  } else {
+    logger.warn("No GitHub App auth configured. GitHub operations will fail until auth is configured.");
   }
 
   for (const config of configs) {
@@ -80,6 +98,8 @@ export async function startMultiServer(): Promise<void> {
 
   const shutdown = async () => {
     logger.info("Shutting down...");
+    githubAppTokenManager?.stop();
+    setRuntimeGitHubAuthProvider(undefined);
     for (const inst of instances.values()) {
       await inst.service.stop();
       inst.store.close();
