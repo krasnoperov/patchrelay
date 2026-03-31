@@ -13,7 +13,7 @@ export interface MergeStewardPathLayout {
   stateDir: string;
   dataDir: string;
   systemdDir: string;
-  systemdUnitTemplatePath: string;
+  systemdUnitPath: string;
 }
 
 function ensureAbsolutePath(value: string): string {
@@ -40,7 +40,7 @@ export function getMergeStewardPathLayout(): MergeStewardPathLayout {
     stateDir,
     dataDir,
     systemdDir,
-    systemdUnitTemplatePath: path.join(systemdDir, "merge-steward@.service"),
+    systemdUnitPath: path.join(systemdDir, "merge-steward.service"),
   };
 }
 
@@ -68,8 +68,8 @@ export function getDefaultDataDir(): string {
   return getMergeStewardPathLayout().dataDir;
 }
 
-export function getSystemdUnitTemplatePath(): string {
-  return getMergeStewardPathLayout().systemdUnitTemplatePath;
+export function getSystemdUnitPath(): string {
+  return getMergeStewardPathLayout().systemdUnitPath;
 }
 
 export function getRepoConfigPath(repoId: string): string {

@@ -11,7 +11,7 @@ export async function handleRepos(parsed: ParsedArgs, stdout: Output): Promise<n
       return 0;
     }
     if (repos.length === 0) {
-      writeOutput(stdout, "No attached repositories yet. Run `merge-steward attach <id> <owner/repo>`.\n");
+      writeOutput(stdout, "No attached repositories yet. Run `merge-steward attach <owner/repo>`.\n");
       return 0;
     }
     writeOutput(

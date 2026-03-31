@@ -1,5 +1,5 @@
 [Unit]
-Description=merge-steward (%i)
+Description=merge-steward
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=60
@@ -16,10 +16,11 @@ EnvironmentFile=-/home/your-user/.config/merge-steward/service.env
 Environment=NODE_ENV=production
 Environment=PATH=/home/your-user/.local/bin:/usr/local/bin:/usr/bin:/bin
 
-LoadCredentialEncrypted=merge-steward-webhook-secret
-LoadCredentialEncrypted=merge-steward-github-token
+# Uncomment the secrets you actually use with systemd-creds:
+# LoadCredentialEncrypted=merge-steward-webhook-secret
+# LoadCredentialEncrypted=merge-steward-github-app-pem
 
-ExecStart=/usr/bin/env merge-steward serve --repo %i
+ExecStart=/usr/bin/env merge-steward serve
 Restart=on-failure
 RestartSec=5
 

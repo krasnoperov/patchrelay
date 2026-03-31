@@ -20,7 +20,7 @@ export async function handleInit(parsed: ParsedArgs, stdout: Output, runCommand:
 
   const payload = {
     ...home,
-    unitTemplatePath: unit.unitTemplatePath,
+    unitPath: unit.unitPath,
     serviceUnitStatus: unit.status,
     webhookUrl,
     serviceReloaded: reloadState.ok,
@@ -42,7 +42,7 @@ export async function handleInit(parsed: ParsedArgs, stdout: Output, runCommand:
       `Repo configs: ${home.repoConfigDir}`,
       `State directory: ${home.stateDir}`,
       `Data directory: ${home.dataDir}`,
-      `Systemd unit template: ${unit.unitTemplatePath} (${unit.status})`,
+      `Systemd unit: ${unit.unitPath} (${unit.status})`,
       "",
       "Public URLs:",
       `- Base URL: ${publicBaseUrl}`,
@@ -53,8 +53,8 @@ export async function handleInit(parsed: ParsedArgs, stdout: Output, runCommand:
         : `systemd daemon-reload failed: ${reloadState.error}`,
       "",
       "Next steps:",
-      `1. Put secrets into ${home.serviceEnvPath} for dev or systemd-creds for prod`,
-      "2. Run `merge-steward attach <id> <owner/repo>`",
+      `1. Put the webhook secret and GitHub App credentials into ${home.serviceEnvPath} for dev or systemd-creds for prod`,
+      "2. Run `merge-steward attach <owner/repo>`",
       "3. Configure your GitHub App webhook URL to the webhook URL above",
       "4. Run `merge-steward doctor --repo <id>`",
     ].join("\n") + "\n",

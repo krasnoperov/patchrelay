@@ -36,43 +36,70 @@ That creates:
 - `~/.config/merge-steward/service.env`
 - `~/.config/merge-steward/merge-steward.json`
 - `~/.config/merge-steward/repos/`
-- `/etc/systemd/system/merge-steward@.service`
+- `/etc/systemd/system/merge-steward.service`
 
 Add one repo-scoped steward instance:
 
 ```bash
-merge-steward attach app owner/repo --base-branch main --required-check test,lint
+merge-steward attach owner/repo
 ```
 
-That writes `~/.config/merge-steward/repos/app.json`, enables `merge-steward@app.service`, and prints the repo-specific webhook URL.
+That writes `~/.config/merge-steward/repos/<derived-id>.json`. By default, `attach` derives the repo id from the GitHub repo name, discovers the default branch and required status checks from GitHub, and stores the discovered values into local config.
 
 Validate the setup:
 
 ```bash
-merge-steward doctor --repo app
-merge-steward service status app
-merge-steward queue status --repo app
+merge-steward doctor --repo repo
+merge-steward service status
+merge-steward queue status --repo repo
 ```
 
 ### Secrets
 
-For dev, `service.env` can contain:
+For local/dev use, put secrets in:
+
+- `~/.config/merge-steward/service.env`
+
+Example:
 
 ```bash
 MERGE_STEWARD_WEBHOOK_SECRET=replace-with-webhook-secret
-MERGE_STEWARD_GITHUB_TOKEN=replace-with-github-token
+
+MERGE_STEWARD_GITHUB_APP_ID=123456
+MERGE_STEWARD_GITHUB_APP_INSTALLATION_ID=12345678
+MERGE_STEWARD_GITHUB_APP_PRIVATE_KEY_FILE=/path/to/merge-steward-github-app.pem
 ```
 
-For production, prefer `systemd-creds` with:
+For production/systemd, prefer encrypted credentials instead of plain env files:
 
-- `LoadCredentialEncrypted=merge-steward-webhook-secret`
-- `LoadCredentialEncrypted=merge-steward-github-token`
+- Uncomment `LoadCredentialEncrypted=merge-steward-webhook-secret`
+- Uncomment `LoadCredentialEncrypted=merge-steward-github-app-pem`
 
-The steward resolves secrets in this order:
+The steward resolves the webhook secret in this order:
 
 1. `$CREDENTIALS_DIRECTORY/<name>`
 2. `${ENV_KEY}_FILE`
 3. `${ENV_KEY}`
+
+GitHub auth resolves in this order:
+
+1. `MERGE_STEWARD_GITHUB_APP_ID` + `merge-steward-github-app-pem` / `MERGE_STEWARD_GITHUB_APP_PRIVATE_KEY`
+
+In practice, use:
+
+- `MERGE_STEWARD_WEBHOOK_SECRET` for validating incoming GitHub webhooks
+- `MERGE_STEWARD_GITHUB_APP_ID` plus `merge-steward-github-app-pem` / `MERGE_STEWARD_GITHUB_APP_PRIVATE_KEY` for production GitHub auth
+- `MERGE_STEWARD_GITHUB_APP_INSTALLATION_ID` if you want to pin a single installation instead of resolving one per repo
+
+When GitHub App auth is configured, Merge Steward mints short-lived installation tokens and uses them for both `gh` API calls and `git clone/fetch/push` over HTTPS. In multi-repo setups it resolves the installation per repository, so repos in different GitHub App installations can still coexist.
+
+The machine-level env files created by `merge-steward init` are:
+
+- `~/.config/merge-steward/runtime.env`
+- `~/.config/merge-steward/service.env`
+
+`runtime.env` is for non-secret runtime settings.
+`service.env` is the normal place for secrets in local/dev installs.
 
 ### Repo Config
 
@@ -90,7 +117,6 @@ The steward resolves secrets in this order:
   "pollIntervalMs": 30000,
   "admissionLabel": "queue",
   "mergeQueueCheckName": "merge-steward/queue",
-  "webhookPath": "/webhooks/github/queue/app",
   "server": {
     "bind": "127.0.0.1",
     "port": 8790
@@ -113,30 +139,39 @@ The steward resolves secrets in this order:
 | `pollIntervalMs` | Reconciliation loop interval |
 | `admissionLabel` | GitHub label that triggers queue admission |
 | `mergeQueueCheckName` | GitHub check run name emitted on eviction |
-| `webhookPath` | Repo-specific webhook endpoint path |
+
+`attach` discovers these values from GitHub when possible:
+
+- `repoId` defaults to the repo name portion of `owner/repo`
+- `baseBranch` defaults to the GitHub default branch
+- `requiredChecks` default to the active `required_status_checks` branch rules for the configured base branch
+
+Pass `--refresh` to re-discover base branch and required checks for an existing repo config. `merge-steward doctor --repo <id>` compares the stored config to GitHub and warns on drift.
 
 ### GitHub Webhook
 
-Configure a webhook on the repository:
+Configure one webhook on the repository pointing to the steward:
 
-- **Payload URL:** the repo-specific URL printed by `merge-steward attach`, for example `https://queue.example.com/webhooks/github/queue/app`
+- **Payload URL:** `https://queue.example.com/webhooks/github`
 - **Content type:** `application/json`
-- **Secret:** same as `MERGE_STEWARD_WEBHOOK_SECRET`
+- **Secret:** same as `MERGE_STEWARD_WEBHOOK_SECRET` or the `merge-steward-webhook-secret` systemd credential
 - **Events:** Pull requests, Pull request reviews, Check suites, Pushes
+
+The steward uses a single multi-repo webhook endpoint and routes events by `repository.full_name`.
 
 ### Running
 
 ```bash
 # Happy path
 merge-steward init https://queue.example.com
-merge-steward attach app owner/repo --base-branch main --required-check test,lint
-merge-steward doctor --repo app
-merge-steward service status app
-merge-steward queue status --repo app
-merge-steward queue show --repo app --pr 123
+merge-steward attach owner/repo
+merge-steward doctor --repo repo
+merge-steward service status
+merge-steward queue status --repo repo
+merge-steward queue show --repo repo --pr 123
 
 # Manual foreground start
-merge-steward serve --repo app
+merge-steward serve
 
 # Live queue watch TUI
 merge-steward queue watch --repo app
@@ -166,7 +201,7 @@ Controls:
 
 ```ini
 [Unit]
-Description=merge-steward (%i)
+Description=merge-steward
 After=network-online.target
 Wants=network-online.target
 
@@ -174,9 +209,10 @@ Wants=network-online.target
 Type=simple
 EnvironmentFile=-/home/your-user/.config/merge-steward/runtime.env
 EnvironmentFile=-/home/your-user/.config/merge-steward/service.env
-LoadCredentialEncrypted=merge-steward-webhook-secret
-LoadCredentialEncrypted=merge-steward-github-token
-ExecStart=/usr/bin/env merge-steward serve --repo %i
+# Uncomment the secrets you actually use with systemd-creds:
+# LoadCredentialEncrypted=merge-steward-webhook-secret
+# LoadCredentialEncrypted=merge-steward-github-app-pem
+ExecStart=/usr/bin/env merge-steward serve
 Restart=on-failure
 RestartSec=5s
 
@@ -198,7 +234,7 @@ WantedBy=multi-user.target
 | `/queue/entries/:id/update-head` | POST | Update head SHA (force-push) |
 | `/queue/incidents/:id` | GET | Get incident details |
 | `/queue/entries/:id/incidents` | GET | List incidents for an entry |
-| `/webhooks/github/queue` | POST | GitHub webhook receiver (configurable via `webhookPath`) |
+| `/webhooks/github` | POST | GitHub webhook receiver for all configured repos |
 
 ## Queue state machine
 

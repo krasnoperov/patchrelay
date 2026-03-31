@@ -80,10 +80,28 @@ Configure branch protection on your base branch (e.g., `main`):
 
 Configure a webhook on the repository pointing to the steward:
 
-- **Payload URL:** the repo-specific URL printed by `merge-steward attach <id> <owner/repo>`, for example `https://queue.example.com/webhooks/github/queue/app`
+- **Payload URL:** `https://queue.example.com/webhooks/github`
 - **Content type:** `application/json`
 - **Secret:** same as `MERGE_STEWARD_WEBHOOK_SECRET` or the `merge-steward-webhook-secret` systemd credential
 - **Events:** Pull requests, Pull request reviews, Check suites, Pushes
+
+Merge Steward now uses one unified multi-repo webhook endpoint and routes by `repository.full_name`.
+
+Set the steward secrets in one of these places:
+
+- local/dev: `~/.config/merge-steward/service.env`
+- production/systemd: uncomment the matching `LoadCredentialEncrypted=` lines in the unit and provide encrypted credentials `merge-steward-webhook-secret` and `merge-steward-github-app-pem`
+
+Typical local `service.env`:
+
+```bash
+MERGE_STEWARD_WEBHOOK_SECRET=replace-with-webhook-secret
+MERGE_STEWARD_GITHUB_APP_ID=123456
+MERGE_STEWARD_GITHUB_APP_INSTALLATION_ID=12345678
+MERGE_STEWARD_GITHUB_APP_PRIVATE_KEY_FILE=/path/to/merge-steward-github-app.pem
+```
+
+GitHub App auth is the production path. Merge Steward mints short-lived installation tokens from the app private key and uses them for PR reads, check reads, queue eviction check runs, label removal, merges, and HTTPS git operations.
 
 PatchRelay needs its own separate GitHub webhook for PR, review, and check events that drive reactive repair loops.
 
@@ -105,11 +123,13 @@ The happy-path bootstrap is:
 
 ```bash
 merge-steward init https://queue.example.com
-merge-steward attach app owner/repo --base-branch main --required-check test,lint
-merge-steward doctor --repo app
-merge-steward service status app
-merge-steward queue status --repo app
+merge-steward attach owner/repo
+merge-steward doctor --repo repo
+merge-steward service status
+merge-steward queue status --repo repo
 ```
+
+`attach` now discovers the GitHub default branch and required status checks automatically when GitHub App auth is configured, then stores those values into local repo config. `doctor --repo <id>` compares the stored values to GitHub and warns if base branch or required checks drift.
 
 See [packages/merge-steward/README.md](../packages/merge-steward/README.md) for configuration, API reference, watch TUI, and systemd setup.
 

@@ -4,6 +4,8 @@ import path from "node:path";
 import { loadConfig } from "../../config.ts";
 import { exec } from "../../exec.ts";
 import { resolveSecretWithSource } from "../../resolve-secret.ts";
+import { issueGitHubAppToken, resolveGitHubAuthConfig } from "../../github-auth.ts";
+import { discoverRepoSettings, normalizeCheckList } from "../../github-repo-discovery.ts";
 import {
   getDefaultConfigPath,
   getDefaultRepoConfigDir,
@@ -11,7 +13,7 @@ import {
   getDefaultServiceEnvPath,
   getDefaultStateDir,
   getRepoConfigPath,
-  getSystemdUnitTemplatePath,
+  getSystemdUnitPath,
 } from "../../runtime-paths.ts";
 import type { ParsedArgs, Output } from "../types.ts";
 import { formatJson, writeOutput } from "../output.ts";
@@ -63,7 +65,7 @@ export async function handleDoctor(parsed: ParsedArgs, stdout: Output): Promise<
   checks.push(checkPath("service-env", getDefaultServiceEnvPath()));
   checks.push(checkPath("repo-config-dir", getDefaultRepoConfigDir(), true));
   checks.push(checkPath("state-dir", getDefaultStateDir(), true));
-  checks.push(checkPath("systemd-unit", getSystemdUnitTemplatePath()));
+  checks.push(checkPath("systemd-unit", getSystemdUnitPath()));
   checks.push(await checkExecutable("git", "git"));
   checks.push(await checkExecutable("gh", "gh"));
 
@@ -76,14 +78,24 @@ export async function handleDoctor(parsed: ParsedArgs, stdout: Output): Promise<
       : "Webhook secret is missing; signed webhook verification will be disabled",
   });
 
-  const githubToken = resolveSecretWithSource("merge-steward-github-token", "MERGE_STEWARD_GITHUB_TOKEN", env);
+  const githubAuth = resolveGitHubAuthConfig(env);
   checks.push({
-    status: githubToken.value ? "pass" : "fail",
-    scope: "github-token",
-    message: githubToken.value
-      ? `GitHub token resolved from ${githubToken.source}`
-      : "GitHub token is missing; steward cannot call gh for merge/check operations",
+    status: githubAuth.mode === "none" ? "fail" : "pass",
+    scope: "github-auth",
+    message:
+      githubAuth.mode === "app"
+        ? `GitHub auth resolved from App ${githubAuth.credentials.appId}`
+        : "GitHub auth is missing; configure MERGE_STEWARD_GITHUB_APP_ID and a private key",
   });
+  if (githubAuth.mode === "app") {
+    checks.push({
+      status: "pass",
+      scope: "github-app",
+      message: githubAuth.credentials.installationId
+        ? `GitHub App installation id is pinned to ${githubAuth.credentials.installationId}`
+        : "GitHub App installation will be resolved per repository",
+    });
+  }
 
   let repoConfigPath: string | undefined;
   if (repoId) {
@@ -103,24 +115,70 @@ export async function handleDoctor(parsed: ParsedArgs, stdout: Output): Promise<
         });
         checks.push(checkPath(`repo:${repoId}:database-dir`, path.dirname(config.database.path), true));
         checks.push(checkPath(`repo:${repoId}:clone-parent`, path.dirname(config.clonePath), true));
-        if (githubToken.value) {
+        if (githubAuth.mode === "app") {
           try {
-            const auth = await exec("gh", ["api", "user", "--jq", ".login"], {
-              allowNonZero: true,
-              env: {
-                ...process.env,
-                ...Object.fromEntries(Object.entries(env).filter(([, value]) => value !== undefined)),
-              },
+            const discovered = await discoverRepoSettings(githubAuth.credentials, config.repoFullName, { baseBranch: config.baseBranch });
+            checks.push({
+              status: discovered.defaultBranch === config.baseBranch ? "pass" : "warn",
+              scope: `repo:${repoId}:github-default-branch`,
+              message: discovered.defaultBranch === config.baseBranch
+                ? `Local base branch matches GitHub default branch (${discovered.defaultBranch})`
+                : `Local base branch is ${config.baseBranch}, but GitHub default branch is ${discovered.defaultBranch}`,
             });
-            if (auth.exitCode === 0 && auth.stdout.trim()) {
-              checks.push({ status: "pass", scope: "github-auth", message: `gh authenticated as ${auth.stdout.trim()}` });
-            } else {
-              checks.push({ status: "warn", scope: "github-auth", message: "gh did not confirm the current auth identity" });
+
+            const configuredChecks = normalizeCheckList(config.requiredChecks);
+            const discoveredChecks = normalizeCheckList(discovered.requiredChecks);
+            const checksMatch = configuredChecks.length === discoveredChecks.length
+              && configuredChecks.every((value, index) => value === discoveredChecks[index]);
+            checks.push({
+              status: checksMatch ? "pass" : "warn",
+              scope: `repo:${repoId}:github-required-checks`,
+              message: checksMatch
+                ? (configuredChecks.length > 0
+                    ? `Local required checks match GitHub for ${config.baseBranch}`
+                    : `No required checks configured locally and GitHub does not require status checks for ${config.baseBranch}`)
+                : `Local required checks [${configuredChecks.join(", ") || "(none)"}] differ from GitHub [${discoveredChecks.join(", ") || "(none)"}] for ${config.baseBranch}`,
+            });
+
+            for (const warning of discovered.warnings) {
+              checks.push({
+                status: "warn",
+                scope: `repo:${repoId}:github-discovery`,
+                message: warning,
+              });
             }
           } catch (error) {
             checks.push({
               status: "warn",
-              scope: "github-auth",
+              scope: `repo:${repoId}:github-discovery`,
+              message: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+        if (githubAuth.mode !== "none") {
+          try {
+            const authEnv = {
+              ...process.env,
+              ...Object.fromEntries(Object.entries(env).filter(([, value]) => value !== undefined)),
+            };
+            if (githubAuth.mode === "app") {
+              const resolved = await issueGitHubAppToken(githubAuth.credentials, { repoFullName: config.repoFullName });
+              authEnv.GH_TOKEN = resolved.token;
+              authEnv.GITHUB_TOKEN = resolved.token;
+            }
+            const auth = await exec("gh", ["api", "user", "--jq", ".login"], {
+              allowNonZero: true,
+              env: authEnv,
+            });
+            if (auth.exitCode === 0 && auth.stdout.trim()) {
+              checks.push({ status: "pass", scope: "github-auth-identity", message: `gh authenticated as ${auth.stdout.trim()}` });
+            } else {
+              checks.push({ status: "warn", scope: "github-auth-identity", message: "gh did not confirm the current auth identity" });
+            }
+          } catch (error) {
+            checks.push({
+              status: "warn",
+              scope: "github-auth-identity",
               message: error instanceof Error ? error.message : String(error),
             });
           }

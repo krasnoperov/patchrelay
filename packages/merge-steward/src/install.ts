@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { DEFAULT_MERGE_QUEUE_CHECK_NAME, parseConfig, type StewardConfig } from "./config.ts";
-import { getBuiltCliEntryPath, getDefaultConfigPath, getDefaultRepoConfigDir, getDefaultRuntimeEnvPath, getDefaultServiceEnvPath, getDefaultStateDir, getMergeStewardPathLayout, getRepoConfigPath, getSystemdUnitTemplatePath, readBundledAsset } from "./runtime-paths.ts";
+import { getBuiltCliEntryPath, getDefaultConfigPath, getDefaultRepoConfigDir, getDefaultRuntimeEnvPath, getDefaultServiceEnvPath, getDefaultStateDir, getMergeStewardPathLayout, getRepoConfigPath, getSystemdUnitPath, readBundledAsset } from "./runtime-paths.ts";
 import { parseHomeConfigObject, stringifyJson, type StewardHomeConfig } from "./steward-home.ts";
 
 function renderTemplate(template: string, replacements?: { publicBaseUrl?: string }): string {
@@ -13,7 +13,7 @@ function renderTemplate(template: string, replacements?: { publicBaseUrl?: strin
   let rendered = template
     .replaceAll("/home/your-user", home)
     .replaceAll("your-user", user)
-    .replaceAll("/etc/systemd/system/merge-steward@.service", layout.systemdUnitTemplatePath)
+    .replaceAll("/etc/systemd/system/merge-steward.service", layout.systemdUnitPath)
     .replaceAll("/home/your-user/.config/merge-steward/runtime.env", layout.runtimeEnvPath)
     .replaceAll("/home/your-user/.config/merge-steward/service.env", layout.serviceEnvPath)
     .replaceAll("/home/your-user/.config/merge-steward/merge-steward.json", layout.configPath)
@@ -117,21 +117,21 @@ export async function initializeMergeStewardHome(options: { publicBaseUrl: strin
 }
 
 export async function installServiceUnit(options?: { force?: boolean }): Promise<{
-  unitTemplatePath: string;
+  unitPath: string;
   runtimeEnvPath: string;
   serviceEnvPath: string;
   configPath: string;
   status: "created" | "skipped";
 }> {
   const force = options?.force ?? false;
-  const unitTemplatePath = getSystemdUnitTemplatePath();
+  const unitPath = getSystemdUnitPath();
   const status = await writeTemplateFile(
-    unitTemplatePath,
-    renderTemplate(readBundledAsset("infra/merge-steward@.service")),
+    unitPath,
+    renderTemplate(readBundledAsset("infra/merge-steward.service")),
     force,
   );
   return {
-    unitTemplatePath,
+    unitPath,
     runtimeEnvPath: getDefaultRuntimeEnvPath(),
     serviceEnvPath: getDefaultServiceEnvPath(),
     configPath: getDefaultConfigPath(),

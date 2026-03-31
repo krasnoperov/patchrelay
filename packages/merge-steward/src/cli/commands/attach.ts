@@ -1,30 +1,95 @@
 import { upsertRepoConfig } from "../../install.ts";
+import { resolveGitHubAuthConfig } from "../../github-auth.ts";
+import { discoverRepoSettings } from "../../github-repo-discovery.ts";
 import type { ParsedArgs, Output, CommandRunner } from "../types.ts";
 import { UsageError } from "../types.ts";
 import { parseCsvFlag } from "../args.ts";
 import { formatJson, writeOutput } from "../output.ts";
 import { runSystemctl } from "../system.ts";
+import { listRepoConfigs } from "../system.ts";
 
-export async function handleAttach(parsed: ParsedArgs, stdout: Output, runCommand: CommandRunner): Promise<number> {
-  const repoId = parsed.positionals[1];
-  const repoFullName = parsed.positionals[2];
-  if (!repoId || !repoFullName) {
-    throw new UsageError("merge-steward attach requires <id> and <owner/repo>.", "repos");
+function deriveRepoId(repoFullName: string): string {
+  const repoName = repoFullName.split("/")[1]?.trim().toLowerCase() ?? "";
+  const normalized = repoName
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^[^a-z0-9]+/, "")
+    .replace(/[^a-z0-9]+$/, "");
+  if (!normalized) {
+    throw new UsageError(`Could not derive a repo id from ${repoFullName}. Pass an explicit <id>.`, "repos");
+  }
+  return normalized;
+}
+
+function parseAttachTarget(parsed: ParsedArgs): { repoId: string; repoFullName: string } {
+  const first = parsed.positionals[1];
+  const second = parsed.positionals[2];
+  if (!first) {
+    throw new UsageError("merge-steward attach requires <owner/repo> or <id> <owner/repo>.", "repos");
+  }
+  if (second) {
+    return { repoId: first, repoFullName: second };
+  }
+  if (!first.includes("/")) {
+    throw new UsageError("merge-steward attach requires <owner/repo> or <id> <owner/repo>.", "repos");
   }
 
-  const baseBranch = typeof parsed.flags.get("base-branch") === "string" ? String(parsed.flags.get("base-branch")) : undefined;
+  const existing = listRepoConfigs().find((repo) => repo.repoFullName === first);
+  if (existing) {
+    return { repoId: existing.repoId, repoFullName: first };
+  }
+
+  const repoId = deriveRepoId(first);
+  const conflict = listRepoConfigs().find((repo) => repo.repoId === repoId && repo.repoFullName !== first);
+  if (conflict) {
+    throw new UsageError(`Derived repo id '${repoId}' is already used by ${conflict.repoFullName}. Pass an explicit <id>.`, "repos");
+  }
+  return { repoId, repoFullName: first };
+}
+
+export async function handleAttach(parsed: ParsedArgs, stdout: Output, runCommand: CommandRunner): Promise<number> {
+  const { repoId, repoFullName } = parseAttachTarget(parsed);
+  const existing = listRepoConfigs().find((repo) => repo.repoId === repoId || repo.repoFullName === repoFullName);
+
+  const explicitBaseBranch = typeof parsed.flags.get("base-branch") === "string" ? String(parsed.flags.get("base-branch")) : undefined;
+  const explicitRequiredChecks = parseCsvFlag(parsed.flags.get("required-check"));
   const admissionLabel = typeof parsed.flags.get("label") === "string" ? String(parsed.flags.get("label")) : undefined;
   const mergeQueueCheckName = typeof parsed.flags.get("merge-queue-check-name") === "string"
     ? String(parsed.flags.get("merge-queue-check-name"))
     : undefined;
+  const refresh = parsed.flags.get("refresh") === true;
+
+  const shouldDiscoverBaseBranch = !explicitBaseBranch && (!existing || refresh);
+  const shouldDiscoverRequiredChecks = explicitRequiredChecks.length === 0 && (!existing || refresh || !!explicitBaseBranch);
+  const needsDiscovery = shouldDiscoverBaseBranch || shouldDiscoverRequiredChecks;
+
+  let discovered: Awaited<ReturnType<typeof discoverRepoSettings>> | undefined;
+  const warnings: string[] = [];
+  if (needsDiscovery) {
+    const githubAuth = resolveGitHubAuthConfig();
+    if (githubAuth.mode === "app") {
+      discovered = await discoverRepoSettings(githubAuth.credentials, repoFullName, {
+        ...(explicitBaseBranch
+          ? { baseBranch: explicitBaseBranch }
+          : existing?.baseBranch && !shouldDiscoverBaseBranch
+            ? { baseBranch: existing.baseBranch }
+            : {}),
+      });
+    } else {
+      warnings.push("GitHub App auth is not configured, so attach used local defaults instead of discovering base branch and required checks from GitHub.");
+    }
+  }
+
+  const baseBranch = explicitBaseBranch
+    ?? (shouldDiscoverBaseBranch ? discovered?.branch : undefined);
+  const requiredChecks = explicitRequiredChecks.length > 0
+    ? explicitRequiredChecks
+    : (shouldDiscoverRequiredChecks ? discovered?.requiredChecks : undefined);
 
   const result = await upsertRepoConfig({
     id: repoId,
     repoFullName,
     ...(baseBranch ? { baseBranch } : {}),
-    ...(parseCsvFlag(parsed.flags.get("required-check")).length > 0
-      ? { requiredChecks: parseCsvFlag(parsed.flags.get("required-check")) }
-      : {}),
+    ...(requiredChecks ? { requiredChecks } : {}),
     ...(admissionLabel ? { admissionLabel } : {}),
     ...(mergeQueueCheckName ? { mergeQueueCheckName } : {}),
   });
@@ -50,6 +115,8 @@ export async function handleAttach(parsed: ParsedArgs, stdout: Output, runComman
       `Admission label: ${result.repo.admissionLabel}`,
       `Queue eviction check: ${result.repo.mergeQueueCheckName}`,
       `Required checks: ${result.repo.requiredChecks.length > 0 ? result.repo.requiredChecks.join(", ") : "(any green check)"}`,
+      ...warnings.map((warning) => `Warning: ${warning}`),
+      ...(discovered?.warnings.map((warning) => `Warning: ${warning}`) ?? []),
       restartState.ok
         ? "Restarted merge-steward.service"
         : `Restart failed: ${restartState.error}`,

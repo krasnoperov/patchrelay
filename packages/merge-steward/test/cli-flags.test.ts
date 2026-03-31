@@ -125,7 +125,7 @@ test("repos --help shows repos usage", async () => {
     stderr: createBufferStream().stream,
   });
   assert.equal(code, 0);
-  assert.match(stdout.read(), /merge-steward attach <id>/);
+  assert.match(stdout.read(), /merge-steward attach <owner\/repo>/);
 });
 
 test("attach --help shows repos usage", async () => {
@@ -135,7 +135,7 @@ test("attach --help shows repos usage", async () => {
     stderr: createBufferStream().stream,
   });
   assert.equal(code, 0);
-  assert.match(stdout.read(), /merge-steward attach <id>/);
+  assert.match(stdout.read(), /merge-steward attach <owner\/repo>/);
 });
 
 test("service --help shows service usage", async () => {
@@ -187,7 +187,7 @@ test("help repos shows repos usage", async () => {
     stderr: createBufferStream().stream,
   });
   assert.equal(code, 0);
-  assert.match(stdout.read(), /merge-steward attach <id>/);
+  assert.match(stdout.read(), /merge-steward attach <owner\/repo>/);
 });
 
 test("help service shows service usage", async () => {
@@ -217,7 +217,7 @@ test("help attach shows repos usage (alias)", async () => {
     stderr: createBufferStream().stream,
   });
   assert.equal(code, 0);
-  assert.match(stdout.read(), /merge-steward attach <id>/);
+  assert.match(stdout.read(), /merge-steward attach <owner\/repo>/);
 });
 
 test("help unknown exits 1 with error", async () => {
