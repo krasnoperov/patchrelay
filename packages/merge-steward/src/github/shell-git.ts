@@ -17,6 +17,7 @@ function parseConflicts(stderr: string): string[] | undefined {
 export class ShellGitOperations implements GitOperations, SpeculativeBranchBuilder {
   constructor(
     private readonly clonePath: string,
+    private readonly repoFullName: string,
     private readonly gitBin: string = "git",
   ) {}
 
@@ -24,6 +25,7 @@ export class ShellGitOperations implements GitOperations, SpeculativeBranchBuild
     return exec(this.gitBin, ["-C", this.clonePath, ...args], {
       timeoutMs: opts?.timeoutMs ?? 120_000,
       allowNonZero: opts?.allowNonZero,
+      githubRepoFullName: this.repoFullName,
     });
   }
 

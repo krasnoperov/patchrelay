@@ -19,7 +19,7 @@ export class GitHubPRClient implements GitHubPRApi {
       "pr", "merge", String(prNumber),
       "--repo", this.repoFullName,
       "--merge", "--delete-branch",
-    ], { timeoutMs: 60_000 });
+    ], { timeoutMs: 60_000, githubRepoFullName: this.repoFullName });
   }
 
   async getStatus(prNumber: number): Promise<PRStatus> {
@@ -27,7 +27,7 @@ export class GitHubPRClient implements GitHubPRApi {
       "pr", "view", String(prNumber),
       "--repo", this.repoFullName,
       "--json", "number,headRefName,headRefOid,reviewDecision,state",
-    ]);
+    ], { githubRepoFullName: this.repoFullName });
 
     const data = JSON.parse(result.stdout) as {
       number: number;
@@ -52,7 +52,7 @@ export class GitHubPRClient implements GitHubPRApi {
       "pr", "checks", String(prNumber),
       "--repo", this.repoFullName,
       "--json", "name,bucket,link",
-    ], { allowNonZero: true });
+    ], { allowNonZero: true, githubRepoFullName: this.repoFullName });
 
     if (result.exitCode !== 0) return [];
 
@@ -80,7 +80,7 @@ export class GitHubPRClient implements GitHubPRApi {
       "api",
       `repos/${this.repoFullName}/commits/${apiRef}/check-runs`,
       "--jq", ".check_runs",
-    ], { allowNonZero: true });
+    ], { allowNonZero: true, githubRepoFullName: this.repoFullName });
 
     if (result.exitCode !== 0) return [];
 
@@ -108,7 +108,7 @@ export class GitHubPRClient implements GitHubPRApi {
       "--state", "open",
       "--json", "number",
       "--limit", "1",
-    ], { allowNonZero: true });
+    ], { allowNonZero: true, githubRepoFullName: this.repoFullName });
 
     if (result.exitCode !== 0) return null;
 
@@ -125,7 +125,7 @@ export class GitHubPRClient implements GitHubPRApi {
       "pr", "view", String(prNumber),
       "--repo", this.repoFullName,
       "--json", "labels",
-    ], { allowNonZero: true });
+    ], { allowNonZero: true, githubRepoFullName: this.repoFullName });
 
     if (result.exitCode !== 0) return [];
 

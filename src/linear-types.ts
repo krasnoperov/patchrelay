@@ -103,6 +103,35 @@ export interface ProjectInstallationRecord {
   linkedAt: string;
 }
 
+export interface LinearCatalogTeamRecord {
+  installationId: number;
+  teamId: string;
+  key?: string;
+  name?: string;
+  active: boolean;
+  updatedAt: string;
+}
+
+export interface LinearCatalogProjectRecord {
+  installationId: number;
+  projectId: string;
+  name?: string;
+  teamIdsJson: string;
+  active: boolean;
+  updatedAt: string;
+}
+
+export interface RepositoryLinkRecord {
+  githubRepo: string;
+  localPath: string;
+  installationId: number;
+  linearTeamIdsJson: string;
+  linearProjectIdsJson: string;
+  issueKeyPrefixesJson: string;
+  linkedAt: string;
+  updatedAt: string;
+}
+
 export interface OAuthStateRecord {
   id: number;
   provider: "linear";
@@ -131,6 +160,20 @@ export interface LinearActorProfile {
   workspaceKey?: string;
   actorId?: string;
   actorName?: string;
+}
+
+export interface LinearWorkspaceCatalog {
+  workspace: LinearActorProfile;
+  teams: Array<{
+    id: string;
+    key?: string;
+    name?: string;
+  }>;
+  projects: Array<{
+    id: string;
+    name?: string;
+    teamIds: string[];
+  }>;
 }
 
 export interface LinearIssueSnapshot {
@@ -206,6 +249,7 @@ export interface LinearClient {
   }): Promise<LinearAgentSessionUpdateResult>;
   updateIssueLabels(params: { issueId: string; addNames?: string[]; removeNames?: string[] }): Promise<LinearIssueSnapshot>;
   getActorProfile(): Promise<LinearActorProfile>;
+  getWorkspaceCatalog(): Promise<LinearWorkspaceCatalog>;
 }
 
 export interface LinearClientProvider {

@@ -66,6 +66,19 @@ function createConfig(baseDir: string): AppConfig {
         serviceName: "patchrelay-test",
       },
     },
+    repos: {
+      root: path.join(baseDir, "repos"),
+    },
+    repositories: [
+      {
+        githubRepo: "krasnoperov/usertold",
+        localPath: path.join(baseDir, "repo"),
+        workspace: "usertold",
+        linearTeamIds: ["USE"],
+        linearProjectIds: [],
+        issueKeyPrefixes: ["USE"],
+      },
+    ],
     projects: [
       {
         id: "usertold",
@@ -213,6 +226,95 @@ function writeRunnerBinaries(configPath: string, binaries: { gitBin?: string; co
   }
 
   writeFileSync(configPath, `${JSON.stringify(raw, null, 2)}\n`, "utf8");
+}
+
+function setReposRoot(configPath: string, reposRoot: string): void {
+  const raw = JSON.parse(readFileSync(configPath, "utf8")) as {
+    repos?: {
+      root?: string;
+    };
+  };
+  raw.repos ??= {};
+  raw.repos.root = reposRoot;
+  writeFileSync(configPath, `${JSON.stringify(raw, null, 2)}\n`, "utf8");
+}
+
+function initializeGitRepo(repoPath: string, githubRepo: string): void {
+  mkdirSync(repoPath, { recursive: true });
+  const init = spawnSync("git", ["init", repoPath], { encoding: "utf8" });
+  assert.equal(init.status, 0, init.stderr);
+  const remote = spawnSync("git", ["-C", repoPath, "remote", "add", "origin", `https://github.com/${githubRepo}.git`], { encoding: "utf8" });
+  assert.equal(remote.status, 0, remote.stderr);
+}
+
+function writeExternalConfig(configPath: string, baseDir: string, overrides?: {
+  serverPort?: number;
+  publicBaseUrl?: string;
+  redirectUri?: string;
+}): void {
+  writeFileSync(
+    configPath,
+    `${JSON.stringify(
+      {
+        server: {
+          bind: "127.0.0.1",
+          port: overrides?.serverPort ?? 19787,
+          public_base_url: overrides?.publicBaseUrl ?? "https://patchrelay.example.com",
+          health_path: "/health",
+          readiness_path: "/ready",
+        },
+        ingress: {
+          linear_webhook_path: "/webhooks/linear",
+          github_webhook_path: "/webhooks/github",
+          max_body_bytes: 262144,
+          max_timestamp_skew_seconds: 60,
+        },
+        logging: {
+          level: "info",
+          format: "logfmt",
+          file_path: path.join(baseDir, "patchrelay.log"),
+        },
+        database: {
+          path: path.join(baseDir, "patchrelay.sqlite"),
+          wal: true,
+        },
+        operator_api: {
+          enabled: true,
+        },
+        linear: {
+          webhook_secret: "webhook-secret",
+          graphql_url: "https://linear.example/graphql",
+          oauth: {
+            client_id: "client-id",
+            client_secret: "client-secret",
+            redirect_uri: overrides?.redirectUri ?? "http://127.0.0.1:8787/oauth/linear/callback",
+            scopes: ["read", "write"],
+            actor: "app",
+          },
+          token_encryption_key: "0123456789abcdef0123456789abcdef",
+        },
+        runner: {
+          git_bin: "git",
+          codex: {
+            bin: "codex",
+            args: ["app-server"],
+            approval_policy: "never",
+            sandbox_mode: "danger-full-access",
+            persist_extended_history: false,
+          },
+        },
+        repos: {
+          root: path.join(baseDir, "projects"),
+        },
+        repositories: [],
+        projects: [],
+        secretSources: {},
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
 }
 
 function createStubCodex(
@@ -653,7 +755,7 @@ test("cli rejects unknown commands, unknown flags, and invalid numeric flags", a
 
   const flagError = createBufferStream();
   assert.equal(
-    await runCli(["connect", "--projct", "usertold"], {
+    await runCli(["linear", "connect", "--projct"], {
       stdout: createBufferStream().stream,
       stderr: flagError.stream,
     }),
@@ -892,7 +994,8 @@ test("cli help explains the setup sequence and default behavior", async () => {
   assert.match(stdout.read(), /Happy path:/);
   assert.match(stdout.read(), /patchrelay version --json/);
   assert.match(stdout.read(), /patchrelay init <public-https-url>/);
-  assert.match(stdout.read(), /patchrelay attach <id>/);
+  assert.match(stdout.read(), /patchrelay linear connect/);
+  assert.match(stdout.read(), /patchrelay repo link krasnoperov\/usertold --workspace usertold --team USE/);
   assert.match(stdout.read(), /dashboard \[--issue <issueKey>\]/);
   assert.match(stdout.read(), /service status \[--json\]/);
   assert.match(stdout.read(), /issue watch <issueKey>/);
@@ -901,39 +1004,47 @@ test("cli help explains the setup sequence and default behavior", async () => {
   assert.match(stdout.read(), /Mental model:/);
 });
 
-test("cli attach and repos help print command-specific usage and errors", async () => {
-  const helpOut = createBufferStream();
-  assert.equal(await runCli(["attach", "--help"], { stdout: helpOut.stream, stderr: createBufferStream().stream }), 0);
-  assert.match(helpOut.read(), /patchrelay attach <id>/);
-  assert.match(helpOut.read(), /Behavior:/);
+test("cli linear and repo help print command-specific usage and removed commands point to replacements", async () => {
+  const linearHelp = createBufferStream();
+  assert.equal(await runCli(["linear", "--help"], { stdout: linearHelp.stream, stderr: createBufferStream().stream }), 0);
+  assert.match(linearHelp.read(), /patchrelay linear connect/);
+  assert.match(linearHelp.read(), /authorizes one Linear workspace/);
 
-  const usageError = createBufferStream();
-  assert.equal(await runCli(["attach"], { stdout: createBufferStream().stream, stderr: usageError.stream }), 1);
-  assert.match(usageError.read(), /patchrelay attach <id>/);
-  assert.match(usageError.read(), /Error: patchrelay attach requires <id>\./);
+  const repoHelp = createBufferStream();
+  assert.equal(await runCli(["repo", "--help"], { stdout: repoHelp.stream, stderr: createBufferStream().stream }), 0);
+  assert.match(repoHelp.read(), /patchrelay repo link <github-repo>/);
+  assert.match(repoHelp.read(), /GitHub repo as the source of truth/);
+
+  for (const command of ["attach", "connect", "installations", "repos"] as const) {
+    const removed = createBufferStream();
+    assert.equal(await runCli([command], { stdout: createBufferStream().stream, stderr: removed.stream }), 1);
+    assert.match(removed.read(), new RegExp(`${command} has been removed`));
+  }
 
   const flagError = createBufferStream();
   assert.equal(
-    await runCli(["attach", "demo", "/tmp/demo", "--bogus"], {
+    await runCli(["repo", "link", "krasnoperov/demo", "--workspace", "demo", "--team", "DEM", "--bogus"], {
       stdout: createBufferStream().stream,
       stderr: flagError.stream,
     }),
     1,
   );
-  assert.match(flagError.read(), /patchrelay attach <id>/);
+  assert.match(flagError.read(), /patchrelay repo link <github-repo>/);
   assert.match(flagError.read(), /Error: Unknown flag: --bogus/);
 });
 
-test("cli attach defaults to cwd and supports --path overrides", async () => {
-  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-project-cwd-"));
+test("cli repo link reuses the managed local clone root and supports --path overrides", { concurrency: false }, async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-repo-link-"));
   const configHome = path.join(baseDir, ".config");
   const stateHome = path.join(baseDir, ".state");
   const dataHome = path.join(baseDir, ".share");
-  const repoPath = path.join(baseDir, "repo");
-  const originalCwd = process.cwd();
+  const managedRoot = path.join(baseDir, "managed");
+  const reusedRepoPath = path.join(managedRoot, "usertold");
+  const overrideRepoPath = path.join(baseDir, "override-repo");
 
   try {
-    mkdirSync(repoPath, { recursive: true });
+    initializeGitRepo(reusedRepoPath, "krasnoperov/usertold");
+    initializeGitRepo(overrideRepoPath, "krasnoperov/mafia");
     await withEnv(
       {
         XDG_CONFIG_HOME: configHome,
@@ -954,33 +1065,71 @@ test("cli attach defaults to cwd and supports --path overrides", async () => {
           0,
         );
 
-        process.chdir(repoPath);
-        assert.equal(
-          await runCli(["attach", "cwd-project", "--prefix", "CWD", "--no-auth"], {
-            stdout: createBufferStream().stream,
-            stderr: createBufferStream().stream,
-            runInteractive: async () => 0,
-          }),
-          0,
-        );
+        const configPath = path.join(configHome, "patchrelay", "patchrelay.json");
+        setReposRoot(configPath, managedRoot);
 
-        process.chdir(originalCwd);
-        assert.equal(
-          await runCli(["attach", "flag-project", "--path", repoPath, "--prefix", "FLG", "--no-auth"], {
-            stdout: createBufferStream().stream,
-            stderr: createBufferStream().stream,
-            runInteractive: async () => 0,
-          }),
-          0,
-        );
+        const operatorData = {
+          close() {},
+          async syncLinearWorkspace(workspace?: string) {
+            assert.equal(workspace, "usertold");
+            return {
+              installation: { id: 7, workspaceName: "Workspace Seven", workspaceKey: "USERTOLD" },
+              teams: [
+                { id: "team-use", key: "USE", name: "Usertold" },
+                { id: "team-maf", key: "MAF", name: "Mafia" },
+              ],
+              projects: [{ id: "project-web", name: "Website", teamIds: ["team-use", "team-maf"] }],
+            };
+          },
+        } as unknown as CliDataAccess;
 
-        const config = loadConfig(path.join(configHome, "patchrelay", "patchrelay.json"), { profile: "write_config" });
-        assert.equal(config.projects.find((project) => project.id === "cwd-project")?.repoPath, repoPath);
-        assert.equal(config.projects.find((project) => project.id === "flag-project")?.repoPath, repoPath);
+        {
+          const stdout = createBufferStream();
+          const stderr = createBufferStream();
+          assert.equal(
+            await runCli(["repo", "link", "krasnoperov/usertold", "--workspace", "usertold", "--team", "USE"], {
+              stdout: stdout.stream,
+              stderr: stderr.stream,
+              data: operatorData,
+              runInteractive: async () => 0,
+            }),
+            0,
+            stderr.read(),
+          );
+        }
+        {
+          const stdout = createBufferStream();
+          const stderr = createBufferStream();
+          assert.equal(
+            await runCli([
+              "repo",
+              "link",
+              "krasnoperov/mafia",
+              "--workspace",
+              "usertold",
+              "--team",
+              "MAF",
+              "--project",
+              "Website",
+              "--path",
+              overrideRepoPath,
+            ], {
+              stdout: stdout.stream,
+              stderr: stderr.stream,
+              data: operatorData,
+              runInteractive: async () => 0,
+            }),
+            0,
+            stderr.read(),
+          );
+        }
+
+        const config = loadConfig(configPath, { profile: "write_config" });
+        assert.equal(config.repositories.find((repository) => repository.githubRepo === "krasnoperov/usertold")?.localPath, reusedRepoPath);
+        assert.equal(config.repositories.find((repository) => repository.githubRepo === "krasnoperov/mafia")?.localPath, overrideRepoPath);
       },
     );
   } finally {
-    process.chdir(originalCwd);
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
@@ -1038,19 +1187,16 @@ test("cli dashboard aliases resolve to the TUI command", async () => {
   }
 });
 
-test("cli process paths avoid sqlite warnings until sqlite-backed commands run", () => {
+test("cli process paths still handle help, version, and unknown commands", () => {
   const help = runCliProcess(["help"]);
   assert.equal(help.status, 0);
-  assert.doesNotMatch(help.stderr, /SQLite is an experimental feature/);
 
   const version = runCliProcess(["version"]);
   assert.equal(version.status, 0);
-  assert.doesNotMatch(version.stderr, /SQLite is an experimental feature/);
 
   const unknown = runCliProcess(["frobnicate"]);
   assert.equal(unknown.status, 1);
   assert.match(unknown.stderr, /Error: Unknown command: frobnicate/);
-  assert.doesNotMatch(unknown.stderr, /SQLite is an experimental feature/);
 });
 
 test("cli feed uses the HTTP operator client without loading sqlite", async () => {
@@ -1166,7 +1312,6 @@ test("cli feed uses the HTTP operator client without loading sqlite", async () =
 
     assert.equal(result.status, 0);
     assert.match(result.stdout, /"events":/);
-    assert.doesNotMatch(result.stderr, /SQLite is an experimental feature/);
   } finally {
     server.closeAllConnections?.();
     await new Promise<void>((resolve, reject) => {
@@ -1233,7 +1378,8 @@ test("cli init writes XDG config files and service install manages the system un
         assert.match(initText, /Config file contains only machine-level essentials/);
         assert.match(initText, /The system service is installed for you/);
         assert.match(initText, /Open Linear Settings > API > Applications/);
-        assert.match(initText, /Run `patchrelay attach <id>` from the repo root/);
+        assert.match(initText, /4\. Run `patchrelay linear connect`/);
+        assert.match(initText, /6\. Run `patchrelay repo link <owner\/repo> --workspace <workspace> --team <team>`/);
 
         const runtimeEnvPath = path.join(configHome, "patchrelay", "runtime.env");
         const serviceEnvPath = path.join(configHome, "patchrelay", "service.env");
@@ -1356,16 +1502,17 @@ test("cli init updates the saved public base URL on rerun", async () => {
   }
 });
 
-test("cli attach appends a minimal repo to config", async () => {
-  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-project-add-"));
+test("cli repo link writes repository-first config and reuses existing clones", { concurrency: false }, async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-repo-config-"));
   const systemdDir = path.join(baseDir, "systemd");
   const configHome = path.join(baseDir, ".config");
   const stateHome = path.join(baseDir, ".state");
   const dataHome = path.join(baseDir, ".share");
-  const repoPath = path.join(baseDir, "repo");
+  const reposRoot = path.join(baseDir, "repos");
+  const repoPath = path.join(reposRoot, "usertold");
 
   try {
-    mkdirSync(repoPath, { recursive: true });
+    initializeGitRepo(repoPath, "krasnoperov/usertold");
     await withEnv(
       {
         XDG_CONFIG_HOME: configHome,
@@ -1386,30 +1533,48 @@ test("cli attach appends a minimal repo to config", async () => {
           0,
         );
 
-        const attachOut = createBufferStream();
-        assert.equal(
-          await runCli(["attach", "usertold", repoPath, "--prefix", "USE", "--no-auth"], {
-            stdout: attachOut.stream,
-            stderr: createBufferStream().stream,
-            runInteractive: async () => 0,
-          }),
-          0,
-        );
-        assert.match(attachOut.read(), /Attached repo usertold/);
-        assert.match(attachOut.read(), /Repo attached and PatchRelay was reloaded|Linear auth was skipped/);
-
         const configPath = path.join(configHome, "patchrelay", "patchrelay.json");
-        const configContents = readFileSync(configPath, "utf8");
-        assert.match(configContents, /"projects"\s*:/);
-        assert.match(configContents, /"id"\s*:\s*"usertold"/);
-        assert.match(configContents, /"repo_path"\s*:/);
-        assert.match(configContents, /"issue_key_prefixes"\s*:/);
+        setReposRoot(configPath, reposRoot);
+
+        const operatorData = {
+          close() {},
+          async syncLinearWorkspace(workspace?: string) {
+            assert.equal(workspace, "usertold");
+            return {
+              installation: { id: 7, workspaceName: "Workspace Seven", workspaceKey: "USERTOLD" },
+              teams: [{ id: "team-use", key: "USE", name: "Usertold" }],
+              projects: [{ id: "project-web", name: "Website", teamIds: ["team-use"] }],
+            };
+          },
+        } as const;
+
+        const linkOut = createBufferStream();
+        {
+          const stderr = createBufferStream();
+          assert.equal(
+            await runCli(["repo", "link", "krasnoperov/usertold", "--workspace", "usertold", "--team", "USE"], {
+              stdout: linkOut.stream,
+              stderr: stderr.stream,
+              data: operatorData as unknown as CliDataAccess,
+              runInteractive: async () => 0,
+            }),
+            0,
+            stderr.read(),
+          );
+        }
+        assert.match(linkOut.read(), /Linked krasnoperov\/usertold|Verified krasnoperov\/usertold/);
+        assert.match(linkOut.read(), /Path: .* \(reused\)/);
 
         const config = loadConfig(configPath, { profile: "write_config" });
-        assert.equal(config.projects[0]?.id, "usertold");
+        assert.equal(config.repositories[0]?.githubRepo, "krasnoperov/usertold");
+        assert.equal(config.repositories[0]?.localPath, repoPath);
+        assert.equal(config.repositories[0]?.workspace, "USERTOLD");
+        assert.deepEqual(config.repositories[0]?.issueKeyPrefixes, ["USE"]);
+        assert.equal(config.projects[0]?.id, "krasnoperov/usertold");
         assert.equal(config.projects[0]?.repoPath, repoPath);
-        assert.equal(config.projects[0]?.branchPrefix, "usertold");
-        assert.equal(config.projects[0]?.worktreeRoot, path.join(dataHome, "patchrelay", "worktrees", "usertold"));
+        assert.equal(config.projects[0]?.branchPrefix, "krasnoperov-usertold");
+        assert.equal(config.projects[0]?.worktreeRoot, path.join(dataHome, "patchrelay", "worktrees", "krasnoperov", "usertold"));
+
       },
     );
   } finally {
@@ -1417,80 +1582,16 @@ test("cli attach appends a minimal repo to config", async () => {
   }
 });
 
-test("cli attach is idempotent and can skip connect until env is ready", async () => {
-  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-project-apply-idempotent-"));
-  const configHome = path.join(baseDir, ".config");
-  const systemdDir = path.join(baseDir, "systemd");
-  const stateHome = path.join(baseDir, ".state");
-  const dataHome = path.join(baseDir, ".share");
-  const repoPath = path.join(baseDir, "repo");
-
-  try {
-    mkdirSync(repoPath, { recursive: true });
-    await withEnv(
-      {
-        XDG_CONFIG_HOME: configHome,
-        XDG_STATE_HOME: stateHome,
-        XDG_DATA_HOME: dataHome,
-        PATCHRELAY_SYSTEMD_DIR: systemdDir,
-        PATCHRELAY_CONFIG: undefined,
-        PATCHRELAY_DB_PATH: undefined,
-        PATCHRELAY_LOG_FILE: undefined,
-        LINEAR_WEBHOOK_SECRET: undefined,
-        PATCHRELAY_TOKEN_ENCRYPTION_KEY: undefined,
-        LINEAR_OAUTH_CLIENT_ID: undefined,
-        LINEAR_OAUTH_CLIENT_SECRET: undefined,
-      },
-      async () => {
-        assert.equal(
-          await runCli(["init", "relay.example.com"], {
-            stdout: createBufferStream().stream,
-            stderr: createBufferStream().stream,
-            runInteractive: async () => 0,
-          }),
-          0,
-        );
-
-        // Service is running on port 8787 (real), but attach still succeeds.
-        // The runInteractive mock prevents actual sudo systemctl calls.
-        const attachOut = createBufferStream();
-        assert.equal(
-          await runCli(["attach", "usertold", repoPath, "--prefix", "USE", "--no-auth"], {
-            stdout: attachOut.stream,
-            stderr: createBufferStream().stream,
-            runInteractive: async () => 0,
-          }),
-          0,
-        );
-
-        const rerunOut = createBufferStream();
-        assert.equal(
-          await runCli(["attach", "usertold", repoPath, "--prefix", "USE", "--no-auth"], {
-            stdout: rerunOut.stream,
-            stderr: createBufferStream().stream,
-            runInteractive: async () => 0,
-          }),
-          0,
-        );
-        assert.match(rerunOut.read(), /Verified repo usertold/);
-      },
-    );
-  } finally {
-    rmSync(baseDir, { recursive: true, force: true });
-  }
-});
-
-test("cli attach requires routing when adding a second repo", async () => {
-  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-project-add-routing-"));
+test("cli repo list, show, and unlink use repository-first identities", { concurrency: false }, async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-repo-ops-"));
   const configHome = path.join(baseDir, ".config");
   const stateHome = path.join(baseDir, ".state");
   const dataHome = path.join(baseDir, ".share");
-  const firstRepoPath = path.join(baseDir, "repo-one");
-  const secondRepoPath = path.join(baseDir, "repo-two");
+  const reposRoot = path.join(baseDir, "repos");
+  const repoPath = path.join(reposRoot, "usertold");
 
   try {
-    mkdirSync(firstRepoPath, { recursive: true });
-    mkdirSync(secondRepoPath, { recursive: true });
+    initializeGitRepo(repoPath, "krasnoperov/usertold");
     await withEnv(
       {
         XDG_CONFIG_HOME: configHome,
@@ -1510,116 +1611,55 @@ test("cli attach requires routing when adding a second repo", async () => {
           }),
           0,
         );
-        assert.equal(
-          await runCli(["attach", "one", firstRepoPath, "--prefix", "ONE", "--no-auth"], {
-            stdout: createBufferStream().stream,
-            stderr: createBufferStream().stream,
-            runInteractive: async () => 0,
-          }),
-          0,
-        );
 
-        const stderr = createBufferStream();
-        assert.equal(
-          await runCli(["attach", "two", secondRepoPath], {
-            stdout: createBufferStream().stream,
-            stderr: stderr.stream,
-          }),
-          1,
-        );
-        assert.match(stderr.read(), /requires routing/);
-      },
-    );
-  } finally {
-    rmSync(baseDir, { recursive: true, force: true });
-  }
-});
-
-test("cli attach can auto-connect using the default service.env file", async () => {
-  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-project-apply-connect-"));
-  const configHome = path.join(baseDir, ".config");
-  const stateHome = path.join(baseDir, ".state");
-  const dataHome = path.join(baseDir, ".share");
-  const repoPath = path.join(baseDir, "repo");
-
-  try {
-    mkdirSync(repoPath, { recursive: true });
-    writeFileSync(path.join(repoPath, "IMPLEMENTATION_WORKFLOW.md"), "# implementation\n", "utf8");
-    writeFileSync(path.join(repoPath, "REVIEW_WORKFLOW.md"), "# review\n", "utf8");
-    writeFileSync(path.join(repoPath, "DEPLOY_WORKFLOW.md"), "# deploy\n", "utf8");
-    writeFileSync(path.join(repoPath, "CLEANUP_WORKFLOW.md"), "# cleanup\n", "utf8");
-
-    await withEnv(
-      {
-        XDG_CONFIG_HOME: configHome,
-        XDG_STATE_HOME: stateHome,
-        XDG_DATA_HOME: dataHome,
-        PATCHRELAY_SYSTEMD_DIR: path.join(baseDir, "systemd"),
-        PATCHRELAY_CONFIG: undefined,
-        PATCHRELAY_DB_PATH: undefined,
-        PATCHRELAY_LOG_FILE: undefined,
-        LINEAR_WEBHOOK_SECRET: undefined,
-        PATCHRELAY_TOKEN_ENCRYPTION_KEY: undefined,
-        LINEAR_OAUTH_CLIENT_ID: undefined,
-        LINEAR_OAUTH_CLIENT_SECRET: undefined,
-      },
-      async () => {
-        assert.equal(
-          await runCli(["init", "relay.example.com"], {
-            stdout: createBufferStream().stream,
-            stderr: createBufferStream().stream,
-            runInteractive: async () => 0,
-          }),
-          0,
-        );
-
-        const envPath = path.join(configHome, "patchrelay", "service.env");
         const configPath = path.join(configHome, "patchrelay", "patchrelay.json");
-        writeFileSync(
-          envPath,
-          [
-            "LINEAR_WEBHOOK_SECRET=secret",
-            "PATCHRELAY_TOKEN_ENCRYPTION_KEY=enc-secret",
-            "LINEAR_OAUTH_CLIENT_ID=client-id",
-            "LINEAR_OAUTH_CLIENT_SECRET=client-secret",
-            "",
-          ].join("\n"),
-          "utf8",
-        );
-        writeRunnerBinaries(configPath, { codexBin: "true" });
+        setReposRoot(configPath, reposRoot);
+        await writeRunnerBinaries(configPath, { gitBin: "git", codexBin: "true" });
 
-        const connectData = {
-          async connect(projectId?: string) {
+        const operatorData = {
+          close() {},
+          async syncLinearWorkspace() {
             return {
-              completed: true as const,
-              reusedExisting: true as const,
-              projectId: projectId ?? "usertold",
-              installation: { id: 7, workspaceName: "Workspace Seven" },
+              installation: { id: 8, workspaceName: "Workspace Eight", workspaceKey: "USERTOLD" },
+              teams: [{ id: "team-use", key: "USE", name: "Usertold" }],
+              projects: [],
             };
           },
-        } as unknown as CliDataAccess;
+        } as const;
 
-        const attachOut = createBufferStream();
-        const commands: string[] = [];
+        {
+          const stdout = createBufferStream();
+          const stderr = createBufferStream();
+          assert.equal(
+            await runCli(["repo", "link", "krasnoperov/usertold", "--workspace", "usertold", "--team", "USE"], {
+              stdout: stdout.stream,
+              stderr: stderr.stream,
+              data: operatorData as unknown as CliDataAccess,
+              runInteractive: async () => 0,
+            }),
+            0,
+            stderr.read(),
+          );
+        }
+
+        const listOut = createBufferStream();
+        assert.equal(await runCli(["repo", "list"], { stdout: listOut.stream, stderr: createBufferStream().stream }), 0);
+        assert.match(listOut.read(), /krasnoperov\/usertold/);
+
+        const showJson = createBufferStream();
+        assert.equal(await runCli(["repo", "show", "krasnoperov/usertold", "--json"], { stdout: showJson.stream, stderr: createBufferStream().stream }), 0);
+        assert.equal((JSON.parse(showJson.read()) as { repository: { githubRepo: string } }).repository.githubRepo, "krasnoperov/usertold");
+
+        const unlinkOut = createBufferStream();
         assert.equal(
-          await runCli(["attach", "usertold", repoPath, "--prefix", "USE"], {
-            stdout: attachOut.stream,
+          await runCli(["repo", "unlink", "krasnoperov/usertold"], {
+            stdout: unlinkOut.stream,
             stderr: createBufferStream().stream,
-            data: connectData,
-            runInteractive: async (command, args) => {
-              commands.push([command, ...args].join(" "));
-              return 0;
-            },
+            runInteractive: async () => 0,
           }),
           0,
         );
-        assert.match(attachOut.read(), /Attached repo usertold/);
-        assert.match(attachOut.read(), /Linked repo usertold to existing Linear installation 7/);
-        assert.deepEqual(commands, [
-          "sudo systemctl daemon-reload",
-          "sudo systemctl enable patchrelay.service",
-          "sudo systemctl reload-or-restart patchrelay.service",
-        ]);
+        assert.match(unlinkOut.read(), /Unlinked krasnoperov\/usertold/);
       },
     );
   } finally {
@@ -1627,20 +1667,13 @@ test("cli attach can auto-connect using the default service.env file", async () 
   }
 });
 
-test("cli attach json performs the workflow and returns structured auth state", async () => {
-  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-project-apply-json-"));
+test("cli linear commands cover workspace OAuth flows", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-linear-workspaces-"));
   const configHome = path.join(baseDir, ".config");
   const stateHome = path.join(baseDir, ".state");
   const dataHome = path.join(baseDir, ".share");
-  const repoPath = path.join(baseDir, "repo");
 
   try {
-    mkdirSync(repoPath, { recursive: true });
-    writeFileSync(path.join(repoPath, "IMPLEMENTATION_WORKFLOW.md"), "# implementation\n", "utf8");
-    writeFileSync(path.join(repoPath, "REVIEW_WORKFLOW.md"), "# review\n", "utf8");
-    writeFileSync(path.join(repoPath, "DEPLOY_WORKFLOW.md"), "# deploy\n", "utf8");
-    writeFileSync(path.join(repoPath, "CLEANUP_WORKFLOW.md"), "# cleanup\n", "utf8");
-
     await withEnv(
       {
         XDG_CONFIG_HOME: configHome,
@@ -1650,10 +1683,6 @@ test("cli attach json performs the workflow and returns structured auth state", 
         PATCHRELAY_CONFIG: undefined,
         PATCHRELAY_DB_PATH: undefined,
         PATCHRELAY_LOG_FILE: undefined,
-        LINEAR_WEBHOOK_SECRET: undefined,
-        PATCHRELAY_TOKEN_ENCRYPTION_KEY: undefined,
-        LINEAR_OAUTH_CLIENT_ID: undefined,
-        LINEAR_OAUTH_CLIENT_SECRET: undefined,
       },
       async () => {
         assert.equal(
@@ -1665,139 +1694,77 @@ test("cli attach json performs the workflow and returns structured auth state", 
           0,
         );
 
-        writeFileSync(
-          path.join(configHome, "patchrelay", "service.env"),
-          [
-            "LINEAR_WEBHOOK_SECRET=secret",
-            "PATCHRELAY_TOKEN_ENCRYPTION_KEY=enc-secret",
-            "LINEAR_OAUTH_CLIENT_ID=client-id",
-            "LINEAR_OAUTH_CLIENT_SECRET=client-secret",
-            "",
-          ].join("\n"),
-          "utf8",
-        );
-        writeRunnerBinaries(path.join(configHome, "patchrelay", "patchrelay.json"), { codexBin: "true" });
-
-        const connectData = {
-          async connect(projectId?: string) {
+        const data = {
+          close() {},
+          async connect() {
             return {
-              completed: true as const,
-              reusedExisting: true as const,
-              projectId: projectId ?? "usertold",
-              installation: { id: 9, workspaceName: "Workspace Nine" },
+              state: "state-1",
+              authorizeUrl: "https://linear.app/oauth/authorize?state=state-1",
+              redirectUri: "http://127.0.0.1:8787/oauth/linear/callback",
             };
           },
-        } as unknown as CliDataAccess;
+          async connectStatus() {
+            return {
+              state: "state-1",
+              status: "completed" as const,
+              installation: { id: 1, workspaceName: "Workspace One", workspaceKey: "WS1" },
+            };
+          },
+          async listLinearWorkspaces() {
+            return {
+              workspaces: [
+                {
+                  installation: { id: 1, workspaceName: "Workspace One", workspaceKey: "WS1" },
+                  linkedRepos: ["krasnoperov/usertold"],
+                  teams: [{ id: "team-use", key: "USE", name: "Usertold" }],
+                  projects: [{ id: "project-web", name: "Website", teamIds: ["team-use"] }],
+                },
+              ],
+            };
+          },
+          async syncLinearWorkspace(workspace?: string) {
+            assert.equal(workspace, "usertold");
+            return {
+              installation: { id: 1, workspaceName: "Workspace One", workspaceKey: "WS1" },
+              teams: [{ id: "team-use", key: "USE", name: "Usertold" }],
+              projects: [{ id: "project-web", name: "Website", teamIds: ["team-use"] }],
+            };
+          },
+          async disconnectLinearWorkspace(workspace: string) {
+            assert.equal(workspace, "usertold");
+            return {
+              installation: { id: 1, workspaceName: "Workspace One", workspaceKey: "WS1" },
+            };
+          },
+        } as const;
 
-        const attachOut = createBufferStream();
+        const connectOut = createBufferStream();
         assert.equal(
-          await runCli(["attach", "usertold", repoPath, "--prefix", "USE", "--json"], {
-            stdout: attachOut.stream,
+          await runCli(["linear", "connect"], {
+            stdout: connectOut.stream,
             stderr: createBufferStream().stream,
-            data: connectData,
-            runInteractive: async () => 0,
+            data: data as unknown as CliDataAccess,
+            openExternal: async () => true,
+            connectPollIntervalMs: 1,
           }),
           0,
         );
+        assert.match(connectOut.read(), /Opened browser for Linear OAuth/);
+        assert.match(connectOut.read(), /Connected Workspace One/);
 
-        const parsed = JSON.parse(attachOut.read()) as Record<string, unknown>;
-        assert.equal(parsed.status, "created");
-        assert.equal((parsed.serviceReloaded as boolean | undefined) ?? false, true);
-        assert.equal(((parsed.readiness as { ok?: boolean }).ok ?? false), true);
-        assert.deepEqual(parsed.auth, {
-          attempted: true,
-          result: {
-            completed: true,
-            reusedExisting: true,
-            projectId: "usertold",
-            installation: { id: 9, workspaceName: "Workspace Nine" },
-          },
-        });
+        const listOut = createBufferStream();
+        assert.equal(await runCli(["linear", "list"], { stdout: listOut.stream, stderr: createBufferStream().stream, data: data as unknown as CliDataAccess }), 0);
+        assert.match(listOut.read(), /WS1 {2}repos=1 teams=1 projects=1/);
+
+        const syncJson = createBufferStream();
+        assert.equal(await runCli(["linear", "sync", "usertold", "--json"], { stdout: syncJson.stream, stderr: createBufferStream().stream, data: data as unknown as CliDataAccess }), 0);
+        assert.equal((JSON.parse(syncJson.read()) as { installation: { workspaceKey: string } }).installation.workspaceKey, "WS1");
+
+        const disconnectOut = createBufferStream();
+        assert.equal(await runCli(["linear", "disconnect", "usertold"], { stdout: disconnectOut.stream, stderr: createBufferStream().stream, data: data as unknown as CliDataAccess }), 0);
+        assert.match(disconnectOut.read(), /Disconnected WS1/);
       },
     );
-  } finally {
-    rmSync(baseDir, { recursive: true, force: true });
-  }
-});
-
-test("cli connect and installations cover OAuth installation flows", async () => {
-  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-installations-"));
-  try {
-    const config = {
-      ...createConfig(baseDir),
-      linear: {
-        ...createConfig(baseDir).linear,
-        oauth: {
-          clientId: "client-id",
-          clientSecret: "client-secret",
-          redirectUri: "http://127.0.0.1:8787/oauth/linear/callback",
-          scopes: ["read", "write"],
-          actor: "app" as const,
-        },
-        tokenEncryptionKey: "encryption-secret",
-      },
-    };
-    const data = {
-      async connect(projectId?: string) {
-        return {
-          state: "state-1",
-          authorizeUrl: "https://linear.app/oauth/authorize?state=state-1",
-          redirectUri: "http://127.0.0.1:8787/oauth/linear/callback",
-          ...(projectId ? { projectId } : {}),
-        };
-      },
-      async connectStatus() {
-        return {
-          state: "state-1",
-          status: "completed" as const,
-          projectId: "usertold",
-          installation: { id: 1, workspaceName: "Workspace One" },
-        };
-      },
-      async listInstallations() {
-        return {
-          installations: [
-            {
-              installation: {
-                id: 1,
-                workspaceName: "Workspace One",
-                workspaceKey: "WS1",
-                actorName: "PatchRelay App",
-                actorId: "actor-1",
-              },
-              linkedProjects: [],
-            },
-          ],
-        };
-      },
-    } as unknown as CliDataAccess;
-
-    const connectOut = createBufferStream();
-    assert.equal(
-      await runCli(["connect", "--repo", "usertold"], {
-        config,
-        data,
-        stdout: connectOut.stream,
-        stderr: createBufferStream().stream,
-        openExternal: async () => true,
-        connectPollIntervalMs: 1,
-      }),
-      0,
-    );
-    assert.match(connectOut.read(), /Opened browser for Linear OAuth/);
-    assert.match(connectOut.read(), /Connected Workspace One for repo usertold/);
-
-    const installationsOut = createBufferStream();
-    assert.equal(
-      await runCli(["installations"], {
-        config,
-        data,
-        stdout: installationsOut.stream,
-        stderr: createBufferStream().stream,
-      }),
-      0,
-    );
-    assert.match(installationsOut.read(), /Workspace One/);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -1986,190 +1953,153 @@ test("cli feed --follow streams live operator observations", async () => {
   }
 });
 
-test("cli connect reuses an existing installation when the repo can be linked locally", async () => {
-  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-connect-reuse-"));
+test("cli linear connect reuses an existing installation without repo-specific output", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-linear-reuse-"));
   try {
-    const config = {
-      ...createConfig(baseDir),
-      linear: {
-        ...createConfig(baseDir).linear,
-        oauth: {
-          clientId: "client-id",
-          clientSecret: "client-secret",
-          redirectUri: "http://127.0.0.1:8787/oauth/linear/callback",
-          scopes: ["read", "write"],
-          actor: "app" as const,
-        },
-        tokenEncryptionKey: "encryption-secret",
+    writeExternalConfig(path.join(baseDir, "patchrelay.json"), baseDir);
+    await withEnv(
+      {
+        PATCHRELAY_CONFIG: path.join(baseDir, "patchrelay.json"),
       },
-    };
-    const data = {
-      async connect(projectId?: string) {
-        return {
-          completed: true as const,
-          reusedExisting: true as const,
-          projectId: projectId ?? "usertold",
-          installation: { id: 7, workspaceName: "Workspace Seven" },
-        };
-      },
-    } as unknown as CliDataAccess;
+      async () => {
+        const data = {
+          close() {},
+          async connect() {
+            return {
+              completed: true as const,
+              reusedExisting: true as const,
+              installation: { id: 7, workspaceName: "Workspace Seven" },
+            };
+          },
+        } as const;
 
-    const connectOut = createBufferStream();
-    assert.equal(
-      await runCli(["connect", "--repo", "usertold"], {
-        config,
-        data,
-        stdout: connectOut.stream,
-        stderr: createBufferStream().stream,
-      }),
-      0,
+        const connectOut = createBufferStream();
+        assert.equal(
+          await runCli(["linear", "connect"], {
+            data: data as unknown as CliDataAccess,
+            stdout: connectOut.stream,
+            stderr: createBufferStream().stream,
+          }),
+          0,
+        );
+        assert.match(connectOut.read(), /Reused existing Linear installation 7/);
+        assert.doesNotMatch(connectOut.read(), /Linked repo/);
+      },
     );
-    assert.match(connectOut.read(), /Linked repo usertold to existing Linear installation 7/);
-    assert.match(connectOut.read(), /No new OAuth approval was needed/);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
 
-test("cli OAuth operator commands support json output and validation failures", async () => {
-  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-installations-"));
+test("cli linear commands support json output and validation failures", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-linear-json-"));
   try {
-    const config = {
-      ...createConfig(baseDir),
-      linear: {
-        ...createConfig(baseDir).linear,
-        oauth: {
-          clientId: "client-id",
-          clientSecret: "client-secret",
-          redirectUri: "http://127.0.0.1:8787/oauth/linear/callback",
-          scopes: ["read", "write"],
-          actor: "app" as const,
-        },
-        tokenEncryptionKey: "encryption-secret",
+    writeExternalConfig(path.join(baseDir, "patchrelay.json"), baseDir);
+    await withEnv(
+      {
+        PATCHRELAY_CONFIG: path.join(baseDir, "patchrelay.json"),
       },
-    };
-    const data = {
-      async connect(projectId?: string) {
-        if (projectId === "missing-project") {
-          throw new Error("Unknown project: missing-project");
-        }
-        return {
+      async () => {
+        const data = {
+          close() {},
+          async connect() {
+            return {
+              state: "state-1",
+              authorizeUrl: "https://linear.app/oauth/authorize?state=state-1",
+              redirectUri: "http://127.0.0.1:8787/oauth/linear/callback",
+            };
+          },
+          async listLinearWorkspaces() {
+            return {
+              workspaces: [
+                {
+                  installation: {
+                    id: 1,
+                    workspaceName: "Workspace One",
+                    workspaceKey: "WS1",
+                    actorName: "PatchRelay App",
+                    actorId: "actor-1",
+                  },
+                  linkedRepos: ["krasnoperov/usertold"],
+                  teams: [{ id: "team-use", key: "USE", name: "Usertold" }],
+                  projects: [{ id: "project-web", name: "Website", teamIds: ["team-use"] }],
+                },
+              ],
+            };
+          },
+          async syncLinearWorkspace(workspace?: string) {
+            if (workspace === "missing-workspace") {
+              throw new Error("Unknown workspace: missing-workspace");
+            }
+            return {
+              installation: { id: 1, workspaceName: "Workspace One", workspaceKey: "WS1" },
+              teams: [{ id: "team-use", key: "USE", name: "Usertold" }],
+              projects: [{ id: "project-web", name: "Website", teamIds: ["team-use"] }],
+            };
+          },
+        } as const;
+
+        const connectJson = createBufferStream();
+        assert.equal(
+          await runCli(["linear", "connect", "--json"], {
+            data: data as unknown as CliDataAccess,
+            stdout: connectJson.stream,
+            stderr: createBufferStream().stream,
+          }),
+          0,
+        );
+        assert.deepEqual(JSON.parse(connectJson.read()), {
           state: "state-1",
           authorizeUrl: "https://linear.app/oauth/authorize?state=state-1",
           redirectUri: "http://127.0.0.1:8787/oauth/linear/callback",
-          ...(projectId ? { projectId } : {}),
-        };
+        });
+
+        const listJson = createBufferStream();
+        assert.equal(
+          await runCli(["linear", "list", "--json"], {
+            data: data as unknown as CliDataAccess,
+            stdout: listJson.stream,
+            stderr: createBufferStream().stream,
+          }),
+          0,
+        );
+        const listResult = JSON.parse(listJson.read()) as { workspaces: Array<{ linkedRepos: string[] }> };
+        assert.equal(listResult.workspaces.length, 1);
+        assert.deepEqual(listResult.workspaces[0]?.linkedRepos, ["krasnoperov/usertold"]);
+
+        const syncError = createBufferStream();
+        assert.equal(
+          await runCli(["linear", "sync", "missing-workspace"], {
+            data: data as unknown as CliDataAccess,
+            stdout: createBufferStream().stream,
+            stderr: syncError.stream,
+          }),
+          1,
+        );
+        assert.match(syncError.read(), /Unknown workspace: missing-workspace/);
       },
-      async listInstallations() {
-        return {
-          installations: [
-            {
-              installation: {
-                id: 1,
-                workspaceName: "Workspace One",
-                workspaceKey: "WS1",
-                actorName: "PatchRelay App",
-                actorId: "actor-1",
-              },
-              linkedProjects: ["usertold"],
-            },
-          ],
-        };
-      },
-    } as unknown as CliDataAccess;
-
-    const connectJson = createBufferStream();
-    assert.equal(
-      await runCli(["connect", "--repo", "usertold", "--json"], {
-        config,
-        data,
-        stdout: connectJson.stream,
-        stderr: createBufferStream().stream,
-      }),
-      0,
     );
-    assert.deepEqual(JSON.parse(connectJson.read()), {
-      state: "state-1",
-      authorizeUrl: "https://linear.app/oauth/authorize?state=state-1",
-      redirectUri: "http://127.0.0.1:8787/oauth/linear/callback",
-      projectId: "usertold",
-    });
-
-    const installationsJson = createBufferStream();
-    assert.equal(
-      await runCli(["installations", "--json"], {
-        config,
-        data,
-        stdout: installationsJson.stream,
-        stderr: createBufferStream().stream,
-      }),
-      0,
-    );
-    const installationsResult = JSON.parse(installationsJson.read());
-    assert.equal(installationsResult.installations.length, 1);
-    assert.deepEqual(installationsResult.installations[0].installation, {
-      id: 1,
-      workspaceName: "Workspace One",
-      workspaceKey: "WS1",
-      actorName: "PatchRelay App",
-      actorId: "actor-1",
-    });
-    assert.deepEqual(installationsResult.installations[0].linkedProjects, ["usertold"]);
-    assert.equal(installationsResult.installations[0].projects[0].id, "usertold");
-    assert.deepEqual(installationsResult.installations[0].projects[0].issueKeyPrefixes, ["USE"]);
-
-    const connectError = createBufferStream();
-    assert.equal(
-      await runCli(["connect", "--repo", "missing-project"], {
-        config,
-        data,
-        stdout: createBufferStream().stream,
-        stderr: connectError.stream,
-      }),
-      1,
-    );
-    assert.match(connectError.read(), /Unknown project: missing-project/);
-
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
 
-test("cli installation commands use the local HTTP service end to end", async (t) => {
+test("cli workspace commands use the local HTTP service end to end", async (t) => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-http-"));
+  let app: Awaited<ReturnType<typeof buildHttpServer>> | undefined;
   try {
-    const config = {
-      ...createConfig(baseDir),
-      server: {
-        ...createConfig(baseDir).server,
-        publicBaseUrl: "https://patchrelay.example.com",
-      },
-      linear: {
-        ...createConfig(baseDir).linear,
-        webhookSecret: "webhook-secret",
-        oauth: {
-          clientId: "client-id",
-          clientSecret: "client-secret",
-          redirectUri: "http://127.0.0.1:0/oauth/linear/callback",
-          scopes: ["read", "write"],
-          actor: "app" as const,
-        },
-        tokenEncryptionKey: "encryption-secret",
-      },
-    };
+    const config = createConfig(baseDir);
 
     let oauthPollCount = 0;
-    const links = new Map<string, number>();
-    const app = await buildHttpServer(
+    app = await buildHttpServer(
       config,
       {
         acceptWebhook: async () => ({ status: 200, body: { ok: true } }),
         getReadiness: () => ({ ready: true, codexStarted: true, linearConnected: true }),
-        createLinearOAuthStart: ({ projectId }: { projectId?: string } = {}) => ({
+        createLinearOAuthStart: () => ({
           state: "state-http",
           authorizeUrl: "https://linear.app/oauth/authorize?state=state-http",
           redirectUri: config.linear.oauth!.redirectUri,
-          ...(projectId ? { projectId } : {}),
         }),
         getLinearOAuthStateStatus: (state: string) => {
           if (state !== "state-http") {
@@ -2177,20 +2107,20 @@ test("cli installation commands use the local HTTP service end to end", async (t
           }
           oauthPollCount += 1;
           if (oauthPollCount < 2) {
-            return { state, status: "pending" as const, projectId: "usertold" };
+            return { state, status: "pending" as const };
           }
-          links.set("usertold", 7);
           return {
             state,
             status: "completed" as const,
-            projectId: "usertold",
             installation: { id: 7, workspaceName: "Workspace Seven" },
           };
         },
-        listLinearInstallations: () => [
+        listLinearWorkspaces: () => [
           {
             installation: { id: 7, workspaceName: "Workspace Seven" },
-            linkedProjects: [...links.entries()].filter(([, id]) => id === 7).map(([projectId]) => projectId),
+            linkedRepos: ["krasnoperov/usertold"],
+            teams: [{ id: "team-use", key: "USE", name: "Usertold" }],
+            projects: [],
           },
         ],
       } as never,
@@ -2209,39 +2139,43 @@ test("cli installation commands use the local HTTP service end to end", async (t
     assert.ok(address && typeof address === "object");
     config.server.port = address.port;
     config.linear.oauth.redirectUri = `http://127.0.0.1:${address.port}/oauth/linear/callback`;
+    const configPath = path.join(baseDir, "patchrelay.json");
+    writeExternalConfig(configPath, baseDir, {
+      serverPort: address.port,
+      redirectUri: config.linear.oauth.redirectUri,
+    });
 
-    const data = new CliDataAccess(config);
+    await withEnv(
+      {
+        PATCHRELAY_CONFIG: configPath,
+      },
+      async () => {
+        const connectOut = createBufferStream();
+        assert.equal(
+          await runCli(["linear", "connect", "--no-open"], {
+            stdout: connectOut.stream,
+            stderr: createBufferStream().stream,
+            connectPollIntervalMs: 1,
+          }),
+          0,
+        );
+        assert.match(connectOut.read(), /Connected Workspace Seven/);
 
-    const connectOut = createBufferStream();
-    assert.equal(
-      await runCli(["connect", "--repo", "usertold", "--no-open"], {
-        config,
-        data,
-        stdout: connectOut.stream,
-        stderr: createBufferStream().stream,
-        connectPollIntervalMs: 1,
-      }),
-      0,
+        const listOut = createBufferStream();
+        assert.equal(
+          await runCli(["linear", "list"], {
+            stdout: listOut.stream,
+            stderr: createBufferStream().stream,
+          }),
+          0,
+        );
+        assert.match(listOut.read(), /Workspace Seven/);
+        assert.match(listOut.read(), /repos=1/);
+      },
     );
-    assert.match(connectOut.read(), /Connected Workspace Seven for repo usertold/);
-    assert.equal(links.get("usertold"), 7);
 
-    const installationsOut = createBufferStream();
-    assert.equal(
-      await runCli(["installations"], {
-        config,
-        data,
-        stdout: installationsOut.stream,
-        stderr: createBufferStream().stream,
-      }),
-      0,
-    );
-    assert.match(installationsOut.read(), /Workspace Seven/);
-    assert.match(installationsOut.read(), /repos=usertold/);
-
-    data.close();
-    await app.close();
   } finally {
+    await app?.close().catch(() => {});
     rmSync(baseDir, { recursive: true, force: true });
   }
 });

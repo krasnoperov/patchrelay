@@ -89,6 +89,37 @@ CREATE TABLE IF NOT EXISTS project_installations (
   linked_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS repository_links (
+  github_repo TEXT PRIMARY KEY,
+  local_path TEXT NOT NULL,
+  installation_id INTEGER NOT NULL,
+  linear_team_ids_json TEXT NOT NULL DEFAULT '[]',
+  linear_project_ids_json TEXT NOT NULL DEFAULT '[]',
+  issue_key_prefixes_json TEXT NOT NULL DEFAULT '[]',
+  linked_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS linear_catalog_teams (
+  installation_id INTEGER NOT NULL,
+  team_id TEXT NOT NULL,
+  team_key TEXT,
+  team_name TEXT,
+  active INTEGER NOT NULL DEFAULT 1,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (installation_id, team_id)
+);
+
+CREATE TABLE IF NOT EXISTS linear_catalog_projects (
+  installation_id INTEGER NOT NULL,
+  project_id TEXT NOT NULL,
+  project_name TEXT,
+  team_ids_json TEXT NOT NULL DEFAULT '[]',
+  active INTEGER NOT NULL DEFAULT 1,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (installation_id, project_id)
+);
+
 CREATE TABLE IF NOT EXISTS oauth_states (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   provider TEXT NOT NULL,
@@ -126,6 +157,9 @@ CREATE INDEX IF NOT EXISTS idx_runs_thread ON runs(thread_id);
 CREATE INDEX IF NOT EXISTS idx_run_thread_events_run ON run_thread_events(run_id, id);
 CREATE INDEX IF NOT EXISTS idx_operator_feed_events_issue ON operator_feed_events(issue_key, id);
 CREATE INDEX IF NOT EXISTS idx_operator_feed_events_project ON operator_feed_events(project_id, id);
+CREATE INDEX IF NOT EXISTS idx_repository_links_installation ON repository_links(installation_id, github_repo);
+CREATE INDEX IF NOT EXISTS idx_linear_catalog_teams_installation ON linear_catalog_teams(installation_id, team_key, team_name);
+CREATE INDEX IF NOT EXISTS idx_linear_catalog_projects_installation ON linear_catalog_projects(installation_id, project_name);
 `;
 
 export function runPatchRelayMigrations(connection: DatabaseConnection): void {

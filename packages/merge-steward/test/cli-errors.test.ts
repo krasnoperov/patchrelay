@@ -94,7 +94,7 @@ test("init without url exits 1", async () => {
   }
 });
 
-test("attach without id and repo exits 1", async () => {
+test("attach without repo exits 1", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "ms-err-attach-noargs-"));
   try {
     await withEnv(
@@ -118,7 +118,7 @@ test("attach without id and repo exits 1", async () => {
           runCommand: noop,
         });
         assert.equal(code, 1);
-        assert.match(stderr.read(), /requires <id> and <owner\/repo>/);
+        assert.match(stderr.read(), /requires <owner\/repo> or <id> <owner\/repo>/);
       },
     );
   } finally {
@@ -126,7 +126,7 @@ test("attach without id and repo exits 1", async () => {
   }
 });
 
-test("attach with only id (no repo) exits 1", async () => {
+test("attach with only id exits 1", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "ms-err-attach-norepo-"));
   try {
     await withEnv(
@@ -150,7 +150,7 @@ test("attach with only id (no repo) exits 1", async () => {
           runCommand: noop,
         });
         assert.equal(code, 1);
-        assert.match(stderr.read(), /requires <id> and <owner\/repo>/);
+        assert.match(stderr.read(), /requires <owner\/repo> or <id> <owner\/repo>/);
       },
     );
   } finally {
@@ -258,39 +258,50 @@ test("queue unknown subcommand exits 1", async () => {
   }
 });
 
-// --- missing repo id ---
+// --- service commands operate on the machine-level unit ---
 
-test("service status without repo id exits 1", async () => {
-  const stderr = createBufferStream();
+test("service status without repo id succeeds", async () => {
+  const stdout = createBufferStream();
   const code = await runCli(["service", "status"], {
-    stdout: createBufferStream().stream,
-    stderr: stderr.stream,
-    runCommand: noop,
+    stdout: stdout.stream,
+    stderr: createBufferStream().stream,
+    runCommand: async () => ({
+      exitCode: 0,
+      stdout: [
+        "Id=merge-steward.service",
+        "LoadState=loaded",
+        "UnitFileState=enabled",
+        "ActiveState=active",
+        "SubState=running",
+        "ExecMainPID=9001",
+      ].join("\n"),
+      stderr: "",
+    }),
   });
-  assert.equal(code, 1);
-  assert.match(stderr.read(), /requires <id>/);
+  assert.equal(code, 0);
+  assert.match(stdout.read(), /Unit: merge-steward\.service/);
 });
 
-test("service restart without repo id exits 1", async () => {
-  const stderr = createBufferStream();
+test("service restart without repo id succeeds", async () => {
+  const stdout = createBufferStream();
   const code = await runCli(["service", "restart"], {
-    stdout: createBufferStream().stream,
-    stderr: stderr.stream,
+    stdout: stdout.stream,
+    stderr: createBufferStream().stream,
     runCommand: noop,
   });
-  assert.equal(code, 1);
-  assert.match(stderr.read(), /requires <id>/);
+  assert.equal(code, 0);
+  assert.match(stdout.read(), /Restarted merge-steward\.service/);
 });
 
-test("service logs without repo id exits 1", async () => {
-  const stderr = createBufferStream();
+test("service logs without repo id succeeds", async () => {
+  const stdout = createBufferStream();
   const code = await runCli(["service", "logs"], {
-    stdout: createBufferStream().stream,
-    stderr: stderr.stream,
-    runCommand: noop,
+    stdout: stdout.stream,
+    stderr: createBufferStream().stream,
+    runCommand: async () => ({ exitCode: 0, stdout: "2026-03-31 ok\n", stderr: "" }),
   });
-  assert.equal(code, 1);
-  assert.match(stderr.read(), /requires <id>/);
+  assert.equal(code, 0);
+  assert.match(stdout.read(), /2026-03-31 ok/);
 });
 
 test("queue status without repo id exits 1", async () => {

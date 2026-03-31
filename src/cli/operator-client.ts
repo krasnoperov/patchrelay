@@ -15,6 +15,22 @@ export interface InstallationListResult {
   }>;
 }
 
+export interface LinearWorkspaceListResult {
+  workspaces: Array<{
+    installation: {
+      id: number;
+      workspaceName?: string;
+      workspaceKey?: string;
+      actorName?: string;
+      actorId?: string;
+      expiresAt?: string;
+    };
+    linkedRepos: string[];
+    teams: Array<{ id: string; key?: string; name?: string }>;
+    projects: Array<{ id: string; name?: string; teamIds: string[] }>;
+  }>;
+}
+
 export interface OperatorFeedResult {
   events: OperatorFeedEvent[];
 }
@@ -29,7 +45,7 @@ export type ConnectResult =
   | {
       completed: true;
       reusedExisting: true;
-      projectId: string;
+      projectId?: string;
       installation: {
         id: number;
         workspaceName?: string;
@@ -58,6 +74,15 @@ export interface CliOperatorDataAccess {
   connect(projectId?: string): Promise<ConnectResult>;
   connectStatus(state: string): Promise<ConnectStateResult>;
   listInstallations(): Promise<InstallationListResult>;
+  listLinearWorkspaces(): Promise<LinearWorkspaceListResult>;
+  syncLinearWorkspace(workspace?: string): Promise<{
+    installation: LinearWorkspaceListResult["workspaces"][number]["installation"];
+    teams: Array<{ id: string; key?: string; name?: string }>;
+    projects: Array<{ id: string; name?: string; teamIds: string[] }>;
+  }>;
+  disconnectLinearWorkspace(workspace: string): Promise<{
+    installation: LinearWorkspaceListResult["workspaces"][number]["installation"];
+  }>;
   listOperatorFeed(options?: Omit<OperatorFeedQuery, "afterId">): Promise<OperatorFeedResult>;
   followOperatorFeed(
     onEvent: (event: OperatorFeedEvent) => void,
@@ -86,6 +111,26 @@ export class CliOperatorApiClient implements CliOperatorDataAccess {
 
   async listInstallations(): Promise<InstallationListResult> {
     return await this.requestJson<InstallationListResult>("/api/installations");
+  }
+
+  async listLinearWorkspaces(): Promise<LinearWorkspaceListResult> {
+    return await this.requestJson<LinearWorkspaceListResult>("/api/linear/workspaces");
+  }
+
+  async syncLinearWorkspace(workspace?: string): Promise<{
+    installation: LinearWorkspaceListResult["workspaces"][number]["installation"];
+    teams: Array<{ id: string; key?: string; name?: string }>;
+    projects: Array<{ id: string; name?: string; teamIds: string[] }>;
+  }> {
+    return await this.requestJson("/api/linear/workspaces/sync", {
+      ...(workspace ? { workspace } : {}),
+    }, { method: "POST" });
+  }
+
+  async disconnectLinearWorkspace(workspace: string): Promise<{
+    installation: LinearWorkspaceListResult["workspaces"][number]["installation"];
+  }> {
+    return await this.requestJson(`/api/linear/workspaces/${encodeURIComponent(workspace)}`, undefined, { method: "DELETE" });
   }
 
   async listOperatorFeed(options?: Omit<OperatorFeedQuery, "afterId">): Promise<OperatorFeedResult> {

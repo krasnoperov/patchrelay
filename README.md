@@ -193,23 +193,37 @@ LINEAR_OAUTH_CLIENT_SECRET=replace-with-linear-oauth-client-secret
 
 Keep service secrets in `service.env`. `runtime.env` is for non-secret overrides such as `PATCHRELAY_DB_PATH` or `PATCHRELAY_LOG_FILE`. Everyday local inspection commands do not require exporting these values in your shell.
 
-### 4. Attach a repo
+### 4. Connect PatchRelay to Linear
 
-Add repositories after `patchrelay init` with `patchrelay attach <id>` from the repo root. If you need to point somewhere else, use `--path <path>`.
+Connect PatchRelay to one Linear workspace:
 
-For a single project, that is usually enough. For multiple projects, add routing with `--issue-prefix APP` or `--team-id <linear-team-id>`.
+```bash
+patchrelay linear connect
+patchrelay linear sync
+```
 
-The generated `~/.config/patchrelay/patchrelay.json` is machine-level service config only. Repo entries should be created with the CLI, not by hand-editing a placeholder template.
+This authorizes the workspace once, then caches its teams and projects locally. Workspace auth is separate from repo linking.
 
-`patchrelay attach` is idempotent:
+### 5. Link a GitHub repo
 
-- it creates or updates the local repo entry
-- it checks whether PatchRelay is ready
+Link repos by GitHub identity, not by local path:
+
+```bash
+patchrelay repo link krasnoperov/usertold --workspace usertold --team USE
+```
+
+PatchRelay treats the GitHub repo as the source of truth. It reuses an existing local clone under the managed repo root when `origin` already matches, or clones it automatically when missing. Use `--path <path>` only when you want a non-default local location.
+
+The generated `~/.config/patchrelay/patchrelay.json` stays machine-level service config. Repo links should be created with the CLI, not by hand-editing the file.
+
+`patchrelay repo link` is idempotent:
+
+- it creates or updates the linked repo entry
+- it refreshes the selected Linear workspace catalog before resolving teams/projects
 - it reloads the service when it can
-- it reuses or starts the Linear connect flow when the local setup is ready
 - if workflow files or secrets are still missing, it tells you exactly what to fix and can be rerun safely
 
-### 5. Add workflow docs to the repo
+### 6. Add workflow docs to the repo
 
 PatchRelay looks for:
 
@@ -220,22 +234,21 @@ REVIEW_WORKFLOW.md
 
 These files define how the agent should work in that repo.
 
-### 6. Validate
+### 7. Validate
 
 ```bash
 patchrelay doctor
 patchrelay service status
 ```
 
-### 7. Check the installation
+### 8. Check linked workspaces and repos
 
 ```bash
-patchrelay installations
+patchrelay linear list
+patchrelay repo list
 ```
 
-In the normal happy path, the earlier `patchrelay attach <id>` command already handles the connect step for you. `patchrelay connect --repo <id>` is the advanced/manual command when you want to retry or debug only the Linear authorization layer.
-
-If you later add another local repo that should use the same Linear installation, run `patchrelay attach <id>` in that repo too, or pass `--path <path>`. PatchRelay now reuses the single saved installation automatically when there is no ambiguity, so you usually will not need another browser approval.
+If you later add another local repo from the same workspace, run `patchrelay repo link <owner/repo> --workspace <workspace> --team <team>` again. PatchRelay reuses the existing workspace installation instead of opening a new OAuth flow.
 
 Important:
 

@@ -2,8 +2,7 @@ import { spawnSync } from "node:child_process";
 import { accessSync, constants, existsSync, mkdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { loadConfig } from "../../config.ts";
-import { exec } from "../../exec.ts";
-import { resolveSecretWithSource } from "../../resolve-secret.ts";
+import { normalizeCheckList } from "../../github-repo-discovery.ts";
 import {
   getDefaultConfigPath,
   getDefaultRepoConfigDir,
@@ -11,11 +10,11 @@ import {
   getDefaultServiceEnvPath,
   getDefaultStateDir,
   getRepoConfigPath,
-  getSystemdUnitTemplatePath,
+  getSystemdUnitPath,
 } from "../../runtime-paths.ts";
 import type { ParsedArgs, Output } from "../types.ts";
 import { formatJson, writeOutput } from "../output.ts";
-import { getHomeEnv } from "../system.ts";
+import { fetchServiceGitHubAuthStatus, fetchServiceRepoDiscovery, getHomeEnv } from "../system.ts";
 
 interface DoctorCheck {
   status: "pass" | "warn" | "fail";
@@ -63,27 +62,80 @@ export async function handleDoctor(parsed: ParsedArgs, stdout: Output): Promise<
   checks.push(checkPath("service-env", getDefaultServiceEnvPath()));
   checks.push(checkPath("repo-config-dir", getDefaultRepoConfigDir(), true));
   checks.push(checkPath("state-dir", getDefaultStateDir(), true));
-  checks.push(checkPath("systemd-unit", getSystemdUnitTemplatePath()));
+  checks.push(checkPath("systemd-unit", getSystemdUnitPath()));
   checks.push(await checkExecutable("git", "git"));
   checks.push(await checkExecutable("gh", "gh"));
 
-  const webhookSecret = resolveSecretWithSource("merge-steward-webhook-secret", "MERGE_STEWARD_WEBHOOK_SECRET", env);
+  const appId = env.MERGE_STEWARD_GITHUB_APP_ID?.trim();
   checks.push({
-    status: webhookSecret.value ? "pass" : "warn",
-    scope: "webhook-secret",
-    message: webhookSecret.value
-      ? `Webhook secret resolved from ${webhookSecret.source}`
-      : "Webhook secret is missing; signed webhook verification will be disabled",
+    status: appId ? "pass" : "fail",
+    scope: "github-app-id",
+    message: appId
+      ? `GitHub App id configured: ${appId}`
+      : "GitHub App id is missing; set MERGE_STEWARD_GITHUB_APP_ID in service.env",
   });
 
-  const githubToken = resolveSecretWithSource("merge-steward-github-token", "MERGE_STEWARD_GITHUB_TOKEN", env);
-  checks.push({
-    status: githubToken.value ? "pass" : "fail",
-    scope: "github-token",
-    message: githubToken.value
-      ? `GitHub token resolved from ${githubToken.source}`
-      : "GitHub token is missing; steward cannot call gh for merge/check operations",
-  });
+  let serviceGitHubStatus:
+    | {
+      mode: "none" | "app";
+      configured: boolean;
+      ready: boolean;
+      webhookSecretConfigured: boolean;
+      appId?: string;
+      installationMode?: "pinned" | "per_repo";
+      error?: string;
+    }
+    | undefined;
+  try {
+    serviceGitHubStatus = await fetchServiceGitHubAuthStatus();
+    checks.push({
+      status: "pass",
+      scope: "service-admin",
+      message: "Local merge-steward service is reachable",
+    });
+  } catch (error) {
+    checks.push({
+      status: "warn",
+      scope: "service-admin",
+      message: `Local merge-steward service is unavailable: ${error instanceof Error ? error.message : String(error)}`,
+    });
+  }
+
+  if (serviceGitHubStatus) {
+    checks.push({
+      status: serviceGitHubStatus.webhookSecretConfigured ? "pass" : "warn",
+      scope: "webhook-secret",
+      message: serviceGitHubStatus.webhookSecretConfigured
+        ? "Webhook secret is configured in the running service"
+        : "Webhook secret is not configured in the running service; signed webhook verification will be disabled",
+    });
+    checks.push({
+      status: serviceGitHubStatus.ready ? "pass" : "fail",
+      scope: "github-auth",
+      message: serviceGitHubStatus.ready
+        ? serviceGitHubStatus.mode === "app" && serviceGitHubStatus.appId
+          ? `Service GitHub auth is ready from App ${serviceGitHubStatus.appId}`
+          : "Service GitHub auth is ready"
+        : serviceGitHubStatus.error ?? "Service GitHub auth is not ready",
+    });
+    if (serviceGitHubStatus.mode === "app") {
+      checks.push({
+        status: "pass",
+        scope: "github-app",
+        message: serviceGitHubStatus.installationMode === "pinned"
+          ? "GitHub App installation id is pinned in the running service"
+          : "GitHub App installation will be resolved per repository by the running service",
+      });
+    }
+  } else {
+    checks.push({
+      status: appId ? "warn" : "fail",
+      scope: "github-auth",
+      message: appId
+        ? "Service runtime GitHub auth could not be verified because the local merge-steward service is unavailable"
+        : "GitHub auth is not configured",
+    });
+  }
 
   let repoConfigPath: string | undefined;
   if (repoId) {
@@ -103,27 +155,52 @@ export async function handleDoctor(parsed: ParsedArgs, stdout: Output): Promise<
         });
         checks.push(checkPath(`repo:${repoId}:database-dir`, path.dirname(config.database.path), true));
         checks.push(checkPath(`repo:${repoId}:clone-parent`, path.dirname(config.clonePath), true));
-        if (githubToken.value) {
+        if (serviceGitHubStatus) {
           try {
-            const auth = await exec("gh", ["api", "user", "--jq", ".login"], {
-              allowNonZero: true,
-              env: {
-                ...process.env,
-                ...Object.fromEntries(Object.entries(env).filter(([, value]) => value !== undefined)),
-              },
+            const response = await fetchServiceRepoDiscovery(config.repoFullName, { baseBranch: config.baseBranch });
+            const discovered = response.discovery;
+            checks.push({
+              status: discovered.defaultBranch === config.baseBranch ? "pass" : "warn",
+              scope: `repo:${repoId}:github-default-branch`,
+              message: discovered.defaultBranch === config.baseBranch
+                ? `Local base branch matches GitHub default branch (${discovered.defaultBranch})`
+                : `Local base branch is ${config.baseBranch}, but GitHub default branch is ${discovered.defaultBranch}`,
             });
-            if (auth.exitCode === 0 && auth.stdout.trim()) {
-              checks.push({ status: "pass", scope: "github-auth", message: `gh authenticated as ${auth.stdout.trim()}` });
-            } else {
-              checks.push({ status: "warn", scope: "github-auth", message: "gh did not confirm the current auth identity" });
+
+            const configuredChecks = normalizeCheckList(config.requiredChecks);
+            const discoveredChecks = normalizeCheckList(discovered.requiredChecks);
+            const checksMatch = configuredChecks.length === discoveredChecks.length
+              && configuredChecks.every((value, index) => value === discoveredChecks[index]);
+            checks.push({
+              status: checksMatch ? "pass" : "warn",
+              scope: `repo:${repoId}:github-required-checks`,
+              message: checksMatch
+                ? (configuredChecks.length > 0
+                    ? `Local required checks match GitHub for ${config.baseBranch}`
+                    : `No required checks configured locally and GitHub does not require status checks for ${config.baseBranch}`)
+                : `Local required checks [${configuredChecks.join(", ") || "(none)"}] differ from GitHub [${discoveredChecks.join(", ") || "(none)"}] for ${config.baseBranch}`,
+            });
+
+            for (const warning of discovered.warnings) {
+              checks.push({
+                status: "warn",
+                scope: `repo:${repoId}:github-discovery`,
+                message: warning,
+              });
             }
           } catch (error) {
             checks.push({
               status: "warn",
-              scope: "github-auth",
+              scope: `repo:${repoId}:github-discovery`,
               message: error instanceof Error ? error.message : String(error),
             });
           }
+        } else {
+          checks.push({
+            status: "warn",
+            scope: `repo:${repoId}:github-discovery`,
+            message: "Skipped GitHub drift checks because the local merge-steward service is unavailable",
+          });
         }
       } catch (error) {
         checks.push({

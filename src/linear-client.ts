@@ -12,6 +12,7 @@ import type {
   LinearCommentUpsertResult,
   LinearAgentSessionUpdateResult,
   LinearIssueSnapshot,
+  LinearWorkspaceCatalog,
 } from "./types.ts";
 
 interface GraphqlResponse<T> {
@@ -409,6 +410,89 @@ export class LinearGraphqlClient implements LinearClient {
     };
   }
 
+  async getWorkspaceCatalog(): Promise<LinearWorkspaceCatalog> {
+    const response = await this.request<{
+      organization?: {
+        id?: string | null;
+        name?: string | null;
+        urlKey?: string | null;
+      } | null;
+      viewer?: {
+        id?: string | null;
+        name?: string | null;
+      } | null;
+      teams?: {
+        nodes?: Array<{
+          id: string;
+          key?: string | null;
+          name?: string | null;
+        }>;
+      } | null;
+      projects?: {
+        nodes?: Array<{
+          id: string;
+          name?: string | null;
+          teams?: {
+            nodes?: Array<{ id: string }>;
+          } | null;
+        }>;
+      } | null;
+    }>(
+      `
+      query PatchRelayWorkspaceCatalog {
+        organization {
+          id
+          name
+          urlKey
+        }
+        viewer {
+          id
+          name
+        }
+        teams {
+          nodes {
+            id
+            key
+            name
+          }
+        }
+        projects {
+          nodes {
+            id
+            name
+            teams {
+              nodes {
+                id
+              }
+            }
+          }
+        }
+      }
+      `,
+      {},
+    );
+
+    return {
+      workspace: {
+        ...(response.organization?.id ? { workspaceId: response.organization.id } : {}),
+        ...(response.organization?.name ? { workspaceName: response.organization.name } : {}),
+        ...(response.organization?.urlKey ? { workspaceKey: response.organization.urlKey } : {}),
+        ...(response.viewer?.id ? { actorId: response.viewer.id } : {}),
+        ...(response.viewer?.name ? { actorName: response.viewer.name } : {}),
+      },
+      teams: (response.teams?.nodes ?? []).map((team) => ({
+        id: team.id,
+        ...(team.key ? { key: team.key } : {}),
+        ...(team.name ? { name: team.name } : {}),
+      })),
+      projects: (response.projects?.nodes ?? []).map((project) => ({
+        id: project.id,
+        ...(project.name ? { name: project.name } : {}),
+        teamIds: (project.teams?.nodes ?? []).map((team) => team.id),
+      })),
+    };
+  }
+
   private async request<T>(query: string, variables: Record<string, unknown>): Promise<T> {
     const response = await fetch(this.options.graphqlUrl, {
       method: "POST",
@@ -497,39 +581,43 @@ export class DatabaseBackedLinearClientProvider implements LinearClientProvider 
   async forProject(projectId: string): Promise<LinearClient | undefined> {
     const link = this.db.linearInstallations.getProjectInstallation(projectId);
     if (link) {
-      const installation = this.db.linearInstallations.getLinearInstallation(link.installationId);
-      if (!installation) {
-        return undefined;
-      }
-
-      const encryptionKey = this.config.linear.tokenEncryptionKey;
-      let accessToken = decryptSecret(installation.accessTokenCiphertext, encryptionKey);
-      const refreshToken = installation.refreshTokenCiphertext
-        ? decryptSecret(installation.refreshTokenCiphertext, encryptionKey)
-        : undefined;
-
-      if (shouldRefreshToken(installation.expiresAt) && refreshToken) {
-        const refreshed = await refreshLinearOAuthToken(this.config, refreshToken);
-        accessToken = refreshed.accessToken;
-        this.db.linearInstallations.updateLinearInstallationTokens(installation.id, {
-          accessTokenCiphertext: encryptSecret(refreshed.accessToken, encryptionKey),
-          ...(refreshed.refreshToken
-            ? { refreshTokenCiphertext: encryptSecret(refreshed.refreshToken, encryptionKey) }
-            : {}),
-          scopesJson: JSON.stringify(refreshed.scopes),
-          ...(refreshed.expiresAt ? { expiresAt: refreshed.expiresAt } : {}),
-        });
-      }
-
-      return new LinearGraphqlClient(
-        {
-          accessToken,
-          graphqlUrl: this.config.linear.graphqlUrl,
-        },
-        this.logger,
-      );
+      return await this.forInstallationId(link.installationId);
     }
     return undefined;
+  }
+
+  async forInstallationId(installationId: number): Promise<LinearClient | undefined> {
+    const installation = this.db.linearInstallations.getLinearInstallation(installationId);
+    if (!installation) {
+      return undefined;
+    }
+
+    const encryptionKey = this.config.linear.tokenEncryptionKey;
+    let accessToken = decryptSecret(installation.accessTokenCiphertext, encryptionKey);
+    const refreshToken = installation.refreshTokenCiphertext
+      ? decryptSecret(installation.refreshTokenCiphertext, encryptionKey)
+      : undefined;
+
+    if (shouldRefreshToken(installation.expiresAt) && refreshToken) {
+      const refreshed = await refreshLinearOAuthToken(this.config, refreshToken);
+      accessToken = refreshed.accessToken;
+      this.db.linearInstallations.updateLinearInstallationTokens(installation.id, {
+        accessTokenCiphertext: encryptSecret(refreshed.accessToken, encryptionKey),
+        ...(refreshed.refreshToken
+          ? { refreshTokenCiphertext: encryptSecret(refreshed.refreshToken, encryptionKey) }
+          : {}),
+        scopesJson: JSON.stringify(refreshed.scopes),
+        ...(refreshed.expiresAt ? { expiresAt: refreshed.expiresAt } : {}),
+      });
+    }
+
+    return new LinearGraphqlClient(
+      {
+        accessToken,
+        graphqlUrl: this.config.linear.graphqlUrl,
+      },
+      this.logger,
+    );
   }
 }
 

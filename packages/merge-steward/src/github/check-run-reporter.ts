@@ -52,7 +52,7 @@ export class GitHubCheckRunReporter implements EvictionReporter {
         `repos/${this.repoFullName}/check-runs`,
         "--method", "POST",
         "--input", tmpPath,
-      ], { timeoutMs: 30_000 });
+      ], { timeoutMs: 30_000, githubRepoFullName: this.repoFullName });
     } catch {
       // Best-effort — the incident record is the source of truth.
     } finally {
@@ -64,7 +64,7 @@ export class GitHubCheckRunReporter implements EvictionReporter {
       "pr", "edit", String(entry.prNumber),
       "--repo", this.repoFullName,
       "--remove-label", this.admissionLabel,
-    ], { timeoutMs: 15_000 }).catch(() => {});
+    ], { timeoutMs: 15_000, githubRepoFullName: this.repoFullName }).catch(() => {});
   }
 }
 

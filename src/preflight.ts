@@ -90,7 +90,7 @@ export async function runPreflight(config: AppConfig, options?: { connectivity?:
   checks.push(...checkDatabaseHealth(config));
   checks.push(...checkPath("logging", path.dirname(config.logging.filePath), "directory", { createIfMissing: true, writable: true }));
   if (config.projects.length === 0) {
-    checks.push(warn("projects", "No repos are configured yet; add one with `patchrelay attach <id>` from the repo root, or pass `--path /path/to/repo`, before connecting Linear"));
+    checks.push(warn("projects", "No repos are configured yet; connect a Linear workspace with `patchrelay linear connect` and then link a GitHub repo with `patchrelay repo link <owner/repo> --workspace <workspace> --team <team>`"));
   }
 
   for (const project of config.projects) {

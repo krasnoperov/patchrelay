@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { isIP } from "node:net";
+import { homedir } from "node:os";
 import path from "node:path";
 import { z } from "zod";
 import type { AppConfig } from "./types.ts";
@@ -50,6 +51,25 @@ const projectSchema = z.object({
     webhook_secret: z.string().min(1).optional(),
     repo_full_name: z.string().min(1).optional(),
     base_branch: z.string().min(1).optional(),
+  }).optional(),
+});
+
+const repositorySchema = z.object({
+  github_repo: z.string().min(1),
+  local_path: z.string().min(1).optional(),
+  workspace: z.string().min(1).optional(),
+  linear_team_ids: z.array(z.string().min(1)).default([]),
+  linear_project_ids: z.array(z.string().min(1)).default([]),
+  issue_key_prefixes: z.array(z.string().min(1)).default([]),
+  review_checks: z.array(z.string().min(1)).default([]),
+  gate_checks: z.array(z.string().min(1)).default([]),
+  trigger_events: z.array(z.string().min(1)).min(1).optional(),
+  branch_prefix: z.string().min(1).optional(),
+  github: z.object({
+    webhook_secret: z.string().min(1).optional(),
+    base_branch: z.string().min(1).optional(),
+    merge_queue_label: z.string().min(1).optional(),
+    merge_queue_check_name: z.string().min(1).optional(),
   }).optional(),
 });
 
@@ -115,7 +135,11 @@ const configSchema = z.object({
       experimental_raw_events: z.boolean().default(true),
     }),
   }),
+  repos: z.object({
+    root: z.string().min(1).default(path.join(homedir(), "projects")),
+  }).default(() => ({ root: path.join(homedir(), "projects") })),
   projects: z.array(projectSchema).default([]),
+  repositories: z.array(repositorySchema).default([]),
 });
 
 function defaultTriggerEvents(actor: "user" | "app"): AppConfig["projects"][number]["triggerEvents"] {
@@ -164,7 +188,9 @@ function withSectionDefaults(input: unknown): unknown {
     logging: {},
     database: {},
     operator_api: {},
+    repos: {},
     projects: [],
+    repositories: [],
     ...rest,
     linear: {
       ...linear,
@@ -307,6 +333,14 @@ function defaultWorktreeRoot(projectId: string): string {
   return path.join(getPatchRelayDataDir(), "worktrees", projectId);
 }
 
+function defaultRepositoryLocalPath(reposRoot: string, githubRepo: string): string {
+  const repoName = githubRepo.split("/").pop()?.trim();
+  if (!repoName) {
+    throw new Error(`Invalid github_repo: ${githubRepo}`);
+  }
+  return path.join(ensureAbsolutePath(reposRoot), repoName);
+}
+
 function defaultBranchPrefix(projectId: string): string {
   const sanitized = projectId
     .trim()
@@ -390,6 +424,93 @@ export function loadConfig(
 
   const logFilePath = env.PATCHRELAY_LOG_FILE ?? parsed.logging.file_path;
   const oauthRedirectUri = parsed.linear.oauth.redirect_uri ?? deriveLinearOAuthRedirectUri(parsed.server);
+  const reposRoot = ensureAbsolutePath(parsed.repos.root);
+
+  const repositories = parsed.repositories.map((repository) => {
+    const localPath = ensureAbsolutePath(repository.local_path ?? defaultRepositoryLocalPath(reposRoot, repository.github_repo));
+    return {
+      githubRepo: repository.github_repo,
+      localPath,
+      ...(repository.workspace ? { workspace: repository.workspace } : {}),
+      linearTeamIds: repository.linear_team_ids,
+      linearProjectIds: repository.linear_project_ids,
+      issueKeyPrefixes: repository.issue_key_prefixes,
+      reviewChecks: repository.review_checks,
+      gateChecks: repository.gate_checks,
+      triggerEvents: repository.trigger_events as AppConfig["projects"][number]["triggerEvents"] | undefined,
+      branchPrefix: repository.branch_prefix,
+      github: repository.github,
+    };
+  });
+
+  const repositoryProjects = repositories.map((repository) => {
+    const repoSettings = readRepoSettings(repository.localPath, env);
+    return {
+      id: repository.githubRepo,
+      repoPath: repository.localPath,
+      worktreeRoot: ensureAbsolutePath(defaultWorktreeRoot(repository.githubRepo)),
+      issueKeyPrefixes: repository.issueKeyPrefixes,
+      linearTeamIds: repository.linearTeamIds,
+      allowLabels: [],
+      reviewChecks: repository.reviewChecks,
+      gateChecks: repository.gateChecks,
+      triggerEvents: normalizeTriggerEvents(
+        parsed.linear.oauth.actor,
+        (repoSettings?.trigger_events as AppConfig["projects"][number]["triggerEvents"] | undefined) ?? repository.triggerEvents,
+      ),
+      branchPrefix: repoSettings?.branch_prefix ?? repository.branchPrefix ?? defaultBranchPrefix(repository.githubRepo),
+      ...(repoSettings?.configPath ? { repoSettingsPath: repoSettings.configPath } : {}),
+      github: {
+        repoFullName: repository.githubRepo,
+        ...(repository.github?.base_branch ? { baseBranch: repository.github.base_branch } : {}),
+        ...(repository.github?.webhook_secret ? { webhookSecret: repository.github.webhook_secret } : {}),
+        ...(repository.github?.merge_queue_label ? { mergeQueueLabel: repository.github.merge_queue_label } : {}),
+        ...(repository.github?.merge_queue_check_name ? { mergeQueueCheckName: repository.github.merge_queue_check_name } : {}),
+      },
+    };
+  });
+
+  const legacyProjects = parsed.projects.map((project) => {
+        const repoPath = ensureAbsolutePath(project.repo_path);
+        const repoSettings = readRepoSettings(repoPath, env);
+        const trustedActors = project.trusted_actors;
+        return {
+          id: project.id,
+          repoPath,
+          worktreeRoot: ensureAbsolutePath(project.worktree_root ?? defaultWorktreeRoot(project.id)),
+          ...(trustedActors
+            ? {
+                trustedActors: {
+                  ids: trustedActors.ids,
+                  names: trustedActors.names,
+                  emails: trustedActors.emails,
+                  emailDomains: trustedActors.email_domains,
+                },
+              }
+            : {}),
+          issueKeyPrefixes: project.issue_key_prefixes,
+          linearTeamIds: project.linear_team_ids,
+          allowLabels: project.allow_labels,
+          reviewChecks: project.review_checks,
+          gateChecks: project.gate_checks,
+          triggerEvents: normalizeTriggerEvents(
+            parsed.linear.oauth.actor,
+            (repoSettings?.trigger_events as AppConfig["projects"][number]["triggerEvents"] | undefined) ??
+              (project.trigger_events as AppConfig["projects"][number]["triggerEvents"] | undefined),
+          ),
+          branchPrefix: repoSettings?.branch_prefix ?? project.branch_prefix ?? defaultBranchPrefix(project.id),
+          ...(repoSettings?.configPath ? { repoSettingsPath: repoSettings.configPath } : {}),
+          ...(project.github ? {
+            github: {
+              ...(project.github.webhook_secret ? { webhookSecret: project.github.webhook_secret } : {}),
+              ...(project.github.repo_full_name ? { repoFullName: project.github.repo_full_name } : {}),
+              ...(project.github.base_branch ? { baseBranch: project.github.base_branch } : {}),
+            },
+          } : {}),
+        };
+      });
+  const repositoryPaths = new Set(repositoryProjects.map((project) => project.repoPath));
+  const derivedProjects = [...repositoryProjects, ...legacyProjects.filter((project) => !repositoryPaths.has(project.repoPath))];
 
   const config: AppConfig = {
     server: {
@@ -451,45 +572,18 @@ export function loadConfig(
         experimentalRawEvents: parsed.runner.codex.experimental_raw_events,
       },
     },
-    projects: parsed.projects.map((project) => {
-      const repoPath = ensureAbsolutePath(project.repo_path);
-      const repoSettings = readRepoSettings(repoPath, env);
-      const trustedActors = project.trusted_actors;
-      return {
-        id: project.id,
-        repoPath,
-        worktreeRoot: ensureAbsolutePath(project.worktree_root ?? defaultWorktreeRoot(project.id)),
-        ...(trustedActors
-          ? {
-              trustedActors: {
-                ids: trustedActors.ids,
-                names: trustedActors.names,
-                emails: trustedActors.emails,
-                emailDomains: trustedActors.email_domains,
-              },
-            }
-          : {}),
-        issueKeyPrefixes: project.issue_key_prefixes,
-        linearTeamIds: project.linear_team_ids,
-        allowLabels: project.allow_labels,
-        reviewChecks: project.review_checks,
-        gateChecks: project.gate_checks,
-        triggerEvents: normalizeTriggerEvents(
-          parsed.linear.oauth.actor,
-          (repoSettings?.trigger_events as AppConfig["projects"][number]["triggerEvents"] | undefined) ??
-            (project.trigger_events as AppConfig["projects"][number]["triggerEvents"] | undefined),
-        ),
-        branchPrefix: repoSettings?.branch_prefix ?? project.branch_prefix ?? defaultBranchPrefix(project.id),
-        ...(repoSettings?.configPath ? { repoSettingsPath: repoSettings.configPath } : {}),
-        ...(project.github ? {
-          github: {
-            ...(project.github.webhook_secret ? { webhookSecret: project.github.webhook_secret } : {}),
-            ...(project.github.repo_full_name ? { repoFullName: project.github.repo_full_name } : {}),
-            ...(project.github.base_branch ? { baseBranch: project.github.base_branch } : {}),
-          },
-        } : {}),
-      };
-    }),
+    repos: {
+      root: reposRoot,
+    },
+    repositories: repositories.map((repository) => ({
+      githubRepo: repository.githubRepo,
+      localPath: repository.localPath,
+      ...(repository.workspace ? { workspace: repository.workspace } : {}),
+      linearTeamIds: repository.linearTeamIds,
+      linearProjectIds: repository.linearProjectIds,
+      issueKeyPrefixes: repository.issueKeyPrefixes,
+    })),
+    projects: derivedProjects,
     secretSources: {
       "linear-webhook-secret": rWebhookSecret.source,
       "token-encryption-key": rTokenEncryptionKey.source,
@@ -554,8 +648,16 @@ function validateConfigSemantics(
   }
 
   const projectIds = new Set<string>();
+  const githubRepos = new Set<string>();
   const issuePrefixes = new Map<string, string>();
   const linearTeamIds = new Map<string, string>();
+
+  for (const repository of config.repositories) {
+    if (githubRepos.has(repository.githubRepo)) {
+      throw new Error(`Duplicate repository github_repo: ${repository.githubRepo}`);
+    }
+    githubRepos.add(repository.githubRepo);
+  }
 
   for (const project of config.projects) {
     if (projectIds.has(project.id)) {

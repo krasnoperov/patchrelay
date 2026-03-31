@@ -61,7 +61,7 @@ test("merge-steward help shows grouped repo, service, and queue commands", async
   const stdout = createBufferStream();
   assert.equal(await runCli([], { stdout: stdout.stream, stderr: createBufferStream().stream }), 0);
   const text = stdout.read();
-  assert.match(text, /attach <id> <owner\/repo>/);
+  assert.match(text, /attach <owner\/repo>/);
   assert.match(text, /service status \[--json\]/);
   assert.match(text, /queue show --repo <id>/);
 });

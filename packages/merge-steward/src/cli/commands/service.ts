@@ -27,7 +27,7 @@ export async function handleService(parsed: ParsedArgs, stdout: Output, runComma
     writeOutput(
       stdout,
       [
-        `Systemd unit template: ${result.unitTemplatePath} (${result.status})`,
+        `Systemd unit: ${result.unitPath} (${result.status})`,
         reload.ok ? "systemd daemon-reload completed." : `systemd daemon-reload failed: ${reload.error}`,
       ].join("\n") + "\n",
     );

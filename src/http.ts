@@ -487,6 +487,22 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
       return reply.send({ ok: true, installations: service.listLinearInstallations() });
     });
 
+    app.get("/api/linear/workspaces", async (_request, reply) => {
+      return reply.send({ ok: true, workspaces: service.listLinearWorkspaces() });
+    });
+
+    app.post("/api/linear/workspaces/sync", async (request, reply) => {
+      const workspace = getQueryParam(request, "workspace");
+      const result = await service.syncLinearWorkspace(workspace ?? undefined);
+      return reply.send({ ok: true, ...result });
+    });
+
+    app.delete("/api/linear/workspaces/:workspace", async (request, reply) => {
+      const { workspace } = request.params as { workspace: string };
+      const result = service.disconnectLinearWorkspace(workspace);
+      return reply.send({ ok: true, ...result });
+    });
+
     app.get("/api/oauth/linear/start", async (request, reply) => {
       const projectId = getQueryParam(request, "projectId");
       const result = await service.createLinearOAuthStart(projectId ? { projectId } : undefined);

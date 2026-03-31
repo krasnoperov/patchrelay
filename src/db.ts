@@ -9,6 +9,7 @@ import type {
 import type { FactoryState, RunType } from "./factory-state.ts";
 import { LinearInstallationStore } from "./db/linear-installation-store.ts";
 import { OperatorFeedStore } from "./db/operator-feed-store.ts";
+import { RepositoryLinkStore } from "./db/repository-link-store.ts";
 import { runPatchRelayMigrations } from "./db/migrations.ts";
 import { SqliteConnection, isoNow, type DatabaseConnection } from "./db/shared.ts";
 
@@ -16,6 +17,7 @@ export class PatchRelayDatabase {
   readonly connection: DatabaseConnection;
   readonly linearInstallations: LinearInstallationStore;
   readonly operatorFeed: OperatorFeedStore;
+  readonly repositories: RepositoryLinkStore;
 
   constructor(databasePath: string, wal: boolean) {
     this.connection = new SqliteConnection(databasePath);
@@ -25,6 +27,7 @@ export class PatchRelayDatabase {
     }
     this.linearInstallations = new LinearInstallationStore(this.connection);
     this.operatorFeed = new OperatorFeedStore(this.connection);
+    this.repositories = new RepositoryLinkStore(this.connection);
   }
 
   runMigrations(): void {

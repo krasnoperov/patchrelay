@@ -26,7 +26,7 @@ export class GitHubActionsRunner implements CIRunner {
       "api",
       `repos/${this.repoFullName}/commits/${sha}/check-runs`,
       "--jq", ".check_runs",
-    ], { allowNonZero: true });
+    ], { allowNonZero: true, githubRepoFullName: this.repoFullName });
 
     if (result.exitCode !== 0) return "pending";
 
@@ -66,7 +66,7 @@ export class GitHubActionsRunner implements CIRunner {
       "api",
       `repos/${this.repoFullName}/git/ref/heads/${encodeURIComponent(baseBranch)}`,
       "--jq", ".object.sha",
-    ], { allowNonZero: true });
+    ], { allowNonZero: true, githubRepoFullName: this.repoFullName });
 
     if (result.exitCode !== 0 || !result.stdout.trim()) return "pending";
     return this.getStatus(`sha:${result.stdout.trim()}`);

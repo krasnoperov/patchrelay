@@ -166,6 +166,25 @@ export class LinearInstallationStore {
     return rows.map((row) => mapLinearInstallation(row));
   }
 
+  findLinearInstallationByWorkspace(query: string): LinearInstallationRecord | undefined {
+    const normalized = query.trim().toLowerCase();
+    if (!normalized) return undefined;
+    const row = this.connection
+      .prepare(
+        `
+        SELECT *
+        FROM linear_installations
+        WHERE LOWER(COALESCE(workspace_key, '')) = ?
+           OR LOWER(COALESCE(workspace_name, '')) = ?
+           OR LOWER(COALESCE(workspace_id, '')) = ?
+        ORDER BY updated_at DESC, id DESC
+        LIMIT 1
+        `,
+      )
+      .get(normalized, normalized, normalized) as Record<string, unknown> | undefined;
+    return row ? mapLinearInstallation(row) : undefined;
+  }
+
   linkProjectInstallation(projectId: string, installationId: number): ProjectInstallationRecord {
     const now = isoNow();
     this.connection
@@ -200,6 +219,14 @@ export class LinearInstallationStore {
 
   unlinkProjectInstallation(projectId: string): void {
     this.connection.prepare("DELETE FROM project_installations WHERE project_id = ?").run(projectId);
+  }
+
+  unlinkInstallationProjects(installationId: number): void {
+    this.connection.prepare("DELETE FROM project_installations WHERE installation_id = ?").run(installationId);
+  }
+
+  deleteLinearInstallation(installationId: number): void {
+    this.connection.prepare("DELETE FROM linear_installations WHERE id = ?").run(installationId);
   }
 
   getLinearInstallationForProject(projectId: string): LinearInstallationRecord | undefined {

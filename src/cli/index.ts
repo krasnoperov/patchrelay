@@ -2,12 +2,12 @@ import { loadConfig, type ConfigLoadProfile } from "../config.ts";
 import type { AppConfig } from "../types.ts";
 import { getBuildInfo } from "../build-info.ts";
 import { assertKnownFlags, hasHelpFlag, parseArgs, resolveCommand } from "./args.ts";
-import { handleConnectCommand, handleInstallationsCommand } from "./commands/connect.ts";
 import { handleFeedCommand } from "./commands/feed.ts";
 import {
   handleIssueCommand,
 } from "./commands/issues.ts";
-import { handleAttachCommand, handleReposCommand } from "./commands/repos.ts";
+import { handleLinearCommand } from "./commands/linear.ts";
+import { handleRepoCommand } from "./commands/repo.ts";
 import { handleInitCommand, handleServiceCommand } from "./commands/setup.ts";
 import type { RunCliOptions } from "./command-types.ts";
 import type { CliDataAccess } from "./data.ts";
@@ -25,11 +25,11 @@ function getCommandConfigProfile(command: string): ConfigLoadProfile {
     case "doctor":
     case "service":
       return "doctor";
-    case "connect":
-    case "installations":
+    case "linear":
     case "feed":
     case "dashboard":
       return "operator_cli";
+    case "repo":
     case "issue":
       return "cli";
     default:
@@ -83,11 +83,44 @@ function validateFlags(command: string, commandArgs: string[], parsed: ReturnTyp
     case "init":
       assertKnownFlags(parsed, command, ["force", "json", "public-base-url"]);
       return;
+    case "linear":
+      switch (commandArgs[0]) {
+        case undefined:
+        case "list":
+          assertKnownFlags(parsed, "linear", ["json"]);
+          return;
+        case "connect":
+          assertKnownFlags(parsed, "linear", ["no-open", "timeout", "json"]);
+          return;
+        case "sync":
+        case "disconnect":
+          assertKnownFlags(parsed, "linear", ["json"]);
+          return;
+        default:
+          assertKnownFlags(parsed, "linear", []);
+          return;
+      }
+    case "repo":
+      switch (commandArgs[0]) {
+        case undefined:
+        case "list":
+        case "show":
+        case "unlink":
+        case "sync":
+          assertKnownFlags(parsed, "repo", ["json"]);
+          return;
+        case "link":
+          assertKnownFlags(parsed, "repo", ["workspace", "team", "project", "prefix", "path", "json"]);
+          return;
+        default:
+          assertKnownFlags(parsed, "repo", []);
+          return;
+      }
     case "attach":
-      assertKnownFlags(parsed, "attach", ["path", "prefix", "team", "no-auth", "no-open", "timeout", "json"]);
-      return;
     case "repos":
-      assertKnownFlags(parsed, "repos", ["json"]);
+    case "connect":
+    case "installations":
+      throw new CliUsageError(`${command} has been removed. Use \`patchrelay linear ...\` and \`patchrelay repo ...\` instead.`);
       return;
     case "service":
       if (commandArgs[0] === "install") {
@@ -107,12 +140,6 @@ function validateFlags(command: string, commandArgs: string[], parsed: ReturnTyp
         return;
       }
       assertKnownFlags(parsed, "service", []);
-      return;
-    case "connect":
-      assertKnownFlags(parsed, command, ["repo", "no-open", "timeout", "json"]);
-      return;
-    case "installations":
-      assertKnownFlags(parsed, command, ["json"]);
       return;
     case "feed":
       assertKnownFlags(parsed, command, ["follow", "limit", "issue", "repo", "kind", "stage", "status", "workflow", "json"]);
@@ -154,8 +181,8 @@ export async function runCli(
   const json = parsed.flags.get("json") === true;
   if (command === "help") {
     const topic = commandArgs[0];
-    if (topic === "attach" || topic === "repos" || topic === "issue" || topic === "service") {
-      writeOutput(stdout, `${helpTextFor(topic === "attach" ? "repos" : topic)}\n`);
+    if (topic === "linear" || topic === "repo" || topic === "issue" || topic === "service") {
+      writeOutput(stdout, `${helpTextFor(topic)}\n`);
       return 0;
     }
     if (topic) {
@@ -172,8 +199,10 @@ export async function runCli(
   }
   if (hasHelpFlag(parsed)) {
     const helpTopic =
-      command === "attach" || command === "repos"
-        ? "repos"
+      command === "linear"
+        ? "linear"
+        : command === "repo"
+          ? "repo"
         : command === "issue" || command === "service"
           ? command
           : "root";
@@ -233,15 +262,13 @@ export async function runCli(
     }
   }
 
-  if (command === "attach") {
+  if (command === "linear") {
     try {
-      return await handleAttachCommand({
+      return await handleLinearCommand({
         commandArgs,
         parsed,
         json,
         stdout,
-        runInteractive,
-        runCommand,
         ...(options ? { options } : {}),
       });
     } catch (error) {
@@ -254,13 +281,15 @@ export async function runCli(
     }
   }
 
-  if (command === "repos") {
+  if (command === "repo") {
     try {
-      return await handleReposCommand({
+      return await handleRepoCommand({
         commandArgs,
         parsed,
         json,
         stdout,
+        runCommand,
+        ...(options ? { options } : {}),
       });
     } catch (error) {
       if (error instanceof CliUsageError) {
@@ -314,34 +343,9 @@ export async function runCli(
       });
     }
 
-    if (command === "connect") {
-      const operatorData = await ensureConnectDataAccess(data, config);
-      if (!data) {
-        data = operatorData;
-        ownsData = true;
-      }
-      return await handleConnectCommand({
-        parsed,
-        json,
-        stdout,
-        config,
-        data: operatorData,
-        ...(options ? { options } : {}),
-      });
-    }
-
-    if (command === "installations") {
-      const operatorData = await ensureInstallationsDataAccess(data, config);
-      if (!data) {
-        data = operatorData;
-        ownsData = true;
-      }
-      return await handleInstallationsCommand({
-        json,
-        stdout,
-        data: operatorData,
-        config,
-      });
+    if (command === "attach" || command === "repos" || command === "connect" || command === "installations") {
+      writeOutput(stderr, `${command} has been removed. Use \`patchrelay linear ...\` and \`patchrelay repo ...\` instead.\n`);
+      return 1;
     }
 
     if (command === "feed") {
@@ -404,36 +408,8 @@ async function ensureIssueDataAccess(
   return await createCliDataAccess(config);
 }
 
-async function ensureConnectDataAccess(
-  data: RunCliOptions["data"],
-  config: AppConfig,
-): Promise<CliOperatorDataAccess> {
-  if (data) {
-    if (hasConnectDataAccess(data)) {
-      return data;
-    }
-    throw new Error("The connect command requires HTTP-backed OAuth CLI data access.");
-  }
-
-  return await createCliOperatorDataAccess(config);
-}
-
 function isIssueDataAccess(data: RunCliOptions["data"]): data is CliDataAccess {
   return !!data && typeof data === "object" && "inspect" in data && typeof data.inspect === "function";
-}
-
-async function ensureInstallationsDataAccess(
-  data: RunCliOptions["data"],
-  config: AppConfig,
-): Promise<CliOperatorDataAccess> {
-  if (data) {
-    if (hasInstallationsDataAccess(data)) {
-      return data as CliOperatorDataAccess;
-    }
-    throw new Error("The installations command requires HTTP-backed installation data access.");
-  }
-
-  return await createCliOperatorDataAccess(config);
 }
 
 async function ensureFeedListDataAccess(
@@ -448,14 +424,6 @@ async function ensureFeedListDataAccess(
   }
 
   return await createCliOperatorDataAccess(config);
-}
-
-function hasConnectDataAccess(data: RunCliOptions["data"]): data is CliOperatorDataAccess {
-  return !!data && typeof data === "object" && "connect" in data && typeof data.connect === "function";
-}
-
-function hasInstallationsDataAccess(data: RunCliOptions["data"]): boolean {
-  return !!data && typeof data === "object" && "listInstallations" in data && typeof data.listInstallations === "function";
 }
 
 async function ensureFeedFollowDataAccess(
