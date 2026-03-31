@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.29.1](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.29.0...patchrelay-v0.29.1) (2026-03-31)
+
+
+### Bug Fixes
+
+* parse release workflow events in shell ([64724ff](https://github.com/krasnoperov/patchrelay/commit/64724ffea08f5f6666d1f33e134541941e598fd0))
+* parse release workflow events in shell ([4ce5493](https://github.com/krasnoperov/patchrelay/commit/4ce54938b18848c6de4669b17c71ea86e282446b))
+* publish release packages when versions are missing ([7279aab](https://github.com/krasnoperov/patchrelay/commit/7279aab927c494a70578f1eb1e6d4c2b2595ba51))
+* publish release packages when versions are missing ([7811964](https://github.com/krasnoperov/patchrelay/commit/7811964f279c001a650140710c30979350401f83))
+* use github.event inputs in release workflow ([8b8278c](https://github.com/krasnoperov/patchrelay/commit/8b8278c3cf2cd6fae11d76ec5010daa19c8b4f86))
+* use github.event inputs in release workflow ([a522d56](https://github.com/krasnoperov/patchrelay/commit/a522d5614d2e15de39350aa06ea3729a9de7a7b5))
+
 ## [0.29.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.28.0...patchrelay-v0.29.0) (2026-03-31)
 
 
