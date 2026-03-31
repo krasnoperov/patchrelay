@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.1.0...merge-steward-v0.2.0) (2026-03-30)
+
+
+### Features
+
+* multi-repo merge-steward server with unified webhook endpoint ([#203](https://github.com/krasnoperov/patchrelay/issues/203)) ([0f9e237](https://github.com/krasnoperov/patchrelay/commit/0f9e237c9d90480d44eb4e43d91c8be2f2dd338a))
+
 ## [0.1.0](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.0.1...merge-steward-v0.1.0) (2026-03-30)
 
 
