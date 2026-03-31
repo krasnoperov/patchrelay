@@ -65,7 +65,7 @@ export function validateFlags(parsed: ParsedArgs): void {
       assertKnownFlags(parsed, "root", []);
       return;
     case "attach":
-      assertKnownFlags(parsed, "repos", ["base-branch", "required-check", "label", "json"]);
+      assertKnownFlags(parsed, "repos", ["base-branch", "required-check", "label", "merge-queue-check-name", "json"]);
       return;
     case "repos":
       assertKnownFlags(parsed, "repos", ["json"]);

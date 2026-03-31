@@ -62,7 +62,7 @@ test("merge-steward help shows grouped repo, service, and queue commands", async
   assert.equal(await runCli([], { stdout: stdout.stream, stderr: createBufferStream().stream }), 0);
   const text = stdout.read();
   assert.match(text, /attach <id> <owner\/repo>/);
-  assert.match(text, /service status <id>/);
+  assert.match(text, /service status \[--json\]/);
   assert.match(text, /queue show --repo <id>/);
 });
 
@@ -103,7 +103,17 @@ test("merge-steward init and repo commands manage bootstrap state with explicit 
 
         const repoOut = createBufferStream();
         assert.equal(
-          await runCli(["attach", "app", "owner/repo", "--base-branch", "main", "--required-check", "test,lint"], {
+          await runCli([
+            "attach",
+            "app",
+            "owner/repo",
+            "--base-branch",
+            "main",
+            "--required-check",
+            "test,lint",
+            "--merge-queue-check-name",
+            "custom/queue-eviction",
+          ], {
             stdout: repoOut.stream,
             stderr: createBufferStream().stream,
             runCommand,
@@ -112,6 +122,7 @@ test("merge-steward init and repo commands manage bootstrap state with explicit 
         );
         assert.match(repoOut.read(), /Attached repo app for owner\/repo/);
         assert.match(repoOut.read(), /Restarted merge-steward\.service/);
+        assert.match(repoOut.read(), /Queue eviction check: custom\/queue-eviction/);
         assert.deepEqual(commands.slice(1), [
           "sudo systemctl reload-or-restart merge-steward.service",
         ]);
@@ -129,6 +140,7 @@ test("merge-steward init and repo commands manage bootstrap state with explicit 
         assert.equal(inspected.repoId, "app");
         assert.equal(inspected.repoFullName, "owner/repo");
         assert.equal(inspected.webhookUrl, "https://queue.example.com/webhooks/github");
+        assert.equal(inspected.mergeQueueCheckName, "custom/queue-eviction");
 
         const statusOut = createBufferStream();
         assert.equal(
@@ -158,6 +170,7 @@ test("merge-steward init and repo commands manage bootstrap state with explicit 
 
     const repoConfig = readFileSync(path.join(configHome, "merge-steward", "repos", "app.json"), "utf8");
     assert.match(repoConfig, /"repoFullName": "owner\/repo"/);
+    assert.match(repoConfig, /"mergeQueueCheckName": "custom\/queue-eviction"/);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

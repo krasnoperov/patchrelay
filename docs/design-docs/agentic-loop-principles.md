@@ -58,6 +58,17 @@ Design implications:
 - reactive runs should receive focused context for the failure they are fixing
 - the system should prefer compact, task-relevant context over ever-growing prompt history
 
+## Progressive Disclosure Beats Monolithic Instructions
+
+The agent should enter through a small, stable map and discover deeper guidance as needed.
+PatchRelay should therefore optimize for linked, versioned repository knowledge rather than giant catch-all instruction files.
+
+Design implications:
+
+- short root entrypoints should point to deeper design and operating docs
+- historical documents should be archived clearly rather than mixed with current guidance
+- workflow-specific prompts should pull only the guidance needed for that run type
+
 ## Distinct Loop Types Beat One Generic Run
 
 PatchRelay should keep different loop types explicit:
@@ -101,6 +112,16 @@ Design implications:
 
 PatchRelay should continue to treat review, CI, and queue behavior as authoritative external verification surfaces.
 
+## Validation Surfaces Should Be Agent-Legible
+
+Verification gets more reliable when the agent can inspect concrete evidence in the current workspace instead of inferring from vague summaries.
+
+Design implications:
+
+- failure context should preserve the exact review, check, or queue evidence that triggered the run
+- operator-facing summaries should compress state without hiding the underlying verification facts
+- repository-local checks, artifacts, and logs should be easy to relate back to the active issue worktree
+
 ## Workspaces Should Bound Agent Action
 
 A practical agent loop works best when the agent acts inside a clear workspace boundary.
@@ -133,6 +154,17 @@ That means:
 
 This is especially important for future agent maintainability.
 If an agent cannot rediscover the rules from the repository, the system becomes brittle.
+
+## Invariants And Cleanup Should Compound
+
+As agent throughput rises, weak patterns spread quickly unless the repository pushes back mechanically.
+PatchRelay should treat cleanup and guidance freshness as part of the operating model, not as occasional manual polish.
+
+Design implications:
+
+- recurring documentation cleanup is a valid maintenance workflow
+- repeated review feedback should graduate into durable docs or tooling
+- quality rules that matter often should become linters, checks, or templates where practical
 
 ## Summaries And State Matter More Than Raw Transcript Growth
 

@@ -89,6 +89,7 @@ The steward resolves secrets in this order:
   "requiredChecks": ["test", "lint"],
   "pollIntervalMs": 30000,
   "admissionLabel": "queue",
+  "mergeQueueCheckName": "merge-steward/queue",
   "webhookPath": "/webhooks/github/queue/app",
   "server": {
     "bind": "127.0.0.1",
@@ -111,6 +112,7 @@ The steward resolves secrets in this order:
 | `requiredChecks` | Check names that must pass for admission (empty = any green) |
 | `pollIntervalMs` | Reconciliation loop interval |
 | `admissionLabel` | GitHub label that triggers queue admission |
+| `mergeQueueCheckName` | GitHub check run name emitted on eviction |
 | `webhookPath` | Repo-specific webhook endpoint path |
 
 ### GitHub Webhook
@@ -218,7 +220,7 @@ queued → preparing_head → validating → merging → merged
 The steward and PatchRelay are independent services that communicate through GitHub:
 
 - PatchRelay adds the `queue` label when an issue reaches `awaiting_queue`
-- The steward merges the PR or evicts it (creating a `merge-steward/queue` check run)
+- The steward merges the PR or evicts it (creating the configured queue eviction check run, default `merge-steward/queue`)
 - PatchRelay watches for that check run failure and triggers `queue_repair`
 - After repair, PatchRelay re-adds the `queue` label
 - The steward re-admits the PR

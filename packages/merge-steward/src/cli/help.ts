@@ -58,6 +58,8 @@ function reposHelpText(): string {
     "  --base-branch <branch>       Base branch to land into (default: main)",
     "  --required-check <checks>    Comma-separated required check names",
     "  --label <label>              Admission label (default: queue)",
+    "  --merge-queue-check-name <name>",
+    "                               Eviction check run name (default: merge-steward/queue)",
     "  --json                       Emit structured JSON",
     "",
     "Examples:",

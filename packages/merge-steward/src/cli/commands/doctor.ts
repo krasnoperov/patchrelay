@@ -96,6 +96,11 @@ export async function handleDoctor(parsed: ParsedArgs, stdout: Output): Promise<
         mkdirSync(path.dirname(config.database.path), { recursive: true });
         mkdirSync(path.dirname(config.clonePath), { recursive: true });
         checks.push({ status: "pass", scope: `repo:${repoId}`, message: `Repo config is valid for ${config.repoFullName}` });
+        checks.push({
+          status: "pass",
+          scope: `repo:${repoId}:merge-queue-check`,
+          message: `Queue eviction check run is ${config.mergeQueueCheckName}`,
+        });
         checks.push(checkPath(`repo:${repoId}:database-dir`, path.dirname(config.database.path), true));
         checks.push(checkPath(`repo:${repoId}:clone-parent`, path.dirname(config.clonePath), true));
         if (githubToken.value) {

@@ -1,6 +1,7 @@
 import type { FactoryState, RunType } from "./factory-state.ts";
 
 export type RunStatus = "queued" | "running" | "completed" | "failed" | "released";
+export type GitHubFailureSource = "branch_ci" | "queue_eviction";
 
 export interface IssueRecord {
   id: number;
@@ -26,6 +27,12 @@ export interface IssueRecord {
   prState?: string | undefined;
   prReviewState?: string | undefined;
   prCheckStatus?: string | undefined;
+  lastGitHubFailureSource?: GitHubFailureSource | undefined;
+  lastGitHubFailureCheckName?: string | undefined;
+  lastGitHubFailureCheckUrl?: string | undefined;
+  lastGitHubFailureAt?: string | undefined;
+  lastQueueSignalAt?: string | undefined;
+  lastQueueIncidentJson?: string | undefined;
   ciRepairAttempts: number;
   queueRepairAttempts: number;
   reviewFixAttempts: number;

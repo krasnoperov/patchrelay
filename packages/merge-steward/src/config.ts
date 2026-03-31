@@ -4,6 +4,8 @@ import path from "node:path";
 import { resolveSecret } from "./resolve-secret.ts";
 import { getDefaultRuntimeEnvPath, getDefaultServiceEnvPath } from "./runtime-paths.ts";
 
+export const DEFAULT_MERGE_QUEUE_CHECK_NAME = "merge-steward/queue";
+
 export const stewardConfigSchema = z.object({
   repoId: z.string().min(1),
   repoFullName: z.string().min(1),
@@ -30,6 +32,7 @@ export const stewardConfigSchema = z.object({
     level: z.enum(["debug", "info", "warn", "error"]).default("info"),
   }).default({ level: "info" }),
   admissionLabel: z.string().default("queue"),
+  mergeQueueCheckName: z.string().default(DEFAULT_MERGE_QUEUE_CHECK_NAME),
   /** Branch name patterns to exclude from admission (glob-style). */
   excludeBranches: z.array(z.string()).default(["release-please--*"]),
   webhookSecret: z.string().optional(),

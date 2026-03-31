@@ -202,6 +202,50 @@ test("doctor with --repo validates repo config", async () => {
   }
 });
 
+test("doctor reports the configured queue eviction check", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "ms-doctor-queue-check-"));
+  try {
+    await withEnv(
+      {
+        XDG_CONFIG_HOME: path.join(baseDir, ".config"),
+        XDG_STATE_HOME: path.join(baseDir, ".state"),
+        XDG_DATA_HOME: path.join(baseDir, ".share"),
+        MERGE_STEWARD_SYSTEMD_DIR: path.join(baseDir, "systemd"),
+        MERGE_STEWARD_WEBHOOK_SECRET: undefined,
+        MERGE_STEWARD_GITHUB_TOKEN: undefined,
+      },
+      async () => {
+        await runCli(["init", "queue.example.com"], {
+          stdout: createBufferStream().stream,
+          stderr: createBufferStream().stream,
+          runCommand: noop,
+        });
+        await runCli(["attach", "app", "owner/repo", "--merge-queue-check-name", "custom/queue-eviction"], {
+          stdout: createBufferStream().stream,
+          stderr: createBufferStream().stream,
+          runCommand: noop,
+        });
+
+        const stdout = createBufferStream();
+        await runCli(["doctor", "--repo", "app", "--json"], {
+          stdout: stdout.stream,
+          stderr: createBufferStream().stream,
+        });
+        const result = JSON.parse(stdout.read()) as {
+          ok: boolean;
+          checks: Array<{ status: string; scope: string; message: string }>;
+        };
+        const queueCheck = result.checks.find((check) => check.scope === "repo:app:merge-queue-check");
+        assert.ok(queueCheck);
+        assert.equal(queueCheck?.status, "pass");
+        assert.match(queueCheck?.message ?? "", /custom\/queue-eviction/);
+      },
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("doctor --repo with nonexistent repo reports failure", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "ms-doctor-norepo-"));
   try {

@@ -23,6 +23,10 @@ export interface NormalizedGitHubEvent {
   checkStatus?: "pending" | "success" | "failure" | undefined;
   checkName?: string | undefined;
   checkUrl?: string | undefined;
+  checkDetailsUrl?: string | undefined;
+  checkOutputTitle?: string | undefined;
+  checkOutputSummary?: string | undefined;
+  checkOutputText?: string | undefined;
   reviewBody?: string | undefined;
   reviewerName?: string | undefined;
   mergeGroupFailureReason?: string | undefined;
@@ -58,7 +62,13 @@ export interface GitHubWebhookPayload {
     conclusion: string | null;
     name: string;
     html_url: string;
+    details_url?: string;
     head_sha: string;
+    output?: {
+      title?: string;
+      summary?: string;
+      text?: string;
+    };
     check_suite?: {
       head_branch: string | null;
       pull_requests: Array<{ number: number; head: { ref: string } }>;

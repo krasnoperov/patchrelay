@@ -163,6 +163,10 @@ function normalizeCheckRunEvent(payload: GitHubWebhookPayload, repoFullName: str
     checkStatus: passed ? "success" : "failure",
     checkName: run.name,
     checkUrl: run.html_url,
+    checkDetailsUrl: run.details_url,
+    checkOutputTitle: run.output?.title,
+    checkOutputSummary: run.output?.summary,
+    checkOutputText: run.output?.text,
     eventSource: "check_run",
   };
 }

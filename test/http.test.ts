@@ -550,6 +550,15 @@ test("public agent session status page validates token and exposes operator sess
                 factoryState: "awaiting_queue",
                 prNumber: 42,
                 prReviewState: "approved",
+                queueProtocol: {
+                  admissionLabel: "queue",
+                  evictionCheckName: "merge-steward/queue",
+                  lastQueueSignalAt: "2026-03-17T12:08:00.000Z",
+                  lastIncidentId: "incident-42",
+                  lastIncidentUrl: "https://queue.example.com/queue/incidents/incident-42",
+                  lastIncidentFailureClass: "integration_conflict",
+                  lastIncidentSummary: "PR #42 was evicted from the merge queue.",
+                },
               },
               activeRun: { runType: "implementation", status: "running" },
               latestRun: { runType: "review_fix", status: "completed" },
@@ -637,6 +646,9 @@ test("public agent session status page validates token and exposes operator sess
     assert.match(page.body, /awaiting_queue/);
     assert.match(page.body, /Recent Stages/);
     assert.match(page.body, /thread-1/);
+    assert.match(page.body, /incident-42/);
+    assert.match(page.body, /integration_conflict/);
+    assert.match(page.body, /PR #42 was evicted from the merge queue\./);
 
     const unauthorizedHelper = await app.inject({
       method: "GET",
