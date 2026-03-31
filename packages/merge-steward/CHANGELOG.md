@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.4.0](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.3.0...merge-steward-v0.4.0) (2026-03-31)
+
+
+### Features
+
+* add GitHub App auth for merge-steward ([1baa29b](https://github.com/krasnoperov/patchrelay/commit/1baa29b8fff61408251247f6d10c6e4d1023da48))
+* move merge-steward GitHub discovery behind the service ([5f8fe46](https://github.com/krasnoperov/patchrelay/commit/5f8fe46171b0a55eb99c27d7f3ed70ad800191f4))
+* simplify merge-steward setup and service ops ([d977160](https://github.com/krasnoperov/patchrelay/commit/d9771604468b7bd16488111dcc63d4856d73bcde))
+* switch patchrelay to workspace and repo linking ([c72aefe](https://github.com/krasnoperov/patchrelay/commit/c72aefea3cb5621961c3e86a6b4bbaea28bda5b8))
+
 ## [0.3.0](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.2.0...merge-steward-v0.3.0) (2026-03-31)
 
 

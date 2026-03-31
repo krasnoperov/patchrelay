@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.29.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.28.0...patchrelay-v0.29.0) (2026-03-31)
+
+
+### Features
+
+* move merge-steward GitHub discovery behind the service ([5f8fe46](https://github.com/krasnoperov/patchrelay/commit/5f8fe46171b0a55eb99c27d7f3ed70ad800191f4))
+* simplify merge-steward setup and service ops ([d977160](https://github.com/krasnoperov/patchrelay/commit/d9771604468b7bd16488111dcc63d4856d73bcde))
+* switch patchrelay to workspace and repo linking ([c72aefe](https://github.com/krasnoperov/patchrelay/commit/c72aefea3cb5621961c3e86a6b4bbaea28bda5b8))
+* switch patchrelay to workspace and repo linking ([53534ba](https://github.com/krasnoperov/patchrelay/commit/53534bab04bf0eae58fb1dc5948e36603419732a))
+
+
+### Bug Fixes
+
+* create repo-link db directories on demand ([f81d489](https://github.com/krasnoperov/patchrelay/commit/f81d48976319a1b8d729a97e14d456f42932584a))
+* satisfy lint in workspace linking tests ([1a731e6](https://github.com/krasnoperov/patchrelay/commit/1a731e6978300b97ca5fdacbccd44f4fe250908c))
+* serialize repo linking cli tests ([47f4002](https://github.com/krasnoperov/patchrelay/commit/47f40021f7e1e305a6771af1e113a2c8d649ecf2))
+
 ## [0.28.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.27.0...patchrelay-v0.28.0) (2026-03-31)
 
 
