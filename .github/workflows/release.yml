@@ -4,6 +4,13 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
+    inputs:
+      publish_unpublished:
+        description: Publish current package versions to npm when they are missing from the registry
+        required: false
+        type: boolean
+        default: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -45,8 +52,67 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
+      - name: Compute publish plan
+        id: publish-plan
+        env:
+          ROOT_RELEASE_CREATED: ${{ steps.release.outputs.release_created }}
+          STEWARD_RELEASE_CREATED: ${{ steps.release.outputs['packages/merge-steward--release_created'] }}
+          MANUAL_PUBLISH_UNPUBLISHED: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_unpublished }}
+          IS_RELEASE_COMMIT: ${{ github.event_name == 'push' && startsWith(github.event.head_commit.message, 'chore: release ') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          root_version="$(node -p "require('./package.json').version")"
+          steward_version="$(node -p "require('./packages/merge-steward/package.json').version")"
+
+          version_exists() {
+            local package_name="$1"
+            local version="$2"
+            npm view "${package_name}@${version}" version >/dev/null 2>&1
+          }
+
+          root_missing=false
+          steward_missing=false
+          if ! version_exists patchrelay "${root_version}"; then
+            root_missing=true
+          fi
+          if ! version_exists merge-steward "${steward_version}"; then
+            steward_missing=true
+          fi
+
+          root_should_publish=false
+          steward_should_publish=false
+
+          if [[ "${ROOT_RELEASE_CREATED}" == "true" ]]; then
+            root_should_publish=true
+          elif [[ "${root_missing}" == "true" && ( "${IS_RELEASE_COMMIT}" == "true" || "${MANUAL_PUBLISH_UNPUBLISHED}" == "true" ) ]]; then
+            root_should_publish=true
+          fi
+
+          if [[ "${STEWARD_RELEASE_CREATED}" == "true" ]]; then
+            steward_should_publish=true
+          elif [[ "${steward_missing}" == "true" && ( "${IS_RELEASE_COMMIT}" == "true" || "${MANUAL_PUBLISH_UNPUBLISHED}" == "true" ) ]]; then
+            steward_should_publish=true
+          fi
+
+          any_publish=false
+          if [[ "${root_should_publish}" == "true" || "${steward_should_publish}" == "true" ]]; then
+            any_publish=true
+          fi
+
+          {
+            echo "root_version=${root_version}"
+            echo "steward_version=${steward_version}"
+            echo "root_missing=${root_missing}"
+            echo "steward_missing=${steward_missing}"
+            echo "root_should_publish=${root_should_publish}"
+            echo "steward_should_publish=${steward_should_publish}"
+            echo "any_publish=${any_publish}"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Set up Node.js
-        if: ${{ steps.release.outputs.releases_created }}
+        if: ${{ steps.publish-plan.outputs.any_publish == 'true' }}
         uses: actions/setup-node@v5
         with:
           node-version: 24
@@ -54,21 +120,21 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       - name: Install dependencies
-        if: ${{ steps.release.outputs.releases_created }}
+        if: ${{ steps.publish-plan.outputs.any_publish == 'true' }}
         run: npm ci
 
       - name: Verify patchrelay
-        if: ${{ steps.release.outputs['.--release_created'] }}
+        if: ${{ steps.publish-plan.outputs.root_should_publish == 'true' }}
         run: npm run ci
 
       - name: Publish patchrelay
-        if: ${{ steps.release.outputs['.--release_created'] }}
+        if: ${{ steps.publish-plan.outputs.root_should_publish == 'true' }}
         run: npm publish --access public
 
       - name: Verify merge-steward
-        if: ${{ steps.release.outputs['packages/merge-steward--release_created'] }}
-        run: npm run -w packages/merge-steward test && npm run -w packages/merge-steward build
+        if: ${{ steps.publish-plan.outputs.steward_should_publish == 'true' }}
+        run: npm run -w packages/merge-steward typecheck && npm run -w packages/merge-steward test && npm run -w packages/merge-steward build
 
       - name: Publish merge-steward
-        if: ${{ steps.release.outputs['packages/merge-steward--release_created'] }}
+        if: ${{ steps.publish-plan.outputs.steward_should_publish == 'true' }}
         run: npm publish -w packages/merge-steward --access public
