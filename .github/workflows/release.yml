@@ -57,7 +57,7 @@ jobs:
         env:
           ROOT_RELEASE_CREATED: ${{ steps.release.outputs.release_created }}
           STEWARD_RELEASE_CREATED: ${{ steps.release.outputs['packages/merge-steward--release_created'] }}
-          MANUAL_PUBLISH_UNPUBLISHED: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_unpublished }}
+          MANUAL_PUBLISH_UNPUBLISHED: ${{ github.event.inputs.publish_unpublished == 'true' }}
           IS_RELEASE_COMMIT: ${{ github.event_name == 'push' && startsWith(github.event.head_commit.message, 'chore: release ') }}
         shell: bash
         run: |
