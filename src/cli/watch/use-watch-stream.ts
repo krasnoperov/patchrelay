@@ -16,7 +16,6 @@ export function useWatchStream(options: WatchStreamOptions): void {
   useEffect(() => {
     let abortController = new AbortController();
     let reconnectTimeout: ReturnType<typeof setTimeout> | undefined;
-    let snapshotInterval: ReturnType<typeof setInterval> | undefined;
     let attempt = 0;
 
     const fetchIssueSnapshot = async () => {
@@ -122,7 +121,7 @@ export function useWatchStream(options: WatchStreamOptions): void {
 
     connect();
     void fetchIssueSnapshot().catch(() => undefined);
-    snapshotInterval = setInterval(() => {
+    const snapshotInterval = setInterval(() => {
       void fetchIssueSnapshot().catch(() => undefined);
     }, 5000);
 
