@@ -43,10 +43,15 @@ export async function requestMergeQueueAdmission(params: {
   });
 
   try {
+    const [owner, repo] = protocol.repoFullName.split("/", 2);
+    if (!owner || !repo) {
+      throw new Error(`Invalid repoFullName: ${protocol.repoFullName}`);
+    }
     await execCommand("gh", [
-      "pr", "edit", String(issue.prNumber),
-      "--repo", protocol.repoFullName,
-      "--add-label", protocol.admissionLabel,
+      "api",
+      "--method", "POST",
+      `repos/${owner}/${repo}/issues/${issue.prNumber}/labels`,
+      "-f", `labels[]=${protocol.admissionLabel}`,
     ], { timeoutMs: 15_000 });
 
     feed?.publish({

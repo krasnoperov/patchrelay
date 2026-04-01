@@ -648,7 +648,9 @@ export class RunOrchestrator {
 
       // Review approved + checks not failed — advance to awaiting_queue
       if (issue.prReviewState === "approved" && issue.prCheckStatus !== "failed") {
-        this.advanceIdleIssue(issue, "awaiting_queue", { clearFailureProvenance: true });
+        if (issue.factoryState !== "awaiting_queue") {
+          this.advanceIdleIssue(issue, "awaiting_queue", { clearFailureProvenance: true });
+        }
         continue;
       }
 
@@ -947,9 +949,22 @@ export class RunOrchestrator {
       } else if (run.runType === "review_fix" && issue.reviewFixAttempts > 0) {
         this.db.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, reviewFixAttempts: issue.reviewFixAttempts - 1 });
       }
-      this.failRunAndClear(run, "Codex turn was interrupted");
+      const recoveredState = resolvePostRunState(this.db.getIssue(run.projectId, run.linearIssueId) ?? issue);
+      this.failRunAndClear(run, "Codex turn was interrupted", recoveredState);
       const failedIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
-      void this.emitLinearActivity(failedIssue, buildRunFailureActivity(run.runType, "The Codex turn was interrupted."));
+      if (recoveredState) {
+        this.feed?.publish({
+          level: "info",
+          kind: "stage",
+          issueKey: issue.issueKey,
+          projectId: run.projectId,
+          stage: recoveredState,
+          status: "reconciled",
+          summary: `Interrupted ${run.runType} recovered \u2192 ${recoveredState}`,
+        });
+      } else {
+        void this.emitLinearActivity(failedIssue, buildRunFailureActivity(run.runType, "The Codex turn was interrupted."));
+      }
       void this.syncLinearSession(failedIssue, { activeRunType: run.runType });
       return;
     }
@@ -1045,14 +1060,14 @@ export class RunOrchestrator {
     });
   }
 
-  private failRunAndClear(run: RunRecord, message: string): void {
+  private failRunAndClear(run: RunRecord, message: string, nextState: FactoryState = "failed"): void {
     this.db.transaction(() => {
       this.db.finishRun(run.id, { status: "failed", failureReason: message });
       this.db.upsertIssue({
         projectId: run.projectId,
         linearIssueId: run.linearIssueId,
         activeRunId: null,
-        factoryState: "failed",
+        factoryState: nextState,
       });
     });
   }
