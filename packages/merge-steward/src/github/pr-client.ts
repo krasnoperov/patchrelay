@@ -5,11 +5,11 @@ import { exec } from "../exec.ts";
 /**
  * GitHub PR operations via gh CLI and REST API.
  *
- * Two external contracts:
- *  - gh pr checks: uses `bucket` (pass/fail/pending/skipping) for classification.
- *  - REST check-runs API: uses lowercase `conclusion` (success/failure/cancelled/…).
+ * External contract:
+ *  - REST check-runs API uses lowercase `conclusion` (success/failure/cancelled/…).
  *
- * Both map to the internal CheckConclusion union: success | failure | pending.
+ * We rely on the REST API here because `gh pr checks --json` is not available
+ * on every gh version we support operationally.
  */
 export class GitHubPRClient implements GitHubPRApi {
   constructor(private readonly repoFullName: string) {}
@@ -48,29 +48,8 @@ export class GitHubPRClient implements GitHubPRApi {
   }
 
   async listChecks(prNumber: number): Promise<CheckResult[]> {
-    const result = await exec("gh", [
-      "pr", "checks", String(prNumber),
-      "--repo", this.repoFullName,
-      "--json", "name,bucket,link",
-    ], { allowNonZero: true, githubRepoFullName: this.repoFullName });
-
-    if (result.exitCode !== 0) return [];
-
-    try {
-      const checks = JSON.parse(result.stdout) as Array<{
-        name: string;
-        bucket: string;
-        link?: string;
-      }>;
-
-      return checks.map((c) => ({
-        name: c.name,
-        conclusion: mapBucket(c.bucket),
-        url: c.link,
-      }));
-    } catch {
-      return [];
-    }
+    const status = await this.getStatus(prNumber);
+    return await this.listChecksForRef(status.headSha);
   }
 
   async listChecksForRef(ref: string): Promise<CheckResult[]> {
@@ -88,12 +67,14 @@ export class GitHubPRClient implements GitHubPRApi {
       const checks = JSON.parse(result.stdout) as Array<{
         name: string;
         conclusion: string | null;
+        html_url?: string;
       }>;
       return checks
         .filter((c) => c.conclusion !== null)
         .map((c) => ({
           name: c.name,
           conclusion: mapRestConclusion(c.conclusion!),
+          ...(c.html_url ? { url: c.html_url } : {}),
         }));
     } catch {
       return [];
@@ -137,15 +118,6 @@ export class GitHubPRClient implements GitHubPRApi {
     } catch {
       return [];
     }
-  }
-}
-
-/** Map gh pr checks bucket field (pass/fail/pending/skipping) to our union. */
-function mapBucket(bucket: string): CheckResult["conclusion"] {
-  switch (bucket) {
-    case "pass": return "success";
-    case "fail": return "failure";
-    default: return "pending";
   }
 }
 

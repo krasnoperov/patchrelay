@@ -238,3 +238,98 @@ test("reconcileIdleIssues preserves stored steward incident context for queue re
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("reconcileRun recovers interrupted implementation runs to pr_open when a PR already exists", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-interrupted-pr-open-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-14",
+      issueKey: "USE-14",
+      branchName: "feat-interrupted",
+      prNumber: 14,
+      prState: "open",
+      prCheckStatus: "success",
+      factoryState: "implementing",
+    });
+    const issue = db.getIssue("usertold", "issue-14");
+    assert.ok(issue);
+    const run = db.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "implementation",
+      promptText: "Implement USE-14",
+    });
+    db.updateRunThread(run.id, { threadId: "thread-14", turnId: "turn-14" });
+    db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      activeRunId: run.id,
+      factoryState: "implementing",
+    });
+
+    const orchestrator = new RunOrchestrator(
+      config,
+      db,
+      {
+        startThread: async () => ({ threadId: "thread-14" }),
+        steerTurn: async () => undefined,
+        readThread: async () => ({
+          id: "thread-14",
+          turns: [{ id: "turn-14", status: "interrupted" }],
+        }),
+      } as never,
+      { forProject: async () => undefined } as never,
+      () => undefined,
+      pino({ enabled: false }),
+    );
+
+    await (orchestrator as unknown as { reconcileRun: (run: ReturnType<typeof db.createRun>) => Promise<void> }).reconcileRun(
+      db.getRun(run.id)!,
+    );
+
+    const updatedIssue = db.getIssue("usertold", "issue-14");
+    const updatedRun = db.getRun(run.id);
+    assert.equal(updatedIssue?.factoryState, "pr_open");
+    assert.equal(updatedIssue?.activeRunId, undefined);
+    assert.equal(updatedRun?.status, "failed");
+    assert.equal(updatedRun?.failureReason, "Codex turn was interrupted");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("reconcileIdleIssues does not re-request queue handoff for issues already awaiting_queue", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-awaiting-queue-"));
+  try {
+    const { db, orchestrator } = createOrchestrator(baseDir);
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-15",
+      issueKey: "USE-15",
+      branchName: "feat-awaiting-queue",
+      prNumber: 15,
+      prState: "open",
+      prReviewState: "approved",
+      prCheckStatus: "success",
+      factoryState: "awaiting_queue",
+    });
+
+    let queueRequests = 0;
+    (orchestrator as unknown as { requestMergeQueueAdmission: () => void }).requestMergeQueueAdmission = () => {
+      queueRequests += 1;
+    };
+
+    await (orchestrator as unknown as { reconcileIdleIssues: () => Promise<void> }).reconcileIdleIssues();
+
+    const issue = db.getIssue("usertold", "issue-15");
+    assert.equal(issue?.factoryState, "awaiting_queue");
+    assert.equal(queueRequests, 0);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});

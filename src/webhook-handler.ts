@@ -195,6 +195,13 @@ export class WebhookHandler {
       pendingRunType = "implementation";
     }
 
+    // Do not create tracked issue rows for unrelated Linear traffic.
+    // An issue becomes PatchRelay-relevant only once it is already tracked
+    // or a true delegation queues work.
+    if (!existingIssue && !pendingRunType) {
+      return { issue: undefined, desiredStage: undefined, delegated };
+    }
+
     // Resolve agent session
     const agentSessionId = normalized.agentSession?.id ??
       (!activeRun && (pendingRunType || (normalized.triggerEvent === "delegateChanged" && !delegated)) ? null : undefined);
