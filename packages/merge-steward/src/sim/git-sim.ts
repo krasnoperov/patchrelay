@@ -1,7 +1,7 @@
 import git from "isomorphic-git";
 import { Volume } from "memfs";
 import type { GitOperations, SpeculativeBranchBuilder } from "../interfaces.ts";
-import type { MergeResult, RebaseResult } from "../types.ts";
+import type { MergeResult } from "../types.ts";
 
 const AUTHOR = { name: "steward-sim", email: "sim@test" };
 
@@ -12,7 +12,6 @@ function isMergeConflict(err: unknown): boolean {
 
 /**
  * In-memory git implementation using isomorphic-git + memfs.
- * Rebase is simulated as merge (same end-state, different history shape).
  */
 export class GitSim implements GitOperations {
   private readonly vol: InstanceType<typeof Volume>;
@@ -129,9 +128,7 @@ export class GitSim implements GitOperations {
     return changes;
   }
 
-  async rebase(branch: string, onto: string): Promise<RebaseResult> {
-    // Simulated as merge — produces the same content, different history shape.
-    // For queue testing, the content outcome is what matters.
+  async mergeBaseInto(branch: string, onto: string): Promise<MergeResult> {
     const currentBranch = await git.currentBranch({ fs: this.vol, dir: this.dir });
     await git.checkout({ fs: this.vol, dir: this.dir, ref: branch, force: true });
 
@@ -144,10 +141,10 @@ export class GitSim implements GitOperations {
         author: AUTHOR,
       });
       if (result.alreadyMerged) {
-        return { success: true, newHeadSha: await this.headSha(branch) };
+        return { success: true, sha: await this.headSha(branch) };
       }
       await git.checkout({ fs: this.vol, dir: this.dir, ref: branch, force: true });
-      return { success: true, newHeadSha: result.oid };
+      return { success: true, sha: result.oid };
     } catch (err: unknown) {
       if (isMergeConflict(err)) {
         // Reset to pre-merge state

@@ -20,7 +20,10 @@ describe("retryHistory records per-transition baseSha", () => {
     // Advance main so next rebase gets a different baseSha.
     await h.advanceMain();
 
-    // Run 2: rebase onto new base → validating (baseSha = main_sha_2).
+    // Run 2: refresh updates the branch head, then the next tick re-promotes,
+    // and the following tick validates against the new base.
+    await h.tick();
+    await h.tick();
     await h.tick();
 
     const baseSha2 = h.entries[0]!.baseSha;
@@ -30,9 +33,10 @@ describe("retryHistory records per-transition baseSha", () => {
     await h.tick();
     await h.advanceMain();
 
-    // Run 3: budget exhausted → evicted.
-    await h.tick();
-    await h.tick();
+    // Run until the retry budget is exhausted and the issue is evicted.
+    for (let i = 0; i < 20 && h.evictionSim.evictions.length === 0; i++) {
+      await h.tick();
+    }
 
     assert.strictEqual(h.evictionSim.evictions.length, 1);
 

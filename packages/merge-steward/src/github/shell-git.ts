@@ -1,5 +1,5 @@
 import type { GitOperations, SpeculativeBranchBuilder } from "../interfaces.ts";
-import type { MergeResult, RebaseResult } from "../types.ts";
+import type { MergeResult } from "../types.ts";
 import { exec } from "../exec.ts";
 
 /** Extract conflict file names from git rebase/merge stderr. */
@@ -45,23 +45,21 @@ export class ShellGitOperations implements GitOperations, SpeculativeBranchBuild
     throw new Error(`git merge-base --is-ancestor failed: ${result.stderr || result.stdout}`);
   }
 
-  async rebase(branch: string, onto: string): Promise<RebaseResult> {
+  async mergeBaseInto(branch: string, base: string): Promise<MergeResult> {
     const remoteBranchRef = `refs/remotes/origin/${branch}`;
     const remoteBranchExists = await this.git(["show-ref", "--verify", remoteBranchRef], { allowNonZero: true });
     if (remoteBranchExists.exitCode === 0) {
-      // Always start from the freshly fetched remote branch tip so stale local branches
-      // cannot reintroduce old commits into queue processing.
       await this.git(["checkout", "-B", branch, `origin/${branch}`]);
     } else {
       await this.git(["checkout", branch]);
     }
-    const result = await this.git(["rebase", onto], { allowNonZero: true });
+    const result = await this.git(["merge", "--no-ff", "--no-edit", base], { allowNonZero: true });
     if (result.exitCode !== 0) {
-      await this.git(["rebase", "--abort"], { allowNonZero: true });
+      await this.git(["merge", "--abort"], { allowNonZero: true });
       return { success: false, conflictFiles: parseConflicts(result.stderr) };
     }
     const newSha = await this.headSha("HEAD");
-    return { success: true, newHeadSha: newSha };
+    return { success: true, sha: newSha };
   }
 
   async push(branch: string, force = false): Promise<void> {

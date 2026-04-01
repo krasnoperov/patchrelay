@@ -7,7 +7,6 @@ import type { QueueEntry, CheckResult, CIStatus, IncidentRecord, PRStatus, Queue
 
 class FakeGit implements GitOperations {
   private readonly refs = new Map<string, string>();
-  private readonly ancestry = new Map<string, boolean>();
   private fetchCount = 0;
   readonly pushes: Array<{ branch: string; force: boolean | undefined }> = [];
 
@@ -15,10 +14,6 @@ class FakeGit implements GitOperations {
     for (const [name, sha] of Object.entries(initialRefs)) {
       this.refs.set(name, sha);
     }
-  }
-
-  setAncestor(ancestor: string, descendant: string, value: boolean): void {
-    this.ancestry.set(`${ancestor}->${descendant}`, value);
   }
 
   async fetch(): Promise<void> {
@@ -33,12 +28,12 @@ class FakeGit implements GitOperations {
   }
 
   async isAncestor(ancestor: string, descendant: string): Promise<boolean> {
-    return this.ancestry.get(`${ancestor}->${descendant}`) ?? ancestor === descendant;
+    return ancestor === descendant;
   }
 
-  async rebase(branch: string, _onto: string) {
+  async mergeBaseInto(branch: string, _onto: string) {
     this.refs.set(branch, "candidate-sha");
-    return { success: true as const, newHeadSha: "candidate-sha" };
+    return { success: true as const, sha: "candidate-sha" };
   }
 
   async push(branch: string, force?: boolean): Promise<void> {
@@ -130,7 +125,7 @@ function createContext(git: GitOperations, store: MemoryStore, ci: CIRunner, onE
 }
 
 describe("remote tip guard", () => {
-  it("requeues instead of force-pushing over a newer remote head", async () => {
+  it("requeues instead of pushing over a newer remote head", async () => {
     const store = new MemoryStore();
     store.insert(createEntry());
 
@@ -144,8 +139,6 @@ describe("remote tip guard", () => {
         if (count === 2) refs.set("origin/feature", "remote-new-sha");
       },
     );
-    git.setAncestor("remote-new-sha", "candidate-sha", false);
-
     const ci = new FakeCI();
     const events: ReconcileEvent[] = [];
     await reconcile(createContext(git, store, ci, (event) => events.push(event)));
@@ -157,10 +150,10 @@ describe("remote tip guard", () => {
     assert.strictEqual(entry.generation, 1);
     assert.deepStrictEqual(git.pushes, []);
     assert.deepStrictEqual(ci.triggered, []);
-    assert.ok(events.some((event) => event.action === "branch_mismatch" && event.detail?.includes("remote advanced during rebase")));
+    assert.ok(events.some((event) => event.action === "branch_mismatch" && event.detail?.includes("remote advanced during refresh")));
   });
 
-  it("requeues instead of force-pushing a stale local branch over the same remote tip", async () => {
+  it("continues when the remote tip is unchanged and the refreshed branch is a new merge commit", async () => {
     const store = new MemoryStore();
     store.insert(createEntry());
 
@@ -169,23 +162,19 @@ describe("remote tip guard", () => {
       "origin/feature": "entry-sha",
       "origin/main": "base-sha",
     });
-    git.setAncestor("entry-sha", "candidate-sha", false);
 
     const ci = new FakeCI();
-    const events: ReconcileEvent[] = [];
-    await reconcile(createContext(git, store, ci, (event) => events.push(event)));
+    await reconcile(createContext(git, store, ci, () => {}));
 
     const entry = store.getEntry("qe-1");
     assert.ok(entry);
-    assert.strictEqual(entry.status, "queued");
-    assert.strictEqual(entry.headSha, "entry-sha");
-    assert.strictEqual(entry.generation, 0);
-    assert.deepStrictEqual(git.pushes, []);
-    assert.deepStrictEqual(ci.triggered, []);
-    assert.ok(events.some((event) => event.action === "branch_mismatch" && event.detail?.includes("candidate diverged from remote head")));
+    assert.strictEqual(entry.status, "validating");
+    assert.strictEqual(entry.headSha, "candidate-sha");
+    assert.strictEqual(ci.triggered.length, 1);
+    assert.deepStrictEqual(git.pushes, [{ branch: "feature", force: false }]);
   });
 
-  it("continues when the refreshed remote head is already contained in the candidate", async () => {
+  it("requeues when the remote tip changes during refresh, even if it matches the candidate", async () => {
     const store = new MemoryStore();
     store.insert(createEntry());
 
@@ -201,13 +190,15 @@ describe("remote tip guard", () => {
     );
 
     const ci = new FakeCI();
-    await reconcile(createContext(git, store, ci, () => {}));
+    const events: ReconcileEvent[] = [];
+    await reconcile(createContext(git, store, ci, (event) => events.push(event)));
 
     const entry = store.getEntry("qe-1");
     assert.ok(entry);
-    assert.strictEqual(entry.status, "validating");
+    assert.strictEqual(entry.status, "queued");
     assert.strictEqual(entry.headSha, "candidate-sha");
-    assert.strictEqual(ci.triggered.length, 1);
-    assert.deepStrictEqual(git.pushes, [{ branch: "feature", force: true }]);
+    assert.strictEqual(ci.triggered.length, 0);
+    assert.deepStrictEqual(git.pushes, []);
+    assert.ok(events.some((event) => event.action === "branch_mismatch" && event.detail?.includes("remote advanced during refresh")));
   });
 });
