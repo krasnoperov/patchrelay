@@ -1,4 +1,4 @@
-import type { CIStatus, CheckResult, IncidentRecord, MergeResult, PRStatus, QueueEntry, RebaseResult } from "./types.ts";
+import type { CIStatus, CheckResult, IncidentRecord, MergeResult, PRStatus, QueueEntry } from "./types.ts";
 
 /**
  * Git operations needed by the reconciler. The sim (GitSim) implements
@@ -8,7 +8,7 @@ export interface GitOperations {
   fetch(remote?: string): Promise<void>;
   headSha(branch: string): Promise<string>;
   isAncestor(ancestor: string, descendant: string): Promise<boolean>;
-  rebase(branch: string, onto: string): Promise<RebaseResult>;
+  mergeBaseInto(branch: string, base: string): Promise<MergeResult>;
   push(branch: string, force?: boolean): Promise<void>;
 }
 

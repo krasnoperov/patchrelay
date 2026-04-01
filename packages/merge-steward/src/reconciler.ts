@@ -108,7 +108,7 @@ export async function reconcile(ctx: ReconcileContext): Promise<void> {
   }
 }
 
-// ─── Head entry: fetch + gate + rebase ──────────────────────────
+// ─── Head entry: fetch + gate + branch refresh ──────────────────
 
 async function prepareHead(ctx: ReconcileContext, entry: QueueEntry): Promise<void> {
   emit(ctx, entry, "fetch_started");
@@ -158,7 +158,7 @@ async function prepareHead(ctx: ReconcileContext, entry: QueueEntry): Promise<vo
     return;
   }
 
-  await performRebase(ctx, entry, baseSha);
+  await performBranchRefresh(ctx, entry, baseSha);
 }
 
 function describeMainBroken(failingChecks: Array<{ name: string }>, pendingChecks: Array<{ name: string }>): string {
@@ -180,9 +180,9 @@ function summarizeCheckNames(checks: Array<{ name: string }>, limit = 3): string
   return `${names.slice(0, limit).join(", ")} +${names.length - limit} more`;
 }
 
-async function performRebase(ctx: ReconcileContext, entry: QueueEntry, baseSha: string): Promise<void> {
+async function performBranchRefresh(ctx: ReconcileContext, entry: QueueEntry, baseSha: string): Promise<void> {
   emit(ctx, entry, "rebase_started", { baseSha });
-  const result = await ctx.git.rebase(entry.branch, ref(ctx, ctx.baseBranch));
+  const result = await ctx.git.mergeBaseInto(entry.branch, ref(ctx, ctx.baseBranch));
 
   if (!result.success) {
     emit(ctx, entry, "rebase_conflict", { baseSha, conflictFiles: result.conflictFiles });
@@ -200,27 +200,17 @@ async function performRebase(ctx: ReconcileContext, entry: QueueEntry, baseSha: 
     return;
   }
 
-  const headSha = result.newHeadSha ?? entry.headSha;
+  const headSha = result.sha ?? entry.headSha;
   await ctx.git.fetch();
   const latestRemoteHead = await ctx.git.headSha(ref(ctx, entry.branch));
-  const candidateKeepsLatestRemote = await ctx.git.isAncestor(latestRemoteHead, headSha);
-  if (!candidateKeepsLatestRemote) {
-    const detail = latestRemoteHead === entry.headSha
-      ? `candidate diverged from remote head: expected ${entry.headSha.slice(0, 8)}, ` +
-        `latest ${latestRemoteHead.slice(0, 8)}, candidate ${headSha.slice(0, 8)}`
-      : `remote advanced during rebase: expected ${entry.headSha.slice(0, 8)}, ` +
-        `latest ${latestRemoteHead.slice(0, 8)}, candidate ${headSha.slice(0, 8)}`;
+  if (latestRemoteHead !== entry.headSha) {
+    const detail = `remote advanced during refresh: expected ${entry.headSha.slice(0, 8)}, ` +
+      `latest ${latestRemoteHead.slice(0, 8)}, candidate ${headSha.slice(0, 8)}`;
     emit(ctx, entry, "branch_mismatch", { detail });
-    if (latestRemoteHead !== entry.headSha) {
-      ctx.store.updateHead(entry.id, latestRemoteHead);
-    } else {
-      ctx.store.transition(entry.id, "queued", {
-        ...CLEAN_CI,
-      }, `stale local branch diverged from ${latestRemoteHead.slice(0, 8)}`);
-    }
+    ctx.store.updateHead(entry.id, latestRemoteHead);
     return;
   }
-  await ctx.git.push(entry.branch, true);
+  await ctx.git.push(entry.branch, false);
   emit(ctx, entry, "rebase_succeeded", { baseSha });
 
   // Build speculative branch for downstream entries.
