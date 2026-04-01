@@ -152,7 +152,7 @@ export function createGitHubCiSnapshotResolver(): GitHubCiSnapshotResolver {
         const checks = await resolveCheckSnapshotChecks(repoFullName, event.headSha);
         return buildCiSnapshotFromChecks(checks, event, gateCheckNames);
       } catch {
-        return buildFallbackCiSnapshot(event, gateCheckNames);
+        return undefined;
       }
     },
   };
@@ -199,36 +199,6 @@ function buildFallbackFailureContext(
     ...(event.checkDetailsUrl ? { checkDetailsUrl: event.checkDetailsUrl } : {}),
     ...(event.checkName ? { jobName: event.checkName } : {}),
     ...(summary ? { summary } : {}),
-  };
-}
-
-function buildFallbackCiSnapshot(
-  event: NormalizedGitHubEvent,
-  gateCheckNames: string[],
-): GitHubCiSnapshotRecord | undefined {
-  if (!event.headSha) return undefined;
-  const gateCheckName = pickGateCheckName(gateCheckNames, event.checkName) ?? event.checkName;
-  const gateCheckStatus = deriveCheckStatus({
-    eventStatus: event.checkStatus,
-    eventConclusion: event.triggerEvent === "check_passed" ? "success" : "failure",
-  });
-  const check = event.checkName
-    ? [{
-        name: event.checkName,
-        status: gateCheckStatus,
-        ...(event.triggerEvent === "check_passed" ? { conclusion: "success" } : { conclusion: "failure" }),
-        ...(firstNonEmpty(event.checkDetailsUrl, event.checkUrl) ? { detailsUrl: firstNonEmpty(event.checkDetailsUrl, event.checkUrl) } : {}),
-        ...(firstNonEmpty(event.checkOutputTitle, event.checkOutputSummary) ? { summary: firstNonEmpty(event.checkOutputTitle, event.checkOutputSummary) } : {}),
-      } satisfies GitHubCiSnapshotCheckRecord]
-    : [];
-  return {
-    headSha: event.headSha,
-    ...(gateCheckName ? { gateCheckName } : {}),
-    gateCheckStatus,
-    failedChecks: check.filter((entry) => entry.status === "failure"),
-    checks: check,
-    ...(gateCheckStatus !== "pending" ? { settledAt: new Date().toISOString() } : {}),
-    capturedAt: new Date().toISOString(),
   };
 }
 

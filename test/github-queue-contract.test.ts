@@ -595,3 +595,102 @@ test("checks with similar names do not count as the Tests gate", async () => {
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("gate failures wait when settled snapshot resolution is unavailable", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-ci-unavailable-"));
+  try {
+    const { db, enqueueCalls, handler } = createHandler(baseDir, undefined, {
+      resolve: async () => undefined,
+    });
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-9",
+      issueKey: "USE-9",
+      branchName: "feat-ci-unavailable",
+      prNumber: 49,
+      prState: "open",
+      factoryState: "pr_open",
+      lastGitHubCiSnapshotHeadSha: "sha-49",
+      lastGitHubCiSnapshotGateCheckName: "Tests",
+      lastGitHubCiSnapshotGateCheckStatus: "pending",
+    });
+
+    await handler.processGitHubWebhookEvent({
+      eventType: "check_run",
+      rawBody: buildCheckRunPayload({
+        branch: "feat-ci-unavailable",
+        headSha: "sha-49",
+        prNumber: 49,
+        checkName: "Tests",
+        conclusion: "failure",
+      }).toString("utf8"),
+    });
+
+    const issue = db.getIssue("usertold", "issue-9");
+    assert.equal(issue?.pendingRunType, undefined);
+    assert.equal(issue?.lastGitHubFailureSource, undefined);
+    assert.equal(issue?.lastGitHubCiSnapshotHeadSha, "sha-49");
+    assert.equal(issue?.lastGitHubCiSnapshotGateCheckStatus, "pending");
+    assert.equal(issue?.lastGitHubCiSnapshotJson, undefined);
+    assert.deepEqual(enqueueCalls, []);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("stale passing gate events do not clear failure provenance for a newer head", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-ci-stale-pass-"));
+  try {
+    const { db, enqueueCalls, handler } = createHandler(baseDir);
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-10",
+      issueKey: "USE-10",
+      branchName: "feat-ci-stale-pass",
+      prNumber: 50,
+      prState: "open",
+      factoryState: "repairing_ci",
+      lastGitHubFailureSource: "branch_ci",
+      lastGitHubFailureHeadSha: "sha-new",
+      lastGitHubFailureSignature: "branch_ci::sha-new::Checks::Run tests",
+      lastGitHubFailureCheckName: "Checks",
+      lastGitHubCiSnapshotHeadSha: "sha-new",
+      lastGitHubCiSnapshotGateCheckName: "Tests",
+      lastGitHubCiSnapshotGateCheckStatus: "failure",
+      lastGitHubCiSnapshotJson: JSON.stringify({
+        headSha: "sha-new",
+        gateCheckName: "Tests",
+        gateCheckStatus: "failure",
+        failedChecks: [{ name: "Checks", status: "failure", conclusion: "failure" }],
+        checks: [
+          { name: "Checks", status: "failure", conclusion: "failure" },
+          { name: "Tests", status: "failure", conclusion: "failure" },
+        ],
+        settledAt: "2026-04-01T00:00:05.000Z",
+        capturedAt: "2026-04-01T00:00:05.000Z",
+      }),
+      lastGitHubCiSnapshotSettledAt: "2026-04-01T00:00:05.000Z",
+    });
+
+    await handler.processGitHubWebhookEvent({
+      eventType: "check_run",
+      rawBody: buildCheckRunPayload({
+        branch: "feat-ci-stale-pass",
+        headSha: "sha-old",
+        prNumber: 50,
+        checkName: "Tests",
+        conclusion: "success",
+      }).toString("utf8"),
+    });
+
+    const issue = db.getIssue("usertold", "issue-10");
+    assert.equal(issue?.lastGitHubFailureSource, "branch_ci");
+    assert.equal(issue?.lastGitHubFailureHeadSha, "sha-new");
+    assert.equal(issue?.lastGitHubFailureCheckName, "Checks");
+    assert.equal(issue?.lastGitHubCiSnapshotHeadSha, "sha-new");
+    assert.equal(issue?.lastGitHubCiSnapshotGateCheckStatus, "failure");
+    assert.deepEqual(enqueueCalls, []);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});

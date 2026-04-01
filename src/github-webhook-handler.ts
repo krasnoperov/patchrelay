@@ -312,13 +312,38 @@ export class GitHubWebhookHandler {
     if (event.eventSource !== "check_run") return;
     if (this.isQueueEvictionFailure(issue, event, project)) return;
     if (!this.isGateCheckEvent(event, project)) return;
+    if (this.isStaleGateEvent(issue, event)) return;
 
     const snapshot = await this.ciSnapshotResolver.resolve({
       repoFullName: project?.github?.repoFullName ?? event.repoFullName,
       event,
       gateCheckNames: this.getGateCheckNames(project),
     });
-    if (!snapshot) return;
+    if (!snapshot) {
+      this.db.upsertIssue({
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        lastGitHubCiSnapshotHeadSha: event.headSha ?? issue.lastGitHubCiSnapshotHeadSha ?? null,
+        lastGitHubCiSnapshotGateCheckName: this.getPrimaryGateCheckName(project),
+        lastGitHubCiSnapshotGateCheckStatus: "pending",
+        lastGitHubCiSnapshotJson: null,
+        lastGitHubCiSnapshotSettledAt: null,
+      });
+      this.logger.warn(
+        { issueKey: issue.issueKey, repoFullName: project?.github?.repoFullName ?? event.repoFullName, headSha: event.headSha },
+        "Could not resolve settled CI snapshot; waiting before CI repair",
+      );
+      this.feed?.publish({
+        level: "warn",
+        kind: "github",
+        issueKey: issue.issueKey,
+        projectId: issue.projectId,
+        stage: issue.factoryState,
+        status: "ci_snapshot_unavailable",
+        summary: `Could not resolve settled ${this.getPrimaryGateCheckName(project)} snapshot; waiting before CI repair`,
+      });
+      return;
+    }
 
     this.db.upsertIssue({
       projectId: issue.projectId,
@@ -485,6 +510,9 @@ export class GitHubWebhookHandler {
       || event.triggerEvent === "pr_synchronize"
       || event.triggerEvent === "pr_merged"
     ) {
+      if (event.triggerEvent === "check_passed" && !this.canClearFailureProvenance(issue, event, project)) {
+        return;
+      }
       this.db.upsertIssue({
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
@@ -620,6 +648,14 @@ export class GitHubWebhookHandler {
     return this.getGateCheckNames(project).some((entry) => entry.trim().toLowerCase() === normalized);
   }
 
+  private isStaleGateEvent(issue: IssueRecord, event: NormalizedGitHubEvent): boolean {
+    return Boolean(
+      issue.lastGitHubCiSnapshotHeadSha
+      && event.headSha
+      && issue.lastGitHubCiSnapshotHeadSha !== event.headSha,
+    );
+  }
+
   private isQueueEvictionFailure(issue: IssueRecord, event: NormalizedGitHubEvent, project?: ProjectConfig): boolean {
     const protocol = resolveMergeQueueProtocol(project);
     return issue.factoryState === "awaiting_queue"
@@ -632,6 +668,20 @@ export class GitHubWebhookHandler {
     if (!this.isGateCheckEvent(event, project)) return false;
     const snapshot = this.getRelevantCiSnapshot(issue, event);
     return snapshot?.gateCheckStatus === "failure" && snapshot.headSha === event.headSha;
+  }
+
+  private canClearFailureProvenance(issue: IssueRecord, event: NormalizedGitHubEvent, project?: ProjectConfig): boolean {
+    if (event.triggerEvent !== "check_passed") return true;
+    if (this.isQueueEvictionFailure(issue, event, project)) {
+      return !issue.lastGitHubFailureHeadSha || issue.lastGitHubFailureHeadSha === event.headSha;
+    }
+    if (!this.isGateCheckEvent(event, project)) {
+      return true;
+    }
+    if (this.isStaleGateEvent(issue, event)) {
+      return false;
+    }
+    return !issue.lastGitHubFailureHeadSha || issue.lastGitHubFailureHeadSha === event.headSha;
   }
 
   private getRelevantCiSnapshot(issue: IssueRecord, event: NormalizedGitHubEvent): GitHubCiSnapshotRecord | undefined {
