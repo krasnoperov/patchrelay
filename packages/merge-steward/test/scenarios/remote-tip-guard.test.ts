@@ -160,6 +160,31 @@ describe("remote tip guard", () => {
     assert.ok(events.some((event) => event.action === "branch_mismatch" && event.detail?.includes("remote advanced during rebase")));
   });
 
+  it("requeues instead of force-pushing a stale local branch over the same remote tip", async () => {
+    const store = new MemoryStore();
+    store.insert(createEntry());
+
+    const git = new FakeGit({
+      "feature": "entry-sha",
+      "origin/feature": "entry-sha",
+      "origin/main": "base-sha",
+    });
+    git.setAncestor("entry-sha", "candidate-sha", false);
+
+    const ci = new FakeCI();
+    const events: ReconcileEvent[] = [];
+    await reconcile(createContext(git, store, ci, (event) => events.push(event)));
+
+    const entry = store.getEntry("qe-1");
+    assert.ok(entry);
+    assert.strictEqual(entry.status, "queued");
+    assert.strictEqual(entry.headSha, "entry-sha");
+    assert.strictEqual(entry.generation, 0);
+    assert.deepStrictEqual(git.pushes, []);
+    assert.deepStrictEqual(ci.triggered, []);
+    assert.ok(events.some((event) => event.action === "branch_mismatch" && event.detail?.includes("candidate diverged from remote head")));
+  });
+
   it("continues when the refreshed remote head is already contained in the candidate", async () => {
     const store = new MemoryStore();
     store.insert(createEntry());

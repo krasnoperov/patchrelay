@@ -203,17 +203,22 @@ async function performRebase(ctx: ReconcileContext, entry: QueueEntry, baseSha: 
   const headSha = result.newHeadSha ?? entry.headSha;
   await ctx.git.fetch();
   const latestRemoteHead = await ctx.git.headSha(ref(ctx, entry.branch));
-  if (latestRemoteHead !== entry.headSha) {
-    const candidateKeepsLatestRemote = await ctx.git.isAncestor(latestRemoteHead, headSha);
-    if (!candidateKeepsLatestRemote) {
-      emit(ctx, entry, "branch_mismatch", {
-        detail:
-          `remote advanced during rebase: expected ${entry.headSha.slice(0, 8)}, ` +
-          `latest ${latestRemoteHead.slice(0, 8)}, candidate ${headSha.slice(0, 8)}`,
-      });
+  const candidateKeepsLatestRemote = await ctx.git.isAncestor(latestRemoteHead, headSha);
+  if (!candidateKeepsLatestRemote) {
+    const detail = latestRemoteHead === entry.headSha
+      ? `candidate diverged from remote head: expected ${entry.headSha.slice(0, 8)}, ` +
+        `latest ${latestRemoteHead.slice(0, 8)}, candidate ${headSha.slice(0, 8)}`
+      : `remote advanced during rebase: expected ${entry.headSha.slice(0, 8)}, ` +
+        `latest ${latestRemoteHead.slice(0, 8)}, candidate ${headSha.slice(0, 8)}`;
+    emit(ctx, entry, "branch_mismatch", { detail });
+    if (latestRemoteHead !== entry.headSha) {
       ctx.store.updateHead(entry.id, latestRemoteHead);
-      return;
+    } else {
+      ctx.store.transition(entry.id, "queued", {
+        ...CLEAN_CI,
+      }, `stale local branch diverged from ${latestRemoteHead.slice(0, 8)}`);
     }
+    return;
   }
   await ctx.git.push(entry.branch, true);
   emit(ctx, entry, "rebase_succeeded", { baseSha });
