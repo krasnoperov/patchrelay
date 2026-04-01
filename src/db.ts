@@ -1,4 +1,5 @@
 import type {
+  GitHubCiSnapshotRecord,
   GitHubFailureSource,
   IssueDependencyRecord,
   IssueRecord,
@@ -123,6 +124,11 @@ export class PatchRelayDatabase {
     lastGitHubFailureCheckUrl?: string | null;
     lastGitHubFailureContextJson?: string | null;
     lastGitHubFailureAt?: string | null;
+    lastGitHubCiSnapshotHeadSha?: string | null;
+    lastGitHubCiSnapshotGateCheckName?: string | null;
+    lastGitHubCiSnapshotGateCheckStatus?: string | null;
+    lastGitHubCiSnapshotJson?: string | null;
+    lastGitHubCiSnapshotSettledAt?: string | null;
     lastQueueSignalAt?: string | null;
     lastQueueIncidentJson?: string | null;
     lastAttemptedFailureHeadSha?: string | null;
@@ -171,6 +177,11 @@ export class PatchRelayDatabase {
       if (params.lastGitHubFailureCheckUrl !== undefined) { sets.push("last_github_failure_check_url = @lastGitHubFailureCheckUrl"); values.lastGitHubFailureCheckUrl = params.lastGitHubFailureCheckUrl; }
       if (params.lastGitHubFailureContextJson !== undefined) { sets.push("last_github_failure_context_json = @lastGitHubFailureContextJson"); values.lastGitHubFailureContextJson = params.lastGitHubFailureContextJson; }
       if (params.lastGitHubFailureAt !== undefined) { sets.push("last_github_failure_at = @lastGitHubFailureAt"); values.lastGitHubFailureAt = params.lastGitHubFailureAt; }
+      if (params.lastGitHubCiSnapshotHeadSha !== undefined) { sets.push("last_github_ci_snapshot_head_sha = @lastGitHubCiSnapshotHeadSha"); values.lastGitHubCiSnapshotHeadSha = params.lastGitHubCiSnapshotHeadSha; }
+      if (params.lastGitHubCiSnapshotGateCheckName !== undefined) { sets.push("last_github_ci_snapshot_gate_check_name = @lastGitHubCiSnapshotGateCheckName"); values.lastGitHubCiSnapshotGateCheckName = params.lastGitHubCiSnapshotGateCheckName; }
+      if (params.lastGitHubCiSnapshotGateCheckStatus !== undefined) { sets.push("last_github_ci_snapshot_gate_check_status = @lastGitHubCiSnapshotGateCheckStatus"); values.lastGitHubCiSnapshotGateCheckStatus = params.lastGitHubCiSnapshotGateCheckStatus; }
+      if (params.lastGitHubCiSnapshotJson !== undefined) { sets.push("last_github_ci_snapshot_json = @lastGitHubCiSnapshotJson"); values.lastGitHubCiSnapshotJson = params.lastGitHubCiSnapshotJson; }
+      if (params.lastGitHubCiSnapshotSettledAt !== undefined) { sets.push("last_github_ci_snapshot_settled_at = @lastGitHubCiSnapshotSettledAt"); values.lastGitHubCiSnapshotSettledAt = params.lastGitHubCiSnapshotSettledAt; }
       if (params.lastQueueSignalAt !== undefined) { sets.push("last_queue_signal_at = @lastQueueSignalAt"); values.lastQueueSignalAt = params.lastQueueSignalAt; }
       if (params.lastQueueIncidentJson !== undefined) { sets.push("last_queue_incident_json = @lastQueueIncidentJson"); values.lastQueueIncidentJson = params.lastQueueIncidentJson; }
       if (params.lastAttemptedFailureHeadSha !== undefined) { sets.push("last_attempted_failure_head_sha = @lastAttemptedFailureHeadSha"); values.lastAttemptedFailureHeadSha = params.lastAttemptedFailureHeadSha; }
@@ -191,7 +202,9 @@ export class PatchRelayDatabase {
           branch_name, worktree_path, thread_id, active_run_id,
           agent_session_id,
           pr_number, pr_url, pr_state, pr_review_state, pr_check_status,
-          last_github_failure_source, last_github_failure_head_sha, last_github_failure_signature, last_github_failure_check_name, last_github_failure_check_url, last_github_failure_context_json, last_github_failure_at, last_queue_signal_at, last_queue_incident_json,
+          last_github_failure_source, last_github_failure_head_sha, last_github_failure_signature, last_github_failure_check_name, last_github_failure_check_url, last_github_failure_context_json, last_github_failure_at,
+          last_github_ci_snapshot_head_sha, last_github_ci_snapshot_gate_check_name, last_github_ci_snapshot_gate_check_status, last_github_ci_snapshot_json, last_github_ci_snapshot_settled_at,
+          last_queue_signal_at, last_queue_incident_json,
           last_attempted_failure_head_sha, last_attempted_failure_signature,
           updated_at
         ) VALUES (
@@ -201,7 +214,9 @@ export class PatchRelayDatabase {
           @branchName, @worktreePath, @threadId, @activeRunId,
           @agentSessionId,
           @prNumber, @prUrl, @prState, @prReviewState, @prCheckStatus,
-          @lastGitHubFailureSource, @lastGitHubFailureHeadSha, @lastGitHubFailureSignature, @lastGitHubFailureCheckName, @lastGitHubFailureCheckUrl, @lastGitHubFailureContextJson, @lastGitHubFailureAt, @lastQueueSignalAt, @lastQueueIncidentJson,
+          @lastGitHubFailureSource, @lastGitHubFailureHeadSha, @lastGitHubFailureSignature, @lastGitHubFailureCheckName, @lastGitHubFailureCheckUrl, @lastGitHubFailureContextJson, @lastGitHubFailureAt,
+          @lastGitHubCiSnapshotHeadSha, @lastGitHubCiSnapshotGateCheckName, @lastGitHubCiSnapshotGateCheckStatus, @lastGitHubCiSnapshotJson, @lastGitHubCiSnapshotSettledAt,
+          @lastQueueSignalAt, @lastQueueIncidentJson,
           @lastAttemptedFailureHeadSha, @lastAttemptedFailureSignature,
           @now
         )
@@ -236,6 +251,11 @@ export class PatchRelayDatabase {
         lastGitHubFailureCheckUrl: params.lastGitHubFailureCheckUrl ?? null,
         lastGitHubFailureContextJson: params.lastGitHubFailureContextJson ?? null,
         lastGitHubFailureAt: params.lastGitHubFailureAt ?? null,
+        lastGitHubCiSnapshotHeadSha: params.lastGitHubCiSnapshotHeadSha ?? null,
+        lastGitHubCiSnapshotGateCheckName: params.lastGitHubCiSnapshotGateCheckName ?? null,
+        lastGitHubCiSnapshotGateCheckStatus: params.lastGitHubCiSnapshotGateCheckStatus ?? null,
+        lastGitHubCiSnapshotJson: params.lastGitHubCiSnapshotJson ?? null,
+        lastGitHubCiSnapshotSettledAt: params.lastGitHubCiSnapshotSettledAt ?? null,
         lastQueueSignalAt: params.lastQueueSignalAt ?? null,
         lastQueueIncidentJson: params.lastQueueIncidentJson ?? null,
         lastAttemptedFailureHeadSha: params.lastAttemptedFailureHeadSha ?? null,
@@ -367,6 +387,16 @@ export class PatchRelayDatabase {
       projectId: String(row.project_id),
       linearIssueId: String(row.linear_issue_id),
     }));
+  }
+
+  getLatestGitHubCiSnapshot(projectId: string, linearIssueId: string): GitHubCiSnapshotRecord | undefined {
+    const issue = this.getIssue(projectId, linearIssueId);
+    if (!issue?.lastGitHubCiSnapshotJson) return undefined;
+    try {
+      return JSON.parse(issue.lastGitHubCiSnapshotJson) as GitHubCiSnapshotRecord;
+    } catch {
+      return undefined;
+    }
   }
 
   countUnresolvedBlockers(projectId: string, linearIssueId: string): number {
@@ -683,6 +713,21 @@ function mapIssueRow(row: Record<string, unknown>): IssueRecord {
       : {}),
     ...(row.last_github_failure_at !== null && row.last_github_failure_at !== undefined
       ? { lastGitHubFailureAt: String(row.last_github_failure_at) }
+      : {}),
+    ...(row.last_github_ci_snapshot_head_sha !== null && row.last_github_ci_snapshot_head_sha !== undefined
+      ? { lastGitHubCiSnapshotHeadSha: String(row.last_github_ci_snapshot_head_sha) }
+      : {}),
+    ...(row.last_github_ci_snapshot_gate_check_name !== null && row.last_github_ci_snapshot_gate_check_name !== undefined
+      ? { lastGitHubCiSnapshotGateCheckName: String(row.last_github_ci_snapshot_gate_check_name) }
+      : {}),
+    ...(row.last_github_ci_snapshot_gate_check_status !== null && row.last_github_ci_snapshot_gate_check_status !== undefined
+      ? { lastGitHubCiSnapshotGateCheckStatus: String(row.last_github_ci_snapshot_gate_check_status) }
+      : {}),
+    ...(row.last_github_ci_snapshot_json !== null && row.last_github_ci_snapshot_json !== undefined
+      ? { lastGitHubCiSnapshotJson: String(row.last_github_ci_snapshot_json) }
+      : {}),
+    ...(row.last_github_ci_snapshot_settled_at !== null && row.last_github_ci_snapshot_settled_at !== undefined
+      ? { lastGitHubCiSnapshotSettledAt: String(row.last_github_ci_snapshot_settled_at) }
       : {}),
     ...(row.last_queue_signal_at !== null && row.last_queue_signal_at !== undefined
       ? { lastQueueSignalAt: String(row.last_queue_signal_at) }

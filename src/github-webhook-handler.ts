@@ -1,10 +1,12 @@
 import type { Logger } from "pino";
 import type { PatchRelayDatabase } from "./db.ts";
-import type { IssueRecord } from "./db-types.ts";
+import type { GitHubCiSnapshotRecord, IssueRecord } from "./db-types.ts";
 import { resolveFactoryStateFromGitHub, TERMINAL_STATES, type FactoryState } from "./factory-state.ts";
 import {
+  createGitHubCiSnapshotResolver,
   createGitHubFailureContextResolver,
   summarizeGitHubFailureContext,
+  type GitHubCiSnapshotResolver,
   type GitHubFailureContextResolver,
 } from "./github-failure-context.ts";
 import type { GitHubWebhookPayload, NormalizedGitHubEvent } from "./github-types.ts";
@@ -25,12 +27,11 @@ import { safeJsonParse } from "./utils.ts";
 
 /**
  * GitHub sends both check_run and check_suite completion events.
- * A single CI run generates 10+ individual check_run events as each job finishes,
- * but only 1 check_suite event when the entire suite completes. Reacting to
- * individual check_run events causes the factory state to flicker rapidly
- * between pr_open and repairing_ci. We only drive state transitions and reactive
- * runs from check_suite events. Individual check_run events still update PR
- * metadata (prCheckStatus) for observability.
+ * A single CI run generates many individual check_run events as each job finishes,
+ * but PatchRelay should only start ci_repair once the configured gate check
+ * (for example `Tests`) has gone terminal for the current PR head SHA. We still
+ * treat most check_run events as metadata-only and only react to queue eviction
+ * checks or the settled gate check.
  */
 function isMetadataOnlyCheckEvent(event: NormalizedGitHubEvent): boolean {
   return event.eventSource === "check_run"
@@ -65,6 +66,7 @@ export class GitHubWebhookHandler {
     private readonly codex: { steerTurn(options: { threadId: string; turnId: string; input: string }): Promise<void> },
     private readonly feed?: OperatorEventFeed,
     private readonly failureContextResolver: GitHubFailureContextResolver = createGitHubFailureContextResolver(),
+    private readonly ciSnapshotResolver: GitHubCiSnapshotResolver = createGitHubCiSnapshotResolver(),
   ) {}
 
   async acceptGitHubWebhook(params: {
@@ -176,6 +178,7 @@ export class GitHubWebhookHandler {
       ...(event.reviewState !== undefined ? { prReviewState: event.reviewState } : {}),
       ...(event.checkStatus !== undefined ? { prCheckStatus: event.checkStatus } : {}),
     });
+    await this.updateCiSnapshot(issue, event, project);
     await this.updateFailureProvenance(issue, event, project);
 
     if (!isMetadataOnlyCheckEvent(event)) {
@@ -237,6 +240,11 @@ export class GitHubWebhookHandler {
         lastGitHubFailureCheckUrl: null,
         lastGitHubFailureContextJson: null,
         lastGitHubFailureAt: null,
+        lastGitHubCiSnapshotHeadSha: event.headSha ?? null,
+        lastGitHubCiSnapshotGateCheckName: this.getPrimaryGateCheckName(project),
+        lastGitHubCiSnapshotGateCheckStatus: "pending",
+        lastGitHubCiSnapshotJson: null,
+        lastGitHubCiSnapshotSettledAt: null,
         lastQueueIncidentJson: null,
         lastAttemptedFailureHeadSha: null,
         lastAttemptedFailureSignature: null,
@@ -262,12 +270,90 @@ export class GitHubWebhookHandler {
     // Queue eviction check runs bypass the metadata-only filter because
     // they're individual check_run events (not check_suite), but they
     // must drive state transitions.
-    const protocol = resolveMergeQueueProtocol(project);
-    if (event.eventSource === "check_run" && event.checkName === protocol.evictionCheckName) {
+    if (this.isQueueEvictionFailure(freshIssue, event, project) || this.isGateCheckEvent(event, project)) {
       await this.maybeEnqueueReactiveRun(freshIssue, event, project);
     } else if (!isMetadataOnlyCheckEvent(event)) {
       await this.maybeEnqueueReactiveRun(freshIssue, event, project);
     }
+  }
+
+  private async updateCiSnapshot(
+    issue: IssueRecord,
+    event: NormalizedGitHubEvent,
+    project?: ProjectConfig,
+  ): Promise<void> {
+    if (event.triggerEvent === "pr_merged") {
+      this.db.upsertIssue({
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        lastGitHubCiSnapshotHeadSha: null,
+        lastGitHubCiSnapshotGateCheckName: null,
+        lastGitHubCiSnapshotGateCheckStatus: null,
+        lastGitHubCiSnapshotJson: null,
+        lastGitHubCiSnapshotSettledAt: null,
+      });
+      return;
+    }
+
+    if (event.triggerEvent === "pr_synchronize") {
+      this.db.upsertIssue({
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        lastGitHubCiSnapshotHeadSha: event.headSha ?? null,
+        lastGitHubCiSnapshotGateCheckName: this.getPrimaryGateCheckName(project),
+        lastGitHubCiSnapshotGateCheckStatus: "pending",
+        lastGitHubCiSnapshotJson: null,
+        lastGitHubCiSnapshotSettledAt: null,
+      });
+      return;
+    }
+
+    if (issue.prState !== "open") return;
+    if (event.eventSource !== "check_run") return;
+    if (this.isQueueEvictionFailure(issue, event, project)) return;
+    if (!this.isGateCheckEvent(event, project)) return;
+    if (this.isStaleGateEvent(issue, event)) return;
+
+    const snapshot = await this.ciSnapshotResolver.resolve({
+      repoFullName: project?.github?.repoFullName ?? event.repoFullName,
+      event,
+      gateCheckNames: this.getGateCheckNames(project),
+    });
+    if (!snapshot) {
+      this.db.upsertIssue({
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        lastGitHubCiSnapshotHeadSha: event.headSha ?? issue.lastGitHubCiSnapshotHeadSha ?? null,
+        lastGitHubCiSnapshotGateCheckName: this.getPrimaryGateCheckName(project),
+        lastGitHubCiSnapshotGateCheckStatus: "pending",
+        lastGitHubCiSnapshotJson: null,
+        lastGitHubCiSnapshotSettledAt: null,
+      });
+      this.logger.warn(
+        { issueKey: issue.issueKey, repoFullName: project?.github?.repoFullName ?? event.repoFullName, headSha: event.headSha },
+        "Could not resolve settled CI snapshot; waiting before CI repair",
+      );
+      this.feed?.publish({
+        level: "warn",
+        kind: "github",
+        issueKey: issue.issueKey,
+        projectId: issue.projectId,
+        stage: issue.factoryState,
+        status: "ci_snapshot_unavailable",
+        summary: `Could not resolve settled ${this.getPrimaryGateCheckName(project)} snapshot; waiting before CI repair`,
+      });
+      return;
+    }
+
+    this.db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      lastGitHubCiSnapshotHeadSha: snapshot.headSha,
+      lastGitHubCiSnapshotGateCheckName: snapshot.gateCheckName ?? this.getPrimaryGateCheckName(project),
+      lastGitHubCiSnapshotGateCheckStatus: snapshot.gateCheckStatus,
+      lastGitHubCiSnapshotJson: JSON.stringify(snapshot),
+      lastGitHubCiSnapshotSettledAt: snapshot.settledAt ?? null,
+    });
   }
 
   private async maybeEnqueueReactiveRun(issue: IssueRecord, event: NormalizedGitHubEvent, project?: ProjectConfig): Promise<void> {
@@ -281,10 +367,7 @@ export class GitHubWebhookHandler {
     if (event.triggerEvent === "check_failed" && issue.prState === "open") {
       // External merge queue eviction: react only to the configured check
       // name, not to any CI failure. Regular CI failures still get ci_repair.
-      const protocol = resolveMergeQueueProtocol(project);
-      const queueCheckName = protocol.evictionCheckName;
-      if (issue.factoryState === "awaiting_queue"
-        && event.checkName === queueCheckName) {
+      if (this.isQueueEvictionFailure(issue, event, project)) {
         const queueRepairContext = buildQueueRepairContextFromEvent(event);
         const failureContext = this.buildQueueFailureContext(issue, event, queueRepairContext);
         if (this.hasDuplicatePendingReactiveRun(issue, "queue_repair", failureContext)) {
@@ -321,10 +404,23 @@ export class GitHubWebhookHandler {
           detail: queueRepairContext.incidentSummary ?? queueRepairContext.incidentUrl ?? event.checkUrl,
         });
       } else {
+        if (!this.isSettledBranchFailure(issue, event, project)) {
+          this.feed?.publish({
+            level: "info",
+            kind: "github",
+            issueKey: issue.issueKey,
+            projectId: issue.projectId,
+            stage: issue.factoryState,
+            status: "ci_waiting_for_settlement",
+            summary: `Waiting for settled ${this.getPrimaryGateCheckName(project)} result before starting CI repair`,
+          });
+          return;
+        }
         const failureContext = await this.resolveBranchFailureContext(issue, event, project);
         if (this.hasDuplicatePendingReactiveRun(issue, "ci_repair", failureContext)) {
           return;
         }
+        const snapshot = this.getRelevantCiSnapshot(issue, event);
         this.db.upsertIssue({
           projectId: issue.projectId,
           linearIssueId: issue.linearIssueId,
@@ -332,6 +428,7 @@ export class GitHubWebhookHandler {
           pendingRunContextJson: JSON.stringify({
             ...failureContext,
             checkClass: resolveCheckClass(failureContext.checkName ?? event.checkName, project),
+            ...(snapshot ? { ciSnapshot: snapshot } : {}),
           }),
           lastGitHubFailureSource: "branch_ci",
           lastGitHubFailureHeadSha: failureContext.failureHeadSha ?? null,
@@ -374,13 +471,15 @@ export class GitHubWebhookHandler {
   }
 
   private async updateFailureProvenance(issue: IssueRecord, event: NormalizedGitHubEvent, project?: ProjectConfig): Promise<void> {
-    const protocol = resolveMergeQueueProtocol(project);
-    const isQueueEvictionCheck = event.eventSource === "check_run" && event.checkName === protocol.evictionCheckName;
+    const isQueueEvictionCheck = this.isQueueEvictionFailure(issue, event, project);
 
     if (event.triggerEvent === "check_failed" && issue.prState === "open") {
-      const source = issue.factoryState === "awaiting_queue" && isQueueEvictionCheck
+      const source = isQueueEvictionCheck
         ? "queue_eviction"
         : "branch_ci";
+      if (source === "branch_ci" && !this.isSettledBranchFailure(issue, event, project)) {
+        return;
+      }
       const failureContext = source === "queue_eviction"
         ? this.buildQueueFailureContext(issue, event)
         : await this.resolveBranchFailureContext(issue, event, project);
@@ -407,10 +506,13 @@ export class GitHubWebhookHandler {
     }
 
     if (
-      (event.triggerEvent === "check_passed" && (!isMetadataOnlyCheckEvent(event) || isQueueEvictionCheck))
+      (event.triggerEvent === "check_passed" && (!isMetadataOnlyCheckEvent(event) || isQueueEvictionCheck || this.isGateCheckEvent(event, project)))
       || event.triggerEvent === "pr_synchronize"
       || event.triggerEvent === "pr_merged"
     ) {
+      if (event.triggerEvent === "check_passed" && !this.canClearFailureProvenance(issue, event, project)) {
+        return;
+      }
       this.db.upsertIssue({
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
@@ -434,10 +536,19 @@ export class GitHubWebhookHandler {
     project?: ProjectConfig,
   ): Promise<GitHubFailurePromptContext> {
     const repoFullName = project?.github?.repoFullName ?? event.repoFullName;
+    const snapshot = this.getRelevantCiSnapshot(issue, event);
+    const primaryFailedCheck = snapshot ? this.pickPrimaryFailedCheck(snapshot) : undefined;
     const context = await this.failureContextResolver.resolve({
       source: "branch_ci",
       repoFullName,
-      event,
+      event: primaryFailedCheck
+        ? {
+            ...event,
+            checkName: primaryFailedCheck.name,
+            checkUrl: primaryFailedCheck.detailsUrl ?? event.checkUrl,
+            checkDetailsUrl: primaryFailedCheck.detailsUrl ?? event.checkDetailsUrl,
+          }
+        : event,
     });
     return {
       ...(context ? context : {}),
@@ -520,6 +631,70 @@ export class GitHubWebhookHandler {
     }
 
     return false;
+  }
+
+  private getGateCheckNames(project?: ProjectConfig): string[] {
+    const configured = (project?.gateChecks ?? []).map((entry) => entry.trim()).filter(Boolean);
+    return configured.length > 0 ? configured : ["Tests"];
+  }
+
+  private getPrimaryGateCheckName(project?: ProjectConfig): string {
+    return this.getGateCheckNames(project)[0] ?? "Tests";
+  }
+
+  private isGateCheckEvent(event: NormalizedGitHubEvent, project?: ProjectConfig): boolean {
+    if (event.eventSource !== "check_run" || !event.checkName) return false;
+    const normalized = event.checkName.trim().toLowerCase();
+    return this.getGateCheckNames(project).some((entry) => entry.trim().toLowerCase() === normalized);
+  }
+
+  private isStaleGateEvent(issue: IssueRecord, event: NormalizedGitHubEvent): boolean {
+    return Boolean(
+      issue.lastGitHubCiSnapshotHeadSha
+      && event.headSha
+      && issue.lastGitHubCiSnapshotHeadSha !== event.headSha,
+    );
+  }
+
+  private isQueueEvictionFailure(issue: IssueRecord, event: NormalizedGitHubEvent, project?: ProjectConfig): boolean {
+    const protocol = resolveMergeQueueProtocol(project);
+    return issue.factoryState === "awaiting_queue"
+      && event.eventSource === "check_run"
+      && event.checkName === protocol.evictionCheckName;
+  }
+
+  private isSettledBranchFailure(issue: IssueRecord, event: NormalizedGitHubEvent, project?: ProjectConfig): boolean {
+    if (event.triggerEvent !== "check_failed" || issue.prState !== "open") return false;
+    if (!this.isGateCheckEvent(event, project)) return false;
+    const snapshot = this.getRelevantCiSnapshot(issue, event);
+    return snapshot?.gateCheckStatus === "failure" && snapshot.headSha === event.headSha;
+  }
+
+  private canClearFailureProvenance(issue: IssueRecord, event: NormalizedGitHubEvent, project?: ProjectConfig): boolean {
+    if (event.triggerEvent !== "check_passed") return true;
+    if (this.isQueueEvictionFailure(issue, event, project)) {
+      return !issue.lastGitHubFailureHeadSha || issue.lastGitHubFailureHeadSha === event.headSha;
+    }
+    if (!this.isGateCheckEvent(event, project)) {
+      return true;
+    }
+    if (this.isStaleGateEvent(issue, event)) {
+      return false;
+    }
+    return !issue.lastGitHubFailureHeadSha || issue.lastGitHubFailureHeadSha === event.headSha;
+  }
+
+  private getRelevantCiSnapshot(issue: IssueRecord, event: NormalizedGitHubEvent): GitHubCiSnapshotRecord | undefined {
+    const snapshot = this.db.getLatestGitHubCiSnapshot(issue.projectId, issue.linearIssueId);
+    if (!snapshot) return undefined;
+    if (snapshot.headSha !== event.headSha) return undefined;
+    return snapshot;
+  }
+
+  private pickPrimaryFailedCheck(snapshot: GitHubCiSnapshotRecord): { name: string; detailsUrl?: string | undefined } | undefined {
+    const gateName = snapshot.gateCheckName?.trim().toLowerCase();
+    return snapshot.failedChecks.find((entry) => entry.name.trim().toLowerCase() !== gateName)
+      ?? snapshot.failedChecks[0];
   }
 
   private async emitLinearActivity(

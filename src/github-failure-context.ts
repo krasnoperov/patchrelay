@@ -1,4 +1,8 @@
-import type { GitHubFailureSource } from "./db-types.ts";
+import type {
+  GitHubCiSnapshotCheckRecord,
+  GitHubCiSnapshotRecord,
+  GitHubFailureSource,
+} from "./db-types.ts";
 import type { NormalizedGitHubEvent } from "./github-types.ts";
 import { execCommand, safeJsonParse, sanitizeDiagnosticText } from "./utils.ts";
 
@@ -34,6 +38,14 @@ interface WorkflowJobSummary {
   name?: string;
   conclusion?: string;
   stepName?: string;
+}
+
+export interface GitHubCiSnapshotResolver {
+  resolve(params: {
+    repoFullName: string;
+    event: NormalizedGitHubEvent;
+    gateCheckNames: string[];
+  }): Promise<GitHubCiSnapshotRecord | undefined>;
 }
 
 const FAILED_CONCLUSIONS = new Set([
@@ -132,6 +144,20 @@ export function createGitHubFailureContextResolver(): GitHubFailureContextResolv
   };
 }
 
+export function createGitHubCiSnapshotResolver(): GitHubCiSnapshotResolver {
+  return {
+    resolve: async ({ repoFullName, event, gateCheckNames }) => {
+      if (!repoFullName || !event.headSha) return undefined;
+      try {
+        const checks = await resolveCheckSnapshotChecks(repoFullName, event.headSha);
+        return buildCiSnapshotFromChecks(checks, event, gateCheckNames);
+      } catch {
+        return undefined;
+      }
+    },
+  };
+}
+
 export function parseGitHubFailureContext(value: string | undefined): GitHubFailureContext | undefined {
   if (!value) return undefined;
   return safeJsonParse<GitHubFailureContext>(value);
@@ -195,6 +221,19 @@ async function resolveFailedCheckRun(repoFullName: string, event: NormalizedGitH
     ?? checks[0];
 }
 
+async function resolveCheckSnapshotChecks(repoFullName: string, headSha: string): Promise<GitHubCiSnapshotCheckRecord[]> {
+  const response = await execCommand("gh", [
+    "api",
+    `repos/${repoFullName}/commits/${headSha}/check-runs`,
+    "--method", "GET",
+  ], { timeoutMs: 15_000 });
+  if (response.exitCode !== 0) {
+    throw new Error(response.stderr || "gh api check-runs failed");
+  }
+  const payload = safeJsonParse<{ check_runs?: Array<Record<string, unknown>> }>(response.stdout);
+  return (payload?.check_runs ?? []).map(mapCiSnapshotCheck).filter((entry): entry is GitHubCiSnapshotCheckRecord => Boolean(entry));
+}
+
 async function resolveWorkflowJob(
   repoFullName: string,
   workflowRunId: number,
@@ -252,6 +291,28 @@ function mapCheckRunSummary(row: Record<string, unknown>): CheckRunSummary {
   };
 }
 
+function mapCiSnapshotCheck(row: Record<string, unknown>): GitHubCiSnapshotCheckRecord | undefined {
+  if (typeof row.name !== "string" || !row.name.trim()) return undefined;
+  const output = row.output && typeof row.output === "object" ? row.output as Record<string, unknown> : undefined;
+  const status = deriveCheckStatus({
+    apiStatus: typeof row.status === "string" ? row.status : undefined,
+    apiConclusion: typeof row.conclusion === "string" ? row.conclusion : undefined,
+  });
+  return {
+    name: row.name.trim(),
+    status,
+    ...(typeof row.conclusion === "string" && row.conclusion.trim() ? { conclusion: row.conclusion.trim().toLowerCase() } : {}),
+    ...(typeof row.details_url === "string" && row.details_url.trim() ? { detailsUrl: row.details_url.trim() } : {}),
+    ...(firstNonEmpty(
+      typeof output?.title === "string" ? output.title : undefined,
+      typeof output?.summary === "string" ? sanitizeDiagnosticText(output.summary, 240) : undefined,
+    ) ? { summary: firstNonEmpty(
+      typeof output?.title === "string" ? output.title : undefined,
+      typeof output?.summary === "string" ? sanitizeDiagnosticText(output.summary, 240) : undefined,
+    ) } : {}),
+  };
+}
+
 function mapWorkflowJobSummary(row: Record<string, unknown>): WorkflowJobSummary {
   const steps = Array.isArray(row.steps) ? row.steps.filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object") : [];
   const failedStep = steps.find((entry) => {
@@ -270,6 +331,71 @@ function parseWorkflowRunId(url: string | undefined): number | undefined {
   if (!url) return undefined;
   const match = url.match(/\/actions\/runs\/(\d+)/);
   return match ? Number(match[1]) : undefined;
+}
+
+function buildCiSnapshotFromChecks(
+  checks: GitHubCiSnapshotCheckRecord[],
+  event: NormalizedGitHubEvent,
+  gateCheckNames: string[],
+): GitHubCiSnapshotRecord {
+  const gateCheck = findGateCheck(checks, gateCheckNames, event.checkName);
+  const gateCheckName = gateCheck?.name ?? pickGateCheckName(gateCheckNames, event.checkName) ?? event.checkName;
+  const gateCheckStatus = gateCheck?.status ?? deriveCheckStatus({
+    eventStatus: event.checkStatus,
+    eventConclusion: event.triggerEvent === "check_passed" ? "success" : "failure",
+  });
+  const failedChecks = checks.filter((entry) => entry.status === "failure");
+  return {
+    headSha: event.headSha,
+    ...(gateCheckName ? { gateCheckName } : {}),
+    gateCheckStatus,
+    failedChecks,
+    checks,
+    ...(gateCheckStatus !== "pending" ? { settledAt: new Date().toISOString() } : {}),
+    capturedAt: new Date().toISOString(),
+  };
+}
+
+function findGateCheck(
+  checks: GitHubCiSnapshotCheckRecord[],
+  gateCheckNames: string[],
+  fallbackCheckName?: string,
+): GitHubCiSnapshotCheckRecord | undefined {
+  const exactNames = gateCheckNames.map((entry) => entry.trim().toLowerCase()).filter(Boolean);
+  if (exactNames.length > 0) {
+    const exact = checks.find((entry) => exactNames.includes(entry.name.trim().toLowerCase()));
+    if (exact) return exact;
+  }
+  if (!fallbackCheckName) return undefined;
+  const fallback = fallbackCheckName.trim().toLowerCase();
+  return checks.find((entry) => entry.name.trim().toLowerCase() === fallback);
+}
+
+function pickGateCheckName(gateCheckNames: string[], fallbackCheckName?: string): string | undefined {
+  return gateCheckNames.find((entry) => entry.trim().length > 0)?.trim()
+    ?? fallbackCheckName?.trim();
+}
+
+function deriveCheckStatus(params: {
+  apiStatus?: string | undefined;
+  apiConclusion?: string | undefined;
+  eventStatus?: string | undefined;
+  eventConclusion?: string | undefined;
+}): "pending" | "success" | "failure" {
+  const status = params.apiStatus?.trim().toLowerCase();
+  if (status === "queued" || status === "in_progress" || status === "requested" || status === "waiting" || status === "pending") {
+    return "pending";
+  }
+  const conclusion = params.apiConclusion?.trim().toLowerCase()
+    ?? params.eventConclusion?.trim().toLowerCase()
+    ?? params.eventStatus?.trim().toLowerCase();
+  if (conclusion === "success" || conclusion === "neutral" || conclusion === "skipped") {
+    return "success";
+  }
+  if (conclusion && FAILED_CONCLUSIONS.has(conclusion)) {
+    return "failure";
+  }
+  return status === "completed" ? "failure" : "pending";
 }
 
 function buildFailureSignature(parts: {

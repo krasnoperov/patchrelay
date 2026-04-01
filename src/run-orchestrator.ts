@@ -92,26 +92,42 @@ function buildRunPrompt(issue: IssueRecord, runType: RunType, repoPath: string, 
 
   // Add run-type-specific context for reactive runs
   switch (runType) {
-    case "ci_repair":
+    case "ci_repair": {
+      const snapshot = context?.ciSnapshot && typeof context.ciSnapshot === "object"
+        ? context.ciSnapshot as {
+            gateCheckName?: string;
+            gateCheckStatus?: string;
+            settledAt?: string;
+            failedChecks?: Array<{ name?: string; summary?: string }>;
+          }
+        : undefined;
       lines.push(
         "## CI Repair",
         "",
-        "A CI check has failed on your PR. Fix the failure and push.",
+        "A full CI iteration has settled failed on your PR. Diagnose the whole snapshot, fix the root cause and directly related fallout, then push to the same PR branch.",
+        snapshot?.gateCheckName ? `Gate check: ${String(snapshot.gateCheckName)}` : "",
+        snapshot?.gateCheckStatus ? `Gate status: ${String(snapshot.gateCheckStatus)}` : "",
+        snapshot?.settledAt ? `Settled at: ${String(snapshot.settledAt)}` : "",
         context?.failureHeadSha ? `Failing head SHA: ${String(context.failureHeadSha)}` : "",
         context?.checkName ? `Failed check: ${String(context.checkName)}` : "",
         context?.jobName && context?.jobName !== context?.checkName ? `Failed job: ${String(context.jobName)}` : "",
         context?.stepName ? `Failed step: ${String(context.stepName)}` : "",
         context?.summary ? `Failure summary: ${String(context.summary)}` : "",
+        Array.isArray(snapshot?.failedChecks) && snapshot.failedChecks.length > 0
+          ? `All failed checks in settled snapshot:\n${snapshot.failedChecks.map((entry) => `- ${String(entry.name ?? "unknown")}${entry.summary ? `: ${String(entry.summary)}` : ""}`).join("\n")}`
+          : "",
         context?.checkUrl ? `Check URL: ${String(context.checkUrl)}` : "",
         Array.isArray(context?.annotations) && context.annotations.length > 0
           ? `Annotations:\n${context.annotations.map((entry) => `- ${String(entry)}`).join("\n")}`
           : "",
         "",
-        "Read the CI failure logs, fix the code issue, run verification, commit and push.",
+        "Read the latest CI logs, consider the broader PR context, fix the likely root cause and any directly related fallout in one pass, run verification, commit and push.",
+        "Do not open a new PR. Keep working on the existing branch until CI goes green or the situation is clearly stuck.",
         "Do not change test expectations unless the test is genuinely wrong.",
         "",
       );
       break;
+    }
     case "review_fix":
       lines.push(
         "## Review Changes Requested",

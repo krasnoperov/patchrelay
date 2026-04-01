@@ -6,7 +6,7 @@ import pino from "pino";
 import test from "node:test";
 import { PatchRelayDatabase } from "../src/db.ts";
 import { GitHubWebhookHandler } from "../src/github-webhook-handler.ts";
-import type { GitHubFailureContextResolver } from "../src/github-failure-context.ts";
+import type { GitHubCiSnapshotResolver, GitHubFailureContextResolver } from "../src/github-failure-context.ts";
 import type { AppConfig } from "../src/types.ts";
 
 function createConfig(baseDir: string): AppConfig {
@@ -65,6 +65,8 @@ function createConfig(baseDir: string): AppConfig {
         issueKeyPrefixes: ["USE"],
         linearTeamIds: ["USE"],
         allowLabels: [],
+        reviewChecks: [],
+        gateChecks: ["Tests"],
         triggerEvents: ["statusChanged"],
         branchPrefix: "use",
         github: {
@@ -76,7 +78,11 @@ function createConfig(baseDir: string): AppConfig {
   };
 }
 
-function createHandler(baseDir: string, failureContextResolver?: GitHubFailureContextResolver) {
+function createHandler(
+  baseDir: string,
+  failureContextResolver?: GitHubFailureContextResolver,
+  ciSnapshotResolver?: GitHubCiSnapshotResolver,
+) {
   const config = createConfig(baseDir);
   const db = new PatchRelayDatabase(config.database.path, config.database.wal);
   db.runMigrations();
@@ -92,6 +98,7 @@ function createHandler(baseDir: string, failureContextResolver?: GitHubFailureCo
     { steerTurn: async () => undefined } as never,
     undefined,
     failureContextResolver,
+    ciSnapshotResolver,
   );
   return { config, db, enqueueCalls, handler };
 }
@@ -131,29 +138,6 @@ function buildCheckRunPayload(params: {
           },
         ],
       },
-    },
-  }), "utf8");
-}
-
-function buildCheckSuitePayload(params: {
-  branch: string;
-  headSha: string;
-  prNumber: number;
-  conclusion: "failure" | "success";
-}): Buffer {
-  return Buffer.from(JSON.stringify({
-    action: "completed",
-    repository: { full_name: "owner/repo" },
-    check_suite: {
-      conclusion: params.conclusion,
-      head_sha: params.headSha,
-      head_branch: params.branch,
-      pull_requests: [
-        {
-          number: params.prNumber,
-          head: { ref: params.branch },
-        },
-      ],
     },
   }), "utf8");
 }
@@ -311,7 +295,40 @@ test("queue eviction falls back to minimal context when incident payload is malf
 test("branch CI failures clear stale queue incident context", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-queue-cleared-"));
   try {
-    const { db, enqueueCalls, handler } = createHandler(baseDir);
+    const { db, enqueueCalls, handler } = createHandler(
+      baseDir,
+      {
+        resolve: async () => ({
+          source: "branch_ci",
+          repoFullName: "owner/repo",
+          capturedAt: "2026-04-01T00:00:00.000Z",
+          headSha: "sha-44",
+          failureSignature: "branch_ci::sha-44::Checks::Run tests",
+          checkName: "Checks",
+          checkUrl: "https://github.com/owner/repo/actions/runs/44",
+          jobName: "Checks",
+          stepName: "Run tests",
+          summary: "Tests failed",
+        }),
+      },
+      {
+        resolve: async () => ({
+          headSha: "sha-44",
+          gateCheckName: "Tests",
+          gateCheckStatus: "failure",
+          failedChecks: [
+            { name: "Checks", status: "failure", conclusion: "failure", detailsUrl: "https://github.com/owner/repo/actions/runs/44", summary: "Tests failed" },
+            { name: "Tests", status: "failure", conclusion: "failure" },
+          ],
+          checks: [
+            { name: "Checks", status: "failure", conclusion: "failure", detailsUrl: "https://github.com/owner/repo/actions/runs/44", summary: "Tests failed" },
+            { name: "Tests", status: "failure", conclusion: "failure" },
+          ],
+          settledAt: "2026-04-01T00:00:05.000Z",
+          capturedAt: "2026-04-01T00:00:05.000Z",
+        }),
+      },
+    );
     db.upsertIssue({
       projectId: "usertold",
       linearIssueId: "issue-4",
@@ -332,11 +349,12 @@ test("branch CI failures clear stale queue incident context", async () => {
     });
 
     await handler.processGitHubWebhookEvent({
-      eventType: "check_suite",
-      rawBody: buildCheckSuitePayload({
+      eventType: "check_run",
+      rawBody: buildCheckRunPayload({
         branch: "feat-branch-fail",
         headSha: "sha-44",
         prNumber: 44,
+        checkName: "Tests",
         conclusion: "failure",
       }).toString("utf8"),
     });
@@ -354,8 +372,11 @@ test("branch CI failures clear stale queue incident context", async () => {
 test("branch CI failures persist enriched Actions context in pending repair prompt", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-ci-context-"));
   try {
+    let resolvedCheckName: string | undefined;
     const { db, enqueueCalls, handler } = createHandler(baseDir, {
-      resolve: async () => ({
+      resolve: async ({ event }) => {
+        resolvedCheckName = event.checkName;
+        return {
         source: "branch_ci",
         repoFullName: "owner/repo",
         capturedAt: "2026-04-01T00:00:00.000Z",
@@ -367,6 +388,43 @@ test("branch CI failures persist enriched Actions context in pending repair prom
         stepName: "Run npx tsgo --noEmit",
         summary: "Type generation failed",
         annotations: ["src/schema.ts: incompatible type"],
+        };
+      },
+    }, {
+      resolve: async () => ({
+        headSha: "sha-45",
+        gateCheckName: "Tests",
+        gateCheckStatus: "failure",
+        failedChecks: [
+          {
+            name: "Checks",
+            status: "failure",
+            conclusion: "failure",
+            detailsUrl: "https://github.com/owner/repo/actions/runs/45",
+            summary: "Type generation failed",
+          },
+          {
+            name: "Tests",
+            status: "failure",
+            conclusion: "failure",
+          },
+        ],
+        checks: [
+          {
+            name: "Checks",
+            status: "failure",
+            conclusion: "failure",
+            detailsUrl: "https://github.com/owner/repo/actions/runs/45",
+            summary: "Type generation failed",
+          },
+          {
+            name: "Tests",
+            status: "failure",
+            conclusion: "failure",
+          },
+        ],
+        settledAt: "2026-04-01T00:00:05.000Z",
+        capturedAt: "2026-04-01T00:00:05.000Z",
       }),
     });
     db.upsertIssue({
@@ -380,17 +438,19 @@ test("branch CI failures persist enriched Actions context in pending repair prom
     });
 
     await handler.processGitHubWebhookEvent({
-      eventType: "check_suite",
-      rawBody: buildCheckSuitePayload({
+      eventType: "check_run",
+      rawBody: buildCheckRunPayload({
         branch: "feat-ci-context",
         headSha: "sha-45",
         prNumber: 45,
+        checkName: "Tests",
         conclusion: "failure",
       }).toString("utf8"),
     });
 
     const issue = db.getIssue("usertold", "issue-5");
     const pending = JSON.parse(issue?.pendingRunContextJson ?? "{}");
+    assert.equal(resolvedCheckName, "Checks");
     assert.equal(issue?.pendingRunType, "ci_repair");
     assert.equal(issue?.lastGitHubFailureSignature, "branch_ci::sha-45::Checks::npx tsgo --noEmit");
     assert.equal(issue?.lastGitHubFailureHeadSha, "sha-45");
@@ -421,6 +481,22 @@ test("same failure signature and head sha are not re-enqueued after an attempted
         stepName: "Run tests",
         summary: "Tests failed",
       }),
+    }, {
+      resolve: async () => ({
+        headSha: "sha-46",
+        gateCheckName: "Tests",
+        gateCheckStatus: "failure",
+        failedChecks: [
+          { name: "Checks", status: "failure", conclusion: "failure", detailsUrl: "https://github.com/owner/repo/actions/runs/46", summary: "Tests failed" },
+          { name: "Tests", status: "failure", conclusion: "failure" },
+        ],
+        checks: [
+          { name: "Checks", status: "failure", conclusion: "failure", detailsUrl: "https://github.com/owner/repo/actions/runs/46", summary: "Tests failed" },
+          { name: "Tests", status: "failure", conclusion: "failure" },
+        ],
+        settledAt: "2026-04-01T00:00:05.000Z",
+        capturedAt: "2026-04-01T00:00:05.000Z",
+      }),
     });
     db.upsertIssue({
       projectId: "usertold",
@@ -435,17 +511,184 @@ test("same failure signature and head sha are not re-enqueued after an attempted
     });
 
     await handler.processGitHubWebhookEvent({
-      eventType: "check_suite",
-      rawBody: buildCheckSuitePayload({
+      eventType: "check_run",
+      rawBody: buildCheckRunPayload({
         branch: "feat-ci-dedupe",
         headSha: "sha-46",
         prNumber: 46,
+        checkName: "Tests",
         conclusion: "failure",
       }).toString("utf8"),
     });
 
     const issue = db.getIssue("usertold", "issue-6");
     assert.equal(issue?.pendingRunType, undefined);
+    assert.deepEqual(enqueueCalls, []);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("non-gate branch CI failures wait for the settled Tests gate before enqueuing repair", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-ci-settlement-"));
+  try {
+    const { db, enqueueCalls, handler } = createHandler(baseDir);
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-7",
+      issueKey: "USE-7",
+      branchName: "feat-ci-settlement",
+      prNumber: 47,
+      prState: "open",
+      factoryState: "pr_open",
+    });
+
+    await handler.processGitHubWebhookEvent({
+      eventType: "check_run",
+      rawBody: buildCheckRunPayload({
+        branch: "feat-ci-settlement",
+        headSha: "sha-47",
+        prNumber: 47,
+        checkName: "Checks",
+        conclusion: "failure",
+      }).toString("utf8"),
+    });
+
+    const issue = db.getIssue("usertold", "issue-7");
+    assert.equal(issue?.pendingRunType, undefined);
+    assert.deepEqual(enqueueCalls, []);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("checks with similar names do not count as the Tests gate", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-ci-similar-"));
+  try {
+    const { db, enqueueCalls, handler } = createHandler(baseDir);
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-8",
+      issueKey: "USE-8",
+      branchName: "feat-ci-similar",
+      prNumber: 48,
+      prState: "open",
+      factoryState: "pr_open",
+    });
+
+    await handler.processGitHubWebhookEvent({
+      eventType: "check_run",
+      rawBody: buildCheckRunPayload({
+        branch: "feat-ci-similar",
+        headSha: "sha-48",
+        prNumber: 48,
+        checkName: "Build & UI Tests",
+        conclusion: "failure",
+      }).toString("utf8"),
+    });
+
+    const issue = db.getIssue("usertold", "issue-8");
+    assert.equal(issue?.pendingRunType, undefined);
+    assert.equal(issue?.lastGitHubCiSnapshotJson, undefined);
+    assert.deepEqual(enqueueCalls, []);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("gate failures wait when settled snapshot resolution is unavailable", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-ci-unavailable-"));
+  try {
+    const { db, enqueueCalls, handler } = createHandler(baseDir, undefined, {
+      resolve: async () => undefined,
+    });
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-9",
+      issueKey: "USE-9",
+      branchName: "feat-ci-unavailable",
+      prNumber: 49,
+      prState: "open",
+      factoryState: "pr_open",
+      lastGitHubCiSnapshotHeadSha: "sha-49",
+      lastGitHubCiSnapshotGateCheckName: "Tests",
+      lastGitHubCiSnapshotGateCheckStatus: "pending",
+    });
+
+    await handler.processGitHubWebhookEvent({
+      eventType: "check_run",
+      rawBody: buildCheckRunPayload({
+        branch: "feat-ci-unavailable",
+        headSha: "sha-49",
+        prNumber: 49,
+        checkName: "Tests",
+        conclusion: "failure",
+      }).toString("utf8"),
+    });
+
+    const issue = db.getIssue("usertold", "issue-9");
+    assert.equal(issue?.pendingRunType, undefined);
+    assert.equal(issue?.lastGitHubFailureSource, undefined);
+    assert.equal(issue?.lastGitHubCiSnapshotHeadSha, "sha-49");
+    assert.equal(issue?.lastGitHubCiSnapshotGateCheckStatus, "pending");
+    assert.equal(issue?.lastGitHubCiSnapshotJson, undefined);
+    assert.deepEqual(enqueueCalls, []);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("stale passing gate events do not clear failure provenance for a newer head", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-ci-stale-pass-"));
+  try {
+    const { db, enqueueCalls, handler } = createHandler(baseDir);
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-10",
+      issueKey: "USE-10",
+      branchName: "feat-ci-stale-pass",
+      prNumber: 50,
+      prState: "open",
+      factoryState: "repairing_ci",
+      lastGitHubFailureSource: "branch_ci",
+      lastGitHubFailureHeadSha: "sha-new",
+      lastGitHubFailureSignature: "branch_ci::sha-new::Checks::Run tests",
+      lastGitHubFailureCheckName: "Checks",
+      lastGitHubCiSnapshotHeadSha: "sha-new",
+      lastGitHubCiSnapshotGateCheckName: "Tests",
+      lastGitHubCiSnapshotGateCheckStatus: "failure",
+      lastGitHubCiSnapshotJson: JSON.stringify({
+        headSha: "sha-new",
+        gateCheckName: "Tests",
+        gateCheckStatus: "failure",
+        failedChecks: [{ name: "Checks", status: "failure", conclusion: "failure" }],
+        checks: [
+          { name: "Checks", status: "failure", conclusion: "failure" },
+          { name: "Tests", status: "failure", conclusion: "failure" },
+        ],
+        settledAt: "2026-04-01T00:00:05.000Z",
+        capturedAt: "2026-04-01T00:00:05.000Z",
+      }),
+      lastGitHubCiSnapshotSettledAt: "2026-04-01T00:00:05.000Z",
+    });
+
+    await handler.processGitHubWebhookEvent({
+      eventType: "check_run",
+      rawBody: buildCheckRunPayload({
+        branch: "feat-ci-stale-pass",
+        headSha: "sha-old",
+        prNumber: 50,
+        checkName: "Tests",
+        conclusion: "success",
+      }).toString("utf8"),
+    });
+
+    const issue = db.getIssue("usertold", "issue-10");
+    assert.equal(issue?.lastGitHubFailureSource, "branch_ci");
+    assert.equal(issue?.lastGitHubFailureHeadSha, "sha-new");
+    assert.equal(issue?.lastGitHubFailureCheckName, "Checks");
+    assert.equal(issue?.lastGitHubCiSnapshotHeadSha, "sha-new");
+    assert.equal(issue?.lastGitHubCiSnapshotGateCheckStatus, "failure");
     assert.deepEqual(enqueueCalls, []);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
