@@ -80,6 +80,7 @@ function verboseItemLabel(type: string): string {
 
 function FeedRow({ entry }: { entry: Extract<TimelineDisplayRow, { kind: "feed" }> }): React.JSX.Element {
   const label = entry.feed.status ?? entry.feed.feedKind;
+  const repeatSuffix = entry.repeatCount && entry.repeatCount > 1 ? ` ×${entry.repeatCount}` : "";
   return (
     <Box flexDirection="column" marginBottom={1}>
       <Box>
@@ -87,7 +88,7 @@ function FeedRow({ entry }: { entry: Extract<TimelineDisplayRow, { kind: "feed" 
         <Text color="cyan" bold>{label.padEnd(12)}</Text>
       </Box>
       <Box paddingLeft={6}>
-        <Text wrap="wrap">{entry.feed.summary}</Text>
+        <Text wrap="wrap">{entry.feed.summary}{repeatSuffix}</Text>
       </Box>
     </Box>
   );

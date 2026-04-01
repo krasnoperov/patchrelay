@@ -24,6 +24,7 @@ export type TimelineDisplayRow =
       at: string;
       finalized: true;
       feed: TimelineFeedPayload;
+      repeatCount?: number | undefined;
     }
   | {
       id: string;
@@ -59,7 +60,8 @@ interface RunAccumulator {
 }
 
 export function buildTimelineRows(entries: TimelineEntry[], mode: TimelineMode): TimelineDisplayRow[] {
-  return mode === "compact" ? buildCompactTimelineRows(entries) : buildVerboseTimelineRows(entries);
+  const rows = mode === "compact" ? buildCompactTimelineRows(entries) : buildVerboseTimelineRows(entries);
+  return collapseRepeatedFeedRows(rows);
 }
 
 function buildVerboseTimelineRows(entries: TimelineEntry[]): TimelineDisplayRow[] {
@@ -107,6 +109,9 @@ function buildVerboseTimelineRows(entries: TimelineEntry[]): TimelineDisplayRow[
 
     switch (entry.kind) {
       case "feed":
+        if (shouldHideFeed(entry.feed!)) {
+          break;
+        }
         rows.push({
           id: entry.id,
           kind: "feed",
@@ -144,9 +149,9 @@ function buildVerboseTimelineRows(entries: TimelineEntry[]): TimelineDisplayRow[
       finalized: run.items.every((item) => item.status !== "inProgress") && run.run.status !== "running",
       run: { ...run.run, ...(run.endedAt ? { endedAt: run.endedAt } : {}) },
       details: [],
-      items: entries
+      items: summarizeVerboseItems(entries
         .filter((entry) => entry.kind === "item" && entry.runId === runId)
-        .map((entry) => ({ at: entry.at, item: entry.item! })),
+        .map((entry) => ({ at: entry.at, item: entry.item! }))),
     });
   }
 
@@ -204,7 +209,7 @@ function buildCompactTimelineRows(entries: TimelineEntry[]): TimelineDisplayRow[
       continue;
     }
 
-    if (entry.kind === "feed" && shouldHideFeedInCompact(entry.feed!)) {
+    if (entry.kind === "feed" && shouldHideFeed(entry.feed!)) {
       continue;
     }
 
@@ -265,14 +270,25 @@ function buildCompactTimelineRows(entries: TimelineEntry[]): TimelineDisplayRow[
   return rows;
 }
 
-function shouldHideFeedInCompact(feed: TimelineFeedPayload): boolean {
+function shouldHideFeed(feed: TimelineFeedPayload): boolean {
   if (feed.feedKind === "stage" && feed.status === "starting") {
+    return true;
+  }
+  if (feed.feedKind === "stage" && feed.status === "reconciled" && isNoOpReconciliation(feed.summary)) {
     return true;
   }
   if (feed.feedKind === "turn" && (feed.status === "completed" || feed.status === "failed")) {
     return true;
   }
+  if (feed.feedKind === "queue" && feed.status === "queue_label_requested") {
+    return true;
+  }
   return false;
+}
+
+function isNoOpReconciliation(summary: string): boolean {
+  const match = summary.match(/^Reconciliation:\s+([a-z_]+)\s+→\s+([a-z_]+)$/i);
+  return Boolean(match?.[1] && match[1] === match[2]);
 }
 
 function resolveCompactRunStatus(run: TimelineRunPayload, items: TimelineItemPayload[]): string {
@@ -415,6 +431,75 @@ function rowKindOrder(kind: TimelineDisplayRow["kind"]): number {
     case "item":
       return 3;
   }
+}
+
+function summarizeVerboseItems(items: TimelineVerboseItem[]): TimelineVerboseItem[] {
+  const directTypes = new Set(["userMessage", "commandExecution", "fileChange", "plan"]);
+  const kept = items.filter((entry) => directTypes.has(entry.item.type));
+
+  const latestAgentMessage = findLatestVerboseItem(items, (entry) =>
+    entry.item.type === "agentMessage" && Boolean(entry.item.text?.trim()));
+  if (latestAgentMessage) {
+    kept.push(latestAgentMessage);
+  } else {
+    const latestReasoning = findLatestVerboseItem(items, (entry) =>
+      entry.item.type === "reasoning" && Boolean(entry.item.text?.trim()));
+    if (latestReasoning) {
+      kept.push(latestReasoning);
+    }
+  }
+
+  const deduped = new Map<string, TimelineVerboseItem>();
+  for (const entry of kept) {
+    deduped.set(entry.item.id, entry);
+  }
+
+  return Array.from(deduped.values()).sort((left, right) => {
+    const cmp = left.at.localeCompare(right.at);
+    if (cmp !== 0) return cmp;
+    return left.item.id.localeCompare(right.item.id);
+  });
+}
+
+function findLatestVerboseItem(
+  items: TimelineVerboseItem[],
+  predicate: (item: TimelineVerboseItem) => boolean,
+): TimelineVerboseItem | undefined {
+  for (let i = items.length - 1; i >= 0; i -= 1) {
+    const item = items[i]!;
+    if (predicate(item)) {
+      return item;
+    }
+  }
+  return undefined;
+}
+
+function collapseRepeatedFeedRows(rows: TimelineDisplayRow[]): TimelineDisplayRow[] {
+  const collapsed: TimelineDisplayRow[] = [];
+
+  for (const row of rows) {
+    if (row.kind !== "feed") {
+      collapsed.push(row);
+      continue;
+    }
+
+    const previous = collapsed.at(-1);
+    if (
+      previous?.kind === "feed"
+      && previous.feed.feedKind === row.feed.feedKind
+      && previous.feed.status === row.feed.status
+      && previous.feed.summary === row.feed.summary
+      && previous.feed.detail === row.feed.detail
+    ) {
+      previous.at = row.at;
+      previous.repeatCount = (previous.repeatCount ?? 1) + 1;
+      continue;
+    }
+
+    collapsed.push({ ...row, ...(row.repeatCount ? { repeatCount: row.repeatCount } : {}) });
+  }
+
+  return collapsed;
 }
 
 function cleanCommand(raw: string): string {
