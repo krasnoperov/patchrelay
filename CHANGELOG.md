@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.30.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.29.3...patchrelay-v0.30.0) (2026-04-01)
+
+
+### Features
+
+* gate blocked work and surface queue pauses ([06735d7](https://github.com/krasnoperov/patchrelay/commit/06735d7fd5b04169b2947097d28828809e5355d6))
+* gate delegated work on blocker completion ([2961639](https://github.com/krasnoperov/patchrelay/commit/2961639ab967cd26c35a75353640deb800b85b5f))
+
+
+### Bug Fixes
+
+* satisfy dashboard watch lint ([7e88d85](https://github.com/krasnoperov/patchrelay/commit/7e88d85b0c5c7c851b7332e22c4e415c3bf68ac6))
+* satisfy watch snapshot lint ([3de5450](https://github.com/krasnoperov/patchrelay/commit/3de5450a34e98b33f9f59528f6475a3dd5e723b7))
+
 ## [0.29.3](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.29.2...patchrelay-v0.29.3) (2026-04-01)
 
 
