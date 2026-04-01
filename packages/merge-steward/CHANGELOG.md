@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.6](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.5.5...merge-steward-v0.5.6) (2026-04-01)
+
+
+### Bug Fixes
+
+* **merge-steward:** evict dirty retry-gated queue heads ([19638e9](https://github.com/krasnoperov/patchrelay/commit/19638e9ba80bf89ee747115cae34876feedc7b6e))
+* **merge-steward:** evict dirty retry-gated queue heads ([81ca480](https://github.com/krasnoperov/patchrelay/commit/81ca4802198981f6a07bd323dea26fac02591758))
+
 ## [0.5.5](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.5.4...merge-steward-v0.5.5) (2026-04-01)
 
 
