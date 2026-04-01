@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.1](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.5.0...merge-steward-v0.5.1) (2026-04-01)
+
+
+### Bug Fixes
+
+* tighten dependency readiness semantics ([2c02792](https://github.com/krasnoperov/patchrelay/commit/2c0279247bdb8f1d59b7256c7d5f89f0fdfefe5c))
+* tighten dependency readiness semantics ([257cfca](https://github.com/krasnoperov/patchrelay/commit/257cfcabaa643f9bb0a6ab021ba4093b037713c2))
+
 ## [0.5.0](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.4.1...merge-steward-v0.5.0) (2026-04-01)
 
 
