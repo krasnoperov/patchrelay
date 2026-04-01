@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.31.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.30.1...patchrelay-v0.31.0) (2026-04-01)
+
+
+### Features
+
+* polish ci repair workflow handling ([d19fc19](https://github.com/krasnoperov/patchrelay/commit/d19fc19b6aeb291c267fd2ee90c33f7e1e594dd4))
+* polish ci repair workflow handling ([bbc7574](https://github.com/krasnoperov/patchrelay/commit/bbc7574c7eeee2acdc8bc80abe388c0d26b34a4b))
+
+
+### Bug Fixes
+
+* satisfy ci lint for repair polish ([4025c53](https://github.com/krasnoperov/patchrelay/commit/4025c53c6ddd6222671384d5a38c527ad4c4dcab))
+
 ## [0.30.1](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.30.0...patchrelay-v0.30.1) (2026-04-01)
 
 
