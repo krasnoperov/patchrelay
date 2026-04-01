@@ -81,6 +81,16 @@ function buildPrStatusSummary(issue: WatchIssue, issueContext: WatchIssueContext
     summary.push(checkState);
   }
 
+  if (issue.prChecksSummary?.total) {
+    if (issue.prChecksSummary.failed > 0) {
+      summary.push(`${issue.prChecksSummary.failed}/${issue.prChecksSummary.total} checks failing`);
+    } else if (issue.prChecksSummary.pending > 0) {
+      summary.push(`${issue.prChecksSummary.completed}/${issue.prChecksSummary.total} checks settled`);
+    } else {
+      summary.push(`${issue.prChecksSummary.passed}/${issue.prChecksSummary.total} checks passed`);
+    }
+  }
+
   if (reviewState) {
     summary.push(`review ${reviewState}`);
   } else if (issue.factoryState === "pr_open" || issue.factoryState === "repairing_ci" || issue.factoryState === "awaiting_queue") {
@@ -108,24 +118,35 @@ function resolvePrimaryBlocker(issue: WatchIssue, issueContext: WatchIssueContex
     };
   }
 
-  if (issue.prCheckStatus === "failed") {
-    const failedCheck = issueContext?.latestFailureCheckName ?? issue.latestFailureCheckName;
+  if (issue.prCheckStatus === "failed" || issue.prCheckStatus === "failure") {
+    const failedChecks = issue.prChecksSummary?.failedNames ?? [];
+    const failedCheck = issueContext?.latestFailureCheckName
+      ?? issue.latestFailureCheckName
+      ?? (failedChecks.length > 0 ? failedChecks.slice(0, 2).join(", ") : undefined);
     return {
       text: failedCheck ? `Blocked by failed check: ${failedCheck}` : "Blocked by failed PR checks",
       color: "red",
     };
   }
 
+  if (issue.prCheckStatus === "pending" || issue.prCheckStatus === "in_progress" || issue.prCheckStatus === "queued") {
+    return { text: "Waiting for PR checks to finish", color: "yellow" };
+  }
+
   if (issue.prReviewState === "changes_requested") {
     return { text: "Blocked by requested review changes", color: "yellow" };
   }
 
-  if (issue.prNumber !== undefined && !issue.prReviewState && issue.factoryState !== "done") {
-    return { text: "Blocked pending review approval", color: "yellow" };
+  if (issue.factoryState === "repairing_queue") {
+    return { text: "Blocked by merge queue refresh failure", color: "yellow" };
   }
 
   if (issue.factoryState === "awaiting_queue") {
     return { text: "Waiting in merge queue", color: "yellow" };
+  }
+
+  if (issue.prNumber !== undefined && !issue.prReviewState && issue.factoryState !== "done") {
+    return { text: "Blocked pending review approval", color: "yellow" };
   }
 
   return null;

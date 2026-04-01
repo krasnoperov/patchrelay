@@ -49,4 +49,52 @@ describe("PR update (force-push) handling", () => {
     assert.strictEqual(h.entries[0]!.status, "merged");
     assert.strictEqual(h.entries[0]!.headSha, sha);
   });
+
+  it("updateHeadByPR ignores synchronize webhooks that repeat the current head", async () => {
+    const h = await createHarness({ ciRule: () => "pass" });
+    const prA: SimPR = { number: 1, branch: "feat-a", files: [{ path: "a.ts", content: "a" }] };
+    const service = (await import("../../src/service.ts")).MergeStewardService;
+    await h.enqueue(prA);
+    await h.tick(); // queued -> preparing_head
+    await h.tick(); // preparing_head -> validating
+
+    const entry = h.entries[0]!;
+    const currentGeneration = entry.generation;
+    const currentEventCount = h.store.listEvents(entry.id).length;
+
+    const steward = new service(
+      {
+        repoId: "test-repo",
+        repoFullName: "test/repo",
+        baseBranch: "main",
+        clonePath: "/tmp/test-clone",
+        gitBin: "git",
+        maxRetries: 3,
+        flakyRetries: 0,
+        requiredChecks: [],
+        pollIntervalMs: 60_000,
+        admissionLabel: "queue",
+        mergeQueueCheckName: "merge-steward/queue",
+        excludeBranches: [],
+        server: { bind: "127.0.0.1", port: 0 },
+        database: { path: ":memory:", wal: true },
+        logging: { level: "silent" },
+        speculativeDepth: 1,
+      },
+      h.store,
+      h.gitSim as any,
+      h.ciSim as any,
+      h.githubSim,
+      h.evictionSim,
+      null,
+      (await import("pino")).default({ level: "silent" }),
+    );
+
+    steward.updateHeadByPR(1, entry.headSha);
+
+    const after = h.entries[0]!;
+    assert.strictEqual(after.status, "validating");
+    assert.strictEqual(after.generation, currentGeneration);
+    assert.strictEqual(h.store.listEvents(entry.id).length, currentEventCount);
+  });
 });

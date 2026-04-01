@@ -52,26 +52,31 @@ function extractStatusNote(summaryJson?: string, reportJson?: string): string | 
   return undefined;
 }
 
-function parseCiSnapshotSummary(snapshotJson?: string): {
+export function parseCiSnapshotSummary(snapshotJson?: string): {
   total: number;
   completed: number;
   passed: number;
   failed: number;
   pending: number;
   overall: "pending" | "success" | "failure";
+  failedNames?: string[] | undefined;
 } | undefined {
   if (!snapshotJson) return undefined;
   try {
     const snapshot = JSON.parse(snapshotJson) as GitHubCiSnapshotRecord;
-    const checks = Array.isArray(snapshot.checks) ? snapshot.checks : [];
+    const rawChecks = Array.isArray(snapshot.checks) ? snapshot.checks : [];
+    const checks = collapseEffectiveChecks(rawChecks);
     if (checks.length === 0) return undefined;
     let passed = 0;
     let failed = 0;
     let pending = 0;
+    const failedNames: string[] = [];
     for (const check of checks) {
       if (check.status === "success") passed++;
-      else if (check.status === "failure") failed++;
-      else pending++;
+      else if (check.status === "failure") {
+        failed++;
+        failedNames.push(check.name);
+      } else pending++;
     }
     return {
       total: checks.length,
@@ -80,10 +85,21 @@ function parseCiSnapshotSummary(snapshotJson?: string): {
       failed,
       pending,
       overall: snapshot.gateCheckStatus,
+      ...(failedNames.length > 0 ? { failedNames } : {}),
     };
   } catch {
     return undefined;
   }
+}
+
+function collapseEffectiveChecks(checks: GitHubCiSnapshotRecord["checks"]): GitHubCiSnapshotRecord["checks"] {
+  const effective = new Map<string, GitHubCiSnapshotRecord["checks"][number]>();
+  for (const check of checks) {
+    const name = typeof check?.name === "string" ? check.name.trim() : "";
+    if (!name || effective.has(name)) continue;
+    effective.set(name, check);
+  }
+  return [...effective.values()];
 }
 
 export class PatchRelayService {
@@ -335,6 +351,7 @@ export class PatchRelayService {
       failed: number;
       pending: number;
       overall: "pending" | "success" | "failure";
+      failedNames?: string[] | undefined;
     };
     latestFailureSource?: string;
     latestFailureHeadSha?: string;

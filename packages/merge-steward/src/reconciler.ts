@@ -181,7 +181,7 @@ function summarizeCheckNames(checks: Array<{ name: string }>, limit = 3): string
 }
 
 async function performBranchRefresh(ctx: ReconcileContext, entry: QueueEntry, baseSha: string): Promise<void> {
-  emit(ctx, entry, "rebase_started", { baseSha });
+  emit(ctx, entry, "rebase_started", { baseSha, detail: `refreshing ${entry.branch} with ${ctx.baseBranch}` });
   const result = await ctx.git.mergeBaseInto(entry.branch, ref(ctx, ctx.baseBranch));
 
   if (!result.success) {
@@ -211,7 +211,7 @@ async function performBranchRefresh(ctx: ReconcileContext, entry: QueueEntry, ba
     return;
   }
   await ctx.git.push(entry.branch, false);
-  emit(ctx, entry, "rebase_succeeded", { baseSha });
+  emit(ctx, entry, "rebase_succeeded", { baseSha, detail: `refreshed ${entry.branch} with ${ctx.baseBranch}` });
 
   // Build speculative branch for downstream entries.
   let specBranch: string | null = null;
@@ -234,7 +234,7 @@ async function performBranchRefresh(ctx: ReconcileContext, entry: QueueEntry, ba
   ctx.store.transition(entry.id, "validating", {
     headSha, baseSha, ciRunId: runId, lastFailedBaseSha: null,
     specBranch, specSha, specBasedOn: null,
-  }, `rebase onto ${baseSha.slice(0, 8)}, CI ${runId}`);
+  }, `refreshed with ${ctx.baseBranch} @ ${baseSha.slice(0, 8)}, CI ${runId}`);
 }
 
 // ─── Non-head entry: speculative branch ─────────────────────────
