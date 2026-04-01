@@ -6,6 +6,7 @@ import type { CodexAppServerClient, CodexNotification } from "./codex-app-server
 import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord, RunRecord } from "./db-types.ts";
 import { ACTIVE_RUN_STATES, TERMINAL_STATES, type FactoryState, type RunType } from "./factory-state.ts";
+import { parseGitHubFailureContext } from "./github-failure-context.ts";
 import { buildHookEnv, runProjectHook } from "./hook-runner.ts";
 import {
   buildAgentSessionPlanForIssue,
@@ -96,8 +97,15 @@ function buildRunPrompt(issue: IssueRecord, runType: RunType, repoPath: string, 
         "## CI Repair",
         "",
         "A CI check has failed on your PR. Fix the failure and push.",
+        context?.failureHeadSha ? `Failing head SHA: ${String(context.failureHeadSha)}` : "",
         context?.checkName ? `Failed check: ${String(context.checkName)}` : "",
+        context?.jobName && context?.jobName !== context?.checkName ? `Failed job: ${String(context.jobName)}` : "",
+        context?.stepName ? `Failed step: ${String(context.stepName)}` : "",
+        context?.summary ? `Failure summary: ${String(context.summary)}` : "",
         context?.checkUrl ? `Check URL: ${String(context.checkUrl)}` : "",
+        Array.isArray(context?.annotations) && context.annotations.length > 0
+          ? `Annotations:\n${context.annotations.map((entry) => `- ${String(entry)}`).join("\n")}`
+          : "",
         "",
         "Read the CI failure logs, fix the code issue, run verification, commit and push.",
         "Do not change test expectations unless the test is genuinely wrong.",
@@ -232,6 +240,10 @@ export class RunOrchestrator {
         runType,
         promptText: prompt,
       });
+      const failureHeadSha = typeof context?.failureHeadSha === "string"
+        ? context.failureHeadSha
+        : typeof context?.headSha === "string" ? context.headSha : undefined;
+      const failureSignature = typeof context?.failureSignature === "string" ? context.failureSignature : undefined;
       this.db.upsertIssue({
         projectId: item.projectId,
         linearIssueId: item.issueId,
@@ -245,6 +257,12 @@ export class RunOrchestrator {
           : runType === "review_fix" ? "changes_requested"
           : runType === "queue_repair" ? "repairing_queue"
           : "implementing",
+        ...((runType === "ci_repair" || runType === "queue_repair") && failureSignature
+          ? {
+              lastAttemptedFailureSignature: failureSignature,
+              lastAttemptedFailureHeadSha: failureHeadSha ?? null,
+            }
+          : {}),
       });
       return created;
     });
@@ -510,6 +528,26 @@ export class RunOrchestrator {
 
     // Determine post-run state based on current PR metadata.
     const freshIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
+    const verifiedRepairError = await this.verifyReactiveRunAdvancedBranch(run, freshIssue);
+    if (verifiedRepairError) {
+      const holdState = resolveRecoverablePostRunState(freshIssue) ?? "failed";
+      this.failRunAndClear(run, verifiedRepairError, holdState);
+      const heldIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? freshIssue;
+      this.feed?.publish({
+        level: "warn",
+        kind: "turn",
+        issueKey: freshIssue.issueKey,
+        projectId: run.projectId,
+        stage: run.runType,
+        status: "branch_not_advanced",
+        summary: verifiedRepairError,
+      });
+      void this.emitLinearActivity(heldIssue, buildRunFailureActivity(run.runType, verifiedRepairError));
+      void this.syncLinearSession(heldIssue, { activeRunType: run.runType });
+      this.progressThrottle.delete(run.id);
+      this.activeThreadId = undefined;
+      return;
+    }
     const postRunState = resolvePostRunState(freshIssue);
 
     this.db.transaction(() => {
@@ -528,10 +566,15 @@ export class RunOrchestrator {
         ...(postRunState === "awaiting_queue" || postRunState === "done"
           ? {
               lastGitHubFailureSource: null,
+              lastGitHubFailureHeadSha: null,
+              lastGitHubFailureSignature: null,
               lastGitHubFailureCheckName: null,
               lastGitHubFailureCheckUrl: null,
+              lastGitHubFailureContextJson: null,
               lastGitHubFailureAt: null,
               lastQueueIncidentJson: null,
+              lastAttemptedFailureHeadSha: null,
+              lastAttemptedFailureSignature: null,
             }
           : {}),
       });
@@ -657,8 +700,10 @@ export class RunOrchestrator {
       // Checks failed + idle — route based on durable GitHub failure provenance.
       if (issue.prCheckStatus === "failed") {
         if (issue.lastGitHubFailureSource === "queue_eviction") {
-          if (issue.factoryState !== "repairing_queue") {
-            const pendingRunContext = buildFailureContext(issue);
+          const pendingRunContext = buildFailureContext(issue);
+          if (isDuplicateRepairAttempt(issue, pendingRunContext)) {
+            this.advanceIdleIssue(issue, "repairing_queue");
+          } else {
             this.advanceIdleIssue(issue, "repairing_queue", {
               pendingRunType: "queue_repair",
               ...(pendingRunContext ? { pendingRunContext } : {}),
@@ -668,8 +713,10 @@ export class RunOrchestrator {
         }
 
         if (issue.lastGitHubFailureSource === "branch_ci") {
-          if (issue.factoryState !== "repairing_ci") {
-            const pendingRunContext = buildFailureContext(issue);
+          const pendingRunContext = buildFailureContext(issue);
+          if (isDuplicateRepairAttempt(issue, pendingRunContext)) {
+            this.advanceIdleIssue(issue, "repairing_ci");
+          } else {
             this.advanceIdleIssue(issue, "repairing_ci", {
               pendingRunType: "ci_repair",
               ...(pendingRunContext ? { pendingRunContext } : {}),
@@ -695,8 +742,10 @@ export class RunOrchestrator {
           continue;
         }
 
-        if (issue.factoryState !== "repairing_ci") {
-          const pendingRunContext = buildFailureContext(issue);
+        const pendingRunContext = buildFailureContext(issue);
+        if (isDuplicateRepairAttempt(issue, pendingRunContext)) {
+          this.advanceIdleIssue(issue, "repairing_ci");
+        } else {
           this.advanceIdleIssue(issue, "repairing_ci", {
             pendingRunType: "ci_repair",
             ...(pendingRunContext ? { pendingRunContext } : {}),
@@ -746,6 +795,9 @@ export class RunOrchestrator {
       clearFailureProvenance?: boolean;
     },
   ): void {
+    if (issue.factoryState === newState && !options?.pendingRunType && !options?.clearFailureProvenance) {
+      return;
+    }
     this.logger.info(
       { issueKey: issue.issueKey, from: issue.factoryState, to: newState, pendingRunType: options?.pendingRunType },
       "Reconciliation: advancing idle issue",
@@ -763,10 +815,15 @@ export class RunOrchestrator {
       ...(options?.clearFailureProvenance
         ? {
             lastGitHubFailureSource: null,
+            lastGitHubFailureHeadSha: null,
+            lastGitHubFailureSignature: null,
             lastGitHubFailureCheckName: null,
             lastGitHubFailureCheckUrl: null,
+            lastGitHubFailureContextJson: null,
             lastGitHubFailureAt: null,
             lastQueueIncidentJson: null,
+            lastAttemptedFailureHeadSha: null,
+            lastAttemptedFailureSignature: null,
           }
         : {}),
     });
@@ -949,7 +1006,7 @@ export class RunOrchestrator {
       } else if (run.runType === "review_fix" && issue.reviewFixAttempts > 0) {
         this.db.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, reviewFixAttempts: issue.reviewFixAttempts - 1 });
       }
-      const recoveredState = resolvePostRunState(this.db.getIssue(run.projectId, run.linearIssueId) ?? issue);
+      const recoveredState = resolveRecoverablePostRunState(this.db.getIssue(run.projectId, run.linearIssueId) ?? issue);
       this.failRunAndClear(run, "Codex turn was interrupted", recoveredState);
       const failedIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
       if (recoveredState) {
@@ -974,6 +1031,21 @@ export class RunOrchestrator {
       const trackedIssue = this.db.issueToTrackedIssue(issue);
       const report = buildStageReport(run, trackedIssue, thread, countEventMethods(this.db.listThreadEvents(run.id)));
       const freshIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
+      const verifiedRepairError = await this.verifyReactiveRunAdvancedBranch(run, freshIssue);
+      if (verifiedRepairError) {
+        const holdState = resolveRecoverablePostRunState(freshIssue) ?? "failed";
+        this.failRunAndClear(run, verifiedRepairError, holdState);
+        this.feed?.publish({
+          level: "warn",
+          kind: "turn",
+          issueKey: issue.issueKey,
+          projectId: run.projectId,
+          stage: run.runType,
+          status: "branch_not_advanced",
+          summary: verifiedRepairError,
+        });
+        return;
+      }
       const postRunState = resolvePostRunState(freshIssue);
       this.db.transaction(() => {
         this.db.finishRun(run.id, {
@@ -991,10 +1063,15 @@ export class RunOrchestrator {
           ...(postRunState === "awaiting_queue" || postRunState === "done"
             ? {
                 lastGitHubFailureSource: null,
+                lastGitHubFailureHeadSha: null,
+                lastGitHubFailureSignature: null,
                 lastGitHubFailureCheckName: null,
                 lastGitHubFailureCheckUrl: null,
+                lastGitHubFailureContextJson: null,
                 lastGitHubFailureAt: null,
                 lastQueueIncidentJson: null,
+                lastAttemptedFailureHeadSha: null,
+                lastAttemptedFailureSignature: null,
               }
             : {}),
           });
@@ -1070,6 +1147,38 @@ export class RunOrchestrator {
         factoryState: nextState,
       });
     });
+  }
+
+  private async verifyReactiveRunAdvancedBranch(run: RunRecord, issue: IssueRecord): Promise<string | undefined> {
+    if (run.runType !== "ci_repair" && run.runType !== "queue_repair") {
+      return undefined;
+    }
+    if (!issue.prNumber || issue.prState !== "open" || !issue.lastGitHubFailureHeadSha) {
+      return undefined;
+    }
+    const project = this.config.projects.find((entry) => entry.id === run.projectId);
+    if (!project?.github?.repoFullName) {
+      return undefined;
+    }
+    try {
+      const { stdout, exitCode } = await execCommand("gh", [
+        "pr", "view", String(issue.prNumber),
+        "--repo", project.github.repoFullName,
+        "--json", "headRefOid,state",
+      ], { timeoutMs: 10_000 });
+      if (exitCode !== 0) return undefined;
+      const pr = JSON.parse(stdout) as { headRefOid?: string; state?: string };
+      if (pr.state?.toUpperCase() !== "OPEN") return undefined;
+      if (!pr.headRefOid || pr.headRefOid !== issue.lastGitHubFailureHeadSha) return undefined;
+      return `Repair finished but PR #${issue.prNumber} is still on failing head ${issue.lastGitHubFailureHeadSha.slice(0, 8)}`;
+    } catch (error) {
+      this.logger.debug({
+        issueKey: issue.issueKey,
+        prNumber: issue.prNumber,
+        error: error instanceof Error ? error.message : String(error),
+      }, "Failed to verify PR head advancement after repair");
+      return undefined;
+    }
   }
 
   private async emitLinearActivity(
@@ -1191,25 +1300,66 @@ function resolvePostRunState(issue: IssueRecord): FactoryState | undefined {
   return undefined;
 }
 
+function resolveRecoverablePostRunState(issue: IssueRecord): FactoryState | undefined {
+  if (!issue.prNumber) {
+    return resolvePostRunState(issue);
+  }
+  if (issue.prState === "merged") return "done";
+  if (issue.prState === "open") {
+    if (issue.lastGitHubFailureSource === "queue_eviction") return "repairing_queue";
+    if (issue.prCheckStatus === "failed" || issue.lastGitHubFailureSource === "branch_ci") return "repairing_ci";
+    if (issue.prReviewState === "changes_requested") return "changes_requested";
+    if (issue.prReviewState === "approved") return "awaiting_queue";
+    return "pr_open";
+  }
+  return resolvePostRunState(issue);
+}
+
 function buildFailureContext(issue: Pick<
   IssueRecord,
-  "lastGitHubFailureSource" | "lastGitHubFailureCheckName" | "lastGitHubFailureCheckUrl" | "lastQueueIncidentJson"
+  | "lastGitHubFailureSource"
+  | "lastGitHubFailureHeadSha"
+  | "lastGitHubFailureSignature"
+  | "lastGitHubFailureCheckName"
+  | "lastGitHubFailureCheckUrl"
+  | "lastGitHubFailureContextJson"
+  | "lastQueueIncidentJson"
 >): Record<string, unknown> | undefined {
+  const storedFailureContext = parseGitHubFailureContext(issue.lastGitHubFailureContextJson);
   const queueRepairContext = issue.lastQueueIncidentJson
     ? parseStoredQueueRepairContext(issue.lastQueueIncidentJson)
     : undefined;
   if (!queueRepairContext
     && !issue.lastGitHubFailureSource
+    && !issue.lastGitHubFailureHeadSha
+    && !issue.lastGitHubFailureSignature
     && !issue.lastGitHubFailureCheckName
-    && !issue.lastGitHubFailureCheckUrl) {
+    && !issue.lastGitHubFailureCheckUrl
+    && !storedFailureContext) {
     return undefined;
   }
   return {
     ...(issue.lastGitHubFailureSource ? { failureReason: issue.lastGitHubFailureSource } : {}),
+    ...(issue.lastGitHubFailureHeadSha ? { failureHeadSha: issue.lastGitHubFailureHeadSha } : {}),
+    ...(issue.lastGitHubFailureSignature ? { failureSignature: issue.lastGitHubFailureSignature } : {}),
     ...(issue.lastGitHubFailureCheckName ? { checkName: issue.lastGitHubFailureCheckName } : {}),
     ...(issue.lastGitHubFailureCheckUrl ? { checkUrl: issue.lastGitHubFailureCheckUrl } : {}),
+    ...(storedFailureContext ? storedFailureContext : {}),
     ...(queueRepairContext ? queueRepairContext : {}),
   };
+}
+
+function isDuplicateRepairAttempt(
+  issue: Pick<IssueRecord, "lastAttemptedFailureHeadSha" | "lastAttemptedFailureSignature">,
+  context: Record<string, unknown> | undefined,
+): boolean {
+  const signature = typeof context?.failureSignature === "string" ? context.failureSignature : undefined;
+  const headSha = typeof context?.failureHeadSha === "string"
+    ? context.failureHeadSha
+    : typeof context?.headSha === "string" ? context.headSha : undefined;
+  if (!signature) return false;
+  return issue.lastAttemptedFailureSignature === signature
+    && (headSha === undefined || issue.lastAttemptedFailureHeadSha === headSha);
 }
 
 function appendQueueRepairContext(lines: string[], context?: Record<string, unknown>): void {

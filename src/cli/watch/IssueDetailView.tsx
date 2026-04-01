@@ -97,6 +97,14 @@ export function IssueDetailView({
         <FreshnessBadge connected={connected} lastServerMessageAt={lastServerMessageAt} />
       </Box>
       {issue.title && <Text>{issue.title}</Text>}
+      {issueContext?.latestFailureSummary && (
+        <Box marginTop={1}>
+          <Text color={issueContext.latestFailureSource === "queue_eviction" ? "yellow" : "red"}>
+            Latest failure: {issueContext.latestFailureSummary}
+            {issueContext.latestFailureHeadSha ? ` @ ${issueContext.latestFailureHeadSha.slice(0, 8)}` : ""}
+          </Text>
+        </Box>
+      )}
 
       {detailTab === "timeline" ? (
         <>

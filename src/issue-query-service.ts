@@ -1,5 +1,6 @@
 import type { CodexAppServerClient } from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
+import { parseGitHubFailureContext, summarizeGitHubFailureContext } from "./github-failure-context.ts";
 import { parseStoredQueueRepairContext } from "./merge-queue-incident.ts";
 import { resolveMergeQueueProtocol } from "./merge-queue-protocol.ts";
 import { extractStageSummary, summarizeCurrentThread } from "./run-reporting.ts";
@@ -169,8 +170,11 @@ export class IssueQueryService {
     issue: {
       prNumber?: number | undefined;
       lastGitHubFailureSource?: string | undefined;
+      lastGitHubFailureHeadSha?: string | undefined;
+      lastGitHubFailureSignature?: string | undefined;
       lastGitHubFailureCheckName?: string | undefined;
       lastGitHubFailureCheckUrl?: string | undefined;
+      lastGitHubFailureContextJson?: string | undefined;
       lastGitHubFailureAt?: string | undefined;
       lastQueueSignalAt?: string | undefined;
       lastQueueIncidentJson?: string | undefined;
@@ -178,6 +182,7 @@ export class IssueQueryService {
   ) {
     const project = this.config.projects.find((entry) => entry.id === projectId);
     const protocol = resolveMergeQueueProtocol(project);
+    const failureContext = parseGitHubFailureContext(issue.lastGitHubFailureContextJson);
     const queueIncident = issue.lastQueueIncidentJson
       ? parseStoredQueueRepairContext(issue.lastQueueIncidentJson)
       : undefined;
@@ -188,8 +193,12 @@ export class IssueQueryService {
       evictionCheckName: protocol.evictionCheckName,
       prNumber: issue.prNumber ?? null,
       lastFailureSource: issue.lastGitHubFailureSource ?? null,
+      lastFailureHeadSha: issue.lastGitHubFailureHeadSha ?? failureContext?.headSha ?? null,
+      lastFailureSignature: issue.lastGitHubFailureSignature ?? failureContext?.failureSignature ?? null,
       lastFailureCheckName: issue.lastGitHubFailureCheckName ?? null,
       lastFailureCheckUrl: issue.lastGitHubFailureCheckUrl ?? null,
+      lastFailureStepName: failureContext?.stepName ?? null,
+      lastFailureSummary: summarizeGitHubFailureContext(failureContext) ?? null,
       lastFailureAt: issue.lastGitHubFailureAt ?? null,
       lastQueueSignalAt: issue.lastQueueSignalAt ?? null,
       lastIncidentId: queueIncident?.incidentId ?? null,

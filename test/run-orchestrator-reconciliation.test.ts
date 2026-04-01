@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import pino from "pino";
@@ -299,6 +299,141 @@ test("reconcileRun recovers interrupted implementation runs to pr_open when a PR
     assert.equal(updatedRun?.status, "failed");
     assert.equal(updatedRun?.failureReason, "Codex turn was interrupted");
   } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("reconcileRun keeps interrupted ci_repair runs in repairing_ci when the PR is still failing", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-interrupted-ci-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-15",
+      issueKey: "USE-15",
+      branchName: "feat-interrupted-ci",
+      prNumber: 15,
+      prState: "open",
+      prCheckStatus: "failed",
+      lastGitHubFailureSource: "branch_ci",
+      factoryState: "repairing_ci",
+      ciRepairAttempts: 1,
+    });
+    const issue = db.getIssue("usertold", "issue-15");
+    assert.ok(issue);
+    const run = db.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "ci_repair",
+    });
+    db.updateRunThread(run.id, { threadId: "thread-15", turnId: "turn-15" });
+    db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      activeRunId: run.id,
+    });
+
+    const orchestrator = new RunOrchestrator(
+      config,
+      db,
+      {
+        startThread: async () => ({ threadId: "thread-15" }),
+        steerTurn: async () => undefined,
+        readThread: async () => ({ id: "thread-15", turns: [{ id: "turn-15", status: "interrupted" }] }),
+      } as never,
+      { forProject: async () => undefined } as never,
+      () => undefined,
+      pino({ enabled: false }),
+    );
+
+    await (orchestrator as unknown as { reconcileRun: (run: { id: number }) => Promise<void> }).reconcileRun(db.getRun(run.id)!);
+
+    const updatedIssue = db.getIssue("usertold", "issue-15");
+    const updatedRun = db.getRun(run.id);
+    assert.equal(updatedIssue?.factoryState, "repairing_ci");
+    assert.equal(updatedIssue?.activeRunId, undefined);
+    assert.equal(updatedIssue?.ciRepairAttempts, 0);
+    assert.equal(updatedRun?.status, "failed");
+    assert.equal(updatedRun?.failureReason, "Codex turn was interrupted");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("completed ci_repair does not succeed when PR head never advanced", { concurrency: false }, async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-head-verify-"));
+  const oldPath = process.env.PATH;
+  try {
+    const fakeBin = path.join(baseDir, "bin");
+    const ghPath = path.join(fakeBin, "gh");
+    mkdirSync(fakeBin, { recursive: true });
+    writeFileSync(ghPath, `#!/usr/bin/env bash
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  printf '{"headRefOid":"same-head-sha","state":"OPEN"}'
+  exit 0
+fi
+exit 1
+`, "utf8");
+    chmodSync(ghPath, 0o755);
+    process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
+
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-16",
+      issueKey: "USE-16",
+      branchName: "feat-no-advance",
+      prNumber: 16,
+      prState: "open",
+      prCheckStatus: "failed",
+      lastGitHubFailureSource: "branch_ci",
+      lastGitHubFailureHeadSha: "same-head-sha",
+      lastGitHubFailureSignature: "branch_ci::same-head-sha::Checks::Run tests",
+      factoryState: "repairing_ci",
+    });
+    const issue = db.getIssue("usertold", "issue-16");
+    assert.ok(issue);
+    const run = db.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "ci_repair",
+    });
+    db.updateRunThread(run.id, { threadId: "thread-16", turnId: "turn-16" });
+    db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      activeRunId: run.id,
+    });
+
+    const orchestrator = new RunOrchestrator(
+      config,
+      db,
+      {
+        startThread: async () => ({ threadId: "thread-16" }),
+        steerTurn: async () => undefined,
+        readThread: async () => ({ id: "thread-16", turns: [{ id: "turn-16", status: "completed", items: [] }] }),
+      } as never,
+      { forProject: async () => undefined } as never,
+      () => undefined,
+      pino({ enabled: false }),
+    );
+
+    await (orchestrator as unknown as { reconcileRun: (run: { id: number }) => Promise<void> }).reconcileRun(db.getRun(run.id)!);
+
+    const updatedIssue = db.getIssue("usertold", "issue-16");
+    const updatedRun = db.getRun(run.id);
+    assert.equal(updatedIssue?.factoryState, "repairing_ci");
+    assert.equal(updatedIssue?.activeRunId, undefined);
+    assert.equal(updatedRun?.status, "failed");
+    assert.match(updatedRun?.failureReason ?? "", /still on failing head/);
+  } finally {
+    process.env.PATH = oldPath;
     rmSync(baseDir, { recursive: true, force: true });
   }
 });

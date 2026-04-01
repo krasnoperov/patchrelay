@@ -230,6 +230,21 @@ test("feed-event aggregates CI checks in timeline", () => {
   assert.equal(ciEntries[0]?.ciChecks?.overall, "failed");
 });
 
+test("feed-event branch_not_advanced updates the selected issue note", () => {
+  const initial = stateWith({
+    issues: [makeIssue("USE-74", { factoryState: "repairing_ci" })],
+  });
+  const event = makeFeedEvent({
+    id: 13,
+    kind: "turn",
+    issueKey: "USE-74",
+    status: "branch_not_advanced",
+    summary: "Repair finished but PR #74 is still on failing head deadbeef",
+  });
+  const state = reduce(initial, { type: "feed-event", event, receivedAt: RECEIVED_AT });
+  assert.equal(state.issues[0]?.statusNote, "Repair finished but PR #74 is still on failing head deadbeef");
+});
+
 // ─── Timeline Rehydration ─────────────────────────────────────────
 
 test("timeline-rehydrate builds entries from runs and feed events", () => {

@@ -6,6 +6,7 @@ import pino from "pino";
 import test from "node:test";
 import { PatchRelayDatabase } from "../src/db.ts";
 import { GitHubWebhookHandler } from "../src/github-webhook-handler.ts";
+import type { GitHubFailureContextResolver } from "../src/github-failure-context.ts";
 import type { AppConfig } from "../src/types.ts";
 
 function createConfig(baseDir: string): AppConfig {
@@ -75,7 +76,7 @@ function createConfig(baseDir: string): AppConfig {
   };
 }
 
-function createHandler(baseDir: string) {
+function createHandler(baseDir: string, failureContextResolver?: GitHubFailureContextResolver) {
   const config = createConfig(baseDir);
   const db = new PatchRelayDatabase(config.database.path, config.database.wal);
   db.runMigrations();
@@ -89,6 +90,8 @@ function createHandler(baseDir: string) {
     },
     pino({ enabled: false }),
     { steerTurn: async () => undefined } as never,
+    undefined,
+    failureContextResolver,
   );
   return { config, db, enqueueCalls, handler };
 }
@@ -197,27 +200,28 @@ test("queue eviction check_run queues queue_repair with explicit provenance", as
 
     const issue = db.getIssue("usertold", "issue-1");
     assert.equal(issue?.pendingRunType, "queue_repair");
-    assert.deepEqual(JSON.parse(issue?.pendingRunContextJson ?? "{}"), {
-      failureReason: "queue_eviction",
-      checkName: "merge-steward/queue",
-      checkUrl: "https://github.com/owner/repo/actions/runs/42",
-      incidentId: "incident-42",
-      incidentUrl: "https://queue.example.com/queue/incidents/incident-42",
-      incidentTitle: "Queue eviction: rebase conflict",
-      incidentSummary: "PR #42 was evicted from the merge queue.",
-      incidentContext: {
-        version: 1,
-        failureClass: "integration_conflict",
-        baseSha: "base-123",
-        prHeadSha: "sha-42",
-        queuePosition: 1,
-        baseBranch: "main",
-        branch: "feat-queue",
-        issueKey: "USE-1",
-        conflictFiles: ["src/conflicted.ts"],
-        failedChecks: [{ name: "test", conclusion: "failure", url: "https://github.com/owner/repo/checks/1" }],
-        retryHistory: [{ at: "2026-03-31T00:00:00.000Z", baseSha: "base-122", outcome: "ci_failed_retry" }],
-      },
+    const pending = JSON.parse(issue?.pendingRunContextJson ?? "{}");
+    assert.equal(pending.failureReason, "queue_eviction");
+    assert.equal(pending.checkName, "merge-steward/queue");
+    assert.equal(pending.checkUrl, "https://github.com/owner/repo/actions/runs/42");
+    assert.equal(pending.failureHeadSha, "sha-42");
+    assert.equal(pending.failureSignature, "queue_eviction::sha-42::merge-steward/queue");
+    assert.equal(pending.incidentId, "incident-42");
+    assert.equal(pending.incidentUrl, "https://queue.example.com/queue/incidents/incident-42");
+    assert.equal(pending.incidentTitle, "Queue eviction: rebase conflict");
+    assert.equal(pending.incidentSummary, "PR #42 was evicted from the merge queue.");
+    assert.deepEqual(pending.incidentContext, {
+      version: 1,
+      failureClass: "integration_conflict",
+      baseSha: "base-123",
+      prHeadSha: "sha-42",
+      queuePosition: 1,
+      baseBranch: "main",
+      branch: "feat-queue",
+      issueKey: "USE-1",
+      conflictFiles: ["src/conflicted.ts"],
+      failedChecks: [{ name: "test", conclusion: "failure", url: "https://github.com/owner/repo/checks/1" }],
+      retryHistory: [{ at: "2026-03-31T00:00:00.000Z", baseSha: "base-122", outcome: "ci_failed_retry" }],
     });
     assert.equal(issue?.lastQueueIncidentJson !== undefined, true);
     assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-1" }]);
@@ -290,14 +294,14 @@ test("queue eviction falls back to minimal context when incident payload is malf
 
     const issue = db.getIssue("usertold", "issue-3");
     assert.equal(issue?.pendingRunType, "queue_repair");
-    assert.deepEqual(JSON.parse(issue?.pendingRunContextJson ?? "{}"), {
-      failureReason: "queue_eviction",
-      checkName: "merge-steward/queue",
-      checkUrl: "https://github.com/owner/repo/actions/runs/43",
-      incidentUrl: "https://queue.example.com/queue/incidents/incident-43",
-      incidentTitle: "Queue eviction: rebase conflict",
-      incidentSummary: "Malformed steward payload fallback",
-    });
+    const pending = JSON.parse(issue?.pendingRunContextJson ?? "{}");
+    assert.equal(pending.failureReason, "queue_eviction");
+    assert.equal(pending.checkName, "merge-steward/queue");
+    assert.equal(pending.checkUrl, "https://github.com/owner/repo/actions/runs/43");
+    assert.equal(pending.failureHeadSha, "sha-43");
+    assert.equal(pending.incidentUrl, "https://queue.example.com/queue/incidents/incident-43");
+    assert.equal(pending.incidentTitle, "Queue eviction: rebase conflict");
+    assert.equal(pending.incidentSummary, "Malformed steward payload fallback");
     assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-3" }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -342,6 +346,107 @@ test("branch CI failures clear stale queue incident context", async () => {
     assert.equal(issue?.lastGitHubFailureSource, "branch_ci");
     assert.equal(issue?.lastQueueIncidentJson, undefined);
     assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-4" }]);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("branch CI failures persist enriched Actions context in pending repair prompt", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-ci-context-"));
+  try {
+    const { db, enqueueCalls, handler } = createHandler(baseDir, {
+      resolve: async () => ({
+        source: "branch_ci",
+        repoFullName: "owner/repo",
+        capturedAt: "2026-04-01T00:00:00.000Z",
+        headSha: "sha-45",
+        failureSignature: "branch_ci::sha-45::Checks::npx tsgo --noEmit",
+        checkName: "Checks",
+        checkUrl: "https://github.com/owner/repo/actions/runs/45",
+        jobName: "Checks",
+        stepName: "Run npx tsgo --noEmit",
+        summary: "Type generation failed",
+        annotations: ["src/schema.ts: incompatible type"],
+      }),
+    });
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-5",
+      issueKey: "USE-5",
+      branchName: "feat-ci-context",
+      prNumber: 45,
+      prState: "open",
+      factoryState: "pr_open",
+    });
+
+    await handler.processGitHubWebhookEvent({
+      eventType: "check_suite",
+      rawBody: buildCheckSuitePayload({
+        branch: "feat-ci-context",
+        headSha: "sha-45",
+        prNumber: 45,
+        conclusion: "failure",
+      }).toString("utf8"),
+    });
+
+    const issue = db.getIssue("usertold", "issue-5");
+    const pending = JSON.parse(issue?.pendingRunContextJson ?? "{}");
+    assert.equal(issue?.pendingRunType, "ci_repair");
+    assert.equal(issue?.lastGitHubFailureSignature, "branch_ci::sha-45::Checks::npx tsgo --noEmit");
+    assert.equal(issue?.lastGitHubFailureHeadSha, "sha-45");
+    assert.equal(pending.failureHeadSha, "sha-45");
+    assert.equal(pending.jobName, "Checks");
+    assert.equal(pending.stepName, "Run npx tsgo --noEmit");
+    assert.equal(pending.summary, "Type generation failed");
+    assert.deepEqual(pending.annotations, ["src/schema.ts: incompatible type"]);
+    assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-5" }]);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("same failure signature and head sha are not re-enqueued after an attempted repair", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-ci-dedupe-"));
+  try {
+    const { db, enqueueCalls, handler } = createHandler(baseDir, {
+      resolve: async () => ({
+        source: "branch_ci",
+        repoFullName: "owner/repo",
+        capturedAt: "2026-04-01T00:00:00.000Z",
+        headSha: "sha-46",
+        failureSignature: "branch_ci::sha-46::Checks::Run tests",
+        checkName: "Checks",
+        checkUrl: "https://github.com/owner/repo/actions/runs/46",
+        jobName: "Checks",
+        stepName: "Run tests",
+        summary: "Tests failed",
+      }),
+    });
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-6",
+      issueKey: "USE-6",
+      branchName: "feat-ci-dedupe",
+      prNumber: 46,
+      prState: "open",
+      factoryState: "repairing_ci",
+      lastAttemptedFailureHeadSha: "sha-46",
+      lastAttemptedFailureSignature: "branch_ci::sha-46::Checks::Run tests",
+    });
+
+    await handler.processGitHubWebhookEvent({
+      eventType: "check_suite",
+      rawBody: buildCheckSuitePayload({
+        branch: "feat-ci-dedupe",
+        headSha: "sha-46",
+        prNumber: 46,
+        conclusion: "failure",
+      }).toString("utf8"),
+    });
+
+    const issue = db.getIssue("usertold", "issue-6");
+    assert.equal(issue?.pendingRunType, undefined);
+    assert.deepEqual(enqueueCalls, []);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
