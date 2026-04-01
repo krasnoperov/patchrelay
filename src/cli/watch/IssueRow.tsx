@@ -9,6 +9,8 @@ interface IssueRowProps {
 }
 
 const STATE_COLORS: Record<string, string> = {
+  blocked: "yellow",
+  ready: "blueBright",
   delegated: "cyan",
   implementing: "cyan",
   pr_open: "cyan",
@@ -23,6 +25,8 @@ const STATE_COLORS: Record<string, string> = {
 };
 
 const STATE_SHORT: Record<string, string> = {
+  blocked: "blocked",
+  ready: "ready",
   delegated: "delegated",
   implementing: "impl",
   pr_open: "pr open",
@@ -76,7 +80,12 @@ function truncate(text: string, max: number): string {
 const TERMINAL_STATES = new Set(["done", "failed", "escalated", "awaiting_input"]);
 
 function formatStatus(issue: WatchIssue): string {
-  const state = STATE_SHORT[issue.factoryState] ?? issue.factoryState;
+  const effectiveState = issue.blockedByCount > 0 && !issue.activeRunType
+    ? "blocked"
+    : issue.readyForExecution && !issue.activeRunType
+      ? "ready"
+      : issue.factoryState;
+  const state = STATE_SHORT[effectiveState] ?? effectiveState;
   // Terminal states: just the label, no run symbol
   if (TERMINAL_STATES.has(issue.factoryState)) return state;
   // Active/in-progress: show run status symbol
@@ -102,7 +111,7 @@ export function IssueRow({ issue, selected, titleWidth }: IssueRowProps): React.
           {selected ? "\u25b8" : " "}
         </Text>
         <Text bold>{` ${key.padEnd(9)}`}</Text>
-        <Text color={stateColor(issue.factoryState)}>{` ${status.padEnd(12)}`}</Text>
+        <Text color={stateColor(issue.blockedByCount > 0 && !issue.activeRunType ? "blocked" : issue.readyForExecution && !issue.activeRunType ? "ready" : issue.factoryState)}>{` ${status.padEnd(12)}`}</Text>
         <Text dimColor>{` ${pr.padEnd(6)}`}</Text>
         <Text dimColor>{` ${ago.padStart(3)}`}</Text>
         {title ? <Text dimColor>{` ${title}`}</Text> : null}

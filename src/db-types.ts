@@ -59,6 +59,16 @@ export interface RunRecord {
   endedAt?: string | undefined;
 }
 
+export interface IssueDependencyRecord {
+  projectId: string;
+  linearIssueId: string;
+  blockerLinearIssueId: string;
+  blockerIssueKey?: string | undefined;
+  blockerTitle?: string | undefined;
+  blockerCurrentLinearState?: string | undefined;
+  updatedAt: string;
+}
+
 export interface WebhookEventRecord {
   id: number;
   webhookId: string;
@@ -77,6 +87,9 @@ export interface TrackedIssueRecord {
   issueUrl?: string | undefined;
   currentLinearState?: string | undefined;
   factoryState: FactoryState;
+  blockedByCount: number;
+  blockedByKeys: string[];
+  readyForExecution: boolean;
   activeRunId?: number | undefined;
   activeAgentSessionId?: string | undefined;
   updatedAt: string;

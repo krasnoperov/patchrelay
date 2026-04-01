@@ -86,6 +86,8 @@ export function IssueDetailView({
       <Box gap={2}>
         <Text bold>{key}</Text>
         <Text color="cyan">{issue.factoryState}</Text>
+        {issue.blockedByCount > 0 && <Text color="yellow">blocked by {issue.blockedByKeys.join(", ")}</Text>}
+        {issue.readyForExecution && !issue.activeRunType && issue.blockedByCount === 0 && <Text color="blueBright">ready</Text>}
         {issue.activeRunType && <Text color="yellow">{issue.activeRunType}</Text>}
         {issue.prNumber !== undefined && <Text dimColor>#{issue.prNumber}</Text>}
         {activeRunStartedAt && <ElapsedTime startedAt={activeRunStartedAt} />}

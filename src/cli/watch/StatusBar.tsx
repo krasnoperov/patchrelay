@@ -37,6 +37,8 @@ export function StatusBar({
         <Text dimColor>[{FILTER_LABELS[filter]}]</Text>
         <Text dimColor>|</Text>
         {agg.active > 0 && <Text color="cyan">{agg.active} active</Text>}
+        {agg.ready > 0 && <Text color="blueBright">{agg.ready} ready</Text>}
+        {agg.blocked > 0 && <Text color="yellow">{agg.blocked} blocked</Text>}
         {withPr > 0 && <Text dimColor>{withPr} PRs</Text>}
         {awaitingInput > 0 && <Text color="yellow">{awaitingInput} awaiting input</Text>}
         {agg.done > 0 && <Text color="green">{agg.done} done</Text>}

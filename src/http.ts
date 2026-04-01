@@ -433,6 +433,10 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
       request.raw.on("close", cleanup);
     });
 
+    app.get("/api/watch/issues", async (_request, reply) => {
+      return reply.send({ ok: true, issues: service.listTrackedIssues() });
+    });
+
     app.get("/api/watch", async (request, reply) => {
       reply.hijack();
       reply.raw.writeHead(200, {

@@ -33,6 +33,8 @@ interface LinearIssueRawFields {
   delegate?: { id?: string | null; name?: string | null } | null;
   state?: { id?: string | null; name?: string | null } | null;
   labels?: { nodes?: Array<{ id: string; name: string }> } | null;
+  blockedBy?: { nodes?: LinearIssueRelationRawFields[] } | null;
+  blocks?: { nodes?: LinearIssueRelationRawFields[] } | null;
   team?: {
     id?: string | null;
     key?: string | null;
@@ -44,6 +46,82 @@ interface LinearIssueRawFields {
     } | null;
   } | null;
 }
+
+interface LinearIssueRelationRawFields {
+  id: string;
+  identifier?: string | null;
+  title?: string | null;
+  state?: {
+    id?: string | null;
+    name?: string | null;
+    type?: string | null;
+  } | null;
+}
+
+const LINEAR_ISSUE_SELECTION = `
+  id
+  identifier
+  title
+  description
+  url
+  priority
+  estimate
+  delegate {
+    id
+    name
+  }
+  state {
+    id
+    name
+  }
+  labels {
+    nodes {
+      id
+      name
+    }
+  }
+  blockedBy {
+    nodes {
+      id
+      identifier
+      title
+      state {
+        id
+        name
+        type
+      }
+    }
+  }
+  blocks {
+    nodes {
+      id
+      identifier
+      title
+      state {
+        id
+        name
+        type
+      }
+    }
+  }
+  team {
+    id
+    key
+    states {
+      nodes {
+        id
+        name
+        type
+      }
+    }
+    labels {
+      nodes {
+        id
+        name
+      }
+    }
+  }
+`;
 
 export class LinearGraphqlClient implements LinearClient {
   constructor(
@@ -61,44 +139,7 @@ export class LinearGraphqlClient implements LinearClient {
       `
       query PatchRelayIssue($id: String!) {
         issue(id: $id) {
-          id
-          identifier
-          title
-          description
-          url
-          priority
-          estimate
-          delegate {
-            id
-            name
-          }
-          state {
-            id
-            name
-          }
-          labels {
-            nodes {
-              id
-              name
-            }
-          }
-          team {
-            id
-            key
-            states {
-              nodes {
-                id
-                name
-                type
-              }
-            }
-            labels {
-              nodes {
-                id
-                name
-              }
-            }
-          }
+          ${LINEAR_ISSUE_SELECTION}
         }
       }
       `,
@@ -130,44 +171,7 @@ export class LinearGraphqlClient implements LinearClient {
         issueUpdate(id: $id, input: { stateId: $stateId }) {
           success
           issue {
-            id
-            identifier
-            title
-            description
-            url
-            priority
-            estimate
-            delegate {
-              id
-              name
-            }
-            state {
-              id
-              name
-            }
-            labels {
-              nodes {
-                id
-                name
-              }
-            }
-            team {
-              id
-              key
-              states {
-                nodes {
-                  id
-                  name
-                  type
-                }
-              }
-              labels {
-                nodes {
-                  id
-                  name
-                }
-              }
-            }
+            ${LINEAR_ISSUE_SELECTION}
           }
         }
       }
@@ -334,40 +338,7 @@ export class LinearGraphqlClient implements LinearClient {
         issueUpdate(id: $id, input: { addedLabelIds: $addedLabelIds, removedLabelIds: $removedLabelIds }) {
           success
           issue {
-            id
-            identifier
-            title
-            description
-            url
-            priority
-            estimate
-            state {
-              id
-              name
-            }
-            labels {
-              nodes {
-                id
-                name
-              }
-            }
-            team {
-              id
-              key
-              states {
-                nodes {
-                  id
-                  name
-                  type
-                }
-              }
-              labels {
-                nodes {
-                  id
-                  name
-                }
-              }
-            }
+            ${LINEAR_ISSUE_SELECTION}
           }
         }
       }
@@ -549,6 +520,8 @@ export class LinearGraphqlClient implements LinearClient {
       labelIds: labels.map((label) => label.id),
       labels,
       teamLabels,
+      blockedBy: (issue.blockedBy?.nodes ?? []).map(mapIssueRelation),
+      blocks: (issue.blocks?.nodes ?? []).map(mapIssueRelation),
     };
   }
 
@@ -569,6 +542,17 @@ export class LinearGraphqlClient implements LinearClient {
 
     return labelIds;
   }
+}
+
+function mapIssueRelation(raw: LinearIssueRelationRawFields) {
+  return {
+    id: raw.id,
+    ...(raw.identifier ? { identifier: raw.identifier } : {}),
+    ...(raw.title ? { title: raw.title } : {}),
+    ...(raw.state?.id ? { stateId: raw.state.id } : {}),
+    ...(raw.state?.name ? { stateName: raw.state.name } : {}),
+    ...(raw.state?.type ? { stateType: raw.state.type } : {}),
+  };
 }
 
 export class DatabaseBackedLinearClientProvider implements LinearClientProvider {

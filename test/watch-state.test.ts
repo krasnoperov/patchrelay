@@ -23,6 +23,9 @@ function makeIssue(key: string, overrides?: Partial<WatchIssue>): WatchIssue {
     issueKey: key,
     projectId: "test-project",
     factoryState: "implementing",
+    blockedByCount: 0,
+    blockedByKeys: [],
+    readyForExecution: false,
     updatedAt: "2026-03-25T10:00:00.000Z",
     ...overrides,
   };
@@ -186,6 +189,19 @@ test("feed-event appends to timeline when in detail view", () => {
   const state = reduce(initial, { type: "feed-event", event, receivedAt: RECEIVED_AT });
   assert.equal(state.timeline.length, 1);
   assert.equal(state.timeline[0]?.kind, "feed");
+});
+
+test("computeAggregates counts blocked and ready issues separately", () => {
+  const issues = [
+    makeIssue("USE-1", { blockedByCount: 1, blockedByKeys: ["USE-0"], factoryState: "delegated" }),
+    makeIssue("USE-2", { readyForExecution: true, pendingRunType: "implementation", factoryState: "delegated" }),
+    makeIssue("USE-3", { activeRunType: "implementation" }),
+  ];
+
+  const aggregates = computeAggregates(issues);
+  assert.equal(aggregates.blocked, 1);
+  assert.equal(aggregates.ready, 1);
+  assert.equal(aggregates.active, 1);
 });
 
 test("feed-event aggregates CI checks in timeline", () => {
@@ -670,7 +686,7 @@ test("computeAggregates counts active, done, failed", () => {
 
 test("computeAggregates returns zeros for empty list", () => {
   const agg = computeAggregates([]);
-  assert.deepEqual(agg, { active: 0, done: 0, failed: 0, total: 0 });
+  assert.deepEqual(agg, { active: 0, blocked: 0, ready: 0, done: 0, failed: 0, total: 0 });
 });
 
 // ─── Timeline Rehydration with Issue Context ─────────────────
