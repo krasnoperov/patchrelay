@@ -198,6 +198,9 @@ export class GitHubWebhookHandler {
           linearIssueId: issue.linearIssueId,
           factoryState: newState,
         });
+        if (newState === "awaiting_queue") {
+          this.db.setBranchOwner(issue.projectId, issue.linearIssueId, "merge_steward");
+        }
         this.logger.info(
           { issueKey: issue.issueKey, from: afterMetadata.factoryState, to: newState, trigger: event.triggerEvent },
           "Factory state transition from GitHub event",
@@ -391,6 +394,7 @@ export class GitHubWebhookHandler {
           lastQueueSignalAt: new Date().toISOString(),
           lastQueueIncidentJson: JSON.stringify(queueRepairContext),
         });
+        this.db.setBranchOwner(issue.projectId, issue.linearIssueId, "patchrelay");
         this.enqueueIssue(issue.projectId, issue.linearIssueId);
         this.logger.info({ issueKey: issue.issueKey, checkName: event.checkName }, "Queue eviction detected, enqueued queue repair");
         this.feed?.publish({
@@ -439,6 +443,7 @@ export class GitHubWebhookHandler {
           lastGitHubFailureAt: new Date().toISOString(),
           lastQueueIncidentJson: null,
         });
+        this.db.setBranchOwner(issue.projectId, issue.linearIssueId, "patchrelay");
         this.enqueueIssue(issue.projectId, issue.linearIssueId);
         this.logger.info({ issueKey: issue.issueKey, checkName: failureContext.checkName ?? event.checkName }, "Enqueued CI repair run");
         this.feed?.publish({
@@ -464,6 +469,7 @@ export class GitHubWebhookHandler {
           reviewerName: event.reviewerName,
         }),
       });
+      this.db.setBranchOwner(issue.projectId, issue.linearIssueId, "patchrelay");
       this.enqueueIssue(issue.projectId, issue.linearIssueId);
       this.logger.info({ issueKey: issue.issueKey, reviewerName: event.reviewerName }, "Enqueued review fix run");
     }

@@ -38,6 +38,13 @@ export class ShellGitOperations implements GitOperations, SpeculativeBranchBuild
     return result.stdout.trim();
   }
 
+  async isAncestor(ancestor: string, descendant: string): Promise<boolean> {
+    const result = await this.git(["merge-base", "--is-ancestor", ancestor, descendant], { allowNonZero: true });
+    if (result.exitCode === 0) return true;
+    if (result.exitCode === 1) return false;
+    throw new Error(`git merge-base --is-ancestor failed: ${result.stderr || result.stdout}`);
+  }
+
   async rebase(branch: string, onto: string): Promise<RebaseResult> {
     await this.git(["checkout", branch]);
     const result = await this.git(["rebase", onto], { allowNonZero: true });

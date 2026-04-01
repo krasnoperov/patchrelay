@@ -201,6 +201,20 @@ async function performRebase(ctx: ReconcileContext, entry: QueueEntry, baseSha: 
   }
 
   const headSha = result.newHeadSha ?? entry.headSha;
+  await ctx.git.fetch();
+  const latestRemoteHead = await ctx.git.headSha(ref(ctx, entry.branch));
+  if (latestRemoteHead !== entry.headSha) {
+    const candidateKeepsLatestRemote = await ctx.git.isAncestor(latestRemoteHead, headSha);
+    if (!candidateKeepsLatestRemote) {
+      emit(ctx, entry, "branch_mismatch", {
+        detail:
+          `remote advanced during rebase: expected ${entry.headSha.slice(0, 8)}, ` +
+          `latest ${latestRemoteHead.slice(0, 8)}, candidate ${headSha.slice(0, 8)}`,
+      });
+      ctx.store.updateHead(entry.id, latestRemoteHead);
+      return;
+    }
+  }
   await ctx.git.push(entry.branch, true);
   emit(ctx, entry, "rebase_succeeded", { baseSha });
 
