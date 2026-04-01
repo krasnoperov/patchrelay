@@ -155,6 +155,18 @@ async function prepareHead(ctx: ReconcileContext, entry: QueueEntry): Promise<vo
   // Gate: non-spinning — skip if base hasn't changed since last conflict.
   if (isRetryGated(entry, baseSha)) {
     emit(ctx, entry, "retry_gated", { baseSha, detail: "base unchanged since last conflict" });
+    try {
+      const prStatus = await ctx.github.getStatus(entry.prNumber);
+      if (prStatus.mergeStateStatus === "DIRTY") {
+        emit(ctx, entry, "budget_exhausted", {
+          baseSha,
+          detail: "retry gated and GitHub still reports merge conflict",
+        });
+        await evictEntry(ctx, entry, "integration_conflict");
+      }
+    } catch {
+      // Best-effort check. If GitHub status is unavailable, preserve the non-spinning wait.
+    }
     return;
   }
 

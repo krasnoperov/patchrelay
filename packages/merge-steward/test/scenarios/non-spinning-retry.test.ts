@@ -93,4 +93,38 @@ describe("non-spinning retry", () => {
 
     h.assertInvariants();
   });
+
+  it("evicts a retry-gated head when GitHub reports the PR is still dirty", async () => {
+    const prA: SimPR = {
+      number: 1,
+      branch: "feat-a",
+      files: [{ path: "shared.ts", content: "version A" }],
+    };
+    const prB: SimPR = {
+      number: 2,
+      branch: "feat-b",
+      files: [{ path: "shared.ts", content: "version B" }],
+    };
+
+    const h = await createHarness({ ciRule: () => "pass", maxRetries: 2 });
+    await h.enqueue(prA);
+    await h.enqueue(prB);
+
+    await h.runUntilStable({ maxTicks: 20 });
+    assert.ok(h.merged.includes(1));
+
+    const gatedEntry = h.entries.find((e) => e.prNumber === 2)!;
+    assert.strictEqual(gatedEntry.status, "preparing_head");
+    assert.strictEqual(gatedEntry.retryAttempts, 1);
+
+    h.githubSim.setMergeStateStatus(2, "DIRTY");
+    await h.tick();
+
+    const bFinal = h.entries.find((e) => e.prNumber === 2)!;
+    assert.strictEqual(bFinal.status, "evicted");
+    assert.ok(h.evictionSim.evictions.length > 0);
+    assert.strictEqual(h.evictionSim.evictions[0]!.incident.failureClass, "integration_conflict");
+
+    h.assertInvariants();
+  });
 });

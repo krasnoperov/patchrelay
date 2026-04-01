@@ -179,6 +179,7 @@ export interface PRStatus {
   branch: string;
   headSha: string;
   mergeable: boolean;
+  mergeStateStatus?: string | undefined;
   reviewApproved: boolean;
   merged: boolean;
 }

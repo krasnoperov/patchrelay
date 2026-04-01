@@ -6,6 +6,7 @@ interface SimPR {
   branch: string;
   headSha: string;
   merged: boolean;
+  mergeStateStatus: string;
   reviewApproved: boolean;
   checks: CheckResult[];
   labels: string[];
@@ -25,6 +26,7 @@ export class GitHubSim implements GitHubPRApi {
       branch: pr.branch,
       headSha: pr.headSha,
       merged: false,
+      mergeStateStatus: "CLEAN",
       reviewApproved: pr.reviewApproved ?? true,
       checks: [],
       labels: pr.labels ?? [],
@@ -42,8 +44,14 @@ export class GitHubSim implements GitHubPRApi {
     const pr = this.prs.get(prNumber);
     if (pr) {
       pr.headSha = sha;
+      pr.mergeStateStatus = "CLEAN";
       pr.checks = [];
     }
+  }
+
+  setMergeStateStatus(prNumber: number, mergeStateStatus: string): void {
+    const pr = this.prs.get(prNumber);
+    if (pr) pr.mergeStateStatus = mergeStateStatus;
   }
 
   /** Set check results for a PR. */
@@ -70,6 +78,7 @@ export class GitHubSim implements GitHubPRApi {
       branch: pr.branch,
       headSha: pr.headSha,
       mergeable: !pr.merged,
+      mergeStateStatus: pr.mergeStateStatus,
       reviewApproved: pr.reviewApproved,
       merged: pr.merged,
     };
