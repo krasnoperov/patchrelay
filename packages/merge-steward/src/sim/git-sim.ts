@@ -91,6 +91,17 @@ export class GitSim implements GitOperations {
     return git.resolveRef({ fs: this.vol, dir: this.dir, ref: branch });
   }
 
+  async isAncestor(ancestor: string, descendant: string): Promise<boolean> {
+    if (ancestor === descendant) return true;
+    return git.isDescendent({
+      fs: this.vol,
+      dir: this.dir,
+      oid: descendant,
+      ancestor,
+      depth: -1,
+    });
+  }
+
   async changedFiles(branch: string, base: string): Promise<string[]> {
     const branchSha = await this.headSha(branch);
     const baseSha = await this.headSha(base);

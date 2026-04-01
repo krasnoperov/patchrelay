@@ -264,6 +264,123 @@ test("delegated blocked issue is tracked but does not queue implementation until
   }
 });
 
+test("delegated issue is tracked via repository-link installation fallback", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-installation-fallback-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.repositories.upsertRepositoryLink({
+      githubRepo: "krasnoperov/mafia",
+      localPath: path.join(baseDir, "repo"),
+      installationId: installation.id,
+      linearTeamIds: ["team-maf"],
+      issueKeyPrefixes: ["MAF"],
+    });
+
+    const handler = new WebhookHandler(
+      config,
+      db,
+      { forProject: async () => undefined } as never,
+      { steerTurn: async () => undefined } as never,
+      () => undefined,
+      pino({ enabled: false }),
+    );
+
+    const payload: LinearWebhookPayload = {
+      action: "update",
+      type: "Issue",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      webhookTimestamp: Date.now(),
+      updatedFrom: { delegateId: null },
+      data: {
+        id: "issue-maf-38",
+        identifier: "MAF-38",
+        title: "DB types + DAOs",
+        team: { id: "team-maf", key: "MAF" },
+        state: { id: "state-backlog", name: "Backlog", type: "backlog" },
+        delegate: { id: "patchrelay-actor", name: "PatchRelay" },
+      },
+    };
+
+    const stored = db.insertFullWebhookEvent({
+      webhookId: "delivery-maf-38-fallback",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(payload),
+    });
+
+    await handler.processWebhookEvent(stored.id);
+
+    const issue = db.getIssue("krasnoperov/mafia", "issue-maf-38");
+    assert.ok(issue);
+    assert.equal(issue?.issueKey, "MAF-38");
+    assert.equal(issue?.factoryState, "delegated");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("delegated issue is tracked via single-installation fallback", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-single-installation-fallback-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+
+    const handler = new WebhookHandler(
+      config,
+      db,
+      { forProject: async () => undefined } as never,
+      { steerTurn: async () => undefined } as never,
+      () => undefined,
+      pino({ enabled: false }),
+    );
+
+    const payload: LinearWebhookPayload = {
+      action: "update",
+      type: "Issue",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      webhookTimestamp: Date.now(),
+      updatedFrom: { delegateId: null },
+      data: {
+        id: "issue-maf-39",
+        identifier: "MAF-39",
+        title: "API contracts",
+        team: { id: "team-maf", key: "MAF" },
+        state: { id: "state-backlog", name: "Backlog", type: "backlog" },
+        delegate: { id: "patchrelay-actor", name: "PatchRelay" },
+      },
+    };
+
+    const stored = db.insertFullWebhookEvent({
+      webhookId: "delivery-maf-39-single-installation-fallback",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(payload),
+    });
+
+    await handler.processWebhookEvent(stored.id);
+
+    const issue = db.getIssue("krasnoperov/mafia", "issue-maf-39");
+    assert.ok(issue);
+    assert.equal(issue?.issueKey, "MAF-39");
+    assert.equal(issue?.factoryState, "delegated");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("incomplete webhook relations do not clear existing blockers when live hydration fails", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-blocker-preserve-"));
   try {
@@ -328,6 +445,76 @@ test("incomplete webhook relations do not clear existing blockers when live hydr
       ["MAF-39"],
     );
     assert.equal(db.getIssue("krasnoperov/mafia", "issue-maf-40")?.pendingRunType, undefined);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("done delegated issue does not requeue implementation after merged status echoes back from Linear", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-done-echo-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+
+    db.upsertIssue({
+      projectId: "krasnoperov/mafia",
+      linearIssueId: "issue-maf-38",
+      issueKey: "MAF-38",
+      title: "DB types + DAOs",
+      currentLinearState: "Done",
+      currentLinearStateType: "completed",
+      factoryState: "done",
+      prNumber: 105,
+      prState: "merged",
+    });
+
+    const enqueued: Array<{ projectId: string; issueId: string }> = [];
+    const handler = new WebhookHandler(
+      config,
+      db,
+      { forProject: async () => undefined } as never,
+      { steerTurn: async () => undefined } as never,
+      (projectId, issueId) => { enqueued.push({ projectId, issueId }); },
+      pino({ enabled: false }),
+    );
+
+    const payload: LinearWebhookPayload = {
+      action: "update",
+      type: "Issue",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      webhookTimestamp: Date.now(),
+      updatedFrom: { stateId: "state-start" },
+      data: {
+        id: "issue-maf-38",
+        identifier: "MAF-38",
+        title: "DB types + DAOs",
+        team: { id: "team-maf", key: "MAF" },
+        state: { id: "state-done", name: "Done", type: "completed" },
+        delegate: { id: "patchrelay-actor", name: "PatchRelay" },
+      },
+    };
+
+    const stored = db.insertFullWebhookEvent({
+      webhookId: "delivery-maf-38-done-echo",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(payload),
+    });
+
+    await handler.processWebhookEvent(stored.id);
+
+    const issue = db.getIssue("krasnoperov/mafia", "issue-maf-38");
+    assert.equal(issue?.factoryState, "done");
+    assert.equal(issue?.pendingRunType, undefined);
+    assert.deepEqual(enqueued, []);
+    assert.deepEqual(db.listIssuesReadyForExecution(), []);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

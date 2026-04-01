@@ -75,7 +75,7 @@ export function QueueListView({
           <Text dimColor>Head PR #{queueBlock.headPrNumber ?? "?"} will resume automatically once main recovers.</Text>
         </Box>
       )}
-      <Text dimColor> s h pos pr    status          rt   ago branch</Text>
+      <Text dimColor> sel head pos pr    status          retry age branch</Text>
       {entries.length === 0 ? (
         <Text dimColor>No queue entries in this filter.</Text>
       ) : (

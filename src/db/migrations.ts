@@ -14,6 +14,8 @@ CREATE TABLE IF NOT EXISTS issues (
   pending_run_type TEXT,
   pending_run_context_json TEXT,
   branch_name TEXT,
+  branch_owner TEXT NOT NULL DEFAULT 'patchrelay',
+  branch_ownership_changed_at TEXT,
   worktree_path TEXT,
   thread_id TEXT,
   active_run_id INTEGER,
@@ -187,6 +189,10 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
 
   // Add pending_merge_prep column for merge queue stewardship
   addColumnIfMissing(connection, "issues", "pending_merge_prep", "INTEGER NOT NULL DEFAULT 0");
+
+  // Explicit PR branch ownership hand-off between PatchRelay and MergeSteward
+  addColumnIfMissing(connection, "issues", "branch_owner", "TEXT NOT NULL DEFAULT 'patchrelay'");
+  addColumnIfMissing(connection, "issues", "branch_ownership_changed_at", "TEXT");
 
   // Add merge_prep_attempts for retry budget / escalation
   addColumnIfMissing(connection, "issues", "merge_prep_attempts", "INTEGER NOT NULL DEFAULT 0");

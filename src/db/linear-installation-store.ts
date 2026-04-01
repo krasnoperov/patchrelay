@@ -5,6 +5,12 @@ import type {
 } from "../types.ts";
 import { isoNow, type DatabaseConnection } from "./shared.ts";
 
+export interface ProjectInstallationRepair {
+  projectId: string;
+  installationId: number;
+  reason: "missing" | "dangling";
+}
+
 export class LinearInstallationStore {
   constructor(private readonly connection: DatabaseConnection) {}
 
@@ -217,6 +223,30 @@ export class LinearInstallationStore {
     return rows.map((row) => mapProjectInstallation(row));
   }
 
+  repairProjectInstallations(projectIds: string[]): ProjectInstallationRepair[] {
+    const repairs: ProjectInstallationRepair[] = [];
+    for (const projectId of projectIds) {
+      const existing = this.getProjectInstallation(projectId);
+      const existingInstallation = existing ? this.getLinearInstallation(existing.installationId) : undefined;
+      if (existing && existingInstallation) {
+        continue;
+      }
+
+      const installationId = this.resolveRepairInstallationId(projectId);
+      if (installationId === undefined) {
+        continue;
+      }
+
+      this.linkProjectInstallation(projectId, installationId);
+      repairs.push({
+        projectId,
+        installationId,
+        reason: existing ? "dangling" : "missing",
+      });
+    }
+    return repairs;
+  }
+
   unlinkProjectInstallation(projectId: string): void {
     this.connection.prepare("DELETE FROM project_installations WHERE project_id = ?").run(projectId);
   }
@@ -235,12 +265,61 @@ export class LinearInstallationStore {
         `
         SELECT li.*
         FROM linear_installations li
-        INNER JOIN project_installations pi ON pi.installation_id = li.id
-        WHERE pi.project_id = ?
+        WHERE li.id = COALESCE(
+          (
+            SELECT pi.installation_id
+            FROM project_installations pi
+            WHERE pi.project_id = ?
+            LIMIT 1
+          ),
+          (
+            SELECT rl.installation_id
+            FROM repository_links rl
+            WHERE rl.github_repo = ?
+            LIMIT 1
+          ),
+          (
+            SELECT li_single.id
+            FROM linear_installations li_single
+            WHERE (SELECT COUNT(*) FROM linear_installations) = 1
+            ORDER BY li_single.updated_at DESC, li_single.id DESC
+            LIMIT 1
+          )
+        )
         `,
       )
-      .get(projectId) as Record<string, unknown> | undefined;
+      .get(projectId, projectId) as Record<string, unknown> | undefined;
     return row ? mapLinearInstallation(row) : undefined;
+  }
+
+  private resolveRepairInstallationId(projectId: string): number | undefined {
+    const repoLink = this.connection
+      .prepare(
+        `
+        SELECT rl.installation_id AS installation_id
+        FROM repository_links rl
+        INNER JOIN linear_installations li ON li.id = rl.installation_id
+        WHERE rl.github_repo = ?
+        LIMIT 1
+        `,
+      )
+      .get(projectId) as { installation_id: number } | undefined;
+    if (repoLink) {
+      return Number(repoLink.installation_id);
+    }
+
+    const singleInstallation = this.connection
+      .prepare(
+        `
+        SELECT li.id AS installation_id
+        FROM linear_installations li
+        WHERE (SELECT COUNT(*) FROM linear_installations) = 1
+        ORDER BY li.updated_at DESC, li.id DESC
+        LIMIT 1
+        `,
+      )
+      .get() as { installation_id: number } | undefined;
+    return singleInstallation ? Number(singleInstallation.installation_id) : undefined;
   }
 
   createOAuthState(params: {

@@ -24,10 +24,15 @@ export async function startWatch(configPath?: string, initialPrNumber?: number):
   const gatewayBase = resolveGatewayBaseUrl();
   const baseUrl = `${gatewayBase}/repos/${config.repoId}`;
 
-  const instance = render(
-    createElement(App, { baseUrl, ...(initialPrNumber !== undefined ? { initialPrNumber } : {}) }),
-    { stdout: process.stderr, stdin: process.stdin, patchConsole: false },
-  );
+  process.stderr.write("\u001b[?1049h\u001b[2J\u001b[H");
+  try {
+    const instance = render(
+      createElement(App, { baseUrl, ...(initialPrNumber !== undefined ? { initialPrNumber } : {}) }),
+      { stdout: process.stderr, stdin: process.stdin, patchConsole: false },
+    );
 
-  await instance.waitUntilExit();
+    await instance.waitUntilExit();
+  } finally {
+    process.stderr.write("\u001b[?1049l");
+  }
 }

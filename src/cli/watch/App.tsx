@@ -81,10 +81,11 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
   });
 
   const filtered = useMemo(() => filterIssues(state.issues, state.filter), [state.issues, state.filter]);
+  const [frozen, setFrozen] = useState(false);
 
-  useWatchStream({ baseUrl, bearerToken, dispatch });
-  useDetailStream({ baseUrl, bearerToken, issueKey: state.activeDetailKey, dispatch });
-  useFeedStream({ baseUrl, bearerToken, active: state.view === "feed", dispatch });
+  useWatchStream({ baseUrl, bearerToken, dispatch, active: !frozen });
+  useDetailStream({ baseUrl, bearerToken, issueKey: state.activeDetailKey, dispatch, active: !frozen });
+  useFeedStream({ baseUrl, bearerToken, active: state.view === "feed" && !frozen, dispatch });
 
   const [promptMode, setPromptMode] = useState(false);
   const [promptBuffer, setPromptBuffer] = useState("");
@@ -142,6 +143,10 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
 
     if (input === "q") {
       exit();
+      return;
+    }
+    if (input === "x") {
+      setFrozen((value) => !value);
       return;
     }
 
@@ -206,6 +211,7 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
           lastServerMessageAt={state.lastServerMessageAt}
           filter={state.filter}
           totalCount={state.issues.length}
+          frozen={frozen}
         />
       ) : state.view === "detail" ? (
         <Box flexDirection="column">

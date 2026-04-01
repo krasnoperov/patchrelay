@@ -117,6 +117,7 @@ test("reconcileIdleIssues advances approved idle issues to awaiting_queue", asyn
 
     const issue = db.getIssue("usertold", "issue-10");
     assert.equal(issue?.factoryState, "awaiting_queue");
+    assert.equal(issue?.branchOwner, "merge_steward");
     assert.equal(issue?.pendingRunType, undefined);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -165,6 +166,7 @@ test("reconcileIdleIssues currently routes failed idle issues to ci_repair", asy
 
     const issue = db.getIssue("usertold", "issue-12");
     assert.equal(issue?.factoryState, "repairing_ci");
+    assert.equal(issue?.branchOwner, "patchrelay");
     assert.equal(issue?.pendingRunType, "ci_repair");
     assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-12" }]);
   } finally {
@@ -213,6 +215,7 @@ test("reconcileIdleIssues preserves stored steward incident context for queue re
 
     const issue = db.getIssue("usertold", "issue-13");
     assert.equal(issue?.factoryState, "repairing_queue");
+    assert.equal(issue?.branchOwner, "patchrelay");
     assert.equal(issue?.pendingRunType, "queue_repair");
     assert.deepEqual(JSON.parse(issue?.pendingRunContextJson ?? "{}"), {
       failureReason: "queue_eviction",
@@ -453,6 +456,7 @@ test("reconcileIdleIssues does not re-request queue handoff for issues already a
       prCheckStatus: "success",
       factoryState: "awaiting_queue",
     });
+    db.setBranchOwner("usertold", "issue-15", "patchrelay");
 
     let queueRequests = 0;
     (orchestrator as unknown as { requestMergeQueueAdmission: () => void }).requestMergeQueueAdmission = () => {
@@ -463,6 +467,7 @@ test("reconcileIdleIssues does not re-request queue handoff for issues already a
 
     const issue = db.getIssue("usertold", "issue-15");
     assert.equal(issue?.factoryState, "awaiting_queue");
+    assert.equal(issue?.branchOwner, "merge_steward");
     assert.equal(queueRequests, 0);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });

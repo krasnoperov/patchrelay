@@ -38,8 +38,23 @@ export class ShellGitOperations implements GitOperations, SpeculativeBranchBuild
     return result.stdout.trim();
   }
 
+  async isAncestor(ancestor: string, descendant: string): Promise<boolean> {
+    const result = await this.git(["merge-base", "--is-ancestor", ancestor, descendant], { allowNonZero: true });
+    if (result.exitCode === 0) return true;
+    if (result.exitCode === 1) return false;
+    throw new Error(`git merge-base --is-ancestor failed: ${result.stderr || result.stdout}`);
+  }
+
   async rebase(branch: string, onto: string): Promise<RebaseResult> {
-    await this.git(["checkout", branch]);
+    const remoteBranchRef = `refs/remotes/origin/${branch}`;
+    const remoteBranchExists = await this.git(["show-ref", "--verify", remoteBranchRef], { allowNonZero: true });
+    if (remoteBranchExists.exitCode === 0) {
+      // Always start from the freshly fetched remote branch tip so stale local branches
+      // cannot reintroduce old commits into queue processing.
+      await this.git(["checkout", "-B", branch, `origin/${branch}`]);
+    } else {
+      await this.git(["checkout", branch]);
+    }
     const result = await this.git(["rebase", onto], { allowNonZero: true });
     if (result.exitCode !== 0) {
       await this.git(["rebase", "--abort"], { allowNonZero: true });

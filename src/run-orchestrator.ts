@@ -4,7 +4,7 @@ import type { Logger } from "pino";
 import type { GitHubAppBotIdentity } from "./github-app-token.ts";
 import type { CodexAppServerClient, CodexNotification } from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
-import type { IssueRecord, RunRecord } from "./db-types.ts";
+import type { BranchOwner, IssueRecord, RunRecord } from "./db-types.ts";
 import { ACTIVE_RUN_STATES, TERMINAL_STATES, type FactoryState, type RunType } from "./factory-state.ts";
 import { parseGitHubFailureContext } from "./github-failure-context.ts";
 import { buildHookEnv, runProjectHook } from "./hook-runner.ts";
@@ -104,7 +104,7 @@ function buildRunPrompt(issue: IssueRecord, runType: RunType, repoPath: string, 
       lines.push(
         "## CI Repair",
         "",
-        "A full CI iteration has settled failed on your PR. Diagnose the whole snapshot, fix the root cause and directly related fallout, then push to the same PR branch.",
+        "A full CI iteration has settled failed on your PR. Start from the specific failing check/job/step below on the latest remote PR branch tip, fix that concrete failure first, then push to the same PR branch.",
         snapshot?.gateCheckName ? `Gate check: ${String(snapshot.gateCheckName)}` : "",
         snapshot?.gateCheckStatus ? `Gate status: ${String(snapshot.gateCheckStatus)}` : "",
         snapshot?.settledAt ? `Settled at: ${String(snapshot.settledAt)}` : "",
@@ -114,14 +114,17 @@ function buildRunPrompt(issue: IssueRecord, runType: RunType, repoPath: string, 
         context?.stepName ? `Failed step: ${String(context.stepName)}` : "",
         context?.summary ? `Failure summary: ${String(context.summary)}` : "",
         Array.isArray(snapshot?.failedChecks) && snapshot.failedChecks.length > 0
-          ? `All failed checks in settled snapshot:\n${snapshot.failedChecks.map((entry) => `- ${String(entry.name ?? "unknown")}${entry.summary ? `: ${String(entry.summary)}` : ""}`).join("\n")}`
+          ? `Other failed checks in the settled snapshot (context only; ignore unless the logs show the same root cause):\n${snapshot.failedChecks.map((entry) => `- ${String(entry.name ?? "unknown")}${entry.summary ? `: ${String(entry.summary)}` : ""}`).join("\n")}`
           : "",
         context?.checkUrl ? `Check URL: ${String(context.checkUrl)}` : "",
         Array.isArray(context?.annotations) && context.annotations.length > 0
           ? `Annotations:\n${context.annotations.map((entry) => `- ${String(entry)}`).join("\n")}`
           : "",
         "",
-        "Read the latest CI logs, consider the broader PR context, fix the likely root cause and any directly related fallout in one pass, run verification, commit and push.",
+        "Fetch the latest remote branch state first. If the branch moved since this failure, restart from the new tip instead of pushing older work.",
+        "Read the latest logs for the named failing check, fix that root cause, and only broaden scope when the logs show direct fallout from the same issue.",
+        "Do not change workflows, dependency installation, or unrelated tests unless the failing logs clearly point there.",
+        "Run focused verification for the named failure, then commit and push.",
         "Do not open a new PR. Keep working on the existing branch until CI goes green or the situation is clearly stuck.",
         "Do not change test expectations unless the test is genuinely wrong.",
         "",
@@ -280,6 +283,7 @@ export class RunOrchestrator {
             }
           : {}),
       });
+      this.db.setBranchOwner(item.projectId, item.issueId, "patchrelay");
       return created;
     });
     if (!run) return;
@@ -402,8 +406,9 @@ export class RunOrchestrator {
    * Risks mitigated:
    * - Dirty worktree from interrupted run → stash before, pop after
    * - Conflicts → abort rebase, throw so the run fails with a clear reason
-   * - Already up-to-date → no-op, no force-push needed
-   * - Force-push invalidates reviews → only push if rebase actually moved commits
+   * - Already up-to-date → no-op
+   * - Keep publishing explicit: the orchestrator updates the local worktree
+   *   only; the agent/run owns any later branch push.
    */
   private async freshenWorktree(
     worktreePath: string,
@@ -446,13 +451,7 @@ export class RunOrchestrator {
       return;
     }
 
-    // Push the rebased branch (force-with-lease to protect against concurrent pushes)
-    const pushResult = await execCommand(gitBin, ["-C", worktreePath, "push", "--force-with-lease"], { timeoutMs: 60_000 });
-    if (pushResult.exitCode !== 0) {
-      this.logger.warn({ issueKey: issue.issueKey, stderr: pushResult.stderr?.slice(0, 300) }, "Pre-run rebase push failed, proceeding anyway");
-    } else {
-      this.logger.info({ issueKey: issue.issueKey, baseBranch }, "Pre-run freshen: rebased and pushed onto latest base");
-    }
+    this.logger.info({ issueKey: issue.issueKey, baseBranch }, "Pre-run freshen: rebased locally onto latest base");
 
     // Restore stashed changes
     if (didStash) await execCommand(gitBin, ["-C", worktreePath, "stash", "pop"], { timeoutMs: 10_000 });
@@ -594,6 +593,9 @@ export class RunOrchestrator {
             }
           : {}),
       });
+      if (postRunState === "awaiting_queue") {
+        this.db.setBranchOwner(run.projectId, run.linearIssueId, "merge_steward");
+      }
     });
 
     // If we advanced to awaiting_queue, enqueue for merge prep
@@ -707,7 +709,7 @@ export class RunOrchestrator {
 
       // Review approved + checks not failed — advance to awaiting_queue
       if (issue.prReviewState === "approved" && issue.prCheckStatus !== "failed") {
-        if (issue.factoryState !== "awaiting_queue") {
+        if (issue.factoryState !== "awaiting_queue" || issue.branchOwner !== "merge_steward") {
           this.advanceIdleIssue(issue, "awaiting_queue", { clearFailureProvenance: true });
         }
         continue;
@@ -843,6 +845,10 @@ export class RunOrchestrator {
           }
         : {}),
     });
+    const branchOwner = this.resolveBranchOwnerForStateTransition(newState, options?.pendingRunType);
+    if (branchOwner) {
+      this.db.setBranchOwner(issue.projectId, issue.linearIssueId, branchOwner);
+    }
     this.feed?.publish({
       level: "info",
       kind: "stage",
@@ -852,7 +858,7 @@ export class RunOrchestrator {
       status: "reconciled",
       summary: `Reconciliation: ${issue.factoryState} \u2192 ${newState}`,
     });
-    if (newState === "awaiting_queue") {
+    if (newState === "awaiting_queue" && issue.factoryState !== "awaiting_queue") {
       this.requestMergeQueueAdmission(issue, issue.projectId);
     }
     if (options?.pendingRunType) {
@@ -1091,6 +1097,9 @@ export class RunOrchestrator {
               }
             : {}),
           });
+        if (postRunState === "awaiting_queue") {
+          this.db.setBranchOwner(run.projectId, run.linearIssueId, "merge_steward");
+        }
       });
       if (postRunState) {
         this.feed?.publish({
@@ -1162,7 +1171,18 @@ export class RunOrchestrator {
         activeRunId: null,
         factoryState: nextState,
       });
+      const branchOwner = this.resolveBranchOwnerForStateTransition(nextState);
+      if (branchOwner) {
+        this.db.setBranchOwner(run.projectId, run.linearIssueId, branchOwner);
+      }
     });
+  }
+
+  private resolveBranchOwnerForStateTransition(newState: FactoryState, pendingRunType?: RunType): BranchOwner | undefined {
+    if (pendingRunType) return "patchrelay";
+    if (newState === "awaiting_queue") return "merge_steward";
+    if (newState === "repairing_ci" || newState === "repairing_queue") return "patchrelay";
+    return undefined;
   }
 
   private async verifyReactiveRunAdvancedBranch(run: RunRecord, issue: IssueRecord): Promise<string | undefined> {

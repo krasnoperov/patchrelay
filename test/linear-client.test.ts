@@ -430,3 +430,28 @@ test("DatabaseBackedLinearClientProvider refreshes expiring tokens and returns a
     globalThis.fetch = originalFetch;
   }
 });
+
+test("repairProjectInstallations backfills missing and dangling project links", () => {
+  const config = createConfig();
+  const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "patchrelay-linear-repair-"));
+  const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
+  db.runMigrations();
+
+  const installation = db.linearInstallations.upsertLinearInstallation({
+    workspaceId: "workspace-1",
+    workspaceName: "Workspace One",
+    accessTokenCiphertext: encryptSecret("access-token", config.linear.tokenEncryptionKey),
+    scopesJson: JSON.stringify(["read"]),
+  });
+
+  db.linearInstallations.linkProjectInstallation("project-dangling", installation.id + 99);
+
+  const repairs = db.linearInstallations.repairProjectInstallations(["project-missing", "project-dangling"]);
+
+  assert.deepEqual(repairs, [
+    { projectId: "project-missing", installationId: installation.id, reason: "missing" },
+    { projectId: "project-dangling", installationId: installation.id, reason: "dangling" },
+  ]);
+  assert.equal(db.linearInstallations.getProjectInstallation("project-missing")?.installationId, installation.id);
+  assert.equal(db.linearInstallations.getProjectInstallation("project-dangling")?.installationId, installation.id);
+});

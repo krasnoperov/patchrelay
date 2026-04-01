@@ -31,6 +31,10 @@ Important implementation details in the current code:
 - the real git path uses `git rebase` directly in a mutable clone
 - the steward merges through `gh pr merge --merge` (merge-only — squash was removed)
 - PatchRelay repairs queue evictions by starting a `queue_repair` run after the steward check run fails
+- the steward now defends against two rollback classes before any force-push:
+  - remote advanced during rebase
+  - stale local branch diverged from the still-current remote tip
+- the real git path now resets the local queue branch from freshly fetched `origin/<pr-branch>` before rebasing so stale local checkout state cannot become the candidate head
 
 ## External Guidance
 
@@ -97,6 +101,16 @@ Why:
 - it uses the same modern merge machinery as real merge operations
 - it gives a cleaner place to classify mechanical conflicts before touching the branch
 - it reduces unnecessary mutable rebase attempts in the steward clone
+
+Branch-safety invariant for any branch-writing queue:
+
+1. Fetch the base branch and PR branch immediately before refresh.
+2. Build the candidate from the freshly fetched remote PR tip, not from whatever the local checkout happened to contain.
+3. Fetch again after the refresh.
+4. Prove `latestRemoteHead` is an ancestor of `candidateHead`.
+5. Only then push with `--force-with-lease`.
+
+This matters because `--force-with-lease` only protects freshness. By itself it does not guarantee monotonicity. A queue can still roll a branch back if it rebases a stale local branch and the remote tip has not changed since the last fetch.
 
 ### 3. Default To Merge Commits For This Delivery Model
 
@@ -195,6 +209,19 @@ In practice:
 2. Extend eviction context with refreshed-head metadata and merge-tree conflict details.
 3. Pass the steward's structured incident JSON through to PatchRelay queue-repair runs.
 4. Collapse queue-label application in PatchRelay into one owned path.
+
+#### Operational Lessons
+
+1. There are two distinct rollback classes to guard:
+   - a newer remote tip appears while the queue is refreshing
+   - the local steward clone is stale even though the remote tip itself has not changed
+2. The second class is easier to miss because a naive guard often checks only `latestRemoteHead !== entry.headSha`.
+3. The minimal safe rule is stricter:
+   every candidate pushed by automation must contain the live remote head, regardless of whether that remote head changed during the current reconcile tick.
+4. In practice that means:
+   - refresh the local branch from `origin/<pr-branch>` before rebase
+   - reject any candidate that does not descend from the live remote tip
+   - requeue on mismatch instead of pushing and hoping the lease protects correctness
 
 #### Tests
 

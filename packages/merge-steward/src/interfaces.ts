@@ -7,6 +7,7 @@ import type { CIStatus, CheckResult, IncidentRecord, MergeResult, PRStatus, Queu
 export interface GitOperations {
   fetch(remote?: string): Promise<void>;
   headSha(branch: string): Promise<string>;
+  isAncestor(ancestor: string, descendant: string): Promise<boolean>;
   rebase(branch: string, onto: string): Promise<RebaseResult>;
   push(branch: string, force?: boolean): Promise<void>;
 }

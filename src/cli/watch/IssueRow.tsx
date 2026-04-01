@@ -54,9 +54,62 @@ function stateColor(state: string): string {
 function formatPr(issue: WatchIssue): string {
   if (!issue.prNumber) return "";
   const parts = [`#${issue.prNumber}`];
-  if (issue.prReviewState === "approved") parts.push("\u2713");
-  else if (issue.prReviewState === "changes_requested") parts.push("\u2717");
+  const review = formatReviewState(issue.prReviewState);
+  const checks = formatCheckState(issue.prCheckStatus);
+  const merge = formatMergeState(issue);
+  if (review) parts.push(review);
+  if (checks) parts.push(checks);
+  if (merge) parts.push(merge);
   return parts.join("");
+}
+
+function formatReviewState(reviewState?: string): string | null {
+  switch (reviewState) {
+    case "approved":
+      return "rev:+";
+    case "changes_requested":
+      return "rev:x";
+    case "commented":
+      return "rev:c";
+    case "dismissed":
+      return "rev:-";
+    default:
+      return null;
+  }
+}
+
+function formatCheckState(checkState?: string): string | null {
+  switch (checkState) {
+    case "passed":
+    case "success":
+      return "ci:+";
+    case "failed":
+    case "failure":
+      return "ci:x";
+    case "pending":
+    case "in_progress":
+    case "queued":
+      return "ci:…";
+    default:
+      return null;
+  }
+}
+
+function formatMergeState(issue: WatchIssue): string | null {
+  if (!issue.prNumber) return null;
+  switch (issue.factoryState) {
+    case "awaiting_queue":
+      return "queue";
+    case "repairing_queue":
+      return "mq-fix";
+    case "done":
+      return "merged";
+    case "pr_open":
+      if (issue.prReviewState === "approved" && issue.prCheckStatus === "passed") return "ready";
+      return "open";
+    default:
+      return null;
+  }
 }
 
 function relativeTime(iso: string): string {
@@ -112,7 +165,7 @@ export function IssueRow({ issue, selected, titleWidth }: IssueRowProps): React.
         </Text>
         <Text bold>{` ${key.padEnd(9)}`}</Text>
         <Text color={stateColor(issue.blockedByCount > 0 && !issue.activeRunType ? "blocked" : issue.readyForExecution && !issue.activeRunType ? "ready" : issue.factoryState)}>{` ${status.padEnd(12)}`}</Text>
-        <Text dimColor>{` ${pr.padEnd(6)}`}</Text>
+        <Text dimColor>{` ${pr.padEnd(26)}`}</Text>
         <Text dimColor>{` ${ago.padStart(3)}`}</Text>
         {title ? <Text dimColor>{` ${title}`}</Text> : null}
       </Box>

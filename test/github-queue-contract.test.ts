@@ -155,6 +155,7 @@ test("queue eviction check_run queues queue_repair with explicit provenance", as
       prState: "open",
       factoryState: "awaiting_queue",
     });
+    db.setBranchOwner("usertold", "issue-1", "merge_steward");
 
     await handler.processGitHubWebhookEvent({
       eventType: "check_run",
@@ -183,6 +184,7 @@ test("queue eviction check_run queues queue_repair with explicit provenance", as
     });
 
     const issue = db.getIssue("usertold", "issue-1");
+    assert.equal(issue?.branchOwner, "patchrelay");
     assert.equal(issue?.pendingRunType, "queue_repair");
     const pending = JSON.parse(issue?.pendingRunContextJson ?? "{}");
     assert.equal(pending.failureReason, "queue_eviction");
@@ -347,6 +349,7 @@ test("branch CI failures clear stale queue incident context", async () => {
         incidentUrl: "https://queue.example.com/queue/incidents/incident-44",
       }),
     });
+    db.setBranchOwner("usertold", "issue-4", "merge_steward");
 
     await handler.processGitHubWebhookEvent({
       eventType: "check_run",
@@ -360,6 +363,7 @@ test("branch CI failures clear stale queue incident context", async () => {
     });
 
     const issue = db.getIssue("usertold", "issue-4");
+    assert.equal(issue?.branchOwner, "patchrelay");
     assert.equal(issue?.pendingRunType, "ci_repair");
     assert.equal(issue?.lastGitHubFailureSource, "branch_ci");
     assert.equal(issue?.lastQueueIncidentJson, undefined);

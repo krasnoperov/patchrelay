@@ -13,6 +13,7 @@ interface IssueListViewProps {
   lastServerMessageAt: number | null;
   filter: WatchFilter;
   totalCount: number;
+  frozen?: boolean | undefined;
 }
 
 // selector(2) + key(10) + status(13) + pr(7) + ago(4) + gaps = ~36
@@ -27,6 +28,7 @@ export function IssueListView({
   lastServerMessageAt,
   filter,
   totalCount,
+  frozen,
 }: IssueListViewProps): React.JSX.Element {
   const { stdout } = useStdout();
   const cols = stdout?.columns ?? 80;
@@ -36,7 +38,11 @@ export function IssueListView({
 
   // Periodic refresh for elapsed times
   const [, tick] = useReducer((c: number) => c + 1, 0);
-  useEffect(() => { const id = setInterval(tick, 5000); return () => clearInterval(id); }, []);
+  useEffect(() => {
+    if (frozen) return;
+    const id = setInterval(tick, 5000);
+    return () => clearInterval(id);
+  }, [frozen]);
 
   let startIndex = 0;
   if (issues.length > maxVisible) {
@@ -55,6 +61,7 @@ export function IssueListView({
         connected={connected}
         lastServerMessageAt={lastServerMessageAt}
         allIssues={allIssues}
+        frozen={frozen ?? false}
       />
       <Box marginTop={1} flexDirection="column">
         {issues.length === 0 ? (

@@ -32,11 +32,16 @@ export async function handleWatchCommand(params: WatchCommandParams): Promise<nu
     ? String(params.parsed.flags.get("issue"))
     : undefined;
 
-  const instance = render(
-    createElement(App, { baseUrl, bearerToken, initialIssueKey: issueKey }),
-    { stdout: process.stderr, stdin: process.stdin, patchConsole: false },
-  );
+  process.stderr.write("\u001b[?1049h\u001b[2J\u001b[H");
+  try {
+    const instance = render(
+      createElement(App, { baseUrl, bearerToken, initialIssueKey: issueKey }),
+      { stdout: process.stderr, stdin: process.stdin, patchConsole: false },
+    );
 
-  await instance.waitUntilExit();
-  return 0;
+    await instance.waitUntilExit();
+    return 0;
+  } finally {
+    process.stderr.write("\u001b[?1049l");
+  }
 }

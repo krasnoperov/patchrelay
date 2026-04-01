@@ -2,6 +2,7 @@ import type { FactoryState, RunType } from "./factory-state.ts";
 
 export type RunStatus = "queued" | "running" | "completed" | "failed" | "released";
 export type GitHubFailureSource = "branch_ci" | "queue_eviction";
+export type BranchOwner = "patchrelay" | "merge_steward";
 
 export interface GitHubCiSnapshotCheckRecord {
   name: string;
@@ -37,6 +38,8 @@ export interface IssueRecord {
   pendingRunType?: RunType | undefined;
   pendingRunContextJson?: string | undefined;
   branchName?: string | undefined;
+  branchOwner?: BranchOwner | undefined;
+  branchOwnershipChangedAt?: string | undefined;
   worktreePath?: string | undefined;
   threadId?: string | undefined;
   activeRunId?: number | undefined;
