@@ -536,7 +536,7 @@ export class PatchRelayService {
     // Infer run type from current state instead of always resetting to implementation
     let runType = "implementation";
     let factoryState: string = "delegated";
-    if (issue.prNumber && issue.prCheckStatus === "failed") {
+    if (issue.prNumber && (issue.prCheckStatus === "failed" || issue.prCheckStatus === "failure" || issue.lastGitHubFailureSource === "branch_ci")) {
       runType = "ci_repair";
       factoryState = "repairing_ci";
     } else if (issue.prNumber && issue.prReviewState === "changes_requested") {

@@ -3,6 +3,24 @@ import type { FactoryState, RunType } from "./factory-state.ts";
 export type RunStatus = "queued" | "running" | "completed" | "failed" | "released";
 export type GitHubFailureSource = "branch_ci" | "queue_eviction";
 
+export interface GitHubCiSnapshotCheckRecord {
+  name: string;
+  status: "pending" | "success" | "failure";
+  conclusion?: string | undefined;
+  detailsUrl?: string | undefined;
+  summary?: string | undefined;
+}
+
+export interface GitHubCiSnapshotRecord {
+  headSha: string;
+  gateCheckName?: string | undefined;
+  gateCheckStatus: "pending" | "success" | "failure";
+  failedChecks: GitHubCiSnapshotCheckRecord[];
+  checks: GitHubCiSnapshotCheckRecord[];
+  settledAt?: string | undefined;
+  capturedAt: string;
+}
+
 export interface IssueRecord {
   id: number;
   projectId: string;
@@ -35,6 +53,11 @@ export interface IssueRecord {
   lastGitHubFailureCheckUrl?: string | undefined;
   lastGitHubFailureContextJson?: string | undefined;
   lastGitHubFailureAt?: string | undefined;
+  lastGitHubCiSnapshotHeadSha?: string | undefined;
+  lastGitHubCiSnapshotGateCheckName?: string | undefined;
+  lastGitHubCiSnapshotGateCheckStatus?: string | undefined;
+  lastGitHubCiSnapshotJson?: string | undefined;
+  lastGitHubCiSnapshotSettledAt?: string | undefined;
   lastQueueSignalAt?: string | undefined;
   lastQueueIncidentJson?: string | undefined;
   lastAttemptedFailureHeadSha?: string | undefined;
