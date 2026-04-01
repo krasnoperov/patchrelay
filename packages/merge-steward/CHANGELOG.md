@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.0](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.4.1...merge-steward-v0.5.0) (2026-04-01)
+
+
+### Features
+
+* gate blocked work and surface queue pauses ([06735d7](https://github.com/krasnoperov/patchrelay/commit/06735d7fd5b04169b2947097d28828809e5355d6))
+* surface queue blocks from unhealthy main ([1aad5a2](https://github.com/krasnoperov/patchrelay/commit/1aad5a2f3bc82a4b81c9da414cf0fffe4f675735))
+
 ## [0.4.1](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.4.0...merge-steward-v0.4.1) (2026-04-01)
 
 
