@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.32.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.31.0...patchrelay-v0.32.0) (2026-04-01)
+
+
+### Features
+
+* wait for settled CI before repair ([c84bb16](https://github.com/krasnoperov/patchrelay/commit/c84bb1636c29f4c715c4f2ded35e267dbe718dbc))
+* wait for settled CI before repair ([6d74200](https://github.com/krasnoperov/patchrelay/commit/6d74200d17fb235559920ef98a633639699152d6))
+
+
+### Bug Fixes
+
+* enforce settled CI snapshot semantics ([20744cf](https://github.com/krasnoperov/patchrelay/commit/20744cf5e620bda7cb78fd0573f36a76a11425a5))
+* scope ci repair prompt snapshot ([eb1c885](https://github.com/krasnoperov/patchrelay/commit/eb1c885fbc9815c24367ff86363f12b6ab76c4d1))
+
 ## [0.31.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.30.1...patchrelay-v0.31.0) (2026-04-01)
 
 
