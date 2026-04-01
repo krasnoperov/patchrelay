@@ -130,9 +130,7 @@ export function useWatchStream(options: WatchStreamOptions): void {
       if (reconnectTimeout !== undefined) {
         clearTimeout(reconnectTimeout);
       }
-      if (snapshotInterval !== undefined) {
-        clearInterval(snapshotInterval);
-      }
+      clearInterval(snapshotInterval);
     };
   }, []);
 }
