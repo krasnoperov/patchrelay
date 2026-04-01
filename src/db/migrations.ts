@@ -211,11 +211,16 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
   // Preserve GitHub failure provenance so reconciliation can distinguish
   // branch CI failures from merge-queue evictions after webhook delivery.
   addColumnIfMissing(connection, "issues", "last_github_failure_source", "TEXT");
+  addColumnIfMissing(connection, "issues", "last_github_failure_head_sha", "TEXT");
+  addColumnIfMissing(connection, "issues", "last_github_failure_signature", "TEXT");
   addColumnIfMissing(connection, "issues", "last_github_failure_check_name", "TEXT");
   addColumnIfMissing(connection, "issues", "last_github_failure_check_url", "TEXT");
+  addColumnIfMissing(connection, "issues", "last_github_failure_context_json", "TEXT");
   addColumnIfMissing(connection, "issues", "last_github_failure_at", "TEXT");
   addColumnIfMissing(connection, "issues", "last_queue_signal_at", "TEXT");
   addColumnIfMissing(connection, "issues", "last_queue_incident_json", "TEXT");
+  addColumnIfMissing(connection, "issues", "last_attempted_failure_head_sha", "TEXT");
+  addColumnIfMissing(connection, "issues", "last_attempted_failure_signature", "TEXT");
 }
 
 function addColumnIfMissing(connection: DatabaseConnection, table: string, column: string, definition: string): void {

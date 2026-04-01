@@ -7,6 +7,7 @@ import {
   ensureGhWrapper,
   type GitHubAppTokenManager,
 } from "./github-app-token.ts";
+import { parseGitHubFailureContext, summarizeGitHubFailureContext } from "./github-failure-context.ts";
 import { GitHubWebhookHandler } from "./github-webhook-handler.ts";
 import { IssueQueryService } from "./issue-query-service.ts";
 import { DatabaseBackedLinearClientProvider } from "./linear-client.ts";
@@ -282,6 +283,11 @@ export class PatchRelayService {
     prNumber?: number;
     prReviewState?: string;
     prCheckStatus?: string;
+    latestFailureSource?: string;
+    latestFailureHeadSha?: string;
+    latestFailureCheckName?: string;
+    latestFailureStepName?: string;
+    latestFailureSummary?: string;
     updatedAt: string;
   }> {
     const rows = this.db.connection
@@ -291,6 +297,10 @@ export class PatchRelayService {
           i.current_linear_state, i.factory_state, i.updated_at,
           i.pending_run_type,
           i.pr_number, i.pr_review_state, i.pr_check_status,
+          i.last_github_failure_source,
+          i.last_github_failure_head_sha,
+          i.last_github_failure_check_name,
+          i.last_github_failure_context_json,
           active_run.run_type AS active_run_type,
           latest_run.run_type AS latest_run_type,
           latest_run.status AS latest_run_status,
@@ -333,6 +343,9 @@ export class PatchRelayService {
       )
       .all() as Array<Record<string, unknown>>;
     return rows.map((row) => {
+      const failureContext = parseGitHubFailureContext(
+        typeof row.last_github_failure_context_json === "string" ? row.last_github_failure_context_json : undefined,
+      );
       const statusNote = extractStatusNote(
         typeof row.latest_run_summary_json === "string" ? row.latest_run_summary_json : undefined,
         typeof row.latest_run_report_json === "string" ? row.latest_run_report_json : undefined,
@@ -342,9 +355,19 @@ export class PatchRelayService {
       );
       const blockedByCount = Number(row.blocked_by_count ?? 0);
       const readyForExecution = row.pending_run_type !== null && row.pending_run_type !== undefined && row.active_run_type === null && blockedByCount === 0;
+      const failureSummary = summarizeGitHubFailureContext(failureContext);
+      const derivedStatusNote = blockedByCount > 0
+        ? `Blocked by ${blockedByKeys.join(", ")}`
+        : failureSummary && (
+          row.factory_state === "repairing_ci"
+          || row.factory_state === "repairing_queue"
+          || row.factory_state === "failed"
+        )
+          ? failureSummary
+          : statusNote;
       const statusNoteWithBlockers = blockedByCount > 0
         ? `Blocked by ${blockedByKeys.join(", ")}`
-        : statusNote;
+        : derivedStatusNote;
 
       return {
         ...(row.issue_key !== null ? { issueKey: String(row.issue_key) } : {}),
@@ -363,6 +386,11 @@ export class PatchRelayService {
         ...(row.pr_number !== null ? { prNumber: Number(row.pr_number) } : {}),
         ...(row.pr_review_state !== null ? { prReviewState: String(row.pr_review_state) } : {}),
         ...(row.pr_check_status !== null ? { prCheckStatus: String(row.pr_check_status) } : {}),
+        ...(row.last_github_failure_source !== null ? { latestFailureSource: String(row.last_github_failure_source) } : {}),
+        ...(row.last_github_failure_head_sha !== null ? { latestFailureHeadSha: String(row.last_github_failure_head_sha) } : {}),
+        ...(row.last_github_failure_check_name !== null ? { latestFailureCheckName: String(row.last_github_failure_check_name) } : {}),
+        ...(failureContext?.stepName ? { latestFailureStepName: failureContext.stepName } : {}),
+        ...(failureContext?.summary ? { latestFailureSummary: failureContext.summary } : {}),
         updatedAt: String(row.updated_at),
       };
     });

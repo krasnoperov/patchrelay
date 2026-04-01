@@ -37,6 +37,11 @@ export interface WatchIssue {
   prNumber?: number | undefined;
   prReviewState?: string | undefined;
   prCheckStatus?: string | undefined;
+  latestFailureSource?: string | undefined;
+  latestFailureHeadSha?: string | undefined;
+  latestFailureCheckName?: string | undefined;
+  latestFailureStepName?: string | undefined;
+  latestFailureSummary?: string | undefined;
   updatedAt: string;
 }
 
@@ -65,6 +70,11 @@ export interface WatchIssueContext {
   ciRepairAttempts: number;
   queueRepairAttempts: number;
   reviewFixAttempts: number;
+  latestFailureSource?: string | undefined;
+  latestFailureHeadSha?: string | undefined;
+  latestFailureCheckName?: string | undefined;
+  latestFailureStepName?: string | undefined;
+  latestFailureSummary?: string | undefined;
   runCount: number;
 }
 
@@ -335,6 +345,20 @@ function applyFeedEvent(state: WatchState, event: OperatorFeedEvent, receivedAt:
     if (event.status === "check_passed" || event.status === "check_failed") {
       issue.prCheckStatus = event.status === "check_passed" ? "passed" : "failed";
     }
+    if (event.status === "ci_repair_queued") {
+      issue.factoryState = "repairing_ci";
+      issue.statusNote = event.detail ?? event.summary;
+    }
+    if (event.status === "queue_repair_queued") {
+      issue.factoryState = "repairing_queue";
+      issue.statusNote = event.detail ?? event.summary;
+    }
+    if (event.status === "repair_deduped" || event.status === "branch_not_advanced") {
+      issue.statusNote = event.summary;
+    }
+  }
+  if ((event.kind === "turn" || event.kind === "github") && event.status === "branch_not_advanced") {
+    issue.statusNote = event.summary;
   }
 
   issue.updatedAt = event.at;

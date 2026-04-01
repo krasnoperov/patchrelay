@@ -102,6 +102,11 @@ async function rehydrate(
         ciRepairAttempts: typeof i.ciRepairAttempts === "number" ? i.ciRepairAttempts : 0,
         queueRepairAttempts: typeof i.queueRepairAttempts === "number" ? i.queueRepairAttempts : 0,
         reviewFixAttempts: typeof i.reviewFixAttempts === "number" ? i.reviewFixAttempts : 0,
+        latestFailureSource: typeof i.latestFailureSource === "string" ? i.latestFailureSource : undefined,
+        latestFailureHeadSha: typeof i.latestFailureHeadSha === "string" ? i.latestFailureHeadSha : undefined,
+        latestFailureCheckName: typeof i.latestFailureCheckName === "string" ? i.latestFailureCheckName : undefined,
+        latestFailureStepName: typeof i.latestFailureStepName === "string" ? i.latestFailureStepName : undefined,
+        latestFailureSummary: typeof i.latestFailureSummary === "string" ? i.latestFailureSummary : undefined,
         runCount: runs.length,
       };
     }

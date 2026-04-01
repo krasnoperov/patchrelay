@@ -29,11 +29,16 @@ export interface IssueRecord {
   prReviewState?: string | undefined;
   prCheckStatus?: string | undefined;
   lastGitHubFailureSource?: GitHubFailureSource | undefined;
+  lastGitHubFailureHeadSha?: string | undefined;
+  lastGitHubFailureSignature?: string | undefined;
   lastGitHubFailureCheckName?: string | undefined;
   lastGitHubFailureCheckUrl?: string | undefined;
+  lastGitHubFailureContextJson?: string | undefined;
   lastGitHubFailureAt?: string | undefined;
   lastQueueSignalAt?: string | undefined;
   lastQueueIncidentJson?: string | undefined;
+  lastAttemptedFailureHeadSha?: string | undefined;
+  lastAttemptedFailureSignature?: string | undefined;
   ciRepairAttempts: number;
   queueRepairAttempts: number;
   reviewFixAttempts: number;
@@ -92,6 +97,11 @@ export interface TrackedIssueRecord {
   blockedByCount: number;
   blockedByKeys: string[];
   readyForExecution: boolean;
+  latestFailureSource?: GitHubFailureSource | undefined;
+  latestFailureHeadSha?: string | undefined;
+  latestFailureCheckName?: string | undefined;
+  latestFailureStepName?: string | undefined;
+  latestFailureSummary?: string | undefined;
   activeRunId?: number | undefined;
   activeAgentSessionId?: string | undefined;
   updatedAt: string;

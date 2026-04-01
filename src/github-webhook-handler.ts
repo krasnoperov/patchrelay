@@ -2,6 +2,12 @@ import type { Logger } from "pino";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord } from "./db-types.ts";
 import { resolveFactoryStateFromGitHub, TERMINAL_STATES, type FactoryState } from "./factory-state.ts";
+import {
+  createGitHubFailureContextResolver,
+  summarizeGitHubFailureContext,
+  type GitHubFailureContext,
+  type GitHubFailureContextResolver,
+} from "./github-failure-context.ts";
 import type { GitHubWebhookPayload, NormalizedGitHubEvent } from "./github-types.ts";
 import { normalizeGitHubWebhook, verifyGitHubWebhookSignature } from "./github-webhooks.ts";
 import { buildAgentSessionPlanForIssue } from "./agent-session-plan.ts";
@@ -32,6 +38,24 @@ function isMetadataOnlyCheckEvent(event: NormalizedGitHubEvent): boolean {
     && (event.triggerEvent === "check_passed" || event.triggerEvent === "check_failed");
 }
 
+interface GitHubFailurePromptContext {
+  source?: "branch_ci" | "queue_eviction" | undefined;
+  repoFullName?: string | undefined;
+  capturedAt?: string | undefined;
+  headSha?: string | undefined;
+  failureHeadSha?: string | undefined;
+  failureSignature?: string | undefined;
+  checkName?: string | undefined;
+  checkUrl?: string | undefined;
+  checkDetailsUrl?: string | undefined;
+  workflowRunId?: number | undefined;
+  workflowName?: string | undefined;
+  jobName?: string | undefined;
+  stepName?: string | undefined;
+  summary?: string | undefined;
+  annotations?: string[] | undefined;
+}
+
 export class GitHubWebhookHandler {
   constructor(
     private readonly config: AppConfig,
@@ -41,6 +65,7 @@ export class GitHubWebhookHandler {
     private readonly logger: Logger,
     private readonly codex: { steerTurn(options: { threadId: string; turnId: string; input: string }): Promise<void> },
     private readonly feed?: OperatorEventFeed,
+    private readonly failureContextResolver: GitHubFailureContextResolver = createGitHubFailureContextResolver(),
   ) {}
 
   async acceptGitHubWebhook(params: {
@@ -140,6 +165,8 @@ export class GitHubWebhookHandler {
       return;
     }
 
+    const project = this.config.projects.find((p) => p.id === issue.projectId);
+
     // Update PR state on the issue
     this.db.upsertIssue({
       projectId: issue.projectId,
@@ -150,7 +177,7 @@ export class GitHubWebhookHandler {
       ...(event.reviewState !== undefined ? { prReviewState: event.reviewState } : {}),
       ...(event.checkStatus !== undefined ? { prCheckStatus: event.checkStatus } : {}),
     });
-    this.updateFailureProvenance(issue, event);
+    await this.updateFailureProvenance(issue, event, project);
 
     if (!isMetadataOnlyCheckEvent(event)) {
       // Re-read issue after PR metadata upsert so guards see fresh prReviewState
@@ -205,10 +232,15 @@ export class GitHubWebhookHandler {
         ciRepairAttempts: 0,
         queueRepairAttempts: 0,
         lastGitHubFailureSource: null,
+        lastGitHubFailureHeadSha: null,
+        lastGitHubFailureSignature: null,
         lastGitHubFailureCheckName: null,
         lastGitHubFailureCheckUrl: null,
+        lastGitHubFailureContextJson: null,
         lastGitHubFailureAt: null,
         lastQueueIncidentJson: null,
+        lastAttemptedFailureHeadSha: null,
+        lastAttemptedFailureSignature: null,
       });
     }
 
@@ -231,16 +263,15 @@ export class GitHubWebhookHandler {
     // Queue eviction check runs bypass the metadata-only filter because
     // they're individual check_run events (not check_suite), but they
     // must drive state transitions.
-    const project = this.config.projects.find((p) => p.id === freshIssue.projectId);
     const protocol = resolveMergeQueueProtocol(project);
     if (event.eventSource === "check_run" && event.checkName === protocol.evictionCheckName) {
-      this.maybeEnqueueReactiveRun(freshIssue, event, project);
+      await this.maybeEnqueueReactiveRun(freshIssue, event, project);
     } else if (!isMetadataOnlyCheckEvent(event)) {
-      this.maybeEnqueueReactiveRun(freshIssue, event, project);
+      await this.maybeEnqueueReactiveRun(freshIssue, event, project);
     }
   }
 
-  private maybeEnqueueReactiveRun(issue: IssueRecord, event: NormalizedGitHubEvent, project?: ProjectConfig): void {
+  private async maybeEnqueueReactiveRun(issue: IssueRecord, event: NormalizedGitHubEvent, project?: ProjectConfig): Promise<void> {
     // Don't trigger if there's already an active run
     if (issue.activeRunId !== undefined) return;
 
@@ -256,14 +287,24 @@ export class GitHubWebhookHandler {
       if (issue.factoryState === "awaiting_queue"
         && event.checkName === queueCheckName) {
         const queueRepairContext = buildQueueRepairContextFromEvent(event);
+        const failureContext = this.buildQueueFailureContext(issue, event, queueRepairContext);
+        if (this.hasDuplicatePendingReactiveRun(issue, "queue_repair", failureContext)) {
+          return;
+        }
         this.db.upsertIssue({
           projectId: issue.projectId,
           linearIssueId: issue.linearIssueId,
           pendingRunType: "queue_repair",
-          pendingRunContextJson: JSON.stringify(queueRepairContext),
+          pendingRunContextJson: JSON.stringify({
+            ...queueRepairContext,
+            ...failureContext,
+          }),
           lastGitHubFailureSource: "queue_eviction",
+          lastGitHubFailureHeadSha: failureContext.failureHeadSha ?? null,
+          lastGitHubFailureSignature: failureContext.failureSignature ?? null,
           lastGitHubFailureCheckName: event.checkName ?? null,
           lastGitHubFailureCheckUrl: event.checkUrl ?? null,
+          lastGitHubFailureContextJson: JSON.stringify(failureContext),
           lastGitHubFailureAt: new Date().toISOString(),
           lastQueueSignalAt: new Date().toISOString(),
           lastQueueIncidentJson: JSON.stringify(queueRepairContext),
@@ -281,23 +322,39 @@ export class GitHubWebhookHandler {
           detail: queueRepairContext.incidentSummary ?? queueRepairContext.incidentUrl ?? event.checkUrl,
         });
       } else {
+        const failureContext = await this.resolveBranchFailureContext(issue, event, project);
+        if (this.hasDuplicatePendingReactiveRun(issue, "ci_repair", failureContext)) {
+          return;
+        }
         this.db.upsertIssue({
           projectId: issue.projectId,
           linearIssueId: issue.linearIssueId,
           pendingRunType: "ci_repair",
           pendingRunContextJson: JSON.stringify({
-            checkName: event.checkName,
-            checkUrl: event.checkUrl,
-            checkClass: resolveCheckClass(event.checkName, project),
+            ...failureContext,
+            checkClass: resolveCheckClass(failureContext.checkName ?? event.checkName, project),
           }),
           lastGitHubFailureSource: "branch_ci",
-          lastGitHubFailureCheckName: event.checkName ?? null,
-          lastGitHubFailureCheckUrl: event.checkUrl ?? null,
+          lastGitHubFailureHeadSha: failureContext.failureHeadSha ?? null,
+          lastGitHubFailureSignature: failureContext.failureSignature ?? null,
+          lastGitHubFailureCheckName: failureContext.checkName ?? event.checkName ?? null,
+          lastGitHubFailureCheckUrl: failureContext.checkUrl ?? event.checkUrl ?? null,
+          lastGitHubFailureContextJson: JSON.stringify(failureContext),
           lastGitHubFailureAt: new Date().toISOString(),
           lastQueueIncidentJson: null,
         });
         this.enqueueIssue(issue.projectId, issue.linearIssueId);
-        this.logger.info({ issueKey: issue.issueKey, checkName: event.checkName }, "Enqueued CI repair run");
+        this.logger.info({ issueKey: issue.issueKey, checkName: failureContext.checkName ?? event.checkName }, "Enqueued CI repair run");
+        this.feed?.publish({
+          level: "warn",
+          kind: "github",
+          issueKey: issue.issueKey,
+          projectId: issue.projectId,
+          stage: "repairing_ci",
+          status: "ci_repair_queued",
+          summary: `CI repair queued for ${failureContext.jobName ?? failureContext.checkName ?? "failed check"}`,
+          detail: summarizeGitHubFailureContext(failureContext),
+        });
       }
     }
 
@@ -317,24 +374,26 @@ export class GitHubWebhookHandler {
 
   }
 
-  private updateFailureProvenance(issue: IssueRecord, event: NormalizedGitHubEvent): void {
-    const project = this.config.projects.find((p) => p.id === issue.projectId);
+  private async updateFailureProvenance(issue: IssueRecord, event: NormalizedGitHubEvent, project?: ProjectConfig): Promise<void> {
     const protocol = resolveMergeQueueProtocol(project);
     const isQueueEvictionCheck = event.eventSource === "check_run" && event.checkName === protocol.evictionCheckName;
 
     if (event.triggerEvent === "check_failed" && issue.prState === "open") {
-      if (isMetadataOnlyCheckEvent(event) && !isQueueEvictionCheck) {
-        return;
-      }
       const source = issue.factoryState === "awaiting_queue" && isQueueEvictionCheck
         ? "queue_eviction"
         : "branch_ci";
+      const failureContext = source === "queue_eviction"
+        ? this.buildQueueFailureContext(issue, event)
+        : await this.resolveBranchFailureContext(issue, event, project);
       this.db.upsertIssue({
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         lastGitHubFailureSource: source,
-        lastGitHubFailureCheckName: event.checkName ?? null,
-        lastGitHubFailureCheckUrl: event.checkUrl ?? null,
+        lastGitHubFailureHeadSha: failureContext.failureHeadSha ?? event.headSha ?? null,
+        lastGitHubFailureSignature: failureContext.failureSignature ?? null,
+        lastGitHubFailureCheckName: failureContext.checkName ?? event.checkName ?? null,
+        lastGitHubFailureCheckUrl: failureContext.checkUrl ?? event.checkUrl ?? null,
+        lastGitHubFailureContextJson: JSON.stringify(failureContext),
         lastGitHubFailureAt: new Date().toISOString(),
         ...(source === "queue_eviction"
           ? {
@@ -357,12 +416,111 @@ export class GitHubWebhookHandler {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         lastGitHubFailureSource: null,
+        lastGitHubFailureHeadSha: null,
+        lastGitHubFailureSignature: null,
         lastGitHubFailureCheckName: null,
         lastGitHubFailureCheckUrl: null,
+        lastGitHubFailureContextJson: null,
         lastGitHubFailureAt: null,
         lastQueueIncidentJson: null,
+        lastAttemptedFailureHeadSha: null,
+        lastAttemptedFailureSignature: null,
       });
     }
+  }
+
+  private async resolveBranchFailureContext(
+    issue: IssueRecord,
+    event: NormalizedGitHubEvent,
+    project?: ProjectConfig,
+  ): Promise<GitHubFailurePromptContext> {
+    const repoFullName = project?.github?.repoFullName ?? event.repoFullName;
+    const context = await this.failureContextResolver.resolve({
+      source: "branch_ci",
+      repoFullName,
+      event,
+    });
+    return {
+      ...(context ? context : {}),
+      ...(context?.headSha || event.headSha ? { failureHeadSha: context?.headSha ?? event.headSha } : {}),
+      ...(context?.failureSignature ? { failureSignature: context.failureSignature } : {}),
+    };
+  }
+
+  private buildQueueFailureContext(
+    issue: IssueRecord,
+    event: NormalizedGitHubEvent,
+    queueRepairContext?: unknown,
+  ): GitHubFailurePromptContext {
+    const repoFullName = event.repoFullName || this.config.projects.find((p) => p.id === issue.projectId)?.github?.repoFullName || "";
+    const incident = queueRepairContext && typeof queueRepairContext === "object"
+      ? queueRepairContext as { incidentSummary?: string; incidentUrl?: string }
+      : undefined;
+    const summary = typeof incident?.incidentSummary === "string"
+      ? incident.incidentSummary
+      : event.checkOutputSummary ?? event.checkOutputTitle;
+    const failureHeadSha = event.headSha;
+    const failureSignature = [
+      "queue_eviction",
+      failureHeadSha ?? "unknown-sha",
+      event.checkName ?? "merge-steward/queue",
+    ].join("::");
+    return {
+      source: "queue_eviction",
+      repoFullName,
+      capturedAt: new Date().toISOString(),
+      ...(failureHeadSha ? { headSha: failureHeadSha, failureHeadSha } : {}),
+      ...(event.checkName ? { checkName: event.checkName } : {}),
+      ...(event.checkUrl ? { checkUrl: event.checkUrl } : {}),
+      ...(event.checkDetailsUrl ? { checkDetailsUrl: event.checkDetailsUrl } : {}),
+      ...(summary ? { summary } : {}),
+      failureSignature,
+    };
+  }
+
+  private hasDuplicatePendingReactiveRun(
+    issue: IssueRecord,
+    runType: "ci_repair" | "queue_repair",
+    failureContext: GitHubFailurePromptContext,
+  ): boolean {
+    const signature = typeof failureContext.failureSignature === "string" ? failureContext.failureSignature : undefined;
+    const headSha = typeof failureContext.failureHeadSha === "string"
+      ? failureContext.failureHeadSha
+      : typeof failureContext.headSha === "string" ? failureContext.headSha : undefined;
+    if (!signature) return false;
+
+    if (issue.pendingRunType === runType && issue.pendingRunContextJson) {
+      const existing = safeJsonParse<Record<string, unknown>>(issue.pendingRunContextJson);
+      if (existing?.failureSignature === signature
+        && (headSha === undefined || existing.failureHeadSha === headSha || existing.headSha === headSha)) {
+        this.feed?.publish({
+          level: "info",
+          kind: "github",
+          issueKey: issue.issueKey,
+          projectId: issue.projectId,
+          stage: issue.factoryState,
+          status: "repair_deduped",
+          summary: `Skipped duplicate ${runType} for ${signature}`,
+        });
+        return true;
+      }
+    }
+
+    if (issue.lastAttemptedFailureSignature === signature
+      && (headSha === undefined || issue.lastAttemptedFailureHeadSha === headSha)) {
+      this.feed?.publish({
+        level: "info",
+        kind: "github",
+        issueKey: issue.issueKey,
+        projectId: issue.projectId,
+        stage: issue.factoryState,
+        status: "repair_deduped",
+        summary: `Already attempted ${runType} for this failing PR head`,
+      });
+      return true;
+    }
+
+    return false;
   }
 
   private async emitLinearActivity(
@@ -467,7 +625,7 @@ function resolveCheckClass(
   project: ProjectConfig | undefined,
 ): "code" | "review" | "gate" {
   if (!checkName || !project) return "code";
-  if (project.reviewChecks.some((name) => checkName.includes(name))) return "review";
-  if (project.gateChecks.some((name) => checkName.includes(name))) return "gate";
+  if ((project.reviewChecks ?? []).some((name) => checkName.includes(name))) return "review";
+  if ((project.gateChecks ?? []).some((name) => checkName.includes(name))) return "gate";
   return "code";
 }
