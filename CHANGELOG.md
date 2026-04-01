@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.32.2](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.32.1...patchrelay-v0.32.2) (2026-04-01)
+
+
+### Bug Fixes
+
+* clarify dashboard and queue status ([99e19a5](https://github.com/krasnoperov/patchrelay/commit/99e19a5e014836170a9a06f396662ff5e4fa212b))
+* clarify dashboard and queue status ([e0df22b](https://github.com/krasnoperov/patchrelay/commit/e0df22bbbf281f27888a515bb4aa11202ee021a4))
+
 ## [0.32.1](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.32.0...patchrelay-v0.32.1) (2026-04-01)
 
 
