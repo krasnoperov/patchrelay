@@ -304,7 +304,10 @@ export class PatchRelayService {
              AND blockers.linear_issue_id = d.blocker_linear_issue_id
             WHERE d.project_id = i.project_id
               AND d.linear_issue_id = i.linear_issue_id
-              AND LOWER(TRIM(COALESCE(blockers.current_linear_state, d.blocker_current_linear_state, ''))) != 'done'
+              AND (
+                COALESCE(blockers.current_linear_state_type, d.blocker_current_linear_state_type, '') != 'completed'
+                AND LOWER(TRIM(COALESCE(blockers.current_linear_state, d.blocker_current_linear_state, ''))) != 'done'
+              )
           ) AS blocked_by_count,
           (
             SELECT json_group_array(COALESCE(blockers.issue_key, d.blocker_issue_key, d.blocker_linear_issue_id))
@@ -314,7 +317,10 @@ export class PatchRelayService {
              AND blockers.linear_issue_id = d.blocker_linear_issue_id
             WHERE d.project_id = i.project_id
               AND d.linear_issue_id = i.linear_issue_id
-              AND LOWER(TRIM(COALESCE(blockers.current_linear_state, d.blocker_current_linear_state, ''))) != 'done'
+              AND (
+                COALESCE(blockers.current_linear_state_type, d.blocker_current_linear_state_type, '') != 'completed'
+                AND LOWER(TRIM(COALESCE(blockers.current_linear_state, d.blocker_current_linear_state, ''))) != 'done'
+              )
           ) AS blocked_by_keys_json
         FROM issues i
         LEFT JOIN runs active_run ON active_run.id = i.active_run_id
