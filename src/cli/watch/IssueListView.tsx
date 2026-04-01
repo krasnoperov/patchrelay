@@ -16,9 +16,9 @@ interface IssueListViewProps {
   frozen?: boolean | undefined;
 }
 
-// selector(2) + key(10) + status(13) + pr(7) + ago(4) + gaps = ~36
-const FIXED_COLS = 40;
+const FIXED_COLS = 8;
 const CHROME_ROWS = 4;
+const ISSUE_ROW_HEIGHT = 4;
 
 export function IssueListView({
   issues,
@@ -34,7 +34,7 @@ export function IssueListView({
   const cols = stdout?.columns ?? 80;
   const rows = stdout?.rows ?? 24;
   const titleWidth = Math.max(0, cols - FIXED_COLS);
-  const maxVisible = Math.max(1, rows - CHROME_ROWS);
+  const maxVisible = Math.max(1, Math.floor((rows - CHROME_ROWS) / ISSUE_ROW_HEIGHT));
 
   // Periodic refresh for elapsed times
   const [, tick] = useReducer((c: number) => c + 1, 0);

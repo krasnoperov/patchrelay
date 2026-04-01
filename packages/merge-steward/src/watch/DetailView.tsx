@@ -1,6 +1,6 @@
 import { Box, Text } from "ink";
 import type { QueueBlockState, QueueEntryDetail } from "../types.ts";
-import { formatEntryEvent, progressBar, relativeTime, shortSha, statusColor, summarizeQueueBlock } from "./format.ts";
+import { formatEntryEvent, humanStatus, nextStepLabel, progressBar, queueProgress, relativeTime, shortSha, statusColor, summarizeQueueBlock } from "./format.ts";
 import { EntryStateGraph } from "./EntryStateGraph.tsx";
 import { ExternalRepairObservation } from "./ExternalRepairObservation.tsx";
 import { buildEntryStateGraph, buildExternalRepairObservations } from "./state-visualization.ts";
@@ -39,11 +39,13 @@ export function DetailView({
     headPrNumber,
     queueBlock,
   });
+  const pipeline = queueProgress(entry.status);
   return (
     <Box flexDirection="column" marginTop={1}>
       <Box gap={2}>
         <Text bold>#{entry.prNumber}</Text>
-        <Text color={statusColor(entry.status)}>{entry.status}</Text>
+        {entry.issueKey ? <Text>{entry.issueKey}</Text> : null}
+        <Text color={statusColor(entry.status)}>{humanStatus(entry.status)}</Text>
         <Text dimColor>pos {entry.position}</Text>
         <Text dimColor>generation {entry.generation}</Text>
         <Text dimColor>retry {entry.retryAttempts}/{entry.maxRetries}</Text>
@@ -53,6 +55,12 @@ export function DetailView({
         <Text dimColor>head {shortSha(entry.headSha)}</Text>
         <Text dimColor>base {shortSha(entry.baseSha)}</Text>
         {entry.issueKey && <Text dimColor>{entry.issueKey}</Text>}
+      </Box>
+
+      <Box gap={1} marginTop={1}>
+        <Text dimColor>progress</Text>
+        <Text>{progressBar(pipeline.current, pipeline.total, 12)}</Text>
+        <Text dimColor>{nextStepLabel(entry.status)}</Text>
       </Box>
 
       {isHead && queueBlock && (

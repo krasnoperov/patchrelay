@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { Box, Text, useStdout } from "ink";
 import type { QueueBlockState, QueueEntry, QueueEventSummary } from "../types.ts";
-import { formatEventSummary, relativeTime, statusColor, summarizeQueueBlock, truncate } from "./format.ts";
+import { formatEventSummary, humanStatus, nextStepLabel, progressBar, queueProgress, relativeTime, statusColor, summarizeQueueBlock, truncate } from "./format.ts";
 
 interface QueueListViewProps {
   entries: QueueEntry[];
@@ -11,41 +11,58 @@ interface QueueListViewProps {
   queueBlock: QueueBlockState | null;
 }
 
+const ENTRY_ROW_HEIGHT = 2;
 const CHROME_ROWS = 13;
 
 function QueueRow({
   entry,
   selected,
-  branchWidth,
+  infoWidth,
   isHead,
   queueBlock,
 }: {
   entry: QueueEntry;
   selected: boolean;
-  branchWidth: number;
+  infoWidth: number;
   isHead: boolean;
   queueBlock: QueueBlockState | null;
 }): React.JSX.Element {
   const retryText = `${entry.retryAttempts}/${entry.maxRetries}`;
-  const ciText = entry.ciRetries > 0 ? ` ci:${entry.ciRetries}` : "";
+  const ciText = entry.ciRetries > 0 ? `CI retries ${entry.ciRetries}` : null;
   const blockedOnMain = isHead && queueBlock?.reason === "main_broken" && queueBlock.headPrNumber === entry.prNumber;
-  const renderedStatus = blockedOnMain ? "blocked/main" : entry.status;
+  const renderedStatus = blockedOnMain ? "blocked by broken main" : humanStatus(entry.status);
   const renderedColor = blockedOnMain ? "red" : statusColor(entry.status);
+  const progress = queueProgress(entry.status);
+  const branchLabel = truncate(entry.branch, Math.max(12, infoWidth - 34));
+  const nextStep = blockedOnMain
+    ? summarizeQueueBlock(queueBlock) ?? "waiting for main to recover"
+    : nextStepLabel(entry.status);
+
   return (
-    <Box>
-      <Text color={selected ? "cyan" : "gray"}>{selected ? "›" : " "}</Text>
-      <Text color={blockedOnMain ? "red" : isHead ? "green" : "gray"}>{blockedOnMain ? "!" : isHead ? "*" : " "}</Text>
-      <Text> {String(entry.position).padStart(2, " ")} </Text>
-      <Text bold>#{String(entry.prNumber).padStart(4, " ")}</Text>
-      <Text> </Text>
-      <Text color={renderedColor}>{renderedStatus.padEnd(14, " ")}</Text>
-      <Text> </Text>
-      <Text>{retryText.padEnd(4, " ")}</Text>
-      <Text> </Text>
-      <Text dimColor>{relativeTime(entry.updatedAt).padStart(4, " ")}</Text>
-      <Text> </Text>
-      <Text>{truncate(entry.branch, branchWidth)}</Text>
-      <Text dimColor>{ciText}</Text>
+    <Box flexDirection="column">
+      <Box>
+        <Text color={selected ? "cyan" : "gray"}>{selected ? "›" : " "}</Text>
+        <Text color={blockedOnMain ? "red" : isHead ? "green" : "gray"}>{blockedOnMain ? "!" : isHead ? "#" : " "}</Text>
+        <Text bold>{` #${entry.prNumber}`}</Text>
+        {entry.issueKey ? <Text>{` ${entry.issueKey}`}</Text> : null}
+        <Text dimColor>{`  pos ${entry.position}`}</Text>
+        <Text dimColor>{`  ${relativeTime(entry.updatedAt)}`}</Text>
+        <Text>{`  `}</Text>
+        <Text color={renderedColor}>{renderedStatus}</Text>
+      </Box>
+      <Box paddingLeft={2} gap={1}>
+        <Text dimColor>{progressBar(progress.current, progress.total, 8)}</Text>
+        <Text dimColor>{branchLabel}</Text>
+        <Text dimColor>|</Text>
+        <Text dimColor>{nextStep}</Text>
+        <Text dimColor>{` | retry ${retryText}`}</Text>
+        {ciText ? (
+          <>
+            <Text dimColor>|</Text>
+            <Text dimColor>{ciText}</Text>
+          </>
+        ) : null}
+      </Box>
     </Box>
   );
 }
@@ -60,8 +77,8 @@ export function QueueListView({
   const { stdout } = useStdout();
   const rows = stdout?.rows ?? 24;
   const cols = stdout?.columns ?? 100;
-  const branchWidth = Math.max(12, cols - 36);
-  const eventRows = Math.min(8, Math.max(4, rows - entries.length - CHROME_ROWS));
+  const infoWidth = Math.max(32, cols - 4);
+  const eventRows = Math.min(8, Math.max(4, rows - (entries.length * ENTRY_ROW_HEIGHT) - CHROME_ROWS));
   const displayedEvents = useMemo(() => recentEvents.slice(-eventRows), [eventRows, recentEvents]);
   const queueBlockLabel = summarizeQueueBlock(queueBlock);
 
@@ -75,7 +92,6 @@ export function QueueListView({
           <Text dimColor>Head PR #{queueBlock.headPrNumber ?? "?"} will resume automatically once main recovers.</Text>
         </Box>
       )}
-      <Text dimColor> sel head pos pr    status          retry age branch</Text>
       {entries.length === 0 ? (
         <Text dimColor>No queue entries in this filter.</Text>
       ) : (
@@ -84,7 +100,7 @@ export function QueueListView({
             key={entry.id}
             entry={entry}
             selected={entry.id === selectedEntryId}
-            branchWidth={branchWidth}
+            infoWidth={infoWidth}
             isHead={entry.id === headEntryId}
             queueBlock={queueBlock}
           />
