@@ -92,7 +92,7 @@ function buildRunPrompt(issue: IssueRecord, runType: RunType, repoPath: string, 
 
   // Add run-type-specific context for reactive runs
   switch (runType) {
-    case "ci_repair":
+    case "ci_repair": {
       const snapshot = context?.ciSnapshot && typeof context.ciSnapshot === "object"
         ? context.ciSnapshot as {
             gateCheckName?: string;
@@ -127,6 +127,7 @@ function buildRunPrompt(issue: IssueRecord, runType: RunType, repoPath: string, 
         "",
       );
       break;
+    }
     case "review_fix":
       lines.push(
         "## Review Changes Requested",
