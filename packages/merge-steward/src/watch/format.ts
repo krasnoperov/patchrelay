@@ -39,6 +39,60 @@ export function statusColor(status: QueueEntryStatus): "yellow" | "cyan" | "gree
   }
 }
 
+export function humanStatus(status: QueueEntryStatus): string {
+  switch (status) {
+    case "queued":
+      return "queued";
+    case "preparing_head":
+      return "refreshing branch";
+    case "validating":
+      return "running CI";
+    case "merging":
+      return "merging to main";
+    case "merged":
+      return "merged";
+    case "evicted":
+      return "removed from queue";
+    case "dequeued":
+      return "dequeued";
+  }
+}
+
+export function queueProgress(status: QueueEntryStatus): { current: number; total: number } {
+  switch (status) {
+    case "queued":
+      return { current: 1, total: 4 };
+    case "preparing_head":
+      return { current: 2, total: 4 };
+    case "validating":
+      return { current: 3, total: 4 };
+    case "merging":
+    case "merged":
+    case "evicted":
+    case "dequeued":
+      return { current: 4, total: 4 };
+  }
+}
+
+export function nextStepLabel(status: QueueEntryStatus): string {
+  switch (status) {
+    case "queued":
+      return "waiting for head-of-line turn";
+    case "preparing_head":
+      return "rebasing onto latest main";
+    case "validating":
+      return "waiting for CI result";
+    case "merging":
+      return "final GitHub merge";
+    case "merged":
+      return "landed on main";
+    case "evicted":
+      return "needs external repair";
+    case "dequeued":
+      return "removed manually";
+  }
+}
+
 export function runtimeLabel(runtime: QueueRuntimeStatus): string {
   if (runtime.tickInProgress) {
     return "running";

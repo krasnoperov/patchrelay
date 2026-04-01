@@ -44,14 +44,19 @@ export function StatusBar({
   const avgWaitMs = activeEntries.length > 0
     ? activeEntries.reduce((sum, e) => sum + (Date.now() - new Date(e.enqueuedAt).getTime()), 0) / activeEntries.length
     : 0;
+  const queueHealth = queueBlockLabel
+    ? `paused on broken main`
+    : summary.headPrNumber !== null
+      ? `head #${summary.headPrNumber} active`
+      : "queue idle";
   const leftParts = [
     snapshot.repoFullName,
     `base:${snapshot.baseBranch}`,
     `${summary.total} entries ${summary.active} active`,
-    summary.headPrNumber !== null ? `head #${summary.headPrNumber}` : null,
-    queueBlockLabel ? `blocked ${queueBlockLabel}` : null,
+    queueHealth,
+    queueBlockLabel ?? null,
     avgWaitMs > 0 ? `wait ~${formatDuration(avgWaitMs)}` : null,
-    `tick ${runtimeLabel(runtime)} ${relativeTime(runtime.lastTickCompletedAt ?? runtime.lastTickStartedAt)}`,
+    `last tick ${runtimeLabel(runtime)} ${relativeTime(runtime.lastTickCompletedAt ?? runtime.lastTickStartedAt)}`,
     filter,
   ].filter(Boolean).join(" | ");
   const availableLeft = Math.max(1, width - 28);

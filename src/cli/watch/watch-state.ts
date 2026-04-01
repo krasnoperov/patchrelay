@@ -37,6 +37,14 @@ export interface WatchIssue {
   prNumber?: number | undefined;
   prReviewState?: string | undefined;
   prCheckStatus?: string | undefined;
+  prChecksSummary?: {
+    total: number;
+    completed: number;
+    passed: number;
+    failed: number;
+    pending: number;
+    overall: "pending" | "success" | "failure";
+  } | undefined;
   latestFailureSource?: string | undefined;
   latestFailureHeadSha?: string | undefined;
   latestFailureCheckName?: string | undefined;

@@ -24,6 +24,7 @@ import { ServiceRuntime } from "./service-runtime.ts";
 import { WebhookHandler } from "./webhook-handler.ts";
 import { acceptIncomingWebhook } from "./service-webhooks.ts";
 import type { AppConfig, LinearClient, LinearClientProvider } from "./types.ts";
+import type { GitHubCiSnapshotRecord } from "./db-types.ts";
 
 function parseObjectJson(value: string | undefined): Record<string, unknown> | undefined {
   if (!value) return undefined;
@@ -49,6 +50,40 @@ function extractStatusNote(summaryJson?: string, reportJson?: string): string | 
   }
 
   return undefined;
+}
+
+function parseCiSnapshotSummary(snapshotJson?: string): {
+  total: number;
+  completed: number;
+  passed: number;
+  failed: number;
+  pending: number;
+  overall: "pending" | "success" | "failure";
+} | undefined {
+  if (!snapshotJson) return undefined;
+  try {
+    const snapshot = JSON.parse(snapshotJson) as GitHubCiSnapshotRecord;
+    const checks = Array.isArray(snapshot.checks) ? snapshot.checks : [];
+    if (checks.length === 0) return undefined;
+    let passed = 0;
+    let failed = 0;
+    let pending = 0;
+    for (const check of checks) {
+      if (check.status === "success") passed++;
+      else if (check.status === "failure") failed++;
+      else pending++;
+    }
+    return {
+      total: checks.length,
+      completed: passed + failed,
+      passed,
+      failed,
+      pending,
+      overall: snapshot.gateCheckStatus,
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 export class PatchRelayService {
@@ -293,6 +328,14 @@ export class PatchRelayService {
     prNumber?: number;
     prReviewState?: string;
     prCheckStatus?: string;
+    prChecksSummary?: {
+      total: number;
+      completed: number;
+      passed: number;
+      failed: number;
+      pending: number;
+      overall: "pending" | "success" | "failure";
+    };
     latestFailureSource?: string;
     latestFailureHeadSha?: string;
     latestFailureCheckName?: string;
@@ -307,6 +350,7 @@ export class PatchRelayService {
           i.current_linear_state, i.factory_state, i.updated_at,
           i.pending_run_type,
           i.pr_number, i.pr_review_state, i.pr_check_status,
+          i.last_github_ci_snapshot_json,
           i.last_github_failure_source,
           i.last_github_failure_head_sha,
           i.last_github_failure_check_name,
@@ -356,6 +400,9 @@ export class PatchRelayService {
       const failureContext = parseGitHubFailureContext(
         typeof row.last_github_failure_context_json === "string" ? row.last_github_failure_context_json : undefined,
       );
+      const prChecksSummary = parseCiSnapshotSummary(
+        typeof row.last_github_ci_snapshot_json === "string" ? row.last_github_ci_snapshot_json : undefined,
+      );
       const statusNote = extractStatusNote(
         typeof row.latest_run_summary_json === "string" ? row.latest_run_summary_json : undefined,
         typeof row.latest_run_report_json === "string" ? row.latest_run_report_json : undefined,
@@ -396,6 +443,7 @@ export class PatchRelayService {
         ...(row.pr_number !== null ? { prNumber: Number(row.pr_number) } : {}),
         ...(row.pr_review_state !== null ? { prReviewState: String(row.pr_review_state) } : {}),
         ...(row.pr_check_status !== null ? { prCheckStatus: String(row.pr_check_status) } : {}),
+        ...(prChecksSummary ? { prChecksSummary } : {}),
         ...(row.last_github_failure_source !== null ? { latestFailureSource: String(row.last_github_failure_source) } : {}),
         ...(row.last_github_failure_head_sha !== null ? { latestFailureHeadSha: String(row.last_github_failure_head_sha) } : {}),
         ...(row.last_github_failure_check_name !== null ? { latestFailureCheckName: String(row.last_github_failure_check_name) } : {}),
