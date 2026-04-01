@@ -114,11 +114,26 @@ async function prepareHead(ctx: ReconcileContext, entry: QueueEntry): Promise<vo
   emit(ctx, entry, "fetch_started");
   await ctx.git.fetch();
 
+  const baseSha = await ctx.git.headSha(ref(ctx, ctx.baseBranch));
+
   // Gate: main CI must be green.
   if (ctx.ci.getMainStatus) {
     const mainStatus = await ctx.ci.getMainStatus(ctx.baseBranch);
     if (mainStatus === "fail") {
-      emit(ctx, entry, "main_broken");
+      let mainChecks: Array<{ name: string; conclusion: "success" | "failure" | "pending"; url?: string | undefined }> = [];
+      try {
+        mainChecks = await ctx.github.listChecksForRef(ref(ctx, ctx.baseBranch));
+      } catch {
+        mainChecks = [];
+      }
+      const failingChecks = mainChecks.filter((check) => check.conclusion === "failure");
+      const pendingChecks = mainChecks.filter((check) => check.conclusion === "pending");
+      emit(ctx, entry, "main_broken", {
+        baseSha,
+        failingChecks,
+        pendingChecks,
+        detail: describeMainBroken(failingChecks, pendingChecks),
+      });
       return;
     }
   }
@@ -130,9 +145,6 @@ async function prepareHead(ctx: ReconcileContext, entry: QueueEntry): Promise<vo
     ctx.store.updateHead(entry.id, currentRef);
     return;
   }
-
-  const baseSha = await ctx.git.headSha(ref(ctx, ctx.baseBranch));
-
   // Gate: budget exhausted after previous conflict.
   if (isBudgetExhausted(entry) && entry.lastFailedBaseSha !== null) {
     emit(ctx, entry, "budget_exhausted", { baseSha });
@@ -147,6 +159,25 @@ async function prepareHead(ctx: ReconcileContext, entry: QueueEntry): Promise<vo
   }
 
   await performRebase(ctx, entry, baseSha);
+}
+
+function describeMainBroken(failingChecks: Array<{ name: string }>, pendingChecks: Array<{ name: string }>): string {
+  const parts: string[] = [];
+  if (failingChecks.length > 0) {
+    parts.push(`failing ${summarizeCheckNames(failingChecks)}`);
+  }
+  if (pendingChecks.length > 0) {
+    parts.push(`pending ${summarizeCheckNames(pendingChecks)}`);
+  }
+  return parts.length > 0 ? `main checks unhealthy: ${parts.join("; ")}` : "main checks unhealthy";
+}
+
+function summarizeCheckNames(checks: Array<{ name: string }>, limit = 3): string {
+  const names = [...new Set(checks.map((check) => check.name))];
+  if (names.length <= limit) {
+    return names.join(", ");
+  }
+  return `${names.slice(0, limit).join(", ")} +${names.length - limit} more`;
 }
 
 async function performRebase(ctx: ReconcileContext, entry: QueueEntry, baseSha: string): Promise<void> {

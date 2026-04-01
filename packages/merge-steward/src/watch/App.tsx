@@ -234,6 +234,7 @@ export function App({ baseUrl, initialPrNumber }: AppProps): React.JSX.Element {
           selectedEntryId={selectedEntryId}
           recentEvents={snapshot?.recentEvents ?? []}
           headEntryId={snapshot?.summary.headEntryId ?? null}
+          queueBlock={snapshot?.queueBlock ?? null}
         />
       ) : (
         <DetailView
@@ -242,6 +243,7 @@ export function App({ baseUrl, initialPrNumber }: AppProps): React.JSX.Element {
           activeIndex={selectedActiveIndex}
           activeCount={activeEntries.length}
           headPrNumber={snapshot?.summary.headPrNumber ?? null}
+          queueBlock={snapshot?.queueBlock ?? null}
         />
       )}
       {flashMessage && (

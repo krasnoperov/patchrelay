@@ -1,13 +1,14 @@
 import { useMemo } from "react";
 import { Box, Text, useStdout } from "ink";
-import type { QueueEntry, QueueEventSummary } from "../types.ts";
-import { formatEventSummary, relativeTime, statusColor, truncate } from "./format.ts";
+import type { QueueBlockState, QueueEntry, QueueEventSummary } from "../types.ts";
+import { formatEventSummary, relativeTime, statusColor, summarizeQueueBlock, truncate } from "./format.ts";
 
 interface QueueListViewProps {
   entries: QueueEntry[];
   selectedEntryId: string | null;
   recentEvents: QueueEventSummary[];
   headEntryId: string | null;
+  queueBlock: QueueBlockState | null;
 }
 
 const CHROME_ROWS = 13;
@@ -17,22 +18,27 @@ function QueueRow({
   selected,
   branchWidth,
   isHead,
+  queueBlock,
 }: {
   entry: QueueEntry;
   selected: boolean;
   branchWidth: number;
   isHead: boolean;
+  queueBlock: QueueBlockState | null;
 }): React.JSX.Element {
   const retryText = `${entry.retryAttempts}/${entry.maxRetries}`;
   const ciText = entry.ciRetries > 0 ? ` ci:${entry.ciRetries}` : "";
+  const blockedOnMain = isHead && queueBlock?.reason === "main_broken" && queueBlock.headPrNumber === entry.prNumber;
+  const renderedStatus = blockedOnMain ? "blocked/main" : entry.status;
+  const renderedColor = blockedOnMain ? "red" : statusColor(entry.status);
   return (
     <Box>
       <Text color={selected ? "cyan" : "gray"}>{selected ? "›" : " "}</Text>
-      <Text color={isHead ? "green" : "gray"}>{isHead ? "*" : " "}</Text>
+      <Text color={blockedOnMain ? "red" : isHead ? "green" : "gray"}>{blockedOnMain ? "!" : isHead ? "*" : " "}</Text>
       <Text> {String(entry.position).padStart(2, " ")} </Text>
       <Text bold>#{String(entry.prNumber).padStart(4, " ")}</Text>
       <Text> </Text>
-      <Text color={statusColor(entry.status)}>{entry.status.padEnd(14, " ")}</Text>
+      <Text color={renderedColor}>{renderedStatus.padEnd(14, " ")}</Text>
       <Text> </Text>
       <Text>{retryText.padEnd(4, " ")}</Text>
       <Text> </Text>
@@ -49,6 +55,7 @@ export function QueueListView({
   selectedEntryId,
   recentEvents,
   headEntryId,
+  queueBlock,
 }: QueueListViewProps): React.JSX.Element {
   const { stdout } = useStdout();
   const rows = stdout?.rows ?? 24;
@@ -56,9 +63,18 @@ export function QueueListView({
   const branchWidth = Math.max(12, cols - 36);
   const eventRows = Math.min(8, Math.max(4, rows - entries.length - CHROME_ROWS));
   const displayedEvents = useMemo(() => recentEvents.slice(-eventRows), [eventRows, recentEvents]);
+  const queueBlockLabel = summarizeQueueBlock(queueBlock);
 
   return (
     <Box flexDirection="column" marginTop={1}>
+      {queueBlock && (
+        <Box marginBottom={1} flexDirection="column">
+          <Text color="yellow">
+            Queue paused: {queueBlockLabel ?? "main is unhealthy"}{queueBlock.baseSha ? ` at ${truncate(queueBlock.baseSha, 10)}` : ""}.
+          </Text>
+          <Text dimColor>Head PR #{queueBlock.headPrNumber ?? "?"} will resume automatically once main recovers.</Text>
+        </Box>
+      )}
       <Text dimColor> s h pos pr    status          rt   ago branch</Text>
       {entries.length === 0 ? (
         <Text dimColor>No queue entries in this filter.</Text>
@@ -70,6 +86,7 @@ export function QueueListView({
             selected={entry.id === selectedEntryId}
             branchWidth={branchWidth}
             isHead={entry.id === headEntryId}
+            queueBlock={queueBlock}
           />
         ))
       )}

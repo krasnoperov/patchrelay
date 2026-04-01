@@ -66,14 +66,14 @@ export class GitHubPRClient implements GitHubPRApi {
     try {
       const checks = JSON.parse(result.stdout) as Array<{
         name: string;
+        status?: string;
         conclusion: string | null;
         html_url?: string;
       }>;
       return checks
-        .filter((c) => c.conclusion !== null)
         .map((c) => ({
           name: c.name,
-          conclusion: mapRestConclusion(c.conclusion!),
+          conclusion: mapRestConclusion(c.status, c.conclusion),
           ...(c.html_url ? { url: c.html_url } : {}),
         }));
     } catch {
@@ -121,8 +121,9 @@ export class GitHubPRClient implements GitHubPRApi {
   }
 }
 
-/** Map GitHub REST API check-run conclusion (lowercase) to our union. */
-function mapRestConclusion(conclusion: string): CheckResult["conclusion"] {
+/** Map GitHub REST API check-run status/conclusion to our union. */
+function mapRestConclusion(status: string | undefined, conclusion: string | null): CheckResult["conclusion"] {
+  if (status !== "completed" || conclusion === null) return "pending";
   switch (conclusion) {
     case "success": case "neutral": case "skipped": return "success";
     case "failure": case "cancelled": case "timed_out":
