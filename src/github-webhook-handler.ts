@@ -5,7 +5,6 @@ import { resolveFactoryStateFromGitHub, TERMINAL_STATES, type FactoryState } fro
 import {
   createGitHubFailureContextResolver,
   summarizeGitHubFailureContext,
-  type GitHubFailureContext,
   type GitHubFailureContextResolver,
 } from "./github-failure-context.ts";
 import type { GitHubWebhookPayload, NormalizedGitHubEvent } from "./github-types.ts";
