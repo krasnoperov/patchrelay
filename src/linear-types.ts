@@ -36,6 +36,7 @@ export interface IssueMetadata {
   delegateName?: string;
   priority?: number;
   estimate?: number;
+  relationsKnown?: boolean;
   labelNames: string[];
   blockedBy: LinearIssueRelationSummary[];
   blocks: LinearIssueRelationSummary[];
@@ -188,6 +189,7 @@ export interface LinearIssueSnapshot {
   estimate?: number;
   stateId?: string;
   stateName?: string;
+  stateType?: string;
   teamId?: string;
   teamKey?: string;
   delegateId?: string;

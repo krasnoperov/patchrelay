@@ -101,6 +101,7 @@ export class PatchRelayDatabase {
     priority?: number | null;
     estimate?: number | null;
     currentLinearState?: string;
+    currentLinearStateType?: string;
     factoryState?: FactoryState;
     pendingRunType?: RunType | null;
     pendingRunContextJson?: string | null;
@@ -143,6 +144,7 @@ export class PatchRelayDatabase {
       if (params.priority !== undefined) { sets.push("priority = @priority"); values.priority = params.priority; }
       if (params.estimate !== undefined) { sets.push("estimate = @estimate"); values.estimate = params.estimate; }
       if (params.currentLinearState !== undefined) { sets.push("current_linear_state = COALESCE(@currentLinearState, current_linear_state)"); values.currentLinearState = params.currentLinearState; }
+      if (params.currentLinearStateType !== undefined) { sets.push("current_linear_state_type = COALESCE(@currentLinearStateType, current_linear_state_type)"); values.currentLinearStateType = params.currentLinearStateType; }
       if (params.factoryState !== undefined) { sets.push("factory_state = @factoryState"); values.factoryState = params.factoryState; }
       if (params.pendingRunType !== undefined) { sets.push("pending_run_type = @pendingRunType"); values.pendingRunType = params.pendingRunType; }
       if (params.pendingRunContextJson !== undefined) { sets.push("pending_run_context_json = @pendingRunContextJson"); values.pendingRunContextJson = params.pendingRunContextJson; }
@@ -174,7 +176,7 @@ export class PatchRelayDatabase {
         INSERT INTO issues (
           project_id, linear_issue_id, issue_key, title, description, url,
           priority, estimate,
-          current_linear_state, factory_state, pending_run_type, pending_run_context_json,
+          current_linear_state, current_linear_state_type, factory_state, pending_run_type, pending_run_context_json,
           branch_name, worktree_path, thread_id, active_run_id,
           agent_session_id,
           pr_number, pr_url, pr_state, pr_review_state, pr_check_status,
@@ -183,7 +185,7 @@ export class PatchRelayDatabase {
         ) VALUES (
           @projectId, @linearIssueId, @issueKey, @title, @description, @url,
           @priority, @estimate,
-          @currentLinearState, @factoryState, @pendingRunType, @pendingRunContextJson,
+          @currentLinearState, @currentLinearStateType, @factoryState, @pendingRunType, @pendingRunContextJson,
           @branchName, @worktreePath, @threadId, @activeRunId,
           @agentSessionId,
           @prNumber, @prUrl, @prState, @prReviewState, @prCheckStatus,
@@ -200,6 +202,7 @@ export class PatchRelayDatabase {
         priority: params.priority ?? null,
         estimate: params.estimate ?? null,
         currentLinearState: params.currentLinearState ?? null,
+        currentLinearStateType: params.currentLinearStateType ?? null,
         factoryState: params.factoryState ?? "delegated",
         pendingRunType: params.pendingRunType ?? null,
         pendingRunContextJson: params.pendingRunContextJson ?? null,
@@ -260,6 +263,7 @@ export class PatchRelayDatabase {
       blockerIssueKey?: string;
       blockerTitle?: string;
       blockerCurrentLinearState?: string;
+      blockerCurrentLinearStateType?: string;
     }>;
   }): void {
     const now = isoNow();
@@ -279,8 +283,9 @@ export class PatchRelayDatabase {
         blocker_issue_key,
         blocker_title,
         blocker_current_linear_state,
+        blocker_current_linear_state_type,
         updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     for (const blocker of params.blockers) {
@@ -291,6 +296,7 @@ export class PatchRelayDatabase {
         blocker.blockerIssueKey ?? null,
         blocker.blockerTitle ?? null,
         blocker.blockerCurrentLinearState ?? null,
+        blocker.blockerCurrentLinearStateType ?? null,
         now,
       );
     }
@@ -305,6 +311,7 @@ export class PatchRelayDatabase {
         COALESCE(blockers.issue_key, d.blocker_issue_key) AS blocker_issue_key,
         COALESCE(blockers.title, d.blocker_title) AS blocker_title,
         COALESCE(blockers.current_linear_state, d.blocker_current_linear_state) AS blocker_current_linear_state,
+        COALESCE(blockers.current_linear_state_type, d.blocker_current_linear_state_type) AS blocker_current_linear_state_type,
         d.updated_at
       FROM issue_dependencies d
       LEFT JOIN issues blockers
@@ -322,6 +329,9 @@ export class PatchRelayDatabase {
       ...(row.blocker_title !== null && row.blocker_title !== undefined ? { blockerTitle: String(row.blocker_title) } : {}),
       ...(row.blocker_current_linear_state !== null && row.blocker_current_linear_state !== undefined
         ? { blockerCurrentLinearState: String(row.blocker_current_linear_state) }
+        : {}),
+      ...(row.blocker_current_linear_state_type !== null && row.blocker_current_linear_state_type !== undefined
+        ? { blockerCurrentLinearStateType: String(row.blocker_current_linear_state_type) }
         : {}),
       updatedAt: String(row.updated_at),
     }));
@@ -349,7 +359,10 @@ export class PatchRelayDatabase {
         ON blockers.project_id = d.project_id
        AND blockers.linear_issue_id = d.blocker_linear_issue_id
       WHERE d.project_id = ? AND d.linear_issue_id = ?
-        AND LOWER(TRIM(COALESCE(blockers.current_linear_state, d.blocker_current_linear_state, ''))) != 'done'
+        AND (
+          COALESCE(blockers.current_linear_state_type, d.blocker_current_linear_state_type, '') != 'completed'
+          AND LOWER(TRIM(COALESCE(blockers.current_linear_state, d.blocker_current_linear_state, ''))) != 'done'
+        )
     `).get(projectId, linearIssueId) as Record<string, unknown> | undefined;
     return Number(row?.count ?? 0);
   }
@@ -369,7 +382,10 @@ export class PatchRelayDatabase {
              AND blockers.linear_issue_id = d.blocker_linear_issue_id
             WHERE d.project_id = i.project_id
               AND d.linear_issue_id = i.linear_issue_id
-              AND LOWER(TRIM(COALESCE(blockers.current_linear_state, d.blocker_current_linear_state, ''))) != 'done'
+              AND (
+                COALESCE(blockers.current_linear_state_type, d.blocker_current_linear_state_type, '') != 'completed'
+                AND LOWER(TRIM(COALESCE(blockers.current_linear_state, d.blocker_current_linear_state, ''))) != 'done'
+              )
           )
       `)
       .all() as Array<Record<string, unknown>>;
@@ -545,6 +561,7 @@ export class PatchRelayDatabase {
 
   issueToTrackedIssue(issue: IssueRecord): TrackedIssueRecord {
     const blockedBy = this.listIssueDependencies(issue.projectId, issue.linearIssueId);
+    const unresolvedBlockedBy = blockedBy.filter((entry) => !isResolvedLinearState(entry.blockerCurrentLinearStateType, entry.blockerCurrentLinearState));
     return {
       id: issue.id,
       projectId: issue.projectId,
@@ -554,11 +571,10 @@ export class PatchRelayDatabase {
       ...(issue.url ? { issueUrl: issue.url } : {}),
       ...(issue.currentLinearState ? { currentLinearState: issue.currentLinearState } : {}),
       factoryState: issue.factoryState,
-      blockedByCount: blockedBy.filter((entry) => !isDoneState(entry.blockerCurrentLinearState)).length,
-      blockedByKeys: blockedBy
-        .filter((entry) => !isDoneState(entry.blockerCurrentLinearState))
+      blockedByCount: unresolvedBlockedBy.length,
+      blockedByKeys: unresolvedBlockedBy
         .map((entry) => entry.blockerIssueKey ?? entry.blockerLinearIssueId),
-      readyForExecution: issue.pendingRunType !== undefined && issue.activeRunId === undefined,
+      readyForExecution: issue.pendingRunType !== undefined && issue.activeRunId === undefined && unresolvedBlockedBy.length === 0,
       ...(issue.activeRunId !== undefined ? { activeRunId: issue.activeRunId } : {}),
       ...(issue.agentSessionId ? { activeAgentSessionId: issue.agentSessionId } : {}),
       updatedAt: issue.updatedAt,
@@ -606,6 +622,9 @@ function mapIssueRow(row: Record<string, unknown>): IssueRecord {
     ...(row.priority !== null && row.priority !== undefined ? { priority: Number(row.priority) } : {}),
     ...(row.estimate !== null && row.estimate !== undefined ? { estimate: Number(row.estimate) } : {}),
     ...(row.current_linear_state !== null ? { currentLinearState: String(row.current_linear_state) } : {}),
+    ...(row.current_linear_state_type !== null && row.current_linear_state_type !== undefined
+      ? { currentLinearStateType: String(row.current_linear_state_type) }
+      : {}),
     factoryState: String(row.factory_state ?? "delegated") as FactoryState,
     ...(row.pending_run_type !== null && row.pending_run_type !== undefined ? { pendingRunType: String(row.pending_run_type) as RunType } : {}),
     ...(row.pending_run_context_json !== null && row.pending_run_context_json !== undefined ? { pendingRunContextJson: String(row.pending_run_context_json) } : {}),
@@ -666,6 +685,6 @@ function mapRunRow(row: Record<string, unknown>): RunRecord {
   };
 }
 
-function isDoneState(stateName: string | undefined): boolean {
-  return stateName?.trim().toLowerCase() === "done";
+function isResolvedLinearState(stateType: string | undefined, stateName: string | undefined): boolean {
+  return stateType === "completed" || stateName?.trim().toLowerCase() === "done";
 }

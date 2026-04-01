@@ -29,7 +29,6 @@ export class MergeStewardService {
   private lastTickCompletedAt: string | null = null;
   private lastTickOutcome: QueueRuntimeStatus["lastTickOutcome"] = "idle";
   private lastTickError: string | null = null;
-  private mainBrokenReported = false;
   private currentQueueBlock: QueueBlockState | null = null;
 
   constructor(
@@ -299,16 +298,12 @@ export class MergeStewardService {
           const level = isWarn ? "warn" : isDebug ? "debug" : "info";
           this.logger[level]({ ...event }, `Queue: ${event.action} PR #${event.prNumber}`);
 
-          if (event.action === "main_broken" && !this.mainBrokenReported) {
-            this.mainBrokenReported = true;
-          }
           if (event.action === "main_broken" && tickQueueBlockEvent === null) {
             tickQueueBlockEvent = event;
           }
         },
       });
       this.currentQueueBlock = tickQueueBlockEvent ? await this.describeMainBroken(tickQueueBlockEvent) : null;
-      this.mainBrokenReported = false; // Reset after successful tick.
       this.lastTickOutcome = "succeeded";
     } catch (error) {
       this.lastTickOutcome = "failed";
@@ -343,9 +338,10 @@ export class MergeStewardService {
       }
     }
 
+    const checkRef = event.baseSha ?? baseSha ?? baseRef;
     let checks: CheckResult[] = [];
     try {
-      checks = await this.github.listChecksForRef(baseRef);
+      checks = await this.github.listChecksForRef(checkRef);
     } catch {
       checks = [];
     }

@@ -31,7 +31,7 @@ interface LinearIssueRawFields {
   priority?: number | null;
   estimate?: number | null;
   delegate?: { id?: string | null; name?: string | null } | null;
-  state?: { id?: string | null; name?: string | null } | null;
+  state?: { id?: string | null; name?: string | null; type?: string | null } | null;
   labels?: { nodes?: Array<{ id: string; name: string }> } | null;
   blockedBy?: { nodes?: LinearIssueRelationRawFields[] } | null;
   blocks?: { nodes?: LinearIssueRelationRawFields[] } | null;
@@ -73,6 +73,7 @@ const LINEAR_ISSUE_SELECTION = `
   state {
     id
     name
+    type
   }
   labels {
     nodes {
@@ -508,6 +509,7 @@ export class LinearGraphqlClient implements LinearClient {
       ...(issue.estimate != null ? { estimate: issue.estimate } : {}),
       ...(issue.state?.id ? { stateId: issue.state.id } : {}),
       ...(issue.state?.name ? { stateName: issue.state.name } : {}),
+      ...(issue.state?.type ? { stateType: issue.state.type } : {}),
       ...(issue.team?.id ? { teamId: issue.team.id } : {}),
       ...(issue.team?.key ? { teamKey: issue.team.key } : {}),
       ...(issue.delegate?.id ? { delegateId: issue.delegate.id } : {}),

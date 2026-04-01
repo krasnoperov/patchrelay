@@ -14,6 +14,7 @@ export interface IssueRecord {
   priority?: number | undefined;
   estimate?: number | undefined;
   currentLinearState?: string | undefined;
+  currentLinearStateType?: string | undefined;
   factoryState: FactoryState;
   pendingRunType?: RunType | undefined;
   pendingRunContextJson?: string | undefined;
@@ -66,6 +67,7 @@ export interface IssueDependencyRecord {
   blockerIssueKey?: string | undefined;
   blockerTitle?: string | undefined;
   blockerCurrentLinearState?: string | undefined;
+  blockerCurrentLinearStateType?: string | undefined;
   updatedAt: string;
 }
 

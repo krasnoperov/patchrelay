@@ -273,6 +273,7 @@ function extractIssueMetadata(payload: LinearWebhookPayload): IssueMetadata | un
     ...(delegateName ? { delegateName } : {}),
     ...(priority != null ? { priority } : {}),
     ...(estimate != null ? { estimate } : {}),
+    relationsKnown: false,
     labelNames: extractLabelNames(issueRecord),
     blockedBy: [],
     blocks: [],

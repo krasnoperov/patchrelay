@@ -143,11 +143,12 @@ test("delegated blocked issue is tracked but does not queue implementation until
         delegateId: "patchrelay-actor",
         stateId: "state-start",
         stateName: "Start",
+        stateType: "started",
         workflowStates: [],
         labelIds: [],
         labels: [],
         teamLabels: [],
-        blockedBy: [{ id: "issue-maf-39", identifier: "MAF-39", title: "API contracts", stateName: "Start" }],
+        blockedBy: [{ id: "issue-maf-39", identifier: "MAF-39", title: "API contracts", stateName: "In Progress", stateType: "started" }],
         blocks: [],
       }],
       ["issue-maf-39", {
@@ -157,13 +158,14 @@ test("delegated blocked issue is tracked but does not queue implementation until
         teamId: "team-maf",
         teamKey: "MAF",
         stateId: "state-start",
-        stateName: "Start",
+        stateName: "In Progress",
+        stateType: "started",
         workflowStates: [],
         labelIds: [],
         labels: [],
         teamLabels: [],
         blockedBy: [],
-        blocks: [{ id: "issue-maf-40", identifier: "MAF-40", title: "Active session sync", stateName: "Start" }],
+        blocks: [{ id: "issue-maf-40", identifier: "MAF-40", title: "Active session sync", stateName: "Start", stateType: "started" }],
       }],
     ]);
 
@@ -220,13 +222,15 @@ test("delegated blocked issue is tracked but does not queue implementation until
       linearIssueId: "issue-maf-39",
       issueKey: "MAF-39",
       title: "API contracts",
-      currentLinearState: "Done",
+      currentLinearState: "Completed",
+      currentLinearStateType: "completed",
       factoryState: "done",
     });
     issueSnapshots.set("issue-maf-39", {
       ...(issueSnapshots.get("issue-maf-39")!),
-      stateName: "Done",
-      blocks: [{ id: "issue-maf-40", identifier: "MAF-40", title: "Active session sync", stateName: "Start" }],
+      stateName: "Completed",
+      stateType: "completed",
+      blocks: [{ id: "issue-maf-40", identifier: "MAF-40", title: "Active session sync", stateName: "Start", stateType: "started" }],
     });
 
     const blockerDonePayload: LinearWebhookPayload = {
@@ -255,6 +259,75 @@ test("delegated blocked issue is tracked but does not queue implementation until
     assert.equal(unblockedIssue?.pendingRunType, "implementation");
     assert.deepEqual(db.listIssuesReadyForExecution(), [{ projectId: "krasnoperov/mafia", linearIssueId: "issue-maf-40" }]);
     assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-40" }]);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("incomplete webhook relations do not clear existing blockers when live hydration fails", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-blocker-preserve-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+
+    db.replaceIssueDependencies({
+      projectId: "krasnoperov/mafia",
+      linearIssueId: "issue-maf-40",
+      blockers: [{
+        blockerLinearIssueId: "issue-maf-39",
+        blockerIssueKey: "MAF-39",
+        blockerTitle: "API contracts",
+        blockerCurrentLinearState: "In Progress",
+        blockerCurrentLinearStateType: "started",
+      }],
+    });
+
+    const handler = new WebhookHandler(
+      config,
+      db,
+      { forProject: async () => ({ getIssue: async () => { throw new Error("linear unavailable"); } } as LinearClient) } as never,
+      { steerTurn: async () => undefined } as never,
+      () => undefined,
+      pino({ enabled: false }),
+    );
+
+    const delegatedPayload: LinearWebhookPayload = {
+      action: "update",
+      type: "Issue",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      webhookTimestamp: Date.now(),
+      updatedFrom: { delegateId: null },
+      data: {
+        id: "issue-maf-40",
+        identifier: "MAF-40",
+        title: "Active session sync",
+        team: { id: "team-maf", key: "MAF" },
+        state: { id: "state-start", name: "Start", type: "started" },
+        delegate: { id: "patchrelay-actor", name: "PatchRelay" },
+      },
+    };
+
+    const delegatedEvent = db.insertFullWebhookEvent({
+      webhookId: "delivery-maf-40-preserve",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(delegatedPayload),
+    });
+    await handler.processWebhookEvent(delegatedEvent.id);
+
+    assert.equal(db.countUnresolvedBlockers("krasnoperov/mafia", "issue-maf-40"), 1);
+    assert.deepEqual(
+      db.listIssueDependencies("krasnoperov/mafia", "issue-maf-40").map((entry) => entry.blockerIssueKey),
+      ["MAF-39"],
+    );
+    assert.equal(db.getIssue("krasnoperov/mafia", "issue-maf-40")?.pendingRunType, undefined);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

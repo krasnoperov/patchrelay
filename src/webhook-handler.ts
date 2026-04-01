@@ -233,6 +233,7 @@ export class WebhookHandler {
       ...(hydratedIssue.priority != null ? { priority: hydratedIssue.priority } : {}),
       ...(hydratedIssue.estimate != null ? { estimate: hydratedIssue.estimate } : {}),
       ...(hydratedIssue.stateName ? { currentLinearState: hydratedIssue.stateName } : {}),
+      ...(hydratedIssue.stateType ? { currentLinearStateType: hydratedIssue.stateType } : {}),
       ...(pendingRunType ? { pendingRunType, factoryState: "delegated" as const } : {}),
       ...(clearPendingImplementation ? { pendingRunType: null } : {}),
       ...((pendingRunType || existingIssue?.pendingRunType === "implementation") && pendingRunContextJson
@@ -257,27 +258,30 @@ export class WebhookHandler {
 
   private async syncIssueDependencies(projectId: string, issue: IssueMetadata): Promise<IssueMetadata> {
     let source = issue;
-    if (source.blockedBy.length === 0 && source.blocks.length === 0) {
+    if (!source.relationsKnown) {
       const linear = await this.linearProvider.forProject(projectId);
       if (linear) {
         try {
           source = mergeIssueMetadata(source, await linear.getIssue(issue.id));
         } catch {
-          // Fall back to webhook payload data when live hydration is unavailable.
+          // Preserve existing dependency rows when webhook relation data is incomplete.
         }
       }
     }
 
-    this.db.replaceIssueDependencies({
-      projectId,
-      linearIssueId: source.id,
-      blockers: source.blockedBy.map((blocker) => ({
-        blockerLinearIssueId: blocker.id,
-        ...(blocker.identifier ? { blockerIssueKey: blocker.identifier } : {}),
-        ...(blocker.title ? { blockerTitle: blocker.title } : {}),
-        ...(blocker.stateName ? { blockerCurrentLinearState: blocker.stateName } : {}),
-      })),
-    });
+    if (source.relationsKnown) {
+      this.db.replaceIssueDependencies({
+        projectId,
+        linearIssueId: source.id,
+        blockers: source.blockedBy.map((blocker) => ({
+          blockerLinearIssueId: blocker.id,
+          ...(blocker.identifier ? { blockerIssueKey: blocker.identifier } : {}),
+          ...(blocker.title ? { blockerTitle: blocker.title } : {}),
+          ...(blocker.stateName ? { blockerCurrentLinearState: blocker.stateName } : {}),
+          ...(blocker.stateType ? { blockerCurrentLinearStateType: blocker.stateType } : {}),
+        })),
+      });
+    }
 
     return source;
   }
@@ -671,7 +675,7 @@ function mergeIssueMetadata(
   issue: IssueMetadata,
   liveIssue: {
     identifier?: string; title?: string; url?: string;
-    teamId?: string; teamKey?: string; stateId?: string; stateName?: string;
+    teamId?: string; teamKey?: string; stateId?: string; stateName?: string; stateType?: string;
     delegateId?: string; delegateName?: string;
     blockedBy?: Array<{ id: string; identifier?: string; title?: string; stateName?: string; stateType?: string }>;
     blocks?: Array<{ id: string; identifier?: string; title?: string; stateName?: string; stateType?: string }>;
@@ -687,10 +691,12 @@ function mergeIssueMetadata(
     ...(issue.teamKey ? {} : liveIssue.teamKey ? { teamKey: liveIssue.teamKey } : {}),
     ...(issue.stateId ? {} : liveIssue.stateId ? { stateId: liveIssue.stateId } : {}),
     ...(issue.stateName ? {} : liveIssue.stateName ? { stateName: liveIssue.stateName } : {}),
+    ...(issue.stateType ? {} : liveIssue.stateType ? { stateType: liveIssue.stateType } : {}),
     ...(issue.delegateId ? {} : liveIssue.delegateId ? { delegateId: liveIssue.delegateId } : {}),
     ...(issue.delegateName ? {} : liveIssue.delegateName ? { delegateName: liveIssue.delegateName } : {}),
+    relationsKnown: issue.relationsKnown || liveIssue.blockedBy !== undefined || liveIssue.blocks !== undefined,
     labelNames: issue.labelNames.length > 0 ? issue.labelNames : (liveIssue.labels ?? []).map((l) => l.name),
-    blockedBy: issue.blockedBy.length > 0 ? issue.blockedBy : (liveIssue.blockedBy ?? []),
-    blocks: issue.blocks.length > 0 ? issue.blocks : (liveIssue.blocks ?? []),
+    blockedBy: issue.relationsKnown ? issue.blockedBy : (liveIssue.blockedBy ?? issue.blockedBy),
+    blocks: issue.relationsKnown ? issue.blocks : (liveIssue.blocks ?? issue.blocks),
   };
 }

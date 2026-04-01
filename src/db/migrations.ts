@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS issues (
   title TEXT,
   url TEXT,
   current_linear_state TEXT,
+  current_linear_state_type TEXT,
   factory_state TEXT NOT NULL DEFAULT 'delegated',
   pending_run_type TEXT,
   pending_run_context_json TEXT,
@@ -154,6 +155,7 @@ CREATE TABLE IF NOT EXISTS issue_dependencies (
   blocker_issue_key TEXT,
   blocker_title TEXT,
   blocker_current_linear_state TEXT,
+  blocker_current_linear_state_type TEXT,
   updated_at TEXT NOT NULL,
   PRIMARY KEY (project_id, linear_issue_id, blocker_linear_issue_id)
 );
@@ -199,6 +201,8 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
   addColumnIfMissing(connection, "issues", "description", "TEXT");
   addColumnIfMissing(connection, "issues", "priority", "INTEGER");
   addColumnIfMissing(connection, "issues", "estimate", "REAL");
+  addColumnIfMissing(connection, "issues", "current_linear_state_type", "TEXT");
+  addColumnIfMissing(connection, "issue_dependencies", "blocker_current_linear_state_type", "TEXT");
 
   // Zombie/stale recovery backoff
   addColumnIfMissing(connection, "issues", "zombie_recovery_attempts", "INTEGER NOT NULL DEFAULT 0");
