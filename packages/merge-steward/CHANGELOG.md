@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.1](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.4.0...merge-steward-v0.4.1) (2026-04-01)
+
+
+### Bug Fixes
+
+* stabilize queue handoff and steward admission ([4d0ada7](https://github.com/krasnoperov/patchrelay/commit/4d0ada794d15c1296c263f508ed903f13cc6af2a))
+* stabilize queue handoff and steward admission ([03bf90a](https://github.com/krasnoperov/patchrelay/commit/03bf90a20e2ad017f335384d0c0e70b5c66bcaf8))
+
 ## [0.4.0](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.3.0...merge-steward-v0.4.0) (2026-03-31)
 
 
