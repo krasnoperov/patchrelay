@@ -26,8 +26,12 @@ export interface WatchIssue {
   statusNote?: string | undefined;
   projectId: string;
   factoryState: string;
+  blockedByCount: number;
+  blockedByKeys: string[];
+  readyForExecution: boolean;
   currentLinearState?: string | undefined;
   activeRunType?: string | undefined;
+  pendingRunType?: string | undefined;
   latestRunType?: string | undefined;
   latestRunStatus?: string | undefined;
   prNumber?: number | undefined;
@@ -170,6 +174,8 @@ export function filterIssues(issues: WatchIssue[], filter: WatchFilter): WatchIs
 
 export interface IssueAggregates {
   active: number;
+  blocked: number;
+  ready: number;
   done: number;
   failed: number;
   total: number;
@@ -180,14 +186,18 @@ const FAILED_STATES = new Set(["failed", "escalated"]);
 
 export function computeAggregates(issues: WatchIssue[]): IssueAggregates {
   let active = 0;
+  let blocked = 0;
+  let ready = 0;
   let done = 0;
   let failed = 0;
   for (const issue of issues) {
     if (issue.activeRunType) active++;
+    if (!issue.activeRunType && issue.blockedByCount > 0) blocked++;
+    if (!issue.activeRunType && issue.readyForExecution) ready++;
     if (DONE_STATES.has(issue.factoryState)) done++;
     if (FAILED_STATES.has(issue.factoryState)) failed++;
   }
-  return { active, done, failed, total: issues.length };
+  return { active, blocked, ready, done, failed, total: issues.length };
 }
 
 function nextFilter(filter: WatchFilter): WatchFilter {

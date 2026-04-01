@@ -147,6 +147,17 @@ CREATE TABLE IF NOT EXISTS operator_feed_events (
   status TEXT
 );
 
+CREATE TABLE IF NOT EXISTS issue_dependencies (
+  project_id TEXT NOT NULL,
+  linear_issue_id TEXT NOT NULL,
+  blocker_linear_issue_id TEXT NOT NULL,
+  blocker_issue_key TEXT,
+  blocker_title TEXT,
+  blocker_current_linear_state TEXT,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (project_id, linear_issue_id, blocker_linear_issue_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_issues_project ON issues(project_id, linear_issue_id);
 CREATE INDEX IF NOT EXISTS idx_issues_key ON issues(issue_key);
 CREATE INDEX IF NOT EXISTS idx_issues_ready ON issues(pending_run_type, active_run_id);
@@ -160,6 +171,8 @@ CREATE INDEX IF NOT EXISTS idx_operator_feed_events_project ON operator_feed_eve
 CREATE INDEX IF NOT EXISTS idx_repository_links_installation ON repository_links(installation_id, github_repo);
 CREATE INDEX IF NOT EXISTS idx_linear_catalog_teams_installation ON linear_catalog_teams(installation_id, team_key, team_name);
 CREATE INDEX IF NOT EXISTS idx_linear_catalog_projects_installation ON linear_catalog_projects(installation_id, project_name);
+CREATE INDEX IF NOT EXISTS idx_issue_dependencies_issue ON issue_dependencies(project_id, linear_issue_id);
+CREATE INDEX IF NOT EXISTS idx_issue_dependencies_blocker ON issue_dependencies(project_id, blocker_linear_issue_id);
 `;
 
 export function runPatchRelayMigrations(connection: DatabaseConnection): void {

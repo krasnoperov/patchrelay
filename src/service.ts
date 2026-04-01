@@ -271,8 +271,12 @@ export class PatchRelayService {
     statusNote?: string;
     projectId: string;
     factoryState: string;
+    blockedByCount: number;
+    blockedByKeys: string[];
+    readyForExecution: boolean;
     currentLinearState?: string;
     activeRunType?: string;
+    pendingRunType?: string;
     latestRunType?: string;
     latestRunStatus?: string;
     prNumber?: number;
@@ -285,12 +289,33 @@ export class PatchRelayService {
         `SELECT
           i.project_id, i.linear_issue_id, i.issue_key, i.title,
           i.current_linear_state, i.factory_state, i.updated_at,
+          i.pending_run_type,
           i.pr_number, i.pr_review_state, i.pr_check_status,
           active_run.run_type AS active_run_type,
           latest_run.run_type AS latest_run_type,
           latest_run.status AS latest_run_status,
           latest_run.summary_json AS latest_run_summary_json,
-          latest_run.report_json AS latest_run_report_json
+          latest_run.report_json AS latest_run_report_json,
+          (
+            SELECT COUNT(*)
+            FROM issue_dependencies d
+            LEFT JOIN issues blockers
+              ON blockers.project_id = d.project_id
+             AND blockers.linear_issue_id = d.blocker_linear_issue_id
+            WHERE d.project_id = i.project_id
+              AND d.linear_issue_id = i.linear_issue_id
+              AND LOWER(TRIM(COALESCE(blockers.current_linear_state, d.blocker_current_linear_state, ''))) != 'done'
+          ) AS blocked_by_count,
+          (
+            SELECT json_group_array(COALESCE(blockers.issue_key, d.blocker_issue_key, d.blocker_linear_issue_id))
+            FROM issue_dependencies d
+            LEFT JOIN issues blockers
+              ON blockers.project_id = d.project_id
+             AND blockers.linear_issue_id = d.blocker_linear_issue_id
+            WHERE d.project_id = i.project_id
+              AND d.linear_issue_id = i.linear_issue_id
+              AND LOWER(TRIM(COALESCE(blockers.current_linear_state, d.blocker_current_linear_state, ''))) != 'done'
+          ) AS blocked_by_keys_json
         FROM issues i
         LEFT JOIN runs active_run ON active_run.id = i.active_run_id
         LEFT JOIN runs latest_run ON latest_run.id = (
@@ -306,15 +331,27 @@ export class PatchRelayService {
         typeof row.latest_run_summary_json === "string" ? row.latest_run_summary_json : undefined,
         typeof row.latest_run_report_json === "string" ? row.latest_run_report_json : undefined,
       );
+      const blockedByKeys = parseStringArray(
+        typeof row.blocked_by_keys_json === "string" ? row.blocked_by_keys_json : undefined,
+      );
+      const blockedByCount = Number(row.blocked_by_count ?? 0);
+      const readyForExecution = row.pending_run_type !== null && row.pending_run_type !== undefined && row.active_run_type === null && blockedByCount === 0;
+      const statusNoteWithBlockers = blockedByCount > 0
+        ? `Blocked by ${blockedByKeys.join(", ")}`
+        : statusNote;
 
       return {
         ...(row.issue_key !== null ? { issueKey: String(row.issue_key) } : {}),
         ...(row.title !== null ? { title: String(row.title) } : {}),
-        ...(statusNote ? { statusNote } : {}),
+        ...(statusNoteWithBlockers ? { statusNote: statusNoteWithBlockers } : {}),
         projectId: String(row.project_id),
         factoryState: String(row.factory_state ?? "delegated"),
+        blockedByCount,
+        blockedByKeys,
+        readyForExecution,
         ...(row.current_linear_state !== null ? { currentLinearState: String(row.current_linear_state) } : {}),
         ...(row.active_run_type !== null ? { activeRunType: String(row.active_run_type) } : {}),
+        ...(row.pending_run_type !== null ? { pendingRunType: String(row.pending_run_type) } : {}),
         ...(row.latest_run_type !== null ? { latestRunType: String(row.latest_run_type) } : {}),
         ...(row.latest_run_status !== null ? { latestRunStatus: String(row.latest_run_status) } : {}),
         ...(row.pr_number !== null ? { prNumber: Number(row.pr_number) } : {}),

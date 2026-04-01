@@ -253,6 +253,18 @@ test("http routes handle webhook validation and issue/report/live/events lookups
               (!workflowId || event.workflowId === workflowId),
           );
         },
+        listTrackedIssues: () => [
+          {
+            issueKey: "USE-42",
+            title: "Important work",
+            projectId: "usertold",
+            factoryState: "delegated",
+            blockedByCount: 1,
+            blockedByKeys: ["USE-41"],
+            readyForExecution: false,
+            updatedAt: "2026-03-13T12:00:00.000Z",
+          },
+        ],
         subscribeOperatorFeed: () => () => undefined,
         listLinearWorkspaces: () => [
           {
@@ -502,6 +514,30 @@ test("http routes handle webhook validation and issue/report/live/events lookups
       stage: "development",
       status: "transition_chosen",
       workflowId: "default",
+    });
+
+    const watchIssues = await app.inject({
+      method: "GET",
+      url: "/api/watch/issues",
+      headers: {
+        authorization: "Bearer operator-token",
+      },
+    });
+    assert.equal(watchIssues.statusCode, 200);
+    assert.deepEqual(watchIssues.json(), {
+      ok: true,
+      issues: [
+        {
+          issueKey: "USE-42",
+          title: "Important work",
+          projectId: "usertold",
+          factoryState: "delegated",
+          blockedByCount: 1,
+          blockedByKeys: ["USE-41"],
+          readyForExecution: false,
+          updatedAt: "2026-03-13T12:00:00.000Z",
+        },
+      ],
     });
 
     const workspaces = await app.inject({

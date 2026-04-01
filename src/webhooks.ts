@@ -106,11 +106,11 @@ function deriveTriggerEvent(payload: LinearWebhookPayload): TriggerEvent {
     if (updatedFields.has("stateId") || updatedFields.has("state")) {
       return "statusChanged";
     }
-    if (updatedFields.has("assigneeId") || updatedFields.has("assignee")) {
-      return "assignmentChanged";
-    }
     if (updatedFields.has("delegateId") || updatedFields.has("delegate")) {
       return "delegateChanged";
+    }
+    if (updatedFields.has("assigneeId") || updatedFields.has("assignee")) {
+      return "assignmentChanged";
     }
     return "issueUpdated";
   }
@@ -274,6 +274,8 @@ function extractIssueMetadata(payload: LinearWebhookPayload): IssueMetadata | un
     ...(priority != null ? { priority } : {}),
     ...(estimate != null ? { estimate } : {}),
     labelNames: extractLabelNames(issueRecord),
+    blockedBy: [],
+    blocks: [],
   };
 }
 

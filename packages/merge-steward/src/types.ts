@@ -132,12 +132,24 @@ export interface QueueStatusSummary {
   headPrNumber: number | null;
 }
 
+export interface QueueBlockState {
+  reason: "main_broken";
+  entryId: string;
+  headPrNumber: number | null;
+  baseBranch: string;
+  baseSha: string | null;
+  observedAt: string;
+  failingChecks: CheckResult[];
+  pendingChecks: CheckResult[];
+}
+
 export interface QueueWatchSnapshot {
   repoId: string;
   repoFullName: string;
   baseBranch: string;
   summary: QueueStatusSummary;
   runtime: QueueRuntimeStatus;
+  queueBlock: QueueBlockState | null;
   entries: QueueEntry[];
   recentEvents: QueueEventSummary[];
 }
@@ -217,6 +229,8 @@ export interface ReconcileEvent {
   baseSha?: string | undefined;
   ciRunId?: string | undefined;
   conflictFiles?: string[] | undefined;
+  failingChecks?: CheckResult[] | undefined;
+  pendingChecks?: CheckResult[] | undefined;
   failureClass?: string | undefined;
   dependsOn?: string | undefined;
 }

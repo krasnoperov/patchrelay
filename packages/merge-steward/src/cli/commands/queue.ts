@@ -32,6 +32,7 @@ async function readQueueSnapshot(config: StewardConfig, eventLimit: number): Pro
             lastTickOutcome: "idle",
             lastTickError: null,
           },
+          queueBlock: null,
           entries,
           recentEvents: store.listRecentEvents(config.repoId, { limit: eventLimit }),
         },
@@ -103,6 +104,15 @@ export async function handleQueue(parsed: ParsedArgs, stdout: Output): Promise<n
         `Queued: ${snapshot.summary.queued}  preparing: ${snapshot.summary.preparingHead}  validating: ${snapshot.summary.validating}  merging: ${snapshot.summary.merging}`,
         `Merged: ${snapshot.summary.merged}  evicted: ${snapshot.summary.evicted}  dequeued: ${snapshot.summary.dequeued}`,
         snapshot.summary.headPrNumber ? `Head PR: #${snapshot.summary.headPrNumber}` : "Head PR: none",
+        ...(snapshot.queueBlock
+          ? [
+            `Queue blocked: ${snapshot.queueBlock.reason} on ${snapshot.queueBlock.baseBranch}${snapshot.queueBlock.baseSha ? ` @ ${snapshot.queueBlock.baseSha.slice(0, 8)}` : ""}`,
+            `Base failures: ${snapshot.queueBlock.failingChecks.length > 0 ? snapshot.queueBlock.failingChecks.map((check) => check.name).join(", ") : "(none)"}`,
+            ...(snapshot.queueBlock.pendingChecks.length > 0
+              ? [`Base pending: ${snapshot.queueBlock.pendingChecks.map((check) => check.name).join(", ")}`]
+              : []),
+          ]
+          : []),
         "",
         "Entries:",
         ...(snapshot.entries.length > 0

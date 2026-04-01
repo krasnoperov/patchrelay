@@ -1,4 +1,4 @@
-import type { QueueEntry, QueueEntryDetail } from "../types.ts";
+import type { QueueBlockState, QueueEntry, QueueEntryDetail } from "../types.ts";
 
 export type VisualizationNodeStatus = "current" | "visited" | "upcoming";
 
@@ -75,6 +75,7 @@ export function buildExternalRepairObservations(
     activeIndex: number | null;
     activeCount: number;
     headPrNumber: number | null;
+    queueBlock: QueueBlockState | null;
   },
 ): ObservationLine[] {
   const { entry, incidents } = detail;
@@ -94,6 +95,12 @@ export function buildExternalRepairObservations(
     observations.push({
       tone: "warn",
       text: "Evicted after steward retries; external branch repair is expected before any later re-admission.",
+    });
+  } else if (options.isHead && options.queueBlock?.reason === "main_broken") {
+    const failingNames = options.queueBlock.failingChecks.map((check) => check.name);
+    observations.push({
+      tone: "warn",
+      text: `Head-of-line entry is paused because ${options.queueBlock.baseBranch} is unhealthy${failingNames.length > 0 ? ` (${failingNames.join(", ")})` : ""}.`,
     });
   } else if (options.isHead) {
     observations.push({

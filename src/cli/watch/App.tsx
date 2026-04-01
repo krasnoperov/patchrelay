@@ -35,7 +35,11 @@ async function postPrompt(
   }
 }
 
-async function postStop(baseUrl: string, issueKey: string, bearerToken?: string): Promise<{ ok?: boolean; reason?: string }> {
+async function postStop(
+  baseUrl: string,
+  issueKey: string,
+  bearerToken?: string,
+): Promise<{ ok?: boolean; stopped?: boolean; reason?: string }> {
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (bearerToken) headers.authorization = `Bearer ${bearerToken}`;
   try {
@@ -44,7 +48,11 @@ async function postStop(baseUrl: string, issueKey: string, bearerToken?: string)
       headers,
       signal: AbortSignal.timeout(5000),
     });
-    return await response.json() as { ok?: boolean; reason?: string };
+    const result = await response.json() as { ok?: boolean; stopped?: boolean; reason?: string };
+    if (result.ok === undefined && result.stopped === true) {
+      return { ...result, ok: true };
+    }
+    return result;
   } catch {
     return { reason: "request failed" };
   }

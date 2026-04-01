@@ -18,6 +18,22 @@ export function useWatchStream(options: WatchStreamOptions): void {
     let reconnectTimeout: ReturnType<typeof setTimeout> | undefined;
     let attempt = 0;
 
+    const fetchIssueSnapshot = async () => {
+      const { baseUrl, bearerToken, dispatch } = optionsRef.current;
+      const headers: Record<string, string> = { accept: "application/json" };
+      if (bearerToken) {
+        headers.authorization = `Bearer ${bearerToken}`;
+      }
+
+      const response = await fetch(new URL("/api/watch/issues", baseUrl), { headers });
+      if (!response.ok) {
+        throw new Error(`Issue snapshot failed: ${response.status}`);
+      }
+
+      const payload = await response.json() as { issues?: WatchIssue[] };
+      dispatch({ type: "issues-snapshot", issues: Array.isArray(payload.issues) ? payload.issues : [], receivedAt: Date.now() });
+    };
+
     const connect = () => {
       abortController = new AbortController();
       const { baseUrl, bearerToken, issueFilter, dispatch } = optionsRef.current;
@@ -40,6 +56,11 @@ export function useWatchStream(options: WatchStreamOptions): void {
 
           dispatch({ type: "connected" });
           attempt = 0;
+          try {
+            await fetchIssueSnapshot();
+          } catch {
+            // Keep the stream alive even if the snapshot endpoint temporarily fails.
+          }
 
           const reader = response.body.getReader();
           const decoder = new TextDecoder();
@@ -99,12 +120,17 @@ export function useWatchStream(options: WatchStreamOptions): void {
     };
 
     connect();
+    void fetchIssueSnapshot().catch(() => undefined);
+    const snapshotInterval = setInterval(() => {
+      void fetchIssueSnapshot().catch(() => undefined);
+    }, 5000);
 
     return () => {
       abortController.abort();
       if (reconnectTimeout !== undefined) {
         clearTimeout(reconnectTimeout);
       }
+      clearInterval(snapshotInterval);
     };
   }, []);
 }

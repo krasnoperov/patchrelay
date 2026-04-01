@@ -94,6 +94,7 @@ export class SqliteConnection implements DatabaseConnection {
 
   constructor(path: string) {
     this.database = new DatabaseSync(path);
+    this.database.exec("PRAGMA busy_timeout = 5000");
   }
 
   close(): void {

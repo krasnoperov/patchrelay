@@ -2,12 +2,15 @@ import type { Logger } from "pino";
 import type { GitOperations, CIRunner, GitHubPRApi, EvictionReporter } from "./interfaces.ts";
 import type { QueueStore } from "./store.ts";
 import type {
+  CheckResult,
+  QueueBlockState,
   QueueEntry,
   IncidentRecord,
   QueueEntryDetail,
   QueueRuntimeStatus,
   QueueStatusSummary,
   QueueWatchSnapshot,
+  ReconcileEvent,
 } from "./types.ts";
 import { TERMINAL_STATUSES } from "./types.ts";
 import type { StewardConfig } from "./config.ts";
@@ -27,6 +30,7 @@ export class MergeStewardService {
   private lastTickOutcome: QueueRuntimeStatus["lastTickOutcome"] = "idle";
   private lastTickError: string | null = null;
   private mainBrokenReported = false;
+  private currentQueueBlock: QueueBlockState | null = null;
 
   constructor(
     private readonly config: StewardConfig,
@@ -149,6 +153,7 @@ export class MergeStewardService {
       baseBranch: this.config.baseBranch,
       summary: buildSummary(entries),
       runtime: this.getRuntimeStatus(),
+      queueBlock: this.currentQueueBlock,
       entries,
       recentEvents: this.store.listRecentEvents(this.config.repoId, { limit: options?.eventLimit ?? 40 }),
     };
@@ -272,6 +277,7 @@ export class MergeStewardService {
     this.lastTickOutcome = "running";
     this.lastTickError = null;
     try {
+      let tickQueueBlockEvent: ReconcileEvent | null = null;
       await reconcile({
         store: this.store,
         repoId: this.config.repoId,
@@ -296,8 +302,12 @@ export class MergeStewardService {
           if (event.action === "main_broken" && !this.mainBrokenReported) {
             this.mainBrokenReported = true;
           }
+          if (event.action === "main_broken" && tickQueueBlockEvent === null) {
+            tickQueueBlockEvent = event;
+          }
         },
       });
+      this.currentQueueBlock = tickQueueBlockEvent ? await this.describeMainBroken(tickQueueBlockEvent) : null;
       this.mainBrokenReported = false; // Reset after successful tick.
       this.lastTickOutcome = "succeeded";
     } catch (error) {
@@ -318,6 +328,38 @@ export class MergeStewardService {
     }
     this.tickTimer = setTimeout(() => void this.runTick(), this.config.pollIntervalMs);
     this.tickTimer.unref?.();
+  }
+
+  private async describeMainBroken(event: ReconcileEvent): Promise<QueueBlockState> {
+    const baseRef = `origin/${this.config.baseBranch}`;
+    let baseSha: string | null = null;
+    try {
+      baseSha = await this.git.headSha(baseRef);
+    } catch {
+      try {
+        baseSha = await this.git.headSha(this.config.baseBranch);
+      } catch {
+        baseSha = event.baseSha ?? null;
+      }
+    }
+
+    let checks: CheckResult[] = [];
+    try {
+      checks = await this.github.listChecksForRef(baseRef);
+    } catch {
+      checks = [];
+    }
+
+    return {
+      reason: "main_broken",
+      entryId: event.entryId,
+      headPrNumber: event.prNumber,
+      baseBranch: this.config.baseBranch,
+      baseSha,
+      observedAt: event.at,
+      failingChecks: event.failingChecks ?? checks.filter((check) => check.conclusion === "failure"),
+      pendingChecks: event.pendingChecks ?? checks.filter((check) => check.conclusion === "pending"),
+    };
   }
 }
 

@@ -1,4 +1,4 @@
-import type { QueueEntryStatus, QueueEventRecord, QueueEventSummary, QueueRuntimeStatus } from "../types.ts";
+import type { CheckResult, QueueBlockState, QueueEntryStatus, QueueEventRecord, QueueEventSummary, QueueRuntimeStatus } from "../types.ts";
 
 export function shortSha(value: string | null | undefined): string {
   if (!value) {
@@ -79,4 +79,19 @@ export function truncate(value: string, width: number): string {
   if (value.length <= width) return value;
   if (width <= 1) return value.slice(0, width);
   return `${value.slice(0, width - 1)}…`;
+}
+
+export function summarizeCheckNames(checks: CheckResult[], limit = 3): string {
+  const names = [...new Set(checks.map((check) => check.name))];
+  if (names.length === 0) return "unknown checks";
+  if (names.length <= limit) return names.join(", ");
+  return `${names.slice(0, limit).join(", ")} +${names.length - limit} more`;
+}
+
+export function summarizeQueueBlock(block: QueueBlockState | null | undefined): string | null {
+  if (!block) return null;
+  const failing = block.failingChecks.length > 0 ? `failing ${summarizeCheckNames(block.failingChecks)}` : null;
+  const pending = block.pendingChecks.length > 0 ? `pending ${summarizeCheckNames(block.pendingChecks)}` : null;
+  const suffix = [failing, pending].filter(Boolean).join("; ");
+  return suffix ? `main broken: ${suffix}` : "main broken";
 }

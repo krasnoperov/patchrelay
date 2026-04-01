@@ -80,6 +80,7 @@ test("merge-steward observations explain queue position for non-head entries", (
     activeIndex: 2,
     activeCount: 4,
     headPrNumber: 40,
+    queueBlock: null,
   });
 
   assert.match(observations[0]?.text ?? "", /Waiting behind current head #40/);
@@ -115,10 +116,40 @@ test("merge-steward observations explain eviction and external repair expectatio
     activeIndex: null,
     activeCount: 0,
     headPrNumber: null,
+    queueBlock: null,
   });
 
   assert.match(observations[0]?.text ?? "", /external branch repair is expected/i);
   assert.match(observations[1]?.text ?? "", /integration_conflict/);
   assert.match(observations[2]?.text ?? "", /Waiting for deadbee/);
   assert.match(observations[3]?.text ?? "", /Observed 2 branch head updates/);
+});
+
+test("merge-steward observations explain when the head is blocked by unhealthy main", () => {
+  const detail = makeDetail({
+    entry: {
+      ...makeDetail().entry,
+      status: "preparing_head",
+    },
+  });
+
+  const observations = buildExternalRepairObservations(detail, {
+    isHead: true,
+    activeIndex: 1,
+    activeCount: 2,
+    headPrNumber: 41,
+    queueBlock: {
+      reason: "main_broken",
+      entryId: "entry-1",
+      headPrNumber: 41,
+      baseBranch: "main",
+      baseSha: "abc123def456",
+      observedAt: "2026-03-28T12:06:00.000Z",
+      failingChecks: [{ name: "Tests", conclusion: "failure" }],
+      pendingChecks: [],
+    },
+  });
+
+  assert.match(observations[0]?.text ?? "", /paused because main is unhealthy/i);
+  assert.match(observations[0]?.text ?? "", /Tests/);
 });

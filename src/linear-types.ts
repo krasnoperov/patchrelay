@@ -37,6 +37,8 @@ export interface IssueMetadata {
   priority?: number;
   estimate?: number;
   labelNames: string[];
+  blockedBy: LinearIssueRelationSummary[];
+  blocks: LinearIssueRelationSummary[];
 }
 
 export interface CommentMetadata {
@@ -204,6 +206,17 @@ export interface LinearIssueSnapshot {
     id: string;
     name: string;
   }>;
+  blockedBy: LinearIssueRelationSummary[];
+  blocks: LinearIssueRelationSummary[];
+}
+
+export interface LinearIssueRelationSummary {
+  id: string;
+  identifier?: string;
+  title?: string;
+  stateId?: string;
+  stateName?: string;
+  stateType?: string;
 }
 
 export interface LinearCommentUpsertResult {

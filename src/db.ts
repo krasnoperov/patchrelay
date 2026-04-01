@@ -1,5 +1,6 @@
 import type {
   GitHubFailureSource,
+  IssueDependencyRecord,
   IssueRecord,
   RunRecord,
   RunStatus,
@@ -251,9 +252,126 @@ export class PatchRelayDatabase {
     return row ? mapIssueRow(row) : undefined;
   }
 
+  replaceIssueDependencies(params: {
+    projectId: string;
+    linearIssueId: string;
+    blockers: Array<{
+      blockerLinearIssueId: string;
+      blockerIssueKey?: string;
+      blockerTitle?: string;
+      blockerCurrentLinearState?: string;
+    }>;
+  }): void {
+    const now = isoNow();
+    this.connection
+      .prepare("DELETE FROM issue_dependencies WHERE project_id = ? AND linear_issue_id = ?")
+      .run(params.projectId, params.linearIssueId);
+
+    if (params.blockers.length === 0) {
+      return;
+    }
+
+    const insert = this.connection.prepare(`
+      INSERT INTO issue_dependencies (
+        project_id,
+        linear_issue_id,
+        blocker_linear_issue_id,
+        blocker_issue_key,
+        blocker_title,
+        blocker_current_linear_state,
+        updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    for (const blocker of params.blockers) {
+      insert.run(
+        params.projectId,
+        params.linearIssueId,
+        blocker.blockerLinearIssueId,
+        blocker.blockerIssueKey ?? null,
+        blocker.blockerTitle ?? null,
+        blocker.blockerCurrentLinearState ?? null,
+        now,
+      );
+    }
+  }
+
+  listIssueDependencies(projectId: string, linearIssueId: string): IssueDependencyRecord[] {
+    const rows = this.connection.prepare(`
+      SELECT
+        d.project_id,
+        d.linear_issue_id,
+        d.blocker_linear_issue_id,
+        COALESCE(blockers.issue_key, d.blocker_issue_key) AS blocker_issue_key,
+        COALESCE(blockers.title, d.blocker_title) AS blocker_title,
+        COALESCE(blockers.current_linear_state, d.blocker_current_linear_state) AS blocker_current_linear_state,
+        d.updated_at
+      FROM issue_dependencies d
+      LEFT JOIN issues blockers
+        ON blockers.project_id = d.project_id
+       AND blockers.linear_issue_id = d.blocker_linear_issue_id
+      WHERE d.project_id = ? AND d.linear_issue_id = ?
+      ORDER BY COALESCE(blockers.issue_key, d.blocker_issue_key, d.blocker_linear_issue_id) ASC
+    `).all(projectId, linearIssueId) as Array<Record<string, unknown>>;
+
+    return rows.map((row) => ({
+      projectId: String(row.project_id),
+      linearIssueId: String(row.linear_issue_id),
+      blockerLinearIssueId: String(row.blocker_linear_issue_id),
+      ...(row.blocker_issue_key !== null && row.blocker_issue_key !== undefined ? { blockerIssueKey: String(row.blocker_issue_key) } : {}),
+      ...(row.blocker_title !== null && row.blocker_title !== undefined ? { blockerTitle: String(row.blocker_title) } : {}),
+      ...(row.blocker_current_linear_state !== null && row.blocker_current_linear_state !== undefined
+        ? { blockerCurrentLinearState: String(row.blocker_current_linear_state) }
+        : {}),
+      updatedAt: String(row.updated_at),
+    }));
+  }
+
+  listDependents(projectId: string, blockerLinearIssueId: string): Array<{ projectId: string; linearIssueId: string }> {
+    const rows = this.connection.prepare(`
+      SELECT project_id, linear_issue_id
+      FROM issue_dependencies
+      WHERE project_id = ? AND blocker_linear_issue_id = ?
+      ORDER BY linear_issue_id ASC
+    `).all(projectId, blockerLinearIssueId) as Array<Record<string, unknown>>;
+
+    return rows.map((row) => ({
+      projectId: String(row.project_id),
+      linearIssueId: String(row.linear_issue_id),
+    }));
+  }
+
+  countUnresolvedBlockers(projectId: string, linearIssueId: string): number {
+    const row = this.connection.prepare(`
+      SELECT COUNT(*) AS count
+      FROM issue_dependencies d
+      LEFT JOIN issues blockers
+        ON blockers.project_id = d.project_id
+       AND blockers.linear_issue_id = d.blocker_linear_issue_id
+      WHERE d.project_id = ? AND d.linear_issue_id = ?
+        AND LOWER(TRIM(COALESCE(blockers.current_linear_state, d.blocker_current_linear_state, ''))) != 'done'
+    `).get(projectId, linearIssueId) as Record<string, unknown> | undefined;
+    return Number(row?.count ?? 0);
+  }
+
   listIssuesReadyForExecution(): Array<{ projectId: string; linearIssueId: string }> {
     const rows = this.connection
-      .prepare("SELECT project_id, linear_issue_id FROM issues WHERE pending_run_type IS NOT NULL AND active_run_id IS NULL")
+      .prepare(`
+        SELECT i.project_id, i.linear_issue_id
+        FROM issues i
+        WHERE i.pending_run_type IS NOT NULL
+          AND i.active_run_id IS NULL
+          AND NOT EXISTS (
+            SELECT 1
+            FROM issue_dependencies d
+            LEFT JOIN issues blockers
+              ON blockers.project_id = d.project_id
+             AND blockers.linear_issue_id = d.blocker_linear_issue_id
+            WHERE d.project_id = i.project_id
+              AND d.linear_issue_id = i.linear_issue_id
+              AND LOWER(TRIM(COALESCE(blockers.current_linear_state, d.blocker_current_linear_state, ''))) != 'done'
+          )
+      `)
       .all() as Array<Record<string, unknown>>;
     return rows.map((row) => ({
       projectId: String(row.project_id),
@@ -426,6 +544,7 @@ export class PatchRelayDatabase {
   // ─── View builders ──────────────────────────────────────────────
 
   issueToTrackedIssue(issue: IssueRecord): TrackedIssueRecord {
+    const blockedBy = this.listIssueDependencies(issue.projectId, issue.linearIssueId);
     return {
       id: issue.id,
       projectId: issue.projectId,
@@ -435,6 +554,11 @@ export class PatchRelayDatabase {
       ...(issue.url ? { issueUrl: issue.url } : {}),
       ...(issue.currentLinearState ? { currentLinearState: issue.currentLinearState } : {}),
       factoryState: issue.factoryState,
+      blockedByCount: blockedBy.filter((entry) => !isDoneState(entry.blockerCurrentLinearState)).length,
+      blockedByKeys: blockedBy
+        .filter((entry) => !isDoneState(entry.blockerCurrentLinearState))
+        .map((entry) => entry.blockerIssueKey ?? entry.blockerLinearIssueId),
+      readyForExecution: issue.pendingRunType !== undefined && issue.activeRunId === undefined,
       ...(issue.activeRunId !== undefined ? { activeRunId: issue.activeRunId } : {}),
       ...(issue.agentSessionId ? { activeAgentSessionId: issue.agentSessionId } : {}),
       updatedAt: issue.updatedAt,
@@ -540,4 +664,8 @@ function mapRunRow(row: Record<string, unknown>): RunRecord {
     startedAt: String(row.started_at),
     ...(row.ended_at !== null ? { endedAt: String(row.ended_at) } : {}),
   };
+}
+
+function isDoneState(stateName: string | undefined): boolean {
+  return stateName?.trim().toLowerCase() === "done";
 }

@@ -220,11 +220,16 @@ describe("webhook admission integration", () => {
     assert.strictEqual(watch1.summary.total, 1);
     assert.strictEqual(watch1.summary.active, 1);
     assert.strictEqual(watch1.summary.headPrNumber, 7);
+    assert.strictEqual((watch1 as { queueBlock?: unknown }).queueBlock ?? null, null);
     assert.deepStrictEqual(watch1.recentEvents.map((event) => [event.prNumber, event.toStatus]), [[7, "queued"]]);
 
-    const reconcile = await (await fetch(`${address}/repos/test-repo/queue/reconcile`, { method: "POST" })).json() as { ok: boolean; started: boolean };
-    assert.strictEqual(reconcile.ok, true);
-    assert.strictEqual(reconcile.started, true);
+    const reconcile1 = await (await fetch(`${address}/repos/test-repo/queue/reconcile`, { method: "POST" })).json() as { ok: boolean; started: boolean };
+    assert.strictEqual(reconcile1.ok, true);
+    assert.strictEqual(reconcile1.started, true);
+
+    const reconcile2 = await (await fetch(`${address}/repos/test-repo/queue/reconcile`, { method: "POST" })).json() as { ok: boolean; started: boolean };
+    assert.strictEqual(reconcile2.ok, true);
+    assert.strictEqual(reconcile2.started, true);
 
     const watch2 = await (await fetch(`${address}/repos/test-repo/queue/watch`)).json() as {
       summary: { preparingHead: number; headPrNumber: number | null };
@@ -249,6 +254,79 @@ describe("webhook admission integration", () => {
     assert.strictEqual(detail.entry.status, "preparing_head");
     assert.deepStrictEqual(detail.events.map((event) => event.toStatus), ["queued", "preparing_head"]);
     assert.strictEqual(detail.incidents.length, 0);
+  });
+
+  it("surfaces queue-level main-broken status in watch snapshots", async () => {
+    const store = new MemoryStore();
+    const githubSim = new GitHubSim();
+    const logger = pino({ level: "silent" });
+    const git = new GitSim();
+    await git.init("main");
+    await git.createBranch("origin/main", "main");
+
+    githubSim.addPR({ number: 8, branch: "feat-main-broken", headSha: "sha-8", reviewApproved: true, labels: ["queue"] });
+    githubSim.setRefChecks("main", [
+      { name: "Tests", conclusion: "failure" },
+      { name: "Deploy stage", conclusion: "failure" },
+      { name: "Claude", conclusion: "pending" },
+    ]);
+
+    const ci = {
+      async triggerRun() {
+        return "ci-1";
+      },
+      async getStatus() {
+        return "pending" as const;
+      },
+      async cancelRun() {},
+      async getMainStatus() {
+        return "fail" as const;
+      },
+    };
+
+    const service = new MergeStewardService(
+      config,
+      store,
+      git as any,
+      ci as any,
+      githubSim,
+      new EvictionReporterSim(),
+      null,
+      logger,
+    );
+
+    service.enqueue({ prNumber: 8, branch: "feat-main-broken", headSha: "sha-8" });
+
+    const app = await makeApp(service);
+    const address = await app.listen({ port: 0 });
+    after(async () => { await app.close(); });
+
+    const reconcile1 = await (await fetch(`${address}/repos/test-repo/queue/reconcile`, { method: "POST" })).json() as { ok: boolean; started: boolean };
+    assert.strictEqual(reconcile1.ok, true);
+    assert.strictEqual(reconcile1.started, true);
+
+    const reconcile2 = await (await fetch(`${address}/repos/test-repo/queue/reconcile`, { method: "POST" })).json() as { ok: boolean; started: boolean };
+    assert.strictEqual(reconcile2.ok, true);
+    assert.strictEqual(reconcile2.started, true);
+
+    const watch = await (await fetch(`${address}/repos/test-repo/queue/watch`)).json() as {
+      summary: { headPrNumber: number | null; preparingHead: number };
+      queueBlock: {
+        reason: string;
+        headPrNumber: number | null;
+        baseBranch: string;
+        failingChecks: Array<{ name: string; conclusion: string }>;
+        pendingChecks: Array<{ name: string; conclusion: string }>;
+      } | null;
+    };
+
+    assert.strictEqual(watch.summary.headPrNumber, 8);
+    assert.strictEqual(watch.summary.preparingHead, 1);
+    assert.ok(watch.queueBlock);
+    assert.strictEqual(watch.queueBlock?.reason, "main_broken");
+    assert.strictEqual(watch.queueBlock?.baseBranch, "main");
+    assert.deepStrictEqual(watch.queueBlock?.failingChecks.map((check) => check.name), ["Tests", "Deploy stage"]);
+    assert.deepStrictEqual(watch.queueBlock?.pendingChecks.map((check) => check.name), ["Claude"]);
   });
 
   it("entry detail returns the most recent events when eventLimit is applied", async () => {

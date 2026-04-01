@@ -1,6 +1,6 @@
 import { Box, Text } from "ink";
-import type { QueueEntryDetail } from "../types.ts";
-import { formatEntryEvent, progressBar, relativeTime, shortSha, statusColor } from "./format.ts";
+import type { QueueBlockState, QueueEntryDetail } from "../types.ts";
+import { formatEntryEvent, progressBar, relativeTime, shortSha, statusColor, summarizeQueueBlock } from "./format.ts";
 import { EntryStateGraph } from "./EntryStateGraph.tsx";
 import { ExternalRepairObservation } from "./ExternalRepairObservation.tsx";
 import { buildEntryStateGraph, buildExternalRepairObservations } from "./state-visualization.ts";
@@ -11,6 +11,7 @@ interface DetailViewProps {
   activeIndex: number | null;
   activeCount: number;
   headPrNumber: number | null;
+  queueBlock: QueueBlockState | null;
 }
 
 export function DetailView({
@@ -19,6 +20,7 @@ export function DetailView({
   activeIndex,
   activeCount,
   headPrNumber,
+  queueBlock,
 }: DetailViewProps): React.JSX.Element {
   if (!detail) {
     return (
@@ -35,6 +37,7 @@ export function DetailView({
     activeIndex,
     activeCount,
     headPrNumber,
+    queueBlock,
   });
   return (
     <Box flexDirection="column" marginTop={1}>
@@ -51,6 +54,16 @@ export function DetailView({
         <Text dimColor>base {shortSha(entry.baseSha)}</Text>
         {entry.issueKey && <Text dimColor>{entry.issueKey}</Text>}
       </Box>
+
+      {isHead && queueBlock && (
+        <Box marginTop={1} flexDirection="column">
+          <Text color="yellow">Queue paused: {summarizeQueueBlock(queueBlock) ?? "main branch is unhealthy"}.</Text>
+          <Text dimColor>
+            {queueBlock.baseBranch}{queueBlock.baseSha ? ` @ ${shortSha(queueBlock.baseSha)}` : ""}
+          </Text>
+          <Text dimColor>Head PR #{queueBlock.headPrNumber ?? entry.prNumber} will resume automatically once main recovers.</Text>
+        </Box>
+      )}
 
       {entry.maxRetries > 0 && (
         <Box gap={1} marginTop={1}>

@@ -126,8 +126,10 @@ export class WebhookHandler {
       const issue = hydrated.issue ?? routedIssue;
 
       // Record desired stage and upsert issue
-      const result = this.recordDesiredStage(project, hydrated);
+      const result = await this.recordDesiredStage(project, hydrated);
       const trackedIssue = result.issue;
+
+      const newlyReadyDependents = this.reconcileDependentReadiness(project.id, issue.id);
 
       // Handle agent session events
       await this.handleAgentSession(hydrated, project, trackedIssue, result.desiredStage, result.delegated);
@@ -150,6 +152,20 @@ export class WebhookHandler {
         });
         this.enqueueIssue(project.id, issue.id);
       }
+      for (const dependentIssueId of newlyReadyDependents) {
+        const dependent = this.db.getTrackedIssue(project.id, dependentIssueId);
+        this.feed?.publish({
+          level: "info",
+          kind: "stage",
+          issueKey: dependent?.issueKey,
+          projectId: project.id,
+          stage: "implementation",
+          status: "queued",
+          summary: "Queued implementation after blockers resolved",
+          detail: `All blockers are now done for ${dependent?.issueKey ?? dependentIssueId}.`,
+        });
+        this.enqueueIssue(project.id, dependentIssueId);
+      }
     } catch (error) {
       this.db.markWebhookProcessed(webhookEventId, "failed");
       const err = error instanceof Error ? error : new Error(String(error));
@@ -169,14 +185,14 @@ export class WebhookHandler {
     }
   }
 
-  private recordDesiredStage(
+  private async recordDesiredStage(
     project: ProjectConfig,
     normalized: NormalizedEvent,
-  ): {
+  ): Promise<{
     issue: TrackedIssueRecord | undefined;
     desiredStage: RunType | undefined;
     delegated: boolean;
-  } {
+  }> {
     const normalizedIssue = normalized.issue;
     if (!normalizedIssue) {
       return { issue: undefined, desiredStage: undefined, delegated: false };
@@ -186,21 +202,21 @@ export class WebhookHandler {
     const activeRun = existingIssue?.activeRunId ? this.db.getRun(existingIssue.activeRunId) : undefined;
     const delegated = this.isDelegatedToPatchRelay(project, normalized);
     const triggerAllowed = triggerEventAllowed(project, normalized.triggerEvent);
-    const pendingRunContextJson = mergePendingImplementationContext(existingIssue?.pendingRunContextJson, normalized);
+    const shouldTrack = Boolean(existingIssue || delegated);
 
-    // In the factory model, only a true delegation queues implementation work.
-    let pendingRunType: RunType | undefined;
-    const isDelegationSignal = delegated;
-    if (isDelegationSignal && triggerAllowed && !activeRun && !existingIssue?.pendingRunType) {
-      pendingRunType = "implementation";
-    }
-
-    // Do not create tracked issue rows for unrelated Linear traffic.
-    // An issue becomes PatchRelay-relevant only once it is already tracked
-    // or a true delegation queues work.
-    if (!existingIssue && !pendingRunType) {
+    if (!shouldTrack) {
       return { issue: undefined, desiredStage: undefined, delegated };
     }
+
+    const hydratedIssue = await this.syncIssueDependencies(project.id, normalizedIssue);
+    const unresolvedBlockers = this.db.countUnresolvedBlockers(project.id, normalizedIssue.id);
+    const pendingRunContextJson = mergePendingImplementationContext(existingIssue?.pendingRunContextJson, normalized);
+
+    let pendingRunType: RunType | undefined;
+    if (delegated && triggerAllowed && unresolvedBlockers === 0 && !activeRun && !existingIssue?.pendingRunType) {
+      pendingRunType = "implementation";
+    }
+    const clearPendingImplementation = unresolvedBlockers > 0 && existingIssue?.pendingRunType === "implementation" && !activeRun;
 
     // Resolve agent session
     const agentSessionId = normalized.agentSession?.id ??
@@ -210,14 +226,15 @@ export class WebhookHandler {
     const issue = this.db.upsertIssue({
       projectId: project.id,
       linearIssueId: normalizedIssue.id,
-      ...(normalizedIssue.identifier ? { issueKey: normalizedIssue.identifier } : {}),
-      ...(normalizedIssue.title ? { title: normalizedIssue.title } : {}),
-      ...(normalizedIssue.description ? { description: normalizedIssue.description } : {}),
-      ...(normalizedIssue.url ? { url: normalizedIssue.url } : {}),
-      ...(normalizedIssue.priority != null ? { priority: normalizedIssue.priority } : {}),
-      ...(normalizedIssue.estimate != null ? { estimate: normalizedIssue.estimate } : {}),
-      ...(normalizedIssue.stateName ? { currentLinearState: normalizedIssue.stateName } : {}),
+      ...(hydratedIssue.identifier ? { issueKey: hydratedIssue.identifier } : {}),
+      ...(hydratedIssue.title ? { title: hydratedIssue.title } : {}),
+      ...(hydratedIssue.description ? { description: hydratedIssue.description } : {}),
+      ...(hydratedIssue.url ? { url: hydratedIssue.url } : {}),
+      ...(hydratedIssue.priority != null ? { priority: hydratedIssue.priority } : {}),
+      ...(hydratedIssue.estimate != null ? { estimate: hydratedIssue.estimate } : {}),
+      ...(hydratedIssue.stateName ? { currentLinearState: hydratedIssue.stateName } : {}),
       ...(pendingRunType ? { pendingRunType, factoryState: "delegated" as const } : {}),
+      ...(clearPendingImplementation ? { pendingRunType: null } : {}),
       ...((pendingRunType || existingIssue?.pendingRunType === "implementation") && pendingRunContextJson
         ? { pendingRunContextJson }
         : {}),
@@ -236,6 +253,68 @@ export class WebhookHandler {
     const installation = this.db.linearInstallations.getLinearInstallationForProject(project.id);
     if (!installation?.actorId) return false;
     return normalized.issue.delegateId === installation.actorId;
+  }
+
+  private async syncIssueDependencies(projectId: string, issue: IssueMetadata): Promise<IssueMetadata> {
+    let source = issue;
+    if (source.blockedBy.length === 0 && source.blocks.length === 0) {
+      const linear = await this.linearProvider.forProject(projectId);
+      if (linear) {
+        try {
+          source = mergeIssueMetadata(source, await linear.getIssue(issue.id));
+        } catch {
+          // Fall back to webhook payload data when live hydration is unavailable.
+        }
+      }
+    }
+
+    this.db.replaceIssueDependencies({
+      projectId,
+      linearIssueId: source.id,
+      blockers: source.blockedBy.map((blocker) => ({
+        blockerLinearIssueId: blocker.id,
+        ...(blocker.identifier ? { blockerIssueKey: blocker.identifier } : {}),
+        ...(blocker.title ? { blockerTitle: blocker.title } : {}),
+        ...(blocker.stateName ? { blockerCurrentLinearState: blocker.stateName } : {}),
+      })),
+    });
+
+    return source;
+  }
+
+  private reconcileDependentReadiness(projectId: string, blockerLinearIssueId: string): string[] {
+    const newlyReady: string[] = [];
+    for (const dependent of this.db.listDependents(projectId, blockerLinearIssueId)) {
+      const issue = this.db.getIssue(projectId, dependent.linearIssueId);
+      if (!issue) {
+        continue;
+      }
+
+      const unresolved = this.db.countUnresolvedBlockers(projectId, dependent.linearIssueId);
+      if (unresolved > 0) {
+        if (issue.pendingRunType === "implementation" && issue.activeRunId === undefined) {
+          this.db.upsertIssue({
+            projectId,
+            linearIssueId: dependent.linearIssueId,
+            pendingRunType: null,
+          });
+        }
+        continue;
+      }
+
+      if (issue.factoryState !== "delegated" || issue.activeRunId !== undefined || issue.pendingRunType !== undefined) {
+        continue;
+      }
+
+      this.db.upsertIssue({
+        projectId,
+        linearIssueId: dependent.linearIssueId,
+        pendingRunType: "implementation",
+      });
+      newlyReady.push(dependent.linearIssueId);
+    }
+
+    return newlyReady;
   }
 
   // ─── Agent session handling (inlined) ─────────────────────────────
@@ -273,9 +352,12 @@ export class WebhookHandler {
         await this.publishAgentActivity(linear, normalized.agentSession.id, buildAlreadyRunningThought(activeRun.runType));
         return;
       }
+      const blockerSummary = trackedIssue?.blockedByCount
+        ? `PatchRelay is delegated and waiting on blockers to reach Done: ${trackedIssue.blockedByKeys.join(", ")}.`
+        : "PatchRelay is delegated, but no work is queued. Delegate the issue or move it to Start to trigger implementation.";
       await this.publishAgentActivity(linear, normalized.agentSession.id, {
         type: "elicitation",
-        body: "PatchRelay is delegated, but no work is queued. Delegate the issue or move it to Start to trigger implementation.",
+        body: blockerSummary,
       });
       return;
     }
@@ -526,8 +608,10 @@ export class WebhookHandler {
 
   private async hydrateIssueContext(projectId: string, normalized: NormalizedEvent): Promise<NormalizedEvent> {
     if (!normalized.issue) return normalized;
-    if (normalized.triggerEvent !== "agentSessionCreated" && normalized.triggerEvent !== "agentPrompted") return normalized;
-    if (hasCompleteIssueContext(normalized.issue)) return normalized;
+    if (normalized.triggerEvent !== "agentSessionCreated" && normalized.triggerEvent !== "agentPrompted" && normalized.entityType !== "Issue") {
+      return normalized;
+    }
+    if (normalized.entityType !== "Issue" && hasCompleteIssueContext(normalized.issue)) return normalized;
 
     const linear = await this.linearProvider.forProject(projectId);
     if (!linear) return normalized;
@@ -589,6 +673,8 @@ function mergeIssueMetadata(
     identifier?: string; title?: string; url?: string;
     teamId?: string; teamKey?: string; stateId?: string; stateName?: string;
     delegateId?: string; delegateName?: string;
+    blockedBy?: Array<{ id: string; identifier?: string; title?: string; stateName?: string; stateType?: string }>;
+    blocks?: Array<{ id: string; identifier?: string; title?: string; stateName?: string; stateType?: string }>;
     labels?: Array<{ id: string; name: string }>;
   },
 ): IssueMetadata {
@@ -604,5 +690,7 @@ function mergeIssueMetadata(
     ...(issue.delegateId ? {} : liveIssue.delegateId ? { delegateId: liveIssue.delegateId } : {}),
     ...(issue.delegateName ? {} : liveIssue.delegateName ? { delegateName: liveIssue.delegateName } : {}),
     labelNames: issue.labelNames.length > 0 ? issue.labelNames : (liveIssue.labels ?? []).map((l) => l.name),
+    blockedBy: issue.blockedBy.length > 0 ? issue.blockedBy : (liveIssue.blockedBy ?? []),
+    blocks: issue.blocks.length > 0 ? issue.blocks : (liveIssue.blocks ?? []),
   };
 }

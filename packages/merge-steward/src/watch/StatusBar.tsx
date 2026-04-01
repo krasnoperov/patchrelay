@@ -1,6 +1,6 @@
 import { Box, Text, useStdout } from "ink";
 import type { QueueWatchSnapshot } from "../types.ts";
-import { formatDuration, relativeTime, runtimeLabel, truncate } from "./format.ts";
+import { formatDuration, relativeTime, runtimeLabel, summarizeQueueBlock, truncate } from "./format.ts";
 import { FreshnessBadge } from "./FreshnessBadge.tsx";
 
 interface StatusBarProps {
@@ -39,6 +39,7 @@ export function StatusBar({
   }
 
   const { summary, runtime } = snapshot;
+  const queueBlockLabel = summarizeQueueBlock(snapshot.queueBlock);
   const activeEntries = snapshot.entries.filter((e) => !TERMINAL.has(e.status));
   const avgWaitMs = activeEntries.length > 0
     ? activeEntries.reduce((sum, e) => sum + (Date.now() - new Date(e.enqueuedAt).getTime()), 0) / activeEntries.length
@@ -48,6 +49,7 @@ export function StatusBar({
     `base:${snapshot.baseBranch}`,
     `${summary.total} entries ${summary.active} active`,
     summary.headPrNumber !== null ? `head #${summary.headPrNumber}` : null,
+    queueBlockLabel ? `blocked ${queueBlockLabel}` : null,
     avgWaitMs > 0 ? `wait ~${formatDuration(avgWaitMs)}` : null,
     `tick ${runtimeLabel(runtime)} ${relativeTime(runtime.lastTickCompletedAt ?? runtime.lastTickStartedAt)}`,
     filter,
