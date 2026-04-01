@@ -255,6 +255,10 @@ export class MergeStewardService {
   updateHeadByPR(prNumber: number, headSha: string): void {
     const entry = this.store.getEntryByPR(this.config.repoId, prNumber);
     if (entry) {
+      if (entry.headSha === headSha) {
+        this.logger.debug({ prNumber, entryId: entry.id, headSha }, "Ignoring synchronize webhook for unchanged head");
+        return;
+      }
       this.store.updateHead(entry.id, headSha);
       this.logger.info({ prNumber, entryId: entry.id, headSha }, "PR head updated via webhook");
     }

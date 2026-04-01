@@ -79,7 +79,7 @@ export function nextStepLabel(status: QueueEntryStatus): string {
     case "queued":
       return "waiting for head-of-line turn";
     case "preparing_head":
-      return "rebasing onto latest main";
+      return "refreshing branch with latest main";
     case "validating":
       return "waiting for CI result";
     case "merging":

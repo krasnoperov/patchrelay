@@ -139,7 +139,7 @@ describe("observability: reconciler event stream", () => {
 
     // The validating transition should explain what happened.
     const validatingEvent = events.find((e) => e.toStatus === "validating");
-    assert.ok(validatingEvent?.detail?.includes("rebase"), "validating detail should mention rebase");
+    assert.ok(validatingEvent?.detail?.includes("refreshed"), "validating detail should mention branch refresh");
 
     // The merged transition should explain.
     const mergedEvent = events.find((e) => e.toStatus === "merged");

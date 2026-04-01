@@ -176,10 +176,10 @@ function buildChecksProgressChip(issue: WatchIssue): StatusChip | null {
   const summary = issue.prChecksSummary;
   if (!summary || summary.total <= 0) return null;
   const text = summary.failed > 0
-    ? `checks ${summary.completed}/${summary.total} failed`
+    ? `checks ${summary.failed}/${summary.total} failed`
     : summary.pending > 0
-      ? `checks ${summary.completed}/${summary.total} running`
-      : `checks ${summary.completed}/${summary.total} passed`;
+      ? `checks ${summary.completed}/${summary.total} settled`
+      : `checks ${summary.passed}/${summary.total} passed`;
   const color = summary.failed > 0 ? "red" : summary.pending > 0 ? "yellow" : "green";
   return { text, color };
 }
@@ -210,11 +210,20 @@ function buildPrimaryBlocker(issue: WatchIssue): StatusChip | null {
       color: "yellow",
     };
   }
-  if (issue.prCheckStatus === "failed") {
-    const failedCheck = issue.latestFailureCheckName ?? "PR checks";
+  if (issue.prCheckStatus === "failed" || issue.prCheckStatus === "failure") {
+    const failedChecks = issue.prChecksSummary?.failedNames ?? [];
+    const failedCheck = issue.latestFailureCheckName
+      ?? (failedChecks.length > 0 ? failedChecks.slice(0, 2).join(", ") : undefined)
+      ?? "PR checks";
     return {
       text: `${failedCheck} failed`,
       color: "red",
+    };
+  }
+  if (issue.prCheckStatus === "pending" || issue.prCheckStatus === "in_progress" || issue.prCheckStatus === "queued") {
+    return {
+      text: "Waiting for PR checks to finish",
+      color: "yellow",
     };
   }
   if (issue.prReviewState === "changes_requested") {
@@ -223,15 +232,21 @@ function buildPrimaryBlocker(issue: WatchIssue): StatusChip | null {
       color: "yellow",
     };
   }
-  if (issue.prNumber !== undefined && !issue.prReviewState && issue.factoryState !== "done") {
+  if (issue.factoryState === "repairing_queue") {
     return {
-      text: "Waiting for review approval",
+      text: "Merge queue reported a branch refresh failure",
       color: "yellow",
     };
   }
   if (issue.factoryState === "awaiting_queue") {
     return {
       text: "Waiting for merge queue turn",
+      color: "yellow",
+    };
+  }
+  if (issue.prNumber !== undefined && !issue.prReviewState && issue.factoryState !== "done") {
+    return {
+      text: "Waiting for review approval",
       color: "yellow",
     };
   }

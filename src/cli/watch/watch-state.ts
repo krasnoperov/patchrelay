@@ -44,6 +44,7 @@ export interface WatchIssue {
     failed: number;
     pending: number;
     overall: "pending" | "success" | "failure";
+    failedNames?: string[] | undefined;
   } | undefined;
   latestFailureSource?: string | undefined;
   latestFailureHeadSha?: string | undefined;
