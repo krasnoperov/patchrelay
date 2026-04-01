@@ -8,6 +8,7 @@ interface DetailStreamOptions {
   baseUrl: string;
   bearerToken?: string | undefined;
   issueKey: string | null;
+  active?: boolean | undefined;
   dispatch: Dispatch<WatchAction>;
 }
 
@@ -16,7 +17,8 @@ export function useDetailStream(options: DetailStreamOptions): void {
   optionsRef.current = options;
 
   useEffect(() => {
-    const { issueKey } = optionsRef.current;
+    const { issueKey, active } = optionsRef.current;
+    if (active === false) return;
     if (!issueKey) return;
 
     const abortController = new AbortController();
@@ -36,7 +38,7 @@ export function useDetailStream(options: DetailStreamOptions): void {
     return () => {
       abortController.abort();
     };
-  }, [options.issueKey]);
+  }, [options.issueKey, options.active]);
 }
 
 // ─── Rehydration ──────────────────────────────────────────────────

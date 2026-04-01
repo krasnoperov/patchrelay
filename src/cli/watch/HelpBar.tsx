@@ -9,7 +9,7 @@ interface HelpBarProps {
 }
 
 const HELP_TEXT: Record<WatchView, string> = {
-  list: "j/k: navigate  Enter: detail  F: feed  Tab: filter  q: quit",
+  list: "j/k: navigate  Enter: detail  F: feed  Tab: filter  x: freeze  q: quit",
   detail: "",
   feed: "Esc: list  q: quit",
 };
@@ -19,7 +19,7 @@ export function HelpBar({ view, follow, detailTab, timelineMode }: HelpBarProps)
   if (view === "detail") {
     const tabHint = detailTab === "history" ? "t: timeline" : "h: history";
     const timelineHint = detailTab === "timeline" ? `v: ${timelineMode === "verbose" ? "compact" : "verbose"}` : undefined;
-    text = [tabHint, timelineHint, "j/k: prev/next", "Esc: list", `f: follow ${follow ? "on" : "off"}`, "p: prompt", "s: stop", "r: retry", "q: quit"]
+    text = [tabHint, timelineHint, "j/k: prev/next", "Esc: list", `f: follow ${follow ? "on" : "off"}`, "x: freeze", "p: prompt", "s: stop", "r: retry", "q: quit"]
       .filter(Boolean)
       .join("  ");
   } else {

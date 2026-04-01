@@ -10,6 +10,7 @@ interface StatusBarProps {
   connected: boolean;
   lastServerMessageAt: number | null;
   allIssues: WatchIssue[];
+  frozen: boolean;
 }
 
 const FILTER_LABELS: Record<WatchFilter, string> = {
@@ -25,6 +26,7 @@ export function StatusBar({
   connected,
   lastServerMessageAt,
   allIssues,
+  frozen,
 }: StatusBarProps): React.JSX.Element {
   const showing = filter === "all" ? `${totalCount} issues` : `${issues.length}/${totalCount} issues`;
   const agg = computeAggregates(allIssues);
@@ -43,6 +45,7 @@ export function StatusBar({
         {awaitingInput > 0 && <Text color="yellow">{awaitingInput} awaiting input</Text>}
         {agg.done > 0 && <Text color="green">{agg.done} done</Text>}
         {agg.failed > 0 && <Text color="red">{agg.failed} failed</Text>}
+        {frozen && <Text color="magenta">frozen</Text>}
       </Box>
       <FreshnessBadge connected={connected} lastServerMessageAt={lastServerMessageAt} />
     </Box>

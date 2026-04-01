@@ -6,6 +6,7 @@ interface WatchStreamOptions {
   baseUrl: string;
   bearerToken?: string | undefined;
   issueFilter?: string | undefined;
+  active?: boolean | undefined;
   dispatch: Dispatch<WatchAction>;
 }
 
@@ -14,6 +15,8 @@ export function useWatchStream(options: WatchStreamOptions): void {
   optionsRef.current = options;
 
   useEffect(() => {
+    if (options.active === false) return;
+
     let abortController = new AbortController();
     let reconnectTimeout: ReturnType<typeof setTimeout> | undefined;
     let attempt = 0;
@@ -132,7 +135,7 @@ export function useWatchStream(options: WatchStreamOptions): void {
       }
       clearInterval(snapshotInterval);
     };
-  }, []);
+  }, [options.active]);
 }
 
 function processEvent(dispatch: Dispatch<WatchAction>, eventType: string, data: string): void {

@@ -131,6 +131,16 @@ export class PatchRelayService {
   }
 
   async start(): Promise<void> {
+    const repairedInstallations = this.db.linearInstallations.repairProjectInstallations(
+      this.config.projects.map((project) => project.id),
+    );
+    for (const repair of repairedInstallations) {
+      this.logger.info(
+        { projectId: repair.projectId, installationId: repair.installationId, reason: repair.reason },
+        "Repaired Linear project installation link",
+      );
+    }
+
     // Verify Linear connectivity for all configured projects before starting.
     // Auth errors do not prevent startup (the OAuth callback must be reachable
     // for `patchrelay linear connect`), but the service reports NOT READY until at

@@ -37,6 +37,100 @@ function formatTokens(n: number): string {
   return String(n);
 }
 
+function formatReviewState(reviewState?: string): string | null {
+  switch (reviewState) {
+    case "approved":
+      return "approved";
+    case "changes_requested":
+      return "changes requested";
+    case "commented":
+      return "commented";
+    default:
+      return reviewState ? reviewState.replaceAll("_", " ") : null;
+  }
+}
+
+function formatCheckState(checkState?: string): string | null {
+  switch (checkState) {
+    case "passed":
+    case "success":
+      return "checks passed";
+    case "failed":
+    case "failure":
+      return "checks failed";
+    case "pending":
+    case "in_progress":
+    case "queued":
+      return "checks pending";
+    default:
+      return null;
+  }
+}
+
+function buildPrStatusSummary(issue: WatchIssue, issueContext: WatchIssueContext | null): string[] {
+  if (issue.prNumber === undefined) return [];
+
+  const summary: string[] = [`PR #${issue.prNumber}`];
+  const checkState = formatCheckState(issue.prCheckStatus);
+  const reviewState = formatReviewState(issue.prReviewState);
+  const failedCheck = issueContext?.latestFailureCheckName ?? issue.latestFailureCheckName;
+
+  if (checkState === "checks failed" && failedCheck) {
+    summary.push(`${failedCheck} failed`);
+  } else if (checkState) {
+    summary.push(checkState);
+  }
+
+  if (reviewState) {
+    summary.push(`review ${reviewState}`);
+  } else if (issue.factoryState === "pr_open" || issue.factoryState === "repairing_ci" || issue.factoryState === "awaiting_queue") {
+    summary.push("review pending");
+  }
+
+  if (issue.factoryState === "awaiting_queue") {
+    summary.push("queued for merge");
+  } else if (issue.factoryState === "repairing_queue") {
+    summary.push("merge queue repair needed");
+  } else if (issue.factoryState === "done") {
+    summary.push("merged");
+  } else if (issue.prCheckStatus === "failed" || issue.prReviewState === undefined || issue.prReviewState === "changes_requested") {
+    summary.push("not mergeable");
+  }
+
+  return summary;
+}
+
+function resolvePrimaryBlocker(issue: WatchIssue, issueContext: WatchIssueContext | null): { text: string; color: "red" | "yellow" } | null {
+  if (issue.blockedByCount > 0) {
+    return {
+      text: `Waiting on blockers: ${issue.blockedByKeys.join(", ")}`,
+      color: "yellow",
+    };
+  }
+
+  if (issue.prCheckStatus === "failed") {
+    const failedCheck = issueContext?.latestFailureCheckName ?? issue.latestFailureCheckName;
+    return {
+      text: failedCheck ? `Blocked by failed check: ${failedCheck}` : "Blocked by failed PR checks",
+      color: "red",
+    };
+  }
+
+  if (issue.prReviewState === "changes_requested") {
+    return { text: "Blocked by requested review changes", color: "yellow" };
+  }
+
+  if (issue.prNumber !== undefined && !issue.prReviewState && issue.factoryState !== "done") {
+    return { text: "Blocked pending review approval", color: "yellow" };
+  }
+
+  if (issue.factoryState === "awaiting_queue") {
+    return { text: "Waiting in merge queue", color: "yellow" };
+  }
+
+  return null;
+}
+
 function ElapsedTime({ startedAt }: { startedAt: string }): React.JSX.Element {
   const [, tick] = useReducer((c: number) => c + 1, 0);
   useEffect(() => {
@@ -80,6 +174,14 @@ export function IssueDetailView({
     () => buildPatchRelayQueueObservations(issue, rawFeedEvents),
     [issue, rawFeedEvents],
   );
+  const prStatusSummary = useMemo(
+    () => buildPrStatusSummary(issue, issueContext),
+    [issue, issueContext],
+  );
+  const primaryBlocker = useMemo(
+    () => resolvePrimaryBlocker(issue, issueContext),
+    [issue, issueContext],
+  );
 
   return (
     <Box flexDirection="column">
@@ -97,6 +199,16 @@ export function IssueDetailView({
         <FreshnessBadge connected={connected} lastServerMessageAt={lastServerMessageAt} />
       </Box>
       {issue.title && <Text>{issue.title}</Text>}
+      {prStatusSummary.length > 0 && (
+        <Box marginTop={1}>
+          <Text dimColor>{prStatusSummary.join("  |  ")}</Text>
+        </Box>
+      )}
+      {primaryBlocker && (
+        <Box marginTop={1}>
+          <Text color={primaryBlocker.color}>Blocked by: {primaryBlocker.text}</Text>
+        </Box>
+      )}
       {issueContext?.latestFailureSummary && (
         <Box marginTop={1}>
           <Text color={issueContext.latestFailureSource === "queue_eviction" ? "yellow" : "red"}>

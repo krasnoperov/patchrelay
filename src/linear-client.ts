@@ -565,9 +565,9 @@ export class DatabaseBackedLinearClientProvider implements LinearClientProvider 
   ) {}
 
   async forProject(projectId: string): Promise<LinearClient | undefined> {
-    const link = this.db.linearInstallations.getProjectInstallation(projectId);
-    if (link) {
-      return await this.forInstallationId(link.installationId);
+    const installation = this.db.linearInstallations.getLinearInstallationForProject(projectId);
+    if (installation) {
+      return await this.forInstallationId(installation.id);
     }
     return undefined;
   }

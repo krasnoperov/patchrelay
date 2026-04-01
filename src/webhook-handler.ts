@@ -5,7 +5,7 @@ import {
 import { buildAgentSessionExternalUrls } from "./agent-session-presentation.ts";
 import type { CodexAppServerClient } from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
-import type { RunType } from "./factory-state.ts";
+import { TERMINAL_STATES, type RunType } from "./factory-state.ts";
 import {
   buildAlreadyRunningThought,
   buildDelegationThought,
@@ -212,8 +212,10 @@ export class WebhookHandler {
     const unresolvedBlockers = this.db.countUnresolvedBlockers(project.id, normalizedIssue.id);
     const pendingRunContextJson = mergePendingImplementationContext(existingIssue?.pendingRunContextJson, normalized);
 
+    const terminalForAutomation = isTerminalDelegationState(existingIssue, hydratedIssue);
+
     let pendingRunType: RunType | undefined;
-    if (delegated && triggerAllowed && unresolvedBlockers === 0 && !activeRun && !existingIssue?.pendingRunType) {
+    if (delegated && triggerAllowed && unresolvedBlockers === 0 && !activeRun && !existingIssue?.pendingRunType && !terminalForAutomation) {
       pendingRunType = "implementation";
     }
     const clearPendingImplementation = unresolvedBlockers > 0 && existingIssue?.pendingRunType === "implementation" && !activeRun;
@@ -646,6 +648,23 @@ export class WebhookHandler {
     }
     return undefined;
   }
+}
+
+function isResolvedLinearState(stateType?: string, stateName?: string): boolean {
+  return stateType === "completed" || stateName?.trim().toLowerCase() === "done";
+}
+
+function isTerminalDelegationState(
+  existingIssue: ReturnType<PatchRelayDatabase["getIssue"]>,
+  hydratedIssue: IssueMetadata,
+): boolean {
+  if (existingIssue?.prState === "merged") {
+    return true;
+  }
+  if (existingIssue?.factoryState && TERMINAL_STATES.has(existingIssue.factoryState)) {
+    return true;
+  }
+  return isResolvedLinearState(hydratedIssue.stateType, hydratedIssue.stateName);
 }
 
 function hasCompleteIssueContext(issue: IssueMetadata): boolean {
