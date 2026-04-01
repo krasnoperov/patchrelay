@@ -10,6 +10,7 @@ import {
 } from "../src/cli/watch/watch-state.ts";
 import {
   buildTimelineFromRehydration,
+  type TimelineEntry,
   type TimelineRunInput,
 } from "../src/cli/watch/timeline-builder.ts";
 import { buildTimelineRows } from "../src/cli/watch/timeline-presentation.ts";
@@ -527,6 +528,112 @@ test("buildTimelineRows sorts compact rows deterministically when timestamps mat
   const rows = buildTimelineRows(timeline, "compact").filter((row) => row.kind === "run");
   assert.equal(rows[0]?.id, "run-1");
   assert.equal(rows[1]?.id, "run-2");
+});
+
+test("buildTimelineRows hides queue handoff chatter and collapses repeated applied rows", () => {
+  const timeline = buildTimelineFromRehydration(
+    [],
+    [
+      makeFeedEvent({
+        id: 1,
+        at: "2026-03-25T10:00:00.000Z",
+        kind: "stage",
+        status: "reconciled",
+        summary: "Reconciliation: awaiting_queue → awaiting_queue",
+      }),
+      makeFeedEvent({
+        id: 2,
+        at: "2026-03-25T10:00:01.000Z",
+        kind: "queue",
+        status: "queue_label_requested",
+        summary: "Queue hand-off requested via label \"queue\" on PR #101",
+      }),
+      makeFeedEvent({
+        id: 3,
+        at: "2026-03-25T10:00:02.000Z",
+        kind: "queue",
+        status: "queue_label_applied",
+        summary: "Queue label \"queue\" applied to PR #101",
+      }),
+      makeFeedEvent({
+        id: 4,
+        at: "2026-03-25T10:00:03.000Z",
+        kind: "queue",
+        status: "queue_label_requested",
+        summary: "Queue hand-off requested via label \"queue\" on PR #101",
+      }),
+      makeFeedEvent({
+        id: 5,
+        at: "2026-03-25T10:00:04.000Z",
+        kind: "queue",
+        status: "queue_label_applied",
+        summary: "Queue label \"queue\" applied to PR #101",
+      }),
+      makeFeedEvent({
+        id: 6,
+        at: "2026-03-25T10:00:05.000Z",
+        kind: "github",
+        status: "pr_merged",
+        summary: "GitHub: pr_merged on PR #101",
+      }),
+    ],
+    null,
+    null,
+  );
+
+  const rows = buildTimelineRows(timeline, "compact").filter((row) => row.kind === "feed");
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0]?.feed.status, "queue_label_applied");
+  assert.equal(rows[0]?.repeatCount, 2);
+  assert.equal(rows[0]?.at, "2026-03-25T10:00:04.000Z");
+  assert.equal(rows[1]?.feed.status, "pr_merged");
+});
+
+test("buildTimelineRows keeps verbose runs focused on meaningful items", () => {
+  const entries: TimelineEntry[] = [
+    {
+      id: "run-start-1",
+      at: "2026-03-25T10:00:00.000Z",
+      kind: "run-start",
+      runId: 1,
+      run: { runType: "implementation", status: "completed", startedAt: "2026-03-25T10:00:00.000Z", endedAt: "2026-03-25T10:05:00.000Z" },
+    },
+    {
+      id: "item-1",
+      at: "2026-03-25T10:00:10.000Z",
+      kind: "item",
+      runId: 1,
+      item: { id: "msg-1", type: "agentMessage", status: "completed", text: "First progress update." },
+    },
+    {
+      id: "item-2",
+      at: "2026-03-25T10:00:20.000Z",
+      kind: "item",
+      runId: 1,
+      item: { id: "msg-2", type: "agentMessage", status: "completed", text: "Final summary update." },
+    },
+    {
+      id: "item-3",
+      at: "2026-03-25T10:00:30.000Z",
+      kind: "item",
+      runId: 1,
+      item: { id: "cmd-1", type: "commandExecution", status: "completed", command: "npm test", exitCode: 0 },
+    },
+    {
+      id: "run-end-1",
+      at: "2026-03-25T10:05:00.000Z",
+      kind: "run-end",
+      runId: 1,
+      run: { runType: "implementation", status: "completed", startedAt: "2026-03-25T10:00:00.000Z", endedAt: "2026-03-25T10:05:00.000Z" },
+    },
+  ];
+
+  const rows = buildTimelineRows(entries, "verbose");
+  const runRow = rows.find((row) => row.kind === "run");
+  assert.ok(runRow && runRow.kind === "run");
+  assert.equal(runRow.items.length, 2);
+  assert.equal(runRow.items[0]?.item.id, "msg-2");
+  assert.equal(runRow.items[1]?.item.id, "cmd-1");
 });
 
 // ─── Feed Events ─────────────────────────────────────────────
