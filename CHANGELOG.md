@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.29.3](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.29.2...patchrelay-v0.29.3) (2026-04-01)
+
+
+### Bug Fixes
+
+* reduce timeline noise in watch ui ([2eb3fe9](https://github.com/krasnoperov/patchrelay/commit/2eb3fe9e82991839a2c61e4645a235a286e134a0))
+* reduce timeline noise in watch ui ([cfe311d](https://github.com/krasnoperov/patchrelay/commit/cfe311d33f5fb1ed768f8e8497311baedf0299a8))
+* skip pre-run freshen for queue_repair, don't throw on rebase conflict ([25faa88](https://github.com/krasnoperov/patchrelay/commit/25faa88c155a675dd2f85e18cc1251a05aba6296))
+
 ## [0.29.2](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.29.1...patchrelay-v0.29.2) (2026-04-01)
 
 
