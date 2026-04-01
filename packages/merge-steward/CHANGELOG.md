@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.5.2](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.5.1...merge-steward-v0.5.2) (2026-04-01)
+
+
+### Bug Fixes
+
+* prevent queued branch rollback ([43c63c8](https://github.com/krasnoperov/patchrelay/commit/43c63c85a3df525f3df15d507ada0da3dea9112c))
+* prevent queued branch rollback ([6052e9b](https://github.com/krasnoperov/patchrelay/commit/6052e9b1b71208982c9a69dbf73db14933d502b0))
+* stabilize dashboard and delegated issue recovery ([0b610f9](https://github.com/krasnoperov/patchrelay/commit/0b610f9360ffa105c624835ebc239e2688d50f00))
+* sync queued rebases to remote heads ([be5940c](https://github.com/krasnoperov/patchrelay/commit/be5940cf7369b9ad27503c89a63765cb2a12aef0))
+
 ## [0.5.1](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.5.0...merge-steward-v0.5.1) (2026-04-01)
 
 

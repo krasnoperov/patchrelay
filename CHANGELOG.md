@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.32.1](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.32.0...patchrelay-v0.32.1) (2026-04-01)
+
+
+### Bug Fixes
+
+* prevent queued branch rollback ([43c63c8](https://github.com/krasnoperov/patchrelay/commit/43c63c85a3df525f3df15d507ada0da3dea9112c))
+* prevent queued branch rollback ([6052e9b](https://github.com/krasnoperov/patchrelay/commit/6052e9b1b71208982c9a69dbf73db14933d502b0))
+* stabilize dashboard and delegated issue recovery ([0b610f9](https://github.com/krasnoperov/patchrelay/commit/0b610f9360ffa105c624835ebc239e2688d50f00))
+
 ## [0.32.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.31.0...patchrelay-v0.32.0) (2026-04-01)
 
 
