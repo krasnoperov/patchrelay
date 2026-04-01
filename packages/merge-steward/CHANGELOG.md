@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.4](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.5.3...merge-steward-v0.5.4) (2026-04-01)
+
+
+### Bug Fixes
+
+* refresh queued branches with merges ([3be7586](https://github.com/krasnoperov/patchrelay/commit/3be75861d63333eec67dbd338e55db1761cba891))
+* refresh queued branches with merges ([22d01f9](https://github.com/krasnoperov/patchrelay/commit/22d01f9bb47487f1fe7f5eadcce3142737f51d15))
+
 ## [0.5.3](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.5.2...merge-steward-v0.5.3) (2026-04-01)
 
 
