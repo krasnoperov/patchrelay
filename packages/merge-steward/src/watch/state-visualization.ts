@@ -18,12 +18,12 @@ const EXIT_STATES = ["evicted", "dequeued"] as const;
 
 const STATE_LABELS: Record<string, string> = {
   queued: "queued",
-  preparing_head: "preparing_head",
-  validating: "validating",
+  preparing_head: "preparing",
+  validating: "testing",
   merging: "merging",
   merged: "merged",
   evicted: "evicted",
-  dequeued: "dequeued",
+  dequeued: "removed",
 };
 
 function labelForState(state: string): string {

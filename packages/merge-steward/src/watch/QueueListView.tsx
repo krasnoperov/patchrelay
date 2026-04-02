@@ -30,15 +30,16 @@ function QueueRow({
   const isTerminal = TERMINAL_STATUSES.includes(entry.status);
 
   if (isTerminal) {
+    const icon = entry.status === "merged" ? "\u2713" : "\u2717";
+    const iconColor = entry.status === "merged" ? "green" : "red";
     return (
       <Box>
-        <Text dimColor>  </Text>
-        <Text color={entry.status === "merged" ? "green" : "red"}>
-          {entry.status === "merged" ? "\u2713" : "\u2717"}
-        </Text>
+        <Text dimColor> </Text>
         <Text dimColor>{` #${entry.prNumber}`}</Text>
         {entry.issueKey ? <Text dimColor>{` ${entry.issueKey}`}</Text> : null}
-        <Text dimColor>{`  ${humanStatus(entry.status)}  ${relativeTime(entry.updatedAt).padStart(4)}`}</Text>
+        <Text dimColor>{`  ${relativeTime(entry.updatedAt).padStart(4)}`}</Text>
+        <Text>{`  `}</Text>
+        <Text color={iconColor}>{`${icon} ${humanStatus(entry.status)}`}</Text>
       </Box>
     );
   }
