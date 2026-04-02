@@ -45,22 +45,30 @@ export function DetailView({
       <Box gap={2}>
         <Text bold>#{entry.prNumber}</Text>
         {entry.issueKey ? <Text>{entry.issueKey}</Text> : null}
-        <Text color={statusColor(entry.status)}>{humanStatus(entry.status)}</Text>
+        <Text color={statusColor(entry.status)}>{humanStatus(entry.status, entry)}</Text>
         <Text dimColor>pos {entry.position}</Text>
-        <Text dimColor>generation {entry.generation}</Text>
         <Text dimColor>retry {entry.retryAttempts}/{entry.maxRetries}</Text>
       </Box>
       <Text>{entry.branch}</Text>
       <Box gap={2}>
         <Text dimColor>head {shortSha(entry.headSha)}</Text>
         <Text dimColor>base {shortSha(entry.baseSha)}</Text>
-        {entry.issueKey && <Text dimColor>{entry.issueKey}</Text>}
       </Box>
+
+      {entry.specBranch && (
+        <Box gap={2}>
+          <Text dimColor>spec</Text>
+          <Text>{entry.specBranch}</Text>
+          <Text dimColor>{shortSha(entry.specSha)}</Text>
+          <Text dimColor>{"\u2190"}</Text>
+          <Text dimColor>{entry.specBasedOn ? `entry ${shortSha(entry.specBasedOn)}` : "main"}</Text>
+        </Box>
+      )}
 
       <Box gap={1} marginTop={1}>
         <Text dimColor>progress</Text>
         <Text>{progressBar(pipeline.current, pipeline.total, 12)}</Text>
-        <Text dimColor>{nextStepLabel(entry.status)}</Text>
+        <Text dimColor>{nextStepLabel(entry.status, entry)}</Text>
       </Box>
 
       {isHead && queueBlock && (

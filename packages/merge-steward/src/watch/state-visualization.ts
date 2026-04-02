@@ -130,17 +130,23 @@ export function buildExternalRepairObservations(
   if (entry.lastFailedBaseSha) {
     observations.push({
       tone: "warn",
-      text: `Waiting for ${entry.lastFailedBaseSha.slice(0, 7)} on base to change before retrying rebase.`,
+      text: `Retry-gated: conflict on base ${entry.lastFailedBaseSha.slice(0, 7)}. Waiting for base to advance before rebuilding spec.`,
     });
   } else if (entry.status === "validating") {
+    const specNote = entry.specBranch
+      ? `CI running on spec branch ${entry.specBranch}.`
+      : "Waiting on CI for the spec branch.";
+    const cascadeNote = entry.specBasedOn
+      ? " Will merge automatically when head clears (cascade)."
+      : "";
     observations.push({
       tone: "info",
-      text: "Waiting on validation CI for the refreshed head branch.",
+      text: `${specNote}${cascadeNote}`,
     });
   } else if (entry.status === "merging") {
     observations.push({
       tone: "info",
-      text: "Validation passed; steward is attempting the GitHub merge.",
+      text: "CI passed; pushing spec branch to main (fast-forward).",
     });
   }
 
