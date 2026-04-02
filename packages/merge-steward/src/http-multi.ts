@@ -196,6 +196,7 @@ export async function buildMultiRepoHttpServer(options: {
         if (body.issueKey !== undefined) params.issueKey = body.issueKey;
         if (body.priority !== undefined) params.priority = body.priority;
         const entry = inst.service.enqueue(params);
+        if (!entry) return reply.status(409).send({ ok: false, error: "Failed to enqueue PR" });
         return reply.status(201).send({ ok: true, entryId: entry.id });
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);

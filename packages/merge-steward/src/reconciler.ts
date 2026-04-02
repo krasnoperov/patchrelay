@@ -70,7 +70,7 @@ export async function reconcile(ctx: ReconcileContext): Promise<void> {
     if (await sanitizeEntry(ctx, entry)) continue;
 
     const isHead = i === 0;
-    const prevEntry = i > 0 ? ctx.store.getEntry(allActive[i - 1]!.id) : null;
+    const prevEntry = i > 0 ? ctx.store.getEntry(allActive[i - 1]!.id) ?? null : null;
     const phase = entry.status;
 
     try {
@@ -103,7 +103,7 @@ export async function reconcile(ctx: ReconcileContext): Promise<void> {
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       const wrapped = new Error(`[PR #${entry.prNumber} ${entry.id} phase=${phase}] ${msg}`);
-      if (error instanceof Error) wrapped.stack = error.stack;
+      if (error instanceof Error && error.stack) wrapped.stack = error.stack;
       throw wrapped;
     }
   }
