@@ -272,7 +272,7 @@ async function prepareEntry(
   ctx.store.transition(entry.id, "validating", {
     baseSha, ciRunId: runId, lastFailedBaseSha: null,
     specBranch: specName, specSha, specBasedOn: isHead ? null : prevEntry!.id,
-  }, `spec ${specName} ready, CI ${runId}`);
+  }, `spec ready, CI ${runId.slice(0, 12)}`);
 }
 
 function describeMainBroken(failingChecks: Array<{ name: string }>, pendingChecks: Array<{ name: string }>): string {
@@ -302,7 +302,7 @@ async function checkValidation(ctx: ReconcileContext, entry: QueueEntry, allActi
     const sha = entry.specSha ?? entry.headSha;
     const runId = await ctx.ci.triggerRun(branch, sha);
     emit(ctx, entry, "ci_triggered", { ciRunId: runId });
-    ctx.store.transition(entry.id, "validating", { ciRunId: runId }, `CI triggered: ${runId}`);
+    ctx.store.transition(entry.id, "validating", { ciRunId: runId }, `CI triggered: ${runId.slice(0, 12)}`);
     return;
   }
 
