@@ -67,6 +67,50 @@ describe("speculative cascade merge", () => {
     h.assertInvariants();
   });
 
+  it("failed head push invalidates downstream specs", async () => {
+    const h = await createHarness({ ciRule: () => "pass", speculativeDepth: 3 });
+    await h.enqueue(prA);
+    await h.enqueue(prB);
+    await h.enqueue(prC);
+
+    // Build phase: all three prepare and build spec branches.
+    await h.tick(); // promote
+    await h.tick(); // build specs, enter validating
+    await h.tick(); // CI passes. A→merging, B/C stay validating
+
+    assert.strictEqual(h.entries.find((e) => e.prNumber === 1)?.status, "merging");
+    assert.strictEqual(h.entries.find((e) => e.prNumber === 2)?.status, "validating");
+    assert.strictEqual(h.entries.find((e) => e.prNumber === 3)?.status, "validating");
+
+    // Make the push to main fail for A.
+    const originalPush = h.gitSim.push.bind(h.gitSim);
+    let pushFailed = false;
+    h.gitSim.push = async (branch?: string, force?: boolean, target?: string) => {
+      if (target === "main" && !pushFailed) {
+        pushFailed = true;
+        throw new Error("push rejected: non-fast-forward");
+      }
+      return originalPush(branch, force, target);
+    };
+
+    // Tick 4: A tries to push spec:main → fails. A re-prepares.
+    // B and C must be invalidated (their specs were based on A's old spec).
+    await h.tick();
+
+    assert.strictEqual(h.entries.find((e) => e.prNumber === 1)?.status, "preparing_head",
+      "A should re-prepare after push failure");
+    assert.strictEqual(h.entries.find((e) => e.prNumber === 2)?.status, "preparing_head",
+      "B should be invalidated (downstream of failed head)");
+    assert.strictEqual(h.entries.find((e) => e.prNumber === 3)?.status, "preparing_head",
+      "C should be invalidated (downstream of failed head)");
+
+    // Restore normal push — everything should eventually merge.
+    h.gitSim.push = originalPush;
+    await h.runUntilStable();
+    assert.deepStrictEqual(h.merged, [1, 2, 3]);
+    h.assertInvariants();
+  });
+
   it("spec chain is valid: B's spec is descendant of A's spec", async () => {
     const h = await createHarness({ ciRule: () => "pass", speculativeDepth: 3 });
     await h.enqueue(prA);

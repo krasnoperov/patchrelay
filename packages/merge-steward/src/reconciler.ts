@@ -405,6 +405,7 @@ async function mergeHead(ctx: ReconcileContext, entry: QueueEntry): Promise<void
     await ctx.git.push(entry.specBranch, false, ctx.baseBranch);
   } catch {
     emit(ctx, entry, "merge_rejected", { detail: "push to main failed" });
+    const allActive = ctx.store.listActive(ctx.repoId);
     if (isBudgetExhausted(entry)) {
       emit(ctx, entry, "budget_exhausted");
       await evictEntry(ctx, entry, "integration_conflict");
@@ -413,6 +414,9 @@ async function mergeHead(ctx: ReconcileContext, entry: QueueEntry): Promise<void
         retryAttempts: entry.retryAttempts + 1, ...CLEAN_CI, ...CLEAN_SPEC,
       }, `push failed, retry ${entry.retryAttempts + 1}/${entry.maxRetries}`);
     }
+    // Head is rebuilding — downstream specs are stale (they were built
+    // on the old head spec which will change after re-preparation).
+    await invalidateDownstream(ctx, allActive, 0);
     return;
   }
 

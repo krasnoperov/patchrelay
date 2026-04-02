@@ -32,12 +32,18 @@ export class MemoryStore implements QueueStore {
   }
 
   getEntryByPR(repoId: string, prNumber: number): QueueEntry | undefined {
+    // Return the lowest-position (oldest) non-terminal entry for this PR.
+    // Deterministic ordering ensures sanitizeEntry always keeps the
+    // canonical entry and dequeues the stale duplicate.
+    let best: QueueEntry | undefined;
     for (const e of this.entries.values()) {
       if (e.repoId === repoId && e.prNumber === prNumber && !TERMINAL_STATUSES.includes(e.status)) {
-        return { ...e };
+        if (!best || e.position < best.position) {
+          best = e;
+        }
       }
     }
-    return undefined;
+    return best ? { ...best } : undefined;
   }
 
   listActive(repoId: string): QueueEntry[] {
