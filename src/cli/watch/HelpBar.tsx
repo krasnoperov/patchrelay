@@ -11,13 +11,13 @@ export function HelpBar({ view, follow, detailTab }: HelpBarProps): React.JSX.El
   let text: string;
   if (view === "detail") {
     const tabHint = detailTab === "history" ? "t: timeline" : "h: history";
-    text = [tabHint, "Esc: list", `f: follow ${follow ? "on" : "off"}`, "p: prompt", "s: stop", "r: retry", "q: quit"]
+    text = [tabHint, "Esc: back", `f: follow ${follow ? "on" : "off"}`, "p: prompt", "s: stop", "r: retry"]
       .filter(Boolean)
       .join("  ");
   } else if (view === "feed") {
-    text = "Esc: list  q: quit";
+    text = "Esc: back";
   } else {
-    text = "Enter: detail  F: feed  Tab: filter  q: quit";
+    text = "Enter: detail  F: feed  Tab: filter";
   }
   return (
     <Box>
