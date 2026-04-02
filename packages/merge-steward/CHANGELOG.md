@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.6.0](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.5.6...merge-steward-v0.6.0) (2026-04-02)
+
+
+### Features
+
+* **merge-steward:** speculative-only mode — push spec branches to main ([4e81eff](https://github.com/krasnoperov/patchrelay/commit/4e81efffe3d6dfc1cbe3041778dd99cd7f08e24c))
+
+
+### Bug Fixes
+
+* **merge-steward:** add queue sanitation, error context, and duplicate handling ([d4e0e7a](https://github.com/krasnoperov/patchrelay/commit/d4e0e7a180fe589c749fb63586e4ef824d1601f5))
+* **merge-steward:** fix strict typecheck errors ([746c575](https://github.com/krasnoperov/patchrelay/commit/746c5750a3e40d769a3ad02ad2db8046a9436d44))
+* **merge-steward:** invalidate downstream on push failure, fix duplicate ordering ([60ed31f](https://github.com/krasnoperov/patchrelay/commit/60ed31f238b3498c642b0057aa5e4c2bdf88fa8e))
+* steward queue sanitation and speculative-only merge ([064cf97](https://github.com/krasnoperov/patchrelay/commit/064cf973c6be5538eff02e51c7805c264dfac964))
+
 ## [0.5.6](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.5.5...merge-steward-v0.5.6) (2026-04-01)
 
 
