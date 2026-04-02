@@ -83,15 +83,14 @@ test("merge-steward observations explain queue position for non-head entries", (
     queueBlock: null,
   });
 
-  assert.match(observations[0]?.text ?? "", /Waiting behind current head #40/);
+  assert.match(observations[0]?.text ?? "", /Position 2 of 4/);
 });
 
-test("merge-steward observations explain eviction and external repair expectation", () => {
+test("merge-steward observations explain eviction and repair expectation", () => {
   const detail = makeDetail({
     entry: {
       ...makeDetail().entry,
       status: "evicted",
-      generation: 2,
       lastFailedBaseSha: "deadbeef1234",
     },
     incidents: [{
@@ -119,10 +118,9 @@ test("merge-steward observations explain eviction and external repair expectatio
     queueBlock: null,
   });
 
-  assert.match(observations[0]?.text ?? "", /external branch repair is expected/i);
+  assert.match(observations[0]?.text ?? "", /needs repair/i);
   assert.match(observations[1]?.text ?? "", /integration_conflict/);
-  assert.match(observations[2]?.text ?? "", /deadbee/);
-  assert.match(observations[3]?.text ?? "", /Observed 2 branch head updates/);
+  assert.match(observations[2]?.text ?? "", /Conflicts with main/);
 });
 
 test("merge-steward observations explain when the head is blocked by unhealthy main", () => {
@@ -150,6 +148,6 @@ test("merge-steward observations explain when the head is blocked by unhealthy m
     },
   });
 
-  assert.match(observations[0]?.text ?? "", /paused because main is unhealthy/i);
+  assert.match(observations[0]?.text ?? "", /main CI is failing/i);
   assert.match(observations[0]?.text ?? "", /Tests/);
 });

@@ -234,7 +234,7 @@ function buildPrimaryBlocker(issue: WatchIssue): StatusChip | null {
   }
   if (issue.factoryState === "repairing_queue") {
     return {
-      text: "Merge queue reported a branch refresh failure",
+      text: "Merge queue conflict, repairing branch",
       color: "yellow",
     };
   }

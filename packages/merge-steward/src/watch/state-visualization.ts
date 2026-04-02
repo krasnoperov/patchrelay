@@ -81,80 +81,55 @@ export function buildExternalRepairObservations(
   const { entry, incidents } = detail;
   const observations: ObservationLine[] = [];
 
+  // What is this entry doing right now?
   if (entry.status === "merged") {
-    observations.push({
-      tone: "success",
-      text: "Merged by steward; no further queue action is required for this entry.",
-    });
+    observations.push({ tone: "success", text: "Landed on main." });
   } else if (entry.status === "dequeued") {
-    observations.push({
-      tone: "info",
-      text: "Removed from the queue without merge; steward will not advance this entry further.",
-    });
+    observations.push({ tone: "info", text: "Removed from queue." });
   } else if (entry.status === "evicted") {
-    observations.push({
-      tone: "warn",
-      text: "Evicted after steward retries; external branch repair is expected before any later re-admission.",
-    });
+    observations.push({ tone: "warn", text: "Removed after failed retries. Branch needs repair before re-admission." });
   } else if (options.isHead && options.queueBlock?.reason === "main_broken") {
     const failingNames = options.queueBlock.failingChecks.map((check) => check.name);
     observations.push({
       tone: "warn",
-      text: `Head-of-line entry is paused because ${options.queueBlock.baseBranch} is unhealthy${failingNames.length > 0 ? ` (${failingNames.join(", ")})` : ""}.`,
+      text: `Queue paused: ${options.queueBlock.baseBranch} CI is failing${failingNames.length > 0 ? ` (${failingNames.join(", ")})` : ""}. Will resume when main is green.`,
     });
   } else if (options.isHead) {
-    observations.push({
-      tone: "info",
-      text: "Head-of-line entry; steward can advance this PR on the next reconcile tick.",
-    });
+    observations.push({ tone: "info", text: "First in queue. Will advance on the next tick." });
   } else if (options.activeIndex !== null && options.headPrNumber !== null) {
     observations.push({
       tone: "info",
-      text: `Waiting behind current head #${options.headPrNumber} as active entry ${options.activeIndex} of ${options.activeCount}.`,
+      text: `Position ${options.activeIndex} of ${options.activeCount}. Being tested together with PRs ahead.`,
     });
   } else {
-    observations.push({
-      tone: "info",
-      text: "Queued for serial processing by the steward.",
-    });
+    observations.push({ tone: "info", text: "Waiting in queue." });
   }
 
+  // What went wrong last time?
   const latestIncident = incidents[incidents.length - 1];
   if (latestIncident) {
     observations.push({
       tone: latestIncident.outcome === "open" ? "warn" : "info",
-      text: `Latest failure class: ${latestIncident.failureClass} (${latestIncident.outcome}).`,
+      text: `Last failure: ${latestIncident.failureClass} (${latestIncident.outcome}).`,
     });
   }
 
+  // What is blocking progress?
   if (entry.lastFailedBaseSha) {
     observations.push({
       tone: "warn",
-      text: `Retry-gated: conflict on base ${entry.lastFailedBaseSha.slice(0, 7)}. Waiting for base to advance before rebuilding spec.`,
+      text: "Conflicts with main. Will retry automatically when another PR merges and main advances.",
     });
   } else if (entry.status === "validating") {
-    const specNote = entry.specBranch
-      ? `CI running on spec branch ${entry.specBranch}.`
-      : "Waiting on CI for the spec branch.";
     const cascadeNote = entry.specBasedOn
-      ? " Will merge automatically when head clears (cascade)."
+      ? " Tests pass → merges automatically when PRs ahead finish."
       : "";
     observations.push({
       tone: "info",
-      text: `${specNote}${cascadeNote}`,
+      text: `CI running on combined changes.${cascadeNote}`,
     });
   } else if (entry.status === "merging") {
-    observations.push({
-      tone: "info",
-      text: "CI passed; pushing spec branch to main (fast-forward).",
-    });
-  }
-
-  if (entry.generation > 0) {
-    observations.push({
-      tone: "info",
-      text: `Observed ${entry.generation} branch head update${entry.generation === 1 ? "" : "s"} since first admission.`,
-    });
+    observations.push({ tone: "info", text: "CI passed. Landing on main." });
   }
 
   return observations.slice(0, 4);

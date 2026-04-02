@@ -42,20 +42,20 @@ export function statusColor(status: QueueEntryStatus): "yellow" | "cyan" | "gree
 export function humanStatus(status: QueueEntryStatus, entry?: { lastFailedBaseSha: string | null; specBranch: string | null }): string {
   switch (status) {
     case "queued":
-      return "queued";
+      return "waiting in queue";
     case "preparing_head":
-      if (entry?.lastFailedBaseSha) return "retry-gated";
-      return "building spec";
+      if (entry?.lastFailedBaseSha) return "has conflicts";
+      return "preparing";
     case "validating":
-      return "running CI";
+      return "testing";
     case "merging":
-      return "merging to main";
+      return "merging";
     case "merged":
       return "merged";
     case "evicted":
-      return "removed from queue";
+      return "needs repair";
     case "dequeued":
-      return "dequeued";
+      return "removed";
   }
 }
 
@@ -78,20 +78,22 @@ export function queueProgress(status: QueueEntryStatus): { current: number; tota
 export function nextStepLabel(status: QueueEntryStatus, entry?: { lastFailedBaseSha: string | null; specBasedOn: string | null }): string {
   switch (status) {
     case "queued":
-      return "waiting for head-of-line turn";
+      return "waiting for PRs ahead to finish";
     case "preparing_head":
-      if (entry?.lastFailedBaseSha) return "waiting for base to advance";
-      return "building cumulative spec branch";
+      if (entry?.lastFailedBaseSha) return "conflicts with main, will retry when queue advances";
+      return "building test branch with changes ahead";
     case "validating":
-      return "waiting for CI on spec branch";
+      return entry?.specBasedOn
+        ? "CI running, tested together with PRs ahead"
+        : "CI running on combined changes";
     case "merging":
-      return "pushing spec to main";
+      return "landing on main";
     case "merged":
       return "landed on main";
     case "evicted":
-      return "needs external repair";
+      return "needs branch repair before re-admission";
     case "dequeued":
-      return "removed manually";
+      return "removed from queue";
   }
 }
 
