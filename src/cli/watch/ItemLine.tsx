@@ -31,19 +31,35 @@ function itemPrefix(item: TimelineItemPayload): string {
   return "";
 }
 
+function formatItemDuration(ms: number | undefined | null): string {
+  if (ms === undefined || ms === null) return "";
+  const seconds = Math.floor(ms / 1000);
+  if (seconds < 1) return "";
+  if (seconds < 60) return `  ${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  return `  ${minutes}m`;
+}
+
 function itemText(item: TimelineItemPayload): string | undefined {
   switch (item.type) {
     case "agentMessage":
     case "plan":
     case "reasoning":
       return summarizeText(item);
-    case "commandExecution":
-      return cleanCommand(item.command ?? "?");
+    case "commandExecution": {
+      const cmd = cleanCommand(item.command ?? "?");
+      const exit = item.exitCode !== undefined && item.exitCode !== null && item.exitCode !== 0
+        ? `  exit ${item.exitCode}` : "";
+      const dur = formatItemDuration(item.durationMs);
+      return `${cmd}${exit}${dur}`;
+    }
     case "fileChange":
       return summarizeFileChange(item);
     case "mcpToolCall":
-    case "dynamicToolCall":
-      return summarizeToolCall(item);
+    case "dynamicToolCall": {
+      const dur = formatItemDuration(item.durationMs);
+      return `${summarizeToolCall(item)}${dur}`;
+    }
     case "userMessage":
       return `you: ${summarizeText(item)}`;
     default:

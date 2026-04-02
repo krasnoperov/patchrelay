@@ -89,6 +89,16 @@ function RunRow({
   const duration = run.endedAt ? formatDuration(run.startedAt, run.endedAt) : undefined;
   const showVerboseItems = mode === "verbose" && entry.items.length > 0;
 
+  // Item counts for metadata
+  const msgs = entry.items.filter((i) => i.item.type === "agentMessage").length;
+  const cmds = entry.items.filter((i) => i.item.type === "commandExecution").length;
+  const files = entry.items.filter((i) => i.item.type === "fileChange").length;
+  const tools = entry.items.filter((i) => i.item.type === "mcpToolCall" || i.item.type === "dynamicToolCall").length;
+  const meta: string[] = [];
+  if (msgs > 0) meta.push(`${msgs} msg`);
+  if (cmds > 0) meta.push(`${cmds} cmd`);
+  if (files > 0) meta.push(`${files} file`);
+  if (tools > 0) meta.push(`${tools} tool`);
   return (
     <Box flexDirection="column">
       <Box>
@@ -96,6 +106,7 @@ function RunRow({
         <Text bold color="yellow">{`  ${RUN_LABELS[run.runType] ?? run.runType}`}</Text>
         <Text bold color={color}>{`  ${run.status}`}</Text>
         {duration ? <Text dimColor>{`  ${duration}`}</Text> : null}
+        {meta.length > 0 ? <Text dimColor>{`  ${meta.join("  ")}`}</Text> : null}
       </Box>
       {entry.details.map((detail, index) => (
         <Box key={`${entry.id}-detail-${index}`} paddingLeft={4}>
