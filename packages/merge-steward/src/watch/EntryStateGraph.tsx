@@ -1,69 +1,35 @@
 import { Box, Text } from "ink";
-import type { VisualizationNode, VisualizationNodeStatus } from "./state-visualization.ts";
+import type { VisualizationNode } from "./state-visualization.ts";
 
 interface EntryStateGraphProps {
   main: VisualizationNode[];
   exits: VisualizationNode[];
 }
 
-function statusColor(status: VisualizationNodeStatus): string {
-  switch (status) {
-    case "current":
-      return "cyan";
-    case "visited":
-      return "green";
-    case "upcoming":
-      return "gray";
-  }
-}
+export function EntryStateGraph({ main, exits }: EntryStateGraphProps): React.JSX.Element {
+  const visibleExits = exits.filter((n) => n.status !== "upcoming");
 
-function statusPrefix(status: VisualizationNodeStatus): string {
-  switch (status) {
-    case "current":
-      return "*";
-    case "visited":
-      return "+";
-    case "upcoming":
-      return " ";
-  }
-}
-
-function NodePill({ node }: { node: VisualizationNode }): React.JSX.Element {
   return (
-    <Text color={statusColor(node.status)} bold={node.status === "current"}>
-      [{statusPrefix(node.status)} {node.label}]
-    </Text>
-  );
-}
-
-function NodeRow({
-  label,
-  nodes,
-  connector = " -> ",
-}: {
-  label: string;
-  nodes: VisualizationNode[];
-  connector?: string;
-}): React.JSX.Element {
-  return (
-    <Box>
-      <Text dimColor>{label.padEnd(8, " ")}</Text>
-      {nodes.map((node, index) => (
-        <Box key={node.state}>
-          {index > 0 && <Text dimColor>{connector}</Text>}
-          <NodePill node={node} />
+    <Box marginTop={1} gap={0}>
+      {main.map((node, i) => {
+        const dot = node.status === "upcoming" ? "\u25cb" : "\u25cf"; // ○ or ●
+        const color = node.status === "current" ? "cyan"
+          : node.status === "visited" ? "green"
+            : "gray";
+        return (
+          <Box key={node.state} gap={0}>
+            {i > 0 && <Text dimColor> \u2192 </Text>}
+            <Text color={color} bold={node.status === "current"}>{dot}</Text>
+            <Text color={color} bold={node.status === "current"}>{` ${node.label}`}</Text>
+          </Box>
+        );
+      })}
+      {visibleExits.map((node) => (
+        <Box key={node.state} gap={0}>
+          <Text dimColor>{"  "}</Text>
+          <Text color="red">{`\u25cf ${node.label}`}</Text>
         </Box>
       ))}
-    </Box>
-  );
-}
-
-export function EntryStateGraph({ main, exits }: EntryStateGraphProps): React.JSX.Element {
-  return (
-    <Box flexDirection="column" marginTop={1}>
-      <Text bold>Entry Graph</Text>
-      <NodeRow label="main" nodes={main} />
-      <NodeRow label="exits" nodes={exits} connector="   " />
     </Box>
   );
 }
