@@ -164,6 +164,16 @@ async function prepareEntry(
 
   const baseSha = await ctx.git.headSha(base);
 
+  // ── Branch mismatch gate (all entries) ─────────────────────────
+  // Detect external pushes to the PR branch. If webhooks missed
+  // a force-push, catch it here before building a spec from stale content.
+  const currentRef = await ctx.git.headSha(ref(ctx, entry.branch));
+  if (currentRef !== entry.headSha) {
+    emit(ctx, entry, "branch_mismatch", { detail: `expected ${entry.headSha.slice(0, 8)}, got ${currentRef.slice(0, 8)}` });
+    ctx.store.updateHead(entry.id, currentRef);
+    return;
+  }
+
   // ── Head-only gates ───────────────────────────────────────────
   if (isHead) {
     // Gate: main CI must be green.
@@ -186,14 +196,6 @@ async function prepareEntry(
         });
         return;
       }
-    }
-
-    // Gate: detect external pushes to the PR branch.
-    const currentRef = await ctx.git.headSha(ref(ctx, entry.branch));
-    if (currentRef !== entry.headSha) {
-      emit(ctx, entry, "branch_mismatch", { detail: `expected ${entry.headSha.slice(0, 8)}, got ${currentRef.slice(0, 8)}` });
-      ctx.store.updateHead(entry.id, currentRef);
-      return;
     }
 
     // Gate: budget exhausted after previous conflict.
@@ -363,10 +365,10 @@ async function mergeHead(ctx: ReconcileContext, entry: QueueEntry): Promise<void
   }
 
   if (!prStatus.reviewApproved) {
-    emit(ctx, entry, "merge_rejected", { detail: "approval withdrawn" });
-    const allActive = ctx.store.listActive(ctx.repoId);
-    await evictEntry(ctx, entry, "policy_blocked");
-    await invalidateDownstream(ctx, allActive, 0);
+    // Don't evict immediately — reviewer may re-approve after re-review.
+    // Stay in merging and re-check on the next tick. Operator can dequeue
+    // manually if the approval never comes back.
+    emit(ctx, entry, "merge_waiting_approval", { detail: "approval withdrawn, waiting for re-approval" });
     return;
   }
 

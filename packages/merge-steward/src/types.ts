@@ -219,6 +219,7 @@ export type ReconcileAction =
   | "invalidated"         // downstream entry reset due to base change
   | "retry_gated"         // non-spinning, waiting for base change
   | "budget_exhausted"
+  | "merge_waiting_approval" // approval withdrawn, waiting for re-approval
   | "sanitized_closed"    // entry terminalized: PR closed on GitHub
   | "sanitized_duplicate" // older duplicate entry superseded
   | "branch_unreachable"; // branch gone or git operation failed unexpectedly
