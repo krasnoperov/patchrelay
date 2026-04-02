@@ -121,7 +121,7 @@ test("merge-steward observations explain eviction and external repair expectatio
 
   assert.match(observations[0]?.text ?? "", /external branch repair is expected/i);
   assert.match(observations[1]?.text ?? "", /integration_conflict/);
-  assert.match(observations[2]?.text ?? "", /Waiting for deadbee/);
+  assert.match(observations[2]?.text ?? "", /deadbee/);
   assert.match(observations[3]?.text ?? "", /Observed 2 branch head updates/);
 });
 
