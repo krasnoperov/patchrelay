@@ -47,6 +47,16 @@ export function App({ baseUrl, initialPrNumber }: AppProps): React.JSX.Element {
     return filter === "active" ? entries.filter(isActiveEntry) : entries;
   }, [filter, snapshot?.entries]);
 
+  // Recently completed entries: terminal entries within the last 60 seconds.
+  const recentlyCompleted = useMemo(() => {
+    if (filter !== "active") return [];
+    const entries = snapshot?.entries ?? [];
+    const cutoff = Date.now() - 60_000;
+    return entries.filter(
+      (e) => !isActiveEntry(e) && new Date(e.updatedAt).getTime() > cutoff,
+    );
+  }, [filter, snapshot?.entries]);
+
   const selectedEntry = useMemo(
     () => visibleEntries.find((entry) => entry.id === selectedEntryId) ?? null,
     [selectedEntryId, visibleEntries],
@@ -231,6 +241,7 @@ export function App({ baseUrl, initialPrNumber }: AppProps): React.JSX.Element {
       {view === "list" ? (
         <QueueListView
           entries={visibleEntries}
+          recentlyCompleted={recentlyCompleted}
           selectedEntryId={selectedEntryId}
           recentEvents={snapshot?.recentEvents ?? []}
           headEntryId={snapshot?.summary.headEntryId ?? null}
