@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.5](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.8.4...merge-steward-v0.8.5) (2026-04-02)
+
+
+### Bug Fixes
+
+* **merge-steward:** --version flag and shorter hashes in watch ([7077a5b](https://github.com/krasnoperov/patchrelay/commit/7077a5b7bbf2acf75b6b1578442634bd73bd1d5e))
+* **merge-steward:** add --version flag, truncate long hashes in event display ([8585e24](https://github.com/krasnoperov/patchrelay/commit/8585e2419fa1c3ce4bbad94142ecf86878c6736b))
+
 ## [0.8.4](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.8.3...merge-steward-v0.8.4) (2026-04-02)
 
 
