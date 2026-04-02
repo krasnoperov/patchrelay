@@ -38,7 +38,7 @@ export class MergeStewardService {
     private readonly ci: CIRunner,
     private readonly github: GitHubPRApi,
     private readonly eviction: EvictionReporter,
-    private readonly specBuilder: import("./interfaces.ts").SpeculativeBranchBuilder | null,
+    private readonly specBuilder: import("./interfaces.ts").SpeculativeBranchBuilder,
     private readonly logger: Logger,
   ) {
     const existing = store.listAll(config.repoId);

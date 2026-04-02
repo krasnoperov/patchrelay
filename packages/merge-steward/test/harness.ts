@@ -68,16 +68,26 @@ export class Harness {
       }
     };
 
-    this.gitSim.onPush = (branch: string, sha: string) => {
-      for (const entry of this.store.listAll(this.repoId)) {
-        if (entry.branch === branch) {
-          this.githubSim.updateSha(entry.prNumber, sha);
+    this.gitSim.onPush = (branch: string, sha: string, targetBranch?: string) => {
+      if (targetBranch === this.baseBranch) {
+        // Push-to-main: mark any PR whose branch was merged via spec as merged.
+        // The spec branch contains the PR's commits, so the PR is effectively merged.
+        for (const entry of this.store.listAll(this.repoId)) {
+          if (entry.specBranch === branch) {
+            this.githubSim.markMergedByBranch(entry.branch);
+          }
+        }
+      } else {
+        // Regular push (spec branch to remote for CI) — sync SHA with GitHubSim.
+        for (const entry of this.store.listAll(this.repoId)) {
+          if (entry.branch === branch) {
+            this.githubSim.updateSha(entry.prNumber, sha);
+          }
         }
       }
     };
 
-    // When GitHub "merges" a PR, actually merge the branch into main
-    // in the git sim so subsequent rebases see the merged content.
+    // onMerge is still wired for external merge simulation via githubSim.mergePR().
     this.githubSim.onMerge = async (_prNumber: number, branch: string) => {
       await this.gitSim.merge(branch, this.baseBranch);
     };
@@ -251,7 +261,7 @@ export class Harness {
       ci: this.ciSim,
       github: this.githubSim,
       eviction: this.evictionSim,
-      specBuilder: this.speculativeDepth > 1 ? this.gitSim : null,
+      specBuilder: this.gitSim,
       speculativeDepth: this.speculativeDepth,
       flakyRetries: this.flakyRetries,
       onEvent: (event: ReconcileEvent) => {

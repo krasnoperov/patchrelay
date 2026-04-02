@@ -3,6 +3,9 @@
  *
  * queued → preparing_head → validating → merging → merged
  *
+ * Every entry builds a cumulative spec branch and runs CI on it.
+ * Head entry pushes its spec to main on merge (fast-forward).
+ *
  * Failure: any state → evicted (after retry budget exhausted).
  * Conflict retries are gated on base SHA change (non-spinning).
  *

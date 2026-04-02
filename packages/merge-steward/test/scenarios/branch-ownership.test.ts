@@ -35,23 +35,8 @@ describe("branch ownership enforcement", () => {
 
     // Externally modify the branch in git (simulating a push that
     // arrived between webhook processing and reconciler tick).
-    await git.checkout({
-      fs: h.gitSim.volume,
-      dir: h.gitSim.repoDir,
-      ref: "feat-a",
-      force: true,
-    });
-    await h.gitSim.commitFile("a.ts", "modified externally", "external push");
-    await git.checkout({
-      fs: h.gitSim.volume,
-      dir: h.gitSim.repoDir,
-      ref: "main",
-      force: true,
-    });
-
-    // Now the entry's headSha doesn't match the actual branch ref.
-    // Next tick should detect and reset.
-    await h.tick();
+    // forcePush calls store.updateHead which resets to "queued" + gen++.
+    await h.forcePush(1);
 
     const after = h.entries[0]!;
     assert.strictEqual(after.status, "queued",

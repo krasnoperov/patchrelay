@@ -9,7 +9,7 @@ export interface GitOperations {
   headSha(branch: string): Promise<string>;
   isAncestor(ancestor: string, descendant: string): Promise<boolean>;
   mergeBaseInto(branch: string, base: string): Promise<MergeResult>;
-  push(branch: string, force?: boolean): Promise<void>;
+  push(branch: string, force?: boolean, targetBranch?: string): Promise<void>;
 }
 
 /**
@@ -47,6 +47,8 @@ export interface GitHubPRApi {
   listLabels(prNumber: number): Promise<string[]>;
   /** Find the open PR number for a branch, or null if none exists. */
   findPRByBranch(branch: string): Promise<number | null>;
+  /** Delete the PR's head branch from the remote (best-effort cleanup). */
+  deleteBranch(prNumber: number): Promise<void>;
 }
 
 /**
