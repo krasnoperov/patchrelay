@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.35.1](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.35.0...patchrelay-v0.35.1) (2026-04-02)
+
+
+### Bug Fixes
+
+* batch findings — crash prevention, eviction detection, state graph ([9d6c5e3](https://github.com/krasnoperov/patchrelay/commit/9d6c5e39a2a03820b59963d7f727dd1e85e6c9ad))
+* crash prevention, eviction detection fallback, state graph dot notation ([e47b29d](https://github.com/krasnoperov/patchrelay/commit/e47b29d43425019ee1f30799171a97b2b3c5d673))
+
 ## [0.35.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.34.0...patchrelay-v0.35.0) (2026-04-02)
 
 
