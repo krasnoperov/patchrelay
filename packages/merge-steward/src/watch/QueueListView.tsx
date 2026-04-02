@@ -1,10 +1,12 @@
 import { useMemo } from "react";
 import { Box, Text, useStdout } from "ink";
 import type { QueueBlockState, QueueEntry, QueueEventSummary } from "../types.ts";
-import { formatEventSummary, humanStatus, nextStepLabel, progressBar, queueProgress, relativeTime, specChainLabel, statusColor, summarizeQueueBlock, truncate } from "./format.ts";
+import { ciStatusIcon, formatEventSummary, humanStatus, nextStepLabel, progressBar, queueProgress, relativeTime, specChainLabel, statusColor, summarizeQueueBlock, truncate } from "./format.ts";
+import { TERMINAL_STATUSES } from "../types.ts";
 
 interface QueueListViewProps {
   entries: QueueEntry[];
+  recentlyCompleted: QueueEntry[];
   selectedEntryId: string | null;
   recentEvents: QueueEventSummary[];
   headEntryId: string | null;
@@ -13,6 +15,7 @@ interface QueueListViewProps {
 
 const ENTRY_ROW_HEIGHT = 2;
 const CHROME_ROWS = 13;
+const RECENTLY_COMPLETED_MAX_AGE_MS = 60_000;
 
 function QueueRow({
   entry,
@@ -76,6 +79,7 @@ function QueueRow({
 
 export function QueueListView({
   entries,
+  recentlyCompleted,
   selectedEntryId,
   recentEvents,
   headEntryId,
@@ -85,12 +89,34 @@ export function QueueListView({
   const rows = stdout?.rows ?? 24;
   const cols = stdout?.columns ?? 100;
   const infoWidth = Math.max(32, cols - 4);
-  const eventRows = Math.min(8, Math.max(4, rows - (entries.length * ENTRY_ROW_HEIGHT) - CHROME_ROWS));
+  const totalRows = entries.length + recentlyCompleted.length;
+  const eventRows = Math.min(8, Math.max(4, rows - (totalRows * ENTRY_ROW_HEIGHT) - CHROME_ROWS));
   const displayedEvents = useMemo(() => recentEvents.slice(-eventRows), [eventRows, recentEvents]);
   const queueBlockLabel = summarizeQueueBlock(queueBlock);
 
+  // Spec chain: main ─ #A ✓ ─ #B ● ─ #C ○
+  const chainEntries = useMemo(() => {
+    const active = entries.filter((e) => !TERMINAL_STATUSES.includes(e.status));
+    return active.sort((a, b) => a.position - b.position);
+  }, [entries]);
+
   return (
     <Box flexDirection="column" marginTop={1}>
+      {chainEntries.length > 0 && (
+        <Box marginBottom={1} gap={0}>
+          <Text dimColor>main</Text>
+          {chainEntries.map((entry) => {
+            const ci = ciStatusIcon(entry);
+            return (
+              <Box key={entry.id} gap={0}>
+                <Text dimColor>{" \u2500 "}</Text>
+                <Text bold>#{entry.prNumber}</Text>
+                <Text color={ci.color}>{` ${ci.icon}`}</Text>
+              </Box>
+            );
+          })}
+        </Box>
+      )}
       {queueBlock && (
         <Box marginBottom={1} flexDirection="column">
           <Text color="yellow">
@@ -99,20 +125,39 @@ export function QueueListView({
           <Text dimColor>Head PR #{queueBlock.headPrNumber ?? "?"} will resume automatically once main recovers.</Text>
         </Box>
       )}
-      {entries.length === 0 ? (
+      {entries.length === 0 && recentlyCompleted.length === 0 ? (
         <Text dimColor>No queue entries in this filter.</Text>
       ) : (
-        entries.map((entry) => (
-          <QueueRow
-            key={entry.id}
-            entry={entry}
-            selected={entry.id === selectedEntryId}
-            infoWidth={infoWidth}
-            isHead={entry.id === headEntryId}
-            queueBlock={queueBlock}
-            allEntries={entries}
-          />
-        ))
+        <>
+          {entries.map((entry) => (
+            <QueueRow
+              key={entry.id}
+              entry={entry}
+              selected={entry.id === selectedEntryId}
+              infoWidth={infoWidth}
+              isHead={entry.id === headEntryId}
+              queueBlock={queueBlock}
+              allEntries={entries}
+            />
+          ))}
+          {recentlyCompleted.length > 0 && (
+            <>
+              {recentlyCompleted.map((entry) => (
+                <Box key={entry.id} flexDirection="column">
+                  <Box>
+                    <Text dimColor>  </Text>
+                    <Text color={entry.status === "merged" ? "green" : "red"}>
+                      {entry.status === "merged" ? "\u2713" : "\u2717"}
+                    </Text>
+                    <Text dimColor>{` #${entry.prNumber}`}</Text>
+                    {entry.issueKey ? <Text dimColor>{` ${entry.issueKey}`}</Text> : null}
+                    <Text dimColor>{`  ${humanStatus(entry.status, entry)}  ${relativeTime(entry.updatedAt)}`}</Text>
+                  </Box>
+                </Box>
+              ))}
+            </>
+          )}
+        </>
       )}
       <Box marginTop={1} flexDirection="column">
         <Text bold>Recent Events</Text>

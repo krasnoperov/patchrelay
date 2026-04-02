@@ -156,6 +156,23 @@ export function summarizeCheckNames(checks: CheckResult[], limit = 3): string {
   return `${names.slice(0, limit).join(", ")} +${names.length - limit} more`;
 }
 
+/** CI status icon for the spec chain summary line. */
+export function ciStatusIcon(entry: { status: QueueEntryStatus; ciRunId: string | null }): { icon: string; color: string } {
+  switch (entry.status) {
+    case "merged": return { icon: "\u2713", color: "green" };     // ✓
+    case "merging": return { icon: "\u2713", color: "cyan" };     // ✓
+    case "evicted": return { icon: "\u2717", color: "red" };      // ✗
+    case "dequeued": return { icon: "\u2012", color: "gray" };    // ‒
+    case "validating":
+      return entry.ciRunId ? { icon: "\u25cf", color: "cyan" } : { icon: "\u25cb", color: "gray" };  // ● or ○
+    case "preparing_head":
+      return { icon: "\u25cb", color: "yellow" };                  // ○
+    case "queued":
+    default:
+      return { icon: "\u25cb", color: "gray" };                    // ○
+  }
+}
+
 export function summarizeQueueBlock(block: QueueBlockState | null | undefined): string | null {
   if (!block) return null;
   const failing = block.failingChecks.length > 0 ? `failing ${summarizeCheckNames(block.failingChecks)}` : null;
