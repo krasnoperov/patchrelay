@@ -3,7 +3,7 @@ import { Box, Text, useStdout } from "ink";
 import type { QueueBlockState, QueueEntry, QueueEventSummary } from "../types.ts";
 import { TERMINAL_STATUSES } from "../types.ts";
 import { buildChainEntries } from "./display-filter.ts";
-import { ciStatusIcon, formatEventSummary, humanStatus, nextStepLabel, progressBar, queueProgress, relativeTime, specChainLabel, statusColor, summarizeQueueBlock, truncate } from "./format.ts";
+import { ciStatusIcon, formatEventSummary, humanStatus, nextStepLabel, relativeTime, statusColor, summarizeQueueBlock, truncate } from "./format.ts";
 
 interface QueueListViewProps {
   entries: QueueEntry[];
@@ -19,21 +19,16 @@ const CHROME_ROWS = 13;
 function QueueRow({
   entry,
   selected,
-  infoWidth,
   isHead,
   queueBlock,
-  allEntries,
 }: {
   entry: QueueEntry;
   selected: boolean;
-  infoWidth: number;
   isHead: boolean;
   queueBlock: QueueBlockState | null;
-  allEntries: QueueEntry[];
 }): React.JSX.Element {
   const isTerminal = TERMINAL_STATUSES.includes(entry.status);
 
-  // Terminal entries render as a single compact dimmed line.
   if (isTerminal) {
     return (
       <Box>
@@ -48,47 +43,27 @@ function QueueRow({
     );
   }
 
-  const retryText = `${entry.retryAttempts}/${entry.maxRetries}`;
-  const ciText = entry.ciRetries > 0 ? `CI retries ${entry.ciRetries}` : null;
   const blockedOnMain = isHead && queueBlock?.reason === "main_broken" && queueBlock.headPrNumber === entry.prNumber;
-  const renderedStatus = blockedOnMain ? "blocked by broken main" : humanStatus(entry.status, entry);
-  const renderedColor = blockedOnMain
-    ? "red"
+  const status = blockedOnMain ? "main CI failing" : humanStatus(entry.status, entry);
+  const color = blockedOnMain ? "red"
     : entry.status === "preparing_head" && entry.lastFailedBaseSha ? "yellow"
       : statusColor(entry.status);
-  const progress = queueProgress(entry.status);
-  const specLabel = entry.specBranch
-    ? specChainLabel(entry, allEntries)
-    : truncate(entry.branch, Math.max(12, infoWidth - 34));
   const nextStep = blockedOnMain
     ? summarizeQueueBlock(queueBlock) ?? "waiting for main to recover"
     : nextStepLabel(entry.status, entry);
 
+  // Only show retry counter when retries have actually happened.
+  const retryNote = entry.retryAttempts > 0 ? ` \u00b7 retry ${entry.retryAttempts}/${entry.maxRetries}` : "";
+
   return (
-    <Box flexDirection="column">
-      <Box>
-        <Text color={selected ? "cyan" : "gray"}>{selected ? "\u203a" : " "}</Text>
-        <Text color={blockedOnMain ? "red" : isHead ? "green" : "gray"}>{blockedOnMain ? "!" : isHead ? "#" : " "}</Text>
-        <Text bold>{` #${entry.prNumber}`}</Text>
-        {entry.issueKey ? <Text>{` ${entry.issueKey}`}</Text> : null}
-        <Text dimColor>{`  pos ${entry.position}`}</Text>
-        <Text dimColor>{`  ${relativeTime(entry.updatedAt)}`}</Text>
-        <Text>{`  `}</Text>
-        <Text color={renderedColor}>{renderedStatus}</Text>
-      </Box>
-      <Box paddingLeft={2} gap={1}>
-        <Text dimColor>{progressBar(progress.current, progress.total, 8)}</Text>
-        <Text dimColor>{specLabel}</Text>
-        <Text dimColor>|</Text>
-        <Text dimColor>{nextStep}</Text>
-        <Text dimColor>{` | retry ${retryText}`}</Text>
-        {ciText ? (
-          <>
-            <Text dimColor>|</Text>
-            <Text dimColor>{ciText}</Text>
-          </>
-        ) : null}
-      </Box>
+    <Box>
+      <Text color={selected ? "cyan" : "gray"}>{selected ? "\u25b8" : " "}</Text>
+      <Text color={isHead ? "green" : undefined} bold>{` #${entry.prNumber}`}</Text>
+      {entry.issueKey ? <Text>{` ${entry.issueKey}`}</Text> : null}
+      <Text dimColor>{`  ${relativeTime(entry.updatedAt)}`}</Text>
+      <Text>{`  `}</Text>
+      <Text color={color}>{status}</Text>
+      <Text dimColor>{` \u00b7 ${nextStep}${retryNote}`}</Text>
     </Box>
   );
 }
@@ -103,11 +78,8 @@ export function QueueListView({
 }: QueueListViewProps): React.JSX.Element {
   const { stdout } = useStdout();
   const rows = stdout?.rows ?? 24;
-  const cols = stdout?.columns ?? 100;
-  const infoWidth = Math.max(32, cols - 4);
-  // Terminal entries render as 1 row, active as 2.
-  const entryRows = entries.reduce((sum, e) => sum + (TERMINAL_STATUSES.includes(e.status) ? 1 : 2), 0);
-  const eventRows = Math.min(8, Math.max(4, rows - entryRows - CHROME_ROWS));
+  // All entries are 1 row now.
+  const eventRows = Math.min(8, Math.max(4, rows - entries.length - CHROME_ROWS));
   const displayedEvents = useMemo(() => recentEvents.slice(-eventRows), [eventRows, recentEvents]);
   const queueBlockLabel = summarizeQueueBlock(queueBlock);
 
@@ -148,10 +120,8 @@ export function QueueListView({
             key={entry.id}
             entry={entry}
             selected={entry.id === selectedEntryId}
-            infoWidth={infoWidth}
             isHead={entry.id === headEntryId}
             queueBlock={queueBlock}
-            allEntries={entries}
           />
         ))
       )}
