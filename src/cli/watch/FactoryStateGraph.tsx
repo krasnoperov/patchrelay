@@ -1,5 +1,5 @@
 import { Box, Text } from "ink";
-import type { VisualizationNode, VisualizationNodeStatus } from "./state-visualization.ts";
+import type { VisualizationNode } from "./state-visualization.ts";
 
 interface FactoryStateGraphProps {
   main: VisualizationNode[];
@@ -8,54 +8,42 @@ interface FactoryStateGraphProps {
   exits: VisualizationNode[];
 }
 
-function statusColor(status: VisualizationNodeStatus): string {
-  switch (status) {
-    case "current":
-      return "cyan";
-    case "visited":
-      return "green";
-    case "upcoming":
-      return "gray";
-  }
+const STATE_LABELS: Record<string, string> = {
+  delegated: "delegated",
+  implementing: "implementing",
+  pr_open: "PR open",
+  awaiting_queue: "merge queue",
+  done: "done",
+  changes_requested: "review fix",
+  repairing_ci: "CI repair",
+  repairing_queue: "queue repair",
+  awaiting_input: "needs input",
+  escalated: "escalated",
+  failed: "failed",
+};
+
+function displayLabel(state: string): string {
+  return STATE_LABELS[state] ?? state;
 }
 
-function statusPrefix(status: VisualizationNodeStatus): string {
-  switch (status) {
-    case "current":
-      return "*";
-    case "visited":
-      return "+";
-    case "upcoming":
-      return " ";
-  }
-}
-
-function NodePill({ node }: { node: VisualizationNode }): React.JSX.Element {
+function NodeRow({ nodes, connector }: { nodes: VisualizationNode[]; connector: string }): React.JSX.Element {
+  const visible = nodes.filter((n) => connector === " \u2192 " || n.status !== "upcoming");
+  if (visible.length === 0) return <></>;
   return (
-    <Text color={statusColor(node.status)} bold={node.status === "current"}>
-      [{statusPrefix(node.status)} {node.label}]
-    </Text>
-  );
-}
-
-function NodeRow({
-  label,
-  nodes,
-  connector = " -> ",
-}: {
-  label: string;
-  nodes: VisualizationNode[];
-  connector?: string;
-}): React.JSX.Element {
-  return (
-    <Box>
-      <Text dimColor>{label.padEnd(11, " ")}</Text>
-      {nodes.map((node, index) => (
-        <Box key={node.state}>
-          {index > 0 && <Text dimColor>{connector}</Text>}
-          <NodePill node={node} />
-        </Box>
-      ))}
+    <Box gap={0}>
+      {visible.map((node, i) => {
+        const dot = node.status === "upcoming" ? "\u25cb" : "\u25cf";
+        const color = node.status === "current" ? "cyan"
+          : node.status === "visited" ? "green"
+            : "gray";
+        return (
+          <Box key={node.state} gap={0}>
+            {i > 0 && <Text dimColor>{connector}</Text>}
+            <Text color={color} bold={node.status === "current"}>{dot}</Text>
+            <Text color={color} bold={node.status === "current"}>{` ${displayLabel(node.state)}`}</Text>
+          </Box>
+        );
+      })}
     </Box>
   );
 }
@@ -66,13 +54,21 @@ export function FactoryStateGraph({
   queueLoop,
   exits,
 }: FactoryStateGraphProps): React.JSX.Element {
+  const hasLoops = prLoops.some((n) => n.status !== "upcoming") || queueLoop.some((n) => n.status !== "upcoming");
+  const hasExits = exits.some((n) => n.status !== "upcoming");
   return (
     <Box flexDirection="column" marginTop={1}>
-      <Text bold>State Graph</Text>
-      <NodeRow label="main" nodes={main} />
-      <NodeRow label="pr loops" nodes={prLoops} connector="   " />
-      <NodeRow label="queue loop" nodes={queueLoop} connector="   " />
-      <NodeRow label="exits" nodes={exits} connector="   " />
+      <NodeRow nodes={main} connector=" \u2192 " />
+      {hasLoops && (
+        <Box gap={0} paddingLeft={2}>
+          <NodeRow nodes={[...prLoops, ...queueLoop]} connector="  " />
+        </Box>
+      )}
+      {hasExits && (
+        <Box gap={0} paddingLeft={2}>
+          <NodeRow nodes={exits} connector="  " />
+        </Box>
+      )}
     </Box>
   );
 }

@@ -785,15 +785,31 @@ export class RunOrchestrator {
     const hasQueueLabel = pr.labels?.some((l) => l.name === protocol.admissionLabel) ?? false;
     if (!hasQueueLabel) return;
 
-    // Conflict detected — dispatch preemptive queue repair.
-    if (pr.mergeStateStatus === "DIRTY" || pr.mergeable === "CONFLICTING") {
+    // Detect queue issues: either GitHub reports DIRTY, or the steward
+    // eviction check run failed (webhook may have been missed).
+    const isDirty = pr.mergeStateStatus === "DIRTY" || pr.mergeable === "CONFLICTING";
+    let hasEvictionCheckRun = false;
+    if (!isDirty) {
+      // Check for missed eviction webhook by looking for the steward's
+      // check run on the PR head.
+      try {
+        const { stdout: checksOut } = await execCommand("gh", [
+          "api", `repos/${project.github.repoFullName}/commits/${pr.headRefOid}/check-runs`,
+          "--jq", `.check_runs[] | select(.name == "${protocol.evictionCheckName}" and .conclusion == "failure") | .name`,
+        ], { timeoutMs: 10_000 });
+        hasEvictionCheckRun = checksOut.trim().length > 0;
+      } catch {
+        // Best-effort check.
+      }
+    }
+
+    if (isDirty || hasEvictionCheckRun) {
       const headRefOid = pr.headRefOid ?? "unknown";
-      // TODO: include baseSha in signature (headRefOid + baseSha) so that a
-      // main-only advance with the same PR head is recognized as a new conflict.
+      const reason = hasEvictionCheckRun ? "queue_eviction_missed" : "preemptive_conflict";
       const signature = `preemptive_queue_conflict:${headRefOid}`;
       const pendingRunContext: Record<string, unknown> = {
         source: "queue_health_monitor",
-        failureReason: "preemptive_conflict",
+        failureReason: reason,
         failureHeadSha: headRefOid,
         failureSignature: signature,
       };
@@ -813,8 +829,8 @@ export class RunOrchestrator {
         pendingRunContext,
       });
       this.logger.info(
-        { issueKey: issue.issueKey, prNumber: issue.prNumber, headRefOid },
-        "Queue health: merge conflict detected, dispatching preemptive repair",
+        { issueKey: issue.issueKey, prNumber: issue.prNumber, headRefOid, reason },
+        "Queue health: queue issue detected, dispatching repair",
       );
       this.feed?.publish({
         level: "warn",
@@ -822,8 +838,10 @@ export class RunOrchestrator {
         issueKey: issue.issueKey,
         projectId: issue.projectId,
         stage: "repairing_queue",
-        status: "queue_health_conflict_detected",
-        summary: `Queue health: merge conflict detected on PR #${issue.prNumber}, dispatching preemptive repair`,
+        status: hasEvictionCheckRun ? "queue_health_eviction_detected" : "queue_health_conflict_detected",
+        summary: hasEvictionCheckRun
+          ? `Queue health: missed eviction detected on PR #${issue.prNumber}, dispatching repair`
+          : `Queue health: merge conflict detected on PR #${issue.prNumber}, dispatching preemptive repair`,
       });
     }
   }

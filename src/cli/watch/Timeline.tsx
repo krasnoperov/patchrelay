@@ -17,12 +17,11 @@ export function Timeline({ entries, follow }: TimelineProps): React.JSX.Element 
   const maxActive = Math.max(ACTIVE_TAIL, rows - 12);
   const displayRows = useMemo(() => buildTimelineRows(entries), [entries]);
 
-  const splitIndex = useMemo(() => {
-    if (!follow) return 0;
-    return Math.max(0, displayRows.length - maxActive);
-  }, [displayRows.length, follow, maxActive]);
-
-  const finalized = displayRows.slice(0, splitIndex);
+  // Always cap the rendered entries to prevent OOM/WASM crashes.
+  // In follow mode: older entries go to Static (terminal scrollback).
+  // Without follow: show last maxActive entries only.
+  const splitIndex = Math.max(0, displayRows.length - maxActive);
+  const finalized = follow ? displayRows.slice(0, splitIndex) : [];
   const active = displayRows.slice(splitIndex);
 
   if (displayRows.length === 0) {
