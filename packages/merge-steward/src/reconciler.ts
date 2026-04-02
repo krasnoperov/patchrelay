@@ -207,7 +207,6 @@ async function prepareEntry(
 
     // Gate: non-spinning — skip if base hasn't changed since last conflict.
     if (isRetryGated(entry, baseSha)) {
-      emit(ctx, entry, "retry_gated", { baseSha, detail: "base unchanged since last conflict" });
       try {
         const prStatus = await ctx.github.getStatus(entry.prNumber);
         if (prStatus.mergeStateStatus === "DIRTY") {
@@ -216,9 +215,17 @@ async function prepareEntry(
             detail: "retry gated and GitHub still reports merge conflict",
           });
           await evictEntry(ctx, entry, "integration_conflict");
+          return;
         }
+        // GitHub says CLEAN but local clone conflicted — the conflict was
+        // likely transient (stale clone state). Clear the gate and retry.
+        emit(ctx, entry, "retry_gated", { baseSha, detail: "local conflict but GitHub reports CLEAN, retrying" });
+        ctx.store.transition(entry.id, "preparing_head", {
+          lastFailedBaseSha: null, ...CLEAN_CI, ...CLEAN_SPEC,
+        }, "GitHub reports CLEAN, clearing retry gate");
       } catch {
-        // Best-effort check.
+        // GitHub probe failed — hold the gate.
+        emit(ctx, entry, "retry_gated", { baseSha, detail: "base unchanged since last conflict" });
       }
       return;
     }

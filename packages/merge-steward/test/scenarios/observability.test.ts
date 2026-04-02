@@ -79,7 +79,6 @@ describe("observability: reconciler event stream", () => {
       (e) => e.prNumber === 2 && e.action === "retry_gated",
     );
     assert.ok(gatedEvents.length > 0, "should emit retry_gated when base unchanged");
-    assert.ok(gatedEvents[0]!.detail?.includes("base unchanged"), "detail should explain why");
 
     h.assertInvariants();
   });

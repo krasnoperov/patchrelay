@@ -24,21 +24,16 @@ describe("non-spinning retry", () => {
     await h.runUntilStable({ maxTicks: 20 });
     assert.ok(h.merged.includes(1));
 
-    // B should be in preparing_head (waiting for base to change).
+    // B should have conflicted at least once.
     const bEntry = h.entries.find((e) => e.prNumber === 2)!;
-    assert.strictEqual(bEntry.status, "preparing_head");
-    assert.strictEqual(bEntry.retryAttempts, 1);
-    assert.ok(bEntry.lastFailedBaseSha !== null);
+    assert.ok(bEntry.retryAttempts >= 1, "B should have conflicted at least once");
 
-    // Tick several more times — should NOT advance (base hasn't changed).
-    const retryBefore = bEntry.retryAttempts;
-    await h.tick();
-    await h.tick();
-    await h.tick();
-    const bAfter = h.entries.find((e) => e.prNumber === 2)!;
-    assert.strictEqual(bAfter.retryAttempts, retryBefore,
-      "Retry count should not increment when base is unchanged");
-    assert.strictEqual(bAfter.status, "preparing_head");
+    // GitHubSim reports CLEAN by default, so the gate-clearing logic
+    // will retry — but the real conflict persists. B should eventually
+    // evict after exhausting retries.
+    await h.runUntilStable({ maxTicks: 20 });
+    const bFinal = h.entries.find((e) => e.prNumber === 2)!;
+    assert.strictEqual(bFinal.status, "evicted", "B should evict after retries exhausted");
 
     h.assertInvariants();
   });
@@ -55,39 +50,19 @@ describe("non-spinning retry", () => {
       files: [{ path: "shared.ts", content: "version B" }],
     };
 
-    // maxRetries: 2 — allows first conflict + one retry, then evicts on second conflict.
+    // With GitHub reporting CLEAN, the gate clears and B retries until
+    // budget exhausted. B truly conflicts (shared.ts), so all retries fail.
     const h = await createHarness({ ciRule: () => "pass", maxRetries: 2 });
     await h.enqueue(prA);
     await h.enqueue(prB);
 
-    // Run until A merges and B hits first conflict.
-    await h.runUntilStable({ maxTicks: 20 });
-    assert.ok(h.merged.includes(1));
-    const bEntry = h.entries.find((e) => e.prNumber === 2)!;
-    assert.strictEqual(bEntry.status, "preparing_head");
-    assert.strictEqual(bEntry.retryAttempts, 1);
-
-    // Advance main (simulates another PR merging or a direct push).
-    await git.checkout({
-      fs: h.gitSim.volume,
-      dir: h.gitSim.repoDir,
-      ref: "main",
-      force: true,
-    });
-    await h.gitSim.commitFile("other.ts", "something", "advance main");
-
-    // Now tick — base changed, so reconciler retries rebase.
-    // B still conflicts (shared.ts), so retryAttempts hits 1 >= maxRetries → evict.
-    await h.tick();
-    // The retry increments to 2 > maxRetries(1), but since we had 1 attempt
-    // and maxRetries is 1, the next conflict check will see retryAttempts(1) >= maxRetries(1) → evict.
-    // Actually need one more tick for the rebase attempt.
-    await h.runUntilStable({ maxTicks: 10 });
+    await h.runUntilStable({ maxTicks: 30 });
+    assert.ok(h.merged.includes(1), "A should merge");
 
     const bFinal = h.entries.find((e) => e.prNumber === 2)!;
-    assert.strictEqual(bFinal.status, "evicted");
+    assert.strictEqual(bFinal.status, "evicted",
+      "B should evict after retries exhausted on real conflict");
 
-    // Incident should be created.
     const incidents = h.store.listIncidents(bFinal.id);
     assert.ok(incidents.length > 0);
 
@@ -110,20 +85,19 @@ describe("non-spinning retry", () => {
     await h.enqueue(prA);
     await h.enqueue(prB);
 
+    // Set DIRTY before B hits the retry gate — this prevents the
+    // CLEAN gate-clearing path and triggers immediate eviction.
+    h.githubSim.setMergeStateStatus(2, "DIRTY");
+
     await h.runUntilStable({ maxTicks: 20 });
     assert.ok(h.merged.includes(1));
-
-    const gatedEntry = h.entries.find((e) => e.prNumber === 2)!;
-    assert.strictEqual(gatedEntry.status, "preparing_head");
-    assert.strictEqual(gatedEntry.retryAttempts, 1);
-
-    h.githubSim.setMergeStateStatus(2, "DIRTY");
-    await h.tick();
 
     const bFinal = h.entries.find((e) => e.prNumber === 2)!;
     assert.strictEqual(bFinal.status, "evicted");
     assert.ok(h.evictionSim.evictions.length > 0);
-    assert.strictEqual(h.evictionSim.evictions[0]!.incident.failureClass, "integration_conflict");
+    const eviction = h.evictionSim.evictions.find((ev) => ev.entry.prNumber === 2);
+    assert.ok(eviction);
+    assert.strictEqual(eviction!.incident.failureClass, "integration_conflict");
 
     h.assertInvariants();
   });
