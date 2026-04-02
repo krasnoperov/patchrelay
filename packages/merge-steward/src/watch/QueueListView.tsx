@@ -96,19 +96,23 @@ export function QueueListView({
 
   // Spec chain: main ─ #A ✓ ─ #B ● ─ #C ○
   // Includes recently completed entries so the cascade stays visible.
+  // Deduplicates by prNumber (not entry ID) so re-admitted PRs don't
+  // appear twice — the active entry wins over the terminal one.
   const chainEntries = useMemo(() => {
-    const seen = new Set<string>();
+    const seenPR = new Set<number>();
     const all: QueueEntry[] = [];
+    // Active entries take priority.
     for (const e of entries) {
-      if (!TERMINAL_STATUSES.includes(e.status) && !seen.has(e.id)) {
+      if (!TERMINAL_STATUSES.includes(e.status) && !seenPR.has(e.prNumber)) {
         all.push(e);
-        seen.add(e.id);
+        seenPR.add(e.prNumber);
       }
     }
+    // Recently completed fill in — only if no active entry for that PR.
     for (const e of recentlyCompleted) {
-      if (!seen.has(e.id)) {
+      if (!seenPR.has(e.prNumber)) {
         all.push(e);
-        seen.add(e.id);
+        seenPR.add(e.prNumber);
       }
     }
     return all.sort((a, b) => a.position - b.position);
