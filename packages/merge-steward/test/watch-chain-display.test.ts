@@ -28,6 +28,25 @@ function makeEntry(overrides: Partial<QueueEntry> & { prNumber: number; position
   };
 }
 
+/** Mirror the chain-building logic from QueueListView. */
+function buildChain(entries: QueueEntry[], recentlyCompleted: QueueEntry[]): QueueEntry[] {
+  const seenPR = new Set<number>();
+  const all: QueueEntry[] = [];
+  for (const e of entries) {
+    if (!TERMINAL_STATUSES.includes(e.status) && !seenPR.has(e.prNumber)) {
+      all.push(e);
+      seenPR.add(e.prNumber);
+    }
+  }
+  for (const e of recentlyCompleted) {
+    if (!seenPR.has(e.prNumber)) {
+      all.push(e);
+      seenPR.add(e.prNumber);
+    }
+  }
+  return all.sort((a, b) => a.position - b.position);
+}
+
 // ─── Spec chain includes recently-completed entries ─────────────
 
 test("chain includes active + recently merged entries sorted by position", () => {
@@ -35,30 +54,36 @@ test("chain includes active + recently merged entries sorted by position", () =>
   const active1 = makeEntry({ prNumber: 2, position: 2, status: "validating", ciRunId: "ci-2" });
   const active2 = makeEntry({ prNumber: 3, position: 3, status: "queued" });
 
-  // Simulate what QueueListView does: build chain from active + recentlyCompleted
-  const entries = [active1, active2]; // "active" filtered
-  const recentlyCompleted = [merged]; // terminal but recent
-
-  const seen = new Set<string>();
-  const all: QueueEntry[] = [];
-  for (const e of entries) {
-    if (!TERMINAL_STATUSES.includes(e.status) && !seen.has(e.id)) {
-      all.push(e);
-      seen.add(e.id);
-    }
-  }
-  for (const e of recentlyCompleted) {
-    if (!seen.has(e.id)) {
-      all.push(e);
-      seen.add(e.id);
-    }
-  }
-  const chain = all.sort((a, b) => a.position - b.position);
+  const chain = buildChain([active1, active2], [merged]);
 
   assert.strictEqual(chain.length, 3, "chain should include merged + 2 active");
   assert.strictEqual(chain[0]!.prNumber, 1, "merged entry first by position");
   assert.strictEqual(chain[1]!.prNumber, 2);
   assert.strictEqual(chain[2]!.prNumber, 3);
+});
+
+test("chain deduplicates by prNumber: re-admitted PR shows active entry, not terminal", () => {
+  // PR #1 was evicted (terminal), then re-admitted with a new entry ID
+  const evictedOld = makeEntry({
+    prNumber: 1, position: 1, status: "evicted",
+    id: "qe-old-1" as string,
+    updatedAt: new Date().toISOString(),
+  });
+  const reAdmittedNew = makeEntry({
+    prNumber: 1, position: 4, status: "validating",
+    id: "qe-new-1" as string,
+    ciRunId: "ci-new",
+  });
+  const active2 = makeEntry({ prNumber: 2, position: 2, status: "validating", ciRunId: "ci-2" });
+
+  const chain = buildChain([reAdmittedNew, active2], [evictedOld]);
+
+  // Should have 2 entries, not 3 — the old evicted #1 is superseded by re-admitted #1
+  assert.strictEqual(chain.length, 2, "no duplicate PR in chain");
+  const pr1 = chain.find((e) => e.prNumber === 1);
+  assert.ok(pr1, "PR #1 should be in chain");
+  assert.strictEqual(pr1!.id, "qe-new-1", "active re-admitted entry wins over terminal");
+  assert.strictEqual(pr1!.status, "validating", "should show active status, not evicted");
 });
 
 // ─── Recently-completed filter ages out ─────────────────────────
