@@ -323,8 +323,8 @@ export class MergeStewardService {
         eviction: this.eviction,
         flakyRetries: this.config.flakyRetries,
         onEvent: (event) => {
-          const isWarn = event.action === "evicted" || event.action === "rebase_conflict"
-            || event.action === "spec_build_conflict" || event.action === "ci_failed"
+          const isWarn = event.action === "evicted" || event.action === "spec_build_conflict"
+            || event.action === "ci_failed"
             || event.action === "merge_rejected" || event.action === "budget_exhausted";
           const isDebug = event.action === "ci_pending" || event.action === "retry_gated"
             || event.action === "fetch_started";

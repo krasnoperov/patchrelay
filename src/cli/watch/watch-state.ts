@@ -10,13 +10,11 @@ import {
   completeCodexItemInTimeline,
   appendDeltaToTimelineItem,
 } from "./timeline-builder.ts";
-import type { TimelineMode } from "./timeline-presentation.ts";
 import type { CodexThreadSummary } from "../../types.ts";
 
 // Re-export for consumers
 export type { TimelineEntry, TimelineItemPayload, TimelineRunInput } from "./timeline-builder.ts";
 export type { OperatorFeedEvent } from "../../operator-feed.ts";
-export type { TimelineMode } from "./timeline-presentation.ts";
 
 // ─── Issue (list view) ────────────────────────────────────────────
 
@@ -106,7 +104,6 @@ export interface WatchState {
   follow: boolean;
   // Detail view state
   detailTab: DetailTab;
-  timelineMode: TimelineMode;
   timeline: TimelineEntry[];
   rawRuns: TimelineRunInput[];
   rawFeedEvents: OperatorFeedEvent[];
@@ -153,7 +150,6 @@ function capArray<T>(arr: T[], max: number): T[] {
 
 const DETAIL_INITIAL = {
   detailTab: "timeline" as DetailTab,
-  timelineMode: "compact" as TimelineMode,
   timeline: [] as TimelineEntry[],
   rawRuns: [] as TimelineRunInput[],
   rawFeedEvents: [] as OperatorFeedEvent[],
@@ -318,8 +314,8 @@ export function watchReducer(state: WatchState, action: WatchAction): WatchState
     case "switch-detail-tab":
       return { ...state, detailTab: action.tab };
 
-    case "toggle-timeline-mode":
-      return { ...state, timelineMode: state.timelineMode === "compact" ? "verbose" : "compact" };
+    default:
+      return state;
   }
 }
 

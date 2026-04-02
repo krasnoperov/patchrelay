@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Box, Text, useApp, useInput } from "ink";
 import type { QueueEntry, QueueEntryDetail, QueueWatchSnapshot } from "../types.ts";
+import { buildDisplayEntries } from "./display-filter.ts";
 import { dequeueEntry, fetchEntryDetail, fetchSnapshot, triggerReconcile } from "./api.ts";
 import { DetailView } from "./DetailView.tsx";
 import { HelpBar } from "./HelpBar.tsx";
@@ -42,20 +43,10 @@ export function App({ baseUrl, initialPrNumber }: AppProps): React.JSX.Element {
   const [filter, setFilter] = useState<WatchFilter>("active");
   const [flashMessage, setFlashMessage] = useState<string | null>(null);
 
-  const visibleEntries = useMemo(() => {
-    const entries = snapshot?.entries ?? [];
-    return filter === "active" ? entries.filter(isActiveEntry) : entries;
-  }, [filter, snapshot?.entries]);
-
-  // Recently completed entries: terminal entries within the last 60 seconds.
-  const recentlyCompleted = useMemo(() => {
-    if (filter !== "active") return [];
-    const entries = snapshot?.entries ?? [];
-    const cutoff = Date.now() - 60_000;
-    return entries.filter(
-      (e) => !isActiveEntry(e) && new Date(e.updatedAt).getTime() > cutoff,
-    );
-  }, [filter, snapshot?.entries]);
+  const visibleEntries = useMemo(
+    () => buildDisplayEntries(snapshot?.entries ?? [], filter),
+    [filter, snapshot?.entries],
+  );
 
   const selectedEntry = useMemo(
     () => visibleEntries.find((entry) => entry.id === selectedEntryId) ?? null,
@@ -241,7 +232,7 @@ export function App({ baseUrl, initialPrNumber }: AppProps): React.JSX.Element {
       {view === "list" ? (
         <QueueListView
           entries={visibleEntries}
-          recentlyCompleted={recentlyCompleted}
+          allEntries={snapshot?.entries ?? []}
           selectedEntryId={selectedEntryId}
           recentEvents={snapshot?.recentEvents ?? []}
           headEntryId={snapshot?.summary.headEntryId ?? null}

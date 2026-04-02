@@ -26,6 +26,7 @@ export interface TimelineRunPayload {
   status: string;
   startedAt: string;
   endedAt?: string | undefined;
+  threadId?: string | undefined;
 }
 
 export interface TimelineItemPayload {
@@ -83,7 +84,7 @@ export function buildTimelineFromRehydration(
       at: run.startedAt,
       kind: "run-start",
       runId: run.id,
-      run: { runType: run.runType, status: run.status, startedAt: run.startedAt, endedAt: run.endedAt },
+      run: { runType: run.runType, status: run.status, startedAt: run.startedAt, endedAt: run.endedAt, threadId: run.threadId },
     });
 
     if (run.endedAt) {
@@ -92,7 +93,7 @@ export function buildTimelineFromRehydration(
         at: run.endedAt,
         kind: "run-end",
         runId: run.id,
-        run: { runType: run.runType, status: run.status, startedAt: run.startedAt, endedAt: run.endedAt },
+        run: { runType: run.runType, status: run.status, startedAt: run.startedAt, endedAt: run.endedAt, threadId: run.threadId },
       });
     }
 

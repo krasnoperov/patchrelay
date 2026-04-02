@@ -8,7 +8,6 @@ export interface GitOperations {
   fetch(remote?: string): Promise<void>;
   headSha(branch: string): Promise<string>;
   isAncestor(ancestor: string, descendant: string): Promise<boolean>;
-  mergeBaseInto(branch: string, base: string): Promise<MergeResult>;
   push(branch: string, force?: boolean, targetBranch?: string): Promise<void>;
 }
 

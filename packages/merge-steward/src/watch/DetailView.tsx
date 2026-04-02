@@ -1,6 +1,6 @@
 import { Box, Text } from "ink";
 import type { QueueBlockState, QueueEntryDetail } from "../types.ts";
-import { formatEntryEvent, humanStatus, nextStepLabel, progressBar, queueProgress, relativeTime, shortSha, statusColor, summarizeQueueBlock } from "./format.ts";
+import { formatEntryEvent, humanStatus, nextStepLabel, relativeTime, shortSha, statusColor, summarizeQueueBlock } from "./format.ts";
 import { EntryStateGraph } from "./EntryStateGraph.tsx";
 import { ExternalRepairObservation } from "./ExternalRepairObservation.tsx";
 import { buildEntryStateGraph, buildExternalRepairObservations } from "./state-visualization.ts";
@@ -39,74 +39,63 @@ export function DetailView({
     headPrNumber,
     queueBlock,
   });
-  const pipeline = queueProgress(entry.status);
   return (
     <Box flexDirection="column" marginTop={1}>
+      {/* Header: PR, status, what's happening */}
       <Box gap={2}>
         <Text bold>#{entry.prNumber}</Text>
         {entry.issueKey ? <Text>{entry.issueKey}</Text> : null}
         <Text color={statusColor(entry.status)}>{humanStatus(entry.status, entry)}</Text>
-        <Text dimColor>pos {entry.position}</Text>
-        <Text dimColor>retry {entry.retryAttempts}/{entry.maxRetries}</Text>
+        <Text dimColor>\u00b7 {nextStepLabel(entry.status, entry)}</Text>
       </Box>
-      <Text>{entry.branch}</Text>
+
+      {/* Branch + git refs */}
       <Box gap={2}>
+        <Text dimColor>{entry.branch}</Text>
         <Text dimColor>head {shortSha(entry.headSha)}</Text>
         <Text dimColor>base {shortSha(entry.baseSha)}</Text>
       </Box>
 
+      {/* What CI is testing */}
       {entry.specBranch && (
         <Box gap={2}>
-          <Text dimColor>spec</Text>
+          <Text dimColor>tested as</Text>
           <Text>{entry.specBranch}</Text>
-          <Text dimColor>{shortSha(entry.specSha)}</Text>
-          <Text dimColor>{"\u2190"}</Text>
-          <Text dimColor>{entry.specBasedOn ? `entry ${shortSha(entry.specBasedOn)}` : "main"}</Text>
+          <Text dimColor>({shortSha(entry.specSha)} \u2190 {entry.specBasedOn ? "PR ahead" : "main"})</Text>
         </Box>
       )}
 
-      <Box gap={1} marginTop={1}>
-        <Text dimColor>progress</Text>
-        <Text>{progressBar(pipeline.current, pipeline.total, 12)}</Text>
-        <Text dimColor>{nextStepLabel(entry.status, entry)}</Text>
-      </Box>
+      {/* Retry count — only when retries happened */}
+      {entry.retryAttempts > 0 && (
+        <Text color="yellow">retry {entry.retryAttempts}/{entry.maxRetries}</Text>
+      )}
 
+      {/* Queue block warning */}
       {isHead && queueBlock && (
         <Box marginTop={1} flexDirection="column">
-          <Text color="yellow">Queue paused: {summarizeQueueBlock(queueBlock) ?? "main branch is unhealthy"}.</Text>
-          <Text dimColor>
-            {queueBlock.baseBranch}{queueBlock.baseSha ? ` @ ${shortSha(queueBlock.baseSha)}` : ""}
-          </Text>
-          <Text dimColor>Head PR #{queueBlock.headPrNumber ?? entry.prNumber} will resume automatically once main recovers.</Text>
-        </Box>
-      )}
-
-      {entry.maxRetries > 0 && (
-        <Box gap={1} marginTop={1}>
-          <Text dimColor>retry</Text>
-          <Text>{progressBar(entry.retryAttempts, entry.maxRetries, 10)}</Text>
-          <Text dimColor>{entry.retryAttempts}/{entry.maxRetries}</Text>
+          <Text color="yellow">Queue paused: {summarizeQueueBlock(queueBlock) ?? "main CI is unhealthy"}.</Text>
+          <Text dimColor>Will resume automatically once {queueBlock.baseBranch} is green.</Text>
         </Box>
       )}
 
       <EntryStateGraph main={graph.main} exits={graph.exits} />
       <ExternalRepairObservation observations={observations} />
 
-      <Box marginTop={1} flexDirection="column">
-        <Text bold>Incidents</Text>
-        {incidents.length === 0 ? (
-          <Text dimColor>No incidents.</Text>
-        ) : (
-          incidents.map((incident) => (
+      {/* Incidents — only when there are any */}
+      {incidents.length > 0 && (
+        <Box marginTop={1} flexDirection="column">
+          <Text bold>Incidents</Text>
+          {incidents.map((incident) => (
             <Box key={incident.id} gap={1}>
-              <Text dimColor>{relativeTime(incident.at).padStart(4, " ")}</Text>
+              <Text dimColor>{relativeTime(incident.at).padStart(4)}</Text>
               <Text color="red">{incident.failureClass}</Text>
               <Text dimColor>{incident.outcome}</Text>
             </Box>
-          ))
-        )}
-      </Box>
+          ))}
+        </Box>
+      )}
 
+      {/* Events */}
       <Box marginTop={1} flexDirection="column">
         <Text bold>Events</Text>
         {events.length === 0 ? (
@@ -114,7 +103,7 @@ export function DetailView({
         ) : (
           events.slice(-16).map((event) => (
             <Box key={event.id ?? `${event.entryId}-${event.at}`} gap={1}>
-              <Text dimColor>{relativeTime(event.at).padStart(4, " ")}</Text>
+              <Text dimColor>{relativeTime(event.at).padStart(4)}</Text>
               <Text>{formatEntryEvent(event)}</Text>
             </Box>
           ))

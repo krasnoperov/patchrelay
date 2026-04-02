@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useReducer } from "react";
 import { Box, Text } from "ink";
 import type { TimelineEntry, TimelineRunInput } from "./timeline-builder.ts";
-import type { DetailTab, TimelineMode, WatchDiffSummary, WatchIssue, WatchIssueContext, WatchTokenUsage, OperatorFeedEvent } from "./watch-state.ts";
+import type { DetailTab, WatchDiffSummary, WatchIssue, WatchIssueContext, WatchTokenUsage, OperatorFeedEvent } from "./watch-state.ts";
 import { Timeline } from "./Timeline.tsx";
 import { StateHistoryView } from "./StateHistoryView.tsx";
 import { buildStateHistory } from "./history-builder.ts";
@@ -24,7 +24,6 @@ interface IssueDetailViewProps {
   plan: Array<{ step: string; status: string }> | null;
   issueContext: WatchIssueContext | null;
   detailTab: DetailTab;
-  timelineMode: TimelineMode;
   rawRuns: TimelineRunInput[];
   rawFeedEvents: OperatorFeedEvent[];
   connected: boolean;
@@ -67,88 +66,42 @@ function formatCheckState(checkState?: string): string | null {
   }
 }
 
-function buildPrStatusSummary(issue: WatchIssue, issueContext: WatchIssueContext | null): string[] {
-  if (issue.prNumber === undefined) return [];
+const STATE_DISPLAY: Record<string, { label: string; color: string }> = {
+  blocked: { label: "blocked", color: "yellow" },
+  ready: { label: "ready", color: "blueBright" },
+  delegated: { label: "delegated", color: "cyan" },
+  implementing: { label: "implementing", color: "cyan" },
+  pr_open: { label: "PR open", color: "cyan" },
+  changes_requested: { label: "review changes", color: "yellow" },
+  repairing_ci: { label: "repairing CI", color: "yellow" },
+  awaiting_queue: { label: "queued for merge", color: "cyan" },
+  repairing_queue: { label: "repairing queue", color: "yellow" },
+  done: { label: "merged", color: "green" },
+  failed: { label: "failed", color: "red" },
+  escalated: { label: "escalated", color: "red" },
+  awaiting_input: { label: "awaiting input", color: "yellow" },
+};
 
-  const summary: string[] = [`PR #${issue.prNumber}`];
-  const checkState = formatCheckState(issue.prCheckStatus);
-  const reviewState = formatReviewState(issue.prReviewState);
-  const failedCheck = issueContext?.latestFailureCheckName ?? issue.latestFailureCheckName;
-
-  if (checkState === "checks failed" && failedCheck) {
-    summary.push(`${failedCheck} failed`);
-  } else if (checkState) {
-    summary.push(checkState);
-  }
-
-  if (issue.prChecksSummary?.total) {
-    if (issue.prChecksSummary.failed > 0) {
-      summary.push(`${issue.prChecksSummary.failed}/${issue.prChecksSummary.total} checks failing`);
-    } else if (issue.prChecksSummary.pending > 0) {
-      summary.push(`${issue.prChecksSummary.completed}/${issue.prChecksSummary.total} checks settled`);
-    } else {
-      summary.push(`${issue.prChecksSummary.passed}/${issue.prChecksSummary.total} checks passed`);
-    }
-  }
-
-  if (reviewState) {
-    summary.push(`review ${reviewState}`);
-  } else if (issue.factoryState === "pr_open" || issue.factoryState === "repairing_ci" || issue.factoryState === "awaiting_queue") {
-    summary.push("review pending");
-  }
-
-  if (issue.factoryState === "awaiting_queue") {
-    summary.push("queued for merge");
-  } else if (issue.factoryState === "repairing_queue") {
-    summary.push("merge queue repair needed");
-  } else if (issue.factoryState === "done") {
-    summary.push("merged");
-  } else if (issue.prCheckStatus === "failed" || issue.prReviewState === undefined || issue.prReviewState === "changes_requested") {
-    summary.push("not mergeable");
-  }
-
-  return summary;
+function effectiveState(issue: WatchIssue): string {
+  if (issue.blockedByCount > 0 && !issue.activeRunType) return "blocked";
+  if (issue.readyForExecution && !issue.activeRunType) return "ready";
+  return issue.factoryState;
 }
 
-function resolvePrimaryBlocker(issue: WatchIssue, issueContext: WatchIssueContext | null): { text: string; color: "red" | "yellow" } | null {
-  if (issue.blockedByCount > 0) {
-    return {
-      text: `Waiting on blockers: ${issue.blockedByKeys.join(", ")}`,
-      color: "yellow",
-    };
+function blockerText(issue: WatchIssue, issueContext: WatchIssueContext | null): string | null {
+  if (issue.blockedByCount > 0) return `Waiting on ${issue.blockedByKeys.join(", ")}`;
+  if (issue.factoryState === "repairing_queue") return "Merge queue conflict, repairing branch";
+  if (issue.factoryState === "repairing_ci") {
+    const check = issueContext?.latestFailureCheckName ?? issue.latestFailureCheckName ?? "CI";
+    return `Repairing ${check}`;
   }
-
+  if (issue.factoryState === "awaiting_queue") return "Waiting for merge queue";
   if (issue.prCheckStatus === "failed" || issue.prCheckStatus === "failure") {
-    const failedChecks = issue.prChecksSummary?.failedNames ?? [];
-    const failedCheck = issueContext?.latestFailureCheckName
-      ?? issue.latestFailureCheckName
-      ?? (failedChecks.length > 0 ? failedChecks.slice(0, 2).join(", ") : undefined);
-    return {
-      text: failedCheck ? `Blocked by failed check: ${failedCheck}` : "Blocked by failed PR checks",
-      color: "red",
-    };
+    const check = issueContext?.latestFailureCheckName ?? issue.latestFailureCheckName ?? "checks";
+    return `${check} failed`;
   }
-
-  if (issue.prCheckStatus === "pending" || issue.prCheckStatus === "in_progress" || issue.prCheckStatus === "queued") {
-    return { text: "Waiting for PR checks to finish", color: "yellow" };
-  }
-
-  if (issue.prReviewState === "changes_requested") {
-    return { text: "Blocked by requested review changes", color: "yellow" };
-  }
-
-  if (issue.factoryState === "repairing_queue") {
-    return { text: "Blocked by merge queue refresh failure", color: "yellow" };
-  }
-
-  if (issue.factoryState === "awaiting_queue") {
-    return { text: "Waiting in merge queue", color: "yellow" };
-  }
-
-  if (issue.prNumber !== undefined && !issue.prReviewState && issue.factoryState !== "done") {
-    return { text: "Blocked pending review approval", color: "yellow" };
-  }
-
+  if (issue.prReviewState === "changes_requested") return "Review changes requested";
+  if (issue.prNumber !== undefined && !issue.prReviewState && issue.factoryState !== "done") return "Awaiting review";
   return null;
 }
 
@@ -166,13 +119,13 @@ function ElapsedTime({ startedAt }: { startedAt: string }): React.JSX.Element {
 
 export function IssueDetailView({
   issue, timeline, follow, activeRunStartedAt, activeRunId, tokenUsage, diffSummary, plan, issueContext,
-  detailTab, timelineMode, rawRuns, rawFeedEvents, connected, lastServerMessageAt,
+  detailTab, rawRuns, rawFeedEvents, connected, lastServerMessageAt,
 }: IssueDetailViewProps): React.JSX.Element {
   if (!issue) {
     return (
       <Box flexDirection="column">
         <Text color="red">Issue not found.</Text>
-        <HelpBar view="detail" follow={follow} detailTab={detailTab} timelineMode={timelineMode} />
+        <HelpBar view="detail" follow={follow} detailTab={detailTab} />
       </Box>
     );
   }
@@ -182,6 +135,9 @@ export function IssueDetailView({
   if (tokenUsage) meta.push(`${formatTokens(tokenUsage.inputTokens)} in / ${formatTokens(tokenUsage.outputTokens)} out`);
   if (diffSummary && diffSummary.filesChanged > 0) meta.push(`${diffSummary.filesChanged}f +${diffSummary.linesAdded} -${diffSummary.linesRemoved}`);
   if (issueContext?.runCount) meta.push(`${issueContext.runCount} runs`);
+
+  const state = STATE_DISPLAY[effectiveState(issue)] ?? { label: issue.factoryState, color: "white" };
+  const blocker = blockerText(issue, issueContext);
 
   const history = useMemo(
     () => buildStateHistory(rawRuns, rawFeedEvents, issue.factoryState, activeRunId),
@@ -195,48 +151,39 @@ export function IssueDetailView({
     () => buildPatchRelayQueueObservations(issue, rawFeedEvents),
     [issue, rawFeedEvents],
   );
-  const prStatusSummary = useMemo(
-    () => buildPrStatusSummary(issue, issueContext),
-    [issue, issueContext],
-  );
-  const primaryBlocker = useMemo(
-    () => resolvePrimaryBlocker(issue, issueContext),
-    [issue, issueContext],
-  );
+
+  // Build compact facts for the header
+  const facts: string[] = [];
+  if (issue.prNumber !== undefined) facts.push(`PR #${issue.prNumber}`);
+  if (issue.prReviewState === "approved") facts.push("approved");
+  else if (issue.prReviewState === "changes_requested") facts.push("changes requested");
+  if (issue.prCheckStatus === "passed" || issue.prCheckStatus === "success") facts.push("checks passed");
+  else if (issue.prCheckStatus === "failed" || issue.prCheckStatus === "failure") {
+    const check = issueContext?.latestFailureCheckName ?? issue.latestFailureCheckName ?? "checks";
+    facts.push(`${check} failed`);
+  } else if (issue.prChecksSummary?.total) {
+    facts.push(`checks ${issue.prChecksSummary.completed}/${issue.prChecksSummary.total}`);
+  }
 
   return (
     <Box flexDirection="column">
+      {/* Header: issue key · status · facts · elapsed · freshness */}
       <Box gap={2}>
         <Text bold>{key}</Text>
-        <Text color="cyan">{issue.factoryState}</Text>
-        {issue.blockedByCount > 0 && <Text color="yellow">blocked by {issue.blockedByKeys.join(", ")}</Text>}
-        {issue.readyForExecution && !issue.activeRunType && issue.blockedByCount === 0 && <Text color="blueBright">ready</Text>}
-        {issue.activeRunType && <Text color="yellow">{issue.activeRunType}</Text>}
-        {issue.prNumber !== undefined && <Text dimColor>#{issue.prNumber}</Text>}
+        <Text color={state.color}>{state.label}</Text>
+        {facts.length > 0 && <Text dimColor>{facts.join(" \u00b7 ")}</Text>}
         {activeRunStartedAt && <ElapsedTime startedAt={activeRunStartedAt} />}
         {meta.length > 0 && <Text dimColor>{meta.join("  ")}</Text>}
-        {detailTab === "timeline" && <Text dimColor>{timelineMode}</Text>}
         {follow && <Text color="yellow">follow</Text>}
         <FreshnessBadge connected={connected} lastServerMessageAt={lastServerMessageAt} />
       </Box>
       {issue.title && <Text>{issue.title}</Text>}
-      {prStatusSummary.length > 0 && (
-        <Box marginTop={1}>
-          <Text dimColor>{prStatusSummary.join("  |  ")}</Text>
-        </Box>
-      )}
-      {primaryBlocker && (
-        <Box marginTop={1}>
-          <Text color={primaryBlocker.color}>Blocked by: {primaryBlocker.text}</Text>
-        </Box>
-      )}
+      {blocker && <Text color="yellow">{blocker}</Text>}
       {issueContext?.latestFailureSummary && (
-        <Box marginTop={1}>
-          <Text color={issueContext.latestFailureSource === "queue_eviction" ? "yellow" : "red"}>
-            Latest failure: {issueContext.latestFailureSummary}
-            {issueContext.latestFailureHeadSha ? ` @ ${issueContext.latestFailureHeadSha.slice(0, 8)}` : ""}
-          </Text>
-        </Box>
+        <Text color={issueContext.latestFailureSource === "queue_eviction" ? "yellow" : "red"}>
+          Latest failure: {issueContext.latestFailureSummary}
+          {issueContext.latestFailureHeadSha ? ` @ ${issueContext.latestFailureHeadSha.slice(0, 8)}` : ""}
+        </Text>
       )}
 
       {detailTab === "timeline" ? (
@@ -258,7 +205,7 @@ export function IssueDetailView({
           )}
 
           <Box marginTop={1} flexDirection="column">
-            <Timeline entries={timeline} follow={follow} mode={timelineMode} />
+            <Timeline entries={timeline} follow={follow} />
           </Box>
         </>
       ) : (
@@ -277,7 +224,7 @@ export function IssueDetailView({
       )}
 
       <Box marginTop={1}>
-        <HelpBar view="detail" follow={follow} detailTab={detailTab} timelineMode={timelineMode} />
+        <HelpBar view="detail" follow={follow} detailTab={detailTab} />
       </Box>
     </Box>
   );

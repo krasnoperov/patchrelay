@@ -80,9 +80,10 @@ describe("webhook admission integration", () => {
     githubSim.addPR({ number: 42, branch: "feat-x", headSha: "sha-42", reviewApproved: true, labels: ["queue"] });
     githubSim.setChecks(42, [{ name: "checks", conclusion: "success" }]);
 
+    const gitSim = new GitSim() as any;
     const service = new MergeStewardService(
-      config, store, new GitSim() as any, new CISim(() => "pass") as any,
-      githubSim, evictionSim, null, logger,
+      config, store, gitSim, new CISim(() => "pass") as any,
+      githubSim, evictionSim, gitSim, logger,
     );
 
     const app = await makeApp(service);
@@ -146,7 +147,7 @@ describe("webhook admission integration", () => {
 
     const service = new MergeStewardService(
       config, store, new GitSim() as any, new CISim(() => "pass") as any,
-      new GitHubSim(), new EvictionReporterSim(), null, logger,
+      new GitHubSim(), new EvictionReporterSim(), new GitSim() as any, logger,
     );
 
     const app = await makeApp(service);
@@ -171,7 +172,7 @@ describe("webhook admission integration", () => {
 
     const service = new MergeStewardService(
       config, store, new GitSim() as any, new CISim(() => "pass") as any,
-      githubSim, new EvictionReporterSim(), null, logger,
+      githubSim, new EvictionReporterSim(), new GitSim() as any, logger,
     );
 
     const app = await makeApp(service);
@@ -203,7 +204,7 @@ describe("webhook admission integration", () => {
 
     const service = new MergeStewardService(
       config, store, new GitSim() as any, new CISim(() => "pass") as any,
-      githubSim, new EvictionReporterSim(), null, logger,
+      githubSim, new EvictionReporterSim(), new GitSim() as any, logger,
     );
 
     const entry = service.enqueue({ prNumber: 7, branch: "feat-watch", headSha: "sha-watch", issueKey: "USE-7" });
@@ -263,8 +264,11 @@ describe("webhook admission integration", () => {
     const git = new GitSim();
     await git.init("main");
     await git.createBranch("origin/main", "main");
+    await git.createBranch("feat-main-broken", "main");
+    await git.createBranch("origin/feat-main-broken", "main");
 
-    githubSim.addPR({ number: 8, branch: "feat-main-broken", headSha: "sha-8", reviewApproved: true, labels: ["queue"] });
+    const branchSha = await git.headSha("feat-main-broken");
+    githubSim.addPR({ number: 8, branch: "feat-main-broken", headSha: branchSha, reviewApproved: true, labels: ["queue"] });
     githubSim.setRefChecks("main", [
       { name: "Tests", conclusion: "failure" },
       { name: "Deploy stage", conclusion: "failure" },
@@ -291,11 +295,11 @@ describe("webhook admission integration", () => {
       ci as any,
       githubSim,
       new EvictionReporterSim(),
-      null,
+      git as any,
       logger,
     );
 
-    service.enqueue({ prNumber: 8, branch: "feat-main-broken", headSha: "sha-8" });
+    service.enqueue({ prNumber: 8, branch: "feat-main-broken", headSha: branchSha });
 
     const app = await makeApp(service);
     const address = await app.listen({ port: 0 });
@@ -335,7 +339,7 @@ describe("webhook admission integration", () => {
 
     const service = new MergeStewardService(
       config, store, new GitSim() as any, new CISim(() => "pass") as any,
-      new GitHubSim(), new EvictionReporterSim(), null, logger,
+      new GitHubSim(), new EvictionReporterSim(), new GitSim() as any, logger,
     );
 
     const entry = service.enqueue({ prNumber: 55, branch: "feat-history", headSha: "sha-history" });

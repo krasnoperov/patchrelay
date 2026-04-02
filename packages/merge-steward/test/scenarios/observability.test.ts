@@ -41,7 +41,7 @@ describe("observability: reconciler event stream", () => {
     h.assertInvariants();
   });
 
-  it("conflict emits rebase_conflict with file info", async () => {
+  it("conflict emits spec_build_conflict with file info", async () => {
     const prConflict: SimPR = { number: 2, branch: "feat-conflict", files: [{ path: "shared.ts", content: "conflict" }] };
     const prOriginal: SimPR = { number: 1, branch: "feat-orig", files: [{ path: "shared.ts", content: "original" }] };
 
@@ -51,9 +51,9 @@ describe("observability: reconciler event stream", () => {
     await h.runUntilStable({ maxTicks: 30 });
 
     const conflictEvents = h.reconcileEvents.filter(
-      (e) => e.prNumber === 2 && e.action === "rebase_conflict",
+      (e) => e.prNumber === 2 && e.action === "spec_build_conflict",
     );
-    assert.ok(conflictEvents.length > 0, "should emit rebase_conflict for PR #2");
+    assert.ok(conflictEvents.length > 0, "should emit spec_build_conflict for PR #2");
 
     const evictEvents = h.reconcileEvents.filter(
       (e) => e.prNumber === 2 && e.action === "evicted",

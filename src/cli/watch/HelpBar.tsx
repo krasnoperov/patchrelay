@@ -1,29 +1,23 @@
 import { Box, Text } from "ink";
-import type { WatchView, DetailTab, TimelineMode } from "./watch-state.ts";
+import type { WatchView, DetailTab } from "./watch-state.ts";
 
 interface HelpBarProps {
   view: WatchView;
   follow?: boolean | undefined;
   detailTab?: DetailTab | undefined;
-  timelineMode?: TimelineMode | undefined;
 }
 
-const HELP_TEXT: Record<WatchView, string> = {
-  list: "j/k: navigate  Enter: detail  F: feed  Tab: filter  x: freeze  q: quit",
-  detail: "",
-  feed: "Esc: list  q: quit",
-};
-
-export function HelpBar({ view, follow, detailTab, timelineMode }: HelpBarProps): React.JSX.Element {
+export function HelpBar({ view, follow, detailTab }: HelpBarProps): React.JSX.Element {
   let text: string;
   if (view === "detail") {
     const tabHint = detailTab === "history" ? "t: timeline" : "h: history";
-    const timelineHint = detailTab === "timeline" ? `v: ${timelineMode === "verbose" ? "compact" : "verbose"}` : undefined;
-    text = [tabHint, timelineHint, "j/k: prev/next", "Esc: list", `f: follow ${follow ? "on" : "off"}`, "x: freeze", "p: prompt", "s: stop", "r: retry", "q: quit"]
+    text = [tabHint, `f: follow ${follow ? "on" : "off"}`, "p: prompt", "s: stop", "r: retry"]
       .filter(Boolean)
       .join("  ");
+  } else if (view === "feed") {
+    text = "";
   } else {
-    text = HELP_TEXT[view];
+    text = "F: feed  Tab: filter";
   }
   return (
     <Box>

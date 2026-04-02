@@ -1,27 +1,24 @@
 import { useMemo } from "react";
 import { Box, Static, Text, useStdout } from "ink";
 import type { TimelineEntry } from "./timeline-builder.ts";
-import { buildTimelineRows, type TimelineMode } from "./timeline-presentation.ts";
+import { buildTimelineRows } from "./timeline-presentation.ts";
 import { TimelineRow } from "./TimelineRow.tsx";
 
 interface TimelineProps {
   entries: TimelineEntry[];
   follow: boolean;
-  mode: TimelineMode;
 }
 
 const ACTIVE_TAIL = 8;
 
-export function Timeline({ entries, follow, mode }: TimelineProps): React.JSX.Element {
+export function Timeline({ entries, follow }: TimelineProps): React.JSX.Element {
   const { stdout } = useStdout();
   const rows = stdout?.rows ?? 24;
   const maxActive = Math.max(ACTIVE_TAIL, rows - 12);
-  const displayRows = useMemo(() => buildTimelineRows(entries, mode), [entries, mode]);
+  const displayRows = useMemo(() => buildTimelineRows(entries), [entries]);
 
-  // Split: finalized entries go to Static (terminal scrollback), active entries re-render
   const splitIndex = useMemo(() => {
-    if (!follow) return 0; // follow OFF: everything in active area (re-renders)
-    // Find the boundary: keep the last maxActive entries in the active area
+    if (!follow) return 0;
     return Math.max(0, displayRows.length - maxActive);
   }, [displayRows.length, follow, maxActive]);
 
@@ -36,11 +33,11 @@ export function Timeline({ entries, follow, mode }: TimelineProps): React.JSX.El
     <Box flexDirection="column">
       {finalized.length > 0 && (
         <Static items={finalized}>
-          {(entry) => <TimelineRow key={entry.id} entry={entry} mode={mode} />}
+          {(entry) => <TimelineRow key={entry.id} entry={entry} />}
         </Static>
       )}
       {active.map((entry) => (
-        <TimelineRow key={entry.id} entry={entry} mode={mode} />
+        <TimelineRow key={entry.id} entry={entry} />
       ))}
     </Box>
   );

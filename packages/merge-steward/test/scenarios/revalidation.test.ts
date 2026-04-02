@@ -5,7 +5,7 @@ import { createHarness, type SimPR } from "../harness.ts";
 const prA: SimPR = { number: 1, branch: "feat-a", files: [{ path: "a.ts", content: "a" }] };
 
 describe("revalidation before merge", () => {
-  it("evicts PR when approval is withdrawn before merge", async () => {
+  it("waits for re-approval when approval is withdrawn before merge", async () => {
     const h = await createHarness({ ciRule: () => "pass" });
     await h.enqueue(prA);
 
@@ -19,12 +19,20 @@ describe("revalidation before merge", () => {
     // Withdraw approval.
     h.githubSim.setReviewApproved(1, false);
 
-    // Tick — revalidation should catch the withdrawn approval.
+    // Tick — should wait, not evict. Entry stays in merging.
     await h.tick();
-    assert.strictEqual(h.entries[0]!.status, "evicted",
-      "Should evict when approval is withdrawn");
+    assert.strictEqual(h.entries[0]!.status, "merging",
+      "Should stay in merging and wait for re-approval");
+    assert.strictEqual(h.merged.length, 0, "Should not merge yet");
+    assert.ok(
+      h.reconcileEvents.some((e) => e.action === "merge_waiting_approval"),
+      "Should emit merge_waiting_approval event",
+    );
 
-    assert.strictEqual(h.merged.length, 0, "Should not merge");
+    // Re-approve — should merge on next tick.
+    h.githubSim.setReviewApproved(1, true);
+    await h.tick();
+    assert.deepStrictEqual(h.merged, [1], "Should merge after re-approval");
     h.assertInvariants();
   });
 

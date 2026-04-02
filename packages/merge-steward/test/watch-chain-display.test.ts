@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { QueueEntry, QueueEntryStatus } from "../src/types.ts";
-import { TERMINAL_STATUSES } from "../src/types.ts";
 import { ciStatusIcon, specChainLabel } from "../src/watch/format.ts";
+import { buildChainEntries, buildDisplayEntries } from "../src/watch/display-filter.ts";
 
 function makeEntry(overrides: Partial<QueueEntry> & { prNumber: number; position: number; status: QueueEntryStatus }): QueueEntry {
   return {
@@ -28,84 +28,63 @@ function makeEntry(overrides: Partial<QueueEntry> & { prNumber: number; position
   };
 }
 
-/** Mirror the chain-building logic from QueueListView. */
-function buildChain(entries: QueueEntry[], recentlyCompleted: QueueEntry[]): QueueEntry[] {
-  const seenPR = new Set<number>();
-  const all: QueueEntry[] = [];
-  for (const e of entries) {
-    if (!TERMINAL_STATUSES.includes(e.status) && !seenPR.has(e.prNumber)) {
-      all.push(e);
-      seenPR.add(e.prNumber);
-    }
-  }
-  for (const e of recentlyCompleted) {
-    if (!seenPR.has(e.prNumber)) {
-      all.push(e);
-      seenPR.add(e.prNumber);
-    }
-  }
-  return all.sort((a, b) => a.position - b.position);
-}
+// ─── Display filter ─────────────────────────────────────────────
 
-// ─── Spec chain includes recently-completed entries ─────────────
-
-test("chain includes active + recently merged entries sorted by position", () => {
+test("active filter includes active entries and recently-merged entries", () => {
   const merged = makeEntry({ prNumber: 1, position: 1, status: "merged", updatedAt: new Date().toISOString() });
   const active1 = makeEntry({ prNumber: 2, position: 2, status: "validating", ciRunId: "ci-2" });
   const active2 = makeEntry({ prNumber: 3, position: 3, status: "queued" });
 
-  const chain = buildChain([active1, active2], [merged]);
+  const result = buildDisplayEntries([merged, active1, active2], "active");
 
-  assert.strictEqual(chain.length, 3, "chain should include merged + 2 active");
-  assert.strictEqual(chain[0]!.prNumber, 1, "merged entry first by position");
-  assert.strictEqual(chain[1]!.prNumber, 2);
-  assert.strictEqual(chain[2]!.prNumber, 3);
+  assert.strictEqual(result.length, 3);
+  assert.strictEqual(result[0]!.prNumber, 1, "merged first by position");
+  assert.strictEqual(result[1]!.prNumber, 2);
+  assert.strictEqual(result[2]!.prNumber, 3);
 });
 
-test("chain deduplicates by prNumber: re-admitted PR shows active entry, not terminal", () => {
-  // PR #1 was evicted (terminal), then re-admitted with a new entry ID
-  const evictedOld = makeEntry({
+test("active filter excludes terminal entries older than 60 seconds", () => {
+  const old = makeEntry({
+    prNumber: 1, position: 1, status: "merged",
+    updatedAt: new Date(Date.now() - 90_000).toISOString(),
+  });
+  const active = makeEntry({ prNumber: 2, position: 2, status: "validating", ciRunId: "ci-2" });
+
+  const result = buildDisplayEntries([old, active], "active");
+
+  assert.strictEqual(result.length, 1);
+  assert.strictEqual(result[0]!.prNumber, 2);
+});
+
+test("re-admitted PR shows active entry, not terminal", () => {
+  const evicted = makeEntry({
     prNumber: 1, position: 1, status: "evicted",
     id: "qe-old-1" as string,
     updatedAt: new Date().toISOString(),
   });
-  const reAdmittedNew = makeEntry({
+  const reAdmitted = makeEntry({
     prNumber: 1, position: 4, status: "validating",
     id: "qe-new-1" as string,
     ciRunId: "ci-new",
   });
   const active2 = makeEntry({ prNumber: 2, position: 2, status: "validating", ciRunId: "ci-2" });
 
-  const chain = buildChain([reAdmittedNew, active2], [evictedOld]);
+  const result = buildDisplayEntries([evicted, reAdmitted, active2], "active");
 
-  // Should have 2 entries, not 3 — the old evicted #1 is superseded by re-admitted #1
-  assert.strictEqual(chain.length, 2, "no duplicate PR in chain");
-  const pr1 = chain.find((e) => e.prNumber === 1);
-  assert.ok(pr1, "PR #1 should be in chain");
-  assert.strictEqual(pr1!.id, "qe-new-1", "active re-admitted entry wins over terminal");
-  assert.strictEqual(pr1!.status, "validating", "should show active status, not evicted");
+  assert.strictEqual(result.length, 2, "no duplicate PR");
+  const pr1 = result.find((e) => e.prNumber === 1);
+  assert.ok(pr1);
+  assert.strictEqual(pr1!.id, "qe-new-1", "active wins over terminal");
+  assert.strictEqual(pr1!.status, "validating");
 });
 
-// ─── Recently-completed filter ages out ─────────────────────────
+test("all filter returns everything unfiltered", () => {
+  const merged = makeEntry({ prNumber: 1, position: 1, status: "merged" });
+  const active = makeEntry({ prNumber: 2, position: 2, status: "validating", ciRunId: "ci-2" });
 
-test("recently-completed excludes entries older than 60 seconds", () => {
-  const recent = makeEntry({
-    prNumber: 1, position: 1, status: "merged",
-    updatedAt: new Date(Date.now() - 30_000).toISOString(), // 30s ago
-  });
-  const old = makeEntry({
-    prNumber: 2, position: 2, status: "merged",
-    updatedAt: new Date(Date.now() - 90_000).toISOString(), // 90s ago
-  });
+  const result = buildDisplayEntries([merged, active], "all");
 
-  const allEntries = [recent, old];
-  const cutoff = Date.now() - 60_000;
-  const recentlyCompleted = allEntries.filter(
-    (e) => TERMINAL_STATUSES.includes(e.status) && new Date(e.updatedAt).getTime() > cutoff,
-  );
-
-  assert.strictEqual(recentlyCompleted.length, 1, "only the 30s-old entry");
-  assert.strictEqual(recentlyCompleted[0]!.prNumber, 1);
+  assert.strictEqual(result.length, 2);
 });
 
 // ─── CI status icons ────────────────────────────────────────────
@@ -114,29 +93,58 @@ test("ciStatusIcon returns correct icons for each status", () => {
   assert.strictEqual(ciStatusIcon({ status: "merged", ciRunId: null }).icon, "\u2713");
   assert.strictEqual(ciStatusIcon({ status: "merged", ciRunId: null }).color, "green");
   assert.strictEqual(ciStatusIcon({ status: "merging", ciRunId: null }).icon, "\u2713");
-  assert.strictEqual(ciStatusIcon({ status: "validating", ciRunId: "ci-1" }).icon, "\u25cf");  // ●
+  assert.strictEqual(ciStatusIcon({ status: "validating", ciRunId: "ci-1" }).icon, "\u25cf");
   assert.strictEqual(ciStatusIcon({ status: "validating", ciRunId: "ci-1" }).color, "cyan");
-  assert.strictEqual(ciStatusIcon({ status: "validating", ciRunId: null }).icon, "\u25cb");     // ○
+  assert.strictEqual(ciStatusIcon({ status: "validating", ciRunId: null }).icon, "\u25cb");
   assert.strictEqual(ciStatusIcon({ status: "queued", ciRunId: null }).icon, "\u25cb");
   assert.strictEqual(ciStatusIcon({ status: "evicted", ciRunId: null }).icon, "\u2717");
   assert.strictEqual(ciStatusIcon({ status: "evicted", ciRunId: null }).color, "red");
+});
+
+// ─── Chain header (always live queue) ────────────────────────────
+
+test("buildChainEntries excludes old terminal entries even when passed all history", () => {
+  const oldMerged = makeEntry({
+    prNumber: 1, position: 1, status: "merged",
+    updatedAt: new Date(Date.now() - 120_000).toISOString(), // 2 min ago
+  });
+  const active = makeEntry({ prNumber: 2, position: 2, status: "validating", ciRunId: "ci-2" });
+  const oldEvicted = makeEntry({
+    prNumber: 3, position: 3, status: "evicted",
+    updatedAt: new Date(Date.now() - 120_000).toISOString(),
+  });
+
+  const chain = buildChainEntries([oldMerged, active, oldEvicted]);
+
+  assert.strictEqual(chain.length, 1, "only active entry in chain");
+  assert.strictEqual(chain[0]!.prNumber, 2);
+});
+
+test("buildChainEntries includes recently-merged for cascade visibility", () => {
+  const recentMerged = makeEntry({
+    prNumber: 1, position: 1, status: "merged",
+    updatedAt: new Date(Date.now() - 30_000).toISOString(), // 30s ago
+  });
+  const active = makeEntry({ prNumber: 2, position: 2, status: "validating", ciRunId: "ci-2" });
+
+  const chain = buildChainEntries([recentMerged, active]);
+
+  assert.strictEqual(chain.length, 2, "recent merged + active");
+  assert.strictEqual(chain[0]!.prNumber, 1);
+  assert.strictEqual(chain[1]!.prNumber, 2);
 });
 
 // ─── Spec chain label ───────────────────────────────────────────
 
 test("specChainLabel shows main as base for head entry", () => {
   const entry = { specBranch: "mq-spec-1", specBasedOn: null, specSha: "abc1234567" };
-  const label = specChainLabel(entry, []);
-  assert.strictEqual(label, "abc1234 \u2190 main");
+  assert.strictEqual(specChainLabel(entry, []), "abc1234 \u2190 main");
 });
 
 test("specChainLabel shows parent PR number for non-head entry", () => {
-  const entries = [
-    { id: "qe-1", prNumber: 110, specBranch: "mq-spec-1" },
-  ];
+  const entries = [{ id: "qe-1", prNumber: 110, specBranch: "mq-spec-1" }];
   const entry = { specBranch: "mq-spec-2", specBasedOn: "qe-1", specSha: "def5678901" };
-  const label = specChainLabel(entry, entries);
-  assert.strictEqual(label, "def5678 \u2190 #110");
+  assert.strictEqual(specChainLabel(entry, entries), "def5678 \u2190 #110");
 });
 
 test("specChainLabel returns 'no spec yet' when no spec branch", () => {
