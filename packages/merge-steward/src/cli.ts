@@ -21,6 +21,13 @@ export async function runCli(argv: string[], options?: RunCliOptions): Promise<n
 
   try {
     const parsed = parseArgs(argv);
+
+    if (parsed.flags.get("version") === true || parsed.positionals[0] === "version") {
+      const { version } = await import("../package.json", { with: { type: "json" } }).then((m) => m.default);
+      writeOutput(stdout, `merge-steward ${version}\n`);
+      return 0;
+    }
+
     validateFlags(parsed);
     const command = parsed.positionals[0] ?? "help";
 
