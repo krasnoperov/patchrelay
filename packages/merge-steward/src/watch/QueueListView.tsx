@@ -38,7 +38,7 @@ function QueueRow({
         </Text>
         <Text dimColor>{` #${entry.prNumber}`}</Text>
         {entry.issueKey ? <Text dimColor>{` ${entry.issueKey}`}</Text> : null}
-        <Text dimColor>{`  ${humanStatus(entry.status)}  ${relativeTime(entry.updatedAt)}`}</Text>
+        <Text dimColor>{`  ${humanStatus(entry.status)}  ${relativeTime(entry.updatedAt).padStart(4)}`}</Text>
       </Box>
     );
   }
@@ -60,7 +60,7 @@ function QueueRow({
       <Text color={selected ? "cyan" : "gray"}>{selected ? "\u25b8" : " "}</Text>
       <Text color={isHead ? "green" : undefined} bold>{` #${entry.prNumber}`}</Text>
       {entry.issueKey ? <Text>{` ${entry.issueKey}`}</Text> : null}
-      <Text dimColor>{`  ${relativeTime(entry.updatedAt)}`}</Text>
+      <Text dimColor>{`  ${relativeTime(entry.updatedAt).padStart(4)}`}</Text>
       <Text>{`  `}</Text>
       <Text color={color}>{status}</Text>
       <Text dimColor>{` \u00b7 ${nextStep}${retryNote}`}</Text>
