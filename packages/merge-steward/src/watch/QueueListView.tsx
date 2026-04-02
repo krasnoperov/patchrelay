@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { Box, Text, useStdout } from "ink";
 import type { QueueBlockState, QueueEntry, QueueEventSummary } from "../types.ts";
-import { formatEventSummary, humanStatus, nextStepLabel, progressBar, queueProgress, relativeTime, statusColor, summarizeQueueBlock, truncate } from "./format.ts";
+import { formatEventSummary, humanStatus, nextStepLabel, progressBar, queueProgress, relativeTime, specChainLabel, statusColor, summarizeQueueBlock, truncate } from "./format.ts";
 
 interface QueueListViewProps {
   entries: QueueEntry[];
@@ -20,23 +20,30 @@ function QueueRow({
   infoWidth,
   isHead,
   queueBlock,
+  allEntries,
 }: {
   entry: QueueEntry;
   selected: boolean;
   infoWidth: number;
   isHead: boolean;
   queueBlock: QueueBlockState | null;
+  allEntries: QueueEntry[];
 }): React.JSX.Element {
   const retryText = `${entry.retryAttempts}/${entry.maxRetries}`;
   const ciText = entry.ciRetries > 0 ? `CI retries ${entry.ciRetries}` : null;
   const blockedOnMain = isHead && queueBlock?.reason === "main_broken" && queueBlock.headPrNumber === entry.prNumber;
-  const renderedStatus = blockedOnMain ? "blocked by broken main" : humanStatus(entry.status);
-  const renderedColor = blockedOnMain ? "red" : statusColor(entry.status);
+  const renderedStatus = blockedOnMain ? "blocked by broken main" : humanStatus(entry.status, entry);
+  const renderedColor = blockedOnMain
+    ? "red"
+    : entry.status === "preparing_head" && entry.lastFailedBaseSha ? "yellow"
+      : statusColor(entry.status);
   const progress = queueProgress(entry.status);
-  const branchLabel = truncate(entry.branch, Math.max(12, infoWidth - 34));
+  const specLabel = entry.specBranch
+    ? specChainLabel(entry, allEntries)
+    : truncate(entry.branch, Math.max(12, infoWidth - 34));
   const nextStep = blockedOnMain
     ? summarizeQueueBlock(queueBlock) ?? "waiting for main to recover"
-    : nextStepLabel(entry.status);
+    : nextStepLabel(entry.status, entry);
 
   return (
     <Box flexDirection="column">
@@ -52,7 +59,7 @@ function QueueRow({
       </Box>
       <Box paddingLeft={2} gap={1}>
         <Text dimColor>{progressBar(progress.current, progress.total, 8)}</Text>
-        <Text dimColor>{branchLabel}</Text>
+        <Text dimColor>{specLabel}</Text>
         <Text dimColor>|</Text>
         <Text dimColor>{nextStep}</Text>
         <Text dimColor>{` | retry ${retryText}`}</Text>
@@ -103,6 +110,7 @@ export function QueueListView({
             infoWidth={infoWidth}
             isHead={entry.id === headEntryId}
             queueBlock={queueBlock}
+            allEntries={entries}
           />
         ))
       )}

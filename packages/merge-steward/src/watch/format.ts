@@ -39,12 +39,13 @@ export function statusColor(status: QueueEntryStatus): "yellow" | "cyan" | "gree
   }
 }
 
-export function humanStatus(status: QueueEntryStatus): string {
+export function humanStatus(status: QueueEntryStatus, entry?: { lastFailedBaseSha: string | null; specBranch: string | null }): string {
   switch (status) {
     case "queued":
       return "queued";
     case "preparing_head":
-      return "refreshing branch";
+      if (entry?.lastFailedBaseSha) return "retry-gated";
+      return "building spec";
     case "validating":
       return "running CI";
     case "merging":
@@ -74,16 +75,17 @@ export function queueProgress(status: QueueEntryStatus): { current: number; tota
   }
 }
 
-export function nextStepLabel(status: QueueEntryStatus): string {
+export function nextStepLabel(status: QueueEntryStatus, entry?: { lastFailedBaseSha: string | null; specBasedOn: string | null }): string {
   switch (status) {
     case "queued":
       return "waiting for head-of-line turn";
     case "preparing_head":
-      return "refreshing branch with latest main";
+      if (entry?.lastFailedBaseSha) return "waiting for base to advance";
+      return "building cumulative spec branch";
     case "validating":
-      return "waiting for CI result";
+      return "waiting for CI on spec branch";
     case "merging":
-      return "final GitHub merge";
+      return "pushing spec to main";
     case "merged":
       return "landed on main";
     case "evicted":
@@ -91,6 +93,18 @@ export function nextStepLabel(status: QueueEntryStatus): string {
     case "dequeued":
       return "removed manually";
   }
+}
+
+/** Describe the spec chain for a queue entry. */
+export function specChainLabel(entry: { specBranch: string | null; specBasedOn: string | null; specSha: string | null }, allEntries: Array<{ id: string; prNumber: number; specBranch: string | null }>): string {
+  if (!entry.specBranch) return "no spec yet";
+  const parent = entry.specBasedOn
+    ? allEntries.find((e) => e.id === entry.specBasedOn)
+    : null;
+  const base = parent
+    ? `#${parent.prNumber}`
+    : "main";
+  return `${shortSha(entry.specSha)} \u2190 ${base}`;
 }
 
 export function runtimeLabel(runtime: QueueRuntimeStatus): string {
