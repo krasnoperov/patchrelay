@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.2](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.8.1...merge-steward-v0.8.2) (2026-04-02)
+
+
+### Bug Fixes
+
+* **merge-steward:** deduplicate chain by prNumber to handle re-admission ([ae64349](https://github.com/krasnoperov/patchrelay/commit/ae643491db047155587ae36929a94e042a828941))
+* **merge-steward:** deduplicate chain header by PR number ([5dffbd7](https://github.com/krasnoperov/patchrelay/commit/5dffbd7e5be870fff3f2dea12f5f6dc1098db071))
+
 ## [0.8.1](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.8.0...merge-steward-v0.8.1) (2026-04-02)
 
 
