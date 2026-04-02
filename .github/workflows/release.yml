@@ -2,35 +2,64 @@ name: Release
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
-    inputs:
-      publish_unpublished:
-        description: Publish current package versions to npm when they are missing from the registry
-        required: false
-        type: boolean
-        default: false
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
-permissions:
-  contents: write
-  issues: write
-  pull-requests: write
-  id-token: write
-
-concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
   release:
-    name: Create or publish release
+    name: CI & Release
     runs-on: ubuntu-latest
+    if: "!startsWith(github.event.head_commit.message, 'ci: release')"
     steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck && npm run -w packages/merge-steward typecheck
+
+      - name: Test
+        run: npm test && npm run -w packages/merge-steward test
+
+      - name: Compute release plan
+        id: plan
+        run: node .github/scripts/release-plan.mjs
+
+      - name: Build patchrelay
+        if: steps.plan.outputs.root_release == 'true'
+        run: npm run build
+
+      - name: Build merge-steward
+        if: steps.plan.outputs.steward_release == 'true'
+        run: npm run -w packages/merge-steward build
+
       - name: Create release app token
+        if: steps.plan.outputs.any_release == 'true'
         id: app-token
         uses: actions/create-github-app-token@v2
         with:
@@ -39,114 +68,31 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
 
-      - name: Check out repository
-        uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-
-      - name: Release Please
-        id: release
-        uses: googleapis/release-please-action@v4.4.0
-        with:
-          token: ${{ steps.app-token.outputs.token }}
-          config-file: release-please-config.json
-          manifest-file: .release-please-manifest.json
-
-      - name: Compute publish plan
-        id: publish-plan
-        env:
-          ROOT_RELEASE_CREATED: ${{ steps.release.outputs.release_created }}
-          STEWARD_RELEASE_CREATED: ${{ steps.release.outputs['packages/merge-steward--release_created'] }}
-          GITHUB_EVENT_NAME: ${{ github.event_name }}
-          GITHUB_EVENT_PATH: ${{ github.event_path }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          event_json="$(cat "${GITHUB_EVENT_PATH}")"
-          manual_publish_unpublished=false
-          is_release_commit=false
-
-          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
-            manual_publish_unpublished="$(node -e "const event = JSON.parse(process.argv[1]); process.stdout.write(String(event.inputs?.publish_unpublished === 'true' || event.inputs?.publish_unpublished === true));" "${event_json}")"
-          fi
-
-          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
-            is_release_commit="$(node -e "const event = JSON.parse(process.argv[1]); process.stdout.write(String((event.head_commit?.message ?? '').startsWith('chore: release ')));" "${event_json}")"
-          fi
-
-          root_version="$(node -p "require('./package.json').version")"
-          steward_version="$(node -p "require('./packages/merge-steward/package.json').version")"
-
-          version_exists() {
-            local package_name="$1"
-            local version="$2"
-            npm view "${package_name}@${version}" version >/dev/null 2>&1
-          }
-
-          root_missing=false
-          steward_missing=false
-          if ! version_exists patchrelay "${root_version}"; then
-            root_missing=true
-          fi
-          if ! version_exists merge-steward "${steward_version}"; then
-            steward_missing=true
-          fi
-
-          root_should_publish=false
-          steward_should_publish=false
-
-          if [[ "${ROOT_RELEASE_CREATED}" == "true" ]]; then
-            root_should_publish=true
-          elif [[ "${root_missing}" == "true" && ( "${is_release_commit}" == "true" || "${manual_publish_unpublished}" == "true" ) ]]; then
-            root_should_publish=true
-          fi
-
-          if [[ "${STEWARD_RELEASE_CREATED}" == "true" ]]; then
-            steward_should_publish=true
-          elif [[ "${steward_missing}" == "true" && ( "${is_release_commit}" == "true" || "${manual_publish_unpublished}" == "true" ) ]]; then
-            steward_should_publish=true
-          fi
-
-          any_publish=false
-          if [[ "${root_should_publish}" == "true" || "${steward_should_publish}" == "true" ]]; then
-            any_publish=true
-          fi
-
-          {
-            echo "root_version=${root_version}"
-            echo "steward_version=${steward_version}"
-            echo "root_missing=${root_missing}"
-            echo "steward_missing=${steward_missing}"
-            echo "root_should_publish=${root_should_publish}"
-            echo "steward_should_publish=${steward_should_publish}"
-            echo "any_publish=${any_publish}"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Set up Node.js
-        if: ${{ steps.publish-plan.outputs.any_publish == 'true' }}
-        uses: actions/setup-node@v5
-        with:
-          node-version: 24
-          cache: npm
-          registry-url: https://registry.npmjs.org
-
-      - name: Install dependencies
-        if: ${{ steps.publish-plan.outputs.any_publish == 'true' }}
-        run: npm ci
-
-      - name: Verify patchrelay
-        if: ${{ steps.publish-plan.outputs.root_should_publish == 'true' }}
-        run: npm run ci
-
       - name: Publish patchrelay
-        if: ${{ steps.publish-plan.outputs.root_should_publish == 'true' }}
+        if: steps.plan.outputs.root_publish == 'true'
         run: npm publish --access public
 
-      - name: Verify merge-steward
-        if: ${{ steps.publish-plan.outputs.steward_should_publish == 'true' }}
-        run: npm run -w packages/merge-steward typecheck && npm run -w packages/merge-steward test && npm run -w packages/merge-steward build
-
       - name: Publish merge-steward
-        if: ${{ steps.publish-plan.outputs.steward_should_publish == 'true' }}
+        if: steps.plan.outputs.steward_publish == 'true'
         run: npm publish -w packages/merge-steward --access public
+
+      - name: Commit version bump and tag
+        if: steps.plan.outputs.any_release == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json packages/merge-steward/package.json
+          git commit -m "$(cat <<'EOF'
+          ci: release
+          EOF
+          )"
+          if [[ "${{ steps.plan.outputs.root_release }}" == "true" ]]; then
+            git tag "patchrelay-v${{ steps.plan.outputs.root_version }}"
+          fi
+          if [[ "${{ steps.plan.outputs.steward_release }}" == "true" ]]; then
+            git tag "merge-steward-v${{ steps.plan.outputs.steward_version }}"
+          fi
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+          git push origin main --tags
