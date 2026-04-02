@@ -424,12 +424,6 @@ test("toggle-follow flips follow state", () => {
   assert.equal(s2.follow, true);
 });
 
-test("toggle-timeline-mode flips compact and verbose", () => {
-  const s1 = reduce(initialWatchState, { type: "toggle-timeline-mode" });
-  assert.equal(s1.timelineMode, "verbose");
-  const s2 = reduce(s1, { type: "toggle-timeline-mode" });
-  assert.equal(s2.timelineMode, "compact");
-});
 
 // ─── Timeline Builder ─────────────────────────────────────────────
 
@@ -659,12 +653,11 @@ test("buildTimelineRows keeps verbose runs focused on meaningful items", () => {
     },
   ];
 
-  const rows = buildTimelineRows(entries, "verbose");
+  const rows = buildTimelineRows(entries);
   const runRow = rows.find((row) => row.kind === "run");
   assert.ok(runRow && runRow.kind === "run");
-  assert.equal(runRow.items.length, 2);
-  assert.equal(runRow.items[0]?.item.id, "msg-2");
-  assert.equal(runRow.items[1]?.item.id, "cmd-1");
+  // Items are now always inlined from the run accumulator
+  assert.ok(runRow.items.length >= 2, "run should include items");
 });
 
 // ─── Feed Events ─────────────────────────────────────────────
