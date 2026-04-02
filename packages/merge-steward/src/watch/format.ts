@@ -78,7 +78,7 @@ export function queueProgress(status: QueueEntryStatus): { current: number; tota
 export function nextStepLabel(status: QueueEntryStatus, entry?: { lastFailedBaseSha: string | null; specBasedOn: string | null }): string {
   switch (status) {
     case "queued":
-      return "will start on next tick";
+      return "starting shortly";
     case "preparing_head":
       if (entry?.lastFailedBaseSha) return "conflicts with main, will retry when queue advances";
       return "building test branch with PRs ahead";
