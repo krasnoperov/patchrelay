@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useReducer } from "react";
 import { Box, Text } from "ink";
 import type { TimelineEntry, TimelineRunInput } from "./timeline-builder.ts";
-import type { DetailTab, TimelineMode, WatchDiffSummary, WatchIssue, WatchIssueContext, WatchTokenUsage, OperatorFeedEvent } from "./watch-state.ts";
+import type { DetailTab, WatchDiffSummary, WatchIssue, WatchIssueContext, WatchTokenUsage, OperatorFeedEvent } from "./watch-state.ts";
 import { Timeline } from "./Timeline.tsx";
 import { StateHistoryView } from "./StateHistoryView.tsx";
 import { buildStateHistory } from "./history-builder.ts";
@@ -24,7 +24,6 @@ interface IssueDetailViewProps {
   plan: Array<{ step: string; status: string }> | null;
   issueContext: WatchIssueContext | null;
   detailTab: DetailTab;
-  timelineMode: TimelineMode;
   rawRuns: TimelineRunInput[];
   rawFeedEvents: OperatorFeedEvent[];
   connected: boolean;
@@ -120,13 +119,13 @@ function ElapsedTime({ startedAt }: { startedAt: string }): React.JSX.Element {
 
 export function IssueDetailView({
   issue, timeline, follow, activeRunStartedAt, activeRunId, tokenUsage, diffSummary, plan, issueContext,
-  detailTab, timelineMode, rawRuns, rawFeedEvents, connected, lastServerMessageAt,
+  detailTab, rawRuns, rawFeedEvents, connected, lastServerMessageAt,
 }: IssueDetailViewProps): React.JSX.Element {
   if (!issue) {
     return (
       <Box flexDirection="column">
         <Text color="red">Issue not found.</Text>
-        <HelpBar view="detail" follow={follow} detailTab={detailTab} timelineMode={timelineMode} />
+        <HelpBar view="detail" follow={follow} detailTab={detailTab} />
       </Box>
     );
   }
@@ -206,7 +205,7 @@ export function IssueDetailView({
           )}
 
           <Box marginTop={1} flexDirection="column">
-            <Timeline entries={timeline} follow={follow} mode={timelineMode} />
+            <Timeline entries={timeline} follow={follow} />
           </Box>
         </>
       ) : (
@@ -225,7 +224,7 @@ export function IssueDetailView({
       )}
 
       <Box marginTop={1}>
-        <HelpBar view="detail" follow={follow} detailTab={detailTab} timelineMode={timelineMode} />
+        <HelpBar view="detail" follow={follow} detailTab={detailTab} />
       </Box>
     </Box>
   );

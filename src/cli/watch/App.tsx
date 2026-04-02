@@ -186,8 +186,6 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
         dispatch({ type: "switch-detail-tab", tab: "history" });
       } else if (input === "t") {
         dispatch({ type: "switch-detail-tab", tab: "timeline" });
-      } else if (input === "v") {
-        dispatch({ type: "toggle-timeline-mode" });
       } else if (input === "j" || key.downArrow) {
         dispatch({ type: "detail-navigate", direction: "next", filtered });
       } else if (input === "k" || key.upArrow) {
@@ -235,7 +233,6 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
           plan={state.plan}
           issueContext={state.issueContext}
           detailTab={state.detailTab}
-          timelineMode={state.timelineMode}
           rawRuns={state.rawRuns}
           rawFeedEvents={state.rawFeedEvents}
           connected={state.connected}

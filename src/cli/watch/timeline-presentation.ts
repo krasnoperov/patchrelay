@@ -6,7 +6,8 @@ import type {
   TimelineRunPayload,
 } from "./timeline-builder.ts";
 
-export type TimelineMode = "compact" | "verbose";
+/** @deprecated No longer used — single timeline mode. */
+export type TimelineMode = "compact";
 
 export type TimelineDisplayRow =
   | {
@@ -59,9 +60,8 @@ interface RunAccumulator {
   endedAt?: string | undefined;
 }
 
-export function buildTimelineRows(entries: TimelineEntry[], mode: TimelineMode): TimelineDisplayRow[] {
-  const rows = mode === "compact" ? buildCompactTimelineRows(entries) : buildVerboseTimelineRows(entries);
-  return collapseRepeatedFeedRows(rows);
+export function buildTimelineRows(entries: TimelineEntry[]): TimelineDisplayRow[] {
+  return collapseRepeatedFeedRows(buildCompactTimelineRows(entries));
 }
 
 function buildVerboseTimelineRows(entries: TimelineEntry[]): TimelineDisplayRow[] {

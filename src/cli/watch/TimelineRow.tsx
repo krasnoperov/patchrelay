@@ -1,11 +1,9 @@
 import { Box, Text } from "ink";
-import type { TimelineMode } from "./timeline-presentation.ts";
 import type { TimelineDisplayRow, TimelineRunDetail } from "./timeline-presentation.ts";
 import { ItemLine } from "./ItemLine.tsx";
 
 interface TimelineRowProps {
   entry: TimelineDisplayRow;
-  mode: TimelineMode;
 }
 
 function formatDuration(startedAt: string, endedAt: string): string {
@@ -124,7 +122,7 @@ function CIChecksRow({ entry }: { entry: Extract<TimelineDisplayRow, { kind: "ci
   );
 }
 
-export function TimelineRow({ entry }: TimelineRowProps): React.JSX.Element {
+export function TimelineRow({ entry }: { entry: TimelineDisplayRow }): React.JSX.Element {
   switch (entry.kind) {
     case "feed":
       return <FeedRow entry={entry} />;
