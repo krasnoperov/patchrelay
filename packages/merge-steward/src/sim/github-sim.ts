@@ -116,6 +116,19 @@ export class GitHubSim implements GitHubPRApi {
     return [...pr.labels];
   }
 
+  async deleteBranch(_prNumber: number): Promise<void> {
+    // No-op in sim — branch deletion is cosmetic cleanup.
+  }
+
+  /** Mark a PR as merged by branch name (used when push-to-main includes PR commits). */
+  markMergedByBranch(branch: string): void {
+    for (const pr of this.prs.values()) {
+      if (pr.branch === branch && !pr.merged) {
+        pr.merged = true;
+      }
+    }
+  }
+
   /** Add a label to a PR. */
   addLabel(prNumber: number, label: string): void {
     const pr = this.prs.get(prNumber);

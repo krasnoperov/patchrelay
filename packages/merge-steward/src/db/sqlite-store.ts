@@ -122,6 +122,7 @@ export class SqliteStore implements QueueStore {
     const row = this.conn.prepare(
       `SELECT * FROM queue_entries
        WHERE repo_id = ? AND pr_number = ? AND status NOT IN (${NOT_TERMINAL_SQL})
+       ORDER BY position ASC
        LIMIT 1`,
     ).get(repoId, prNumber, ...TERMINAL_STATUSES);
     return row ? mapEntry(row) : undefined;

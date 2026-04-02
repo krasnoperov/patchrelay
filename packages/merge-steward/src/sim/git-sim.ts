@@ -31,7 +31,7 @@ export class GitSim implements GitOperations {
   }
 
   /** Called after push — harness wires this to sync GitHubSim SHA. */
-  onPush: ((branch: string, sha: string) => void) | null = null;
+  onPush: ((branch: string, sha: string, targetBranch?: string) => void) | null = null;
 
   /** Initialize the repo with an initial commit on the base branch. */
   async init(baseBranch: string): Promise<string> {
@@ -188,13 +188,32 @@ export class GitSim implements GitOperations {
     }
   }
 
-  async push(branch?: string): Promise<void> {
-    // No real remote in sim, but notify the onPush callback so
-    // GitHubSim can sync the SHA.
+  async push(branch?: string, _force?: boolean, targetBranch?: string): Promise<void> {
+    // When pushing to a different branch (e.g., spec → main), fast-forward
+    // the target to the source branch's HEAD in the in-memory repo.
+    if (targetBranch && branch) {
+      const sha = await this.headSha(branch);
+      const currentBranch = await git.currentBranch({ fs: this.vol, dir: this.dir });
+      await git.checkout({ fs: this.vol, dir: this.dir, ref: targetBranch, force: true });
+      // Fast-forward: set target branch to the source commit.
+      await git.merge({
+        fs: this.vol, dir: this.dir,
+        ours: targetBranch, theirs: branch,
+        author: AUTHOR,
+        fastForward: true,
+      });
+      await git.checkout({ fs: this.vol, dir: this.dir, ref: targetBranch, force: true });
+      if (currentBranch) {
+        try {
+          await git.checkout({ fs: this.vol, dir: this.dir, ref: currentBranch, force: true });
+        } catch { /* branch may not exist */ }
+      }
+    }
     if (this.onPush && branch) {
       try {
-        const sha = await this.headSha(branch);
-        this.onPush(branch, sha);
+        const effectiveBranch = targetBranch ?? branch;
+        const sha = await this.headSha(effectiveBranch);
+        this.onPush(branch, sha, targetBranch);
       } catch {
         // Branch may not exist in some edge cases.
       }

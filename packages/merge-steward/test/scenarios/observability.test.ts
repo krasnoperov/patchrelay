@@ -22,20 +22,20 @@ describe("observability: reconciler event stream", () => {
     // Should see the full lifecycle:
     assert.ok(actions.includes("promoted"), "should emit promoted");
     assert.ok(actions.includes("fetch_started"), "should emit fetch_started");
-    assert.ok(actions.includes("rebase_started"), "should emit rebase_started");
-    assert.ok(actions.includes("rebase_succeeded"), "should emit rebase_succeeded");
+    assert.ok(actions.includes("spec_build_started"), "should emit spec_build_started");
+    assert.ok(actions.includes("spec_build_succeeded"), "should emit spec_build_succeeded");
     assert.ok(actions.includes("ci_triggered"), "should emit ci_triggered");
     assert.ok(actions.includes("ci_passed"), "should emit ci_passed");
     assert.ok(actions.includes("merge_revalidating"), "should emit merge_revalidating");
     assert.ok(actions.includes("merge_succeeded"), "should emit merge_succeeded");
 
-    // Order: promoted before rebase_started before ci_triggered before merge_succeeded
+    // Order: promoted before spec_build before ci_triggered before merge_succeeded
     const promotedIdx = actions.indexOf("promoted");
-    const rebaseIdx = actions.indexOf("rebase_started");
+    const specIdx = actions.indexOf("spec_build_started");
     const ciIdx = actions.indexOf("ci_triggered");
     const mergeIdx = actions.indexOf("merge_succeeded");
-    assert.ok(promotedIdx < rebaseIdx, "promoted before rebase");
-    assert.ok(rebaseIdx < ciIdx, "rebase before CI");
+    assert.ok(promotedIdx < specIdx, "promoted before spec_build");
+    assert.ok(specIdx < ciIdx, "spec_build before CI");
     assert.ok(ciIdx < mergeIdx, "CI before merge");
 
     h.assertInvariants();
@@ -139,11 +139,12 @@ describe("observability: reconciler event stream", () => {
 
     // The validating transition should explain what happened.
     const validatingEvent = events.find((e) => e.toStatus === "validating");
-    assert.ok(validatingEvent?.detail?.includes("refreshed"), "validating detail should mention branch refresh");
+    assert.ok(validatingEvent?.detail?.includes("spec") || validatingEvent?.detail?.includes("CI"), "validating detail should mention spec or CI");
 
     // The merged transition should explain.
     const mergedEvent = events.find((e) => e.toStatus === "merged");
-    assert.ok(mergedEvent?.detail?.includes("merged"), "merged detail should mention merge");
+    assert.ok(mergedEvent?.detail?.includes("main") || mergedEvent?.detail?.includes("merged"),
+      "merged detail should mention main or merge");
 
     h.assertInvariants();
   });

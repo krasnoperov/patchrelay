@@ -3,6 +3,9 @@
  *
  * queued → preparing_head → validating → merging → merged
  *
+ * Every entry builds a cumulative spec branch and runs CI on it.
+ * Head entry pushes its spec to main on merge (fast-forward).
+ *
  * Failure: any state → evicted (after retry budget exhausted).
  * Conflict retries are gated on base SHA change (non-spinning).
  *
@@ -218,7 +221,10 @@ export type ReconcileAction =
   | "evicted"
   | "invalidated"         // downstream entry reset due to base change
   | "retry_gated"         // non-spinning, waiting for base change
-  | "budget_exhausted";
+  | "budget_exhausted"
+  | "sanitized_closed"    // entry terminalized: PR closed on GitHub
+  | "sanitized_duplicate" // older duplicate entry superseded
+  | "branch_unreachable"; // branch gone or git operation failed unexpectedly
 
 export interface ReconcileEvent {
   at: string;

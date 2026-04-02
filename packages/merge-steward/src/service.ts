@@ -38,7 +38,7 @@ export class MergeStewardService {
     private readonly ci: CIRunner,
     private readonly github: GitHubPRApi,
     private readonly eviction: EvictionReporter,
-    private readonly specBuilder: import("./interfaces.ts").SpeculativeBranchBuilder | null,
+    private readonly specBuilder: import("./interfaces.ts").SpeculativeBranchBuilder,
     private readonly logger: Logger,
   ) {
     const existing = store.listAll(config.repoId);
@@ -77,7 +77,20 @@ export class MergeStewardService {
     headSha: string;
     issueKey?: string;
     priority?: number;
-  }): QueueEntry {
+  }): QueueEntry | undefined {
+    // Pre-check: if an active entry already exists for this PR, don't
+    // attempt the insert. This is also enforced by the UNIQUE partial
+    // index (idx_one_active_per_pr), but handling it here gives a clear
+    // log message instead of a raw constraint error.
+    const existing = this.store.getEntryByPR(this.config.repoId, params.prNumber);
+    if (existing) {
+      this.logger.warn(
+        { prNumber: params.prNumber, existingEntryId: existing.id },
+        "Duplicate enqueue rejected: active entry already exists for PR",
+      );
+      return existing;
+    }
+
     const entry: QueueEntry = {
       id: randomUUID(),
       repoId: this.config.repoId,
@@ -101,7 +114,23 @@ export class MergeStewardService {
       enqueuedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
-    this.store.insert(entry);
+
+    try {
+      this.store.insert(entry);
+    } catch (err) {
+      // UNIQUE constraint race: another entry was inserted between our
+      // pre-check and the insert. Return the existing entry.
+      const raced = this.store.getEntryByPR(this.config.repoId, params.prNumber);
+      if (raced) {
+        this.logger.warn(
+          { prNumber: params.prNumber, existingEntryId: raced.id },
+          "Duplicate enqueue caught by constraint: returning existing entry",
+        );
+        return raced;
+      }
+      throw err; // Not a duplicate constraint — re-throw the real error.
+    }
+
     this.logger.info({ prNumber: params.prNumber, entryId: entry.id }, "PR enqueued");
     return entry;
   }
@@ -311,8 +340,15 @@ export class MergeStewardService {
       this.lastTickOutcome = "succeeded";
     } catch (error) {
       this.lastTickOutcome = "failed";
-      this.lastTickError = error instanceof Error ? error.message : String(error);
-      this.logger.error({ error }, "Reconcile tick failed");
+      // Preserve stack + message for the watch API. The reconciler wraps
+      // per-entry errors with [PR #N entryId phase=X] context.
+      this.lastTickError = error instanceof Error
+        ? `${error.message}${error.stack ? `\n${error.stack}` : ""}`
+        : String(error);
+      this.logger.error(
+        { err: error instanceof Error ? { message: error.message, stack: error.stack } : error },
+        "Reconcile tick failed",
+      );
     } finally {
       this.tickInProgress = false;
       this.lastTickCompletedAt = new Date().toISOString();

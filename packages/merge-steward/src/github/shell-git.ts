@@ -62,10 +62,11 @@ export class ShellGitOperations implements GitOperations, SpeculativeBranchBuild
     return { success: true, sha: newSha };
   }
 
-  async push(branch: string, force = false): Promise<void> {
+  async push(branch: string, force = false, targetBranch?: string): Promise<void> {
     const args = ["push"];
     if (force) args.push("--force-with-lease");
-    args.push("origin", branch);
+    const refspec = targetBranch ? `${branch}:${targetBranch}` : branch;
+    args.push("origin", refspec);
     await this.git(args, { timeoutMs: 60_000 });
   }
 
