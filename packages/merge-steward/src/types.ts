@@ -203,9 +203,6 @@ export type ReconcileAction =
   | "fetch_started"
   | "main_broken"
   | "branch_mismatch"     // external push detected
-  | "rebase_started"
-  | "rebase_succeeded"
-  | "rebase_conflict"
   | "spec_build_started"
   | "spec_build_succeeded"
   | "spec_build_conflict"

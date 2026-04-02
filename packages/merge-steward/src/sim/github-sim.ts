@@ -39,7 +39,7 @@ export class GitHubSim implements GitHubPRApi {
     if (pr) pr.reviewApproved = approved;
   }
 
-  /** Update head SHA (e.g., after rebase/push). */
+  /** Update head SHA (e.g., after force push). */
   updateSha(prNumber: number, sha: string): void {
     const pr = this.prs.get(prNumber);
     if (pr) {

@@ -2,7 +2,7 @@ import type { GitOperations, SpeculativeBranchBuilder } from "../interfaces.ts";
 import type { MergeResult } from "../types.ts";
 import { exec } from "../exec.ts";
 
-/** Extract conflict file names from git rebase/merge stderr. */
+/** Extract conflict file names from git merge stderr. */
 function parseConflicts(stderr: string): string[] | undefined {
   const files = stderr
     .split("\n")

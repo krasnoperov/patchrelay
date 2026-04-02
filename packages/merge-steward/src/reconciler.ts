@@ -246,7 +246,7 @@ async function prepareEntry(
   }
 
   if (!result.success) {
-    emit(ctx, entry, "rebase_conflict", { baseSha, conflictFiles: result.conflictFiles });
+    emit(ctx, entry, "spec_build_conflict", { baseSha, conflictFiles: result.conflictFiles });
     if (isBudgetExhausted(entry)) {
       emit(ctx, entry, "budget_exhausted");
       await evictEntry(ctx, entry, "integration_conflict",
