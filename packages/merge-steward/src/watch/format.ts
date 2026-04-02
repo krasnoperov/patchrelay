@@ -78,10 +78,10 @@ export function queueProgress(status: QueueEntryStatus): { current: number; tota
 export function nextStepLabel(status: QueueEntryStatus, entry?: { lastFailedBaseSha: string | null; specBasedOn: string | null }): string {
   switch (status) {
     case "queued":
-      return "waiting for PRs ahead to finish";
+      return "will start on next tick";
     case "preparing_head":
       if (entry?.lastFailedBaseSha) return "conflicts with main, will retry when queue advances";
-      return "building test branch with changes ahead";
+      return "building test branch with PRs ahead";
     case "validating":
       return entry?.specBasedOn
         ? "CI running, tested together with PRs ahead"
@@ -119,13 +119,31 @@ export function runtimeLabel(runtime: QueueRuntimeStatus): string {
   return runtime.lastTickOutcome;
 }
 
+const STATUS_DISPLAY: Record<string, string> = {
+  queued: "queued",
+  preparing_head: "preparing",
+  validating: "testing",
+  merging: "merging",
+  merged: "merged",
+  evicted: "evicted",
+  dequeued: "removed",
+};
+
+function displayStatus(status: string): string {
+  return STATUS_DISPLAY[status] ?? status;
+}
+
 export function formatEventSummary(event: QueueEventSummary): string {
-  const transition = event.fromStatus ? `${event.fromStatus} -> ${event.toStatus}` : `entered ${event.toStatus}`;
+  const from = event.fromStatus ? displayStatus(event.fromStatus) : null;
+  const to = displayStatus(event.toStatus);
+  const transition = from ? `${from} \u2192 ${to}` : to;
   return `#${event.prNumber} ${transition}${event.detail ? ` (${event.detail})` : ""}`;
 }
 
 export function formatEntryEvent(event: QueueEventRecord): string {
-  const transition = event.fromStatus ? `${event.fromStatus} -> ${event.toStatus}` : `entered ${event.toStatus}`;
+  const from = event.fromStatus ? displayStatus(event.fromStatus) : null;
+  const to = displayStatus(event.toStatus);
+  const transition = from ? `${from} \u2192 ${to}` : to;
   return `${transition}${event.detail ? ` (${event.detail})` : ""}`;
 }
 
