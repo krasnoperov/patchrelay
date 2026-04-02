@@ -133,18 +133,25 @@ function displayStatus(status: string): string {
   return STATUS_DISPLAY[status] ?? status;
 }
 
+/** Truncate hex strings longer than 12 chars (SHAs, run IDs) to 8 chars. */
+function shortenHashes(text: string): string {
+  return text.replace(/\b[0-9a-f]{13,}\b/g, (match) => match.slice(0, 8));
+}
+
 export function formatEventSummary(event: QueueEventSummary): string {
   const from = event.fromStatus ? displayStatus(event.fromStatus) : null;
   const to = displayStatus(event.toStatus);
   const transition = from ? `${from} \u2192 ${to}` : to;
-  return `#${event.prNumber} ${transition}${event.detail ? ` (${event.detail})` : ""}`;
+  const detail = event.detail ? ` (${shortenHashes(event.detail)})` : "";
+  return `#${event.prNumber} ${transition}${detail}`;
 }
 
 export function formatEntryEvent(event: QueueEventRecord): string {
   const from = event.fromStatus ? displayStatus(event.fromStatus) : null;
   const to = displayStatus(event.toStatus);
   const transition = from ? `${from} \u2192 ${to}` : to;
-  return `${transition}${event.detail ? ` (${event.detail})` : ""}`;
+  const detail = event.detail ? ` (${shortenHashes(event.detail)})` : "";
+  return `${transition}${detail}`;
 }
 
 export function formatDuration(ms: number): string {
