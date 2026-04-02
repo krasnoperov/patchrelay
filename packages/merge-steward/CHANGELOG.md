@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.0](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.7.0...merge-steward-v0.8.0) (2026-04-02)
+
+
+### Features
+
+* **merge-steward:** spec chain progress and recently-completed entries ([a489180](https://github.com/krasnoperov/patchrelay/commit/a489180f20c842a01eb05cd8229dde0149ba43d5))
+* **merge-steward:** spec chain summary line and recently-completed entries ([11143ac](https://github.com/krasnoperov/patchrelay/commit/11143ac1b78dc79c688409d80d1037aa29e3a9b4))
+
 ## [0.7.0](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.6.0...merge-steward-v0.7.0) (2026-04-02)
 
 
