@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.4](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.8.3...merge-steward-v0.8.4) (2026-04-02)
+
+
+### Bug Fixes
+
+* **merge-steward:** shorten CI run IDs in transition detail strings ([d9984e7](https://github.com/krasnoperov/patchrelay/commit/d9984e7d1bd9107df7c1a01f013fd681ca5f764d))
+* **merge-steward:** shorten hashes in event details ([a7dab3f](https://github.com/krasnoperov/patchrelay/commit/a7dab3f93824b24b64e65947d258a0caf7c555eb))
+
 ## [0.8.3](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.8.2...merge-steward-v0.8.3) (2026-04-02)
 
 
