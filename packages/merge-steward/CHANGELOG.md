@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.6](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.8.5...merge-steward-v0.8.6) (2026-04-02)
+
+
+### Bug Fixes
+
+* **merge-steward:** clear retry gate when GitHub reports CLEAN ([307d100](https://github.com/krasnoperov/patchrelay/commit/307d100f75a1c028482b861df1640847fdb7aff1))
+* **merge-steward:** clear retry gate when GitHub reports PR is CLEAN ([0e07568](https://github.com/krasnoperov/patchrelay/commit/0e075685df29dad006786a1a690e7a54d320e4b4))
+
 ## [0.8.5](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.8.4...merge-steward-v0.8.5) (2026-04-02)
 
 
