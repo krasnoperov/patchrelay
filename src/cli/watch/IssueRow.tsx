@@ -1,7 +1,7 @@
 import { Box, Text } from "ink";
 import type { WatchIssue } from "./watch-state.ts";
 import { summarizeIssueStatusNote } from "./issue-status-note.ts";
-import { progressBar, relativeTime, truncate } from "./format-utils.ts";
+import { relativeTime, truncate } from "./format-utils.ts";
 
 interface IssueRowProps {
   issue: WatchIssue;
@@ -9,315 +9,161 @@ interface IssueRowProps {
   titleWidth?: number | undefined;
 }
 
-const STATE_COLORS: Record<string, string> = {
-  blocked: "yellow",
-  ready: "blueBright",
-  delegated: "cyan",
-  implementing: "cyan",
-  pr_open: "cyan",
-  changes_requested: "yellow",
-  repairing_ci: "cyan",
-  awaiting_queue: "cyan",
-  repairing_queue: "cyan",
-  done: "green",
-  failed: "red",
-  escalated: "red",
-  awaiting_input: "yellow",
-};
-
-const STATE_SHORT: Record<string, string> = {
-  blocked: "blocked",
-  ready: "ready",
-  delegated: "delegated",
-  implementing: "implementing",
-  pr_open: "pr open",
-  changes_requested: "review changes",
-  repairing_ci: "repairing checks",
-  awaiting_queue: "queued for merge",
-  repairing_queue: "repairing merge queue",
-  done: "done",
-  failed: "failed",
-  escalated: "escalated",
-  awaiting_input: "awaiting input",
-};
-
-const STATUS_SHORT: Record<string, string> = {
-  running: "\u25b8",
-  completed: "\u2713",
-  failed: "\u2717",
-  released: "\u2013",
-};
-
-function stateColor(state: string): string {
-  return STATE_COLORS[state] ?? "white";
-}
+// ─── State display ──────────────────────────────────────────────
 
 const TERMINAL_STATES = new Set(["done", "failed", "escalated", "awaiting_input"]);
 
-interface StatusChip {
-  text: string;
+interface StateDisplay {
+  label: string;
   color: string;
 }
 
-interface PipelineProgress {
-  current: number;
-  total: number;
-  label: string;
+function effectiveState(issue: WatchIssue): string {
+  if (issue.blockedByCount > 0 && !issue.activeRunType) return "blocked";
+  if (issue.readyForExecution && !issue.activeRunType) return "ready";
+  return issue.factoryState;
 }
 
-function formatStatus(issue: WatchIssue): string {
-  const effectiveState = issue.blockedByCount > 0 && !issue.activeRunType
-    ? "blocked"
-    : issue.readyForExecution && !issue.activeRunType
-      ? "ready"
-      : issue.factoryState;
-  const state = STATE_SHORT[effectiveState] ?? effectiveState;
-  // Terminal states: just the label, no run symbol
-  if (TERMINAL_STATES.has(issue.factoryState)) return state;
-  // Active/in-progress: show run status symbol
-  const status = issue.activeRunType ? "running" : issue.latestRunStatus;
-  const statusSym = status ? (STATUS_SHORT[status] ?? "") : "";
-  if (statusSym) return `${state} ${statusSym}`;
-  return state;
-}
-
-function buildStatusChips(issue: WatchIssue): StatusChip[] {
-  const effectiveState = issue.blockedByCount > 0 && !issue.activeRunType
-    ? "blocked"
-    : issue.readyForExecution && !issue.activeRunType
-      ? "ready"
-      : issue.factoryState;
-
-  const chips: StatusChip[] = [{
-    text: `${stateIcon(effectiveState)} ${STATE_SHORT[effectiveState] ?? effectiveState}`,
-    color: stateColor(effectiveState),
-  }];
-
-  if (issue.prNumber !== undefined) {
-    chips.push({ text: `PR #${issue.prNumber}`, color: "cyan" });
-  }
-
-  const reviewChip = buildReviewChip(issue.prReviewState);
-  if (reviewChip) chips.push(reviewChip);
-
-  const checkChip = buildCheckChip(issue.prCheckStatus);
-  if (checkChip) chips.push(checkChip);
-  const checksProgressChip = buildChecksProgressChip(issue);
-  if (checksProgressChip) chips.push(checksProgressChip);
-
-  const mergeChip = buildMergeChip(issue);
-  if (mergeChip) chips.push(mergeChip);
-
-  if (issue.blockedByCount > 0) {
-    chips.push({
-      text: `blocked by ${issue.blockedByKeys.join(", ")}`,
-      color: "yellow",
-    });
-  }
-
-  return chips;
-}
-
-function stateIcon(state: string): string {
+function stateDisplay(issue: WatchIssue): StateDisplay {
+  const state = effectiveState(issue);
   switch (state) {
-    case "implementing":
-    case "repairing_ci":
-    case "repairing_queue":
-      return "\u25b8";
-    case "awaiting_queue":
-      return "\u25a4";
-    case "done":
-      return "\u2713";
-    case "failed":
-    case "escalated":
-      return "\u2717";
-    case "blocked":
-      return "!";
-    case "ready":
-      return "+";
-    default:
-      return "\u2022";
+    case "blocked": return { label: "blocked", color: "yellow" };
+    case "ready": return { label: "ready", color: "blueBright" };
+    case "delegated": return { label: "delegated", color: "cyan" };
+    case "implementing": return { label: "implementing", color: "cyan" };
+    case "pr_open": return { label: "PR open", color: "cyan" };
+    case "changes_requested": return { label: "review changes", color: "yellow" };
+    case "repairing_ci": return { label: "repairing CI", color: "yellow" };
+    case "awaiting_queue": return { label: "queued for merge", color: "cyan" };
+    case "repairing_queue": return { label: "repairing queue", color: "yellow" };
+    case "done": return { label: "merged", color: "green" };
+    case "failed": return { label: "failed", color: "red" };
+    case "escalated": return { label: "escalated", color: "red" };
+    case "awaiting_input": return { label: "awaiting input", color: "yellow" };
+    default: return { label: state, color: "white" };
   }
 }
 
-function buildReviewChip(reviewState?: string): StatusChip | null {
-  switch (reviewState) {
-    case "approved":
-      return { text: "\u2713 review approved", color: "green" };
-    case "changes_requested":
-      return { text: "\u2717 changes requested", color: "yellow" };
-    case "commented":
-      return { text: "\u2022 review commented", color: "yellow" };
-    case "dismissed":
-      return { text: "\u2013 review dismissed", color: "yellow" };
-    default:
-      return null;
+// ─── Context facts (what matters right now) ─────────────────────
+
+function buildFacts(issue: WatchIssue): Array<{ text: string; color?: string }> {
+  const facts: Array<{ text: string; color?: string }> = [];
+
+  // PR number
+  if (issue.prNumber !== undefined) {
+    facts.push({ text: `PR #${issue.prNumber}` });
   }
-}
 
-function buildCheckChip(checkState?: string): StatusChip | null {
-  switch (checkState) {
-    case "passed":
-    case "success":
-      return { text: "\u2713 checks passed", color: "green" };
-    case "failed":
-    case "failure":
-      return { text: "\u2717 checks failed", color: "red" };
-    case "pending":
-    case "in_progress":
-    case "queued":
-      return { text: "\u25cf checks running", color: "yellow" };
-    default:
-      return null;
+  // Review state — only show when it matters (not yet approved, or changes requested)
+  if (issue.prReviewState === "approved") {
+    facts.push({ text: "approved", color: "green" });
+  } else if (issue.prReviewState === "changes_requested") {
+    facts.push({ text: "changes requested", color: "yellow" });
+  } else if (issue.prNumber !== undefined && !issue.prReviewState && !TERMINAL_STATES.has(issue.factoryState)) {
+    facts.push({ text: "awaiting review", color: "yellow" });
   }
-}
 
-function buildChecksProgressChip(issue: WatchIssue): StatusChip | null {
-  const summary = issue.prChecksSummary;
-  if (!summary || summary.total <= 0) return null;
-  const text = summary.failed > 0
-    ? `checks ${summary.failed}/${summary.total} failed`
-    : summary.pending > 0
-      ? `checks ${summary.completed}/${summary.total} settled`
-      : `checks ${summary.passed}/${summary.total} passed`;
-  const color = summary.failed > 0 ? "red" : summary.pending > 0 ? "yellow" : "green";
-  return { text, color };
-}
-
-function buildMergeChip(issue: WatchIssue): StatusChip | null {
-  if (issue.prNumber === undefined) return null;
-  switch (issue.factoryState) {
-    case "awaiting_queue":
-      return { text: "\u25a4 queued for merge", color: "cyan" };
-    case "repairing_queue":
-      return { text: "! merge queue repair", color: "yellow" };
-    case "done":
-      return { text: "\u2713 merged", color: "green" };
-    case "pr_open":
-      if (issue.prReviewState === "approved" && issue.prCheckStatus === "passed") {
-        return { text: "\u2713 merge ready", color: "green" };
-      }
-      return { text: "\u2022 PR open", color: "cyan" };
-    default:
-      return null;
+  // Check status — compact
+  if (issue.prCheckStatus === "passed" || issue.prCheckStatus === "success") {
+    facts.push({ text: "checks passed", color: "green" });
+  } else if (issue.prCheckStatus === "failed" || issue.prCheckStatus === "failure") {
+    const failedNames = issue.prChecksSummary?.failedNames ?? [];
+    const checkInfo = issue.latestFailureCheckName
+      ?? (failedNames.length > 0 ? failedNames.slice(0, 2).join(", ") : "checks");
+    facts.push({ text: `${checkInfo} failed`, color: "red" });
+  } else if (issue.prCheckStatus === "pending" || issue.prCheckStatus === "in_progress") {
+    const summary = issue.prChecksSummary;
+    if (summary && summary.total > 0) {
+      facts.push({ text: `checks ${summary.completed}/${summary.total}`, color: "yellow" });
+    } else {
+      facts.push({ text: "checks running", color: "yellow" });
+    }
   }
-}
 
-function buildPrimaryBlocker(issue: WatchIssue): StatusChip | null {
+  // Blocker
   if (issue.blockedByCount > 0) {
-    return {
-      text: `Waiting on ${issue.blockedByKeys.join(", ")}`,
-      color: "yellow",
-    };
+    facts.push({ text: `waiting on ${issue.blockedByKeys.join(", ")}`, color: "yellow" });
   }
+
+  return facts;
+}
+
+// ─── What's blocking progress ───────────────────────────────────
+
+function blockerText(issue: WatchIssue): string | null {
+  if (issue.blockedByCount > 0) return `Waiting on ${issue.blockedByKeys.join(", ")}`;
+  if (issue.factoryState === "repairing_queue") return "Merge queue conflict, repairing branch";
+  if (issue.factoryState === "repairing_ci") {
+    const check = issue.latestFailureCheckName ?? "CI";
+    return `Repairing ${check}`;
+  }
+  if (issue.factoryState === "awaiting_queue") return "Waiting for merge queue";
   if (issue.prCheckStatus === "failed" || issue.prCheckStatus === "failure") {
-    const failedChecks = issue.prChecksSummary?.failedNames ?? [];
-    const failedCheck = issue.latestFailureCheckName
-      ?? (failedChecks.length > 0 ? failedChecks.slice(0, 2).join(", ") : undefined)
-      ?? "PR checks";
-    return {
-      text: `${failedCheck} failed`,
-      color: "red",
-    };
+    const check = issue.latestFailureCheckName ?? "checks";
+    return `${check} failed`;
   }
-  if (issue.prCheckStatus === "pending" || issue.prCheckStatus === "in_progress" || issue.prCheckStatus === "queued") {
-    return {
-      text: "Waiting for PR checks to finish",
-      color: "yellow",
-    };
-  }
-  if (issue.prReviewState === "changes_requested") {
-    return {
-      text: "Review changes requested",
-      color: "yellow",
-    };
-  }
-  if (issue.factoryState === "repairing_queue") {
-    return {
-      text: "Merge queue conflict, repairing branch",
-      color: "yellow",
-    };
-  }
-  if (issue.factoryState === "awaiting_queue") {
-    return {
-      text: "Waiting for merge queue turn",
-      color: "yellow",
-    };
-  }
-  if (issue.prNumber !== undefined && !issue.prReviewState && issue.factoryState !== "done") {
-    return {
-      text: "Waiting for review approval",
-      color: "yellow",
-    };
-  }
+  if (issue.prReviewState === "changes_requested") return "Review changes requested";
   return null;
 }
 
-function buildPipelineProgress(issue: WatchIssue): PipelineProgress {
-  switch (issue.factoryState) {
-    case "delegated":
-      return { current: 1, total: 4, label: "delegated" };
-    case "implementing":
-      return { current: 1, total: 4, label: "implementing" };
-    case "pr_open":
-    case "changes_requested":
-    case "repairing_ci":
-      return { current: 2, total: 4, label: "pr checks" };
-    case "awaiting_queue":
-    case "repairing_queue":
-      return { current: 3, total: 4, label: "merge queue" };
-    case "done":
-      return { current: 4, total: 4, label: "merged" };
-    case "failed":
-    case "escalated":
-    case "awaiting_input":
-      return { current: 4, total: 4, label: "stopped" };
-    default:
-      return { current: 1, total: 4, label: "queued" };
-  }
-}
+// ─── Render ─────────────────────────────────────────────────────
 
 export function IssueRow({ issue, selected, titleWidth }: IssueRowProps): React.JSX.Element {
   const key = issue.issueKey ?? issue.projectId;
-  const ago = relativeTime(issue.updatedAt);
-  const tw = titleWidth ?? 40;
+  const tw = titleWidth ?? 60;
   const title = issue.title ? truncate(issue.title, tw) : "";
   const detail = selected ? summarizeIssueStatusNote(issue.statusNote) : undefined;
-  const status = formatStatus(issue);
-  const chips = buildStatusChips(issue);
-  const blocker = buildPrimaryBlocker(issue);
-  const pipeline = buildPipelineProgress(issue);
+  const state = stateDisplay(issue);
+  const facts = buildFacts(issue);
+  const blocker = selected ? blockerText(issue) : null;
+
+  const isTerminal = TERMINAL_STATES.has(issue.factoryState);
+
+  // Terminal issues: compact single line
+  if (isTerminal && !selected) {
+    return (
+      <Box>
+        <Text dimColor> </Text>
+        <Text dimColor>{` ${key}`}</Text>
+        <Text dimColor>{`  ${relativeTime(issue.updatedAt).padStart(4)}`}</Text>
+        <Text>{`  `}</Text>
+        <Text color={state.color}>{state.label}</Text>
+      </Box>
+    );
+  }
 
   return (
     <Box flexDirection="column" marginBottom={detail ? 1 : 0}>
+      {/* Line 1: key · time · status · facts */}
       <Box>
-        <Text color={selected ? "blueBright" : "white"} bold={selected}>
-          {selected ? "\u25b8" : " "}
-        </Text>
+        <Text color={selected ? "blueBright" : "gray"}>{selected ? "\u25b8" : " "}</Text>
         <Text bold>{` ${key}`}</Text>
-        <Text dimColor>{`  ${ago}`}</Text>
-        <Text dimColor>{`  ${status}`}</Text>
-      </Box>
-      <Box paddingLeft={2} flexWrap="wrap">
-        {title ? <Text>{title}</Text> : null}
-      </Box>
-      <Box paddingLeft={2} flexWrap="wrap">
-        {chips.map((chip, index) => (
-          <Box key={`${key}-chip-${index}`} marginRight={1}>
-            <Text color={chip.color}>[{chip.text}]</Text>
-          </Box>
+        <Text dimColor>{`  ${relativeTime(issue.updatedAt).padStart(4)}`}</Text>
+        <Text>{`  `}</Text>
+        <Text color={state.color}>{state.label}</Text>
+        {facts.length > 0 && (
+          <Text dimColor>{` \u00b7 `}</Text>
+        )}
+        {facts.map((fact, i) => (
+          <Text key={i}>
+            {i > 0 ? <Text dimColor>{` \u00b7 `}</Text> : null}
+            <Text color={fact.color ?? "white"} dimColor={!fact.color}>{fact.text}</Text>
+          </Text>
         ))}
       </Box>
-      <Box paddingLeft={2} gap={1}>
-        <Text dimColor>{progressBar(pipeline.current, pipeline.total, 8)}</Text>
-        <Text dimColor>{pipeline.label}</Text>
-        {blocker ? (
-          <>
-            <Text dimColor>|</Text>
-            <Text color={blocker.color}>{blocker.text}</Text>
-          </>
-        ) : null}
-      </Box>
+      {/* Line 2: title */}
+      {title ? (
+        <Box paddingLeft={2}>
+          <Text dimColor>{title}</Text>
+        </Box>
+      ) : null}
+      {/* Line 3 (selected only): blocker explanation */}
+      {blocker ? (
+        <Box paddingLeft={2}>
+          <Text color="yellow">{blocker}</Text>
+        </Box>
+      ) : null}
+      {/* Line 4 (selected only): status note from agent */}
       {detail ? (
         <Box paddingLeft={4}>
           <Text dimColor wrap="wrap">{detail}</Text>
