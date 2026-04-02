@@ -49,6 +49,8 @@ const ZOMBIE_RECOVERY_BASE_DELAY_MS = 15_000; // 15s, 30s, 60s, 120s, 240s
 // TODO: replace updatedAt with a true factory_state_changed_at timestamp —
 // updatedAt can reset on unrelated row mutations (e.g. webhook metadata).
 const QUEUE_HEALTH_GRACE_MS = 120_000;
+// Suppress repeated probe-failure feed events — at most one per issue per window.
+const QUEUE_HEALTH_PROBE_FAILURE_COOLDOWN_MS = 300_000; // 5 minutes
 
 function slugify(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
@@ -188,6 +190,8 @@ const PROGRESS_THROTTLE_MS = 10_000;
 export class RunOrchestrator {
   private readonly worktreeManager: WorktreeManager;
   private readonly progressThrottle = new Map<number, number>();
+  /** Tracks last probe-failure feed event per issue to avoid spamming the operator feed. */
+  private readonly probeFailureFeedTimes = new Map<string, number>();
   private activeThreadId: string | undefined;
   botIdentity?: GitHubAppBotIdentity;
 
@@ -723,12 +727,20 @@ export class RunOrchestrator {
     const age = Date.now() - Date.parse(issue.updatedAt);
     if (age < QUEUE_HEALTH_GRACE_MS) return;
 
-    let pr: { state?: string; mergeable?: string; mergeStateStatus?: string; headRefOid?: string };
+    const protocol = resolveMergeQueueProtocol(project);
+
+    let pr: {
+      state?: string;
+      mergeable?: string;
+      mergeStateStatus?: string;
+      headRefOid?: string;
+      labels?: Array<{ name: string }>;
+    };
     try {
       const { stdout } = await execCommand("gh", [
         "pr", "view", String(issue.prNumber),
         "--repo", project.github.repoFullName,
-        "--json", "state,mergeable,mergeStateStatus,headRefOid",
+        "--json", "state,mergeable,mergeStateStatus,headRefOid,labels",
       ], { timeoutMs: 10_000 });
       pr = JSON.parse(stdout) as typeof pr;
     } catch (error) {
@@ -736,17 +748,26 @@ export class RunOrchestrator {
         { issueKey: issue.issueKey, prNumber: issue.prNumber, error: error instanceof Error ? error.message : String(error) },
         "Queue health: failed to probe GitHub PR state",
       );
-      this.feed?.publish({
-        level: "info",
-        kind: "github",
-        issueKey: issue.issueKey,
-        projectId: issue.projectId,
-        stage: "awaiting_queue",
-        status: "queue_health_probe_failed",
-        summary: `Queue health: failed to probe PR #${issue.prNumber}`,
-      });
+      // Throttle feed events — at most one per issue per cooldown window.
+      const issueKey = `${issue.projectId}::${issue.linearIssueId}`;
+      const lastFeedAt = this.probeFailureFeedTimes.get(issueKey) ?? 0;
+      if (Date.now() - lastFeedAt >= QUEUE_HEALTH_PROBE_FAILURE_COOLDOWN_MS) {
+        this.probeFailureFeedTimes.set(issueKey, Date.now());
+        this.feed?.publish({
+          level: "info",
+          kind: "github",
+          issueKey: issue.issueKey,
+          projectId: issue.projectId,
+          stage: "awaiting_queue",
+          status: "queue_health_probe_failed",
+          summary: `Queue health: failed to probe PR #${issue.prNumber}`,
+        });
+      }
       return;
     }
+
+    // Successful probe — clear any probe-failure throttle for this issue.
+    this.probeFailureFeedTimes.delete(`${issue.projectId}::${issue.linearIssueId}`);
 
     // Missed merge webhook — advance to done.
     if (pr.state === "MERGED") {
@@ -757,6 +778,12 @@ export class RunOrchestrator {
 
     // Non-open PRs (closed, draft) — don't enter repair logic.
     if (pr.state !== "OPEN") return;
+
+    // Verify admission label is still present — if the Steward removed it
+    // (eviction, dequeue) but PatchRelay missed the webhook, we should not
+    // treat a DIRTY PR as a queue-health problem.
+    const hasQueueLabel = pr.labels?.some((l) => l.name === protocol.admissionLabel) ?? false;
+    if (!hasQueueLabel) return;
 
     // Conflict detected — dispatch preemptive queue repair.
     if (pr.mergeStateStatus === "DIRTY" || pr.mergeable === "CONFLICTING") {
