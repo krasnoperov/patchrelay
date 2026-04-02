@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.33.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.32.3...patchrelay-v0.33.0) (2026-04-02)
+
+
+### Features
+
+* add queue health monitor for preemptive conflict detection ([80a4779](https://github.com/krasnoperov/patchrelay/commit/80a4779ace59473327c06a61f103eee08189ceba))
+* preemptively repair stuck queued PRs ([02e080e](https://github.com/krasnoperov/patchrelay/commit/02e080ea1df49a45a031a915c2ba5a504955bc45))
+
+
+### Bug Fixes
+
+* add queue label guard, throttle probe failures, add tests ([80dcdc9](https://github.com/krasnoperov/patchrelay/commit/80dcdc92dcc6beda8fd139f79c4e6b3bf84c28d4))
+
 ## [0.32.3](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.32.2...patchrelay-v0.32.3) (2026-04-01)
 
 
