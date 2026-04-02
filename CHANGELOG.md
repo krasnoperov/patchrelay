@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.35.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.34.0...patchrelay-v0.35.0) (2026-04-02)
+
+
+### Features
+
+* **patchrelay:** show run item counts and command duration in timeline ([f1683fd](https://github.com/krasnoperov/patchrelay/commit/f1683fde4a893e7e6ad97f21d20476bd49dd2c29))
+
+
+### Bug Fixes
+
+* **patchrelay:** remove Enter/Esc hints — intuitive navigation ([1e406f0](https://github.com/krasnoperov/patchrelay/commit/1e406f047ccd152f2eaf45ade44ee8e5ce858b17))
+* **patchrelay:** remove q from help bar, ctrl-c is the primary exit ([c9b499c](https://github.com/krasnoperov/patchrelay/commit/c9b499cee49bc7e8c2284db935bbda01905cc1af))
+* **patchrelay:** remove unused buildVerboseTimelineRows and summarizeVerboseItems ([44b4ae4](https://github.com/krasnoperov/patchrelay/commit/44b4ae48ac85242fbd09c45a7c6695e5ef969c07))
+* **patchrelay:** use ● dot prefix for timeline blocks, blank line before each ([35ff6e9](https://github.com/krasnoperov/patchrelay/commit/35ff6e93359e43976e0aa6e104be9217432b56c7))
+* remove tests for deleted timeline mode toggle ([24bcb49](https://github.com/krasnoperov/patchrelay/commit/24bcb49a8af94627417a89e93559777d925956a5))
+* replace implementation jargon with operator-facing language ([f6845c7](https://github.com/krasnoperov/patchrelay/commit/f6845c738ab4e3fdf7ee5982de2c5e1b771fff64))
+
 ## [0.34.0](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.33.0...patchrelay-v0.34.0) (2026-04-02)
 
 

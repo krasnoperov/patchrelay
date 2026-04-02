@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.8.3](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.8.2...merge-steward-v0.8.3) (2026-04-02)
+
+
+### Bug Fixes
+
+* **merge-steward:** align terminal rows, clean up detail view ([b4b2087](https://github.com/krasnoperov/patchrelay/commit/b4b20875342d53871da757cdb3c0b3dbf347762d))
+* **merge-steward:** fix misleading status text and humanize event log ([b74f511](https://github.com/krasnoperov/patchrelay/commit/b74f5116c26ab539c5ee3816a9f1d7bf17a12ea5))
+* **merge-steward:** fix strict typecheck for optional color prop ([2e93c2b](https://github.com/krasnoperov/patchrelay/commit/2e93c2bf3dacf57e76b57e574373765a6e4be67f))
+* **merge-steward:** pad relative time to 4 chars for aligned columns ([f4b7528](https://github.com/krasnoperov/patchrelay/commit/f4b7528d3a3daa65ce793e7226785f906c6d61a8))
+* **merge-steward:** queued status says 'starting shortly' not 'next tick' ([fbcc9db](https://github.com/krasnoperov/patchrelay/commit/fbcc9db9382bee29cc37683abc7fd558074f0402))
+* **merge-steward:** replace bracket state graph with dot notation ([8c86ae5](https://github.com/krasnoperov/patchrelay/commit/8c86ae5d39400941536ff8293f5c6e3767adba3b))
+* **merge-steward:** separate chain header from display filter ([5fa1b7b](https://github.com/krasnoperov/patchrelay/commit/5fa1b7b553a599299635739aec6c2523b4cde39a))
+* **merge-steward:** simplify queue row to one line, remove visual noise ([2ba1058](https://github.com/krasnoperov/patchrelay/commit/2ba1058c27ef7015cc82e0c65df0fd7a0f728859))
+* **merge-steward:** wait for re-approval instead of evicting, check all branches ([a6a49fe](https://github.com/krasnoperov/patchrelay/commit/a6a49fece67c4f94e8ca6ddc447a09fc8e2aa2cd))
+* replace implementation jargon with operator-facing language ([f6845c7](https://github.com/krasnoperov/patchrelay/commit/f6845c738ab4e3fdf7ee5982de2c5e1b771fff64))
+* update integration tests for non-null specBuilder and branch setup ([3044ba9](https://github.com/krasnoperov/patchrelay/commit/3044ba9c6727477e4f46ba8dc57584d1f7dd6413))
+
 ## [0.8.2](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.8.1...merge-steward-v0.8.2) (2026-04-02)
 
 
