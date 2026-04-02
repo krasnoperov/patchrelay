@@ -65,6 +65,9 @@ export async function reconcile(ctx: ReconcileContext): Promise<void> {
   const allActive = ctx.store.listActive(ctx.repoId);
   if (allActive.length === 0) return;
 
+  // Process up to speculativeDepth entries (1 in serial mode). GitHub
+  // truth checks are bounded by this window — we never scan the full
+  // historical queue, only the active working set.
   const depth = ctx.specBuilder ? Math.min(ctx.speculativeDepth, allActive.length) : 1;
 
   for (let i = 0; i < depth; i++) {
@@ -72,40 +75,108 @@ export async function reconcile(ctx: ReconcileContext): Promise<void> {
     const entry = ctx.store.getEntry(entryId);
     if (!entry || TERMINAL_STATUSES.includes(entry.status)) continue;
 
+    // ── Truth guard: verify entry against GitHub before processing ──
+    // Catches ghost entries (merged/closed PRs) and duplicate entries
+    // that survived from older bugs or missed webhooks.
+    if (await sanitizeEntry(ctx, entry)) continue;
+
     const isHead = i === 0;
     const prevEntry = i > 0 ? ctx.store.getEntry(allActive[i - 1]!.id) : null;
+    const phase = entry.status;
 
-    switch (entry.status) {
-      case "queued":
-        emit(ctx, entry, "promoted");
-        ctx.store.transition(entry.id, "preparing_head", undefined, "promoted to head");
-        break;
+    try {
+      switch (phase) {
+        case "queued":
+          emit(ctx, entry, "promoted");
+          ctx.store.transition(entry.id, "preparing_head", undefined, "promoted to head");
+          break;
 
-      case "preparing_head":
-        if (isHead) {
-          await prepareHead(ctx, entry);
-        } else if (ctx.specBuilder && prevEntry) {
-          await prepareSpeculative(ctx, entry, prevEntry);
+        case "preparing_head":
+          if (isHead) {
+            await prepareHead(ctx, entry);
+          } else if (ctx.specBuilder && prevEntry) {
+            await prepareSpeculative(ctx, entry, prevEntry);
+          }
+          break;
+
+        case "validating": {
+          const freshActive = ctx.store.listActive(ctx.repoId);
+          const freshIdx = freshActive.findIndex((e) => e.id === entry.id);
+          await checkValidation(ctx, entry, freshActive, freshIdx >= 0 ? freshIdx : i);
+          break;
         }
-        break;
 
-      case "validating": {
-        const freshActive = ctx.store.listActive(ctx.repoId);
-        const freshIdx = freshActive.findIndex((e) => e.id === entry.id);
-        await checkValidation(ctx, entry, freshActive, freshIdx >= 0 ? freshIdx : i);
-        break;
+        case "merging":
+          if (isHead) {
+            await mergeHead(ctx, entry, ctx.store.listActive(ctx.repoId));
+          }
+          break;
+
+        default:
+          break;
       }
-
-      case "merging":
-        if (isHead) {
-          await mergeHead(ctx, entry, ctx.store.listActive(ctx.repoId));
-        }
-        break;
-
-      default:
-        break;
+    } catch (error) {
+      // Attach entry context so the service-level catch has actionable detail.
+      const msg = error instanceof Error ? error.message : String(error);
+      const wrapped = new Error(`[PR #${entry.prNumber} ${entry.id} phase=${phase}] ${msg}`);
+      if (error instanceof Error) wrapped.stack = error.stack;
+      throw wrapped;
     }
   }
+}
+
+// ─── Truth guard: sanitize entry against GitHub ─────────────────
+
+/**
+ * Check if this entry should be terminalized before normal processing.
+ * Returns true if the entry was sanitized (caller should skip it).
+ *
+ * Two checks:
+ *  1. Duplicate: if getEntryByPR returns a *different* entry, this one is
+ *     stale — dequeue it as superseded.
+ *  2. PR liveness: if GitHub says the PR is already merged, terminalize.
+ *
+ * GitHub probe failures are swallowed — the entry proceeds normally and
+ * will be checked again on the next tick.
+ */
+async function sanitizeEntry(ctx: ReconcileContext, entry: QueueEntry): Promise<boolean> {
+  // 1. Duplicate check: getEntryByPR returns the first non-terminal
+  //    entry for this PR. If it's not us, we're the stale duplicate.
+  const canonical = ctx.store.getEntryByPR(ctx.repoId, entry.prNumber);
+  if (canonical && canonical.id !== entry.id) {
+    emit(ctx, entry, "sanitized_duplicate", {
+      detail: `superseded by entry ${canonical.id}`,
+    });
+    await cleanupSpec(ctx, entry);
+    ctx.store.dequeue(entry.id);
+    return true;
+  }
+
+  // 2. PR liveness: ask GitHub if the PR still exists and is open.
+  try {
+    const prStatus = await ctx.github.getStatus(entry.prNumber);
+    if (prStatus.merged) {
+      emit(ctx, entry, "merge_external", {
+        detail: `PR #${entry.prNumber} already merged on GitHub (detected in sanitize)`,
+      });
+      await cleanupSpec(ctx, entry);
+      ctx.store.transition(entry.id, "merged", CLEAN_SPEC, "merged externally (sanitize)");
+      return true;
+    }
+    // PR closed but not merged — the PR is dead, dequeue the entry.
+    if (!prStatus.mergeable && !prStatus.merged) {
+      emit(ctx, entry, "sanitized_closed", {
+        detail: `PR #${entry.prNumber} is closed on GitHub`,
+      });
+      await cleanupSpec(ctx, entry);
+      ctx.store.dequeue(entry.id);
+      return true;
+    }
+  } catch {
+    // GitHub probe failed — don't block the tick.
+  }
+
+  return false;
 }
 
 // ─── Head entry: fetch + gate + branch refresh ──────────────────
@@ -194,7 +265,17 @@ function summarizeCheckNames(checks: Array<{ name: string }>, limit = 3): string
 
 async function performBranchRefresh(ctx: ReconcileContext, entry: QueueEntry, baseSha: string): Promise<void> {
   emit(ctx, entry, "rebase_started", { baseSha, detail: `refreshing ${entry.branch} with ${ctx.baseBranch}` });
-  const result = await ctx.git.mergeBaseInto(entry.branch, ref(ctx, ctx.baseBranch));
+
+  let result: MergeResult;
+  try {
+    result = await ctx.git.mergeBaseInto(entry.branch, ref(ctx, ctx.baseBranch));
+  } catch (err) {
+    // Branch gone, unreachable, or unexpected git failure.
+    const detail = `git error during refresh: ${err instanceof Error ? err.message : String(err)}`;
+    emit(ctx, entry, "branch_unreachable", { baseSha, detail });
+    await evictEntry(ctx, entry, "branch_local");
+    return;
+  }
 
   if (!result.success) {
     emit(ctx, entry, "rebase_conflict", { baseSha, conflictFiles: result.conflictFiles });

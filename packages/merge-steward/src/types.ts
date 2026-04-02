@@ -218,7 +218,10 @@ export type ReconcileAction =
   | "evicted"
   | "invalidated"         // downstream entry reset due to base change
   | "retry_gated"         // non-spinning, waiting for base change
-  | "budget_exhausted";
+  | "budget_exhausted"
+  | "sanitized_closed"    // entry terminalized: PR closed on GitHub
+  | "sanitized_duplicate" // older duplicate entry superseded
+  | "branch_unreachable"; // branch gone or git operation failed unexpectedly
 
 export interface ReconcileEvent {
   at: string;
