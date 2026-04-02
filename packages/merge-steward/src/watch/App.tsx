@@ -232,6 +232,7 @@ export function App({ baseUrl, initialPrNumber }: AppProps): React.JSX.Element {
       {view === "list" ? (
         <QueueListView
           entries={visibleEntries}
+          allEntries={snapshot?.entries ?? []}
           selectedEntryId={selectedEntryId}
           recentEvents={snapshot?.recentEvents ?? []}
           headEntryId={snapshot?.summary.headEntryId ?? null}

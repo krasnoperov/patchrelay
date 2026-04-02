@@ -2,17 +2,18 @@ import { useMemo } from "react";
 import { Box, Text, useStdout } from "ink";
 import type { QueueBlockState, QueueEntry, QueueEventSummary } from "../types.ts";
 import { TERMINAL_STATUSES } from "../types.ts";
+import { buildChainEntries } from "./display-filter.ts";
 import { ciStatusIcon, formatEventSummary, humanStatus, nextStepLabel, progressBar, queueProgress, relativeTime, specChainLabel, statusColor, summarizeQueueBlock, truncate } from "./format.ts";
 
 interface QueueListViewProps {
   entries: QueueEntry[];
+  allEntries: QueueEntry[];
   selectedEntryId: string | null;
   recentEvents: QueueEventSummary[];
   headEntryId: string | null;
   queueBlock: QueueBlockState | null;
 }
 
-const ENTRY_ROW_HEIGHT = 2;
 const CHROME_ROWS = 13;
 
 function QueueRow({
@@ -94,6 +95,7 @@ function QueueRow({
 
 export function QueueListView({
   entries,
+  allEntries,
   selectedEntryId,
   recentEvents,
   headEntryId,
@@ -103,17 +105,22 @@ export function QueueListView({
   const rows = stdout?.rows ?? 24;
   const cols = stdout?.columns ?? 100;
   const infoWidth = Math.max(32, cols - 4);
-  const eventRows = Math.min(8, Math.max(4, rows - (entries.length * ENTRY_ROW_HEIGHT) - CHROME_ROWS));
+  // Terminal entries render as 1 row, active as 2.
+  const entryRows = entries.reduce((sum, e) => sum + (TERMINAL_STATUSES.includes(e.status) ? 1 : 2), 0);
+  const eventRows = Math.min(8, Math.max(4, rows - entryRows - CHROME_ROWS));
   const displayedEvents = useMemo(() => recentEvents.slice(-eventRows), [eventRows, recentEvents]);
   const queueBlockLabel = summarizeQueueBlock(queueBlock);
+
+  // Chain header always shows the live queue, regardless of display filter.
+  const chainEntries = useMemo(() => buildChainEntries(allEntries), [allEntries]);
 
   return (
     <Box flexDirection="column" marginTop={1}>
       {/* Spec chain: main ─ #A ✓ ─ #B ● ─ #C ○ */}
-      {entries.length > 0 && (
+      {chainEntries.length > 0 && (
         <Box marginBottom={1} gap={0}>
           <Text dimColor>main</Text>
-          {entries.map((entry) => {
+          {chainEntries.map((entry) => {
             const ci = ciStatusIcon(entry);
             return (
               <Box key={entry.id} gap={0}>

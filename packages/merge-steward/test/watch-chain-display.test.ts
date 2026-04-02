@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { QueueEntry, QueueEntryStatus } from "../src/types.ts";
 import { ciStatusIcon, specChainLabel } from "../src/watch/format.ts";
-import { buildDisplayEntries } from "../src/watch/display-filter.ts";
+import { buildChainEntries, buildDisplayEntries } from "../src/watch/display-filter.ts";
 
 function makeEntry(overrides: Partial<QueueEntry> & { prNumber: number; position: number; status: QueueEntryStatus }): QueueEntry {
   return {
@@ -99,6 +99,39 @@ test("ciStatusIcon returns correct icons for each status", () => {
   assert.strictEqual(ciStatusIcon({ status: "queued", ciRunId: null }).icon, "\u25cb");
   assert.strictEqual(ciStatusIcon({ status: "evicted", ciRunId: null }).icon, "\u2717");
   assert.strictEqual(ciStatusIcon({ status: "evicted", ciRunId: null }).color, "red");
+});
+
+// ─── Chain header (always live queue) ────────────────────────────
+
+test("buildChainEntries excludes old terminal entries even when passed all history", () => {
+  const oldMerged = makeEntry({
+    prNumber: 1, position: 1, status: "merged",
+    updatedAt: new Date(Date.now() - 120_000).toISOString(), // 2 min ago
+  });
+  const active = makeEntry({ prNumber: 2, position: 2, status: "validating", ciRunId: "ci-2" });
+  const oldEvicted = makeEntry({
+    prNumber: 3, position: 3, status: "evicted",
+    updatedAt: new Date(Date.now() - 120_000).toISOString(),
+  });
+
+  const chain = buildChainEntries([oldMerged, active, oldEvicted]);
+
+  assert.strictEqual(chain.length, 1, "only active entry in chain");
+  assert.strictEqual(chain[0]!.prNumber, 2);
+});
+
+test("buildChainEntries includes recently-merged for cascade visibility", () => {
+  const recentMerged = makeEntry({
+    prNumber: 1, position: 1, status: "merged",
+    updatedAt: new Date(Date.now() - 30_000).toISOString(), // 30s ago
+  });
+  const active = makeEntry({ prNumber: 2, position: 2, status: "validating", ciRunId: "ci-2" });
+
+  const chain = buildChainEntries([recentMerged, active]);
+
+  assert.strictEqual(chain.length, 2, "recent merged + active");
+  assert.strictEqual(chain[0]!.prNumber, 1);
+  assert.strictEqual(chain[1]!.prNumber, 2);
 });
 
 // ─── Spec chain label ───────────────────────────────────────────
