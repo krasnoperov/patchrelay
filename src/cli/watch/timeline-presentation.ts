@@ -255,7 +255,7 @@ function buildCompactTimelineRows(entries: TimelineEntry[]): TimelineDisplayRow[
       finalized: status !== "running",
       run: { ...run.run, status, ...(run.endedAt ? { endedAt: run.endedAt } : {}) },
       details: summarizeRunDetails(run.items),
-      items: [],
+      items: run.items.map((item) => ({ at: run.at, item })),
     });
   }
 

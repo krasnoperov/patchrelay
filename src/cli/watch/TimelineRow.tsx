@@ -47,20 +47,6 @@ function detailPrefix(detail: TimelineRunDetail): string {
   return "";
 }
 
-function verboseItemLabel(type: string): string {
-  switch (type) {
-    case "agentMessage": return "message";
-    case "commandExecution": return "command";
-    case "fileChange": return "files";
-    case "mcpToolCall":
-    case "dynamicToolCall": return "tool";
-    case "userMessage": return "you";
-    case "plan": return "plan";
-    case "reasoning": return "reasoning";
-    default: return type;
-  }
-}
-
 function TimeStamp({ at }: { at: string }): React.JSX.Element {
   return <Text dimColor>{relativeTime(at).padStart(4)}</Text>;
 }
@@ -87,43 +73,33 @@ function RunRow({
   const run = entry.run;
   const color = runStatusColor(run.status);
   const duration = run.endedAt ? formatDuration(run.startedAt, run.endedAt) : undefined;
-  const showVerboseItems = mode === "verbose" && entry.items.length > 0;
 
-  // Item counts for metadata
-  const msgs = entry.items.filter((i) => i.item.type === "agentMessage").length;
-  const cmds = entry.items.filter((i) => i.item.type === "commandExecution").length;
-  const files = entry.items.filter((i) => i.item.type === "fileChange").length;
-  const tools = entry.items.filter((i) => i.item.type === "mcpToolCall" || i.item.type === "dynamicToolCall").length;
-  const meta: string[] = [];
-  if (msgs > 0) meta.push(`${msgs} msg`);
-  if (cmds > 0) meta.push(`${cmds} cmd`);
-  if (files > 0) meta.push(`${files} file`);
-  if (tools > 0) meta.push(`${tools} tool`);
+  // In compact mode with items available, show items inline instead of detail summaries.
+  // In verbose mode, also show items. Fall back to details only when items are empty.
+  const showItems = entry.items.length > 0;
+  const showDetails = !showItems && entry.details.length > 0;
+
   return (
     <Box flexDirection="column">
+      {/* Run header */}
       <Box>
         <TimeStamp at={entry.at} />
         <Text bold color="yellow">{`  ${RUN_LABELS[run.runType] ?? run.runType}`}</Text>
         <Text bold color={color}>{`  ${run.status}`}</Text>
         {duration ? <Text dimColor>{`  ${duration}`}</Text> : null}
-        {meta.length > 0 ? <Text dimColor>{`  ${meta.join("  ")}`}</Text> : null}
       </Box>
-      {entry.details.map((detail, index) => (
-        <Box key={`${entry.id}-detail-${index}`} paddingLeft={4}>
+      {/* Items inline — each as a compact one-liner */}
+      {showItems && entry.items.map((itemEntry, index) => (
+        <Box key={`${entry.id}-item-${index}`} paddingLeft={6}>
+          <ItemLine item={itemEntry.item} />
+        </Box>
+      ))}
+      {/* Fallback: detail summaries when no items available */}
+      {showDetails && entry.details.map((detail, index) => (
+        <Box key={`${entry.id}-detail-${index}`} paddingLeft={6}>
           <Text wrap="wrap" {...(detailColor(detail) ? { color: detailColor(detail)! } : { dimColor: true })} bold={detail.tone === "message"}>
             {detailPrefix(detail)}{detail.text}
           </Text>
-        </Box>
-      ))}
-      {showVerboseItems && entry.items.map((itemEntry, index) => (
-        <Box key={`${entry.id}-item-${index}`} flexDirection="column" paddingLeft={4}>
-          <Box>
-            <TimeStamp at={itemEntry.at} />
-            <Text dimColor>{`  ${verboseItemLabel(itemEntry.item.type)}`}</Text>
-          </Box>
-          <Box paddingLeft={6}>
-            <ItemLine item={itemEntry.item} />
-          </Box>
         </Box>
       ))}
     </Box>
@@ -136,14 +112,8 @@ function ItemRow({
   entry: Extract<TimelineDisplayRow, { kind: "item" }>;
 }): React.JSX.Element {
   return (
-    <Box flexDirection="column" paddingLeft={4}>
-      <Box>
-        <TimeStamp at={entry.at} />
-        <Text dimColor>{`  ${verboseItemLabel(entry.item.type)}`}</Text>
-      </Box>
-      <Box paddingLeft={6}>
-        <ItemLine item={entry.item} />
-      </Box>
+    <Box paddingLeft={6}>
+      <ItemLine item={entry.item} />
     </Box>
   );
 }
