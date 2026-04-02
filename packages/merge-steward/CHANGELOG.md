@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.1](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.8.0...merge-steward-v0.8.1) (2026-04-02)
+
+
+### Bug Fixes
+
+* **merge-steward:** chain header includes recently-merged entries ([cb48fa1](https://github.com/krasnoperov/patchrelay/commit/cb48fa185af33a899a0970719888a035992eb4ea))
+* **merge-steward:** include recently-merged entries in spec chain header ([37dfcea](https://github.com/krasnoperov/patchrelay/commit/37dfcea6c8eec260fe23967f33f35f7c5d3f03a8))
+
 ## [0.8.0](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.7.0...merge-steward-v0.8.0) (2026-04-02)
 
 
