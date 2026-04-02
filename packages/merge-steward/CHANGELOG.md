@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.0](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.6.0...merge-steward-v0.7.0) (2026-04-02)
+
+
+### Features
+
+* **merge-steward:** improve watch with spec chain, retry-gate, cascade visibility ([d17b165](https://github.com/krasnoperov/patchrelay/commit/d17b165d8e4bc21b0c6421d137aa29d4391444db))
+* **merge-steward:** spec chain and retry-gate visibility in watch ([5ee3c70](https://github.com/krasnoperov/patchrelay/commit/5ee3c70c401d3636e74f1d31f7cee1647a2e463a))
+
 ## [0.6.0](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.5.6...merge-steward-v0.6.0) (2026-04-02)
 
 
