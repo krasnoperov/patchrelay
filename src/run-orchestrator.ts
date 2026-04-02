@@ -45,6 +45,10 @@ const DEFAULT_QUEUE_REPAIR_BUDGET = 3;
 const DEFAULT_REVIEW_FIX_BUDGET = 3;
 const DEFAULT_ZOMBIE_RECOVERY_BUDGET = 5;
 const ZOMBIE_RECOVERY_BASE_DELAY_MS = 15_000; // 15s, 30s, 60s, 120s, 240s
+// Queue health monitor: wait before probing a freshly-queued PR.
+// TODO: replace updatedAt with a true factory_state_changed_at timestamp —
+// updatedAt can reset on unrelated row mutations (e.g. webhook metadata).
+const QUEUE_HEALTH_GRACE_MS = 120_000;
 
 function slugify(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
@@ -694,9 +698,107 @@ export class RunOrchestrator {
     for (const run of this.db.listRunningRuns()) {
       await this.reconcileRun(run);
     }
+    // Preemptively detect stuck merge-queue PRs (conflicts visible on
+    // GitHub) and dispatch queue_repair before the Steward evicts.
+    await this.reconcileQueueHealth();
     // Advance issues stuck in pr_open whose stored PR metadata already
     // shows they should transition (e.g. approved PR, missed webhook).
     await this.reconcileIdleIssues();
+  }
+
+  // ─── Queue Health Monitor ──────────────────────────────────────────
+
+  private async reconcileQueueHealth(): Promise<void> {
+    for (const issue of this.db.listAwaitingQueueIssues()) {
+      await this.probeQueuedIssue(issue);
+    }
+  }
+
+  private async probeQueuedIssue(issue: IssueRecord): Promise<void> {
+    if (!issue.prNumber) return;
+    const project = this.config.projects.find((p) => p.id === issue.projectId);
+    if (!project?.github?.repoFullName) return;
+
+    // Grace period — don't probe PRs that just entered the queue.
+    const age = Date.now() - Date.parse(issue.updatedAt);
+    if (age < QUEUE_HEALTH_GRACE_MS) return;
+
+    let pr: { state?: string; mergeable?: string; mergeStateStatus?: string; headRefOid?: string };
+    try {
+      const { stdout } = await execCommand("gh", [
+        "pr", "view", String(issue.prNumber),
+        "--repo", project.github.repoFullName,
+        "--json", "state,mergeable,mergeStateStatus,headRefOid",
+      ], { timeoutMs: 10_000 });
+      pr = JSON.parse(stdout) as typeof pr;
+    } catch (error) {
+      this.logger.debug(
+        { issueKey: issue.issueKey, prNumber: issue.prNumber, error: error instanceof Error ? error.message : String(error) },
+        "Queue health: failed to probe GitHub PR state",
+      );
+      this.feed?.publish({
+        level: "info",
+        kind: "github",
+        issueKey: issue.issueKey,
+        projectId: issue.projectId,
+        stage: "awaiting_queue",
+        status: "queue_health_probe_failed",
+        summary: `Queue health: failed to probe PR #${issue.prNumber}`,
+      });
+      return;
+    }
+
+    // Missed merge webhook — advance to done.
+    if (pr.state === "MERGED") {
+      this.db.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, prState: "merged" });
+      this.advanceIdleIssue(issue, "done", { clearFailureProvenance: true });
+      return;
+    }
+
+    // Non-open PRs (closed, draft) — don't enter repair logic.
+    if (pr.state !== "OPEN") return;
+
+    // Conflict detected — dispatch preemptive queue repair.
+    if (pr.mergeStateStatus === "DIRTY" || pr.mergeable === "CONFLICTING") {
+      const headRefOid = pr.headRefOid ?? "unknown";
+      // TODO: include baseSha in signature (headRefOid + baseSha) so that a
+      // main-only advance with the same PR head is recognized as a new conflict.
+      const signature = `preemptive_queue_conflict:${headRefOid}`;
+      const pendingRunContext: Record<string, unknown> = {
+        source: "queue_health_monitor",
+        failureReason: "preemptive_conflict",
+        failureHeadSha: headRefOid,
+        failureSignature: signature,
+      };
+
+      if (isDuplicateRepairAttempt(issue, pendingRunContext)) {
+        return;
+      }
+
+      this.db.upsertIssue({
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        lastAttemptedFailureHeadSha: headRefOid,
+        lastAttemptedFailureSignature: signature,
+      });
+      this.advanceIdleIssue(issue, "repairing_queue", {
+        pendingRunType: "queue_repair",
+        pendingRunContext,
+      });
+      this.logger.info(
+        { issueKey: issue.issueKey, prNumber: issue.prNumber, headRefOid },
+        "Queue health: merge conflict detected, dispatching preemptive repair",
+      );
+      this.feed?.publish({
+        level: "warn",
+        kind: "github",
+        issueKey: issue.issueKey,
+        projectId: issue.projectId,
+        stage: "repairing_queue",
+        status: "queue_health_conflict_detected",
+        summary: `Queue health: merge conflict detected on PR #${issue.prNumber}, dispatching preemptive repair`,
+      });
+    }
   }
 
   private async reconcileIdleIssues(): Promise<void> {

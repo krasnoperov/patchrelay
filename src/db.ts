@@ -469,6 +469,23 @@ export class PatchRelayDatabase {
     return rows.map(mapIssueRow);
   }
 
+  /**
+   * Issues waiting in the merge queue with no active or pending run.
+   * Used by the queue health monitor to probe GitHub for stuck PRs.
+   */
+  listAwaitingQueueIssues(): IssueRecord[] {
+    const rows = this.connection
+      .prepare(
+        `SELECT * FROM issues
+         WHERE factory_state = 'awaiting_queue'
+         AND active_run_id IS NULL
+         AND pending_run_type IS NULL
+         AND pr_number IS NOT NULL`,
+      )
+      .all() as Array<Record<string, unknown>>;
+    return rows.map(mapIssueRow);
+  }
+
   listIssuesByState(projectId: string, state: FactoryState): IssueRecord[] {
     const rows = this.connection
       .prepare("SELECT * FROM issues WHERE project_id = ? AND factory_state = ? ORDER BY pr_number ASC")
