@@ -95,10 +95,24 @@ export function QueueListView({
   const queueBlockLabel = summarizeQueueBlock(queueBlock);
 
   // Spec chain: main ─ #A ✓ ─ #B ● ─ #C ○
+  // Includes recently completed entries so the cascade stays visible.
   const chainEntries = useMemo(() => {
-    const active = entries.filter((e) => !TERMINAL_STATUSES.includes(e.status));
-    return active.sort((a, b) => a.position - b.position);
-  }, [entries]);
+    const seen = new Set<string>();
+    const all: QueueEntry[] = [];
+    for (const e of entries) {
+      if (!TERMINAL_STATUSES.includes(e.status) && !seen.has(e.id)) {
+        all.push(e);
+        seen.add(e.id);
+      }
+    }
+    for (const e of recentlyCompleted) {
+      if (!seen.has(e.id)) {
+        all.push(e);
+        seen.add(e.id);
+      }
+    }
+    return all.sort((a, b) => a.position - b.position);
+  }, [entries, recentlyCompleted]);
 
   return (
     <Box flexDirection="column" marginTop={1}>
