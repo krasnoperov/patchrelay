@@ -2,7 +2,7 @@ import pino from "pino";
 import type { StewardConfig } from "./config.ts";
 import { SqliteStore } from "./db/sqlite-store.ts";
 import { CloneManager } from "./github/clone-manager.ts";
-import { ShellGitOperations } from "./github/shell-git.ts";
+import { ShellGitOperations, type BotIdentity } from "./github/shell-git.ts";
 import { GitHubActionsRunner } from "./github/actions-runner.ts";
 import { GitHubPRClient } from "./github/pr-client.ts";
 import { GitHubCheckRunReporter } from "./github/check-run-reporter.ts";
@@ -11,7 +11,7 @@ import { buildMultiRepoHttpServer } from "./http-multi.ts";
 import { loadAllRepoConfigs } from "./install.ts";
 import { parseHomeConfigObject } from "./steward-home.ts";
 import { getMergeStewardPathLayout } from "./runtime-paths.ts";
-import { createGitHubAppTokenManager, resolveGitHubAuthConfig, type GitHubAppTokenManager } from "./github-auth.ts";
+import { createGitHubAppTokenManager, resolveGitHubAuthConfig, resolveAppSlug, type GitHubAppTokenManager } from "./github-auth.ts";
 import { discoverRepoSettings } from "./github-repo-discovery.ts";
 import { resolveSecret } from "./resolve-secret.ts";
 import { setRuntimeGitHubAuthProvider } from "./exec.ts";
@@ -25,7 +25,7 @@ export interface RepoInstance {
   store: SqliteStore;
 }
 
-async function createRepoInstance(config: StewardConfig, logger: Logger): Promise<RepoInstance> {
+async function createRepoInstance(config: StewardConfig, logger: Logger, botIdentity?: BotIdentity): Promise<RepoInstance> {
   const repoUrl = `https://github.com/${config.repoFullName}.git`;
   const clone = new CloneManager(config.clonePath, repoUrl, config.repoFullName, config.gitBin, logger);
   await clone.ensureClone();
@@ -33,6 +33,7 @@ async function createRepoInstance(config: StewardConfig, logger: Logger): Promis
 
   const store = new SqliteStore(config.database.path);
   const git = new ShellGitOperations(clone.path, config.repoFullName, config.gitBin);
+  if (botIdentity) git.setBotIdentity(botIdentity);
   const ci = new GitHubActionsRunner(config.repoFullName, config.requiredChecks);
   const github = new GitHubPRClient(config.repoFullName);
   const eviction = new GitHubCheckRunReporter(
@@ -63,6 +64,7 @@ export async function startMultiServer(): Promise<void> {
   const configs = await loadAllRepoConfigs();
   const githubAuth = resolveGitHubAuthConfig();
   let githubAppTokenManager: GitHubAppTokenManager | undefined;
+  let botIdentity: BotIdentity | undefined;
   let githubRuntimeStatus: ServiceGitHubAuthStatus = {
     mode: "none",
     configured: false,
@@ -92,6 +94,16 @@ export async function startMultiServer(): Promise<void> {
     setRuntimeGitHubAuthProvider(githubAppTokenManager);
     try {
       await githubAppTokenManager.start();
+      try {
+        const slug = await resolveAppSlug(githubAuth.credentials);
+        botIdentity = {
+          name: `${slug}[bot]`,
+          email: `${githubAuth.credentials.appId}+${slug}[bot]@users.noreply.github.com`,
+        };
+        logger.info({ botName: botIdentity.name }, "Resolved GitHub App bot identity");
+      } catch {
+        logger.warn("Could not resolve GitHub App slug, merge commits will use clone owner identity");
+      }
       githubRuntimeStatus = {
         ...githubRuntimeStatus,
         ready: true,
@@ -125,7 +137,7 @@ export async function startMultiServer(): Promise<void> {
   const instances = new Map<string, RepoInstance>();
   for (const config of configs) {
     logger.info({ repoId: config.repoId, repoFullName: config.repoFullName }, "Initializing repo");
-    const instance = await createRepoInstance(config, logger.child({ repoId: config.repoId }));
+    const instance = await createRepoInstance(config, logger.child({ repoId: config.repoId }), botIdentity);
     instances.set(config.repoFullName, instance);
   }
 
