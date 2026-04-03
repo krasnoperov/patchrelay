@@ -519,3 +519,222 @@ test("done delegated issue does not requeue implementation after merged status e
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("un-delegation during active run releases run and transitions to awaiting_input", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-undelegate-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+
+    const issueRecord = db.upsertIssue({
+      projectId: "krasnoperov/mafia",
+      linearIssueId: "issue-maf-50",
+      issueKey: "MAF-50",
+      title: "Implement feature X",
+      factoryState: "implementing",
+    });
+    const run = db.createRun({
+      issueId: issueRecord.id,
+      projectId: "krasnoperov/mafia",
+      linearIssueId: "issue-maf-50",
+      runType: "implementation",
+    });
+    db.upsertIssue({
+      projectId: "krasnoperov/mafia",
+      linearIssueId: "issue-maf-50",
+      activeRunId: run.id,
+    });
+
+    const handler = new WebhookHandler(
+      config,
+      db,
+      { forProject: async () => undefined } as never,
+      { steerTurn: async () => undefined } as never,
+      () => undefined,
+      pino({ enabled: false }),
+    );
+
+    const payload: LinearWebhookPayload = {
+      action: "update",
+      type: "Issue",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      webhookTimestamp: Date.now(),
+      updatedFrom: { delegateId: "patchrelay-actor" },
+      data: {
+        id: "issue-maf-50",
+        identifier: "MAF-50",
+        title: "Implement feature X",
+        team: { id: "team-maf", key: "MAF" },
+        state: { id: "state-start", name: "In Progress", type: "started" },
+        delegate: null,
+      },
+    };
+
+    const stored = db.insertFullWebhookEvent({
+      webhookId: "delivery-undelegate-50",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(payload),
+    });
+
+    await handler.processWebhookEvent(stored.id);
+
+    const issue = db.getIssue("krasnoperov/mafia", "issue-maf-50");
+    assert.equal(issue?.factoryState, "awaiting_input");
+    assert.equal(issue?.activeRunId, undefined);
+    assert.equal(issue?.pendingRunType, undefined);
+
+    const finishedRun = db.getRun(run.id);
+    assert.equal(finishedRun?.status, "released");
+    assert.ok(finishedRun?.failureReason?.includes("Un-delegated"));
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("un-delegation of awaiting_queue issue does not change state (point of no return)", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-noreturn-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+
+    db.upsertIssue({
+      projectId: "krasnoperov/mafia",
+      linearIssueId: "issue-maf-51",
+      issueKey: "MAF-51",
+      title: "Approved feature",
+      factoryState: "awaiting_queue",
+      prNumber: 120,
+      prState: "open",
+    });
+
+    const handler = new WebhookHandler(
+      config,
+      db,
+      { forProject: async () => undefined } as never,
+      { steerTurn: async () => undefined } as never,
+      () => undefined,
+      pino({ enabled: false }),
+    );
+
+    const payload: LinearWebhookPayload = {
+      action: "update",
+      type: "Issue",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      webhookTimestamp: Date.now(),
+      updatedFrom: { delegateId: "patchrelay-actor" },
+      data: {
+        id: "issue-maf-51",
+        identifier: "MAF-51",
+        title: "Approved feature",
+        team: { id: "team-maf", key: "MAF" },
+        state: { id: "state-start", name: "In Progress", type: "started" },
+        delegate: null,
+      },
+    };
+
+    const stored = db.insertFullWebhookEvent({
+      webhookId: "delivery-undelegate-51",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(payload),
+    });
+
+    await handler.processWebhookEvent(stored.id);
+
+    const issue = db.getIssue("krasnoperov/mafia", "issue-maf-51");
+    assert.equal(issue?.factoryState, "awaiting_queue");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("issueRemoved releases active run and transitions to failed", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-removed-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+
+    const issueRecord = db.upsertIssue({
+      projectId: "krasnoperov/mafia",
+      linearIssueId: "issue-maf-52",
+      issueKey: "MAF-52",
+      title: "Soon to be removed",
+      factoryState: "implementing",
+    });
+    const run = db.createRun({
+      issueId: issueRecord.id,
+      projectId: "krasnoperov/mafia",
+      linearIssueId: "issue-maf-52",
+      runType: "implementation",
+    });
+    db.upsertIssue({
+      projectId: "krasnoperov/mafia",
+      linearIssueId: "issue-maf-52",
+      activeRunId: run.id,
+    });
+
+    const handler = new WebhookHandler(
+      config,
+      db,
+      { forProject: async () => undefined } as never,
+      { steerTurn: async () => undefined } as never,
+      () => undefined,
+      pino({ enabled: false }),
+    );
+
+    const payload: LinearWebhookPayload = {
+      action: "remove",
+      type: "Issue",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      webhookTimestamp: Date.now(),
+      data: {
+        id: "issue-maf-52",
+        identifier: "MAF-52",
+        title: "Soon to be removed",
+        team: { id: "team-maf", key: "MAF" },
+        state: { id: "state-start", name: "In Progress", type: "started" },
+      },
+    };
+
+    const stored = db.insertFullWebhookEvent({
+      webhookId: "delivery-remove-52",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(payload),
+    });
+
+    await handler.processWebhookEvent(stored.id);
+
+    const issue = db.getIssue("krasnoperov/mafia", "issue-maf-52");
+    assert.equal(issue?.factoryState, "failed");
+    assert.equal(issue?.activeRunId, undefined);
+
+    const finishedRun = db.getRun(run.id);
+    assert.equal(finishedRun?.status, "released");
+    assert.ok(finishedRun?.failureReason?.includes("removed"));
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});

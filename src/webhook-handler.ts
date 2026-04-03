@@ -131,6 +131,40 @@ export class WebhookHandler {
 
       const newlyReadyDependents = this.reconcileDependentReadiness(project.id, issue.id);
 
+      // Handle issue removal: release active runs, mark as failed.
+      if (hydrated.triggerEvent === "issueRemoved" && trackedIssue) {
+        const removedIssue = this.db.getIssue(project.id, issue.id);
+        if (removedIssue?.activeRunId) {
+          const run = this.db.getRun(removedIssue.activeRunId);
+          if (run) {
+            this.db.finishRun(run.id, { status: "released", failureReason: "Issue removed from Linear" });
+          }
+          this.db.upsertIssue({
+            projectId: project.id,
+            linearIssueId: issue.id,
+            activeRunId: null,
+            pendingRunType: null,
+            factoryState: "failed" as never,
+          });
+        } else if (removedIssue && !TERMINAL_STATES.has(removedIssue.factoryState)) {
+          this.db.upsertIssue({
+            projectId: project.id,
+            linearIssueId: issue.id,
+            pendingRunType: null,
+            factoryState: "failed" as never,
+          });
+        }
+        this.feed?.publish({
+          level: "warn",
+          kind: "stage",
+          issueKey: issue.identifier,
+          projectId: project.id,
+          stage: "failed",
+          status: "issue_removed",
+          summary: "Issue removed from Linear",
+        });
+      }
+
       // Handle agent session events
       await this.handleAgentSession(hydrated, project, trackedIssue, result.desiredStage, result.delegated);
 
@@ -232,6 +266,18 @@ export class WebhookHandler {
       }
     }
 
+    // Un-delegation: transition to awaiting_input unless past point of no return.
+    // awaiting_queue means the PR is approved and in the merge queue — let it merge.
+    let undelegatedFactoryState: string | undefined;
+    if (normalized.triggerEvent === "delegateChanged" && !delegated && existingIssue) {
+      const pastNoReturn = existingIssue.factoryState === "awaiting_queue"
+        || TERMINAL_STATES.has(existingIssue.factoryState);
+      if (!pastNoReturn) {
+        undelegatedFactoryState = "awaiting_input";
+        clearPendingImplementation = Boolean(existingIssue.pendingRunType);
+      }
+    }
+
     // Resolve agent session
     const agentSessionId = normalized.agentSession?.id ??
       (!activeRun && (pendingRunType || (normalized.triggerEvent === "delegateChanged" && !delegated)) ? null : undefined);
@@ -255,11 +301,24 @@ export class WebhookHandler {
         : {}),
       ...(agentSessionId !== undefined ? { agentSessionId } : {}),
       ...(clearActiveRun ? { activeRunId: null } : {}),
+      ...(undelegatedFactoryState ? { factoryState: undelegatedFactoryState as never } : {}),
     });
 
     if (clearActiveRun && activeRun) {
       const reason = terminalForAutomation ? "Issue reached terminal state during active run" : "Un-delegated from PatchRelay";
       this.db.finishRun(activeRun.id, { status: "released", failureReason: reason });
+    }
+
+    if (undelegatedFactoryState) {
+      this.feed?.publish({
+        level: "warn",
+        kind: "stage",
+        issueKey: issue.issueKey,
+        projectId: project.id,
+        stage: "awaiting_input",
+        status: "un_delegated",
+        summary: "Issue un-delegated from PatchRelay",
+      });
     }
 
     return {
