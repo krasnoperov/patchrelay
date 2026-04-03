@@ -273,6 +273,9 @@ async function prepareEntry(
   const specSha = result.sha ?? entry.headSha;
   emit(ctx, entry, "spec_build_succeeded", { specBranch: specName, ...(prevEntry ? { dependsOn: prevEntry.id } : {}) });
 
+  // Push spec to remote so CI can access it.
+  await ctx.git.push(specName, true);
+
   // Trigger CI on the spec branch.
   const runId = await ctx.ci.triggerRun(specName, specSha);
   emit(ctx, entry, "ci_triggered", { ciRunId: runId, specBranch: specName });
