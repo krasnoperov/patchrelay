@@ -89,7 +89,10 @@ export class ShellGitOperations implements GitOperations, SpeculativeBranchBuild
     await this.git(["worktree", "add", "-B", specName, wtPath, baseBranch]);
 
     // Merge PR into spec branch inside the worktree.
-    const result = await this.gitIn(wtPath, ["merge", "--no-ff", prBranch], { allowNonZero: true });
+    // PR branches are always remote refs — use explicit origin/ prefix
+    // because git DWIM doesn't reliably resolve bare names in worktrees.
+    const mergeRef = prBranch.startsWith("origin/") ? prBranch : `origin/${prBranch}`;
+    const result = await this.gitIn(wtPath, ["merge", "--no-ff", mergeRef], { allowNonZero: true });
 
     if (result.exitCode !== 0) {
       const conflictFiles = parseConflicts(result.stderr);
