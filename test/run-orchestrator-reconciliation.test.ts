@@ -113,7 +113,7 @@ test("reconcileIdleIssues advances approved idle issues to awaiting_queue", asyn
       factoryState: "pr_open",
     });
 
-    await (orchestrator as unknown as { reconcileIdleIssues: () => Promise<void> }).reconcileIdleIssues();
+    await (orchestrator as unknown as { idleReconciler: { reconcile: () => Promise<void> } }).idleReconciler.reconcile();
 
     const issue = db.getIssue("usertold", "issue-10");
     assert.equal(issue?.factoryState, "awaiting_queue");
@@ -138,7 +138,7 @@ test("reconcileIdleIssues marks merged idle issues done without enqueueing", asy
       factoryState: "pr_open",
     });
 
-    await (orchestrator as unknown as { reconcileIdleIssues: () => Promise<void> }).reconcileIdleIssues();
+    await (orchestrator as unknown as { idleReconciler: { reconcile: () => Promise<void> } }).idleReconciler.reconcile();
 
     const issue = db.getIssue("usertold", "issue-11");
     assert.equal(issue?.factoryState, "done");
@@ -162,7 +162,7 @@ test("reconcileIdleIssues currently routes failed idle issues to ci_repair", asy
       factoryState: "pr_open",
     });
 
-    await (orchestrator as unknown as { reconcileIdleIssues: () => Promise<void> }).reconcileIdleIssues();
+    await (orchestrator as unknown as { idleReconciler: { reconcile: () => Promise<void> } }).idleReconciler.reconcile();
 
     const issue = db.getIssue("usertold", "issue-12");
     assert.equal(issue?.factoryState, "repairing_ci");
@@ -211,7 +211,7 @@ test("reconcileIdleIssues preserves stored steward incident context for queue re
       }),
     });
 
-    await (orchestrator as unknown as { reconcileIdleIssues: () => Promise<void> }).reconcileIdleIssues();
+    await (orchestrator as unknown as { idleReconciler: { reconcile: () => Promise<void> } }).idleReconciler.reconcile();
 
     const issue = db.getIssue("usertold", "issue-13");
     assert.equal(issue?.factoryState, "repairing_queue");
@@ -463,7 +463,7 @@ test("reconcileIdleIssues does not re-request queue handoff for issues already a
       queueRequests += 1;
     };
 
-    await (orchestrator as unknown as { reconcileIdleIssues: () => Promise<void> }).reconcileIdleIssues();
+    await (orchestrator as unknown as { idleReconciler: { reconcile: () => Promise<void> } }).idleReconciler.reconcile();
 
     const issue = db.getIssue("usertold", "issue-15");
     assert.equal(issue?.factoryState, "awaiting_queue");
