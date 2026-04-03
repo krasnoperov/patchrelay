@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.10](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.8.9...merge-steward-v0.8.10) (2026-04-03)
+
+
+### Bug Fixes
+
+* attribute steward merge commits to bot identity ([e16695d](https://github.com/krasnoperov/patchrelay/commit/e16695d7912b7478c92fd4ff8382696461913084))
+* attribute steward merge commits to discovered bot identity ([82774ab](https://github.com/krasnoperov/patchrelay/commit/82774ab1f33c03c65e863174c83698d812220c70))
+
 ## [0.8.9](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.8.8...merge-steward-v0.8.9) (2026-04-03)
 
 
