@@ -69,6 +69,26 @@ export async function reconcile(ctx: ReconcileContext): Promise<void> {
     // Truth guard: verify entry against GitHub before processing.
     if (await sanitizeEntry(ctx, entry)) continue;
 
+    // Stale dependency guard: if this entry's spec was built on top of
+    // another entry that was dequeued or evicted (without downstream
+    // invalidation), the spec is contaminated with the removed entry's
+    // changes. Reset so it rebuilds on the correct base next tick.
+    // Exclude "merged" — a merged dependency means main advanced to its
+    // spec, so our cumulative spec is still valid (speculative consistency).
+    if (entry.specBasedOn) {
+      const dep = ctx.store.getEntry(entry.specBasedOn);
+      if (!dep || dep.status === "dequeued" || dep.status === "evicted") {
+        emit(ctx, entry, "invalidated", {
+          detail: `dependency ${entry.specBasedOn} is ${dep?.status ?? "removed"}`,
+        });
+        await cleanupSpec(ctx, entry);
+        ctx.store.transition(entry.id, "preparing_head", {
+          ...CLEAN_CI, ...CLEAN_SPEC,
+        }, `stale dependency ${dep?.status ?? "removed"}`);
+        continue;
+      }
+    }
+
     const isHead = i === 0;
     const prevEntry = i > 0 ? ctx.store.getEntry(allActive[i - 1]!.id) ?? null : null;
     const phase = entry.status;
