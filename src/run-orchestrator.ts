@@ -590,6 +590,7 @@ export class RunOrchestrator {
         projectId: run.projectId,
         linearIssueId: run.linearIssueId,
         activeRunId: null,
+        ...(postRunState === "awaiting_queue" ? { queueLabelApplied: false } : {}),
         ...(postRunState ? { factoryState: postRunState } : {}),
         ...(postRunState === "awaiting_queue" || postRunState === "done"
           ? {
@@ -1267,6 +1268,7 @@ export class RunOrchestrator {
           projectId: run.projectId,
           linearIssueId: run.linearIssueId,
           activeRunId: null,
+          ...(postRunState === "awaiting_queue" ? { queueLabelApplied: false } : {}),
           ...(postRunState ? { factoryState: postRunState } : {}),
           ...(postRunState === "awaiting_queue" || postRunState === "done"
             ? {
