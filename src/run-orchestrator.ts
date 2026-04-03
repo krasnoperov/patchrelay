@@ -321,11 +321,17 @@ export class RunOrchestrator {
         { allowExistingOutsideRoot: issue.branchName !== undefined },
       );
 
-      // Set bot git identity when GitHub App is configured
+      // Set bot git identity and push credentials when GitHub App is configured.
+      // This ensures commits are authored by and pushes are authenticated as
+      // patchrelay[bot], not the system user.
       if (this.botIdentity) {
         const gitBin = this.config.runner.gitBin;
         await execCommand(gitBin, ["-C", worktreePath, "config", "user.name", this.botIdentity.name], { timeoutMs: 5_000 });
         await execCommand(gitBin, ["-C", worktreePath, "config", "user.email", this.botIdentity.email], { timeoutMs: 5_000 });
+        // Override credential helper to use the App installation token for git push.
+        // The helper script reads the token file and returns it as the password.
+        const credentialHelper = `!f() { echo "username=x-access-token"; echo "password=$(cat ${this.botIdentity.tokenFile})"; }; f`;
+        await execCommand(gitBin, ["-C", worktreePath, "config", "credential.helper", credentialHelper], { timeoutMs: 5_000 });
       }
 
       // Freshen the worktree: fetch + rebase onto latest base branch.
