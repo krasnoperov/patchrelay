@@ -107,7 +107,7 @@ function createTestHarness(baseDir: string, ghScript: string) {
   );
 
   const reconcileQueueHealth = () =>
-    (orchestrator as unknown as { reconcileQueueHealth: () => Promise<void> }).reconcileQueueHealth();
+    (orchestrator as unknown as { queueHealthMonitor: { reconcile: () => Promise<void> } }).queueHealthMonitor.reconcile();
 
   return { config, db, enqueueCalls, orchestrator, reconcileQueueHealth, oldPath };
 }
