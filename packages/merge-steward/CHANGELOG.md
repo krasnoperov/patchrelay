@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.1](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.9.0...merge-steward-v0.9.1) (2026-04-03)
+
+
+### Bug Fixes
+
+* use patience diff algorithm for spec merges ([38c198e](https://github.com/krasnoperov/patchrelay/commit/38c198e25f3452aebea9dfff95f2571d3d7c006a))
+* use patience diff algorithm for spec merges ([2822deb](https://github.com/krasnoperov/patchrelay/commit/2822deb634000974b2e4a544882d1365ef638b5d))
+
 ## [0.9.0](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.8.13...merge-steward-v0.9.0) (2026-04-03)
 
 
