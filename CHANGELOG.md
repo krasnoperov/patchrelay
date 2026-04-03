@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.35.8](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.35.7...patchrelay-v0.35.8) (2026-04-03)
+
+
+### Bug Fixes
+
+* detect pre-queue merge conflicts in idle reconciliation ([60ea433](https://github.com/krasnoperov/patchrelay/commit/60ea43311d1494aa33fa83c664a0bdac2702d333))
+* detect pre-queue merge conflicts in idle reconciliation ([8ca2ea4](https://github.com/krasnoperov/patchrelay/commit/8ca2ea4f68a41334a15e04b8398af64474e061da))
+
 ## [0.35.7](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.35.6...patchrelay-v0.35.7) (2026-04-03)
 
 
