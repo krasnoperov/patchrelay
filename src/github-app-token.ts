@@ -17,6 +17,7 @@ export interface GitHubAppCredentials {
 export interface GitHubAppBotIdentity {
   name: string;   // e.g. "patchrelay[bot]"
   email: string;  // e.g. "267939867+patchrelay[bot]@users.noreply.github.com"
+  tokenFile: string; // Path to the App installation token file for git push auth
 }
 
 export interface GitHubAppTokenManager {
@@ -252,8 +253,10 @@ async function resolveBotIdentity(jwt: string): Promise<GitHubAppBotIdentity> {
   }
   const user = await userResponse.json() as { id: number; login: string };
 
+  const { tokenFile } = getGitHubAppPaths();
   return {
     name: user.login,
     email: `${user.id}+${user.login}@users.noreply.github.com`,
+    tokenFile,
   };
 }
