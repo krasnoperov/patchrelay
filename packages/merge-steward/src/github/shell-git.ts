@@ -86,7 +86,7 @@ export class ShellGitOperations implements GitOperations, SpeculativeBranchBuild
    * The worktree is removed after the merge; the branch ref persists
    * so the reconciler can push it and reference its SHA.
    */
-  async buildSpeculative(prBranch: string, baseBranch: string, specName: string): Promise<MergeResult> {
+  async buildSpeculative(prBranch: string, baseBranch: string, specName: string, mergeMessage?: string): Promise<MergeResult> {
     const wtPath = join(this.worktreeBase, specName);
 
     // Clean up any leftover worktree/branch from a previous run.
@@ -108,7 +108,10 @@ export class ShellGitOperations implements GitOperations, SpeculativeBranchBuild
     // PR branches are always remote refs — use explicit origin/ prefix
     // because git DWIM doesn't reliably resolve bare names in worktrees.
     const mergeRef = prBranch.startsWith("origin/") ? prBranch : `origin/${prBranch}`;
-    const result = await this.gitIn(wtPath, ["merge", "--no-ff", mergeRef], { allowNonZero: true });
+    const mergeArgs = ["merge", "--no-ff"];
+    if (mergeMessage) mergeArgs.push("-m", mergeMessage);
+    mergeArgs.push(mergeRef);
+    const result = await this.gitIn(wtPath, mergeArgs, { allowNonZero: true });
 
     if (result.exitCode !== 0) {
       const conflictFiles = parseConflicts(result.stderr);

@@ -216,6 +216,11 @@ export class RunOrchestrator {
     const issue = this.db.getIssue(item.projectId, item.issueId);
     if (!issue?.pendingRunType || issue.activeRunId !== undefined) return;
 
+    if (issue.prState === "merged") {
+      this.db.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, pendingRunType: null, factoryState: "done" as never });
+      return;
+    }
+
     const runType = issue.pendingRunType;
     const contextJson = issue.pendingRunContextJson;
     const context = contextJson ? JSON.parse(contextJson) as Record<string, unknown> : undefined;

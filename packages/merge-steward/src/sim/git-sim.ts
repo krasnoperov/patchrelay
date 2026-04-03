@@ -231,7 +231,7 @@ export class GitSim implements GitOperations {
 
   // --- SpeculativeBranchBuilder ---
 
-  async buildSpeculative(prBranch: string, baseBranch: string, specName: string): Promise<MergeResult> {
+  async buildSpeculative(prBranch: string, baseBranch: string, specName: string, _mergeMessage?: string): Promise<MergeResult> {
     // Create spec branch from base, then merge PR into it.
     try {
       await this.deleteBranch(specName);

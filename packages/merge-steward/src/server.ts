@@ -13,7 +13,7 @@ import { parseHomeConfigObject } from "./steward-home.ts";
 import { getMergeStewardPathLayout } from "./runtime-paths.ts";
 import { createGitHubAppTokenManager, resolveGitHubAuthConfig, resolveAppSlug, type GitHubAppTokenManager } from "./github-auth.ts";
 import { discoverRepoSettings } from "./github-repo-discovery.ts";
-import { resolveSecret } from "./resolve-secret.ts";
+import { resolveSecret, resolveSecretWithSource } from "./resolve-secret.ts";
 import { setRuntimeGitHubAuthProvider } from "./exec.ts";
 import { readFileSync, existsSync } from "node:fs";
 import type { Logger } from "pino";
@@ -53,7 +53,8 @@ export async function startMultiServer(): Promise<void> {
   const layout = getMergeStewardPathLayout();
   const homeRaw = existsSync(layout.configPath) ? readFileSync(layout.configPath, "utf8") : "{}";
   const home = parseHomeConfigObject(homeRaw, layout.configPath);
-  const webhookSecret = resolveSecret("merge-steward-webhook-secret", "MERGE_STEWARD_WEBHOOK_SECRET");
+  const webhookSecretResolved = resolveSecretWithSource("merge-steward-webhook-secret", "MERGE_STEWARD_WEBHOOK_SECRET");
+  const webhookSecret = webhookSecretResolved.value;
 
   const bind = home.server.bind;
   const port = home.server.gateway_port ?? (home.server.port_base - 1);
@@ -61,6 +62,10 @@ export async function startMultiServer(): Promise<void> {
   const logLevel = home.logging.level;
 
   const logger = pino({ level: logLevel });
+  logger.info({
+    webhookSecretSource: webhookSecretResolved.source,
+    webhookSecretPrefix: webhookSecret?.slice(0, 4) ?? "NONE",
+  }, "Webhook secret loaded");
   const configs = await loadAllRepoConfigs();
   const githubAuth = resolveGitHubAuthConfig();
   let githubAppTokenManager: GitHubAppTokenManager | undefined;
@@ -177,6 +182,6 @@ export async function startMultiServer(): Promise<void> {
   logger.info({ bind, port, repos: instances.size }, "merge-steward listening");
 
   for (const inst of instances.values()) {
-    inst.service.start();
+    await inst.service.start();
   }
 }

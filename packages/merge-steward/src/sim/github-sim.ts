@@ -116,6 +116,10 @@ export class GitHubSim implements GitHubPRApi {
     return [...pr.labels];
   }
 
+  async listOpenPRsWithLabel(_label: string): Promise<Array<{ number: number; branch: string; headSha: string }>> {
+    return [];
+  }
+
   async deleteBranch(_prNumber: number): Promise<void> {
     // No-op in sim — branch deletion is cosmetic cleanup.
   }
