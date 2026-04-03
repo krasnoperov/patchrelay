@@ -46,8 +46,12 @@ export class GitHubActionsRunner implements CIRunner {
       if (relevant.length === 0) return "pending";
 
       if (relevant.some((c) => c.status !== "completed")) return "pending";
-      // REST API returns lowercase conclusions; any non-success completed check is a failure.
-      if (relevant.some((c) => c.conclusion !== "success" && c.conclusion !== "neutral" && c.conclusion !== "skipped")) return "fail";
+      // REST API returns lowercase conclusions; any non-success completed
+      // check is a failure.  "skipped" is NOT accepted — if a check is
+      // required it must actually execute.  A skipped required check means
+      // the CI workflow doesn't trigger on the spec branch, which would
+      // let untested code through (see: MAF-49 incident).
+      if (relevant.some((c) => c.conclusion !== "success" && c.conclusion !== "neutral")) return "fail";
 
       return "pass";
     } catch {
