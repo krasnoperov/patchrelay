@@ -154,6 +154,7 @@ export class MergeStewardService {
     const entry = this.store.getEntry(entryId);
     if (!entry) return false;
     this.store.dequeue(entryId);
+    this.invalidateDownstreamOf(entry);
     this.logger.info({ entryId, prNumber: entry.prNumber }, "Entry dequeued");
     return true;
   }
@@ -291,6 +292,7 @@ export class MergeStewardService {
     const entry = this.store.getEntryByPR(this.config.repoId, prNumber);
     if (entry) {
       this.store.dequeue(entry.id);
+      this.invalidateDownstreamOf(entry);
       this.logger.info({ prNumber, entryId: entry.id }, "PR dequeued");
     }
   }
@@ -314,6 +316,28 @@ export class MergeStewardService {
     if (entry) {
       this.store.transition(entry.id, "merged");
       this.logger.info({ prNumber, entryId: entry.id }, "External merge acknowledged");
+    }
+  }
+
+  /**
+   * Reset all active entries positioned after the given entry to preparing_head
+   * with clean spec/CI state. Prevents downstream specs that included the
+   * dequeued entry's changes from being merged to main.
+   */
+  private invalidateDownstreamOf(removedEntry: QueueEntry): void {
+    const allActive = this.store.listActive(this.config.repoId);
+    let invalidated = 0;
+    for (const downstream of allActive) {
+      if (downstream.position <= removedEntry.position) continue;
+      if (TERMINAL_STATUSES.includes(downstream.status)) continue;
+      this.store.transition(downstream.id, "preparing_head", {
+        ciRunId: null, ciRetries: 0,
+        specBranch: null, specSha: null, specBasedOn: null,
+      }, `invalidated: entry ${removedEntry.id.slice(0, 8)} dequeued`);
+      invalidated++;
+    }
+    if (invalidated > 0) {
+      this.logger.info({ removedEntryId: removedEntry.id, invalidated }, "Invalidated downstream entries after dequeue");
     }
   }
 
