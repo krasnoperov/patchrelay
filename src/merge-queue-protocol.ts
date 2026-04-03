@@ -28,9 +28,9 @@ export async function requestMergeQueueAdmission(params: {
   protocol: MergeQueueProtocolConfig;
   logger: Logger;
   feed?: OperatorEventFeed | undefined;
-}): Promise<void> {
+}): Promise<boolean> {
   const { issue, protocol, logger, feed } = params;
-  if (!protocol.repoFullName || !issue.prNumber) return;
+  if (!protocol.repoFullName || !issue.prNumber) return false;
 
   feed?.publish({
     level: "info",
@@ -63,6 +63,7 @@ export async function requestMergeQueueAdmission(params: {
       status: "queue_label_applied",
       summary: `Queue label "${protocol.admissionLabel}" applied to PR #${issue.prNumber}`,
     });
+    return true;
   } catch (error) {
     logger.warn({ issueKey: issue.issueKey, err: error }, "Failed to add merge queue label");
     feed?.publish({
@@ -75,5 +76,6 @@ export async function requestMergeQueueAdmission(params: {
       summary: `Queue hand-off failed while adding label "${protocol.admissionLabel}" to PR #${issue.prNumber}`,
       detail: error instanceof Error ? error.message : String(error),
     });
+    return false;
   }
 }

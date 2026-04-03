@@ -331,9 +331,13 @@ export class MergeStewardService {
     for (const downstream of allActive) {
       if (downstream.position <= removedEntry.position) continue;
       if (TERMINAL_STATUSES.includes(downstream.status)) continue;
+      if (downstream.specBranch) {
+        this.specBuilder.deleteSpeculative(downstream.specBranch).catch(() => {});
+      }
       this.store.transition(downstream.id, "preparing_head", {
         ciRunId: null, ciRetries: 0,
         specBranch: null, specSha: null, specBasedOn: null,
+        retryAttempts: 0, lastFailedBaseSha: null,
       }, `invalidated: entry ${removedEntry.id.slice(0, 8)} dequeued`);
       invalidated++;
     }

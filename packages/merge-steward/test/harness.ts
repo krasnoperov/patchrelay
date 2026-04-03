@@ -259,6 +259,7 @@ export class Harness {
       this.store.transition(downstream.id, "preparing_head", {
         ciRunId: null, ciRetries: 0,
         specBranch: null, specSha: null, specBasedOn: null,
+        retryAttempts: 0, lastFailedBaseSha: null,
       }, `invalidated: entry ${entry.id.slice(0, 8)} dequeued`);
     }
   }

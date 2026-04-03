@@ -83,7 +83,7 @@ export async function reconcile(ctx: ReconcileContext): Promise<void> {
         });
         await cleanupSpec(ctx, entry);
         ctx.store.transition(entry.id, "preparing_head", {
-          ...CLEAN_CI, ...CLEAN_SPEC,
+          ...CLEAN_CI, ...CLEAN_SPEC, retryAttempts: 0, lastFailedBaseSha: null,
         }, `stale dependency ${dep?.status ?? "removed"}`);
         continue;
       }
@@ -199,7 +199,7 @@ async function prepareEntry(
     // Gate: main CI must be green.
     if (ctx.ci.getMainStatus) {
       const mainStatus = await ctx.ci.getMainStatus(ctx.baseBranch);
-      if (mainStatus === "fail") {
+      if (mainStatus !== "pass") {
         let mainChecks: Array<{ name: string; conclusion: "success" | "failure" | "pending"; url?: string | undefined }> = [];
         try {
           mainChecks = await ctx.github.listChecksForRef(ref(ctx, ctx.baseBranch));
@@ -435,6 +435,16 @@ async function mergeHead(ctx: ReconcileContext, entry: QueueEntry): Promise<void
     // Can't verify — proceed and let push fail if needed.
   }
 
+  // Final main health check — don't push to a broken main.
+  if (ctx.ci.getMainStatus) {
+    const mainStatus = await ctx.ci.getMainStatus(ctx.baseBranch);
+    if (mainStatus !== "pass") {
+      emit(ctx, entry, "main_broken", { detail: "main unhealthy at merge time, re-preparing" });
+      ctx.store.transition(entry.id, "preparing_head", { ...CLEAN_CI, ...CLEAN_SPEC }, "main unhealthy at merge time");
+      return;
+    }
+  }
+
   // Push the spec branch to main (fast-forward).
   try {
     await ctx.git.push(entry.specBranch, false, ctx.baseBranch);
@@ -471,7 +481,7 @@ async function invalidateDownstream(ctx: ReconcileContext, allActive: QueueEntry
     if (TERMINAL_STATUSES.includes(downstream.status)) continue;
     emit(ctx, downstream, "invalidated", { detail: `base changed after position ${afterIndex}` });
     await cleanupSpec(ctx, downstream);
-    ctx.store.transition(downstream.id, "preparing_head", { ...CLEAN_CI, ...CLEAN_SPEC }, "invalidated: base changed");
+    ctx.store.transition(downstream.id, "preparing_head", { ...CLEAN_CI, ...CLEAN_SPEC, retryAttempts: 0, lastFailedBaseSha: null }, "invalidated: base changed");
   }
 }
 

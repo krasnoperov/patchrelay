@@ -863,6 +863,9 @@ export class RunOrchestrator {
       if (issue.prReviewState === "approved" && issue.prCheckStatus !== "failed") {
         if (issue.factoryState !== "awaiting_queue" || issue.branchOwner !== "merge_steward") {
           this.advanceIdleIssue(issue, "awaiting_queue", { clearFailureProvenance: true });
+        } else if (!issue.queueLabelApplied) {
+          // Retry failed label application
+          await this.requestMergeQueueAdmission(issue, issue.projectId);
         }
         continue;
       }
@@ -896,18 +899,30 @@ export class RunOrchestrator {
         }
 
         if (issue.factoryState === "awaiting_queue") {
-          this.logger.warn(
-            { issueKey: issue.issueKey, prNumber: issue.prNumber },
-            "Reconciliation skipped failed awaiting_queue issue with unknown failure provenance",
+          // Infer provenance: check if steward eviction check run exists on the PR
+          const inferProject = this.config.projects.find((p) => p.id === issue.projectId);
+          const inferProtocol = resolveMergeQueueProtocol(inferProject);
+          let inferred: "queue_eviction" | "branch_ci" = "branch_ci";
+          if (inferProject?.github?.repoFullName && issue.prNumber && issue.lastGitHubFailureHeadSha) {
+            try {
+              const { stdout } = await execCommand("gh", [
+                "api",
+                `repos/${inferProject.github.repoFullName}/commits/${issue.lastGitHubFailureHeadSha}/check-runs`,
+                "--jq", `.check_runs[] | select(.name == "${inferProtocol.evictionCheckName}" and .conclusion == "failure") | .name`,
+              ], { timeoutMs: 10_000 });
+              if (stdout.trim().length > 0) inferred = "queue_eviction";
+            } catch { /* best effort */ }
+          }
+          const inferRunType = inferred === "queue_eviction" ? "queue_repair" : "ci_repair";
+          const inferState = inferred === "queue_eviction" ? "repairing_queue" : "repairing_ci";
+          this.logger.info(
+            { issueKey: issue.issueKey, prNumber: issue.prNumber, inferred },
+            "Inferred failure provenance for awaiting_queue issue",
           );
-          this.feed?.publish({
-            level: "warn",
-            kind: "github",
-            issueKey: issue.issueKey,
-            projectId: issue.projectId,
-            stage: issue.factoryState,
-            status: "failure_source_unknown",
-            summary: "Reconciliation saw failed checks but could not determine whether the failure came from CI or the merge queue",
+          const pendingRunContext = buildFailureContext(issue);
+          this.advanceIdleIssue(issue, inferState as never, {
+            pendingRunType: inferRunType,
+            ...(pendingRunContext ? { pendingRunContext } : {}),
           });
           continue;
         }
@@ -1316,15 +1331,18 @@ export class RunOrchestrator {
   }
 
   /** Add the merge queue admission label for external-queue projects (best-effort). */
-  private requestMergeQueueAdmission(issue: IssueRecord, projectId: string): void {
+  private async requestMergeQueueAdmission(issue: IssueRecord, projectId: string): Promise<void> {
     const project = this.config.projects.find((p) => p.id === projectId);
     const protocol = resolveMergeQueueProtocol(project);
-    void requestMergeQueueAdmission({
+    const applied = await requestMergeQueueAdmission({
       issue,
       protocol,
       logger: this.logger,
       feed: this.feed,
     });
+    if (applied) {
+      this.db.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, queueLabelApplied: true });
+    }
   }
 
   private failRunAndClear(run: RunRecord, message: string, nextState: FactoryState = "failed"): void {
