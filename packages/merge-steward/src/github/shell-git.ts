@@ -16,8 +16,14 @@ function parseConflicts(stderr: string): string[] | undefined {
   return files.length > 0 ? files : undefined;
 }
 
+export interface BotIdentity {
+  name: string;
+  email: string;
+}
+
 export class ShellGitOperations implements GitOperations, SpeculativeBranchBuilder {
   private readonly worktreeBase: string;
+  private botIdentity: BotIdentity | undefined;
 
   constructor(
     private readonly clonePath: string,
@@ -25,6 +31,10 @@ export class ShellGitOperations implements GitOperations, SpeculativeBranchBuild
     private readonly gitBin: string = "git",
   ) {
     this.worktreeBase = `${clonePath}-worktrees`;
+  }
+
+  setBotIdentity(identity: BotIdentity): void {
+    this.botIdentity = identity;
   }
 
   private git(args: string[], opts?: { allowNonZero?: boolean; timeoutMs?: number }) {
@@ -87,6 +97,12 @@ export class ShellGitOperations implements GitOperations, SpeculativeBranchBuild
     // Create isolated worktree with spec branch starting at baseBranch.
     mkdirSync(this.worktreeBase, { recursive: true });
     await this.git(["worktree", "add", "-B", specName, wtPath, baseBranch]);
+
+    // Override git identity so merge commits are attributed to the steward, not the clone owner.
+    if (this.botIdentity) {
+      await this.gitIn(wtPath, ["config", "user.name", this.botIdentity.name]);
+      await this.gitIn(wtPath, ["config", "user.email", this.botIdentity.email]);
+    }
 
     // Merge PR into spec branch inside the worktree.
     // PR branches are always remote refs — use explicit origin/ prefix

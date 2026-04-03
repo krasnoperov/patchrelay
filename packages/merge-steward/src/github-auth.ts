@@ -60,6 +60,15 @@ function githubHeaders(token: string): Record<string, string> {
   };
 }
 
+export async function resolveAppSlug(credentials: GitHubAppCredentials): Promise<string> {
+  const jwt = generateJwt(credentials.appId, credentials.privateKey);
+  const data = await fetchJson<{ slug: string }>(
+    "https://api.github.com/app",
+    { headers: githubHeaders(jwt) },
+  );
+  return data.slug;
+}
+
 async function resolveInstallationIdForRepo(jwt: string, repoFullName: string): Promise<string> {
   const encodedRepo = repoFullName
     .split("/")
