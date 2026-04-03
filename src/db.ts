@@ -470,6 +470,23 @@ export class PatchRelayDatabase {
   }
 
   /**
+   * Issues in delegated state with dependencies but no pending/active run.
+   * Candidates for unblocking when their blockers complete.
+   */
+  listBlockedDelegatedIssues(): IssueRecord[] {
+    const rows = this.connection
+      .prepare(
+        `SELECT DISTINCT i.* FROM issues i
+         JOIN issue_dependencies d ON d.project_id = i.project_id AND d.linear_issue_id = i.linear_issue_id
+         WHERE i.factory_state = 'delegated'
+         AND i.active_run_id IS NULL
+         AND i.pending_run_type IS NULL`,
+      )
+      .all() as Array<Record<string, unknown>>;
+    return rows.map(mapIssueRow);
+  }
+
+  /**
    * Issues waiting in the merge queue with no active or pending run.
    * Used by the queue health monitor to probe GitHub for stuck PRs.
    */
