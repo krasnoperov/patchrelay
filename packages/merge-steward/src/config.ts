@@ -35,6 +35,19 @@ export const stewardConfigSchema = z.object({
   mergeQueueCheckName: z.string().default(DEFAULT_MERGE_QUEUE_CHECK_NAME),
   /** Branch name patterns to exclude from admission (glob-style). */
   excludeBranches: z.array(z.string()).default(["release-please--*"]),
+  /**
+   * File patterns with regen commands for auto-resolving merge conflicts.
+   * When all conflicting files match a pattern, the command is run to regenerate them.
+   * Defaults to lockfile resolution for npm/pnpm/yarn.
+   */
+  autoResolvePatterns: z.array(z.object({
+    glob: z.string().min(1),
+    command: z.array(z.string()).min(1),
+  })).default([
+    { glob: "**/package-lock.json", command: ["npm", "install", "--package-lock-only"] },
+    { glob: "**/pnpm-lock.yaml", command: ["pnpm", "install", "--lockfile-only"] },
+    { glob: "**/yarn.lock", command: ["yarn", "install", "--mode", "update-lockfile"] },
+  ]),
   webhookSecret: z.string().optional(),
 });
 
