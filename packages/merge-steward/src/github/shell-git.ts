@@ -209,5 +209,6 @@ export class ShellGitOperations implements GitOperations, SpeculativeBranchBuild
     const wtPath = join(this.worktreeBase, specName);
     await this.git(["worktree", "remove", "--force", wtPath], { allowNonZero: true });
     await this.git(["branch", "-D", specName], { allowNonZero: true });
+    await this.git(["push", "origin", "--delete", specName], { allowNonZero: true });
   }
 }

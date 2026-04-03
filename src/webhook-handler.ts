@@ -5,7 +5,7 @@ import {
 import { buildAgentSessionExternalUrls } from "./agent-session-presentation.ts";
 import type { CodexAppServerClient } from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
-import { TERMINAL_STATES, type RunType } from "./factory-state.ts";
+import { TERMINAL_STATES, type RunType, type FactoryState } from "./factory-state.ts";
 import {
   buildAlreadyRunningThought,
   buildDelegationThought,
@@ -232,84 +232,83 @@ export class WebhookHandler {
       return { issue: undefined, desiredStage: undefined, delegated: false };
     }
 
+    // ── 1. Fetch data ────────────────────────────────────────────
     const existingIssue = this.db.getIssue(project.id, normalizedIssue.id);
     const activeRun = existingIssue?.activeRunId ? this.db.getRun(existingIssue.activeRunId) : undefined;
     const delegated = this.isDelegatedToPatchRelay(project, normalized);
     const triggerAllowed = triggerEventAllowed(project, normalized.triggerEvent);
-    const shouldTrack = Boolean(existingIssue || delegated);
 
-    if (!shouldTrack) {
+    if (!existingIssue && !delegated) {
       return { issue: undefined, desiredStage: undefined, delegated };
     }
 
     const hydratedIssue = await this.syncIssueDependencies(project.id, normalizedIssue);
     const unresolvedBlockers = this.db.countUnresolvedBlockers(project.id, normalizedIssue.id);
     const pendingRunContextJson = mergePendingImplementationContext(existingIssue?.pendingRunContextJson, normalized);
+    const terminal = isTerminalDelegationState(existingIssue, hydratedIssue);
 
-    const terminalForAutomation = isTerminalDelegationState(existingIssue, hydratedIssue);
-
-    let pendingRunType: RunType | undefined;
-    if (delegated && triggerAllowed && unresolvedBlockers === 0 && !activeRun && !existingIssue?.pendingRunType && !terminalForAutomation) {
-      pendingRunType = "implementation";
-    }
-    let clearPendingImplementation = unresolvedBlockers > 0 && existingIssue?.pendingRunType === "implementation" && !activeRun;
-
-    // Release active run when issue reaches a terminal state or is un-delegated.
-    let clearActiveRun = false;
-    if (activeRun && existingIssue) {
-      if (terminalForAutomation) {
-        clearActiveRun = true;
-      }
-      if (normalized.triggerEvent === "delegateChanged" && !delegated) {
-        clearActiveRun = true;
-        clearPendingImplementation = Boolean(existingIssue.pendingRunType);
-      }
-    }
-
-    // Un-delegation: transition to awaiting_input unless past point of no return.
-    // awaiting_queue means the PR is approved and in the merge queue — let it merge.
-    let undelegatedFactoryState: string | undefined;
-    if (normalized.triggerEvent === "delegateChanged" && !delegated && existingIssue) {
-      const pastNoReturn = existingIssue.factoryState === "awaiting_queue"
-        || TERMINAL_STATES.has(existingIssue.factoryState);
-      if (!pastNoReturn) {
-        undelegatedFactoryState = "awaiting_input";
-        clearPendingImplementation = Boolean(existingIssue.pendingRunType);
-      }
-    }
-
-    // Resolve agent session
-    const agentSessionId = normalized.agentSession?.id ??
-      (!activeRun && (pendingRunType || (normalized.triggerEvent === "delegateChanged" && !delegated)) ? null : undefined);
-
-    // Upsert the issue
-    const issue = this.db.upsertIssue({
-      projectId: project.id,
-      linearIssueId: normalizedIssue.id,
-      ...(hydratedIssue.identifier ? { issueKey: hydratedIssue.identifier } : {}),
-      ...(hydratedIssue.title ? { title: hydratedIssue.title } : {}),
-      ...(hydratedIssue.description ? { description: hydratedIssue.description } : {}),
-      ...(hydratedIssue.url ? { url: hydratedIssue.url } : {}),
-      ...(hydratedIssue.priority != null ? { priority: hydratedIssue.priority } : {}),
-      ...(hydratedIssue.estimate != null ? { estimate: hydratedIssue.estimate } : {}),
-      ...(hydratedIssue.stateName ? { currentLinearState: hydratedIssue.stateName } : {}),
-      ...(hydratedIssue.stateType ? { currentLinearStateType: hydratedIssue.stateType } : {}),
-      ...(pendingRunType ? { pendingRunType, factoryState: "delegated" as const } : {}),
-      ...(clearPendingImplementation ? { pendingRunType: null } : {}),
-      ...((pendingRunType || existingIssue?.pendingRunType === "implementation") && pendingRunContextJson
-        ? { pendingRunContextJson }
-        : {}),
-      ...(agentSessionId !== undefined ? { agentSessionId } : {}),
-      ...(clearActiveRun ? { activeRunId: null } : {}),
-      ...(undelegatedFactoryState ? { factoryState: undelegatedFactoryState as never } : {}),
+    // ── 2. Pure decisions ────────────────────────────────────────
+    const pendingRunType = decideRunIntent({
+      delegated, triggerAllowed, unresolvedBlockers,
+      hasActiveRun: Boolean(activeRun),
+      hasPendingRun: Boolean(existingIssue?.pendingRunType),
+      terminal,
     });
 
-    if (clearActiveRun && activeRun) {
-      const reason = terminalForAutomation ? "Issue reached terminal state during active run" : "Un-delegated from PatchRelay";
-      this.db.finishRun(activeRun.id, { status: "released", failureReason: reason });
-    }
+    const runRelease = decideActiveRunRelease({
+      hasActiveRun: Boolean(activeRun),
+      terminal,
+      triggerEvent: normalized.triggerEvent,
+      delegated,
+    });
 
-    if (undelegatedFactoryState) {
+    const undelegation = decideUnDelegation({
+      triggerEvent: normalized.triggerEvent,
+      delegated,
+      currentState: existingIssue?.factoryState,
+    });
+
+    const clearPending = (unresolvedBlockers > 0 && existingIssue?.pendingRunType === "implementation" && !activeRun)
+      || undelegation.clearPending;
+
+    const agentSessionId = decideAgentSession({
+      sessionId: normalized.agentSession?.id,
+      hasActiveRun: Boolean(activeRun),
+      hasPendingRun: Boolean(pendingRunType),
+      triggerEvent: normalized.triggerEvent,
+      delegated,
+    });
+
+    // ── 3. Transactional commit ──────────────────────────────────
+    const issue = this.db.transaction(() => {
+      const record = this.db.upsertIssue({
+        projectId: project.id,
+        linearIssueId: normalizedIssue.id,
+        ...(hydratedIssue.identifier ? { issueKey: hydratedIssue.identifier } : {}),
+        ...(hydratedIssue.title ? { title: hydratedIssue.title } : {}),
+        ...(hydratedIssue.description ? { description: hydratedIssue.description } : {}),
+        ...(hydratedIssue.url ? { url: hydratedIssue.url } : {}),
+        ...(hydratedIssue.priority != null ? { priority: hydratedIssue.priority } : {}),
+        ...(hydratedIssue.estimate != null ? { estimate: hydratedIssue.estimate } : {}),
+        ...(hydratedIssue.stateName ? { currentLinearState: hydratedIssue.stateName } : {}),
+        ...(hydratedIssue.stateType ? { currentLinearStateType: hydratedIssue.stateType } : {}),
+        ...(pendingRunType ? { pendingRunType, factoryState: "delegated" as const } : {}),
+        ...(clearPending ? { pendingRunType: null } : {}),
+        ...((pendingRunType || existingIssue?.pendingRunType === "implementation") && pendingRunContextJson
+          ? { pendingRunContextJson }
+          : {}),
+        ...(agentSessionId !== undefined ? { agentSessionId } : {}),
+        ...(runRelease.release ? { activeRunId: null } : {}),
+        ...(undelegation.factoryState ? { factoryState: undelegation.factoryState as never } : {}),
+      });
+      if (runRelease.release && activeRun && runRelease.reason) {
+        this.db.finishRun(activeRun.id, { status: "released", failureReason: runRelease.reason });
+      }
+      return record;
+    });
+
+    // ── 4. Side effects (after transaction) ──────────────────────
+    if (undelegation.factoryState) {
       this.feed?.publish({
         level: "warn",
         kind: "stage",
@@ -726,6 +725,61 @@ export class WebhookHandler {
     return undefined;
   }
 }
+
+// ─── Pure decision functions for recordDesiredStage ──────────────
+
+function decideRunIntent(p: {
+  delegated: boolean;
+  triggerAllowed: boolean;
+  unresolvedBlockers: number;
+  hasActiveRun: boolean;
+  hasPendingRun: boolean;
+  terminal: boolean;
+}): RunType | undefined {
+  if (p.delegated && p.triggerAllowed && p.unresolvedBlockers === 0
+      && !p.hasActiveRun && !p.hasPendingRun && !p.terminal) {
+    return "implementation";
+  }
+  return undefined;
+}
+
+function decideActiveRunRelease(p: {
+  hasActiveRun: boolean;
+  terminal: boolean;
+  triggerEvent: string;
+  delegated: boolean;
+}): { release: boolean; reason?: string } {
+  if (!p.hasActiveRun) return { release: false };
+  if (p.terminal) return { release: true, reason: "Issue reached terminal state during active run" };
+  if (p.triggerEvent === "delegateChanged" && !p.delegated) return { release: true, reason: "Un-delegated from PatchRelay" };
+  return { release: false };
+}
+
+function decideUnDelegation(p: {
+  triggerEvent: string;
+  delegated: boolean;
+  currentState?: FactoryState | undefined;
+}): { factoryState?: FactoryState | undefined; clearPending: boolean } {
+  if (p.triggerEvent !== "delegateChanged" || p.delegated) return { clearPending: false };
+  if (!p.currentState) return { clearPending: false };
+  const pastNoReturn = p.currentState === "awaiting_queue" || TERMINAL_STATES.has(p.currentState);
+  if (pastNoReturn) return { clearPending: false };
+  return { factoryState: "awaiting_input", clearPending: true };
+}
+
+function decideAgentSession(p: {
+  sessionId?: string | undefined;
+  hasActiveRun: boolean;
+  hasPendingRun: boolean;
+  triggerEvent: string;
+  delegated: boolean;
+}): string | null | undefined {
+  if (p.sessionId) return p.sessionId;
+  if (!p.hasActiveRun && (p.hasPendingRun || (p.triggerEvent === "delegateChanged" && !p.delegated))) return null;
+  return undefined;
+}
+
+// ─── Helper predicates ──────────────────────────────────────────
 
 function isResolvedLinearState(stateType?: string, stateName?: string): boolean {
   return stateType === "completed" || stateName?.trim().toLowerCase() === "done";

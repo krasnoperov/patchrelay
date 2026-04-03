@@ -15,6 +15,7 @@ import type {
 import { TERMINAL_STATUSES } from "./types.ts";
 import type { StewardConfig } from "./config.ts";
 import { reconcile } from "./reconciler.ts";
+import { INVALIDATION_PATCH, selectDownstream } from "./invalidation.ts";
 import { randomUUID } from "node:crypto";
 
 /**
@@ -327,22 +328,16 @@ export class MergeStewardService {
    */
   private invalidateDownstreamOf(removedEntry: QueueEntry): void {
     const allActive = this.store.listActive(this.config.repoId);
-    let invalidated = 0;
-    for (const downstream of allActive) {
-      if (downstream.position <= removedEntry.position) continue;
-      if (TERMINAL_STATUSES.includes(downstream.status)) continue;
+    const targets = selectDownstream(allActive, removedEntry.position);
+    for (const downstream of targets) {
       if (downstream.specBranch) {
         this.specBuilder.deleteSpeculative(downstream.specBranch).catch(() => {});
       }
-      this.store.transition(downstream.id, "preparing_head", {
-        ciRunId: null, ciRetries: 0,
-        specBranch: null, specSha: null, specBasedOn: null,
-        retryAttempts: 0, lastFailedBaseSha: null,
-      }, `invalidated: entry ${removedEntry.id.slice(0, 8)} dequeued`);
-      invalidated++;
+      this.store.transition(downstream.id, "preparing_head", INVALIDATION_PATCH,
+        `invalidated: entry ${removedEntry.id.slice(0, 8)} dequeued`);
     }
-    if (invalidated > 0) {
-      this.logger.info({ removedEntryId: removedEntry.id, invalidated }, "Invalidated downstream entries after dequeue");
+    if (targets.length > 0) {
+      this.logger.info({ removedEntryId: removedEntry.id, invalidated: targets.length }, "Invalidated downstream entries after dequeue");
     }
   }
 
