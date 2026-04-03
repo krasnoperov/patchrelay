@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.3](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.9.2...merge-steward-v0.9.3) (2026-04-03)
+
+
+### Bug Fixes
+
+* add stale dependency guard in reconciler + dequeue contamination tests ([6b330b6](https://github.com/krasnoperov/patchrelay/commit/6b330b6c3fd6a4de4f8e8a6f11d531dbae1e3aa7))
+* stale dependency guard in reconciler + dequeue contamination tests ([7778ff5](https://github.com/krasnoperov/patchrelay/commit/7778ff5eb5a103b0d8e695a0975c2eb59b5a6c01))
+
 ## [0.9.2](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.9.1...merge-steward-v0.9.2) (2026-04-03)
 
 
