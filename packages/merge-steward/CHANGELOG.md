@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.13](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.8.12...merge-steward-v0.8.13) (2026-04-03)
+
+
+### Bug Fixes
+
+* support pnpm and yarn lockfile auto-resolve in spec builds ([7f9c5c9](https://github.com/krasnoperov/patchrelay/commit/7f9c5c9ae69e78c610e569001a4006aa50045c1b))
+* support pnpm and yarn lockfile auto-resolve in spec builds ([4fee9ef](https://github.com/krasnoperov/patchrelay/commit/4fee9ef723c8453b39c956eefd033a3369b7dd7d))
+
 ## [0.8.12](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.8.11...merge-steward-v0.8.12) (2026-04-03)
 
 
