@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.35.10](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.35.9...patchrelay-v0.35.10) (2026-04-03)
+
+
+### Bug Fixes
+
+* probe GitHub for all idle issues with PRs ([f04b87a](https://github.com/krasnoperov/patchrelay/commit/f04b87a2e82f411125682261bbedba0ee8a9d794))
+* probe GitHub for all idle issues with PRs, not just pr_open ([1dc0625](https://github.com/krasnoperov/patchrelay/commit/1dc06257eea5fc417a2ab9a5e0c5649a48da6bee))
+
 ## [0.35.9](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.35.8...patchrelay-v0.35.9) (2026-04-03)
 
 
