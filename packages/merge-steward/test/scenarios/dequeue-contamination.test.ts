@@ -38,13 +38,11 @@ describe("mid-queue dequeue does not contaminate downstream specs", () => {
     assert.strictEqual(h.entryStatus(prB), "dequeued", "B should be dequeued");
     assert.ok(h.merged.includes(3), "C should merge after rebuild without B");
 
-    // C must have been invalidated and rebuilt — either by the service-level
-    // dequeue handler or the reconciler's stale dependency guard.
-    // Verify by checking that C was re-prepared (went through preparing_head
-    // after the dequeue happened).
+    // C must have been invalidated — check for a preparing_head transition
+    // triggered by the dequeue (service-level or reconciler stale-dep guard).
     const cEvents = h.store.listEvents(cBefore!.id);
     const rePrepared = cEvents.some(
-      (e) => e.toStatus === "preparing_head" && new Date(e.at) > new Date(cBefore!.updatedAt),
+      (e) => e.toStatus === "preparing_head" && e.detail?.includes("dequeued"),
     );
     assert.ok(rePrepared, "C should have been reset to preparing_head after B was dequeued");
 
