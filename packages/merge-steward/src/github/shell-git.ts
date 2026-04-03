@@ -21,6 +21,27 @@ export interface BotIdentity {
   email: string;
 }
 
+interface RegenCommand {
+  bin: string;
+  args: string[];
+}
+
+const LOCKFILE_REGEN: Array<{ suffix: string; command: RegenCommand }> = [
+  { suffix: "package-lock.json", command: { bin: "npm", args: ["install", "--package-lock-only"] } },
+  { suffix: "pnpm-lock.yaml", command: { bin: "pnpm", args: ["install", "--lockfile-only"] } },
+  { suffix: "yarn.lock", command: { bin: "yarn", args: ["install", "--mode", "update-lockfile"] } },
+];
+
+/** If all conflicting files are lockfiles of the same type, return the regen command. */
+function detectLockfileRegenCommand(conflictFiles: string[]): RegenCommand | undefined {
+  for (const entry of LOCKFILE_REGEN) {
+    if (conflictFiles.every((f) => f.endsWith(entry.suffix))) {
+      return entry.command;
+    }
+  }
+  return undefined;
+}
+
 export class ShellGitOperations implements GitOperations, SpeculativeBranchBuilder {
   private readonly worktreeBase: string;
   private botIdentity: BotIdentity | undefined;
@@ -136,27 +157,28 @@ export class ShellGitOperations implements GitOperations, SpeculativeBranchBuild
   }
 
   /**
-   * During a merge conflict, check if the only unmerged files are lockfiles
-   * (package-lock.json). If so, resolve by regenerating from the merged
-   * package.json via `npm install --package-lock-only`.
+   * During a merge conflict, check if the only unmerged files are lockfiles.
+   * If so, resolve by regenerating from the merged manifest via the
+   * appropriate package manager.
    */
   private async tryResolveLockfileConflict(wtPath: string): Promise<boolean> {
     try {
       const unmerged = await this.gitIn(wtPath, ["diff", "--name-only", "--diff-filter=U"]);
       const files = unmerged.stdout.trim().split("\n").filter(Boolean);
-      if (files.length === 0 || !files.every((f) => f.endsWith("package-lock.json"))) {
-        return false;
-      }
+      if (files.length === 0) return false;
+
+      const regenerate = detectLockfileRegenCommand(files);
+      if (!regenerate) return false;
 
       for (const file of files) {
         await this.gitIn(wtPath, ["checkout", "--ours", "--", file]);
       }
 
-      const npmResult = await exec("npm", ["install", "--package-lock-only"], {
+      const result = await exec(regenerate.bin, regenerate.args, {
         cwd: wtPath,
         timeoutMs: 60_000,
       });
-      if (npmResult.exitCode !== 0) return false;
+      if (result.exitCode !== 0) return false;
 
       for (const file of files) {
         await this.gitIn(wtPath, ["add", file]);
