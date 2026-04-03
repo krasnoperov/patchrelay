@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.12](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.8.11...merge-steward-v0.8.12) (2026-04-03)
+
+
+### Bug Fixes
+
+* **merge-steward:** reject skipped required checks ([2ba38f9](https://github.com/krasnoperov/patchrelay/commit/2ba38f91f80338d0a65095ac54cf5f23c52401b7))
+* **merge-steward:** reject skipped required checks instead of passing them ([4ab10e5](https://github.com/krasnoperov/patchrelay/commit/4ab10e532eabe49f47e156aca6f24cece12546c4))
+
 ## [0.8.11](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.8.10...merge-steward-v0.8.11) (2026-04-03)
 
 
