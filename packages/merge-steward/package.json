@@ -1,6 +1,6 @@
 {
   "name": "merge-steward",
-  "version": "0.8.8",
+  "version": "0.8.9",
   "description": "Serial merge queue for GitHub — rebase, CI-gate, and merge PRs one at a time",
   "type": "module",
   "repository": {

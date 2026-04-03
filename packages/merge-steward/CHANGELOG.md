@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.9](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.8.8...merge-steward-v0.8.9) (2026-04-03)
+
+
+### Bug Fixes
+
+* push spec branch to remote before triggering CI ([3ad6b2f](https://github.com/krasnoperov/patchrelay/commit/3ad6b2f98e46f58d0a93173c91d3e2ae729f0bf3))
+* push spec branch to remote before triggering CI ([63e0b84](https://github.com/krasnoperov/patchrelay/commit/63e0b84c13370529c8dc3c2913a9d5d93bf16fd8))
+
 ## [0.8.8](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.8.7...merge-steward-v0.8.8) (2026-04-03)
 
 
