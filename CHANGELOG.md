@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.35.5](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.35.4...patchrelay-v0.35.5) (2026-04-03)
+
+
+### Bug Fixes
+
+* operational reliability — health gate, label retry, provenance, reset ([f27ac71](https://github.com/krasnoperov/patchrelay/commit/f27ac7166d89f38463c8f2b8f622e6b06845ce39))
+* operational reliability — health gate, label retry, provenance, reset ([bfd926a](https://github.com/krasnoperov/patchrelay/commit/bfd926a8dc40c57bd08a6cd96e7e0c6bf13f9405))
+
 ## [0.35.4](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.35.3...patchrelay-v0.35.4) (2026-04-03)
 
 
