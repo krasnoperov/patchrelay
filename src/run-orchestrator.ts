@@ -929,6 +929,19 @@ export class RunOrchestrator {
         await this.reconcileFromGitHub(issue);
       }
     }
+
+    // Unblock delegated issues whose blockers have been resolved.
+    for (const issue of this.db.listBlockedDelegatedIssues()) {
+      const unresolved = this.db.countUnresolvedBlockers(issue.projectId, issue.linearIssueId);
+      if (unresolved === 0) {
+        this.db.upsertIssue({
+          projectId: issue.projectId,
+          linearIssueId: issue.linearIssueId,
+          pendingRunType: "implementation",
+        });
+        this.enqueueIssue(issue.projectId, issue.linearIssueId);
+      }
+    }
   }
 
   private async reconcileFromGitHub(issue: IssueRecord): Promise<void> {

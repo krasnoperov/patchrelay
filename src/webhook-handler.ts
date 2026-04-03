@@ -218,7 +218,19 @@ export class WebhookHandler {
     if (delegated && triggerAllowed && unresolvedBlockers === 0 && !activeRun && !existingIssue?.pendingRunType && !terminalForAutomation) {
       pendingRunType = "implementation";
     }
-    const clearPendingImplementation = unresolvedBlockers > 0 && existingIssue?.pendingRunType === "implementation" && !activeRun;
+    let clearPendingImplementation = unresolvedBlockers > 0 && existingIssue?.pendingRunType === "implementation" && !activeRun;
+
+    // Release active run when issue reaches a terminal state or is un-delegated.
+    let clearActiveRun = false;
+    if (activeRun && existingIssue) {
+      if (terminalForAutomation) {
+        clearActiveRun = true;
+      }
+      if (normalized.triggerEvent === "delegateChanged" && !delegated) {
+        clearActiveRun = true;
+        clearPendingImplementation = Boolean(existingIssue.pendingRunType);
+      }
+    }
 
     // Resolve agent session
     const agentSessionId = normalized.agentSession?.id ??
@@ -242,7 +254,13 @@ export class WebhookHandler {
         ? { pendingRunContextJson }
         : {}),
       ...(agentSessionId !== undefined ? { agentSessionId } : {}),
+      ...(clearActiveRun ? { activeRunId: null } : {}),
     });
+
+    if (clearActiveRun && activeRun) {
+      const reason = terminalForAutomation ? "Issue reached terminal state during active run" : "Un-delegated from PatchRelay";
+      this.db.finishRun(activeRun.id, { status: "released", failureReason: reason });
+    }
 
     return {
       issue: this.db.issueToTrackedIssue(issue),
