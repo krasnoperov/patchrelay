@@ -3,6 +3,7 @@ import type { QueueStore } from "./store.ts";
 import type { QueueEntry, EvictionContext, FailureClass, MergeResult, ReconcileEvent, ReconcileAction } from "./types.ts";
 import { TERMINAL_STATUSES } from "./types.ts";
 import { classifyFailure } from "./classify.ts";
+import { INVALIDATION_PATCH, selectDownstream } from "./invalidation.ts";
 import { randomUUID } from "node:crypto";
 
 // ─── Constants ──────────────────────────────────────────────────
@@ -82,9 +83,8 @@ export async function reconcile(ctx: ReconcileContext): Promise<void> {
           detail: `dependency ${entry.specBasedOn} is ${dep?.status ?? "removed"}`,
         });
         await cleanupSpec(ctx, entry);
-        ctx.store.transition(entry.id, "preparing_head", {
-          ...CLEAN_CI, ...CLEAN_SPEC, retryAttempts: 0, lastFailedBaseSha: null,
-        }, `stale dependency ${dep?.status ?? "removed"}`);
+        ctx.store.transition(entry.id, "preparing_head",
+          INVALIDATION_PATCH, `stale dependency ${dep?.status ?? "removed"}`);
         continue;
       }
     }
@@ -476,12 +476,11 @@ async function mergeHead(ctx: ReconcileContext, entry: QueueEntry): Promise<void
 // ─── Invalidation + eviction ────────────────────────────────────
 
 async function invalidateDownstream(ctx: ReconcileContext, allActive: QueueEntry[], afterIndex: number): Promise<void> {
-  for (let i = afterIndex + 1; i < allActive.length; i++) {
-    const downstream = allActive[i]!;
-    if (TERMINAL_STATUSES.includes(downstream.status)) continue;
+  const targets = selectDownstream(allActive, allActive[afterIndex]!.position);
+  for (const downstream of targets) {
     emit(ctx, downstream, "invalidated", { detail: `base changed after position ${afterIndex}` });
     await cleanupSpec(ctx, downstream);
-    ctx.store.transition(downstream.id, "preparing_head", { ...CLEAN_CI, ...CLEAN_SPEC, retryAttempts: 0, lastFailedBaseSha: null }, "invalidated: base changed");
+    ctx.store.transition(downstream.id, "preparing_head", INVALIDATION_PATCH, "invalidated: base changed");
   }
 }
 
