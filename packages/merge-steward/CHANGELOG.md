@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.2](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.9.1...merge-steward-v0.9.2) (2026-04-03)
+
+
+### Bug Fixes
+
+* invalidate downstream specs on mid-queue dequeue ([2011909](https://github.com/krasnoperov/patchrelay/commit/201190984a34cc131bfd3863d7eb345d64a0a246))
+* invalidate downstream specs on mid-queue dequeue ([f87fb5f](https://github.com/krasnoperov/patchrelay/commit/f87fb5f4bbc30ba68a7b2cad7336fe3e7511525f))
+
 ## [0.9.1](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.9.0...merge-steward-v0.9.1) (2026-04-03)
 
 
