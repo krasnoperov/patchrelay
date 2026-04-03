@@ -21,22 +21,32 @@ export interface BotIdentity {
   email: string;
 }
 
-interface RegenCommand {
-  bin: string;
-  args: string[];
+export interface AutoResolvePattern {
+  glob: string;
+  command: string[];
 }
 
-const LOCKFILE_REGEN: Array<{ suffix: string; command: RegenCommand }> = [
-  { suffix: "package-lock.json", command: { bin: "npm", args: ["install", "--package-lock-only"] } },
-  { suffix: "pnpm-lock.yaml", command: { bin: "pnpm", args: ["install", "--lockfile-only"] } },
-  { suffix: "yarn.lock", command: { bin: "yarn", args: ["install", "--mode", "update-lockfile"] } },
-];
+/** Check if a file path matches a glob pattern (simple suffix/wildcard match). */
+function matchesGlob(filePath: string, pattern: string): boolean {
+  if (pattern.startsWith("**/")) {
+    return filePath.endsWith(pattern.slice(2));
+  }
+  if (pattern.startsWith("*/")) {
+    const name = filePath.split("/").pop() ?? filePath;
+    return name === pattern.slice(2);
+  }
+  return filePath === pattern || filePath.endsWith(`/${pattern}`);
+}
 
-/** If all conflicting files are lockfiles of the same type, return the regen command. */
-function detectLockfileRegenCommand(conflictFiles: string[]): RegenCommand | undefined {
-  for (const entry of LOCKFILE_REGEN) {
-    if (conflictFiles.every((f) => f.endsWith(entry.suffix))) {
-      return entry.command;
+/** If all conflicting files match a single auto-resolve pattern, return its command. */
+function detectAutoResolveCommand(
+  conflictFiles: string[],
+  patterns: AutoResolvePattern[],
+): { bin: string; args: string[] } | undefined {
+  for (const pattern of patterns) {
+    if (conflictFiles.every((f) => matchesGlob(f, pattern.glob))) {
+      const [bin, ...args] = pattern.command;
+      return bin ? { bin, args } : undefined;
     }
   }
   return undefined;
@@ -45,6 +55,7 @@ function detectLockfileRegenCommand(conflictFiles: string[]): RegenCommand | und
 export class ShellGitOperations implements GitOperations, SpeculativeBranchBuilder {
   private readonly worktreeBase: string;
   private botIdentity: BotIdentity | undefined;
+  private autoResolvePatterns: AutoResolvePattern[] = [];
 
   constructor(
     private readonly clonePath: string,
@@ -56,6 +67,10 @@ export class ShellGitOperations implements GitOperations, SpeculativeBranchBuild
 
   setBotIdentity(identity: BotIdentity): void {
     this.botIdentity = identity;
+  }
+
+  setAutoResolvePatterns(patterns: AutoResolvePattern[]): void {
+    this.autoResolvePatterns = patterns;
   }
 
   private git(args: string[], opts?: { allowNonZero?: boolean; timeoutMs?: number }) {
@@ -138,7 +153,7 @@ export class ShellGitOperations implements GitOperations, SpeculativeBranchBuild
       const conflictFiles = parseConflicts(result.stderr);
 
       // Lockfile-only conflicts can be auto-resolved by regenerating.
-      if (await this.tryResolveLockfileConflict(wtPath)) {
+      if (await this.tryAutoResolveConflict(wtPath)) {
         const sha = (await this.gitIn(wtPath, ["rev-parse", "HEAD"])).stdout.trim();
         await this.git(["worktree", "remove", "--force", wtPath], { allowNonZero: true });
         return { success: true, sha };
@@ -157,17 +172,17 @@ export class ShellGitOperations implements GitOperations, SpeculativeBranchBuild
   }
 
   /**
-   * During a merge conflict, check if the only unmerged files are lockfiles.
-   * If so, resolve by regenerating from the merged manifest via the
-   * appropriate package manager.
+   * During a merge conflict, check if all unmerged files match a configured
+   * auto-resolve pattern. If so, regenerate them via the pattern's command.
    */
-  private async tryResolveLockfileConflict(wtPath: string): Promise<boolean> {
+  private async tryAutoResolveConflict(wtPath: string): Promise<boolean> {
+    if (this.autoResolvePatterns.length === 0) return false;
     try {
       const unmerged = await this.gitIn(wtPath, ["diff", "--name-only", "--diff-filter=U"]);
       const files = unmerged.stdout.trim().split("\n").filter(Boolean);
       if (files.length === 0) return false;
 
-      const regenerate = detectLockfileRegenCommand(files);
+      const regenerate = detectAutoResolveCommand(files, this.autoResolvePatterns);
       if (!regenerate) return false;
 
       for (const file of files) {

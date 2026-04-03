@@ -34,6 +34,7 @@ async function createRepoInstance(config: StewardConfig, logger: Logger, botIden
   const store = new SqliteStore(config.database.path);
   const git = new ShellGitOperations(clone.path, config.repoFullName, config.gitBin);
   if (botIdentity) git.setBotIdentity(botIdentity);
+  if (config.autoResolvePatterns.length > 0) git.setAutoResolvePatterns(config.autoResolvePatterns);
   const ci = new GitHubActionsRunner(config.repoFullName, config.requiredChecks);
   const github = new GitHubPRClient(config.repoFullName);
   const eviction = new GitHubCheckRunReporter(
