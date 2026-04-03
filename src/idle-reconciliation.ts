@@ -98,9 +98,9 @@ export class IdleIssueReconciler {
         continue;
       }
 
-      // Probe GitHub for stale pr_open issues: detect missed reviews,
-      // merge conflicts, and other state that webhooks may have missed.
-      if (issue.factoryState === "pr_open") {
+      // Probe GitHub for idle issues with PRs: detect missed reviews,
+      // merge conflicts, and orphaned repair states.
+      if (issue.prNumber) {
         await this.reconcileFromGitHub(issue);
       }
     }
