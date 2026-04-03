@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.0](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.8.13...merge-steward-v0.9.0) (2026-04-03)
+
+
+### Features
+
+* configurable auto-resolve patterns for merge conflicts ([59ee2cc](https://github.com/krasnoperov/patchrelay/commit/59ee2cc7a286d3a2c4743ccc84e8f0fe3d58fba7))
+* configurable auto-resolve patterns for merge conflicts ([1c0a2f2](https://github.com/krasnoperov/patchrelay/commit/1c0a2f26ff05426f0d917b2c3bdc2001aa21456f))
+
 ## [0.8.13](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.8.12...merge-steward-v0.8.13) (2026-04-03)
 
 
