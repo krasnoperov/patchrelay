@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.35.3](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.35.2...patchrelay-v0.35.3) (2026-04-03)
+
+
+### Bug Fixes
+
+* delegation reliability — un-delegation cleanup, terminal halt, blocker reconciliation ([b40a993](https://github.com/krasnoperov/patchrelay/commit/b40a9935d7be4c1105c9ec5f7e286c578debe9bf))
+* delegation reliability — un-delegation, terminal halt, blocker reconciliation ([0522930](https://github.com/krasnoperov/patchrelay/commit/0522930e0054f48c926eb2e6a685cd80e6dd1d05))
+
 ## [0.35.2](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.35.1...patchrelay-v0.35.2) (2026-04-03)
 
 
