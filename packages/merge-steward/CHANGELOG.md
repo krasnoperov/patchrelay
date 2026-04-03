@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.4](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.9.3...merge-steward-v0.9.4) (2026-04-03)
+
+
+### Bug Fixes
+
+* complete dequeue invalidation — service, harness, external merge ([00f5499](https://github.com/krasnoperov/patchrelay/commit/00f54994119f7c6c4bce8c11bcfe831cb9bb7486))
+* complete dequeue invalidation — service, harness, external merge ([4cc6298](https://github.com/krasnoperov/patchrelay/commit/4cc629889c931ce25145d1cf6e82b34c6500bcb2))
+
 ## [0.9.3](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.9.2...merge-steward-v0.9.3) (2026-04-03)
 
 
