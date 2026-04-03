@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.35.7](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.35.6...patchrelay-v0.35.7) (2026-04-03)
+
+
+### Bug Fixes
+
+* reset queueLabelApplied on all paths entering awaiting_queue ([578977f](https://github.com/krasnoperov/patchrelay/commit/578977f5332b6333e467f1854bf01da0b8ea68df))
+* reset queueLabelApplied on all paths entering awaiting_queue ([ebac73c](https://github.com/krasnoperov/patchrelay/commit/ebac73cde440c9ce9641deb8bc2201e2d175c06a))
+
 ## [0.35.6](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.35.5...patchrelay-v0.35.6) (2026-04-03)
 
 
