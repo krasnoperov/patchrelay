@@ -98,7 +98,9 @@ export class IdleIssueReconciler {
         continue;
       }
 
-      if (issue.factoryState === "pr_open" && !issue.prReviewState) {
+      // Probe GitHub for stale pr_open issues: detect missed reviews,
+      // merge conflicts, and other state that webhooks may have missed.
+      if (issue.factoryState === "pr_open") {
         await this.reconcileFromGitHub(issue);
       }
     }
@@ -255,15 +257,47 @@ export class IdleIssueReconciler {
       const { stdout } = await execCommand("gh", [
         "pr", "view", String(issue.prNumber),
         "--repo", project.github.repoFullName,
-        "--json", "state,reviewDecision",
+        "--json", "state,reviewDecision,mergeable,mergeStateStatus",
       ], { timeoutMs: 10_000 });
-      const pr = JSON.parse(stdout) as { state?: string; reviewDecision?: string };
+      const pr = JSON.parse(stdout) as {
+        state?: string;
+        reviewDecision?: string;
+        mergeable?: string;
+        mergeStateStatus?: string;
+      };
       if (pr.state === "MERGED") {
         this.db.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, prState: "merged" });
         this.advanceIdleIssue(issue, "done", { clearFailureProvenance: true });
-      } else if (pr.reviewDecision === "APPROVED") {
+        return;
+      }
+      if (pr.reviewDecision === "APPROVED") {
         this.db.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, prReviewState: "approved" });
         this.advanceIdleIssue(issue, "awaiting_queue", { clearFailureProvenance: true });
+        return;
+      }
+      // Merge conflict detected — dispatch a repair run to rebase the branch.
+      if (pr.mergeable === "CONFLICTING" || pr.mergeStateStatus === "DIRTY") {
+        this.logger.info(
+          { issueKey: issue.issueKey, prNumber: issue.prNumber, mergeable: pr.mergeable },
+          "Reconciliation: PR has merge conflicts, dispatching rebase",
+        );
+        this.advanceIdleIssue(issue, "repairing_queue" as never, {
+          pendingRunType: "queue_repair",
+          pendingRunContext: {
+            source: "idle_reconciliation",
+            failureReason: "merge_conflict_detected",
+            failureSignature: `conflict:${issue.prNumber}`,
+          },
+        });
+        this.feed?.publish({
+          level: "warn",
+          kind: "github",
+          issueKey: issue.issueKey,
+          projectId: issue.projectId,
+          stage: "repairing_queue",
+          status: "conflict_detected",
+          summary: `PR #${issue.prNumber} has merge conflicts with main, dispatching rebase`,
+        });
       }
     } catch (error) {
       this.logger.debug(
