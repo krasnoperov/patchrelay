@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.35.4](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.35.3...patchrelay-v0.35.4) (2026-04-03)
+
+
+### Bug Fixes
+
+* delegation edge cases — un-delegation state, issueRemoved, tests ([aff9641](https://github.com/krasnoperov/patchrelay/commit/aff9641a7a5cc0abf3fe2a22504fcfee6c5c4fcf))
+* delegation edge cases — un-delegation, issueRemoved, point of no return ([c51189b](https://github.com/krasnoperov/patchrelay/commit/c51189b4da13f78afba6c0e2fa404a83c13206ca))
+
 ## [0.35.3](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.35.2...patchrelay-v0.35.3) (2026-04-03)
 
 
