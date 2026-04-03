@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.35.9](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.35.8...patchrelay-v0.35.9) (2026-04-03)
+
+
+### Bug Fixes
+
+* push as patchrelay[bot] using App installation token ([e18346b](https://github.com/krasnoperov/patchrelay/commit/e18346b7904a2d8f4397d8ed0b913ff16f55c27e))
+* push as patchrelay[bot] using App installation token ([2cb4f38](https://github.com/krasnoperov/patchrelay/commit/2cb4f381015e01a555e62479983684573dbb570b))
+
 ## [0.35.8](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.35.7...patchrelay-v0.35.8) (2026-04-03)
 
 
