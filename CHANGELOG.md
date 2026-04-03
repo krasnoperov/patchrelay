@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.35.6](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.35.5...patchrelay-v0.35.6) (2026-04-03)
+
+
+### Bug Fixes
+
+* reset queueLabelApplied on queue transitions, widen provenance probe ([e53c15a](https://github.com/krasnoperov/patchrelay/commit/e53c15a6dd3dd1b85755d7cee6efd8146b31803c))
+* reset queueLabelApplied on queue transitions, widen provenance probe ([15dcbe1](https://github.com/krasnoperov/patchrelay/commit/15dcbe1cea88178738ac9435e582e2b06064d2af))
+
 ## [0.35.5](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.35.4...patchrelay-v0.35.5) (2026-04-03)
 
 
