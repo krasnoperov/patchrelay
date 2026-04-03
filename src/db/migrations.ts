@@ -232,6 +232,9 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
   addColumnIfMissing(connection, "issues", "last_queue_incident_json", "TEXT");
   addColumnIfMissing(connection, "issues", "last_attempted_failure_head_sha", "TEXT");
   addColumnIfMissing(connection, "issues", "last_attempted_failure_signature", "TEXT");
+
+  // Track whether the merge queue label was successfully applied.
+  addColumnIfMissing(connection, "issues", "queue_label_applied", "INTEGER NOT NULL DEFAULT 0");
 }
 
 function addColumnIfMissing(connection: DatabaseConnection, table: string, column: string, definition: string): void {
