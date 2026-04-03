@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.8.7](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.8.6...merge-steward-v0.8.7) (2026-04-03)
+
+
+### Bug Fixes
+
+* harden buildSpeculative against stale clone and lockfile conflicts ([0a78f9d](https://github.com/krasnoperov/patchrelay/commit/0a78f9dd408f53fcf920cf70f51e16076d07770a))
+* harden buildSpeculative against stale clone and lockfile conflicts ([14b2466](https://github.com/krasnoperov/patchrelay/commit/14b2466d1a0ce7a1ce572632b83e1d56b22b2397))
+* use isolated git worktrees for speculative branch builds ([ea40e85](https://github.com/krasnoperov/patchrelay/commit/ea40e8554c29e7453489668d059cea3937155160))
+* use isolated git worktrees for speculative branch builds ([1243adb](https://github.com/krasnoperov/patchrelay/commit/1243adbc7ad98662265a07fe25c5dc583637c153))
+
 ## [0.8.6](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.8.5...merge-steward-v0.8.6) (2026-04-02)
 
 
