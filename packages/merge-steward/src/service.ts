@@ -315,6 +315,7 @@ export class MergeStewardService {
     const entry = this.store.getEntryByPR(this.config.repoId, prNumber);
     if (entry) {
       this.store.transition(entry.id, "merged");
+      this.invalidateDownstreamOf(entry);
       this.logger.info({ prNumber, entryId: entry.id }, "External merge acknowledged");
     }
   }
