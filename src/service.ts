@@ -608,6 +608,11 @@ export class PatchRelayService {
     if (!issue) return undefined;
     if (issue.activeRunId) return { error: "Issue already has an active run" };
 
+    if (issue.prState === "merged") {
+      this.db.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, factoryState: "done" as never });
+      return { issueKey, runType: "none" };
+    }
+
     // Infer run type from current state instead of always resetting to implementation
     let runType = "implementation";
     let factoryState: string = "delegated";

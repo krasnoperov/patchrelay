@@ -236,9 +236,12 @@ async function prepareEntry(
   const specName = specBranchName(entry.id);
   emit(ctx, entry, "spec_build_started", { specBranch: specName, baseSha, ...(prevEntry ? { dependsOn: prevEntry.id } : {}) });
 
+  const branchSuffix = entry.branch.replace(/^.*\//, "").replace(/-/g, " ");
+  const mergeMessage = `Merge PR #${entry.prNumber}: ${branchSuffix}`;
+
   let result: MergeResult;
   try {
-    result = await ctx.specBuilder.buildSpeculative(entry.branch, base, specName);
+    result = await ctx.specBuilder.buildSpeculative(entry.branch, base, specName, mergeMessage);
   } catch (err) {
     if (isHead) {
       // Branch gone or unreachable.

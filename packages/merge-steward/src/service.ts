@@ -54,9 +54,24 @@ export class MergeStewardService {
     return this.github;
   }
 
-  start(): void {
+  async start(): Promise<void> {
     this.logger.info({ pollIntervalMs: this.config.pollIntervalMs }, "Steward service starting");
     this.scheduleNextTick();
+
+    // Best-effort: scan GitHub for PRs with the admission label that
+    // aren't already in the queue (recovers state after restart).
+    try {
+      const labeled = await this.github.listOpenPRsWithLabel(this.config.admissionLabel);
+      let admitted = 0;
+      for (const pr of labeled) {
+        if (await this.tryAdmit(pr.number, pr.branch, pr.headSha)) admitted++;
+      }
+      if (labeled.length > 0) {
+        this.logger.info({ scanned: labeled.length, admitted }, "Startup scan for labeled PRs complete");
+      }
+    } catch (err) {
+      this.logger.warn({ err }, "Startup scan for labeled PRs failed");
+    }
   }
 
   async stop(): Promise<void> {
