@@ -903,11 +903,12 @@ export class RunOrchestrator {
           const inferProject = this.config.projects.find((p) => p.id === issue.projectId);
           const inferProtocol = resolveMergeQueueProtocol(inferProject);
           let inferred: "queue_eviction" | "branch_ci" = "branch_ci";
-          if (inferProject?.github?.repoFullName && issue.prNumber && issue.lastGitHubFailureHeadSha) {
+          const probeSha = issue.lastGitHubFailureHeadSha ?? issue.lastGitHubCiSnapshotHeadSha;
+          if (inferProject?.github?.repoFullName && issue.prNumber && probeSha) {
             try {
               const { stdout } = await execCommand("gh", [
                 "api",
-                `repos/${inferProject.github.repoFullName}/commits/${issue.lastGitHubFailureHeadSha}/check-runs`,
+                `repos/${inferProject.github.repoFullName}/commits/${probeSha}/check-runs`,
                 "--jq", `.check_runs[] | select(.name == "${inferProtocol.evictionCheckName}" and .conclusion == "failure") | .name`,
               ], { timeoutMs: 10_000 });
               if (stdout.trim().length > 0) inferred = "queue_eviction";
@@ -1000,6 +1001,10 @@ export class RunOrchestrator {
       { issueKey: issue.issueKey, from: issue.factoryState, to: newState, pendingRunType: options?.pendingRunType },
       "Reconciliation: advancing idle issue",
     );
+    // Reset queueLabelApplied when entering or leaving awaiting_queue so
+    // the retry loop re-applies the label on each queue cycle.
+    const resetQueueLabel = newState === "awaiting_queue" || issue.factoryState === "awaiting_queue";
+
     this.db.upsertIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
@@ -1010,6 +1015,7 @@ export class RunOrchestrator {
             pendingRunContextJson: options.pendingRunContext ? JSON.stringify(options.pendingRunContext) : null,
           }
         : {}),
+      ...(resetQueueLabel ? { queueLabelApplied: false } : {}),
       ...(options?.clearFailureProvenance
         ? {
             lastGitHubFailureSource: null,
