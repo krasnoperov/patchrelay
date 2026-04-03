@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.8](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.8.7...merge-steward-v0.8.8) (2026-04-03)
+
+
+### Bug Fixes
+
+* use explicit origin/ prefix for PR branches in worktree merges ([8a36f36](https://github.com/krasnoperov/patchrelay/commit/8a36f36114581465a0027d3bcd83a1efb7117935))
+* use explicit origin/ prefix for PR branches in worktree merges ([52b3e65](https://github.com/krasnoperov/patchrelay/commit/52b3e65b6870f4d86ab458c1a83395e4371fe583))
+
 ## [0.8.7](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.8.6...merge-steward-v0.8.7) (2026-04-03)
 
 
