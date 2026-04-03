@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.35.2](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.35.1...patchrelay-v0.35.2) (2026-04-03)
+
+
+### Bug Fixes
+
+* reliability batch — merged-PR guards, startup scan, commit messages ([2129d8a](https://github.com/krasnoperov/patchrelay/commit/2129d8a1eb3ea330a8987f4949a9d57aa4201e0f))
+* reliability batch — merged-PR guards, startup scan, commit messages ([b306a00](https://github.com/krasnoperov/patchrelay/commit/b306a006dc29f380a2179ef54f5d35818a48482c))
+
 ## [0.35.1](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.35.0...patchrelay-v0.35.1) (2026-04-02)
 
 

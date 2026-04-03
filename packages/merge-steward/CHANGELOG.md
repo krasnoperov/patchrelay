@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.11](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.8.10...merge-steward-v0.8.11) (2026-04-03)
+
+
+### Bug Fixes
+
+* reliability batch — merged-PR guards, startup scan, commit messages ([2129d8a](https://github.com/krasnoperov/patchrelay/commit/2129d8a1eb3ea330a8987f4949a9d57aa4201e0f))
+* reliability batch — merged-PR guards, startup scan, commit messages ([b306a00](https://github.com/krasnoperov/patchrelay/commit/b306a006dc29f380a2179ef54f5d35818a48482c))
+
 ## [0.8.10](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.8.9...merge-steward-v0.8.10) (2026-04-03)
 
 
