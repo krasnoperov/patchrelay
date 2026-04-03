@@ -45,12 +45,7 @@ const DEFAULT_QUEUE_REPAIR_BUDGET = 3;
 const DEFAULT_REVIEW_FIX_BUDGET = 3;
 const DEFAULT_ZOMBIE_RECOVERY_BUDGET = 5;
 const ZOMBIE_RECOVERY_BASE_DELAY_MS = 15_000; // 15s, 30s, 60s, 120s, 240s
-// Queue health monitor: wait before probing a freshly-queued PR.
-// TODO: replace updatedAt with a true factory_state_changed_at timestamp —
-// updatedAt can reset on unrelated row mutations (e.g. webhook metadata).
-const QUEUE_HEALTH_GRACE_MS = 120_000;
-// Suppress repeated probe-failure feed events — at most one per issue per window.
-const QUEUE_HEALTH_PROBE_FAILURE_COOLDOWN_MS = 300_000; // 5 minutes
+import { QueueHealthMonitor } from "./queue-health-monitor.ts";
 
 function slugify(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
@@ -191,7 +186,7 @@ export class RunOrchestrator {
   private readonly worktreeManager: WorktreeManager;
   private readonly progressThrottle = new Map<number, number>();
   /** Tracks last probe-failure feed event per issue to avoid spamming the operator feed. */
-  private readonly probeFailureFeedTimes = new Map<string, number>();
+  private readonly queueHealthMonitor: QueueHealthMonitor;
   private activeThreadId: string | undefined;
   botIdentity?: GitHubAppBotIdentity;
 
@@ -205,6 +200,9 @@ export class RunOrchestrator {
     private readonly feed?: OperatorEventFeed,
   ) {
     this.worktreeManager = new WorktreeManager(config);
+    this.queueHealthMonitor = new QueueHealthMonitor(db, config, {
+      advanceIdleIssue: (issue, newState, options) => this.advanceIdleIssue(issue, newState, options),
+    }, logger, feed);
   }
 
   // ─── Run ────────────────────────────────────────────────────────
@@ -710,146 +708,10 @@ export class RunOrchestrator {
     }
     // Preemptively detect stuck merge-queue PRs (conflicts visible on
     // GitHub) and dispatch queue_repair before the Steward evicts.
-    await this.reconcileQueueHealth();
+    await this.queueHealthMonitor.reconcile();
     // Advance issues stuck in pr_open whose stored PR metadata already
     // shows they should transition (e.g. approved PR, missed webhook).
     await this.reconcileIdleIssues();
-  }
-
-  // ─── Queue Health Monitor ──────────────────────────────────────────
-
-  private async reconcileQueueHealth(): Promise<void> {
-    for (const issue of this.db.listAwaitingQueueIssues()) {
-      await this.probeQueuedIssue(issue);
-    }
-  }
-
-  private async probeQueuedIssue(issue: IssueRecord): Promise<void> {
-    if (!issue.prNumber) return;
-    const project = this.config.projects.find((p) => p.id === issue.projectId);
-    if (!project?.github?.repoFullName) return;
-
-    // Grace period — don't probe PRs that just entered the queue.
-    const age = Date.now() - Date.parse(issue.updatedAt);
-    if (age < QUEUE_HEALTH_GRACE_MS) return;
-
-    const protocol = resolveMergeQueueProtocol(project);
-
-    let pr: {
-      state?: string;
-      mergeable?: string;
-      mergeStateStatus?: string;
-      headRefOid?: string;
-      labels?: Array<{ name: string }>;
-    };
-    try {
-      const { stdout } = await execCommand("gh", [
-        "pr", "view", String(issue.prNumber),
-        "--repo", project.github.repoFullName,
-        "--json", "state,mergeable,mergeStateStatus,headRefOid,labels",
-      ], { timeoutMs: 10_000 });
-      pr = JSON.parse(stdout) as typeof pr;
-    } catch (error) {
-      this.logger.debug(
-        { issueKey: issue.issueKey, prNumber: issue.prNumber, error: error instanceof Error ? error.message : String(error) },
-        "Queue health: failed to probe GitHub PR state",
-      );
-      // Throttle feed events — at most one per issue per cooldown window.
-      const issueKey = `${issue.projectId}::${issue.linearIssueId}`;
-      const lastFeedAt = this.probeFailureFeedTimes.get(issueKey) ?? 0;
-      if (Date.now() - lastFeedAt >= QUEUE_HEALTH_PROBE_FAILURE_COOLDOWN_MS) {
-        this.probeFailureFeedTimes.set(issueKey, Date.now());
-        this.feed?.publish({
-          level: "info",
-          kind: "github",
-          issueKey: issue.issueKey,
-          projectId: issue.projectId,
-          stage: "awaiting_queue",
-          status: "queue_health_probe_failed",
-          summary: `Queue health: failed to probe PR #${issue.prNumber}`,
-        });
-      }
-      return;
-    }
-
-    // Successful probe — clear any probe-failure throttle for this issue.
-    this.probeFailureFeedTimes.delete(`${issue.projectId}::${issue.linearIssueId}`);
-
-    // Missed merge webhook — advance to done.
-    if (pr.state === "MERGED") {
-      this.db.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, prState: "merged" });
-      this.advanceIdleIssue(issue, "done", { clearFailureProvenance: true });
-      return;
-    }
-
-    // Non-open PRs (closed, draft) — don't enter repair logic.
-    if (pr.state !== "OPEN") return;
-
-    // Verify admission label is still present — if the Steward removed it
-    // (eviction, dequeue) but PatchRelay missed the webhook, we should not
-    // treat a DIRTY PR as a queue-health problem.
-    const hasQueueLabel = pr.labels?.some((l) => l.name === protocol.admissionLabel) ?? false;
-    if (!hasQueueLabel) return;
-
-    // Detect queue issues: either GitHub reports DIRTY, or the steward
-    // eviction check run failed (webhook may have been missed).
-    const isDirty = pr.mergeStateStatus === "DIRTY" || pr.mergeable === "CONFLICTING";
-    let hasEvictionCheckRun = false;
-    if (!isDirty) {
-      // Check for missed eviction webhook by looking for the steward's
-      // check run on the PR head.
-      try {
-        const { stdout: checksOut } = await execCommand("gh", [
-          "api", `repos/${project.github.repoFullName}/commits/${pr.headRefOid}/check-runs`,
-          "--jq", `.check_runs[] | select(.name == "${protocol.evictionCheckName}" and .conclusion == "failure") | .name`,
-        ], { timeoutMs: 10_000 });
-        hasEvictionCheckRun = checksOut.trim().length > 0;
-      } catch {
-        // Best-effort check.
-      }
-    }
-
-    if (isDirty || hasEvictionCheckRun) {
-      const headRefOid = pr.headRefOid ?? "unknown";
-      const reason = hasEvictionCheckRun ? "queue_eviction_missed" : "preemptive_conflict";
-      const signature = `preemptive_queue_conflict:${headRefOid}`;
-      const pendingRunContext: Record<string, unknown> = {
-        source: "queue_health_monitor",
-        failureReason: reason,
-        failureHeadSha: headRefOid,
-        failureSignature: signature,
-      };
-
-      if (isDuplicateRepairAttempt(issue, pendingRunContext)) {
-        return;
-      }
-
-      this.db.upsertIssue({
-        projectId: issue.projectId,
-        linearIssueId: issue.linearIssueId,
-        lastAttemptedFailureHeadSha: headRefOid,
-        lastAttemptedFailureSignature: signature,
-      });
-      this.advanceIdleIssue(issue, "repairing_queue", {
-        pendingRunType: "queue_repair",
-        pendingRunContext,
-      });
-      this.logger.info(
-        { issueKey: issue.issueKey, prNumber: issue.prNumber, headRefOid, reason },
-        "Queue health: queue issue detected, dispatching repair",
-      );
-      this.feed?.publish({
-        level: "warn",
-        kind: "github",
-        issueKey: issue.issueKey,
-        projectId: issue.projectId,
-        stage: "repairing_queue",
-        status: hasEvictionCheckRun ? "queue_health_eviction_detected" : "queue_health_conflict_detected",
-        summary: hasEvictionCheckRun
-          ? `Queue health: missed eviction detected on PR #${issue.prNumber}, dispatching repair`
-          : `Queue health: merge conflict detected on PR #${issue.prNumber}, dispatching preemptive repair`,
-      });
-    }
   }
 
   private async reconcileIdleIssues(): Promise<void> {
