@@ -7,9 +7,6 @@ import type { PatchRelayDatabase } from "./db.ts";
 import type { BranchOwner, IssueRecord, RunRecord } from "./db-types.ts";
 import { ACTIVE_RUN_STATES, TERMINAL_STATES, type FactoryState, type RunType } from "./factory-state.ts";
 import { buildHookEnv, runProjectHook } from "./hook-runner.ts";
-import {
-  buildAgentSessionPlanForIssue,
-} from "./agent-session-plan.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import {
   buildStageReport,
@@ -27,13 +24,11 @@ import {
   requestMergeQueueAdmission,
   resolveMergeQueueProtocol,
 } from "./merge-queue-protocol.ts";
-import { buildAgentSessionExternalUrls } from "./agent-session-presentation.ts";
 import { WorktreeManager } from "./worktree-manager.ts";
 import type {
   AppConfig,
   CodexThreadSummary,
   LinearClientProvider,
-  LinearAgentActivityContent,
 } from "./types.ts";
 import { resolveAuthoritativeLinearStopState } from "./linear-workflow.ts";
 import { execCommand } from "./utils.ts";
@@ -45,6 +40,7 @@ const DEFAULT_ZOMBIE_RECOVERY_BUDGET = 5;
 const ZOMBIE_RECOVERY_BASE_DELAY_MS = 15_000; // 15s, 30s, 60s, 120s, 240s
 import { QueueHealthMonitor } from "./queue-health-monitor.ts";
 import { IdleIssueReconciler, resolveBranchOwnerForStateTransition } from "./idle-reconciliation.ts";
+import { LinearSessionSync } from "./linear-session-sync.ts";
 
 function slugify(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
@@ -179,14 +175,13 @@ function buildRunPrompt(issue: IssueRecord, runType: RunType, repoPath: string, 
   return lines.join("\n");
 }
 
-const PROGRESS_THROTTLE_MS = 10_000;
 
 export class RunOrchestrator {
   private readonly worktreeManager: WorktreeManager;
-  private readonly progressThrottle = new Map<number, number>();
   /** Tracks last probe-failure feed event per issue to avoid spamming the operator feed. */
   private readonly queueHealthMonitor: QueueHealthMonitor;
   private readonly idleReconciler: IdleIssueReconciler;
+  readonly linearSync: LinearSessionSync;
   private activeThreadId: string | undefined;
   botIdentity?: GitHubAppBotIdentity;
 
@@ -200,6 +195,7 @@ export class RunOrchestrator {
     private readonly feed?: OperatorEventFeed,
   ) {
     this.worktreeManager = new WorktreeManager(config);
+    this.linearSync = new LinearSessionSync(config, db, linearProvider, logger, feed);
     this.idleReconciler = new IdleIssueReconciler(db, config, {
       requestMergeQueueAdmission: (issue, projectId) => this.requestMergeQueueAdmission(issue, projectId),
       enqueueIssue: (projectId, issueId) => this.enqueueIssue(projectId, issueId),
@@ -385,8 +381,8 @@ export class RunOrchestrator {
       });
       this.logger.error({ issueKey: issue.issueKey, runType, error: message }, `Failed to launch ${runType} run`);
       const failedIssue = this.db.getIssue(item.projectId, item.issueId) ?? issue;
-      void this.emitLinearActivity(failedIssue, buildRunFailureActivity(runType, `Failed to start ${lowerCaseFirst(message)}`));
-      void this.syncLinearSession(failedIssue, { activeRunType: runType });
+      void this.linearSync.emitActivity(failedIssue, buildRunFailureActivity(runType, `Failed to start ${lowerCaseFirst(message)}`));
+      void this.linearSync.syncSession(failedIssue, { activeRunType: runType });
       throw error;
     }
 
@@ -409,8 +405,8 @@ export class RunOrchestrator {
 
     // Emit Linear activity + plan
     const freshIssue = this.db.getIssue(item.projectId, item.issueId) ?? issue;
-    void this.emitLinearActivity(freshIssue, buildRunStartedActivity(runType));
-    void this.syncLinearSession(freshIssue, { activeRunType: runType });
+    void this.linearSync.emitActivity(freshIssue, buildRunStartedActivity(runType));
+    void this.linearSync.syncSession(freshIssue, { activeRunType: runType });
   }
 
   // ─── Pre-run branch freshening ────────────────────────────────────
@@ -503,13 +499,13 @@ export class RunOrchestrator {
     }
 
     // Emit ephemeral progress activity to Linear for notable in-flight events
-    this.maybeEmitProgressActivity(notification, run);
+    this.linearSync.maybeEmitProgress(notification, run);
 
     // Sync codex plan to Linear session when it updates
     if (notification.method === "turn/plan/updated") {
       const issue = this.db.getIssue(run.projectId, run.linearIssueId);
       if (issue) {
-        void this.syncLinearSessionWithCodexPlan(issue, notification.params);
+        void this.linearSync.syncCodexPlan(issue, notification.params);
       }
     }
 
@@ -545,9 +541,9 @@ export class RunOrchestrator {
         summary: `Turn failed for ${run.runType}`,
       });
       const failedIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
-      void this.emitLinearActivity(failedIssue, buildRunFailureActivity(run.runType));
-      void this.syncLinearSession(failedIssue, { activeRunType: run.runType });
-      this.progressThrottle.delete(run.id);
+      void this.linearSync.emitActivity(failedIssue, buildRunFailureActivity(run.runType));
+      void this.linearSync.syncSession(failedIssue, { activeRunType: run.runType });
+      this.linearSync.clearProgress(run.id);
       this.activeThreadId = undefined;
       return;
     }
@@ -572,9 +568,9 @@ export class RunOrchestrator {
         status: "branch_not_advanced",
         summary: verifiedRepairError,
       });
-      void this.emitLinearActivity(heldIssue, buildRunFailureActivity(run.runType, verifiedRepairError));
-      void this.syncLinearSession(heldIssue, { activeRunType: run.runType });
-      this.progressThrottle.delete(run.id);
+      void this.linearSync.emitActivity(heldIssue, buildRunFailureActivity(run.runType, verifiedRepairError));
+      void this.linearSync.syncSession(heldIssue, { activeRunType: run.runType });
+      this.linearSync.clearProgress(run.id);
       this.activeThreadId = undefined;
       return;
     }
@@ -633,56 +629,15 @@ export class RunOrchestrator {
     // Emit Linear completion activity + plan
     const updatedIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
     const completionSummary = report.assistantMessages.at(-1)?.slice(0, 300) ?? `${run.runType} completed.`;
-    void this.emitLinearActivity(updatedIssue, buildRunCompletedActivity({
+    void this.linearSync.emitActivity(updatedIssue, buildRunCompletedActivity({
       runType: run.runType,
       completionSummary,
       postRunState: updatedIssue.factoryState,
       ...(updatedIssue.prNumber !== undefined ? { prNumber: updatedIssue.prNumber } : {}),
     }));
-    void this.syncLinearSession(updatedIssue);
-    this.progressThrottle.delete(run.id);
+    void this.linearSync.syncSession(updatedIssue);
+    this.linearSync.clearProgress(run.id);
     this.activeThreadId = undefined;
-  }
-
-  // ─── In-flight progress ──────────────────────────────────────────
-
-  private maybeEmitProgressActivity(notification: CodexNotification, run: RunRecord): void {
-    const activity = this.resolveProgressActivity(notification);
-    if (!activity) return;
-
-    const now = Date.now();
-    const lastEmit = this.progressThrottle.get(run.id) ?? 0;
-    if (now - lastEmit < PROGRESS_THROTTLE_MS) return;
-    this.progressThrottle.set(run.id, now);
-
-    const issue = this.db.getIssue(run.projectId, run.linearIssueId);
-    if (issue) {
-      void this.emitLinearActivity(issue, activity, { ephemeral: true });
-    }
-  }
-
-  private resolveProgressActivity(notification: CodexNotification): LinearAgentActivityContent | undefined {
-    if (notification.method === "item/started") {
-      const item = notification.params.item as Record<string, unknown> | undefined;
-      if (!item) return undefined;
-      const type = typeof item.type === "string" ? item.type : undefined;
-
-      if (type === "commandExecution") {
-        const cmd = item.command;
-        const cmdStr = Array.isArray(cmd) ? cmd.join(" ") : typeof cmd === "string" ? cmd : undefined;
-        return { type: "action", action: "Running", parameter: cmdStr?.slice(0, 120) ?? "command" };
-      }
-      if (type === "mcpToolCall") {
-        const server = typeof item.server === "string" ? item.server : "";
-        const tool = typeof item.tool === "string" ? item.tool : "";
-        return { type: "action", action: "Using", parameter: `${server}/${tool}` };
-      }
-      if (type === "dynamicToolCall") {
-        const tool = typeof item.tool === "string" ? item.tool : "tool";
-        return { type: "action", action: "Using", parameter: tool };
-      }
-    }
-    return undefined;
   }
 
   // ─── Active status for query ──────────────────────────────────────
@@ -907,9 +862,9 @@ export class RunOrchestrator {
           summary: `Interrupted ${run.runType} recovered \u2192 ${recoveredState}`,
         });
       } else {
-        void this.emitLinearActivity(failedIssue, buildRunFailureActivity(run.runType, "The Codex turn was interrupted."));
+        void this.linearSync.emitActivity(failedIssue, buildRunFailureActivity(run.runType, "The Codex turn was interrupted."));
       }
-      void this.syncLinearSession(failedIssue, { activeRunType: run.runType });
+      void this.linearSync.syncSession(failedIssue, { activeRunType: run.runType });
       return;
     }
 
@@ -1009,11 +964,11 @@ export class RunOrchestrator {
       summary: `Escalated: ${reason}`,
     });
     const escalatedIssue = this.db.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
-    void this.emitLinearActivity(escalatedIssue, {
+    void this.linearSync.emitActivity(escalatedIssue, {
       type: "error",
       body: `PatchRelay needs human help to continue.\n\n${reason}`,
     });
-    void this.syncLinearSession(escalatedIssue);
+    void this.linearSync.syncSession(escalatedIssue);
   }
 
   /** Add the merge queue admission label for external-queue projects (best-effort). */
@@ -1083,96 +1038,6 @@ export class RunOrchestrator {
     }
   }
 
-  private async emitLinearActivity(
-    issue: IssueRecord,
-    content: LinearAgentActivityContent,
-    options?: { ephemeral?: boolean },
-  ): Promise<void> {
-    if (!issue.agentSessionId) return;
-    try {
-      const linear = await this.linearProvider.forProject(issue.projectId);
-      if (!linear) return;
-      const allowEphemeral = content.type === "thought" || content.type === "action";
-      await linear.createAgentActivity({
-        agentSessionId: issue.agentSessionId,
-        content,
-        ...(options?.ephemeral && allowEphemeral ? { ephemeral: true } : {}),
-      });
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      this.logger.warn({ issueKey: issue.issueKey, type: content.type, error: msg }, "Failed to emit Linear activity");
-      this.feed?.publish({
-        level: "warn",
-        kind: "linear",
-        issueKey: issue.issueKey,
-        projectId: issue.projectId,
-        status: "linear_error",
-        summary: `Linear activity failed: ${msg}`,
-      });
-    }
-  }
-
-  private async syncLinearSession(issue: IssueRecord, options?: { activeRunType?: RunType }): Promise<void> {
-    if (!issue.agentSessionId) return;
-    try {
-      const linear = await this.linearProvider.forProject(issue.projectId);
-      if (!linear?.updateAgentSession) return;
-      const externalUrls = buildAgentSessionExternalUrls(this.config, {
-        ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
-        ...(issue.prUrl ? { prUrl: issue.prUrl } : {}),
-      });
-      await linear.updateAgentSession({
-        agentSessionId: issue.agentSessionId,
-        plan: buildAgentSessionPlanForIssue(issue, options),
-        ...(externalUrls ? { externalUrls } : {}),
-      });
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      this.logger.warn({ issueKey: issue.issueKey, error: msg }, "Failed to update Linear plan");
-    }
-  }
-
-  private async syncLinearSessionWithCodexPlan(
-    issue: IssueRecord,
-    params: Record<string, unknown>,
-  ): Promise<void> {
-    if (!issue.agentSessionId) return;
-    const plan = params.plan;
-    if (!Array.isArray(plan)) return;
-
-    const STATUS_MAP: Record<string, "pending" | "inProgress" | "completed"> = {
-      pending: "pending",
-      inProgress: "inProgress",
-      completed: "completed",
-    };
-
-    const steps = plan.map((entry) => {
-      const e = entry as Record<string, unknown>;
-      const step = typeof e.step === "string" ? e.step : String(e.step ?? "");
-      const status = typeof e.status === "string" ? (STATUS_MAP[e.status] ?? "pending") : "pending";
-      return { content: step, status };
-    });
-
-    // Prepend a "Prepare workspace" completed step and append a "Merge" pending step
-    // to frame the codex plan within the PatchRelay lifecycle
-    const fullPlan = [
-      { content: "Prepare workspace", status: "completed" as const },
-      ...steps,
-      { content: "Merge", status: "pending" as const },
-    ];
-
-    try {
-      const linear = await this.linearProvider.forProject(issue.projectId);
-      if (!linear?.updateAgentSession) return;
-      await linear.updateAgentSession({
-        agentSessionId: issue.agentSessionId,
-        plan: fullPlan,
-      });
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      this.logger.warn({ issueKey: issue.issueKey, error: msg }, "Failed to sync codex plan to Linear");
-    }
-  }
 
   private async readThreadWithRetry(threadId: string, maxRetries = 3): Promise<CodexThreadSummary> {
     for (let attempt = 0; attempt < maxRetries; attempt++) {
