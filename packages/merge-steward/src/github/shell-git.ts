@@ -144,7 +144,7 @@ export class ShellGitOperations implements GitOperations, SpeculativeBranchBuild
     // PR branches are always remote refs — use explicit origin/ prefix
     // because git DWIM doesn't reliably resolve bare names in worktrees.
     const mergeRef = prBranch.startsWith("origin/") ? prBranch : `origin/${prBranch}`;
-    const mergeArgs = ["merge", "--no-ff"];
+    const mergeArgs = ["merge", "--no-ff", "-X", "patience"];
     if (mergeMessage) mergeArgs.push("-m", mergeMessage);
     mergeArgs.push(mergeRef);
     const result = await this.gitIn(wtPath, mergeArgs, { allowNonZero: true });
