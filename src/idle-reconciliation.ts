@@ -270,6 +270,18 @@ export class IdleIssueReconciler {
         this.advanceIdleIssue(issue, "done", { clearFailureProvenance: true });
         return;
       }
+      if (pr.state === "CLOSED") {
+        this.logger.info(
+          { issueKey: issue.issueKey, prNumber: issue.prNumber },
+          "Reconciliation: PR was closed, re-delegating for implementation",
+        );
+        this.db.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, prState: "closed" });
+        this.advanceIdleIssue(issue, "delegated" as never, {
+          pendingRunType: "implementation",
+          clearFailureProvenance: true,
+        });
+        return;
+      }
       if (pr.reviewDecision === "APPROVED") {
         this.db.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, prReviewState: "approved" });
         this.advanceIdleIssue(issue, "awaiting_queue", { clearFailureProvenance: true });
