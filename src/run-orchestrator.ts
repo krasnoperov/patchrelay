@@ -24,6 +24,10 @@ import {
   requestMergeQueueAdmission,
   resolveMergeQueueProtocol,
 } from "./merge-queue-protocol.ts";
+import {
+  clearReviewLabel,
+  resolveReviewLabelProtocol,
+} from "./review-label-protocol.ts";
 import { WorktreeManager } from "./worktree-manager.ts";
 import type {
   AppConfig,
@@ -308,6 +312,10 @@ export class RunOrchestrator {
       status: "starting",
       summary: `Starting ${runType} run`,
     });
+
+    if (runType === "ci_repair" || runType === "queue_repair" || runType === "review_fix") {
+      await this.clearReviewRequest(issue, item.projectId);
+    }
 
     let threadId: string;
     let turnId: string;
@@ -990,6 +998,18 @@ export class RunOrchestrator {
     if (applied) {
       this.db.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, queueLabelApplied: true });
     }
+  }
+
+  /** Clear the review-request label when a new repair run starts (best-effort). */
+  private async clearReviewRequest(issue: IssueRecord, projectId: string): Promise<void> {
+    const project = this.config.projects.find((entry) => entry.id === projectId);
+    const protocol = resolveReviewLabelProtocol(project);
+    await clearReviewLabel({
+      issue,
+      protocol,
+      logger: this.logger,
+      feed: this.feed,
+    });
   }
 
   private failRunAndClear(run: RunRecord, message: string, nextState: FactoryState = "failed"): void {

@@ -20,6 +20,11 @@ import {
   resolveMergeQueueProtocol,
 } from "./merge-queue-protocol.ts";
 import { buildQueueRepairContextFromEvent } from "./merge-queue-incident.ts";
+import {
+  clearReviewLabel,
+  requestReviewLabel,
+  resolveReviewLabelProtocol,
+} from "./review-label-protocol.ts";
 import { resolveSecret } from "./resolve-secret.ts";
 import type { AppConfig, LinearClientProvider } from "./types.ts";
 import type { ProjectConfig } from "./workflow-types.ts";
@@ -227,6 +232,9 @@ export class GitHubWebhookHandler {
 
     // Re-read issue after all upserts so reactive run logic sees current state
     const freshIssue = this.db.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
+
+    await this.maybeClearReviewLabel(freshIssue, event, project);
+    await this.maybeRequestReviewLabel(freshIssue, event, project);
 
     // Reset repair counters on new push — but only when no repair run is active,
     // since Codex pushes during repair and resetting mid-run would bypass budgets.
@@ -701,6 +709,48 @@ export class GitHubWebhookHandler {
     const gateName = snapshot.gateCheckName?.trim().toLowerCase();
     return snapshot.failedChecks.find((entry) => entry.name.trim().toLowerCase() !== gateName)
       ?? snapshot.failedChecks[0];
+  }
+
+  private async maybeRequestReviewLabel(
+    issue: IssueRecord,
+    event: NormalizedGitHubEvent,
+    project?: ProjectConfig,
+  ): Promise<void> {
+    if (event.triggerEvent !== "check_passed") return;
+    if (!this.isGateCheckEvent(event, project)) return;
+    if (this.isStaleGateEvent(issue, event)) return;
+    if (issue.prState !== "open" || !issue.prNumber) return;
+    if (issue.prReviewState === "approved") return;
+
+    const snapshot = this.getRelevantCiSnapshot(issue, event);
+    if (!snapshot || snapshot.gateCheckStatus !== "success") return;
+
+    const protocol = resolveReviewLabelProtocol(project);
+    await requestReviewLabel({
+      issue,
+      protocol,
+      logger: this.logger,
+      feed: this.feed,
+    });
+  }
+
+  private async maybeClearReviewLabel(
+    issue: IssueRecord,
+    event: NormalizedGitHubEvent,
+    project?: ProjectConfig,
+  ): Promise<void> {
+    if (event.triggerEvent !== "pr_synchronize" && event.triggerEvent !== "review_approved") {
+      return;
+    }
+    if (!issue.prNumber) return;
+
+    const protocol = resolveReviewLabelProtocol(project);
+    await clearReviewLabel({
+      issue,
+      protocol,
+      logger: this.logger,
+      feed: this.feed,
+    });
   }
 
   private async emitLinearActivity(

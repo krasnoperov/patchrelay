@@ -5,6 +5,7 @@ import {
   DEFAULT_MERGE_QUEUE_LABEL,
   resolveMergeQueueProtocol,
 } from "../src/merge-queue-protocol.ts";
+import { DEFAULT_REVIEW_LABEL, resolveReviewLabelProtocol } from "../src/review-label-protocol.ts";
 import { stewardConfigSchema } from "../packages/merge-steward/src/config.ts";
 
 test("merge queue protocol defaults stay aligned across PatchRelay and Merge Steward", () => {
@@ -34,4 +35,22 @@ test("merge queue protocol defaults stay aligned across PatchRelay and Merge Ste
   assert.equal(protocol.evictionCheckName, "merge-steward/queue");
   assert.equal(stewardConfig.admissionLabel, "queue");
   assert.equal(stewardConfig.mergeQueueCheckName, "merge-steward/queue");
+});
+
+test("review label protocol defaults to needs-review", () => {
+  const protocol = resolveReviewLabelProtocol({
+    id: "usertold",
+    repoPath: "/repo",
+    worktreeRoot: "/worktrees",
+    issueKeyPrefixes: [],
+    linearTeamIds: [],
+    allowLabels: [],
+    reviewChecks: [],
+    gateChecks: [],
+    triggerEvents: ["statusChanged"],
+    branchPrefix: "use",
+  });
+
+  assert.equal(DEFAULT_REVIEW_LABEL, "needs-review");
+  assert.equal(protocol.reviewLabel, "needs-review");
 });

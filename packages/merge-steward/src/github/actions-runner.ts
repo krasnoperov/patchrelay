@@ -43,7 +43,11 @@ export class GitHubActionsRunner implements CIRunner {
         ? checkRuns.filter((c) => this.requiredChecks.includes(c.name))
         : checkRuns;
 
-      if (relevant.length === 0) return "pending";
+      if (relevant.length === 0) {
+        if (checkRuns.some((c) => c.status !== "completed")) return "pending";
+        if (checkRuns.some((c) => c.conclusion !== "success" && c.conclusion !== "neutral" && c.conclusion !== "skipped")) return "fail";
+        return checkRuns.length > 0 ? "pass" : "pending";
+      }
 
       if (relevant.some((c) => c.status !== "completed")) return "pending";
       // REST API returns lowercase conclusions; any non-success completed

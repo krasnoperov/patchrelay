@@ -7,6 +7,7 @@ import type { OperatorEventFeed } from "./operator-feed.ts";
 import { resolveMergeQueueProtocol } from "./merge-queue-protocol.ts";
 import { parseGitHubFailureContext } from "./github-failure-context.ts";
 import { parseStoredQueueRepairContext } from "./merge-queue-incident.ts";
+import { requestReviewLabel, resolveReviewLabelProtocol } from "./review-label-protocol.ts";
 import { execCommand } from "./utils.ts";
 
 function isDuplicateRepairAttempt(
@@ -116,6 +117,28 @@ export class IdleIssueReconciler {
         this.deps.enqueueIssue(issue.projectId, issue.linearIssueId);
       }
     }
+  }
+
+  private getGateCheckNames(issue: IssueRecord): string[] {
+    const project = this.config.projects.find((entry) => entry.id === issue.projectId);
+    const configured = (project?.gateChecks ?? []).map((entry) => entry.trim()).filter(Boolean);
+    return configured.length > 0 ? configured : ["Tests"];
+  }
+
+  private async isGateGreen(repoFullName: string, headSha: string, gateCheckNames: string[]): Promise<boolean> {
+    const { stdout, exitCode } = await execCommand("gh", [
+      "api",
+      `repos/${repoFullName}/commits/${headSha}/check-runs`,
+      "--jq", ".check_runs",
+    ], { timeoutMs: 10_000 });
+    if (exitCode !== 0) return false;
+
+    const checks = JSON.parse(stdout) as Array<{ name?: string; status?: string; conclusion?: string | null }>;
+    const normalizedGateChecks = gateCheckNames.map((entry) => entry.trim().toLowerCase());
+    const relevant = checks.filter((entry) => entry.name && normalizedGateChecks.includes(entry.name.trim().toLowerCase()));
+    if (relevant.length === 0) return false;
+    return relevant.every((entry) =>
+      entry.status === "completed" && (entry.conclusion === "success" || entry.conclusion === "neutral"));
   }
 
   advanceIdleIssue(
@@ -257,13 +280,16 @@ export class IdleIssueReconciler {
       const { stdout } = await execCommand("gh", [
         "pr", "view", String(issue.prNumber),
         "--repo", project.github.repoFullName,
-        "--json", "state,reviewDecision,mergeable,mergeStateStatus",
+        "--json", "state,reviewDecision,mergeable,mergeStateStatus,headRefOid,isDraft,labels",
       ], { timeoutMs: 10_000 });
       const pr = JSON.parse(stdout) as {
         state?: string;
         reviewDecision?: string;
         mergeable?: string;
         mergeStateStatus?: string;
+        headRefOid?: string;
+        isDraft?: boolean;
+        labels?: Array<{ name?: string }>;
       };
       if (pr.state === "MERGED") {
         this.db.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, prState: "merged" });
@@ -310,6 +336,19 @@ export class IdleIssueReconciler {
           status: "conflict_detected",
           summary: `PR #${issue.prNumber} has merge conflicts with main, dispatching rebase`,
         });
+      }
+
+      if (!pr.isDraft && pr.state === "OPEN" && pr.headRefOid && pr.reviewDecision !== "APPROVED") {
+        const gateGreen = await this.isGateGreen(project.github.repoFullName, pr.headRefOid, this.getGateCheckNames(issue));
+        const hasReviewLabel = (pr.labels ?? []).some((label) => label.name === resolveReviewLabelProtocol(project).reviewLabel);
+        if (gateGreen && !hasReviewLabel) {
+          await requestReviewLabel({
+            issue,
+            protocol: resolveReviewLabelProtocol(project),
+            logger: this.logger,
+            feed: this.feed,
+          });
+        }
       }
     } catch (error) {
       this.logger.debug(

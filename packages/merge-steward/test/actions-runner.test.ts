@@ -93,11 +93,11 @@ describe("GitHubActionsRunner.getStatus", () => {
     assert.strictEqual(await runner.getStatus("sha:abc123"), "pending");
   });
 
-  it("ignores irrelevant checks and reports pending when required is missing", async () => {
+  it("falls back to pass when required checks are missing but other completed checks are green", async () => {
     const runner = setup({
       abc123: [{ name: "Lint", status: "completed", conclusion: "success" }],
     });
-    assert.strictEqual(await runner.getStatus("sha:abc123"), "pending");
+    assert.strictEqual(await runner.getStatus("sha:abc123"), "pass");
   });
 
   it("fails when gate job succeeds but underlying check is skipped (MAF-49 scenario)", async () => {

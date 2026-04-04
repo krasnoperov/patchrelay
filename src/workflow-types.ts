@@ -40,6 +40,8 @@ export interface ProjectConfig {
     webhookSecret?: string;
     repoFullName?: string;
     baseBranch?: string;
+    /** GitHub label that requests AI review once CI has settled green (default: "needs-review"). */
+    reviewLabel?: string;
     /** GitHub label to add when entering awaiting_queue (default: "queue"). */
     mergeQueueLabel?: string;
     /** Check run name that signals queue eviction (default: "merge-steward/queue"). */

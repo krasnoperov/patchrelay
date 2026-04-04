@@ -51,6 +51,7 @@ const projectSchema = z.object({
     webhook_secret: z.string().min(1).optional(),
     repo_full_name: z.string().min(1).optional(),
     base_branch: z.string().min(1).optional(),
+    review_label: z.string().min(1).optional(),
   }).optional(),
 });
 
@@ -68,6 +69,7 @@ const repositorySchema = z.object({
   github: z.object({
     webhook_secret: z.string().min(1).optional(),
     base_branch: z.string().min(1).optional(),
+    review_label: z.string().min(1).optional(),
     merge_queue_label: z.string().min(1).optional(),
     merge_queue_check_name: z.string().min(1).optional(),
   }).optional(),
@@ -464,6 +466,7 @@ export function loadConfig(
         repoFullName: repository.githubRepo,
         ...(repository.github?.base_branch ? { baseBranch: repository.github.base_branch } : {}),
         ...(repository.github?.webhook_secret ? { webhookSecret: repository.github.webhook_secret } : {}),
+        ...(repository.github?.review_label ? { reviewLabel: repository.github.review_label } : {}),
         ...(repository.github?.merge_queue_label ? { mergeQueueLabel: repository.github.merge_queue_label } : {}),
         ...(repository.github?.merge_queue_check_name ? { mergeQueueCheckName: repository.github.merge_queue_check_name } : {}),
       },
@@ -505,6 +508,7 @@ export function loadConfig(
               ...(project.github.webhook_secret ? { webhookSecret: project.github.webhook_secret } : {}),
               ...(project.github.repo_full_name ? { repoFullName: project.github.repo_full_name } : {}),
               ...(project.github.base_branch ? { baseBranch: project.github.base_branch } : {}),
+              ...(project.github.review_label ? { reviewLabel: project.github.review_label } : {}),
             },
           } : {}),
         };

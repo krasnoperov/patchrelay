@@ -620,6 +620,9 @@ test("loadConfig derives runtime projects from repository-first config", () => {
           github_repo: "krasnoperov/usertold",
           workspace: "usertold",
           local_path: repoPath,
+          github: {
+            review_label: "ready-for-ai-review",
+          },
           linear_team_ids: ["team-use"],
           linear_project_ids: ["project-site"],
           issue_key_prefixes: ["USE"],
@@ -644,6 +647,7 @@ test("loadConfig derives runtime projects from repository-first config", () => {
         assert.equal(config.projects[0]?.repoPath, repoPath);
         assert.deepEqual(config.projects[0]?.linearTeamIds, ["team-use"]);
         assert.equal(config.projects[0]?.github?.repoFullName, "krasnoperov/usertold");
+        assert.equal(config.projects[0]?.github?.reviewLabel, "ready-for-ai-review");
       },
     );
   } finally {
