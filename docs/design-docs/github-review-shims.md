@@ -11,6 +11,17 @@ It exists for two reasons:
 
 This is a design note for the current shipped system, not a claim that every shim below should live forever.
 
+## Recovery Status
+
+As of April 5, 2026:
+
+- the Mafia backlog that triggered this work has drained completely
+- the previously stuck PR batch was merged to `main`
+- the live review-label protocol is running in production PatchRelay
+- the repository workflows in Mafia and Usertold include the compatibility layers described below
+
+That means this document is now in the "stabilization and cleanup" phase, not the "incident still in progress" phase.
+
 ## Context
 
 The target protocol is intentionally simple:
@@ -129,6 +140,14 @@ That manual approval was:
 
 Operators should treat that as an emergency override, not as normal operating procedure.
 
+That override did its job:
+
+- it unblocked the queue
+- it let the queued backlog drain
+- it confirmed that PatchRelay and Merge Steward behaved correctly once GitHub review state was genuinely `APPROVED`
+
+But it should not be required for new PRs after stabilization.
+
 ## What Is Temporary vs Structural
 
 Likely structural:
@@ -145,7 +164,7 @@ Likely temporary:
 
 ## Follow-Up Plan
 
-The immediate follow-up after incident recovery should be:
+The next follow-up after recovery is:
 
 1. Merge the PatchRelay branch that contains the review-label protocol into protected `main`.
 2. Run one small canary issue through Mafia or Usertold and verify the full path without manual intervention:
@@ -155,6 +174,12 @@ The immediate follow-up after incident recovery should be:
    - keep the base-branch workflow choice if it remains the most reliable trigger
    - consider removing the explicit token-export shim first
 5. Only remove the verdict translation shim after several consecutive PRs prove that the provider action emits native GitHub review states reliably.
+
+Current status against that plan:
+
+- the backlog drain is complete
+- the next required action is the PatchRelay `main` merge
+- after that, the highest-value validation step is one intentionally small canary PR
 
 ## Operator Checks
 
