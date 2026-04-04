@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.35.11](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.35.10...patchrelay-v0.35.11) (2026-04-04)
+
+
+### Bug Fixes
+
+* detect closed PRs in idle reconciliation and re-delegate ([6ebaca5](https://github.com/krasnoperov/patchrelay/commit/6ebaca56c509115d25a0c08476bd045b68fdc68a))
+* detect closed PRs in idle reconciliation and re-delegate ([29365f3](https://github.com/krasnoperov/patchrelay/commit/29365f35ed5934cdd43cf2716fd28007683b0694))
+
 ## [0.35.10](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.35.9...patchrelay-v0.35.10) (2026-04-03)
 
 
