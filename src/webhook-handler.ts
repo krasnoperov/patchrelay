@@ -253,6 +253,8 @@ export class WebhookHandler {
       hasActiveRun: Boolean(activeRun),
       hasPendingRun: Boolean(existingIssue?.pendingRunType),
       terminal,
+      currentState: existingIssue?.factoryState,
+      prState: existingIssue?.prState,
     });
 
     const runRelease = decideActiveRunRelease({
@@ -735,9 +737,16 @@ function decideRunIntent(p: {
   hasActiveRun: boolean;
   hasPendingRun: boolean;
   terminal: boolean;
+  currentState?: FactoryState | undefined;
+  prState?: string | undefined;
 }): RunType | undefined {
+  const implementationAlreadyHandedOff = p.currentState === "pr_open"
+    || p.currentState === "changes_requested"
+    || p.currentState === "awaiting_queue";
+  const hasOpenPr = p.prState === "open";
   if (p.delegated && p.triggerAllowed && p.unresolvedBlockers === 0
-      && !p.hasActiveRun && !p.hasPendingRun && !p.terminal) {
+      && !p.hasActiveRun && !p.hasPendingRun && !p.terminal
+      && !implementationAlreadyHandedOff && !hasOpenPr) {
     return "implementation";
   }
   return undefined;

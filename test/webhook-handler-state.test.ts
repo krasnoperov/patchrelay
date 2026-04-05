@@ -663,6 +663,77 @@ test("un-delegation of awaiting_queue issue does not change state (point of no r
   }
 });
 
+test("statusChanged does not requeue implementation after PR is already queued for merge", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-awaiting-queue-echo-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+
+    db.upsertIssue({
+      projectId: "krasnoperov/mafia",
+      linearIssueId: "issue-maf-57",
+      issueKey: "MAF-57",
+      title: "Rename groups to towns",
+      currentLinearState: "In Review",
+      currentLinearStateType: "started",
+      factoryState: "awaiting_queue",
+      prNumber: 129,
+      prState: "open",
+      prReviewState: "approved",
+    });
+
+    const enqueued: Array<{ projectId: string; issueId: string }> = [];
+    const handler = new WebhookHandler(
+      config,
+      db,
+      { forProject: async () => undefined } as never,
+      { steerTurn: async () => undefined } as never,
+      (projectId, issueId) => { enqueued.push({ projectId, issueId }); },
+      pino({ enabled: false }),
+    );
+
+    const payload: LinearWebhookPayload = {
+      action: "update",
+      type: "Issue",
+      createdAt: "2026-04-05T07:45:00.000Z",
+      webhookTimestamp: Date.now(),
+      updatedFrom: { stateId: "state-progress" },
+      data: {
+        id: "issue-maf-57",
+        identifier: "MAF-57",
+        title: "Rename groups to towns",
+        team: { id: "team-maf", key: "MAF" },
+        state: { id: "state-review", name: "In Review", type: "started" },
+        delegate: { id: "patchrelay-actor", name: "PatchRelay" },
+      },
+    };
+
+    const stored = db.insertFullWebhookEvent({
+      webhookId: "delivery-maf-57-review-echo",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(payload),
+    });
+
+    await handler.processWebhookEvent(stored.id);
+
+    const issue = db.getIssue("krasnoperov/mafia", "issue-maf-57");
+    assert.equal(issue?.factoryState, "awaiting_queue");
+    assert.equal(issue?.pendingRunType, undefined);
+    assert.deepEqual(enqueued, []);
+    assert.deepEqual(db.listIssuesReadyForExecution(), []);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("issueRemoved releases active run and transitions to failed", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-removed-"));
   try {
