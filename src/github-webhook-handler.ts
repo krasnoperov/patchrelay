@@ -16,7 +16,6 @@ import { buildAgentSessionExternalUrls } from "./agent-session-presentation.ts";
 import { buildGitHubStateActivity } from "./linear-session-reporting.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import {
-  requestMergeQueueAdmission,
   resolveMergeQueueProtocol,
 } from "./merge-queue-protocol.ts";
 import { buildQueueRepairContextFromEvent } from "./merge-queue-incident.ts";
@@ -57,6 +56,8 @@ interface GitHubFailurePromptContext {
 }
 
 export class GitHubWebhookHandler {
+  private readonly patchRelayAuthorLogins = new Set<string>();
+
   constructor(
     private readonly config: AppConfig,
     private readonly db: PatchRelayDatabase,
@@ -67,7 +68,21 @@ export class GitHubWebhookHandler {
     private readonly feed?: OperatorEventFeed,
     private readonly failureContextResolver: GitHubFailureContextResolver = createGitHubFailureContextResolver(),
     private readonly ciSnapshotResolver: GitHubCiSnapshotResolver = createGitHubCiSnapshotResolver(),
-  ) {}
+  ) {
+    for (const login of resolvePatchRelayAuthorLoginsFromEnv()) {
+      this.patchRelayAuthorLogins.add(login);
+    }
+  }
+
+  setPatchRelayAuthorLogins(logins: string[]): void {
+    this.patchRelayAuthorLogins.clear();
+    for (const login of logins) {
+      const normalized = normalizeAuthorLogin(login);
+      if (normalized) {
+        this.patchRelayAuthorLogins.add(normalized);
+      }
+    }
+  }
 
   async acceptGitHubWebhook(params: {
     deliveryId: string;
@@ -175,6 +190,8 @@ export class GitHubWebhookHandler {
       ...(event.prNumber !== undefined ? { prNumber: event.prNumber } : {}),
       ...(event.prUrl !== undefined ? { prUrl: event.prUrl } : {}),
       ...(event.prState !== undefined ? { prState: event.prState } : {}),
+      ...(event.headSha !== undefined ? { prHeadSha: event.headSha } : {}),
+      ...(event.prAuthorLogin !== undefined ? { prAuthorLogin: event.prAuthorLogin } : {}),
       ...(event.reviewState !== undefined ? { prReviewState: event.reviewState } : {}),
       ...(event.checkStatus !== undefined ? { prCheckStatus: event.checkStatus } : {}),
     });
@@ -198,9 +215,6 @@ export class GitHubWebhookHandler {
           linearIssueId: issue.linearIssueId,
           factoryState: newState,
         });
-        if (newState === "awaiting_queue") {
-          this.db.setBranchOwner(issue.projectId, issue.linearIssueId, "merge_steward");
-        }
         this.logger.info(
           { issueKey: issue.issueKey, from: afterMetadata.factoryState, to: newState, trigger: event.triggerEvent },
           "Factory state transition from GitHub event",
@@ -209,18 +223,6 @@ export class GitHubWebhookHandler {
         const transitionedIssue = this.db.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
         void this.emitLinearActivity(transitionedIssue, newState, event);
         void this.syncLinearSession(transitionedIssue);
-
-        // Schedule merge prep when entering awaiting_queue
-        if (newState === "awaiting_queue") {
-          const proj = this.config.projects.find((p) => p.id === issue.projectId);
-          const protocol = resolveMergeQueueProtocol(proj);
-          void requestMergeQueueAdmission({
-            issue: transitionedIssue,
-            protocol,
-            logger: this.logger,
-            feed: this.feed,
-          });
-        }
 
       }
     }
@@ -277,6 +279,10 @@ export class GitHubWebhookHandler {
       await this.maybeEnqueueReactiveRun(freshIssue, event, project);
     } else if (!isMetadataOnlyCheckEvent(event)) {
       await this.maybeEnqueueReactiveRun(freshIssue, event, project);
+    }
+
+    if (event.triggerEvent === "pr_merged" || event.triggerEvent === "pr_closed") {
+      await this.handleTerminalPrEvent(freshIssue, event);
     }
   }
 
@@ -367,6 +373,19 @@ export class GitHubWebhookHandler {
     // merge_group_failed after pr_merged) must not resurrect done issues.
     if (TERMINAL_STATES.has(issue.factoryState as FactoryState)) return;
 
+    if (!this.isPatchRelayOwnedPr(issue)) {
+      this.feed?.publish({
+        level: "info",
+        kind: "github",
+        issueKey: issue.issueKey,
+        projectId: issue.projectId,
+        stage: issue.factoryState,
+        status: "ignored_non_patchrelay_pr",
+        summary: `Ignored ${event.triggerEvent} on non-PatchRelay-owned PR`,
+      });
+      return;
+    }
+
     if (event.triggerEvent === "check_failed" && issue.prState === "open") {
       // External merge queue eviction: react only to the configured check
       // name, not to any CI failure. Regular CI failures still get ci_repair.
@@ -379,11 +398,6 @@ export class GitHubWebhookHandler {
         this.db.upsertIssue({
           projectId: issue.projectId,
           linearIssueId: issue.linearIssueId,
-          pendingRunType: "queue_repair",
-          pendingRunContextJson: JSON.stringify({
-            ...queueRepairContext,
-            ...failureContext,
-          }),
           lastGitHubFailureSource: "queue_eviction",
           lastGitHubFailureHeadSha: failureContext.failureHeadSha ?? null,
           lastGitHubFailureSignature: failureContext.failureSignature ?? null,
@@ -393,6 +407,16 @@ export class GitHubWebhookHandler {
           lastGitHubFailureAt: new Date().toISOString(),
           lastQueueSignalAt: new Date().toISOString(),
           lastQueueIncidentJson: JSON.stringify(queueRepairContext),
+        });
+        this.db.appendIssueSessionEvent({
+          projectId: issue.projectId,
+          linearIssueId: issue.linearIssueId,
+          eventType: "merge_steward_incident",
+          eventJson: JSON.stringify({
+            ...queueRepairContext,
+            ...failureContext,
+          }),
+          dedupeKey: failureContext.failureSignature,
         });
         this.db.setBranchOwner(issue.projectId, issue.linearIssueId, "patchrelay");
         this.enqueueIssue(issue.projectId, issue.linearIssueId);
@@ -428,12 +452,6 @@ export class GitHubWebhookHandler {
         this.db.upsertIssue({
           projectId: issue.projectId,
           linearIssueId: issue.linearIssueId,
-          pendingRunType: "ci_repair",
-          pendingRunContextJson: JSON.stringify({
-            ...failureContext,
-            checkClass: resolveCheckClass(failureContext.checkName ?? event.checkName, project),
-            ...(snapshot ? { ciSnapshot: snapshot } : {}),
-          }),
           lastGitHubFailureSource: "branch_ci",
           lastGitHubFailureHeadSha: failureContext.failureHeadSha ?? null,
           lastGitHubFailureSignature: failureContext.failureSignature ?? null,
@@ -442,6 +460,17 @@ export class GitHubWebhookHandler {
           lastGitHubFailureContextJson: JSON.stringify(failureContext),
           lastGitHubFailureAt: new Date().toISOString(),
           lastQueueIncidentJson: null,
+        });
+        this.db.appendIssueSessionEvent({
+          projectId: issue.projectId,
+          linearIssueId: issue.linearIssueId,
+          eventType: "settled_red_ci",
+          eventJson: JSON.stringify({
+            ...failureContext,
+            checkClass: resolveCheckClass(failureContext.checkName ?? event.checkName, project),
+            ...(snapshot ? { ciSnapshot: snapshot } : {}),
+          }),
+          dedupeKey: failureContext.failureSignature,
         });
         this.db.setBranchOwner(issue.projectId, issue.linearIssueId, "patchrelay");
         this.enqueueIssue(issue.projectId, issue.linearIssueId);
@@ -460,20 +489,76 @@ export class GitHubWebhookHandler {
     }
 
     if (event.triggerEvent === "review_changes_requested") {
-      this.db.upsertIssue({
+      this.db.appendIssueSessionEvent({
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
-        pendingRunType: "review_fix",
-        pendingRunContextJson: JSON.stringify({
+        eventType: "review_changes_requested",
+        eventJson: JSON.stringify({
           reviewBody: event.reviewBody,
           reviewerName: event.reviewerName,
         }),
+        dedupeKey: [
+          "review_changes_requested",
+          issue.prHeadSha ?? event.headSha ?? "unknown-sha",
+          event.reviewerName ?? "unknown-reviewer",
+        ].join("::"),
       });
       this.db.setBranchOwner(issue.projectId, issue.linearIssueId, "patchrelay");
       this.enqueueIssue(issue.projectId, issue.linearIssueId);
       this.logger.info({ issueKey: issue.issueKey, reviewerName: event.reviewerName }, "Enqueued review fix run");
     }
 
+  }
+
+  private async handleTerminalPrEvent(issue: IssueRecord, event: NormalizedGitHubEvent): Promise<void> {
+    const eventType = event.triggerEvent === "pr_merged" ? "pr_merged" : "pr_closed";
+    this.db.appendIssueSessionEvent({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      eventType,
+      dedupeKey: [eventType, issue.prNumber ?? event.prNumber ?? "unknown-pr", issue.prHeadSha ?? event.headSha ?? "unknown-sha"].join("::"),
+    });
+    this.db.clearPendingIssueSessionEvents(issue.projectId, issue.linearIssueId);
+
+    if (!issue.activeRunId) {
+      this.db.releaseIssueSessionLease(issue.projectId, issue.linearIssueId);
+      return;
+    }
+
+    const run = this.db.getRun(issue.activeRunId);
+    if (run?.threadId && run.turnId) {
+      try {
+        await this.codex.steerTurn({
+          threadId: run.threadId,
+          turnId: run.turnId,
+          input: event.triggerEvent === "pr_merged"
+            ? "STOP: The pull request has already merged. Stop working immediately and exit without making further changes."
+            : "STOP: The pull request was closed. Stop working immediately and exit without making further changes.",
+        });
+      } catch (error) {
+        this.logger.warn({ issueKey: issue.issueKey, runId: run.id, error: error instanceof Error ? error.message : String(error) }, "Failed to steer active run after terminal PR event");
+      }
+    }
+
+    this.db.transaction(() => {
+      if (run) {
+        this.db.finishRun(run.id, {
+          status: "released",
+          failureReason: event.triggerEvent === "pr_merged"
+            ? "Pull request merged during active run"
+            : "Pull request closed during active run",
+        });
+      }
+      this.db.upsertIssue({
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        activeRunId: null,
+        factoryState: event.triggerEvent === "pr_merged" ? "done" : "failed",
+      });
+    });
+    this.db.releaseIssueSessionLease(issue.projectId, issue.linearIssueId);
+    const updatedIssue = this.db.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
+    void this.syncLinearSession(updatedIssue);
   }
 
   private async updateFailureProvenance(issue: IssueRecord, event: NormalizedGitHubEvent, project?: ProjectConfig): Promise<void> {
@@ -769,6 +854,7 @@ export class GitHubWebhookHandler {
     if (!prNumber) return;
     const issue = this.db.getIssueByPrNumber(prNumber);
     if (!issue) return;
+    if (!this.isPatchRelayOwnedPr(issue)) return;
 
     this.feed?.publish({
       level: "info",
@@ -791,13 +877,49 @@ export class GitHubWebhookHandler {
             input: `GitHub PR comment from ${author}:\n\n${body}`,
           });
           this.logger.info({ issueKey: issue.issueKey, author }, "Forwarded GitHub PR comment to active run");
+          return;
         } catch (error) {
           const msg = error instanceof Error ? error.message : String(error);
           this.logger.warn({ issueKey: issue.issueKey, error: msg }, "Failed to forward GitHub PR comment");
         }
       }
     }
+
+    this.db.appendIssueSessionEvent({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      eventType: "followup_comment",
+      eventJson: JSON.stringify({ body, author }),
+    });
+    this.enqueueIssue(issue.projectId, issue.linearIssueId);
   }
+
+  private isPatchRelayOwnedPr(issue: IssueRecord): boolean {
+    const author = normalizeAuthorLogin(issue.prAuthorLogin);
+    if (author) {
+      if (this.patchRelayAuthorLogins.size > 0) {
+        return this.patchRelayAuthorLogins.has(author);
+      }
+      return author.includes("patchrelay");
+    }
+    // Transitional fallback for rows written before author tracking existed.
+    return issue.prNumber !== undefined && issue.branchOwner === "patchrelay";
+  }
+}
+
+function normalizeAuthorLogin(login: string | undefined): string | undefined {
+  const normalized = login?.trim().toLowerCase();
+  return normalized ? normalized : undefined;
+}
+
+function resolvePatchRelayAuthorLoginsFromEnv(): string[] {
+  return [
+    process.env.PATCHRELAY_GITHUB_BOT_LOGIN,
+    process.env.PATCHRELAY_GITHUB_BOT_NAME,
+  ]
+    .flatMap((value) => (value ?? "").split(","))
+    .map((value) => normalizeAuthorLogin(value))
+    .filter((value): value is string => Boolean(value));
 }
 
 function resolveCheckClass(

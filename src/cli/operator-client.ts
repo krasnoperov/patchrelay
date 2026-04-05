@@ -1,5 +1,4 @@
 import type { AppConfig } from "../types.ts";
-import type { OperatorFeedEvent, OperatorFeedQuery } from "../operator-feed.ts";
 
 export interface InstallationListResult {
   installations: Array<{
@@ -29,10 +28,6 @@ export interface LinearWorkspaceListResult {
     teams: Array<{ id: string; key?: string; name?: string }>;
     projects: Array<{ id: string; name?: string; teamIds: string[] }>;
   }>;
-}
-
-export interface OperatorFeedResult {
-  events: OperatorFeedEvent[];
 }
 
 export type ConnectResult =
@@ -83,11 +78,6 @@ export interface CliOperatorDataAccess {
   disconnectLinearWorkspace(workspace: string): Promise<{
     installation: LinearWorkspaceListResult["workspaces"][number]["installation"];
   }>;
-  listOperatorFeed(options?: Omit<OperatorFeedQuery, "afterId">): Promise<OperatorFeedResult>;
-  followOperatorFeed(
-    onEvent: (event: OperatorFeedEvent) => void,
-    options?: Omit<OperatorFeedQuery, "afterId">,
-  ): Promise<void>;
 }
 
 export class CliOperatorApiClient implements CliOperatorDataAccess {
@@ -131,98 +121,6 @@ export class CliOperatorApiClient implements CliOperatorDataAccess {
     installation: LinearWorkspaceListResult["workspaces"][number]["installation"];
   }> {
     return await this.requestJson(`/api/linear/workspaces/${encodeURIComponent(workspace)}`, undefined, { method: "DELETE" });
-  }
-
-  async listOperatorFeed(options?: Omit<OperatorFeedQuery, "afterId">): Promise<OperatorFeedResult> {
-    return await this.requestJson<OperatorFeedResult>("/api/feed", {
-      ...(options?.limit && options.limit > 0 ? { limit: String(options.limit) } : {}),
-      ...(options?.issueKey ? { issue: options.issueKey } : {}),
-      ...(options?.projectId ? { project: options.projectId } : {}),
-      ...(options?.kind ? { kind: options.kind } : {}),
-      ...(options?.stage ? { stage: options.stage } : {}),
-      ...(options?.status ? { status: options.status } : {}),
-      ...(options?.workflowId ? { workflow: options.workflowId } : {}),
-    });
-  }
-
-  async followOperatorFeed(
-    onEvent: (event: OperatorFeedEvent) => void,
-    options?: Omit<OperatorFeedQuery, "afterId">,
-  ): Promise<void> {
-    const url = new URL("/api/feed", this.getOperatorBaseUrl());
-    url.searchParams.set("follow", "1");
-    if (options?.limit && options.limit > 0) {
-      url.searchParams.set("limit", String(options.limit));
-    }
-    if (options?.issueKey) {
-      url.searchParams.set("issue", options.issueKey);
-    }
-    if (options?.projectId) {
-      url.searchParams.set("project", options.projectId);
-    }
-    if (options?.kind) {
-      url.searchParams.set("kind", options.kind);
-    }
-    if (options?.stage) {
-      url.searchParams.set("stage", options.stage);
-    }
-    if (options?.status) {
-      url.searchParams.set("status", options.status);
-    }
-    if (options?.workflowId) {
-      url.searchParams.set("workflow", options.workflowId);
-    }
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        accept: "text/event-stream",
-        ...(this.config.operatorApi.bearerToken ? { authorization: `Bearer ${this.config.operatorApi.bearerToken}` } : {}),
-      },
-    });
-    if (!response.ok || !response.body) {
-      const body = await response.text().catch(() => "");
-      const message = this.readErrorMessage(body);
-      throw new Error(message ?? `Request failed: ${response.status}`);
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    let dataLines: string[] = [];
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      buffer += decoder.decode(value, { stream: true });
-      let newlineIndex = buffer.indexOf("\n");
-      while (newlineIndex !== -1) {
-        const rawLine = buffer.slice(0, newlineIndex);
-        buffer = buffer.slice(newlineIndex + 1);
-        const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
-
-        if (!line) {
-          if (dataLines.length > 0) {
-            const parsed = JSON.parse(dataLines.join("\n")) as OperatorFeedEvent;
-            onEvent(parsed);
-            dataLines = [];
-          }
-          newlineIndex = buffer.indexOf("\n");
-          continue;
-        }
-
-        if (line.startsWith(":")) {
-          newlineIndex = buffer.indexOf("\n");
-          continue;
-        }
-
-        if (line.startsWith("data:")) {
-          dataLines.push(line.slice(5).trimStart());
-        }
-        newlineIndex = buffer.indexOf("\n");
-      }
-    }
   }
 
   private getOperatorBaseUrl(): string {

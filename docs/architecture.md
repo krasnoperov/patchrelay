@@ -4,7 +4,7 @@
 
 This document describes the target architecture for PatchRelay as a Linear-native agentic software factory.
 
-The service is not a generic prompt runner. It is the deterministic orchestration layer that turns a delegated Linear issue into a reviewed, repairable pull request. A separate [Merge Steward](../packages/merge-steward) service owns serial queue integration and landing — PatchRelay develops code, Merge Steward delivers it.
+The service is not a generic prompt runner. It is the deterministic orchestration layer that turns a delegated Linear issue into a PatchRelay-owned pull request and keeps that PR healthy until merge or close. Separate downstream services own review automation and merge execution.
 
 ## External Patterns We Are Combining
 
@@ -74,7 +74,8 @@ flowchart TB
   RO --> ST
   ST --> RO
   RO --> LS
-  RO -->|queue label| MS
+  GH --> RB[ReviewBot]
+  GH --> MS[Merge Steward]
   MS -->|merge / evict| GH
 ```
 
@@ -99,8 +100,7 @@ Owns:
 
 - GitHub webhook signature verification
 - PR state tracking (number, URL, review state, check status)
-- factory state transitions from GitHub events
-- triggering reactive runs (ci_repair, review_fix, queue_repair)
+- triggering reactive runs on PatchRelay-owned PR follow-up events
 - repair counter management
 
 ### Run Orchestrator (`run-orchestrator.ts`)
@@ -134,6 +134,19 @@ Owns:
 - notification handling (turn/completed events)
 - exposing thread, turn, and item state that can be reduced into human-facing status summaries
 
+## Ownership
+
+PatchRelay tracks two different ownership models:
+
+- issue ownership
+- PR ownership
+
+Issue ownership decides who may start new delegated implementation work from Linear.
+PR ownership decides who must keep an existing PR healthy until merge or close.
+
+For PatchRelay, a PR is PatchRelay-owned when its author is the PatchRelay GitHub app or service account.
+That ownership does not change just because the issue is undelegated, the PR becomes ready, or the PR enters the queue.
+
 ## Issue Lifecycle
 
 ### Main Flow
@@ -144,11 +157,11 @@ Delegated in Linear
 -> Plan published
 -> Worktree prepared
 -> Implementation run (Codex)
--> PR opened (detected via GitHub webhook)
--> Review loop
--> Approved and checks green
--> PatchRelay adds queue label → Merge Steward takes over
--> Steward: rebase → CI → merge (or evict → PatchRelay queue_repair → re-label)
+-> PatchRelay opens draft PR
+-> PatchRelay marks PR ready when implementation is complete
+-> ReviewBot reviews ready PRs with green CI
+-> Merge Steward queues ready PRs with green CI and approval
+-> If requested changes, red CI, or merge-steward incident lands on a PatchRelay-owned PR, PatchRelay resumes the same branch
 -> Merged → done
 ```
 
@@ -207,9 +220,16 @@ terminal exits:
 - failed
 ```
 
-`changes_requested`, `repairing_ci`, and `repairing_queue` are native PatchRelay states.
-They do not mean the external queue owns the issue state.
-PatchRelay and Merge Steward remain isolated services and communicate only through GitHub-observed labels, checks, and merge events.
+The current implementation still carries a broader factory-state model than the desired `v2` runtime.
+The target runtime is a smaller `IssueSession` state machine:
+
+- `idle`
+- `running`
+- `waiting_input`
+- `done`
+- `failed`
+
+Waiting on review or queue should be represented as `waitingReason`, not as a major PatchRelay-owned lifecycle state.
 
 ## Failure Taxonomy
 
@@ -228,7 +248,7 @@ PatchRelay and Merge Steward remain isolated services and communicate only throu
 
 ## State Storage
 
-PatchRelay uses SQLite with these tables:
+PatchRelay uses SQLite with these tables today:
 
 - `issues` — one record per tracked issue, includes factory state, PR state, run pointers, repair counters
 - `runs` — one record per Codex run (implementation, review_fix, ci_repair, queue_repair)
@@ -236,6 +256,8 @@ PatchRelay uses SQLite with these tables:
 - `run_thread_events` — per-run transcript of Codex thread events (when extended history is enabled)
 - `linear_installations` — OAuth credentials and installation metadata
 - `operator_feed_events` — event log for operator CLI
+
+The target model is to keep a smaller durable `IssueSession` record that stores only PatchRelay runtime truth, while GitHub remains the source of truth for PR readiness, review, and merge state.
 
 ## Knowledge Layout
 

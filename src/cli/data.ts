@@ -18,7 +18,6 @@ export type {
   ConnectResult,
   ConnectStateResult,
   InstallationListResult,
-  OperatorFeedResult,
 } from "./operator-client.ts";
 
 interface LiveSummary {
@@ -39,30 +38,6 @@ export interface InspectResult {
   prNumber?: number | undefined;
   prReviewState?: string | undefined;
   statusNote?: string | undefined;
-}
-
-export interface ReportResult {
-  issue: TrackedIssueRecord;
-  runs: Array<{
-    run: RunRecord;
-    report?: StageReport;
-    summary?: Record<string, unknown>;
-  }>;
-}
-
-export interface EventsResult {
-  issue: TrackedIssueRecord;
-  run: RunRecord;
-  events: Array<{
-    id: number;
-    runId: number;
-    threadId: string;
-    turnId?: string | undefined;
-    method: string;
-    eventJson: string;
-    createdAt: string;
-    parsedEvent?: Record<string, unknown>;
-  }>;
 }
 
 export interface WorktreeResult {
@@ -193,50 +168,6 @@ export class CliDataAccess extends CliOperatorApiClient {
       (await this.readLiveSummary(run.threadId, latestEventTimestamp(this.db, run.id)).catch(() => undefined));
 
     return { issue, run, ...(live ? { live } : {}) };
-  }
-
-  report(issueKey: string, options?: { runType?: string; runId?: number }): ReportResult | undefined {
-    const issue = this.db.getTrackedIssueByKey(issueKey);
-    if (!issue) return undefined;
-
-    const runs = this.db
-      .listRunsForIssue(issue.projectId, issue.linearIssueId)
-      .filter((run) => {
-        if (options?.runId !== undefined && run.id !== options.runId) return false;
-        if (options?.runType !== undefined && run.runType !== options.runType) return false;
-        return true;
-      })
-      .reverse()
-      .map((run) => ({
-        run,
-        ...(run.reportJson ? { report: JSON.parse(run.reportJson) as StageReport } : {}),
-        ...(safeJsonParse(run.summaryJson) ? { summary: safeJsonParse(run.summaryJson)! } : {}),
-      }));
-
-    return { issue, runs };
-  }
-
-  events(issueKey: string, options?: { runId?: number; method?: string; afterId?: number }): EventsResult | undefined {
-    const issue = this.db.getTrackedIssueByKey(issueKey);
-    if (!issue) return undefined;
-
-    const dbIssue = this.db.getIssueByKey(issueKey)!;
-    const run =
-      (options?.runId !== undefined ? this.db.getRun(options.runId) : undefined) ??
-      (dbIssue.activeRunId ? this.db.getRun(dbIssue.activeRunId) : undefined) ??
-      this.db.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
-    if (!run || run.projectId !== issue.projectId || run.linearIssueId !== issue.linearIssueId) return undefined;
-
-    const events = this.db
-      .listThreadEvents(run.id)
-      .filter((event) => (options?.method ? event.method === options.method : true))
-      .filter((event) => (options?.afterId !== undefined ? event.id > options.afterId : true))
-      .map((event) => ({
-        ...event,
-        ...(safeJsonParse(event.eventJson) ? { parsedEvent: safeJsonParse(event.eventJson)! } : {}),
-      }));
-
-    return { issue, run, events };
   }
 
   worktree(issueKey: string): WorktreeResult | undefined {

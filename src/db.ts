@@ -4,18 +4,30 @@ import type {
   GitHubFailureSource,
   IssueDependencyRecord,
   IssueRecord,
+  IssueSessionEventRecord,
+  IssueSessionRecord,
   RunRecord,
   RunStatus,
   TrackedIssueRecord,
   ThreadEventRecord,
 } from "./db-types.ts";
 import type { FactoryState, RunType } from "./factory-state.ts";
+import {
+  deriveIssueSessionState,
+  deriveIssueSessionWakeReason,
+} from "./issue-session.ts";
+import {
+  deriveSessionWakePlan,
+  extractLatestAssistantSummary,
+  type IssueSessionEventType,
+} from "./issue-session-events.ts";
 import { parseGitHubFailureContext } from "./github-failure-context.ts";
 import { LinearInstallationStore } from "./db/linear-installation-store.ts";
 import { OperatorFeedStore } from "./db/operator-feed-store.ts";
 import { RepositoryLinkStore } from "./db/repository-link-store.ts";
 import { runPatchRelayMigrations } from "./db/migrations.ts";
 import { SqliteConnection, isoNow, type DatabaseConnection } from "./db/shared.ts";
+import { derivePatchRelayWaitingReason } from "./waiting-reason.ts";
 
 export class PatchRelayDatabase {
   readonly connection: DatabaseConnection;
@@ -116,6 +128,8 @@ export class PatchRelayDatabase {
     prNumber?: number | null;
     prUrl?: string | null;
     prState?: string | null;
+    prHeadSha?: string | null;
+    prAuthorLogin?: string | null;
     prReviewState?: string | null;
     prCheckStatus?: string | null;
     lastGitHubFailureSource?: GitHubFailureSource | null;
@@ -170,6 +184,8 @@ export class PatchRelayDatabase {
       if (params.prNumber !== undefined) { sets.push("pr_number = @prNumber"); values.prNumber = params.prNumber; }
       if (params.prUrl !== undefined) { sets.push("pr_url = @prUrl"); values.prUrl = params.prUrl; }
       if (params.prState !== undefined) { sets.push("pr_state = @prState"); values.prState = params.prState; }
+      if (params.prHeadSha !== undefined) { sets.push("pr_head_sha = @prHeadSha"); values.prHeadSha = params.prHeadSha; }
+      if (params.prAuthorLogin !== undefined) { sets.push("pr_author_login = @prAuthorLogin"); values.prAuthorLogin = params.prAuthorLogin; }
       if (params.prReviewState !== undefined) { sets.push("pr_review_state = @prReviewState"); values.prReviewState = params.prReviewState; }
       if (params.prCheckStatus !== undefined) { sets.push("pr_check_status = @prCheckStatus"); values.prCheckStatus = params.prCheckStatus; }
       if (params.lastGitHubFailureSource !== undefined) { sets.push("last_github_failure_source = @lastGitHubFailureSource"); values.lastGitHubFailureSource = params.lastGitHubFailureSource; }
@@ -204,7 +220,7 @@ export class PatchRelayDatabase {
           current_linear_state, current_linear_state_type, factory_state, pending_run_type, pending_run_context_json,
           branch_name, worktree_path, thread_id, active_run_id,
           agent_session_id,
-          pr_number, pr_url, pr_state, pr_review_state, pr_check_status,
+          pr_number, pr_url, pr_state, pr_head_sha, pr_author_login, pr_review_state, pr_check_status,
           last_github_failure_source, last_github_failure_head_sha, last_github_failure_signature, last_github_failure_check_name, last_github_failure_check_url, last_github_failure_context_json, last_github_failure_at,
           last_github_ci_snapshot_head_sha, last_github_ci_snapshot_gate_check_name, last_github_ci_snapshot_gate_check_status, last_github_ci_snapshot_json, last_github_ci_snapshot_settled_at,
           last_queue_signal_at, last_queue_incident_json,
@@ -216,7 +232,7 @@ export class PatchRelayDatabase {
           @currentLinearState, @currentLinearStateType, @factoryState, @pendingRunType, @pendingRunContextJson,
           @branchName, @worktreePath, @threadId, @activeRunId,
           @agentSessionId,
-          @prNumber, @prUrl, @prState, @prReviewState, @prCheckStatus,
+          @prNumber, @prUrl, @prState, @prHeadSha, @prAuthorLogin, @prReviewState, @prCheckStatus,
           @lastGitHubFailureSource, @lastGitHubFailureHeadSha, @lastGitHubFailureSignature, @lastGitHubFailureCheckName, @lastGitHubFailureCheckUrl, @lastGitHubFailureContextJson, @lastGitHubFailureAt,
           @lastGitHubCiSnapshotHeadSha, @lastGitHubCiSnapshotGateCheckName, @lastGitHubCiSnapshotGateCheckStatus, @lastGitHubCiSnapshotJson, @lastGitHubCiSnapshotSettledAt,
           @lastQueueSignalAt, @lastQueueIncidentJson,
@@ -245,6 +261,8 @@ export class PatchRelayDatabase {
         prNumber: params.prNumber ?? null,
         prUrl: params.prUrl ?? null,
         prState: params.prState ?? null,
+        prHeadSha: params.prHeadSha ?? null,
+        prAuthorLogin: params.prAuthorLogin ?? null,
         prReviewState: params.prReviewState ?? null,
         prCheckStatus: params.prCheckStatus ?? null,
         lastGitHubFailureSource: params.lastGitHubFailureSource ?? null,
@@ -266,7 +284,9 @@ export class PatchRelayDatabase {
         now,
       });
     }
-    return this.getIssue(params.projectId, params.linearIssueId)!;
+    const updated = this.getIssue(params.projectId, params.linearIssueId)!;
+    this.syncIssueSessionFromIssue(updated);
+    return updated;
   }
 
   getIssue(projectId: string, linearIssueId: string): IssueRecord | undefined {
@@ -294,6 +314,197 @@ export class PatchRelayDatabase {
   getIssueByPrNumber(prNumber: number): IssueRecord | undefined {
     const row = this.connection.prepare("SELECT * FROM issues WHERE pr_number = ?").get(prNumber) as Record<string, unknown> | undefined;
     return row ? mapIssueRow(row) : undefined;
+  }
+
+  getIssueSession(projectId: string, linearIssueId: string): IssueSessionRecord | undefined {
+    const row = this.connection
+      .prepare("SELECT * FROM issue_sessions WHERE project_id = ? AND linear_issue_id = ?")
+      .get(projectId, linearIssueId) as Record<string, unknown> | undefined;
+    return row ? mapIssueSessionRow(row) : undefined;
+  }
+
+  getIssueSessionByKey(issueKey: string): IssueSessionRecord | undefined {
+    const row = this.connection.prepare("SELECT * FROM issue_sessions WHERE issue_key = ?").get(issueKey) as Record<string, unknown> | undefined;
+    return row ? mapIssueSessionRow(row) : undefined;
+  }
+
+  appendIssueSessionEvent(params: {
+    projectId: string;
+    linearIssueId: string;
+    eventType: IssueSessionEventType;
+    eventJson?: string | undefined;
+    dedupeKey?: string | undefined;
+  }): IssueSessionEventRecord {
+    if (params.dedupeKey) {
+      const existing = this.connection.prepare(`
+        SELECT * FROM issue_session_events
+        WHERE project_id = ? AND linear_issue_id = ? AND dedupe_key = ? AND processed_at IS NULL
+        ORDER BY id DESC LIMIT 1
+      `).get(params.projectId, params.linearIssueId, params.dedupeKey) as Record<string, unknown> | undefined;
+      if (existing) return mapIssueSessionEventRow(existing);
+    }
+
+    const now = isoNow();
+    const result = this.connection.prepare(`
+      INSERT INTO issue_session_events (
+        project_id, linear_issue_id, event_type, event_json, dedupe_key, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      params.projectId,
+      params.linearIssueId,
+      params.eventType,
+      params.eventJson ?? null,
+      params.dedupeKey ?? null,
+      now,
+    );
+    return this.getIssueSessionEvent(Number(result.lastInsertRowid))!;
+  }
+
+  getIssueSessionEvent(id: number): IssueSessionEventRecord | undefined {
+    const row = this.connection.prepare("SELECT * FROM issue_session_events WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+    return row ? mapIssueSessionEventRow(row) : undefined;
+  }
+
+  listIssueSessionEvents(
+    projectId: string,
+    linearIssueId: string,
+    options?: { pendingOnly?: boolean; limit?: number },
+  ): IssueSessionEventRecord[] {
+    const conditions = ["project_id = ?", "linear_issue_id = ?"];
+    const values: Array<string | number> = [projectId, linearIssueId];
+    if (options?.pendingOnly) {
+      conditions.push("processed_at IS NULL");
+    }
+    let query = `SELECT * FROM issue_session_events WHERE ${conditions.join(" AND ")} ORDER BY id`;
+    if (options?.limit !== undefined) {
+      query += " LIMIT ?";
+      values.push(options.limit);
+    }
+    const rows = this.connection.prepare(query).all(...values) as Array<Record<string, unknown>>;
+    return rows.map(mapIssueSessionEventRow);
+  }
+
+  consumeIssueSessionEvents(projectId: string, linearIssueId: string, eventIds: number[], runId: number): void {
+    if (eventIds.length === 0) return;
+    const now = isoNow();
+    const placeholders = eventIds.map(() => "?").join(", ");
+    this.connection.prepare(`
+      UPDATE issue_session_events
+      SET processed_at = ?, consumed_by_run_id = ?
+      WHERE project_id = ? AND linear_issue_id = ? AND id IN (${placeholders}) AND processed_at IS NULL
+    `).run(now, runId, projectId, linearIssueId, ...eventIds);
+  }
+
+  clearPendingIssueSessionEvents(projectId: string, linearIssueId: string): void {
+    this.connection.prepare(`
+      UPDATE issue_session_events
+      SET processed_at = ?, consumed_by_run_id = NULL
+      WHERE project_id = ? AND linear_issue_id = ? AND processed_at IS NULL
+    `).run(isoNow(), projectId, linearIssueId);
+  }
+
+  hasPendingIssueSessionEvents(projectId: string, linearIssueId: string): boolean {
+    const row = this.connection.prepare(`
+      SELECT 1
+      FROM issue_session_events
+      WHERE project_id = ? AND linear_issue_id = ? AND processed_at IS NULL
+      LIMIT 1
+    `).get(projectId, linearIssueId) as Record<string, unknown> | undefined;
+    return row !== undefined;
+  }
+
+  peekIssueSessionWake(projectId: string, linearIssueId: string): {
+    eventIds: number[];
+    runType: RunType;
+    context: Record<string, unknown>;
+    wakeReason?: string | undefined;
+    resumeThread: boolean;
+  } | undefined {
+    const issue = this.getIssue(projectId, linearIssueId);
+    if (!issue) return undefined;
+    const events = this.listIssueSessionEvents(projectId, linearIssueId, { pendingOnly: true });
+    const plan = deriveSessionWakePlan(issue, events);
+    if (!plan?.runType) return undefined;
+    return {
+      eventIds: events.map((event) => event.id),
+      runType: plan.runType,
+      context: plan.context,
+      ...(plan.wakeReason ? { wakeReason: plan.wakeReason } : {}),
+      resumeThread: plan.resumeThread,
+    };
+  }
+
+  acquireIssueSessionLease(params: {
+    projectId: string;
+    linearIssueId: string;
+    leaseId: string;
+    workerId: string;
+    leasedUntil: string;
+    now?: string;
+  }): boolean {
+    const now = params.now ?? isoNow();
+    const result = this.connection.prepare(`
+      UPDATE issue_sessions
+      SET lease_id = ?, worker_id = ?, leased_until = ?, updated_at = ?
+      WHERE project_id = ? AND linear_issue_id = ?
+        AND (leased_until IS NULL OR leased_until <= ? OR lease_id = ?)
+    `).run(
+      params.leaseId,
+      params.workerId,
+      params.leasedUntil,
+      now,
+      params.projectId,
+      params.linearIssueId,
+      now,
+      params.leaseId,
+    );
+    return Number(result.changes ?? 0) > 0;
+  }
+
+  renewIssueSessionLease(params: {
+    projectId: string;
+    linearIssueId: string;
+    leaseId: string;
+    leasedUntil: string;
+    now?: string;
+  }): boolean {
+    const now = params.now ?? isoNow();
+    const result = this.connection.prepare(`
+      UPDATE issue_sessions
+      SET leased_until = ?, updated_at = ?
+      WHERE project_id = ? AND linear_issue_id = ? AND lease_id = ?
+    `).run(
+      params.leasedUntil,
+      now,
+      params.projectId,
+      params.linearIssueId,
+      params.leaseId,
+    );
+    return Number(result.changes ?? 0) > 0;
+  }
+
+  releaseIssueSessionLease(projectId: string, linearIssueId: string, leaseId?: string): void {
+    this.connection.prepare(`
+      UPDATE issue_sessions
+      SET lease_id = NULL, worker_id = NULL, leased_until = NULL, updated_at = ?
+      WHERE project_id = ? AND linear_issue_id = ? AND (? IS NULL OR lease_id = ?)
+    `).run(isoNow(), projectId, linearIssueId, leaseId ?? null, leaseId ?? null);
+  }
+
+  releaseAllIssueSessionLeases(): void {
+    this.connection.prepare(`
+      UPDATE issue_sessions
+      SET lease_id = NULL, worker_id = NULL, leased_until = NULL, updated_at = ?
+      WHERE lease_id IS NOT NULL OR worker_id IS NOT NULL OR leased_until IS NOT NULL
+    `).run(isoNow());
+  }
+
+  setIssueSessionLastWakeReason(projectId: string, linearIssueId: string, lastWakeReason?: string | null): void {
+    this.connection.prepare(`
+      UPDATE issue_sessions
+      SET last_wake_reason = ?, updated_at = ?
+      WHERE project_id = ? AND linear_issue_id = ?
+    `).run(lastWakeReason ?? null, isoNow(), projectId, linearIssueId);
   }
 
   setBranchOwner(projectId: string, linearIssueId: string, owner: BranchOwner): void {
@@ -448,10 +659,44 @@ export class PatchRelayDatabase {
           )
       `)
       .all() as Array<Record<string, unknown>>;
-    return rows.map((row) => ({
+    const ready = rows.map((row) => ({
       projectId: String(row.project_id),
       linearIssueId: String(row.linear_issue_id),
     }));
+    const pendingEventRows = this.connection.prepare(`
+      SELECT DISTINCT s.project_id, s.linear_issue_id
+      FROM issue_sessions s
+      JOIN issue_session_events e
+        ON e.project_id = s.project_id
+       AND e.linear_issue_id = s.linear_issue_id
+      JOIN issues i
+        ON i.project_id = s.project_id
+       AND i.linear_issue_id = s.linear_issue_id
+      WHERE e.processed_at IS NULL
+        AND i.active_run_id IS NULL
+        AND NOT EXISTS (
+          SELECT 1
+          FROM issue_dependencies d
+          LEFT JOIN issues blockers
+            ON blockers.project_id = d.project_id
+           AND blockers.linear_issue_id = d.blocker_linear_issue_id
+          WHERE d.project_id = i.project_id
+            AND d.linear_issue_id = i.linear_issue_id
+            AND (
+              COALESCE(blockers.current_linear_state_type, d.blocker_current_linear_state_type, '') != 'completed'
+              AND LOWER(TRIM(COALESCE(blockers.current_linear_state, d.blocker_current_linear_state, ''))) != 'done'
+            )
+        )
+    `).all() as Array<Record<string, unknown>>;
+    const merged = new Map<string, { projectId: string; linearIssueId: string }>();
+    for (const item of ready) {
+      merged.set(`${item.projectId}:${item.linearIssueId}`, item);
+    }
+    for (const row of pendingEventRows) {
+      const item = { projectId: String(row.project_id), linearIssueId: String(row.linear_issue_id) };
+      merged.set(`${item.projectId}:${item.linearIssueId}`, item);
+    }
+    return [...merged.values()];
   }
 
   /**
@@ -533,7 +778,12 @@ export class PatchRelayDatabase {
       params.promptText ?? null,
       now,
     );
-    return this.getRun(Number(result.lastInsertRowid))!;
+    const run = this.getRun(Number(result.lastInsertRowid))!;
+    const issue = this.getIssue(params.projectId, params.linearIssueId);
+    if (issue) {
+      this.syncIssueSessionFromIssue(issue, { lastRunType: run.runType });
+    }
+    return run;
   }
 
   getRun(id: number): RunRecord | undefined {
@@ -582,7 +832,15 @@ export class PatchRelayDatabase {
         turn_id = COALESCE(?, turn_id),
         status = 'running'
       WHERE id = ?
+        AND ended_at IS NULL
+        AND status IN ('queued', 'running')
     `).run(params.threadId, params.parentThreadId ?? null, params.turnId ?? null, runId);
+    const run = this.getRun(runId);
+    if (!run) return;
+    const issue = this.getIssue(run.projectId, run.linearIssueId);
+    if (issue) {
+      this.syncIssueSessionFromIssue(issue);
+    }
   }
 
   updateRunTurnId(runId: number, turnId: string): void {
@@ -618,6 +876,15 @@ export class PatchRelayDatabase {
       now,
       runId,
     );
+    const run = this.getRun(runId);
+    if (!run) return;
+    const issue = this.getIssue(run.projectId, run.linearIssueId);
+    if (issue) {
+      this.syncIssueSessionFromIssue(issue, {
+        summaryText: extractLatestAssistantSummary(this.getRun(runId) ?? run),
+        lastRunType: run.runType,
+      });
+    }
   }
 
   // ─── Thread Events (kept for extended history) ────────────────────
@@ -655,7 +922,19 @@ export class PatchRelayDatabase {
   issueToTrackedIssue(issue: IssueRecord): TrackedIssueRecord {
     const blockedBy = this.listIssueDependencies(issue.projectId, issue.linearIssueId);
     const unresolvedBlockedBy = blockedBy.filter((entry) => !isResolvedLinearState(entry.blockerCurrentLinearStateType, entry.blockerCurrentLinearState));
+    const hasPendingSessionEvents = this.hasPendingIssueSessionEvents(issue.projectId, issue.linearIssueId);
     const failureContext = parseGitHubFailureContext(issue.lastGitHubFailureContextJson);
+    const blockedByKeys = unresolvedBlockedBy.map((entry) => entry.blockerIssueKey ?? entry.blockerLinearIssueId);
+    const waitingReason = derivePatchRelayWaitingReason({
+      ...(issue.activeRunId !== undefined ? { activeRunId: issue.activeRunId } : {}),
+      blockedByKeys,
+      factoryState: issue.factoryState,
+      pendingRunType: issue.pendingRunType,
+      prNumber: issue.prNumber,
+      prReviewState: issue.prReviewState,
+      prCheckStatus: issue.prCheckStatus,
+      latestFailureCheckName: issue.lastGitHubFailureCheckName,
+    });
     return {
       id: issue.id,
       projectId: issue.projectId,
@@ -666,14 +945,14 @@ export class PatchRelayDatabase {
       ...(issue.currentLinearState ? { currentLinearState: issue.currentLinearState } : {}),
       factoryState: issue.factoryState,
       blockedByCount: unresolvedBlockedBy.length,
-      blockedByKeys: unresolvedBlockedBy
-        .map((entry) => entry.blockerIssueKey ?? entry.blockerLinearIssueId),
-      readyForExecution: issue.pendingRunType !== undefined && issue.activeRunId === undefined && unresolvedBlockedBy.length === 0,
+      blockedByKeys,
+      readyForExecution: (issue.pendingRunType !== undefined || hasPendingSessionEvents) && issue.activeRunId === undefined && unresolvedBlockedBy.length === 0,
       ...(issue.lastGitHubFailureSource ? { latestFailureSource: issue.lastGitHubFailureSource } : {}),
       ...(issue.lastGitHubFailureHeadSha ? { latestFailureHeadSha: issue.lastGitHubFailureHeadSha } : {}),
       ...(issue.lastGitHubFailureCheckName ? { latestFailureCheckName: issue.lastGitHubFailureCheckName } : {}),
       ...(failureContext?.stepName ? { latestFailureStepName: failureContext.stepName } : {}),
       ...(failureContext?.summary ? { latestFailureSummary: failureContext.summary } : {}),
+      ...(waitingReason ? { waitingReason } : {}),
       ...(issue.activeRunId !== undefined ? { activeRunId: issue.activeRunId } : {}),
       ...(issue.agentSessionId ? { activeAgentSessionId: issue.agentSessionId } : {}),
       updatedAt: issue.updatedAt,
@@ -690,6 +969,13 @@ export class PatchRelayDatabase {
     return issue ? this.issueToTrackedIssue(issue) : undefined;
   }
 
+  listIssuesWithAgentSessions(): IssueRecord[] {
+    const rows = this.connection
+      .prepare("SELECT * FROM issues WHERE agent_session_id IS NOT NULL ORDER BY updated_at DESC")
+      .all() as Array<Record<string, unknown>>;
+    return rows.map(mapIssueRow);
+  }
+
   // ─── Issue overview for query service ─────────────────────────────
 
   getIssueOverview(issueKey: string): {
@@ -704,6 +990,123 @@ export class PatchRelayDatabase {
       issue: tracked,
       ...(activeRun ? { activeRun } : {}),
     };
+  }
+
+  private syncIssueSessionFromIssue(
+    issue: IssueRecord,
+    options?: {
+      summaryText?: string | undefined;
+      lastRunType?: RunType | undefined;
+      lastWakeReason?: string | undefined;
+    },
+  ): void {
+    const tracked = this.issueToTrackedIssue(issue);
+    const existing = this.getIssueSession(issue.projectId, issue.linearIssueId);
+    const latestRun = this.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
+    const latestRunType = options?.lastRunType ?? latestRun?.runType ?? existing?.lastRunType;
+    const summaryText = options?.summaryText
+      ?? extractLatestAssistantSummary(latestRun)
+      ?? existing?.summaryText;
+    const activeThreadId = issue.threadId ?? existing?.activeThreadId;
+    const threadGeneration = activeThreadId && activeThreadId !== existing?.activeThreadId
+      ? (existing?.threadGeneration ?? 0) + 1
+      : (existing?.threadGeneration ?? (activeThreadId ? 1 : 0));
+    const sessionState = deriveIssueSessionState({
+      ...(issue.activeRunId !== undefined ? { activeRunId: issue.activeRunId } : {}),
+      factoryState: issue.factoryState,
+    });
+    const lastWakeReason = options?.lastWakeReason
+      ?? deriveIssueSessionWakeReason({
+        pendingRunType: issue.pendingRunType,
+        factoryState: issue.factoryState,
+        prReviewState: issue.prReviewState,
+        prCheckStatus: issue.prCheckStatus,
+        latestFailureSource: issue.lastGitHubFailureSource,
+      })
+      ?? existing?.lastWakeReason;
+    const now = isoNow();
+
+    if (existing) {
+      this.connection.prepare(`
+        UPDATE issue_sessions SET
+          issue_key = ?,
+          repo_id = ?,
+          branch_name = ?,
+          worktree_path = ?,
+          pr_number = ?,
+          pr_head_sha = ?,
+          pr_author_login = ?,
+          session_state = ?,
+          waiting_reason = ?,
+          summary_text = ?,
+          active_thread_id = ?,
+          thread_generation = ?,
+          active_run_id = ?,
+          last_run_type = ?,
+          last_wake_reason = ?,
+          ci_repair_attempts = ?,
+          queue_repair_attempts = ?,
+          review_fix_attempts = ?,
+          updated_at = ?
+        WHERE project_id = ? AND linear_issue_id = ?
+      `).run(
+        issue.issueKey ?? null,
+        issue.projectId,
+        issue.branchName ?? null,
+        issue.worktreePath ?? null,
+        issue.prNumber ?? null,
+        issue.prHeadSha ?? null,
+        issue.prAuthorLogin ?? null,
+        sessionState,
+        tracked.waitingReason ?? null,
+        summaryText ?? null,
+        activeThreadId ?? null,
+        threadGeneration,
+        issue.activeRunId ?? null,
+        latestRunType ?? null,
+        lastWakeReason ?? null,
+        issue.ciRepairAttempts,
+        issue.queueRepairAttempts,
+        issue.reviewFixAttempts,
+        now,
+        issue.projectId,
+        issue.linearIssueId,
+      );
+      return;
+    }
+
+    this.connection.prepare(`
+      INSERT INTO issue_sessions (
+        project_id, linear_issue_id, issue_key, repo_id, branch_name, worktree_path,
+        pr_number, pr_head_sha, pr_author_login, session_state, waiting_reason, summary_text,
+        active_thread_id, thread_generation, active_run_id, last_run_type, last_wake_reason,
+        ci_repair_attempts, queue_repair_attempts, review_fix_attempts,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      issue.projectId,
+      issue.linearIssueId,
+      issue.issueKey ?? null,
+      issue.projectId,
+      issue.branchName ?? null,
+      issue.worktreePath ?? null,
+      issue.prNumber ?? null,
+      issue.prHeadSha ?? null,
+      issue.prAuthorLogin ?? null,
+      sessionState,
+      tracked.waitingReason ?? null,
+      summaryText ?? null,
+      activeThreadId ?? null,
+      threadGeneration,
+      issue.activeRunId ?? null,
+      latestRunType ?? null,
+      lastWakeReason ?? null,
+      issue.ciRepairAttempts,
+      issue.queueRepairAttempts,
+      issue.reviewFixAttempts,
+      now,
+      now,
+    );
   }
 }
 
@@ -728,7 +1131,9 @@ function mapIssueRow(row: Record<string, unknown>): IssueRecord {
     ...(row.pending_run_type !== null && row.pending_run_type !== undefined ? { pendingRunType: String(row.pending_run_type) as RunType } : {}),
     ...(row.pending_run_context_json !== null && row.pending_run_context_json !== undefined ? { pendingRunContextJson: String(row.pending_run_context_json) } : {}),
     ...(row.branch_name !== null ? { branchName: String(row.branch_name) } : {}),
-    ...(row.branch_owner !== null && row.branch_owner !== undefined ? { branchOwner: String(row.branch_owner) as BranchOwner } : { branchOwner: "patchrelay" as BranchOwner }),
+    ...(row.branch_owner !== null && row.branch_owner !== undefined && String(row.branch_owner) === "patchrelay"
+      ? { branchOwner: "patchrelay" as BranchOwner }
+      : { branchOwner: "patchrelay" as BranchOwner }),
     ...(row.branch_ownership_changed_at !== null && row.branch_ownership_changed_at !== undefined
       ? { branchOwnershipChangedAt: String(row.branch_ownership_changed_at) }
       : {}),
@@ -740,6 +1145,8 @@ function mapIssueRow(row: Record<string, unknown>): IssueRecord {
     ...(row.pr_number !== null && row.pr_number !== undefined ? { prNumber: Number(row.pr_number) } : {}),
     ...(row.pr_url !== null && row.pr_url !== undefined ? { prUrl: String(row.pr_url) } : {}),
     ...(row.pr_state !== null && row.pr_state !== undefined ? { prState: String(row.pr_state) } : {}),
+    ...(row.pr_head_sha !== null && row.pr_head_sha !== undefined ? { prHeadSha: String(row.pr_head_sha) } : {}),
+    ...(row.pr_author_login !== null && row.pr_author_login !== undefined ? { prAuthorLogin: String(row.pr_author_login) } : {}),
     ...(row.pr_review_state !== null && row.pr_review_state !== undefined ? { prReviewState: String(row.pr_review_state) } : {}),
     ...(row.pr_check_status !== null && row.pr_check_status !== undefined ? { prCheckStatus: String(row.pr_check_status) } : {}),
     ...(row.last_github_failure_source !== null && row.last_github_failure_source !== undefined
@@ -796,6 +1203,51 @@ function mapIssueRow(row: Record<string, unknown>): IssueRecord {
     zombieRecoveryAttempts: Number(row.zombie_recovery_attempts ?? 0),
     ...(row.last_zombie_recovery_at !== null && row.last_zombie_recovery_at !== undefined ? { lastZombieRecoveryAt: String(row.last_zombie_recovery_at) } : {}),
     queueLabelApplied: Boolean(row.queue_label_applied),
+  };
+}
+
+function mapIssueSessionRow(row: Record<string, unknown>): IssueSessionRecord {
+  return {
+    id: Number(row.id),
+    projectId: String(row.project_id),
+    linearIssueId: String(row.linear_issue_id),
+    ...(row.issue_key !== null && row.issue_key !== undefined ? { issueKey: String(row.issue_key) } : {}),
+    repoId: String(row.repo_id),
+    ...(row.branch_name !== null && row.branch_name !== undefined ? { branchName: String(row.branch_name) } : {}),
+    ...(row.worktree_path !== null && row.worktree_path !== undefined ? { worktreePath: String(row.worktree_path) } : {}),
+    ...(row.pr_number !== null && row.pr_number !== undefined ? { prNumber: Number(row.pr_number) } : {}),
+    ...(row.pr_head_sha !== null && row.pr_head_sha !== undefined ? { prHeadSha: String(row.pr_head_sha) } : {}),
+    ...(row.pr_author_login !== null && row.pr_author_login !== undefined ? { prAuthorLogin: String(row.pr_author_login) } : {}),
+    sessionState: String(row.session_state) as IssueSessionRecord["sessionState"],
+    ...(row.waiting_reason !== null && row.waiting_reason !== undefined ? { waitingReason: String(row.waiting_reason) } : {}),
+    ...(row.summary_text !== null && row.summary_text !== undefined ? { summaryText: String(row.summary_text) } : {}),
+    ...(row.active_thread_id !== null && row.active_thread_id !== undefined ? { activeThreadId: String(row.active_thread_id) } : {}),
+    threadGeneration: Number(row.thread_generation ?? 0),
+    ...(row.active_run_id !== null && row.active_run_id !== undefined ? { activeRunId: Number(row.active_run_id) } : {}),
+    ...(row.last_run_type !== null && row.last_run_type !== undefined ? { lastRunType: String(row.last_run_type) as RunType } : {}),
+    ...(row.last_wake_reason !== null && row.last_wake_reason !== undefined ? { lastWakeReason: String(row.last_wake_reason) } : {}),
+    ciRepairAttempts: Number(row.ci_repair_attempts ?? 0),
+    queueRepairAttempts: Number(row.queue_repair_attempts ?? 0),
+    reviewFixAttempts: Number(row.review_fix_attempts ?? 0),
+    ...(row.lease_id !== null && row.lease_id !== undefined ? { leaseId: String(row.lease_id) } : {}),
+    ...(row.worker_id !== null && row.worker_id !== undefined ? { workerId: String(row.worker_id) } : {}),
+    ...(row.leased_until !== null && row.leased_until !== undefined ? { leasedUntil: String(row.leased_until) } : {}),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+function mapIssueSessionEventRow(row: Record<string, unknown>): IssueSessionEventRecord {
+  return {
+    id: Number(row.id),
+    projectId: String(row.project_id),
+    linearIssueId: String(row.linear_issue_id),
+    eventType: String(row.event_type) as IssueSessionEventType,
+    ...(row.event_json !== null && row.event_json !== undefined ? { eventJson: String(row.event_json) } : {}),
+    ...(row.dedupe_key !== null && row.dedupe_key !== undefined ? { dedupeKey: String(row.dedupe_key) } : {}),
+    createdAt: String(row.created_at),
+    ...(row.processed_at !== null && row.processed_at !== undefined ? { processedAt: String(row.processed_at) } : {}),
+    ...(row.consumed_by_run_id !== null && row.consumed_by_run_id !== undefined ? { consumedByRunId: Number(row.consumed_by_run_id) } : {}),
   };
 }
 

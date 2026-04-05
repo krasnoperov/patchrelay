@@ -86,7 +86,6 @@ test("health endpoint includes build version metadata from the built artifact", 
         acceptWebhook: async () => ({ status: 200, body: { ok: true } }),
         getReadiness: () => ({ ready: true, codexStarted: true, linearConnected: true }),
         getIssueOverview: async () => undefined,
-        getIssueReport: async () => undefined,
       } as never,
       pino({ enabled: false }),
     );
@@ -126,6 +125,7 @@ test("health endpoint includes build version metadata from the built artifact", 
     });
     assert.match(home.body, /codex app-server/);
     assert.doesNotMatch(home.body, /api\/issues\/:issueKey\/report/);
+    assert.doesNotMatch(home.body, /api\/issues\/:issueKey\/runs\/:runId\/events/);
 
     await app.close();
   } finally {
@@ -133,7 +133,7 @@ test("health endpoint includes build version metadata from the built artifact", 
   }
 });
 
-test("http routes handle webhook validation and issue/report/live/events lookups", async () => {
+test("http routes handle webhook validation and issue/live lookups", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-http-routes-"));
 
   try {
@@ -148,7 +148,6 @@ test("http routes handle webhook validation and issue/report/live/events lookups
         bearerToken: "operator-token",
       },
     };
-    const feedQueries: Array<Record<string, unknown>> = [];
     const app = await buildHttpServer(
       config,
       {
@@ -164,13 +163,6 @@ test("http routes handle webhook validation and issue/report/live/events lookups
                 latestStageRun: { id: 7, stage: "development", status: "completed" },
               }
             : undefined,
-        getIssueReport: async (issueKey: string) =>
-          issueKey === "USE-42"
-            ? {
-                issue: { issueKey: "USE-42" },
-                stages: [{ stageRun: { id: 7, stage: "development", status: "completed" } }],
-              }
-            : undefined,
         getActiveRunStatus: async (issueKey: string) =>
           issueKey === "USE-42"
             ? {
@@ -179,80 +171,6 @@ test("http routes handle webhook validation and issue/report/live/events lookups
                 liveThread: { threadId: "thread-1", threadStatus: "running" },
               }
             : undefined,
-        getRunEvents: async (issueKey: string, runId: number) =>
-          issueKey === "USE-42" && runId === 8
-            ? {
-                issue: { issueKey: "USE-42" },
-                run: { id: 8, runType: "review", status: "running" },
-                events: [{ id: 1, method: "turn/started" }],
-              }
-            : undefined,
-        listOperatorFeed: (
-          {
-            limit,
-            issueKey,
-            projectId,
-            kind,
-            stage,
-            status,
-            workflowId,
-          }: {
-            limit?: number;
-            issueKey?: string;
-            projectId?: string;
-            kind?: string;
-            stage?: string;
-            status?: string;
-            workflowId?: string;
-          } = {},
-        ) => {
-          feedQueries.push({ limit, issueKey, projectId, kind, stage, status, workflowId });
-          return [
-            {
-              id: 2,
-              at: "2026-03-13T12:00:00.000Z",
-              level: "info",
-              kind: "workflow",
-              issueKey: "USE-42",
-              projectId: "usertold",
-              stage: "development",
-              workflowId: "default",
-              nextStage: "review",
-              status: "transition_chosen",
-              summary: `Chose development -> review${limit ? ` (${limit})` : ""}`,
-            },
-            {
-              id: 3,
-              at: "2026-03-13T12:00:00.000Z",
-              level: "info",
-              kind: "stage",
-              issueKey: "USE-42",
-              projectId: "usertold",
-              stage: "review",
-              workflowId: "default",
-              status: "running",
-              summary: "Started review workflow",
-            },
-            {
-              id: 4,
-              at: "2026-03-13T12:01:00.000Z",
-              level: "warn",
-              kind: "comment",
-              issueKey: "OPS-7",
-              projectId: "ops",
-              status: "delivery_failed",
-              summary: "Could not deliver follow-up comment",
-            },
-          ].filter(
-            (event) =>
-              (!issueKey || event.issueKey === issueKey) &&
-              (!projectId || event.projectId === projectId) &&
-              (!kind || event.kind === kind) &&
-              (!stage || event.stage === stage) &&
-              (!status || event.status === status) &&
-              (!workflowId || event.workflowId === workflowId),
-          );
-        },
         listTrackedIssues: () => [
           {
             issueKey: "USE-42",
@@ -265,7 +183,6 @@ test("http routes handle webhook validation and issue/report/live/events lookups
             updatedAt: "2026-03-13T12:00:00.000Z",
           },
         ],
-        subscribeOperatorFeed: () => () => undefined,
         listLinearWorkspaces: () => [
           {
             installation: {
@@ -353,18 +270,29 @@ test("http routes handle webhook validation and issue/report/live/events lookups
     assert.equal(missingOverview.statusCode, 404);
     assert.deepEqual(missingOverview.json(), { ok: false, reason: "issue_not_found" });
 
-    const report = await app.inject({
+    const issueList = await app.inject({
       method: "GET",
-      url: "/api/issues/USE-42/report",
+      url: "/api/issues",
       headers: {
         authorization: "Bearer operator-token",
       },
     });
-    assert.equal(report.statusCode, 200);
-    assert.deepEqual(report.json(), {
+    assert.equal(issueList.statusCode, 200);
+    assert.equal(issueList.headers["x-patchrelay-legacy"], undefined);
+    assert.deepEqual(issueList.json(), {
       ok: true,
-      issue: { issueKey: "USE-42" },
-      stages: [{ stageRun: { id: 7, stage: "development", status: "completed" } }],
+      issues: [
+        {
+          issueKey: "USE-42",
+          title: "Important work",
+          projectId: "usertold",
+          factoryState: "delegated",
+          blockedByCount: 1,
+          blockedByKeys: ["USE-41"],
+          readyForExecution: false,
+          updatedAt: "2026-03-13T12:00:00.000Z",
+        },
+      ],
     });
 
     const live = await app.inject({
@@ -391,154 +319,6 @@ test("http routes handle webhook validation and issue/report/live/events lookups
     });
     assert.equal(missingLive.statusCode, 404);
     assert.deepEqual(missingLive.json(), { ok: false, reason: "active_run_not_found" });
-
-    const events = await app.inject({
-      method: "GET",
-      url: "/api/issues/USE-42/runs/8/events",
-      headers: {
-        authorization: "Bearer operator-token",
-      },
-    });
-    assert.equal(events.statusCode, 200);
-    assert.deepEqual(events.json(), {
-      ok: true,
-      issue: { issueKey: "USE-42" },
-      run: { id: 8, runType: "review", status: "running" },
-      events: [{ id: 1, method: "turn/started" }],
-    });
-
-    const feed = await app.inject({
-      method: "GET",
-      url: "/api/feed?limit=10",
-      headers: {
-        authorization: "Bearer operator-token",
-      },
-    });
-    assert.equal(feed.statusCode, 200);
-    assert.deepEqual(feed.json(), {
-      ok: true,
-      events: [
-        {
-          id: 2,
-          at: "2026-03-13T12:00:00.000Z",
-          level: "info",
-          kind: "workflow",
-          issueKey: "USE-42",
-          projectId: "usertold",
-          stage: "development",
-          workflowId: "default",
-          nextStage: "review",
-          status: "transition_chosen",
-          summary: "Chose development -> review (10)",
-        },
-        {
-          id: 3,
-          at: "2026-03-13T12:00:00.000Z",
-          level: "info",
-          kind: "stage",
-          issueKey: "USE-42",
-          projectId: "usertold",
-          stage: "review",
-          workflowId: "default",
-          status: "running",
-          summary: "Started review workflow",
-        },
-        {
-          id: 4,
-          at: "2026-03-13T12:01:00.000Z",
-          level: "warn",
-          kind: "comment",
-          issueKey: "OPS-7",
-          projectId: "ops",
-          status: "delivery_failed",
-          summary: "Could not deliver follow-up comment",
-        },
-      ],
-    });
-
-    const filteredFeed = await app.inject({
-      method: "GET",
-      url: "/api/feed?issue=OPS-7&project=ops",
-      headers: {
-        authorization: "Bearer operator-token",
-      },
-    });
-    assert.equal(filteredFeed.statusCode, 200);
-    assert.deepEqual(filteredFeed.json(), {
-      ok: true,
-      events: [
-        {
-          id: 4,
-          at: "2026-03-13T12:01:00.000Z",
-          level: "warn",
-          kind: "comment",
-          issueKey: "OPS-7",
-          projectId: "ops",
-          status: "delivery_failed",
-          summary: "Could not deliver follow-up comment",
-        },
-      ],
-    });
-
-    const workflowFeed = await app.inject({
-      method: "GET",
-      url: "/api/feed?kind=workflow&stage=development&status=transition_chosen&workflow=default",
-      headers: {
-        authorization: "Bearer operator-token",
-      },
-    });
-    assert.equal(workflowFeed.statusCode, 200);
-    assert.deepEqual(workflowFeed.json(), {
-      ok: true,
-      events: [
-        {
-          id: 2,
-          at: "2026-03-13T12:00:00.000Z",
-          level: "info",
-          kind: "workflow",
-          issueKey: "USE-42",
-          projectId: "usertold",
-          stage: "development",
-          workflowId: "default",
-          nextStage: "review",
-          status: "transition_chosen",
-          summary: "Chose development -> review (50)",
-        },
-      ],
-    });
-    assert.deepEqual(feedQueries.at(-1), {
-      limit: 50,
-      issueKey: undefined,
-      projectId: undefined,
-      kind: "workflow",
-      stage: "development",
-      status: "transition_chosen",
-      workflowId: "default",
-    });
-
-    const watchIssues = await app.inject({
-      method: "GET",
-      url: "/api/watch/issues",
-      headers: {
-        authorization: "Bearer operator-token",
-      },
-    });
-    assert.equal(watchIssues.statusCode, 200);
-    assert.deepEqual(watchIssues.json(), {
-      ok: true,
-      issues: [
-        {
-          issueKey: "USE-42",
-          title: "Important work",
-          projectId: "usertold",
-          factoryState: "delegated",
-          blockedByCount: 1,
-          blockedByKeys: ["USE-41"],
-          readyForExecution: false,
-          updatedAt: "2026-03-13T12:00:00.000Z",
-        },
-      ],
-    });
 
     const workspaces = await app.inject({
       method: "GET",
@@ -569,16 +349,6 @@ test("http routes handle webhook validation and issue/report/live/events lookups
     });
     assert.equal(disconnectWorkspace.statusCode, 200);
     assert.equal(disconnectWorkspace.json().installation.workspaceKey, "usertold");
-
-    const missingEvents = await app.inject({
-      method: "GET",
-      url: "/api/issues/USE-42/runs/999/events",
-      headers: {
-        authorization: "Bearer operator-token",
-      },
-    });
-    assert.equal(missingEvents.statusCode, 404);
-    assert.deepEqual(missingEvents.json(), { ok: false, reason: "run_not_found" });
 
     await app.close();
   } finally {
@@ -635,53 +405,15 @@ test("public agent session status page validates token and exposes operator sess
                 factoryState: "awaiting_queue",
                 prNumber: 42,
                 prReviewState: "approved",
-                queueProtocol: {
-                  admissionLabel: "queue",
-                  evictionCheckName: "merge-steward/queue",
-                  lastQueueSignalAt: "2026-03-17T12:08:00.000Z",
-                  lastIncidentId: "incident-42",
-                  lastIncidentUrl: "https://queue.example.com/queue/incidents/incident-42",
-                  lastIncidentFailureClass: "integration_conflict",
-                  lastIncidentSummary: "PR #42 was evicted from the merge queue.",
-                },
+                waitingReason: "Waiting on downstream review/merge automation",
               },
               activeRun: { runType: "implementation", status: "running" },
               latestRun: { runType: "review_fix", status: "completed" },
               liveThread: { threadId: "thread-1", threadStatus: "running" },
-              activeRunId: 1,
-              feedEvents: [
-                {
-                  id: 1,
-                  at: "2026-03-17T12:00:00.000Z",
-                  level: "info",
-                  kind: "stage",
-                  stage: "implementation",
-                  status: "starting",
-                  summary: "Starting implementation run",
-                },
-                {
-                  id: 2,
-                  at: "2026-03-17T12:05:00.000Z",
-                  level: "info",
-                  kind: "github",
-                  stage: "pr_open",
-                  status: "pr_opened",
-                  summary: "GitHub: pr_opened",
-                },
-                {
-                  id: 3,
-                  at: "2026-03-17T12:09:00.000Z",
-                  level: "info",
-                  kind: "github",
-                  stage: "awaiting_queue",
-                  status: "review_approved",
-                  summary: "GitHub: review_approved",
-                },
-              ],
               runs: [{
                 run: { id: 1, runType: "implementation", status: "running", startedAt: "2026-03-17T12:00:00.000Z" },
                 report: {
-                  assistantMessages: ["Opened the PR and waiting for queue hand-off."],
+                  assistantMessages: ["Opened the PR and waiting on merge automation."],
                   commands: [],
                   fileChanges: [],
                 },
@@ -726,14 +458,11 @@ test("public agent session status page validates token and exposes operator sess
     });
     assert.equal(page.statusCode, 200);
     assert.match(page.body, /Implement API endpoint/);
-    assert.match(page.body, /State Path/);
-    assert.match(page.body, /Queue Observation/);
+    assert.match(page.body, /PatchRelay wait/);
     assert.match(page.body, /awaiting_queue/);
     assert.match(page.body, /Recent Stages/);
     assert.match(page.body, /thread-1/);
-    assert.match(page.body, /incident-42/);
-    assert.match(page.body, /integration_conflict/);
-    assert.match(page.body, /PR #42 was evicted from the merge queue\./);
+    assert.match(page.body, /Waiting on downstream review\/merge automation/);
 
     const unauthorizedHelper = await app.inject({
       method: "GET",

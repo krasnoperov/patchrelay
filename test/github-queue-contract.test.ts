@@ -155,8 +155,6 @@ test("queue eviction check_run queues queue_repair with explicit provenance", as
       prState: "open",
       factoryState: "awaiting_queue",
     });
-    db.setBranchOwner("usertold", "issue-1", "merge_steward");
-
     await handler.processGitHubWebhookEvent({
       eventType: "check_run",
       rawBody: buildCheckRunPayload({
@@ -349,8 +347,6 @@ test("branch CI failures clear stale queue incident context", async () => {
         incidentUrl: "https://queue.example.com/queue/incidents/incident-44",
       }),
     });
-    db.setBranchOwner("usertold", "issue-4", "merge_steward");
-
     await handler.processGitHubWebhookEvent({
       eventType: "check_run",
       rawBody: buildCheckRunPayload({

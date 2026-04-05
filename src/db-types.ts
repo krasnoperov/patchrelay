@@ -1,8 +1,9 @@
 import type { FactoryState, RunType } from "./factory-state.ts";
+import type { IssueSessionState } from "./issue-session.ts";
 
 export type RunStatus = "queued" | "running" | "completed" | "failed" | "released";
 export type GitHubFailureSource = "branch_ci" | "queue_eviction";
-export type BranchOwner = "patchrelay" | "merge_steward";
+export type BranchOwner = "patchrelay";
 
 export interface GitHubCiSnapshotCheckRecord {
   name: string;
@@ -47,6 +48,8 @@ export interface IssueRecord {
   prNumber?: number | undefined;
   prUrl?: string | undefined;
   prState?: string | undefined;
+  prHeadSha?: string | undefined;
+  prAuthorLogin?: string | undefined;
   prReviewState?: string | undefined;
   prCheckStatus?: string | undefined;
   lastGitHubFailureSource?: GitHubFailureSource | undefined;
@@ -73,6 +76,37 @@ export interface IssueRecord {
   queueLabelApplied: boolean;
   updatedAt: string;
 }
+
+export interface IssueSessionRecord {
+  id: number;
+  projectId: string;
+  linearIssueId: string;
+  issueKey?: string | undefined;
+  repoId: string;
+  branchName?: string | undefined;
+  worktreePath?: string | undefined;
+  prNumber?: number | undefined;
+  prHeadSha?: string | undefined;
+  prAuthorLogin?: string | undefined;
+  sessionState: IssueSessionState;
+  waitingReason?: string | undefined;
+  summaryText?: string | undefined;
+  activeThreadId?: string | undefined;
+  threadGeneration: number;
+  activeRunId?: number | undefined;
+  lastRunType?: RunType | undefined;
+  lastWakeReason?: string | undefined;
+  ciRepairAttempts: number;
+  queueRepairAttempts: number;
+  reviewFixAttempts: number;
+  leaseId?: string | undefined;
+  workerId?: string | undefined;
+  leasedUntil?: string | undefined;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type { IssueSessionEventRecord, IssueSessionEventType } from "./issue-session-events.ts";
 
 export interface RunRecord {
   id: number;
@@ -129,6 +163,7 @@ export interface TrackedIssueRecord {
   latestFailureCheckName?: string | undefined;
   latestFailureStepName?: string | undefined;
   latestFailureSummary?: string | undefined;
+  waitingReason?: string | undefined;
   activeRunId?: number | undefined;
   activeAgentSessionId?: string | undefined;
   updatedAt: string;

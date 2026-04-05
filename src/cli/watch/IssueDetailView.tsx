@@ -8,9 +8,6 @@ import { buildStateHistory } from "./history-builder.ts";
 import { HelpBar } from "./HelpBar.tsx";
 import { planStepSymbol, planStepColor } from "./plan-helpers.ts";
 import { progressBar } from "./format-utils.ts";
-import { FactoryStateGraph } from "./FactoryStateGraph.tsx";
-import { QueueObservationView } from "./QueueObservationView.tsx";
-import { buildPatchRelayQueueObservations, buildPatchRelayStateGraph } from "./state-visualization.ts";
 import { FreshnessBadge } from "./FreshnessBadge.tsx";
 
 interface IssueDetailViewProps {
@@ -89,6 +86,7 @@ function effectiveState(issue: WatchIssue): string {
 }
 
 function blockerText(issue: WatchIssue, issueContext: WatchIssueContext | null): string | null {
+  if (issue.waitingReason && !issue.activeRunType) return issue.waitingReason;
   if (issue.blockedByCount > 0) return `Waiting on ${issue.blockedByKeys.join(", ")}`;
   if (issue.factoryState === "repairing_queue") return "Merge queue conflict, repairing branch";
   if (issue.factoryState === "repairing_ci") {
@@ -142,14 +140,6 @@ export function IssueDetailView({
   const history = useMemo(
     () => buildStateHistory(rawRuns, rawFeedEvents, issue.factoryState, activeRunId),
     [rawRuns, rawFeedEvents, issue.factoryState, activeRunId],
-  );
-  const graph = useMemo(
-    () => buildPatchRelayStateGraph(history, issue.factoryState),
-    [history, issue.factoryState],
-  );
-  const queueObservations = useMemo(
-    () => buildPatchRelayQueueObservations(issue, rawFeedEvents),
-    [issue, rawFeedEvents],
   );
 
   // Build compact facts for the header
@@ -210,13 +200,10 @@ export function IssueDetailView({
         </>
       ) : (
         <>
-          <FactoryStateGraph
-            main={graph.main}
-            prLoops={graph.prLoops}
-            queueLoop={graph.queueLoop}
-            exits={graph.exits}
-          />
-          <QueueObservationView observations={queueObservations} />
+          <Box marginTop={1} flexDirection="column">
+            <Text dimColor>PatchRelay activity history only.</Text>
+            <Text dimColor>Review and merge automation remain downstream and are intentionally de-emphasized here.</Text>
+          </Box>
           <Box marginTop={1}>
             <StateHistoryView history={history} plan={plan} activeRunId={activeRunId} />
           </Box>

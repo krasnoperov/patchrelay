@@ -137,6 +137,7 @@ export class WebhookHandler {
         if (removedIssue?.activeRunId) {
           const run = this.db.getRun(removedIssue.activeRunId);
           if (run) {
+            await this.stopActiveRun(run, "STOP: The Linear issue was removed. Stop working immediately and exit.");
             this.db.finishRun(run.id, { status: "released", failureReason: "Issue removed from Linear" });
           }
           this.db.upsertIssue({
@@ -154,6 +155,14 @@ export class WebhookHandler {
             factoryState: "failed" as never,
           });
         }
+        this.db.appendIssueSessionEvent({
+          projectId: project.id,
+          linearIssueId: issue.id,
+          eventType: "issue_removed",
+          dedupeKey: `issue_removed:${issue.id}`,
+        });
+        this.db.clearPendingIssueSessionEvents(project.id, issue.id);
+        this.db.releaseIssueSessionLease(project.id, issue.id);
         this.feed?.publish({
           level: "warn",
           kind: "stage",
@@ -174,6 +183,18 @@ export class WebhookHandler {
       this.db.markWebhookProcessed(webhookEventId, "processed");
 
       if (result.desiredStage) {
+        if (result.desiredStage === "implementation") {
+          this.db.appendIssueSessionEvent({
+            projectId: project.id,
+            linearIssueId: issue.id,
+            eventType: "delegated",
+            eventJson: JSON.stringify({
+              promptContext: trackedIssue?.issueKey ? `Linear issue ${trackedIssue.issueKey} was delegated to PatchRelay.` : undefined,
+              promptBody: normalized.agentSession?.promptBody?.trim(),
+            }),
+            dedupeKey: `delegated:${issue.id}`,
+          });
+        }
         this.feed?.publish({
           level: "info",
           kind: "stage",
@@ -309,6 +330,17 @@ export class WebhookHandler {
 
     // ── 4. Side effects (after transaction) ──────────────────────
     if (undelegation.factoryState) {
+      if (activeRun?.threadId && activeRun.turnId) {
+        await this.stopActiveRun(activeRun, "STOP: The issue was un-delegated from PatchRelay. Stop working immediately and exit.");
+      }
+      this.db.appendIssueSessionEvent({
+        projectId: project.id,
+        linearIssueId: normalizedIssue.id,
+        eventType: "undelegated",
+        dedupeKey: `undelegated:${normalizedIssue.id}`,
+      });
+      this.db.clearPendingIssueSessionEvents(project.id, normalizedIssue.id);
+      this.db.releaseIssueSessionLease(project.id, normalizedIssue.id);
       this.feed?.publish({
         level: "warn",
         kind: "stage",
@@ -392,6 +424,12 @@ export class WebhookHandler {
         projectId,
         linearIssueId: dependent.linearIssueId,
         pendingRunType: "implementation",
+      });
+      this.db.appendIssueSessionEvent({
+        projectId,
+        linearIssueId: dependent.linearIssueId,
+        eventType: "delegated",
+        dedupeKey: `delegated:${dependent.linearIssueId}`,
       });
       newlyReady.push(dependent.linearIssueId);
     }
@@ -484,6 +522,25 @@ export class WebhookHandler {
       return;
     }
 
+    if (promptBody && existingIssue && delegated) {
+      this.db.appendIssueSessionEvent({
+        projectId: project.id,
+        linearIssueId: normalized.issue.id,
+        eventType: "followup_prompt",
+        eventJson: JSON.stringify({
+          text: promptBody,
+          source: "linear_agent_prompt",
+        }),
+      });
+      this.enqueueIssue(project.id, normalized.issue.id);
+      const latestIssue = this.db.getIssue(project.id, normalized.issue.id);
+      await this.syncAgentSession(linear, normalized.agentSession.id, latestIssue ?? trackedIssue, {
+        pendingRunType: desiredStage ?? (existingIssue.prReviewState === "changes_requested" ? "review_fix" : "implementation"),
+      });
+      await this.publishAgentActivity(linear, normalized.agentSession.id, buildPromptDeliveredThought(desiredStage ?? "implementation"), { ephemeral: true });
+      return;
+    }
+
     if (desiredStage) {
       const latestIssue = this.db.getIssue(project.id, normalized.issue.id);
       await this.syncAgentSession(linear, normalized.agentSession.id, latestIssue ?? trackedIssue, { pendingRunType: desiredStage });
@@ -526,6 +583,14 @@ export class WebhookHandler {
       factoryState: "awaiting_input",
       agentSessionId: sessionId,
     });
+    this.db.appendIssueSessionEvent({
+      projectId: project.id,
+      linearIssueId: issueId,
+      eventType: "stop_requested",
+      dedupeKey: `stop_requested:${issueId}`,
+    });
+    this.db.clearPendingIssueSessionEvents(project.id, issueId);
+    this.db.releaseIssueSessionLease(project.id, issueId);
 
     this.feed?.publish({
       level: "info",
@@ -539,6 +604,18 @@ export class WebhookHandler {
     const updatedIssue = this.db.getIssue(project.id, issueId);
     await this.publishAgentActivity(linear, sessionId, buildStopConfirmationActivity());
     await this.syncAgentSession(linear, sessionId, updatedIssue ?? trackedIssue);
+  }
+
+  private async stopActiveRun(
+    run: NonNullable<ReturnType<PatchRelayDatabase["getRun"]>>,
+    input: string,
+  ): Promise<void> {
+    if (!run.threadId || !run.turnId) return;
+    try {
+      await this.codex.steerTurn({ threadId: run.threadId, turnId: run.turnId, input });
+    } catch (error) {
+      this.logger.warn({ runId: run.id, error: error instanceof Error ? error.message : String(error) }, "Failed to steer active run during session shutdown");
+    }
   }
 
   // ─── Comment handling (inlined) ───────────────────────────────────
@@ -573,13 +650,18 @@ export class WebhookHandler {
       const ENQUEUEABLE_STATES = new Set(["pr_open", "changes_requested", "implementing", "delegated"]);
       if (ENQUEUEABLE_STATES.has(issue.factoryState)) {
         const runType = issue.prReviewState === "changes_requested" ? "review_fix" : "implementation";
-        this.db.upsertIssue({
+        this.db.appendIssueSessionEvent({
           projectId: project.id,
           linearIssueId: normalized.issue.id,
-          pendingRunType: runType as never,
-          pendingRunContextJson: JSON.stringify({ userComment: normalized.comment.body.trim() }),
+          eventType: "followup_comment",
+          eventJson: JSON.stringify({
+            body: normalized.comment.body.trim(),
+            author: normalized.comment.userName,
+          }),
         });
-        this.enqueueIssue(project.id, normalized.issue.id);
+        if (!issue.pendingRunType) {
+          this.enqueueIssue(project.id, normalized.issue.id);
+        }
         this.feed?.publish({
           level: "info",
           kind: "comment",
@@ -616,6 +698,16 @@ export class WebhookHandler {
       });
     } catch (error) {
       this.logger.warn({ issueKey: trackedIssue?.issueKey, error: error instanceof Error ? error.message : String(error) }, "Failed to deliver follow-up comment");
+      this.db.appendIssueSessionEvent({
+        projectId: project.id,
+        linearIssueId: normalized.issue.id,
+        eventType: "followup_comment",
+        eventJson: JSON.stringify({
+          body: normalized.comment.body.trim(),
+          author: normalized.comment.userName,
+        }),
+      });
+      this.enqueueIssue(project.id, normalized.issue.id);
       this.feed?.publish({
         level: "warn",
         kind: "comment",
@@ -775,7 +867,7 @@ function decideAgentSession(p: {
   delegated: boolean;
 }): string | null | undefined {
   if (p.sessionId) return p.sessionId;
-  if (!p.hasActiveRun && (p.hasPendingRun || (p.triggerEvent === "delegateChanged" && !p.delegated))) return null;
+  if (p.triggerEvent === "delegateChanged" && !p.delegated) return null;
   return undefined;
 }
 

@@ -58,13 +58,12 @@ function buildFailureContext(issue: Pick<
 
 export function resolveBranchOwnerForStateTransition(newState: FactoryState, pendingRunType?: RunType): BranchOwner | undefined {
   if (pendingRunType) return "patchrelay";
-  if (newState === "awaiting_queue") return "merge_steward";
+  if (newState === "awaiting_queue") return "patchrelay";
   if (newState === "repairing_ci" || newState === "repairing_queue") return "patchrelay";
   return undefined;
 }
 
 export interface IdleReconciliationDeps {
-  requestMergeQueueAdmission(issue: IssueRecord, projectId: string): Promise<void>;
   enqueueIssue(projectId: string, issueId: string): void;
 }
 
@@ -85,10 +84,8 @@ export class IdleIssueReconciler {
       }
 
       if (issue.prReviewState === "approved" && issue.prCheckStatus !== "failed") {
-        if (issue.factoryState !== "awaiting_queue" || issue.branchOwner !== "merge_steward") {
+        if (issue.factoryState !== "awaiting_queue") {
           this.advanceIdleIssue(issue, "awaiting_queue", { clearFailureProvenance: true });
-        } else if (!issue.queueLabelApplied) {
-          await this.deps.requestMergeQueueAdmission(issue, issue.projectId);
         }
         continue;
       }
@@ -134,8 +131,6 @@ export class IdleIssueReconciler {
       { issueKey: issue.issueKey, from: issue.factoryState, to: newState, pendingRunType: options?.pendingRunType },
       "Reconciliation: advancing idle issue",
     );
-    const resetQueueLabel = newState === "awaiting_queue" || issue.factoryState === "awaiting_queue";
-
     this.db.upsertIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
@@ -146,7 +141,6 @@ export class IdleIssueReconciler {
             pendingRunContextJson: options.pendingRunContext ? JSON.stringify(options.pendingRunContext) : null,
           }
         : {}),
-      ...(resetQueueLabel ? { queueLabelApplied: false } : {}),
       ...(options?.clearFailureProvenance
         ? {
             lastGitHubFailureSource: null,
@@ -175,9 +169,6 @@ export class IdleIssueReconciler {
       status: "reconciled",
       summary: `Reconciliation: ${issue.factoryState} \u2192 ${newState}`,
     });
-    if (newState === "awaiting_queue" && issue.factoryState !== "awaiting_queue") {
-      void this.deps.requestMergeQueueAdmission(issue, issue.projectId);
-    }
     if (options?.pendingRunType) {
       this.deps.enqueueIssue(issue.projectId, issue.linearIssueId);
     }

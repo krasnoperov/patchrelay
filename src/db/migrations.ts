@@ -24,6 +24,8 @@ CREATE TABLE IF NOT EXISTS issues (
   pr_number INTEGER,
   pr_url TEXT,
   pr_state TEXT,
+  pr_head_sha TEXT,
+  pr_author_login TEXT,
   pr_review_state TEXT,
   pr_check_status TEXT,
   ci_repair_attempts INTEGER NOT NULL DEFAULT 0,
@@ -48,6 +50,48 @@ CREATE TABLE IF NOT EXISTS runs (
   failure_reason TEXT,
   started_at TEXT NOT NULL,
   ended_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS issue_sessions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id TEXT NOT NULL,
+  linear_issue_id TEXT NOT NULL,
+  issue_key TEXT,
+  repo_id TEXT NOT NULL,
+  branch_name TEXT,
+  worktree_path TEXT,
+  pr_number INTEGER,
+  pr_head_sha TEXT,
+  pr_author_login TEXT,
+  session_state TEXT NOT NULL DEFAULT 'idle',
+  waiting_reason TEXT,
+  summary_text TEXT,
+  active_thread_id TEXT,
+  thread_generation INTEGER NOT NULL DEFAULT 0,
+  active_run_id INTEGER,
+  last_run_type TEXT,
+  last_wake_reason TEXT,
+  ci_repair_attempts INTEGER NOT NULL DEFAULT 0,
+  queue_repair_attempts INTEGER NOT NULL DEFAULT 0,
+  review_fix_attempts INTEGER NOT NULL DEFAULT 0,
+  lease_id TEXT,
+  worker_id TEXT,
+  leased_until TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(project_id, linear_issue_id)
+);
+
+CREATE TABLE IF NOT EXISTS issue_session_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id TEXT NOT NULL,
+  linear_issue_id TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  event_json TEXT,
+  dedupe_key TEXT,
+  created_at TEXT NOT NULL,
+  processed_at TEXT,
+  consumed_by_run_id INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS webhook_events (
@@ -169,6 +213,11 @@ CREATE INDEX IF NOT EXISTS idx_issues_branch ON issues(branch_name);
 CREATE INDEX IF NOT EXISTS idx_runs_issue ON runs(issue_id);
 CREATE INDEX IF NOT EXISTS idx_runs_active ON runs(status, project_id, linear_issue_id);
 CREATE INDEX IF NOT EXISTS idx_runs_thread ON runs(thread_id);
+CREATE INDEX IF NOT EXISTS idx_issue_sessions_issue ON issue_sessions(project_id, linear_issue_id);
+CREATE INDEX IF NOT EXISTS idx_issue_sessions_key ON issue_sessions(issue_key);
+CREATE INDEX IF NOT EXISTS idx_issue_sessions_lease ON issue_sessions(leased_until, session_state);
+CREATE INDEX IF NOT EXISTS idx_issue_session_events_issue ON issue_session_events(project_id, linear_issue_id, id);
+CREATE INDEX IF NOT EXISTS idx_issue_session_events_pending ON issue_session_events(processed_at, project_id, linear_issue_id, id);
 CREATE INDEX IF NOT EXISTS idx_run_thread_events_run ON run_thread_events(run_id, id);
 CREATE INDEX IF NOT EXISTS idx_operator_feed_events_issue ON operator_feed_events(issue_key, id);
 CREATE INDEX IF NOT EXISTS idx_operator_feed_events_project ON operator_feed_events(project_id, id);
@@ -193,6 +242,7 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
   // Explicit PR branch ownership hand-off between PatchRelay and MergeSteward
   addColumnIfMissing(connection, "issues", "branch_owner", "TEXT NOT NULL DEFAULT 'patchrelay'");
   addColumnIfMissing(connection, "issues", "branch_ownership_changed_at", "TEXT");
+  connection.prepare("UPDATE issues SET branch_owner = 'patchrelay' WHERE branch_owner IS NULL OR branch_owner != 'patchrelay'").run();
 
   // Add merge_prep_attempts for retry budget / escalation
   addColumnIfMissing(connection, "issues", "merge_prep_attempts", "INTEGER NOT NULL DEFAULT 0");
@@ -216,6 +266,8 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
 
   // Preserve GitHub failure provenance so reconciliation can distinguish
   // branch CI failures from merge-queue evictions after webhook delivery.
+  addColumnIfMissing(connection, "issues", "pr_head_sha", "TEXT");
+  addColumnIfMissing(connection, "issues", "pr_author_login", "TEXT");
   addColumnIfMissing(connection, "issues", "last_github_failure_source", "TEXT");
   addColumnIfMissing(connection, "issues", "last_github_failure_head_sha", "TEXT");
   addColumnIfMissing(connection, "issues", "last_github_failure_signature", "TEXT");

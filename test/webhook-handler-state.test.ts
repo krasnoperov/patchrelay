@@ -738,3 +738,173 @@ test("issueRemoved releases active run and transitions to failed", async () => {
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("idle delegated comments queue a follow-up session event instead of rewriting pending context", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-comment-followup-"));
+  try {
+    const config = createConfig(baseDir);
+    config.projects[0] = {
+      ...config.projects[0]!,
+      triggerEvents: [...config.projects[0]!.triggerEvents, "commentCreated", "commentUpdated"],
+    };
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+    db.upsertIssue({
+      projectId: "krasnoperov/mafia",
+      linearIssueId: "issue-maf-comment",
+      issueKey: "MAF-91",
+      title: "Commentable issue",
+      currentLinearState: "Review",
+      currentLinearStateType: "started",
+      factoryState: "pr_open",
+      prNumber: 91,
+    });
+
+    const enqueued: Array<{ projectId: string; issueId: string }> = [];
+    const handler = new WebhookHandler(
+      config,
+      db,
+      { forProject: async () => undefined } as never,
+      { steerTurn: async () => undefined } as never,
+      (projectId, issueId) => { enqueued.push({ projectId, issueId }); },
+      pino({ enabled: false }),
+    );
+
+    const payload: LinearWebhookPayload = {
+      action: "create",
+      type: "Comment",
+      createdAt: "2026-04-01T02:00:00.000Z",
+      webhookTimestamp: Date.now(),
+      actor: {
+        id: "user-1",
+        name: "Alex Operator",
+        email: "alex@example.com",
+        type: "User",
+      } as unknown as Record<string, unknown>,
+      data: {
+        id: "comment-1",
+        body: "Please keep this compatible with the old contract.",
+        user: { name: "Alex Operator" },
+        issue: {
+          id: "issue-maf-comment",
+          identifier: "MAF-91",
+          title: "Commentable issue",
+          team: { id: "team-maf", key: "MAF" },
+          state: { id: "state-review", name: "Review", type: "started" },
+          delegate: { id: "patchrelay-actor", name: "PatchRelay" },
+        },
+      },
+    };
+
+    const stored = db.insertFullWebhookEvent({
+      webhookId: "delivery-comment-followup",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(payload),
+    });
+    await handler.processWebhookEvent(stored.id);
+
+    const issue = db.getIssue("krasnoperov/mafia", "issue-maf-comment");
+    const wake = db.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-comment");
+    assert.equal(issue?.pendingRunContextJson, undefined);
+    assert.equal(wake?.runType, "implementation");
+    assert.equal(Array.isArray(wake?.context.followUps), true);
+    assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-comment" }]);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("agent session id survives follow-up webhooks that do not carry a session id", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-agent-session-id-"));
+  try {
+    const config = createConfig(baseDir);
+    config.projects[0] = {
+      ...config.projects[0]!,
+      triggerEvents: [...config.projects[0]!.triggerEvents, "agentSessionCreated"],
+    };
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+
+    const handler = new WebhookHandler(
+      config,
+      db,
+      { forProject: async () => undefined } as never,
+      { steerTurn: async () => undefined } as never,
+      () => undefined,
+      pino({ enabled: false }),
+    );
+
+    const sessionPayload: LinearWebhookPayload = {
+      action: "created",
+      type: "AgentSessionEvent",
+      createdAt: "2026-04-01T03:00:00.000Z",
+      webhookTimestamp: Date.now(),
+      data: {
+        promptContext: "<issue identifier=\"MAF-92\"><title>Keep agent session id</title></issue>",
+        agentSession: {
+          id: "session-92",
+          issue: {
+            id: "issue-maf-session",
+            identifier: "MAF-92",
+            title: "Keep agent session id",
+            delegateId: "patchrelay-actor",
+            delegate: { id: "patchrelay-actor", name: "PatchRelay" },
+            team: { id: "team-maf", key: "MAF" },
+            state: { id: "state-start", name: "Start", type: "started" },
+          },
+        },
+      },
+    };
+    const sessionEvent = db.insertFullWebhookEvent({
+      webhookId: "delivery-agent-session",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(sessionPayload),
+    });
+    await handler.processWebhookEvent(sessionEvent.id);
+
+    const notificationPayload: LinearWebhookPayload = {
+      action: "create",
+      type: "AppUserNotification",
+      createdAt: "2026-04-01T03:01:00.000Z",
+      webhookTimestamp: Date.now(),
+      data: {
+        appUserId: "patchrelay-actor",
+        notification: {
+          type: "issueSubscribed",
+          issue: {
+            id: "issue-maf-session",
+            identifier: "MAF-92",
+            title: "Keep agent session id",
+            team: { id: "team-maf", key: "MAF" },
+            state: { id: "state-start", name: "Start", type: "started" },
+          },
+        },
+      },
+    };
+    const notificationEvent = db.insertFullWebhookEvent({
+      webhookId: "delivery-agent-notification",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(notificationPayload),
+    });
+    await handler.processWebhookEvent(notificationEvent.id);
+
+    const issue = db.getIssue("krasnoperov/mafia", "issue-maf-session");
+    assert.equal(issue?.agentSessionId, "session-92");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});

@@ -19,6 +19,7 @@ export interface NormalizedGitHubEvent {
   prNumber?: number | undefined;
   prUrl?: string | undefined;
   prState?: "open" | "closed" | "merged" | undefined;
+  prAuthorLogin?: string | undefined;
   reviewState?: "approved" | "changes_requested" | "commented" | undefined;
   checkStatus?: "pending" | "success" | "failure" | undefined;
   checkName?: string | undefined;
@@ -41,6 +42,7 @@ export interface GitHubWebhookPayload {
     html_url: string;
     state: string;
     merged: boolean;
+    user?: { login: string };
     head: { ref: string; sha: string };
     base: { ref: string };
   };

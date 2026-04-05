@@ -117,7 +117,7 @@ test("reconcileIdleIssues advances approved idle issues to awaiting_queue", asyn
 
     const issue = db.getIssue("usertold", "issue-10");
     assert.equal(issue?.factoryState, "awaiting_queue");
-    assert.equal(issue?.branchOwner, "merge_steward");
+    assert.equal(issue?.branchOwner, "patchrelay");
     assert.equal(issue?.pendingRunType, undefined);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -441,7 +441,7 @@ exit 1
   }
 });
 
-test("reconcileIdleIssues does not re-request queue handoff for issues already awaiting_queue", async () => {
+test("reconcileIdleIssues leaves awaiting_queue issues idle when they are already waiting on downstream merge automation", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-awaiting-queue-"));
   try {
     const { db, orchestrator } = createOrchestrator(baseDir);
@@ -458,17 +458,12 @@ test("reconcileIdleIssues does not re-request queue handoff for issues already a
     });
     db.setBranchOwner("usertold", "issue-15", "patchrelay");
 
-    let queueRequests = 0;
-    (orchestrator as unknown as { requestMergeQueueAdmission: () => void }).requestMergeQueueAdmission = () => {
-      queueRequests += 1;
-    };
-
     await (orchestrator as unknown as { idleReconciler: { reconcile: () => Promise<void> } }).idleReconciler.reconcile();
 
     const issue = db.getIssue("usertold", "issue-15");
     assert.equal(issue?.factoryState, "awaiting_queue");
-    assert.equal(issue?.branchOwner, "merge_steward");
-    assert.equal(queueRequests, 0);
+    assert.equal(issue?.branchOwner, "patchrelay");
+    assert.equal(issue?.pendingRunType, undefined);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

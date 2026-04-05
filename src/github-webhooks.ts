@@ -79,6 +79,7 @@ function normalizePullRequestEvent(payload: GitHubWebhookPayload, repoFullName: 
     prNumber: pr.number,
     prUrl: pr.html_url,
     prState,
+    prAuthorLogin: pr.user?.login ?? undefined,
   };
 }
 
@@ -113,6 +114,7 @@ function normalizePullRequestReviewEvent(payload: GitHubWebhookPayload, repoFull
     prNumber: pr.number,
     prUrl: pr.html_url,
     prState: "open",
+    prAuthorLogin: pr.user?.login ?? undefined,
     reviewState,
     reviewBody: review.body ?? undefined,
     reviewerName: review.user?.login ?? undefined,

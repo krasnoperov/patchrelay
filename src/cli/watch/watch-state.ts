@@ -49,6 +49,7 @@ export interface WatchIssue {
   latestFailureCheckName?: string | undefined;
   latestFailureStepName?: string | undefined;
   latestFailureSummary?: string | undefined;
+  waitingReason?: string | undefined;
   updatedAt: string;
 }
 
@@ -127,7 +128,7 @@ export type WatchAction =
   | { type: "enter-detail"; issueKey: string }
   | { type: "exit-detail" }
   | { type: "detail-navigate"; direction: "next" | "prev"; filtered: WatchIssue[] }
-  | { type: "timeline-rehydrate"; runs: TimelineRunInput[]; feedEvents: OperatorFeedEvent[]; liveThread: CodexThreadSummary | null; activeRunId: number | null; issueContext: WatchIssueContext | null }
+  | { type: "timeline-rehydrate"; runs: TimelineRunInput[]; feedEvents: OperatorFeedEvent[]; liveThread: CodexThreadSummary | null; activeRunId: number | null; activeRunStartedAt?: string | null; issueContext: WatchIssueContext | null }
   | { type: "codex-notification"; method: string; params: Record<string, unknown> }
   | { type: "cycle-filter" }
   | { type: "toggle-follow" }
@@ -285,7 +286,7 @@ export function watchReducer(state: WatchState, action: WatchAction): WatchState
         rawRuns: action.runs,
         rawFeedEvents: action.feedEvents,
         activeRunId: action.activeRunId,
-        activeRunStartedAt: activeRun?.startedAt ?? null,
+        activeRunStartedAt: action.activeRunStartedAt ?? activeRun?.startedAt ?? null,
         issueContext: action.issueContext,
       };
     }

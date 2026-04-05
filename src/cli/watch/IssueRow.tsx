@@ -91,6 +91,7 @@ function buildFacts(issue: WatchIssue): Array<{ text: string; color?: string }> 
 // ─── What's blocking progress ───────────────────────────────────
 
 function blockerText(issue: WatchIssue): string | null {
+  if (issue.waitingReason && !issue.activeRunType) return issue.waitingReason;
   if (issue.blockedByCount > 0) return `Waiting on ${issue.blockedByKeys.join(", ")}`;
   if (issue.factoryState === "repairing_queue") return "Merge queue conflict, repairing branch";
   if (issue.factoryState === "repairing_ci") {

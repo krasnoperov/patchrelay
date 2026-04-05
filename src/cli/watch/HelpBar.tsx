@@ -15,9 +15,9 @@ export function HelpBar({ view, follow, detailTab }: HelpBarProps): React.JSX.El
       .filter(Boolean)
       .join("  ");
   } else if (view === "feed") {
-    text = "";
+    text = "Legacy feed view  Esc: back";
   } else {
-    text = "F: feed  Tab: filter";
+    text = "Enter: detail  Tab: filter";
   }
   return (
     <Box>
