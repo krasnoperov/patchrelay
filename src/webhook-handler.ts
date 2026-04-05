@@ -274,6 +274,7 @@ export class WebhookHandler {
       hasActiveRun: Boolean(activeRun),
       hasPendingRun: Boolean(existingIssue?.pendingRunType),
       terminal,
+      currentState: existingIssue?.factoryState,
     });
 
     const runRelease = decideActiveRunRelease({
@@ -827,9 +828,14 @@ function decideRunIntent(p: {
   hasActiveRun: boolean;
   hasPendingRun: boolean;
   terminal: boolean;
+  currentState?: FactoryState | undefined;
 }): RunType | undefined {
+  const wakeEligibleState =
+    p.currentState === undefined
+    || p.currentState === "delegated"
+    || p.currentState === "awaiting_input";
   if (p.delegated && p.triggerAllowed && p.unresolvedBlockers === 0
-      && !p.hasActiveRun && !p.hasPendingRun && !p.terminal) {
+      && !p.hasActiveRun && !p.hasPendingRun && !p.terminal && wakeEligibleState) {
     return "implementation";
   }
   return undefined;

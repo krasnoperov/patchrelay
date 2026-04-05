@@ -520,6 +520,76 @@ test("done delegated issue does not requeue implementation after merged status e
   }
 });
 
+test("in-review status echo does not requeue implementation for an open delegated PR", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-in-review-echo-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+
+    db.upsertIssue({
+      projectId: "krasnoperov/mafia",
+      linearIssueId: "issue-maf-39",
+      issueKey: "MAF-39",
+      title: "Printable facilitator sheet",
+      currentLinearState: "In Review",
+      currentLinearStateType: "started",
+      factoryState: "awaiting_queue",
+      prNumber: 130,
+      prState: "open",
+    });
+
+    const enqueued: Array<{ projectId: string; issueId: string }> = [];
+    const handler = new WebhookHandler(
+      config,
+      db,
+      { forProject: async () => undefined } as never,
+      { steerTurn: async () => undefined } as never,
+      (projectId, issueId) => { enqueued.push({ projectId, issueId }); },
+      pino({ enabled: false }),
+    );
+
+    const payload: LinearWebhookPayload = {
+      action: "update",
+      type: "Issue",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      webhookTimestamp: Date.now(),
+      updatedFrom: { stateId: "state-progress" },
+      data: {
+        id: "issue-maf-39",
+        identifier: "MAF-39",
+        title: "Printable facilitator sheet",
+        team: { id: "team-maf", key: "MAF" },
+        state: { id: "state-review", name: "In Review", type: "started" },
+        delegate: { id: "patchrelay-actor", name: "PatchRelay" },
+      },
+    };
+
+    const stored = db.insertFullWebhookEvent({
+      webhookId: "delivery-maf-39-review-echo",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(payload),
+    });
+
+    await handler.processWebhookEvent(stored.id);
+
+    const issue = db.getIssue("krasnoperov/mafia", "issue-maf-39");
+    assert.equal(issue?.factoryState, "awaiting_queue");
+    assert.equal(issue?.pendingRunType, undefined);
+    assert.deepEqual(enqueued, []);
+    assert.deepEqual(db.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-39", { pendingOnly: true }), []);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("un-delegation during active run releases run and transitions to awaiting_input", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-undelegate-"));
   try {
