@@ -5,7 +5,7 @@ import {
   DEFAULT_MERGE_QUEUE_LABEL,
   resolveMergeQueueProtocol,
 } from "../src/merge-queue-protocol.ts";
-import { DEFAULT_REVIEW_LABEL, resolveReviewLabelProtocol } from "../src/review-label-protocol.ts";
+import { DEFAULT_REVIEW_LABEL, resolveReviewLabelProtocol, reviewNeedsAiReview } from "../src/review-label-protocol.ts";
 import { stewardConfigSchema } from "../packages/merge-steward/src/config.ts";
 
 test("merge queue protocol defaults stay aligned across PatchRelay and Merge Steward", () => {
@@ -53,4 +53,12 @@ test("review label protocol defaults to needs-review", () => {
 
   assert.equal(DEFAULT_REVIEW_LABEL, "needs-review");
   assert.equal(protocol.reviewLabel, "needs-review");
+});
+
+test("reviewNeedsAiReview only requests labels when review is still genuinely pending", () => {
+  assert.equal(reviewNeedsAiReview(undefined), true);
+  assert.equal(reviewNeedsAiReview("REVIEW_REQUIRED"), true);
+  assert.equal(reviewNeedsAiReview("commented"), true);
+  assert.equal(reviewNeedsAiReview("APPROVED"), false);
+  assert.equal(reviewNeedsAiReview("changes_requested"), false);
 });

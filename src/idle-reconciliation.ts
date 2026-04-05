@@ -7,7 +7,7 @@ import type { OperatorEventFeed } from "./operator-feed.ts";
 import { resolveMergeQueueProtocol } from "./merge-queue-protocol.ts";
 import { parseGitHubFailureContext } from "./github-failure-context.ts";
 import { parseStoredQueueRepairContext } from "./merge-queue-incident.ts";
-import { requestReviewLabel, resolveReviewLabelProtocol } from "./review-label-protocol.ts";
+import { requestReviewLabel, resolveReviewLabelProtocol, reviewNeedsAiReview } from "./review-label-protocol.ts";
 import { execCommand } from "./utils.ts";
 
 function isDuplicateRepairAttempt(
@@ -55,6 +55,27 @@ function buildFailureContext(issue: Pick<
     ...(storedFailureContext ? storedFailureContext : {}),
     ...(queueRepairContext ? queueRepairContext : {}),
   };
+}
+
+function canRequestReviewForHead(
+  issue: Pick<IssueRecord, "prReviewState" | "lastAttemptedFailureHeadSha">,
+  headSha?: string,
+): boolean {
+  const normalized = issue.prReviewState?.trim().toLowerCase();
+  if (!normalized || normalized === "review_required" || normalized === "commented") {
+    return true;
+  }
+  if (normalized === "approved") {
+    return false;
+  }
+  if (normalized !== "changes_requested") {
+    return reviewNeedsAiReview(issue.prReviewState);
+  }
+  return Boolean(headSha && issue.lastAttemptedFailureHeadSha && headSha !== issue.lastAttemptedFailureHeadSha);
+}
+
+function hasReviewFixInFlight(issue: Pick<IssueRecord, "activeRunId" | "pendingRunType">): boolean {
+  return issue.activeRunId !== undefined || issue.pendingRunType === "review_fix";
 }
 
 export function resolveBranchOwnerForStateTransition(newState: FactoryState, pendingRunType?: RunType): BranchOwner | undefined {
@@ -338,7 +359,14 @@ export class IdleIssueReconciler {
         });
       }
 
-      if (!pr.isDraft && pr.state === "OPEN" && pr.headRefOid && pr.reviewDecision !== "APPROVED") {
+      if (!pr.isDraft && pr.state === "OPEN" && pr.headRefOid && !hasReviewFixInFlight(issue)) {
+        const effectiveReviewState = issue.prReviewState ?? pr.reviewDecision;
+        if (!canRequestReviewForHead({
+          prReviewState: effectiveReviewState,
+          lastAttemptedFailureHeadSha: issue.lastAttemptedFailureHeadSha,
+        }, pr.headRefOid)) {
+          return;
+        }
         const gateGreen = await this.isGateGreen(project.github.repoFullName, pr.headRefOid, this.getGateCheckNames(issue));
         const hasReviewLabel = (pr.labels ?? []).some((label) => label.name === resolveReviewLabelProtocol(project).reviewLabel);
         if (gateGreen && !hasReviewLabel) {

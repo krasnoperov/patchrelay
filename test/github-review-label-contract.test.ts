@@ -104,6 +104,7 @@ function installGhStub(baseDir: string): { restore: () => void; readLog: () => s
   const previousPath = process.env.PATH;
   const logPath = path.join(baseDir, "gh.log");
   const ghPath = path.join(baseDir, "gh");
+  writeFileSync(logPath, "", "utf8");
   writeFileSync(ghPath, `#!/usr/bin/env node
 const fs = require("node:fs");
 const logPath = process.env.GH_STUB_LOG;
@@ -310,6 +311,194 @@ test("approved review clears the needs-review label", async () => {
 
     const log = ghStub.readLog();
     assert.match(log, /api --method DELETE repos\/owner\/repo\/issues\/13\/labels\/needs-review/);
+  } finally {
+    ghStub.restore();
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("changes requested review clears the needs-review label", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-review-clear-changes-"));
+  const ghStub = installGhStub(baseDir);
+  try {
+    const { db, handler } = createHandler(baseDir);
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-14",
+      issueKey: "USE-14",
+      branchName: "feat-review-changes",
+      prNumber: 14,
+      prState: "open",
+      factoryState: "pr_open",
+    });
+
+    await handler.processGitHubWebhookEvent({
+      eventType: "pull_request_review",
+      rawBody: buildReviewPayload({
+        branch: "feat-review-changes",
+        headSha: "sha-14",
+        prNumber: 14,
+        state: "changes_requested",
+      }),
+    });
+
+    const log = ghStub.readLog();
+    assert.match(log, /api --method DELETE repos\/owner\/repo\/issues\/14\/labels\/needs-review/);
+  } finally {
+    ghStub.restore();
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("green gate check does not request needs-review when changes are already requested", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-review-skip-changes-requested-"));
+  const ghStub = installGhStub(baseDir);
+  try {
+    const { db, handler } = createHandler(
+      baseDir,
+      undefined,
+      {
+        resolve: async () => ({
+          headSha: "sha-15",
+          gateCheckName: "Tests",
+          gateCheckStatus: "success",
+          failedChecks: [],
+          checks: [{ name: "Tests", status: "success", conclusion: "success" }],
+          settledAt: "2026-04-04T00:00:05.000Z",
+          capturedAt: "2026-04-04T00:00:05.000Z",
+        }),
+      },
+    );
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-15",
+      issueKey: "USE-15",
+      branchName: "feat-review-skip",
+      prNumber: 15,
+      prState: "open",
+      prReviewState: "changes_requested",
+      lastAttemptedFailureHeadSha: "sha-15",
+      lastAttemptedFailureSignature: "review_fix:sha-15",
+      factoryState: "changes_requested",
+    });
+
+    await handler.processGitHubWebhookEvent({
+      eventType: "check_run",
+      rawBody: buildCheckRunPayload({
+        branch: "feat-review-skip",
+        headSha: "sha-15",
+        prNumber: 15,
+        checkName: "Tests",
+        conclusion: "success",
+      }),
+    });
+
+    const log = ghStub.readLog();
+    assert.doesNotMatch(log, /issues\/15\/labels/);
+  } finally {
+    ghStub.restore();
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("green gate check re-requests needs-review after a review fix advances the PR head", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-review-rerequest-after-fix-"));
+  const ghStub = installGhStub(baseDir);
+  try {
+    const { db, handler } = createHandler(
+      baseDir,
+      undefined,
+      {
+        resolve: async () => ({
+          headSha: "sha-16-new",
+          gateCheckName: "Tests",
+          gateCheckStatus: "success",
+          failedChecks: [],
+          checks: [{ name: "Tests", status: "success", conclusion: "success" }],
+          settledAt: "2026-04-04T00:00:05.000Z",
+          capturedAt: "2026-04-04T00:00:05.000Z",
+        }),
+      },
+    );
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-16",
+      issueKey: "USE-16",
+      branchName: "feat-review-rerequest",
+      prNumber: 16,
+      prState: "open",
+      prReviewState: "changes_requested",
+      lastAttemptedFailureHeadSha: "sha-16-old",
+      lastAttemptedFailureSignature: "review_fix:sha-16-old",
+      factoryState: "changes_requested",
+    });
+
+    await handler.processGitHubWebhookEvent({
+      eventType: "check_run",
+      rawBody: buildCheckRunPayload({
+        branch: "feat-review-rerequest",
+        headSha: "sha-16-new",
+        prNumber: 16,
+        checkName: "Tests",
+        conclusion: "success",
+      }),
+    });
+
+    const log = ghStub.readLog();
+    assert.match(log, /api --method POST repos\/owner\/repo\/issues\/16\/labels/);
+    assert.match(log, /labels\[\]=needs-review/);
+  } finally {
+    ghStub.restore();
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("green gate check does not request needs-review while a review_fix is pending", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-review-skip-pending-review-fix-"));
+  const ghStub = installGhStub(baseDir);
+  try {
+    const { db, handler } = createHandler(
+      baseDir,
+      undefined,
+      {
+        resolve: async () => ({
+          headSha: "sha-17",
+          gateCheckName: "Tests",
+          gateCheckStatus: "success",
+          failedChecks: [],
+          checks: [{ name: "Tests", status: "success", conclusion: "success" }],
+          settledAt: "2026-04-04T00:00:05.000Z",
+          capturedAt: "2026-04-04T00:00:05.000Z",
+        }),
+      },
+    );
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-17",
+      issueKey: "USE-17",
+      branchName: "feat-review-pending-fix",
+      prNumber: 17,
+      prState: "open",
+      prReviewState: "changes_requested",
+      pendingRunType: "review_fix",
+      lastAttemptedFailureHeadSha: "sha-16-old",
+      lastAttemptedFailureSignature: "review_fix:sha-16-old",
+      factoryState: "changes_requested",
+    });
+
+    await handler.processGitHubWebhookEvent({
+      eventType: "check_run",
+      rawBody: buildCheckRunPayload({
+        branch: "feat-review-pending-fix",
+        headSha: "sha-17",
+        prNumber: 17,
+        checkName: "Tests",
+        conclusion: "success",
+      }),
+    });
+
+    const log = ghStub.readLog();
+    assert.doesNotMatch(log, /issues\/17\/labels/);
   } finally {
     ghStub.restore();
     rmSync(baseDir, { recursive: true, force: true });

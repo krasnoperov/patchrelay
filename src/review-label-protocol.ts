@@ -18,6 +18,12 @@ export function resolveReviewLabelProtocol(project?: ProjectConfig): ReviewLabel
   };
 }
 
+export function reviewNeedsAiReview(reviewState?: string | null): boolean {
+  if (!reviewState) return true;
+  const normalized = reviewState.trim().toLowerCase();
+  return normalized === "" || normalized === "review_required" || normalized === "commented";
+}
+
 export async function requestReviewLabel(params: {
   issue: Pick<IssueRecord, "issueKey" | "projectId" | "prNumber">;
   protocol: ReviewLabelProtocolConfig;

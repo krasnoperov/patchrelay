@@ -23,6 +23,7 @@ import { buildQueueRepairContextFromEvent } from "./merge-queue-incident.ts";
 import {
   clearReviewLabel,
   requestReviewLabel,
+  reviewNeedsAiReview,
   resolveReviewLabelProtocol,
 } from "./review-label-protocol.ts";
 import { resolveSecret } from "./resolve-secret.ts";
@@ -41,6 +42,24 @@ import { safeJsonParse } from "./utils.ts";
 function isMetadataOnlyCheckEvent(event: NormalizedGitHubEvent): boolean {
   return event.eventSource === "check_run"
     && (event.triggerEvent === "check_passed" || event.triggerEvent === "check_failed");
+}
+
+function canRequestReviewForHead(issue: Pick<IssueRecord, "prReviewState" | "lastAttemptedFailureHeadSha">, headSha?: string): boolean {
+  const normalized = issue.prReviewState?.trim().toLowerCase();
+  if (!normalized || normalized === "review_required" || normalized === "commented") {
+    return true;
+  }
+  if (normalized === "approved") {
+    return false;
+  }
+  if (normalized !== "changes_requested") {
+    return reviewNeedsAiReview(issue.prReviewState);
+  }
+  return Boolean(headSha && issue.lastAttemptedFailureHeadSha && headSha !== issue.lastAttemptedFailureHeadSha);
+}
+
+function hasReviewFixInFlight(issue: Pick<IssueRecord, "activeRunId" | "pendingRunType">): boolean {
+  return issue.activeRunId !== undefined || issue.pendingRunType === "review_fix";
 }
 
 interface GitHubFailurePromptContext {
@@ -475,6 +494,7 @@ export class GitHubWebhookHandler {
         pendingRunContextJson: JSON.stringify({
           reviewBody: event.reviewBody,
           reviewerName: event.reviewerName,
+          reviewHeadSha: event.headSha,
         }),
       });
       this.db.setBranchOwner(issue.projectId, issue.linearIssueId, "patchrelay");
@@ -527,6 +547,8 @@ export class GitHubWebhookHandler {
       if (event.triggerEvent === "check_passed" && !this.canClearFailureProvenance(issue, event, project)) {
         return;
       }
+      const preserveReviewFixHead = issue.prReviewState?.trim().toLowerCase() === "changes_requested"
+        && issue.lastAttemptedFailureSignature?.startsWith("review_fix:");
       this.db.upsertIssue({
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
@@ -538,8 +560,12 @@ export class GitHubWebhookHandler {
         lastGitHubFailureContextJson: null,
         lastGitHubFailureAt: null,
         lastQueueIncidentJson: null,
-        lastAttemptedFailureHeadSha: null,
-        lastAttemptedFailureSignature: null,
+        ...(preserveReviewFixHead
+          ? {}
+          : {
+              lastAttemptedFailureHeadSha: null,
+              lastAttemptedFailureSignature: null,
+            }),
       });
     }
   }
@@ -720,7 +746,8 @@ export class GitHubWebhookHandler {
     if (!this.isGateCheckEvent(event, project)) return;
     if (this.isStaleGateEvent(issue, event)) return;
     if (issue.prState !== "open" || !issue.prNumber) return;
-    if (issue.prReviewState === "approved") return;
+    if (!canRequestReviewForHead(issue, event.headSha)) return;
+    if (hasReviewFixInFlight(issue)) return;
 
     const snapshot = this.getRelevantCiSnapshot(issue, event);
     if (!snapshot || snapshot.gateCheckStatus !== "success") return;
@@ -739,7 +766,11 @@ export class GitHubWebhookHandler {
     event: NormalizedGitHubEvent,
     project?: ProjectConfig,
   ): Promise<void> {
-    if (event.triggerEvent !== "pr_synchronize" && event.triggerEvent !== "review_approved") {
+    if (
+      event.triggerEvent !== "pr_synchronize"
+      && event.triggerEvent !== "review_approved"
+      && event.triggerEvent !== "review_changes_requested"
+    ) {
       return;
     }
     if (!issue.prNumber) return;
