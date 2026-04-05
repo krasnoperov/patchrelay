@@ -920,6 +920,7 @@ export class PatchRelayDatabase {
   // ─── View builders ──────────────────────────────────────────────
 
   issueToTrackedIssue(issue: IssueRecord): TrackedIssueRecord {
+    const session = this.getIssueSession(issue.projectId, issue.linearIssueId);
     const blockedBy = this.listIssueDependencies(issue.projectId, issue.linearIssueId);
     const unresolvedBlockedBy = blockedBy.filter((entry) => !isResolvedLinearState(entry.blockerCurrentLinearStateType, entry.blockerCurrentLinearState));
     const hasPendingSessionEvents = this.hasPendingIssueSessionEvents(issue.projectId, issue.linearIssueId);
@@ -943,6 +944,7 @@ export class PatchRelayDatabase {
       ...(issue.title ? { title: issue.title } : {}),
       ...(issue.url ? { issueUrl: issue.url } : {}),
       ...(issue.currentLinearState ? { currentLinearState: issue.currentLinearState } : {}),
+      ...(session?.sessionState ? { sessionState: session.sessionState } : {}),
       factoryState: issue.factoryState,
       blockedByCount: unresolvedBlockedBy.length,
       blockedByKeys,

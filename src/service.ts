@@ -344,6 +344,7 @@ export class PatchRelayService {
     title?: string;
     statusNote?: string;
     projectId: string;
+    sessionState?: string;
     factoryState: string;
     blockedByCount: number;
     blockedByKeys: string[];
@@ -376,8 +377,8 @@ export class PatchRelayService {
     const rows = this.db.connection
       .prepare(
         `SELECT
-          i.project_id, i.linear_issue_id, i.issue_key, i.title,
-          i.current_linear_state, i.factory_state, i.updated_at,
+          s.project_id, s.linear_issue_id, s.issue_key, i.title,
+          i.current_linear_state, i.factory_state, s.session_state, s.waiting_reason, s.summary_text, s.updated_at,
           i.pending_run_type,
           i.pr_number, i.pr_review_state, i.pr_check_status,
           i.last_github_ci_snapshot_json,
@@ -393,8 +394,8 @@ export class PatchRelayService {
           (
             SELECT COUNT(*)
             FROM issue_session_events e
-            WHERE e.project_id = i.project_id
-              AND e.linear_issue_id = i.linear_issue_id
+            WHERE e.project_id = s.project_id
+              AND e.linear_issue_id = s.linear_issue_id
               AND e.processed_at IS NULL
           ) AS pending_session_event_count,
           (
@@ -403,8 +404,8 @@ export class PatchRelayService {
             LEFT JOIN issues blockers
               ON blockers.project_id = d.project_id
              AND blockers.linear_issue_id = d.blocker_linear_issue_id
-            WHERE d.project_id = i.project_id
-              AND d.linear_issue_id = i.linear_issue_id
+            WHERE d.project_id = s.project_id
+              AND d.linear_issue_id = s.linear_issue_id
               AND (
                 COALESCE(blockers.current_linear_state_type, d.blocker_current_linear_state_type, '') != 'completed'
                 AND LOWER(TRIM(COALESCE(blockers.current_linear_state, d.blocker_current_linear_state, ''))) != 'done'
@@ -416,21 +417,24 @@ export class PatchRelayService {
             LEFT JOIN issues blockers
               ON blockers.project_id = d.project_id
              AND blockers.linear_issue_id = d.blocker_linear_issue_id
-            WHERE d.project_id = i.project_id
-              AND d.linear_issue_id = i.linear_issue_id
+            WHERE d.project_id = s.project_id
+              AND d.linear_issue_id = s.linear_issue_id
               AND (
                 COALESCE(blockers.current_linear_state_type, d.blocker_current_linear_state_type, '') != 'completed'
                 AND LOWER(TRIM(COALESCE(blockers.current_linear_state, d.blocker_current_linear_state, ''))) != 'done'
               )
           ) AS blocked_by_keys_json
-        FROM issues i
-        LEFT JOIN runs active_run ON active_run.id = i.active_run_id
+        FROM issue_sessions s
+        LEFT JOIN issues i
+          ON i.project_id = s.project_id
+         AND i.linear_issue_id = s.linear_issue_id
+        LEFT JOIN runs active_run ON active_run.id = COALESCE(s.active_run_id, i.active_run_id)
         LEFT JOIN runs latest_run ON latest_run.id = (
           SELECT r.id FROM runs r
-          WHERE r.project_id = i.project_id AND r.linear_issue_id = i.linear_issue_id
+          WHERE r.project_id = s.project_id AND r.linear_issue_id = s.linear_issue_id
           ORDER BY r.id DESC LIMIT 1
         )
-        ORDER BY i.updated_at DESC, i.issue_key ASC`,
+        ORDER BY s.updated_at DESC, s.issue_key ASC`,
       )
       .all() as Array<Record<string, unknown>>;
     return rows.map((row) => {
@@ -440,7 +444,7 @@ export class PatchRelayService {
       const prChecksSummary = parseCiSnapshotSummary(
         typeof row.last_github_ci_snapshot_json === "string" ? row.last_github_ci_snapshot_json : undefined,
       );
-      const statusNote = extractStatusNote(
+      const latestRunStatusNote = extractStatusNote(
         typeof row.latest_run_summary_json === "string" ? row.latest_run_summary_json : undefined,
         typeof row.latest_run_report_json === "string" ? row.latest_run_report_json : undefined,
       );
@@ -452,6 +456,12 @@ export class PatchRelayService {
       const readyForExecution = (row.pending_run_type !== null && row.pending_run_type !== undefined || hasPendingSessionEvents)
         && row.active_run_type === null && blockedByCount === 0;
       const failureSummary = summarizeGitHubFailureContext(failureContext);
+      const sessionWaitingReason = typeof row.waiting_reason === "string" && row.waiting_reason.trim().length > 0
+        ? row.waiting_reason
+        : undefined;
+      const sessionSummary = typeof row.summary_text === "string" && row.summary_text.trim().length > 0
+        ? row.summary_text
+        : undefined;
       const derivedStatusNote = blockedByCount > 0
         ? `Blocked by ${blockedByKeys.join(", ")}`
         : failureSummary && (
@@ -460,11 +470,11 @@ export class PatchRelayService {
           || row.factory_state === "failed"
         )
           ? failureSummary
-          : statusNote;
+          : sessionSummary ?? latestRunStatusNote;
       const statusNoteWithBlockers = blockedByCount > 0
         ? `Blocked by ${blockedByKeys.join(", ")}`
         : derivedStatusNote;
-      const waitingReason = derivePatchRelayWaitingReason({
+      const waitingReason = sessionWaitingReason ?? derivePatchRelayWaitingReason({
         ...(row.active_run_type !== null ? { activeRunType: String(row.active_run_type) } : {}),
         blockedByKeys,
         factoryState: String(row.factory_state ?? "delegated"),
@@ -481,6 +491,7 @@ export class PatchRelayService {
         ...(row.title !== null ? { title: String(row.title) } : {}),
         ...(statusNoteForReturn ? { statusNote: statusNoteForReturn } : {}),
         projectId: String(row.project_id),
+        ...(row.session_state !== null ? { sessionState: String(row.session_state) } : {}),
         factoryState: String(row.factory_state ?? "delegated"),
         blockedByCount,
         blockedByKeys,

@@ -535,6 +535,7 @@ function renderAgentSessionStatusPage(params: {
       title?: string;
       issueUrl?: string;
       currentLinearState?: string;
+      sessionState?: string;
       factoryState?: string;
       prNumber?: number;
       prUrl?: string;
@@ -542,6 +543,7 @@ function renderAgentSessionStatusPage(params: {
       prReviewState?: string;
       prCheckStatus?: string;
       waitingReason?: string;
+      lastWakeReason?: string;
       ciRepairAttempts?: number;
       queueRepairAttempts?: number;
     };
@@ -591,6 +593,7 @@ function renderAgentSessionStatusPage(params: {
   const commandCount = params.sessionStatus.liveThread?.commandCount ?? params.sessionStatus.latestReportSummary?.commandCount ?? 0;
   const fileChangeCount = params.sessionStatus.liveThread?.fileChangeCount ?? params.sessionStatus.latestReportSummary?.fileChangeCount ?? 0;
   const toolCallCount = params.sessionStatus.liveThread?.toolCallCount ?? params.sessionStatus.latestReportSummary?.toolCallCount ?? 0;
+  const sessionState = params.sessionStatus.issue.sessionState ?? "unknown";
   const factoryState = params.sessionStatus.issue.factoryState ?? "unknown";
   const linearState = params.sessionStatus.issue.currentLinearState ?? "unknown";
   const prState = params.sessionStatus.issue.prState ?? "unknown";
@@ -599,6 +602,7 @@ function renderAgentSessionStatusPage(params: {
   const ciAttempts = params.sessionStatus.issue.ciRepairAttempts ?? 0;
   const queueAttempts = params.sessionStatus.issue.queueRepairAttempts ?? 0;
   const waitingReason = params.sessionStatus.issue.waitingReason ?? "No outstanding wait reason.";
+  const lastWakeReason = params.sessionStatus.issue.lastWakeReason ?? "unknown";
 
   return `<!doctype html>
 <html lang="en">
@@ -673,6 +677,7 @@ function renderAgentSessionStatusPage(params: {
       ${issueUrl ? `<p><a href="${escapeHtml(issueUrl)}" target="_blank" rel="noopener noreferrer">Open issue in Linear</a></p>` : ""}
       ${prUrl ? `<p><a href="${escapeHtml(prUrl)}" target="_blank" rel="noopener noreferrer">Open pull request ${escapeHtml(prLabel ?? "")}</a></p>` : ""}
       <div class="chips">
+        <span class="chip"><strong>Session:</strong> <code>${escapeHtml(sessionState)}</code></span>
         <span class="chip"><strong>Factory:</strong> <code>${escapeHtml(factoryState)}</code></span>
         <span class="chip"><strong>Linear:</strong> <code>${escapeHtml(linearState)}</code></span>
         <span class="chip"><strong>Active:</strong> ${activeStage}</span>
@@ -687,6 +692,7 @@ function renderAgentSessionStatusPage(params: {
             <tr><th>Review</th><td>${escapeHtml(reviewState)}</td></tr>
             <tr><th>Checks</th><td>${escapeHtml(checkState)}</td></tr>
             <tr><th>PatchRelay wait</th><td>${escapeHtml(waitingReason)}</td></tr>
+            <tr><th>Last wake</th><td><code>${escapeHtml(lastWakeReason)}</code></td></tr>
             <tr><th>Latest plan</th><td>${escapeHtml(latestPlan)}</td></tr>
             <tr><th>Active command</th><td><code>${escapeHtml(activeCommand)}</code></td></tr>
             <tr><th>Latest summary</th><td>${escapeHtml(latestAgentMessage)}</td></tr>

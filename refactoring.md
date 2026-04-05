@@ -459,9 +459,9 @@ Use this as the execution order for the refactor. The early phases are designed 
 
 ### Phase 8: Read Path Migration
 
-- [ ] Add a minimal session-summary query layer backed by `IssueSession`.
-- [ ] Update `src/service.ts` to expose session-oriented read methods.
-- [ ] Update issue overview APIs to read from the new session model first.
+- [x] Add a minimal session-summary query layer backed by `IssueSession`.
+- [x] Update `src/service.ts` to expose session-oriented read methods.
+- [x] Update issue overview APIs to read from the new session model first.
 - [x] Stop returning queue protocol detail as a core part of issue/session status.
 - [x] Stop returning raw thread-event and operator-feed data as default issue status.
 - [ ] Keep a temporary compatibility path for old CLI commands if needed while the UI/API migrates.
@@ -500,10 +500,11 @@ Use this as the execution order for the refactor. The early phases are designed 
 ## Live Operational Notes
 
 - PatchRelay now runs with session-event wakeups, renewable issue-session leases, terminal-event shutdown, and startup agent-session resync.
+- PatchRelay operator and public status reads now load from `IssueSession` first, with legacy `factoryState` retained only as a compatibility shadow while remaining read paths migrate.
 - A live trial on `TST-5` exposed a real publication gap: Codex completed an implementation turn with local worktree changes but without committing or opening a PR. The runtime now verifies publication outcome before treating an implementation turn as successful.
 - A live follow-up prompt on `TST-5` successfully queued a continuation turn from existing session state after a service restart.
 - A second live delegation on `TST-6` successfully created a new active implementation session while `TST-5` was still in flight.
-- `merge-steward` is configured locally for `krasnoperov/ballony-i-nasosy`, but it is still blocked by a missing GitHub App installation on that repository. Queue admission and merge execution cannot be end-to-end operational there until that `404` is resolved.
+- `merge-steward` and the PatchRelay GitHub App are now installed on `krasnoperov/ballony-i-nasosy`, branch protection requires one approval plus the `verify` check, and a live trial on `TST-6` successfully progressed through PR creation, approval, queue admission, validation, and merge to `main`.
 
 ## Suggested First PR Sequence
 
