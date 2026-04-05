@@ -290,6 +290,25 @@ test("timeline-rehydrate builds entries from runs and feed events", () => {
   assert.ok(kinds.includes("feed"));
 });
 
+test("timeline-rehydrate tolerates live threads without a turns array", () => {
+  const state = reduce(initialWatchState, {
+    type: "timeline-rehydrate",
+    runs: [],
+    feedEvents: [],
+    liveThread: {
+      id: "thread-1",
+      preview: "",
+      cwd: "/tmp",
+      status: "running",
+      turns: undefined as unknown as never[],
+    },
+    activeRunId: 42,
+    issueContext: null,
+  });
+
+  assert.deepEqual(state.timeline, []);
+});
+
 test("timeline-rehydrate sets activeRunId and startedAt", () => {
   const runs: TimelineRunInput[] = [{
     id: 42,

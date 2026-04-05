@@ -122,7 +122,7 @@ export function IssueDetailView({
   if (!issue) {
     return (
       <Box flexDirection="column">
-        <Text color="red">Issue not found.</Text>
+        <Text dimColor>Loading issue…</Text>
         <HelpBar view="detail" follow={follow} detailTab={detailTab} />
       </Box>
     );

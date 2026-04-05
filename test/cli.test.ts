@@ -1156,6 +1156,29 @@ test("cli dashboard aliases resolve to the TUI command", async () => {
   }
 });
 
+test("cli dashboard reports a clean error when stdin is not a TTY", async () => {
+  const tempDir = mkdtempSync(path.join(tmpdir(), "patchrelay-dashboard-"));
+  try {
+    const configPath = path.join(tempDir, "config.json");
+    mkdirSync(path.join(tempDir, "repo"), { recursive: true });
+    writeFileSync(configPath, JSON.stringify(createConfig(tempDir), null, 2));
+
+    const result = runCliProcess(["dashboard"], {
+      cwd: "/home/alv/projects/patchrelay",
+      env: {
+        PATCHRELAY_CONFIG_PATH: configPath,
+      },
+    });
+
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /requires an interactive TTY/i);
+    assert.doesNotMatch(result.stderr, /thread\.turns is not iterable/i);
+    assert.doesNotMatch(result.stderr, /Raw mode is not supported/i);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("cli process paths still handle help, version, and unknown commands", () => {
   const help = runCliProcess(["help"]);
   assert.equal(help.status, 0);

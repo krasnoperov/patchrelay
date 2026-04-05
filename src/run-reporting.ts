@@ -1,4 +1,5 @@
 import type { CodexThreadItem, CodexThreadSummary, StageReport } from "./codex-types.ts";
+import { getThreadTurns } from "./codex-thread-utils.ts";
 import type { RunRecord, ThreadEventRecord, TrackedIssueRecord } from "./db-types.ts";
 
 export function extractStageSummary(report: StageReport): Record<string, unknown> {
@@ -23,7 +24,8 @@ export function summarizeCurrentThread(thread: CodexThreadSummary): {
   fileChangeCount: number;
   toolCallCount: number;
 } {
-  const latestTurn = thread.turns.at(-1);
+  const turns = getThreadTurns(thread);
+  const latestTurn = turns.at(-1);
   const latestAgentMessage = latestTurn?.items
     .filter((item): item is Extract<CodexThreadItem, { type: "agentMessage" }> => item.type === "agentMessage")
     .at(-1)?.text;
@@ -41,7 +43,7 @@ export function summarizeCurrentThread(thread: CodexThreadSummary): {
   let fileChangeCount = 0;
   let toolCallCount = 0;
 
-  for (const turn of thread.turns) {
+  for (const turn of turns) {
     for (const item of turn.items as CodexThreadItem[]) {
       if (item.type === "commandExecution") {
         commandCount += 1;
@@ -79,7 +81,7 @@ export function buildStageReport(
   const fileChanges: Array<Record<string, unknown>> = [];
   const toolCalls: StageReport["toolCalls"] = [];
 
-  for (const turn of thread.turns) {
+  for (const turn of getThreadTurns(thread)) {
     for (const rawItem of turn.items as CodexThreadItem[]) {
       const item = rawItem as CodexThreadItem & Record<string, unknown>;
       if (item.type === "agentMessage" && typeof item.text === "string") {

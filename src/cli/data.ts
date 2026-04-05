@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import pino from "pino";
 import { CodexAppServerClient } from "../codex-app-server.ts";
+import { getThreadTurns } from "../codex-thread-utils.ts";
 import { PatchRelayDatabase } from "../db.ts";
 import { WorktreeManager } from "../worktree-manager.ts";
 import { CliOperatorApiClient } from "./operator-client.ts";
@@ -81,7 +82,8 @@ function safeJsonParse(value: string | undefined): Record<string, unknown> | und
 }
 
 function summarizeThread(thread: CodexThreadSummary, latestTimestampSeen?: string): LiveSummary {
-  const latestTurn = thread.turns.at(-1);
+  const turns = getThreadTurns(thread);
+  const latestTurn = turns.at(-1);
   const latestAssistantMessage = latestTurn?.items
     .filter((item): item is Extract<CodexThreadItem, { type: "agentMessage" }> => item.type === "agentMessage")
     .at(-1)?.text;

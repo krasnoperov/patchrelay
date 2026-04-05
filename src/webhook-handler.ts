@@ -457,6 +457,10 @@ export class WebhookHandler {
 
     if (normalized.triggerEvent === "agentSessionCreated") {
       if (!delegated) {
+        const currentlyDelegated = await this.isCurrentLinearIssueDelegatedToPatchRelay(linear, project.id, normalized.issue.id);
+        if (currentlyDelegated) {
+          return;
+        }
         const body = "PatchRelay received your mention. Delegate the issue to PatchRelay to start work.";
         await this.publishAgentActivity(linear, normalized.agentSession.id, { type: "elicitation", body });
         return;
@@ -740,6 +744,21 @@ export class WebhookHandler {
         { agentSessionId, error: error instanceof Error ? error.message : String(error) },
         "Failed to publish Linear agent activity",
       );
+    }
+  }
+
+  private async isCurrentLinearIssueDelegatedToPatchRelay(
+    linear: NonNullable<Awaited<ReturnType<LinearClientProvider["forProject"]>>>,
+    projectId: string,
+    issueId: string,
+  ): Promise<boolean> {
+    const installation = this.db.linearInstallations.getLinearInstallationForProject(projectId);
+    if (!installation?.actorId) return false;
+    try {
+      const issue = await linear.getIssue(issueId);
+      return issue.delegateId === installation.actorId;
+    } catch {
+      return false;
     }
   }
 

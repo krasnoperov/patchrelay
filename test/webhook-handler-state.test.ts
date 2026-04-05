@@ -978,3 +978,94 @@ test("agent session id survives follow-up webhooks that do not carry a session i
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("agent session creation does not post a delegate prompt when Linear already shows PatchRelay delegated", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-agent-session-delegated-race-"));
+  try {
+    const config = createConfig(baseDir);
+    config.projects[0] = {
+      ...config.projects[0]!,
+      triggerEvents: [...config.projects[0]!.triggerEvents, "agentSessionCreated"],
+    };
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+
+    const activities: Array<{ agentSessionId: string; body?: string; type?: string }> = [];
+    const linearClient: Partial<LinearClient> = {
+      getIssue: async () => ({
+        id: "issue-maf-session",
+        identifier: "MAF-93",
+        title: "Delegation race",
+        teamId: "team-maf",
+        teamKey: "MAF",
+        delegateId: "patchrelay-actor",
+        stateId: "state-start",
+        stateName: "In Progress",
+        stateType: "started",
+        workflowStates: [],
+        labelIds: [],
+        labels: [],
+        teamLabels: [],
+        blockedBy: [],
+        blocks: [],
+      }),
+      createAgentActivity: async ({ agentSessionId, content }) => {
+        activities.push({
+          agentSessionId,
+          type: content.type,
+          ...(typeof (content as { body?: string }).body === "string" ? { body: (content as { body: string }).body } : {}),
+        });
+      },
+    };
+
+    const handler = new WebhookHandler(
+      config,
+      db,
+      { forProject: async () => linearClient as LinearClient } as never,
+      { steerTurn: async () => undefined } as never,
+      () => undefined,
+      pino({ enabled: false }),
+    );
+
+    const sessionPayload: LinearWebhookPayload = {
+      action: "created",
+      type: "AgentSessionEvent",
+      createdAt: "2026-04-01T03:00:00.000Z",
+      webhookTimestamp: Date.now(),
+      data: {
+        promptContext: "<issue identifier=\"MAF-93\"><title>Delegation race</title></issue>",
+        agentSession: {
+          id: "session-93",
+          issue: {
+            id: "issue-maf-session",
+            identifier: "MAF-93",
+            title: "Delegation race",
+            team: { id: "team-maf", key: "MAF" },
+            state: { id: "state-start", name: "In Progress", type: "started" },
+          },
+        },
+      },
+    };
+    const stored = db.insertFullWebhookEvent({
+      webhookId: "delivery-agent-session-race",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(sessionPayload),
+    });
+
+    await handler.processWebhookEvent(stored.id);
+
+    assert.deepEqual(
+      activities.filter((entry) => entry.body?.includes("Delegate the issue to PatchRelay to start work.")),
+      [],
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
