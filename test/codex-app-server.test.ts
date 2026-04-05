@@ -3,7 +3,12 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import test from "node:test";
 import type { Logger } from "pino";
-import { CodexAppServerClient, resolveCodexAppServerLaunch } from "../src/codex-app-server.ts";
+import {
+  CodexAppServerClient,
+  extractCodexRpcErrorMessage,
+  isCodexThreadMaterializingError,
+  resolveCodexAppServerLaunch,
+} from "../src/codex-app-server.ts";
 
 class FakeChildProcess extends EventEmitter {
   readonly stdin = new PassThrough();
@@ -264,6 +269,19 @@ function createClient(
   );
   return { client, child };
 }
+
+test("extractCodexRpcErrorMessage unwraps JSON-RPC error payloads", () => {
+  const error = new Error(JSON.stringify({
+    code: -32600,
+    message: "thread thread-1 is not materialized yet; includeTurns is unavailable before first user message",
+  }));
+
+  assert.equal(
+    extractCodexRpcErrorMessage(error),
+    "thread thread-1 is not materialized yet; includeTurns is unavailable before first user message",
+  );
+  assert.equal(isCodexThreadMaterializingError(error), true);
+});
 
 test("CodexAppServerClient handles initialize, approval requests, notifications, and thread operations", async () => {
   const { client, child } = createClient("normal");

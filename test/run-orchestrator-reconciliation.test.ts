@@ -306,6 +306,181 @@ test("reconcileRun recovers interrupted implementation runs to pr_open when a PR
   }
 });
 
+test("reconcileRun tolerates pending thread materialization and recovers on the next pass", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-materializing-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-14b",
+      issueKey: "USE-14B",
+      branchName: "feat-materializing",
+      prNumber: 141,
+      prState: "open",
+      prCheckStatus: "success",
+      factoryState: "implementing",
+    });
+    const issue = db.getIssue("usertold", "issue-14b");
+    assert.ok(issue);
+    const run = db.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "implementation",
+      promptText: "Implement USE-14B",
+    });
+    db.updateRunThread(run.id, { threadId: "thread-14b", turnId: "turn-14b" });
+    db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      activeRunId: run.id,
+      factoryState: "implementing",
+    });
+
+    let includeTurnsReadAttempts = 0;
+    const materializationError = new Error(JSON.stringify({
+      code: -32600,
+      message: "thread thread-14b is not materialized yet; includeTurns is unavailable before first user message",
+    }));
+    const orchestrator = new RunOrchestrator(
+      config,
+      db,
+      {
+        startThread: async () => ({ threadId: "thread-14b" }),
+        steerTurn: async () => undefined,
+        readThread: async (_threadId: string, includeTurns = true) => {
+          if (!includeTurns) {
+            return { id: "thread-14b", status: "notLoaded", turns: [] };
+          }
+          includeTurnsReadAttempts += 1;
+          if (includeTurnsReadAttempts <= 3) {
+            throw materializationError;
+          }
+          return {
+            id: "thread-14b",
+            status: "notLoaded",
+            turns: [{ id: "turn-14b", status: "interrupted", items: [] }],
+          };
+        },
+      } as never,
+      { forProject: async () => undefined } as never,
+      () => undefined,
+      pino({ enabled: false }),
+    );
+
+    await (orchestrator as unknown as { reconcileRun: (run: ReturnType<typeof db.createRun>) => Promise<void> }).reconcileRun(
+      db.getRun(run.id)!,
+    );
+
+    const afterPendingPass = db.getIssue("usertold", "issue-14b");
+    assert.equal(afterPendingPass?.factoryState, "implementing");
+    assert.equal(afterPendingPass?.activeRunId, run.id);
+    assert.equal(db.getRun(run.id)?.status, "running");
+
+    await (orchestrator as unknown as { reconcileRun: (run: ReturnType<typeof db.createRun>) => Promise<void> }).reconcileRun(
+      db.getRun(run.id)!,
+    );
+
+    const updatedIssue = db.getIssue("usertold", "issue-14b");
+    const updatedRun = db.getRun(run.id);
+    assert.equal(updatedIssue?.factoryState, "pr_open");
+    assert.equal(updatedIssue?.activeRunId, undefined);
+    assert.equal(updatedRun?.status, "failed");
+    assert.equal(updatedRun?.failureReason, "Codex turn was interrupted");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("turn completed notification defers completion while the thread is still materializing", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-turn-completed-materializing-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const issueRecord = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-14c",
+      issueKey: "USE-14C",
+      branchName: "feat-materializing-notification",
+      factoryState: "implementing",
+    });
+    const run = db.createRun({
+      issueId: issueRecord.id,
+      projectId: issueRecord.projectId,
+      linearIssueId: issueRecord.linearIssueId,
+      runType: "implementation",
+      promptText: "Implement USE-14C",
+    });
+    db.updateRunThread(run.id, { threadId: "thread-14c", turnId: "turn-14c" });
+    db.upsertIssue({
+      projectId: issueRecord.projectId,
+      linearIssueId: issueRecord.linearIssueId,
+      activeRunId: run.id,
+      threadId: "thread-14c",
+      factoryState: "implementing",
+    });
+
+    const materializationError = new Error(JSON.stringify({
+      code: -32600,
+      message: "thread thread-14c is not materialized yet; includeTurns is unavailable before first user message",
+    }));
+    let includeTurnsAttempts = 0;
+    const orchestrator = new RunOrchestrator(
+      config,
+      db,
+      {
+        startThread: async () => ({ threadId: "thread-14c" }),
+        steerTurn: async () => undefined,
+        readThread: async (_threadId: string, includeTurns = true) => {
+          if (!includeTurns) {
+            return { id: "thread-14c", status: "notLoaded", turns: [] };
+          }
+          includeTurnsAttempts += 1;
+          if (includeTurnsAttempts <= 3) {
+            throw materializationError;
+          }
+          return {
+            id: "thread-14c",
+            status: "notLoaded",
+            turns: [{ id: "turn-14c", status: "completed", items: [] }],
+          };
+        },
+      } as never,
+      { forProject: async () => undefined } as never,
+      () => undefined,
+      pino({ enabled: false }),
+    );
+
+    await orchestrator.handleCodexNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-14c",
+        turn: { id: "turn-14c", status: "completed" },
+      },
+    } as never);
+
+    const deferredIssue = db.getIssue("usertold", "issue-14c");
+    const deferredRun = db.getRun(run.id);
+    assert.equal(deferredIssue?.factoryState, "implementing");
+    assert.equal(deferredIssue?.activeRunId, run.id);
+    assert.equal(deferredRun?.status, "running");
+
+    await (orchestrator as unknown as { reconcileRun: (run: ReturnType<typeof db.createRun>) => Promise<void> }).reconcileRun(
+      db.getRun(run.id)!,
+    );
+
+    const completedIssue = db.getIssue("usertold", "issue-14c");
+    const completedRun = db.getRun(run.id);
+    assert.equal(completedIssue?.activeRunId, undefined);
+    assert.equal(completedRun?.status, "completed");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("reconcileRun keeps interrupted ci_repair runs in repairing_ci when the PR is still failing", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-interrupted-ci-"));
   try {

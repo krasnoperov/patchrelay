@@ -2,13 +2,18 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import type { Logger } from "pino";
 import type { GitHubAppBotIdentity } from "./github-app-token.ts";
-import type { CodexAppServerClient, CodexNotification } from "./codex-app-server.ts";
+import {
+  isCodexThreadMaterializingError,
+  type CodexAppServerClient,
+  type CodexNotification,
+} from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { BranchOwner, IssueRecord, RunRecord } from "./db-types.ts";
 import { ACTIVE_RUN_STATES, TERMINAL_STATES, type FactoryState, type RunType } from "./factory-state.ts";
 import { buildHookEnv, runProjectHook } from "./hook-runner.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import {
+  buildPendingMaterializationThread,
   buildStageReport,
   countEventMethods,
   extractTurnId,
@@ -278,6 +283,7 @@ export class RunOrchestrator {
         ? context.failureHeadSha
         : typeof context?.headSha === "string" ? context.headSha : undefined;
       const failureSignature = typeof context?.failureSignature === "string" ? context.failureSignature : undefined;
+      const reviewHeadSha = typeof context?.reviewHeadSha === "string" ? context.reviewHeadSha : undefined;
       this.db.upsertIssue({
         projectId: item.projectId,
         linearIssueId: item.issueId,
@@ -296,6 +302,11 @@ export class RunOrchestrator {
               lastAttemptedFailureSignature: failureSignature,
               lastAttemptedFailureHeadSha: failureHeadSha ?? null,
             }
+          : runType === "review_fix" && reviewHeadSha
+            ? {
+                lastAttemptedFailureSignature: `review_fix:${reviewHeadSha}`,
+                lastAttemptedFailureHeadSha: reviewHeadSha,
+              }
           : {}),
       });
       this.db.setBranchOwner(item.projectId, item.issueId, "patchrelay");
@@ -525,7 +536,14 @@ export class RunOrchestrator {
 
     if (notification.method !== "turn/completed") return;
 
-    const thread = await this.readThreadWithRetry(threadId);
+    const thread = await this.readThreadWithRetry(threadId, 3, run);
+    if (!thread) {
+      this.logger.debug(
+        { issueKey: run.linearIssueId, runId: run.id, runType: run.runType, threadId },
+        "Turn completed before thread materialized; deferring completion handling to reconciliation",
+      );
+      return;
+    }
     const issue = this.db.getIssue(run.projectId, run.linearIssueId);
     if (!issue) return;
 
@@ -799,7 +817,7 @@ export class RunOrchestrator {
     // Read Codex state — thread may not exist after app-server restart.
     let thread: CodexThreadSummary | undefined;
     try {
-      thread = await this.readThreadWithRetry(run.threadId);
+      thread = await this.readThreadWithRetry(run.threadId, 3, run);
     } catch {
       this.logger.warn(
         { issueKey: issue.issueKey, runId: run.id, runType: run.runType, threadId: run.threadId },
@@ -842,6 +860,14 @@ export class RunOrchestrator {
           return;
         }
       }
+    }
+
+    if (!thread) {
+      this.logger.debug(
+        { issueKey: issue.issueKey, runId: run.id, runType: run.runType, threadId: run.threadId },
+        "Thread is still materializing during reconciliation; keeping run active",
+      );
+      return;
     }
 
     const latestTurn = thread.turns.at(-1);
@@ -1065,16 +1091,35 @@ export class RunOrchestrator {
   }
 
 
-  private async readThreadWithRetry(threadId: string, maxRetries = 3): Promise<CodexThreadSummary> {
+  private async readThreadWithRetry(
+    threadId: string,
+    maxRetries = 3,
+    pendingStageRun?: Pick<RunRecord, "threadId" | "turnId">,
+  ): Promise<CodexThreadSummary | undefined> {
+    let lastError: unknown;
     for (let attempt = 0; attempt < maxRetries; attempt++) {
       try {
         return await this.codex.readThread(threadId, true);
-      } catch {
-        if (attempt === maxRetries - 1) throw new Error(`Failed to read thread ${threadId} after ${maxRetries} attempts`);
+      } catch (error) {
+        lastError = error;
+        if (attempt === maxRetries - 1) {
+          break;
+        }
         await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
       }
     }
-    throw new Error(`Failed to read thread ${threadId}`);
+
+    if (pendingStageRun && lastError && isCodexThreadMaterializingError(lastError)) {
+      try {
+        await this.codex.readThread(threadId, false);
+        return undefined;
+      } catch {
+        // Fall through to the stale-thread error below when the thread cannot
+        // be read even without turns.
+      }
+    }
+
+    throw new Error(`Failed to read thread ${threadId} after ${maxRetries} attempts`);
   }
 }
 

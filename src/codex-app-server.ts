@@ -50,6 +50,27 @@ export interface SteerTurnOptions {
   input: string;
 }
 
+export function extractCodexRpcErrorMessage(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const message = parsed.message;
+    return typeof message === "string" ? message : raw;
+  } catch {
+    return raw;
+  }
+}
+
+export function isCodexThreadMaterializingError(error: unknown): boolean {
+  const message = extractCodexRpcErrorMessage(error).toLowerCase();
+  return message.includes("not materialized") || message.includes("includeturns is unavailable before first user message");
+}
+
+export function isCodexThreadMissingError(error: unknown): boolean {
+  const message = extractCodexRpcErrorMessage(error).toLowerCase();
+  return message.includes("thread not found") || message.includes("unknown thread");
+}
+
 export function resolveCodexAppServerLaunch(config: CodexAppServerConfig): { command: string; args: string[] } {
   if (!config.sourceBashrc) {
     return {
