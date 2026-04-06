@@ -422,6 +422,7 @@ export class GitHubWebhookHandler {
     this.db.upsertIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
+      prCheckStatus: snapshot.gateCheckStatus,
       lastGitHubCiSnapshotHeadSha: snapshot.headSha,
       lastGitHubCiSnapshotGateCheckName: snapshot.gateCheckName ?? this.getPrimaryGateCheckName(project),
       lastGitHubCiSnapshotGateCheckStatus: snapshot.gateCheckStatus,

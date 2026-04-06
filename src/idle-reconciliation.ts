@@ -6,11 +6,17 @@ import type { AppConfig } from "./types.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import { resolveMergeQueueProtocol } from "./merge-queue-protocol.ts";
 import { parseGitHubFailureContext } from "./github-failure-context.ts";
+import { deriveGateCheckStatusFromRollup, type GitHubStatusRollupEntry } from "./github-rollup.ts";
 import { parseStoredQueueRepairContext } from "./merge-queue-incident.ts";
 import { execCommand } from "./utils.ts";
 
 function isFailingCheckStatus(status: string | undefined): boolean {
   return status === "failed" || status === "failure";
+}
+
+function getGateCheckNames(project: AppConfig["projects"][number] | undefined): string[] {
+  const configured = project?.gateChecks?.map((entry) => entry.trim()).filter(Boolean) ?? [];
+  return configured.length > 0 ? configured : ["verify"];
 }
 
 function isDuplicateRepairAttempt(
@@ -399,19 +405,44 @@ export class IdleIssueReconciler {
       const { stdout } = await execCommand("gh", [
         "pr", "view", String(issue.prNumber),
         "--repo", project.github.repoFullName,
-        "--json", "state,reviewDecision,mergeable,mergeStateStatus,labels",
+        "--json", "headRefOid,state,reviewDecision,mergeable,mergeStateStatus,labels,statusCheckRollup",
       ], { timeoutMs: 10_000 });
       const pr = JSON.parse(stdout) as {
+        headRefOid?: string;
         state?: string;
         reviewDecision?: string;
         mergeable?: string;
         mergeStateStatus?: string;
         labels?: Array<{ name?: string }>;
+        statusCheckRollup?: GitHubStatusRollupEntry[];
       };
       const protocol = resolveMergeQueueProtocol(project);
+      const gateCheckNames = getGateCheckNames(project);
+      const gateCheckStatus = deriveGateCheckStatusFromRollup(pr.statusCheckRollup, gateCheckNames);
       const queueLabelApplied = Array.isArray(pr.labels)
         ? pr.labels.some((label) => label?.name === protocol.admissionLabel)
         : Boolean(issue.queueLabelApplied);
+      this.db.upsertIssue({
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        ...(pr.headRefOid ? { prHeadSha: pr.headRefOid } : {}),
+        ...(pr.state === "OPEN" ? { prState: "open" as const } : {}),
+        ...(pr.reviewDecision === "APPROVED"
+          ? { prReviewState: "approved" as const }
+          : pr.reviewDecision === "CHANGES_REQUESTED"
+            ? { prReviewState: "changes_requested" as const }
+            : {}),
+        ...(gateCheckStatus ? { prCheckStatus: gateCheckStatus } : {}),
+        ...(pr.headRefOid && gateCheckStatus
+          ? {
+              lastGitHubCiSnapshotHeadSha: pr.headRefOid,
+              lastGitHubCiSnapshotGateCheckName: gateCheckNames[0] ?? "verify",
+              lastGitHubCiSnapshotGateCheckStatus: gateCheckStatus,
+              lastGitHubCiSnapshotSettledAt: gateCheckStatus === "pending" ? null : new Date().toISOString(),
+            }
+          : {}),
+        queueLabelApplied,
+      });
       if (pr.state === "MERGED") {
         this.db.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, prState: "merged" });
         this.advanceIdleIssue(issue, "done", { clearFailureProvenance: true });

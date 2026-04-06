@@ -129,6 +129,52 @@ test("reconcileIdleIssues advances approved idle issues to awaiting_queue", asyn
   }
 });
 
+test("idle reconciliation refreshes stale green check status from GitHub truth", { concurrency: false }, async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-green-truth-"));
+  const oldPath = process.env.PATH;
+  try {
+    const fakeBin = path.join(baseDir, "bin");
+    const ghPath = path.join(fakeBin, "gh");
+    mkdirSync(fakeBin, { recursive: true });
+    writeFileSync(ghPath, `#!/usr/bin/env bash
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  printf '{"headRefOid":"sha-green","state":"OPEN","reviewDecision":"CHANGES_REQUESTED","mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED","labels":[],"statusCheckRollup":[{"__typename":"CheckRun","name":"verify","status":"COMPLETED","conclusion":"SUCCESS"}]}'
+  exit 0
+fi
+echo "unexpected gh args: $*" >&2
+exit 1
+`, "utf8");
+    chmodSync(ghPath, 0o755);
+    process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
+
+    const { db, orchestrator } = createOrchestrator(baseDir);
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-green-truth",
+      issueKey: "USE-11B",
+      branchName: "feat-green-truth",
+      prNumber: 112,
+      prState: "open",
+      prHeadSha: "sha-green",
+      prReviewState: "changes_requested",
+      prCheckStatus: "pending",
+      factoryState: "pr_open",
+      lastGitHubCiSnapshotHeadSha: "sha-green",
+      lastGitHubCiSnapshotGateCheckName: "verify",
+      lastGitHubCiSnapshotGateCheckStatus: "pending",
+    });
+
+    await (orchestrator as unknown as { idleReconciler: { reconcile: () => Promise<void> } }).idleReconciler.reconcile();
+
+    const issue = db.getIssue("usertold", "issue-green-truth");
+    assert.equal(issue?.prCheckStatus, "success");
+    assert.equal(issue?.lastGitHubCiSnapshotGateCheckStatus, "success");
+  } finally {
+    process.env.PATH = oldPath;
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("resetWorktreeToTrackedBranch clears interrupted rebase state back to the remote issue branch", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reset-worktree-"));
   try {
