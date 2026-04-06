@@ -18,7 +18,7 @@ export function EntryStateGraph({ main, exits }: EntryStateGraphProps): React.JS
             : "gray";
         return (
           <Box key={node.state} gap={0}>
-            {i > 0 && <Text dimColor> \u2192 </Text>}
+            {i > 0 && <Text dimColor>{" → "}</Text>}
             <Text color={color} bold={node.status === "current"}>{dot}</Text>
             <Text color={color} bold={node.status === "current"}>{` ${node.label}`}</Text>
           </Box>

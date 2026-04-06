@@ -42,6 +42,44 @@ async function readQueueSnapshot(config: StewardConfig, eventLimit: number): Pro
   }
 }
 
+function firstLine(text: string | null | undefined): string | null {
+  if (!text) return null;
+  const line = text.split(/\r?\n/, 1)[0]?.trim();
+  return line ? line : null;
+}
+
+export function formatQueueStatusText(source: "service" | "database", snapshot: QueueWatchSnapshot): string {
+  return [
+    `Repo: ${snapshot.repoId} (${snapshot.repoFullName})`,
+    `Source: ${source}`,
+    `Base branch: ${snapshot.baseBranch}`,
+    `Active entries: ${snapshot.summary.active}`,
+    `Queued: ${snapshot.summary.queued}  preparing: ${snapshot.summary.preparingHead}  validating: ${snapshot.summary.validating}  merging: ${snapshot.summary.merging}`,
+    `Merged: ${snapshot.summary.merged}  evicted: ${snapshot.summary.evicted}  dequeued: ${snapshot.summary.dequeued}`,
+    snapshot.summary.headPrNumber ? `Head PR: #${snapshot.summary.headPrNumber}` : "Head PR: none",
+    ...(snapshot.runtime.lastTickOutcome === "failed"
+      ? [
+        "Last tick: failed",
+        ...(firstLine(snapshot.runtime.lastTickError) ? [`Last error: ${firstLine(snapshot.runtime.lastTickError)}`] : []),
+      ]
+      : []),
+    ...(snapshot.queueBlock
+      ? [
+        `Queue blocked: ${snapshot.queueBlock.reason} on ${snapshot.queueBlock.baseBranch}${snapshot.queueBlock.baseSha ? ` @ ${snapshot.queueBlock.baseSha.slice(0, 8)}` : ""}`,
+        `Base failures: ${snapshot.queueBlock.failingChecks.length > 0 ? snapshot.queueBlock.failingChecks.map((check) => check.name).join(", ") : "(none)"}`,
+        ...(snapshot.queueBlock.pendingChecks.length > 0
+          ? [`Base pending: ${snapshot.queueBlock.pendingChecks.map((check) => check.name).join(", ")}`]
+          : []),
+      ]
+      : []),
+    "",
+    "Entries:",
+    ...(snapshot.entries.length > 0
+      ? snapshot.entries.map((entry) => `- #${entry.prNumber} ${entry.status} pos=${entry.position} branch=${entry.branch}`)
+      : ["- (none)"]),
+  ].join("\n") + "\n";
+}
+
 function findEntryForInspect(store: SqliteStore, repoId: string, options: { entryId?: string; prNumber?: number }): QueueEntry | undefined {
   if (options.entryId) {
     return store.getEntry(options.entryId);
@@ -101,32 +139,7 @@ export async function handleQueue(parsed: ParsedArgs, stdout: Output): Promise<n
       writeOutput(stdout, formatJson(payload));
       return 0;
     }
-    writeOutput(
-      stdout,
-      [
-        `Repo: ${snapshot.repoId} (${snapshot.repoFullName})`,
-        `Source: ${source}`,
-        `Base branch: ${snapshot.baseBranch}`,
-        `Active entries: ${snapshot.summary.active}`,
-        `Queued: ${snapshot.summary.queued}  preparing: ${snapshot.summary.preparingHead}  validating: ${snapshot.summary.validating}  merging: ${snapshot.summary.merging}`,
-        `Merged: ${snapshot.summary.merged}  evicted: ${snapshot.summary.evicted}  dequeued: ${snapshot.summary.dequeued}`,
-        snapshot.summary.headPrNumber ? `Head PR: #${snapshot.summary.headPrNumber}` : "Head PR: none",
-        ...(snapshot.queueBlock
-          ? [
-            `Queue blocked: ${snapshot.queueBlock.reason} on ${snapshot.queueBlock.baseBranch}${snapshot.queueBlock.baseSha ? ` @ ${snapshot.queueBlock.baseSha.slice(0, 8)}` : ""}`,
-            `Base failures: ${snapshot.queueBlock.failingChecks.length > 0 ? snapshot.queueBlock.failingChecks.map((check) => check.name).join(", ") : "(none)"}`,
-            ...(snapshot.queueBlock.pendingChecks.length > 0
-              ? [`Base pending: ${snapshot.queueBlock.pendingChecks.map((check) => check.name).join(", ")}`]
-              : []),
-          ]
-          : []),
-        "",
-        "Entries:",
-        ...(snapshot.entries.length > 0
-          ? snapshot.entries.map((entry) => `- #${entry.prNumber} ${entry.status} pos=${entry.position} branch=${entry.branch}`)
-          : ["- (none)"]),
-      ].join("\n") + "\n",
-    );
+    writeOutput(stdout, formatQueueStatusText(source, snapshot));
     return 0;
   }
 

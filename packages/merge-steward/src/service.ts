@@ -371,6 +371,7 @@ export class MergeStewardService {
       this.lastTickOutcome = "succeeded";
     } catch (error) {
       this.lastTickOutcome = "failed";
+      this.currentQueueBlock = null;
       // Preserve stack + message for the watch API. The reconciler wraps
       // per-entry errors with [PR #N entryId phase=X] context.
       this.lastTickError = error instanceof Error

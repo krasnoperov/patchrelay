@@ -46,7 +46,7 @@ export function DetailView({
         <Text bold>#{entry.prNumber}</Text>
         {entry.issueKey ? <Text>{entry.issueKey}</Text> : null}
         <Text color={statusColor(entry.status)}>{humanStatus(entry.status, entry)}</Text>
-        <Text dimColor>\u00b7 {nextStepLabel(entry.status, entry)}</Text>
+        <Text dimColor>{`· ${nextStepLabel(entry.status, entry)}`}</Text>
       </Box>
 
       {/* Branch + git refs */}
@@ -61,7 +61,7 @@ export function DetailView({
         <Box gap={2}>
           <Text dimColor>tested as</Text>
           <Text>{entry.specBranch}</Text>
-          <Text dimColor>({shortSha(entry.specSha)} \u2190 {entry.specBasedOn ? "PR ahead" : "main"})</Text>
+          <Text dimColor>{`(${shortSha(entry.specSha)} ← ${entry.specBasedOn ? "PR ahead" : "main"})`}</Text>
         </Box>
       )}
 

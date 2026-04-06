@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { runCli } from "../src/cli.ts";
+import { formatQueueStatusText } from "../src/cli/commands/queue.ts";
+import type { QueueWatchSnapshot } from "../src/types.ts";
 
 function createBufferStream() {
   let buffer = "";
@@ -201,4 +203,71 @@ test("queue status text output formats correctly with no entries", async () => {
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
+});
+
+test("queue status text output surfaces failed tick errors ahead of stale queue state", () => {
+  const snapshot: QueueWatchSnapshot = {
+    repoId: "app",
+    repoFullName: "owner/repo",
+    baseBranch: "main",
+    summary: {
+      total: 1,
+      active: 1,
+      queued: 0,
+      preparingHead: 1,
+      validating: 0,
+      merging: 0,
+      merged: 0,
+      evicted: 0,
+      dequeued: 0,
+      headEntryId: "entry-1",
+      headPrNumber: 14,
+    },
+    runtime: {
+      tickInProgress: false,
+      lastTickStartedAt: "2026-04-06T16:46:05.507Z",
+      lastTickCompletedAt: "2026-04-06T16:46:08.088Z",
+      lastTickOutcome: "failed",
+      lastTickError: "Command failed: git push\nExit code: 1\nstderr: remote rejected",
+    },
+    queueBlock: {
+      reason: "main_broken",
+      entryId: "entry-1",
+      headPrNumber: 14,
+      baseBranch: "main",
+      baseSha: "edc495b599b6d795f5c65657f656615d9d243c8a",
+      observedAt: "2026-04-06T16:26:30.217Z",
+      failingChecks: [],
+      pendingChecks: [{ name: "verify", conclusion: "pending", url: "https://example.test/run" }],
+    },
+    entries: [{
+      id: "entry-1",
+      repoId: "app",
+      prNumber: 14,
+      branch: "feature/queue-fix",
+      headSha: "abc123",
+      baseSha: "def456",
+      status: "preparing_head",
+      position: 1,
+      priority: 0,
+      generation: 0,
+      ciRunId: null,
+      ciRetries: 0,
+      retryAttempts: 0,
+      maxRetries: 2,
+      lastFailedBaseSha: null,
+      issueKey: null,
+      specBranch: null,
+      specSha: null,
+      specBasedOn: null,
+      enqueuedAt: "2026-04-06T16:21:37.417Z",
+      updatedAt: "2026-04-06T16:25:25.481Z",
+    }],
+    recentEvents: [],
+  };
+
+  const text = formatQueueStatusText("service", snapshot);
+  assert.match(text, /Last tick: failed/);
+  assert.match(text, /Last error: Command failed: git push/);
+  assert.match(text, /Queue blocked: main_broken on main @ edc495b5/);
 });
