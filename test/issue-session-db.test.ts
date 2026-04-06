@@ -49,6 +49,9 @@ test("migrations create issue_sessions and upgrade legacy issue schema", () => {
     const issueColumns = connection.prepare("PRAGMA table_info(issues)").all() as Array<Record<string, unknown>>;
     assert.ok(issueColumns.some((column) => column.name === "pr_head_sha"));
     assert.ok(issueColumns.some((column) => column.name === "pr_author_login"));
+    assert.ok(!issueColumns.some((column) => column.name === "queue_label_applied"));
+    assert.ok(!issueColumns.some((column) => column.name === "pending_merge_prep"));
+    assert.ok(!issueColumns.some((column) => column.name === "merge_prep_attempts"));
 
     const sessionColumns = connection.prepare("PRAGMA table_info(issue_sessions)").all() as Array<Record<string, unknown>>;
     assert.ok(sessionColumns.some((column) => column.name === "session_state"));

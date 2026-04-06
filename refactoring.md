@@ -513,7 +513,7 @@ Use this as the execution order for the refactor. The early phases are designed 
 - `merge-steward doctor` now discovers required checks from branch rules and classic branch protection, with a local `gh` fallback when the app token cannot read protection directly.
 - Routine Linear status comments are now suppressed when a native agent session exists; visible Linear comments are reserved for attention-needed states and planning-only final delivery.
 - Follow-up prompt construction is now split from initial prompt construction, and queued comment/prompt follow-ups reuse the main session thread by default.
-- `queueLabelApplied` has been removed from runtime control flow and operator/read models; the remaining work is schema/test/history cleanup rather than behavior change.
+- `queueLabelApplied` has been removed from runtime control flow and operator/read models, and migrations now rebuild legacy `issues` tables to retire the dead queue-label-era column instead of carrying it indefinitely.
 
 ## Operational Hardening Plan
 
@@ -991,9 +991,9 @@ Acceptance criteria:
 
 Why last:
 
-- it is already mostly dead in control flow
-- the remaining risk is compatibility/tests, not runtime behavior
-- removing it too early would create churn before the new operator/read paths fully settle
+- it was already mostly dead in control flow
+- the remaining risk was compatibility/tests, not runtime behavior
+- the schema-retirement pass is now safe because the operator/read paths no longer depend on it
 
 Primary targets:
 
@@ -1005,15 +1005,15 @@ Primary targets:
 
 Work to do:
 
-- remove `queueLabelApplied` from `IssueRecord`, DB row mapping, and read-model queries
-- add a migration that stops relying on `queue_label_applied`
-- delete compatibility assertions from tests once queue repair is fully GitHub-truth-based
-- remove any leftover docs mentioning it as a runtime fact
+- [x] remove `queueLabelApplied` from `IssueRecord`, DB row mapping, and read-model queries
+- [x] add a migration that stops relying on `queue_label_applied`
+- [x] delete compatibility assertions from tests once queue repair is fully GitHub-truth-based
+- [ ] remove any leftover docs/history wording mentioning it as a runtime fact
 
 Acceptance criteria:
 
 - no runtime, read model, or test logic depends on `queue_label_applied`
-- the DB schema no longer carries it as an active field
+- the DB schema no longer carries it as an active field on migrated installations
 - PatchRelay queue repair behavior remains unchanged because it already keys off GitHub truth and downstream-owned posture
 
 ## What Can Be Simplified vs What Must Stay

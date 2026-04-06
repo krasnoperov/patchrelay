@@ -42,9 +42,6 @@ const PR_LOOP_STATES = ["changes_requested", "repairing_ci"] as const;
 const QUEUE_LOOP_STATES = ["repairing_queue"] as const;
 const EXIT_STATES = ["awaiting_input", "escalated", "failed"] as const;
 const QUEUE_EVENT_STATUSES = new Set([
-  "queue_label_requested",
-  "queue_label_applied",
-  "queue_label_failed",
   "queue_repair_queued",
   "pr_merged",
 ]);
@@ -99,12 +96,6 @@ function latestQueueObservationEvent(feedEvents: OperatorFeedEvent[]): OperatorF
 
 function describeObservationEvent(event: OperatorFeedEvent): ObservationLine {
   switch (event.status) {
-    case "queue_label_requested":
-      return { tone: "info", text: event.summary };
-    case "queue_label_applied":
-      return { tone: "success", text: event.summary };
-    case "queue_label_failed":
-      return { tone: "warn", text: event.summary };
     case "queue_repair_queued":
       return { tone: "warn", text: event.summary };
     case "pr_merged":

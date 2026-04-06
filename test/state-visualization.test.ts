@@ -75,9 +75,9 @@ test("patchrelay queue observations report handoff and external queue failure", 
   const events: OperatorFeedEvent[] = [
     makeEvent({
       id: 1,
-      status: "queue_label_requested",
-      stage: "awaiting_queue",
-      summary: "Queue hand-off requested via label \"queue\" on PR #88",
+      status: "queue_repair_queued",
+      stage: "repairing_queue",
+      summary: "Queue repair queued after external failure from merge-steward/queue",
     }),
     makeEvent({
       id: 2,
