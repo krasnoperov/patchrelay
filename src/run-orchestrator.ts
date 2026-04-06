@@ -30,6 +30,7 @@ import type {
 import { resolveAuthoritativeLinearStopState, resolvePreferredCompletedLinearState } from "./linear-workflow.ts";
 import { execCommand } from "./utils.ts";
 import { getThreadTurns } from "./codex-thread-utils.ts";
+import { deriveIssueSessionReactiveIntent } from "./issue-session.ts";
 
 const DEFAULT_CI_REPAIR_BUDGET = 3;
 const DEFAULT_QUEUE_REPAIR_BUDGET = 3;
@@ -2366,9 +2367,14 @@ function resolveRecoverablePostRunState(issue: IssueRecord): FactoryState | unde
   }
   if (issue.prState === "merged") return "done";
   if (issue.prState === "open") {
-    if (issue.lastGitHubFailureSource === "queue_eviction") return "repairing_queue";
-    if (issue.prCheckStatus === "failed" || issue.lastGitHubFailureSource === "branch_ci") return "repairing_ci";
-    if (issue.prReviewState === "changes_requested") return "changes_requested";
+    const reactiveIntent = deriveIssueSessionReactiveIntent({
+      prNumber: issue.prNumber,
+      prState: issue.prState,
+      prReviewState: issue.prReviewState,
+      prCheckStatus: issue.prCheckStatus,
+      latestFailureSource: issue.lastGitHubFailureSource,
+    });
+    if (reactiveIntent) return reactiveIntent.compatibilityFactoryState;
     if (issue.prReviewState === "approved") return "awaiting_queue";
     return "pr_open";
   }

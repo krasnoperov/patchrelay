@@ -1144,6 +1144,7 @@ test("reconcileRun syncs Linear session after interrupted runs when an agent ses
     );
 
     await (orchestrator as unknown as { reconcileRun: (run: { id: number }) => Promise<void> }).reconcileRun(db.getRun(run.id)!);
+    await new Promise((resolve) => setImmediate(resolve));
 
     assert.equal(activities.length, 0);
     assert.deepEqual(updates, [{ agentSessionId: "session-15b", planLength: 4 }]);

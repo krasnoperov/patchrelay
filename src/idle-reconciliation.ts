@@ -7,6 +7,7 @@ import type { OperatorEventFeed } from "./operator-feed.ts";
 import { resolveMergeQueueProtocol } from "./merge-queue-protocol.ts";
 import { parseGitHubFailureContext } from "./github-failure-context.ts";
 import { deriveGateCheckStatusFromRollup, type GitHubStatusRollupEntry } from "./github-rollup.ts";
+import { deriveIssueSessionReactiveIntent } from "./issue-session.ts";
 import { parseStoredQueueRepairContext } from "./merge-queue-incident.ts";
 import { execCommand } from "./utils.ts";
 
@@ -231,34 +232,15 @@ export class IdleIssueReconciler {
     const latestRun = this.db.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
     const ignoreDuplicateAttempt = latestRun?.status === "failed"
       && latestRun.failureReason === "Codex turn was interrupted";
+    const reactiveIntent = deriveIssueSessionReactiveIntent({
+      prNumber: issue.prNumber,
+      prState: issue.prState,
+      prReviewState: issue.prReviewState,
+      prCheckStatus: issue.prCheckStatus,
+      latestFailureSource: issue.lastGitHubFailureSource,
+    });
 
-    if (issue.lastGitHubFailureSource === "queue_eviction") {
-      const pendingRunContext = buildFailureContext(issue);
-      if (!ignoreDuplicateAttempt && isDuplicateRepairAttempt(issue, pendingRunContext)) {
-        this.advanceIdleIssue(issue, "repairing_queue");
-      } else {
-        this.advanceIdleIssue(issue, "repairing_queue", {
-          pendingRunType: "queue_repair",
-          ...(pendingRunContext ? { pendingRunContext } : {}),
-        });
-      }
-      return;
-    }
-
-    if (issue.lastGitHubFailureSource === "branch_ci") {
-      const pendingRunContext = buildFailureContext(issue);
-      if (!ignoreDuplicateAttempt && isDuplicateRepairAttempt(issue, pendingRunContext)) {
-        this.advanceIdleIssue(issue, "repairing_ci");
-      } else {
-        this.advanceIdleIssue(issue, "repairing_ci", {
-          pendingRunType: "ci_repair",
-          ...(pendingRunContext ? { pendingRunContext } : {}),
-        });
-      }
-      return;
-    }
-
-    if (issue.factoryState === "awaiting_queue") {
+    if (!reactiveIntent && issue.factoryState === "awaiting_queue") {
       const inferred = await this.inferFailureSourceFromGitHub(issue) ?? "branch_ci";
       const inferRunType = inferred === "queue_eviction" ? "queue_repair" : "ci_repair";
       const inferState = inferred === "queue_eviction" ? "repairing_queue" : "repairing_ci";
@@ -274,12 +256,19 @@ export class IdleIssueReconciler {
       return;
     }
 
+    if (!reactiveIntent) {
+      return;
+    }
+
     const pendingRunContext = buildFailureContext(issue);
-    if (!ignoreDuplicateAttempt && isDuplicateRepairAttempt(issue, pendingRunContext)) {
-      this.advanceIdleIssue(issue, "repairing_ci");
+    const duplicateRepair = reactiveIntent.runType !== "review_fix"
+      && !ignoreDuplicateAttempt
+      && isDuplicateRepairAttempt(issue, pendingRunContext);
+    if (duplicateRepair) {
+      this.advanceIdleIssue(issue, reactiveIntent.compatibilityFactoryState);
     } else {
-      this.advanceIdleIssue(issue, "repairing_ci", {
-        pendingRunType: "ci_repair",
+      this.advanceIdleIssue(issue, reactiveIntent.compatibilityFactoryState, {
+        pendingRunType: reactiveIntent.runType,
         ...(pendingRunContext ? { pendingRunContext } : {}),
       });
     }
@@ -450,50 +439,25 @@ export class IdleIssueReconciler {
         });
         return;
       }
-      if (pr.reviewDecision === "APPROVED") {
-        this.db.upsertIssue({
-          projectId: issue.projectId,
-          linearIssueId: issue.linearIssueId,
-          prReviewState: "approved",
-        });
-        if (pr.mergeable === "CONFLICTING" || pr.mergeStateStatus === "DIRTY") {
-          this.logger.info(
-            { issueKey: issue.issueKey, prNumber: issue.prNumber, mergeable: pr.mergeable },
-            "Reconciliation: approved PR has merge conflicts, dispatching rebase",
-          );
-          this.advanceIdleIssue(issue, "repairing_queue" as never, {
-            pendingRunType: "queue_repair",
-            pendingRunContext: {
-              source: "idle_reconciliation",
-              failureReason: "merge_conflict_detected",
-              failureSignature: `conflict:${issue.prNumber}`,
-            },
-          });
-          this.feed?.publish({
-            level: "warn",
-            kind: "github",
-            issueKey: issue.issueKey,
-            projectId: issue.projectId,
-            stage: "repairing_queue",
-            status: "conflict_detected",
-            summary: `Approved PR #${issue.prNumber} has merge conflicts with main, dispatching rebase`,
-          });
-          return;
-        }
-        if (issue.factoryState !== "awaiting_queue" || hasFailureProvenance(issue)) {
-          this.advanceIdleIssue(issue, "awaiting_queue", {
-            ...(hasFailureProvenance(issue) ? { clearFailureProvenance: true } : {}),
-          });
-        }
-        return;
-      }
-      if ((pr.mergeable === "CONFLICTING" || pr.mergeStateStatus === "DIRTY") && issue.factoryState === "awaiting_queue") {
+      const downstreamOwned = issue.factoryState === "awaiting_queue" || issue.prReviewState === "approved" || pr.reviewDecision === "APPROVED";
+      const mergeConflictDetected = pr.mergeable === "CONFLICTING" || pr.mergeStateStatus === "DIRTY";
+      const refreshedIssue = this.db.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
+      const reactiveIntent = deriveIssueSessionReactiveIntent({
+        prNumber: refreshedIssue.prNumber,
+        prState: refreshedIssue.prState,
+        prReviewState: refreshedIssue.prReviewState,
+        prCheckStatus: refreshedIssue.prCheckStatus,
+        latestFailureSource: refreshedIssue.lastGitHubFailureSource,
+        mergeConflictDetected,
+        downstreamOwned,
+      });
+      if (reactiveIntent?.runType === "queue_repair" && mergeConflictDetected) {
         this.logger.info(
           { issueKey: issue.issueKey, prNumber: issue.prNumber, mergeable: pr.mergeable },
-          "Reconciliation: queue-admitted PR has merge conflicts, dispatching rebase",
+          "Reconciliation: PR needs queue repair from fresh GitHub truth",
         );
-        this.advanceIdleIssue(issue, "repairing_queue" as never, {
-          pendingRunType: "queue_repair",
+        this.advanceIdleIssue(issue, reactiveIntent.compatibilityFactoryState, {
+          pendingRunType: reactiveIntent.runType,
           pendingRunContext: {
             source: "idle_reconciliation",
             failureReason: "merge_conflict_detected",
@@ -505,11 +469,26 @@ export class IdleIssueReconciler {
           kind: "github",
           issueKey: issue.issueKey,
           projectId: issue.projectId,
-          stage: "repairing_queue",
+          stage: reactiveIntent.compatibilityFactoryState,
           status: "conflict_detected",
           summary: `PR #${issue.prNumber} has merge conflicts with main, dispatching rebase`,
         });
-      } else if (pr.mergeable === "CONFLICTING" || pr.mergeStateStatus === "DIRTY") {
+        return;
+      }
+      if (pr.reviewDecision === "APPROVED") {
+        this.db.upsertIssue({
+          projectId: issue.projectId,
+          linearIssueId: issue.linearIssueId,
+          prReviewState: "approved",
+        });
+        if (issue.factoryState !== "awaiting_queue" || hasFailureProvenance(issue)) {
+          this.advanceIdleIssue(issue, "awaiting_queue", {
+            ...(hasFailureProvenance(issue) ? { clearFailureProvenance: true } : {}),
+          });
+        }
+        return;
+      }
+      if (mergeConflictDetected) {
         this.logger.debug(
           { issueKey: issue.issueKey, prNumber: issue.prNumber, mergeable: pr.mergeable, mergeStateStatus: pr.mergeStateStatus },
           "Reconciliation: PR is dirty but not yet queue-admitted; leaving PatchRelay in review state",

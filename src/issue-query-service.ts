@@ -3,6 +3,7 @@ import type { CodexThreadSummary } from "./codex-types.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueSessionRecord } from "./db-types.ts";
 import { parseGitHubFailureContext } from "./github-failure-context.ts";
+import { isIssueSessionReadyForExecution } from "./issue-session.ts";
 import { extractStageSummary, summarizeCurrentThread } from "./run-reporting.ts";
 import type { StageReport, RunRecord, TrackedIssueRecord } from "./types.ts";
 import { deriveIssueStatusNote } from "./status-note.ts";
@@ -218,11 +219,14 @@ export class IssueQueryService {
       factoryState: issueRecord?.factoryState ?? "delegated",
       blockedByCount: unresolvedBlockedBy.length,
       blockedByKeys,
-      readyForExecution: (
-        (issueRecord?.pendingRunType !== undefined || this.db.peekIssueSessionWake(session.projectId, session.linearIssueId) !== undefined)
-        && activeRun === undefined
-        && unresolvedBlockedBy.length === 0
-      ),
+      readyForExecution: isIssueSessionReadyForExecution({
+        sessionState: session.sessionState,
+        factoryState: issueRecord?.factoryState ?? "delegated",
+        ...(activeRun ? { activeRunId: activeRun.id } : {}),
+        blockedByCount: unresolvedBlockedBy.length,
+        hasPendingWake: this.db.peekIssueSessionWake(session.projectId, session.linearIssueId) !== undefined,
+        hasLegacyPendingRun: issueRecord?.pendingRunType !== undefined,
+      }),
       ...(issueRecord?.lastGitHubFailureSource ? { latestFailureSource: issueRecord.lastGitHubFailureSource } : {}),
       ...(issueRecord?.lastGitHubFailureHeadSha ? { latestFailureHeadSha: issueRecord.lastGitHubFailureHeadSha } : {}),
       ...(issueRecord?.lastGitHubFailureCheckName ? { latestFailureCheckName: issueRecord.lastGitHubFailureCheckName } : {}),

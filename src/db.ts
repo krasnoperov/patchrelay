@@ -13,7 +13,9 @@ import type {
 } from "./db-types.ts";
 import type { FactoryState, RunType } from "./factory-state.ts";
 import {
+  isIssueSessionReadyForExecution,
   deriveIssueSessionState,
+  deriveIssueSessionReactiveIntent,
   deriveIssueSessionWakeReason,
 } from "./issue-session.ts";
 import {
@@ -53,9 +55,17 @@ function hasUnattemptedFailureSignature(issue: IssueRecord, fallbackHeadSha?: st
 function deriveImplicitReactiveWake(issue: IssueRecord):
   | { runType: RunType; wakeReason: string; context: Record<string, unknown> }
   | undefined {
-  if (issue.activeRunId !== undefined) return undefined;
+  const reactiveIntent = deriveIssueSessionReactiveIntent({
+    activeRunId: issue.activeRunId,
+    prNumber: issue.prNumber,
+    prState: issue.prState,
+    prReviewState: issue.prReviewState,
+    prCheckStatus: issue.prCheckStatus,
+    latestFailureSource: issue.lastGitHubFailureSource,
+  });
+  if (!reactiveIntent) return undefined;
 
-  if (issue.factoryState === "repairing_ci") {
+  if (reactiveIntent.runType === "ci_repair") {
     const failureContext = parseObjectJson(issue.lastGitHubFailureContextJson) ?? {};
     const snapshot = parseObjectJson(issue.lastGitHubCiSnapshotJson);
     const fallbackHeadSha = typeof failureContext.failureHeadSha === "string"
@@ -71,8 +81,8 @@ function deriveImplicitReactiveWake(issue: IssueRecord):
       return undefined;
     }
     return {
-      runType: "ci_repair",
-      wakeReason: "settled_red_ci",
+      runType: reactiveIntent.runType,
+      wakeReason: reactiveIntent.wakeReason,
       context: {
         ...failureContext,
         failureSignature,
@@ -83,7 +93,7 @@ function deriveImplicitReactiveWake(issue: IssueRecord):
     };
   }
 
-  if (issue.factoryState === "repairing_queue") {
+  if (reactiveIntent.runType === "queue_repair") {
     const failureContext = parseObjectJson(issue.lastGitHubFailureContextJson) ?? {};
     const incidentContext = parseObjectJson(issue.lastQueueIncidentJson) ?? {};
     const fallbackHeadSha = typeof failureContext.failureHeadSha === "string"
@@ -91,8 +101,8 @@ function deriveImplicitReactiveWake(issue: IssueRecord):
       : undefined;
     if (!hasUnattemptedFailureSignature(issue, fallbackHeadSha)) return undefined;
     return {
-      runType: "queue_repair",
-      wakeReason: "merge_steward_incident",
+      runType: reactiveIntent.runType,
+      wakeReason: reactiveIntent.wakeReason,
       context: {
         ...incidentContext,
         ...failureContext,
@@ -1175,7 +1185,14 @@ export class PatchRelayDatabase {
       factoryState: issue.factoryState,
       blockedByCount: unresolvedBlockedBy.length,
       blockedByKeys,
-      readyForExecution: (issue.pendingRunType !== undefined || pendingWake !== undefined) && issue.activeRunId === undefined && unresolvedBlockedBy.length === 0,
+      readyForExecution: isIssueSessionReadyForExecution({
+        sessionState: session?.sessionState,
+        factoryState: issue.factoryState,
+        activeRunId: issue.activeRunId,
+        blockedByCount: unresolvedBlockedBy.length,
+        hasPendingWake: pendingWake !== undefined,
+        hasLegacyPendingRun: issue.pendingRunType !== undefined,
+      }),
       ...(issue.lastGitHubFailureSource ? { latestFailureSource: issue.lastGitHubFailureSource } : {}),
       ...(issue.lastGitHubFailureHeadSha ? { latestFailureHeadSha: issue.lastGitHubFailureHeadSha } : {}),
       ...(issue.lastGitHubFailureCheckName ? { latestFailureCheckName: issue.lastGitHubFailureCheckName } : {}),
@@ -1281,6 +1298,8 @@ export class PatchRelayDatabase {
       ?? deriveIssueSessionWakeReason({
         pendingRunType: issue.pendingRunType,
         factoryState: issue.factoryState,
+        prNumber: issue.prNumber,
+        prState: issue.prState,
         prReviewState: issue.prReviewState,
         prCheckStatus: issue.prCheckStatus,
         latestFailureSource: issue.lastGitHubFailureSource,

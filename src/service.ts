@@ -8,6 +8,7 @@ import {
   type GitHubAppTokenManager,
 } from "./github-app-token.ts";
 import { parseGitHubFailureContext, summarizeGitHubFailureContext } from "./github-failure-context.ts";
+import { isIssueSessionReadyForExecution } from "./issue-session.ts";
 import { GitHubWebhookHandler } from "./github-webhook-handler.ts";
 import { IssueQueryService } from "./issue-query-service.ts";
 import { DatabaseBackedLinearClientProvider } from "./linear-client.ts";
@@ -540,8 +541,14 @@ export class PatchRelayService {
       const hasPendingSessionEvents = Number(row.pending_session_event_count ?? 0) > 0;
       const hasPendingWake = hasPendingSessionEvents
         || this.db.peekIssueSessionWake(String(row.project_id), String(row.linear_issue_id)) !== undefined;
-      const readyForExecution = ((row.pending_run_type !== null && row.pending_run_type !== undefined) || hasPendingWake)
-        && row.active_run_type === null && blockedByCount === 0;
+      const readyForExecution = isIssueSessionReadyForExecution({
+        ...(typeof row.session_state === "string" ? { sessionState: String(row.session_state) as never } : {}),
+        factoryState: String(row.factory_state ?? "delegated") as never,
+        ...(row.active_run_type !== null ? { activeRunId: 1 } : {}),
+        blockedByCount,
+        hasPendingWake,
+        hasLegacyPendingRun: row.pending_run_type !== null && row.pending_run_type !== undefined,
+      });
       const failureSummary = summarizeGitHubFailureContext(failureContext);
       const sessionWaitingReason = typeof row.waiting_reason === "string" && row.waiting_reason.trim().length > 0
         ? row.waiting_reason

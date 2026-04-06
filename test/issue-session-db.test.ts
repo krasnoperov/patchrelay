@@ -6,6 +6,7 @@ import test from "node:test";
 import { PatchRelayDatabase } from "../src/db.ts";
 import { SqliteConnection } from "../src/db/shared.ts";
 import { runPatchRelayMigrations } from "../src/db/migrations.ts";
+import { deriveIssueSessionReactiveIntent, deriveIssueSessionWakeReason } from "../src/issue-session.ts";
 
 test("migrations create issue_sessions and upgrade legacy issue schema", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-session-migration-"));
@@ -647,4 +648,58 @@ test("updateRunThread does not resurrect a run that already ended", () => {
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
+});
+
+test("reactive intent is derived from GitHub truth instead of compatibility stage names", () => {
+  assert.deepEqual(
+    deriveIssueSessionReactiveIntent({
+      prNumber: 17,
+      prState: "open",
+      prCheckStatus: "failed",
+    }),
+    {
+      runType: "ci_repair",
+      wakeReason: "settled_red_ci",
+      compatibilityFactoryState: "repairing_ci",
+    },
+  );
+
+  assert.deepEqual(
+    deriveIssueSessionReactiveIntent({
+      prNumber: 18,
+      prState: "open",
+      prReviewState: "changes_requested",
+    }),
+    {
+      runType: "review_fix",
+      wakeReason: "review_changes_requested",
+      compatibilityFactoryState: "changes_requested",
+    },
+  );
+
+  assert.deepEqual(
+    deriveIssueSessionReactiveIntent({
+      prNumber: 19,
+      prState: "open",
+      mergeConflictDetected: true,
+      downstreamOwned: true,
+    }),
+    {
+      runType: "queue_repair",
+      wakeReason: "merge_steward_incident",
+      compatibilityFactoryState: "repairing_queue",
+    },
+  );
+});
+
+test("wake reason falls back to reactive GitHub truth", () => {
+  assert.equal(
+    deriveIssueSessionWakeReason({
+      factoryState: "pr_open",
+      prNumber: 20,
+      prState: "open",
+      prReviewState: "changes_requested",
+    }),
+    "review_changes_requested",
+  );
 });
