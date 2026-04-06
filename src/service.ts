@@ -26,7 +26,7 @@ import { WebhookHandler } from "./webhook-handler.ts";
 import { acceptIncomingWebhook } from "./service-webhooks.ts";
 import { deriveIssueStatusNote } from "./status-note.ts";
 import type { AppConfig, LinearClient, LinearClientProvider } from "./types.ts";
-import type { GitHubCiSnapshotRecord } from "./db-types.ts";
+import type { GitHubCiSnapshotRecord, IssueRecord } from "./db-types.ts";
 
 function parseObjectJson(value: string | undefined): Record<string, unknown> | undefined {
   if (!value) return undefined;
@@ -697,6 +697,14 @@ export class PatchRelayService {
       }
     }
 
+    this.db.appendIssueSessionEvent({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      eventType: "stop_requested",
+      dedupeKey: `operator_stop:${issue.linearIssueId}`,
+    });
+    this.db.clearPendingIssueSessionEvents(issue.projectId, issue.linearIssueId);
+
     this.db.upsertIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
@@ -743,6 +751,7 @@ export class PatchRelayService {
       factoryState = "implementing";
     }
 
+    this.appendOperatorRetryEvent(issue, runType);
     this.db.upsertIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
@@ -760,6 +769,68 @@ export class PatchRelayService {
     });
     this.runtime.enqueueIssue(issue.projectId, issue.linearIssueId);
     return { issueKey, runType };
+  }
+
+  private appendOperatorRetryEvent(
+    issue: IssueRecord,
+    runType: string,
+  ): void {
+    if (runType === "queue_repair") {
+      const queueIncident = parseObjectJson(issue.lastQueueIncidentJson);
+      const failureContext = parseObjectJson(issue.lastGitHubFailureContextJson);
+      this.db.appendIssueSessionEvent({
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        eventType: "merge_steward_incident",
+        eventJson: JSON.stringify({
+          ...(queueIncident ?? {}),
+          ...(failureContext ?? {}),
+          source: "operator_retry",
+        }),
+        dedupeKey: `operator_retry:queue_repair:${issue.linearIssueId}:${issue.prHeadSha ?? issue.lastGitHubFailureHeadSha ?? "unknown-sha"}`,
+      });
+      return;
+    }
+
+    if (runType === "ci_repair") {
+      const failureContext = parseObjectJson(issue.lastGitHubFailureContextJson);
+      this.db.appendIssueSessionEvent({
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        eventType: "settled_red_ci",
+        eventJson: JSON.stringify({
+          ...(failureContext ?? {}),
+          source: "operator_retry",
+        }),
+        dedupeKey: `operator_retry:ci_repair:${issue.linearIssueId}:${issue.lastGitHubFailureSignature ?? issue.prHeadSha ?? "unknown-sha"}`,
+      });
+      return;
+    }
+
+    if (runType === "review_fix") {
+      this.db.appendIssueSessionEvent({
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        eventType: "review_changes_requested",
+        eventJson: JSON.stringify({
+          reviewBody: "Operator requested retry of review-fix work.",
+          source: "operator_retry",
+        }),
+        dedupeKey: `operator_retry:review_fix:${issue.linearIssueId}:${issue.prHeadSha ?? "unknown-sha"}`,
+      });
+      return;
+    }
+
+    this.db.appendIssueSessionEvent({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      eventType: "delegated",
+      eventJson: JSON.stringify({
+        promptContext: "Operator requested retry of PatchRelay work.",
+        source: "operator_retry",
+      }),
+      dedupeKey: `operator_retry:implementation:${issue.linearIssueId}`,
+    });
   }
 
   async acceptWebhook(params: {
