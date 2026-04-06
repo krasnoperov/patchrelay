@@ -326,6 +326,10 @@ interface PostRunFollowUp {
   summary: string;
 }
 
+function isBranchUpkeepRequired(context: Record<string, unknown> | undefined): boolean {
+  return context?.branchUpkeepRequired === true;
+}
+
 export class RunOrchestrator {
   private readonly worktreeManager: WorktreeManager;
   /** Tracks last probe-failure feed event per issue to avoid spamming the operator feed. */
@@ -410,6 +414,10 @@ export class RunOrchestrator {
       return;
     }
     const { runType, context, resumeThread } = wake;
+    const effectiveContext = runType === "review_fix"
+      ? await this.resolveReviewFixWakeContext(issue, context, project)
+      : context;
+    const isReviewFixBranchUpkeep = runType === "review_fix" && isBranchUpkeepRequired(effectiveContext);
 
     // Check repair budgets
     if (runType === "ci_repair" && issue.ciRepairAttempts >= DEFAULT_CI_REPAIR_BUDGET) {
@@ -420,7 +428,7 @@ export class RunOrchestrator {
       this.escalate(issue, runType, `Queue repair budget exhausted (${DEFAULT_QUEUE_REPAIR_BUDGET} attempts)`);
       return;
     }
-    if (runType === "review_fix" && issue.reviewFixAttempts >= DEFAULT_REVIEW_FIX_BUDGET) {
+    if (runType === "review_fix" && !isReviewFixBranchUpkeep && issue.reviewFixAttempts >= DEFAULT_REVIEW_FIX_BUDGET) {
       this.escalate(issue, runType, `Review fix budget exhausted (${DEFAULT_REVIEW_FIX_BUDGET} attempts)`);
       return;
     }
@@ -432,12 +440,12 @@ export class RunOrchestrator {
     if (runType === "queue_repair") {
       this.db.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, queueRepairAttempts: issue.queueRepairAttempts + 1 });
     }
-    if (runType === "review_fix") {
+    if (runType === "review_fix" && !isReviewFixBranchUpkeep) {
       this.db.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, reviewFixAttempts: issue.reviewFixAttempts + 1 });
     }
 
     // Build prompt
-    const prompt = buildRunPrompt(issue, runType, project.repoPath, context);
+    const prompt = buildRunPrompt(issue, runType, project.repoPath, effectiveContext);
 
     // Resolve workspace
     const issueRef = sanitizePathSegment(issue.issueKey ?? issue.linearIssueId);
@@ -460,10 +468,10 @@ export class RunOrchestrator {
         runType,
         promptText: prompt,
       });
-      const failureHeadSha = typeof context?.failureHeadSha === "string"
-          ? context.failureHeadSha
-          : typeof context?.headSha === "string" ? context.headSha : undefined;
-      const failureSignature = typeof context?.failureSignature === "string" ? context.failureSignature : undefined;
+      const failureHeadSha = typeof effectiveContext?.failureHeadSha === "string"
+          ? effectiveContext.failureHeadSha
+          : typeof effectiveContext?.headSha === "string" ? effectiveContext.headSha : undefined;
+      const failureSignature = typeof effectiveContext?.failureSignature === "string" ? effectiveContext.failureSignature : undefined;
       this.db.upsertIssue({
         projectId: item.projectId,
         linearIssueId: item.issueId,
@@ -1496,6 +1504,57 @@ export class RunOrchestrator {
     return JSON.parse(stdout) as RemotePrState;
   }
 
+  private async resolveReviewFixWakeContext(
+    issue: IssueRecord,
+    context: Record<string, unknown> | undefined,
+    project: { github?: { repoFullName?: string; baseBranch?: string } },
+  ): Promise<Record<string, unknown> | undefined> {
+    if (isBranchUpkeepRequired(context)) {
+      return context;
+    }
+    if (!issue.prNumber || issue.prState !== "open" || issue.prReviewState !== "changes_requested") {
+      return context;
+    }
+
+    const repoFullName = project.github?.repoFullName;
+    if (!repoFullName) {
+      return context;
+    }
+
+    try {
+      const pr = await this.loadRemotePrState(repoFullName, issue.prNumber);
+      if (!pr) return context;
+
+      const nextPrState = normalizeRemotePrState(pr.state);
+      const nextReviewState = normalizeRemoteReviewDecision(pr.reviewDecision);
+      this.db.upsertIssue({
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        ...(nextPrState ? { prState: nextPrState } : {}),
+        ...(pr.headRefOid ? { prHeadSha: pr.headRefOid } : {}),
+        ...(nextReviewState ? { prReviewState: nextReviewState } : {}),
+      });
+
+      if (nextPrState !== "open") return context;
+      if (nextReviewState && nextReviewState !== "changes_requested") return context;
+      if (!isDirtyMergeStateStatus(pr.mergeStateStatus)) return context;
+
+      return buildReviewFixBranchUpkeepContext(
+        issue.prNumber,
+        project.github?.baseBranch ?? "main",
+        pr,
+        context,
+      );
+    } catch (error) {
+      this.logger.debug({
+        issueKey: issue.issueKey,
+        prNumber: issue.prNumber,
+        error: error instanceof Error ? error.message : String(error),
+      }, "Failed to resolve review-fix wake context");
+      return context;
+    }
+  }
+
   private async resolvePostRunFollowUp(
     run: Pick<RunRecord, "runType" | "projectId">,
     issue: IssueRecord,
@@ -1535,23 +1594,14 @@ export class RunOrchestrator {
       if (nextReviewState && nextReviewState !== "changes_requested") return undefined;
       if (!isDirtyMergeStateStatus(pr.mergeStateStatus)) return undefined;
 
-      const baseBranch = project?.github?.baseBranch ?? "main";
-      const promptContext = [
-        `The requested review change is already addressed, but GitHub still reports PR #${issue.prNumber} as ${String(pr.mergeStateStatus)} against latest ${baseBranch}.`,
-        `Before stopping, update the existing PR branch onto latest ${baseBranch}, resolve any conflicts, rerun the narrowest relevant verification, and push again.`,
-        "Do not stop just because the requested code change is already present.",
-      ].join(" ");
-
       return {
         pendingRunType: "review_fix",
         factoryState: "changes_requested",
-        context: {
-          branchUpkeepRequired: true,
-          promptContext,
-          ...(pr.mergeStateStatus ? { mergeStateStatus: pr.mergeStateStatus } : {}),
-          ...(pr.headRefOid ? { failingHeadSha: pr.headRefOid } : {}),
-          baseBranch,
-        },
+        context: buildReviewFixBranchUpkeepContext(
+          issue.prNumber,
+          project?.github?.baseBranch ?? "main",
+          pr,
+        ),
         summary: `PR #${issue.prNumber} is still dirty after review fix; queued branch upkeep`,
       };
     } catch (error) {
@@ -1825,6 +1875,28 @@ function normalizeRemoteReviewDecision(value: string | undefined): "approved" | 
 
 function isDirtyMergeStateStatus(value: string | undefined): boolean {
   return value?.trim().toUpperCase() === "DIRTY";
+}
+
+function buildReviewFixBranchUpkeepContext(
+  prNumber: number,
+  baseBranch: string,
+  pr: RemotePrState,
+  context?: Record<string, unknown>,
+): Record<string, unknown> {
+  const promptContext = [
+    `The requested review change is already addressed, but GitHub still reports PR #${prNumber} as ${String(pr.mergeStateStatus)} against latest ${baseBranch}.`,
+    `Before stopping, update the existing PR branch onto latest ${baseBranch}, resolve any conflicts, rerun the narrowest relevant verification, and push again.`,
+    "Do not stop just because the requested code change is already present.",
+  ].join(" ");
+
+  return {
+    ...(context ?? {}),
+    branchUpkeepRequired: true,
+    promptContext,
+    ...(pr.mergeStateStatus ? { mergeStateStatus: pr.mergeStateStatus } : {}),
+    ...(pr.headRefOid ? { failingHeadSha: pr.headRefOid } : {}),
+    baseBranch,
+  };
 }
 
 function appendQueueRepairContext(lines: string[], context?: Record<string, unknown>): void {

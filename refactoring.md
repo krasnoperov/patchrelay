@@ -555,6 +555,7 @@ The remaining work is no longer just "finish the refactor." It is to make the re
 - A `review_fix` turn is not truly complete if the requested code change is present but the PR is still `DIRTY` against current `main`.
 - After any PatchRelay-owned PR turn that claims success, refresh GitHub PR truth and decide whether another upkeep step is required before stopping.
 - For the current live gap, implement this first for `review_fix`: if the PR is still `DIRTY`, queue another upkeep turn that rebases or updates the existing PR branch onto latest `main`, verifies, and pushes again.
+- Do not let the ordinary `review_fix` attempt budget block that upkeep lane; once the task is “make the PR clean again,” it should proceed as PR upkeep rather than escalate just because prior review-fix attempts already exist.
 - Preserve that upkeep intent across restart and manual retry so `review_fix` does not silently downgrade to plain `implementation`.
 - Keep the status surface honest: when the branch still needs upkeep, do not report the issue as simply “waiting for review feedback.”
 

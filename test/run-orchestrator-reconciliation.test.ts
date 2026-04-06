@@ -836,6 +836,73 @@ exit 1
   }
 });
 
+test("review_fix wake infers branch upkeep context from a dirty PR", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-review-fix-wake-context-"));
+  const oldPath = process.env.PATH;
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-review-wake",
+      issueKey: "USE-REVIEW-WAKE",
+      branchName: "feat-review-wake",
+      prNumber: 31,
+      prState: "open",
+      prReviewState: "changes_requested",
+      factoryState: "changes_requested",
+      reviewFixAttempts: 3,
+    });
+
+    const fakeBin = path.join(baseDir, "fake-bin");
+    mkdirSync(fakeBin, { recursive: true });
+    const ghPath = path.join(fakeBin, "gh");
+    writeFileSync(ghPath, `#!/usr/bin/env bash
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  printf '{"headRefOid":"sha-review-wake","state":"OPEN","reviewDecision":"CHANGES_REQUESTED","mergeStateStatus":"DIRTY"}'
+  exit 0
+fi
+echo "unexpected gh args: $*" >&2
+exit 1
+`);
+    chmodSync(ghPath, 0o755);
+    process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
+
+    const orchestrator = new RunOrchestrator(
+      config,
+      db,
+      {
+        startThread: async () => ({ threadId: "thread-review-wake" }),
+        steerTurn: async () => undefined,
+        readThread: async () => ({ id: "thread-review-wake", turns: [] }),
+      } as never,
+      { forProject: async () => undefined } as never,
+      () => undefined,
+      pino({ enabled: false }),
+    );
+
+    const context = await (orchestrator as unknown as {
+      resolveReviewFixWakeContext: (
+        issue: typeof issue,
+        context: Record<string, unknown> | undefined,
+        project: AppConfig["projects"][number],
+      ) => Promise<Record<string, unknown> | undefined>;
+    }).resolveReviewFixWakeContext(issue, undefined, config.projects[0]!);
+
+    assert.equal(context?.branchUpkeepRequired, true);
+    assert.equal(context?.mergeStateStatus, "DIRTY");
+    assert.match(String(context?.promptContext ?? ""), /GitHub still reports PR #31 as DIRTY/);
+
+    const updatedIssue = db.getIssue("usertold", "issue-review-wake");
+    assert.equal(updatedIssue?.prHeadSha, "sha-review-wake");
+    assert.equal(updatedIssue?.prReviewState, "changes_requested");
+  } finally {
+    process.env.PATH = oldPath;
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("reconcileIdleIssues prioritizes queue eviction recovery over approved waiting state", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-queue-eviction-priority-"));
   try {
