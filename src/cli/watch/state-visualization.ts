@@ -15,6 +15,8 @@ export interface ObservationLine {
 }
 
 export interface PatchRelayObservationIssue {
+  sessionState?: string | undefined;
+  waitingReason?: string | undefined;
   factoryState: string;
   activeRunType?: string | undefined;
   prNumber?: number | undefined;
@@ -118,10 +120,10 @@ function describeObservationEvent(event: OperatorFeedEvent): ObservationLine {
         const active = event.status === "starting";
         return {
           tone: active ? "warn" : "info",
-          text: active ? "PatchRelay is actively running queue repair." : event.summary,
+          text: active ? "PatchRelay is actively running queue repair." : `Observed queue signal: ${event.summary}`,
         };
       }
-      return { tone: "info", text: event.summary };
+      return { tone: "info", text: `Observed signal: ${event.summary}` };
   }
 }
 
@@ -146,11 +148,43 @@ export function buildPatchRelayQueueObservations(
 ): ObservationLine[] {
   const observations: ObservationLine[] = [];
 
-  switch (issue.factoryState) {
+  switch (issue.sessionState) {
+    case "waiting_input":
+      observations.push({
+        tone: "warn",
+        text: issue.waitingReason ?? "PatchRelay is waiting for input before continuing.",
+      });
+      break;
+    case "running":
+      observations.push({
+        tone: "info",
+        text: "PatchRelay is actively working this session.",
+      });
+      break;
+    case "idle":
+      observations.push({
+        tone: "info",
+        text: "PatchRelay is idle for this issue.",
+      });
+      break;
+    case "done":
+      observations.push({
+        tone: "success",
+        text: "PatchRelay is complete because GitHub reports the PR has merged.",
+      });
+      break;
+    case "failed":
+      observations.push({
+        tone: "warn",
+        text: "PatchRelay needs human help to recover this session.",
+      });
+      break;
+    default:
+      switch (issue.factoryState) {
     case "awaiting_queue":
       observations.push({
         tone: "info",
-        text: "PatchRelay has finished branch work and is waiting for external queue progress.",
+        text: "PatchRelay has finished active work and is waiting for downstream merge flow.",
       });
       break;
     case "repairing_queue":
@@ -170,8 +204,10 @@ export function buildPatchRelayQueueObservations(
     default:
       observations.push({
         tone: "info",
-        text: "Queue hand-off has not started yet; PatchRelay still owns the issue workflow.",
+        text: "PatchRelay is tracking this issue.",
       });
+      break;
+      }
       break;
   }
 
@@ -181,7 +217,7 @@ export function buildPatchRelayQueueObservations(
   } else if (issue.factoryState === "awaiting_queue") {
     observations.push({
       tone: "info",
-      text: "No external queue signal has been observed yet.",
+      text: "No downstream queue signal has been observed yet.",
     });
   }
 

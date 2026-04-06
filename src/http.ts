@@ -678,7 +678,8 @@ function renderAgentSessionStatusPage(params: {
       ${prUrl ? `<p><a href="${escapeHtml(prUrl)}" target="_blank" rel="noopener noreferrer">Open pull request ${escapeHtml(prLabel ?? "")}</a></p>` : ""}
       <div class="chips">
         <span class="chip"><strong>Session:</strong> <code>${escapeHtml(sessionState)}</code></span>
-        <span class="chip"><strong>Stage:</strong> <code>${escapeHtml(factoryState)}</code></span>
+        <span class="chip"><strong>Waiting reason:</strong> <code>${escapeHtml(waitingReason)}</code></span>
+        <span class="chip"><strong>Debug stage:</strong> <code>${escapeHtml(factoryState)}</code></span>
         <span class="chip"><strong>Linear:</strong> <code>${escapeHtml(linearState)}</code></span>
         <span class="chip"><strong>Active:</strong> ${activeStage}</span>
         <span class="chip"><strong>Latest:</strong> ${latestStage}</span>

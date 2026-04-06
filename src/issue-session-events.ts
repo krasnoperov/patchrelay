@@ -109,7 +109,11 @@ export function deriveSessionWakePlan(
             ...(typeof payload?.author === "string" ? { author: payload.author } : {}),
           });
         }
-        if (event.eventType === "followup_prompt" || event.eventType === "operator_prompt") {
+        if (
+          event.eventType === "followup_prompt"
+          || event.eventType === "followup_comment"
+          || event.eventType === "operator_prompt"
+        ) {
           resumeThread = true;
         }
         break;

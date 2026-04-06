@@ -173,47 +173,223 @@ function appendPublicationContract(
   );
 }
 
-export function buildRunPrompt(issue: IssueRecord, runType: RunType, repoPath: string, context?: Record<string, unknown>): string {
-  const lines: string[] = [
+function buildPromptHeader(issue: IssueRecord): string[] {
+  return [
     `Issue: ${issue.issueKey ?? issue.linearIssueId}`,
     issue.title ? `Title: ${issue.title}` : undefined,
     issue.branchName ? `Branch: ${issue.branchName}` : undefined,
     issue.prNumber ? `PR: #${issue.prNumber}` : undefined,
     "",
   ].filter(Boolean) as string[];
+}
 
+function appendTaskObjective(lines: string[], issue: IssueRecord): void {
+  const description = issue.description?.trim();
+  lines.push("## Task Objective", "");
+  lines.push(issue.title || `Complete ${issue.issueKey ?? issue.linearIssueId}.`);
+  if (description) {
+    lines.push("", description);
+  }
+  lines.push("");
+}
+
+function appendLinearContext(lines: string[], context?: Record<string, unknown>): void {
   const promptContext = typeof context?.promptContext === "string" ? context.promptContext.trim() : "";
   const latestPrompt = typeof context?.promptBody === "string" ? context.promptBody.trim() : "";
+  const operatorPrompt = typeof context?.operatorPrompt === "string" ? context.operatorPrompt.trim() : "";
+  const userComment = typeof context?.userComment === "string" ? context.userComment.trim() : "";
+
   if (promptContext) {
     lines.push("## Linear Session Context", "", promptContext, "");
   }
   if (latestPrompt) {
     lines.push("## Latest Human Instruction", "", latestPrompt, "");
   }
-  const operatorPrompt = typeof context?.operatorPrompt === "string" ? context.operatorPrompt.trim() : "";
   if (operatorPrompt) {
     lines.push("## Operator Prompt", "", operatorPrompt, "");
   }
-  const userComment = typeof context?.userComment === "string" ? context.userComment.trim() : "";
   if (userComment) {
     lines.push("## Human Follow-up Comment", "", userComment, "");
   }
+}
+
+function collectFollowUpInputs(context?: Record<string, unknown>): Array<{ type: string; text: string; author?: string }> {
   const followUps = Array.isArray(context?.followUps) ? context.followUps : [];
+  const inputs: Array<{ type: string; text: string; author?: string }> = [];
+  for (const entry of followUps) {
+    const followUp = entry && typeof entry === "object" ? entry as Record<string, unknown> : undefined;
+    const type = typeof followUp?.type === "string" ? followUp.type : "followup";
+    const author = typeof followUp?.author === "string" ? followUp.author : undefined;
+    const text = typeof followUp?.text === "string" ? followUp.text.trim() : "";
+    if (!text) continue;
+    inputs.push({ type, text, ...(author ? { author } : {}) });
+  }
+  return inputs;
+}
+
+function resolveFollowUpWhy(runType: RunType, context?: Record<string, unknown>): string {
+  const wakeReason = typeof context?.wakeReason === "string" ? context.wakeReason : undefined;
+  switch (wakeReason) {
+    case "followup_prompt":
+      return "A new Linear agent prompt arrived after the previous turn.";
+    case "followup_comment":
+      return "A human follow-up comment arrived after the previous turn.";
+    case "operator_prompt":
+      return "An operator supplied new guidance for this issue.";
+    case "review_changes_requested":
+      return "GitHub review requested changes on the current PR head.";
+    case "settled_red_ci":
+      return "Required CI settled red for the current PR head.";
+    case "merge_steward_incident":
+      return "Merge Steward reported an incident on the current PR head.";
+    case "delegated":
+      return runType === "implementation"
+        ? "This is the first implementation turn for the delegated issue."
+        : `This turn continues ${runType.replaceAll("_", " ")} work for the delegated issue.`;
+    default:
+      if (runType === "review_fix") return "This turn continues requested-changes work on the existing PR.";
+      if (runType === "ci_repair") return "This turn continues CI repair work on the existing PR.";
+      if (runType === "queue_repair") return "This turn continues merge-queue repair work on the existing PR.";
+      return "This turn continues implementation on the existing issue session.";
+  }
+}
+
+function resolveFollowUpAction(runType: RunType, context?: Record<string, unknown>): string {
+  if (runType === "review_fix" && context?.branchUpkeepRequired === true) {
+    const baseBranch = typeof context.baseBranch === "string" ? context.baseBranch : "main";
+    return `Update the existing PR branch onto latest ${baseBranch}, resolve conflicts if needed, rerun narrow verification, and push the same branch.`;
+  }
+  switch (runType) {
+    case "review_fix":
+      return "Address the review feedback on the current PR branch, verify the fix, and push the same branch.";
+    case "ci_repair":
+      return "Fix the failing CI root cause on the current PR branch, verify it locally, and push the same branch.";
+    case "queue_repair":
+      return "Repair the merge-queue incident on the current PR branch, verify the fix, and push the same branch.";
+    case "implementation":
+    default:
+      return "Continue from the latest branch state, incorporate the new input, and publish updates to the existing issue branch if you make changes.";
+  }
+}
+
+function hasAuthoritativeGitHubFacts(issue: IssueRecord, runType: RunType, context?: Record<string, unknown>): boolean {
+  return issue.prNumber !== undefined
+    || issue.prHeadSha !== undefined
+    || runType !== "implementation"
+    || typeof context?.failureHeadSha === "string"
+    || typeof context?.failingHeadSha === "string"
+    || typeof context?.mergeStateStatus === "string"
+    || typeof context?.checkName === "string"
+    || typeof context?.reviewerName === "string";
+}
+
+function appendAuthoritativeGitHubFacts(
+  lines: string[],
+  issue: IssueRecord,
+  runType: RunType,
+  context?: Record<string, unknown>,
+): void {
+  if (!hasAuthoritativeGitHubFacts(issue, runType, context)) {
+    return;
+  }
+
+  const prNumber = issue.prNumber !== undefined ? `#${issue.prNumber}` : undefined;
+  const headSha = typeof context?.failureHeadSha === "string"
+    ? context.failureHeadSha
+    : typeof context?.failingHeadSha === "string"
+    ? context.failingHeadSha
+    : issue.prHeadSha;
+  const mergeStateStatus = typeof context?.mergeStateStatus === "string" ? context.mergeStateStatus : undefined;
+  const baseBranch = typeof context?.baseBranch === "string" ? context.baseBranch : undefined;
+  const checkName = typeof context?.checkName === "string" ? context.checkName : undefined;
+  const jobName = typeof context?.jobName === "string" ? context.jobName : undefined;
+  const stepName = typeof context?.stepName === "string" ? context.stepName : undefined;
+  const reviewerName = typeof context?.reviewerName === "string" ? context.reviewerName : undefined;
+  const reviewBody = typeof context?.reviewBody === "string" ? context.reviewBody.trim() : "";
+  const summary = typeof context?.summary === "string" ? context.summary : undefined;
+
+  lines.push("## Authoritative GitHub Facts", "");
+  if (prNumber) {
+    lines.push(`- Current PR: ${prNumber}`);
+  }
+  if (headSha) {
+    lines.push(`- Current relevant head SHA: ${headSha}`);
+  }
+  if (issue.prReviewState) {
+    lines.push(`- Current review state: ${issue.prReviewState}`);
+  }
+  if (issue.prCheckStatus) {
+    lines.push(`- Current check status: ${issue.prCheckStatus}`);
+  }
+  if (mergeStateStatus) {
+    lines.push(`- Merge state against ${baseBranch ?? "base"}: ${mergeStateStatus}`);
+  }
+  if (checkName) {
+    lines.push(`- Relevant check: ${checkName}`);
+  }
+  if (jobName && jobName !== checkName) {
+    lines.push(`- Relevant job: ${jobName}`);
+  }
+  if (stepName) {
+    lines.push(`- Relevant step: ${stepName}`);
+  }
+  if (reviewerName) {
+    lines.push(`- Reviewer: ${reviewerName}`);
+  }
+  if (summary) {
+    lines.push(`- Summary: ${summary}`);
+  }
+  if (reviewBody) {
+    lines.push(`- Review body: ${reviewBody}`);
+  }
+  lines.push("");
+}
+
+function appendFactFreshness(lines: string[], issue: IssueRecord, runType: RunType, context?: Record<string, unknown>): void {
+  if (!hasAuthoritativeGitHubFacts(issue, runType, context)) {
+    return;
+  }
+  const hasFreshFacts = context?.githubFactsFresh === true || context?.branchUpkeepRequired === true;
+  lines.push("## Fact Freshness", "");
+  if (hasFreshFacts) {
+    lines.push("GitHub facts below were refreshed immediately before this turn was created.");
+  } else {
+    lines.push("GitHub facts below came from the triggering event or last known reconciliation state and may now be stale.");
+    lines.push("Verify the current PR head, review state, and check state in GitHub before making branch-mutating decisions.");
+  }
+  lines.push("");
+}
+
+function appendFollowUpPromptPrelude(
+  lines: string[],
+  issue: IssueRecord,
+  runType: RunType,
+  context?: Record<string, unknown>,
+): void {
+  lines.push("## Follow-up Turn", "");
+  lines.push(`Why this turn exists: ${resolveFollowUpWhy(runType, context)}`);
+  lines.push(`Required action now: ${resolveFollowUpAction(runType, context)}`);
+  lines.push("");
+
+  appendLinearContext(lines, context);
+
+  const followUps = collectFollowUpInputs(context);
   if (followUps.length > 0) {
-    lines.push("## Follow-up Inputs", "");
-    for (const entry of followUps) {
-      const followUp = entry && typeof entry === "object" ? entry as Record<string, unknown> : undefined;
-      const type = typeof followUp?.type === "string" ? followUp.type : "followup";
-      const author = typeof followUp?.author === "string" ? followUp.author : undefined;
-      const text = typeof followUp?.text === "string" ? followUp.text.trim() : "";
-      if (!text) continue;
-      lines.push(`- ${type}${author ? ` from ${author}` : ""}: ${text}`);
+    lines.push("## What Changed Since The Last Turn", "");
+    for (const followUp of followUps) {
+      lines.push(`- ${followUp.type}${followUp.author ? ` from ${followUp.author}` : ""}: ${followUp.text}`);
     }
     lines.push("");
-    if (context?.followUpMode) {
-      lines.push("Continue from the latest branch state and incorporate the follow-up inputs above before making further changes.", "");
-    }
   }
+
+  appendFactFreshness(lines, issue, runType, context);
+  appendAuthoritativeGitHubFacts(lines, issue, runType, context);
+}
+
+export function buildInitialRunPrompt(issue: IssueRecord, runType: RunType, repoPath: string, context?: Record<string, unknown>): string {
+  const lines: string[] = buildPromptHeader(issue);
+  appendTaskObjective(lines, issue);
+  appendLinearContext(lines, context);
 
   // Add run-type-specific context for reactive runs
   switch (runType) {
@@ -289,12 +465,10 @@ export function buildRunPrompt(issue: IssueRecord, runType: RunType, repoPath: s
       break;
   }
 
-  // Append the repo's workflow file
   const workflowBody = readWorkflowFile(repoPath, runType);
   if (workflowBody) {
     lines.push(workflowBody);
   } else if (runType === "implementation") {
-    // Fallback if no workflow file exists
     lines.push(
       "Implement the Linear issue. Read the issue via MCP for details.",
     );
@@ -302,6 +476,112 @@ export function buildRunPrompt(issue: IssueRecord, runType: RunType, repoPath: s
   appendPublicationContract(lines, runType, issue, context);
 
   return lines.join("\n");
+}
+
+export function buildFollowUpRunPrompt(issue: IssueRecord, runType: RunType, repoPath: string, context?: Record<string, unknown>): string {
+  const lines: string[] = buildPromptHeader(issue);
+  appendFollowUpPromptPrelude(lines, issue, runType, context);
+
+  // Add run-type-specific context for reactive runs
+  switch (runType) {
+    case "ci_repair": {
+      const snapshot = context?.ciSnapshot && typeof context.ciSnapshot === "object"
+        ? context.ciSnapshot as {
+            gateCheckName?: string;
+            gateCheckStatus?: string;
+            settledAt?: string;
+            failedChecks?: Array<{ name?: string; summary?: string }>;
+          }
+        : undefined;
+      lines.push(
+        "## CI Repair",
+        "",
+        "A full CI iteration has settled failed on your PR. Start from the specific failing check/job/step below on the latest remote PR branch tip, fix that concrete failure first, then push to the same PR branch.",
+        snapshot?.gateCheckName ? `Gate check: ${String(snapshot.gateCheckName)}` : "",
+        snapshot?.gateCheckStatus ? `Gate status: ${String(snapshot.gateCheckStatus)}` : "",
+        snapshot?.settledAt ? `Settled at: ${String(snapshot.settledAt)}` : "",
+        context?.failureHeadSha ? `Failing head SHA: ${String(context.failureHeadSha)}` : "",
+        context?.checkName ? `Failed check: ${String(context.checkName)}` : "",
+        context?.jobName && context?.jobName !== context?.checkName ? `Failed job: ${String(context.jobName)}` : "",
+        context?.stepName ? `Failed step: ${String(context.stepName)}` : "",
+        context?.summary ? `Failure summary: ${String(context.summary)}` : "",
+        Array.isArray(snapshot?.failedChecks) && snapshot.failedChecks.length > 0
+          ? `Other failed checks in the settled snapshot (context only; ignore unless the logs show the same root cause):\n${snapshot.failedChecks.map((entry) => `- ${String(entry.name ?? "unknown")}${entry.summary ? `: ${String(entry.summary)}` : ""}`).join("\n")}`
+          : "",
+        context?.checkUrl ? `Check URL: ${String(context.checkUrl)}` : "",
+        Array.isArray(context?.annotations) && context.annotations.length > 0
+          ? `Annotations:\n${context.annotations.map((entry) => `- ${String(entry)}`).join("\n")}`
+          : "",
+        "",
+        "Fetch the latest remote branch state first. If the branch moved since this failure, restart from the new tip instead of pushing older work.",
+        "Read the latest logs for the named failing check, fix that root cause, and only broaden scope when the logs show direct fallout from the same issue.",
+        "Do not change workflows, dependency installation, or unrelated tests unless the failing logs clearly point there.",
+        "Run focused verification for the named failure, then commit and push.",
+        "Do not open a new PR. Keep working on the existing branch until CI goes green or the situation is clearly stuck.",
+        "Do not change test expectations unless the test is genuinely wrong.",
+        "",
+      );
+      break;
+    }
+    case "review_fix":
+      lines.push(
+        "## Review Changes Requested",
+        "",
+        "A reviewer has requested changes on your PR. Address the feedback and push.",
+        context?.reviewerName ? `Reviewer: ${String(context.reviewerName)}` : "",
+        context?.reviewBody ? `\n## Review comment\n\n${String(context.reviewBody)}` : "",
+        "",
+        "Steps:",
+        "1. Read the review feedback and PR comments (`gh pr view --comments`).",
+        "2. Check the current diff (`git diff origin/main`) — a prior rebase may have already resolved some concerns (e.g., scope-bundling from stale commits).",
+        "3. For each review point: if already resolved, note why. If not, fix it.",
+        "4. Run verification, commit and push.",
+        "5. If you believe all concerns are resolved, request a re-review: `gh pr edit <PR#> --add-reviewer <reviewer>`.",
+        "   Do NOT just post a comment saying \"resolved\" — the reviewer must re-review to dismiss the CHANGES_REQUESTED state.",
+        "",
+      );
+      break;
+    case "queue_repair":
+      appendQueueRepairContext(lines, context);
+      lines.push(
+        "## Merge Queue Failure",
+        "",
+        "The merge queue rejected this PR. Rebase onto latest main and fix conflicts.",
+        context?.failureReason ? `Failure reason: ${String(context.failureReason)}` : "",
+        "",
+        "Fetch and rebase onto latest main, resolve conflicts, run verification, push.",
+        "If the conflict is a semantic contradiction, explain and stop.",
+        "",
+      );
+      break;
+  }
+
+  const workflowBody = readWorkflowFile(repoPath, runType);
+  if (workflowBody) {
+    lines.push(workflowBody);
+  } else if (runType === "implementation") {
+    lines.push(
+      "Implement the Linear issue. Read the issue via MCP for details.",
+    );
+  }
+  appendPublicationContract(lines, runType, issue, context);
+
+  return lines.join("\n");
+}
+
+function shouldBuildFollowUpPrompt(runType: RunType, context?: Record<string, unknown>): boolean {
+  if (context?.followUpMode) return true;
+  if (runType !== "implementation") return true;
+  const wakeReason = typeof context?.wakeReason === "string" ? context.wakeReason : undefined;
+  return Boolean(wakeReason && wakeReason !== "delegated");
+}
+
+export function buildRunPrompt(issue: IssueRecord, runType: RunType, repoPath: string, context?: Record<string, unknown>): string {
+  if (shouldBuildFollowUpPrompt(runType, context)) {
+    return buildFollowUpRunPrompt(issue, runType, repoPath, context);
+  }
+
+  return buildInitialRunPrompt(issue, runType, repoPath, context);
 }
 
 interface PendingRunWake {

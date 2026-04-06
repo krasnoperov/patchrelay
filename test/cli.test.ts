@@ -475,6 +475,7 @@ test("cli inspect, worktree, and open render stored issue details", async () => 
     const stderr = createBufferStream();
     assert.equal(await runCli(["issue", "show", "USE-54"], { config, data, stdout: stdout.stream, stderr: stderr.stream }), 0);
     assert.match(stdout.read(), /USE-54 {2}Human Needed/);
+    assert.match(stdout.read(), /Debug stage: failed/);
     assert.match(stdout.read(), /Deploy did not complete because auth was missing/);
 
     const worktreeOut = createBufferStream();
@@ -759,7 +760,6 @@ test("cli list and retry cover operator control flows", async () => {
       lastGitHubFailureSource: "queue_eviction",
       lastGitHubFailureHeadSha: "sha-queue",
       lastGitHubFailureCheckName: "merge-steward/queue",
-      queueLabelApplied: true,
     });
 
     const queueRetryOut = createBufferStream();
@@ -788,7 +788,6 @@ test("cli list and retry cover operator control flows", async () => {
       prNumber: 59,
       prState: "open",
       prReviewState: "changes_requested",
-      queueLabelApplied: false,
     });
 
     const reviewRetryOut = createBufferStream();

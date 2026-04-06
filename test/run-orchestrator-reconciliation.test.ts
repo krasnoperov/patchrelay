@@ -487,7 +487,6 @@ exit 1`, "utf8");
       prState: "open",
       prHeadSha: "sha-13c",
       prCheckStatus: "failure",
-      queueLabelApplied: true,
       factoryState: "repairing_ci",
     });
 
@@ -532,7 +531,6 @@ exit 1`, "utf8");
       prState: "open",
       prReviewState: null,
       prCheckStatus: "success",
-      queueLabelApplied: false,
       factoryState: "pr_open",
     });
 
@@ -541,7 +539,6 @@ exit 1`, "utf8");
     const issue = db.getIssue("usertold", "issue-13b");
     assert.equal(issue?.factoryState, "pr_open");
     assert.equal(issue?.pendingRunType, undefined);
-    assert.equal(issue?.queueLabelApplied, false);
     assert.deepEqual(enqueueCalls, []);
   } finally {
     process.env.PATH = oldPath;
@@ -575,7 +572,6 @@ exit 1`, "utf8");
       prState: "open",
       prReviewState: "approved",
       prCheckStatus: "success",
-      queueLabelApplied: false,
       factoryState: "awaiting_queue",
     });
 
@@ -620,7 +616,6 @@ exit 1`, "utf8");
       prState: "open",
       prHeadSha: "sha-13d",
       prCheckStatus: "failure",
-      queueLabelApplied: true,
       factoryState: "awaiting_queue",
     });
 
@@ -1061,7 +1056,6 @@ test("reconcileIdleIssues prioritizes queue eviction recovery over approved wait
       lastGitHubFailureCheckName: "merge-steward/queue",
       lastAttemptedFailureHeadSha: null,
       lastAttemptedFailureSignature: null,
-      queueLabelApplied: true,
     });
 
     await (orchestrator as unknown as { idleReconciler: { reconcile: () => Promise<void> } }).idleReconciler.reconcile();

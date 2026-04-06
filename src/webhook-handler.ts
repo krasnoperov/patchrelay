@@ -533,7 +533,7 @@ export class WebhookHandler {
       return;
     }
 
-    if (promptBody && existingIssue && delegated) {
+    if (promptBody && existingIssue && (delegated || existingIssue.factoryState === "awaiting_input")) {
       this.db.appendIssueSessionEvent({
         projectId: project.id,
         linearIssueId: normalized.issue.id,
@@ -667,7 +667,7 @@ export class WebhookHandler {
 
     // No active run — enqueue a run with the comment as context if appropriate
     if (!issue.activeRunId) {
-      const ENQUEUEABLE_STATES = new Set(["pr_open", "changes_requested", "implementing", "delegated"]);
+      const ENQUEUEABLE_STATES = new Set(["pr_open", "changes_requested", "implementing", "delegated", "awaiting_input"]);
       if (ENQUEUEABLE_STATES.has(issue.factoryState)) {
         const runType = issue.prReviewState === "changes_requested" ? "review_fix" : "implementation";
         this.db.appendIssueSessionEvent({

@@ -420,7 +420,6 @@ test("pull request label events are inert for PatchRelay queue scheduling", asyn
       factoryState: "awaiting_queue",
       prReviewState: "approved",
       prCheckStatus: "success",
-      queueLabelApplied: false,
     });
 
     await handler.processGitHubWebhookEvent({
@@ -434,7 +433,6 @@ test("pull request label events are inert for PatchRelay queue scheduling", asyn
     });
 
     const issue = db.getIssue("usertold", "issue-queue-label");
-    assert.equal(issue?.queueLabelApplied, false);
     assert.equal(issue?.pendingRunType, undefined);
     assert.deepEqual(enqueueCalls, []);
   } finally {

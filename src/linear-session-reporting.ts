@@ -172,7 +172,25 @@ export function buildMergePrepEscalationActivity(attempts: number): LinearAgentA
   };
 }
 
-export function summarizeIssueStateForLinear(issue: Pick<IssueRecord, "factoryState" | "prNumber" | "prState" | "prReviewState" | "prCheckStatus">): string | undefined {
+export function summarizeIssueStateForLinear(
+  issue: Pick<IssueRecord, "factoryState" | "prNumber" | "prState" | "prReviewState" | "prCheckStatus"> & {
+    sessionState?: string | undefined;
+    waitingReason?: string | undefined;
+  },
+): string | undefined {
+  switch (issue.sessionState) {
+    case "waiting_input":
+      return issue.waitingReason ?? (issue.prNumber ? `PR #${issue.prNumber} is waiting for input.` : "Waiting for input.");
+    case "running":
+      return issue.prNumber ? `PR #${issue.prNumber} is actively running.` : "Actively running.";
+    case "idle":
+      return issue.prNumber ? `PR #${issue.prNumber} is idle.` : "Idle.";
+    case "done":
+      return issue.prNumber ? `PR #${issue.prNumber} has merged.` : "Change merged.";
+    case "failed":
+      return issue.prNumber ? `PR #${issue.prNumber} needs help to recover.` : "Needs help to recover.";
+  }
+
   switch (issue.factoryState) {
     case "pr_open":
       return issue.prNumber ? `PR #${issue.prNumber} is awaiting review.` : "Awaiting review.";

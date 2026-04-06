@@ -74,7 +74,6 @@ export interface IssueRecord {
   reviewFixAttempts: number;
   zombieRecoveryAttempts: number;
   lastZombieRecoveryAt?: string | undefined;
-  queueLabelApplied: boolean;
   updatedAt: string;
 }
 

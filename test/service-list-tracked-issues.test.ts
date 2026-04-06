@@ -102,7 +102,6 @@ test("listTrackedIssues suppresses stale interrupted notes while a run is active
       prNumber: 1,
       prReviewState: "approved",
       prCheckStatus: "failure",
-      queueLabelApplied: true,
     });
     const run = db.createRun({
       issueId: issue.id,

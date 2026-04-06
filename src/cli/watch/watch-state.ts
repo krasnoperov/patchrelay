@@ -178,6 +178,10 @@ export const initialWatchState: WatchState = {
 
 const TERMINAL_FACTORY_STATES = new Set(["done", "failed"]);
 
+function effectiveSessionState(issue: WatchIssue): string | undefined {
+  return issue.sessionState ?? (TERMINAL_FACTORY_STATES.has(issue.factoryState) ? issue.factoryState : undefined);
+}
+
 export function filterIssues(issues: WatchIssue[], filter: WatchFilter): WatchIssue[] {
   switch (filter) {
     case "all":
@@ -185,7 +189,10 @@ export function filterIssues(issues: WatchIssue[], filter: WatchFilter): WatchIs
     case "active":
       return issues.filter((i) => i.activeRunType !== undefined);
     case "non-done":
-      return issues.filter((i) => !TERMINAL_FACTORY_STATES.has(i.factoryState));
+      return issues.filter((i) => {
+        const sessionState = effectiveSessionState(i);
+        return sessionState !== "done" && sessionState !== "failed" && !TERMINAL_FACTORY_STATES.has(i.factoryState);
+      });
   }
 }
 
@@ -211,8 +218,9 @@ export function computeAggregates(issues: WatchIssue[]): IssueAggregates {
     if (issue.activeRunType) active++;
     if (!issue.activeRunType && issue.blockedByCount > 0) blocked++;
     if (!issue.activeRunType && issue.readyForExecution) ready++;
-    if (DONE_STATES.has(issue.factoryState)) done++;
-    if (FAILED_STATES.has(issue.factoryState)) failed++;
+    const sessionState = effectiveSessionState(issue);
+    if (sessionState === "done" || DONE_STATES.has(issue.factoryState)) done++;
+    if (sessionState === "failed" || FAILED_STATES.has(issue.factoryState)) failed++;
   }
   return { active, blocked, ready, done, failed, total: issues.length };
 }

@@ -441,7 +441,7 @@ Use this as the execution order for the refactor. The early phases are designed 
 - [ ] Implement the `v2` steer rule for direct replies to explicit agent questions.
 - [x] Implement additive clarification batching.
 - [x] Ensure inert self-generated events are recorded but do not start work.
-- [ ] Keep old `factoryState` writes only as transitional compatibility until read paths move over.
+- [x] Keep old `factoryState` writes only as transitional compatibility until read paths move over.
 
 ### Phase 6: Lease And Concurrency Model
 
@@ -453,9 +453,9 @@ Use this as the execution order for the refactor. The early phases are designed 
 
 ### Phase 7: Prompt And Thread Model Alignment
 
-- [ ] Separate prompt builders into explicit initial-prompt and follow-up-prompt paths.
-- [ ] Ensure follow-up prompts explain why the turn exists, what changed, and which GitHub facts are authoritative.
-- [ ] Make stale or partial GitHub facts explicit in follow-up prompts.
+- [x] Separate prompt builders into explicit initial-prompt and follow-up-prompt paths.
+- [x] Ensure follow-up prompts explain why the turn exists, what changed, and which GitHub facts are authoritative.
+- [x] Make stale or partial GitHub facts explicit in follow-up prompts.
 - [x] Reuse the same main thread for follow-up work within a session by default.
 - [ ] Add thread compaction/replacement rules that match the `v2` runtime document.
 - [x] Ensure merge/close events interrupt active work without starting a new implementation turn.
@@ -465,6 +465,7 @@ Use this as the execution order for the refactor. The early phases are designed 
 - [x] Add a minimal session-summary query layer backed by `IssueSession`.
 - [x] Update `src/service.ts` to expose session-oriented read methods.
 - [x] Update issue overview APIs to read from the new session model first.
+- [x] Make CLI, HTTP, watch views, and Linear summaries default to `sessionState` plus `waitingReason`.
 - [x] Stop returning queue protocol detail as a core part of issue/session status.
 - [x] Stop returning raw thread-event and operator-feed data as default issue status.
 - [ ] Keep a temporary compatibility path for old CLI commands if needed while the UI/API migrates.
@@ -478,7 +479,7 @@ Use this as the execution order for the refactor. The early phases are designed 
 - [x] Remove or deprecate `/api/issues/:issueKey/timeline`.
 - [x] Remove or deprecate `/api/issues/:issueKey/runs/:runId/events`.
 - [x] Remove queue observation building from `src/issue-query-service.ts` and watch views.
-- [ ] Remove or de-emphasize `src/operator-feed.ts` if it is no longer needed after the minimal session view lands.
+- [x] De-emphasize `src/operator-feed.ts` as supporting history instead of headline status.
 - [ ] Replace the current dashboard/TUI with a PatchRelay-only session view or remove it entirely.
 - [x] Update CLI help in `src/cli/help.ts` to match the reduced operator surface.
 
@@ -503,13 +504,16 @@ Use this as the execution order for the refactor. The early phases are designed 
 ## Live Operational Notes
 
 - PatchRelay now runs with session-event wakeups, renewable issue-session leases, terminal-event shutdown, and startup agent-session resync.
-- PatchRelay operator and public status reads now load from `IssueSession` first, with legacy `factoryState` retained only as a compatibility shadow while remaining read paths migrate.
+- PatchRelay operator and public status reads now default to `IssueSession` state plus `waitingReason`, with legacy `factoryState` retained only as a compatibility/debug shadow while remaining runtime writes migrate.
+- Startup no longer clears every session lease indiscriminately; it now expires only stale issue-session leases before recovery starts.
 - A live trial on `TST-5` exposed a real publication gap: Codex completed an implementation turn with local worktree changes but without committing or opening a PR. The runtime now verifies publication outcome before treating an implementation turn as successful.
 - A live follow-up prompt on `TST-5` successfully queued a continuation turn from existing session state after a service restart.
 - A second live delegation on `TST-6` successfully created a new active implementation session while `TST-5` was still in flight.
 - `merge-steward` and the PatchRelay GitHub App are now installed on `krasnoperov/ballony-i-nasosy`, branch protection requires one approval plus the `Verify` check, and live trials through `TST-20` successfully progressed through PR creation, approval, queue admission, validation, queue repair, and merge to `main`.
 - `merge-steward doctor` now discovers required checks from branch rules and classic branch protection, with a local `gh` fallback when the app token cannot read protection directly.
 - Routine Linear status comments are now suppressed when a native agent session exists; visible Linear comments are reserved for attention-needed states and planning-only final delivery.
+- Follow-up prompt construction is now split from initial prompt construction, and queued comment/prompt follow-ups reuse the main session thread by default.
+- `queueLabelApplied` has been removed from runtime control flow and operator/read models; the remaining work is schema/test/history cleanup rather than behavior change.
 
 ## Operational Hardening Plan
 
@@ -858,6 +862,177 @@ These are the behaviors we should keep pressure-testing with TST issues until th
 - `TST-2` showed that queue eviction must not be reclassified as branch CI during reconciliation.
 - `TST-7` and `TST-8` showed that Linear/operator status still drifts from the real session state when we keep reporting through old lifecycle language.
 - The interrupted `TST-2` repair turn after service restart showed that lease and interrupted-turn handling is much better now, but packaging and restart ergonomics are still brittle.
+
+## Sequenced Remaining Plan
+
+This is the recommended order for the remaining work. The key rule is: move correctness boundaries first, then behavior routing, then presentation, then schema cleanup.
+
+### Step 1. Finish Lease Fencing Outside The Orchestrator
+
+Why first:
+
+- this is the highest-risk correctness gap left
+- stale workers are still able to mutate compatibility state from webhook/service paths
+- later simplifications get much safer once all side-effecting writes are fenced
+
+Primary targets:
+
+- `src/service.ts`
+  - stop using global startup lease clearing as the default recovery mechanism
+  - thread lease ownership into any session-recovery writes that can race active work
+- `src/webhook-handler.ts`
+  - fence delegated-state recovery, input-state transitions, and retry-related writes when they mutate active session state
+- `src/github-webhook-handler.ts`
+  - fence PR bookkeeping writes that can race an active worker
+- `src/linear-session-sync.ts`
+  - keep read/report paths read-only; if any state mutation remains here, fence it
+- `src/db.ts`
+  - add one clear family of helpers for lease-guarded issue shadow writes instead of ad hoc wrappers
+
+Acceptance criteria:
+
+- every side-effecting write that can race an active session uses a lease-checked DB helper
+- stale workers can still read and log, but cannot finalize, requeue, or overwrite summaries/waiting reasons
+- startup no longer depends on unconditional `releaseAllIssueSessionLeases()` as the main recovery primitive
+
+### Step 2. Implement Direct-Reply Steer And Prompt-Path Split
+
+Why second:
+
+- recent live runs proved the biggest behavior gap is not lack of power; it is waking the right turn for the right reason
+- the current prompt builder and event handling still mix initial-turn and follow-up-turn contracts together
+
+Primary targets:
+
+- `src/run-orchestrator.ts`
+  - split `buildRunPrompt(...)` into:
+    - initial prompt builder
+    - follow-up prompt builder
+  - make follow-up prompts explicitly state:
+    - why this turn exists
+    - which GitHub facts are authoritative
+    - what may be stale
+    - whether the agent should resume an existing thread or treat this as premise-changing
+- `src/issue-session-events.ts`
+  - add or refine explicit event types for:
+    - direct human reply to an explicit agent question
+    - additive human follow-up
+    - premise-changing follow-up
+  - keep `self_comment` inert
+- `src/webhook-handler.ts`
+  - when PatchRelay is truly waiting on human input, route a direct reply into same-thread steering instead of always creating a fresh follow-up wake
+  - keep unrelated/new operator prompts as fresh-turn wakes
+
+Acceptance criteria:
+
+- a reply to an explicit PatchRelay question resumes the same conversational thread when safe
+- additive follow-up stays in-thread
+- premise-changing follow-up becomes a fresh turn
+- initial prompts and follow-up prompts are no longer built by one mixed function
+
+### Step 3. Demote `factoryState` From Operator Truth
+
+Why third:
+
+- once writes and wake routing are safer, we can simplify what humans and tooling see
+- today the remaining confusion comes from showing `factoryState` and `sessionState` side by side as if they are equal truths
+
+Primary targets:
+
+- `src/cli/data.ts`
+- `src/cli/formatters/text.ts`
+- `src/http.ts`
+- `src/linear-session-reporting.ts`
+- `src/service.ts`
+- `src/issue-query-service.ts`
+
+Work to do:
+
+- make `sessionState` plus `waitingReason` the default headline status everywhere
+- demote `factoryState` to debug/detail output only
+- update Linear summary text so active delegated work is not summarized only through old factory stages
+- remove remaining queue-label-era wording from status text
+
+Acceptance criteria:
+
+- default CLI, dashboard, and public session views speak in `running`, `waiting_input`, `done`, `failed`, plus actionable `waitingReason`
+- `factoryState` remains visible only in debug/detail surfaces
+- Linear-facing summaries no longer make active work look like passive backlog/input drift
+
+### Step 4. Reduce Legacy Operator-Feed Dependence
+
+Why fourth:
+
+- the append-only event store is still useful as audit/timeline data
+- the remaining problem is that some visible state builders still treat it like a live control-plane feed
+
+Primary targets:
+
+- `src/cli/watch/state-visualization.ts`
+- `src/cli/watch/watch-state.ts`
+- `src/cli/watch/IssueDetailView.tsx`
+- `src/cli/watch/HelpBar.tsx`
+- `src/operator-feed.ts`
+
+Work to do:
+
+- keep operator-feed as a timeline/audit source
+- stop using feed-derived pseudo-states as headline status
+- remove queue-label/feed-era wording from watch help and status summaries
+- preserve history/timeline views, but make them clearly historical rather than current control state
+
+Acceptance criteria:
+
+- no default operator view needs feed-derived status to understand the current session
+- feed remains available only as supporting history/audit data
+- timeline/history no longer makes stale queue attempts look like current obligations
+
+### Step 5. Retire `queue_label_applied` At Schema Level
+
+Why last:
+
+- it is already mostly dead in control flow
+- the remaining risk is compatibility/tests, not runtime behavior
+- removing it too early would create churn before the new operator/read paths fully settle
+
+Primary targets:
+
+- `src/db-types.ts`
+- `src/db.ts`
+- `src/db/migrations.ts`
+- `src/service.ts`
+- tests that still assert `queueLabelApplied`
+
+Work to do:
+
+- remove `queueLabelApplied` from `IssueRecord`, DB row mapping, and read-model queries
+- add a migration that stops relying on `queue_label_applied`
+- delete compatibility assertions from tests once queue repair is fully GitHub-truth-based
+- remove any leftover docs mentioning it as a runtime fact
+
+Acceptance criteria:
+
+- no runtime, read model, or test logic depends on `queue_label_applied`
+- the DB schema no longer carries it as an active field
+- PatchRelay queue repair behavior remains unchanged because it already keys off GitHub truth and downstream-owned posture
+
+## What Can Be Simplified vs What Must Stay
+
+Can simplify now:
+
+- mixed prompt-building paths
+- visible reliance on `factoryState`
+- queue-label compatibility state
+- feed-derived headline status
+
+Must stay:
+
+- periodic reconciliation
+- repair-specific run types
+- fresh GitHub truth checks after PR-affecting turns
+- operator/audit history, even if it is de-emphasized
+
+In practice, the correct target is not a tiny runtime with no loops. It is a smaller, more obviously correct runtime that still survives real dirty PRs, missing webhooks, restart recovery, and queue conflicts.
 - The queue behavior around PRs `#4`, `#5`, and `#6` showed that speculative merge conflicts are expected, but the system must describe them clearly and keep the repair obligation visible.
 - `TST-15` showed that PatchRelay can correctly detect “review fix already present” but still stop too early: if the PR remains `DIRTY`, PatchRelay must continue into branch upkeep instead of settling idle.
 - `TST-15` also showed that retry and restart recovery must preserve the original repair lane; otherwise a review fix can resume as generic implementation and lose the PR-upkeep intent.

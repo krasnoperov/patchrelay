@@ -174,6 +174,7 @@ export function IssueDetailView({
   if (issue.prReviewState === "approved") facts.push("approved");
   else if (rereviewNeeded) facts.push("re-review needed");
   else if (issue.prReviewState === "changes_requested") facts.push("changes requested");
+  if (issue.waitingReason && issue.sessionState === "waiting_input") facts.push(issue.waitingReason);
   if (issue.prCheckStatus === "passed" || issue.prCheckStatus === "success") facts.push("checks passed");
   else if (issue.prCheckStatus === "failed" || issue.prCheckStatus === "failure") {
     const check = issueContext?.latestFailureCheckName ?? issue.latestFailureCheckName ?? "checks";
@@ -188,7 +189,7 @@ export function IssueDetailView({
       <Box gap={2}>
         <Text bold>{key}</Text>
         <Text color={session.color}>{session.label}</Text>
-        <Text dimColor>{`  stage ${stage}`}</Text>
+        <Text dimColor>{`  debug stage ${stage}`}</Text>
         {facts.length > 0 && <Text dimColor>{facts.join(" \u00b7 ")}</Text>}
         {activeRunStartedAt && <ElapsedTime startedAt={activeRunStartedAt} />}
         {meta.length > 0 && <Text dimColor>{meta.join("  ")}</Text>}

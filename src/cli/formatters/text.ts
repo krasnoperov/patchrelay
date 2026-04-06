@@ -19,7 +19,9 @@ export function formatInspect(result: InspectResult): string {
   const lines = [
     header,
     value("Title", result.issue?.title),
-    value("State", result.issue?.factoryState),
+    value("Session", result.issue?.sessionState),
+    value("Waiting reason", result.issue?.waitingReason ?? result.issue?.statusNote),
+    value("Debug stage", result.issue?.factoryState),
     result.activeRun ? value("Active run", `${result.activeRun.runType} (${result.activeRun.status})`) : undefined,
     result.latestRun && !result.activeRun ? value("Latest run", `${result.latestRun.runType} (${result.latestRun.status})`) : undefined,
     result.prNumber ? value("PR", `#${result.prNumber}${result.prReviewState ? ` [${result.prReviewState}]` : ""}`) : undefined,
@@ -96,10 +98,12 @@ export function formatList(items: ListResultItem[]): string {
       [
         item.issueKey ?? "-",
         item.currentLinearState ?? "-",
-        item.factoryState,
+        item.sessionState ?? "-",
+        item.waitingReason ?? "-",
         item.activeRunType ?? "-",
         item.latestRunType ? `${item.latestRunType}:${item.latestRunStatus ?? "-"}` : "-",
         item.updatedAt,
+        item.factoryState,
       ].join("\t"),
     )
     .join("\n")}\n`;

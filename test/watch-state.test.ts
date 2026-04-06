@@ -698,8 +698,8 @@ test("feed-new-event appends to feed events", () => {
 test("computeAggregates counts active, done, failed", () => {
   const issues = [
     makeIssue("USE-1", { factoryState: "implementing", activeRunType: "implementation" }),
-    makeIssue("USE-2", { factoryState: "done" }),
-    makeIssue("USE-3", { factoryState: "failed" }),
+    makeIssue("USE-2", { factoryState: "delegated", sessionState: "done" }),
+    makeIssue("USE-3", { factoryState: "implementing", sessionState: "failed" }),
     makeIssue("USE-4", { factoryState: "escalated" }),
     makeIssue("USE-5", { factoryState: "pr_open" }),
     makeIssue("USE-6", { factoryState: "implementing", activeRunType: "implementation" }),

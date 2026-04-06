@@ -891,6 +891,87 @@ test("idle delegated comments queue a follow-up session event instead of rewriti
   }
 });
 
+test("awaiting_input comments resume PatchRelay work through the follow-up queue", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-awaiting-input-comment-"));
+  try {
+    const config = createConfig(baseDir);
+    config.projects[0] = {
+      ...config.projects[0]!,
+      triggerEvents: [...config.projects[0]!.triggerEvents, "commentCreated", "commentUpdated"],
+    };
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+    db.upsertIssue({
+      projectId: "krasnoperov/mafia",
+      linearIssueId: "issue-maf-awaiting-input",
+      issueKey: "MAF-91A",
+      title: "Needs operator reply",
+      currentLinearState: "Needs input",
+      currentLinearStateType: "unstarted",
+      factoryState: "awaiting_input",
+      threadId: "thread-awaiting-input",
+    });
+
+    const enqueued: Array<{ projectId: string; issueId: string }> = [];
+    const handler = new WebhookHandler(
+      config,
+      db,
+      { forProject: async () => undefined } as never,
+      { steerTurn: async () => undefined } as never,
+      (projectId, issueId) => { enqueued.push({ projectId, issueId }); },
+      pino({ enabled: false }),
+    );
+
+    const payload: LinearWebhookPayload = {
+      action: "create",
+      type: "Comment",
+      createdAt: "2026-04-01T02:05:00.000Z",
+      webhookTimestamp: Date.now(),
+      actor: {
+        id: "user-2",
+        name: "Jamie Operator",
+        email: "jamie@example.com",
+        type: "User",
+      } as unknown as Record<string, unknown>,
+      data: {
+        id: "comment-2",
+        body: "Use the staged rollout copy, not the earlier draft.",
+        user: { name: "Jamie Operator" },
+        issue: {
+          id: "issue-maf-awaiting-input",
+          identifier: "MAF-91A",
+          title: "Needs operator reply",
+          team: { id: "team-maf", key: "MAF" },
+          state: { id: "state-input", name: "Needs input", type: "unstarted" },
+          delegate: { id: "patchrelay-actor", name: "PatchRelay" },
+        },
+      },
+    };
+
+    const stored = db.insertFullWebhookEvent({
+      webhookId: "delivery-awaiting-input-comment",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(payload),
+    });
+    await handler.processWebhookEvent(stored.id);
+
+    const wake = db.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-awaiting-input");
+    assert.equal(wake?.runType, "implementation");
+    assert.equal(wake?.resumeThread, true);
+    assert.equal(wake?.wakeReason, "followup_comment");
+    assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-awaiting-input" }]);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("PatchRelay-authored comments are recorded as inert session events without enqueueing work", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-self-comment-"));
   try {

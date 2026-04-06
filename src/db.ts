@@ -228,7 +228,6 @@ export class PatchRelayDatabase {
     reviewFixAttempts?: number;
     zombieRecoveryAttempts?: number;
     lastZombieRecoveryAt?: string | null;
-    queueLabelApplied?: boolean;
   }): IssueRecord {
     const now = isoNow();
     const existing = this.getIssue(params.projectId, params.linearIssueId);
@@ -285,8 +284,6 @@ export class PatchRelayDatabase {
       if (params.reviewFixAttempts !== undefined) { sets.push("review_fix_attempts = @reviewFixAttempts"); values.reviewFixAttempts = params.reviewFixAttempts; }
       if (params.zombieRecoveryAttempts !== undefined) { sets.push("zombie_recovery_attempts = @zombieRecoveryAttempts"); values.zombieRecoveryAttempts = params.zombieRecoveryAttempts; }
       if (params.lastZombieRecoveryAt !== undefined) { sets.push("last_zombie_recovery_at = @lastZombieRecoveryAt"); values.lastZombieRecoveryAt = params.lastZombieRecoveryAt; }
-      if (params.queueLabelApplied !== undefined) { sets.push("queue_label_applied = @queueLabelApplied"); values.queueLabelApplied = params.queueLabelApplied ? 1 : 0; }
-
       this.connection.prepare(`UPDATE issues SET ${sets.join(", ")} WHERE project_id = @projectId AND linear_issue_id = @linearIssueId`).run(values);
     } else {
       this.connection.prepare(`
@@ -301,7 +298,6 @@ export class PatchRelayDatabase {
           last_github_ci_snapshot_head_sha, last_github_ci_snapshot_gate_check_name, last_github_ci_snapshot_gate_check_status, last_github_ci_snapshot_json, last_github_ci_snapshot_settled_at,
           last_queue_signal_at, last_queue_incident_json,
           last_attempted_failure_head_sha, last_attempted_failure_signature,
-          queue_label_applied,
           updated_at
         ) VALUES (
           @projectId, @linearIssueId, @issueKey, @title, @description, @url,
@@ -314,7 +310,6 @@ export class PatchRelayDatabase {
           @lastGitHubCiSnapshotHeadSha, @lastGitHubCiSnapshotGateCheckName, @lastGitHubCiSnapshotGateCheckStatus, @lastGitHubCiSnapshotJson, @lastGitHubCiSnapshotSettledAt,
           @lastQueueSignalAt, @lastQueueIncidentJson,
           @lastAttemptedFailureHeadSha, @lastAttemptedFailureSignature,
-          @queueLabelApplied,
           @now
         )
       `).run({
@@ -360,7 +355,6 @@ export class PatchRelayDatabase {
         lastQueueIncidentJson: params.lastQueueIncidentJson ?? null,
         lastAttemptedFailureHeadSha: params.lastAttemptedFailureHeadSha ?? null,
         lastAttemptedFailureSignature: params.lastAttemptedFailureSignature ?? null,
-        queueLabelApplied: params.queueLabelApplied ? 1 : 0,
         now,
       });
     }
@@ -581,12 +575,12 @@ export class PatchRelayDatabase {
     `).run(isoNow(), projectId, linearIssueId, leaseId ?? null, leaseId ?? null);
   }
 
-  releaseAllIssueSessionLeases(): void {
+  releaseExpiredIssueSessionLeases(now = isoNow()): void {
     this.connection.prepare(`
       UPDATE issue_sessions
       SET lease_id = NULL, worker_id = NULL, leased_until = NULL, updated_at = ?
-      WHERE lease_id IS NOT NULL OR worker_id IS NOT NULL OR leased_until IS NOT NULL
-    `).run(isoNow());
+      WHERE leased_until IS NOT NULL AND leased_until <= ?
+    `).run(now, now);
   }
 
   hasActiveIssueSessionLease(projectId: string, linearIssueId: string, leaseId: string, now = isoNow()): boolean {
@@ -1412,7 +1406,6 @@ function mapIssueRow(row: Record<string, unknown>): IssueRecord {
     reviewFixAttempts: Number(row.review_fix_attempts ?? 0),
     zombieRecoveryAttempts: Number(row.zombie_recovery_attempts ?? 0),
     ...(row.last_zombie_recovery_at !== null && row.last_zombie_recovery_at !== undefined ? { lastZombieRecoveryAt: String(row.last_zombie_recovery_at) } : {}),
-    queueLabelApplied: Boolean(row.queue_label_applied),
   };
 }
 

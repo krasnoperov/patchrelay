@@ -189,7 +189,6 @@ test("issue session keeps the last published summary when a later stale repair f
       factoryState: "pr_open",
       prCheckStatus: "success",
       prReviewState: null,
-      queueLabelApplied: false,
     });
 
     const session = db.getIssueSession("usertold", "issue-summary");
@@ -348,6 +347,57 @@ test("lease-guarded writes reject stale issue-session leases", () => {
   }
 });
 
+test("startup lease cleanup expires only stale issue-session leases", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-session-expire-leases-"));
+  try {
+    const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
+    db.runMigrations();
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-stale-lease",
+      issueKey: "USE-LEASE-EXPIRE",
+      factoryState: "delegated",
+    });
+
+    assert.equal(
+      db.acquireIssueSessionLease({
+        projectId: "usertold",
+        linearIssueId: "issue-stale-lease",
+        leaseId: "lease-stale",
+        workerId: "worker-a",
+        leasedUntil: "2030-04-05T10:00:00.000Z",
+        now: "2030-04-05T09:00:00.000Z",
+      }),
+      true,
+    );
+
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-fresh-lease",
+      issueKey: "USE-LEASE-FRESH",
+      factoryState: "delegated",
+    });
+    assert.equal(
+      db.acquireIssueSessionLease({
+        projectId: "usertold",
+        linearIssueId: "issue-fresh-lease",
+        leaseId: "lease-fresh",
+        workerId: "worker-b",
+        leasedUntil: "2030-04-05T12:00:00.000Z",
+        now: "2030-04-05T09:00:00.000Z",
+      }),
+      true,
+    );
+
+    db.releaseExpiredIssueSessionLeases("2030-04-05T10:30:00.000Z");
+
+    assert.equal(db.getIssueSession("usertold", "issue-stale-lease")?.leaseId, undefined);
+    assert.equal(db.getIssueSession("usertold", "issue-fresh-lease")?.leaseId, "lease-fresh");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("issue session wake derives follow-up mode and thread reuse from queued events", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-session-events-"));
   try {
@@ -382,6 +432,37 @@ test("issue session wake derives follow-up mode and thread reuse from queued eve
     assert.equal(Array.isArray(wake?.context.followUps), true);
     assert.equal(wake?.context.followUpMode, true);
     assert.equal(wake?.eventIds.length, 2);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("followup_comment alone reuses the main thread for the next turn", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-session-comment-followup-"));
+  try {
+    const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
+    db.runMigrations();
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-comment-followup",
+      issueKey: "USE-16",
+      factoryState: "pr_open",
+      prNumber: 16,
+      threadId: "thread-comment-followup",
+      prReviewState: "approved",
+    });
+    db.appendIssueSessionEvent({
+      projectId: "usertold",
+      linearIssueId: "issue-comment-followup",
+      eventType: "followup_comment",
+      eventJson: JSON.stringify({ body: "Please keep the current copy.", author: "alice" }),
+    });
+
+    const wake = db.peekIssueSessionWake("usertold", "issue-comment-followup");
+    assert.equal(wake?.runType, "implementation");
+    assert.equal(wake?.resumeThread, true);
+    assert.equal(wake?.wakeReason, "followup_comment");
+    assert.equal(wake?.context.followUpMode, true);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

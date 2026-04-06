@@ -96,6 +96,20 @@ test("patchrelay queue observations report handoff and external queue failure", 
   assert.match(observations[2]?.text ?? "", /Tracked PR: #88/);
 });
 
+test("patchrelay queue observations prefer session state and waiting reason", () => {
+  const issue = makeIssue({
+    factoryState: "awaiting_queue",
+    sessionState: "waiting_input",
+    waitingReason: "Waiting for the next instruction.",
+  });
+
+  const observations = buildPatchRelayQueueObservations(issue, []);
+
+  assert.equal(observations[0]?.tone, "warn");
+  assert.equal(observations[0]?.text, "Waiting for the next instruction.");
+  assert.match(observations[1]?.text ?? "", /No downstream queue signal/);
+});
+
 test("patchrelay queue observations report merge completion", () => {
   const issue = makeIssue({ factoryState: "done" });
   const observations = buildPatchRelayQueueObservations(issue, [

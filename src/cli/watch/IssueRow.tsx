@@ -63,7 +63,7 @@ function stageLabel(issue: WatchIssue): string {
 
 // ─── Context facts (what matters right now) ─────────────────────
 
-function buildFacts(issue: WatchIssue): Array<{ text: string; color?: string }> {
+function buildFacts(issue: WatchIssue, selected: boolean): Array<{ text: string; color?: string }> {
   const facts: Array<{ text: string; color?: string }> = [];
   const rereviewNeeded = issue.prReviewState === "changes_requested"
     && (issue.prCheckStatus === "passed" || issue.prCheckStatus === "success")
@@ -74,7 +74,15 @@ function buildFacts(issue: WatchIssue): Array<{ text: string; color?: string }> 
     facts.push({ text: `PR #${issue.prNumber}` });
   }
 
-  facts.push({ text: `stage ${stageLabel(issue)}` });
+  if (!issue.sessionState) {
+    facts.push({ text: `stage ${stageLabel(issue)}` });
+  } else if (selected) {
+    facts.push({ text: `internal stage ${stageLabel(issue)}` });
+  }
+
+  if (issue.waitingReason && issue.sessionState === "waiting_input") {
+    facts.push({ text: issue.waitingReason, color: "yellow" });
+  }
 
   // Review state — only show when it matters (not yet approved, or changes requested)
   if (issue.prReviewState === "approved") {
@@ -143,7 +151,7 @@ export function IssueRow({ issue, selected, titleWidth }: IssueRowProps): React.
   const title = issue.title ? truncate(issue.title, tw) : "";
   const detail = selected ? summarizeIssueStatusNote(issue.statusNote) : undefined;
   const session = sessionDisplay(issue);
-  const facts = buildFacts(issue);
+  const facts = buildFacts(issue, selected);
   const blocker = selected ? blockerText(issue) : null;
 
   const isTerminal = TERMINAL_STATES.has(issue.factoryState);
@@ -196,6 +204,11 @@ export function IssueRow({ issue, selected, titleWidth }: IssueRowProps): React.
       {detail ? (
         <Box paddingLeft={4}>
           <Text dimColor wrap="wrap">{detail}</Text>
+        </Box>
+      ) : null}
+      {selected && issue.factoryState && issue.sessionState ? (
+        <Box paddingLeft={4}>
+          <Text dimColor>{`Debug stage: ${stageLabel(issue)}`}</Text>
         </Box>
       ) : null}
     </Box>

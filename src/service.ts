@@ -180,7 +180,7 @@ export class PatchRelayService {
   }
 
   async start(): Promise<void> {
-    this.db.releaseAllIssueSessionLeases();
+    this.db.releaseExpiredIssueSessionLeases();
 
     const repairedInstallations = this.db.linearInstallations.repairProjectInstallations(
       this.config.projects.map((project) => project.id),
@@ -469,7 +469,7 @@ export class PatchRelayService {
           s.project_id, s.linear_issue_id, s.issue_key, i.title,
           i.current_linear_state, i.factory_state, s.session_state, s.waiting_reason, s.summary_text, s.updated_at,
           i.pending_run_type,
-          i.pr_number, i.pr_review_state, i.pr_check_status, i.queue_label_applied,
+          i.pr_number, i.pr_review_state, i.pr_check_status,
           i.last_github_ci_snapshot_json,
           i.last_github_failure_source,
           i.last_github_failure_head_sha,
