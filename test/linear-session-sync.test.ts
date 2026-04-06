@@ -249,3 +249,113 @@ test("syncSession includes actionable input text for awaiting_input sessions", a
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("syncSession does not write a routine visible issue comment for healthy agent-session runs", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-linear-sync-healthy-agent-session-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+
+    const issue = db.upsertIssue({
+      projectId: "krasnoperov/ballony-i-nasosy",
+      linearIssueId: "issue-tst-20",
+      issueKey: "TST-20",
+      title: "Parallelize verify into smaller jobs behind one clear required gate",
+      factoryState: "awaiting_queue",
+      agentSessionId: "session-20",
+      prNumber: 17,
+      prUrl: "https://github.com/krasnoperov/ballony-i-nasosy/pull/17",
+      prReviewState: "approved",
+      prCheckStatus: "success",
+    });
+
+    const sessionUpdates: Array<Record<string, unknown>> = [];
+    const commentUpdates: Array<Record<string, unknown>> = [];
+    const linear: Partial<LinearClient> = {
+      updateAgentSession: async (params) => {
+        sessionUpdates.push(params as unknown as Record<string, unknown>);
+        return { id: params.agentSessionId };
+      },
+      upsertIssueComment: async (params) => {
+        commentUpdates.push(params as unknown as Record<string, unknown>);
+        return { id: "comment-20", body: params.body };
+      },
+      createAgentActivity: async () => ({ id: "activity-20" }),
+      getIssue: async () => { throw new Error("not used"); },
+      setIssueState: async () => { throw new Error("not used"); },
+      updateIssueLabels: async () => { throw new Error("not used"); },
+      getActorProfile: async () => ({ actorId: "patchrelay-actor" }),
+      getWorkspaceCatalog: async () => ({ workspace: {}, teams: [], projects: [] }),
+    };
+
+    const sync = new LinearSessionSync(
+      config,
+      db,
+      { forProject: async () => linear as LinearClient },
+      pino({ enabled: false }),
+    );
+
+    await sync.syncSession(db.getIssue(issue.projectId, issue.linearIssueId)!);
+
+    assert.equal(sessionUpdates.length, 1);
+    assert.equal(commentUpdates.length, 0);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("syncSession keeps a final visible comment for done planning-only issues", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-linear-sync-planning-done-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+
+    const issue = db.upsertIssue({
+      projectId: "krasnoperov/ballony-i-nasosy",
+      linearIssueId: "issue-tst-21",
+      issueKey: "TST-21",
+      title: "Re-measure CI after the speedup wave and decide whether artifact handoff is still worth it",
+      factoryState: "done",
+      agentSessionId: "session-21",
+      currentLinearState: "Done",
+    });
+    const run = db.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "implementation",
+    });
+    db.finishRun(run.id, { status: "completed" });
+
+    const commentUpdates: Array<Record<string, unknown>> = [];
+    const linear: Partial<LinearClient> = {
+      updateAgentSession: async (params) => ({ id: params.agentSessionId }),
+      upsertIssueComment: async (params) => {
+        commentUpdates.push(params as unknown as Record<string, unknown>);
+        return { id: "comment-21", body: params.body };
+      },
+      createAgentActivity: async () => ({ id: "activity-21" }),
+      getIssue: async () => { throw new Error("not used"); },
+      setIssueState: async () => { throw new Error("not used"); },
+      updateIssueLabels: async () => { throw new Error("not used"); },
+      getActorProfile: async () => ({ actorId: "patchrelay-actor" }),
+      getWorkspaceCatalog: async () => ({ workspace: {}, teams: [], projects: [] }),
+    };
+
+    const sync = new LinearSessionSync(
+      config,
+      db,
+      { forProject: async () => linear as LinearClient },
+      pino({ enabled: false }),
+    );
+
+    await sync.syncSession(db.getIssue(issue.projectId, issue.linearIssueId)!);
+
+    assert.equal(commentUpdates.length, 1);
+    assert.match(String(commentUpdates[0]?.body), /Completed/);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});

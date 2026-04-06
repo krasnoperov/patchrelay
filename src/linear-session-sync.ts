@@ -84,7 +84,9 @@ export class LinearSessionSync {
           ...(externalUrls ? { externalUrls } : {}),
         });
       }
-      await this.syncStatusComment(syncedIssue, linear, options);
+      if (shouldSyncVisibleIssueComment(syncedIssue)) {
+        await this.syncStatusComment(syncedIssue, linear, options);
+      }
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       this.logger.warn({ issueKey: syncedIssue.issueKey, error: msg }, "Failed to update Linear plan");
@@ -265,6 +267,22 @@ function renderStatusComment(
   );
 
   return lines.join("\n");
+}
+
+function shouldSyncVisibleIssueComment(issue: IssueRecord): boolean {
+  if (!issue.agentSessionId) {
+    return true;
+  }
+
+  if (issue.factoryState === "awaiting_input" || issue.factoryState === "failed" || issue.factoryState === "escalated") {
+    return true;
+  }
+
+  if (issue.factoryState === "done" && issue.prNumber === undefined && !issue.prUrl) {
+    return true;
+  }
+
+  return false;
 }
 
 function statusHeadline(issue: IssueRecord, activeRunType?: string): string {
