@@ -2,6 +2,10 @@ import type { CIRunner } from "../interfaces.ts";
 import type { CIStatus } from "../types.ts";
 import { exec } from "../exec.ts";
 
+function normalizeCheckName(name: string): string {
+  return name.trim().toLowerCase();
+}
+
 /**
  * CI runner that polls GitHub Actions via the gh CLI.
  * triggerRun is a no-op — force-pushing the branch triggers CI automatically.
@@ -39,8 +43,9 @@ export class GitHubActionsRunner implements CIRunner {
 
       if (checkRuns.length === 0) return "pending";
 
+      const normalizedRequired = this.requiredChecks.map(normalizeCheckName);
       const relevant = this.requiredChecks.length > 0
-        ? checkRuns.filter((c) => this.requiredChecks.includes(c.name))
+        ? checkRuns.filter((c) => normalizedRequired.includes(normalizeCheckName(c.name)))
         : checkRuns;
 
       if (relevant.length === 0) return "pending";
