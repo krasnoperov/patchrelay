@@ -8,6 +8,7 @@ import { buildAgentSessionPlanForIssue } from "./agent-session-plan.ts";
 import { buildAgentSessionExternalUrls } from "./agent-session-presentation.ts";
 import { deriveIssueStatusNote } from "./status-note.ts";
 import { derivePatchRelayWaitingReason } from "./waiting-reason.ts";
+import { resolvePreferredReviewLinearState, resolvePreferredStartedLinearState } from "./linear-workflow.ts";
 
 const PROGRESS_THROTTLE_MS = 5_000;
 
@@ -74,6 +75,7 @@ export class LinearSessionSync {
       const linear = await this.linearProvider.forProject(syncedIssue.projectId);
       if (!linear) return;
       const trackedIssue = this.db.getTrackedIssue(syncedIssue.projectId, syncedIssue.linearIssueId);
+      await this.syncActiveWorkflowState(syncedIssue, linear, trackedIssue, options);
       if (syncedIssue.agentSessionId && linear.updateAgentSession) {
         const externalUrls = buildAgentSessionExternalUrls(this.config, {
           ...(syncedIssue.issueKey ? { issueKey: syncedIssue.issueKey } : {}),
@@ -92,6 +94,55 @@ export class LinearSessionSync {
       const msg = error instanceof Error ? error.message : String(error);
       this.logger.warn({ issueKey: syncedIssue.issueKey, error: msg }, "Failed to update Linear plan");
     }
+  }
+
+  private async syncActiveWorkflowState(
+    issue: IssueRecord,
+    linear: NonNullable<Awaited<ReturnType<LinearClientProvider["forProject"]>>>,
+    trackedIssue?: TrackedIssueRecord,
+    options?: { activeRunType?: RunType },
+  ): Promise<void> {
+    if (!shouldAutoAdvanceLinearState(issue)) {
+      return;
+    }
+
+    const liveIssue = await linear.getIssue(issue.linearIssueId).catch(() => undefined);
+    if (!liveIssue) return;
+
+    if (!shouldAutoAdvanceLinearState({
+      currentLinearState: liveIssue.stateName,
+      currentLinearStateType: liveIssue.stateType,
+    })) {
+      this.db.upsertIssue({
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        ...(liveIssue.stateName ? { currentLinearState: liveIssue.stateName } : {}),
+        ...(liveIssue.stateType ? { currentLinearStateType: liveIssue.stateType } : {}),
+      });
+      return;
+    }
+
+    const targetState = resolveDesiredActiveWorkflowState(issue, trackedIssue, options, liveIssue);
+    if (!targetState) return;
+
+    const normalizedCurrent = liveIssue.stateName?.trim().toLowerCase();
+    if (normalizedCurrent === targetState.trim().toLowerCase()) {
+      this.db.upsertIssue({
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        ...(liveIssue.stateName ? { currentLinearState: liveIssue.stateName } : {}),
+        ...(liveIssue.stateType ? { currentLinearStateType: liveIssue.stateType } : {}),
+      });
+      return;
+    }
+
+    const updated = await linear.setIssueState(issue.linearIssueId, targetState);
+    this.db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      ...(updated.stateName ? { currentLinearState: updated.stateName } : {}),
+      ...(updated.stateType ? { currentLinearStateType: updated.stateType } : {}),
+    });
   }
 
   async syncCodexPlan(issue: IssueRecord, params: Record<string, unknown>): Promise<void> {
@@ -345,4 +396,49 @@ function formatLatestRun(run: Pick<RunRecord, "runType" | "status" | "endedAt" |
 
 function humanize(value: string): string {
   return value.replaceAll("_", " ");
+}
+
+function shouldAutoAdvanceLinearState(issue: {
+  currentLinearState?: string | undefined;
+  currentLinearStateType?: string | undefined;
+}): boolean {
+  const normalizedType = issue.currentLinearStateType?.trim().toLowerCase();
+  if (normalizedType === "backlog" || normalizedType === "unstarted") {
+    return true;
+  }
+  const normalizedName = issue.currentLinearState?.trim().toLowerCase();
+  return normalizedName === "backlog" || normalizedName === "todo" || normalizedName === "to do" || normalizedName === "triage";
+}
+
+function resolveDesiredActiveWorkflowState(
+  issue: Pick<IssueRecord, "factoryState" | "prNumber" | "prUrl" | "prReviewState" | "prCheckStatus" | "activeRunId">,
+  trackedIssue: Pick<TrackedIssueRecord, "sessionState"> | undefined,
+  options: { activeRunType?: RunType } | undefined,
+  liveIssue: {
+    workflowStates: Array<{ name: string; type?: string }>;
+  },
+): string | undefined {
+  const reviewBound = issue.prNumber !== undefined
+    || Boolean(issue.prUrl)
+    || issue.factoryState === "pr_open"
+    || issue.factoryState === "awaiting_queue"
+    || issue.factoryState === "changes_requested"
+    || issue.factoryState === "repairing_ci"
+    || issue.factoryState === "repairing_queue"
+    || issue.prReviewState !== undefined
+    || issue.prCheckStatus !== undefined;
+  if (reviewBound) {
+    return resolvePreferredReviewLinearState(liveIssue);
+  }
+
+  const activelyWorking = issue.activeRunId !== undefined
+    || options?.activeRunType !== undefined
+    || trackedIssue?.sessionState === "running"
+    || issue.factoryState === "delegated"
+    || issue.factoryState === "implementing";
+  if (activelyWorking) {
+    return resolvePreferredStartedLinearState(liveIssue);
+  }
+
+  return undefined;
 }

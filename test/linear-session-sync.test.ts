@@ -359,3 +359,166 @@ test("syncSession keeps a final visible comment for done planning-only issues", 
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("syncSession moves backlog issues into an active started state when implementation starts", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-linear-sync-active-state-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+
+    const issue = db.upsertIssue({
+      projectId: "krasnoperov/ballony-i-nasosy",
+      linearIssueId: "issue-tst-30",
+      issueKey: "TST-30",
+      title: "Start implementation",
+      factoryState: "implementing",
+      currentLinearState: "Backlog",
+      currentLinearStateType: "backlog",
+      agentSessionId: "session-30",
+      activeRunId: 1,
+    });
+
+    const setIssueStateCalls: string[] = [];
+    const linear: Partial<LinearClient> = {
+      updateAgentSession: async (params) => ({ id: params.agentSessionId }),
+      upsertIssueComment: async (params) => ({ id: "comment-30", body: params.body }),
+      createAgentActivity: async () => ({ id: "activity-30" }),
+      getIssue: async () => ({
+        id: issue.linearIssueId,
+        identifier: issue.issueKey,
+        title: issue.title,
+        delegateId: "patchrelay-actor",
+        stateName: "Backlog",
+        stateType: "backlog",
+        workflowStates: [
+          { id: "state-backlog", name: "Backlog", type: "backlog" },
+          { id: "state-progress", name: "In Progress", type: "started" },
+          { id: "state-review", name: "In Review", type: "started" },
+          { id: "state-done", name: "Done", type: "completed" },
+        ],
+        blockedBy: [],
+        relationsKnown: true,
+      }),
+      setIssueState: async (_issueId, stateName) => {
+        setIssueStateCalls.push(stateName);
+        return {
+          id: issue.linearIssueId,
+          identifier: issue.issueKey,
+          title: issue.title,
+          delegateId: "patchrelay-actor",
+          stateName,
+          stateType: stateName === "Done" ? "completed" : "started",
+          workflowStates: [
+            { id: "state-backlog", name: "Backlog", type: "backlog" },
+            { id: "state-progress", name: "In Progress", type: "started" },
+            { id: "state-review", name: "In Review", type: "started" },
+            { id: "state-done", name: "Done", type: "completed" },
+          ],
+          blockedBy: [],
+          relationsKnown: true,
+        };
+      },
+      updateIssueLabels: async () => { throw new Error("not used"); },
+      getActorProfile: async () => ({ actorId: "patchrelay-actor" }),
+      getWorkspaceCatalog: async () => ({ workspace: {}, teams: [], projects: [] }),
+    };
+
+    const sync = new LinearSessionSync(
+      config,
+      db,
+      { forProject: async () => linear as LinearClient },
+      pino({ enabled: false }),
+    );
+
+    await sync.syncSession(db.getIssue(issue.projectId, issue.linearIssueId)!, { activeRunType: "implementation" });
+
+    assert.deepEqual(setIssueStateCalls, ["In Progress"]);
+    assert.equal(db.getIssue(issue.projectId, issue.linearIssueId)?.currentLinearState, "In Progress");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("syncSession moves backlog issues into review when a PR is opened or waiting downstream", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-linear-sync-review-state-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+
+    const issue = db.upsertIssue({
+      projectId: "krasnoperov/ballony-i-nasosy",
+      linearIssueId: "issue-tst-31",
+      issueKey: "TST-31",
+      title: "Waiting downstream",
+      factoryState: "awaiting_queue",
+      currentLinearState: "Backlog",
+      currentLinearStateType: "backlog",
+      agentSessionId: "session-31",
+      prNumber: 31,
+      prUrl: "https://github.com/krasnoperov/ballony-i-nasosy/pull/31",
+      prReviewState: "approved",
+      prCheckStatus: "success",
+    });
+
+    const setIssueStateCalls: string[] = [];
+    const linear: Partial<LinearClient> = {
+      updateAgentSession: async (params) => ({ id: params.agentSessionId }),
+      upsertIssueComment: async (params) => ({ id: "comment-31", body: params.body }),
+      createAgentActivity: async () => ({ id: "activity-31" }),
+      getIssue: async () => ({
+        id: issue.linearIssueId,
+        identifier: issue.issueKey,
+        title: issue.title,
+        delegateId: "patchrelay-actor",
+        stateName: "Backlog",
+        stateType: "backlog",
+        workflowStates: [
+          { id: "state-backlog", name: "Backlog", type: "backlog" },
+          { id: "state-progress", name: "In Progress", type: "started" },
+          { id: "state-review", name: "In Review", type: "started" },
+          { id: "state-done", name: "Done", type: "completed" },
+        ],
+        blockedBy: [],
+        relationsKnown: true,
+      }),
+      setIssueState: async (_issueId, stateName) => {
+        setIssueStateCalls.push(stateName);
+        return {
+          id: issue.linearIssueId,
+          identifier: issue.issueKey,
+          title: issue.title,
+          delegateId: "patchrelay-actor",
+          stateName,
+          stateType: stateName === "Done" ? "completed" : "started",
+          workflowStates: [
+            { id: "state-backlog", name: "Backlog", type: "backlog" },
+            { id: "state-progress", name: "In Progress", type: "started" },
+            { id: "state-review", name: "In Review", type: "started" },
+            { id: "state-done", name: "Done", type: "completed" },
+          ],
+          blockedBy: [],
+          relationsKnown: true,
+        };
+      },
+      updateIssueLabels: async () => { throw new Error("not used"); },
+      getActorProfile: async () => ({ actorId: "patchrelay-actor" }),
+      getWorkspaceCatalog: async () => ({ workspace: {}, teams: [], projects: [] }),
+    };
+
+    const sync = new LinearSessionSync(
+      config,
+      db,
+      { forProject: async () => linear as LinearClient },
+      pino({ enabled: false }),
+    );
+
+    await sync.syncSession(db.getIssue(issue.projectId, issue.linearIssueId)!);
+
+    assert.deepEqual(setIssueStateCalls, ["In Review"]);
+    assert.equal(db.getIssue(issue.projectId, issue.linearIssueId)?.currentLinearState, "In Review");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});

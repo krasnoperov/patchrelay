@@ -3,6 +3,28 @@ function normalizeLinearState(value: string | undefined): string | undefined {
   return trimmed ? trimmed.toLowerCase() : undefined;
 }
 
+export function resolvePreferredStartedLinearState(issue: {
+  workflowStates: Array<{ name: string; type?: string }>;
+}): string | undefined {
+  const startedStates = issue.workflowStates.filter((state) => normalizeLinearState(state.type) === "started");
+  const preferred = startedStates.find((state) => {
+    const normalized = normalizeLinearState(state.name);
+    return normalized === "in progress" || normalized === "in-progress" || normalized === "started" || normalized === "doing";
+  });
+  return preferred?.name ?? startedStates[0]?.name;
+}
+
+export function resolvePreferredReviewLinearState(issue: {
+  workflowStates: Array<{ name: string; type?: string }>;
+}): string | undefined {
+  const reviewState = issue.workflowStates.find((state) => {
+    if (normalizeLinearState(state.type) !== "started") return false;
+    const normalized = normalizeLinearState(state.name);
+    return normalized === "in review" || normalized === "review";
+  });
+  return reviewState?.name ?? resolvePreferredStartedLinearState(issue);
+}
+
 export function resolvePreferredCompletedLinearState(issue: {
   stateName?: string;
   workflowStates: Array<{ name: string; type?: string }>;
