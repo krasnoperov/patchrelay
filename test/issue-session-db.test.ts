@@ -262,6 +262,92 @@ test("issue session leases can be acquired, renewed, and reclaimed after expiry"
   }
 });
 
+test("lease-guarded writes reject stale issue-session leases", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-session-lease-guards-"));
+  try {
+    const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
+    db.runMigrations();
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-lease-guards",
+      issueKey: "USE-LEASE-GUARDS",
+      factoryState: "delegated",
+      branchName: "use/USE-LEASE-GUARDS",
+    });
+
+    const run = db.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "implementation",
+      promptText: "Ship it",
+    });
+
+    assert.equal(
+      db.acquireIssueSessionLease({
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        leaseId: "lease-1",
+        workerId: "worker-a",
+        leasedUntil: "2030-04-05T10:05:00.000Z",
+        now: "2030-04-05T10:00:00.000Z",
+      }),
+      true,
+    );
+    assert.equal(
+      db.acquireIssueSessionLease({
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        leaseId: "lease-2",
+        workerId: "worker-b",
+        leasedUntil: "2030-04-05T10:10:00.000Z",
+        now: "2030-04-05T10:06:00.000Z",
+      }),
+      true,
+    );
+
+    const staleIssueWrite = db.upsertIssueWithLease(
+      { projectId: issue.projectId, linearIssueId: issue.linearIssueId, leaseId: "lease-1" },
+      {
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        factoryState: "implementing",
+      },
+    );
+    assert.equal(staleIssueWrite, undefined);
+    assert.equal(db.getIssue(issue.projectId, issue.linearIssueId)?.factoryState, "delegated");
+
+    const staleRunFinish = db.finishRunWithLease(
+      { projectId: issue.projectId, linearIssueId: issue.linearIssueId, leaseId: "lease-1" },
+      run.id,
+      { status: "failed", failureReason: "stale worker" },
+    );
+    assert.equal(staleRunFinish, false);
+    assert.equal(db.getRun(run.id)?.status, "queued");
+
+    const freshIssueWrite = db.upsertIssueWithLease(
+      { projectId: issue.projectId, linearIssueId: issue.linearIssueId, leaseId: "lease-2" },
+      {
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        factoryState: "implementing",
+        activeRunId: run.id,
+      },
+    );
+    assert.equal(freshIssueWrite?.factoryState, "implementing");
+
+    const freshRunFinish = db.finishRunWithLease(
+      { projectId: issue.projectId, linearIssueId: issue.linearIssueId, leaseId: "lease-2" },
+      run.id,
+      { status: "completed", summaryJson: JSON.stringify({ latestAssistantMessage: "Done" }) },
+    );
+    assert.equal(freshRunFinish, true);
+    assert.equal(db.getRun(run.id)?.status, "completed");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("issue session wake derives follow-up mode and thread reuse from queued events", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-session-events-"));
   try {

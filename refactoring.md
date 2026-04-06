@@ -535,6 +535,11 @@ Goal:
 
 - make the `v2` lease rule real for side-effecting writes, not just for acquire/renew/release
 
+Status:
+
+- first pass landed: DB lease guards now fence orchestrator run-claim, run-thread attach, failure cleanup, normal completion, and reconciliation completion/release paths
+- still remaining: webhook-driven writes, pre-run counter increments, and any remaining PR-side-effect checkpoints that still rely on unfenced `upsertIssue(...)`
+
 Why this slice matters:
 
 - current leases stop some duplicate workers, but they do not fence most DB writes or PR-side effects
