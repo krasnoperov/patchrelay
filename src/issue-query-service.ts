@@ -2,8 +2,10 @@ import type { CodexAppServerClient } from "./codex-app-server.ts";
 import type { CodexThreadSummary } from "./codex-types.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueSessionRecord } from "./db-types.ts";
+import { parseGitHubFailureContext } from "./github-failure-context.ts";
 import { extractStageSummary, summarizeCurrentThread } from "./run-reporting.ts";
 import type { StageReport, RunRecord, TrackedIssueRecord } from "./types.ts";
+import { deriveIssueStatusNote } from "./status-note.ts";
 import { derivePatchRelayWaitingReason } from "./waiting-reason.ts";
 
 interface RunStatusProvider {
@@ -127,12 +129,26 @@ export class IssueQueryService {
       const activeStatus = await this.runStatusProvider.getActiveRunStatus(issueKey);
       const activeRun = activeStatus?.run ?? legacy.activeRun;
       const latestRun = this.db.getLatestRunForIssue(legacy.issue.projectId, legacy.issue.linearIssueId);
+      const latestEvent = this.db.listIssueSessionEvents(legacy.issue.projectId, legacy.issue.linearIssueId, { limit: 1 }).at(-1);
       const runs = this.buildRuns(legacy.issue.projectId, legacy.issue.linearIssueId);
       const runCount = runs.length;
       const liveThread = await this.readLiveThread(activeRun);
+      const statusNote = issueRecord
+        ? deriveIssueStatusNote({
+            issue: issueRecord,
+            latestRun,
+            latestEvent,
+            failureSummary: legacy.issue.latestFailureSummary,
+            blockedByKeys: legacy.issue.blockedByKeys,
+            waitingReason: legacy.issue.waitingReason,
+          })
+        : legacy.issue.statusNote;
 
       return {
-        issue: legacy.issue,
+        issue: {
+          ...legacy.issue,
+          ...(statusNote ? { statusNote } : {}),
+        },
         ...(activeRun ? { activeRun } : {}),
         ...(latestRun ? { latestRun } : {}),
         ...(liveThread ? { liveThread } : {}),
@@ -174,9 +190,11 @@ export class IssueQueryService {
     const activeRun = activeStatus?.run
       ?? (session.activeRunId !== undefined ? this.db.getRun(session.activeRunId) : undefined);
     const latestRun = this.db.getLatestRunForIssue(session.projectId, session.linearIssueId);
+    const latestEvent = this.db.listIssueSessionEvents(session.projectId, session.linearIssueId, { limit: 1 }).at(-1);
     const runs = this.buildRuns(session.projectId, session.linearIssueId);
     const runCount = runs.length;
     const liveThread = await this.readLiveThread(activeRun);
+    const failureContext = parseGitHubFailureContext(issueRecord?.lastGitHubFailureContextJson);
 
     const waitingReason = session.waitingReason ?? derivePatchRelayWaitingReason({
       ...(activeRun ? { activeRunType: activeRun.runType } : {}),
@@ -209,6 +227,20 @@ export class IssueQueryService {
       ...(issueRecord?.lastGitHubFailureSource ? { latestFailureSource: issueRecord.lastGitHubFailureSource } : {}),
       ...(issueRecord?.lastGitHubFailureHeadSha ? { latestFailureHeadSha: issueRecord.lastGitHubFailureHeadSha } : {}),
       ...(issueRecord?.lastGitHubFailureCheckName ? { latestFailureCheckName: issueRecord.lastGitHubFailureCheckName } : {}),
+      ...(() => {
+        const statusNote = issueRecord
+          ? deriveIssueStatusNote({
+              issue: issueRecord,
+              sessionSummary: session.summaryText,
+              latestRun,
+              latestEvent,
+              failureSummary: failureContext?.summary,
+              blockedByKeys,
+              waitingReason,
+            })
+          : undefined;
+        return statusNote ? { statusNote } : {};
+      })(),
       ...(waitingReason ? { waitingReason } : {}),
       queueLabelApplied: issueRecord?.queueLabelApplied,
       ...(activeRun ? { activeRunId: activeRun.id } : {}),
@@ -281,6 +313,7 @@ export class IssueQueryService {
         ...(issueRecord ? { queueLabelApplied: issueRecord.queueLabelApplied } : {}),
         ...(issueRecord ? { ciRepairAttempts: issueRecord.ciRepairAttempts, queueRepairAttempts: issueRecord.queueRepairAttempts } : {}),
         ...(overview.issue.waitingReason ? { waitingReason: overview.issue.waitingReason } : {}),
+        ...(overview.issue.statusNote ? { statusNote: overview.issue.statusNote } : {}),
         ...(overview.session?.lastWakeReason ? { lastWakeReason: overview.session.lastWakeReason } : {}),
       },
       ...(overview.activeRun ? { activeRun: overview.activeRun } : {}),

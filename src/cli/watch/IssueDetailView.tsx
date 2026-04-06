@@ -197,6 +197,9 @@ export function IssueDetailView({
       </Box>
       {issue.title && <Text>{issue.title}</Text>}
       {blocker && <Text color="yellow">{blocker}</Text>}
+      {issue.statusNote && issue.statusNote !== blocker && (
+        <Text dimColor wrap="wrap">{issue.statusNote}</Text>
+      )}
       {issueContext?.latestFailureSummary && (
         <Text color={issueContext.latestFailureSource === "queue_eviction" ? "yellow" : "red"}>
           Latest failure: {issueContext.latestFailureSummary}

@@ -137,3 +137,45 @@ test("listTrackedIssues suppresses stale interrupted notes while a run is active
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("listTrackedIssues surfaces actionable stop guidance for awaiting_input issues", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-service-list-awaiting-input-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const service = new PatchRelayService(
+      config,
+      db,
+      {
+        on: () => undefined,
+        readThread: async () => ({ id: "thread-1", turns: [] }),
+      } as never,
+      undefined,
+      pino({ enabled: false }),
+    );
+
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-2",
+      issueKey: "USE-2",
+      title: "Stopped implementation",
+      currentLinearState: "In Progress",
+      factoryState: "awaiting_input",
+      agentSessionId: "session-2",
+    });
+    db.appendIssueSessionEvent({
+      projectId: "usertold",
+      linearIssueId: "issue-2",
+      eventType: "stop_requested",
+      dedupeKey: "stop_requested:issue-2",
+    });
+
+    const tracked = service.listTrackedIssues().find((entry) => entry.issueKey === "USE-2");
+    assert.ok(tracked);
+    assert.equal(tracked.waitingReason, "Waiting on operator input");
+    assert.equal(tracked.statusNote, "Operator stopped the run. Use retry or delegate again to resume.");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});

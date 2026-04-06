@@ -195,3 +195,57 @@ test("syncSession updates the existing visible Linear status comment even withou
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("syncSession includes actionable input text for awaiting_input sessions", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-linear-sync-awaiting-input-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+
+    const issue = db.upsertIssue({
+      projectId: "krasnoperov/ballony-i-nasosy",
+      linearIssueId: "issue-tst-7",
+      issueKey: "TST-7",
+      title: "Awaiting operator follow-up",
+      factoryState: "awaiting_input",
+      agentSessionId: "session-7",
+    });
+    db.appendIssueSessionEvent({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      eventType: "stop_requested",
+      dedupeKey: "stop_requested:issue-tst-7",
+    });
+
+    const commentUpdates: Array<Record<string, unknown>> = [];
+    const linear: Partial<LinearClient> = {
+      updateAgentSession: async (params) => ({ id: params.agentSessionId }),
+      upsertIssueComment: async (params) => {
+        commentUpdates.push(params as unknown as Record<string, unknown>);
+        return { id: "comment-7", body: params.body };
+      },
+      createAgentActivity: async () => ({ id: "activity-7" }),
+      getIssue: async () => { throw new Error("not used"); },
+      setIssueState: async () => { throw new Error("not used"); },
+      updateIssueLabels: async () => { throw new Error("not used"); },
+      getActorProfile: async () => ({ actorId: "patchrelay-actor" }),
+      getWorkspaceCatalog: async () => ({ workspace: {}, teams: [], projects: [] }),
+    };
+
+    const sync = new LinearSessionSync(
+      config,
+      db,
+      { forProject: async () => linear as LinearClient },
+      pino({ enabled: false }),
+    );
+
+    await sync.syncSession(db.getIssue(issue.projectId, issue.linearIssueId)!);
+
+    assert.equal(commentUpdates.length, 1);
+    assert.match(String(commentUpdates[0]?.body), /Waiting: Waiting on operator input/);
+    assert.match(String(commentUpdates[0]?.body), /Input needed: Operator stopped the run\. Use retry or delegate again to resume\./);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});

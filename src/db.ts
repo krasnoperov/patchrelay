@@ -22,6 +22,7 @@ import {
   type IssueSessionEventType,
 } from "./issue-session-events.ts";
 import { parseGitHubFailureContext } from "./github-failure-context.ts";
+import { deriveIssueStatusNote } from "./status-note.ts";
 import { LinearInstallationStore } from "./db/linear-installation-store.ts";
 import { OperatorFeedStore } from "./db/operator-feed-store.ts";
 import { RepositoryLinkStore } from "./db/repository-link-store.ts";
@@ -975,6 +976,17 @@ export class PatchRelayDatabase {
       queueLabelApplied: issue.queueLabelApplied,
       latestFailureCheckName: issue.lastGitHubFailureCheckName,
     });
+    const latestRun = this.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
+    const latestEvent = this.listIssueSessionEvents(issue.projectId, issue.linearIssueId, { limit: 1 }).at(-1);
+    const statusNote = deriveIssueStatusNote({
+      issue,
+      sessionSummary: session?.summaryText,
+      latestRun,
+      latestEvent,
+      failureSummary: failureContext?.summary,
+      blockedByKeys,
+      waitingReason,
+    });
     return {
       id: issue.id,
       projectId: issue.projectId,
@@ -982,6 +994,7 @@ export class PatchRelayDatabase {
       ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
       ...(issue.title ? { title: issue.title } : {}),
       ...(issue.url ? { issueUrl: issue.url } : {}),
+      ...(statusNote ? { statusNote } : {}),
       ...(issue.currentLinearState ? { currentLinearState: issue.currentLinearState } : {}),
       ...(session?.sessionState ? { sessionState: session.sessionState } : {}),
       factoryState: issue.factoryState,

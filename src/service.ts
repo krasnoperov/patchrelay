@@ -24,6 +24,7 @@ import {
 import { ServiceRuntime } from "./service-runtime.ts";
 import { WebhookHandler } from "./webhook-handler.ts";
 import { acceptIncomingWebhook } from "./service-webhooks.ts";
+import { deriveIssueStatusNote } from "./status-note.ts";
 import type { AppConfig, LinearClient, LinearClientProvider } from "./types.ts";
 import type { GitHubCiSnapshotRecord } from "./db-types.ts";
 
@@ -35,22 +36,6 @@ function parseObjectJson(value: string | undefined): Record<string, unknown> | u
   } catch {
     return undefined;
   }
-}
-
-function extractStatusNote(summaryJson?: string, reportJson?: string): string | undefined {
-  const summary = parseObjectJson(summaryJson);
-  if (typeof summary?.latestAssistantMessage === "string" && summary.latestAssistantMessage.trim()) {
-    return summary.latestAssistantMessage;
-  }
-
-  const report = parseObjectJson(reportJson);
-  const assistantMessages = report?.assistantMessages;
-  if (Array.isArray(assistantMessages)) {
-    const latest = assistantMessages.findLast((value) => typeof value === "string" && value.trim().length > 0);
-    if (typeof latest === "string") return latest;
-  }
-
-  return undefined;
 }
 
 function shouldSuppressStatusNote(params: {
@@ -478,10 +463,6 @@ export class PatchRelayService {
       const prChecksSummary = parseCiSnapshotSummary(
         typeof row.last_github_ci_snapshot_json === "string" ? row.last_github_ci_snapshot_json : undefined,
       );
-      const latestRunStatusNote = extractStatusNote(
-        typeof row.latest_run_summary_json === "string" ? row.latest_run_summary_json : undefined,
-        typeof row.latest_run_report_json === "string" ? row.latest_run_report_json : undefined,
-      );
       const blockedByKeys = parseStringArray(
         typeof row.blocked_by_keys_json === "string" ? row.blocked_by_keys_json : undefined,
       );
@@ -498,18 +479,6 @@ export class PatchRelayService {
       const sessionSummary = typeof row.summary_text === "string" && row.summary_text.trim().length > 0
         ? row.summary_text
         : undefined;
-      const derivedStatusNote = blockedByCount > 0
-        ? `Blocked by ${blockedByKeys.join(", ")}`
-        : failureSummary && (
-          row.factory_state === "repairing_ci"
-          || row.factory_state === "repairing_queue"
-          || row.factory_state === "failed"
-        )
-          ? failureSummary
-          : sessionSummary ?? latestRunStatusNote;
-      const statusNoteWithBlockers = blockedByCount > 0
-        ? `Blocked by ${blockedByKeys.join(", ")}`
-        : derivedStatusNote;
       const waitingReason = sessionWaitingReason ?? derivePatchRelayWaitingReason({
         ...(row.active_run_type !== null ? { activeRunType: String(row.active_run_type) } : {}),
         blockedByKeys,
@@ -521,7 +490,29 @@ export class PatchRelayService {
         queueLabelApplied: Boolean(row.queue_label_applied),
         ...(row.last_github_failure_check_name !== null ? { latestFailureCheckName: String(row.last_github_failure_check_name) } : {}),
       });
-      const statusNoteCandidate = statusNoteWithBlockers ?? waitingReason;
+      const latestRun = row.latest_run_type !== null && row.latest_run_status !== null
+        ? {
+            id: 0,
+            issueId: 0,
+            projectId: String(row.project_id),
+            linearIssueId: String(row.linear_issue_id),
+            runType: String(row.latest_run_type) as never,
+            status: String(row.latest_run_status) as never,
+            ...(typeof row.latest_run_summary_json === "string" ? { summaryJson: row.latest_run_summary_json } : {}),
+            ...(typeof row.latest_run_report_json === "string" ? { reportJson: row.latest_run_report_json } : {}),
+            startedAt: String(row.updated_at),
+          }
+        : undefined;
+      const latestEvent = this.db.listIssueSessionEvents(String(row.project_id), String(row.linear_issue_id), { limit: 1 }).at(-1);
+      const statusNoteCandidate = deriveIssueStatusNote({
+        issue: { factoryState: String(row.factory_state ?? "delegated") } as never,
+        sessionSummary,
+        latestRun: latestRun as never,
+        latestEvent,
+        failureSummary,
+        blockedByKeys,
+        waitingReason,
+      }) ?? waitingReason;
       const statusNoteForReturn = shouldSuppressStatusNote({
         activeRunType: row.active_run_type as string | null | undefined,
         sessionState: row.session_state as string | null | undefined,

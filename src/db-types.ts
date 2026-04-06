@@ -154,6 +154,7 @@ export interface TrackedIssueRecord {
   issueKey?: string | undefined;
   title?: string | undefined;
   issueUrl?: string | undefined;
+  statusNote?: string | undefined;
   currentLinearState?: string | undefined;
   sessionState?: IssueSessionState | undefined;
   factoryState: FactoryState;

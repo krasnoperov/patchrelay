@@ -6,6 +6,7 @@ import type { AppConfig, LinearClientProvider, LinearAgentActivityContent } from
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import { buildAgentSessionPlanForIssue } from "./agent-session-plan.ts";
 import { buildAgentSessionExternalUrls } from "./agent-session-presentation.ts";
+import { deriveIssueStatusNote } from "./status-note.ts";
 import { derivePatchRelayWaitingReason } from "./waiting-reason.ts";
 
 const PROGRESS_THROTTLE_MS = 5_000;
@@ -204,6 +205,7 @@ function renderStatusComment(
 ): string {
   const activeRun = issue.activeRunId ? db.getRun(issue.activeRunId) : undefined;
   const latestRun = db.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
+  const latestEvent = db.listIssueSessionEvents(issue.projectId, issue.linearIssueId, { limit: 1 }).at(-1);
   const activeRunType = issue.activeRunId !== undefined
     ? (options?.activeRunType ?? activeRun?.runType)
     : undefined;
@@ -224,9 +226,21 @@ function renderStatusComment(
     "",
     statusHeadline(issue, activeRunType),
   ];
+  const statusNote = deriveIssueStatusNote({
+    issue,
+    latestRun,
+    latestEvent,
+    waitingReason,
+  });
 
   if (waitingReason) {
     lines.push("", `Waiting: ${waitingReason}`);
+  }
+  if (statusNote && statusNote !== waitingReason) {
+    const label = issue.factoryState === "awaiting_input" ? "Input needed"
+      : issue.factoryState === "failed" || issue.factoryState === "escalated" ? "Action needed"
+      : "Note";
+    lines.push("", `${label}: ${statusNote}`);
   }
 
   if (issue.prNumber !== undefined || issue.prUrl) {
