@@ -271,7 +271,7 @@ export class WebhookHandler {
 
     // ── 2. Pure decisions ────────────────────────────────────────
     const pendingRunType = decideRunIntent({
-      delegated, triggerAllowed, unresolvedBlockers,
+      delegated, triggerAllowed, triggerEvent: normalized.triggerEvent, unresolvedBlockers,
       hasActiveRun: Boolean(activeRun),
       hasPendingRun: Boolean(existingIssue?.pendingRunType),
       terminal,
@@ -843,6 +843,7 @@ export class WebhookHandler {
 function decideRunIntent(p: {
   delegated: boolean;
   triggerAllowed: boolean;
+  triggerEvent: string;
   unresolvedBlockers: number;
   hasActiveRun: boolean;
   hasPendingRun: boolean;
@@ -853,7 +854,11 @@ function decideRunIntent(p: {
     p.currentState === undefined
     || p.currentState === "delegated"
     || p.currentState === "awaiting_input";
-  if (p.delegated && p.triggerAllowed && p.unresolvedBlockers === 0
+  const delegatedStartupRecovery =
+    p.delegated
+    && p.currentState === "awaiting_input"
+    && p.triggerEvent === "issueCreated";
+  if (p.delegated && (p.triggerAllowed || delegatedStartupRecovery) && p.unresolvedBlockers === 0
       && !p.hasActiveRun && !p.hasPendingRun && !p.terminal && wakeEligibleState) {
     return "implementation";
   }
