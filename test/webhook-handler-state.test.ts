@@ -891,7 +891,7 @@ test("idle delegated comments queue a follow-up session event instead of rewriti
   }
 });
 
-test("awaiting_input comments resume PatchRelay work through the follow-up queue", async () => {
+test("awaiting_input comments resume PatchRelay work as direct replies on the same thread", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-awaiting-input-comment-"));
   try {
     const config = createConfig(baseDir);
@@ -965,8 +965,101 @@ test("awaiting_input comments resume PatchRelay work through the follow-up queue
     const wake = db.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-awaiting-input");
     assert.equal(wake?.runType, "implementation");
     assert.equal(wake?.resumeThread, true);
-    assert.equal(wake?.wakeReason, "followup_comment");
+    assert.equal(wake?.wakeReason, "direct_reply");
+    assert.equal(wake?.context.directReplyMode, true);
     assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-awaiting-input" }]);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("awaiting_input answers to an outstanding PatchRelay question are classified as direct replies", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-direct-reply-"));
+  try {
+    const config = createConfig(baseDir);
+    config.projects[0] = {
+      ...config.projects[0]!,
+      triggerEvents: [...config.projects[0]!.triggerEvents, "commentCreated", "commentUpdated"],
+    };
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+    const issue = db.upsertIssue({
+      projectId: "krasnoperov/mafia",
+      linearIssueId: "issue-maf-direct-reply",
+      issueKey: "MAF-91B",
+      title: "Needs direct answer",
+      currentLinearState: "Needs input",
+      currentLinearStateType: "unstarted",
+      factoryState: "awaiting_input",
+      threadId: "thread-direct-reply",
+    });
+    const run = db.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "implementation",
+      promptText: "Which rollout copy should I use?",
+    });
+    db.finishRun(run.id, {
+      status: "completed",
+      summaryJson: JSON.stringify({ latestAssistantMessage: "Which rollout copy should I use?" }),
+    });
+
+    const enqueued: Array<{ projectId: string; issueId: string }> = [];
+    const handler = new WebhookHandler(
+      config,
+      db,
+      { forProject: async () => undefined } as never,
+      { steerTurn: async () => undefined } as never,
+      (projectId, issueId) => { enqueued.push({ projectId, issueId }); },
+      pino({ enabled: false }),
+    );
+
+    const payload: LinearWebhookPayload = {
+      action: "create",
+      type: "Comment",
+      createdAt: "2026-04-01T02:05:00.000Z",
+      webhookTimestamp: Date.now(),
+      actor: {
+        id: "user-2",
+        name: "Jamie Operator",
+        email: "jamie@example.com",
+        type: "User",
+      } as unknown as Record<string, unknown>,
+      data: {
+        id: "comment-direct-reply",
+        body: "Use the staged rollout copy.",
+        user: { name: "Jamie Operator" },
+        issue: {
+          id: "issue-maf-direct-reply",
+          identifier: "MAF-91B",
+          title: "Needs direct answer",
+          team: { id: "team-maf", key: "MAF" },
+          state: { id: "state-input", name: "Needs input", type: "unstarted" },
+          delegate: { id: "patchrelay-actor", name: "PatchRelay" },
+        },
+      },
+    };
+
+    const stored = db.insertFullWebhookEvent({
+      webhookId: "delivery-direct-reply-comment",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(payload),
+    });
+    await handler.processWebhookEvent(stored.id);
+
+    const wake = db.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-direct-reply");
+    assert.equal(wake?.wakeReason, "direct_reply");
+    assert.equal(wake?.resumeThread, true);
+    assert.equal(wake?.context.directReplyMode, true);
+    assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-direct-reply" }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

@@ -37,6 +37,8 @@ const DEFAULT_REVIEW_FIX_BUDGET = 3;
 const DEFAULT_ZOMBIE_RECOVERY_BUDGET = 5;
 const ZOMBIE_RECOVERY_BASE_DELAY_MS = 15_000; // 15s, 30s, 60s, 120s, 240s
 const ISSUE_SESSION_LEASE_MS = 10 * 60_000;
+const MAX_THREAD_GENERATION_BEFORE_COMPACTION = 4;
+const MAX_FOLLOW_UPS_BEFORE_COMPACTION = 4;
 import { QueueHealthMonitor } from "./queue-health-monitor.ts";
 import { IdleIssueReconciler, resolveBranchOwnerForStateTransition } from "./idle-reconciliation.ts";
 import { LinearSessionSync } from "./linear-session-sync.ts";
@@ -230,6 +232,8 @@ function collectFollowUpInputs(context?: Record<string, unknown>): Array<{ type:
 function resolveFollowUpWhy(runType: RunType, context?: Record<string, unknown>): string {
   const wakeReason = typeof context?.wakeReason === "string" ? context.wakeReason : undefined;
   switch (wakeReason) {
+    case "direct_reply":
+      return "A human reply arrived for the outstanding question from the previous turn.";
     case "followup_prompt":
       return "A new Linear agent prompt arrived after the previous turn.";
     case "followup_comment":
@@ -255,6 +259,9 @@ function resolveFollowUpWhy(runType: RunType, context?: Record<string, unknown>)
 }
 
 function resolveFollowUpAction(runType: RunType, context?: Record<string, unknown>): string {
+  if (context?.directReplyMode === true) {
+    return "Apply the latest human answer, continue from the current branch/session context, and only ask another question if you are still blocked.";
+  }
   if (runType === "review_fix" && context?.branchUpkeepRequired === true) {
     const baseBranch = typeof context.baseBranch === "string" ? context.baseBranch : "main";
     return `Update the existing PR branch onto latest ${baseBranch}, resolve conflicts if needed, rerun narrow verification, and push the same branch.`;
@@ -592,6 +599,13 @@ interface PendingRunWake {
   eventIds: number[];
 }
 
+function shouldCompactThread(issue: IssueRecord, threadGeneration: number | undefined, context?: Record<string, unknown>): boolean {
+  const followUpCount = typeof context?.followUpCount === "number" ? context.followUpCount : 0;
+  return issue.threadId !== undefined
+    && (threadGeneration ?? 0) >= MAX_THREAD_GENERATION_BEFORE_COMPACTION
+    && followUpCount >= MAX_FOLLOW_UPS_BEFORE_COMPACTION;
+}
+
 interface RemotePrState {
   headRefOid?: string;
   state?: string;
@@ -675,6 +689,7 @@ export class RunOrchestrator {
 
     const issue = this.db.getIssue(item.projectId, item.issueId);
     if (!issue || issue.activeRunId !== undefined) return;
+    const issueSession = this.db.getIssueSession(item.projectId, item.issueId);
 
     const leaseId = this.acquireIssueSessionLease(item.projectId, item.issueId);
     if (!leaseId) {
@@ -818,6 +833,7 @@ export class RunOrchestrator {
 
     let threadId: string;
     let turnId: string;
+    let parentThreadId: string | undefined;
     try {
       // Ensure worktree
       await this.worktreeManager.ensureIssueWorktree(
@@ -861,7 +877,13 @@ export class RunOrchestrator {
 
       // Reuse the existing thread when the wake source is an additive follow-up
       // or when review-fix work benefits from carrying reviewer context forward.
-      if (issue.threadId && (resumeThread || runType === "review_fix")) {
+      // If the thread has accumulated many resumptions and batched follow-ups,
+      // compact by starting a fresh main thread while keeping a parent link.
+      const compactThread = shouldCompactThread(issue, issueSession?.threadGeneration, effectiveContext);
+      if (compactThread && issue.threadId) {
+        parentThreadId = issue.threadId;
+      }
+      if (issue.threadId && !compactThread && (resumeThread || runType === "review_fix")) {
         threadId = issue.threadId;
       } else {
         const thread = await this.codex.startThread({ cwd: worktreePath });
@@ -920,7 +942,11 @@ export class RunOrchestrator {
     }
 
     this.assertLaunchLease(run, "before recording the active thread");
-    if (!this.db.updateRunThreadWithLease({ projectId: run.projectId, linearIssueId: run.linearIssueId, leaseId }, run.id, { threadId, turnId })) {
+    if (!this.db.updateRunThreadWithLease(
+      { projectId: run.projectId, linearIssueId: run.linearIssueId, leaseId },
+      run.id,
+      { threadId, turnId, ...(parentThreadId ? { parentThreadId } : {}) },
+    )) {
       this.logger.warn({ runId: run.id, issueId: run.linearIssueId }, "Skipping run thread update after losing issue-session lease");
       this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
       return;

@@ -12,6 +12,7 @@ import {
   buildPromptDeliveredThought,
   buildStopConfirmationActivity,
 } from "./linear-session-reporting.ts";
+import { deriveIssueStatusNote } from "./status-note.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import { resolveProject, triggerEventAllowed, trustedActorAllowed } from "./project-resolution.ts";
 import { normalizeWebhook } from "./webhooks.ts";
@@ -27,6 +28,7 @@ import type {
   LinearAgentActivityContent,
 } from "./types.ts";
 import { safeJsonParse, sanitizeDiagnosticText } from "./utils.ts";
+import { extractLatestAssistantSummary } from "./issue-session-events.ts";
 
 export interface IssueQueueItem {
   projectId: string;
@@ -557,10 +559,11 @@ export class WebhookHandler {
     }
 
     if (promptBody && existingIssue && (delegated || existingIssue.factoryState === "awaiting_input")) {
+      const directReply = this.isDirectReplyToOutstandingQuestion(existingIssue);
       this.db.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
         projectId: project.id,
         linearIssueId: normalized.issue.id,
-        eventType: "followup_prompt",
+        eventType: directReply ? "direct_reply" : "followup_prompt",
         eventJson: JSON.stringify({
           text: promptBody,
           source: "linear_agent_prompt",
@@ -693,10 +696,11 @@ export class WebhookHandler {
       const ENQUEUEABLE_STATES = new Set(["pr_open", "changes_requested", "implementing", "delegated", "awaiting_input"]);
       if (ENQUEUEABLE_STATES.has(issue.factoryState)) {
         const runType = issue.prReviewState === "changes_requested" ? "review_fix" : "implementation";
+        const directReply = this.isDirectReplyToOutstandingQuestion(issue);
         this.db.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
           projectId: project.id,
           linearIssueId: normalized.issue.id,
-          eventType: "followup_comment",
+          eventType: directReply ? "direct_reply" : "followup_comment",
           eventJson: JSON.stringify({
             body: normalized.comment.body.trim(),
             author: normalized.comment.userName,
@@ -741,10 +745,11 @@ export class WebhookHandler {
       });
     } catch (error) {
       this.logger.warn({ issueKey: trackedIssue?.issueKey, error: error instanceof Error ? error.message : String(error) }, "Failed to deliver follow-up comment");
+      const directReply = this.isDirectReplyToOutstandingQuestion(issue);
       this.db.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
         projectId: project.id,
         linearIssueId: normalized.issue.id,
-        eventType: "followup_comment",
+        eventType: directReply ? "direct_reply" : "followup_comment",
         eventJson: JSON.stringify({
           body: normalized.comment.body.trim(),
           author: normalized.comment.userName,
@@ -873,6 +878,28 @@ export class WebhookHandler {
       } catch { /* continue to next candidate */ }
     }
     return undefined;
+  }
+
+  private isDirectReplyToOutstandingQuestion(issue: ReturnType<PatchRelayDatabase["getIssue"]>): boolean {
+    if (!issue) return false;
+    const linearNeedsInput = issue.currentLinearState?.trim().toLowerCase().includes("input") ?? false;
+    if (issue.factoryState !== "awaiting_input" && !linearNeedsInput) return false;
+    if (issue.threadId) {
+      return true;
+    }
+    const latestRun = this.db.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
+    const latestRunNote = extractLatestAssistantSummary(latestRun)?.trim();
+    if (latestRunNote?.endsWith("?")) {
+      return true;
+    }
+    const latestEvent = this.db.listIssueSessionEvents(issue.projectId, issue.linearIssueId).at(-1);
+    const statusNote = deriveIssueStatusNote({
+      issue,
+      latestRun,
+      latestEvent,
+      waitingReason: undefined,
+    })?.trim();
+    return Boolean(statusNote?.endsWith("?"));
   }
 }
 

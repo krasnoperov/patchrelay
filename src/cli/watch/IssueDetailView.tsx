@@ -90,6 +90,9 @@ const STAGE_DISPLAY: Record<string, string> = {
 function effectiveState(issue: WatchIssue): string {
   if (issue.blockedByCount > 0 && !issue.activeRunType) return "blocked";
   if (issue.readyForExecution && !issue.activeRunType) return "ready";
+  if (issue.sessionState === "waiting_input") return "awaiting_input";
+  if (issue.sessionState === "done") return "done";
+  if (issue.sessionState === "failed") return "failed";
   return issue.factoryState;
 }
 
@@ -110,8 +113,8 @@ function blockerText(issue: WatchIssue, issueContext: WatchIssueContext | null):
   if (issue.sessionState === "waiting_input") return issue.waitingReason ?? "Waiting for input";
   if (issue.waitingReason && !issue.activeRunType) return issue.waitingReason;
   if (issue.blockedByCount > 0) return `Waiting on ${issue.blockedByKeys.join(", ")}`;
-  if (issue.factoryState === "repairing_queue") return "Merge queue conflict, repairing branch";
-  if (issue.factoryState === "repairing_ci") {
+  if (effectiveState(issue) === "repairing_queue") return "Merge queue conflict, repairing branch";
+  if (effectiveState(issue) === "repairing_ci") {
     const check = issueContext?.latestFailureCheckName ?? issue.latestFailureCheckName ?? "CI";
     return `Repairing ${check}`;
   }
@@ -121,7 +124,7 @@ function blockerText(issue: WatchIssue, issueContext: WatchIssueContext | null):
   }
   if (rereviewNeeded) return "Awaiting re-review after requested changes";
   if (issue.prReviewState === "changes_requested") return "Review changes requested";
-  if (issue.prNumber !== undefined && !issue.prReviewState && issue.factoryState !== "done") return "Awaiting review";
+  if (issue.prNumber !== undefined && !issue.prReviewState && effectiveState(issue) !== "done") return "Awaiting review";
   return null;
 }
 

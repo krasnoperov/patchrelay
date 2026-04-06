@@ -11,7 +11,7 @@ interface IssueRowProps {
 
 // ─── State display ──────────────────────────────────────────────
 
-const TERMINAL_STATES = new Set(["done", "failed", "escalated", "awaiting_input"]);
+const TERMINAL_STATES = new Set(["done", "failed", "escalated"]);
 
 interface StateDisplay {
   label: string;
@@ -21,6 +21,9 @@ interface StateDisplay {
 function effectiveState(issue: WatchIssue): string {
   if (issue.blockedByCount > 0 && !issue.activeRunType) return "blocked";
   if (issue.readyForExecution && !issue.activeRunType) return "ready";
+  if (issue.sessionState === "waiting_input") return "awaiting_input";
+  if (issue.sessionState === "done") return "done";
+  if (issue.sessionState === "failed") return "failed";
   return issue.factoryState;
 }
 
@@ -91,7 +94,7 @@ function buildFacts(issue: WatchIssue, selected: boolean): Array<{ text: string;
     facts.push({ text: "re-review needed", color: "yellow" });
   } else if (issue.prReviewState === "changes_requested") {
     facts.push({ text: "changes requested", color: "yellow" });
-  } else if (issue.prNumber !== undefined && !issue.prReviewState && !TERMINAL_STATES.has(issue.factoryState)) {
+  } else if (issue.prNumber !== undefined && !issue.prReviewState && !TERMINAL_STATES.has(effectiveState(issue))) {
     facts.push({ text: "awaiting review", color: "yellow" });
   }
 
@@ -129,8 +132,8 @@ function blockerText(issue: WatchIssue): string | null {
   if (issue.sessionState === "waiting_input") return issue.waitingReason ?? "Waiting for input";
   if (issue.waitingReason && !issue.activeRunType) return issue.waitingReason;
   if (issue.blockedByCount > 0) return `Waiting on ${issue.blockedByKeys.join(", ")}`;
-  if (issue.factoryState === "repairing_queue") return "Merge queue conflict, repairing branch";
-  if (issue.factoryState === "repairing_ci") {
+  if (effectiveState(issue) === "repairing_queue") return "Merge queue conflict, repairing branch";
+  if (effectiveState(issue) === "repairing_ci") {
     const check = issue.latestFailureCheckName ?? "CI";
     return `Repairing ${check}`;
   }
@@ -154,7 +157,7 @@ export function IssueRow({ issue, selected, titleWidth }: IssueRowProps): React.
   const facts = buildFacts(issue, selected);
   const blocker = selected ? blockerText(issue) : null;
 
-  const isTerminal = TERMINAL_STATES.has(issue.factoryState);
+  const isTerminal = TERMINAL_STATES.has(effectiveState(issue));
 
   // Terminal issues: compact single line
   if (isTerminal && !selected) {

@@ -551,6 +551,36 @@ test("followup_comment alone reuses the main thread for the next turn", () => {
   }
 });
 
+test("direct_reply wakes the next turn in direct-reply mode on the same thread", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-session-direct-reply-"));
+  try {
+    const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
+    db.runMigrations();
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-direct-reply",
+      issueKey: "USE-17",
+      factoryState: "awaiting_input",
+      threadId: "thread-direct-reply",
+    });
+    db.appendIssueSessionEvent({
+      projectId: "usertold",
+      linearIssueId: "issue-direct-reply",
+      eventType: "direct_reply",
+      eventJson: JSON.stringify({ body: "Use the staged rollout copy.", author: "alice" }),
+    });
+
+    const wake = db.peekIssueSessionWake("usertold", "issue-direct-reply");
+    assert.equal(wake?.runType, "implementation");
+    assert.equal(wake?.resumeThread, true);
+    assert.equal(wake?.wakeReason, "direct_reply");
+    assert.equal(wake?.context.directReplyMode, true);
+    assert.equal(Array.isArray(wake?.context.followUps), true);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("terminal session events suppress queued follow-up wakeups", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-session-terminal-events-"));
   try {

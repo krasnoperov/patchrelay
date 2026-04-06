@@ -162,3 +162,31 @@ test("buildRunPrompt switches implementation follow-ups to the follow-up prompt 
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("buildRunPrompt keeps direct-reply follow-ups concise", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-direct-reply-prompt-"));
+  try {
+    writeFileSync(path.join(baseDir, "IMPLEMENTATION_WORKFLOW.md"), "# Implementation Workflow\n");
+
+    const prompt = buildRunPrompt({
+      ...createIssue(),
+      factoryState: "awaiting_input",
+      prNumber: 22,
+      prHeadSha: "abc123def456",
+    }, "implementation", baseDir, {
+      wakeReason: "direct_reply",
+      directReplyMode: true,
+      followUpCount: 1,
+      followUps: [
+        { type: "direct_reply", text: "Use the staged rollout copy.", author: "alice" },
+      ],
+    });
+
+    assert.match(prompt, /Why this turn exists: A human reply arrived for the outstanding question from the previous turn/);
+    assert.match(prompt, /Required action now: Apply the latest human answer, continue from the current branch\/session context/);
+    assert.match(prompt, /direct_reply from alice: Use the staged rollout copy/);
+    assert.doesNotMatch(prompt, /## Direct Reply Handling/);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});

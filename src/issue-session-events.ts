@@ -3,6 +3,7 @@ import type { RunType } from "./factory-state.ts";
 
 export type IssueSessionEventType =
   | "delegated"
+  | "direct_reply"
   | "followup_prompt"
   | "followup_comment"
   | "self_comment"
@@ -92,6 +93,25 @@ export function deriveSessionWakePlan(
           context.promptBody = payload.promptBody;
         }
         break;
+      case "direct_reply": {
+        if (!runType) {
+          runType = issue.prReviewState === "changes_requested" ? "review_fix" : "implementation";
+          wakeReason = "direct_reply";
+        }
+        const text = typeof payload?.text === "string"
+          ? payload.text
+          : typeof payload?.body === "string" ? payload.body : undefined;
+        if (text) {
+          followUps.push({
+            type: event.eventType,
+            text,
+            ...(typeof payload?.author === "string" ? { author: payload.author } : {}),
+          });
+        }
+        context.directReplyMode = true;
+        resumeThread = true;
+        break;
+      }
       case "followup_prompt":
       case "followup_comment":
       case "operator_prompt": {
