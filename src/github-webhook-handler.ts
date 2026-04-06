@@ -212,7 +212,7 @@ export class GitHubWebhookHandler {
       // Only transition and notify when the state actually changes.
       // Multiple check_suite events can arrive for the same outcome.
       if (newState && newState !== afterMetadata.factoryState) {
-        this.db.upsertIssue({
+        this.db.upsertIssueRespectingActiveLease(issue.projectId, issue.linearIssueId, {
           projectId: issue.projectId,
           linearIssueId: issue.linearIssueId,
           factoryState: newState,
@@ -235,7 +235,7 @@ export class GitHubWebhookHandler {
     // Reset repair counters on new push — but only when no repair run is active,
     // since Codex pushes during repair and resetting mid-run would bypass budgets.
     if (event.triggerEvent === "pr_synchronize" && !freshIssue.activeRunId) {
-      this.db.upsertIssue({
+      this.db.upsertIssueRespectingActiveLease(issue.projectId, issue.linearIssueId, {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         ciRepairAttempts: 0,
@@ -432,7 +432,7 @@ export class GitHubWebhookHandler {
           lastQueueSignalAt: new Date().toISOString(),
           lastQueueIncidentJson: JSON.stringify(queueRepairContext),
         });
-        this.db.appendIssueSessionEvent({
+        this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
           projectId: issue.projectId,
           linearIssueId: issue.linearIssueId,
           eventType: "merge_steward_incident",
@@ -442,7 +442,7 @@ export class GitHubWebhookHandler {
           }),
           dedupeKey: failureContext.failureSignature,
         });
-        this.db.setBranchOwner(issue.projectId, issue.linearIssueId, "patchrelay");
+        this.db.setBranchOwnerRespectingActiveLease(issue.projectId, issue.linearIssueId, "patchrelay");
         this.enqueueIssue(issue.projectId, issue.linearIssueId);
         this.logger.info({ issueKey: issue.issueKey, checkName: event.checkName }, "Queue eviction detected, enqueued queue repair");
         this.feed?.publish({
@@ -485,7 +485,7 @@ export class GitHubWebhookHandler {
           lastGitHubFailureAt: new Date().toISOString(),
           lastQueueIncidentJson: null,
         });
-        this.db.appendIssueSessionEvent({
+        this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
           projectId: issue.projectId,
           linearIssueId: issue.linearIssueId,
           eventType: "settled_red_ci",
@@ -496,7 +496,7 @@ export class GitHubWebhookHandler {
           }),
           dedupeKey: failureContext.failureSignature,
         });
-        this.db.setBranchOwner(issue.projectId, issue.linearIssueId, "patchrelay");
+        this.db.setBranchOwnerRespectingActiveLease(issue.projectId, issue.linearIssueId, "patchrelay");
         this.enqueueIssue(issue.projectId, issue.linearIssueId);
         this.logger.info({ issueKey: issue.issueKey, checkName: failureContext.checkName ?? event.checkName }, "Enqueued CI repair run");
         this.feed?.publish({
@@ -513,7 +513,7 @@ export class GitHubWebhookHandler {
     }
 
     if (event.triggerEvent === "review_changes_requested") {
-      this.db.appendIssueSessionEvent({
+      this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         eventType: "review_changes_requested",
@@ -527,7 +527,7 @@ export class GitHubWebhookHandler {
           event.reviewerName ?? "unknown-reviewer",
         ].join("::"),
       });
-      this.db.setBranchOwner(issue.projectId, issue.linearIssueId, "patchrelay");
+      this.db.setBranchOwnerRespectingActiveLease(issue.projectId, issue.linearIssueId, "patchrelay");
       this.enqueueIssue(issue.projectId, issue.linearIssueId);
       this.logger.info({ issueKey: issue.issueKey, reviewerName: event.reviewerName }, "Enqueued review fix run");
     }
@@ -542,7 +542,7 @@ export class GitHubWebhookHandler {
       eventType,
       dedupeKey: [eventType, issue.prNumber ?? event.prNumber ?? "unknown-pr", issue.prHeadSha ?? event.headSha ?? "unknown-sha"].join("::"),
     });
-    this.db.clearPendingIssueSessionEvents(issue.projectId, issue.linearIssueId);
+    this.db.clearPendingIssueSessionEventsRespectingActiveLease(issue.projectId, issue.linearIssueId);
 
     const run = issue.activeRunId ? this.db.getRun(issue.activeRunId) : undefined;
     if (run?.threadId && run.turnId) {
@@ -559,7 +559,7 @@ export class GitHubWebhookHandler {
       }
     }
 
-    this.db.transaction(() => {
+    const commitTerminalUpdate = () => {
       if (run) {
         this.db.finishRun(run.id, {
           status: "released",
@@ -574,8 +574,14 @@ export class GitHubWebhookHandler {
         activeRunId: null,
         factoryState: event.triggerEvent === "pr_merged" ? "done" : "failed",
       });
-    });
-    this.db.releaseIssueSessionLease(issue.projectId, issue.linearIssueId);
+    };
+    const activeLease = this.db.getActiveIssueSessionLease(issue.projectId, issue.linearIssueId);
+    if (activeLease) {
+      this.db.withIssueSessionLease(issue.projectId, issue.linearIssueId, activeLease.leaseId, commitTerminalUpdate);
+    } else {
+      this.db.transaction(commitTerminalUpdate);
+    }
+    this.db.releaseIssueSessionLeaseRespectingActiveLease(issue.projectId, issue.linearIssueId);
     const updatedIssue = this.db.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
     if (event.triggerEvent === "pr_merged") {
       await this.completeLinearIssueAfterMerge(updatedIssue);

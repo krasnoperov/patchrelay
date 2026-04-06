@@ -642,7 +642,7 @@ export class PatchRelayService {
 
     // If no active run, queue as pending context for the next run
     if (!issue.activeRunId) {
-      this.db.appendIssueSessionEvent({
+      this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         eventType: "operator_prompt",
@@ -668,7 +668,7 @@ export class PatchRelayService {
       // Turn may have completed between check and steer — queue for next run
       const msg = error instanceof Error ? error.message : String(error);
       this.logger.warn({ issueKey, error: msg }, "steerTurn failed, queuing prompt for next run");
-      this.db.appendIssueSessionEvent({
+      this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         eventType: "operator_prompt",
@@ -697,15 +697,15 @@ export class PatchRelayService {
       }
     }
 
-    this.db.appendIssueSessionEvent({
+    this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       eventType: "stop_requested",
       dedupeKey: `operator_stop:${issue.linearIssueId}`,
     });
-    this.db.clearPendingIssueSessionEvents(issue.projectId, issue.linearIssueId);
+    this.db.clearPendingIssueSessionEventsRespectingActiveLease(issue.projectId, issue.linearIssueId);
 
-    this.db.upsertIssue({
+    this.db.upsertIssueRespectingActiveLease(issue.projectId, issue.linearIssueId, {
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       factoryState: "awaiting_input" as never,
@@ -729,7 +729,11 @@ export class PatchRelayService {
     if (issue.activeRunId) return { error: "Issue already has an active run" };
 
     if (issue.prState === "merged") {
-      this.db.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, factoryState: "done" as never });
+      this.db.upsertIssueRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        factoryState: "done" as never,
+      });
       return { issueKey, runType: "none" };
     }
 
@@ -752,7 +756,7 @@ export class PatchRelayService {
     }
 
     this.appendOperatorRetryEvent(issue, runType);
-    this.db.upsertIssue({
+    this.db.upsertIssueRespectingActiveLease(issue.projectId, issue.linearIssueId, {
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       pendingRunType: runType as never,
@@ -778,7 +782,7 @@ export class PatchRelayService {
     if (runType === "queue_repair") {
       const queueIncident = parseObjectJson(issue.lastQueueIncidentJson);
       const failureContext = parseObjectJson(issue.lastGitHubFailureContextJson);
-      this.db.appendIssueSessionEvent({
+      this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         eventType: "merge_steward_incident",
@@ -794,7 +798,7 @@ export class PatchRelayService {
 
     if (runType === "ci_repair") {
       const failureContext = parseObjectJson(issue.lastGitHubFailureContextJson);
-      this.db.appendIssueSessionEvent({
+      this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         eventType: "settled_red_ci",
@@ -808,7 +812,7 @@ export class PatchRelayService {
     }
 
     if (runType === "review_fix") {
-      this.db.appendIssueSessionEvent({
+      this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         eventType: "review_changes_requested",
@@ -821,7 +825,7 @@ export class PatchRelayService {
       return;
     }
 
-    this.db.appendIssueSessionEvent({
+    this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       eventType: "delegated",

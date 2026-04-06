@@ -401,6 +401,86 @@ test("startup lease cleanup expires only stale issue-session leases", () => {
   }
 });
 
+test("active-lease-aware helpers use the current live lease for control writes", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-session-active-lease-helpers-"));
+  try {
+    const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
+    db.runMigrations();
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-active-lease",
+      issueKey: "USE-ACTIVE-LEASE",
+      factoryState: "delegated",
+      branchOwner: "user",
+    });
+    db.appendIssueSessionEvent({
+      projectId: "usertold",
+      linearIssueId: "issue-active-lease",
+      eventType: "followup_comment",
+      eventJson: JSON.stringify({ body: "hello" }),
+    });
+
+    assert.equal(
+      db.acquireIssueSessionLease({
+        projectId: "usertold",
+        linearIssueId: "issue-active-lease",
+        leaseId: "lease-1",
+        workerId: "worker-a",
+        leasedUntil: "2030-04-05T10:05:00.000Z",
+        now: "2030-04-05T10:00:00.000Z",
+      }),
+      true,
+    );
+    assert.equal(
+      db.acquireIssueSessionLease({
+        projectId: "usertold",
+        linearIssueId: "issue-active-lease",
+        leaseId: "lease-2",
+        workerId: "worker-b",
+        leasedUntil: "2030-04-05T10:10:00.000Z",
+        now: "2030-04-05T10:06:00.000Z",
+      }),
+      true,
+    );
+
+    const issueWrite = db.upsertIssueRespectingActiveLease("usertold", "issue-active-lease", {
+      projectId: "usertold",
+      linearIssueId: "issue-active-lease",
+      factoryState: "implementing",
+    });
+    assert.equal(issueWrite?.factoryState, "implementing");
+
+    assert.equal(
+      db.clearPendingIssueSessionEventsWithLease({
+        projectId: "usertold",
+        linearIssueId: "issue-active-lease",
+        leaseId: "lease-1",
+      }),
+      false,
+    );
+    assert.equal(db.hasPendingIssueSessionEvents("usertold", "issue-active-lease"), true);
+    assert.equal(db.clearPendingIssueSessionEventsRespectingActiveLease("usertold", "issue-active-lease"), true);
+    assert.equal(db.hasPendingIssueSessionEvents("usertold", "issue-active-lease"), false);
+
+    const originalBranchOwner = db.getIssue("usertold", "issue-active-lease")?.branchOwner;
+    assert.equal(
+      db.setBranchOwnerWithLease(
+        { projectId: "usertold", linearIssueId: "issue-active-lease", leaseId: "lease-1" },
+        "patchrelay",
+      ),
+      false,
+    );
+    assert.equal(db.getIssue("usertold", "issue-active-lease")?.branchOwner, originalBranchOwner);
+    assert.equal(db.setBranchOwnerRespectingActiveLease("usertold", "issue-active-lease", "patchrelay"), true);
+    assert.equal(db.getIssue("usertold", "issue-active-lease")?.branchOwner, "patchrelay");
+
+    db.releaseIssueSessionLeaseRespectingActiveLease("usertold", "issue-active-lease");
+    assert.equal(db.getIssueSession("usertold", "issue-active-lease")?.leaseId, undefined);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("issue session wake derives follow-up mode and thread reuse from queued events", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-session-events-"));
   try {

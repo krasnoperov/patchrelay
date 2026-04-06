@@ -798,7 +798,7 @@ export class RunOrchestrator {
       });
       this.db.consumeIssueSessionEvents(item.projectId, item.issueId, freshWake.eventIds, created.id);
       this.db.setIssueSessionLastWakeReason(item.projectId, item.issueId, freshWake.wakeReason ?? null);
-      this.db.setBranchOwner(item.projectId, item.issueId, "patchrelay");
+      this.db.setBranchOwnerWithLease({ projectId: item.projectId, linearIssueId: item.issueId, leaseId }, "patchrelay");
       return created;
     });
     if (!run) {
@@ -1822,7 +1822,10 @@ export class RunOrchestrator {
       });
       const branchOwner = this.resolveBranchOwnerForStateTransition(nextState);
       if (branchOwner) {
-        this.db.setBranchOwner(run.projectId, run.linearIssueId, branchOwner);
+        const lease = this.getHeldIssueSessionLease(run.projectId, run.linearIssueId);
+        if (lease) {
+          this.db.setBranchOwnerWithLease(lease, branchOwner);
+        }
       }
       return true;
     });

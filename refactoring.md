@@ -446,7 +446,7 @@ Use this as the execution order for the refactor. The early phases are designed 
 ### Phase 6: Lease And Concurrency Model
 
 - [x] Add renewable lease acquisition and heartbeat logic around session execution.
-- [ ] Require lease checks before session writes, PR writes, pushes, or turn starts.
+- [x] Require lease checks before session writes, PR writes, pushes, or turn starts.
 - [x] Handle stale-worker wakeups as read-only.
 - [x] Add lease-expiry recovery in reconciliation.
 - [x] Add tests for duplicate workers, expired leases, and reclaimed sessions.
@@ -548,7 +548,8 @@ Status:
 
 - first pass landed: DB lease guards now fence orchestrator run-claim, run-thread attach, failure cleanup, normal completion, and reconciliation completion/release paths
 - second pass landed: run-start repair counters, zombie-recovery reset, interrupted-run counter rollback, escalation/recovery writes, and PR-truth refresh checkpoints in `src/run-orchestrator.ts` now all drop writes after lease loss instead of mutating compatibility state
-- still remaining: webhook-driven writes, service-layer compatibility writes, and any push/publication side effects that are not yet explicitly guarded by lease-held checkpoints
+- third pass landed: `src/db.ts` now exposes active-lease-aware helpers for issue shadow writes, run finalization, wake-event append, pending-event clear, branch-owner changes, and lease release; `src/service.ts`, `src/webhook-handler.ts`, and `src/github-webhook-handler.ts` now route their remaining compatibility/control writes through those guards
+- only narrow leftovers remain: startup metadata refresh and other explicitly read-model-only sync paths, which stay unfenced by design because they do not control execution
 
 Why this slice matters:
 

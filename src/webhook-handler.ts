@@ -134,26 +134,41 @@ export class WebhookHandler {
       // Handle issue removal: release active runs, mark as failed.
       if (hydrated.triggerEvent === "issueRemoved" && trackedIssue) {
         const removedIssue = this.db.getIssue(project.id, issue.id);
+        const activeLease = this.db.getActiveIssueSessionLease(project.id, issue.id);
+        const commitRemoval = () => {
+          if (removedIssue?.activeRunId) {
+            const run = this.db.getRun(removedIssue.activeRunId);
+            if (run) {
+              this.db.finishRun(run.id, { status: "released", failureReason: "Issue removed from Linear" });
+            }
+            return this.db.upsertIssue({
+              projectId: project.id,
+              linearIssueId: issue.id,
+              activeRunId: null,
+              pendingRunType: null,
+              factoryState: "failed" as never,
+            });
+          }
+          if (removedIssue && !TERMINAL_STATES.has(removedIssue.factoryState)) {
+            return this.db.upsertIssue({
+              projectId: project.id,
+              linearIssueId: issue.id,
+              pendingRunType: null,
+              factoryState: "failed" as never,
+            });
+          }
+          return removedIssue;
+        };
         if (removedIssue?.activeRunId) {
           const run = this.db.getRun(removedIssue.activeRunId);
           if (run) {
             await this.stopActiveRun(run, "STOP: The Linear issue was removed. Stop working immediately and exit.");
-            this.db.finishRun(run.id, { status: "released", failureReason: "Issue removed from Linear" });
           }
-          this.db.upsertIssue({
-            projectId: project.id,
-            linearIssueId: issue.id,
-            activeRunId: null,
-            pendingRunType: null,
-            factoryState: "failed" as never,
-          });
-        } else if (removedIssue && !TERMINAL_STATES.has(removedIssue.factoryState)) {
-          this.db.upsertIssue({
-            projectId: project.id,
-            linearIssueId: issue.id,
-            pendingRunType: null,
-            factoryState: "failed" as never,
-          });
+        }
+        if (activeLease) {
+          this.db.withIssueSessionLease(project.id, issue.id, activeLease.leaseId, commitRemoval);
+        } else {
+          commitRemoval();
         }
         this.db.appendIssueSessionEvent({
           projectId: project.id,
@@ -161,8 +176,8 @@ export class WebhookHandler {
           eventType: "issue_removed",
           dedupeKey: `issue_removed:${issue.id}`,
         });
-        this.db.clearPendingIssueSessionEvents(project.id, issue.id);
-        this.db.releaseIssueSessionLease(project.id, issue.id);
+        this.db.clearPendingIssueSessionEventsRespectingActiveLease(project.id, issue.id);
+        this.db.releaseIssueSessionLeaseRespectingActiveLease(project.id, issue.id);
         this.feed?.publish({
           level: "warn",
           kind: "stage",
@@ -184,10 +199,10 @@ export class WebhookHandler {
 
       if (result.desiredStage) {
         if (result.desiredStage === "implementation") {
-          this.db.appendIssueSessionEvent({
-            projectId: project.id,
-            linearIssueId: issue.id,
-            eventType: "delegated",
+        this.db.appendIssueSessionEventRespectingActiveLease(project.id, issue.id, {
+          projectId: project.id,
+          linearIssueId: issue.id,
+          eventType: "delegated",
             eventJson: JSON.stringify({
               promptContext: trackedIssue?.issueKey ? `Linear issue ${trackedIssue.issueKey} was delegated to PatchRelay.` : undefined,
               promptBody: normalized.agentSession?.promptBody?.trim(),
@@ -308,7 +323,7 @@ export class WebhookHandler {
     });
 
     // ── 3. Transactional commit ──────────────────────────────────
-    const issue = this.db.transaction(() => {
+    const commitIssueUpdate = () => {
       const record = this.db.upsertIssue({
         projectId: project.id,
         linearIssueId: normalizedIssue.id,
@@ -335,7 +350,15 @@ export class WebhookHandler {
         this.db.finishRun(activeRun.id, { status: "released", failureReason: runRelease.reason });
       }
       return record;
-    });
+    };
+    const activeLease = this.db.getActiveIssueSessionLease(project.id, normalizedIssue.id);
+    const issue = activeLease
+      ? this.db.withIssueSessionLease(project.id, normalizedIssue.id, activeLease.leaseId, commitIssueUpdate) ?? (existingIssue ?? this.db.upsertIssue({
+          projectId: project.id,
+          linearIssueId: normalizedIssue.id,
+          ...(hydratedIssue.identifier ? { issueKey: hydratedIssue.identifier } : {}),
+        }))
+      : this.db.transaction(commitIssueUpdate);
 
     // ── 4. Side effects (after transaction) ──────────────────────
     if (undelegation.factoryState) {
@@ -348,8 +371,8 @@ export class WebhookHandler {
         eventType: "undelegated",
         dedupeKey: `undelegated:${normalizedIssue.id}`,
       });
-      this.db.clearPendingIssueSessionEvents(project.id, normalizedIssue.id);
-      this.db.releaseIssueSessionLease(project.id, normalizedIssue.id);
+      this.db.clearPendingIssueSessionEventsRespectingActiveLease(project.id, normalizedIssue.id);
+      this.db.releaseIssueSessionLeaseRespectingActiveLease(project.id, normalizedIssue.id);
       this.feed?.publish({
         level: "warn",
         kind: "stage",
@@ -434,7 +457,7 @@ export class WebhookHandler {
         linearIssueId: dependent.linearIssueId,
         pendingRunType: "implementation",
       });
-      this.db.appendIssueSessionEvent({
+      this.db.appendIssueSessionEventRespectingActiveLease(projectId, dependent.linearIssueId, {
         projectId,
         linearIssueId: dependent.linearIssueId,
         eventType: "delegated",
@@ -534,7 +557,7 @@ export class WebhookHandler {
     }
 
     if (promptBody && existingIssue && (delegated || existingIssue.factoryState === "awaiting_input")) {
-      this.db.appendIssueSessionEvent({
+      this.db.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
         projectId: project.id,
         linearIssueId: normalized.issue.id,
         eventType: "followup_prompt",
@@ -587,7 +610,7 @@ export class WebhookHandler {
       this.db.finishRun(activeRun.id, { status: "released", threadId: activeRun.threadId, turnId: activeRun.turnId });
     }
 
-    this.db.upsertIssue({
+    this.db.upsertIssueRespectingActiveLease(project.id, issueId, {
       projectId: project.id,
       linearIssueId: issueId,
       activeRunId: null,
@@ -600,8 +623,8 @@ export class WebhookHandler {
       eventType: "stop_requested",
       dedupeKey: `stop_requested:${issueId}`,
     });
-    this.db.clearPendingIssueSessionEvents(project.id, issueId);
-    this.db.releaseIssueSessionLease(project.id, issueId);
+    this.db.clearPendingIssueSessionEventsRespectingActiveLease(project.id, issueId);
+    this.db.releaseIssueSessionLeaseRespectingActiveLease(project.id, issueId);
 
     this.feed?.publish({
       level: "info",
@@ -650,10 +673,10 @@ export class WebhookHandler {
     // commentCreated webhook back — without this guard that re-enqueues a new run.
     const installation = this.db.linearInstallations.getLinearInstallationForProject(project.id);
     if (installation?.actorId && normalized.actor?.id === installation.actorId) {
-      this.db.appendIssueSessionEvent({
-        projectId: project.id,
-        linearIssueId: normalized.issue.id,
-        eventType: "self_comment",
+        this.db.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
+          projectId: project.id,
+          linearIssueId: normalized.issue.id,
+          eventType: "self_comment",
         eventJson: JSON.stringify({
           body: normalized.comment.body.trim(),
           author: normalized.comment.userName,
@@ -670,7 +693,7 @@ export class WebhookHandler {
       const ENQUEUEABLE_STATES = new Set(["pr_open", "changes_requested", "implementing", "delegated", "awaiting_input"]);
       if (ENQUEUEABLE_STATES.has(issue.factoryState)) {
         const runType = issue.prReviewState === "changes_requested" ? "review_fix" : "implementation";
-        this.db.appendIssueSessionEvent({
+        this.db.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
           projectId: project.id,
           linearIssueId: normalized.issue.id,
           eventType: "followup_comment",
@@ -718,7 +741,7 @@ export class WebhookHandler {
       });
     } catch (error) {
       this.logger.warn({ issueKey: trackedIssue?.issueKey, error: error instanceof Error ? error.message : String(error) }, "Failed to deliver follow-up comment");
-      this.db.appendIssueSessionEvent({
+      this.db.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
         projectId: project.id,
         linearIssueId: normalized.issue.id,
         eventType: "followup_comment",
