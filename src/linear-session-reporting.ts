@@ -184,11 +184,11 @@ export function summarizeIssueStateForLinear(
     case "running":
       return issue.prNumber ? `PR #${issue.prNumber} is actively running.` : "Actively running.";
     case "idle":
-      return issue.prNumber ? `PR #${issue.prNumber} is idle.` : "Idle.";
+      return issue.waitingReason ?? (issue.prNumber ? `PR #${issue.prNumber} is idle.` : "Idle.");
     case "done":
       return issue.prNumber ? `PR #${issue.prNumber} has merged.` : "Change merged.";
     case "failed":
-      return issue.prNumber ? `PR #${issue.prNumber} needs help to recover.` : "Needs help to recover.";
+      return issue.waitingReason ?? (issue.prNumber ? `PR #${issue.prNumber} needs help to recover.` : "Needs help to recover.");
   }
 
   switch (issue.factoryState) {

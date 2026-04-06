@@ -332,63 +332,16 @@ export function watchReducer(state: WatchState, action: WatchAction): WatchState
 // ─── Feed Event → Issue List + Timeline ───────────────────────────
 
 function applyFeedEvent(state: WatchState, event: OperatorFeedEvent, receivedAt: number): WatchState {
-  if (!event.issueKey) {
-    return { ...state, lastServerMessageAt: receivedAt };
-  }
-
-  const index = state.issues.findIndex((issue) => issue.issueKey === event.issueKey);
-  if (index === -1) {
-    return { ...state, lastServerMessageAt: receivedAt };
-  }
-
-  const updated = [...state.issues];
-  const issue = { ...updated[index]! };
-
-  if (event.kind === "stage" && event.stage) {
-    issue.factoryState = event.stage;
-  }
-  if (event.kind === "stage" && event.status === "starting" && event.stage) {
-    issue.activeRunType = event.stage;
-  }
-  if (event.kind === "turn") {
-    if (event.status === "completed" || event.status === "failed") {
-      issue.activeRunType = undefined;
-      issue.latestRunStatus = event.status;
-    }
-  }
-  if (event.kind === "github" && event.status) {
-    if (event.status === "check_passed" || event.status === "check_failed") {
-      issue.prCheckStatus = event.status === "check_passed" ? "passed" : "failed";
-    }
-    if (event.status === "ci_repair_queued") {
-      issue.factoryState = "repairing_ci";
-      issue.statusNote = event.detail ?? event.summary;
-    }
-    if (event.status === "queue_repair_queued") {
-      issue.factoryState = "repairing_queue";
-      issue.statusNote = event.detail ?? event.summary;
-    }
-    if (event.status === "repair_deduped" || event.status === "branch_not_advanced") {
-      issue.statusNote = event.summary;
-    }
-  }
-  if ((event.kind === "turn" || event.kind === "github") && event.status === "branch_not_advanced") {
-    issue.statusNote = event.summary;
-  }
-
-  issue.updatedAt = event.at;
-  updated[index] = issue;
-
-  // Append to timeline and raw feed events if this event matches the active detail issue
-  const isActiveDetail = state.view === "detail" && state.activeDetailKey === event.issueKey;
+  const isActiveDetail = Boolean(event.issueKey)
+    && state.view === "detail"
+    && state.activeDetailKey === event.issueKey;
   const timeline = isActiveDetail
     ? capArray(appendFeedToTimeline(state.timeline, event), MAX_TIMELINE_ENTRIES)
     : state.timeline;
   const rawFeedEvents = isActiveDetail
     ? capArray([...state.rawFeedEvents, event], MAX_RAW_FEED_EVENTS)
     : state.rawFeedEvents;
-
-  return { ...state, lastServerMessageAt: receivedAt, issues: updated, timeline, rawFeedEvents };
+  return { ...state, lastServerMessageAt: receivedAt, timeline, rawFeedEvents };
 }
 
 // ─── Codex Notification → Timeline + Metadata ─────────────────────

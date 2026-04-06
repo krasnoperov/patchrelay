@@ -1,6 +1,6 @@
 import type { Logger } from "pino";
 import type { PatchRelayDatabase } from "./db.ts";
-import type { IssueRecord, RunRecord } from "./db-types.ts";
+import type { IssueRecord, RunRecord, TrackedIssueRecord } from "./db-types.ts";
 import type { RunType } from "./factory-state.ts";
 import type { AppConfig, LinearClientProvider, LinearAgentActivityContent } from "./types.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
@@ -73,6 +73,7 @@ export class LinearSessionSync {
     try {
       const linear = await this.linearProvider.forProject(syncedIssue.projectId);
       if (!linear) return;
+      const trackedIssue = this.db.getTrackedIssue(syncedIssue.projectId, syncedIssue.linearIssueId);
       if (syncedIssue.agentSessionId && linear.updateAgentSession) {
         const externalUrls = buildAgentSessionExternalUrls(this.config, {
           ...(syncedIssue.issueKey ? { issueKey: syncedIssue.issueKey } : {}),
@@ -84,7 +85,7 @@ export class LinearSessionSync {
           ...(externalUrls ? { externalUrls } : {}),
         });
       }
-      if (shouldSyncVisibleIssueComment(syncedIssue)) {
+      if (shouldSyncVisibleIssueComment(trackedIssue ?? syncedIssue, Boolean(syncedIssue.agentSessionId))) {
         await this.syncStatusComment(syncedIssue, linear, options);
       }
     } catch (error) {
@@ -156,7 +157,8 @@ export class LinearSessionSync {
     options?: { activeRunType?: RunType },
   ): Promise<void> {
     try {
-      const body = renderStatusComment(this.db, issue, options);
+      const trackedIssue = this.db.getTrackedIssue(issue.projectId, issue.linearIssueId);
+      const body = renderStatusComment(this.db, issue, trackedIssue, options);
       const result = await linear.upsertIssueComment({
         issueId: issue.linearIssueId,
         ...(issue.statusCommentId ? { commentId: issue.statusCommentId } : {}),
@@ -203,6 +205,7 @@ function resolveProgressActivity(notification: { method: string; params: Record<
 function renderStatusComment(
   db: PatchRelayDatabase,
   issue: IssueRecord,
+  trackedIssue: TrackedIssueRecord | undefined,
   options?: { activeRunType?: RunType },
 ): string {
   const activeRun = issue.activeRunId ? db.getRun(issue.activeRunId) : undefined;
@@ -211,7 +214,7 @@ function renderStatusComment(
   const activeRunType = issue.activeRunId !== undefined
     ? (options?.activeRunType ?? activeRun?.runType)
     : undefined;
-  const waitingReason = derivePatchRelayWaitingReason({
+  const waitingReason = trackedIssue?.waitingReason ?? derivePatchRelayWaitingReason({
     ...(activeRunType ? { activeRunType } : {}),
     ...(issue.activeRunId !== undefined ? { activeRunId: issue.activeRunId } : {}),
     factoryState: issue.factoryState,
@@ -225,21 +228,16 @@ function renderStatusComment(
   const lines = [
     "## PatchRelay status",
     "",
-    statusHeadline(issue, activeRunType),
+    statusHeadline(trackedIssue ?? issue, activeRunType),
   ];
-  const statusNote = deriveIssueStatusNote({
-    issue,
-    latestRun,
-    latestEvent,
-    waitingReason,
-  });
+  const statusNote = trackedIssue?.statusNote ?? deriveIssueStatusNote({ issue, latestRun, latestEvent, waitingReason });
 
   if (waitingReason) {
     lines.push("", `Waiting: ${waitingReason}`);
   }
   if (statusNote && statusNote !== waitingReason) {
-    const label = issue.factoryState === "awaiting_input" ? "Input needed"
-      : issue.factoryState === "failed" || issue.factoryState === "escalated" ? "Action needed"
+    const label = trackedIssue?.sessionState === "waiting_input" || issue.factoryState === "awaiting_input" ? "Input needed"
+      : trackedIssue?.sessionState === "failed" || issue.factoryState === "failed" || issue.factoryState === "escalated" ? "Action needed"
       : "Note";
     lines.push("", `${label}: ${statusNote}`);
   }
@@ -268,25 +266,49 @@ function renderStatusComment(
   return lines.join("\n");
 }
 
-function shouldSyncVisibleIssueComment(issue: IssueRecord): boolean {
-  if (!issue.agentSessionId) {
+function shouldSyncVisibleIssueComment(
+  issue: Pick<IssueRecord, "factoryState" | "prNumber" | "prUrl"> & {
+    sessionState?: string | undefined;
+  },
+  hasAgentSession: boolean,
+): boolean {
+  if (!hasAgentSession) {
     return true;
   }
 
-  if (issue.factoryState === "awaiting_input" || issue.factoryState === "failed" || issue.factoryState === "escalated") {
+  if (issue.sessionState === "waiting_input" || issue.sessionState === "failed"
+    || issue.factoryState === "awaiting_input" || issue.factoryState === "failed" || issue.factoryState === "escalated") {
     return true;
   }
 
-  if (issue.factoryState === "done" && issue.prNumber === undefined && !issue.prUrl) {
+  if ((issue.sessionState === "done" || issue.factoryState === "done") && issue.prNumber === undefined && !issue.prUrl) {
     return true;
   }
 
   return false;
 }
 
-function statusHeadline(issue: IssueRecord, activeRunType?: string): string {
+function statusHeadline(
+  issue: Pick<IssueRecord, "factoryState" | "prNumber"> & {
+    sessionState?: string | undefined;
+    waitingReason?: string | undefined;
+  },
+  activeRunType?: string,
+): string {
   if (activeRunType) {
     return `Running ${humanize(activeRunType)}`;
+  }
+  switch (issue.sessionState) {
+    case "waiting_input":
+      return issue.waitingReason ?? "Waiting for more input";
+    case "running":
+      return issue.prNumber !== undefined ? `PR #${issue.prNumber} is actively running` : "Actively running";
+    case "done":
+      return issue.prNumber !== undefined ? `Completed with PR #${issue.prNumber}` : "Completed";
+    case "failed":
+      return "Needs operator intervention";
+    default:
+      break;
   }
   switch (issue.factoryState) {
     case "delegated":

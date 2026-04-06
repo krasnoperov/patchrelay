@@ -480,6 +480,7 @@ Use this as the execution order for the refactor. The early phases are designed 
 - [x] Remove or deprecate `/api/issues/:issueKey/runs/:runId/events`.
 - [x] Remove queue observation building from `src/issue-query-service.ts` and watch views.
 - [x] De-emphasize `src/operator-feed.ts` as supporting history instead of headline status.
+- [x] Stop letting operator-feed events mutate live watch-list issue state; use issue snapshots as the authoritative current view.
 - [ ] Replace the current dashboard/TUI with a PatchRelay-only session view or remove it entirely.
 - [x] Update CLI help in `src/cli/help.ts` to match the reduced operator surface.
 
@@ -977,8 +978,8 @@ Primary targets:
 
 Work to do:
 
-- keep operator-feed as a timeline/audit source
-- stop using feed-derived pseudo-states as headline status
+- [x] keep operator-feed as a timeline/audit source
+- [x] stop using feed-derived pseudo-states as headline status
 - remove queue-label/feed-era wording from watch help and status summaries
 - preserve history/timeline views, but make them clearly historical rather than current control state
 

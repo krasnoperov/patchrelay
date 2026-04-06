@@ -161,13 +161,13 @@ test("detail-navigate clears timeline for rehydration", () => {
   assert.deepEqual(state.timeline, []);
 });
 
-// ─── Feed Event → Issue Update ────────────────────────────────────
+// ─── Feed Event → Detail Timeline Only ────────────────────────────
 
-test("feed-event with stage kind updates factoryState", () => {
+test("feed-event does not mutate issue list state", () => {
   const initial = stateWith({ issues: [makeIssue("USE-74")] });
   const event = makeFeedEvent({ id: 1, kind: "stage", issueKey: "USE-74", stage: "done" });
   const state = reduce(initial, { type: "feed-event", event, receivedAt: RECEIVED_AT });
-  assert.equal(state.issues[0]?.factoryState, "done");
+  assert.deepEqual(state.issues, initial.issues);
   assert.equal(state.lastServerMessageAt, RECEIVED_AT);
 });
 
@@ -230,9 +230,11 @@ test("feed-event aggregates CI checks in timeline", () => {
   assert.equal(ciEntries[0]?.ciChecks?.overall, "failed");
 });
 
-test("feed-event branch_not_advanced updates the selected issue note", () => {
+test("feed-event branch_not_advanced stays in timeline/history only", () => {
   const initial = stateWith({
     issues: [makeIssue("USE-74", { factoryState: "repairing_ci" })],
+    view: "detail",
+    activeDetailKey: "USE-74",
   });
   const event = makeFeedEvent({
     id: 13,
@@ -242,7 +244,8 @@ test("feed-event branch_not_advanced updates the selected issue note", () => {
     summary: "Repair finished but PR #74 is still on failing head deadbeef",
   });
   const state = reduce(initial, { type: "feed-event", event, receivedAt: RECEIVED_AT });
-  assert.equal(state.issues[0]?.statusNote, "Repair finished but PR #74 is still on failing head deadbeef");
+  assert.equal(state.issues[0]?.statusNote, undefined);
+  assert.equal(state.timeline.at(-1)?.kind, "feed");
 });
 
 // ─── Timeline Rehydration ─────────────────────────────────────────
