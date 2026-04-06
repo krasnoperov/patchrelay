@@ -519,6 +519,186 @@ The remaining work is no longer just "finish the refactor." It is to make the re
 - Stop showing queue-label-derived wording like "waiting for merge queue" as if PatchRelay controlled queue admission.
 - Fix Linear reporting so delegated active work is not shown as passive `Backlog` or `Needs input` while a session is actually `running`.
 
+## Post-`TST-20` Refactor Slices
+
+After `TST-20` / PR `#17` lands, the next cleanup wave should be small, explicit slices rather than another broad rewrite.
+
+The goal of this wave is:
+
+- simplify the contracts without removing the operational loops that recent live runs proved we still need
+- reduce PatchRelay's internal control-plane duplication
+- tighten merge-steward's documented contract to match its real behavior
+
+### Slice 1: PatchRelay Lease Fencing Pass
+
+Goal:
+
+- make the `v2` lease rule real for side-effecting writes, not just for acquire/renew/release
+
+Why this slice matters:
+
+- current leases stop some duplicate workers, but they do not fence most DB writes or PR-side effects
+- this is the highest-value correctness cleanup because it reduces split-brain risk under restart and retry pressure
+
+Scope:
+
+- add lease-checked write helpers in `src/db.ts`
+- require a matching `leaseId` for:
+  - session state writes
+  - issue shadow-state writes used by the runtime
+  - run finalization
+  - PR publication bookkeeping
+  - push / PR-update side-effect checkpoints
+- stop using unconditional `UPDATE ... WHERE issue_id = ?` writes from orchestrator paths
+- replace global lease clearing on startup with per-session recovery logic where possible
+
+Concrete tasks:
+
+- add `updateIssueSessionWithLease(...)` and equivalent guarded helpers in `src/db.ts`
+- thread current `leaseId` through `src/run-orchestrator.ts`, `src/service.ts`, and webhook follow-up paths
+- make stale workers log-and-drop instead of writing compatibility state
+- add focused tests for:
+  - old worker wakes after reclaim and cannot finalize
+  - old worker cannot overwrite summary/waiting reason
+  - old worker cannot publish PR metadata after lease loss
+
+Definition of done:
+
+- every PatchRelay-owned side-effecting write path is lease-fenced or explicitly documented as read-only
+
+### Slice 2: PatchRelay Inbox-First Follow-Up Pass
+
+Goal:
+
+- make the event inbox the real follow-up scheduler instead of a mix of webhook-specific state mutations plus reconciliation side effects
+
+Why this slice matters:
+
+- recent live behavior proved we do need reconciliation and repair loops
+- the simplification is not removing those loops; it is making them all append events and then schedule from one place
+
+Scope:
+
+- unify follow-up triggers from:
+  - GitHub webhooks
+  - queue-health monitor
+  - review changes
+  - red CI
+  - trusted human follow-up
+  - operator retry/stop/resume
+- move direct runtime decisions toward:
+  - append event
+  - coalesce
+  - resolve next turn from fresh GitHub truth
+
+Concrete tasks:
+
+- add or finish a durable session-event inbox as the canonical follow-up record
+- make `src/github-webhook-handler.ts` append inbox events instead of directly encoding most state transitions
+- make `src/queue-health-monitor.ts` append `merge_steward_incident` or `queue_conflict_detected` events instead of directly advancing issue state
+- implement the missing direct-reply steer path from the `v2` runtime doc
+- make inert self-generated events explicitly recorded and ignored
+
+Definition of done:
+
+- PatchRelay start / follow-up decisions happen from inbox + fresh GitHub truth, not from ad hoc per-trigger state mutation
+
+### Slice 3: Merge-Steward Docs And Config Cleanup For Label-Less Admission
+
+Goal:
+
+- align merge-steward docs and config with the GitHub-truth admission model we are actually using
+
+Why this slice matters:
+
+- right now the code intentionally admits approved green PRs without the queue label
+- docs and some config naming still imply label-driven admission, which creates fake confusion and review noise
+
+Scope:
+
+- treat GitHub truth as the admission contract:
+  - open PR
+  - approved
+  - required checks green
+- downgrade the label from gate to optional compatibility hint, or remove it entirely from the product contract
+
+Concrete tasks:
+
+- update `packages/merge-steward/README.md` to describe label-less admission
+- update docs under `docs/design-docs/` and queue runbooks to match
+- either:
+  - remove `admissionLabel` from repo config and attach/install paths, or
+  - keep it as deprecated compatibility-only config with clear wording
+- update webhook admission tests so they assert the intended GitHub-truth contract directly
+
+Definition of done:
+
+- there is one documented admission model, and it matches the running service
+
+### Slice 4: Merge-Steward Merge Execution Decision Doc
+
+Goal:
+
+- make an explicit architecture decision about merge execution instead of drifting between "spec branch is the tested artifact" and "GitHub should own the merge"
+
+Why this slice matters:
+
+- this is the main remaining merge-steward contract drift versus the design docs
+- it is not a small code cleanup; it needs a clear decision first
+
+Options to document:
+
+1. Keep spec-push merge execution.
+
+- Document that the validated artifact is the speculative branch, and merge execution is "push validated spec to base".
+- Update docs so GitHub remains source of truth for PR lifecycle, but merge-steward remains source of truth for merge execution.
+
+2. Redesign to GitHub-native merge execution.
+
+- Require a plan that preserves "what was validated is what lands".
+- Likely needs merge-group or a stronger mapping from validated spec SHA to actual merge action.
+
+Concrete tasks:
+
+- write a short ADR in `docs/design-docs/`
+- include:
+  - current behavior
+  - why it exists
+  - operational pros/cons
+  - auditability impact
+  - what would need to change to move to GitHub-native merge safely
+
+Definition of done:
+
+- reviewers no longer have to infer the intended merge contract from code drift
+
+## What To Simplify vs What To Keep
+
+This is the guardrail for the next refactor wave.
+
+Simplify:
+
+- duplicated control planes
+- undocumented or conflicting contracts
+- durable state shape
+- write fencing rules
+- operator views that show stale history as current obligations
+
+Do not simplify away:
+
+- periodic reconciliation
+- distinct repair lanes such as `review_fix`, `ci_repair`, and `queue_repair`
+- speculative validation in merge-steward
+- GitHub-truth checks before branch-mutating follow-up work
+
+The right shape is:
+
+- fewer durable states
+- fewer conflicting contracts
+- one event inbox
+- one session model
+- but still enough runtime machinery to survive real webhook loss, dirty PRs, queue conflicts, and restart recovery
+
 2. Remove remaining non-`v2` control facts from PatchRelay.
 
 - Stop treating `queueLabelApplied` as a control-plane fact; keep it only as a short-lived migration aid if it is still needed for compatibility.

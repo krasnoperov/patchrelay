@@ -18,6 +18,10 @@ import { reconcile } from "./reconciler.ts";
 import { INVALIDATION_PATCH, selectDownstream } from "./invalidation.ts";
 import { randomUUID } from "node:crypto";
 
+function normalizeCheckName(name: string): string {
+  return name.trim().toLowerCase();
+}
+
 /**
  * Merge steward service. Runs a timer-driven reconciliation loop and
  * exposes methods for the HTTP API to call.
@@ -257,10 +261,19 @@ export class MergeStewardService {
       // If empty, at least one non-steward check must be green.
       const checks = await this.github.listChecks(prNumber);
       if (this.config.requiredChecks.length > 0) {
-        const required = new Set(this.config.requiredChecks);
-        const passing = checks.filter((c) => c.conclusion === "success" && required.has(c.name));
+        const required = new Set(this.config.requiredChecks.map(normalizeCheckName));
+        const passing = checks.filter((c) => c.conclusion === "success" && required.has(normalizeCheckName(c.name)));
         if (passing.length < required.size) {
-          this.logger.debug({ prNumber, passing: passing.length, required: required.size }, "Required checks not all green");
+          this.logger.debug(
+            {
+              prNumber,
+              passing: passing.length,
+              required: required.size,
+              checkNames: checks.map((check) => check.name),
+              requiredChecks: this.config.requiredChecks,
+            },
+            "Required checks not all green",
+          );
           return false;
         }
       } else {

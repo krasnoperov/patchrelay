@@ -200,6 +200,49 @@ describe("webhook admission integration", () => {
     assert.strictEqual(status.entries[0]!.status, "queued");
   });
 
+  it("admits PR when required check names differ only by case", async () => {
+    const store = new MemoryStore();
+    const githubSim = new GitHubSim();
+    const logger = pino({ level: "silent" });
+
+    githubSim.addPR({ number: 109, branch: "feat-case-check", headSha: "sha-109", reviewApproved: true, labels: [] });
+    githubSim.setChecks(109, [{ name: "Verify", conclusion: "success" }]);
+
+    const service = new MergeStewardService(
+      { ...config, requiredChecks: ["verify"] },
+      store,
+      new GitSim() as any,
+      new CISim(() => "pass") as any,
+      githubSim,
+      new EvictionReporterSim(),
+      new GitSim() as any,
+      logger,
+    );
+
+    const app = await makeApp(service);
+    const address = await app.listen({ port: 0 });
+    after(async () => { await app.close(); });
+
+    const reviewBody = webhookBody({
+      action: "submitted",
+      review: { state: "approved" },
+      pull_request: { number: 109, head: { ref: "feat-case-check", sha: "sha-109" } },
+    });
+
+    await fetch(`${address}/webhooks/github`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-github-event": "pull_request_review", "x-hub-signature-256": sign(reviewBody) },
+      body: reviewBody,
+    });
+
+    const status = await (await fetch(`${address}/repos/test-repo/queue/status`)).json() as {
+      entries: Array<{ prNumber: number; status: string }>;
+    };
+    assert.strictEqual(status.entries.length, 1, "eligible PR should be admitted when check names only differ by case");
+    assert.strictEqual(status.entries[0]!.prNumber, 109);
+    assert.strictEqual(status.entries[0]!.status, "queued");
+  });
+
   it("serves watch snapshots, entry detail, and manual reconcile control", async () => {
     const store = new MemoryStore();
     const githubSim = new GitHubSim();
