@@ -1,6 +1,6 @@
 import { SqliteStore } from "../../db/sqlite-store.ts";
 import { buildSummary } from "../../service.ts";
-import type { QueueEntry, QueueEntryDetail, QueueWatchSnapshot } from "../../types.ts";
+import { TERMINAL_STATUSES, type QueueEntry, type QueueEntryDetail, type QueueWatchSnapshot } from "../../types.ts";
 import type { StewardConfig } from "../../config.ts";
 import type { ParsedArgs, Output } from "../types.ts";
 import { UsageError } from "../types.ts";
@@ -47,7 +47,14 @@ function findEntryForInspect(store: SqliteStore, repoId: string, options: { entr
     return store.getEntry(options.entryId);
   }
   if (options.prNumber !== undefined) {
-    return store.listAll(repoId).find((entry) => entry.prNumber === options.prNumber);
+    const matches = store.listAll(repoId).filter((entry) => entry.prNumber === options.prNumber);
+    matches.sort((left, right) => {
+      const leftActive = TERMINAL_STATUSES.includes(left.status) ? 0 : 1;
+      const rightActive = TERMINAL_STATUSES.includes(right.status) ? 0 : 1;
+      if (leftActive !== rightActive) return rightActive - leftActive;
+      return right.position - left.position;
+    });
+    return matches[0];
   }
   return undefined;
 }

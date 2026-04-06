@@ -280,3 +280,90 @@ test("merge-steward queue commands inspect the local database when the service i
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("merge-steward queue show --pr prefers the latest active entry over historical ones", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "merge-steward-queue-pr-show-"));
+  const configHome = path.join(baseDir, ".config");
+  const stateHome = path.join(baseDir, ".state");
+  const dataHome = path.join(baseDir, ".share");
+
+  try {
+    await withEnv(
+      {
+        XDG_CONFIG_HOME: configHome,
+        XDG_STATE_HOME: stateHome,
+        XDG_DATA_HOME: dataHome,
+        MERGE_STEWARD_SYSTEMD_DIR: path.join(baseDir, "systemd"),
+      },
+      async () => {
+        const runCommand = async () => ({ exitCode: 0, stdout: "", stderr: "" });
+        assert.equal(await runCli(["init", "queue.example.com"], { stdout: createBufferStream().stream, stderr: createBufferStream().stream, runCommand }), 0);
+        assert.equal(await runCli(["attach", "app", "owner/repo"], { stdout: createBufferStream().stream, stderr: createBufferStream().stream, runCommand }), 0);
+
+        const store = new SqliteStore(path.join(stateHome, "merge-steward", "app.sqlite"));
+        store.insert({
+          id: "entry-old",
+          repoId: "app",
+          prNumber: 42,
+          branch: "feature/queue",
+          headSha: "old-sha",
+          baseSha: "base-old",
+          status: "queued",
+          position: 1,
+          priority: 0,
+          generation: 0,
+          ciRunId: null,
+          ciRetries: 0,
+          retryAttempts: 0,
+          maxRetries: 2,
+          lastFailedBaseSha: null,
+          issueKey: "APP-42",
+          specBranch: null,
+          specSha: null,
+          specBasedOn: null,
+          enqueuedAt: "2026-03-28T10:00:00.000Z",
+          updatedAt: "2026-03-28T10:00:00.000Z",
+        });
+        store.transition("entry-old", "evicted", undefined, "historical failure");
+        store.insert({
+          id: "entry-new",
+          repoId: "app",
+          prNumber: 42,
+          branch: "feature/queue",
+          headSha: "new-sha",
+          baseSha: "base-new",
+          status: "validating",
+          position: 2,
+          priority: 0,
+          generation: 0,
+          ciRunId: "ci-42",
+          ciRetries: 0,
+          retryAttempts: 0,
+          maxRetries: 2,
+          lastFailedBaseSha: null,
+          issueKey: "APP-42",
+          specBranch: "mq/spec-entry-new",
+          specSha: "spec-new",
+          specBasedOn: null,
+          enqueuedAt: "2026-03-28T10:10:00.000Z",
+          updatedAt: "2026-03-28T10:10:00.000Z",
+        });
+        store.close();
+
+        const inspectOut = createBufferStream();
+        assert.equal(
+          await runCli(["queue", "show", "--repo", "app", "--pr", "42", "--json"], {
+            stdout: inspectOut.stream,
+            stderr: createBufferStream().stream,
+          }),
+          0,
+        );
+        const detail = JSON.parse(inspectOut.read()) as Record<string, unknown>;
+        assert.equal(((detail.entry as { id?: string }).id ?? ""), "entry-new");
+        assert.equal(((detail.entry as { status?: string }).status ?? ""), "validating");
+      },
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
