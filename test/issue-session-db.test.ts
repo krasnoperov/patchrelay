@@ -122,6 +122,83 @@ test("issue upserts and run completion dual-write into issue_sessions", () => {
   }
 });
 
+test("issue session keeps the last published summary when a later stale repair fails", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-session-summary-fallback-"));
+  try {
+    const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
+    db.runMigrations();
+
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-summary",
+      issueKey: "USE-SUMMARY",
+      factoryState: "delegated",
+      pendingRunType: "implementation",
+      branchName: "use/USE-SUMMARY",
+    });
+
+    const implementationRun = db.createRun({
+      issueId: issue.id,
+      projectId: "usertold",
+      linearIssueId: "issue-summary",
+      runType: "implementation",
+      promptText: "Ship it",
+    });
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-summary",
+      activeRunId: implementationRun.id,
+      pendingRunType: null,
+      factoryState: "implementing",
+    });
+    db.finishRun(implementationRun.id, {
+      status: "completed",
+      summaryJson: JSON.stringify({ latestAssistantMessage: "Published PR #42 with the seeded word-pack library." }),
+    });
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-summary",
+      activeRunId: null,
+      factoryState: "pr_open",
+      prNumber: 42,
+      prHeadSha: "sha-42",
+      prAuthorLogin: "patchrelay[bot]",
+    });
+
+    const staleRepair = db.createRun({
+      issueId: issue.id,
+      projectId: "usertold",
+      linearIssueId: "issue-summary",
+      runType: "queue_repair",
+      promptText: "Repair queue incident",
+    });
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-summary",
+      activeRunId: staleRepair.id,
+      factoryState: "repairing_queue",
+    });
+    db.finishRun(staleRepair.id, {
+      status: "failed",
+      failureReason: "Codex turn was interrupted",
+    });
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-summary",
+      activeRunId: null,
+      factoryState: "pr_open",
+      prCheckStatus: "success",
+      prReviewState: null,
+      queueLabelApplied: false,
+    });
+
+    const session = db.getIssueSession("usertold", "issue-summary");
+    assert.equal(session?.summaryText, "Published PR #42 with the seeded word-pack library.");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("issue session leases can be acquired, renewed, and reclaimed after expiry", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-session-lease-"));
   try {

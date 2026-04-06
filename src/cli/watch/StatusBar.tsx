@@ -29,20 +29,24 @@ export function StatusBar({
   frozen,
 }: StatusBarProps): React.JSX.Element {
   const showing = filter === "all" ? `${totalCount} issues` : `${issues.length}/${totalCount} issues`;
-  const agg = computeAggregates(allIssues);
-  const withPr = allIssues.filter((i) => i.prNumber !== undefined).length;
-  const awaitingInput = allIssues.filter((i) => i.factoryState === "awaiting_input").length;
+  const aggregateSource = filter === "all" ? allIssues : issues;
+  const agg = computeAggregates(aggregateSource);
+  const withPr = aggregateSource.filter((i) => i.prNumber !== undefined).length;
+  const waitingInput = aggregateSource.filter((i) => i.sessionState === "waiting_input" || i.factoryState === "awaiting_input").length;
+  const running = aggregateSource.filter((i) => i.sessionState === "running").length;
+  const idle = aggregateSource.filter((i) => i.sessionState === "idle").length;
   return (
     <Box justifyContent="space-between">
       <Box gap={1}>
         <Text bold>{showing}</Text>
         <Text dimColor>[{FILTER_LABELS[filter]}]</Text>
         <Text dimColor>|</Text>
-        {agg.active > 0 && <Text color="cyan">{agg.active} active</Text>}
+        {running > 0 && <Text color="cyan">{running} running</Text>}
+        {idle > 0 && <Text color="blueBright">{idle} idle</Text>}
         {agg.ready > 0 && <Text color="blueBright">{agg.ready} ready</Text>}
         {agg.blocked > 0 && <Text color="yellow">{agg.blocked} blocked</Text>}
         {withPr > 0 && <Text dimColor>{withPr} PRs</Text>}
-        {awaitingInput > 0 && <Text color="yellow">{awaitingInput} awaiting input</Text>}
+        {waitingInput > 0 && <Text color="yellow">{waitingInput} needs input</Text>}
         {agg.done > 0 && <Text color="green">{agg.done} done</Text>}
         {agg.failed > 0 && <Text color="red">{agg.failed} failed</Text>}
         {frozen && <Text color="magenta">frozen</Text>}

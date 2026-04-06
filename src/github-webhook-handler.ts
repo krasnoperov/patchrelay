@@ -37,6 +37,8 @@ function isMetadataOnlyCheckEvent(event: NormalizedGitHubEvent): boolean {
     && (event.triggerEvent === "check_passed" || event.triggerEvent === "check_failed");
 }
 
+const DEFAULT_GATE_CHECK_NAMES = ["verify", "tests"];
+
 interface GitHubFailurePromptContext {
   source?: "branch_ci" | "queue_eviction" | undefined;
   repoFullName?: string | undefined;
@@ -165,6 +167,10 @@ export class GitHubWebhookHandler {
       return;
     }
 
+    if (params.eventType === "pull_request") {
+      await this.updateQueueAdmissionLabelState(payload as GitHubWebhookPayload);
+    }
+
     const event = normalizeGitHubWebhook({
       eventType: params.eventType,
       payload: payload as GitHubWebhookPayload,
@@ -198,14 +204,13 @@ export class GitHubWebhookHandler {
     await this.updateCiSnapshot(issue, event, project);
     await this.updateFailureProvenance(issue, event, project);
 
-    if (!isMetadataOnlyCheckEvent(event)) {
+    const queueEvictionCheck = this.isQueueEvictionFailure(issue, event, project);
+
+    if (!isMetadataOnlyCheckEvent(event) || queueEvictionCheck) {
       // Re-read issue after PR metadata upsert so guards see fresh prReviewState
       const afterMetadata = this.db.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
 
-      const newState = resolveFactoryStateFromGitHub(event.triggerEvent, afterMetadata.factoryState, {
-        prReviewState: afterMetadata.prReviewState,
-        activeRunId: afterMetadata.activeRunId,
-      });
+      const newState = this.resolveFactoryStateForEvent(afterMetadata, event, project);
 
       // Only transition and notify when the state actually changes.
       // Multiple check_suite events can arrive for the same outcome.
@@ -275,7 +280,7 @@ export class GitHubWebhookHandler {
     // Queue eviction check runs bypass the metadata-only filter because
     // they're individual check_run events (not check_suite), but they
     // must drive state transitions.
-    if (this.isQueueEvictionFailure(freshIssue, event, project) || this.isGateCheckEvent(event, project)) {
+    if (queueEvictionCheck || this.isGateCheckEvent(event, project)) {
       await this.maybeEnqueueReactiveRun(freshIssue, event, project);
     } else if (!isMetadataOnlyCheckEvent(event)) {
       await this.maybeEnqueueReactiveRun(freshIssue, event, project);
@@ -284,6 +289,66 @@ export class GitHubWebhookHandler {
     if (event.triggerEvent === "pr_merged" || event.triggerEvent === "pr_closed") {
       await this.handleTerminalPrEvent(freshIssue, event);
     }
+  }
+
+  private async updateQueueAdmissionLabelState(payload: GitHubWebhookPayload): Promise<void> {
+    const pr = payload.pull_request;
+    const repoFullName = payload.repository?.full_name;
+    if (!pr || !repoFullName) return;
+
+    const issue = this.db.getIssueByBranch(pr.head.ref);
+    if (!issue) return;
+
+    const project = this.config.projects.find((entry) => entry.id === issue.projectId);
+    if (!project || project.github?.repoFullName !== repoFullName) return;
+
+    const protocol = resolveMergeQueueProtocol(project);
+    const labels = Array.isArray(pr.labels)
+      ? pr.labels.map((label) => label?.name).filter((label): label is string => typeof label === "string" && label.trim().length > 0)
+      : [];
+    const queueLabelApplied = labels.includes(protocol.admissionLabel);
+    if (issue.queueLabelApplied === queueLabelApplied) return;
+
+    this.db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      queueLabelApplied,
+    });
+
+    const refreshed = this.db.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
+    this.feed?.publish({
+      level: "info",
+      kind: "github",
+      issueKey: refreshed.issueKey,
+      projectId: refreshed.projectId,
+      stage: refreshed.factoryState,
+      status: queueLabelApplied ? "queue_label_applied" : "queue_label_removed",
+      summary: queueLabelApplied
+        ? `Merge-steward admission label "${protocol.admissionLabel}" is present`
+        : `Merge-steward admission label "${protocol.admissionLabel}" is absent`,
+    });
+    await this.syncLinearSession(refreshed);
+  }
+
+  private resolveFactoryStateForEvent(
+    issue: IssueRecord,
+    event: NormalizedGitHubEvent,
+    project?: ProjectConfig,
+  ): FactoryState | undefined {
+    if (
+      event.triggerEvent === "check_failed"
+      && this.isQueueEvictionFailure(issue, event, project)
+      && issue.prState === "open"
+      && issue.activeRunId === undefined
+      && !TERMINAL_STATES.has(issue.factoryState)
+    ) {
+      return "repairing_queue";
+    }
+
+    return resolveFactoryStateFromGitHub(event.triggerEvent, issue.factoryState, {
+      prReviewState: issue.prReviewState,
+      activeRunId: issue.activeRunId,
+    });
   }
 
   private async updateCiSnapshot(
@@ -726,11 +791,11 @@ export class GitHubWebhookHandler {
 
   private getGateCheckNames(project?: ProjectConfig): string[] {
     const configured = (project?.gateChecks ?? []).map((entry) => entry.trim()).filter(Boolean);
-    return configured.length > 0 ? configured : ["Tests"];
+    return configured.length > 0 ? configured : DEFAULT_GATE_CHECK_NAMES;
   }
 
   private getPrimaryGateCheckName(project?: ProjectConfig): string {
-    return this.getGateCheckNames(project)[0] ?? "Tests";
+    return this.getGateCheckNames(project)[0] ?? "verify";
   }
 
   private isGateCheckEvent(event: NormalizedGitHubEvent, project?: ProjectConfig): boolean {
@@ -749,8 +814,7 @@ export class GitHubWebhookHandler {
 
   private isQueueEvictionFailure(issue: IssueRecord, event: NormalizedGitHubEvent, project?: ProjectConfig): boolean {
     const protocol = resolveMergeQueueProtocol(project);
-    return issue.factoryState === "awaiting_queue"
-      && event.eventSource === "check_run"
+    return event.eventSource === "check_run"
       && event.checkName === protocol.evictionCheckName;
   }
 

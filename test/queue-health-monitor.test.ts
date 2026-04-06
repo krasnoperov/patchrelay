@@ -249,9 +249,9 @@ exit 1`;
   }
 });
 
-// ─── DIRTY without label → skip ──────────────────────────────────
+// ─── DIRTY without label → queue_repair for approved PR upkeep ───
 
-test("reconcileQueueHealth skips DIRTY PR without queue label", { concurrency: false }, async () => {
+test("reconcileQueueHealth dispatches queue_repair for DIRTY PR without queue label", { concurrency: false }, async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "qhm-dirty-no-label-"));
   let oldPath: string | undefined;
   try {
@@ -268,8 +268,9 @@ exit 1`;
     await harness.reconcileQueueHealth();
 
     const issue = harness.db.getIssue("proj", "issue-1");
-    assert.equal(issue?.factoryState, "awaiting_queue");
-    assert.equal(issue?.pendingRunType, undefined);
+    assert.equal(issue?.factoryState, "repairing_queue");
+    assert.equal(issue?.pendingRunType, "queue_repair");
+    assert.deepEqual(harness.enqueueCalls, [{ projectId: "proj", issueId: "issue-1" }]);
   } finally {
     process.env.PATH = oldPath;
     rmSync(baseDir, { recursive: true, force: true });

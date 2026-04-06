@@ -63,20 +63,28 @@ function formatCheckState(checkState?: string): string | null {
   }
 }
 
-const STATE_DISPLAY: Record<string, { label: string; color: string }> = {
-  blocked: { label: "blocked", color: "yellow" },
-  ready: { label: "ready", color: "blueBright" },
-  delegated: { label: "delegated", color: "cyan" },
-  implementing: { label: "implementing", color: "cyan" },
-  pr_open: { label: "PR open", color: "cyan" },
-  changes_requested: { label: "review changes", color: "yellow" },
-  repairing_ci: { label: "repairing CI", color: "yellow" },
-  awaiting_queue: { label: "queued for merge", color: "cyan" },
-  repairing_queue: { label: "repairing queue", color: "yellow" },
-  done: { label: "merged", color: "green" },
+const SESSION_DISPLAY: Record<string, { label: string; color: string }> = {
+  idle: { label: "idle", color: "blueBright" },
+  running: { label: "running", color: "cyan" },
+  waiting_input: { label: "needs input", color: "yellow" },
+  done: { label: "done", color: "green" },
   failed: { label: "failed", color: "red" },
-  escalated: { label: "escalated", color: "red" },
-  awaiting_input: { label: "awaiting input", color: "yellow" },
+};
+
+const STAGE_DISPLAY: Record<string, string> = {
+  blocked: "blocked",
+  ready: "ready",
+  delegated: "delegated",
+  implementing: "implementing",
+  pr_open: "PR open",
+  changes_requested: "review changes",
+  repairing_ci: "repairing CI",
+  awaiting_queue: "waiting downstream",
+  repairing_queue: "repairing queue",
+  done: "merged",
+  failed: "failed",
+  escalated: "escalated",
+  awaiting_input: "needs input",
 };
 
 function effectiveState(issue: WatchIssue): string {
@@ -85,7 +93,18 @@ function effectiveState(issue: WatchIssue): string {
   return issue.factoryState;
 }
 
+function sessionDisplay(issue: WatchIssue): { label: string; color: string } {
+  const state = issue.sessionState ?? "unknown";
+  return SESSION_DISPLAY[state] ?? { label: state, color: "white" };
+}
+
+function stageDisplay(issue: WatchIssue): string {
+  const state = effectiveState(issue);
+  return STAGE_DISPLAY[state] ?? issue.factoryState;
+}
+
 function blockerText(issue: WatchIssue, issueContext: WatchIssueContext | null): string | null {
+  if (issue.sessionState === "waiting_input") return issue.waitingReason ?? "Waiting for input";
   if (issue.waitingReason && !issue.activeRunType) return issue.waitingReason;
   if (issue.blockedByCount > 0) return `Waiting on ${issue.blockedByKeys.join(", ")}`;
   if (issue.factoryState === "repairing_queue") return "Merge queue conflict, repairing branch";
@@ -93,7 +112,6 @@ function blockerText(issue: WatchIssue, issueContext: WatchIssueContext | null):
     const check = issueContext?.latestFailureCheckName ?? issue.latestFailureCheckName ?? "CI";
     return `Repairing ${check}`;
   }
-  if (issue.factoryState === "awaiting_queue") return "Waiting for merge queue";
   if (issue.prCheckStatus === "failed" || issue.prCheckStatus === "failure") {
     const check = issueContext?.latestFailureCheckName ?? issue.latestFailureCheckName ?? "checks";
     return `${check} failed`;
@@ -134,7 +152,8 @@ export function IssueDetailView({
   if (diffSummary && diffSummary.filesChanged > 0) meta.push(`${diffSummary.filesChanged}f +${diffSummary.linesAdded} -${diffSummary.linesRemoved}`);
   if (issueContext?.runCount) meta.push(`${issueContext.runCount} runs`);
 
-  const state = STATE_DISPLAY[effectiveState(issue)] ?? { label: issue.factoryState, color: "white" };
+  const session = sessionDisplay(issue);
+  const stage = stageDisplay(issue);
   const blocker = blockerText(issue, issueContext);
 
   const history = useMemo(
@@ -160,7 +179,8 @@ export function IssueDetailView({
       {/* Header: issue key · status · facts · elapsed · freshness */}
       <Box gap={2}>
         <Text bold>{key}</Text>
-        <Text color={state.color}>{state.label}</Text>
+        <Text color={session.color}>{session.label}</Text>
+        <Text dimColor>{`  stage ${stage}`}</Text>
         {facts.length > 0 && <Text dimColor>{facts.join(" \u00b7 ")}</Text>}
         {activeRunStartedAt && <ElapsedTime startedAt={activeRunStartedAt} />}
         {meta.length > 0 && <Text dimColor>{meta.join("  ")}</Text>}
@@ -201,8 +221,8 @@ export function IssueDetailView({
       ) : (
         <>
           <Box marginTop={1} flexDirection="column">
-            <Text dimColor>PatchRelay activity history only.</Text>
-            <Text dimColor>Review and merge automation remain downstream and are intentionally de-emphasized here.</Text>
+            <Text dimColor>PatchRelay activity history.</Text>
+            <Text dimColor>Runs, waits, and wake-ups are shown here in PatchRelay order.</Text>
           </Box>
           <Box marginTop={1}>
             <StateHistoryView history={history} plan={plan} activeRunId={activeRunId} />

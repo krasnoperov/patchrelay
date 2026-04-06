@@ -3,6 +3,18 @@ import { TERMINAL_STATUSES } from "../types.ts";
 
 const RECENTLY_COMPLETED_MS = 60_000;
 
+function isActiveFilterVisible(entry: QueueEntry, cutoff: number): boolean {
+  if (!TERMINAL_STATUSES.includes(entry.status)) {
+    return true;
+  }
+  if (entry.status === "evicted") {
+    // Evicted entries still represent open repair obligations even after the
+    // queue itself has drained, so keep the latest one visible in active mode.
+    return true;
+  }
+  return new Date(entry.updatedAt).getTime() > cutoff;
+}
+
 /**
  * Build the display row list for the queue watch. In "active" mode,
  * includes active entries plus recently-terminal entries (within 60s),
@@ -15,8 +27,7 @@ export function buildDisplayEntries(entries: QueueEntry[], filter: "active" | "a
   const byPR = new Map<number, QueueEntry>();
   for (const e of entries) {
     const isActive = !TERMINAL_STATUSES.includes(e.status);
-    const isRecent = !isActive && new Date(e.updatedAt).getTime() > cutoff;
-    if (!isActive && !isRecent) continue;
+    if (!isActive && !isActiveFilterVisible(e, cutoff)) continue;
     const existing = byPR.get(e.prNumber);
     if (!existing || (isActive && TERMINAL_STATUSES.includes(existing.status))) {
       byPR.set(e.prNumber, e);

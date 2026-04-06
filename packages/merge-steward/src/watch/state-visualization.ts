@@ -90,9 +90,16 @@ export function buildExternalRepairObservations(
     observations.push({ tone: "warn", text: "Removed after failed retries. Branch needs repair before re-admission." });
   } else if (options.isHead && options.queueBlock?.reason === "main_broken") {
     const failingNames = options.queueBlock.failingChecks.map((check) => check.name);
+    const pendingNames = options.queueBlock.pendingChecks.map((check) => check.name);
+    const detail = [
+      failingNames.length > 0 ? `failing ${failingNames.join(", ")}` : null,
+      pendingNames.length > 0 ? `pending ${pendingNames.join(", ")}` : null,
+    ].filter(Boolean).join("; ");
     observations.push({
       tone: "warn",
-      text: `Queue paused: ${options.queueBlock.baseBranch} CI is failing${failingNames.length > 0 ? ` (${failingNames.join(", ")})` : ""}. Will resume when main is green.`,
+      text: pendingNames.length > 0 && failingNames.length === 0
+        ? `Queue paused: ${options.queueBlock.baseBranch} is still verifying${detail ? ` (${detail})` : ""}. Will resume when checks settle.`
+        : `Queue paused: ${options.queueBlock.baseBranch} is unhealthy${detail ? ` (${detail})` : ""}. Will resume when main is healthy.`,
     });
   } else if (options.isHead) {
     observations.push({ tone: "info", text: "First in queue. Will advance on the next tick." });

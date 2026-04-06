@@ -80,6 +80,9 @@ function normalizePullRequestEvent(payload: GitHubWebhookPayload, repoFullName: 
     prUrl: pr.html_url,
     prState,
     prAuthorLogin: pr.user?.login ?? undefined,
+    prLabels: Array.isArray(pr.labels)
+      ? pr.labels.map((label) => label?.name).filter((label): label is string => typeof label === "string" && label.trim().length > 0)
+      : undefined,
   };
 }
 

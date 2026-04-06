@@ -1,6 +1,7 @@
 import { useEffect, useRef, type Dispatch } from "react";
 import type { WatchAction, WatchIssueContext } from "./watch-state.ts";
 import type { CodexThreadSummary } from "../../types.ts";
+import type { TimelineRunInput } from "./timeline-builder.ts";
 
 interface DetailStreamOptions {
   baseUrl: string;
@@ -57,12 +58,13 @@ async function rehydrate(
       ok?: boolean;
       issueContext?: WatchIssueContext;
       liveThread?: CodexThreadSummary;
+      runs?: TimelineRunInput[];
       activeRun?: { id: number; startedAt?: string };
     };
 
     dispatch({
       type: "timeline-rehydrate",
-      runs: [],
+      runs: Array.isArray(data.runs) ? data.runs : [],
       feedEvents: [],
       liveThread: data.liveThread ?? null,
       activeRunId: data.activeRun?.id ?? null,

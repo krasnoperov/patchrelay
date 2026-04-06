@@ -59,19 +59,19 @@ export class MergeStewardService {
     this.logger.info({ pollIntervalMs: this.config.pollIntervalMs }, "Steward service starting");
     this.scheduleNextTick();
 
-    // Best-effort: scan GitHub for PRs with the admission label that
-    // aren't already in the queue (recovers state after restart).
+    // Best-effort: scan GitHub for open PRs that may already satisfy the
+    // merge gate and aren't already in the queue (recovers state after restart).
     try {
-      const labeled = await this.github.listOpenPRsWithLabel(this.config.admissionLabel);
+      const open = await this.github.listOpenPRs();
       let admitted = 0;
-      for (const pr of labeled) {
+      for (const pr of open) {
         if (await this.tryAdmit(pr.number, pr.branch, pr.headSha)) admitted++;
       }
-      if (labeled.length > 0) {
-        this.logger.info({ scanned: labeled.length, admitted }, "Startup scan for labeled PRs complete");
+      if (open.length > 0) {
+        this.logger.info({ scanned: open.length, admitted }, "Startup scan for eligible open PRs complete");
       }
     } catch (err) {
-      this.logger.warn({ err }, "Startup scan for labeled PRs failed");
+      this.logger.warn({ err }, "Startup scan for eligible open PRs failed");
     }
   }
 
@@ -227,10 +227,9 @@ export class MergeStewardService {
   /**
    * Try to admit a PR into the queue. Checks:
    * - Not already queued
-   * - PR has admission label
    * - PR is approved
    * - Required checks are green
-   * Called from webhook handler on label add or review approved.
+   * Called from webhook handler on label add, review approved, or green CI.
    */
   async tryAdmit(prNumber: number, branch: string, headSha: string): Promise<boolean> {
     // Excluded branch?
@@ -248,13 +247,6 @@ export class MergeStewardService {
 
     // Check approval, label, and CI via GitHub API.
     try {
-      // Verify admission label is present.
-      const labels = await this.github.listLabels(prNumber);
-      if (!labels.includes(this.config.admissionLabel)) {
-        this.logger.debug({ prNumber }, "PR missing admission label, skipping");
-        return false;
-      }
-
       const status = await this.github.getStatus(prNumber);
       if (!status.reviewApproved) {
         this.logger.debug({ prNumber }, "PR not approved, skipping admission");

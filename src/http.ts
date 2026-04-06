@@ -678,7 +678,7 @@ function renderAgentSessionStatusPage(params: {
       ${prUrl ? `<p><a href="${escapeHtml(prUrl)}" target="_blank" rel="noopener noreferrer">Open pull request ${escapeHtml(prLabel ?? "")}</a></p>` : ""}
       <div class="chips">
         <span class="chip"><strong>Session:</strong> <code>${escapeHtml(sessionState)}</code></span>
-        <span class="chip"><strong>Factory:</strong> <code>${escapeHtml(factoryState)}</code></span>
+        <span class="chip"><strong>Stage:</strong> <code>${escapeHtml(factoryState)}</code></span>
         <span class="chip"><strong>Linear:</strong> <code>${escapeHtml(linearState)}</code></span>
         <span class="chip"><strong>Active:</strong> ${activeStage}</span>
         <span class="chip"><strong>Latest:</strong> ${latestStage}</span>
@@ -691,7 +691,7 @@ function renderAgentSessionStatusPage(params: {
             <tr><th>Pull request</th><td>${escapeHtml(prLabel ?? "none")} (${escapeHtml(prState)})</td></tr>
             <tr><th>Review</th><td>${escapeHtml(reviewState)}</td></tr>
             <tr><th>Checks</th><td>${escapeHtml(checkState)}</td></tr>
-            <tr><th>PatchRelay wait</th><td>${escapeHtml(waitingReason)}</td></tr>
+            <tr><th>Waiting reason</th><td>${escapeHtml(waitingReason)}</td></tr>
             <tr><th>Last wake</th><td><code>${escapeHtml(lastWakeReason)}</code></td></tr>
             <tr><th>Latest plan</th><td>${escapeHtml(latestPlan)}</td></tr>
             <tr><th>Active command</th><td><code>${escapeHtml(activeCommand)}</code></td></tr>

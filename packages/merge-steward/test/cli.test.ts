@@ -142,6 +142,12 @@ test("merge-steward init and repo commands manage bootstrap state with explicit 
         assert.equal(inspected.webhookUrl, "https://queue.example.com/webhooks/github");
         assert.equal(inspected.mergeQueueCheckName, "custom/queue-eviction");
 
+        const inspectByFullNameOut = createBufferStream();
+        assert.equal(await runCli(["repos", "owner/repo", "--json"], { stdout: inspectByFullNameOut.stream, stderr: createBufferStream().stream }), 0);
+        const inspectedByFullName = JSON.parse(inspectByFullNameOut.read()) as Record<string, unknown>;
+        assert.equal(inspectedByFullName.repoId, "app");
+        assert.equal(inspectedByFullName.repoFullName, "owner/repo");
+
         const statusOut = createBufferStream();
         assert.equal(
           await runCli(["service", "status", "--json"], {

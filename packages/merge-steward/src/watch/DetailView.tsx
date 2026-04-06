@@ -73,8 +73,8 @@ export function DetailView({
       {/* Queue block warning */}
       {isHead && queueBlock && (
         <Box marginTop={1} flexDirection="column">
-          <Text color="yellow">Queue paused: {summarizeQueueBlock(queueBlock) ?? "main CI is unhealthy"}.</Text>
-          <Text dimColor>Will resume automatically once {queueBlock.baseBranch} is green.</Text>
+          <Text color="yellow">Queue paused: {summarizeQueueBlock(queueBlock) ?? `waiting for ${queueBlock.baseBranch} checks`}.</Text>
+          <Text dimColor>Will resume automatically once {queueBlock.baseBranch} is healthy.</Text>
         </Box>
       )}
 

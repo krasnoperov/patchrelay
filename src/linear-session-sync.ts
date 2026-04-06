@@ -6,6 +6,7 @@ import type { AppConfig, LinearClientProvider, LinearAgentActivityContent } from
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import { buildAgentSessionPlanForIssue } from "./agent-session-plan.ts";
 import { buildAgentSessionExternalUrls } from "./agent-session-presentation.ts";
+import { derivePatchRelayWaitingReason } from "./waiting-reason.ts";
 
 const PROGRESS_THROTTLE_MS = 5_000;
 
@@ -20,29 +21,46 @@ export class LinearSessionSync {
     private readonly feed?: OperatorEventFeed,
   ) {}
 
+  private ensureAgentSessionIssue(issue: IssueRecord): IssueRecord {
+    if (issue.agentSessionId) {
+      return issue;
+    }
+
+    const recoveredAgentSessionId = this.db.findLatestAgentSessionIdForIssue(issue.linearIssueId);
+    if (!recoveredAgentSessionId) return issue;
+
+    this.logger.info({ issueKey: issue.issueKey, agentSessionId: recoveredAgentSessionId }, "Recovered missing Linear agent session id from webhook history");
+    return this.db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      agentSessionId: recoveredAgentSessionId,
+    });
+  }
+
   async emitActivity(
     issue: IssueRecord,
     content: LinearAgentActivityContent,
     options?: { ephemeral?: boolean },
   ): Promise<void> {
-    if (!issue.agentSessionId) return;
+    const syncedIssue = this.ensureAgentSessionIssue(issue);
+    if (!syncedIssue.agentSessionId) return;
     try {
-      const linear = await this.linearProvider.forProject(issue.projectId);
+      const linear = await this.linearProvider.forProject(syncedIssue.projectId);
       if (!linear) return;
       const allowEphemeral = content.type === "thought" || content.type === "action";
       await linear.createAgentActivity({
-        agentSessionId: issue.agentSessionId,
+        agentSessionId: syncedIssue.agentSessionId,
         content,
         ...(options?.ephemeral && allowEphemeral ? { ephemeral: true } : {}),
       });
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
-      this.logger.warn({ issueKey: issue.issueKey, type: content.type, error: msg }, "Failed to emit Linear activity");
+      this.logger.warn({ issueKey: syncedIssue.issueKey, type: content.type, error: msg }, "Failed to emit Linear activity");
       this.feed?.publish({
         level: "warn",
         kind: "linear",
-        issueKey: issue.issueKey,
-        projectId: issue.projectId,
+        issueKey: syncedIssue.issueKey,
+        projectId: syncedIssue.projectId,
         status: "linear_error",
         summary: `Linear activity failed: ${msg}`,
       });
@@ -50,27 +68,31 @@ export class LinearSessionSync {
   }
 
   async syncSession(issue: IssueRecord, options?: { activeRunType?: RunType }): Promise<void> {
-    if (!issue.agentSessionId) return;
+    const syncedIssue = this.ensureAgentSessionIssue(issue);
     try {
-      const linear = await this.linearProvider.forProject(issue.projectId);
-      if (!linear?.updateAgentSession) return;
-      const externalUrls = buildAgentSessionExternalUrls(this.config, {
-        ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
-        ...(issue.prUrl ? { prUrl: issue.prUrl } : {}),
-      });
-      await linear.updateAgentSession({
-        agentSessionId: issue.agentSessionId,
-        plan: buildAgentSessionPlanForIssue(issue, options),
-        ...(externalUrls ? { externalUrls } : {}),
-      });
+      const linear = await this.linearProvider.forProject(syncedIssue.projectId);
+      if (!linear) return;
+      if (syncedIssue.agentSessionId && linear.updateAgentSession) {
+        const externalUrls = buildAgentSessionExternalUrls(this.config, {
+          ...(syncedIssue.issueKey ? { issueKey: syncedIssue.issueKey } : {}),
+          ...(syncedIssue.prUrl ? { prUrl: syncedIssue.prUrl } : {}),
+        });
+        await linear.updateAgentSession({
+          agentSessionId: syncedIssue.agentSessionId,
+          plan: buildAgentSessionPlanForIssue(syncedIssue, options),
+          ...(externalUrls ? { externalUrls } : {}),
+        });
+      }
+      await this.syncStatusComment(syncedIssue, linear, options);
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
-      this.logger.warn({ issueKey: issue.issueKey, error: msg }, "Failed to update Linear plan");
+      this.logger.warn({ issueKey: syncedIssue.issueKey, error: msg }, "Failed to update Linear plan");
     }
   }
 
   async syncCodexPlan(issue: IssueRecord, params: Record<string, unknown>): Promise<void> {
-    if (!issue.agentSessionId) return;
+    const syncedIssue = this.ensureAgentSessionIssue(issue);
+    if (!syncedIssue.agentSessionId) return;
     const plan = params.plan;
     if (!Array.isArray(plan)) return;
 
@@ -94,15 +116,15 @@ export class LinearSessionSync {
     ];
 
     try {
-      const linear = await this.linearProvider.forProject(issue.projectId);
+      const linear = await this.linearProvider.forProject(syncedIssue.projectId);
       if (!linear?.updateAgentSession) return;
       await linear.updateAgentSession({
-        agentSessionId: issue.agentSessionId,
+        agentSessionId: syncedIssue.agentSessionId,
         plan: fullPlan,
       });
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
-      this.logger.warn({ issueKey: issue.issueKey, error: msg }, "Failed to sync codex plan to Linear");
+      this.logger.warn({ issueKey: syncedIssue.issueKey, error: msg }, "Failed to sync codex plan to Linear");
     }
   }
 
@@ -123,6 +145,31 @@ export class LinearSessionSync {
 
   clearProgress(runId: number): void {
     this.progressThrottle.delete(runId);
+  }
+
+  private async syncStatusComment(
+    issue: IssueRecord,
+    linear: NonNullable<Awaited<ReturnType<LinearClientProvider["forProject"]>>>,
+    options?: { activeRunType?: RunType },
+  ): Promise<void> {
+    try {
+      const body = renderStatusComment(this.db, issue, options);
+      const result = await linear.upsertIssueComment({
+        issueId: issue.linearIssueId,
+        ...(issue.statusCommentId ? { commentId: issue.statusCommentId } : {}),
+        body,
+      });
+      if (result.id !== issue.statusCommentId) {
+        this.db.upsertIssue({
+          projectId: issue.projectId,
+          linearIssueId: issue.linearIssueId,
+          statusCommentId: result.id,
+        });
+      }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      this.logger.warn({ issueKey: issue.issueKey, error: msg }, "Failed to sync Linear status comment");
+    }
   }
 }
 
@@ -148,4 +195,101 @@ function resolveProgressActivity(notification: { method: string; params: Record<
     }
   }
   return undefined;
+}
+
+function renderStatusComment(
+  db: PatchRelayDatabase,
+  issue: IssueRecord,
+  options?: { activeRunType?: RunType },
+): string {
+  const activeRun = issue.activeRunId ? db.getRun(issue.activeRunId) : undefined;
+  const latestRun = db.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
+  const activeRunType = issue.activeRunId !== undefined
+    ? (options?.activeRunType ?? activeRun?.runType)
+    : undefined;
+  const waitingReason = derivePatchRelayWaitingReason({
+    ...(activeRunType ? { activeRunType } : {}),
+    ...(issue.activeRunId !== undefined ? { activeRunId: issue.activeRunId } : {}),
+    factoryState: issue.factoryState,
+    pendingRunType: issue.pendingRunType,
+    ...(issue.prNumber !== undefined ? { prNumber: issue.prNumber } : {}),
+    prReviewState: issue.prReviewState,
+    prCheckStatus: issue.prCheckStatus,
+    queueLabelApplied: issue.queueLabelApplied,
+    latestFailureCheckName: issue.lastGitHubFailureCheckName,
+  });
+
+  const lines = [
+    "## PatchRelay status",
+    "",
+    statusHeadline(issue, activeRunType),
+  ];
+
+  if (waitingReason) {
+    lines.push("", `Waiting: ${waitingReason}`);
+  }
+
+  if (issue.prNumber !== undefined || issue.prUrl) {
+    const prLabel = issue.prNumber !== undefined ? `#${issue.prNumber}` : "open";
+    lines.push("", `PR: ${issue.prUrl ? `[${prLabel}](${issue.prUrl})` : prLabel}`);
+  }
+
+  if (latestRun) {
+    lines.push("", `Latest run: ${formatLatestRun(latestRun)}`);
+    if (latestRun.failureReason) {
+      lines.push("", `Failure: ${latestRun.failureReason}`);
+    }
+  }
+
+  if (issue.lastGitHubFailureCheckName && (issue.factoryState === "repairing_ci" || issue.prCheckStatus === "failed" || issue.prCheckStatus === "failure")) {
+    lines.push("", `Latest failing check: ${issue.lastGitHubFailureCheckName}`);
+  }
+
+  lines.push(
+    "",
+    "_PatchRelay updates this comment as it works. Review and merge remain downstream._",
+  );
+
+  return lines.join("\n");
+}
+
+function statusHeadline(issue: IssueRecord, activeRunType?: string): string {
+  if (activeRunType) {
+    return `Running ${humanize(activeRunType)}`;
+  }
+  switch (issue.factoryState) {
+    case "delegated":
+      return "Queued to start work";
+    case "implementing":
+      return "Implementing requested change";
+    case "pr_open":
+      return issue.prNumber !== undefined ? `PR #${issue.prNumber} opened` : "PR opened";
+    case "changes_requested":
+      return "Addressing requested review changes";
+    case "repairing_ci":
+      return "Repairing failing CI";
+    case "awaiting_queue":
+      return "Handed off downstream for merge";
+    case "repairing_queue":
+      return "Repairing merge handoff";
+    case "awaiting_input":
+      return "Waiting for more input";
+    case "failed":
+      return "Needs operator intervention";
+    case "escalated":
+      return "Escalated for human help";
+    case "done":
+      return issue.prNumber !== undefined ? `Completed with PR #${issue.prNumber}` : "Completed";
+    default:
+      return humanize(issue.factoryState);
+  }
+}
+
+function formatLatestRun(run: Pick<RunRecord, "runType" | "status" | "endedAt" | "startedAt">): string {
+  const at = run.endedAt ?? run.startedAt;
+  return `${humanize(run.runType)} ${run.status} at ${at}`;
+}
+
+function humanize(value: string): string {
+  return value.replaceAll("_", " ");
 }

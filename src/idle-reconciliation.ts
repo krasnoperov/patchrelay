@@ -9,6 +9,10 @@ import { parseGitHubFailureContext } from "./github-failure-context.ts";
 import { parseStoredQueueRepairContext } from "./merge-queue-incident.ts";
 import { execCommand } from "./utils.ts";
 
+function isFailingCheckStatus(status: string | undefined): boolean {
+  return status === "failed" || status === "failure";
+}
+
 function isDuplicateRepairAttempt(
   issue: Pick<IssueRecord, "lastAttemptedFailureHeadSha" | "lastAttemptedFailureSignature">,
   context: Record<string, unknown> | undefined,
@@ -56,6 +60,33 @@ function buildFailureContext(issue: Pick<
   };
 }
 
+function hasFailureProvenance(issue: Pick<
+  IssueRecord,
+  | "lastGitHubFailureSource"
+  | "lastGitHubFailureHeadSha"
+  | "lastGitHubFailureSignature"
+  | "lastGitHubFailureCheckName"
+  | "lastGitHubFailureCheckUrl"
+  | "lastGitHubFailureContextJson"
+  | "lastGitHubFailureAt"
+  | "lastQueueIncidentJson"
+  | "lastAttemptedFailureHeadSha"
+  | "lastAttemptedFailureSignature"
+>): boolean {
+  return Boolean(
+    issue.lastGitHubFailureSource
+      || issue.lastGitHubFailureHeadSha
+      || issue.lastGitHubFailureSignature
+      || issue.lastGitHubFailureCheckName
+      || issue.lastGitHubFailureCheckUrl
+      || issue.lastGitHubFailureContextJson
+      || issue.lastGitHubFailureAt
+      || issue.lastQueueIncidentJson
+      || issue.lastAttemptedFailureHeadSha
+      || issue.lastAttemptedFailureSignature,
+  );
+}
+
 export function resolveBranchOwnerForStateTransition(newState: FactoryState, pendingRunType?: RunType): BranchOwner | undefined {
   if (pendingRunType) return "patchrelay";
   if (newState === "awaiting_queue") return "patchrelay";
@@ -83,14 +114,28 @@ export class IdleIssueReconciler {
         continue;
       }
 
-      if (issue.prReviewState === "approved" && issue.prCheckStatus !== "failed") {
-        if (issue.factoryState !== "awaiting_queue") {
+      if (issue.lastGitHubFailureSource === "queue_eviction") {
+        await this.routeFailedIssue(issue);
+        continue;
+      }
+
+      if (issue.lastGitHubFailureSource === "branch_ci") {
+        await this.routeFailedIssue(issue);
+        continue;
+      }
+
+      if (issue.prReviewState === "approved" && !isFailingCheckStatus(issue.prCheckStatus)) {
+        if (issue.prNumber) {
+          await this.reconcileFromGitHub(issue);
+        } else if (issue.factoryState !== "awaiting_queue") {
+          this.advanceIdleIssue(issue, "awaiting_queue", { clearFailureProvenance: true });
+        } else if (hasFailureProvenance(issue)) {
           this.advanceIdleIssue(issue, "awaiting_queue", { clearFailureProvenance: true });
         }
         continue;
       }
 
-      if (issue.prCheckStatus === "failed") {
+      if (isFailingCheckStatus(issue.prCheckStatus)) {
         await this.routeFailedIssue(issue);
         continue;
       }
@@ -175,9 +220,15 @@ export class IdleIssueReconciler {
   }
 
   private async routeFailedIssue(issue: IssueRecord): Promise<void> {
+    issue = await this.refreshMissingFailureProvenance(issue);
+    issue = await this.reclassifyStaleBranchFailure(issue);
+    const latestRun = this.db.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
+    const ignoreDuplicateAttempt = latestRun?.status === "failed"
+      && latestRun.failureReason === "Codex turn was interrupted";
+
     if (issue.lastGitHubFailureSource === "queue_eviction") {
       const pendingRunContext = buildFailureContext(issue);
-      if (isDuplicateRepairAttempt(issue, pendingRunContext)) {
+      if (!ignoreDuplicateAttempt && isDuplicateRepairAttempt(issue, pendingRunContext)) {
         this.advanceIdleIssue(issue, "repairing_queue");
       } else {
         this.advanceIdleIssue(issue, "repairing_queue", {
@@ -190,7 +241,7 @@ export class IdleIssueReconciler {
 
     if (issue.lastGitHubFailureSource === "branch_ci") {
       const pendingRunContext = buildFailureContext(issue);
-      if (isDuplicateRepairAttempt(issue, pendingRunContext)) {
+      if (!ignoreDuplicateAttempt && isDuplicateRepairAttempt(issue, pendingRunContext)) {
         this.advanceIdleIssue(issue, "repairing_ci");
       } else {
         this.advanceIdleIssue(issue, "repairing_ci", {
@@ -202,20 +253,7 @@ export class IdleIssueReconciler {
     }
 
     if (issue.factoryState === "awaiting_queue") {
-      const inferProject = this.config.projects.find((p) => p.id === issue.projectId);
-      const inferProtocol = resolveMergeQueueProtocol(inferProject);
-      let inferred: "queue_eviction" | "branch_ci" = "branch_ci";
-      const probeSha = issue.lastGitHubFailureHeadSha ?? issue.lastGitHubCiSnapshotHeadSha;
-      if (inferProject?.github?.repoFullName && issue.prNumber && probeSha) {
-        try {
-          const { stdout } = await execCommand("gh", [
-            "api",
-            `repos/${inferProject.github.repoFullName}/commits/${probeSha}/check-runs`,
-            "--jq", `.check_runs[] | select(.name == "${inferProtocol.evictionCheckName}" and .conclusion == "failure") | .name`,
-          ], { timeoutMs: 10_000 });
-          if (stdout.trim().length > 0) inferred = "queue_eviction";
-        } catch { /* best effort */ }
-      }
+      const inferred = await this.inferFailureSourceFromGitHub(issue) ?? "branch_ci";
       const inferRunType = inferred === "queue_eviction" ? "queue_repair" : "ci_repair";
       const inferState = inferred === "queue_eviction" ? "repairing_queue" : "repairing_ci";
       this.logger.info(
@@ -231,7 +269,7 @@ export class IdleIssueReconciler {
     }
 
     const pendingRunContext = buildFailureContext(issue);
-    if (isDuplicateRepairAttempt(issue, pendingRunContext)) {
+    if (!ignoreDuplicateAttempt && isDuplicateRepairAttempt(issue, pendingRunContext)) {
       this.advanceIdleIssue(issue, "repairing_ci");
     } else {
       this.advanceIdleIssue(issue, "repairing_ci", {
@@ -241,6 +279,119 @@ export class IdleIssueReconciler {
     }
   }
 
+  private async refreshMissingFailureProvenance(issue: IssueRecord): Promise<IssueRecord> {
+    if (issue.lastGitHubFailureSource || !issue.prNumber || !isFailingCheckStatus(issue.prCheckStatus)) {
+      return issue;
+    }
+    const inferred = await this.inferFailureSourceFromGitHub(issue);
+    if (!inferred) return issue;
+    const protocol = this.getIssueProtocol(issue);
+    const failureHeadSha = issue.lastGitHubFailureHeadSha ?? issue.lastGitHubCiSnapshotHeadSha ?? issue.prHeadSha ?? null;
+    const checkName = inferred === "queue_eviction"
+      ? issue.lastGitHubFailureCheckName ?? protocol.evictionCheckName
+      : issue.lastGitHubFailureCheckName ?? null;
+    const failureSignature = issue.lastGitHubFailureSignature
+      ?? (inferred === "queue_eviction" && failureHeadSha && checkName
+        ? ["queue_eviction", failureHeadSha, checkName].join("::")
+        : null);
+    this.db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      lastGitHubFailureSource: inferred,
+      ...(failureHeadSha ? { lastGitHubFailureHeadSha: failureHeadSha } : {}),
+      ...(checkName ? { lastGitHubFailureCheckName: checkName } : {}),
+      ...(failureSignature ? { lastGitHubFailureSignature: failureSignature } : {}),
+    });
+    const refreshed = this.db.getIssue(issue.projectId, issue.linearIssueId);
+    if (!refreshed) return issue;
+    this.logger.info(
+      { issueKey: issue.issueKey, prNumber: issue.prNumber, inferred, factoryState: issue.factoryState },
+      "Recovered missing failure provenance from GitHub state",
+    );
+    return refreshed;
+  }
+
+  private async reclassifyStaleBranchFailure(issue: IssueRecord): Promise<IssueRecord> {
+    const downstreamOwned = issue.factoryState === "awaiting_queue" || issue.prReviewState === "approved";
+    if (issue.lastGitHubFailureSource !== "branch_ci" || (!issue.queueLabelApplied && !downstreamOwned)) {
+      return issue;
+    }
+    const inferred = await this.inferFailureSourceFromGitHub(issue);
+    if (inferred !== "queue_eviction") {
+      return issue;
+    }
+    const protocol = this.getIssueProtocol(issue);
+    const failureHeadSha = issue.lastGitHubFailureHeadSha ?? issue.lastGitHubCiSnapshotHeadSha ?? issue.prHeadSha ?? null;
+    const checkName = issue.lastGitHubFailureCheckName ?? protocol.evictionCheckName;
+    const failureSignature = issue.lastGitHubFailureSignature
+      ?? (failureHeadSha && checkName ? ["queue_eviction", failureHeadSha, checkName].join("::") : null);
+    this.db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      lastGitHubFailureSource: "queue_eviction",
+      ...(failureHeadSha ? { lastGitHubFailureHeadSha: failureHeadSha } : {}),
+      ...(checkName ? { lastGitHubFailureCheckName: checkName } : {}),
+      ...(failureSignature ? { lastGitHubFailureSignature: failureSignature } : {}),
+    });
+    const refreshed = this.db.getIssue(issue.projectId, issue.linearIssueId);
+    if (!refreshed) return issue;
+    this.logger.info(
+      { issueKey: issue.issueKey, prNumber: issue.prNumber },
+      "Reclassified stale branch failure as queue repair from GitHub state",
+    );
+    return refreshed;
+  }
+
+  private async inferFailureSourceFromGitHub(issue: IssueRecord): Promise<"queue_eviction" | "branch_ci" | undefined> {
+    const project = this.config.projects.find((candidate) => candidate.id === issue.projectId);
+    const repoFullName = project?.github?.repoFullName;
+    const probeSha = issue.lastGitHubFailureHeadSha ?? issue.lastGitHubCiSnapshotHeadSha ?? issue.prHeadSha;
+    if (!repoFullName || !issue.prNumber || !probeSha) return undefined;
+    const protocol = this.getIssueProtocol(issue);
+    try {
+      const { stdout } = await execCommand("gh", [
+        "api",
+        `repos/${repoFullName}/commits/${probeSha}/check-runs`,
+        "--jq", `.check_runs[] | select(.name == "${protocol.evictionCheckName}" and .conclusion == "failure") | .name`,
+      ], { timeoutMs: 10_000 });
+      if (stdout.trim().length > 0) return "queue_eviction";
+    } catch {
+      // Fall through to a PR-level probe. Preemptive conflicts can require
+      // queue repair even when no merge-steward eviction check-run exists yet.
+    }
+    try {
+      const { stdout } = await execCommand("gh", [
+        "pr", "view", String(issue.prNumber),
+        "--repo", repoFullName,
+        "--json", "mergeable,mergeStateStatus,labels",
+      ], { timeoutMs: 10_000 });
+      const pr = JSON.parse(stdout) as {
+        mergeable?: string;
+        mergeStateStatus?: string;
+        labels?: Array<{ name?: string }>;
+      };
+      const downstreamOwned = issue.factoryState === "awaiting_queue" || issue.prReviewState === "approved";
+      const queueLabelApplied = Array.isArray(pr.labels)
+        ? pr.labels.some((label) => label?.name === protocol.admissionLabel)
+        : Boolean(issue.queueLabelApplied);
+      if ((pr.mergeable === "CONFLICTING" || pr.mergeStateStatus === "DIRTY")
+        && (queueLabelApplied || downstreamOwned)) {
+        return "queue_eviction";
+      }
+      if (pr.mergeable === "CONFLICTING" || pr.mergeStateStatus === "DIRTY") {
+        return undefined;
+      }
+    } catch {
+      return issue.queueLabelApplied || issue.factoryState === "awaiting_queue" ? "branch_ci" : undefined;
+    }
+    return "branch_ci";
+  }
+
+  private getIssueProtocol(issue: Pick<IssueRecord, "projectId">) {
+    const project = this.config.projects.find((candidate) => candidate.id === issue.projectId);
+    return resolveMergeQueueProtocol(project);
+  }
+
   private async reconcileFromGitHub(issue: IssueRecord): Promise<void> {
     const project = this.config.projects.find((p) => p.id === issue.projectId);
     if (!project?.github?.repoFullName || !issue.prNumber) return;
@@ -248,14 +399,19 @@ export class IdleIssueReconciler {
       const { stdout } = await execCommand("gh", [
         "pr", "view", String(issue.prNumber),
         "--repo", project.github.repoFullName,
-        "--json", "state,reviewDecision,mergeable,mergeStateStatus",
+        "--json", "state,reviewDecision,mergeable,mergeStateStatus,labels",
       ], { timeoutMs: 10_000 });
       const pr = JSON.parse(stdout) as {
         state?: string;
         reviewDecision?: string;
         mergeable?: string;
         mergeStateStatus?: string;
+        labels?: Array<{ name?: string }>;
       };
+      const protocol = resolveMergeQueueProtocol(project);
+      const queueLabelApplied = Array.isArray(pr.labels)
+        ? pr.labels.some((label) => label?.name === protocol.admissionLabel)
+        : Boolean(issue.queueLabelApplied);
       if (pr.state === "MERGED") {
         this.db.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, prState: "merged" });
         this.advanceIdleIssue(issue, "done", { clearFailureProvenance: true });
@@ -274,15 +430,47 @@ export class IdleIssueReconciler {
         return;
       }
       if (pr.reviewDecision === "APPROVED") {
-        this.db.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, prReviewState: "approved" });
-        this.advanceIdleIssue(issue, "awaiting_queue", { clearFailureProvenance: true });
+        this.db.upsertIssue({
+          projectId: issue.projectId,
+          linearIssueId: issue.linearIssueId,
+          prReviewState: "approved",
+          queueLabelApplied,
+        });
+        if (pr.mergeable === "CONFLICTING" || pr.mergeStateStatus === "DIRTY") {
+          this.logger.info(
+            { issueKey: issue.issueKey, prNumber: issue.prNumber, mergeable: pr.mergeable },
+            "Reconciliation: approved PR has merge conflicts, dispatching rebase",
+          );
+          this.advanceIdleIssue(issue, "repairing_queue" as never, {
+            pendingRunType: "queue_repair",
+            pendingRunContext: {
+              source: "idle_reconciliation",
+              failureReason: "merge_conflict_detected",
+              failureSignature: `conflict:${issue.prNumber}`,
+            },
+          });
+          this.feed?.publish({
+            level: "warn",
+            kind: "github",
+            issueKey: issue.issueKey,
+            projectId: issue.projectId,
+            stage: "repairing_queue",
+            status: "conflict_detected",
+            summary: `Approved PR #${issue.prNumber} has merge conflicts with main, dispatching rebase`,
+          });
+          return;
+        }
+        if (issue.factoryState !== "awaiting_queue" || hasFailureProvenance(issue)) {
+          this.advanceIdleIssue(issue, "awaiting_queue", {
+            ...(hasFailureProvenance(issue) ? { clearFailureProvenance: true } : {}),
+          });
+        }
         return;
       }
-      // Merge conflict detected — dispatch a repair run to rebase the branch.
-      if (pr.mergeable === "CONFLICTING" || pr.mergeStateStatus === "DIRTY") {
+      if ((pr.mergeable === "CONFLICTING" || pr.mergeStateStatus === "DIRTY") && queueLabelApplied) {
         this.logger.info(
           { issueKey: issue.issueKey, prNumber: issue.prNumber, mergeable: pr.mergeable },
-          "Reconciliation: PR has merge conflicts, dispatching rebase",
+          "Reconciliation: queue-admitted PR has merge conflicts, dispatching rebase",
         );
         this.advanceIdleIssue(issue, "repairing_queue" as never, {
           pendingRunType: "queue_repair",
@@ -301,12 +489,24 @@ export class IdleIssueReconciler {
           status: "conflict_detected",
           summary: `PR #${issue.prNumber} has merge conflicts with main, dispatching rebase`,
         });
+      } else if (pr.mergeable === "CONFLICTING" || pr.mergeStateStatus === "DIRTY") {
+        this.logger.debug(
+          { issueKey: issue.issueKey, prNumber: issue.prNumber, mergeable: pr.mergeable, mergeStateStatus: pr.mergeStateStatus },
+          "Reconciliation: PR is dirty but not yet queue-admitted; leaving PatchRelay in review state",
+        );
       }
     } catch (error) {
       this.logger.debug(
         { issueKey: issue.issueKey, error: error instanceof Error ? error.message : String(error) },
         "Failed to query GitHub PR state during reconciliation",
       );
+      if (issue.prReviewState === "approved") {
+        if (issue.factoryState !== "awaiting_queue" || hasFailureProvenance(issue)) {
+          this.advanceIdleIssue(issue, "awaiting_queue", {
+            ...(hasFailureProvenance(issue) ? { clearFailureProvenance: true } : {}),
+          });
+        }
+      }
     }
   }
 }

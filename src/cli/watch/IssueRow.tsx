@@ -24,23 +24,40 @@ function effectiveState(issue: WatchIssue): string {
   return issue.factoryState;
 }
 
-function stateDisplay(issue: WatchIssue): StateDisplay {
+function sessionDisplay(issue: WatchIssue): StateDisplay {
+  switch (issue.sessionState) {
+    case "running":
+      return { label: "running", color: "cyan" };
+    case "idle":
+      return { label: "idle", color: "blueBright" };
+    case "waiting_input":
+      return { label: "needs input", color: "yellow" };
+    case "done":
+      return { label: "done", color: "green" };
+    case "failed":
+      return { label: "failed", color: "red" };
+    default:
+      return { label: "unknown", color: "white" };
+  }
+}
+
+function stageLabel(issue: WatchIssue): string {
   const state = effectiveState(issue);
   switch (state) {
-    case "blocked": return { label: "blocked", color: "yellow" };
-    case "ready": return { label: "ready", color: "blueBright" };
-    case "delegated": return { label: "delegated", color: "cyan" };
-    case "implementing": return { label: "implementing", color: "cyan" };
-    case "pr_open": return { label: "PR open", color: "cyan" };
-    case "changes_requested": return { label: "review changes", color: "yellow" };
-    case "repairing_ci": return { label: "repairing CI", color: "yellow" };
-    case "awaiting_queue": return { label: "queued for merge", color: "cyan" };
-    case "repairing_queue": return { label: "repairing queue", color: "yellow" };
-    case "done": return { label: "merged", color: "green" };
-    case "failed": return { label: "failed", color: "red" };
-    case "escalated": return { label: "escalated", color: "red" };
-    case "awaiting_input": return { label: "awaiting input", color: "yellow" };
-    default: return { label: state, color: "white" };
+    case "blocked": return "blocked";
+    case "ready": return "ready";
+    case "delegated": return "delegated";
+    case "implementing": return "implementing";
+    case "pr_open": return "PR open";
+    case "changes_requested": return "review changes";
+    case "repairing_ci": return "repairing CI";
+    case "awaiting_queue": return "waiting downstream";
+    case "repairing_queue": return "repairing queue";
+    case "done": return "merged";
+    case "failed": return "failed";
+    case "escalated": return "escalated";
+    case "awaiting_input": return "needs input";
+    default: return state;
   }
 }
 
@@ -53,6 +70,8 @@ function buildFacts(issue: WatchIssue): Array<{ text: string; color?: string }> 
   if (issue.prNumber !== undefined) {
     facts.push({ text: `PR #${issue.prNumber}` });
   }
+
+  facts.push({ text: `stage ${stageLabel(issue)}` });
 
   // Review state — only show when it matters (not yet approved, or changes requested)
   if (issue.prReviewState === "approved") {
@@ -91,6 +110,7 @@ function buildFacts(issue: WatchIssue): Array<{ text: string; color?: string }> 
 // ─── What's blocking progress ───────────────────────────────────
 
 function blockerText(issue: WatchIssue): string | null {
+  if (issue.sessionState === "waiting_input") return issue.waitingReason ?? "Waiting for input";
   if (issue.waitingReason && !issue.activeRunType) return issue.waitingReason;
   if (issue.blockedByCount > 0) return `Waiting on ${issue.blockedByKeys.join(", ")}`;
   if (issue.factoryState === "repairing_queue") return "Merge queue conflict, repairing branch";
@@ -98,7 +118,6 @@ function blockerText(issue: WatchIssue): string | null {
     const check = issue.latestFailureCheckName ?? "CI";
     return `Repairing ${check}`;
   }
-  if (issue.factoryState === "awaiting_queue") return "Waiting for merge queue";
   if (issue.prCheckStatus === "failed" || issue.prCheckStatus === "failure") {
     const check = issue.latestFailureCheckName ?? "checks";
     return `${check} failed`;
@@ -114,7 +133,7 @@ export function IssueRow({ issue, selected, titleWidth }: IssueRowProps): React.
   const tw = titleWidth ?? 60;
   const title = issue.title ? truncate(issue.title, tw) : "";
   const detail = selected ? summarizeIssueStatusNote(issue.statusNote) : undefined;
-  const state = stateDisplay(issue);
+  const session = sessionDisplay(issue);
   const facts = buildFacts(issue);
   const blocker = selected ? blockerText(issue) : null;
 
@@ -128,7 +147,7 @@ export function IssueRow({ issue, selected, titleWidth }: IssueRowProps): React.
         <Text dimColor>{` ${key}`}</Text>
         <Text dimColor>{`  ${relativeTime(issue.updatedAt).padStart(4)}`}</Text>
         <Text>{`  `}</Text>
-        <Text color={state.color}>{state.label}</Text>
+        <Text color={session.color}>{session.label}</Text>
       </Box>
     );
   }
@@ -141,7 +160,7 @@ export function IssueRow({ issue, selected, titleWidth }: IssueRowProps): React.
         <Text bold>{` ${key}`}</Text>
         <Text dimColor>{`  ${relativeTime(issue.updatedAt).padStart(4)}`}</Text>
         <Text>{`  `}</Text>
-        <Text color={state.color}>{state.label}</Text>
+        <Text color={session.color}>{session.label}</Text>
         {facts.length > 0 && (
           <Text dimColor>{` \u00b7 `}</Text>
         )}

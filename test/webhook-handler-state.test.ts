@@ -1069,3 +1069,132 @@ test("agent session creation does not post a delegate prompt when Linear already
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("agent session creation before delegation persists the session id for later sync", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-agent-session-predelegate-"));
+  try {
+    const config = createConfig(baseDir);
+    config.projects[0] = {
+      ...config.projects[0]!,
+      triggerEvents: [...config.projects[0]!.triggerEvents, "agentSessionCreated", "delegateChanged"],
+    };
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+
+    const activities: Array<{ agentSessionId: string; body?: string; type?: string }> = [];
+    const sessionUpdates: Array<{ agentSessionId: string; planLength: number }> = [];
+    const linearClient: Partial<LinearClient> = {
+      getIssue: async () => ({
+        id: "issue-maf-session",
+        identifier: "MAF-94",
+        title: "Pre-delegation session",
+        teamId: "team-maf",
+        teamKey: "MAF",
+        delegateId: undefined,
+        stateId: "state-backlog",
+        stateName: "Backlog",
+        stateType: "unstarted",
+        workflowStates: [],
+        labelIds: [],
+        labels: [],
+        teamLabels: [],
+        blockedBy: [],
+        blocks: [],
+      }),
+      createAgentActivity: async ({ agentSessionId, content }) => {
+        activities.push({
+          agentSessionId,
+          type: content.type,
+          ...(typeof (content as { body?: string }).body === "string" ? { body: (content as { body: string }).body } : {}),
+        });
+      },
+      updateAgentSession: async ({ agentSessionId, plan }) => {
+        sessionUpdates.push({ agentSessionId, planLength: Array.isArray(plan) ? plan.length : 0 });
+      },
+    };
+
+    const handler = new WebhookHandler(
+      config,
+      db,
+      { forProject: async () => linearClient as LinearClient } as never,
+      { steerTurn: async () => undefined } as never,
+      () => undefined,
+      pino({ enabled: false }),
+    );
+
+    const agentSessionPayload: LinearWebhookPayload = {
+      action: "created",
+      type: "AgentSessionEvent",
+      createdAt: "2026-04-01T03:00:00.000Z",
+      webhookTimestamp: Date.now(),
+      agentSession: {
+        id: "session-94",
+        issueId: "issue-maf-session",
+        comment: {
+          id: "comment-94",
+          body: "This thread is for an agent session with patchrelay.",
+          issueId: "issue-maf-session",
+        },
+        issue: {
+          id: "issue-maf-session",
+          identifier: "MAF-94",
+          title: "Pre-delegation session",
+          team: { id: "team-maf", key: "MAF" },
+          state: { id: "state-backlog", name: "Backlog", type: "unstarted" },
+        },
+      },
+      promptContext: "<issue identifier=\"MAF-94\"><title>Pre-delegation session</title></issue>",
+    };
+    const sessionEvent = db.insertFullWebhookEvent({
+      webhookId: "delivery-agent-session-predelegate",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(agentSessionPayload),
+    });
+    await handler.processWebhookEvent(sessionEvent.id);
+
+    const preDelegationIssue = db.getIssue("krasnoperov/mafia", "issue-maf-session");
+    assert.equal(preDelegationIssue?.agentSessionId, "session-94");
+    assert.equal(preDelegationIssue?.factoryState, "awaiting_input");
+    assert.deepEqual(
+      activities.filter((entry) => entry.body?.includes("Delegate the issue to PatchRelay to start work.")),
+      [],
+    );
+    assert.deepEqual(sessionUpdates, [{ agentSessionId: "session-94", planLength: 4 }]);
+
+    const delegatePayload: LinearWebhookPayload = {
+      action: "update",
+      type: "Issue",
+      createdAt: "2026-04-01T03:01:00.000Z",
+      webhookTimestamp: Date.now(),
+      updatedFrom: { delegateId: null },
+      data: {
+        id: "issue-maf-session",
+        identifier: "MAF-94",
+        title: "Pre-delegation session",
+        delegateId: "patchrelay-actor",
+        delegate: { id: "patchrelay-actor", name: "PatchRelay" },
+        team: { id: "team-maf", key: "MAF" },
+        state: { id: "state-start", name: "Start", type: "started" },
+      },
+    };
+    const delegateEvent = db.insertFullWebhookEvent({
+      webhookId: "delivery-agent-session-delegate",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(delegatePayload),
+    });
+    await handler.processWebhookEvent(delegateEvent.id);
+
+    const delegatedIssue = db.getIssue("krasnoperov/mafia", "issue-maf-session");
+    assert.equal(delegatedIssue?.agentSessionId, "session-94");
+    assert.equal(delegatedIssue?.pendingRunType, "implementation");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});

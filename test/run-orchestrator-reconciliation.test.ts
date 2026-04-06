@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -97,6 +98,10 @@ function createOrchestrator(baseDir: string) {
   return { config, db, enqueueCalls, orchestrator };
 }
 
+function runGit(args: string[], cwd: string): string {
+  return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+}
+
 test("reconcileIdleIssues advances approved idle issues to awaiting_queue", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-approved-"));
   try {
@@ -119,6 +124,70 @@ test("reconcileIdleIssues advances approved idle issues to awaiting_queue", asyn
     assert.equal(issue?.factoryState, "awaiting_queue");
     assert.equal(issue?.branchOwner, "patchrelay");
     assert.equal(issue?.pendingRunType, undefined);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("resetWorktreeToTrackedBranch clears interrupted rebase state back to the remote issue branch", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reset-worktree-"));
+  try {
+    const config = createConfig(baseDir);
+    const remotePath = path.join(baseDir, "remote.git");
+    const repoPath = config.projects[0]!.repoPath;
+    const worktreePath = path.join(config.projects[0]!.worktreeRoot, "USE-RESET");
+    const branchName = "use-reset";
+
+    runGit(["init", "--bare", remotePath], baseDir);
+    runGit(["clone", remotePath, repoPath], baseDir);
+    runGit(["config", "user.name", "PatchRelay Test"], repoPath);
+    runGit(["config", "user.email", "patchrelay@example.com"], repoPath);
+    writeFileSync(path.join(repoPath, "game.txt"), "base\n", "utf8");
+    runGit(["add", "game.txt"], repoPath);
+    runGit(["commit", "-m", "base"], repoPath);
+    runGit(["push", "-u", "origin", "HEAD:main"], repoPath);
+    runGit(["checkout", "main"], repoPath);
+
+    runGit(["worktree", "add", "-B", branchName, worktreePath, "origin/main"], repoPath);
+    runGit(["config", "user.name", "PatchRelay Test"], worktreePath);
+    runGit(["config", "user.email", "patchrelay@example.com"], worktreePath);
+    writeFileSync(path.join(worktreePath, "game.txt"), "feature change\n", "utf8");
+    runGit(["add", "game.txt"], worktreePath);
+    runGit(["commit", "-m", "feature"], worktreePath);
+    runGit(["push", "-u", "origin", branchName], worktreePath);
+
+    writeFileSync(path.join(repoPath, "game.txt"), "main change\n", "utf8");
+    runGit(["add", "game.txt"], repoPath);
+    runGit(["commit", "-m", "main change"], repoPath);
+    runGit(["push", "origin", "main"], repoPath);
+
+    runGit(["fetch", "origin", "main"], worktreePath);
+    assert.throws(() => runGit(["rebase", "origin/main"], worktreePath));
+    assert.match(runGit(["status", "--short", "--branch"], worktreePath), /HEAD \(no branch\)/);
+    writeFileSync(path.join(worktreePath, "game.txt"), "dirty local edit\n", "utf8");
+
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const orchestrator = new RunOrchestrator(
+      config,
+      db,
+      {
+        startThread: async () => ({ threadId: "thread-1" }),
+        steerTurn: async () => undefined,
+        readThread: async () => ({ id: "thread-1", turns: [] }),
+      } as never,
+      { forProject: async () => undefined } as never,
+      () => undefined,
+      pino({ enabled: false }),
+    );
+
+    await (orchestrator as unknown as {
+      resetWorktreeToTrackedBranch: (worktreePath: string, branchName: string, issue: { issueKey: string }) => Promise<void>;
+    }).resetWorktreeToTrackedBranch(worktreePath, branchName, { issueKey: "USE-RESET" });
+
+    assert.equal(runGit(["rev-parse", "--abbrev-ref", "HEAD"], worktreePath), branchName);
+    assert.equal(runGit(["status", "--porcelain"], worktreePath), "");
+    assert.equal(runGit(["show", "HEAD:game.txt"], worktreePath), "feature change");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -169,6 +238,32 @@ test("reconcileIdleIssues currently routes failed idle issues to ci_repair", asy
     assert.equal(issue?.branchOwner, "patchrelay");
     assert.equal(issue?.pendingRunType, "ci_repair");
     assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-12" }]);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("reconcileIdleIssues treats GitHub 'failure' status as a failing check", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-failure-status-"));
+  try {
+    const { db, enqueueCalls, orchestrator } = createOrchestrator(baseDir);
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-12b",
+      issueKey: "USE-12B",
+      branchName: "feat-failure",
+      prNumber: 120,
+      prState: "open",
+      prCheckStatus: "failure",
+      factoryState: "pr_open",
+    });
+
+    await (orchestrator as unknown as { idleReconciler: { reconcile: () => Promise<void> } }).idleReconciler.reconcile();
+
+    const issue = db.getIssue("usertold", "issue-12b");
+    assert.equal(issue?.factoryState, "repairing_ci");
+    assert.equal(issue?.pendingRunType, "ci_repair");
+    assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-12b" }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -238,6 +333,231 @@ test("reconcileIdleIssues preserves stored steward incident context for queue re
     });
     assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-13" }]);
   } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("reconcileIdleIssues recovers missing queue provenance for admitted PRs with a failing merge-steward check", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-queue-provenance-"));
+  const fakeBin = path.join(baseDir, "bin");
+  const ghPath = path.join(fakeBin, "gh");
+  const oldPath = process.env.PATH;
+  try {
+    mkdirSync(fakeBin, { recursive: true });
+    writeFileSync(ghPath, `#!/usr/bin/env bash
+if [ "$1" = "api" ] && [[ "$2" == repos/owner/repo/commits/sha-13c/check-runs ]]; then
+  printf 'merge-steward/queue'
+  exit 0
+fi
+exit 1`, "utf8");
+    chmodSync(ghPath, 0o755);
+    process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
+
+    const { db, enqueueCalls, orchestrator } = createOrchestrator(baseDir);
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-13c",
+      issueKey: "USE-13C",
+      branchName: "feat-evicted",
+      prNumber: 113,
+      prState: "open",
+      prHeadSha: "sha-13c",
+      prCheckStatus: "failure",
+      queueLabelApplied: true,
+      factoryState: "repairing_ci",
+    });
+
+    await (orchestrator as unknown as { idleReconciler: { reconcile: () => Promise<void> } }).idleReconciler.reconcile();
+
+    const issue = db.getIssue("usertold", "issue-13c");
+    assert.equal(issue?.factoryState, "repairing_queue");
+    assert.equal(issue?.pendingRunType, "queue_repair");
+    assert.equal(issue?.lastGitHubFailureSource, "queue_eviction");
+    assert.equal(issue?.lastGitHubFailureCheckName, "merge-steward/queue");
+    assert.equal(issue?.lastGitHubFailureSignature, "queue_eviction::sha-13c::merge-steward/queue");
+    assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-13c" }]);
+  } finally {
+    process.env.PATH = oldPath;
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("reconcileIdleIssues does not dispatch queue repair for DIRTY PRs without queue admission", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-dirty-no-queue-"));
+  const fakeBin = path.join(baseDir, "bin");
+  const ghPath = path.join(fakeBin, "gh");
+  const oldPath = process.env.PATH;
+  try {
+    mkdirSync(fakeBin, { recursive: true });
+    writeFileSync(ghPath, `#!/usr/bin/env bash
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  printf '{"state":"OPEN","reviewDecision":"REVIEW_REQUIRED","mergeable":"CONFLICTING","mergeStateStatus":"DIRTY","labels":[]}'
+  exit 0
+fi
+exit 1`, "utf8");
+    chmodSync(ghPath, 0o755);
+    process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
+
+    const { db, enqueueCalls, orchestrator } = createOrchestrator(baseDir);
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-13b",
+      issueKey: "USE-13B",
+      branchName: "feat-dirty-review",
+      prNumber: 113,
+      prState: "open",
+      prReviewState: null,
+      prCheckStatus: "success",
+      queueLabelApplied: false,
+      factoryState: "pr_open",
+    });
+
+    await (orchestrator as unknown as { idleReconciler: { reconcile: () => Promise<void> } }).idleReconciler.reconcile();
+
+    const issue = db.getIssue("usertold", "issue-13b");
+    assert.equal(issue?.factoryState, "pr_open");
+    assert.equal(issue?.pendingRunType, undefined);
+    assert.equal(issue?.queueLabelApplied, false);
+    assert.deepEqual(enqueueCalls, []);
+  } finally {
+    process.env.PATH = oldPath;
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("reconcileIdleIssues dispatches queue repair for approved DIRTY PRs without queue admission", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-approved-dirty-no-queue-"));
+  const fakeBin = path.join(baseDir, "bin");
+  const ghPath = path.join(fakeBin, "gh");
+  const oldPath = process.env.PATH;
+  try {
+    mkdirSync(fakeBin, { recursive: true });
+    writeFileSync(ghPath, `#!/usr/bin/env bash
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  printf '{"state":"OPEN","reviewDecision":"APPROVED","mergeable":"CONFLICTING","mergeStateStatus":"DIRTY","labels":[]}'
+  exit 0
+fi
+exit 1`, "utf8");
+    chmodSync(ghPath, 0o755);
+    process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
+
+    const { db, enqueueCalls, orchestrator } = createOrchestrator(baseDir);
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-13b2",
+      issueKey: "USE-13B2",
+      branchName: "feat-approved-dirty",
+      prNumber: 113,
+      prState: "open",
+      prReviewState: "approved",
+      prCheckStatus: "success",
+      queueLabelApplied: false,
+      factoryState: "awaiting_queue",
+    });
+
+    await (orchestrator as unknown as { idleReconciler: { reconcile: () => Promise<void> } }).idleReconciler.reconcile();
+
+    const issue = db.getIssue("usertold", "issue-13b2");
+    assert.equal(issue?.factoryState, "repairing_queue");
+    assert.equal(issue?.pendingRunType, "queue_repair");
+    assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-13b2" }]);
+  } finally {
+    process.env.PATH = oldPath;
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("reconcileIdleIssues recovers preemptive queue conflicts as queue repair when the PR is queue-admitted", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-preemptive-queue-conflict-"));
+  const fakeBin = path.join(baseDir, "bin");
+  const ghPath = path.join(fakeBin, "gh");
+  const oldPath = process.env.PATH;
+  try {
+    mkdirSync(fakeBin, { recursive: true });
+    writeFileSync(ghPath, `#!/usr/bin/env bash
+if [ "$1" = "api" ] && [[ "$2" == repos/owner/repo/commits/sha-13d/check-runs ]]; then
+  exit 0
+fi
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  printf '{"mergeable":"CONFLICTING","mergeStateStatus":"DIRTY","labels":[{"name":"queue"}]}'
+  exit 0
+fi
+exit 1`, "utf8");
+    chmodSync(ghPath, 0o755);
+    process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
+
+    const { db, enqueueCalls, orchestrator } = createOrchestrator(baseDir);
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-13d",
+      issueKey: "USE-13D",
+      branchName: "feat-preemptive-conflict",
+      prNumber: 113,
+      prState: "open",
+      prHeadSha: "sha-13d",
+      prCheckStatus: "failure",
+      queueLabelApplied: true,
+      factoryState: "awaiting_queue",
+    });
+
+    await (orchestrator as unknown as { idleReconciler: { reconcile: () => Promise<void> } }).idleReconciler.reconcile();
+
+    const issue = db.getIssue("usertold", "issue-13d");
+    assert.equal(issue?.factoryState, "repairing_queue");
+    assert.equal(issue?.pendingRunType, "queue_repair");
+    assert.equal(issue?.lastGitHubFailureSource, "queue_eviction");
+    assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-13d" }]);
+  } finally {
+    process.env.PATH = oldPath;
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("reconcileIdleIssues reclassifies stale branch_ci provenance to queue repair when GitHub shows an admitted conflict", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-stale-branch-ci-"));
+  const fakeBin = path.join(baseDir, "bin");
+  const ghPath = path.join(fakeBin, "gh");
+  const oldPath = process.env.PATH;
+  try {
+    mkdirSync(fakeBin, { recursive: true });
+    writeFileSync(ghPath, `#!/usr/bin/env bash
+if [ "$1" = "api" ] && [[ "$2" == repos/owner/repo/commits/sha-13e/check-runs ]]; then
+  exit 0
+fi
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  printf '{"mergeable":"CONFLICTING","mergeStateStatus":"DIRTY","labels":[{"name":"queue"}]}'
+  exit 0
+fi
+exit 1`, "utf8");
+    chmodSync(ghPath, 0o755);
+    process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
+
+    const { db, enqueueCalls, orchestrator } = createOrchestrator(baseDir);
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-13e",
+      issueKey: "USE-13E",
+      branchName: "feat-stale-branch-ci",
+      prNumber: 113,
+      prState: "open",
+      prHeadSha: "sha-13e",
+      prCheckStatus: "failure",
+      queueLabelApplied: true,
+      lastGitHubFailureSource: "branch_ci",
+      factoryState: "repairing_ci",
+    });
+
+    await (orchestrator as unknown as { idleReconciler: { reconcile: () => Promise<void> } }).idleReconciler.reconcile();
+
+    const issue = db.getIssue("usertold", "issue-13e");
+    assert.equal(issue?.factoryState, "repairing_queue");
+    assert.equal(issue?.pendingRunType, "queue_repair");
+    assert.equal(issue?.lastGitHubFailureSource, "queue_eviction");
+    assert.equal(issue?.lastGitHubFailureCheckName, "merge-steward/queue");
+    assert.equal(issue?.lastGitHubFailureSignature, "queue_eviction::sha-13e::merge-steward/queue");
+    assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-13e" }]);
+  } finally {
+    process.env.PATH = oldPath;
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
@@ -366,6 +686,195 @@ test("reconcileRun keeps interrupted ci_repair runs in repairing_ci when the PR 
   }
 });
 
+test("reconcileRun leaves interrupted queue_repair eligible for retry on idle reconciliation", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-interrupted-queue-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const enqueueCalls: Array<{ projectId: string; issueId: string }> = [];
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-15q",
+      issueKey: "USE-15Q",
+      branchName: "feat-interrupted-queue",
+      prNumber: 15,
+      prState: "open",
+      prReviewState: "approved",
+      prCheckStatus: "success",
+      queueRepairAttempts: 1,
+      factoryState: "repairing_queue",
+      lastGitHubFailureSource: "queue_eviction",
+      lastGitHubFailureHeadSha: "sha-15q",
+      lastGitHubFailureSignature: "queue_eviction::sha-15q::merge-steward/queue",
+      lastGitHubFailureCheckName: "merge-steward/queue",
+      lastAttemptedFailureHeadSha: "sha-15q",
+      lastAttemptedFailureSignature: "queue_eviction::sha-15q::merge-steward/queue",
+    });
+    const run = db.createRun({
+      issueId: issue.id,
+      projectId: "usertold",
+      linearIssueId: "issue-15q",
+      runType: "queue_repair",
+      promptText: "repair queue",
+    });
+    db.updateRunThread(run.id, { threadId: "thread-15q", turnId: "turn-15q" });
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-15q",
+      activeRunId: run.id,
+      factoryState: "repairing_queue",
+    });
+
+    const orchestrator = new RunOrchestrator(
+      config,
+      db,
+      {
+        startThread: async () => ({ threadId: "thread-15q" }),
+        steerTurn: async () => undefined,
+        readThread: async () => ({ id: "thread-15q", turns: [{ id: "turn-15q", status: "interrupted" }] }),
+      } as never,
+      { forProject: async () => undefined } as never,
+      (projectId, issueId) => {
+        enqueueCalls.push({ projectId, issueId });
+      },
+      pino({ enabled: false }),
+    );
+
+    await (orchestrator as unknown as { reconcileRun: (run: typeof run) => Promise<void> }).reconcileRun(db.getRun(run.id)!);
+    await (orchestrator as unknown as { idleReconciler: { reconcile: () => Promise<void> } }).idleReconciler.reconcile();
+
+    const updatedIssue = db.getIssue("usertold", "issue-15q");
+    const updatedRun = db.getRun(run.id);
+    assert.equal(updatedIssue?.factoryState, "repairing_queue");
+    assert.equal(updatedIssue?.queueRepairAttempts, 0);
+    assert.equal(updatedIssue?.pendingRunType, "queue_repair");
+    assert.equal(updatedIssue?.activeRunId, undefined);
+    assert.equal(updatedRun?.status, "failed");
+    assert.equal(updatedRun?.failureReason, "Codex turn was interrupted");
+    assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-15q" }]);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("reconcileIdleIssues prioritizes queue eviction recovery over approved waiting state", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-queue-eviction-priority-"));
+  try {
+    const { db, enqueueCalls, orchestrator } = createOrchestrator(baseDir);
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-queue-priority",
+      issueKey: "USE-QUEUE",
+      branchName: "feat-queue-priority",
+      prNumber: 16,
+      prState: "open",
+      prReviewState: "approved",
+      prCheckStatus: "success",
+      factoryState: "repairing_queue",
+      lastGitHubFailureSource: "queue_eviction",
+      lastGitHubFailureHeadSha: "sha-16",
+      lastGitHubFailureSignature: "queue_eviction::sha-16::merge-steward/queue",
+      lastGitHubFailureCheckName: "merge-steward/queue",
+      lastAttemptedFailureHeadSha: null,
+      lastAttemptedFailureSignature: null,
+      queueLabelApplied: true,
+    });
+
+    await (orchestrator as unknown as { idleReconciler: { reconcile: () => Promise<void> } }).idleReconciler.reconcile();
+
+    const issue = db.getIssue("usertold", "issue-queue-priority");
+    assert.equal(issue?.factoryState, "repairing_queue");
+    assert.equal(issue?.pendingRunType, "queue_repair");
+    assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-queue-priority" }]);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("reconcileRun syncs Linear session after interrupted runs when an agent session is known", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-interrupted-linear-sync-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-15b",
+      issueKey: "USE-15B",
+      branchName: "feat-interrupted-linear",
+      prNumber: 15,
+      prState: "open",
+      prCheckStatus: "failed",
+      lastGitHubFailureSource: "branch_ci",
+      factoryState: "repairing_ci",
+      ciRepairAttempts: 1,
+      agentSessionId: "session-15b",
+    });
+    const issue = db.getIssue("usertold", "issue-15b");
+    assert.ok(issue);
+    const run = db.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "ci_repair",
+    });
+    db.updateRunThread(run.id, { threadId: "thread-15b", turnId: "turn-15b" });
+    db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      activeRunId: run.id,
+    });
+
+    const activities: Array<{ agentSessionId: string; body: string }> = [];
+    const updates: Array<{ agentSessionId: string; planLength: number }> = [];
+    const orchestrator = new RunOrchestrator(
+      config,
+      db,
+      {
+        startThread: async () => ({ threadId: "thread-15b" }),
+        steerTurn: async () => undefined,
+        readThread: async () => ({ id: "thread-15b", turns: [{ id: "turn-15b", status: "interrupted" }] }),
+      } as never,
+      {
+        forProject: async () => ({
+          getIssue: async () => ({
+            id: "issue-15b",
+            identifier: "USE-15B",
+            title: "Interrupted linear sync",
+            teamId: "USE",
+            teamKey: "USE",
+            stateId: "state-start",
+            stateName: "In Progress",
+            stateType: "started",
+            workflowStates: [],
+            labelIds: [],
+            labels: [],
+            teamLabels: [],
+            blockedBy: [],
+            blocks: [],
+          }),
+          createAgentActivity: async ({ agentSessionId, content }) => {
+            activities.push({ agentSessionId, body: (content as { body?: string }).body ?? "" });
+          },
+          updateAgentSession: async ({ agentSessionId, plan }) => {
+            updates.push({ agentSessionId, planLength: Array.isArray(plan) ? plan.length : 0 });
+          },
+        } as never),
+      } as never,
+      () => undefined,
+      pino({ enabled: false }),
+    );
+
+    await (orchestrator as unknown as { reconcileRun: (run: { id: number }) => Promise<void> }).reconcileRun(db.getRun(run.id)!);
+
+    assert.equal(activities.length, 0);
+    assert.deepEqual(updates, [{ agentSessionId: "session-15b", planLength: 4 }]);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("completed ci_repair does not succeed when PR head never advanced", { concurrency: false }, async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-head-verify-"));
   const oldPath = process.env.PATH;
@@ -375,7 +884,7 @@ test("completed ci_repair does not succeed when PR head never advanced", { concu
     mkdirSync(fakeBin, { recursive: true });
     writeFileSync(ghPath, `#!/usr/bin/env bash
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
-  printf '{"headRefOid":"same-head-sha","state":"OPEN"}'
+  printf '{"headRefOid":"same-head-sha","state":"OPEN","reviewDecision":"APPROVED"}'
   exit 0
 fi
 exit 1
@@ -441,6 +950,91 @@ exit 1
   }
 });
 
+test("completed queue_repair refreshes PR head to pending checks instead of re-queuing stale ci_repair", { concurrency: false }, async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-queue-publish-"));
+  const oldPath = process.env.PATH;
+  try {
+    const fakeBin = path.join(baseDir, "bin");
+    const ghPath = path.join(fakeBin, "gh");
+    mkdirSync(fakeBin, { recursive: true });
+    writeFileSync(ghPath, `#!/usr/bin/env bash
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  printf '{"headRefOid":"sha-advanced","state":"OPEN","reviewDecision":"APPROVED"}'
+  exit 0
+fi
+exit 1
+`, "utf8");
+    chmodSync(ghPath, 0o755);
+    process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
+
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const orchestrator = new RunOrchestrator(
+      config,
+      db,
+      {
+        startThread: async () => ({ threadId: "thread-17" }),
+        steerTurn: async () => undefined,
+        readThread: async () => ({ id: "thread-17", turns: [{ id: "turn-17", status: "completed", items: [] }] }),
+      } as never,
+      { forProject: async () => undefined } as never,
+      () => undefined,
+      pino({ enabled: false }),
+    );
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-17",
+      issueKey: "USE-17",
+      branchName: "feat-queue-publish",
+      prNumber: 17,
+      prState: "open",
+      prReviewState: "approved",
+      prCheckStatus: "failed",
+      prHeadSha: "sha-old",
+      lastGitHubFailureSource: "queue_eviction",
+      lastGitHubFailureHeadSha: "sha-old",
+      lastGitHubFailureSignature: "queue_eviction::sha-old::merge-steward/queue",
+      lastGitHubFailureCheckName: "merge-steward/queue",
+      lastQueueIncidentJson: JSON.stringify({ incidentSummary: "merge conflict" }),
+      factoryState: "repairing_queue",
+    });
+    const issue = db.getIssue("usertold", "issue-17");
+    assert.ok(issue);
+    const run = db.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "queue_repair",
+    });
+    db.updateRunThread(run.id, { threadId: "thread-17", turnId: "turn-17" });
+    db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      activeRunId: run.id,
+    });
+
+    await (orchestrator as unknown as { reconcileRun: (run: { id: number }) => Promise<void> }).reconcileRun(db.getRun(run.id)!);
+
+    await (orchestrator as unknown as { idleReconciler: { reconcile: () => Promise<void> } }).idleReconciler.reconcile();
+
+    const updatedIssue = db.getIssue("usertold", "issue-17");
+    const updatedRun = db.getRun(run.id);
+    assert.equal(updatedRun?.status, "completed");
+    assert.equal(updatedIssue?.factoryState, "awaiting_queue");
+    assert.equal(updatedIssue?.activeRunId, undefined);
+    assert.equal(updatedIssue?.pendingRunType, undefined);
+    assert.equal(updatedIssue?.prHeadSha, "sha-advanced");
+    assert.equal(updatedIssue?.prCheckStatus, "pending");
+    assert.equal(updatedIssue?.lastGitHubFailureSource, undefined);
+    assert.equal(updatedIssue?.lastGitHubFailureHeadSha, undefined);
+    assert.equal(updatedIssue?.lastGitHubFailureSignature, undefined);
+  } finally {
+    process.env.PATH = oldPath;
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("reconcileIdleIssues leaves awaiting_queue issues idle when they are already waiting on downstream merge automation", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-awaiting-queue-"));
   try {
@@ -457,6 +1051,8 @@ test("reconcileIdleIssues leaves awaiting_queue issues idle when they are alread
       factoryState: "awaiting_queue",
     });
     db.setBranchOwner("usertold", "issue-15", "patchrelay");
+    const before = db.getIssue("usertold", "issue-15");
+    assert.ok(before);
 
     await (orchestrator as unknown as { idleReconciler: { reconcile: () => Promise<void> } }).idleReconciler.reconcile();
 
@@ -464,6 +1060,7 @@ test("reconcileIdleIssues leaves awaiting_queue issues idle when they are alread
     assert.equal(issue?.factoryState, "awaiting_queue");
     assert.equal(issue?.branchOwner, "patchrelay");
     assert.equal(issue?.pendingRunType, undefined);
+    assert.equal(issue?.updatedAt, before.updatedAt);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

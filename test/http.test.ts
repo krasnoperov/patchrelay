@@ -161,6 +161,15 @@ test("http routes handle webhook validation and issue/live lookups", async () =>
             ? {
                 issue: { issueKey: "USE-42" },
                 latestStageRun: { id: 7, stage: "development", status: "completed" },
+                runs: [
+                  {
+                    id: 7,
+                    runType: "implementation",
+                    status: "completed",
+                    startedAt: "2026-03-13T11:00:00.000Z",
+                    endedAt: "2026-03-13T11:30:00.000Z",
+                  },
+                ],
               }
             : undefined,
         getActiveRunStatus: async (issueKey: string) =>
@@ -258,6 +267,15 @@ test("http routes handle webhook validation and issue/live lookups", async () =>
       ok: true,
       issue: { issueKey: "USE-42" },
       latestStageRun: { id: 7, stage: "development", status: "completed" },
+      runs: [
+        {
+          id: 7,
+          runType: "implementation",
+          status: "completed",
+          startedAt: "2026-03-13T11:00:00.000Z",
+          endedAt: "2026-03-13T11:30:00.000Z",
+        },
+      ],
     });
 
     const missingOverview = await app.inject({
@@ -458,11 +476,14 @@ test("public agent session status page validates token and exposes operator sess
     });
     assert.equal(page.statusCode, 200);
     assert.match(page.body, /Implement API endpoint/);
-    assert.match(page.body, /PatchRelay wait/);
+    assert.match(page.body, /Session:/);
+    assert.match(page.body, /Stage:/);
+    assert.match(page.body, /Waiting reason/);
     assert.match(page.body, /awaiting_queue/);
     assert.match(page.body, /Recent Stages/);
     assert.match(page.body, /thread-1/);
     assert.match(page.body, /Waiting on downstream review\/merge automation/);
+    assert.doesNotMatch(page.body, /merge-steward admission/);
 
     const unauthorizedHelper = await app.inject({
       method: "GET",

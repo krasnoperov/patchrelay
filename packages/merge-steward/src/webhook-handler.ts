@@ -154,7 +154,7 @@ export async function processWebhookEvent(
     }
 
     case "review_approved": {
-      // Review approved — check if admission label is present and enqueue.
+      // Review approved — check merge-gate eligibility and enqueue if ready.
       logger.info({ prNumber: event.prNumber }, "Review approved, checking eligibility");
       await service.tryAdmit(event.prNumber, event.branch, event.headSha);
       break;

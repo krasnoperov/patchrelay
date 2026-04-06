@@ -106,9 +106,6 @@ export class QueueHealthMonitor {
 
     if (pr.state !== "OPEN") return;
 
-    const hasQueueLabel = pr.labels?.some((l) => l.name === protocol.admissionLabel) ?? false;
-    if (!hasQueueLabel) return;
-
     const isDirty = pr.mergeStateStatus === "DIRTY" || pr.mergeable === "CONFLICTING";
     let hasEvictionCheckRun = false;
     if (!isDirty) {

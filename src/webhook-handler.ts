@@ -258,8 +258,9 @@ export class WebhookHandler {
     const activeRun = existingIssue?.activeRunId ? this.db.getRun(existingIssue.activeRunId) : undefined;
     const delegated = this.isDelegatedToPatchRelay(project, normalized);
     const triggerAllowed = triggerEventAllowed(project, normalized.triggerEvent);
+    const incomingAgentSessionId = normalized.agentSession?.id;
 
-    if (!existingIssue && !delegated) {
+    if (!existingIssue && !delegated && !incomingAgentSessionId) {
       return { issue: undefined, desiredStage: undefined, delegated };
     }
 
@@ -314,6 +315,7 @@ export class WebhookHandler {
         ...(hydratedIssue.estimate != null ? { estimate: hydratedIssue.estimate } : {}),
         ...(hydratedIssue.stateName ? { currentLinearState: hydratedIssue.stateName } : {}),
         ...(hydratedIssue.stateType ? { currentLinearStateType: hydratedIssue.stateType } : {}),
+        ...(!existingIssue && !delegated && incomingAgentSessionId ? { factoryState: "awaiting_input" as const } : {}),
         ...(pendingRunType ? { pendingRunType, factoryState: "delegated" as const } : {}),
         ...(clearPending ? { pendingRunType: null } : {}),
         ...((pendingRunType || existingIssue?.pendingRunType === "implementation") && pendingRunContextJson
@@ -457,12 +459,10 @@ export class WebhookHandler {
 
     if (normalized.triggerEvent === "agentSessionCreated") {
       if (!delegated) {
-        const currentlyDelegated = await this.isCurrentLinearIssueDelegatedToPatchRelay(linear, project.id, normalized.issue.id);
-        if (currentlyDelegated) {
-          return;
+        const latestIssue = this.db.getIssue(project.id, normalized.issue.id);
+        if (latestIssue ?? trackedIssue) {
+          await this.syncAgentSession(linear, normalized.agentSession.id, latestIssue ?? trackedIssue);
         }
-        const body = "PatchRelay received your mention. Delegate the issue to PatchRelay to start work.";
-        await this.publishAgentActivity(linear, normalized.agentSession.id, { type: "elicitation", body });
         return;
       }
       if (desiredStage) {
@@ -909,7 +909,7 @@ function isTerminalDelegationState(
   if (existingIssue?.prState === "merged") {
     return true;
   }
-  if (existingIssue?.factoryState && TERMINAL_STATES.has(existingIssue.factoryState)) {
+  if (existingIssue?.factoryState && existingIssue.factoryState !== "awaiting_input" && TERMINAL_STATES.has(existingIssue.factoryState)) {
     return true;
   }
   return isResolvedLinearState(hydratedIssue.stateType, hydratedIssue.stateName);

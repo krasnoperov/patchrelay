@@ -45,12 +45,12 @@ function QueueRow({
   }
 
   const blockedOnMain = isHead && queueBlock?.reason === "main_broken" && queueBlock.headPrNumber === entry.prNumber;
-  const status = blockedOnMain ? "main CI failing" : humanStatus(entry.status, entry);
+  const status = blockedOnMain ? "waiting for main" : humanStatus(entry.status, entry);
   const color = blockedOnMain ? "red"
     : entry.status === "preparing_head" && entry.lastFailedBaseSha ? "yellow"
       : statusColor(entry.status);
   const nextStep = blockedOnMain
-    ? summarizeQueueBlock(queueBlock) ?? "waiting for main to recover"
+    ? summarizeQueueBlock(queueBlock) ?? "waiting for main checks to settle"
     : nextStepLabel(entry.status, entry);
 
   // Only show retry counter when retries have actually happened.
@@ -108,9 +108,9 @@ export function QueueListView({
       {queueBlock && (
         <Box marginBottom={1} flexDirection="column">
           <Text color="yellow">
-            Queue paused: {queueBlockLabel ?? "main is unhealthy"}{queueBlock.baseSha ? ` at ${truncate(queueBlock.baseSha, 10)}` : ""}.
+            Queue paused: {queueBlockLabel ?? "waiting for main checks"}{queueBlock.baseSha ? ` at ${truncate(queueBlock.baseSha, 10)}` : ""}.
           </Text>
-          <Text dimColor>Head PR #{queueBlock.headPrNumber ?? "?"} will resume automatically once main recovers.</Text>
+          <Text dimColor>Head PR #{queueBlock.headPrNumber ?? "?"} will resume automatically once main is healthy.</Text>
         </Box>
       )}
       {entries.length === 0 ? (

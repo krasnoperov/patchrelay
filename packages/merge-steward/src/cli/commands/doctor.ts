@@ -9,12 +9,11 @@ import {
   getDefaultRuntimeEnvPath,
   getDefaultServiceEnvPath,
   getDefaultStateDir,
-  getRepoConfigPath,
   getSystemdUnitPath,
 } from "../../runtime-paths.ts";
 import type { ParsedArgs, Output } from "../types.ts";
 import { formatJson, writeOutput } from "../output.ts";
-import { fetchServiceGitHubAuthStatus, fetchServiceRepoDiscovery, getHomeEnv } from "../system.ts";
+import { fetchServiceGitHubAuthStatus, fetchServiceRepoDiscovery, getHomeEnv, loadRepoConfigById } from "../system.ts";
 
 interface DoctorCheck {
   status: "pass" | "warn" | "fail";
@@ -139,12 +138,28 @@ export async function handleDoctor(parsed: ParsedArgs, stdout: Output): Promise<
 
   let repoConfigPath: string | undefined;
   if (repoId) {
-    repoConfigPath = getRepoConfigPath(repoId);
-    if (!existsSync(repoConfigPath)) {
-      checks.push({ status: "fail", scope: `repo:${repoId}`, message: `Repo config not found: ${repoConfigPath}` });
+    let loaded:
+      | {
+        configPath: string;
+        config: ReturnType<typeof loadConfig>;
+      }
+      | undefined;
+    try {
+      loaded = loadRepoConfigById(repoId);
+      repoConfigPath = loaded.configPath;
+    } catch (error) {
+      checks.push({
+        status: "fail",
+        scope: `repo:${repoId}`,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    if (!loaded) {
+      // already reported above
     } else {
       try {
-        const config = loadConfig(repoConfigPath);
+        const config = loaded.config;
         mkdirSync(path.dirname(config.database.path), { recursive: true });
         mkdirSync(path.dirname(config.clonePath), { recursive: true });
         checks.push({ status: "pass", scope: `repo:${repoId}`, message: `Repo config is valid for ${config.repoFullName}` });

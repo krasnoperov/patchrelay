@@ -44,6 +44,7 @@ export interface IssueRecord {
   worktreePath?: string | undefined;
   threadId?: string | undefined;
   activeRunId?: number | undefined;
+  statusCommentId?: string | undefined;
   agentSessionId?: string | undefined;
   prNumber?: number | undefined;
   prUrl?: string | undefined;
@@ -165,6 +166,7 @@ export interface TrackedIssueRecord {
   latestFailureStepName?: string | undefined;
   latestFailureSummary?: string | undefined;
   waitingReason?: string | undefined;
+  queueLabelApplied?: boolean | undefined;
   activeRunId?: number | undefined;
   activeAgentSessionId?: string | undefined;
   updatedAt: string;

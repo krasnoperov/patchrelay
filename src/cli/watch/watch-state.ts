@@ -23,6 +23,7 @@ export interface WatchIssue {
   title?: string | undefined;
   statusNote?: string | undefined;
   projectId: string;
+  sessionState?: string | undefined;
   factoryState: string;
   blockedByCount: number;
   blockedByKeys: string[];
@@ -35,6 +36,7 @@ export interface WatchIssue {
   prNumber?: number | undefined;
   prReviewState?: string | undefined;
   prCheckStatus?: string | undefined;
+  queueLabelApplied?: boolean | undefined;
   prChecksSummary?: {
     total: number;
     completed: number;

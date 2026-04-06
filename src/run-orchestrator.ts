@@ -29,6 +29,7 @@ import type {
 } from "./types.ts";
 import { resolveAuthoritativeLinearStopState } from "./linear-workflow.ts";
 import { execCommand } from "./utils.ts";
+import { getThreadTurns } from "./codex-thread-utils.ts";
 
 const DEFAULT_CI_REPAIR_BUDGET = 3;
 const DEFAULT_QUEUE_REPAIR_BUDGET = 3;
@@ -66,7 +67,113 @@ function readWorkflowFile(repoPath: string, runType: RunType): string | undefine
   return readFileSync(filePath, "utf8").trim();
 }
 
-function buildRunPrompt(issue: IssueRecord, runType: RunType, repoPath: string, context?: Record<string, unknown>): string {
+export type ImplementationDeliveryMode = "publish_pr" | "linear_only";
+
+function collectImplementationInstructionText(issue: Pick<IssueRecord, "title" | "description">, context?: Record<string, unknown>, promptText?: string): string {
+  const parts: string[] = [];
+  if (issue.title) parts.push(issue.title);
+  if (issue.description) parts.push(issue.description);
+  if (promptText) parts.push(promptText);
+
+  const stringFields = ["promptContext", "promptBody", "operatorPrompt", "userComment"];
+  for (const field of stringFields) {
+    const value = context?.[field];
+    if (typeof value === "string" && value.trim()) {
+      parts.push(value);
+    }
+  }
+
+  if (Array.isArray(context?.followUps)) {
+    for (const entry of context.followUps) {
+      if (!entry || typeof entry !== "object") continue;
+      const text = (entry as { text?: unknown }).text;
+      if (typeof text === "string" && text.trim()) {
+        parts.push(text);
+      }
+    }
+  }
+
+  return parts.join("\n").toLowerCase();
+}
+
+export function resolveImplementationDeliveryMode(
+  issue: Pick<IssueRecord, "title" | "description">,
+  context?: Record<string, unknown>,
+  promptText?: string,
+): ImplementationDeliveryMode {
+  const instructionText = collectImplementationInstructionText(issue, context, promptText);
+  if (!instructionText) return "publish_pr";
+
+  const hasExplicitNoPr = [
+    /\bdo not open (?:a |any )?pr\b/,
+    /\bdo not open (?:a |any )?pull request\b/,
+    /\bno pr is opened\b/,
+    /\bpatchrelay should not open a pr\b/,
+    /\bwithout opening a pr\b/,
+  ].some((pattern) => pattern.test(instructionText));
+  const forbidsRepoChanges = [
+    /\bdo not make repository changes\b/,
+    /\bdo not make repo changes\b/,
+    /\bno repository changes\b/,
+    /\bno repo changes\b/,
+    /\bdo not modify repo files\b/,
+  ].some((pattern) => pattern.test(instructionText));
+  const planningOnly = [
+    /\bplanning\/specification issue only\b/,
+    /\bplanning[- ]only\b/,
+    /\bspecification[- ]only\b/,
+    /\bplanning issue only\b/,
+  ].some((pattern) => pattern.test(instructionText));
+
+  if (hasExplicitNoPr || (planningOnly && forbidsRepoChanges)) {
+    return "linear_only";
+  }
+  return "publish_pr";
+}
+
+function appendPublicationContract(
+  lines: string[],
+  runType: RunType,
+  issue?: Pick<IssueRecord, "title" | "description">,
+  context?: Record<string, unknown>,
+): void {
+  const deliveryMode = runType === "implementation" && issue
+    ? resolveImplementationDeliveryMode(issue, context)
+    : "publish_pr";
+  if (runType === "implementation" && deliveryMode === "linear_only") {
+    lines.push("## Delivery Requirements", "");
+    lines.push(
+      "This issue is planning/specification only.",
+      "Do not modify repo files or open a PR for this issue.",
+      "Deliver the result through Linear artifacts such as follow-up issues, documents, and a concise summary.",
+      "Leave the worktree clean before stopping.",
+      "",
+    );
+    return;
+  }
+
+  lines.push("## Publication Requirements", "");
+  if (runType === "implementation") {
+    lines.push(
+      "Before finishing, publish the result instead of leaving it only in the worktree.",
+      "If the worktree already contains relevant changes for this issue, verify them and publish them.",
+      "If you changed files for this issue, commit them, push the issue branch, and open or update the PR before stopping.",
+      "Do not stop with only local commits or uncommitted changes.",
+      "",
+    );
+    return;
+  }
+
+  lines.push(
+    "Before finishing, publish the result to the existing PR branch.",
+    "If you changed files for this repair, commit them and push the same branch before stopping.",
+    "Do not open a new PR.",
+    "Do not stop with only local commits or uncommitted changes.",
+    "",
+  );
+}
+
+export function buildRunPrompt(issue: IssueRecord, runType: RunType, repoPath: string, context?: Record<string, unknown>): string {
   const lines: string[] = [
     `Issue: ${issue.issueKey ?? issue.linearIssueId}`,
     issue.title ? `Title: ${issue.title}` : undefined,
@@ -190,9 +297,9 @@ function buildRunPrompt(issue: IssueRecord, runType: RunType, repoPath: string, 
     // Fallback if no workflow file exists
     lines.push(
       "Implement the Linear issue. Read the issue via MCP for details.",
-      "Run verification before finishing. Commit, push, and open a PR.",
     );
   }
+  appendPublicationContract(lines, runType, issue, context);
 
   return lines.join("\n");
 }
@@ -408,6 +515,8 @@ export class RunOrchestrator {
         await execCommand(gitBin, ["-C", worktreePath, "config", "credential.helper", credentialHelper], { timeoutMs: 5_000 });
       }
 
+      await this.resetWorktreeToTrackedBranch(worktreePath, branchName, issue);
+
       // Freshen the worktree: fetch + rebase onto latest base branch.
       // This prevents branch contamination when local main has drifted
       // and avoids scope-bundling review rejections from stale commits.
@@ -556,6 +665,65 @@ export class RunOrchestrator {
     if (didStash) await execCommand(gitBin, ["-C", worktreePath, "stash", "pop"], { timeoutMs: 10_000 });
   }
 
+  private async resetWorktreeToTrackedBranch(
+    worktreePath: string,
+    branchName: string,
+    issue: Pick<IssueRecord, "issueKey">,
+  ): Promise<void> {
+    const gitBin = this.config.runner.gitBin;
+    const branchFetch = await execCommand(gitBin, ["-C", worktreePath, "fetch", "origin", branchName], { timeoutMs: 60_000 });
+    const hasRemoteBranch = branchFetch.exitCode === 0;
+
+    await execCommand(gitBin, ["-C", worktreePath, "rebase", "--abort"], { timeoutMs: 10_000 });
+    await execCommand(gitBin, ["-C", worktreePath, "merge", "--abort"], { timeoutMs: 10_000 });
+    await execCommand(gitBin, ["-C", worktreePath, "cherry-pick", "--abort"], { timeoutMs: 10_000 });
+    await execCommand(gitBin, ["-C", worktreePath, "am", "--abort"], { timeoutMs: 10_000 });
+    await execCommand(gitBin, ["-C", worktreePath, "reset", "--hard", "HEAD"], { timeoutMs: 30_000 });
+    await execCommand(gitBin, ["-C", worktreePath, "clean", "-fd"], { timeoutMs: 30_000 });
+
+    const checkoutTarget = hasRemoteBranch ? `origin/${branchName}` : branchName;
+    const checkoutResult = await execCommand(
+      gitBin,
+      ["-C", worktreePath, "checkout", "-B", branchName, checkoutTarget],
+      { timeoutMs: 30_000 },
+    );
+    if (checkoutResult.exitCode !== 0) {
+      throw new Error(
+        `Failed to restore ${branchName} worktree state: ${checkoutResult.stderr?.slice(0, 300) ?? "git checkout failed"}`,
+      );
+    }
+
+    const resetTarget = hasRemoteBranch ? `origin/${branchName}` : "HEAD";
+    const resetResult = await execCommand(gitBin, ["-C", worktreePath, "reset", "--hard", resetTarget], { timeoutMs: 30_000 });
+    if (resetResult.exitCode !== 0) {
+      throw new Error(
+        `Failed to reset ${branchName} worktree state: ${resetResult.stderr?.slice(0, 300) ?? "git reset failed"}`,
+      );
+    }
+
+    await execCommand(gitBin, ["-C", worktreePath, "clean", "-fd"], { timeoutMs: 30_000 });
+    this.logger.debug({ issueKey: issue.issueKey, branchName, hasRemoteBranch }, "Reset issue worktree to tracked branch state");
+  }
+
+  private async restoreIdleWorktree(
+    issue: Pick<IssueRecord, "issueKey" | "worktreePath" | "branchName">,
+  ): Promise<void> {
+    if (!issue.worktreePath || !issue.branchName) return;
+    try {
+      await this.resetWorktreeToTrackedBranch(issue.worktreePath, issue.branchName, issue);
+    } catch (error) {
+      this.logger.warn(
+        {
+          issueKey: issue.issueKey,
+          branchName: issue.branchName,
+          worktreePath: issue.worktreePath,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        "Failed to restore idle worktree after interrupted run",
+      );
+    }
+  }
+
   // ─── Notification handler ─────────────────────────────────────────
 
   async handleCodexNotification(notification: CodexNotification): Promise<void> {
@@ -643,7 +811,12 @@ export class RunOrchestrator {
 
     // Complete the run
     const trackedIssue = this.db.issueToTrackedIssue(issue);
-    const report = buildStageReport(run, trackedIssue, thread, countEventMethods(this.db.listThreadEvents(run.id)));
+    const report = buildStageReport(
+      { ...run, status: "completed" },
+      trackedIssue,
+      thread,
+      countEventMethods(this.db.listThreadEvents(run.id)),
+    );
 
     // Determine post-run state based on current PR metadata.
     const freshIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
@@ -687,8 +860,8 @@ export class RunOrchestrator {
       this.activeThreadId = undefined;
       return;
     }
-    const refreshedIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? freshIssue;
-    const postRunState = resolvePostRunState(refreshedIssue);
+    const refreshedIssue = await this.refreshIssueAfterReactivePublish(run, freshIssue);
+    const postRunState = resolveCompletedRunState(refreshedIssue, run);
 
     this.db.transaction(() => {
       this.db.finishRun(run.id, {
@@ -875,6 +1048,8 @@ export class RunOrchestrator {
         this.db.upsertIssue({ projectId: run.projectId, linearIssueId: run.linearIssueId, activeRunId: null });
       });
       this.logger.info({ issueKey: issue.issueKey, runId: run.id, factoryState: issue.factoryState }, "Reconciliation: released run on terminal issue");
+      const releasedIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
+      void this.linearSync.syncSession(releasedIssue, { activeRunType: run.runType });
       if (recoveryLease) this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
       return;
     }
@@ -890,6 +1065,9 @@ export class RunOrchestrator {
         this.db.upsertIssue({ projectId: run.projectId, linearIssueId: run.linearIssueId, activeRunId: null });
       });
       this.recoverOrEscalate(issue, run.runType, "zombie");
+      const recoveredIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
+      void this.linearSync.emitActivity(recoveredIssue, buildRunFailureActivity(run.runType, "The Codex turn never started before PatchRelay restarted."));
+      void this.linearSync.syncSession(recoveredIssue, { activeRunType: run.runType });
       if (recoveryLease) this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
       return;
     }
@@ -908,6 +1086,9 @@ export class RunOrchestrator {
         this.db.upsertIssue({ projectId: run.projectId, linearIssueId: run.linearIssueId, activeRunId: null });
       });
       this.recoverOrEscalate(issue, run.runType, "stale_thread");
+      const recoveredIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
+      void this.linearSync.emitActivity(recoveredIssue, buildRunFailureActivity(run.runType, "PatchRelay lost the active Codex thread after restart and needs to recover."));
+      void this.linearSync.syncSession(recoveredIssue, { activeRunType: run.runType });
       if (recoveryLease) this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
       return;
     }
@@ -938,13 +1119,15 @@ export class RunOrchestrator {
             status: "reconciled",
             summary: `Linear state ${stopState.stateName} \u2192 done`,
           });
+          const doneIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
+          void this.linearSync.syncSession(doneIssue, { activeRunType: run.runType });
           if (recoveryLease) this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
           return;
         }
       }
     }
 
-    const latestTurn = thread.turns.at(-1);
+    const latestTurn = getThreadTurns(thread).at(-1);
 
     // Handle interrupted turn — fail the run rather than retrying indefinitely.
     // The agent may have partially completed work (commits, PR) before interruption.
@@ -962,8 +1145,25 @@ export class RunOrchestrator {
       } else if (run.runType === "review_fix" && issue.reviewFixAttempts > 0) {
         this.db.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, reviewFixAttempts: issue.reviewFixAttempts - 1 });
       }
+      if (run.runType === "ci_repair" || run.runType === "queue_repair") {
+        this.db.upsertIssue({
+          projectId: issue.projectId,
+          linearIssueId: issue.linearIssueId,
+          lastAttemptedFailureHeadSha: null,
+          lastAttemptedFailureSignature: null,
+        });
+      }
       const recoveredState = resolveRecoverablePostRunState(this.db.getIssue(run.projectId, run.linearIssueId) ?? issue);
       this.failRunAndClear(run, "Codex turn was interrupted", recoveredState);
+      await this.restoreIdleWorktree(issue);
+      if (run.runType === "ci_repair" || run.runType === "queue_repair") {
+        this.db.upsertIssue({
+          projectId: run.projectId,
+          linearIssueId: run.linearIssueId,
+          lastAttemptedFailureHeadSha: null,
+          lastAttemptedFailureSignature: null,
+        });
+      }
       const failedIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
       if (recoveredState) {
         this.feed?.publish({
@@ -979,13 +1179,19 @@ export class RunOrchestrator {
         void this.linearSync.emitActivity(failedIssue, buildRunFailureActivity(run.runType, "The Codex turn was interrupted."));
       }
       void this.linearSync.syncSession(failedIssue, { activeRunType: run.runType });
+      if (recoveryLease) this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
       return;
     }
 
     // Handle completed turn discovered during reconciliation
     if (latestTurn?.status === "completed") {
       const trackedIssue = this.db.issueToTrackedIssue(issue);
-      const report = buildStageReport(run, trackedIssue, thread, countEventMethods(this.db.listThreadEvents(run.id)));
+      const report = buildStageReport(
+        { ...run, status: "completed" },
+        trackedIssue,
+        thread,
+        countEventMethods(this.db.listThreadEvents(run.id)),
+      );
       const freshIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
       const verifiedRepairError = await this.verifyReactiveRunAdvancedBranch(run, freshIssue);
       if (verifiedRepairError) {
@@ -1000,6 +1206,10 @@ export class RunOrchestrator {
           status: "branch_not_advanced",
           summary: verifiedRepairError,
         });
+        const heldIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? freshIssue;
+        void this.linearSync.emitActivity(heldIssue, buildRunFailureActivity(run.runType, verifiedRepairError));
+        void this.linearSync.syncSession(heldIssue, { activeRunType: run.runType });
+        if (recoveryLease) this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
         return;
       }
       const publishedOutcomeError = await this.verifyPublishedRunOutcome(run, freshIssue);
@@ -1014,10 +1224,14 @@ export class RunOrchestrator {
           status: "publish_incomplete",
           summary: publishedOutcomeError,
         });
+        const failedIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? freshIssue;
+        void this.linearSync.emitActivity(failedIssue, buildRunFailureActivity(run.runType, publishedOutcomeError));
+        void this.linearSync.syncSession(failedIssue, { activeRunType: run.runType });
+        if (recoveryLease) this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
         return;
       }
-      const refreshedIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? freshIssue;
-      const postRunState = resolvePostRunState(refreshedIssue);
+      const refreshedIssue = await this.refreshIssueAfterReactivePublish(run, freshIssue);
+      const postRunState = resolveCompletedRunState(refreshedIssue, run);
       this.db.transaction(() => {
         this.db.finishRun(run.id, {
           status: "completed",
@@ -1058,7 +1272,20 @@ export class RunOrchestrator {
           summary: `Reconciliation: ${run.runType} completed \u2192 ${postRunState}`,
         });
       }
+      const updatedIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? refreshedIssue;
+      const completionSummary = report.assistantMessages.at(-1)?.slice(0, 300) ?? `${run.runType} completed.`;
+      void this.linearSync.emitActivity(updatedIssue, buildRunCompletedActivity({
+        runType: run.runType,
+        completionSummary,
+        postRunState: updatedIssue.factoryState,
+        ...(updatedIssue.prNumber !== undefined ? { prNumber: updatedIssue.prNumber } : {}),
+      }));
+      void this.linearSync.syncSession(updatedIssue);
+      if (recoveryLease) this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
+      return;
     }
+
+    if (recoveryLease) this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
   }
 
   // ─── Internal helpers ─────────────────────────────────────────────
@@ -1127,14 +1354,8 @@ export class RunOrchestrator {
       return undefined;
     }
     try {
-      const { stdout, exitCode } = await execCommand("gh", [
-        "pr", "view", String(issue.prNumber),
-        "--repo", project.github.repoFullName,
-        "--json", "headRefOid,state",
-      ], { timeoutMs: 10_000 });
-      if (exitCode !== 0) return undefined;
-      const pr = JSON.parse(stdout) as { headRefOid?: string; state?: string };
-      if (pr.state?.toUpperCase() !== "OPEN") return undefined;
+      const pr = await this.loadRemotePrState(project.github.repoFullName, issue.prNumber);
+      if (!pr || pr.state?.toUpperCase() !== "OPEN") return undefined;
       if (!pr.headRefOid || pr.headRefOid !== issue.lastGitHubFailureHeadSha) return undefined;
       return `Repair finished but PR #${issue.prNumber} is still on failing head ${issue.lastGitHubFailureHeadSha.slice(0, 8)}`;
     } catch (error) {
@@ -1147,6 +1368,81 @@ export class RunOrchestrator {
     }
   }
 
+  private async refreshIssueAfterReactivePublish(run: RunRecord, issue: IssueRecord): Promise<IssueRecord> {
+    if (run.runType !== "ci_repair" && run.runType !== "queue_repair") {
+      return this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
+    }
+    if (!issue.prNumber) {
+      return this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
+    }
+    const project = this.config.projects.find((entry) => entry.id === run.projectId);
+    const repoFullName = project?.github?.repoFullName;
+    if (!repoFullName) {
+      return this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
+    }
+
+    try {
+      const pr = await this.loadRemotePrState(repoFullName, issue.prNumber);
+      if (!pr) {
+        return this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
+      }
+
+      const nextPrState = normalizeRemotePrState(pr.state);
+      const nextReviewState = normalizeRemoteReviewDecision(pr.reviewDecision);
+      const gateCheckName = project?.gateChecks?.find((entry) => entry.trim())?.trim() ?? "verify";
+      const headAdvanced = Boolean(pr.headRefOid && pr.headRefOid !== issue.lastGitHubFailureHeadSha);
+
+      this.db.upsertIssue({
+        projectId: run.projectId,
+        linearIssueId: run.linearIssueId,
+        ...(nextPrState ? { prState: nextPrState } : {}),
+        ...(pr.headRefOid ? { prHeadSha: pr.headRefOid } : {}),
+        ...(nextReviewState ? { prReviewState: nextReviewState } : {}),
+        ...(headAdvanced
+          ? {
+              prCheckStatus: "pending",
+              lastGitHubFailureSource: null,
+              lastGitHubFailureHeadSha: null,
+              lastGitHubFailureSignature: null,
+              lastGitHubFailureCheckName: null,
+              lastGitHubFailureCheckUrl: null,
+              lastGitHubFailureContextJson: null,
+              lastGitHubFailureAt: null,
+              lastQueueIncidentJson: null,
+              lastAttemptedFailureHeadSha: null,
+              lastAttemptedFailureSignature: null,
+              lastGitHubCiSnapshotHeadSha: pr.headRefOid ?? null,
+              lastGitHubCiSnapshotGateCheckName: gateCheckName,
+              lastGitHubCiSnapshotGateCheckStatus: "pending",
+              lastGitHubCiSnapshotJson: null,
+              lastGitHubCiSnapshotSettledAt: null,
+            }
+          : {}),
+      });
+    } catch (error) {
+      this.logger.debug({
+        issueKey: issue.issueKey,
+        prNumber: issue.prNumber,
+        error: error instanceof Error ? error.message : String(error),
+      }, "Failed to refresh PR state after reactive publish");
+    }
+
+    return this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
+  }
+
+  private async loadRemotePrState(
+    repoFullName: string,
+    prNumber: number,
+  ): Promise<{ headRefOid?: string; state?: string; reviewDecision?: string } | undefined> {
+    const { stdout, exitCode } = await execCommand("gh", [
+      "pr", "view", String(prNumber),
+      "--repo", repoFullName,
+      "--json", "headRefOid,state,reviewDecision",
+    ], { timeoutMs: 10_000 });
+    if (exitCode !== 0) return undefined;
+    return JSON.parse(stdout) as { headRefOid?: string; state?: string; reviewDecision?: string };
+  }
+
   private async verifyPublishedRunOutcome(
     run: RunRecord,
     issue: IssueRecord,
@@ -1155,11 +1451,19 @@ export class RunOrchestrator {
     if (run.runType !== "implementation") {
       return undefined;
     }
+    const project = projectOverride ?? this.config.projects.find((entry) => entry.id === run.projectId);
+    const baseBranch = project?.github?.baseBranch ?? "main";
+    const deliveryMode = resolveImplementationDeliveryMode(issue, undefined, run.promptText);
+    if (deliveryMode === "linear_only") {
+      if (issue.prNumber !== undefined) {
+        return `Planning-only implementation should not open a PR, but PR #${issue.prNumber} was observed`;
+      }
+      return this.describeLocalImplementationOutcome(issue, baseBranch, deliveryMode);
+    }
     if (issue.prNumber && issue.prState && issue.prState !== "closed") {
       return undefined;
     }
 
-    const project = projectOverride ?? this.config.projects.find((entry) => entry.id === run.projectId);
     if (project?.github?.repoFullName && issue.branchName) {
       try {
         const { stdout, exitCode } = await execCommand("gh", [
@@ -1206,11 +1510,15 @@ export class RunOrchestrator {
       }
     }
 
-    const details = await this.describeLocalImplementationOutcome(issue, project?.github?.baseBranch ?? "main");
+    const details = await this.describeLocalImplementationOutcome(issue, baseBranch, deliveryMode);
     return details ?? `Implementation completed without opening a PR for branch ${issue.branchName ?? issue.linearIssueId}`;
   }
 
-  private async describeLocalImplementationOutcome(issue: IssueRecord, baseBranch: string): Promise<string | undefined> {
+  private async describeLocalImplementationOutcome(
+    issue: IssueRecord,
+    baseBranch: string,
+    deliveryMode: ImplementationDeliveryMode = "publish_pr",
+  ): Promise<string | undefined> {
     if (!issue.worktreePath) {
       return undefined;
     }
@@ -1226,6 +1534,9 @@ export class RunOrchestrator {
         ? status.stdout.split("\n").map((line) => line.trim()).filter(Boolean)
         : [];
       if (dirtyEntries.length > 0) {
+        if (deliveryMode === "linear_only") {
+          return `Planning-only implementation should not modify the repo; worktree still has ${dirtyEntries.length} uncommitted change(s)`;
+        }
         return `Implementation completed without opening a PR; worktree still has ${dirtyEntries.length} uncommitted change(s)`;
       }
     } catch {
@@ -1243,6 +1554,9 @@ export class RunOrchestrator {
       if (ahead.exitCode === 0) {
         const count = Number(ahead.stdout.trim());
         if (Number.isFinite(count) && count > 0) {
+          if (deliveryMode === "linear_only") {
+            return `Planning-only implementation should not create repo commits; worktree is ${count} local commit(s) ahead of origin/${baseBranch}`;
+          }
           return `Implementation completed with ${count} local commit(s) ahead of origin/${baseBranch} but no PR was observed`;
         }
       }
@@ -1350,6 +1664,13 @@ function resolvePostRunState(issue: IssueRecord): FactoryState | undefined {
   return undefined;
 }
 
+function resolveCompletedRunState(issue: IssueRecord, run: Pick<RunRecord, "runType" | "promptText">): FactoryState | undefined {
+  if (run.runType === "implementation" && resolveImplementationDeliveryMode(issue, undefined, run.promptText) === "linear_only") {
+    return "done";
+  }
+  return resolvePostRunState(issue);
+}
+
 function resolveRecoverablePostRunState(issue: IssueRecord): FactoryState | undefined {
   if (!issue.prNumber) {
     return resolvePostRunState(issue);
@@ -1363,6 +1684,22 @@ function resolveRecoverablePostRunState(issue: IssueRecord): FactoryState | unde
     return "pr_open";
   }
   return resolvePostRunState(issue);
+}
+
+function normalizeRemotePrState(value: string | undefined): "open" | "closed" | "merged" | undefined {
+  const normalized = value?.trim().toUpperCase();
+  if (normalized === "OPEN") return "open";
+  if (normalized === "CLOSED") return "closed";
+  if (normalized === "MERGED") return "merged";
+  return undefined;
+}
+
+function normalizeRemoteReviewDecision(value: string | undefined): "approved" | "changes_requested" | "commented" | undefined {
+  const normalized = value?.trim().toUpperCase();
+  if (normalized === "APPROVED") return "approved";
+  if (normalized === "CHANGES_REQUESTED") return "changes_requested";
+  if (normalized === "REVIEW_REQUIRED") return "commented";
+  return undefined;
 }
 
 function appendQueueRepairContext(lines: string[], context?: Record<string, unknown>): void {

@@ -53,6 +53,18 @@ function extractStatusNote(summaryJson?: string, reportJson?: string): string | 
   return undefined;
 }
 
+function shouldSuppressStatusNote(params: {
+  activeRunType?: string | null | undefined;
+  sessionState?: string | null | undefined;
+  statusNote?: string | undefined;
+}): boolean {
+  if (!params.activeRunType && params.sessionState !== "running") return false;
+  const note = params.statusNote?.trim().toLowerCase();
+  if (!note) return true;
+  return note === "codex turn was interrupted"
+    || note === "patchrelay received your mention. delegate the issue to patchrelay to start work.";
+}
+
 export function parseCiSnapshotSummary(snapshotJson?: string): {
   total: number;
   completed: number;
@@ -228,7 +240,10 @@ export class PatchRelayService {
       }
     }
     await this.runtime.start();
-    await this.syncKnownAgentSessions();
+    void this.syncKnownAgentSessions().catch((error) => {
+      const msg = error instanceof Error ? error.message : String(error);
+      this.logger.warn({ error: msg }, "Background agent session sync failed");
+    });
   }
 
   async stop(): Promise<void> {
@@ -237,9 +252,27 @@ export class PatchRelayService {
   }
 
   private async syncKnownAgentSessions(): Promise<void> {
-    for (const issue of this.db.listIssuesWithAgentSessions()) {
-      const activeRun = issue.activeRunId ? this.db.getRun(issue.activeRunId) : undefined;
-      await this.orchestrator.linearSync.syncSession(issue, activeRun ? { activeRunType: activeRun.runType } : undefined);
+    for (const issue of this.db.listIssues()) {
+      if (issue.factoryState === "done") {
+        continue;
+      }
+      const syncedIssue = issue.agentSessionId
+        ? issue
+        : (() => {
+            const recoveredAgentSessionId = this.db.findLatestAgentSessionIdForIssue(issue.linearIssueId);
+            return recoveredAgentSessionId
+              ? this.db.upsertIssue({
+                  projectId: issue.projectId,
+                  linearIssueId: issue.linearIssueId,
+                  agentSessionId: recoveredAgentSessionId,
+                })
+              : issue;
+          })();
+      if (!syncedIssue.agentSessionId) {
+        continue;
+      }
+      const activeRun = syncedIssue.activeRunId ? this.db.getRun(syncedIssue.activeRunId) : undefined;
+      await this.orchestrator.linearSync.syncSession(syncedIssue, activeRun ? { activeRunType: activeRun.runType } : undefined);
     }
   }
 
@@ -357,6 +390,7 @@ export class PatchRelayService {
     prNumber?: number;
     prReviewState?: string;
     prCheckStatus?: string;
+    queueLabelApplied?: boolean;
     prChecksSummary?: {
       total: number;
       completed: number;
@@ -380,7 +414,7 @@ export class PatchRelayService {
           s.project_id, s.linear_issue_id, s.issue_key, i.title,
           i.current_linear_state, i.factory_state, s.session_state, s.waiting_reason, s.summary_text, s.updated_at,
           i.pending_run_type,
-          i.pr_number, i.pr_review_state, i.pr_check_status,
+          i.pr_number, i.pr_review_state, i.pr_check_status, i.queue_label_applied,
           i.last_github_ci_snapshot_json,
           i.last_github_failure_source,
           i.last_github_failure_head_sha,
@@ -453,7 +487,9 @@ export class PatchRelayService {
       );
       const blockedByCount = Number(row.blocked_by_count ?? 0);
       const hasPendingSessionEvents = Number(row.pending_session_event_count ?? 0) > 0;
-      const readyForExecution = (row.pending_run_type !== null && row.pending_run_type !== undefined || hasPendingSessionEvents)
+      const hasPendingWake = hasPendingSessionEvents
+        || this.db.peekIssueSessionWake(String(row.project_id), String(row.linear_issue_id)) !== undefined;
+      const readyForExecution = ((row.pending_run_type !== null && row.pending_run_type !== undefined) || hasPendingWake)
         && row.active_run_type === null && blockedByCount === 0;
       const failureSummary = summarizeGitHubFailureContext(failureContext);
       const sessionWaitingReason = typeof row.waiting_reason === "string" && row.waiting_reason.trim().length > 0
@@ -482,9 +518,17 @@ export class PatchRelayService {
         ...(row.pr_number !== null ? { prNumber: Number(row.pr_number) } : {}),
         ...(row.pr_review_state !== null ? { prReviewState: String(row.pr_review_state) } : {}),
         ...(row.pr_check_status !== null ? { prCheckStatus: String(row.pr_check_status) } : {}),
+        queueLabelApplied: Boolean(row.queue_label_applied),
         ...(row.last_github_failure_check_name !== null ? { latestFailureCheckName: String(row.last_github_failure_check_name) } : {}),
       });
-      const statusNoteForReturn = statusNoteWithBlockers ?? waitingReason;
+      const statusNoteCandidate = statusNoteWithBlockers ?? waitingReason;
+      const statusNoteForReturn = shouldSuppressStatusNote({
+        activeRunType: row.active_run_type as string | null | undefined,
+        sessionState: row.session_state as string | null | undefined,
+        statusNote: statusNoteCandidate,
+      })
+        ? undefined
+        : statusNoteCandidate;
 
       return {
         ...(row.issue_key !== null ? { issueKey: String(row.issue_key) } : {}),
@@ -504,6 +548,7 @@ export class PatchRelayService {
         ...(row.pr_number !== null ? { prNumber: Number(row.pr_number) } : {}),
         ...(row.pr_review_state !== null ? { prReviewState: String(row.pr_review_state) } : {}),
         ...(row.pr_check_status !== null ? { prCheckStatus: String(row.pr_check_status) } : {}),
+        queueLabelApplied: Boolean(row.queue_label_applied),
         ...(prChecksSummary ? { prChecksSummary } : {}),
         ...(row.last_github_failure_source !== null ? { latestFailureSource: String(row.last_github_failure_source) } : {}),
         ...(row.last_github_failure_head_sha !== null ? { latestFailureHeadSha: String(row.last_github_failure_head_sha) } : {}),
@@ -624,7 +669,10 @@ export class PatchRelayService {
     // Infer run type from current state instead of always resetting to implementation
     let runType = "implementation";
     let factoryState: string = "delegated";
-    if (issue.prNumber && (issue.prCheckStatus === "failed" || issue.prCheckStatus === "failure" || issue.lastGitHubFailureSource === "branch_ci")) {
+    if (issue.prNumber && issue.lastGitHubFailureSource === "queue_eviction") {
+      runType = "queue_repair";
+      factoryState = "repairing_queue";
+    } else if (issue.prNumber && (issue.prCheckStatus === "failed" || issue.prCheckStatus === "failure" || issue.lastGitHubFailureSource === "branch_ci")) {
       runType = "ci_repair";
       factoryState = "repairing_ci";
     } else if (issue.prNumber && issue.prReviewState === "changes_requested") {

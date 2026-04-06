@@ -64,10 +64,12 @@ export interface ListResultItem {
   title?: string;
   projectId: string;
   currentLinearState?: string;
+  sessionState?: string;
   factoryState: string;
   activeRunType?: string;
   latestRunType?: string;
   latestRunStatus?: string;
+  waitingReason?: string;
   updatedAt: string;
 }
 
@@ -76,6 +78,16 @@ function safeJsonParse(value: string | undefined): Record<string, unknown> | und
   try {
     const parsed = JSON.parse(value) as unknown;
     return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeStageReport(reportJson: string | undefined, runStatus: string | undefined): StageReport | undefined {
+  if (!reportJson) return undefined;
+  try {
+    const parsed = JSON.parse(reportJson) as StageReport;
+    return { ...parsed, status: runStatus ?? parsed.status };
   } catch {
     return undefined;
   }
@@ -133,7 +145,7 @@ export class CliDataAccess extends CliOperatorApiClient {
     const dbIssue = this.db.getIssueByKey(issueKey)!;
     const activeRun = dbIssue.activeRunId ? this.db.getRun(dbIssue.activeRunId) : undefined;
     const latestRun = this.db.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
-    const latestReport = latestRun?.reportJson ? (JSON.parse(latestRun.reportJson) as StageReport) : undefined;
+    const latestReport = normalizeStageReport(latestRun?.reportJson, latestRun?.status);
     const latestSummary = safeJsonParse(latestRun?.summaryJson);
 
     const statusNote =
@@ -238,13 +250,22 @@ export class CliDataAccess extends CliOperatorApiClient {
       throw new Error(`Issue ${issueKey} already has an active run.`);
     }
 
-    const runType = (options?.runType ?? "implementation") as RunType;
+    const runType = (options?.runType
+      ?? (issue.latestFailureSource === "queue_eviction" || issue.factoryState === "repairing_queue"
+        ? "queue_repair"
+        : "implementation")) as RunType;
+
+    const factoryState = runType === "queue_repair"
+      ? "repairing_queue"
+      : runType === "ci_repair"
+        ? "repairing_ci"
+        : "delegated";
 
     this.db.upsertIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       pendingRunType: runType,
-      factoryState: "delegated",
+      factoryState,
     });
     const updated = this.db.getTrackedIssue(issue.projectId, issue.linearIssueId)!;
     return { issue: updated, runType, ...(options?.reason ? { reason: options.reason } : {}) };
@@ -271,10 +292,15 @@ export class CliDataAccess extends CliOperatorApiClient {
           i.current_linear_state,
           i.factory_state,
           i.updated_at,
+          s.session_state,
+          s.waiting_reason,
           active_run.run_type AS active_run_type,
           latest_run.run_type AS latest_run_type,
           latest_run.status AS latest_run_status
         FROM issues i
+        LEFT JOIN issue_sessions s
+          ON s.project_id = i.project_id
+         AND s.linear_issue_id = i.linear_issue_id
         LEFT JOIN runs active_run ON active_run.id = i.active_run_id
         LEFT JOIN runs latest_run ON latest_run.id = (
           SELECT r.id FROM runs r
@@ -292,7 +318,9 @@ export class CliDataAccess extends CliOperatorApiClient {
       ...(row.title !== null ? { title: String(row.title) } : {}),
       projectId: String(row.project_id),
       ...(row.current_linear_state !== null ? { currentLinearState: String(row.current_linear_state) } : {}),
+      ...(row.session_state !== null ? { sessionState: String(row.session_state) } : {}),
       factoryState: String(row.factory_state ?? "delegated"),
+      ...(row.waiting_reason !== null ? { waitingReason: String(row.waiting_reason) } : {}),
       ...(row.active_run_type !== null ? { activeRunType: String(row.active_run_type) } : {}),
       ...(row.latest_run_type !== null ? { latestRunType: String(row.latest_run_type) } : {}),
       ...(row.latest_run_status !== null ? { latestRunStatus: String(row.latest_run_status) } : {}),
@@ -301,7 +329,7 @@ export class CliDataAccess extends CliOperatorApiClient {
 
     return items.filter((item) => {
       if (options?.active && !item.activeRunType) return false;
-      if (options?.failed && item.latestRunStatus !== "failed") return false;
+      if (options?.failed && item.factoryState !== "failed" && item.factoryState !== "escalated") return false;
       return true;
     });
   }

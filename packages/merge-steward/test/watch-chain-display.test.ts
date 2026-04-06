@@ -56,6 +56,21 @@ test("active filter excludes terminal entries older than 60 seconds", () => {
   assert.strictEqual(result[0]!.prNumber, 2);
 });
 
+test("active filter keeps old evicted entries visible because they still need repair", () => {
+  const oldEvicted = makeEntry({
+    prNumber: 1, position: 1, status: "evicted",
+    updatedAt: new Date(Date.now() - 90_000).toISOString(),
+  });
+  const active = makeEntry({ prNumber: 2, position: 2, status: "validating", ciRunId: "ci-2" });
+
+  const result = buildDisplayEntries([oldEvicted, active], "active");
+
+  assert.strictEqual(result.length, 2);
+  assert.strictEqual(result[0]!.prNumber, 1);
+  assert.strictEqual(result[0]!.status, "evicted");
+  assert.strictEqual(result[1]!.prNumber, 2);
+});
+
 test("re-admitted PR shows active entry, not terminal", () => {
   const evicted = makeEntry({
     prNumber: 1, position: 1, status: "evicted",

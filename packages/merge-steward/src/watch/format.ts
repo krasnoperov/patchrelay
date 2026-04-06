@@ -203,7 +203,15 @@ export function ciStatusIcon(entry: { status: QueueEntryStatus; ciRunId: string 
 export function summarizeQueueBlock(block: QueueBlockState | null | undefined): string | null {
   if (!block) return null;
   const failing = block.failingChecks.length > 0 ? `failing ${summarizeCheckNames(block.failingChecks)}` : null;
-  const pending = block.pendingChecks.length > 0 ? `pending ${summarizeCheckNames(block.pendingChecks)}` : null;
-  const suffix = [failing, pending].filter(Boolean).join("; ");
-  return suffix ? `main broken: ${suffix}` : "main broken";
+  const pending = block.pendingChecks.length > 0 ? `${summarizeCheckNames(block.pendingChecks)} pending` : null;
+  if (failing && pending) {
+    return `waiting for ${block.baseBranch}: ${failing}; ${pending}`;
+  }
+  if (failing) {
+    return `waiting for ${block.baseBranch} recovery: ${failing}`;
+  }
+  if (pending) {
+    return `waiting for ${block.baseBranch} verification: ${pending}`;
+  }
+  return `waiting for ${block.baseBranch} checks`;
 }

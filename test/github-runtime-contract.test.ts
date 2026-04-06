@@ -226,6 +226,29 @@ function buildTerminalPrPayload(params: {
   });
 }
 
+function buildLabeledPrPayload(params: {
+  branch: string;
+  headSha: string;
+  prNumber: number;
+  labels: string[];
+}): string {
+  return JSON.stringify({
+    action: "labeled",
+    repository: { full_name: "owner/repo" },
+    pull_request: {
+      number: params.prNumber,
+      html_url: `https://github.com/owner/repo/pull/${params.prNumber}`,
+      state: "open",
+      merged: false,
+      user: { login: "patchrelay[bot]" },
+      labels: params.labels.map((name) => ({ name })),
+      head: { ref: params.branch, sha: params.headSha },
+      base: { ref: "main" },
+    },
+    label: { name: params.labels.at(-1) ?? "queue" },
+  });
+}
+
 test("review approval updates GitHub state but does not queue new PatchRelay work", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-runtime-approved-"));
   try {
@@ -286,6 +309,42 @@ test("green gate-check completion does not queue new PatchRelay work", async () 
     assert.equal(issue?.prCheckStatus, "success");
     assert.equal(issue?.pendingRunType, undefined);
     assert.equal(issue?.activeRunId, undefined);
+    assert.deepEqual(enqueueCalls, []);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("pull request label events refresh merge-steward admission state without queuing PatchRelay work", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-runtime-queue-label-"));
+  try {
+    const { db, enqueueCalls, handler } = createHandler(baseDir);
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-queue-label",
+      issueKey: "USE-11A",
+      branchName: "feat-queue-label",
+      prNumber: 111,
+      prState: "open",
+      factoryState: "awaiting_queue",
+      prReviewState: "approved",
+      prCheckStatus: "success",
+      queueLabelApplied: false,
+    });
+
+    await handler.processGitHubWebhookEvent({
+      eventType: "pull_request",
+      rawBody: buildLabeledPrPayload({
+        branch: "feat-queue-label",
+        headSha: "sha-queue-label",
+        prNumber: 111,
+        labels: ["queue"],
+      }),
+    });
+
+    const issue = db.getIssue("usertold", "issue-queue-label");
+    assert.equal(issue?.queueLabelApplied, true);
+    assert.equal(issue?.pendingRunType, undefined);
     assert.deepEqual(enqueueCalls, []);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });

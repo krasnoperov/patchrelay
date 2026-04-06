@@ -506,6 +506,159 @@ Use this as the execution order for the refactor. The early phases are designed 
 - A second live delegation on `TST-6` successfully created a new active implementation session while `TST-5` was still in flight.
 - `merge-steward` and the PatchRelay GitHub App are now installed on `krasnoperov/ballony-i-nasosy`, branch protection requires one approval plus the `verify` check, and a live trial on `TST-6` successfully progressed through PR creation, approval, queue admission, validation, and merge to `main`.
 
+## Operational Hardening Plan
+
+The remaining work is no longer just "finish the refactor." It is to make the refactor operationally trustworthy under real queue pressure and service restarts.
+
+### PatchRelay
+
+1. Make `IssueSession` the operator truth everywhere.
+
+- Finish migrating CLI, HTTP, watch views, and Linear status reporting to `sessionState`, `waitingReason`, and session wake summaries.
+- Keep `factoryState` only as a temporary compatibility shadow for runtime internals and old tests.
+- Stop showing queue-label-derived wording like "waiting for merge queue" as if PatchRelay controlled queue admission.
+- Fix Linear reporting so delegated active work is not shown as passive `Backlog` or `Needs input` while a session is actually `running`.
+
+2. Remove remaining non-`v2` control facts from PatchRelay.
+
+- Stop treating `queueLabelApplied` as a control-plane fact; keep it only as a short-lived migration aid if it is still needed for compatibility.
+- Remove `src/merge-queue-protocol.ts` once no runtime path depends on label-driven admission requests.
+- Clean up checklist/docs references to `src/review-label-protocol.ts`; that file no longer exists and should no longer appear in the plan.
+
+3. Finish the event-routing model.
+
+- Implement the direct-reply steer rule for explicit agent questions so human answers do not always become fresh turns.
+- Record inert self-generated events without waking work.
+- Make terminal events always interrupt and close cleanly.
+- Tighten event coalescing so repeated comment-update noise does not look like meaningful wake pressure.
+
+4. Finish the prompt/thread split.
+
+- Separate initial implementation prompts from follow-up repair/prompts.
+- Make follow-up prompts explicitly state why the turn exists, what changed, which GitHub facts are authoritative, and which facts may be stale.
+- Keep the default single-thread-per-session rule, but add a clean compaction or replacement path when the thread becomes noisy or stale.
+
+5. Enforce leases on every side effect.
+
+- Gate session writes, PR writes, pushes, and finalization on the current session lease.
+- Treat stale workers as read-only observers.
+- Add restart tests where an old worker wakes up after a new worker already reclaimed the session.
+
+6. Fix packaging and service lifecycle.
+
+- Stop relying on `/usr/bin/env patchrelay` in the systemd unit.
+- Make install/restart paths use the built CLI entry directly, the same way `merge-steward` already does.
+- Add a doctor or startup check that verifies the installed executable path is real before restart attempts.
+
+### Merge Steward
+
+1. Keep queue state GitHub-first, but make the operator view repair-aware.
+
+- Continue showing active queue work from GitHub truth.
+- Also surface open repair obligations for evicted PRs in the active view until PatchRelay repairs or the PR closes.
+- Keep wording precise: waiting on main verification is not a PR failure; integration conflict is.
+
+2. Strengthen queue-to-repair handoff.
+
+- Preserve enough metadata on queue incidents to help PatchRelay classify them without falling back to heuristic label checks.
+- Prefer exact incident facts like `failureClass`, `baseSha`, and current `headSha`.
+- Add or expose issue-key or PatchRelay ownership metadata where practical so queue incidents are easier to correlate.
+
+3. Keep review semantics simple for now.
+
+- For the current live loop, human approval is the review source of truth.
+- `merge-steward` should continue gating on exact-head GitHub approval plus required checks.
+- `reviewbot` can be introduced later without changing PatchRelay's ownership model.
+
+## Bounded Next Milestones
+
+Use these as the last focused refactor slices before treating the `v2` migration as operationally complete.
+
+### 1. Session-First Reads And UI
+
+Goal:
+
+- make `IssueSession` the primary source for operator-facing reads
+- keep legacy state only as compatibility shadow data while old paths are retired
+
+Acceptance criteria:
+
+- CLI, HTTP, and watch views default to `sessionState` plus `waitingReason`
+- Linear status reporting reflects active `running` work instead of old lifecycle labels like `Needs input` when a session is actually active
+- queue wording is no longer presented as a PatchRelay-owned control plane responsibility
+
+### 2. Remove `queueLabelApplied` From Control Flow
+
+Goal:
+
+- stop treating queue-label state as part of PatchRelay's own runtime contract
+- keep queue admission as downstream truth owned by GitHub and `merge-steward`
+
+Acceptance criteria:
+
+- no scheduling, reconciliation, or restart path depends on `queueLabelApplied`
+- queue repair, merge conflicts, and fresh-main delays are represented through GitHub truth plus `waitingReason`
+- PatchRelay can still repair its own PRs, but it no longer needs to model queue admission as a local invariant
+
+### 3. Prompt And Thread Alignment
+
+Goal:
+
+- split initial prompt construction from follow-up prompt construction
+- make thread reuse and replacement behavior explicit instead of accidental
+
+Acceptance criteria:
+
+- follow-up prompts state why the turn exists, what changed, and which GitHub facts are authoritative
+- stale or partial facts are clearly marked as such
+- planning-only delegated issues can finish successfully after creating the required follow-up Linear issues/documents, even if no PR is opened
+- direct-reply steering and compaction/replacement rules match the session runtime doc
+
+### 4. Lease Enforcement And Recovery
+
+Goal:
+
+- make lease ownership the guardrail for every write path
+- ensure stale workers remain read-only after a lease loss or reclaim
+
+Acceptance criteria:
+
+- every side-effecting write checks the stored lease before mutating state
+- stale workers may continue to read but cannot start turns, push commits, or update PRs
+- lease expiry recovery in reconciliation can reclaim a stuck session without duplicating side effects
+
+### 5. Service Packaging Robustness
+
+Goal:
+
+- make restart and local service invocation predictable enough for long live TST runs
+
+Acceptance criteria:
+
+- systemd startup, `patchrelay` CLI startup, and dashboard startup all work from the same installed build
+- service restarts do not leave PatchRelay in a state where local edits exist but publication or recovery cannot resume cleanly
+- packaging errors surface clearly instead of failing later as dashboard/runtime shape mismatches
+
+### Live Test Matrix
+
+These are the behaviors we should keep pressure-testing with TST issues until the system feels routine:
+
+- several implementation issues in parallel
+- overlapping PRs that conflict after one merge lands
+- queue eviction followed by PatchRelay repair and successful re-queue
+- red PR CI followed by CI repair
+- service restart during active implementation and active queue repair
+- direct human reply to an explicit agent question
+- merge and close events arriving while a turn is active
+- fresh-main verification delay after a prior merge
+
+### What Recent TST Runs Taught Us
+
+- `TST-2` showed that queue eviction must not be reclassified as branch CI during reconciliation.
+- `TST-7` and `TST-8` showed that Linear/operator status still drifts from the real session state when we keep reporting through old lifecycle language.
+- The interrupted `TST-2` repair turn after service restart showed that lease and interrupted-turn handling is much better now, but packaging and restart ergonomics are still brittle.
+- The queue behavior around PRs `#4`, `#5`, and `#6` showed that speculative merge conflicts are expected, but the system must describe them clearly and keep the repair obligation visible.
+
 ## Suggested First PR Sequence
 
 If we want to break this into sane PRs, this is the order I would recommend:

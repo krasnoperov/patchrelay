@@ -1,5 +1,4 @@
 import { SqliteStore } from "../../db/sqlite-store.ts";
-import { getRepoConfigPath } from "../../runtime-paths.ts";
 import { buildSummary } from "../../service.ts";
 import type { QueueEntry, QueueEntryDetail, QueueWatchSnapshot } from "../../types.ts";
 import type { StewardConfig } from "../../config.ts";
@@ -78,8 +77,9 @@ export async function handleQueue(parsed: ParsedArgs, stdout: Output): Promise<n
 
   if (subcommand === "watch") {
     const repoId = resolveRepoId(parsed, 2, "queue");
+    const { configPath } = loadRepoConfigById(repoId);
     const { startWatch } = await import("../../watch/index.tsx");
-    await startWatch(getRepoConfigPath(repoId), parseIntegerFlag(parsed.flags.get("pr"), "--pr"));
+    await startWatch(configPath, parseIntegerFlag(parsed.flags.get("pr"), "--pr"));
     return 0;
   }
 

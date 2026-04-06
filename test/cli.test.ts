@@ -705,12 +705,29 @@ test("cli list and retry cover operator control flows", async () => {
     const db = new PatchRelayDatabase(config.database.path, true);
     db.runMigrations();
     seedDatabase(db, config);
+    const doneIssue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-done",
+      issueKey: "USE-57",
+      title: "Merged despite an earlier failed run",
+      currentLinearState: "Done",
+      factoryState: "done",
+    });
+    const doneRun = db.createRun({
+      issueId: doneIssue.id,
+      projectId: doneIssue.projectId,
+      linearIssueId: doneIssue.linearIssueId,
+      runType: "implementation",
+      promptText: "Earlier failed attempt",
+    });
+    db.finishRun(doneRun.id, { status: "failed", failureReason: "old failure" });
     data = new CliDataAccess(config, { db });
 
     const failedList = createBufferStream();
     assert.equal(await runCli(["issue", "list", "--failed"], { config, data, stdout: failedList.stream, stderr: createBufferStream().stream }), 0);
     assert.match(failedList.read(), /USE-54/);
     assert.doesNotMatch(failedList.read(), /USE-55/);
+    assert.doesNotMatch(failedList.read(), /USE-57/);
 
     const retryOut = createBufferStream();
     assert.equal(
@@ -728,6 +745,38 @@ test("cli list and retry cover operator control flows", async () => {
     assert.equal(updated?.factoryState, "delegated");
     const updatedIssue = db.getIssue("usertold", "issue-2");
     assert.equal(updatedIssue?.pendingRunType, "implementation");
+
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-queue-repair",
+      issueKey: "USE-58",
+      title: "Queue-evicted issue",
+      currentLinearState: "In Review",
+      factoryState: "failed",
+      prNumber: 58,
+      prState: "open",
+      prReviewState: "approved",
+      lastGitHubFailureSource: "queue_eviction",
+      lastGitHubFailureHeadSha: "sha-queue",
+      lastGitHubFailureCheckName: "merge-steward/queue",
+      queueLabelApplied: true,
+    });
+
+    const queueRetryOut = createBufferStream();
+    assert.equal(
+      await runCli(["issue", "retry", "USE-58"], {
+        config,
+        data,
+        stdout: queueRetryOut.stream,
+        stderr: createBufferStream().stream,
+      }),
+      0,
+    );
+    assert.match(queueRetryOut.read(), /Queued stage: queue_repair/);
+
+    const queueRepairIssue = db.getIssue("usertold", "issue-queue-repair");
+    assert.equal(queueRepairIssue?.factoryState, "repairing_queue");
+    assert.equal(queueRepairIssue?.pendingRunType, "queue_repair");
 
     const inspectJson = createBufferStream();
     assert.equal(await runCli(["issue", "show", "USE-54", "--json"], { config, data, stdout: inspectJson.stream, stderr: createBufferStream().stream }), 0);
@@ -883,6 +932,7 @@ test("cli resolves workspace, run context, and live summary from the unified iss
     assert.equal(listed?.activeRunType, "implementation");
     assert.equal(listed?.latestRunType, "implementation");
     assert.equal(listed?.latestRunStatus, "running");
+    assert.equal(listed?.sessionState, "running");
   } finally {
     data?.close();
     rmSync(baseDir, { recursive: true, force: true });

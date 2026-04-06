@@ -163,12 +163,13 @@ describe("webhook admission integration", () => {
     assert.strictEqual(resp.status, 401);
   });
 
-  it("does not admit PR without label on review_approved", async () => {
+  it("admits PR without label on review_approved when approval and CI are already green", async () => {
     const store = new MemoryStore();
     const githubSim = new GitHubSim();
     const logger = pino({ level: "silent" });
 
     githubSim.addPR({ number: 99, branch: "feat-y", headSha: "sha-99", reviewApproved: true, labels: [] });
+    githubSim.setChecks(99, [{ name: "checks", conclusion: "success" }]);
 
     const service = new MergeStewardService(
       config, store, new GitSim() as any, new CISim(() => "pass") as any,
@@ -191,8 +192,12 @@ describe("webhook admission integration", () => {
       body: reviewBody,
     });
 
-    const status = await (await fetch(`${address}/repos/test-repo/queue/status`)).json() as { entries: unknown[] };
-    assert.strictEqual(status.entries.length, 0, "PR without label should not be admitted");
+    const status = await (await fetch(`${address}/repos/test-repo/queue/status`)).json() as {
+      entries: Array<{ prNumber: number; status: string }>;
+    };
+    assert.strictEqual(status.entries.length, 1, "eligible PR should be admitted without a queue label");
+    assert.strictEqual(status.entries[0]!.prNumber, 99);
+    assert.strictEqual(status.entries[0]!.status, "queued");
   });
 
   it("serves watch snapshots, entry detail, and manual reconcile control", async () => {
@@ -360,5 +365,29 @@ describe("webhook admission integration", () => {
 
     const detail = await (await fetch(`${address}/repos/test-repo/queue/entries/${entry.id}/detail?eventLimit=2`)).json() as { events: Array<{ toStatus: string }> };
     assert.deepStrictEqual(detail.events.map((event) => event.toStatus), ["validating", "merging"]);
+  });
+
+  it("startup scan admits already-eligible open PRs without requiring a queue label", async () => {
+    const store = new MemoryStore();
+    const githubSim = new GitHubSim();
+    const logger = pino({ level: "silent" });
+
+    githubSim.addPR({ number: 123, branch: "feat-startup", headSha: "sha-startup", reviewApproved: true, labels: [] });
+    githubSim.setChecks(123, [{ name: "checks", conclusion: "success" }]);
+
+    const service = new MergeStewardService(
+      config, store, new GitSim() as any, new CISim(() => "pass") as any,
+      githubSim, new EvictionReporterSim(), new GitSim() as any, logger,
+    );
+
+    await service.start();
+    try {
+      const entries = store.listAll("test-repo");
+      assert.strictEqual(entries.length, 1);
+      assert.strictEqual(entries[0]!.prNumber, 123);
+      assert.strictEqual(entries[0]!.status, "queued");
+    } finally {
+      await service.stop();
+    }
   });
 });
