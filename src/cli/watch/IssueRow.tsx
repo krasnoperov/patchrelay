@@ -65,6 +65,9 @@ function stageLabel(issue: WatchIssue): string {
 
 function buildFacts(issue: WatchIssue): Array<{ text: string; color?: string }> {
   const facts: Array<{ text: string; color?: string }> = [];
+  const rereviewNeeded = issue.prReviewState === "changes_requested"
+    && (issue.prCheckStatus === "passed" || issue.prCheckStatus === "success")
+    && !issue.activeRunType;
 
   // PR number
   if (issue.prNumber !== undefined) {
@@ -76,6 +79,8 @@ function buildFacts(issue: WatchIssue): Array<{ text: string; color?: string }> 
   // Review state — only show when it matters (not yet approved, or changes requested)
   if (issue.prReviewState === "approved") {
     facts.push({ text: "approved", color: "green" });
+  } else if (rereviewNeeded) {
+    facts.push({ text: "re-review needed", color: "yellow" });
   } else if (issue.prReviewState === "changes_requested") {
     facts.push({ text: "changes requested", color: "yellow" });
   } else if (issue.prNumber !== undefined && !issue.prReviewState && !TERMINAL_STATES.has(issue.factoryState)) {
@@ -110,6 +115,9 @@ function buildFacts(issue: WatchIssue): Array<{ text: string; color?: string }> 
 // ─── What's blocking progress ───────────────────────────────────
 
 function blockerText(issue: WatchIssue): string | null {
+  const rereviewNeeded = issue.prReviewState === "changes_requested"
+    && (issue.prCheckStatus === "passed" || issue.prCheckStatus === "success")
+    && !issue.activeRunType;
   if (issue.sessionState === "waiting_input") return issue.waitingReason ?? "Waiting for input";
   if (issue.waitingReason && !issue.activeRunType) return issue.waitingReason;
   if (issue.blockedByCount > 0) return `Waiting on ${issue.blockedByKeys.join(", ")}`;
@@ -122,6 +130,7 @@ function blockerText(issue: WatchIssue): string | null {
     const check = issue.latestFailureCheckName ?? "checks";
     return `${check} failed`;
   }
+  if (rereviewNeeded) return "Awaiting re-review after requested changes";
   if (issue.prReviewState === "changes_requested") return "Review changes requested";
   return null;
 }

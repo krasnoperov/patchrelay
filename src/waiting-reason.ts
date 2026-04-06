@@ -2,6 +2,7 @@ export const PATCHRELAY_WAITING_REASONS = {
   activeWork: "PatchRelay is actively working",
   waitingForOperatorInput: "Waiting on operator input",
   waitingForReviewFeedback: "Waiting to address review feedback",
+  waitingForRereview: "Waiting on re-review after requested changes",
   waitingForMergeStewardRepair: "Waiting to repair a merge-steward incident",
   waitingForDownstreamAutomation: "Waiting on downstream review/merge automation",
   workComplete: "PatchRelay work is complete",
@@ -60,6 +61,9 @@ export function derivePatchRelayWaitingReason(params: {
     return `${checkName} failed`;
   }
   if (params.prReviewState === "changes_requested") {
+    if (params.prCheckStatus === "passed" || params.prCheckStatus === "success") {
+      return PATCHRELAY_WAITING_REASONS.waitingForRereview;
+    }
     return PATCHRELAY_WAITING_REASONS.waitingForReviewFeedback;
   }
   if (params.prReviewState === "approved") {

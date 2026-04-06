@@ -104,6 +104,9 @@ function stageDisplay(issue: WatchIssue): string {
 }
 
 function blockerText(issue: WatchIssue, issueContext: WatchIssueContext | null): string | null {
+  const rereviewNeeded = issue.prReviewState === "changes_requested"
+    && (issue.prCheckStatus === "passed" || issue.prCheckStatus === "success")
+    && !issue.activeRunType;
   if (issue.sessionState === "waiting_input") return issue.waitingReason ?? "Waiting for input";
   if (issue.waitingReason && !issue.activeRunType) return issue.waitingReason;
   if (issue.blockedByCount > 0) return `Waiting on ${issue.blockedByKeys.join(", ")}`;
@@ -116,6 +119,7 @@ function blockerText(issue: WatchIssue, issueContext: WatchIssueContext | null):
     const check = issueContext?.latestFailureCheckName ?? issue.latestFailureCheckName ?? "checks";
     return `${check} failed`;
   }
+  if (rereviewNeeded) return "Awaiting re-review after requested changes";
   if (issue.prReviewState === "changes_requested") return "Review changes requested";
   if (issue.prNumber !== undefined && !issue.prReviewState && issue.factoryState !== "done") return "Awaiting review";
   return null;
@@ -163,8 +167,12 @@ export function IssueDetailView({
 
   // Build compact facts for the header
   const facts: string[] = [];
+  const rereviewNeeded = issue.prReviewState === "changes_requested"
+    && (issue.prCheckStatus === "passed" || issue.prCheckStatus === "success")
+    && !issue.activeRunType;
   if (issue.prNumber !== undefined) facts.push(`PR #${issue.prNumber}`);
   if (issue.prReviewState === "approved") facts.push("approved");
+  else if (rereviewNeeded) facts.push("re-review needed");
   else if (issue.prReviewState === "changes_requested") facts.push("changes requested");
   if (issue.prCheckStatus === "passed" || issue.prCheckStatus === "success") facts.push("checks passed");
   else if (issue.prCheckStatus === "failed" || issue.prCheckStatus === "failure") {
