@@ -7,7 +7,7 @@ import test from "node:test";
 import { PatchRelayDatabase } from "../src/db.ts";
 import { GitHubWebhookHandler } from "../src/github-webhook-handler.ts";
 import { normalizeGitHubWebhook } from "../src/github-webhooks.ts";
-import type { AppConfig, GitHubWebhookPayload } from "../src/types.ts";
+import type { AppConfig, GitHubWebhookPayload, LinearClient } from "../src/types.ts";
 
 function createConfig(baseDir: string): AppConfig {
   return {
@@ -78,7 +78,7 @@ function createConfig(baseDir: string): AppConfig {
   };
 }
 
-function createHandler(baseDir: string) {
+function createHandler(baseDir: string, linearProvider?: { forProject(projectId: string): Promise<LinearClient | undefined> }) {
   const config = createConfig(baseDir);
   const db = new PatchRelayDatabase(config.database.path, config.database.wal);
   db.runMigrations();
@@ -86,7 +86,7 @@ function createHandler(baseDir: string) {
   const handler = new GitHubWebhookHandler(
     config,
     db,
-    { forProject: async () => undefined } as never,
+    (linearProvider ?? { forProject: async () => undefined }) as never,
     (projectId, issueId) => {
       enqueueCalls.push({ projectId, issueId });
     },
@@ -277,6 +277,97 @@ test("review approval updates GitHub state but does not queue new PatchRelay wor
     assert.equal(issue?.pendingRunType, undefined);
     assert.equal(issue?.activeRunId, undefined);
     assert.deepEqual(enqueueCalls, []);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("merged PatchRelay PR moves the Linear issue to a completed state", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-runtime-merged-linear-state-"));
+  try {
+    const setIssueStateCalls: string[] = [];
+    const { db, handler } = createHandler(baseDir, {
+      forProject: async () => ({
+        getIssue: async () => ({
+          id: "issue-merge-linear",
+          identifier: "USE-14",
+          title: "Merged issue",
+          description: "",
+          url: "https://linear.app/usertold/issue/USE-14",
+          teamId: "team-use",
+          teamKey: "USE",
+          stateId: "state-review",
+          stateName: "In Review",
+          stateType: "started",
+          workflowStates: [
+            { id: "state-review", name: "In Review", type: "started" },
+            { id: "state-done", name: "Done", type: "completed" },
+          ],
+          labelIds: [],
+          labels: [],
+          teamLabels: [],
+          blockedBy: [],
+          blocks: [],
+        }),
+        setIssueState: async (_issueId: string, stateName: string) => {
+          setIssueStateCalls.push(stateName);
+          return {
+            id: "issue-merge-linear",
+            identifier: "USE-14",
+            title: "Merged issue",
+            description: "",
+            url: "https://linear.app/usertold/issue/USE-14",
+            teamId: "team-use",
+            teamKey: "USE",
+            stateId: "state-done",
+            stateName: "Done",
+            stateType: "completed",
+            workflowStates: [
+              { id: "state-review", name: "In Review", type: "started" },
+              { id: "state-done", name: "Done", type: "completed" },
+            ],
+            labelIds: [],
+            labels: [],
+            teamLabels: [],
+            blockedBy: [],
+            blocks: [],
+          };
+        },
+      }) as LinearClient,
+    });
+
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-merge-linear",
+      issueKey: "USE-14",
+      branchName: "feat-merge-linear",
+      prNumber: 14,
+      prState: "open",
+      prHeadSha: "merge-sha-1",
+      prAuthorLogin: "patchrelay[bot]",
+      factoryState: "awaiting_queue",
+      currentLinearState: "In Review",
+      currentLinearStateType: "started",
+    });
+
+    const payload = buildTerminalPrPayload({
+      action: "closed",
+      branch: "feat-merge-linear",
+      headSha: "merge-sha-1",
+      prNumber: 14,
+      merged: true,
+      prAuthorLogin: "patchrelay[bot]",
+    });
+    await handler.processGitHubWebhookEvent({
+      eventType: "pull_request",
+      rawBody: payload,
+    });
+
+    const issue = db.getIssue("usertold", "issue-merge-linear");
+    assert.equal(issue?.factoryState, "done");
+    assert.equal(issue?.currentLinearState, "Done");
+    assert.equal(issue?.currentLinearStateType, "completed");
+    assert.deepEqual(setIssueStateCalls, ["Done"]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

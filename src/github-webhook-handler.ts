@@ -19,6 +19,7 @@ import {
   resolveMergeQueueProtocol,
 } from "./merge-queue-protocol.ts";
 import { buildQueueRepairContextFromEvent } from "./merge-queue-incident.ts";
+import { resolvePreferredCompletedLinearState } from "./linear-workflow.ts";
 import { resolveSecret } from "./resolve-secret.ts";
 import type { AppConfig, LinearClientProvider } from "./types.ts";
 import type { ProjectConfig } from "./workflow-types.ts";
@@ -586,12 +587,7 @@ export class GitHubWebhookHandler {
     });
     this.db.clearPendingIssueSessionEvents(issue.projectId, issue.linearIssueId);
 
-    if (!issue.activeRunId) {
-      this.db.releaseIssueSessionLease(issue.projectId, issue.linearIssueId);
-      return;
-    }
-
-    const run = this.db.getRun(issue.activeRunId);
+    const run = issue.activeRunId ? this.db.getRun(issue.activeRunId) : undefined;
     if (run?.threadId && run.turnId) {
       try {
         await this.codex.steerTurn({
@@ -624,7 +620,46 @@ export class GitHubWebhookHandler {
     });
     this.db.releaseIssueSessionLease(issue.projectId, issue.linearIssueId);
     const updatedIssue = this.db.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
+    if (event.triggerEvent === "pr_merged") {
+      await this.completeLinearIssueAfterMerge(updatedIssue);
+    }
     void this.syncLinearSession(updatedIssue);
+  }
+
+  private async completeLinearIssueAfterMerge(issue: IssueRecord): Promise<void> {
+    const linear = await this.linearProvider.forProject(issue.projectId).catch(() => undefined);
+    if (!linear) return;
+
+    try {
+      const liveIssue = await linear.getIssue(issue.linearIssueId);
+      const targetState = resolvePreferredCompletedLinearState(liveIssue);
+      if (!targetState) {
+        this.logger.warn({ issueKey: issue.issueKey }, "Could not find a completed Linear workflow state after merge");
+        return;
+      }
+
+      const normalizedCurrent = liveIssue.stateName?.trim().toLowerCase();
+      if (normalizedCurrent === targetState.trim().toLowerCase()) {
+        this.db.upsertIssue({
+          projectId: issue.projectId,
+          linearIssueId: issue.linearIssueId,
+          ...(liveIssue.stateName ? { currentLinearState: liveIssue.stateName } : {}),
+          ...(liveIssue.stateType ? { currentLinearStateType: liveIssue.stateType } : {}),
+        });
+        return;
+      }
+
+      const updated = await linear.setIssueState(issue.linearIssueId, targetState);
+      this.db.upsertIssue({
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        ...(updated.stateName ? { currentLinearState: updated.stateName } : {}),
+        ...(updated.stateType ? { currentLinearStateType: updated.stateType } : {}),
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      this.logger.warn({ issueKey: issue.issueKey, error: msg }, "Failed to move merged issue to a completed Linear state");
+    }
   }
 
   private async updateFailureProvenance(issue: IssueRecord, event: NormalizedGitHubEvent, project?: ProjectConfig): Promise<void> {

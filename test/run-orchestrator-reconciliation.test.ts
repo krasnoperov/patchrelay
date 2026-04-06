@@ -7,7 +7,7 @@ import pino from "pino";
 import test from "node:test";
 import { PatchRelayDatabase } from "../src/db.ts";
 import { RunOrchestrator } from "../src/run-orchestrator.ts";
-import type { AppConfig } from "../src/types.ts";
+import type { AppConfig, LinearClient } from "../src/types.ts";
 
 function createConfig(baseDir: string): AppConfig {
   return {
@@ -76,7 +76,7 @@ function createConfig(baseDir: string): AppConfig {
   };
 }
 
-function createOrchestrator(baseDir: string) {
+function createOrchestrator(baseDir: string, linearProvider?: { forProject(projectId: string): Promise<LinearClient | undefined> }) {
   const config = createConfig(baseDir);
   const db = new PatchRelayDatabase(config.database.path, config.database.wal);
   db.runMigrations();
@@ -89,7 +89,7 @@ function createOrchestrator(baseDir: string) {
       steerTurn: async () => undefined,
       readThread: async () => ({ id: "thread-1", turns: [] }),
     } as never,
-    { forProject: async () => undefined } as never,
+    (linearProvider ?? { forProject: async () => undefined }) as never,
     (projectId, issueId) => {
       enqueueCalls.push({ projectId, issueId });
     },
@@ -124,6 +124,84 @@ test("reconcileIdleIssues advances approved idle issues to awaiting_queue", asyn
     assert.equal(issue?.factoryState, "awaiting_queue");
     assert.equal(issue?.branchOwner, "patchrelay");
     assert.equal(issue?.pendingRunType, undefined);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("reconcileActiveRuns moves merged issues to a completed Linear state", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-merged-linear-state-"));
+  try {
+    const setIssueStateCalls: string[] = [];
+    const { db, orchestrator } = createOrchestrator(baseDir, {
+      forProject: async () => ({
+        getIssue: async () => ({
+          id: "issue-merged-linear",
+          identifier: "USE-11C",
+          title: "Merged issue",
+          description: "",
+          url: "https://linear.app/usertold/issue/USE-11C",
+          teamId: "team-use",
+          teamKey: "USE",
+          stateId: "state-review",
+          stateName: "In Progress",
+          stateType: "started",
+          workflowStates: [
+            { id: "state-progress", name: "In Progress", type: "started" },
+            { id: "state-done", name: "Done", type: "completed" },
+          ],
+          labelIds: [],
+          labels: [],
+          teamLabels: [],
+          blockedBy: [],
+          blocks: [],
+        }),
+        setIssueState: async (_issueId: string, stateName: string) => {
+          setIssueStateCalls.push(stateName);
+          return {
+            id: "issue-merged-linear",
+            identifier: "USE-11C",
+            title: "Merged issue",
+            description: "",
+            url: "https://linear.app/usertold/issue/USE-11C",
+            teamId: "team-use",
+            teamKey: "USE",
+            stateId: "state-done",
+            stateName: "Done",
+            stateType: "completed",
+            workflowStates: [
+              { id: "state-progress", name: "In Progress", type: "started" },
+              { id: "state-done", name: "Done", type: "completed" },
+            ],
+            labelIds: [],
+            labels: [],
+            teamLabels: [],
+            blockedBy: [],
+            blocks: [],
+          };
+        },
+      }) as LinearClient,
+    });
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-merged-linear",
+      issueKey: "USE-11C",
+      branchName: "feat-merged-linear",
+      prNumber: 113,
+      prState: "merged",
+      prHeadSha: "sha-merged-linear",
+      prAuthorLogin: "patchrelay[bot]",
+      factoryState: "done",
+      currentLinearState: "In Progress",
+      currentLinearStateType: "started",
+    });
+
+    await orchestrator.reconcileActiveRuns();
+
+    const issue = db.getIssue("usertold", "issue-merged-linear");
+    assert.equal(issue?.currentLinearState, "Done");
+    assert.equal(issue?.currentLinearStateType, "completed");
+    assert.deepEqual(setIssueStateCalls, ["Done"]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
