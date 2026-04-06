@@ -312,6 +312,20 @@ interface PendingRunWake {
   eventIds: number[];
 }
 
+interface RemotePrState {
+  headRefOid?: string;
+  state?: string;
+  reviewDecision?: string;
+  mergeStateStatus?: string;
+}
+
+interface PostRunFollowUp {
+  pendingRunType: RunType;
+  factoryState: FactoryState;
+  context?: Record<string, unknown> | undefined;
+  summary: string;
+}
+
 export class RunOrchestrator {
   private readonly worktreeManager: WorktreeManager;
   /** Tracks last probe-failure feed event per issue to avoid spamming the operator feed. */
@@ -861,7 +875,8 @@ export class RunOrchestrator {
       return;
     }
     const refreshedIssue = await this.refreshIssueAfterReactivePublish(run, freshIssue);
-    const postRunState = resolveCompletedRunState(refreshedIssue, run);
+    const postRunFollowUp = await this.resolvePostRunFollowUp(run, refreshedIssue);
+    const postRunState = postRunFollowUp?.factoryState ?? resolveCompletedRunState(refreshedIssue, run);
 
     this.db.transaction(() => {
       this.db.finishRun(run.id, {
@@ -871,12 +886,18 @@ export class RunOrchestrator {
         summaryJson: JSON.stringify({ latestAssistantMessage: report.assistantMessages.at(-1) ?? null }),
         reportJson: JSON.stringify(report),
       });
-      this.db.upsertIssue({
-        projectId: run.projectId,
-        linearIssueId: run.linearIssueId,
-        activeRunId: null,
-        ...(postRunState ? { factoryState: postRunState } : {}),
-        ...(postRunState === "awaiting_queue" || postRunState === "done"
+        this.db.upsertIssue({
+          projectId: run.projectId,
+          linearIssueId: run.linearIssueId,
+          activeRunId: null,
+          ...(postRunState ? { factoryState: postRunState } : {}),
+          ...(postRunFollowUp
+            ? {
+                pendingRunType: postRunFollowUp.pendingRunType,
+                pendingRunContextJson: postRunFollowUp.context ? JSON.stringify(postRunFollowUp.context) : null,
+              }
+            : {}),
+          ...(postRunFollowUp ? {} : (postRunState === "awaiting_queue" || postRunState === "done"
           ? {
               lastGitHubFailureSource: null,
               lastGitHubFailureHeadSha: null,
@@ -889,8 +910,21 @@ export class RunOrchestrator {
               lastAttemptedFailureHeadSha: null,
               lastAttemptedFailureSignature: null,
             }
-          : {}),
+          : {})),
       });
+
+      if (postRunFollowUp) {
+        this.feed?.publish({
+          level: "info",
+          kind: "stage",
+          issueKey: issue.issueKey,
+          projectId: run.projectId,
+          stage: postRunFollowUp.factoryState,
+          status: "follow_up_queued",
+          summary: postRunFollowUp.summary,
+        });
+        this.enqueueIssue(run.projectId, run.linearIssueId);
+      }
     });
 
     this.feed?.publish({
@@ -1231,7 +1265,8 @@ export class RunOrchestrator {
         return;
       }
       const refreshedIssue = await this.refreshIssueAfterReactivePublish(run, freshIssue);
-      const postRunState = resolveCompletedRunState(refreshedIssue, run);
+      const postRunFollowUp = await this.resolvePostRunFollowUp(run, refreshedIssue);
+      const postRunState = postRunFollowUp?.factoryState ?? resolveCompletedRunState(refreshedIssue, run);
       this.db.transaction(() => {
         this.db.finishRun(run.id, {
           status: "completed",
@@ -1245,7 +1280,13 @@ export class RunOrchestrator {
           linearIssueId: run.linearIssueId,
           activeRunId: null,
           ...(postRunState ? { factoryState: postRunState } : {}),
-          ...(postRunState === "awaiting_queue" || postRunState === "done"
+          ...(postRunFollowUp
+            ? {
+                pendingRunType: postRunFollowUp.pendingRunType,
+                pendingRunContextJson: postRunFollowUp.context ? JSON.stringify(postRunFollowUp.context) : null,
+              }
+            : {}),
+          ...(postRunFollowUp ? {} : (postRunState === "awaiting_queue" || postRunState === "done"
             ? {
                 lastGitHubFailureSource: null,
                 lastGitHubFailureHeadSha: null,
@@ -1258,9 +1299,21 @@ export class RunOrchestrator {
                 lastAttemptedFailureHeadSha: null,
                 lastAttemptedFailureSignature: null,
               }
-            : {}),
+            : {})),
           });
       });
+      if (postRunFollowUp) {
+        this.feed?.publish({
+          level: "info",
+          kind: "stage",
+          issueKey: issue.issueKey,
+          projectId: run.projectId,
+          stage: postRunFollowUp.factoryState,
+          status: "follow_up_queued",
+          summary: postRunFollowUp.summary,
+        });
+        this.enqueueIssue(run.projectId, run.linearIssueId);
+      }
       if (postRunState) {
         this.feed?.publish({
           level: "info",
@@ -1433,14 +1486,82 @@ export class RunOrchestrator {
   private async loadRemotePrState(
     repoFullName: string,
     prNumber: number,
-  ): Promise<{ headRefOid?: string; state?: string; reviewDecision?: string } | undefined> {
+  ): Promise<RemotePrState | undefined> {
     const { stdout, exitCode } = await execCommand("gh", [
       "pr", "view", String(prNumber),
       "--repo", repoFullName,
-      "--json", "headRefOid,state,reviewDecision",
+      "--json", "headRefOid,state,reviewDecision,mergeStateStatus",
     ], { timeoutMs: 10_000 });
     if (exitCode !== 0) return undefined;
-    return JSON.parse(stdout) as { headRefOid?: string; state?: string; reviewDecision?: string };
+    return JSON.parse(stdout) as RemotePrState;
+  }
+
+  private async resolvePostRunFollowUp(
+    run: Pick<RunRecord, "runType" | "projectId">,
+    issue: IssueRecord,
+    projectOverride?: { github?: { repoFullName?: string; baseBranch?: string } } | undefined,
+  ): Promise<PostRunFollowUp | undefined> {
+    if (run.runType !== "review_fix") {
+      return undefined;
+    }
+    if (!issue.prNumber || issue.prState !== "open") {
+      return undefined;
+    }
+    if (issue.prReviewState !== "changes_requested") {
+      return undefined;
+    }
+
+    const project = projectOverride ?? this.config.projects.find((entry) => entry.id === run.projectId);
+    const repoFullName = project?.github?.repoFullName;
+    if (!repoFullName) {
+      return undefined;
+    }
+
+    try {
+      const pr = await this.loadRemotePrState(repoFullName, issue.prNumber);
+      if (!pr) return undefined;
+
+      const nextPrState = normalizeRemotePrState(pr.state);
+      const nextReviewState = normalizeRemoteReviewDecision(pr.reviewDecision);
+      this.db.upsertIssue({
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        ...(nextPrState ? { prState: nextPrState } : {}),
+        ...(pr.headRefOid ? { prHeadSha: pr.headRefOid } : {}),
+        ...(nextReviewState ? { prReviewState: nextReviewState } : {}),
+      });
+
+      if (nextPrState !== "open") return undefined;
+      if (nextReviewState && nextReviewState !== "changes_requested") return undefined;
+      if (!isDirtyMergeStateStatus(pr.mergeStateStatus)) return undefined;
+
+      const baseBranch = project?.github?.baseBranch ?? "main";
+      const promptContext = [
+        `The requested review change is already addressed, but GitHub still reports PR #${issue.prNumber} as ${String(pr.mergeStateStatus)} against latest ${baseBranch}.`,
+        `Before stopping, update the existing PR branch onto latest ${baseBranch}, resolve any conflicts, rerun the narrowest relevant verification, and push again.`,
+        "Do not stop just because the requested code change is already present.",
+      ].join(" ");
+
+      return {
+        pendingRunType: "review_fix",
+        factoryState: "changes_requested",
+        context: {
+          branchUpkeepRequired: true,
+          promptContext,
+          ...(pr.mergeStateStatus ? { mergeStateStatus: pr.mergeStateStatus } : {}),
+          ...(pr.headRefOid ? { failingHeadSha: pr.headRefOid } : {}),
+          baseBranch,
+        },
+        summary: `PR #${issue.prNumber} is still dirty after review fix; queued branch upkeep`,
+      };
+    } catch (error) {
+      this.logger.debug({
+        issueKey: issue.issueKey,
+        prNumber: issue.prNumber,
+        error: error instanceof Error ? error.message : String(error),
+      }, "Failed to resolve post-run PR upkeep");
+      return undefined;
+    }
   }
 
   private async verifyPublishedRunOutcome(
@@ -1700,6 +1821,10 @@ function normalizeRemoteReviewDecision(value: string | undefined): "approved" | 
   if (normalized === "CHANGES_REQUESTED") return "changes_requested";
   if (normalized === "REVIEW_REQUIRED") return "commented";
   return undefined;
+}
+
+function isDirtyMergeStateStatus(value: string | undefined): boolean {
+  return value?.trim().toUpperCase() === "DIRTY";
 }
 
 function appendQueueRepairContext(lines: string[], context?: Record<string, unknown>): void {

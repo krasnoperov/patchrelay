@@ -87,3 +87,25 @@ test("planning-only implementation prompts switch to Linear-only delivery requir
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("review_fix prompt includes explicit branch upkeep guidance when the PR is still dirty", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-prompt-"));
+  try {
+    writeFileSync(path.join(baseDir, "REVIEW_WORKFLOW.md"), "# Review Workflow\n");
+
+    const prompt = buildRunPrompt({
+      ...createIssue(),
+      factoryState: "changes_requested",
+      prNumber: 12,
+    }, "review_fix", baseDir, {
+      promptContext: "The requested review change is already addressed, but GitHub still reports PR #12 as DIRTY against latest main. Before stopping, update the existing PR branch onto latest main, resolve any conflicts, rerun the narrowest relevant verification, and push again.",
+      branchUpkeepRequired: true,
+      mergeStateStatus: "DIRTY",
+    });
+
+    assert.match(prompt, /GitHub still reports PR #12 as DIRTY against latest main/);
+    assert.match(prompt, /update the existing PR branch onto latest main/);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});

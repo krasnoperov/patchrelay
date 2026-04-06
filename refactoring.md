@@ -550,6 +550,14 @@ The remaining work is no longer just "finish the refactor." It is to make the re
 - Make install/restart paths use the built CLI entry directly, the same way `merge-steward` already does.
 - Add a doctor or startup check that verifies the installed executable path is real before restart attempts.
 
+7. Close the PR-upkeep gap for PatchRelay-owned review fixes.
+
+- A `review_fix` turn is not truly complete if the requested code change is present but the PR is still `DIRTY` against current `main`.
+- After any PatchRelay-owned PR turn that claims success, refresh GitHub PR truth and decide whether another upkeep step is required before stopping.
+- For the current live gap, implement this first for `review_fix`: if the PR is still `DIRTY`, queue another upkeep turn that rebases or updates the existing PR branch onto latest `main`, verifies, and pushes again.
+- Preserve that upkeep intent across restart and manual retry so `review_fix` does not silently downgrade to plain `implementation`.
+- Keep the status surface honest: when the branch still needs upkeep, do not report the issue as simply “waiting for review feedback.”
+
 ### Merge Steward
 
 1. Keep queue state GitHub-first, but make the operator view repair-aware.
@@ -626,6 +634,7 @@ Acceptance criteria:
 - every side-effecting write checks the stored lease before mutating state
 - stale workers may continue to read but cannot start turns, push commits, or update PRs
 - lease expiry recovery in reconciliation can reclaim a stuck session without duplicating side effects
+- interrupted `review_fix`, `ci_repair`, and `queue_repair` turns resume in the same repair lane after restart or retry
 
 ### 5. Service Packaging Robustness
 
@@ -658,6 +667,8 @@ These are the behaviors we should keep pressure-testing with TST issues until th
 - `TST-7` and `TST-8` showed that Linear/operator status still drifts from the real session state when we keep reporting through old lifecycle language.
 - The interrupted `TST-2` repair turn after service restart showed that lease and interrupted-turn handling is much better now, but packaging and restart ergonomics are still brittle.
 - The queue behavior around PRs `#4`, `#5`, and `#6` showed that speculative merge conflicts are expected, but the system must describe them clearly and keep the repair obligation visible.
+- `TST-15` showed that PatchRelay can correctly detect “review fix already present” but still stop too early: if the PR remains `DIRTY`, PatchRelay must continue into branch upkeep instead of settling idle.
+- `TST-15` also showed that retry and restart recovery must preserve the original repair lane; otherwise a review fix can resume as generic implementation and lose the PR-upkeep intent.
 
 ## Suggested First PR Sequence
 

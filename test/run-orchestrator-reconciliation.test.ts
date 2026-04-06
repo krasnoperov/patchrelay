@@ -758,6 +758,84 @@ test("reconcileRun leaves interrupted queue_repair eligible for retry on idle re
   }
 });
 
+test("completed review_fix queues follow-up upkeep when the PR is still dirty", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-review-fix-dirty-"));
+  const oldPath = process.env.PATH;
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const enqueueCalls: Array<{ projectId: string; issueId: string }> = [];
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-review-dirty",
+      issueKey: "USE-REVIEW-DIRTY",
+      branchName: "feat-review-dirty",
+      prNumber: 21,
+      prState: "open",
+      prReviewState: "changes_requested",
+      factoryState: "changes_requested",
+      reviewFixAttempts: 1,
+    });
+    const run = db.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "review_fix",
+      promptText: "review fix",
+    });
+    db.updateRunThread(run.id, { threadId: "thread-review-dirty", turnId: "turn-review-dirty" });
+    db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      activeRunId: run.id,
+    });
+
+    const fakeBin = path.join(baseDir, "fake-bin");
+    mkdirSync(fakeBin, { recursive: true });
+    const ghPath = path.join(fakeBin, "gh");
+    writeFileSync(ghPath, `#!/usr/bin/env bash
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  printf '{"headRefOid":"sha-review-dirty","state":"OPEN","reviewDecision":"CHANGES_REQUESTED","mergeStateStatus":"DIRTY"}'
+  exit 0
+fi
+echo "unexpected gh args: $*" >&2
+exit 1
+`);
+    chmodSync(ghPath, 0o755);
+    process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
+
+    const orchestrator = new RunOrchestrator(
+      config,
+      db,
+      {
+        startThread: async () => ({ threadId: "thread-review-dirty" }),
+        steerTurn: async () => undefined,
+        readThread: async () => ({ id: "thread-review-dirty", turns: [{ id: "turn-review-dirty", status: "completed", items: [] }] }),
+      } as never,
+      { forProject: async () => undefined } as never,
+      (projectId, issueId) => {
+        enqueueCalls.push({ projectId, issueId });
+      },
+      pino({ enabled: false }),
+    );
+
+    await (orchestrator as unknown as { reconcileRun: (run: typeof run) => Promise<void> }).reconcileRun(db.getRun(run.id)!);
+
+    const updatedIssue = db.getIssue("usertold", "issue-review-dirty");
+    const updatedRun = db.getRun(run.id);
+    assert.equal(updatedRun?.status, "completed");
+    assert.equal(updatedIssue?.factoryState, "changes_requested");
+    assert.equal(updatedIssue?.pendingRunType, "review_fix");
+    assert.match(updatedIssue?.pendingRunContextJson ?? "", /branchUpkeepRequired/);
+    assert.match(updatedIssue?.pendingRunContextJson ?? "", /GitHub still reports PR #21 as DIRTY/);
+    assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-review-dirty" }]);
+  } finally {
+    process.env.PATH = oldPath;
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("reconcileIdleIssues prioritizes queue eviction recovery over approved waiting state", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-queue-eviction-priority-"));
   try {
