@@ -1049,7 +1049,6 @@ export class PatchRelayDatabase {
       prNumber: issue.prNumber,
       prReviewState: issue.prReviewState,
       prCheckStatus: issue.prCheckStatus,
-      queueLabelApplied: issue.queueLabelApplied,
       latestFailureCheckName: issue.lastGitHubFailureCheckName,
     });
     const latestRun = this.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
@@ -1083,7 +1082,6 @@ export class PatchRelayDatabase {
       ...(failureContext?.stepName ? { latestFailureStepName: failureContext.stepName } : {}),
       ...(failureContext?.summary ? { latestFailureSummary: failureContext.summary } : {}),
       ...(waitingReason ? { waitingReason } : {}),
-      queueLabelApplied: issue.queueLabelApplied,
       ...(issue.activeRunId !== undefined ? { activeRunId: issue.activeRunId } : {}),
       ...(issue.agentSessionId ? { activeAgentSessionId: issue.agentSessionId } : {}),
       updatedAt: issue.updatedAt,

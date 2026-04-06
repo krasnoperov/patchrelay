@@ -637,7 +637,7 @@ exit 1`, "utf8");
   }
 });
 
-test("reconcileIdleIssues reclassifies stale branch_ci provenance to queue repair when GitHub shows an admitted conflict", async () => {
+test("reconcileIdleIssues reclassifies stale branch_ci provenance to queue repair when GitHub shows a downstream conflict", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-stale-branch-ci-"));
   const fakeBin = path.join(baseDir, "bin");
   const ghPath = path.join(fakeBin, "gh");
@@ -649,7 +649,7 @@ if [ "$1" = "api" ] && [[ "$2" == repos/owner/repo/commits/sha-13e/check-runs ]]
   exit 0
 fi
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
-  printf '{"mergeable":"CONFLICTING","mergeStateStatus":"DIRTY","labels":[{"name":"queue"}]}'
+  printf '{"mergeable":"CONFLICTING","mergeStateStatus":"DIRTY"}'
   exit 0
 fi
 exit 1`, "utf8");
@@ -666,9 +666,9 @@ exit 1`, "utf8");
       prState: "open",
       prHeadSha: "sha-13e",
       prCheckStatus: "failure",
-      queueLabelApplied: true,
+      prReviewState: "approved",
       lastGitHubFailureSource: "branch_ci",
-      factoryState: "repairing_ci",
+      factoryState: "awaiting_queue",
     });
 
     await (orchestrator as unknown as { idleReconciler: { reconcile: () => Promise<void> } }).idleReconciler.reconcile();
@@ -1005,6 +1005,20 @@ exit 1
       () => undefined,
       pino({ enabled: false }),
     );
+    const leaseId = "lease-review-wake";
+    assert.equal(
+      db.acquireIssueSessionLease({
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        leaseId,
+        workerId: "worker-review-wake",
+        leasedUntil: "2030-04-06T10:05:00.000Z",
+        now: "2030-04-06T10:00:00.000Z",
+      }),
+      true,
+    );
+    ((orchestrator as unknown as { activeSessionLeases: Map<string, string> }).activeSessionLeases)
+      .set(`${issue.projectId}:${issue.linearIssueId}`, leaseId);
 
     const context = await (orchestrator as unknown as {
       resolveReviewFixWakeContext: (

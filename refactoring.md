@@ -404,6 +404,9 @@ Use this as the execution order for the refactor. The early phases are designed 
 - [ ] Remove automatic review-label clearing from `src/github-webhook-handler.ts` and `src/run-orchestrator.ts`.
 - [x] Remove automatic queue-label admission requests from `src/github-webhook-handler.ts`.
 - [x] Remove queue-label admission requests from reconciliation paths in `src/run-orchestrator.ts` and related helpers.
+- [x] Make pull-request label events inert for PatchRelay queue scheduling.
+- [x] Stop using `queueLabelApplied` as a runtime gate for queue-repair reconciliation.
+- [x] Remove `queueLabelApplied` from operator-facing waiting/status derivation.
 - [x] Update tests so PatchRelay marks PRs ready but does not gate review/merge itself.
 - [x] Verify any remaining queue-repair behavior is triggered only by `merge-steward` incident/failure signals, not by PatchRelay-owned queue state.
 
@@ -437,7 +440,7 @@ Use this as the execution order for the refactor. The early phases are designed 
 - [x] Implement the `v2` premise-changing event rule: requested changes, settled red CI, and merge-steward incidents start a fresh branch-mutating turn.
 - [ ] Implement the `v2` steer rule for direct replies to explicit agent questions.
 - [x] Implement additive clarification batching.
-- [ ] Ensure inert self-generated events are recorded but do not start work.
+- [x] Ensure inert self-generated events are recorded but do not start work.
 - [ ] Keep old `factoryState` writes only as transitional compatibility until read paths move over.
 
 ### Phase 6: Lease And Concurrency Model
@@ -504,7 +507,9 @@ Use this as the execution order for the refactor. The early phases are designed 
 - A live trial on `TST-5` exposed a real publication gap: Codex completed an implementation turn with local worktree changes but without committing or opening a PR. The runtime now verifies publication outcome before treating an implementation turn as successful.
 - A live follow-up prompt on `TST-5` successfully queued a continuation turn from existing session state after a service restart.
 - A second live delegation on `TST-6` successfully created a new active implementation session while `TST-5` was still in flight.
-- `merge-steward` and the PatchRelay GitHub App are now installed on `krasnoperov/ballony-i-nasosy`, branch protection requires one approval plus the `verify` check, and a live trial on `TST-6` successfully progressed through PR creation, approval, queue admission, validation, and merge to `main`.
+- `merge-steward` and the PatchRelay GitHub App are now installed on `krasnoperov/ballony-i-nasosy`, branch protection requires one approval plus the `Verify` check, and live trials through `TST-20` successfully progressed through PR creation, approval, queue admission, validation, queue repair, and merge to `main`.
+- `merge-steward doctor` now discovers required checks from branch rules and classic branch protection, with a local `gh` fallback when the app token cannot read protection directly.
+- Routine Linear status comments are now suppressed when a native agent session exists; visible Linear comments are reserved for attention-needed states and planning-only final delivery.
 
 ## Operational Hardening Plan
 
@@ -538,7 +543,8 @@ Goal:
 Status:
 
 - first pass landed: DB lease guards now fence orchestrator run-claim, run-thread attach, failure cleanup, normal completion, and reconciliation completion/release paths
-- still remaining: webhook-driven writes, pre-run counter increments, and any remaining PR-side-effect checkpoints that still rely on unfenced `upsertIssue(...)`
+- second pass landed: run-start repair counters, zombie-recovery reset, interrupted-run counter rollback, escalation/recovery writes, and PR-truth refresh checkpoints in `src/run-orchestrator.ts` now all drop writes after lease loss instead of mutating compatibility state
+- still remaining: webhook-driven writes, service-layer compatibility writes, and any push/publication side effects that are not yet explicitly guarded by lease-held checkpoints
 
 Why this slice matters:
 
@@ -790,7 +796,7 @@ Goal:
 
 Acceptance criteria:
 
-- no scheduling, reconciliation, or restart path depends on `queueLabelApplied`
+- no scheduling or reconciliation path depends on `queueLabelApplied`
 - queue repair, merge conflicts, and fresh-main delays are represented through GitHub truth plus `waitingReason`
 - PatchRelay can still repair its own PRs, but it no longer needs to model queue admission as a local invariant
 

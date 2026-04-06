@@ -65,13 +65,12 @@ export class QueueHealthMonitor {
       mergeable?: string;
       mergeStateStatus?: string;
       headRefOid?: string;
-      labels?: Array<{ name: string }>;
     };
     try {
       const { stdout } = await execCommand("gh", [
         "pr", "view", String(issue.prNumber),
         "--repo", project.github.repoFullName,
-        "--json", "state,mergeable,mergeStateStatus,headRefOid,labels",
+        "--json", "state,mergeable,mergeStateStatus,headRefOid",
       ], { timeoutMs: 10_000 });
       pr = JSON.parse(stdout) as typeof pr;
     } catch (error) {

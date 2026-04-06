@@ -168,10 +168,6 @@ export class GitHubWebhookHandler {
       return;
     }
 
-    if (params.eventType === "pull_request") {
-      await this.updateQueueAdmissionLabelState(payload as GitHubWebhookPayload);
-    }
-
     const event = normalizeGitHubWebhook({
       eventType: params.eventType,
       payload: payload as GitHubWebhookPayload,
@@ -290,45 +286,6 @@ export class GitHubWebhookHandler {
     if (event.triggerEvent === "pr_merged" || event.triggerEvent === "pr_closed") {
       await this.handleTerminalPrEvent(freshIssue, event);
     }
-  }
-
-  private async updateQueueAdmissionLabelState(payload: GitHubWebhookPayload): Promise<void> {
-    const pr = payload.pull_request;
-    const repoFullName = payload.repository?.full_name;
-    if (!pr || !repoFullName) return;
-
-    const issue = this.db.getIssueByBranch(pr.head.ref);
-    if (!issue) return;
-
-    const project = this.config.projects.find((entry) => entry.id === issue.projectId);
-    if (!project || project.github?.repoFullName !== repoFullName) return;
-
-    const protocol = resolveMergeQueueProtocol(project);
-    const labels = Array.isArray(pr.labels)
-      ? pr.labels.map((label) => label?.name).filter((label): label is string => typeof label === "string" && label.trim().length > 0)
-      : [];
-    const queueLabelApplied = labels.includes(protocol.admissionLabel);
-    if (issue.queueLabelApplied === queueLabelApplied) return;
-
-    this.db.upsertIssue({
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      queueLabelApplied,
-    });
-
-    const refreshed = this.db.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
-    this.feed?.publish({
-      level: "info",
-      kind: "github",
-      issueKey: refreshed.issueKey,
-      projectId: refreshed.projectId,
-      stage: refreshed.factoryState,
-      status: queueLabelApplied ? "queue_label_applied" : "queue_label_removed",
-      summary: queueLabelApplied
-        ? `Merge-steward admission label "${protocol.admissionLabel}" is present`
-        : `Merge-steward admission label "${protocol.admissionLabel}" is absent`,
-    });
-    await this.syncLinearSession(refreshed);
   }
 
   private resolveFactoryStateForEvent(

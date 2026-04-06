@@ -406,7 +406,7 @@ test("green gate-check completion does not queue new PatchRelay work", async () 
   }
 });
 
-test("pull request label events refresh merge-steward admission state without queuing PatchRelay work", async () => {
+test("pull request label events are inert for PatchRelay queue scheduling", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-runtime-queue-label-"));
   try {
     const { db, enqueueCalls, handler } = createHandler(baseDir);
@@ -434,7 +434,7 @@ test("pull request label events refresh merge-steward admission state without qu
     });
 
     const issue = db.getIssue("usertold", "issue-queue-label");
-    assert.equal(issue?.queueLabelApplied, true);
+    assert.equal(issue?.queueLabelApplied, false);
     assert.equal(issue?.pendingRunType, undefined);
     assert.deepEqual(enqueueCalls, []);
   } finally {

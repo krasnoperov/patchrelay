@@ -21,7 +21,6 @@ export function derivePatchRelayWaitingReason(params: {
   prNumber?: number | undefined;
   prReviewState?: string | undefined;
   prCheckStatus?: string | undefined;
-  queueLabelApplied?: boolean | undefined;
   latestFailureCheckName?: string | undefined;
 }): PatchRelayWaitingReason | undefined {
   if (params.activeRunType) {

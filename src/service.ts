@@ -446,7 +446,6 @@ export class PatchRelayService {
     prNumber?: number;
     prReviewState?: string;
     prCheckStatus?: string;
-    queueLabelApplied?: boolean;
     prChecksSummary?: {
       total: number;
       completed: number;
@@ -558,7 +557,6 @@ export class PatchRelayService {
         ...(row.pr_number !== null ? { prNumber: Number(row.pr_number) } : {}),
         ...(row.pr_review_state !== null ? { prReviewState: String(row.pr_review_state) } : {}),
         ...(row.pr_check_status !== null ? { prCheckStatus: String(row.pr_check_status) } : {}),
-        queueLabelApplied: Boolean(row.queue_label_applied),
         ...(row.last_github_failure_check_name !== null ? { latestFailureCheckName: String(row.last_github_failure_check_name) } : {}),
       });
       const latestRun = row.latest_run_type !== null && row.latest_run_status !== null
@@ -610,7 +608,6 @@ export class PatchRelayService {
         ...(row.pr_number !== null ? { prNumber: Number(row.pr_number) } : {}),
         ...(row.pr_review_state !== null ? { prReviewState: String(row.pr_review_state) } : {}),
         ...(row.pr_check_status !== null ? { prCheckStatus: String(row.pr_check_status) } : {}),
-        queueLabelApplied: Boolean(row.queue_label_applied),
         ...(prChecksSummary ? { prChecksSummary } : {}),
         ...(row.last_github_failure_source !== null ? { latestFailureSource: String(row.last_github_failure_source) } : {}),
         ...(row.last_github_failure_head_sha !== null ? { latestFailureHeadSha: String(row.last_github_failure_head_sha) } : {}),

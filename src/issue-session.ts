@@ -16,7 +16,6 @@ export interface IssueSessionWaitingReasonInput {
   prNumber?: number | undefined;
   prReviewState?: string | undefined;
   prCheckStatus?: string | undefined;
-  queueLabelApplied?: boolean | undefined;
   latestFailureCheckName?: string | undefined;
 }
 

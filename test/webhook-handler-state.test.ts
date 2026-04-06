@@ -891,6 +891,87 @@ test("idle delegated comments queue a follow-up session event instead of rewriti
   }
 });
 
+test("PatchRelay-authored comments are recorded as inert session events without enqueueing work", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-self-comment-"));
+  try {
+    const config = createConfig(baseDir);
+    config.projects[0] = {
+      ...config.projects[0]!,
+      triggerEvents: [...config.projects[0]!.triggerEvents, "commentCreated", "commentUpdated"],
+    };
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+    db.upsertIssue({
+      projectId: "krasnoperov/mafia",
+      linearIssueId: "issue-maf-self-comment",
+      issueKey: "MAF-91B",
+      title: "Self comment issue",
+      currentLinearState: "Review",
+      currentLinearStateType: "started",
+      factoryState: "pr_open",
+      prNumber: 911,
+    });
+
+    const enqueued: Array<{ projectId: string; issueId: string }> = [];
+    const handler = new WebhookHandler(
+      config,
+      db,
+      { forProject: async () => undefined } as never,
+      { steerTurn: async () => undefined } as never,
+      (projectId, issueId) => { enqueued.push({ projectId, issueId }); },
+      pino({ enabled: false }),
+    );
+
+    const payload: LinearWebhookPayload = {
+      action: "create",
+      type: "Comment",
+      createdAt: "2026-04-01T02:05:00.000Z",
+      webhookTimestamp: Date.now(),
+      actor: {
+        id: "patchrelay-actor",
+        name: "PatchRelay",
+        email: "patchrelay@example.com",
+        type: "Application",
+      } as unknown as Record<string, unknown>,
+      data: {
+        id: "comment-self-1",
+        body: "PatchRelay status update",
+        user: { name: "PatchRelay" },
+        issue: {
+          id: "issue-maf-self-comment",
+          identifier: "MAF-91B",
+          title: "Self comment issue",
+          team: { id: "team-maf", key: "MAF" },
+          state: { id: "state-review", name: "Review", type: "started" },
+          delegate: { id: "patchrelay-actor", name: "PatchRelay" },
+        },
+      },
+    };
+
+    const stored = db.insertFullWebhookEvent({
+      webhookId: "delivery-self-comment",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(payload),
+    });
+    await handler.processWebhookEvent(stored.id);
+
+    const events = db.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-self-comment");
+    assert.equal(events.length, 1);
+    assert.equal(events[0]?.eventType, "self_comment");
+    assert.equal(db.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-self-comment"), undefined);
+    assert.deepEqual(enqueued, []);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("agent session id survives follow-up webhooks that do not carry a session id", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-agent-session-id-"));
   try {

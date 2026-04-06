@@ -18,7 +18,7 @@ GitHub is the shared bus.
 Operator surfaces must therefore separate:
 
 - native state: what the current service owns directly
-- external observation: what the current service has inferred from GitHub events, checks, labels, or branch changes
+- external observation: what the current service has inferred from GitHub events, checks, or branch changes
 
 Do not invent cross-service states such as `queued_in_steward`.
 
@@ -86,7 +86,6 @@ It should answer:
 
 Example observations:
 
-- `queue hand-off requested via label "queue"`
 - `waiting for external queue progress`
 - `external queue reported failure via merge-steward/queue`
 - `queue repair run active`

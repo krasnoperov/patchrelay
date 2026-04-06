@@ -650,6 +650,15 @@ export class WebhookHandler {
     // commentCreated webhook back — without this guard that re-enqueues a new run.
     const installation = this.db.linearInstallations.getLinearInstallationForProject(project.id);
     if (installation?.actorId && normalized.actor?.id === installation.actorId) {
+      this.db.appendIssueSessionEvent({
+        projectId: project.id,
+        linearIssueId: normalized.issue.id,
+        eventType: "self_comment",
+        eventJson: JSON.stringify({
+          body: normalized.comment.body.trim(),
+          author: normalized.comment.userName,
+        }),
+      });
       return;
     }
 

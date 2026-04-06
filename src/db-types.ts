@@ -167,7 +167,6 @@ export interface TrackedIssueRecord {
   latestFailureStepName?: string | undefined;
   latestFailureSummary?: string | undefined;
   waitingReason?: string | undefined;
-  queueLabelApplied?: boolean | undefined;
   activeRunId?: number | undefined;
   activeAgentSessionId?: string | undefined;
   updatedAt: string;

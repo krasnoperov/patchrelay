@@ -5,7 +5,7 @@ PatchRelay and Merge Steward are two independent services with distinct responsi
 - **PatchRelay** develops code and delivers pull requests — it owns issue worktrees, agent runs (implementation, review fix, CI repair), and Linear session UX
 - **Merge Steward** delivers pull requests into production — it owns queue ordering, branch freshness, CI validation, merge decisions, and retry/eviction policy
 
-Neither service calls the other's API. GitHub is the shared bus — labels, check runs, and PR state changes are the protocol.
+Neither service calls the other's API. GitHub is the shared bus — PR state, reviews, checks, and branch changes are the protocol. Labels may still exist as compatibility metadata, but they are not the admission gate.
 
 See [GitHub queue contract](./github-queue-contract.md) for the concrete shared artifacts and ownership boundaries.
 
@@ -23,9 +23,9 @@ See [design rationale](./design-docs/merge-steward.md) for the full analysis.
 
 ## Queue Lifecycle
 
-1. A PR gets the `queue` label (added by PatchRelay when an issue reaches `awaiting_queue`, or manually by any automation)
-2. The steward sees the label via GitHub webhook
-3. If the PR is approved and CI is green, it enters the queue
+1. A PR reaches a downstream-ready state in GitHub
+2. The steward sees that the PR is approved and green
+3. The steward admits it to the queue
 4. The steward processes the queue head: fetch → rebase onto main → push → wait for CI → merge
 5. Non-head entries remain frozen until the queue advances — no wasted CI runs
 6. After the head merges, the steward advances to the next entry
@@ -43,13 +43,13 @@ When the queue head fails, the steward classifies the failure before acting:
 - **Branch-local** — evict and report via `merge-steward/queue` check run
 - **Integration conflict** — evict and report via check run
 
-On eviction, the steward creates a durable incident record and a GitHub check run with failure details. PatchRelay (or any agent) sees the check run failure, triggers a `queue_repair` run, fixes the branch, and re-adds the `queue` label. The steward re-admits the PR.
+On eviction, the steward creates a durable incident record and a GitHub check run with failure details. PatchRelay (or any agent) sees the check run failure, triggers a `queue_repair` run, fixes the branch, and pushes a new head SHA. The steward re-admits the PR from fresh GitHub truth.
 
 ```text
 Steward evicts PR → creates check run with failure context
 PatchRelay sees check run failure → triggers queue_repair run
-Agent fixes the branch → PatchRelay re-adds queue label
-Steward re-admits the PR
+Agent fixes the branch → pushes a fresh PR head
+Steward re-admits the PR from fresh GitHub truth
 ```
 
 ## Repository Settings

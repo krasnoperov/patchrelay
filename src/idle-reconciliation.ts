@@ -319,7 +319,7 @@ export class IdleIssueReconciler {
 
   private async reclassifyStaleBranchFailure(issue: IssueRecord): Promise<IssueRecord> {
     const downstreamOwned = issue.factoryState === "awaiting_queue" || issue.prReviewState === "approved";
-    if (issue.lastGitHubFailureSource !== "branch_ci" || (!issue.queueLabelApplied && !downstreamOwned)) {
+    if (issue.lastGitHubFailureSource !== "branch_ci" || !downstreamOwned) {
       return issue;
     }
     const inferred = await this.inferFailureSourceFromGitHub(issue);
@@ -374,21 +374,17 @@ export class IdleIssueReconciler {
       const pr = JSON.parse(stdout) as {
         mergeable?: string;
         mergeStateStatus?: string;
-        labels?: Array<{ name?: string }>;
       };
       const downstreamOwned = issue.factoryState === "awaiting_queue" || issue.prReviewState === "approved";
-      const queueLabelApplied = Array.isArray(pr.labels)
-        ? pr.labels.some((label) => label?.name === protocol.admissionLabel)
-        : Boolean(issue.queueLabelApplied);
       if ((pr.mergeable === "CONFLICTING" || pr.mergeStateStatus === "DIRTY")
-        && (queueLabelApplied || downstreamOwned)) {
+        && downstreamOwned) {
         return "queue_eviction";
       }
       if (pr.mergeable === "CONFLICTING" || pr.mergeStateStatus === "DIRTY") {
         return undefined;
       }
     } catch {
-      return issue.queueLabelApplied || issue.factoryState === "awaiting_queue" ? "branch_ci" : undefined;
+      return issue.factoryState === "awaiting_queue" || issue.prReviewState === "approved" ? "branch_ci" : undefined;
     }
     return "branch_ci";
   }
@@ -405,7 +401,7 @@ export class IdleIssueReconciler {
       const { stdout } = await execCommand("gh", [
         "pr", "view", String(issue.prNumber),
         "--repo", project.github.repoFullName,
-        "--json", "headRefOid,state,reviewDecision,mergeable,mergeStateStatus,labels,statusCheckRollup",
+        "--json", "headRefOid,state,reviewDecision,mergeable,mergeStateStatus,statusCheckRollup",
       ], { timeoutMs: 10_000 });
       const pr = JSON.parse(stdout) as {
         headRefOid?: string;
@@ -413,15 +409,10 @@ export class IdleIssueReconciler {
         reviewDecision?: string;
         mergeable?: string;
         mergeStateStatus?: string;
-        labels?: Array<{ name?: string }>;
         statusCheckRollup?: GitHubStatusRollupEntry[];
       };
-      const protocol = resolveMergeQueueProtocol(project);
       const gateCheckNames = getGateCheckNames(project);
       const gateCheckStatus = deriveGateCheckStatusFromRollup(pr.statusCheckRollup, gateCheckNames);
-      const queueLabelApplied = Array.isArray(pr.labels)
-        ? pr.labels.some((label) => label?.name === protocol.admissionLabel)
-        : Boolean(issue.queueLabelApplied);
       this.db.upsertIssue({
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
@@ -441,7 +432,6 @@ export class IdleIssueReconciler {
               lastGitHubCiSnapshotSettledAt: gateCheckStatus === "pending" ? null : new Date().toISOString(),
             }
           : {}),
-        queueLabelApplied,
       });
       if (pr.state === "MERGED") {
         this.db.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, prState: "merged" });
@@ -465,7 +455,6 @@ export class IdleIssueReconciler {
           projectId: issue.projectId,
           linearIssueId: issue.linearIssueId,
           prReviewState: "approved",
-          queueLabelApplied,
         });
         if (pr.mergeable === "CONFLICTING" || pr.mergeStateStatus === "DIRTY") {
           this.logger.info(
@@ -498,7 +487,7 @@ export class IdleIssueReconciler {
         }
         return;
       }
-      if ((pr.mergeable === "CONFLICTING" || pr.mergeStateStatus === "DIRTY") && queueLabelApplied) {
+      if ((pr.mergeable === "CONFLICTING" || pr.mergeStateStatus === "DIRTY") && issue.factoryState === "awaiting_queue") {
         this.logger.info(
           { issueKey: issue.issueKey, prNumber: issue.prNumber, mergeable: pr.mergeable },
           "Reconciliation: queue-admitted PR has merge conflicts, dispatching rebase",

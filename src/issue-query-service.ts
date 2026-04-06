@@ -204,7 +204,6 @@ export class IssueQueryService {
       prNumber: session.prNumber,
       prReviewState: issueRecord?.prReviewState,
       prCheckStatus: issueRecord?.prCheckStatus,
-      queueLabelApplied: issueRecord?.queueLabelApplied,
       latestFailureCheckName: issueRecord?.lastGitHubFailureCheckName,
     });
     const issue: TrackedIssueRecord = {
@@ -242,7 +241,6 @@ export class IssueQueryService {
         return statusNote ? { statusNote } : {};
       })(),
       ...(waitingReason ? { waitingReason } : {}),
-      queueLabelApplied: issueRecord?.queueLabelApplied,
       ...(activeRun ? { activeRunId: activeRun.id } : {}),
       ...(issueRecord?.agentSessionId ? { activeAgentSessionId: issueRecord.agentSessionId } : {}),
       updatedAt: session.updatedAt,
@@ -310,7 +308,6 @@ export class IssueQueryService {
         ...(issueRecord?.prState ? { prState: issueRecord.prState } : {}),
         ...(issueRecord?.prReviewState ? { prReviewState: issueRecord.prReviewState } : {}),
         ...(issueRecord?.prCheckStatus ? { prCheckStatus: issueRecord.prCheckStatus } : {}),
-        ...(issueRecord ? { queueLabelApplied: issueRecord.queueLabelApplied } : {}),
         ...(issueRecord ? { ciRepairAttempts: issueRecord.ciRepairAttempts, queueRepairAttempts: issueRecord.queueRepairAttempts } : {}),
         ...(overview.issue.waitingReason ? { waitingReason: overview.issue.waitingReason } : {}),
         ...(overview.issue.statusNote ? { statusNote: overview.issue.statusNote } : {}),

@@ -5,6 +5,7 @@ export type IssueSessionEventType =
   | "delegated"
   | "followup_prompt"
   | "followup_comment"
+  | "self_comment"
   | "operator_prompt"
   | "review_changes_requested"
   | "settled_red_ci"

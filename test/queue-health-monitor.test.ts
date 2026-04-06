@@ -216,15 +216,15 @@ exit 1`;
   }
 });
 
-// ─── DIRTY + label → queue_repair ─────────────────────────────────
+// ─── DIRTY downstream-waiting PR → queue_repair ───────────────────
 
-test("reconcileQueueHealth dispatches queue_repair for DIRTY PR with queue label", { concurrency: false }, async () => {
+test("reconcileQueueHealth dispatches queue_repair for DIRTY downstream-waiting PR", { concurrency: false }, async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "qhm-dirty-"));
   let oldPath: string | undefined;
   try {
     const ghScript = `
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
-  printf '{"state":"OPEN","mergeable":"CONFLICTING","mergeStateStatus":"DIRTY","headRefOid":"deadbeef","labels":[{"name":"queue"}]}'
+  printf '{"state":"OPEN","mergeable":"CONFLICTING","mergeStateStatus":"DIRTY","headRefOid":"deadbeef"}'
   exit 0
 fi
 exit 1`;
@@ -249,15 +249,15 @@ exit 1`;
   }
 });
 
-// ─── DIRTY without label → queue_repair for approved PR upkeep ───
+// ─── DIRTY without label → queue_repair for downstream upkeep ─────
 
-test("reconcileQueueHealth dispatches queue_repair for DIRTY PR without queue label", { concurrency: false }, async () => {
+test("reconcileQueueHealth dispatches queue_repair for DIRTY PR without label metadata", { concurrency: false }, async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "qhm-dirty-no-label-"));
   let oldPath: string | undefined;
   try {
     const ghScript = `
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
-  printf '{"state":"OPEN","mergeable":"CONFLICTING","mergeStateStatus":"DIRTY","headRefOid":"deadbeef","labels":[]}'
+  printf '{"state":"OPEN","mergeable":"CONFLICTING","mergeStateStatus":"DIRTY","headRefOid":"deadbeef"}'
   exit 0
 fi
 exit 1`;

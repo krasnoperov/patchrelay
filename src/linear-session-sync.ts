@@ -219,7 +219,6 @@ function renderStatusComment(
     ...(issue.prNumber !== undefined ? { prNumber: issue.prNumber } : {}),
     prReviewState: issue.prReviewState,
     prCheckStatus: issue.prCheckStatus,
-    queueLabelApplied: issue.queueLabelApplied,
     latestFailureCheckName: issue.lastGitHubFailureCheckName,
   });
 

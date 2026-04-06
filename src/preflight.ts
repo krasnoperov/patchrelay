@@ -350,7 +350,7 @@ function checkGitHubProtocol(project: AppConfig["projects"][number], publicBaseU
   const checks: PreflightCheck[] = [
     pass(
       scope,
-      `GitHub protocol configured for ${protocol.repoFullName} (label "${protocol.admissionLabel}", eviction check "${protocol.evictionCheckName}")`,
+      `GitHub protocol configured for ${protocol.repoFullName} (base "${protocol.baseBranch ?? "main"}", queue incident check "${protocol.evictionCheckName}")`,
     ),
   ];
 
@@ -359,9 +359,6 @@ function checkGitHubProtocol(project: AppConfig["projects"][number], publicBaseU
   }
   if (!protocol.baseBranch) {
     checks.push(warn(scope, "GitHub base branch is not configured; defaults may diverge from the target repository"));
-  }
-  if (!protocol.admissionLabel.trim()) {
-    checks.push(fail(scope, "Merge queue admission label must not be empty"));
   }
   if (!protocol.evictionCheckName.trim()) {
     checks.push(fail(scope, "Merge queue eviction check name must not be empty"));

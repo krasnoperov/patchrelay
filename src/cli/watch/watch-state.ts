@@ -36,7 +36,6 @@ export interface WatchIssue {
   prNumber?: number | undefined;
   prReviewState?: string | undefined;
   prCheckStatus?: string | undefined;
-  queueLabelApplied?: boolean | undefined;
   prChecksSummary?: {
     total: number;
     completed: number;
