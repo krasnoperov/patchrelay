@@ -253,13 +253,19 @@ export class CliDataAccess extends CliOperatorApiClient {
     const runType = (options?.runType
       ?? (issue.latestFailureSource === "queue_eviction" || issue.factoryState === "repairing_queue"
         ? "queue_repair"
-        : "implementation")) as RunType;
+        : dbIssue.prCheckStatus === "failed" || dbIssue.prCheckStatus === "failure" || issue.latestFailureSource === "branch_ci" || issue.factoryState === "repairing_ci"
+          ? "ci_repair"
+          : dbIssue.prReviewState === "changes_requested" || issue.factoryState === "changes_requested"
+            ? "review_fix"
+            : "implementation")) as RunType;
 
     const factoryState = runType === "queue_repair"
       ? "repairing_queue"
       : runType === "ci_repair"
         ? "repairing_ci"
-        : "delegated";
+        : runType === "review_fix"
+          ? "changes_requested"
+          : "delegated";
 
     this.db.upsertIssue({
       projectId: issue.projectId,

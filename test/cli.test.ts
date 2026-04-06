@@ -778,6 +778,35 @@ test("cli list and retry cover operator control flows", async () => {
     assert.equal(queueRepairIssue?.factoryState, "repairing_queue");
     assert.equal(queueRepairIssue?.pendingRunType, "queue_repair");
 
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-review-fix",
+      issueKey: "USE-59",
+      title: "Review changes requested",
+      currentLinearState: "In Review",
+      factoryState: "changes_requested",
+      prNumber: 59,
+      prState: "open",
+      prReviewState: "changes_requested",
+      queueLabelApplied: false,
+    });
+
+    const reviewRetryOut = createBufferStream();
+    assert.equal(
+      await runCli(["issue", "retry", "USE-59"], {
+        config,
+        data,
+        stdout: reviewRetryOut.stream,
+        stderr: createBufferStream().stream,
+      }),
+      0,
+    );
+    assert.match(reviewRetryOut.read(), /Queued stage: review_fix/);
+
+    const reviewFixIssue = db.getIssue("usertold", "issue-review-fix");
+    assert.equal(reviewFixIssue?.factoryState, "changes_requested");
+    assert.equal(reviewFixIssue?.pendingRunType, "review_fix");
+
     const inspectJson = createBufferStream();
     assert.equal(await runCli(["issue", "show", "USE-54", "--json"], { config, data, stdout: inspectJson.stream, stderr: createBufferStream().stream }), 0);
     assert.match(inspectJson.read(), /"issueKey": "USE-54"/);
