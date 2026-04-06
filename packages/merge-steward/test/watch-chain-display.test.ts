@@ -56,7 +56,7 @@ test("active filter excludes terminal entries older than 60 seconds", () => {
   assert.strictEqual(result[0]!.prNumber, 2);
 });
 
-test("active filter keeps old evicted entries visible because they still need repair", () => {
+test("active filter hides old evicted entries so active mode stays focused on live queue work", () => {
   const oldEvicted = makeEntry({
     prNumber: 1, position: 1, status: "evicted",
     updatedAt: new Date(Date.now() - 90_000).toISOString(),
@@ -64,6 +64,19 @@ test("active filter keeps old evicted entries visible because they still need re
   const active = makeEntry({ prNumber: 2, position: 2, status: "validating", ciRunId: "ci-2" });
 
   const result = buildDisplayEntries([oldEvicted, active], "active");
+
+  assert.strictEqual(result.length, 1);
+  assert.strictEqual(result[0]!.prNumber, 2);
+});
+
+test("active filter still shows recent evicted entries long enough to explain the latest queue outcome", () => {
+  const recentEvicted = makeEntry({
+    prNumber: 1, position: 1, status: "evicted",
+    updatedAt: new Date(Date.now() - 15_000).toISOString(),
+  });
+  const active = makeEntry({ prNumber: 2, position: 2, status: "validating", ciRunId: "ci-2" });
+
+  const result = buildDisplayEntries([recentEvicted, active], "active");
 
   assert.strictEqual(result.length, 2);
   assert.strictEqual(result[0]!.prNumber, 1);

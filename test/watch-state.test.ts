@@ -204,6 +204,26 @@ test("computeAggregates counts blocked and ready issues separately", () => {
   assert.equal(aggregates.active, 1);
 });
 
+test("computeAggregates does not count terminal issues as ready even if stale ready flags linger", () => {
+  const issues = [
+    makeIssue("USE-1", {
+      sessionState: "done",
+      factoryState: "done",
+      readyForExecution: true,
+    }),
+    makeIssue("USE-2", {
+      sessionState: "failed",
+      factoryState: "failed",
+      readyForExecution: true,
+    }),
+  ];
+
+  const aggregates = computeAggregates(issues);
+  assert.equal(aggregates.ready, 0);
+  assert.equal(aggregates.done, 1);
+  assert.equal(aggregates.failed, 1);
+});
+
 test("feed-event aggregates CI checks in timeline", () => {
   const initial = stateWith({
     issues: [makeIssue("USE-74")],

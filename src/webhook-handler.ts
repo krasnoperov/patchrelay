@@ -199,12 +199,16 @@ export class WebhookHandler {
 
       this.db.markWebhookProcessed(webhookEventId, "processed");
 
-      if (result.desiredStage) {
+      const wakeAlreadyQueuedByFollowUpHandler = normalized.triggerEvent === "commentCreated"
+        || normalized.triggerEvent === "commentUpdated"
+        || normalized.triggerEvent === "agentPrompted";
+
+      if (result.desiredStage && !wakeAlreadyQueuedByFollowUpHandler) {
         if (result.desiredStage === "implementation") {
-        this.db.appendIssueSessionEventRespectingActiveLease(project.id, issue.id, {
-          projectId: project.id,
-          linearIssueId: issue.id,
-          eventType: "delegated",
+          this.db.appendIssueSessionEventRespectingActiveLease(project.id, issue.id, {
+            projectId: project.id,
+            linearIssueId: issue.id,
+            eventType: "delegated",
             eventJson: JSON.stringify({
               promptContext: trackedIssue?.issueKey ? `Linear issue ${trackedIssue.issueKey} was delegated to PatchRelay.` : undefined,
               promptBody: normalized.agentSession?.promptBody?.trim(),
@@ -212,31 +216,31 @@ export class WebhookHandler {
             dedupeKey: `delegated:${issue.id}`,
           });
         }
+        const queuedRunType = this.enqueuePendingSessionWake(project.id, issue.id);
         this.feed?.publish({
           level: "info",
           kind: "stage",
           issueKey: issue.identifier,
           projectId: project.id,
-          stage: result.desiredStage,
+          stage: queuedRunType ?? result.desiredStage,
           status: "queued",
-          summary: `Queued ${result.desiredStage} workflow`,
+          summary: `Queued ${(queuedRunType ?? result.desiredStage)} workflow`,
           detail: `Triggered by ${hydrated.triggerEvent}.`,
         });
-        this.enqueueIssue(project.id, issue.id);
       }
       for (const dependentIssueId of newlyReadyDependents) {
         const dependent = this.db.getTrackedIssue(project.id, dependentIssueId);
+        const queuedRunType = this.enqueuePendingSessionWake(project.id, dependentIssueId);
         this.feed?.publish({
           level: "info",
           kind: "stage",
           issueKey: dependent?.issueKey,
           projectId: project.id,
-          stage: "implementation",
+          stage: queuedRunType ?? "implementation",
           status: "queued",
-          summary: "Queued implementation after blockers resolved",
+          summary: `Queued ${(queuedRunType ?? "implementation")} after blockers resolved`,
           detail: `All blockers are now done for ${dependent?.issueKey ?? dependentIssueId}.`,
         });
-        this.enqueueIssue(project.id, dependentIssueId);
       }
     } catch (error) {
       this.db.markWebhookProcessed(webhookEventId, "failed");
@@ -559,6 +563,7 @@ export class WebhookHandler {
     }
 
     if (promptBody && existingIssue && (delegated || existingIssue.factoryState === "awaiting_input")) {
+      const hadPendingWake = this.db.hasPendingIssueSessionEvents(project.id, normalized.issue.id);
       const directReply = this.isDirectReplyToOutstandingQuestion(existingIssue);
       this.db.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
         projectId: project.id,
@@ -569,12 +574,14 @@ export class WebhookHandler {
           source: "linear_agent_prompt",
         }),
       });
-      this.enqueueIssue(project.id, normalized.issue.id);
+      const queuedRunType = hadPendingWake
+        ? this.peekPendingSessionWakeRunType(project.id, normalized.issue.id)
+        : this.enqueuePendingSessionWake(project.id, normalized.issue.id);
       const latestIssue = this.db.getIssue(project.id, normalized.issue.id);
       await this.syncAgentSession(linear, normalized.agentSession.id, latestIssue ?? trackedIssue, {
-        pendingRunType: desiredStage ?? (existingIssue.prReviewState === "changes_requested" ? "review_fix" : "implementation"),
+        pendingRunType: queuedRunType ?? desiredStage ?? (existingIssue.prReviewState === "changes_requested" ? "review_fix" : "implementation"),
       });
-      await this.publishAgentActivity(linear, normalized.agentSession.id, buildPromptDeliveredThought(desiredStage ?? "implementation"), { ephemeral: true });
+      await this.publishAgentActivity(linear, normalized.agentSession.id, buildPromptDeliveredThought(queuedRunType ?? desiredStage ?? "implementation"), { ephemeral: true });
       return;
     }
 
@@ -696,6 +703,7 @@ export class WebhookHandler {
       const ENQUEUEABLE_STATES = new Set(["pr_open", "changes_requested", "implementing", "delegated", "awaiting_input"]);
       if (ENQUEUEABLE_STATES.has(issue.factoryState)) {
         const runType = issue.prReviewState === "changes_requested" ? "review_fix" : "implementation";
+        const hadPendingWake = this.db.hasPendingIssueSessionEvents(project.id, normalized.issue.id);
         const directReply = this.isDirectReplyToOutstandingQuestion(issue);
         this.db.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
           projectId: project.id,
@@ -706,16 +714,16 @@ export class WebhookHandler {
             author: normalized.comment.userName,
           }),
         });
-        if (!issue.pendingRunType) {
-          this.enqueueIssue(project.id, normalized.issue.id);
-        }
+        const queuedRunType = hadPendingWake
+          ? this.peekPendingSessionWakeRunType(project.id, normalized.issue.id)
+          : this.enqueuePendingSessionWake(project.id, normalized.issue.id);
         this.feed?.publish({
           level: "info",
           kind: "comment",
           projectId: project.id,
           issueKey: trackedIssue?.issueKey,
           status: "enqueued",
-          summary: `Comment enqueued ${runType} run`,
+          summary: `Comment enqueued ${(queuedRunType ?? runType)} run`,
           detail: normalized.comment.body.slice(0, 200),
         });
       }
@@ -745,6 +753,7 @@ export class WebhookHandler {
       });
     } catch (error) {
       this.logger.warn({ issueKey: trackedIssue?.issueKey, error: error instanceof Error ? error.message : String(error) }, "Failed to deliver follow-up comment");
+      const hadPendingWake = this.db.hasPendingIssueSessionEvents(project.id, normalized.issue.id);
       const directReply = this.isDirectReplyToOutstandingQuestion(issue);
       this.db.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
         projectId: project.id,
@@ -755,7 +764,9 @@ export class WebhookHandler {
           author: normalized.comment.userName,
         }),
       });
-      this.enqueueIssue(project.id, normalized.issue.id);
+      if (!hadPendingWake) {
+        this.enqueuePendingSessionWake(project.id, normalized.issue.id);
+      }
       this.feed?.publish({
         level: "warn",
         kind: "comment",
@@ -766,6 +777,19 @@ export class WebhookHandler {
         summary: `Could not deliver follow-up comment to active ${run.runType} workflow`,
       });
     }
+  }
+
+  private peekPendingSessionWakeRunType(projectId: string, issueId: string): RunType | undefined {
+    return this.db.peekIssueSessionWake(projectId, issueId)?.runType;
+  }
+
+  private enqueuePendingSessionWake(projectId: string, issueId: string): RunType | undefined {
+    const wake = this.db.peekIssueSessionWake(projectId, issueId);
+    if (!wake) {
+      return undefined;
+    }
+    this.enqueueIssue(projectId, issueId);
+    return wake.runType;
   }
 
   // ─── Helpers ──────────────────────────────────────────────────────

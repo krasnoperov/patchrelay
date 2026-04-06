@@ -111,6 +111,8 @@ Work:
 - rewrite post-run completion to use that resolver first
 - rewrite idle reconciliation to append/consume session events and then use that resolver
 - rewrite GitHub follow-up routing to compute next action from session facts instead of directly mapping to `factoryState`
+- continue moving Linear webhook wakeups onto the session inbox first
+  - comments, prompts, and dependency-unblock wakeups should enqueue from `peekIssueSessionWake(...)`, not from raw `pendingRunType`
 
 Definition of done:
 

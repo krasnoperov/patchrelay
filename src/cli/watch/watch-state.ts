@@ -215,12 +215,14 @@ export function computeAggregates(issues: WatchIssue[]): IssueAggregates {
   let done = 0;
   let failed = 0;
   for (const issue of issues) {
+    const sessionState = effectiveSessionState(issue);
+    const isDone = sessionState === "done" || DONE_STATES.has(issue.factoryState);
+    const isFailed = sessionState === "failed" || FAILED_STATES.has(issue.factoryState);
     if (issue.activeRunType) active++;
     if (!issue.activeRunType && issue.blockedByCount > 0) blocked++;
-    if (!issue.activeRunType && issue.readyForExecution) ready++;
-    const sessionState = effectiveSessionState(issue);
-    if (sessionState === "done" || DONE_STATES.has(issue.factoryState)) done++;
-    if (sessionState === "failed" || FAILED_STATES.has(issue.factoryState)) failed++;
+    if (!issue.activeRunType && issue.readyForExecution && !isDone && !isFailed) ready++;
+    if (isDone) done++;
+    if (isFailed) failed++;
   }
   return { active, blocked, ready, done, failed, total: issues.length };
 }

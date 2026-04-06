@@ -7,11 +7,6 @@ function isActiveFilterVisible(entry: QueueEntry, cutoff: number): boolean {
   if (!TERMINAL_STATUSES.includes(entry.status)) {
     return true;
   }
-  if (entry.status === "evicted") {
-    // Evicted entries still represent open repair obligations even after the
-    // queue itself has drained, so keep the latest one visible in active mode.
-    return true;
-  }
   return new Date(entry.updatedAt).getTime() > cutoff;
 }
 

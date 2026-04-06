@@ -19,11 +19,11 @@ interface StateDisplay {
 }
 
 function effectiveState(issue: WatchIssue): string {
+  if (issue.sessionState === "done") return "done";
+  if (issue.sessionState === "failed") return "failed";
   if (issue.blockedByCount > 0 && !issue.activeRunType) return "blocked";
   if (issue.readyForExecution && !issue.activeRunType) return "ready";
   if (issue.sessionState === "waiting_input") return "awaiting_input";
-  if (issue.sessionState === "done") return "done";
-  if (issue.sessionState === "failed") return "failed";
   return issue.factoryState;
 }
 
