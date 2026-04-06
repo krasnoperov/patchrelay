@@ -225,6 +225,7 @@ export class PatchRelayService {
       }
     }
     await this.runtime.start();
+    await this.recoverDelegatedIssueStateFromLinear();
     void this.syncKnownAgentSessions().catch((error) => {
       const msg = error instanceof Error ? error.message : String(error);
       this.logger.warn({ error: msg }, "Background agent session sync failed");
@@ -258,6 +259,76 @@ export class PatchRelayService {
       }
       const activeRun = syncedIssue.activeRunId ? this.db.getRun(syncedIssue.activeRunId) : undefined;
       await this.orchestrator.linearSync.syncSession(syncedIssue, activeRun ? { activeRunType: activeRun.runType } : undefined);
+    }
+  }
+
+  private async recoverDelegatedIssueStateFromLinear(): Promise<void> {
+    for (const issue of this.db.listIssuesWithAgentSessions()) {
+      if (issue.factoryState === "done" || issue.activeRunId !== undefined) {
+        continue;
+      }
+      const linear = await this.linearProvider.forProject(issue.projectId).catch(() => undefined);
+      if (!linear) {
+        continue;
+      }
+      const installation = this.db.linearInstallations.getLinearInstallationForProject(issue.projectId);
+      if (!installation?.actorId) {
+        continue;
+      }
+
+      const liveIssue = await linear.getIssue(issue.linearIssueId).catch(() => undefined);
+      if (!liveIssue) {
+        continue;
+      }
+
+      this.db.replaceIssueDependencies({
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        blockers: liveIssue.blockedBy.map((blocker) => ({
+          blockerLinearIssueId: blocker.id,
+          ...(blocker.identifier ? { blockerIssueKey: blocker.identifier } : {}),
+          ...(blocker.title ? { blockerTitle: blocker.title } : {}),
+          ...(blocker.stateName ? { blockerCurrentLinearState: blocker.stateName } : {}),
+          ...(blocker.stateType ? { blockerCurrentLinearStateType: blocker.stateType } : {}),
+        })),
+      });
+
+      const delegated = liveIssue.delegateId === installation.actorId;
+      const unresolvedBlockers = this.db.countUnresolvedBlockers(issue.projectId, issue.linearIssueId);
+      const shouldRecoverAwaitingInput =
+        delegated
+        && issue.factoryState === "awaiting_input"
+        && issue.pendingRunType === undefined;
+
+      let updated = this.db.upsertIssue({
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        ...(liveIssue.identifier ? { issueKey: liveIssue.identifier } : {}),
+        ...(liveIssue.title ? { title: liveIssue.title } : {}),
+        ...(liveIssue.description ? { description: liveIssue.description } : {}),
+        ...(liveIssue.url ? { url: liveIssue.url } : {}),
+        ...(liveIssue.priority != null ? { priority: liveIssue.priority } : {}),
+        ...(liveIssue.estimate != null ? { estimate: liveIssue.estimate } : {}),
+        ...(liveIssue.stateName ? { currentLinearState: liveIssue.stateName } : {}),
+        ...(liveIssue.stateType ? { currentLinearStateType: liveIssue.stateType } : {}),
+        ...(shouldRecoverAwaitingInput ? { factoryState: "delegated" as never } : {}),
+      });
+
+      if (!shouldRecoverAwaitingInput) {
+        continue;
+      }
+
+      if (unresolvedBlockers === 0) {
+        updated = this.db.upsertIssue({
+          projectId: issue.projectId,
+          linearIssueId: issue.linearIssueId,
+          pendingRunType: "implementation" as never,
+        });
+        this.runtime.enqueueIssue(issue.projectId, issue.linearIssueId);
+        this.logger.info({ issueKey: updated.issueKey }, "Recovered delegated issue from stale awaiting_input state and re-queued implementation");
+      } else {
+        this.logger.info({ issueKey: updated.issueKey, unresolvedBlockers }, "Recovered delegated blocked issue from stale awaiting_input state");
+      }
     }
   }
 

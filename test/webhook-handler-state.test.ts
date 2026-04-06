@@ -1318,3 +1318,126 @@ test("issueCreated recovers delegated startup after an early agent session left 
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("issueCreated recovers delegated blocked startup without queueing implementation", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-agent-session-created-blocked-recovery-"));
+  try {
+    const config = createConfig(baseDir);
+    config.projects[0] = {
+      ...config.projects[0]!,
+      triggerEvents: ["delegateChanged", "statusChanged", "agentSessionCreated", "agentPrompted", "commentCreated", "commentUpdated"],
+    };
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+
+    let hydratedDelegateId: string | undefined;
+    const linearClient: Partial<LinearClient> = {
+      getIssue: async () => ({
+        id: "issue-maf-blocked-startup",
+        identifier: "MAF-96",
+        title: "Delegated blocked startup recovery",
+        teamId: "team-maf",
+        teamKey: "MAF",
+        delegateId: hydratedDelegateId,
+        stateId: "state-backlog",
+        stateName: "Backlog",
+        stateType: "unstarted",
+        workflowStates: [],
+        labelIds: [],
+        labels: [],
+        teamLabels: [],
+        blockedBy: [{
+          id: "issue-blocker-1",
+          identifier: "MAF-10",
+          title: "Blocking task",
+          stateName: "In Progress",
+          stateType: "started",
+        }],
+        blocks: [],
+      }),
+      createAgentActivity: async () => undefined,
+      updateAgentSession: async () => undefined,
+    };
+
+    const enqueued: Array<{ projectId: string; issueId: string }> = [];
+    const handler = new WebhookHandler(
+      config,
+      db,
+      { forProject: async () => linearClient as LinearClient } as never,
+      { steerTurn: async () => undefined } as never,
+      (projectId, issueId) => {
+        enqueued.push({ projectId, issueId });
+      },
+      pino({ enabled: false }),
+    );
+
+    hydratedDelegateId = undefined;
+    const agentSessionPayload: LinearWebhookPayload = {
+      action: "created",
+      type: "AgentSessionEvent",
+      createdAt: "2026-04-01T03:00:00.000Z",
+      webhookTimestamp: Date.now(),
+      agentSession: {
+        id: "session-96",
+        issueId: "issue-maf-blocked-startup",
+        comment: {
+          id: "comment-96",
+          body: "This thread is for an agent session with patchrelay.",
+          issueId: "issue-maf-blocked-startup",
+        },
+        issue: {
+          id: "issue-maf-blocked-startup",
+          identifier: "MAF-96",
+          title: "Delegated blocked startup recovery",
+          team: { id: "team-maf", key: "MAF" },
+          state: { id: "state-backlog", name: "Backlog", type: "unstarted" },
+        },
+      },
+      promptContext: "<issue identifier=\"MAF-96\"><title>Delegated blocked startup recovery</title></issue>",
+    };
+    const sessionEvent = db.insertFullWebhookEvent({
+      webhookId: "delivery-agent-session-blocked-startup-race",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(agentSessionPayload),
+    });
+    await handler.processWebhookEvent(sessionEvent.id);
+
+    hydratedDelegateId = "patchrelay-actor";
+    const issueCreatedPayload: LinearWebhookPayload = {
+      action: "create",
+      type: "Issue",
+      createdAt: "2026-04-01T03:00:10.000Z",
+      webhookTimestamp: Date.now(),
+      data: {
+        id: "issue-maf-blocked-startup",
+        identifier: "MAF-96",
+        title: "Delegated blocked startup recovery",
+        team: { id: "team-maf", key: "MAF" },
+        state: { id: "state-backlog", name: "Backlog", type: "unstarted" },
+        delegateId: "patchrelay-actor",
+        delegate: { id: "patchrelay-actor", name: "PatchRelay" },
+      },
+    };
+    const issueCreatedEvent = db.insertFullWebhookEvent({
+      webhookId: "delivery-issue-created-blocked-startup-race",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(issueCreatedPayload),
+    });
+    await handler.processWebhookEvent(issueCreatedEvent.id);
+
+    const recoveredIssue = db.getIssue("krasnoperov/mafia", "issue-maf-blocked-startup");
+    assert.equal(recoveredIssue?.pendingRunType, undefined);
+    assert.equal(recoveredIssue?.factoryState, "delegated");
+    assert.equal(db.countUnresolvedBlockers("krasnoperov/mafia", "issue-maf-blocked-startup"), 1);
+    assert.deepEqual(enqueued, []);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});

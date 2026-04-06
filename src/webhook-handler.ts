@@ -290,6 +290,11 @@ export class WebhookHandler {
       delegated,
       currentState: existingIssue?.factoryState,
     });
+    const delegatedStateRecovery =
+      delegated
+      && !terminal
+      && existingIssue?.factoryState === "awaiting_input"
+      && !undelegation.factoryState;
 
     const clearPending = (unresolvedBlockers > 0 && existingIssue?.pendingRunType === "implementation" && !activeRun)
       || undelegation.clearPending;
@@ -316,6 +321,7 @@ export class WebhookHandler {
         ...(hydratedIssue.stateName ? { currentLinearState: hydratedIssue.stateName } : {}),
         ...(hydratedIssue.stateType ? { currentLinearStateType: hydratedIssue.stateType } : {}),
         ...(!existingIssue && !delegated && incomingAgentSessionId ? { factoryState: "awaiting_input" as const } : {}),
+        ...(delegatedStateRecovery ? { factoryState: "delegated" as const } : {}),
         ...(pendingRunType ? { pendingRunType, factoryState: "delegated" as const } : {}),
         ...(clearPending ? { pendingRunType: null } : {}),
         ...((pendingRunType || existingIssue?.pendingRunType === "implementation") && pendingRunContextJson

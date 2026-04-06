@@ -179,3 +179,87 @@ test("listTrackedIssues surfaces actionable stop guidance for awaiting_input iss
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("service start recovers delegated blocked issues from stale awaiting_input state", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-service-startup-recover-blocked-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("usertold", installation.id);
+
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-3",
+      issueKey: "USE-3",
+      title: "Blocked delegated issue",
+      currentLinearState: "Backlog",
+      factoryState: "awaiting_input",
+      agentSessionId: "session-3",
+    });
+
+    const service = new PatchRelayService(
+      config,
+      db,
+      {
+        start: async () => undefined,
+        stop: async () => undefined,
+        isStarted: () => true,
+        on: () => undefined,
+        readThread: async () => ({ id: "thread-1", turns: [] }),
+      } as never,
+      {
+        forProject: async () => ({
+          getIssue: async () => ({
+            id: "issue-3",
+            identifier: "USE-3",
+            title: "Blocked delegated issue",
+            description: "",
+            url: "https://linear.app/usertold/issue/USE-3",
+            teamId: "team-use",
+            teamKey: "USE",
+            stateId: "state-backlog",
+            stateName: "Backlog",
+            stateType: "unstarted",
+            delegateId: "patchrelay-actor",
+            delegateName: "PatchRelay",
+            workflowStates: [],
+            labelIds: [],
+            labels: [],
+            teamLabels: [],
+            blockedBy: [{
+              id: "issue-blocker",
+              identifier: "USE-1",
+              title: "Blocking issue",
+              stateName: "In Progress",
+              stateType: "started",
+            }],
+            blocks: [],
+          }),
+          updateAgentSession: async () => ({ id: "session-3" }),
+          upsertIssueComment: async () => ({ id: "comment-3", body: "ok" }),
+          createAgentActivity: async () => ({ id: "activity-3" }),
+        }),
+      } as never,
+      pino({ enabled: false }),
+    );
+
+    await service.start();
+
+    const tracked = service.listTrackedIssues().find((entry) => entry.issueKey === "USE-3");
+    assert.ok(tracked);
+    assert.equal(tracked.factoryState, "delegated");
+    assert.equal(tracked.blockedByCount, 1);
+    assert.deepEqual(tracked.blockedByKeys, ["USE-1"]);
+    assert.equal(tracked.waitingReason, "Blocked by USE-1");
+    await service.stop();
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
