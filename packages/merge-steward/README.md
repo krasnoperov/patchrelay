@@ -263,7 +263,7 @@ Neither service calls the other's API. GitHub is the shared bus.
 ## Current scope
 
 What's implemented:
-- **Speculative execution**: cumulative branches (`main+A`, `main+A+B`, `main+A+B+C`) tested in parallel. Configurable depth (default 3, set `speculativeDepth: 1` for serial mode).
+- **Speculative execution**: cumulative branches (`main+A`, `main+A+B`, `main+A+B+C`) tested in parallel. Configurable depth (default 10, set `speculativeDepth: 1` for serial mode).
 - **Speculative consistency**: when head merges, downstream entries that already passed don't re-test.
 - **Cascade invalidation**: when mid-chain entry fails, downstream speculative branches are rebuilt without it.
 - Non-spinning conflict retry: gated on base SHA change

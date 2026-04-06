@@ -138,7 +138,7 @@ This phase delivers the main operational win:
 
 ## Speculative Validation
 
-**Status: shipped.** Configurable via `speculativeDepth` (default 3, set to 1 for serial mode).
+**Status: shipped.** Configurable via `speculativeDepth` (default 10, set to 1 for serial mode).
 
 The steward builds cumulative speculative branches:
 

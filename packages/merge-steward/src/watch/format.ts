@@ -1,5 +1,9 @@
 import type { CheckResult, QueueBlockState, QueueEntryStatus, QueueEventRecord, QueueEventSummary, QueueRuntimeStatus } from "../types.ts";
 
+export function isPendingMainVerification(block: QueueBlockState | null | undefined): boolean {
+  return Boolean(block && block.failingChecks.length === 0 && block.pendingChecks.length > 0);
+}
+
 export function shortSha(value: string | null | undefined): string {
   if (!value) {
     return "-";

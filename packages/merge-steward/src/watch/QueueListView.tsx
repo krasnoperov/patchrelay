@@ -3,7 +3,7 @@ import { Box, Text, useStdout } from "ink";
 import type { QueueBlockState, QueueEntry, QueueEventSummary } from "../types.ts";
 import { TERMINAL_STATUSES } from "../types.ts";
 import { buildChainEntries } from "./display-filter.ts";
-import { ciStatusIcon, formatEventSummary, humanStatus, nextStepLabel, relativeTime, statusColor, summarizeQueueBlock, truncate } from "./format.ts";
+import { ciStatusIcon, formatEventSummary, humanStatus, isPendingMainVerification, nextStepLabel, relativeTime, statusColor, summarizeQueueBlock, truncate } from "./format.ts";
 
 interface QueueListViewProps {
   entries: QueueEntry[];
@@ -45,8 +45,11 @@ function QueueRow({
   }
 
   const blockedOnMain = isHead && queueBlock?.reason === "main_broken" && queueBlock.headPrNumber === entry.prNumber;
-  const status = blockedOnMain ? "waiting for main" : humanStatus(entry.status, entry);
-  const color = blockedOnMain ? "red"
+  const pendingMainVerification = blockedOnMain && isPendingMainVerification(queueBlock);
+  const status = blockedOnMain
+    ? pendingMainVerification ? "verifying main" : "waiting for main"
+    : humanStatus(entry.status, entry);
+  const color = blockedOnMain ? (pendingMainVerification ? "yellow" : "red")
     : entry.status === "preparing_head" && entry.lastFailedBaseSha ? "yellow"
       : statusColor(entry.status);
   const nextStep = blockedOnMain

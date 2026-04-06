@@ -93,6 +93,32 @@ test("re-admitted PR shows active entry, not terminal", () => {
   assert.strictEqual(pr1!.status, "validating");
 });
 
+test("active filter hides old evicted attempts when a newer merged attempt exists for the same PR", () => {
+  const evicted = makeEntry({
+    prNumber: 1,
+    position: 1,
+    status: "evicted",
+    id: "qe-old-1" as string,
+    updatedAt: new Date(Date.now() - 90_000).toISOString(),
+  });
+  const merged = makeEntry({
+    prNumber: 1,
+    position: 4,
+    status: "merged",
+    id: "qe-new-1" as string,
+    updatedAt: new Date().toISOString(),
+  });
+  const active = makeEntry({ prNumber: 2, position: 5, status: "validating", ciRunId: "ci-2" });
+
+  const result = buildDisplayEntries([evicted, merged, active], "active");
+
+  assert.strictEqual(result.length, 2, "superseded evicted row hidden");
+  const pr1 = result.find((entry) => entry.prNumber === 1);
+  assert.ok(pr1);
+  assert.strictEqual(pr1!.id, "qe-new-1");
+  assert.strictEqual(pr1!.status, "merged");
+});
+
 test("all filter returns everything unfiltered", () => {
   const merged = makeEntry({ prNumber: 1, position: 1, status: "merged" });
   const active = makeEntry({ prNumber: 2, position: 2, status: "validating", ciRunId: "ci-2" });
@@ -147,6 +173,30 @@ test("buildChainEntries includes recently-merged for cascade visibility", () => 
   assert.strictEqual(chain.length, 2, "recent merged + active");
   assert.strictEqual(chain[0]!.prNumber, 1);
   assert.strictEqual(chain[1]!.prNumber, 2);
+});
+
+test("buildChainEntries prefers the newest queue attempt for a PR", () => {
+  const oldEvicted = makeEntry({
+    prNumber: 1,
+    position: 1,
+    status: "evicted",
+    id: "qe-old-1" as string,
+    updatedAt: new Date().toISOString(),
+  });
+  const recentMerged = makeEntry({
+    prNumber: 1,
+    position: 4,
+    status: "merged",
+    id: "qe-new-1" as string,
+    updatedAt: new Date().toISOString(),
+  });
+  const active = makeEntry({ prNumber: 2, position: 5, status: "validating", ciRunId: "ci-2" });
+
+  const chain = buildChainEntries([oldEvicted, recentMerged, active]);
+
+  assert.strictEqual(chain.length, 2);
+  assert.strictEqual(chain[0]!.id, "qe-new-1");
+  assert.strictEqual(chain[0]!.status, "merged");
 });
 
 // ─── Spec chain label ───────────────────────────────────────────

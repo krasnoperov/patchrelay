@@ -15,6 +15,24 @@ function isActiveFilterVisible(entry: QueueEntry, cutoff: number): boolean {
   return new Date(entry.updatedAt).getTime() > cutoff;
 }
 
+function isLaterEntry(left: QueueEntry, right: QueueEntry): boolean {
+  if (left.position !== right.position) {
+    return left.position > right.position;
+  }
+  return new Date(left.updatedAt).getTime() >= new Date(right.updatedAt).getTime();
+}
+
+function pickLatestPerPR(entries: QueueEntry[]): QueueEntry[] {
+  const byPR = new Map<number, QueueEntry>();
+  for (const entry of entries) {
+    const existing = byPR.get(entry.prNumber);
+    if (!existing || isLaterEntry(entry, existing)) {
+      byPR.set(entry.prNumber, entry);
+    }
+  }
+  return [...byPR.values()];
+}
+
 /**
  * Build the display row list for the queue watch. In "active" mode,
  * includes active entries plus recently-terminal entries (within 60s),
@@ -24,16 +42,12 @@ function isActiveFilterVisible(entry: QueueEntry, cutoff: number): boolean {
 export function buildDisplayEntries(entries: QueueEntry[], filter: "active" | "all"): QueueEntry[] {
   if (filter !== "active") return entries;
   const cutoff = Date.now() - RECENTLY_COMPLETED_MS;
-  const byPR = new Map<number, QueueEntry>();
-  for (const e of entries) {
-    const isActive = !TERMINAL_STATUSES.includes(e.status);
-    if (!isActive && !isActiveFilterVisible(e, cutoff)) continue;
-    const existing = byPR.get(e.prNumber);
-    if (!existing || (isActive && TERMINAL_STATUSES.includes(existing.status))) {
-      byPR.set(e.prNumber, e);
-    }
-  }
-  return [...byPR.values()].sort((a, b) => a.position - b.position);
+  return pickLatestPerPR(entries)
+    .filter((entry) => {
+      const isActive = !TERMINAL_STATUSES.includes(entry.status);
+      return isActive || isActiveFilterVisible(entry, cutoff);
+    })
+    .sort((a, b) => a.position - b.position);
 }
 
 /**
@@ -43,15 +57,11 @@ export function buildDisplayEntries(entries: QueueEntry[], filter: "active" | "a
  */
 export function buildChainEntries(entries: QueueEntry[]): QueueEntry[] {
   const cutoff = Date.now() - RECENTLY_COMPLETED_MS;
-  const byPR = new Map<number, QueueEntry>();
-  for (const e of entries) {
-    const isActive = !TERMINAL_STATUSES.includes(e.status);
-    const isRecent = !isActive && new Date(e.updatedAt).getTime() > cutoff;
-    if (!isActive && !isRecent) continue;
-    const existing = byPR.get(e.prNumber);
-    if (!existing || (isActive && TERMINAL_STATUSES.includes(existing.status))) {
-      byPR.set(e.prNumber, e);
-    }
-  }
-  return [...byPR.values()].sort((a, b) => a.position - b.position);
+  return pickLatestPerPR(entries)
+    .filter((entry) => {
+      const isActive = !TERMINAL_STATUSES.includes(entry.status);
+      const isRecent = !isActive && new Date(entry.updatedAt).getTime() > cutoff;
+      return isActive || isRecent;
+    })
+    .sort((a, b) => a.position - b.position);
 }
