@@ -653,6 +653,7 @@ export class RunOrchestrator {
     }, logger, feed);
     this.queueHealthMonitor = new QueueHealthMonitor(db, config, {
       advanceIdleIssue: (issue, newState, options) => this.idleReconciler.advanceIdleIssue(issue, newState, options),
+      enqueueIssue: (projectId, issueId) => this.enqueueIssue(projectId, issueId),
     }, logger, feed);
   }
 
@@ -667,16 +668,7 @@ export class RunOrchestrator {
         eventIds: sessionWake.eventIds,
       };
     }
-    if (!issue.pendingRunType) return undefined;
-    const context = issue.pendingRunContextJson
-      ? JSON.parse(issue.pendingRunContextJson) as Record<string, unknown>
-      : undefined;
-    return {
-      runType: issue.pendingRunType,
-      context,
-      resumeThread: false,
-      eventIds: [],
-    };
+    return undefined;
   }
 
   private appendWakeEventWithLease(
@@ -711,6 +703,25 @@ export class RunOrchestrator {
     }));
   }
 
+  private materializeLegacyPendingWake(
+    issue: IssueRecord,
+    lease: { projectId: string; linearIssueId: string; leaseId: string },
+  ): IssueRecord {
+    if (!issue.pendingRunType) return issue;
+    const context = issue.pendingRunContextJson
+      ? JSON.parse(issue.pendingRunContextJson) as Record<string, unknown>
+      : undefined;
+    this.appendWakeEventWithLease(lease, issue, issue.pendingRunType, context, "legacy_pending");
+    const updated = this.db.upsertIssueWithLease(lease, {
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      pendingRunType: null,
+      pendingRunContextJson: null,
+    });
+    if (!updated) return issue;
+    return this.db.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
+  }
+
   // ─── Run ────────────────────────────────────────────────────────
 
   async run(item: { projectId: string; issueId: string }): Promise<void> {
@@ -740,7 +751,8 @@ export class RunOrchestrator {
       return;
     }
 
-    const wake = this.resolveRunWake(issue);
+    const wakeIssue = this.materializeLegacyPendingWake(issue, { projectId: item.projectId, linearIssueId: item.issueId, leaseId });
+    const wake = this.resolveRunWake(wakeIssue);
     if (!wake) {
       this.releaseIssueSessionLease(item.projectId, item.issueId);
       return;
@@ -811,7 +823,8 @@ export class RunOrchestrator {
     const run = this.db.withIssueSessionLease(item.projectId, item.issueId, leaseId, () => {
       const fresh = this.db.getIssue(item.projectId, item.issueId);
       if (!fresh || fresh.activeRunId !== undefined) return undefined;
-      const freshWake = this.resolveRunWake(fresh);
+      const wakeIssue = this.materializeLegacyPendingWake(fresh, { projectId: item.projectId, linearIssueId: item.issueId, leaseId });
+      const freshWake = this.resolveRunWake(wakeIssue);
       if (!freshWake || freshWake.runType !== runType) return undefined;
 
       const created = this.db.createRun({

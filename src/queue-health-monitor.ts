@@ -20,6 +20,7 @@ export interface QueueHealthAdvancer {
       clearFailureProvenance?: boolean;
     },
   ): void;
+  enqueueIssue(projectId: string, issueId: string): void;
 }
 
 function isDuplicateProbe(
@@ -140,10 +141,17 @@ export class QueueHealthMonitor {
         lastAttemptedFailureHeadSha: headRefOid,
         lastAttemptedFailureSignature: signature,
       });
-      this.advancer.advanceIdleIssue(issue, "repairing_queue", {
-        pendingRunType: "queue_repair",
-        pendingRunContext,
+      this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        eventType: "merge_steward_incident",
+        eventJson: JSON.stringify(pendingRunContext),
+        dedupeKey: `queue_health:queue_repair:${issue.linearIssueId}:${signature}`,
       });
+      this.advancer.advanceIdleIssue(issue, "repairing_queue");
+      if (this.db.peekIssueSessionWake(issue.projectId, issue.linearIssueId)) {
+        this.advancer.enqueueIssue(issue.projectId, issue.linearIssueId);
+      }
       this.logger.info(
         { issueKey: issue.issueKey, prNumber: issue.prNumber, headRefOid, reason },
         "Queue health: queue issue detected, dispatching repair",
