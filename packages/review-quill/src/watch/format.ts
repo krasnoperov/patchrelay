@@ -34,6 +34,7 @@ export function attemptStateColor(attempt: ReviewAttemptRecord): string {
   if (attempt.status === "running") return "yellow";
   if (attempt.status === "queued") return "cyan";
   if (attempt.status === "failed") return "red";
+  if (attempt.status === "superseded" || attempt.status === "cancelled") return "gray";
   if (attempt.conclusion === "approved") return "green";
   if (attempt.conclusion === "declined") return "red";
   return "white";
@@ -43,6 +44,8 @@ export function attemptLabel(attempt: ReviewAttemptRecord): string {
   if (attempt.status === "completed" && attempt.conclusion === "approved") return "approved";
   if (attempt.status === "completed" && attempt.conclusion === "declined") return "changes";
   if (attempt.status === "completed" && attempt.conclusion === "error") return "error";
+  if (attempt.status === "superseded") return "superseded";
+  if (attempt.status === "cancelled") return "cancelled";
   return attempt.status;
 }
 

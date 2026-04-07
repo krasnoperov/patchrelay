@@ -14,12 +14,13 @@ function AttemptRow({ attempt, selected }: { attempt: ReviewAttemptRecord; selec
       <Text color={selected ? "cyan" : "gray"}>{selected ? "\u25b8" : " "}</Text>
       <Text bold>{` #${attempt.prNumber}`}</Text>
       <Text>{` ${truncate(attempt.repoFullName, 24)}`}</Text>
-      <Text dimColor>{` ${formatSha(attempt.headSha)}`}</Text>
-      <Text>{` `}</Text>
-      <Text color={attemptStateColor(attempt)}>{attemptLabel(attempt)}</Text>
-      <Text dimColor>{` ${relativeTime(attempt.updatedAt)} ago`}</Text>
-    </Box>
-  );
+        <Text dimColor>{` ${formatSha(attempt.headSha)}`}</Text>
+        <Text>{` `}</Text>
+        <Text color={attemptStateColor(attempt)}>{attemptLabel(attempt)}</Text>
+        {attempt.status === "superseded" ? <Text dimColor>{` stale-head`}</Text> : null}
+        <Text dimColor>{` ${relativeTime(attempt.updatedAt)} ago`}</Text>
+      </Box>
+    );
 }
 
 export function ListView({ snapshot, attempts, selectedAttemptId }: ListViewProps): React.JSX.Element {

@@ -72,6 +72,28 @@ export class GitHubClient {
     }));
   }
 
+  async getPullRequest(repoFullName: string, prNumber: number): Promise<PullRequestSummary> {
+    const encodedRepo = repoFullName.split("/").map(encodeURIComponent).join("/");
+    const pr = await this.request<Record<string, unknown>>(
+      repoFullName,
+      `/repos/${encodedRepo}/pulls/${prNumber}`,
+    );
+    return {
+      number: Number(pr.number),
+      title: String(pr.title ?? ""),
+      ...(typeof pr.body === "string" ? { body: pr.body } : {}),
+      url: String(pr.html_url ?? ""),
+      state: String(pr.state ?? "OPEN"),
+      isDraft: Boolean(pr.draft),
+      headSha: String((pr.head as Record<string, unknown> | undefined)?.sha ?? ""),
+      headRefName: String((pr.head as Record<string, unknown> | undefined)?.ref ?? ""),
+      baseRefName: String((pr.base as Record<string, unknown> | undefined)?.ref ?? ""),
+      ...(typeof (pr.user as Record<string, unknown> | undefined)?.login === "string"
+        ? { authorLogin: String((pr.user as Record<string, unknown>).login) }
+        : {}),
+    };
+  }
+
   async listPullRequestReviews(repoFullName: string, prNumber: number): Promise<PullRequestReviewRecord[]> {
     const encodedRepo = repoFullName.split("/").map(encodeURIComponent).join("/");
     const reviews = await this.request<Array<Record<string, unknown>>>(

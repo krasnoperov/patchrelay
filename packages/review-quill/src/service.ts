@@ -1,5 +1,6 @@
 import type { Logger } from "pino";
 import type {
+  PullRequestSummary,
   ReviewAttemptDetail,
   ReviewEligibility,
   ReviewQuillConfig,
@@ -54,6 +55,11 @@ function reviewStateForVerdict(verdict: "approve" | "request_changes"): "APPROVE
   return verdict === "approve" ? "APPROVED" : "CHANGES_REQUESTED";
 }
 
+type PublicationDisposition =
+  | { action: "publish" }
+  | { action: "supersede"; summary: string; checkConclusion: "cancelled" }
+  | { action: "cancel"; summary: string; checkConclusion: "cancelled" };
+
 export function hasMatchingLatestReviewForHead(
   reviews: PullRequestReviewRecord[],
   reviewerLogin: string | undefined,
@@ -66,6 +72,34 @@ export function hasMatchingLatestReviewForHead(
     .reverse()
     .find((review) => review.authorLogin === reviewerLogin && review.commitId === headSha);
   return latest?.state === desiredState;
+}
+
+export function classifyPublicationDisposition(
+  currentPr: Pick<PullRequestSummary, "state" | "isDraft" | "headSha">,
+  reviewedHeadSha: string,
+): PublicationDisposition {
+  if (currentPr.headSha && currentPr.headSha !== reviewedHeadSha) {
+    return {
+      action: "supersede",
+      summary: `Superseded by newer head ${currentPr.headSha.slice(0, 12)} before review publication`,
+      checkConclusion: "cancelled",
+    };
+  }
+  if (currentPr.state !== "open" && currentPr.state !== "OPEN") {
+    return {
+      action: "cancel",
+      summary: `Cancelled because the PR is ${currentPr.state.toLowerCase()} before review publication`,
+      checkConclusion: "cancelled",
+    };
+  }
+  if (currentPr.isDraft) {
+    return {
+      action: "cancel",
+      summary: "Cancelled because the PR returned to draft before review publication",
+      checkConclusion: "cancelled",
+    };
+  }
+  return { action: "publish" };
 }
 
 export class ReviewQuillService {
@@ -275,6 +309,35 @@ export class ReviewQuillService {
         summary: result.verdict.summary,
         findings: result.verdict.findings,
       });
+      const currentPr = await this.github.getPullRequest(repo.repoFullName, pr.number);
+      const publicationDisposition = classifyPublicationDisposition(currentPr, pr.headSha);
+      if (publicationDisposition.action !== "publish") {
+        const superseded = publicationDisposition.action === "supersede";
+        await this.github.updateCheckRun(repo.repoFullName, checkRunId, {
+          status: "completed",
+          conclusion: publicationDisposition.checkConclusion,
+          summary: publicationDisposition.summary,
+          text: publicationDisposition.summary,
+          ...(detailsUrl ? { detailsUrl } : {}),
+        });
+        this.store.updateAttempt(attempt.id, {
+          status: superseded ? "superseded" : "cancelled",
+          conclusion: "skipped",
+          summary: publicationDisposition.summary,
+          threadId: result.threadId,
+          turnId: result.turnId,
+          externalCheckRunId: checkRunId,
+          completedAt: new Date().toISOString(),
+        });
+        this.logger.info({
+          repo: repo.repoFullName,
+          prNumber: pr.number,
+          reviewedHeadSha: pr.headSha,
+          currentHeadSha: currentPr.headSha,
+          action: publicationDisposition.action,
+        }, "Skipping stale review publication");
+        return;
+      }
       const approved = result.verdict.verdict === "approve";
       const currentReviews = await this.github.listPullRequestReviews(repo.repoFullName, pr.number);
       if (hasMatchingLatestReviewForHead(currentReviews, this.reviewerLogin, pr.headSha, result.verdict.verdict)) {

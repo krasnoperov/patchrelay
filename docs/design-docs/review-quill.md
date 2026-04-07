@@ -196,6 +196,7 @@ Each review attempt should be:
 - readonly
 - keyed to one head SHA
 - idempotent
+- cancelled or superseded at publish time if GitHub truth changed underneath it
 
 Recommended model:
 
@@ -247,6 +248,12 @@ If a newer head SHA appears before publication:
 - cancel the old attempt
 - avoid publishing a stale review
 - publish `cancelled` or `neutral` on the old check if needed
+
+Operator surfaces should make this visible:
+
+- watch/dashboard should show `cancelled` and `superseded` attempts
+- attempt detail should preserve the supersession reason
+- doctor should warn when GitHub is not actually counting recent approvals
 
 ## Prompt And Repo Guidance
 

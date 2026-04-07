@@ -8,6 +8,7 @@ It is responsible for one narrow loop:
 - run a readonly review pass for that exact SHA
 - publish a normal GitHub PR review on the PR
 - publish a machine-facing `review-quill/verdict` check run
+- cancel stale in-flight attempts when a newer PR head lands before publication
 
 In the current production shape, `review-quill` uses its GitHub App identity
 for the whole loop:
@@ -114,6 +115,13 @@ Notes:
 - `doctor` verifies readiness and, when possible, checks whether GitHub is counting recent `review-quill` reviews
 - `service status|logs|restart|install` handles systemd operations
 - `dashboard` opens the live review watch UI
+
+The dashboard/watch UI is mainly for operators. It shows:
+
+- active queued/running review attempts
+- completed, failed, cancelled, and superseded attempts in `all` mode
+- recent webhook wakeups
+- latest reconcile status
 
 Happy path:
 
