@@ -44,6 +44,7 @@ export class GitHubPRClient implements GitHubPRApi {
       headSha: data.headRefOid,
       mergeable: data.state === "OPEN",
       mergeStateStatus: data.mergeStateStatus,
+      reviewDecision: data.reviewDecision,
       reviewApproved: data.reviewDecision === "APPROVED",
       merged: data.state === "MERGED",
     };

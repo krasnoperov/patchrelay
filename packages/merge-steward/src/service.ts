@@ -253,7 +253,7 @@ export class MergeStewardService {
     try {
       const status = await this.github.getStatus(prNumber);
       if (!status.reviewApproved) {
-        this.logger.debug({ prNumber }, "PR not approved, skipping admission");
+        this.logger.debug({ prNumber, reviewDecision: status.reviewDecision }, "PR review gate is not satisfied, skipping admission");
         return false;
       }
 

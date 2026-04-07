@@ -183,6 +183,7 @@ export interface PRStatus {
   headSha: string;
   mergeable: boolean;
   mergeStateStatus?: string | undefined;
+  reviewDecision?: string | undefined;
   reviewApproved: boolean;
   merged: boolean;
 }
