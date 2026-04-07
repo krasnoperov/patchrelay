@@ -1,8 +1,20 @@
 #!/usr/bin/env node
 
-// Analyzes conventional commits since each package's last git tag,
-// determines version bump, applies via `npm version`, outputs plan
-// to $GITHUB_OUTPUT for the release workflow.
+// Release planner for the direct-publish workflow.
+//
+// Strategy:
+//   - Source of truth for "what's published": the npm registry (`npm view`).
+//   - Marker for "commits since last release": the workflow's own `ci: release`
+//     commit on main. Tags are optional/advisory.
+//   - Manual override: if package.json version != published version, the
+//     workflow publishes it as-is (contributor bumped version in their PR).
+//   - Automatic bump: otherwise, aggregate conventional commits since the last
+//     `ci: release` commit, filtered to files owned by the package.
+//
+// Outputs per package (root, steward, review_quill):
+//   <key>_release — "true" if a version will be shipped this run
+//   <key>_publish — "true" if we should run `npm publish` for it
+//   <key>_version — the version string being shipped (or current if none)
 
 import { execSync } from 'node:child_process';
 import { readFileSync, appendFileSync } from 'node:fs';
@@ -12,6 +24,10 @@ if (!GITHUB_OUTPUT) throw new Error('GITHUB_OUTPUT not set');
 
 function run(cmd) {
   return execSync(cmd, { encoding: 'utf8' }).trim();
+}
+
+function tryRun(cmd) {
+  try { return run(cmd); } catch { return ''; }
 }
 
 function output(key, value) {
@@ -50,23 +66,20 @@ const packages = [
   },
 ];
 
-function latestTag(prefix) {
-  try {
-    const out = run(`git tag --sort=-v:refname --list '${prefix}*'`);
-    return out.split('\n')[0] || '';
-  } catch {
-    return '';
-  }
+function publishedVersion(npmName) {
+  return tryRun(`npm view ${npmName} version`); // empty string if not yet published
+}
+
+function lastReleaseCommit() {
+  // Match our own `ci: release` marker and the legacy release-please
+  // `chore: release` marker so the first run after the release-please
+  // cutover boundaries on the last release-please commit.
+  return tryRun(`git log --format=%H --grep='^ci: release' --grep='^chore: release' -n 1`);
 }
 
 function commitsSince(ref) {
   const range = ref ? `${ref}..HEAD` : 'HEAD';
-  let log;
-  try {
-    log = run(`git log ${range} --format=%H%x1f%s --no-merges`);
-  } catch {
-    return [];
-  }
+  const log = tryRun(`git log ${range} --format=%H%x1f%s --no-merges`);
   if (!log) return [];
   return log.split('\n').filter(Boolean).map((line) => {
     const i = line.indexOf('\x1f');
@@ -75,11 +88,7 @@ function commitsSince(ref) {
 }
 
 function changedFiles(hash) {
-  try {
-    return run(`git diff-tree --no-commit-id --name-only -r ${hash}`).split('\n').filter(Boolean);
-  } catch {
-    return [];
-  }
+  return tryRun(`git diff-tree --no-commit-id --name-only -r ${hash}`).split('\n').filter(Boolean);
 }
 
 function conventionalBump(subject) {
@@ -92,40 +101,53 @@ function conventionalBump(subject) {
 const RANK = { patch: 1, minor: 2, major: 3 };
 const higher = (a, b) => ((RANK[a] ?? 0) >= (RANK[b] ?? 0) ? a : b);
 
-// Pre-1.0: breaking changes bump minor instead of major
+// Pre-1.0: breaking changes bump minor instead of major.
 function applyPreMajor(bump, version) {
   return version.startsWith('0.') && bump === 'major' ? 'minor' : bump;
 }
 
-function npmHas(name, version) {
-  try {
-    run(`npm view ${name}@${version} version`);
-    return true;
-  } catch {
-    return false;
-  }
-}
+const marker = lastReleaseCommit();
+console.log(`Last 'ci: release' commit: ${marker ? marker.slice(0, 8) : '(none — analyzing reachable history)'}`);
 
 let anyRelease = false;
 
 for (const pkg of packages) {
   console.log(`\n--- ${pkg.key} (${pkg.npmName}) ---`);
 
-  const tag = latestTag(pkg.tagPrefix);
-  console.log(`Latest tag: ${tag || '(none)'}`);
+  const local = readVersion(pkg.packageJson);
+  const published = publishedVersion(pkg.npmName);
+  console.log(`Local: ${local}  Published: ${published || '(not on npm)'}`);
 
-  const all = commitsSince(tag);
-  const relevant = all.filter((c) => {
+  // Manual override: contributor already bumped the version in their PR.
+  if (published && local !== published) {
+    console.log(`Manual bump detected (${published} → ${local}); will publish as-is.`);
+    output(`${pkg.key}_release`, 'true');
+    output(`${pkg.key}_publish`, 'true');
+    output(`${pkg.key}_version`, local);
+    anyRelease = true;
+    continue;
+  }
+
+  // Automatic bump from conventional commits since the last release marker.
+  const relevant = commitsSince(marker).filter((c) => {
     if (c.subject.startsWith('ci: release')) return false;
     return changedFiles(c.hash).some(pkg.matchFile);
   });
 
-  console.log(`Commits: ${all.length} total, ${relevant.length} relevant`);
+  console.log(`Relevant commits: ${relevant.length}`);
 
   if (relevant.length === 0) {
-    output(`${pkg.key}_release`, 'false');
-    output(`${pkg.key}_publish`, 'false');
-    output(`${pkg.key}_version`, readVersion(pkg.packageJson));
+    if (!published) {
+      console.log(`First publish of ${local}`);
+      output(`${pkg.key}_release`, 'true');
+      output(`${pkg.key}_publish`, 'true');
+      output(`${pkg.key}_version`, local);
+      anyRelease = true;
+    } else {
+      output(`${pkg.key}_release`, 'false');
+      output(`${pkg.key}_publish`, 'false');
+      output(`${pkg.key}_version`, local);
+    }
     continue;
   }
 
@@ -133,7 +155,7 @@ for (const pkg of packages) {
 
   let bump = 'patch';
   for (const c of relevant) bump = higher(bump, conventionalBump(c.subject));
-  bump = applyPreMajor(bump, readVersion(pkg.packageJson));
+  bump = applyPreMajor(bump, local);
   console.log(`Bump: ${bump}`);
 
   const versionCmd = pkg.workspace
@@ -142,13 +164,10 @@ for (const pkg of packages) {
   run(versionCmd);
 
   const newVersion = readVersion(pkg.packageJson);
-  console.log(`Version: ${newVersion}`);
-
-  const onNpm = npmHas(pkg.npmName, newVersion);
-  if (onNpm) console.log(`Already on npm — will tag but skip publish`);
+  console.log(`Version: ${local} → ${newVersion}`);
 
   output(`${pkg.key}_release`, 'true');
-  output(`${pkg.key}_publish`, String(!onNpm));
+  output(`${pkg.key}_publish`, 'true');
   output(`${pkg.key}_version`, newVersion);
   anyRelease = true;
 }

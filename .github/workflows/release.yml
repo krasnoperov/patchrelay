@@ -84,7 +84,7 @@ jobs:
         if: steps.plan.outputs.review_quill_publish == 'true'
         run: npm publish -w packages/review-quill --access public
 
-      - name: Commit version bump and tag
+      - name: Commit release marker and tag
         if: steps.plan.outputs.any_release == 'true'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -92,18 +92,19 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add package.json package-lock.json packages/merge-steward/package.json packages/review-quill/package.json
-          git commit -m "$(cat <<'EOF'
-          ci: release
-          EOF
-          )"
+          # --allow-empty: manual version bumps leave nothing to stage, but we
+          # still need a `ci: release` marker commit for the next release cycle
+          # to use as the "commits since last release" boundary.
+          git commit --allow-empty -m "ci: release"
+          # Tags are advisory — the release process does not depend on them.
           if [[ "${{ steps.plan.outputs.root_release }}" == "true" ]]; then
-            git tag "patchrelay-v${{ steps.plan.outputs.root_version }}"
+            git tag "patchrelay-v${{ steps.plan.outputs.root_version }}" || true
           fi
           if [[ "${{ steps.plan.outputs.steward_release }}" == "true" ]]; then
-            git tag "merge-steward-v${{ steps.plan.outputs.steward_version }}"
+            git tag "merge-steward-v${{ steps.plan.outputs.steward_version }}" || true
           fi
           if [[ "${{ steps.plan.outputs.review_quill_release }}" == "true" ]]; then
-            git tag "review-quill-v${{ steps.plan.outputs.review_quill_version }}"
+            git tag "review-quill-v${{ steps.plan.outputs.review_quill_version }}" || true
           fi
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
-          git push origin main --tags
+          git push --follow-tags origin main
