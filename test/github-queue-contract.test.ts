@@ -146,7 +146,7 @@ function buildCheckRunPayload(params: {
 test("queue eviction check_run queues queue_repair with explicit provenance", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-queue-"));
   try {
-    const { db, enqueueCalls, handler } = createHandler(baseDir);
+    const { db, handler } = createHandler(baseDir);
     db.upsertIssue({
       projectId: "usertold",
       linearIssueId: "issue-1",
@@ -278,7 +278,7 @@ test("default gate fallback recognizes verify and enqueues CI repair", async () 
         ],
       }),
     };
-    const { db, enqueueCalls, handler } = createHandler(
+    const { db, handler } = createHandler(
       baseDir,
       failureContextResolver,
       ciSnapshotResolver,
@@ -320,7 +320,7 @@ test("default gate fallback recognizes verify and enqueues CI repair", async () 
 test("queue eviction falls back to minimal context when incident payload is malformed", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-queue-malformed-"));
   try {
-    const { db, enqueueCalls, handler } = createHandler(baseDir);
+    const { db, handler } = createHandler(baseDir);
     db.upsertIssue({
       projectId: "usertold",
       linearIssueId: "issue-3",
@@ -364,7 +364,7 @@ test("queue eviction falls back to minimal context when incident payload is malf
 test("branch CI failures clear stale queue incident context", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-queue-cleared-"));
   try {
-    const { db, enqueueCalls, handler } = createHandler(
+    const { db, handler } = createHandler(
       baseDir,
       {
         resolve: async () => ({
@@ -443,7 +443,7 @@ test("branch CI failures persist enriched Actions context in pending repair prom
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-ci-context-"));
   try {
     let resolvedCheckName: string | undefined;
-    const { db, enqueueCalls, handler } = createHandler(baseDir, {
+    const { db, handler } = createHandler(baseDir, {
       resolve: async ({ event }) => {
         resolvedCheckName = event.checkName;
         return {
