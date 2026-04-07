@@ -574,6 +574,30 @@ export class PatchRelayDatabase {
     return Number(result.changes ?? 0) > 0;
   }
 
+  forceAcquireIssueSessionLease(params: {
+    projectId: string;
+    linearIssueId: string;
+    leaseId: string;
+    workerId: string;
+    leasedUntil: string;
+    now?: string;
+  }): boolean {
+    const now = params.now ?? isoNow();
+    const result = this.connection.prepare(`
+      UPDATE issue_sessions
+      SET lease_id = ?, worker_id = ?, leased_until = ?, updated_at = ?
+      WHERE project_id = ? AND linear_issue_id = ?
+    `).run(
+      params.leaseId,
+      params.workerId,
+      params.leasedUntil,
+      now,
+      params.projectId,
+      params.linearIssueId,
+    );
+    return Number(result.changes ?? 0) > 0;
+  }
+
   renewIssueSessionLease(params: {
     projectId: string;
     linearIssueId: string;

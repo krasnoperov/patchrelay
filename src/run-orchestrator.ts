@@ -1560,7 +1560,10 @@ export class RunOrchestrator {
   private async reconcileRun(run: RunRecord): Promise<void> {
     const issue = this.db.getIssue(run.projectId, run.linearIssueId);
     if (!issue) return;
-    const recoveryLease = this.claimLeaseForReconciliation(run.projectId, run.linearIssueId);
+    let recoveryLease = this.claimLeaseForReconciliation(run.projectId, run.linearIssueId);
+    if (recoveryLease === "skip" && await this.reclaimForeignRecoveryLeaseIfSafe(run, issue)) {
+      recoveryLease = true;
+    }
     if (recoveryLease === "skip") return;
     const acquiredRecoveryLease = recoveryLease === true;
 
@@ -2356,6 +2359,21 @@ export class RunOrchestrator {
     return leaseId;
   }
 
+  private forceAcquireIssueSessionLease(projectId: string, linearIssueId: string): string | undefined {
+    const leaseId = randomUUID();
+    const leasedUntil = new Date(Date.now() + ISSUE_SESSION_LEASE_MS).toISOString();
+    const acquired = this.db.forceAcquireIssueSessionLease({
+      projectId,
+      linearIssueId,
+      leaseId,
+      workerId: this.workerId,
+      leasedUntil,
+    });
+    if (!acquired) return undefined;
+    this.activeSessionLeases.set(this.issueSessionLeaseKey(projectId, linearIssueId), leaseId);
+    return leaseId;
+  }
+
   private claimLeaseForReconciliation(projectId: string, linearIssueId: string): boolean | "owned" | "skip" {
     const key = this.issueSessionLeaseKey(projectId, linearIssueId);
     if (this.activeSessionLeases.has(key)) {
@@ -2368,6 +2386,50 @@ export class RunOrchestrator {
       return "skip";
     }
     return this.acquireIssueSessionLease(projectId, linearIssueId) ? true : "skip";
+  }
+
+  private async reclaimForeignRecoveryLeaseIfSafe(run: RunRecord, issue: IssueRecord): Promise<boolean> {
+    const key = this.issueSessionLeaseKey(run.projectId, run.linearIssueId);
+    if (this.activeSessionLeases.has(key)) {
+      return false;
+    }
+    const session = this.db.getIssueSession(run.projectId, run.linearIssueId);
+    if (!session?.leaseId || !session.workerId || session.workerId === this.workerId) {
+      return false;
+    }
+    if (issue.activeRunId !== run.id) {
+      return false;
+    }
+
+    let safeToReclaim = !run.threadId;
+    if (!safeToReclaim && run.threadId) {
+      try {
+        const thread = await this.readThreadWithRetry(run.threadId, 1);
+        const latestTurn = getThreadTurns(thread).at(-1);
+        safeToReclaim = thread.status === "notLoaded"
+          || latestTurn?.status === "interrupted"
+          || latestTurn?.status === "completed";
+      } catch {
+        safeToReclaim = true;
+      }
+    }
+
+    if (!safeToReclaim) {
+      return false;
+    }
+
+    const leaseId = this.forceAcquireIssueSessionLease(run.projectId, run.linearIssueId);
+    if (!leaseId) {
+      return false;
+    }
+    this.logger.info({
+      issueKey: issue.issueKey,
+      runId: run.id,
+      previousWorkerId: session.workerId,
+      previousLeaseId: session.leaseId,
+      reclaimedLeaseId: leaseId,
+    }, "Reclaimed foreign issue-session lease for active-run recovery");
+    return true;
   }
 
   private heartbeatIssueSessionLease(projectId: string, linearIssueId: string): boolean {

@@ -893,6 +893,97 @@ test("reconcileRun keeps interrupted ci_repair runs in repairing_ci when the PR 
   }
 });
 
+test("reconcileRun reclaims a foreign active-run lease after restart when the thread is already interrupted", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-interrupted-foreign-lease-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const enqueueCalls: Array<{ projectId: string; issueId: string }> = [];
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-15f",
+      issueKey: "USE-15F",
+      branchName: "feat-interrupted-foreign",
+      prNumber: 151,
+      prState: "open",
+      prReviewState: "approved",
+      prCheckStatus: "success",
+      queueRepairAttempts: 1,
+      factoryState: "repairing_queue",
+      lastGitHubFailureSource: "queue_eviction",
+      lastGitHubFailureHeadSha: "sha-15f",
+      lastGitHubFailureSignature: "queue_eviction::sha-15f::merge-steward/queue",
+      lastGitHubFailureCheckName: "merge-steward/queue",
+      lastAttemptedFailureHeadSha: "sha-15f",
+      lastAttemptedFailureSignature: "queue_eviction::sha-15f::merge-steward/queue",
+    });
+    const run = db.createRun({
+      issueId: issue.id,
+      projectId: "usertold",
+      linearIssueId: "issue-15f",
+      runType: "queue_repair",
+      promptText: "repair queue",
+    });
+    db.updateRunThread(run.id, { threadId: "thread-15f", turnId: "turn-15f" });
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-15f",
+      activeRunId: run.id,
+      factoryState: "repairing_queue",
+    });
+    assert.equal(
+      db.acquireIssueSessionLease({
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        leaseId: "foreign-lease-15f",
+        workerId: "patchrelay:old-process",
+        leasedUntil: "2099-04-07T01:00:00.000Z",
+        now: "2099-04-07T00:50:00.000Z",
+      }),
+      true,
+    );
+
+    const orchestrator = new RunOrchestrator(
+      config,
+      db,
+      {
+        startThread: async () => ({ threadId: "thread-15f" }),
+        steerTurn: async () => undefined,
+        readThread: async () => ({
+          id: "thread-15f",
+          status: "notLoaded",
+          preview: "",
+          cwd: baseDir,
+          turns: [{ id: "turn-15f", status: "interrupted", items: [] }],
+        }),
+      } as never,
+      { forProject: async () => undefined } as never,
+      (projectId, issueId) => {
+        enqueueCalls.push({ projectId, issueId });
+      },
+      pino({ enabled: false }),
+    );
+
+    await (orchestrator as unknown as { reconcileRun: (run: typeof run) => Promise<void> }).reconcileRun(db.getRun(run.id)!);
+    await (orchestrator as unknown as { idleReconciler: { reconcile: () => Promise<void> } }).idleReconciler.reconcile();
+
+    const updatedIssue = db.getIssue("usertold", "issue-15f");
+    const updatedRun = db.getRun(run.id);
+    const session = db.getIssueSession(issue.projectId, issue.linearIssueId);
+    assert.equal(updatedIssue?.factoryState, "repairing_queue");
+    assert.equal(updatedIssue?.queueRepairAttempts, 0);
+    assert.equal(updatedIssue?.activeRunId, undefined);
+    assert.equal(updatedRun?.status, "failed");
+    assert.equal(updatedRun?.failureReason, "Codex turn was interrupted");
+    assert.equal(db.peekIssueSessionWake("usertold", "issue-15f")?.runType, "queue_repair");
+    assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-15f" }]);
+    assert.equal(session?.leaseId, undefined);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("reconcileRun leaves interrupted queue_repair eligible for retry on idle reconciliation", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-interrupted-queue-"));
   try {
