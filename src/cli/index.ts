@@ -2,7 +2,6 @@ import { loadConfig, type ConfigLoadProfile } from "../config.ts";
 import type { AppConfig } from "../types.ts";
 import { getBuildInfo } from "../build-info.ts";
 import { assertKnownFlags, hasHelpFlag, parseArgs, resolveCommand } from "./args.ts";
-import { handleFeedCommand } from "./commands/feed.ts";
 import {
   handleIssueCommand,
 } from "./commands/issues.ts";
@@ -15,7 +14,6 @@ import { CliUsageError } from "./errors.ts";
 import { formatJson } from "./formatters/json.ts";
 import { helpTextFor, rootHelpText } from "./help.ts";
 import { runBufferedCommand, runInteractiveCommand } from "./interactive.ts";
-import type { CliOperatorDataAccess } from "./operator-client.ts";
 import { formatDoctor, writeOutput, writeUsageError } from "./output.ts";
 
 function getCommandConfigProfile(command: string): ConfigLoadProfile {
@@ -26,7 +24,6 @@ function getCommandConfigProfile(command: string): ConfigLoadProfile {
     case "service":
       return "doctor";
     case "linear":
-    case "feed":
     case "dashboard":
       return "operator_cli";
     case "repo":
@@ -116,12 +113,6 @@ function validateFlags(command: string, commandArgs: string[], parsed: ReturnTyp
           assertKnownFlags(parsed, "repo", []);
           return;
       }
-    case "attach":
-    case "repos":
-    case "connect":
-    case "installations":
-      throw new CliUsageError(`${command} has been removed. Use \`patchrelay linear ...\` and \`patchrelay repo ...\` instead.`);
-      return;
     case "service":
       if (commandArgs[0] === "install") {
         assertKnownFlags(parsed, "service", ["force", "write-only", "json"]);
@@ -140,9 +131,6 @@ function validateFlags(command: string, commandArgs: string[], parsed: ReturnTyp
         return;
       }
       assertKnownFlags(parsed, "service", []);
-      return;
-    case "feed":
-      assertKnownFlags(parsed, command, ["follow", "limit", "issue", "repo", "kind", "stage", "status", "workflow", "json"]);
       return;
     case "dashboard":
       assertKnownFlags(parsed, command, ["issue"]);
@@ -343,27 +331,6 @@ export async function runCli(
       });
     }
 
-    if (command === "attach" || command === "repos" || command === "connect" || command === "installations") {
-      writeOutput(stderr, `${command} has been removed. Use \`patchrelay linear ...\` and \`patchrelay repo ...\` instead.\n`);
-      return 1;
-    }
-
-    if (command === "feed") {
-      const operatorData = parsed.flags.get("follow") === true
-        ? await ensureFeedFollowDataAccess(data, config)
-        : await ensureFeedListDataAccess(data, config);
-      if (!data) {
-        data = operatorData;
-        ownsData = true;
-      }
-      return await handleFeedCommand({
-        parsed,
-        json,
-        stdout,
-        data: operatorData,
-      });
-    }
-
     if (command === "dashboard") {
       const { handleWatchCommand } = await import("./commands/watch.ts");
       return await handleWatchCommand({ config, parsed });
@@ -389,11 +356,6 @@ async function createCliDataAccess(config: AppConfig): Promise<CliDataAccess> {
   return new CliDataAccess(config);
 }
 
-async function createCliOperatorDataAccess(config: AppConfig): Promise<CliOperatorDataAccess> {
-  const { CliOperatorApiClient } = await import("./operator-client.ts");
-  return new CliOperatorApiClient(config);
-}
-
 async function ensureIssueDataAccess(
   data: RunCliOptions["data"],
   config: AppConfig,
@@ -410,40 +372,4 @@ async function ensureIssueDataAccess(
 
 function isIssueDataAccess(data: RunCliOptions["data"]): data is CliDataAccess {
   return !!data && typeof data === "object" && "inspect" in data && typeof data.inspect === "function";
-}
-
-async function ensureFeedListDataAccess(
-  data: RunCliOptions["data"],
-  config: AppConfig,
-): Promise<CliOperatorDataAccess> {
-  if (data) {
-    if (hasFeedListDataAccess(data)) {
-      return data as CliOperatorDataAccess;
-    }
-    throw new Error("The feed command requires listOperatorFeed() data access.");
-  }
-
-  return await createCliOperatorDataAccess(config);
-}
-
-async function ensureFeedFollowDataAccess(
-  data: RunCliOptions["data"],
-  config: AppConfig,
-): Promise<CliOperatorDataAccess> {
-  if (data) {
-    if (hasFeedFollowDataAccess(data)) {
-      return data as CliOperatorDataAccess;
-    }
-    throw new Error("The feed --follow command requires followOperatorFeed() data access.");
-  }
-
-  return await createCliOperatorDataAccess(config);
-}
-
-function hasFeedListDataAccess(data: RunCliOptions["data"]): boolean {
-  return !!data && typeof data === "object" && "listOperatorFeed" in data && typeof data.listOperatorFeed === "function";
-}
-
-function hasFeedFollowDataAccess(data: RunCliOptions["data"]): boolean {
-  return !!data && typeof data === "object" && "followOperatorFeed" in data && typeof data.followOperatorFeed === "function";
 }

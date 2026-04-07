@@ -22,6 +22,12 @@ function resolveBaseUrl(config: AppConfig): string {
 }
 
 export async function handleWatchCommand(params: WatchCommandParams): Promise<number> {
+  if (!process.stdin.isTTY || typeof process.stdin.setRawMode !== "function") {
+    process.stderr.write("patchrelay dashboard requires an interactive TTY.\n");
+    process.stderr.write("Use `patchrelay issue list`, `patchrelay issue show <issueKey>`, or run the dashboard from a terminal.\n");
+    return 1;
+  }
+
   const { render } = await import("ink");
   const { createElement } = await import("react");
   const { App } = await import("../watch/App.tsx");

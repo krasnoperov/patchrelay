@@ -1,0 +1,57 @@
+{
+  "name": "review-quill",
+  "version": "0.2.1",
+  "description": "GitHub-first PR review service for the PatchRelay stack",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/krasnoperov/patchrelay.git",
+    "directory": "packages/review-quill"
+  },
+  "homepage": "https://github.com/krasnoperov/patchrelay/tree/main/packages/review-quill#readme",
+  "keywords": [
+    "github",
+    "pull-request",
+    "code-review",
+    "checks",
+    "automation"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist",
+    "config/review-quill.example.json",
+    "runtime.env.example",
+    "service.env.example",
+    "infra/Caddyfile",
+    "infra/review-quill.service"
+  ],
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "bin": {
+    "review-quill": "dist/index.js"
+  },
+  "scripts": {
+    "dev": "node --watch --experimental-transform-types src/index.ts",
+    "prepack": "npm run build",
+    "build": "rm -rf dist && tsc -p tsconfig.json && chmod +x dist/index.js",
+    "start": "node dist/index.js serve",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --experimental-transform-types --test test/**/*.test.ts"
+  },
+  "dependencies": {
+    "fastify": "^5.8.2",
+    "fastify-raw-body": "^5.0.0",
+    "ink": "^6.8.0",
+    "pino": "^10.3.1",
+    "react": "^19.2.4",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "@types/react": "^19.2.14",
+    "typescript": "^5.8.3"
+  }
+}

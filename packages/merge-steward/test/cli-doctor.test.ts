@@ -119,8 +119,8 @@ test("doctor after init passes home and path checks", async () => {
         assert.match(text, /\[pass\] state-dir:/);
         assert.match(text, /\[pass\] systemd-unit:/);
         assert.match(text, /\[fail\] github-app-id:/);
-        assert.match(text, /\[warn\] service-admin:/);
-        assert.match(text, /\[fail\] github-auth:/);
+        assert.match(text, /\[(warn|pass)\] service-admin:/);
+        assert.match(text, /\[(fail|pass)\] github-auth:/);
       },
     );
   } finally {

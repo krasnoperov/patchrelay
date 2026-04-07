@@ -2,6 +2,10 @@ import type { CIRunner } from "../interfaces.ts";
 import type { CIStatus } from "../types.ts";
 import { exec } from "../exec.ts";
 
+function normalizeCheckName(name: string): string {
+  return name.trim().toLowerCase();
+}
+
 /**
  * CI runner that polls GitHub Actions via the gh CLI.
  * triggerRun is a no-op — force-pushing the branch triggers CI automatically.
@@ -39,15 +43,20 @@ export class GitHubActionsRunner implements CIRunner {
 
       if (checkRuns.length === 0) return "pending";
 
+      const normalizedRequired = this.requiredChecks.map(normalizeCheckName);
       const relevant = this.requiredChecks.length > 0
-        ? checkRuns.filter((c) => this.requiredChecks.includes(c.name))
+        ? checkRuns.filter((c) => normalizedRequired.includes(normalizeCheckName(c.name)))
         : checkRuns;
 
       if (relevant.length === 0) return "pending";
 
       if (relevant.some((c) => c.status !== "completed")) return "pending";
-      // REST API returns lowercase conclusions; any non-success completed check is a failure.
-      if (relevant.some((c) => c.conclusion !== "success" && c.conclusion !== "neutral" && c.conclusion !== "skipped")) return "fail";
+      // REST API returns lowercase conclusions; any non-success completed
+      // check is a failure.  "skipped" is NOT accepted — if a check is
+      // required it must actually execute.  A skipped required check means
+      // the CI workflow doesn't trigger on the spec branch, which would
+      // let untested code through (see: MAF-49 incident).
+      if (relevant.some((c) => c.conclusion !== "success" && c.conclusion !== "neutral")) return "fail";
 
       return "pass";
     } catch {

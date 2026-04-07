@@ -15,6 +15,19 @@ export interface ServiceGitHubDiscoverResponse {
   discovery: DiscoveredRepoSettings;
 }
 
+export interface ServiceGitHubRepoAccessResponse {
+  ok: true;
+  repoFullName: string;
+  baseBranch: string;
+  permissions: {
+    contents: "none" | "read" | "write";
+    pull: boolean;
+    push: boolean;
+    admin: boolean;
+  };
+  branchProtected: boolean;
+}
+
 export interface ServiceErrorResponse {
   ok: false;
   error: string;

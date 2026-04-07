@@ -61,7 +61,7 @@ test("merge-steward help shows grouped repo, service, and queue commands", async
   const stdout = createBufferStream();
   assert.equal(await runCli([], { stdout: stdout.stream, stderr: createBufferStream().stream }), 0);
   const text = stdout.read();
-  assert.match(text, /attach <owner\/repo>/);
+  assert.match(text, /repo attach <owner\/repo>/);
   assert.match(text, /service status \[--json\]/);
   assert.match(text, /queue show --repo <id>/);
 });
@@ -104,6 +104,7 @@ test("merge-steward init and repo commands manage bootstrap state with explicit 
         const repoOut = createBufferStream();
         assert.equal(
           await runCli([
+            "repo",
             "attach",
             "app",
             "owner/repo",
@@ -128,19 +129,25 @@ test("merge-steward init and repo commands manage bootstrap state with explicit 
         ]);
 
         const listOut = createBufferStream();
-        assert.equal(await runCli(["repos", "--json"], { stdout: listOut.stream, stderr: createBufferStream().stream }), 0);
+        assert.equal(await runCli(["repo", "list", "--json"], { stdout: listOut.stream, stderr: createBufferStream().stream }), 0);
         const repos = JSON.parse(listOut.read()) as { repos: Array<Record<string, unknown>> };
         assert.strictEqual(repos.repos.length, 1);
         assert.strictEqual(repos.repos[0]!.repoId, "app");
         assert.strictEqual(repos.repos[0]!.repoFullName, "owner/repo");
 
         const inspectOut = createBufferStream();
-        assert.equal(await runCli(["repos", "app", "--json"], { stdout: inspectOut.stream, stderr: createBufferStream().stream }), 0);
+        assert.equal(await runCli(["repo", "show", "app", "--json"], { stdout: inspectOut.stream, stderr: createBufferStream().stream }), 0);
         const inspected = JSON.parse(inspectOut.read()) as Record<string, unknown>;
         assert.equal(inspected.repoId, "app");
         assert.equal(inspected.repoFullName, "owner/repo");
         assert.equal(inspected.webhookUrl, "https://queue.example.com/webhooks/github");
         assert.equal(inspected.mergeQueueCheckName, "custom/queue-eviction");
+
+        const inspectByFullNameOut = createBufferStream();
+        assert.equal(await runCli(["repos", "owner/repo", "--json"], { stdout: inspectByFullNameOut.stream, stderr: createBufferStream().stream }), 0);
+        const inspectedByFullName = JSON.parse(inspectByFullNameOut.read()) as Record<string, unknown>;
+        assert.equal(inspectedByFullName.repoId, "app");
+        assert.equal(inspectedByFullName.repoFullName, "owner/repo");
 
         const statusOut = createBufferStream();
         assert.equal(
@@ -268,6 +275,93 @@ test("merge-steward queue commands inspect the local database when the service i
         const detail = JSON.parse(inspectOut.read()) as Record<string, unknown>;
         assert.equal(((detail.entry as { id?: string }).id ?? ""), "entry-1");
         assert.equal((((detail.events as Array<{ toStatus: string }>)[0] as { toStatus: string }).toStatus), "queued");
+      },
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("merge-steward queue show --pr prefers the latest active entry over historical ones", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "merge-steward-queue-pr-show-"));
+  const configHome = path.join(baseDir, ".config");
+  const stateHome = path.join(baseDir, ".state");
+  const dataHome = path.join(baseDir, ".share");
+
+  try {
+    await withEnv(
+      {
+        XDG_CONFIG_HOME: configHome,
+        XDG_STATE_HOME: stateHome,
+        XDG_DATA_HOME: dataHome,
+        MERGE_STEWARD_SYSTEMD_DIR: path.join(baseDir, "systemd"),
+      },
+      async () => {
+        const runCommand = async () => ({ exitCode: 0, stdout: "", stderr: "" });
+        assert.equal(await runCli(["init", "queue.example.com"], { stdout: createBufferStream().stream, stderr: createBufferStream().stream, runCommand }), 0);
+        assert.equal(await runCli(["attach", "app", "owner/repo"], { stdout: createBufferStream().stream, stderr: createBufferStream().stream, runCommand }), 0);
+
+        const store = new SqliteStore(path.join(stateHome, "merge-steward", "app.sqlite"));
+        store.insert({
+          id: "entry-old",
+          repoId: "app",
+          prNumber: 42,
+          branch: "feature/queue",
+          headSha: "old-sha",
+          baseSha: "base-old",
+          status: "queued",
+          position: 1,
+          priority: 0,
+          generation: 0,
+          ciRunId: null,
+          ciRetries: 0,
+          retryAttempts: 0,
+          maxRetries: 2,
+          lastFailedBaseSha: null,
+          issueKey: "APP-42",
+          specBranch: null,
+          specSha: null,
+          specBasedOn: null,
+          enqueuedAt: "2026-03-28T10:00:00.000Z",
+          updatedAt: "2026-03-28T10:00:00.000Z",
+        });
+        store.transition("entry-old", "evicted", undefined, "historical failure");
+        store.insert({
+          id: "entry-new",
+          repoId: "app",
+          prNumber: 42,
+          branch: "feature/queue",
+          headSha: "new-sha",
+          baseSha: "base-new",
+          status: "validating",
+          position: 2,
+          priority: 0,
+          generation: 0,
+          ciRunId: "ci-42",
+          ciRetries: 0,
+          retryAttempts: 0,
+          maxRetries: 2,
+          lastFailedBaseSha: null,
+          issueKey: "APP-42",
+          specBranch: "mq/spec-entry-new",
+          specSha: "spec-new",
+          specBasedOn: null,
+          enqueuedAt: "2026-03-28T10:10:00.000Z",
+          updatedAt: "2026-03-28T10:10:00.000Z",
+        });
+        store.close();
+
+        const inspectOut = createBufferStream();
+        assert.equal(
+          await runCli(["queue", "show", "--repo", "app", "--pr", "42", "--json"], {
+            stdout: inspectOut.stream,
+            stderr: createBufferStream().stream,
+          }),
+          0,
+        );
+        const detail = JSON.parse(inspectOut.read()) as Record<string, unknown>;
+        assert.equal(((detail.entry as { id?: string }).id ?? ""), "entry-new");
+        assert.equal(((detail.entry as { status?: string }).status ?? ""), "validating");
       },
     );
   } finally {

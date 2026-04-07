@@ -1,5 +1,4 @@
-import type { EventsResult, InspectResult, ListResultItem, LiveResult, OpenResult, OperatorFeedResult, ReportResult, RetryResult, WorktreeResult } from "../data.ts";
-import type { OperatorFeedEvent } from "../../operator-feed.ts";
+import type { InspectResult, ListResultItem, LiveResult, OpenResult, RetryResult, WorktreeResult } from "../data.ts";
 
 function value(label: string, entry: string | number | undefined): string {
   return `${label}: ${entry ?? "-"}`;
@@ -20,7 +19,9 @@ export function formatInspect(result: InspectResult): string {
   const lines = [
     header,
     value("Title", result.issue?.title),
-    value("State", result.issue?.factoryState),
+    value("Session", result.issue?.sessionState),
+    value("Waiting reason", result.issue?.waitingReason ?? result.issue?.statusNote),
+    value("Debug stage", result.issue?.factoryState),
     result.activeRun ? value("Active run", `${result.activeRun.runType} (${result.activeRun.status})`) : undefined,
     result.latestRun && !result.activeRun ? value("Latest run", `${result.latestRun.runType} (${result.latestRun.status})`) : undefined,
     result.prNumber ? value("PR", `#${result.prNumber}${result.prReviewState ? ` [${result.prReviewState}]` : ""}`) : undefined,
@@ -41,46 +42,6 @@ export function formatLive(result: LiveResult): string {
     result.live?.latestAssistantMessage ? `Latest assistant message:\n${truncateLine(result.live.latestAssistantMessage)}` : undefined,
   ].filter(Boolean);
   return `${lines.join("\n")}\n`;
-}
-
-export function formatReport(result: ReportResult): string {
-  const sections = result.runs.map(({ run, report, summary }) => {
-    const changedFiles = report?.fileChanges
-      .map((entry: Record<string, unknown>) => (typeof entry.path === "string" ? entry.path : undefined))
-      .filter(Boolean)
-      .join(", ");
-    const commands = report?.commands.map((command: { command: string }) => command.command).join(" | ");
-    const tools = report?.toolCalls.map((tool: { type: string; name: string }) => `${tool.type}:${tool.name}`).join(", ");
-
-    return [
-      `${run.runType} #${run.id} ${run.status}`,
-      value("Started", run.startedAt),
-      value("Ended", run.endedAt),
-      value("Thread", run.threadId),
-      summary?.latestAssistantMessage ? value("Summary", truncateLine(String(summary.latestAssistantMessage))) : undefined,
-      report?.assistantMessages.at(-1) ? value("Assistant conclusion", truncateLine(report.assistantMessages.at(-1))) : undefined,
-      commands ? value("Commands", commands) : undefined,
-      changedFiles ? value("Changed files", changedFiles) : undefined,
-      tools ? value("Tool calls", tools) : undefined,
-    ]
-      .filter(Boolean)
-      .join("\n");
-  });
-
-  return `${sections.join("\n\n")}\n`;
-}
-
-export function formatEvents(result: EventsResult): string {
-  const sections = result.events.map((event) =>
-    [
-      `#${event.id} ${event.createdAt} ${event.method}`,
-      value("Thread", event.threadId),
-      value("Turn", event.turnId),
-      event.parsedEvent ? JSON.stringify(event.parsedEvent, null, 2) : event.eventJson,
-    ].join("\n"),
-  );
-
-  return `${value("Run", result.run.id)}\n${value("Run type", result.run.runType)}\n\n${sections.join("\n\n")}\n`;
 }
 
 export function formatWorktree(result: WorktreeResult, cdOnly: boolean): string {
@@ -137,74 +98,13 @@ export function formatList(items: ListResultItem[]): string {
       [
         item.issueKey ?? "-",
         item.currentLinearState ?? "-",
-        item.factoryState,
+        item.sessionState ?? "-",
+        item.waitingReason ?? "-",
         item.activeRunType ?? "-",
         item.latestRunType ? `${item.latestRunType}:${item.latestRunStatus ?? "-"}` : "-",
         item.updatedAt,
+        item.factoryState,
       ].join("\t"),
     )
     .join("\n")}\n`;
-}
-
-function colorize(enabled: boolean, code: string, value: string): string {
-  return enabled ? `\u001B[${code}m${value}\u001B[0m` : value;
-}
-
-function formatFeedStatus(event: OperatorFeedEvent, color: boolean): string {
-  const raw = event.status ?? event.kind;
-  const label = raw.replaceAll("_", " ");
-  const padded = label.padEnd(15);
-  if (event.level === "error" || raw === "failed" || raw === "delivery_failed") {
-    return colorize(color, "31", padded);
-  }
-  if (event.level === "warn" || raw === "ignored" || raw === "fallback" || raw === "handoff" || raw === "transition_suppressed") {
-    return colorize(color, "33", padded);
-  }
-  if (raw === "running" || raw === "started" || raw === "delegated" || raw === "transition_chosen" || raw === "completed") {
-    return colorize(color, "32", padded);
-  }
-  if (raw === "queued" || raw === "selected") {
-    return colorize(color, "36", padded);
-  }
-  return colorize(color, "2", padded);
-}
-
-function formatFeedMeta(event: OperatorFeedEvent, color: boolean): string | undefined {
-  const parts = [
-    event.workflowId ? `workflow:${event.workflowId}` : undefined,
-    event.stage ? `stage:${event.stage}` : undefined,
-    event.nextStage ? `next:${event.nextStage}` : undefined,
-  ].filter(Boolean);
-  if (parts.length === 0) {
-    return undefined;
-  }
-  return colorize(color, "2", `[${parts.join(" ")}]`);
-}
-
-export function formatOperatorFeedEvent(event: OperatorFeedEvent, options?: { color?: boolean }): string {
-  const color = options?.color === true;
-  const timestamp = new Date(event.at).toLocaleTimeString("en-GB", { hour12: false });
-  const issue = event.issueKey ?? event.projectId ?? "-";
-  const meta = formatFeedMeta(event, color);
-  const line = [
-    colorize(color, "2", timestamp),
-    colorize(color, "1", issue.padEnd(10)),
-    formatFeedStatus(event, color),
-    event.summary,
-    ...(meta ? [meta] : []),
-  ].join("  ");
-
-  if (!event.detail) {
-    return `${line}\n`;
-  }
-
-  return `${line}\n${colorize(color, "2", `  ${truncateLine(event.detail)}`)}\n`;
-}
-
-export function formatOperatorFeed(result: OperatorFeedResult, options?: { color?: boolean }): string {
-  if (result.events.length === 0) {
-    return "No feed events yet.\n";
-  }
-
-  return result.events.map((event) => formatOperatorFeedEvent(event, options)).join("");
 }

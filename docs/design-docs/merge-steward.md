@@ -138,7 +138,7 @@ This phase delivers the main operational win:
 
 ## Speculative Validation
 
-**Status: shipped.** Configurable via `speculativeDepth` (default 3, set to 1 for serial mode).
+**Status: shipped.** Configurable via `speculativeDepth` (default 10, set to 1 for serial mode).
 
 The steward builds cumulative speculative branches:
 
@@ -167,8 +167,7 @@ The steward does not call PatchRelay directly. When a PR fails after retries, th
 
 1. Creates a durable `IncidentRecord` in its SQLite database
 2. Creates a `merge-steward/queue` GitHub check run with the incident context as JSON in `output.text`
-3. Removes the admission label from the PR
-4. Transitions the entry to `evicted`
+3. Transitions the entry to `evicted`
 
 PatchRelay observes the check run failure via its GitHub webhook handler and triggers `queue_repair` if the check name matches `mergeQueueCheckName` (configurable, default `merge-steward/queue`).
 

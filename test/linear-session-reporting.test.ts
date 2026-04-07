@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { buildAgentSessionPlan, buildAgentSessionPlanForIssue } from "../src/agent-session-plan.ts";
 import { buildAgentSessionExternalUrls } from "../src/agent-session-presentation.ts";
-import { buildGitHubStateActivity, buildRunCompletedActivity } from "../src/linear-session-reporting.ts";
+import { buildGitHubStateActivity, buildRunCompletedActivity, summarizeIssueStateForLinear } from "../src/linear-session-reporting.ts";
 import type { AppConfig } from "../src/types.ts";
 
 function createConfig(): AppConfig {
@@ -135,6 +135,33 @@ test("run completion activity summarizes the next visible milestone", () => {
     type: "response",
     body: "Implementation completed.\n\nPR #42 is ready for review.\n\nImplemented the API endpoint and pushed the branch.",
   });
+});
+
+test("linear summaries prefer session state over factory state", () => {
+  assert.equal(
+    summarizeIssueStateForLinear({
+      factoryState: "awaiting_queue",
+      sessionState: "waiting_input",
+      waitingReason: "Waiting for a merge queue retry.",
+      prNumber: 7,
+      prState: "open",
+      prReviewState: "approved",
+      prCheckStatus: "passed",
+    }),
+    "Waiting for a merge queue retry.",
+  );
+
+  assert.equal(
+    summarizeIssueStateForLinear({
+      factoryState: "pr_open",
+      sessionState: "running",
+      prNumber: 8,
+      prState: "open",
+      prReviewState: "approved",
+      prCheckStatus: "passed",
+    }),
+    "PR #8 is actively running.",
+  );
 });
 
 test("session external urls include both status and pull request links", () => {

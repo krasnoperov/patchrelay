@@ -41,14 +41,23 @@ jobs:
       - name: Typecheck merge-steward
         run: npm run -w packages/merge-steward typecheck
 
+      - name: Typecheck review-quill
+        run: npm run -w packages/review-quill typecheck
+
       - name: Test
         run: npm test
 
       - name: Test merge-steward
         run: npm run -w packages/merge-steward test
 
+      - name: Test review-quill
+        run: npm run -w packages/review-quill test
+
       - name: Build
         run: npm run build
 
       - name: Build merge-steward
         run: npm run -w packages/merge-steward build
+
+      - name: Build review-quill
+        run: npm run -w packages/review-quill build

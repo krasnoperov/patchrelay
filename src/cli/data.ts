@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import pino from "pino";
 import { CodexAppServerClient } from "../codex-app-server.ts";
+import { getThreadTurns } from "../codex-thread-utils.ts";
 import { PatchRelayDatabase } from "../db.ts";
 import { WorktreeManager } from "../worktree-manager.ts";
 import { CliOperatorApiClient } from "./operator-client.ts";
@@ -9,6 +10,7 @@ import type {
   AppConfig,
   CodexThreadItem,
   CodexThreadSummary,
+  IssueRecord,
   StageReport,
   RunRecord,
   TrackedIssueRecord,
@@ -18,7 +20,6 @@ export type {
   ConnectResult,
   ConnectStateResult,
   InstallationListResult,
-  OperatorFeedResult,
 } from "./operator-client.ts";
 
 interface LiveSummary {
@@ -38,31 +39,9 @@ export interface InspectResult {
   latestSummary?: Record<string, unknown> | undefined;
   prNumber?: number | undefined;
   prReviewState?: string | undefined;
+  sessionState?: string | undefined;
+  waitingReason?: string | undefined;
   statusNote?: string | undefined;
-}
-
-export interface ReportResult {
-  issue: TrackedIssueRecord;
-  runs: Array<{
-    run: RunRecord;
-    report?: StageReport;
-    summary?: Record<string, unknown>;
-  }>;
-}
-
-export interface EventsResult {
-  issue: TrackedIssueRecord;
-  run: RunRecord;
-  events: Array<{
-    id: number;
-    runId: number;
-    threadId: string;
-    turnId?: string | undefined;
-    method: string;
-    eventJson: string;
-    createdAt: string;
-    parsedEvent?: Record<string, unknown>;
-  }>;
 }
 
 export interface WorktreeResult {
@@ -88,10 +67,12 @@ export interface ListResultItem {
   title?: string;
   projectId: string;
   currentLinearState?: string;
+  sessionState?: string;
   factoryState: string;
   activeRunType?: string;
   latestRunType?: string;
   latestRunStatus?: string;
+  waitingReason?: string;
   updatedAt: string;
 }
 
@@ -105,8 +86,19 @@ function safeJsonParse(value: string | undefined): Record<string, unknown> | und
   }
 }
 
+function normalizeStageReport(reportJson: string | undefined, runStatus: string | undefined): StageReport | undefined {
+  if (!reportJson) return undefined;
+  try {
+    const parsed = JSON.parse(reportJson) as StageReport;
+    return { ...parsed, status: runStatus ?? parsed.status };
+  } catch {
+    return undefined;
+  }
+}
+
 function summarizeThread(thread: CodexThreadSummary, latestTimestampSeen?: string): LiveSummary {
-  const latestTurn = thread.turns.at(-1);
+  const turns = getThreadTurns(thread);
+  const latestTurn = turns.at(-1);
   const latestAssistantMessage = latestTurn?.items
     .filter((item): item is Extract<CodexThreadItem, { type: "agentMessage" }> => item.type === "agentMessage")
     .at(-1)?.text;
@@ -123,6 +115,16 @@ function summarizeThread(thread: CodexThreadSummary, latestTimestampSeen?: strin
 function latestEventTimestamp(db: PatchRelayDatabase, runId: number): string | undefined {
   const events = db.listThreadEvents(runId);
   return events.at(-1)?.createdAt;
+}
+
+function parseObjectJson(value: string | undefined): Record<string, unknown> | undefined {
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 // resolveStageFromState removed — factory state replaces workflow stage resolution
@@ -156,7 +158,7 @@ export class CliDataAccess extends CliOperatorApiClient {
     const dbIssue = this.db.getIssueByKey(issueKey)!;
     const activeRun = dbIssue.activeRunId ? this.db.getRun(dbIssue.activeRunId) : undefined;
     const latestRun = this.db.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
-    const latestReport = latestRun?.reportJson ? (JSON.parse(latestRun.reportJson) as StageReport) : undefined;
+    const latestReport = normalizeStageReport(latestRun?.reportJson, latestRun?.status);
     const latestSummary = safeJsonParse(latestRun?.summaryJson);
 
     const statusNote =
@@ -173,6 +175,8 @@ export class CliDataAccess extends CliOperatorApiClient {
       ...(latestSummary ? { latestSummary } : {}),
       ...(dbIssue.prNumber ? { prNumber: dbIssue.prNumber } : {}),
       ...(dbIssue.prReviewState ? { prReviewState: dbIssue.prReviewState } : {}),
+      ...(((dbIssue as { sessionState?: string }).sessionState) ? { sessionState: (dbIssue as { sessionState?: string }).sessionState } : {}),
+      ...(((dbIssue as { waitingReason?: string }).waitingReason) ? { waitingReason: (dbIssue as { waitingReason?: string }).waitingReason } : {}),
       ...(statusNote ? { statusNote } : {}),
     };
   }
@@ -193,50 +197,6 @@ export class CliDataAccess extends CliOperatorApiClient {
       (await this.readLiveSummary(run.threadId, latestEventTimestamp(this.db, run.id)).catch(() => undefined));
 
     return { issue, run, ...(live ? { live } : {}) };
-  }
-
-  report(issueKey: string, options?: { runType?: string; runId?: number }): ReportResult | undefined {
-    const issue = this.db.getTrackedIssueByKey(issueKey);
-    if (!issue) return undefined;
-
-    const runs = this.db
-      .listRunsForIssue(issue.projectId, issue.linearIssueId)
-      .filter((run) => {
-        if (options?.runId !== undefined && run.id !== options.runId) return false;
-        if (options?.runType !== undefined && run.runType !== options.runType) return false;
-        return true;
-      })
-      .reverse()
-      .map((run) => ({
-        run,
-        ...(run.reportJson ? { report: JSON.parse(run.reportJson) as StageReport } : {}),
-        ...(safeJsonParse(run.summaryJson) ? { summary: safeJsonParse(run.summaryJson)! } : {}),
-      }));
-
-    return { issue, runs };
-  }
-
-  events(issueKey: string, options?: { runId?: number; method?: string; afterId?: number }): EventsResult | undefined {
-    const issue = this.db.getTrackedIssueByKey(issueKey);
-    if (!issue) return undefined;
-
-    const dbIssue = this.db.getIssueByKey(issueKey)!;
-    const run =
-      (options?.runId !== undefined ? this.db.getRun(options.runId) : undefined) ??
-      (dbIssue.activeRunId ? this.db.getRun(dbIssue.activeRunId) : undefined) ??
-      this.db.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
-    if (!run || run.projectId !== issue.projectId || run.linearIssueId !== issue.linearIssueId) return undefined;
-
-    const events = this.db
-      .listThreadEvents(run.id)
-      .filter((event) => (options?.method ? event.method === options.method : true))
-      .filter((event) => (options?.afterId !== undefined ? event.id > options.afterId : true))
-      .map((event) => ({
-        ...event,
-        ...(safeJsonParse(event.eventJson) ? { parsedEvent: safeJsonParse(event.eventJson)! } : {}),
-      }));
-
-    return { issue, run, events };
   }
 
   worktree(issueKey: string): WorktreeResult | undefined {
@@ -305,16 +265,92 @@ export class CliDataAccess extends CliOperatorApiClient {
       throw new Error(`Issue ${issueKey} already has an active run.`);
     }
 
-    const runType = (options?.runType ?? "implementation") as RunType;
+    const runType = (options?.runType
+      ?? (issue.latestFailureSource === "queue_eviction" || issue.factoryState === "repairing_queue"
+        ? "queue_repair"
+        : dbIssue.prCheckStatus === "failed" || dbIssue.prCheckStatus === "failure" || issue.latestFailureSource === "branch_ci" || issue.factoryState === "repairing_ci"
+          ? "ci_repair"
+          : dbIssue.prReviewState === "changes_requested" || issue.factoryState === "changes_requested"
+            ? "review_fix"
+            : "implementation")) as RunType;
 
+    const factoryState = runType === "queue_repair"
+      ? "repairing_queue"
+      : runType === "ci_repair"
+        ? "repairing_ci"
+        : runType === "review_fix"
+          ? "changes_requested"
+          : "delegated";
+
+    this.appendRetryWake(dbIssue, runType);
     this.db.upsertIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
-      pendingRunType: runType,
-      factoryState: "delegated",
+      pendingRunType: null,
+      pendingRunContextJson: null,
+      factoryState,
     });
     const updated = this.db.getTrackedIssue(issue.projectId, issue.linearIssueId)!;
     return { issue: updated, runType, ...(options?.reason ? { reason: options.reason } : {}) };
+  }
+
+  private appendRetryWake(issue: IssueRecord, runType: RunType): void {
+    if (runType === "queue_repair") {
+      const queueIncident = parseObjectJson(issue.lastQueueIncidentJson);
+      const failureContext = parseObjectJson(issue.lastGitHubFailureContextJson);
+      this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        eventType: "merge_steward_incident",
+        eventJson: JSON.stringify({
+          ...(queueIncident ?? {}),
+          ...(failureContext ?? {}),
+          source: "operator_retry",
+        }),
+        dedupeKey: `operator_retry:queue_repair:${issue.linearIssueId}:${issue.prHeadSha ?? issue.lastGitHubFailureHeadSha ?? "unknown-sha"}`,
+      });
+      return;
+    }
+
+    if (runType === "ci_repair") {
+      const failureContext = parseObjectJson(issue.lastGitHubFailureContextJson);
+      this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        eventType: "settled_red_ci",
+        eventJson: JSON.stringify({
+          ...(failureContext ?? {}),
+          source: "operator_retry",
+        }),
+        dedupeKey: `operator_retry:ci_repair:${issue.linearIssueId}:${issue.lastGitHubFailureSignature ?? issue.prHeadSha ?? "unknown-sha"}`,
+      });
+      return;
+    }
+
+    if (runType === "review_fix") {
+      this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        eventType: "review_changes_requested",
+        eventJson: JSON.stringify({
+          reviewBody: "Operator requested retry of review-fix work.",
+          source: "operator_retry",
+        }),
+        dedupeKey: `operator_retry:review_fix:${issue.linearIssueId}:${issue.prHeadSha ?? "unknown-sha"}`,
+      });
+      return;
+    }
+
+    this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      eventType: "delegated",
+      eventJson: JSON.stringify({
+        promptContext: "Operator requested retry of PatchRelay work.",
+        source: "operator_retry",
+      }),
+      dedupeKey: `operator_retry:implementation:${issue.linearIssueId}`,
+    });
   }
 
   list(options?: { active?: boolean; failed?: boolean; project?: string }): ListResultItem[] {
@@ -338,10 +374,15 @@ export class CliDataAccess extends CliOperatorApiClient {
           i.current_linear_state,
           i.factory_state,
           i.updated_at,
+          s.session_state,
+          s.waiting_reason,
           active_run.run_type AS active_run_type,
           latest_run.run_type AS latest_run_type,
           latest_run.status AS latest_run_status
         FROM issues i
+        LEFT JOIN issue_sessions s
+          ON s.project_id = i.project_id
+         AND s.linear_issue_id = i.linear_issue_id
         LEFT JOIN runs active_run ON active_run.id = i.active_run_id
         LEFT JOIN runs latest_run ON latest_run.id = (
           SELECT r.id FROM runs r
@@ -359,7 +400,9 @@ export class CliDataAccess extends CliOperatorApiClient {
       ...(row.title !== null ? { title: String(row.title) } : {}),
       projectId: String(row.project_id),
       ...(row.current_linear_state !== null ? { currentLinearState: String(row.current_linear_state) } : {}),
+      ...(row.session_state !== null ? { sessionState: String(row.session_state) } : {}),
       factoryState: String(row.factory_state ?? "delegated"),
+      ...(row.waiting_reason !== null ? { waitingReason: String(row.waiting_reason) } : {}),
       ...(row.active_run_type !== null ? { activeRunType: String(row.active_run_type) } : {}),
       ...(row.latest_run_type !== null ? { latestRunType: String(row.latest_run_type) } : {}),
       ...(row.latest_run_status !== null ? { latestRunStatus: String(row.latest_run_status) } : {}),
@@ -368,7 +411,7 @@ export class CliDataAccess extends CliOperatorApiClient {
 
     return items.filter((item) => {
       if (options?.active && !item.activeRunType) return false;
-      if (options?.failed && item.latestRunStatus !== "failed") return false;
+      if (options?.failed && item.factoryState !== "failed" && item.factoryState !== "escalated") return false;
       return true;
     });
   }

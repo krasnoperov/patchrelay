@@ -4,18 +4,114 @@ import type {
   GitHubFailureSource,
   IssueDependencyRecord,
   IssueRecord,
+  IssueSessionEventRecord,
+  IssueSessionRecord,
   RunRecord,
   RunStatus,
   TrackedIssueRecord,
   ThreadEventRecord,
 } from "./db-types.ts";
 import type { FactoryState, RunType } from "./factory-state.ts";
+import {
+  isIssueSessionReadyForExecution,
+  deriveIssueSessionState,
+  deriveIssueSessionReactiveIntent,
+  deriveIssueSessionWakeReason,
+} from "./issue-session.ts";
+import {
+  deriveSessionWakePlan,
+  extractLatestAssistantSummary,
+  type IssueSessionEventType,
+} from "./issue-session-events.ts";
 import { parseGitHubFailureContext } from "./github-failure-context.ts";
+import { deriveIssueStatusNote } from "./status-note.ts";
 import { LinearInstallationStore } from "./db/linear-installation-store.ts";
 import { OperatorFeedStore } from "./db/operator-feed-store.ts";
 import { RepositoryLinkStore } from "./db/repository-link-store.ts";
 import { runPatchRelayMigrations } from "./db/migrations.ts";
 import { SqliteConnection, isoNow, type DatabaseConnection } from "./db/shared.ts";
+import { derivePatchRelayWaitingReason } from "./waiting-reason.ts";
+
+function parseObjectJson(raw: string | undefined): Record<string, unknown> | undefined {
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function hasUnattemptedFailureSignature(issue: IssueRecord, fallbackHeadSha?: string): boolean {
+  const signature = issue.lastGitHubFailureSignature;
+  if (!signature) return false;
+  const headSha = issue.lastGitHubFailureHeadSha ?? fallbackHeadSha;
+  return issue.lastAttemptedFailureSignature !== signature
+    || (headSha !== undefined && issue.lastAttemptedFailureHeadSha !== headSha);
+}
+
+function deriveImplicitReactiveWake(issue: IssueRecord):
+  | { runType: RunType; wakeReason: string; context: Record<string, unknown> }
+  | undefined {
+  const reactiveIntent = deriveIssueSessionReactiveIntent({
+    activeRunId: issue.activeRunId,
+    prNumber: issue.prNumber,
+    prState: issue.prState,
+    prReviewState: issue.prReviewState,
+    prCheckStatus: issue.prCheckStatus,
+    latestFailureSource: issue.lastGitHubFailureSource,
+  });
+  if (!reactiveIntent) return undefined;
+
+  if (reactiveIntent.runType === "ci_repair") {
+    const failureContext = parseObjectJson(issue.lastGitHubFailureContextJson) ?? {};
+    const snapshot = parseObjectJson(issue.lastGitHubCiSnapshotJson);
+    const fallbackHeadSha = typeof failureContext.failureHeadSha === "string"
+      ? failureContext.failureHeadSha
+      : issue.lastGitHubFailureHeadSha ?? issue.prHeadSha;
+    const failureSignature = issue.lastGitHubFailureSignature
+      ?? (fallbackHeadSha ? `implicit_branch_ci::${fallbackHeadSha}` : undefined);
+    if (!failureSignature || issue.prState !== "open") return undefined;
+    if (
+      issue.lastAttemptedFailureSignature === failureSignature
+      && (fallbackHeadSha === undefined || issue.lastAttemptedFailureHeadSha === fallbackHeadSha)
+    ) {
+      return undefined;
+    }
+    return {
+      runType: reactiveIntent.runType,
+      wakeReason: reactiveIntent.wakeReason,
+      context: {
+        ...failureContext,
+        failureSignature,
+        ...(fallbackHeadSha ? { failureHeadSha: fallbackHeadSha } : {}),
+        ...(issue.lastGitHubFailureCheckName ? { checkName: issue.lastGitHubFailureCheckName } : {}),
+        ...(snapshot ? { ciSnapshot: snapshot } : {}),
+      },
+    };
+  }
+
+  if (reactiveIntent.runType === "queue_repair") {
+    const failureContext = parseObjectJson(issue.lastGitHubFailureContextJson) ?? {};
+    const incidentContext = parseObjectJson(issue.lastQueueIncidentJson) ?? {};
+    const fallbackHeadSha = typeof failureContext.failureHeadSha === "string"
+      ? failureContext.failureHeadSha
+      : undefined;
+    if (!hasUnattemptedFailureSignature(issue, fallbackHeadSha)) return undefined;
+    return {
+      runType: reactiveIntent.runType,
+      wakeReason: reactiveIntent.wakeReason,
+      context: {
+        ...incidentContext,
+        ...failureContext,
+      },
+    };
+  }
+
+  return undefined;
+}
 
 export class PatchRelayDatabase {
   readonly connection: DatabaseConnection;
@@ -112,10 +208,13 @@ export class PatchRelayDatabase {
     worktreePath?: string;
     threadId?: string | null;
     activeRunId?: number | null;
+    statusCommentId?: string | null;
     agentSessionId?: string | null;
     prNumber?: number | null;
     prUrl?: string | null;
     prState?: string | null;
+    prHeadSha?: string | null;
+    prAuthorLogin?: string | null;
     prReviewState?: string | null;
     prCheckStatus?: string | null;
     lastGitHubFailureSource?: GitHubFailureSource | null;
@@ -165,10 +264,13 @@ export class PatchRelayDatabase {
       if (params.worktreePath !== undefined) { sets.push("worktree_path = COALESCE(@worktreePath, worktree_path)"); values.worktreePath = params.worktreePath; }
       if (params.threadId !== undefined) { sets.push("thread_id = @threadId"); values.threadId = params.threadId; }
       if (params.activeRunId !== undefined) { sets.push("active_run_id = @activeRunId"); values.activeRunId = params.activeRunId; }
+      if (params.statusCommentId !== undefined) { sets.push("status_comment_id = @statusCommentId"); values.statusCommentId = params.statusCommentId; }
       if (params.agentSessionId !== undefined) { sets.push("agent_session_id = @agentSessionId"); values.agentSessionId = params.agentSessionId; }
       if (params.prNumber !== undefined) { sets.push("pr_number = @prNumber"); values.prNumber = params.prNumber; }
       if (params.prUrl !== undefined) { sets.push("pr_url = @prUrl"); values.prUrl = params.prUrl; }
       if (params.prState !== undefined) { sets.push("pr_state = @prState"); values.prState = params.prState; }
+      if (params.prHeadSha !== undefined) { sets.push("pr_head_sha = @prHeadSha"); values.prHeadSha = params.prHeadSha; }
+      if (params.prAuthorLogin !== undefined) { sets.push("pr_author_login = @prAuthorLogin"); values.prAuthorLogin = params.prAuthorLogin; }
       if (params.prReviewState !== undefined) { sets.push("pr_review_state = @prReviewState"); values.prReviewState = params.prReviewState; }
       if (params.prCheckStatus !== undefined) { sets.push("pr_check_status = @prCheckStatus"); values.prCheckStatus = params.prCheckStatus; }
       if (params.lastGitHubFailureSource !== undefined) { sets.push("last_github_failure_source = @lastGitHubFailureSource"); values.lastGitHubFailureSource = params.lastGitHubFailureSource; }
@@ -192,7 +294,6 @@ export class PatchRelayDatabase {
       if (params.reviewFixAttempts !== undefined) { sets.push("review_fix_attempts = @reviewFixAttempts"); values.reviewFixAttempts = params.reviewFixAttempts; }
       if (params.zombieRecoveryAttempts !== undefined) { sets.push("zombie_recovery_attempts = @zombieRecoveryAttempts"); values.zombieRecoveryAttempts = params.zombieRecoveryAttempts; }
       if (params.lastZombieRecoveryAt !== undefined) { sets.push("last_zombie_recovery_at = @lastZombieRecoveryAt"); values.lastZombieRecoveryAt = params.lastZombieRecoveryAt; }
-
       this.connection.prepare(`UPDATE issues SET ${sets.join(", ")} WHERE project_id = @projectId AND linear_issue_id = @linearIssueId`).run(values);
     } else {
       this.connection.prepare(`
@@ -200,9 +301,9 @@ export class PatchRelayDatabase {
           project_id, linear_issue_id, issue_key, title, description, url,
           priority, estimate,
           current_linear_state, current_linear_state_type, factory_state, pending_run_type, pending_run_context_json,
-          branch_name, worktree_path, thread_id, active_run_id,
+          branch_name, worktree_path, thread_id, active_run_id, status_comment_id,
           agent_session_id,
-          pr_number, pr_url, pr_state, pr_review_state, pr_check_status,
+          pr_number, pr_url, pr_state, pr_head_sha, pr_author_login, pr_review_state, pr_check_status,
           last_github_failure_source, last_github_failure_head_sha, last_github_failure_signature, last_github_failure_check_name, last_github_failure_check_url, last_github_failure_context_json, last_github_failure_at,
           last_github_ci_snapshot_head_sha, last_github_ci_snapshot_gate_check_name, last_github_ci_snapshot_gate_check_status, last_github_ci_snapshot_json, last_github_ci_snapshot_settled_at,
           last_queue_signal_at, last_queue_incident_json,
@@ -212,9 +313,9 @@ export class PatchRelayDatabase {
           @projectId, @linearIssueId, @issueKey, @title, @description, @url,
           @priority, @estimate,
           @currentLinearState, @currentLinearStateType, @factoryState, @pendingRunType, @pendingRunContextJson,
-          @branchName, @worktreePath, @threadId, @activeRunId,
+          @branchName, @worktreePath, @threadId, @activeRunId, @statusCommentId,
           @agentSessionId,
-          @prNumber, @prUrl, @prState, @prReviewState, @prCheckStatus,
+          @prNumber, @prUrl, @prState, @prHeadSha, @prAuthorLogin, @prReviewState, @prCheckStatus,
           @lastGitHubFailureSource, @lastGitHubFailureHeadSha, @lastGitHubFailureSignature, @lastGitHubFailureCheckName, @lastGitHubFailureCheckUrl, @lastGitHubFailureContextJson, @lastGitHubFailureAt,
           @lastGitHubCiSnapshotHeadSha, @lastGitHubCiSnapshotGateCheckName, @lastGitHubCiSnapshotGateCheckStatus, @lastGitHubCiSnapshotJson, @lastGitHubCiSnapshotSettledAt,
           @lastQueueSignalAt, @lastQueueIncidentJson,
@@ -239,10 +340,13 @@ export class PatchRelayDatabase {
         worktreePath: params.worktreePath ?? null,
         threadId: params.threadId ?? null,
         activeRunId: params.activeRunId ?? null,
+        statusCommentId: params.statusCommentId ?? null,
         agentSessionId: params.agentSessionId ?? null,
         prNumber: params.prNumber ?? null,
         prUrl: params.prUrl ?? null,
         prState: params.prState ?? null,
+        prHeadSha: params.prHeadSha ?? null,
+        prAuthorLogin: params.prAuthorLogin ?? null,
         prReviewState: params.prReviewState ?? null,
         prCheckStatus: params.prCheckStatus ?? null,
         lastGitHubFailureSource: params.lastGitHubFailureSource ?? null,
@@ -264,7 +368,9 @@ export class PatchRelayDatabase {
         now,
       });
     }
-    return this.getIssue(params.projectId, params.linearIssueId)!;
+    const updated = this.getIssue(params.projectId, params.linearIssueId)!;
+    this.syncIssueSessionFromIssue(updated);
+    return updated;
   }
 
   getIssue(projectId: string, linearIssueId: string): IssueRecord | undefined {
@@ -294,12 +400,419 @@ export class PatchRelayDatabase {
     return row ? mapIssueRow(row) : undefined;
   }
 
+  getIssueSession(projectId: string, linearIssueId: string): IssueSessionRecord | undefined {
+    const row = this.connection
+      .prepare("SELECT * FROM issue_sessions WHERE project_id = ? AND linear_issue_id = ?")
+      .get(projectId, linearIssueId) as Record<string, unknown> | undefined;
+    return row ? mapIssueSessionRow(row) : undefined;
+  }
+
+  getIssueSessionByKey(issueKey: string): IssueSessionRecord | undefined {
+    const row = this.connection.prepare("SELECT * FROM issue_sessions WHERE issue_key = ?").get(issueKey) as Record<string, unknown> | undefined;
+    return row ? mapIssueSessionRow(row) : undefined;
+  }
+
+  appendIssueSessionEvent(params: {
+    projectId: string;
+    linearIssueId: string;
+    eventType: IssueSessionEventType;
+    eventJson?: string | undefined;
+    dedupeKey?: string | undefined;
+  }): IssueSessionEventRecord {
+    if (params.dedupeKey) {
+      const existing = this.connection.prepare(`
+        SELECT * FROM issue_session_events
+        WHERE project_id = ? AND linear_issue_id = ? AND dedupe_key = ? AND processed_at IS NULL
+        ORDER BY id DESC LIMIT 1
+      `).get(params.projectId, params.linearIssueId, params.dedupeKey) as Record<string, unknown> | undefined;
+      if (existing) return mapIssueSessionEventRow(existing);
+    }
+
+    const now = isoNow();
+    const result = this.connection.prepare(`
+      INSERT INTO issue_session_events (
+        project_id, linear_issue_id, event_type, event_json, dedupe_key, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      params.projectId,
+      params.linearIssueId,
+      params.eventType,
+      params.eventJson ?? null,
+      params.dedupeKey ?? null,
+      now,
+    );
+    return this.getIssueSessionEvent(Number(result.lastInsertRowid))!;
+  }
+
+  appendIssueSessionEventWithLease(
+    lease: { projectId: string; linearIssueId: string; leaseId: string },
+    params: Parameters<PatchRelayDatabase["appendIssueSessionEvent"]>[0],
+  ): IssueSessionEventRecord | undefined {
+    return this.withIssueSessionLease(lease.projectId, lease.linearIssueId, lease.leaseId, () => this.appendIssueSessionEvent(params));
+  }
+
+  appendIssueSessionEventRespectingActiveLease(
+    projectId: string,
+    linearIssueId: string,
+    params: Parameters<PatchRelayDatabase["appendIssueSessionEvent"]>[0],
+  ): IssueSessionEventRecord | undefined {
+    const lease = this.getActiveIssueSessionLease(projectId, linearIssueId);
+    if (!lease) {
+      return this.appendIssueSessionEvent(params);
+    }
+    return this.appendIssueSessionEventWithLease(lease, params);
+  }
+
+  getIssueSessionEvent(id: number): IssueSessionEventRecord | undefined {
+    const row = this.connection.prepare("SELECT * FROM issue_session_events WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+    return row ? mapIssueSessionEventRow(row) : undefined;
+  }
+
+  listIssueSessionEvents(
+    projectId: string,
+    linearIssueId: string,
+    options?: { pendingOnly?: boolean; limit?: number },
+  ): IssueSessionEventRecord[] {
+    const conditions = ["project_id = ?", "linear_issue_id = ?"];
+    const values: Array<string | number> = [projectId, linearIssueId];
+    if (options?.pendingOnly) {
+      conditions.push("processed_at IS NULL");
+    }
+    let query = `SELECT * FROM issue_session_events WHERE ${conditions.join(" AND ")} ORDER BY id`;
+    if (options?.limit !== undefined) {
+      query += " LIMIT ?";
+      values.push(options.limit);
+    }
+    const rows = this.connection.prepare(query).all(...values) as Array<Record<string, unknown>>;
+    return rows.map(mapIssueSessionEventRow);
+  }
+
+  consumeIssueSessionEvents(projectId: string, linearIssueId: string, eventIds: number[], runId: number): void {
+    if (eventIds.length === 0) return;
+    const now = isoNow();
+    const placeholders = eventIds.map(() => "?").join(", ");
+    this.connection.prepare(`
+      UPDATE issue_session_events
+      SET processed_at = ?, consumed_by_run_id = ?
+      WHERE project_id = ? AND linear_issue_id = ? AND id IN (${placeholders}) AND processed_at IS NULL
+    `).run(now, runId, projectId, linearIssueId, ...eventIds);
+  }
+
+  clearPendingIssueSessionEvents(projectId: string, linearIssueId: string): void {
+    this.connection.prepare(`
+      UPDATE issue_session_events
+      SET processed_at = ?, consumed_by_run_id = NULL
+      WHERE project_id = ? AND linear_issue_id = ? AND processed_at IS NULL
+    `).run(isoNow(), projectId, linearIssueId);
+  }
+
+  hasPendingIssueSessionEvents(projectId: string, linearIssueId: string): boolean {
+    const row = this.connection.prepare(`
+      SELECT 1
+      FROM issue_session_events
+      WHERE project_id = ? AND linear_issue_id = ? AND processed_at IS NULL
+      LIMIT 1
+    `).get(projectId, linearIssueId) as Record<string, unknown> | undefined;
+    return row !== undefined;
+  }
+
+  peekIssueSessionWake(projectId: string, linearIssueId: string): {
+    eventIds: number[];
+    runType: RunType;
+    context: Record<string, unknown>;
+    wakeReason?: string | undefined;
+    resumeThread: boolean;
+  } | undefined {
+    const issue = this.getIssue(projectId, linearIssueId);
+    if (!issue) return undefined;
+    const events = this.listIssueSessionEvents(projectId, linearIssueId, { pendingOnly: true });
+    const plan = deriveSessionWakePlan(issue, events);
+    if (plan?.runType) {
+      return {
+        eventIds: events.map((event) => event.id),
+        runType: plan.runType,
+        context: plan.context,
+        ...(plan.wakeReason ? { wakeReason: plan.wakeReason } : {}),
+        resumeThread: plan.resumeThread,
+      };
+    }
+    const implicitWake = deriveImplicitReactiveWake(issue);
+    if (!implicitWake) return undefined;
+    return {
+      eventIds: [],
+      runType: implicitWake.runType,
+      context: implicitWake.context,
+      wakeReason: implicitWake.wakeReason,
+      resumeThread: false,
+    };
+  }
+
+  acquireIssueSessionLease(params: {
+    projectId: string;
+    linearIssueId: string;
+    leaseId: string;
+    workerId: string;
+    leasedUntil: string;
+    now?: string;
+  }): boolean {
+    const now = params.now ?? isoNow();
+    const result = this.connection.prepare(`
+      UPDATE issue_sessions
+      SET lease_id = ?, worker_id = ?, leased_until = ?, updated_at = ?
+      WHERE project_id = ? AND linear_issue_id = ?
+        AND (leased_until IS NULL OR leased_until <= ? OR lease_id = ?)
+    `).run(
+      params.leaseId,
+      params.workerId,
+      params.leasedUntil,
+      now,
+      params.projectId,
+      params.linearIssueId,
+      now,
+      params.leaseId,
+    );
+    return Number(result.changes ?? 0) > 0;
+  }
+
+  forceAcquireIssueSessionLease(params: {
+    projectId: string;
+    linearIssueId: string;
+    leaseId: string;
+    workerId: string;
+    leasedUntil: string;
+    now?: string;
+  }): boolean {
+    const now = params.now ?? isoNow();
+    const result = this.connection.prepare(`
+      UPDATE issue_sessions
+      SET lease_id = ?, worker_id = ?, leased_until = ?, updated_at = ?
+      WHERE project_id = ? AND linear_issue_id = ?
+    `).run(
+      params.leaseId,
+      params.workerId,
+      params.leasedUntil,
+      now,
+      params.projectId,
+      params.linearIssueId,
+    );
+    return Number(result.changes ?? 0) > 0;
+  }
+
+  renewIssueSessionLease(params: {
+    projectId: string;
+    linearIssueId: string;
+    leaseId: string;
+    leasedUntil: string;
+    now?: string;
+  }): boolean {
+    const now = params.now ?? isoNow();
+    const result = this.connection.prepare(`
+      UPDATE issue_sessions
+      SET leased_until = ?, updated_at = ?
+      WHERE project_id = ? AND linear_issue_id = ? AND lease_id = ?
+    `).run(
+      params.leasedUntil,
+      now,
+      params.projectId,
+      params.linearIssueId,
+      params.leaseId,
+    );
+    return Number(result.changes ?? 0) > 0;
+  }
+
+  releaseIssueSessionLease(projectId: string, linearIssueId: string, leaseId?: string): void {
+    this.connection.prepare(`
+      UPDATE issue_sessions
+      SET lease_id = NULL, worker_id = NULL, leased_until = NULL, updated_at = ?
+      WHERE project_id = ? AND linear_issue_id = ? AND (? IS NULL OR lease_id = ?)
+    `).run(isoNow(), projectId, linearIssueId, leaseId ?? null, leaseId ?? null);
+  }
+
+  releaseExpiredIssueSessionLeases(now = isoNow()): void {
+    this.connection.prepare(`
+      UPDATE issue_sessions
+      SET lease_id = NULL, worker_id = NULL, leased_until = NULL, updated_at = ?
+      WHERE leased_until IS NOT NULL AND leased_until <= ?
+    `).run(now, now);
+  }
+
+  hasActiveIssueSessionLease(projectId: string, linearIssueId: string, leaseId: string, now = isoNow()): boolean {
+    const row = this.connection.prepare(`
+      SELECT 1
+      FROM issue_sessions
+      WHERE project_id = ? AND linear_issue_id = ? AND lease_id = ?
+        AND leased_until IS NOT NULL
+        AND leased_until > ?
+      LIMIT 1
+    `).get(projectId, linearIssueId, leaseId, now) as Record<string, unknown> | undefined;
+    return row !== undefined;
+  }
+
+  getActiveIssueSessionLease(
+    projectId: string,
+    linearIssueId: string,
+    now = isoNow(),
+  ): { projectId: string; linearIssueId: string; leaseId: string } | undefined {
+    const row = this.connection.prepare(`
+      SELECT lease_id
+      FROM issue_sessions
+      WHERE project_id = ? AND linear_issue_id = ?
+        AND lease_id IS NOT NULL
+        AND leased_until IS NOT NULL
+        AND leased_until > ?
+      LIMIT 1
+    `).get(projectId, linearIssueId, now) as Record<string, unknown> | undefined;
+    const leaseId = typeof row?.lease_id === "string" ? row.lease_id : undefined;
+    if (!leaseId) return undefined;
+    return { projectId, linearIssueId, leaseId };
+  }
+
+  withIssueSessionLease<T>(
+    projectId: string,
+    linearIssueId: string,
+    leaseId: string,
+    fn: () => T,
+  ): T | undefined {
+    return this.transaction(() => {
+      if (!this.hasActiveIssueSessionLease(projectId, linearIssueId, leaseId)) {
+        return undefined;
+      }
+      return fn();
+    });
+  }
+
+  upsertIssueWithLease(
+    lease: { projectId: string; linearIssueId: string; leaseId: string },
+    params: Parameters<PatchRelayDatabase["upsertIssue"]>[0],
+  ): IssueRecord | undefined {
+    return this.withIssueSessionLease(lease.projectId, lease.linearIssueId, lease.leaseId, () => this.upsertIssue(params));
+  }
+
+  upsertIssueRespectingActiveLease(
+    projectId: string,
+    linearIssueId: string,
+    params: Parameters<PatchRelayDatabase["upsertIssue"]>[0],
+  ): IssueRecord | undefined {
+    const lease = this.getActiveIssueSessionLease(projectId, linearIssueId);
+    if (!lease) {
+      return this.upsertIssue(params);
+    }
+    return this.upsertIssueWithLease(lease, params);
+  }
+
+  finishRunWithLease(
+    lease: { projectId: string; linearIssueId: string; leaseId: string },
+    runId: number,
+    params: Parameters<PatchRelayDatabase["finishRun"]>[1],
+  ): boolean {
+    return this.withIssueSessionLease(lease.projectId, lease.linearIssueId, lease.leaseId, () => {
+      this.finishRun(runId, params);
+      return true;
+    }) ?? false;
+  }
+
+  finishRunRespectingActiveLease(
+    projectId: string,
+    linearIssueId: string,
+    runId: number,
+    params: Parameters<PatchRelayDatabase["finishRun"]>[1],
+  ): boolean {
+    const lease = this.getActiveIssueSessionLease(projectId, linearIssueId);
+    if (!lease) {
+      this.finishRun(runId, params);
+      return true;
+    }
+    return this.finishRunWithLease(lease, runId, params);
+  }
+
+  updateRunThreadWithLease(
+    lease: { projectId: string; linearIssueId: string; leaseId: string },
+    runId: number,
+    params: Parameters<PatchRelayDatabase["updateRunThread"]>[1],
+  ): boolean {
+    return this.withIssueSessionLease(lease.projectId, lease.linearIssueId, lease.leaseId, () => {
+      this.updateRunThread(runId, params);
+      return true;
+    }) ?? false;
+  }
+
+  consumeIssueSessionEventsWithLease(
+    lease: { projectId: string; linearIssueId: string; leaseId: string },
+    eventIds: number[],
+    runId: number,
+  ): boolean {
+    return this.withIssueSessionLease(lease.projectId, lease.linearIssueId, lease.leaseId, () => {
+      this.consumeIssueSessionEvents(lease.projectId, lease.linearIssueId, eventIds, runId);
+      return true;
+    }) ?? false;
+  }
+
+  clearPendingIssueSessionEventsWithLease(
+    lease: { projectId: string; linearIssueId: string; leaseId: string },
+  ): boolean {
+    return this.withIssueSessionLease(lease.projectId, lease.linearIssueId, lease.leaseId, () => {
+      this.clearPendingIssueSessionEvents(lease.projectId, lease.linearIssueId);
+      return true;
+    }) ?? false;
+  }
+
+  clearPendingIssueSessionEventsRespectingActiveLease(projectId: string, linearIssueId: string): boolean {
+    const lease = this.getActiveIssueSessionLease(projectId, linearIssueId);
+    if (!lease) {
+      this.clearPendingIssueSessionEvents(projectId, linearIssueId);
+      return true;
+    }
+    return this.clearPendingIssueSessionEventsWithLease(lease);
+  }
+
+  setIssueSessionLastWakeReasonWithLease(
+    lease: { projectId: string; linearIssueId: string; leaseId: string },
+    lastWakeReason?: string | null,
+  ): boolean {
+    return this.withIssueSessionLease(lease.projectId, lease.linearIssueId, lease.leaseId, () => {
+      this.setIssueSessionLastWakeReason(lease.projectId, lease.linearIssueId, lastWakeReason);
+      return true;
+    }) ?? false;
+  }
+
+  setIssueSessionLastWakeReason(projectId: string, linearIssueId: string, lastWakeReason?: string | null): void {
+    this.connection.prepare(`
+      UPDATE issue_sessions
+      SET last_wake_reason = ?, updated_at = ?
+      WHERE project_id = ? AND linear_issue_id = ?
+    `).run(lastWakeReason ?? null, isoNow(), projectId, linearIssueId);
+  }
+
   setBranchOwner(projectId: string, linearIssueId: string, owner: BranchOwner): void {
     this.connection.prepare(`
       UPDATE issues
       SET branch_owner = ?, branch_ownership_changed_at = ?, updated_at = ?
       WHERE project_id = ? AND linear_issue_id = ?
     `).run(owner, isoNow(), isoNow(), projectId, linearIssueId);
+  }
+
+  setBranchOwnerWithLease(
+    lease: { projectId: string; linearIssueId: string; leaseId: string },
+    owner: BranchOwner,
+  ): boolean {
+    return this.withIssueSessionLease(lease.projectId, lease.linearIssueId, lease.leaseId, () => {
+      this.setBranchOwner(lease.projectId, lease.linearIssueId, owner);
+      return true;
+    }) ?? false;
+  }
+
+  setBranchOwnerRespectingActiveLease(projectId: string, linearIssueId: string, owner: BranchOwner): boolean {
+    const lease = this.getActiveIssueSessionLease(projectId, linearIssueId);
+    if (!lease) {
+      this.setBranchOwner(projectId, linearIssueId, owner);
+      return true;
+    }
+    return this.setBranchOwnerWithLease(lease, owner);
+  }
+
+  releaseIssueSessionLeaseRespectingActiveLease(projectId: string, linearIssueId: string): void {
+    const lease = this.getActiveIssueSessionLease(projectId, linearIssueId);
+    this.releaseIssueSessionLease(projectId, linearIssueId, lease?.leaseId);
   }
 
   replaceIssueDependencies(params: {
@@ -425,31 +938,14 @@ export class PatchRelayDatabase {
   }
 
   listIssuesReadyForExecution(): Array<{ projectId: string; linearIssueId: string }> {
-    const rows = this.connection
-      .prepare(`
-        SELECT i.project_id, i.linear_issue_id
-        FROM issues i
-        WHERE i.pending_run_type IS NOT NULL
-          AND i.active_run_id IS NULL
-          AND NOT EXISTS (
-            SELECT 1
-            FROM issue_dependencies d
-            LEFT JOIN issues blockers
-              ON blockers.project_id = d.project_id
-             AND blockers.linear_issue_id = d.blocker_linear_issue_id
-            WHERE d.project_id = i.project_id
-              AND d.linear_issue_id = i.linear_issue_id
-              AND (
-                COALESCE(blockers.current_linear_state_type, d.blocker_current_linear_state_type, '') != 'completed'
-                AND LOWER(TRIM(COALESCE(blockers.current_linear_state, d.blocker_current_linear_state, ''))) != 'done'
-              )
-          )
-      `)
-      .all() as Array<Record<string, unknown>>;
-    return rows.map((row) => ({
-      projectId: String(row.project_id),
-      linearIssueId: String(row.linear_issue_id),
-    }));
+    return this.listIssues()
+      .filter((issue) => issue.activeRunId === undefined)
+      .filter((issue) => this.countUnresolvedBlockers(issue.projectId, issue.linearIssueId) === 0)
+      .filter((issue) => issue.pendingRunType !== undefined || this.peekIssueSessionWake(issue.projectId, issue.linearIssueId) !== undefined)
+      .map((issue) => ({
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+      }));
   }
 
   /**
@@ -464,6 +960,23 @@ export class PatchRelayDatabase {
          AND active_run_id IS NULL
          AND pending_run_type IS NULL
          AND pr_number IS NOT NULL`,
+      )
+      .all() as Array<Record<string, unknown>>;
+    return rows.map(mapIssueRow);
+  }
+
+  /**
+   * Issues in delegated state with dependencies but no pending/active run.
+   * Candidates for unblocking when their blockers complete.
+   */
+  listBlockedDelegatedIssues(): IssueRecord[] {
+    const rows = this.connection
+      .prepare(
+        `SELECT DISTINCT i.* FROM issues i
+         JOIN issue_dependencies d ON d.project_id = i.project_id AND d.linear_issue_id = i.linear_issue_id
+         WHERE i.factory_state = 'delegated'
+         AND i.active_run_id IS NULL
+         AND i.pending_run_type IS NULL`,
       )
       .all() as Array<Record<string, unknown>>;
     return rows.map(mapIssueRow);
@@ -514,7 +1027,12 @@ export class PatchRelayDatabase {
       params.promptText ?? null,
       now,
     );
-    return this.getRun(Number(result.lastInsertRowid))!;
+    const run = this.getRun(Number(result.lastInsertRowid))!;
+    const issue = this.getIssue(params.projectId, params.linearIssueId);
+    if (issue) {
+      this.syncIssueSessionFromIssue(issue, { lastRunType: run.runType });
+    }
+    return run;
   }
 
   getRun(id: number): RunRecord | undefined {
@@ -563,7 +1081,15 @@ export class PatchRelayDatabase {
         turn_id = COALESCE(?, turn_id),
         status = 'running'
       WHERE id = ?
+        AND ended_at IS NULL
+        AND status IN ('queued', 'running')
     `).run(params.threadId, params.parentThreadId ?? null, params.turnId ?? null, runId);
+    const run = this.getRun(runId);
+    if (!run) return;
+    const issue = this.getIssue(run.projectId, run.linearIssueId);
+    if (issue) {
+      this.syncIssueSessionFromIssue(issue);
+    }
   }
 
   updateRunTurnId(runId: number, turnId: string): void {
@@ -599,6 +1125,15 @@ export class PatchRelayDatabase {
       now,
       runId,
     );
+    const run = this.getRun(runId);
+    if (!run) return;
+    const issue = this.getIssue(run.projectId, run.linearIssueId);
+    if (issue) {
+      this.syncIssueSessionFromIssue(issue, {
+        summaryText: extractLatestAssistantSummary(this.getRun(runId) ?? run),
+        lastRunType: run.runType,
+      });
+    }
   }
 
   // ─── Thread Events (kept for extended history) ────────────────────
@@ -634,9 +1169,33 @@ export class PatchRelayDatabase {
   // ─── View builders ──────────────────────────────────────────────
 
   issueToTrackedIssue(issue: IssueRecord): TrackedIssueRecord {
+    const session = this.getIssueSession(issue.projectId, issue.linearIssueId);
     const blockedBy = this.listIssueDependencies(issue.projectId, issue.linearIssueId);
     const unresolvedBlockedBy = blockedBy.filter((entry) => !isResolvedLinearState(entry.blockerCurrentLinearStateType, entry.blockerCurrentLinearState));
+    const pendingWake = this.peekIssueSessionWake(issue.projectId, issue.linearIssueId);
     const failureContext = parseGitHubFailureContext(issue.lastGitHubFailureContextJson);
+    const blockedByKeys = unresolvedBlockedBy.map((entry) => entry.blockerIssueKey ?? entry.blockerLinearIssueId);
+    const waitingReason = derivePatchRelayWaitingReason({
+      ...(issue.activeRunId !== undefined ? { activeRunId: issue.activeRunId } : {}),
+      blockedByKeys,
+      factoryState: issue.factoryState,
+      pendingRunType: issue.pendingRunType,
+      prNumber: issue.prNumber,
+      prReviewState: issue.prReviewState,
+      prCheckStatus: issue.prCheckStatus,
+      latestFailureCheckName: issue.lastGitHubFailureCheckName,
+    });
+    const latestRun = this.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
+    const latestEvent = this.listIssueSessionEvents(issue.projectId, issue.linearIssueId, { limit: 1 }).at(-1);
+    const statusNote = deriveIssueStatusNote({
+      issue,
+      sessionSummary: session?.summaryText,
+      latestRun,
+      latestEvent,
+      failureSummary: failureContext?.summary,
+      blockedByKeys,
+      waitingReason,
+    });
     return {
       id: issue.id,
       projectId: issue.projectId,
@@ -644,17 +1203,31 @@ export class PatchRelayDatabase {
       ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
       ...(issue.title ? { title: issue.title } : {}),
       ...(issue.url ? { issueUrl: issue.url } : {}),
+      ...(statusNote ? { statusNote } : {}),
       ...(issue.currentLinearState ? { currentLinearState: issue.currentLinearState } : {}),
+      ...(session?.sessionState ? { sessionState: session.sessionState } : {}),
       factoryState: issue.factoryState,
       blockedByCount: unresolvedBlockedBy.length,
-      blockedByKeys: unresolvedBlockedBy
-        .map((entry) => entry.blockerIssueKey ?? entry.blockerLinearIssueId),
-      readyForExecution: issue.pendingRunType !== undefined && issue.activeRunId === undefined && unresolvedBlockedBy.length === 0,
+      blockedByKeys,
+      readyForExecution: isIssueSessionReadyForExecution({
+        sessionState: session?.sessionState,
+        factoryState: issue.factoryState,
+        activeRunId: issue.activeRunId,
+        blockedByCount: unresolvedBlockedBy.length,
+        hasPendingWake: pendingWake !== undefined,
+        hasLegacyPendingRun: issue.pendingRunType !== undefined,
+        ...(issue.prNumber !== undefined ? { prNumber: issue.prNumber } : {}),
+        ...(issue.prState ? { prState: issue.prState } : {}),
+        ...(issue.prReviewState ? { prReviewState: issue.prReviewState } : {}),
+        ...(issue.prCheckStatus ? { prCheckStatus: issue.prCheckStatus } : {}),
+        ...(issue.lastGitHubFailureSource ? { latestFailureSource: issue.lastGitHubFailureSource } : {}),
+      }),
       ...(issue.lastGitHubFailureSource ? { latestFailureSource: issue.lastGitHubFailureSource } : {}),
       ...(issue.lastGitHubFailureHeadSha ? { latestFailureHeadSha: issue.lastGitHubFailureHeadSha } : {}),
       ...(issue.lastGitHubFailureCheckName ? { latestFailureCheckName: issue.lastGitHubFailureCheckName } : {}),
       ...(failureContext?.stepName ? { latestFailureStepName: failureContext.stepName } : {}),
       ...(failureContext?.summary ? { latestFailureSummary: failureContext.summary } : {}),
+      ...(waitingReason ? { waitingReason } : {}),
       ...(issue.activeRunId !== undefined ? { activeRunId: issue.activeRunId } : {}),
       ...(issue.agentSessionId ? { activeAgentSessionId: issue.agentSessionId } : {}),
       updatedAt: issue.updatedAt,
@@ -671,6 +1244,48 @@ export class PatchRelayDatabase {
     return issue ? this.issueToTrackedIssue(issue) : undefined;
   }
 
+  listIssues(): IssueRecord[] {
+    const rows = this.connection
+      .prepare("SELECT * FROM issues ORDER BY updated_at DESC")
+      .all() as Array<Record<string, unknown>>;
+    return rows.map(mapIssueRow);
+  }
+
+  listIssuesWithAgentSessions(): IssueRecord[] {
+    const rows = this.connection
+      .prepare("SELECT * FROM issues WHERE agent_session_id IS NOT NULL ORDER BY updated_at DESC")
+      .all() as Array<Record<string, unknown>>;
+    return rows.map(mapIssueRow);
+  }
+
+  findLatestAgentSessionIdForIssue(linearIssueId: string): string | undefined {
+    const row = this.connection.prepare(`
+      SELECT COALESCE(
+        json_extract(payload_json, '$.agentSession.id'),
+        json_extract(payload_json, '$.data.agentSession.id'),
+        json_extract(payload_json, '$.agentSessionId'),
+        json_extract(payload_json, '$.data.agentSessionId')
+      ) AS agent_session_id
+      FROM webhook_events
+      WHERE COALESCE(
+        json_extract(payload_json, '$.agentSession.issueId'),
+        json_extract(payload_json, '$.data.agentSession.issueId'),
+        json_extract(payload_json, '$.agentSession.issue.id'),
+        json_extract(payload_json, '$.data.agentSession.issue.id')
+      ) = ?
+        AND COALESCE(
+          json_extract(payload_json, '$.agentSession.id'),
+          json_extract(payload_json, '$.data.agentSession.id'),
+          json_extract(payload_json, '$.agentSessionId'),
+          json_extract(payload_json, '$.data.agentSessionId')
+        ) IS NOT NULL
+      ORDER BY id DESC
+      LIMIT 1
+    `).get(linearIssueId) as Record<string, unknown> | undefined;
+
+    return row?.agent_session_id != null ? String(row.agent_session_id) : undefined;
+  }
+
   // ─── Issue overview for query service ─────────────────────────────
 
   getIssueOverview(issueKey: string): {
@@ -685,6 +1300,170 @@ export class PatchRelayDatabase {
       issue: tracked,
       ...(activeRun ? { activeRun } : {}),
     };
+  }
+
+  private syncIssueSessionFromIssue(
+    issue: IssueRecord,
+    options?: {
+      summaryText?: string | undefined;
+      lastRunType?: RunType | undefined;
+      lastWakeReason?: string | undefined;
+    },
+  ): void {
+    const tracked = this.issueToTrackedIssue(issue);
+    const existing = this.getIssueSession(issue.projectId, issue.linearIssueId);
+    const latestRun = this.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
+    const latestRunType = options?.lastRunType ?? latestRun?.runType ?? existing?.lastRunType;
+    const summaryText = this.resolveIssueSessionSummary(issue, latestRun, existing?.summaryText, options?.summaryText);
+    const activeThreadId = issue.threadId ?? existing?.activeThreadId;
+    const threadGeneration = activeThreadId && activeThreadId !== existing?.activeThreadId
+      ? (existing?.threadGeneration ?? 0) + 1
+      : (existing?.threadGeneration ?? (activeThreadId ? 1 : 0));
+    const sessionState = deriveIssueSessionState({
+      ...(issue.activeRunId !== undefined ? { activeRunId: issue.activeRunId } : {}),
+      factoryState: issue.factoryState,
+    });
+    const lastWakeReason = options?.lastWakeReason
+      ?? deriveIssueSessionWakeReason({
+        pendingRunType: issue.pendingRunType,
+        factoryState: issue.factoryState,
+        prNumber: issue.prNumber,
+        prState: issue.prState,
+        prReviewState: issue.prReviewState,
+        prCheckStatus: issue.prCheckStatus,
+        latestFailureSource: issue.lastGitHubFailureSource,
+      })
+      ?? existing?.lastWakeReason;
+    const now = isoNow();
+
+    if (existing) {
+      this.connection.prepare(`
+        UPDATE issue_sessions SET
+          issue_key = ?,
+          repo_id = ?,
+          branch_name = ?,
+          worktree_path = ?,
+          pr_number = ?,
+          pr_head_sha = ?,
+          pr_author_login = ?,
+          session_state = ?,
+          waiting_reason = ?,
+          summary_text = ?,
+          active_thread_id = ?,
+          thread_generation = ?,
+          active_run_id = ?,
+          last_run_type = ?,
+          last_wake_reason = ?,
+          ci_repair_attempts = ?,
+          queue_repair_attempts = ?,
+          review_fix_attempts = ?,
+          updated_at = ?
+        WHERE project_id = ? AND linear_issue_id = ?
+      `).run(
+        issue.issueKey ?? null,
+        issue.projectId,
+        issue.branchName ?? null,
+        issue.worktreePath ?? null,
+        issue.prNumber ?? null,
+        issue.prHeadSha ?? null,
+        issue.prAuthorLogin ?? null,
+        sessionState,
+        tracked.waitingReason ?? null,
+        summaryText ?? null,
+        activeThreadId ?? null,
+        threadGeneration,
+        issue.activeRunId ?? null,
+        latestRunType ?? null,
+        lastWakeReason ?? null,
+        issue.ciRepairAttempts,
+        issue.queueRepairAttempts,
+        issue.reviewFixAttempts,
+        now,
+        issue.projectId,
+        issue.linearIssueId,
+      );
+      return;
+    }
+
+    this.connection.prepare(`
+      INSERT INTO issue_sessions (
+        project_id, linear_issue_id, issue_key, repo_id, branch_name, worktree_path,
+        pr_number, pr_head_sha, pr_author_login, session_state, waiting_reason, summary_text,
+        active_thread_id, thread_generation, active_run_id, last_run_type, last_wake_reason,
+        ci_repair_attempts, queue_repair_attempts, review_fix_attempts,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      issue.projectId,
+      issue.linearIssueId,
+      issue.issueKey ?? null,
+      issue.projectId,
+      issue.branchName ?? null,
+      issue.worktreePath ?? null,
+      issue.prNumber ?? null,
+      issue.prHeadSha ?? null,
+      issue.prAuthorLogin ?? null,
+      sessionState,
+      tracked.waitingReason ?? null,
+      summaryText ?? null,
+      activeThreadId ?? null,
+      threadGeneration,
+      issue.activeRunId ?? null,
+      latestRunType ?? null,
+      lastWakeReason ?? null,
+      issue.ciRepairAttempts,
+      issue.queueRepairAttempts,
+      issue.reviewFixAttempts,
+      now,
+      now,
+    );
+  }
+
+  private resolveIssueSessionSummary(
+    issue: IssueRecord,
+    latestRun: RunRecord | undefined,
+    existingSummaryText: string | undefined,
+    explicitSummaryText: string | undefined,
+  ): string | undefined {
+    if (explicitSummaryText?.trim()) {
+      return explicitSummaryText;
+    }
+
+    const latestSummary = extractLatestAssistantSummary(latestRun);
+    if (this.shouldKeepPreviousIssueSummary(issue, latestRun)) {
+      return this.findLatestCompletedRunSummary(issue.projectId, issue.linearIssueId)
+        ?? existingSummaryText
+        ?? latestSummary;
+    }
+
+    return latestSummary ?? existingSummaryText;
+  }
+
+  private shouldKeepPreviousIssueSummary(issue: IssueRecord, latestRun: RunRecord | undefined): boolean {
+    if (!latestRun || latestRun.status !== "failed") {
+      return false;
+    }
+    if (latestRun.summaryJson || latestRun.reportJson) {
+      return false;
+    }
+    return issue.factoryState === "pr_open"
+      || issue.factoryState === "awaiting_queue"
+      || issue.factoryState === "done";
+  }
+
+  private findLatestCompletedRunSummary(projectId: string, linearIssueId: string): string | undefined {
+    const runs = this.listRunsForIssue(projectId, linearIssueId);
+    for (let index = runs.length - 1; index >= 0; index -= 1) {
+      const run = runs[index];
+      if (!run || run.status !== "completed") {
+        continue;
+      }
+      const summary = extractLatestAssistantSummary(run);
+      if (summary?.trim()) {
+        return summary;
+      }
+    }
+    return undefined;
   }
 }
 
@@ -709,18 +1488,23 @@ function mapIssueRow(row: Record<string, unknown>): IssueRecord {
     ...(row.pending_run_type !== null && row.pending_run_type !== undefined ? { pendingRunType: String(row.pending_run_type) as RunType } : {}),
     ...(row.pending_run_context_json !== null && row.pending_run_context_json !== undefined ? { pendingRunContextJson: String(row.pending_run_context_json) } : {}),
     ...(row.branch_name !== null ? { branchName: String(row.branch_name) } : {}),
-    ...(row.branch_owner !== null && row.branch_owner !== undefined ? { branchOwner: String(row.branch_owner) as BranchOwner } : { branchOwner: "patchrelay" as BranchOwner }),
+    ...(row.branch_owner !== null && row.branch_owner !== undefined && String(row.branch_owner) === "patchrelay"
+      ? { branchOwner: "patchrelay" as BranchOwner }
+      : { branchOwner: "patchrelay" as BranchOwner }),
     ...(row.branch_ownership_changed_at !== null && row.branch_ownership_changed_at !== undefined
       ? { branchOwnershipChangedAt: String(row.branch_ownership_changed_at) }
       : {}),
     ...(row.worktree_path !== null ? { worktreePath: String(row.worktree_path) } : {}),
     ...(row.thread_id !== null ? { threadId: String(row.thread_id) } : {}),
     ...(row.active_run_id !== null ? { activeRunId: Number(row.active_run_id) } : {}),
+    ...(row.status_comment_id !== null && row.status_comment_id !== undefined ? { statusCommentId: String(row.status_comment_id) } : {}),
     ...(row.agent_session_id !== null ? { agentSessionId: String(row.agent_session_id) } : {}),
     updatedAt: String(row.updated_at),
     ...(row.pr_number !== null && row.pr_number !== undefined ? { prNumber: Number(row.pr_number) } : {}),
     ...(row.pr_url !== null && row.pr_url !== undefined ? { prUrl: String(row.pr_url) } : {}),
     ...(row.pr_state !== null && row.pr_state !== undefined ? { prState: String(row.pr_state) } : {}),
+    ...(row.pr_head_sha !== null && row.pr_head_sha !== undefined ? { prHeadSha: String(row.pr_head_sha) } : {}),
+    ...(row.pr_author_login !== null && row.pr_author_login !== undefined ? { prAuthorLogin: String(row.pr_author_login) } : {}),
     ...(row.pr_review_state !== null && row.pr_review_state !== undefined ? { prReviewState: String(row.pr_review_state) } : {}),
     ...(row.pr_check_status !== null && row.pr_check_status !== undefined ? { prCheckStatus: String(row.pr_check_status) } : {}),
     ...(row.last_github_failure_source !== null && row.last_github_failure_source !== undefined
@@ -776,6 +1560,51 @@ function mapIssueRow(row: Record<string, unknown>): IssueRecord {
     reviewFixAttempts: Number(row.review_fix_attempts ?? 0),
     zombieRecoveryAttempts: Number(row.zombie_recovery_attempts ?? 0),
     ...(row.last_zombie_recovery_at !== null && row.last_zombie_recovery_at !== undefined ? { lastZombieRecoveryAt: String(row.last_zombie_recovery_at) } : {}),
+  };
+}
+
+function mapIssueSessionRow(row: Record<string, unknown>): IssueSessionRecord {
+  return {
+    id: Number(row.id),
+    projectId: String(row.project_id),
+    linearIssueId: String(row.linear_issue_id),
+    ...(row.issue_key !== null && row.issue_key !== undefined ? { issueKey: String(row.issue_key) } : {}),
+    repoId: String(row.repo_id),
+    ...(row.branch_name !== null && row.branch_name !== undefined ? { branchName: String(row.branch_name) } : {}),
+    ...(row.worktree_path !== null && row.worktree_path !== undefined ? { worktreePath: String(row.worktree_path) } : {}),
+    ...(row.pr_number !== null && row.pr_number !== undefined ? { prNumber: Number(row.pr_number) } : {}),
+    ...(row.pr_head_sha !== null && row.pr_head_sha !== undefined ? { prHeadSha: String(row.pr_head_sha) } : {}),
+    ...(row.pr_author_login !== null && row.pr_author_login !== undefined ? { prAuthorLogin: String(row.pr_author_login) } : {}),
+    sessionState: String(row.session_state) as IssueSessionRecord["sessionState"],
+    ...(row.waiting_reason !== null && row.waiting_reason !== undefined ? { waitingReason: String(row.waiting_reason) } : {}),
+    ...(row.summary_text !== null && row.summary_text !== undefined ? { summaryText: String(row.summary_text) } : {}),
+    ...(row.active_thread_id !== null && row.active_thread_id !== undefined ? { activeThreadId: String(row.active_thread_id) } : {}),
+    threadGeneration: Number(row.thread_generation ?? 0),
+    ...(row.active_run_id !== null && row.active_run_id !== undefined ? { activeRunId: Number(row.active_run_id) } : {}),
+    ...(row.last_run_type !== null && row.last_run_type !== undefined ? { lastRunType: String(row.last_run_type) as RunType } : {}),
+    ...(row.last_wake_reason !== null && row.last_wake_reason !== undefined ? { lastWakeReason: String(row.last_wake_reason) } : {}),
+    ciRepairAttempts: Number(row.ci_repair_attempts ?? 0),
+    queueRepairAttempts: Number(row.queue_repair_attempts ?? 0),
+    reviewFixAttempts: Number(row.review_fix_attempts ?? 0),
+    ...(row.lease_id !== null && row.lease_id !== undefined ? { leaseId: String(row.lease_id) } : {}),
+    ...(row.worker_id !== null && row.worker_id !== undefined ? { workerId: String(row.worker_id) } : {}),
+    ...(row.leased_until !== null && row.leased_until !== undefined ? { leasedUntil: String(row.leased_until) } : {}),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+function mapIssueSessionEventRow(row: Record<string, unknown>): IssueSessionEventRecord {
+  return {
+    id: Number(row.id),
+    projectId: String(row.project_id),
+    linearIssueId: String(row.linear_issue_id),
+    eventType: String(row.event_type) as IssueSessionEventType,
+    ...(row.event_json !== null && row.event_json !== undefined ? { eventJson: String(row.event_json) } : {}),
+    ...(row.dedupe_key !== null && row.dedupe_key !== undefined ? { dedupeKey: String(row.dedupe_key) } : {}),
+    createdAt: String(row.created_at),
+    ...(row.processed_at !== null && row.processed_at !== undefined ? { processedAt: String(row.processed_at) } : {}),
+    ...(row.consumed_by_run_id !== null && row.consumed_by_run_id !== undefined ? { consumedByRunId: Number(row.consumed_by_run_id) } : {}),
   };
 }
 

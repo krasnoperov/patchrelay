@@ -7,6 +7,7 @@ import { reconcile } from "../src/reconciler.ts";
 import type { ReconcileContext } from "../src/reconciler.ts";
 import type { QueueEntry, QueueEntryStatus, ReconcileEvent } from "../src/types.ts";
 import { TERMINAL_STATUSES } from "../src/types.ts";
+import { INVALIDATION_PATCH } from "../src/invalidation.ts";
 import { assertInvariants } from "./invariants.ts";
 
 export interface SimPR {
@@ -248,7 +249,17 @@ export class Harness {
   /** Dequeue a PR (simulates label removal). */
   dequeueByPR(prNumber: number): void {
     const entry = this.store.getEntryByPR(this.repoId, prNumber);
-    if (entry) this.store.dequeue(entry.id);
+    if (!entry) return;
+    this.store.dequeue(entry.id);
+    // Replicate service-level invalidateDownstreamOf: reset downstream
+    // entries so their specs (which included the dequeued entry's changes)
+    // are rebuilt without contamination.
+    for (const downstream of this.store.listActive(this.repoId)) {
+      if (downstream.position <= entry.position) continue;
+      if (TERMINAL_STATUSES.includes(downstream.status)) continue;
+      this.store.transition(downstream.id, "preparing_head",
+        INVALIDATION_PATCH, `invalidated: entry ${entry.id.slice(0, 8)} dequeued`);
+    }
   }
 
   private buildContext(): ReconcileContext {

@@ -9,17 +9,33 @@ import {
   getDefaultRuntimeEnvPath,
   getDefaultServiceEnvPath,
   getDefaultStateDir,
-  getRepoConfigPath,
   getSystemdUnitPath,
 } from "../../runtime-paths.ts";
 import type { ParsedArgs, Output } from "../types.ts";
 import { formatJson, writeOutput } from "../output.ts";
-import { fetchServiceGitHubAuthStatus, fetchServiceRepoDiscovery, getHomeEnv } from "../system.ts";
+import {
+  fetchServiceGitHubAuthStatus,
+  fetchServiceRepoAccess,
+  fetchServiceRepoDiscovery,
+  getHomeEnv,
+  loadRepoConfigById,
+} from "../system.ts";
 
 interface DoctorCheck {
   status: "pass" | "warn" | "fail";
   scope: string;
   message: string;
+}
+
+interface GhBranchProtectionResponse {
+  required_status_checks?: {
+    contexts?: string[];
+    checks?: Array<{ context?: string }>;
+  };
+}
+
+interface GhRepoResponse {
+  default_branch?: string;
 }
 
 function checkPath(scope: string, targetPath: string, writable = false): DoctorCheck {
@@ -50,6 +66,37 @@ async function checkExecutable(scope: string, command: string): Promise<DoctorCh
     return { status: "pass", scope, message: `${command} is available` };
   }
   return { status: "fail", scope, message: `${command} is not available in PATH` };
+}
+
+function runGhApiJson<T>(pathArg: string): T {
+  const result = spawnSync("gh", ["api", pathArg], { encoding: "utf8" });
+  if (result.status !== 0) {
+    throw new Error(result.stderr.trim() || result.stdout.trim() || `gh api ${pathArg} failed`);
+  }
+  return JSON.parse(result.stdout) as T;
+}
+
+function discoverRepoSettingsViaGhCli(repoFullName: string, branch: string): {
+  defaultBranch: string;
+  branch: string;
+  requiredChecks: string[];
+} {
+  const repo = runGhApiJson<GhRepoResponse>(`repos/${repoFullName}`);
+  const protection = runGhApiJson<GhBranchProtectionResponse>(`repos/${repoFullName}/branches/${branch}/protection`);
+  const requiredChecks = new Set<string>();
+  for (const context of protection.required_status_checks?.contexts ?? []) {
+    const trimmed = context?.trim();
+    if (trimmed) requiredChecks.add(trimmed);
+  }
+  for (const check of protection.required_status_checks?.checks ?? []) {
+    const trimmed = check.context?.trim();
+    if (trimmed) requiredChecks.add(trimmed);
+  }
+  return {
+    defaultBranch: repo.default_branch?.trim() || branch,
+    branch,
+    requiredChecks: [...requiredChecks].sort((left, right) => left.localeCompare(right)),
+  };
 }
 
 export async function handleDoctor(parsed: ParsedArgs, stdout: Output): Promise<number> {
@@ -139,12 +186,28 @@ export async function handleDoctor(parsed: ParsedArgs, stdout: Output): Promise<
 
   let repoConfigPath: string | undefined;
   if (repoId) {
-    repoConfigPath = getRepoConfigPath(repoId);
-    if (!existsSync(repoConfigPath)) {
-      checks.push({ status: "fail", scope: `repo:${repoId}`, message: `Repo config not found: ${repoConfigPath}` });
+    let loaded:
+      | {
+        configPath: string;
+        config: ReturnType<typeof loadConfig>;
+      }
+      | undefined;
+    try {
+      loaded = loadRepoConfigById(repoId);
+      repoConfigPath = loaded.configPath;
+    } catch (error) {
+      checks.push({
+        status: "fail",
+        scope: `repo:${repoId}`,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    if (!loaded) {
+      // already reported above
     } else {
       try {
-        const config = loadConfig(repoConfigPath);
+        const config = loaded.config;
         mkdirSync(path.dirname(config.database.path), { recursive: true });
         mkdirSync(path.dirname(config.clonePath), { recursive: true });
         checks.push({ status: "pass", scope: `repo:${repoId}`, message: `Repo config is valid for ${config.repoFullName}` });
@@ -157,8 +220,26 @@ export async function handleDoctor(parsed: ParsedArgs, stdout: Output): Promise<
         checks.push(checkPath(`repo:${repoId}:clone-parent`, path.dirname(config.clonePath), true));
         if (serviceGitHubStatus) {
           try {
-            const response = await fetchServiceRepoDiscovery(config.repoFullName, { baseBranch: config.baseBranch });
-            const discovered = response.discovery;
+            let discoveredSource: "service" | "gh";
+            let discovered: {
+              defaultBranch: string;
+              branch: string;
+              requiredChecks: string[];
+              warnings?: string[];
+            };
+            try {
+              const response = await fetchServiceRepoDiscovery(config.repoFullName, { baseBranch: config.baseBranch });
+              discovered = response.discovery;
+              discoveredSource = "service";
+            } catch (error) {
+              discovered = discoverRepoSettingsViaGhCli(config.repoFullName, config.baseBranch);
+              discoveredSource = "gh";
+              checks.push({
+                status: "warn",
+                scope: `repo:${repoId}:github-discovery`,
+                message: `Service discovery failed, used local gh fallback: ${error instanceof Error ? error.message : String(error)}`,
+              });
+            }
             checks.push({
               status: discovered.defaultBranch === config.baseBranch ? "pass" : "warn",
               scope: `repo:${repoId}:github-default-branch`,
@@ -169,23 +250,48 @@ export async function handleDoctor(parsed: ParsedArgs, stdout: Output): Promise<
 
             const configuredChecks = normalizeCheckList(config.requiredChecks);
             const discoveredChecks = normalizeCheckList(discovered.requiredChecks);
-            const checksMatch = configuredChecks.length === discoveredChecks.length
-              && configuredChecks.every((value, index) => value === discoveredChecks[index]);
+            const configuredSet = new Set(configuredChecks);
+            const discoveredSet = new Set(discoveredChecks);
+            const missingFromLocal = discoveredChecks.filter((value) => !configuredSet.has(value));
+            const extraLocal = configuredChecks.filter((value) => !discoveredSet.has(value));
+            const checksMatch = missingFromLocal.length === 0 && extraLocal.length === 0;
+            const localSuperset = missingFromLocal.length === 0 && extraLocal.length > 0;
             checks.push({
-              status: checksMatch ? "pass" : "warn",
+              status: checksMatch || localSuperset ? "pass" : "warn",
               scope: `repo:${repoId}:github-required-checks`,
               message: checksMatch
                 ? (configuredChecks.length > 0
                     ? `Local required checks match GitHub for ${config.baseBranch}`
                     : `No required checks configured locally and GitHub does not require status checks for ${config.baseBranch}`)
-                : `Local required checks [${configuredChecks.join(", ") || "(none)"}] differ from GitHub [${discoveredChecks.join(", ") || "(none)"}] for ${config.baseBranch}`,
+                : localSuperset
+                  ? `Local required checks extend GitHub for ${config.baseBranch} with additional gates [${extraLocal.join(", ")}]`
+                : `Local required checks [${configuredChecks.join(", ") || "(none)"}] differ from GitHub [${discoveredChecks.join(", ") || "(none)"}] for ${config.baseBranch}${discoveredSource === "gh" ? " (via gh fallback)" : ""}`,
             });
 
-            for (const warning of discovered.warnings) {
+            for (const warning of discovered.warnings ?? []) {
               checks.push({
                 status: "warn",
                 scope: `repo:${repoId}:github-discovery`,
                 message: warning,
+              });
+            }
+
+            try {
+              const access = await fetchServiceRepoAccess(config.repoFullName, { baseBranch: config.baseBranch });
+              checks.push({
+                status: access.permissions.push ? "pass" : "fail",
+                scope: `repo:${repoId}:github-push-access`,
+                message: access.permissions.push
+                  ? access.branchProtected
+                    ? `Steward App has Contents:${access.permissions.contents} for ${config.repoFullName}; ${config.baseBranch} is protected, so final fast-forward pushes still depend on branch rules allowing the App`
+                    : `Steward App has Contents:${access.permissions.contents} for ${config.repoFullName}`
+                  : `Steward App does not have Contents:write for ${config.repoFullName}; queue merges to ${config.baseBranch} will fail`,
+              });
+            } catch (error) {
+              checks.push({
+                status: "warn",
+                scope: `repo:${repoId}:github-push-access`,
+                message: `Could not verify steward push access: ${error instanceof Error ? error.message : String(error)}`,
               });
             }
           } catch (error) {

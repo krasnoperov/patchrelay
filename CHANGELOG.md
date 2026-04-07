@@ -1,5 +1,92 @@
 # Changelog
 
+## [0.35.12](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.35.11...patchrelay-v0.35.12) (2026-04-07)
+
+
+### Bug Fixes
+
+* address lint failures on wake handling branch ([c4c1707](https://github.com/krasnoperov/patchrelay/commit/c4c1707cb2f81e9e81ca9afb0d50f5b1de111da5))
+
+## [0.35.11](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.35.10...patchrelay-v0.35.11) (2026-04-04)
+
+
+### Bug Fixes
+
+* detect closed PRs in idle reconciliation and re-delegate ([6ebaca5](https://github.com/krasnoperov/patchrelay/commit/6ebaca56c509115d25a0c08476bd045b68fdc68a))
+* detect closed PRs in idle reconciliation and re-delegate ([29365f3](https://github.com/krasnoperov/patchrelay/commit/29365f35ed5934cdd43cf2716fd28007683b0694))
+
+## [0.35.10](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.35.9...patchrelay-v0.35.10) (2026-04-03)
+
+
+### Bug Fixes
+
+* probe GitHub for all idle issues with PRs ([f04b87a](https://github.com/krasnoperov/patchrelay/commit/f04b87a2e82f411125682261bbedba0ee8a9d794))
+* probe GitHub for all idle issues with PRs, not just pr_open ([1dc0625](https://github.com/krasnoperov/patchrelay/commit/1dc06257eea5fc417a2ab9a5e0c5649a48da6bee))
+
+## [0.35.9](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.35.8...patchrelay-v0.35.9) (2026-04-03)
+
+
+### Bug Fixes
+
+* push as patchrelay[bot] using App installation token ([e18346b](https://github.com/krasnoperov/patchrelay/commit/e18346b7904a2d8f4397d8ed0b913ff16f55c27e))
+* push as patchrelay[bot] using App installation token ([2cb4f38](https://github.com/krasnoperov/patchrelay/commit/2cb4f381015e01a555e62479983684573dbb570b))
+
+## [0.35.8](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.35.7...patchrelay-v0.35.8) (2026-04-03)
+
+
+### Bug Fixes
+
+* detect pre-queue merge conflicts in idle reconciliation ([60ea433](https://github.com/krasnoperov/patchrelay/commit/60ea43311d1494aa33fa83c664a0bdac2702d333))
+* detect pre-queue merge conflicts in idle reconciliation ([8ca2ea4](https://github.com/krasnoperov/patchrelay/commit/8ca2ea4f68a41334a15e04b8398af64474e061da))
+
+## [0.35.7](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.35.6...patchrelay-v0.35.7) (2026-04-03)
+
+
+### Bug Fixes
+
+* reset queueLabelApplied on all paths entering awaiting_queue ([578977f](https://github.com/krasnoperov/patchrelay/commit/578977f5332b6333e467f1854bf01da0b8ea68df))
+* reset queueLabelApplied on all paths entering awaiting_queue ([ebac73c](https://github.com/krasnoperov/patchrelay/commit/ebac73cde440c9ce9641deb8bc2201e2d175c06a))
+
+## [0.35.6](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.35.5...patchrelay-v0.35.6) (2026-04-03)
+
+
+### Bug Fixes
+
+* reset queueLabelApplied on queue transitions, widen provenance probe ([e53c15a](https://github.com/krasnoperov/patchrelay/commit/e53c15a6dd3dd1b85755d7cee6efd8146b31803c))
+* reset queueLabelApplied on queue transitions, widen provenance probe ([15dcbe1](https://github.com/krasnoperov/patchrelay/commit/15dcbe1cea88178738ac9435e582e2b06064d2af))
+
+## [0.35.5](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.35.4...patchrelay-v0.35.5) (2026-04-03)
+
+
+### Bug Fixes
+
+* operational reliability — health gate, label retry, provenance, reset ([f27ac71](https://github.com/krasnoperov/patchrelay/commit/f27ac7166d89f38463c8f2b8f622e6b06845ce39))
+* operational reliability — health gate, label retry, provenance, reset ([bfd926a](https://github.com/krasnoperov/patchrelay/commit/bfd926a8dc40c57bd08a6cd96e7e0c6bf13f9405))
+
+## [0.35.4](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.35.3...patchrelay-v0.35.4) (2026-04-03)
+
+
+### Bug Fixes
+
+* delegation edge cases — un-delegation state, issueRemoved, tests ([aff9641](https://github.com/krasnoperov/patchrelay/commit/aff9641a7a5cc0abf3fe2a22504fcfee6c5c4fcf))
+* delegation edge cases — un-delegation, issueRemoved, point of no return ([c51189b](https://github.com/krasnoperov/patchrelay/commit/c51189b4da13f78afba6c0e2fa404a83c13206ca))
+
+## [0.35.3](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.35.2...patchrelay-v0.35.3) (2026-04-03)
+
+
+### Bug Fixes
+
+* delegation reliability — un-delegation cleanup, terminal halt, blocker reconciliation ([b40a993](https://github.com/krasnoperov/patchrelay/commit/b40a9935d7be4c1105c9ec5f7e286c578debe9bf))
+* delegation reliability — un-delegation, terminal halt, blocker reconciliation ([0522930](https://github.com/krasnoperov/patchrelay/commit/0522930e0054f48c926eb2e6a685cd80e6dd1d05))
+
+## [0.35.2](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.35.1...patchrelay-v0.35.2) (2026-04-03)
+
+
+### Bug Fixes
+
+* reliability batch — merged-PR guards, startup scan, commit messages ([2129d8a](https://github.com/krasnoperov/patchrelay/commit/2129d8a1eb3ea330a8987f4949a9d57aa4201e0f))
+* reliability batch — merged-PR guards, startup scan, commit messages ([b306a00](https://github.com/krasnoperov/patchrelay/commit/b306a006dc29f380a2179ef54f5d35818a48482c))
+
 ## [0.35.1](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.35.0...patchrelay-v0.35.1) (2026-04-02)
 
 

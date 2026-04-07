@@ -1,11 +1,11 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { AppConfig } from "../../types.ts";
-import { getRunTypeFlag, parsePositiveIntegerFlag } from "../args.ts";
+import { getRunTypeFlag } from "../args.ts";
 import type { InteractiveRunner, Output, ParsedArgs } from "../command-types.ts";
 import type { CliDataAccess } from "../data.ts";
 import { CliUsageError } from "../errors.ts";
 import { formatJson } from "../formatters/json.ts";
-import { formatEvents, formatInspect, formatList, formatLive, formatOpen, formatReport, formatRetry, formatWorktree } from "../formatters/text.ts";
+import { formatInspect, formatList, formatLive, formatOpen, formatRetry, formatWorktree } from "../formatters/text.ts";
 import { buildOpenCommand } from "../interactive.ts";
 import { writeOutput } from "../output.ts";
 
@@ -46,10 +46,6 @@ export async function handleIssueCommand(params: IssueCommandParams): Promise<nu
         },
       });
     }
-    case "report":
-      return await handleReportCommand(nested);
-    case "events":
-      return await handleEventsCommand(nested);
     case "path":
       return await handleWorktreeCommand(nested);
     case "open":
@@ -87,58 +83,6 @@ export async function handleLiveCommand(params: IssueCommandParams): Promise<num
     }
     writeOutput(params.stdout, params.json ? formatJson(result) : formatLive(result));
     if (!watch || result.run.status !== "running") {
-      break;
-    }
-    await delay(2000);
-  } while (true);
-  return 0;
-}
-
-export async function handleReportCommand(params: IssueCommandParams): Promise<number> {
-  const issueKey = params.commandArgs[0];
-  if (!issueKey) {
-    throw new Error("report requires <issueKey>.");
-  }
-  const reportOptions: { runType?: string; runId?: number } = {};
-  const runType = getRunTypeFlag(params.parsed.flags.get("run-type"));
-  if (runType) {
-    reportOptions.runType = runType;
-  }
-  const runId = parsePositiveIntegerFlag(params.parsed.flags.get("run"), "--run");
-  if (runId !== undefined) {
-    reportOptions.runId = runId;
-  }
-  const result = params.data.report(issueKey, reportOptions);
-  if (!result) {
-    throw new Error(`Issue not found: ${issueKey}`);
-  }
-  writeOutput(params.stdout, params.json ? formatJson(result) : formatReport(result));
-  return 0;
-}
-
-export async function handleEventsCommand(params: IssueCommandParams): Promise<number> {
-  const issueKey = params.commandArgs[0];
-  if (!issueKey) {
-    throw new Error("events requires <issueKey>.");
-  }
-  const follow = params.parsed.flags.get("follow") === true;
-  let afterId: number | undefined;
-  let runId = parsePositiveIntegerFlag(params.parsed.flags.get("run"), "--run");
-  do {
-    const result = params.data.events(issueKey, {
-      ...(runId !== undefined ? { runId } : {}),
-      ...(typeof params.parsed.flags.get("method") === "string" ? { method: String(params.parsed.flags.get("method")) } : {}),
-      ...(afterId !== undefined ? { afterId } : {}),
-    });
-    if (!result) {
-      throw new Error(`Run not found for ${issueKey}`);
-    }
-    runId = result.run.id;
-    if (result.events.length > 0) {
-      writeOutput(params.stdout, params.json ? formatJson(result) : formatEvents(result));
-      afterId = result.events.at(-1)?.id;
-    }
-    if (!follow || result.run.status !== "running") {
       break;
     }
     await delay(2000);

@@ -8,7 +8,7 @@ This directory is for deeper product specs later, such as:
 - operator workflows
 - review and repair UX
 - merge queue provider behavior
-- state visualization and queue hand-off UX
+- state visualization and downstream queue observation UX
 
 Until those docs exist, treat the root product spec and [../architecture.md](../architecture.md) as authoritative.
 

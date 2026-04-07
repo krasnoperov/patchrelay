@@ -1,5 +1,119 @@
 # Changelog
 
+## [0.9.6](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.9.5...merge-steward-v0.9.6) (2026-04-07)
+
+
+### Bug Fixes
+
+* **review-quill:** trigger release for git auth + sandbox fixes ([0dcb588](https://github.com/krasnoperov/patchrelay/commit/0dcb588ce77c6966337b3ccb183a3ae1aa25dcef))
+* **review-quill:** trigger release for git auth + sandbox fixes ([ad565ab](https://github.com/krasnoperov/patchrelay/commit/ad565ab7d7788d7a607c7cd727e1cd79a369b245)), closes [#312](https://github.com/krasnoperov/patchrelay/issues/312)
+
+## [0.9.5](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.9.4...merge-steward-v0.9.5) (2026-04-03)
+
+
+### Bug Fixes
+
+* operational reliability — health gate, label retry, provenance, reset ([f27ac71](https://github.com/krasnoperov/patchrelay/commit/f27ac7166d89f38463c8f2b8f622e6b06845ce39))
+* operational reliability — health gate, label retry, provenance, reset ([bfd926a](https://github.com/krasnoperov/patchrelay/commit/bfd926a8dc40c57bd08a6cd96e7e0c6bf13f9405))
+
+## [0.9.4](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.9.3...merge-steward-v0.9.4) (2026-04-03)
+
+
+### Bug Fixes
+
+* complete dequeue invalidation — service, harness, external merge ([00f5499](https://github.com/krasnoperov/patchrelay/commit/00f54994119f7c6c4bce8c11bcfe831cb9bb7486))
+* complete dequeue invalidation — service, harness, external merge ([4cc6298](https://github.com/krasnoperov/patchrelay/commit/4cc629889c931ce25145d1cf6e82b34c6500bcb2))
+
+## [0.9.3](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.9.2...merge-steward-v0.9.3) (2026-04-03)
+
+
+### Bug Fixes
+
+* add stale dependency guard in reconciler + dequeue contamination tests ([6b330b6](https://github.com/krasnoperov/patchrelay/commit/6b330b6c3fd6a4de4f8e8a6f11d531dbae1e3aa7))
+* stale dependency guard in reconciler + dequeue contamination tests ([7778ff5](https://github.com/krasnoperov/patchrelay/commit/7778ff5eb5a103b0d8e695a0975c2eb59b5a6c01))
+
+## [0.9.2](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.9.1...merge-steward-v0.9.2) (2026-04-03)
+
+
+### Bug Fixes
+
+* invalidate downstream specs on mid-queue dequeue ([2011909](https://github.com/krasnoperov/patchrelay/commit/201190984a34cc131bfd3863d7eb345d64a0a246))
+* invalidate downstream specs on mid-queue dequeue ([f87fb5f](https://github.com/krasnoperov/patchrelay/commit/f87fb5f4bbc30ba68a7b2cad7336fe3e7511525f))
+
+## [0.9.1](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.9.0...merge-steward-v0.9.1) (2026-04-03)
+
+
+### Bug Fixes
+
+* use patience diff algorithm for spec merges ([38c198e](https://github.com/krasnoperov/patchrelay/commit/38c198e25f3452aebea9dfff95f2571d3d7c006a))
+* use patience diff algorithm for spec merges ([2822deb](https://github.com/krasnoperov/patchrelay/commit/2822deb634000974b2e4a544882d1365ef638b5d))
+
+## [0.9.0](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.8.13...merge-steward-v0.9.0) (2026-04-03)
+
+
+### Features
+
+* configurable auto-resolve patterns for merge conflicts ([59ee2cc](https://github.com/krasnoperov/patchrelay/commit/59ee2cc7a286d3a2c4743ccc84e8f0fe3d58fba7))
+* configurable auto-resolve patterns for merge conflicts ([1c0a2f2](https://github.com/krasnoperov/patchrelay/commit/1c0a2f26ff05426f0d917b2c3bdc2001aa21456f))
+
+## [0.8.13](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.8.12...merge-steward-v0.8.13) (2026-04-03)
+
+
+### Bug Fixes
+
+* support pnpm and yarn lockfile auto-resolve in spec builds ([7f9c5c9](https://github.com/krasnoperov/patchrelay/commit/7f9c5c9ae69e78c610e569001a4006aa50045c1b))
+* support pnpm and yarn lockfile auto-resolve in spec builds ([4fee9ef](https://github.com/krasnoperov/patchrelay/commit/4fee9ef723c8453b39c956eefd033a3369b7dd7d))
+
+## [0.8.12](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.8.11...merge-steward-v0.8.12) (2026-04-03)
+
+
+### Bug Fixes
+
+* **merge-steward:** reject skipped required checks ([2ba38f9](https://github.com/krasnoperov/patchrelay/commit/2ba38f91f80338d0a65095ac54cf5f23c52401b7))
+* **merge-steward:** reject skipped required checks instead of passing them ([4ab10e5](https://github.com/krasnoperov/patchrelay/commit/4ab10e532eabe49f47e156aca6f24cece12546c4))
+
+## [0.8.11](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.8.10...merge-steward-v0.8.11) (2026-04-03)
+
+
+### Bug Fixes
+
+* reliability batch — merged-PR guards, startup scan, commit messages ([2129d8a](https://github.com/krasnoperov/patchrelay/commit/2129d8a1eb3ea330a8987f4949a9d57aa4201e0f))
+* reliability batch — merged-PR guards, startup scan, commit messages ([b306a00](https://github.com/krasnoperov/patchrelay/commit/b306a006dc29f380a2179ef54f5d35818a48482c))
+
+## [0.8.10](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.8.9...merge-steward-v0.8.10) (2026-04-03)
+
+
+### Bug Fixes
+
+* attribute steward merge commits to bot identity ([e16695d](https://github.com/krasnoperov/patchrelay/commit/e16695d7912b7478c92fd4ff8382696461913084))
+* attribute steward merge commits to discovered bot identity ([82774ab](https://github.com/krasnoperov/patchrelay/commit/82774ab1f33c03c65e863174c83698d812220c70))
+
+## [0.8.9](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.8.8...merge-steward-v0.8.9) (2026-04-03)
+
+
+### Bug Fixes
+
+* push spec branch to remote before triggering CI ([3ad6b2f](https://github.com/krasnoperov/patchrelay/commit/3ad6b2f98e46f58d0a93173c91d3e2ae729f0bf3))
+* push spec branch to remote before triggering CI ([63e0b84](https://github.com/krasnoperov/patchrelay/commit/63e0b84c13370529c8dc3c2913a9d5d93bf16fd8))
+
+## [0.8.8](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.8.7...merge-steward-v0.8.8) (2026-04-03)
+
+
+### Bug Fixes
+
+* use explicit origin/ prefix for PR branches in worktree merges ([8a36f36](https://github.com/krasnoperov/patchrelay/commit/8a36f36114581465a0027d3bcd83a1efb7117935))
+* use explicit origin/ prefix for PR branches in worktree merges ([52b3e65](https://github.com/krasnoperov/patchrelay/commit/52b3e65b6870f4d86ab458c1a83395e4371fe583))
+
+## [0.8.7](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.8.6...merge-steward-v0.8.7) (2026-04-03)
+
+
+### Bug Fixes
+
+* harden buildSpeculative against stale clone and lockfile conflicts ([0a78f9d](https://github.com/krasnoperov/patchrelay/commit/0a78f9dd408f53fcf920cf70f51e16076d07770a))
+* harden buildSpeculative against stale clone and lockfile conflicts ([14b2466](https://github.com/krasnoperov/patchrelay/commit/14b2466d1a0ce7a1ce572632b83e1d56b22b2397))
+* use isolated git worktrees for speculative branch builds ([ea40e85](https://github.com/krasnoperov/patchrelay/commit/ea40e8554c29e7453489668d059cea3937155160))
+* use isolated git worktrees for speculative branch builds ([1243adb](https://github.com/krasnoperov/patchrelay/commit/1243adbc7ad98662265a07fe25c5dc583637c153))
+
 ## [0.8.6](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.8.5...merge-steward-v0.8.6) (2026-04-02)
 
 

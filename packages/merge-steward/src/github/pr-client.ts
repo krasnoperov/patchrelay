@@ -44,6 +44,7 @@ export class GitHubPRClient implements GitHubPRApi {
       headSha: data.headRefOid,
       mergeable: data.state === "OPEN",
       mergeStateStatus: data.mergeStateStatus,
+      reviewDecision: data.reviewDecision,
       reviewApproved: data.reviewDecision === "APPROVED",
       merged: data.state === "MERGED",
     };
@@ -78,6 +79,51 @@ export class GitHubPRClient implements GitHubPRApi {
           conclusion: mapRestConclusion(c.status, c.conclusion),
           ...(c.html_url ? { url: c.html_url } : {}),
         }));
+    } catch {
+      return [];
+    }
+  }
+
+  async listOpenPRsWithLabel(label: string): Promise<Array<{ number: number; branch: string; headSha: string }>> {
+    const result = await exec("gh", [
+      "pr", "list",
+      "--repo", this.repoFullName,
+      "--label", label,
+      "--state", "open",
+      "--json", "number,headRefName,headRefOid",
+    ], { allowNonZero: true, githubRepoFullName: this.repoFullName });
+
+    if (result.exitCode !== 0) return [];
+
+    try {
+      const data = JSON.parse(result.stdout) as Array<{
+        number: number;
+        headRefName: string;
+        headRefOid: string;
+      }>;
+      return data.map((pr) => ({ number: pr.number, branch: pr.headRefName, headSha: pr.headRefOid }));
+    } catch {
+      return [];
+    }
+  }
+
+  async listOpenPRs(): Promise<Array<{ number: number; branch: string; headSha: string }>> {
+    const result = await exec("gh", [
+      "pr", "list",
+      "--repo", this.repoFullName,
+      "--state", "open",
+      "--json", "number,headRefName,headRefOid",
+    ], { allowNonZero: true, githubRepoFullName: this.repoFullName });
+
+    if (result.exitCode !== 0) return [];
+
+    try {
+      const data = JSON.parse(result.stdout) as Array<{
+        number: number;
+        headRefName: string;
+        headRefOid: string;
+      }>;
+      return data.map((pr) => ({ number: pr.number, branch: pr.headRefName, headSha: pr.headRefOid }));
     } catch {
       return [];
     }

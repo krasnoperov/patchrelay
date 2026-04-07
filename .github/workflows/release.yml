@@ -41,10 +41,10 @@ jobs:
         run: npm run lint
 
       - name: Typecheck
-        run: npm run typecheck && npm run -w packages/merge-steward typecheck
+        run: npm run typecheck && npm run -w packages/merge-steward typecheck && npm run -w packages/review-quill typecheck
 
       - name: Test
-        run: npm test && npm run -w packages/merge-steward test
+        run: npm test && npm run -w packages/merge-steward test && npm run -w packages/review-quill test
 
       - name: Compute release plan
         id: plan
@@ -57,6 +57,10 @@ jobs:
       - name: Build merge-steward
         if: steps.plan.outputs.steward_release == 'true'
         run: npm run -w packages/merge-steward build
+
+      - name: Build review-quill
+        if: steps.plan.outputs.review_quill_release == 'true'
+        run: npm run -w packages/review-quill build
 
       - name: Create release app token
         if: steps.plan.outputs.any_release == 'true'
@@ -76,6 +80,10 @@ jobs:
         if: steps.plan.outputs.steward_publish == 'true'
         run: npm publish -w packages/merge-steward --access public
 
+      - name: Publish review-quill
+        if: steps.plan.outputs.review_quill_publish == 'true'
+        run: npm publish -w packages/review-quill --access public
+
       - name: Commit version bump and tag
         if: steps.plan.outputs.any_release == 'true'
         env:
@@ -83,7 +91,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package.json package-lock.json packages/merge-steward/package.json
+          git add package.json package-lock.json packages/merge-steward/package.json packages/review-quill/package.json
           git commit -m "$(cat <<'EOF'
           ci: release
           EOF
@@ -93,6 +101,9 @@ jobs:
           fi
           if [[ "${{ steps.plan.outputs.steward_release }}" == "true" ]]; then
             git tag "merge-steward-v${{ steps.plan.outputs.steward_version }}"
+          fi
+          if [[ "${{ steps.plan.outputs.review_quill_release }}" == "true" ]]; then
+            git tag "review-quill-v${{ steps.plan.outputs.review_quill_version }}"
           fi
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
           git push origin main --tags

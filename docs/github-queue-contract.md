@@ -15,15 +15,14 @@ This document is the contract for that boundary.
 
 ## Shared Control Artifacts
 
-- Admission label:
-  PatchRelay adds this when a PR reaches `awaiting_queue`.
-  Merge Steward admits only labeled PRs.
-  Default: `queue`
-
 - Eviction check run:
   Merge Steward emits this on queue eviction.
   PatchRelay interprets it as a queue-repair request rather than ordinary CI failure.
   Default: `merge-steward/queue`
+
+- Optional compatibility label:
+  Some repos may still carry a `queue` label or similar metadata.
+  PatchRelay does not rely on it for scheduling, and Merge Steward admission should not require it.
 
 ## Ownership
 
@@ -71,18 +70,16 @@ This document is the contract for that boundary.
 ## Observability Contract
 
 - PatchRelay should expose:
-  - configured admission label
   - configured eviction check name
   - last observed queue/failure signal
 
 - Merge Steward should expose:
   - incident detail for evicted entries
   - emitted eviction check run name
-  - configured admission label
+  - current required checks / admission facts from GitHub truth
 
 ## Defaults
 
-- Admission label: `queue`
 - Eviction check run: `merge-steward/queue`
 
-Changing either value must be treated as a protocol change and updated on both sides.
+Changing the eviction check name must be treated as a protocol change and updated on both sides.

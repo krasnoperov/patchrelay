@@ -1,11 +1,13 @@
 import type { CodexAppServerClient } from "./codex-app-server.ts";
+import type { CodexThreadSummary } from "./codex-types.ts";
 import type { PatchRelayDatabase } from "./db.ts";
-import { parseGitHubFailureContext, summarizeGitHubFailureContext } from "./github-failure-context.ts";
-import { parseStoredQueueRepairContext } from "./merge-queue-incident.ts";
-import { resolveMergeQueueProtocol } from "./merge-queue-protocol.ts";
+import type { IssueSessionRecord } from "./db-types.ts";
+import { parseGitHubFailureContext } from "./github-failure-context.ts";
+import { isIssueSessionReadyForExecution } from "./issue-session.ts";
 import { extractStageSummary, summarizeCurrentThread } from "./run-reporting.ts";
-import type { AppConfig, StageReport, RunRecord, TrackedIssueRecord } from "./types.ts";
-import { safeJsonParse } from "./utils.ts";
+import type { StageReport, RunRecord, TrackedIssueRecord } from "./types.ts";
+import { deriveIssueStatusNote } from "./status-note.ts";
+import { derivePatchRelayWaitingReason } from "./waiting-reason.ts";
 
 interface RunStatusProvider {
   getActiveRunStatus(issueKey: string): Promise<{
@@ -15,116 +17,270 @@ interface RunStatusProvider {
   } | undefined>;
 }
 
+interface IssueOverviewRun {
+  id: number;
+  runType: string;
+  status: string;
+  startedAt: string;
+  endedAt?: string | undefined;
+  threadId?: string | undefined;
+  report?: StageReport | undefined;
+  events?: Array<{
+    id: number;
+    method: string;
+    createdAt: string;
+    parsedEvent?: Record<string, unknown> | undefined;
+  }> | undefined;
+}
+
+interface IssueOverviewResult {
+  issue: TrackedIssueRecord;
+  session?: IssueSessionRecord | undefined;
+  activeRun?: RunRecord | undefined;
+  latestRun?: RunRecord | undefined;
+  liveThread?: CodexThreadSummary | undefined;
+  runs?: IssueOverviewRun[] | undefined;
+  issueContext?: {
+    description?: string;
+    currentLinearState?: string;
+    issueUrl?: string;
+    worktreePath?: string;
+    branchName?: string;
+    prUrl?: string;
+    priority?: number;
+    estimate?: number;
+    ciRepairAttempts: number;
+    queueRepairAttempts: number;
+    reviewFixAttempts: number;
+    latestFailureSource?: string;
+    latestFailureHeadSha?: string;
+    latestFailureCheckName?: string;
+    latestFailureStepName?: string;
+    latestFailureSummary?: string;
+    runCount: number;
+  } | undefined;
+}
+
+function parseStageReport(reportJson: string | undefined, runStatus: string): StageReport | undefined {
+  if (!reportJson) return undefined;
+  try {
+    const parsed = JSON.parse(reportJson) as StageReport;
+    return { ...parsed, status: runStatus };
+  } catch {
+    return undefined;
+  }
+}
+
 export class IssueQueryService {
   constructor(
-    private readonly config: AppConfig,
     private readonly db: PatchRelayDatabase,
     private readonly codex: CodexAppServerClient,
     private readonly runStatusProvider: RunStatusProvider,
   ) {}
 
-  async getIssueOverview(issueKey: string) {
-    const result = this.db.getIssueOverview(issueKey);
-    if (!result) return undefined;
-
-    const issueRecord = this.db.getIssueByKey(issueKey);
-    const activeStatus = await this.runStatusProvider.getActiveRunStatus(issueKey);
-    const activeRun = activeStatus?.run ?? result.activeRun;
-    const latestRun = this.db.getLatestRunForIssue(result.issue.projectId, result.issue.linearIssueId);
-    let liveThread;
-    if (activeStatus?.liveThread) {
-      liveThread = activeStatus.liveThread;
-    } else if (activeRun?.threadId) {
-      liveThread = await this.codex.readThread(activeRun.threadId, true).then(summarizeCurrentThread).catch(() => undefined);
-    }
-
-    return {
-      ...result,
-      issue: issueRecord ? { ...result.issue, queueProtocol: this.buildQueueProtocol(issueRecord.projectId, issueRecord) } : result.issue,
-      ...(activeRun ? { activeRun } : {}),
-      ...(latestRun ? { latestRun } : {}),
-      ...(liveThread ? { liveThread } : {}),
-    };
+  private async readLiveThread(run?: RunRecord | undefined): Promise<CodexThreadSummary | undefined> {
+    if (!run?.threadId) return undefined;
+    return await this.codex.readThread(run.threadId, true).catch(() => undefined);
   }
 
-  async getIssueReport(issueKey: string) {
-    const issue = this.db.getTrackedIssueByKey(issueKey);
-    if (!issue) return undefined;
-
-    return {
-      issue,
-      runs: this.db.listRunsForIssue(issue.projectId, issue.linearIssueId).map((run) => ({
-        run,
-        ...(run.reportJson ? { report: JSON.parse(run.reportJson) as StageReport } : {}),
-      })),
-    };
-  }
-
-  async getRunEvents(issueKey: string, runId: number) {
-    const issue = this.db.getTrackedIssueByKey(issueKey);
-    if (!issue) return undefined;
-
-    const run = this.db.getRun(runId);
-    if (!run || run.projectId !== issue.projectId || run.linearIssueId !== issue.linearIssueId) return undefined;
-
-    return {
-      issue,
-      run,
-      events: this.db.listThreadEvents(runId).map((event) => ({
-        ...event,
-        parsedEvent: safeJsonParse<Record<string, unknown>>(event.eventJson),
-      })),
-    };
-  }
-
-  async getIssueTimeline(issueKey: string) {
-    const issue = this.db.getTrackedIssueByKey(issueKey);
-    if (!issue) return undefined;
-
-    const fullIssue = this.db.getIssueByKey(issueKey);
-    const runs = this.db.listRunsForIssue(issue.projectId, issue.linearIssueId).map((run) => ({
+  private buildRuns(projectId: string, linearIssueId: string): IssueOverviewRun[] {
+    return this.db.listRunsForIssue(projectId, linearIssueId).map((run) => ({
       id: run.id,
       runType: run.runType,
       status: run.status,
       startedAt: run.startedAt,
-      endedAt: run.endedAt,
-      threadId: run.threadId,
-      events: this.db.listThreadEvents(run.id).map((event) => ({
-        id: event.id,
-        method: event.method,
-        createdAt: event.createdAt,
-        parsedEvent: safeJsonParse<Record<string, unknown>>(event.eventJson),
-      })),
-      ...(run.reportJson ? { report: JSON.parse(run.reportJson) as StageReport } : {}),
+      ...(run.endedAt ? { endedAt: run.endedAt } : {}),
+      ...(run.threadId ? { threadId: run.threadId } : {}),
+      ...(() => {
+        const report = parseStageReport(run.reportJson, run.status);
+        return report ? { report } : {};
+      })(),
+      ...(() => {
+        const events = this.db.listThreadEvents(run.id).flatMap((event) => {
+          try {
+            const parsed = JSON.parse(event.eventJson) as unknown;
+            return [{
+              id: event.id,
+              method: event.method,
+              createdAt: event.createdAt,
+              ...(parsed && typeof parsed === "object" && !Array.isArray(parsed)
+                ? { parsedEvent: parsed as Record<string, unknown> }
+                : {}),
+            }];
+          } catch {
+            return [{
+              id: event.id,
+              method: event.method,
+              createdAt: event.createdAt,
+            }];
+          }
+        });
+        return events.length > 0 ? { events } : {};
+      })(),
     }));
+  }
 
-    const feedEvents = this.db.operatorFeed.list({ issueKey, limit: 500 });
+  async getIssueOverview(issueKey: string): Promise<IssueOverviewResult | undefined> {
+    const session = this.db.getIssueSessionByKey(issueKey);
+    if (!session) {
+      const legacy = this.db.getIssueOverview(issueKey);
+      if (!legacy) return undefined;
 
-    let liveThread = undefined;
-    const activeRunId = fullIssue?.activeRunId;
-    const activeRun = activeRunId !== undefined ? runs.find((r) => r.id === activeRunId) : undefined;
-    if (activeRun?.threadId) {
-      liveThread = await this.codex.readThread(activeRun.threadId, true).catch(() => undefined);
+      const issueRecord = this.db.getIssueByKey(issueKey);
+      const activeStatus = await this.runStatusProvider.getActiveRunStatus(issueKey);
+      const activeRun = activeStatus?.run ?? legacy.activeRun;
+      const latestRun = this.db.getLatestRunForIssue(legacy.issue.projectId, legacy.issue.linearIssueId);
+      const latestEvent = this.db.listIssueSessionEvents(legacy.issue.projectId, legacy.issue.linearIssueId, { limit: 1 }).at(-1);
+      const runs = this.buildRuns(legacy.issue.projectId, legacy.issue.linearIssueId);
+      const runCount = runs.length;
+      const liveThread = await this.readLiveThread(activeRun);
+      const statusNote = issueRecord
+        ? deriveIssueStatusNote({
+            issue: issueRecord,
+            latestRun,
+            latestEvent,
+            failureSummary: legacy.issue.latestFailureSummary,
+            blockedByKeys: legacy.issue.blockedByKeys,
+            waitingReason: legacy.issue.waitingReason,
+          })
+        : legacy.issue.statusNote;
+
+      return {
+        issue: {
+          ...legacy.issue,
+          ...(statusNote ? { statusNote } : {}),
+        },
+        ...(activeRun ? { activeRun } : {}),
+        ...(latestRun ? { latestRun } : {}),
+        ...(liveThread ? { liveThread } : {}),
+        ...(runs.length > 0 ? { runs } : {}),
+        ...(issueRecord
+          ? {
+              issueContext: {
+                ...(issueRecord.description ? { description: issueRecord.description } : {}),
+                ...(issueRecord.currentLinearState ? { currentLinearState: issueRecord.currentLinearState } : {}),
+                ...(issueRecord.url ? { issueUrl: issueRecord.url } : {}),
+                ...(issueRecord.worktreePath ? { worktreePath: issueRecord.worktreePath } : {}),
+                ...(issueRecord.branchName ? { branchName: issueRecord.branchName } : {}),
+                ...(issueRecord.prUrl ? { prUrl: issueRecord.prUrl } : {}),
+                ...(issueRecord.priority != null ? { priority: issueRecord.priority } : {}),
+                ...(issueRecord.estimate != null ? { estimate: issueRecord.estimate } : {}),
+                ciRepairAttempts: issueRecord.ciRepairAttempts,
+                queueRepairAttempts: issueRecord.queueRepairAttempts,
+                reviewFixAttempts: issueRecord.reviewFixAttempts,
+                ...(legacy.issue.latestFailureSource ? { latestFailureSource: legacy.issue.latestFailureSource } : {}),
+                ...(legacy.issue.latestFailureHeadSha ? { latestFailureHeadSha: legacy.issue.latestFailureHeadSha } : {}),
+                ...(legacy.issue.latestFailureCheckName ? { latestFailureCheckName: legacy.issue.latestFailureCheckName } : {}),
+                ...(legacy.issue.latestFailureStepName ? { latestFailureStepName: legacy.issue.latestFailureStepName } : {}),
+                ...(legacy.issue.latestFailureSummary ? { latestFailureSummary: legacy.issue.latestFailureSummary } : {}),
+                runCount,
+              },
+            }
+          : {}),
+      };
     }
 
+    const issueRecord = this.db.getIssueByKey(issueKey);
+    const blockedBy = this.db.listIssueDependencies(session.projectId, session.linearIssueId);
+    const unresolvedBlockedBy = blockedBy.filter((entry) => (
+      entry.blockerCurrentLinearStateType !== "completed"
+      && entry.blockerCurrentLinearState?.trim().toLowerCase() !== "done"
+    ));
+    const blockedByKeys = unresolvedBlockedBy.map((entry) => entry.blockerIssueKey ?? entry.blockerLinearIssueId);
+    const activeStatus = await this.runStatusProvider.getActiveRunStatus(issueKey);
+    const activeRun = activeStatus?.run
+      ?? (session.activeRunId !== undefined ? this.db.getRun(session.activeRunId) : undefined);
+    const latestRun = this.db.getLatestRunForIssue(session.projectId, session.linearIssueId);
+    const latestEvent = this.db.listIssueSessionEvents(session.projectId, session.linearIssueId, { limit: 1 }).at(-1);
+    const runs = this.buildRuns(session.projectId, session.linearIssueId);
+    const runCount = runs.length;
+    const liveThread = await this.readLiveThread(activeRun);
+    const failureContext = parseGitHubFailureContext(issueRecord?.lastGitHubFailureContextJson);
+
+    const waitingReason = session.waitingReason ?? derivePatchRelayWaitingReason({
+      ...(activeRun ? { activeRunType: activeRun.runType } : {}),
+      blockedByKeys,
+      factoryState: issueRecord?.factoryState ?? "delegated",
+      pendingRunType: issueRecord?.pendingRunType,
+      prNumber: session.prNumber,
+      prReviewState: issueRecord?.prReviewState,
+      prCheckStatus: issueRecord?.prCheckStatus,
+      latestFailureCheckName: issueRecord?.lastGitHubFailureCheckName,
+    });
+    const issue: TrackedIssueRecord = {
+      id: issueRecord?.id ?? session.id,
+      projectId: session.projectId,
+      linearIssueId: session.linearIssueId,
+      ...(session.issueKey ? { issueKey: session.issueKey } : {}),
+      ...(issueRecord?.title ? { title: issueRecord.title } : {}),
+      ...(issueRecord?.url ? { issueUrl: issueRecord.url } : {}),
+      ...(issueRecord?.currentLinearState ? { currentLinearState: issueRecord.currentLinearState } : {}),
+      sessionState: session.sessionState,
+      factoryState: issueRecord?.factoryState ?? "delegated",
+      blockedByCount: unresolvedBlockedBy.length,
+      blockedByKeys,
+      readyForExecution: isIssueSessionReadyForExecution({
+        sessionState: session.sessionState,
+        factoryState: issueRecord?.factoryState ?? "delegated",
+        ...(activeRun ? { activeRunId: activeRun.id } : {}),
+        blockedByCount: unresolvedBlockedBy.length,
+        hasPendingWake: this.db.peekIssueSessionWake(session.projectId, session.linearIssueId) !== undefined,
+        hasLegacyPendingRun: issueRecord?.pendingRunType !== undefined,
+        ...(session.prNumber !== undefined ? { prNumber: session.prNumber } : {}),
+        ...(issueRecord?.prState ? { prState: issueRecord.prState } : {}),
+        ...(issueRecord?.prReviewState ? { prReviewState: issueRecord.prReviewState } : {}),
+        ...(issueRecord?.prCheckStatus ? { prCheckStatus: issueRecord.prCheckStatus } : {}),
+        ...(issueRecord?.lastGitHubFailureSource ? { latestFailureSource: issueRecord.lastGitHubFailureSource } : {}),
+      }),
+      ...(issueRecord?.lastGitHubFailureSource ? { latestFailureSource: issueRecord.lastGitHubFailureSource } : {}),
+      ...(issueRecord?.lastGitHubFailureHeadSha ? { latestFailureHeadSha: issueRecord.lastGitHubFailureHeadSha } : {}),
+      ...(issueRecord?.lastGitHubFailureCheckName ? { latestFailureCheckName: issueRecord.lastGitHubFailureCheckName } : {}),
+      ...(() => {
+        const statusNote = issueRecord
+          ? deriveIssueStatusNote({
+              issue: issueRecord,
+              sessionSummary: session.summaryText,
+              latestRun,
+              latestEvent,
+              failureSummary: failureContext?.summary,
+              blockedByKeys,
+              waitingReason,
+            })
+          : undefined;
+        return statusNote ? { statusNote } : {};
+      })(),
+      ...(waitingReason ? { waitingReason } : {}),
+      ...(activeRun ? { activeRunId: activeRun.id } : {}),
+      ...(issueRecord?.agentSessionId ? { activeAgentSessionId: issueRecord.agentSessionId } : {}),
+      updatedAt: session.updatedAt,
+    };
+
     return {
-      issue: {
-        ...issue,
-        ...(fullIssue?.description ? { description: fullIssue.description } : {}),
-        ...(fullIssue?.branchName ? { branchName: fullIssue.branchName } : {}),
-        ...(fullIssue?.worktreePath ? { worktreePath: fullIssue.worktreePath } : {}),
-        ...(fullIssue?.prUrl ? { prUrl: fullIssue.prUrl } : {}),
-        ...(fullIssue?.priority != null ? { priority: fullIssue.priority } : {}),
-        ...(fullIssue?.estimate != null ? { estimate: fullIssue.estimate } : {}),
-        ciRepairAttempts: fullIssue?.ciRepairAttempts ?? 0,
-        queueRepairAttempts: fullIssue?.queueRepairAttempts ?? 0,
-        reviewFixAttempts: fullIssue?.reviewFixAttempts ?? 0,
-        ...(fullIssue ? { queueProtocol: this.buildQueueProtocol(fullIssue.projectId, fullIssue) } : {}),
+      issue,
+      session,
+      ...(activeRun ? { activeRun } : {}),
+      ...(latestRun ? { latestRun } : {}),
+      ...(liveThread ? { liveThread } : {}),
+      ...(runs.length > 0 ? { runs } : {}),
+      issueContext: {
+        ...(issueRecord?.description ? { description: issueRecord.description } : {}),
+        ...(issueRecord?.currentLinearState ? { currentLinearState: issueRecord.currentLinearState } : {}),
+        ...(issueRecord?.url ? { issueUrl: issueRecord.url } : {}),
+        ...(session.worktreePath ? { worktreePath: session.worktreePath } : {}),
+        ...(session.branchName ? { branchName: session.branchName } : {}),
+        ...(issueRecord?.prUrl ? { prUrl: issueRecord.prUrl } : {}),
+        ...(issueRecord?.priority != null ? { priority: issueRecord.priority } : {}),
+        ...(issueRecord?.estimate != null ? { estimate: issueRecord.estimate } : {}),
+        ciRepairAttempts: issueRecord?.ciRepairAttempts ?? session.ciRepairAttempts,
+        queueRepairAttempts: issueRecord?.queueRepairAttempts ?? session.queueRepairAttempts,
+        reviewFixAttempts: issueRecord?.reviewFixAttempts ?? session.reviewFixAttempts,
+        ...(issue.latestFailureSource ? { latestFailureSource: issue.latestFailureSource } : {}),
+        ...(issue.latestFailureHeadSha ? { latestFailureHeadSha: issue.latestFailureHeadSha } : {}),
+        ...(issue.latestFailureCheckName ? { latestFailureCheckName: issue.latestFailureCheckName } : {}),
+        ...(issue.latestFailureStepName ? { latestFailureStepName: issue.latestFailureStepName } : {}),
+        ...(issue.latestFailureSummary ? { latestFailureSummary: issue.latestFailureSummary } : {}),
+        runCount,
       },
-      runs,
-      feedEvents,
-      liveThread,
-      activeRunId,
     };
   }
 
@@ -137,74 +293,41 @@ export class IssueQueryService {
     if (!overview) return undefined;
 
     const issueRecord = this.db.getIssueByKey(issueKey);
-    const report = await this.getIssueReport(issueKey);
-    const latestRunReport = report?.runs.at(-1)?.report;
+    const latestRunReport = parseStageReport(overview.latestRun?.reportJson, overview.latestRun?.status ?? "unknown");
+    const runs = (overview.runs ?? this.buildRuns(overview.issue.projectId, overview.issue.linearIssueId)).map((run) => ({
+      run: {
+        id: run.id,
+        runType: run.runType,
+        status: run.status,
+        startedAt: run.startedAt,
+        ...(run.endedAt ? { endedAt: run.endedAt } : {}),
+      },
+      ...(run.report ? { report: run.report } : {}),
+    }));
     return {
       issue: {
         issueKey: overview.issue.issueKey,
         title: overview.issue.title,
         issueUrl: overview.issue.issueUrl,
         currentLinearState: overview.issue.currentLinearState,
+        ...(overview.session?.sessionState ? { sessionState: overview.session.sessionState } : {}),
         factoryState: overview.issue.factoryState,
-        ...(issueRecord?.prNumber !== undefined ? { prNumber: issueRecord.prNumber } : {}),
+        ...(overview.session?.prNumber !== undefined ? { prNumber: overview.session.prNumber } : {}),
         ...(issueRecord?.prUrl ? { prUrl: issueRecord.prUrl } : {}),
         ...(issueRecord?.prState ? { prState: issueRecord.prState } : {}),
         ...(issueRecord?.prReviewState ? { prReviewState: issueRecord.prReviewState } : {}),
         ...(issueRecord?.prCheckStatus ? { prCheckStatus: issueRecord.prCheckStatus } : {}),
         ...(issueRecord ? { ciRepairAttempts: issueRecord.ciRepairAttempts, queueRepairAttempts: issueRecord.queueRepairAttempts } : {}),
-        ...(issueRecord ? { queueProtocol: this.buildQueueProtocol(issueRecord.projectId, issueRecord) } : {}),
+        ...(overview.issue.waitingReason ? { waitingReason: overview.issue.waitingReason } : {}),
+        ...(overview.issue.statusNote ? { statusNote: overview.issue.statusNote } : {}),
+        ...(overview.session?.lastWakeReason ? { lastWakeReason: overview.session.lastWakeReason } : {}),
       },
       ...(overview.activeRun ? { activeRun: overview.activeRun } : {}),
       ...(overview.latestRun ? { latestRun: overview.latestRun } : {}),
-      ...(overview.liveThread ? { liveThread: overview.liveThread } : {}),
+      ...(overview.liveThread ? { liveThread: summarizeCurrentThread(overview.liveThread) } : {}),
       ...(latestRunReport ? { latestReportSummary: extractStageSummary(latestRunReport) } : {}),
-      feedEvents: this.db.operatorFeed.list({ issueKey, limit: 500 }),
-      activeRunId: issueRecord?.activeRunId ?? null,
-      runs: report?.runs ?? [],
+      runs,
       generatedAt: new Date().toISOString(),
-    };
-  }
-
-  private buildQueueProtocol(
-    projectId: string,
-    issue: {
-      prNumber?: number | undefined;
-      lastGitHubFailureSource?: string | undefined;
-      lastGitHubFailureHeadSha?: string | undefined;
-      lastGitHubFailureSignature?: string | undefined;
-      lastGitHubFailureCheckName?: string | undefined;
-      lastGitHubFailureCheckUrl?: string | undefined;
-      lastGitHubFailureContextJson?: string | undefined;
-      lastGitHubFailureAt?: string | undefined;
-      lastQueueSignalAt?: string | undefined;
-      lastQueueIncidentJson?: string | undefined;
-    },
-  ) {
-    const project = this.config.projects.find((entry) => entry.id === projectId);
-    const protocol = resolveMergeQueueProtocol(project);
-    const failureContext = parseGitHubFailureContext(issue.lastGitHubFailureContextJson);
-    const queueIncident = issue.lastQueueIncidentJson
-      ? parseStoredQueueRepairContext(issue.lastQueueIncidentJson)
-      : undefined;
-    return {
-      repoFullName: protocol.repoFullName,
-      baseBranch: protocol.baseBranch,
-      admissionLabel: protocol.admissionLabel,
-      evictionCheckName: protocol.evictionCheckName,
-      prNumber: issue.prNumber ?? null,
-      lastFailureSource: issue.lastGitHubFailureSource ?? null,
-      lastFailureHeadSha: issue.lastGitHubFailureHeadSha ?? failureContext?.headSha ?? null,
-      lastFailureSignature: issue.lastGitHubFailureSignature ?? failureContext?.failureSignature ?? null,
-      lastFailureCheckName: issue.lastGitHubFailureCheckName ?? null,
-      lastFailureCheckUrl: issue.lastGitHubFailureCheckUrl ?? null,
-      lastFailureStepName: failureContext?.stepName ?? null,
-      lastFailureSummary: summarizeGitHubFailureContext(failureContext) ?? null,
-      lastFailureAt: issue.lastGitHubFailureAt ?? null,
-      lastQueueSignalAt: issue.lastQueueSignalAt ?? null,
-      lastIncidentId: queueIncident?.incidentId ?? null,
-      lastIncidentUrl: queueIncident?.incidentUrl ?? null,
-      lastIncidentFailureClass: queueIncident?.incidentContext?.failureClass ?? null,
-      lastIncidentSummary: queueIncident?.incidentSummary ?? null,
     };
   }
 }

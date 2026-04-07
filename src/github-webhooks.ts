@@ -79,6 +79,10 @@ function normalizePullRequestEvent(payload: GitHubWebhookPayload, repoFullName: 
     prNumber: pr.number,
     prUrl: pr.html_url,
     prState,
+    prAuthorLogin: pr.user?.login ?? undefined,
+    prLabels: Array.isArray(pr.labels)
+      ? pr.labels.map((label) => label?.name).filter((label): label is string => typeof label === "string" && label.trim().length > 0)
+      : undefined,
   };
 }
 
@@ -113,6 +117,7 @@ function normalizePullRequestReviewEvent(payload: GitHubWebhookPayload, repoFull
     prNumber: pr.number,
     prUrl: pr.html_url,
     prState: "open",
+    prAuthorLogin: pr.user?.login ?? undefined,
     reviewState,
     reviewBody: review.body ?? undefined,
     reviewerName: review.user?.login ?? undefined,

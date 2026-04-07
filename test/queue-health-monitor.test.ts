@@ -107,7 +107,7 @@ function createTestHarness(baseDir: string, ghScript: string) {
   );
 
   const reconcileQueueHealth = () =>
-    (orchestrator as unknown as { reconcileQueueHealth: () => Promise<void> }).reconcileQueueHealth();
+    (orchestrator as unknown as { queueHealthMonitor: { reconcile: () => Promise<void> } }).queueHealthMonitor.reconcile();
 
   return { config, db, enqueueCalls, orchestrator, reconcileQueueHealth, oldPath };
 }
@@ -216,15 +216,15 @@ exit 1`;
   }
 });
 
-// ─── DIRTY + label → queue_repair ─────────────────────────────────
+// ─── DIRTY downstream-waiting PR → queue_repair ───────────────────
 
-test("reconcileQueueHealth dispatches queue_repair for DIRTY PR with queue label", { concurrency: false }, async () => {
+test("reconcileQueueHealth dispatches queue_repair for DIRTY downstream-waiting PR", { concurrency: false }, async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "qhm-dirty-"));
   let oldPath: string | undefined;
   try {
     const ghScript = `
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
-  printf '{"state":"OPEN","mergeable":"CONFLICTING","mergeStateStatus":"DIRTY","headRefOid":"deadbeef","labels":[{"name":"queue"}]}'
+  printf '{"state":"OPEN","mergeable":"CONFLICTING","mergeStateStatus":"DIRTY","headRefOid":"deadbeef"}'
   exit 0
 fi
 exit 1`;
@@ -236,9 +236,11 @@ exit 1`;
 
     const issue = harness.db.getIssue("proj", "issue-1");
     assert.equal(issue?.factoryState, "repairing_queue");
-    assert.equal(issue?.pendingRunType, "queue_repair");
+    assert.equal(issue?.pendingRunType, undefined);
     assert.equal(issue?.branchOwner, "patchrelay");
-    const ctx = JSON.parse(issue?.pendingRunContextJson ?? "{}");
+    const wake = harness.db.peekIssueSessionWake("proj", "issue-1");
+    assert.equal(wake?.runType, "queue_repair");
+    const ctx = wake?.context ?? {};
     assert.equal(ctx.source, "queue_health_monitor");
     assert.equal(ctx.failureReason, "preemptive_conflict");
     assert.equal(ctx.failureHeadSha, "deadbeef");
@@ -249,15 +251,15 @@ exit 1`;
   }
 });
 
-// ─── DIRTY without label → skip ──────────────────────────────────
+// ─── DIRTY without label → queue_repair for downstream upkeep ─────
 
-test("reconcileQueueHealth skips DIRTY PR without queue label", { concurrency: false }, async () => {
+test("reconcileQueueHealth dispatches queue_repair for DIRTY PR without label metadata", { concurrency: false }, async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "qhm-dirty-no-label-"));
   let oldPath: string | undefined;
   try {
     const ghScript = `
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
-  printf '{"state":"OPEN","mergeable":"CONFLICTING","mergeStateStatus":"DIRTY","headRefOid":"deadbeef","labels":[]}'
+  printf '{"state":"OPEN","mergeable":"CONFLICTING","mergeStateStatus":"DIRTY","headRefOid":"deadbeef"}'
   exit 0
 fi
 exit 1`;
@@ -268,8 +270,10 @@ exit 1`;
     await harness.reconcileQueueHealth();
 
     const issue = harness.db.getIssue("proj", "issue-1");
-    assert.equal(issue?.factoryState, "awaiting_queue");
+    assert.equal(issue?.factoryState, "repairing_queue");
     assert.equal(issue?.pendingRunType, undefined);
+    assert.equal(harness.db.peekIssueSessionWake("proj", "issue-1")?.runType, "queue_repair");
+    assert.deepEqual(harness.enqueueCalls, [{ projectId: "proj", issueId: "issue-1" }]);
   } finally {
     process.env.PATH = oldPath;
     rmSync(baseDir, { recursive: true, force: true });
@@ -323,7 +327,8 @@ exit 1`;
     await harness.reconcileQueueHealth();
     const after1 = harness.db.getIssue("proj", "issue-1");
     assert.equal(after1?.factoryState, "repairing_queue");
-    assert.equal(after1?.pendingRunType, "queue_repair");
+    assert.equal(after1?.pendingRunType, undefined);
+    assert.equal(harness.db.peekIssueSessionWake("proj", "issue-1")?.runType, "queue_repair");
 
     // Reset state to awaiting_queue to simulate the issue coming back
     // (e.g. repair completed but conflict remains with same head)
@@ -335,6 +340,7 @@ exit 1`;
       pendingRunContextJson: null,
       activeRunId: null,
     });
+    harness.db.consumeIssueSessionEvents("proj", "issue-1", harness.db.listIssueSessionEvents("proj", "issue-1", { pendingOnly: true }).map((event) => event.id), 999);
     const oldDate = new Date(Date.now() - 300_000).toISOString();
     harness.db["connection"]
       .prepare("UPDATE issues SET updated_at = ? WHERE linear_issue_id = ?")

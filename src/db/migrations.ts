@@ -24,6 +24,8 @@ CREATE TABLE IF NOT EXISTS issues (
   pr_number INTEGER,
   pr_url TEXT,
   pr_state TEXT,
+  pr_head_sha TEXT,
+  pr_author_login TEXT,
   pr_review_state TEXT,
   pr_check_status TEXT,
   ci_repair_attempts INTEGER NOT NULL DEFAULT 0,
@@ -48,6 +50,48 @@ CREATE TABLE IF NOT EXISTS runs (
   failure_reason TEXT,
   started_at TEXT NOT NULL,
   ended_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS issue_sessions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id TEXT NOT NULL,
+  linear_issue_id TEXT NOT NULL,
+  issue_key TEXT,
+  repo_id TEXT NOT NULL,
+  branch_name TEXT,
+  worktree_path TEXT,
+  pr_number INTEGER,
+  pr_head_sha TEXT,
+  pr_author_login TEXT,
+  session_state TEXT NOT NULL DEFAULT 'idle',
+  waiting_reason TEXT,
+  summary_text TEXT,
+  active_thread_id TEXT,
+  thread_generation INTEGER NOT NULL DEFAULT 0,
+  active_run_id INTEGER,
+  last_run_type TEXT,
+  last_wake_reason TEXT,
+  ci_repair_attempts INTEGER NOT NULL DEFAULT 0,
+  queue_repair_attempts INTEGER NOT NULL DEFAULT 0,
+  review_fix_attempts INTEGER NOT NULL DEFAULT 0,
+  lease_id TEXT,
+  worker_id TEXT,
+  leased_until TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(project_id, linear_issue_id)
+);
+
+CREATE TABLE IF NOT EXISTS issue_session_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id TEXT NOT NULL,
+  linear_issue_id TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  event_json TEXT,
+  dedupe_key TEXT,
+  created_at TEXT NOT NULL,
+  processed_at TEXT,
+  consumed_by_run_id INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS webhook_events (
@@ -169,6 +213,11 @@ CREATE INDEX IF NOT EXISTS idx_issues_branch ON issues(branch_name);
 CREATE INDEX IF NOT EXISTS idx_runs_issue ON runs(issue_id);
 CREATE INDEX IF NOT EXISTS idx_runs_active ON runs(status, project_id, linear_issue_id);
 CREATE INDEX IF NOT EXISTS idx_runs_thread ON runs(thread_id);
+CREATE INDEX IF NOT EXISTS idx_issue_sessions_issue ON issue_sessions(project_id, linear_issue_id);
+CREATE INDEX IF NOT EXISTS idx_issue_sessions_key ON issue_sessions(issue_key);
+CREATE INDEX IF NOT EXISTS idx_issue_sessions_lease ON issue_sessions(leased_until, session_state);
+CREATE INDEX IF NOT EXISTS idx_issue_session_events_issue ON issue_session_events(project_id, linear_issue_id, id);
+CREATE INDEX IF NOT EXISTS idx_issue_session_events_pending ON issue_session_events(processed_at, project_id, linear_issue_id, id);
 CREATE INDEX IF NOT EXISTS idx_run_thread_events_run ON run_thread_events(run_id, id);
 CREATE INDEX IF NOT EXISTS idx_operator_feed_events_issue ON operator_feed_events(issue_key, id);
 CREATE INDEX IF NOT EXISTS idx_operator_feed_events_project ON operator_feed_events(project_id, id);
@@ -193,6 +242,7 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
   // Explicit PR branch ownership hand-off between PatchRelay and MergeSteward
   addColumnIfMissing(connection, "issues", "branch_owner", "TEXT NOT NULL DEFAULT 'patchrelay'");
   addColumnIfMissing(connection, "issues", "branch_ownership_changed_at", "TEXT");
+  connection.prepare("UPDATE issues SET branch_owner = 'patchrelay' WHERE branch_owner IS NULL OR branch_owner != 'patchrelay'").run();
 
   // Add merge_prep_attempts for retry budget / escalation
   addColumnIfMissing(connection, "issues", "merge_prep_attempts", "INTEGER NOT NULL DEFAULT 0");
@@ -207,6 +257,7 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
   addColumnIfMissing(connection, "issues", "description", "TEXT");
   addColumnIfMissing(connection, "issues", "priority", "INTEGER");
   addColumnIfMissing(connection, "issues", "estimate", "REAL");
+  addColumnIfMissing(connection, "issues", "status_comment_id", "TEXT");
   addColumnIfMissing(connection, "issues", "current_linear_state_type", "TEXT");
   addColumnIfMissing(connection, "issue_dependencies", "blocker_current_linear_state_type", "TEXT");
 
@@ -216,6 +267,8 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
 
   // Preserve GitHub failure provenance so reconciliation can distinguish
   // branch CI failures from merge-queue evictions after webhook delivery.
+  addColumnIfMissing(connection, "issues", "pr_head_sha", "TEXT");
+  addColumnIfMissing(connection, "issues", "pr_author_login", "TEXT");
   addColumnIfMissing(connection, "issues", "last_github_failure_source", "TEXT");
   addColumnIfMissing(connection, "issues", "last_github_failure_head_sha", "TEXT");
   addColumnIfMissing(connection, "issues", "last_github_failure_signature", "TEXT");
@@ -232,10 +285,198 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
   addColumnIfMissing(connection, "issues", "last_queue_incident_json", "TEXT");
   addColumnIfMissing(connection, "issues", "last_attempted_failure_head_sha", "TEXT");
   addColumnIfMissing(connection, "issues", "last_attempted_failure_signature", "TEXT");
+
+  removeRetiredIssueColumnsIfPresent(connection);
 }
 
 function addColumnIfMissing(connection: DatabaseConnection, table: string, column: string, definition: string): void {
   const cols = connection.prepare(`PRAGMA table_info(${table})`).all() as Array<Record<string, unknown>>;
   if (cols.some((c) => c.name === column)) return;
   connection.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+
+function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): void {
+  const cols = connection.prepare("PRAGMA table_info(issues)").all() as Array<Record<string, unknown>>;
+  const columnNames = new Set(cols.map((column) => String(column.name)));
+  const retired = ["queue_label_applied", "pending_merge_prep", "merge_prep_attempts"];
+  if (!retired.some((name) => columnNames.has(name))) {
+    return;
+  }
+
+  connection.exec("PRAGMA foreign_keys = OFF");
+  try {
+    connection.exec(`
+      CREATE TABLE issues_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id TEXT NOT NULL,
+        linear_issue_id TEXT NOT NULL,
+        issue_key TEXT,
+        title TEXT,
+        description TEXT,
+        url TEXT,
+        priority INTEGER,
+        estimate REAL,
+        current_linear_state TEXT,
+        current_linear_state_type TEXT,
+        factory_state TEXT NOT NULL DEFAULT 'delegated',
+        pending_run_type TEXT,
+        pending_run_context_json TEXT,
+        branch_name TEXT,
+        branch_owner TEXT NOT NULL DEFAULT 'patchrelay',
+        branch_ownership_changed_at TEXT,
+        worktree_path TEXT,
+        thread_id TEXT,
+        active_run_id INTEGER,
+        status_comment_id TEXT,
+        agent_session_id TEXT,
+        pr_number INTEGER,
+        pr_url TEXT,
+        pr_state TEXT,
+        pr_head_sha TEXT,
+        pr_author_login TEXT,
+        pr_review_state TEXT,
+        pr_check_status TEXT,
+        last_github_failure_source TEXT,
+        last_github_failure_head_sha TEXT,
+        last_github_failure_signature TEXT,
+        last_github_failure_check_name TEXT,
+        last_github_failure_check_url TEXT,
+        last_github_failure_context_json TEXT,
+        last_github_failure_at TEXT,
+        last_github_ci_snapshot_head_sha TEXT,
+        last_github_ci_snapshot_gate_check_name TEXT,
+        last_github_ci_snapshot_gate_check_status TEXT,
+        last_github_ci_snapshot_json TEXT,
+        last_github_ci_snapshot_settled_at TEXT,
+        last_queue_signal_at TEXT,
+        last_queue_incident_json TEXT,
+        last_attempted_failure_head_sha TEXT,
+        last_attempted_failure_signature TEXT,
+        ci_repair_attempts INTEGER NOT NULL DEFAULT 0,
+        queue_repair_attempts INTEGER NOT NULL DEFAULT 0,
+        review_fix_attempts INTEGER NOT NULL DEFAULT 0,
+        zombie_recovery_attempts INTEGER NOT NULL DEFAULT 0,
+        last_zombie_recovery_at TEXT,
+        updated_at TEXT NOT NULL,
+        UNIQUE(project_id, linear_issue_id)
+      );
+
+      INSERT INTO issues_new (
+        id,
+        project_id,
+        linear_issue_id,
+        issue_key,
+        title,
+        description,
+        url,
+        priority,
+        estimate,
+        current_linear_state,
+        current_linear_state_type,
+        factory_state,
+        pending_run_type,
+        pending_run_context_json,
+        branch_name,
+        branch_owner,
+        branch_ownership_changed_at,
+        worktree_path,
+        thread_id,
+        active_run_id,
+        status_comment_id,
+        agent_session_id,
+        pr_number,
+        pr_url,
+        pr_state,
+        pr_head_sha,
+        pr_author_login,
+        pr_review_state,
+        pr_check_status,
+        last_github_failure_source,
+        last_github_failure_head_sha,
+        last_github_failure_signature,
+        last_github_failure_check_name,
+        last_github_failure_check_url,
+        last_github_failure_context_json,
+        last_github_failure_at,
+        last_github_ci_snapshot_head_sha,
+        last_github_ci_snapshot_gate_check_name,
+        last_github_ci_snapshot_gate_check_status,
+        last_github_ci_snapshot_json,
+        last_github_ci_snapshot_settled_at,
+        last_queue_signal_at,
+        last_queue_incident_json,
+        last_attempted_failure_head_sha,
+        last_attempted_failure_signature,
+        ci_repair_attempts,
+        queue_repair_attempts,
+        review_fix_attempts,
+        zombie_recovery_attempts,
+        last_zombie_recovery_at,
+        updated_at
+      )
+      SELECT
+        id,
+        project_id,
+        linear_issue_id,
+        issue_key,
+        title,
+        description,
+        url,
+        priority,
+        estimate,
+        current_linear_state,
+        current_linear_state_type,
+        COALESCE(factory_state, 'delegated'),
+        pending_run_type,
+        pending_run_context_json,
+        branch_name,
+        COALESCE(branch_owner, 'patchrelay'),
+        branch_ownership_changed_at,
+        worktree_path,
+        thread_id,
+        active_run_id,
+        status_comment_id,
+        agent_session_id,
+        pr_number,
+        pr_url,
+        pr_state,
+        pr_head_sha,
+        pr_author_login,
+        pr_review_state,
+        pr_check_status,
+        last_github_failure_source,
+        last_github_failure_head_sha,
+        last_github_failure_signature,
+        last_github_failure_check_name,
+        last_github_failure_check_url,
+        last_github_failure_context_json,
+        last_github_failure_at,
+        last_github_ci_snapshot_head_sha,
+        last_github_ci_snapshot_gate_check_name,
+        last_github_ci_snapshot_gate_check_status,
+        last_github_ci_snapshot_json,
+        last_github_ci_snapshot_settled_at,
+        last_queue_signal_at,
+        last_queue_incident_json,
+        last_attempted_failure_head_sha,
+        last_attempted_failure_signature,
+        COALESCE(ci_repair_attempts, 0),
+        COALESCE(queue_repair_attempts, 0),
+        COALESCE(review_fix_attempts, 0),
+        COALESCE(zombie_recovery_attempts, 0),
+        last_zombie_recovery_at,
+        updated_at
+      FROM issues;
+
+      DROP TABLE issues;
+      ALTER TABLE issues_new RENAME TO issues;
+
+      CREATE INDEX IF NOT EXISTS idx_issues_project ON issues(project_id, linear_issue_id);
+      CREATE INDEX IF NOT EXISTS idx_issues_key ON issues(issue_key);
+      CREATE INDEX IF NOT EXISTS idx_issues_ready ON issues(pending_run_type, active_run_id);
+      CREATE INDEX IF NOT EXISTS idx_issues_branch ON issues(branch_name);
+    `);
+  } finally {
+    connection.exec("PRAGMA foreign_keys = ON");
+  }
 }

@@ -3,6 +3,7 @@ import type { QueueStore } from "./store.ts";
 import type { QueueEntry, EvictionContext, FailureClass, MergeResult, ReconcileEvent, ReconcileAction } from "./types.ts";
 import { TERMINAL_STATUSES } from "./types.ts";
 import { classifyFailure } from "./classify.ts";
+import { INVALIDATION_PATCH, selectDownstream } from "./invalidation.ts";
 import { randomUUID } from "node:crypto";
 
 // ─── Constants ──────────────────────────────────────────────────
@@ -68,6 +69,25 @@ export async function reconcile(ctx: ReconcileContext): Promise<void> {
 
     // Truth guard: verify entry against GitHub before processing.
     if (await sanitizeEntry(ctx, entry)) continue;
+
+    // Stale dependency guard: if this entry's spec was built on top of
+    // another entry that was dequeued or evicted (without downstream
+    // invalidation), the spec is contaminated with the removed entry's
+    // changes. Reset so it rebuilds on the correct base next tick.
+    // Exclude "merged" — a merged dependency means main advanced to its
+    // spec, so our cumulative spec is still valid (speculative consistency).
+    if (entry.specBasedOn) {
+      const dep = ctx.store.getEntry(entry.specBasedOn);
+      if (!dep || dep.status === "dequeued" || dep.status === "evicted") {
+        emit(ctx, entry, "invalidated", {
+          detail: `dependency ${entry.specBasedOn} is ${dep?.status ?? "removed"}`,
+        });
+        await cleanupSpec(ctx, entry);
+        ctx.store.transition(entry.id, "preparing_head",
+          INVALIDATION_PATCH, `stale dependency ${dep?.status ?? "removed"}`);
+        continue;
+      }
+    }
 
     const isHead = i === 0;
     const prevEntry = i > 0 ? ctx.store.getEntry(allActive[i - 1]!.id) ?? null : null;
@@ -179,7 +199,7 @@ async function prepareEntry(
     // Gate: main CI must be green.
     if (ctx.ci.getMainStatus) {
       const mainStatus = await ctx.ci.getMainStatus(ctx.baseBranch);
-      if (mainStatus === "fail") {
+      if (mainStatus !== "pass") {
         let mainChecks: Array<{ name: string; conclusion: "success" | "failure" | "pending"; url?: string | undefined }> = [];
         try {
           mainChecks = await ctx.github.listChecksForRef(ref(ctx, ctx.baseBranch));
@@ -236,9 +256,12 @@ async function prepareEntry(
   const specName = specBranchName(entry.id);
   emit(ctx, entry, "spec_build_started", { specBranch: specName, baseSha, ...(prevEntry ? { dependsOn: prevEntry.id } : {}) });
 
+  const branchSuffix = entry.branch.replace(/^.*\//, "").replace(/-/g, " ");
+  const mergeMessage = `Merge PR #${entry.prNumber}: ${branchSuffix}`;
+
   let result: MergeResult;
   try {
-    result = await ctx.specBuilder.buildSpeculative(entry.branch, base, specName);
+    result = await ctx.specBuilder.buildSpeculative(entry.branch, base, specName, mergeMessage);
   } catch (err) {
     if (isHead) {
       // Branch gone or unreachable.
@@ -272,6 +295,9 @@ async function prepareEntry(
 
   const specSha = result.sha ?? entry.headSha;
   emit(ctx, entry, "spec_build_succeeded", { specBranch: specName, ...(prevEntry ? { dependsOn: prevEntry.id } : {}) });
+
+  // Push spec to remote so CI can access it.
+  await ctx.git.push(specName, true);
 
   // Trigger CI on the spec branch.
   const runId = await ctx.ci.triggerRun(specName, specSha);
@@ -375,7 +401,12 @@ async function mergeHead(ctx: ReconcileContext, entry: QueueEntry): Promise<void
     // Don't evict immediately — reviewer may re-approve after re-review.
     // Stay in merging and re-check on the next tick. Operator can dequeue
     // manually if the approval never comes back.
-    emit(ctx, entry, "merge_waiting_approval", { detail: "approval withdrawn, waiting for re-approval" });
+    const detail = prStatus.reviewDecision === "CHANGES_REQUESTED"
+      ? "blocking review present, waiting for approval"
+      : prStatus.reviewDecision === "REVIEW_REQUIRED"
+        ? "required approval missing"
+        : `review gate not satisfied (${prStatus.reviewDecision ?? "unknown"})`;
+    emit(ctx, entry, "merge_waiting_approval", { detail });
     return;
   }
 
@@ -409,6 +440,16 @@ async function mergeHead(ctx: ReconcileContext, entry: QueueEntry): Promise<void
     // Can't verify — proceed and let push fail if needed.
   }
 
+  // Final main health check — don't push to a broken main.
+  if (ctx.ci.getMainStatus) {
+    const mainStatus = await ctx.ci.getMainStatus(ctx.baseBranch);
+    if (mainStatus !== "pass") {
+      emit(ctx, entry, "main_broken", { detail: "main unhealthy at merge time, re-preparing" });
+      ctx.store.transition(entry.id, "preparing_head", { ...CLEAN_CI, ...CLEAN_SPEC }, "main unhealthy at merge time");
+      return;
+    }
+  }
+
   // Push the spec branch to main (fast-forward).
   try {
     await ctx.git.push(entry.specBranch, false, ctx.baseBranch);
@@ -440,12 +481,11 @@ async function mergeHead(ctx: ReconcileContext, entry: QueueEntry): Promise<void
 // ─── Invalidation + eviction ────────────────────────────────────
 
 async function invalidateDownstream(ctx: ReconcileContext, allActive: QueueEntry[], afterIndex: number): Promise<void> {
-  for (let i = afterIndex + 1; i < allActive.length; i++) {
-    const downstream = allActive[i]!;
-    if (TERMINAL_STATUSES.includes(downstream.status)) continue;
+  const targets = selectDownstream(allActive, allActive[afterIndex]!.position);
+  for (const downstream of targets) {
     emit(ctx, downstream, "invalidated", { detail: `base changed after position ${afterIndex}` });
     await cleanupSpec(ctx, downstream);
-    ctx.store.transition(downstream.id, "preparing_head", { ...CLEAN_CI, ...CLEAN_SPEC }, "invalidated: base changed");
+    ctx.store.transition(downstream.id, "preparing_head", INVALIDATION_PATCH, "invalidated: base changed");
   }
 }
 

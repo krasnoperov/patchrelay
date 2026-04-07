@@ -40,12 +40,10 @@ export function rootHelpText(): string {
     "  issue open <issueKey> [--print] [--json]                Open Codex in the issue worktree",
     "  service status [--json]                                 Show systemd state and local health",
     "  service logs [--lines <count>] [--json]                 Show recent service logs",
+    "  serve                                                   Run the local PatchRelay service",
     "",
     "Operator commands:",
-    "  feed [--follow] [--limit <count>] [--issue <issueKey>] [--repo <id>] [--kind <kind>] [--stage <stage>] [--status <status>] [--workflow <id>] [--json]",
-    "                                                          Show operator activity from the daemon",
-    "  dashboard [--issue <issueKey>]                           Open the TUI dashboard of issues and runs",
-    "  serve                                                   Run the local PatchRelay service",
+    "  dashboard [--issue <issueKey>]                           Open the PatchRelay session dashboard",
     "",
     "Environment options:",
     "  --help, -h              Show help for the root command or current command group",
@@ -64,7 +62,6 @@ export function rootHelpText(): string {
     "  patchrelay repo list",
     "  patchrelay issue list --active",
     "  patchrelay issue watch USE-54",
-    "  patchrelay dashboard",
     "  patchrelay service status",
     "  patchrelay version --json",
     "",
@@ -99,6 +96,10 @@ export function linearHelpText(): string {
     "  patchrelay linear connect",
     "  patchrelay linear list",
     "  patchrelay linear sync usertold",
+    "",
+    "Compatibility aliases:",
+    "  patchrelay connect            Alias for `patchrelay linear connect`",
+    "  patchrelay installations      Alias for `patchrelay linear list`",
   ].join("\n");
 }
 
@@ -128,6 +129,11 @@ export function repoHelpText(): string {
     "  patchrelay repo link krasnoperov/usertold --workspace usertold --team USE",
     "  patchrelay repo show krasnoperov/usertold",
     "  patchrelay repo sync",
+    "",
+    "Compatibility aliases:",
+    "  patchrelay attach ...         Alias for `patchrelay repo link ...`",
+    "  patchrelay repos              Alias for `patchrelay repo list`",
+    "  patchrelay repos <repo>       Alias for `patchrelay repo show <repo>`",
   ].join("\n");
 }
 
@@ -139,9 +145,7 @@ export function issueHelpText(): string {
     "Commands:",
     "  show <issueKey>                 Show the latest known issue state",
     "  list                            List tracked issues",
-    "  watch <issueKey>                Follow the active run until it settles",
-    "  report <issueKey>               Show finished run reports",
-    "  events <issueKey>               Show raw thread events",
+    "  watch <issueKey>                Follow PatchRelay-owned activity until it settles",
     "  path <issueKey>                 Print the issue worktree path",
     "  open <issueKey>                 Open Codex in the issue worktree",
     "  retry <issueKey>                Requeue a run",

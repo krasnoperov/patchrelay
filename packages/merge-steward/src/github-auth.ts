@@ -28,7 +28,7 @@ export interface GitHubAppTokenManager extends RuntimeGitHubAuthProvider {
   stop(): void;
 }
 
-function generateJwt(appId: string, privateKey: string): string {
+export function generateJwt(appId: string, privateKey: string): string {
   const now = Math.floor(Date.now() / 1000);
   const header = Buffer.from(JSON.stringify({ alg: "RS256", typ: "JWT" })).toString("base64url");
   const payload = Buffer.from(JSON.stringify({
@@ -58,6 +58,15 @@ function githubHeaders(token: string): Record<string, string> {
     Accept: "application/vnd.github+json",
     "X-GitHub-Api-Version": "2022-11-28",
   };
+}
+
+export async function resolveAppSlug(credentials: GitHubAppCredentials): Promise<string> {
+  const jwt = generateJwt(credentials.appId, credentials.privateKey);
+  const data = await fetchJson<{ slug: string }>(
+    "https://api.github.com/app",
+    { headers: githubHeaders(jwt) },
+  );
+  return data.slug;
 }
 
 async function resolveInstallationIdForRepo(jwt: string, repoFullName: string): Promise<string> {

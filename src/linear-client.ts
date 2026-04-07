@@ -33,8 +33,18 @@ interface LinearIssueRawFields {
   delegate?: { id?: string | null; name?: string | null } | null;
   state?: { id?: string | null; name?: string | null; type?: string | null } | null;
   labels?: { nodes?: Array<{ id: string; name: string }> } | null;
-  blockedBy?: { nodes?: LinearIssueRelationRawFields[] } | null;
-  blocks?: { nodes?: LinearIssueRelationRawFields[] } | null;
+  inverseRelations?: {
+    nodes?: Array<{
+      type?: string | null;
+      issue?: LinearIssueRelationRawFields | null;
+    }>;
+  } | null;
+  relations?: {
+    nodes?: Array<{
+      type?: string | null;
+      relatedIssue?: LinearIssueRelationRawFields | null;
+    }>;
+  } | null;
   team?: {
     id?: string | null;
     key?: string | null;
@@ -81,27 +91,33 @@ const LINEAR_ISSUE_SELECTION = `
       name
     }
   }
-  blockedBy {
+  inverseRelations {
     nodes {
-      id
-      identifier
-      title
-      state {
+      type
+      issue {
         id
-        name
-        type
+        identifier
+        title
+        state {
+          id
+          name
+          type
+        }
       }
     }
   }
-  blocks {
+  relations {
     nodes {
-      id
-      identifier
-      title
-      state {
+      type
+      relatedIssue {
         id
-        name
-        type
+        identifier
+        title
+        state {
+          id
+          name
+          type
+        }
       }
     }
   }
@@ -164,27 +180,23 @@ export class LinearGraphqlClient implements LinearClient {
     const response = await this.request<{
       issueUpdate: {
         success: boolean;
-        issue?: LinearIssueRawFields | null;
       };
     }>(
       `
-      mutation PatchRelaySetIssueState($id: String!, $stateId: String!) {
-        issueUpdate(id: $id, input: { stateId: $stateId }) {
+      mutation PatchRelaySetIssueState($id: String!, $input: IssueUpdateInput!) {
+        issueUpdate(id: $id, input: $input) {
           success
-          issue {
-            ${LINEAR_ISSUE_SELECTION}
-          }
         }
       }
       `,
-      { id: issueId, stateId: state.id },
+      { id: issueId, input: { stateId: state.id } },
     );
 
-    if (!response.issueUpdate.success || !response.issueUpdate.issue) {
+    if (!response.issueUpdate.success) {
       throw new Error(`Linear rejected state update for issue ${issue.identifier ?? issueId}`);
     }
 
-    return this.mapIssue(response.issueUpdate.issue);
+    return await this.getIssue(issueId);
   }
 
   async upsertIssueComment(params: { issueId: string; commentId?: string; body: string }): Promise<LinearCommentUpsertResult> {
@@ -479,7 +491,12 @@ export class LinearGraphqlClient implements LinearClient {
     });
 
     if (!response.ok) {
-      throw new Error(`Linear API request failed with HTTP ${response.status}`);
+      const body = (await response.text()).trim();
+      throw new Error(
+        body
+          ? `Linear API request failed with HTTP ${response.status}: ${body}`
+          : `Linear API request failed with HTTP ${response.status}`,
+      );
     }
 
     const payload = (await response.json()) as GraphqlResponse<T>;
@@ -499,6 +516,8 @@ export class LinearGraphqlClient implements LinearClient {
   private mapIssue(issue: LinearIssueRawFields): LinearIssueSnapshot {
     const labels = (issue.labels?.nodes ?? []).map((label) => ({ id: label.id, name: label.name }));
     const teamLabels = (issue.team?.labels?.nodes ?? []).map((label) => ({ id: label.id, name: label.name }));
+    const blocksRelations = (issue.relations?.nodes ?? []).filter((relation) => relation.type?.trim().toLowerCase() === "blocks");
+    const blockedByRelations = (issue.inverseRelations?.nodes ?? []).filter((relation) => relation.type?.trim().toLowerCase() === "blocks");
     return {
       id: issue.id,
       ...(issue.identifier ? { identifier: issue.identifier } : {}),
@@ -522,8 +541,14 @@ export class LinearGraphqlClient implements LinearClient {
       labelIds: labels.map((label) => label.id),
       labels,
       teamLabels,
-      blockedBy: (issue.blockedBy?.nodes ?? []).map(mapIssueRelation),
-      blocks: (issue.blocks?.nodes ?? []).map(mapIssueRelation),
+      blockedBy: blockedByRelations
+        .map((relation) => relation.issue)
+        .filter((relation): relation is LinearIssueRelationRawFields => Boolean(relation))
+        .map(mapIssueRelation),
+      blocks: blocksRelations
+        .map((relation) => relation.relatedIssue)
+        .filter((relation): relation is LinearIssueRelationRawFields => Boolean(relation))
+        .map(mapIssueRelation),
     };
   }
 

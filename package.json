@@ -1,6 +1,6 @@
 {
   "name": "patchrelay",
-  "version": "0.35.1",
+  "version": "0.35.12",
   "license": "MIT",
   "type": "module",
   "repository": {
@@ -25,7 +25,8 @@
     "node": ">=24.0.0"
   },
   "workspaces": [
-    "packages/merge-steward"
+    "packages/merge-steward",
+    "packages/review-quill"
   ],
   "scripts": {
     "dev": "node --watch --experimental-transform-types src/index.ts",

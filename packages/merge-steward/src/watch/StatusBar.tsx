@@ -45,7 +45,7 @@ export function StatusBar({
     ? activeEntries.reduce((sum, e) => sum + (Date.now() - new Date(e.enqueuedAt).getTime()), 0) / activeEntries.length
     : 0;
   const queueHealth = queueBlockLabel
-    ? `paused on broken main`
+    ? `waiting on main`
     : summary.headPrNumber !== null
       ? `head #${summary.headPrNumber} active`
       : "queue idle";

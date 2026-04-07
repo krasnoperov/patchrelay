@@ -10,7 +10,12 @@ import {
   getRepoConfigPath,
 } from "../runtime-paths.ts";
 import { parseHomeConfigObject } from "../steward-home.ts";
-import type { ServiceErrorResponse, ServiceGitHubAuthStatus, ServiceGitHubDiscoverResponse } from "../admin-types.ts";
+import type {
+  ServiceErrorResponse,
+  ServiceGitHubAuthStatus,
+  ServiceGitHubDiscoverResponse,
+  ServiceGitHubRepoAccessResponse,
+} from "../admin-types.ts";
 import type { ParsedArgs, HelpTopic, CommandResult, CommandRunner } from "./types.ts";
 import { UsageError } from "./types.ts";
 
@@ -92,10 +97,35 @@ export function listRepoConfigs(): Array<{
     });
 }
 
+function findConfiguredRepoConfig(repoRef: string): {
+  repoId: string;
+  repoFullName: string;
+  configPath: string;
+} | undefined {
+  const normalized = repoRef.trim();
+  if (!normalized) return undefined;
+
+  return listRepoConfigs().find((repo) => (
+    repo.repoId === normalized
+    || repo.repoFullName === normalized
+  ));
+}
+
 export function loadRepoConfigById(repoId: string): { configPath: string; config: StewardConfig } {
-  const configPath = getRepoConfigPath(repoId);
+  const exactPath = getRepoConfigPath(repoId);
+  const resolved = existsSync(exactPath)
+    ? { configPath: exactPath, repoId }
+    : findConfiguredRepoConfig(repoId);
+  const configPath = resolved?.configPath ?? exactPath;
   if (!existsSync(configPath)) {
-    throw new UsageError(`Repo config not found: ${configPath}. Run \`merge-steward attach ${repoId} <owner/repo>\` first.`, "repos");
+    const configured = listRepoConfigs();
+    const configuredHint = configured.length > 0
+      ? ` Configured repos: ${configured.map((repo) => repo.repoId).join(", ")}.`
+      : "";
+    throw new UsageError(
+      `Repo config not found for ${repoId}: ${configPath}. Run \`merge-steward attach ${repoId} <owner/repo>\` first.${configuredHint}`,
+      "repos",
+    );
   }
   return {
     configPath,
@@ -224,6 +254,19 @@ export async function fetchServiceRepoDiscovery(
     body: {
       repoFullName,
       ...(options?.baseBranch ? { baseBranch: options.baseBranch } : {}),
+    },
+  });
+}
+
+export async function fetchServiceRepoAccess(
+  repoFullName: string,
+  options: { baseBranch: string },
+): Promise<ServiceGitHubRepoAccessResponse> {
+  return await fetchGatewayJson<ServiceGitHubRepoAccessResponse>("/admin/github/repo-access", {
+    method: "POST",
+    body: {
+      repoFullName,
+      baseBranch: options.baseBranch,
     },
   });
 }

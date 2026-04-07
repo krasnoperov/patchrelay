@@ -9,7 +9,7 @@ import type { GitHubTriggerEvent } from "../src/github-types.ts";
 
 /**
  * Tests for the merge queue integration contract:
- * 1. Factory state transitions that lead to awaiting_queue (where the label gets added)
+ * 1. Factory state transitions that lead to awaiting_queue (where downstream queue automation takes over)
  * 2. Factory state transitions on check_failed while awaiting_queue (CI repair fallback)
  * 3. External queue eviction is handled by the GitHub webhook handler, not here
  */
@@ -18,7 +18,7 @@ function resolve(event: GitHubTriggerEvent, current: FactoryState, ctx?: Transit
   return resolveFactoryStateFromGitHub(event, current, ctx);
 }
 
-// --- Paths to awaiting_queue (where PatchRelay adds the queue label) ---
+// --- Paths to awaiting_queue (where downstream queue automation takes over) ---
 
 test("review_approved from pr_open transitions to awaiting_queue", () => {
   assert.equal(resolve("review_approved", "pr_open"), "awaiting_queue");

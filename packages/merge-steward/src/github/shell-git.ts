@@ -1,3 +1,5 @@
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
 import type { GitOperations, SpeculativeBranchBuilder } from "../interfaces.ts";
 import type { MergeResult } from "../types.ts";
 import { exec } from "../exec.ts";
@@ -14,15 +16,74 @@ function parseConflicts(stderr: string): string[] | undefined {
   return files.length > 0 ? files : undefined;
 }
 
+export interface BotIdentity {
+  name: string;
+  email: string;
+}
+
+export interface AutoResolvePattern {
+  glob: string;
+  command: string[];
+}
+
+/** Check if a file path matches a glob pattern (simple suffix/wildcard match). */
+function matchesGlob(filePath: string, pattern: string): boolean {
+  if (pattern.startsWith("**/")) {
+    return filePath.endsWith(pattern.slice(2));
+  }
+  if (pattern.startsWith("*/")) {
+    const name = filePath.split("/").pop() ?? filePath;
+    return name === pattern.slice(2);
+  }
+  return filePath === pattern || filePath.endsWith(`/${pattern}`);
+}
+
+/** If all conflicting files match a single auto-resolve pattern, return its command. */
+function detectAutoResolveCommand(
+  conflictFiles: string[],
+  patterns: AutoResolvePattern[],
+): { bin: string; args: string[] } | undefined {
+  for (const pattern of patterns) {
+    if (conflictFiles.every((f) => matchesGlob(f, pattern.glob))) {
+      const [bin, ...args] = pattern.command;
+      return bin ? { bin, args } : undefined;
+    }
+  }
+  return undefined;
+}
+
 export class ShellGitOperations implements GitOperations, SpeculativeBranchBuilder {
+  private readonly worktreeBase: string;
+  private botIdentity: BotIdentity | undefined;
+  private autoResolvePatterns: AutoResolvePattern[] = [];
+
   constructor(
     private readonly clonePath: string,
     private readonly repoFullName: string,
     private readonly gitBin: string = "git",
-  ) {}
+  ) {
+    this.worktreeBase = `${clonePath}-worktrees`;
+  }
+
+  setBotIdentity(identity: BotIdentity): void {
+    this.botIdentity = identity;
+  }
+
+  setAutoResolvePatterns(patterns: AutoResolvePattern[]): void {
+    this.autoResolvePatterns = patterns;
+  }
 
   private git(args: string[], opts?: { allowNonZero?: boolean; timeoutMs?: number }) {
     return exec(this.gitBin, ["-C", this.clonePath, ...args], {
+      timeoutMs: opts?.timeoutMs ?? 120_000,
+      allowNonZero: opts?.allowNonZero,
+      githubRepoFullName: this.repoFullName,
+    });
+  }
+
+  /** Run a git command in a specific directory (worktree). */
+  private gitIn(cwd: string, args: string[], opts?: { allowNonZero?: boolean; timeoutMs?: number }) {
+    return exec(this.gitBin, ["-C", cwd, ...args], {
       timeoutMs: opts?.timeoutMs ?? 120_000,
       allowNonZero: opts?.allowNonZero,
       githubRepoFullName: this.repoFullName,
@@ -45,23 +106,6 @@ export class ShellGitOperations implements GitOperations, SpeculativeBranchBuild
     throw new Error(`git merge-base --is-ancestor failed: ${result.stderr || result.stdout}`);
   }
 
-  async mergeBaseInto(branch: string, base: string): Promise<MergeResult> {
-    const remoteBranchRef = `refs/remotes/origin/${branch}`;
-    const remoteBranchExists = await this.git(["show-ref", "--verify", remoteBranchRef], { allowNonZero: true });
-    if (remoteBranchExists.exitCode === 0) {
-      await this.git(["checkout", "-B", branch, `origin/${branch}`]);
-    } else {
-      await this.git(["checkout", branch]);
-    }
-    const result = await this.git(["merge", "--no-ff", "--no-edit", base], { allowNonZero: true });
-    if (result.exitCode !== 0) {
-      await this.git(["merge", "--abort"], { allowNonZero: true });
-      return { success: false, conflictFiles: parseConflicts(result.stderr) };
-    }
-    const newSha = await this.headSha("HEAD");
-    return { success: true, sha: newSha };
-  }
-
   async push(branch: string, force = false, targetBranch?: string): Promise<void> {
     const args = ["push"];
     if (force) args.push("--force-with-lease");
@@ -72,24 +116,99 @@ export class ShellGitOperations implements GitOperations, SpeculativeBranchBuild
 
   // ─── SpeculativeBranchBuilder ───────────────────────────────
 
-  async buildSpeculative(prBranch: string, baseBranch: string, specName: string): Promise<MergeResult> {
-    await this.git(["branch", "-D", specName], { allowNonZero: true });
-    await this.git(["checkout", "-B", specName, baseBranch]);
+  /**
+   * Build a speculative merge branch using an isolated git worktree.
+   * Each call gets its own working directory — no shared mutable state.
+   * The worktree is removed after the merge; the branch ref persists
+   * so the reconciler can push it and reference its SHA.
+   */
+  async buildSpeculative(prBranch: string, baseBranch: string, specName: string, mergeMessage?: string): Promise<MergeResult> {
+    const wtPath = join(this.worktreeBase, specName);
 
-    const result = await this.git(["merge", "--no-ff", prBranch], { allowNonZero: true });
+    // Clean up any leftover worktree/branch from a previous run.
+    await this.git(["worktree", "remove", "--force", wtPath], { allowNonZero: true });
+    await this.git(["branch", "-D", specName], { allowNonZero: true });
+    await this.git(["worktree", "prune"], { allowNonZero: true });
+
+    // Create isolated worktree with spec branch starting at baseBranch.
+    mkdirSync(this.worktreeBase, { recursive: true });
+    await this.git(["worktree", "add", "-B", specName, wtPath, baseBranch]);
+
+    // Override git identity so merge commits are attributed to the steward, not the clone owner.
+    if (this.botIdentity) {
+      await this.gitIn(wtPath, ["config", "user.name", this.botIdentity.name]);
+      await this.gitIn(wtPath, ["config", "user.email", this.botIdentity.email]);
+    }
+
+    // Merge PR into spec branch inside the worktree.
+    // PR branches are always remote refs — use explicit origin/ prefix
+    // because git DWIM doesn't reliably resolve bare names in worktrees.
+    const mergeRef = prBranch.startsWith("origin/") ? prBranch : `origin/${prBranch}`;
+    const mergeArgs = ["merge", "--no-ff", "-X", "patience"];
+    if (mergeMessage) mergeArgs.push("-m", mergeMessage);
+    mergeArgs.push(mergeRef);
+    const result = await this.gitIn(wtPath, mergeArgs, { allowNonZero: true });
+
     if (result.exitCode !== 0) {
       const conflictFiles = parseConflicts(result.stderr);
-      await this.git(["merge", "--abort"], { allowNonZero: true });
-      await this.git(["checkout", "-"], { allowNonZero: true });
+
+      // Lockfile-only conflicts can be auto-resolved by regenerating.
+      if (await this.tryAutoResolveConflict(wtPath)) {
+        const sha = (await this.gitIn(wtPath, ["rev-parse", "HEAD"])).stdout.trim();
+        await this.git(["worktree", "remove", "--force", wtPath], { allowNonZero: true });
+        return { success: true, sha };
+      }
+
+      await this.gitIn(wtPath, ["merge", "--abort"], { allowNonZero: true });
+      await this.git(["worktree", "remove", "--force", wtPath], { allowNonZero: true });
+      await this.git(["branch", "-D", specName], { allowNonZero: true });
       return { success: false, conflictFiles };
     }
 
-    const sha = (await this.git(["rev-parse", "HEAD"])).stdout.trim();
-    await this.git(["checkout", "-"], { allowNonZero: true });
+    const sha = (await this.gitIn(wtPath, ["rev-parse", "HEAD"])).stdout.trim();
+    // Remove worktree but keep the branch — reconciler needs it for push/CI.
+    await this.git(["worktree", "remove", "--force", wtPath], { allowNonZero: true });
     return { success: true, sha };
   }
 
+  /**
+   * During a merge conflict, check if all unmerged files match a configured
+   * auto-resolve pattern. If so, regenerate them via the pattern's command.
+   */
+  private async tryAutoResolveConflict(wtPath: string): Promise<boolean> {
+    if (this.autoResolvePatterns.length === 0) return false;
+    try {
+      const unmerged = await this.gitIn(wtPath, ["diff", "--name-only", "--diff-filter=U"]);
+      const files = unmerged.stdout.trim().split("\n").filter(Boolean);
+      if (files.length === 0) return false;
+
+      const regenerate = detectAutoResolveCommand(files, this.autoResolvePatterns);
+      if (!regenerate) return false;
+
+      for (const file of files) {
+        await this.gitIn(wtPath, ["checkout", "--ours", "--", file]);
+      }
+
+      const result = await exec(regenerate.bin, regenerate.args, {
+        cwd: wtPath,
+        timeoutMs: 60_000,
+      });
+      if (result.exitCode !== 0) return false;
+
+      for (const file of files) {
+        await this.gitIn(wtPath, ["add", file]);
+      }
+      const commitResult = await this.gitIn(wtPath, ["commit", "--no-edit"], { allowNonZero: true });
+      return commitResult.exitCode === 0;
+    } catch {
+      return false;
+    }
+  }
+
   async deleteSpeculative(specName: string): Promise<void> {
+    const wtPath = join(this.worktreeBase, specName);
+    await this.git(["worktree", "remove", "--force", wtPath], { allowNonZero: true });
     await this.git(["branch", "-D", specName], { allowNonZero: true });
+    await this.git(["push", "origin", "--delete", specName], { allowNonZero: true });
   }
 }

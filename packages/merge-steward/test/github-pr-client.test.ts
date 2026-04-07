@@ -20,7 +20,7 @@ if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
   exit 0
 fi
 if [ "$1" = "api" ]; then
-  printf '[{"name":"Tests","conclusion":"success","html_url":"https://github.com/owner/repo/checks/1"},{"name":"AI Review","conclusion":"skipped","html_url":"https://github.com/owner/repo/checks/2"}]'
+  printf '[{"name":"Tests","status":"completed","conclusion":"success","html_url":"https://github.com/owner/repo/checks/1"},{"name":"AI Review","status":"completed","conclusion":"skipped","html_url":"https://github.com/owner/repo/checks/2"}]'
   exit 0
 fi
 exit 1
@@ -35,6 +35,9 @@ exit 1
     process.env.GH_LOG = logPath;
     try {
       const client = new GitHubPRClient("owner/repo");
+      const status = await client.getStatus(101);
+      assert.equal(status.reviewDecision, "APPROVED");
+      assert.equal(status.reviewApproved, true);
       const checks = await client.listChecks(101);
       assert.deepEqual(checks, [
         { name: "Tests", conclusion: "success", url: "https://github.com/owner/repo/checks/1" },

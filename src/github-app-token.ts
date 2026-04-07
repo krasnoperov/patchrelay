@@ -17,6 +17,7 @@ export interface GitHubAppCredentials {
 export interface GitHubAppBotIdentity {
   name: string;   // e.g. "patchrelay[bot]"
   email: string;  // e.g. "267939867+patchrelay[bot]@users.noreply.github.com"
+  tokenFile: string; // Path to the App installation token file for git push auth
 }
 
 export interface GitHubAppTokenManager {
@@ -86,6 +87,11 @@ exec /usr/bin/gh "$@"
 `;
 
   await writeFile(ghWrapper, script, { mode: 0o755 });
+  const currentPath = process.env.PATH ?? "";
+  const pathEntries = currentPath.split(path.delimiter).filter(Boolean);
+  if (!pathEntries.includes(binDir)) {
+    process.env.PATH = [binDir, ...pathEntries].join(path.delimiter);
+  }
   logger.debug({ path: ghWrapper }, "Wrote gh wrapper script");
 }
 
@@ -186,6 +192,8 @@ export function createGitHubAppTokenManager(
       await mkdir(path.dirname(tokenFile), { recursive: true });
       await writeFile(tokenFile, token, { mode: 0o600 });
       cachedToken = token;
+      process.env.GH_TOKEN = token;
+      process.env.GITHUB_TOKEN = token;
       logger.debug("Refreshed GitHub App installation token");
     } catch (error) {
       logger.warn(
@@ -252,8 +260,10 @@ async function resolveBotIdentity(jwt: string): Promise<GitHubAppBotIdentity> {
   }
   const user = await userResponse.json() as { id: number; login: string };
 
+  const { tokenFile } = getGitHubAppPaths();
   return {
     name: user.login,
     email: `${user.id}+${user.login}@users.noreply.github.com`,
+    tokenFile,
   };
 }

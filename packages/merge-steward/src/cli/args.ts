@@ -70,6 +70,20 @@ export function validateFlags(parsed: ParsedArgs): void {
     case "repos":
       assertKnownFlags(parsed, "repos", ["json"]);
       return;
+    case "repo":
+      switch (subcommand) {
+        case undefined:
+        case "list":
+        case "show":
+          assertKnownFlags(parsed, "repo", ["json"]);
+          return;
+        case "attach":
+          assertKnownFlags(parsed, "repo", ["base-branch", "required-check", "label", "merge-queue-check-name", "refresh", "json"]);
+          return;
+        default:
+          assertKnownFlags(parsed, "repo", []);
+          return;
+      }
     case "service":
       switch (subcommand) {
         case "install":

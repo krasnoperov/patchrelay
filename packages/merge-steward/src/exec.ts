@@ -19,9 +19,20 @@ export interface ExecOptions {
 
 let runtimeGitHubAuthProvider: RuntimeGitHubAuthProvider | undefined;
 
+const WORKFLOW_PERMISSION_REJECTION =
+  "refusing to allow a GitHub App to create or update workflow";
+
 export function setRuntimeGitHubAuthProvider(provider?: RuntimeGitHubAuthProvider): void {
   runtimeGitHubAuthProvider = provider;
 }
+
+type ExecFailure = Error & {
+  stdout?: string;
+  stderr?: string;
+  exitCode?: number;
+  signal?: NodeJS.Signals | null;
+  timedOut?: boolean;
+};
 
 function applyGitConfigEntries(
   env: Record<string, string>,
@@ -64,6 +75,11 @@ export function resolveGitHubCommandEnv(
     return authEnv;
   }
 
+  // GitHub does NOT accept `Authorization: Bearer ghs_*` for git over
+  // HTTPS — only Basic auth with `x-access-token:<token>`. Mirrored in
+  // `packages/review-quill/src/review-workspace/git.ts`. Keep both in
+  // sync — no shared helper because each service has different git
+  // surface area.
   const authHeader = `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`;
   return applyGitConfigEntries(
     {
@@ -73,6 +89,77 @@ export function resolveGitHubCommandEnv(
     },
     [["http.https://github.com/.extraheader", authHeader]],
   );
+}
+
+function shouldRetryWithoutRuntimeGitHubAuth(
+  command: string,
+  githubEnv: Record<string, string>,
+  failure: ExecFailure,
+): boolean {
+  if (command !== "git") {
+    return false;
+  }
+  if (Object.keys(githubEnv).length === 0) {
+    return false;
+  }
+  if (failure.timedOut) {
+    return false;
+  }
+  return (failure.stderr ?? "").includes(WORKFLOW_PERMISSION_REJECTION);
+}
+
+async function runExecFile(
+  command: string,
+  args: string[],
+  env: NodeJS.ProcessEnv,
+  options?: ExecOptions,
+): Promise<ExecResult> {
+  return await new Promise((resolve, reject) => {
+    execFile(
+      command,
+      args,
+      {
+        cwd: options?.cwd,
+        env,
+        timeout: options?.timeoutMs ?? 120_000,
+        maxBuffer: 10 * 1024 * 1024,
+      },
+      (error, stdout, stderr) => {
+        // Timeouts always reject regardless of allowNonZero.
+        // When execFile times out, error.killed is true and error.code is null.
+        if (error && (error.killed || error.signal)) {
+          const failure = new Error(
+            `Command timed out: ${command} ${args.join(" ")}\n` +
+            `Signal: ${error.signal ?? "SIGTERM"}\n` +
+            `stderr: ${stderr.slice(0, 500)}`,
+          ) as ExecFailure;
+          failure.stdout = stdout;
+          failure.stderr = stderr;
+          failure.signal = error.signal ?? null;
+          failure.timedOut = true;
+          reject(failure);
+          return;
+        }
+
+        const exitCode = error && typeof error.code === "number" ? error.code : 0;
+        const result = { stdout, stderr, exitCode };
+
+        if (error && !options?.allowNonZero) {
+          const failure = new Error(
+            `Command failed: ${command} ${args.join(" ")}\n` +
+            `Exit code: ${exitCode}\n` +
+            `stderr: ${stderr.slice(0, 500)}`,
+          ) as ExecFailure;
+          failure.stdout = stdout;
+          failure.stderr = stderr;
+          failure.exitCode = exitCode;
+          reject(failure);
+        } else {
+          resolve(result);
+        }
+      },
+    );
+  });
 }
 
 /**
@@ -92,45 +179,18 @@ export async function exec(
     ...(options?.githubRepoFullName ? { githubRepoFullName: options.githubRepoFullName } : {}),
     ...(runtimeGitHubAuthProvider ? { runtimeAuthProvider: runtimeGitHubAuthProvider } : {}),
   });
+  const authEnv = {
+    ...baseEnv,
+    ...githubEnv,
+  };
 
-  return new Promise((resolve, reject) => {
-    const child = execFile(
-      command,
-      args,
-      {
-        cwd: options?.cwd,
-        env: {
-          ...baseEnv,
-          ...githubEnv,
-        },
-        timeout: options?.timeoutMs ?? 120_000,
-        maxBuffer: 10 * 1024 * 1024,
-      },
-      (error, stdout, stderr) => {
-        // Timeouts always reject regardless of allowNonZero.
-        // When execFile times out, error.killed is true and error.code is null.
-        if (error && (error.killed || error.signal)) {
-          reject(new Error(
-            `Command timed out: ${command} ${args.join(" ")}\n` +
-            `Signal: ${error.signal ?? "SIGTERM"}\n` +
-            `stderr: ${stderr.slice(0, 500)}`,
-          ));
-          return;
-        }
-
-        const exitCode = error && typeof error.code === "number" ? error.code : 0;
-        const result = { stdout, stderr, exitCode };
-
-        if (error && !options?.allowNonZero) {
-          reject(new Error(
-            `Command failed: ${command} ${args.join(" ")}\n` +
-            `Exit code: ${exitCode}\n` +
-            `stderr: ${stderr.slice(0, 500)}`,
-          ));
-        } else {
-          resolve(result);
-        }
-      },
-    );
-  });
+  try {
+    return await runExecFile(command, args, authEnv, options);
+  } catch (error) {
+    const failure = error as ExecFailure;
+    if (!shouldRetryWithoutRuntimeGitHubAuth(command, githubEnv, failure)) {
+      throw error;
+    }
+    return await runExecFile(command, args, baseEnv, options);
+  }
 }

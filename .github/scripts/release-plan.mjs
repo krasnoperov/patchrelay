@@ -40,6 +40,14 @@ const packages = [
     packageJson: 'packages/merge-steward/package.json',
     matchFile: (f) => f.startsWith('packages/merge-steward/'),
   },
+  {
+    key: 'review_quill',
+    npmName: 'review-quill',
+    tagPrefix: 'review-quill-v',
+    workspace: 'packages/review-quill',
+    packageJson: 'packages/review-quill/package.json',
+    matchFile: (f) => f.startsWith('packages/review-quill/'),
+  },
 ];
 
 function latestTag(prefix) {

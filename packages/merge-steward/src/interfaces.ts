@@ -17,7 +17,7 @@ export interface GitOperations {
  */
 export interface SpeculativeBranchBuilder {
   /** Merge prBranch into baseBranch, store result as specName. */
-  buildSpeculative(prBranch: string, baseBranch: string, specName: string): Promise<MergeResult>;
+  buildSpeculative(prBranch: string, baseBranch: string, specName: string, mergeMessage?: string): Promise<MergeResult>;
   /** Delete a speculative branch (cleanup after merge/eviction). */
   deleteSpeculative(specName: string): Promise<void>;
 }
@@ -44,10 +44,14 @@ export interface GitHubPRApi {
   listChecks(prNumber: number): Promise<CheckResult[]>;
   listChecksForRef(ref: string): Promise<CheckResult[]>;
   listLabels(prNumber: number): Promise<string[]>;
+  /** List open PRs for restart-time eligibility scans. */
+  listOpenPRs(): Promise<Array<{ number: number; branch: string; headSha: string }>>;
   /** Find the open PR number for a branch, or null if none exists. */
   findPRByBranch(branch: string): Promise<number | null>;
   /** Delete the PR's head branch from the remote (best-effort cleanup). */
   deleteBranch(prNumber: number): Promise<void>;
+  /** List open PRs with a specific label (for startup scan). */
+  listOpenPRsWithLabel(label: string): Promise<Array<{ number: number; branch: string; headSha: string }>>;
 }
 
 /**
