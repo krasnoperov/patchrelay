@@ -301,7 +301,7 @@ export class PatchRelayService {
         && issue.factoryState === "awaiting_input"
         && this.db.peekIssueSessionWake(issue.projectId, issue.linearIssueId) === undefined;
 
-      let updated = this.db.upsertIssue({
+      const updated = this.db.upsertIssue({
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         ...(liveIssue.identifier ? { issueKey: liveIssue.identifier } : {}),

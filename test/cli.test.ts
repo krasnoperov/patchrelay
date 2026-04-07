@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -126,43 +126,6 @@ function runCliProcess(
     cwd: options?.cwd ?? process.cwd(),
     encoding: "utf8",
     env,
-  });
-}
-
-async function runCliProcessAsync(
-  args: string[],
-  options?: { env?: Record<string, string | undefined>; cwd?: string },
-): Promise<{ status: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }> {
-  const env = { ...process.env } as Record<string, string>;
-  for (const [key, value] of Object.entries(options?.env ?? {})) {
-    if (value === undefined) {
-      delete env[key];
-    } else {
-      env[key] = value;
-    }
-  }
-
-  return await new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ["--experimental-transform-types", "src/index.ts", ...args], {
-      cwd: options?.cwd ?? process.cwd(),
-      env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    child.on("error", reject);
-    child.on("close", (status, signal) => {
-      resolve({ status, signal, stdout, stderr });
-    });
   });
 }
 

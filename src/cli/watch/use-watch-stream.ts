@@ -16,7 +16,7 @@ export function useWatchStream(options: WatchStreamOptions): void {
   useEffect(() => {
     if (options.active === false) return;
 
-    let abortController = new AbortController();
+    const abortController = new AbortController();
 
     const fetchIssueSnapshot = async () => {
       const { baseUrl, bearerToken, dispatch } = optionsRef.current;

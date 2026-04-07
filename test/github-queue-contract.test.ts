@@ -345,7 +345,6 @@ test("queue eviction falls back to minimal context when incident payload is malf
       }).toString("utf8"),
     });
 
-    const issue = db.getIssue("usertold", "issue-3");
     const wake = db.peekIssueSessionWake("usertold", "issue-3");
     assert.equal(wake?.runType, "queue_repair");
     const pending = wake?.context ?? {};
