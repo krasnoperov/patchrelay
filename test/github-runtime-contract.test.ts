@@ -271,6 +271,27 @@ function buildLabeledPrPayload(params: {
   });
 }
 
+function buildSynchronizePrPayload(params: {
+  branch: string;
+  headSha: string;
+  prNumber: number;
+  prAuthorLogin?: string;
+}): string {
+  return JSON.stringify({
+    action: "synchronize",
+    repository: { full_name: "owner/repo" },
+    pull_request: {
+      number: params.prNumber,
+      html_url: `https://github.com/owner/repo/pull/${params.prNumber}`,
+      state: "open",
+      merged: false,
+      user: { login: params.prAuthorLogin ?? "patchrelay[bot]" },
+      head: { ref: params.branch, sha: params.headSha },
+      base: { ref: "main" },
+    },
+  });
+}
+
 test("review approval updates GitHub state but does not queue new PatchRelay work", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-runtime-approved-"));
   try {
@@ -589,6 +610,134 @@ test("requested changes on a PatchRelay-owned PR queue review_fix", async () => 
       "https://api.github.com/repos/owner/repo/pulls/13/reviews/901/comments?per_page=100",
     ]);
     assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-owned-review" }]);
+  } finally {
+    if (previousGitHubToken === undefined) {
+      delete process.env.GITHUB_TOKEN;
+    } else {
+      process.env.GITHUB_TOKEN = previousGitHubToken;
+    }
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("push after requested changes auto re-requests review from the last reviewer", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-runtime-rereview-"));
+  const previousGitHubToken = process.env.GITHUB_TOKEN;
+  try {
+    process.env.GITHUB_TOKEN = "test-github-token";
+    const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
+    const { db, enqueueCalls, handler } = createHandler(baseDir, {
+      fetchImpl: async (input, init) => {
+        fetchCalls.push({ url: String(input), init });
+        if (String(input).includes("/reviews/901/comments")) {
+          return createJsonResponse([]);
+        }
+        return createJsonResponse({}, 201);
+      },
+    });
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-rereview",
+      issueKey: "USE-26",
+      branchName: "feat-rereview",
+      prNumber: 26,
+      prState: "open",
+      prAuthorLogin: "patchrelay[bot]",
+      factoryState: "changes_requested",
+      prReviewState: "changes_requested",
+    });
+
+    await handler.processGitHubWebhookEvent({
+      eventType: "pull_request_review",
+      rawBody: buildChangesRequestedReviewPayload({
+        branch: "feat-rereview",
+        headSha: "sha-review",
+        prNumber: 26,
+        prAuthorLogin: "patchrelay[bot]",
+      }),
+    });
+    fetchCalls.length = 0;
+    enqueueCalls.length = 0;
+
+    await handler.processGitHubWebhookEvent({
+      eventType: "pull_request",
+      rawBody: buildSynchronizePrPayload({
+        branch: "feat-rereview",
+        headSha: "sha-push",
+        prNumber: 26,
+        prAuthorLogin: "patchrelay[bot]",
+      }),
+    });
+
+    assert.deepEqual(enqueueCalls, []);
+    assert.equal(fetchCalls.length, 1);
+    assert.equal(fetchCalls[0]?.url, "https://api.github.com/repos/owner/repo/pulls/26/requested_reviewers");
+    assert.equal(fetchCalls[0]?.init?.method, "POST");
+    assert.match(String(fetchCalls[0]?.init?.headers && (fetchCalls[0].init.headers as Record<string, string>).authorization), /^Bearer test-github-token$/);
+    assert.equal(fetchCalls[0]?.init?.body, JSON.stringify({ reviewers: ["reviewbot"] }));
+  } finally {
+    if (previousGitHubToken === undefined) {
+      delete process.env.GITHUB_TOKEN;
+    } else {
+      process.env.GITHUB_TOKEN = previousGitHubToken;
+    }
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("push after requested changes skips auto re-review while a run is active", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-runtime-rereview-active-"));
+  const previousGitHubToken = process.env.GITHUB_TOKEN;
+  try {
+    process.env.GITHUB_TOKEN = "test-github-token";
+    const fetchCalls: string[] = [];
+    const { db, handler } = createHandler(baseDir, {
+      fetchImpl: async (input) => {
+        fetchCalls.push(String(input));
+        return createJsonResponse({}, 201);
+      },
+    });
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-rereview-active",
+      issueKey: "USE-27",
+      branchName: "feat-rereview-active",
+      prNumber: 27,
+      prState: "open",
+      prAuthorLogin: "patchrelay[bot]",
+      factoryState: "changes_requested",
+      prReviewState: "changes_requested",
+      threadId: "thread-active",
+    });
+    const run = db.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "review_fix",
+    });
+    db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      activeRunId: run.id,
+    });
+    db.appendIssueSessionEvent({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      eventType: "review_changes_requested",
+      eventJson: JSON.stringify({ reviewerName: "reviewbot" }),
+    });
+
+    await handler.processGitHubWebhookEvent({
+      eventType: "pull_request",
+      rawBody: buildSynchronizePrPayload({
+        branch: "feat-rereview-active",
+        headSha: "sha-push-active",
+        prNumber: 27,
+        prAuthorLogin: "patchrelay[bot]",
+      }),
+    });
+
+    assert.deepEqual(fetchCalls, []);
   } finally {
     if (previousGitHubToken === undefined) {
       delete process.env.GITHUB_TOKEN;
