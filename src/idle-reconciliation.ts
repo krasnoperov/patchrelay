@@ -190,10 +190,10 @@ export class IdleIssueReconciler {
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       factoryState: newState,
-      ...(options?.pendingRunType ? { pendingRunType: options.pendingRunType } : {}),
-      ...(options?.pendingRunType
+      ...((options?.pendingRunType || newState === "awaiting_queue" || newState === "delegated" || newState === "done")
         ? {
-            pendingRunContextJson: options.pendingRunContext ? JSON.stringify(options.pendingRunContext) : null,
+            pendingRunType: null,
+            pendingRunContextJson: null,
           }
         : {}),
       ...(options?.clearFailureProvenance
@@ -215,6 +215,9 @@ export class IdleIssueReconciler {
     if (branchOwner) {
       this.db.setBranchOwner(issue.projectId, issue.linearIssueId, branchOwner);
     }
+    if (options?.pendingRunType) {
+      this.appendWakeEvent(issue, options.pendingRunType, options.pendingRunContext, "idle_reconciliation");
+    }
     this.feed?.publish({
       level: "info",
       kind: "stage",
@@ -224,9 +227,39 @@ export class IdleIssueReconciler {
       status: "reconciled",
       summary: `Reconciliation: ${issue.factoryState} \u2192 ${newState}`,
     });
-    if (options?.pendingRunType) {
+    if (options?.pendingRunType && this.db.peekIssueSessionWake(issue.projectId, issue.linearIssueId)) {
       this.deps.enqueueIssue(issue.projectId, issue.linearIssueId);
     }
+  }
+
+  private appendWakeEvent(
+    issue: Pick<IssueRecord, "projectId" | "linearIssueId" | "prHeadSha" | "lastGitHubFailureHeadSha" | "lastGitHubFailureSignature">,
+    runType: RunType,
+    context?: Record<string, unknown>,
+    dedupeScope = "idle_reconciliation",
+  ): void {
+    let eventType: "delegated" | "review_changes_requested" | "settled_red_ci" | "merge_steward_incident";
+    let dedupeKey: string;
+    if (runType === "queue_repair") {
+      eventType = "merge_steward_incident";
+      dedupeKey = `${dedupeScope}:queue_repair:${issue.linearIssueId}:${issue.lastGitHubFailureSignature ?? issue.prHeadSha ?? issue.lastGitHubFailureHeadSha ?? "unknown"}`;
+    } else if (runType === "ci_repair") {
+      eventType = "settled_red_ci";
+      dedupeKey = `${dedupeScope}:ci_repair:${issue.linearIssueId}:${issue.lastGitHubFailureSignature ?? issue.prHeadSha ?? issue.lastGitHubFailureHeadSha ?? "unknown"}`;
+    } else if (runType === "review_fix") {
+      eventType = "review_changes_requested";
+      dedupeKey = `${dedupeScope}:review_fix:${issue.linearIssueId}:${issue.prHeadSha ?? "unknown"}`;
+    } else {
+      eventType = "delegated";
+      dedupeKey = `${dedupeScope}:implementation:${issue.linearIssueId}`;
+    }
+    this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      eventType,
+      ...(context ? { eventJson: JSON.stringify(context) } : {}),
+      dedupeKey,
+    });
   }
 
   private async routeFailedIssue(issue: IssueRecord): Promise<void> {

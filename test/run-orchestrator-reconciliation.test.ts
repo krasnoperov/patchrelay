@@ -360,7 +360,8 @@ test("reconcileIdleIssues currently routes failed idle issues to ci_repair", asy
     const issue = db.getIssue("usertold", "issue-12");
     assert.equal(issue?.factoryState, "repairing_ci");
     assert.equal(issue?.branchOwner, "patchrelay");
-    assert.equal(issue?.pendingRunType, "ci_repair");
+    assert.equal(issue?.pendingRunType, undefined);
+    assert.equal(db.peekIssueSessionWake("usertold", "issue-12")?.runType, "ci_repair");
     assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-12" }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -386,7 +387,8 @@ test("reconcileIdleIssues treats GitHub 'failure' status as a failing check", as
 
     const issue = db.getIssue("usertold", "issue-12b");
     assert.equal(issue?.factoryState, "repairing_ci");
-    assert.equal(issue?.pendingRunType, "ci_repair");
+    assert.equal(issue?.pendingRunType, undefined);
+    assert.equal(db.peekIssueSessionWake("usertold", "issue-12b")?.runType, "ci_repair");
     assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-12b" }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -435,8 +437,8 @@ test("reconcileIdleIssues preserves stored steward incident context for queue re
     const issue = db.getIssue("usertold", "issue-13");
     assert.equal(issue?.factoryState, "repairing_queue");
     assert.equal(issue?.branchOwner, "patchrelay");
-    assert.equal(issue?.pendingRunType, "queue_repair");
-    assert.deepEqual(JSON.parse(issue?.pendingRunContextJson ?? "{}"), {
+    assert.equal(issue?.pendingRunType, undefined);
+    assert.deepEqual(db.peekIssueSessionWake("usertold", "issue-13")?.context, {
       failureReason: "queue_eviction",
       checkName: "merge-steward/queue",
       checkUrl: "https://github.com/owner/repo/actions/runs/13",
@@ -454,6 +456,7 @@ test("reconcileIdleIssues preserves stored steward incident context for queue re
         branch: "feat-queue-failed",
         retryHistory: [{ at: "2026-03-31T00:00:00.000Z", baseSha: "base-12", outcome: "ci_failed_retry" }],
       },
+      wakeReason: "merge_steward_incident",
     });
     assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-13" }]);
   } finally {
@@ -494,7 +497,8 @@ exit 1`, "utf8");
 
     const issue = db.getIssue("usertold", "issue-13c");
     assert.equal(issue?.factoryState, "repairing_queue");
-    assert.equal(issue?.pendingRunType, "queue_repair");
+    assert.equal(issue?.pendingRunType, undefined);
+    assert.equal(db.peekIssueSessionWake("usertold", "issue-13c")?.runType, "queue_repair");
     assert.equal(issue?.lastGitHubFailureSource, "queue_eviction");
     assert.equal(issue?.lastGitHubFailureCheckName, "merge-steward/queue");
     assert.equal(issue?.lastGitHubFailureSignature, "queue_eviction::sha-13c::merge-steward/queue");
@@ -579,7 +583,8 @@ exit 1`, "utf8");
 
     const issue = db.getIssue("usertold", "issue-13b2");
     assert.equal(issue?.factoryState, "repairing_queue");
-    assert.equal(issue?.pendingRunType, "queue_repair");
+    assert.equal(issue?.pendingRunType, undefined);
+    assert.equal(db.peekIssueSessionWake("usertold", "issue-13b2")?.runType, "queue_repair");
     assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-13b2" }]);
   } finally {
     process.env.PATH = oldPath;
@@ -623,7 +628,8 @@ exit 1`, "utf8");
 
     const issue = db.getIssue("usertold", "issue-13d");
     assert.equal(issue?.factoryState, "repairing_queue");
-    assert.equal(issue?.pendingRunType, "queue_repair");
+    assert.equal(issue?.pendingRunType, undefined);
+    assert.equal(db.peekIssueSessionWake("usertold", "issue-13d")?.runType, "queue_repair");
     assert.equal(issue?.lastGitHubFailureSource, "queue_eviction");
     assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-13d" }]);
   } finally {
@@ -670,7 +676,8 @@ exit 1`, "utf8");
 
     const issue = db.getIssue("usertold", "issue-13e");
     assert.equal(issue?.factoryState, "repairing_queue");
-    assert.equal(issue?.pendingRunType, "queue_repair");
+    assert.equal(issue?.pendingRunType, undefined);
+    assert.equal(db.peekIssueSessionWake("usertold", "issue-13e")?.runType, "queue_repair");
     assert.equal(issue?.lastGitHubFailureSource, "queue_eviction");
     assert.equal(issue?.lastGitHubFailureCheckName, "merge-steward/queue");
     assert.equal(issue?.lastGitHubFailureSignature, "queue_eviction::sha-13e::merge-steward/queue");
@@ -948,7 +955,8 @@ test("reconcileRun leaves interrupted queue_repair eligible for retry on idle re
     const updatedRun = db.getRun(run.id);
     assert.equal(updatedIssue?.factoryState, "repairing_queue");
     assert.equal(updatedIssue?.queueRepairAttempts, 0);
-    assert.equal(updatedIssue?.pendingRunType, "queue_repair");
+    assert.equal(updatedIssue?.pendingRunType, undefined);
+    assert.equal(db.peekIssueSessionWake("usertold", "issue-15q")?.runType, "queue_repair");
     assert.equal(updatedIssue?.activeRunId, undefined);
     assert.equal(updatedRun?.status, "failed");
     assert.equal(updatedRun?.failureReason, "Codex turn was interrupted");
@@ -1145,7 +1153,8 @@ test("reconcileIdleIssues prioritizes queue eviction recovery over approved wait
 
     const issue = db.getIssue("usertold", "issue-queue-priority");
     assert.equal(issue?.factoryState, "repairing_queue");
-    assert.equal(issue?.pendingRunType, "queue_repair");
+    assert.equal(issue?.pendingRunType, undefined);
+    assert.equal(db.peekIssueSessionWake("usertold", "issue-queue-priority")?.runType, "queue_repair");
     assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-queue-priority" }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
