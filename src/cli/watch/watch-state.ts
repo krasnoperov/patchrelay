@@ -106,6 +106,10 @@ export interface WatchState {
   follow: boolean;
   // Detail view state
   detailTab: DetailTab;
+  detailScrollOffset: number;
+  detailViewportRows: number;
+  detailContentRows: number;
+  detailUnreadBelow: number;
   timeline: TimelineEntry[];
   rawRuns: TimelineRunInput[];
   rawFeedEvents: OperatorFeedEvent[];
@@ -129,6 +133,10 @@ export type WatchAction =
   | { type: "enter-detail"; issueKey: string }
   | { type: "exit-detail" }
   | { type: "detail-navigate"; direction: "next" | "prev"; filtered: WatchIssue[] }
+  | { type: "detail-scroll"; delta: number }
+  | { type: "detail-page"; direction: "up" | "down" }
+  | { type: "detail-jump"; target: "start" | "end" }
+  | { type: "detail-layout-updated"; viewportRows: number; contentRows: number }
   | { type: "timeline-rehydrate"; runs: TimelineRunInput[]; feedEvents: OperatorFeedEvent[]; liveThread: CodexThreadSummary | null; activeRunId: number | null; activeRunStartedAt?: string | null; issueContext: WatchIssueContext | null }
   | { type: "codex-notification"; method: string; params: Record<string, unknown> }
   | { type: "cycle-filter" }
@@ -152,6 +160,10 @@ function capArray<T>(arr: T[], max: number): T[] {
 
 const DETAIL_INITIAL = {
   detailTab: "timeline" as DetailTab,
+  detailScrollOffset: 0,
+  detailViewportRows: 0,
+  detailContentRows: 0,
+  detailUnreadBelow: 0,
   timeline: [] as TimelineEntry[],
   rawRuns: [] as TimelineRunInput[],
   rawFeedEvents: [] as OperatorFeedEvent[],
@@ -235,6 +247,80 @@ function nextFilter(filter: WatchFilter): WatchFilter {
   }
 }
 
+function clampIndex(index: number, length: number): number {
+  return Math.max(0, Math.min(index, Math.max(0, length - 1)));
+}
+
+function selectedIssueKeyForFilter(state: WatchState): string | null {
+  const filtered = filterIssues(state.issues, state.filter);
+  return filtered[state.selectedIndex]?.issueKey ?? null;
+}
+
+function selectedIndexForSnapshot(state: WatchState, nextIssues: WatchIssue[]): number {
+  const nextFiltered = filterIssues(nextIssues, state.filter);
+  if (nextFiltered.length === 0) return 0;
+
+  const selectedIssueKey = selectedIssueKeyForFilter(state);
+  if (selectedIssueKey) {
+    const selectedIndex = nextFiltered.findIndex((issue) => issue.issueKey === selectedIssueKey);
+    if (selectedIndex >= 0) return selectedIndex;
+  }
+
+  return clampIndex(state.selectedIndex, nextFiltered.length);
+}
+
+const DETAIL_BOTTOM_THRESHOLD = 2;
+
+function maxDetailScrollOffset(contentRows: number, viewportRows: number): number {
+  return Math.max(0, contentRows - viewportRows);
+}
+
+function isDetailNearBottom(scrollOffset: number, contentRows: number, viewportRows: number): boolean {
+  const maxOffset = maxDetailScrollOffset(contentRows, viewportRows);
+  return scrollOffset >= Math.max(0, maxOffset - DETAIL_BOTTOM_THRESHOLD);
+}
+
+function detailStateForPosition(
+  state: WatchState,
+  scrollOffset: number,
+  follow: boolean,
+): Pick<WatchState, "detailScrollOffset" | "detailUnreadBelow" | "follow"> {
+  const maxOffset = maxDetailScrollOffset(state.detailContentRows, state.detailViewportRows);
+  const nextOffset = clampIndex(scrollOffset, maxOffset + 1);
+  const nextFollow = follow || isDetailNearBottom(nextOffset, state.detailContentRows, state.detailViewportRows);
+  return {
+    detailScrollOffset: nextFollow ? maxOffset : nextOffset,
+    detailUnreadBelow: nextFollow ? 0 : Math.max(0, maxOffset - nextOffset),
+    follow: nextFollow,
+  };
+}
+
+function detailStateAfterLayout(
+  state: WatchState,
+  viewportRows: number,
+  contentRows: number,
+): Pick<WatchState, "detailScrollOffset" | "detailViewportRows" | "detailContentRows" | "detailUnreadBelow" | "follow"> {
+  const nextState = {
+    ...state,
+    detailViewportRows: Math.max(0, viewportRows),
+    detailContentRows: Math.max(0, contentRows),
+  };
+  const maxOffset = maxDetailScrollOffset(nextState.detailContentRows, nextState.detailViewportRows);
+  const shouldFollow = state.follow || isDetailNearBottom(
+    state.detailScrollOffset,
+    state.detailContentRows,
+    state.detailViewportRows,
+  );
+  const nextOffset = shouldFollow ? maxOffset : Math.min(state.detailScrollOffset, maxOffset);
+  return {
+    detailViewportRows: nextState.detailViewportRows,
+    detailContentRows: nextState.detailContentRows,
+    detailScrollOffset: nextOffset,
+    detailUnreadBelow: shouldFollow ? 0 : Math.max(0, maxOffset - nextOffset),
+    follow: shouldFollow,
+  };
+}
+
 // ─── Reducer ──────────────────────────────────────────────────────
 
 export function watchReducer(state: WatchState, action: WatchAction): WatchState {
@@ -253,7 +339,7 @@ export function watchReducer(state: WatchState, action: WatchAction): WatchState
         ...state,
         lastServerMessageAt: action.receivedAt,
         issues: action.issues,
-        selectedIndex: Math.min(state.selectedIndex, Math.max(0, action.issues.length - 1)),
+        selectedIndex: selectedIndexForSnapshot(state, action.issues),
       };
 
     case "feed-event":
@@ -262,11 +348,11 @@ export function watchReducer(state: WatchState, action: WatchAction): WatchState
     case "select":
       return {
         ...state,
-        selectedIndex: Math.max(0, Math.min(action.index, state.issues.length - 1)),
+        selectedIndex: clampIndex(action.index, filterIssues(state.issues, state.filter).length),
       };
 
     case "enter-detail":
-      return { ...state, view: "detail", activeDetailKey: action.issueKey, ...DETAIL_INITIAL };
+      return { ...state, view: "detail", activeDetailKey: action.issueKey, follow: true, ...DETAIL_INITIAL };
 
     case "exit-detail":
       return { ...state, view: "list", activeDetailKey: null, ...DETAIL_INITIAL };
@@ -280,7 +366,55 @@ export function watchReducer(state: WatchState, action: WatchAction): WatchState
         : (curIdx - 1 + list.length) % list.length;
       const nextIssue = list[nextIdx];
       if (!nextIssue?.issueKey || nextIssue.issueKey === state.activeDetailKey) return state;
-      return { ...state, activeDetailKey: nextIssue.issueKey, selectedIndex: nextIdx, ...DETAIL_INITIAL };
+      return { ...state, activeDetailKey: nextIssue.issueKey, selectedIndex: nextIdx, follow: true, ...DETAIL_INITIAL };
+    }
+
+    case "detail-scroll":
+      return {
+        ...state,
+        ...detailStateForPosition(state, state.detailScrollOffset + action.delta, false),
+      };
+
+    case "detail-page": {
+      const pageSize = Math.max(1, state.detailViewportRows - 2);
+      const delta = action.direction === "down" ? pageSize : -pageSize;
+      return {
+        ...state,
+        ...detailStateForPosition(state, state.detailScrollOffset + delta, false),
+      };
+    }
+
+    case "detail-jump":
+      return action.target === "end"
+        ? {
+            ...state,
+            ...detailStateForPosition(
+              state,
+              maxDetailScrollOffset(state.detailContentRows, state.detailViewportRows),
+              true,
+            ),
+          }
+        : {
+            ...state,
+            ...detailStateForPosition(state, 0, false),
+          };
+
+    case "detail-layout-updated":
+    {
+      const nextDetailState = detailStateAfterLayout(state, action.viewportRows, action.contentRows);
+      if (
+        nextDetailState.detailViewportRows === state.detailViewportRows
+        && nextDetailState.detailContentRows === state.detailContentRows
+        && nextDetailState.detailScrollOffset === state.detailScrollOffset
+        && nextDetailState.detailUnreadBelow === state.detailUnreadBelow
+        && nextDetailState.follow === state.follow
+      ) {
+        return state;
+      }
+      return {
+        ...state,
+        ...nextDetailState,
+      };
     }
 
     case "timeline-rehydrate": {
@@ -309,7 +443,23 @@ export function watchReducer(state: WatchState, action: WatchAction): WatchState
       return { ...state, filter: nextFilter(state.filter), selectedIndex: 0 };
 
     case "toggle-follow":
-      return { ...state, follow: !state.follow };
+      return state.follow
+        ? {
+            ...state,
+            follow: false,
+            detailUnreadBelow: Math.max(
+              0,
+              maxDetailScrollOffset(state.detailContentRows, state.detailViewportRows) - state.detailScrollOffset,
+            ),
+          }
+        : {
+            ...state,
+            ...detailStateForPosition(
+              state,
+              maxDetailScrollOffset(state.detailContentRows, state.detailViewportRows),
+              true,
+            ),
+          };
 
     case "enter-feed":
       return { ...state, view: "feed", activeDetailKey: null, ...DETAIL_INITIAL };
@@ -324,7 +474,7 @@ export function watchReducer(state: WatchState, action: WatchAction): WatchState
       return { ...state, feedEvents: capArray([...state.feedEvents, action.event], MAX_FEED_EVENTS) };
 
     case "switch-detail-tab":
-      return { ...state, detailTab: action.tab };
+      return { ...state, follow: true, ...DETAIL_INITIAL, detailTab: action.tab };
 
     default:
       return state;

@@ -1,0 +1,146 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import type { TimelineEntry, TimelineRunInput } from "../src/cli/watch/timeline-builder.ts";
+import { buildDetailLines } from "../src/cli/watch/detail-rows.ts";
+import { lineToPlainText, renderRichTextLines } from "../src/cli/watch/render-rich-text.ts";
+import type { WatchIssue } from "../src/cli/watch/watch-state.ts";
+
+function makeIssue(key: string, overrides?: Partial<WatchIssue>): WatchIssue {
+  return {
+    issueKey: key,
+    projectId: "test-project",
+    factoryState: "implementing",
+    blockedByCount: 0,
+    blockedByKeys: [],
+    readyForExecution: false,
+    updatedAt: "2026-03-25T10:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function detailText(lines: ReturnType<typeof buildDetailLines>): string[] {
+  return lines.map(lineToPlainText).filter((line) => line.length > 0);
+}
+
+test("renderRichTextLines formats links, bullets, and code blocks without raw markdown wrappers", () => {
+  const lines = renderRichTextLines([
+    "Summary with [sessionSchema.ts](/tmp/sessionSchema.ts#L42).",
+    "",
+    "- first bullet",
+    "```ts",
+    "const answer = 42;",
+    "```",
+  ].join("\n"), {
+    key: "rich-text",
+    width: 80,
+  });
+
+  const text = lines.map(lineToPlainText).join("\n");
+  assert.match(text, /sessionSchema\.ts \(\/tmp\/sessionSchema\.ts#L42\)/);
+  assert.match(text, /• first bullet/);
+  assert.match(text, /const answer = 42;/);
+  assert.doesNotMatch(text, /\[sessionSchema\.ts\]\(/);
+  assert.doesNotMatch(text, /```/);
+});
+
+test("buildDetailLines keeps completed timeline runs collapsed to a summary", () => {
+  const issue = makeIssue("USE-1");
+  const timeline: TimelineEntry[] = [
+    {
+      id: "run-start-1",
+      at: "2026-03-25T10:00:00.000Z",
+      kind: "run-start",
+      runId: 1,
+      run: { runType: "implementation", status: "completed", startedAt: "2026-03-25T10:00:00.000Z", endedAt: "2026-03-25T10:05:00.000Z" },
+    },
+    {
+      id: "item-1",
+      at: "2026-03-25T10:00:10.000Z",
+      kind: "item",
+      runId: 1,
+      item: { id: "msg-1", type: "agentMessage", status: "completed", text: "First progress update." },
+    },
+    {
+      id: "item-2",
+      at: "2026-03-25T10:00:20.000Z",
+      kind: "item",
+      runId: 1,
+      item: { id: "msg-2", type: "agentMessage", status: "completed", text: "Final summary update." },
+    },
+    {
+      id: "run-end-1",
+      at: "2026-03-25T10:05:00.000Z",
+      kind: "run-end",
+      runId: 1,
+      run: { runType: "implementation", status: "completed", startedAt: "2026-03-25T10:00:00.000Z", endedAt: "2026-03-25T10:05:00.000Z" },
+    },
+  ];
+
+  const text = detailText(buildDetailLines({
+    issue,
+    timeline,
+    activeRunStartedAt: null,
+    activeRunId: null,
+    tokenUsage: null,
+    diffSummary: null,
+    plan: null,
+    issueContext: null,
+    detailTab: "timeline",
+    rawRuns: [],
+    rawFeedEvents: [],
+    follow: true,
+    connected: true,
+    lastServerMessageAt: Date.now(),
+    width: 80,
+  })).join("\n");
+
+  assert.match(text, /Final summary update\./);
+  assert.doesNotMatch(text, /First progress update\./);
+});
+
+test("buildDetailLines renders history messages with markdown-friendly formatting", () => {
+  const issue = makeIssue("USE-1", { factoryState: "changes_requested" });
+  const rawRuns: TimelineRunInput[] = [{
+    id: 7,
+    runType: "review_fix",
+    status: "completed",
+    startedAt: "2026-03-25T10:00:00.000Z",
+    endedAt: "2026-03-25T10:05:00.000Z",
+    report: {
+      runType: "review_fix",
+      status: "completed",
+      prompt: "",
+      assistantMessages: [
+        "Updated [app-shell.spec.ts](/tmp/app-shell.spec.ts#L282) and verified with `npm test`.",
+      ],
+      plans: [],
+      reasoning: [],
+      commands: [],
+      fileChanges: [],
+      toolCalls: [],
+      eventCounts: {},
+    },
+  }];
+
+  const text = detailText(buildDetailLines({
+    issue,
+    timeline: [],
+    activeRunStartedAt: null,
+    activeRunId: null,
+    tokenUsage: null,
+    diffSummary: null,
+    plan: null,
+    issueContext: null,
+    detailTab: "history",
+    rawRuns,
+    rawFeedEvents: [],
+    follow: true,
+    connected: true,
+    lastServerMessageAt: Date.now(),
+    width: 90,
+  })).join("\n");
+
+  assert.match(text, /app-shell\.spec\.ts \(\/tmp\/app-shell\.spec\.ts#L282\)/);
+  assert.match(text, /npm test/);
+  assert.doesNotMatch(text, /\[app-shell\.spec\.ts\]\(/);
+});
