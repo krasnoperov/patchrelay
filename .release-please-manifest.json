@@ -1,5 +1,5 @@
 {
   ".": "0.35.12",
   "packages/merge-steward": "0.9.5",
-  "packages/review-quill": "0.1.0"
+  "packages/review-quill": "0.2.0"
 }
