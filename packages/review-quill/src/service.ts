@@ -136,6 +136,16 @@ function reviewStateForEvent(event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT"): 
   }
 }
 
+function normalizeReviewerLogin(login: string | undefined): string | undefined {
+  return login?.replace(/\[bot\]$/i, "");
+}
+
+function matchesReviewerLogin(authorLogin: string | undefined, reviewerLogin: string | undefined): boolean {
+  const normalizedAuthor = normalizeReviewerLogin(authorLogin);
+  const normalizedReviewer = normalizeReviewerLogin(reviewerLogin);
+  return Boolean(normalizedAuthor && normalizedReviewer && normalizedAuthor === normalizedReviewer);
+}
+
 export function preserveRequestedChangesOnRereview(params: {
   reviews: PullRequestReviewRecord[];
   reviewerLogin: string | undefined;
@@ -148,7 +158,7 @@ export function preserveRequestedChangesOnRereview(params: {
 
   const latestPriorDecisiveReview = [...params.reviews]
     .reverse()
-    .find((review) => review.authorLogin === params.reviewerLogin
+    .find((review) => matchesReviewerLogin(review.authorLogin, params.reviewerLogin)
       && review.commitId !== params.headSha
       && (review.state === "CHANGES_REQUESTED" || review.state === "APPROVED"));
 
@@ -157,6 +167,26 @@ export function preserveRequestedChangesOnRereview(params: {
   }
 
   return params.event;
+}
+
+export function shouldRecoverNonDecisiveRereview(params: {
+  attempt: Pick<ReviewAttemptRecord, "status" | "conclusion">;
+  reviews: PullRequestReviewRecord[];
+  reviewerLogin: string | undefined;
+  headSha: string;
+}): boolean {
+  if (params.attempt.status !== "completed" || params.attempt.conclusion !== "skipped") {
+    return false;
+  }
+  if (!hasMatchingLatestReviewForHead(params.reviews, params.reviewerLogin, params.headSha, "COMMENT")) {
+    return false;
+  }
+  return preserveRequestedChangesOnRereview({
+    reviews: params.reviews,
+    reviewerLogin: params.reviewerLogin,
+    headSha: params.headSha,
+    event: "COMMENT",
+  }) === "REQUEST_CHANGES";
 }
 
 type PublicationDisposition =
@@ -188,7 +218,7 @@ export function hasMatchingLatestReviewForHead(
   const desiredState = reviewStateForEvent(event);
   const latest = [...reviews]
     .reverse()
-    .find((review) => review.authorLogin === reviewerLogin && review.commitId === headSha);
+    .find((review) => matchesReviewerLogin(review.authorLogin, reviewerLogin) && review.commitId === headSha);
   if (latest?.state !== desiredState) return false;
   // State matches. If we were given a newBody to compare, require
   // byte-equality too. If not (backward compat), the state match is
@@ -375,8 +405,26 @@ export class ReviewQuillService {
     for (const pr of prs) {
       await this.reconcileActiveAttemptsForPullRequest(repo, pr);
       const existing = this.store.getAttempt(repo.repoFullName, pr.number, pr.headSha);
-      if (existing && !["failed", "cancelled", "superseded"].includes(existing.status)) continue;
       const eligibility = await this.evaluateEligibility(repo, pr.number, pr.headSha, pr.isDraft, pr.headRefName);
+      if (existing && !["failed", "cancelled", "superseded"].includes(existing.status)) {
+        if (!eligibility.eligible) continue;
+        const currentReviews = await this.github.listPullRequestReviews(repo.repoFullName, pr.number);
+        if (shouldRecoverNonDecisiveRereview({
+          attempt: existing,
+          reviews: currentReviews,
+          reviewerLogin: this.reviewerLogin,
+          headSha: pr.headSha,
+        })) {
+          this.logger.warn({
+            repo: repo.repoFullName,
+            prNumber: pr.number,
+            headSha: pr.headSha,
+            attemptId: existing.id,
+          }, "Recovering non-decisive re-review on current head");
+          await this.executeReview(repo, pr, existing);
+        }
+        continue;
+      }
       if (!eligibility.eligible) continue;
       await this.executeReview(repo, pr, existing);
     }
