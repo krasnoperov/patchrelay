@@ -50,7 +50,7 @@ const configSchema = z.object({
     approvalPolicy: "never",
     sandboxMode: "read-only",
   }),
-  repositories: z.array(repositorySchema).min(1),
+  repositories: z.array(repositorySchema).default([]),
 });
 
 function readEnvFile(filePath: string): Record<string, string> {

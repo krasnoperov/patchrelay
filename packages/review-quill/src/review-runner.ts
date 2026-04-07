@@ -7,6 +7,11 @@ import { extractFirstJsonObject, safeJsonParse } from "./utils.ts";
 import type { GitHubClient } from "./github-client.ts";
 import type { PullRequestSummary, ReviewQuillConfig, ReviewQuillRepositoryConfig, ReviewVerdict } from "./types.ts";
 
+function isThreadMaterializationRace(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("not materialized yet") || message.includes("includeTurns is unavailable before first user message");
+}
+
 function collectAssistantMessages(thread: { turns: Array<{ items: Array<{ type: string; text?: string }> }> }): string[] {
   const messages: string[] = [];
   for (const turn of thread.turns) {
@@ -123,7 +128,16 @@ export class ReviewRunner {
   private async waitForTurnCompletion(threadId: string, turnId: string): Promise<Awaited<ReturnType<CodexAppServerClient["readThread"]>>> {
     const deadline = Date.now() + 15 * 60_000;
     while (Date.now() < deadline) {
-      const thread = await this.codex.readThread(threadId);
+      let thread: Awaited<ReturnType<CodexAppServerClient["readThread"]>>;
+      try {
+        thread = await this.codex.readThread(threadId);
+      } catch (error) {
+        if (isThreadMaterializationRace(error)) {
+          await new Promise((resolve) => setTimeout(resolve, 750));
+          continue;
+        }
+        throw error;
+      }
       const turn = thread.turns.find((entry) => entry.id === turnId);
       if (!turn) {
         await new Promise((resolve) => setTimeout(resolve, 1_000));
