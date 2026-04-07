@@ -1,0 +1,37 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { deriveIssueStatusNote } from "../src/status-note.ts";
+
+test("deriveIssueStatusNote prefers failure context over the latest assistant summary for failed issues", () => {
+  const note = deriveIssueStatusNote({
+    issue: { factoryState: "failed" },
+    sessionSummary: "Last assistant summary that should not win.",
+    latestRun: {
+      id: 1,
+      issueId: 1,
+      projectId: "project",
+      linearIssueId: "issue-1",
+      runType: "review_fix",
+      status: "completed",
+      startedAt: "2026-04-07T22:30:00.000Z",
+      summaryJson: JSON.stringify({
+        assistantMessages: ["Aligned the route copy and reran checks."],
+      }),
+    } as never,
+    failureSummary: "CI repair budget exhausted (3 attempts)",
+  });
+
+  assert.equal(note, "CI repair budget exhausted (3 attempts)");
+});
+
+test("deriveIssueStatusNote still prefers explicit operator events for escalated issues", () => {
+  const note = deriveIssueStatusNote({
+    issue: { factoryState: "escalated" },
+    latestEvent: {
+      eventType: "stop_requested",
+    } as never,
+    failureSummary: "CI repair budget exhausted (3 attempts)",
+  });
+
+  assert.equal(note, "Operator stopped the run. Use retry or delegate again to resume.");
+});

@@ -51,7 +51,7 @@ export function deriveIssueStatusNote(params: {
       break;
     case "failed":
     case "escalated":
-      note = latestRunNote ?? latestEventNote ?? failureSummary ?? sessionSummary;
+      note = latestEventNote ?? failureSummary ?? latestRunNote ?? sessionSummary;
       break;
     case "repairing_ci":
     case "repairing_queue":
