@@ -56,6 +56,28 @@ interface GhRepoResponse {
   default_branch?: string;
 }
 
+interface GhReviewGateResponse {
+  data?: {
+    repository?: {
+      pullRequests?: {
+        nodes?: Array<{
+          number?: number;
+          reviewDecision?: string;
+          headRefOid?: string;
+          latestReviews?: {
+            nodes?: Array<{
+              state?: string;
+              author?: { login?: string };
+              authorCanPushToRepository?: boolean;
+              commit?: { oid?: string };
+            }>;
+          };
+        }>;
+      };
+    };
+  };
+}
+
 function rootHelpText(): string {
   return [
     "review-quill",
@@ -367,6 +389,18 @@ function runGhApiJson<T>(pathArg: string): T {
   return JSON.parse(result.stdout) as T;
 }
 
+function runGhGraphqlJson<T>(query: string, variables: Record<string, string>): T {
+  const args = ["api", "graphql", "-f", `query=${query}`];
+  for (const [name, value] of Object.entries(variables)) {
+    args.push("-f", `${name}=${value}`);
+  }
+  const result = defaultGhCommand(args);
+  if (result.exitCode !== 0) {
+    throw new Error(result.stderr.trim() || result.stdout.trim() || "gh api graphql failed");
+  }
+  return JSON.parse(result.stdout) as T;
+}
+
 function defaultGhCommand(args: string[]): { exitCode: number; stdout: string; stderr: string } {
   const result = spawnSync("gh", args, { encoding: "utf8" });
   if (result.error) {
@@ -409,6 +443,96 @@ function discoverRepoSettingsViaGhCli(repoFullName: string, branch?: string): {
     branch: targetBranch,
     requiredChecks: [...requiredChecks].sort((left, right) => left.localeCompare(right)),
   };
+}
+
+function splitRepoFullName(repoFullName: string): { owner: string; name: string } {
+  const [owner, name] = repoFullName.split("/", 2);
+  if (!owner || !name) {
+    throw new Error(`Invalid GitHub repository name: ${repoFullName}`);
+  }
+  return { owner, name };
+}
+
+function queryReviewGateState(repoFullName: string): GhReviewGateResponse {
+  const { owner, name } = splitRepoFullName(repoFullName);
+  return runGhGraphqlJson<GhReviewGateResponse>(
+    `query($owner:String!, $name:String!) {
+      repository(owner:$owner, name:$name) {
+        pullRequests(first:20, states:OPEN, orderBy:{field:UPDATED_AT, direction:DESC}) {
+          nodes {
+            number
+            reviewDecision
+            headRefOid
+            latestReviews(first:20) {
+              nodes {
+                state
+                author { login }
+                authorCanPushToRepository
+                commit { oid }
+              }
+            }
+          }
+        }
+      }
+    }`,
+    { owner, name },
+  );
+}
+
+function buildReviewGateChecks(repoId: string, repoFullName: string, appSlug: string | undefined): DoctorCheck[] {
+  if (!appSlug) {
+    return [{
+      status: "warn",
+      scope: `repo:${repoId}:github-review-gate`,
+      message: "Could not determine the running review-quill app slug, so live GitHub review-gate validation was skipped.",
+    }];
+  }
+
+  const payload = queryReviewGateState(repoFullName);
+  const prs = payload.data?.repository?.pullRequests?.nodes ?? [];
+  const reviewed = prs.flatMap((pr) => {
+    const review = pr.latestReviews?.nodes?.find((entry) => entry.author?.login === appSlug);
+    return review ? [{
+      prNumber: pr.number ?? 0,
+      reviewDecision: pr.reviewDecision ?? "unknown",
+      state: review.state ?? "unknown",
+      authorCanPushToRepository: review.authorCanPushToRepository ?? false,
+      commitOid: review.commit?.oid,
+      headSha: pr.headRefOid,
+    }] : [];
+  });
+
+  if (reviewed.length === 0) {
+    return [{
+      status: "warn",
+      scope: `repo:${repoId}:github-review-gate`,
+      message: `No open PR currently has a latest ${appSlug} review, so GitHub gate counting could not be verified live.`,
+    }];
+  }
+
+  const nonCounted = reviewed.filter((entry) => !entry.authorCanPushToRepository);
+  if (nonCounted.length > 0) {
+    return [{
+      status: "warn",
+      scope: `repo:${repoId}:github-review-gate`,
+      message: `GitHub is not counting ${appSlug} on PR ${nonCounted.map((entry) => `#${entry.prNumber}`).join(", ")} because authorCanPushToRepository is false.`,
+    }];
+  }
+
+  const mismatchedApprovals = reviewed.filter((entry) => entry.state === "APPROVED" && entry.reviewDecision !== "APPROVED");
+  if (mismatchedApprovals.length > 0) {
+    return [{
+      status: "warn",
+      scope: `repo:${repoId}:github-review-gate`,
+      message: `GitHub still shows reviewDecision != APPROVED for ${appSlug} on PR ${mismatchedApprovals.map((entry) => `#${entry.prNumber}`).join(", ")}.`,
+    }];
+  }
+
+  return [{
+    status: "pass",
+    scope: `repo:${repoId}:github-review-gate`,
+    message: `GitHub is counting the latest ${appSlug} reviews on ${reviewed.map((entry) => `#${entry.prNumber}`).join(", ")}.`,
+  }];
 }
 
 async function handleInit(parsed: ParsedArgs, stdout: Output, runCommand: CommandRunner): Promise<number> {
@@ -609,6 +733,7 @@ async function handleDoctor(parsed: ParsedArgs, stdout: Output, runCommand: Comm
   const checks: DoctorCheck[] = [];
   const layout = getReviewQuillPathLayout();
   const env = getHomeEnv();
+  let serviceAppSlug: string | undefined;
 
   const pathChecks = [
     ["home-config", layout.configPath, false],
@@ -689,6 +814,7 @@ async function handleDoctor(parsed: ParsedArgs, stdout: Output, runCommand: Comm
 
   try {
     const auth = await fetchServiceAuthStatus();
+    serviceAppSlug = auth.appSlug;
     checks.push({
       status: auth.ready ? "pass" : "fail",
       scope: "service-auth",
@@ -736,6 +862,9 @@ async function handleDoctor(parsed: ParsedArgs, stdout: Output, runCommand: Comm
           scope: `repo:${repo.repoId}:review-protocol`,
           message: "review-quill uses its GitHub App identity for normal PR approvals or change requests, and repos may optionally require `review-quill/verdict` too.",
         });
+        for (const check of buildReviewGateChecks(repo.repoId, repo.repoFullName, serviceAppSlug)) {
+          checks.push(check);
+        }
       } catch (error) {
         checks.push({
           status: "warn",

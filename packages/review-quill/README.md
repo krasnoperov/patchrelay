@@ -111,7 +111,7 @@ Notes:
 - `init` bootstraps the local home and systemd unit
 - `attach` adds or updates one watched repository
 - `repos` shows what is configured
-- `doctor` verifies readiness
+- `doctor` verifies readiness and, when possible, checks whether GitHub is counting recent `review-quill` reviews
 - `service status|logs|restart|install` handles systemd operations
 - `dashboard` opens the live review watch UI
 
