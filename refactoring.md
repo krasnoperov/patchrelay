@@ -113,6 +113,8 @@ Work:
 - rewrite GitHub follow-up routing to compute next action from session facts instead of directly mapping to `factoryState`
 - continue moving Linear webhook wakeups onto the session inbox first
   - comments, prompts, and dependency-unblock wakeups should enqueue from `peekIssueSessionWake(...)`, not from raw `pendingRunType`
+- continue moving GitHub/reactive wakeups onto the session inbox first
+  - review changes, CI repair, queue repair, and idle dependency-unblock wakeups should enqueue from `peekIssueSessionWake(...)`, not directly from compatibility stage writes
 
 Definition of done:
 

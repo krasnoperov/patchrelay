@@ -157,12 +157,15 @@ export class IdleIssueReconciler {
     for (const issue of this.db.listBlockedDelegatedIssues()) {
       const unresolved = this.db.countUnresolvedBlockers(issue.projectId, issue.linearIssueId);
       if (unresolved === 0) {
-        this.db.upsertIssue({
+        this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
           projectId: issue.projectId,
           linearIssueId: issue.linearIssueId,
-          pendingRunType: "implementation",
+          eventType: "delegated",
+          dedupeKey: `delegated:${issue.linearIssueId}`,
         });
-        this.deps.enqueueIssue(issue.projectId, issue.linearIssueId);
+        if (this.db.peekIssueSessionWake(issue.projectId, issue.linearIssueId)) {
+          this.deps.enqueueIssue(issue.projectId, issue.linearIssueId);
+        }
       }
     }
   }

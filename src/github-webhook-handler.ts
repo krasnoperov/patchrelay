@@ -419,6 +419,7 @@ export class GitHubWebhookHandler {
         if (this.hasDuplicatePendingReactiveRun(issue, "queue_repair", failureContext)) {
           return;
         }
+        const hadPendingWake = this.db.hasPendingIssueSessionEvents(issue.projectId, issue.linearIssueId);
         this.db.upsertIssue({
           projectId: issue.projectId,
           linearIssueId: issue.linearIssueId,
@@ -443,7 +444,9 @@ export class GitHubWebhookHandler {
           dedupeKey: failureContext.failureSignature,
         });
         this.db.setBranchOwnerRespectingActiveLease(issue.projectId, issue.linearIssueId, "patchrelay");
-        this.enqueueIssue(issue.projectId, issue.linearIssueId);
+        const queuedRunType = hadPendingWake
+          ? this.peekPendingSessionWakeRunType(issue.projectId, issue.linearIssueId)
+          : this.enqueuePendingSessionWake(issue.projectId, issue.linearIssueId);
         this.logger.info({ issueKey: issue.issueKey, checkName: event.checkName }, "Queue eviction detected, enqueued queue repair");
         this.feed?.publish({
           level: "warn",
@@ -452,7 +455,7 @@ export class GitHubWebhookHandler {
           projectId: issue.projectId,
           stage: "repairing_queue",
           status: "queue_repair_queued",
-          summary: `Queue repair queued after external failure from ${event.checkName}`,
+          summary: `${queuedRunType ?? "queue_repair"} queued after external failure from ${event.checkName}`,
           detail: queueRepairContext.incidentSummary ?? queueRepairContext.incidentUrl ?? event.checkUrl,
         });
       } else {
@@ -472,6 +475,7 @@ export class GitHubWebhookHandler {
         if (this.hasDuplicatePendingReactiveRun(issue, "ci_repair", failureContext)) {
           return;
         }
+        const hadPendingWake = this.db.hasPendingIssueSessionEvents(issue.projectId, issue.linearIssueId);
         const snapshot = this.getRelevantCiSnapshot(issue, event);
         this.db.upsertIssue({
           projectId: issue.projectId,
@@ -497,7 +501,9 @@ export class GitHubWebhookHandler {
           dedupeKey: failureContext.failureSignature,
         });
         this.db.setBranchOwnerRespectingActiveLease(issue.projectId, issue.linearIssueId, "patchrelay");
-        this.enqueueIssue(issue.projectId, issue.linearIssueId);
+        const queuedRunType = hadPendingWake
+          ? this.peekPendingSessionWakeRunType(issue.projectId, issue.linearIssueId)
+          : this.enqueuePendingSessionWake(issue.projectId, issue.linearIssueId);
         this.logger.info({ issueKey: issue.issueKey, checkName: failureContext.checkName ?? event.checkName }, "Enqueued CI repair run");
         this.feed?.publish({
           level: "warn",
@@ -506,13 +512,14 @@ export class GitHubWebhookHandler {
           projectId: issue.projectId,
           stage: "repairing_ci",
           status: "ci_repair_queued",
-          summary: `CI repair queued for ${failureContext.jobName ?? failureContext.checkName ?? "failed check"}`,
+          summary: `${queuedRunType ?? "ci_repair"} queued for ${failureContext.jobName ?? failureContext.checkName ?? "failed check"}`,
           detail: summarizeGitHubFailureContext(failureContext),
         });
       }
     }
 
     if (event.triggerEvent === "review_changes_requested") {
+      const hadPendingWake = this.db.hasPendingIssueSessionEvents(issue.projectId, issue.linearIssueId);
       this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
@@ -528,8 +535,20 @@ export class GitHubWebhookHandler {
         ].join("::"),
       });
       this.db.setBranchOwnerRespectingActiveLease(issue.projectId, issue.linearIssueId, "patchrelay");
-      this.enqueueIssue(issue.projectId, issue.linearIssueId);
+      const queuedRunType = hadPendingWake
+        ? this.peekPendingSessionWakeRunType(issue.projectId, issue.linearIssueId)
+        : this.enqueuePendingSessionWake(issue.projectId, issue.linearIssueId);
       this.logger.info({ issueKey: issue.issueKey, reviewerName: event.reviewerName }, "Enqueued review fix run");
+      this.feed?.publish({
+        level: "warn",
+        kind: "github",
+        issueKey: issue.issueKey,
+        projectId: issue.projectId,
+        stage: "changes_requested",
+        status: "review_fix_queued",
+        summary: `${queuedRunType ?? "review_fix"} queued after requested changes`,
+        detail: event.reviewBody?.slice(0, 200) ?? event.reviewerName,
+      });
     }
 
   }
@@ -954,7 +973,20 @@ export class GitHubWebhookHandler {
       eventType: "followup_comment",
       eventJson: JSON.stringify({ body, author }),
     });
-    this.enqueueIssue(issue.projectId, issue.linearIssueId);
+    this.enqueuePendingSessionWake(issue.projectId, issue.linearIssueId);
+  }
+
+  private peekPendingSessionWakeRunType(projectId: string, issueId: string): string | undefined {
+    return this.db.peekIssueSessionWake(projectId, issueId)?.runType;
+  }
+
+  private enqueuePendingSessionWake(projectId: string, issueId: string): string | undefined {
+    const wake = this.db.peekIssueSessionWake(projectId, issueId);
+    if (!wake) {
+      return undefined;
+    }
+    this.enqueueIssue(projectId, issueId);
+    return wake.runType;
   }
 
   private isPatchRelayOwnedPr(issue: IssueRecord): boolean {
