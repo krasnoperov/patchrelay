@@ -232,7 +232,7 @@ export async function upsertRepoConfig(options: {
     repoFullName,
     baseBranch: options.baseBranch?.trim() || (typeof existing?.baseBranch === "string" ? existing.baseBranch : "main"),
     requiredChecks: [...new Set((options.requiredChecks ?? (Array.isArray(existing?.requiredChecks) ? existing.requiredChecks as string[] : [])).map((entry) => entry.trim()).filter(Boolean))],
-    excludeBranches: [...new Set((options.excludeBranches ?? (Array.isArray(existing?.excludeBranches) ? existing.excludeBranches as string[] : ["release-please--*"])).map((entry) => entry.trim()).filter(Boolean))],
+    excludeBranches: [...new Set((options.excludeBranches ?? (Array.isArray(existing?.excludeBranches) ? existing.excludeBranches as string[] : [])).map((entry) => entry.trim()).filter(Boolean))],
     reviewDocs: [...new Set((options.reviewDocs ?? (Array.isArray(existing?.reviewDocs) ? existing.reviewDocs as string[] : ["REVIEW_WORKFLOW.md", "CLAUDE.md", "AGENTS.md"])).map((entry) => entry.trim()).filter(Boolean))],
     diffIgnore: [...new Set((options.diffIgnore ?? (Array.isArray(existing?.diffIgnore) ? existing.diffIgnore as string[] : [...DEFAULT_DIFF_IGNORE])).map((entry) => entry.trim()).filter(Boolean))],
     diffSummarizeOnly: [...new Set((options.diffSummarizeOnly ?? (Array.isArray(existing?.diffSummarizeOnly) ? existing.diffSummarizeOnly as string[] : [...DEFAULT_DIFF_SUMMARIZE_ONLY])).map((entry) => entry.trim()).filter(Boolean))],

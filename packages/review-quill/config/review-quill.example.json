@@ -28,7 +28,7 @@
       "repoFullName": "krasnoperov/mafia",
       "baseBranch": "main",
       "requiredChecks": ["Tests"],
-      "excludeBranches": ["release-please--*"],
+      "excludeBranches": [],
       "reviewDocs": ["REVIEW_WORKFLOW.md", "CLAUDE.md", "AGENTS.md"]
     }
   ]
