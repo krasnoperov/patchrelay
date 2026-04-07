@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -126,6 +126,43 @@ function runCliProcess(
     cwd: options?.cwd ?? process.cwd(),
     encoding: "utf8",
     env,
+  });
+}
+
+async function _runCliProcessAsync(
+  args: string[],
+  options?: { env?: Record<string, string | undefined>; cwd?: string },
+): Promise<{ status: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }> {
+  const env = { ...process.env } as Record<string, string>;
+  for (const [key, value] of Object.entries(options?.env ?? {})) {
+    if (value === undefined) {
+      delete env[key];
+    } else {
+      env[key] = value;
+    }
+  }
+
+  return await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ["--experimental-transform-types", "src/index.ts", ...args], {
+      cwd: options?.cwd ?? process.cwd(),
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", reject);
+    child.on("close", (status, signal) => {
+      resolve({ status, signal, stdout, stderr });
+    });
   });
 }
 
@@ -1228,12 +1265,12 @@ test("cli dashboard reports a clean error when stdin is not a TTY", async () => 
   try {
     const configPath = path.join(tempDir, "config.json");
     mkdirSync(path.join(tempDir, "repo"), { recursive: true });
-    writeFileSync(configPath, JSON.stringify(createConfig(tempDir), null, 2));
+    writeExternalConfig(configPath, tempDir);
 
     const result = runCliProcess(["dashboard"], {
-      cwd: "/home/alv/projects/patchrelay",
+      cwd: process.cwd(),
       env: {
-        PATCHRELAY_CONFIG_PATH: configPath,
+        PATCHRELAY_CONFIG: configPath,
       },
     });
 

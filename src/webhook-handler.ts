@@ -192,7 +192,7 @@ export class WebhookHandler {
       }
 
       // Handle agent session events
-      await this.handleAgentSession(hydrated, project, trackedIssue, result.desiredStage, result.delegated);
+      await this.handleAgentSession(hydrated, project, trackedIssue, result.wakeRunType, result.delegated);
 
       // Handle comments during active run
       await this.handleComment(hydrated, project, trackedIssue);
@@ -203,16 +203,16 @@ export class WebhookHandler {
         || normalized.triggerEvent === "commentUpdated"
         || normalized.triggerEvent === "agentPrompted";
 
-      if (result.desiredStage && !wakeAlreadyQueuedByFollowUpHandler) {
+      if (result.wakeRunType && !wakeAlreadyQueuedByFollowUpHandler) {
         const queuedRunType = this.enqueuePendingSessionWake(project.id, issue.id);
         this.feed?.publish({
           level: "info",
           kind: "stage",
           issueKey: issue.identifier,
           projectId: project.id,
-          stage: queuedRunType ?? result.desiredStage,
+          stage: queuedRunType ?? result.wakeRunType,
           status: "queued",
-          summary: `Queued ${(queuedRunType ?? result.desiredStage)} workflow`,
+          summary: `Queued ${(queuedRunType ?? result.wakeRunType)} workflow`,
           detail: `Triggered by ${hydrated.triggerEvent}.`,
         });
       }
@@ -254,12 +254,12 @@ export class WebhookHandler {
     normalized: NormalizedEvent,
   ): Promise<{
     issue: TrackedIssueRecord | undefined;
-    desiredStage: RunType | undefined;
+    wakeRunType: RunType | undefined;
     delegated: boolean;
   }> {
     const normalizedIssue = normalized.issue;
     if (!normalizedIssue) {
-      return { issue: undefined, desiredStage: undefined, delegated: false };
+      return { issue: undefined, wakeRunType: undefined, delegated: false };
     }
 
     // ── 1. Fetch data ────────────────────────────────────────────
@@ -271,7 +271,7 @@ export class WebhookHandler {
     const hasPendingWake = this.db.peekIssueSessionWake(project.id, normalizedIssue.id) !== undefined;
 
     if (!existingIssue && !delegated && !incomingAgentSessionId) {
-      return { issue: undefined, desiredStage: undefined, delegated };
+      return { issue: undefined, wakeRunType: undefined, delegated };
     }
 
     const hydratedIssue = await this.syncIssueDependencies(project.id, normalizedIssue);
@@ -393,7 +393,7 @@ export class WebhookHandler {
 
     return {
       issue: this.db.issueToTrackedIssue(issue),
-      desiredStage,
+      wakeRunType: this.peekPendingSessionWakeRunType(project.id, normalizedIssue.id),
       delegated,
     };
   }
@@ -488,7 +488,7 @@ export class WebhookHandler {
     normalized: NormalizedEvent,
     project: ProjectConfig,
     trackedIssue: TrackedIssueRecord | undefined,
-    desiredStage: RunType | undefined,
+    wakeRunType: RunType | undefined,
     delegated: boolean,
   ): Promise<void> {
     if (!normalized.agentSession?.id || !normalized.issue) return;
@@ -507,10 +507,10 @@ export class WebhookHandler {
         }
         return;
       }
-      if (desiredStage) {
+      if (wakeRunType) {
         const latestIssue = this.db.getIssue(project.id, normalized.issue.id);
-        await this.syncAgentSession(linear, normalized.agentSession.id, latestIssue ?? trackedIssue, { pendingRunType: desiredStage });
-        await this.publishAgentActivity(linear, normalized.agentSession.id, buildDelegationThought(desiredStage));
+        await this.syncAgentSession(linear, normalized.agentSession.id, latestIssue ?? trackedIssue, { pendingRunType: wakeRunType });
+        await this.publishAgentActivity(linear, normalized.agentSession.id, buildDelegationThought(wakeRunType));
         return;
       }
       if (activeRun) {
@@ -586,16 +586,16 @@ export class WebhookHandler {
         : this.enqueuePendingSessionWake(project.id, normalized.issue.id);
       const latestIssue = this.db.getIssue(project.id, normalized.issue.id);
       await this.syncAgentSession(linear, normalized.agentSession.id, latestIssue ?? trackedIssue, {
-        pendingRunType: queuedRunType ?? desiredStage ?? (existingIssue.prReviewState === "changes_requested" ? "review_fix" : "implementation"),
+        pendingRunType: queuedRunType ?? wakeRunType ?? (existingIssue.prReviewState === "changes_requested" ? "review_fix" : "implementation"),
       });
-      await this.publishAgentActivity(linear, normalized.agentSession.id, buildPromptDeliveredThought(queuedRunType ?? desiredStage ?? "implementation"), { ephemeral: true });
+      await this.publishAgentActivity(linear, normalized.agentSession.id, buildPromptDeliveredThought(queuedRunType ?? wakeRunType ?? "implementation"), { ephemeral: true });
       return;
     }
 
-    if (desiredStage) {
+    if (wakeRunType) {
       const latestIssue = this.db.getIssue(project.id, normalized.issue.id);
-      await this.syncAgentSession(linear, normalized.agentSession.id, latestIssue ?? trackedIssue, { pendingRunType: desiredStage });
-      await this.publishAgentActivity(linear, normalized.agentSession.id, buildDelegationThought(desiredStage, "prompt"), { ephemeral: true });
+      await this.syncAgentSession(linear, normalized.agentSession.id, latestIssue ?? trackedIssue, { pendingRunType: wakeRunType });
+      await this.publishAgentActivity(linear, normalized.agentSession.id, buildDelegationThought(wakeRunType, "prompt"), { ephemeral: true });
     }
   }
 

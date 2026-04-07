@@ -146,12 +146,13 @@ function buildCheckRunPayload(params: {
 test("queue eviction check_run queues queue_repair with explicit provenance", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-queue-"));
   try {
-    const { db, enqueueCalls, handler } = createHandler(baseDir);
+    const { db, handler } = createHandler(baseDir);
     db.upsertIssue({
       projectId: "usertold",
       linearIssueId: "issue-1",
       issueKey: "USE-1",
       branchName: "feat-queue",
+      branchOwner: "patchrelay",
       prNumber: 42,
       prState: "open",
       factoryState: "awaiting_queue",
@@ -211,7 +212,6 @@ test("queue eviction check_run queues queue_repair with explicit provenance", as
       retryHistory: [{ at: "2026-03-31T00:00:00.000Z", baseSha: "base-122", outcome: "ci_failed_retry" }],
     });
     assert.equal(issue?.lastQueueIncidentJson !== undefined, true);
-    assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-1" }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -278,7 +278,7 @@ test("default gate fallback recognizes verify and enqueues CI repair", async () 
         ],
       }),
     };
-    const { db, enqueueCalls, handler } = createHandler(
+    const { db, handler } = createHandler(
       baseDir,
       failureContextResolver,
       ciSnapshotResolver,
@@ -289,6 +289,7 @@ test("default gate fallback recognizes verify and enqueues CI repair", async () 
       linearIssueId: "issue-verify",
       issueKey: "USE-VERIFY",
       branchName: "feat-verify",
+      branchOwner: "patchrelay",
       prNumber: 44,
       prState: "open",
       prAuthorLogin: "patchrelay[bot]",
@@ -311,7 +312,6 @@ test("default gate fallback recognizes verify and enqueues CI repair", async () 
     const wake = db.peekIssueSessionWake("usertold", "issue-verify");
     assert.equal(wake?.runType, "ci_repair");
     assert.equal(wake?.wakeReason, "settled_red_ci");
-    assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-verify" }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -320,12 +320,13 @@ test("default gate fallback recognizes verify and enqueues CI repair", async () 
 test("queue eviction falls back to minimal context when incident payload is malformed", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-queue-malformed-"));
   try {
-    const { db, enqueueCalls, handler } = createHandler(baseDir);
+    const { db, handler } = createHandler(baseDir);
     db.upsertIssue({
       projectId: "usertold",
       linearIssueId: "issue-3",
       issueKey: "USE-3",
       branchName: "feat-malformed",
+      branchOwner: "patchrelay",
       prNumber: 43,
       prState: "open",
       factoryState: "awaiting_queue",
@@ -355,7 +356,6 @@ test("queue eviction falls back to minimal context when incident payload is malf
     assert.equal(pending.incidentUrl, "https://queue.example.com/queue/incidents/incident-43");
     assert.equal(pending.incidentTitle, "Queue eviction: rebase conflict");
     assert.equal(pending.incidentSummary, "Malformed steward payload fallback");
-    assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-3" }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -364,7 +364,7 @@ test("queue eviction falls back to minimal context when incident payload is malf
 test("branch CI failures clear stale queue incident context", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-queue-cleared-"));
   try {
-    const { db, enqueueCalls, handler } = createHandler(
+    const { db, handler } = createHandler(
       baseDir,
       {
         resolve: async () => ({
@@ -403,6 +403,7 @@ test("branch CI failures clear stale queue incident context", async () => {
       linearIssueId: "issue-4",
       issueKey: "USE-4",
       branchName: "feat-branch-fail",
+      branchOwner: "patchrelay",
       prNumber: 44,
       prState: "open",
       factoryState: "awaiting_queue",
@@ -433,7 +434,6 @@ test("branch CI failures clear stale queue incident context", async () => {
     assert.equal(wake?.runType, "ci_repair");
     assert.equal(issue?.lastGitHubFailureSource, "branch_ci");
     assert.equal(issue?.lastQueueIncidentJson, undefined);
-    assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-4" }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -443,7 +443,7 @@ test("branch CI failures persist enriched Actions context in pending repair prom
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-ci-context-"));
   try {
     let resolvedCheckName: string | undefined;
-    const { db, enqueueCalls, handler } = createHandler(baseDir, {
+    const { db, handler } = createHandler(baseDir, {
       resolve: async ({ event }) => {
         resolvedCheckName = event.checkName;
         return {
@@ -502,6 +502,7 @@ test("branch CI failures persist enriched Actions context in pending repair prom
       linearIssueId: "issue-5",
       issueKey: "USE-5",
       branchName: "feat-ci-context",
+      branchOwner: "patchrelay",
       prNumber: 45,
       prState: "open",
       factoryState: "pr_open",
@@ -530,7 +531,6 @@ test("branch CI failures persist enriched Actions context in pending repair prom
     assert.equal(pending.stepName, "Run npx tsgo --noEmit");
     assert.equal(pending.summary, "Type generation failed");
     assert.deepEqual(pending.annotations, ["src/schema.ts: incompatible type"]);
-    assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-5" }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

@@ -53,6 +53,11 @@ export interface IssueSessionReadyInput {
   blockedByCount: number;
   hasPendingWake: boolean;
   hasLegacyPendingRun: boolean;
+  prNumber?: number | undefined;
+  prState?: string | undefined;
+  prReviewState?: string | undefined;
+  prCheckStatus?: string | undefined;
+  latestFailureSource?: string | undefined;
 }
 
 export function deriveIssueSessionState(params: IssueSessionStateInput): IssueSessionState {
@@ -128,6 +133,17 @@ export function isIssueSessionReadyForExecution(params: IssueSessionReadyInput):
     return true;
   }
   if (!params.hasLegacyPendingRun) {
+    return false;
+  }
+  if (
+    deriveIssueSessionReactiveIntent({
+      prNumber: params.prNumber,
+      prState: params.prState,
+      prReviewState: params.prReviewState,
+      prCheckStatus: params.prCheckStatus,
+      latestFailureSource: params.latestFailureSource,
+    }) === undefined
+  ) {
     return false;
   }
   if (

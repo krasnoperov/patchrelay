@@ -551,6 +551,11 @@ export class PatchRelayService {
         blockedByCount,
         hasPendingWake,
         hasLegacyPendingRun: row.pending_run_type !== null && row.pending_run_type !== undefined,
+        ...(row.pr_number !== null ? { prNumber: Number(row.pr_number) } : {}),
+        ...(row.pr_state !== null ? { prState: String(row.pr_state) } : {}),
+        ...(row.pr_review_state !== null ? { prReviewState: String(row.pr_review_state) } : {}),
+        ...(row.pr_check_status !== null ? { prCheckStatus: String(row.pr_check_status) } : {}),
+        ...(row.last_github_failure_source !== null ? { latestFailureSource: String(row.last_github_failure_source) } : {}),
       });
       const failureSummary = summarizeGitHubFailureContext(failureContext);
       const sessionWaitingReason = typeof row.waiting_reason === "string" && row.waiting_reason.trim().length > 0
