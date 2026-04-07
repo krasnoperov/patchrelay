@@ -301,3 +301,43 @@ test("listTrackedIssues does not mark downstream waiting issues as ready just be
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("listTrackedIssues does not mark awaiting-review issues as ready just because legacy pending state exists", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-service-list-awaiting-review-ready-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const service = new PatchRelayService(
+      config,
+      db,
+      {
+        on: () => undefined,
+        readThread: async () => ({ id: "thread-1", turns: [] }),
+      } as never,
+      undefined,
+      pino({ enabled: false }),
+    );
+
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-review",
+      issueKey: "USE-REVIEW",
+      title: "Awaiting review",
+      currentLinearState: "In Review",
+      factoryState: "pr_open",
+      pendingRunType: "implementation",
+      prNumber: 21,
+      prState: "open",
+      prReviewState: "review_required",
+      prCheckStatus: "success",
+    });
+
+    const tracked = service.listTrackedIssues().find((entry) => entry.issueKey === "USE-REVIEW");
+    assert.ok(tracked);
+    assert.equal(tracked.waitingReason, "Waiting on external review");
+    assert.equal(tracked.readyForExecution, false);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
