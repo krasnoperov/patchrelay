@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.35.12](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.35.11...patchrelay-v0.35.12) (2026-04-07)
+
+
+### Bug Fixes
+
+* address lint failures on wake handling branch ([c4c1707](https://github.com/krasnoperov/patchrelay/commit/c4c1707cb2f81e9e81ca9afb0d50f5b1de111da5))
+
 ## [0.35.11](https://github.com/krasnoperov/patchrelay/compare/patchrelay-v0.35.10...patchrelay-v0.35.11) (2026-04-04)
 
 
