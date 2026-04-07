@@ -4,6 +4,7 @@ import {
   watchReducer,
   initialWatchState,
   computeAggregates,
+  filterIssues,
   type WatchAction,
   type WatchIssue,
   type WatchState,
@@ -78,6 +79,28 @@ test("issues-snapshot clamps selectedIndex when list shrinks", () => {
   assert.equal(state.selectedIndex, 0);
 });
 
+test("issues-snapshot preserves the selected issue across reordering", () => {
+  const initial = stateWith({
+    filter: "all",
+    issues: [
+      makeIssue("USE-1", { updatedAt: "2026-03-25T10:00:00.000Z" }),
+      makeIssue("USE-2", { updatedAt: "2026-03-25T09:59:00.000Z" }),
+      makeIssue("USE-3", { updatedAt: "2026-03-25T09:58:00.000Z" }),
+    ],
+    selectedIndex: 1,
+  });
+
+  const reordered = [
+    makeIssue("USE-3", { updatedAt: "2026-03-25T10:01:00.000Z" }),
+    makeIssue("USE-1", { updatedAt: "2026-03-25T10:00:00.000Z" }),
+    makeIssue("USE-2", { updatedAt: "2026-03-25T09:59:00.000Z" }),
+  ];
+
+  const state = reduce(initial, { type: "issues-snapshot", issues: reordered, receivedAt: RECEIVED_AT });
+  assert.equal(state.selectedIndex, 2);
+  assert.equal(filterIssues(state.issues, state.filter)[state.selectedIndex]?.issueKey, "USE-2");
+});
+
 test("stream-heartbeat updates freshness without mutating issues", () => {
   const initial = stateWith({ issues: [makeIssue("USE-1")] });
   const state = reduce(initial, { type: "stream-heartbeat", receivedAt: RECEIVED_AT });
@@ -94,6 +117,19 @@ test("select clamps to valid range", () => {
   assert.equal(reduce(initial, { type: "select", index: 1 }).selectedIndex, 1);
   assert.equal(reduce(initial, { type: "select", index: 10 }).selectedIndex, 2);
   assert.equal(reduce(initial, { type: "select", index: -1 }).selectedIndex, 0);
+});
+
+test("select clamps to the current filtered list length", () => {
+  const initial = stateWith({
+    filter: "active",
+    issues: [
+      makeIssue("USE-1", { activeRunType: "implementation" }),
+      makeIssue("USE-2"),
+    ],
+  });
+
+  const state = reduce(initial, { type: "select", index: 10 });
+  assert.equal(state.selectedIndex, 0);
 });
 
 // ─── View Transitions ─────────────────────────────────────────────
@@ -464,6 +500,67 @@ test("toggle-follow flips follow state", () => {
   assert.equal(s1.follow, false);
   const s2 = reduce(s1, { type: "toggle-follow" });
   assert.equal(s2.follow, true);
+});
+
+test("detail-layout-updated sticks to the bottom while follow is enabled", () => {
+  const initial = stateWith({ view: "detail", activeDetailKey: "USE-1" });
+  const state = reduce(initial, { type: "detail-layout-updated", viewportRows: 6, contentRows: 14 });
+  assert.equal(state.follow, true);
+  assert.equal(state.detailScrollOffset, 8);
+  assert.equal(state.detailUnreadBelow, 0);
+});
+
+test("detail-scroll moves the viewport and tracks content below", () => {
+  const initial = stateWith({
+    view: "detail",
+    activeDetailKey: "USE-1",
+    follow: true,
+    detailViewportRows: 6,
+    detailContentRows: 14,
+    detailScrollOffset: 8,
+  });
+
+  const state = reduce(initial, { type: "detail-scroll", delta: -3 });
+  assert.equal(state.follow, false);
+  assert.equal(state.detailScrollOffset, 5);
+  assert.equal(state.detailUnreadBelow, 3);
+});
+
+test("detail-jump end restores live follow at the bottom", () => {
+  const initial = stateWith({
+    view: "detail",
+    activeDetailKey: "USE-1",
+    follow: false,
+    detailViewportRows: 6,
+    detailContentRows: 14,
+    detailScrollOffset: 2,
+    detailUnreadBelow: 6,
+  });
+
+  const state = reduce(initial, { type: "detail-jump", target: "end" });
+  assert.equal(state.follow, true);
+  assert.equal(state.detailScrollOffset, 8);
+  assert.equal(state.detailUnreadBelow, 0);
+});
+
+test("switch-detail-tab resets viewport state and re-enables follow", () => {
+  const initial = stateWith({
+    view: "detail",
+    activeDetailKey: "USE-1",
+    detailTab: "timeline",
+    follow: false,
+    detailScrollOffset: 5,
+    detailViewportRows: 10,
+    detailContentRows: 20,
+    detailUnreadBelow: 7,
+  });
+
+  const state = reduce(initial, { type: "switch-detail-tab", tab: "history" });
+  assert.equal(state.detailTab, "history");
+  assert.equal(state.follow, true);
+  assert.equal(state.detailScrollOffset, 0);
+  assert.equal(state.detailContentRows, 0);
+  assert.equal(state.detailUnreadBelow, 0);
 });
 
 

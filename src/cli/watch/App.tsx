@@ -182,9 +182,21 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
       } else if (input === "t") {
         dispatch({ type: "switch-detail-tab", tab: "timeline" });
       } else if (input === "j" || key.downArrow) {
-        dispatch({ type: "detail-navigate", direction: "next", filtered });
+        dispatch({ type: "detail-scroll", delta: 1 });
       } else if (input === "k" || key.upArrow) {
+        dispatch({ type: "detail-scroll", delta: -1 });
+      } else if (key.pageDown || (key.ctrl && input === "d")) {
+        dispatch({ type: "detail-page", direction: "down" });
+      } else if (key.pageUp || (key.ctrl && input === "u")) {
+        dispatch({ type: "detail-page", direction: "up" });
+      } else if (key.home) {
+        dispatch({ type: "detail-jump", target: "start" });
+      } else if (key.end) {
+        dispatch({ type: "detail-jump", target: "end" });
+      } else if (input === "[" || key.leftArrow) {
         dispatch({ type: "detail-navigate", direction: "prev", filtered });
+      } else if (input === "]" || key.rightArrow) {
+        dispatch({ type: "detail-navigate", direction: "next", filtered });
       }
     }
   });
@@ -217,6 +229,8 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
           issue={state.issues.find((i) => i.issueKey === state.activeDetailKey)}
           timeline={state.timeline}
           follow={state.follow}
+          scrollOffset={state.detailScrollOffset}
+          unreadBelow={state.detailUnreadBelow}
           activeRunStartedAt={state.activeRunStartedAt}
           activeRunId={state.activeRunId}
           tokenUsage={state.tokenUsage}
@@ -228,6 +242,10 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
           rawFeedEvents={state.rawFeedEvents}
           connected={state.connected}
           lastServerMessageAt={state.lastServerMessageAt}
+          reservedRows={1 + ((promptMode || promptStatus) ? 1 : 0)}
+          onLayoutChange={(viewportRows, contentRows) => {
+            dispatch({ type: "detail-layout-updated", viewportRows, contentRows });
+          }}
         />
         {promptMode && (
           <Box>
