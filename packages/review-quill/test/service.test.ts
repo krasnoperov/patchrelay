@@ -33,7 +33,7 @@ function fakeVerdict(overrides: Partial<ReviewVerdict> = {}): ReviewVerdict {
   };
 }
 
-test("hasMatchingLatestReviewForHead skips resubmission when latest reviewer verdict already matches the head", () => {
+test("hasMatchingLatestReviewForHead skips resubmission when latest reviewer verdict already matches the head (state-only)", () => {
   const reviews = [
     {
       id: 1,
@@ -49,9 +49,51 @@ test("hasMatchingLatestReviewForHead skips resubmission when latest reviewer ver
     },
   ];
 
+  // Backward-compatible signature (no newBody): state-only match.
   assert.equal(hasMatchingLatestReviewForHead(reviews, "review-quill", "head-sha", "APPROVE"), true);
   assert.equal(hasMatchingLatestReviewForHead(reviews, "review-quill", "head-sha", "REQUEST_CHANGES"), false);
   assert.equal(hasMatchingLatestReviewForHead(reviews, "someone-else", "head-sha", "APPROVE"), false);
+});
+
+test("hasMatchingLatestReviewForHead requires body byte-equality when newBody is supplied", () => {
+  const reviews = [
+    {
+      id: 1,
+      authorLogin: "review-quill",
+      state: "APPROVED",
+      commitId: "head-sha",
+      body: "Walkthrough v1",
+    },
+  ];
+  // Same body → skip
+  assert.equal(
+    hasMatchingLatestReviewForHead(reviews, "review-quill", "head-sha", "APPROVE", "Walkthrough v1"),
+    true,
+  );
+  // Different body → don't skip; we want the new content posted
+  assert.equal(
+    hasMatchingLatestReviewForHead(reviews, "review-quill", "head-sha", "APPROVE", "Walkthrough v2"),
+    false,
+  );
+});
+
+test("hasMatchingLatestReviewForHead does not skip when state matches but the body is missing on the existing review", () => {
+  // If GitHub returned the review without a body field (rare but
+  // possible), we cannot prove equality and should err on the side of
+  // re-posting rather than silently swallowing the new content.
+  const reviews = [
+    {
+      id: 1,
+      authorLogin: "review-quill",
+      state: "APPROVED",
+      commitId: "head-sha",
+      // body intentionally absent
+    },
+  ];
+  assert.equal(
+    hasMatchingLatestReviewForHead(reviews, "review-quill", "head-sha", "APPROVE", "Some body"),
+    false,
+  );
 });
 
 test("hasMatchingLatestReviewForHead matches COMMENTED state for comment event", () => {
@@ -155,18 +197,49 @@ test("forgivingJsonParse recovers from trailing commas", () => {
   assert.deepEqual(parsed, { a: [1, 2, 3] });
 });
 
-test("extractFirstJsonObject returns the LAST brace-balanced block (the answer, not the schema example)", () => {
-  // Simulate a model that echoed the schema in preamble, then emitted its
-  // actual answer. Both are balanced JSON — we want the second one.
-  const text = `Here is the schema:
-{"walkthrough": "placeholder", "findings": []}
+test("extractFirstJsonObject returns the OUTERMOST top-level object even when it contains nested objects", () => {
+  // Reproduces a bug where the extractor returned the LAST balanced
+  // block in the text — for the rich verdict schema, that's the LAST
+  // element of `findings[]`, not the top-level verdict. The fix:
+  // walk forward from the FIRST `{` and let the depth-tracking walker
+  // close the outermost block.
+  const text = JSON.stringify({
+    walkthrough: "Real review walkthrough.",
+    architectural_concerns: [
+      { severity: "nit", category: "convention", message: "minor convention drift" },
+    ],
+    findings: [
+      { path: "src/a.ts", line: 1, severity: "blocking", message: "first finding" },
+      { path: "src/b.ts", line: 2, severity: "nit", message: "last finding" },
+    ],
+    verdict: "request_changes",
+    verdict_reason: "blocking finding present",
+  });
+  const extracted = extractFirstJsonObject(text);
+  assert.ok(extracted);
+  const parsed = JSON.parse(extracted!) as { walkthrough: string; findings: unknown[] };
+  // Must be the outermost object, not the last finding
+  assert.equal(parsed.walkthrough, "Real review walkthrough.");
+  assert.equal(parsed.findings.length, 2);
+});
 
-And here is my actual review:
-{"walkthrough": "real review", "verdict": "approve", "findings": [], "architectural_concerns": [], "verdict_reason": "clean"}`;
+test("extractFirstJsonObject ignores prose before and after the JSON", () => {
+  const text = "Here is the review:\n{\"walkthrough\":\"x\",\"verdict\":\"approve\"}\n\nLet me know if you need more.";
   const extracted = extractFirstJsonObject(text);
   assert.ok(extracted);
   const parsed = JSON.parse(extracted!) as { walkthrough: string };
-  assert.equal(parsed.walkthrough, "real review");
+  assert.equal(parsed.walkthrough, "x");
+});
+
+test("extractFirstJsonObject skips a malformed first attempt and finds a valid later one", () => {
+  // First brace-block is malformed (unbalanced, never closes). Walker
+  // returns undefined for it; we move to the next `{` and find the
+  // valid object.
+  const text = "{ this is not really json\n\nbut here is the real one: {\"walkthrough\":\"recovery\",\"verdict\":\"approve\"}";
+  const extracted = extractFirstJsonObject(text);
+  assert.ok(extracted);
+  const parsed = JSON.parse(extracted!) as { walkthrough: string };
+  assert.equal(parsed.walkthrough, "recovery");
 });
 
 test("normalizeVerdict accepts case-variant severity values", () => {
@@ -265,6 +338,24 @@ test("normalizeVerdict drops findings that are missing path, line, severity, or 
   const result = normalizeVerdict(raw);
   assert.equal(result.findings.length, 1);
   assert.equal(result.findings[0]?.path, "a.ts");
+});
+
+test("filterFindings drops findings whose path is not in the known-paths set (hallucinated paths)", () => {
+  const findings = [
+    fakeFinding({ path: "src/known.ts" }),
+    fakeFinding({ path: "src/also-known.ts" }),
+    fakeFinding({ path: "src/hallucinated.ts" }),
+  ];
+  const knownPaths = new Set(["src/known.ts", "src/also-known.ts"]);
+  const kept = filterFindings(findings, knownPaths);
+  assert.equal(kept.length, 2);
+  assert.ok(kept.every((f) => knownPaths.has(f.path)));
+});
+
+test("filterFindings still works without a knownPaths argument (backward compat)", () => {
+  const findings = [fakeFinding({ path: "anything.ts" })];
+  const kept = filterFindings(findings);
+  assert.equal(kept.length, 1);
 });
 
 test("filterFindings drops low-confidence findings", () => {

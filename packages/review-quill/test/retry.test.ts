@@ -140,6 +140,34 @@ test("GitHubClient honors Retry-After on a retryable GET 429", async () => {
   assert.ok(elapsed >= 900, `expected >=900ms elapsed for Retry-After=1, got ${elapsed}ms`);
 });
 
+test("GitHubClient propagates a 422 on submitReview without retrying (fallback is handled by the caller)", async () => {
+  // 422 is a validation error — the server DID see the request, and
+  // retrying the identical request would fail identically. The
+  // service.ts caller catches 422 specifically and retries WITHOUT
+  // inline comments as a fallback, but that retry is a fresh
+  // submitReview call with a different payload, not an HTTP-level retry.
+  const stub = new FetchStub([
+    {
+      kind: "error",
+      status: 422,
+      body: JSON.stringify({ message: "Pull request review comment on invalid line" }),
+    },
+  ]);
+  await withFetchStub(stub, async () => {
+    const client = makeClient();
+    await assert.rejects(
+      client.submitReview("owner/repo", 1, {
+        event: "REQUEST_CHANGES",
+        body: "needs fixes",
+        comments: [{ path: "src/a.ts", line: 9999, body: "bad line" }],
+      }),
+      /GitHub API 422/,
+    );
+    // Only ONE HTTP call — the retry at the HTTP layer never fires for 422.
+    assert.equal(stub.calls.length, 1);
+  });
+});
+
 test("GitHubClient gives up on a 404 without retrying", async () => {
   const stub = new FetchStub([
     { kind: "error", status: 404, body: "not found" },

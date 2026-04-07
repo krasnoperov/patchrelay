@@ -41,7 +41,10 @@ export const OUTPUT_RULES = `Output rules — the response parser expects strict
 - No trailing commas before } or ].
 - All \`severity\` values must be exactly "blocking" or "nit" (lowercase).
 - All \`verdict\` values must be exactly "approve", "request_changes", or "comment".
-- \`path\` is required on every finding; \`line\` is a positive integer, not a string.`;
+- \`path\` is required on every finding; \`line\` is a positive integer, not a string.
+- \`path\` MUST be a file that appears in the diff inventory above. Do not invent file paths.
+- \`line\` MUST be a line number in the NEW (right side) version of the file — i.e., a line that exists in the file as of this PR's HEAD. Do not point at lines that only exist in the old version.
+- Findings on files not visible in the inventory will be silently dropped before posting.`;
 
 // One concrete example so the model has a template to pattern-match
 // against. Few-shot is the highest-ROI reliability trick for structured

@@ -44,10 +44,18 @@ function requiredChecksGreen(requiredChecks: string[], checks: Array<{ name: str
 
 // Drop findings the model was not confident in, then cap the total
 // count so a runaway model can't spam 100 inline comments.
-export function filterFindings(findings: ReviewFinding[]): ReviewFinding[] {
+//
+// Also drop findings that point at files the model invented — any
+// path not in `knownPaths` gets silently removed. The diff inventory
+// is the authoritative list of files the model could actually review,
+// so a finding pointing outside of it is always a hallucination.
+export function filterFindings(findings: ReviewFinding[], knownPaths?: Set<string>): ReviewFinding[] {
   const confident = findings.filter((f) => (f.confidence ?? 100) >= CONFIDENCE_THRESHOLD);
+  const withKnownPath = knownPaths
+    ? confident.filter((f) => knownPaths.has(f.path))
+    : confident;
   // Keep blocking findings first, then nits, up to the cap.
-  const sorted = [...confident].sort((a, b) => {
+  const sorted = [...withKnownPath].sort((a, b) => {
     if (a.severity === b.severity) return (b.confidence ?? 100) - (a.confidence ?? 100);
     return a.severity === "blocking" ? -1 : 1;
   });
@@ -131,18 +139,37 @@ type PublicationDisposition =
   | { action: "supersede"; summary: string; checkConclusion: "cancelled" }
   | { action: "cancel"; summary: string; checkConclusion: "cancelled" };
 
+// Decide whether we should skip posting the new review because the
+// existing one (from us, on the same head SHA) is already equivalent.
+//
+// Equivalence means BOTH:
+//   - the review state matches (APPROVED / CHANGES_REQUESTED / COMMENTED)
+//   - the rendered body is byte-identical
+//
+// The body comparison closes the gap where two runs on the same head
+// produce the same verdict but different walkthroughs / findings — we
+// want the new content visible to the author instead of silently
+// keeping the stale content. Inline comments are deterministic from
+// the body (both are derived from the same findings array), so body
+// equality is a sufficient proxy; we don't need to diff comments too.
 export function hasMatchingLatestReviewForHead(
   reviews: PullRequestReviewRecord[],
   reviewerLogin: string | undefined,
   headSha: string,
   event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT",
+  newBody?: string,
 ): boolean {
   if (!reviewerLogin) return false;
   const desiredState = reviewStateForEvent(event);
   const latest = [...reviews]
     .reverse()
     .find((review) => review.authorLogin === reviewerLogin && review.commitId === headSha);
-  return latest?.state === desiredState;
+  if (latest?.state !== desiredState) return false;
+  // State matches. If we were given a newBody to compare, require
+  // byte-equality too. If not (backward compat), the state match is
+  // enough.
+  if (newBody !== undefined && latest.body !== newBody) return false;
+  return true;
 }
 
 export function classifyPublicationDisposition(
@@ -379,23 +406,50 @@ export class ReviewQuillService {
         repo,
         pr,
       });
+      // Log diff packer stats so production reviews show the same
+      // numbers the `review-quill diff --json` CLI exposes locally.
+      // Useful for spotting drift in budget pressure / hallucinated paths
+      // / pure-deletion files across many PRs without re-running the CLI.
+      const reasons = prepared.context.diff.suppressed.reduce<Record<string, number>>((acc, entry) => {
+        acc[entry.reason] = (acc[entry.reason] ?? 0) + 1;
+        return acc;
+      }, {});
+      this.logger.info({
+        repo: repo.repoFullName,
+        prNumber: pr.number,
+        headSha: pr.headSha,
+        inventoryCount: prepared.context.diff.inventory.length,
+        patchCount: prepared.context.diff.patches.length,
+        suppressedCount: prepared.context.diff.suppressed.length,
+        suppressedReasons: reasons,
+        patchBodyBudgetTokens: repo.patchBodyBudgetTokens,
+      }, "Diff packer stats");
       let result: Awaited<ReturnType<ReviewRunner["review"]>>;
       try {
         result = await this.runner.review(prepared.context);
       } finally {
         await prepared.dispose();
       }
-      const filteredFindings = filterFindings(result.verdict.findings);
-      const droppedByConfidence = result.verdict.findings.length - filteredFindings.length;
-      if (droppedByConfidence > 0) {
+      // Build the set of paths the model was actually allowed to comment
+      // on. The diff inventory is the authoritative list — any finding
+      // pointing outside it is a hallucinated path and gets dropped
+      // before the GitHub POST so a single bad comment doesn't 422 the
+      // whole review.
+      const knownPaths = new Set(prepared.context.diff.inventory.map((entry) => entry.path));
+      const filteredFindings = filterFindings(result.verdict.findings, knownPaths);
+      const droppedTotal = result.verdict.findings.length - filteredFindings.length;
+      if (droppedTotal > 0) {
+        const droppedByPath = result.verdict.findings.filter((f) => !knownPaths.has(f.path)).length;
+        const droppedByConfidence = droppedTotal - droppedByPath;
         this.logger.info({
           repo: repo.repoFullName,
           prNumber: pr.number,
           droppedByConfidence,
+          droppedByPath,
           threshold: CONFIDENCE_THRESHOLD,
           kept: filteredFindings.length,
           cap: MAX_INLINE_COMMENTS,
-        }, "Dropped low-confidence or over-cap findings before posting");
+        }, "Dropped low-confidence, hallucinated-path, or over-cap findings before posting");
       }
       const event = resolveEvent(result.verdict, filteredFindings);
       const reviewBody = buildReviewBody({ verdict: result.verdict, event });
@@ -435,7 +489,7 @@ export class ReviewQuillService {
         return;
       }
       const currentReviews = await this.github.listPullRequestReviews(repo.repoFullName, pr.number);
-      if (hasMatchingLatestReviewForHead(currentReviews, this.reviewerLogin, pr.headSha, event)) {
+      if (hasMatchingLatestReviewForHead(currentReviews, this.reviewerLogin, pr.headSha, event, reviewBody)) {
         this.logger.info({
           repo: repo.repoFullName,
           prNumber: pr.number,
@@ -444,12 +498,40 @@ export class ReviewQuillService {
           event,
         }, "Skipping duplicate GitHub review for unchanged head verdict");
       } else {
-        await this.github.submitReview(repo.repoFullName, pr.number, {
-          event,
-          body: reviewBody,
-          commitId: pr.headSha,
-          ...(inlineComments.length > 0 ? { comments: inlineComments } : {}),
-        });
+        // Atomic POST with body + inline comments + verdict. If GitHub
+        // rejects with 422 it usually means at least one of the inline
+        // comments references a path/line that isn't in the diff (e.g.
+        // a context line, or a line on the LHS of the diff). The whole
+        // POST is rejected as a unit, so a single bad comment kills the
+        // entire review. To survive that case we retry ONCE without the
+        // inline comments — the body-only review still lands so the
+        // verdict is visible to the author and CI.
+        try {
+          await this.github.submitReview(repo.repoFullName, pr.number, {
+            event,
+            body: reviewBody,
+            commitId: pr.headSha,
+            ...(inlineComments.length > 0 ? { comments: inlineComments } : {}),
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          const isUnprocessableEntity = /^GitHub API 422\b/.test(message);
+          if (!isUnprocessableEntity || inlineComments.length === 0) {
+            throw error;
+          }
+          this.logger.warn({
+            repo: repo.repoFullName,
+            prNumber: pr.number,
+            headSha: pr.headSha,
+            droppedInlineComments: inlineComments.length,
+            githubError: message.slice(0, 500),
+          }, "GitHub rejected review with inline comments (422); retrying body-only");
+          await this.github.submitReview(repo.repoFullName, pr.number, {
+            event,
+            body: reviewBody,
+            commitId: pr.headSha,
+          });
+        }
       }
       const checkConclusion = event === "REQUEST_CHANGES"
         ? "failure"

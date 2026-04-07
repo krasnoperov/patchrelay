@@ -33,26 +33,32 @@ export function sanitizeDiagnosticText(text: string, maxLength = 500): string {
 }
 
 export function extractFirstJsonObject(text: string): string | undefined {
-  // Scan for the LAST top-level `{...}` block in the text. When the model
-  // quotes the schema in a preamble and then emits its answer, the first
-  // brace-matched block may be the schema example, not the actual answer.
-  // Walking from the end finds the most recent brace-balanced region,
-  // which is reliably the final answer.
+  // Walk forward through `{` positions and return the FIRST one that
+  // produces a balanced top-level object. The walker tracks brace depth
+  // and only returns at depth=0, so starting from the OUTERMOST `{` and
+  // walking forward correctly returns the full top-level object even
+  // when it contains nested arrays/objects (architectural_concerns[],
+  // findings[], etc.).
   //
-  // We still tolerate code fences, prose, and mixed quoting by relying on
-  // the brace-depth walker rather than string parsing.
-  const firstBrace = text.indexOf("{");
-  if (firstBrace === -1) return undefined;
-
-  // Try from each `{` in turn (usually only one matters). Walk forward
-  // tracking brace depth + string escapes. Return the LAST successful
-  // balanced block — that's the one closest to the end of the message.
-  let lastBalanced: string | undefined;
-  for (let candidate = firstBrace; candidate !== -1; candidate = text.indexOf("{", candidate + 1)) {
-    const balanced = walkJsonObject(text, candidate);
-    if (balanced) lastBalanced = balanced;
+  // Earlier this function returned the LAST balanced block to defend
+  // against a hypothetical "model echoes the schema in preamble" case.
+  // That was wrong: with the rich schema, the LAST balanced block is
+  // the LAST nested object (e.g. the last finding), not the top-level
+  // verdict. The prompt explicitly forbids preamble before the JSON, so
+  // returning the OUTERMOST first balanced block is both correct and
+  // robust to nested schemas.
+  //
+  // The "walk forward through every `{`" loop also handles the rare
+  // case where a malformed first attempt is followed by a valid second:
+  // if `walkJsonObject` from the first `{` returns undefined (unbalanced),
+  // we try the next `{`, and so on.
+  let pos = text.indexOf("{");
+  while (pos !== -1) {
+    const balanced = walkJsonObject(text, pos);
+    if (balanced) return balanced;
+    pos = text.indexOf("{", pos + 1);
   }
-  return lastBalanced;
+  return undefined;
 }
 
 function walkJsonObject(text: string, start: number): string | undefined {
