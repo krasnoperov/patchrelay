@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.6](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.9.5...merge-steward-v0.9.6) (2026-04-07)
+
+
+### Bug Fixes
+
+* **review-quill:** trigger release for git auth + sandbox fixes ([0dcb588](https://github.com/krasnoperov/patchrelay/commit/0dcb588ce77c6966337b3ccb183a3ae1aa25dcef))
+* **review-quill:** trigger release for git auth + sandbox fixes ([ad565ab](https://github.com/krasnoperov/patchrelay/commit/ad565ab7d7788d7a607c7cd727e1cd79a369b245)), closes [#312](https://github.com/krasnoperov/patchrelay/issues/312)
+
 ## [0.9.5](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.9.4...merge-steward-v0.9.5) (2026-04-03)
 
 

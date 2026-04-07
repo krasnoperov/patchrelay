@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.1](https://github.com/krasnoperov/patchrelay/compare/review-quill-v0.2.0...review-quill-v0.2.1) (2026-04-07)
+
+
+### Bug Fixes
+
+* **review-quill:** trigger release for git auth + sandbox fixes ([0dcb588](https://github.com/krasnoperov/patchrelay/commit/0dcb588ce77c6966337b3ccb183a3ae1aa25dcef))
+* **review-quill:** trigger release for git auth + sandbox fixes ([ad565ab](https://github.com/krasnoperov/patchrelay/commit/ad565ab7d7788d7a607c7cd727e1cd79a369b245)), closes [#312](https://github.com/krasnoperov/patchrelay/issues/312)
+
 ## [0.2.0](https://github.com/krasnoperov/patchrelay/compare/review-quill-v0.1.0...review-quill-v0.2.0) (2026-04-07)
 
 
