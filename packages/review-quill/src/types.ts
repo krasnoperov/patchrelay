@@ -9,9 +9,7 @@ export interface ReviewQuillRepositoryConfig {
   reviewDocs: string[];
   diffIgnore: string[];
   diffSummarizeOnly: string[];
-  maxPatchLines: number;
-  maxPatchBytes: number;
-  maxFilesWithFullPatch: number;
+  patchBodyBudgetTokens: number;
 }
 
 export interface CodexAppServerConfig {

@@ -3,6 +3,7 @@ import { accessSync, constants, existsSync, readFileSync, statSync } from "node:
 import path from "node:path";
 import { loadConfig } from "./config.ts";
 import { getReviewQuillPathLayout } from "./runtime-paths.ts";
+import type { ReviewQuillRepositoryConfig } from "./types.ts";
 
 export interface CommandResult {
   exitCode: number;
@@ -80,19 +81,7 @@ export function checkExecutable(command: string): { ok: boolean; message: string
   return { ok: false, message: `${command} is not available in PATH` };
 }
 
-export function listRepoConfigs(): Array<{
-  repoId: string;
-  repoFullName: string;
-  baseBranch: string;
-  requiredChecks: string[];
-  excludeBranches: string[];
-  reviewDocs: string[];
-  diffIgnore: string[];
-  diffSummarizeOnly: string[];
-  maxPatchLines: number;
-  maxPatchBytes: number;
-  maxFilesWithFullPatch: number;
-}> {
+export function listRepoConfigs(): ReviewQuillRepositoryConfig[] {
   const layout = getReviewQuillPathLayout();
   if (!existsSync(layout.configPath)) {
     return [];
@@ -103,19 +92,7 @@ export function listRepoConfigs(): Array<{
 
 export function loadRepoConfigById(repoRef: string): {
   configPath: string;
-  repo: {
-    repoId: string;
-    repoFullName: string;
-    baseBranch: string;
-    requiredChecks: string[];
-    excludeBranches: string[];
-    reviewDocs: string[];
-    diffIgnore: string[];
-    diffSummarizeOnly: string[];
-    maxPatchLines: number;
-    maxPatchBytes: number;
-    maxFilesWithFullPatch: number;
-  };
+  repo: ReviewQuillRepositoryConfig;
   publicBaseUrl?: string;
 } {
   const layout = getReviewQuillPathLayout();

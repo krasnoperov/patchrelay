@@ -1,6 +1,11 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
+import {
+  DEFAULT_DIFF_IGNORE,
+  DEFAULT_DIFF_SUMMARIZE_ONLY,
+  DEFAULT_PATCH_BODY_BUDGET_TOKENS,
+} from "./diff-context/defaults.ts";
 import { getDefaultRuntimeEnvPath, getDefaultServiceEnvPath } from "./runtime-paths.ts";
 import { resolveSecretWithSource } from "./resolve-secret.ts";
 import type { ReviewQuillConfig } from "./types.ts";
@@ -12,22 +17,9 @@ const repositorySchema = z.object({
   requiredChecks: z.array(z.string()).default([]),
   excludeBranches: z.array(z.string()).default(["release-please--*"]),
   reviewDocs: z.array(z.string()).default(["REVIEW_WORKFLOW.md", "CLAUDE.md", "AGENTS.md"]),
-  diffIgnore: z.array(z.string()).default([]),
-  diffSummarizeOnly: z.array(z.string()).default([
-    "package-lock.json",
-    "pnpm-lock.yaml",
-    "yarn.lock",
-    "bun.lock*",
-    "dist/**",
-    "build/**",
-    "coverage/**",
-    "*.map",
-    "*.min.js",
-    "*.snap",
-  ]),
-  maxPatchLines: z.number().int().min(1).default(400),
-  maxPatchBytes: z.number().int().min(256).default(24_000),
-  maxFilesWithFullPatch: z.number().int().min(1).default(20),
+  diffIgnore: z.array(z.string()).default([...DEFAULT_DIFF_IGNORE]),
+  diffSummarizeOnly: z.array(z.string()).default([...DEFAULT_DIFF_SUMMARIZE_ONLY]),
+  patchBodyBudgetTokens: z.number().int().min(1_000).default(DEFAULT_PATCH_BODY_BUDGET_TOKENS),
 });
 
 const configSchema = z.object({

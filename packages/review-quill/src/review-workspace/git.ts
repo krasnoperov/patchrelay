@@ -70,7 +70,7 @@ export async function gitDiffPatch(worktreePath: string, baseRef: string, filePa
     worktreePath,
     "diff",
     "--find-renames",
-    "--unified=3",
+    "--unified=5",
     `${baseRef}...HEAD`,
     "--",
     filePath,

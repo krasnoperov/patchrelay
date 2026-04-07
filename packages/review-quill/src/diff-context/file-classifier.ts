@@ -6,8 +6,18 @@ function normalizePattern(value: string): string {
 }
 
 function globToRegExp(pattern: string): RegExp {
-  const normalized = normalizePattern(pattern);
+  let normalized = normalizePattern(pattern);
   let source = "^";
+
+  // Special case: a leading `**/` should match zero-or-more directory
+  // components, so `**/package-lock.json` matches both root-level
+  // `package-lock.json` and nested `frontend/app/package-lock.json`.
+  // Without this, `**/` compiles to `.*/` which requires at least one slash.
+  if (normalized.startsWith("**/")) {
+    source += "(?:.*/)?";
+    normalized = normalized.slice(3);
+  }
+
   for (let index = 0; index < normalized.length; index += 1) {
     const char = normalized[index];
     if (!char) continue;
@@ -32,10 +42,17 @@ function matchesAny(filePath: string, patterns: string[]): boolean {
   return patterns.some((pattern) => globToRegExp(pattern).test(normalizedPath));
 }
 
+// Pattern-only classification. Returns the *provisional* classification
+// based purely on `diffIgnore` / `diffSummarizeOnly` globs and numstat's
+// `isBinary` flag. Budget-based demotion (token-budget overflow) happens
+// later in `buildDiffContext`'s packer, not here.
+//
+// The `full_patch` return value means "eligible for a patch if the budget
+// allows" — the final classification may still be `summarize` with
+// reason=`budget_exceeded` if the packer can't fit the file.
 export function classifyDiffFile(
   repo: ReviewQuillRepositoryConfig,
   entry: Omit<DiffFileInventoryEntry, "classification">,
-  fullPatchIndex: number,
 ): { classification: DiffClassification; reason?: string } {
   const normalizedPath = path.posix.normalize(entry.path.replaceAll("\\", "/"));
   if (matchesAny(normalizedPath, repo.diffIgnore)) {
@@ -46,9 +63,6 @@ export function classifyDiffFile(
   }
   if (matchesAny(normalizedPath, repo.diffSummarizeOnly)) {
     return { classification: "summarize", reason: "summarize_only_policy" };
-  }
-  if (fullPatchIndex >= repo.maxFilesWithFullPatch) {
-    return { classification: "summarize", reason: "patch_budget_exceeded" };
   }
   return { classification: "full_patch" };
 }

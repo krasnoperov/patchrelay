@@ -15,8 +15,17 @@ import {
   runSystemctl,
   type CommandRunner,
 } from "./cli-system.ts";
+import {
+  buildLocalDiffContext,
+  defaultDiffRepoConfig,
+  detectDefaultBranch,
+  detectRepoFullNameFromCwd,
+  estimateTokens,
+  renderDiffContextLines,
+} from "./diff-context/index.ts";
 import { installServiceUnit, initializeReviewQuillHome, upsertRepoConfig } from "./install.ts";
 import { getDefaultConfigPath, getReviewQuillPathLayout } from "./runtime-paths.ts";
+import type { ReviewQuillRepositoryConfig } from "./types.ts";
 
 type HelpTopic = "root" | "repo" | "service";
 type Output = Pick<NodeJS.WriteStream, "write">;
@@ -116,6 +125,11 @@ function rootHelpText(): string {
     "Advanced commands:",
     "  serve [--config <path>]                                Run the review-quill service",
     "  watch [--config <path>]                                Alias for `dashboard`",
+    "  diff [--repo <id>] [--base <ref>] [--cwd <path>] [--ignore <globs>] [--summarize-only <globs>]",
+    "       [--budget <tokens>] [--json]",
+    "                                                          Render the diff/inventory the reviewer would see (debug view)",
+    "                                                          (works in any git checkout; shows whatever state the caller prepared —",
+    "                                                          never fetches, checks out, or mutates the working tree)",
     "  version                                                Show the installed CLI version",
     "",
     "Secrets:",
@@ -285,6 +299,17 @@ function validateFlags(parsed: ParsedArgs): void {
       }
     case "doctor":
       assertKnownFlags(parsed, "root", ["repo", "json"]);
+      return;
+    case "diff":
+      assertKnownFlags(parsed, "root", [
+        "repo",
+        "base",
+        "cwd",
+        "ignore",
+        "summarize-only",
+        "budget",
+        "json",
+      ]);
       return;
     case "service":
       switch (subcommand) {
@@ -649,7 +674,7 @@ async function handleAttach(parsed: ParsedArgs, stdout: Output, runCommand: Comm
       `Review docs: ${result.repo.reviewDocs.join(", ")}`,
       `Summarize-only diff patterns: ${result.repo.diffSummarizeOnly.join(", ") || "(none)"}`,
       `Ignored diff patterns: ${result.repo.diffIgnore.join(", ") || "(none)"}`,
-      `Patch limits: ${result.repo.maxFilesWithFullPatch} files, ${result.repo.maxPatchLines} lines, ${result.repo.maxPatchBytes} bytes`,
+      `Patch body budget: ${result.repo.patchBodyBudgetTokens} tokens`,
       ...warnings.map((warning) => `Warning: ${warning}`),
       restartState.ok ? "Restarted review-quill.service" : `Restart failed: ${restartState.error}`,
     ].join("\n") + "\n",
@@ -689,9 +714,7 @@ async function handleRepos(parsed: ParsedArgs, stdout: Output): Promise<number> 
     reviewDocs: repo.reviewDocs,
     diffIgnore: repo.diffIgnore,
     diffSummarizeOnly: repo.diffSummarizeOnly,
-    maxPatchLines: repo.maxPatchLines,
-    maxPatchBytes: repo.maxPatchBytes,
-    maxFilesWithFullPatch: repo.maxFilesWithFullPatch,
+    patchBodyBudgetTokens: repo.patchBodyBudgetTokens,
     verdictCheckName: "review-quill/verdict",
     configPath,
     ...(webhookUrl ? { webhookUrl } : {}),
@@ -714,7 +737,7 @@ async function handleRepos(parsed: ParsedArgs, stdout: Output): Promise<number> 
       `Review docs: ${repo.reviewDocs.join(", ")}`,
       `Summarize-only diff patterns: ${repo.diffSummarizeOnly.join(", ") || "(none)"}`,
       `Ignored diff patterns: ${repo.diffIgnore.join(", ") || "(none)"}`,
-      `Patch limits: ${repo.maxFilesWithFullPatch} files, ${repo.maxPatchLines} lines, ${repo.maxPatchBytes} bytes`,
+      `Patch body budget: ${repo.patchBodyBudgetTokens} tokens`,
       "Verdict check: review-quill/verdict",
       webhookUrl ? `Webhook URL: ${webhookUrl}` : undefined,
     ].filter(Boolean).join("\n") + "\n",
@@ -907,6 +930,123 @@ async function handleDoctor(parsed: ParsedArgs, stdout: Output, runCommand: Comm
   lines.push(ok ? "Doctor result: ready" : "Doctor result: not ready");
   writeOutput(stdout, `${lines.join("\n")}\n`);
   return ok ? 0 : 1;
+}
+
+type DiffConfigSource = "explicit" | "watched" | "defaults";
+
+interface DiffConfigResolution {
+  repo: ReviewQuillRepositoryConfig;
+  source: DiffConfigSource;
+  detectedRepoFullName?: string;
+}
+
+function safeListWatchedRepos(): ReviewQuillRepositoryConfig[] {
+  try {
+    return listRepoConfigs() as ReviewQuillRepositoryConfig[];
+  } catch {
+    return [];
+  }
+}
+
+async function resolveDiffRepoConfig(params: {
+  cwd: string;
+  explicitRepo?: string;
+}): Promise<DiffConfigResolution> {
+  if (params.explicitRepo) {
+    return { repo: loadRepoConfigById(params.explicitRepo).repo as ReviewQuillRepositoryConfig, source: "explicit" };
+  }
+  const detected = await detectRepoFullNameFromCwd(params.cwd);
+  if (detected) {
+    const match = safeListWatchedRepos().find(
+      (entry) => entry.repoFullName.toLowerCase() === detected.toLowerCase(),
+    );
+    if (match) {
+      return { repo: match, source: "watched", detectedRepoFullName: detected };
+    }
+  }
+  const defaultBranch = await detectDefaultBranch(params.cwd);
+  return {
+    repo: defaultDiffRepoConfig(detected, defaultBranch),
+    source: "defaults",
+    ...(detected ? { detectedRepoFullName: detected } : {}),
+  };
+}
+
+function applyDiffConfigOverrides(
+  base: ReviewQuillRepositoryConfig,
+  parsed: ParsedArgs,
+): ReviewQuillRepositoryConfig {
+  const next: ReviewQuillRepositoryConfig = { ...base };
+  const ignore = parsed.flags.get("ignore");
+  if (typeof ignore === "string") next.diffIgnore = parseCsvFlag(ignore);
+  const summarize = parsed.flags.get("summarize-only");
+  if (typeof summarize === "string") next.diffSummarizeOnly = parseCsvFlag(summarize);
+  const budget = parseIntegerFlag(parsed.flags.get("budget"), "--budget");
+  if (budget !== undefined) next.patchBodyBudgetTokens = budget;
+  return next;
+}
+
+async function handleDiff(parsed: ParsedArgs, stdout: Output): Promise<number> {
+  const explicitRepo = typeof parsed.flags.get("repo") === "string" ? String(parsed.flags.get("repo")) : undefined;
+  const explicitBase = typeof parsed.flags.get("base") === "string" ? String(parsed.flags.get("base")) : undefined;
+  const explicitCwd = typeof parsed.flags.get("cwd") === "string" ? String(parsed.flags.get("cwd")) : undefined;
+  const json = parsed.flags.get("json") === true;
+  const cwd = explicitCwd ?? process.cwd();
+
+  const resolution = await resolveDiffRepoConfig({ cwd, ...(explicitRepo ? { explicitRepo } : {}) });
+  const repo = applyDiffConfigOverrides(resolution.repo, parsed);
+
+  // This command is a read-only debug view of whatever git state the
+  // caller prepared. It never fetches, checks out, or mutates the
+  // working tree — if the caller wants fresh refs, they run `git fetch`
+  // themselves before invoking `review-quill diff`.
+  const { workspace, diff } = await buildLocalDiffContext({
+    repo,
+    cwd,
+    ...(explicitBase ? { baseRef: explicitBase } : {}),
+  });
+
+  const body = renderDiffContextLines(diff);
+
+  if (json) {
+    // JSON mode keeps all diagnostic fields — budget, repo resolution,
+    // workspace refs — for scripting and debugging. Plain-text mode
+    // stays pure (only the bytes that would land in the prompt) so
+    // callers can compare the CLI output byte-for-byte against what
+    // the reviewer will see.
+    const diffSectionTokens = estimateTokens(body.join("\n"));
+    const patchBodyTokens = diff.patches.reduce(
+      (sum, entry) => sum + estimateTokens(entry.patch) + 23, // framing overhead
+      0,
+    );
+    writeOutput(stdout, formatJson({
+      configSource: resolution.source,
+      ...(resolution.detectedRepoFullName ? { detectedRepoFullName: resolution.detectedRepoFullName } : {}),
+      repo: {
+        repoId: repo.repoId,
+        repoFullName: repo.repoFullName,
+        baseBranch: repo.baseBranch,
+        diffIgnore: repo.diffIgnore,
+        diffSummarizeOnly: repo.diffSummarizeOnly,
+        patchBodyBudgetTokens: repo.patchBodyBudgetTokens,
+      },
+      workspace,
+      estimatedTokens: {
+        patchBody: patchBodyTokens,
+        patchBodyBudget: repo.patchBodyBudgetTokens,
+        fullDiffSection: diffSectionTokens,
+      },
+      diff,
+    }));
+    return 0;
+  }
+
+  // Plain-text mode: emit ONLY the bytes the prompt-builder will embed
+  // via renderDiffContextLines. No repository header, no budget line, no
+  // base/head ref, no SHA. If the caller wants those diagnostics they
+  // can run `review-quill diff --json` instead.
+  writeOutput(stdout, `${body.join("\n")}\n`);
+  return 0;
 }
 
 async function handleService(parsed: ParsedArgs, stdout: Output, runCommand: CommandRunner): Promise<number> {
@@ -1112,6 +1252,8 @@ export async function runCli(args: string[], options?: RunCliOptions): Promise<n
       }
       case "doctor":
         return await handleDoctor(parsed, stdout, runCommand);
+      case "diff":
+        return await handleDiff(parsed, stdout);
       case "service":
         return await handleService(parsed, stdout, runCommand);
       default:

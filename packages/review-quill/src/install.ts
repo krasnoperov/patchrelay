@@ -2,6 +2,11 @@ import { basename, dirname } from "node:path";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
+import {
+  DEFAULT_DIFF_IGNORE,
+  DEFAULT_DIFF_SUMMARIZE_ONLY,
+  DEFAULT_PATCH_BODY_BUDGET_TOKENS,
+} from "./diff-context/defaults.ts";
 import { getReviewQuillPathLayout, readBundledAsset } from "./runtime-paths.ts";
 import type { ReviewQuillRepositoryConfig } from "./types.ts";
 
@@ -196,9 +201,7 @@ export async function upsertRepoConfig(options: {
   reviewDocs?: string[];
   diffIgnore?: string[];
   diffSummarizeOnly?: string[];
-  maxPatchLines?: number;
-  maxPatchBytes?: number;
-  maxFilesWithFullPatch?: number;
+  patchBodyBudgetTokens?: number;
 }): Promise<{
   configPath: string;
   status: "created" | "updated" | "unchanged";
@@ -226,22 +229,9 @@ export async function upsertRepoConfig(options: {
     requiredChecks: [...new Set((options.requiredChecks ?? (Array.isArray(existing?.requiredChecks) ? existing.requiredChecks as string[] : [])).map((entry) => entry.trim()).filter(Boolean))],
     excludeBranches: [...new Set((options.excludeBranches ?? (Array.isArray(existing?.excludeBranches) ? existing.excludeBranches as string[] : ["release-please--*"])).map((entry) => entry.trim()).filter(Boolean))],
     reviewDocs: [...new Set((options.reviewDocs ?? (Array.isArray(existing?.reviewDocs) ? existing.reviewDocs as string[] : ["REVIEW_WORKFLOW.md", "CLAUDE.md", "AGENTS.md"])).map((entry) => entry.trim()).filter(Boolean))],
-    diffIgnore: [...new Set((options.diffIgnore ?? (Array.isArray(existing?.diffIgnore) ? existing.diffIgnore as string[] : [])).map((entry) => entry.trim()).filter(Boolean))],
-    diffSummarizeOnly: [...new Set((options.diffSummarizeOnly ?? (Array.isArray(existing?.diffSummarizeOnly) ? existing.diffSummarizeOnly as string[] : [
-      "package-lock.json",
-      "pnpm-lock.yaml",
-      "yarn.lock",
-      "bun.lock*",
-      "dist/**",
-      "build/**",
-      "coverage/**",
-      "*.map",
-      "*.min.js",
-      "*.snap",
-    ])).map((entry) => entry.trim()).filter(Boolean))],
-    maxPatchLines: options.maxPatchLines ?? (typeof existing?.maxPatchLines === "number" ? existing.maxPatchLines : 400),
-    maxPatchBytes: options.maxPatchBytes ?? (typeof existing?.maxPatchBytes === "number" ? existing.maxPatchBytes : 24_000),
-    maxFilesWithFullPatch: options.maxFilesWithFullPatch ?? (typeof existing?.maxFilesWithFullPatch === "number" ? existing.maxFilesWithFullPatch : 20),
+    diffIgnore: [...new Set((options.diffIgnore ?? (Array.isArray(existing?.diffIgnore) ? existing.diffIgnore as string[] : [...DEFAULT_DIFF_IGNORE])).map((entry) => entry.trim()).filter(Boolean))],
+    diffSummarizeOnly: [...new Set((options.diffSummarizeOnly ?? (Array.isArray(existing?.diffSummarizeOnly) ? existing.diffSummarizeOnly as string[] : [...DEFAULT_DIFF_SUMMARIZE_ONLY])).map((entry) => entry.trim()).filter(Boolean))],
+    patchBodyBudgetTokens: options.patchBodyBudgetTokens ?? (typeof existing?.patchBodyBudgetTokens === "number" ? existing.patchBodyBudgetTokens : DEFAULT_PATCH_BODY_BUDGET_TOKENS),
   };
 
   const nextRepositories: Array<Record<string, unknown>> = repositories.filter((entry) => entry.repoId !== repoId && entry.repoFullName !== repoFullName);
@@ -254,9 +244,7 @@ export async function upsertRepoConfig(options: {
     reviewDocs: repo.reviewDocs,
     diffIgnore: repo.diffIgnore,
     diffSummarizeOnly: repo.diffSummarizeOnly,
-    maxPatchLines: repo.maxPatchLines,
-    maxPatchBytes: repo.maxPatchBytes,
-    maxFilesWithFullPatch: repo.maxFilesWithFullPatch,
+    patchBodyBudgetTokens: repo.patchBodyBudgetTokens,
   });
   nextRepositories.sort((left, right) => String(left.repoId ?? "").localeCompare(String(right.repoId ?? "")));
 
