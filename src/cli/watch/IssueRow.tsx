@@ -18,6 +18,10 @@ interface StateDisplay {
   color: string;
 }
 
+function needsOperatorIntervention(issue: WatchIssue): boolean {
+  return issue.sessionState === "failed" || issue.factoryState === "failed" || issue.factoryState === "escalated";
+}
+
 function effectiveState(issue: WatchIssue): string {
   if (issue.sessionState === "done") return "done";
   if (issue.sessionState === "failed") return "failed";
@@ -28,6 +32,9 @@ function effectiveState(issue: WatchIssue): string {
 }
 
 function sessionDisplay(issue: WatchIssue): StateDisplay {
+  if (needsOperatorIntervention(issue)) {
+    return { label: "needs help", color: "red" };
+  }
   switch (issue.sessionState) {
     case "running":
       return { label: "running", color: "cyan" };
@@ -86,6 +93,9 @@ function buildFacts(issue: WatchIssue, selected: boolean): Array<{ text: string;
   if (issue.waitingReason && issue.sessionState === "waiting_input") {
     facts.push({ text: issue.waitingReason, color: "yellow" });
   }
+  if (needsOperatorIntervention(issue)) {
+    facts.push({ text: "operator action needed", color: "red" });
+  }
 
   // Review state — only show when it matters (not yet approved, or changes requested)
   if (issue.prReviewState === "approved") {
@@ -130,6 +140,7 @@ function blockerText(issue: WatchIssue): string | null {
     && (issue.prCheckStatus === "passed" || issue.prCheckStatus === "success")
     && !issue.activeRunType;
   if (issue.sessionState === "waiting_input") return issue.waitingReason ?? "Waiting for input";
+  if (needsOperatorIntervention(issue)) return issue.statusNote ?? issue.waitingReason ?? "Needs operator intervention";
   if (issue.waitingReason && !issue.activeRunType) return issue.waitingReason;
   if (issue.blockedByCount > 0) return `Waiting on ${issue.blockedByKeys.join(", ")}`;
   if (effectiveState(issue) === "repairing_queue") return "Merge queue conflict, repairing branch";

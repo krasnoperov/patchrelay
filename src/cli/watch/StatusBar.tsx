@@ -33,6 +33,7 @@ export function StatusBar({
   const agg = computeAggregates(aggregateSource);
   const withPr = aggregateSource.filter((i) => i.prNumber !== undefined).length;
   const waitingInput = aggregateSource.filter((i) => i.sessionState === "waiting_input" || i.factoryState === "awaiting_input").length;
+  const intervention = aggregateSource.filter((i) => i.sessionState === "failed" || i.factoryState === "failed" || i.factoryState === "escalated").length;
   const running = aggregateSource.filter((i) => i.sessionState === "running").length;
   const idle = aggregateSource.filter((i) => i.sessionState === "idle").length;
   return (
@@ -47,6 +48,7 @@ export function StatusBar({
         {agg.blocked > 0 && <Text color="yellow">{agg.blocked} blocked</Text>}
         {withPr > 0 && <Text dimColor>{withPr} PRs</Text>}
         {waitingInput > 0 && <Text color="yellow">{waitingInput} needs input</Text>}
+        {intervention > 0 && <Text color="red">{intervention} needs help</Text>}
         {agg.done > 0 && <Text color="green">{agg.done} done</Text>}
         {agg.failed > 0 && <Text color="red">{agg.failed} failed</Text>}
         {frozen && <Text color="magenta">frozen</Text>}

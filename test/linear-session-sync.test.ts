@@ -143,6 +143,71 @@ test("syncSession mirrors failure state into a visible Linear status comment", a
   }
 });
 
+test("syncSession prefers the intervention reason over the last assistant summary for escalated issues", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-linear-sync-escalated-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+
+    const issue = db.upsertIssue({
+      projectId: "krasnoperov/ballony-i-nasosy",
+      linearIssueId: "issue-tst-escalated",
+      issueKey: "TST-30",
+      title: "Rebuild `/app` as history, archive, and recovery shell",
+      factoryState: "escalated",
+      agentSessionId: "session-escalated",
+      currentLinearState: "In Review",
+    });
+    const run = db.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "review_fix",
+    });
+    db.finishRun(run.id, {
+      status: "completed",
+      summaryJson: JSON.stringify({
+        assistantMessages: [
+          "Aligned the remaining route copy so `/`, `/game`, and `/app` now tell the same story.",
+        ],
+      }),
+      failureReason: "CI repair budget exhausted (3 attempts)",
+    });
+
+    const commentUpdates: Array<Record<string, unknown>> = [];
+    const linear: Partial<LinearClient> = {
+      updateAgentSession: async (params) => ({ id: params.agentSessionId }),
+      upsertIssueComment: async (params) => {
+        commentUpdates.push(params as unknown as Record<string, unknown>);
+        return { id: "comment-escalated", body: params.body };
+      },
+      createAgentActivity: async () => ({ id: "activity-escalated" }),
+      getIssue: async () => { throw new Error("not used"); },
+      setIssueState: async () => { throw new Error("not used"); },
+      updateIssueLabels: async () => { throw new Error("not used"); },
+      getActorProfile: async () => ({ actorId: "patchrelay-actor" }),
+      getWorkspaceCatalog: async () => ({ workspace: {}, teams: [], projects: [] }),
+    };
+
+    const sync = new LinearSessionSync(
+      config,
+      db,
+      { forProject: async () => linear as LinearClient },
+      pino({ enabled: false }),
+    );
+
+    await sync.syncSession(db.getIssue(issue.projectId, issue.linearIssueId)!);
+
+    assert.equal(commentUpdates.length, 1);
+    assert.match(String(commentUpdates[0]?.body), /Needs operator intervention/);
+    assert.match(String(commentUpdates[0]?.body), /Action needed: CI repair budget exhausted \(3 attempts\)/);
+    assert.doesNotMatch(String(commentUpdates[0]?.body), /Aligned the remaining route copy/);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("syncSession updates the existing visible Linear status comment even without an agent session id", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-linear-sync-"));
   try {

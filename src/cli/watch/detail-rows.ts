@@ -30,7 +30,7 @@ const SESSION_DISPLAY: Record<string, { label: string; color: string }> = {
   running: { label: "running", color: "cyan" },
   waiting_input: { label: "needs input", color: "yellow" },
   done: { label: "done", color: "green" },
-  failed: { label: "failed", color: "red" },
+  failed: { label: "needs help", color: "red" },
 };
 
 const STAGE_DISPLAY: Record<string, string> = {
@@ -574,6 +574,9 @@ function summarizeFileChanges(changes: unknown[]): string {
 }
 
 function sessionDisplay(issue: WatchIssue): { label: string; color: string } {
+  if (issue.sessionState === "failed" || issue.factoryState === "failed" || issue.factoryState === "escalated") {
+    return { label: "needs help", color: "red" };
+  }
   const state = issue.sessionState ?? "unknown";
   return SESSION_DISPLAY[state] ?? { label: state, color: "white" };
 }
@@ -596,6 +599,9 @@ function blockerText(issue: WatchIssue, issueContext: WatchIssueContext | null):
     && (issue.prCheckStatus === "passed" || issue.prCheckStatus === "success")
     && !issue.activeRunType;
   if (issue.sessionState === "waiting_input") return issue.waitingReason ?? "Waiting for input";
+  if (issue.sessionState === "failed" || issue.factoryState === "failed" || issue.factoryState === "escalated") {
+    return issue.statusNote ?? issue.waitingReason ?? "Needs operator intervention";
+  }
   if (issue.waitingReason && !issue.activeRunType) return issue.waitingReason;
   if (issue.blockedByCount > 0) return `Waiting on ${issue.blockedByKeys.join(", ")}`;
   if (effectiveState(issue) === "repairing_queue") return "Merge queue conflict, repairing branch";

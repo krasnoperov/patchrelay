@@ -381,7 +381,7 @@ function statusHeadline(
     case "failed":
       return "Needs operator intervention";
     case "escalated":
-      return "Escalated for human help";
+      return "Needs operator intervention";
     case "done":
       return issue.prNumber !== undefined ? `Completed with PR #${issue.prNumber}` : "Completed";
     default:
