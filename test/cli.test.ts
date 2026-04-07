@@ -868,12 +868,12 @@ test("cli sessions shows recorded app-server runs with resume commands", async (
     assert.equal(await runCli(["issue", "sessions", "USE-54"], { config, data, stdout: stdout.stream, stderr: stderr.stream }), 0);
 
     const rendered = stdout.read();
-    assert.match(rendered, /run #\d+  review_fix  completed/);
+    assert.match(rendered, /run #\d+[ ]{2}review_fix[ ]{2}completed/);
     assert.match(rendered, /Thread: thread-54-review/);
     assert.match(rendered, /Parent thread: thread-54/);
     assert.match(rendered, /Applied the requested review changes and pushed an update/);
     assert.match(rendered, /Open: codex --dangerously-bypass-approvals-and-sandbox resume -C .*USE-54 thread-54-review/);
-    assert.match(rendered, /run #\d+  implementation  failed/);
+    assert.match(rendered, /run #\d+[ ]{2}implementation[ ]{2}failed/);
   } finally {
     data?.close();
     rmSync(baseDir, { recursive: true, force: true });
