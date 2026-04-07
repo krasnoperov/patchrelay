@@ -1245,12 +1245,12 @@ test("cli dashboard reports a clean error when stdin is not a TTY", async () => 
   try {
     const configPath = path.join(tempDir, "config.json");
     mkdirSync(path.join(tempDir, "repo"), { recursive: true });
-    writeFileSync(configPath, JSON.stringify(createConfig(tempDir), null, 2));
+    writeExternalConfig(configPath, tempDir);
 
     const result = runCliProcess(["dashboard"], {
-      cwd: "/home/alv/projects/patchrelay",
+      cwd: process.cwd(),
       env: {
-        PATCHRELAY_CONFIG_PATH: configPath,
+        PATCHRELAY_CONFIG: configPath,
       },
     });
 

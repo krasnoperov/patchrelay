@@ -16,7 +16,9 @@ test("repairing_ci issues with an unseen failure signature become ready without 
       linearIssueId: "issue-1",
       issueKey: "USE-1",
       factoryState: "repairing_ci",
+      prNumber: 1,
       prState: "open",
+      prCheckStatus: "failure",
       lastGitHubFailureSignature: "branch_ci::sha-1::verify",
       lastGitHubFailureHeadSha: "sha-1",
       lastGitHubFailureContextJson: JSON.stringify({
@@ -58,6 +60,7 @@ test("repairing_ci issues can synthesize a one-time wake from the current PR hea
       linearIssueId: "issue-2",
       issueKey: "USE-2",
       factoryState: "repairing_ci",
+      prNumber: 2,
       prState: "open",
       prHeadSha: "sha-implicit",
       prCheckStatus: "failure",
