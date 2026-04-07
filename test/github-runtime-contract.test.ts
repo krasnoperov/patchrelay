@@ -78,7 +78,13 @@ function createConfig(baseDir: string): AppConfig {
   };
 }
 
-function createHandler(baseDir: string, linearProvider?: { forProject(projectId: string): Promise<LinearClient | undefined> }) {
+function createHandler(
+  baseDir: string,
+  options?: {
+    linearProvider?: { forProject(projectId: string): Promise<LinearClient | undefined> };
+    fetchImpl?: typeof fetch;
+  },
+) {
   const config = createConfig(baseDir);
   const db = new PatchRelayDatabase(config.database.path, config.database.wal);
   db.runMigrations();
@@ -86,12 +92,16 @@ function createHandler(baseDir: string, linearProvider?: { forProject(projectId:
   const handler = new GitHubWebhookHandler(
     config,
     db,
-    (linearProvider ?? { forProject: async () => undefined }) as never,
+    (options?.linearProvider ?? { forProject: async () => undefined }) as never,
     (projectId, issueId) => {
       enqueueCalls.push({ projectId, issueId });
     },
     pino({ enabled: false }),
     { steerTurn: async () => undefined } as never,
+    undefined,
+    undefined,
+    undefined,
+    options?.fetchImpl,
   );
   return { db, enqueueCalls, handler };
 }
@@ -127,6 +137,8 @@ function buildChangesRequestedReviewPayload(params: {
   headSha: string;
   prNumber: number;
   prAuthorLogin: string;
+  reviewId?: number;
+  reviewCommitId?: string;
 }): string {
   return JSON.stringify({
     action: "submitted",
@@ -141,11 +153,21 @@ function buildChangesRequestedReviewPayload(params: {
       base: { ref: "main" },
     },
     review: {
+      id: params.reviewId ?? 901,
       state: "changes_requested",
       body: "Please tighten this up.",
+      commit_id: params.reviewCommitId ?? params.headSha,
       user: { login: "reviewbot" },
     },
   });
+}
+
+function createJsonResponse(data: unknown, status = 200): Response {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => data,
+  } as Response;
 }
 
 function buildSuccessfulCheckRunPayload(params: {
@@ -287,9 +309,10 @@ test("merged PatchRelay PR moves the Linear issue to a completed state", async (
   try {
     const setIssueStateCalls: string[] = [];
     const { db, handler } = createHandler(baseDir, {
-      forProject: async () => ({
-        getIssue: async () => ({
-          id: "issue-merge-linear",
+      linearProvider: {
+        forProject: async () => ({
+          getIssue: async () => ({
+            id: "issue-merge-linear",
           identifier: "USE-14",
           title: "Merged issue",
           description: "",
@@ -333,7 +356,8 @@ test("merged PatchRelay PR moves the Linear issue to a completed state", async (
             blocks: [],
           };
         },
-      }) as LinearClient,
+        }) as LinearClient,
+      },
     });
 
     db.upsertIssue({
@@ -498,8 +522,27 @@ test("requested changes on a non-PatchRelay-owned PR do not queue follow-up work
 
 test("requested changes on a PatchRelay-owned PR queue review_fix", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-runtime-owned-review-"));
+  const previousGitHubToken = process.env.GITHUB_TOKEN;
   try {
-    const { db, enqueueCalls, handler } = createHandler(baseDir);
+    process.env.GITHUB_TOKEN = "test-github-token";
+    const fetchCalls: string[] = [];
+    const { db, enqueueCalls, handler } = createHandler(baseDir, {
+      fetchImpl: async (input) => {
+        fetchCalls.push(String(input));
+        return createJsonResponse([
+          {
+            id: 71,
+            body: "Use the saved review context, not a fake leader.",
+            path: "src/frontend/app/sessionSchema.ts",
+            line: 1526,
+            side: "RIGHT",
+            commit_id: "sha-owned",
+            html_url: "https://github.com/owner/repo/pull/13#discussion_r71",
+            user: { login: "review-quill[bot]" },
+          },
+        ]);
+      },
+    });
     db.upsertIssue({
       projectId: "usertold",
       linearIssueId: "issue-owned-review",
@@ -526,8 +569,32 @@ test("requested changes on a PatchRelay-owned PR queue review_fix", async () => 
     assert.equal(issue?.pendingRunType, undefined);
     assert.equal(wake?.runType, "review_fix");
     assert.equal(wake?.wakeReason, "review_changes_requested");
+    assert.equal(wake?.context.reviewId, 901);
+    assert.equal(wake?.context.reviewCommitId, "sha-owned");
+    assert.equal(wake?.context.reviewerName, "reviewbot");
+    assert.equal(wake?.context.reviewUrl, "https://github.com/owner/repo/pull/13#pullrequestreview-901");
+    assert.deepEqual(wake?.context.reviewComments, [
+      {
+        id: 71,
+        body: "Use the saved review context, not a fake leader.",
+        path: "src/frontend/app/sessionSchema.ts",
+        line: 1526,
+        side: "RIGHT",
+        commitId: "sha-owned",
+        url: "https://github.com/owner/repo/pull/13#discussion_r71",
+        authorLogin: "review-quill[bot]",
+      },
+    ]);
+    assert.deepEqual(fetchCalls, [
+      "https://api.github.com/repos/owner/repo/pulls/13/reviews/901/comments?per_page=100",
+    ]);
     assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-owned-review" }]);
   } finally {
+    if (previousGitHubToken === undefined) {
+      delete process.env.GITHUB_TOKEN;
+    } else {
+      process.env.GITHUB_TOKEN = previousGitHubToken;
+    }
     rmSync(baseDir, { recursive: true, force: true });
   }
 });

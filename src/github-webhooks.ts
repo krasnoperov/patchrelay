@@ -120,6 +120,8 @@ function normalizePullRequestReviewEvent(payload: GitHubWebhookPayload, repoFull
     prAuthorLogin: pr.user?.login ?? undefined,
     reviewState,
     reviewBody: review.body ?? undefined,
+    reviewId: typeof review.id === "number" ? review.id : undefined,
+    reviewCommitId: typeof review.commit_id === "string" ? review.commit_id : undefined,
     reviewerName: review.user?.login ?? undefined,
   };
 }

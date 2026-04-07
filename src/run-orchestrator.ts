@@ -217,6 +217,85 @@ function appendLinearContext(lines: string[], context?: Record<string, unknown>)
   }
 }
 
+interface ReviewFixCommentContext {
+  body: string;
+  path?: string | undefined;
+  line?: number | undefined;
+  side?: string | undefined;
+  startLine?: number | undefined;
+  startSide?: string | undefined;
+  url?: string | undefined;
+  authorLogin?: string | undefined;
+}
+
+function readReviewFixComments(context?: Record<string, unknown>): ReviewFixCommentContext[] {
+  const raw = context?.reviewComments;
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+
+  const comments: ReviewFixCommentContext[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") continue;
+    const record = entry as Record<string, unknown>;
+    const body = typeof record.body === "string" ? record.body.trim() : "";
+    if (!body) continue;
+    comments.push({
+      body,
+      ...(typeof record.path === "string" ? { path: record.path } : {}),
+      ...(typeof record.line === "number" ? { line: record.line } : {}),
+      ...(typeof record.side === "string" ? { side: record.side } : {}),
+      ...(typeof record.startLine === "number" ? { startLine: record.startLine } : {}),
+      ...(typeof record.startSide === "string" ? { startSide: record.startSide } : {}),
+      ...(typeof record.url === "string" ? { url: record.url } : {}),
+      ...(typeof record.authorLogin === "string" ? { authorLogin: record.authorLogin } : {}),
+    });
+  }
+  return comments;
+}
+
+function appendStructuredReviewContext(lines: string[], context?: Record<string, unknown>): void {
+  const reviewId = typeof context?.reviewId === "number" ? context.reviewId : undefined;
+  const reviewCommitId = typeof context?.reviewCommitId === "string" ? context.reviewCommitId : undefined;
+  const reviewUrl = typeof context?.reviewUrl === "string" ? context.reviewUrl : undefined;
+  const reviewComments = readReviewFixComments(context);
+  if (!reviewId && !reviewCommitId && !reviewUrl && reviewComments.length === 0) {
+    return;
+  }
+
+  lines.push("## Structured Review Context", "");
+  if (reviewId !== undefined) {
+    lines.push(`Review ID: ${reviewId}`);
+  }
+  if (reviewCommitId) {
+    lines.push(`Reviewed commit: ${reviewCommitId}`);
+  }
+  if (reviewUrl) {
+    lines.push(`Review URL: ${reviewUrl}`);
+  }
+  if (reviewComments.length === 0) {
+    lines.push("No inline review comments were captured for this review.", "");
+    return;
+  }
+
+  lines.push(
+    `Inline review comments captured: ${reviewComments.length}`,
+    "Resolve each comment below or verify it is already fixed on the current head before you stop.",
+    "",
+  );
+  for (const comment of reviewComments) {
+    const location = comment.path
+      ? `${comment.path}${comment.line !== undefined ? `:${comment.line}` : ""}${comment.side ? ` (${comment.side})` : ""}`
+      : "general";
+    lines.push(`- ${location}`);
+    lines.push(comment.body);
+    if (comment.url) {
+      lines.push(`  URL: ${comment.url}`);
+    }
+  }
+  lines.push("");
+}
+
 function collectFollowUpInputs(context?: Record<string, unknown>): Array<{ type: string; text: string; author?: string }> {
   const followUps = Array.isArray(context?.followUps) ? context.followUps : [];
   const inputs: Array<{ type: string; text: string; author?: string }> = [];
@@ -450,14 +529,16 @@ export function buildInitialRunPrompt(issue: IssueRecord, runType: RunType, repo
         context?.reviewBody ? `\n## Review comment\n\n${String(context.reviewBody)}` : "",
         "",
         "Steps:",
-        "1. Read the review feedback and PR comments (`gh pr view --comments`).",
+        "1. Start with the structured review context below. Treat the inline review comments as the primary repair checklist for this turn.",
         "2. Check the current diff (`git diff origin/main`) — a prior rebase may have already resolved some concerns (e.g., scope-bundling from stale commits).",
-        "3. For each review point: if already resolved, note why. If not, fix it.",
-        "4. Run verification, commit and push.",
-        "5. If you believe all concerns are resolved, request a re-review: `gh pr edit <PR#> --add-reviewer <reviewer>`.",
+        "3. For each review point: if already resolved on the current head, note why. If not, fix it.",
+        "4. If the structured review context looks incomplete, inspect the latest GitHub review threads directly before deciding you are done.",
+        "5. Run verification, commit and push.",
+        "6. If you believe all concerns are resolved, request a re-review: `gh pr edit <PR#> --add-reviewer <reviewer>`.",
         "   Do NOT just post a comment saying \"resolved\" — the reviewer must re-review to dismiss the CHANGES_REQUESTED state.",
         "",
       );
+      appendStructuredReviewContext(lines, context);
       break;
     case "queue_repair":
       appendQueueRepairContext(lines, context);
@@ -541,14 +622,16 @@ export function buildFollowUpRunPrompt(issue: IssueRecord, runType: RunType, rep
         context?.reviewBody ? `\n## Review comment\n\n${String(context.reviewBody)}` : "",
         "",
         "Steps:",
-        "1. Read the review feedback and PR comments (`gh pr view --comments`).",
+        "1. Start with the structured review context below. Treat the inline review comments as the primary repair checklist for this turn.",
         "2. Check the current diff (`git diff origin/main`) — a prior rebase may have already resolved some concerns (e.g., scope-bundling from stale commits).",
-        "3. For each review point: if already resolved, note why. If not, fix it.",
-        "4. Run verification, commit and push.",
-        "5. If you believe all concerns are resolved, request a re-review: `gh pr edit <PR#> --add-reviewer <reviewer>`.",
+        "3. For each review point: if already resolved on the current head, note why. If not, fix it.",
+        "4. If the structured review context looks incomplete, inspect the latest GitHub review threads directly before deciding you are done.",
+        "5. Run verification, commit and push.",
+        "6. If you believe all concerns are resolved, request a re-review: `gh pr edit <PR#> --add-reviewer <reviewer>`.",
         "   Do NOT just post a comment saying \"resolved\" — the reviewer must re-review to dismiss the CHANGES_REQUESTED state.",
         "",
       );
+      appendStructuredReviewContext(lines, context);
       break;
     case "queue_repair":
       appendQueueRepairContext(lines, context);
@@ -606,6 +689,14 @@ function shouldCompactThread(issue: IssueRecord, threadGeneration: number | unde
   return issue.threadId !== undefined
     && (threadGeneration ?? 0) >= MAX_THREAD_GENERATION_BEFORE_COMPACTION
     && followUpCount >= MAX_FOLLOW_UPS_BEFORE_COMPACTION;
+}
+
+export function shouldReuseIssueThread(params: {
+  existingThreadId?: string | undefined;
+  compactThread: boolean;
+  resumeThread: boolean;
+}): boolean {
+  return Boolean(params.existingThreadId) && !params.compactThread && params.resumeThread;
 }
 
 interface RemotePrState {
@@ -922,16 +1013,18 @@ export class RunOrchestrator {
       }
       this.assertLaunchLease(run, "before starting the Codex turn");
 
-      // Reuse the existing thread when the wake source is an additive follow-up
-      // or when review-fix work benefits from carrying reviewer context forward.
-      // If the thread has accumulated many resumptions and batched follow-ups,
-      // compact by starting a fresh main thread while keeping a parent link.
+      // Reuse the existing thread only for additive follow-ups that explicitly
+      // request continuity. Fresh review-fix runs now start a new thread so the
+      // model is not anchored to the implementation conversation that produced
+      // the rejected patch. If the thread has accumulated many resumptions and
+      // batched follow-ups, compact by starting a fresh main thread while
+      // keeping a parent link.
       const compactThread = shouldCompactThread(issue, issueSession?.threadGeneration, effectiveContext);
       if (compactThread && issue.threadId) {
         parentThreadId = issue.threadId;
       }
-      if (issue.threadId && !compactThread && (resumeThread || runType === "review_fix")) {
-        threadId = issue.threadId;
+      if (shouldReuseIssueThread({ existingThreadId: issue.threadId, compactThread, resumeThread })) {
+        threadId = issue.threadId!;
       } else {
         const thread = await this.codex.startThread({ cwd: worktreePath });
         threadId = thread.id;
