@@ -13,6 +13,56 @@ function githubHeaders(token: string): Record<string, string> {
   };
 }
 
+// Retry policy for transient failures on the GitHub API.
+// - 3 total attempts (the initial call counts as attempt #1).
+// - Exponential backoff: 250ms → 1000ms → 4000ms, ±20% jitter.
+// - Cap any single delay at 30s even if `Retry-After` asks for more.
+// - GET/HEAD (idempotent) retry on network errors, 5xx, and 429.
+// - POST/PUT/PATCH/DELETE (non-idempotent) retry ONLY on network errors —
+//   blind retry on 5xx risks double-creation on reviews/check-runs.
+const HTTP_RETRY_MAX_ATTEMPTS = 3;
+const HTTP_RETRY_BASE_DELAY_MS = 250;
+const HTTP_RETRY_MAX_DELAY_MS = 30_000;
+const HTTP_RETRY_JITTER_RATIO = 0.2;
+
+function isIdempotentMethod(method: string | undefined): boolean {
+  const normalized = (method ?? "GET").toUpperCase();
+  return normalized === "GET" || normalized === "HEAD";
+}
+
+function isRetryableStatus(status: number): boolean {
+  return status === 429 || (status >= 500 && status <= 599);
+}
+
+// Parse a Retry-After header that can be either delay-seconds or an HTTP date.
+function parseRetryAfterMs(value: string | null): number | undefined {
+  if (!value) return undefined;
+  const numeric = Number(value.trim());
+  if (Number.isFinite(numeric) && numeric >= 0) {
+    return Math.min(Math.round(numeric * 1000), HTTP_RETRY_MAX_DELAY_MS);
+  }
+  const date = Date.parse(value);
+  if (Number.isFinite(date)) {
+    return Math.min(Math.max(0, date - Date.now()), HTTP_RETRY_MAX_DELAY_MS);
+  }
+  return undefined;
+}
+
+function exponentialBackoffMs(attempt: number): number {
+  // attempt=1 → 250ms, attempt=2 → 1000ms, attempt=3 → 4000ms
+  const base = HTTP_RETRY_BASE_DELAY_MS * Math.pow(4, attempt - 1);
+  const capped = Math.min(base, HTTP_RETRY_MAX_DELAY_MS);
+  const jitter = capped * HTTP_RETRY_JITTER_RATIO * (Math.random() * 2 - 1);
+  return Math.max(0, Math.round(capped + jitter));
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref?.();
+  });
+}
+
 export class GitHubClient {
   constructor(private readonly auth: GitHubClientAuthProvider) {}
 
@@ -24,18 +74,62 @@ export class GitHubClient {
     const token = this.currentTokenForRepo(repoFullName);
     if (!token) throw new Error(`No GitHub installation token available for ${repoFullName}`);
 
-    const response = await fetch(`https://api.github.com${path}`, {
+    const method = (init.method ?? "GET").toUpperCase();
+    const url = `https://api.github.com${path}`;
+    const fetchInit: RequestInit = {
       ...init,
+      method,
       headers: {
         ...githubHeaders(token),
         ...(init.headers ? init.headers as Record<string, string> : {}),
       },
-    });
-    if (!response.ok) {
+    };
+
+    let lastError: Error | undefined;
+
+    for (let attempt = 1; attempt <= HTTP_RETRY_MAX_ATTEMPTS; attempt += 1) {
+      // Try the request.
+      let response: Response;
+      try {
+        response = await fetch(url, fetchInit);
+      } catch (error) {
+        // Network error BEFORE the server saw a response. Safe to retry
+        // even non-idempotent methods here because the server never
+        // processed anything. Exponential backoff (no Retry-After
+        // information available on a network error).
+        lastError = error instanceof Error ? error : new Error(String(error));
+        if (attempt >= HTTP_RETRY_MAX_ATTEMPTS) throw lastError;
+        await sleep(exponentialBackoffMs(attempt));
+        continue;
+      }
+
+      if (response.ok) {
+        return await response.json() as T;
+      }
+
+      // Non-ok HTTP response. Read the body once (the body stream is
+      // single-use) and decide whether to retry.
       const body = await response.text();
-      throw new Error(`GitHub API ${response.status} for ${path}: ${body}`);
+      const httpError = new Error(`GitHub API ${response.status} for ${path}: ${body}`);
+      lastError = httpError;
+
+      const retryable = isRetryableStatus(response.status) && isIdempotentMethod(method);
+      if (!retryable || attempt >= HTTP_RETRY_MAX_ATTEMPTS) {
+        throw httpError;
+      }
+
+      // Honor Retry-After when the server supplies one (429/503 usually do);
+      // fall back to exponential backoff otherwise. Either way this is the
+      // ONLY sleep for this iteration — no top-of-loop sleep compounds it.
+      const retryAfterMs = parseRetryAfterMs(response.headers.get("Retry-After"));
+      const waitMs = retryAfterMs ?? exponentialBackoffMs(attempt);
+      await sleep(Math.min(waitMs, HTTP_RETRY_MAX_DELAY_MS));
     }
-    return await response.json() as T;
+
+    // Unreachable in practice — the loop body either returns on success
+    // or throws on the final failure. Defensive rethrow to keep TypeScript
+    // inference happy.
+    throw lastError ?? new Error(`GitHub API request to ${path} failed after ${HTTP_RETRY_MAX_ATTEMPTS} attempts`);
   }
 
   async listOpenPullRequests(repoFullName: string): Promise<PullRequestSummary[]> {
@@ -213,18 +307,37 @@ export class GitHubClient {
   async submitReview(repoFullName: string, prNumber: number, params: {
     event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT";
     body: string;
+    commitId?: string;
+    comments?: Array<{
+      path: string;
+      line: number;
+      side?: "LEFT" | "RIGHT";
+      body: string;
+    }>;
   }): Promise<void> {
     const encodedRepo = repoFullName.split("/").map(encodeURIComponent).join("/");
+    const payload: Record<string, unknown> = {
+      event: params.event,
+      body: params.body,
+    };
+    if (params.commitId) {
+      payload.commit_id = params.commitId;
+    }
+    if (params.comments && params.comments.length > 0) {
+      payload.comments = params.comments.map((c) => ({
+        path: c.path,
+        line: c.line,
+        side: c.side ?? "RIGHT",
+        body: c.body,
+      }));
+    }
     await this.request(
       repoFullName,
       `/repos/${encodedRepo}/pulls/${prNumber}/reviews`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          event: params.event,
-          body: params.body,
-        }),
+        body: JSON.stringify(payload),
       },
     );
   }

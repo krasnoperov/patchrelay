@@ -3,16 +3,28 @@ import type {
   PullRequestSummary,
   ReviewAttemptDetail,
   ReviewEligibility,
+  ReviewFinding,
   ReviewQuillConfig,
   ReviewQuillRepositoryConfig,
   ReviewQuillRuntimeStatus,
   ReviewQuillWatchSnapshot,
+  ReviewVerdict,
 } from "./types.ts";
 import type { SqliteStore } from "./db/sqlite-store.ts";
 import type { GitHubClient } from "./github-client.ts";
 import type { ReviewRunner } from "./review-runner.ts";
 import type { PullRequestReviewRecord } from "./types.ts";
 import { buildReviewContext } from "./review-context.ts";
+
+// Findings below this confidence score are dropped before posting.
+// Empirical; tunable. Claude Code plugin uses 80 as its default. We
+// start at 70 — slightly more permissive — and can raise if noise creeps
+// back in.
+const CONFIDENCE_THRESHOLD = 70;
+
+// Guard against a runaway model producing 100 inline comments. Matches
+// PR-Agent's `num_max_findings` cap philosophy.
+const MAX_INLINE_COMMENTS = 20;
 
 function branchExcluded(repo: ReviewQuillRepositoryConfig, branchName: string): boolean {
   return repo.excludeBranches.some((pattern) => pattern.endsWith("*")
@@ -30,30 +42,88 @@ function requiredChecksGreen(requiredChecks: string[], checks: Array<{ name: str
   });
 }
 
-function buildReviewBody(params: {
-  verdict: "approve" | "request_changes";
-  summary: string;
-  findings: Array<{ path?: string; line?: number; severity: "blocking" | "nit"; message: string }>;
+// Drop findings the model was not confident in, then cap the total
+// count so a runaway model can't spam 100 inline comments.
+export function filterFindings(findings: ReviewFinding[]): ReviewFinding[] {
+  const confident = findings.filter((f) => (f.confidence ?? 100) >= CONFIDENCE_THRESHOLD);
+  // Keep blocking findings first, then nits, up to the cap.
+  const sorted = [...confident].sort((a, b) => {
+    if (a.severity === b.severity) return (b.confidence ?? 100) - (a.confidence ?? 100);
+    return a.severity === "blocking" ? -1 : 1;
+  });
+  return sorted.slice(0, MAX_INLINE_COMMENTS);
+}
+
+// Map the agent's verdict + findings to the GitHub review event. Enforces
+// "nits never block": even if the model asked for REQUEST_CHANGES, if
+// there are no blocking findings we demote to COMMENT. This is the same
+// rule `normalizeVerdict` enforces in review-runner, but we re-apply it
+// here after the confidence filter (which might have removed the
+// blocking finding that justified request_changes in the first place).
+export function resolveEvent(verdict: ReviewVerdict, filtered: ReviewFinding[]): "APPROVE" | "REQUEST_CHANGES" | "COMMENT" {
+  const hasBlocking = filtered.some((f) => f.severity === "blocking")
+    || verdict.architectural_concerns.some((c) => c.severity === "blocking");
+  if (hasBlocking) return "REQUEST_CHANGES";
+  if (filtered.length === 0 && verdict.architectural_concerns.length === 0) return "APPROVE";
+  return "COMMENT";
+}
+
+// Build the review body (posted into the `body` field of the GitHub
+// review, i.e. the walkthrough comment at the top). Structured as:
+//   1. Walkthrough narrative
+//   2. Architectural concerns section (if any)
+//   3. Final verdict line with rationale
+export function buildReviewBody(params: {
+  verdict: ReviewVerdict;
+  event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT";
 }): string {
-  const lines = [
-    `Machine verdict: ${params.verdict}`,
-    "",
-    params.summary,
-  ];
-  if (params.findings.length > 0) {
-    lines.push("", "Findings:");
-    for (const finding of params.findings) {
-      const location = finding.path
-        ? `${finding.path}${finding.line ? `:${finding.line}` : ""}`
-        : undefined;
-      lines.push(`- [${finding.severity}] ${location ? `${location} ` : ""}${finding.message}`);
+  const { verdict, event } = params;
+  const lines: string[] = [];
+
+  lines.push(verdict.walkthrough.trim());
+
+  if (verdict.architectural_concerns.length > 0) {
+    lines.push("", "## Architectural concerns");
+    for (const concern of verdict.architectural_concerns) {
+      const marker = concern.severity === "blocking" ? "🚨" : "💡";
+      lines.push(`- ${marker} **[${concern.category}]** ${concern.message}`);
     }
   }
+
+  lines.push("");
+  const verdictLabel = event === "APPROVE"
+    ? "✅ Approve"
+    : event === "REQUEST_CHANGES"
+      ? "🛑 Request changes"
+      : "💬 Comment";
+  lines.push(`**Verdict: ${verdictLabel}** — ${verdict.verdict_reason}`);
+
   return lines.join("\n");
 }
 
-function reviewStateForVerdict(verdict: "approve" | "request_changes"): "APPROVED" | "CHANGES_REQUESTED" {
-  return verdict === "approve" ? "APPROVED" : "CHANGES_REQUESTED";
+// Format a single inline comment body: severity marker + message + optional
+// committable suggestion block. The 6-line rule from Claude Code is
+// enforced here: suggestions longer than 6 lines are dropped (we keep
+// the message describing the fix, but don't inject a suggestion block
+// that the reviewer would have to manually trim).
+export function buildInlineCommentBody(finding: ReviewFinding): string {
+  const marker = finding.severity === "blocking" ? "🚨" : "💡";
+  const header = `${marker} ${finding.message}`;
+  if (finding.suggestion) {
+    const snippetLines = finding.suggestion.split("\n").length;
+    if (snippetLines <= 6) {
+      return `${header}\n\n\`\`\`suggestion\n${finding.suggestion}\n\`\`\``;
+    }
+  }
+  return header;
+}
+
+function reviewStateForEvent(event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT"): "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" {
+  switch (event) {
+    case "APPROVE": return "APPROVED";
+    case "REQUEST_CHANGES": return "CHANGES_REQUESTED";
+    case "COMMENT": return "COMMENTED";
+  }
 }
 
 type PublicationDisposition =
@@ -65,10 +135,10 @@ export function hasMatchingLatestReviewForHead(
   reviews: PullRequestReviewRecord[],
   reviewerLogin: string | undefined,
   headSha: string,
-  verdict: "approve" | "request_changes",
+  event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT",
 ): boolean {
   if (!reviewerLogin) return false;
-  const desiredState = reviewStateForVerdict(verdict);
+  const desiredState = reviewStateForEvent(event);
   const latest = [...reviews]
     .reverse()
     .find((review) => review.authorLogin === reviewerLogin && review.commitId === headSha);
@@ -315,11 +385,26 @@ export class ReviewQuillService {
       } finally {
         await prepared.dispose();
       }
-      const reviewBody = buildReviewBody({
-        verdict: result.verdict.verdict,
-        summary: result.verdict.summary,
-        findings: result.verdict.findings,
-      });
+      const filteredFindings = filterFindings(result.verdict.findings);
+      const droppedByConfidence = result.verdict.findings.length - filteredFindings.length;
+      if (droppedByConfidence > 0) {
+        this.logger.info({
+          repo: repo.repoFullName,
+          prNumber: pr.number,
+          droppedByConfidence,
+          threshold: CONFIDENCE_THRESHOLD,
+          kept: filteredFindings.length,
+          cap: MAX_INLINE_COMMENTS,
+        }, "Dropped low-confidence or over-cap findings before posting");
+      }
+      const event = resolveEvent(result.verdict, filteredFindings);
+      const reviewBody = buildReviewBody({ verdict: result.verdict, event });
+      const inlineComments = filteredFindings.map((finding) => ({
+        path: finding.path,
+        line: finding.line,
+        side: "RIGHT" as const,
+        body: buildInlineCommentBody(finding),
+      }));
       const currentPr = await this.github.getPullRequest(repo.repoFullName, pr.number);
       const publicationDisposition = classifyPublicationDisposition(currentPr, pr.headSha);
       if (publicationDisposition.action !== "publish") {
@@ -349,32 +434,44 @@ export class ReviewQuillService {
         }, "Skipping stale review publication");
         return;
       }
-      const approved = result.verdict.verdict === "approve";
       const currentReviews = await this.github.listPullRequestReviews(repo.repoFullName, pr.number);
-      if (hasMatchingLatestReviewForHead(currentReviews, this.reviewerLogin, pr.headSha, result.verdict.verdict)) {
+      if (hasMatchingLatestReviewForHead(currentReviews, this.reviewerLogin, pr.headSha, event)) {
         this.logger.info({
           repo: repo.repoFullName,
           prNumber: pr.number,
           headSha: pr.headSha,
           verdict: result.verdict.verdict,
+          event,
         }, "Skipping duplicate GitHub review for unchanged head verdict");
       } else {
         await this.github.submitReview(repo.repoFullName, pr.number, {
-          event: approved ? "APPROVE" : "REQUEST_CHANGES",
+          event,
           body: reviewBody,
+          commitId: pr.headSha,
+          ...(inlineComments.length > 0 ? { comments: inlineComments } : {}),
         });
       }
+      const checkConclusion = event === "REQUEST_CHANGES"
+        ? "failure"
+        : event === "COMMENT"
+          ? "neutral"
+          : "success";
       await this.github.updateCheckRun(repo.repoFullName, checkRunId, {
         status: "completed",
-        conclusion: approved ? "success" : "failure",
-        summary: result.verdict.summary,
+        conclusion: checkConclusion,
+        summary: result.verdict.walkthrough,
         text: reviewBody,
         ...(detailsUrl ? { detailsUrl } : {}),
       });
+      const attemptConclusion = event === "REQUEST_CHANGES"
+        ? "declined"
+        : event === "COMMENT"
+          ? "skipped"
+          : "approved";
       this.store.updateAttempt(attempt.id, {
         status: "completed",
-        conclusion: approved ? "approved" : "declined",
-        summary: result.verdict.summary,
+        conclusion: attemptConclusion,
+        summary: result.verdict.walkthrough,
         threadId: result.threadId,
         turnId: result.turnId,
         externalCheckRunId: checkRunId,

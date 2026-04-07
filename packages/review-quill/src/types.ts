@@ -185,15 +185,45 @@ export interface ReviewEligibility {
   reason?: string;
 }
 
+export type ReviewFindingSeverity = "blocking" | "nit";
+
+export interface ReviewFinding {
+  path: string;
+  line: number;
+  severity: ReviewFindingSeverity;
+  message: string;
+  // 0-100. review-quill drops findings below a confidence threshold
+  // before posting. If omitted by the model, treated as 100.
+  confidence?: number;
+  // Optional committable fix. Only honored when the entire issue can be
+  // resolved by this one snippet and the snippet is ≤6 lines long.
+  suggestion?: string;
+}
+
+export interface ReviewArchitecturalConcern {
+  severity: ReviewFindingSeverity;
+  // Free-form category label. Common values: "intent", "regression",
+  // "convention", "product". Not enforced — any short label is fine.
+  category: string;
+  message: string;
+}
+
 export interface ReviewVerdict {
-  verdict: "approve" | "request_changes";
-  summary: string;
-  findings: Array<{
-    path?: string;
-    line?: number;
-    severity: "blocking" | "nit";
-    message: string;
-  }>;
+  // 2-4 paragraph wide narrative: what this PR does, author's intent,
+  // how it fits into the codebase, notable risks. Goes into the review
+  // body (top of the review).
+  walkthrough: string;
+  // Cross-file or product-level concerns that don't pin to one line.
+  // Rendered into the review body after the walkthrough.
+  architectural_concerns: ReviewArchitecturalConcern[];
+  // Line-level findings. Each becomes one inline comment on the PR.
+  findings: ReviewFinding[];
+  // Final verdict. `comment` is used when there are no blocking findings
+  // but still something to say (e.g., only nits).
+  verdict: "approve" | "request_changes" | "comment";
+  // One-sentence rationale for the verdict. Appears at the bottom of
+  // the review body so humans see why the bot decided what it decided.
+  verdict_reason: string;
 }
 
 export interface CodexThreadSummary {

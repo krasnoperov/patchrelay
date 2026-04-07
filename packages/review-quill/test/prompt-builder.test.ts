@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { renderDiffContextLines } from "../src/diff-context/index.ts";
 import { renderReviewPrompt } from "../src/prompt-builder/index.ts";
 import type { ReviewContext } from "../src/types.ts";
 
@@ -23,9 +24,7 @@ function baseContext(): Omit<ReviewContext, "prompt"> {
       reviewDocs: ["REVIEW_WORKFLOW.md", "CLAUDE.md", "AGENTS.md"],
       diffIgnore: [],
       diffSummarizeOnly: ["package-lock.json"],
-      maxPatchLines: 400,
-      maxPatchBytes: 24_000,
-      maxFilesWithFullPatch: 20,
+      patchBodyBudgetTokens: 75_000,
     },
     pr: {
       number: 42,
@@ -103,10 +102,25 @@ test("renderReviewPrompt includes explicit guidance docs and suppressed summarie
 
   assert.match(prompt, /AGENTS\.md/);
   assert.match(prompt, /REVIEW_WORKFLOW\.md/);
-  assert.match(prompt, /package-lock\.json .*omitted: summarize_only_policy/);
+  assert.match(prompt, /package-lock\.json .*— summary only by rule/);
   assert.doesNotMatch(prompt, /lockfile patch body/);
   assert.match(prompt, /src\/service\.ts/);
   assert.match(prompt, /Earlier note/);
   assert.match(prompt, /Linked issue keys detected: TST-28/);
   assert.match(prompt, /linear` MCP tool is available/);
+});
+
+test("renderReviewPrompt embeds renderDiffContextLines verbatim (CLI/LLM parity lock)", () => {
+  // The `review-quill diff` CLI and the LLM prompt must render the diff
+  // portion identically. They achieve this by both calling
+  // `renderDiffContextLines(diff)`. This test locks that property — if
+  // anyone ever re-inlines the rendering in prompt-builder/render.ts
+  // (as happened once before), this assertion fails loudly.
+  const context = baseContext();
+  const prompt = renderReviewPrompt(context);
+  const diffSection = renderDiffContextLines(context.diff).join("\n");
+  assert.ok(
+    prompt.includes(diffSection),
+    "renderReviewPrompt output must contain renderDiffContextLines output as a substring",
+  );
 });
