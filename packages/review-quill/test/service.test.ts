@@ -6,6 +6,7 @@ import {
   classifyPublicationDisposition,
   filterFindings,
   hasMatchingLatestReviewForHead,
+  preserveRequestedChangesOnRereview,
   resolveEvent,
 } from "../src/service.ts";
 import { normalizeVerdict } from "../src/review-runner.ts";
@@ -423,6 +424,48 @@ test("resolveEvent enforces 'nits never block'", () => {
       }),
       [],
     ),
+    "COMMENT",
+  );
+});
+
+test("preserveRequestedChangesOnRereview upgrades comment to request changes after our older blocking review", () => {
+  const reviews = [
+    {
+      id: 1,
+      authorLogin: "review-quill",
+      state: "CHANGES_REQUESTED",
+      commitId: "old-head",
+    },
+  ];
+
+  assert.equal(
+    preserveRequestedChangesOnRereview({
+      reviews,
+      reviewerLogin: "review-quill",
+      headSha: "new-head",
+      event: "COMMENT",
+    }),
+    "REQUEST_CHANGES",
+  );
+});
+
+test("preserveRequestedChangesOnRereview leaves first-pass comments alone", () => {
+  const reviews = [
+    {
+      id: 1,
+      authorLogin: "review-quill",
+      state: "COMMENTED",
+      commitId: "old-head",
+    },
+  ];
+
+  assert.equal(
+    preserveRequestedChangesOnRereview({
+      reviews,
+      reviewerLogin: "review-quill",
+      headSha: "new-head",
+      event: "COMMENT",
+    }),
     "COMMENT",
   );
 });

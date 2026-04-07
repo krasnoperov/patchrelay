@@ -31,6 +31,7 @@ export function runtimeLabel(runtime: ReviewQuillRuntimeStatus): string {
 }
 
 export function attemptStateColor(attempt: ReviewAttemptRecord): string {
+  if (attempt.stale) return "red";
   if (attempt.status === "running") return "yellow";
   if (attempt.status === "queued") return "cyan";
   if (attempt.status === "failed") return "red";
@@ -41,6 +42,7 @@ export function attemptStateColor(attempt: ReviewAttemptRecord): string {
 }
 
 export function attemptLabel(attempt: ReviewAttemptRecord): string {
+  if (attempt.stale) return `stale-${attempt.status}`;
   if (attempt.status === "completed" && attempt.conclusion === "approved") return "approved";
   if (attempt.status === "completed" && attempt.conclusion === "declined") return "changes";
   if (attempt.status === "completed" && attempt.conclusion === "error") return "error";

@@ -1,5 +1,9 @@
 import { spawnSync } from "node:child_process";
+import pino from "pino";
 import { loadConfig } from "./config.ts";
+import { decorateAttempt } from "./attempt-state.ts";
+import { SqliteStore } from "./db/sqlite-store.ts";
+import { CodexAppServerClient } from "./codex-app-server.ts";
 import {
   checkExecutable,
   checkPath,
@@ -25,7 +29,7 @@ import {
 } from "./diff-context/index.ts";
 import { installServiceUnit, initializeReviewQuillHome, upsertRepoConfig } from "./install.ts";
 import { getDefaultConfigPath, getReviewQuillPathLayout } from "./runtime-paths.ts";
-import type { ReviewQuillRepositoryConfig } from "./types.ts";
+import type { CodexThreadSummary, ReviewAttemptRecord, ReviewQuillConfig, ReviewQuillRepositoryConfig } from "./types.ts";
 
 type HelpTopic = "root" | "repo" | "service";
 type Output = Pick<NodeJS.WriteStream, "write">;
@@ -39,6 +43,7 @@ interface RunCliOptions {
   stdout?: Output;
   stderr?: Output;
   runCommand?: CommandRunner;
+  readCodexThread?: (threadId: string) => Promise<CodexThreadSummary>;
 }
 
 class UsageError extends Error {
@@ -113,6 +118,8 @@ function rootHelpText(): string {
     "                                                          Create or update a watched repository and restart the service",
     "  repo list [--json]                                     List watched repositories",
     "  repo show <id> [--json]                                Show one repo config",
+    "  attempts <repo> <pr-number> [--json]                   Show recorded review attempts for one pull request",
+    "  transcript <repo> <pr-number> [--attempt <id>] [--json]  Show the full Codex thread for one recorded review attempt",
     "  doctor [--repo <id>] [--json]                          Validate config, secrets, binaries, and service reachability",
     "  service status [--json]                                Show systemd state and local health",
     "  service logs [--lines <count>] [--json]                Show recent journal logs",
@@ -211,6 +218,15 @@ function formatJson(value: unknown): string {
   return `${JSON.stringify(value, null, 2)}\n`;
 }
 
+function withAttemptState(attempt: ReviewAttemptRecord, config: ReviewQuillConfig): ReviewAttemptRecord {
+  return decorateAttempt(attempt, {
+    policy: {
+      queuedAfterMs: config.reconciliation.staleQueuedAfterMs,
+      runningAfterMs: config.reconciliation.staleRunningAfterMs,
+    },
+  });
+}
+
 function writeUsageError(stream: Output, error: UsageError): void {
   writeOutput(stream, `${helpTextFor(error.helpTopic)}\n\nError: ${error.message}\n`);
 }
@@ -300,6 +316,12 @@ function validateFlags(parsed: ParsedArgs): void {
     case "doctor":
       assertKnownFlags(parsed, "root", ["repo", "json"]);
       return;
+    case "attempts":
+      assertKnownFlags(parsed, "root", ["json"]);
+      return;
+    case "transcript":
+      assertKnownFlags(parsed, "root", ["attempt", "json"]);
+      return;
     case "diff":
       assertKnownFlags(parsed, "root", [
         "repo",
@@ -359,6 +381,16 @@ function normalizePublicBaseUrl(value: string): string {
     throw new UsageError(`Public base URL must include http:// or https://. Received: ${value}`);
   }
   return trimmed;
+}
+
+function parsePullRequestNumber(value: string | undefined): number {
+  if (!value?.trim()) {
+    throw new UsageError("review-quill attempts requires <repo> <pr-number>.");
+  }
+  if (!/^\d+$/.test(value.trim())) {
+    throw new UsageError(`PR number must be a positive integer. Received: ${value}`);
+  }
+  return Number(value.trim());
 }
 
 function deriveRepoId(repoFullName: string): string {
@@ -1049,6 +1081,257 @@ async function handleDiff(parsed: ParsedArgs, stdout: Output): Promise<number> {
   return 0;
 }
 
+async function handleAttempts(parsed: ParsedArgs, stdout: Output): Promise<number> {
+  const repoRef = parsed.positionals[1];
+  const prNumber = parsePullRequestNumber(parsed.positionals[2]);
+  if (!repoRef) {
+    throw new UsageError("review-quill attempts requires <repo> <pr-number>.");
+  }
+
+  const configPath = process.env.REVIEW_QUILL_CONFIG ?? getDefaultConfigPath();
+  const config = loadConfig(configPath);
+  const { repo } = loadRepoConfigById(repoRef);
+  const store = new SqliteStore(config.database.path);
+  try {
+    const attempts = store.listAttemptsForPullRequest(repo.repoFullName, prNumber, 50)
+      .map((attempt) => withAttemptState(attempt, config));
+    const payload = {
+      repoId: repo.repoId,
+      repoFullName: repo.repoFullName,
+      prNumber,
+      attempts,
+    };
+
+    if (parsed.flags.get("json") === true) {
+      writeOutput(stdout, formatJson(payload));
+      return 0;
+    }
+
+    const lines = [
+      `Repo: ${repo.repoFullName}`,
+      `PR: #${prNumber}`,
+      `Attempts: ${attempts.length}`,
+    ];
+
+    if (attempts.length === 0) {
+      lines.push("");
+      lines.push("No recorded review attempts.");
+      writeOutput(stdout, `${lines.join("\n")}\n`);
+      return 0;
+    }
+
+    lines.push("");
+    lines.push("Review workspaces are disposable temp worktrees, so old attempts expose Codex thread ids rather than a stable reopen path.");
+
+    for (const attempt of attempts) {
+      lines.push("");
+      lines.push(
+        [
+          `attempt #${attempt.id}`,
+          attempt.stale ? "stale" : undefined,
+          attempt.status,
+          attempt.conclusion ?? undefined,
+          attempt.completedAt ? `${attempt.createdAt} -> ${attempt.completedAt}` : `${attempt.createdAt} -> running`,
+        ].filter(Boolean).join("  "),
+      );
+      lines.push(`Head SHA: ${attempt.headSha}`);
+      if (attempt.threadId) {
+        lines.push(`Thread: ${attempt.threadId}`);
+        lines.push(`Catalog: search Codex old sessions for thread ${attempt.threadId}`);
+      }
+      if (attempt.turnId) {
+        lines.push(`Turn: ${attempt.turnId}`);
+      }
+      if (attempt.externalCheckRunId !== undefined) {
+        lines.push(`Check run: ${attempt.externalCheckRunId}`);
+      }
+      lines.push(`Updated: ${attempt.updatedAt}`);
+      if (attempt.staleReason) {
+        lines.push(`Stale: ${attempt.staleReason}`);
+      }
+      lines.push(`Summary: ${attempt.summary ?? "No summary captured."}`);
+    }
+
+    writeOutput(stdout, `${lines.join("\n")}\n`);
+    return 0;
+  } finally {
+    store.close();
+  }
+}
+
+function parseAttemptId(value: string | boolean | undefined): number | undefined {
+  if (value === undefined || value === false) {
+    return undefined;
+  }
+  if (value === true || typeof value !== "string" || !/^\d+$/.test(value.trim())) {
+    throw new UsageError(`Attempt id must be a positive integer. Received: ${String(value)}`);
+  }
+  return Number(value.trim());
+}
+
+function selectTranscriptAttempt(
+  attempts: ReviewAttemptRecord[],
+  attemptId?: number,
+): { attempt: ReviewAttemptRecord; notice?: string } {
+  if (attemptId !== undefined) {
+    const match = attempts.find((attempt) => attempt.id === attemptId);
+    if (!match) {
+      throw new UsageError(`No recorded review attempt #${attemptId} for that pull request.`);
+    }
+    return { attempt: match };
+  }
+
+  const latest = attempts[0];
+  const withThread = attempts.find((attempt) => attempt.threadId);
+  if (withThread) {
+    return {
+      attempt: withThread,
+      ...(latest && latest.id !== withThread.id && latest.stale && !latest.threadId
+        ? {
+          notice: `Newest attempt #${latest.id} is stale and has no stored Codex thread. Showing latest attempt with a stored thread instead (#${withThread.id}).`,
+        }
+        : {}),
+    };
+  }
+
+  if (latest?.stale) {
+    throw new UsageError(`Newest attempt #${latest.id} is stale and has no stored Codex thread. ${latest.staleReason ?? ""}`.trim());
+  }
+
+  throw new UsageError("No recorded review attempt with a stored Codex thread was found for that pull request.");
+}
+
+function formatTranscriptText(params: {
+  repoFullName: string;
+  prNumber: number;
+  attempt: ReviewAttemptRecord;
+  thread: CodexThreadSummary;
+  notice?: string;
+}): string {
+  const formatUserMessage = (item: Record<string, unknown>): string | undefined => {
+    const content = item.content;
+    if (!Array.isArray(content)) {
+      return undefined;
+    }
+
+    const textParts = content
+      .map((entry) => {
+        if (!entry || typeof entry !== "object") {
+          return undefined;
+        }
+        const value = (entry as Record<string, unknown>).text;
+        return typeof value === "string" ? value : undefined;
+      })
+      .filter((value): value is string => Boolean(value));
+
+    return textParts.length > 0 ? textParts.join("\n\n") : undefined;
+  };
+
+  const lines = [
+    `Repo: ${params.repoFullName}`,
+    `PR: #${params.prNumber}`,
+    `Attempt: #${params.attempt.id}`,
+    `Status: ${params.attempt.status}${params.attempt.conclusion ? ` (${params.attempt.conclusion})` : ""}`,
+    `Head SHA: ${params.attempt.headSha}`,
+    `Thread: ${params.thread.id}`,
+    params.attempt.turnId ? `Recorded turn: ${params.attempt.turnId}` : undefined,
+    params.attempt.staleReason ? `Stale: ${params.attempt.staleReason}` : undefined,
+    params.notice,
+    "",
+  ].filter(Boolean) as string[];
+
+  for (const [index, turn] of params.thread.turns.entries()) {
+    lines.push(`Turn ${index + 1}: ${turn.id} [${turn.status}]`);
+    for (const item of turn.items) {
+      if (item.type === "userMessage") {
+        lines.push(`user (${item.id}):`);
+        lines.push(formatUserMessage(item as Record<string, unknown>) ?? JSON.stringify(item, null, 2));
+      } else if (item.type === "agentMessage" && typeof item.text === "string") {
+        const phaseValue = (item as Record<string, unknown>).phase;
+        const phase = typeof phaseValue === "string" ? ` [${phaseValue}]` : "";
+        lines.push(`assistant (${item.id})${phase}:`);
+        lines.push(item.text);
+      } else {
+        lines.push(`item ${item.type} (${item.id}):`);
+        lines.push(JSON.stringify(item, null, 2));
+      }
+      lines.push("");
+    }
+  }
+
+  return `${lines.join("\n").trimEnd()}\n`;
+}
+
+async function handleTranscript(
+  parsed: ParsedArgs,
+  stdout: Output,
+  readCodexThread?: (threadId: string) => Promise<CodexThreadSummary>,
+): Promise<number> {
+  const repoRef = parsed.positionals[1];
+  const prNumber = parsePullRequestNumber(parsed.positionals[2]);
+  if (!repoRef) {
+    throw new UsageError("review-quill transcript requires <repo> <pr-number>.");
+  }
+
+  const configPath = process.env.REVIEW_QUILL_CONFIG ?? getDefaultConfigPath();
+  const config = loadConfig(configPath);
+  const { repo } = loadRepoConfigById(repoRef);
+  const attemptId = parseAttemptId(parsed.flags.get("attempt"));
+  const store = new SqliteStore(config.database.path);
+
+  try {
+    const attempts = store.listAttemptsForPullRequest(repo.repoFullName, prNumber, 50)
+      .map((entry) => withAttemptState(entry, config));
+    if (attempts.length === 0) {
+      throw new UsageError("No recorded review attempts were found for that pull request.");
+    }
+
+    const selection = selectTranscriptAttempt(attempts, attemptId);
+    const { attempt } = selection;
+    if (!attempt.threadId) {
+      throw new UsageError(
+        `Review attempt #${attempt.id} does not have a stored Codex thread id.${attempt.staleReason ? ` ${attempt.staleReason}` : ""}`,
+      );
+    }
+
+    const thread = readCodexThread
+      ? await readCodexThread(attempt.threadId)
+      : await (async () => {
+        const client = new CodexAppServerClient(config.codex, pino({ level: "silent" }));
+        await client.start();
+        try {
+          return await client.readThread(attempt.threadId!);
+        } finally {
+          await client.stop();
+        }
+      })();
+
+    const payload = {
+      repoId: repo.repoId,
+      repoFullName: repo.repoFullName,
+      prNumber,
+      attempt,
+      thread,
+    };
+
+    if (parsed.flags.get("json") === true) {
+      writeOutput(stdout, formatJson(payload));
+      return 0;
+    }
+
+    writeOutput(stdout, formatTranscriptText({
+      repoFullName: repo.repoFullName,
+      prNumber,
+      attempt,
+      thread,
+      ...(selection.notice ? { notice: selection.notice } : {}),
+    }));
+    return 0;
+  } finally {
+    store.close();
+  }
+}
+
 async function handleService(parsed: ParsedArgs, stdout: Output, runCommand: CommandRunner): Promise<number> {
   const subcommand = parsed.positionals[1];
   if (!subcommand) {
@@ -1252,6 +1535,10 @@ export async function runCli(args: string[], options?: RunCliOptions): Promise<n
       }
       case "doctor":
         return await handleDoctor(parsed, stdout, runCommand);
+      case "attempts":
+        return await handleAttempts(parsed, stdout);
+      case "transcript":
+        return await handleTranscript(parsed, stdout, options?.readCodexThread);
       case "diff":
         return await handleDiff(parsed, stdout);
       case "service":

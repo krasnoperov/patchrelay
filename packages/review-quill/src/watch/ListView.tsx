@@ -18,6 +18,7 @@ function AttemptRow({ attempt, selected }: { attempt: ReviewAttemptRecord; selec
         <Text>{` `}</Text>
         <Text color={attemptStateColor(attempt)}>{attemptLabel(attempt)}</Text>
         {attempt.status === "superseded" ? <Text dimColor>{` stale-head`}</Text> : null}
+        {attempt.stale ? <Text dimColor>{` stale-worker`}</Text> : null}
         <Text dimColor>{` ${relativeTime(attempt.updatedAt)} ago`}</Text>
       </Box>
     );

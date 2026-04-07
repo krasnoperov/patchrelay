@@ -23,6 +23,7 @@ export function DetailView({ detail }: DetailViewProps): React.JSX.Element {
         <Text>Status: </Text>
         <Text color={attemptStateColor(attempt)}>{attemptLabel(attempt)}</Text>
       </Box>
+      {attempt.staleReason ? <Text>{`Stale: ${attempt.staleReason}`}</Text> : null}
       <Text>{`Head SHA: ${formatSha(attempt.headSha)}`}</Text>
       <Text>{`Created: ${attempt.createdAt} (${relativeTime(attempt.createdAt)} ago)`}</Text>
       <Text>{`Updated: ${attempt.updatedAt} (${relativeTime(attempt.updatedAt)} ago)`}</Text>
