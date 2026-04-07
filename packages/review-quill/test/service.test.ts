@@ -8,6 +8,7 @@ import {
   hasMatchingLatestReviewForHead,
   preserveRequestedChangesOnRereview,
   resolveEvent,
+  shouldRecoverNonDecisiveRereview,
 } from "../src/service.ts";
 import { normalizeVerdict } from "../src/review-runner.ts";
 import { extractFirstJsonObject, forgivingJsonParse, sanitizeJsonPayload } from "../src/utils.ts";
@@ -108,6 +109,23 @@ test("hasMatchingLatestReviewForHead matches COMMENTED state for comment event",
   ];
   assert.equal(hasMatchingLatestReviewForHead(reviews, "review-quill", "head-sha", "COMMENT"), true);
   assert.equal(hasMatchingLatestReviewForHead(reviews, "review-quill", "head-sha", "APPROVE"), false);
+});
+
+test("hasMatchingLatestReviewForHead matches bot-authored reviews against the app slug", () => {
+  const reviews = [
+    {
+      id: 1,
+      authorLogin: "review-quill[bot]",
+      state: "COMMENTED",
+      commitId: "head-sha",
+      body: "Walkthrough v1",
+    },
+  ];
+
+  assert.equal(
+    hasMatchingLatestReviewForHead(reviews, "review-quill", "head-sha", "COMMENT", "Walkthrough v1"),
+    true,
+  );
 });
 
 test("classifyPublicationDisposition marks stale heads as superseded", () => {
@@ -449,6 +467,27 @@ test("preserveRequestedChangesOnRereview upgrades comment to request changes aft
   );
 });
 
+test("preserveRequestedChangesOnRereview matches GitHub bot logins against the app slug", () => {
+  const reviews = [
+    {
+      id: 1,
+      authorLogin: "review-quill[bot]",
+      state: "CHANGES_REQUESTED",
+      commitId: "old-head",
+    },
+  ];
+
+  assert.equal(
+    preserveRequestedChangesOnRereview({
+      reviews,
+      reviewerLogin: "review-quill",
+      headSha: "new-head",
+      event: "COMMENT",
+    }),
+    "REQUEST_CHANGES",
+  );
+});
+
 test("preserveRequestedChangesOnRereview leaves first-pass comments alone", () => {
   const reviews = [
     {
@@ -467,6 +506,54 @@ test("preserveRequestedChangesOnRereview leaves first-pass comments alone", () =
       event: "COMMENT",
     }),
     "COMMENT",
+  );
+});
+
+test("shouldRecoverNonDecisiveRereview requests a replay for a comment on the current head after older blocking review", () => {
+  const reviews = [
+    {
+      id: 1,
+      authorLogin: "review-quill[bot]",
+      state: "CHANGES_REQUESTED",
+      commitId: "old-head",
+    },
+    {
+      id: 2,
+      authorLogin: "review-quill[bot]",
+      state: "COMMENTED",
+      commitId: "new-head",
+    },
+  ];
+
+  assert.equal(
+    shouldRecoverNonDecisiveRereview({
+      attempt: { status: "completed", conclusion: "skipped" },
+      reviews,
+      reviewerLogin: "review-quill",
+      headSha: "new-head",
+    }),
+    true,
+  );
+});
+
+test("shouldRecoverNonDecisiveRereview ignores already-decisive or non-comment outcomes", () => {
+  const reviews = [
+    {
+      id: 1,
+      authorLogin: "review-quill[bot]",
+      state: "CHANGES_REQUESTED",
+      commitId: "old-head",
+    },
+  ];
+
+  assert.equal(
+    shouldRecoverNonDecisiveRereview({
+      attempt: { status: "completed", conclusion: "declined" },
+      reviews,
+      reviewerLogin: "review-quill",
+      headSha: "new-head",
+    }),
+    false,
   );
 });
 
