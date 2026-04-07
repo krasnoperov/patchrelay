@@ -745,6 +745,87 @@ test("reconcileRun recovers interrupted implementation runs to pr_open when a PR
   }
 });
 
+test("reconcileRun recovers interrupted implementation runs even when reconciliation sees a locally-owned lease", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-interrupted-owned-lease-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-14b",
+      issueKey: "USE-14B",
+      branchName: "feat-interrupted-owned",
+      prNumber: 141,
+      prState: "open",
+      prCheckStatus: "success",
+      factoryState: "implementing",
+    });
+    const issue = db.getIssue("usertold", "issue-14b");
+    assert.ok(issue);
+    const run = db.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "implementation",
+      promptText: "Implement USE-14B",
+    });
+    db.updateRunThread(run.id, { threadId: "thread-14b", turnId: "turn-14b" });
+    db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      activeRunId: run.id,
+      factoryState: "implementing",
+    });
+
+    const orchestrator = new RunOrchestrator(
+      config,
+      db,
+      {
+        startThread: async () => ({ threadId: "thread-14b" }),
+        steerTurn: async () => undefined,
+        readThread: async () => ({
+          id: "thread-14b",
+          turns: [{ id: "turn-14b", status: "interrupted" }],
+        }),
+      } as never,
+      { forProject: async () => undefined } as never,
+      () => undefined,
+      pino({ enabled: false }),
+    );
+
+    const leaseId = "lease-interrupted-owned";
+    assert.equal(
+      db.acquireIssueSessionLease({
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        leaseId,
+        workerId: "worker-interrupted-owned",
+        leasedUntil: "2030-04-06T10:05:00.000Z",
+        now: "2030-04-06T10:00:00.000Z",
+      }),
+      true,
+    );
+    ((orchestrator as unknown as { activeSessionLeases: Map<string, string> }).activeSessionLeases)
+      .set(`${issue.projectId}:${issue.linearIssueId}`, leaseId);
+
+    await (orchestrator as unknown as { reconcileRun: (run: ReturnType<typeof db.createRun>) => Promise<void> }).reconcileRun(
+      db.getRun(run.id)!,
+    );
+
+    const updatedIssue = db.getIssue("usertold", "issue-14b");
+    const updatedRun = db.getRun(run.id);
+    const session = db.getIssueSession(issue.projectId, issue.linearIssueId);
+    assert.equal(updatedIssue?.factoryState, "pr_open");
+    assert.equal(updatedIssue?.activeRunId, undefined);
+    assert.equal(updatedRun?.status, "failed");
+    assert.equal(updatedRun?.failureReason, "Codex turn was interrupted");
+    assert.equal(session?.leaseId, undefined);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("reconcileRun keeps interrupted ci_repair runs in repairing_ci when the PR is still failing", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-interrupted-ci-"));
   try {

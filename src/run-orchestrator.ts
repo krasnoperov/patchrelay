@@ -1549,6 +1549,7 @@ export class RunOrchestrator {
     if (!issue) return;
     const recoveryLease = this.claimLeaseForReconciliation(run.projectId, run.linearIssueId);
     if (recoveryLease === "skip") return;
+    const acquiredRecoveryLease = recoveryLease === true;
 
     // If the issue reached a terminal state while this run was active
     // (e.g. pr_merged processed, DB manually edited), just release the run.
@@ -1560,7 +1561,7 @@ export class RunOrchestrator {
       this.logger.info({ issueKey: issue.issueKey, runId: run.id, factoryState: issue.factoryState }, "Reconciliation: released run on terminal issue");
       const releasedIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
       void this.linearSync.syncSession(releasedIssue, { activeRunType: run.runType });
-      if (recoveryLease) this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
+      this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
       return;
     }
 
@@ -1578,7 +1579,7 @@ export class RunOrchestrator {
       const recoveredIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
       void this.linearSync.emitActivity(recoveredIssue, buildRunFailureActivity(run.runType, "The Codex turn never started before PatchRelay restarted."));
       void this.linearSync.syncSession(recoveredIssue, { activeRunType: run.runType });
-      if (recoveryLease) this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
+      this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
       return;
     }
 
@@ -1599,7 +1600,7 @@ export class RunOrchestrator {
       const recoveredIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
       void this.linearSync.emitActivity(recoveredIssue, buildRunFailureActivity(run.runType, "PatchRelay lost the active Codex thread after restart and needs to recover."));
       void this.linearSync.syncSession(recoveredIssue, { activeRunType: run.runType });
-      if (recoveryLease) this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
+      this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
       return;
     }
 
@@ -1631,7 +1632,7 @@ export class RunOrchestrator {
           });
           const doneIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
           void this.linearSync.syncSession(doneIssue, { activeRunType: run.runType });
-          if (recoveryLease) this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
+          this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
           return;
         }
       }
@@ -1680,7 +1681,7 @@ export class RunOrchestrator {
       });
       if (!repairedCounters) {
         this.logger.warn({ runId: run.id, issueId: run.linearIssueId }, "Skipping interrupted-run recovery after losing issue-session lease");
-        if (recoveryLease) this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
+        this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
         return;
       }
       const recoveredState = resolveRecoverablePostRunState(this.db.getIssue(run.projectId, run.linearIssueId) ?? issue);
@@ -1701,7 +1702,7 @@ export class RunOrchestrator {
         void this.linearSync.emitActivity(failedIssue, buildRunFailureActivity(run.runType, "The Codex turn was interrupted."));
       }
       void this.linearSync.syncSession(failedIssue, { activeRunType: run.runType });
-      if (recoveryLease) this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
+      this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
       return;
     }
 
@@ -1731,7 +1732,7 @@ export class RunOrchestrator {
         const heldIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? freshIssue;
         void this.linearSync.emitActivity(heldIssue, buildRunFailureActivity(run.runType, verifiedRepairError));
         void this.linearSync.syncSession(heldIssue, { activeRunType: run.runType });
-        if (recoveryLease) this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
+        this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
         return;
       }
       const publishedOutcomeError = await this.verifyPublishedRunOutcome(run, freshIssue);
@@ -1749,7 +1750,7 @@ export class RunOrchestrator {
         const failedIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? freshIssue;
         void this.linearSync.emitActivity(failedIssue, buildRunFailureActivity(run.runType, publishedOutcomeError));
         void this.linearSync.syncSession(failedIssue, { activeRunType: run.runType });
-        if (recoveryLease) this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
+        this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
         return;
       }
       const refreshedIssue = await this.refreshIssueAfterReactivePublish(run, freshIssue);
@@ -1798,7 +1799,7 @@ export class RunOrchestrator {
       });
       if (!reconciled) {
         this.logger.warn({ runId: run.id, issueId: run.linearIssueId }, "Skipping reconciled completion writes after losing issue-session lease");
-        if (recoveryLease) this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
+        this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
         return;
       }
       if (postRunFollowUp) {
@@ -1833,11 +1834,11 @@ export class RunOrchestrator {
         ...(updatedIssue.prNumber !== undefined ? { prNumber: updatedIssue.prNumber } : {}),
       }));
       void this.linearSync.syncSession(updatedIssue);
-      if (recoveryLease) this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
+      this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
       return;
     }
 
-    if (recoveryLease) this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
+    if (acquiredRecoveryLease) this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
   }
 
   // ─── Internal helpers ─────────────────────────────────────────────
@@ -2342,10 +2343,10 @@ export class RunOrchestrator {
     return leaseId;
   }
 
-  private claimLeaseForReconciliation(projectId: string, linearIssueId: string): boolean | "skip" {
+  private claimLeaseForReconciliation(projectId: string, linearIssueId: string): boolean | "owned" | "skip" {
     const key = this.issueSessionLeaseKey(projectId, linearIssueId);
     if (this.activeSessionLeases.has(key)) {
-      return "skip";
+      return "owned";
     }
     const session = this.db.getIssueSession(projectId, linearIssueId);
     if (!session) return "skip";
