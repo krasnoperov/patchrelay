@@ -318,7 +318,8 @@ export class WebhookHandler {
       && existingIssue?.factoryState === "awaiting_input"
       && !undelegation.factoryState;
 
-    const clearPending = (unresolvedBlockers > 0 && existingIssue?.pendingRunType === "implementation" && !activeRun)
+    const existingWakeRunType = existingIssue ? this.peekPendingSessionWakeRunType(project.id, normalizedIssue.id) : undefined;
+    const clearPending = (unresolvedBlockers > 0 && existingWakeRunType === "implementation" && !activeRun)
       || undelegation.clearPending;
 
     const agentSessionId = decideAgentSession({
@@ -440,7 +441,9 @@ export class WebhookHandler {
 
       const unresolved = this.db.countUnresolvedBlockers(projectId, dependent.linearIssueId);
       if (unresolved > 0) {
-        if (issue.pendingRunType === "implementation" && issue.activeRunId === undefined && !this.db.hasPendingIssueSessionEvents(projectId, dependent.linearIssueId)) {
+        if (this.peekPendingSessionWakeRunType(projectId, dependent.linearIssueId) === "implementation"
+          && issue.activeRunId === undefined
+          && !this.db.hasPendingIssueSessionEvents(projectId, dependent.linearIssueId)) {
           this.db.upsertIssue({
             projectId,
             linearIssueId: dependent.linearIssueId,
@@ -455,7 +458,7 @@ export class WebhookHandler {
         continue;
       }
 
-      if (issue.pendingRunType === "implementation") {
+      if (this.peekPendingSessionWakeRunType(projectId, dependent.linearIssueId) === "implementation") {
         this.db.upsertIssue({
           projectId,
           linearIssueId: dependent.linearIssueId,
@@ -850,7 +853,10 @@ export class WebhookHandler {
               plan: buildAgentSessionPlanForIssue(
                 {
                   factoryState: issue.factoryState,
-                  pendingRunType: options?.pendingRunType ?? ("pendingRunType" in issue ? issue.pendingRunType : undefined),
+                  pendingRunType: options?.pendingRunType ?? this.peekPendingSessionWakeRunType(
+                    issue.projectId,
+                    issue.linearIssueId,
+                  ),
                   ciRepairAttempts: "ciRepairAttempts" in issue ? issue.ciRepairAttempts : 0,
                   queueRepairAttempts: "queueRepairAttempts" in issue ? issue.queueRepairAttempts : 0,
                 },
