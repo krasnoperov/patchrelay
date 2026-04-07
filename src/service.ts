@@ -320,12 +320,15 @@ export class PatchRelayService {
       }
 
       if (unresolvedBlockers === 0) {
-        updated = this.db.upsertIssue({
+        this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
           projectId: issue.projectId,
           linearIssueId: issue.linearIssueId,
-          pendingRunType: "implementation" as never,
+          eventType: "delegated",
+          dedupeKey: `delegated:${issue.linearIssueId}`,
         });
-        this.runtime.enqueueIssue(issue.projectId, issue.linearIssueId);
+        if (this.db.peekIssueSessionWake(issue.projectId, issue.linearIssueId)) {
+          this.runtime.enqueueIssue(issue.projectId, issue.linearIssueId);
+        }
         this.logger.info({ issueKey: updated.issueKey }, "Recovered delegated issue from stale awaiting_input state and re-queued implementation");
       } else {
         this.logger.info({ issueKey: updated.issueKey, unresolvedBlockers }, "Recovered delegated blocked issue from stale awaiting_input state");
@@ -766,7 +769,6 @@ export class PatchRelayService {
     this.db.upsertIssueRespectingActiveLease(issue.projectId, issue.linearIssueId, {
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
-      pendingRunType: runType as never,
       factoryState: factoryState as never,
     });
     this.feed.publish({
@@ -778,7 +780,9 @@ export class PatchRelayService {
       status: "retry",
       summary: `Retry queued: ${runType}`,
     });
-    this.runtime.enqueueIssue(issue.projectId, issue.linearIssueId);
+    if (this.db.peekIssueSessionWake(issue.projectId, issue.linearIssueId)) {
+      this.runtime.enqueueIssue(issue.projectId, issue.linearIssueId);
+    }
     return { issueKey, runType };
   }
 

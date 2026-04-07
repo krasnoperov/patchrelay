@@ -256,7 +256,9 @@ test("delegated blocked issue is tracked but does not queue implementation until
     await handler.processWebhookEvent(blockerDoneEvent.id);
 
     const unblockedIssue = db.getIssue("krasnoperov/mafia", "issue-maf-40");
-    assert.equal(unblockedIssue?.pendingRunType, "implementation");
+    const unblockedWake = db.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-40");
+    assert.equal(unblockedIssue?.pendingRunType, undefined);
+    assert.equal(unblockedWake?.runType, "implementation");
     assert.deepEqual(db.listIssuesReadyForExecution(), [{ projectId: "krasnoperov/mafia", linearIssueId: "issue-maf-40" }]);
     assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-40" }]);
   } finally {
@@ -1448,7 +1450,9 @@ test("agent session creation before delegation persists the session id for later
 
     const delegatedIssue = db.getIssue("krasnoperov/mafia", "issue-maf-session");
     assert.equal(delegatedIssue?.agentSessionId, "session-94");
-    assert.equal(delegatedIssue?.pendingRunType, "implementation");
+    const delegatedWake = db.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-session");
+    assert.equal(delegatedIssue?.pendingRunType, undefined);
+    assert.equal(delegatedWake?.runType, "implementation");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -1566,8 +1570,10 @@ test("issueCreated recovers delegated startup after an early agent session left 
     await handler.processWebhookEvent(issueCreatedEvent.id);
 
     const recoveredIssue = db.getIssue("krasnoperov/mafia", "issue-maf-startup");
-    assert.equal(recoveredIssue?.pendingRunType, "implementation");
+    const recoveredWake = db.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-startup");
+    assert.equal(recoveredIssue?.pendingRunType, undefined);
     assert.equal(recoveredIssue?.factoryState, "delegated");
+    assert.equal(recoveredWake?.runType, "implementation");
     assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-startup" }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });

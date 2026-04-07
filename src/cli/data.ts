@@ -10,6 +10,7 @@ import type {
   AppConfig,
   CodexThreadItem,
   CodexThreadSummary,
+  IssueRecord,
   StageReport,
   RunRecord,
   TrackedIssueRecord,
@@ -114,6 +115,16 @@ function summarizeThread(thread: CodexThreadSummary, latestTimestampSeen?: strin
 function latestEventTimestamp(db: PatchRelayDatabase, runId: number): string | undefined {
   const events = db.listThreadEvents(runId);
   return events.at(-1)?.createdAt;
+}
+
+function parseObjectJson(value: string | undefined): Record<string, unknown> | undefined {
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 // resolveStageFromState removed — factory state replaces workflow stage resolution
@@ -271,14 +282,75 @@ export class CliDataAccess extends CliOperatorApiClient {
           ? "changes_requested"
           : "delegated";
 
+    this.appendRetryWake(dbIssue, runType);
     this.db.upsertIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
-      pendingRunType: runType,
+      pendingRunType: null,
+      pendingRunContextJson: null,
       factoryState,
     });
     const updated = this.db.getTrackedIssue(issue.projectId, issue.linearIssueId)!;
     return { issue: updated, runType, ...(options?.reason ? { reason: options.reason } : {}) };
+  }
+
+  private appendRetryWake(issue: IssueRecord, runType: RunType): void {
+    if (runType === "queue_repair") {
+      const queueIncident = parseObjectJson(issue.lastQueueIncidentJson);
+      const failureContext = parseObjectJson(issue.lastGitHubFailureContextJson);
+      this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        eventType: "merge_steward_incident",
+        eventJson: JSON.stringify({
+          ...(queueIncident ?? {}),
+          ...(failureContext ?? {}),
+          source: "operator_retry",
+        }),
+        dedupeKey: `operator_retry:queue_repair:${issue.linearIssueId}:${issue.prHeadSha ?? issue.lastGitHubFailureHeadSha ?? "unknown-sha"}`,
+      });
+      return;
+    }
+
+    if (runType === "ci_repair") {
+      const failureContext = parseObjectJson(issue.lastGitHubFailureContextJson);
+      this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        eventType: "settled_red_ci",
+        eventJson: JSON.stringify({
+          ...(failureContext ?? {}),
+          source: "operator_retry",
+        }),
+        dedupeKey: `operator_retry:ci_repair:${issue.linearIssueId}:${issue.lastGitHubFailureSignature ?? issue.prHeadSha ?? "unknown-sha"}`,
+      });
+      return;
+    }
+
+    if (runType === "review_fix") {
+      this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        eventType: "review_changes_requested",
+        eventJson: JSON.stringify({
+          reviewBody: "Operator requested retry of review-fix work.",
+          source: "operator_retry",
+        }),
+        dedupeKey: `operator_retry:review_fix:${issue.linearIssueId}:${issue.prHeadSha ?? "unknown-sha"}`,
+      });
+      return;
+    }
+
+    this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      eventType: "delegated",
+      eventJson: JSON.stringify({
+        promptContext: "Operator requested retry of PatchRelay work.",
+        source: "operator_retry",
+      }),
+      dedupeKey: `operator_retry:implementation:${issue.linearIssueId}`,
+    });
   }
 
   list(options?: { active?: boolean; failed?: boolean; project?: string }): ListResultItem[] {

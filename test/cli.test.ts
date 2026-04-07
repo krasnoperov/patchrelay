@@ -745,7 +745,9 @@ test("cli list and retry cover operator control flows", async () => {
     const updated = db.getTrackedIssue("usertold", "issue-2");
     assert.equal(updated?.factoryState, "delegated");
     const updatedIssue = db.getIssue("usertold", "issue-2");
-    assert.equal(updatedIssue?.pendingRunType, "implementation");
+    const updatedWake = db.peekIssueSessionWake("usertold", "issue-2");
+    assert.equal(updatedIssue?.pendingRunType, undefined);
+    assert.equal(updatedWake?.runType, "implementation");
 
     db.upsertIssue({
       projectId: "usertold",
@@ -776,7 +778,9 @@ test("cli list and retry cover operator control flows", async () => {
 
     const queueRepairIssue = db.getIssue("usertold", "issue-queue-repair");
     assert.equal(queueRepairIssue?.factoryState, "repairing_queue");
-    assert.equal(queueRepairIssue?.pendingRunType, "queue_repair");
+    const queueRepairWake = db.peekIssueSessionWake("usertold", "issue-queue-repair");
+    assert.equal(queueRepairIssue?.pendingRunType, undefined);
+    assert.equal(queueRepairWake?.runType, "queue_repair");
 
     db.upsertIssue({
       projectId: "usertold",
@@ -804,7 +808,9 @@ test("cli list and retry cover operator control flows", async () => {
 
     const reviewFixIssue = db.getIssue("usertold", "issue-review-fix");
     assert.equal(reviewFixIssue?.factoryState, "changes_requested");
-    assert.equal(reviewFixIssue?.pendingRunType, "review_fix");
+    const reviewFixWake = db.peekIssueSessionWake("usertold", "issue-review-fix");
+    assert.equal(reviewFixIssue?.pendingRunType, undefined);
+    assert.equal(reviewFixWake?.runType, "review_fix");
 
     const inspectJson = createBufferStream();
     assert.equal(await runCli(["issue", "show", "USE-54", "--json"], { config, data, stdout: inspectJson.stream, stderr: createBufferStream().stream }), 0);
