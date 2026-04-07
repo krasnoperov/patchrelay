@@ -8,6 +8,7 @@ import {
   buildInitialRunPrompt,
   buildRunPrompt,
   resolveImplementationDeliveryMode,
+  shouldReuseIssueThread,
 } from "../src/run-orchestrator.ts";
 import type { IssueRecord } from "../src/db-types.ts";
 
@@ -127,6 +128,72 @@ test("review_fix prompt includes explicit branch upkeep guidance when the PR is 
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
+});
+
+test("review_fix prompt embeds structured inline review context", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-prompt-"));
+  try {
+    writeFileSync(path.join(baseDir, "REVIEW_WORKFLOW.md"), "# Review Workflow\n");
+
+    const prompt = buildFollowUpRunPrompt({
+      ...createIssue(),
+      factoryState: "changes_requested",
+      prNumber: 26,
+      prReviewState: "changes_requested",
+    }, "review_fix", baseDir, {
+      reviewerName: "review-quill",
+      reviewBody: "The recovery shell still shows fake standings.",
+      reviewId: 901,
+      reviewCommitId: "abc123def456",
+      reviewUrl: "https://github.com/owner/repo/pull/26#pullrequestreview-901",
+      reviewComments: [
+        {
+          body: "Blank totals should not produce a leader.",
+          path: "src/frontend/app/sessionSchema.ts",
+          line: 1526,
+          side: "RIGHT",
+          url: "https://github.com/owner/repo/pull/26#discussion_r71",
+        },
+      ],
+    });
+
+    assert.match(prompt, /## Structured Review Context/);
+    assert.match(prompt, /Review ID: 901/);
+    assert.match(prompt, /Reviewed commit: abc123def456/);
+    assert.match(prompt, /Inline review comments captured: 1/);
+    assert.match(prompt, /src\/frontend\/app\/sessionSchema\.ts:1526 \(RIGHT\)/);
+    assert.match(prompt, /Blank totals should not produce a leader\./);
+    assert.doesNotMatch(prompt, /gh pr view --comments/);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("thread reuse is limited to explicit follow-up continuity", () => {
+  assert.equal(
+    shouldReuseIssueThread({
+      existingThreadId: "thread-1",
+      compactThread: false,
+      resumeThread: false,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldReuseIssueThread({
+      existingThreadId: "thread-1",
+      compactThread: false,
+      resumeThread: true,
+    }),
+    true,
+  );
+  assert.equal(
+    shouldReuseIssueThread({
+      existingThreadId: "thread-1",
+      compactThread: true,
+      resumeThread: true,
+    }),
+    false,
+  );
 });
 
 test("buildRunPrompt switches implementation follow-ups to the follow-up prompt shape", () => {

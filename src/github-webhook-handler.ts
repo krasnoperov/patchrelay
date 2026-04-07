@@ -58,6 +58,22 @@ interface GitHubFailurePromptContext {
   annotations?: string[] | undefined;
 }
 
+interface GitHubReviewThreadComment {
+  id: number;
+  body: string;
+  path?: string | undefined;
+  line?: number | undefined;
+  side?: string | undefined;
+  startLine?: number | undefined;
+  startSide?: string | undefined;
+  commitId?: string | undefined;
+  url?: string | undefined;
+  diffHunk?: string | undefined;
+  authorLogin?: string | undefined;
+}
+
+type FetchLike = typeof fetch;
+
 export class GitHubWebhookHandler {
   private readonly patchRelayAuthorLogins = new Set<string>();
 
@@ -71,6 +87,7 @@ export class GitHubWebhookHandler {
     private readonly feed?: OperatorEventFeed,
     private readonly failureContextResolver: GitHubFailureContextResolver = createGitHubFailureContextResolver(),
     private readonly ciSnapshotResolver: GitHubCiSnapshotResolver = createGitHubCiSnapshotResolver(),
+    private readonly fetchImpl: FetchLike = fetch,
   ) {
     for (const login of resolvePatchRelayAuthorLoginsFromEnv()) {
       this.patchRelayAuthorLogins.add(login);
@@ -520,13 +537,29 @@ export class GitHubWebhookHandler {
 
     if (event.triggerEvent === "review_changes_requested") {
       const hadPendingWake = this.db.hasPendingIssueSessionEvents(issue.projectId, issue.linearIssueId);
+      const reviewComments = await this.fetchReviewCommentsForEvent(event).catch((error) => {
+        this.logger.warn(
+          {
+            issueKey: issue.issueKey,
+            prNumber: event.prNumber,
+            reviewId: event.reviewId,
+            error: error instanceof Error ? error.message : String(error),
+          },
+          "Failed to fetch inline review comments for requested-changes event",
+        );
+        return undefined;
+      });
       this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         eventType: "review_changes_requested",
         eventJson: JSON.stringify({
           reviewBody: event.reviewBody,
+          reviewCommitId: event.reviewCommitId,
+          reviewId: event.reviewId,
+          reviewUrl: buildGitHubReviewUrl(event.repoFullName, event.prNumber, event.reviewId),
           reviewerName: event.reviewerName,
+          ...(reviewComments && reviewComments.length > 0 ? { reviewComments } : {}),
         }),
         dedupeKey: [
           "review_changes_requested",
@@ -547,7 +580,9 @@ export class GitHubWebhookHandler {
         stage: "changes_requested",
         status: "review_fix_queued",
         summary: `${queuedRunType ?? "review_fix"} queued after requested changes`,
-        detail: event.reviewBody?.slice(0, 200) ?? event.reviewerName,
+        detail: reviewComments && reviewComments.length > 0
+          ? `${reviewComments.length} inline review comment${reviewComments.length === 1 ? "" : "s"} captured`
+          : event.reviewBody?.slice(0, 200) ?? event.reviewerName,
       });
     }
 
@@ -922,6 +957,77 @@ export class GitHubWebhookHandler {
     }
   }
 
+  private async fetchReviewCommentsForEvent(
+    event: NormalizedGitHubEvent,
+  ): Promise<GitHubReviewThreadComment[] | undefined> {
+    if (event.triggerEvent !== "review_changes_requested") {
+      return undefined;
+    }
+    if (!event.repoFullName || event.prNumber === undefined || event.reviewId === undefined) {
+      return undefined;
+    }
+
+    const token = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN;
+    if (!token) {
+      this.logger.debug(
+        { prNumber: event.prNumber, reviewId: event.reviewId },
+        "Skipping inline review comment fetch because no GitHub API token is available",
+      );
+      return undefined;
+    }
+
+    const [owner, repo] = event.repoFullName.split("/", 2);
+    if (!owner || !repo) {
+      return undefined;
+    }
+
+    const response = await this.fetchImpl(
+      `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${event.prNumber}/reviews/${event.reviewId}/comments?per_page=100`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/vnd.github+json",
+          "User-Agent": "patchrelay",
+          "X-GitHub-Api-Version": "2022-11-28",
+        },
+      },
+    );
+    if (!response.ok) {
+      throw new Error(`GitHub review comment fetch failed (${response.status})`);
+    }
+
+    const payload = await response.json() as unknown;
+    if (!Array.isArray(payload)) {
+      return undefined;
+    }
+
+    const comments: GitHubReviewThreadComment[] = [];
+    for (const entry of payload) {
+      if (!entry || typeof entry !== "object") continue;
+      const record = entry as Record<string, unknown>;
+      const body = typeof record.body === "string" ? record.body.trim() : "";
+      const id = typeof record.id === "number" ? record.id : undefined;
+      if (!body || id === undefined) continue;
+      comments.push({
+        id,
+        body,
+        ...(typeof record.path === "string" ? { path: record.path } : {}),
+        ...(typeof record.line === "number" ? { line: record.line } : {}),
+        ...(typeof record.side === "string" ? { side: record.side } : {}),
+        ...(typeof record.start_line === "number" ? { startLine: record.start_line } : {}),
+        ...(typeof record.start_side === "string" ? { startSide: record.start_side } : {}),
+        ...(typeof record.commit_id === "string" ? { commitId: record.commit_id } : {}),
+        ...(typeof record.html_url === "string" ? { url: record.html_url } : {}),
+        ...(typeof record.diff_hunk === "string" ? { diffHunk: record.diff_hunk } : {}),
+        ...(typeof (record.user as Record<string, unknown> | undefined)?.login === "string"
+          ? { authorLogin: String((record.user as Record<string, unknown>).login) }
+          : {}),
+      });
+    }
+
+    return comments;
+  }
+
   private async handlePrComment(payload: Record<string, unknown>): Promise<void> {
     if (payload.action !== "created") return;
     const issuePayload = payload.issue as Record<string, unknown> | undefined;
@@ -1016,6 +1122,17 @@ function resolvePatchRelayAuthorLoginsFromEnv(): string[] {
     .flatMap((value) => (value ?? "").split(","))
     .map((value) => normalizeAuthorLogin(value))
     .filter((value): value is string => Boolean(value));
+}
+
+function buildGitHubReviewUrl(
+  repoFullName: string | undefined,
+  prNumber: number | undefined,
+  reviewId: number | undefined,
+): string | undefined {
+  if (!repoFullName || prNumber === undefined || reviewId === undefined) {
+    return undefined;
+  }
+  return `https://github.com/${repoFullName}/pull/${prNumber}#pullrequestreview-${reviewId}`;
 }
 
 function resolveCheckClass(

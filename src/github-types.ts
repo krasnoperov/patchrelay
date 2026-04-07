@@ -30,6 +30,8 @@ export interface NormalizedGitHubEvent {
   checkOutputSummary?: string | undefined;
   checkOutputText?: string | undefined;
   reviewBody?: string | undefined;
+  reviewId?: number | undefined;
+  reviewCommitId?: string | undefined;
   reviewerName?: string | undefined;
   mergeGroupFailureReason?: string | undefined;
   eventSource?: "check_run" | "check_suite" | undefined;
@@ -50,8 +52,10 @@ export interface GitHubWebhookPayload {
   };
   // pull_request_review event
   review?: {
+    id?: number;
     state: string;
     body?: string;
+    commit_id?: string;
     user?: { login: string };
   };
   // check_suite event
