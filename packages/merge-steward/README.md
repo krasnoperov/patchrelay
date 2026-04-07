@@ -108,6 +108,20 @@ In practice, use:
 
 When GitHub App auth is configured, Merge Steward mints short-lived installation tokens and uses them for both `gh` API calls and `git clone/fetch/push` over HTTPS. In multi-repo setups it resolves the installation per repository, so repos in different GitHub App installations can still coexist.
 
+Recommended GitHub App repository permissions:
+
+- `Contents: Read and write`
+- `Pull requests: Read and write`
+- `Checks: Read and write`
+- `Metadata: Read-only`
+- `Administration: Read-only`
+
+`Contents: Read and write` is the important merge-path permission because the
+steward lands tested speculative SHAs by fast-forward pushing `main`.
+`Administration: Read-only` is not required for merging itself, but it lets the
+doctor and attach/refresh flows discover branch rules and required checks
+without falling back to a local `gh` user token.
+
 The machine-level env files created by `merge-steward init` are:
 
 - `~/.config/merge-steward/runtime.env`
