@@ -34,7 +34,7 @@ export const stewardConfigSchema = z.object({
   admissionLabel: z.string().default("queue"),
   mergeQueueCheckName: z.string().default(DEFAULT_MERGE_QUEUE_CHECK_NAME),
   /** Branch name patterns to exclude from admission (glob-style). */
-  excludeBranches: z.array(z.string()).default(["release-please--*"]),
+  excludeBranches: z.array(z.string()).default([]),
   /**
    * File patterns with regen commands for auto-resolving merge conflicts.
    * When all conflicting files match a pattern, the command is run to regenerate them.

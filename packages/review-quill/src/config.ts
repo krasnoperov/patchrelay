@@ -15,7 +15,7 @@ const repositorySchema = z.object({
   repoFullName: z.string().min(1),
   baseBranch: z.string().default("main"),
   requiredChecks: z.array(z.string()).default([]),
-  excludeBranches: z.array(z.string()).default(["release-please--*"]),
+  excludeBranches: z.array(z.string()).default([]),
   reviewDocs: z.array(z.string()).default(["REVIEW_WORKFLOW.md", "CLAUDE.md", "AGENTS.md"]),
   diffIgnore: z.array(z.string()).default([...DEFAULT_DIFF_IGNORE]),
   diffSummarizeOnly: z.array(z.string()).default([...DEFAULT_DIFF_SUMMARIZE_ONLY]),

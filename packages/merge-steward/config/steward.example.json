@@ -9,7 +9,7 @@
   "pollIntervalMs": 30000,
   "admissionLabel": "queue",
   "mergeQueueCheckName": "merge-steward/queue",
-  "excludeBranches": ["release-please--*"],
+  "excludeBranches": [],
   "webhookPath": "/webhooks/github/queue/usertold",
   "server": {
     "bind": "127.0.0.1",

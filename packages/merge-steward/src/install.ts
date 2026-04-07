@@ -251,7 +251,7 @@ export async function upsertRepoConfig(options: {
     },
     admissionLabel,
     mergeQueueCheckName,
-    excludeBranches: existing?.excludeBranches ?? ["release-please--*"],
+    excludeBranches: existing?.excludeBranches ?? [],
   };
 
   const rendered = stringifyJson(next as unknown as Record<string, unknown>);

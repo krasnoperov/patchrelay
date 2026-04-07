@@ -39,7 +39,7 @@ function repoConfig(overrides?: Partial<ReviewQuillRepositoryConfig>): ReviewQui
     repoFullName: "example/fixture",
     baseBranch: "main",
     requiredChecks: [],
-    excludeBranches: ["release-please--*"],
+    excludeBranches: [],
     reviewDocs: ["REVIEW_WORKFLOW.md", "CLAUDE.md", "AGENTS.md"],
     diffIgnore: [...DEFAULT_DIFF_IGNORE],
     diffSummarizeOnly: [...DEFAULT_DIFF_SUMMARIZE_ONLY],
