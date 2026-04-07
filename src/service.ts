@@ -299,7 +299,7 @@ export class PatchRelayService {
       const shouldRecoverAwaitingInput =
         delegated
         && issue.factoryState === "awaiting_input"
-        && issue.pendingRunType === undefined;
+        && this.db.peekIssueSessionWake(issue.projectId, issue.linearIssueId) === undefined;
 
       let updated = this.db.upsertIssue({
         projectId: issue.projectId,

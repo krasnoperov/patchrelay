@@ -204,19 +204,6 @@ export class WebhookHandler {
         || normalized.triggerEvent === "agentPrompted";
 
       if (result.desiredStage && !wakeAlreadyQueuedByFollowUpHandler) {
-        if (result.desiredStage === "implementation") {
-          this.db.appendIssueSessionEventRespectingActiveLease(project.id, issue.id, {
-            projectId: project.id,
-            linearIssueId: issue.id,
-            eventType: "delegated",
-            eventJson: JSON.stringify({
-              promptContext: normalized.agentSession?.promptContext?.trim()
-                ?? (trackedIssue?.issueKey ? `Linear issue ${trackedIssue.issueKey} was delegated to PatchRelay.` : undefined),
-              promptBody: normalized.agentSession?.promptBody?.trim(),
-            }),
-            dedupeKey: `delegated:${issue.id}`,
-          });
-        }
         const queuedRunType = this.enqueuePendingSessionWake(project.id, issue.id);
         this.feed?.publish({
           level: "info",
@@ -281,7 +268,7 @@ export class WebhookHandler {
     const delegated = this.isDelegatedToPatchRelay(project, normalized);
     const triggerAllowed = triggerEventAllowed(project, normalized.triggerEvent);
     const incomingAgentSessionId = normalized.agentSession?.id;
-    const hasPendingWake = this.db.hasPendingIssueSessionEvents(project.id, normalizedIssue.id);
+    const hasPendingWake = this.db.peekIssueSessionWake(project.id, normalizedIssue.id) !== undefined;
 
     if (!existingIssue && !delegated && !incomingAgentSessionId) {
       return { issue: undefined, desiredStage: undefined, delegated };
@@ -384,6 +371,23 @@ export class WebhookHandler {
         stage: "awaiting_input",
         status: "un_delegated",
         summary: "Issue un-delegated from PatchRelay",
+      });
+    } else if (
+      desiredStage === "implementation"
+      && normalized.triggerEvent !== "commentCreated"
+      && normalized.triggerEvent !== "commentUpdated"
+      && normalized.triggerEvent !== "agentPrompted"
+    ) {
+      this.db.appendIssueSessionEventRespectingActiveLease(project.id, normalizedIssue.id, {
+        projectId: project.id,
+        linearIssueId: normalizedIssue.id,
+        eventType: "delegated",
+        eventJson: JSON.stringify({
+          promptContext: normalized.agentSession?.promptContext?.trim()
+            ?? (issue.issueKey ? `Linear issue ${issue.issueKey} was delegated to PatchRelay.` : undefined),
+          promptBody: normalized.agentSession?.promptBody?.trim(),
+        }),
+        dedupeKey: `delegated:${normalizedIssue.id}`,
       });
     }
 
@@ -566,7 +570,7 @@ export class WebhookHandler {
     }
 
     if (promptBody && existingIssue && (delegated || existingIssue.factoryState === "awaiting_input")) {
-      const hadPendingWake = this.db.hasPendingIssueSessionEvents(project.id, normalized.issue.id);
+      const hadPendingWake = this.db.peekIssueSessionWake(project.id, normalized.issue.id) !== undefined;
       const directReply = this.isDirectReplyToOutstandingQuestion(existingIssue);
       this.db.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
         projectId: project.id,
@@ -706,7 +710,7 @@ export class WebhookHandler {
       const ENQUEUEABLE_STATES = new Set(["pr_open", "changes_requested", "implementing", "delegated", "awaiting_input"]);
       if (ENQUEUEABLE_STATES.has(issue.factoryState)) {
         const runType = issue.prReviewState === "changes_requested" ? "review_fix" : "implementation";
-        const hadPendingWake = this.db.hasPendingIssueSessionEvents(project.id, normalized.issue.id);
+        const hadPendingWake = this.db.peekIssueSessionWake(project.id, normalized.issue.id) !== undefined;
         const directReply = this.isDirectReplyToOutstandingQuestion(issue);
         this.db.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
           projectId: project.id,
