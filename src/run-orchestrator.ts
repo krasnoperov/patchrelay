@@ -31,6 +31,7 @@ import { resolveAuthoritativeLinearStopState, resolvePreferredCompletedLinearSta
 import { execCommand } from "./utils.ts";
 import { getThreadTurns } from "./codex-thread-utils.ts";
 import { deriveIssueSessionReactiveIntent } from "./issue-session.ts";
+import type { IssueSessionEventType } from "./issue-session-events.ts";
 
 const DEFAULT_CI_REPAIR_BUDGET = 3;
 const DEFAULT_QUEUE_REPAIR_BUDGET = 3;
@@ -678,6 +679,38 @@ export class RunOrchestrator {
     };
   }
 
+  private appendWakeEventWithLease(
+    lease: { projectId: string; linearIssueId: string; leaseId: string },
+    issue: Pick<IssueRecord, "projectId" | "linearIssueId" | "prHeadSha" | "lastGitHubFailureSignature" | "lastGitHubFailureHeadSha">,
+    runType: RunType,
+    context?: Record<string, unknown>,
+    dedupeScope?: string,
+  ): boolean {
+    let eventType: IssueSessionEventType;
+    let dedupeKey: string;
+    if (runType === "queue_repair") {
+      eventType = "merge_steward_incident";
+      dedupeKey = `${dedupeScope ?? "wake"}:queue_repair:${issue.linearIssueId}:${issue.prHeadSha ?? issue.lastGitHubFailureHeadSha ?? "unknown-sha"}`;
+    } else if (runType === "ci_repair") {
+      eventType = "settled_red_ci";
+      dedupeKey = `${dedupeScope ?? "wake"}:ci_repair:${issue.linearIssueId}:${issue.lastGitHubFailureSignature ?? issue.prHeadSha ?? "unknown-sha"}`;
+    } else if (runType === "review_fix") {
+      eventType = "review_changes_requested";
+      dedupeKey = `${dedupeScope ?? "wake"}:review_fix:${issue.linearIssueId}:${issue.prHeadSha ?? "unknown-sha"}`;
+    } else {
+      eventType = "delegated";
+      dedupeKey = `${dedupeScope ?? "wake"}:implementation:${issue.linearIssueId}`;
+    }
+
+    return Boolean(this.db.appendIssueSessionEventWithLease(lease, {
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      eventType,
+      ...(context ? { eventJson: JSON.stringify(context) } : {}),
+      dedupeKey,
+    }));
+  }
+
   // ─── Run ────────────────────────────────────────────────────────
 
   async run(item: { projectId: string; issueId: string }): Promise<void> {
@@ -1243,7 +1276,7 @@ export class RunOrchestrator {
     const postRunFollowUp = await this.resolvePostRunFollowUp(run, refreshedIssue);
     const postRunState = postRunFollowUp?.factoryState ?? resolveCompletedRunState(refreshedIssue, run);
 
-    const completed = this.withHeldIssueSessionLease(run.projectId, run.linearIssueId, () => {
+    const completed = this.withHeldIssueSessionLease(run.projectId, run.linearIssueId, (lease) => {
       this.db.finishRun(run.id, {
         status: "completed",
         threadId,
@@ -1256,12 +1289,8 @@ export class RunOrchestrator {
         linearIssueId: run.linearIssueId,
         activeRunId: null,
         ...(postRunState ? { factoryState: postRunState } : {}),
-        ...(postRunFollowUp
-          ? {
-              pendingRunType: postRunFollowUp.pendingRunType,
-              pendingRunContextJson: postRunFollowUp.context ? JSON.stringify(postRunFollowUp.context) : null,
-            }
-          : {}),
+        pendingRunType: null,
+        pendingRunContextJson: null,
         ...(postRunFollowUp ? {} : (postRunState === "awaiting_queue" || postRunState === "done"
         ? {
             lastGitHubFailureSource: null,
@@ -1277,6 +1306,15 @@ export class RunOrchestrator {
           }
         : {})),
       });
+      if (postRunFollowUp) {
+        return this.appendWakeEventWithLease(
+          lease,
+          issue,
+          postRunFollowUp.pendingRunType,
+          postRunFollowUp.context,
+          "post_run",
+        );
+      }
       return true;
     });
     if (!completed) {
@@ -1490,12 +1528,12 @@ export class RunOrchestrator {
       this.db.upsertIssueWithLease(lease, {
         projectId: fresh.projectId,
         linearIssueId: fresh.linearIssueId,
-        pendingRunType: runType,
+        pendingRunType: null,
         pendingRunContextJson: null,
         zombieRecoveryAttempts: attempts,
         lastZombieRecoveryAt: new Date().toISOString(),
       });
-      return true;
+      return this.appendWakeEventWithLease(lease, fresh, runType, undefined, `recovery:${attempts}`);
     });
     if (!requeued) {
       this.logger.warn({ issueKey: fresh.issueKey, attempts, reason }, "Skipping recovery re-enqueue after losing issue-session lease");
@@ -1717,7 +1755,7 @@ export class RunOrchestrator {
       const refreshedIssue = await this.refreshIssueAfterReactivePublish(run, freshIssue);
       const postRunFollowUp = await this.resolvePostRunFollowUp(run, refreshedIssue);
       const postRunState = postRunFollowUp?.factoryState ?? resolveCompletedRunState(refreshedIssue, run);
-      const reconciled = this.withHeldIssueSessionLease(run.projectId, run.linearIssueId, () => {
+      const reconciled = this.withHeldIssueSessionLease(run.projectId, run.linearIssueId, (lease) => {
         this.db.finishRun(run.id, {
           status: "completed",
           ...(run.threadId ? { threadId: run.threadId } : {}),
@@ -1730,12 +1768,8 @@ export class RunOrchestrator {
           linearIssueId: run.linearIssueId,
           activeRunId: null,
           ...(postRunState ? { factoryState: postRunState } : {}),
-          ...(postRunFollowUp
-            ? {
-                pendingRunType: postRunFollowUp.pendingRunType,
-                pendingRunContextJson: postRunFollowUp.context ? JSON.stringify(postRunFollowUp.context) : null,
-              }
-            : {}),
+          pendingRunType: null,
+          pendingRunContextJson: null,
           ...(postRunFollowUp ? {} : (postRunState === "awaiting_queue" || postRunState === "done"
             ? {
                 lastGitHubFailureSource: null,
@@ -1751,6 +1785,15 @@ export class RunOrchestrator {
               }
             : {})),
         });
+        if (postRunFollowUp) {
+          return this.appendWakeEventWithLease(
+            lease,
+            issue,
+            postRunFollowUp.pendingRunType,
+            postRunFollowUp.context,
+            "post_run",
+          );
+        }
         return true;
       });
       if (!reconciled) {

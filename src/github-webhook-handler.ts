@@ -773,8 +773,9 @@ export class GitHubWebhookHandler {
       : typeof failureContext.headSha === "string" ? failureContext.headSha : undefined;
     if (!signature) return false;
 
-    if (issue.pendingRunType === runType && issue.pendingRunContextJson) {
-      const existing = safeJsonParse<Record<string, unknown>>(issue.pendingRunContextJson);
+    const pendingWake = this.db.peekIssueSessionWake(issue.projectId, issue.linearIssueId);
+    if (pendingWake?.runType === runType) {
+      const existing = pendingWake.context;
       if (existing?.failureSignature === signature
         && (headSha === undefined || existing.failureHeadSha === headSha || existing.headSha === headSha)) {
         this.feed?.publish({

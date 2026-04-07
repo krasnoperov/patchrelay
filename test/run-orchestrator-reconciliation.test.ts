@@ -942,12 +942,14 @@ exit 1
     await (orchestrator as unknown as { reconcileRun: (run: typeof run) => Promise<void> }).reconcileRun(db.getRun(run.id)!);
 
     const updatedIssue = db.getIssue("usertold", "issue-review-dirty");
+    const wake = db.peekIssueSessionWake("usertold", "issue-review-dirty");
     const updatedRun = db.getRun(run.id);
     assert.equal(updatedRun?.status, "completed");
     assert.equal(updatedIssue?.factoryState, "changes_requested");
-    assert.equal(updatedIssue?.pendingRunType, "review_fix");
-    assert.match(updatedIssue?.pendingRunContextJson ?? "", /branchUpkeepRequired/);
-    assert.match(updatedIssue?.pendingRunContextJson ?? "", /GitHub still reports PR #21 as DIRTY/);
+    assert.equal(updatedIssue?.pendingRunType, undefined);
+    assert.equal(wake?.runType, "review_fix");
+    assert.match(JSON.stringify(wake?.context ?? {}), /branchUpkeepRequired/);
+    assert.match(JSON.stringify(wake?.context ?? {}), /GitHub still reports PR #21 as DIRTY/);
     assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-review-dirty" }]);
   } finally {
     process.env.PATH = oldPath;
