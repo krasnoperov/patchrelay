@@ -20,7 +20,8 @@ for the whole loop:
 
 `review-quill/verdict` is optional. A repository can rely on normal GitHub
 review gating alone, or it can also require the verdict check in branch
-protection.
+protection. `merge-steward` admits on GitHub's PR review/check truth and then
+does its own speculative integrated-branch validation before landing.
 
 It complements:
 
@@ -36,6 +37,7 @@ webhooks and check-run detail links.
 Authoritative design:
 
 - [../../docs/design-docs/review-quill.md](../../docs/design-docs/review-quill.md)
+- [../../docs/design-docs/pr-automation-loop.md](../../docs/design-docs/pr-automation-loop.md)
 
 ## Public ingress
 

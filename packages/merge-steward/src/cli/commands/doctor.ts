@@ -13,7 +13,13 @@ import {
 } from "../../runtime-paths.ts";
 import type { ParsedArgs, Output } from "../types.ts";
 import { formatJson, writeOutput } from "../output.ts";
-import { fetchServiceGitHubAuthStatus, fetchServiceRepoDiscovery, getHomeEnv, loadRepoConfigById } from "../system.ts";
+import {
+  fetchServiceGitHubAuthStatus,
+  fetchServiceRepoAccess,
+  fetchServiceRepoDiscovery,
+  getHomeEnv,
+  loadRepoConfigById,
+} from "../system.ts";
 
 interface DoctorCheck {
   status: "pass" | "warn" | "fail";
@@ -244,15 +250,21 @@ export async function handleDoctor(parsed: ParsedArgs, stdout: Output): Promise<
 
             const configuredChecks = normalizeCheckList(config.requiredChecks);
             const discoveredChecks = normalizeCheckList(discovered.requiredChecks);
-            const checksMatch = configuredChecks.length === discoveredChecks.length
-              && configuredChecks.every((value, index) => value === discoveredChecks[index]);
+            const configuredSet = new Set(configuredChecks);
+            const discoveredSet = new Set(discoveredChecks);
+            const missingFromLocal = discoveredChecks.filter((value) => !configuredSet.has(value));
+            const extraLocal = configuredChecks.filter((value) => !discoveredSet.has(value));
+            const checksMatch = missingFromLocal.length === 0 && extraLocal.length === 0;
+            const localSuperset = missingFromLocal.length === 0 && extraLocal.length > 0;
             checks.push({
-              status: checksMatch ? "pass" : "warn",
+              status: checksMatch || localSuperset ? "pass" : "warn",
               scope: `repo:${repoId}:github-required-checks`,
               message: checksMatch
                 ? (configuredChecks.length > 0
                     ? `Local required checks match GitHub for ${config.baseBranch}`
                     : `No required checks configured locally and GitHub does not require status checks for ${config.baseBranch}`)
+                : localSuperset
+                  ? `Local required checks extend GitHub for ${config.baseBranch} with additional gates [${extraLocal.join(", ")}]`
                 : `Local required checks [${configuredChecks.join(", ") || "(none)"}] differ from GitHub [${discoveredChecks.join(", ") || "(none)"}] for ${config.baseBranch}${discoveredSource === "gh" ? " (via gh fallback)" : ""}`,
             });
 
@@ -261,6 +273,25 @@ export async function handleDoctor(parsed: ParsedArgs, stdout: Output): Promise<
                 status: "warn",
                 scope: `repo:${repoId}:github-discovery`,
                 message: warning,
+              });
+            }
+
+            try {
+              const access = await fetchServiceRepoAccess(config.repoFullName, { baseBranch: config.baseBranch });
+              checks.push({
+                status: access.permissions.push ? "pass" : "fail",
+                scope: `repo:${repoId}:github-push-access`,
+                message: access.permissions.push
+                  ? access.branchProtected
+                    ? `Steward App has repo push permission for ${config.repoFullName}; ${config.baseBranch} is protected, so final fast-forward pushes still depend on branch rules allowing the App`
+                    : `Steward App has repo push permission for ${config.repoFullName}`
+                  : `Steward App does not have repo push permission for ${config.repoFullName}; queue merges to ${config.baseBranch} will fail`,
+              });
+            } catch (error) {
+              checks.push({
+                status: "warn",
+                scope: `repo:${repoId}:github-push-access`,
+                message: `Could not verify steward push access: ${error instanceof Error ? error.message : String(error)}`,
               });
             }
           } catch (error) {

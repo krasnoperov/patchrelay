@@ -1,18 +1,30 @@
 # merge-steward
 
-Serial merge queue service. Rebases PRs onto main one at a time, waits for CI, and merges when green. Evicts on failure and reports incidents via GitHub check runs.
+Speculative merge queue service. It admits approved PRs whose required checks
+are green, builds cumulative speculative branches, waits for CI on those exact
+integrated SHAs, and then fast-forwards `main` to the tested result. On
+failure, it evicts with a durable incident record and GitHub check run.
 
-Fully independent of PatchRelay. Communicates through GitHub — PRs, labels, check runs, branches.
+Fully independent of PatchRelay. Communicates through GitHub — PRs, reviews,
+checks, labels, branches.
+
+Shared protocol:
+
+- [../../docs/design-docs/pr-automation-loop.md](../../docs/design-docs/pr-automation-loop.md)
 
 ## How it works
 
-1. A PR gets the `queue` label (manually, by PatchRelay, or by any automation)
-2. The steward sees the label via GitHub webhook
-3. If the PR is approved and CI is green, it enters the queue
-4. The steward processes the queue head: fetch → rebase onto main → push → wait for CI → merge
-5. On failure: retry (gated on base SHA change), then evict with a durable incident record and GitHub check run
-6. PatchRelay (or any agent) sees the check run failure and can fix the branch
-7. When the branch is fixed and CI passes again, adding the `queue` label re-admits it
+1. A PR becomes eligible when GitHub says it is approved and its required checks are green
+2. The steward notices that through webhook wakeups or startup/reconcile scans
+3. It admits the PR into the queue; the optional `queue` label is just an operator-friendly nudge, not the sole trigger
+4. The steward builds a speculative branch:
+   - head of queue: `main + PR`
+   - downstream entries: cumulative specs like `main + A + B`
+5. CI runs on that speculative SHA
+6. If the queue head's speculative SHA is still a fast-forward from current `main`, the steward pushes that exact SHA to `main`
+7. On failure: retry (gated on base SHA change), then evict with a durable incident record and GitHub check run
+8. PatchRelay (or any agent) sees the check run failure and can fix the branch
+9. When the branch is fixed and CI passes again, the PR can be re-admitted
 
 ## Setup
 
@@ -45,6 +57,12 @@ merge-steward attach owner/repo
 ```
 
 That writes `~/.config/merge-steward/repos/<derived-id>.json`. By default, `attach` derives the repo id from the GitHub repo name, discovers the default branch and required status checks from GitHub, and stores the discovered values into local config.
+
+If you also use `review-quill`, its `review-quill/verdict` check can be added to
+the repository's required checks if you want machine review to be part of the
+merge gate. Steward will naturally follow whatever required checks the repo
+configuration uses, but its primary admission gate is still GitHub's formal
+review state plus those required checks.
 
 Validate the setup:
 
@@ -135,7 +153,7 @@ The CLI is a thin local client and does not need direct access to secret credent
 | `flakyRetries` | CI-only retries before counting toward maxRetries |
 | `requiredChecks` | Check names that must pass for admission (empty = any green) |
 | `pollIntervalMs` | Reconciliation loop interval |
-| `admissionLabel` | GitHub label that triggers queue admission |
+| `admissionLabel` | Optional GitHub label used as a manual/operator admission nudge |
 | `mergeQueueCheckName` | GitHub check run name emitted on eviction |
 
 `attach` discovers these values from GitHub when possible:
@@ -156,6 +174,16 @@ Configure one webhook on the repository pointing to the steward:
 - **Events:** Pull requests, Pull request reviews, Check suites, Pushes
 
 The steward uses a single multi-repo webhook endpoint and routes events by `repository.full_name`.
+
+It can wake up on:
+
+- PR label changes
+- review approvals
+- successful check-suite completion
+- pushes to the base branch
+
+Even without a webhook, startup and periodic reconcile will still scan open PRs
+and admit anything that already satisfies the gate.
 
 ### Running
 
@@ -247,6 +275,22 @@ queued → preparing_head → validating → merging → merged
 - **merged**: done
 - **evicted**: failed after retry budget, incident created
 - **dequeued**: manually removed
+
+## Merge Gate
+
+For the steward path, the real gate is:
+
+- GitHub says the PR review state is approved
+- the configured required checks are green
+- the steward's speculative integrated branch also passes CI
+
+`review-quill/verdict` only matters if you choose to include it in the repo's
+required checks.
+
+GitHub branch protection is still useful as defense in depth, but steward does
+not merge by pressing GitHub's merge button. It fast-forwards `main` to the
+already-tested speculative SHA, so successful queue merges also depend on the
+steward App being allowed to push that result to the protected branch.
 
 ## Interaction with PatchRelay
 

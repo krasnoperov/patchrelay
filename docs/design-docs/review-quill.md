@@ -230,6 +230,11 @@ Branch protection should require:
 The PR review is the human-facing representation.
 The check run is the merge-gate representation.
 
+In practice, `merge-steward` uses GitHub PR review truth plus configured
+required checks for admission, and then validates speculative integrated
+branches itself before landing. So `review-quill/verdict` is optional unless a
+repository explicitly chooses to make it part of its required checks.
+
 ## PR Review Contract
 
 For an eligible PR head, `review-quill` should publish one of:

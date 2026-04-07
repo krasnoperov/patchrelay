@@ -17,7 +17,7 @@ import { resolveSecret, resolveSecretWithSource } from "./resolve-secret.ts";
 import { setRuntimeGitHubAuthProvider } from "./exec.ts";
 import { readFileSync, existsSync } from "node:fs";
 import type { Logger } from "pino";
-import type { ServiceGitHubAuthStatus } from "./admin-types.ts";
+import type { ServiceGitHubAuthStatus, ServiceGitHubRepoAccessResponse } from "./admin-types.ts";
 
 export interface RepoInstance {
   config: StewardConfig;
@@ -48,6 +48,25 @@ async function createRepoInstance(config: StewardConfig, logger: Logger, botIden
   const service = new MergeStewardService(config, store, git, ci, github, eviction, git, logger);
 
   return { config, service, store };
+}
+
+function githubHeaders(token: string): Record<string, string> {
+  return {
+    Authorization: `Bearer ${token}`,
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
+}
+
+async function fetchGitHubJson<T>(token: string, path: string): Promise<T> {
+  const response = await fetch(`https://api.github.com${path}`, {
+    headers: githubHeaders(token),
+  });
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`GitHub API ${response.status} for ${path}: ${body}`);
+  }
+  return await response.json() as T;
 }
 
 export async function startMultiServer(): Promise<void> {
@@ -159,6 +178,34 @@ export async function startMultiServer(): Promise<void> {
         return await discoverRepoSettings(githubAuth.credentials, params.repoFullName, {
           ...(params.baseBranch ? { baseBranch: params.baseBranch } : {}),
         });
+      },
+      async checkRepoAccess(params): Promise<ServiceGitHubRepoAccessResponse> {
+        if (!githubAppTokenManager) {
+          throw new Error("GitHub App auth is not ready in the merge-steward service.");
+        }
+        const token = githubAppTokenManager.currentTokenForRepo(params.repoFullName);
+        if (!token) {
+          throw new Error(`No GitHub installation token available for ${params.repoFullName}.`);
+        }
+        const encodedRepo = params.repoFullName.split("/").map(encodeURIComponent).join("/");
+        const repo = await fetchGitHubJson<{
+          permissions?: { pull?: boolean; push?: boolean; admin?: boolean };
+        }>(token, `/repos/${encodedRepo}`);
+        const branch = await fetchGitHubJson<{ protected?: boolean }>(
+          token,
+          `/repos/${encodedRepo}/branches/${encodeURIComponent(params.baseBranch)}`,
+        );
+        return {
+          ok: true,
+          repoFullName: params.repoFullName,
+          baseBranch: params.baseBranch,
+          permissions: {
+            pull: Boolean(repo.permissions?.pull),
+            push: Boolean(repo.permissions?.push),
+            admin: Boolean(repo.permissions?.admin),
+          },
+          branchProtected: Boolean(branch.protected),
+        };
       },
     },
     logger,
