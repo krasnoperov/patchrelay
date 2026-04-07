@@ -48,7 +48,24 @@ const configSchema = z.object({
     modelProvider: z.string().optional(),
     serviceName: z.string().default("review-quill"),
     approvalPolicy: z.enum(["never", "on-request", "on-failure", "untrusted"]).default("never"),
-    sandboxMode: z.enum(["danger-full-access", "workspace-write", "read-only"]).default("read-only"),
+    // Match patchrelay's default. The Codex sandbox uses bwrap, which
+    // tries to set up a fresh network namespace per exec call when
+    // run under read-only / workspace-write modes. Inside many host
+    // configurations (kernel `unprivileged_userns_clone=1` but no
+    // CAP_NET_ADMIN propagation, e.g. systemd-managed services with
+    // PrivateNetwork=false but reduced caps) that fails with
+    // `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`
+    // and the agent cannot run any bash command — including the
+    // `git diff` and `cat`/`sed` calls it needs to read context
+    // around findings.
+    //
+    // `danger-full-access` skips bwrap entirely and runs the agent's
+    // tool calls in the parent environment. We're OK with this for
+    // review-quill because: (a) the agent never commits or pushes
+    // (review-quill posts the review via GitHub App, not git); (b)
+    // the worktree is a throwaway temp directory cleaned up after
+    // the run; (c) the alternative is a non-functional reviewer.
+    sandboxMode: z.enum(["danger-full-access", "workspace-write", "read-only"]).default("danger-full-access"),
   }).default({
     bin: "codex",
     args: ["app-server"],
@@ -56,7 +73,7 @@ const configSchema = z.object({
     requestTimeoutMs: 30_000,
     serviceName: "review-quill",
     approvalPolicy: "never",
-    sandboxMode: "read-only",
+    sandboxMode: "danger-full-access",
   }),
   repositories: z.array(repositorySchema).default([]),
 });

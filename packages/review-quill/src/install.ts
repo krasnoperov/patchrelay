@@ -64,7 +64,12 @@ function defaultConfigDocument(publicBaseUrl: string, databasePath: string): Rec
       requestTimeoutMs: 30000,
       serviceName: "review-quill",
       approvalPolicy: "never",
-      sandboxMode: "read-only",
+      // Match patchrelay's default. See `config.ts` for the long
+      // explanation; short version: bwrap network-namespace setup
+      // fails inside the systemd unit, and review-quill never
+      // commits anything (it posts reviews via the GitHub App), so
+      // the sandbox is unnecessary friction.
+      sandboxMode: "danger-full-access",
     },
     repositories: [],
   };

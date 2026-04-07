@@ -75,6 +75,11 @@ export function resolveGitHubCommandEnv(
     return authEnv;
   }
 
+  // GitHub does NOT accept `Authorization: Bearer ghs_*` for git over
+  // HTTPS — only Basic auth with `x-access-token:<token>`. Mirrored in
+  // `packages/review-quill/src/review-workspace/git.ts`. Keep both in
+  // sync — no shared helper because each service has different git
+  // surface area.
   const authHeader = `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`;
   return applyGitConfigEntries(
     {
