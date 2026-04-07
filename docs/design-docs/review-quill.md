@@ -262,18 +262,55 @@ Operator surfaces should make this visible:
 
 ## Prompt And Repo Guidance
 
-The review prompt should be built from:
+The review prompt should be built from a prepared review-context pipeline, not
+directly inside the runner.
+
+### Review Workspace
+
+Each attempt should materialize an ephemeral local checkout:
+
+- fetch base branch plus `refs/pull/<pr>/head`
+- create a detached temp worktree at the exact PR head SHA
+- run `codex app-server` inside that checkout
+- dispose the worktree after publication
+
+### Diff Context
+
+Build diff context locally from the checked-out repo:
+
+- `git diff <base>...HEAD` file inventory
+- per-file patch extraction for reviewable files
+- summarized entries for noisy/generated/oversized files
+
+The initial default summarize-only set should include common lockfiles and
+generated outputs such as:
+
+- `package-lock.json`
+- `pnpm-lock.yaml`
+- `yarn.lock`
+- `bun.lock*`
+- `dist/**`
+- `build/**`
+- `coverage/**`
+- `*.map`
+- `*.min.js`
+- `*.snap`
+
+### Prompt Context
+
+Prompt context should include:
 
 - PR title and body
 - current head SHA
-- base branch and merge base when useful
-- unified diff or changed-files patch
-- previous `review-quill` review on the same PR when relevant
-- repo-local review docs such as:
+- base branch
+- prior formal PR reviews
+- explicit repo-local guidance docs:
+  - `REVIEW_WORKFLOW.md`
   - `CLAUDE.md`
   - `AGENTS.md`
-  - `REVIEW_WORKFLOW.md`
-  - focused docs linked from those entrypoints
+
+`AGENTS.md` should still be loaded explicitly for safety, even though
+`app-server` also sees it from the checked-out repo cwd.
 
 The prompt must explicitly say:
 

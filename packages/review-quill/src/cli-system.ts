@@ -87,6 +87,11 @@ export function listRepoConfigs(): Array<{
   requiredChecks: string[];
   excludeBranches: string[];
   reviewDocs: string[];
+  diffIgnore: string[];
+  diffSummarizeOnly: string[];
+  maxPatchLines: number;
+  maxPatchBytes: number;
+  maxFilesWithFullPatch: number;
 }> {
   const layout = getReviewQuillPathLayout();
   if (!existsSync(layout.configPath)) {
@@ -105,6 +110,11 @@ export function loadRepoConfigById(repoRef: string): {
     requiredChecks: string[];
     excludeBranches: string[];
     reviewDocs: string[];
+    diffIgnore: string[];
+    diffSummarizeOnly: string[];
+    maxPatchLines: number;
+    maxPatchBytes: number;
+    maxFilesWithFullPatch: number;
   };
   publicBaseUrl?: string;
 } {

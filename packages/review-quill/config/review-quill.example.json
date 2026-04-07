@@ -29,7 +29,23 @@
       "baseBranch": "main",
       "requiredChecks": ["Tests"],
       "excludeBranches": ["release-please--*"],
-      "reviewDocs": ["REVIEW_WORKFLOW.md", "CLAUDE.md", "AGENTS.md"]
+      "reviewDocs": ["REVIEW_WORKFLOW.md", "CLAUDE.md", "AGENTS.md"],
+      "diffIgnore": [],
+      "diffSummarizeOnly": [
+        "package-lock.json",
+        "pnpm-lock.yaml",
+        "yarn.lock",
+        "bun.lock*",
+        "dist/**",
+        "build/**",
+        "coverage/**",
+        "*.map",
+        "*.min.js",
+        "*.snap"
+      ],
+      "maxPatchLines": 400,
+      "maxPatchBytes": 24000,
+      "maxFilesWithFullPatch": 20
     }
   ]
 }

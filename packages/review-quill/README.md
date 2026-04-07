@@ -5,6 +5,8 @@
 It is responsible for one narrow loop:
 
 - detect PRs whose latest head SHA is ready for review
+- materialize an ephemeral checkout of that exact PR head
+- build a curated local diff against the PR base
 - run a readonly review pass for that exact SHA
 - publish a normal GitHub PR review on the PR
 - publish a machine-facing `review-quill/verdict` check run
@@ -124,6 +126,24 @@ The dashboard/watch UI is mainly for operators. It shows:
 - completed, failed, cancelled, and superseded attempts in `all` mode
 - recent webhook wakeups
 - latest reconcile status
+
+## Review Context
+
+`review-quill` now reviews from a real checked-out PR head, not just the GitHub
+files API.
+
+The initial context path is:
+
+- ephemeral local checkout at the exact PR head SHA
+- local `git diff <base>...HEAD` inventory and curated patch set
+- explicit repo guidance from `REVIEW_WORKFLOW.md`, `CLAUDE.md`, and `AGENTS.md`
+- prior formal PR reviews from GitHub
+
+Diff context is intentionally filtered:
+
+- lockfiles and other noisy/generated paths are summarized by policy
+- oversized patches are summarized instead of dumped whole
+- repo config can tune ignore/summarize patterns and patch budgets
 
 Happy path:
 

@@ -12,6 +12,7 @@ import type { SqliteStore } from "./db/sqlite-store.ts";
 import type { GitHubClient } from "./github-client.ts";
 import type { ReviewRunner } from "./review-runner.ts";
 import type { PullRequestReviewRecord } from "./types.ts";
+import { buildReviewContext } from "./review-context.ts";
 
 function branchExcluded(repo: ReviewQuillRepositoryConfig, branchName: string): boolean {
   return repo.excludeBranches.some((pattern) => pattern.endsWith("*")
@@ -303,7 +304,17 @@ export class ReviewQuillService {
       });
       this.store.updateAttempt(attempt.id, { status: "running", externalCheckRunId: checkRunId });
 
-      const result = await this.runner.review(repo, pr);
+      const prepared = await buildReviewContext({
+        github: this.github,
+        repo,
+        pr,
+      });
+      let result: Awaited<ReturnType<ReviewRunner["review"]>>;
+      try {
+        result = await this.runner.review(prepared.context);
+      } finally {
+        await prepared.dispose();
+      }
       const reviewBody = buildReviewBody({
         verdict: result.verdict.verdict,
         summary: result.verdict.summary,

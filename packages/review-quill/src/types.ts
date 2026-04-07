@@ -7,6 +7,11 @@ export interface ReviewQuillRepositoryConfig {
   requiredChecks: string[];
   excludeBranches: string[];
   reviewDocs: string[];
+  diffIgnore: string[];
+  diffSummarizeOnly: string[];
+  maxPatchLines: number;
+  maxPatchBytes: number;
+  maxFilesWithFullPatch: number;
 }
 
 export interface CodexAppServerConfig {
@@ -80,6 +85,65 @@ export interface CheckRunRecord {
   status: string;
   conclusion?: string;
   detailsUrl?: string;
+}
+
+export interface GuidanceDoc {
+  path: string;
+  text: string;
+}
+
+export type DiffClassification = "full_patch" | "summarize" | "ignore";
+
+export interface DiffFileInventoryEntry {
+  path: string;
+  previousPath?: string;
+  status: string;
+  additions: number;
+  deletions: number;
+  changes: number;
+  isBinary: boolean;
+  classification: DiffClassification;
+  reason?: string;
+}
+
+export interface DiffFilePatchEntry extends DiffFileInventoryEntry {
+  classification: "full_patch";
+  patch: string;
+}
+
+export interface DiffSuppressedEntry extends DiffFileInventoryEntry {
+  classification: "summarize" | "ignore";
+  reason: string;
+}
+
+export interface ReviewWorkspace {
+  repoFullName: string;
+  cachePath: string;
+  worktreePath: string;
+  baseRef: string;
+  headRef: string;
+  headSha: string;
+}
+
+export interface ReviewDiffContext {
+  inventory: DiffFileInventoryEntry[];
+  patches: DiffFilePatchEntry[];
+  suppressed: DiffSuppressedEntry[];
+}
+
+export interface PromptContext {
+  guidanceDocs: GuidanceDoc[];
+  priorReviews: PullRequestReviewRecord[];
+}
+
+export interface ReviewContext {
+  workspaceMode: "checkout";
+  workspace: ReviewWorkspace;
+  repo: ReviewQuillRepositoryConfig;
+  pr: PullRequestSummary;
+  diff: ReviewDiffContext;
+  promptContext: PromptContext;
+  prompt: string;
 }
 
 export type ReviewAttemptStatus =

@@ -1,11 +1,7 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import type { Logger } from "pino";
 import { CodexAppServerClient } from "./codex-app-server.ts";
 import { extractFirstJsonObject, safeJsonParse } from "./utils.ts";
-import type { GitHubClient } from "./github-client.ts";
-import type { PullRequestSummary, ReviewQuillConfig, ReviewQuillRepositoryConfig, ReviewVerdict } from "./types.ts";
+import type { ReviewContext, ReviewQuillConfig, ReviewVerdict } from "./types.ts";
 
 function isThreadMaterializationRace(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
@@ -24,65 +20,11 @@ function collectAssistantMessages(thread: { turns: Array<{ items: Array<{ type: 
   return messages;
 }
 
-function buildPrompt(params: {
-  repo: ReviewQuillRepositoryConfig;
-  pr: PullRequestSummary;
-  files: Array<{ filename: string; patch?: string; additions: number; deletions: number; changes: number }>;
-  docs: Array<{ path: string; text: string }>;
-  priorReviews: Array<{ authorLogin?: string; state?: string; body?: string; commitId?: string }>;
-}): string {
-  const lines: string[] = [];
-  lines.push(
-    "You are Review Quill, a strict pull request reviewer.",
-    "Review only the current PR head SHA described below.",
-    "Return only one JSON object with this shape:",
-    '{"verdict":"approve"|"request_changes","summary":"short summary","findings":[{"path":"optional","line":123,"severity":"blocking"|"nit","message":"text"}]}',
-    "",
-    "Approve only if the PR is ready to merge as-is.",
-    "Nits alone should not block; mark them with severity nit.",
-    "",
-    `Repository: ${params.repo.repoFullName}`,
-    `Base branch: ${params.pr.baseRefName}`,
-    `Head branch: ${params.pr.headRefName}`,
-    `PR: #${params.pr.number}`,
-    `Head SHA: ${params.pr.headSha}`,
-    `Title: ${params.pr.title}`,
-    params.pr.body ? `Body:\n${params.pr.body}` : "Body: <empty>",
-    "",
-    "Changed files:",
-  );
-
-  for (const file of params.files) {
-    lines.push(`- ${file.filename} (+${file.additions} -${file.deletions}, ${file.changes} changes)`);
-    if (file.patch) {
-      lines.push("```diff", file.patch.slice(0, 5000), "```");
-    }
-  }
-
-  if (params.docs.length > 0) {
-    lines.push("", "Repository guidance:");
-    for (const doc of params.docs) {
-      lines.push(`## ${doc.path}`, doc.text.slice(0, 8000), "");
-    }
-  }
-
-  if (params.priorReviews.length > 0) {
-    lines.push("", "Previous reviews:");
-    for (const review of params.priorReviews.slice(-10)) {
-      lines.push(`- ${review.authorLogin ?? "unknown"} [${review.state ?? "unknown"}] ${review.commitId ?? ""}`.trim());
-      if (review.body) lines.push(review.body.slice(0, 2000));
-    }
-  }
-
-  return lines.join("\n");
-}
-
 export class ReviewRunner {
   private readonly codex: CodexAppServerClient;
 
   constructor(
     private readonly config: ReviewQuillConfig,
-    private readonly github: GitHubClient,
     private readonly logger: Logger,
   ) {
     this.codex = new CodexAppServerClient(config.codex, logger.child({ component: "codex" }));
@@ -96,33 +38,21 @@ export class ReviewRunner {
     await this.codex.stop();
   }
 
-  async review(repo: ReviewQuillRepositoryConfig, pr: PullRequestSummary): Promise<{ verdict: ReviewVerdict; threadId: string; turnId: string }> {
-    const files = await this.github.listPullRequestFiles(repo.repoFullName, pr.number);
-    const docs = await Promise.all(repo.reviewDocs.map(async (docPath) => {
-      const text = await this.github.readRepoFile(repo.repoFullName, docPath, pr.headSha);
-      return text ? { path: docPath, text } : undefined;
-    })).then((values) => values.filter((value): value is { path: string; text: string } => Boolean(value)));
-    const priorReviews = await this.github.listPullRequestReviews(repo.repoFullName, pr.number);
-
-    const cwd = await mkdtemp(path.join(tmpdir(), "review-quill-"));
-    try {
-      const thread = await this.codex.startThread({ cwd });
-      const prompt = buildPrompt({ repo, pr, files, docs, priorReviews });
-      const started = await this.codex.startTurn({ threadId: thread.id, cwd, input: prompt });
-      const completedThread = await this.waitForTurnCompletion(thread.id, started.turnId);
-      const latestMessage = collectAssistantMessages(completedThread).at(-1);
-      if (!latestMessage) {
-        throw new Error("Review run completed without an assistant message");
-      }
-      const jsonText = extractFirstJsonObject(latestMessage);
-      const verdict = jsonText ? safeJsonParse<ReviewVerdict>(jsonText) : undefined;
-      if (!verdict || (verdict.verdict !== "approve" && verdict.verdict !== "request_changes")) {
-        throw new Error("Review run did not produce a valid structured verdict");
-      }
-      return { verdict, threadId: thread.id, turnId: started.turnId };
-    } finally {
-      await rm(cwd, { recursive: true, force: true });
+  async review(context: ReviewContext): Promise<{ verdict: ReviewVerdict; threadId: string; turnId: string }> {
+    const cwd = context.workspace.worktreePath;
+    const thread = await this.codex.startThread({ cwd });
+    const started = await this.codex.startTurn({ threadId: thread.id, cwd, input: context.prompt });
+    const completedThread = await this.waitForTurnCompletion(thread.id, started.turnId);
+    const latestMessage = collectAssistantMessages(completedThread).at(-1);
+    if (!latestMessage) {
+      throw new Error("Review run completed without an assistant message");
     }
+    const jsonText = extractFirstJsonObject(latestMessage);
+    const verdict = jsonText ? safeJsonParse<ReviewVerdict>(jsonText) : undefined;
+    if (!verdict || (verdict.verdict !== "approve" && verdict.verdict !== "request_changes")) {
+      throw new Error("Review run did not produce a valid structured verdict");
+    }
+    return { verdict, threadId: thread.id, turnId: started.turnId };
   }
 
   private async waitForTurnCompletion(threadId: string, turnId: string): Promise<Awaited<ReturnType<CodexAppServerClient["readThread"]>>> {

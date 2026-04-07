@@ -37,7 +37,7 @@ export async function startServer(configPath = process.env.REVIEW_QUILL_CONFIG ?
   const github = new GitHubClient({
     currentTokenForRepo: (repoFullName?: string) => tokenManager.currentTokenForRepo(repoFullName),
   });
-  const runner = new ReviewRunner(config, github, logger.child({ component: "review-runner" }));
+  const runner = new ReviewRunner(config, logger.child({ component: "review-runner" }));
   const service = new ReviewQuillService(config, store, github, runner, logger.child({ component: "service" }), appSlug);
 
   const app = fastify({ loggerInstance: logger, disableRequestLogging: true });

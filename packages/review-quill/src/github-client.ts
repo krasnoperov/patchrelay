@@ -16,8 +16,12 @@ function githubHeaders(token: string): Record<string, string> {
 export class GitHubClient {
   constructor(private readonly auth: GitHubClientAuthProvider) {}
 
+  currentTokenForRepo(repoFullName?: string): string | undefined {
+    return this.auth.currentTokenForRepo(repoFullName);
+  }
+
   private async request<T>(repoFullName: string, path: string, init: RequestInit = {}): Promise<T> {
-    const token = this.auth.currentTokenForRepo(repoFullName);
+    const token = this.currentTokenForRepo(repoFullName);
     if (!token) throw new Error(`No GitHub installation token available for ${repoFullName}`);
 
     const response = await fetch(`https://api.github.com${path}`, {
