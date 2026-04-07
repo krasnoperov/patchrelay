@@ -5,7 +5,7 @@ import type { InteractiveRunner, Output, ParsedArgs } from "../command-types.ts"
 import type { CliDataAccess } from "../data.ts";
 import { CliUsageError } from "../errors.ts";
 import { formatJson } from "../formatters/json.ts";
-import { formatInspect, formatList, formatLive, formatOpen, formatRetry, formatWorktree } from "../formatters/text.ts";
+import { formatInspect, formatList, formatLive, formatOpen, formatRetry, formatSessionHistory, formatWorktree } from "../formatters/text.ts";
 import { buildOpenCommand } from "../interactive.ts";
 import { writeOutput } from "../output.ts";
 
@@ -50,6 +50,8 @@ export async function handleIssueCommand(params: IssueCommandParams): Promise<nu
       return await handleWorktreeCommand(nested);
     case "open":
       return await handleOpenCommand(nested);
+    case "sessions":
+      return await handleSessionsCommand(nested);
     case "retry":
       return await handleRetryCommand(nested);
     default:
@@ -132,6 +134,29 @@ export async function handleOpenCommand(params: IssueCommandParams): Promise<num
   }
   const openCommand = buildOpenCommand(params.config, result.worktreePath, result.resumeThreadId);
   return await params.runInteractive(openCommand.command, openCommand.args);
+}
+
+export async function handleSessionsCommand(params: IssueCommandParams): Promise<number> {
+  const issueKey = params.commandArgs[0];
+  if (!issueKey) {
+    throw new Error("sessions requires <issueKey>.");
+  }
+
+  const result = params.data.sessions(issueKey);
+  if (!result) {
+    throw new Error(`Issue not found: ${issueKey}`);
+  }
+
+  writeOutput(
+    params.stdout,
+    params.json
+      ? formatJson(result)
+      : formatSessionHistory(
+        result,
+        (threadId) => buildOpenCommand(params.config, result.worktreePath ?? "", threadId),
+      ),
+  );
+  return 0;
 }
 
 export async function handleRetryCommand(params: IssueCommandParams): Promise<number> {

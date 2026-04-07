@@ -1,4 +1,12 @@
-import type { InspectResult, ListResultItem, LiveResult, OpenResult, RetryResult, WorktreeResult } from "../data.ts";
+import type {
+  InspectResult,
+  IssueSessionHistoryResult,
+  ListResultItem,
+  LiveResult,
+  OpenResult,
+  RetryResult,
+  WorktreeResult,
+} from "../data.ts";
 
 function value(label: string, entry: string | number | undefined): string {
   return `${label}: ${entry ?? "-"}`;
@@ -90,6 +98,60 @@ export function formatRetry(result: RetryResult): string {
   ]
     .filter(Boolean)
     .join("\n")}\n`;
+}
+
+function formatTimestampRange(startedAt: string, endedAt?: string): string {
+  return endedAt ? `${startedAt} -> ${endedAt}` : `${startedAt} -> running`;
+}
+
+export function formatSessionHistory(
+  result: IssueSessionHistoryResult,
+  buildOpenForThread?: (threadId: string) => { command: string; args: string[] },
+): string {
+  const lines = [
+    `${result.issue.issueKey ?? result.issue.linearIssueId}${result.issue.currentLinearState ? `  ${result.issue.currentLinearState}` : ""}`,
+    value("Worktree", result.worktreePath),
+    value("Current thread", result.currentThreadId),
+  ];
+
+  if (result.sessions.length === 0) {
+    lines.push("No recorded app-server sessions.");
+    return `${lines.join("\n")}\n`;
+  }
+
+  for (const session of result.sessions) {
+    lines.push("");
+    lines.push(
+      [
+        `run #${session.runId}`,
+        session.runType,
+        session.status,
+        formatTimestampRange(session.startedAt, session.endedAt),
+        session.isCurrentThread ? "current" : undefined,
+      ]
+        .filter(Boolean)
+        .join("  "),
+    );
+    lines.push(value("Thread", session.threadId));
+    if (session.parentThreadId) {
+      lines.push(value("Parent thread", session.parentThreadId));
+    }
+    if (session.turnId) {
+      lines.push(value("Turn", session.turnId));
+    }
+    lines.push(value("Events", session.eventCount));
+    if (session.summary) {
+      lines.push(value("Summary", truncateLine(session.summary)));
+    } else if (session.failureReason) {
+      lines.push(value("Failure", truncateLine(session.failureReason)));
+    }
+    if (session.threadId && result.worktreePath && buildOpenForThread) {
+      const command = buildOpenForThread(session.threadId);
+      lines.push(value("Open", formatCommand(command.command, command.args)));
+    }
+  }
+
+  return `${lines.join("\n")}\n`;
 }
 
 export function formatList(items: ListResultItem[]): string {
