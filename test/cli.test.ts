@@ -1055,21 +1055,41 @@ test("cli help explains the setup sequence and default behavior", async () => {
   assert.match(stdout.read(), /Mental model:/);
 });
 
-test("cli linear and repo help print command-specific usage and removed commands point to replacements", async () => {
+test("cli linear and repo help print command-specific usage and legacy aliases point to replacements", async () => {
   const linearHelp = createBufferStream();
   assert.equal(await runCli(["linear", "--help"], { stdout: linearHelp.stream, stderr: createBufferStream().stream }), 0);
   assert.match(linearHelp.read(), /patchrelay linear connect/);
   assert.match(linearHelp.read(), /authorizes one Linear workspace/);
+  assert.match(linearHelp.read(), /patchrelay connect/);
 
   const repoHelp = createBufferStream();
   assert.equal(await runCli(["repo", "--help"], { stdout: repoHelp.stream, stderr: createBufferStream().stream }), 0);
   assert.match(repoHelp.read(), /patchrelay repo link <github-repo>/);
   assert.match(repoHelp.read(), /GitHub repo as the source of truth/);
+  assert.match(repoHelp.read(), /patchrelay attach/);
+  assert.match(repoHelp.read(), /patchrelay repos/);
 
-  for (const command of ["attach", "connect", "installations", "repos"] as const) {
-    const removed = createBufferStream();
-    assert.equal(await runCli([command], { stdout: createBufferStream().stream, stderr: removed.stream }), 1);
-    assert.match(removed.read(), new RegExp(`${command} has been removed`));
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-aliases-"));
+  try {
+    const config = createConfig(baseDir);
+
+    const reposOut = createBufferStream();
+    assert.equal(await runCli(["repos"], { stdout: reposOut.stream, stderr: createBufferStream().stream, config }), 0);
+    assert.match(reposOut.read(), /krasnoperov\/usertold/);
+
+    const reposShowOut = createBufferStream();
+    assert.equal(await runCli(["repos", "krasnoperov/usertold"], { stdout: reposShowOut.stream, stderr: createBufferStream().stream, config }), 0);
+    assert.match(reposShowOut.read(), /Repository: krasnoperov\/usertold/);
+
+    const connectHelp = createBufferStream();
+    assert.equal(await runCli(["connect", "--help"], { stdout: connectHelp.stream, stderr: createBufferStream().stream }), 0);
+    assert.match(connectHelp.read(), /patchrelay linear connect/);
+
+    const installationsHelp = createBufferStream();
+    assert.equal(await runCli(["installations", "--help"], { stdout: installationsHelp.stream, stderr: createBufferStream().stream }), 0);
+    assert.match(installationsHelp.read(), /patchrelay linear connect/);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
   }
 
   const flagError = createBufferStream();

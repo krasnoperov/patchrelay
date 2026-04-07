@@ -3,7 +3,7 @@ export interface ParsedArgs {
   flags: Map<string, string | boolean>;
 }
 
-export type HelpTopic = "root" | "repos" | "service" | "queue";
+export type HelpTopic = "root" | "repo" | "repos" | "service" | "queue";
 
 export interface Output {
   write(chunk: string): boolean;

@@ -113,12 +113,6 @@ function validateFlags(command: string, commandArgs: string[], parsed: ReturnTyp
           assertKnownFlags(parsed, "repo", []);
           return;
       }
-    case "attach":
-    case "repos":
-    case "connect":
-    case "installations":
-      throw new CliUsageError(`${command} has been removed. Use \`patchrelay linear ...\` and \`patchrelay repo ...\` instead.`);
-      return;
     case "service":
       if (commandArgs[0] === "install") {
         assertKnownFlags(parsed, "service", ["force", "write-only", "json"]);
@@ -335,11 +329,6 @@ export async function runCli(
         config,
         runInteractive,
       });
-    }
-
-    if (command === "attach" || command === "repos" || command === "connect" || command === "installations") {
-      writeOutput(stderr, `${command} has been removed. Use \`patchrelay linear ...\` and \`patchrelay repo ...\` instead.\n`);
-      return 1;
     }
 
     if (command === "dashboard") {

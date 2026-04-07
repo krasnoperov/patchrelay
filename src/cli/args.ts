@@ -65,6 +65,26 @@ export function resolveCommand(parsed: ParsedArgs): ResolvedCommand {
   }
 
   if (KNOWN_COMMANDS.has(requestedCommand)) {
+    if (requestedCommand === "attach") {
+      return { command: "repo", commandArgs: ["link", ...parsed.positionals.slice(1)] };
+    }
+    if (requestedCommand === "repos") {
+      const rest = parsed.positionals.slice(1);
+      if (rest.length === 0) {
+        return { command: "repo", commandArgs: ["list"] };
+      }
+      if (["list", "show", "link", "unlink", "sync"].includes(rest[0]!)) {
+        return { command: "repo", commandArgs: rest };
+      }
+      return { command: "repo", commandArgs: ["show", ...rest] };
+    }
+    if (requestedCommand === "connect") {
+      return { command: "linear", commandArgs: ["connect", ...parsed.positionals.slice(1)] };
+    }
+    if (requestedCommand === "installations") {
+      return { command: "linear", commandArgs: ["list", ...parsed.positionals.slice(1)] };
+    }
+
     const command =
       requestedCommand === "dash" || requestedCommand === "d"
         ? "dashboard"
