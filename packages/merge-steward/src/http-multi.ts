@@ -2,7 +2,7 @@ import fastify from "fastify";
 import rawBody from "fastify-raw-body";
 import type { Logger } from "pino";
 import { z } from "zod";
-import type { ServiceGitHubAuthStatus } from "./admin-types.ts";
+import type { ServiceGitHubAuthStatus, ServiceGitHubRepoAccessResponse } from "./admin-types.ts";
 import type { DiscoveredRepoSettings } from "./github-repo-discovery.ts";
 import type { MergeStewardService } from "./service.ts";
 import type { StewardConfig } from "./config.ts";
@@ -38,12 +38,18 @@ const discoverRepoBody = z.object({
   baseBranch: z.string().min(1).optional(),
 });
 
+const repoAccessBody = z.object({
+  repoFullName: z.string().min(1),
+  baseBranch: z.string().min(1),
+});
+
 export async function buildMultiRepoHttpServer(options: {
   instances: Map<string, RepoInstance>;
   webhookSecret: string | undefined;
   githubAdmin: {
     getStatus(): ServiceGitHubAuthStatus;
     discoverRepoSettings(params: { repoFullName: string; baseBranch?: string }): Promise<DiscoveredRepoSettings>;
+    checkRepoAccess(params: { repoFullName: string; baseBranch: string }): Promise<ServiceGitHubRepoAccessResponse>;
   };
   logger: Logger;
 }) {
@@ -77,6 +83,21 @@ export async function buildMultiRepoHttpServer(options: {
         ...(body.baseBranch ? { baseBranch: body.baseBranch } : {}),
       });
       return { ok: true, discovery };
+    } catch (error) {
+      return reply.status(503).send({
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  app.post("/admin/github/repo-access", async (request, reply) => {
+    const body = repoAccessBody.parse(request.body);
+    try {
+      return await githubAdmin.checkRepoAccess({
+        repoFullName: body.repoFullName,
+        baseBranch: body.baseBranch,
+      });
     } catch (error) {
       return reply.status(503).send({
         ok: false,

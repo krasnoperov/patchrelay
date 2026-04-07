@@ -28,7 +28,7 @@ export interface GitHubAppTokenManager extends RuntimeGitHubAuthProvider {
   stop(): void;
 }
 
-function generateJwt(appId: string, privateKey: string): string {
+export function generateJwt(appId: string, privateKey: string): string {
   const now = Math.floor(Date.now() / 1000);
   const header = Buffer.from(JSON.stringify({ alg: "RS256", typ: "JWT" })).toString("base64url");
   const payload = Buffer.from(JSON.stringify({

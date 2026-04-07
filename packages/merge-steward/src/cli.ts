@@ -7,6 +7,13 @@ import type { RunCliOptions } from "./cli/types.ts";
 
 export type { RunCliOptions };
 
+function rewriteParsedArgs(parsed: { positionals: string[]; flags: Map<string, string | boolean> }, positionals: string[]) {
+  return {
+    positionals,
+    flags: parsed.flags,
+  };
+}
+
 export async function runCli(argv: string[], options?: RunCliOptions): Promise<number> {
   const stdout = options?.stdout ?? process.stdout;
   const stderr = options?.stderr ?? process.stderr;
@@ -26,16 +33,16 @@ export async function runCli(argv: string[], options?: RunCliOptions): Promise<n
 
     if (hasHelpFlag(parsed) || command === "help") {
       const topic = command === "help"
-        ? ((parsed.positionals[1] as "root" | "attach" | "repos" | "service" | "queue" | undefined) ?? "root")
-        : (command === "attach" || command === "repos"
-            ? "repos"
+        ? ((parsed.positionals[1] as "root" | "attach" | "repo" | "repos" | "service" | "queue" | undefined) ?? "root")
+        : (command === "attach" || command === "repo" || command === "repos"
+            ? "repo"
             : command === "service" || command === "queue"
               ? command
               : "root");
-      if (!["root", "attach", "repos", "service", "queue"].includes(topic)) {
+      if (!["root", "attach", "repo", "repos", "service", "queue"].includes(topic)) {
         throw new UsageError(`Unknown help topic: ${String(topic)}`);
       }
-      writeOutput(stdout, `${helpTextFor(topic === "attach" ? "repos" : topic)}\n`);
+      writeOutput(stdout, `${helpTextFor(topic === "attach" ? "repo" : topic)}\n`);
       return 0;
     }
 
@@ -49,6 +56,22 @@ export async function runCli(argv: string[], options?: RunCliOptions): Promise<n
         return await (await import("./cli/commands/attach.ts")).handleAttach(parsed, stdout, runCommand);
       case "repos":
         return await (await import("./cli/commands/repos.ts")).handleRepos(parsed, stdout);
+      case "repo": {
+        const subcommand = parsed.positionals[1] ?? "list";
+        if (subcommand === "attach") {
+          return await (await import("./cli/commands/attach.ts")).handleAttach(rewriteParsedArgs(parsed, ["attach", ...parsed.positionals.slice(2)]), stdout, runCommand);
+        }
+        if (subcommand === "list") {
+          return await (await import("./cli/commands/repos.ts")).handleRepos(rewriteParsedArgs(parsed, ["repos", ...parsed.positionals.slice(2)]), stdout);
+        }
+        if (subcommand === "show") {
+          if (!parsed.positionals[2]) {
+            throw new UsageError("merge-steward repo show requires <id>.", "repo");
+          }
+          return await (await import("./cli/commands/repos.ts")).handleRepos(rewriteParsedArgs(parsed, ["repos", ...parsed.positionals.slice(2)]), stdout);
+        }
+        throw new UsageError(`Unknown repo command: ${subcommand}`, "repo");
+      }
       case "doctor":
         return await (await import("./cli/commands/doctor.ts")).handleDoctor(parsed, stdout);
       case "service":

@@ -57,6 +57,7 @@ jobs:
         env:
           ROOT_RELEASE_CREATED: ${{ steps.release.outputs.release_created }}
           STEWARD_RELEASE_CREATED: ${{ steps.release.outputs['packages/merge-steward--release_created'] }}
+          REVIEW_QUILL_RELEASE_CREATED: ${{ steps.release.outputs['packages/review-quill--release_created'] }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
           GITHUB_EVENT_PATH: ${{ github.event_path }}
         shell: bash
@@ -77,6 +78,7 @@ jobs:
 
           root_version="$(node -p "require('./package.json').version")"
           steward_version="$(node -p "require('./packages/merge-steward/package.json').version")"
+          review_quill_version="$(node -p "require('./packages/review-quill/package.json').version")"
 
           version_exists() {
             local package_name="$1"
@@ -86,15 +88,20 @@ jobs:
 
           root_missing=false
           steward_missing=false
+          review_quill_missing=false
           if ! version_exists patchrelay "${root_version}"; then
             root_missing=true
           fi
           if ! version_exists merge-steward "${steward_version}"; then
             steward_missing=true
           fi
+          if ! version_exists review-quill "${review_quill_version}"; then
+            review_quill_missing=true
+          fi
 
           root_should_publish=false
           steward_should_publish=false
+          review_quill_should_publish=false
 
           if [[ "${ROOT_RELEASE_CREATED}" == "true" ]]; then
             root_should_publish=true
@@ -108,18 +115,27 @@ jobs:
             steward_should_publish=true
           fi
 
+          if [[ "${REVIEW_QUILL_RELEASE_CREATED}" == "true" ]]; then
+            review_quill_should_publish=true
+          elif [[ "${review_quill_missing}" == "true" && ( "${is_release_commit}" == "true" || "${manual_publish_unpublished}" == "true" ) ]]; then
+            review_quill_should_publish=true
+          fi
+
           any_publish=false
-          if [[ "${root_should_publish}" == "true" || "${steward_should_publish}" == "true" ]]; then
+          if [[ "${root_should_publish}" == "true" || "${steward_should_publish}" == "true" || "${review_quill_should_publish}" == "true" ]]; then
             any_publish=true
           fi
 
           {
             echo "root_version=${root_version}"
             echo "steward_version=${steward_version}"
+            echo "review_quill_version=${review_quill_version}"
             echo "root_missing=${root_missing}"
             echo "steward_missing=${steward_missing}"
+            echo "review_quill_missing=${review_quill_missing}"
             echo "root_should_publish=${root_should_publish}"
             echo "steward_should_publish=${steward_should_publish}"
+            echo "review_quill_should_publish=${review_quill_should_publish}"
             echo "any_publish=${any_publish}"
           } >> "$GITHUB_OUTPUT"
 
@@ -150,3 +166,11 @@ jobs:
       - name: Publish merge-steward
         if: ${{ steps.publish-plan.outputs.steward_should_publish == 'true' }}
         run: npm publish -w packages/merge-steward --access public
+
+      - name: Verify review-quill
+        if: ${{ steps.publish-plan.outputs.review_quill_should_publish == 'true' }}
+        run: npm run -w packages/review-quill typecheck && npm run -w packages/review-quill test && npm run -w packages/review-quill build
+
+      - name: Publish review-quill
+        if: ${{ steps.publish-plan.outputs.review_quill_should_publish == 'true' }}
+        run: npm publish -w packages/review-quill --access public

@@ -25,7 +25,8 @@
     "node": ">=24.0.0"
   },
   "workspaces": [
-    "packages/merge-steward"
+    "packages/merge-steward",
+    "packages/review-quill"
   ],
   "scripts": {
     "dev": "node --watch --experimental-transform-types src/index.ts",

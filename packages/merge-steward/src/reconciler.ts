@@ -401,7 +401,12 @@ async function mergeHead(ctx: ReconcileContext, entry: QueueEntry): Promise<void
     // Don't evict immediately — reviewer may re-approve after re-review.
     // Stay in merging and re-check on the next tick. Operator can dequeue
     // manually if the approval never comes back.
-    emit(ctx, entry, "merge_waiting_approval", { detail: "approval withdrawn, waiting for re-approval" });
+    const detail = prStatus.reviewDecision === "CHANGES_REQUESTED"
+      ? "blocking review present, waiting for approval"
+      : prStatus.reviewDecision === "REVIEW_REQUIRED"
+        ? "required approval missing"
+        : `review gate not satisfied (${prStatus.reviewDecision ?? "unknown"})`;
+    emit(ctx, entry, "merge_waiting_approval", { detail });
     return;
   }
 

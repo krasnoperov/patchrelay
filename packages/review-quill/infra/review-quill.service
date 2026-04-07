@@ -1,0 +1,35 @@
+[Unit]
+Description=review-quill
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=8
+
+[Service]
+Type=simple
+User=your-user
+Group=your-user
+WorkingDirectory=/home/your-user
+
+EnvironmentFile=-/home/your-user/.config/review-quill/runtime.env
+EnvironmentFile=-/home/your-user/.config/review-quill/service.env
+Environment=NODE_ENV=production
+Environment=PATH=/home/your-user/.local/bin:/usr/local/bin:/usr/bin:/bin
+
+# Service-owned secrets live in encrypted systemd credentials.
+LoadCredentialEncrypted=review-quill-webhook-secret:/etc/credstore.encrypted/review-quill-webhook-secret.cred
+LoadCredentialEncrypted=review-quill-github-app-pem:/etc/credstore.encrypted/review-quill-github-app-pem.cred
+
+ExecStart=/usr/bin/env review-quill serve
+Restart=on-failure
+RestartSec=5
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateMounts=true
+ProtectSystem=strict
+ProtectHome=false
+ReadWritePaths=/home/your-user/.config/review-quill /home/your-user/.local/state/review-quill /home/your-user/.local/share/review-quill
+
+[Install]
+WantedBy=multi-user.target

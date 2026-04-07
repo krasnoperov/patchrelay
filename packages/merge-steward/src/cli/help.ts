@@ -11,15 +11,16 @@ function rootHelpText(): string {
     "",
     "Happy path:",
     "  1. merge-steward init <public-base-url>",
-    "  2. merge-steward attach <owner/repo>",
+    "  2. merge-steward repo attach <owner/repo>",
     "  3. merge-steward doctor --repo <id>",
     "  4. merge-steward service status",
     "  5. merge-steward queue status --repo <id>",
     "",
     "Everyday commands:",
-    "  attach <owner/repo> [--base-branch <branch>] [--required-check <checks>] [--label <label>] [--refresh] [--json]",
+    "  repo attach <owner/repo> [--base-branch <branch>] [--required-check <checks>] [--label <label>] [--refresh] [--json]",
     "                                                          Create or update a repo config, auto-discover GitHub defaults, and restart the service",
-    "  repos [<id>] [--json]                                  List attached repositories or show one repo config",
+    "  repo list [--json]                                     List attached repositories",
+    "  repo show <id> [--json]                                Show one repo config",
     "  doctor [--repo <id>] [--json]                          Validate config, secrets, auth, and required binaries",
     "  service status [--json]                                Show systemd state",
     "  service logs [--lines <count>] [--json]                Show recent journal logs",
@@ -42,19 +43,21 @@ function rootHelpText(): string {
     "",
     "Command help:",
     "  merge-steward help",
-    "  merge-steward help repos",
+    "  merge-steward help repo",
     "  merge-steward help service",
     "  merge-steward help queue",
   ].join("\n");
 }
 
-function reposHelpText(): string {
+function repoHelpText(): string {
   return [
     "Usage:",
-    "  merge-steward attach <owner/repo> [options]",
-    "  merge-steward repos [<id>] [--json]",
+    "  merge-steward repo attach <owner/repo> [options]",
+    "  merge-steward repo attach <id> <owner/repo> [options]",
+    "  merge-steward repo list [--json]",
+    "  merge-steward repo show <id> [--json]",
     "",
-    "Options for `attach`:",
+    "Options for `repo attach`:",
     "  --base-branch <branch>       Base branch to land into (default: main)",
     "  --required-check <checks>    Comma-separated required check names",
     "  --label <label>              Admission label (default: queue)",
@@ -63,12 +66,16 @@ function reposHelpText(): string {
     "  --refresh                    Re-discover base branch and required checks from GitHub",
     "  --json                       Emit structured JSON",
     "",
+    "Compatibility aliases:",
+    "  merge-steward attach ...     Alias for `merge-steward repo attach ...`",
+    "  merge-steward repos ...      Alias for `merge-steward repo list/show ...`",
+    "",
     "Examples:",
-    "  merge-steward attach owner/repo",
-    "  merge-steward attach owner/repo --refresh",
-    "  merge-steward attach owner/repo --label queue",
-    "  merge-steward repos",
-    "  merge-steward repos app",
+    "  merge-steward repo attach owner/repo",
+    "  merge-steward repo attach owner/repo --refresh",
+    "  merge-steward repo attach owner/repo --label queue",
+    "  merge-steward repo list",
+    "  merge-steward repo show app",
   ].join("\n");
 }
 
@@ -101,8 +108,9 @@ function queueHelpText(): string {
 
 export function helpTextFor(topic: HelpTopic): string {
   switch (topic) {
+    case "repo":
     case "repos":
-      return reposHelpText();
+      return repoHelpText();
     case "service":
       return serviceHelpText();
     case "queue":

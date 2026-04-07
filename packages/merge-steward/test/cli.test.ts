@@ -61,7 +61,7 @@ test("merge-steward help shows grouped repo, service, and queue commands", async
   const stdout = createBufferStream();
   assert.equal(await runCli([], { stdout: stdout.stream, stderr: createBufferStream().stream }), 0);
   const text = stdout.read();
-  assert.match(text, /attach <owner\/repo>/);
+  assert.match(text, /repo attach <owner\/repo>/);
   assert.match(text, /service status \[--json\]/);
   assert.match(text, /queue show --repo <id>/);
 });
@@ -104,6 +104,7 @@ test("merge-steward init and repo commands manage bootstrap state with explicit 
         const repoOut = createBufferStream();
         assert.equal(
           await runCli([
+            "repo",
             "attach",
             "app",
             "owner/repo",
@@ -128,14 +129,14 @@ test("merge-steward init and repo commands manage bootstrap state with explicit 
         ]);
 
         const listOut = createBufferStream();
-        assert.equal(await runCli(["repos", "--json"], { stdout: listOut.stream, stderr: createBufferStream().stream }), 0);
+        assert.equal(await runCli(["repo", "list", "--json"], { stdout: listOut.stream, stderr: createBufferStream().stream }), 0);
         const repos = JSON.parse(listOut.read()) as { repos: Array<Record<string, unknown>> };
         assert.strictEqual(repos.repos.length, 1);
         assert.strictEqual(repos.repos[0]!.repoId, "app");
         assert.strictEqual(repos.repos[0]!.repoFullName, "owner/repo");
 
         const inspectOut = createBufferStream();
-        assert.equal(await runCli(["repos", "app", "--json"], { stdout: inspectOut.stream, stderr: createBufferStream().stream }), 0);
+        assert.equal(await runCli(["repo", "show", "app", "--json"], { stdout: inspectOut.stream, stderr: createBufferStream().stream }), 0);
         const inspected = JSON.parse(inspectOut.read()) as Record<string, unknown>;
         assert.equal(inspected.repoId, "app");
         assert.equal(inspected.repoFullName, "owner/repo");

@@ -10,7 +10,12 @@ import {
   getRepoConfigPath,
 } from "../runtime-paths.ts";
 import { parseHomeConfigObject } from "../steward-home.ts";
-import type { ServiceErrorResponse, ServiceGitHubAuthStatus, ServiceGitHubDiscoverResponse } from "../admin-types.ts";
+import type {
+  ServiceErrorResponse,
+  ServiceGitHubAuthStatus,
+  ServiceGitHubDiscoverResponse,
+  ServiceGitHubRepoAccessResponse,
+} from "../admin-types.ts";
 import type { ParsedArgs, HelpTopic, CommandResult, CommandRunner } from "./types.ts";
 import { UsageError } from "./types.ts";
 
@@ -249,6 +254,19 @@ export async function fetchServiceRepoDiscovery(
     body: {
       repoFullName,
       ...(options?.baseBranch ? { baseBranch: options.baseBranch } : {}),
+    },
+  });
+}
+
+export async function fetchServiceRepoAccess(
+  repoFullName: string,
+  options: { baseBranch: string },
+): Promise<ServiceGitHubRepoAccessResponse> {
+  return await fetchGatewayJson<ServiceGitHubRepoAccessResponse>("/admin/github/repo-access", {
+    method: "POST",
+    body: {
+      repoFullName,
+      baseBranch: options.baseBranch,
     },
   });
 }

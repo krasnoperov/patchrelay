@@ -96,6 +96,10 @@ export function linearHelpText(): string {
     "  patchrelay linear connect",
     "  patchrelay linear list",
     "  patchrelay linear sync usertold",
+    "",
+    "Compatibility aliases:",
+    "  patchrelay connect            Alias for `patchrelay linear connect`",
+    "  patchrelay installations      Alias for `patchrelay linear list`",
   ].join("\n");
 }
 
@@ -125,6 +129,11 @@ export function repoHelpText(): string {
     "  patchrelay repo link krasnoperov/usertold --workspace usertold --team USE",
     "  patchrelay repo show krasnoperov/usertold",
     "  patchrelay repo sync",
+    "",
+    "Compatibility aliases:",
+    "  patchrelay attach ...         Alias for `patchrelay repo link ...`",
+    "  patchrelay repos              Alias for `patchrelay repo list`",
+    "  patchrelay repos <repo>       Alias for `patchrelay repo show <repo>`",
   ].join("\n");
 }
 

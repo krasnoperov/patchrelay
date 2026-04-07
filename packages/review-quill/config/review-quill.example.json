@@ -1,0 +1,35 @@
+{
+  "server": {
+    "bind": "127.0.0.1",
+    "port": 8788
+  },
+  "database": {
+    "path": "/home/your-user/.local/state/review-quill/review-quill.sqlite",
+    "wal": true
+  },
+  "logging": {
+    "level": "info"
+  },
+  "reconciliation": {
+    "pollIntervalMs": 120000
+  },
+  "codex": {
+    "bin": "codex",
+    "args": ["app-server"],
+    "sourceBashrc": true,
+    "requestTimeoutMs": 30000,
+    "serviceName": "review-quill",
+    "approvalPolicy": "never",
+    "sandboxMode": "read-only"
+  },
+  "repositories": [
+    {
+      "repoId": "mafia",
+      "repoFullName": "krasnoperov/mafia",
+      "baseBranch": "main",
+      "requiredChecks": ["Tests"],
+      "excludeBranches": ["release-please--*"],
+      "reviewDocs": ["REVIEW_WORKFLOW.md", "CLAUDE.md", "AGENTS.md"]
+    }
+  ]
+}
