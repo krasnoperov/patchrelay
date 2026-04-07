@@ -20,6 +20,7 @@ export interface ServiceGitHubRepoAccessResponse {
   repoFullName: string;
   baseBranch: string;
   permissions: {
+    contents: "none" | "read" | "write";
     pull: boolean;
     push: boolean;
     admin: boolean;

@@ -283,9 +283,9 @@ export async function handleDoctor(parsed: ParsedArgs, stdout: Output): Promise<
                 scope: `repo:${repoId}:github-push-access`,
                 message: access.permissions.push
                   ? access.branchProtected
-                    ? `Steward App has repo push permission for ${config.repoFullName}; ${config.baseBranch} is protected, so final fast-forward pushes still depend on branch rules allowing the App`
-                    : `Steward App has repo push permission for ${config.repoFullName}`
-                  : `Steward App does not have repo push permission for ${config.repoFullName}; queue merges to ${config.baseBranch} will fail`,
+                    ? `Steward App has Contents:${access.permissions.contents} for ${config.repoFullName}; ${config.baseBranch} is protected, so final fast-forward pushes still depend on branch rules allowing the App`
+                    : `Steward App has Contents:${access.permissions.contents} for ${config.repoFullName}`
+                  : `Steward App does not have Contents:write for ${config.repoFullName}; queue merges to ${config.baseBranch} will fail`,
               });
             } catch (error) {
               checks.push({

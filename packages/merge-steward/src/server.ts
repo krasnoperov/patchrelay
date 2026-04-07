@@ -11,7 +11,7 @@ import { buildMultiRepoHttpServer } from "./http-multi.ts";
 import { loadAllRepoConfigs } from "./install.ts";
 import { parseHomeConfigObject } from "./steward-home.ts";
 import { getMergeStewardPathLayout } from "./runtime-paths.ts";
-import { createGitHubAppTokenManager, resolveGitHubAuthConfig, resolveAppSlug, type GitHubAppTokenManager } from "./github-auth.ts";
+import { createGitHubAppTokenManager, generateJwt, resolveGitHubAuthConfig, resolveAppSlug, type GitHubAppTokenManager } from "./github-auth.ts";
 import { discoverRepoSettings } from "./github-repo-discovery.ts";
 import { resolveSecret, resolveSecretWithSource } from "./resolve-secret.ts";
 import { setRuntimeGitHubAuthProvider } from "./exec.ts";
@@ -67,6 +67,12 @@ async function fetchGitHubJson<T>(token: string, path: string): Promise<T> {
     throw new Error(`GitHub API ${response.status} for ${path}: ${body}`);
   }
   return await response.json() as T;
+}
+
+function normalizePermissionLevel(value: unknown): "none" | "read" | "write" {
+  if (value === "write") return "write";
+  if (value === "read") return "read";
+  return "none";
 }
 
 export async function startMultiServer(): Promise<void> {
@@ -183,26 +189,32 @@ export async function startMultiServer(): Promise<void> {
         if (!githubAppTokenManager) {
           throw new Error("GitHub App auth is not ready in the merge-steward service.");
         }
+        if (githubAuth.mode !== "app") {
+          throw new Error("GitHub App auth is not configured in the merge-steward service.");
+        }
+        const encodedRepo = params.repoFullName.split("/").map(encodeURIComponent).join("/");
+        const appJwt = generateJwt(githubAuth.credentials.appId, githubAuth.credentials.privateKey);
+        const installation = await fetchGitHubJson<{
+          permissions?: { contents?: string };
+        }>(appJwt, `/repos/${encodedRepo}/installation`);
         const token = githubAppTokenManager.currentTokenForRepo(params.repoFullName);
         if (!token) {
           throw new Error(`No GitHub installation token available for ${params.repoFullName}.`);
         }
-        const encodedRepo = params.repoFullName.split("/").map(encodeURIComponent).join("/");
-        const repo = await fetchGitHubJson<{
-          permissions?: { pull?: boolean; push?: boolean; admin?: boolean };
-        }>(token, `/repos/${encodedRepo}`);
         const branch = await fetchGitHubJson<{ protected?: boolean }>(
           token,
           `/repos/${encodedRepo}/branches/${encodeURIComponent(params.baseBranch)}`,
         );
+        const contents = normalizePermissionLevel(installation.permissions?.contents);
         return {
           ok: true,
           repoFullName: params.repoFullName,
           baseBranch: params.baseBranch,
           permissions: {
-            pull: Boolean(repo.permissions?.pull),
-            push: Boolean(repo.permissions?.push),
-            admin: Boolean(repo.permissions?.admin),
+            contents,
+            pull: contents === "read" || contents === "write",
+            push: contents === "write",
+            admin: false,
           },
           branchProtected: Boolean(branch.protected),
         };
