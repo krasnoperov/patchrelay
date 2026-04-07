@@ -20,7 +20,7 @@
     "requestTimeoutMs": 30000,
     "serviceName": "review-quill",
     "approvalPolicy": "never",
-    "sandboxMode": "read-only"
+    "sandboxMode": "danger-full-access"
   },
   "repositories": [
     {
