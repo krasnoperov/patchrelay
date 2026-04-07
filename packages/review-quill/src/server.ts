@@ -34,7 +34,9 @@ export async function startServer(configPath = process.env.REVIEW_QUILL_CONFIG ?
   }
 
   const store = new SqliteStore(config.database.path);
-  const github = new GitHubClient(tokenManager);
+  const github = new GitHubClient({
+    currentTokenForRepo: (repoFullName?: string) => tokenManager.currentTokenForRepo(repoFullName),
+  });
   const runner = new ReviewRunner(config, github, logger.child({ component: "review-runner" }));
   const service = new ReviewQuillService(config, store, github, runner, logger.child({ component: "service" }));
 
@@ -74,11 +76,15 @@ export async function startServer(configPath = process.env.REVIEW_QUILL_CONFIG ?
 
   app.get("/watch", async () => service.getWatchSnapshot());
 
-  app.post("/admin/reconcile", async () => {
-    const started = await service.triggerReconcile();
+  app.post("/admin/reconcile", async (request) => {
+    const repoFullName = typeof (request.body as { repoFullName?: unknown } | undefined)?.repoFullName === "string"
+      ? (request.body as { repoFullName: string }).repoFullName
+      : undefined;
+    const started = await service.triggerReconcile(repoFullName);
     return {
       ok: true,
       started,
+      ...(repoFullName ? { repoFullName } : {}),
       runtime: service.getWatchSnapshot().runtime,
     };
   });

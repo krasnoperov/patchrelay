@@ -135,6 +135,28 @@ The GitHub App should be the actor for:
 - publishing `APPROVE` or `REQUEST_CHANGES`
 - creating and updating the `review-quill/verdict` check run
 
+### Known-Good GitHub App Permissions
+
+This is the currently validated permission set for `review-quill`. After moving
+the app to this shape, GitHub started counting `review-quill` approvals toward
+the normal branch review gate.
+
+Repository permissions:
+
+- `Contents: Read and write`
+- `Issues: Read and write`
+- `Pull requests: Read and write`
+- `Actions: Read-only`
+- `Metadata: Read-only`
+
+Webhook events:
+
+- `Pull request`
+- `Check run`
+- `Check suite`
+
+This is a known-good set, not a proven minimal set.
+
 ### `gh` / `git` Identity
 
 Like PatchRelay, `review-quill` should override `gh` and `git` credentials with the current installation token when running review jobs.

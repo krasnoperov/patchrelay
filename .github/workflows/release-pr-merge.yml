@@ -67,6 +67,8 @@ jobs:
             '.release-please-manifest.json',
             'packages/merge-steward/CHANGELOG.md',
             'packages/merge-steward/package.json',
+            'packages/review-quill/CHANGELOG.md',
+            'packages/review-quill/package.json',
           ]);
 
           function ghJson(args) {
