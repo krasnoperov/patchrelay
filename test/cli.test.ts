@@ -129,7 +129,7 @@ function runCliProcess(
   });
 }
 
-async function runCliProcessAsync(
+async function _runCliProcessAsync(
   args: string[],
   options?: { env?: Record<string, string | undefined>; cwd?: string },
 ): Promise<{ status: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }> {
