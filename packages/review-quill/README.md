@@ -138,12 +138,18 @@ The initial context path is:
 - local `git diff <base>...HEAD` inventory and curated patch set
 - explicit repo guidance from `REVIEW_WORKFLOW.md`, `CLAUDE.md`, and `AGENTS.md`
 - prior formal PR reviews from GitHub
+- optional Linear issue context via the existing Codex `linear` MCP when the PR metadata includes issue keys
 
 Diff context is intentionally filtered:
 
 - lockfiles and other noisy/generated paths are summarized by policy
 - oversized patches are summarized instead of dumped whole
 - repo config can tune ignore/summarize patterns and patch budgets
+
+When the PR title, body, or branch name contains issue keys like `TST-28`,
+the review prompt now explicitly nudges the model to consult the existing
+`linear` MCP before finalizing its verdict. This stays lightweight: no separate
+Linear auth/config is added inside `review-quill`.
 
 Happy path:
 

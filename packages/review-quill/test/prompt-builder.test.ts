@@ -93,6 +93,7 @@ function baseContext(): Omit<ReviewContext, "prompt"> {
       priorReviews: [
         { id: 1, authorLogin: "review-quill", state: "COMMENTED", body: "Earlier note", commitId: "oldsha" },
       ],
+      issueKeys: ["TST-28"],
     },
   };
 }
@@ -106,4 +107,6 @@ test("renderReviewPrompt includes explicit guidance docs and suppressed summarie
   assert.doesNotMatch(prompt, /lockfile patch body/);
   assert.match(prompt, /src\/service\.ts/);
   assert.match(prompt, /Earlier note/);
+  assert.match(prompt, /Linked issue keys detected: TST-28/);
+  assert.match(prompt, /linear` MCP tool is available/);
 });

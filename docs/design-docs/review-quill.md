@@ -308,6 +308,12 @@ Prompt context should include:
   - `REVIEW_WORKFLOW.md`
   - `CLAUDE.md`
   - `AGENTS.md`
+- detected issue keys from the PR title, body, or head branch
+
+When issue keys are present, the prompt should encourage the model to consult
+the existing Codex `linear` MCP for the most relevant issue before finalizing
+its verdict. This should remain prompt-level guidance, not a dedicated Linear
+integration subsystem inside `review-quill`.
 
 `AGENTS.md` should still be loaded explicitly for safety, even though
 `app-server` also sees it from the checked-out repo cwd.

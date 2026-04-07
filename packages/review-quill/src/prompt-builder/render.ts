@@ -2,10 +2,12 @@ import { summarizeSuppressedFile } from "../diff-context/index.ts";
 import type { ReviewContext } from "../types.ts";
 
 export function renderReviewPrompt(context: Omit<ReviewContext, "prompt">): string {
+  const issueKeys = context.promptContext.issueKeys;
   const lines: string[] = [
     "You are Review Quill, a strict pull request reviewer.",
     "You are running inside a checked-out copy of the current PR head.",
     "Use the repository in the current working directory when you need more context.",
+    "Start by understanding the actual code and diff before deciding on a verdict.",
     "Return only one JSON object with this shape:",
     '{"verdict":"approve"|"request_changes","summary":"short summary","findings":[{"path":"optional","line":123,"severity":"blocking"|"nit","message":"text"}]}',
     "",
@@ -46,6 +48,15 @@ export function renderReviewPrompt(context: Omit<ReviewContext, "prompt">): stri
     for (const entry of context.diff.suppressed) {
       lines.push(`- ${summarizeSuppressedFile(entry)}`);
     }
+  }
+
+  if (issueKeys.length > 0) {
+    lines.push(
+      "",
+      `Linked issue keys detected: ${issueKeys.join(", ")}`,
+      "If the `linear` MCP tool is available, usually read the most relevant issue before finalizing your verdict.",
+      "Use the issue to understand intent, acceptance context, and product constraints, then return to the checked-out code and diff.",
+    );
   }
 
   if (context.promptContext.guidanceDocs.length > 0) {

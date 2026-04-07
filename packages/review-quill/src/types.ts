@@ -134,6 +134,7 @@ export interface ReviewDiffContext {
 export interface PromptContext {
   guidanceDocs: GuidanceDoc[];
   priorReviews: PullRequestReviewRecord[];
+  issueKeys: string[];
 }
 
 export interface ReviewContext {

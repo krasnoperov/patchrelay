@@ -1,6 +1,7 @@
 import type { GitHubClient } from "../github-client.ts";
 import type { PromptContext, PullRequestSummary, ReviewWorkspace } from "../types.ts";
 import { buildGitHubPromptContext } from "./github-context.ts";
+import { detectIssueKeys } from "./issue-keys.ts";
 import { loadRepoGuidanceDocs } from "./repo-guidance.ts";
 
 export async function buildPromptContext(
@@ -15,5 +16,6 @@ export async function buildPromptContext(
   return {
     guidanceDocs,
     priorReviews: githubContext.priorReviews,
+    issueKeys: detectIssueKeys(pr),
   };
 }
