@@ -20,6 +20,7 @@ export interface QueueHealthAdvancer {
       clearFailureProvenance?: boolean;
     },
   ): void;
+  enqueueIssue(projectId: string, issueId: string): void;
 }
 
 function isDuplicateProbe(
@@ -65,13 +66,12 @@ export class QueueHealthMonitor {
       mergeable?: string;
       mergeStateStatus?: string;
       headRefOid?: string;
-      labels?: Array<{ name: string }>;
     };
     try {
       const { stdout } = await execCommand("gh", [
         "pr", "view", String(issue.prNumber),
         "--repo", project.github.repoFullName,
-        "--json", "state,mergeable,mergeStateStatus,headRefOid,labels",
+        "--json", "state,mergeable,mergeStateStatus,headRefOid",
       ], { timeoutMs: 10_000 });
       pr = JSON.parse(stdout) as typeof pr;
     } catch (error) {
@@ -105,9 +105,6 @@ export class QueueHealthMonitor {
     }
 
     if (pr.state !== "OPEN") return;
-
-    const hasQueueLabel = pr.labels?.some((l) => l.name === protocol.admissionLabel) ?? false;
-    if (!hasQueueLabel) return;
 
     const isDirty = pr.mergeStateStatus === "DIRTY" || pr.mergeable === "CONFLICTING";
     let hasEvictionCheckRun = false;
@@ -144,10 +141,17 @@ export class QueueHealthMonitor {
         lastAttemptedFailureHeadSha: headRefOid,
         lastAttemptedFailureSignature: signature,
       });
-      this.advancer.advanceIdleIssue(issue, "repairing_queue", {
-        pendingRunType: "queue_repair",
-        pendingRunContext,
+      this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        eventType: "merge_steward_incident",
+        eventJson: JSON.stringify(pendingRunContext),
+        dedupeKey: `queue_health:queue_repair:${issue.linearIssueId}:${signature}`,
       });
+      this.advancer.advanceIdleIssue(issue, "repairing_queue");
+      if (this.db.peekIssueSessionWake(issue.projectId, issue.linearIssueId)) {
+        this.advancer.enqueueIssue(issue.projectId, issue.linearIssueId);
+      }
       this.logger.info(
         { issueKey: issue.issueKey, prNumber: issue.prNumber, headRefOid, reason },
         "Queue health: queue issue detected, dispatching repair",

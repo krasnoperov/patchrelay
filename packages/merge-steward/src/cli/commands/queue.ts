@@ -1,7 +1,6 @@
 import { SqliteStore } from "../../db/sqlite-store.ts";
-import { getRepoConfigPath } from "../../runtime-paths.ts";
 import { buildSummary } from "../../service.ts";
-import type { QueueEntry, QueueEntryDetail, QueueWatchSnapshot } from "../../types.ts";
+import { TERMINAL_STATUSES, type QueueEntry, type QueueEntryDetail, type QueueWatchSnapshot } from "../../types.ts";
 import type { StewardConfig } from "../../config.ts";
 import type { ParsedArgs, Output } from "../types.ts";
 import { UsageError } from "../types.ts";
@@ -43,12 +42,57 @@ async function readQueueSnapshot(config: StewardConfig, eventLimit: number): Pro
   }
 }
 
+function firstLine(text: string | null | undefined): string | null {
+  if (!text) return null;
+  const line = text.split(/\r?\n/, 1)[0]?.trim();
+  return line ? line : null;
+}
+
+export function formatQueueStatusText(source: "service" | "database", snapshot: QueueWatchSnapshot): string {
+  return [
+    `Repo: ${snapshot.repoId} (${snapshot.repoFullName})`,
+    `Source: ${source}`,
+    `Base branch: ${snapshot.baseBranch}`,
+    `Active entries: ${snapshot.summary.active}`,
+    `Queued: ${snapshot.summary.queued}  preparing: ${snapshot.summary.preparingHead}  validating: ${snapshot.summary.validating}  merging: ${snapshot.summary.merging}`,
+    `Merged: ${snapshot.summary.merged}  evicted: ${snapshot.summary.evicted}  dequeued: ${snapshot.summary.dequeued}`,
+    snapshot.summary.headPrNumber ? `Head PR: #${snapshot.summary.headPrNumber}` : "Head PR: none",
+    ...(snapshot.runtime.lastTickOutcome === "failed"
+      ? [
+        "Last tick: failed",
+        ...(firstLine(snapshot.runtime.lastTickError) ? [`Last error: ${firstLine(snapshot.runtime.lastTickError)}`] : []),
+      ]
+      : []),
+    ...(snapshot.queueBlock
+      ? [
+        `Queue blocked: ${snapshot.queueBlock.reason} on ${snapshot.queueBlock.baseBranch}${snapshot.queueBlock.baseSha ? ` @ ${snapshot.queueBlock.baseSha.slice(0, 8)}` : ""}`,
+        `Base failures: ${snapshot.queueBlock.failingChecks.length > 0 ? snapshot.queueBlock.failingChecks.map((check) => check.name).join(", ") : "(none)"}`,
+        ...(snapshot.queueBlock.pendingChecks.length > 0
+          ? [`Base pending: ${snapshot.queueBlock.pendingChecks.map((check) => check.name).join(", ")}`]
+          : []),
+      ]
+      : []),
+    "",
+    "Entries:",
+    ...(snapshot.entries.length > 0
+      ? snapshot.entries.map((entry) => `- #${entry.prNumber} ${entry.status} pos=${entry.position} branch=${entry.branch}`)
+      : ["- (none)"]),
+  ].join("\n") + "\n";
+}
+
 function findEntryForInspect(store: SqliteStore, repoId: string, options: { entryId?: string; prNumber?: number }): QueueEntry | undefined {
   if (options.entryId) {
     return store.getEntry(options.entryId);
   }
   if (options.prNumber !== undefined) {
-    return store.listAll(repoId).find((entry) => entry.prNumber === options.prNumber);
+    const matches = store.listAll(repoId).filter((entry) => entry.prNumber === options.prNumber);
+    matches.sort((left, right) => {
+      const leftActive = TERMINAL_STATUSES.includes(left.status) ? 0 : 1;
+      const rightActive = TERMINAL_STATUSES.includes(right.status) ? 0 : 1;
+      if (leftActive !== rightActive) return rightActive - leftActive;
+      return right.position - left.position;
+    });
+    return matches[0];
   }
   return undefined;
 }
@@ -78,8 +122,9 @@ export async function handleQueue(parsed: ParsedArgs, stdout: Output): Promise<n
 
   if (subcommand === "watch") {
     const repoId = resolveRepoId(parsed, 2, "queue");
+    const { configPath } = loadRepoConfigById(repoId);
     const { startWatch } = await import("../../watch/index.tsx");
-    await startWatch(getRepoConfigPath(repoId), parseIntegerFlag(parsed.flags.get("pr"), "--pr"));
+    await startWatch(configPath, parseIntegerFlag(parsed.flags.get("pr"), "--pr"));
     return 0;
   }
 
@@ -94,32 +139,7 @@ export async function handleQueue(parsed: ParsedArgs, stdout: Output): Promise<n
       writeOutput(stdout, formatJson(payload));
       return 0;
     }
-    writeOutput(
-      stdout,
-      [
-        `Repo: ${snapshot.repoId} (${snapshot.repoFullName})`,
-        `Source: ${source}`,
-        `Base branch: ${snapshot.baseBranch}`,
-        `Active entries: ${snapshot.summary.active}`,
-        `Queued: ${snapshot.summary.queued}  preparing: ${snapshot.summary.preparingHead}  validating: ${snapshot.summary.validating}  merging: ${snapshot.summary.merging}`,
-        `Merged: ${snapshot.summary.merged}  evicted: ${snapshot.summary.evicted}  dequeued: ${snapshot.summary.dequeued}`,
-        snapshot.summary.headPrNumber ? `Head PR: #${snapshot.summary.headPrNumber}` : "Head PR: none",
-        ...(snapshot.queueBlock
-          ? [
-            `Queue blocked: ${snapshot.queueBlock.reason} on ${snapshot.queueBlock.baseBranch}${snapshot.queueBlock.baseSha ? ` @ ${snapshot.queueBlock.baseSha.slice(0, 8)}` : ""}`,
-            `Base failures: ${snapshot.queueBlock.failingChecks.length > 0 ? snapshot.queueBlock.failingChecks.map((check) => check.name).join(", ") : "(none)"}`,
-            ...(snapshot.queueBlock.pendingChecks.length > 0
-              ? [`Base pending: ${snapshot.queueBlock.pendingChecks.map((check) => check.name).join(", ")}`]
-              : []),
-          ]
-          : []),
-        "",
-        "Entries:",
-        ...(snapshot.entries.length > 0
-          ? snapshot.entries.map((entry) => `- #${entry.prNumber} ${entry.status} pos=${entry.position} branch=${entry.branch}`)
-          : ["- (none)"]),
-      ].join("\n") + "\n",
-    );
+    writeOutput(stdout, formatQueueStatusText(source, snapshot));
     return 0;
   }
 

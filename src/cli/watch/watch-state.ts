@@ -23,6 +23,7 @@ export interface WatchIssue {
   title?: string | undefined;
   statusNote?: string | undefined;
   projectId: string;
+  sessionState?: string | undefined;
   factoryState: string;
   blockedByCount: number;
   blockedByKeys: string[];
@@ -49,6 +50,7 @@ export interface WatchIssue {
   latestFailureCheckName?: string | undefined;
   latestFailureStepName?: string | undefined;
   latestFailureSummary?: string | undefined;
+  waitingReason?: string | undefined;
   updatedAt: string;
 }
 
@@ -127,7 +129,7 @@ export type WatchAction =
   | { type: "enter-detail"; issueKey: string }
   | { type: "exit-detail" }
   | { type: "detail-navigate"; direction: "next" | "prev"; filtered: WatchIssue[] }
-  | { type: "timeline-rehydrate"; runs: TimelineRunInput[]; feedEvents: OperatorFeedEvent[]; liveThread: CodexThreadSummary | null; activeRunId: number | null; issueContext: WatchIssueContext | null }
+  | { type: "timeline-rehydrate"; runs: TimelineRunInput[]; feedEvents: OperatorFeedEvent[]; liveThread: CodexThreadSummary | null; activeRunId: number | null; activeRunStartedAt?: string | null; issueContext: WatchIssueContext | null }
   | { type: "codex-notification"; method: string; params: Record<string, unknown> }
   | { type: "cycle-filter" }
   | { type: "toggle-follow" }
@@ -176,6 +178,10 @@ export const initialWatchState: WatchState = {
 
 const TERMINAL_FACTORY_STATES = new Set(["done", "failed"]);
 
+function effectiveSessionState(issue: WatchIssue): string | undefined {
+  return issue.sessionState ?? (TERMINAL_FACTORY_STATES.has(issue.factoryState) ? issue.factoryState : undefined);
+}
+
 export function filterIssues(issues: WatchIssue[], filter: WatchFilter): WatchIssue[] {
   switch (filter) {
     case "all":
@@ -183,7 +189,10 @@ export function filterIssues(issues: WatchIssue[], filter: WatchFilter): WatchIs
     case "active":
       return issues.filter((i) => i.activeRunType !== undefined);
     case "non-done":
-      return issues.filter((i) => !TERMINAL_FACTORY_STATES.has(i.factoryState));
+      return issues.filter((i) => {
+        const sessionState = effectiveSessionState(i);
+        return sessionState !== "done" && sessionState !== "failed" && !TERMINAL_FACTORY_STATES.has(i.factoryState);
+      });
   }
 }
 
@@ -206,11 +215,14 @@ export function computeAggregates(issues: WatchIssue[]): IssueAggregates {
   let done = 0;
   let failed = 0;
   for (const issue of issues) {
+    const sessionState = effectiveSessionState(issue);
+    const isDone = sessionState === "done" || DONE_STATES.has(issue.factoryState);
+    const isFailed = sessionState === "failed" || FAILED_STATES.has(issue.factoryState);
     if (issue.activeRunType) active++;
     if (!issue.activeRunType && issue.blockedByCount > 0) blocked++;
-    if (!issue.activeRunType && issue.readyForExecution) ready++;
-    if (DONE_STATES.has(issue.factoryState)) done++;
-    if (FAILED_STATES.has(issue.factoryState)) failed++;
+    if (!issue.activeRunType && issue.readyForExecution && !isDone && !isFailed) ready++;
+    if (isDone) done++;
+    if (isFailed) failed++;
   }
   return { active, blocked, ready, done, failed, total: issues.length };
 }
@@ -285,7 +297,7 @@ export function watchReducer(state: WatchState, action: WatchAction): WatchState
         rawRuns: action.runs,
         rawFeedEvents: action.feedEvents,
         activeRunId: action.activeRunId,
-        activeRunStartedAt: activeRun?.startedAt ?? null,
+        activeRunStartedAt: action.activeRunStartedAt ?? activeRun?.startedAt ?? null,
         issueContext: action.issueContext,
       };
     }
@@ -322,63 +334,16 @@ export function watchReducer(state: WatchState, action: WatchAction): WatchState
 // ─── Feed Event → Issue List + Timeline ───────────────────────────
 
 function applyFeedEvent(state: WatchState, event: OperatorFeedEvent, receivedAt: number): WatchState {
-  if (!event.issueKey) {
-    return { ...state, lastServerMessageAt: receivedAt };
-  }
-
-  const index = state.issues.findIndex((issue) => issue.issueKey === event.issueKey);
-  if (index === -1) {
-    return { ...state, lastServerMessageAt: receivedAt };
-  }
-
-  const updated = [...state.issues];
-  const issue = { ...updated[index]! };
-
-  if (event.kind === "stage" && event.stage) {
-    issue.factoryState = event.stage;
-  }
-  if (event.kind === "stage" && event.status === "starting" && event.stage) {
-    issue.activeRunType = event.stage;
-  }
-  if (event.kind === "turn") {
-    if (event.status === "completed" || event.status === "failed") {
-      issue.activeRunType = undefined;
-      issue.latestRunStatus = event.status;
-    }
-  }
-  if (event.kind === "github" && event.status) {
-    if (event.status === "check_passed" || event.status === "check_failed") {
-      issue.prCheckStatus = event.status === "check_passed" ? "passed" : "failed";
-    }
-    if (event.status === "ci_repair_queued") {
-      issue.factoryState = "repairing_ci";
-      issue.statusNote = event.detail ?? event.summary;
-    }
-    if (event.status === "queue_repair_queued") {
-      issue.factoryState = "repairing_queue";
-      issue.statusNote = event.detail ?? event.summary;
-    }
-    if (event.status === "repair_deduped" || event.status === "branch_not_advanced") {
-      issue.statusNote = event.summary;
-    }
-  }
-  if ((event.kind === "turn" || event.kind === "github") && event.status === "branch_not_advanced") {
-    issue.statusNote = event.summary;
-  }
-
-  issue.updatedAt = event.at;
-  updated[index] = issue;
-
-  // Append to timeline and raw feed events if this event matches the active detail issue
-  const isActiveDetail = state.view === "detail" && state.activeDetailKey === event.issueKey;
+  const isActiveDetail = Boolean(event.issueKey)
+    && state.view === "detail"
+    && state.activeDetailKey === event.issueKey;
   const timeline = isActiveDetail
     ? capArray(appendFeedToTimeline(state.timeline, event), MAX_TIMELINE_ENTRIES)
     : state.timeline;
   const rawFeedEvents = isActiveDetail
     ? capArray([...state.rawFeedEvents, event], MAX_RAW_FEED_EVENTS)
     : state.rawFeedEvents;
-
-  return { ...state, lastServerMessageAt: receivedAt, issues: updated, timeline, rawFeedEvents };
+  return { ...state, lastServerMessageAt: receivedAt, timeline, rawFeedEvents };
 }
 
 // ─── Codex Notification → Timeline + Metadata ─────────────────────

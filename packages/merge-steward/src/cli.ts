@@ -5,13 +5,6 @@ import { defaultRunCommand } from "./cli/system.ts";
 import { UsageError } from "./cli/types.ts";
 import type { RunCliOptions } from "./cli/types.ts";
 
-import { handleInit } from "./cli/commands/init.ts";
-import { handleAttach } from "./cli/commands/attach.ts";
-import { handleRepos } from "./cli/commands/repos.ts";
-import { handleDoctor } from "./cli/commands/doctor.ts";
-import { handleService } from "./cli/commands/service.ts";
-import { handleQueue } from "./cli/commands/queue.ts";
-
 export type { RunCliOptions };
 
 export async function runCli(argv: string[], options?: RunCliOptions): Promise<number> {
@@ -51,17 +44,17 @@ export async function runCli(argv: string[], options?: RunCliOptions): Promise<n
         await (await import("./server.ts")).startMultiServer();
         return 0;
       case "init":
-        return await handleInit(parsed, stdout, runCommand);
+        return await (await import("./cli/commands/init.ts")).handleInit(parsed, stdout, runCommand);
       case "attach":
-        return await handleAttach(parsed, stdout, runCommand);
+        return await (await import("./cli/commands/attach.ts")).handleAttach(parsed, stdout, runCommand);
       case "repos":
-        return await handleRepos(parsed, stdout);
+        return await (await import("./cli/commands/repos.ts")).handleRepos(parsed, stdout);
       case "doctor":
-        return await handleDoctor(parsed, stdout);
+        return await (await import("./cli/commands/doctor.ts")).handleDoctor(parsed, stdout);
       case "service":
-        return await handleService(parsed, stdout, runCommand);
+        return await (await import("./cli/commands/service.ts")).handleService(parsed, stdout, runCommand);
       case "queue":
-        return await handleQueue(parsed, stdout);
+        return await (await import("./cli/commands/queue.ts")).handleQueue(parsed, stdout);
       default:
         throw new UsageError(`Unknown command: ${command}`);
     }

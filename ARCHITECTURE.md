@@ -6,9 +6,10 @@ It manages a controlled issue loop of context, action, verification, and repair.
 The architecture follows a simple rule:
 
 - **Linear owns the human conversation**
-- **PatchRelay owns deterministic orchestration** (issue → PR)
+- **PatchRelay owns deterministic orchestration for delegated work and PatchRelay-owned PR upkeep**
 - **Codex owns code generation and repair execution**
-- **GitHub owns review and CI truth**
+- **GitHub owns PR, review, and CI truth**
+- **ReviewBot owns review automation**
 - **Merge Steward owns serial integration and landing** (queue → merge)
 
 ## System Shape
@@ -23,7 +24,8 @@ flowchart LR
   GH --> GWH[GitHub Webhook Handler]
   GWH --> RO
   RO --> L
-  RO -->|queue label| MS[Merge Steward]
+  GH --> RB[ReviewBot]
+  GH --> MS[Merge Steward]
   MS -->|merge / evict| GH
 ```
 
@@ -54,11 +56,11 @@ Implemented in: `webhook-handler.ts`, `webhook-installation-handler.ts`, `linear
 
 Responsible for:
 
-- issue lifecycle state (factory state machine)
+- PatchRelay runtime state and session scheduling
 - run scheduling
 - retry budgets
 - escalation policy
-- coordination across review, CI, and queue events
+- coordination of follow-up work on PatchRelay-owned PRs
 
 Implemented in: `run-orchestrator.ts`, `factory-state.ts`
 
@@ -119,30 +121,34 @@ Linear delegate event
 -> publish plan
 -> prepare worktree
 -> run Codex (implementation)
--> PR opened (GitHub webhook)
--> review loop (GitHub webhook → review_fix run)
--> CI repair loop if needed (GitHub webhook → ci_repair run)
--> approved → PatchRelay adds queue label
--> Merge Steward takes over (rebase → CI → merge)
--> queue repair if steward evicts (check run → queue_repair run → re-label)
--> merged → done
+-> PatchRelay opens draft PR
+-> PatchRelay marks PR ready
+-> ReviewBot reviews when GitHub says the PR is ready and CI is green
+-> Merge Steward queues when GitHub says the PR is ready, green, and approved
+-> PatchRelay wakes only for follow-up work on PatchRelay-owned PRs
+-> merged or closed -> session terminates
 ```
 
-## State Model
+## Ownership Model
 
-Factory states as implemented in `factory-state.ts`:
+PatchRelay distinguishes:
 
-- `delegated`
-- `implementing`
-- `pr_open`
-- `changes_requested`
-- `repairing_ci`
-- `awaiting_queue`
-- `repairing_queue`
-- `awaiting_input`
-- `escalated`
+- issue ownership: who may start delegated implementation work from Linear
+- PR ownership: who must keep an existing PR healthy until merge or close
+
+PR ownership is determined by PR author identity, not by queue state or issue delegation state.
+
+## Runtime Model
+
+The target runtime model is a small durable `IssueSession` with:
+
+- `idle`
+- `running`
+- `waiting_input`
 - `done`
 - `failed`
+
+Review and queue waiting should be represented as `waitingReason`, not as control-plane ownership handoffs.
 
 ## Design Implications
 

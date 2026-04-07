@@ -95,14 +95,14 @@ export function createGitHubFailureContextResolver(): GitHubFailureContextResolv
           ? await resolveAnnotations(repoFullName, failedCheck.id)
           : undefined;
 
-        const summary = firstNonEmpty(
-          annotations?.[0],
-          failedCheck?.outputTitle,
-          failedCheck?.outputSummary,
-          event.checkOutputTitle,
-          event.checkOutputSummary,
-          workflowJob?.stepName ? `Failed step: ${workflowJob.stepName}` : undefined,
-        );
+        const summary = pickFailureSummary({
+          annotations,
+          failedCheckOutputTitle: failedCheck?.outputTitle,
+          failedCheckOutputSummary: failedCheck?.outputSummary,
+          eventCheckOutputTitle: event.checkOutputTitle,
+          eventCheckOutputSummary: event.checkOutputSummary,
+          workflowStepName: workflowJob?.stepName,
+        });
         const checkName = firstNonEmpty(failedCheck?.name, event.checkName);
         const checkUrl = firstNonEmpty(failedCheck?.htmlUrl, event.checkUrl);
         const checkDetailsUrl = firstNonEmpty(failedCheck?.detailsUrl, event.checkDetailsUrl);
@@ -179,6 +179,30 @@ export function summarizeGitHubFailureContext(
   );
 }
 
+export function pickFailureSummary(params: {
+  annotations?: string[] | undefined;
+  failedCheckOutputTitle?: string | undefined;
+  failedCheckOutputSummary?: string | undefined;
+  eventCheckOutputTitle?: string | undefined;
+  eventCheckOutputSummary?: string | undefined;
+  workflowStepName?: string | undefined;
+}): string | undefined {
+  const preferredAnnotation = pickPreferredFailureAnnotation(params.annotations);
+  const structuredSummary = firstNonEmpty(
+    params.failedCheckOutputTitle,
+    params.failedCheckOutputSummary,
+    params.eventCheckOutputTitle,
+    params.eventCheckOutputSummary,
+  );
+  const failedStepSummary = params.workflowStepName ? `Failed step: ${params.workflowStepName}` : undefined;
+  return firstNonEmpty(
+    preferredAnnotation,
+    structuredSummary,
+    failedStepSummary,
+    params.annotations?.[0],
+  );
+}
+
 function buildFallbackFailureContext(
   source: GitHubFailureSource,
   repoFullName: string,
@@ -200,6 +224,36 @@ function buildFallbackFailureContext(
     ...(event.checkName ? { jobName: event.checkName } : {}),
     ...(summary ? { summary } : {}),
   };
+}
+
+export function pickPreferredFailureAnnotation(annotations: string[] | undefined): string | undefined {
+  if (!Array.isArray(annotations) || annotations.length === 0) return undefined;
+  const ranked = annotations
+    .map((annotation) => ({ annotation, score: scoreFailureAnnotation(annotation) }))
+    .filter((entry) => entry.score > 0)
+    .sort((left, right) => right.score - left.score);
+  return ranked[0]?.annotation;
+}
+
+function scoreFailureAnnotation(annotation: string): number {
+  const text = annotation.trim();
+  if (!text) return 0;
+  const lower = text.toLowerCase();
+
+  if (lower.startsWith("process completed with exit code")) return 0;
+  if (lower.includes("actions target node.js 20 but are being forced to run on node.js 24")) return 0;
+
+  let score = 1;
+  if (!lower.includes("(.github)")) {
+    score += 2;
+  }
+  if (lower.includes("assertionerror") || lower.includes("expected values to be strictly equal")) {
+    score += 2;
+  }
+  if (lower.includes("error") || lower.includes("exception") || lower.includes("failed")) {
+    score += 1;
+  }
+  return score;
 }
 
 async function resolveFailedCheckRun(repoFullName: string, event: NormalizedGitHubEvent): Promise<CheckRunSummary | undefined> {

@@ -75,9 +75,9 @@ test("patchrelay queue observations report handoff and external queue failure", 
   const events: OperatorFeedEvent[] = [
     makeEvent({
       id: 1,
-      status: "queue_label_requested",
-      stage: "awaiting_queue",
-      summary: "Queue hand-off requested via label \"queue\" on PR #88",
+      status: "queue_repair_queued",
+      stage: "repairing_queue",
+      summary: "Queue repair queued after external failure from merge-steward/queue",
     }),
     makeEvent({
       id: 2,
@@ -94,6 +94,20 @@ test("patchrelay queue observations report handoff and external queue failure", 
   assert.equal(observations[0]?.text, "PatchRelay is actively repairing a queue eviction.");
   assert.match(observations[1]?.text ?? "", /External queue reported failure/);
   assert.match(observations[2]?.text ?? "", /Tracked PR: #88/);
+});
+
+test("patchrelay queue observations prefer session state and waiting reason", () => {
+  const issue = makeIssue({
+    factoryState: "awaiting_queue",
+    sessionState: "waiting_input",
+    waitingReason: "Waiting for the next instruction.",
+  });
+
+  const observations = buildPatchRelayQueueObservations(issue, []);
+
+  assert.equal(observations[0]?.tone, "warn");
+  assert.equal(observations[0]?.text, "Waiting for the next instruction.");
+  assert.match(observations[1]?.text ?? "", /No downstream queue signal/);
 });
 
 test("patchrelay queue observations report merge completion", () => {

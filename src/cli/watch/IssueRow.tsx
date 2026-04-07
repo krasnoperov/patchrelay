@@ -11,7 +11,7 @@ interface IssueRowProps {
 
 // ─── State display ──────────────────────────────────────────────
 
-const TERMINAL_STATES = new Set(["done", "failed", "escalated", "awaiting_input"]);
+const TERMINAL_STATES = new Set(["done", "failed", "escalated"]);
 
 interface StateDisplay {
   label: string;
@@ -19,47 +19,82 @@ interface StateDisplay {
 }
 
 function effectiveState(issue: WatchIssue): string {
+  if (issue.sessionState === "done") return "done";
+  if (issue.sessionState === "failed") return "failed";
   if (issue.blockedByCount > 0 && !issue.activeRunType) return "blocked";
   if (issue.readyForExecution && !issue.activeRunType) return "ready";
+  if (issue.sessionState === "waiting_input") return "awaiting_input";
   return issue.factoryState;
 }
 
-function stateDisplay(issue: WatchIssue): StateDisplay {
+function sessionDisplay(issue: WatchIssue): StateDisplay {
+  switch (issue.sessionState) {
+    case "running":
+      return { label: "running", color: "cyan" };
+    case "idle":
+      return { label: "idle", color: "blueBright" };
+    case "waiting_input":
+      return { label: "needs input", color: "yellow" };
+    case "done":
+      return { label: "done", color: "green" };
+    case "failed":
+      return { label: "failed", color: "red" };
+    default:
+      return { label: "unknown", color: "white" };
+  }
+}
+
+function stageLabel(issue: WatchIssue): string {
   const state = effectiveState(issue);
   switch (state) {
-    case "blocked": return { label: "blocked", color: "yellow" };
-    case "ready": return { label: "ready", color: "blueBright" };
-    case "delegated": return { label: "delegated", color: "cyan" };
-    case "implementing": return { label: "implementing", color: "cyan" };
-    case "pr_open": return { label: "PR open", color: "cyan" };
-    case "changes_requested": return { label: "review changes", color: "yellow" };
-    case "repairing_ci": return { label: "repairing CI", color: "yellow" };
-    case "awaiting_queue": return { label: "queued for merge", color: "cyan" };
-    case "repairing_queue": return { label: "repairing queue", color: "yellow" };
-    case "done": return { label: "merged", color: "green" };
-    case "failed": return { label: "failed", color: "red" };
-    case "escalated": return { label: "escalated", color: "red" };
-    case "awaiting_input": return { label: "awaiting input", color: "yellow" };
-    default: return { label: state, color: "white" };
+    case "blocked": return "blocked";
+    case "ready": return "ready";
+    case "delegated": return "delegated";
+    case "implementing": return "implementing";
+    case "pr_open": return "PR open";
+    case "changes_requested": return "review changes";
+    case "repairing_ci": return "repairing CI";
+    case "awaiting_queue": return "waiting downstream";
+    case "repairing_queue": return "repairing queue";
+    case "done": return "merged";
+    case "failed": return "failed";
+    case "escalated": return "escalated";
+    case "awaiting_input": return "needs input";
+    default: return state;
   }
 }
 
 // ─── Context facts (what matters right now) ─────────────────────
 
-function buildFacts(issue: WatchIssue): Array<{ text: string; color?: string }> {
+function buildFacts(issue: WatchIssue, selected: boolean): Array<{ text: string; color?: string }> {
   const facts: Array<{ text: string; color?: string }> = [];
+  const rereviewNeeded = issue.prReviewState === "changes_requested"
+    && (issue.prCheckStatus === "passed" || issue.prCheckStatus === "success")
+    && !issue.activeRunType;
 
   // PR number
   if (issue.prNumber !== undefined) {
     facts.push({ text: `PR #${issue.prNumber}` });
   }
 
+  if (!issue.sessionState) {
+    facts.push({ text: `stage ${stageLabel(issue)}` });
+  } else if (selected) {
+    facts.push({ text: `internal stage ${stageLabel(issue)}` });
+  }
+
+  if (issue.waitingReason && issue.sessionState === "waiting_input") {
+    facts.push({ text: issue.waitingReason, color: "yellow" });
+  }
+
   // Review state — only show when it matters (not yet approved, or changes requested)
   if (issue.prReviewState === "approved") {
     facts.push({ text: "approved", color: "green" });
+  } else if (rereviewNeeded) {
+    facts.push({ text: "re-review needed", color: "yellow" });
   } else if (issue.prReviewState === "changes_requested") {
     facts.push({ text: "changes requested", color: "yellow" });
-  } else if (issue.prNumber !== undefined && !issue.prReviewState && !TERMINAL_STATES.has(issue.factoryState)) {
+  } else if (issue.prNumber !== undefined && !issue.prReviewState && !TERMINAL_STATES.has(effectiveState(issue))) {
     facts.push({ text: "awaiting review", color: "yellow" });
   }
 
@@ -91,17 +126,22 @@ function buildFacts(issue: WatchIssue): Array<{ text: string; color?: string }> 
 // ─── What's blocking progress ───────────────────────────────────
 
 function blockerText(issue: WatchIssue): string | null {
+  const rereviewNeeded = issue.prReviewState === "changes_requested"
+    && (issue.prCheckStatus === "passed" || issue.prCheckStatus === "success")
+    && !issue.activeRunType;
+  if (issue.sessionState === "waiting_input") return issue.waitingReason ?? "Waiting for input";
+  if (issue.waitingReason && !issue.activeRunType) return issue.waitingReason;
   if (issue.blockedByCount > 0) return `Waiting on ${issue.blockedByKeys.join(", ")}`;
-  if (issue.factoryState === "repairing_queue") return "Merge queue conflict, repairing branch";
-  if (issue.factoryState === "repairing_ci") {
+  if (effectiveState(issue) === "repairing_queue") return "Merge queue conflict, repairing branch";
+  if (effectiveState(issue) === "repairing_ci") {
     const check = issue.latestFailureCheckName ?? "CI";
     return `Repairing ${check}`;
   }
-  if (issue.factoryState === "awaiting_queue") return "Waiting for merge queue";
   if (issue.prCheckStatus === "failed" || issue.prCheckStatus === "failure") {
     const check = issue.latestFailureCheckName ?? "checks";
     return `${check} failed`;
   }
+  if (rereviewNeeded) return "Awaiting re-review after requested changes";
   if (issue.prReviewState === "changes_requested") return "Review changes requested";
   return null;
 }
@@ -113,11 +153,11 @@ export function IssueRow({ issue, selected, titleWidth }: IssueRowProps): React.
   const tw = titleWidth ?? 60;
   const title = issue.title ? truncate(issue.title, tw) : "";
   const detail = selected ? summarizeIssueStatusNote(issue.statusNote) : undefined;
-  const state = stateDisplay(issue);
-  const facts = buildFacts(issue);
+  const session = sessionDisplay(issue);
+  const facts = buildFacts(issue, selected);
   const blocker = selected ? blockerText(issue) : null;
 
-  const isTerminal = TERMINAL_STATES.has(issue.factoryState);
+  const isTerminal = TERMINAL_STATES.has(effectiveState(issue));
 
   // Terminal issues: compact single line
   if (isTerminal && !selected) {
@@ -127,7 +167,7 @@ export function IssueRow({ issue, selected, titleWidth }: IssueRowProps): React.
         <Text dimColor>{` ${key}`}</Text>
         <Text dimColor>{`  ${relativeTime(issue.updatedAt).padStart(4)}`}</Text>
         <Text>{`  `}</Text>
-        <Text color={state.color}>{state.label}</Text>
+        <Text color={session.color}>{session.label}</Text>
       </Box>
     );
   }
@@ -140,7 +180,7 @@ export function IssueRow({ issue, selected, titleWidth }: IssueRowProps): React.
         <Text bold>{` ${key}`}</Text>
         <Text dimColor>{`  ${relativeTime(issue.updatedAt).padStart(4)}`}</Text>
         <Text>{`  `}</Text>
-        <Text color={state.color}>{state.label}</Text>
+        <Text color={session.color}>{session.label}</Text>
         {facts.length > 0 && (
           <Text dimColor>{` \u00b7 `}</Text>
         )}
@@ -167,6 +207,11 @@ export function IssueRow({ issue, selected, titleWidth }: IssueRowProps): React.
       {detail ? (
         <Box paddingLeft={4}>
           <Text dimColor wrap="wrap">{detail}</Text>
+        </Box>
+      ) : null}
+      {selected && issue.factoryState && issue.sessionState ? (
+        <Box paddingLeft={4}>
+          <Text dimColor>{`Debug stage: ${stageLabel(issue)}`}</Text>
         </Box>
       ) : null}
     </Box>

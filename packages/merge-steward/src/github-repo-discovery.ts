@@ -23,6 +23,17 @@ interface GitHubRule {
   };
 }
 
+interface GitHubBranchProtectionCheck {
+  context?: string;
+}
+
+interface GitHubBranchProtectionResponse {
+  required_status_checks?: {
+    contexts?: string[];
+    checks?: GitHubBranchProtectionCheck[];
+  };
+}
+
 function githubHeaders(token: string): Record<string, string> {
   return {
     Authorization: `Bearer ${token}`,
@@ -35,6 +46,20 @@ async function fetchGitHubJson<T>(url: string, token: string): Promise<T> {
   const response = await fetch(url, {
     headers: githubHeaders(token),
   });
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`GitHub API ${response.status} for ${url}: ${body}`);
+  }
+  return await response.json() as T;
+}
+
+async function fetchGitHubJsonOptional<T>(url: string, token: string): Promise<T | undefined> {
+  const response = await fetch(url, {
+    headers: githubHeaders(token),
+  });
+  if (response.status === 404) {
+    return undefined;
+  }
   if (!response.ok) {
     const body = await response.text();
     throw new Error(`GitHub API ${response.status} for ${url}: ${body}`);
@@ -77,6 +102,26 @@ function normalizeRequiredChecks(rules: GitHubRule[]): { requiredChecks: string[
   };
 }
 
+function extractProtectionChecks(protection: GitHubBranchProtectionResponse | undefined): string[] {
+  if (!protection?.required_status_checks) {
+    return [];
+  }
+  const checks = new Set<string>();
+  for (const context of protection.required_status_checks.contexts ?? []) {
+    const trimmed = context?.trim();
+    if (trimmed) {
+      checks.add(trimmed);
+    }
+  }
+  for (const check of protection.required_status_checks.checks ?? []) {
+    const trimmed = check.context?.trim();
+    if (trimmed) {
+      checks.add(trimmed);
+    }
+  }
+  return [...checks].sort((left, right) => left.localeCompare(right));
+}
+
 export async function discoverRepoSettings(
   credentials: GitHubAppCredentials,
   repoFullName: string,
@@ -102,7 +147,13 @@ export async function discoverRepoSettings(
     `https://api.github.com/repos/${encodedRepo}/rules/branches/${encodeURIComponent(branch)}`,
     token,
   );
-  const { requiredChecks, warnings } = normalizeRequiredChecks(parseRulesResponse(rulesResponse));
+  const { requiredChecks: ruleChecks, warnings } = normalizeRequiredChecks(parseRulesResponse(rulesResponse));
+  const protection = await fetchGitHubJsonOptional<GitHubBranchProtectionResponse>(
+    `https://api.github.com/repos/${encodedRepo}/branches/${encodeURIComponent(branch)}/protection`,
+    token,
+  );
+  const protectionChecks = extractProtectionChecks(protection);
+  const requiredChecks = [...new Set([...ruleChecks, ...protectionChecks])].sort((left, right) => left.localeCompare(right));
 
   if (requiredChecks.length === 0) {
     warnings.push(`No required status checks discovered for ${branch}; Steward will admit on any green check unless you configure requiredChecks explicitly.`);

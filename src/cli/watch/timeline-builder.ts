@@ -1,3 +1,4 @@
+import { getThreadTurns } from "../../codex-thread-utils.ts";
 import type { OperatorFeedEvent } from "../../operator-feed.ts";
 import type { CodexThreadSummary, CodexThreadItem, StageReport } from "../../types.ts";
 
@@ -226,7 +227,7 @@ function syntheticTimestamp(startMs: number, endMs: number, index: number, total
 
 function itemsFromThread(runId: number, thread: CodexThreadSummary): TimelineEntry[] {
   const entries: TimelineEntry[] = [];
-  for (const turn of thread.turns) {
+  for (const turn of getThreadTurns(thread)) {
     for (const item of turn.items) {
       entries.push({
         id: `live-${item.id}`,

@@ -9,7 +9,7 @@ import { GitHubWebhookHandler } from "../src/github-webhook-handler.ts";
 import type { GitHubCiSnapshotResolver, GitHubFailureContextResolver } from "../src/github-failure-context.ts";
 import type { AppConfig } from "../src/types.ts";
 
-function createConfig(baseDir: string): AppConfig {
+function createConfig(baseDir: string, options?: { gateChecks?: string[] }): AppConfig {
   return {
     server: {
       bind: "127.0.0.1",
@@ -66,7 +66,7 @@ function createConfig(baseDir: string): AppConfig {
         linearTeamIds: ["USE"],
         allowLabels: [],
         reviewChecks: [],
-        gateChecks: ["Tests"],
+        gateChecks: options?.gateChecks ?? ["Tests"],
         triggerEvents: ["statusChanged"],
         branchPrefix: "use",
         github: {
@@ -82,8 +82,9 @@ function createHandler(
   baseDir: string,
   failureContextResolver?: GitHubFailureContextResolver,
   ciSnapshotResolver?: GitHubCiSnapshotResolver,
+  options?: { gateChecks?: string[] },
 ) {
-  const config = createConfig(baseDir);
+  const config = createConfig(baseDir, options);
   const db = new PatchRelayDatabase(config.database.path, config.database.wal);
   db.runMigrations();
   const enqueueCalls: Array<{ projectId: string; issueId: string }> = [];
@@ -145,18 +146,17 @@ function buildCheckRunPayload(params: {
 test("queue eviction check_run queues queue_repair with explicit provenance", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-queue-"));
   try {
-    const { db, enqueueCalls, handler } = createHandler(baseDir);
+    const { db, handler } = createHandler(baseDir);
     db.upsertIssue({
       projectId: "usertold",
       linearIssueId: "issue-1",
       issueKey: "USE-1",
       branchName: "feat-queue",
+      branchOwner: "patchrelay",
       prNumber: 42,
       prState: "open",
       factoryState: "awaiting_queue",
     });
-    db.setBranchOwner("usertold", "issue-1", "merge_steward");
-
     await handler.processGitHubWebhookEvent({
       eventType: "check_run",
       rawBody: buildCheckRunPayload({
@@ -184,9 +184,11 @@ test("queue eviction check_run queues queue_repair with explicit provenance", as
     });
 
     const issue = db.getIssue("usertold", "issue-1");
+    const wake = db.peekIssueSessionWake("usertold", "issue-1");
     assert.equal(issue?.branchOwner, "patchrelay");
-    assert.equal(issue?.pendingRunType, "queue_repair");
-    const pending = JSON.parse(issue?.pendingRunContextJson ?? "{}");
+    assert.equal(issue?.factoryState, "repairing_queue");
+    assert.equal(wake?.runType, "queue_repair");
+    const pending = wake?.context ?? {};
     assert.equal(pending.failureReason, "queue_eviction");
     assert.equal(pending.checkName, "merge-steward/queue");
     assert.equal(pending.checkUrl, "https://github.com/owner/repo/actions/runs/42");
@@ -210,7 +212,6 @@ test("queue eviction check_run queues queue_repair with explicit provenance", as
       retryHistory: [{ at: "2026-03-31T00:00:00.000Z", baseSha: "base-122", outcome: "ci_failed_retry" }],
     });
     assert.equal(issue?.lastQueueIncidentJson !== undefined, true);
-    assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-1" }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -250,15 +251,82 @@ test("stale queue eviction webhooks do not resurrect terminal issues", async () 
   }
 });
 
+test("default gate fallback recognizes verify and enqueues CI repair", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-verify-gate-"));
+  try {
+    const failureContextResolver: GitHubFailureContextResolver = {
+      resolve: async () => ({
+        source: "branch_ci",
+        failureHeadSha: "sha-verify",
+        failureSignature: "branch_ci::sha-verify::verify",
+        checkName: "verify",
+        summary: "verify failed",
+      }),
+    };
+    const ciSnapshotResolver: GitHubCiSnapshotResolver = {
+      resolve: async () => ({
+        headSha: "sha-verify",
+        gateCheckName: "verify",
+        gateCheckStatus: "failure",
+        settledAt: "2026-04-06T00:17:44.000Z",
+        checks: [
+          { name: "verify", status: "failure", conclusion: "failure" },
+          { name: "deploy_stage", status: "pending", conclusion: null },
+        ],
+        failedChecks: [
+          { name: "verify", status: "failure", conclusion: "failure" },
+        ],
+      }),
+    };
+    const { db, handler } = createHandler(
+      baseDir,
+      failureContextResolver,
+      ciSnapshotResolver,
+      { gateChecks: [] },
+    );
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-verify",
+      issueKey: "USE-VERIFY",
+      branchName: "feat-verify",
+      branchOwner: "patchrelay",
+      prNumber: 44,
+      prState: "open",
+      prAuthorLogin: "patchrelay[bot]",
+      factoryState: "pr_open",
+    });
+
+    await handler.processGitHubWebhookEvent({
+      eventType: "check_run",
+      rawBody: buildCheckRunPayload({
+        branch: "feat-verify",
+        headSha: "sha-verify",
+        prNumber: 44,
+        checkName: "verify",
+        conclusion: "failure",
+        outputTitle: "verify failed",
+        outputSummary: "Required verification failed.",
+      }).toString("utf8"),
+    });
+
+    const wake = db.peekIssueSessionWake("usertold", "issue-verify");
+    assert.equal(wake?.runType, "ci_repair");
+    assert.equal(wake?.wakeReason, "settled_red_ci");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("queue eviction falls back to minimal context when incident payload is malformed", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-queue-malformed-"));
   try {
-    const { db, enqueueCalls, handler } = createHandler(baseDir);
+    const { db, handler } = createHandler(baseDir);
     db.upsertIssue({
       projectId: "usertold",
       linearIssueId: "issue-3",
       issueKey: "USE-3",
       branchName: "feat-malformed",
+      branchOwner: "patchrelay",
       prNumber: 43,
       prState: "open",
       factoryState: "awaiting_queue",
@@ -278,9 +346,9 @@ test("queue eviction falls back to minimal context when incident payload is malf
       }).toString("utf8"),
     });
 
-    const issue = db.getIssue("usertold", "issue-3");
-    assert.equal(issue?.pendingRunType, "queue_repair");
-    const pending = JSON.parse(issue?.pendingRunContextJson ?? "{}");
+    const wake = db.peekIssueSessionWake("usertold", "issue-3");
+    assert.equal(wake?.runType, "queue_repair");
+    const pending = wake?.context ?? {};
     assert.equal(pending.failureReason, "queue_eviction");
     assert.equal(pending.checkName, "merge-steward/queue");
     assert.equal(pending.checkUrl, "https://github.com/owner/repo/actions/runs/43");
@@ -288,7 +356,6 @@ test("queue eviction falls back to minimal context when incident payload is malf
     assert.equal(pending.incidentUrl, "https://queue.example.com/queue/incidents/incident-43");
     assert.equal(pending.incidentTitle, "Queue eviction: rebase conflict");
     assert.equal(pending.incidentSummary, "Malformed steward payload fallback");
-    assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-3" }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -297,7 +364,7 @@ test("queue eviction falls back to minimal context when incident payload is malf
 test("branch CI failures clear stale queue incident context", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-queue-cleared-"));
   try {
-    const { db, enqueueCalls, handler } = createHandler(
+    const { db, handler } = createHandler(
       baseDir,
       {
         resolve: async () => ({
@@ -336,6 +403,7 @@ test("branch CI failures clear stale queue incident context", async () => {
       linearIssueId: "issue-4",
       issueKey: "USE-4",
       branchName: "feat-branch-fail",
+      branchOwner: "patchrelay",
       prNumber: 44,
       prState: "open",
       factoryState: "awaiting_queue",
@@ -349,8 +417,6 @@ test("branch CI failures clear stale queue incident context", async () => {
         incidentUrl: "https://queue.example.com/queue/incidents/incident-44",
       }),
     });
-    db.setBranchOwner("usertold", "issue-4", "merge_steward");
-
     await handler.processGitHubWebhookEvent({
       eventType: "check_run",
       rawBody: buildCheckRunPayload({
@@ -363,11 +429,11 @@ test("branch CI failures clear stale queue incident context", async () => {
     });
 
     const issue = db.getIssue("usertold", "issue-4");
+    const wake = db.peekIssueSessionWake("usertold", "issue-4");
     assert.equal(issue?.branchOwner, "patchrelay");
-    assert.equal(issue?.pendingRunType, "ci_repair");
+    assert.equal(wake?.runType, "ci_repair");
     assert.equal(issue?.lastGitHubFailureSource, "branch_ci");
     assert.equal(issue?.lastQueueIncidentJson, undefined);
-    assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-4" }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -377,7 +443,7 @@ test("branch CI failures persist enriched Actions context in pending repair prom
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-ci-context-"));
   try {
     let resolvedCheckName: string | undefined;
-    const { db, enqueueCalls, handler } = createHandler(baseDir, {
+    const { db, handler } = createHandler(baseDir, {
       resolve: async ({ event }) => {
         resolvedCheckName = event.checkName;
         return {
@@ -436,6 +502,7 @@ test("branch CI failures persist enriched Actions context in pending repair prom
       linearIssueId: "issue-5",
       issueKey: "USE-5",
       branchName: "feat-ci-context",
+      branchOwner: "patchrelay",
       prNumber: 45,
       prState: "open",
       factoryState: "pr_open",
@@ -453,9 +520,10 @@ test("branch CI failures persist enriched Actions context in pending repair prom
     });
 
     const issue = db.getIssue("usertold", "issue-5");
-    const pending = JSON.parse(issue?.pendingRunContextJson ?? "{}");
+    const wake = db.peekIssueSessionWake("usertold", "issue-5");
+    const pending = wake?.context ?? {};
     assert.equal(resolvedCheckName, "Checks");
-    assert.equal(issue?.pendingRunType, "ci_repair");
+    assert.equal(wake?.runType, "ci_repair");
     assert.equal(issue?.lastGitHubFailureSignature, "branch_ci::sha-45::Checks::npx tsgo --noEmit");
     assert.equal(issue?.lastGitHubFailureHeadSha, "sha-45");
     assert.equal(pending.failureHeadSha, "sha-45");
@@ -463,7 +531,6 @@ test("branch CI failures persist enriched Actions context in pending repair prom
     assert.equal(pending.stepName, "Run npx tsgo --noEmit");
     assert.equal(pending.summary, "Type generation failed");
     assert.deepEqual(pending.annotations, ["src/schema.ts: incompatible type"]);
-    assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-5" }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

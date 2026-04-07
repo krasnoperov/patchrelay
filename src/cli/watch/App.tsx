@@ -3,10 +3,8 @@ import { Box, Text, useApp, useInput } from "ink";
 import { watchReducer, initialWatchState, filterIssues } from "./watch-state.ts";
 import { useWatchStream } from "./use-watch-stream.ts";
 import { useDetailStream } from "./use-detail-stream.ts";
-import { useFeedStream } from "./use-feed-stream.ts";
 import { IssueListView } from "./IssueListView.tsx";
 import { IssueDetailView } from "./IssueDetailView.tsx";
-import { FeedView } from "./FeedView.tsx";
 
 interface AppProps {
   baseUrl: string;
@@ -85,7 +83,6 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
 
   useWatchStream({ baseUrl, bearerToken, dispatch, active: !frozen });
   useDetailStream({ baseUrl, bearerToken, issueKey: state.activeDetailKey, dispatch, active: !frozen });
-  useFeedStream({ baseUrl, bearerToken, active: state.view === "feed" && !frozen, dispatch });
 
   const [promptMode, setPromptMode] = useState(false);
   const [promptBuffer, setPromptBuffer] = useState("");
@@ -162,8 +159,6 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
         }
       } else if (key.tab) {
         dispatch({ type: "cycle-filter" });
-      } else if (input === "F" || input === "f") {
-        dispatch({ type: "enter-feed" });
       }
     } else if (state.view === "detail") {
       if (key.escape || key.backspace || key.delete) {
@@ -190,10 +185,6 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
         dispatch({ type: "detail-navigate", direction: "next", filtered });
       } else if (input === "k" || key.upArrow) {
         dispatch({ type: "detail-navigate", direction: "prev", filtered });
-      }
-    } else if (state.view === "feed") {
-      if (key.escape || key.backspace || key.delete) {
-        dispatch({ type: "exit-feed" });
       }
     }
   });
@@ -249,20 +240,7 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
           <Text dimColor>{promptStatus}</Text>
         )}
         </Box>
-      ) : (
-        <Box flexDirection="column">
-          <Box>
-            <Text dimColor>Issues</Text>
-            <Text dimColor> › </Text>
-            <Text bold>Operator Feed</Text>
-          </Box>
-          <FeedView
-            events={state.feedEvents}
-            connected={state.connected}
-            lastServerMessageAt={state.lastServerMessageAt}
-          />
-        </Box>
-      )}
+      ) : null}
     </Box>
   );
 }

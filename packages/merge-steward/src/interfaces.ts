@@ -44,6 +44,8 @@ export interface GitHubPRApi {
   listChecks(prNumber: number): Promise<CheckResult[]>;
   listChecksForRef(ref: string): Promise<CheckResult[]>;
   listLabels(prNumber: number): Promise<string[]>;
+  /** List open PRs for restart-time eligibility scans. */
+  listOpenPRs(): Promise<Array<{ number: number; branch: string; headSha: string }>>;
   /** Find the open PR number for a branch, or null if none exists. */
   findPRByBranch(branch: string): Promise<number | null>;
   /** Delete the PR's head branch from the remote (best-effort cleanup). */

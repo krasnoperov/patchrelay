@@ -16,10 +16,10 @@ import { buildAgentSessionExternalUrls } from "./agent-session-presentation.ts";
 import { buildGitHubStateActivity } from "./linear-session-reporting.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import {
-  requestMergeQueueAdmission,
   resolveMergeQueueProtocol,
 } from "./merge-queue-protocol.ts";
 import { buildQueueRepairContextFromEvent } from "./merge-queue-incident.ts";
+import { resolvePreferredCompletedLinearState } from "./linear-workflow.ts";
 import { resolveSecret } from "./resolve-secret.ts";
 import type { AppConfig, LinearClientProvider } from "./types.ts";
 import type { ProjectConfig } from "./workflow-types.ts";
@@ -37,6 +37,8 @@ function isMetadataOnlyCheckEvent(event: NormalizedGitHubEvent): boolean {
   return event.eventSource === "check_run"
     && (event.triggerEvent === "check_passed" || event.triggerEvent === "check_failed");
 }
+
+const DEFAULT_GATE_CHECK_NAMES = ["verify", "tests"];
 
 interface GitHubFailurePromptContext {
   source?: "branch_ci" | "queue_eviction" | undefined;
@@ -57,6 +59,8 @@ interface GitHubFailurePromptContext {
 }
 
 export class GitHubWebhookHandler {
+  private readonly patchRelayAuthorLogins = new Set<string>();
+
   constructor(
     private readonly config: AppConfig,
     private readonly db: PatchRelayDatabase,
@@ -67,7 +71,21 @@ export class GitHubWebhookHandler {
     private readonly feed?: OperatorEventFeed,
     private readonly failureContextResolver: GitHubFailureContextResolver = createGitHubFailureContextResolver(),
     private readonly ciSnapshotResolver: GitHubCiSnapshotResolver = createGitHubCiSnapshotResolver(),
-  ) {}
+  ) {
+    for (const login of resolvePatchRelayAuthorLoginsFromEnv()) {
+      this.patchRelayAuthorLogins.add(login);
+    }
+  }
+
+  setPatchRelayAuthorLogins(logins: string[]): void {
+    this.patchRelayAuthorLogins.clear();
+    for (const login of logins) {
+      const normalized = normalizeAuthorLogin(login);
+      if (normalized) {
+        this.patchRelayAuthorLogins.add(normalized);
+      }
+    }
+  }
 
   async acceptGitHubWebhook(params: {
     deliveryId: string;
@@ -175,32 +193,30 @@ export class GitHubWebhookHandler {
       ...(event.prNumber !== undefined ? { prNumber: event.prNumber } : {}),
       ...(event.prUrl !== undefined ? { prUrl: event.prUrl } : {}),
       ...(event.prState !== undefined ? { prState: event.prState } : {}),
+      ...(event.headSha !== undefined ? { prHeadSha: event.headSha } : {}),
+      ...(event.prAuthorLogin !== undefined ? { prAuthorLogin: event.prAuthorLogin } : {}),
       ...(event.reviewState !== undefined ? { prReviewState: event.reviewState } : {}),
       ...(event.checkStatus !== undefined ? { prCheckStatus: event.checkStatus } : {}),
     });
     await this.updateCiSnapshot(issue, event, project);
     await this.updateFailureProvenance(issue, event, project);
 
-    if (!isMetadataOnlyCheckEvent(event)) {
+    const queueEvictionCheck = this.isQueueEvictionFailure(issue, event, project);
+
+    if (!isMetadataOnlyCheckEvent(event) || queueEvictionCheck) {
       // Re-read issue after PR metadata upsert so guards see fresh prReviewState
       const afterMetadata = this.db.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
 
-      const newState = resolveFactoryStateFromGitHub(event.triggerEvent, afterMetadata.factoryState, {
-        prReviewState: afterMetadata.prReviewState,
-        activeRunId: afterMetadata.activeRunId,
-      });
+      const newState = this.resolveFactoryStateForEvent(afterMetadata, event, project);
 
       // Only transition and notify when the state actually changes.
       // Multiple check_suite events can arrive for the same outcome.
       if (newState && newState !== afterMetadata.factoryState) {
-        this.db.upsertIssue({
+        this.db.upsertIssueRespectingActiveLease(issue.projectId, issue.linearIssueId, {
           projectId: issue.projectId,
           linearIssueId: issue.linearIssueId,
           factoryState: newState,
         });
-        if (newState === "awaiting_queue") {
-          this.db.setBranchOwner(issue.projectId, issue.linearIssueId, "merge_steward");
-        }
         this.logger.info(
           { issueKey: issue.issueKey, from: afterMetadata.factoryState, to: newState, trigger: event.triggerEvent },
           "Factory state transition from GitHub event",
@@ -209,18 +225,6 @@ export class GitHubWebhookHandler {
         const transitionedIssue = this.db.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
         void this.emitLinearActivity(transitionedIssue, newState, event);
         void this.syncLinearSession(transitionedIssue);
-
-        // Schedule merge prep when entering awaiting_queue
-        if (newState === "awaiting_queue") {
-          const proj = this.config.projects.find((p) => p.id === issue.projectId);
-          const protocol = resolveMergeQueueProtocol(proj);
-          void requestMergeQueueAdmission({
-            issue: transitionedIssue,
-            protocol,
-            logger: this.logger,
-            feed: this.feed,
-          });
-        }
 
       }
     }
@@ -231,7 +235,7 @@ export class GitHubWebhookHandler {
     // Reset repair counters on new push — but only when no repair run is active,
     // since Codex pushes during repair and resetting mid-run would bypass budgets.
     if (event.triggerEvent === "pr_synchronize" && !freshIssue.activeRunId) {
-      this.db.upsertIssue({
+      this.db.upsertIssueRespectingActiveLease(issue.projectId, issue.linearIssueId, {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         ciRepairAttempts: 0,
@@ -273,11 +277,36 @@ export class GitHubWebhookHandler {
     // Queue eviction check runs bypass the metadata-only filter because
     // they're individual check_run events (not check_suite), but they
     // must drive state transitions.
-    if (this.isQueueEvictionFailure(freshIssue, event, project) || this.isGateCheckEvent(event, project)) {
+    if (queueEvictionCheck || this.isGateCheckEvent(event, project)) {
       await this.maybeEnqueueReactiveRun(freshIssue, event, project);
     } else if (!isMetadataOnlyCheckEvent(event)) {
       await this.maybeEnqueueReactiveRun(freshIssue, event, project);
     }
+
+    if (event.triggerEvent === "pr_merged" || event.triggerEvent === "pr_closed") {
+      await this.handleTerminalPrEvent(freshIssue, event);
+    }
+  }
+
+  private resolveFactoryStateForEvent(
+    issue: IssueRecord,
+    event: NormalizedGitHubEvent,
+    project?: ProjectConfig,
+  ): FactoryState | undefined {
+    if (
+      event.triggerEvent === "check_failed"
+      && this.isQueueEvictionFailure(issue, event, project)
+      && issue.prState === "open"
+      && issue.activeRunId === undefined
+      && !TERMINAL_STATES.has(issue.factoryState)
+    ) {
+      return "repairing_queue";
+    }
+
+    return resolveFactoryStateFromGitHub(event.triggerEvent, issue.factoryState, {
+      prReviewState: issue.prReviewState,
+      activeRunId: issue.activeRunId,
+    });
   }
 
   private async updateCiSnapshot(
@@ -351,6 +380,7 @@ export class GitHubWebhookHandler {
     this.db.upsertIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
+      prCheckStatus: snapshot.gateCheckStatus,
       lastGitHubCiSnapshotHeadSha: snapshot.headSha,
       lastGitHubCiSnapshotGateCheckName: snapshot.gateCheckName ?? this.getPrimaryGateCheckName(project),
       lastGitHubCiSnapshotGateCheckStatus: snapshot.gateCheckStatus,
@@ -367,6 +397,19 @@ export class GitHubWebhookHandler {
     // merge_group_failed after pr_merged) must not resurrect done issues.
     if (TERMINAL_STATES.has(issue.factoryState as FactoryState)) return;
 
+    if (!this.isPatchRelayOwnedPr(issue)) {
+      this.feed?.publish({
+        level: "info",
+        kind: "github",
+        issueKey: issue.issueKey,
+        projectId: issue.projectId,
+        stage: issue.factoryState,
+        status: "ignored_non_patchrelay_pr",
+        summary: `Ignored ${event.triggerEvent} on non-PatchRelay-owned PR`,
+      });
+      return;
+    }
+
     if (event.triggerEvent === "check_failed" && issue.prState === "open") {
       // External merge queue eviction: react only to the configured check
       // name, not to any CI failure. Regular CI failures still get ci_repair.
@@ -376,14 +419,10 @@ export class GitHubWebhookHandler {
         if (this.hasDuplicatePendingReactiveRun(issue, "queue_repair", failureContext)) {
           return;
         }
+        const hadPendingWake = this.db.hasPendingIssueSessionEvents(issue.projectId, issue.linearIssueId);
         this.db.upsertIssue({
           projectId: issue.projectId,
           linearIssueId: issue.linearIssueId,
-          pendingRunType: "queue_repair",
-          pendingRunContextJson: JSON.stringify({
-            ...queueRepairContext,
-            ...failureContext,
-          }),
           lastGitHubFailureSource: "queue_eviction",
           lastGitHubFailureHeadSha: failureContext.failureHeadSha ?? null,
           lastGitHubFailureSignature: failureContext.failureSignature ?? null,
@@ -394,8 +433,20 @@ export class GitHubWebhookHandler {
           lastQueueSignalAt: new Date().toISOString(),
           lastQueueIncidentJson: JSON.stringify(queueRepairContext),
         });
-        this.db.setBranchOwner(issue.projectId, issue.linearIssueId, "patchrelay");
-        this.enqueueIssue(issue.projectId, issue.linearIssueId);
+        this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+          projectId: issue.projectId,
+          linearIssueId: issue.linearIssueId,
+          eventType: "merge_steward_incident",
+          eventJson: JSON.stringify({
+            ...queueRepairContext,
+            ...failureContext,
+          }),
+          dedupeKey: failureContext.failureSignature,
+        });
+        this.db.setBranchOwnerRespectingActiveLease(issue.projectId, issue.linearIssueId, "patchrelay");
+        const queuedRunType = hadPendingWake
+          ? this.peekPendingSessionWakeRunType(issue.projectId, issue.linearIssueId)
+          : this.enqueuePendingSessionWake(issue.projectId, issue.linearIssueId);
         this.logger.info({ issueKey: issue.issueKey, checkName: event.checkName }, "Queue eviction detected, enqueued queue repair");
         this.feed?.publish({
           level: "warn",
@@ -404,7 +455,7 @@ export class GitHubWebhookHandler {
           projectId: issue.projectId,
           stage: "repairing_queue",
           status: "queue_repair_queued",
-          summary: `Queue repair queued after external failure from ${event.checkName}`,
+          summary: `${queuedRunType ?? "queue_repair"} queued after external failure from ${event.checkName}`,
           detail: queueRepairContext.incidentSummary ?? queueRepairContext.incidentUrl ?? event.checkUrl,
         });
       } else {
@@ -424,16 +475,11 @@ export class GitHubWebhookHandler {
         if (this.hasDuplicatePendingReactiveRun(issue, "ci_repair", failureContext)) {
           return;
         }
+        const hadPendingWake = this.db.hasPendingIssueSessionEvents(issue.projectId, issue.linearIssueId);
         const snapshot = this.getRelevantCiSnapshot(issue, event);
         this.db.upsertIssue({
           projectId: issue.projectId,
           linearIssueId: issue.linearIssueId,
-          pendingRunType: "ci_repair",
-          pendingRunContextJson: JSON.stringify({
-            ...failureContext,
-            checkClass: resolveCheckClass(failureContext.checkName ?? event.checkName, project),
-            ...(snapshot ? { ciSnapshot: snapshot } : {}),
-          }),
           lastGitHubFailureSource: "branch_ci",
           lastGitHubFailureHeadSha: failureContext.failureHeadSha ?? null,
           lastGitHubFailureSignature: failureContext.failureSignature ?? null,
@@ -443,8 +489,21 @@ export class GitHubWebhookHandler {
           lastGitHubFailureAt: new Date().toISOString(),
           lastQueueIncidentJson: null,
         });
-        this.db.setBranchOwner(issue.projectId, issue.linearIssueId, "patchrelay");
-        this.enqueueIssue(issue.projectId, issue.linearIssueId);
+        this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+          projectId: issue.projectId,
+          linearIssueId: issue.linearIssueId,
+          eventType: "settled_red_ci",
+          eventJson: JSON.stringify({
+            ...failureContext,
+            checkClass: resolveCheckClass(failureContext.checkName ?? event.checkName, project),
+            ...(snapshot ? { ciSnapshot: snapshot } : {}),
+          }),
+          dedupeKey: failureContext.failureSignature,
+        });
+        this.db.setBranchOwnerRespectingActiveLease(issue.projectId, issue.linearIssueId, "patchrelay");
+        const queuedRunType = hadPendingWake
+          ? this.peekPendingSessionWakeRunType(issue.projectId, issue.linearIssueId)
+          : this.enqueuePendingSessionWake(issue.projectId, issue.linearIssueId);
         this.logger.info({ issueKey: issue.issueKey, checkName: failureContext.checkName ?? event.checkName }, "Enqueued CI repair run");
         this.feed?.publish({
           level: "warn",
@@ -453,27 +512,136 @@ export class GitHubWebhookHandler {
           projectId: issue.projectId,
           stage: "repairing_ci",
           status: "ci_repair_queued",
-          summary: `CI repair queued for ${failureContext.jobName ?? failureContext.checkName ?? "failed check"}`,
+          summary: `${queuedRunType ?? "ci_repair"} queued for ${failureContext.jobName ?? failureContext.checkName ?? "failed check"}`,
           detail: summarizeGitHubFailureContext(failureContext),
         });
       }
     }
 
     if (event.triggerEvent === "review_changes_requested") {
-      this.db.upsertIssue({
+      const hadPendingWake = this.db.hasPendingIssueSessionEvents(issue.projectId, issue.linearIssueId);
+      this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
-        pendingRunType: "review_fix",
-        pendingRunContextJson: JSON.stringify({
+        eventType: "review_changes_requested",
+        eventJson: JSON.stringify({
           reviewBody: event.reviewBody,
           reviewerName: event.reviewerName,
         }),
+        dedupeKey: [
+          "review_changes_requested",
+          issue.prHeadSha ?? event.headSha ?? "unknown-sha",
+          event.reviewerName ?? "unknown-reviewer",
+        ].join("::"),
       });
-      this.db.setBranchOwner(issue.projectId, issue.linearIssueId, "patchrelay");
-      this.enqueueIssue(issue.projectId, issue.linearIssueId);
+      this.db.setBranchOwnerRespectingActiveLease(issue.projectId, issue.linearIssueId, "patchrelay");
+      const queuedRunType = hadPendingWake
+        ? this.peekPendingSessionWakeRunType(issue.projectId, issue.linearIssueId)
+        : this.enqueuePendingSessionWake(issue.projectId, issue.linearIssueId);
       this.logger.info({ issueKey: issue.issueKey, reviewerName: event.reviewerName }, "Enqueued review fix run");
+      this.feed?.publish({
+        level: "warn",
+        kind: "github",
+        issueKey: issue.issueKey,
+        projectId: issue.projectId,
+        stage: "changes_requested",
+        status: "review_fix_queued",
+        summary: `${queuedRunType ?? "review_fix"} queued after requested changes`,
+        detail: event.reviewBody?.slice(0, 200) ?? event.reviewerName,
+      });
     }
 
+  }
+
+  private async handleTerminalPrEvent(issue: IssueRecord, event: NormalizedGitHubEvent): Promise<void> {
+    const eventType = event.triggerEvent === "pr_merged" ? "pr_merged" : "pr_closed";
+    this.db.appendIssueSessionEvent({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      eventType,
+      dedupeKey: [eventType, issue.prNumber ?? event.prNumber ?? "unknown-pr", issue.prHeadSha ?? event.headSha ?? "unknown-sha"].join("::"),
+    });
+    this.db.clearPendingIssueSessionEventsRespectingActiveLease(issue.projectId, issue.linearIssueId);
+
+    const run = issue.activeRunId ? this.db.getRun(issue.activeRunId) : undefined;
+    if (run?.threadId && run.turnId) {
+      try {
+        await this.codex.steerTurn({
+          threadId: run.threadId,
+          turnId: run.turnId,
+          input: event.triggerEvent === "pr_merged"
+            ? "STOP: The pull request has already merged. Stop working immediately and exit without making further changes."
+            : "STOP: The pull request was closed. Stop working immediately and exit without making further changes.",
+        });
+      } catch (error) {
+        this.logger.warn({ issueKey: issue.issueKey, runId: run.id, error: error instanceof Error ? error.message : String(error) }, "Failed to steer active run after terminal PR event");
+      }
+    }
+
+    const commitTerminalUpdate = () => {
+      if (run) {
+        this.db.finishRun(run.id, {
+          status: "released",
+          failureReason: event.triggerEvent === "pr_merged"
+            ? "Pull request merged during active run"
+            : "Pull request closed during active run",
+        });
+      }
+      this.db.upsertIssue({
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        activeRunId: null,
+        factoryState: event.triggerEvent === "pr_merged" ? "done" : "failed",
+      });
+    };
+    const activeLease = this.db.getActiveIssueSessionLease(issue.projectId, issue.linearIssueId);
+    if (activeLease) {
+      this.db.withIssueSessionLease(issue.projectId, issue.linearIssueId, activeLease.leaseId, commitTerminalUpdate);
+    } else {
+      this.db.transaction(commitTerminalUpdate);
+    }
+    this.db.releaseIssueSessionLeaseRespectingActiveLease(issue.projectId, issue.linearIssueId);
+    const updatedIssue = this.db.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
+    if (event.triggerEvent === "pr_merged") {
+      await this.completeLinearIssueAfterMerge(updatedIssue);
+    }
+    void this.syncLinearSession(updatedIssue);
+  }
+
+  private async completeLinearIssueAfterMerge(issue: IssueRecord): Promise<void> {
+    const linear = await this.linearProvider.forProject(issue.projectId).catch(() => undefined);
+    if (!linear) return;
+
+    try {
+      const liveIssue = await linear.getIssue(issue.linearIssueId);
+      const targetState = resolvePreferredCompletedLinearState(liveIssue);
+      if (!targetState) {
+        this.logger.warn({ issueKey: issue.issueKey }, "Could not find a completed Linear workflow state after merge");
+        return;
+      }
+
+      const normalizedCurrent = liveIssue.stateName?.trim().toLowerCase();
+      if (normalizedCurrent === targetState.trim().toLowerCase()) {
+        this.db.upsertIssue({
+          projectId: issue.projectId,
+          linearIssueId: issue.linearIssueId,
+          ...(liveIssue.stateName ? { currentLinearState: liveIssue.stateName } : {}),
+          ...(liveIssue.stateType ? { currentLinearStateType: liveIssue.stateType } : {}),
+        });
+        return;
+      }
+
+      const updated = await linear.setIssueState(issue.linearIssueId, targetState);
+      this.db.upsertIssue({
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        ...(updated.stateName ? { currentLinearState: updated.stateName } : {}),
+        ...(updated.stateType ? { currentLinearStateType: updated.stateType } : {}),
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      this.logger.warn({ issueKey: issue.issueKey, error: msg }, "Failed to move merged issue to a completed Linear state");
+    }
   }
 
   private async updateFailureProvenance(issue: IssueRecord, event: NormalizedGitHubEvent, project?: ProjectConfig): Promise<void> {
@@ -605,8 +773,9 @@ export class GitHubWebhookHandler {
       : typeof failureContext.headSha === "string" ? failureContext.headSha : undefined;
     if (!signature) return false;
 
-    if (issue.pendingRunType === runType && issue.pendingRunContextJson) {
-      const existing = safeJsonParse<Record<string, unknown>>(issue.pendingRunContextJson);
+    const pendingWake = this.db.peekIssueSessionWake(issue.projectId, issue.linearIssueId);
+    if (pendingWake?.runType === runType) {
+      const existing = pendingWake.context;
       if (existing?.failureSignature === signature
         && (headSha === undefined || existing.failureHeadSha === headSha || existing.headSha === headSha)) {
         this.feed?.publish({
@@ -641,11 +810,11 @@ export class GitHubWebhookHandler {
 
   private getGateCheckNames(project?: ProjectConfig): string[] {
     const configured = (project?.gateChecks ?? []).map((entry) => entry.trim()).filter(Boolean);
-    return configured.length > 0 ? configured : ["Tests"];
+    return configured.length > 0 ? configured : DEFAULT_GATE_CHECK_NAMES;
   }
 
   private getPrimaryGateCheckName(project?: ProjectConfig): string {
-    return this.getGateCheckNames(project)[0] ?? "Tests";
+    return this.getGateCheckNames(project)[0] ?? "verify";
   }
 
   private isGateCheckEvent(event: NormalizedGitHubEvent, project?: ProjectConfig): boolean {
@@ -664,8 +833,7 @@ export class GitHubWebhookHandler {
 
   private isQueueEvictionFailure(issue: IssueRecord, event: NormalizedGitHubEvent, project?: ProjectConfig): boolean {
     const protocol = resolveMergeQueueProtocol(project);
-    return issue.factoryState === "awaiting_queue"
-      && event.eventSource === "check_run"
+    return event.eventSource === "check_run"
       && event.checkName === protocol.evictionCheckName;
   }
 
@@ -769,6 +937,7 @@ export class GitHubWebhookHandler {
     if (!prNumber) return;
     const issue = this.db.getIssueByPrNumber(prNumber);
     if (!issue) return;
+    if (!this.isPatchRelayOwnedPr(issue)) return;
 
     this.feed?.publish({
       level: "info",
@@ -791,13 +960,62 @@ export class GitHubWebhookHandler {
             input: `GitHub PR comment from ${author}:\n\n${body}`,
           });
           this.logger.info({ issueKey: issue.issueKey, author }, "Forwarded GitHub PR comment to active run");
+          return;
         } catch (error) {
           const msg = error instanceof Error ? error.message : String(error);
           this.logger.warn({ issueKey: issue.issueKey, error: msg }, "Failed to forward GitHub PR comment");
         }
       }
     }
+
+    this.db.appendIssueSessionEvent({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      eventType: "followup_comment",
+      eventJson: JSON.stringify({ body, author }),
+    });
+    this.enqueuePendingSessionWake(issue.projectId, issue.linearIssueId);
   }
+
+  private peekPendingSessionWakeRunType(projectId: string, issueId: string): string | undefined {
+    return this.db.peekIssueSessionWake(projectId, issueId)?.runType;
+  }
+
+  private enqueuePendingSessionWake(projectId: string, issueId: string): string | undefined {
+    const wake = this.db.peekIssueSessionWake(projectId, issueId);
+    if (!wake) {
+      return undefined;
+    }
+    this.enqueueIssue(projectId, issueId);
+    return wake.runType;
+  }
+
+  private isPatchRelayOwnedPr(issue: IssueRecord): boolean {
+    const author = normalizeAuthorLogin(issue.prAuthorLogin);
+    if (author) {
+      if (this.patchRelayAuthorLogins.size > 0) {
+        return this.patchRelayAuthorLogins.has(author);
+      }
+      return author.includes("patchrelay");
+    }
+    // Transitional fallback for rows written before author tracking existed.
+    return issue.prNumber !== undefined && issue.branchOwner === "patchrelay";
+  }
+}
+
+function normalizeAuthorLogin(login: string | undefined): string | undefined {
+  const normalized = login?.trim().toLowerCase();
+  return normalized ? normalized : undefined;
+}
+
+function resolvePatchRelayAuthorLoginsFromEnv(): string[] {
+  return [
+    process.env.PATCHRELAY_GITHUB_BOT_LOGIN,
+    process.env.PATCHRELAY_GITHUB_BOT_NAME,
+  ]
+    .flatMap((value) => (value ?? "").split(","))
+    .map((value) => normalizeAuthorLogin(value))
+    .filter((value): value is string => Boolean(value));
 }
 
 function resolveCheckClass(

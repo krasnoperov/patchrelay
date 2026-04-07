@@ -3,9 +3,6 @@ import fastify from "fastify";
 import rawBody from "fastify-raw-body";
 import type { Logger } from "pino";
 import { getBuildInfo } from "./build-info.ts";
-import { matchesOperatorFeedEvent, type OperatorFeedEvent, type OperatorFeedQuery } from "./operator-feed.ts";
-import { buildStateHistory, type StateHistoryNode } from "./cli/watch/history-builder.ts";
-import { buildPatchRelayQueueObservations, buildPatchRelayStateGraph, type ObservationLine, type VisualizationNode } from "./cli/watch/state-visualization.ts";
 import type { PatchRelayService } from "./service.ts";
 import type { AppConfig } from "./types.ts";
 
@@ -285,27 +282,13 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
   }
 
   if (managementRoutesEnabled) {
+    app.get("/api/issues", async (_request, reply) => {
+      return reply.send({ ok: true, issues: service.listTrackedIssues() });
+    });
+
     app.get("/api/issues/:issueKey", async (request, reply) => {
       const issueKey = (request.params as { issueKey: string }).issueKey;
       const result = await service.getIssueOverview(issueKey);
-      if (!result) {
-        return reply.code(404).send({ ok: false, reason: "issue_not_found" });
-      }
-      return reply.send({ ok: true, ...result });
-    });
-
-    app.get("/api/issues/:issueKey/report", async (request, reply) => {
-      const issueKey = (request.params as { issueKey: string }).issueKey;
-      const result = await service.getIssueReport(issueKey);
-      if (!result) {
-        return reply.code(404).send({ ok: false, reason: "issue_not_found" });
-      }
-      return reply.send({ ok: true, ...result });
-    });
-
-    app.get("/api/issues/:issueKey/timeline", async (request, reply) => {
-      const issueKey = (request.params as { issueKey: string }).issueKey;
-      const result = await service.getIssueTimeline(issueKey);
       if (!result) {
         return reply.code(404).send({ ok: false, reason: "issue_not_found" });
       }
@@ -317,15 +300,6 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
       const result = await service.getActiveRunStatus(issueKey);
       if (!result) {
         return reply.code(404).send({ ok: false, reason: "active_run_not_found" });
-      }
-      return reply.send({ ok: true, ...result });
-    });
-
-    app.get("/api/issues/:issueKey/runs/:runId/events", async (request, reply) => {
-      const { issueKey, runId } = request.params as { issueKey: string; runId: string };
-      const result = await service.getRunEvents(issueKey, Number(runId));
-      if (!result) {
-        return reply.code(404).send({ ok: false, reason: "run_not_found" });
       }
       return reply.send({ ok: true, ...result });
     });
@@ -385,106 +359,6 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
         return reply.code(409).send({ ok: false, reason: result.error });
       }
       return reply.send({ ok: true, ...result });
-    });
-
-    app.get("/api/feed", async (request, reply) => {
-      const feedQuery: OperatorFeedQuery = {
-        limit: getPositiveIntegerQueryParam(request, "limit") ?? 50,
-        ...readFeedQueryFilters(request),
-      };
-      if (getQueryParam(request, "follow") !== "1") {
-        return reply.send({ ok: true, events: service.listOperatorFeed(feedQuery) });
-      }
-
-      reply.hijack();
-      reply.raw.writeHead(200, {
-        "content-type": "text/event-stream; charset=utf-8",
-        "cache-control": "no-cache, no-transform",
-        connection: "keep-alive",
-        "x-accel-buffering": "no",
-      });
-
-      const writeEvent = (event: unknown) => {
-        reply.raw.write(`event: feed\n`);
-        reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
-      };
-
-      for (const event of service.listOperatorFeed(feedQuery)) {
-        writeEvent(event);
-      }
-
-      const cleanup = () => {
-        clearInterval(keepAlive);
-        unsubscribe();
-        if (!reply.raw.destroyed) reply.raw.end();
-      };
-
-      const unsubscribe = service.subscribeOperatorFeed((event) => {
-        if (!matchesOperatorFeedEvent(event, feedQuery)) {
-          return;
-        }
-        writeEvent(event);
-      });
-      const keepAlive = setInterval(() => {
-        reply.raw.write(": keepalive\n\n");
-      }, 15000);
-
-      reply.raw.on("error", cleanup);
-      request.raw.on("close", cleanup);
-    });
-
-    app.get("/api/watch/issues", async (_request, reply) => {
-      return reply.send({ ok: true, issues: service.listTrackedIssues() });
-    });
-
-    app.get("/api/watch", async (request, reply) => {
-      reply.hijack();
-      reply.raw.writeHead(200, {
-        "content-type": "text/event-stream; charset=utf-8",
-        "cache-control": "no-cache, no-transform",
-        connection: "keep-alive",
-        "x-accel-buffering": "no",
-      });
-
-      const writeSse = (eventType: string, data: unknown) => {
-        reply.raw.write(`event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`);
-      };
-
-      // Send initial issue snapshot
-      writeSse("issues", service.listTrackedIssues());
-
-      // Stream operator feed events
-      const issueFilter = getQueryParam(request, "issue");
-      const unsubscribeFeed = service.subscribeOperatorFeed((event) => {
-        if (issueFilter && event.issueKey !== issueFilter) {
-          return;
-        }
-        writeSse("feed", event);
-      });
-
-      // When filtered to a specific issue, also stream codex notifications
-      const unsubscribeCodex = issueFilter
-        ? service.subscribeCodexNotifications((event) => {
-            if (event.issueKey !== issueFilter) {
-              return;
-            }
-            writeSse("codex", { method: event.method, params: event.params });
-          })
-        : undefined;
-
-      const cleanup = () => {
-        clearInterval(keepAlive);
-        unsubscribeFeed();
-        unsubscribeCodex?.();
-        if (!reply.raw.destroyed) reply.raw.end();
-      };
-
-      const keepAlive = setInterval(() => {
-        reply.raw.write(": keepalive\n\n");
-      }, 15000);
-
-      reply.raw.on("error", cleanup);
-      request.raw.on("close", cleanup);
     });
 
     app.get("/api/installations", async (_request, reply) => {
@@ -598,23 +472,6 @@ function getQueryParam(request: FastifyRequest, key: string): string | undefined
   return typeof value === "string" ? value : undefined;
 }
 
-function readFeedQueryFilters(request: FastifyRequest): Omit<OperatorFeedQuery, "limit" | "afterId"> {
-  const issueKey = getQueryParam(request, "issue")?.trim() || undefined;
-  const projectId = getQueryParam(request, "project")?.trim() || undefined;
-  const kind = (getQueryParam(request, "kind")?.trim() || undefined) as OperatorFeedQuery["kind"];
-  const stage = getQueryParam(request, "stage")?.trim() || undefined;
-  const status = getQueryParam(request, "status")?.trim() || undefined;
-  const workflowId = getQueryParam(request, "workflow")?.trim() || undefined;
-  return {
-    ...(issueKey ? { issueKey } : {}),
-    ...(projectId ? { projectId } : {}),
-    ...(kind ? { kind } : {}),
-    ...(stage ? { stage } : {}),
-    ...(status ? { status } : {}),
-    ...(workflowId ? { workflowId } : {}),
-  };
-}
-
 function getPositiveIntegerQueryParam(request: FastifyRequest, key: string): number | undefined {
   const value = getQueryParam(request, key);
   if (!value || !/^\d+$/.test(value)) {
@@ -678,29 +535,17 @@ function renderAgentSessionStatusPage(params: {
       title?: string;
       issueUrl?: string;
       currentLinearState?: string;
+      sessionState?: string;
       factoryState?: string;
       prNumber?: number;
       prUrl?: string;
       prState?: string;
       prReviewState?: string;
       prCheckStatus?: string;
+      waitingReason?: string;
+      lastWakeReason?: string;
       ciRepairAttempts?: number;
       queueRepairAttempts?: number;
-      queueProtocol?: {
-        repoFullName?: string | null;
-        baseBranch?: string | null;
-        admissionLabel?: string | null;
-        evictionCheckName?: string | null;
-        lastFailureSource?: string | null;
-        lastFailureCheckName?: string | null;
-        lastFailureCheckUrl?: string | null;
-        lastFailureAt?: string | null;
-        lastQueueSignalAt?: string | null;
-        lastIncidentId?: string | null;
-        lastIncidentUrl?: string | null;
-        lastIncidentFailureClass?: string | null;
-        lastIncidentSummary?: string | null;
-      } | undefined;
     };
     activeRun?: { runType?: string; status?: string } | undefined;
     latestRun?: { runType?: string; status?: string } | undefined;
@@ -723,21 +568,6 @@ function renderAgentSessionStatusPage(params: {
       toolCallCount?: number;
       latestAssistantMessage?: string | null;
     } | undefined;
-    feedEvents?: Array<{
-      id?: number;
-      at: string;
-      level?: string;
-      kind?: string;
-      summary?: string;
-      detail?: string;
-      issueKey?: string;
-      projectId?: string;
-      stage?: string;
-      status?: string;
-      workflowId?: string;
-      nextStage?: string;
-    }> | undefined;
-    activeRunId?: number | null;
     runs: Array<{
       run?: { id?: number; runType?: string; status?: string; startedAt?: string; endedAt?: string } | undefined;
       report?: {
@@ -763,6 +593,7 @@ function renderAgentSessionStatusPage(params: {
   const commandCount = params.sessionStatus.liveThread?.commandCount ?? params.sessionStatus.latestReportSummary?.commandCount ?? 0;
   const fileChangeCount = params.sessionStatus.liveThread?.fileChangeCount ?? params.sessionStatus.latestReportSummary?.fileChangeCount ?? 0;
   const toolCallCount = params.sessionStatus.liveThread?.toolCallCount ?? params.sessionStatus.latestReportSummary?.toolCallCount ?? 0;
+  const sessionState = params.sessionStatus.issue.sessionState ?? "unknown";
   const factoryState = params.sessionStatus.issue.factoryState ?? "unknown";
   const linearState = params.sessionStatus.issue.currentLinearState ?? "unknown";
   const prState = params.sessionStatus.issue.prState ?? "unknown";
@@ -770,23 +601,8 @@ function renderAgentSessionStatusPage(params: {
   const checkState = params.sessionStatus.issue.prCheckStatus ?? "unknown";
   const ciAttempts = params.sessionStatus.issue.ciRepairAttempts ?? 0;
   const queueAttempts = params.sessionStatus.issue.queueRepairAttempts ?? 0;
-  const queueProtocol = params.sessionStatus.issue.queueProtocol;
-  const history = buildPublicStateHistory({
-    currentFactoryState: factoryState,
-    activeRunId: params.sessionStatus.activeRunId ?? null,
-    ...(params.sessionStatus.feedEvents ? { feedEvents: params.sessionStatus.feedEvents } : {}),
-    runs: params.sessionStatus.runs,
-  });
-  const graph = buildPatchRelayStateGraph(history, factoryState);
-  const queueObservations = buildPatchRelayQueueObservations({
-    factoryState,
-    ...(params.sessionStatus.activeRun?.runType ? { activeRunType: params.sessionStatus.activeRun.runType } : {}),
-    ...(params.sessionStatus.issue.prNumber !== undefined ? { prNumber: params.sessionStatus.issue.prNumber } : {}),
-    ...(params.sessionStatus.issue.prReviewState ? { prReviewState: params.sessionStatus.issue.prReviewState } : {}),
-  }, normalizeFeedEvents(params.sessionStatus.feedEvents));
-  const pathHtml = renderStatePath(history, factoryState);
-  const graphHtml = renderStateGraph(graph.main, graph.prLoops, graph.queueLoop, graph.exits);
-  const observationsHtml = renderObservationList(queueObservations);
+  const waitingReason = params.sessionStatus.issue.waitingReason ?? "No outstanding wait reason.";
+  const lastWakeReason = params.sessionStatus.issue.lastWakeReason ?? "unknown";
 
   return `<!doctype html>
 <html lang="en">
@@ -861,7 +677,9 @@ function renderAgentSessionStatusPage(params: {
       ${issueUrl ? `<p><a href="${escapeHtml(issueUrl)}" target="_blank" rel="noopener noreferrer">Open issue in Linear</a></p>` : ""}
       ${prUrl ? `<p><a href="${escapeHtml(prUrl)}" target="_blank" rel="noopener noreferrer">Open pull request ${escapeHtml(prLabel ?? "")}</a></p>` : ""}
       <div class="chips">
-        <span class="chip"><strong>Factory:</strong> <code>${escapeHtml(factoryState)}</code></span>
+        <span class="chip"><strong>Session:</strong> <code>${escapeHtml(sessionState)}</code></span>
+        <span class="chip"><strong>Waiting reason:</strong> <code>${escapeHtml(waitingReason)}</code></span>
+        <span class="chip"><strong>Debug stage:</strong> <code>${escapeHtml(factoryState)}</code></span>
         <span class="chip"><strong>Linear:</strong> <code>${escapeHtml(linearState)}</code></span>
         <span class="chip"><strong>Active:</strong> ${activeStage}</span>
         <span class="chip"><strong>Latest:</strong> ${latestStage}</span>
@@ -874,14 +692,8 @@ function renderAgentSessionStatusPage(params: {
             <tr><th>Pull request</th><td>${escapeHtml(prLabel ?? "none")} (${escapeHtml(prState)})</td></tr>
             <tr><th>Review</th><td>${escapeHtml(reviewState)}</td></tr>
             <tr><th>Checks</th><td>${escapeHtml(checkState)}</td></tr>
-            <tr><th>Queue label</th><td><code>${escapeHtml(queueProtocol?.admissionLabel ?? "queue")}</code></td></tr>
-            <tr><th>Queue check</th><td><code>${escapeHtml(queueProtocol?.evictionCheckName ?? "merge-steward/queue")}</code></td></tr>
-            <tr><th>Last queue signal</th><td><code>${escapeHtml(queueProtocol?.lastQueueSignalAt ?? queueProtocol?.lastFailureAt ?? "none")}</code></td></tr>
-            <tr><th>Last queue incident</th><td>${queueProtocol?.lastIncidentUrl
-              ? `<a href="${escapeHtml(queueProtocol.lastIncidentUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(queueProtocol.lastIncidentId ?? queueProtocol.lastIncidentUrl)}</a>`
-              : escapeHtml(queueProtocol?.lastIncidentId ?? "none")}</td></tr>
-            <tr><th>Queue failure class</th><td><code>${escapeHtml(queueProtocol?.lastIncidentFailureClass ?? "unknown")}</code></td></tr>
-            <tr><th>Queue incident summary</th><td>${escapeHtml(queueProtocol?.lastIncidentSummary ?? "none")}</td></tr>
+            <tr><th>Waiting reason</th><td>${escapeHtml(waitingReason)}</td></tr>
+            <tr><th>Last wake</th><td><code>${escapeHtml(lastWakeReason)}</code></td></tr>
             <tr><th>Latest plan</th><td>${escapeHtml(latestPlan)}</td></tr>
             <tr><th>Active command</th><td><code>${escapeHtml(activeCommand)}</code></td></tr>
             <tr><th>Latest summary</th><td>${escapeHtml(latestAgentMessage)}</td></tr>
@@ -893,24 +705,7 @@ function renderAgentSessionStatusPage(params: {
         <span class="chip"><strong>File changes:</strong> ${escapeHtml(String(fileChangeCount))}</span>
         <span class="chip"><strong>Tool calls:</strong> ${escapeHtml(String(toolCallCount))}</span>
         <span class="chip"><strong>CI repairs:</strong> ${escapeHtml(String(ciAttempts))}</span>
-        <span class="chip"><strong>Queue repairs:</strong> ${escapeHtml(String(queueAttempts))}</span>
-      </div>
-      <div class="section">
-        <h2>State Path</h2>
-        <div class="grid">
-          <div class="card">
-            <h3>Native Graph</h3>
-            ${graphHtml}
-          </div>
-          <div class="card">
-            <h3>Queue Observation</h3>
-            ${observationsHtml}
-          </div>
-        </div>
-        <div class="card" style="margin-top: 18px;">
-          <h3>Observed Path</h3>
-          ${pathHtml}
-        </div>
+        <span class="chip"><strong>Steward repairs:</strong> ${escapeHtml(String(queueAttempts))}</span>
       </div>
       <div class="section">
         <h2>Recent Stages</h2>
@@ -987,155 +782,4 @@ function formatStageRow(
   return `<tr><td><code>${escapeHtml(runType)}</code></td><td>${escapeHtml(status)}</td><td><code>${escapeHtml(
     startedAt,
   )}</code></td><td><code>${escapeHtml(endedAt)}</code></td></tr>`;
-}
-
-function normalizeFeedEvents(
-  feedEvents:
-    | Array<{
-        id?: number;
-        at: string;
-        level?: string;
-        kind?: string;
-        summary?: string;
-        detail?: string;
-        issueKey?: string;
-        projectId?: string;
-        stage?: string;
-        status?: string;
-        workflowId?: string;
-        nextStage?: string;
-      }>
-    | undefined,
-): OperatorFeedEvent[] {
-  return (feedEvents ?? []).map((event, index) => ({
-    id: event.id ?? -(index + 1),
-    at: event.at,
-    level: event.level === "warn" || event.level === "error" ? event.level : "info",
-    kind: event.kind === "service"
-      || event.kind === "webhook"
-      || event.kind === "agent"
-      || event.kind === "comment"
-      || event.kind === "stage"
-      || event.kind === "turn"
-      || event.kind === "workflow"
-      || event.kind === "hook"
-      || event.kind === "github"
-      || event.kind === "linear"
-      ? event.kind
-      : "service",
-    summary: event.summary ?? "",
-    ...(event.detail ? { detail: event.detail } : {}),
-    ...(event.issueKey ? { issueKey: event.issueKey } : {}),
-    ...(event.projectId ? { projectId: event.projectId } : {}),
-    ...(event.stage ? { stage: event.stage } : {}),
-    ...(event.status ? { status: event.status } : {}),
-    ...(event.workflowId ? { workflowId: event.workflowId } : {}),
-    ...(event.nextStage ? { nextStage: event.nextStage } : {}),
-  }));
-}
-
-function buildPublicStateHistory(params: {
-  currentFactoryState: string;
-  activeRunId: number | null;
-  feedEvents?: Array<{
-    id?: number;
-    at: string;
-    level?: string;
-    kind?: string;
-    summary?: string;
-    detail?: string;
-    issueKey?: string;
-    projectId?: string;
-    stage?: string;
-    status?: string;
-    workflowId?: string;
-    nextStage?: string;
-  }>;
-  runs: Array<{
-    run?: { id?: number; runType?: string; status?: string; startedAt?: string; endedAt?: string } | undefined;
-    report?: {
-      assistantMessages?: string[];
-      commands?: unknown[];
-      fileChanges?: unknown[];
-    } | undefined;
-  }>;
-}): StateHistoryNode[] {
-  const runs = params.runs.flatMap((entry, index) => {
-    if (!entry.run?.runType || !entry.run?.status || !entry.run?.startedAt) {
-      return [];
-    }
-    return [{
-      id: entry.run.id ?? index + 1,
-      runType: entry.run.runType,
-      status: entry.run.status,
-      startedAt: entry.run.startedAt,
-      endedAt: entry.run.endedAt,
-      ...(entry.report ? {
-        report: {
-          runType: entry.run.runType,
-          status: entry.run.status,
-          prompt: "",
-          assistantMessages: entry.report.assistantMessages ?? [],
-          plans: [],
-          reasoning: [],
-          commands: (entry.report.commands ?? []) as Array<{ command: string; cwd: string; status: string; exitCode?: number }>,
-          fileChanges: (entry.report.fileChanges ?? []) as Array<{ path: string; changeType: string }>,
-          toolCalls: [],
-          eventCounts: {},
-        },
-      } : {}),
-    }];
-  });
-
-  return buildStateHistory(
-    runs,
-    normalizeFeedEvents(params.feedEvents),
-    params.currentFactoryState,
-    params.activeRunId,
-  );
-}
-
-function renderStateGraph(
-  main: VisualizationNode[],
-  prLoops: VisualizationNode[],
-  queueLoop: VisualizationNode[],
-  exits: VisualizationNode[],
-): string {
-  return [
-    renderGraphRow("main", main, true),
-    renderGraphRow("pr loops", prLoops, false),
-    renderGraphRow("queue loop", queueLoop, false),
-    renderGraphRow("exits", exits, false),
-  ].join("");
-}
-
-function renderGraphRow(label: string, nodes: VisualizationNode[], withConnectors: boolean): string {
-  const items = nodes.map((node, index) => {
-    const connector = withConnectors && index > 0 ? '<span class="graph-connector">→</span>' : "";
-    return `${connector}<span class="node ${escapeHtml(node.status)}">${escapeHtml(node.label)}</span>`;
-  }).join("");
-  return `<div class="graph-row"><strong>${escapeHtml(label)}:</strong> ${items}</div>`;
-}
-
-function renderObservationList(observations: ObservationLine[]): string {
-  if (observations.length === 0) {
-    return '<p>No queue observation is available yet.</p>';
-  }
-  return `<ul class="observation-list">${observations.map((observation) =>
-    `<li class="tone-${escapeHtml(observation.tone)}">${escapeHtml(observation.text)}</li>`).join("")}</ul>`;
-}
-
-function renderStatePath(history: StateHistoryNode[], currentFactoryState: string): string {
-  if (history.length === 0) {
-    return `<p>Current native state: <code>${escapeHtml(currentFactoryState)}</code>.</p>`;
-  }
-  const items: string[] = [];
-  for (const node of history) {
-    items.push(`<li><code>${escapeHtml(node.state)}</code>${node.reason ? ` — ${escapeHtml(node.reason)}` : ""}${node.isCurrent ? " (current)" : ""}</li>`);
-    for (const trip of node.sideTrips) {
-      const returnText = trip.returnState ? ` → ${trip.returnedAt ? escapeHtml(trip.returnState) : escapeHtml(trip.returnState)}` : "";
-      items.push(`<li><code>${escapeHtml(trip.state)}</code> side trip${trip.reason ? ` — ${escapeHtml(trip.reason)}` : ""}${returnText ? ` ${returnText}` : ""}</li>`);
-    }
-  }
-  return `<ul class="path-list">${items.join("")}</ul>`;
 }

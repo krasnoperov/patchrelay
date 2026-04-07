@@ -8,12 +8,14 @@ import {
   type GitHubAppTokenManager,
 } from "./github-app-token.ts";
 import { parseGitHubFailureContext, summarizeGitHubFailureContext } from "./github-failure-context.ts";
+import { isIssueSessionReadyForExecution } from "./issue-session.ts";
 import { GitHubWebhookHandler } from "./github-webhook-handler.ts";
 import { IssueQueryService } from "./issue-query-service.ts";
 import { DatabaseBackedLinearClientProvider } from "./linear-client.ts";
 import { LinearOAuthService } from "./linear-oauth-service.ts";
 import { RunOrchestrator } from "./run-orchestrator.ts";
-import { OperatorEventFeed, type OperatorFeedQuery } from "./operator-feed.ts";
+import { OperatorEventFeed } from "./operator-feed.ts";
+import { derivePatchRelayWaitingReason } from "./waiting-reason.ts";
 import {
   buildSessionStatusUrl,
   createSessionStatusToken,
@@ -23,8 +25,9 @@ import {
 import { ServiceRuntime } from "./service-runtime.ts";
 import { WebhookHandler } from "./webhook-handler.ts";
 import { acceptIncomingWebhook } from "./service-webhooks.ts";
+import { deriveIssueStatusNote } from "./status-note.ts";
 import type { AppConfig, LinearClient, LinearClientProvider } from "./types.ts";
-import type { GitHubCiSnapshotRecord } from "./db-types.ts";
+import type { GitHubCiSnapshotRecord, IssueRecord } from "./db-types.ts";
 
 function parseObjectJson(value: string | undefined): Record<string, unknown> | undefined {
   if (!value) return undefined;
@@ -36,20 +39,16 @@ function parseObjectJson(value: string | undefined): Record<string, unknown> | u
   }
 }
 
-function extractStatusNote(summaryJson?: string, reportJson?: string): string | undefined {
-  const summary = parseObjectJson(summaryJson);
-  if (typeof summary?.latestAssistantMessage === "string" && summary.latestAssistantMessage.trim()) {
-    return summary.latestAssistantMessage;
-  }
-
-  const report = parseObjectJson(reportJson);
-  const assistantMessages = report?.assistantMessages;
-  if (Array.isArray(assistantMessages)) {
-    const latest = assistantMessages.findLast((value) => typeof value === "string" && value.trim().length > 0);
-    if (typeof latest === "string") return latest;
-  }
-
-  return undefined;
+function shouldSuppressStatusNote(params: {
+  activeRunType?: string | null | undefined;
+  sessionState?: string | null | undefined;
+  statusNote?: string | undefined;
+}): boolean {
+  if (!params.activeRunType && params.sessionState !== "running") return false;
+  const note = params.statusNote?.trim().toLowerCase();
+  if (!note) return true;
+  return note === "codex turn was interrupted"
+    || note === "patchrelay received your mention. delegate the issue to patchrelay to start work.";
 }
 
 export function parseCiSnapshotSummary(snapshotJson?: string): {
@@ -163,7 +162,7 @@ export class PatchRelayService {
     enqueueIssue = (projectId, issueId) => runtime.enqueueIssue(projectId, issueId);
 
     this.oauthService = new LinearOAuthService(config, { linearInstallations: db.linearInstallations }, logger);
-    this.queryService = new IssueQueryService(config, db, codex, this.orchestrator);
+    this.queryService = new IssueQueryService(db, codex, this.orchestrator);
     this.runtime = runtime;
 
     // Optional GitHub App token management for bot identity
@@ -182,6 +181,8 @@ export class PatchRelayService {
   }
 
   async start(): Promise<void> {
+    this.db.releaseExpiredIssueSessionLeases();
+
     const repairedInstallations = this.db.linearInstallations.repairProjectInstallations(
       this.config.projects.map((project) => project.id),
     );
@@ -221,14 +222,118 @@ export class PatchRelayService {
       const identity = this.githubAppTokenManager.botIdentity();
       if (identity) {
         this.orchestrator.botIdentity = identity;
+        this.githubWebhookHandler.setPatchRelayAuthorLogins([identity.name]);
       }
     }
     await this.runtime.start();
+    await this.recoverDelegatedIssueStateFromLinear();
+    void this.syncKnownAgentSessions().catch((error) => {
+      const msg = error instanceof Error ? error.message : String(error);
+      this.logger.warn({ error: msg }, "Background agent session sync failed");
+    });
   }
 
   async stop(): Promise<void> {
     this.githubAppTokenManager?.stop();
     await this.runtime.stop();
+  }
+
+  private async syncKnownAgentSessions(): Promise<void> {
+    for (const issue of this.db.listIssues()) {
+      if (issue.factoryState === "done") {
+        continue;
+      }
+      const syncedIssue = issue.agentSessionId
+        ? issue
+        : (() => {
+            const recoveredAgentSessionId = this.db.findLatestAgentSessionIdForIssue(issue.linearIssueId);
+            return recoveredAgentSessionId
+              ? this.db.upsertIssue({
+                  projectId: issue.projectId,
+                  linearIssueId: issue.linearIssueId,
+                  agentSessionId: recoveredAgentSessionId,
+                })
+              : issue;
+          })();
+      if (!syncedIssue.agentSessionId) {
+        continue;
+      }
+      const activeRun = syncedIssue.activeRunId ? this.db.getRun(syncedIssue.activeRunId) : undefined;
+      await this.orchestrator.linearSync.syncSession(syncedIssue, activeRun ? { activeRunType: activeRun.runType } : undefined);
+    }
+  }
+
+  private async recoverDelegatedIssueStateFromLinear(): Promise<void> {
+    for (const issue of this.db.listIssuesWithAgentSessions()) {
+      if (issue.factoryState === "done" || issue.activeRunId !== undefined) {
+        continue;
+      }
+      const linear = await this.linearProvider.forProject(issue.projectId).catch(() => undefined);
+      if (!linear) {
+        continue;
+      }
+      const installation = this.db.linearInstallations.getLinearInstallationForProject(issue.projectId);
+      if (!installation?.actorId) {
+        continue;
+      }
+
+      const liveIssue = await linear.getIssue(issue.linearIssueId).catch(() => undefined);
+      if (!liveIssue) {
+        continue;
+      }
+
+      this.db.replaceIssueDependencies({
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        blockers: liveIssue.blockedBy.map((blocker) => ({
+          blockerLinearIssueId: blocker.id,
+          ...(blocker.identifier ? { blockerIssueKey: blocker.identifier } : {}),
+          ...(blocker.title ? { blockerTitle: blocker.title } : {}),
+          ...(blocker.stateName ? { blockerCurrentLinearState: blocker.stateName } : {}),
+          ...(blocker.stateType ? { blockerCurrentLinearStateType: blocker.stateType } : {}),
+        })),
+      });
+
+      const delegated = liveIssue.delegateId === installation.actorId;
+      const unresolvedBlockers = this.db.countUnresolvedBlockers(issue.projectId, issue.linearIssueId);
+      const shouldRecoverAwaitingInput =
+        delegated
+        && issue.factoryState === "awaiting_input"
+        && this.db.peekIssueSessionWake(issue.projectId, issue.linearIssueId) === undefined;
+
+      const updated = this.db.upsertIssue({
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        ...(liveIssue.identifier ? { issueKey: liveIssue.identifier } : {}),
+        ...(liveIssue.title ? { title: liveIssue.title } : {}),
+        ...(liveIssue.description ? { description: liveIssue.description } : {}),
+        ...(liveIssue.url ? { url: liveIssue.url } : {}),
+        ...(liveIssue.priority != null ? { priority: liveIssue.priority } : {}),
+        ...(liveIssue.estimate != null ? { estimate: liveIssue.estimate } : {}),
+        ...(liveIssue.stateName ? { currentLinearState: liveIssue.stateName } : {}),
+        ...(liveIssue.stateType ? { currentLinearStateType: liveIssue.stateType } : {}),
+        ...(shouldRecoverAwaitingInput ? { factoryState: "delegated" as never } : {}),
+      });
+
+      if (!shouldRecoverAwaitingInput) {
+        continue;
+      }
+
+      if (unresolvedBlockers === 0) {
+        this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+          projectId: issue.projectId,
+          linearIssueId: issue.linearIssueId,
+          eventType: "delegated",
+          dedupeKey: `delegated:${issue.linearIssueId}`,
+        });
+        if (this.db.peekIssueSessionWake(issue.projectId, issue.linearIssueId)) {
+          this.runtime.enqueueIssue(issue.projectId, issue.linearIssueId);
+        }
+        this.logger.info({ issueKey: updated.issueKey }, "Recovered delegated issue from stale awaiting_input state and re-queued implementation");
+      } else {
+        this.logger.info({ issueKey: updated.issueKey, unresolvedBlockers }, "Recovered delegated blocked issue from stale awaiting_input state");
+      }
+    }
   }
 
   async createLinearOAuthStart(params?: { projectId?: string }) {
@@ -332,6 +437,7 @@ export class PatchRelayService {
     title?: string;
     statusNote?: string;
     projectId: string;
+    sessionState?: string;
     factoryState: string;
     blockedByCount: number;
     blockedByKeys: string[];
@@ -358,13 +464,14 @@ export class PatchRelayService {
     latestFailureCheckName?: string;
     latestFailureStepName?: string;
     latestFailureSummary?: string;
+    waitingReason?: string;
     updatedAt: string;
   }> {
     const rows = this.db.connection
       .prepare(
         `SELECT
-          i.project_id, i.linear_issue_id, i.issue_key, i.title,
-          i.current_linear_state, i.factory_state, i.updated_at,
+          s.project_id, s.linear_issue_id, s.issue_key, i.title,
+          i.current_linear_state, i.factory_state, s.session_state, s.waiting_reason, s.summary_text, s.updated_at,
           i.pending_run_type,
           i.pr_number, i.pr_review_state, i.pr_check_status,
           i.last_github_ci_snapshot_json,
@@ -379,12 +486,19 @@ export class PatchRelayService {
           latest_run.report_json AS latest_run_report_json,
           (
             SELECT COUNT(*)
+            FROM issue_session_events e
+            WHERE e.project_id = s.project_id
+              AND e.linear_issue_id = s.linear_issue_id
+              AND e.processed_at IS NULL
+          ) AS pending_session_event_count,
+          (
+            SELECT COUNT(*)
             FROM issue_dependencies d
             LEFT JOIN issues blockers
               ON blockers.project_id = d.project_id
              AND blockers.linear_issue_id = d.blocker_linear_issue_id
-            WHERE d.project_id = i.project_id
-              AND d.linear_issue_id = i.linear_issue_id
+            WHERE d.project_id = s.project_id
+              AND d.linear_issue_id = s.linear_issue_id
               AND (
                 COALESCE(blockers.current_linear_state_type, d.blocker_current_linear_state_type, '') != 'completed'
                 AND LOWER(TRIM(COALESCE(blockers.current_linear_state, d.blocker_current_linear_state, ''))) != 'done'
@@ -396,21 +510,24 @@ export class PatchRelayService {
             LEFT JOIN issues blockers
               ON blockers.project_id = d.project_id
              AND blockers.linear_issue_id = d.blocker_linear_issue_id
-            WHERE d.project_id = i.project_id
-              AND d.linear_issue_id = i.linear_issue_id
+            WHERE d.project_id = s.project_id
+              AND d.linear_issue_id = s.linear_issue_id
               AND (
                 COALESCE(blockers.current_linear_state_type, d.blocker_current_linear_state_type, '') != 'completed'
                 AND LOWER(TRIM(COALESCE(blockers.current_linear_state, d.blocker_current_linear_state, ''))) != 'done'
               )
           ) AS blocked_by_keys_json
-        FROM issues i
-        LEFT JOIN runs active_run ON active_run.id = i.active_run_id
+        FROM issue_sessions s
+        LEFT JOIN issues i
+          ON i.project_id = s.project_id
+         AND i.linear_issue_id = s.linear_issue_id
+        LEFT JOIN runs active_run ON active_run.id = COALESCE(s.active_run_id, i.active_run_id)
         LEFT JOIN runs latest_run ON latest_run.id = (
           SELECT r.id FROM runs r
-          WHERE r.project_id = i.project_id AND r.linear_issue_id = i.linear_issue_id
+          WHERE r.project_id = s.project_id AND r.linear_issue_id = s.linear_issue_id
           ORDER BY r.id DESC LIMIT 1
         )
-        ORDER BY i.updated_at DESC, i.issue_key ASC`,
+        ORDER BY s.updated_at DESC, s.issue_key ASC`,
       )
       .all() as Array<Record<string, unknown>>;
     return rows.map((row) => {
@@ -420,34 +537,80 @@ export class PatchRelayService {
       const prChecksSummary = parseCiSnapshotSummary(
         typeof row.last_github_ci_snapshot_json === "string" ? row.last_github_ci_snapshot_json : undefined,
       );
-      const statusNote = extractStatusNote(
-        typeof row.latest_run_summary_json === "string" ? row.latest_run_summary_json : undefined,
-        typeof row.latest_run_report_json === "string" ? row.latest_run_report_json : undefined,
-      );
       const blockedByKeys = parseStringArray(
         typeof row.blocked_by_keys_json === "string" ? row.blocked_by_keys_json : undefined,
       );
       const blockedByCount = Number(row.blocked_by_count ?? 0);
-      const readyForExecution = row.pending_run_type !== null && row.pending_run_type !== undefined && row.active_run_type === null && blockedByCount === 0;
+      const hasPendingSessionEvents = Number(row.pending_session_event_count ?? 0) > 0;
+      const hasPendingWake = hasPendingSessionEvents
+        || this.db.peekIssueSessionWake(String(row.project_id), String(row.linear_issue_id)) !== undefined;
+      const readyForExecution = isIssueSessionReadyForExecution({
+        ...(typeof row.session_state === "string" ? { sessionState: String(row.session_state) as never } : {}),
+        factoryState: String(row.factory_state ?? "delegated") as never,
+        ...(row.active_run_type !== null ? { activeRunId: 1 } : {}),
+        blockedByCount,
+        hasPendingWake,
+        hasLegacyPendingRun: row.pending_run_type !== null && row.pending_run_type !== undefined,
+        ...(row.pr_number !== null ? { prNumber: Number(row.pr_number) } : {}),
+        ...(row.pr_state !== null ? { prState: String(row.pr_state) } : {}),
+        ...(row.pr_review_state !== null ? { prReviewState: String(row.pr_review_state) } : {}),
+        ...(row.pr_check_status !== null ? { prCheckStatus: String(row.pr_check_status) } : {}),
+        ...(row.last_github_failure_source !== null ? { latestFailureSource: String(row.last_github_failure_source) } : {}),
+      });
       const failureSummary = summarizeGitHubFailureContext(failureContext);
-      const derivedStatusNote = blockedByCount > 0
-        ? `Blocked by ${blockedByKeys.join(", ")}`
-        : failureSummary && (
-          row.factory_state === "repairing_ci"
-          || row.factory_state === "repairing_queue"
-          || row.factory_state === "failed"
-        )
-          ? failureSummary
-          : statusNote;
-      const statusNoteWithBlockers = blockedByCount > 0
-        ? `Blocked by ${blockedByKeys.join(", ")}`
-        : derivedStatusNote;
+      const sessionWaitingReason = typeof row.waiting_reason === "string" && row.waiting_reason.trim().length > 0
+        ? row.waiting_reason
+        : undefined;
+      const sessionSummary = typeof row.summary_text === "string" && row.summary_text.trim().length > 0
+        ? row.summary_text
+        : undefined;
+      const waitingReason = sessionWaitingReason ?? derivePatchRelayWaitingReason({
+        ...(row.active_run_type !== null ? { activeRunType: String(row.active_run_type) } : {}),
+        blockedByKeys,
+        factoryState: String(row.factory_state ?? "delegated"),
+        ...(row.pending_run_type !== null ? { pendingRunType: String(row.pending_run_type) } : {}),
+        ...(row.pr_number !== null ? { prNumber: Number(row.pr_number) } : {}),
+        ...(row.pr_review_state !== null ? { prReviewState: String(row.pr_review_state) } : {}),
+        ...(row.pr_check_status !== null ? { prCheckStatus: String(row.pr_check_status) } : {}),
+        ...(row.last_github_failure_check_name !== null ? { latestFailureCheckName: String(row.last_github_failure_check_name) } : {}),
+      });
+      const latestRun = row.latest_run_type !== null && row.latest_run_status !== null
+        ? {
+            id: 0,
+            issueId: 0,
+            projectId: String(row.project_id),
+            linearIssueId: String(row.linear_issue_id),
+            runType: String(row.latest_run_type) as never,
+            status: String(row.latest_run_status) as never,
+            ...(typeof row.latest_run_summary_json === "string" ? { summaryJson: row.latest_run_summary_json } : {}),
+            ...(typeof row.latest_run_report_json === "string" ? { reportJson: row.latest_run_report_json } : {}),
+            startedAt: String(row.updated_at),
+          }
+        : undefined;
+      const latestEvent = this.db.listIssueSessionEvents(String(row.project_id), String(row.linear_issue_id), { limit: 1 }).at(-1);
+      const statusNoteCandidate = deriveIssueStatusNote({
+        issue: { factoryState: String(row.factory_state ?? "delegated") } as never,
+        sessionSummary,
+        latestRun: latestRun as never,
+        latestEvent,
+        failureSummary,
+        blockedByKeys,
+        waitingReason,
+      }) ?? waitingReason;
+      const statusNoteForReturn = shouldSuppressStatusNote({
+        activeRunType: row.active_run_type as string | null | undefined,
+        sessionState: row.session_state as string | null | undefined,
+        statusNote: statusNoteCandidate,
+      })
+        ? undefined
+        : statusNoteCandidate;
 
       return {
         ...(row.issue_key !== null ? { issueKey: String(row.issue_key) } : {}),
         ...(row.title !== null ? { title: String(row.title) } : {}),
-        ...(statusNoteWithBlockers ? { statusNote: statusNoteWithBlockers } : {}),
+        ...(statusNoteForReturn ? { statusNote: statusNoteForReturn } : {}),
         projectId: String(row.project_id),
+        ...(row.session_state !== null ? { sessionState: String(row.session_state) } : {}),
         factoryState: String(row.factory_state ?? "delegated"),
         blockedByCount,
         blockedByKeys,
@@ -466,44 +629,10 @@ export class PatchRelayService {
         ...(row.last_github_failure_check_name !== null ? { latestFailureCheckName: String(row.last_github_failure_check_name) } : {}),
         ...(failureContext?.stepName ? { latestFailureStepName: failureContext.stepName } : {}),
         ...(failureContext?.summary ? { latestFailureSummary: failureContext.summary } : {}),
+        ...(waitingReason ? { waitingReason } : {}),
         updatedAt: String(row.updated_at),
       };
     });
-  }
-
-  subscribeCodexNotifications(
-    listener: (event: { method: string; params: Record<string, unknown>; issueKey?: string; runId?: number }) => void,
-  ): () => void {
-    let trackedThreadId: string | undefined;
-    const handler = (notification: CodexNotification) => {
-      let threadId = typeof notification.params.threadId === "string"
-        ? notification.params.threadId
-        : typeof notification.params.thread === "object" && notification.params.thread !== null && "id" in (notification.params.thread as Record<string, unknown>)
-          ? String((notification.params.thread as Record<string, unknown>).id)
-          : undefined;
-      // Item-level notifications lack threadId — use the tracked one from turn/started
-      if (!threadId) threadId = trackedThreadId;
-      if (notification.method === "turn/started" && threadId) trackedThreadId = threadId;
-      if (notification.method === "turn/completed") trackedThreadId = undefined;
-      let issueKey: string | undefined;
-      let runId: number | undefined;
-      if (threadId) {
-        const run = this.db.getRunByThreadId(threadId);
-        if (run) {
-          runId = run.id;
-          const issue = this.db.getIssue(run.projectId, run.linearIssueId);
-          issueKey = issue?.issueKey ?? undefined;
-        }
-      }
-      listener({
-        method: notification.method,
-        params: notification.params,
-        ...(issueKey ? { issueKey } : {}),
-        ...(runId !== undefined ? { runId } : {}),
-      });
-    };
-    this.codex.on("notification", handler);
-    return () => { this.codex.off("notification", handler); };
   }
 
   async promptIssue(
@@ -528,14 +657,13 @@ export class PatchRelayService {
 
     // If no active run, queue as pending context for the next run
     if (!issue.activeRunId) {
-      const existing = issue.pendingRunContextJson
-        ? JSON.parse(issue.pendingRunContextJson) as Record<string, unknown>
-        : {};
-      this.db.upsertIssue({
+      this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
-        pendingRunContextJson: JSON.stringify({ ...existing, operatorPrompt: text }),
+        eventType: "operator_prompt",
+        eventJson: JSON.stringify({ text, source }),
       });
+      this.runtime.enqueueIssue(issue.projectId, issue.linearIssueId);
       return { delivered: false, queued: true };
     }
 
@@ -555,14 +683,13 @@ export class PatchRelayService {
       // Turn may have completed between check and steer — queue for next run
       const msg = error instanceof Error ? error.message : String(error);
       this.logger.warn({ issueKey, error: msg }, "steerTurn failed, queuing prompt for next run");
-      const existing = issue.pendingRunContextJson
-        ? JSON.parse(issue.pendingRunContextJson) as Record<string, unknown>
-        : {};
-      this.db.upsertIssue({
+      this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
-        pendingRunContextJson: JSON.stringify({ ...existing, operatorPrompt: text }),
+        eventType: "operator_prompt",
+        eventJson: JSON.stringify({ text, source }),
       });
+      this.runtime.enqueueIssue(issue.projectId, issue.linearIssueId);
       return { delivered: false, queued: true };
     }
   }
@@ -585,7 +712,15 @@ export class PatchRelayService {
       }
     }
 
-    this.db.upsertIssue({
+    this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      eventType: "stop_requested",
+      dedupeKey: `operator_stop:${issue.linearIssueId}`,
+    });
+    this.db.clearPendingIssueSessionEventsRespectingActiveLease(issue.projectId, issue.linearIssueId);
+
+    this.db.upsertIssueRespectingActiveLease(issue.projectId, issue.linearIssueId, {
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       factoryState: "awaiting_input" as never,
@@ -609,14 +744,21 @@ export class PatchRelayService {
     if (issue.activeRunId) return { error: "Issue already has an active run" };
 
     if (issue.prState === "merged") {
-      this.db.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, factoryState: "done" as never });
+      this.db.upsertIssueRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        factoryState: "done" as never,
+      });
       return { issueKey, runType: "none" };
     }
 
     // Infer run type from current state instead of always resetting to implementation
     let runType = "implementation";
     let factoryState: string = "delegated";
-    if (issue.prNumber && (issue.prCheckStatus === "failed" || issue.prCheckStatus === "failure" || issue.lastGitHubFailureSource === "branch_ci")) {
+    if (issue.prNumber && issue.lastGitHubFailureSource === "queue_eviction") {
+      runType = "queue_repair";
+      factoryState = "repairing_queue";
+    } else if (issue.prNumber && (issue.prCheckStatus === "failed" || issue.prCheckStatus === "failure" || issue.lastGitHubFailureSource === "branch_ci")) {
       runType = "ci_repair";
       factoryState = "repairing_ci";
     } else if (issue.prNumber && issue.prReviewState === "changes_requested") {
@@ -628,10 +770,10 @@ export class PatchRelayService {
       factoryState = "implementing";
     }
 
-    this.db.upsertIssue({
+    this.appendOperatorRetryEvent(issue, runType);
+    this.db.upsertIssueRespectingActiveLease(issue.projectId, issue.linearIssueId, {
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
-      pendingRunType: runType as never,
       factoryState: factoryState as never,
     });
     this.feed.publish({
@@ -643,16 +785,72 @@ export class PatchRelayService {
       status: "retry",
       summary: `Retry queued: ${runType}`,
     });
-    this.runtime.enqueueIssue(issue.projectId, issue.linearIssueId);
+    if (this.db.peekIssueSessionWake(issue.projectId, issue.linearIssueId)) {
+      this.runtime.enqueueIssue(issue.projectId, issue.linearIssueId);
+    }
     return { issueKey, runType };
   }
 
-  listOperatorFeed(options?: OperatorFeedQuery) {
-    return this.feed.list(options);
-  }
+  private appendOperatorRetryEvent(
+    issue: IssueRecord,
+    runType: string,
+  ): void {
+    if (runType === "queue_repair") {
+      const queueIncident = parseObjectJson(issue.lastQueueIncidentJson);
+      const failureContext = parseObjectJson(issue.lastGitHubFailureContextJson);
+      this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        eventType: "merge_steward_incident",
+        eventJson: JSON.stringify({
+          ...(queueIncident ?? {}),
+          ...(failureContext ?? {}),
+          source: "operator_retry",
+        }),
+        dedupeKey: `operator_retry:queue_repair:${issue.linearIssueId}:${issue.prHeadSha ?? issue.lastGitHubFailureHeadSha ?? "unknown-sha"}`,
+      });
+      return;
+    }
 
-  subscribeOperatorFeed(listener: Parameters<OperatorEventFeed["subscribe"]>[0]) {
-    return this.feed.subscribe(listener);
+    if (runType === "ci_repair") {
+      const failureContext = parseObjectJson(issue.lastGitHubFailureContextJson);
+      this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        eventType: "settled_red_ci",
+        eventJson: JSON.stringify({
+          ...(failureContext ?? {}),
+          source: "operator_retry",
+        }),
+        dedupeKey: `operator_retry:ci_repair:${issue.linearIssueId}:${issue.lastGitHubFailureSignature ?? issue.prHeadSha ?? "unknown-sha"}`,
+      });
+      return;
+    }
+
+    if (runType === "review_fix") {
+      this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        eventType: "review_changes_requested",
+        eventJson: JSON.stringify({
+          reviewBody: "Operator requested retry of review-fix work.",
+          source: "operator_retry",
+        }),
+        dedupeKey: `operator_retry:review_fix:${issue.linearIssueId}:${issue.prHeadSha ?? "unknown-sha"}`,
+      });
+      return;
+    }
+
+    this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      eventType: "delegated",
+      eventJson: JSON.stringify({
+        promptContext: "Operator requested retry of PatchRelay work.",
+        source: "operator_retry",
+      }),
+      dedupeKey: `operator_retry:implementation:${issue.linearIssueId}`,
+    });
   }
 
   async acceptWebhook(params: {
@@ -716,18 +914,6 @@ export class PatchRelayService {
 
   async getIssueOverview(issueKey: string) {
     return await this.queryService.getIssueOverview(issueKey);
-  }
-
-  async getIssueReport(issueKey: string) {
-    return await this.queryService.getIssueReport(issueKey);
-  }
-
-  async getIssueTimeline(issueKey: string) {
-    return await this.queryService.getIssueTimeline(issueKey);
-  }
-
-  async getRunEvents(issueKey: string, runId: number) {
-    return await this.queryService.getRunEvents(issueKey, runId);
   }
 
   async getActiveRunStatus(issueKey: string) {

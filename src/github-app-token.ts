@@ -87,6 +87,11 @@ exec /usr/bin/gh "$@"
 `;
 
   await writeFile(ghWrapper, script, { mode: 0o755 });
+  const currentPath = process.env.PATH ?? "";
+  const pathEntries = currentPath.split(path.delimiter).filter(Boolean);
+  if (!pathEntries.includes(binDir)) {
+    process.env.PATH = [binDir, ...pathEntries].join(path.delimiter);
+  }
   logger.debug({ path: ghWrapper }, "Wrote gh wrapper script");
 }
 
@@ -187,6 +192,8 @@ export function createGitHubAppTokenManager(
       await mkdir(path.dirname(tokenFile), { recursive: true });
       await writeFile(tokenFile, token, { mode: 0o600 });
       cachedToken = token;
+      process.env.GH_TOKEN = token;
+      process.env.GITHUB_TOKEN = token;
       logger.debug("Refreshed GitHub App installation token");
     } catch (error) {
       logger.warn(

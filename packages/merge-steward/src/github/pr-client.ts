@@ -106,6 +106,28 @@ export class GitHubPRClient implements GitHubPRApi {
     }
   }
 
+  async listOpenPRs(): Promise<Array<{ number: number; branch: string; headSha: string }>> {
+    const result = await exec("gh", [
+      "pr", "list",
+      "--repo", this.repoFullName,
+      "--state", "open",
+      "--json", "number,headRefName,headRefOid",
+    ], { allowNonZero: true, githubRepoFullName: this.repoFullName });
+
+    if (result.exitCode !== 0) return [];
+
+    try {
+      const data = JSON.parse(result.stdout) as Array<{
+        number: number;
+        headRefName: string;
+        headRefOid: string;
+      }>;
+      return data.map((pr) => ({ number: pr.number, branch: pr.headRefName, headSha: pr.headRefOid }));
+    } catch {
+      return [];
+    }
+  }
+
   async deleteBranch(prNumber: number): Promise<void> {
     const status = await this.getStatus(prNumber);
     await exec("gh", [

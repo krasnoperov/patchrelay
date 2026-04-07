@@ -17,8 +17,7 @@ PatchRelay and Merge Steward are intentionally separate:
 
 GitHub is the protocol boundary:
 
-- PatchRelay requests queue admission by adding the configured queue label
-- Merge Steward admits, validates, merges, or evicts based on PR state and CI
+- Merge Steward admits, validates, merges, or evicts based on GitHub PR state and CI
 - Merge Steward reports queue eviction via the configured GitHub check run
 - PatchRelay interprets that signal as `queue_repair` rather than ordinary `ci_repair`
 
@@ -30,9 +29,8 @@ The happy path is deterministic and deliberately narrow:
 
 1. PatchRelay finishes implementation and review/CI work for an issue branch.
 2. The PR reaches `awaiting_queue`.
-3. PatchRelay adds the configured admission label, default `queue`.
-4. Merge Steward sees the labeled PR via GitHub webhook.
-5. If the PR is approved and required checks are green, Steward admits it to the queue.
+3. Merge Steward sees that the PR is approved and required checks are green.
+4. Steward admits it to the queue.
 6. The queue head advances through:
 
 ```text
@@ -171,8 +169,8 @@ The repair handoff should be clean and observable:
 3. PatchRelay observes that check run, persists queue-failure provenance, and preserves the steward incident context for repair.
 4. PatchRelay schedules `queue_repair`.
 5. The repair run updates the PR branch and pushes a new head SHA.
-6. When the branch is healthy again, PatchRelay returns the issue to `awaiting_queue` and re-adds the queue label.
-7. Steward sees the label and re-admits the PR when admission conditions hold again.
+6. When the branch is healthy again, PatchRelay returns the issue to `awaiting_queue` and pushes the repaired head SHA.
+7. Steward re-admits the PR when GitHub truth says the PR is admissible again.
 
 The important distinction is that PatchRelay should not treat queue eviction like ordinary branch CI failure. It now preserves that provenance so idle reconciliation can keep routing it back to `queue_repair`.
 
@@ -213,9 +211,8 @@ It exposes:
 
 - issue state and PR lifecycle
 - agent run history
-- queue handoff events
 - queue-repair vs CI-repair routing
-- configured queue protocol details
+- configured queue incident check details
 - last observed queue/failure signal
 - public session status and operator APIs
 
@@ -223,7 +220,7 @@ Use PatchRelay first when you need to answer:
 
 - why is this issue not progressing?
 - did we route to `ci_repair` or `queue_repair`?
-- when did we last request queue admission?
+- what queue/steward fact most recently changed the session?
 - what has the agent done so far?
 
 ### Merge Steward

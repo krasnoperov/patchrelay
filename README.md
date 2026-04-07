@@ -1,8 +1,8 @@
 # PatchRelay
 
-PatchRelay is a self-hosted harness for running a controlled coding loop per Linear issue on your own machine.
+PatchRelay is a self-hosted harness for delegated Linear work and upkeep of PatchRelay-owned pull requests on your own machine.
 
-It receives Linear webhooks, routes issues to the right local repository, prepares durable issue worktrees, runs Codex sessions through `codex app-server`, and keeps the whole issue loop observable and resumable from the CLI. GitHub webhooks drive reactive loops for CI repair and review fixes. A separate [Merge Steward](./packages/merge-steward) service handles serial queue integration and landing.
+It receives Linear webhooks, routes issues to the right local repository, prepares durable issue worktrees, runs Codex sessions through `codex app-server`, and keeps the issue loop observable and resumable from the CLI. GitHub webhooks drive reactive loops for CI repair, review fixes, and merge-steward incidents on PatchRelay-owned PRs. Separate downstream services own review automation and merge execution.
 
 PatchRelay is the system around the model:
 
@@ -38,9 +38,13 @@ PatchRelay does the deterministic harness work that you do not want to re-implem
 - creates and reuses one durable worktree and branch per issue lifecycle
 - starts Codex threads for implementation runs
 - triggers reactive runs for CI failures, review feedback, and Merge Steward evictions
+- opens and updates PatchRelay-owned PRs
+- marks its own PRs ready when implementation is complete
 - persists enough state to correlate the Linear issue, local workspace, run, and Codex thread
 - reports progress back to Linear and forwards follow-up agent input into active runs
 - exposes CLI and optional read-only inspection surfaces so operators can understand what happened
+
+PatchRelay does not own review decisions or queue admission. GitHub is the source of truth for PR readiness, `reviewbot` owns review automation, and [Merge Steward](./packages/merge-steward) owns queueing and merge execution.
 
 ## System Layers
 
@@ -50,7 +54,7 @@ PatchRelay works best when read as five layers with clear ownership:
 - coordination layer: issue claiming, run scheduling, retry budgets, and reconciliation
 - execution layer: durable worktrees, Codex threads, and queued turn input delivery
 - integration layer: Linear webhooks, GitHub webhooks, OAuth, project routing, and state sync
-- observability layer: CLI inspection, reports, event trails, and operator endpoints
+- observability layer: CLI inspection, session status, and operator endpoints
 
 That separation is intentional. PatchRelay is not the policy itself and it is not the coding agent. It is the harness that keeps context, action, verification, and repair coordinated in a real repository with real operational state.
 
@@ -81,8 +85,26 @@ You will also need:
 3. Delegated issues create or reuse the issue worktree and launch an implementation run through `codex app-server`.
 4. PatchRelay persists thread ids, run state, and observations so the work stays inspectable and resumable.
 5. GitHub webhooks drive reactive verification and repair loops: CI repair on check failures and review fix on changes requested.
-6. When the PR is approved and CI is green, PatchRelay adds the `queue` label. Merge Steward takes over — rebasing, validating, and merging the PR. If the steward evicts the PR, PatchRelay triggers a queue repair run.
-7. Native agent prompts and Linear comments can steer the active run. An operator can take over from the exact same worktree when needed.
+6. PatchRelay opens draft PRs while implementation is in progress and marks its own PR ready when implementation is complete.
+7. Downstream automation reacts to GitHub truth: `reviewbot` reviews ready PRs with green CI, and Merge Steward admits ready PRs with green CI and approval into the merge queue.
+8. If requested changes, red CI, or a merge-steward incident lands on a PatchRelay-owned PR, PatchRelay resumes work on that same PR branch.
+9. Native agent prompts and Linear comments can steer the active run. An operator can take over from the exact same worktree when needed.
+
+## Ownership Model
+
+PatchRelay tracks two different kinds of ownership:
+
+- issue ownership: who may start new delegated implementation work from Linear
+- PR ownership: who is responsible for keeping an existing PR healthy until it merges or closes
+
+For PatchRelay, PR ownership is determined by one concrete GitHub fact: a PR is PatchRelay-owned when its author is the PatchRelay GitHub app or service account.
+
+That ownership does not change just because:
+
+- the issue is undelegated
+- the PR becomes ready for review
+- the PR is approved
+- the PR enters or leaves the merge queue
 
 ## Factory State Machine
 
@@ -105,6 +127,16 @@ Run types:
 - `queue_repair` — fix merge queue failures
 
 PatchRelay treats these as distinct loop types with different context, entry conditions, and success criteria rather than as one generic "ask the agent again" workflow.
+
+The long-term runtime model is a small durable `IssueSession`:
+
+- `idle`
+- `running`
+- `waiting_input`
+- `done`
+- `failed`
+
+Waiting on review or queue should be represented as a waiting reason, not as a large internal control-plane state machine.
 
 ## Restart And Reconciliation
 
@@ -269,13 +301,13 @@ Useful commands:
 - `patchrelay issue list --active`
 - `patchrelay issue show APP-123`
 - `patchrelay issue watch APP-123`
-- `patchrelay dashboard`
-- `patchrelay issue report APP-123`
-- `patchrelay issue events APP-123 --follow`
 - `patchrelay issue path APP-123 --cd`
 - `patchrelay issue open APP-123`
 - `patchrelay issue retry APP-123`
 - `patchrelay service logs --lines 100`
+
+PatchRelay's operator surface is being reduced to its own runtime responsibilities: issue status,
+active work, waiting reason, worktree handoff, and retry controls.
 
 `patchrelay issue open` is the handoff bridge: it opens Codex in the issue worktree and resumes the existing thread when PatchRelay has one.
 
@@ -297,7 +329,7 @@ PatchRelay keeps enough durable state to answer the questions that matter during
 
 [Merge Steward](./packages/merge-steward) is a separate service that owns serial merge queue integration. PatchRelay develops code and produces pull requests. Merge Steward delivers those PRs into production — rebasing onto main, waiting for CI, and merging when green.
 
-The two services communicate through GitHub. PatchRelay adds a `queue` label when a PR is ready. The steward processes the queue. On failure, the steward evicts the PR with a check run report, and PatchRelay can trigger a queue repair run in response.
+The two services communicate through GitHub. PatchRelay makes its own PR ready, and Merge Steward decides queue admission and merge execution from GitHub truth. On failure, the steward reports the incident through GitHub signals, and PatchRelay can trigger a queue repair run in response.
 
 The steward now has its own bootstrap flow:
 

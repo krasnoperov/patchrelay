@@ -8,9 +8,6 @@ import { buildStateHistory } from "./history-builder.ts";
 import { HelpBar } from "./HelpBar.tsx";
 import { planStepSymbol, planStepColor } from "./plan-helpers.ts";
 import { progressBar } from "./format-utils.ts";
-import { FactoryStateGraph } from "./FactoryStateGraph.tsx";
-import { QueueObservationView } from "./QueueObservationView.tsx";
-import { buildPatchRelayQueueObservations, buildPatchRelayStateGraph } from "./state-visualization.ts";
 import { FreshnessBadge } from "./FreshnessBadge.tsx";
 
 interface IssueDetailViewProps {
@@ -66,42 +63,68 @@ function formatCheckState(checkState?: string): string | null {
   }
 }
 
-const STATE_DISPLAY: Record<string, { label: string; color: string }> = {
-  blocked: { label: "blocked", color: "yellow" },
-  ready: { label: "ready", color: "blueBright" },
-  delegated: { label: "delegated", color: "cyan" },
-  implementing: { label: "implementing", color: "cyan" },
-  pr_open: { label: "PR open", color: "cyan" },
-  changes_requested: { label: "review changes", color: "yellow" },
-  repairing_ci: { label: "repairing CI", color: "yellow" },
-  awaiting_queue: { label: "queued for merge", color: "cyan" },
-  repairing_queue: { label: "repairing queue", color: "yellow" },
-  done: { label: "merged", color: "green" },
+const SESSION_DISPLAY: Record<string, { label: string; color: string }> = {
+  idle: { label: "idle", color: "blueBright" },
+  running: { label: "running", color: "cyan" },
+  waiting_input: { label: "needs input", color: "yellow" },
+  done: { label: "done", color: "green" },
   failed: { label: "failed", color: "red" },
-  escalated: { label: "escalated", color: "red" },
-  awaiting_input: { label: "awaiting input", color: "yellow" },
+};
+
+const STAGE_DISPLAY: Record<string, string> = {
+  blocked: "blocked",
+  ready: "ready",
+  delegated: "delegated",
+  implementing: "implementing",
+  pr_open: "PR open",
+  changes_requested: "review changes",
+  repairing_ci: "repairing CI",
+  awaiting_queue: "waiting downstream",
+  repairing_queue: "repairing queue",
+  done: "merged",
+  failed: "failed",
+  escalated: "escalated",
+  awaiting_input: "needs input",
 };
 
 function effectiveState(issue: WatchIssue): string {
+  if (issue.sessionState === "done") return "done";
+  if (issue.sessionState === "failed") return "failed";
   if (issue.blockedByCount > 0 && !issue.activeRunType) return "blocked";
   if (issue.readyForExecution && !issue.activeRunType) return "ready";
+  if (issue.sessionState === "waiting_input") return "awaiting_input";
   return issue.factoryState;
 }
 
+function sessionDisplay(issue: WatchIssue): { label: string; color: string } {
+  const state = issue.sessionState ?? "unknown";
+  return SESSION_DISPLAY[state] ?? { label: state, color: "white" };
+}
+
+function stageDisplay(issue: WatchIssue): string {
+  const state = effectiveState(issue);
+  return STAGE_DISPLAY[state] ?? issue.factoryState;
+}
+
 function blockerText(issue: WatchIssue, issueContext: WatchIssueContext | null): string | null {
+  const rereviewNeeded = issue.prReviewState === "changes_requested"
+    && (issue.prCheckStatus === "passed" || issue.prCheckStatus === "success")
+    && !issue.activeRunType;
+  if (issue.sessionState === "waiting_input") return issue.waitingReason ?? "Waiting for input";
+  if (issue.waitingReason && !issue.activeRunType) return issue.waitingReason;
   if (issue.blockedByCount > 0) return `Waiting on ${issue.blockedByKeys.join(", ")}`;
-  if (issue.factoryState === "repairing_queue") return "Merge queue conflict, repairing branch";
-  if (issue.factoryState === "repairing_ci") {
+  if (effectiveState(issue) === "repairing_queue") return "Merge queue conflict, repairing branch";
+  if (effectiveState(issue) === "repairing_ci") {
     const check = issueContext?.latestFailureCheckName ?? issue.latestFailureCheckName ?? "CI";
     return `Repairing ${check}`;
   }
-  if (issue.factoryState === "awaiting_queue") return "Waiting for merge queue";
   if (issue.prCheckStatus === "failed" || issue.prCheckStatus === "failure") {
     const check = issueContext?.latestFailureCheckName ?? issue.latestFailureCheckName ?? "checks";
     return `${check} failed`;
   }
+  if (rereviewNeeded) return "Awaiting re-review after requested changes";
   if (issue.prReviewState === "changes_requested") return "Review changes requested";
-  if (issue.prNumber !== undefined && !issue.prReviewState && issue.factoryState !== "done") return "Awaiting review";
+  if (issue.prNumber !== undefined && !issue.prReviewState && effectiveState(issue) !== "done") return "Awaiting review";
   return null;
 }
 
@@ -124,7 +147,7 @@ export function IssueDetailView({
   if (!issue) {
     return (
       <Box flexDirection="column">
-        <Text color="red">Issue not found.</Text>
+        <Text dimColor>Loading issue…</Text>
         <HelpBar view="detail" follow={follow} detailTab={detailTab} />
       </Box>
     );
@@ -136,27 +159,25 @@ export function IssueDetailView({
   if (diffSummary && diffSummary.filesChanged > 0) meta.push(`${diffSummary.filesChanged}f +${diffSummary.linesAdded} -${diffSummary.linesRemoved}`);
   if (issueContext?.runCount) meta.push(`${issueContext.runCount} runs`);
 
-  const state = STATE_DISPLAY[effectiveState(issue)] ?? { label: issue.factoryState, color: "white" };
+  const session = sessionDisplay(issue);
+  const stage = stageDisplay(issue);
   const blocker = blockerText(issue, issueContext);
 
   const history = useMemo(
     () => buildStateHistory(rawRuns, rawFeedEvents, issue.factoryState, activeRunId),
     [rawRuns, rawFeedEvents, issue.factoryState, activeRunId],
   );
-  const graph = useMemo(
-    () => buildPatchRelayStateGraph(history, issue.factoryState),
-    [history, issue.factoryState],
-  );
-  const queueObservations = useMemo(
-    () => buildPatchRelayQueueObservations(issue, rawFeedEvents),
-    [issue, rawFeedEvents],
-  );
 
   // Build compact facts for the header
   const facts: string[] = [];
+  const rereviewNeeded = issue.prReviewState === "changes_requested"
+    && (issue.prCheckStatus === "passed" || issue.prCheckStatus === "success")
+    && !issue.activeRunType;
   if (issue.prNumber !== undefined) facts.push(`PR #${issue.prNumber}`);
   if (issue.prReviewState === "approved") facts.push("approved");
+  else if (rereviewNeeded) facts.push("re-review needed");
   else if (issue.prReviewState === "changes_requested") facts.push("changes requested");
+  if (issue.waitingReason && issue.sessionState === "waiting_input") facts.push(issue.waitingReason);
   if (issue.prCheckStatus === "passed" || issue.prCheckStatus === "success") facts.push("checks passed");
   else if (issue.prCheckStatus === "failed" || issue.prCheckStatus === "failure") {
     const check = issueContext?.latestFailureCheckName ?? issue.latestFailureCheckName ?? "checks";
@@ -170,7 +191,8 @@ export function IssueDetailView({
       {/* Header: issue key · status · facts · elapsed · freshness */}
       <Box gap={2}>
         <Text bold>{key}</Text>
-        <Text color={state.color}>{state.label}</Text>
+        <Text color={session.color}>{session.label}</Text>
+        <Text dimColor>{`  debug stage ${stage}`}</Text>
         {facts.length > 0 && <Text dimColor>{facts.join(" \u00b7 ")}</Text>}
         {activeRunStartedAt && <ElapsedTime startedAt={activeRunStartedAt} />}
         {meta.length > 0 && <Text dimColor>{meta.join("  ")}</Text>}
@@ -179,6 +201,9 @@ export function IssueDetailView({
       </Box>
       {issue.title && <Text>{issue.title}</Text>}
       {blocker && <Text color="yellow">{blocker}</Text>}
+      {issue.statusNote && issue.statusNote !== blocker && (
+        <Text dimColor wrap="wrap">{issue.statusNote}</Text>
+      )}
       {issueContext?.latestFailureSummary && (
         <Text color={issueContext.latestFailureSource === "queue_eviction" ? "yellow" : "red"}>
           Latest failure: {issueContext.latestFailureSummary}
@@ -210,13 +235,10 @@ export function IssueDetailView({
         </>
       ) : (
         <>
-          <FactoryStateGraph
-            main={graph.main}
-            prLoops={graph.prLoops}
-            queueLoop={graph.queueLoop}
-            exits={graph.exits}
-          />
-          <QueueObservationView observations={queueObservations} />
+          <Box marginTop={1} flexDirection="column">
+            <Text dimColor>PatchRelay activity history.</Text>
+            <Text dimColor>Runs, waits, and wake-ups are shown here in PatchRelay order.</Text>
+          </Box>
           <Box marginTop={1}>
             <StateHistoryView history={history} plan={plan} activeRunId={activeRunId} />
           </Box>

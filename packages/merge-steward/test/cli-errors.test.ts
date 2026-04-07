@@ -258,6 +258,44 @@ test("queue unknown subcommand exits 1", async () => {
   }
 });
 
+test("queue watch with nonexistent repo exits 1 with a configured-repos hint instead of ENOENT", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "ms-err-queue-watch-missing-"));
+  try {
+    await withEnv(
+      {
+        XDG_CONFIG_HOME: path.join(baseDir, ".config"),
+        XDG_STATE_HOME: path.join(baseDir, ".state"),
+        XDG_DATA_HOME: path.join(baseDir, ".share"),
+        MERGE_STEWARD_SYSTEMD_DIR: path.join(baseDir, "systemd"),
+      },
+      async () => {
+        await runCli(["init", "queue.example.com"], {
+          stdout: createBufferStream().stream,
+          stderr: createBufferStream().stream,
+          runCommand: noop,
+        });
+        await runCli(["attach", "app", "owner/repo"], {
+          stdout: createBufferStream().stream,
+          stderr: createBufferStream().stream,
+          runCommand: noop,
+        });
+
+        const stderr = createBufferStream();
+        const code = await runCli(["queue", "watch", "--repo", "missing"], {
+          stdout: createBufferStream().stream,
+          stderr: stderr.stream,
+          runCommand: noop,
+        });
+        assert.equal(code, 1);
+        assert.match(stderr.read(), /Repo config not found for missing/);
+        assert.match(stderr.read(), /Configured repos: app/);
+      },
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 // --- service commands operate on the machine-level unit ---
 
 test("service status without repo id succeeds", async () => {
