@@ -40,6 +40,9 @@ export interface ReviewQuillConfig {
   };
   reconciliation: {
     pollIntervalMs: number;
+    heartbeatIntervalMs: number;
+    staleQueuedAfterMs: number;
+    staleRunningAfterMs: number;
   };
   codex: CodexAppServerConfig;
   repositories: ReviewQuillRepositoryConfig[];
@@ -169,6 +172,8 @@ export interface ReviewAttemptRecord {
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
+  stale?: boolean;
+  staleReason?: string;
 }
 
 export interface WebhookEventRecord {

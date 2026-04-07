@@ -96,11 +96,11 @@ export class SqliteStore {
 
   updateAttempt(id: number, params: {
     status?: ReviewAttemptStatus;
-    conclusion?: ReviewAttemptConclusion;
+    conclusion?: ReviewAttemptConclusion | null;
     summary?: string;
-    threadId?: string;
-    turnId?: string;
-    externalCheckRunId?: number;
+    threadId?: string | null;
+    turnId?: string | null;
+    externalCheckRunId?: number | null;
     completedAt?: string | null;
   }): ReviewAttemptRecord | undefined {
     const sets: string[] = ["updated_at = @updatedAt"];

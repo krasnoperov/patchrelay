@@ -2,6 +2,7 @@ import type { Logger } from "pino";
 import type {
   PullRequestSummary,
   ReviewAttemptDetail,
+  ReviewAttemptRecord,
   ReviewEligibility,
   ReviewFinding,
   ReviewQuillConfig,
@@ -14,6 +15,7 @@ import type { SqliteStore } from "./db/sqlite-store.ts";
 import type { GitHubClient } from "./github-client.ts";
 import type { ReviewRunner } from "./review-runner.ts";
 import type { PullRequestReviewRecord } from "./types.ts";
+import { decorateAttempt, describeAttemptState, isAttemptActive } from "./attempt-state.ts";
 import { buildReviewContext } from "./review-context.ts";
 
 // Findings below this confidence score are dropped before posting.
@@ -134,6 +136,29 @@ function reviewStateForEvent(event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT"): 
   }
 }
 
+export function preserveRequestedChangesOnRereview(params: {
+  reviews: PullRequestReviewRecord[];
+  reviewerLogin: string | undefined;
+  headSha: string;
+  event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT";
+}): "APPROVE" | "REQUEST_CHANGES" | "COMMENT" {
+  if (params.event !== "COMMENT" || !params.reviewerLogin) {
+    return params.event;
+  }
+
+  const latestPriorDecisiveReview = [...params.reviews]
+    .reverse()
+    .find((review) => review.authorLogin === params.reviewerLogin
+      && review.commitId !== params.headSha
+      && (review.state === "CHANGES_REQUESTED" || review.state === "APPROVED"));
+
+  if (latestPriorDecisiveReview?.state === "CHANGES_REQUESTED") {
+    return "REQUEST_CHANGES";
+  }
+
+  return params.event;
+}
+
 type PublicationDisposition =
   | { action: "publish" }
   | { action: "supersede"; summary: string; checkConclusion: "cancelled" }
@@ -203,6 +228,7 @@ export function classifyPublicationDisposition(
 export class ReviewQuillService {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private reconcileInProgress = false;
+  private readonly startedAt = new Date().toISOString();
   private readonly runtime: ReviewQuillRuntimeStatus = {
     reconcileInProgress: false,
     lastReconcileStartedAt: null,
@@ -233,20 +259,22 @@ export class ReviewQuillService {
   }
 
   listAttempts() {
-    return this.store.listAttempts(100);
+    return this.store.listAttempts(100).map((attempt) => this.decorateAttempt(attempt));
   }
 
   getAttemptDetail(attemptId: number): ReviewAttemptDetail | undefined {
     const attempt = this.store.getAttemptById(attemptId);
     if (!attempt) return undefined;
     return {
-      attempt,
-      relatedAttempts: this.store.listAttemptsForPullRequest(attempt.repoFullName, attempt.prNumber, 10),
+      attempt: this.decorateAttempt(attempt),
+      relatedAttempts: this.store
+        .listAttemptsForPullRequest(attempt.repoFullName, attempt.prNumber, 10)
+        .map((related) => this.decorateAttempt(related)),
     };
   }
 
   getWatchSnapshot(): ReviewQuillWatchSnapshot {
-    const attempts = this.store.listAttempts(60);
+    const attempts = this.store.listAttempts(60).map((attempt) => this.decorateAttempt(attempt));
     const recentWebhooks = this.store.listWebhooks(25);
     const repos = this.config.repositories.map((repo) => {
       const repoAttempts = attempts.filter((attempt) => attempt.repoFullName === repo.repoFullName);
@@ -345,12 +373,93 @@ export class ReviewQuillService {
   private async reconcileRepo(repo: ReviewQuillRepositoryConfig): Promise<void> {
     const prs = await this.github.listOpenPullRequests(repo.repoFullName);
     for (const pr of prs) {
+      await this.reconcileActiveAttemptsForPullRequest(repo, pr);
       const existing = this.store.getAttempt(repo.repoFullName, pr.number, pr.headSha);
       if (existing && !["failed", "cancelled", "superseded"].includes(existing.status)) continue;
       const eligibility = await this.evaluateEligibility(repo, pr.number, pr.headSha, pr.isDraft, pr.headRefName);
       if (!eligibility.eligible) continue;
       await this.executeReview(repo, pr, existing);
     }
+  }
+
+  private decorateAttempt(attempt: ReviewAttemptRecord): ReviewAttemptRecord {
+    return decorateAttempt(attempt, {
+      serviceStartedAt: this.startedAt,
+      policy: {
+        queuedAfterMs: this.config.reconciliation.staleQueuedAfterMs,
+        runningAfterMs: this.config.reconciliation.staleRunningAfterMs,
+      },
+    });
+  }
+
+  private async reconcileActiveAttemptsForPullRequest(
+    repo: ReviewQuillRepositoryConfig,
+    pr: Awaited<ReturnType<GitHubClient["listOpenPullRequests"]>>[number],
+  ): Promise<void> {
+    const attempts = this.store.listAttemptsForPullRequest(repo.repoFullName, pr.number, 20);
+    for (const attempt of attempts) {
+      if (!isAttemptActive(attempt)) continue;
+      if (attempt.headSha !== pr.headSha) {
+        await this.retireAttempt(repo, attempt, {
+          status: "superseded",
+          conclusion: "skipped",
+          checkConclusion: "cancelled",
+          summary: `Superseded by newer head ${pr.headSha.slice(0, 12)} before review started.`,
+        });
+        continue;
+      }
+      const state = describeAttemptState(attempt, {
+        serviceStartedAt: this.startedAt,
+        policy: {
+          queuedAfterMs: this.config.reconciliation.staleQueuedAfterMs,
+          runningAfterMs: this.config.reconciliation.staleRunningAfterMs,
+        },
+      });
+      if (!state.stale) continue;
+      const summary = `Marked stale and queued for retry. ${state.staleReason ?? "Attempt stopped making progress."}`;
+      await this.retireAttempt(repo, attempt, {
+        status: "failed",
+        conclusion: "error",
+        checkConclusion: "neutral",
+        summary,
+      });
+      this.logger.warn({
+        repo: repo.repoFullName,
+        prNumber: pr.number,
+        attemptId: attempt.id,
+        headSha: attempt.headSha,
+        staleReason: state.staleReason,
+      }, "Recovered stale review attempt");
+    }
+  }
+
+  private async retireAttempt(
+    repo: ReviewQuillRepositoryConfig,
+    attempt: ReviewAttemptRecord,
+    params: {
+      status: "failed" | "cancelled" | "superseded";
+      conclusion: "error" | "skipped";
+      checkConclusion: "neutral" | "cancelled";
+      summary: string;
+    },
+  ): Promise<void> {
+    const detailsUrl = this.config.server.publicBaseUrl
+      ? `${this.config.server.publicBaseUrl.replace(/\/$/, "")}/attempts/${attempt.id}`
+      : undefined;
+    this.store.updateAttempt(attempt.id, {
+      status: params.status,
+      conclusion: params.conclusion,
+      summary: params.summary,
+      completedAt: new Date().toISOString(),
+    });
+    if (attempt.externalCheckRunId === undefined) return;
+    await this.github.updateCheckRun(repo.repoFullName, attempt.externalCheckRunId, {
+      status: "completed",
+      conclusion: params.checkConclusion,
+      summary: params.summary,
+      text: params.summary,
+      ...(detailsUrl ? { detailsUrl } : {}),
+    }).catch(() => undefined);
   }
 
   private async evaluateEligibility(
@@ -378,7 +487,11 @@ export class ReviewQuillService {
     const attempt = existingAttempt
       ? (this.store.updateAttempt(existingAttempt.id, {
         status: "queued",
+        conclusion: null,
         summary: "Retrying previous failed review attempt",
+        threadId: null,
+        turnId: null,
+        externalCheckRunId: null,
         completedAt: null,
       }) ?? existingAttempt)
       : this.store.createAttempt({
@@ -390,6 +503,7 @@ export class ReviewQuillService {
     const detailsUrl = this.config.server.publicBaseUrl
       ? `${this.config.server.publicBaseUrl.replace(/\/$/, "")}/attempts/${attempt.id}`
       : undefined;
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
 
     try {
       const checkRunId = await this.github.createCheckRun(repo.repoFullName, {
@@ -400,6 +514,10 @@ export class ReviewQuillService {
         ...(detailsUrl ? { detailsUrl } : {}),
       });
       this.store.updateAttempt(attempt.id, { status: "running", externalCheckRunId: checkRunId });
+      heartbeat = setInterval(() => {
+        this.store.updateAttempt(attempt.id, {});
+      }, this.config.reconciliation.heartbeatIntervalMs);
+      heartbeat.unref?.();
 
       const prepared = await buildReviewContext({
         github: this.github,
@@ -489,13 +607,29 @@ export class ReviewQuillService {
         return;
       }
       const currentReviews = await this.github.listPullRequestReviews(repo.repoFullName, pr.number);
-      if (hasMatchingLatestReviewForHead(currentReviews, this.reviewerLogin, pr.headSha, event, reviewBody)) {
+      const effectiveEvent = preserveRequestedChangesOnRereview({
+        reviews: currentReviews,
+        reviewerLogin: this.reviewerLogin,
+        headSha: pr.headSha,
+        event,
+      });
+      const effectiveReviewBody = buildReviewBody({ verdict: result.verdict, event: effectiveEvent });
+      if (effectiveEvent !== event) {
+        this.logger.info({
+          repo: repo.repoFullName,
+          prNumber: pr.number,
+          headSha: pr.headSha,
+          previousEvent: event,
+          effectiveEvent,
+        }, "Promoted re-review comment to requested changes to preserve decisive review state");
+      }
+      if (hasMatchingLatestReviewForHead(currentReviews, this.reviewerLogin, pr.headSha, effectiveEvent, effectiveReviewBody)) {
         this.logger.info({
           repo: repo.repoFullName,
           prNumber: pr.number,
           headSha: pr.headSha,
           verdict: result.verdict.verdict,
-          event,
+          event: effectiveEvent,
         }, "Skipping duplicate GitHub review for unchanged head verdict");
       } else {
         // Atomic POST with body + inline comments + verdict. If GitHub
@@ -508,8 +642,8 @@ export class ReviewQuillService {
         // verdict is visible to the author and CI.
         try {
           await this.github.submitReview(repo.repoFullName, pr.number, {
-            event,
-            body: reviewBody,
+            event: effectiveEvent,
+            body: effectiveReviewBody,
             commitId: pr.headSha,
             ...(inlineComments.length > 0 ? { comments: inlineComments } : {}),
           });
@@ -527,27 +661,27 @@ export class ReviewQuillService {
             githubError: message.slice(0, 500),
           }, "GitHub rejected review with inline comments (422); retrying body-only");
           await this.github.submitReview(repo.repoFullName, pr.number, {
-            event,
-            body: reviewBody,
+            event: effectiveEvent,
+            body: effectiveReviewBody,
             commitId: pr.headSha,
           });
         }
       }
-      const checkConclusion = event === "REQUEST_CHANGES"
+      const checkConclusion = effectiveEvent === "REQUEST_CHANGES"
         ? "failure"
-        : event === "COMMENT"
+        : effectiveEvent === "COMMENT"
           ? "neutral"
           : "success";
       await this.github.updateCheckRun(repo.repoFullName, checkRunId, {
         status: "completed",
         conclusion: checkConclusion,
         summary: result.verdict.walkthrough,
-        text: reviewBody,
+        text: effectiveReviewBody,
         ...(detailsUrl ? { detailsUrl } : {}),
       });
-      const attemptConclusion = event === "REQUEST_CHANGES"
+      const attemptConclusion = effectiveEvent === "REQUEST_CHANGES"
         ? "declined"
-        : event === "COMMENT"
+        : effectiveEvent === "COMMENT"
           ? "skipped"
           : "approved";
       this.store.updateAttempt(attempt.id, {
@@ -576,6 +710,10 @@ export class ReviewQuillService {
           text: message,
           ...(detailsUrl ? { detailsUrl } : {}),
         }).catch(() => undefined);
+      }
+    } finally {
+      if (heartbeat) {
+        clearInterval(heartbeat);
       }
     }
   }

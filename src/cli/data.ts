@@ -62,6 +62,28 @@ export interface RetryResult {
   reason?: string;
 }
 
+export interface IssueSessionHistoryItem {
+  runId: number;
+  runType: string;
+  status: string;
+  threadId?: string;
+  turnId?: string;
+  parentThreadId?: string;
+  summary?: string;
+  failureReason?: string;
+  eventCount: number;
+  startedAt: string;
+  endedAt?: string;
+  isCurrentThread: boolean;
+}
+
+export interface IssueSessionHistoryResult {
+  issue: TrackedIssueRecord;
+  worktreePath?: string;
+  currentThreadId?: string;
+  sessions: IssueSessionHistoryItem[];
+}
+
 export interface ListResultItem {
   issueKey?: string;
   title?: string;
@@ -125,6 +147,26 @@ function parseObjectJson(value: string | undefined): Record<string, unknown> | u
   } catch {
     return undefined;
   }
+}
+
+function summarizeRun(run: RunRecord): string | undefined {
+  const summary = parseObjectJson(run.summaryJson);
+  if (typeof summary?.latestAssistantMessage === "string" && summary.latestAssistantMessage.trim()) {
+    return summary.latestAssistantMessage.trim();
+  }
+
+  const report = parseObjectJson(run.reportJson);
+  const assistantMessages = report?.assistantMessages;
+  if (Array.isArray(assistantMessages)) {
+    for (let index = assistantMessages.length - 1; index >= 0; index -= 1) {
+      const value = assistantMessages[index];
+      if (typeof value === "string" && value.trim()) {
+        return value.trim();
+      }
+    }
+  }
+
+  return run.failureReason?.trim() || undefined;
 }
 
 // resolveStageFromState removed — factory state replaces workflow stage resolution
@@ -292,6 +334,41 @@ export class CliDataAccess extends CliOperatorApiClient {
     });
     const updated = this.db.getTrackedIssue(issue.projectId, issue.linearIssueId)!;
     return { issue: updated, runType, ...(options?.reason ? { reason: options.reason } : {}) };
+  }
+
+  sessions(issueKey: string): IssueSessionHistoryResult | undefined {
+    const issue = this.db.getTrackedIssueByKey(issueKey);
+    if (!issue) return undefined;
+
+    const dbIssue = this.db.getIssueByKey(issueKey)!;
+    const runs = this.db.listRunsForIssue(issue.projectId, issue.linearIssueId);
+    const sessions = runs
+      .slice()
+      .reverse()
+      .map((run) => {
+        const summary = summarizeRun(run);
+        return {
+          runId: run.id,
+          runType: run.runType,
+          status: run.status,
+          ...(run.threadId ? { threadId: run.threadId } : {}),
+          ...(run.turnId ? { turnId: run.turnId } : {}),
+          ...(run.parentThreadId ? { parentThreadId: run.parentThreadId } : {}),
+          ...(summary ? { summary } : {}),
+          ...(run.failureReason ? { failureReason: run.failureReason } : {}),
+          eventCount: this.db.listThreadEvents(run.id).length,
+          startedAt: run.startedAt,
+          ...(run.endedAt ? { endedAt: run.endedAt } : {}),
+          isCurrentThread: run.threadId !== undefined && run.threadId === dbIssue.threadId,
+        };
+      });
+
+    return {
+      issue,
+      ...(dbIssue.worktreePath ? { worktreePath: dbIssue.worktreePath } : {}),
+      ...(dbIssue.threadId ? { currentThreadId: dbIssue.threadId } : {}),
+      sessions,
+    };
   }
 
   private appendRetryWake(issue: IssueRecord, runType: RunType): void {

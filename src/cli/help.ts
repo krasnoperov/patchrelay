@@ -38,6 +38,7 @@ export function rootHelpText(): string {
     "  issue show <issueKey> [--json]                          Show the latest known issue state",
     "  issue watch <issueKey> [--json]                         Follow the active run until it settles",
     "  issue open <issueKey> [--print] [--json]                Open Codex in the issue worktree",
+    "  issue sessions <issueKey> [--json]                      Show recorded Codex app-server sessions for one issue",
     "  service status [--json]                                 Show systemd state and local health",
     "  service logs [--lines <count>] [--json]                 Show recent service logs",
     "  serve                                                   Run the local PatchRelay service",
@@ -148,12 +149,14 @@ export function issueHelpText(): string {
     "  watch <issueKey>                Follow PatchRelay-owned activity until it settles",
     "  path <issueKey>                 Print the issue worktree path",
     "  open <issueKey>                 Open Codex in the issue worktree",
+    "  sessions <issueKey>             Show recorded Codex app-server sessions",
     "  retry <issueKey>                Requeue a run",
     "",
     "Examples:",
     "  patchrelay issue list --active",
     "  patchrelay issue show USE-54",
     "  patchrelay issue watch USE-54",
+    "  patchrelay issue sessions USE-54",
   ].join("\n");
 }
 

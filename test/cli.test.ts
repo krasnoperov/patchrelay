@@ -821,6 +821,65 @@ test("cli list and retry cover operator control flows", async () => {
   }
 });
 
+test("cli sessions shows recorded app-server runs with resume commands", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-sessions-"));
+  let data: CliDataAccess | undefined;
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, true);
+    db.runMigrations();
+    seedDatabase(db, config);
+
+    const issue = db.getIssue("usertold", "issue-1");
+    assert.ok(issue);
+
+    const reviewRun = db.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "review_fix",
+      promptText: "Address requested review changes",
+    });
+    db.updateRunThread(reviewRun.id, {
+      threadId: "thread-54-review",
+      parentThreadId: "thread-54",
+      turnId: "turn-54-review",
+    });
+    db.saveThreadEvent({
+      runId: reviewRun.id,
+      threadId: "thread-54-review",
+      turnId: "turn-54-review",
+      method: "turn/started",
+      eventJson: JSON.stringify({ threadId: "thread-54-review", turnId: "turn-54-review" }),
+    });
+    db.finishRun(reviewRun.id, {
+      status: "completed",
+      threadId: "thread-54-review",
+      turnId: "turn-54-review",
+      summaryJson: JSON.stringify({
+        latestAssistantMessage: "Applied the requested review changes and pushed an update.",
+      }),
+    });
+
+    data = new CliDataAccess(config, { db });
+
+    const stdout = createBufferStream();
+    const stderr = createBufferStream();
+    assert.equal(await runCli(["issue", "sessions", "USE-54"], { config, data, stdout: stdout.stream, stderr: stderr.stream }), 0);
+
+    const rendered = stdout.read();
+    assert.match(rendered, /run #\d+[ ]{2}review_fix[ ]{2}completed/);
+    assert.match(rendered, /Thread: thread-54-review/);
+    assert.match(rendered, /Parent thread: thread-54/);
+    assert.match(rendered, /Applied the requested review changes and pushed an update/);
+    assert.match(rendered, /Open: codex --dangerously-bypass-approvals-and-sandbox resume -C .*USE-54 thread-54-review/);
+    assert.match(rendered, /run #\d+[ ]{2}implementation[ ]{2}failed/);
+  } finally {
+    data?.close();
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("cli rejects unknown commands and unknown flags", async () => {
   const commandError = createBufferStream();
   assert.equal(await runCli(["conenct"], { stdout: createBufferStream().stream, stderr: commandError.stream }), 1);

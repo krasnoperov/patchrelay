@@ -37,7 +37,15 @@ const configSchema = z.object({
   }).default({ level: "info" }),
   reconciliation: z.object({
     pollIntervalMs: z.number().int().min(5_000).default(120_000),
-  }).default({ pollIntervalMs: 120_000 }),
+    heartbeatIntervalMs: z.number().int().min(5_000).default(30_000),
+    staleQueuedAfterMs: z.number().int().min(30_000).default(5 * 60_000),
+    staleRunningAfterMs: z.number().int().min(60_000).default(20 * 60_000),
+  }).default({
+    pollIntervalMs: 120_000,
+    heartbeatIntervalMs: 30_000,
+    staleQueuedAfterMs: 5 * 60_000,
+    staleRunningAfterMs: 20 * 60_000,
+  }),
   codex: z.object({
     bin: z.string().default("codex"),
     args: z.array(z.string()).default(["app-server"]),
