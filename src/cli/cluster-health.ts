@@ -39,7 +39,7 @@ export interface ClusterCiEntry {
   projectId: string;
   prNumber: number;
   gateStatus: "pending" | "success" | "failure" | "unknown";
-  owner: "patchrelay" | "reviewer" | "downstream" | "external" | "unknown";
+  owner: "patchrelay" | "reviewer" | "review-quill" | "downstream" | "external" | "unknown";
   orphaned: boolean;
   factoryState: string;
   reviewDecision?: string | undefined;
@@ -68,6 +68,10 @@ interface ReviewQuillStatusJson extends JsonObject {
   healthError?: string | undefined;
 }
 
+interface ReviewQuillAttemptsJson extends JsonObject {
+  attempts?: unknown[] | undefined;
+}
+
 interface MergeStewardStatusJson extends JsonObject {
   systemd?: { ActiveState?: string } | undefined;
 }
@@ -89,6 +93,12 @@ interface IssueSnapshot {
   missingTrackedBlockers: IssueDependencyRecord[];
   ageMs: number;
   readyForExecution: boolean;
+}
+
+interface ReviewQuillAttemptOwnership {
+  id: number;
+  status: "queued" | "running";
+  headSha: string;
 }
 
 export async function collectClusterHealth(
@@ -158,6 +168,10 @@ export async function collectClusterHealth(
     });
   }
 
+  const reviewQuillAttemptOwners = reviewQuillProbe?.status === "pass"
+    ? await collectReviewQuillAttemptOwners(reviewRelevantIssues, config, runCommand)
+    : new Map<string, ReviewQuillAttemptOwnership>();
+
   const mergeStewardProbe = queueRelevantIssues.length > 0
     ? await probeOptionalService(runCommand, "merge-steward", {
         healthy: (payload) => {
@@ -201,6 +215,7 @@ export async function collectClusterHealth(
       config,
       runCommand,
       reviewQuillProbe,
+      reviewQuillAttemptOwners,
       mergeStewardProbe,
     );
     if (githubHealth.ciEntry) {
@@ -354,6 +369,7 @@ async function evaluateGitHubIssueHealth(
   config: AppConfig,
   runCommand: CommandRunner,
   reviewQuillProbe?: ServiceProbeResult,
+  reviewQuillAttemptOwners?: Map<string, ReviewQuillAttemptOwnership>,
   mergeStewardProbe?: ServiceProbeResult,
 ): Promise<{ finding?: ClusterHealthCheck | undefined; ciEntry?: ClusterCiEntry | undefined }> {
   const { issue, ageMs } = snapshot;
@@ -399,12 +415,14 @@ async function evaluateGitHubIssueHealth(
   const requestedReviewers = extractRequestedReviewerLogins(pr.reviewRequests);
   const reviewRequested = requestedReviewers.length > 0;
   const mergeConflictDetected = pr.mergeable === "CONFLICTING" || pr.mergeStateStatus === "DIRTY";
+  const reviewQuillAttempt = issue.issueKey ? reviewQuillAttemptOwners?.get(issue.issueKey) : undefined;
   const ciEntry = buildCiEntry({
     issue,
     gateCheckStatus,
     reviewDecision,
     reviewRequested,
     mergeConflictDetected,
+    reviewQuillAttempt,
   });
 
   if (pr.state === "MERGED" && issue.factoryState !== "done" && ageMs >= RECONCILIATION_GRACE_MS) {
@@ -451,7 +469,13 @@ async function evaluateGitHubIssueHealth(
     };
   }
 
-  if (gateCheckStatus === "success" && reviewDecision === "CHANGES_REQUESTED" && !reviewRequested && ageMs >= RECONCILIATION_GRACE_MS) {
+  if (
+    gateCheckStatus === "success"
+    && reviewDecision === "CHANGES_REQUESTED"
+    && !reviewRequested
+    && !reviewQuillAttempt
+    && ageMs >= RECONCILIATION_GRACE_MS
+  ) {
     return {
       ciEntry,
       finding: {
@@ -462,7 +486,13 @@ async function evaluateGitHubIssueHealth(
     };
   }
 
-  if (gateCheckStatus === "success" && reviewDecision === "REVIEW_REQUIRED" && !reviewRequested && ageMs >= RECONCILIATION_GRACE_MS) {
+  if (
+    gateCheckStatus === "success"
+    && reviewDecision === "REVIEW_REQUIRED"
+    && !reviewRequested
+    && !reviewQuillAttempt
+    && ageMs >= RECONCILIATION_GRACE_MS
+  ) {
     return {
       ciEntry,
       finding: {
@@ -515,14 +545,16 @@ function buildCiEntry(params: {
   reviewDecision?: string | undefined;
   reviewRequested: boolean;
   mergeConflictDetected: boolean;
+  reviewQuillAttempt?: ReviewQuillAttemptOwnership | undefined;
 }): ClusterCiEntry {
-  const { issue, gateCheckStatus, reviewDecision, reviewRequested, mergeConflictDetected } = params;
+  const { issue, gateCheckStatus, reviewDecision, reviewRequested, mergeConflictDetected, reviewQuillAttempt } = params;
   const owner = deriveCiOwner({
     gateCheckStatus,
     factoryState: issue.factoryState,
     reviewDecision,
     reviewRequested,
     mergeConflictDetected,
+    reviewQuillAttempt,
   });
   return {
     ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
@@ -539,6 +571,7 @@ function buildCiEntry(params: {
       reviewDecision,
       reviewRequested,
       mergeConflictDetected,
+      reviewQuillAttempt,
     }),
   };
 }
@@ -549,7 +582,8 @@ function deriveCiOwner(params: {
   reviewDecision?: string | undefined;
   reviewRequested: boolean;
   mergeConflictDetected: boolean;
-}): "patchrelay" | "reviewer" | "downstream" | "external" | "unknown" {
+  reviewQuillAttempt?: ReviewQuillAttemptOwnership | undefined;
+}): "patchrelay" | "reviewer" | "review-quill" | "downstream" | "external" | "unknown" {
   if (params.gateCheckStatus === "failure") {
     return params.factoryState === "repairing_ci" ? "patchrelay" : "unknown";
   }
@@ -563,6 +597,7 @@ function deriveCiOwner(params: {
   }
   if (params.reviewDecision === "CHANGES_REQUESTED" || params.reviewDecision === "REVIEW_REQUIRED") {
     if (params.factoryState === "changes_requested") return "patchrelay";
+    if (params.reviewQuillAttempt) return "review-quill";
     return params.reviewRequested ? "reviewer" : "unknown";
   }
   if (params.gateCheckStatus === "success" && params.factoryState === "pr_open") {
@@ -573,15 +608,21 @@ function deriveCiOwner(params: {
 
 function describeCiOwnership(params: {
   gateCheckStatus: "pending" | "success" | "failure" | "unknown";
-  owner: "patchrelay" | "reviewer" | "downstream" | "external" | "unknown";
+  owner: "patchrelay" | "reviewer" | "review-quill" | "downstream" | "external" | "unknown";
   reviewDecision?: string | undefined;
   reviewRequested: boolean;
   mergeConflictDetected: boolean;
+  reviewQuillAttempt?: ReviewQuillAttemptOwnership | undefined;
 }): string {
   if (params.owner === "patchrelay") {
     return params.gateCheckStatus === "failure"
       ? "PatchRelay owns the next CI repair move"
       : "PatchRelay owns the next requested-changes move";
+  }
+  if (params.owner === "review-quill") {
+    return params.reviewQuillAttempt
+      ? `review-quill attempt #${params.reviewQuillAttempt.id} is ${params.reviewQuillAttempt.status} on the current head`
+      : "review-quill owns the current review attempt";
   }
   if (params.owner === "reviewer") {
     return params.reviewRequested
@@ -618,6 +659,42 @@ function needsReviewAutomation(issue: IssueRecord): boolean {
   return issue.prNumber !== undefined;
 }
 
+async function collectReviewQuillAttemptOwners(
+  snapshots: IssueSnapshot[],
+  config: AppConfig,
+  runCommand: CommandRunner,
+): Promise<Map<string, ReviewQuillAttemptOwnership>> {
+  const owners = new Map<string, ReviewQuillAttemptOwnership>();
+
+  for (const snapshot of snapshots) {
+    const issueKey = snapshot.issue.issueKey;
+    const prNumber = snapshot.issue.prNumber;
+    if (!issueKey || prNumber === undefined) continue;
+
+    const project = config.projects.find((entry) => entry.id === snapshot.issue.projectId);
+    const repoFullName = project?.github?.repoFullName;
+    if (!repoFullName) continue;
+
+    const probe = await probeReviewQuillAttempts(runCommand, repoFullName, prNumber);
+    if (!probe.ok) continue;
+
+    const activeAttempt = probe.attempts.find((attempt) =>
+      (attempt.status === "queued" || attempt.status === "running")
+      && !attempt.stale
+      && attempt.headSha === probe.currentHeadSha
+    );
+    if (!activeAttempt) continue;
+
+    owners.set(issueKey, {
+      id: activeAttempt.id,
+      status: activeAttempt.status,
+      headSha: activeAttempt.headSha,
+    });
+  }
+
+  return owners;
+}
+
 function getGateCheckNames(project: AppConfig["projects"][number] | undefined): string[] {
   const configured = project?.gateChecks?.map((entry) => entry.trim()).filter(Boolean) ?? [];
   return configured.length > 0 ? configured : ["verify"];
@@ -646,6 +723,75 @@ function deriveCiGateStatus(
   }
 
   return "unknown";
+}
+
+async function probeReviewQuillAttempts(
+  runCommand: CommandRunner,
+  repoFullName: string,
+  prNumber: number,
+): Promise<
+  | {
+      ok: true;
+      currentHeadSha?: string | undefined;
+      attempts: Array<{ id: number; headSha: string; status: "queued" | "running"; stale: boolean }>;
+    }
+  | { ok: false; error: string }
+> {
+  const repoRef = repoFullName.split("/").at(-1);
+  if (!repoRef) {
+    return { ok: false, error: `Unable to derive review-quill repo id from ${repoFullName}` };
+  }
+
+  let attemptsResult: CommandRunnerResult;
+  try {
+    attemptsResult = await runCommand("review-quill", ["attempts", repoRef, String(prNumber), "--json"]);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+
+  if (attemptsResult.exitCode !== 0) {
+    return {
+      ok: false,
+      error: [attemptsResult.stderr.trim(), attemptsResult.stdout.trim()].filter(Boolean).join(" ") || `review-quill exited ${attemptsResult.exitCode}`,
+    };
+  }
+
+  const parsedAttempts = safeJsonParse(attemptsResult.stdout) as ReviewQuillAttemptsJson | undefined;
+  if (!parsedAttempts || !Array.isArray(parsedAttempts.attempts)) {
+    return { ok: false, error: "invalid JSON from review-quill attempts" };
+  }
+
+  const prProbe = await probeGitHubPullRequest(runCommand, repoFullName, prNumber);
+  if (!prProbe.ok) {
+    return { ok: false, error: prProbe.error };
+  }
+
+  const attempts = parsedAttempts.attempts.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") return [];
+    const id = (entry as { id?: unknown }).id;
+    const headSha = (entry as { headSha?: unknown }).headSha;
+    const status = (entry as { status?: unknown }).status;
+    const stale = (entry as { stale?: unknown }).stale;
+    if (
+      typeof id !== "number"
+      || typeof headSha !== "string"
+      || (status !== "queued" && status !== "running")
+    ) {
+      return [];
+    }
+    return [{
+      id,
+      headSha,
+      status: status as "queued" | "running",
+      stale: stale === true,
+    }];
+  });
+
+  return {
+    ok: true,
+    currentHeadSha: prProbe.pr.headRefOid,
+    attempts,
+  };
 }
 
 async function probePatchRelayService(config: AppConfig): Promise<ServiceProbeResult> {
