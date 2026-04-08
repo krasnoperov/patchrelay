@@ -260,6 +260,26 @@ test("computeAggregates does not count terminal issues as ready even if stale re
   assert.equal(aggregates.failed, 1);
 });
 
+test("computeAggregates does not count PR-backed issues as ready even if stale ready flags linger", () => {
+  const issues = [
+    makeIssue("TST-39", {
+      factoryState: "pr_open",
+      prNumber: 38,
+      prReviewState: "review_required",
+      readyForExecution: true,
+    }),
+    makeIssue("TST-43", {
+      factoryState: "awaiting_queue",
+      prNumber: 36,
+      prReviewState: "approved",
+      readyForExecution: true,
+    }),
+  ];
+
+  const aggregates = computeAggregates(issues);
+  assert.equal(aggregates.ready, 0);
+});
+
 test("feed-event aggregates CI checks in timeline", () => {
   const initial = stateWith({
     issues: [makeIssue("USE-74")],
