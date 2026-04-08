@@ -203,8 +203,10 @@ export class IssueQueryService {
       factoryState: issueRecord?.factoryState ?? "delegated",
       pendingRunType: issueRecord?.pendingRunType,
       prNumber: session.prNumber,
+      prHeadSha: issueRecord?.prHeadSha ?? session.prHeadSha,
       prReviewState: issueRecord?.prReviewState,
       prCheckStatus: issueRecord?.prCheckStatus,
+      lastBlockingReviewHeadSha: issueRecord?.lastBlockingReviewHeadSha,
       latestFailureCheckName: issueRecord?.lastGitHubFailureCheckName,
     });
     const issue: TrackedIssueRecord = {

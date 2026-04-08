@@ -271,8 +271,10 @@ function renderStatusComment(
     factoryState: issue.factoryState,
     pendingRunType: issue.pendingRunType,
     ...(issue.prNumber !== undefined ? { prNumber: issue.prNumber } : {}),
+    prHeadSha: issue.prHeadSha,
     prReviewState: issue.prReviewState,
     prCheckStatus: issue.prCheckStatus,
+    lastBlockingReviewHeadSha: issue.lastBlockingReviewHeadSha,
     latestFailureCheckName: issue.lastGitHubFailureCheckName,
   });
 

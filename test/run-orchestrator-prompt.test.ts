@@ -111,12 +111,12 @@ test("review_fix prompt includes explicit branch upkeep guidance when the PR is 
       branchUpkeepRequired: true,
       mergeStateStatus: "DIRTY",
       baseBranch: "main",
-      wakeReason: "review_changes_requested",
+      wakeReason: "branch_upkeep",
       githubFactsFresh: true,
     });
 
     assert.match(prompt, /## Follow-up Turn/);
-    assert.match(prompt, /Why this turn exists: GitHub review requested changes on the current PR head/);
+    assert.match(prompt, /Why this turn exists: GitHub still shows the PR branch as needing upkeep after the requested code change was addressed/);
     assert.match(prompt, /## Fact Freshness/);
     assert.match(prompt, /GitHub facts below were refreshed immediately before this turn was created/);
     assert.match(prompt, /## Authoritative GitHub Facts/);

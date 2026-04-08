@@ -473,7 +473,7 @@ export class PatchRelayService {
           s.project_id, s.linear_issue_id, s.issue_key, i.title,
           i.current_linear_state, i.factory_state, s.session_state, s.waiting_reason, s.summary_text, s.updated_at,
           i.pending_run_type,
-          i.pr_number, i.pr_review_state, i.pr_check_status,
+          i.pr_number, i.pr_head_sha, i.pr_review_state, i.pr_check_status, i.last_blocking_review_head_sha,
           i.last_github_ci_snapshot_json,
           i.last_github_failure_source,
           i.last_github_failure_head_sha,
@@ -570,8 +570,10 @@ export class PatchRelayService {
         factoryState: String(row.factory_state ?? "delegated"),
         ...(row.pending_run_type !== null ? { pendingRunType: String(row.pending_run_type) } : {}),
         ...(row.pr_number !== null ? { prNumber: Number(row.pr_number) } : {}),
+        ...(row.pr_head_sha !== null ? { prHeadSha: String(row.pr_head_sha) } : {}),
         ...(row.pr_review_state !== null ? { prReviewState: String(row.pr_review_state) } : {}),
         ...(row.pr_check_status !== null ? { prCheckStatus: String(row.pr_check_status) } : {}),
+        ...(row.last_blocking_review_head_sha !== null ? { lastBlockingReviewHeadSha: String(row.last_blocking_review_head_sha) } : {}),
         ...(row.last_github_failure_check_name !== null ? { latestFailureCheckName: String(row.last_github_failure_check_name) } : {}),
       });
       const latestRun = row.latest_run_type !== null && row.latest_run_status !== null

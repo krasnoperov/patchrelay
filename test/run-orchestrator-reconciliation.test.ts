@@ -1425,6 +1425,7 @@ exit 1
     }).resolveReviewFixWakeContext(issue, undefined, config.projects[0]!);
 
     assert.equal(context?.branchUpkeepRequired, true);
+    assert.equal(context?.wakeReason, "branch_upkeep");
     assert.equal(context?.mergeStateStatus, "DIRTY");
     assert.match(String(context?.promptContext ?? ""), /GitHub still reports PR #31 as DIRTY/);
 

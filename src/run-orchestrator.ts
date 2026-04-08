@@ -324,6 +324,8 @@ function resolveFollowUpWhy(runType: RunType, context?: Record<string, unknown>)
       return "An operator supplied new guidance for this issue.";
     case "review_changes_requested":
       return "GitHub review requested changes on the current PR head.";
+    case "branch_upkeep":
+      return "GitHub still shows the PR branch as needing upkeep after the requested code change was addressed.";
     case "settled_red_ci":
       return "Required CI settled red for the current PR head.";
     case "merge_steward_incident":
@@ -2764,6 +2766,7 @@ function buildReviewFixBranchUpkeepContext(
   return {
     ...(context ?? {}),
     branchUpkeepRequired: true,
+    wakeReason: "branch_upkeep",
     promptContext,
     ...(pr.mergeStateStatus ? { mergeStateStatus: pr.mergeStateStatus } : {}),
     ...(pr.headRefOid ? { failingHeadSha: pr.headRefOid } : {}),

@@ -14,8 +14,10 @@ export interface IssueSessionWaitingReasonInput {
   factoryState: FactoryState;
   pendingRunType?: RunType | undefined;
   prNumber?: number | undefined;
+  prHeadSha?: string | undefined;
   prReviewState?: string | undefined;
   prCheckStatus?: string | undefined;
+  lastBlockingReviewHeadSha?: string | undefined;
   latestFailureCheckName?: string | undefined;
 }
 

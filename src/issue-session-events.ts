@@ -77,7 +77,7 @@ export function deriveSessionWakePlan(
       case "review_changes_requested":
         if (runType !== "queue_repair" && runType !== "ci_repair") {
           runType = "review_fix";
-          wakeReason = "review_changes_requested";
+          wakeReason = payload?.branchUpkeepRequired === true ? "branch_upkeep" : "review_changes_requested";
           Object.assign(context, payload ?? {});
         }
         break;

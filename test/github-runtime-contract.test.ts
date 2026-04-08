@@ -588,6 +588,7 @@ test("requested changes on a PatchRelay-owned PR queue review_fix", async () => 
     const issue = db.getIssue("usertold", "issue-owned-review");
     const wake = db.peekIssueSessionWake("usertold", "issue-owned-review");
     assert.equal(issue?.pendingRunType, undefined);
+    assert.equal(issue?.lastBlockingReviewHeadSha, "sha-owned");
     assert.equal(wake?.runType, "review_fix");
     assert.equal(wake?.wakeReason, "review_changes_requested");
     assert.equal(wake?.context.reviewId, 901);

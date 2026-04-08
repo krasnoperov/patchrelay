@@ -214,6 +214,11 @@ export class GitHubWebhookHandler {
       ...(event.prAuthorLogin !== undefined ? { prAuthorLogin: event.prAuthorLogin } : {}),
       ...(event.reviewState !== undefined ? { prReviewState: event.reviewState } : {}),
       ...(event.checkStatus !== undefined ? { prCheckStatus: event.checkStatus } : {}),
+      ...(event.reviewState === "changes_requested"
+        ? { lastBlockingReviewHeadSha: event.reviewCommitId ?? event.headSha ?? null }
+        : event.reviewState === "approved"
+          ? { lastBlockingReviewHeadSha: null }
+          : {}),
     });
     await this.updateCiSnapshot(issue, event, project);
     await this.updateFailureProvenance(issue, event, project);
