@@ -43,8 +43,8 @@ export interface IssueSessionReactiveIntentInput {
 }
 
 export interface IssueSessionReactiveIntent {
-  runType: Extract<RunType, "review_fix" | "ci_repair" | "queue_repair">;
-  wakeReason: "review_changes_requested" | "settled_red_ci" | "merge_steward_incident";
+  runType: Extract<RunType, "review_fix" | "branch_upkeep" | "ci_repair" | "queue_repair">;
+  wakeReason: "review_changes_requested" | "branch_upkeep" | "settled_red_ci" | "merge_steward_incident";
   compatibilityFactoryState: Extract<FactoryState, "changes_requested" | "repairing_ci" | "repairing_queue">;
 }
 
@@ -116,6 +116,13 @@ export function deriveIssueSessionReactiveIntent(
   }
 
   if (params.prReviewState === "changes_requested") {
+    if (params.mergeConflictDetected) {
+      return {
+        runType: "branch_upkeep",
+        wakeReason: "branch_upkeep",
+        compatibilityFactoryState: "changes_requested",
+      };
+    }
     return {
       runType: "review_fix",
       wakeReason: "review_changes_requested",

@@ -483,6 +483,24 @@ async function evaluateGitHubIssueHealth(
   if (
     gateCheckStatus === "success"
     && reviewDecision === "CHANGES_REQUESTED"
+    && mergeConflictDetected
+    && issue.factoryState !== "changes_requested"
+    && issue.activeRunId === undefined
+    && ageMs >= RECONCILIATION_GRACE_MS
+  ) {
+    return {
+      ciEntry,
+      finding: {
+        status: "fail",
+        scope: "github:branch-upkeep",
+        message: "PR is still dirty after requested changes, but no branch-upkeep run is active",
+      },
+    };
+  }
+
+  if (
+    gateCheckStatus === "success"
+    && reviewDecision === "CHANGES_REQUESTED"
     && latestBlockingReviewHeadSha === pr.headRefOid
     && !reviewQuillAttempt
     && issue.factoryState !== "changes_requested"
@@ -613,6 +631,9 @@ function deriveCiOwner(params: {
       : "downstream";
   }
   if (params.reviewDecision === "CHANGES_REQUESTED") {
+    if (params.mergeConflictDetected) {
+      return params.factoryState === "changes_requested" ? "patchrelay" : "unknown";
+    }
     if (params.factoryState === "changes_requested") return "patchrelay";
     if (params.reviewQuillAttempt) return "review-quill";
     if (headAdvancedPastBlockingReview) return "reviewer";
@@ -650,6 +671,9 @@ function describeCiOwnership(params: {
       && params.currentHeadSha !== params.latestBlockingReviewHeadSha,
   );
   if (params.owner === "patchrelay") {
+    if (params.mergeConflictDetected) {
+      return "PatchRelay owns the next branch-upkeep move";
+    }
     return params.gateCheckStatus === "failure"
       ? "PatchRelay owns the next CI repair move"
       : "PatchRelay owns the next requested-changes move";
@@ -678,6 +702,11 @@ function describeCiOwnership(params: {
       : "Waiting on external GitHub automation";
   }
   if (params.reviewDecision === "CHANGES_REQUESTED") {
+    if (params.mergeConflictDetected) {
+      return headAdvancedPastBlockingReview
+        ? "PR is still dirty after a newer pushed head and no branch-upkeep run is active"
+        : "PR is still dirty on the current blocked head and no branch-upkeep run is active";
+    }
     return blockingReviewTargetsCurrentHead
       ? "Requested changes still block the same head and no fix run is active"
       : "Waiting on review after a newer pushed head";

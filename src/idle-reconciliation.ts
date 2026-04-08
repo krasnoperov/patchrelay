@@ -27,6 +27,23 @@ function isReviewDecisionReviewRequired(value: string | undefined): boolean {
   return value?.trim().toUpperCase() === "REVIEW_REQUIRED";
 }
 
+function buildBranchUpkeepContext(prNumber: number, baseBranch: string, mergeStateStatus?: string, headSha?: string): Record<string, unknown> {
+  const promptContext = [
+    `The requested code change may already be present, but GitHub still reports PR #${prNumber} as ${mergeStateStatus ?? "DIRTY"} against latest ${baseBranch}.`,
+    `This turn is branch upkeep on the existing PR branch: update onto latest ${baseBranch}, resolve any conflicts, rerun the narrowest relevant verification, and push a newer head.`,
+    "Do not stop just because the requested code change is already present. Review can only move forward after a new pushed head.",
+  ].join(" ");
+  return {
+    branchUpkeepRequired: true,
+    reviewFixMode: "branch_upkeep",
+    wakeReason: "branch_upkeep",
+    promptContext,
+    ...(mergeStateStatus ? { mergeStateStatus } : {}),
+    ...(headSha ? { failingHeadSha: headSha } : {}),
+    baseBranch,
+  };
+}
+
 function hasCompletedReviewQuillVerdict(entries: GitHubStatusRollupEntry[] | undefined): boolean {
   return (entries ?? []).some((entry) => entry.__typename === "CheckRun"
     && entry.name === "review-quill/verdict"
@@ -562,6 +579,31 @@ export class IdleIssueReconciler {
         mergeConflictDetected,
         downstreamOwned,
       });
+      if (reactiveIntent?.runType === "branch_upkeep" && mergeConflictDetected) {
+        this.logger.info(
+          { issueKey: issue.issueKey, prNumber: issue.prNumber, mergeable: pr.mergeable, mergeStateStatus: pr.mergeStateStatus },
+          "Reconciliation: PR still needs branch upkeep after requested changes",
+        );
+        this.advanceIdleIssue(issue, reactiveIntent.compatibilityFactoryState, {
+          pendingRunType: reactiveIntent.runType,
+          pendingRunContext: buildBranchUpkeepContext(
+            issue.prNumber,
+            project.github?.baseBranch ?? "main",
+            pr.mergeStateStatus,
+            pr.headRefOid,
+          ),
+        });
+        this.feed?.publish({
+          level: "warn",
+          kind: "github",
+          issueKey: issue.issueKey,
+          projectId: issue.projectId,
+          stage: reactiveIntent.compatibilityFactoryState,
+          status: "branch_upkeep_queued",
+          summary: `PR #${issue.prNumber} is still dirty after requested changes, dispatching branch upkeep`,
+        });
+        return;
+      }
       if (reactiveIntent?.runType === "queue_repair" && mergeConflictDetected) {
         this.logger.info(
           { issueKey: issue.issueKey, prNumber: issue.prNumber, mergeable: pr.mergeable },
@@ -602,7 +644,7 @@ export class IdleIssueReconciler {
       if (mergeConflictDetected) {
         this.logger.debug(
           { issueKey: issue.issueKey, prNumber: issue.prNumber, mergeable: pr.mergeable, mergeStateStatus: pr.mergeStateStatus },
-          "Reconciliation: PR is dirty but not yet queue-admitted; leaving PatchRelay in review state",
+          "Reconciliation: PR is dirty but no automation owner was derived",
         );
       }
     } catch (error) {
