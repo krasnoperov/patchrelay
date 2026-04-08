@@ -223,9 +223,9 @@ export interface ReviewVerdict {
   architectural_concerns: ReviewArchitecturalConcern[];
   // Line-level findings. Each becomes one inline comment on the PR.
   findings: ReviewFinding[];
-  // Final verdict. `comment` is used when there are no blocking findings
-  // but still something to say (e.g., only nits).
-  verdict: "approve" | "request_changes" | "comment";
+  // Final verdict. Review Quill is a binary gate in the merge pipeline:
+  // approve when the PR is safe to merge, request changes otherwise.
+  verdict: "approve" | "request_changes";
   // One-sentence rationale for the verdict. Appears at the bottom of
   // the review body so humans see why the bot decided what it decided.
   verdict_reason: string;

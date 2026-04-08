@@ -62,7 +62,6 @@ function normalizeRawVerdict(value: unknown): ReviewVerdict["verdict"] | undefin
   const v = value.trim().toLowerCase().replace(/[\s-]/g, "_");
   if (v === "approve" || v === "approved" || v === "lgtm") return "approve";
   if (v === "request_changes" || v === "changes_requested" || v === "reject" || v === "rejected" || v === "needs_changes" || v === "needs_work") return "request_changes";
-  if (v === "comment" || v === "commented" || v === "neutral" || v === "observation") return "comment";
   return undefined;
 }
 
@@ -161,21 +160,12 @@ export function normalizeVerdict(raw: Record<string, unknown>): ReviewVerdict {
   const normalizedRawVerdict = normalizeRawVerdict(raw.verdict);
   const hasBlocking = findings.some((f) => f.severity === "blocking")
     || architecturalConcerns.some((c) => c.severity === "blocking");
-  const hasAnything = findings.length > 0 || architecturalConcerns.length > 0;
-  const derivedVerdict: ReviewVerdict["verdict"] = hasBlocking
-    ? "request_changes"
-    : hasAnything
-      ? "comment"
-      : "approve";
-  let verdict: ReviewVerdict["verdict"];
-  if (normalizedRawVerdict) {
-    // Enforce the "nits never block" rule even if the model ignored it:
-    // if the model says request_changes but there are no blocking
-    // findings, demote to comment.
-    verdict = normalizedRawVerdict === "request_changes" && !hasBlocking ? "comment" : normalizedRawVerdict;
-  } else {
-    verdict = derivedVerdict;
+  if (!normalizedRawVerdict) {
+    throw new Error("Review run returned no explicit binary verdict (expected approve or request_changes)");
   }
+  const verdict: ReviewVerdict["verdict"] = normalizedRawVerdict === "request_changes" && !hasBlocking
+    ? "approve"
+    : normalizedRawVerdict;
 
   // Walkthrough falls back through a few common model variants. Always
   // require something substantial — an empty walkthrough means the model
@@ -192,9 +182,7 @@ export function normalizeVerdict(raw: Record<string, unknown>): ReviewVerdict {
   const verdictReason = asString(raw.verdict_reason)
     ?? (hasBlocking
       ? "Blocking issues must be addressed before merge."
-      : hasAnything
-        ? "Only non-blocking observations; no merge block."
-        : "No issues found.");
+      : "No blocking issues found.");
 
   return {
     walkthrough,

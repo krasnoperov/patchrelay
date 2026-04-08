@@ -70,12 +70,11 @@ export function filterFindings(findings: ReviewFinding[], knownPaths?: Set<strin
 // rule `normalizeVerdict` enforces in review-runner, but we re-apply it
 // here after the confidence filter (which might have removed the
 // blocking finding that justified request_changes in the first place).
-export function resolveEvent(verdict: ReviewVerdict, filtered: ReviewFinding[]): "APPROVE" | "REQUEST_CHANGES" | "COMMENT" {
+export function resolveEvent(verdict: ReviewVerdict, filtered: ReviewFinding[]): "APPROVE" | "REQUEST_CHANGES" {
   const hasBlocking = filtered.some((f) => f.severity === "blocking")
     || verdict.architectural_concerns.some((c) => c.severity === "blocking");
   if (hasBlocking) return "REQUEST_CHANGES";
-  if (filtered.length === 0 && verdict.architectural_concerns.length === 0) return "APPROVE";
-  return "COMMENT";
+  return "APPROVE";
 }
 
 // Build the review body (posted into the `body` field of the GitHub

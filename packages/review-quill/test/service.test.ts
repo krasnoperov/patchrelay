@@ -171,9 +171,9 @@ test("normalizeVerdict falls back to legacy `summary` when `walkthrough` is abse
   assert.equal(result.verdict, "approve");
 });
 
-test("normalizeVerdict demotes request_changes to comment when no blocking findings exist", () => {
+test("normalizeVerdict demotes request_changes to approve when no blocking findings exist", () => {
   // Model asked for request_changes but only has nit findings. The
-  // normalizer enforces the "nits never block" rule.
+  // normalizer enforces the binary merge-gate rule.
   const raw = {
     walkthrough: "Walkthrough.",
     findings: [{ path: "a.ts", line: 1, severity: "nit", message: "naming" }],
@@ -182,7 +182,7 @@ test("normalizeVerdict demotes request_changes to comment when no blocking findi
     verdict_reason: "Model thought this was blocking but it is not.",
   };
   const result = normalizeVerdict(raw);
-  assert.equal(result.verdict, "comment");
+  assert.equal(result.verdict, "approve");
 });
 
 test("sanitizeJsonPayload strips markdown fences", () => {
@@ -264,6 +264,7 @@ test("extractFirstJsonObject skips a malformed first attempt and finds a valid l
 test("normalizeVerdict accepts case-variant severity values", () => {
   const raw = {
     walkthrough: "x",
+    verdict: "request_changes",
     findings: [
       { path: "a.ts", line: 1, severity: "BLOCKING", message: "upper" },
       { path: "b.ts", line: 1, severity: "Blocking", message: "title" },
@@ -282,6 +283,7 @@ test("normalizeVerdict accepts case-variant severity values", () => {
 test("normalizeVerdict accepts string-numeric or L-prefixed line numbers", () => {
   const raw = {
     walkthrough: "x",
+    verdict: "request_changes",
     findings: [
       { path: "a.ts", line: "42", severity: "blocking", message: "string number" },
       { path: "b.ts", line: "L107", severity: "nit", message: "L-prefix" },
@@ -314,10 +316,12 @@ test("normalizeVerdict accepts verdict synonyms and case variations", () => {
     }).verdict,
     "request_changes",
   );
-  // "observation" → comment. We keep the model's stated intent even when
-  // there are no findings — if the model decided to say "comment" instead
-  // of "approve", there's usually a reason (a remark in the walkthrough).
-  assert.equal(normalizeVerdict({ walkthrough: "x", verdict: "observation", findings: [] }).verdict, "comment");
+  // Non-binary verdicts are rejected so the corrective retry can demand
+  // an explicit deploy decision.
+  assert.throws(
+    () => normalizeVerdict({ walkthrough: "x", verdict: "observation", findings: [] }),
+    /explicit binary verdict/i,
+  );
 });
 
 test("normalizeVerdict accepts alternate field names (file, description, fix)", () => {
@@ -407,14 +411,14 @@ test("filterFindings sorts blocking findings ahead of nits and applies the MAX c
   assert.equal(nitsKept.length, 10);
 });
 
-test("resolveEvent enforces 'nits never block'", () => {
+test("resolveEvent stays binary for the merge pipeline", () => {
   // No findings at all → approve
   assert.equal(resolveEvent(fakeVerdict(), []), "APPROVE");
 
-  // Only nits → comment (never request_changes)
+  // Only nits → approve (never request_changes)
   assert.equal(
     resolveEvent(fakeVerdict(), [fakeFinding({ severity: "nit" })]),
-    "COMMENT",
+    "APPROVE",
   );
 
   // At least one blocking → request_changes
@@ -434,7 +438,7 @@ test("resolveEvent enforces 'nits never block'", () => {
     "REQUEST_CHANGES",
   );
 
-  // Only nit-level architectural concerns → comment
+  // Only nit-level architectural concerns → approve
   assert.equal(
     resolveEvent(
       fakeVerdict({
@@ -442,7 +446,7 @@ test("resolveEvent enforces 'nits never block'", () => {
       }),
       [],
     ),
-    "COMMENT",
+    "APPROVE",
   );
 });
 

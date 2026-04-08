@@ -25,7 +25,7 @@ export const OUTPUT_SCHEMA = `{
       "suggestion": "Optional committable fix. Include ONLY if the fix is <=6 lines AND fully resolves the issue."
     }
   ],
-  "verdict": "approve" | "request_changes" | "comment",
+  "verdict": "approve" | "request_changes",
   "verdict_reason": "One sentence explaining the verdict."
 }`;
 
@@ -40,7 +40,7 @@ export const OUTPUT_RULES = `Output rules — the response parser expects strict
 - No comments (neither // nor /* */).
 - No trailing commas before } or ].
 - All \`severity\` values must be exactly "blocking" or "nit" (lowercase).
-- All \`verdict\` values must be exactly "approve", "request_changes", or "comment".
+- All \`verdict\` values must be exactly "approve" or "request_changes". Any non-binary verdict is invalid.
 - \`path\` is required on every finding; \`line\` is a positive integer, not a string.
 - \`path\` MUST be a file that appears in the diff inventory above. Do not invent file paths.
 - \`line\` MUST be a line number in the NEW (right side) version of the file — i.e., a line that exists in the file as of this PR's HEAD. Do not point at lines that only exist in the old version.
@@ -129,9 +129,9 @@ const SEVERITY_RULES = `Severity: exactly two levels — "blocking" and "nit".
 
 Verdict rules (apply exactly):
 - If ANY finding or architectural_concern has severity "blocking" → verdict = "request_changes"
-- Else if there is ANY finding or architectural_concern at all (all nits) → verdict = "comment"
-- Else (zero findings, zero concerns) → verdict = "approve"
-Nits NEVER trigger "request_changes". That is a hard rule.`;
+- Else → verdict = "approve"
+- Non-blocking findings and architectural concerns should still be included in the JSON, but they ride along with an approval instead of a neutral review.
+This reviewer is part of the merge pipeline, so you MUST produce a decisive binary verdict. Do not emit a neutral/comment-only outcome.`;
 
 // Posting carve-out. The REVIEW_WORKFLOW.md guidance doc may instruct
 // human reviewers to post via `gh pr review`. The agent must not do this

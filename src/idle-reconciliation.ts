@@ -15,6 +15,24 @@ function isFailingCheckStatus(status: string | undefined): boolean {
   return status === "failed" || status === "failure";
 }
 
+function isReviewDecisionApproved(value: string | undefined): boolean {
+  return value?.trim().toUpperCase() === "APPROVED";
+}
+
+function isReviewDecisionChangesRequested(value: string | undefined): boolean {
+  return value?.trim().toUpperCase() === "CHANGES_REQUESTED";
+}
+
+function isReviewDecisionReviewRequired(value: string | undefined): boolean {
+  return value?.trim().toUpperCase() === "REVIEW_REQUIRED";
+}
+
+function hasCompletedReviewQuillVerdict(entries: GitHubStatusRollupEntry[] | undefined): boolean {
+  return (entries ?? []).some((entry) => entry.__typename === "CheckRun"
+    && entry.name === "review-quill/verdict"
+    && entry.status === "COMPLETED");
+}
+
 function getGateCheckNames(project: AppConfig["projects"][number] | undefined): string[] {
   const configured = project?.gateChecks?.map((entry) => entry.trim()).filter(Boolean) ?? [];
   return configured.length > 0 ? configured : ["verify"];
@@ -443,10 +461,12 @@ export class IdleIssueReconciler {
         linearIssueId: issue.linearIssueId,
         ...(pr.headRefOid ? { prHeadSha: pr.headRefOid } : {}),
         ...(pr.state === "OPEN" ? { prState: "open" as const } : {}),
-        ...(pr.reviewDecision === "APPROVED"
+        ...(isReviewDecisionApproved(pr.reviewDecision)
           ? { prReviewState: "approved" as const }
-          : pr.reviewDecision === "CHANGES_REQUESTED"
+          : isReviewDecisionChangesRequested(pr.reviewDecision)
             ? { prReviewState: "changes_requested" as const }
+            : isReviewDecisionReviewRequired(pr.reviewDecision)
+              ? { prReviewState: "commented" as const }
             : {}),
         ...(gateCheckStatus ? { prCheckStatus: gateCheckStatus } : {}),
         ...(pr.headRefOid && gateCheckStatus
@@ -475,6 +495,27 @@ export class IdleIssueReconciler {
         });
         return;
       }
+
+      if (isReviewDecisionReviewRequired(pr.reviewDecision)
+        && gateCheckStatus === "success"
+        && hasCompletedReviewQuillVerdict(pr.statusCheckRollup)) {
+        this.logger.warn(
+          { issueKey: issue.issueKey, prNumber: issue.prNumber, reviewDecision: pr.reviewDecision },
+          "Reconciliation: review-quill completed without a decisive GitHub review; escalating for operator input",
+        );
+        this.advanceIdleIssue(issue, "awaiting_input");
+        this.feed?.publish({
+          level: "warn",
+          kind: "github",
+          issueKey: issue.issueKey,
+          projectId: issue.projectId,
+          stage: "awaiting_input",
+          status: "non_decisive_review",
+          summary: `PR #${issue.prNumber} needs operator input: review-quill finished but GitHub still requires review`,
+        });
+        return;
+      }
+
       const downstreamOwned = issue.factoryState === "awaiting_queue" || issue.prReviewState === "approved" || pr.reviewDecision === "APPROVED";
       const mergeConflictDetected = pr.mergeable === "CONFLICTING" || pr.mergeStateStatus === "DIRTY";
       const refreshedIssue = this.db.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
@@ -511,7 +552,7 @@ export class IdleIssueReconciler {
         });
         return;
       }
-      if (pr.reviewDecision === "APPROVED") {
+      if (isReviewDecisionApproved(pr.reviewDecision)) {
         this.db.upsertIssue({
           projectId: issue.projectId,
           linearIssueId: issue.linearIssueId,
