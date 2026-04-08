@@ -98,7 +98,7 @@ function buildHeaderLines(input: BuildDetailLinesInput, width: number): TextLine
   const issue = input.issue;
   const session = sessionDisplay(issue);
   const stage = stageDisplay(issue);
-  const facts = buildFacts(issue, input.issueContext);
+  const facts = buildFactSegments(issue, input.issueContext);
   const meta = buildMeta(input.tokenUsage, input.diffSummary, input.issueContext);
   const headerSegments: TextSegment[] = [
     { text: issue.issueKey ?? issue.projectId, bold: true },
@@ -110,7 +110,7 @@ function buildHeaderLines(input: BuildDetailLinesInput, width: number): TextLine
 
   if (facts.length > 0) {
     headerSegments.push({ text: "  ", dimColor: true });
-    headerSegments.push({ text: facts.join(" · "), dimColor: true });
+    headerSegments.push(...joinFactSegments(facts));
   }
   if (input.activeRunStartedAt) {
     headerSegments.push({ text: "  ", dimColor: true });
@@ -479,22 +479,33 @@ function renderSideTripLines(trip: SideTripNode, runOffset: number, width: numbe
   return lines;
 }
 
-function buildFacts(issue: WatchIssue, issueContext: WatchIssueContext | null): string[] {
-  const facts: string[] = [];
+function buildFactSegments(issue: WatchIssue, issueContext: WatchIssueContext | null): TextSegment[][] {
+  const facts: TextSegment[][] = [];
   const rereviewNeeded = isRereviewNeeded(issue);
-  if (issue.prNumber !== undefined) facts.push(`PR #${issue.prNumber}`);
-  if (issue.prReviewState === "approved") facts.push("approved");
-  else if (rereviewNeeded) facts.push("re-review needed");
-  else if (issue.prReviewState === "changes_requested") facts.push("changes requested");
-  if (issue.waitingReason && issue.sessionState === "waiting_input") facts.push(issue.waitingReason);
+  if (issue.prNumber !== undefined) facts.push([{ text: `PR #${issue.prNumber}`, color: "cyan" }]);
+  if (issue.prReviewState === "approved") facts.push([{ text: "approved", color: "green" }]);
+  else if (rereviewNeeded) facts.push([{ text: "re-review needed", color: "yellow" }]);
+  else if (issue.prReviewState === "changes_requested") facts.push([{ text: "changes requested", color: "yellow" }]);
+  if (issue.waitingReason && issue.sessionState === "waiting_input") facts.push([{ text: issue.waitingReason, color: "yellow" }]);
   const checks = prChecksFact({
     ...issue,
     latestFailureCheckName: issueContext?.latestFailureCheckName ?? issue.latestFailureCheckName,
   });
   if (checks) {
-    facts.push(checks.text);
+    facts.push([{ text: checks.text, color: checks.color }]);
   }
   return facts;
+}
+
+function joinFactSegments(facts: TextSegment[][]): TextSegment[] {
+  const segments: TextSegment[] = [];
+  for (const [index, fact] of facts.entries()) {
+    if (index > 0) {
+      segments.push({ text: " · ", dimColor: true });
+    }
+    segments.push(...fact);
+  }
+  return segments;
 }
 
 function buildMeta(
