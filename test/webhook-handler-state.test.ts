@@ -811,7 +811,7 @@ test("issueRemoved releases active run and transitions to failed", async () => {
   }
 });
 
-test("idle delegated comments queue a follow-up session event instead of rewriting pending context", async () => {
+test("idle delegated comments with explicit PatchRelay intent queue a follow-up session event instead of rewriting pending context", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-comment-followup-"));
   try {
     const config = createConfig(baseDir);
@@ -862,7 +862,7 @@ test("idle delegated comments queue a follow-up session event instead of rewriti
       } as unknown as Record<string, unknown>,
       data: {
         id: "comment-1",
-        body: "Please keep this compatible with the old contract.",
+        body: "PatchRelay, please keep this compatible with the old contract.",
         user: { name: "Alex Operator" },
         issue: {
           id: "issue-maf-comment",
@@ -888,6 +888,85 @@ test("idle delegated comments queue a follow-up session event instead of rewriti
     assert.equal(wake?.runType, "implementation");
     assert.equal(Array.isArray(wake?.context.followUps), true);
     assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-comment" }]);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("idle comments without explicit PatchRelay intent are ignored", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-comment-ignored-"));
+  try {
+    const config = createConfig(baseDir);
+    config.projects[0] = {
+      ...config.projects[0]!,
+      triggerEvents: [...config.projects[0]!.triggerEvents, "commentCreated", "commentUpdated"],
+    };
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+    db.upsertIssue({
+      projectId: "krasnoperov/mafia",
+      linearIssueId: "issue-maf-comment-ignored",
+      issueKey: "MAF-91C",
+      title: "Commentable issue",
+      currentLinearState: "Review",
+      currentLinearStateType: "started",
+      factoryState: "pr_open",
+      prNumber: 92,
+    });
+
+    const enqueued: Array<{ projectId: string; issueId: string }> = [];
+    const handler = new WebhookHandler(
+      config,
+      db,
+      { forProject: async () => undefined } as never,
+      { steerTurn: async () => undefined } as never,
+      (projectId, issueId) => { enqueued.push({ projectId, issueId }); },
+      pino({ enabled: false }),
+    );
+
+    const payload: LinearWebhookPayload = {
+      action: "create",
+      type: "Comment",
+      createdAt: "2026-04-01T02:00:00.000Z",
+      webhookTimestamp: Date.now(),
+      actor: {
+        id: "user-3",
+        name: "Taylor Operator",
+        email: "taylor@example.com",
+        type: "User",
+      } as unknown as Record<string, unknown>,
+      data: {
+        id: "comment-ignored-1",
+        body: "Please keep this compatible with the old contract.",
+        user: { name: "Taylor Operator" },
+        issue: {
+          id: "issue-maf-comment-ignored",
+          identifier: "MAF-91C",
+          title: "Commentable issue",
+          team: { id: "team-maf", key: "MAF" },
+          state: { id: "state-review", name: "Review", type: "started" },
+          delegate: { id: "patchrelay-actor", name: "PatchRelay" },
+        },
+      },
+    };
+
+    const stored = db.insertFullWebhookEvent({
+      webhookId: "delivery-comment-ignored",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(payload),
+    });
+    await handler.processWebhookEvent(stored.id);
+
+    assert.equal(db.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-comment-ignored"), undefined);
+    assert.equal(db.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-comment-ignored").length, 0);
+    assert.deepEqual(enqueued, []);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -1142,6 +1221,94 @@ test("PatchRelay-authored comments are recorded as inert session events without 
     assert.equal(events.length, 1);
     assert.equal(events[0]?.eventType, "self_comment");
     assert.equal(db.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-self-comment"), undefined);
+    assert.deepEqual(enqueued, []);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("PatchRelay managed status comment updates stay inert even when the webhook actor is not PatchRelay", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-managed-status-comment-"));
+  try {
+    const config = createConfig(baseDir);
+    config.projects[0] = {
+      ...config.projects[0]!,
+      triggerEvents: [...config.projects[0]!.triggerEvents, "commentCreated", "commentUpdated"],
+    };
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+    db.upsertIssue({
+      projectId: "krasnoperov/mafia",
+      linearIssueId: "issue-maf-managed-status",
+      issueKey: "MAF-91D",
+      title: "Managed status issue",
+      currentLinearState: "Review",
+      currentLinearStateType: "started",
+      factoryState: "pr_open",
+      prNumber: 912,
+      statusCommentId: "comment-status-1",
+    });
+
+    const enqueued: Array<{ projectId: string; issueId: string }> = [];
+    const handler = new WebhookHandler(
+      config,
+      db,
+      { forProject: async () => undefined } as never,
+      { steerTurn: async () => undefined } as never,
+      (projectId, issueId) => { enqueued.push({ projectId, issueId }); },
+      pino({ enabled: false }),
+    );
+
+    const payload: LinearWebhookPayload = {
+      action: "update",
+      type: "Comment",
+      createdAt: "2026-04-01T02:06:00.000Z",
+      webhookTimestamp: Date.now(),
+      actor: {
+        id: "linear-system",
+        name: "Linear",
+        email: "system@example.com",
+        type: "Application",
+      } as unknown as Record<string, unknown>,
+      data: {
+        id: "comment-status-1",
+        body: [
+          "## PatchRelay status",
+          "",
+          "PatchRelay is waiting on review.",
+          "",
+          "_PatchRelay updates this comment as it works. Review and merge remain downstream._",
+        ].join("\n"),
+        user: { name: "Linear" },
+        issue: {
+          id: "issue-maf-managed-status",
+          identifier: "MAF-91D",
+          title: "Managed status issue",
+          team: { id: "team-maf", key: "MAF" },
+          state: { id: "state-review", name: "Review", type: "started" },
+          delegate: { id: "patchrelay-actor", name: "PatchRelay" },
+        },
+      },
+    };
+
+    const stored = db.insertFullWebhookEvent({
+      webhookId: "delivery-managed-status-comment",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(payload),
+    });
+    await handler.processWebhookEvent(stored.id);
+
+    const events = db.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-managed-status");
+    assert.equal(events.length, 1);
+    assert.equal(events[0]?.eventType, "self_comment");
+    assert.equal(db.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-managed-status"), undefined);
     assert.deepEqual(enqueued, []);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
