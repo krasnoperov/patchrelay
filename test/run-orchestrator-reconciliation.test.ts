@@ -1210,6 +1210,7 @@ test("completed review_fix queues follow-up upkeep when the PR is still dirty", 
       branchName: "feat-review-dirty",
       prNumber: 21,
       prState: "open",
+      prHeadSha: "sha-review-before",
       prReviewState: "changes_requested",
       factoryState: "changes_requested",
       reviewFixAttempts: 1,
@@ -1219,6 +1220,7 @@ test("completed review_fix queues follow-up upkeep when the PR is still dirty", 
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       runType: "review_fix",
+      sourceHeadSha: "sha-review-before",
       promptText: "review fix",
     });
     db.updateRunThread(run.id, { threadId: "thread-review-dirty", turnId: "turn-review-dirty" });
@@ -1269,6 +1271,85 @@ exit 1
     assert.match(JSON.stringify(wake?.context ?? {}), /branchUpkeepRequired/);
     assert.match(JSON.stringify(wake?.context ?? {}), /GitHub still reports PR #21 as DIRTY/);
     assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-review-dirty" }]);
+  } finally {
+    process.env.PATH = oldPath;
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("completed review_fix escalates when the PR head did not advance", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-review-fix-same-head-"));
+  const oldPath = process.env.PATH;
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const enqueueCalls: Array<{ projectId: string; issueId: string }> = [];
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-review-same-head",
+      issueKey: "USE-REVIEW-SAME-HEAD",
+      branchName: "feat-review-same-head",
+      prNumber: 22,
+      prState: "open",
+      prHeadSha: "sha-review-same-head",
+      prReviewState: "changes_requested",
+      factoryState: "changes_requested",
+      reviewFixAttempts: 1,
+    });
+    const run = db.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "review_fix",
+      sourceHeadSha: "sha-review-same-head",
+      promptText: "review fix",
+    });
+    db.updateRunThread(run.id, { threadId: "thread-review-same-head", turnId: "turn-review-same-head" });
+    db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      activeRunId: run.id,
+    });
+
+    const fakeBin = path.join(baseDir, "fake-bin");
+    mkdirSync(fakeBin, { recursive: true });
+    const ghPath = path.join(fakeBin, "gh");
+    writeFileSync(ghPath, `#!/usr/bin/env bash
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  printf '{"headRefOid":"sha-review-same-head","state":"OPEN","reviewDecision":"CHANGES_REQUESTED","mergeStateStatus":"CLEAN"}'
+  exit 0
+fi
+echo "unexpected gh args: $*" >&2
+exit 1
+`);
+    chmodSync(ghPath, 0o755);
+    process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
+
+    const orchestrator = new RunOrchestrator(
+      config,
+      db,
+      {
+        startThread: async () => ({ threadId: "thread-review-same-head" }),
+        steerTurn: async () => undefined,
+        readThread: async () => ({ id: "thread-review-same-head", turns: [{ id: "turn-review-same-head", status: "completed", items: [] }] }),
+      } as never,
+      { forProject: async () => undefined } as never,
+      (projectId, issueId) => {
+        enqueueCalls.push({ projectId, issueId });
+      },
+      pino({ enabled: false }),
+    );
+
+    await (orchestrator as unknown as { reconcileRun: (run: typeof run) => Promise<void> }).reconcileRun(db.getRun(run.id)!);
+
+    const updatedIssue = db.getIssue("usertold", "issue-review-same-head");
+    const updatedRun = db.getRun(run.id);
+    assert.equal(updatedIssue?.factoryState, "escalated");
+    assert.equal(updatedIssue?.activeRunId, undefined);
+    assert.equal(updatedRun?.status, "failed");
+    assert.match(updatedRun?.failureReason ?? "", /without pushing a new head/);
+    assert.deepEqual(enqueueCalls, []);
   } finally {
     process.env.PATH = oldPath;
     rmSync(baseDir, { recursive: true, force: true });

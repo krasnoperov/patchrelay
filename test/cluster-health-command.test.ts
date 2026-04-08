@@ -190,7 +190,7 @@ test("cli cluster reports unmanaged blockers and lost dispatch", async () => {
   }
 });
 
-test("cli cluster reports stale re-review handoff with no requested reviewer", async () => {
+test("cli cluster reports a same-head requested-changes stall", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cluster-review-"));
   const config = createConfig(baseDir, 19792);
   mkdirSync(config.projects[0]!.repoPath, { recursive: true });
@@ -242,6 +242,12 @@ test("cli cluster reports stale re-review handoff with no requested reviewer", a
               state: "OPEN",
               reviewDecision: "CHANGES_REQUESTED",
               reviewRequests: [],
+              latestReviews: [
+                {
+                  state: "CHANGES_REQUESTED",
+                  commit: { oid: "abc123" },
+                },
+              ],
               statusCheckRollup: [
                 { __typename: "CheckRun", name: "verify", status: "COMPLETED", conclusion: "SUCCESS" },
               ],
@@ -262,8 +268,91 @@ test("cli cluster reports stale re-review handoff with no requested reviewer", a
     assert.match(text, /PASS \[service:review-quill\] Healthy/);
     assert.match(text, /FAIL \[ci\] 1 PR-backed issue has no visible next owner/);
     assert.match(text, /CI summary: prs=1 pending=0 success=1 failure=0 unknown=0 missing_owner=1/);
-    assert.match(text, /CI USE-33 PR #27  gate=success  next=missing  No active reviewer request; re-review handoff is stale/);
-    assert.match(text, /FAIL \[github:review-handoff USE-33 PR #27\] PR is waiting on re-review but no reviewer is currently requested/);
+    assert.match(text, /CI USE-33 PR #27  gate=success  next=missing  Requested changes still block the same head and no fix run is active/);
+    assert.match(text, /FAIL \[github:review-handoff USE-33 PR #27\] Requested changes still block the current head, but no review fix is running/);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("cli cluster ignores reviewer requests when the same head is still blocked", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cluster-review-request-same-head-"));
+  const config = createConfig(baseDir, 19795);
+  mkdirSync(config.projects[0]!.repoPath, { recursive: true });
+  mkdirSync(config.projects[0]!.worktreeRoot, { recursive: true });
+  const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+  db.runMigrations();
+  const server = await startPatchRelayHealthServer(config);
+
+  try {
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-use-36",
+      issueKey: "USE-36",
+      title: "Reviewer request on same blocked head",
+      currentLinearState: "In Progress",
+      factoryState: "pr_open",
+      prNumber: 36,
+      prState: "open",
+      prReviewState: "changes_requested",
+      prCheckStatus: "success",
+    });
+    const staleTime = new Date(Date.now() - 300_000).toISOString();
+    db.connection.prepare("UPDATE issues SET updated_at = ?").run(staleTime);
+    db.connection.prepare("UPDATE issue_sessions SET updated_at = ?").run(staleTime);
+
+    const stdout = createBufferStream();
+    const stderr = createBufferStream();
+    const exitCode = await runCli(["cluster"], {
+      config,
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      runCommand: async (command, args) => {
+        if (command === "review-quill") {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              unit: "review-quill.service",
+              systemd: { ActiveState: "active" },
+              health: { ok: true },
+              watch: { runningAttempts: 0 },
+            }),
+            stderr: "",
+          };
+        }
+        if (command === "gh" && args[0] === "pr" && args[1] === "view") {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              state: "OPEN",
+              reviewDecision: "CHANGES_REQUESTED",
+              reviewRequests: [{ login: "review-quill[bot]" }],
+              latestReviews: [
+                {
+                  state: "CHANGES_REQUESTED",
+                  commit: { oid: "abc123" },
+                },
+              ],
+              statusCheckRollup: [
+                { __typename: "CheckRun", name: "verify", status: "COMPLETED", conclusion: "SUCCESS" },
+              ],
+              mergeable: "MERGEABLE",
+              mergeStateStatus: "CLEAN",
+              headRefOid: "abc123",
+            }),
+            stderr: "",
+          };
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    });
+
+    assert.equal(exitCode, 1);
+    assert.equal(stderr.read(), "");
+    const text = stdout.read();
+    assert.match(text, /CI USE-36 PR #36  gate=success  next=missing  Requested changes still block the same head and no fix run is active/);
+    assert.match(text, /FAIL \[github:review-handoff USE-36 PR #36\] Requested changes still block the current head, but no review fix is running/);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     rmSync(baseDir, { recursive: true, force: true });

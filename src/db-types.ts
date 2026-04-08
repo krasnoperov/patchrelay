@@ -115,6 +115,7 @@ export interface RunRecord {
   linearIssueId: string;
   runType: RunType;
   status: RunStatus;
+  sourceHeadSha?: string | undefined;
   promptText?: string | undefined;
   threadId?: string | undefined;
   turnId?: string | undefined;

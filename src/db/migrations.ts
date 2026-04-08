@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS runs (
   linear_issue_id TEXT NOT NULL,
   run_type TEXT NOT NULL DEFAULT 'implementation',
   status TEXT NOT NULL,
+  source_head_sha TEXT,
   prompt_text TEXT,
   thread_id TEXT,
   turn_id TEXT,
@@ -249,6 +250,10 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
 
   // Add review_fix_attempts counter
   addColumnIfMissing(connection, "issues", "review_fix_attempts", "INTEGER NOT NULL DEFAULT 0");
+
+  // Preserve the PR head SHA seen when a run started so PatchRelay can
+  // verify that requested-changes work actually published a new head.
+  addColumnIfMissing(connection, "runs", "source_head_sha", "TEXT");
 
   // Collapse awaiting_review into pr_open (state normalization)
   connection.prepare("UPDATE issues SET factory_state = 'pr_open' WHERE factory_state = 'awaiting_review'").run();

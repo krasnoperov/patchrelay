@@ -1026,17 +1026,19 @@ export class PatchRelayDatabase {
     projectId: string;
     linearIssueId: string;
     runType: RunType;
+    sourceHeadSha?: string;
     promptText?: string;
   }): RunRecord {
     const now = isoNow();
     const result = this.connection.prepare(`
-      INSERT INTO runs (issue_id, project_id, linear_issue_id, run_type, status, prompt_text, started_at)
-      VALUES (?, ?, ?, ?, 'queued', ?, ?)
+      INSERT INTO runs (issue_id, project_id, linear_issue_id, run_type, status, source_head_sha, prompt_text, started_at)
+      VALUES (?, ?, ?, ?, 'queued', ?, ?, ?)
     `).run(
       params.issueId,
       params.projectId,
       params.linearIssueId,
       params.runType,
+      params.sourceHeadSha ?? null,
       params.promptText ?? null,
       now,
     );
@@ -1629,6 +1631,7 @@ function mapRunRow(row: Record<string, unknown>): RunRecord {
     linearIssueId: String(row.linear_issue_id),
     runType: String(row.run_type ?? "implementation") as RunType,
     status: String(row.status) as RunStatus,
+    ...(row.source_head_sha !== null ? { sourceHeadSha: String(row.source_head_sha) } : {}),
     ...(row.prompt_text !== null ? { promptText: String(row.prompt_text) } : {}),
     ...(row.thread_id !== null ? { threadId: String(row.thread_id) } : {}),
     ...(row.turn_id !== null ? { turnId: String(row.turn_id) } : {}),

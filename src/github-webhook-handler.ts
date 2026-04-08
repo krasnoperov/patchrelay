@@ -273,7 +273,6 @@ export class GitHubWebhookHandler {
         lastAttemptedFailureHeadSha: null,
         lastAttemptedFailureSignature: null,
       });
-      await this.maybeRequestRereviewAfterPush(freshIssue, event, project);
     }
 
     this.logger.info(
@@ -1082,95 +1081,6 @@ export class GitHubWebhookHandler {
       eventJson: JSON.stringify({ body, author }),
     });
     this.enqueuePendingSessionWake(issue.projectId, issue.linearIssueId);
-  }
-
-  private async maybeRequestRereviewAfterPush(
-    issue: IssueRecord,
-    event: NormalizedGitHubEvent,
-    project?: ProjectConfig,
-  ): Promise<void> {
-    if (event.triggerEvent !== "pr_synchronize") return;
-    if (issue.activeRunId !== undefined) return;
-    if (issue.prState !== "open" || issue.prReviewState !== "changes_requested" || issue.prNumber === undefined) return;
-    if (!this.isPatchRelayOwnedPr(issue)) return;
-
-    const reviewerName = this.findLatestRequestedChangesReviewer(issue.projectId, issue.linearIssueId);
-    if (!reviewerName) {
-      this.logger.info({ issueKey: issue.issueKey, prNumber: issue.prNumber }, "Skipping auto re-review request because no prior reviewer was recorded");
-      return;
-    }
-
-    const repoFullName = project?.github?.repoFullName ?? event.repoFullName;
-    const token = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN;
-    if (!token) {
-      this.logger.warn({ issueKey: issue.issueKey, prNumber: issue.prNumber }, "Skipping auto re-review request because no GitHub token is available");
-      this.feed?.publish({
-        level: "warn",
-        kind: "github",
-        issueKey: issue.issueKey,
-        projectId: issue.projectId,
-        stage: issue.factoryState,
-        status: "rereview_request_skipped",
-        summary: `Skipped auto re-review request for PR #${issue.prNumber}`,
-        detail: "No GitHub token available for requested_reviewers API call",
-      });
-      return;
-    }
-
-    const response = await this.fetchImpl(
-      `https://api.github.com/repos/${repoFullName}/pulls/${issue.prNumber}/requested_reviewers`,
-      {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${token}`,
-          accept: "application/vnd.github+json",
-          "content-type": "application/json",
-          "user-agent": "patchrelay",
-        },
-        body: JSON.stringify({ reviewers: [reviewerName] }),
-      },
-    );
-
-    if (!response.ok) {
-      const detail = await this.readGitHubErrorResponse(response);
-      this.logger.warn(
-        { issueKey: issue.issueKey, prNumber: issue.prNumber, reviewerName, status: response.status, detail },
-        "Failed to auto request re-review after push",
-      );
-      this.feed?.publish({
-        level: "warn",
-        kind: "github",
-        issueKey: issue.issueKey,
-        projectId: issue.projectId,
-        stage: issue.factoryState,
-        status: "rereview_request_failed",
-        summary: `Failed to auto request re-review from ${reviewerName}`,
-        detail,
-      });
-      return;
-    }
-
-    this.logger.info({ issueKey: issue.issueKey, prNumber: issue.prNumber, reviewerName }, "Auto requested re-review after push");
-    this.feed?.publish({
-      level: "info",
-      kind: "github",
-      issueKey: issue.issueKey,
-      projectId: issue.projectId,
-      stage: issue.factoryState,
-      status: "rereview_requested",
-      summary: `Requested re-review from ${reviewerName} on PR #${issue.prNumber}`,
-    });
-  }
-
-  private findLatestRequestedChangesReviewer(projectId: string, linearIssueId: string): string | undefined {
-    const event = this.db
-      .listIssueSessionEvents(projectId, linearIssueId)
-      .findLast((candidate) => candidate.eventType === "review_changes_requested");
-    if (!event?.eventJson) return undefined;
-    const payload = safeJsonParse<Record<string, unknown>>(event.eventJson);
-    return typeof payload?.reviewerName === "string" && payload.reviewerName.trim()
-      ? payload.reviewerName.trim()
-      : undefined;
   }
 
   private async readGitHubErrorResponse(response: Response): Promise<string> {

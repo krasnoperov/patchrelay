@@ -852,6 +852,11 @@ export class RunOrchestrator {
     const effectiveContext = runType === "review_fix"
       ? await this.resolveReviewFixWakeContext(issue, context, project)
       : context;
+    const sourceHeadSha = typeof effectiveContext?.failureHeadSha === "string"
+      ? effectiveContext.failureHeadSha
+      : typeof effectiveContext?.headSha === "string"
+        ? effectiveContext.headSha
+        : issue.prHeadSha;
     const isReviewFixBranchUpkeep = runType === "review_fix" && isBranchUpkeepRequired(effectiveContext);
 
     // Check repair budgets
@@ -923,6 +928,7 @@ export class RunOrchestrator {
         projectId: item.projectId,
         linearIssueId: item.issueId,
         runType,
+        ...(sourceHeadSha ? { sourceHeadSha } : {}),
         promptText: prompt,
       });
       const failureHeadSha = typeof effectiveContext?.failureHeadSha === "string"
@@ -1059,6 +1065,7 @@ export class RunOrchestrator {
       const message = error instanceof Error ? error.message : String(error);
       const lostLease = error instanceof Error && error.name === "IssueSessionLeaseLostError";
       if (!lostLease) {
+        const nextState: FactoryState = runType === "review_fix" ? "escalated" : "failed";
         this.db.finishRunWithLease({ projectId: item.projectId, linearIssueId: item.issueId, leaseId }, run.id, {
           status: "failed",
           failureReason: message,
@@ -1069,7 +1076,7 @@ export class RunOrchestrator {
             projectId: item.projectId,
             linearIssueId: item.issueId,
             activeRunId: null,
-            factoryState: "failed" as const,
+            factoryState: nextState,
           },
         );
       }
@@ -1289,6 +1296,7 @@ export class RunOrchestrator {
     const status = resolveRunCompletionStatus(notification.params);
 
     if (status === "failed") {
+      const nextState: FactoryState = run.runType === "review_fix" ? "escalated" : "failed";
       const updated = this.withHeldIssueSessionLease(run.projectId, run.linearIssueId, (lease) => {
         this.db.finishRunWithLease(lease, run.id, {
           status: "failed",
@@ -1300,7 +1308,7 @@ export class RunOrchestrator {
           projectId: run.projectId,
           linearIssueId: run.linearIssueId,
           activeRunId: null,
-          factoryState: "failed",
+          factoryState: nextState,
         });
         return true;
       });
@@ -1354,6 +1362,26 @@ export class RunOrchestrator {
       });
       void this.linearSync.emitActivity(heldIssue, buildRunFailureActivity(run.runType, verifiedRepairError));
       void this.linearSync.syncSession(heldIssue, { activeRunType: run.runType });
+      this.linearSync.clearProgress(run.id);
+      this.activeThreadId = undefined;
+      this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
+      return;
+    }
+    const missingReviewFixHeadError = await this.verifyReviewFixAdvancedHead(run, freshIssue);
+    if (missingReviewFixHeadError) {
+      this.failRunAndClear(run, missingReviewFixHeadError, "escalated");
+      const failedIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? freshIssue;
+      this.feed?.publish({
+        level: "error",
+        kind: "turn",
+        issueKey: freshIssue.issueKey,
+        projectId: run.projectId,
+        stage: run.runType,
+        status: "same_head_review_handoff_blocked",
+        summary: missingReviewFixHeadError,
+      });
+      void this.linearSync.emitActivity(failedIssue, buildRunFailureActivity(run.runType, missingReviewFixHeadError));
+      void this.linearSync.syncSession(failedIssue, { activeRunType: run.runType });
       this.linearSync.clearProgress(run.id);
       this.activeThreadId = undefined;
       this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
@@ -1566,6 +1594,37 @@ export class RunOrchestrator {
     // Re-read issue after the run was cleared (activeRunId is now null)
     const fresh = this.db.getIssue(issue.projectId, issue.linearIssueId);
     if (!fresh) return;
+
+    if (runType === "review_fix") {
+      const updated = this.withHeldIssueSessionLease(fresh.projectId, fresh.linearIssueId, (lease) => {
+        this.db.clearPendingIssueSessionEventsWithLease(lease);
+        this.db.upsertIssueWithLease(lease, {
+          projectId: fresh.projectId,
+          linearIssueId: fresh.linearIssueId,
+          pendingRunType: null,
+          pendingRunContextJson: null,
+          factoryState: "escalated",
+        });
+        return true;
+      });
+      if (!updated) {
+        this.logger.warn({ issueKey: fresh.issueKey, reason }, "Skipping review-fix recovery escalation after losing issue-session lease");
+        this.releaseIssueSessionLease(fresh.projectId, fresh.linearIssueId);
+        return;
+      }
+      this.logger.warn({ issueKey: fresh.issueKey, reason }, "Requested-changes run failed before a new head was published — escalating");
+      this.feed?.publish({
+        level: "error",
+        kind: "workflow",
+        issueKey: fresh.issueKey,
+        projectId: fresh.projectId,
+        stage: runType,
+        status: "escalated",
+        summary: `Requested-changes run failed before publishing a new head (${reason})`,
+      });
+      this.releaseIssueSessionLease(fresh.projectId, fresh.linearIssueId);
+      return;
+    }
 
     // If PR already merged, transition to done — no retry needed
     if (fresh.prState === "merged") {
@@ -1793,6 +1852,25 @@ export class RunOrchestrator {
         this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
         return;
       }
+      if (run.runType === "review_fix") {
+        const interruptedMessage = "Requested-changes run was interrupted before PatchRelay could verify that a new PR head was published";
+        this.failRunAndClear(run, interruptedMessage, "escalated");
+        await this.restoreIdleWorktree(issue);
+        const failedIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
+        this.feed?.publish({
+          level: "error",
+          kind: "workflow",
+          issueKey: issue.issueKey,
+          projectId: run.projectId,
+          stage: "review_fix",
+          status: "escalated",
+          summary: interruptedMessage,
+        });
+        void this.linearSync.emitActivity(failedIssue, buildRunFailureActivity(run.runType, interruptedMessage));
+        void this.linearSync.syncSession(failedIssue, { activeRunType: run.runType });
+        this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
+        return;
+      }
       const recoveredState = resolveRecoverablePostRunState(this.db.getIssue(run.projectId, run.linearIssueId) ?? issue);
       this.failRunAndClear(run, "Codex turn was interrupted", recoveredState);
       await this.restoreIdleWorktree(issue);
@@ -1841,6 +1919,24 @@ export class RunOrchestrator {
         const heldIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? freshIssue;
         void this.linearSync.emitActivity(heldIssue, buildRunFailureActivity(run.runType, verifiedRepairError));
         void this.linearSync.syncSession(heldIssue, { activeRunType: run.runType });
+        this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
+        return;
+      }
+      const missingReviewFixHeadError = await this.verifyReviewFixAdvancedHead(run, freshIssue);
+      if (missingReviewFixHeadError) {
+        this.failRunAndClear(run, missingReviewFixHeadError, "escalated");
+        const failedIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? freshIssue;
+        this.feed?.publish({
+          level: "error",
+          kind: "turn",
+          issueKey: freshIssue.issueKey,
+          projectId: run.projectId,
+          stage: run.runType,
+          status: "same_head_review_handoff_blocked",
+          summary: missingReviewFixHeadError,
+        });
+        void this.linearSync.emitActivity(failedIssue, buildRunFailureActivity(run.runType, missingReviewFixHeadError));
+        void this.linearSync.syncSession(failedIssue, { activeRunType: run.runType });
         this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
         return;
       }
@@ -2049,8 +2145,42 @@ export class RunOrchestrator {
     }
   }
 
+  private async verifyReviewFixAdvancedHead(run: RunRecord, issue: IssueRecord): Promise<string | undefined> {
+    if (run.runType !== "review_fix") {
+      return undefined;
+    }
+    if (!issue.prNumber || issue.prState !== "open") {
+      return undefined;
+    }
+    if (!run.sourceHeadSha) {
+      return `Requested-changes run finished for PR #${issue.prNumber} without a recorded starting head SHA. PatchRelay cannot verify that a new head was published.`;
+    }
+    const project = this.config.projects.find((entry) => entry.id === run.projectId);
+    if (!project?.github?.repoFullName) {
+      return undefined;
+    }
+    try {
+      const pr = await this.loadRemotePrState(project.github.repoFullName, issue.prNumber);
+      if (!pr || pr.state?.toUpperCase() !== "OPEN") return undefined;
+      if (!pr.headRefOid) {
+        return `Requested-changes run finished for PR #${issue.prNumber} but GitHub did not report a current head SHA.`;
+      }
+      if (pr.headRefOid === run.sourceHeadSha) {
+        return `Requested-changes run finished for PR #${issue.prNumber} without pushing a new head; PatchRelay must not hand the same SHA back to review.`;
+      }
+      return undefined;
+    } catch (error) {
+      this.logger.debug({
+        issueKey: issue.issueKey,
+        prNumber: issue.prNumber,
+        error: error instanceof Error ? error.message : String(error),
+      }, "Failed to verify PR head advancement after review fix");
+      return undefined;
+    }
+  }
+
   private async refreshIssueAfterReactivePublish(run: RunRecord, issue: IssueRecord): Promise<IssueRecord> {
-    if (run.runType !== "ci_repair" && run.runType !== "queue_repair") {
+    if (run.runType !== "ci_repair" && run.runType !== "queue_repair" && run.runType !== "review_fix") {
       return this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
     }
     if (!issue.prNumber) {
@@ -2072,6 +2202,7 @@ export class RunOrchestrator {
       const nextReviewState = normalizeRemoteReviewDecision(pr.reviewDecision);
       const gateCheckName = project?.gateChecks?.find((entry) => entry.trim())?.trim() ?? "verify";
       const headAdvanced = Boolean(pr.headRefOid && pr.headRefOid !== issue.lastGitHubFailureHeadSha);
+      const reviewFixHeadAdvanced = run.runType === "review_fix" && Boolean(pr.headRefOid && run.sourceHeadSha && pr.headRefOid !== run.sourceHeadSha);
 
       this.upsertIssueIfLeaseHeld(
         run.projectId,
@@ -2082,7 +2213,7 @@ export class RunOrchestrator {
         ...(nextPrState ? { prState: nextPrState } : {}),
         ...(pr.headRefOid ? { prHeadSha: pr.headRefOid } : {}),
         ...(nextReviewState ? { prReviewState: nextReviewState } : {}),
-        ...(headAdvanced
+        ...((headAdvanced || reviewFixHeadAdvanced)
           ? {
               prCheckStatus: "pending",
               lastGitHubFailureSource: null,
