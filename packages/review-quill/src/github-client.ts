@@ -341,4 +341,17 @@ export class GitHubClient {
       },
     );
   }
+
+  async dismissReview(repoFullName: string, prNumber: number, reviewId: number, message: string): Promise<void> {
+    const encodedRepo = repoFullName.split("/").map(encodeURIComponent).join("/");
+    await this.request(
+      repoFullName,
+      `/repos/${encodedRepo}/pulls/${prNumber}/reviews/${reviewId}/dismissals`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message }),
+      },
+    );
+  }
 }
