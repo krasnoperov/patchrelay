@@ -729,7 +729,6 @@ export class ReviewQuillService {
           conclusion: "neutral",
           summary: "Review Quill could not complete the review attempt",
           text: message,
-          ...(detailsUrl ? { detailsUrl } : {}),
         }).catch(() => undefined);
       }
     } finally {
