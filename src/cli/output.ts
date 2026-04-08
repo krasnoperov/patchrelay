@@ -48,18 +48,33 @@ export function formatClusterHealth(report: ClusterHealthReport): string {
 
   lines.push("");
   lines.push(
-    `Summary: tracked=${report.summary.trackedIssues} open=${report.summary.openIssues} active=${report.summary.activeRuns} blocked=${report.summary.blockedIssues} ready=${report.summary.readyIssues}`,
+    `Summary: tracked=${report.summary.trackedIssues} non_done=${report.summary.openIssues} active_runs=${report.summary.activeRuns} blocked=${report.summary.blockedIssues} ready=${report.summary.readyIssues}`,
   );
   if (report.summary.ciTrackedPrs > 0) {
     lines.push(
-      `CI: prs=${report.summary.ciTrackedPrs} pending=${report.summary.ciPending} success=${report.summary.ciSuccess} failure=${report.summary.ciFailure} unknown=${report.summary.ciUnknown} orphaned=${report.summary.ciOrphaned}`,
+      `CI summary: prs=${report.summary.ciTrackedPrs} pending=${report.summary.ciPending} success=${report.summary.ciSuccess} failure=${report.summary.ciFailure} unknown=${report.summary.ciUnknown} missing_owner=${report.summary.ciOrphaned}`,
     );
     for (const entry of report.ci) {
       lines.push(
-        `CI ${entry.issueKey ?? entry.projectId} PR #${entry.prNumber}  gate=${entry.gateStatus}  owner=${entry.owner}${entry.orphaned ? " [orphaned]" : ""}  ${entry.message}`,
+        `CI ${entry.issueKey ?? entry.projectId} PR #${entry.prNumber}  gate=${entry.gateStatus}  next=${formatCiOwnerLabel(entry.owner)}  ${entry.message}`,
       );
     }
   }
-  lines.push(report.ok ? "Cluster result: healthy" : "Cluster result: attention needed");
+  lines.push(report.ok ? "Cluster result: no ownership gaps detected" : "Cluster result: attention needed");
   return `${lines.join("\n")}\n`;
+}
+
+function formatCiOwnerLabel(owner: ClusterHealthReport["ci"][number]["owner"]): string {
+  switch (owner) {
+    case "patchrelay":
+      return "patchrelay";
+    case "reviewer":
+      return "reviewer";
+    case "downstream":
+      return "merge-queue";
+    case "external":
+      return "ci/github";
+    default:
+      return "missing";
+  }
 }

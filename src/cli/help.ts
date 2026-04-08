@@ -193,6 +193,7 @@ export function clusterHelpText(): string {
     "  tracked non-done issue. The command looks for unmanaged blockers, lost",
     "  dispatch, stale PR handoffs, and downstream waits that no longer have a",
     "  healthy automation owner.",
+    "  `cluster`, `cluster check`, and `cluster status` are aliases today.",
     "",
     "Examples:",
     "  patchrelay cluster",
