@@ -939,9 +939,22 @@ export class PatchRelayDatabase {
 
   listIssuesReadyForExecution(): Array<{ projectId: string; linearIssueId: string }> {
     return this.listIssues()
-      .filter((issue) => issue.activeRunId === undefined)
-      .filter((issue) => this.countUnresolvedBlockers(issue.projectId, issue.linearIssueId) === 0)
-      .filter((issue) => issue.pendingRunType !== undefined || this.peekIssueSessionWake(issue.projectId, issue.linearIssueId) !== undefined)
+      .filter((issue) => isIssueSessionReadyForExecution({
+        factoryState: issue.factoryState,
+        sessionState: deriveIssueSessionState({
+          activeRunId: issue.activeRunId,
+          factoryState: issue.factoryState,
+        }),
+        activeRunId: issue.activeRunId,
+        blockedByCount: this.countUnresolvedBlockers(issue.projectId, issue.linearIssueId),
+        hasPendingWake: this.peekIssueSessionWake(issue.projectId, issue.linearIssueId) !== undefined,
+        hasLegacyPendingRun: issue.pendingRunType !== undefined,
+        prNumber: issue.prNumber,
+        prState: issue.prState,
+        prReviewState: issue.prReviewState,
+        prCheckStatus: issue.prCheckStatus,
+        latestFailureSource: issue.lastGitHubFailureSource,
+      }))
       .map((issue) => ({
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
