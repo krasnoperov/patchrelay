@@ -29,7 +29,10 @@ export async function runCli(argv: string[], options?: RunCliOptions): Promise<n
     }
 
     validateFlags(parsed);
-    const command = parsed.positionals[0] ?? "help";
+    const requestedCommand = parsed.positionals[0] ?? "help";
+    const command = requestedCommand === "dash" || requestedCommand === "d"
+      ? "dashboard"
+      : requestedCommand;
 
     if (hasHelpFlag(parsed) || command === "help") {
       const topic = command === "help"
@@ -74,6 +77,8 @@ export async function runCli(argv: string[], options?: RunCliOptions): Promise<n
       }
       case "doctor":
         return await (await import("./cli/commands/doctor.ts")).handleDoctor(parsed, stdout);
+      case "dashboard":
+        return await (await import("./cli/commands/dashboard.ts")).handleDashboard(parsed);
       case "service":
         return await (await import("./cli/commands/service.ts")).handleService(parsed, stdout, runCommand);
       case "queue":

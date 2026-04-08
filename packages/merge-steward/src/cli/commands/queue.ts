@@ -121,11 +121,12 @@ export async function handleQueue(parsed: ParsedArgs, stdout: Output): Promise<n
   }
 
   if (subcommand === "watch") {
-    const repoId = resolveRepoId(parsed, 2, "queue");
-    const { configPath } = loadRepoConfigById(repoId);
-    const { startWatch } = await import("../../watch/index.tsx");
-    await startWatch(configPath, parseIntegerFlag(parsed.flags.get("pr"), "--pr"));
-    return 0;
+    throw new UsageError("`merge-steward queue watch` was replaced by `merge-steward dashboard [--repo <id>] [--pr <number>]`.", "queue");
+  }
+
+  if (subcommand === "dashboard") {
+    const { handleDashboard } = await import("./dashboard.ts");
+    return await handleDashboard(parsed);
   }
 
   const repoId = resolveRepoId(parsed, 2, "queue");

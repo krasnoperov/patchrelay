@@ -27,7 +27,7 @@ function rootHelpText(): string {
     "  queue status --repo <id> [--json]                      Show queue summary and current entries",
     "  queue show --repo <id> (--entry <id> | --pr <num>) [--events <count>] [--json]",
     "                                                          Show one queue entry with events and incidents",
-    "  queue watch --repo <id> [--pr <number>]                Open the queue watch TUI",
+    "  dashboard [--repo <id>] [--pr <number>]                Open the multi-repo merge queue dashboard",
     "",
     "Service management:",
     "  service install [--force] [--json]                     Reinstall the systemd unit",
@@ -99,9 +99,9 @@ function queueHelpText(): string {
     "  merge-steward queue <command> [options]",
     "",
     "Commands:",
+    "  dashboard [--repo <id>] [--pr <number>]            Open the multi-repo merge queue dashboard",
     "  status --repo <id>                                 Show queue summary and entries",
     "  show --repo <id> (--entry <id> | --pr <num>)       Show one queue entry with events and incidents",
-    "  watch --repo <id> [--pr <number>]                  Open the queue watch TUI",
     "  reconcile --repo <id> [--json]                     Ask the service to reconcile immediately",
   ].join("\n");
 }

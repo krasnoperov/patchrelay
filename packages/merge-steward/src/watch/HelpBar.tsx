@@ -1,13 +1,13 @@
 import { Box, Text } from "ink";
 
 interface HelpBarProps {
-  view: "list" | "detail";
+  view: "overview" | "project";
 }
 
 export function HelpBar({ view }: HelpBarProps): React.JSX.Element {
-  const text = view === "list"
-    ? "j/k: navigate  Enter: detail  a: filter  r: reconcile  d: dequeue  q: quit"
-    : "j/k: prev/next  Esc: list  r: reconcile  d: dequeue  q: quit";
+  const text = view === "overview"
+    ? "j/k: select project  Enter: open project  r: reconcile selected project  q: quit"
+    : "j/k: select PR  Esc: overview  a: filter  r: reconcile project  d: dequeue PR  q: quit";
 
   return (
     <Box marginTop={1}>

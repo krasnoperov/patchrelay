@@ -158,6 +158,45 @@ export function formatEntryEvent(event: QueueEventRecord): string {
   return `${transition}${detail}`;
 }
 
+function withDetail(text: string, detail?: string | undefined): string {
+  if (!detail) {
+    return text;
+  }
+  return `${text} ${shortenHashes(detail)}`;
+}
+
+export function formatEventNarrative(event: QueueEventRecord | QueueEventSummary): string {
+  const prPrefix = "prNumber" in event ? `PR #${event.prNumber} ` : "This PR ";
+  if (!event.fromStatus && event.toStatus === "queued") {
+    return withDetail(`${prPrefix}entered the merge queue.`, event.detail);
+  }
+  if (event.toStatus === "preparing_head") {
+    return withDetail(`${prPrefix}started preparing its combined test branch.`, event.detail);
+  }
+  if (event.toStatus === "validating") {
+    return withDetail(`${prPrefix}started running CI.`, event.detail);
+  }
+  if (event.toStatus === "merging") {
+    return withDetail(`${prPrefix}passed CI and started merging to main.`, event.detail);
+  }
+  if (event.toStatus === "merged") {
+    return withDetail(`${prPrefix}landed on main.`, event.detail);
+  }
+  if (event.toStatus === "evicted") {
+    return withDetail(`${prPrefix}was evicted and needs repair before it can rejoin the queue.`, event.detail);
+  }
+  if (event.toStatus === "dequeued") {
+    return withDetail(`${prPrefix}was removed from the queue.`, event.detail);
+  }
+  if (event.toStatus === "queued" && event.fromStatus) {
+    return withDetail(`${prPrefix}was re-queued for another attempt.`, event.detail);
+  }
+  return withDetail(
+    `${prPrefix}moved from ${displayStatus(event.fromStatus ?? "start")} to ${displayStatus(event.toStatus)}.`,
+    event.detail,
+  );
+}
+
 export function formatDuration(ms: number): string {
   const seconds = Math.floor(ms / 1000);
   if (seconds < 60) return `${seconds}s`;

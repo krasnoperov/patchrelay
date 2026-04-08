@@ -37,18 +37,28 @@ function buildUrl(baseUrl: string, path: string, params?: Record<string, string>
   return url.toString();
 }
 
-export async function fetchSnapshot(baseUrl: string): Promise<QueueWatchSnapshot> {
-  return await requestJson<QueueWatchSnapshot>(buildUrl(baseUrl, "/queue/watch", { eventLimit: "40" }));
+function repoBaseUrl(gatewayBaseUrl: string, repoId: string): string {
+  const base = gatewayBaseUrl.replace(/\/$/, "");
+  return `${base}/repos/${encodeURIComponent(repoId)}`;
 }
 
-export async function fetchEntryDetail(baseUrl: string, entryId: string): Promise<QueueEntryDetail> {
-  return await requestJson<QueueEntryDetail>(buildUrl(baseUrl, `/queue/entries/${encodeURIComponent(entryId)}/detail`, { eventLimit: "120" }));
+export async function fetchSnapshot(gatewayBaseUrl: string, repoId: string): Promise<QueueWatchSnapshot> {
+  return await requestJson<QueueWatchSnapshot>(buildUrl(repoBaseUrl(gatewayBaseUrl, repoId), "/queue/watch", { eventLimit: "40" }));
 }
 
-export async function triggerReconcile(baseUrl: string): Promise<{ ok: true; started: boolean }> {
-  return await requestJson<{ ok: true; started: boolean }>(buildUrl(baseUrl, "/queue/reconcile"), { method: "POST" });
+export async function fetchEntryDetail(gatewayBaseUrl: string, repoId: string, entryId: string): Promise<QueueEntryDetail> {
+  return await requestJson<QueueEntryDetail>(
+    buildUrl(repoBaseUrl(gatewayBaseUrl, repoId), `/queue/entries/${encodeURIComponent(entryId)}/detail`, { eventLimit: "120" }),
+  );
 }
 
-export async function dequeueEntry(baseUrl: string, entryId: string): Promise<void> {
-  await requestJson<{ ok: true }>(buildUrl(baseUrl, `/queue/entries/${encodeURIComponent(entryId)}/dequeue`), { method: "POST" });
+export async function triggerReconcile(gatewayBaseUrl: string, repoId: string): Promise<{ ok: true; started: boolean }> {
+  return await requestJson<{ ok: true; started: boolean }>(buildUrl(repoBaseUrl(gatewayBaseUrl, repoId), "/queue/reconcile"), { method: "POST" });
+}
+
+export async function dequeueEntry(gatewayBaseUrl: string, repoId: string, entryId: string): Promise<void> {
+  await requestJson<{ ok: true }>(
+    buildUrl(repoBaseUrl(gatewayBaseUrl, repoId), `/queue/entries/${encodeURIComponent(entryId)}/dequeue`),
+    { method: "POST" },
+  );
 }

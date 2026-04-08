@@ -1,9 +1,11 @@
 # merge-steward
 
-Speculative merge queue service. It admits approved PRs whose required checks
-are green, builds cumulative speculative branches, waits for CI on those exact
-integrated SHAs, and then fast-forwards `main` to the tested result. On
-failure, it evicts with a durable incident record and GitHub check run.
+`merge-steward` is a self-hosted merge queue for bot-managed and human-managed
+GitHub pull requests. It admits approved PRs whose required checks are green,
+builds cumulative speculative branches, waits for CI on those exact integrated
+SHAs, and then fast-forwards `main` to the tested result. On failure, it evicts
+with a durable incident record and GitHub check run so an agent or human can
+repair the branch and re-queue it.
 
 Fully independent of PatchRelay. Communicates through GitHub — PRs, reviews,
 checks, labels, branches.
@@ -209,33 +211,66 @@ merge-steward doctor --repo repo
 merge-steward service status
 merge-steward queue status --repo repo
 merge-steward queue show --repo repo --pr 123
+merge-steward dashboard
 
 # Manual foreground start
 merge-steward serve
 
-# Live queue watch TUI
-merge-steward queue watch --repo app
+# Open one project directly in the dashboard
+merge-steward dashboard --repo app
 ```
 
-### Watch TUI
+### Dashboard
 
-`merge-steward queue watch --repo <id>` gives you a terminal view of the queue:
+`merge-steward dashboard` is the operator surface for day-to-day queue work.
 
-- which PRs are currently queued
-- which PR is head-of-line
-- current steward tick state
-- recent queue transitions
-- per-PR detail with incidents and event history
+The first screen shows all configured projects with:
+
+- project-level queue health
+- readable queue stats
+- a compact queue chain like `#123 ●  #124 ○`
+- clear bad states such as blocked, stuck, or needs attention
+
+Press `Enter` on a project to open the second screen. That project detail view shows:
+
+- the same top-level queue stats for that project
+- a readable list of PRs in the queue
+- recent queue activity in plain language
+- incidents for evicted PRs
+- direct actions like reconcile and dequeue
+
+Use `merge-steward dashboard --repo <id>` to open the project detail screen directly. Use `--pr <number>` to preselect a PR when you already know what you need to inspect.
 
 Controls:
 
 - `j` / `k` or arrows — move selection
-- `Enter` — open selected PR detail
-- `Esc` — return to queue view
-- `a` — toggle `active` vs `all`
-- `r` — run a reconcile tick now
-- `d` — dequeue the selected PR
+- `Enter` — open the selected project from overview
+- `Esc` — return to the overview
+- `a` — toggle `active` vs `all` in project view
+- `r` — run a reconcile tick for the selected project
+- `d` — dequeue the selected PR in project view
 - `q` — quit
+
+### Validation, Visibility, And Troubleshooting
+
+These are the first commands to reach for after setup or when a queue looks wrong:
+
+```bash
+merge-steward doctor --repo app
+merge-steward service status
+merge-steward dashboard
+merge-steward queue status --repo app
+merge-steward queue show --repo app --pr 123
+merge-steward service logs --lines 100
+```
+
+Use them this way:
+
+- `doctor` checks config, GitHub auth, branch rules, and required checks.
+- `dashboard` is the best live operator view across all configured projects.
+- `queue status` is the fastest text snapshot when you need one repo in a shell script or over SSH.
+- `queue show --pr <number>` is the most direct way to inspect one PR's queue events and incidents.
+- `service logs` helps when the queue is not reacting to webhooks, GitHub auth is failing, or reconcile ticks are erroring.
 
 ### systemd
 
@@ -264,15 +299,15 @@ WantedBy=multi-user.target
 | Endpoint | Method | Description |
 |-|-|-|
 | `/health` | GET | Liveness check |
-| `/queue/status` | GET | All queue entries |
-| `/queue/watch` | GET | Queue snapshot for the operator TUI |
-| `/queue/enqueue` | POST | Manually enqueue a PR |
-| `/queue/reconcile` | POST | Trigger one reconcile tick immediately |
-| `/queue/entries/:id/detail` | GET | Entry detail with recent events and incidents |
-| `/queue/entries/:id/dequeue` | POST | Remove from queue (non-destructive) |
-| `/queue/entries/:id/update-head` | POST | Update head SHA (force-push) |
-| `/queue/incidents/:id` | GET | Get incident details |
-| `/queue/entries/:id/incidents` | GET | List incidents for an entry |
+| `/repos/:repoId/queue/status` | GET | All queue entries for one configured repo |
+| `/repos/:repoId/queue/watch` | GET | Queue snapshot used by the dashboard |
+| `/repos/:repoId/queue/enqueue` | POST | Manually enqueue a PR |
+| `/repos/:repoId/queue/reconcile` | POST | Trigger one reconcile tick immediately |
+| `/repos/:repoId/queue/entries/:id/detail` | GET | Entry detail with recent events and incidents |
+| `/repos/:repoId/queue/entries/:id/dequeue` | POST | Remove from queue (non-destructive) |
+| `/repos/:repoId/queue/entries/:id/update-head` | POST | Update head SHA (force-push) |
+| `/repos/:repoId/queue/incidents/:id` | GET | Get incident details |
+| `/repos/:repoId/queue/entries/:id/incidents` | GET | List incidents for an entry |
 | `/webhooks/github` | POST | GitHub webhook receiver for all configured repos |
 
 ## Queue state machine

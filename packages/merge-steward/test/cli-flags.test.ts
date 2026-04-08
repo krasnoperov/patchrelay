@@ -105,6 +105,16 @@ test("unknown flag on queue show exits 1 with error", async () => {
   assert.match(stderr.read(), /Unknown flag.*--bogus/);
 });
 
+test("unknown flag on dashboard exits 1 with error", async () => {
+  const stderr = createBufferStream();
+  const code = await runCli(["dashboard", "--bogus"], {
+    stdout: createBufferStream().stream,
+    stderr: stderr.stream,
+  });
+  assert.equal(code, 1);
+  assert.match(stderr.read(), /Unknown flag.*--bogus/);
+});
+
 test("multiple unknown flags are reported together", async () => {
   const stderr = createBufferStream();
   const code = await runCli(["init", "example.com", "--aaa", "--zzz"], {
@@ -166,6 +176,7 @@ test("queue --help shows queue usage", async () => {
   });
   assert.equal(code, 0);
   assert.match(stdout.read(), /merge-steward queue <command>/);
+  assert.match(stdout.read(), /dashboard \[--repo <id>\] \[--pr <number>\]/);
 });
 
 test("init --help shows root usage", async () => {

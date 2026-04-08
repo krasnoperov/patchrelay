@@ -64,6 +64,7 @@ test("merge-steward help shows grouped repo, service, and queue commands", async
   assert.match(text, /repo attach <owner\/repo>/);
   assert.match(text, /service status \[--json\]/);
   assert.match(text, /queue show --repo <id>/);
+  assert.match(text, /dashboard \[--repo <id>\] \[--pr <number>\]/);
 });
 
 test("merge-steward init and repo commands manage bootstrap state with explicit service actions", async () => {
