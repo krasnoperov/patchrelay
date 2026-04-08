@@ -1315,7 +1315,7 @@ test("PatchRelay managed status comment updates stay inert even when the webhook
   }
 });
 
-test("PatchRelay-generated escalation activity comments stay inert for non-user webhook actors", async () => {
+test("PatchRelay-generated escalation activity comments stay inert even when Linear reports PatchRelay as a user actor", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-escalation-comment-"));
   try {
     const config = createConfig(baseDir);
@@ -1360,15 +1360,15 @@ test("PatchRelay-generated escalation activity comments stay inert for non-user 
       createdAt: "2026-04-01T02:07:00.000Z",
       webhookTimestamp: Date.now(),
       actor: {
-        id: "linear-system",
-        name: "Linear",
-        email: "system@example.com",
-        type: "Application",
+        id: "patchrelay-linear-user",
+        name: "patchrelay",
+        email: "patchrelay@oauthapp.linear.app",
+        type: "User",
       } as unknown as Record<string, unknown>,
       data: {
         id: "comment-escalation-1",
         body: "PatchRelay needs human help to continue.\n\nReview fix budget exhausted (3 attempts)",
-        user: { name: "Linear" },
+        user: { name: "patchrelay" },
         issue: {
           id: "issue-maf-escalation-comment",
           identifier: "MAF-91E",

@@ -694,7 +694,7 @@ export class WebhookHandler {
     // refreshes its visible status comment, and those updates should never
     // consume review-fix budget or wake a new run.
     const installation = this.db.linearInstallations.getLinearInstallationForProject(project.id);
-    const selfAuthored = installation?.actorId && normalized.actor?.id === installation.actorId;
+    const selfAuthored = this.isPatchRelayManagedCommentAuthor(installation, normalized.actor, normalized.comment.userName);
     const inertPatchRelayComment = this.isInertPatchRelayComment(issue, normalized.comment.id, trimmedBody, normalized.actor?.type);
     if (selfAuthored || inertPatchRelayComment) {
       this.db.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
@@ -819,6 +819,26 @@ export class WebhookHandler {
     const normalizedActorType = actorType?.trim().toLowerCase();
     if (normalizedActorType && normalizedActorType !== "user") {
       return this.isPatchRelayGeneratedActivityComment(body);
+    }
+    return false;
+  }
+
+  private isPatchRelayManagedCommentAuthor(
+    installation: ReturnType<PatchRelayDatabase["linearInstallations"]["getLinearInstallationForProject"]>,
+    actor: NormalizedEvent["actor"],
+    commentUserName?: string,
+  ): boolean {
+    const actorName = actor?.name?.trim().toLowerCase();
+    const commentAuthor = commentUserName?.trim().toLowerCase();
+    const installationName = installation?.actorName?.trim().toLowerCase();
+    if (installation?.actorId && actor?.id === installation.actorId) {
+      return true;
+    }
+    if (installationName && actorName === installationName) {
+      return true;
+    }
+    if (actorName === "patchrelay" || commentAuthor === "patchrelay") {
+      return true;
     }
     return false;
   }
