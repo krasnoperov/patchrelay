@@ -89,8 +89,8 @@ function baseContext(): Omit<ReviewContext, "prompt"> {
         { path: "AGENTS.md", text: "Be careful with merges." },
         { path: "REVIEW_WORKFLOW.md", text: "Focus on correctness and regressions." },
       ],
-      priorReviews: [
-        { id: 1, authorLogin: "review-quill", state: "COMMENTED", body: "Earlier note", commitId: "oldsha" },
+      priorReviewClaims: [
+        { authorLogin: "review-quill", state: "COMMENTED", commitId: "oldsha", excerpt: "Earlier note" },
       ],
       issueKeys: ["TST-28"],
     },
@@ -106,6 +106,8 @@ test("renderReviewPrompt includes explicit guidance docs and suppressed summarie
   assert.doesNotMatch(prompt, /lockfile patch body/);
   assert.match(prompt, /src\/service\.ts/);
   assert.match(prompt, /Earlier note/);
+  assert.match(prompt, /## Prior review claims to verify/);
+  assert.match(prompt, /Do not repeat a claim just because it appeared in a previous review/);
   assert.match(prompt, /Linked issue keys detected: TST-28/);
   assert.match(prompt, /linear` MCP tool is available/);
   assert.match(prompt, /authoritative definition of this PR's scope on the current head/);

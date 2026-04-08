@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS issues (
   pr_author_login TEXT,
   pr_review_state TEXT,
   pr_check_status TEXT,
+  last_blocking_review_head_sha TEXT,
   ci_repair_attempts INTEGER NOT NULL DEFAULT 0,
   queue_repair_attempts INTEGER NOT NULL DEFAULT 0,
   updated_at TEXT NOT NULL,
@@ -41,6 +42,7 @@ CREATE TABLE IF NOT EXISTS runs (
   linear_issue_id TEXT NOT NULL,
   run_type TEXT NOT NULL DEFAULT 'implementation',
   status TEXT NOT NULL,
+  source_head_sha TEXT,
   prompt_text TEXT,
   thread_id TEXT,
   turn_id TEXT,
@@ -250,6 +252,11 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
   // Add review_fix_attempts counter
   addColumnIfMissing(connection, "issues", "review_fix_attempts", "INTEGER NOT NULL DEFAULT 0");
 
+  // Preserve the PR head SHA seen when a run started so PatchRelay can
+  // verify that requested-changes work actually published a new head.
+  addColumnIfMissing(connection, "runs", "source_head_sha", "TEXT");
+  addColumnIfMissing(connection, "issues", "last_blocking_review_head_sha", "TEXT");
+
   // Collapse awaiting_review into pr_open (state normalization)
   connection.prepare("UPDATE issues SET factory_state = 'pr_open' WHERE factory_state = 'awaiting_review'").run();
 
@@ -336,6 +343,7 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
         pr_author_login TEXT,
         pr_review_state TEXT,
         pr_check_status TEXT,
+        last_blocking_review_head_sha TEXT,
         last_github_failure_source TEXT,
         last_github_failure_head_sha TEXT,
         last_github_failure_signature TEXT,
@@ -391,6 +399,7 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
         pr_author_login,
         pr_review_state,
         pr_check_status,
+        last_blocking_review_head_sha,
         last_github_failure_source,
         last_github_failure_head_sha,
         last_github_failure_signature,
@@ -444,6 +453,7 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
         pr_author_login,
         pr_review_state,
         pr_check_status,
+        last_blocking_review_head_sha,
         last_github_failure_source,
         last_github_failure_head_sha,
         last_github_failure_signature,

@@ -473,7 +473,7 @@ export class PatchRelayService {
           s.project_id, s.linear_issue_id, s.issue_key, i.title,
           i.current_linear_state, i.factory_state, s.session_state, s.waiting_reason, s.summary_text, s.updated_at,
           i.pending_run_type,
-          i.pr_number, i.pr_review_state, i.pr_check_status,
+          i.pr_number, i.pr_head_sha, i.pr_review_state, i.pr_check_status, i.last_blocking_review_head_sha,
           i.last_github_ci_snapshot_json,
           i.last_github_failure_source,
           i.last_github_failure_head_sha,
@@ -570,8 +570,10 @@ export class PatchRelayService {
         factoryState: String(row.factory_state ?? "delegated"),
         ...(row.pending_run_type !== null ? { pendingRunType: String(row.pending_run_type) } : {}),
         ...(row.pr_number !== null ? { prNumber: Number(row.pr_number) } : {}),
+        ...(row.pr_head_sha !== null ? { prHeadSha: String(row.pr_head_sha) } : {}),
         ...(row.pr_review_state !== null ? { prReviewState: String(row.pr_review_state) } : {}),
         ...(row.pr_check_status !== null ? { prCheckStatus: String(row.pr_check_status) } : {}),
+        ...(row.last_blocking_review_head_sha !== null ? { lastBlockingReviewHeadSha: String(row.last_blocking_review_head_sha) } : {}),
         ...(row.last_github_failure_check_name !== null ? { latestFailureCheckName: String(row.last_github_failure_check_name) } : {}),
       });
       const latestRun = row.latest_run_type !== null && row.latest_run_status !== null
@@ -742,6 +744,7 @@ export class PatchRelayService {
     const issue = this.db.getIssueByKey(issueKey);
     if (!issue) return undefined;
     if (issue.activeRunId) return { error: "Issue already has an active run" };
+    const issueSession = this.db.getIssueSession(issue.projectId, issue.linearIssueId);
 
     if (issue.prState === "merged") {
       this.db.upsertIssueRespectingActiveLease(issue.projectId, issue.linearIssueId, {
@@ -762,7 +765,9 @@ export class PatchRelayService {
       runType = "ci_repair";
       factoryState = "repairing_ci";
     } else if (issue.prNumber && issue.prReviewState === "changes_requested") {
-      runType = "review_fix";
+      runType = issue.pendingRunType === "branch_upkeep" || issueSession?.lastRunType === "branch_upkeep"
+        ? "branch_upkeep"
+        : "review_fix";
       factoryState = "changes_requested";
     } else if (issue.prNumber) {
       // PR exists but no specific failure — re-run implementation
@@ -827,16 +832,19 @@ export class PatchRelayService {
       return;
     }
 
-    if (runType === "review_fix") {
+    if (runType === "review_fix" || runType === "branch_upkeep") {
       this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         eventType: "review_changes_requested",
         eventJson: JSON.stringify({
-          reviewBody: "Operator requested retry of review-fix work.",
+          reviewBody: runType === "branch_upkeep"
+            ? "Operator requested retry of branch upkeep after requested changes."
+            : "Operator requested retry of review-fix work.",
+          ...(runType === "branch_upkeep" ? { branchUpkeepRequired: true, wakeReason: "branch_upkeep" } : {}),
           source: "operator_retry",
         }),
-        dedupeKey: `operator_retry:review_fix:${issue.linearIssueId}:${issue.prHeadSha ?? "unknown-sha"}`,
+        dedupeKey: `operator_retry:${runType}:${issue.linearIssueId}:${issue.prHeadSha ?? "unknown-sha"}`,
       });
       return;
     }

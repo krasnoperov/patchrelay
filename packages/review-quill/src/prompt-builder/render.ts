@@ -236,14 +236,17 @@ export function renderReviewPrompt(context: Omit<ReviewContext, "prompt">): stri
     }
   }
 
-  if (context.promptContext.priorReviews.length > 0) {
-    lines.push("", "## Previous formal reviews");
-    lines.push("Treat these as historical claims to verify against the current head, not as authoritative facts.");
-    for (const review of context.promptContext.priorReviews.slice(-10)) {
-      lines.push(`- ${review.authorLogin ?? "unknown"} [${review.state ?? "unknown"}] ${review.commitId ?? ""}`.trim());
-      if (review.body) {
-        lines.push(review.body.slice(0, 2_000));
-      }
+  if (context.promptContext.priorReviewClaims.length > 0) {
+    lines.push("", "## Prior review claims to verify");
+    lines.push("These are short historical claims from previous formal reviews. Verify them against the current head, current diff, and current behavior before reusing them.");
+    lines.push("Do not repeat a claim just because it appeared in a previous review.");
+    for (const claim of context.promptContext.priorReviewClaims) {
+      const label = [
+        claim.authorLogin ?? "unknown",
+        claim.state ? `[${claim.state}]` : undefined,
+        claim.commitId ? `commit ${claim.commitId}` : undefined,
+      ].filter(Boolean).join(" ");
+      lines.push(`- ${label}: ${claim.excerpt}`);
     }
   }
 

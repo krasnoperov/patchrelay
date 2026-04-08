@@ -14,8 +14,10 @@ export interface IssueSessionWaitingReasonInput {
   factoryState: FactoryState;
   pendingRunType?: RunType | undefined;
   prNumber?: number | undefined;
+  prHeadSha?: string | undefined;
   prReviewState?: string | undefined;
   prCheckStatus?: string | undefined;
+  lastBlockingReviewHeadSha?: string | undefined;
   latestFailureCheckName?: string | undefined;
 }
 
@@ -75,6 +77,7 @@ export function deriveIssueSessionWaitingReason(params: IssueSessionWaitingReaso
 export function deriveIssueSessionWakeReason(params: IssueSessionWakeReasonInput): string | undefined {
   if (params.pendingRunType === "implementation") return "delegated";
   if (params.pendingRunType === "review_fix") return "review_changes_requested";
+  if (params.pendingRunType === "branch_upkeep") return "branch_upkeep";
   if (params.pendingRunType === "ci_repair") return "settled_red_ci";
   if (params.pendingRunType === "queue_repair") return "merge_steward_incident";
   if (params.factoryState === "awaiting_input") return "waiting_for_human_reply";

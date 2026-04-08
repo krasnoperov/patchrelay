@@ -276,9 +276,9 @@ export class IdleIssueReconciler {
     } else if (runType === "ci_repair") {
       eventType = "settled_red_ci";
       dedupeKey = `${dedupeScope}:ci_repair:${issue.linearIssueId}:${issue.lastGitHubFailureSignature ?? issue.prHeadSha ?? issue.lastGitHubFailureHeadSha ?? "unknown"}`;
-    } else if (runType === "review_fix") {
+    } else if (runType === "review_fix" || runType === "branch_upkeep") {
       eventType = "review_changes_requested";
-      dedupeKey = `${dedupeScope}:review_fix:${issue.linearIssueId}:${issue.prHeadSha ?? "unknown"}`;
+      dedupeKey = `${dedupeScope}:${runType}:${issue.linearIssueId}:${issue.prHeadSha ?? "unknown"}`;
     } else {
       eventType = "delegated";
       dedupeKey = `${dedupeScope}:implementation:${issue.linearIssueId}`;

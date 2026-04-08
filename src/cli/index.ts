@@ -297,6 +297,11 @@ export async function runCli(
     }
   }
 
+  if (command === "cluster" && commandArgs[0]) {
+    writeUsageError(stderr, new CliUsageError(`Unknown cluster command: ${commandArgs[0]}`, "cluster"));
+    return 1;
+  }
+
   const config =
     options?.config ??
     loadConfig(undefined, {

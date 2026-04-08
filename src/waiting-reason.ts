@@ -2,7 +2,8 @@ export const PATCHRELAY_WAITING_REASONS = {
   activeWork: "PatchRelay is actively working",
   waitingForOperatorInput: "Waiting on operator input",
   waitingForReviewFeedback: "Waiting to address review feedback",
-  waitingForRereview: "Waiting on re-review after requested changes",
+  waitingForReviewOnNewHead: "Waiting on review of a newer pushed head",
+  sameHeadStillBlocked: "Requested changes still block the current head",
   waitingForMergeStewardRepair: "Waiting to repair a merge-steward incident",
   waitingForDownstreamAutomation: "Waiting on downstream review/merge automation",
   workComplete: "PatchRelay work is complete",
@@ -19,8 +20,10 @@ export function derivePatchRelayWaitingReason(params: {
   factoryState?: string | undefined;
   pendingRunType?: string | undefined;
   prNumber?: number | undefined;
+  prHeadSha?: string | undefined;
   prReviewState?: string | undefined;
   prCheckStatus?: string | undefined;
+  lastBlockingReviewHeadSha?: string | undefined;
   latestFailureCheckName?: string | undefined;
 }): PatchRelayWaitingReason | undefined {
   if (params.activeRunType) {
@@ -61,7 +64,14 @@ export function derivePatchRelayWaitingReason(params: {
   }
   if (params.prReviewState === "changes_requested") {
     if (params.prCheckStatus === "passed" || params.prCheckStatus === "success") {
-      return PATCHRELAY_WAITING_REASONS.waitingForRereview;
+      if (
+        params.prHeadSha
+        && params.lastBlockingReviewHeadSha
+        && params.prHeadSha !== params.lastBlockingReviewHeadSha
+      ) {
+        return PATCHRELAY_WAITING_REASONS.waitingForReviewOnNewHead;
+      }
+      return PATCHRELAY_WAITING_REASONS.sameHeadStillBlocked;
     }
     return PATCHRELAY_WAITING_REASONS.waitingForReviewFeedback;
   }

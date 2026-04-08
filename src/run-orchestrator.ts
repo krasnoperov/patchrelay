@@ -60,6 +60,7 @@ function lowerCaseFirst(value: string): string {
 const WORKFLOW_FILES: Record<RunType, string> = {
   implementation: "IMPLEMENTATION_WORKFLOW.md",
   review_fix: "REVIEW_WORKFLOW.md",
+  branch_upkeep: "REVIEW_WORKFLOW.md",
   ci_repair: "IMPLEMENTATION_WORKFLOW.md",
   queue_repair: "IMPLEMENTATION_WORKFLOW.md",
 };
@@ -228,6 +229,21 @@ interface ReviewFixCommentContext {
   authorLogin?: string | undefined;
 }
 
+function isRequestedChangesRunType(runType: RunType): boolean {
+  return runType === "review_fix" || runType === "branch_upkeep";
+}
+
+type RequestedChangesMode = "address_review_feedback" | "branch_upkeep";
+
+function resolveRequestedChangesMode(runType: RunType, context?: Record<string, unknown>): RequestedChangesMode {
+  if (runType === "branch_upkeep") {
+    return "branch_upkeep";
+  }
+  return context?.reviewFixMode === "branch_upkeep" || context?.branchUpkeepRequired === true
+    ? "branch_upkeep"
+    : "address_review_feedback";
+}
+
 function readReviewFixComments(context?: Record<string, unknown>): ReviewFixCommentContext[] {
   const raw = context?.reviewComments;
   if (!Array.isArray(raw)) {
@@ -281,6 +297,7 @@ function appendStructuredReviewContext(lines: string[], context?: Record<string,
   lines.push(
     `Inline review comments captured: ${reviewComments.length}`,
     "Resolve each comment below or verify it is already fixed on the current head before you stop.",
+    "A requested-changes turn is only complete if you push a newer PR head or deliberately escalate because you are blocked.",
     "",
   );
   for (const comment of reviewComments) {
@@ -323,6 +340,8 @@ function resolveFollowUpWhy(runType: RunType, context?: Record<string, unknown>)
       return "An operator supplied new guidance for this issue.";
     case "review_changes_requested":
       return "GitHub review requested changes on the current PR head.";
+    case "branch_upkeep":
+      return "GitHub still shows the PR branch as needing upkeep after the requested code change was addressed.";
     case "settled_red_ci":
       return "Required CI settled red for the current PR head.";
     case "merge_steward_incident":
@@ -332,7 +351,11 @@ function resolveFollowUpWhy(runType: RunType, context?: Record<string, unknown>)
         ? "This is the first implementation turn for the delegated issue."
         : `This turn continues ${runType.replaceAll("_", " ")} work for the delegated issue.`;
     default:
-      if (runType === "review_fix") return "This turn continues requested-changes work on the existing PR.";
+      if (isRequestedChangesRunType(runType)) {
+        return resolveRequestedChangesMode(runType, context) === "branch_upkeep"
+          ? "This turn continues branch upkeep on the existing PR after requested changes."
+          : "This turn continues requested-changes work on the existing PR.";
+      }
       if (runType === "ci_repair") return "This turn continues CI repair work on the existing PR.";
       if (runType === "queue_repair") return "This turn continues merge-queue repair work on the existing PR.";
       return "This turn continues implementation on the existing issue session.";
@@ -343,13 +366,15 @@ function resolveFollowUpAction(runType: RunType, context?: Record<string, unknow
   if (context?.directReplyMode === true) {
     return "Apply the latest human answer, continue from the current branch/session context, and only ask another question if you are still blocked.";
   }
-  if (runType === "review_fix" && context?.branchUpkeepRequired === true) {
-    const baseBranch = typeof context.baseBranch === "string" ? context.baseBranch : "main";
-    return `Update the existing PR branch onto latest ${baseBranch}, resolve conflicts if needed, rerun narrow verification, and push the same branch.`;
+  if (isRequestedChangesRunType(runType) && resolveRequestedChangesMode(runType, context) === "branch_upkeep") {
+    const baseBranch = typeof context?.baseBranch === "string" ? context.baseBranch : "main";
+    return `Update the existing PR branch onto latest ${baseBranch}, resolve conflicts if needed, rerun narrow verification, and push a newer head on the same branch.`;
   }
   switch (runType) {
     case "review_fix":
-      return "Address the review feedback on the current PR branch, verify the fix, and push the same branch.";
+      return "Address the review feedback on the current PR branch, verify the fix, and push a newer head on the same branch.";
+    case "branch_upkeep":
+      return "Repair the existing PR branch after requested changes, rerun narrow verification, and push a newer head on the same branch.";
     case "ci_repair":
       return "Fix the failing CI root cause on the current PR branch, verify it locally, and push the same branch.";
     case "queue_repair":
@@ -474,6 +499,46 @@ function appendFollowUpPromptPrelude(
   appendAuthoritativeGitHubFacts(lines, issue, runType, context);
 }
 
+function appendRequestedChangesInstructions(lines: string[], runType: RunType, context?: Record<string, unknown>): void {
+  if (resolveRequestedChangesMode(runType, context) === "branch_upkeep") {
+    const baseBranch = typeof context?.baseBranch === "string" ? context.baseBranch : "main";
+    lines.push(
+      "## Branch Upkeep After Requested Changes",
+      "",
+      "The requested code change may already be present, but the PR branch still needs upkeep before review can continue.",
+      typeof context?.mergeStateStatus === "string" ? `Current merge state: ${String(context.mergeStateStatus)}` : "",
+      "",
+      "Steps:",
+      `1. Update the existing PR branch onto latest ${baseBranch}.`,
+      "2. Resolve conflicts or branch drift without reopening the review-feedback debate unless the merge introduces a new issue.",
+      "3. Run the narrowest verification that proves the branch is healthy again.",
+      "4. Commit and push a newer head on the existing PR branch.",
+      "5. If you cannot produce a new pushed head, stop and surface the exact blocker.",
+      "",
+    );
+    return;
+  }
+
+  lines.push(
+    "## Review Changes Requested",
+    "",
+    "A reviewer has requested changes on your PR. Address the feedback and push.",
+    context?.reviewerName ? `Reviewer: ${String(context.reviewerName)}` : "",
+    context?.reviewBody ? `\n## Review comment\n\n${String(context.reviewBody)}` : "",
+    "",
+    "Steps:",
+    "1. Start with the structured review context below. Treat the inline review comments as the primary repair checklist for this turn.",
+    "2. Check the current diff (`git diff origin/main`) — a prior rebase may have already resolved some concerns (e.g., scope-bundling from stale commits).",
+    "3. For each review point: if already resolved on the current head, note why. If not, fix it.",
+    "4. If the structured review context looks incomplete, inspect the latest GitHub review threads directly before deciding you are done.",
+    "5. Run verification, commit, and push a newer head on the existing PR branch.",
+    "6. Do not try to hand the same head back to review. If you cannot produce a new pushed head, stop and surface the blocker clearly.",
+    "7. GitHub review happens after the new head is pushed and CI is green. Do not use `gh pr edit --add-reviewer` as part of this workflow.",
+    "",
+  );
+  appendStructuredReviewContext(lines, context);
+}
+
 export function buildInitialRunPrompt(issue: IssueRecord, runType: RunType, repoPath: string, context?: Record<string, unknown>): string {
   const lines: string[] = buildPromptHeader(issue);
   appendTaskObjective(lines, issue);
@@ -521,24 +586,8 @@ export function buildInitialRunPrompt(issue: IssueRecord, runType: RunType, repo
       break;
     }
     case "review_fix":
-      lines.push(
-        "## Review Changes Requested",
-        "",
-        "A reviewer has requested changes on your PR. Address the feedback and push.",
-        context?.reviewerName ? `Reviewer: ${String(context.reviewerName)}` : "",
-        context?.reviewBody ? `\n## Review comment\n\n${String(context.reviewBody)}` : "",
-        "",
-        "Steps:",
-        "1. Start with the structured review context below. Treat the inline review comments as the primary repair checklist for this turn.",
-        "2. Check the current diff (`git diff origin/main`) — a prior rebase may have already resolved some concerns (e.g., scope-bundling from stale commits).",
-        "3. For each review point: if already resolved on the current head, note why. If not, fix it.",
-        "4. If the structured review context looks incomplete, inspect the latest GitHub review threads directly before deciding you are done.",
-        "5. Run verification, commit and push.",
-        "6. If you believe all concerns are resolved, request a re-review: `gh pr edit <PR#> --add-reviewer <reviewer>`.",
-        "   Do NOT just post a comment saying \"resolved\" — the reviewer must re-review to dismiss the CHANGES_REQUESTED state.",
-        "",
-      );
-      appendStructuredReviewContext(lines, context);
+    case "branch_upkeep":
+      appendRequestedChangesInstructions(lines, runType, context);
       break;
     case "queue_repair":
       appendQueueRepairContext(lines, context);
@@ -614,24 +663,8 @@ export function buildFollowUpRunPrompt(issue: IssueRecord, runType: RunType, rep
       break;
     }
     case "review_fix":
-      lines.push(
-        "## Review Changes Requested",
-        "",
-        "A reviewer has requested changes on your PR. Address the feedback and push.",
-        context?.reviewerName ? `Reviewer: ${String(context.reviewerName)}` : "",
-        context?.reviewBody ? `\n## Review comment\n\n${String(context.reviewBody)}` : "",
-        "",
-        "Steps:",
-        "1. Start with the structured review context below. Treat the inline review comments as the primary repair checklist for this turn.",
-        "2. Check the current diff (`git diff origin/main`) — a prior rebase may have already resolved some concerns (e.g., scope-bundling from stale commits).",
-        "3. For each review point: if already resolved on the current head, note why. If not, fix it.",
-        "4. If the structured review context looks incomplete, inspect the latest GitHub review threads directly before deciding you are done.",
-        "5. Run verification, commit and push.",
-        "6. If you believe all concerns are resolved, request a re-review: `gh pr edit <PR#> --add-reviewer <reviewer>`.",
-        "   Do NOT just post a comment saying \"resolved\" — the reviewer must re-review to dismiss the CHANGES_REQUESTED state.",
-        "",
-      );
-      appendStructuredReviewContext(lines, context);
+    case "branch_upkeep":
+      appendRequestedChangesInstructions(lines, runType, context);
       break;
     case "queue_repair":
       appendQueueRepairContext(lines, context);
@@ -777,9 +810,9 @@ export class RunOrchestrator {
     } else if (runType === "ci_repair") {
       eventType = "settled_red_ci";
       dedupeKey = `${dedupeScope ?? "wake"}:ci_repair:${issue.linearIssueId}:${issue.lastGitHubFailureSignature ?? issue.prHeadSha ?? "unknown-sha"}`;
-    } else if (runType === "review_fix") {
+    } else if (runType === "review_fix" || runType === "branch_upkeep") {
       eventType = "review_changes_requested";
-      dedupeKey = `${dedupeScope ?? "wake"}:review_fix:${issue.linearIssueId}:${issue.prHeadSha ?? "unknown-sha"}`;
+      dedupeKey = `${dedupeScope ?? "wake"}:${runType}:${issue.linearIssueId}:${issue.prHeadSha ?? "unknown-sha"}`;
     } else {
       eventType = "delegated";
       dedupeKey = `${dedupeScope ?? "wake"}:implementation:${issue.linearIssueId}`;
@@ -849,11 +882,14 @@ export class RunOrchestrator {
       return;
     }
     const { runType, context, resumeThread } = wake;
-    const effectiveContext = runType === "review_fix"
-      ? await this.resolveReviewFixWakeContext(issue, context, project)
+    const effectiveContext = isRequestedChangesRunType(runType)
+      ? await this.resolveRequestedChangesWakeContext(issue, runType, context, project)
       : context;
-    const isReviewFixBranchUpkeep = runType === "review_fix" && isBranchUpkeepRequired(effectiveContext);
-
+    const sourceHeadSha = typeof effectiveContext?.failureHeadSha === "string"
+      ? effectiveContext.failureHeadSha
+      : typeof effectiveContext?.headSha === "string"
+        ? effectiveContext.headSha
+        : issue.prHeadSha;
     // Check repair budgets
     if (runType === "ci_repair" && issue.ciRepairAttempts >= DEFAULT_CI_REPAIR_BUDGET) {
       this.escalate(issue, runType, `CI repair budget exhausted (${DEFAULT_CI_REPAIR_BUDGET} attempts)`);
@@ -863,7 +899,7 @@ export class RunOrchestrator {
       this.escalate(issue, runType, `Queue repair budget exhausted (${DEFAULT_QUEUE_REPAIR_BUDGET} attempts)`);
       return;
     }
-    if (runType === "review_fix" && !isReviewFixBranchUpkeep && issue.reviewFixAttempts >= DEFAULT_REVIEW_FIX_BUDGET) {
+    if (runType === "review_fix" && issue.reviewFixAttempts >= DEFAULT_REVIEW_FIX_BUDGET) {
       this.escalate(issue, runType, `Review fix budget exhausted (${DEFAULT_REVIEW_FIX_BUDGET} attempts)`);
       return;
     }
@@ -889,7 +925,7 @@ export class RunOrchestrator {
         return;
       }
     }
-    if (runType === "review_fix" && !isReviewFixBranchUpkeep) {
+    if (runType === "review_fix") {
       const updated = this.db.upsertIssueWithLease(
         { projectId: issue.projectId, linearIssueId: issue.linearIssueId, leaseId },
         { projectId: issue.projectId, linearIssueId: issue.linearIssueId, reviewFixAttempts: issue.reviewFixAttempts + 1 },
@@ -923,6 +959,7 @@ export class RunOrchestrator {
         projectId: item.projectId,
         linearIssueId: item.issueId,
         runType,
+        ...(sourceHeadSha ? { sourceHeadSha } : {}),
         promptText: prompt,
       });
       const failureHeadSha = typeof effectiveContext?.failureHeadSha === "string"
@@ -939,7 +976,7 @@ export class RunOrchestrator {
         worktreePath,
         factoryState: runType === "implementation" ? "implementing"
           : runType === "ci_repair" ? "repairing_ci"
-          : runType === "review_fix" ? "changes_requested"
+          : runType === "review_fix" || runType === "branch_upkeep" ? "changes_requested"
           : runType === "queue_repair" ? "repairing_queue"
           : "implementing",
         ...((runType === "ci_repair" || runType === "queue_repair") && failureSignature
@@ -1059,6 +1096,7 @@ export class RunOrchestrator {
       const message = error instanceof Error ? error.message : String(error);
       const lostLease = error instanceof Error && error.name === "IssueSessionLeaseLostError";
       if (!lostLease) {
+        const nextState: FactoryState = isRequestedChangesRunType(runType) ? "escalated" : "failed";
         this.db.finishRunWithLease({ projectId: item.projectId, linearIssueId: item.issueId, leaseId }, run.id, {
           status: "failed",
           failureReason: message,
@@ -1069,7 +1107,7 @@ export class RunOrchestrator {
             projectId: item.projectId,
             linearIssueId: item.issueId,
             activeRunId: null,
-            factoryState: "failed" as const,
+            factoryState: nextState,
           },
         );
       }
@@ -1289,6 +1327,7 @@ export class RunOrchestrator {
     const status = resolveRunCompletionStatus(notification.params);
 
     if (status === "failed") {
+      const nextState: FactoryState = isRequestedChangesRunType(run.runType) ? "escalated" : "failed";
       const updated = this.withHeldIssueSessionLease(run.projectId, run.linearIssueId, (lease) => {
         this.db.finishRunWithLease(lease, run.id, {
           status: "failed",
@@ -1300,7 +1339,7 @@ export class RunOrchestrator {
           projectId: run.projectId,
           linearIssueId: run.linearIssueId,
           activeRunId: null,
-          factoryState: "failed",
+          factoryState: nextState,
         });
         return true;
       });
@@ -1354,6 +1393,26 @@ export class RunOrchestrator {
       });
       void this.linearSync.emitActivity(heldIssue, buildRunFailureActivity(run.runType, verifiedRepairError));
       void this.linearSync.syncSession(heldIssue, { activeRunType: run.runType });
+      this.linearSync.clearProgress(run.id);
+      this.activeThreadId = undefined;
+      this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
+      return;
+    }
+    const missingReviewFixHeadError = await this.verifyReviewFixAdvancedHead(run, freshIssue);
+    if (missingReviewFixHeadError) {
+      this.failRunAndClear(run, missingReviewFixHeadError, "escalated");
+      const failedIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? freshIssue;
+      this.feed?.publish({
+        level: "error",
+        kind: "turn",
+        issueKey: freshIssue.issueKey,
+        projectId: run.projectId,
+        stage: run.runType,
+        status: "same_head_review_handoff_blocked",
+        summary: missingReviewFixHeadError,
+      });
+      void this.linearSync.emitActivity(failedIssue, buildRunFailureActivity(run.runType, missingReviewFixHeadError));
+      void this.linearSync.syncSession(failedIssue, { activeRunType: run.runType });
       this.linearSync.clearProgress(run.id);
       this.activeThreadId = undefined;
       this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
@@ -1566,6 +1625,37 @@ export class RunOrchestrator {
     // Re-read issue after the run was cleared (activeRunId is now null)
     const fresh = this.db.getIssue(issue.projectId, issue.linearIssueId);
     if (!fresh) return;
+
+    if (isRequestedChangesRunType(runType)) {
+      const updated = this.withHeldIssueSessionLease(fresh.projectId, fresh.linearIssueId, (lease) => {
+        this.db.clearPendingIssueSessionEventsWithLease(lease);
+        this.db.upsertIssueWithLease(lease, {
+          projectId: fresh.projectId,
+          linearIssueId: fresh.linearIssueId,
+          pendingRunType: null,
+          pendingRunContextJson: null,
+          factoryState: "escalated",
+        });
+        return true;
+      });
+      if (!updated) {
+        this.logger.warn({ issueKey: fresh.issueKey, reason }, "Skipping review-fix recovery escalation after losing issue-session lease");
+        this.releaseIssueSessionLease(fresh.projectId, fresh.linearIssueId);
+        return;
+      }
+      this.logger.warn({ issueKey: fresh.issueKey, reason }, "Requested-changes run failed before a new head was published — escalating");
+      this.feed?.publish({
+        level: "error",
+        kind: "workflow",
+        issueKey: fresh.issueKey,
+        projectId: fresh.projectId,
+        stage: runType,
+        status: "escalated",
+        summary: `Requested-changes run failed before publishing a new head (${reason})`,
+      });
+      this.releaseIssueSessionLease(fresh.projectId, fresh.linearIssueId);
+      return;
+    }
 
     // If PR already merged, transition to done — no retry needed
     if (fresh.prState === "merged") {
@@ -1793,6 +1883,25 @@ export class RunOrchestrator {
         this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
         return;
       }
+      if (isRequestedChangesRunType(run.runType)) {
+        const interruptedMessage = "Requested-changes run was interrupted before PatchRelay could verify that a new PR head was published";
+        this.failRunAndClear(run, interruptedMessage, "escalated");
+        await this.restoreIdleWorktree(issue);
+        const failedIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
+        this.feed?.publish({
+          level: "error",
+          kind: "workflow",
+          issueKey: issue.issueKey,
+          projectId: run.projectId,
+          stage: "review_fix",
+          status: "escalated",
+          summary: interruptedMessage,
+        });
+        void this.linearSync.emitActivity(failedIssue, buildRunFailureActivity(run.runType, interruptedMessage));
+        void this.linearSync.syncSession(failedIssue, { activeRunType: run.runType });
+        this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
+        return;
+      }
       const recoveredState = resolveRecoverablePostRunState(this.db.getIssue(run.projectId, run.linearIssueId) ?? issue);
       this.failRunAndClear(run, "Codex turn was interrupted", recoveredState);
       await this.restoreIdleWorktree(issue);
@@ -1841,6 +1950,24 @@ export class RunOrchestrator {
         const heldIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? freshIssue;
         void this.linearSync.emitActivity(heldIssue, buildRunFailureActivity(run.runType, verifiedRepairError));
         void this.linearSync.syncSession(heldIssue, { activeRunType: run.runType });
+        this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
+        return;
+      }
+      const missingReviewFixHeadError = await this.verifyReviewFixAdvancedHead(run, freshIssue);
+      if (missingReviewFixHeadError) {
+        this.failRunAndClear(run, missingReviewFixHeadError, "escalated");
+        const failedIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? freshIssue;
+        this.feed?.publish({
+          level: "error",
+          kind: "turn",
+          issueKey: freshIssue.issueKey,
+          projectId: run.projectId,
+          stage: run.runType,
+          status: "same_head_review_handoff_blocked",
+          summary: missingReviewFixHeadError,
+        });
+        void this.linearSync.emitActivity(failedIssue, buildRunFailureActivity(run.runType, missingReviewFixHeadError));
+        void this.linearSync.syncSession(failedIssue, { activeRunType: run.runType });
         this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
         return;
       }
@@ -2049,8 +2176,42 @@ export class RunOrchestrator {
     }
   }
 
+  private async verifyReviewFixAdvancedHead(run: RunRecord, issue: IssueRecord): Promise<string | undefined> {
+    if (!isRequestedChangesRunType(run.runType)) {
+      return undefined;
+    }
+    if (!issue.prNumber || issue.prState !== "open") {
+      return undefined;
+    }
+    if (!run.sourceHeadSha) {
+      return `Requested-changes run finished for PR #${issue.prNumber} without a recorded starting head SHA. PatchRelay cannot verify that a new head was published.`;
+    }
+    const project = this.config.projects.find((entry) => entry.id === run.projectId);
+    if (!project?.github?.repoFullName) {
+      return undefined;
+    }
+    try {
+      const pr = await this.loadRemotePrState(project.github.repoFullName, issue.prNumber);
+      if (!pr || pr.state?.toUpperCase() !== "OPEN") return undefined;
+      if (!pr.headRefOid) {
+        return `Requested-changes run finished for PR #${issue.prNumber} but GitHub did not report a current head SHA.`;
+      }
+      if (pr.headRefOid === run.sourceHeadSha) {
+        return `Requested-changes run finished for PR #${issue.prNumber} without pushing a new head; PatchRelay must not hand the same SHA back to review.`;
+      }
+      return undefined;
+    } catch (error) {
+      this.logger.debug({
+        issueKey: issue.issueKey,
+        prNumber: issue.prNumber,
+        error: error instanceof Error ? error.message : String(error),
+      }, "Failed to verify PR head advancement after requested-changes work");
+      return undefined;
+    }
+  }
+
   private async refreshIssueAfterReactivePublish(run: RunRecord, issue: IssueRecord): Promise<IssueRecord> {
-    if (run.runType !== "ci_repair" && run.runType !== "queue_repair") {
+    if (run.runType !== "ci_repair" && run.runType !== "queue_repair" && !isRequestedChangesRunType(run.runType)) {
       return this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
     }
     if (!issue.prNumber) {
@@ -2072,6 +2233,8 @@ export class RunOrchestrator {
       const nextReviewState = normalizeRemoteReviewDecision(pr.reviewDecision);
       const gateCheckName = project?.gateChecks?.find((entry) => entry.trim())?.trim() ?? "verify";
       const headAdvanced = Boolean(pr.headRefOid && pr.headRefOid !== issue.lastGitHubFailureHeadSha);
+      const reviewFixHeadAdvanced = isRequestedChangesRunType(run.runType)
+        && Boolean(pr.headRefOid && run.sourceHeadSha && pr.headRefOid !== run.sourceHeadSha);
 
       this.upsertIssueIfLeaseHeld(
         run.projectId,
@@ -2082,7 +2245,7 @@ export class RunOrchestrator {
         ...(nextPrState ? { prState: nextPrState } : {}),
         ...(pr.headRefOid ? { prHeadSha: pr.headRefOid } : {}),
         ...(nextReviewState ? { prReviewState: nextReviewState } : {}),
-        ...(headAdvanced
+        ...((headAdvanced || reviewFixHeadAdvanced)
           ? {
               prCheckStatus: "pending",
               lastGitHubFailureSource: null,
@@ -2129,12 +2292,13 @@ export class RunOrchestrator {
     return JSON.parse(stdout) as RemotePrState;
   }
 
-  private async resolveReviewFixWakeContext(
+  private async resolveRequestedChangesWakeContext(
     issue: IssueRecord,
+    runType: RunType,
     context: Record<string, unknown> | undefined,
     project: { github?: { repoFullName?: string; baseBranch?: string } },
   ): Promise<Record<string, unknown> | undefined> {
-    if (isBranchUpkeepRequired(context)) {
+    if (runType === "branch_upkeep" || isBranchUpkeepRequired(context)) {
       return context;
     }
     if (!issue.prNumber || issue.prState !== "open" || issue.prReviewState !== "changes_requested") {
@@ -2180,7 +2344,7 @@ export class RunOrchestrator {
         issueKey: issue.issueKey,
         prNumber: issue.prNumber,
         error: error instanceof Error ? error.message : String(error),
-      }, "Failed to resolve review-fix wake context");
+      }, "Failed to resolve requested-changes wake context");
       return context;
     }
   }
@@ -2230,7 +2394,7 @@ export class RunOrchestrator {
       if (!isDirtyMergeStateStatus(pr.mergeStateStatus)) return undefined;
 
       return {
-        pendingRunType: "review_fix",
+        pendingRunType: "branch_upkeep",
         factoryState: "changes_requested",
         context: buildReviewFixBranchUpkeepContext(
           issue.prNumber,
@@ -2624,14 +2788,16 @@ function buildReviewFixBranchUpkeepContext(
   context?: Record<string, unknown>,
 ): Record<string, unknown> {
   const promptContext = [
-    `The requested review change is already addressed, but GitHub still reports PR #${prNumber} as ${String(pr.mergeStateStatus)} against latest ${baseBranch}.`,
-    `Before stopping, update the existing PR branch onto latest ${baseBranch}, resolve any conflicts, rerun the narrowest relevant verification, and push again.`,
-    "Do not stop just because the requested code change is already present.",
+    `The requested code change may already be present, but GitHub still reports PR #${prNumber} as ${String(pr.mergeStateStatus)} against latest ${baseBranch}.`,
+    `This turn is branch upkeep on the existing PR branch: update onto latest ${baseBranch}, resolve any conflicts, rerun the narrowest relevant verification, and push a newer head.`,
+    "Do not stop just because the requested code change is already present. Review can only move forward after a new pushed head.",
   ].join(" ");
 
   return {
     ...(context ?? {}),
     branchUpkeepRequired: true,
+    reviewFixMode: "branch_upkeep",
+    wakeReason: "branch_upkeep",
     promptContext,
     ...(pr.mergeStateStatus ? { mergeStateStatus: pr.mergeStateStatus } : {}),
     ...(pr.headRefOid ? { failingHeadSha: pr.headRefOid } : {}),

@@ -27,6 +27,7 @@ const RUN_LABELS: Record<string, string> = {
   implementation: "implementation",
   ci_repair: "ci repair",
   review_fix: "review fix",
+  branch_upkeep: "branch upkeep",
   queue_repair: "queue repair",
 };
 

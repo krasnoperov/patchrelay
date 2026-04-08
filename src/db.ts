@@ -217,6 +217,7 @@ export class PatchRelayDatabase {
     prAuthorLogin?: string | null;
     prReviewState?: string | null;
     prCheckStatus?: string | null;
+    lastBlockingReviewHeadSha?: string | null;
     lastGitHubFailureSource?: GitHubFailureSource | null;
     lastGitHubFailureHeadSha?: string | null;
     lastGitHubFailureSignature?: string | null;
@@ -273,6 +274,7 @@ export class PatchRelayDatabase {
       if (params.prAuthorLogin !== undefined) { sets.push("pr_author_login = @prAuthorLogin"); values.prAuthorLogin = params.prAuthorLogin; }
       if (params.prReviewState !== undefined) { sets.push("pr_review_state = @prReviewState"); values.prReviewState = params.prReviewState; }
       if (params.prCheckStatus !== undefined) { sets.push("pr_check_status = @prCheckStatus"); values.prCheckStatus = params.prCheckStatus; }
+      if (params.lastBlockingReviewHeadSha !== undefined) { sets.push("last_blocking_review_head_sha = @lastBlockingReviewHeadSha"); values.lastBlockingReviewHeadSha = params.lastBlockingReviewHeadSha; }
       if (params.lastGitHubFailureSource !== undefined) { sets.push("last_github_failure_source = @lastGitHubFailureSource"); values.lastGitHubFailureSource = params.lastGitHubFailureSource; }
       if (params.lastGitHubFailureHeadSha !== undefined) { sets.push("last_github_failure_head_sha = @lastGitHubFailureHeadSha"); values.lastGitHubFailureHeadSha = params.lastGitHubFailureHeadSha; }
       if (params.lastGitHubFailureSignature !== undefined) { sets.push("last_github_failure_signature = @lastGitHubFailureSignature"); values.lastGitHubFailureSignature = params.lastGitHubFailureSignature; }
@@ -303,7 +305,7 @@ export class PatchRelayDatabase {
           current_linear_state, current_linear_state_type, factory_state, pending_run_type, pending_run_context_json,
           branch_name, worktree_path, thread_id, active_run_id, status_comment_id,
           agent_session_id,
-          pr_number, pr_url, pr_state, pr_head_sha, pr_author_login, pr_review_state, pr_check_status,
+          pr_number, pr_url, pr_state, pr_head_sha, pr_author_login, pr_review_state, pr_check_status, last_blocking_review_head_sha,
           last_github_failure_source, last_github_failure_head_sha, last_github_failure_signature, last_github_failure_check_name, last_github_failure_check_url, last_github_failure_context_json, last_github_failure_at,
           last_github_ci_snapshot_head_sha, last_github_ci_snapshot_gate_check_name, last_github_ci_snapshot_gate_check_status, last_github_ci_snapshot_json, last_github_ci_snapshot_settled_at,
           last_queue_signal_at, last_queue_incident_json,
@@ -315,7 +317,7 @@ export class PatchRelayDatabase {
           @currentLinearState, @currentLinearStateType, @factoryState, @pendingRunType, @pendingRunContextJson,
           @branchName, @worktreePath, @threadId, @activeRunId, @statusCommentId,
           @agentSessionId,
-          @prNumber, @prUrl, @prState, @prHeadSha, @prAuthorLogin, @prReviewState, @prCheckStatus,
+          @prNumber, @prUrl, @prState, @prHeadSha, @prAuthorLogin, @prReviewState, @prCheckStatus, @lastBlockingReviewHeadSha,
           @lastGitHubFailureSource, @lastGitHubFailureHeadSha, @lastGitHubFailureSignature, @lastGitHubFailureCheckName, @lastGitHubFailureCheckUrl, @lastGitHubFailureContextJson, @lastGitHubFailureAt,
           @lastGitHubCiSnapshotHeadSha, @lastGitHubCiSnapshotGateCheckName, @lastGitHubCiSnapshotGateCheckStatus, @lastGitHubCiSnapshotJson, @lastGitHubCiSnapshotSettledAt,
           @lastQueueSignalAt, @lastQueueIncidentJson,
@@ -349,6 +351,7 @@ export class PatchRelayDatabase {
         prAuthorLogin: params.prAuthorLogin ?? null,
         prReviewState: params.prReviewState ?? null,
         prCheckStatus: params.prCheckStatus ?? null,
+        lastBlockingReviewHeadSha: params.lastBlockingReviewHeadSha ?? null,
         lastGitHubFailureSource: params.lastGitHubFailureSource ?? null,
         lastGitHubFailureHeadSha: params.lastGitHubFailureHeadSha ?? null,
         lastGitHubFailureSignature: params.lastGitHubFailureSignature ?? null,
@@ -1026,17 +1029,19 @@ export class PatchRelayDatabase {
     projectId: string;
     linearIssueId: string;
     runType: RunType;
+    sourceHeadSha?: string;
     promptText?: string;
   }): RunRecord {
     const now = isoNow();
     const result = this.connection.prepare(`
-      INSERT INTO runs (issue_id, project_id, linear_issue_id, run_type, status, prompt_text, started_at)
-      VALUES (?, ?, ?, ?, 'queued', ?, ?)
+      INSERT INTO runs (issue_id, project_id, linear_issue_id, run_type, status, source_head_sha, prompt_text, started_at)
+      VALUES (?, ?, ?, ?, 'queued', ?, ?, ?)
     `).run(
       params.issueId,
       params.projectId,
       params.linearIssueId,
       params.runType,
+      params.sourceHeadSha ?? null,
       params.promptText ?? null,
       now,
     );
@@ -1194,8 +1199,10 @@ export class PatchRelayDatabase {
       factoryState: issue.factoryState,
       pendingRunType: issue.pendingRunType,
       prNumber: issue.prNumber,
+      prHeadSha: issue.prHeadSha,
       prReviewState: issue.prReviewState,
       prCheckStatus: issue.prCheckStatus,
+      lastBlockingReviewHeadSha: issue.lastBlockingReviewHeadSha,
       latestFailureCheckName: issue.lastGitHubFailureCheckName,
     });
     const latestRun = this.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
@@ -1520,6 +1527,9 @@ function mapIssueRow(row: Record<string, unknown>): IssueRecord {
     ...(row.pr_author_login !== null && row.pr_author_login !== undefined ? { prAuthorLogin: String(row.pr_author_login) } : {}),
     ...(row.pr_review_state !== null && row.pr_review_state !== undefined ? { prReviewState: String(row.pr_review_state) } : {}),
     ...(row.pr_check_status !== null && row.pr_check_status !== undefined ? { prCheckStatus: String(row.pr_check_status) } : {}),
+    ...(row.last_blocking_review_head_sha !== null && row.last_blocking_review_head_sha !== undefined
+      ? { lastBlockingReviewHeadSha: String(row.last_blocking_review_head_sha) }
+      : {}),
     ...(row.last_github_failure_source !== null && row.last_github_failure_source !== undefined
       ? { lastGitHubFailureSource: String(row.last_github_failure_source) as GitHubFailureSource }
       : {}),
@@ -1629,6 +1639,7 @@ function mapRunRow(row: Record<string, unknown>): RunRecord {
     linearIssueId: String(row.linear_issue_id),
     runType: String(row.run_type ?? "implementation") as RunType,
     status: String(row.status) as RunStatus,
+    ...(row.source_head_sha !== null ? { sourceHeadSha: String(row.source_head_sha) } : {}),
     ...(row.prompt_text !== null ? { promptText: String(row.prompt_text) } : {}),
     ...(row.thread_id !== null ? { threadId: String(row.thread_id) } : {}),
     ...(row.turn_id !== null ? { turnId: String(row.turn_id) } : {}),

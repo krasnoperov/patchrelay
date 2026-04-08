@@ -80,6 +80,13 @@ export interface PullRequestReviewRecord {
   commitId?: string;
 }
 
+export interface PriorReviewClaim {
+  authorLogin?: string;
+  state?: string;
+  commitId?: string;
+  excerpt: string;
+}
+
 export interface CheckRunRecord {
   id: number;
   name: string;
@@ -136,7 +143,7 @@ export interface ReviewDiffContext {
 
 export interface PromptContext {
   guidanceDocs: GuidanceDoc[];
-  priorReviews: PullRequestReviewRecord[];
+  priorReviewClaims: PriorReviewClaim[];
   issueKeys: string[];
 }
 

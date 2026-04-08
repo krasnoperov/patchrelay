@@ -83,6 +83,7 @@ interface GitHubPullRequestSnapshot {
   mergeStateStatus?: string | undefined;
   headRefOid?: string | undefined;
   reviewRequests?: unknown[] | undefined;
+  latestReviews?: unknown[] | undefined;
   statusCheckRollup?: GitHubStatusRollupEntry[] | undefined;
 }
 
@@ -414,6 +415,7 @@ async function evaluateGitHubIssueHealth(
   const reviewDecision = pr.reviewDecision?.trim().toUpperCase();
   const requestedReviewers = extractRequestedReviewerLogins(pr.reviewRequests);
   const reviewRequested = requestedReviewers.length > 0;
+  const latestBlockingReviewHeadSha = extractLatestBlockingReviewHeadSha(pr.latestReviews);
   const mergeConflictDetected = pr.mergeable === "CONFLICTING" || pr.mergeStateStatus === "DIRTY";
   const reviewQuillAttempt = issue.issueKey ? reviewQuillAttemptOwners?.get(issue.issueKey) : undefined;
   const ciEntry = buildCiEntry({
@@ -421,6 +423,8 @@ async function evaluateGitHubIssueHealth(
     gateCheckStatus,
     reviewDecision,
     reviewRequested,
+    currentHeadSha: pr.headRefOid,
+    latestBlockingReviewHeadSha,
     mergeConflictDetected,
     reviewQuillAttempt,
   });
@@ -472,8 +476,9 @@ async function evaluateGitHubIssueHealth(
   if (
     gateCheckStatus === "success"
     && reviewDecision === "CHANGES_REQUESTED"
-    && !reviewRequested
+    && latestBlockingReviewHeadSha === pr.headRefOid
     && !reviewQuillAttempt
+    && issue.factoryState !== "changes_requested"
     && ageMs >= RECONCILIATION_GRACE_MS
   ) {
     return {
@@ -481,24 +486,7 @@ async function evaluateGitHubIssueHealth(
       finding: {
         status: "fail",
         scope: "github:review-handoff",
-        message: "PR is waiting on re-review but no reviewer is currently requested",
-      },
-    };
-  }
-
-  if (
-    gateCheckStatus === "success"
-    && reviewDecision === "REVIEW_REQUIRED"
-    && !reviewRequested
-    && !reviewQuillAttempt
-    && ageMs >= RECONCILIATION_GRACE_MS
-  ) {
-    return {
-      ciEntry,
-      finding: {
-        status: "fail",
-        scope: "github:review-handoff",
-        message: "PR needs review but no reviewer is currently requested",
+        message: "Requested changes still block the current head, but no review fix is running",
       },
     };
   }
@@ -544,15 +532,28 @@ function buildCiEntry(params: {
   gateCheckStatus: "pending" | "success" | "failure" | "unknown";
   reviewDecision?: string | undefined;
   reviewRequested: boolean;
+  currentHeadSha?: string | undefined;
+  latestBlockingReviewHeadSha?: string | undefined;
   mergeConflictDetected: boolean;
   reviewQuillAttempt?: ReviewQuillAttemptOwnership | undefined;
 }): ClusterCiEntry {
-  const { issue, gateCheckStatus, reviewDecision, reviewRequested, mergeConflictDetected, reviewQuillAttempt } = params;
+  const {
+    issue,
+    gateCheckStatus,
+    reviewDecision,
+    reviewRequested,
+    currentHeadSha,
+    latestBlockingReviewHeadSha,
+    mergeConflictDetected,
+    reviewQuillAttempt,
+  } = params;
   const owner = deriveCiOwner({
     gateCheckStatus,
     factoryState: issue.factoryState,
     reviewDecision,
     reviewRequested,
+    currentHeadSha,
+    latestBlockingReviewHeadSha,
     mergeConflictDetected,
     reviewQuillAttempt,
   });
@@ -570,6 +571,8 @@ function buildCiEntry(params: {
       owner,
       reviewDecision,
       reviewRequested,
+      currentHeadSha,
+      latestBlockingReviewHeadSha,
       mergeConflictDetected,
       reviewQuillAttempt,
     }),
@@ -581,9 +584,16 @@ function deriveCiOwner(params: {
   factoryState: string;
   reviewDecision?: string | undefined;
   reviewRequested: boolean;
+  currentHeadSha?: string | undefined;
+  latestBlockingReviewHeadSha?: string | undefined;
   mergeConflictDetected: boolean;
   reviewQuillAttempt?: ReviewQuillAttemptOwnership | undefined;
 }): "patchrelay" | "reviewer" | "review-quill" | "downstream" | "external" | "unknown" {
+  const headAdvancedPastBlockingReview = Boolean(
+    params.currentHeadSha
+      && params.latestBlockingReviewHeadSha
+      && params.currentHeadSha !== params.latestBlockingReviewHeadSha,
+  );
   if (params.gateCheckStatus === "failure") {
     return params.factoryState === "repairing_ci" ? "patchrelay" : "unknown";
   }
@@ -595,9 +605,15 @@ function deriveCiOwner(params: {
       ? "unknown"
       : "downstream";
   }
-  if (params.reviewDecision === "CHANGES_REQUESTED" || params.reviewDecision === "REVIEW_REQUIRED") {
+  if (params.reviewDecision === "CHANGES_REQUESTED") {
     if (params.factoryState === "changes_requested") return "patchrelay";
     if (params.reviewQuillAttempt) return "review-quill";
+    if (headAdvancedPastBlockingReview) return "reviewer";
+    return "unknown";
+  }
+  if (params.reviewDecision === "REVIEW_REQUIRED") {
+    if (params.reviewQuillAttempt) return "review-quill";
+    if (params.gateCheckStatus === "success") return "reviewer";
     return params.reviewRequested ? "reviewer" : "unknown";
   }
   if (params.gateCheckStatus === "success" && params.factoryState === "pr_open") {
@@ -611,9 +627,21 @@ function describeCiOwnership(params: {
   owner: "patchrelay" | "reviewer" | "review-quill" | "downstream" | "external" | "unknown";
   reviewDecision?: string | undefined;
   reviewRequested: boolean;
+  currentHeadSha?: string | undefined;
+  latestBlockingReviewHeadSha?: string | undefined;
   mergeConflictDetected: boolean;
   reviewQuillAttempt?: ReviewQuillAttemptOwnership | undefined;
 }): string {
+  const blockingReviewTargetsCurrentHead = Boolean(
+    params.currentHeadSha
+      && params.latestBlockingReviewHeadSha
+      && params.currentHeadSha === params.latestBlockingReviewHeadSha,
+  );
+  const headAdvancedPastBlockingReview = Boolean(
+    params.currentHeadSha
+      && params.latestBlockingReviewHeadSha
+      && params.currentHeadSha !== params.latestBlockingReviewHeadSha,
+  );
   if (params.owner === "patchrelay") {
     return params.gateCheckStatus === "failure"
       ? "PatchRelay owns the next CI repair move"
@@ -625,9 +653,12 @@ function describeCiOwnership(params: {
       : "review-quill owns the current review attempt";
   }
   if (params.owner === "reviewer") {
+    if (headAdvancedPastBlockingReview) {
+      return "Waiting on review of a newer pushed head";
+    }
     return params.reviewRequested
       ? "Waiting on an active reviewer request"
-      : "Waiting on review";
+      : "Waiting on review of the current head";
   }
   if (params.owner === "downstream") {
     return params.mergeConflictDetected
@@ -640,10 +671,12 @@ function describeCiOwnership(params: {
       : "Waiting on external GitHub automation";
   }
   if (params.reviewDecision === "CHANGES_REQUESTED") {
-    return "No active reviewer request; re-review handoff is stale";
+    return blockingReviewTargetsCurrentHead
+      ? "Requested changes still block the same head and no fix run is active"
+      : "Waiting on review after a newer pushed head";
   }
   if (params.reviewDecision === "REVIEW_REQUIRED") {
-    return "No active reviewer request; review handoff is stale";
+    return "Waiting on review of the current head";
   }
   return "No visible next owner for this PR state";
 }
@@ -882,7 +915,7 @@ async function probeGitHubPullRequest(
       "--repo",
       repoFullName,
       "--json",
-      "state,reviewDecision,reviewRequests,statusCheckRollup,mergeable,mergeStateStatus,headRefOid",
+      "state,reviewDecision,reviewRequests,latestReviews,statusCheckRollup,mergeable,mergeStateStatus,headRefOid",
     ]);
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
@@ -901,6 +934,24 @@ async function probeGitHubPullRequest(
   }
 
   return { ok: true, pr: parsed as GitHubPullRequestSnapshot };
+}
+
+function extractLatestBlockingReviewHeadSha(latestReviews: unknown[] | undefined): string | undefined {
+  if (!Array.isArray(latestReviews)) {
+    return undefined;
+  }
+  for (const review of latestReviews) {
+    if (!review || typeof review !== "object") continue;
+    const state = typeof (review as { state?: unknown }).state === "string"
+      ? String((review as { state: string }).state).trim().toUpperCase()
+      : undefined;
+    if (state !== "CHANGES_REQUESTED") continue;
+    const commitOid = typeof (review as { commit?: { oid?: unknown } }).commit?.oid === "string"
+      ? String((review as { commit: { oid: string } }).commit.oid).trim()
+      : undefined;
+    if (commitOid) return commitOid;
+  }
+  return undefined;
 }
 
 function extractRequestedReviewerLogins(requests: unknown[] | undefined): string[] {

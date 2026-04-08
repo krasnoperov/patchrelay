@@ -53,6 +53,7 @@ export interface IssueRecord {
   prAuthorLogin?: string | undefined;
   prReviewState?: string | undefined;
   prCheckStatus?: string | undefined;
+  lastBlockingReviewHeadSha?: string | undefined;
   lastGitHubFailureSource?: GitHubFailureSource | undefined;
   lastGitHubFailureHeadSha?: string | undefined;
   lastGitHubFailureSignature?: string | undefined;
@@ -115,6 +116,7 @@ export interface RunRecord {
   linearIssueId: string;
   runType: RunType;
   status: RunStatus;
+  sourceHeadSha?: string | undefined;
   promptText?: string | undefined;
   threadId?: string | undefined;
   turnId?: string | undefined;

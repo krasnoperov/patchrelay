@@ -129,6 +129,28 @@ Linear delegate event
 -> merged or closed -> session terminates
 ```
 
+## GitHub Review Loop Contract
+
+The requested-changes loop should be explainable from GitHub alone.
+
+- PatchRelay communicates review follow-up by pushing a new commit to the existing PR branch.
+- Review automation communicates only by GitHub reviews (`APPROVED` or `CHANGES_REQUESTED`).
+- Green CI on the latest head is a precondition for review, not a handoff performed by PatchRelay.
+- PatchRelay must never hand the same head SHA back to review after requested changes.
+- If requested-changes work ends without a new pushed head, that is a PatchRelay/system failure and must escalate.
+
+In simple terms:
+
+```text
+reviewer requests changes on head X
+-> PatchRelay works on head X
+-> either PatchRelay pushes head Y, or PatchRelay escalates
+-> GitHub CI goes green on head Y
+-> reviewer reviews head Y
+```
+
+Anything that looks like "requested changes were handled, but the PR is still on head X" is a broken state, not normal waiting.
+
 ## Ownership Model
 
 PatchRelay distinguishes:

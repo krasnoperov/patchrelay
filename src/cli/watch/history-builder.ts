@@ -42,6 +42,7 @@ const RUN_TYPE_TO_STATE: Record<string, string> = {
   implementation: "implementing",
   ci_repair: "repairing_ci",
   review_fix: "changes_requested",
+  branch_upkeep: "changes_requested",
   queue_repair: "repairing_queue",
 };
 
