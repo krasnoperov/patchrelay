@@ -117,14 +117,15 @@ test("review_fix prompt includes explicit branch upkeep guidance when the PR is 
 
     assert.match(prompt, /## Follow-up Turn/);
     assert.match(prompt, /Why this turn exists: GitHub still shows the PR branch as needing upkeep after the requested code change was addressed/);
+    assert.match(prompt, /## Branch Upkeep After Requested Changes/);
     assert.match(prompt, /## Fact Freshness/);
     assert.match(prompt, /GitHub facts below were refreshed immediately before this turn was created/);
     assert.match(prompt, /## Authoritative GitHub Facts/);
     assert.match(prompt, /Current PR: #12/);
     assert.match(prompt, /Current review state: changes_requested/);
     assert.match(prompt, /Merge state against main: DIRTY/);
-    assert.match(prompt, /GitHub still reports PR #12 as DIRTY against latest main/);
     assert.match(prompt, /update the existing PR branch onto latest main/);
+    assert.doesNotMatch(prompt, /## Review Changes Requested/);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

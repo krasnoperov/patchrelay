@@ -228,6 +228,14 @@ interface ReviewFixCommentContext {
   authorLogin?: string | undefined;
 }
 
+type ReviewFixMode = "address_review_feedback" | "branch_upkeep";
+
+function resolveReviewFixMode(context?: Record<string, unknown>): ReviewFixMode {
+  return context?.reviewFixMode === "branch_upkeep" || context?.branchUpkeepRequired === true
+    ? "branch_upkeep"
+    : "address_review_feedback";
+}
+
 function readReviewFixComments(context?: Record<string, unknown>): ReviewFixCommentContext[] {
   const raw = context?.reviewComments;
   if (!Array.isArray(raw)) {
@@ -335,7 +343,11 @@ function resolveFollowUpWhy(runType: RunType, context?: Record<string, unknown>)
         ? "This is the first implementation turn for the delegated issue."
         : `This turn continues ${runType.replaceAll("_", " ")} work for the delegated issue.`;
     default:
-      if (runType === "review_fix") return "This turn continues requested-changes work on the existing PR.";
+      if (runType === "review_fix") {
+        return resolveReviewFixMode(context) === "branch_upkeep"
+          ? "This turn continues branch upkeep on the existing PR after requested changes."
+          : "This turn continues requested-changes work on the existing PR.";
+      }
       if (runType === "ci_repair") return "This turn continues CI repair work on the existing PR.";
       if (runType === "queue_repair") return "This turn continues merge-queue repair work on the existing PR.";
       return "This turn continues implementation on the existing issue session.";
@@ -346,8 +358,8 @@ function resolveFollowUpAction(runType: RunType, context?: Record<string, unknow
   if (context?.directReplyMode === true) {
     return "Apply the latest human answer, continue from the current branch/session context, and only ask another question if you are still blocked.";
   }
-  if (runType === "review_fix" && context?.branchUpkeepRequired === true) {
-    const baseBranch = typeof context.baseBranch === "string" ? context.baseBranch : "main";
+  if (runType === "review_fix" && resolveReviewFixMode(context) === "branch_upkeep") {
+    const baseBranch = typeof context?.baseBranch === "string" ? context.baseBranch : "main";
     return `Update the existing PR branch onto latest ${baseBranch}, resolve conflicts if needed, rerun narrow verification, and push a newer head on the same branch.`;
   }
   switch (runType) {
@@ -477,6 +489,46 @@ function appendFollowUpPromptPrelude(
   appendAuthoritativeGitHubFacts(lines, issue, runType, context);
 }
 
+function appendReviewFixInstructions(lines: string[], context?: Record<string, unknown>): void {
+  if (resolveReviewFixMode(context) === "branch_upkeep") {
+    const baseBranch = typeof context?.baseBranch === "string" ? context.baseBranch : "main";
+    lines.push(
+      "## Branch Upkeep After Requested Changes",
+      "",
+      "The requested code change may already be present, but the PR branch still needs upkeep before review can continue.",
+      typeof context?.mergeStateStatus === "string" ? `Current merge state: ${String(context.mergeStateStatus)}` : "",
+      "",
+      "Steps:",
+      `1. Update the existing PR branch onto latest ${baseBranch}.`,
+      "2. Resolve conflicts or branch drift without reopening the review-feedback debate unless the merge introduces a new issue.",
+      "3. Run the narrowest verification that proves the branch is healthy again.",
+      "4. Commit and push a newer head on the existing PR branch.",
+      "5. If you cannot produce a new pushed head, stop and surface the exact blocker.",
+      "",
+    );
+    return;
+  }
+
+  lines.push(
+    "## Review Changes Requested",
+    "",
+    "A reviewer has requested changes on your PR. Address the feedback and push.",
+    context?.reviewerName ? `Reviewer: ${String(context.reviewerName)}` : "",
+    context?.reviewBody ? `\n## Review comment\n\n${String(context.reviewBody)}` : "",
+    "",
+    "Steps:",
+    "1. Start with the structured review context below. Treat the inline review comments as the primary repair checklist for this turn.",
+    "2. Check the current diff (`git diff origin/main`) — a prior rebase may have already resolved some concerns (e.g., scope-bundling from stale commits).",
+    "3. For each review point: if already resolved on the current head, note why. If not, fix it.",
+    "4. If the structured review context looks incomplete, inspect the latest GitHub review threads directly before deciding you are done.",
+    "5. Run verification, commit, and push a newer head on the existing PR branch.",
+    "6. Do not try to hand the same head back to review. If you cannot produce a new pushed head, stop and surface the blocker clearly.",
+    "7. GitHub review happens after the new head is pushed and CI is green. Do not use `gh pr edit --add-reviewer` as part of this workflow.",
+    "",
+  );
+  appendStructuredReviewContext(lines, context);
+}
+
 export function buildInitialRunPrompt(issue: IssueRecord, runType: RunType, repoPath: string, context?: Record<string, unknown>): string {
   const lines: string[] = buildPromptHeader(issue);
   appendTaskObjective(lines, issue);
@@ -524,24 +576,7 @@ export function buildInitialRunPrompt(issue: IssueRecord, runType: RunType, repo
       break;
     }
     case "review_fix":
-      lines.push(
-        "## Review Changes Requested",
-        "",
-        "A reviewer has requested changes on your PR. Address the feedback and push.",
-        context?.reviewerName ? `Reviewer: ${String(context.reviewerName)}` : "",
-        context?.reviewBody ? `\n## Review comment\n\n${String(context.reviewBody)}` : "",
-        "",
-        "Steps:",
-        "1. Start with the structured review context below. Treat the inline review comments as the primary repair checklist for this turn.",
-        "2. Check the current diff (`git diff origin/main`) — a prior rebase may have already resolved some concerns (e.g., scope-bundling from stale commits).",
-        "3. For each review point: if already resolved on the current head, note why. If not, fix it.",
-        "4. If the structured review context looks incomplete, inspect the latest GitHub review threads directly before deciding you are done.",
-        "5. Run verification, commit, and push a newer head on the existing PR branch.",
-        "6. Do not try to hand the same head back to review. If you cannot produce a new pushed head, stop and surface the blocker clearly.",
-        "7. GitHub review happens after the new head is pushed and CI is green. Do not use `gh pr edit --add-reviewer` as part of this workflow.",
-        "",
-      );
-      appendStructuredReviewContext(lines, context);
+      appendReviewFixInstructions(lines, context);
       break;
     case "queue_repair":
       appendQueueRepairContext(lines, context);
@@ -617,24 +652,7 @@ export function buildFollowUpRunPrompt(issue: IssueRecord, runType: RunType, rep
       break;
     }
     case "review_fix":
-      lines.push(
-        "## Review Changes Requested",
-        "",
-        "A reviewer has requested changes on your PR. Address the feedback and push.",
-        context?.reviewerName ? `Reviewer: ${String(context.reviewerName)}` : "",
-        context?.reviewBody ? `\n## Review comment\n\n${String(context.reviewBody)}` : "",
-        "",
-        "Steps:",
-        "1. Start with the structured review context below. Treat the inline review comments as the primary repair checklist for this turn.",
-        "2. Check the current diff (`git diff origin/main`) — a prior rebase may have already resolved some concerns (e.g., scope-bundling from stale commits).",
-        "3. For each review point: if already resolved on the current head, note why. If not, fix it.",
-        "4. If the structured review context looks incomplete, inspect the latest GitHub review threads directly before deciding you are done.",
-        "5. Run verification, commit, and push a newer head on the existing PR branch.",
-        "6. Do not try to hand the same head back to review. If you cannot produce a new pushed head, stop and surface the blocker clearly.",
-        "7. GitHub review happens after the new head is pushed and CI is green. Do not use `gh pr edit --add-reviewer` as part of this workflow.",
-        "",
-      );
-      appendStructuredReviewContext(lines, context);
+      appendReviewFixInstructions(lines, context);
       break;
     case "queue_repair":
       appendQueueRepairContext(lines, context);
@@ -2766,6 +2784,7 @@ function buildReviewFixBranchUpkeepContext(
   return {
     ...(context ?? {}),
     branchUpkeepRequired: true,
+    reviewFixMode: "branch_upkeep",
     wakeReason: "branch_upkeep",
     promptContext,
     ...(pr.mergeStateStatus ? { mergeStateStatus: pr.mergeStateStatus } : {}),
