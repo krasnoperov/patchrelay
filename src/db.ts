@@ -1450,6 +1450,9 @@ export class PatchRelayDatabase {
     }
 
     const latestSummary = extractLatestAssistantSummary(latestRun);
+    if (latestRun && (latestRun.status === "queued" || latestRun.status === "running")) {
+      return latestSummary;
+    }
     if (this.shouldKeepPreviousIssueSummary(issue, latestRun)) {
       return this.findLatestCompletedRunSummary(issue.projectId, issue.linearIssueId)
         ?? existingSummaryText

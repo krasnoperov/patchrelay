@@ -610,6 +610,8 @@ function blockerText(issue: WatchIssue, issueContext: WatchIssueContext | null):
   if (issue.sessionState === "failed" || issue.factoryState === "failed" || issue.factoryState === "escalated") {
     return issue.statusNote ?? issue.waitingReason ?? "Needs operator intervention";
   }
+  if (issue.waitingReason && issue.activeRunType && issue.factoryState === "pr_open") return issue.waitingReason;
+  if (issue.waitingReason && issue.activeRunType && issue.factoryState === "awaiting_queue") return issue.waitingReason;
   if (issue.waitingReason && !issue.activeRunType) return issue.waitingReason;
   if (issue.blockedByCount > 0) return `Waiting on ${issue.blockedByKeys.join(", ")}`;
   if (effectiveState(issue) === "repairing_queue") return "Merge queue conflict, repairing branch";

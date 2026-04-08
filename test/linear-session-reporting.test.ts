@@ -137,6 +137,22 @@ test("run completion activity summarizes the next visible milestone", () => {
   });
 });
 
+test("run completion activity unwraps shell-wrapped verification commands", () => {
+  const activity = buildRunCompletedActivity({
+    runType: "implementation",
+    completionSummary:
+      "Verification passed with `/bin/bash -lc 'npm run test:ui:local -- tests/ui/app-shell.spec.ts tests/ui/game-flow.spec.ts'`.",
+    postRunState: "pr_open",
+    prNumber: 42,
+  });
+
+  assert.deepEqual(activity, {
+    type: "response",
+    body:
+      "Implementation completed.\n\nPR #42 is ready for review.\n\nVerification passed with `npm run test:ui:local -- tests/ui/app-shell.spec.ts tests/ui/game-flow.spec.ts`.",
+  });
+});
+
 test("linear summaries prefer session state over factory state", () => {
   assert.equal(
     summarizeIssueStateForLinear({
@@ -155,12 +171,13 @@ test("linear summaries prefer session state over factory state", () => {
     summarizeIssueStateForLinear({
       factoryState: "pr_open",
       sessionState: "running",
+      waitingReason: "PatchRelay is finalizing a published PR",
       prNumber: 8,
       prState: "open",
       prReviewState: "approved",
       prCheckStatus: "passed",
     }),
-    "PR #8 is actively running.",
+    "PatchRelay is finalizing a published PR",
   );
 });
 

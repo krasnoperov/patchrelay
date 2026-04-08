@@ -10,7 +10,7 @@
 - PR titles and merge commit titles do not control release versioning here; the release planner reads non-merge commit subjects.
 - Keep release-related workflow or package changes small and explicit so the release planner can attribute them to the correct package.
 
-## Review Handoff
+## PatchRelay Workflow
 
-- PatchRelay must not hand off the same PR head back to review after requested changes.
-- If requested-changes work ends without a new pushed head because the app-server turn failed, that is a PatchRelay/system failure and must be evaluated and fixed in PatchRelay rather than papered over with a re-review handoff.
+- PatchRelay must not hand off the same PR head back to review after requested changes. A requested-changes repair must produce a new pushed head before the issue can return to review.
+- If the app-server terminates, loses the turn, or otherwise finishes requested-changes work without pushing a new head, treat that as a PatchRelay/system failure that must be evaluated and fixed in PatchRelay so the state cannot recur.

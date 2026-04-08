@@ -1,5 +1,7 @@
 export const PATCHRELAY_WAITING_REASONS = {
   activeWork: "PatchRelay is actively working",
+  finalizingPublishedPr: "PatchRelay is finalizing a published PR",
+  finalizingMergedChange: "PatchRelay is finalizing a merged change",
   waitingForOperatorInput: "Waiting on operator input",
   waitingForReviewFeedback: "Waiting to address review feedback",
   waitingForReviewOnNewHead: "Waiting on review of a newer pushed head",
@@ -27,6 +29,12 @@ export function derivePatchRelayWaitingReason(params: {
   latestFailureCheckName?: string | undefined;
 }): PatchRelayWaitingReason | undefined {
   if (params.activeRunType) {
+    if (params.prNumber !== undefined && (params.factoryState === "pr_open" || params.factoryState === "awaiting_queue")) {
+      return PATCHRELAY_WAITING_REASONS.finalizingPublishedPr;
+    }
+    if (params.factoryState === "done") {
+      return PATCHRELAY_WAITING_REASONS.finalizingMergedChange;
+    }
     return `PatchRelay is running ${humanize(params.activeRunType)}`;
   }
   if (params.activeRunId !== undefined) {

@@ -1,9 +1,9 @@
 import type { IssueRecord, IssueSessionEventRecord, RunRecord } from "./db-types.ts";
 import { extractLatestAssistantSummary } from "./issue-session-events.ts";
+import { sanitizeOperatorFacingText } from "./presentation-text.ts";
 
 function clean(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
+  return sanitizeOperatorFacingText(value);
 }
 
 function eventStatusNote(event: IssueSessionEventRecord | undefined): string | undefined {

@@ -48,6 +48,8 @@ function shouldSuppressStatusNote(params: {
   const note = params.statusNote?.trim().toLowerCase();
   if (!note) return true;
   return note === "codex turn was interrupted"
+    || note.startsWith("zombie: never started")
+    || note === "stale thread after restart"
     || note === "patchrelay received your mention. delegate the issue to patchrelay to start work.";
 }
 

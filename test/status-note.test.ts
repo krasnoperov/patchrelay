@@ -35,3 +35,27 @@ test("deriveIssueStatusNote still prefers explicit operator events for escalated
 
   assert.equal(note, "Operator stopped the run. Use retry or delegate again to resume.");
 });
+
+test("deriveIssueStatusNote unwraps shell-wrapped commands in assistant summaries", () => {
+  const note = deriveIssueStatusNote({
+    issue: { factoryState: "done" },
+    latestRun: {
+      id: 1,
+      issueId: 1,
+      projectId: "project",
+      linearIssueId: "issue-1",
+      runType: "implementation",
+      status: "completed",
+      startedAt: "2026-04-07T22:30:00.000Z",
+      summaryJson: JSON.stringify({
+        latestAssistantMessage:
+          "Verification passed with `/bin/bash -lc 'npm run test:ui:local -- tests/ui/app-shell.spec.ts tests/ui/game-flow.spec.ts'`.",
+      }),
+    } as never,
+  });
+
+  assert.equal(
+    note,
+    "Verification passed with `npm run test:ui:local -- tests/ui/app-shell.spec.ts tests/ui/game-flow.spec.ts`.",
+  );
+});

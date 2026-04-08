@@ -3,13 +3,14 @@ import type { FactoryState, RunType } from "./factory-state.ts";
 import type { NormalizedGitHubEvent } from "./github-types.ts";
 import type { LinearAgentActivityContent } from "./linear-types.ts";
 import { formatRunTypeLabel } from "./agent-session-plan.ts";
+import { sanitizeOperatorFacingText } from "./presentation-text.ts";
 
 function lowerRunTypeLabel(runType: RunType): string {
   return formatRunTypeLabel(runType).toLowerCase();
 }
 
 function trimSummary(summary: string | undefined, maxLength = 300): string | undefined {
-  const value = summary?.trim();
+  const value = sanitizeOperatorFacingText(summary);
   if (!value) {
     return undefined;
   }
@@ -184,7 +185,7 @@ export function summarizeIssueStateForLinear(
     case "waiting_input":
       return issue.waitingReason ?? (issue.prNumber ? `PR #${issue.prNumber} is waiting for input.` : "Waiting for input.");
     case "running":
-      return issue.prNumber ? `PR #${issue.prNumber} is actively running.` : "Actively running.";
+      return issue.waitingReason ?? (issue.prNumber ? `PR #${issue.prNumber} is actively running.` : "Actively running.");
     case "idle":
       return issue.waitingReason ?? (issue.prNumber ? `PR #${issue.prNumber} is idle.` : "Idle.");
     case "done":
