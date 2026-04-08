@@ -178,9 +178,9 @@ function parseInlineMarkdown(text: string, style?: TextStyle): TextSegment[] {
     }
 
     if (match[1] && match[2]) {
-      segments.push({ text: match[1], color: "cyan", bold: true });
+      segments.push({ text: match[1], color: "cyan" });
     } else if (match[3]) {
-      segments.push({ text: match[3], color: "yellow", bold: true });
+      segments.push({ text: match[3], color: "yellow" });
     } else if (match[4]) {
       segments.push({ text: match[4], ...(style ?? {}), bold: true });
     }

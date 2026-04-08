@@ -154,7 +154,6 @@ function buildHeaderLines(input: BuildDetailLinesInput, width: number): TextLine
     lines.push(...renderRichTextLines(issue.statusNote, {
       key: "detail-note",
       width,
-      style: { dimColor: true },
     }));
   }
 
