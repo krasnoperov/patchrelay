@@ -36,7 +36,8 @@ test("renderRichTextLines formats links, bullets, and code blocks without raw ma
   });
 
   const text = lines.map(lineToPlainText).join("\n");
-  assert.match(text, /sessionSchema\.ts \(\/tmp\/sessionSchema\.ts#L42\)/);
+  assert.match(text, /sessionSchema\.ts/);
+  assert.doesNotMatch(text, /\/tmp\/sessionSchema\.ts#L42/);
   assert.match(text, /• first bullet/);
   assert.match(text, /const answer = 42;/);
   assert.doesNotMatch(text, /\[sessionSchema\.ts\]\(/);
@@ -140,7 +141,80 @@ test("buildDetailLines renders history messages with markdown-friendly formattin
     width: 90,
   })).join("\n");
 
-  assert.match(text, /app-shell\.spec\.ts \(\/tmp\/app-shell\.spec\.ts#L282\)/);
+  assert.match(text, /app-shell\.spec\.ts/);
+  assert.doesNotMatch(text, /\/tmp\/app-shell\.spec\.ts#L282/);
   assert.match(text, /npm test/);
   assert.doesNotMatch(text, /\[app-shell\.spec\.ts\]\(/);
+});
+
+test("buildDetailLines renders header status notes with markdown-friendly formatting and compact link labels", () => {
+  const issue = makeIssue("USE-9", {
+    statusNote: "Updated [AppOverviewPanel.tsx](/tmp/AppOverviewPanel.tsx#L24) and verified with `npm test`.",
+  });
+
+  const text = detailText(buildDetailLines({
+    issue,
+    timeline: [],
+    activeRunStartedAt: null,
+    activeRunId: null,
+    tokenUsage: null,
+    diffSummary: null,
+    plan: null,
+    issueContext: null,
+    detailTab: "timeline",
+    rawRuns: [],
+    rawFeedEvents: [],
+    follow: true,
+    connected: true,
+    lastServerMessageAt: Date.now(),
+    width: 90,
+  })).join("\n");
+
+  assert.match(text, /AppOverviewPanel\.tsx/);
+  assert.doesNotMatch(text, /\/tmp\/AppOverviewPanel\.tsx#L24/);
+  assert.match(text, /npm test/);
+  assert.doesNotMatch(text, /\[AppOverviewPanel\.tsx\]\(/);
+});
+
+test("buildDetailLines prefers full check summary over gate status for re-review state", () => {
+  const issue = makeIssue("TST-30", {
+    factoryState: "changes_requested",
+    readyForExecution: true,
+    prNumber: 26,
+    prReviewState: "changes_requested",
+    prCheckStatus: "success",
+    prChecksSummary: {
+      total: 3,
+      completed: 2,
+      passed: 2,
+      failed: 0,
+      pending: 1,
+      overall: "success",
+    },
+  });
+
+  const text = detailText(buildDetailLines({
+    issue,
+    timeline: [],
+    activeRunStartedAt: null,
+    activeRunId: null,
+    tokenUsage: null,
+    diffSummary: null,
+    plan: null,
+    issueContext: null,
+    detailTab: "timeline",
+    rawRuns: [],
+    rawFeedEvents: [],
+    follow: true,
+    connected: true,
+    lastServerMessageAt: Date.now(),
+    width: 100,
+  })).join("\n");
+
+  assert.match(text, /changes requested/);
+  assert.match(text, /checks 2\/3/);
+  assert.match(text, /checks 2\/3 still running/);
+  assert.doesNotMatch(text, /re-review needed/);
+  assert.doesNotMatch(text, /checks passed/);
+  assert.doesNotMatch(text, / {2}ready {2}/);
 });

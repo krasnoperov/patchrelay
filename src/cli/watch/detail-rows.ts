@@ -5,6 +5,7 @@ import { buildTimelineRows } from "./timeline-presentation.ts";
 import { planStepColor, planStepSymbol } from "./plan-helpers.ts";
 import { progressBar } from "./format-utils.ts";
 import { describePatchRelayFreshness } from "./freshness.ts";
+import { hasDisplayPrBlocker, isRereviewNeeded, prChecksFact } from "./pr-status.ts";
 import { renderRichTextLines, renderTextLines, type TextLine, type TextSegment } from "./render-rich-text.ts";
 
 interface BuildDetailLinesInput {
@@ -150,7 +151,7 @@ function buildHeaderLines(input: BuildDetailLinesInput, width: number): TextLine
   }
 
   if (issue.statusNote && issue.statusNote !== blocker) {
-    lines.push(...renderTextLines(issue.statusNote, {
+    lines.push(...renderRichTextLines(issue.statusNote, {
       key: "detail-note",
       width,
       style: { dimColor: true },
@@ -481,20 +482,18 @@ function renderSideTripLines(trip: SideTripNode, runOffset: number, width: numbe
 
 function buildFacts(issue: WatchIssue, issueContext: WatchIssueContext | null): string[] {
   const facts: string[] = [];
-  const rereviewNeeded = issue.prReviewState === "changes_requested"
-    && (issue.prCheckStatus === "passed" || issue.prCheckStatus === "success")
-    && !issue.activeRunType;
+  const rereviewNeeded = isRereviewNeeded(issue);
   if (issue.prNumber !== undefined) facts.push(`PR #${issue.prNumber}`);
   if (issue.prReviewState === "approved") facts.push("approved");
   else if (rereviewNeeded) facts.push("re-review needed");
   else if (issue.prReviewState === "changes_requested") facts.push("changes requested");
   if (issue.waitingReason && issue.sessionState === "waiting_input") facts.push(issue.waitingReason);
-  if (issue.prCheckStatus === "passed" || issue.prCheckStatus === "success") facts.push("checks passed");
-  else if (issue.prCheckStatus === "failed" || issue.prCheckStatus === "failure") {
-    const check = issueContext?.latestFailureCheckName ?? issue.latestFailureCheckName ?? "checks";
-    facts.push(`${check} failed`);
-  } else if (issue.prChecksSummary?.total) {
-    facts.push(`checks ${issue.prChecksSummary.completed}/${issue.prChecksSummary.total}`);
+  const checks = prChecksFact({
+    ...issue,
+    latestFailureCheckName: issueContext?.latestFailureCheckName ?? issue.latestFailureCheckName,
+  });
+  if (checks) {
+    facts.push(checks.text);
   }
   return facts;
 }
@@ -589,15 +588,13 @@ function effectiveState(issue: WatchIssue): string {
   if (issue.sessionState === "done") return "done";
   if (issue.sessionState === "failed") return "failed";
   if (issue.blockedByCount > 0 && !issue.activeRunType) return "blocked";
-  if (issue.readyForExecution && !issue.activeRunType) return "ready";
   if (issue.sessionState === "waiting_input") return "awaiting_input";
+  if (issue.readyForExecution && !issue.activeRunType && !hasDisplayPrBlocker(issue)) return "ready";
   return issue.factoryState;
 }
 
 function blockerText(issue: WatchIssue, issueContext: WatchIssueContext | null): string | null {
-  const rereviewNeeded = issue.prReviewState === "changes_requested"
-    && (issue.prCheckStatus === "passed" || issue.prCheckStatus === "success")
-    && !issue.activeRunType;
+  const rereviewNeeded = isRereviewNeeded(issue);
   if (issue.sessionState === "waiting_input") return issue.waitingReason ?? "Waiting for input";
   if (issue.sessionState === "failed" || issue.factoryState === "failed" || issue.factoryState === "escalated") {
     return issue.statusNote ?? issue.waitingReason ?? "Needs operator intervention";
@@ -609,9 +606,15 @@ function blockerText(issue: WatchIssue, issueContext: WatchIssueContext | null):
     const check = issueContext?.latestFailureCheckName ?? issue.latestFailureCheckName ?? "CI";
     return `Repairing ${check}`;
   }
-  if (issue.prCheckStatus === "failed" || issue.prCheckStatus === "failure") {
-    const check = issueContext?.latestFailureCheckName ?? issue.latestFailureCheckName ?? "checks";
-    return `${check} failed`;
+  const checks = prChecksFact({
+    ...issue,
+    latestFailureCheckName: issueContext?.latestFailureCheckName ?? issue.latestFailureCheckName,
+  });
+  if (checks?.color === "red") {
+    return checks.text;
+  }
+  if (checks?.color === "yellow" && checks.text.startsWith("checks ")) {
+    return `${checks.text} still running`;
   }
   if (rereviewNeeded) return "Awaiting re-review after requested changes";
   if (issue.prReviewState === "changes_requested") return "Review changes requested";
