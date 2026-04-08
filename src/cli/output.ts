@@ -50,6 +50,16 @@ export function formatClusterHealth(report: ClusterHealthReport): string {
   lines.push(
     `Summary: tracked=${report.summary.trackedIssues} open=${report.summary.openIssues} active=${report.summary.activeRuns} blocked=${report.summary.blockedIssues} ready=${report.summary.readyIssues}`,
   );
+  if (report.summary.ciTrackedPrs > 0) {
+    lines.push(
+      `CI: prs=${report.summary.ciTrackedPrs} pending=${report.summary.ciPending} success=${report.summary.ciSuccess} failure=${report.summary.ciFailure} unknown=${report.summary.ciUnknown} orphaned=${report.summary.ciOrphaned}`,
+    );
+    for (const entry of report.ci) {
+      lines.push(
+        `CI ${entry.issueKey ?? entry.projectId} PR #${entry.prNumber}  gate=${entry.gateStatus}  owner=${entry.owner}${entry.orphaned ? " [orphaned]" : ""}  ${entry.message}`,
+      );
+    }
+  }
   lines.push(report.ok ? "Cluster result: healthy" : "Cluster result: attention needed");
   return `${lines.join("\n")}\n`;
 }
