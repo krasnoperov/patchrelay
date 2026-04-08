@@ -135,6 +135,10 @@ function reviewStateForEvent(event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT"): 
   }
 }
 
+function isDecisiveReviewState(state: string | undefined): state is "APPROVED" | "CHANGES_REQUESTED" {
+  return state === "APPROVED" || state === "CHANGES_REQUESTED";
+}
+
 function normalizeReviewerLogin(login: string | undefined): string | undefined {
   return login?.replace(/\[bot\]$/i, "");
 }
@@ -145,47 +149,21 @@ function matchesReviewerLogin(authorLogin: string | undefined, reviewerLogin: st
   return Boolean(normalizedAuthor && normalizedReviewer && normalizedAuthor === normalizedReviewer);
 }
 
-export function preserveRequestedChangesOnRereview(params: {
+export function findStaleDecisiveReviews(params: {
   reviews: PullRequestReviewRecord[];
   reviewerLogin: string | undefined;
   headSha: string;
-  event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT";
-}): "APPROVE" | "REQUEST_CHANGES" | "COMMENT" {
-  if (params.event !== "COMMENT" || !params.reviewerLogin) {
-    return params.event;
+}): PullRequestReviewRecord[] {
+  if (!params.reviewerLogin) {
+    return [];
   }
 
-  const latestPriorDecisiveReview = [...params.reviews]
+  return [...params.reviews]
     .reverse()
-    .find((review) => matchesReviewerLogin(review.authorLogin, params.reviewerLogin)
+    .filter((review) => matchesReviewerLogin(review.authorLogin, params.reviewerLogin)
+      && review.commitId !== undefined
       && review.commitId !== params.headSha
-      && (review.state === "CHANGES_REQUESTED" || review.state === "APPROVED"));
-
-  if (latestPriorDecisiveReview?.state === "CHANGES_REQUESTED") {
-    return "REQUEST_CHANGES";
-  }
-
-  return params.event;
-}
-
-export function shouldRecoverNonDecisiveRereview(params: {
-  attempt: Pick<ReviewAttemptRecord, "status" | "conclusion">;
-  reviews: PullRequestReviewRecord[];
-  reviewerLogin: string | undefined;
-  headSha: string;
-}): boolean {
-  if (params.attempt.status !== "completed" || params.attempt.conclusion !== "skipped") {
-    return false;
-  }
-  if (!hasMatchingLatestReviewForHead(params.reviews, params.reviewerLogin, params.headSha, "COMMENT")) {
-    return false;
-  }
-  return preserveRequestedChangesOnRereview({
-    reviews: params.reviews,
-    reviewerLogin: params.reviewerLogin,
-    headSha: params.headSha,
-    event: "COMMENT",
-  }) === "REQUEST_CHANGES";
+      && isDecisiveReviewState(review.state));
 }
 
 type PublicationDisposition =
@@ -403,29 +381,54 @@ export class ReviewQuillService {
     const prs = await this.github.listOpenPullRequests(repo.repoFullName);
     for (const pr of prs) {
       await this.reconcileActiveAttemptsForPullRequest(repo, pr);
+      const currentReviews = await this.github.listPullRequestReviews(repo.repoFullName, pr.number);
+      await this.dismissStaleDecisiveReviews(repo, pr, currentReviews);
       const existing = this.store.getAttempt(repo.repoFullName, pr.number, pr.headSha);
       const eligibility = await this.evaluateEligibility(repo, pr.number, pr.headSha, pr.isDraft, pr.headRefName);
       if (existing && !["failed", "cancelled", "superseded"].includes(existing.status)) {
         if (!eligibility.eligible) continue;
-        const currentReviews = await this.github.listPullRequestReviews(repo.repoFullName, pr.number);
-        if (shouldRecoverNonDecisiveRereview({
-          attempt: existing,
-          reviews: currentReviews,
-          reviewerLogin: this.reviewerLogin,
-          headSha: pr.headSha,
-        })) {
-          this.logger.warn({
-            repo: repo.repoFullName,
-            prNumber: pr.number,
-            headSha: pr.headSha,
-            attemptId: existing.id,
-          }, "Recovering non-decisive re-review on current head");
-          await this.executeReview(repo, pr, existing);
-        }
         continue;
       }
       if (!eligibility.eligible) continue;
       await this.executeReview(repo, pr, existing);
+    }
+  }
+
+  private async dismissStaleDecisiveReviews(
+    repo: ReviewQuillRepositoryConfig,
+    pr: Awaited<ReturnType<GitHubClient["listOpenPullRequests"]>>[number],
+    reviews: PullRequestReviewRecord[],
+  ): Promise<void> {
+    const staleReviews = findStaleDecisiveReviews({
+      reviews,
+      reviewerLogin: this.reviewerLogin,
+      headSha: pr.headSha,
+    });
+    if (staleReviews.length === 0) return;
+
+    const message = `Superseded by newer head ${pr.headSha.slice(0, 12)}; review-quill will re-review the latest commit separately.`;
+    for (const review of staleReviews) {
+      try {
+        await this.github.dismissReview(repo.repoFullName, pr.number, review.id, message);
+        this.logger.info({
+          repo: repo.repoFullName,
+          prNumber: pr.number,
+          reviewId: review.id,
+          dismissedReviewCommitId: review.commitId,
+          currentHeadSha: pr.headSha,
+          state: review.state,
+        }, "Dismissed stale decisive review on superseded head");
+      } catch (error) {
+        const failure = error instanceof Error ? error.message : String(error);
+        this.logger.warn({
+          repo: repo.repoFullName,
+          prNumber: pr.number,
+          reviewId: review.id,
+          dismissedReviewCommitId: review.commitId,
+          currentHeadSha: pr.headSha,
+          error: failure,
+        }, "Failed to dismiss stale decisive review on superseded head");
+      }
     }
   }
 
@@ -640,29 +643,13 @@ export class ReviewQuillService {
         return;
       }
       const currentReviews = await this.github.listPullRequestReviews(repo.repoFullName, pr.number);
-      const effectiveEvent = preserveRequestedChangesOnRereview({
-        reviews: currentReviews,
-        reviewerLogin: this.reviewerLogin,
-        headSha: pr.headSha,
-        event,
-      });
-      const effectiveReviewBody = buildReviewBody({ verdict: result.verdict, event: effectiveEvent });
-      if (effectiveEvent !== event) {
-        this.logger.info({
-          repo: repo.repoFullName,
-          prNumber: pr.number,
-          headSha: pr.headSha,
-          previousEvent: event,
-          effectiveEvent,
-        }, "Promoted re-review comment to requested changes to preserve decisive review state");
-      }
-      if (hasMatchingLatestReviewForHead(currentReviews, this.reviewerLogin, pr.headSha, effectiveEvent, effectiveReviewBody)) {
+      if (hasMatchingLatestReviewForHead(currentReviews, this.reviewerLogin, pr.headSha, event, reviewBody)) {
         this.logger.info({
           repo: repo.repoFullName,
           prNumber: pr.number,
           headSha: pr.headSha,
           verdict: result.verdict.verdict,
-          event: effectiveEvent,
+          event,
         }, "Skipping duplicate GitHub review for unchanged head verdict");
       } else {
         // Atomic POST with body + inline comments + verdict. If GitHub
@@ -675,8 +662,8 @@ export class ReviewQuillService {
         // verdict is visible to the author and CI.
         try {
           await this.github.submitReview(repo.repoFullName, pr.number, {
-            event: effectiveEvent,
-            body: effectiveReviewBody,
+            event,
+            body: reviewBody,
             commitId: pr.headSha,
             ...(inlineComments.length > 0 ? { comments: inlineComments } : {}),
           });
@@ -694,15 +681,15 @@ export class ReviewQuillService {
             githubError: message.slice(0, 500),
           }, "GitHub rejected review with inline comments (422); retrying body-only");
           await this.github.submitReview(repo.repoFullName, pr.number, {
-            event: effectiveEvent,
-            body: effectiveReviewBody,
+            event,
+            body: reviewBody,
             commitId: pr.headSha,
           });
         }
       }
-      const attemptConclusion = effectiveEvent === "REQUEST_CHANGES"
+      const attemptConclusion = event === "REQUEST_CHANGES"
         ? "declined"
-        : effectiveEvent === "COMMENT"
+        : event === "COMMENT"
           ? "skipped"
           : "approved";
       this.store.updateAttempt(attempt.id, {

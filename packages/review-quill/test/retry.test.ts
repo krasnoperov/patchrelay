@@ -183,6 +183,19 @@ test("GitHubClient gives up on a 404 without retrying", async () => {
   });
 });
 
+test("GitHubClient dismissReview uses the dismissals endpoint", async () => {
+  const stub = new FetchStub([
+    { kind: "ok", status: 200, body: "{}" },
+  ]);
+  await withFetchStub(stub, async () => {
+    const client = makeClient();
+    await client.dismissReview("owner/repo", 7, 42, "superseded by newer head");
+    assert.equal(stub.calls.length, 1);
+    assert.equal(stub.calls[0]?.method, "PUT");
+    assert.match(stub.calls[0]?.url ?? "", /\/repos\/owner\/repo\/pulls\/7\/reviews\/42\/dismissals$/);
+  });
+});
+
 // ---- parseModelResponse tests ----------------------------------------
 
 test("parseModelResponse returns ok for a valid JSON response", () => {

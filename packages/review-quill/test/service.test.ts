@@ -4,11 +4,10 @@ import {
   buildInlineCommentBody,
   buildReviewBody,
   classifyPublicationDisposition,
+  findStaleDecisiveReviews,
   filterFindings,
   hasMatchingLatestReviewForHead,
-  preserveRequestedChangesOnRereview,
   resolveEvent,
-  shouldRecoverNonDecisiveRereview,
 } from "../src/service.ts";
 import { normalizeVerdict } from "../src/review-runner.ts";
 import { extractFirstJsonObject, forgivingJsonParse, sanitizeJsonPayload } from "../src/utils.ts";
@@ -450,7 +449,7 @@ test("resolveEvent stays binary for the merge pipeline", () => {
   );
 });
 
-test("preserveRequestedChangesOnRereview upgrades comment to request changes after our older blocking review", () => {
+test("findStaleDecisiveReviews returns older blocking reviews from the same reviewer", () => {
   const reviews = [
     {
       id: 1,
@@ -460,18 +459,17 @@ test("preserveRequestedChangesOnRereview upgrades comment to request changes aft
     },
   ];
 
-  assert.equal(
-    preserveRequestedChangesOnRereview({
+  assert.deepEqual(
+    findStaleDecisiveReviews({
       reviews,
       reviewerLogin: "review-quill",
       headSha: "new-head",
-      event: "COMMENT",
     }),
-    "REQUEST_CHANGES",
+    [reviews[0]],
   );
 });
 
-test("preserveRequestedChangesOnRereview matches GitHub bot logins against the app slug", () => {
+test("findStaleDecisiveReviews matches GitHub bot logins against the app slug", () => {
   const reviews = [
     {
       id: 1,
@@ -481,18 +479,17 @@ test("preserveRequestedChangesOnRereview matches GitHub bot logins against the a
     },
   ];
 
-  assert.equal(
-    preserveRequestedChangesOnRereview({
+  assert.deepEqual(
+    findStaleDecisiveReviews({
       reviews,
       reviewerLogin: "review-quill",
       headSha: "new-head",
-      event: "COMMENT",
     }),
-    "REQUEST_CHANGES",
+    [reviews[0]],
   );
 });
 
-test("preserveRequestedChangesOnRereview leaves first-pass comments alone", () => {
+test("findStaleDecisiveReviews ignores current-head, commented, and already-dismissed reviews", () => {
   const reviews = [
     {
       id: 1,
@@ -500,64 +497,53 @@ test("preserveRequestedChangesOnRereview leaves first-pass comments alone", () =
       state: "COMMENTED",
       commitId: "old-head",
     },
+    {
+      id: 2,
+      authorLogin: "review-quill",
+      state: "CHANGES_REQUESTED",
+      commitId: "new-head",
+    },
+    {
+      id: 3,
+      authorLogin: "review-quill",
+      state: "DISMISSED",
+      commitId: "older-head",
+    },
   ];
 
-  assert.equal(
-    preserveRequestedChangesOnRereview({
+  assert.deepEqual(
+    findStaleDecisiveReviews({
       reviews,
       reviewerLogin: "review-quill",
       headSha: "new-head",
-      event: "COMMENT",
     }),
-    "COMMENT",
+    [],
   );
 });
 
-test("shouldRecoverNonDecisiveRereview requests a replay for a comment on the current head after older blocking review", () => {
+test("findStaleDecisiveReviews includes older approvals because they are also stale after a new push", () => {
   const reviews = [
     {
       id: 1,
       authorLogin: "review-quill[bot]",
-      state: "CHANGES_REQUESTED",
+      state: "APPROVED",
       commitId: "old-head",
     },
     {
       id: 2,
       authorLogin: "review-quill[bot]",
-      state: "COMMENTED",
+      state: "APPROVED",
       commitId: "new-head",
     },
   ];
 
-  assert.equal(
-    shouldRecoverNonDecisiveRereview({
-      attempt: { status: "completed", conclusion: "skipped" },
+  assert.deepEqual(
+    findStaleDecisiveReviews({
       reviews,
       reviewerLogin: "review-quill",
       headSha: "new-head",
     }),
-    true,
-  );
-});
-
-test("shouldRecoverNonDecisiveRereview ignores already-decisive or non-comment outcomes", () => {
-  const reviews = [
-    {
-      id: 1,
-      authorLogin: "review-quill[bot]",
-      state: "CHANGES_REQUESTED",
-      commitId: "old-head",
-    },
-  ];
-
-  assert.equal(
-    shouldRecoverNonDecisiveRereview({
-      attempt: { status: "completed", conclusion: "declined" },
-      reviews,
-      reviewerLogin: "review-quill",
-      headSha: "new-head",
-    }),
-    false,
+    [reviews[0]],
   );
 });
 
