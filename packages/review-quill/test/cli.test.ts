@@ -342,6 +342,7 @@ test("transcript shows the full stored Codex thread for one PR review attempt", 
         assert.match(rendered, /Repo: krasnoperov\/mafia/);
         assert.match(rendered, /Attempt: #\d+/);
         assert.match(rendered, /Thread: thread-review-42/);
+        assert.match(rendered, /Visible thread items are shown below/);
         assert.match(rendered, /Turn 1: turn-review-42 \[completed\]/);
         assert.match(rendered, /assistant \(assistant-1\):/);
         assert.match(rendered, /Review walkthrough paragraph one/);

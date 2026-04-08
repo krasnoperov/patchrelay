@@ -119,7 +119,7 @@ function rootHelpText(): string {
     "  repo list [--json]                                     List watched repositories",
     "  repo show <id> [--json]                                Show one repo config",
     "  attempts <repo> <pr-number> [--json]                   Show recorded review attempts for one pull request",
-    "  transcript <repo> <pr-number> [--attempt <id>] [--json]  Show the full Codex thread for one recorded review attempt",
+    "  transcript <repo> <pr-number> [--attempt <id>] [--json]  Show the full visible Codex thread for one recorded review attempt",
     "  doctor [--repo <id>] [--json]                          Validate config, secrets, binaries, and service reachability",
     "  service status [--json]                                Show systemd state and local health",
     "  service logs [--lines <count>] [--json]                Show recent journal logs",
@@ -1223,6 +1223,13 @@ function formatTranscriptText(params: {
     return textParts.length > 0 ? textParts.join("\n\n") : undefined;
   };
 
+  const compactExtraFields = (item: Record<string, unknown>, ignored: string[]): string | undefined => {
+    const filtered = Object.fromEntries(
+      Object.entries(item).filter(([key, value]) => !ignored.includes(key) && value !== undefined),
+    );
+    return Object.keys(filtered).length > 0 ? JSON.stringify(filtered, null, 2) : undefined;
+  };
+
   const lines = [
     `Repo: ${params.repoFullName}`,
     `PR: #${params.prNumber}`,
@@ -1233,6 +1240,7 @@ function formatTranscriptText(params: {
     params.attempt.turnId ? `Recorded turn: ${params.attempt.turnId}` : undefined,
     params.attempt.staleReason ? `Stale: ${params.attempt.staleReason}` : undefined,
     params.notice,
+    "Visible thread items are shown below. Hidden model reasoning is not exposed by the app-server.",
     "",
   ].filter(Boolean) as string[];
 
@@ -1241,14 +1249,32 @@ function formatTranscriptText(params: {
     for (const item of turn.items) {
       if (item.type === "userMessage") {
         lines.push(`user (${item.id}):`);
-        lines.push(formatUserMessage(item as Record<string, unknown>) ?? JSON.stringify(item, null, 2));
+        const record = item as Record<string, unknown>;
+        lines.push(formatUserMessage(record) ?? JSON.stringify(item, null, 2));
+        const extra = compactExtraFields(record, ["type", "id", "content"]);
+        if (extra) {
+          lines.push("meta:");
+          lines.push(extra);
+        }
       } else if (item.type === "agentMessage" && typeof item.text === "string") {
-        const phaseValue = (item as Record<string, unknown>).phase;
+        const record = item as Record<string, unknown>;
+        const phaseValue = record.phase;
         const phase = typeof phaseValue === "string" ? ` [${phaseValue}]` : "";
         lines.push(`assistant (${item.id})${phase}:`);
         lines.push(item.text);
+        const extra = compactExtraFields(record, ["type", "id", "text", "phase"]);
+        if (extra) {
+          lines.push("meta:");
+          lines.push(extra);
+        }
       } else {
-        lines.push(`item ${item.type} (${item.id}):`);
+        const record = item as Record<string, unknown>;
+        const toolName = typeof record.toolName === "string"
+          ? record.toolName
+          : typeof record.name === "string"
+            ? record.name
+            : undefined;
+        lines.push(`item ${item.type} (${item.id})${toolName ? ` [${toolName}]` : ""}:`);
         lines.push(JSON.stringify(item, null, 2));
       }
       lines.push("");

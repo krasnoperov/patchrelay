@@ -133,6 +133,18 @@ Verdict rules (apply exactly):
 - Non-blocking findings and architectural concerns should still be included in the JSON, but they ride along with an approval instead of a neutral review.
 This reviewer is part of the merge pipeline, so you MUST produce a decisive binary verdict. Do not emit a neutral/comment-only outcome.`;
 
+const GROUNDING_RULES = `Current-head grounding rules:
+- The changed-files inventory and detailed patches below are the authoritative definition of this PR's scope on the current head.
+- Do NOT claim that this PR changes files, routes, or surfaces that do not appear in that current diff inventory.
+- The checked-out repository is for surrounding context only. Use it to understand impacted behavior, but not to expand the claimed scope of the PR beyond the diff inventory.
+- If you believe there is a scope/control problem, quote the specific files or patches from the current diff inventory that create that problem.`;
+
+const PRIOR_REVIEW_RULES = `How to use previous reviews:
+- Previous formal reviews are historical claims to verify, not facts to repeat automatically.
+- Re-check each important prior-review claim against the CURRENT head, CURRENT diff inventory, and CURRENT code before reusing it.
+- If a prior concern is no longer supported by the current diff or current behavior, drop it or explicitly treat it as resolved.
+- Focus first on whether the current head solves the task correctly. Only then use prior reviews as a side-check for regressions or unresolved concerns.`;
+
 // Posting carve-out. The REVIEW_WORKFLOW.md guidance doc may instruct
 // human reviewers to post via `gh pr review`. The agent must not do this
 // — review-quill posts atomically via the GitHub App installation token
@@ -187,6 +199,12 @@ export function renderReviewPrompt(context: Omit<ReviewContext, "prompt">): stri
     "## Severity and verdict",
     SEVERITY_RULES,
     "",
+    "## Grounding",
+    GROUNDING_RULES,
+    "",
+    "## Previous review handling",
+    PRIOR_REVIEW_RULES,
+    "",
     "## Posting",
     POSTING_CARVEOUT,
     "",
@@ -220,6 +238,7 @@ export function renderReviewPrompt(context: Omit<ReviewContext, "prompt">): stri
 
   if (context.promptContext.priorReviews.length > 0) {
     lines.push("", "## Previous formal reviews");
+    lines.push("Treat these as historical claims to verify against the current head, not as authoritative facts.");
     for (const review of context.promptContext.priorReviews.slice(-10)) {
       lines.push(`- ${review.authorLogin ?? "unknown"} [${review.state ?? "unknown"}] ${review.commitId ?? ""}`.trim());
       if (review.body) {
