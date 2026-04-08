@@ -108,6 +108,9 @@ test("renderReviewPrompt includes explicit guidance docs and suppressed summarie
   assert.match(prompt, /Earlier note/);
   assert.match(prompt, /Linked issue keys detected: TST-28/);
   assert.match(prompt, /linear` MCP tool is available/);
+  assert.match(prompt, /authoritative definition of this PR's scope on the current head/);
+  assert.match(prompt, /historical claims to verify/);
+  assert.match(prompt, /Do NOT claim that this PR changes files, routes, or surfaces that do not appear in that current diff inventory/);
 });
 
 test("renderReviewPrompt embeds renderDiffContextLines verbatim (CLI/LLM parity lock)", () => {
