@@ -270,6 +270,104 @@ test("cli cluster reports stale re-review handoff with no requested reviewer", a
   }
 });
 
+test("cli cluster treats a live review-quill attempt on the current head as an owner", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cluster-review-quill-active-"));
+  const config = createConfig(baseDir, 19794);
+  mkdirSync(config.projects[0]!.repoPath, { recursive: true });
+  mkdirSync(config.projects[0]!.worktreeRoot, { recursive: true });
+  const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+  db.runMigrations();
+  const server = await startPatchRelayHealthServer(config);
+
+  try {
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-use-35",
+      issueKey: "USE-35",
+      title: "Review quill is actively reviewing",
+      currentLinearState: "In Progress",
+      factoryState: "pr_open",
+      prNumber: 35,
+      prState: "open",
+      prReviewState: "review_required",
+      prCheckStatus: "success",
+    });
+    const staleTime = new Date(Date.now() - 300_000).toISOString();
+    db.connection.prepare("UPDATE issues SET updated_at = ?").run(staleTime);
+    db.connection.prepare("UPDATE issue_sessions SET updated_at = ?").run(staleTime);
+
+    const stdout = createBufferStream();
+    const stderr = createBufferStream();
+    const exitCode = await runCli(["cluster"], {
+      config,
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      runCommand: async (command, args) => {
+        if (command === "review-quill" && args.join(" ") === "service status --json") {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              unit: "review-quill.service",
+              systemd: { ActiveState: "active" },
+              health: { ok: true },
+              watch: { runningAttempts: 1 },
+            }),
+            stderr: "",
+          };
+        }
+        if (command === "review-quill" && args.join(" ") === "attempts usertold 35 --json") {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              repoId: "usertold",
+              repoFullName: "krasnoperov/usertold",
+              prNumber: 35,
+              attempts: [
+                {
+                  id: 77,
+                  headSha: "abc123",
+                  status: "running",
+                  stale: false,
+                },
+              ],
+            }),
+            stderr: "",
+          };
+        }
+        if (command === "gh" && args[0] === "pr" && args[1] === "view") {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              state: "OPEN",
+              reviewDecision: "REVIEW_REQUIRED",
+              reviewRequests: [],
+              statusCheckRollup: [
+                { __typename: "CheckRun", name: "verify", status: "COMPLETED", conclusion: "SUCCESS" },
+              ],
+              mergeable: "MERGEABLE",
+              mergeStateStatus: "CLEAN",
+              headRefOid: "abc123",
+            }),
+            stderr: "",
+          };
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    });
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr.read(), "");
+    const text = stdout.read();
+    assert.match(text, /PASS \[ci\] Tracked 1 PR-backed issue and each PR has a visible next owner/);
+    assert.match(text, /CI summary: prs=1 pending=0 success=1 failure=0 unknown=0 missing_owner=0/);
+    assert.match(text, /CI USE-35 PR #35  gate=success  next=review-quill  review-quill attempt #77 is running on the current head/);
+    assert.doesNotMatch(text, /github:review-handoff USE-35/);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("cli cluster treats in-progress CI as externally owned instead of orphaned", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cluster-ci-pending-"));
   const config = createConfig(baseDir, 19793);

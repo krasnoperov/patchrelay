@@ -70,6 +70,8 @@ function formatCiOwnerLabel(owner: ClusterHealthReport["ci"][number]["owner"]): 
       return "patchrelay";
     case "reviewer":
       return "reviewer";
+    case "review-quill":
+      return "review-quill";
     case "downstream":
       return "merge-queue";
     case "external":
