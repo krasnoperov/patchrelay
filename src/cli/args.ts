@@ -5,6 +5,7 @@ export const KNOWN_COMMANDS = new Set([
   "version",
   "serve",
   "issue",
+  "cluster",
   "doctor",
   "init",
   "attach",
