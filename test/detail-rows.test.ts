@@ -255,3 +255,39 @@ test("buildDetailLines prefers full check summary over gate status for re-review
   assert.doesNotMatch(text, /checks passed/);
   assert.doesNotMatch(text, / {2}ready {2}/);
 });
+
+test("buildDetailLines keeps header PR and review facts colorized instead of flattening them to dim text", () => {
+  const issue = makeIssue("TST-33", {
+    prNumber: 27,
+    prReviewState: "approved",
+    prCheckStatus: "success",
+  });
+
+  const lines = buildDetailLines({
+    issue,
+    timeline: [],
+    activeRunStartedAt: null,
+    activeRunId: null,
+    tokenUsage: null,
+    diffSummary: null,
+    plan: null,
+    issueContext: null,
+    detailTab: "timeline",
+    rawRuns: [],
+    rawFeedEvents: [],
+    follow: true,
+    connected: true,
+    lastServerMessageAt: Date.now(),
+    width: 100,
+  });
+
+  const headerLine = lines[0];
+  assert.ok(headerLine);
+  const prSegment = headerLine.segments.find((segment) => segment.text === "PR #27");
+  const approvedSegment = headerLine.segments.find((segment) => segment.text === "approved");
+  const checksSegment = headerLine.segments.find((segment) => segment.text === "checks passed");
+
+  assert.equal(prSegment?.color, "cyan");
+  assert.equal(approvedSegment?.color, "green");
+  assert.equal(checksSegment?.color, "green");
+});

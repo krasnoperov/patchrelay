@@ -306,11 +306,7 @@ function detailStateAfterLayout(
     detailContentRows: Math.max(0, contentRows),
   };
   const maxOffset = maxDetailScrollOffset(nextState.detailContentRows, nextState.detailViewportRows);
-  const shouldFollow = state.follow || isDetailNearBottom(
-    state.detailScrollOffset,
-    state.detailContentRows,
-    state.detailViewportRows,
-  );
+  const shouldFollow = state.follow;
   const nextOffset = shouldFollow ? maxOffset : Math.min(state.detailScrollOffset, maxOffset);
   return {
     detailViewportRows: nextState.detailViewportRows,

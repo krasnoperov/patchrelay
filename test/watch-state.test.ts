@@ -510,6 +510,23 @@ test("detail-layout-updated sticks to the bottom while follow is enabled", () =>
   assert.equal(state.detailUnreadBelow, 0);
 });
 
+test("detail-layout-updated preserves manual follow-off near the bottom", () => {
+  const initial = stateWith({
+    view: "detail",
+    activeDetailKey: "USE-1",
+    follow: false,
+    detailViewportRows: 6,
+    detailContentRows: 14,
+    detailScrollOffset: 7,
+    detailUnreadBelow: 1,
+  });
+
+  const state = reduce(initial, { type: "detail-layout-updated", viewportRows: 6, contentRows: 14 });
+  assert.equal(state.follow, false);
+  assert.equal(state.detailScrollOffset, 7);
+  assert.equal(state.detailUnreadBelow, 1);
+});
+
 test("detail-scroll moves the viewport and tracks content below", () => {
   const initial = stateWith({
     view: "detail",

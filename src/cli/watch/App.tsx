@@ -185,9 +185,9 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
         dispatch({ type: "detail-scroll", delta: 1 });
       } else if (input === "k" || key.upArrow) {
         dispatch({ type: "detail-scroll", delta: -1 });
-      } else if (key.pageDown || (key.ctrl && input === "d")) {
+      } else if (key.pageDown || (key.ctrl && input === "d") || (key.ctrl && key.downArrow)) {
         dispatch({ type: "detail-page", direction: "down" });
-      } else if (key.pageUp || (key.ctrl && input === "u")) {
+      } else if (key.pageUp || (key.ctrl && input === "u") || (key.ctrl && key.upArrow)) {
         dispatch({ type: "detail-page", direction: "up" });
       } else if (key.home) {
         dispatch({ type: "detail-jump", target: "start" });
