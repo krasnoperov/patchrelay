@@ -547,20 +547,13 @@ export class ReviewQuillService {
         headSha: pr.headSha,
         status: "queued",
       });
-    const detailsUrl = this.config.server.publicBaseUrl
-      ? `${this.config.server.publicBaseUrl.replace(/\/$/, "")}/attempts/${attempt.id}`
-      : undefined;
     let heartbeat: ReturnType<typeof setInterval> | undefined;
 
     try {
-      const checkRunId = await this.github.createCheckRun(repo.repoFullName, {
-        name: "review-quill/verdict",
-        headSha: pr.headSha,
-        status: "in_progress",
-        summary: `Reviewing PR #${pr.number} at ${pr.headSha.slice(0, 12)}`,
-        ...(detailsUrl ? { detailsUrl } : {}),
+      this.store.updateAttempt(attempt.id, {
+        status: "running",
+        externalCheckRunId: null,
       });
-      this.store.updateAttempt(attempt.id, { status: "running", externalCheckRunId: checkRunId });
       heartbeat = setInterval(() => {
         this.store.updateAttempt(attempt.id, {});
       }, this.config.reconciliation.heartbeatIntervalMs);
@@ -628,20 +621,13 @@ export class ReviewQuillService {
       const publicationDisposition = classifyPublicationDisposition(currentPr, pr.headSha);
       if (publicationDisposition.action !== "publish") {
         const superseded = publicationDisposition.action === "supersede";
-        await this.github.updateCheckRun(repo.repoFullName, checkRunId, {
-          status: "completed",
-          conclusion: publicationDisposition.checkConclusion,
-          summary: publicationDisposition.summary,
-          text: publicationDisposition.summary,
-          ...(detailsUrl ? { detailsUrl } : {}),
-        });
         this.store.updateAttempt(attempt.id, {
           status: superseded ? "superseded" : "cancelled",
           conclusion: "skipped",
           summary: publicationDisposition.summary,
           threadId: result.threadId,
           turnId: result.turnId,
-          externalCheckRunId: checkRunId,
+          externalCheckRunId: null,
           completedAt: new Date().toISOString(),
         });
         this.logger.info({
@@ -714,18 +700,6 @@ export class ReviewQuillService {
           });
         }
       }
-      const checkConclusion = effectiveEvent === "REQUEST_CHANGES"
-        ? "failure"
-        : effectiveEvent === "COMMENT"
-          ? "neutral"
-          : "success";
-      await this.github.updateCheckRun(repo.repoFullName, checkRunId, {
-        status: "completed",
-        conclusion: checkConclusion,
-        summary: result.verdict.walkthrough,
-        text: effectiveReviewBody,
-        ...(detailsUrl ? { detailsUrl } : {}),
-      });
       const attemptConclusion = effectiveEvent === "REQUEST_CHANGES"
         ? "declined"
         : effectiveEvent === "COMMENT"
@@ -737,7 +711,7 @@ export class ReviewQuillService {
         summary: result.verdict.walkthrough,
         threadId: result.threadId,
         turnId: result.turnId,
-        externalCheckRunId: checkRunId,
+        externalCheckRunId: null,
         completedAt: new Date().toISOString(),
       });
     } catch (error) {
