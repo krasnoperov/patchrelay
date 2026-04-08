@@ -64,7 +64,8 @@ async function statFile(workspace: ReviewWorkspace, baseRef: string, filePath: s
   changes: number;
   isBinary: boolean;
 }> {
-  const raw = (await gitDiffNumstat(workspace.worktreePath, baseRef, filePath)).trim();
+  const diffTarget = workspace.diffTarget ?? "head";
+  const raw = (await gitDiffNumstat(workspace.worktreePath, baseRef, filePath, diffTarget)).trim();
   const line = raw.split(/\r?\n/).find(Boolean);
   if (!line) {
     return { additions: 0, deletions: 0, changes: 0, isBinary: false };
@@ -127,8 +128,9 @@ async function collectInventory(
   repo: ReviewQuillRepositoryConfig,
   workspace: ReviewWorkspace,
 ): Promise<DiffFileInventoryEntry[]> {
-  const baseRef = workspace.baseRef;
-  const nameStatus = await gitDiffNameStatus(workspace.worktreePath, baseRef);
+  const baseRef = workspace.diffBaseRef ?? workspace.baseRef;
+  const diffTarget = workspace.diffTarget ?? "head";
+  const nameStatus = await gitDiffNameStatus(workspace.worktreePath, baseRef, diffTarget);
   const inventory: DiffFileInventoryEntry[] = [];
 
   for (const line of nameStatus.split(/\r?\n/)) {
@@ -168,8 +170,10 @@ async function fetchCandidatePatches(
 ): Promise<FetchedPatches> {
   const candidates: CandidatePatch[] = [];
   const demoted: DemotedPatch[] = [];
+  const baseRef = workspace.diffBaseRef ?? workspace.baseRef;
+  const diffTarget = workspace.diffTarget ?? "head";
   for (const entry of eligible) {
-    const raw = await gitDiffPatch(workspace.worktreePath, workspace.baseRef, entry.path);
+    const raw = await gitDiffPatch(workspace.worktreePath, baseRef, entry.path, diffTarget);
     const patch = stripDeletionOnlyHunks(raw);
     if (!hasAnyHunk(patch)) {
       demoted.push({ entry, reason: "no_additions" });

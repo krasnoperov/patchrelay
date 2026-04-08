@@ -35,6 +35,16 @@ async function runGit(args: string[], token?: string, cwd?: string): Promise<str
   return result.stdout;
 }
 
+function buildDiffArgs(
+  worktreePath: string,
+  baseRef: string,
+  mode: "head" | "working-tree",
+  extra: string[],
+): string[] {
+  const target = mode === "working-tree" ? [baseRef] : [`${baseRef}...HEAD`];
+  return ["-C", worktreePath, "diff", "--find-renames", ...extra, ...target];
+}
+
 export async function gitCloneBare(repoUrl: string, targetPath: string, token: string): Promise<void> {
   await runGit(["clone", "--bare", "--filter=blob:none", repoUrl, targetPath], token);
 }
@@ -68,26 +78,35 @@ export async function gitWorktreeRemove(cachePath: string, worktreePath: string)
   await runGit(["-C", cachePath, "worktree", "remove", "--force", worktreePath]);
 }
 
-export async function gitDiffNameStatus(worktreePath: string, baseRef: string): Promise<string> {
-  return await runGit(["-C", worktreePath, "diff", "--find-renames", "--name-status", `${baseRef}...HEAD`]);
+export async function gitDiffNameStatus(
+  worktreePath: string,
+  baseRef: string,
+  mode: "head" | "working-tree" = "head",
+): Promise<string> {
+  return await runGit(buildDiffArgs(worktreePath, baseRef, mode, ["--name-status"]));
 }
 
-export async function gitDiffNumstat(worktreePath: string, baseRef: string, filePath?: string): Promise<string> {
-  const args = ["-C", worktreePath, "diff", "--find-renames", "--numstat", `${baseRef}...HEAD`];
+export async function gitDiffNumstat(
+  worktreePath: string,
+  baseRef: string,
+  filePath?: string,
+  mode: "head" | "working-tree" = "head",
+): Promise<string> {
+  const args = buildDiffArgs(worktreePath, baseRef, mode, ["--numstat"]);
   if (filePath) {
     args.push("--", filePath);
   }
   return await runGit(args);
 }
 
-export async function gitDiffPatch(worktreePath: string, baseRef: string, filePath: string): Promise<string> {
+export async function gitDiffPatch(
+  worktreePath: string,
+  baseRef: string,
+  filePath: string,
+  mode: "head" | "working-tree" = "head",
+): Promise<string> {
   return await runGit([
-    "-C",
-    worktreePath,
-    "diff",
-    "--find-renames",
-    "--unified=5",
-    `${baseRef}...HEAD`,
+    ...buildDiffArgs(worktreePath, baseRef, mode, ["--unified=5"]),
     "--",
     filePath,
   ]);

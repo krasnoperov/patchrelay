@@ -122,6 +122,8 @@ export interface ReviewWorkspace {
   cachePath: string;
   worktreePath: string;
   baseRef: string;
+  diffBaseRef?: string;
+  diffTarget?: "head" | "working-tree";
   headRef: string;
   headSha: string;
 }
