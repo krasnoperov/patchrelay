@@ -23,9 +23,27 @@ export interface ClusterHealthSummary {
   activeRuns: number;
   blockedIssues: number;
   readyIssues: number;
+  ciTrackedPrs: number;
+  ciPending: number;
+  ciSuccess: number;
+  ciFailure: number;
+  ciUnknown: number;
+  ciOrphaned: number;
   passCount: number;
   warnCount: number;
   failCount: number;
+}
+
+export interface ClusterCiEntry {
+  issueKey?: string | undefined;
+  projectId: string;
+  prNumber: number;
+  gateStatus: "pending" | "success" | "failure" | "unknown";
+  owner: "patchrelay" | "reviewer" | "downstream" | "external" | "unknown";
+  orphaned: boolean;
+  factoryState: string;
+  reviewDecision?: string | undefined;
+  message: string;
 }
 
 export interface ClusterHealthReport {
@@ -33,6 +51,7 @@ export interface ClusterHealthReport {
   ok: boolean;
   summary: ClusterHealthSummary;
   checks: ClusterHealthCheck[];
+  ci: ClusterCiEntry[];
 }
 
 interface ServiceProbeResult {
@@ -41,6 +60,17 @@ interface ServiceProbeResult {
 }
 
 type JsonObject = Record<string, unknown>;
+
+interface ReviewQuillStatusJson extends JsonObject {
+  health?: { ok?: boolean } | undefined;
+  systemd?: { ActiveState?: string } | undefined;
+  watch?: { runningAttempts?: number } | undefined;
+  healthError?: string | undefined;
+}
+
+interface MergeStewardStatusJson extends JsonObject {
+  systemd?: { ActiveState?: string } | undefined;
+}
 
 interface GitHubPullRequestSnapshot {
   state?: string | undefined;
@@ -67,6 +97,7 @@ export async function collectClusterHealth(
   runCommand: CommandRunner,
 ): Promise<ClusterHealthReport> {
   const checks: ClusterHealthCheck[] = [];
+  const ciEntries: ClusterCiEntry[] = [];
   const now = Date.now();
   const issues = db.listIssues();
   const openIssues = issues.filter((issue) => issue.factoryState !== "done");
@@ -107,10 +138,16 @@ export async function collectClusterHealth(
   const queueRelevantIssues = snapshots.filter((snapshot) => snapshot.issue.factoryState === "awaiting_queue");
   const reviewQuillProbe = reviewRelevantIssues.length > 0
     ? await probeOptionalService(runCommand, "review-quill", {
-        healthy: (payload) => payload?.health?.ok === true && payload?.systemd?.ActiveState === "active",
-        summarize: (payload) => payload?.health?.ok === true
-          ? `Healthy (${typeof payload?.watch?.runningAttempts === "number" ? `${payload.watch.runningAttempts} running attempts` : "service reachable"})`
-          : `Unhealthy (${payload?.healthError ?? "service health unavailable"})`,
+        healthy: (payload) => {
+          const parsed = payload as ReviewQuillStatusJson;
+          return parsed.health?.ok === true && parsed.systemd?.ActiveState === "active";
+        },
+        summarize: (payload) => {
+          const parsed = payload as ReviewQuillStatusJson;
+          return parsed.health?.ok === true
+            ? `Healthy (${typeof parsed.watch?.runningAttempts === "number" ? `${parsed.watch.runningAttempts} running attempts` : "service reachable"})`
+            : `Unhealthy (${parsed.healthError ?? "service health unavailable"})`;
+        },
       })
     : undefined;
   if (reviewQuillProbe) {
@@ -123,10 +160,16 @@ export async function collectClusterHealth(
 
   const mergeStewardProbe = queueRelevantIssues.length > 0
     ? await probeOptionalService(runCommand, "merge-steward", {
-        healthy: (payload) => payload?.systemd?.ActiveState === "active",
-        summarize: (payload) => payload?.systemd?.ActiveState === "active"
-          ? "Healthy"
-          : `Unhealthy (${payload?.systemd?.ActiveState ?? "unknown"})`,
+        healthy: (payload) => {
+          const parsed = payload as MergeStewardStatusJson;
+          return parsed.systemd?.ActiveState === "active";
+        },
+        summarize: (payload) => {
+          const parsed = payload as MergeStewardStatusJson;
+          return parsed.systemd?.ActiveState === "active"
+            ? "Healthy"
+            : `Unhealthy (${parsed.systemd?.ActiveState ?? "unknown"})`;
+        },
       })
     : undefined;
   if (mergeStewardProbe) {
@@ -153,16 +196,19 @@ export async function collectClusterHealth(
     if (!snapshot.issue.prNumber) {
       continue;
     }
-    const finding = await evaluateGitHubIssueHealth(
+    const githubHealth = await evaluateGitHubIssueHealth(
       snapshot,
       config,
       runCommand,
       reviewQuillProbe,
       mergeStewardProbe,
     );
-    if (finding) {
+    if (githubHealth.ciEntry) {
+      ciEntries.push(githubHealth.ciEntry);
+    }
+    if (githubHealth.finding) {
       checks.push({
-        ...finding,
+        ...githubHealth.finding,
         ...(snapshot.issue.issueKey ? { issueKey: snapshot.issue.issueKey } : {}),
         projectId: snapshot.issue.projectId,
         prNumber: snapshot.issue.prNumber,
@@ -185,6 +231,16 @@ export async function collectClusterHealth(
       message: "No non-done issues are currently tracked",
     });
   }
+  if (ciEntries.length > 0) {
+    const orphanedCi = ciEntries.filter((entry) => entry.orphaned);
+    checks.push({
+      status: orphanedCi.length === 0 ? "pass" : "fail",
+      scope: "ci",
+      message: orphanedCi.length === 0
+        ? `Tracked ${ciEntries.length} PR-backed issue${ciEntries.length === 1 ? "" : "s"} and every CI state has a live owner`
+        : `${orphanedCi.length} PR-backed issue${orphanedCi.length === 1 ? "" : "s"} ha${orphanedCi.length === 1 ? "s" : "ve"} orphaned CI ownership`,
+    });
+  }
 
   const summary: ClusterHealthSummary = {
     trackedIssues: issues.length,
@@ -192,6 +248,12 @@ export async function collectClusterHealth(
     activeRuns: openIssues.filter((issue) => issue.activeRunId !== undefined).length,
     blockedIssues: snapshots.filter((snapshot) => snapshot.blockedBy.length > 0).length,
     readyIssues: snapshots.filter((snapshot) => snapshot.readyForExecution).length,
+    ciTrackedPrs: ciEntries.length,
+    ciPending: ciEntries.filter((entry) => entry.gateStatus === "pending").length,
+    ciSuccess: ciEntries.filter((entry) => entry.gateStatus === "success").length,
+    ciFailure: ciEntries.filter((entry) => entry.gateStatus === "failure").length,
+    ciUnknown: ciEntries.filter((entry) => entry.gateStatus === "unknown").length,
+    ciOrphaned: ciEntries.filter((entry) => entry.orphaned).length,
     passCount: checks.filter((check) => check.status === "pass").length,
     warnCount: checks.filter((check) => check.status === "warn").length,
     failCount: checks.filter((check) => check.status === "fail").length,
@@ -202,6 +264,7 @@ export async function collectClusterHealth(
     ok: summary.failCount === 0,
     summary,
     checks,
+    ci: ciEntries,
   };
 }
 
@@ -292,110 +355,250 @@ async function evaluateGitHubIssueHealth(
   runCommand: CommandRunner,
   reviewQuillProbe?: ServiceProbeResult,
   mergeStewardProbe?: ServiceProbeResult,
-): Promise<ClusterHealthCheck | undefined> {
+): Promise<{ finding?: ClusterHealthCheck | undefined; ciEntry?: ClusterCiEntry | undefined }> {
   const { issue, ageMs } = snapshot;
   const project = config.projects.find((entry) => entry.id === issue.projectId);
   const repoFullName = project?.github?.repoFullName;
   if (!repoFullName || issue.prNumber === undefined) {
-    return issue.prNumber !== undefined
-      ? {
-          status: "fail",
-          scope: "github:config",
-          message: "PR-backed issue has no GitHub repo configured",
-        }
-      : undefined;
+    return {
+      finding: issue.prNumber !== undefined
+        ? {
+            status: "fail",
+            scope: "github:config",
+            message: "PR-backed issue has no GitHub repo configured",
+          }
+        : undefined,
+    };
   }
 
   const probe = await probeGitHubPullRequest(runCommand, repoFullName, issue.prNumber);
   if (!probe.ok) {
     return {
-      status: "warn",
-      scope: "github:probe",
-      message: `Unable to query GitHub PR state: ${probe.error}`,
+      ciEntry: {
+        ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
+        projectId: issue.projectId,
+        prNumber: issue.prNumber,
+        gateStatus: "unknown",
+        owner: "unknown",
+        orphaned: true,
+        factoryState: issue.factoryState,
+        message: `GitHub probe failed: ${probe.error}`,
+      },
+      finding: {
+        status: "warn",
+        scope: "github:probe",
+        message: `Unable to query GitHub PR state: ${probe.error}`,
+      },
     };
   }
 
   const pr = probe.pr;
   const gateCheckNames = getGateCheckNames(project);
-  const gateCheckStatus = deriveGateCheckStatusFromRollup(pr.statusCheckRollup, gateCheckNames);
+  const gateCheckStatus = deriveCiGateStatus(pr.statusCheckRollup, gateCheckNames);
   const reviewDecision = pr.reviewDecision?.trim().toUpperCase();
   const requestedReviewers = extractRequestedReviewerLogins(pr.reviewRequests);
   const reviewRequested = requestedReviewers.length > 0;
   const mergeConflictDetected = pr.mergeable === "CONFLICTING" || pr.mergeStateStatus === "DIRTY";
+  const ciEntry = buildCiEntry({
+    issue,
+    gateCheckStatus,
+    reviewDecision,
+    reviewRequested,
+    mergeConflictDetected,
+  });
 
   if (pr.state === "MERGED" && issue.factoryState !== "done" && ageMs >= RECONCILIATION_GRACE_MS) {
     return {
-      status: "fail",
-      scope: "github:reconcile",
-      message: "PR is already merged but the issue has not advanced to done",
+      ciEntry,
+      finding: {
+        status: "fail",
+        scope: "github:reconcile",
+        message: "PR is already merged but the issue has not advanced to done",
+      },
     };
   }
 
   if (pr.state === "CLOSED" && issue.factoryState !== "delegated" && issue.factoryState !== "done" && ageMs >= RECONCILIATION_GRACE_MS) {
     return {
-      status: "fail",
-      scope: "github:reconcile",
-      message: "PR is closed but the issue is still waiting on PR state",
+      ciEntry,
+      finding: {
+        status: "fail",
+        scope: "github:reconcile",
+        message: "PR is closed but the issue is still waiting on PR state",
+      },
     };
   }
 
   if (gateCheckStatus === "failure" && issue.factoryState !== "repairing_ci" && issue.activeRunId === undefined && ageMs >= RECONCILIATION_GRACE_MS) {
     return {
-      status: "fail",
-      scope: "github:ci",
-      message: "Gate CI is failing but no CI repair is running or queued",
+      ciEntry,
+      finding: {
+        status: "fail",
+        scope: "github:ci",
+        message: "Gate CI is failing but no CI repair is running or queued",
+      },
     };
   }
 
   if (reviewDecision === "APPROVED" && issue.factoryState !== "awaiting_queue" && issue.factoryState !== "done" && ageMs >= RECONCILIATION_GRACE_MS) {
     return {
-      status: "fail",
-      scope: "github:reconcile",
-      message: "PR is approved but the issue has not handed off to downstream merge automation",
+      ciEntry,
+      finding: {
+        status: "fail",
+        scope: "github:reconcile",
+        message: "PR is approved but the issue has not handed off to downstream merge automation",
+      },
     };
   }
 
   if (gateCheckStatus === "success" && reviewDecision === "CHANGES_REQUESTED" && !reviewRequested && ageMs >= RECONCILIATION_GRACE_MS) {
     return {
-      status: "fail",
-      scope: "github:review-handoff",
-      message: "PR is waiting on re-review but no reviewer is currently requested",
+      ciEntry,
+      finding: {
+        status: "fail",
+        scope: "github:review-handoff",
+        message: "PR is waiting on re-review but no reviewer is currently requested",
+      },
     };
   }
 
   if (gateCheckStatus === "success" && reviewDecision === "REVIEW_REQUIRED" && !reviewRequested && ageMs >= RECONCILIATION_GRACE_MS) {
     return {
-      status: "fail",
-      scope: "github:review-handoff",
-      message: "PR needs review but no reviewer is currently requested",
+      ciEntry,
+      finding: {
+        status: "fail",
+        scope: "github:review-handoff",
+        message: "PR needs review but no reviewer is currently requested",
+      },
     };
   }
 
   if (requestedReviewers.includes("review-quill") && reviewQuillProbe && reviewQuillProbe.status !== "pass") {
     return {
-      status: "fail",
-      scope: "github:review-automation",
-      message: `PR is waiting on review-quill but the service is not healthy: ${reviewQuillProbe.message}`,
+      ciEntry,
+      finding: {
+        status: "fail",
+        scope: "github:review-automation",
+        message: `PR is waiting on review-quill but the service is not healthy: ${reviewQuillProbe.message}`,
+      },
     };
   }
 
   if (issue.factoryState === "awaiting_queue" && mergeConflictDetected && issue.activeRunId === undefined && ageMs >= RECONCILIATION_GRACE_MS) {
     return {
-      status: "fail",
-      scope: "github:queue",
-      message: "PR has merge conflicts but no queue repair is running or queued",
+      ciEntry,
+      finding: {
+        status: "fail",
+        scope: "github:queue",
+        message: "PR has merge conflicts but no queue repair is running or queued",
+      },
     };
   }
 
   if (issue.factoryState === "awaiting_queue" && mergeStewardProbe && mergeStewardProbe.status !== "pass" && ageMs >= RECONCILIATION_GRACE_MS) {
     return {
-      status: "fail",
-      scope: "github:queue",
-      message: `Issue is waiting on downstream merge automation but merge-steward is not healthy: ${mergeStewardProbe.message}`,
+      ciEntry,
+      finding: {
+        status: "fail",
+        scope: "github:queue",
+        message: `Issue is waiting on downstream merge automation but merge-steward is not healthy: ${mergeStewardProbe.message}`,
+      },
     };
   }
 
-  return undefined;
+  return { ciEntry };
+}
+
+function buildCiEntry(params: {
+  issue: IssueRecord;
+  gateCheckStatus: "pending" | "success" | "failure" | "unknown";
+  reviewDecision?: string | undefined;
+  reviewRequested: boolean;
+  mergeConflictDetected: boolean;
+}): ClusterCiEntry {
+  const { issue, gateCheckStatus, reviewDecision, reviewRequested, mergeConflictDetected } = params;
+  const owner = deriveCiOwner({
+    gateCheckStatus,
+    factoryState: issue.factoryState,
+    reviewDecision,
+    reviewRequested,
+    mergeConflictDetected,
+  });
+  return {
+    ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
+    projectId: issue.projectId,
+    prNumber: issue.prNumber!,
+    gateStatus: gateCheckStatus,
+    owner,
+    orphaned: owner === "unknown",
+    factoryState: issue.factoryState,
+    ...(reviewDecision ? { reviewDecision } : {}),
+    message: describeCiOwnership({
+      gateCheckStatus,
+      owner,
+      reviewDecision,
+      reviewRequested,
+      mergeConflictDetected,
+    }),
+  };
+}
+
+function deriveCiOwner(params: {
+  gateCheckStatus: "pending" | "success" | "failure" | "unknown";
+  factoryState: string;
+  reviewDecision?: string | undefined;
+  reviewRequested: boolean;
+  mergeConflictDetected: boolean;
+}): "patchrelay" | "reviewer" | "downstream" | "external" | "unknown" {
+  if (params.gateCheckStatus === "failure") {
+    return params.factoryState === "repairing_ci" ? "patchrelay" : "unknown";
+  }
+  if (params.factoryState === "awaiting_queue" || params.reviewDecision === "APPROVED") {
+    return params.mergeConflictDetected && params.factoryState !== "repairing_queue"
+      ? "unknown"
+      : "downstream";
+  }
+  if (params.reviewDecision === "CHANGES_REQUESTED" || params.reviewDecision === "REVIEW_REQUIRED") {
+    if (params.factoryState === "changes_requested") return "patchrelay";
+    return "reviewer";
+  }
+  if (params.gateCheckStatus === "pending") {
+    return "external";
+  }
+  if (params.gateCheckStatus === "success" && params.factoryState === "pr_open") {
+    return "reviewer";
+  }
+  return "external";
+}
+
+function describeCiOwnership(params: {
+  gateCheckStatus: "pending" | "success" | "failure" | "unknown";
+  owner: "patchrelay" | "reviewer" | "downstream" | "external" | "unknown";
+  reviewDecision?: string | undefined;
+  reviewRequested: boolean;
+  mergeConflictDetected: boolean;
+}): string {
+  if (params.owner === "patchrelay") {
+    return params.gateCheckStatus === "failure"
+      ? "PatchRelay owns the next CI repair move"
+      : "PatchRelay owns the next requested-changes move";
+  }
+  if (params.owner === "reviewer") {
+    return params.reviewRequested
+      ? "Waiting on an active reviewer request"
+      : "Waiting on review or re-review";
+  }
+  if (params.owner === "downstream") {
+    return params.mergeConflictDetected
+      ? "Downstream merge automation is expected to repair or requeue this PR"
+      : "Downstream merge automation owns the next move";
+  }
+  if (params.owner === "external") {
+    return params.gateCheckStatus === "pending"
+      ? "Waiting on external CI checks to settle"
+      : "Waiting on external GitHub automation";
+  }
+  return "No live automation owner is visible for this CI/review state";
 }
 
 function isResolvedDependency(dep: IssueDependencyRecord): boolean {
@@ -412,6 +615,31 @@ function needsReviewAutomation(issue: IssueRecord): boolean {
 function getGateCheckNames(project: AppConfig["projects"][number] | undefined): string[] {
   const configured = project?.gateChecks?.map((entry) => entry.trim()).filter(Boolean) ?? [];
   return configured.length > 0 ? configured : ["verify"];
+}
+
+function deriveCiGateStatus(
+  statusCheckRollup: GitHubStatusRollupEntry[] | undefined,
+  gateCheckNames: string[],
+): "pending" | "success" | "failure" | "unknown" {
+  const gateStatus = deriveGateCheckStatusFromRollup(statusCheckRollup, gateCheckNames);
+  if (gateStatus) {
+    return gateStatus;
+  }
+
+  const entries = Array.isArray(statusCheckRollup) ? statusCheckRollup : [];
+  if (entries.length === 0) {
+    return "unknown";
+  }
+
+  const hasPending = entries.some((entry) => {
+    const status = entry.status?.trim().toLowerCase();
+    return status === "queued" || status === "in_progress" || status === "requested" || status === "waiting" || status === "pending";
+  });
+  if (hasPending) {
+    return "pending";
+  }
+
+  return "unknown";
 }
 
 async function probePatchRelayService(config: AppConfig): Promise<ServiceProbeResult> {
