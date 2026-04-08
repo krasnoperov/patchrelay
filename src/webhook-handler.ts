@@ -695,8 +695,8 @@ export class WebhookHandler {
     // consume review-fix budget or wake a new run.
     const installation = this.db.linearInstallations.getLinearInstallationForProject(project.id);
     const selfAuthored = installation?.actorId && normalized.actor?.id === installation.actorId;
-    const statusCommentUpdate = this.isPatchRelayManagedStatusComment(issue, normalized.comment.id, trimmedBody);
-    if (selfAuthored || statusCommentUpdate) {
+    const inertPatchRelayComment = this.isInertPatchRelayComment(issue, normalized.comment.id, trimmedBody, normalized.actor?.type);
+    if (selfAuthored || inertPatchRelayComment) {
       this.db.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
         projectId: project.id,
         linearIssueId: normalized.issue.id,
@@ -803,14 +803,34 @@ export class WebhookHandler {
     }
   }
 
-  private isPatchRelayManagedStatusComment(
+  private isInertPatchRelayComment(
     issue: NonNullable<ReturnType<PatchRelayDatabase["getIssue"]>>,
     commentId: string,
     body: string,
+    actorType?: string,
   ): boolean {
-    return commentId === issue.statusCommentId
-      || (body.startsWith("## PatchRelay status")
-        && body.includes("_PatchRelay updates this comment as it works. Review and merge remain downstream._"));
+    if (commentId === issue.statusCommentId) {
+      return true;
+    }
+    if (body.startsWith("## PatchRelay status")
+      && body.includes("_PatchRelay updates this comment as it works. Review and merge remain downstream._")) {
+      return true;
+    }
+    const normalizedActorType = actorType?.trim().toLowerCase();
+    if (normalizedActorType && normalizedActorType !== "user") {
+      return this.isPatchRelayGeneratedActivityComment(body);
+    }
+    return false;
+  }
+
+  private isPatchRelayGeneratedActivityComment(body: string): boolean {
+    return body.startsWith("PatchRelay needs human help to continue.")
+      || body.startsWith("PatchRelay is already working on ")
+      || body.startsWith("PatchRelay received the ")
+      || body.startsWith("PatchRelay routed your latest instructions into ")
+      || body.startsWith("PatchRelay has stopped work as requested.")
+      || body.startsWith("Merge preparation failed ")
+      || body === "This thread is for an agent session with patchrelay.";
   }
 
   private hasExplicitPatchRelayWakeIntent(body: string): boolean {
