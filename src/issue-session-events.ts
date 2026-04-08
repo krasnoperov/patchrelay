@@ -1,5 +1,6 @@
 import type { IssueRecord, RunRecord } from "./db-types.ts";
 import type { RunType } from "./factory-state.ts";
+import { sanitizeOperatorFacingText } from "./presentation-text.ts";
 
 export type IssueSessionEventType =
   | "delegated"
@@ -162,7 +163,7 @@ export function extractLatestAssistantSummary(run: RunRecord | undefined): strin
     try {
       const parsed = JSON.parse(run.summaryJson) as { latestAssistantMessage?: unknown };
       if (typeof parsed.latestAssistantMessage === "string" && parsed.latestAssistantMessage.trim()) {
-        return parsed.latestAssistantMessage;
+        return sanitizeOperatorFacingText(parsed.latestAssistantMessage);
       }
     } catch {
       // ignore malformed summary json
@@ -173,13 +174,13 @@ export function extractLatestAssistantSummary(run: RunRecord | undefined): strin
       const parsed = JSON.parse(run.reportJson) as { assistantMessages?: unknown };
       if (Array.isArray(parsed.assistantMessages)) {
         const latest = parsed.assistantMessages.findLast((value) => typeof value === "string" && value.trim());
-        if (typeof latest === "string") return latest;
+        if (typeof latest === "string") return sanitizeOperatorFacingText(latest);
       }
     } catch {
       // ignore malformed report json
     }
   }
-  return run.failureReason;
+  return sanitizeOperatorFacingText(run.failureReason);
 }
 
 function parseEventJson(raw: string | undefined): Record<string, unknown> | undefined {

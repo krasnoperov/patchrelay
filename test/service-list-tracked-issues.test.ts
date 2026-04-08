@@ -137,6 +137,65 @@ test("listTrackedIssues suppresses stale interrupted notes while a run is active
   }
 });
 
+test("listTrackedIssues suppresses stale zombie notes while a run is active", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-service-list-zombie-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const service = new PatchRelayService(
+      config,
+      db,
+      {
+        on: () => undefined,
+        readThread: async () => ({ id: "thread-1", turns: [] }),
+      } as never,
+      undefined,
+      pino({ enabled: false }),
+    );
+
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-zombie",
+      issueKey: "USE-Z",
+      title: "Active implementation after zombie recovery",
+      currentLinearState: "In Progress",
+      factoryState: "implementing",
+    });
+    const run = db.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "implementation",
+    });
+    db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      activeRunId: run.id,
+      factoryState: "implementing",
+    });
+    db.connection.prepare(`
+      UPDATE issue_sessions
+      SET summary_text = ?, session_state = ?, active_run_id = ?
+      WHERE project_id = ? AND linear_issue_id = ?
+    `).run(
+      "Zombie: never started (no thread after restart)",
+      "running",
+      run.id,
+      issue.projectId,
+      issue.linearIssueId,
+    );
+
+    const tracked = service.listTrackedIssues().find((entry) => entry.issueKey === "USE-Z");
+    assert.ok(tracked);
+    assert.equal(tracked.activeRunType, "implementation");
+    assert.equal(tracked.waitingReason, "PatchRelay is actively working");
+    assert.equal(tracked.statusNote, undefined);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("listTrackedIssues surfaces actionable stop guidance for awaiting_input issues", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-service-list-awaiting-input-"));
   try {
