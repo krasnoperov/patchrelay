@@ -5,6 +5,7 @@ import { assertKnownFlags, hasHelpFlag, parseArgs, resolveCommand } from "./args
 import {
   handleIssueCommand,
 } from "./commands/issues.ts";
+import { handleClusterCommand } from "./commands/cluster.ts";
 import { handleLinearCommand } from "./commands/linear.ts";
 import { handleRepoCommand } from "./commands/repo.ts";
 import { handleInitCommand, handleServiceCommand } from "./commands/setup.ts";
@@ -26,6 +27,7 @@ function getCommandConfigProfile(command: string): ConfigLoadProfile {
     case "linear":
     case "dashboard":
       return "operator_cli";
+    case "cluster":
     case "repo":
     case "issue":
       return "cli";
@@ -78,6 +80,9 @@ function validateFlags(command: string, commandArgs: string[], parsed: ReturnTyp
       }
     }
     case "doctor":
+      assertKnownFlags(parsed, command, ["json"]);
+      return;
+    case "cluster":
       assertKnownFlags(parsed, command, ["json"]);
       return;
     case "init":
@@ -172,7 +177,7 @@ export async function runCli(
   const json = parsed.flags.get("json") === true;
   if (command === "help") {
     const topic = commandArgs[0];
-    if (topic === "linear" || topic === "repo" || topic === "issue" || topic === "service") {
+    if (topic === "linear" || topic === "repo" || topic === "issue" || topic === "service" || topic === "cluster") {
       writeOutput(stdout, `${helpTextFor(topic)}\n`);
       return 0;
     }
@@ -194,7 +199,7 @@ export async function runCli(
         ? "linear"
         : command === "repo"
           ? "repo"
-        : command === "issue" || command === "service"
+        : command === "issue" || command === "service" || command === "cluster"
           ? command
           : "root";
     writeOutput(
@@ -331,6 +336,23 @@ export async function runCli(
         data: issueData,
         config,
         runInteractive,
+      });
+    }
+
+    if (command === "cluster") {
+      const issueData = await ensureIssueDataAccess(data, config);
+      if (!data) {
+        data = issueData;
+        ownsData = true;
+      }
+      return await handleClusterCommand({
+        commandArgs,
+        parsed,
+        json,
+        stdout,
+        data: issueData,
+        config,
+        runCommand,
       });
     }
 

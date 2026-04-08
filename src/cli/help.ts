@@ -1,4 +1,4 @@
-export type CliHelpTopic = "root" | "linear" | "repo" | "issue" | "service";
+export type CliHelpTopic = "root" | "linear" | "repo" | "issue" | "service" | "cluster";
 
 export function rootHelpText(): string {
   return [
@@ -40,6 +40,7 @@ export function rootHelpText(): string {
     "  issue open <issueKey> [--print] [--json]                Open Codex in the issue worktree",
     "  issue sessions <issueKey> [--json]                      Show recorded Codex app-server sessions for one issue",
     "  service status [--json]                                 Show systemd state and local health",
+    "  cluster [--json]                                        Check service + workflow health across all tracked issues",
     "  service logs [--lines <count>] [--json]                 Show recent service logs",
     "  serve                                                   Run the local PatchRelay service",
     "",
@@ -64,6 +65,7 @@ export function rootHelpText(): string {
     "  patchrelay issue list --active",
     "  patchrelay issue watch USE-54",
     "  patchrelay service status",
+    "  patchrelay cluster",
     "  patchrelay version --json",
     "",
     "Command help:",
@@ -72,6 +74,7 @@ export function rootHelpText(): string {
     "  patchrelay help repo",
     "  patchrelay help issue",
     "  patchrelay help service",
+    "  patchrelay help cluster",
   ].join("\n");
 }
 
@@ -178,8 +181,29 @@ export function serviceHelpText(): string {
   ].join("\n");
 }
 
+export function clusterHelpText(): string {
+  return [
+    "Usage:",
+    "  patchrelay cluster [--json]",
+    "  patchrelay cluster check [--json]",
+    "  patchrelay cluster status [--json]",
+    "",
+    "Behavior:",
+    "  Aggregates local PatchRelay service health with workflow checks for every",
+    "  tracked non-done issue. The command looks for unmanaged blockers, lost",
+    "  dispatch, stale PR handoffs, and downstream waits that no longer have a",
+    "  healthy automation owner.",
+    "",
+    "Examples:",
+    "  patchrelay cluster",
+    "  patchrelay cluster --json",
+  ].join("\n");
+}
+
 export function helpTextFor(topic: CliHelpTopic): string {
   switch (topic) {
+    case "cluster":
+      return clusterHelpText();
     case "linear":
       return linearHelpText();
     case "repo":

@@ -1108,6 +1108,7 @@ test("cli help explains the setup sequence and default behavior", async () => {
   assert.match(stdout.read(), /patchrelay repo link krasnoperov\/usertold --workspace usertold --team USE/);
   assert.match(stdout.read(), /dashboard \[--issue <issueKey>\]/);
   assert.match(stdout.read(), /service status \[--json\]/);
+  assert.match(stdout.read(), /cluster \[--json\]/);
   assert.match(stdout.read(), /issue watch <issueKey>/);
   assert.match(stdout.read(), /Automation env vars:/);
   assert.match(stdout.read(), /Examples:/);
@@ -1309,6 +1310,10 @@ test("cli issue and service groups expose the supported operator flow", async ()
   assert.equal((parsed.systemd as Record<string, unknown>).ActiveState, "active");
   assert.equal((parsed.systemd as Record<string, unknown>).ExecMainPID, "4242");
   assert.equal(typeof (parsed.health as { reachable?: boolean }).reachable, "boolean");
+
+  const clusterHelp = createBufferStream();
+  assert.equal(await runCli(["cluster", "--help"], { stdout: clusterHelp.stream, stderr: createBufferStream().stream }), 0);
+  assert.match(clusterHelp.read(), /patchrelay cluster \[--json\]/);
 });
 
 test("cli dashboard aliases resolve to the TUI command", async () => {
