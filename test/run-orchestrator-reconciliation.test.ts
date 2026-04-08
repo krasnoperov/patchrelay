@@ -349,6 +349,56 @@ exit 1
   }
 });
 
+test("idle reconciliation dispatches branch upkeep when requested-changes PR is still dirty on a newer head", { concurrency: false }, async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-dirty-review-upkeep-"));
+  const oldPath = process.env.PATH;
+  try {
+    const fakeBin = path.join(baseDir, "bin");
+    const ghPath = path.join(fakeBin, "gh");
+    mkdirSync(fakeBin, { recursive: true });
+    writeFileSync(ghPath, `#!/usr/bin/env bash
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  printf '{"headRefOid":"sha-newer","state":"OPEN","reviewDecision":"CHANGES_REQUESTED","mergeable":"CONFLICTING","mergeStateStatus":"DIRTY","statusCheckRollup":[{"__typename":"CheckRun","name":"verify","status":"COMPLETED","conclusion":"SUCCESS"}]}'
+  exit 0
+fi
+echo "unexpected gh args: $*" >&2
+exit 1
+`, "utf8");
+    chmodSync(ghPath, 0o755);
+    process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
+
+    const { db, orchestrator, enqueueCalls } = createOrchestrator(baseDir);
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-dirty-review-upkeep",
+      issueKey: "USE-11F",
+      branchName: "feat-dirty-review-upkeep",
+      prNumber: 116,
+      prState: "open",
+      prHeadSha: "sha-old",
+      prReviewState: "changes_requested",
+      prCheckStatus: "success",
+      factoryState: "pr_open",
+    });
+
+    await (orchestrator as unknown as { idleReconciler: { reconcile: () => Promise<void> } }).idleReconciler.reconcile();
+
+    const issue = db.getIssue("usertold", "issue-dirty-review-upkeep");
+    const wake = db.peekIssueSessionWake("usertold", "issue-dirty-review-upkeep");
+    assert.equal(issue?.factoryState, "changes_requested");
+    assert.equal(issue?.prHeadSha, "sha-newer");
+    assert.equal(issue?.prReviewState, "changes_requested");
+    assert.equal(issue?.prCheckStatus, "success");
+    assert.equal(wake?.runType, "branch_upkeep");
+    assert.match(JSON.stringify(wake?.context ?? {}), /branchUpkeepRequired/);
+    assert.match(JSON.stringify(wake?.context ?? {}), /PR #116 as DIRTY/);
+    assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-dirty-review-upkeep" }]);
+  } finally {
+    process.env.PATH = oldPath;
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("idle reconciliation escalates non-decisive review-quill outcomes to operator input", { concurrency: false }, async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-neutral-review-"));
   const oldPath = process.env.PATH;
