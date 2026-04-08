@@ -44,6 +44,23 @@ test("renderRichTextLines formats links, bullets, and code blocks without raw ma
   assert.doesNotMatch(text, /```/);
 });
 
+test("renderRichTextLines uses color without extra bolding for links and inline code", () => {
+  const lines = renderRichTextLines("Updated [LandingPage.tsx](/tmp/LandingPage.tsx#L24) with `npm run test`.", {
+    key: "rich-text-style",
+    width: 80,
+  });
+
+  const styledSegments = lines.flatMap((line) => line.segments).filter((segment) => segment.color === "cyan" || segment.color === "yellow");
+  const cyanText = styledSegments.filter((segment) => segment.color === "cyan").map((segment) => segment.text).join("");
+  const yellowText = styledSegments.filter((segment) => segment.color === "yellow").map((segment) => segment.text).join("");
+
+  assert.match(cyanText, /LandingPage\.tsx/);
+  assert.match(yellowText, /npm run test/);
+  for (const segment of styledSegments) {
+    assert.equal(segment.bold, undefined);
+  }
+});
+
 test("buildDetailLines keeps completed timeline runs collapsed to a summary", () => {
   const issue = makeIssue("USE-1");
   const timeline: TimelineEntry[] = [
@@ -174,6 +191,26 @@ test("buildDetailLines renders header status notes with markdown-friendly format
   assert.doesNotMatch(text, /\/tmp\/AppOverviewPanel\.tsx#L24/);
   assert.match(text, /npm test/);
   assert.doesNotMatch(text, /\[AppOverviewPanel\.tsx\]\(/);
+
+  const noteLine = buildDetailLines({
+    issue,
+    timeline: [],
+    activeRunStartedAt: null,
+    activeRunId: null,
+    tokenUsage: null,
+    diffSummary: null,
+    plan: null,
+    issueContext: null,
+    detailTab: "timeline",
+    rawRuns: [],
+    rawFeedEvents: [],
+    follow: true,
+    connected: true,
+    lastServerMessageAt: Date.now(),
+    width: 90,
+  }).find((line) => line.segments.some((segment) => segment.text.includes("Updated")));
+
+  assert.equal(noteLine?.segments.some((segment) => segment.dimColor === true), false);
 });
 
 test("buildDetailLines prefers full check summary over gate status for re-review state", () => {
