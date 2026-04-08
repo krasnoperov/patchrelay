@@ -32,6 +32,10 @@ async function refExists(cwd: string, ref: string): Promise<boolean> {
   }
 }
 
+async function mergeBase(cwd: string, left: string, right: string): Promise<string> {
+  return (await git(cwd, ["merge-base", left, right])).trim();
+}
+
 export function defaultDiffRepoConfig(repoFullName?: string, baseBranch?: string): ReviewQuillRepositoryConfig {
   return {
     repoId: "local",
@@ -107,6 +111,7 @@ export async function buildLocalDiffContext(params: {
   }
 
   const baseRef = params.baseRef ?? await resolveLocalBaseRef(toplevel, params.repo.baseBranch);
+  const diffBaseRef = await mergeBase(toplevel, baseRef, "HEAD");
   const headSha = (await git(toplevel, ["rev-parse", "HEAD"])).trim();
   const headRef = (await git(toplevel, ["rev-parse", "--abbrev-ref", "HEAD"])).trim();
 
@@ -115,6 +120,8 @@ export async function buildLocalDiffContext(params: {
     cachePath: toplevel,
     worktreePath: toplevel,
     baseRef,
+    diffBaseRef,
+    diffTarget: "working-tree",
     headRef,
     headSha,
   };

@@ -172,6 +172,31 @@ test("buildLocalDiffContext mirrors buildDiffContext for the current branch", as
   }
 });
 
+test("buildLocalDiffContext includes staged and unstaged tracked changes on the current branch", async () => {
+  const fixture = await createRepo();
+  try {
+    await writeFile(path.join(fixture.repoPath, "src.ts"), "export const value = 7;\n", "utf8");
+    await writeFile(path.join(fixture.repoPath, "extra.ts"), "export const extra = true;\n", "utf8");
+    git(fixture.repoPath, "add", "extra.ts");
+
+    const { workspace, diff } = await buildLocalDiffContext({
+      repo: repoConfig(),
+      cwd: fixture.repoPath,
+      baseRef: "main",
+    });
+
+    assert.equal(workspace.baseRef, "main");
+    assert.equal(workspace.diffTarget, "working-tree");
+    assert.ok(workspace.diffBaseRef, "local diff should resolve a merge-base for the working tree");
+    assert.ok(diff.inventory.some((entry) => entry.path === "src.ts" && entry.classification === "full_patch"));
+    assert.ok(diff.inventory.some((entry) => entry.path === "extra.ts" && entry.classification === "full_patch"));
+    assert.ok(diff.patches.some((entry) => entry.path === "src.ts"));
+    assert.ok(diff.patches.some((entry) => entry.path === "extra.ts"));
+  } finally {
+    await rm(fixture.repoPath, { recursive: true, force: true });
+  }
+});
+
 test("parseGitHubRepoFullName handles common GitHub remote URL formats", () => {
   assert.equal(parseGitHubRepoFullName("https://github.com/krasnoperov/patchrelay.git"), "krasnoperov/patchrelay");
   assert.equal(parseGitHubRepoFullName("https://github.com/krasnoperov/patchrelay"), "krasnoperov/patchrelay");
