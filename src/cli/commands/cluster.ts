@@ -19,7 +19,7 @@ interface ClusterCommandParams {
 
 export async function handleClusterCommand(params: ClusterCommandParams): Promise<number> {
   const subcommand = params.commandArgs[0];
-  if (subcommand && subcommand !== "check" && subcommand !== "status") {
+  if (subcommand) {
     throw new CliUsageError(`Unknown cluster command: ${subcommand}`, "cluster");
   }
 

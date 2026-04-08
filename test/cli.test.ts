@@ -1314,6 +1314,10 @@ test("cli issue and service groups expose the supported operator flow", async ()
   const clusterHelp = createBufferStream();
   assert.equal(await runCli(["cluster", "--help"], { stdout: clusterHelp.stream, stderr: createBufferStream().stream }), 0);
   assert.match(clusterHelp.read(), /patchrelay cluster \[--json\]/);
+
+  const clusterStatusErr = createBufferStream();
+  assert.equal(await runCli(["cluster", "status"], { stdout: createBufferStream().stream, stderr: clusterStatusErr.stream }), 1);
+  assert.match(clusterStatusErr.read(), /Unknown cluster command: status/);
 });
 
 test("cli dashboard aliases resolve to the TUI command", async () => {
