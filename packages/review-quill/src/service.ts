@@ -687,11 +687,7 @@ export class ReviewQuillService {
           });
         }
       }
-      const attemptConclusion = event === "REQUEST_CHANGES"
-        ? "declined"
-        : event === "COMMENT"
-          ? "skipped"
-          : "approved";
+      const attemptConclusion = event === "REQUEST_CHANGES" ? "declined" : "approved";
       this.store.updateAttempt(attempt.id, {
         status: "completed",
         conclusion: attemptConclusion,
