@@ -221,7 +221,7 @@ export async function collectClusterHealth(
     checks.push({
       status: "pass",
       scope: "workflow",
-      message: `All ${openIssues.length} non-done issues have a live owner, a valid blocker, or a current downstream waiter`,
+      message: `All ${openIssues.length} non-done issues currently have active work, a tracked blocker, or a downstream owner`,
     });
   }
   if (openIssues.length === 0) {
@@ -237,8 +237,8 @@ export async function collectClusterHealth(
       status: orphanedCi.length === 0 ? "pass" : "fail",
       scope: "ci",
       message: orphanedCi.length === 0
-        ? `Tracked ${ciEntries.length} PR-backed issue${ciEntries.length === 1 ? "" : "s"} and every CI state has a live owner`
-        : `${orphanedCi.length} PR-backed issue${orphanedCi.length === 1 ? "" : "s"} ha${orphanedCi.length === 1 ? "s" : "ve"} orphaned CI ownership`,
+        ? `Tracked ${ciEntries.length} PR-backed issue${ciEntries.length === 1 ? "" : "s"} and each PR has a visible next owner`
+        : `${orphanedCi.length} PR-backed issue${orphanedCi.length === 1 ? "" : "s"} ha${orphanedCi.length === 1 ? "s" : "ve"} no visible next owner`,
     });
   }
 
@@ -553,6 +553,9 @@ function deriveCiOwner(params: {
   if (params.gateCheckStatus === "failure") {
     return params.factoryState === "repairing_ci" ? "patchrelay" : "unknown";
   }
+  if (params.gateCheckStatus === "pending") {
+    return "external";
+  }
   if (params.factoryState === "awaiting_queue" || params.reviewDecision === "APPROVED") {
     return params.mergeConflictDetected && params.factoryState !== "repairing_queue"
       ? "unknown"
@@ -560,10 +563,7 @@ function deriveCiOwner(params: {
   }
   if (params.reviewDecision === "CHANGES_REQUESTED" || params.reviewDecision === "REVIEW_REQUIRED") {
     if (params.factoryState === "changes_requested") return "patchrelay";
-    return "reviewer";
-  }
-  if (params.gateCheckStatus === "pending") {
-    return "external";
+    return params.reviewRequested ? "reviewer" : "unknown";
   }
   if (params.gateCheckStatus === "success" && params.factoryState === "pr_open") {
     return "reviewer";
@@ -586,7 +586,7 @@ function describeCiOwnership(params: {
   if (params.owner === "reviewer") {
     return params.reviewRequested
       ? "Waiting on an active reviewer request"
-      : "Waiting on review or re-review";
+      : "Waiting on review";
   }
   if (params.owner === "downstream") {
     return params.mergeConflictDetected
@@ -598,7 +598,13 @@ function describeCiOwnership(params: {
       ? "Waiting on external CI checks to settle"
       : "Waiting on external GitHub automation";
   }
-  return "No live automation owner is visible for this CI/review state";
+  if (params.reviewDecision === "CHANGES_REQUESTED") {
+    return "No active reviewer request; re-review handoff is stale";
+  }
+  if (params.reviewDecision === "REVIEW_REQUIRED") {
+    return "No active reviewer request; review handoff is stale";
+  }
+  return "No visible next owner for this PR state";
 }
 
 function isResolvedDependency(dep: IssueDependencyRecord): boolean {

@@ -260,9 +260,9 @@ test("cli cluster reports stale re-review handoff with no requested reviewer", a
     assert.equal(stderr.read(), "");
     const text = stdout.read();
     assert.match(text, /PASS \[service:review-quill\] Healthy/);
-    assert.match(text, /PASS \[ci\] Tracked 1 PR-backed issue and every CI state has a live owner/);
-    assert.match(text, /CI: prs=1 pending=0 success=1 failure=0 unknown=0 orphaned=0/);
-    assert.match(text, /CI USE-33 PR #27  gate=success  owner=reviewer  Waiting on review or re-review/);
+    assert.match(text, /FAIL \[ci\] 1 PR-backed issue has no visible next owner/);
+    assert.match(text, /CI summary: prs=1 pending=0 success=1 failure=0 unknown=0 missing_owner=1/);
+    assert.match(text, /CI USE-33 PR #27  gate=success  next=missing  No active reviewer request; re-review handoff is stale/);
     assert.match(text, /FAIL \[github:review-handoff USE-33 PR #27\] PR is waiting on re-review but no reviewer is currently requested/);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
@@ -339,9 +339,9 @@ test("cli cluster treats in-progress CI as externally owned instead of orphaned"
     assert.equal(exitCode, 0);
     assert.equal(stderr.read(), "");
     const text = stdout.read();
-    assert.match(text, /PASS \[ci\] Tracked 1 PR-backed issue and every CI state has a live owner/);
-    assert.match(text, /CI: prs=1 pending=1 success=0 failure=0 unknown=0 orphaned=0/);
-    assert.match(text, /CI USE-32 PR #29  gate=pending  owner=reviewer  Waiting on review or re-review/);
+    assert.match(text, /PASS \[ci\] Tracked 1 PR-backed issue and each PR has a visible next owner/);
+    assert.match(text, /CI summary: prs=1 pending=1 success=0 failure=0 unknown=0 missing_owner=0/);
+    assert.match(text, /CI USE-32 PR #29  gate=pending  next=ci\/github  Waiting on external CI checks to settle/);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     rmSync(baseDir, { recursive: true, force: true });
