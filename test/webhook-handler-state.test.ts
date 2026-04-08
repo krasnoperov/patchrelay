@@ -1315,6 +1315,88 @@ test("PatchRelay managed status comment updates stay inert even when the webhook
   }
 });
 
+test("PatchRelay-generated escalation activity comments stay inert for non-user webhook actors", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-escalation-comment-"));
+  try {
+    const config = createConfig(baseDir);
+    config.projects[0] = {
+      ...config.projects[0]!,
+      triggerEvents: [...config.projects[0]!.triggerEvents, "commentCreated", "commentUpdated"],
+    };
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+    db.upsertIssue({
+      projectId: "krasnoperov/mafia",
+      linearIssueId: "issue-maf-escalation-comment",
+      issueKey: "MAF-91E",
+      title: "Escalated issue",
+      currentLinearState: "Review",
+      currentLinearStateType: "started",
+      factoryState: "changes_requested",
+      prNumber: 913,
+      prReviewState: "changes_requested",
+    });
+
+    const enqueued: Array<{ projectId: string; issueId: string }> = [];
+    const handler = new WebhookHandler(
+      config,
+      db,
+      { forProject: async () => undefined } as never,
+      { steerTurn: async () => undefined } as never,
+      (projectId, issueId) => { enqueued.push({ projectId, issueId }); },
+      pino({ enabled: false }),
+    );
+
+    const payload: LinearWebhookPayload = {
+      action: "create",
+      type: "Comment",
+      createdAt: "2026-04-01T02:07:00.000Z",
+      webhookTimestamp: Date.now(),
+      actor: {
+        id: "linear-system",
+        name: "Linear",
+        email: "system@example.com",
+        type: "Application",
+      } as unknown as Record<string, unknown>,
+      data: {
+        id: "comment-escalation-1",
+        body: "PatchRelay needs human help to continue.\n\nReview fix budget exhausted (3 attempts)",
+        user: { name: "Linear" },
+        issue: {
+          id: "issue-maf-escalation-comment",
+          identifier: "MAF-91E",
+          title: "Escalated issue",
+          team: { id: "team-maf", key: "MAF" },
+          state: { id: "state-review", name: "Review", type: "started" },
+          delegate: { id: "patchrelay-actor", name: "PatchRelay" },
+        },
+      },
+    };
+
+    const stored = db.insertFullWebhookEvent({
+      webhookId: "delivery-escalation-comment",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(payload),
+    });
+    await handler.processWebhookEvent(stored.id);
+
+    const events = db.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-escalation-comment");
+    assert.equal(events.length, 1);
+    assert.equal(events[0]?.eventType, "self_comment");
+    assert.equal(db.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-escalation-comment"), undefined);
+    assert.deepEqual(enqueued, []);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("agent session id survives follow-up webhooks that do not carry a session id", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-agent-session-id-"));
   try {
