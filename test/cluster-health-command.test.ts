@@ -268,7 +268,7 @@ test("cli cluster reports a same-head requested-changes stall", async () => {
     assert.match(text, /PASS \[service:review-quill\] Healthy/);
     assert.match(text, /FAIL \[ci\] 1 PR-backed issue has no visible next owner/);
     assert.match(text, /CI summary: prs=1 pending=0 success=1 failure=0 unknown=0 missing_owner=1/);
-    assert.match(text, /CI USE-33 PR #27  gate=success  next=missing  Requested changes still block the same head and no fix run is active/);
+    assert.match(text, /CI USE-33 PR #27 {2}gate=success {2}next=missing {2}Requested changes still block the same head and no fix run is active/);
     assert.match(text, /FAIL \[github:review-handoff USE-33 PR #27\] Requested changes still block the current head, but no review fix is running/);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
@@ -351,7 +351,7 @@ test("cli cluster ignores reviewer requests when the same head is still blocked"
     assert.equal(exitCode, 1);
     assert.equal(stderr.read(), "");
     const text = stdout.read();
-    assert.match(text, /CI USE-36 PR #36  gate=success  next=missing  Requested changes still block the same head and no fix run is active/);
+    assert.match(text, /CI USE-36 PR #36 {2}gate=success {2}next=missing {2}Requested changes still block the same head and no fix run is active/);
     assert.match(text, /FAIL \[github:review-handoff USE-36 PR #36\] Requested changes still block the current head, but no review fix is running/);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
@@ -449,7 +449,7 @@ test("cli cluster treats a live review-quill attempt on the current head as an o
     const text = stdout.read();
     assert.match(text, /PASS \[ci\] Tracked 1 PR-backed issue and each PR has a visible next owner/);
     assert.match(text, /CI summary: prs=1 pending=0 success=1 failure=0 unknown=0 missing_owner=0/);
-    assert.match(text, /CI USE-35 PR #35  gate=success  next=review-quill  review-quill attempt #77 is running on the current head/);
+    assert.match(text, /CI USE-35 PR #35 {2}gate=success {2}next=review-quill {2}review-quill attempt #77 is running on the current head/);
     assert.doesNotMatch(text, /github:review-handoff USE-35/);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
@@ -528,7 +528,7 @@ test("cli cluster treats in-progress CI as externally owned instead of orphaned"
     const text = stdout.read();
     assert.match(text, /PASS \[ci\] Tracked 1 PR-backed issue and each PR has a visible next owner/);
     assert.match(text, /CI summary: prs=1 pending=1 success=0 failure=0 unknown=0 missing_owner=0/);
-    assert.match(text, /CI USE-32 PR #29  gate=pending  next=ci\/github  Waiting on external CI checks to settle/);
+    assert.match(text, /CI USE-32 PR #29 {2}gate=pending {2}next=ci\/github {2}Waiting on external CI checks to settle/);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     rmSync(baseDir, { recursive: true, force: true });
