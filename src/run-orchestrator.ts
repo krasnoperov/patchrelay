@@ -1958,6 +1958,7 @@ export class RunOrchestrator {
       if (issue.activeRunId) {
         this.db.finishRunWithLease(lease, issue.activeRunId, { status: "released" });
       }
+      this.db.clearPendingIssueSessionEventsWithLease(lease);
       this.db.upsertIssueWithLease(lease, {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
@@ -1992,8 +1993,11 @@ export class RunOrchestrator {
   }
 
   private failRunAndClear(run: RunRecord, message: string, nextState: FactoryState = "failed"): void {
-    const updated = this.withHeldIssueSessionLease(run.projectId, run.linearIssueId, () => {
+    const updated = this.withHeldIssueSessionLease(run.projectId, run.linearIssueId, (lease) => {
       this.db.finishRun(run.id, { status: "failed", failureReason: message });
+      if (nextState === "failed" || nextState === "escalated" || nextState === "awaiting_input" || nextState === "done") {
+        this.db.clearPendingIssueSessionEventsWithLease(lease);
+      }
       this.db.upsertIssue({
         projectId: run.projectId,
         linearIssueId: run.linearIssueId,

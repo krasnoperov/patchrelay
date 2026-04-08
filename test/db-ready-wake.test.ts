@@ -74,3 +74,34 @@ test("repairing_ci issues can synthesize a one-time wake from the current PR hea
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("terminal issues with stale pending wakes are not treated as ready for execution", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-db-ready-wake-terminal-"));
+  try {
+    const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
+    db.runMigrations();
+
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-3",
+      issueKey: "USE-3",
+      factoryState: "escalated",
+      prNumber: 3,
+      prState: "open",
+      prReviewState: "changes_requested",
+      prCheckStatus: "success",
+    });
+    db.appendIssueSessionEvent({
+      projectId: "usertold",
+      linearIssueId: "issue-3",
+      eventType: "review_changes_requested",
+      eventJson: JSON.stringify({ reviewBody: "Please fix the failing review points." }),
+    });
+
+    const wake = db.peekIssueSessionWake("usertold", "issue-3");
+    assert.equal(wake?.runType, "review_fix");
+    assert.deepEqual(db.listIssuesReadyForExecution(), []);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
