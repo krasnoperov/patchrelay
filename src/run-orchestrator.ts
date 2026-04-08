@@ -281,6 +281,7 @@ function appendStructuredReviewContext(lines: string[], context?: Record<string,
   lines.push(
     `Inline review comments captured: ${reviewComments.length}`,
     "Resolve each comment below or verify it is already fixed on the current head before you stop.",
+    "A requested-changes turn is only complete if you push a newer PR head or deliberately escalate because you are blocked.",
     "",
   );
   for (const comment of reviewComments) {
@@ -345,11 +346,11 @@ function resolveFollowUpAction(runType: RunType, context?: Record<string, unknow
   }
   if (runType === "review_fix" && context?.branchUpkeepRequired === true) {
     const baseBranch = typeof context.baseBranch === "string" ? context.baseBranch : "main";
-    return `Update the existing PR branch onto latest ${baseBranch}, resolve conflicts if needed, rerun narrow verification, and push the same branch.`;
+    return `Update the existing PR branch onto latest ${baseBranch}, resolve conflicts if needed, rerun narrow verification, and push a newer head on the same branch.`;
   }
   switch (runType) {
     case "review_fix":
-      return "Address the review feedback on the current PR branch, verify the fix, and push the same branch.";
+      return "Address the review feedback on the current PR branch, verify the fix, and push a newer head on the same branch.";
     case "ci_repair":
       return "Fix the failing CI root cause on the current PR branch, verify it locally, and push the same branch.";
     case "queue_repair":
@@ -533,9 +534,9 @@ export function buildInitialRunPrompt(issue: IssueRecord, runType: RunType, repo
         "2. Check the current diff (`git diff origin/main`) — a prior rebase may have already resolved some concerns (e.g., scope-bundling from stale commits).",
         "3. For each review point: if already resolved on the current head, note why. If not, fix it.",
         "4. If the structured review context looks incomplete, inspect the latest GitHub review threads directly before deciding you are done.",
-        "5. Run verification, commit and push.",
-        "6. If you believe all concerns are resolved, request a re-review: `gh pr edit <PR#> --add-reviewer <reviewer>`.",
-        "   Do NOT just post a comment saying \"resolved\" — the reviewer must re-review to dismiss the CHANGES_REQUESTED state.",
+        "5. Run verification, commit, and push a newer head on the existing PR branch.",
+        "6. Do not try to hand the same head back to review. If you cannot produce a new pushed head, stop and surface the blocker clearly.",
+        "7. GitHub review happens after the new head is pushed and CI is green. Do not use `gh pr edit --add-reviewer` as part of this workflow.",
         "",
       );
       appendStructuredReviewContext(lines, context);
@@ -626,9 +627,9 @@ export function buildFollowUpRunPrompt(issue: IssueRecord, runType: RunType, rep
         "2. Check the current diff (`git diff origin/main`) — a prior rebase may have already resolved some concerns (e.g., scope-bundling from stale commits).",
         "3. For each review point: if already resolved on the current head, note why. If not, fix it.",
         "4. If the structured review context looks incomplete, inspect the latest GitHub review threads directly before deciding you are done.",
-        "5. Run verification, commit and push.",
-        "6. If you believe all concerns are resolved, request a re-review: `gh pr edit <PR#> --add-reviewer <reviewer>`.",
-        "   Do NOT just post a comment saying \"resolved\" — the reviewer must re-review to dismiss the CHANGES_REQUESTED state.",
+        "5. Run verification, commit, and push a newer head on the existing PR branch.",
+        "6. Do not try to hand the same head back to review. If you cannot produce a new pushed head, stop and surface the blocker clearly.",
+        "7. GitHub review happens after the new head is pushed and CI is green. Do not use `gh pr edit --add-reviewer` as part of this workflow.",
         "",
       );
       appendStructuredReviewContext(lines, context);
@@ -2755,9 +2756,9 @@ function buildReviewFixBranchUpkeepContext(
   context?: Record<string, unknown>,
 ): Record<string, unknown> {
   const promptContext = [
-    `The requested review change is already addressed, but GitHub still reports PR #${prNumber} as ${String(pr.mergeStateStatus)} against latest ${baseBranch}.`,
-    `Before stopping, update the existing PR branch onto latest ${baseBranch}, resolve any conflicts, rerun the narrowest relevant verification, and push again.`,
-    "Do not stop just because the requested code change is already present.",
+    `The requested code change may already be present, but GitHub still reports PR #${prNumber} as ${String(pr.mergeStateStatus)} against latest ${baseBranch}.`,
+    `This turn is branch upkeep on the existing PR branch: update onto latest ${baseBranch}, resolve any conflicts, rerun the narrowest relevant verification, and push a newer head.`,
+    "Do not stop just because the requested code change is already present. Review can only move forward after a new pushed head.",
   ].join(" ");
 
   return {

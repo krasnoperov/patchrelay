@@ -161,9 +161,11 @@ test("review_fix prompt embeds structured inline review context", () => {
     assert.match(prompt, /Review ID: 901/);
     assert.match(prompt, /Reviewed commit: abc123def456/);
     assert.match(prompt, /Inline review comments captured: 1/);
+    assert.match(prompt, /only complete if you push a newer PR head or deliberately escalate/);
     assert.match(prompt, /src\/frontend\/app\/sessionSchema\.ts:1526 \(RIGHT\)/);
     assert.match(prompt, /Blank totals should not produce a leader\./);
-    assert.doesNotMatch(prompt, /gh pr view --comments/);
+    assert.match(prompt, /GitHub review happens after the new head is pushed and CI is green/);
+    assert.doesNotMatch(prompt, /If you believe all concerns are resolved, request a re-review/);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
