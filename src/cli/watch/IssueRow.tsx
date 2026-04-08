@@ -2,6 +2,7 @@ import { Box, Text } from "ink";
 import type { WatchIssue } from "./watch-state.ts";
 import { summarizeIssueStatusNote } from "./issue-status-note.ts";
 import { relativeTime, truncate } from "./format-utils.ts";
+import { hasDisplayPrBlocker, isRereviewNeeded, prChecksFact } from "./pr-status.ts";
 
 interface IssueRowProps {
   issue: WatchIssue;
@@ -26,8 +27,8 @@ function effectiveState(issue: WatchIssue): string {
   if (issue.sessionState === "done") return "done";
   if (issue.sessionState === "failed") return "failed";
   if (issue.blockedByCount > 0 && !issue.activeRunType) return "blocked";
-  if (issue.readyForExecution && !issue.activeRunType) return "ready";
   if (issue.sessionState === "waiting_input") return "awaiting_input";
+  if (issue.readyForExecution && !issue.activeRunType && !hasDisplayPrBlocker(issue)) return "ready";
   return issue.factoryState;
 }
 
@@ -75,9 +76,7 @@ function stageLabel(issue: WatchIssue): string {
 
 function buildFacts(issue: WatchIssue, selected: boolean): Array<{ text: string; color?: string }> {
   const facts: Array<{ text: string; color?: string }> = [];
-  const rereviewNeeded = issue.prReviewState === "changes_requested"
-    && (issue.prCheckStatus === "passed" || issue.prCheckStatus === "success")
-    && !issue.activeRunType;
+  const rereviewNeeded = isRereviewNeeded(issue);
 
   // PR number
   if (issue.prNumber !== undefined) {
@@ -109,20 +108,9 @@ function buildFacts(issue: WatchIssue, selected: boolean): Array<{ text: string;
   }
 
   // Check status — compact
-  if (issue.prCheckStatus === "passed" || issue.prCheckStatus === "success") {
-    facts.push({ text: "checks passed", color: "green" });
-  } else if (issue.prCheckStatus === "failed" || issue.prCheckStatus === "failure") {
-    const failedNames = issue.prChecksSummary?.failedNames ?? [];
-    const checkInfo = issue.latestFailureCheckName
-      ?? (failedNames.length > 0 ? failedNames.slice(0, 2).join(", ") : "checks");
-    facts.push({ text: `${checkInfo} failed`, color: "red" });
-  } else if (issue.prCheckStatus === "pending" || issue.prCheckStatus === "in_progress") {
-    const summary = issue.prChecksSummary;
-    if (summary && summary.total > 0) {
-      facts.push({ text: `checks ${summary.completed}/${summary.total}`, color: "yellow" });
-    } else {
-      facts.push({ text: "checks running", color: "yellow" });
-    }
+  const checksFact = prChecksFact(issue);
+  if (checksFact) {
+    facts.push(checksFact);
   }
 
   // Blocker
@@ -136,9 +124,7 @@ function buildFacts(issue: WatchIssue, selected: boolean): Array<{ text: string;
 // ─── What's blocking progress ───────────────────────────────────
 
 function blockerText(issue: WatchIssue): string | null {
-  const rereviewNeeded = issue.prReviewState === "changes_requested"
-    && (issue.prCheckStatus === "passed" || issue.prCheckStatus === "success")
-    && !issue.activeRunType;
+  const rereviewNeeded = isRereviewNeeded(issue);
   if (issue.sessionState === "waiting_input") return issue.waitingReason ?? "Waiting for input";
   if (needsOperatorIntervention(issue)) return issue.statusNote ?? issue.waitingReason ?? "Needs operator intervention";
   if (issue.waitingReason && !issue.activeRunType) return issue.waitingReason;
@@ -148,9 +134,12 @@ function blockerText(issue: WatchIssue): string | null {
     const check = issue.latestFailureCheckName ?? "CI";
     return `Repairing ${check}`;
   }
-  if (issue.prCheckStatus === "failed" || issue.prCheckStatus === "failure") {
-    const check = issue.latestFailureCheckName ?? "checks";
-    return `${check} failed`;
+  const checksFact = prChecksFact(issue);
+  if (checksFact?.color === "red") {
+    return checksFact.text;
+  }
+  if (checksFact?.color === "yellow" && checksFact.text.startsWith("checks ")) {
+    return `${checksFact.text} still running`;
   }
   if (rereviewNeeded) return "Awaiting re-review after requested changes";
   if (issue.prReviewState === "changes_requested") return "Review changes requested";
