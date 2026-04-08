@@ -744,6 +744,7 @@ export class PatchRelayService {
     const issue = this.db.getIssueByKey(issueKey);
     if (!issue) return undefined;
     if (issue.activeRunId) return { error: "Issue already has an active run" };
+    const issueSession = this.db.getIssueSession(issue.projectId, issue.linearIssueId);
 
     if (issue.prState === "merged") {
       this.db.upsertIssueRespectingActiveLease(issue.projectId, issue.linearIssueId, {
@@ -764,7 +765,9 @@ export class PatchRelayService {
       runType = "ci_repair";
       factoryState = "repairing_ci";
     } else if (issue.prNumber && issue.prReviewState === "changes_requested") {
-      runType = "review_fix";
+      runType = issue.pendingRunType === "branch_upkeep" || issueSession?.lastRunType === "branch_upkeep"
+        ? "branch_upkeep"
+        : "review_fix";
       factoryState = "changes_requested";
     } else if (issue.prNumber) {
       // PR exists but no specific failure — re-run implementation
@@ -829,16 +832,19 @@ export class PatchRelayService {
       return;
     }
 
-    if (runType === "review_fix") {
+    if (runType === "review_fix" || runType === "branch_upkeep") {
       this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         eventType: "review_changes_requested",
         eventJson: JSON.stringify({
-          reviewBody: "Operator requested retry of review-fix work.",
+          reviewBody: runType === "branch_upkeep"
+            ? "Operator requested retry of branch upkeep after requested changes."
+            : "Operator requested retry of review-fix work.",
+          ...(runType === "branch_upkeep" ? { branchUpkeepRequired: true, wakeReason: "branch_upkeep" } : {}),
           source: "operator_retry",
         }),
-        dedupeKey: `operator_retry:review_fix:${issue.linearIssueId}:${issue.prHeadSha ?? "unknown-sha"}`,
+        dedupeKey: `operator_retry:${runType}:${issue.linearIssueId}:${issue.prHeadSha ?? "unknown-sha"}`,
       });
       return;
     }

@@ -60,6 +60,8 @@ export function buildRunStartedActivity(runType: RunType): LinearAgentActivityCo
   switch (runType) {
     case "review_fix":
       return { type: "action", action: "Addressing", parameter: "review feedback" };
+    case "branch_upkeep":
+      return { type: "action", action: "Repairing", parameter: "PR branch upkeep after requested changes" };
     case "ci_repair":
       return { type: "action", action: "Repairing", parameter: "failing CI checks" };
     case "queue_repair":

@@ -303,6 +303,7 @@ export class CliDataAccess extends CliOperatorApiClient {
     if (!issue) return undefined;
 
     const dbIssue = this.db.getIssueByKey(issueKey)!;
+    const issueSession = this.db.getIssueSession(issue.projectId, issue.linearIssueId);
     if (dbIssue.activeRunId !== undefined) {
       throw new Error(`Issue ${issueKey} already has an active run.`);
     }
@@ -313,14 +314,14 @@ export class CliDataAccess extends CliOperatorApiClient {
         : dbIssue.prCheckStatus === "failed" || dbIssue.prCheckStatus === "failure" || issue.latestFailureSource === "branch_ci" || issue.factoryState === "repairing_ci"
           ? "ci_repair"
           : dbIssue.prReviewState === "changes_requested" || issue.factoryState === "changes_requested"
-            ? "review_fix"
+            ? (dbIssue.pendingRunType === "branch_upkeep" || issueSession?.lastRunType === "branch_upkeep" ? "branch_upkeep" : "review_fix")
             : "implementation")) as RunType;
 
     const factoryState = runType === "queue_repair"
       ? "repairing_queue"
       : runType === "ci_repair"
         ? "repairing_ci"
-        : runType === "review_fix"
+        : runType === "review_fix" || runType === "branch_upkeep"
           ? "changes_requested"
           : "delegated";
 
@@ -404,16 +405,19 @@ export class CliDataAccess extends CliOperatorApiClient {
       return;
     }
 
-    if (runType === "review_fix") {
+    if (runType === "review_fix" || runType === "branch_upkeep") {
       this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         eventType: "review_changes_requested",
         eventJson: JSON.stringify({
-          reviewBody: "Operator requested retry of review-fix work.",
+          reviewBody: runType === "branch_upkeep"
+            ? "Operator requested retry of branch upkeep after requested changes."
+            : "Operator requested retry of review-fix work.",
+          ...(runType === "branch_upkeep" ? { branchUpkeepRequired: true, wakeReason: "branch_upkeep" } : {}),
           source: "operator_retry",
         }),
-        dedupeKey: `operator_retry:review_fix:${issue.linearIssueId}:${issue.prHeadSha ?? "unknown-sha"}`,
+        dedupeKey: `operator_retry:${runType}:${issue.linearIssueId}:${issue.prHeadSha ?? "unknown-sha"}`,
       });
       return;
     }

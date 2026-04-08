@@ -60,6 +60,7 @@ function lowerCaseFirst(value: string): string {
 const WORKFLOW_FILES: Record<RunType, string> = {
   implementation: "IMPLEMENTATION_WORKFLOW.md",
   review_fix: "REVIEW_WORKFLOW.md",
+  branch_upkeep: "REVIEW_WORKFLOW.md",
   ci_repair: "IMPLEMENTATION_WORKFLOW.md",
   queue_repair: "IMPLEMENTATION_WORKFLOW.md",
 };
@@ -228,9 +229,16 @@ interface ReviewFixCommentContext {
   authorLogin?: string | undefined;
 }
 
-type ReviewFixMode = "address_review_feedback" | "branch_upkeep";
+function isRequestedChangesRunType(runType: RunType): boolean {
+  return runType === "review_fix" || runType === "branch_upkeep";
+}
 
-function resolveReviewFixMode(context?: Record<string, unknown>): ReviewFixMode {
+type RequestedChangesMode = "address_review_feedback" | "branch_upkeep";
+
+function resolveRequestedChangesMode(runType: RunType, context?: Record<string, unknown>): RequestedChangesMode {
+  if (runType === "branch_upkeep") {
+    return "branch_upkeep";
+  }
   return context?.reviewFixMode === "branch_upkeep" || context?.branchUpkeepRequired === true
     ? "branch_upkeep"
     : "address_review_feedback";
@@ -343,8 +351,8 @@ function resolveFollowUpWhy(runType: RunType, context?: Record<string, unknown>)
         ? "This is the first implementation turn for the delegated issue."
         : `This turn continues ${runType.replaceAll("_", " ")} work for the delegated issue.`;
     default:
-      if (runType === "review_fix") {
-        return resolveReviewFixMode(context) === "branch_upkeep"
+      if (isRequestedChangesRunType(runType)) {
+        return resolveRequestedChangesMode(runType, context) === "branch_upkeep"
           ? "This turn continues branch upkeep on the existing PR after requested changes."
           : "This turn continues requested-changes work on the existing PR.";
       }
@@ -358,13 +366,15 @@ function resolveFollowUpAction(runType: RunType, context?: Record<string, unknow
   if (context?.directReplyMode === true) {
     return "Apply the latest human answer, continue from the current branch/session context, and only ask another question if you are still blocked.";
   }
-  if (runType === "review_fix" && resolveReviewFixMode(context) === "branch_upkeep") {
+  if (isRequestedChangesRunType(runType) && resolveRequestedChangesMode(runType, context) === "branch_upkeep") {
     const baseBranch = typeof context?.baseBranch === "string" ? context.baseBranch : "main";
     return `Update the existing PR branch onto latest ${baseBranch}, resolve conflicts if needed, rerun narrow verification, and push a newer head on the same branch.`;
   }
   switch (runType) {
     case "review_fix":
       return "Address the review feedback on the current PR branch, verify the fix, and push a newer head on the same branch.";
+    case "branch_upkeep":
+      return "Repair the existing PR branch after requested changes, rerun narrow verification, and push a newer head on the same branch.";
     case "ci_repair":
       return "Fix the failing CI root cause on the current PR branch, verify it locally, and push the same branch.";
     case "queue_repair":
@@ -489,8 +499,8 @@ function appendFollowUpPromptPrelude(
   appendAuthoritativeGitHubFacts(lines, issue, runType, context);
 }
 
-function appendReviewFixInstructions(lines: string[], context?: Record<string, unknown>): void {
-  if (resolveReviewFixMode(context) === "branch_upkeep") {
+function appendRequestedChangesInstructions(lines: string[], runType: RunType, context?: Record<string, unknown>): void {
+  if (resolveRequestedChangesMode(runType, context) === "branch_upkeep") {
     const baseBranch = typeof context?.baseBranch === "string" ? context.baseBranch : "main";
     lines.push(
       "## Branch Upkeep After Requested Changes",
@@ -576,7 +586,8 @@ export function buildInitialRunPrompt(issue: IssueRecord, runType: RunType, repo
       break;
     }
     case "review_fix":
-      appendReviewFixInstructions(lines, context);
+    case "branch_upkeep":
+      appendRequestedChangesInstructions(lines, runType, context);
       break;
     case "queue_repair":
       appendQueueRepairContext(lines, context);
@@ -652,7 +663,8 @@ export function buildFollowUpRunPrompt(issue: IssueRecord, runType: RunType, rep
       break;
     }
     case "review_fix":
-      appendReviewFixInstructions(lines, context);
+    case "branch_upkeep":
+      appendRequestedChangesInstructions(lines, runType, context);
       break;
     case "queue_repair":
       appendQueueRepairContext(lines, context);
@@ -798,9 +810,9 @@ export class RunOrchestrator {
     } else if (runType === "ci_repair") {
       eventType = "settled_red_ci";
       dedupeKey = `${dedupeScope ?? "wake"}:ci_repair:${issue.linearIssueId}:${issue.lastGitHubFailureSignature ?? issue.prHeadSha ?? "unknown-sha"}`;
-    } else if (runType === "review_fix") {
+    } else if (runType === "review_fix" || runType === "branch_upkeep") {
       eventType = "review_changes_requested";
-      dedupeKey = `${dedupeScope ?? "wake"}:review_fix:${issue.linearIssueId}:${issue.prHeadSha ?? "unknown-sha"}`;
+      dedupeKey = `${dedupeScope ?? "wake"}:${runType}:${issue.linearIssueId}:${issue.prHeadSha ?? "unknown-sha"}`;
     } else {
       eventType = "delegated";
       dedupeKey = `${dedupeScope ?? "wake"}:implementation:${issue.linearIssueId}`;
@@ -870,16 +882,14 @@ export class RunOrchestrator {
       return;
     }
     const { runType, context, resumeThread } = wake;
-    const effectiveContext = runType === "review_fix"
-      ? await this.resolveReviewFixWakeContext(issue, context, project)
+    const effectiveContext = isRequestedChangesRunType(runType)
+      ? await this.resolveRequestedChangesWakeContext(issue, runType, context, project)
       : context;
     const sourceHeadSha = typeof effectiveContext?.failureHeadSha === "string"
       ? effectiveContext.failureHeadSha
       : typeof effectiveContext?.headSha === "string"
         ? effectiveContext.headSha
         : issue.prHeadSha;
-    const isReviewFixBranchUpkeep = runType === "review_fix" && isBranchUpkeepRequired(effectiveContext);
-
     // Check repair budgets
     if (runType === "ci_repair" && issue.ciRepairAttempts >= DEFAULT_CI_REPAIR_BUDGET) {
       this.escalate(issue, runType, `CI repair budget exhausted (${DEFAULT_CI_REPAIR_BUDGET} attempts)`);
@@ -889,7 +899,7 @@ export class RunOrchestrator {
       this.escalate(issue, runType, `Queue repair budget exhausted (${DEFAULT_QUEUE_REPAIR_BUDGET} attempts)`);
       return;
     }
-    if (runType === "review_fix" && !isReviewFixBranchUpkeep && issue.reviewFixAttempts >= DEFAULT_REVIEW_FIX_BUDGET) {
+    if (runType === "review_fix" && issue.reviewFixAttempts >= DEFAULT_REVIEW_FIX_BUDGET) {
       this.escalate(issue, runType, `Review fix budget exhausted (${DEFAULT_REVIEW_FIX_BUDGET} attempts)`);
       return;
     }
@@ -915,7 +925,7 @@ export class RunOrchestrator {
         return;
       }
     }
-    if (runType === "review_fix" && !isReviewFixBranchUpkeep) {
+    if (runType === "review_fix") {
       const updated = this.db.upsertIssueWithLease(
         { projectId: issue.projectId, linearIssueId: issue.linearIssueId, leaseId },
         { projectId: issue.projectId, linearIssueId: issue.linearIssueId, reviewFixAttempts: issue.reviewFixAttempts + 1 },
@@ -966,7 +976,7 @@ export class RunOrchestrator {
         worktreePath,
         factoryState: runType === "implementation" ? "implementing"
           : runType === "ci_repair" ? "repairing_ci"
-          : runType === "review_fix" ? "changes_requested"
+          : runType === "review_fix" || runType === "branch_upkeep" ? "changes_requested"
           : runType === "queue_repair" ? "repairing_queue"
           : "implementing",
         ...((runType === "ci_repair" || runType === "queue_repair") && failureSignature
@@ -1086,7 +1096,7 @@ export class RunOrchestrator {
       const message = error instanceof Error ? error.message : String(error);
       const lostLease = error instanceof Error && error.name === "IssueSessionLeaseLostError";
       if (!lostLease) {
-        const nextState: FactoryState = runType === "review_fix" ? "escalated" : "failed";
+        const nextState: FactoryState = isRequestedChangesRunType(runType) ? "escalated" : "failed";
         this.db.finishRunWithLease({ projectId: item.projectId, linearIssueId: item.issueId, leaseId }, run.id, {
           status: "failed",
           failureReason: message,
@@ -1317,7 +1327,7 @@ export class RunOrchestrator {
     const status = resolveRunCompletionStatus(notification.params);
 
     if (status === "failed") {
-      const nextState: FactoryState = run.runType === "review_fix" ? "escalated" : "failed";
+      const nextState: FactoryState = isRequestedChangesRunType(run.runType) ? "escalated" : "failed";
       const updated = this.withHeldIssueSessionLease(run.projectId, run.linearIssueId, (lease) => {
         this.db.finishRunWithLease(lease, run.id, {
           status: "failed",
@@ -1616,7 +1626,7 @@ export class RunOrchestrator {
     const fresh = this.db.getIssue(issue.projectId, issue.linearIssueId);
     if (!fresh) return;
 
-    if (runType === "review_fix") {
+    if (isRequestedChangesRunType(runType)) {
       const updated = this.withHeldIssueSessionLease(fresh.projectId, fresh.linearIssueId, (lease) => {
         this.db.clearPendingIssueSessionEventsWithLease(lease);
         this.db.upsertIssueWithLease(lease, {
@@ -1873,7 +1883,7 @@ export class RunOrchestrator {
         this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
         return;
       }
-      if (run.runType === "review_fix") {
+      if (isRequestedChangesRunType(run.runType)) {
         const interruptedMessage = "Requested-changes run was interrupted before PatchRelay could verify that a new PR head was published";
         this.failRunAndClear(run, interruptedMessage, "escalated");
         await this.restoreIdleWorktree(issue);
@@ -2167,7 +2177,7 @@ export class RunOrchestrator {
   }
 
   private async verifyReviewFixAdvancedHead(run: RunRecord, issue: IssueRecord): Promise<string | undefined> {
-    if (run.runType !== "review_fix") {
+    if (!isRequestedChangesRunType(run.runType)) {
       return undefined;
     }
     if (!issue.prNumber || issue.prState !== "open") {
@@ -2195,13 +2205,13 @@ export class RunOrchestrator {
         issueKey: issue.issueKey,
         prNumber: issue.prNumber,
         error: error instanceof Error ? error.message : String(error),
-      }, "Failed to verify PR head advancement after review fix");
+      }, "Failed to verify PR head advancement after requested-changes work");
       return undefined;
     }
   }
 
   private async refreshIssueAfterReactivePublish(run: RunRecord, issue: IssueRecord): Promise<IssueRecord> {
-    if (run.runType !== "ci_repair" && run.runType !== "queue_repair" && run.runType !== "review_fix") {
+    if (run.runType !== "ci_repair" && run.runType !== "queue_repair" && !isRequestedChangesRunType(run.runType)) {
       return this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
     }
     if (!issue.prNumber) {
@@ -2223,7 +2233,8 @@ export class RunOrchestrator {
       const nextReviewState = normalizeRemoteReviewDecision(pr.reviewDecision);
       const gateCheckName = project?.gateChecks?.find((entry) => entry.trim())?.trim() ?? "verify";
       const headAdvanced = Boolean(pr.headRefOid && pr.headRefOid !== issue.lastGitHubFailureHeadSha);
-      const reviewFixHeadAdvanced = run.runType === "review_fix" && Boolean(pr.headRefOid && run.sourceHeadSha && pr.headRefOid !== run.sourceHeadSha);
+      const reviewFixHeadAdvanced = isRequestedChangesRunType(run.runType)
+        && Boolean(pr.headRefOid && run.sourceHeadSha && pr.headRefOid !== run.sourceHeadSha);
 
       this.upsertIssueIfLeaseHeld(
         run.projectId,
@@ -2281,12 +2292,13 @@ export class RunOrchestrator {
     return JSON.parse(stdout) as RemotePrState;
   }
 
-  private async resolveReviewFixWakeContext(
+  private async resolveRequestedChangesWakeContext(
     issue: IssueRecord,
+    runType: RunType,
     context: Record<string, unknown> | undefined,
     project: { github?: { repoFullName?: string; baseBranch?: string } },
   ): Promise<Record<string, unknown> | undefined> {
-    if (isBranchUpkeepRequired(context)) {
+    if (runType === "branch_upkeep" || isBranchUpkeepRequired(context)) {
       return context;
     }
     if (!issue.prNumber || issue.prState !== "open" || issue.prReviewState !== "changes_requested") {
@@ -2332,7 +2344,7 @@ export class RunOrchestrator {
         issueKey: issue.issueKey,
         prNumber: issue.prNumber,
         error: error instanceof Error ? error.message : String(error),
-      }, "Failed to resolve review-fix wake context");
+      }, "Failed to resolve requested-changes wake context");
       return context;
     }
   }
@@ -2382,7 +2394,7 @@ export class RunOrchestrator {
       if (!isDirtyMergeStateStatus(pr.mergeStateStatus)) return undefined;
 
       return {
-        pendingRunType: "review_fix",
+        pendingRunType: "branch_upkeep",
         factoryState: "changes_requested",
         context: buildReviewFixBranchUpkeepContext(
           issue.prNumber,

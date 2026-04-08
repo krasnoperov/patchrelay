@@ -1195,7 +1195,7 @@ test("reconcileRun leaves interrupted queue_repair eligible for retry on idle re
   }
 });
 
-test("completed review_fix queues follow-up upkeep when the PR is still dirty", async () => {
+test("completed review_fix queues branch_upkeep when the PR is still dirty", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-review-fix-dirty-"));
   const oldPath = process.env.PATH;
   try {
@@ -1267,7 +1267,7 @@ exit 1
     assert.equal(updatedRun?.status, "completed");
     assert.equal(updatedIssue?.factoryState, "changes_requested");
     assert.equal(updatedIssue?.pendingRunType, undefined);
-    assert.equal(wake?.runType, "review_fix");
+    assert.equal(wake?.runType, "branch_upkeep");
     assert.match(JSON.stringify(wake?.context ?? {}), /branchUpkeepRequired/);
     assert.match(JSON.stringify(wake?.context ?? {}), /GitHub still reports PR #21 as DIRTY/);
     assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-review-dirty" }]);
@@ -1417,12 +1417,13 @@ exit 1
       .set(`${issue.projectId}:${issue.linearIssueId}`, leaseId);
 
     const context = await (orchestrator as unknown as {
-      resolveReviewFixWakeContext: (
+      resolveRequestedChangesWakeContext: (
         issue: typeof issue,
+        runType: "review_fix" | "branch_upkeep",
         context: Record<string, unknown> | undefined,
         project: AppConfig["projects"][number],
       ) => Promise<Record<string, unknown> | undefined>;
-    }).resolveReviewFixWakeContext(issue, undefined, config.projects[0]!);
+    }).resolveRequestedChangesWakeContext(issue, "review_fix", undefined, config.projects[0]!);
 
     assert.equal(context?.branchUpkeepRequired, true);
     assert.equal(context?.wakeReason, "branch_upkeep");

@@ -42,6 +42,15 @@ function reviewFixPlan(): AgentSessionPlanStep[] {
   ];
 }
 
+function branchUpkeepPlan(): AgentSessionPlanStep[] {
+  return [
+    { content: "Prepare workspace", status: "completed" },
+    { content: "Repairing branch upkeep", status: "pending" },
+    { content: "Awaiting re-verification", status: "pending" },
+    { content: "Merge", status: "pending" },
+  ];
+}
+
 function ciRepairPlan(attempt: number): AgentSessionPlanStep[] {
   return [
     { content: "Prepare workspace", status: "completed" },
@@ -103,7 +112,9 @@ function resolvePlanRunType(params: {
   }
   switch (params.factoryState) {
     case "changes_requested":
-      return "review_fix";
+      return params.pendingRunType === "branch_upkeep" || params.activeRunType === "branch_upkeep"
+        ? "branch_upkeep"
+        : "review_fix";
     case "repairing_ci":
       return "ci_repair";
     case "repairing_queue":
@@ -168,6 +179,8 @@ function planForRunType(
   switch (runType) {
     case "review_fix":
       return reviewFixPlan();
+    case "branch_upkeep":
+      return branchUpkeepPlan();
     case "ci_repair":
       return ciRepairPlan(params.ciRepairAttempts ?? 1);
     case "queue_repair":
@@ -194,7 +207,7 @@ export function buildAgentSessionPlanForIssue(
 export function buildRunningSessionPlan(runType: string): AgentSessionPlanStep[] {
   return buildAgentSessionPlan({
     factoryState: runType === "ci_repair" ? "repairing_ci"
-      : runType === "review_fix" ? "changes_requested"
+      : runType === "review_fix" || runType === "branch_upkeep" ? "changes_requested"
       : runType === "queue_repair" ? "repairing_queue"
       : "implementing",
     activeRunType: runType as RunType,

@@ -96,7 +96,7 @@ test("planning-only implementation prompts switch to Linear-only delivery requir
   }
 });
 
-test("review_fix prompt includes explicit branch upkeep guidance when the PR is still dirty", () => {
+test("branch_upkeep prompt includes explicit branch upkeep guidance when the PR is still dirty", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-prompt-"));
   try {
     writeFileSync(path.join(baseDir, "REVIEW_WORKFLOW.md"), "# Review Workflow\n");
@@ -106,7 +106,7 @@ test("review_fix prompt includes explicit branch upkeep guidance when the PR is 
       factoryState: "changes_requested",
       prNumber: 12,
       prReviewState: "changes_requested",
-    }, "review_fix", baseDir, {
+    }, "branch_upkeep", baseDir, {
       promptContext: "The requested review change is already addressed, but GitHub still reports PR #12 as DIRTY against latest main. Before stopping, update the existing PR branch onto latest main, resolve any conflicts, rerun the narrowest relevant verification, and push again.",
       branchUpkeepRequired: true,
       mergeStateStatus: "DIRTY",
