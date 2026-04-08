@@ -253,6 +253,102 @@ exit 1
   }
 });
 
+test("idle reconciliation recovers escalated PR issues when a newer head is now pending CI", { concurrency: false }, async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-terminal-pending-"));
+  const oldPath = process.env.PATH;
+  try {
+    const fakeBin = path.join(baseDir, "bin");
+    const ghPath = path.join(fakeBin, "gh");
+    mkdirSync(fakeBin, { recursive: true });
+    writeFileSync(ghPath, `#!/usr/bin/env bash
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  printf '{"headRefOid":"sha-new","state":"OPEN","reviewDecision":"REVIEW_REQUIRED","mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED","statusCheckRollup":[{"__typename":"CheckRun","name":"verify","status":"IN_PROGRESS","conclusion":null}]}'
+  exit 0
+fi
+echo "unexpected gh args: $*" >&2
+exit 1
+`, "utf8");
+    chmodSync(ghPath, 0o755);
+    process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
+
+    const { db, orchestrator } = createOrchestrator(baseDir);
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-terminal-pending",
+      issueKey: "USE-11D",
+      branchName: "feat-terminal-pending",
+      prNumber: 114,
+      prState: "open",
+      prHeadSha: "sha-old",
+      prReviewState: "changes_requested",
+      prCheckStatus: "success",
+      factoryState: "escalated",
+      lastGitHubFailureSource: "branch_ci",
+      lastGitHubFailureHeadSha: "sha-old",
+      lastGitHubFailureSignature: "branch_ci::sha-old::verify",
+    });
+
+    await (orchestrator as unknown as { idleReconciler: { reconcile: () => Promise<void> } }).idleReconciler.reconcile();
+
+    const issue = db.getIssue("usertold", "issue-terminal-pending");
+    assert.equal(issue?.factoryState, "pr_open");
+    assert.equal(issue?.prHeadSha, "sha-new");
+    assert.equal(issue?.prReviewState, "commented");
+    assert.equal(issue?.prCheckStatus, "pending");
+    assert.equal(issue?.lastGitHubFailureSource, undefined);
+    assert.equal(issue?.lastGitHubFailureHeadSha, undefined);
+    assert.equal(issue?.lastGitHubFailureSignature, undefined);
+  } finally {
+    process.env.PATH = oldPath;
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("idle reconciliation does not reopen terminal issues from the same green changes-requested head", { concurrency: false }, async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-terminal-same-head-"));
+  const oldPath = process.env.PATH;
+  try {
+    const fakeBin = path.join(baseDir, "bin");
+    const ghPath = path.join(fakeBin, "gh");
+    mkdirSync(fakeBin, { recursive: true });
+    writeFileSync(ghPath, `#!/usr/bin/env bash
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  printf '{"headRefOid":"sha-stuck","state":"OPEN","reviewDecision":"CHANGES_REQUESTED","mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED","statusCheckRollup":[{"__typename":"CheckRun","name":"verify","status":"COMPLETED","conclusion":"SUCCESS"}]}'
+  exit 0
+fi
+echo "unexpected gh args: $*" >&2
+exit 1
+`, "utf8");
+    chmodSync(ghPath, 0o755);
+    process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
+
+    const { db, orchestrator } = createOrchestrator(baseDir);
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-terminal-same-head",
+      issueKey: "USE-11E",
+      branchName: "feat-terminal-same-head",
+      prNumber: 115,
+      prState: "open",
+      prHeadSha: "sha-stuck",
+      prReviewState: "changes_requested",
+      prCheckStatus: "success",
+      factoryState: "escalated",
+    });
+
+    await (orchestrator as unknown as { idleReconciler: { reconcile: () => Promise<void> } }).idleReconciler.reconcile();
+
+    const issue = db.getIssue("usertold", "issue-terminal-same-head");
+    assert.equal(issue?.factoryState, "escalated");
+    assert.equal(issue?.prHeadSha, "sha-stuck");
+    assert.equal(issue?.prReviewState, "changes_requested");
+    assert.equal(issue?.prCheckStatus, "success");
+  } finally {
+    process.env.PATH = oldPath;
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("idle reconciliation escalates non-decisive review-quill outcomes to operator input", { concurrency: false }, async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-neutral-review-"));
   const oldPath = process.env.PATH;

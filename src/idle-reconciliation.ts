@@ -172,6 +172,11 @@ export class IdleIssueReconciler {
       }
     }
 
+    for (const issue of this.db.listIssues()) {
+      if (!this.shouldProbeTerminalIssueFromGitHub(issue)) continue;
+      await this.reconcileFromGitHub(issue);
+    }
+
     for (const issue of this.db.listBlockedDelegatedIssues()) {
       const unresolved = this.db.countUnresolvedBlockers(issue.projectId, issue.linearIssueId);
       if (unresolved === 0) {
@@ -186,6 +191,13 @@ export class IdleIssueReconciler {
         }
       }
     }
+  }
+
+  private shouldProbeTerminalIssueFromGitHub(issue: IssueRecord): boolean {
+    if (issue.prNumber === undefined) return false;
+    if (issue.activeRunId !== undefined) return false;
+    if (issue.pendingRunType !== undefined) return false;
+    return issue.factoryState === "escalated" || issue.factoryState === "failed";
   }
 
   advanceIdleIssue(
@@ -454,6 +466,7 @@ export class IdleIssueReconciler {
         mergeStateStatus?: string;
         statusCheckRollup?: GitHubStatusRollupEntry[];
       };
+      const previousHeadSha = issue.prHeadSha;
       const gateCheckNames = getGateCheckNames(project);
       const gateCheckStatus = deriveGateCheckStatusFromRollup(pr.statusCheckRollup, gateCheckNames);
       this.db.upsertIssue({
@@ -494,6 +507,27 @@ export class IdleIssueReconciler {
           clearFailureProvenance: true,
         });
         return;
+      }
+
+      const headAdvanced = Boolean(pr.headRefOid && pr.headRefOid !== previousHeadSha);
+      if (issue.factoryState !== "awaiting_input") {
+        const terminalRecoveryState = this.deriveTerminalRecoveryState(issue, pr.reviewDecision, gateCheckStatus, headAdvanced);
+        if (terminalRecoveryState) {
+          this.logger.info(
+            {
+              issueKey: issue.issueKey,
+              prNumber: issue.prNumber,
+              from: issue.factoryState,
+              to: terminalRecoveryState,
+              gateCheckStatus,
+              reviewDecision: pr.reviewDecision,
+              headAdvanced,
+            },
+            "Reconciliation: recovered terminal issue from newer GitHub truth",
+          );
+          this.advanceIdleIssue(issue, terminalRecoveryState, { clearFailureProvenance: true });
+          return;
+        }
       }
 
       if (isReviewDecisionReviewRequired(pr.reviewDecision)
@@ -584,5 +618,29 @@ export class IdleIssueReconciler {
         }
       }
     }
+  }
+
+  private deriveTerminalRecoveryState(
+    issue: Pick<IssueRecord, "factoryState">,
+    reviewDecision: string | undefined,
+    gateCheckStatus: string | undefined,
+    headAdvanced: boolean,
+  ): FactoryState | undefined {
+    if (issue.factoryState !== "escalated" && issue.factoryState !== "failed") {
+      return undefined;
+    }
+    if (isReviewDecisionApproved(reviewDecision) && !isFailingCheckStatus(gateCheckStatus)) {
+      return "awaiting_queue";
+    }
+    if (gateCheckStatus === "pending") {
+      return "pr_open";
+    }
+    if (headAdvanced && !isFailingCheckStatus(gateCheckStatus)) {
+      return "pr_open";
+    }
+    if (isReviewDecisionReviewRequired(reviewDecision) && !isFailingCheckStatus(gateCheckStatus)) {
+      return "pr_open";
+    }
+    return undefined;
   }
 }

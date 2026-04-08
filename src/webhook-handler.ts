@@ -685,39 +685,56 @@ export class WebhookHandler {
     }
     if (!triggerEventAllowed(project, normalized.triggerEvent)) return;
 
-    // Ignore PatchRelay's own comments to prevent self-triggering feedback loops.
-    // When a run completes, PatchRelay posts an activity to Linear, which fires a
-    // commentCreated webhook back — without this guard that re-enqueues a new run.
+    const issue = this.db.getIssue(project.id, normalized.issue.id);
+    if (!issue) return;
+    const trimmedBody = normalized.comment.body.trim();
+
+    // Ignore PatchRelay-managed comments to prevent status-sync feedback loops.
+    // Linear commentUpdated/commentCreated events can arrive after PatchRelay
+    // refreshes its visible status comment, and those updates should never
+    // consume review-fix budget or wake a new run.
     const installation = this.db.linearInstallations.getLinearInstallationForProject(project.id);
-    if (installation?.actorId && normalized.actor?.id === installation.actorId) {
-        this.db.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
-          projectId: project.id,
-          linearIssueId: normalized.issue.id,
-          eventType: "self_comment",
+    const selfAuthored = installation?.actorId && normalized.actor?.id === installation.actorId;
+    const statusCommentUpdate = this.isPatchRelayManagedStatusComment(issue, normalized.comment.id, trimmedBody);
+    if (selfAuthored || statusCommentUpdate) {
+      this.db.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
+        projectId: project.id,
+        linearIssueId: normalized.issue.id,
+        eventType: "self_comment",
         eventJson: JSON.stringify({
-          body: normalized.comment.body.trim(),
+          body: trimmedBody,
           author: normalized.comment.userName,
         }),
       });
       return;
     }
 
-    const issue = this.db.getIssue(project.id, normalized.issue.id);
-    if (!issue) return;
-
     // No active run — enqueue a run with the comment as context if appropriate
     if (!issue.activeRunId) {
       const ENQUEUEABLE_STATES = new Set(["pr_open", "changes_requested", "implementing", "delegated", "awaiting_input"]);
       if (ENQUEUEABLE_STATES.has(issue.factoryState)) {
+        const directReply = this.isDirectReplyToOutstandingQuestion(issue);
+        const wakeIntent = directReply || this.hasExplicitPatchRelayWakeIntent(trimmedBody);
+        if (!wakeIntent) {
+          this.feed?.publish({
+            level: "info",
+            kind: "comment",
+            projectId: project.id,
+            issueKey: trackedIssue?.issueKey,
+            status: "ignored",
+            summary: "Ignored comment with no explicit PatchRelay wake intent",
+            detail: trimmedBody.slice(0, 200),
+          });
+          return;
+        }
         const runType = issue.prReviewState === "changes_requested" ? "review_fix" : "implementation";
         const hadPendingWake = this.db.peekIssueSessionWake(project.id, normalized.issue.id) !== undefined;
-        const directReply = this.isDirectReplyToOutstandingQuestion(issue);
         this.db.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
           projectId: project.id,
           linearIssueId: normalized.issue.id,
           eventType: directReply ? "direct_reply" : "followup_comment",
           eventJson: JSON.stringify({
-            body: normalized.comment.body.trim(),
+            body: trimmedBody,
             author: normalized.comment.userName,
           }),
         });
@@ -731,7 +748,7 @@ export class WebhookHandler {
           issueKey: trackedIssue?.issueKey,
           status: "enqueued",
           summary: `Comment enqueued ${(queuedRunType ?? runType)} run`,
-          detail: normalized.comment.body.slice(0, 200),
+          detail: trimmedBody.slice(0, 200),
         });
       }
       return;
@@ -744,7 +761,7 @@ export class WebhookHandler {
       "New Linear comment received while you are working.",
       normalized.comment.userName ? `Author: ${normalized.comment.userName}` : undefined,
       "",
-      normalized.comment.body.trim(),
+      trimmedBody,
     ].filter(Boolean).join("\n");
 
     try {
@@ -767,7 +784,7 @@ export class WebhookHandler {
         linearIssueId: normalized.issue.id,
         eventType: directReply ? "direct_reply" : "followup_comment",
         eventJson: JSON.stringify({
-          body: normalized.comment.body.trim(),
+          body: trimmedBody,
           author: normalized.comment.userName,
         }),
       });
@@ -784,6 +801,20 @@ export class WebhookHandler {
         summary: `Could not deliver follow-up comment to active ${run.runType} workflow`,
       });
     }
+  }
+
+  private isPatchRelayManagedStatusComment(
+    issue: NonNullable<ReturnType<PatchRelayDatabase["getIssue"]>>,
+    commentId: string,
+    body: string,
+  ): boolean {
+    return commentId === issue.statusCommentId
+      || (body.startsWith("## PatchRelay status")
+        && body.includes("_PatchRelay updates this comment as it works. Review and merge remain downstream._"));
+  }
+
+  private hasExplicitPatchRelayWakeIntent(body: string): boolean {
+    return /\bpatchrelay\b/i.test(body);
   }
 
   private peekPendingSessionWakeRunType(projectId: string, issueId: string): RunType | undefined {
