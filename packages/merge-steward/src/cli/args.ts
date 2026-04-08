@@ -64,6 +64,11 @@ export function validateFlags(parsed: ParsedArgs): void {
     case "serve":
       assertKnownFlags(parsed, "root", []);
       return;
+    case "dashboard":
+    case "dash":
+    case "d":
+      assertKnownFlags(parsed, "root", ["repo", "pr"]);
+      return;
     case "attach":
       assertKnownFlags(parsed, "repos", ["base-branch", "required-check", "label", "merge-queue-check-name", "refresh", "json"]);
       return;
@@ -104,14 +109,14 @@ export function validateFlags(parsed: ParsedArgs): void {
       }
     case "queue":
       switch (subcommand) {
+        case "dashboard":
+          assertKnownFlags(parsed, "queue", ["repo", "pr"]);
+          return;
         case "status":
           assertKnownFlags(parsed, "queue", ["repo", "events", "json"]);
           return;
         case "show":
           assertKnownFlags(parsed, "queue", ["repo", "entry", "pr", "events", "json"]);
-          return;
-        case "watch":
-          assertKnownFlags(parsed, "queue", ["repo", "pr"]);
           return;
         case "reconcile":
           assertKnownFlags(parsed, "queue", ["repo", "json"]);

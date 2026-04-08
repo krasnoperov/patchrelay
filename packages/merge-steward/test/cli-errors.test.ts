@@ -258,8 +258,8 @@ test("queue unknown subcommand exits 1", async () => {
   }
 });
 
-test("queue watch with nonexistent repo exits 1 with a configured-repos hint instead of ENOENT", async () => {
-  const baseDir = mkdtempSync(path.join(tmpdir(), "ms-err-queue-watch-missing-"));
+test("dashboard with nonexistent repo exits 1 with a configured-repos hint instead of opening the wrong project", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "ms-err-dashboard-missing-"));
   try {
     await withEnv(
       {
@@ -281,7 +281,7 @@ test("queue watch with nonexistent repo exits 1 with a configured-repos hint ins
         });
 
         const stderr = createBufferStream();
-        const code = await runCli(["queue", "watch", "--repo", "missing"], {
+        const code = await runCli(["dashboard", "--repo", "missing"], {
           stdout: createBufferStream().stream,
           stderr: stderr.stream,
           runCommand: noop,

@@ -271,6 +271,7 @@ These files define how the agent should work in that repo.
 ```bash
 patchrelay doctor
 patchrelay service status
+patchrelay dashboard
 ```
 
 ### 8. Check linked workspaces and repos
@@ -298,6 +299,7 @@ Important:
 
 Useful commands:
 
+- `patchrelay dashboard`
 - `patchrelay issue list --active`
 - `patchrelay issue show APP-123`
 - `patchrelay issue watch APP-123`
@@ -309,7 +311,14 @@ Useful commands:
 PatchRelay's operator surface is being reduced to its own runtime responsibilities: issue status,
 active work, waiting reason, worktree handoff, and retry controls.
 
-`patchrelay issue open` is the handoff bridge: it opens Codex in the issue worktree and resumes the existing thread when PatchRelay has one.
+`patchrelay issue open` is the handoff bridge: it opens a normal Codex CLI session in the issue worktree and resumes the existing thread when PatchRelay has one.
+
+If automation looks stuck, this is the usual operator path:
+
+1. `patchrelay dashboard` to see active issues and waiting reasons across the service.
+2. `patchrelay issue show APP-123` or `patchrelay issue watch APP-123` to inspect one issue in more detail.
+3. `patchrelay issue open APP-123` to take over inside the exact worktree and continue from the same issue context.
+4. `patchrelay service logs --lines 100` if the problem looks like webhook intake, Codex startup, or service runtime failure.
 
 Today that takeover path is intentionally YOLO mode: it launches Codex with `--dangerously-bypass-approvals-and-sandbox`.
 
@@ -337,7 +346,7 @@ The steward now has its own bootstrap flow:
 merge-steward init https://queue.example.com
 merge-steward attach app owner/repo --base-branch main --required-check test,lint
 merge-steward doctor --repo app
-merge-steward service status app
+merge-steward service status
 merge-steward queue status --repo app
 ```
 

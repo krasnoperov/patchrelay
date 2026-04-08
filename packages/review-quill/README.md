@@ -1,46 +1,101 @@
 # review-quill
 
-`review-quill` is the dedicated PR review service for the PatchRelay stack.
+`review-quill` is a self-hosted GitHub PR review bot. It watches configured
+repositories, materializes the exact PR head SHA in a throwaway checkout,
+builds the review context locally, runs a read-only Codex review pass, and
+publishes a normal GitHub PR review with its GitHub App identity.
 
-It is responsible for one narrow loop:
+It fits alongside:
 
-- detect PRs whose latest head SHA is ready for review
-- materialize an ephemeral checkout of that exact PR head
-- build a curated local diff against the PR base
-- run a readonly review pass for that exact SHA
-- publish a normal GitHub PR review on the PR
-- cancel stale in-flight attempts when a newer PR head lands before publication
+- `patchrelay` for delegated implementation and PR upkeep
+- `merge-steward` for queue admission and merge execution
 
-In the current production shape, `review-quill` uses its GitHub App identity
-for the whole loop:
+You can run `review-quill` on its own. PatchRelay is not required.
 
-- webhook intake
-- repository reads
-- `APPROVE` / `REQUEST_CHANGES` reviews
+## What It Does
 
-`merge-steward` admits on GitHub's PR review/check truth and then does its own
-speculative integrated-branch validation before landing.
+For each eligible PR head, `review-quill`:
 
-It complements:
+1. detects that a new reviewable PR head exists
+2. materializes an ephemeral local checkout of that exact SHA
+3. builds a curated diff against the PR base branch
+4. loads repo review guidance such as `REVIEW_WORKFLOW.md`, `CLAUDE.md`, and `AGENTS.md`
+5. runs a review pass through `codex app-server`
+6. publishes an ordinary GitHub `APPROVE` or `REQUEST_CHANGES` review
+7. cancels stale in-flight attempts when a newer PR head lands first
 
-- `patchrelay` — delegated implementation and branch upkeep
-- `merge-steward` — merge admission and landing
+This keeps review grounded in the real repository state instead of only the
+GitHub files API.
 
-## Status
+## Quick Start
 
-This package now includes a working service skeleton, a review attempt store,
-the `review-quill watch` TUI, and the public URL wiring needed for GitHub
-webhooks and check-run detail links.
+### 1. Install
 
-Authoritative design:
+```bash
+npm install -g review-quill
+```
 
-- [../../docs/design-docs/review-quill.md](../../docs/design-docs/review-quill.md)
-- [../../docs/design-docs/pr-automation-loop.md](../../docs/design-docs/pr-automation-loop.md)
+### 2. Bootstrap the local home
 
-## Public ingress
+```bash
+review-quill init https://patchrelay.example.com/review
+```
 
-`review-quill` follows the same shared-host ingress pattern as PatchRelay and
-`merge-steward`.
+That creates:
+
+- `~/.config/review-quill/runtime.env`
+- `~/.config/review-quill/service.env`
+- `~/.config/review-quill/review-quill.json`
+- `/etc/systemd/system/review-quill.service`
+
+### 3. Configure GitHub access
+
+Quick-start path: put the non-secret GitHub App id in `service.env` and keep
+the webhook secret plus App private key in encrypted systemd credentials.
+
+Typical machine-level config:
+
+```bash
+REVIEW_QUILL_GITHUB_APP_ID=123456
+REVIEW_QUILL_GITHUB_APP_INSTALLATION_ID=12345678
+```
+
+Recommended encrypted credentials:
+
+- `review-quill-webhook-secret`
+- `review-quill-github-app-pem`
+
+For first-time local bring-up you can also use environment-file secrets, but
+production should prefer encrypted systemd credentials.
+
+### 4. Attach a repository
+
+```bash
+review-quill repo attach owner/repo
+```
+
+`review-quill repo attach` is the normal happy-path command:
+
+- it adds or updates one watched repository
+- it can auto-discover the default branch and required checks
+- it stores repo-local review doc paths
+- it reloads the service when needed
+
+If you want machine review to count toward merge admission, include
+`review-quill/verdict` in the repository's required checks and in any downstream
+merge queue policy.
+
+### 5. Validate the install
+
+```bash
+review-quill doctor --repo repo
+review-quill service status
+review-quill dashboard
+```
+
+That is the minimum “is this actually alive?” loop.
+
+## Public Ingress
 
 Recommended public base URL:
 
@@ -52,35 +107,17 @@ That gives these public endpoints:
 - `GET /review/health` for external health checks
 - `GET /review/attempts/:id` for check-run detail links
 
-Intentionally not public:
+Keep these local-only:
 
 - `/review/watch`
 - `/review/attempts`
 - `/review/admin/*`
 
-The package ships an example Caddy config at
-[`infra/Caddyfile`](./infra/Caddyfile) that matches the live layout used by
-PatchRelay and `merge-steward`.
+The package ships an example Caddy config at [infra/Caddyfile](./infra/Caddyfile).
 
-## Config model
+## GitHub App Permissions
 
-Planned config layout:
-
-- `~/.config/review-quill/runtime.env`
-- `~/.config/review-quill/service.env`
-- `~/.config/review-quill/review-quill.json`
-- `/etc/systemd/system/review-quill.service`
-
-Planned encrypted credentials:
-
-- `review-quill-webhook-secret`
-- `review-quill-github-app-pem`
-
-## GitHub App permissions
-
-This is the current known-good permission set for `review-quill`. After moving
-the app to this shape, GitHub started counting `review-quill` approvals toward
-the branch review gate on live PRs.
+This is the current known-good permission set:
 
 Repository permissions:
 
@@ -98,61 +135,94 @@ Webhook events:
 
 Notes:
 
-- `Pull requests: Read and write` is what lets `review-quill` submit ordinary
-  `APPROVE` / `REQUEST_CHANGES` reviews and create review comments.
-- `Actions: Read-only` lets it observe CI state cleanly.
-- `Contents: Read and write` is part of the currently validated working setup.
-  We have not minimized this below the known-good set yet.
+- `Pull requests: Read and write` is what lets `review-quill` submit ordinary GitHub reviews.
+- `Actions: Read-only` lets it observe CI state clearly.
+- `Contents: Read and write` is part of the validated working setup today.
 
-## CLI
+## CLI Surface
 
-`review-quill` now follows the same operator pattern as PatchRelay and
-`merge-steward`:
+The operator-facing commands are:
 
-- `init` bootstraps the local home and systemd unit
-- `attach` adds or updates one watched repository
-- `repos` shows what is configured
-- `doctor` verifies readiness and, when possible, checks whether GitHub is counting recent `review-quill` reviews
-- `service status|logs|restart|install` handles systemd operations
-- `dashboard` opens the live review watch UI
+- `review-quill init <public-base-url>`
+- `review-quill repo attach <owner/repo>`
+- `review-quill repo list`
+- `review-quill repo show <id>`
+- `review-quill doctor --repo <id>`
+- `review-quill service status`
+- `review-quill service logs --lines 100`
+- `review-quill dashboard`
+- `review-quill attempts <repo> <pr-number>`
+- `review-quill transcript <repo> <pr-number>`
+- `review-quill diff --repo <id>`
 
-The dashboard/watch UI is mainly for operators. It shows:
+`watch` is kept as an alias for `dashboard`, but `dashboard` is the name to
+document and use.
 
-- active queued/running review attempts
-- completed, failed, cancelled, and superseded attempts in `all` mode
-- recent webhook wakeups
-- latest reconcile status
+## Validation, Visibility, And Troubleshooting
+
+These are the key commands once the service is installed:
+
+```bash
+review-quill doctor --repo repo
+review-quill service status
+review-quill dashboard
+review-quill attempts repo 123
+review-quill transcript repo 123
+review-quill diff --repo repo
+review-quill service logs --lines 100
+```
+
+Use them this way:
+
+- `doctor` checks config, binaries, service reachability, and GitHub review wiring.
+- `dashboard` shows queued/running/completed review attempts and recent webhook wakeups.
+- `attempts` shows recorded review history for one PR.
+- `transcript` lets you inspect the visible Codex thread for a review attempt.
+- `diff` shows the exact local diff/inventory the reviewer would see.
+- `service logs` is where to look when webhooks are not arriving, Codex requests fail, or GitHub publishing fails.
+
+If GitHub is not counting `review-quill` reviews toward branch protection:
+
+1. verify the App permission set above
+2. confirm the repository requires the review/check signals you expect
+3. run `review-quill doctor --repo <id>`
+4. inspect recent attempts and transcripts for the affected PR
 
 ## Review Context
 
-`review-quill` now reviews from a real checked-out PR head, not just the GitHub
-files API.
+`review-quill` reviews from a real checked-out PR head, not just GitHub API
+metadata.
 
-The initial context path is:
+The default context path is:
 
 - ephemeral local checkout at the exact PR head SHA
 - local `git diff <base>...HEAD` inventory and curated patch set
-- explicit repo guidance from `REVIEW_WORKFLOW.md`, `CLAUDE.md`, and `AGENTS.md`
+- repo guidance from `REVIEW_WORKFLOW.md`, `CLAUDE.md`, and `AGENTS.md`
 - prior formal PR reviews from GitHub
-- optional Linear issue context via the existing Codex `linear` MCP when the PR metadata includes issue keys
+- optional Linear issue context when issue keys appear in the PR metadata
 
 Diff context is intentionally filtered:
 
-- lockfiles and other noisy/generated paths are summarized by policy
+- noisy/generated paths can be ignored or summarized
 - oversized patches are summarized instead of dumped whole
 - repo config can tune ignore/summarize patterns and patch budgets
 
-When the PR title, body, or branch name contains issue keys like `TST-28`,
-the review prompt now explicitly nudges the model to consult the existing
-`linear` MCP before finalizing its verdict. This stays lightweight: no separate
-Linear auth/config is added inside `review-quill`.
+## Relationship To PatchRelay And Merge Steward
 
-Happy path:
+The three services have distinct ownership:
 
-1. `review-quill init https://patchrelay.example.com/review`
-2. Fill in `~/.config/review-quill/service.env`
-3. Install encrypted credentials for the webhook secret and GitHub App key
-4. `review-quill attach krasnoperov/mafia`
-5. `review-quill doctor --repo mafia`
-6. `review-quill service status`
-7. `review-quill dashboard`
+- `patchrelay` owns implementation, branch upkeep, and issue/worktree orchestration
+- `review-quill` owns PR review publication
+- `merge-steward` owns queue admission, speculative validation, and landing
+
+GitHub is the shared protocol boundary between them.
+
+## Happy Path
+
+```bash
+review-quill init https://patchrelay.example.com/review
+review-quill repo attach owner/repo
+review-quill doctor --repo repo
+review-quill service status
+review-quill dashboard
+```
