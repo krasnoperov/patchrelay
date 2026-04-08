@@ -291,3 +291,60 @@ test("buildDetailLines keeps header PR and review facts colorized instead of fla
   assert.equal(approvedSegment?.color, "green");
   assert.equal(checksSegment?.color, "green");
 });
+
+test("buildDetailLines shows awaiting review and downstream queue facts without falling back to ready", () => {
+  const reviewIssue = makeIssue("TST-39", {
+    factoryState: "pr_open",
+    readyForExecution: true,
+    prNumber: 38,
+    prReviewState: "review_required",
+    prCheckStatus: "success",
+  });
+  const downstreamIssue = makeIssue("TST-43", {
+    factoryState: "awaiting_queue",
+    readyForExecution: true,
+    prNumber: 36,
+    prReviewState: "approved",
+    prCheckStatus: "success",
+  });
+
+  const reviewText = detailText(buildDetailLines({
+    issue: reviewIssue,
+    timeline: [],
+    activeRunStartedAt: null,
+    activeRunId: null,
+    tokenUsage: null,
+    diffSummary: null,
+    plan: null,
+    issueContext: null,
+    detailTab: "timeline",
+    rawRuns: [],
+    rawFeedEvents: [],
+    follow: true,
+    connected: true,
+    lastServerMessageAt: Date.now(),
+    width: 100,
+  })).join("\n");
+  const downstreamText = detailText(buildDetailLines({
+    issue: downstreamIssue,
+    timeline: [],
+    activeRunStartedAt: null,
+    activeRunId: null,
+    tokenUsage: null,
+    diffSummary: null,
+    plan: null,
+    issueContext: null,
+    detailTab: "timeline",
+    rawRuns: [],
+    rawFeedEvents: [],
+    follow: true,
+    connected: true,
+    lastServerMessageAt: Date.now(),
+    width: 100,
+  })).join("\n");
+
+  assert.match(reviewText, /awaiting review/);
+  assert.doesNotMatch(reviewText, / {2}ready {2}/);
+  assert.match(downstreamText, /merge queue/);
+  assert.doesNotMatch(downstreamText, / {2}ready {2}/);
+});

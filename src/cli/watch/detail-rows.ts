@@ -5,7 +5,14 @@ import { buildTimelineRows } from "./timeline-presentation.ts";
 import { planStepColor, planStepSymbol } from "./plan-helpers.ts";
 import { progressBar } from "./format-utils.ts";
 import { describePatchRelayFreshness } from "./freshness.ts";
-import { hasDisplayPrBlocker, isRereviewNeeded, prChecksFact } from "./pr-status.ts";
+import {
+  hasDisplayPrBlocker,
+  isApprovedReviewState,
+  isAwaitingReviewState,
+  isChangesRequestedReviewState,
+  isRereviewNeeded,
+  prChecksFact,
+} from "./pr-status.ts";
 import { renderRichTextLines, renderTextLines, type TextLine, type TextSegment } from "./render-rich-text.ts";
 
 interface BuildDetailLinesInput {
@@ -484,9 +491,14 @@ function buildFactSegments(issue: WatchIssue, issueContext: WatchIssueContext | 
   const facts: TextSegment[][] = [];
   const rereviewNeeded = isRereviewNeeded(issue);
   if (issue.prNumber !== undefined) facts.push([{ text: `PR #${issue.prNumber}`, color: "cyan" }]);
-  if (issue.prReviewState === "approved") facts.push([{ text: "approved", color: "green" }]);
+  if (isApprovedReviewState(issue.prReviewState)) facts.push([{ text: "approved", color: "green" }]);
   else if (rereviewNeeded) facts.push([{ text: "re-review needed", color: "yellow" }]);
-  else if (issue.prReviewState === "changes_requested") facts.push([{ text: "changes requested", color: "yellow" }]);
+  else if (isChangesRequestedReviewState(issue.prReviewState)) facts.push([{ text: "changes requested", color: "yellow" }]);
+  else if (
+    issue.prNumber !== undefined
+    && (isAwaitingReviewState(issue.prReviewState) || (!issue.prReviewState && issue.factoryState === "pr_open"))
+  ) facts.push([{ text: "awaiting review", color: "yellow" }]);
+  if (issue.factoryState === "awaiting_queue") facts.push([{ text: "merge queue", color: "cyan" }]);
   if (issue.waitingReason && issue.sessionState === "waiting_input") facts.push([{ text: issue.waitingReason, color: "yellow" }]);
   const checks = prChecksFact({
     ...issue,
@@ -600,6 +612,7 @@ function effectiveState(issue: WatchIssue): string {
   if (issue.sessionState === "failed") return "failed";
   if (issue.blockedByCount > 0 && !issue.activeRunType) return "blocked";
   if (issue.sessionState === "waiting_input") return "awaiting_input";
+  if (issue.prNumber !== undefined) return issue.factoryState;
   if (issue.readyForExecution && !issue.activeRunType && !hasDisplayPrBlocker(issue)) return "ready";
   return issue.factoryState;
 }
@@ -630,8 +643,10 @@ function blockerText(issue: WatchIssue, issueContext: WatchIssueContext | null):
     return `${checks.text} still running`;
   }
   if (rereviewNeeded) return "Awaiting re-review after requested changes";
-  if (issue.prReviewState === "changes_requested") return "Review changes requested";
-  if (issue.prNumber !== undefined && !issue.prReviewState && effectiveState(issue) !== "done") return "Awaiting review";
+  if (isChangesRequestedReviewState(issue.prReviewState)) return "Review changes requested";
+  if (issue.prNumber !== undefined && (isAwaitingReviewState(issue.prReviewState) || (!issue.prReviewState && effectiveState(issue) !== "done"))) {
+    return "Awaiting review";
+  }
   return null;
 }
 

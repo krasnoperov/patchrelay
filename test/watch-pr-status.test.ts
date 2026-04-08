@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { arePrChecksCompleteAndGreen, hasDisplayPrBlocker, isRereviewNeeded, prChecksFact } from "../src/cli/watch/pr-status.ts";
+import {
+  arePrChecksCompleteAndGreen,
+  hasDisplayPrBlocker,
+  isAwaitingReviewState,
+  isRereviewNeeded,
+  prChecksFact,
+} from "../src/cli/watch/pr-status.ts";
 import type { WatchIssue } from "../src/cli/watch/watch-state.ts";
 
 function makeIssue(overrides?: Partial<WatchIssue>): WatchIssue {
@@ -56,4 +62,25 @@ test("completed green checks allow rereview once all checks settle", () => {
   assert.equal(arePrChecksCompleteAndGreen(issue), true);
   assert.equal(isRereviewNeeded(issue), true);
   assert.deepEqual(prChecksFact(issue), { text: "checks passed", color: "green" });
+});
+
+test("review-required and downstream PR states still count as display blockers", () => {
+  const reviewRequired = makeIssue({
+    prNumber: 34,
+    factoryState: "pr_open",
+    readyForExecution: true,
+    prReviewState: "review_required",
+    prCheckStatus: "success",
+  });
+  const downstream = makeIssue({
+    prNumber: 36,
+    factoryState: "awaiting_queue",
+    readyForExecution: true,
+    prReviewState: "approved",
+    prCheckStatus: "success",
+  });
+
+  assert.equal(isAwaitingReviewState(reviewRequired.prReviewState), true);
+  assert.equal(hasDisplayPrBlocker(reviewRequired), true);
+  assert.equal(hasDisplayPrBlocker(downstream), true);
 });

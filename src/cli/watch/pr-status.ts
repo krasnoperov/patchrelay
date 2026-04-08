@@ -12,6 +12,24 @@ function isPendingCheckStatus(status: string | undefined): boolean {
   return status === "pending" || status === "in_progress";
 }
 
+function normalizeReviewState(state: string | undefined): string | undefined {
+  const normalized = state?.trim().toLowerCase();
+  return normalized && normalized.length > 0 ? normalized : undefined;
+}
+
+export function isApprovedReviewState(state: string | undefined): boolean {
+  return normalizeReviewState(state) === "approved";
+}
+
+export function isChangesRequestedReviewState(state: string | undefined): boolean {
+  return normalizeReviewState(state) === "changes_requested";
+}
+
+export function isAwaitingReviewState(state: string | undefined): boolean {
+  const normalized = normalizeReviewState(state);
+  return normalized === "review_required" || normalized === "commented";
+}
+
 export function hasPendingPrChecks(issue: WatchIssue): boolean {
   const summary = issue.prChecksSummary;
   if (summary?.total) {
@@ -37,7 +55,7 @@ export function arePrChecksCompleteAndGreen(issue: WatchIssue): boolean {
 }
 
 export function isRereviewNeeded(issue: WatchIssue): boolean {
-  return issue.prReviewState === "changes_requested"
+  return isChangesRequestedReviewState(issue.prReviewState)
     && arePrChecksCompleteAndGreen(issue)
     && !issue.activeRunType;
 }
@@ -71,10 +89,13 @@ export function hasDisplayPrBlocker(issue: WatchIssue): boolean {
   if (issue.prNumber === undefined || issue.activeRunType) {
     return false;
   }
+  if (issue.factoryState === "pr_open" || issue.factoryState === "awaiting_queue" || issue.factoryState === "repairing_queue") {
+    return true;
+  }
   if (hasPendingPrChecks(issue) || hasFailedPrChecks(issue)) {
     return true;
   }
-  if (issue.prReviewState === "changes_requested" && !isRereviewNeeded(issue)) {
+  if (isChangesRequestedReviewState(issue.prReviewState) && !isRereviewNeeded(issue)) {
     return true;
   }
   if (!issue.prReviewState && issue.factoryState === "pr_open") {

@@ -2,7 +2,14 @@ import { Box, Text } from "ink";
 import type { WatchIssue } from "./watch-state.ts";
 import { summarizeIssueStatusNote } from "./issue-status-note.ts";
 import { relativeTime, truncate } from "./format-utils.ts";
-import { hasDisplayPrBlocker, isRereviewNeeded, prChecksFact } from "./pr-status.ts";
+import {
+  hasDisplayPrBlocker,
+  isApprovedReviewState,
+  isAwaitingReviewState,
+  isChangesRequestedReviewState,
+  isRereviewNeeded,
+  prChecksFact,
+} from "./pr-status.ts";
 
 interface IssueRowProps {
   issue: WatchIssue;
@@ -28,6 +35,7 @@ function effectiveState(issue: WatchIssue): string {
   if (issue.sessionState === "failed") return "failed";
   if (issue.blockedByCount > 0 && !issue.activeRunType) return "blocked";
   if (issue.sessionState === "waiting_input") return "awaiting_input";
+  if (issue.prNumber !== undefined) return issue.factoryState;
   if (issue.readyForExecution && !issue.activeRunType && !hasDisplayPrBlocker(issue)) return "ready";
   return issue.factoryState;
 }
@@ -97,14 +105,21 @@ function buildFacts(issue: WatchIssue, selected: boolean): Array<{ text: string;
   }
 
   // Review state — only show when it matters (not yet approved, or changes requested)
-  if (issue.prReviewState === "approved") {
+  if (isApprovedReviewState(issue.prReviewState)) {
     facts.push({ text: "approved", color: "green" });
   } else if (rereviewNeeded) {
     facts.push({ text: "re-review needed", color: "yellow" });
-  } else if (issue.prReviewState === "changes_requested") {
+  } else if (isChangesRequestedReviewState(issue.prReviewState)) {
     facts.push({ text: "changes requested", color: "yellow" });
-  } else if (issue.prNumber !== undefined && !issue.prReviewState && !TERMINAL_STATES.has(effectiveState(issue))) {
+  } else if (
+    issue.prNumber !== undefined
+    && (isAwaitingReviewState(issue.prReviewState) || (!issue.prReviewState && !TERMINAL_STATES.has(effectiveState(issue))))
+  ) {
     facts.push({ text: "awaiting review", color: "yellow" });
+  }
+
+  if (issue.factoryState === "awaiting_queue") {
+    facts.push({ text: "merge queue", color: "cyan" });
   }
 
   // Check status — compact
@@ -144,7 +159,8 @@ function blockerText(issue: WatchIssue): string | null {
     return `${checksFact.text} still running`;
   }
   if (rereviewNeeded) return "Awaiting re-review after requested changes";
-  if (issue.prReviewState === "changes_requested") return "Review changes requested";
+  if (isChangesRequestedReviewState(issue.prReviewState)) return "Review changes requested";
+  if (issue.prNumber !== undefined && isAwaitingReviewState(issue.prReviewState)) return "Awaiting review";
   return null;
 }
 

@@ -232,7 +232,7 @@ export function computeAggregates(issues: WatchIssue[]): IssueAggregates {
     const isFailed = sessionState === "failed" || FAILED_STATES.has(issue.factoryState);
     if (issue.activeRunType) active++;
     if (!issue.activeRunType && issue.blockedByCount > 0) blocked++;
-    if (!issue.activeRunType && issue.readyForExecution && !isDone && !isFailed) ready++;
+    if (!issue.activeRunType && issue.prNumber === undefined && issue.readyForExecution && !isDone && !isFailed) ready++;
     if (isDone) done++;
     if (isFailed) failed++;
   }
