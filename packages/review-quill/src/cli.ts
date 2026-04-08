@@ -99,7 +99,7 @@ function rootHelpText(): string {
     "Mental model:",
     "  review-quill is the PR review complement to PatchRelay and merge-steward.",
     "  It watches configured repositories, reviews merge-ready PR heads, and",
-    "  publishes a normal GitHub PR review and a `review-quill/verdict` check.",
+    "  publishes a normal GitHub PR review.",
     "",
     "Usage:",
     "  review-quill <command> [args] [flags]",
@@ -145,7 +145,6 @@ function rootHelpText(): string {
     "",
     "Review protocol:",
     "  - review-quill submits ordinary GitHub `APPROVE` / `REQUEST_CHANGES` reviews with its App identity",
-    "  - `review-quill/verdict` is the matching machine-facing check run for the same head SHA",
     "",
     "Command help:",
     "  review-quill help",
@@ -181,7 +180,6 @@ function repoHelpText(): string {
     "",
     "Review contract:",
     "  - review-quill leaves a descriptive APPROVE / REQUEST_CHANGES review on the PR timeline",
-    "  - `review-quill/verdict` is available as an extra machine verdict check when a repo wants it",
   ].join("\n");
 }
 
@@ -729,7 +727,7 @@ async function handleRepos(parsed: ParsedArgs, stdout: Output): Promise<number> 
     writeOutput(
       stdout,
       repos
-        .map((repo) => `${repo.repoId}  ${repo.repoFullName}  base=${repo.baseBranch}  verdict=review-quill/verdict`)
+        .map((repo) => `${repo.repoId}  ${repo.repoFullName}  base=${repo.baseBranch}`)
         .join("\n") + "\n",
     );
     return 0;
@@ -747,7 +745,6 @@ async function handleRepos(parsed: ParsedArgs, stdout: Output): Promise<number> 
     diffIgnore: repo.diffIgnore,
     diffSummarizeOnly: repo.diffSummarizeOnly,
     patchBodyBudgetTokens: repo.patchBodyBudgetTokens,
-    verdictCheckName: "review-quill/verdict",
     configPath,
     ...(webhookUrl ? { webhookUrl } : {}),
   };
@@ -770,7 +767,6 @@ async function handleRepos(parsed: ParsedArgs, stdout: Output): Promise<number> 
       `Summarize-only diff patterns: ${repo.diffSummarizeOnly.join(", ") || "(none)"}`,
       `Ignored diff patterns: ${repo.diffIgnore.join(", ") || "(none)"}`,
       `Patch body budget: ${repo.patchBodyBudgetTokens} tokens`,
-      "Verdict check: review-quill/verdict",
       webhookUrl ? `Webhook URL: ${webhookUrl}` : undefined,
     ].filter(Boolean).join("\n") + "\n",
   );
@@ -926,7 +922,7 @@ async function handleDoctor(parsed: ParsedArgs, stdout: Output, runCommand: Comm
         checks.push({
           status: "pass",
           scope: `repo:${repo.repoId}:review-protocol`,
-          message: "review-quill uses its GitHub App identity for normal PR approvals or change requests, and repos may optionally require `review-quill/verdict` too.",
+          message: "review-quill uses its GitHub App identity for normal PR approvals or change requests.",
         });
         for (const check of buildReviewGateChecks(repo.repoId, repo.repoFullName, serviceAppSlug)) {
           checks.push(check);

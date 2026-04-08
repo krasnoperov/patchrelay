@@ -9,7 +9,6 @@ It is responsible for one narrow loop:
 - build a curated local diff against the PR base
 - run a readonly review pass for that exact SHA
 - publish a normal GitHub PR review on the PR
-- publish a machine-facing `review-quill/verdict` check run
 - cancel stale in-flight attempts when a newer PR head lands before publication
 
 In the current production shape, `review-quill` uses its GitHub App identity
@@ -18,12 +17,9 @@ for the whole loop:
 - webhook intake
 - repository reads
 - `APPROVE` / `REQUEST_CHANGES` reviews
-- `review-quill/verdict` check runs
 
-`review-quill/verdict` is optional. A repository can rely on normal GitHub
-review gating alone, or it can also require the verdict check in branch
-protection. `merge-steward` admits on GitHub's PR review/check truth and then
-does its own speculative integrated-branch validation before landing.
+`merge-steward` admits on GitHub's PR review/check truth and then does its own
+speculative integrated-branch validation before landing.
 
 It complements:
 
