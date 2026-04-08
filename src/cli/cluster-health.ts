@@ -40,6 +40,8 @@ interface ServiceProbeResult {
   message: string;
 }
 
+type JsonObject = Record<string, unknown>;
+
 interface GitHubPullRequestSnapshot {
   state?: string | undefined;
   reviewDecision?: string | undefined;
@@ -450,8 +452,8 @@ async function probeOptionalService(
   runCommand: CommandRunner,
   binary: string,
   options: {
-    healthy: (payload: Record<string, any>) => boolean;
-    summarize: (payload: Record<string, any>) => string;
+    healthy: (payload: JsonObject) => boolean;
+    summarize: (payload: JsonObject) => string;
   },
 ): Promise<ServiceProbeResult> {
   let result: CommandRunnerResult;
@@ -540,11 +542,11 @@ function extractRequestedReviewerLogins(requests: unknown[] | undefined): string
   return [...new Set(logins)];
 }
 
-function safeJsonParse(value: string): Record<string, any> | undefined {
+function safeJsonParse(value: string): JsonObject | undefined {
   try {
     const parsed = JSON.parse(value) as unknown;
     return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? parsed as Record<string, any>
+      ? parsed as JsonObject
       : undefined;
   } catch {
     return undefined;
