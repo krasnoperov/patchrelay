@@ -19,7 +19,7 @@ export class RunWakePlanner {
   constructor(private readonly db: PatchRelayDatabase) {}
 
   resolveRunWake(issue: IssueRecord): PendingRunWake | undefined {
-    const sessionWake = this.db.peekIssueSessionWake(issue.projectId, issue.linearIssueId);
+    const sessionWake = this.db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId);
     if (!sessionWake) return undefined;
     return {
       runType: sessionWake.runType,
@@ -53,7 +53,7 @@ export class RunWakePlanner {
       dedupeKey = `${dedupeScope ?? "wake"}:implementation:${issue.linearIssueId}`;
     }
 
-    return Boolean(this.db.appendIssueSessionEventWithLease(lease, {
+    return Boolean(this.db.issueSessions.appendIssueSessionEventWithLease(lease, {
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       eventType,
@@ -71,7 +71,7 @@ export class RunWakePlanner {
       ? JSON.parse(issue.pendingRunContextJson) as Record<string, unknown>
       : undefined;
     this.appendWakeEventWithLease(lease, issue, issue.pendingRunType, context, "legacy_pending");
-    const updated = this.db.upsertIssueWithLease(lease, {
+    const updated = this.db.issueSessions.upsertIssueWithLease(lease, {
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       pendingRunType: null,
@@ -101,21 +101,21 @@ export class RunWakePlanner {
     isRequestedChangesRunType: (runType: RunType) => boolean,
   ): boolean {
     if (runType === "ci_repair") {
-      return Boolean(this.db.upsertIssueWithLease(lease, {
+      return Boolean(this.db.issueSessions.upsertIssueWithLease(lease, {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         ciRepairAttempts: issue.ciRepairAttempts + 1,
       }));
     }
     if (runType === "queue_repair") {
-      return Boolean(this.db.upsertIssueWithLease(lease, {
+      return Boolean(this.db.issueSessions.upsertIssueWithLease(lease, {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         queueRepairAttempts: issue.queueRepairAttempts + 1,
       }));
     }
     if (isRequestedChangesRunType(runType)) {
-      return Boolean(this.db.upsertIssueWithLease(lease, {
+      return Boolean(this.db.issueSessions.upsertIssueWithLease(lease, {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         reviewFixAttempts: issue.reviewFixAttempts + 1,

@@ -37,7 +37,7 @@ test("repairing_ci issues with an unseen failure signature become ready without 
       }),
     });
 
-    const wake = db.peekIssueSessionWake("usertold", "issue-1");
+    const wake = db.issueSessions.peekIssueSessionWake("usertold", "issue-1");
     assert.equal(wake?.runType, "ci_repair");
     assert.equal(wake?.wakeReason, "settled_red_ci");
     assert.deepEqual(
@@ -66,7 +66,7 @@ test("repairing_ci issues can synthesize a one-time wake from the current PR hea
       prCheckStatus: "failure",
     });
 
-    const wake = db.peekIssueSessionWake("usertold", "issue-2");
+    const wake = db.issueSessions.peekIssueSessionWake("usertold", "issue-2");
     assert.equal(wake?.runType, "ci_repair");
     assert.equal(wake?.context.failureSignature, "implicit_branch_ci::sha-implicit");
     assert.equal(wake?.context.failureHeadSha, "sha-implicit");
@@ -91,14 +91,14 @@ test("terminal issues with a fresh GitHub wake become ready for execution again"
       prReviewState: "changes_requested",
       prCheckStatus: "success",
     });
-    db.appendIssueSessionEvent({
+    db.issueSessions.appendIssueSessionEvent({
       projectId: "usertold",
       linearIssueId: "issue-3",
       eventType: "review_changes_requested",
       eventJson: JSON.stringify({ reviewBody: "Please fix the failing review points." }),
     });
 
-    const wake = db.peekIssueSessionWake("usertold", "issue-3");
+    const wake = db.issueSessions.peekIssueSessionWake("usertold", "issue-3");
     assert.equal(wake?.runType, "review_fix");
     assert.deepEqual(
       db.listIssuesReadyForExecution(),

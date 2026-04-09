@@ -141,7 +141,7 @@ export async function collectClusterHealth(
     });
     return {
       issue,
-      session: db.getIssueSession(issue.projectId, issue.linearIssueId),
+      session: db.issueSessions.getIssueSession(issue.projectId, issue.linearIssueId),
       blockedBy,
       missingTrackedBlockers,
       ageMs: Math.max(0, now - Date.parse(issue.updatedAt || new Date(0).toISOString())),

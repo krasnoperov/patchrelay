@@ -238,7 +238,7 @@ exit 1`;
     assert.equal(issue?.factoryState, "repairing_queue");
     assert.equal(issue?.pendingRunType, undefined);
     assert.equal(issue?.branchOwner, "patchrelay");
-    const wake = harness.db.peekIssueSessionWake("proj", "issue-1");
+    const wake = harness.db.issueSessions.peekIssueSessionWake("proj", "issue-1");
     assert.equal(wake?.runType, "queue_repair");
     const ctx = wake?.context ?? {};
     assert.equal(ctx.source, "queue_health_monitor");
@@ -272,7 +272,7 @@ exit 1`;
     const issue = harness.db.getIssue("proj", "issue-1");
     assert.equal(issue?.factoryState, "repairing_queue");
     assert.equal(issue?.pendingRunType, undefined);
-    assert.equal(harness.db.peekIssueSessionWake("proj", "issue-1")?.runType, "queue_repair");
+    assert.equal(harness.db.issueSessions.peekIssueSessionWake("proj", "issue-1")?.runType, "queue_repair");
     assert.deepEqual(harness.enqueueCalls, [{ projectId: "proj", issueId: "issue-1" }]);
   } finally {
     process.env.PATH = oldPath;
@@ -328,7 +328,7 @@ exit 1`;
     const after1 = harness.db.getIssue("proj", "issue-1");
     assert.equal(after1?.factoryState, "repairing_queue");
     assert.equal(after1?.pendingRunType, undefined);
-    assert.equal(harness.db.peekIssueSessionWake("proj", "issue-1")?.runType, "queue_repair");
+    assert.equal(harness.db.issueSessions.peekIssueSessionWake("proj", "issue-1")?.runType, "queue_repair");
 
     // Reset state to awaiting_queue to simulate the issue coming back
     // (e.g. repair completed but conflict remains with same head)
@@ -340,7 +340,7 @@ exit 1`;
       pendingRunContextJson: null,
       activeRunId: null,
     });
-    harness.db.consumeIssueSessionEvents("proj", "issue-1", harness.db.listIssueSessionEvents("proj", "issue-1", { pendingOnly: true }).map((event) => event.id), 999);
+    harness.db.issueSessions.consumeIssueSessionEvents("proj", "issue-1", harness.db.issueSessions.listIssueSessionEvents("proj", "issue-1", { pendingOnly: true }).map((event) => event.id), 999);
     const oldDate = new Date(Date.now() - 300_000).toISOString();
     harness.db["connection"]
       .prepare("UPDATE issues SET updated_at = ? WHERE linear_issue_id = ?")

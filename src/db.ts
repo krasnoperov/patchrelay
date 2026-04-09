@@ -382,238 +382,12 @@ export class PatchRelayDatabase {
     return row ? mapIssueRow(row) : undefined;
   }
 
-  getIssueSession(projectId: string, linearIssueId: string): IssueSessionRecord | undefined {
-    return this.issueSessions.getIssueSession(projectId, linearIssueId);
-  }
-
-  getIssueSessionByKey(issueKey: string): IssueSessionRecord | undefined {
-    return this.issueSessions.getIssueSessionByKey(issueKey);
-  }
-
-  appendIssueSessionEvent(params: {
-    projectId: string;
-    linearIssueId: string;
-    eventType: IssueSessionEventType;
-    eventJson?: string | undefined;
-    dedupeKey?: string | undefined;
-  }): IssueSessionEventRecord {
-    return this.issueSessions.appendIssueSessionEvent(params);
-  }
-
-  appendIssueSessionEventWithLease(
-    lease: { projectId: string; linearIssueId: string; leaseId: string },
-    params: Parameters<PatchRelayDatabase["appendIssueSessionEvent"]>[0],
-  ): IssueSessionEventRecord | undefined {
-    return this.issueSessions.appendIssueSessionEventWithLease(lease, params);
-  }
-
-  appendIssueSessionEventRespectingActiveLease(
-    projectId: string,
-    linearIssueId: string,
-    params: Parameters<PatchRelayDatabase["appendIssueSessionEvent"]>[0],
-  ): IssueSessionEventRecord | undefined {
-    return this.issueSessions.appendIssueSessionEventRespectingActiveLease(projectId, linearIssueId, params);
-  }
-
-  getIssueSessionEvent(id: number): IssueSessionEventRecord | undefined {
-    return this.issueSessions.getIssueSessionEvent(id);
-  }
-
-  listIssueSessionEvents(
-    projectId: string,
-    linearIssueId: string,
-    options?: { pendingOnly?: boolean; limit?: number },
-  ): IssueSessionEventRecord[] {
-    return this.issueSessions.listIssueSessionEvents(projectId, linearIssueId, options);
-  }
-
-  consumeIssueSessionEvents(projectId: string, linearIssueId: string, eventIds: number[], runId: number): void {
-    this.issueSessions.consumeIssueSessionEvents(projectId, linearIssueId, eventIds, runId);
-  }
-
-  clearPendingIssueSessionEvents(projectId: string, linearIssueId: string): void {
-    this.issueSessions.clearPendingIssueSessionEvents(projectId, linearIssueId);
-  }
-
-  hasPendingIssueSessionEvents(projectId: string, linearIssueId: string): boolean {
-    return this.issueSessions.hasPendingIssueSessionEvents(projectId, linearIssueId);
-  }
-
-  peekIssueSessionWake(projectId: string, linearIssueId: string): {
-    eventIds: number[];
-    runType: RunType;
-    context: Record<string, unknown>;
-    wakeReason?: string | undefined;
-    resumeThread: boolean;
-  } | undefined {
-    return this.issueSessions.peekIssueSessionWake(projectId, linearIssueId);
-  }
-
-  acquireIssueSessionLease(params: {
-    projectId: string;
-    linearIssueId: string;
-    leaseId: string;
-    workerId: string;
-    leasedUntil: string;
-    now?: string;
-  }): boolean {
-    return this.issueSessions.acquireIssueSessionLease(params);
-  }
-
-  forceAcquireIssueSessionLease(params: {
-    projectId: string;
-    linearIssueId: string;
-    leaseId: string;
-    workerId: string;
-    leasedUntil: string;
-    now?: string;
-  }): boolean {
-    return this.issueSessions.forceAcquireIssueSessionLease(params);
-  }
-
-  renewIssueSessionLease(params: {
-    projectId: string;
-    linearIssueId: string;
-    leaseId: string;
-    leasedUntil: string;
-    now?: string;
-  }): boolean {
-    return this.issueSessions.renewIssueSessionLease(params);
-  }
-
-  releaseIssueSessionLease(projectId: string, linearIssueId: string, leaseId?: string): void {
-    this.issueSessions.releaseIssueSessionLease(projectId, linearIssueId, leaseId);
-  }
-
-  releaseExpiredIssueSessionLeases(now = isoNow()): void {
-    this.issueSessions.releaseExpiredIssueSessionLeases(now);
-  }
-
-  hasActiveIssueSessionLease(projectId: string, linearIssueId: string, leaseId: string, now = isoNow()): boolean {
-    return this.issueSessions.hasActiveIssueSessionLease(projectId, linearIssueId, leaseId, now);
-  }
-
-  getActiveIssueSessionLease(
-    projectId: string,
-    linearIssueId: string,
-    now = isoNow(),
-  ): { projectId: string; linearIssueId: string; leaseId: string } | undefined {
-    return this.issueSessions.getActiveIssueSessionLease(projectId, linearIssueId, now);
-  }
-
-  withIssueSessionLease<T>(
-    projectId: string,
-    linearIssueId: string,
-    leaseId: string,
-    fn: () => T,
-  ): T | undefined {
-    return this.issueSessions.withIssueSessionLease(projectId, linearIssueId, leaseId, fn);
-  }
-
-  upsertIssueWithLease(
-    lease: { projectId: string; linearIssueId: string; leaseId: string },
-    params: Parameters<PatchRelayDatabase["upsertIssue"]>[0],
-  ): IssueRecord | undefined {
-    return this.issueSessions.upsertIssueWithLease(lease, params);
-  }
-
-  upsertIssueRespectingActiveLease(
-    projectId: string,
-    linearIssueId: string,
-    params: Parameters<PatchRelayDatabase["upsertIssue"]>[0],
-  ): IssueRecord | undefined {
-    return this.issueSessions.upsertIssueRespectingActiveLease(projectId, linearIssueId, params);
-  }
-
-  finishRunWithLease(
-    lease: { projectId: string; linearIssueId: string; leaseId: string },
-    runId: number,
-    params: {
-      status: RunStatus;
-      threadId?: string;
-      turnId?: string;
-      failureReason?: string;
-      summaryJson?: string;
-      reportJson?: string;
-    },
-  ): boolean {
-    return this.issueSessions.finishRunWithLease(lease, runId, params);
-  }
-
-  finishRunRespectingActiveLease(
-    projectId: string,
-    linearIssueId: string,
-    runId: number,
-    params: {
-      status: RunStatus;
-      threadId?: string;
-      turnId?: string;
-      failureReason?: string;
-      summaryJson?: string;
-      reportJson?: string;
-    },
-  ): boolean {
-    return this.issueSessions.finishRunRespectingActiveLease(projectId, linearIssueId, runId, params);
-  }
-
-  updateRunThreadWithLease(
-    lease: { projectId: string; linearIssueId: string; leaseId: string },
-    runId: number,
-    params: { threadId: string; parentThreadId?: string; turnId?: string },
-  ): boolean {
-    return this.issueSessions.updateRunThreadWithLease(lease, runId, params);
-  }
-
-  consumeIssueSessionEventsWithLease(
-    lease: { projectId: string; linearIssueId: string; leaseId: string },
-    eventIds: number[],
-    runId: number,
-  ): boolean {
-    return this.issueSessions.consumeIssueSessionEventsWithLease(lease, eventIds, runId);
-  }
-
-  clearPendingIssueSessionEventsWithLease(
-    lease: { projectId: string; linearIssueId: string; leaseId: string },
-  ): boolean {
-    return this.issueSessions.clearPendingIssueSessionEventsWithLease(lease);
-  }
-
-  clearPendingIssueSessionEventsRespectingActiveLease(projectId: string, linearIssueId: string): boolean {
-    return this.issueSessions.clearPendingIssueSessionEventsRespectingActiveLease(projectId, linearIssueId);
-  }
-
-  setIssueSessionLastWakeReasonWithLease(
-    lease: { projectId: string; linearIssueId: string; leaseId: string },
-    lastWakeReason?: string | null,
-  ): boolean {
-    return this.issueSessions.setIssueSessionLastWakeReasonWithLease(lease, lastWakeReason);
-  }
-
-  setIssueSessionLastWakeReason(projectId: string, linearIssueId: string, lastWakeReason?: string | null): void {
-    this.issueSessions.setIssueSessionLastWakeReason(projectId, linearIssueId, lastWakeReason);
-  }
-
   setBranchOwner(projectId: string, linearIssueId: string, owner: BranchOwner): void {
     this.connection.prepare(`
       UPDATE issues
       SET branch_owner = ?, branch_ownership_changed_at = ?, updated_at = ?
       WHERE project_id = ? AND linear_issue_id = ?
     `).run(owner, isoNow(), isoNow(), projectId, linearIssueId);
-  }
-
-  setBranchOwnerWithLease(
-    lease: { projectId: string; linearIssueId: string; leaseId: string },
-    owner: BranchOwner,
-  ): boolean {
-    return this.issueSessions.setBranchOwnerWithLease(lease, owner);
-  }
-
-  setBranchOwnerRespectingActiveLease(projectId: string, linearIssueId: string, owner: BranchOwner): boolean {
-    return this.issueSessions.setBranchOwnerRespectingActiveLease(projectId, linearIssueId, owner);
-  }
-
-  releaseIssueSessionLeaseRespectingActiveLease(projectId: string, linearIssueId: string): void {
-    this.issueSessions.releaseIssueSessionLeaseRespectingActiveLease(projectId, linearIssueId);
   }
 
   replaceIssueDependencies(params: {
@@ -748,7 +522,7 @@ export class PatchRelayDatabase {
         }),
         activeRunId: issue.activeRunId,
         blockedByCount: this.countUnresolvedBlockers(issue.projectId, issue.linearIssueId),
-        hasPendingWake: this.peekIssueSessionWake(issue.projectId, issue.linearIssueId) !== undefined,
+        hasPendingWake: this.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId) !== undefined,
         hasLegacyPendingRun: issue.pendingRunType !== undefined,
         prNumber: issue.prNumber,
         prState: issue.prState,
@@ -825,11 +599,11 @@ export class PatchRelayDatabase {
   issueToTrackedIssue(issue: IssueRecord): TrackedIssueRecord {
     return buildTrackedIssueRecord({
       issue,
-      session: this.getIssueSession(issue.projectId, issue.linearIssueId),
+      session: this.issueSessions.getIssueSession(issue.projectId, issue.linearIssueId),
       blockedBy: this.listIssueDependencies(issue.projectId, issue.linearIssueId),
-      hasPendingWake: this.peekIssueSessionWake(issue.projectId, issue.linearIssueId) !== undefined,
+      hasPendingWake: this.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId) !== undefined,
       latestRun: this.runs.getLatestRunForIssue(issue.projectId, issue.linearIssueId),
-      latestEvent: this.listIssueSessionEvents(issue.projectId, issue.linearIssueId, { limit: 1 }).at(-1),
+      latestEvent: this.issueSessions.listIssueSessionEvents(issue.projectId, issue.linearIssueId, { limit: 1 }).at(-1),
     });
   }
 
@@ -882,7 +656,7 @@ export class PatchRelayDatabase {
     },
   ): void {
     const tracked = this.issueToTrackedIssue(issue);
-    const existing = this.getIssueSession(issue.projectId, issue.linearIssueId);
+    const existing = this.issueSessions.getIssueSession(issue.projectId, issue.linearIssueId);
     const latestRun = this.runs.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
     const latestRunType = options?.lastRunType ?? latestRun?.runType ?? existing?.lastRunType;
     const summaryText = this.resolveIssueSessionSummary(issue, latestRun, existing?.summaryText, options?.summaryText);

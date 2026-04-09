@@ -40,13 +40,13 @@ export class IssueSessionLeaseService {
   ): T | undefined {
     const lease = this.getHeldLease(projectId, linearIssueId);
     if (!lease) return undefined;
-    return this.db.withIssueSessionLease(projectId, linearIssueId, lease.leaseId, () => fn(lease));
+    return this.db.issueSessions.withIssueSessionLease(projectId, linearIssueId, lease.leaseId, () => fn(lease));
   }
 
   acquire(projectId: string, linearIssueId: string): string | undefined {
     const leaseId = randomUUID();
     const leasedUntil = new Date(Date.now() + ISSUE_SESSION_LEASE_MS).toISOString();
-    const acquired = this.db.acquireIssueSessionLease({
+    const acquired = this.db.issueSessions.acquireIssueSessionLease({
       projectId,
       linearIssueId,
       leaseId,
@@ -61,7 +61,7 @@ export class IssueSessionLeaseService {
   forceAcquire(projectId: string, linearIssueId: string): string | undefined {
     const leaseId = randomUUID();
     const leasedUntil = new Date(Date.now() + ISSUE_SESSION_LEASE_MS).toISOString();
-    const acquired = this.db.forceAcquireIssueSessionLease({
+    const acquired = this.db.issueSessions.forceAcquireIssueSessionLease({
       projectId,
       linearIssueId,
       leaseId,
@@ -78,7 +78,7 @@ export class IssueSessionLeaseService {
     if (this.activeSessionLeases.has(key)) {
       return "owned";
     }
-    const session = this.db.getIssueSession(projectId, linearIssueId);
+    const session = this.db.issueSessions.getIssueSession(projectId, linearIssueId);
     if (!session) return "skip";
     const leasedUntilMs = session.leasedUntil ? Date.parse(session.leasedUntil) : undefined;
     if (leasedUntilMs !== undefined && Number.isFinite(leasedUntilMs) && leasedUntilMs > Date.now()) {
@@ -92,7 +92,7 @@ export class IssueSessionLeaseService {
     if (this.activeSessionLeases.has(key)) {
       return false;
     }
-    const session = this.db.getIssueSession(run.projectId, run.linearIssueId);
+    const session = this.db.issueSessions.getIssueSession(run.projectId, run.linearIssueId);
     if (!session?.leaseId || !session.workerId || session.workerId === this.workerId) {
       return false;
     }
@@ -133,9 +133,9 @@ export class IssueSessionLeaseService {
 
   heartbeat(projectId: string, linearIssueId: string): boolean {
     const key = this.issueSessionLeaseKey(projectId, linearIssueId);
-    const leaseId = this.activeSessionLeases.get(key) ?? this.db.getIssueSession(projectId, linearIssueId)?.leaseId;
+    const leaseId = this.activeSessionLeases.get(key) ?? this.db.issueSessions.getIssueSession(projectId, linearIssueId)?.leaseId;
     if (!leaseId) return false;
-    const renewed = this.db.renewIssueSessionLease({
+    const renewed = this.db.issueSessions.renewIssueSessionLease({
       projectId,
       linearIssueId,
       leaseId,
@@ -152,7 +152,7 @@ export class IssueSessionLeaseService {
   release(projectId: string, linearIssueId: string): void {
     const key = this.issueSessionLeaseKey(projectId, linearIssueId);
     const leaseId = this.activeSessionLeases.get(key);
-    this.db.releaseIssueSessionLease(projectId, linearIssueId, leaseId);
+    this.db.issueSessions.releaseIssueSessionLease(projectId, linearIssueId, leaseId);
     this.activeSessionLeases.delete(key);
   }
 
