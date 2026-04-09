@@ -105,7 +105,7 @@ test("non-delegated backlog issue webhooks do not create tracked issues", async 
       },
     };
 
-    const stored = db.insertFullWebhookEvent({
+    const stored = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-maf-35",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(payload),
@@ -203,7 +203,7 @@ test("delegated blocked issue is tracked but does not queue implementation until
       },
     };
 
-    const delegatedEvent = db.insertFullWebhookEvent({
+    const delegatedEvent = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-maf-40",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(delegatedPayload),
@@ -248,7 +248,7 @@ test("delegated blocked issue is tracked but does not queue implementation until
       },
     };
 
-    const blockerDoneEvent = db.insertFullWebhookEvent({
+    const blockerDoneEvent = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-maf-39-done",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(blockerDonePayload),
@@ -256,11 +256,89 @@ test("delegated blocked issue is tracked but does not queue implementation until
     await handler.processWebhookEvent(blockerDoneEvent.id);
 
     const unblockedIssue = db.getIssue("krasnoperov/mafia", "issue-maf-40");
-    const unblockedWake = db.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-40");
+    const unblockedWake = db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-40");
     assert.equal(unblockedIssue?.pendingRunType, undefined);
     assert.equal(unblockedWake?.runType, "implementation");
     assert.deepEqual(db.listIssuesReadyForExecution(), [{ projectId: "krasnoperov/mafia", linearIssueId: "issue-maf-40" }]);
     assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-40" }]);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("delegated issue webhooks enqueue implementation wake immediately when the issue is unblocked", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-delegation-wake-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+
+    const linearClient: Partial<LinearClient> = {
+      getIssue: async () => ({
+        id: "issue-maf-delegated",
+        identifier: "MAF-41",
+        title: "Unblocked delegation wake",
+        teamId: "team-maf",
+        teamKey: "MAF",
+        delegateId: "patchrelay-actor",
+        stateId: "state-start",
+        stateName: "Start",
+        stateType: "started",
+        workflowStates: [],
+        labelIds: [],
+        labels: [],
+        teamLabels: [],
+        blockedBy: [],
+        blocks: [],
+      }),
+    };
+
+    const enqueued: Array<{ projectId: string; issueId: string }> = [];
+    const handler = new WebhookHandler(
+      config,
+      db,
+      { forProject: async () => linearClient as LinearClient } as never,
+      { steerTurn: async () => undefined } as never,
+      (projectId, issueId) => { enqueued.push({ projectId, issueId }); },
+      pino({ enabled: false }),
+    );
+
+    const payload: LinearWebhookPayload = {
+      action: "update",
+      type: "Issue",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      webhookTimestamp: Date.now(),
+      updatedFrom: { delegateId: null },
+      data: {
+        id: "issue-maf-delegated",
+        identifier: "MAF-41",
+        title: "Unblocked delegation wake",
+        team: { id: "team-maf", key: "MAF" },
+        state: { id: "state-start", name: "Start", type: "started" },
+        delegate: { id: "patchrelay-actor", name: "PatchRelay" },
+      },
+    };
+
+    const stored = db.webhookEvents.insertFullWebhookEvent({
+      webhookId: "delivery-delegation-wake",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(payload),
+    });
+    await handler.processWebhookEvent(stored.id);
+
+    const issue = db.getIssue("krasnoperov/mafia", "issue-maf-delegated");
+    const wake = db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-delegated");
+    assert.equal(issue?.factoryState, "delegated");
+    assert.equal(issue?.pendingRunType, undefined);
+    assert.equal(wake?.runType, "implementation");
+    assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-delegated" }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -311,7 +389,7 @@ test("delegated issue is tracked via repository-link installation fallback", asy
       },
     };
 
-    const stored = db.insertFullWebhookEvent({
+    const stored = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-maf-38-fallback",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(payload),
@@ -366,7 +444,7 @@ test("delegated issue is tracked via single-installation fallback", async () => 
       },
     };
 
-    const stored = db.insertFullWebhookEvent({
+    const stored = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-maf-39-single-installation-fallback",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(payload),
@@ -434,7 +512,7 @@ test("incomplete webhook relations do not clear existing blockers when live hydr
       },
     };
 
-    const delegatedEvent = db.insertFullWebhookEvent({
+    const delegatedEvent = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-maf-40-preserve",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(delegatedPayload),
@@ -504,7 +582,7 @@ test("done delegated issue does not requeue implementation after merged status e
       },
     };
 
-    const stored = db.insertFullWebhookEvent({
+    const stored = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-maf-38-done-echo",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(payload),
@@ -574,7 +652,7 @@ test("in-review status echo does not requeue implementation for an open delegate
       },
     };
 
-    const stored = db.insertFullWebhookEvent({
+    const stored = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-maf-39-review-echo",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(payload),
@@ -586,7 +664,7 @@ test("in-review status echo does not requeue implementation for an open delegate
     assert.equal(issue?.factoryState, "awaiting_queue");
     assert.equal(issue?.pendingRunType, undefined);
     assert.deepEqual(enqueued, []);
-    assert.deepEqual(db.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-39", { pendingOnly: true }), []);
+    assert.deepEqual(db.issueSessions.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-39", { pendingOnly: true }), []);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -613,7 +691,7 @@ test("un-delegation during active run releases run and transitions to awaiting_i
       title: "Implement feature X",
       factoryState: "implementing",
     });
-    const run = db.createRun({
+    const run = db.runs.createRun({
       issueId: issueRecord.id,
       projectId: "krasnoperov/mafia",
       linearIssueId: "issue-maf-50",
@@ -650,7 +728,7 @@ test("un-delegation during active run releases run and transitions to awaiting_i
       },
     };
 
-    const stored = db.insertFullWebhookEvent({
+    const stored = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-undelegate-50",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(payload),
@@ -663,7 +741,7 @@ test("un-delegation during active run releases run and transitions to awaiting_i
     assert.equal(issue?.activeRunId, undefined);
     assert.equal(issue?.pendingRunType, undefined);
 
-    const finishedRun = db.getRun(run.id);
+    const finishedRun = db.runs.getRunById(run.id);
     assert.equal(finishedRun?.status, "released");
     assert.ok(finishedRun?.failureReason?.includes("Un-delegated"));
   } finally {
@@ -720,7 +798,7 @@ test("un-delegation of awaiting_queue issue does not change state (point of no r
       },
     };
 
-    const stored = db.insertFullWebhookEvent({
+    const stored = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-undelegate-51",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(payload),
@@ -756,7 +834,7 @@ test("issueRemoved releases active run and transitions to failed", async () => {
       title: "Soon to be removed",
       factoryState: "implementing",
     });
-    const run = db.createRun({
+    const run = db.runs.createRun({
       issueId: issueRecord.id,
       projectId: "krasnoperov/mafia",
       linearIssueId: "issue-maf-52",
@@ -791,7 +869,7 @@ test("issueRemoved releases active run and transitions to failed", async () => {
       },
     };
 
-    const stored = db.insertFullWebhookEvent({
+    const stored = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-remove-52",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(payload),
@@ -803,9 +881,74 @@ test("issueRemoved releases active run and transitions to failed", async () => {
     assert.equal(issue?.factoryState, "failed");
     assert.equal(issue?.activeRunId, undefined);
 
-    const finishedRun = db.getRun(run.id);
+    const finishedRun = db.runs.getRunById(run.id);
     assert.equal(finishedRun?.status, "released");
     assert.ok(finishedRun?.failureReason?.includes("removed"));
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("issueRemoved without an active run marks the issue failed and clears pending wakeups", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-removed-idle-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+
+    db.upsertIssue({
+      projectId: "krasnoperov/mafia",
+      linearIssueId: "issue-maf-53",
+      issueKey: "MAF-53",
+      title: "Removed while idle",
+      factoryState: "delegated",
+      pendingRunType: "implementation",
+      pendingRunContextJson: JSON.stringify({ note: "queued before removal" }),
+    });
+
+    const handler = new WebhookHandler(
+      config,
+      db,
+      { forProject: async () => undefined } as never,
+      { steerTurn: async () => undefined } as never,
+      () => undefined,
+      pino({ enabled: false }),
+    );
+
+    const payload: LinearWebhookPayload = {
+      action: "remove",
+      type: "Issue",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      webhookTimestamp: Date.now(),
+      data: {
+        id: "issue-maf-53",
+        identifier: "MAF-53",
+        title: "Removed while idle",
+        team: { id: "team-maf", key: "MAF" },
+        state: { id: "state-start", name: "In Progress", type: "started" },
+      },
+    };
+
+    const stored = db.webhookEvents.insertFullWebhookEvent({
+      webhookId: "delivery-remove-idle-53",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(payload),
+    });
+
+    await handler.processWebhookEvent(stored.id);
+
+    const issue = db.getIssue("krasnoperov/mafia", "issue-maf-53");
+    assert.equal(issue?.factoryState, "failed");
+    assert.equal(issue?.pendingRunType, undefined);
+    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-53"), undefined);
+    assert.equal(db.issueSessions.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-53", { pendingOnly: true }).length, 0);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -875,7 +1018,7 @@ test("idle delegated comments with explicit PatchRelay intent queue a follow-up 
       },
     };
 
-    const stored = db.insertFullWebhookEvent({
+    const stored = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-comment-followup",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(payload),
@@ -883,7 +1026,7 @@ test("idle delegated comments with explicit PatchRelay intent queue a follow-up 
     await handler.processWebhookEvent(stored.id);
 
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-comment");
-    const wake = db.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-comment");
+    const wake = db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-comment");
     assert.equal(issue?.pendingRunContextJson, undefined);
     assert.equal(wake?.runType, "implementation");
     assert.equal(Array.isArray(wake?.context.followUps), true);
@@ -957,16 +1100,98 @@ test("idle comments without explicit PatchRelay intent are ignored", async () =>
       },
     };
 
-    const stored = db.insertFullWebhookEvent({
+    const stored = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-comment-ignored",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(payload),
     });
     await handler.processWebhookEvent(stored.id);
 
-    assert.equal(db.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-comment-ignored"), undefined);
-    assert.equal(db.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-comment-ignored").length, 0);
+    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-comment-ignored"), undefined);
+    assert.equal(db.issueSessions.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-comment-ignored").length, 0);
     assert.deepEqual(enqueued, []);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("awaiting_input comments without explicit PatchRelay intent are still classified as direct replies", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-comment-awaiting-input-ignored-"));
+  try {
+    const config = createConfig(baseDir);
+    config.projects[0] = {
+      ...config.projects[0]!,
+      triggerEvents: [...config.projects[0]!.triggerEvents, "commentCreated", "commentUpdated"],
+    };
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+    db.upsertIssue({
+      projectId: "krasnoperov/mafia",
+      linearIssueId: "issue-maf-awaiting-input-ignored",
+      issueKey: "MAF-91F",
+      title: "Awaiting input issue",
+      currentLinearState: "Needs input",
+      currentLinearStateType: "unstarted",
+      factoryState: "awaiting_input",
+      threadId: "thread-awaiting-input-ignored",
+    });
+
+    const enqueued: Array<{ projectId: string; issueId: string }> = [];
+    const handler = new WebhookHandler(
+      config,
+      db,
+      { forProject: async () => undefined } as never,
+      { steerTurn: async () => undefined } as never,
+      (projectId, issueId) => { enqueued.push({ projectId, issueId }); },
+      pino({ enabled: false }),
+    );
+
+    const payload: LinearWebhookPayload = {
+      action: "create",
+      type: "Comment",
+      createdAt: "2026-04-01T02:10:00.000Z",
+      webhookTimestamp: Date.now(),
+      actor: {
+        id: "user-4",
+        name: "Jordan Reviewer",
+        email: "jordan@example.com",
+        type: "User",
+      } as unknown as Record<string, unknown>,
+      data: {
+        id: "comment-awaiting-input-ignored",
+        body: "Please keep the current API surface intact.",
+        user: { name: "Jordan Reviewer" },
+        issue: {
+          id: "issue-maf-awaiting-input-ignored",
+          identifier: "MAF-91F",
+          title: "Awaiting input issue",
+          team: { id: "team-maf", key: "MAF" },
+          state: { id: "state-input", name: "Needs input", type: "unstarted" },
+          delegate: { id: "patchrelay-actor", name: "PatchRelay" },
+        },
+      },
+    };
+
+    const stored = db.webhookEvents.insertFullWebhookEvent({
+      webhookId: "delivery-awaiting-input-comment-ignored",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(payload),
+    });
+    await handler.processWebhookEvent(stored.id);
+
+    const wake = db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-awaiting-input-ignored");
+    assert.equal(wake?.runType, "implementation");
+    assert.equal(wake?.resumeThread, true);
+    assert.equal(wake?.wakeReason, "direct_reply");
+    assert.equal(wake?.context.directReplyMode, true);
+    assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-awaiting-input-ignored" }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -1036,14 +1261,14 @@ test("awaiting_input comments resume PatchRelay work as direct replies on the sa
       },
     };
 
-    const stored = db.insertFullWebhookEvent({
+    const stored = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-awaiting-input-comment",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(payload),
     });
     await handler.processWebhookEvent(stored.id);
 
-    const wake = db.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-awaiting-input");
+    const wake = db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-awaiting-input");
     assert.equal(wake?.runType, "implementation");
     assert.equal(wake?.resumeThread, true);
     assert.equal(wake?.wakeReason, "direct_reply");
@@ -1081,14 +1306,14 @@ test("awaiting_input answers to an outstanding PatchRelay question are classifie
       factoryState: "awaiting_input",
       threadId: "thread-direct-reply",
     });
-    const run = db.createRun({
+    const run = db.runs.createRun({
       issueId: issue.id,
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       runType: "implementation",
       promptText: "Which rollout copy should I use?",
     });
-    db.finishRun(run.id, {
+    db.runs.finishRun(run.id, {
       status: "completed",
       summaryJson: JSON.stringify({ latestAssistantMessage: "Which rollout copy should I use?" }),
     });
@@ -1129,14 +1354,14 @@ test("awaiting_input answers to an outstanding PatchRelay question are classifie
       },
     };
 
-    const stored = db.insertFullWebhookEvent({
+    const stored = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-direct-reply-comment",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(payload),
     });
     await handler.processWebhookEvent(stored.id);
 
-    const wake = db.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-direct-reply");
+    const wake = db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-direct-reply");
     assert.equal(wake?.wakeReason, "direct_reply");
     assert.equal(wake?.resumeThread, true);
     assert.equal(wake?.context.directReplyMode, true);
@@ -1210,17 +1435,17 @@ test("PatchRelay-authored comments are recorded as inert session events without 
       },
     };
 
-    const stored = db.insertFullWebhookEvent({
+    const stored = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-self-comment",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(payload),
     });
     await handler.processWebhookEvent(stored.id);
 
-    const events = db.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-self-comment");
+    const events = db.issueSessions.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-self-comment");
     assert.equal(events.length, 1);
     assert.equal(events[0]?.eventType, "self_comment");
-    assert.equal(db.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-self-comment"), undefined);
+    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-self-comment"), undefined);
     assert.deepEqual(enqueued, []);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -1298,17 +1523,17 @@ test("PatchRelay managed status comment updates stay inert even when the webhook
       },
     };
 
-    const stored = db.insertFullWebhookEvent({
+    const stored = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-managed-status-comment",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(payload),
     });
     await handler.processWebhookEvent(stored.id);
 
-    const events = db.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-managed-status");
+    const events = db.issueSessions.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-managed-status");
     assert.equal(events.length, 1);
     assert.equal(events[0]?.eventType, "self_comment");
-    assert.equal(db.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-managed-status"), undefined);
+    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-managed-status"), undefined);
     assert.deepEqual(enqueued, []);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -1380,18 +1605,136 @@ test("PatchRelay-generated escalation activity comments stay inert even when Lin
       },
     };
 
-    const stored = db.insertFullWebhookEvent({
+    const stored = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-escalation-comment",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(payload),
     });
     await handler.processWebhookEvent(stored.id);
 
-    const events = db.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-escalation-comment");
+    const events = db.issueSessions.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-escalation-comment");
     assert.equal(events.length, 1);
     assert.equal(events[0]?.eventType, "self_comment");
-    assert.equal(db.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-escalation-comment"), undefined);
+    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-escalation-comment"), undefined);
     assert.deepEqual(enqueued, []);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("agent signal stop requests halt the active run and emit a stop_requested session event", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-stop-signal-"));
+  try {
+    const config = createConfig(baseDir);
+    config.projects[0] = {
+      ...config.projects[0]!,
+      triggerEvents: [...config.projects[0]!.triggerEvents, "agentSignal"],
+    };
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+
+    const issueRecord = db.upsertIssue({
+      projectId: "krasnoperov/mafia",
+      linearIssueId: "issue-maf-stop",
+      issueKey: "MAF-97",
+      title: "Stop requested issue",
+      factoryState: "implementing",
+      agentSessionId: "session-stop-1",
+    });
+    const run = db.runs.createRun({
+      issueId: issueRecord.id,
+      projectId: "krasnoperov/mafia",
+      linearIssueId: "issue-maf-stop",
+      runType: "implementation",
+      promptText: "Keep working until the stop signal arrives.",
+    });
+    db.upsertIssue({
+      projectId: "krasnoperov/mafia",
+      linearIssueId: "issue-maf-stop",
+      activeRunId: run.id,
+    });
+    db.runs.updateRunThread(run.id, { threadId: "thread-stop-1", turnId: "turn-stop-1" });
+
+    const agentActivities: Array<{ agentSessionId: string; contentType: string; body?: string }> = [];
+    const sessionUpdates: Array<{ agentSessionId: string; planLength: number }> = [];
+    const codexSteers: Array<{ threadId: string; turnId: string; input: string }> = [];
+    const handler = new WebhookHandler(
+      config,
+      db,
+      {
+        forProject: async () => ({
+          createAgentActivity: async ({ agentSessionId, content }) => {
+            agentActivities.push({
+              agentSessionId,
+              contentType: content.type,
+              ...(typeof content.body === "string" ? { body: content.body } : {}),
+            });
+          },
+          updateAgentSession: async ({ agentSessionId, plan }) => {
+            sessionUpdates.push({ agentSessionId, planLength: Array.isArray(plan) ? plan.length : 0 });
+          },
+        } as unknown as LinearClient),
+      } as never,
+      {
+        steerTurn: async ({ threadId, turnId, input }) => {
+          codexSteers.push({ threadId, turnId, input });
+        },
+      } as never,
+      () => undefined,
+      pino({ enabled: false }),
+    );
+
+    const payload: LinearWebhookPayload = {
+      action: "created",
+      type: "AgentSessionEvent",
+      createdAt: "2026-04-01T02:20:00.000Z",
+      webhookTimestamp: Date.now(),
+      agentSession: {
+        id: "session-stop-1",
+        issue: {
+          id: "issue-maf-stop",
+          identifier: "MAF-97",
+          title: "Stop requested issue",
+          team: { id: "team-maf", key: "MAF" },
+          state: { id: "state-start", name: "In Progress", type: "started" },
+          delegate: { id: "patchrelay-actor", name: "PatchRelay" },
+        },
+      },
+      agentActivity: {
+        signal: "stop",
+      },
+    } as unknown as LinearWebhookPayload;
+
+    const stored = db.webhookEvents.insertFullWebhookEvent({
+      webhookId: "delivery-stop-signal",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(payload),
+    });
+
+    await handler.processWebhookEvent(stored.id);
+
+    const issue = db.getIssue("krasnoperov/mafia", "issue-maf-stop");
+    const runAfter = db.runs.getRunById(run.id);
+    const events = db.issueSessions.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-stop");
+    assert.equal(issue?.factoryState, "awaiting_input");
+    assert.equal(issue?.activeRunId, undefined);
+    assert.equal(runAfter?.status, "released");
+    assert.ok(events.some((event) => event.eventType === "stop_requested"));
+    assert.equal(codexSteers.length, 1);
+    assert.equal(codexSteers[0]?.threadId, "thread-stop-1");
+    assert.equal(codexSteers[0]?.turnId, "turn-stop-1");
+    assert.match(codexSteers[0]?.input ?? "", /STOP: The user has requested you stop working immediately/);
+    assert.equal(agentActivities.length, 1);
+    assert.equal(agentActivities[0]?.agentSessionId, "session-stop-1");
+    assert.equal(sessionUpdates.length, 1);
+    assert.equal(sessionUpdates[0]?.agentSessionId, "session-stop-1");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -1445,7 +1788,7 @@ test("agent session id survives follow-up webhooks that do not carry a session i
         },
       },
     };
-    const sessionEvent = db.insertFullWebhookEvent({
+    const sessionEvent = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-agent-session",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(sessionPayload),
@@ -1471,7 +1814,7 @@ test("agent session id survives follow-up webhooks that do not carry a session i
         },
       },
     };
-    const notificationEvent = db.insertFullWebhookEvent({
+    const notificationEvent = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-agent-notification",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(notificationPayload),
@@ -1559,7 +1902,7 @@ test("agent session creation does not post a delegate prompt when Linear already
         },
       },
     };
-    const stored = db.insertFullWebhookEvent({
+    const stored = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-agent-session-race",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(sessionPayload),
@@ -1658,7 +2001,7 @@ test("agent session creation before delegation persists the session id for later
       },
       promptContext: "<issue identifier=\"MAF-94\"><title>Pre-delegation session</title></issue>",
     };
-    const sessionEvent = db.insertFullWebhookEvent({
+    const sessionEvent = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-agent-session-predelegate",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(agentSessionPayload),
@@ -1690,7 +2033,7 @@ test("agent session creation before delegation persists the session id for later
         state: { id: "state-start", name: "Start", type: "started" },
       },
     };
-    const delegateEvent = db.insertFullWebhookEvent({
+    const delegateEvent = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-agent-session-delegate",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(delegatePayload),
@@ -1699,7 +2042,7 @@ test("agent session creation before delegation persists the session id for later
 
     const delegatedIssue = db.getIssue("krasnoperov/mafia", "issue-maf-session");
     assert.equal(delegatedIssue?.agentSessionId, "session-94");
-    const delegatedWake = db.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-session");
+    const delegatedWake = db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-session");
     assert.equal(delegatedIssue?.pendingRunType, undefined);
     assert.equal(delegatedWake?.runType, "implementation");
   } finally {
@@ -1784,7 +2127,7 @@ test("issueCreated recovers delegated startup after an early agent session left 
       },
       promptContext: "<issue identifier=\"MAF-95\"><title>Delegated startup recovery</title></issue>",
     };
-    const sessionEvent = db.insertFullWebhookEvent({
+    const sessionEvent = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-agent-session-startup-race",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(agentSessionPayload),
@@ -1811,7 +2154,7 @@ test("issueCreated recovers delegated startup after an early agent session left 
         delegate: { id: "patchrelay-actor", name: "PatchRelay" },
       },
     };
-    const issueCreatedEvent = db.insertFullWebhookEvent({
+    const issueCreatedEvent = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-issue-created-startup-race",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(issueCreatedPayload),
@@ -1819,7 +2162,7 @@ test("issueCreated recovers delegated startup after an early agent session left 
     await handler.processWebhookEvent(issueCreatedEvent.id);
 
     const recoveredIssue = db.getIssue("krasnoperov/mafia", "issue-maf-startup");
-    const recoveredWake = db.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-startup");
+    const recoveredWake = db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-startup");
     assert.equal(recoveredIssue?.pendingRunType, undefined);
     assert.equal(recoveredIssue?.factoryState, "delegated");
     assert.equal(recoveredWake?.runType, "implementation");
@@ -1912,7 +2255,7 @@ test("issueCreated recovers delegated blocked startup without queueing implement
       },
       promptContext: "<issue identifier=\"MAF-96\"><title>Delegated blocked startup recovery</title></issue>",
     };
-    const sessionEvent = db.insertFullWebhookEvent({
+    const sessionEvent = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-agent-session-blocked-startup-race",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(agentSessionPayload),
@@ -1935,7 +2278,7 @@ test("issueCreated recovers delegated blocked startup without queueing implement
         delegate: { id: "patchrelay-actor", name: "PatchRelay" },
       },
     };
-    const issueCreatedEvent = db.insertFullWebhookEvent({
+    const issueCreatedEvent = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-issue-created-blocked-startup-race",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(issueCreatedPayload),

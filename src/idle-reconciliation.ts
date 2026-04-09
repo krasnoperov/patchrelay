@@ -197,13 +197,13 @@ export class IdleIssueReconciler {
     for (const issue of this.db.listBlockedDelegatedIssues()) {
       const unresolved = this.db.countUnresolvedBlockers(issue.projectId, issue.linearIssueId);
       if (unresolved === 0) {
-        this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+        this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
           projectId: issue.projectId,
           linearIssueId: issue.linearIssueId,
           eventType: "delegated",
           dedupeKey: `delegated:${issue.linearIssueId}`,
         });
-        if (this.db.peekIssueSessionWake(issue.projectId, issue.linearIssueId)) {
+        if (this.db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId)) {
           this.deps.enqueueIssue(issue.projectId, issue.linearIssueId);
         }
       }
@@ -274,7 +274,7 @@ export class IdleIssueReconciler {
       status: "reconciled",
       summary: `Reconciliation: ${issue.factoryState} \u2192 ${newState}`,
     });
-    if (options?.pendingRunType && this.db.peekIssueSessionWake(issue.projectId, issue.linearIssueId)) {
+    if (options?.pendingRunType && this.db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId)) {
       this.deps.enqueueIssue(issue.projectId, issue.linearIssueId);
     }
   }
@@ -300,7 +300,7 @@ export class IdleIssueReconciler {
       eventType = "delegated";
       dedupeKey = `${dedupeScope}:implementation:${issue.linearIssueId}`;
     }
-    this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+    this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       eventType,
@@ -312,7 +312,7 @@ export class IdleIssueReconciler {
   private async routeFailedIssue(issue: IssueRecord): Promise<void> {
     issue = await this.refreshMissingFailureProvenance(issue);
     issue = await this.reclassifyStaleBranchFailure(issue);
-    const latestRun = this.db.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
+    const latestRun = this.db.runs.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
     const ignoreDuplicateAttempt = latestRun?.status === "failed"
       && latestRun.failureReason === "Codex turn was interrupted";
     const reactiveIntent = deriveIssueSessionReactiveIntent({

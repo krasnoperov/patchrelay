@@ -1,21 +1,12 @@
-import { randomUUID } from "node:crypto";
 import type { Logger } from "pino";
 import type { GitHubAppBotIdentity } from "./github-app-token.ts";
 import type { CodexAppServerClient, CodexNotification } from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { BranchOwner, IssueRecord, RunRecord } from "./db-types.ts";
 import { ACTIVE_RUN_STATES, TERMINAL_STATES, type FactoryState, type RunType } from "./factory-state.ts";
-import { buildHookEnv, runProjectHook } from "./hook-runner.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
+import { extractTurnId, resolveRunCompletionStatus, summarizeCurrentThread } from "./run-reporting.ts";
 import {
-  buildStageReport,
-  countEventMethods,
-  extractTurnId,
-  resolveRunCompletionStatus,
-  summarizeCurrentThread,
-} from "./run-reporting.ts";
-import {
-  buildRunCompletedActivity,
   buildRunFailureActivity,
   buildRunStartedActivity,
 } from "./linear-session-reporting.ts";
@@ -29,42 +20,18 @@ import { resolveAuthoritativeLinearStopState, resolvePreferredCompletedLinearSta
 import { execCommand } from "./utils.ts";
 import { getThreadTurns } from "./codex-thread-utils.ts";
 import { deriveIssueSessionReactiveIntent } from "./issue-session.ts";
-import type { IssueSessionEventType } from "./issue-session-events.ts";
-import { loadPatchRelayRepoPrompting } from "./patchrelay-customization.ts";
+import { QueueHealthMonitor } from "./queue-health-monitor.ts";
 import {
-  buildRunPrompt as buildPatchRelayRunPrompt,
-  findDisallowedPatchRelayPromptSectionIds,
-  findUnknownPatchRelayPromptSectionIds,
-  mergePromptCustomizationLayers,
   resolveImplementationDeliveryMode,
-  resolvePromptLayers,
 } from "./prompting/patchrelay.ts";
 import type { ImplementationDeliveryMode } from "./prompting/patchrelay.ts";
-
-const DEFAULT_CI_REPAIR_BUDGET = 3;
-const DEFAULT_QUEUE_REPAIR_BUDGET = 3;
-// Requested-changes loops can legitimately take more iterations than CI/queue
-// repair when the reviewer is catching nuanced product or timing bugs across
-// successive heads. Keep a hard ceiling to prevent infinite ping-pong, but make
-// it wide enough that real review cycles can continue after multiple successful
-// head advances.
-const DEFAULT_REVIEW_FIX_BUDGET = 12;
-const DEFAULT_ZOMBIE_RECOVERY_BUDGET = 5;
-const ZOMBIE_RECOVERY_BASE_DELAY_MS = 15_000; // 15s, 30s, 60s, 120s, 240s
-const ISSUE_SESSION_LEASE_MS = 10 * 60_000;
-const MAX_THREAD_GENERATION_BEFORE_COMPACTION = 4;
-const MAX_FOLLOW_UPS_BEFORE_COMPACTION = 4;
-import { QueueHealthMonitor } from "./queue-health-monitor.ts";
 import { IdleIssueReconciler, resolveBranchOwnerForStateTransition } from "./idle-reconciliation.ts";
 import { LinearSessionSync } from "./linear-session-sync.ts";
-
-function slugify(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
-}
-
-function sanitizePathSegment(value: string): string {
-  return value.replace(/[^a-zA-Z0-9._-]+/g, "-");
-}
+import { IssueSessionLeaseService } from "./issue-session-lease-service.ts";
+import { RunFinalizer } from "./run-finalizer.ts";
+import { RunLauncher } from "./run-launcher.ts";
+import { RunRecoveryService } from "./run-recovery-service.ts";
+import { RunWakePlanner, type PendingRunWake } from "./run-wake-planner.ts";
 
 function lowerCaseFirst(value: string): string {
   return value ? `${value.slice(0, 1).toLowerCase()}${value.slice(1)}` : value;
@@ -83,29 +50,6 @@ function resolveRequestedChangesMode(runType: RunType, context?: Record<string, 
   return context?.reviewFixMode === "branch_upkeep" || context?.branchUpkeepRequired === true
     ? "branch_upkeep"
     : "address_review_feedback";
-}
-
-interface PendingRunWake {
-  runType: RunType;
-  context?: Record<string, unknown> | undefined;
-  wakeReason?: string | undefined;
-  resumeThread: boolean;
-  eventIds: number[];
-}
-
-function shouldCompactThread(issue: IssueRecord, threadGeneration: number | undefined, context?: Record<string, unknown>): boolean {
-  const followUpCount = typeof context?.followUpCount === "number" ? context.followUpCount : 0;
-  return issue.threadId !== undefined
-    && (threadGeneration ?? 0) >= MAX_THREAD_GENERATION_BEFORE_COMPACTION
-    && followUpCount >= MAX_FOLLOW_UPS_BEFORE_COMPACTION;
-}
-
-export function shouldReuseIssueThread(params: {
-  existingThreadId?: string | undefined;
-  compactThread: boolean;
-  resumeThread: boolean;
-}): boolean {
-  return Boolean(params.existingThreadId) && !params.compactThread && params.resumeThread;
 }
 
 interface RemotePrState {
@@ -134,7 +78,12 @@ export class RunOrchestrator {
   readonly linearSync: LinearSessionSync;
   private activeThreadId: string | undefined;
   private readonly workerId = `patchrelay:${process.pid}`;
-  private readonly activeSessionLeases = new Map<string, string>();
+  private readonly leaseService: IssueSessionLeaseService;
+  private readonly runFinalizer: RunFinalizer;
+  private readonly runLauncher: RunLauncher;
+  private readonly runRecovery: RunRecoveryService;
+  private readonly runWakePlanner: RunWakePlanner;
+  readonly activeSessionLeases: Map<string, string>;
   botIdentity?: GitHubAppBotIdentity;
 
   constructor(
@@ -148,6 +97,25 @@ export class RunOrchestrator {
   ) {
     this.worktreeManager = new WorktreeManager(config);
     this.linearSync = new LinearSessionSync(config, db, linearProvider, logger, feed);
+    this.leaseService = new IssueSessionLeaseService(
+      db,
+      logger,
+      this.workerId,
+      (threadId, maxRetries) => this.readThreadWithRetry(threadId, maxRetries),
+    );
+    this.activeSessionLeases = this.leaseService.activeSessionLeases;
+    this.runFinalizer = new RunFinalizer(db, logger, this.linearSync, this.enqueueIssue, feed);
+    this.runLauncher = new RunLauncher(config, db, codex, logger, this.worktreeManager);
+    this.runRecovery = new RunRecoveryService(
+      db,
+      logger,
+      this.linearSync,
+      (projectId, linearIssueId) => this.releaseIssueSessionLease(projectId, linearIssueId),
+      (projectId, issueId) => this.enqueueIssue(projectId, issueId),
+      (newState, pendingRunType) => this.resolveBranchOwnerForStateTransition(newState, pendingRunType),
+      feed,
+    );
+    this.runWakePlanner = new RunWakePlanner(db);
     this.idleReconciler = new IdleIssueReconciler(db, config, {
       enqueueIssue: (projectId, issueId) => this.enqueueIssue(projectId, issueId),
     }, logger, feed);
@@ -158,17 +126,7 @@ export class RunOrchestrator {
   }
 
   private resolveRunWake(issue: IssueRecord): PendingRunWake | undefined {
-    const sessionWake = this.db.peekIssueSessionWake(issue.projectId, issue.linearIssueId);
-    if (sessionWake) {
-      return {
-        runType: sessionWake.runType,
-        context: sessionWake.context,
-        wakeReason: sessionWake.wakeReason,
-        resumeThread: sessionWake.resumeThread,
-        eventIds: sessionWake.eventIds,
-      };
-    }
-    return undefined;
+    return this.runWakePlanner.resolveRunWake(issue);
   }
 
   private appendWakeEventWithLease(
@@ -178,48 +136,14 @@ export class RunOrchestrator {
     context?: Record<string, unknown>,
     dedupeScope?: string,
   ): boolean {
-    let eventType: IssueSessionEventType;
-    let dedupeKey: string;
-    if (runType === "queue_repair") {
-      eventType = "merge_steward_incident";
-      dedupeKey = `${dedupeScope ?? "wake"}:queue_repair:${issue.linearIssueId}:${issue.prHeadSha ?? issue.lastGitHubFailureHeadSha ?? "unknown-sha"}`;
-    } else if (runType === "ci_repair") {
-      eventType = "settled_red_ci";
-      dedupeKey = `${dedupeScope ?? "wake"}:ci_repair:${issue.linearIssueId}:${issue.lastGitHubFailureSignature ?? issue.prHeadSha ?? "unknown-sha"}`;
-    } else if (runType === "review_fix" || runType === "branch_upkeep") {
-      eventType = "review_changes_requested";
-      dedupeKey = `${dedupeScope ?? "wake"}:${runType}:${issue.linearIssueId}:${issue.prHeadSha ?? "unknown-sha"}`;
-    } else {
-      eventType = "delegated";
-      dedupeKey = `${dedupeScope ?? "wake"}:implementation:${issue.linearIssueId}`;
-    }
-
-    return Boolean(this.db.appendIssueSessionEventWithLease(lease, {
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      eventType,
-      ...(context ? { eventJson: JSON.stringify(context) } : {}),
-      dedupeKey,
-    }));
+    return this.runWakePlanner.appendWakeEventWithLease(lease, issue, runType, context, dedupeScope);
   }
 
   private materializeLegacyPendingWake(
     issue: IssueRecord,
     lease: { projectId: string; linearIssueId: string; leaseId: string },
   ): IssueRecord {
-    if (!issue.pendingRunType) return issue;
-    const context = issue.pendingRunContextJson
-      ? JSON.parse(issue.pendingRunContextJson) as Record<string, unknown>
-      : undefined;
-    this.appendWakeEventWithLease(lease, issue, issue.pendingRunType, context, "legacy_pending");
-    const updated = this.db.upsertIssueWithLease(lease, {
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      pendingRunType: null,
-      pendingRunContextJson: null,
-    });
-    if (!updated) return issue;
-    return this.db.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
+    return this.runWakePlanner.materializeLegacyPendingWake(issue, lease);
   }
 
   // ─── Run ────────────────────────────────────────────────────────
@@ -228,33 +152,33 @@ export class RunOrchestrator {
     const project = this.config.projects.find((p) => p.id === item.projectId);
     if (!project) return;
 
-    if (this.activeSessionLeases.has(this.issueSessionLeaseKey(item.projectId, item.issueId))) {
+    if (this.leaseService.hasLocalLease(item.projectId, item.issueId)) {
       return;
     }
 
     const issue = this.db.getIssue(item.projectId, item.issueId);
     if (!issue || issue.activeRunId !== undefined) return;
-    const issueSession = this.db.getIssueSession(item.projectId, item.issueId);
+    const issueSession = this.db.issueSessions.getIssueSession(item.projectId, item.issueId);
 
-    const leaseId = this.acquireIssueSessionLease(item.projectId, item.issueId);
+    const leaseId = this.leaseService.acquire(item.projectId, item.issueId);
     if (!leaseId) {
       this.logger.info({ issueKey: issue.issueKey, projectId: item.projectId }, "Skipped run because another worker holds the session lease");
       return;
     }
 
     if (issue.prState === "merged") {
-      this.db.upsertIssueWithLease(
+      this.db.issueSessions.upsertIssueWithLease(
         { projectId: issue.projectId, linearIssueId: issue.linearIssueId, leaseId },
         { projectId: issue.projectId, linearIssueId: issue.linearIssueId, pendingRunType: null, factoryState: "done" as never },
       );
-      this.releaseIssueSessionLease(item.projectId, item.issueId);
+      this.leaseService.release(item.projectId, item.issueId);
       return;
     }
 
     const wakeIssue = this.materializeLegacyPendingWake(issue, { projectId: item.projectId, linearIssueId: item.issueId, leaseId });
     const wake = this.resolveRunWake(wakeIssue);
     if (!wake) {
-      this.releaseIssueSessionLease(item.projectId, item.issueId);
+      this.leaseService.release(item.projectId, item.issueId);
       return;
     }
     const { runType, context, resumeThread } = wake;
@@ -266,134 +190,41 @@ export class RunOrchestrator {
       : typeof effectiveContext?.headSha === "string"
         ? effectiveContext.headSha
         : issue.prHeadSha;
-    // Check repair budgets
-    if (runType === "ci_repair" && issue.ciRepairAttempts >= DEFAULT_CI_REPAIR_BUDGET) {
-      this.escalate(issue, runType, `CI repair budget exhausted (${DEFAULT_CI_REPAIR_BUDGET} attempts)`);
-      return;
-    }
-    if (runType === "queue_repair" && issue.queueRepairAttempts >= DEFAULT_QUEUE_REPAIR_BUDGET) {
-      this.escalate(issue, runType, `Queue repair budget exhausted (${DEFAULT_QUEUE_REPAIR_BUDGET} attempts)`);
-      return;
-    }
-    if (isRequestedChangesRunType(runType) && issue.reviewFixAttempts >= DEFAULT_REVIEW_FIX_BUDGET) {
-      this.escalate(issue, runType, `Requested-changes budget exhausted (${DEFAULT_REVIEW_FIX_BUDGET} attempts)`);
+    const budgetExceeded = this.runWakePlanner.budgetExceeded(issue, runType, isRequestedChangesRunType);
+    if (budgetExceeded) {
+      this.escalate(issue, runType, budgetExceeded);
       return;
     }
 
-    // Increment repair counters
-    if (runType === "ci_repair") {
-      const updated = this.db.upsertIssueWithLease(
-        { projectId: issue.projectId, linearIssueId: issue.linearIssueId, leaseId },
-        { projectId: issue.projectId, linearIssueId: issue.linearIssueId, ciRepairAttempts: issue.ciRepairAttempts + 1 },
-      );
-      if (!updated) {
-        this.releaseIssueSessionLease(item.projectId, item.issueId);
-        return;
-      }
-    }
-    if (runType === "queue_repair") {
-      const updated = this.db.upsertIssueWithLease(
-        { projectId: issue.projectId, linearIssueId: issue.linearIssueId, leaseId },
-        { projectId: issue.projectId, linearIssueId: issue.linearIssueId, queueRepairAttempts: issue.queueRepairAttempts + 1 },
-      );
-      if (!updated) {
-        this.releaseIssueSessionLease(item.projectId, item.issueId);
-        return;
-      }
-    }
-    if (isRequestedChangesRunType(runType)) {
-      const updated = this.db.upsertIssueWithLease(
-        { projectId: issue.projectId, linearIssueId: issue.linearIssueId, leaseId },
-        { projectId: issue.projectId, linearIssueId: issue.linearIssueId, reviewFixAttempts: issue.reviewFixAttempts + 1 },
-      );
-      if (!updated) {
-        this.releaseIssueSessionLease(item.projectId, item.issueId);
-        return;
-      }
+    if (!this.runWakePlanner.incrementAttemptCounters(
+      issue,
+      { projectId: issue.projectId, linearIssueId: issue.linearIssueId, leaseId },
+      runType,
+      isRequestedChangesRunType,
+    )) {
+      this.releaseIssueSessionLease(item.projectId, item.issueId);
+      return;
     }
 
-    const repoPrompting = loadPatchRelayRepoPrompting({
-      repoRoot: project.repoPath,
-      logger: this.logger,
-    });
-    const promptLayer = mergePromptCustomizationLayers(
-      resolvePromptLayers(this.config.prompting, runType),
-      resolvePromptLayers(repoPrompting, runType),
-    );
-    const unknownPromptSections = findUnknownPatchRelayPromptSectionIds(promptLayer);
-    if (unknownPromptSections.length > 0) {
-      this.logger.warn(
-        { issueKey: issue.issueKey, runType, unknownPromptSections },
-        "PatchRelay prompt customization references unknown section ids",
-      );
-    }
-    const disallowedPromptSections = findDisallowedPatchRelayPromptSectionIds(promptLayer);
-    if (disallowedPromptSections.length > 0) {
-      this.logger.warn(
-        { issueKey: issue.issueKey, runType, disallowedPromptSections },
-        "PatchRelay prompt customization attempted to replace non-overridable sections",
-      );
-    }
-
-    const prompt = buildPatchRelayRunPrompt({
+    const { prompt, branchName, worktreePath } = this.runLauncher.prepareLaunchPlan({
+      project,
       issue,
       runType,
-      repoPath: project.repoPath,
-      ...(effectiveContext ? { context: effectiveContext } : {}),
-      ...(promptLayer ? { promptLayer } : {}),
+      ...(effectiveContext ? { effectiveContext } : {}),
     });
 
-    // Resolve workspace
-    const issueRef = sanitizePathSegment(issue.issueKey ?? issue.linearIssueId);
-    const slug = issue.title ? slugify(issue.title) : "";
-    const branchSuffix = slug ? `${issueRef}-${slug}` : issueRef;
-    const branchName = issue.branchName ?? `${project.branchPrefix}/${branchSuffix}`;
-    const worktreePath = issue.worktreePath ?? `${project.worktreeRoot}/${issueRef}`;
-
-    // Claim the run atomically
-    const run = this.db.withIssueSessionLease(item.projectId, item.issueId, leaseId, () => {
-      const fresh = this.db.getIssue(item.projectId, item.issueId);
-      if (!fresh || fresh.activeRunId !== undefined) return undefined;
-      const wakeIssue = this.materializeLegacyPendingWake(fresh, { projectId: item.projectId, linearIssueId: item.issueId, leaseId });
-      const freshWake = this.resolveRunWake(wakeIssue);
-      if (!freshWake || freshWake.runType !== runType) return undefined;
-
-      const created = this.db.createRun({
-        issueId: fresh.id,
-        projectId: item.projectId,
-        linearIssueId: item.issueId,
-        runType,
-        ...(sourceHeadSha ? { sourceHeadSha } : {}),
-        promptText: prompt,
-      });
-      const failureHeadSha = typeof effectiveContext?.failureHeadSha === "string"
-          ? effectiveContext.failureHeadSha
-          : typeof effectiveContext?.headSha === "string" ? effectiveContext.headSha : undefined;
-      const failureSignature = typeof effectiveContext?.failureSignature === "string" ? effectiveContext.failureSignature : undefined;
-      this.db.upsertIssue({
-        projectId: item.projectId,
-        linearIssueId: item.issueId,
-        pendingRunType: null,
-        pendingRunContextJson: null,
-        activeRunId: created.id,
-        branchName,
-        worktreePath,
-        factoryState: runType === "implementation" ? "implementing"
-          : runType === "ci_repair" ? "repairing_ci"
-          : runType === "review_fix" || runType === "branch_upkeep" ? "changes_requested"
-          : runType === "queue_repair" ? "repairing_queue"
-          : "implementing",
-        ...((runType === "ci_repair" || runType === "queue_repair") && failureSignature
-          ? {
-              lastAttemptedFailureSignature: failureSignature,
-              lastAttemptedFailureHeadSha: failureHeadSha ?? null,
-            }
-          : {}),
-      });
-      this.db.consumeIssueSessionEvents(item.projectId, item.issueId, freshWake.eventIds, created.id);
-      this.db.setIssueSessionLastWakeReason(item.projectId, item.issueId, freshWake.wakeReason ?? null);
-      this.db.setBranchOwnerWithLease({ projectId: item.projectId, linearIssueId: item.issueId, leaseId }, "patchrelay");
-      return created;
+    const run = this.runLauncher.claimRun({
+      item,
+      issue,
+      leaseId,
+      runType,
+      prompt,
+      ...(sourceHeadSha ? { sourceHeadSha } : {}),
+      ...(effectiveContext ? { effectiveContext } : {}),
+      materializeLegacyPendingWake: (targetIssue, lease) => this.materializeLegacyPendingWake(targetIssue, lease),
+      resolveRunWake: (targetIssue) => this.resolveRunWake(targetIssue),
+      branchName,
+      worktreePath,
     });
     if (!run) {
       this.releaseIssueSessionLease(item.projectId, item.issueId);
@@ -410,121 +241,36 @@ export class RunOrchestrator {
       summary: `Starting ${runType} run`,
     });
 
-    let threadId: string;
-    let turnId: string;
-    let parentThreadId: string | undefined;
-    try {
-      // Ensure worktree
-      await this.worktreeManager.ensureIssueWorktree(
-        project.repoPath,
-        project.worktreeRoot,
-        worktreePath,
-        branchName,
-        { allowExistingOutsideRoot: issue.branchName !== undefined },
-      );
-
-      // Set bot git identity and push credentials when GitHub App is configured.
-      // This ensures commits are authored by and pushes are authenticated as
-      // patchrelay[bot], not the system user.
-      if (this.botIdentity) {
-        const gitBin = this.config.runner.gitBin;
-        await execCommand(gitBin, ["-C", worktreePath, "config", "user.name", this.botIdentity.name], { timeoutMs: 5_000 });
-        await execCommand(gitBin, ["-C", worktreePath, "config", "user.email", this.botIdentity.email], { timeoutMs: 5_000 });
-        // Override credential helper to use the App installation token for git push.
-        // The helper script reads the token file and returns it as the password.
-        const credentialHelper = `!f() { echo "username=x-access-token"; echo "password=$(cat ${this.botIdentity.tokenFile})"; }; f`;
-        await execCommand(gitBin, ["-C", worktreePath, "config", "credential.helper", credentialHelper], { timeoutMs: 5_000 });
-      }
-
-      await this.resetWorktreeToTrackedBranch(worktreePath, branchName, issue);
-
-      // Freshen the worktree: fetch + rebase onto latest base branch.
-      // This prevents branch contamination when local main has drifted
-      // and avoids scope-bundling review rejections from stale commits.
-      // Skip for queue_repair — its entire purpose is to resolve rebase conflicts.
-      if (runType !== "queue_repair") {
-        await this.freshenWorktree(worktreePath, project, issue);
-      }
-
-      // Run prepare-worktree hook
-      const hookEnv = buildHookEnv(issue.issueKey ?? issue.linearIssueId, branchName, runType, worktreePath);
-      const prepareResult = await runProjectHook(project.repoPath, "prepare-worktree", { cwd: worktreePath, env: hookEnv });
-      if (prepareResult.ran && prepareResult.exitCode !== 0) {
-        throw new Error(`prepare-worktree hook failed (exit ${prepareResult.exitCode}): ${prepareResult.stderr?.slice(0, 500) ?? ""}`);
-      }
-      this.assertLaunchLease(run, "before starting the Codex turn");
-
-      // Reuse the existing thread only for additive follow-ups that explicitly
-      // request continuity. Fresh review-fix runs now start a new thread so the
-      // model is not anchored to the implementation conversation that produced
-      // the rejected patch. If the thread has accumulated many resumptions and
-      // batched follow-ups, compact by starting a fresh main thread while
-      // keeping a parent link.
-      const compactThread = shouldCompactThread(issue, issueSession?.threadGeneration, effectiveContext);
-      if (compactThread && issue.threadId) {
-        parentThreadId = issue.threadId;
-      }
-      if (shouldReuseIssueThread({ existingThreadId: issue.threadId, compactThread, resumeThread })) {
-        threadId = issue.threadId!;
-      } else {
-        const thread = await this.codex.startThread({ cwd: worktreePath });
-        threadId = thread.id;
-        this.db.upsertIssueWithLease(
-          { projectId: item.projectId, linearIssueId: item.issueId, leaseId },
-          { projectId: item.projectId, linearIssueId: item.issueId, threadId },
-        );
-      }
-
-      try {
-        const turn = await this.codex.startTurn({ threadId, cwd: worktreePath, input: prompt });
-        turnId = turn.turnId;
-      } catch (turnError) {
-        // If the thread is stale (e.g. after app-server restart), start fresh and retry once.
-        const msg = turnError instanceof Error ? turnError.message : String(turnError);
-        if (msg.includes("thread not found") || msg.includes("not materialized")) {
-          this.logger.info({ issueKey: issue.issueKey, staleThreadId: threadId }, "Thread is stale, retrying with fresh thread");
-          const thread = await this.codex.startThread({ cwd: worktreePath });
-          threadId = thread.id;
-          this.db.upsertIssueWithLease(
-            { projectId: item.projectId, linearIssueId: item.issueId, leaseId },
-            { projectId: item.projectId, linearIssueId: item.issueId, threadId },
-          );
-          const turn = await this.codex.startTurn({ threadId, cwd: worktreePath, input: prompt });
-          turnId = turn.turnId;
-        } else {
-          throw turnError;
-        }
-      }
-      this.assertLaunchLease(run, "after starting the Codex turn");
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const lostLease = error instanceof Error && error.name === "IssueSessionLeaseLostError";
-      if (!lostLease) {
-        const nextState: FactoryState = isRequestedChangesRunType(runType) ? "escalated" : "failed";
-        this.db.finishRunWithLease({ projectId: item.projectId, linearIssueId: item.issueId, leaseId }, run.id, {
-          status: "failed",
-          failureReason: message,
-        });
-        this.db.upsertIssueWithLease(
-          { projectId: item.projectId, linearIssueId: item.issueId, leaseId },
-          {
-            projectId: item.projectId,
-            linearIssueId: item.issueId,
-            activeRunId: null,
-            factoryState: nextState,
-          },
-        );
-      }
-      this.logger.error({ issueKey: issue.issueKey, runType, error: message }, `Failed to launch ${runType} run`);
-      const failedIssue = this.db.getIssue(item.projectId, item.issueId) ?? issue;
-      void this.linearSync.emitActivity(failedIssue, buildRunFailureActivity(runType, `Failed to start ${lowerCaseFirst(message)}`));
-      void this.linearSync.syncSession(failedIssue, { activeRunType: runType });
-      this.releaseIssueSessionLease(item.projectId, item.issueId);
-      throw error;
-    }
+    const {
+      threadId,
+      turnId,
+      parentThreadId,
+    } = await this.runLauncher.launchTurn({
+      project,
+      issue,
+      ...(issueSession ? { issueSession } : {}),
+      run,
+      runType,
+      prompt,
+      branchName,
+      worktreePath,
+      resumeThread,
+      ...(effectiveContext ? { effectiveContext } : {}),
+      leaseId,
+      ...(this.botIdentity ? { botIdentity: this.botIdentity } : {}),
+      assertLaunchLease: (targetRun, phase) => this.assertLaunchLease(targetRun, phase),
+      resetWorktreeToTrackedBranch: (targetWorktreePath, targetBranchName, targetIssue) =>
+        this.resetWorktreeToTrackedBranch(targetWorktreePath, targetBranchName, targetIssue),
+      freshenWorktree: (targetWorktreePath, targetProject, targetIssue) =>
+        this.freshenWorktree(targetWorktreePath, targetProject, targetIssue),
+      linearSync: this.linearSync,
+      releaseLease: (projectId, issueId) => this.releaseIssueSessionLease(projectId, issueId),
+      isRequestedChangesRunType,
+      lowerCaseFirst,
+    });
 
     this.assertLaunchLease(run, "before recording the active thread");
-    if (!this.db.updateRunThreadWithLease(
+    if (!this.db.issueSessions.updateRunThreadWithLease(
       { projectId: run.projectId, linearIssueId: run.linearIssueId, leaseId },
       run.id,
       { threadId, turnId, ...(parentThreadId ? { parentThreadId } : {}) },
@@ -536,7 +282,7 @@ export class RunOrchestrator {
 
     // Reset zombie recovery counter — this run started successfully
     if (issue.zombieRecoveryAttempts > 0) {
-      this.db.upsertIssueWithLease(
+      this.db.issueSessions.upsertIssueWithLease(
         { projectId: item.projectId, linearIssueId: item.issueId, leaseId },
         {
           projectId: item.projectId,
@@ -692,7 +438,7 @@ export class RunOrchestrator {
       this.activeThreadId = threadId;
     }
 
-    const run = this.db.getRunByThreadId(threadId);
+    const run = this.db.runs.getRunByThreadId(threadId);
     if (!run) return;
     if (!this.heartbeatIssueSessionLease(run.projectId, run.linearIssueId)) {
       this.logger.warn({ runId: run.id, issueId: run.linearIssueId }, "Ignoring Codex notification after losing issue-session lease");
@@ -701,7 +447,7 @@ export class RunOrchestrator {
 
     const turnId = typeof notification.params.turnId === "string" ? notification.params.turnId : undefined;
     if (this.config.runner.codex.persistExtendedHistory) {
-      this.db.saveThreadEvent({
+      this.db.runs.saveThreadEvent({
         runId: run.id,
         threadId,
         ...(turnId ? { turnId } : {}),
@@ -733,13 +479,13 @@ export class RunOrchestrator {
     if (status === "failed") {
       const nextState: FactoryState = isRequestedChangesRunType(run.runType) ? "escalated" : "failed";
       const updated = this.withHeldIssueSessionLease(run.projectId, run.linearIssueId, (lease) => {
-        this.db.finishRunWithLease(lease, run.id, {
+        this.db.issueSessions.finishRunWithLease(lease, run.id, {
           status: "failed",
           threadId,
           ...(completedTurnId ? { turnId: completedTurnId } : {}),
           failureReason: "Codex reported the turn completed in a failed state",
         });
-        this.db.upsertIssueWithLease(lease, {
+        this.db.issueSessions.upsertIssueWithLease(lease, {
           projectId: run.projectId,
           linearIssueId: run.linearIssueId,
           activeRunId: null,
@@ -770,167 +516,27 @@ export class RunOrchestrator {
       return;
     }
 
-    // Complete the run
-    const trackedIssue = this.db.issueToTrackedIssue(issue);
-    const report = buildStageReport(
-      { ...run, status: "completed" },
-      trackedIssue,
+    await this.runFinalizer.finalizeCompletedRun({
+      source: "notification",
+      run,
+      issue,
       thread,
-      countEventMethods(this.db.listThreadEvents(run.id)),
-    );
-
-    // Determine post-run state based on current PR metadata.
-    const freshIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
-    const verifiedRepairError = await this.verifyReactiveRunAdvancedBranch(run, freshIssue);
-    if (verifiedRepairError) {
-      const holdState = resolveRecoverablePostRunState(freshIssue) ?? "failed";
-      this.failRunAndClear(run, verifiedRepairError, holdState);
-      const heldIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? freshIssue;
-      this.feed?.publish({
-        level: "warn",
-        kind: "turn",
-        issueKey: freshIssue.issueKey,
-        projectId: run.projectId,
-        stage: run.runType,
-        status: "branch_not_advanced",
-        summary: verifiedRepairError,
-      });
-      void this.linearSync.emitActivity(heldIssue, buildRunFailureActivity(run.runType, verifiedRepairError));
-      void this.linearSync.syncSession(heldIssue, { activeRunType: run.runType });
-      this.linearSync.clearProgress(run.id);
-      this.activeThreadId = undefined;
-      this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
-      return;
-    }
-    const missingReviewFixHeadError = await this.verifyReviewFixAdvancedHead(run, freshIssue);
-    if (missingReviewFixHeadError) {
-      this.failRunAndClear(run, missingReviewFixHeadError, "escalated");
-      const failedIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? freshIssue;
-      this.feed?.publish({
-        level: "error",
-        kind: "turn",
-        issueKey: freshIssue.issueKey,
-        projectId: run.projectId,
-        stage: run.runType,
-        status: "same_head_review_handoff_blocked",
-        summary: missingReviewFixHeadError,
-      });
-      void this.linearSync.emitActivity(failedIssue, buildRunFailureActivity(run.runType, missingReviewFixHeadError));
-      void this.linearSync.syncSession(failedIssue, { activeRunType: run.runType });
-      this.linearSync.clearProgress(run.id);
-      this.activeThreadId = undefined;
-      this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
-      return;
-    }
-    const publishedOutcomeError = await this.verifyPublishedRunOutcome(run, freshIssue);
-    if (publishedOutcomeError) {
-      this.failRunAndClear(run, publishedOutcomeError, "failed");
-      const failedIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? freshIssue;
-      this.feed?.publish({
-        level: "warn",
-        kind: "turn",
-        issueKey: freshIssue.issueKey,
-        projectId: run.projectId,
-        stage: run.runType,
-        status: "publish_incomplete",
-        summary: publishedOutcomeError,
-      });
-      void this.linearSync.emitActivity(failedIssue, buildRunFailureActivity(run.runType, publishedOutcomeError));
-      void this.linearSync.syncSession(failedIssue, { activeRunType: run.runType });
-      this.linearSync.clearProgress(run.id);
-      this.activeThreadId = undefined;
-      return;
-    }
-    const refreshedIssue = await this.refreshIssueAfterReactivePublish(run, freshIssue);
-    const postRunFollowUp = await this.resolvePostRunFollowUp(run, refreshedIssue);
-    const postRunState = postRunFollowUp?.factoryState ?? resolveCompletedRunState(refreshedIssue, run);
-
-    const completed = this.withHeldIssueSessionLease(run.projectId, run.linearIssueId, (lease) => {
-      this.db.finishRun(run.id, {
-        status: "completed",
-        threadId,
-        ...(completedTurnId ? { turnId: completedTurnId } : {}),
-        summaryJson: JSON.stringify({ latestAssistantMessage: report.assistantMessages.at(-1) ?? null }),
-        reportJson: JSON.stringify(report),
-      });
-      this.db.upsertIssue({
-        projectId: run.projectId,
-        linearIssueId: run.linearIssueId,
-        activeRunId: null,
-        ...(postRunState ? { factoryState: postRunState } : {}),
-        pendingRunType: null,
-        pendingRunContextJson: null,
-        ...(postRunFollowUp ? {} : (postRunState === "awaiting_queue" || postRunState === "done"
-        ? {
-            lastGitHubFailureSource: null,
-            lastGitHubFailureHeadSha: null,
-            lastGitHubFailureSignature: null,
-            lastGitHubFailureCheckName: null,
-            lastGitHubFailureCheckUrl: null,
-            lastGitHubFailureContextJson: null,
-            lastGitHubFailureAt: null,
-            lastQueueIncidentJson: null,
-            lastAttemptedFailureHeadSha: null,
-            lastAttemptedFailureSignature: null,
-          }
-        : {})),
-      });
-      if (postRunFollowUp) {
-        return this.appendWakeEventWithLease(
-          lease,
-          issue,
-          postRunFollowUp.pendingRunType,
-          postRunFollowUp.context,
-          "post_run",
-        );
-      }
-      return true;
+      threadId,
+      ...(completedTurnId ? { completedTurnId } : {}),
+      withHeldLease: (projectId, linearIssueId, fn) => this.withHeldIssueSessionLease(projectId, linearIssueId, fn),
+      releaseLease: (projectId, linearIssueId) => this.releaseIssueSessionLease(projectId, linearIssueId),
+      failRunAndClear: (targetRun, message, nextState) => this.failRunAndClear(targetRun, message, nextState),
+      verifyReactiveRunAdvancedBranch: (targetRun, targetIssue) => this.verifyReactiveRunAdvancedBranch(targetRun, targetIssue),
+      verifyReviewFixAdvancedHead: (targetRun, targetIssue) => this.verifyReviewFixAdvancedHead(targetRun, targetIssue),
+      verifyPublishedRunOutcome: (targetRun, targetIssue) => this.verifyPublishedRunOutcome(targetRun, targetIssue),
+      refreshIssueAfterReactivePublish: (targetRun, targetIssue) => this.refreshIssueAfterReactivePublish(targetRun, targetIssue),
+      resolvePostRunFollowUp: (targetRun, targetIssue) => this.resolvePostRunFollowUp(targetRun, targetIssue),
+      resolveCompletedRunState,
+      resolveRecoverableRunState: resolveRecoverablePostRunState,
+      appendWakeEventWithLease: (lease, targetIssue, runType, context, dedupeScope) =>
+        this.appendWakeEventWithLease(lease, targetIssue, runType, context, dedupeScope),
     });
-    if (!completed) {
-      this.logger.warn({ runId: run.id, issueId: run.linearIssueId }, "Skipping completion writes after losing issue-session lease");
-      this.linearSync.clearProgress(run.id);
-      this.activeThreadId = undefined;
-      this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
-      return;
-    }
-
-    if (postRunFollowUp) {
-      this.feed?.publish({
-        level: "info",
-        kind: "stage",
-        issueKey: issue.issueKey,
-        projectId: run.projectId,
-        stage: postRunFollowUp.factoryState,
-        status: "follow_up_queued",
-        summary: postRunFollowUp.summary,
-      });
-      this.enqueueIssue(run.projectId, run.linearIssueId);
-    }
-
-    this.feed?.publish({
-      level: "info",
-      kind: "turn",
-      issueKey: issue.issueKey,
-      projectId: run.projectId,
-      stage: run.runType,
-      status: "completed",
-      summary: `Turn completed for ${run.runType}`,
-      detail: summarizeCurrentThread(thread).latestAgentMessage,
-    });
-
-    // Emit Linear completion activity + plan
-    const updatedIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? refreshedIssue;
-    const completionSummary = report.assistantMessages.at(-1)?.slice(0, 300) ?? `${run.runType} completed.`;
-    void this.linearSync.emitActivity(updatedIssue, buildRunCompletedActivity({
-      runType: run.runType,
-      completionSummary,
-      postRunState: updatedIssue.factoryState,
-      ...(updatedIssue.prNumber !== undefined ? { prNumber: updatedIssue.prNumber } : {}),
-    }));
-    void this.linearSync.syncSession(updatedIssue);
-    this.linearSync.clearProgress(run.id);
     this.activeThreadId = undefined;
-    this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
   }
 
   // ─── Active status for query ──────────────────────────────────────
@@ -939,7 +545,7 @@ export class RunOrchestrator {
     const issue = this.db.getIssueByKey(issueKey);
     if (!issue?.activeRunId) return undefined;
 
-    const run = this.db.getRun(issue.activeRunId);
+    const run = this.db.runs.getRunById(issue.activeRunId);
     if (!run?.threadId) return undefined;
 
     const trackedIssue = this.db.issueToTrackedIssue(issue);
@@ -955,7 +561,7 @@ export class RunOrchestrator {
   // ─── Reconciliation ───────────────────────────────────────────────
 
   async reconcileActiveRuns(): Promise<void> {
-    for (const run of this.db.listRunningRuns()) {
+    for (const run of this.db.runs.listRunningRuns()) {
       await this.reconcileRun(run);
     }
     // Preemptively detect stuck merge-queue PRs (conflicts visible on
@@ -1026,122 +632,15 @@ export class RunOrchestrator {
    * escalate; backoff delay not elapsed → skip.
    */
   private recoverOrEscalate(issue: IssueRecord, runType: RunType, reason: string): void {
-    // Re-read issue after the run was cleared (activeRunId is now null)
-    const fresh = this.db.getIssue(issue.projectId, issue.linearIssueId);
-    if (!fresh) return;
-
-    if (isRequestedChangesRunType(runType)) {
-      const updated = this.withHeldIssueSessionLease(fresh.projectId, fresh.linearIssueId, (lease) => {
-        this.db.clearPendingIssueSessionEventsWithLease(lease);
-        this.db.upsertIssueWithLease(lease, {
-          projectId: fresh.projectId,
-          linearIssueId: fresh.linearIssueId,
-          pendingRunType: null,
-          pendingRunContextJson: null,
-          factoryState: "escalated",
-        });
-        return true;
-      });
-      if (!updated) {
-        this.logger.warn({ issueKey: fresh.issueKey, reason }, "Skipping review-fix recovery escalation after losing issue-session lease");
-        this.releaseIssueSessionLease(fresh.projectId, fresh.linearIssueId);
-        return;
-      }
-      this.logger.warn({ issueKey: fresh.issueKey, reason }, "Requested-changes run failed before a new head was published — escalating");
-      this.feed?.publish({
-        level: "error",
-        kind: "workflow",
-        issueKey: fresh.issueKey,
-        projectId: fresh.projectId,
-        stage: runType,
-        status: "escalated",
-        summary: `Requested-changes run failed before publishing a new head (${reason})`,
-      });
-      this.releaseIssueSessionLease(fresh.projectId, fresh.linearIssueId);
-      return;
-    }
-
-    // If PR already merged, transition to done — no retry needed
-    if (fresh.prState === "merged") {
-      const updated = this.withHeldIssueSessionLease(fresh.projectId, fresh.linearIssueId, (lease) => {
-        this.db.upsertIssueWithLease(lease, {
-          projectId: fresh.projectId,
-          linearIssueId: fresh.linearIssueId,
-          factoryState: "done",
-          zombieRecoveryAttempts: 0,
-          lastZombieRecoveryAt: null,
-        });
-        return true;
-      });
-      if (!updated) {
-        this.logger.warn({ issueKey: fresh.issueKey, reason }, "Skipping merged recovery completion after losing issue-session lease");
-        this.releaseIssueSessionLease(fresh.projectId, fresh.linearIssueId);
-        return;
-      }
-      this.logger.info({ issueKey: fresh.issueKey, reason }, "Recovery: PR already merged — transitioning to done");
-      this.releaseIssueSessionLease(fresh.projectId, fresh.linearIssueId);
-      return;
-    }
-
-    // Budget check
-    const attempts = fresh.zombieRecoveryAttempts + 1;
-    if (attempts > DEFAULT_ZOMBIE_RECOVERY_BUDGET) {
-      const updated = this.withHeldIssueSessionLease(fresh.projectId, fresh.linearIssueId, (lease) => {
-        this.db.upsertIssueWithLease(lease, {
-          projectId: fresh.projectId,
-          linearIssueId: fresh.linearIssueId,
-          factoryState: "escalated",
-        });
-        return true;
-      });
-      if (!updated) {
-        this.logger.warn({ issueKey: fresh.issueKey, attempts, reason }, "Skipping recovery escalation after losing issue-session lease");
-        this.releaseIssueSessionLease(fresh.projectId, fresh.linearIssueId);
-        return;
-      }
-      this.logger.warn({ issueKey: fresh.issueKey, attempts, reason }, "Recovery: budget exhausted — escalating");
-      this.feed?.publish({
-        level: "error",
-        kind: "workflow",
-        issueKey: fresh.issueKey,
-        projectId: fresh.projectId,
-        stage: "escalated",
-        status: "budget_exhausted",
-        summary: `${reason} recovery failed after ${DEFAULT_ZOMBIE_RECOVERY_BUDGET} attempts`,
-      });
-      this.releaseIssueSessionLease(fresh.projectId, fresh.linearIssueId);
-      return;
-    }
-
-    // Exponential backoff — skip if delay hasn't elapsed
-    if (fresh.lastZombieRecoveryAt) {
-      const elapsed = Date.now() - new Date(fresh.lastZombieRecoveryAt).getTime();
-      const delay = ZOMBIE_RECOVERY_BASE_DELAY_MS * Math.pow(2, fresh.zombieRecoveryAttempts);
-      if (elapsed < delay) {
-        this.logger.debug({ issueKey: fresh.issueKey, attempts: fresh.zombieRecoveryAttempts, delay, elapsed }, "Recovery: backoff not elapsed, skipping");
-        return;
-      }
-    }
-
-    // Re-enqueue with backoff tracking
-    const requeued = this.withHeldIssueSessionLease(fresh.projectId, fresh.linearIssueId, (lease) => {
-      this.db.upsertIssueWithLease(lease, {
-        projectId: fresh.projectId,
-        linearIssueId: fresh.linearIssueId,
-        pendingRunType: null,
-        pendingRunContextJson: null,
-        zombieRecoveryAttempts: attempts,
-        lastZombieRecoveryAt: new Date().toISOString(),
-      });
-      return this.appendWakeEventWithLease(lease, fresh, runType, undefined, `recovery:${attempts}`);
+    this.runRecovery.recoverOrEscalate({
+      issue,
+      runType,
+      reason,
+      isRequestedChangesRunType,
+      withHeldLease: (projectId, linearIssueId, fn) => this.withHeldIssueSessionLease(projectId, linearIssueId, fn),
+      appendWakeEventWithLease: (lease, targetIssue, pendingRunType, context, dedupeScope) =>
+        this.appendWakeEventWithLease(lease, targetIssue, pendingRunType, context, dedupeScope),
     });
-    if (!requeued) {
-      this.logger.warn({ issueKey: fresh.issueKey, attempts, reason }, "Skipping recovery re-enqueue after losing issue-session lease");
-      this.releaseIssueSessionLease(fresh.projectId, fresh.linearIssueId);
-      return;
-    }
-    this.enqueueIssue(fresh.projectId, fresh.linearIssueId);
-    this.logger.info({ issueKey: fresh.issueKey, attempts, reason }, "Recovery: re-enqueued with backoff");
   }
 
   private async reconcileRun(run: RunRecord): Promise<void> {
@@ -1158,7 +657,7 @@ export class RunOrchestrator {
     // (e.g. pr_merged processed, DB manually edited), just release the run.
     if (TERMINAL_STATES.has(issue.factoryState)) {
       this.withHeldIssueSessionLease(run.projectId, run.linearIssueId, () => {
-        this.db.finishRun(run.id, { status: "released", failureReason: "Issue reached terminal state during active run" });
+        this.db.runs.finishRun(run.id, { status: "released", failureReason: "Issue reached terminal state during active run" });
         this.db.upsertIssue({ projectId: run.projectId, linearIssueId: run.linearIssueId, activeRunId: null });
       });
       this.logger.info({ issueKey: issue.issueKey, runId: run.id, factoryState: issue.factoryState }, "Reconciliation: released run on terminal issue");
@@ -1175,7 +674,7 @@ export class RunOrchestrator {
         "Zombie run detected (no thread)",
       );
       this.withHeldIssueSessionLease(run.projectId, run.linearIssueId, () => {
-        this.db.finishRun(run.id, { status: "failed", failureReason: "Zombie: never started (no thread after restart)" });
+        this.db.runs.finishRun(run.id, { status: "failed", failureReason: "Zombie: never started (no thread after restart)" });
         this.db.upsertIssue({ projectId: run.projectId, linearIssueId: run.linearIssueId, activeRunId: null });
       });
       this.recoverOrEscalate(issue, run.runType, "zombie");
@@ -1196,7 +695,7 @@ export class RunOrchestrator {
         "Stale thread during reconciliation",
       );
       this.withHeldIssueSessionLease(run.projectId, run.linearIssueId, () => {
-        this.db.finishRun(run.id, { status: "failed", failureReason: "Stale thread after restart" });
+        this.db.runs.finishRun(run.id, { status: "failed", failureReason: "Stale thread after restart" });
         this.db.upsertIssue({ projectId: run.projectId, linearIssueId: run.linearIssueId, activeRunId: null });
       });
       this.recoverOrEscalate(issue, run.runType, "stale_thread");
@@ -1215,7 +714,7 @@ export class RunOrchestrator {
         const stopState = resolveAuthoritativeLinearStopState(linearIssue);
         if (stopState?.isFinal) {
           this.withHeldIssueSessionLease(run.projectId, run.linearIssueId, () => {
-            this.db.finishRun(run.id, { status: "released" });
+            this.db.runs.finishRun(run.id, { status: "released" });
             this.db.upsertIssue({
               projectId: run.projectId,
               linearIssueId: run.linearIssueId,
@@ -1254,20 +753,20 @@ export class RunOrchestrator {
       // Interrupted runs are not real failures — undo the budget increment.
       const repairedCounters = this.withHeldIssueSessionLease(issue.projectId, issue.linearIssueId, (lease) => {
         if (run.runType === "ci_repair" && issue.ciRepairAttempts > 0) {
-          this.db.upsertIssueWithLease(lease, {
+          this.db.issueSessions.upsertIssueWithLease(lease, {
             projectId: issue.projectId,
             linearIssueId: issue.linearIssueId,
             ciRepairAttempts: issue.ciRepairAttempts - 1,
           });
         } else if (run.runType === "queue_repair" && issue.queueRepairAttempts > 0) {
-          this.db.upsertIssueWithLease(lease, {
+          this.db.issueSessions.upsertIssueWithLease(lease, {
             projectId: issue.projectId,
             linearIssueId: issue.linearIssueId,
             queueRepairAttempts: issue.queueRepairAttempts - 1,
           });
         }
         if (run.runType === "ci_repair" || run.runType === "queue_repair") {
-          this.db.upsertIssueWithLease(lease, {
+          this.db.issueSessions.upsertIssueWithLease(lease, {
             projectId: issue.projectId,
             linearIssueId: issue.linearIssueId,
             lastAttemptedFailureHeadSha: null,
@@ -1363,151 +862,26 @@ export class RunOrchestrator {
 
     // Handle completed turn discovered during reconciliation
     if (latestTurn?.status === "completed") {
-      const trackedIssue = this.db.issueToTrackedIssue(issue);
-      const report = buildStageReport(
-        { ...run, status: "completed" },
-        trackedIssue,
+      await this.runFinalizer.finalizeCompletedRun({
+        source: "reconciliation",
+        run,
+        issue,
         thread,
-        countEventMethods(this.db.listThreadEvents(run.id)),
-      );
-      const freshIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
-      const verifiedRepairError = await this.verifyReactiveRunAdvancedBranch(run, freshIssue);
-      if (verifiedRepairError) {
-        const holdState = resolveRecoverablePostRunState(freshIssue) ?? "failed";
-        this.failRunAndClear(run, verifiedRepairError, holdState);
-        this.feed?.publish({
-          level: "warn",
-          kind: "turn",
-          issueKey: issue.issueKey,
-          projectId: run.projectId,
-          stage: run.runType,
-          status: "branch_not_advanced",
-          summary: verifiedRepairError,
-        });
-        const heldIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? freshIssue;
-        void this.linearSync.emitActivity(heldIssue, buildRunFailureActivity(run.runType, verifiedRepairError));
-        void this.linearSync.syncSession(heldIssue, { activeRunType: run.runType });
-        this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
-        return;
-      }
-      const missingReviewFixHeadError = await this.verifyReviewFixAdvancedHead(run, freshIssue);
-      if (missingReviewFixHeadError) {
-        this.failRunAndClear(run, missingReviewFixHeadError, "escalated");
-        const failedIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? freshIssue;
-        this.feed?.publish({
-          level: "error",
-          kind: "turn",
-          issueKey: freshIssue.issueKey,
-          projectId: run.projectId,
-          stage: run.runType,
-          status: "same_head_review_handoff_blocked",
-          summary: missingReviewFixHeadError,
-        });
-        void this.linearSync.emitActivity(failedIssue, buildRunFailureActivity(run.runType, missingReviewFixHeadError));
-        void this.linearSync.syncSession(failedIssue, { activeRunType: run.runType });
-        this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
-        return;
-      }
-      const publishedOutcomeError = await this.verifyPublishedRunOutcome(run, freshIssue);
-      if (publishedOutcomeError) {
-        this.failRunAndClear(run, publishedOutcomeError, "failed");
-        this.feed?.publish({
-          level: "warn",
-          kind: "turn",
-          issueKey: issue.issueKey,
-          projectId: run.projectId,
-          stage: run.runType,
-          status: "publish_incomplete",
-          summary: publishedOutcomeError,
-        });
-        const failedIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? freshIssue;
-        void this.linearSync.emitActivity(failedIssue, buildRunFailureActivity(run.runType, publishedOutcomeError));
-        void this.linearSync.syncSession(failedIssue, { activeRunType: run.runType });
-        this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
-        return;
-      }
-      const refreshedIssue = await this.refreshIssueAfterReactivePublish(run, freshIssue);
-      const postRunFollowUp = await this.resolvePostRunFollowUp(run, refreshedIssue);
-      const postRunState = postRunFollowUp?.factoryState ?? resolveCompletedRunState(refreshedIssue, run);
-      const reconciled = this.withHeldIssueSessionLease(run.projectId, run.linearIssueId, (lease) => {
-        this.db.finishRun(run.id, {
-          status: "completed",
-          ...(run.threadId ? { threadId: run.threadId } : {}),
-          ...(latestTurn.id ? { turnId: latestTurn.id } : {}),
-          summaryJson: JSON.stringify({ latestAssistantMessage: report.assistantMessages.at(-1) ?? null }),
-          reportJson: JSON.stringify(report),
-        });
-        this.db.upsertIssue({
-          projectId: run.projectId,
-          linearIssueId: run.linearIssueId,
-          activeRunId: null,
-          ...(postRunState ? { factoryState: postRunState } : {}),
-          pendingRunType: null,
-          pendingRunContextJson: null,
-          ...(postRunFollowUp ? {} : (postRunState === "awaiting_queue" || postRunState === "done"
-            ? {
-                lastGitHubFailureSource: null,
-                lastGitHubFailureHeadSha: null,
-                lastGitHubFailureSignature: null,
-                lastGitHubFailureCheckName: null,
-                lastGitHubFailureCheckUrl: null,
-                lastGitHubFailureContextJson: null,
-                lastGitHubFailureAt: null,
-                lastQueueIncidentJson: null,
-                lastAttemptedFailureHeadSha: null,
-                lastAttemptedFailureSignature: null,
-              }
-            : {})),
-        });
-        if (postRunFollowUp) {
-          return this.appendWakeEventWithLease(
-            lease,
-            issue,
-            postRunFollowUp.pendingRunType,
-            postRunFollowUp.context,
-            "post_run",
-          );
-        }
-        return true;
+        threadId: run.threadId,
+        ...(latestTurn.id ? { completedTurnId: latestTurn.id } : {}),
+        withHeldLease: (projectId, linearIssueId, fn) => this.withHeldIssueSessionLease(projectId, linearIssueId, fn),
+        releaseLease: (projectId, linearIssueId) => this.releaseIssueSessionLease(projectId, linearIssueId),
+        failRunAndClear: (targetRun, message, nextState) => this.failRunAndClear(targetRun, message, nextState),
+        verifyReactiveRunAdvancedBranch: (targetRun, targetIssue) => this.verifyReactiveRunAdvancedBranch(targetRun, targetIssue),
+        verifyReviewFixAdvancedHead: (targetRun, targetIssue) => this.verifyReviewFixAdvancedHead(targetRun, targetIssue),
+        verifyPublishedRunOutcome: (targetRun, targetIssue) => this.verifyPublishedRunOutcome(targetRun, targetIssue),
+        refreshIssueAfterReactivePublish: (targetRun, targetIssue) => this.refreshIssueAfterReactivePublish(targetRun, targetIssue),
+        resolvePostRunFollowUp: (targetRun, targetIssue) => this.resolvePostRunFollowUp(targetRun, targetIssue),
+        resolveCompletedRunState,
+        resolveRecoverableRunState: resolveRecoverablePostRunState,
+        appendWakeEventWithLease: (lease, targetIssue, runType, context, dedupeScope) =>
+          this.appendWakeEventWithLease(lease, targetIssue, runType, context, dedupeScope),
       });
-      if (!reconciled) {
-        this.logger.warn({ runId: run.id, issueId: run.linearIssueId }, "Skipping reconciled completion writes after losing issue-session lease");
-        this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
-        return;
-      }
-      if (postRunFollowUp) {
-        this.feed?.publish({
-          level: "info",
-          kind: "stage",
-          issueKey: issue.issueKey,
-          projectId: run.projectId,
-          stage: postRunFollowUp.factoryState,
-          status: "follow_up_queued",
-          summary: postRunFollowUp.summary,
-        });
-        this.enqueueIssue(run.projectId, run.linearIssueId);
-      }
-      if (postRunState) {
-        this.feed?.publish({
-          level: "info",
-          kind: "turn",
-          issueKey: issue.issueKey,
-          projectId: run.projectId,
-          stage: run.runType,
-          status: "completed",
-          summary: `Reconciliation: ${run.runType} completed \u2192 ${postRunState}`,
-        });
-      }
-      const updatedIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? refreshedIssue;
-      const completionSummary = report.assistantMessages.at(-1)?.slice(0, 300) ?? `${run.runType} completed.`;
-      void this.linearSync.emitActivity(updatedIssue, buildRunCompletedActivity({
-        runType: run.runType,
-        completionSummary,
-        postRunState: updatedIssue.factoryState,
-        ...(updatedIssue.prNumber !== undefined ? { prNumber: updatedIssue.prNumber } : {}),
-      }));
-      void this.linearSync.syncSession(updatedIssue);
-      this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
       return;
     }
 
@@ -1517,70 +891,22 @@ export class RunOrchestrator {
   // ─── Internal helpers ─────────────────────────────────────────────
 
   private escalate(issue: IssueRecord, runType: string, reason: string): void {
-    this.logger.warn({ issueKey: issue.issueKey, runType, reason }, "Escalating to human");
-    const escalated = this.withHeldIssueSessionLease(issue.projectId, issue.linearIssueId, (lease) => {
-      if (issue.activeRunId) {
-        this.db.finishRunWithLease(lease, issue.activeRunId, { status: "released" });
-      }
-      this.db.clearPendingIssueSessionEventsWithLease(lease);
-      this.db.upsertIssueWithLease(lease, {
-        projectId: issue.projectId,
-        linearIssueId: issue.linearIssueId,
-        pendingRunType: null,
-        pendingRunContextJson: null,
-        activeRunId: null,
-        factoryState: "escalated",
-      });
-      return true;
+    this.runRecovery.escalate({
+      issue,
+      runType,
+      reason,
+      withHeldLease: (projectId, linearIssueId, fn) => this.withHeldIssueSessionLease(projectId, linearIssueId, fn),
     });
-    if (!escalated) {
-      this.logger.warn({ issueKey: issue.issueKey, runType }, "Skipping escalation write after losing issue-session lease");
-      this.releaseIssueSessionLease(issue.projectId, issue.linearIssueId);
-      return;
-    }
-    this.feed?.publish({
-      level: "error",
-      kind: "workflow",
-      issueKey: issue.issueKey,
-      projectId: issue.projectId,
-      stage: runType,
-      status: "escalated",
-      summary: `Escalated: ${reason}`,
-    });
-    const escalatedIssue = this.db.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
-    void this.linearSync.emitActivity(escalatedIssue, {
-      type: "error",
-      body: `PatchRelay needs human help to continue.\n\n${reason}`,
-    });
-    void this.linearSync.syncSession(escalatedIssue);
-    this.releaseIssueSessionLease(issue.projectId, issue.linearIssueId);
   }
 
   private failRunAndClear(run: RunRecord, message: string, nextState: FactoryState = "failed"): void {
-    const updated = this.withHeldIssueSessionLease(run.projectId, run.linearIssueId, (lease) => {
-      this.db.finishRun(run.id, { status: "failed", failureReason: message });
-      if (nextState === "failed" || nextState === "escalated" || nextState === "awaiting_input" || nextState === "done") {
-        this.db.clearPendingIssueSessionEventsWithLease(lease);
-      }
-      this.db.upsertIssue({
-        projectId: run.projectId,
-        linearIssueId: run.linearIssueId,
-        activeRunId: null,
-        factoryState: nextState,
-      });
-      const branchOwner = this.resolveBranchOwnerForStateTransition(nextState);
-      if (branchOwner) {
-        const lease = this.getHeldIssueSessionLease(run.projectId, run.linearIssueId);
-        if (lease) {
-          this.db.setBranchOwnerWithLease(lease, branchOwner);
-        }
-      }
-      return true;
+    this.runRecovery.failRunAndClear({
+      run,
+      message,
+      nextState,
+      withHeldLease: (projectId, linearIssueId, fn) => this.withHeldIssueSessionLease(projectId, linearIssueId, fn),
+      getHeldLease: (projectId, linearIssueId) => this.getHeldIssueSessionLease(projectId, linearIssueId),
     });
-    if (!updated) {
-      this.logger.warn({ runId: run.id, issueId: run.linearIssueId }, "Skipping failure cleanup after losing issue-session lease");
-    }
-    this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
   }
 
   private resolveBranchOwnerForStateTransition(newState: FactoryState, pendingRunType?: RunType): BranchOwner | undefined {
@@ -1992,16 +1318,10 @@ export class RunOrchestrator {
     throw new Error(`Failed to read thread ${threadId}`);
   }
 
-  private issueSessionLeaseKey(projectId: string, linearIssueId: string): string {
-    return `${projectId}:${linearIssueId}`;
-  }
-
   private getHeldIssueSessionLease(projectId: string, linearIssueId: string):
     | { projectId: string; linearIssueId: string; leaseId: string }
     | undefined {
-    const leaseId = this.activeSessionLeases.get(this.issueSessionLeaseKey(projectId, linearIssueId));
-    if (!leaseId) return undefined;
-    return { projectId, linearIssueId, leaseId };
+    return this.leaseService.getHeldLease(projectId, linearIssueId);
   }
 
   private withHeldIssueSessionLease<T>(
@@ -2009,9 +1329,7 @@ export class RunOrchestrator {
     linearIssueId: string,
     fn: (lease: { projectId: string; linearIssueId: string; leaseId: string }) => T,
   ): T | undefined {
-    const lease = this.getHeldIssueSessionLease(projectId, linearIssueId);
-    if (!lease) return undefined;
-    return this.db.withIssueSessionLease(projectId, linearIssueId, lease.leaseId, () => fn(lease));
+    return this.leaseService.withHeldLease(projectId, linearIssueId, fn);
   }
 
   private upsertIssueIfLeaseHeld(
@@ -2025,7 +1343,7 @@ export class RunOrchestrator {
       this.logger.warn({ projectId, linearIssueId, context }, "Skipping issue write without a held issue-session lease");
       return undefined;
     }
-    const updated = this.db.upsertIssueWithLease(lease, params);
+    const updated = this.db.issueSessions.upsertIssueWithLease(lease, params);
     if (!updated) {
       this.logger.warn({ projectId, linearIssueId, context }, "Skipping issue write after losing issue-session lease");
     }
@@ -2043,116 +1361,27 @@ export class RunOrchestrator {
   }
 
   private acquireIssueSessionLease(projectId: string, linearIssueId: string): string | undefined {
-    const leaseId = randomUUID();
-    const leasedUntil = new Date(Date.now() + ISSUE_SESSION_LEASE_MS).toISOString();
-    const acquired = this.db.acquireIssueSessionLease({
-      projectId,
-      linearIssueId,
-      leaseId,
-      workerId: this.workerId,
-      leasedUntil,
-    });
-    if (!acquired) return undefined;
-    this.activeSessionLeases.set(this.issueSessionLeaseKey(projectId, linearIssueId), leaseId);
-    return leaseId;
+    return this.leaseService.acquire(projectId, linearIssueId);
   }
 
   private forceAcquireIssueSessionLease(projectId: string, linearIssueId: string): string | undefined {
-    const leaseId = randomUUID();
-    const leasedUntil = new Date(Date.now() + ISSUE_SESSION_LEASE_MS).toISOString();
-    const acquired = this.db.forceAcquireIssueSessionLease({
-      projectId,
-      linearIssueId,
-      leaseId,
-      workerId: this.workerId,
-      leasedUntil,
-    });
-    if (!acquired) return undefined;
-    this.activeSessionLeases.set(this.issueSessionLeaseKey(projectId, linearIssueId), leaseId);
-    return leaseId;
+    return this.leaseService.forceAcquire(projectId, linearIssueId);
   }
 
   private claimLeaseForReconciliation(projectId: string, linearIssueId: string): boolean | "owned" | "skip" {
-    const key = this.issueSessionLeaseKey(projectId, linearIssueId);
-    if (this.activeSessionLeases.has(key)) {
-      return "owned";
-    }
-    const session = this.db.getIssueSession(projectId, linearIssueId);
-    if (!session) return "skip";
-    const leasedUntilMs = session.leasedUntil ? Date.parse(session.leasedUntil) : undefined;
-    if (leasedUntilMs !== undefined && Number.isFinite(leasedUntilMs) && leasedUntilMs > Date.now()) {
-      return "skip";
-    }
-    return this.acquireIssueSessionLease(projectId, linearIssueId) ? true : "skip";
+    return this.leaseService.claimForReconciliation(projectId, linearIssueId);
   }
 
   private async reclaimForeignRecoveryLeaseIfSafe(run: RunRecord, issue: IssueRecord): Promise<boolean> {
-    const key = this.issueSessionLeaseKey(run.projectId, run.linearIssueId);
-    if (this.activeSessionLeases.has(key)) {
-      return false;
-    }
-    const session = this.db.getIssueSession(run.projectId, run.linearIssueId);
-    if (!session?.leaseId || !session.workerId || session.workerId === this.workerId) {
-      return false;
-    }
-    if (issue.activeRunId !== run.id) {
-      return false;
-    }
-
-    let safeToReclaim = !run.threadId;
-    if (!safeToReclaim && run.threadId) {
-      try {
-        const thread = await this.readThreadWithRetry(run.threadId, 1);
-        const latestTurn = getThreadTurns(thread).at(-1);
-        safeToReclaim = thread.status === "notLoaded"
-          || latestTurn?.status === "interrupted"
-          || latestTurn?.status === "completed";
-      } catch {
-        safeToReclaim = true;
-      }
-    }
-
-    if (!safeToReclaim) {
-      return false;
-    }
-
-    const leaseId = this.forceAcquireIssueSessionLease(run.projectId, run.linearIssueId);
-    if (!leaseId) {
-      return false;
-    }
-    this.logger.info({
-      issueKey: issue.issueKey,
-      runId: run.id,
-      previousWorkerId: session.workerId,
-      previousLeaseId: session.leaseId,
-      reclaimedLeaseId: leaseId,
-    }, "Reclaimed foreign issue-session lease for active-run recovery");
-    return true;
+    return await this.leaseService.reclaimForeignRecoveryLeaseIfSafe(run, issue);
   }
 
   private heartbeatIssueSessionLease(projectId: string, linearIssueId: string): boolean {
-    const key = this.issueSessionLeaseKey(projectId, linearIssueId);
-    const leaseId = this.activeSessionLeases.get(key) ?? this.db.getIssueSession(projectId, linearIssueId)?.leaseId;
-    if (!leaseId) return false;
-    const renewed = this.db.renewIssueSessionLease({
-      projectId,
-      linearIssueId,
-      leaseId,
-      leasedUntil: new Date(Date.now() + ISSUE_SESSION_LEASE_MS).toISOString(),
-    });
-    if (renewed) {
-      this.activeSessionLeases.set(key, leaseId);
-      return true;
-    }
-    this.activeSessionLeases.delete(key);
-    return false;
+    return this.leaseService.heartbeat(projectId, linearIssueId);
   }
 
   private releaseIssueSessionLease(projectId: string, linearIssueId: string): void {
-    const key = this.issueSessionLeaseKey(projectId, linearIssueId);
-    const leaseId = this.activeSessionLeases.get(key);
-    this.db.releaseIssueSessionLease(projectId, linearIssueId, leaseId);
-    this.activeSessionLeases.delete(key);
+    this.leaseService.release(projectId, linearIssueId);
   }
 }
 

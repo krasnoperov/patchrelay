@@ -141,7 +141,7 @@ export class QueueHealthMonitor {
         lastAttemptedFailureHeadSha: headRefOid,
         lastAttemptedFailureSignature: signature,
       });
-      this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+      this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         eventType: "merge_steward_incident",
@@ -149,7 +149,7 @@ export class QueueHealthMonitor {
         dedupeKey: `queue_health:queue_repair:${issue.linearIssueId}:${signature}`,
       });
       this.advancer.advanceIdleIssue(issue, "repairing_queue");
-      if (this.db.peekIssueSessionWake(issue.projectId, issue.linearIssueId)) {
+      if (this.db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId)) {
         this.advancer.enqueueIssue(issue.projectId, issue.linearIssueId);
       }
       this.logger.info(

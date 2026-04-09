@@ -80,12 +80,12 @@ test("issue upserts and run completion dual-write into issue_sessions", () => {
       worktreePath: "/tmp/use-1",
       threadId: "thread-1",
     });
-    const queuedSession = db.getIssueSession("usertold", "issue-1");
+    const queuedSession = db.issueSessions.getIssueSession("usertold", "issue-1");
     assert.equal(queuedSession?.sessionState, "idle");
     assert.equal(queuedSession?.waitingReason, "Ready to run implementation");
     assert.equal(queuedSession?.threadGeneration, 1);
 
-    const run = db.createRun({
+    const run = db.runs.createRun({
       issueId: issue.id,
       projectId: "usertold",
       linearIssueId: "issue-1",
@@ -99,11 +99,11 @@ test("issue upserts and run completion dual-write into issue_sessions", () => {
       pendingRunType: null,
       factoryState: "implementing",
     });
-    const runningSession = db.getIssueSession("usertold", "issue-1");
+    const runningSession = db.issueSessions.getIssueSession("usertold", "issue-1");
     assert.equal(runningSession?.sessionState, "running");
     assert.equal(runningSession?.activeRunId, run.id);
 
-    db.finishRun(run.id, {
+    db.runs.finishRun(run.id, {
       status: "completed",
       summaryJson: JSON.stringify({ latestAssistantMessage: "Implementation finished cleanly." }),
     });
@@ -116,7 +116,7 @@ test("issue upserts and run completion dual-write into issue_sessions", () => {
       prHeadSha: "sha-1",
       prAuthorLogin: "patchrelay[bot]",
     });
-    const completedSession = db.getIssueSession("usertold", "issue-1");
+    const completedSession = db.issueSessions.getIssueSession("usertold", "issue-1");
     assert.equal(completedSession?.sessionState, "idle");
     assert.equal(completedSession?.summaryText, "Implementation finished cleanly.");
     assert.equal(completedSession?.lastRunType, "implementation");
@@ -141,7 +141,7 @@ test("issue session keeps the last published summary when a later stale repair f
       branchName: "use/USE-SUMMARY",
     });
 
-    const implementationRun = db.createRun({
+    const implementationRun = db.runs.createRun({
       issueId: issue.id,
       projectId: "usertold",
       linearIssueId: "issue-summary",
@@ -155,7 +155,7 @@ test("issue session keeps the last published summary when a later stale repair f
       pendingRunType: null,
       factoryState: "implementing",
     });
-    db.finishRun(implementationRun.id, {
+    db.runs.finishRun(implementationRun.id, {
       status: "completed",
       summaryJson: JSON.stringify({ latestAssistantMessage: "Published PR #42 with the seeded word-pack library." }),
     });
@@ -169,7 +169,7 @@ test("issue session keeps the last published summary when a later stale repair f
       prAuthorLogin: "patchrelay[bot]",
     });
 
-    const staleRepair = db.createRun({
+    const staleRepair = db.runs.createRun({
       issueId: issue.id,
       projectId: "usertold",
       linearIssueId: "issue-summary",
@@ -182,7 +182,7 @@ test("issue session keeps the last published summary when a later stale repair f
       activeRunId: staleRepair.id,
       factoryState: "repairing_queue",
     });
-    db.finishRun(staleRepair.id, {
+    db.runs.finishRun(staleRepair.id, {
       status: "failed",
       failureReason: "Codex turn was interrupted",
     });
@@ -195,7 +195,7 @@ test("issue session keeps the last published summary when a later stale repair f
       prReviewState: null,
     });
 
-    const session = db.getIssueSession("usertold", "issue-summary");
+    const session = db.issueSessions.getIssueSession("usertold", "issue-summary");
     assert.equal(session?.summaryText, "Published PR #42 with the seeded word-pack library.");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -215,7 +215,7 @@ test("issue session leases can be acquired, renewed, and reclaimed after expiry"
     });
 
     assert.equal(
-      db.acquireIssueSessionLease({
+      db.issueSessions.acquireIssueSessionLease({
         projectId: "usertold",
         linearIssueId: "issue-lease",
         leaseId: "lease-1",
@@ -226,7 +226,7 @@ test("issue session leases can be acquired, renewed, and reclaimed after expiry"
       true,
     );
     assert.equal(
-      db.acquireIssueSessionLease({
+      db.issueSessions.acquireIssueSessionLease({
         projectId: "usertold",
         linearIssueId: "issue-lease",
         leaseId: "lease-2",
@@ -237,7 +237,7 @@ test("issue session leases can be acquired, renewed, and reclaimed after expiry"
       false,
     );
     assert.equal(
-      db.renewIssueSessionLease({
+      db.issueSessions.renewIssueSessionLease({
         projectId: "usertold",
         linearIssueId: "issue-lease",
         leaseId: "lease-1",
@@ -247,7 +247,7 @@ test("issue session leases can be acquired, renewed, and reclaimed after expiry"
       true,
     );
     assert.equal(
-      db.acquireIssueSessionLease({
+      db.issueSessions.acquireIssueSessionLease({
         projectId: "usertold",
         linearIssueId: "issue-lease",
         leaseId: "lease-3",
@@ -257,7 +257,7 @@ test("issue session leases can be acquired, renewed, and reclaimed after expiry"
       }),
       true,
     );
-    const session = db.getIssueSession("usertold", "issue-lease");
+    const session = db.issueSessions.getIssueSession("usertold", "issue-lease");
     assert.equal(session?.leaseId, "lease-3");
     assert.equal(session?.workerId, "worker-c");
   } finally {
@@ -278,7 +278,7 @@ test("lease-guarded writes reject stale issue-session leases", () => {
       branchName: "use/USE-LEASE-GUARDS",
     });
 
-    const run = db.createRun({
+    const run = db.runs.createRun({
       issueId: issue.id,
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
@@ -287,7 +287,7 @@ test("lease-guarded writes reject stale issue-session leases", () => {
     });
 
     assert.equal(
-      db.acquireIssueSessionLease({
+      db.issueSessions.acquireIssueSessionLease({
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         leaseId: "lease-1",
@@ -298,7 +298,7 @@ test("lease-guarded writes reject stale issue-session leases", () => {
       true,
     );
     assert.equal(
-      db.acquireIssueSessionLease({
+      db.issueSessions.acquireIssueSessionLease({
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         leaseId: "lease-2",
@@ -309,7 +309,7 @@ test("lease-guarded writes reject stale issue-session leases", () => {
       true,
     );
 
-    const staleIssueWrite = db.upsertIssueWithLease(
+    const staleIssueWrite = db.issueSessions.upsertIssueWithLease(
       { projectId: issue.projectId, linearIssueId: issue.linearIssueId, leaseId: "lease-1" },
       {
         projectId: issue.projectId,
@@ -320,15 +320,15 @@ test("lease-guarded writes reject stale issue-session leases", () => {
     assert.equal(staleIssueWrite, undefined);
     assert.equal(db.getIssue(issue.projectId, issue.linearIssueId)?.factoryState, "delegated");
 
-    const staleRunFinish = db.finishRunWithLease(
+    const staleRunFinish = db.issueSessions.finishRunWithLease(
       { projectId: issue.projectId, linearIssueId: issue.linearIssueId, leaseId: "lease-1" },
       run.id,
       { status: "failed", failureReason: "stale worker" },
     );
     assert.equal(staleRunFinish, false);
-    assert.equal(db.getRun(run.id)?.status, "queued");
+    assert.equal(db.runs.getRunById(run.id)?.status, "queued");
 
-    const freshIssueWrite = db.upsertIssueWithLease(
+    const freshIssueWrite = db.issueSessions.upsertIssueWithLease(
       { projectId: issue.projectId, linearIssueId: issue.linearIssueId, leaseId: "lease-2" },
       {
         projectId: issue.projectId,
@@ -339,13 +339,13 @@ test("lease-guarded writes reject stale issue-session leases", () => {
     );
     assert.equal(freshIssueWrite?.factoryState, "implementing");
 
-    const freshRunFinish = db.finishRunWithLease(
+    const freshRunFinish = db.issueSessions.finishRunWithLease(
       { projectId: issue.projectId, linearIssueId: issue.linearIssueId, leaseId: "lease-2" },
       run.id,
       { status: "completed", summaryJson: JSON.stringify({ latestAssistantMessage: "Done" }) },
     );
     assert.equal(freshRunFinish, true);
-    assert.equal(db.getRun(run.id)?.status, "completed");
+    assert.equal(db.runs.getRunById(run.id)?.status, "completed");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -364,7 +364,7 @@ test("startup lease cleanup expires only stale issue-session leases", () => {
     });
 
     assert.equal(
-      db.acquireIssueSessionLease({
+      db.issueSessions.acquireIssueSessionLease({
         projectId: "usertold",
         linearIssueId: "issue-stale-lease",
         leaseId: "lease-stale",
@@ -382,7 +382,7 @@ test("startup lease cleanup expires only stale issue-session leases", () => {
       factoryState: "delegated",
     });
     assert.equal(
-      db.acquireIssueSessionLease({
+      db.issueSessions.acquireIssueSessionLease({
         projectId: "usertold",
         linearIssueId: "issue-fresh-lease",
         leaseId: "lease-fresh",
@@ -393,10 +393,10 @@ test("startup lease cleanup expires only stale issue-session leases", () => {
       true,
     );
 
-    db.releaseExpiredIssueSessionLeases("2030-04-05T10:30:00.000Z");
+    db.issueSessions.releaseExpiredIssueSessionLeases("2030-04-05T10:30:00.000Z");
 
-    assert.equal(db.getIssueSession("usertold", "issue-stale-lease")?.leaseId, undefined);
-    assert.equal(db.getIssueSession("usertold", "issue-fresh-lease")?.leaseId, "lease-fresh");
+    assert.equal(db.issueSessions.getIssueSession("usertold", "issue-stale-lease")?.leaseId, undefined);
+    assert.equal(db.issueSessions.getIssueSession("usertold", "issue-fresh-lease")?.leaseId, "lease-fresh");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -414,7 +414,7 @@ test("active-lease-aware helpers use the current live lease for control writes",
       factoryState: "delegated",
       branchOwner: "user",
     });
-    db.appendIssueSessionEvent({
+    db.issueSessions.appendIssueSessionEvent({
       projectId: "usertold",
       linearIssueId: "issue-active-lease",
       eventType: "followup_comment",
@@ -422,7 +422,7 @@ test("active-lease-aware helpers use the current live lease for control writes",
     });
 
     assert.equal(
-      db.acquireIssueSessionLease({
+      db.issueSessions.acquireIssueSessionLease({
         projectId: "usertold",
         linearIssueId: "issue-active-lease",
         leaseId: "lease-1",
@@ -433,7 +433,7 @@ test("active-lease-aware helpers use the current live lease for control writes",
       true,
     );
     assert.equal(
-      db.acquireIssueSessionLease({
+      db.issueSessions.acquireIssueSessionLease({
         projectId: "usertold",
         linearIssueId: "issue-active-lease",
         leaseId: "lease-2",
@@ -444,7 +444,7 @@ test("active-lease-aware helpers use the current live lease for control writes",
       true,
     );
 
-    const issueWrite = db.upsertIssueRespectingActiveLease("usertold", "issue-active-lease", {
+    const issueWrite = db.issueSessions.upsertIssueRespectingActiveLease("usertold", "issue-active-lease", {
       projectId: "usertold",
       linearIssueId: "issue-active-lease",
       factoryState: "implementing",
@@ -452,31 +452,31 @@ test("active-lease-aware helpers use the current live lease for control writes",
     assert.equal(issueWrite?.factoryState, "implementing");
 
     assert.equal(
-      db.clearPendingIssueSessionEventsWithLease({
+      db.issueSessions.clearPendingIssueSessionEventsWithLease({
         projectId: "usertold",
         linearIssueId: "issue-active-lease",
         leaseId: "lease-1",
       }),
       false,
     );
-    assert.equal(db.hasPendingIssueSessionEvents("usertold", "issue-active-lease"), true);
-    assert.equal(db.clearPendingIssueSessionEventsRespectingActiveLease("usertold", "issue-active-lease"), true);
-    assert.equal(db.hasPendingIssueSessionEvents("usertold", "issue-active-lease"), false);
+    assert.equal(db.issueSessions.hasPendingIssueSessionEvents("usertold", "issue-active-lease"), true);
+    assert.equal(db.issueSessions.clearPendingIssueSessionEventsRespectingActiveLease("usertold", "issue-active-lease"), true);
+    assert.equal(db.issueSessions.hasPendingIssueSessionEvents("usertold", "issue-active-lease"), false);
 
     const originalBranchOwner = db.getIssue("usertold", "issue-active-lease")?.branchOwner;
     assert.equal(
-      db.setBranchOwnerWithLease(
+      db.issueSessions.setBranchOwnerWithLease(
         { projectId: "usertold", linearIssueId: "issue-active-lease", leaseId: "lease-1" },
         "patchrelay",
       ),
       false,
     );
     assert.equal(db.getIssue("usertold", "issue-active-lease")?.branchOwner, originalBranchOwner);
-    assert.equal(db.setBranchOwnerRespectingActiveLease("usertold", "issue-active-lease", "patchrelay"), true);
+    assert.equal(db.issueSessions.setBranchOwnerRespectingActiveLease("usertold", "issue-active-lease", "patchrelay"), true);
     assert.equal(db.getIssue("usertold", "issue-active-lease")?.branchOwner, "patchrelay");
 
-    db.releaseIssueSessionLeaseRespectingActiveLease("usertold", "issue-active-lease");
-    assert.equal(db.getIssueSession("usertold", "issue-active-lease")?.leaseId, undefined);
+    db.issueSessions.releaseIssueSessionLeaseRespectingActiveLease("usertold", "issue-active-lease");
+    assert.equal(db.issueSessions.getIssueSession("usertold", "issue-active-lease")?.leaseId, undefined);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -496,20 +496,20 @@ test("issue session wake derives follow-up mode and thread reuse from queued eve
       threadId: "thread-followup",
       prReviewState: "approved",
     });
-    db.appendIssueSessionEvent({
+    db.issueSessions.appendIssueSessionEvent({
       projectId: "usertold",
       linearIssueId: "issue-followup",
       eventType: "followup_prompt",
       eventJson: JSON.stringify({ text: "Please split the parser into smaller functions.", author: "alice" }),
     });
-    db.appendIssueSessionEvent({
+    db.issueSessions.appendIssueSessionEvent({
       projectId: "usertold",
       linearIssueId: "issue-followup",
       eventType: "followup_comment",
       eventJson: JSON.stringify({ body: "And keep the API stable.", author: "bob" }),
     });
 
-    const wake = db.peekIssueSessionWake("usertold", "issue-followup");
+    const wake = db.issueSessions.peekIssueSessionWake("usertold", "issue-followup");
     assert.equal(wake?.runType, "implementation");
     assert.equal(wake?.resumeThread, true);
     assert.equal(wake?.wakeReason, "followup_prompt");
@@ -535,14 +535,14 @@ test("followup_comment alone reuses the main thread for the next turn", () => {
       threadId: "thread-comment-followup",
       prReviewState: "approved",
     });
-    db.appendIssueSessionEvent({
+    db.issueSessions.appendIssueSessionEvent({
       projectId: "usertold",
       linearIssueId: "issue-comment-followup",
       eventType: "followup_comment",
       eventJson: JSON.stringify({ body: "Please keep the current copy.", author: "alice" }),
     });
 
-    const wake = db.peekIssueSessionWake("usertold", "issue-comment-followup");
+    const wake = db.issueSessions.peekIssueSessionWake("usertold", "issue-comment-followup");
     assert.equal(wake?.runType, "implementation");
     assert.equal(wake?.resumeThread, true);
     assert.equal(wake?.wakeReason, "followup_comment");
@@ -564,14 +564,14 @@ test("direct_reply wakes the next turn in direct-reply mode on the same thread",
       factoryState: "awaiting_input",
       threadId: "thread-direct-reply",
     });
-    db.appendIssueSessionEvent({
+    db.issueSessions.appendIssueSessionEvent({
       projectId: "usertold",
       linearIssueId: "issue-direct-reply",
       eventType: "direct_reply",
       eventJson: JSON.stringify({ body: "Use the staged rollout copy.", author: "alice" }),
     });
 
-    const wake = db.peekIssueSessionWake("usertold", "issue-direct-reply");
+    const wake = db.issueSessions.peekIssueSessionWake("usertold", "issue-direct-reply");
     assert.equal(wake?.runType, "implementation");
     assert.equal(wake?.resumeThread, true);
     assert.equal(wake?.wakeReason, "direct_reply");
@@ -595,20 +595,20 @@ test("terminal session events suppress queued follow-up wakeups", () => {
       prNumber: 15,
       threadId: "thread-terminal",
     });
-    db.appendIssueSessionEvent({
+    db.issueSessions.appendIssueSessionEvent({
       projectId: "usertold",
       linearIssueId: "issue-terminal",
       eventType: "followup_comment",
       eventJson: JSON.stringify({ body: "Please adjust the copy." }),
     });
-    db.appendIssueSessionEvent({
+    db.issueSessions.appendIssueSessionEvent({
       projectId: "usertold",
       linearIssueId: "issue-terminal",
       eventType: "pr_merged",
       dedupeKey: "pr_merged:15",
     });
 
-    const wake = db.peekIssueSessionWake("usertold", "issue-terminal");
+    const wake = db.issueSessions.peekIssueSessionWake("usertold", "issue-terminal");
     assert.equal(wake, undefined);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -627,20 +627,20 @@ test("updateRunThread does not resurrect a run that already ended", () => {
       factoryState: "delegated",
       pendingRunType: "implementation",
     });
-    const run = db.createRun({
+    const run = db.runs.createRun({
       issueId: issue.id,
       projectId: "usertold",
       linearIssueId: "issue-ended-run",
       runType: "implementation",
     });
-    db.finishRun(run.id, { status: "failed", failureReason: "zombie" });
+    db.runs.finishRun(run.id, { status: "failed", failureReason: "zombie" });
 
-    db.updateRunThread(run.id, {
+    db.runs.updateRunThread(run.id, {
       threadId: "thread-after-end",
       turnId: "turn-after-end",
     });
 
-    const finished = db.getRun(run.id);
+    const finished = db.runs.getRunById(run.id);
     assert.equal(finished?.status, "failed");
     assert.equal(finished?.threadId, undefined);
     assert.equal(finished?.turnId, undefined);

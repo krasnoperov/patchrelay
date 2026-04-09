@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -76,7 +77,15 @@ function createConfig(baseDir: string): AppConfig {
   };
 }
 
-function createOrchestrator(baseDir: string, linearProvider?: { forProject(projectId: string): Promise<LinearClient | undefined> }) {
+function createOrchestrator(
+  baseDir: string,
+  linearProvider?: { forProject(projectId: string): Promise<LinearClient | undefined> },
+  codex?: {
+    startThread: () => Promise<{ threadId: string }>;
+    steerTurn: () => Promise<undefined>;
+    readThread: (threadId: string) => Promise<{ id: string; turns: Array<{ id: string; status: string; items: Array<unknown> }> }>;
+  },
+) {
   const config = createConfig(baseDir);
   const db = new PatchRelayDatabase(config.database.path, config.database.wal);
   db.runMigrations();
@@ -84,22 +93,144 @@ function createOrchestrator(baseDir: string, linearProvider?: { forProject(proje
   const orchestrator = new RunOrchestrator(
     config,
     db,
-    {
+    (codex ?? {
       startThread: async () => ({ threadId: "thread-1" }),
       steerTurn: async () => undefined,
       readThread: async () => ({ id: "thread-1", turns: [] }),
-    } as never,
+    }) as never,
     (linearProvider ?? { forProject: async () => undefined }) as never,
     (projectId, issueId) => {
       enqueueCalls.push({ projectId, issueId });
     },
     pino({ enabled: false }),
   );
+  patchOrchestratorLeaseService(orchestrator, db);
   return { config, db, enqueueCalls, orchestrator };
+}
+
+function patchOrchestratorLeaseService(orchestrator: RunOrchestrator, db: PatchRelayDatabase): void {
+  const leaseService = (orchestrator as unknown as { leaseService: {
+    activeSessionLeases: Map<string, string>;
+    acquire: (projectId: string, linearIssueId: string) => string | undefined;
+    forceAcquire: (projectId: string, linearIssueId: string) => string | undefined;
+    claimForReconciliation: (projectId: string, linearIssueId: string) => boolean | "owned" | "skip";
+    heartbeat: (projectId: string, linearIssueId: string) => boolean;
+    release: (projectId: string, linearIssueId: string) => void;
+  } }).leaseService;
+  const workerId = `patchrelay:${process.pid}`;
+  const leasedUntil = () => new Date(Date.now() + 10 * 60_000).toISOString();
+  const leaseKey = (projectId: string, linearIssueId: string) => `${projectId}:${linearIssueId}`;
+
+  leaseService.acquire = (projectId, linearIssueId) => {
+    const leaseId = randomUUID();
+    const acquired = db.issueSessions.acquireIssueSessionLease({
+      projectId,
+      linearIssueId,
+      leaseId,
+      workerId,
+      leasedUntil: leasedUntil(),
+    });
+    if (!acquired) return undefined;
+    leaseService.activeSessionLeases.set(leaseKey(projectId, linearIssueId), leaseId);
+    return leaseId;
+  };
+
+  leaseService.forceAcquire = (projectId, linearIssueId) => {
+    const leaseId = randomUUID();
+    const acquired = db.issueSessions.forceAcquireIssueSessionLease({
+      projectId,
+      linearIssueId,
+      leaseId,
+      workerId,
+      leasedUntil: leasedUntil(),
+    });
+    if (!acquired) return undefined;
+    leaseService.activeSessionLeases.set(leaseKey(projectId, linearIssueId), leaseId);
+    return leaseId;
+  };
+
+  leaseService.claimForReconciliation = (projectId, linearIssueId) => {
+    const key = leaseKey(projectId, linearIssueId);
+    if (leaseService.activeSessionLeases.has(key)) return "owned";
+    const session = db.issueSessions.getIssueSession(projectId, linearIssueId);
+    if (!session) return "skip";
+    const leasedUntilMs = session.leasedUntil ? Date.parse(session.leasedUntil) : undefined;
+    if (leasedUntilMs !== undefined && Number.isFinite(leasedUntilMs) && leasedUntilMs > Date.now()) {
+      return "skip";
+    }
+    return leaseService.acquire(projectId, linearIssueId) ? true : "skip";
+  };
+
+  leaseService.heartbeat = (projectId, linearIssueId) => {
+    const key = leaseKey(projectId, linearIssueId);
+    const leaseId = leaseService.activeSessionLeases.get(key) ?? db.issueSessions.getIssueSession(projectId, linearIssueId)?.leaseId;
+    if (!leaseId) return false;
+    const renewed = db.issueSessions.renewIssueSessionLease({
+      projectId,
+      linearIssueId,
+      leaseId,
+      leasedUntil: leasedUntil(),
+    });
+    if (!renewed) {
+      leaseService.activeSessionLeases.delete(key);
+      return false;
+    }
+    leaseService.activeSessionLeases.set(key, leaseId);
+    return true;
+  };
+
+  leaseService.release = (projectId, linearIssueId) => {
+    const key = leaseKey(projectId, linearIssueId);
+    const leaseId = leaseService.activeSessionLeases.get(key);
+    db.issueSessions.releaseIssueSessionLease(projectId, linearIssueId, leaseId);
+    leaseService.activeSessionLeases.delete(key);
+  };
 }
 
 function runGit(args: string[], cwd: string): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+}
+
+function writeGhViewScript(baseDir: string, output: string): string {
+  const fakeBin = path.join(baseDir, "bin");
+  const ghPath = path.join(fakeBin, "gh");
+  mkdirSync(fakeBin, { recursive: true });
+  writeFileSync(ghPath, `#!/usr/bin/env bash
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  printf '%s' ${JSON.stringify(output)}
+  exit 0
+fi
+echo "unexpected gh args: $*" >&2
+exit 1
+`, "utf8");
+  chmodSync(ghPath, 0o755);
+  return fakeBin;
+}
+
+function summarizeRunOutcome(db: PatchRelayDatabase, issueId: string, runId: number) {
+  const issue = db.getIssue("usertold", issueId);
+  const run = db.runs.getRunById(runId);
+  return {
+    factoryState: issue?.factoryState,
+    activeRunId: issue?.activeRunId,
+    pendingRunType: issue?.pendingRunType,
+    prState: issue?.prState,
+    prHeadSha: issue?.prHeadSha,
+    prReviewState: issue?.prReviewState,
+    prCheckStatus: issue?.prCheckStatus,
+    lastGitHubFailureSource: issue?.lastGitHubFailureSource,
+    lastGitHubFailureHeadSha: issue?.lastGitHubFailureHeadSha,
+    lastGitHubFailureSignature: issue?.lastGitHubFailureSignature,
+    runStatus: run?.status,
+    runFailureReason: run?.failureReason,
+  };
+}
+
+function normalizeRunOutcomeForComparison(outcome: ReturnType<typeof summarizeRunOutcome>) {
+  return {
+    ...outcome,
+    runFailureReason: outcome.runFailureReason?.replace(/PR #\d+/g, "PR #<n>"),
+  };
 }
 
 test("reconcileIdleIssues advances approved idle issues to awaiting_queue", async () => {
@@ -343,7 +474,7 @@ exit 1
     assert.equal(issue?.prHeadSha, "sha-stuck");
     assert.equal(issue?.prReviewState, "changes_requested");
     assert.equal(issue?.prCheckStatus, "success");
-    assert.equal(db.peekIssueSessionWake("usertold", "issue-terminal-same-head")?.runType, "review_fix");
+    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-terminal-same-head")?.runType, "review_fix");
   } finally {
     process.env.PATH = oldPath;
     rmSync(baseDir, { recursive: true, force: true });
@@ -385,7 +516,7 @@ exit 1
     await (orchestrator as unknown as { idleReconciler: { reconcile: () => Promise<void> } }).idleReconciler.reconcile();
 
     const issue = db.getIssue("usertold", "issue-dirty-review-upkeep");
-    const wake = db.peekIssueSessionWake("usertold", "issue-dirty-review-upkeep");
+    const wake = db.issueSessions.peekIssueSessionWake("usertold", "issue-dirty-review-upkeep");
     assert.equal(issue?.factoryState, "changes_requested");
     assert.equal(issue?.prHeadSha, "sha-newer");
     assert.equal(issue?.prReviewState, "changes_requested");
@@ -550,7 +681,7 @@ test("reconcileIdleIssues currently routes failed idle issues to ci_repair", asy
     assert.equal(issue?.factoryState, "repairing_ci");
     assert.equal(issue?.branchOwner, "patchrelay");
     assert.equal(issue?.pendingRunType, undefined);
-    assert.equal(db.peekIssueSessionWake("usertold", "issue-12")?.runType, "ci_repair");
+    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-12")?.runType, "ci_repair");
     assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-12" }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -577,7 +708,7 @@ test("reconcileIdleIssues treats GitHub 'failure' status as a failing check", as
     const issue = db.getIssue("usertold", "issue-12b");
     assert.equal(issue?.factoryState, "repairing_ci");
     assert.equal(issue?.pendingRunType, undefined);
-    assert.equal(db.peekIssueSessionWake("usertold", "issue-12b")?.runType, "ci_repair");
+    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-12b")?.runType, "ci_repair");
     assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-12b" }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -627,7 +758,7 @@ test("reconcileIdleIssues preserves stored steward incident context for queue re
     assert.equal(issue?.factoryState, "repairing_queue");
     assert.equal(issue?.branchOwner, "patchrelay");
     assert.equal(issue?.pendingRunType, undefined);
-    assert.deepEqual(db.peekIssueSessionWake("usertold", "issue-13")?.context, {
+    assert.deepEqual(db.issueSessions.peekIssueSessionWake("usertold", "issue-13")?.context, {
       failureReason: "queue_eviction",
       checkName: "merge-steward/queue",
       checkUrl: "https://github.com/owner/repo/actions/runs/13",
@@ -687,7 +818,7 @@ exit 1`, "utf8");
     const issue = db.getIssue("usertold", "issue-13c");
     assert.equal(issue?.factoryState, "repairing_queue");
     assert.equal(issue?.pendingRunType, undefined);
-    assert.equal(db.peekIssueSessionWake("usertold", "issue-13c")?.runType, "queue_repair");
+    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-13c")?.runType, "queue_repair");
     assert.equal(issue?.lastGitHubFailureSource, "queue_eviction");
     assert.equal(issue?.lastGitHubFailureCheckName, "merge-steward/queue");
     assert.equal(issue?.lastGitHubFailureSignature, "queue_eviction::sha-13c::merge-steward/queue");
@@ -773,7 +904,7 @@ exit 1`, "utf8");
     const issue = db.getIssue("usertold", "issue-13b2");
     assert.equal(issue?.factoryState, "repairing_queue");
     assert.equal(issue?.pendingRunType, undefined);
-    assert.equal(db.peekIssueSessionWake("usertold", "issue-13b2")?.runType, "queue_repair");
+    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-13b2")?.runType, "queue_repair");
     assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-13b2" }]);
   } finally {
     process.env.PATH = oldPath;
@@ -818,7 +949,7 @@ exit 1`, "utf8");
     const issue = db.getIssue("usertold", "issue-13d");
     assert.equal(issue?.factoryState, "repairing_queue");
     assert.equal(issue?.pendingRunType, undefined);
-    assert.equal(db.peekIssueSessionWake("usertold", "issue-13d")?.runType, "queue_repair");
+    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-13d")?.runType, "queue_repair");
     assert.equal(issue?.lastGitHubFailureSource, "queue_eviction");
     assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-13d" }]);
   } finally {
@@ -866,7 +997,7 @@ exit 1`, "utf8");
     const issue = db.getIssue("usertold", "issue-13e");
     assert.equal(issue?.factoryState, "repairing_queue");
     assert.equal(issue?.pendingRunType, undefined);
-    assert.equal(db.peekIssueSessionWake("usertold", "issue-13e")?.runType, "queue_repair");
+    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-13e")?.runType, "queue_repair");
     assert.equal(issue?.lastGitHubFailureSource, "queue_eviction");
     assert.equal(issue?.lastGitHubFailureCheckName, "merge-steward/queue");
     assert.equal(issue?.lastGitHubFailureSignature, "queue_eviction::sha-13e::merge-steward/queue");
@@ -895,14 +1026,14 @@ test("reconcileRun recovers interrupted implementation runs to pr_open when a PR
     });
     const issue = db.getIssue("usertold", "issue-14");
     assert.ok(issue);
-    const run = db.createRun({
+    const run = db.runs.createRun({
       issueId: issue.id,
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       runType: "implementation",
       promptText: "Implement USE-14",
     });
-    db.updateRunThread(run.id, { threadId: "thread-14", turnId: "turn-14" });
+    db.runs.updateRunThread(run.id, { threadId: "thread-14", turnId: "turn-14" });
     db.upsertIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
@@ -926,12 +1057,12 @@ test("reconcileRun recovers interrupted implementation runs to pr_open when a PR
       pino({ enabled: false }),
     );
 
-    await (orchestrator as unknown as { reconcileRun: (run: ReturnType<typeof db.createRun>) => Promise<void> }).reconcileRun(
-      db.getRun(run.id)!,
+    await (orchestrator as unknown as { reconcileRun: (run: ReturnType<typeof db.runs.createRun>) => Promise<void> }).reconcileRun(
+      db.runs.getRunById(run.id)!,
     );
 
     const updatedIssue = db.getIssue("usertold", "issue-14");
-    const updatedRun = db.getRun(run.id);
+    const updatedRun = db.runs.getRunById(run.id);
     assert.equal(updatedIssue?.factoryState, "pr_open");
     assert.equal(updatedIssue?.activeRunId, undefined);
     assert.equal(updatedRun?.status, "failed");
@@ -959,14 +1090,14 @@ test("reconcileRun recovers interrupted implementation runs even when reconcilia
     });
     const issue = db.getIssue("usertold", "issue-14b");
     assert.ok(issue);
-    const run = db.createRun({
+    const run = db.runs.createRun({
       issueId: issue.id,
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       runType: "implementation",
       promptText: "Implement USE-14B",
     });
-    db.updateRunThread(run.id, { threadId: "thread-14b", turnId: "turn-14b" });
+    db.runs.updateRunThread(run.id, { threadId: "thread-14b", turnId: "turn-14b" });
     db.upsertIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
@@ -992,7 +1123,7 @@ test("reconcileRun recovers interrupted implementation runs even when reconcilia
 
     const leaseId = "lease-interrupted-owned";
     assert.equal(
-      db.acquireIssueSessionLease({
+      db.issueSessions.acquireIssueSessionLease({
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         leaseId,
@@ -1005,13 +1136,13 @@ test("reconcileRun recovers interrupted implementation runs even when reconcilia
     ((orchestrator as unknown as { activeSessionLeases: Map<string, string> }).activeSessionLeases)
       .set(`${issue.projectId}:${issue.linearIssueId}`, leaseId);
 
-    await (orchestrator as unknown as { reconcileRun: (run: ReturnType<typeof db.createRun>) => Promise<void> }).reconcileRun(
-      db.getRun(run.id)!,
+    await (orchestrator as unknown as { reconcileRun: (run: ReturnType<typeof db.runs.createRun>) => Promise<void> }).reconcileRun(
+      db.runs.getRunById(run.id)!,
     );
 
     const updatedIssue = db.getIssue("usertold", "issue-14b");
-    const updatedRun = db.getRun(run.id);
-    const session = db.getIssueSession(issue.projectId, issue.linearIssueId);
+    const updatedRun = db.runs.getRunById(run.id);
+    const session = db.issueSessions.getIssueSession(issue.projectId, issue.linearIssueId);
     assert.equal(updatedIssue?.factoryState, "pr_open");
     assert.equal(updatedIssue?.activeRunId, undefined);
     assert.equal(updatedRun?.status, "failed");
@@ -1042,13 +1173,13 @@ test("reconcileRun keeps interrupted ci_repair runs in repairing_ci when the PR 
     });
     const issue = db.getIssue("usertold", "issue-15");
     assert.ok(issue);
-    const run = db.createRun({
+    const run = db.runs.createRun({
       issueId: issue.id,
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       runType: "ci_repair",
     });
-    db.updateRunThread(run.id, { threadId: "thread-15", turnId: "turn-15" });
+    db.runs.updateRunThread(run.id, { threadId: "thread-15", turnId: "turn-15" });
     db.upsertIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
@@ -1068,10 +1199,10 @@ test("reconcileRun keeps interrupted ci_repair runs in repairing_ci when the PR 
       pino({ enabled: false }),
     );
 
-    await (orchestrator as unknown as { reconcileRun: (run: { id: number }) => Promise<void> }).reconcileRun(db.getRun(run.id)!);
+    await (orchestrator as unknown as { reconcileRun: (run: { id: number }) => Promise<void> }).reconcileRun(db.runs.getRunById(run.id)!);
 
     const updatedIssue = db.getIssue("usertold", "issue-15");
-    const updatedRun = db.getRun(run.id);
+    const updatedRun = db.runs.getRunById(run.id);
     assert.equal(updatedIssue?.factoryState, "repairing_ci");
     assert.equal(updatedIssue?.activeRunId, undefined);
     assert.equal(updatedIssue?.ciRepairAttempts, 0);
@@ -1107,14 +1238,14 @@ test("reconcileRun reclaims a foreign active-run lease after restart when the th
       lastAttemptedFailureHeadSha: "sha-15f",
       lastAttemptedFailureSignature: "queue_eviction::sha-15f::merge-steward/queue",
     });
-    const run = db.createRun({
+    const run = db.runs.createRun({
       issueId: issue.id,
       projectId: "usertold",
       linearIssueId: "issue-15f",
       runType: "queue_repair",
       promptText: "repair queue",
     });
-    db.updateRunThread(run.id, { threadId: "thread-15f", turnId: "turn-15f" });
+    db.runs.updateRunThread(run.id, { threadId: "thread-15f", turnId: "turn-15f" });
     db.upsertIssue({
       projectId: "usertold",
       linearIssueId: "issue-15f",
@@ -1122,7 +1253,7 @@ test("reconcileRun reclaims a foreign active-run lease after restart when the th
       factoryState: "repairing_queue",
     });
     assert.equal(
-      db.acquireIssueSessionLease({
+      db.issueSessions.acquireIssueSessionLease({
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         leaseId: "foreign-lease-15f",
@@ -1154,18 +1285,18 @@ test("reconcileRun reclaims a foreign active-run lease after restart when the th
       pino({ enabled: false }),
     );
 
-    await (orchestrator as unknown as { reconcileRun: (run: typeof run) => Promise<void> }).reconcileRun(db.getRun(run.id)!);
+    await (orchestrator as unknown as { reconcileRun: (run: typeof run) => Promise<void> }).reconcileRun(db.runs.getRunById(run.id)!);
     await (orchestrator as unknown as { idleReconciler: { reconcile: () => Promise<void> } }).idleReconciler.reconcile();
 
     const updatedIssue = db.getIssue("usertold", "issue-15f");
-    const updatedRun = db.getRun(run.id);
-    const session = db.getIssueSession(issue.projectId, issue.linearIssueId);
+    const updatedRun = db.runs.getRunById(run.id);
+    const session = db.issueSessions.getIssueSession(issue.projectId, issue.linearIssueId);
     assert.equal(updatedIssue?.factoryState, "repairing_queue");
     assert.equal(updatedIssue?.queueRepairAttempts, 0);
     assert.equal(updatedIssue?.activeRunId, undefined);
     assert.equal(updatedRun?.status, "failed");
     assert.equal(updatedRun?.failureReason, "Codex turn was interrupted");
-    assert.equal(db.peekIssueSessionWake("usertold", "issue-15f")?.runType, "queue_repair");
+    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-15f")?.runType, "queue_repair");
     assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-15f" }]);
     assert.equal(session?.leaseId, undefined);
   } finally {
@@ -1198,14 +1329,14 @@ test("reconcileRun leaves interrupted queue_repair eligible for retry on idle re
       lastAttemptedFailureHeadSha: "sha-15q",
       lastAttemptedFailureSignature: "queue_eviction::sha-15q::merge-steward/queue",
     });
-    const run = db.createRun({
+    const run = db.runs.createRun({
       issueId: issue.id,
       projectId: "usertold",
       linearIssueId: "issue-15q",
       runType: "queue_repair",
       promptText: "repair queue",
     });
-    db.updateRunThread(run.id, { threadId: "thread-15q", turnId: "turn-15q" });
+    db.runs.updateRunThread(run.id, { threadId: "thread-15q", turnId: "turn-15q" });
     db.upsertIssue({
       projectId: "usertold",
       linearIssueId: "issue-15q",
@@ -1228,15 +1359,15 @@ test("reconcileRun leaves interrupted queue_repair eligible for retry on idle re
       pino({ enabled: false }),
     );
 
-    await (orchestrator as unknown as { reconcileRun: (run: typeof run) => Promise<void> }).reconcileRun(db.getRun(run.id)!);
+    await (orchestrator as unknown as { reconcileRun: (run: typeof run) => Promise<void> }).reconcileRun(db.runs.getRunById(run.id)!);
     await (orchestrator as unknown as { idleReconciler: { reconcile: () => Promise<void> } }).idleReconciler.reconcile();
 
     const updatedIssue = db.getIssue("usertold", "issue-15q");
-    const updatedRun = db.getRun(run.id);
+    const updatedRun = db.runs.getRunById(run.id);
     assert.equal(updatedIssue?.factoryState, "repairing_queue");
     assert.equal(updatedIssue?.queueRepairAttempts, 0);
     assert.equal(updatedIssue?.pendingRunType, undefined);
-    assert.equal(db.peekIssueSessionWake("usertold", "issue-15q")?.runType, "queue_repair");
+    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-15q")?.runType, "queue_repair");
     assert.equal(updatedIssue?.activeRunId, undefined);
     assert.equal(updatedRun?.status, "failed");
     assert.equal(updatedRun?.failureReason, "Codex turn was interrupted");
@@ -1281,7 +1412,7 @@ exit 1
       reviewFixAttempts: 1,
       factoryState: "changes_requested",
     });
-    const run = db.createRun({
+    const run = db.runs.createRun({
       issueId: issue.id,
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
@@ -1289,7 +1420,7 @@ exit 1
       sourceHeadSha: "sha-review-stuck",
       promptText: "fix review",
     });
-    db.updateRunThread(run.id, { threadId: "thread-15r", turnId: "turn-15r" });
+    db.runs.updateRunThread(run.id, { threadId: "thread-15r", turnId: "turn-15r" });
     db.upsertIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
@@ -1312,10 +1443,10 @@ exit 1
       pino({ enabled: false }),
     );
 
-    await (orchestrator as unknown as { reconcileRun: (run: typeof run) => Promise<void> }).reconcileRun(db.getRun(run.id)!);
+    await (orchestrator as unknown as { reconcileRun: (run: typeof run) => Promise<void> }).reconcileRun(db.runs.getRunById(run.id)!);
 
     const updatedIssue = db.getIssue("usertold", "issue-15r");
-    const updatedRun = db.getRun(run.id);
+    const updatedRun = db.runs.getRunById(run.id);
     assert.equal(updatedIssue?.factoryState, "changes_requested");
     assert.equal(updatedIssue?.activeRunId, undefined);
     assert.equal(updatedIssue?.reviewFixAttempts, 1);
@@ -1368,7 +1499,7 @@ exit 1
       reviewFixAttempts: 2,
       factoryState: "changes_requested",
     });
-    const run = db.createRun({
+    const run = db.runs.createRun({
       issueId: issue.id,
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
@@ -1376,7 +1507,7 @@ exit 1
       sourceHeadSha: "sha-branch-upkeep-stuck",
       promptText: "repair branch",
     });
-    db.updateRunThread(run.id, { threadId: "thread-15s", turnId: "turn-15s" });
+    db.runs.updateRunThread(run.id, { threadId: "thread-15s", turnId: "turn-15s" });
     db.upsertIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
@@ -1399,10 +1530,10 @@ exit 1
       pino({ enabled: false }),
     );
 
-    await (orchestrator as unknown as { reconcileRun: (run: typeof run) => Promise<void> }).reconcileRun(db.getRun(run.id)!);
+    await (orchestrator as unknown as { reconcileRun: (run: typeof run) => Promise<void> }).reconcileRun(db.runs.getRunById(run.id)!);
 
     const updatedIssue = db.getIssue("usertold", "issue-15s");
-    const updatedRun = db.getRun(run.id);
+    const updatedRun = db.runs.getRunById(run.id);
     const pendingContext = updatedIssue?.pendingRunContextJson
       ? JSON.parse(updatedIssue.pendingRunContextJson) as Record<string, unknown>
       : undefined;
@@ -1444,7 +1575,7 @@ test("completed review_fix queues branch_upkeep when the PR is still dirty", asy
       factoryState: "changes_requested",
       reviewFixAttempts: 1,
     });
-    const run = db.createRun({
+    const run = db.runs.createRun({
       issueId: issue.id,
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
@@ -1452,7 +1583,7 @@ test("completed review_fix queues branch_upkeep when the PR is still dirty", asy
       sourceHeadSha: "sha-review-before",
       promptText: "review fix",
     });
-    db.updateRunThread(run.id, { threadId: "thread-review-dirty", turnId: "turn-review-dirty" });
+    db.runs.updateRunThread(run.id, { threadId: "thread-review-dirty", turnId: "turn-review-dirty" });
     db.upsertIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
@@ -1488,11 +1619,11 @@ exit 1
       pino({ enabled: false }),
     );
 
-    await (orchestrator as unknown as { reconcileRun: (run: typeof run) => Promise<void> }).reconcileRun(db.getRun(run.id)!);
+    await (orchestrator as unknown as { reconcileRun: (run: typeof run) => Promise<void> }).reconcileRun(db.runs.getRunById(run.id)!);
 
     const updatedIssue = db.getIssue("usertold", "issue-review-dirty");
-    const wake = db.peekIssueSessionWake("usertold", "issue-review-dirty");
-    const updatedRun = db.getRun(run.id);
+    const wake = db.issueSessions.peekIssueSessionWake("usertold", "issue-review-dirty");
+    const updatedRun = db.runs.getRunById(run.id);
     assert.equal(updatedRun?.status, "completed");
     assert.equal(updatedIssue?.factoryState, "changes_requested");
     assert.equal(updatedIssue?.pendingRunType, undefined);
@@ -1526,7 +1657,7 @@ test("completed review_fix escalates when the PR head did not advance", async ()
       factoryState: "changes_requested",
       reviewFixAttempts: 1,
     });
-    const run = db.createRun({
+    const run = db.runs.createRun({
       issueId: issue.id,
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
@@ -1534,7 +1665,7 @@ test("completed review_fix escalates when the PR head did not advance", async ()
       sourceHeadSha: "sha-review-same-head",
       promptText: "review fix",
     });
-    db.updateRunThread(run.id, { threadId: "thread-review-same-head", turnId: "turn-review-same-head" });
+    db.runs.updateRunThread(run.id, { threadId: "thread-review-same-head", turnId: "turn-review-same-head" });
     db.upsertIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
@@ -1570,15 +1701,234 @@ exit 1
       pino({ enabled: false }),
     );
 
-    await (orchestrator as unknown as { reconcileRun: (run: typeof run) => Promise<void> }).reconcileRun(db.getRun(run.id)!);
+    await (orchestrator as unknown as { reconcileRun: (run: typeof run) => Promise<void> }).reconcileRun(db.runs.getRunById(run.id)!);
 
     const updatedIssue = db.getIssue("usertold", "issue-review-same-head");
-    const updatedRun = db.getRun(run.id);
+    const updatedRun = db.runs.getRunById(run.id);
     assert.equal(updatedIssue?.factoryState, "escalated");
     assert.equal(updatedIssue?.activeRunId, undefined);
     assert.equal(updatedRun?.status, "failed");
     assert.match(updatedRun?.failureReason ?? "", /without pushing a new head/);
     assert.deepEqual(enqueueCalls, []);
+  } finally {
+    process.env.PATH = oldPath;
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("live completion and reconciliation both reject review_fix runs that never publish a newer head", { concurrency: false }, async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-review-fix-parity-"));
+  const oldPath = process.env.PATH;
+  try {
+    const fakeBin = writeGhViewScript(baseDir, '{"headRefOid":"sha-review-parity","state":"OPEN","reviewDecision":"CHANGES_REQUESTED","mergeStateStatus":"CLEAN"}');
+    process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
+
+    const liveDir = path.join(baseDir, "live");
+    const reconcileDir = path.join(baseDir, "reconcile");
+    mkdirSync(liveDir, { recursive: true });
+    mkdirSync(reconcileDir, { recursive: true });
+
+    const liveSetup = createOrchestrator(liveDir, undefined, {
+      startThread: async () => ({ threadId: "thread-review-parity-live" }),
+      steerTurn: async () => undefined,
+      readThread: async () => ({
+        id: "thread-review-parity-live",
+        turns: [{ id: "turn-review-parity-live", status: "completed", items: [] }],
+      }),
+    });
+    const liveIssue = liveSetup.db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-review-parity-live",
+      issueKey: "USE-REVIEW-PARITY",
+      branchName: "feat-review-parity",
+      prNumber: 41,
+      prState: "open",
+      prHeadSha: "sha-review-parity",
+      prReviewState: "changes_requested",
+      prCheckStatus: "success",
+      factoryState: "changes_requested",
+    });
+    const liveRun = liveSetup.db.runs.createRun({
+      issueId: liveIssue.id,
+      projectId: liveIssue.projectId,
+      linearIssueId: liveIssue.linearIssueId,
+      runType: "review_fix",
+      sourceHeadSha: "sha-review-parity",
+      promptText: "repair review feedback",
+    });
+    liveSetup.db.runs.updateRunThread(liveRun.id, { threadId: "thread-review-parity-live", turnId: "turn-review-parity-live" });
+    liveSetup.db.upsertIssue({
+      projectId: liveIssue.projectId,
+      linearIssueId: liveIssue.linearIssueId,
+      activeRunId: liveRun.id,
+      factoryState: "changes_requested",
+    });
+    const liveLeaseId = "lease-review-parity-live";
+    assert.equal(
+      liveSetup.db.issueSessions.acquireIssueSessionLease({
+        projectId: liveIssue.projectId,
+        linearIssueId: liveIssue.linearIssueId,
+        leaseId: liveLeaseId,
+        workerId: "worker-review-parity-live",
+        leasedUntil: "2030-04-06T10:05:00.000Z",
+        now: "2030-04-06T10:00:00.000Z",
+      }),
+      true,
+    );
+    ((liveSetup.orchestrator as unknown as { activeSessionLeases: Map<string, string> }).activeSessionLeases)
+      .set(`${liveIssue.projectId}:${liveIssue.linearIssueId}`, liveLeaseId);
+
+    await liveSetup.orchestrator.handleCodexNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-review-parity-live",
+        turn: {
+          id: "turn-review-parity-live",
+          status: "completed",
+        },
+      },
+    });
+
+    const reconcileSetup = createOrchestrator(reconcileDir, undefined, {
+      startThread: async () => ({ threadId: "thread-review-parity-reconcile" }),
+      steerTurn: async () => undefined,
+      readThread: async () => ({
+        id: "thread-review-parity-reconcile",
+        turns: [{ id: "turn-review-parity-reconcile", status: "completed", items: [] }],
+      }),
+    });
+    const reconcileIssue = reconcileSetup.db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-review-parity-reconcile",
+      issueKey: "USE-REVIEW-PARITY",
+      branchName: "feat-review-parity",
+      prNumber: 42,
+      prState: "open",
+      prHeadSha: "sha-review-parity",
+      prReviewState: "changes_requested",
+      prCheckStatus: "success",
+      factoryState: "changes_requested",
+    });
+    const reconcileRun = reconcileSetup.db.runs.createRun({
+      issueId: reconcileIssue.id,
+      projectId: reconcileIssue.projectId,
+      linearIssueId: reconcileIssue.linearIssueId,
+      runType: "review_fix",
+      sourceHeadSha: "sha-review-parity",
+      promptText: "repair review feedback",
+    });
+    reconcileSetup.db.runs.updateRunThread(reconcileRun.id, { threadId: "thread-review-parity-reconcile", turnId: "turn-review-parity-reconcile" });
+    reconcileSetup.db.upsertIssue({
+      projectId: reconcileIssue.projectId,
+      linearIssueId: reconcileIssue.linearIssueId,
+      activeRunId: reconcileRun.id,
+      factoryState: "changes_requested",
+    });
+    const reconcileLeaseId = "lease-review-parity-reconcile";
+    assert.equal(
+      reconcileSetup.db.issueSessions.acquireIssueSessionLease({
+        projectId: reconcileIssue.projectId,
+        linearIssueId: reconcileIssue.linearIssueId,
+        leaseId: reconcileLeaseId,
+        workerId: "worker-review-parity-reconcile",
+        leasedUntil: "2030-04-06T10:05:00.000Z",
+        now: "2030-04-06T10:00:00.000Z",
+      }),
+      true,
+    );
+    ((reconcileSetup.orchestrator as unknown as { activeSessionLeases: Map<string, string> }).activeSessionLeases)
+      .set(`${reconcileIssue.projectId}:${reconcileIssue.linearIssueId}`, reconcileLeaseId);
+
+    await reconcileSetup.orchestrator.reconcileRun(reconcileSetup.db.runs.getRunById(reconcileRun.id)!);
+
+    assert.deepEqual(
+      normalizeRunOutcomeForComparison(summarizeRunOutcome(liveSetup.db, "issue-review-parity-live", liveRun.id)),
+      normalizeRunOutcomeForComparison(summarizeRunOutcome(reconcileSetup.db, "issue-review-parity-reconcile", reconcileRun.id)),
+    );
+    assert.equal(liveSetup.db.getIssue("usertold", "issue-review-parity-live")?.factoryState, "escalated");
+    assert.equal(reconcileSetup.db.getIssue("usertold", "issue-review-parity-reconcile")?.factoryState, "escalated");
+    assert.match(
+      liveSetup.db.runs.getRunById(liveRun.id)?.failureReason ?? "",
+      /same SHA back to review/,
+    );
+    assert.match(
+      reconcileSetup.db.runs.getRunById(reconcileRun.id)?.failureReason ?? "",
+      /same SHA back to review/,
+    );
+  } finally {
+    process.env.PATH = oldPath;
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("completion notifications are ignored after the issue-session lease is lost", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-lease-loss-"));
+  const oldPath = process.env.PATH;
+  try {
+    const fakeBin = writeGhViewScript(baseDir, '{"headRefOid":"sha-lease-loss","state":"OPEN","reviewDecision":"CHANGES_REQUESTED","mergeStateStatus":"CLEAN"}');
+    process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
+
+    const { db, orchestrator } = createOrchestrator(baseDir);
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-lease-loss",
+      issueKey: "USE-LEASE-LOSS",
+      branchName: "feat-lease-loss",
+      prNumber: 51,
+      prState: "open",
+      prHeadSha: "sha-lease-loss",
+      prReviewState: "changes_requested",
+      prCheckStatus: "success",
+      factoryState: "changes_requested",
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "review_fix",
+      sourceHeadSha: "sha-lease-loss",
+      promptText: "repair review feedback",
+    });
+    db.runs.updateRunThread(run.id, { threadId: "thread-lease-loss", turnId: "turn-lease-loss" });
+    db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      activeRunId: run.id,
+      factoryState: "changes_requested",
+    });
+    const leaseId = "lease-review-lease-loss";
+    assert.equal(
+      db.issueSessions.acquireIssueSessionLease({
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        leaseId,
+        workerId: "worker-lease-loss",
+        leasedUntil: "2030-04-06T10:05:00.000Z",
+        now: "2030-04-06T10:00:00.000Z",
+      }),
+      true,
+    );
+    ((orchestrator as unknown as { activeSessionLeases: Map<string, string> }).activeSessionLeases)
+      .set(`${issue.projectId}:${issue.linearIssueId}`, leaseId);
+    db.issueSessions.releaseIssueSessionLease(issue.projectId, issue.linearIssueId, leaseId);
+
+    await orchestrator.handleCodexNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-lease-loss",
+        turn: {
+          id: "turn-lease-loss",
+          status: "completed",
+        },
+      },
+    });
+
+    const untouchedIssue = db.getIssue("usertold", "issue-lease-loss");
+    const untouchedRun = db.runs.getRunById(run.id);
+    assert.equal(untouchedIssue?.activeRunId, run.id);
+    assert.equal(untouchedIssue?.factoryState, "changes_requested");
+    assert.equal(untouchedRun?.status, "running");
+    assert.equal(untouchedRun?.failureReason, undefined);
   } finally {
     process.env.PATH = oldPath;
     rmSync(baseDir, { recursive: true, force: true });
@@ -1632,7 +1982,7 @@ exit 1
     );
     const leaseId = "lease-review-wake";
     assert.equal(
-      db.acquireIssueSessionLease({
+      db.issueSessions.acquireIssueSessionLease({
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         leaseId,
@@ -1695,7 +2045,7 @@ test("reconcileIdleIssues prioritizes queue eviction recovery over approved wait
     const issue = db.getIssue("usertold", "issue-queue-priority");
     assert.equal(issue?.factoryState, "repairing_queue");
     assert.equal(issue?.pendingRunType, undefined);
-    assert.equal(db.peekIssueSessionWake("usertold", "issue-queue-priority")?.runType, "queue_repair");
+    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-queue-priority")?.runType, "queue_repair");
     assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-queue-priority" }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -1723,13 +2073,13 @@ test("reconcileRun syncs Linear session after interrupted runs when an agent ses
     });
     const issue = db.getIssue("usertold", "issue-15b");
     assert.ok(issue);
-    const run = db.createRun({
+    const run = db.runs.createRun({
       issueId: issue.id,
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       runType: "ci_repair",
     });
-    db.updateRunThread(run.id, { threadId: "thread-15b", turnId: "turn-15b" });
+    db.runs.updateRunThread(run.id, { threadId: "thread-15b", turnId: "turn-15b" });
     db.upsertIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
@@ -1776,7 +2126,7 @@ test("reconcileRun syncs Linear session after interrupted runs when an agent ses
       pino({ enabled: false }),
     );
 
-    await (orchestrator as unknown as { reconcileRun: (run: { id: number }) => Promise<void> }).reconcileRun(db.getRun(run.id)!);
+    await (orchestrator as unknown as { reconcileRun: (run: { id: number }) => Promise<void> }).reconcileRun(db.runs.getRunById(run.id)!);
     await new Promise((resolve) => setImmediate(resolve));
 
     assert.equal(activities.length, 0);
@@ -1821,13 +2171,13 @@ exit 1
     });
     const issue = db.getIssue("usertold", "issue-16");
     assert.ok(issue);
-    const run = db.createRun({
+    const run = db.runs.createRun({
       issueId: issue.id,
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       runType: "ci_repair",
     });
-    db.updateRunThread(run.id, { threadId: "thread-16", turnId: "turn-16" });
+    db.runs.updateRunThread(run.id, { threadId: "thread-16", turnId: "turn-16" });
     db.upsertIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
@@ -1847,10 +2197,10 @@ exit 1
       pino({ enabled: false }),
     );
 
-    await (orchestrator as unknown as { reconcileRun: (run: { id: number }) => Promise<void> }).reconcileRun(db.getRun(run.id)!);
+    await (orchestrator as unknown as { reconcileRun: (run: { id: number }) => Promise<void> }).reconcileRun(db.runs.getRunById(run.id)!);
 
     const updatedIssue = db.getIssue("usertold", "issue-16");
-    const updatedRun = db.getRun(run.id);
+    const updatedRun = db.runs.getRunById(run.id);
     assert.equal(updatedIssue?.factoryState, "repairing_ci");
     assert.equal(updatedIssue?.activeRunId, undefined);
     assert.equal(updatedRun?.status, "failed");
@@ -1912,25 +2262,25 @@ exit 1
     });
     const issue = db.getIssue("usertold", "issue-17");
     assert.ok(issue);
-    const run = db.createRun({
+    const run = db.runs.createRun({
       issueId: issue.id,
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       runType: "queue_repair",
     });
-    db.updateRunThread(run.id, { threadId: "thread-17", turnId: "turn-17" });
+    db.runs.updateRunThread(run.id, { threadId: "thread-17", turnId: "turn-17" });
     db.upsertIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       activeRunId: run.id,
     });
 
-    await (orchestrator as unknown as { reconcileRun: (run: { id: number }) => Promise<void> }).reconcileRun(db.getRun(run.id)!);
+    await (orchestrator as unknown as { reconcileRun: (run: { id: number }) => Promise<void> }).reconcileRun(db.runs.getRunById(run.id)!);
 
     await (orchestrator as unknown as { idleReconciler: { reconcile: () => Promise<void> } }).idleReconciler.reconcile();
 
     const updatedIssue = db.getIssue("usertold", "issue-17");
-    const updatedRun = db.getRun(run.id);
+    const updatedRun = db.runs.getRunById(run.id);
     assert.equal(updatedRun?.status, "completed");
     assert.equal(updatedIssue?.factoryState, "awaiting_queue");
     assert.equal(updatedIssue?.activeRunId, undefined);

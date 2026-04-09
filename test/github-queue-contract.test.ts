@@ -184,7 +184,7 @@ test("queue eviction check_run queues queue_repair with explicit provenance", as
     });
 
     const issue = db.getIssue("usertold", "issue-1");
-    const wake = db.peekIssueSessionWake("usertold", "issue-1");
+    const wake = db.issueSessions.peekIssueSessionWake("usertold", "issue-1");
     assert.equal(issue?.branchOwner, "patchrelay");
     assert.equal(issue?.factoryState, "repairing_queue");
     assert.equal(wake?.runType, "queue_repair");
@@ -309,7 +309,7 @@ test("default gate fallback recognizes verify and enqueues CI repair", async () 
       }).toString("utf8"),
     });
 
-    const wake = db.peekIssueSessionWake("usertold", "issue-verify");
+    const wake = db.issueSessions.peekIssueSessionWake("usertold", "issue-verify");
     assert.equal(wake?.runType, "ci_repair");
     assert.equal(wake?.wakeReason, "settled_red_ci");
   } finally {
@@ -346,7 +346,7 @@ test("queue eviction falls back to minimal context when incident payload is malf
       }).toString("utf8"),
     });
 
-    const wake = db.peekIssueSessionWake("usertold", "issue-3");
+    const wake = db.issueSessions.peekIssueSessionWake("usertold", "issue-3");
     assert.equal(wake?.runType, "queue_repair");
     const pending = wake?.context ?? {};
     assert.equal(pending.failureReason, "queue_eviction");
@@ -429,7 +429,7 @@ test("branch CI failures clear stale queue incident context", async () => {
     });
 
     const issue = db.getIssue("usertold", "issue-4");
-    const wake = db.peekIssueSessionWake("usertold", "issue-4");
+    const wake = db.issueSessions.peekIssueSessionWake("usertold", "issue-4");
     assert.equal(issue?.branchOwner, "patchrelay");
     assert.equal(wake?.runType, "ci_repair");
     assert.equal(issue?.lastGitHubFailureSource, "branch_ci");
@@ -520,7 +520,7 @@ test("branch CI failures persist enriched Actions context in pending repair prom
     });
 
     const issue = db.getIssue("usertold", "issue-5");
-    const wake = db.peekIssueSessionWake("usertold", "issue-5");
+    const wake = db.issueSessions.peekIssueSessionWake("usertold", "issue-5");
     const pending = wake?.context ?? {};
     assert.equal(resolvedCheckName, "Checks");
     assert.equal(wake?.runType, "ci_repair");

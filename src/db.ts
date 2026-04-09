@@ -9,7 +9,6 @@ import type {
   RunRecord,
   RunStatus,
   TrackedIssueRecord,
-  ThreadEventRecord,
 } from "./db-types.ts";
 import type { FactoryState, RunType } from "./factory-state.ts";
 import {
@@ -19,18 +18,18 @@ import {
   deriveIssueSessionWakeReason,
 } from "./issue-session.ts";
 import {
-  deriveSessionWakePlan,
   extractLatestAssistantSummary,
   type IssueSessionEventType,
 } from "./issue-session-events.ts";
-import { parseGitHubFailureContext } from "./github-failure-context.ts";
-import { deriveIssueStatusNote } from "./status-note.ts";
+import { IssueSessionStore } from "./db/issue-session-store.ts";
 import { LinearInstallationStore } from "./db/linear-installation-store.ts";
 import { OperatorFeedStore } from "./db/operator-feed-store.ts";
 import { RepositoryLinkStore } from "./db/repository-link-store.ts";
+import { RunStore } from "./db/run-store.ts";
+import { WebhookEventStore } from "./db/webhook-event-store.ts";
 import { runPatchRelayMigrations } from "./db/migrations.ts";
 import { SqliteConnection, isoNow, type DatabaseConnection } from "./db/shared.ts";
-import { derivePatchRelayWaitingReason } from "./waiting-reason.ts";
+import { buildTrackedIssueRecord } from "./tracked-issue-projector.ts";
 
 function parseObjectJson(raw: string | undefined): Record<string, unknown> | undefined {
   if (!raw) return undefined;
@@ -118,6 +117,9 @@ export class PatchRelayDatabase {
   readonly linearInstallations: LinearInstallationStore;
   readonly operatorFeed: OperatorFeedStore;
   readonly repositories: RepositoryLinkStore;
+  readonly webhookEvents: WebhookEventStore;
+  readonly issueSessions: IssueSessionStore;
+  readonly runs: RunStore;
 
   constructor(databasePath: string, wal: boolean) {
     this.connection = new SqliteConnection(databasePath);
@@ -128,6 +130,26 @@ export class PatchRelayDatabase {
     this.linearInstallations = new LinearInstallationStore(this.connection);
     this.operatorFeed = new OperatorFeedStore(this.connection);
     this.repositories = new RepositoryLinkStore(this.connection);
+    this.webhookEvents = new WebhookEventStore(this.connection);
+    this.issueSessions = new IssueSessionStore(
+      this.connection,
+      mapIssueSessionRow,
+      mapIssueSessionEventRow,
+      (projectId, linearIssueId) => this.getIssue(projectId, linearIssueId),
+      deriveImplicitReactiveWake,
+      <T>(fn: () => T) => this.transaction(fn),
+      (params) => this.upsertIssue(params as Parameters<PatchRelayDatabase["upsertIssue"]>[0]),
+      (runId, params) => this.runs.finishRun(runId, params),
+      (runId, params) => this.runs.updateRunThread(runId, params),
+      (projectId, linearIssueId, owner) => this.setBranchOwner(projectId, linearIssueId, owner),
+    );
+    this.runs = new RunStore(
+      this.connection,
+      mapRunRow,
+      (id) => this.runs.getRunById(id),
+      (projectId, linearIssueId) => this.getIssue(projectId, linearIssueId),
+      (issue, options) => this.syncIssueSessionFromIssue(issue, options),
+    );
   }
 
   runMigrations(): void {
@@ -136,56 +158,6 @@ export class PatchRelayDatabase {
 
   transaction<T>(fn: () => T): T {
     return this.connection.transaction(fn)();
-  }
-
-  // ─── Webhook Events ───────────────────────────────────────────────
-
-  insertWebhookEvent(webhookId: string, receivedAt: string): { id: number; duplicate: boolean } {
-    const existing = this.connection
-      .prepare("SELECT id FROM webhook_events WHERE webhook_id = ?")
-      .get(webhookId) as { id: number } | undefined;
-    if (existing) {
-      return { id: existing.id as number, duplicate: true };
-    }
-    const result = this.connection
-      .prepare("INSERT INTO webhook_events (webhook_id, received_at, processing_status) VALUES (?, ?, 'processed')")
-      .run(webhookId, receivedAt);
-    return { id: Number(result.lastInsertRowid), duplicate: false };
-  }
-
-  insertFullWebhookEvent(params: {
-    webhookId: string;
-    receivedAt: string;
-    payloadJson: string;
-  }): { id: number; dedupeStatus: string } {
-    const existing = this.connection
-      .prepare("SELECT id FROM webhook_events WHERE webhook_id = ?")
-      .get(params.webhookId) as { id: number } | undefined;
-    if (existing) {
-      return { id: existing.id as number, dedupeStatus: "duplicate" };
-    }
-    const result = this.connection
-      .prepare("INSERT INTO webhook_events (webhook_id, received_at, payload_json) VALUES (?, ?, ?)")
-      .run(params.webhookId, params.receivedAt, params.payloadJson);
-    return { id: Number(result.lastInsertRowid), dedupeStatus: "accepted" };
-  }
-
-  getWebhookPayload(id: number): { webhookId: string; payloadJson: string } | undefined {
-    const row = this.connection.prepare("SELECT webhook_id, payload_json FROM webhook_events WHERE id = ?").get(id) as Record<string, unknown> | undefined;
-    if (!row || !row.payload_json) return undefined;
-    return { webhookId: String(row.webhook_id), payloadJson: String(row.payload_json) };
-  }
-
-  isWebhookDuplicate(webhookId: string): boolean {
-    return this.connection.prepare("SELECT 1 FROM webhook_events WHERE webhook_id = ?").get(webhookId) !== undefined;
-  }
-
-  markWebhookProcessed(id: number, status: string): void {
-    this.connection.prepare("UPDATE webhook_events SET processing_status = ? WHERE id = ?").run(status, id);
-  }
-
-  assignWebhookProject(id: number, projectId: string): void {
-    this.connection.prepare("UPDATE webhook_events SET project_id = ? WHERE id = ?").run(projectId, id);
   }
 
   // ─── Issues ───────────────────────────────────────────────────────
@@ -410,419 +382,12 @@ export class PatchRelayDatabase {
     return row ? mapIssueRow(row) : undefined;
   }
 
-  getIssueSession(projectId: string, linearIssueId: string): IssueSessionRecord | undefined {
-    const row = this.connection
-      .prepare("SELECT * FROM issue_sessions WHERE project_id = ? AND linear_issue_id = ?")
-      .get(projectId, linearIssueId) as Record<string, unknown> | undefined;
-    return row ? mapIssueSessionRow(row) : undefined;
-  }
-
-  getIssueSessionByKey(issueKey: string): IssueSessionRecord | undefined {
-    const row = this.connection.prepare("SELECT * FROM issue_sessions WHERE issue_key = ?").get(issueKey) as Record<string, unknown> | undefined;
-    return row ? mapIssueSessionRow(row) : undefined;
-  }
-
-  appendIssueSessionEvent(params: {
-    projectId: string;
-    linearIssueId: string;
-    eventType: IssueSessionEventType;
-    eventJson?: string | undefined;
-    dedupeKey?: string | undefined;
-  }): IssueSessionEventRecord {
-    if (params.dedupeKey) {
-      const existing = this.connection.prepare(`
-        SELECT * FROM issue_session_events
-        WHERE project_id = ? AND linear_issue_id = ? AND dedupe_key = ? AND processed_at IS NULL
-        ORDER BY id DESC LIMIT 1
-      `).get(params.projectId, params.linearIssueId, params.dedupeKey) as Record<string, unknown> | undefined;
-      if (existing) return mapIssueSessionEventRow(existing);
-    }
-
-    const now = isoNow();
-    const result = this.connection.prepare(`
-      INSERT INTO issue_session_events (
-        project_id, linear_issue_id, event_type, event_json, dedupe_key, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?)
-    `).run(
-      params.projectId,
-      params.linearIssueId,
-      params.eventType,
-      params.eventJson ?? null,
-      params.dedupeKey ?? null,
-      now,
-    );
-    return this.getIssueSessionEvent(Number(result.lastInsertRowid))!;
-  }
-
-  appendIssueSessionEventWithLease(
-    lease: { projectId: string; linearIssueId: string; leaseId: string },
-    params: Parameters<PatchRelayDatabase["appendIssueSessionEvent"]>[0],
-  ): IssueSessionEventRecord | undefined {
-    return this.withIssueSessionLease(lease.projectId, lease.linearIssueId, lease.leaseId, () => this.appendIssueSessionEvent(params));
-  }
-
-  appendIssueSessionEventRespectingActiveLease(
-    projectId: string,
-    linearIssueId: string,
-    params: Parameters<PatchRelayDatabase["appendIssueSessionEvent"]>[0],
-  ): IssueSessionEventRecord | undefined {
-    const lease = this.getActiveIssueSessionLease(projectId, linearIssueId);
-    if (!lease) {
-      return this.appendIssueSessionEvent(params);
-    }
-    return this.appendIssueSessionEventWithLease(lease, params);
-  }
-
-  getIssueSessionEvent(id: number): IssueSessionEventRecord | undefined {
-    const row = this.connection.prepare("SELECT * FROM issue_session_events WHERE id = ?").get(id) as Record<string, unknown> | undefined;
-    return row ? mapIssueSessionEventRow(row) : undefined;
-  }
-
-  listIssueSessionEvents(
-    projectId: string,
-    linearIssueId: string,
-    options?: { pendingOnly?: boolean; limit?: number },
-  ): IssueSessionEventRecord[] {
-    const conditions = ["project_id = ?", "linear_issue_id = ?"];
-    const values: Array<string | number> = [projectId, linearIssueId];
-    if (options?.pendingOnly) {
-      conditions.push("processed_at IS NULL");
-    }
-    let query = `SELECT * FROM issue_session_events WHERE ${conditions.join(" AND ")} ORDER BY id`;
-    if (options?.limit !== undefined) {
-      query += " LIMIT ?";
-      values.push(options.limit);
-    }
-    const rows = this.connection.prepare(query).all(...values) as Array<Record<string, unknown>>;
-    return rows.map(mapIssueSessionEventRow);
-  }
-
-  consumeIssueSessionEvents(projectId: string, linearIssueId: string, eventIds: number[], runId: number): void {
-    if (eventIds.length === 0) return;
-    const now = isoNow();
-    const placeholders = eventIds.map(() => "?").join(", ");
-    this.connection.prepare(`
-      UPDATE issue_session_events
-      SET processed_at = ?, consumed_by_run_id = ?
-      WHERE project_id = ? AND linear_issue_id = ? AND id IN (${placeholders}) AND processed_at IS NULL
-    `).run(now, runId, projectId, linearIssueId, ...eventIds);
-  }
-
-  clearPendingIssueSessionEvents(projectId: string, linearIssueId: string): void {
-    this.connection.prepare(`
-      UPDATE issue_session_events
-      SET processed_at = ?, consumed_by_run_id = NULL
-      WHERE project_id = ? AND linear_issue_id = ? AND processed_at IS NULL
-    `).run(isoNow(), projectId, linearIssueId);
-  }
-
-  hasPendingIssueSessionEvents(projectId: string, linearIssueId: string): boolean {
-    const row = this.connection.prepare(`
-      SELECT 1
-      FROM issue_session_events
-      WHERE project_id = ? AND linear_issue_id = ? AND processed_at IS NULL
-      LIMIT 1
-    `).get(projectId, linearIssueId) as Record<string, unknown> | undefined;
-    return row !== undefined;
-  }
-
-  peekIssueSessionWake(projectId: string, linearIssueId: string): {
-    eventIds: number[];
-    runType: RunType;
-    context: Record<string, unknown>;
-    wakeReason?: string | undefined;
-    resumeThread: boolean;
-  } | undefined {
-    const issue = this.getIssue(projectId, linearIssueId);
-    if (!issue) return undefined;
-    const events = this.listIssueSessionEvents(projectId, linearIssueId, { pendingOnly: true });
-    const plan = deriveSessionWakePlan(issue, events);
-    if (plan?.runType) {
-      return {
-        eventIds: events.map((event) => event.id),
-        runType: plan.runType,
-        context: plan.context,
-        ...(plan.wakeReason ? { wakeReason: plan.wakeReason } : {}),
-        resumeThread: plan.resumeThread,
-      };
-    }
-    const implicitWake = deriveImplicitReactiveWake(issue);
-    if (!implicitWake) return undefined;
-    return {
-      eventIds: [],
-      runType: implicitWake.runType,
-      context: implicitWake.context,
-      wakeReason: implicitWake.wakeReason,
-      resumeThread: false,
-    };
-  }
-
-  acquireIssueSessionLease(params: {
-    projectId: string;
-    linearIssueId: string;
-    leaseId: string;
-    workerId: string;
-    leasedUntil: string;
-    now?: string;
-  }): boolean {
-    const now = params.now ?? isoNow();
-    const result = this.connection.prepare(`
-      UPDATE issue_sessions
-      SET lease_id = ?, worker_id = ?, leased_until = ?, updated_at = ?
-      WHERE project_id = ? AND linear_issue_id = ?
-        AND (leased_until IS NULL OR leased_until <= ? OR lease_id = ?)
-    `).run(
-      params.leaseId,
-      params.workerId,
-      params.leasedUntil,
-      now,
-      params.projectId,
-      params.linearIssueId,
-      now,
-      params.leaseId,
-    );
-    return Number(result.changes ?? 0) > 0;
-  }
-
-  forceAcquireIssueSessionLease(params: {
-    projectId: string;
-    linearIssueId: string;
-    leaseId: string;
-    workerId: string;
-    leasedUntil: string;
-    now?: string;
-  }): boolean {
-    const now = params.now ?? isoNow();
-    const result = this.connection.prepare(`
-      UPDATE issue_sessions
-      SET lease_id = ?, worker_id = ?, leased_until = ?, updated_at = ?
-      WHERE project_id = ? AND linear_issue_id = ?
-    `).run(
-      params.leaseId,
-      params.workerId,
-      params.leasedUntil,
-      now,
-      params.projectId,
-      params.linearIssueId,
-    );
-    return Number(result.changes ?? 0) > 0;
-  }
-
-  renewIssueSessionLease(params: {
-    projectId: string;
-    linearIssueId: string;
-    leaseId: string;
-    leasedUntil: string;
-    now?: string;
-  }): boolean {
-    const now = params.now ?? isoNow();
-    const result = this.connection.prepare(`
-      UPDATE issue_sessions
-      SET leased_until = ?, updated_at = ?
-      WHERE project_id = ? AND linear_issue_id = ? AND lease_id = ?
-    `).run(
-      params.leasedUntil,
-      now,
-      params.projectId,
-      params.linearIssueId,
-      params.leaseId,
-    );
-    return Number(result.changes ?? 0) > 0;
-  }
-
-  releaseIssueSessionLease(projectId: string, linearIssueId: string, leaseId?: string): void {
-    this.connection.prepare(`
-      UPDATE issue_sessions
-      SET lease_id = NULL, worker_id = NULL, leased_until = NULL, updated_at = ?
-      WHERE project_id = ? AND linear_issue_id = ? AND (? IS NULL OR lease_id = ?)
-    `).run(isoNow(), projectId, linearIssueId, leaseId ?? null, leaseId ?? null);
-  }
-
-  releaseExpiredIssueSessionLeases(now = isoNow()): void {
-    this.connection.prepare(`
-      UPDATE issue_sessions
-      SET lease_id = NULL, worker_id = NULL, leased_until = NULL, updated_at = ?
-      WHERE leased_until IS NOT NULL AND leased_until <= ?
-    `).run(now, now);
-  }
-
-  hasActiveIssueSessionLease(projectId: string, linearIssueId: string, leaseId: string, now = isoNow()): boolean {
-    const row = this.connection.prepare(`
-      SELECT 1
-      FROM issue_sessions
-      WHERE project_id = ? AND linear_issue_id = ? AND lease_id = ?
-        AND leased_until IS NOT NULL
-        AND leased_until > ?
-      LIMIT 1
-    `).get(projectId, linearIssueId, leaseId, now) as Record<string, unknown> | undefined;
-    return row !== undefined;
-  }
-
-  getActiveIssueSessionLease(
-    projectId: string,
-    linearIssueId: string,
-    now = isoNow(),
-  ): { projectId: string; linearIssueId: string; leaseId: string } | undefined {
-    const row = this.connection.prepare(`
-      SELECT lease_id
-      FROM issue_sessions
-      WHERE project_id = ? AND linear_issue_id = ?
-        AND lease_id IS NOT NULL
-        AND leased_until IS NOT NULL
-        AND leased_until > ?
-      LIMIT 1
-    `).get(projectId, linearIssueId, now) as Record<string, unknown> | undefined;
-    const leaseId = typeof row?.lease_id === "string" ? row.lease_id : undefined;
-    if (!leaseId) return undefined;
-    return { projectId, linearIssueId, leaseId };
-  }
-
-  withIssueSessionLease<T>(
-    projectId: string,
-    linearIssueId: string,
-    leaseId: string,
-    fn: () => T,
-  ): T | undefined {
-    return this.transaction(() => {
-      if (!this.hasActiveIssueSessionLease(projectId, linearIssueId, leaseId)) {
-        return undefined;
-      }
-      return fn();
-    });
-  }
-
-  upsertIssueWithLease(
-    lease: { projectId: string; linearIssueId: string; leaseId: string },
-    params: Parameters<PatchRelayDatabase["upsertIssue"]>[0],
-  ): IssueRecord | undefined {
-    return this.withIssueSessionLease(lease.projectId, lease.linearIssueId, lease.leaseId, () => this.upsertIssue(params));
-  }
-
-  upsertIssueRespectingActiveLease(
-    projectId: string,
-    linearIssueId: string,
-    params: Parameters<PatchRelayDatabase["upsertIssue"]>[0],
-  ): IssueRecord | undefined {
-    const lease = this.getActiveIssueSessionLease(projectId, linearIssueId);
-    if (!lease) {
-      return this.upsertIssue(params);
-    }
-    return this.upsertIssueWithLease(lease, params);
-  }
-
-  finishRunWithLease(
-    lease: { projectId: string; linearIssueId: string; leaseId: string },
-    runId: number,
-    params: Parameters<PatchRelayDatabase["finishRun"]>[1],
-  ): boolean {
-    return this.withIssueSessionLease(lease.projectId, lease.linearIssueId, lease.leaseId, () => {
-      this.finishRun(runId, params);
-      return true;
-    }) ?? false;
-  }
-
-  finishRunRespectingActiveLease(
-    projectId: string,
-    linearIssueId: string,
-    runId: number,
-    params: Parameters<PatchRelayDatabase["finishRun"]>[1],
-  ): boolean {
-    const lease = this.getActiveIssueSessionLease(projectId, linearIssueId);
-    if (!lease) {
-      this.finishRun(runId, params);
-      return true;
-    }
-    return this.finishRunWithLease(lease, runId, params);
-  }
-
-  updateRunThreadWithLease(
-    lease: { projectId: string; linearIssueId: string; leaseId: string },
-    runId: number,
-    params: Parameters<PatchRelayDatabase["updateRunThread"]>[1],
-  ): boolean {
-    return this.withIssueSessionLease(lease.projectId, lease.linearIssueId, lease.leaseId, () => {
-      this.updateRunThread(runId, params);
-      return true;
-    }) ?? false;
-  }
-
-  consumeIssueSessionEventsWithLease(
-    lease: { projectId: string; linearIssueId: string; leaseId: string },
-    eventIds: number[],
-    runId: number,
-  ): boolean {
-    return this.withIssueSessionLease(lease.projectId, lease.linearIssueId, lease.leaseId, () => {
-      this.consumeIssueSessionEvents(lease.projectId, lease.linearIssueId, eventIds, runId);
-      return true;
-    }) ?? false;
-  }
-
-  clearPendingIssueSessionEventsWithLease(
-    lease: { projectId: string; linearIssueId: string; leaseId: string },
-  ): boolean {
-    return this.withIssueSessionLease(lease.projectId, lease.linearIssueId, lease.leaseId, () => {
-      this.clearPendingIssueSessionEvents(lease.projectId, lease.linearIssueId);
-      return true;
-    }) ?? false;
-  }
-
-  clearPendingIssueSessionEventsRespectingActiveLease(projectId: string, linearIssueId: string): boolean {
-    const lease = this.getActiveIssueSessionLease(projectId, linearIssueId);
-    if (!lease) {
-      this.clearPendingIssueSessionEvents(projectId, linearIssueId);
-      return true;
-    }
-    return this.clearPendingIssueSessionEventsWithLease(lease);
-  }
-
-  setIssueSessionLastWakeReasonWithLease(
-    lease: { projectId: string; linearIssueId: string; leaseId: string },
-    lastWakeReason?: string | null,
-  ): boolean {
-    return this.withIssueSessionLease(lease.projectId, lease.linearIssueId, lease.leaseId, () => {
-      this.setIssueSessionLastWakeReason(lease.projectId, lease.linearIssueId, lastWakeReason);
-      return true;
-    }) ?? false;
-  }
-
-  setIssueSessionLastWakeReason(projectId: string, linearIssueId: string, lastWakeReason?: string | null): void {
-    this.connection.prepare(`
-      UPDATE issue_sessions
-      SET last_wake_reason = ?, updated_at = ?
-      WHERE project_id = ? AND linear_issue_id = ?
-    `).run(lastWakeReason ?? null, isoNow(), projectId, linearIssueId);
-  }
-
   setBranchOwner(projectId: string, linearIssueId: string, owner: BranchOwner): void {
     this.connection.prepare(`
       UPDATE issues
       SET branch_owner = ?, branch_ownership_changed_at = ?, updated_at = ?
       WHERE project_id = ? AND linear_issue_id = ?
     `).run(owner, isoNow(), isoNow(), projectId, linearIssueId);
-  }
-
-  setBranchOwnerWithLease(
-    lease: { projectId: string; linearIssueId: string; leaseId: string },
-    owner: BranchOwner,
-  ): boolean {
-    return this.withIssueSessionLease(lease.projectId, lease.linearIssueId, lease.leaseId, () => {
-      this.setBranchOwner(lease.projectId, lease.linearIssueId, owner);
-      return true;
-    }) ?? false;
-  }
-
-  setBranchOwnerRespectingActiveLease(projectId: string, linearIssueId: string, owner: BranchOwner): boolean {
-    const lease = this.getActiveIssueSessionLease(projectId, linearIssueId);
-    if (!lease) {
-      this.setBranchOwner(projectId, linearIssueId, owner);
-      return true;
-    }
-    return this.setBranchOwnerWithLease(lease, owner);
-  }
-
-  releaseIssueSessionLeaseRespectingActiveLease(projectId: string, linearIssueId: string): void {
-    const lease = this.getActiveIssueSessionLease(projectId, linearIssueId);
-    this.releaseIssueSessionLease(projectId, linearIssueId, lease?.leaseId);
   }
 
   replaceIssueDependencies(params: {
@@ -957,7 +522,7 @@ export class PatchRelayDatabase {
         }),
         activeRunId: issue.activeRunId,
         blockedByCount: this.countUnresolvedBlockers(issue.projectId, issue.linearIssueId),
-        hasPendingWake: this.peekIssueSessionWake(issue.projectId, issue.linearIssueId) !== undefined,
+        hasPendingWake: this.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId) !== undefined,
         hasLegacyPendingRun: issue.pendingRunType !== undefined,
         prNumber: issue.prNumber,
         prState: issue.prState,
@@ -1029,236 +594,17 @@ export class PatchRelayDatabase {
     return rows.map(mapIssueRow);
   }
 
-  // ─── Runs ─────────────────────────────────────────────────────────
-
-  createRun(params: {
-    issueId: number;
-    projectId: string;
-    linearIssueId: string;
-    runType: RunType;
-    sourceHeadSha?: string;
-    promptText?: string;
-  }): RunRecord {
-    const now = isoNow();
-    const result = this.connection.prepare(`
-      INSERT INTO runs (issue_id, project_id, linear_issue_id, run_type, status, source_head_sha, prompt_text, started_at)
-      VALUES (?, ?, ?, ?, 'queued', ?, ?, ?)
-    `).run(
-      params.issueId,
-      params.projectId,
-      params.linearIssueId,
-      params.runType,
-      params.sourceHeadSha ?? null,
-      params.promptText ?? null,
-      now,
-    );
-    const run = this.getRun(Number(result.lastInsertRowid))!;
-    const issue = this.getIssue(params.projectId, params.linearIssueId);
-    if (issue) {
-      this.syncIssueSessionFromIssue(issue, { lastRunType: run.runType });
-    }
-    return run;
-  }
-
-  getRun(id: number): RunRecord | undefined {
-    const row = this.connection.prepare("SELECT * FROM runs WHERE id = ?").get(id) as Record<string, unknown> | undefined;
-    return row ? mapRunRow(row) : undefined;
-  }
-
-  getRunByThreadId(threadId: string): RunRecord | undefined {
-    const row = this.connection.prepare("SELECT * FROM runs WHERE thread_id = ?").get(threadId) as Record<string, unknown> | undefined;
-    return row ? mapRunRow(row) : undefined;
-  }
-
-  listRunsForIssue(projectId: string, linearIssueId: string): RunRecord[] {
-    const rows = this.connection
-      .prepare("SELECT * FROM runs WHERE project_id = ? AND linear_issue_id = ? ORDER BY id")
-      .all(projectId, linearIssueId) as Array<Record<string, unknown>>;
-    return rows.map(mapRunRow);
-  }
-
-  getLatestRunForIssue(projectId: string, linearIssueId: string): RunRecord | undefined {
-    const row = this.connection
-      .prepare("SELECT * FROM runs WHERE project_id = ? AND linear_issue_id = ? ORDER BY id DESC LIMIT 1")
-      .get(projectId, linearIssueId) as Record<string, unknown> | undefined;
-    return row ? mapRunRow(row) : undefined;
-  }
-
-  listActiveRuns(): RunRecord[] {
-    const rows = this.connection
-      .prepare("SELECT * FROM runs WHERE status IN ('queued', 'running')")
-      .all() as Array<Record<string, unknown>>;
-    return rows.map(mapRunRow);
-  }
-
-  listRunningRuns(): RunRecord[] {
-    const rows = this.connection
-      .prepare("SELECT * FROM runs WHERE status IN ('running', 'queued')")
-      .all() as Array<Record<string, unknown>>;
-    return rows.map(mapRunRow);
-  }
-
-  updateRunThread(runId: number, params: { threadId: string; parentThreadId?: string; turnId?: string }): void {
-    this.connection.prepare(`
-      UPDATE runs SET
-        thread_id = ?,
-        parent_thread_id = COALESCE(?, parent_thread_id),
-        turn_id = COALESCE(?, turn_id),
-        status = 'running'
-      WHERE id = ?
-        AND ended_at IS NULL
-        AND status IN ('queued', 'running')
-    `).run(params.threadId, params.parentThreadId ?? null, params.turnId ?? null, runId);
-    const run = this.getRun(runId);
-    if (!run) return;
-    const issue = this.getIssue(run.projectId, run.linearIssueId);
-    if (issue) {
-      this.syncIssueSessionFromIssue(issue);
-    }
-  }
-
-  updateRunTurnId(runId: number, turnId: string): void {
-    this.connection.prepare("UPDATE runs SET turn_id = ? WHERE id = ?").run(turnId, runId);
-  }
-
-  finishRun(runId: number, params: {
-    status: RunStatus;
-    threadId?: string;
-    turnId?: string;
-    failureReason?: string;
-    summaryJson?: string;
-    reportJson?: string;
-  }): void {
-    const now = isoNow();
-    this.connection.prepare(`
-      UPDATE runs SET
-        status = ?,
-        thread_id = COALESCE(?, thread_id),
-        turn_id = COALESCE(?, turn_id),
-        failure_reason = COALESCE(?, failure_reason),
-        summary_json = COALESCE(?, summary_json),
-        report_json = COALESCE(?, report_json),
-        ended_at = ?
-      WHERE id = ?
-    `).run(
-      params.status,
-      params.threadId ?? null,
-      params.turnId ?? null,
-      params.failureReason ?? null,
-      params.summaryJson ?? null,
-      params.reportJson ?? null,
-      now,
-      runId,
-    );
-    const run = this.getRun(runId);
-    if (!run) return;
-    const issue = this.getIssue(run.projectId, run.linearIssueId);
-    if (issue) {
-      this.syncIssueSessionFromIssue(issue, {
-        summaryText: extractLatestAssistantSummary(this.getRun(runId) ?? run),
-        lastRunType: run.runType,
-      });
-    }
-  }
-
-  // ─── Thread Events (kept for extended history) ────────────────────
-
-  saveThreadEvent(params: {
-    runId: number;
-    threadId: string;
-    turnId?: string;
-    method: string;
-    eventJson: string;
-  }): void {
-    this.connection.prepare(`
-      INSERT INTO run_thread_events (run_id, thread_id, turn_id, method, event_json, created_at)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(params.runId, params.threadId, params.turnId ?? null, params.method, params.eventJson, isoNow());
-  }
-
-  listThreadEvents(runId: number): ThreadEventRecord[] {
-    const rows = this.connection
-      .prepare("SELECT * FROM run_thread_events WHERE run_id = ? ORDER BY id")
-      .all(runId) as Array<Record<string, unknown>>;
-    return rows.map((row) => ({
-      id: Number(row.id),
-      runId: Number(row.run_id),
-      threadId: String(row.thread_id),
-      ...(row.turn_id !== null ? { turnId: String(row.turn_id) } : {}),
-      method: String(row.method),
-      eventJson: String(row.event_json),
-      createdAt: String(row.created_at),
-    }));
-  }
-
   // ─── View builders ──────────────────────────────────────────────
 
   issueToTrackedIssue(issue: IssueRecord): TrackedIssueRecord {
-    const session = this.getIssueSession(issue.projectId, issue.linearIssueId);
-    const blockedBy = this.listIssueDependencies(issue.projectId, issue.linearIssueId);
-    const unresolvedBlockedBy = blockedBy.filter((entry) => !isResolvedLinearState(entry.blockerCurrentLinearStateType, entry.blockerCurrentLinearState));
-    const pendingWake = this.peekIssueSessionWake(issue.projectId, issue.linearIssueId);
-    const failureContext = parseGitHubFailureContext(issue.lastGitHubFailureContextJson);
-    const blockedByKeys = unresolvedBlockedBy.map((entry) => entry.blockerIssueKey ?? entry.blockerLinearIssueId);
-    const waitingReason = derivePatchRelayWaitingReason({
-      ...(issue.activeRunId !== undefined ? { activeRunId: issue.activeRunId } : {}),
-      blockedByKeys,
-      factoryState: issue.factoryState,
-      pendingRunType: issue.pendingRunType,
-      prNumber: issue.prNumber,
-      prHeadSha: issue.prHeadSha,
-      prReviewState: issue.prReviewState,
-      prCheckStatus: issue.prCheckStatus,
-      lastBlockingReviewHeadSha: issue.lastBlockingReviewHeadSha,
-      latestFailureCheckName: issue.lastGitHubFailureCheckName,
-    });
-    const latestRun = this.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
-    const latestEvent = this.listIssueSessionEvents(issue.projectId, issue.linearIssueId, { limit: 1 }).at(-1);
-    const statusNote = deriveIssueStatusNote({
+    return buildTrackedIssueRecord({
       issue,
-      sessionSummary: session?.summaryText,
-      latestRun,
-      latestEvent,
-      failureSummary: failureContext?.summary,
-      blockedByKeys,
-      waitingReason,
+      session: this.issueSessions.getIssueSession(issue.projectId, issue.linearIssueId),
+      blockedBy: this.listIssueDependencies(issue.projectId, issue.linearIssueId),
+      hasPendingWake: this.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId) !== undefined,
+      latestRun: this.runs.getLatestRunForIssue(issue.projectId, issue.linearIssueId),
+      latestEvent: this.issueSessions.listIssueSessionEvents(issue.projectId, issue.linearIssueId, { limit: 1 }).at(-1),
     });
-    return {
-      id: issue.id,
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
-      ...(issue.title ? { title: issue.title } : {}),
-      ...(issue.url ? { issueUrl: issue.url } : {}),
-      ...(statusNote ? { statusNote } : {}),
-      ...(issue.currentLinearState ? { currentLinearState: issue.currentLinearState } : {}),
-      ...(session?.sessionState ? { sessionState: session.sessionState } : {}),
-      factoryState: issue.factoryState,
-      blockedByCount: unresolvedBlockedBy.length,
-      blockedByKeys,
-      readyForExecution: isIssueSessionReadyForExecution({
-        sessionState: session?.sessionState,
-        factoryState: issue.factoryState,
-        activeRunId: issue.activeRunId,
-        blockedByCount: unresolvedBlockedBy.length,
-        hasPendingWake: pendingWake !== undefined,
-        hasLegacyPendingRun: issue.pendingRunType !== undefined,
-        ...(issue.prNumber !== undefined ? { prNumber: issue.prNumber } : {}),
-        ...(issue.prState ? { prState: issue.prState } : {}),
-        ...(issue.prReviewState ? { prReviewState: issue.prReviewState } : {}),
-        ...(issue.prCheckStatus ? { prCheckStatus: issue.prCheckStatus } : {}),
-        ...(issue.lastGitHubFailureSource ? { latestFailureSource: issue.lastGitHubFailureSource } : {}),
-      }),
-      ...(issue.lastGitHubFailureSource ? { latestFailureSource: issue.lastGitHubFailureSource } : {}),
-      ...(issue.lastGitHubFailureHeadSha ? { latestFailureHeadSha: issue.lastGitHubFailureHeadSha } : {}),
-      ...(issue.lastGitHubFailureCheckName ? { latestFailureCheckName: issue.lastGitHubFailureCheckName } : {}),
-      ...(failureContext?.stepName ? { latestFailureStepName: failureContext.stepName } : {}),
-      ...(failureContext?.summary ? { latestFailureSummary: failureContext.summary } : {}),
-      ...(waitingReason ? { waitingReason } : {}),
-      ...(issue.activeRunId !== undefined ? { activeRunId: issue.activeRunId } : {}),
-      ...(issue.agentSessionId ? { activeAgentSessionId: issue.agentSessionId } : {}),
-      updatedAt: issue.updatedAt,
-    };
   }
 
   getTrackedIssue(projectId: string, linearIssueId: string): TrackedIssueRecord | undefined {
@@ -1285,34 +631,6 @@ export class PatchRelayDatabase {
     return rows.map(mapIssueRow);
   }
 
-  findLatestAgentSessionIdForIssue(linearIssueId: string): string | undefined {
-    const row = this.connection.prepare(`
-      SELECT COALESCE(
-        json_extract(payload_json, '$.agentSession.id'),
-        json_extract(payload_json, '$.data.agentSession.id'),
-        json_extract(payload_json, '$.agentSessionId'),
-        json_extract(payload_json, '$.data.agentSessionId')
-      ) AS agent_session_id
-      FROM webhook_events
-      WHERE COALESCE(
-        json_extract(payload_json, '$.agentSession.issueId'),
-        json_extract(payload_json, '$.data.agentSession.issueId'),
-        json_extract(payload_json, '$.agentSession.issue.id'),
-        json_extract(payload_json, '$.data.agentSession.issue.id')
-      ) = ?
-        AND COALESCE(
-          json_extract(payload_json, '$.agentSession.id'),
-          json_extract(payload_json, '$.data.agentSession.id'),
-          json_extract(payload_json, '$.agentSessionId'),
-          json_extract(payload_json, '$.data.agentSessionId')
-        ) IS NOT NULL
-      ORDER BY id DESC
-      LIMIT 1
-    `).get(linearIssueId) as Record<string, unknown> | undefined;
-
-    return row?.agent_session_id != null ? String(row.agent_session_id) : undefined;
-  }
-
   // ─── Issue overview for query service ─────────────────────────────
 
   getIssueOverview(issueKey: string): {
@@ -1322,7 +640,7 @@ export class PatchRelayDatabase {
     const issue = this.getIssueByKey(issueKey);
     if (!issue) return undefined;
     const tracked = this.issueToTrackedIssue(issue);
-    const activeRun = issue.activeRunId ? this.getRun(issue.activeRunId) : undefined;
+    const activeRun = issue.activeRunId ? this.runs.getRunById(issue.activeRunId) : undefined;
     return {
       issue: tracked,
       ...(activeRun ? { activeRun } : {}),
@@ -1338,8 +656,8 @@ export class PatchRelayDatabase {
     },
   ): void {
     const tracked = this.issueToTrackedIssue(issue);
-    const existing = this.getIssueSession(issue.projectId, issue.linearIssueId);
-    const latestRun = this.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
+    const existing = this.issueSessions.getIssueSession(issue.projectId, issue.linearIssueId);
+    const latestRun = this.runs.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
     const latestRunType = options?.lastRunType ?? latestRun?.runType ?? existing?.lastRunType;
     const summaryText = this.resolveIssueSessionSummary(issue, latestRun, existing?.summaryText, options?.summaryText);
     const activeThreadId = issue.threadId ?? existing?.activeThreadId;
@@ -1482,7 +800,7 @@ export class PatchRelayDatabase {
   }
 
   private findLatestCompletedRunSummary(projectId: string, linearIssueId: string): string | undefined {
-    const runs = this.listRunsForIssue(projectId, linearIssueId);
+    const runs = this.runs.listRunsForIssue(projectId, linearIssueId);
     for (let index = runs.length - 1; index >= 0; index -= 1) {
       const run = runs[index];
       if (!run || run.status !== "completed") {
@@ -1660,8 +978,4 @@ function mapRunRow(row: Record<string, unknown>): RunRecord {
     startedAt: String(row.started_at),
     ...(row.ended_at !== null ? { endedAt: String(row.ended_at) } : {}),
   };
-}
-
-function isResolvedLinearState(stateType: string | undefined, stateName: string | undefined): boolean {
-  return stateType === "completed" || stateName?.trim().toLowerCase() === "done";
 }

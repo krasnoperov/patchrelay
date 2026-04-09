@@ -183,7 +183,7 @@ export class PatchRelayService {
   }
 
   async start(): Promise<void> {
-    this.db.releaseExpiredIssueSessionLeases();
+    this.db.issueSessions.releaseExpiredIssueSessionLeases();
 
     const repairedInstallations = this.db.linearInstallations.repairProjectInstallations(
       this.config.projects.map((project) => project.id),
@@ -248,7 +248,7 @@ export class PatchRelayService {
       const syncedIssue = issue.agentSessionId
         ? issue
         : (() => {
-            const recoveredAgentSessionId = this.db.findLatestAgentSessionIdForIssue(issue.linearIssueId);
+            const recoveredAgentSessionId = this.db.webhookEvents.findLatestAgentSessionIdForIssue(issue.linearIssueId);
             return recoveredAgentSessionId
               ? this.db.upsertIssue({
                   projectId: issue.projectId,
@@ -260,7 +260,7 @@ export class PatchRelayService {
       if (!syncedIssue.agentSessionId) {
         continue;
       }
-      const activeRun = syncedIssue.activeRunId ? this.db.getRun(syncedIssue.activeRunId) : undefined;
+      const activeRun = syncedIssue.activeRunId ? this.db.runs.getRunById(syncedIssue.activeRunId) : undefined;
       await this.orchestrator.linearSync.syncSession(syncedIssue, activeRun ? { activeRunType: activeRun.runType } : undefined);
     }
   }
@@ -301,7 +301,7 @@ export class PatchRelayService {
       const shouldRecoverAwaitingInput =
         delegated
         && issue.factoryState === "awaiting_input"
-        && this.db.peekIssueSessionWake(issue.projectId, issue.linearIssueId) === undefined;
+        && this.db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId) === undefined;
 
       const updated = this.db.upsertIssue({
         projectId: issue.projectId,
@@ -322,13 +322,13 @@ export class PatchRelayService {
       }
 
       if (unresolvedBlockers === 0) {
-        this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+        this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
           projectId: issue.projectId,
           linearIssueId: issue.linearIssueId,
           eventType: "delegated",
           dedupeKey: `delegated:${issue.linearIssueId}`,
         });
-        if (this.db.peekIssueSessionWake(issue.projectId, issue.linearIssueId)) {
+        if (this.db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId)) {
           this.runtime.enqueueIssue(issue.projectId, issue.linearIssueId);
         }
         this.logger.info({ issueKey: updated.issueKey }, "Recovered delegated issue from stale awaiting_input state and re-queued implementation");
@@ -545,7 +545,7 @@ export class PatchRelayService {
       const blockedByCount = Number(row.blocked_by_count ?? 0);
       const hasPendingSessionEvents = Number(row.pending_session_event_count ?? 0) > 0;
       const hasPendingWake = hasPendingSessionEvents
-        || this.db.peekIssueSessionWake(String(row.project_id), String(row.linear_issue_id)) !== undefined;
+        || this.db.issueSessions.peekIssueSessionWake(String(row.project_id), String(row.linear_issue_id)) !== undefined;
       const readyForExecution = isIssueSessionReadyForExecution({
         ...(typeof row.session_state === "string" ? { sessionState: String(row.session_state) as never } : {}),
         factoryState: String(row.factory_state ?? "delegated") as never,
@@ -591,7 +591,7 @@ export class PatchRelayService {
             startedAt: String(row.updated_at),
           }
         : undefined;
-      const latestEvent = this.db.listIssueSessionEvents(String(row.project_id), String(row.linear_issue_id), { limit: 1 }).at(-1);
+      const latestEvent = this.db.issueSessions.listIssueSessionEvents(String(row.project_id), String(row.linear_issue_id), { limit: 1 }).at(-1);
       const statusNoteCandidate = deriveIssueStatusNote({
         issue: { factoryState: String(row.factory_state ?? "delegated") } as never,
         sessionSummary,
@@ -661,7 +661,7 @@ export class PatchRelayService {
 
     // If no active run, queue as pending context for the next run
     if (!issue.activeRunId) {
-      this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+      this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         eventType: "operator_prompt",
@@ -671,7 +671,7 @@ export class PatchRelayService {
       return { delivered: false, queued: true };
     }
 
-    const run = this.db.getRun(issue.activeRunId);
+    const run = this.db.runs.getRunById(issue.activeRunId);
     if (!run?.threadId || !run.turnId) {
       return { error: "Active run has no thread or turn yet" };
     }
@@ -687,7 +687,7 @@ export class PatchRelayService {
       // Turn may have completed between check and steer — queue for next run
       const msg = error instanceof Error ? error.message : String(error);
       this.logger.warn({ issueKey, error: msg }, "steerTurn failed, queuing prompt for next run");
-      this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+      this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         eventType: "operator_prompt",
@@ -703,7 +703,7 @@ export class PatchRelayService {
     if (!issue) return undefined;
     if (!issue.activeRunId) return { error: "No active run to stop" };
 
-    const run = this.db.getRun(issue.activeRunId);
+    const run = this.db.runs.getRunById(issue.activeRunId);
     if (run?.threadId && run.turnId) {
       try {
         await this.codex.steerTurn({
@@ -716,15 +716,15 @@ export class PatchRelayService {
       }
     }
 
-    this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+    this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       eventType: "stop_requested",
       dedupeKey: `operator_stop:${issue.linearIssueId}`,
     });
-    this.db.clearPendingIssueSessionEventsRespectingActiveLease(issue.projectId, issue.linearIssueId);
+    this.db.issueSessions.clearPendingIssueSessionEventsRespectingActiveLease(issue.projectId, issue.linearIssueId);
 
-    this.db.upsertIssueRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+    this.db.issueSessions.upsertIssueRespectingActiveLease(issue.projectId, issue.linearIssueId, {
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       factoryState: "awaiting_input" as never,
@@ -746,10 +746,10 @@ export class PatchRelayService {
     const issue = this.db.getIssueByKey(issueKey);
     if (!issue) return undefined;
     if (issue.activeRunId) return { error: "Issue already has an active run" };
-    const issueSession = this.db.getIssueSession(issue.projectId, issue.linearIssueId);
+    const issueSession = this.db.issueSessions.getIssueSession(issue.projectId, issue.linearIssueId);
 
     if (issue.prState === "merged") {
-      this.db.upsertIssueRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+      this.db.issueSessions.upsertIssueRespectingActiveLease(issue.projectId, issue.linearIssueId, {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         factoryState: "done" as never,
@@ -778,7 +778,7 @@ export class PatchRelayService {
     }
 
     this.appendOperatorRetryEvent(issue, runType);
-    this.db.upsertIssueRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+    this.db.issueSessions.upsertIssueRespectingActiveLease(issue.projectId, issue.linearIssueId, {
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       factoryState: factoryState as never,
@@ -792,7 +792,7 @@ export class PatchRelayService {
       status: "retry",
       summary: `Retry queued: ${runType}`,
     });
-    if (this.db.peekIssueSessionWake(issue.projectId, issue.linearIssueId)) {
+    if (this.db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId)) {
       this.runtime.enqueueIssue(issue.projectId, issue.linearIssueId);
     }
     return { issueKey, runType };
@@ -805,7 +805,7 @@ export class PatchRelayService {
     if (runType === "queue_repair") {
       const queueIncident = parseObjectJson(issue.lastQueueIncidentJson);
       const failureContext = parseObjectJson(issue.lastGitHubFailureContextJson);
-      this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+      this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         eventType: "merge_steward_incident",
@@ -821,7 +821,7 @@ export class PatchRelayService {
 
     if (runType === "ci_repair") {
       const failureContext = parseObjectJson(issue.lastGitHubFailureContextJson);
-      this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+      this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         eventType: "settled_red_ci",
@@ -835,7 +835,7 @@ export class PatchRelayService {
     }
 
     if (runType === "review_fix" || runType === "branch_upkeep") {
-      this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+      this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         eventType: "review_changes_requested",
@@ -851,7 +851,7 @@ export class PatchRelayService {
       return;
     }
 
-    this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+    this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       eventType: "delegated",
@@ -876,7 +876,7 @@ export class PatchRelayService {
       stores: {
         webhookEvents: {
           insertWebhookEvent: (p: { webhookId: string; receivedAt: string; payloadJson: string }) => {
-            const r = this.db.insertFullWebhookEvent(p);
+            const r = this.db.webhookEvents.insertFullWebhookEvent(p);
             return { id: r.id, dedupeStatus: r.dedupeStatus };
           },
         },
