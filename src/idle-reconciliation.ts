@@ -584,7 +584,7 @@ export class IdleIssueReconciler {
       if ((issue.factoryState === "escalated" || issue.factoryState === "failed")
         && (reactiveIntent?.runType === "review_fix" || reactiveIntent?.runType === "branch_upkeep")) {
         if (issue.reviewFixAttempts >= DEFAULT_REVIEW_FIX_BUDGET) {
-          this.logger.info(
+          this.logger.debug(
             {
               issueKey: issue.issueKey,
               prNumber: issue.prNumber,

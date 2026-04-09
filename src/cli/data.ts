@@ -72,6 +72,7 @@ export interface IssueSessionHistoryItem {
   summary?: string;
   failureReason?: string;
   eventCount: number;
+  eventCountAvailable: boolean;
   startedAt: string;
   endedAt?: string;
   isCurrentThread: boolean;
@@ -348,6 +349,7 @@ export class CliDataAccess extends CliOperatorApiClient {
       .reverse()
       .map((run) => {
         const summary = summarizeRun(run);
+        const eventCount = this.db.runs.listThreadEvents(run.id).length;
         return {
           runId: run.id,
           runType: run.runType,
@@ -357,7 +359,8 @@ export class CliDataAccess extends CliOperatorApiClient {
           ...(run.parentThreadId ? { parentThreadId: run.parentThreadId } : {}),
           ...(summary ? { summary } : {}),
           ...(run.failureReason ? { failureReason: run.failureReason } : {}),
-          eventCount: this.db.runs.listThreadEvents(run.id).length,
+          eventCount,
+          eventCountAvailable: this.config.runner.codex.persistExtendedHistory || eventCount > 0,
           startedAt: run.startedAt,
           ...(run.endedAt ? { endedAt: run.endedAt } : {}),
           isCurrentThread: run.threadId !== undefined && run.threadId === dbIssue.threadId,

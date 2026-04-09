@@ -139,7 +139,12 @@ export function formatSessionHistory(
     if (session.turnId) {
       lines.push(value("Turn", session.turnId));
     }
-    lines.push(value("Events", session.eventCount));
+    lines.push(value(
+      "Events",
+      session.eventCountAvailable
+        ? session.eventCount
+        : "not persisted (persistExtendedHistory=false)",
+    ));
     if (session.summary) {
       lines.push(value("Summary", truncateLine(session.summary)));
     } else if (session.failureReason) {
