@@ -29,6 +29,7 @@ import { RunStore } from "./db/run-store.ts";
 import { WebhookEventStore } from "./db/webhook-event-store.ts";
 import { runPatchRelayMigrations } from "./db/migrations.ts";
 import { SqliteConnection, isoNow, type DatabaseConnection } from "./db/shared.ts";
+import { syncIssueSessionFromIssue } from "./issue-session-projector.ts";
 import { buildTrackedIssueRecord } from "./tracked-issue-projector.ts";
 
 function parseObjectJson(raw: string | undefined): Record<string, unknown> | undefined {
@@ -134,13 +135,20 @@ export class PatchRelayDatabase {
     this.webhookEvents = new WebhookEventStore(this.connection);
     this.issues = new IssueStore(
       this.connection,
-      (issue) => this.syncIssueSessionFromIssue(issue),
+      (issue) => syncIssueSessionFromIssue({ connection: this.connection, issues: this.issues, issueSessions: this.issueSessions, runs: this.runs, issue }),
     );
     this.runs = new RunStore(
       this.connection,
       mapRunRow,
       this.issues,
-      (issue, options) => this.syncIssueSessionFromIssue(issue, options),
+      (issue, options) => syncIssueSessionFromIssue({
+        connection: this.connection,
+        issues: this.issues,
+        issueSessions: this.issueSessions,
+        runs: this.runs,
+        issue,
+        ...(options ? { options } : {}),
+      }),
     );
     this.issueSessions = new IssueSessionStore(
       this.connection,
@@ -315,173 +323,6 @@ export class PatchRelayDatabase {
       issue: tracked,
       ...(activeRun ? { activeRun } : {}),
     };
-  }
-
-  private syncIssueSessionFromIssue(
-    issue: IssueRecord,
-    options?: {
-      summaryText?: string | undefined;
-      lastRunType?: RunType | undefined;
-      lastWakeReason?: string | undefined;
-    },
-  ): void {
-    const tracked = this.issueToTrackedIssue(issue);
-    const existing = this.issueSessions.getIssueSession(issue.projectId, issue.linearIssueId);
-    const latestRun = this.runs.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
-    const latestRunType = options?.lastRunType ?? latestRun?.runType ?? existing?.lastRunType;
-    const summaryText = this.resolveIssueSessionSummary(issue, latestRun, existing?.summaryText, options?.summaryText);
-    const activeThreadId = issue.threadId ?? existing?.activeThreadId;
-    const threadGeneration = activeThreadId && activeThreadId !== existing?.activeThreadId
-      ? (existing?.threadGeneration ?? 0) + 1
-      : (existing?.threadGeneration ?? (activeThreadId ? 1 : 0));
-    const sessionState = deriveIssueSessionState({
-      ...(issue.activeRunId !== undefined ? { activeRunId: issue.activeRunId } : {}),
-      factoryState: issue.factoryState,
-    });
-    const lastWakeReason = options?.lastWakeReason
-      ?? deriveIssueSessionWakeReason({
-        pendingRunType: issue.pendingRunType,
-        factoryState: issue.factoryState,
-        prNumber: issue.prNumber,
-        prState: issue.prState,
-        prReviewState: issue.prReviewState,
-        prCheckStatus: issue.prCheckStatus,
-        latestFailureSource: issue.lastGitHubFailureSource,
-      })
-      ?? existing?.lastWakeReason;
-    const now = isoNow();
-
-    if (existing) {
-      this.connection.prepare(`
-        UPDATE issue_sessions SET
-          issue_key = ?,
-          repo_id = ?,
-          branch_name = ?,
-          worktree_path = ?,
-          pr_number = ?,
-          pr_head_sha = ?,
-          pr_author_login = ?,
-          session_state = ?,
-          waiting_reason = ?,
-          summary_text = ?,
-          active_thread_id = ?,
-          thread_generation = ?,
-          active_run_id = ?,
-          last_run_type = ?,
-          last_wake_reason = ?,
-          ci_repair_attempts = ?,
-          queue_repair_attempts = ?,
-          review_fix_attempts = ?,
-          updated_at = ?
-        WHERE project_id = ? AND linear_issue_id = ?
-      `).run(
-        issue.issueKey ?? null,
-        issue.projectId,
-        issue.branchName ?? null,
-        issue.worktreePath ?? null,
-        issue.prNumber ?? null,
-        issue.prHeadSha ?? null,
-        issue.prAuthorLogin ?? null,
-        sessionState,
-        tracked.waitingReason ?? null,
-        summaryText ?? null,
-        activeThreadId ?? null,
-        threadGeneration,
-        issue.activeRunId ?? null,
-        latestRunType ?? null,
-        lastWakeReason ?? null,
-        issue.ciRepairAttempts,
-        issue.queueRepairAttempts,
-        issue.reviewFixAttempts,
-        now,
-        issue.projectId,
-        issue.linearIssueId,
-      );
-      return;
-    }
-
-    this.connection.prepare(`
-      INSERT INTO issue_sessions (
-        project_id, linear_issue_id, issue_key, repo_id, branch_name, worktree_path,
-        pr_number, pr_head_sha, pr_author_login, session_state, waiting_reason, summary_text,
-        active_thread_id, thread_generation, active_run_id, last_run_type, last_wake_reason,
-        ci_repair_attempts, queue_repair_attempts, review_fix_attempts,
-        created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      issue.projectId,
-      issue.linearIssueId,
-      issue.issueKey ?? null,
-      issue.projectId,
-      issue.branchName ?? null,
-      issue.worktreePath ?? null,
-      issue.prNumber ?? null,
-      issue.prHeadSha ?? null,
-      issue.prAuthorLogin ?? null,
-      sessionState,
-      tracked.waitingReason ?? null,
-      summaryText ?? null,
-      activeThreadId ?? null,
-      threadGeneration,
-      issue.activeRunId ?? null,
-      latestRunType ?? null,
-      lastWakeReason ?? null,
-      issue.ciRepairAttempts,
-      issue.queueRepairAttempts,
-      issue.reviewFixAttempts,
-      now,
-      now,
-    );
-  }
-
-  private resolveIssueSessionSummary(
-    issue: IssueRecord,
-    latestRun: RunRecord | undefined,
-    existingSummaryText: string | undefined,
-    explicitSummaryText: string | undefined,
-  ): string | undefined {
-    if (explicitSummaryText?.trim()) {
-      return explicitSummaryText;
-    }
-
-    const latestSummary = extractLatestAssistantSummary(latestRun);
-    if (latestRun && (latestRun.status === "queued" || latestRun.status === "running")) {
-      return latestSummary;
-    }
-    if (this.shouldKeepPreviousIssueSummary(issue, latestRun)) {
-      return this.findLatestCompletedRunSummary(issue.projectId, issue.linearIssueId)
-        ?? existingSummaryText
-        ?? latestSummary;
-    }
-
-    return latestSummary ?? existingSummaryText;
-  }
-
-  private shouldKeepPreviousIssueSummary(issue: IssueRecord, latestRun: RunRecord | undefined): boolean {
-    if (!latestRun || latestRun.status !== "failed") {
-      return false;
-    }
-    if (latestRun.summaryJson || latestRun.reportJson) {
-      return false;
-    }
-    return issue.factoryState === "pr_open"
-      || issue.factoryState === "awaiting_queue"
-      || issue.factoryState === "done";
-  }
-
-  private findLatestCompletedRunSummary(projectId: string, linearIssueId: string): string | undefined {
-    const runs = this.runs.listRunsForIssue(projectId, linearIssueId);
-    for (let index = runs.length - 1; index >= 0; index -= 1) {
-      const run = runs[index];
-      if (!run || run.status !== "completed") {
-        continue;
-      }
-      const summary = extractLatestAssistantSummary(run);
-      if (summary?.trim()) {
-        return summary;
-      }
-    }
-    return undefined;
   }
 }
 
