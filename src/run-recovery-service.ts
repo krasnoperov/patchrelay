@@ -20,6 +20,9 @@ export class RunRecoveryService {
     private readonly db: PatchRelayDatabase,
     private readonly logger: Logger,
     private readonly linearSync: LinearSessionSync,
+    private readonly withHeldLease: WithHeldIssueSessionLease,
+    private readonly getHeldLease: GetHeldIssueSessionLease,
+    private readonly appendWakeEventWithLease: AppendWakeEventWithLease,
     private readonly releaseLease: ReleaseIssueSessionLease,
     private readonly enqueueIssue: (projectId: string, issueId: string) => void,
     private readonly resolveBranchOwnerForStateTransition: (newState: FactoryState, pendingRunType?: RunType) => BranchOwner | undefined,
@@ -31,15 +34,13 @@ export class RunRecoveryService {
     runType: RunType;
     reason: string;
     isRequestedChangesRunType: (runType: RunType) => boolean;
-    withHeldLease: WithHeldIssueSessionLease;
-    appendWakeEventWithLease: AppendWakeEventWithLease;
   }): void {
     const { issue, runType, reason } = params;
     const fresh = this.db.issues.getIssue(issue.projectId, issue.linearIssueId);
     if (!fresh) return;
 
     if (params.isRequestedChangesRunType(runType)) {
-      const updated = params.withHeldLease(fresh.projectId, fresh.linearIssueId, (lease) => {
+      const updated = this.withHeldLease(fresh.projectId, fresh.linearIssueId, (lease) => {
         this.db.issueSessions.clearPendingIssueSessionEventsWithLease(lease);
         this.db.issueSessions.upsertIssueWithLease(lease, {
           projectId: fresh.projectId,
@@ -70,7 +71,7 @@ export class RunRecoveryService {
     }
 
     if (fresh.prState === "merged") {
-      const updated = params.withHeldLease(fresh.projectId, fresh.linearIssueId, (lease) => {
+      const updated = this.withHeldLease(fresh.projectId, fresh.linearIssueId, (lease) => {
         this.db.issueSessions.upsertIssueWithLease(lease, {
           projectId: fresh.projectId,
           linearIssueId: fresh.linearIssueId,
@@ -92,7 +93,7 @@ export class RunRecoveryService {
 
     const attempts = fresh.zombieRecoveryAttempts + 1;
     if (attempts > DEFAULT_ZOMBIE_RECOVERY_BUDGET) {
-      const updated = params.withHeldLease(fresh.projectId, fresh.linearIssueId, (lease) => {
+      const updated = this.withHeldLease(fresh.projectId, fresh.linearIssueId, (lease) => {
         this.db.issueSessions.upsertIssueWithLease(lease, {
           projectId: fresh.projectId,
           linearIssueId: fresh.linearIssueId,
@@ -128,7 +129,7 @@ export class RunRecoveryService {
       }
     }
 
-    const requeued = params.withHeldLease(fresh.projectId, fresh.linearIssueId, (lease) => {
+    const requeued = this.withHeldLease(fresh.projectId, fresh.linearIssueId, (lease) => {
       this.db.issueSessions.upsertIssueWithLease(lease, {
         projectId: fresh.projectId,
         linearIssueId: fresh.linearIssueId,
@@ -137,7 +138,7 @@ export class RunRecoveryService {
         zombieRecoveryAttempts: attempts,
         lastZombieRecoveryAt: new Date().toISOString(),
       });
-      return params.appendWakeEventWithLease(lease, fresh, runType, undefined, `recovery:${attempts}`);
+      return this.appendWakeEventWithLease(lease, fresh, runType, undefined, `recovery:${attempts}`);
     });
     if (!requeued) {
       this.logger.warn({ issueKey: fresh.issueKey, attempts, reason }, "Skipping recovery re-enqueue after losing issue-session lease");
@@ -152,11 +153,10 @@ export class RunRecoveryService {
     issue: IssueRecord;
     runType: string;
     reason: string;
-    withHeldLease: WithHeldIssueSessionLease;
   }): void {
     const { issue, runType, reason } = params;
     this.logger.warn({ issueKey: issue.issueKey, runType, reason }, "Escalating to human");
-    const escalated = params.withHeldLease(issue.projectId, issue.linearIssueId, (lease) => {
+    const escalated = this.withHeldLease(issue.projectId, issue.linearIssueId, (lease) => {
       if (issue.activeRunId) {
         this.db.issueSessions.finishRunWithLease(lease, issue.activeRunId, { status: "released" });
       }
@@ -198,11 +198,9 @@ export class RunRecoveryService {
     run: RunRecord;
     message: string;
     nextState: FactoryState;
-    withHeldLease: WithHeldIssueSessionLease;
-    getHeldLease: GetHeldIssueSessionLease;
   }): void {
     const { run, message, nextState } = params;
-    const updated = params.withHeldLease(run.projectId, run.linearIssueId, (lease) => {
+    const updated = this.withHeldLease(run.projectId, run.linearIssueId, (lease) => {
       this.db.runs.finishRun(run.id, { status: "failed", failureReason: message });
       if (nextState === "failed" || nextState === "escalated" || nextState === "awaiting_input" || nextState === "done") {
         this.db.issueSessions.clearPendingIssueSessionEventsWithLease(lease);
@@ -215,7 +213,7 @@ export class RunRecoveryService {
       });
       const branchOwner = this.resolveBranchOwnerForStateTransition(nextState);
       if (branchOwner) {
-        const heldLease = params.getHeldLease(run.projectId, run.linearIssueId);
+        const heldLease = this.getHeldLease(run.projectId, run.linearIssueId);
         if (heldLease) {
           this.db.issueSessions.setBranchOwnerWithLease(heldLease, branchOwner);
         }

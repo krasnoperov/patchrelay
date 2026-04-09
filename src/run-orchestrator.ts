@@ -104,12 +104,25 @@ export class RunOrchestrator {
       (threadId, maxRetries) => this.readThreadWithRetry(threadId, maxRetries),
     );
     this.activeSessionLeases = this.leaseService.activeSessionLeases;
-    this.runFinalizer = new RunFinalizer(db, logger, this.linearSync, this.enqueueIssue, feed);
+    this.runFinalizer = new RunFinalizer(
+      db,
+      logger,
+      this.linearSync,
+      this.enqueueIssue,
+      (projectId, linearIssueId, fn) => this.withHeldIssueSessionLease(projectId, linearIssueId, fn),
+      (projectId, linearIssueId) => this.releaseIssueSessionLease(projectId, linearIssueId),
+      (lease, issue, runType, context, dedupeScope) => this.appendWakeEventWithLease(lease, issue, runType, context, dedupeScope),
+      (run, message, nextState) => this.failRunAndClear(run, message, nextState),
+      feed,
+    );
     this.runLauncher = new RunLauncher(config, db, codex, logger, this.worktreeManager);
     this.runRecovery = new RunRecoveryService(
       db,
       logger,
       this.linearSync,
+      (projectId, linearIssueId, fn) => this.withHeldIssueSessionLease(projectId, linearIssueId, fn),
+      (projectId, linearIssueId) => this.getHeldIssueSessionLease(projectId, linearIssueId),
+      (lease, issue, runType, context, dedupeScope) => this.appendWakeEventWithLease(lease, issue, runType, context, dedupeScope),
       (projectId, linearIssueId) => this.releaseIssueSessionLease(projectId, linearIssueId),
       (projectId, issueId) => this.enqueueIssue(projectId, issueId),
       (newState, pendingRunType) => this.resolveBranchOwnerForStateTransition(newState, pendingRunType),
@@ -523,9 +536,6 @@ export class RunOrchestrator {
       thread,
       threadId,
       ...(completedTurnId ? { completedTurnId } : {}),
-      withHeldLease: (projectId, linearIssueId, fn) => this.withHeldIssueSessionLease(projectId, linearIssueId, fn),
-      releaseLease: (projectId, linearIssueId) => this.releaseIssueSessionLease(projectId, linearIssueId),
-      failRunAndClear: (targetRun, message, nextState) => this.failRunAndClear(targetRun, message, nextState),
       verifyReactiveRunAdvancedBranch: (targetRun, targetIssue) => this.verifyReactiveRunAdvancedBranch(targetRun, targetIssue),
       verifyReviewFixAdvancedHead: (targetRun, targetIssue) => this.verifyReviewFixAdvancedHead(targetRun, targetIssue),
       verifyPublishedRunOutcome: (targetRun, targetIssue) => this.verifyPublishedRunOutcome(targetRun, targetIssue),
@@ -533,8 +543,6 @@ export class RunOrchestrator {
       resolvePostRunFollowUp: (targetRun, targetIssue) => this.resolvePostRunFollowUp(targetRun, targetIssue),
       resolveCompletedRunState,
       resolveRecoverableRunState: resolveRecoverablePostRunState,
-      appendWakeEventWithLease: (lease, targetIssue, runType, context, dedupeScope) =>
-        this.appendWakeEventWithLease(lease, targetIssue, runType, context, dedupeScope),
     });
     this.activeThreadId = undefined;
   }
@@ -637,9 +645,6 @@ export class RunOrchestrator {
       runType,
       reason,
       isRequestedChangesRunType,
-      withHeldLease: (projectId, linearIssueId, fn) => this.withHeldIssueSessionLease(projectId, linearIssueId, fn),
-      appendWakeEventWithLease: (lease, targetIssue, pendingRunType, context, dedupeScope) =>
-        this.appendWakeEventWithLease(lease, targetIssue, pendingRunType, context, dedupeScope),
     });
   }
 
@@ -869,9 +874,6 @@ export class RunOrchestrator {
         thread,
         threadId: run.threadId,
         ...(latestTurn.id ? { completedTurnId: latestTurn.id } : {}),
-        withHeldLease: (projectId, linearIssueId, fn) => this.withHeldIssueSessionLease(projectId, linearIssueId, fn),
-        releaseLease: (projectId, linearIssueId) => this.releaseIssueSessionLease(projectId, linearIssueId),
-        failRunAndClear: (targetRun, message, nextState) => this.failRunAndClear(targetRun, message, nextState),
         verifyReactiveRunAdvancedBranch: (targetRun, targetIssue) => this.verifyReactiveRunAdvancedBranch(targetRun, targetIssue),
         verifyReviewFixAdvancedHead: (targetRun, targetIssue) => this.verifyReviewFixAdvancedHead(targetRun, targetIssue),
         verifyPublishedRunOutcome: (targetRun, targetIssue) => this.verifyPublishedRunOutcome(targetRun, targetIssue),
@@ -879,8 +881,6 @@ export class RunOrchestrator {
         resolvePostRunFollowUp: (targetRun, targetIssue) => this.resolvePostRunFollowUp(targetRun, targetIssue),
         resolveCompletedRunState,
         resolveRecoverableRunState: resolveRecoverablePostRunState,
-        appendWakeEventWithLease: (lease, targetIssue, runType, context, dedupeScope) =>
-          this.appendWakeEventWithLease(lease, targetIssue, runType, context, dedupeScope),
       });
       return;
     }
@@ -895,7 +895,6 @@ export class RunOrchestrator {
       issue,
       runType,
       reason,
-      withHeldLease: (projectId, linearIssueId, fn) => this.withHeldIssueSessionLease(projectId, linearIssueId, fn),
     });
   }
 
@@ -904,8 +903,6 @@ export class RunOrchestrator {
       run,
       message,
       nextState,
-      withHeldLease: (projectId, linearIssueId, fn) => this.withHeldIssueSessionLease(projectId, linearIssueId, fn),
-      getHeldLease: (projectId, linearIssueId) => this.getHeldIssueSessionLease(projectId, linearIssueId),
     });
   }
 

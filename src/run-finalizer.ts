@@ -23,6 +23,10 @@ export class RunFinalizer {
     private readonly logger: Logger,
     private readonly linearSync: LinearSessionSync,
     private readonly enqueueIssue: (projectId: string, issueId: string) => void,
+    private readonly withHeldLease: WithHeldIssueSessionLease,
+    private readonly releaseLease: ReleaseIssueSessionLease,
+    private readonly appendWakeEventWithLease: AppendWakeEventWithLease,
+    private readonly failRunAndClear: (run: RunRecord, message: string, nextState?: FactoryState) => void,
     private readonly feed?: OperatorEventFeed,
   ) {}
 
@@ -33,9 +37,6 @@ export class RunFinalizer {
     thread: CodexThreadSummary;
     threadId: string;
     completedTurnId?: string;
-    withHeldLease: WithHeldIssueSessionLease;
-    releaseLease: ReleaseIssueSessionLease;
-    failRunAndClear: (run: RunRecord, message: string, nextState?: FactoryState) => void;
     verifyReactiveRunAdvancedBranch: (run: RunRecord, issue: IssueRecord) => Promise<string | undefined>;
     verifyReviewFixAdvancedHead: (run: RunRecord, issue: IssueRecord) => Promise<string | undefined>;
     verifyPublishedRunOutcome: (run: RunRecord, issue: IssueRecord) => Promise<string | undefined>;
@@ -43,7 +44,6 @@ export class RunFinalizer {
     resolvePostRunFollowUp: (run: Pick<RunRecord, "runType" | "projectId">, issue: IssueRecord) => Promise<PostRunFollowUp | undefined>;
     resolveCompletedRunState: (issue: IssueRecord, run: Pick<RunRecord, "runType" | "promptText">) => FactoryState | undefined;
     resolveRecoverableRunState: (issue: IssueRecord) => FactoryState | undefined;
-    appendWakeEventWithLease: AppendWakeEventWithLease;
   }): Promise<void> {
     const { run, issue, thread, threadId } = params;
     const trackedIssue = this.db.issueToTrackedIssue(issue);
@@ -58,7 +58,7 @@ export class RunFinalizer {
     const verifiedRepairError = await params.verifyReactiveRunAdvancedBranch(run, freshIssue);
     if (verifiedRepairError) {
       const holdState = params.resolveRecoverableRunState(freshIssue) ?? "failed";
-      params.failRunAndClear(run, verifiedRepairError, holdState);
+      this.failRunAndClear(run, verifiedRepairError, holdState);
       const heldIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? freshIssue;
       this.feed?.publish({
         level: "warn",
@@ -72,13 +72,13 @@ export class RunFinalizer {
       void this.linearSync.emitActivity(heldIssue, buildRunFailureActivity(run.runType, verifiedRepairError));
       void this.linearSync.syncSession(heldIssue, { activeRunType: run.runType });
       this.linearSync.clearProgress(run.id);
-      params.releaseLease(run.projectId, run.linearIssueId);
+      this.releaseLease(run.projectId, run.linearIssueId);
       return;
     }
 
     const missingReviewFixHeadError = await params.verifyReviewFixAdvancedHead(run, freshIssue);
     if (missingReviewFixHeadError) {
-      params.failRunAndClear(run, missingReviewFixHeadError, "escalated");
+      this.failRunAndClear(run, missingReviewFixHeadError, "escalated");
       const failedIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? freshIssue;
       this.feed?.publish({
         level: "error",
@@ -92,13 +92,13 @@ export class RunFinalizer {
       void this.linearSync.emitActivity(failedIssue, buildRunFailureActivity(run.runType, missingReviewFixHeadError));
       void this.linearSync.syncSession(failedIssue, { activeRunType: run.runType });
       this.linearSync.clearProgress(run.id);
-      params.releaseLease(run.projectId, run.linearIssueId);
+      this.releaseLease(run.projectId, run.linearIssueId);
       return;
     }
 
     const publishedOutcomeError = await params.verifyPublishedRunOutcome(run, freshIssue);
     if (publishedOutcomeError) {
-      params.failRunAndClear(run, publishedOutcomeError, "failed");
+      this.failRunAndClear(run, publishedOutcomeError, "failed");
       const failedIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? freshIssue;
       this.feed?.publish({
         level: "warn",
@@ -113,7 +113,7 @@ export class RunFinalizer {
       void this.linearSync.syncSession(failedIssue, { activeRunType: run.runType });
       this.linearSync.clearProgress(run.id);
       if (params.source === "notification") {
-        params.releaseLease(run.projectId, run.linearIssueId);
+        this.releaseLease(run.projectId, run.linearIssueId);
       }
       return;
     }
@@ -122,7 +122,7 @@ export class RunFinalizer {
     const postRunFollowUp = await params.resolvePostRunFollowUp(run, refreshedIssue);
     const postRunState = postRunFollowUp?.factoryState ?? params.resolveCompletedRunState(refreshedIssue, run);
 
-    const completed = params.withHeldLease(run.projectId, run.linearIssueId, (lease) => {
+    const completed = this.withHeldLease(run.projectId, run.linearIssueId, (lease) => {
       this.db.runs.finishRun(run.id, {
         status: "completed",
         threadId,
@@ -153,7 +153,7 @@ export class RunFinalizer {
           : {})),
       });
       if (postRunFollowUp) {
-        return params.appendWakeEventWithLease(
+        return this.appendWakeEventWithLease(
           lease,
           issue,
           postRunFollowUp.pendingRunType,
@@ -166,7 +166,7 @@ export class RunFinalizer {
     if (!completed) {
       this.logger.warn({ runId: run.id, issueId: run.linearIssueId }, "Skipping completion writes after losing issue-session lease");
       this.linearSync.clearProgress(run.id);
-      params.releaseLease(run.projectId, run.linearIssueId);
+      this.releaseLease(run.projectId, run.linearIssueId);
       return;
     }
 
@@ -206,6 +206,6 @@ export class RunFinalizer {
     }));
     void this.linearSync.syncSession(updatedIssue);
     this.linearSync.clearProgress(run.id);
-    params.releaseLease(run.projectId, run.linearIssueId);
+    this.releaseLease(run.projectId, run.linearIssueId);
   }
 }
