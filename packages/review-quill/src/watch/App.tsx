@@ -43,6 +43,14 @@ export function App({ baseUrl }: AppProps): React.JSX.Element {
     return attempts.filter((attempt) => attempt.status === "queued" || attempt.status === "running");
   }, [filter, snapshot?.attempts]);
 
+  const selectedRepoFullName = useMemo(() => {
+    if (!snapshot) {
+      return null;
+    }
+    const selectedAttempt = snapshot.attempts.find((attempt) => attempt.id === selectedAttemptId);
+    return selectedAttempt?.repoFullName ?? snapshot.repos[0]?.repoFullName ?? null;
+  }, [selectedAttemptId, snapshot]);
+
   useEffect(() => {
     if (!flashMessage) return;
     const timeout = setTimeout(() => setFlashMessage(null), 2500);
@@ -172,7 +180,12 @@ export function App({ baseUrl }: AppProps): React.JSX.Element {
       {view === "detail" && selectedAttemptId ? (
         <DetailView detail={detail} />
       ) : snapshot ? (
-        <ListView snapshot={snapshot} attempts={visibleAttempts} selectedAttemptId={selectedAttemptId} />
+        <ListView
+          snapshot={snapshot}
+          attempts={visibleAttempts}
+          selectedAttemptId={selectedAttemptId}
+          selectedRepoFullName={selectedRepoFullName}
+        />
       ) : (
         <Box marginTop={1}>
           <Text dimColor>Loading review-quill snapshot…</Text>

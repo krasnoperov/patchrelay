@@ -8,6 +8,7 @@ import {
   filterFindings,
   hasMatchingLatestReviewForHead,
   resolveEvent,
+  ReviewQuillService,
 } from "../src/service.ts";
 import { normalizeVerdict } from "../src/review-runner.ts";
 import { extractFirstJsonObject, forgivingJsonParse, sanitizeJsonPayload } from "../src/utils.ts";
@@ -182,6 +183,78 @@ test("normalizeVerdict demotes request_changes to approve when no blocking findi
   };
   const result = normalizeVerdict(raw);
   assert.equal(result.verdict, "approve");
+});
+
+test("getWatchSnapshot counts only the latest attempt per pull request", () => {
+  const service = new ReviewQuillService(
+    {
+      server: { bind: "127.0.0.1", port: 8788 },
+      database: { path: ":memory:", wal: true },
+      logging: { level: "info" },
+      reconciliation: {
+        pollIntervalMs: 1_000,
+        heartbeatIntervalMs: 1_000,
+        staleQueuedAfterMs: 60_000,
+        staleRunningAfterMs: 60_000,
+      },
+      codex: {
+        bin: "codex",
+        args: [],
+        approvalPolicy: "never",
+        sandboxMode: "danger-full-access",
+      },
+      prompting: { replaceSections: {} },
+      repositories: [
+        {
+          repoId: "ballony-i-nasosy",
+          repoFullName: "krasnoperov/ballony-i-nasosy",
+          baseBranch: "main",
+          requiredChecks: [],
+          excludeBranches: [],
+          reviewDocs: [],
+          diffIgnore: [],
+          diffSummarizeOnly: [],
+          patchBodyBudgetTokens: 5_000,
+        },
+      ],
+      secretSources: {},
+    } as never,
+    {
+      listAttempts: () => [
+        {
+          id: 1,
+          repoFullName: "krasnoperov/ballony-i-nasosy",
+          prNumber: 55,
+          headSha: "old",
+          status: "failed",
+          conclusion: "error",
+          createdAt: "2026-04-09T20:00:00.000Z",
+          updatedAt: "2026-04-09T20:01:00.000Z",
+        },
+        {
+          id: 2,
+          repoFullName: "krasnoperov/ballony-i-nasosy",
+          prNumber: 55,
+          headSha: "new",
+          status: "completed",
+          conclusion: "approved",
+          createdAt: "2026-04-09T20:02:00.000Z",
+          updatedAt: "2026-04-09T20:03:00.000Z",
+        },
+      ],
+      listWebhooks: () => [],
+    } as never,
+    {} as never,
+    {} as never,
+    { child: () => ({}) } as never,
+  );
+
+  const snapshot = service.getWatchSnapshot();
+  assert.equal(snapshot.summary.totalAttempts, 1);
+  assert.equal(snapshot.summary.failedAttempts, 0);
+  assert.equal(snapshot.summary.completedAttempts, 1);
+  assert.equal(snapshot.repos[0]?.failedAttempts, 0);
+  assert.equal(snapshot.repos[0]?.completedAttempts, 1);
 });
 
 test("sanitizeJsonPayload strips markdown fences", () => {
