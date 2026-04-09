@@ -17,7 +17,6 @@ import type {
   LinearClientProvider,
 } from "./types.ts";
 import { resolveAuthoritativeLinearStopState, resolvePreferredCompletedLinearState } from "./linear-workflow.ts";
-import { execCommand } from "./utils.ts";
 import { getThreadTurns } from "./codex-thread-utils.ts";
 import { deriveIssueSessionReactiveIntent } from "./issue-session.ts";
 import { QueueHealthMonitor } from "./queue-health-monitor.ts";
@@ -262,10 +261,6 @@ export class RunOrchestrator {
       leaseId,
       ...(this.botIdentity ? { botIdentity: this.botIdentity } : {}),
       assertLaunchLease: (targetRun, phase) => this.assertLaunchLease(targetRun, phase),
-      resetWorktreeToTrackedBranch: (targetWorktreePath, targetBranchName, targetIssue) =>
-        this.resetWorktreeToTrackedBranch(targetWorktreePath, targetBranchName, targetIssue),
-      freshenWorktree: (targetWorktreePath, targetProject, targetIssue) =>
-        this.freshenWorktree(targetWorktreePath, targetProject, targetIssue),
       linearSync: this.linearSync,
       releaseLease: (projectId, issueId) => this.releaseIssueSessionLease(projectId, issueId),
       isRequestedChangesRunType,
@@ -307,122 +302,18 @@ export class RunOrchestrator {
     void this.linearSync.syncSession(freshIssue, { activeRunType: runType });
   }
 
-  // ─── Pre-run branch freshening ────────────────────────────────────
-
-  /**
-   * Fetch origin and rebase the worktree onto the latest base branch.
-   *
-   * Risks mitigated:
-   * - Dirty worktree from interrupted run → stash before, pop after
-   * - Conflicts → abort rebase, throw so the run fails with a clear reason
-   * - Already up-to-date → no-op
-   * - Keep publishing explicit: the orchestrator updates the local worktree
-   *   only; the agent/run owns any later branch push.
-   */
-  private async freshenWorktree(
-    worktreePath: string,
-    project: { github?: { baseBranch?: string }; repoPath: string },
-    issue: IssueRecord,
-  ): Promise<void> {
-    const gitBin = this.config.runner.gitBin;
-    const baseBranch = project.github?.baseBranch ?? "main";
-
-    // Stash any uncommitted changes from a previous interrupted run
-    const stashResult = await execCommand(gitBin, ["-C", worktreePath, "stash"], { timeoutMs: 30_000 });
-    const didStash = stashResult.exitCode === 0 && !stashResult.stdout?.includes("No local changes");
-
-    // Fetch latest base
-    const fetchResult = await execCommand(gitBin, ["-C", worktreePath, "fetch", "origin", baseBranch], { timeoutMs: 60_000 });
-    if (fetchResult.exitCode !== 0) {
-      this.logger.warn({ issueKey: issue.issueKey, stderr: fetchResult.stderr?.slice(0, 300) }, "Pre-run fetch failed, proceeding with current base");
-      if (didStash) await execCommand(gitBin, ["-C", worktreePath, "stash", "pop"], { timeoutMs: 10_000 });
-      return;
-    }
-
-    // Check if rebase is needed: is HEAD already on top of origin/baseBranch?
-    const mergeBaseResult = await execCommand(gitBin, ["-C", worktreePath, "merge-base", "--is-ancestor", `origin/${baseBranch}`, "HEAD"], { timeoutMs: 10_000 });
-    if (mergeBaseResult.exitCode === 0) {
-      // Already up-to-date — no rebase needed
-      this.logger.debug({ issueKey: issue.issueKey }, "Pre-run freshen: branch already up to date");
-      if (didStash) await execCommand(gitBin, ["-C", worktreePath, "stash", "pop"], { timeoutMs: 10_000 });
-      return;
-    }
-
-    // Rebase onto latest base
-    const rebaseResult = await execCommand(gitBin, ["-C", worktreePath, "rebase", `origin/${baseBranch}`], { timeoutMs: 120_000 });
-    if (rebaseResult.exitCode !== 0) {
-      // Abort the failed rebase and restore state — then let the agent run
-      // proceed. The agent can resolve the conflict itself (the workflow
-      // prompt tells it to rebase and handle conflicts).
-      await execCommand(gitBin, ["-C", worktreePath, "rebase", "--abort"], { timeoutMs: 10_000 });
-      if (didStash) await execCommand(gitBin, ["-C", worktreePath, "stash", "pop"], { timeoutMs: 10_000 });
-      this.logger.warn({ issueKey: issue.issueKey, baseBranch }, "Pre-run freshen: rebase conflict, agent will resolve");
-      return;
-    }
-
-    this.logger.info({ issueKey: issue.issueKey, baseBranch }, "Pre-run freshen: rebased locally onto latest base");
-
-    // Restore stashed changes
-    if (didStash) await execCommand(gitBin, ["-C", worktreePath, "stash", "pop"], { timeoutMs: 10_000 });
-  }
-
   private async resetWorktreeToTrackedBranch(
     worktreePath: string,
     branchName: string,
     issue: Pick<IssueRecord, "issueKey">,
   ): Promise<void> {
-    const gitBin = this.config.runner.gitBin;
-    const branchFetch = await execCommand(gitBin, ["-C", worktreePath, "fetch", "origin", branchName], { timeoutMs: 60_000 });
-    const hasRemoteBranch = branchFetch.exitCode === 0;
-
-    await execCommand(gitBin, ["-C", worktreePath, "rebase", "--abort"], { timeoutMs: 10_000 });
-    await execCommand(gitBin, ["-C", worktreePath, "merge", "--abort"], { timeoutMs: 10_000 });
-    await execCommand(gitBin, ["-C", worktreePath, "cherry-pick", "--abort"], { timeoutMs: 10_000 });
-    await execCommand(gitBin, ["-C", worktreePath, "am", "--abort"], { timeoutMs: 10_000 });
-    await execCommand(gitBin, ["-C", worktreePath, "reset", "--hard", "HEAD"], { timeoutMs: 30_000 });
-    await execCommand(gitBin, ["-C", worktreePath, "clean", "-fd"], { timeoutMs: 30_000 });
-
-    const checkoutTarget = hasRemoteBranch ? `origin/${branchName}` : branchName;
-    const checkoutResult = await execCommand(
-      gitBin,
-      ["-C", worktreePath, "checkout", "-B", branchName, checkoutTarget],
-      { timeoutMs: 30_000 },
-    );
-    if (checkoutResult.exitCode !== 0) {
-      throw new Error(
-        `Failed to restore ${branchName} worktree state: ${checkoutResult.stderr?.slice(0, 300) ?? "git checkout failed"}`,
-      );
-    }
-
-    const resetTarget = hasRemoteBranch ? `origin/${branchName}` : "HEAD";
-    const resetResult = await execCommand(gitBin, ["-C", worktreePath, "reset", "--hard", resetTarget], { timeoutMs: 30_000 });
-    if (resetResult.exitCode !== 0) {
-      throw new Error(
-        `Failed to reset ${branchName} worktree state: ${resetResult.stderr?.slice(0, 300) ?? "git reset failed"}`,
-      );
-    }
-
-    await execCommand(gitBin, ["-C", worktreePath, "clean", "-fd"], { timeoutMs: 30_000 });
-    this.logger.debug({ issueKey: issue.issueKey, branchName, hasRemoteBranch }, "Reset issue worktree to tracked branch state");
+    await this.worktreeManager.resetWorktreeToTrackedBranch(worktreePath, branchName, issue, this.logger);
   }
 
   private async restoreIdleWorktree(
     issue: Pick<IssueRecord, "issueKey" | "worktreePath" | "branchName">,
   ): Promise<void> {
-    if (!issue.worktreePath || !issue.branchName) return;
-    try {
-      await this.resetWorktreeToTrackedBranch(issue.worktreePath, issue.branchName, issue);
-    } catch (error) {
-      this.logger.warn(
-        {
-          issueKey: issue.issueKey,
-          branchName: issue.branchName,
-          worktreePath: issue.worktreePath,
-          error: error instanceof Error ? error.message : String(error),
-        },
-        "Failed to restore idle worktree after interrupted run",
-      );
-    }
+    await this.worktreeManager.restoreIdleWorktree(issue, this.logger);
   }
 
   // ─── Notification handler ─────────────────────────────────────────
@@ -812,24 +703,6 @@ export class RunOrchestrator {
     return this.leaseService.withHeldLease(projectId, linearIssueId, fn);
   }
 
-  private upsertIssueIfLeaseHeld(
-    projectId: string,
-    linearIssueId: string,
-    params: Parameters<PatchRelayDatabase["upsertIssue"]>[0],
-    context: string,
-  ): IssueRecord | undefined {
-    const lease = this.getHeldIssueSessionLease(projectId, linearIssueId);
-    if (!lease) {
-      this.logger.warn({ projectId, linearIssueId, context }, "Skipping issue write without a held issue-session lease");
-      return undefined;
-    }
-    const updated = this.db.issueSessions.upsertIssueWithLease(lease, params);
-    if (!updated) {
-      this.logger.warn({ projectId, linearIssueId, context }, "Skipping issue write after losing issue-session lease");
-    }
-    return updated;
-  }
-
   private assertLaunchLease(run: Pick<RunRecord, "id" | "projectId" | "linearIssueId">, phase: string): void {
     if (this.heartbeatIssueSessionLease(run.projectId, run.linearIssueId)) {
       return;
@@ -838,14 +711,6 @@ export class RunOrchestrator {
     error.name = "IssueSessionLeaseLostError";
     this.logger.warn({ runId: run.id, issueId: run.linearIssueId, phase }, "Aborting run launch after losing issue-session lease");
     throw error;
-  }
-
-  private acquireIssueSessionLease(projectId: string, linearIssueId: string): string | undefined {
-    return this.leaseService.acquire(projectId, linearIssueId);
-  }
-
-  private forceAcquireIssueSessionLease(projectId: string, linearIssueId: string): string | undefined {
-    return this.leaseService.forceAcquire(projectId, linearIssueId);
   }
 
   private claimLeaseForReconciliation(projectId: string, linearIssueId: string): boolean | "owned" | "skip" {

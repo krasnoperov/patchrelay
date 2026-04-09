@@ -177,16 +177,6 @@ export class RunLauncher {
     leaseId: string;
     botIdentity?: GitHubAppBotIdentity;
     assertLaunchLease: (run: Pick<RunRecord, "id" | "projectId" | "linearIssueId">, phase: string) => void;
-    resetWorktreeToTrackedBranch: (
-      worktreePath: string,
-      branchName: string,
-      issue: Pick<IssueRecord, "issueKey">,
-    ) => Promise<void>;
-    freshenWorktree: (
-      worktreePath: string,
-      project: { github?: { baseBranch?: string }; repoPath: string },
-      issue: IssueRecord,
-    ) => Promise<void>;
     linearSync: {
       emitActivity: (issue: IssueRecord, activity: LinearAgentActivityContent) => Promise<void> | void;
       syncSession: (issue: IssueRecord, options?: { activeRunType?: RunType }) => Promise<void> | void;
@@ -215,9 +205,9 @@ export class RunLauncher {
         await execCommand(gitBin, ["-C", params.worktreePath, "config", "credential.helper", credentialHelper], { timeoutMs: 5_000 });
       }
 
-      await params.resetWorktreeToTrackedBranch(params.worktreePath, params.branchName, params.issue);
+      await this.worktreeManager.resetWorktreeToTrackedBranch(params.worktreePath, params.branchName, params.issue, this.logger);
       if (params.runType !== "queue_repair") {
-        await params.freshenWorktree(params.worktreePath, params.project, params.issue);
+        await this.worktreeManager.freshenWorktree(params.worktreePath, params.project, params.issue, this.logger);
       }
 
       const hookEnv = buildHookEnv(params.issue.issueKey ?? params.issue.linearIssueId, params.branchName, params.runType, params.worktreePath);
