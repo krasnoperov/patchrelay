@@ -180,6 +180,7 @@ async function readPatchRelayHealth(): Promise<
     }
   | {
       reachable: false;
+      ok: false;
       error: string;
     }
 > {
@@ -207,6 +208,7 @@ async function readPatchRelayHealth(): Promise<
   } catch (error) {
     return {
       reachable: false,
+      ok: false,
       error: error instanceof Error ? error.message : String(error),
     };
   }
