@@ -227,9 +227,18 @@ test("service restart --json emits structured output", async () => {
         runCommand: noop,
       });
       assert.equal(code, 0);
-      const result = JSON.parse(stdout.read()) as { daemonReloaded: boolean; restarted: boolean };
+      const result = JSON.parse(stdout.read()) as {
+        service: string;
+        unit: string;
+        daemonReloaded: boolean;
+        restarted: boolean;
+        errors: string[];
+      };
+      assert.equal(result.service, "merge-steward");
+      assert.equal(result.unit, "merge-steward.service");
       assert.equal(result.daemonReloaded, true);
       assert.equal(result.restarted, true);
+      assert.deepEqual(result.errors, []);
     });
   } finally {
     rmSync(baseDir, { recursive: true, force: true });

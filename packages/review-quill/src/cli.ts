@@ -10,7 +10,7 @@ import {
   defaultRunCommand,
   fetchServiceAuthStatus,
   fetchServiceHealth,
-  fetchWatchSnapshot,
+  fetchServiceHealthStatus,
   formatCommandFailure,
   getHomeEnv,
   listRepoConfigs,
@@ -191,7 +191,7 @@ function serviceHelpText(): string {
     "Commands:",
     "  install [--force] [--json]    Reinstall the systemd unit",
     "  restart [--json]              Reload-or-restart the service",
-    "  status [--json]               Show systemd state and local service health",
+    "  status [--json]               Show systemd state and local health",
     "  logs [--lines <count>] [--json]",
     "                                Show recent journal logs",
   ].join("\n");
@@ -1386,6 +1386,8 @@ async function handleService(parsed: ParsedArgs, stdout: Output, runCommand: Com
     const restart = await runSystemctl(runCommand, ["reload-or-restart", "review-quill.service"]);
     if (parsed.flags.get("json") === true) {
       writeOutput(stdout, formatJson({
+        service: "review-quill",
+        unit: "review-quill.service",
         daemonReloaded: daemonReload.ok,
         restarted: restart.ok,
         errors: [
@@ -1415,36 +1417,14 @@ async function handleService(parsed: ParsedArgs, stdout: Output, runCommand: Com
       throw new Error(status.error);
     }
     const properties = parseSystemctlShowOutput(status.result.stdout);
-    let health:
-      | { ok: boolean; service: string; repos: string[] }
-      | undefined;
-    let watch:
-      | {
-        summary: {
-          totalRepos: number;
-          totalAttempts: number;
-          queuedAttempts: number;
-          runningAttempts: number;
-          completedAttempts: number;
-          failedAttempts: number;
-        };
-      }
-      | undefined;
-    let healthError: string | undefined;
-    try {
-      health = await fetchServiceHealth();
-      watch = await fetchWatchSnapshot();
-    } catch (error) {
-      healthError = error instanceof Error ? error.message : String(error);
-    }
+    const health = await fetchServiceHealthStatus();
 
     if (parsed.flags.get("json") === true) {
       writeOutput(stdout, formatJson({
+        service: "review-quill",
         unit: "review-quill.service",
         systemd: properties,
-        ...(health ? { health } : {}),
-        ...(watch ? { watch: watch.summary } : {}),
-        ...(healthError ? { healthError } : {}),
+        health,
       }));
       return 0;
     }
@@ -1457,8 +1437,9 @@ async function handleService(parsed: ParsedArgs, stdout: Output, runCommand: Com
         `Enabled: ${properties.UnitFileState ?? "unknown"}`,
         `Active: ${properties.ActiveState ?? "unknown"}${properties.SubState ? ` (${properties.SubState})` : ""}`,
         properties.ExecMainPID ? `Main PID: ${properties.ExecMainPID}` : undefined,
-        health ? `Health: ok (${health.repos.length} repos)` : `Health: unavailable (${healthError ?? "unknown error"})`,
-        watch ? `Attempts: total=${watch.summary.totalAttempts} running=${watch.summary.runningAttempts} failed=${watch.summary.failedAttempts}` : undefined,
+        health.reachable
+          ? `Health: ${health.ok ? "ok" : "unhealthy"} (HTTP ${health.status})`
+          : `Health: not reachable (${health.error})`,
       ].filter(Boolean).join("\n") + "\n",
     );
     return 0;

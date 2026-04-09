@@ -154,7 +154,8 @@ export async function runSystemctl(runCommand: CommandRunner, args: string[]): P
 function getLocalBaseUrl(): string {
   const layout = getReviewQuillPathLayout();
   const config = loadConfig(layout.configPath);
-  return `http://${config.server.bind}:${config.server.port}`;
+  const host = config.server.bind === "0.0.0.0" ? "127.0.0.1" : config.server.bind;
+  return `http://${host}:${config.server.port}`;
 }
 
 async function requestLocalJson<T>(relativePath: string, options?: { method?: string; body?: unknown }): Promise<T> {
@@ -173,6 +174,36 @@ async function requestLocalJson<T>(relativePath: string, options?: { method?: st
 
 export async function fetchServiceHealth(): Promise<{ ok: boolean; service: string; repos: string[] }> {
   return await requestLocalJson<{ ok: boolean; service: string; repos: string[] }>("/health");
+}
+
+export async function fetchServiceHealthStatus(): Promise<
+  | { reachable: true; ok: boolean; status: number }
+  | { reachable: false; error: string }
+> {
+  try {
+    const response = await fetch(`${getLocalBaseUrl()}/health`, {
+      signal: AbortSignal.timeout(2_000),
+    });
+    let ok = response.ok;
+    try {
+      const body = await response.json() as { ok?: unknown };
+      if (typeof body.ok === "boolean") {
+        ok = response.ok && body.ok;
+      }
+    } catch {
+      ok = response.ok;
+    }
+    return {
+      reachable: true,
+      ok,
+      status: response.status,
+    };
+  } catch (error) {
+    return {
+      reachable: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 export async function fetchServiceAuthStatus(): Promise<{

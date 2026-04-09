@@ -62,10 +62,8 @@ interface ServiceProbeResult {
 type JsonObject = Record<string, unknown>;
 
 interface ReviewQuillStatusJson extends JsonObject {
-  health?: { ok?: boolean } | undefined;
+  health?: { reachable?: boolean; ok?: boolean } | undefined;
   systemd?: { ActiveState?: string } | undefined;
-  watch?: { runningAttempts?: number } | undefined;
-  healthError?: string | undefined;
 }
 
 interface ReviewQuillAttemptsJson extends JsonObject {
@@ -73,6 +71,7 @@ interface ReviewQuillAttemptsJson extends JsonObject {
 }
 
 interface MergeStewardStatusJson extends JsonObject {
+  health?: { reachable?: boolean; ok?: boolean } | undefined;
   systemd?: { ActiveState?: string } | undefined;
 }
 
@@ -156,13 +155,13 @@ export async function collectClusterHealth(
     ? await probeOptionalService(runCommand, "review-quill", {
         healthy: (payload) => {
           const parsed = payload as ReviewQuillStatusJson;
-          return parsed.health?.ok === true && parsed.systemd?.ActiveState === "active";
+          return parsed.health?.reachable === true && parsed.health?.ok === true && parsed.systemd?.ActiveState === "active";
         },
         summarize: (payload) => {
           const parsed = payload as ReviewQuillStatusJson;
-          return parsed.health?.ok === true
-            ? `Healthy (${typeof parsed.watch?.runningAttempts === "number" ? `${parsed.watch.runningAttempts} running attempts` : "service reachable"})`
-            : `Unhealthy (${parsed.healthError ?? "service health unavailable"})`;
+          return parsed.health?.reachable === true && parsed.health?.ok === true
+            ? "Healthy"
+            : `Unhealthy (${parsed.health?.reachable === false ? "service not reachable" : "service health unavailable"})`;
         },
       })
     : undefined;
@@ -182,13 +181,13 @@ export async function collectClusterHealth(
     ? await probeOptionalService(runCommand, "merge-steward", {
         healthy: (payload) => {
           const parsed = payload as MergeStewardStatusJson;
-          return parsed.systemd?.ActiveState === "active";
+          return parsed.health?.reachable === true && parsed.health?.ok === true && parsed.systemd?.ActiveState === "active";
         },
         summarize: (payload) => {
           const parsed = payload as MergeStewardStatusJson;
-          return parsed.systemd?.ActiveState === "active"
+          return parsed.health?.reachable === true && parsed.health?.ok === true && parsed.systemd?.ActiveState === "active"
             ? "Healthy"
-            : `Unhealthy (${parsed.systemd?.ActiveState ?? "unknown"})`;
+            : `Unhealthy (${parsed.health?.reachable === false ? "service not reachable" : parsed.systemd?.ActiveState ?? "unknown"})`;
         },
       })
     : undefined;

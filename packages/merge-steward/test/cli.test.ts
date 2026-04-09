@@ -171,8 +171,10 @@ test("merge-steward init and repo commands manage bootstrap state with explicit 
           0,
         );
         const serviceStatus = JSON.parse(statusOut.read()) as Record<string, unknown>;
+        assert.equal(serviceStatus.service, "merge-steward");
         assert.equal(serviceStatus.unit, "merge-steward.service");
         assert.equal((serviceStatus.systemd as Record<string, unknown>).ActiveState, "active");
+        assert.equal(typeof (serviceStatus.health as { reachable?: boolean }).reachable, "boolean");
       },
     );
 

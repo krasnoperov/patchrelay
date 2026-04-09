@@ -2,6 +2,7 @@ import type { CommandRunner, CommandRunnerResult } from "./command-types.ts";
 
 export type ServiceCommand = { command: string; args: string[] };
 export interface ServiceCommandResult extends ServiceCommand, CommandRunnerResult {}
+export type SystemctlResult = { ok: true; result: CommandRunnerResult } | { ok: false; error: string; result: CommandRunnerResult };
 
 function summarizeCommandOutput(result: CommandRunnerResult): string {
   const parts = [result.stderr.trim(), result.stdout.trim()].filter(Boolean);
@@ -36,6 +37,21 @@ export async function tryManageService(
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
+}
+
+export async function runSystemctl(
+  runner: CommandRunner,
+  args: string[],
+): Promise<SystemctlResult> {
+  const result = await runner("sudo", ["systemctl", ...args]);
+  if (result.exitCode === 0) {
+    return { ok: true, result };
+  }
+  return {
+    ok: false,
+    error: `Command failed with exit code ${result.exitCode}: sudo systemctl ${args.join(" ")}${summarizeCommandOutput(result)}`,
+    result,
+  };
 }
 
 export function installServiceCommands(): ServiceCommand[] {

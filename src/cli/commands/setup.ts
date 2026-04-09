@@ -11,7 +11,7 @@ import type { CommandRunner, InteractiveRunner, Output, ParsedArgs } from "../co
 import { CliUsageError } from "../errors.ts";
 import { formatJson } from "../formatters/json.ts";
 import { writeOutput } from "../output.ts";
-import { installServiceCommands, restartServiceCommands, runServiceCommands, tryManageService } from "../service-commands.ts";
+import { installServiceCommands, restartServiceCommands, runServiceCommands, runSystemctl, tryManageService } from "../service-commands.ts";
 
 interface SetupCommandParams {
   commandArgs: string[];
@@ -139,26 +139,28 @@ export async function handleInstallServiceCommand(params: SetupCommandParams): P
 }
 
 export async function handleRestartServiceCommand(params: SetupCommandParams): Promise<number> {
-  try {
-    await runServiceCommands(params.runCommand, restartServiceCommands());
-    writeOutput(
-      params.stdout,
-      params.json
-        ? formatJson({
-            service: "patchrelay",
-            unitPath: getSystemdUnitPath(),
-            runtimeEnvPath: getDefaultRuntimeEnvPath(),
-            serviceEnvPath: getDefaultServiceEnvPath(),
-            configPath: getDefaultConfigPath(),
-            restarted: true,
-          })
-        : "Reloaded systemd units and reload-or-restart was requested for PatchRelay.\n",
-    );
-    return 0;
-  } catch (error) {
-    writeOutput(params.stderr, `${error instanceof Error ? error.message : String(error)}\n`);
-    return 1;
-  }
+  const daemonReload = await runSystemctl(params.runCommand, ["daemon-reload"]);
+  const restart = await runSystemctl(params.runCommand, ["reload-or-restart", "patchrelay.service"]);
+  const ok = daemonReload.ok && restart.ok;
+  writeOutput(
+    ok ? params.stdout : params.stderr,
+    params.json
+      ? formatJson({
+          service: "patchrelay",
+          unit: "patchrelay.service",
+          daemonReloaded: daemonReload.ok,
+          restarted: restart.ok,
+          errors: [
+            ...(daemonReload.ok ? [] : [daemonReload.error]),
+            ...(restart.ok ? [] : [restart.error]),
+          ],
+        })
+      : [
+          daemonReload.ok ? "systemd daemon-reload completed." : `systemd daemon-reload failed: ${daemonReload.error}`,
+          restart.ok ? "Restarted patchrelay.service" : `Restart failed: ${restart.error}`,
+        ].join("\n") + "\n",
+  );
+  return ok ? 0 : 1;
 }
 
 function parseSystemctlShowOutput(raw: string): Record<string, string> {
@@ -176,8 +178,8 @@ function parseSystemctlShowOutput(raw: string): Record<string, string> {
 async function readPatchRelayHealth(): Promise<
   | {
       reachable: true;
+      ok: boolean;
       status: number;
-      body?: Record<string, unknown>;
     }
   | {
       reachable: false;
@@ -186,20 +188,24 @@ async function readPatchRelayHealth(): Promise<
 > {
   try {
     const config = loadConfig(undefined, { profile: "doctor" });
+    const host = config.server.bind === "0.0.0.0" ? "127.0.0.1" : config.server.bind;
     const response = await fetch(
-      `http://${config.server.bind}:${config.server.port}${config.server.healthPath}`,
+      `http://${host}:${config.server.port}${config.server.healthPath}`,
       { signal: AbortSignal.timeout(2000) },
     );
-    let body: Record<string, unknown> | undefined;
+    let ok = response.ok;
     try {
-      body = await response.json() as Record<string, unknown>;
+      const body = await response.json() as Record<string, unknown>;
+      if (typeof body.ok === "boolean") {
+        ok = response.ok && body.ok;
+      }
     } catch {
-      body = undefined;
+      ok = response.ok;
     }
     return {
       reachable: true,
+      ok,
       status: response.status,
-      ...(body ? { body } : {}),
     };
   } catch (error) {
     return {
@@ -242,7 +248,6 @@ export async function handleServiceCommand(params: SetupCommandParams): Promise<
     const payload = {
       service: "patchrelay",
       unit: "patchrelay.service",
-      unitPath: getSystemdUnitPath(),
       systemd: properties,
       health,
     };
@@ -260,7 +265,7 @@ export async function handleServiceCommand(params: SetupCommandParams): Promise<
             `Unit path: ${properties.FragmentPath || getSystemdUnitPath()}`,
             properties.ExecMainPID ? `Main PID: ${properties.ExecMainPID}` : undefined,
             health.reachable
-              ? `Health: reachable (HTTP ${health.status})${typeof health.body?.version === "string" ? ` version ${health.body.version}` : ""}`
+              ? `Health: ${health.ok ? "ok" : "unhealthy"} (HTTP ${health.status})`
               : `Health: not reachable (${health.error})`,
           ]
             .filter(Boolean)

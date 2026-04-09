@@ -171,7 +171,7 @@ export function serviceHelpText(): string {
     "Commands:",
     "  install [--force] [--write-only] [--json]  Reinstall the systemd service unit",
     "  restart [--json]                           Reload-or-restart the service",
-    "  status [--json]                            Show systemd state and service health",
+    "  status [--json]                            Show systemd state and local health",
     "  logs [--lines <count>] [--json]            Show recent journal logs",
     "",
     "Examples:",
