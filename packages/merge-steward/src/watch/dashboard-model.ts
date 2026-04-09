@@ -34,6 +34,27 @@ const RECENT_EVICTION_MS = 60 * 60 * 1_000;
 const STUCK_ENTRY_MS = 25 * 60 * 1_000;
 const OFFLINE_STALE_MS = 10 * 1_000;
 
+function isLaterEntry(left: QueueEntry, right: QueueEntry): boolean {
+  if (left.position !== right.position) {
+    return left.position > right.position;
+  }
+  return new Date(left.updatedAt).getTime() >= new Date(right.updatedAt).getTime();
+}
+
+function getLatestEntries(snapshot: QueueWatchSnapshot | null): QueueEntry[] {
+  if (!snapshot) {
+    return [];
+  }
+  const byPR = new Map<number, QueueEntry>();
+  for (const entry of snapshot.entries) {
+    const existing = byPR.get(entry.prNumber);
+    if (!existing || isLaterEntry(entry, existing)) {
+      byPR.set(entry.prNumber, entry);
+    }
+  }
+  return [...byPR.values()].sort((a, b) => a.position - b.position);
+}
+
 export function matchRepoRef(repo: DashboardRepoConfig, repoRef: string | undefined): boolean {
   if (!repoRef) {
     return false;
@@ -56,10 +77,7 @@ export function getChainEntries(snapshot: QueueWatchSnapshot | null): QueueEntry
 }
 
 export function getActiveEntries(snapshot: QueueWatchSnapshot | null): QueueEntry[] {
-  if (!snapshot) {
-    return [];
-  }
-  return snapshot.entries.filter((entry) => (
+  return getLatestEntries(snapshot).filter((entry) => (
     entry.status !== "merged" && entry.status !== "evicted" && entry.status !== "dequeued"
   ));
 }
@@ -127,7 +145,7 @@ export function getRepoHealth(repo: DashboardRepoState, now = Date.now()): RepoH
     }
   }
 
-  const recentEvicted = snapshot.entries.find((entry) => (
+  const recentEvicted = getLatestEntries(snapshot).find((entry) => (
     entry.status === "evicted"
     && now - new Date(entry.updatedAt).getTime() <= RECENT_EVICTION_MS
   ));
@@ -196,19 +214,23 @@ export function projectStatsSummary(snapshot: QueueWatchSnapshot | null): string
   if (!snapshot) {
     return "No queue data yet.";
   }
-  const { summary } = snapshot;
+  const latestEntries = getLatestEntries(snapshot);
   const activeEntries = getActiveEntries(snapshot);
   const avgWaitMs = activeEntries.length > 0
     ? activeEntries.reduce((sum, entry) => sum + (Date.now() - new Date(entry.enqueuedAt).getTime()), 0) / activeEntries.length
     : 0;
+  const queued = latestEntries.filter((entry) => entry.status === "queued").length;
+  const validating = latestEntries.filter((entry) => entry.status === "validating" || entry.status === "preparing_head").length;
+  const merging = latestEntries.filter((entry) => entry.status === "merging").length;
+  const evicted = latestEntries.filter((entry) => entry.status === "evicted").length;
   const parts = [
-    `${summary.active} active`,
-    `${summary.queued} waiting`,
-    `${summary.validating} testing`,
-    `${summary.merging} merging`,
+    `${activeEntries.length} active`,
+    `${queued} waiting`,
+    `${validating} testing`,
+    `${merging} merging`,
   ];
-  if (summary.evicted > 0) {
-    parts.push(`${summary.evicted} need repair`);
+  if (evicted > 0) {
+    parts.push(`${evicted} need repair`);
   }
   if (avgWaitMs > 0) {
     parts.push(`avg wait ${formatDuration(avgWaitMs)}`);
