@@ -6,12 +6,9 @@ import type {
   IssueSessionRecord,
   RunRecord,
   RunStatus,
-  TrackedIssueRecord,
 } from "./db-types.ts";
 import type { FactoryState, RunType } from "./factory-state.ts";
 import {
-  isIssueSessionReadyForExecution,
-  deriveIssueSessionState,
   deriveIssueSessionReactiveIntent,
 } from "./issue-session.ts";
 import {
@@ -27,7 +24,7 @@ import { WebhookEventStore } from "./db/webhook-event-store.ts";
 import { runPatchRelayMigrations } from "./db/migrations.ts";
 import { SqliteConnection, type DatabaseConnection } from "./db/shared.ts";
 import { syncIssueSessionFromIssue } from "./issue-session-projector.ts";
-import { buildTrackedIssueRecord } from "./tracked-issue-projector.ts";
+import { TrackedIssueQuery } from "./tracked-issue-query.ts";
 
 function parseObjectJson(raw: string | undefined): Record<string, unknown> | undefined {
   if (!raw) return undefined;
@@ -119,6 +116,7 @@ export class PatchRelayDatabase {
   readonly issues: IssueStore;
   readonly issueSessions: IssueSessionStore;
   readonly runs: RunStore;
+  readonly trackedIssues: TrackedIssueQuery;
 
   constructor(databasePath: string, wal: boolean) {
     this.connection = new SqliteConnection(databasePath);
@@ -155,6 +153,7 @@ export class PatchRelayDatabase {
       this.runs,
       deriveImplicitReactiveWake,
     );
+    this.trackedIssues = new TrackedIssueQuery(this.issues, this.issueSessions, this.runs);
   }
 
   runMigrations(): void {
@@ -224,27 +223,7 @@ export class PatchRelayDatabase {
   }
 
   listIssuesReadyForExecution(): Array<{ projectId: string; linearIssueId: string }> {
-    return this.issues.listIssues()
-      .filter((issue) => isIssueSessionReadyForExecution({
-        factoryState: issue.factoryState,
-        sessionState: deriveIssueSessionState({
-          activeRunId: issue.activeRunId,
-          factoryState: issue.factoryState,
-        }),
-        activeRunId: issue.activeRunId,
-        blockedByCount: this.issues.countUnresolvedBlockers(issue.projectId, issue.linearIssueId),
-        hasPendingWake: this.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId) !== undefined,
-        hasLegacyPendingRun: issue.pendingRunType !== undefined,
-        prNumber: issue.prNumber,
-        prState: issue.prState,
-        prReviewState: issue.prReviewState,
-        prCheckStatus: issue.prCheckStatus,
-        latestFailureSource: issue.lastGitHubFailureSource,
-      }))
-      .map((issue) => ({
-        projectId: issue.projectId,
-        linearIssueId: issue.linearIssueId,
-      }));
+    return this.trackedIssues.listIssuesReadyForExecution();
   }
 
   /**
@@ -272,30 +251,21 @@ export class PatchRelayDatabase {
   }
 
   listIssuesByState(projectId: string, state: FactoryState): IssueRecord[] {
-    return this.issues.listIssuesByState(projectId, state);
+    return this.trackedIssues.listIssuesByState(projectId, state);
   }
 
   // ─── View builders ──────────────────────────────────────────────
 
-  issueToTrackedIssue(issue: IssueRecord): TrackedIssueRecord {
-    return buildTrackedIssueRecord({
-      issue,
-      session: this.issueSessions.getIssueSession(issue.projectId, issue.linearIssueId),
-      blockedBy: this.issues.listIssueDependencies(issue.projectId, issue.linearIssueId),
-      hasPendingWake: this.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId) !== undefined,
-      latestRun: this.runs.getLatestRunForIssue(issue.projectId, issue.linearIssueId),
-      latestEvent: this.issueSessions.listIssueSessionEvents(issue.projectId, issue.linearIssueId, { limit: 1 }).at(-1),
-    });
+  issueToTrackedIssue(issue: IssueRecord) {
+    return this.trackedIssues.issueToTrackedIssue(issue);
   }
 
-  getTrackedIssue(projectId: string, linearIssueId: string): TrackedIssueRecord | undefined {
-    const issue = this.getIssue(projectId, linearIssueId);
-    return issue ? this.issueToTrackedIssue(issue) : undefined;
+  getTrackedIssue(projectId: string, linearIssueId: string) {
+    return this.trackedIssues.getTrackedIssue(projectId, linearIssueId);
   }
 
-  getTrackedIssueByKey(issueKey: string): TrackedIssueRecord | undefined {
-    const issue = this.getIssueByKey(issueKey);
-    return issue ? this.issueToTrackedIssue(issue) : undefined;
+  getTrackedIssueByKey(issueKey: string) {
+    return this.trackedIssues.getTrackedIssueByKey(issueKey);
   }
 
   listIssues(): IssueRecord[] {
@@ -308,18 +278,8 @@ export class PatchRelayDatabase {
 
   // ─── Issue overview for query service ─────────────────────────────
 
-  getIssueOverview(issueKey: string): {
-    issue: TrackedIssueRecord;
-    activeRun?: RunRecord;
-  } | undefined {
-    const issue = this.getIssueByKey(issueKey);
-    if (!issue) return undefined;
-    const tracked = this.issueToTrackedIssue(issue);
-    const activeRun = issue.activeRunId ? this.runs.getRunById(issue.activeRunId) : undefined;
-    return {
-      issue: tracked,
-      ...(activeRun ? { activeRun } : {}),
-    };
+  getIssueOverview(issueKey: string) {
+    return this.trackedIssues.getIssueOverview(issueKey);
   }
 }
 
