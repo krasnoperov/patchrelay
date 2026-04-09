@@ -906,21 +906,6 @@ test("reconcileRun keeps a pending wake when zombie recovery backoff defers retr
       lastZombieRecoveryAt: issue.lastZombieRecoveryAt,
     });
 
-    const leaseId = "lease-zombie-backoff";
-    assert.equal(
-      db.issueSessions.acquireIssueSessionLease({
-        projectId: issue.projectId,
-        linearIssueId: issue.linearIssueId,
-        leaseId,
-        workerId: "worker-zombie-backoff",
-        leasedUntil: "2030-04-06T10:05:00.000Z",
-        now: "2030-04-06T10:00:00.000Z",
-      }),
-      true,
-    );
-    ((orchestrator as unknown as { activeSessionLeases: Map<string, string> }).activeSessionLeases)
-      .set(`${issue.projectId}:${issue.linearIssueId}`, leaseId);
-
     await (orchestrator as unknown as { reconcileRun: (targetRun: typeof run) => Promise<void> }).reconcileRun(run);
 
     const recoveredIssue = db.getIssue(issue.projectId, issue.linearIssueId);
@@ -929,6 +914,54 @@ test("reconcileRun keeps a pending wake when zombie recovery backoff defers retr
     assert.equal(recoveredIssue?.zombieRecoveryAttempts, 1);
     assert.equal(db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId)?.runType, "implementation");
     assert.deepEqual(enqueueCalls, []);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("reconcileRun does not treat a locally-owned no-thread launch as zombie", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-owned-launching-"));
+  try {
+    const { db, orchestrator } = createOrchestrator(baseDir);
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-zombie-owned-launch",
+      issueKey: "USE-ZOMBIE-OWNED",
+      branchName: "feat-zombie-owned-launch",
+      factoryState: "implementing",
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "implementation",
+      promptText: "launch still preparing",
+    });
+    db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      activeRunId: run.id,
+      factoryState: "implementing",
+    });
+
+    const leaseService = (orchestrator as unknown as {
+      leaseService: {
+        acquire: (projectId: string, linearIssueId: string) => string | undefined;
+      };
+    }).leaseService;
+    const leaseId = leaseService.acquire(issue.projectId, issue.linearIssueId);
+    assert.ok(leaseId);
+
+    await (orchestrator as unknown as { reconcileRun: (targetRun: typeof run) => Promise<void> }).reconcileRun(run);
+
+    const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId);
+    const updatedRun = db.runs.getRunById(run.id);
+    const session = db.issueSessions.getIssueSession(issue.projectId, issue.linearIssueId);
+    assert.equal(updatedIssue?.activeRunId, run.id);
+    assert.equal(updatedIssue?.factoryState, "implementing");
+    assert.equal(updatedRun?.status, "queued");
+    assert.equal(updatedRun?.failureReason, undefined);
+    assert.equal(session?.leaseId, leaseId);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

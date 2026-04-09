@@ -567,7 +567,16 @@ export class RunOrchestrator {
     }
 
     // Zombie run: claimed in DB but Codex never started (no thread).
+    // If this process still owns the live lease, launch may still be in flight
+    // between worktree prep and Codex thread creation, so do not self-recover it.
     if (!run.threadId) {
+      if (recoveryLease === "owned") {
+        this.logger.debug(
+          { issueKey: issue.issueKey, runId: run.id, runType: run.runType },
+          "Skipping zombie reconciliation for locally-owned launch that has not created a thread yet",
+        );
+        return;
+      }
       this.logger.warn(
         { issueKey: issue.issueKey, runId: run.id, runType: run.runType },
         "Zombie run detected (no thread)",
