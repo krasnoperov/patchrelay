@@ -3,7 +3,6 @@ import type { IssueRecord, RunRecord } from "./db-types.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import { ACTIVE_RUN_STATES, type FactoryState, type RunType } from "./factory-state.ts";
 import type { WithHeldIssueSessionLease } from "./issue-session-lease-service.ts";
-import { deriveIssueSessionReactiveIntent } from "./issue-session.ts";
 import type { AppConfig } from "./types.ts";
 import { execCommand } from "./utils.ts";
 import {

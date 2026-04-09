@@ -1,6 +1,5 @@
 import type {
   IssueRecord,
-  IssueSessionRecord,
   RunRecord,
 } from "./db-types.ts";
 import type { RunType } from "./factory-state.ts";
