@@ -161,36 +161,6 @@ export class PatchRelayDatabase {
     return this.connection.transaction(fn)();
   }
 
-  // ─── Webhook Events ───────────────────────────────────────────────
-
-  insertWebhookEvent(webhookId: string, receivedAt: string): { id: number; duplicate: boolean } {
-    return this.webhookEvents.insertWebhookEvent(webhookId, receivedAt);
-  }
-
-  insertFullWebhookEvent(params: {
-    webhookId: string;
-    receivedAt: string;
-    payloadJson: string;
-  }): { id: number; dedupeStatus: string } {
-    return this.webhookEvents.insertFullWebhookEvent(params);
-  }
-
-  getWebhookPayload(id: number): { webhookId: string; payloadJson: string } | undefined {
-    return this.webhookEvents.getWebhookPayload(id);
-  }
-
-  isWebhookDuplicate(webhookId: string): boolean {
-    return this.webhookEvents.isWebhookDuplicate(webhookId);
-  }
-
-  markWebhookProcessed(id: number, status: string): void {
-    this.webhookEvents.markWebhookProcessed(id, status);
-  }
-
-  assignWebhookProject(id: number, projectId: string): void {
-    this.webhookEvents.assignWebhookProject(id, projectId);
-  }
-
   // ─── Issues ───────────────────────────────────────────────────────
 
   upsertIssue(params: {
@@ -944,34 +914,6 @@ export class PatchRelayDatabase {
       .prepare("SELECT * FROM issues WHERE agent_session_id IS NOT NULL ORDER BY updated_at DESC")
       .all() as Array<Record<string, unknown>>;
     return rows.map(mapIssueRow);
-  }
-
-  findLatestAgentSessionIdForIssue(linearIssueId: string): string | undefined {
-    const row = this.connection.prepare(`
-      SELECT COALESCE(
-        json_extract(payload_json, '$.agentSession.id'),
-        json_extract(payload_json, '$.data.agentSession.id'),
-        json_extract(payload_json, '$.agentSessionId'),
-        json_extract(payload_json, '$.data.agentSessionId')
-      ) AS agent_session_id
-      FROM webhook_events
-      WHERE COALESCE(
-        json_extract(payload_json, '$.agentSession.issueId'),
-        json_extract(payload_json, '$.data.agentSession.issueId'),
-        json_extract(payload_json, '$.agentSession.issue.id'),
-        json_extract(payload_json, '$.data.agentSession.issue.id')
-      ) = ?
-        AND COALESCE(
-          json_extract(payload_json, '$.agentSession.id'),
-          json_extract(payload_json, '$.data.agentSession.id'),
-          json_extract(payload_json, '$.agentSessionId'),
-          json_extract(payload_json, '$.data.agentSessionId')
-        ) IS NOT NULL
-      ORDER BY id DESC
-      LIMIT 1
-    `).get(linearIssueId) as Record<string, unknown> | undefined;
-
-    return row?.agent_session_id != null ? String(row.agent_session_id) : undefined;
   }
 
   // ─── Issue overview for query service ─────────────────────────────

@@ -248,7 +248,7 @@ export class PatchRelayService {
       const syncedIssue = issue.agentSessionId
         ? issue
         : (() => {
-            const recoveredAgentSessionId = this.db.findLatestAgentSessionIdForIssue(issue.linearIssueId);
+            const recoveredAgentSessionId = this.db.webhookEvents.findLatestAgentSessionIdForIssue(issue.linearIssueId);
             return recoveredAgentSessionId
               ? this.db.upsertIssue({
                   projectId: issue.projectId,
@@ -876,7 +876,7 @@ export class PatchRelayService {
       stores: {
         webhookEvents: {
           insertWebhookEvent: (p: { webhookId: string; receivedAt: string; payloadJson: string }) => {
-            const r = this.db.insertFullWebhookEvent(p);
+            const r = this.db.webhookEvents.insertFullWebhookEvent(p);
             return { id: r.id, dedupeStatus: r.dedupeStatus };
           },
         },

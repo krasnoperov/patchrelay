@@ -50,4 +50,32 @@ export class WebhookEventStore {
   assignWebhookProject(id: number, projectId: string): void {
     this.connection.prepare("UPDATE webhook_events SET project_id = ? WHERE id = ?").run(projectId, id);
   }
+
+  findLatestAgentSessionIdForIssue(linearIssueId: string): string | undefined {
+    const row = this.connection.prepare(`
+      SELECT COALESCE(
+        json_extract(payload_json, '$.agentSession.id'),
+        json_extract(payload_json, '$.data.agentSession.id'),
+        json_extract(payload_json, '$.agentSessionId'),
+        json_extract(payload_json, '$.data.agentSessionId')
+      ) AS agent_session_id
+      FROM webhook_events
+      WHERE COALESCE(
+        json_extract(payload_json, '$.agentSession.issueId'),
+        json_extract(payload_json, '$.data.agentSession.issueId'),
+        json_extract(payload_json, '$.agentSession.issue.id'),
+        json_extract(payload_json, '$.data.agentSession.issue.id')
+      ) = ?
+        AND COALESCE(
+          json_extract(payload_json, '$.agentSession.id'),
+          json_extract(payload_json, '$.data.agentSession.id'),
+          json_extract(payload_json, '$.agentSessionId'),
+          json_extract(payload_json, '$.data.agentSessionId')
+        ) IS NOT NULL
+      ORDER BY id DESC
+      LIMIT 1
+    `).get(linearIssueId) as Record<string, unknown> | undefined;
+
+    return row?.agent_session_id != null ? String(row.agent_session_id) : undefined;
+  }
 }

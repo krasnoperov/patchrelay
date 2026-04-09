@@ -48,7 +48,7 @@ export class WebhookHandler {
   }
 
   async processWebhookEvent(webhookEventId: number): Promise<void> {
-    const event = this.db.getWebhookPayload(webhookEventId);
+    const event = this.db.webhookEvents.getWebhookPayload(webhookEventId);
     if (!event) {
       this.logger.warn({ webhookEventId }, "Webhook event was not found during processing");
       return;
@@ -57,7 +57,7 @@ export class WebhookHandler {
     try {
       const payload = safeJsonParse<LinearWebhookPayload>(event.payloadJson);
       if (!payload) {
-        this.db.markWebhookProcessed(webhookEventId, "failed");
+        this.db.webhookEvents.markWebhookProcessed(webhookEventId, "failed");
         throw new Error(`Stored webhook payload is invalid JSON: event ${webhookEventId}`);
       }
 
@@ -80,7 +80,7 @@ export class WebhookHandler {
           summary: `Received ${normalized.triggerEvent} webhook`,
         });
         this.installationHandler.handle(normalized);
-        this.db.markWebhookProcessed(webhookEventId, "processed");
+        this.db.webhookEvents.markWebhookProcessed(webhookEventId, "processed");
         return;
       }
 
@@ -97,13 +97,13 @@ export class WebhookHandler {
           status: "ignored",
           summary: "Ignored webhook with no matching project route",
         });
-        this.db.markWebhookProcessed(webhookEventId, "processed");
+        this.db.webhookEvents.markWebhookProcessed(webhookEventId, "processed");
         return;
       }
 
       const routedIssue = normalized.issue;
       if (!routedIssue) {
-        this.db.markWebhookProcessed(webhookEventId, "failed");
+        this.db.webhookEvents.markWebhookProcessed(webhookEventId, "failed");
         throw new Error(`Issue context disappeared while routing webhook ${event.webhookId}`);
       }
 
@@ -116,11 +116,11 @@ export class WebhookHandler {
           status: "ignored",
           summary: "Ignored webhook from an untrusted actor",
         });
-        this.db.markWebhookProcessed(webhookEventId, "processed");
+        this.db.webhookEvents.markWebhookProcessed(webhookEventId, "processed");
         return;
       }
 
-      this.db.assignWebhookProject(webhookEventId, project.id);
+      this.db.webhookEvents.assignWebhookProject(webhookEventId, project.id);
       const hydrated = await this.hydrateIssueContext(project.id, normalized);
       const issue = hydrated.issue ?? routedIssue;
 
@@ -165,7 +165,7 @@ export class WebhookHandler {
         isDirectReplyToOutstandingQuestion: (targetIssue) => this.isDirectReplyToOutstandingQuestion(targetIssue),
       });
 
-      this.db.markWebhookProcessed(webhookEventId, "processed");
+      this.db.webhookEvents.markWebhookProcessed(webhookEventId, "processed");
 
       const wakeAlreadyQueuedByFollowUpHandler = normalized.triggerEvent === "commentCreated"
         || normalized.triggerEvent === "commentUpdated"
@@ -199,7 +199,7 @@ export class WebhookHandler {
         });
       }
     } catch (error) {
-      this.db.markWebhookProcessed(webhookEventId, "failed");
+      this.db.webhookEvents.markWebhookProcessed(webhookEventId, "failed");
       const err = error instanceof Error ? error : new Error(String(error));
       this.feed?.publish({
         level: "error",

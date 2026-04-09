@@ -111,12 +111,12 @@ export class GitHubWebhookHandler {
     rawBody: Buffer;
   }): Promise<{ status: number; body: Record<string, unknown> }> {
     // Deduplicate
-    if (this.db.isWebhookDuplicate(params.deliveryId)) {
+    if (this.db.webhookEvents.isWebhookDuplicate(params.deliveryId)) {
       return { status: 200, body: { ok: true, duplicate: true } };
     }
 
     // Store the event
-    const stored = this.db.insertWebhookEvent(params.deliveryId, new Date().toISOString());
+    const stored = this.db.webhookEvents.insertWebhookEvent(params.deliveryId, new Date().toISOString());
 
     // Parse payload
     const payload = safeJsonParse(params.rawBody.toString("utf8"));

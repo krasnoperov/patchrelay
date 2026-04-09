@@ -105,7 +105,7 @@ test("non-delegated backlog issue webhooks do not create tracked issues", async 
       },
     };
 
-    const stored = db.insertFullWebhookEvent({
+    const stored = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-maf-35",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(payload),
@@ -203,7 +203,7 @@ test("delegated blocked issue is tracked but does not queue implementation until
       },
     };
 
-    const delegatedEvent = db.insertFullWebhookEvent({
+    const delegatedEvent = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-maf-40",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(delegatedPayload),
@@ -248,7 +248,7 @@ test("delegated blocked issue is tracked but does not queue implementation until
       },
     };
 
-    const blockerDoneEvent = db.insertFullWebhookEvent({
+    const blockerDoneEvent = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-maf-39-done",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(blockerDonePayload),
@@ -326,7 +326,7 @@ test("delegated issue webhooks enqueue implementation wake immediately when the 
       },
     };
 
-    const stored = db.insertFullWebhookEvent({
+    const stored = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-delegation-wake",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(payload),
@@ -389,7 +389,7 @@ test("delegated issue is tracked via repository-link installation fallback", asy
       },
     };
 
-    const stored = db.insertFullWebhookEvent({
+    const stored = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-maf-38-fallback",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(payload),
@@ -444,7 +444,7 @@ test("delegated issue is tracked via single-installation fallback", async () => 
       },
     };
 
-    const stored = db.insertFullWebhookEvent({
+    const stored = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-maf-39-single-installation-fallback",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(payload),
@@ -512,7 +512,7 @@ test("incomplete webhook relations do not clear existing blockers when live hydr
       },
     };
 
-    const delegatedEvent = db.insertFullWebhookEvent({
+    const delegatedEvent = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-maf-40-preserve",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(delegatedPayload),
@@ -582,7 +582,7 @@ test("done delegated issue does not requeue implementation after merged status e
       },
     };
 
-    const stored = db.insertFullWebhookEvent({
+    const stored = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-maf-38-done-echo",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(payload),
@@ -652,7 +652,7 @@ test("in-review status echo does not requeue implementation for an open delegate
       },
     };
 
-    const stored = db.insertFullWebhookEvent({
+    const stored = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-maf-39-review-echo",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(payload),
@@ -728,7 +728,7 @@ test("un-delegation during active run releases run and transitions to awaiting_i
       },
     };
 
-    const stored = db.insertFullWebhookEvent({
+    const stored = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-undelegate-50",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(payload),
@@ -798,7 +798,7 @@ test("un-delegation of awaiting_queue issue does not change state (point of no r
       },
     };
 
-    const stored = db.insertFullWebhookEvent({
+    const stored = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-undelegate-51",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(payload),
@@ -869,7 +869,7 @@ test("issueRemoved releases active run and transitions to failed", async () => {
       },
     };
 
-    const stored = db.insertFullWebhookEvent({
+    const stored = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-remove-52",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(payload),
@@ -936,7 +936,7 @@ test("issueRemoved without an active run marks the issue failed and clears pendi
       },
     };
 
-    const stored = db.insertFullWebhookEvent({
+    const stored = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-remove-idle-53",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(payload),
@@ -1018,7 +1018,7 @@ test("idle delegated comments with explicit PatchRelay intent queue a follow-up 
       },
     };
 
-    const stored = db.insertFullWebhookEvent({
+    const stored = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-comment-followup",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(payload),
@@ -1100,7 +1100,7 @@ test("idle comments without explicit PatchRelay intent are ignored", async () =>
       },
     };
 
-    const stored = db.insertFullWebhookEvent({
+    const stored = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-comment-ignored",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(payload),
@@ -1179,7 +1179,7 @@ test("awaiting_input comments without explicit PatchRelay intent are still class
       },
     };
 
-    const stored = db.insertFullWebhookEvent({
+    const stored = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-awaiting-input-comment-ignored",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(payload),
@@ -1261,7 +1261,7 @@ test("awaiting_input comments resume PatchRelay work as direct replies on the sa
       },
     };
 
-    const stored = db.insertFullWebhookEvent({
+    const stored = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-awaiting-input-comment",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(payload),
@@ -1354,7 +1354,7 @@ test("awaiting_input answers to an outstanding PatchRelay question are classifie
       },
     };
 
-    const stored = db.insertFullWebhookEvent({
+    const stored = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-direct-reply-comment",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(payload),
@@ -1435,7 +1435,7 @@ test("PatchRelay-authored comments are recorded as inert session events without 
       },
     };
 
-    const stored = db.insertFullWebhookEvent({
+    const stored = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-self-comment",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(payload),
@@ -1523,7 +1523,7 @@ test("PatchRelay managed status comment updates stay inert even when the webhook
       },
     };
 
-    const stored = db.insertFullWebhookEvent({
+    const stored = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-managed-status-comment",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(payload),
@@ -1605,7 +1605,7 @@ test("PatchRelay-generated escalation activity comments stay inert even when Lin
       },
     };
 
-    const stored = db.insertFullWebhookEvent({
+    const stored = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-escalation-comment",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(payload),
@@ -1712,7 +1712,7 @@ test("agent signal stop requests halt the active run and emit a stop_requested s
       },
     } as unknown as LinearWebhookPayload;
 
-    const stored = db.insertFullWebhookEvent({
+    const stored = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-stop-signal",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(payload),
@@ -1788,7 +1788,7 @@ test("agent session id survives follow-up webhooks that do not carry a session i
         },
       },
     };
-    const sessionEvent = db.insertFullWebhookEvent({
+    const sessionEvent = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-agent-session",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(sessionPayload),
@@ -1814,7 +1814,7 @@ test("agent session id survives follow-up webhooks that do not carry a session i
         },
       },
     };
-    const notificationEvent = db.insertFullWebhookEvent({
+    const notificationEvent = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-agent-notification",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(notificationPayload),
@@ -1902,7 +1902,7 @@ test("agent session creation does not post a delegate prompt when Linear already
         },
       },
     };
-    const stored = db.insertFullWebhookEvent({
+    const stored = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-agent-session-race",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(sessionPayload),
@@ -2001,7 +2001,7 @@ test("agent session creation before delegation persists the session id for later
       },
       promptContext: "<issue identifier=\"MAF-94\"><title>Pre-delegation session</title></issue>",
     };
-    const sessionEvent = db.insertFullWebhookEvent({
+    const sessionEvent = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-agent-session-predelegate",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(agentSessionPayload),
@@ -2033,7 +2033,7 @@ test("agent session creation before delegation persists the session id for later
         state: { id: "state-start", name: "Start", type: "started" },
       },
     };
-    const delegateEvent = db.insertFullWebhookEvent({
+    const delegateEvent = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-agent-session-delegate",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(delegatePayload),
@@ -2127,7 +2127,7 @@ test("issueCreated recovers delegated startup after an early agent session left 
       },
       promptContext: "<issue identifier=\"MAF-95\"><title>Delegated startup recovery</title></issue>",
     };
-    const sessionEvent = db.insertFullWebhookEvent({
+    const sessionEvent = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-agent-session-startup-race",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(agentSessionPayload),
@@ -2154,7 +2154,7 @@ test("issueCreated recovers delegated startup after an early agent session left 
         delegate: { id: "patchrelay-actor", name: "PatchRelay" },
       },
     };
-    const issueCreatedEvent = db.insertFullWebhookEvent({
+    const issueCreatedEvent = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-issue-created-startup-race",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(issueCreatedPayload),
@@ -2255,7 +2255,7 @@ test("issueCreated recovers delegated blocked startup without queueing implement
       },
       promptContext: "<issue identifier=\"MAF-96\"><title>Delegated blocked startup recovery</title></issue>",
     };
-    const sessionEvent = db.insertFullWebhookEvent({
+    const sessionEvent = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-agent-session-blocked-startup-race",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(agentSessionPayload),
@@ -2278,7 +2278,7 @@ test("issueCreated recovers delegated blocked startup without queueing implement
         delegate: { id: "patchrelay-actor", name: "PatchRelay" },
       },
     };
-    const issueCreatedEvent = db.insertFullWebhookEvent({
+    const issueCreatedEvent = db.webhookEvents.insertFullWebhookEvent({
       webhookId: "delivery-issue-created-blocked-startup-race",
       receivedAt: new Date().toISOString(),
       payloadJson: JSON.stringify(issueCreatedPayload),
