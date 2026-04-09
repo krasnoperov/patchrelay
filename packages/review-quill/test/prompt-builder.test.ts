@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { renderDiffContextLines } from "../src/diff-context/index.ts";
 import { renderReviewPrompt } from "../src/prompt-builder/index.ts";
+import { findDisallowedReviewPromptSectionIds } from "../src/prompt-builder/render.ts";
 import type { ReviewContext } from "../src/types.ts";
 
 function baseContext(): Omit<ReviewContext, "prompt"> {
@@ -84,6 +85,9 @@ function baseContext(): Omit<ReviewContext, "prompt"> {
         },
       ],
     },
+    promptCustomization: {
+      replaceSections: {},
+    },
     promptContext: {
       guidanceDocs: [
         { path: "AGENTS.md", text: "Be careful with merges." },
@@ -107,15 +111,11 @@ test("renderReviewPrompt includes explicit guidance docs and suppressed summarie
   assert.match(prompt, /src\/service\.ts/);
   assert.match(prompt, /Earlier note/);
   assert.match(prompt, /## Prior review claims to verify/);
-  assert.match(prompt, /Do not repeat a claim just because it appeared in a previous review/);
-  assert.match(prompt, /Linked issue keys detected: TST-28/);
-  assert.match(prompt, /## Task Boundary/);
+  assert.match(prompt, /Linked issue keys: TST-28/);
+  assert.match(prompt, /## Review rules/);
+  assert.match(prompt, /Flag only high-signal issues/);
   assert.match(prompt, /Do not silently widen the delegated task/);
-  assert.match(prompt, /broader product inconsistency should be blocking only when ONE of these is true/);
-  assert.match(prompt, /Treat issue keys as identifiers only/);
-  assert.match(prompt, /authoritative definition of this PR's scope on the current head/);
-  assert.match(prompt, /historical claims to verify/);
-  assert.match(prompt, /Do NOT claim that this PR changes files, routes, or surfaces that do not appear in that current diff inventory/);
+  assert.match(prompt, /Verify these historical claims against the current head before reusing them/);
 });
 
 test("renderReviewPrompt embeds renderDiffContextLines verbatim (CLI/LLM parity lock)", () => {
@@ -131,4 +131,39 @@ test("renderReviewPrompt embeds renderDiffContextLines verbatim (CLI/LLM parity 
     prompt.includes(diffSection),
     "renderReviewPrompt output must contain renderDiffContextLines output as a substring",
   );
+});
+
+test("renderReviewPrompt applies extra instructions and allowed section replacement", () => {
+  const context = baseContext();
+  context.promptCustomization = {
+    extraInstructions: { sourcePath: "/install/review-policy.md", content: "Escalate UX regressions to humans." },
+    replaceSections: {
+      "review-rubric": {
+        sourcePath: "/repo/review-rubric.md",
+        content: "## Review rules\nUse the repository's custom review bar.",
+      },
+    },
+  };
+
+  const prompt = renderReviewPrompt(context);
+
+  assert.match(prompt, /## Extra Instructions/);
+  assert.match(prompt, /Escalate UX regressions to humans\./);
+  assert.match(prompt, /Use the repository's custom review bar/);
+});
+
+test("disallowed review-quill section replacements are detected and ignored", () => {
+  const context = baseContext();
+  context.promptCustomization = {
+    replaceSections: {
+      "diff-context": {
+        sourcePath: "/repo/diff-context.md",
+        content: "## Diff Context\nPretend this was replaceable.",
+      },
+    },
+  };
+
+  assert.deepEqual(findDisallowedReviewPromptSectionIds(context.promptCustomization.replaceSections), ["diff-context"]);
+  const prompt = renderReviewPrompt(context);
+  assert.doesNotMatch(prompt, /Pretend this was replaceable\./);
 });

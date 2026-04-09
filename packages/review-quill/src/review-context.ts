@@ -1,14 +1,36 @@
+import type { Logger } from "pino";
 import type { GitHubClient } from "./github-client.ts";
 import type { PullRequestSummary, ReviewContext, ReviewQuillRepositoryConfig } from "./types.ts";
+import { loadReviewQuillRepoPrompting } from "./customization.ts";
 import { buildDiffContext } from "./diff-context/index.ts";
 import { buildPromptContext } from "./prompt-context/index.ts";
 import { renderReviewPrompt } from "./prompt-builder/index.ts";
+import { findDisallowedReviewPromptSectionIds, findUnknownReviewPromptSectionIds } from "./prompt-builder/render.ts";
 import { materializeReviewWorkspace } from "./review-workspace/index.ts";
+
+function mergePromptCustomization(
+  base: ReviewContext["promptCustomization"],
+  override: ReviewContext["promptCustomization"] | undefined,
+): ReviewContext["promptCustomization"] {
+  return {
+    ...(override?.extraInstructions
+      ? { extraInstructions: override.extraInstructions }
+      : base.extraInstructions
+      ? { extraInstructions: base.extraInstructions }
+      : {}),
+    replaceSections: {
+      ...base.replaceSections,
+      ...(override?.replaceSections ?? {}),
+    },
+  };
+}
 
 export async function buildReviewContext(params: {
   github: GitHubClient;
   repo: ReviewQuillRepositoryConfig;
   pr: PullRequestSummary;
+  prompting: ReviewContext["promptCustomization"];
+  logger: Logger;
 }): Promise<{ context: ReviewContext; dispose: () => Promise<void> }> {
   const token = params.github.currentTokenForRepo(params.repo.repoFullName);
   if (!token) {
@@ -31,14 +53,33 @@ export async function buildReviewContext(params: {
       materialized.workspace,
       params.repo.reviewDocs,
     );
+    const repoPromptCustomization = loadReviewQuillRepoPrompting({
+      repoRoot: materialized.workspace.worktreePath,
+      logger: params.logger,
+    });
     const baseContext = {
       workspaceMode: "checkout" as const,
       workspace: materialized.workspace,
       repo: params.repo,
       pr: params.pr,
       diff,
+      promptCustomization: mergePromptCustomization(params.prompting, repoPromptCustomization),
       promptContext,
     };
+    const unknownPromptSections = findUnknownReviewPromptSectionIds(baseContext.promptCustomization.replaceSections);
+    if (unknownPromptSections.length > 0) {
+      params.logger.warn(
+        { repo: params.repo.repoFullName, prNumber: params.pr.number, unknownPromptSections },
+        "Review Quill prompt customization references unknown section ids",
+      );
+    }
+    const disallowedPromptSections = findDisallowedReviewPromptSectionIds(baseContext.promptCustomization.replaceSections);
+    if (disallowedPromptSections.length > 0) {
+      params.logger.warn(
+        { repo: params.repo.repoFullName, prNumber: params.pr.number, disallowedPromptSections },
+        "Review Quill prompt customization attempted to replace non-overridable sections",
+      );
+    }
     return {
       context: {
         ...baseContext,
