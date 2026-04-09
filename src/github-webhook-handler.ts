@@ -234,7 +234,7 @@ export class GitHubWebhookHandler {
       // Only transition and notify when the state actually changes.
       // Multiple check_suite events can arrive for the same outcome.
       if (newState && newState !== afterMetadata.factoryState) {
-        this.db.upsertIssueRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+        this.db.issueSessions.upsertIssueRespectingActiveLease(issue.projectId, issue.linearIssueId, {
           projectId: issue.projectId,
           linearIssueId: issue.linearIssueId,
           factoryState: newState,
@@ -257,7 +257,7 @@ export class GitHubWebhookHandler {
     // Reset repair counters on new push — but only when no repair run is active,
     // since Codex pushes during repair and resetting mid-run would bypass budgets.
     if (event.triggerEvent === "pr_synchronize" && !freshIssue.activeRunId) {
-      this.db.upsertIssueRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+      this.db.issueSessions.upsertIssueRespectingActiveLease(issue.projectId, issue.linearIssueId, {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         ciRepairAttempts: 0,
@@ -441,7 +441,7 @@ export class GitHubWebhookHandler {
         if (this.hasDuplicatePendingReactiveRun(issue, "queue_repair", failureContext)) {
           return;
         }
-        const hadPendingWake = this.db.hasPendingIssueSessionEvents(issue.projectId, issue.linearIssueId);
+        const hadPendingWake = this.db.issueSessions.hasPendingIssueSessionEvents(issue.projectId, issue.linearIssueId);
         this.db.upsertIssue({
           projectId: issue.projectId,
           linearIssueId: issue.linearIssueId,
@@ -455,7 +455,7 @@ export class GitHubWebhookHandler {
           lastQueueSignalAt: new Date().toISOString(),
           lastQueueIncidentJson: JSON.stringify(queueRepairContext),
         });
-        this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+        this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
           projectId: issue.projectId,
           linearIssueId: issue.linearIssueId,
           eventType: "merge_steward_incident",
@@ -465,7 +465,7 @@ export class GitHubWebhookHandler {
           }),
           dedupeKey: failureContext.failureSignature,
         });
-        this.db.setBranchOwnerRespectingActiveLease(issue.projectId, issue.linearIssueId, "patchrelay");
+        this.db.issueSessions.setBranchOwnerRespectingActiveLease(issue.projectId, issue.linearIssueId, "patchrelay");
         const queuedRunType = hadPendingWake
           ? this.peekPendingSessionWakeRunType(issue.projectId, issue.linearIssueId)
           : this.enqueuePendingSessionWake(issue.projectId, issue.linearIssueId);
@@ -497,7 +497,7 @@ export class GitHubWebhookHandler {
         if (this.hasDuplicatePendingReactiveRun(issue, "ci_repair", failureContext)) {
           return;
         }
-        const hadPendingWake = this.db.hasPendingIssueSessionEvents(issue.projectId, issue.linearIssueId);
+        const hadPendingWake = this.db.issueSessions.hasPendingIssueSessionEvents(issue.projectId, issue.linearIssueId);
         const snapshot = this.getRelevantCiSnapshot(issue, event);
         this.db.upsertIssue({
           projectId: issue.projectId,
@@ -511,7 +511,7 @@ export class GitHubWebhookHandler {
           lastGitHubFailureAt: new Date().toISOString(),
           lastQueueIncidentJson: null,
         });
-        this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+        this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
           projectId: issue.projectId,
           linearIssueId: issue.linearIssueId,
           eventType: "settled_red_ci",
@@ -522,7 +522,7 @@ export class GitHubWebhookHandler {
           }),
           dedupeKey: failureContext.failureSignature,
         });
-        this.db.setBranchOwnerRespectingActiveLease(issue.projectId, issue.linearIssueId, "patchrelay");
+        this.db.issueSessions.setBranchOwnerRespectingActiveLease(issue.projectId, issue.linearIssueId, "patchrelay");
         const queuedRunType = hadPendingWake
           ? this.peekPendingSessionWakeRunType(issue.projectId, issue.linearIssueId)
           : this.enqueuePendingSessionWake(issue.projectId, issue.linearIssueId);
@@ -541,7 +541,7 @@ export class GitHubWebhookHandler {
     }
 
     if (event.triggerEvent === "review_changes_requested") {
-      const hadPendingWake = this.db.hasPendingIssueSessionEvents(issue.projectId, issue.linearIssueId);
+      const hadPendingWake = this.db.issueSessions.hasPendingIssueSessionEvents(issue.projectId, issue.linearIssueId);
       const reviewComments = await this.fetchReviewCommentsForEvent(event).catch((error) => {
         this.logger.warn(
           {
@@ -554,7 +554,7 @@ export class GitHubWebhookHandler {
         );
         return undefined;
       });
-      this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+      this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         eventType: "review_changes_requested",
@@ -572,7 +572,7 @@ export class GitHubWebhookHandler {
           event.reviewerName ?? "unknown-reviewer",
         ].join("::"),
       });
-      this.db.setBranchOwnerRespectingActiveLease(issue.projectId, issue.linearIssueId, "patchrelay");
+      this.db.issueSessions.setBranchOwnerRespectingActiveLease(issue.projectId, issue.linearIssueId, "patchrelay");
       const queuedRunType = hadPendingWake
         ? this.peekPendingSessionWakeRunType(issue.projectId, issue.linearIssueId)
         : this.enqueuePendingSessionWake(issue.projectId, issue.linearIssueId);
@@ -595,15 +595,15 @@ export class GitHubWebhookHandler {
 
   private async handleTerminalPrEvent(issue: IssueRecord, event: NormalizedGitHubEvent): Promise<void> {
     const eventType = event.triggerEvent === "pr_merged" ? "pr_merged" : "pr_closed";
-    this.db.appendIssueSessionEvent({
+    this.db.issueSessions.appendIssueSessionEvent({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       eventType,
       dedupeKey: [eventType, issue.prNumber ?? event.prNumber ?? "unknown-pr", issue.prHeadSha ?? event.headSha ?? "unknown-sha"].join("::"),
     });
-    this.db.clearPendingIssueSessionEventsRespectingActiveLease(issue.projectId, issue.linearIssueId);
+    this.db.issueSessions.clearPendingIssueSessionEventsRespectingActiveLease(issue.projectId, issue.linearIssueId);
 
-    const run = issue.activeRunId ? this.db.getRun(issue.activeRunId) : undefined;
+    const run = issue.activeRunId ? this.db.runs.getRunById(issue.activeRunId) : undefined;
     if (run?.threadId && run.turnId) {
       try {
         await this.codex.steerTurn({
@@ -620,7 +620,7 @@ export class GitHubWebhookHandler {
 
     const commitTerminalUpdate = () => {
       if (run) {
-        this.db.finishRun(run.id, {
+        this.db.runs.finishRun(run.id, {
           status: "released",
           failureReason: event.triggerEvent === "pr_merged"
             ? "Pull request merged during active run"
@@ -634,13 +634,13 @@ export class GitHubWebhookHandler {
         factoryState: event.triggerEvent === "pr_merged" ? "done" : "failed",
       });
     };
-    const activeLease = this.db.getActiveIssueSessionLease(issue.projectId, issue.linearIssueId);
+    const activeLease = this.db.issueSessions.getActiveIssueSessionLease(issue.projectId, issue.linearIssueId);
     if (activeLease) {
-      this.db.withIssueSessionLease(issue.projectId, issue.linearIssueId, activeLease.leaseId, commitTerminalUpdate);
+      this.db.issueSessions.withIssueSessionLease(issue.projectId, issue.linearIssueId, activeLease.leaseId, commitTerminalUpdate);
     } else {
       this.db.transaction(commitTerminalUpdate);
     }
-    this.db.releaseIssueSessionLeaseRespectingActiveLease(issue.projectId, issue.linearIssueId);
+    this.db.issueSessions.releaseIssueSessionLeaseRespectingActiveLease(issue.projectId, issue.linearIssueId);
     const updatedIssue = this.db.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
     if (event.triggerEvent === "pr_merged") {
       await this.completeLinearIssueAfterMerge(updatedIssue);
@@ -813,7 +813,7 @@ export class GitHubWebhookHandler {
       : typeof failureContext.headSha === "string" ? failureContext.headSha : undefined;
     if (!signature) return false;
 
-    const pendingWake = this.db.peekIssueSessionWake(issue.projectId, issue.linearIssueId);
+    const pendingWake = this.db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId);
     if (pendingWake?.runType === runType) {
       const existing = pendingWake.context;
       if (existing?.failureSignature === signature
@@ -1062,7 +1062,7 @@ export class GitHubWebhookHandler {
     });
 
     if (issue.activeRunId) {
-      const run = this.db.getRun(issue.activeRunId);
+      const run = this.db.runs.getRunById(issue.activeRunId);
       if (run?.threadId && run.turnId) {
         try {
           await this.codex.steerTurn({
@@ -1079,7 +1079,7 @@ export class GitHubWebhookHandler {
       }
     }
 
-    this.db.appendIssueSessionEvent({
+    this.db.issueSessions.appendIssueSessionEvent({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       eventType: "followup_comment",
@@ -1105,11 +1105,11 @@ export class GitHubWebhookHandler {
   }
 
   private peekPendingSessionWakeRunType(projectId: string, issueId: string): string | undefined {
-    return this.db.peekIssueSessionWake(projectId, issueId)?.runType;
+    return this.db.issueSessions.peekIssueSessionWake(projectId, issueId)?.runType;
   }
 
   private enqueuePendingSessionWake(projectId: string, issueId: string): string | undefined {
-    const wake = this.db.peekIssueSessionWake(projectId, issueId);
+    const wake = this.db.issueSessions.peekIssueSessionWake(projectId, issueId);
     if (!wake) {
       return undefined;
     }

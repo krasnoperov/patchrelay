@@ -113,7 +113,7 @@ export class RunLauncher {
     branchName: string;
     worktreePath: string;
   }): RunRecord | undefined {
-    return this.db.withIssueSessionLease(params.item.projectId, params.item.issueId, params.leaseId, () => {
+    return this.db.issueSessions.withIssueSessionLease(params.item.projectId, params.item.issueId, params.leaseId, () => {
       const fresh = this.db.getIssue(params.item.projectId, params.item.issueId);
       if (!fresh || fresh.activeRunId !== undefined) return undefined;
       const wakeIssue = params.materializeLegacyPendingWake(fresh, {
@@ -124,7 +124,7 @@ export class RunLauncher {
       const freshWake = params.resolveRunWake(wakeIssue);
       if (!freshWake || freshWake.runType !== params.runType) return undefined;
 
-      const created = this.db.createRun({
+      const created = this.db.runs.createRun({
         issueId: fresh.id,
         projectId: params.item.projectId,
         linearIssueId: params.item.issueId,
@@ -156,9 +156,9 @@ export class RunLauncher {
             }
           : {}),
       });
-      this.db.consumeIssueSessionEvents(params.item.projectId, params.item.issueId, freshWake.eventIds, created.id);
-      this.db.setIssueSessionLastWakeReason(params.item.projectId, params.item.issueId, freshWake.wakeReason ?? null);
-      this.db.setBranchOwnerWithLease({ projectId: params.item.projectId, linearIssueId: params.item.issueId, leaseId: params.leaseId }, "patchrelay");
+      this.db.issueSessions.consumeIssueSessionEvents(params.item.projectId, params.item.issueId, freshWake.eventIds, created.id);
+      this.db.issueSessions.setIssueSessionLastWakeReason(params.item.projectId, params.item.issueId, freshWake.wakeReason ?? null);
+      this.db.issueSessions.setBranchOwnerWithLease({ projectId: params.item.projectId, linearIssueId: params.item.issueId, leaseId: params.leaseId }, "patchrelay");
       return created;
     });
   }
@@ -236,7 +236,7 @@ export class RunLauncher {
       } else {
         const thread = await this.codex.startThread({ cwd: params.worktreePath });
         threadId = thread.id;
-        this.db.upsertIssueWithLease(
+        this.db.issueSessions.upsertIssueWithLease(
           { projectId: params.project.id, linearIssueId: params.issue.linearIssueId, leaseId: params.leaseId },
           { projectId: params.project.id, linearIssueId: params.issue.linearIssueId, threadId },
         );
@@ -251,7 +251,7 @@ export class RunLauncher {
           this.logger.info({ issueKey: params.issue.issueKey, staleThreadId: threadId }, "Thread is stale, retrying with fresh thread");
           const thread = await this.codex.startThread({ cwd: params.worktreePath });
           threadId = thread.id;
-          this.db.upsertIssueWithLease(
+          this.db.issueSessions.upsertIssueWithLease(
             { projectId: params.project.id, linearIssueId: params.issue.linearIssueId, leaseId: params.leaseId },
             { projectId: params.project.id, linearIssueId: params.issue.linearIssueId, threadId },
           );
@@ -268,11 +268,11 @@ export class RunLauncher {
       const lostLease = error instanceof Error && error.name === "IssueSessionLeaseLostError";
       if (!lostLease) {
         const nextState: FactoryState = params.isRequestedChangesRunType(params.runType) ? "escalated" : "failed";
-        this.db.finishRunWithLease({ projectId: params.project.id, linearIssueId: params.issue.linearIssueId, leaseId: params.leaseId }, params.run.id, {
+        this.db.issueSessions.finishRunWithLease({ projectId: params.project.id, linearIssueId: params.issue.linearIssueId, leaseId: params.leaseId }, params.run.id, {
           status: "failed",
           failureReason: message,
         });
-        this.db.upsertIssueWithLease(
+        this.db.issueSessions.upsertIssueWithLease(
           { projectId: params.project.id, linearIssueId: params.issue.linearIssueId, leaseId: params.leaseId },
           {
             projectId: params.project.id,

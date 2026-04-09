@@ -638,7 +638,7 @@ test("cli cluster warns when active repo work overlaps on the same files", async
       worktreePath: path.join(baseDir, "worktrees", "USE-50"),
       threadId: "thread-use-50",
     });
-    const run50 = db.createRun({
+    const run50 = db.runs.createRun({
       issueId: issue50.id,
       projectId: "usertold",
       linearIssueId: "issue-use-50",
@@ -662,7 +662,7 @@ test("cli cluster warns when active repo work overlaps on the same files", async
       worktreePath: path.join(baseDir, "worktrees", "USE-51"),
       threadId: "thread-use-51",
     });
-    const run51 = db.createRun({
+    const run51 = db.runs.createRun({
       issueId: issue51.id,
       projectId: "usertold",
       linearIssueId: "issue-use-51",

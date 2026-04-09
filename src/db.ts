@@ -9,7 +9,6 @@ import type {
   RunRecord,
   RunStatus,
   TrackedIssueRecord,
-  ThreadEventRecord,
 } from "./db-types.ts";
 import type { FactoryState, RunType } from "./factory-state.ts";
 import {
@@ -140,14 +139,14 @@ export class PatchRelayDatabase {
       deriveImplicitReactiveWake,
       <T>(fn: () => T) => this.transaction(fn),
       (params) => this.upsertIssue(params as Parameters<PatchRelayDatabase["upsertIssue"]>[0]),
-      (runId, params) => this.finishRun(runId, params),
-      (runId, params) => this.updateRunThread(runId, params),
+      (runId, params) => this.runs.finishRun(runId, params),
+      (runId, params) => this.runs.updateRunThread(runId, params),
       (projectId, linearIssueId, owner) => this.setBranchOwner(projectId, linearIssueId, owner),
     );
     this.runs = new RunStore(
       this.connection,
       mapRunRow,
-      (id) => this.getRun(id),
+      (id) => this.runs.getRunById(id),
       (projectId, linearIssueId) => this.getIssue(projectId, linearIssueId),
       (issue, options) => this.syncIssueSessionFromIssue(issue, options),
     );
@@ -529,7 +528,14 @@ export class PatchRelayDatabase {
   finishRunWithLease(
     lease: { projectId: string; linearIssueId: string; leaseId: string },
     runId: number,
-    params: Parameters<PatchRelayDatabase["finishRun"]>[1],
+    params: {
+      status: RunStatus;
+      threadId?: string;
+      turnId?: string;
+      failureReason?: string;
+      summaryJson?: string;
+      reportJson?: string;
+    },
   ): boolean {
     return this.issueSessions.finishRunWithLease(lease, runId, params);
   }
@@ -538,7 +544,14 @@ export class PatchRelayDatabase {
     projectId: string,
     linearIssueId: string,
     runId: number,
-    params: Parameters<PatchRelayDatabase["finishRun"]>[1],
+    params: {
+      status: RunStatus;
+      threadId?: string;
+      turnId?: string;
+      failureReason?: string;
+      summaryJson?: string;
+      reportJson?: string;
+    },
   ): boolean {
     return this.issueSessions.finishRunRespectingActiveLease(projectId, linearIssueId, runId, params);
   }
@@ -546,7 +559,7 @@ export class PatchRelayDatabase {
   updateRunThreadWithLease(
     lease: { projectId: string; linearIssueId: string; leaseId: string },
     runId: number,
-    params: Parameters<PatchRelayDatabase["updateRunThread"]>[1],
+    params: { threadId: string; parentThreadId?: string; turnId?: string },
   ): boolean {
     return this.issueSessions.updateRunThreadWithLease(lease, runId, params);
   }
@@ -807,78 +820,6 @@ export class PatchRelayDatabase {
     return rows.map(mapIssueRow);
   }
 
-  // ─── Runs ─────────────────────────────────────────────────────────
-
-  createRun(params: {
-    issueId: number;
-    projectId: string;
-    linearIssueId: string;
-    runType: RunType;
-    sourceHeadSha?: string;
-    promptText?: string;
-  }): RunRecord {
-    return this.runs.createRun(params);
-  }
-
-  getRun(id: number): RunRecord | undefined {
-    return this.runs.getRunById(id);
-  }
-
-  getRunByThreadId(threadId: string): RunRecord | undefined {
-    return this.runs.getRunByThreadId(threadId);
-  }
-
-  listRunsForIssue(projectId: string, linearIssueId: string): RunRecord[] {
-    return this.runs.listRunsForIssue(projectId, linearIssueId);
-  }
-
-  getLatestRunForIssue(projectId: string, linearIssueId: string): RunRecord | undefined {
-    return this.runs.getLatestRunForIssue(projectId, linearIssueId);
-  }
-
-  listActiveRuns(): RunRecord[] {
-    return this.runs.listActiveRuns();
-  }
-
-  listRunningRuns(): RunRecord[] {
-    return this.runs.listRunningRuns();
-  }
-
-  updateRunThread(runId: number, params: { threadId: string; parentThreadId?: string; turnId?: string }): void {
-    this.runs.updateRunThread(runId, params);
-  }
-
-  updateRunTurnId(runId: number, turnId: string): void {
-    this.runs.updateRunTurnId(runId, turnId);
-  }
-
-  finishRun(runId: number, params: {
-    status: RunStatus;
-    threadId?: string;
-    turnId?: string;
-    failureReason?: string;
-    summaryJson?: string;
-    reportJson?: string;
-  }): void {
-    this.runs.finishRun(runId, params);
-  }
-
-  // ─── Thread Events (kept for extended history) ────────────────────
-
-  saveThreadEvent(params: {
-    runId: number;
-    threadId: string;
-    turnId?: string;
-    method: string;
-    eventJson: string;
-  }): void {
-    this.runs.saveThreadEvent(params);
-  }
-
-  listThreadEvents(runId: number): ThreadEventRecord[] {
-    return this.runs.listThreadEvents(runId);
-  }
-
   // ─── View builders ──────────────────────────────────────────────
 
   issueToTrackedIssue(issue: IssueRecord): TrackedIssueRecord {
@@ -887,7 +828,7 @@ export class PatchRelayDatabase {
       session: this.getIssueSession(issue.projectId, issue.linearIssueId),
       blockedBy: this.listIssueDependencies(issue.projectId, issue.linearIssueId),
       hasPendingWake: this.peekIssueSessionWake(issue.projectId, issue.linearIssueId) !== undefined,
-      latestRun: this.getLatestRunForIssue(issue.projectId, issue.linearIssueId),
+      latestRun: this.runs.getLatestRunForIssue(issue.projectId, issue.linearIssueId),
       latestEvent: this.listIssueSessionEvents(issue.projectId, issue.linearIssueId, { limit: 1 }).at(-1),
     });
   }
@@ -925,7 +866,7 @@ export class PatchRelayDatabase {
     const issue = this.getIssueByKey(issueKey);
     if (!issue) return undefined;
     const tracked = this.issueToTrackedIssue(issue);
-    const activeRun = issue.activeRunId ? this.getRun(issue.activeRunId) : undefined;
+    const activeRun = issue.activeRunId ? this.runs.getRunById(issue.activeRunId) : undefined;
     return {
       issue: tracked,
       ...(activeRun ? { activeRun } : {}),
@@ -942,7 +883,7 @@ export class PatchRelayDatabase {
   ): void {
     const tracked = this.issueToTrackedIssue(issue);
     const existing = this.getIssueSession(issue.projectId, issue.linearIssueId);
-    const latestRun = this.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
+    const latestRun = this.runs.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
     const latestRunType = options?.lastRunType ?? latestRun?.runType ?? existing?.lastRunType;
     const summaryText = this.resolveIssueSessionSummary(issue, latestRun, existing?.summaryText, options?.summaryText);
     const activeThreadId = issue.threadId ?? existing?.activeThreadId;
@@ -1085,7 +1026,7 @@ export class PatchRelayDatabase {
   }
 
   private findLatestCompletedRunSummary(projectId: string, linearIssueId: string): string | undefined {
-    const runs = this.listRunsForIssue(projectId, linearIssueId);
+    const runs = this.runs.listRunsForIssue(projectId, linearIssueId);
     for (let index = runs.length - 1; index >= 0; index -= 1) {
       const run = runs[index];
       if (!run || run.status !== "completed") {

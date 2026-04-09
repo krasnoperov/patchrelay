@@ -29,7 +29,7 @@ export class DesiredStageRecorder {
     project: ProjectConfig;
     normalized: NormalizedEvent;
     peekPendingSessionWakeRunType: (projectId: string, issueId: string) => RunType | undefined;
-    stopActiveRun: (run: NonNullable<ReturnType<PatchRelayDatabase["getRun"]>>, input: string) => Promise<void>;
+    stopActiveRun: (run: NonNullable<ReturnType<PatchRelayDatabase["runs"]["getRunById"]>>, input: string) => Promise<void>;
   }): Promise<{
     issue: TrackedIssueRecord | undefined;
     wakeRunType: RunType | undefined;
@@ -41,11 +41,11 @@ export class DesiredStageRecorder {
     }
 
     const existingIssue = this.db.getIssue(params.project.id, normalizedIssue.id);
-    const activeRun = existingIssue?.activeRunId ? this.db.getRun(existingIssue.activeRunId) : undefined;
+    const activeRun = existingIssue?.activeRunId ? this.db.runs.getRunById(existingIssue.activeRunId) : undefined;
     const delegated = this.isDelegatedToPatchRelay(params.project, params.normalized);
     const triggerAllowed = triggerEventAllowed(params.project, params.normalized.triggerEvent);
     const incomingAgentSessionId = params.normalized.agentSession?.id;
-    const hasPendingWake = this.db.peekIssueSessionWake(params.project.id, normalizedIssue.id) !== undefined;
+    const hasPendingWake = this.db.issueSessions.peekIssueSessionWake(params.project.id, normalizedIssue.id) !== undefined;
 
     if (!existingIssue && !delegated && !incomingAgentSessionId) {
       return { issue: undefined, wakeRunType: undefined, delegated };
@@ -117,14 +117,14 @@ export class DesiredStageRecorder {
         ...(undelegation.factoryState ? { factoryState: undelegation.factoryState as never } : {}),
       });
       if (runRelease.release && activeRun && runRelease.reason) {
-        this.db.finishRun(activeRun.id, { status: "released", failureReason: runRelease.reason });
+        this.db.runs.finishRun(activeRun.id, { status: "released", failureReason: runRelease.reason });
       }
       return record;
     };
 
-    const activeLease = this.db.getActiveIssueSessionLease(params.project.id, normalizedIssue.id);
+    const activeLease = this.db.issueSessions.getActiveIssueSessionLease(params.project.id, normalizedIssue.id);
     const issue = activeLease
-      ? this.db.withIssueSessionLease(params.project.id, normalizedIssue.id, activeLease.leaseId, commitIssueUpdate) ?? (existingIssue ?? this.db.upsertIssue({
+      ? this.db.issueSessions.withIssueSessionLease(params.project.id, normalizedIssue.id, activeLease.leaseId, commitIssueUpdate) ?? (existingIssue ?? this.db.upsertIssue({
           projectId: params.project.id,
           linearIssueId: normalizedIssue.id,
           ...(hydratedIssue.identifier ? { issueKey: hydratedIssue.identifier } : {}),
@@ -135,14 +135,14 @@ export class DesiredStageRecorder {
       if (activeRun?.threadId && activeRun.turnId) {
         await params.stopActiveRun(activeRun, "STOP: The issue was un-delegated from PatchRelay. Stop working immediately and exit.");
       }
-      this.db.appendIssueSessionEvent({
+      this.db.issueSessions.appendIssueSessionEvent({
         projectId: params.project.id,
         linearIssueId: normalizedIssue.id,
         eventType: "undelegated",
         dedupeKey: `undelegated:${normalizedIssue.id}`,
       });
-      this.db.clearPendingIssueSessionEventsRespectingActiveLease(params.project.id, normalizedIssue.id);
-      this.db.releaseIssueSessionLeaseRespectingActiveLease(params.project.id, normalizedIssue.id);
+      this.db.issueSessions.clearPendingIssueSessionEventsRespectingActiveLease(params.project.id, normalizedIssue.id);
+      this.db.issueSessions.releaseIssueSessionLeaseRespectingActiveLease(params.project.id, normalizedIssue.id);
       this.feed?.publish({
         level: "warn",
         kind: "stage",
@@ -158,7 +158,7 @@ export class DesiredStageRecorder {
       && params.normalized.triggerEvent !== "commentUpdated"
       && params.normalized.triggerEvent !== "agentPrompted"
     ) {
-      this.db.appendIssueSessionEventRespectingActiveLease(params.project.id, normalizedIssue.id, {
+      this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(params.project.id, normalizedIssue.id, {
         projectId: params.project.id,
         linearIssueId: normalizedIssue.id,
         eventType: "delegated",

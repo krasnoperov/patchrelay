@@ -158,7 +158,7 @@ export class RunOrchestrator {
 
     const issue = this.db.getIssue(item.projectId, item.issueId);
     if (!issue || issue.activeRunId !== undefined) return;
-    const issueSession = this.db.getIssueSession(item.projectId, item.issueId);
+    const issueSession = this.db.issueSessions.getIssueSession(item.projectId, item.issueId);
 
     const leaseId = this.leaseService.acquire(item.projectId, item.issueId);
     if (!leaseId) {
@@ -167,7 +167,7 @@ export class RunOrchestrator {
     }
 
     if (issue.prState === "merged") {
-      this.db.upsertIssueWithLease(
+      this.db.issueSessions.upsertIssueWithLease(
         { projectId: issue.projectId, linearIssueId: issue.linearIssueId, leaseId },
         { projectId: issue.projectId, linearIssueId: issue.linearIssueId, pendingRunType: null, factoryState: "done" as never },
       );
@@ -270,7 +270,7 @@ export class RunOrchestrator {
     });
 
     this.assertLaunchLease(run, "before recording the active thread");
-    if (!this.db.updateRunThreadWithLease(
+    if (!this.db.issueSessions.updateRunThreadWithLease(
       { projectId: run.projectId, linearIssueId: run.linearIssueId, leaseId },
       run.id,
       { threadId, turnId, ...(parentThreadId ? { parentThreadId } : {}) },
@@ -282,7 +282,7 @@ export class RunOrchestrator {
 
     // Reset zombie recovery counter — this run started successfully
     if (issue.zombieRecoveryAttempts > 0) {
-      this.db.upsertIssueWithLease(
+      this.db.issueSessions.upsertIssueWithLease(
         { projectId: item.projectId, linearIssueId: item.issueId, leaseId },
         {
           projectId: item.projectId,
@@ -438,7 +438,7 @@ export class RunOrchestrator {
       this.activeThreadId = threadId;
     }
 
-    const run = this.db.getRunByThreadId(threadId);
+    const run = this.db.runs.getRunByThreadId(threadId);
     if (!run) return;
     if (!this.heartbeatIssueSessionLease(run.projectId, run.linearIssueId)) {
       this.logger.warn({ runId: run.id, issueId: run.linearIssueId }, "Ignoring Codex notification after losing issue-session lease");
@@ -447,7 +447,7 @@ export class RunOrchestrator {
 
     const turnId = typeof notification.params.turnId === "string" ? notification.params.turnId : undefined;
     if (this.config.runner.codex.persistExtendedHistory) {
-      this.db.saveThreadEvent({
+      this.db.runs.saveThreadEvent({
         runId: run.id,
         threadId,
         ...(turnId ? { turnId } : {}),
@@ -479,13 +479,13 @@ export class RunOrchestrator {
     if (status === "failed") {
       const nextState: FactoryState = isRequestedChangesRunType(run.runType) ? "escalated" : "failed";
       const updated = this.withHeldIssueSessionLease(run.projectId, run.linearIssueId, (lease) => {
-        this.db.finishRunWithLease(lease, run.id, {
+        this.db.issueSessions.finishRunWithLease(lease, run.id, {
           status: "failed",
           threadId,
           ...(completedTurnId ? { turnId: completedTurnId } : {}),
           failureReason: "Codex reported the turn completed in a failed state",
         });
-        this.db.upsertIssueWithLease(lease, {
+        this.db.issueSessions.upsertIssueWithLease(lease, {
           projectId: run.projectId,
           linearIssueId: run.linearIssueId,
           activeRunId: null,
@@ -545,7 +545,7 @@ export class RunOrchestrator {
     const issue = this.db.getIssueByKey(issueKey);
     if (!issue?.activeRunId) return undefined;
 
-    const run = this.db.getRun(issue.activeRunId);
+    const run = this.db.runs.getRunById(issue.activeRunId);
     if (!run?.threadId) return undefined;
 
     const trackedIssue = this.db.issueToTrackedIssue(issue);
@@ -561,7 +561,7 @@ export class RunOrchestrator {
   // ─── Reconciliation ───────────────────────────────────────────────
 
   async reconcileActiveRuns(): Promise<void> {
-    for (const run of this.db.listRunningRuns()) {
+    for (const run of this.db.runs.listRunningRuns()) {
       await this.reconcileRun(run);
     }
     // Preemptively detect stuck merge-queue PRs (conflicts visible on
@@ -657,7 +657,7 @@ export class RunOrchestrator {
     // (e.g. pr_merged processed, DB manually edited), just release the run.
     if (TERMINAL_STATES.has(issue.factoryState)) {
       this.withHeldIssueSessionLease(run.projectId, run.linearIssueId, () => {
-        this.db.finishRun(run.id, { status: "released", failureReason: "Issue reached terminal state during active run" });
+        this.db.runs.finishRun(run.id, { status: "released", failureReason: "Issue reached terminal state during active run" });
         this.db.upsertIssue({ projectId: run.projectId, linearIssueId: run.linearIssueId, activeRunId: null });
       });
       this.logger.info({ issueKey: issue.issueKey, runId: run.id, factoryState: issue.factoryState }, "Reconciliation: released run on terminal issue");
@@ -674,7 +674,7 @@ export class RunOrchestrator {
         "Zombie run detected (no thread)",
       );
       this.withHeldIssueSessionLease(run.projectId, run.linearIssueId, () => {
-        this.db.finishRun(run.id, { status: "failed", failureReason: "Zombie: never started (no thread after restart)" });
+        this.db.runs.finishRun(run.id, { status: "failed", failureReason: "Zombie: never started (no thread after restart)" });
         this.db.upsertIssue({ projectId: run.projectId, linearIssueId: run.linearIssueId, activeRunId: null });
       });
       this.recoverOrEscalate(issue, run.runType, "zombie");
@@ -695,7 +695,7 @@ export class RunOrchestrator {
         "Stale thread during reconciliation",
       );
       this.withHeldIssueSessionLease(run.projectId, run.linearIssueId, () => {
-        this.db.finishRun(run.id, { status: "failed", failureReason: "Stale thread after restart" });
+        this.db.runs.finishRun(run.id, { status: "failed", failureReason: "Stale thread after restart" });
         this.db.upsertIssue({ projectId: run.projectId, linearIssueId: run.linearIssueId, activeRunId: null });
       });
       this.recoverOrEscalate(issue, run.runType, "stale_thread");
@@ -714,7 +714,7 @@ export class RunOrchestrator {
         const stopState = resolveAuthoritativeLinearStopState(linearIssue);
         if (stopState?.isFinal) {
           this.withHeldIssueSessionLease(run.projectId, run.linearIssueId, () => {
-            this.db.finishRun(run.id, { status: "released" });
+            this.db.runs.finishRun(run.id, { status: "released" });
             this.db.upsertIssue({
               projectId: run.projectId,
               linearIssueId: run.linearIssueId,
@@ -753,20 +753,20 @@ export class RunOrchestrator {
       // Interrupted runs are not real failures — undo the budget increment.
       const repairedCounters = this.withHeldIssueSessionLease(issue.projectId, issue.linearIssueId, (lease) => {
         if (run.runType === "ci_repair" && issue.ciRepairAttempts > 0) {
-          this.db.upsertIssueWithLease(lease, {
+          this.db.issueSessions.upsertIssueWithLease(lease, {
             projectId: issue.projectId,
             linearIssueId: issue.linearIssueId,
             ciRepairAttempts: issue.ciRepairAttempts - 1,
           });
         } else if (run.runType === "queue_repair" && issue.queueRepairAttempts > 0) {
-          this.db.upsertIssueWithLease(lease, {
+          this.db.issueSessions.upsertIssueWithLease(lease, {
             projectId: issue.projectId,
             linearIssueId: issue.linearIssueId,
             queueRepairAttempts: issue.queueRepairAttempts - 1,
           });
         }
         if (run.runType === "ci_repair" || run.runType === "queue_repair") {
-          this.db.upsertIssueWithLease(lease, {
+          this.db.issueSessions.upsertIssueWithLease(lease, {
             projectId: issue.projectId,
             linearIssueId: issue.linearIssueId,
             lastAttemptedFailureHeadSha: null,
@@ -1343,7 +1343,7 @@ export class RunOrchestrator {
       this.logger.warn({ projectId, linearIssueId, context }, "Skipping issue write without a held issue-session lease");
       return undefined;
     }
-    const updated = this.db.upsertIssueWithLease(lease, params);
+    const updated = this.db.issueSessions.upsertIssueWithLease(lease, params);
     if (!updated) {
       this.logger.warn({ projectId, linearIssueId, context }, "Skipping issue write after losing issue-session lease");
     }

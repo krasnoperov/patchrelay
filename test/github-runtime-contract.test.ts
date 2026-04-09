@@ -586,7 +586,7 @@ test("requested changes on a PatchRelay-owned PR queue review_fix", async () => 
     });
 
     const issue = db.getIssue("usertold", "issue-owned-review");
-    const wake = db.peekIssueSessionWake("usertold", "issue-owned-review");
+    const wake = db.issueSessions.peekIssueSessionWake("usertold", "issue-owned-review");
     assert.equal(issue?.pendingRunType, undefined);
     assert.equal(issue?.lastBlockingReviewHeadSha, "sha-owned");
     assert.equal(wake?.runType, "review_fix");
@@ -699,7 +699,7 @@ test("GitHub PR comments on idle PatchRelay-owned PRs queue follow-up session wo
       }),
     });
 
-    const wake = db.peekIssueSessionWake("usertold", "issue-pr-comment");
+    const wake = db.issueSessions.peekIssueSessionWake("usertold", "issue-pr-comment");
     assert.equal(wake?.runType, "implementation");
     assert.equal(Array.isArray(wake?.context.followUps), true);
     assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-pr-comment" }]);
@@ -723,13 +723,13 @@ test("merged PatchRelay-owned PRs release active runs and do not queue new work"
       factoryState: "implementing",
       threadId: "thread-merged",
     });
-    const run = db.createRun({
+    const run = db.runs.createRun({
       issueId: issue.id,
       projectId: "usertold",
       linearIssueId: "issue-merged-active",
       runType: "implementation",
     });
-    db.updateRunThread(run.id, { threadId: "thread-merged", turnId: "turn-merged" });
+    db.runs.updateRunThread(run.id, { threadId: "thread-merged", turnId: "turn-merged" });
     db.upsertIssue({
       projectId: "usertold",
       linearIssueId: "issue-merged-active",
@@ -748,11 +748,11 @@ test("merged PatchRelay-owned PRs release active runs and do not queue new work"
     });
 
     const updatedIssue = db.getIssue("usertold", "issue-merged-active");
-    const updatedRun = db.getRun(run.id);
+    const updatedRun = db.runs.getRunById(run.id);
     assert.equal(updatedIssue?.factoryState, "done");
     assert.equal(updatedIssue?.activeRunId, undefined);
     assert.equal(updatedRun?.status, "released");
-    assert.equal(db.peekIssueSessionWake("usertold", "issue-merged-active"), undefined);
+    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-merged-active"), undefined);
     assert.deepEqual(enqueueCalls, []);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });

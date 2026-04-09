@@ -40,8 +40,8 @@ export class RunRecoveryService {
 
     if (params.isRequestedChangesRunType(runType)) {
       const updated = params.withHeldLease(fresh.projectId, fresh.linearIssueId, (lease) => {
-        this.db.clearPendingIssueSessionEventsWithLease(lease);
-        this.db.upsertIssueWithLease(lease, {
+        this.db.issueSessions.clearPendingIssueSessionEventsWithLease(lease);
+        this.db.issueSessions.upsertIssueWithLease(lease, {
           projectId: fresh.projectId,
           linearIssueId: fresh.linearIssueId,
           pendingRunType: null,
@@ -71,7 +71,7 @@ export class RunRecoveryService {
 
     if (fresh.prState === "merged") {
       const updated = params.withHeldLease(fresh.projectId, fresh.linearIssueId, (lease) => {
-        this.db.upsertIssueWithLease(lease, {
+        this.db.issueSessions.upsertIssueWithLease(lease, {
           projectId: fresh.projectId,
           linearIssueId: fresh.linearIssueId,
           factoryState: "done",
@@ -93,7 +93,7 @@ export class RunRecoveryService {
     const attempts = fresh.zombieRecoveryAttempts + 1;
     if (attempts > DEFAULT_ZOMBIE_RECOVERY_BUDGET) {
       const updated = params.withHeldLease(fresh.projectId, fresh.linearIssueId, (lease) => {
-        this.db.upsertIssueWithLease(lease, {
+        this.db.issueSessions.upsertIssueWithLease(lease, {
           projectId: fresh.projectId,
           linearIssueId: fresh.linearIssueId,
           factoryState: "escalated",
@@ -129,7 +129,7 @@ export class RunRecoveryService {
     }
 
     const requeued = params.withHeldLease(fresh.projectId, fresh.linearIssueId, (lease) => {
-      this.db.upsertIssueWithLease(lease, {
+      this.db.issueSessions.upsertIssueWithLease(lease, {
         projectId: fresh.projectId,
         linearIssueId: fresh.linearIssueId,
         pendingRunType: null,
@@ -158,10 +158,10 @@ export class RunRecoveryService {
     this.logger.warn({ issueKey: issue.issueKey, runType, reason }, "Escalating to human");
     const escalated = params.withHeldLease(issue.projectId, issue.linearIssueId, (lease) => {
       if (issue.activeRunId) {
-        this.db.finishRunWithLease(lease, issue.activeRunId, { status: "released" });
+        this.db.issueSessions.finishRunWithLease(lease, issue.activeRunId, { status: "released" });
       }
-      this.db.clearPendingIssueSessionEventsWithLease(lease);
-      this.db.upsertIssueWithLease(lease, {
+      this.db.issueSessions.clearPendingIssueSessionEventsWithLease(lease);
+      this.db.issueSessions.upsertIssueWithLease(lease, {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         pendingRunType: null,
@@ -203,9 +203,9 @@ export class RunRecoveryService {
   }): void {
     const { run, message, nextState } = params;
     const updated = params.withHeldLease(run.projectId, run.linearIssueId, (lease) => {
-      this.db.finishRun(run.id, { status: "failed", failureReason: message });
+      this.db.runs.finishRun(run.id, { status: "failed", failureReason: message });
       if (nextState === "failed" || nextState === "escalated" || nextState === "awaiting_input" || nextState === "done") {
-        this.db.clearPendingIssueSessionEventsWithLease(lease);
+        this.db.issueSessions.clearPendingIssueSessionEventsWithLease(lease);
       }
       this.db.upsertIssue({
         projectId: run.projectId,
@@ -217,7 +217,7 @@ export class RunRecoveryService {
       if (branchOwner) {
         const heldLease = params.getHeldLease(run.projectId, run.linearIssueId);
         if (heldLease) {
-          this.db.setBranchOwnerWithLease(heldLease, branchOwner);
+          this.db.issueSessions.setBranchOwnerWithLease(heldLease, branchOwner);
         }
       }
       return true;

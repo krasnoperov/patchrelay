@@ -52,7 +52,7 @@ export class AgentSessionHandler {
     if (!linear) return;
 
     const existingIssue = this.db.getIssue(project.id, normalized.issue.id);
-    const activeRun = existingIssue?.activeRunId ? this.db.getRun(existingIssue.activeRunId) : undefined;
+    const activeRun = existingIssue?.activeRunId ? this.db.runs.getRunById(existingIssue.activeRunId) : undefined;
 
     if (normalized.triggerEvent === "agentSessionCreated") {
       if (!delegated) {
@@ -131,9 +131,9 @@ export class AgentSessionHandler {
     }
 
     if (promptBody && existingIssue && (delegated || existingIssue.factoryState === "awaiting_input")) {
-      const hadPendingWake = this.db.peekIssueSessionWake(project.id, normalized.issue.id) !== undefined;
+      const hadPendingWake = this.db.issueSessions.peekIssueSessionWake(project.id, normalized.issue.id) !== undefined;
       const directReply = params.isDirectReplyToOutstandingQuestion(existingIssue);
-      this.db.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
+      this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
         projectId: project.id,
         linearIssueId: normalized.issue.id,
         eventType: directReply ? "direct_reply" : "followup_prompt",
@@ -168,7 +168,7 @@ export class AgentSessionHandler {
     normalized: NormalizedEvent;
     project: ProjectConfig;
     trackedIssue: TrackedIssueRecord | undefined;
-    activeRun: ReturnType<PatchRelayDatabase["getRun"]>;
+    activeRun: ReturnType<PatchRelayDatabase["runs"]["getRunById"]>;
     linear: LinearClient;
     syncAgentSession: (
       agentSessionId: string,
@@ -190,24 +190,24 @@ export class AgentSessionHandler {
         this.logger.warn({ issueKey: params.trackedIssue?.issueKey, error: error instanceof Error ? error.message : String(error) }, "Failed to steer Codex turn for stop signal");
       }
 
-      this.db.finishRun(params.activeRun.id, { status: "released", threadId: params.activeRun.threadId, turnId: params.activeRun.turnId });
+      this.db.runs.finishRun(params.activeRun.id, { status: "released", threadId: params.activeRun.threadId, turnId: params.activeRun.turnId });
     }
 
-    this.db.upsertIssueRespectingActiveLease(params.project.id, issueId, {
+    this.db.issueSessions.upsertIssueRespectingActiveLease(params.project.id, issueId, {
       projectId: params.project.id,
       linearIssueId: issueId,
       activeRunId: null,
       factoryState: "awaiting_input",
       agentSessionId: sessionId,
     });
-    this.db.appendIssueSessionEvent({
+    this.db.issueSessions.appendIssueSessionEvent({
       projectId: params.project.id,
       linearIssueId: issueId,
       eventType: "stop_requested",
       dedupeKey: `stop_requested:${issueId}`,
     });
-    this.db.clearPendingIssueSessionEventsRespectingActiveLease(params.project.id, issueId);
-    this.db.releaseIssueSessionLeaseRespectingActiveLease(params.project.id, issueId);
+    this.db.issueSessions.clearPendingIssueSessionEventsRespectingActiveLease(params.project.id, issueId);
+    this.db.issueSessions.releaseIssueSessionLeaseRespectingActiveLease(params.project.id, issueId);
 
     this.feed?.publish({
       level: "info",

@@ -91,13 +91,13 @@ test("syncSession mirrors failure state into a visible Linear status comment", a
       agentSessionId: "session-1",
       currentLinearState: "In Progress",
     });
-    const run = db.createRun({
+    const run = db.runs.createRun({
       issueId: issue.id,
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       runType: "implementation",
     });
-    db.finishRun(run.id, {
+    db.runs.finishRun(run.id, {
       status: "failed",
       failureReason: "Implementation completed without opening a PR",
     });
@@ -159,13 +159,13 @@ test("syncSession prefers the intervention reason over the last assistant summar
       agentSessionId: "session-escalated",
       currentLinearState: "In Review",
     });
-    const run = db.createRun({
+    const run = db.runs.createRun({
       issueId: issue.id,
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       runType: "review_fix",
     });
-    db.finishRun(run.id, {
+    db.runs.finishRun(run.id, {
       status: "completed",
       summaryJson: JSON.stringify({
         assistantMessages: [
@@ -276,7 +276,7 @@ test("syncSession includes actionable input text for awaiting_input sessions", a
       factoryState: "awaiting_input",
       agentSessionId: "session-7",
     });
-    db.appendIssueSessionEvent({
+    db.issueSessions.appendIssueSessionEvent({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       eventType: "stop_requested",
@@ -386,13 +386,13 @@ test("syncSession keeps a final visible comment for done planning-only issues", 
       agentSessionId: "session-21",
       currentLinearState: "Done",
     });
-    const run = db.createRun({
+    const run = db.runs.createRun({
       issueId: issue.id,
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       runType: "implementation",
     });
-    db.finishRun(run.id, { status: "completed" });
+    db.runs.finishRun(run.id, { status: "completed" });
 
     const commentUpdates: Array<Record<string, unknown>> = [];
     const linear: Partial<LinearClient> = {

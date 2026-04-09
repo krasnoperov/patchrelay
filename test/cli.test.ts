@@ -362,7 +362,7 @@ function seedDatabase(db: PatchRelayDatabase, config: AppConfig): void {
     threadId: "thread-54",
     factoryState: "failed",
   });
-  const completedRun = db.createRun({
+  const completedRun = db.runs.createRun({
     issueId: issue1.id,
     projectId: "usertold",
     linearIssueId: "issue-1",
@@ -371,15 +371,15 @@ function seedDatabase(db: PatchRelayDatabase, config: AppConfig): void {
     promptText: "Deploy it",
   });
   mkdirSync(path.join(config.projects[0].worktreeRoot, "USE-54"), { recursive: true });
-  db.updateRunThread(completedRun.id, { threadId: "thread-54", turnId: "turn-54" });
-  db.saveThreadEvent({
+  db.runs.updateRunThread(completedRun.id, { threadId: "thread-54", turnId: "turn-54" });
+  db.runs.saveThreadEvent({
     runId: completedRun.id,
     threadId: "thread-54",
     turnId: "turn-54",
     method: "turn/started",
     eventJson: JSON.stringify({ threadId: "thread-54", turnId: "turn-54" }),
   });
-  db.finishRun(completedRun.id, {
+  db.runs.finishRun(completedRun.id, {
     status: "failed",
     threadId: "thread-54",
     turnId: "turn-54",
@@ -426,7 +426,7 @@ function seedDatabase(db: PatchRelayDatabase, config: AppConfig): void {
     worktreePath: path.join(config.projects[0].worktreeRoot, "USE-56"),
     factoryState: "implementing",
   });
-  const runningRun = db.createRun({
+  const runningRun = db.runs.createRun({
     issueId: issue3.id,
     projectId: "usertold",
     linearIssueId: "issue-3",
@@ -435,7 +435,7 @@ function seedDatabase(db: PatchRelayDatabase, config: AppConfig): void {
     promptText: "Build it",
   });
   mkdirSync(path.join(config.projects[0].worktreeRoot, "USE-56"), { recursive: true });
-  db.updateRunThread(runningRun.id, { threadId: "thread-56", turnId: "turn-56" });
+  db.runs.updateRunThread(runningRun.id, { threadId: "thread-56", turnId: "turn-56" });
   db.upsertIssue({
     projectId: "usertold",
     linearIssueId: "issue-3",
@@ -714,14 +714,14 @@ test("cli list and retry cover operator control flows", async () => {
       currentLinearState: "Done",
       factoryState: "done",
     });
-    const doneRun = db.createRun({
+    const doneRun = db.runs.createRun({
       issueId: doneIssue.id,
       projectId: doneIssue.projectId,
       linearIssueId: doneIssue.linearIssueId,
       runType: "implementation",
       promptText: "Earlier failed attempt",
     });
-    db.finishRun(doneRun.id, { status: "failed", failureReason: "old failure" });
+    db.runs.finishRun(doneRun.id, { status: "failed", failureReason: "old failure" });
     data = new CliDataAccess(config, { db });
 
     const failedList = createBufferStream();
@@ -745,7 +745,7 @@ test("cli list and retry cover operator control flows", async () => {
     const updated = db.getTrackedIssue("usertold", "issue-2");
     assert.equal(updated?.factoryState, "delegated");
     const updatedIssue = db.getIssue("usertold", "issue-2");
-    const updatedWake = db.peekIssueSessionWake("usertold", "issue-2");
+    const updatedWake = db.issueSessions.peekIssueSessionWake("usertold", "issue-2");
     assert.equal(updatedIssue?.pendingRunType, undefined);
     assert.equal(updatedWake?.runType, "implementation");
 
@@ -778,7 +778,7 @@ test("cli list and retry cover operator control flows", async () => {
 
     const queueRepairIssue = db.getIssue("usertold", "issue-queue-repair");
     assert.equal(queueRepairIssue?.factoryState, "repairing_queue");
-    const queueRepairWake = db.peekIssueSessionWake("usertold", "issue-queue-repair");
+    const queueRepairWake = db.issueSessions.peekIssueSessionWake("usertold", "issue-queue-repair");
     assert.equal(queueRepairIssue?.pendingRunType, undefined);
     assert.equal(queueRepairWake?.runType, "queue_repair");
 
@@ -808,7 +808,7 @@ test("cli list and retry cover operator control flows", async () => {
 
     const reviewFixIssue = db.getIssue("usertold", "issue-review-fix");
     assert.equal(reviewFixIssue?.factoryState, "changes_requested");
-    const reviewFixWake = db.peekIssueSessionWake("usertold", "issue-review-fix");
+    const reviewFixWake = db.issueSessions.peekIssueSessionWake("usertold", "issue-review-fix");
     assert.equal(reviewFixIssue?.pendingRunType, undefined);
     assert.equal(reviewFixWake?.runType, "review_fix");
 
@@ -833,26 +833,26 @@ test("cli sessions shows recorded app-server runs with resume commands", async (
     const issue = db.getIssue("usertold", "issue-1");
     assert.ok(issue);
 
-    const reviewRun = db.createRun({
+    const reviewRun = db.runs.createRun({
       issueId: issue.id,
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       runType: "review_fix",
       promptText: "Address requested review changes",
     });
-    db.updateRunThread(reviewRun.id, {
+    db.runs.updateRunThread(reviewRun.id, {
       threadId: "thread-54-review",
       parentThreadId: "thread-54",
       turnId: "turn-54-review",
     });
-    db.saveThreadEvent({
+    db.runs.saveThreadEvent({
       runId: reviewRun.id,
       threadId: "thread-54-review",
       turnId: "turn-54-review",
       method: "turn/started",
       eventJson: JSON.stringify({ threadId: "thread-54-review", turnId: "turn-54-review" }),
     });
-    db.finishRun(reviewRun.id, {
+    db.runs.finishRun(reviewRun.id, {
       status: "completed",
       threadId: "thread-54-review",
       turnId: "turn-54-review",
@@ -912,13 +912,13 @@ test("cli retry blocks when the issue still has an active run", () => {
     // Create an active run on issue-2 and point the issue's activeRunId at it
     const issue = db.getIssue("usertold", "issue-2");
     assert.ok(issue);
-    const run = db.createRun({
+    const run = db.runs.createRun({
       issueId: issue.id,
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       runType: "implementation",
     });
-    db.updateRunThread(run.id, { threadId: "thread-55-active" });
+    db.runs.updateRunThread(run.id, { threadId: "thread-55-active" });
     db.upsertIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
@@ -957,7 +957,7 @@ test("cli resolves workspace, run context, and live summary from the unified iss
     });
 
     // First run: completed stale review
-    const staleRun = db.createRun({
+    const staleRun = db.runs.createRun({
       issueId: issue4.id,
       projectId: "usertold",
       linearIssueId: "issue-4",
@@ -965,21 +965,21 @@ test("cli resolves workspace, run context, and live summary from the unified iss
       
       promptText: "Stale review run",
     });
-    db.updateRunThread(staleRun.id, { threadId: "thread-57-stale", turnId: "turn-57-stale" });
-    db.finishRun(staleRun.id, {
+    db.runs.updateRunThread(staleRun.id, { threadId: "thread-57-stale", turnId: "turn-57-stale" });
+    db.runs.finishRun(staleRun.id, {
       status: "completed",
       threadId: "thread-57-stale",
       turnId: "turn-57-stale",
     });
 
     // Second run: active development run
-    const activeRun = db.createRun({
+    const activeRun = db.runs.createRun({
       issueId: issue4.id,
       projectId: "usertold",
       linearIssueId: "issue-4",
       runType: "implementation",
     });
-    db.updateRunThread(activeRun.id, { threadId: "thread-57", turnId: "turn-57" });
+    db.runs.updateRunThread(activeRun.id, { threadId: "thread-57", turnId: "turn-57" });
     db.upsertIssue({
       projectId: "usertold",
       linearIssueId: "issue-4",

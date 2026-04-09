@@ -13,17 +13,17 @@ export class IssueRemovalHandler {
     projectId: string;
     issue: IssueMetadata;
     trackedIssue: TrackedIssueRecord | undefined;
-    stopActiveRun: (run: NonNullable<ReturnType<PatchRelayDatabase["getRun"]>>, input: string) => Promise<void>;
+    stopActiveRun: (run: NonNullable<ReturnType<PatchRelayDatabase["runs"]["getRunById"]>>, input: string) => Promise<void>;
   }): Promise<void> {
     if (!params.trackedIssue) return;
 
     const removedIssue = this.db.getIssue(params.projectId, params.issue.id);
-    const activeLease = this.db.getActiveIssueSessionLease(params.projectId, params.issue.id);
+    const activeLease = this.db.issueSessions.getActiveIssueSessionLease(params.projectId, params.issue.id);
     const commitRemoval = () => {
       if (removedIssue?.activeRunId) {
-        const run = this.db.getRun(removedIssue.activeRunId);
+        const run = this.db.runs.getRunById(removedIssue.activeRunId);
         if (run) {
-          this.db.finishRun(run.id, { status: "released", failureReason: "Issue removed from Linear" });
+          this.db.runs.finishRun(run.id, { status: "released", failureReason: "Issue removed from Linear" });
         }
         return this.db.upsertIssue({
           projectId: params.projectId,
@@ -45,26 +45,26 @@ export class IssueRemovalHandler {
     };
 
     if (removedIssue?.activeRunId) {
-      const run = this.db.getRun(removedIssue.activeRunId);
+      const run = this.db.runs.getRunById(removedIssue.activeRunId);
       if (run) {
         await params.stopActiveRun(run, "STOP: The Linear issue was removed. Stop working immediately and exit.");
       }
     }
 
     if (activeLease) {
-      this.db.withIssueSessionLease(params.projectId, params.issue.id, activeLease.leaseId, commitRemoval);
+      this.db.issueSessions.withIssueSessionLease(params.projectId, params.issue.id, activeLease.leaseId, commitRemoval);
     } else {
       commitRemoval();
     }
 
-    this.db.appendIssueSessionEvent({
+    this.db.issueSessions.appendIssueSessionEvent({
       projectId: params.projectId,
       linearIssueId: params.issue.id,
       eventType: "issue_removed",
       dedupeKey: `issue_removed:${params.issue.id}`,
     });
-    this.db.clearPendingIssueSessionEventsRespectingActiveLease(params.projectId, params.issue.id);
-    this.db.releaseIssueSessionLeaseRespectingActiveLease(params.projectId, params.issue.id);
+    this.db.issueSessions.clearPendingIssueSessionEventsRespectingActiveLease(params.projectId, params.issue.id);
+    this.db.issueSessions.releaseIssueSessionLeaseRespectingActiveLease(params.projectId, params.issue.id);
     this.feed?.publish({
       level: "warn",
       kind: "stage",

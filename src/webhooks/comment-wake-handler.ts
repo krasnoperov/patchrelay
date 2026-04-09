@@ -47,7 +47,7 @@ export class CommentWakeHandler {
     const selfAuthored = isPatchRelayManagedCommentAuthor(installation, normalized.actor, normalized.comment.userName);
     const inertPatchRelayComment = isInertPatchRelayComment(issue, normalized.comment.id, trimmedBody, normalized.actor?.type);
     if (selfAuthored || inertPatchRelayComment) {
-      this.db.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
+      this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
         projectId: project.id,
         linearIssueId: normalized.issue.id,
         eventType: "self_comment",
@@ -76,8 +76,8 @@ export class CommentWakeHandler {
           return;
         }
         const runType = issue.prReviewState === "changes_requested" ? "review_fix" : "implementation";
-        const hadPendingWake = this.db.peekIssueSessionWake(project.id, normalized.issue.id) !== undefined;
-        this.db.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
+        const hadPendingWake = this.db.issueSessions.peekIssueSessionWake(project.id, normalized.issue.id) !== undefined;
+        this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
           projectId: project.id,
           linearIssueId: normalized.issue.id,
           eventType: directReply ? "direct_reply" : "followup_comment",
@@ -102,7 +102,7 @@ export class CommentWakeHandler {
       return;
     }
 
-    const run = this.db.getRun(issue.activeRunId);
+    const run = this.db.runs.getRunById(issue.activeRunId);
     if (!run?.threadId || !run.turnId) return;
 
     const body = [
@@ -125,9 +125,9 @@ export class CommentWakeHandler {
       });
     } catch (error) {
       this.logger.warn({ issueKey: trackedIssue?.issueKey, error: error instanceof Error ? error.message : String(error) }, "Failed to deliver follow-up comment");
-      const hadPendingWake = this.db.hasPendingIssueSessionEvents(project.id, normalized.issue.id);
+      const hadPendingWake = this.db.issueSessions.hasPendingIssueSessionEvents(project.id, normalized.issue.id);
       const directReply = params.isDirectReplyToOutstandingQuestion(issue);
-      this.db.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
+      this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
         projectId: project.id,
         linearIssueId: normalized.issue.id,
         eventType: directReply ? "direct_reply" : "followup_comment",

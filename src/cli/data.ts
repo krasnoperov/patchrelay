@@ -135,7 +135,7 @@ function summarizeThread(thread: CodexThreadSummary, latestTimestampSeen?: strin
 }
 
 function latestEventTimestamp(db: PatchRelayDatabase, runId: number): string | undefined {
-  const events = db.listThreadEvents(runId);
+  const events = db.runs.listThreadEvents(runId);
   return events.at(-1)?.createdAt;
 }
 
@@ -198,8 +198,8 @@ export class CliDataAccess extends CliOperatorApiClient {
     if (!issue) return undefined;
 
     const dbIssue = this.db.getIssueByKey(issueKey)!;
-    const activeRun = dbIssue.activeRunId ? this.db.getRun(dbIssue.activeRunId) : undefined;
-    const latestRun = this.db.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
+    const activeRun = dbIssue.activeRunId ? this.db.runs.getRunById(dbIssue.activeRunId) : undefined;
+    const latestRun = this.db.runs.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
     const latestReport = normalizeStageReport(latestRun?.reportJson, latestRun?.status);
     const latestSummary = safeJsonParse(latestRun?.summaryJson);
 
@@ -231,7 +231,7 @@ export class CliDataAccess extends CliOperatorApiClient {
     if (!issue) return undefined;
 
     const dbIssue = this.db.getIssueByKey(issueKey)!;
-    const run = dbIssue.activeRunId ? this.db.getRun(dbIssue.activeRunId) : undefined;
+    const run = dbIssue.activeRunId ? this.db.runs.getRunById(dbIssue.activeRunId) : undefined;
     if (!run) return undefined;
 
     const live =
@@ -303,7 +303,7 @@ export class CliDataAccess extends CliOperatorApiClient {
     if (!issue) return undefined;
 
     const dbIssue = this.db.getIssueByKey(issueKey)!;
-    const issueSession = this.db.getIssueSession(issue.projectId, issue.linearIssueId);
+    const issueSession = this.db.issueSessions.getIssueSession(issue.projectId, issue.linearIssueId);
     if (dbIssue.activeRunId !== undefined) {
       throw new Error(`Issue ${issueKey} already has an active run.`);
     }
@@ -342,7 +342,7 @@ export class CliDataAccess extends CliOperatorApiClient {
     if (!issue) return undefined;
 
     const dbIssue = this.db.getIssueByKey(issueKey)!;
-    const runs = this.db.listRunsForIssue(issue.projectId, issue.linearIssueId);
+    const runs = this.db.runs.listRunsForIssue(issue.projectId, issue.linearIssueId);
     const sessions = runs
       .slice()
       .reverse()
@@ -357,7 +357,7 @@ export class CliDataAccess extends CliOperatorApiClient {
           ...(run.parentThreadId ? { parentThreadId: run.parentThreadId } : {}),
           ...(summary ? { summary } : {}),
           ...(run.failureReason ? { failureReason: run.failureReason } : {}),
-          eventCount: this.db.listThreadEvents(run.id).length,
+          eventCount: this.db.runs.listThreadEvents(run.id).length,
           startedAt: run.startedAt,
           ...(run.endedAt ? { endedAt: run.endedAt } : {}),
           isCurrentThread: run.threadId !== undefined && run.threadId === dbIssue.threadId,
@@ -376,7 +376,7 @@ export class CliDataAccess extends CliOperatorApiClient {
     if (runType === "queue_repair") {
       const queueIncident = parseObjectJson(issue.lastQueueIncidentJson);
       const failureContext = parseObjectJson(issue.lastGitHubFailureContextJson);
-      this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+      this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         eventType: "merge_steward_incident",
@@ -392,7 +392,7 @@ export class CliDataAccess extends CliOperatorApiClient {
 
     if (runType === "ci_repair") {
       const failureContext = parseObjectJson(issue.lastGitHubFailureContextJson);
-      this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+      this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         eventType: "settled_red_ci",
@@ -406,7 +406,7 @@ export class CliDataAccess extends CliOperatorApiClient {
     }
 
     if (runType === "review_fix" || runType === "branch_upkeep") {
-      this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+      this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         eventType: "review_changes_requested",
@@ -422,7 +422,7 @@ export class CliDataAccess extends CliOperatorApiClient {
       return;
     }
 
-    this.db.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+    this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       eventType: "delegated",

@@ -103,7 +103,7 @@ test("listTrackedIssues suppresses stale interrupted notes while a run is active
       prReviewState: "approved",
       prCheckStatus: "failure",
     });
-    const run = db.createRun({
+    const run = db.runs.createRun({
       issueId: issue.id,
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
@@ -162,7 +162,7 @@ test("listTrackedIssues suppresses stale zombie notes while a run is active", as
       currentLinearState: "In Progress",
       factoryState: "implementing",
     });
-    const run = db.createRun({
+    const run = db.runs.createRun({
       issueId: issue.id,
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
@@ -222,7 +222,7 @@ test("listTrackedIssues surfaces actionable stop guidance for awaiting_input iss
       factoryState: "awaiting_input",
       agentSessionId: "session-2",
     });
-    db.appendIssueSessionEvent({
+    db.issueSessions.appendIssueSessionEvent({
       projectId: "usertold",
       linearIssueId: "issue-2",
       eventType: "stop_requested",

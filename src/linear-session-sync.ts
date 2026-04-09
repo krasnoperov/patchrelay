@@ -259,9 +259,9 @@ function renderStatusComment(
   trackedIssue: TrackedIssueRecord | undefined,
   options?: { activeRunType?: RunType },
 ): string {
-  const activeRun = issue.activeRunId ? db.getRun(issue.activeRunId) : undefined;
-  const latestRun = db.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
-  const latestEvent = db.listIssueSessionEvents(issue.projectId, issue.linearIssueId, { limit: 1 }).at(-1);
+  const activeRun = issue.activeRunId ? db.runs.getRunById(issue.activeRunId) : undefined;
+  const latestRun = db.runs.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
+  const latestEvent = db.issueSessions.listIssueSessionEvents(issue.projectId, issue.linearIssueId, { limit: 1 }).at(-1);
   const activeRunType = issue.activeRunId !== undefined
     ? (options?.activeRunType ?? activeRun?.runType)
     : undefined;

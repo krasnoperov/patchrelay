@@ -55,7 +55,7 @@ export class RunFinalizer {
       { ...run, status: "completed" },
       trackedIssue,
       thread,
-      countEventMethods(this.db.listThreadEvents(run.id)),
+      countEventMethods(this.db.runs.listThreadEvents(run.id)),
     );
 
     const freshIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
@@ -127,7 +127,7 @@ export class RunFinalizer {
     const postRunState = postRunFollowUp?.factoryState ?? params.resolveCompletedRunState(refreshedIssue, run);
 
     const completed = params.withHeldLease(run.projectId, run.linearIssueId, (lease) => {
-      this.db.finishRun(run.id, {
+      this.db.runs.finishRun(run.id, {
         status: "completed",
         threadId,
         ...(params.completedTurnId ? { turnId: params.completedTurnId } : {}),

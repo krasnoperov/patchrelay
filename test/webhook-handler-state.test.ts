@@ -256,7 +256,7 @@ test("delegated blocked issue is tracked but does not queue implementation until
     await handler.processWebhookEvent(blockerDoneEvent.id);
 
     const unblockedIssue = db.getIssue("krasnoperov/mafia", "issue-maf-40");
-    const unblockedWake = db.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-40");
+    const unblockedWake = db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-40");
     assert.equal(unblockedIssue?.pendingRunType, undefined);
     assert.equal(unblockedWake?.runType, "implementation");
     assert.deepEqual(db.listIssuesReadyForExecution(), [{ projectId: "krasnoperov/mafia", linearIssueId: "issue-maf-40" }]);
@@ -334,7 +334,7 @@ test("delegated issue webhooks enqueue implementation wake immediately when the 
     await handler.processWebhookEvent(stored.id);
 
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-delegated");
-    const wake = db.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-delegated");
+    const wake = db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-delegated");
     assert.equal(issue?.factoryState, "delegated");
     assert.equal(issue?.pendingRunType, undefined);
     assert.equal(wake?.runType, "implementation");
@@ -664,7 +664,7 @@ test("in-review status echo does not requeue implementation for an open delegate
     assert.equal(issue?.factoryState, "awaiting_queue");
     assert.equal(issue?.pendingRunType, undefined);
     assert.deepEqual(enqueued, []);
-    assert.deepEqual(db.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-39", { pendingOnly: true }), []);
+    assert.deepEqual(db.issueSessions.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-39", { pendingOnly: true }), []);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -691,7 +691,7 @@ test("un-delegation during active run releases run and transitions to awaiting_i
       title: "Implement feature X",
       factoryState: "implementing",
     });
-    const run = db.createRun({
+    const run = db.runs.createRun({
       issueId: issueRecord.id,
       projectId: "krasnoperov/mafia",
       linearIssueId: "issue-maf-50",
@@ -741,7 +741,7 @@ test("un-delegation during active run releases run and transitions to awaiting_i
     assert.equal(issue?.activeRunId, undefined);
     assert.equal(issue?.pendingRunType, undefined);
 
-    const finishedRun = db.getRun(run.id);
+    const finishedRun = db.runs.getRunById(run.id);
     assert.equal(finishedRun?.status, "released");
     assert.ok(finishedRun?.failureReason?.includes("Un-delegated"));
   } finally {
@@ -834,7 +834,7 @@ test("issueRemoved releases active run and transitions to failed", async () => {
       title: "Soon to be removed",
       factoryState: "implementing",
     });
-    const run = db.createRun({
+    const run = db.runs.createRun({
       issueId: issueRecord.id,
       projectId: "krasnoperov/mafia",
       linearIssueId: "issue-maf-52",
@@ -881,7 +881,7 @@ test("issueRemoved releases active run and transitions to failed", async () => {
     assert.equal(issue?.factoryState, "failed");
     assert.equal(issue?.activeRunId, undefined);
 
-    const finishedRun = db.getRun(run.id);
+    const finishedRun = db.runs.getRunById(run.id);
     assert.equal(finishedRun?.status, "released");
     assert.ok(finishedRun?.failureReason?.includes("removed"));
   } finally {
@@ -947,8 +947,8 @@ test("issueRemoved without an active run marks the issue failed and clears pendi
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-53");
     assert.equal(issue?.factoryState, "failed");
     assert.equal(issue?.pendingRunType, undefined);
-    assert.equal(db.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-53"), undefined);
-    assert.equal(db.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-53", { pendingOnly: true }).length, 0);
+    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-53"), undefined);
+    assert.equal(db.issueSessions.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-53", { pendingOnly: true }).length, 0);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -1026,7 +1026,7 @@ test("idle delegated comments with explicit PatchRelay intent queue a follow-up 
     await handler.processWebhookEvent(stored.id);
 
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-comment");
-    const wake = db.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-comment");
+    const wake = db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-comment");
     assert.equal(issue?.pendingRunContextJson, undefined);
     assert.equal(wake?.runType, "implementation");
     assert.equal(Array.isArray(wake?.context.followUps), true);
@@ -1107,8 +1107,8 @@ test("idle comments without explicit PatchRelay intent are ignored", async () =>
     });
     await handler.processWebhookEvent(stored.id);
 
-    assert.equal(db.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-comment-ignored"), undefined);
-    assert.equal(db.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-comment-ignored").length, 0);
+    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-comment-ignored"), undefined);
+    assert.equal(db.issueSessions.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-comment-ignored").length, 0);
     assert.deepEqual(enqueued, []);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -1186,7 +1186,7 @@ test("awaiting_input comments without explicit PatchRelay intent are still class
     });
     await handler.processWebhookEvent(stored.id);
 
-    const wake = db.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-awaiting-input-ignored");
+    const wake = db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-awaiting-input-ignored");
     assert.equal(wake?.runType, "implementation");
     assert.equal(wake?.resumeThread, true);
     assert.equal(wake?.wakeReason, "direct_reply");
@@ -1268,7 +1268,7 @@ test("awaiting_input comments resume PatchRelay work as direct replies on the sa
     });
     await handler.processWebhookEvent(stored.id);
 
-    const wake = db.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-awaiting-input");
+    const wake = db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-awaiting-input");
     assert.equal(wake?.runType, "implementation");
     assert.equal(wake?.resumeThread, true);
     assert.equal(wake?.wakeReason, "direct_reply");
@@ -1306,14 +1306,14 @@ test("awaiting_input answers to an outstanding PatchRelay question are classifie
       factoryState: "awaiting_input",
       threadId: "thread-direct-reply",
     });
-    const run = db.createRun({
+    const run = db.runs.createRun({
       issueId: issue.id,
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       runType: "implementation",
       promptText: "Which rollout copy should I use?",
     });
-    db.finishRun(run.id, {
+    db.runs.finishRun(run.id, {
       status: "completed",
       summaryJson: JSON.stringify({ latestAssistantMessage: "Which rollout copy should I use?" }),
     });
@@ -1361,7 +1361,7 @@ test("awaiting_input answers to an outstanding PatchRelay question are classifie
     });
     await handler.processWebhookEvent(stored.id);
 
-    const wake = db.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-direct-reply");
+    const wake = db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-direct-reply");
     assert.equal(wake?.wakeReason, "direct_reply");
     assert.equal(wake?.resumeThread, true);
     assert.equal(wake?.context.directReplyMode, true);
@@ -1442,10 +1442,10 @@ test("PatchRelay-authored comments are recorded as inert session events without 
     });
     await handler.processWebhookEvent(stored.id);
 
-    const events = db.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-self-comment");
+    const events = db.issueSessions.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-self-comment");
     assert.equal(events.length, 1);
     assert.equal(events[0]?.eventType, "self_comment");
-    assert.equal(db.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-self-comment"), undefined);
+    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-self-comment"), undefined);
     assert.deepEqual(enqueued, []);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -1530,10 +1530,10 @@ test("PatchRelay managed status comment updates stay inert even when the webhook
     });
     await handler.processWebhookEvent(stored.id);
 
-    const events = db.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-managed-status");
+    const events = db.issueSessions.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-managed-status");
     assert.equal(events.length, 1);
     assert.equal(events[0]?.eventType, "self_comment");
-    assert.equal(db.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-managed-status"), undefined);
+    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-managed-status"), undefined);
     assert.deepEqual(enqueued, []);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -1612,10 +1612,10 @@ test("PatchRelay-generated escalation activity comments stay inert even when Lin
     });
     await handler.processWebhookEvent(stored.id);
 
-    const events = db.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-escalation-comment");
+    const events = db.issueSessions.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-escalation-comment");
     assert.equal(events.length, 1);
     assert.equal(events[0]?.eventType, "self_comment");
-    assert.equal(db.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-escalation-comment"), undefined);
+    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-escalation-comment"), undefined);
     assert.deepEqual(enqueued, []);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -1648,7 +1648,7 @@ test("agent signal stop requests halt the active run and emit a stop_requested s
       factoryState: "implementing",
       agentSessionId: "session-stop-1",
     });
-    const run = db.createRun({
+    const run = db.runs.createRun({
       issueId: issueRecord.id,
       projectId: "krasnoperov/mafia",
       linearIssueId: "issue-maf-stop",
@@ -1660,7 +1660,7 @@ test("agent signal stop requests halt the active run and emit a stop_requested s
       linearIssueId: "issue-maf-stop",
       activeRunId: run.id,
     });
-    db.updateRunThread(run.id, { threadId: "thread-stop-1", turnId: "turn-stop-1" });
+    db.runs.updateRunThread(run.id, { threadId: "thread-stop-1", turnId: "turn-stop-1" });
 
     const agentActivities: Array<{ agentSessionId: string; contentType: string; body?: string }> = [];
     const sessionUpdates: Array<{ agentSessionId: string; planLength: number }> = [];
@@ -1721,8 +1721,8 @@ test("agent signal stop requests halt the active run and emit a stop_requested s
     await handler.processWebhookEvent(stored.id);
 
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-stop");
-    const runAfter = db.getRun(run.id);
-    const events = db.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-stop");
+    const runAfter = db.runs.getRunById(run.id);
+    const events = db.issueSessions.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-stop");
     assert.equal(issue?.factoryState, "awaiting_input");
     assert.equal(issue?.activeRunId, undefined);
     assert.equal(runAfter?.status, "released");
@@ -2042,7 +2042,7 @@ test("agent session creation before delegation persists the session id for later
 
     const delegatedIssue = db.getIssue("krasnoperov/mafia", "issue-maf-session");
     assert.equal(delegatedIssue?.agentSessionId, "session-94");
-    const delegatedWake = db.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-session");
+    const delegatedWake = db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-session");
     assert.equal(delegatedIssue?.pendingRunType, undefined);
     assert.equal(delegatedWake?.runType, "implementation");
   } finally {
@@ -2162,7 +2162,7 @@ test("issueCreated recovers delegated startup after an early agent session left 
     await handler.processWebhookEvent(issueCreatedEvent.id);
 
     const recoveredIssue = db.getIssue("krasnoperov/mafia", "issue-maf-startup");
-    const recoveredWake = db.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-startup");
+    const recoveredWake = db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-startup");
     assert.equal(recoveredIssue?.pendingRunType, undefined);
     assert.equal(recoveredIssue?.factoryState, "delegated");
     assert.equal(recoveredWake?.runType, "implementation");

@@ -84,7 +84,7 @@ export class IssueQueryService {
   }
 
   private buildRuns(projectId: string, linearIssueId: string): IssueOverviewRun[] {
-    return this.db.listRunsForIssue(projectId, linearIssueId).map((run) => ({
+    return this.db.runs.listRunsForIssue(projectId, linearIssueId).map((run) => ({
       id: run.id,
       runType: run.runType,
       status: run.status,
@@ -96,7 +96,7 @@ export class IssueQueryService {
         return report ? { report } : {};
       })(),
       ...(() => {
-        const events = this.db.listThreadEvents(run.id).flatMap((event) => {
+        const events = this.db.runs.listThreadEvents(run.id).flatMap((event) => {
           try {
             const parsed = JSON.parse(event.eventJson) as unknown;
             return [{
@@ -121,7 +121,7 @@ export class IssueQueryService {
   }
 
   async getIssueOverview(issueKey: string): Promise<IssueOverviewResult | undefined> {
-    const session = this.db.getIssueSessionByKey(issueKey);
+    const session = this.db.issueSessions.getIssueSessionByKey(issueKey);
     if (!session) {
       const legacy = this.db.getIssueOverview(issueKey);
       if (!legacy) return undefined;
@@ -129,8 +129,8 @@ export class IssueQueryService {
       const issueRecord = this.db.getIssueByKey(issueKey);
       const activeStatus = await this.runStatusProvider.getActiveRunStatus(issueKey);
       const activeRun = activeStatus?.run ?? legacy.activeRun;
-      const latestRun = this.db.getLatestRunForIssue(legacy.issue.projectId, legacy.issue.linearIssueId);
-      const latestEvent = this.db.listIssueSessionEvents(legacy.issue.projectId, legacy.issue.linearIssueId, { limit: 1 }).at(-1);
+      const latestRun = this.db.runs.getLatestRunForIssue(legacy.issue.projectId, legacy.issue.linearIssueId);
+      const latestEvent = this.db.issueSessions.listIssueSessionEvents(legacy.issue.projectId, legacy.issue.linearIssueId, { limit: 1 }).at(-1);
       const runs = this.buildRuns(legacy.issue.projectId, legacy.issue.linearIssueId);
       const runCount = runs.length;
       const liveThread = await this.readLiveThread(activeRun);
@@ -189,9 +189,9 @@ export class IssueQueryService {
     const blockedByKeys = unresolvedBlockedBy.map((entry) => entry.blockerIssueKey ?? entry.blockerLinearIssueId);
     const activeStatus = await this.runStatusProvider.getActiveRunStatus(issueKey);
     const activeRun = activeStatus?.run
-      ?? (session.activeRunId !== undefined ? this.db.getRun(session.activeRunId) : undefined);
-    const latestRun = this.db.getLatestRunForIssue(session.projectId, session.linearIssueId);
-    const latestEvent = this.db.listIssueSessionEvents(session.projectId, session.linearIssueId, { limit: 1 }).at(-1);
+      ?? (session.activeRunId !== undefined ? this.db.runs.getRunById(session.activeRunId) : undefined);
+    const latestRun = this.db.runs.getLatestRunForIssue(session.projectId, session.linearIssueId);
+    const latestEvent = this.db.issueSessions.listIssueSessionEvents(session.projectId, session.linearIssueId, { limit: 1 }).at(-1);
     const runs = this.buildRuns(session.projectId, session.linearIssueId);
     const runCount = runs.length;
     const liveThread = await this.readLiveThread(activeRun);
@@ -226,7 +226,7 @@ export class IssueQueryService {
         factoryState: issueRecord?.factoryState ?? "delegated",
         ...(activeRun ? { activeRunId: activeRun.id } : {}),
         blockedByCount: unresolvedBlockedBy.length,
-        hasPendingWake: this.db.peekIssueSessionWake(session.projectId, session.linearIssueId) !== undefined,
+        hasPendingWake: this.db.issueSessions.peekIssueSessionWake(session.projectId, session.linearIssueId) !== undefined,
         hasLegacyPendingRun: issueRecord?.pendingRunType !== undefined,
         ...(session.prNumber !== undefined ? { prNumber: session.prNumber } : {}),
         ...(issueRecord?.prState ? { prState: issueRecord.prState } : {}),

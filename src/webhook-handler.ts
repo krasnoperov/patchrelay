@@ -229,7 +229,7 @@ export class WebhookHandler {
       if (unresolved > 0) {
         if (this.peekPendingSessionWakeRunType(projectId, dependent.linearIssueId) === "implementation"
           && issue.activeRunId === undefined
-          && !this.db.hasPendingIssueSessionEvents(projectId, dependent.linearIssueId)) {
+          && !this.db.issueSessions.hasPendingIssueSessionEvents(projectId, dependent.linearIssueId)) {
           this.db.upsertIssue({
             projectId,
             linearIssueId: dependent.linearIssueId,
@@ -240,7 +240,7 @@ export class WebhookHandler {
         continue;
       }
 
-      if (issue.factoryState !== "delegated" || issue.activeRunId !== undefined || this.db.hasPendingIssueSessionEvents(projectId, dependent.linearIssueId)) {
+      if (issue.factoryState !== "delegated" || issue.activeRunId !== undefined || this.db.issueSessions.hasPendingIssueSessionEvents(projectId, dependent.linearIssueId)) {
         continue;
       }
 
@@ -252,7 +252,7 @@ export class WebhookHandler {
           pendingRunContextJson: null,
         });
       }
-      this.db.appendIssueSessionEventRespectingActiveLease(projectId, dependent.linearIssueId, {
+      this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(projectId, dependent.linearIssueId, {
         projectId,
         linearIssueId: dependent.linearIssueId,
         eventType: "delegated",
@@ -265,7 +265,7 @@ export class WebhookHandler {
   }
 
   private async stopActiveRun(
-    run: NonNullable<ReturnType<PatchRelayDatabase["getRun"]>>,
+    run: NonNullable<ReturnType<PatchRelayDatabase["runs"]["getRunById"]>>,
     input: string,
   ): Promise<void> {
     if (!run.threadId || !run.turnId) return;
@@ -277,11 +277,11 @@ export class WebhookHandler {
   }
 
   private peekPendingSessionWakeRunType(projectId: string, issueId: string): RunType | undefined {
-    return this.db.peekIssueSessionWake(projectId, issueId)?.runType;
+    return this.db.issueSessions.peekIssueSessionWake(projectId, issueId)?.runType;
   }
 
   private enqueuePendingSessionWake(projectId: string, issueId: string): RunType | undefined {
-    const wake = this.db.peekIssueSessionWake(projectId, issueId);
+    const wake = this.db.issueSessions.peekIssueSessionWake(projectId, issueId);
     if (!wake) {
       return undefined;
     }
@@ -333,12 +333,12 @@ export class WebhookHandler {
     if (issue.threadId) {
       return true;
     }
-    const latestRun = this.db.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
+    const latestRun = this.db.runs.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
     const latestRunNote = extractLatestAssistantSummary(latestRun)?.trim();
     if (latestRunNote?.endsWith("?")) {
       return true;
     }
-    const latestEvent = this.db.listIssueSessionEvents(issue.projectId, issue.linearIssueId).at(-1);
+    const latestEvent = this.db.issueSessions.listIssueSessionEvents(issue.projectId, issue.linearIssueId).at(-1);
     const statusNote = deriveIssueStatusNote({
       issue,
       latestRun,
