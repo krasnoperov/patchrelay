@@ -23,14 +23,12 @@ import {
   extractLatestAssistantSummary,
   type IssueSessionEventType,
 } from "./issue-session-events.ts";
-import { parseGitHubFailureContext } from "./github-failure-context.ts";
-import { deriveIssueStatusNote } from "./status-note.ts";
 import { LinearInstallationStore } from "./db/linear-installation-store.ts";
 import { OperatorFeedStore } from "./db/operator-feed-store.ts";
 import { RepositoryLinkStore } from "./db/repository-link-store.ts";
 import { runPatchRelayMigrations } from "./db/migrations.ts";
 import { SqliteConnection, isoNow, type DatabaseConnection } from "./db/shared.ts";
-import { derivePatchRelayWaitingReason } from "./waiting-reason.ts";
+import { buildTrackedIssueRecord } from "./tracked-issue-projector.ts";
 
 function parseObjectJson(raw: string | undefined): Record<string, unknown> | undefined {
   if (!raw) return undefined;
@@ -1194,71 +1192,14 @@ export class PatchRelayDatabase {
   // ─── View builders ──────────────────────────────────────────────
 
   issueToTrackedIssue(issue: IssueRecord): TrackedIssueRecord {
-    const session = this.getIssueSession(issue.projectId, issue.linearIssueId);
-    const blockedBy = this.listIssueDependencies(issue.projectId, issue.linearIssueId);
-    const unresolvedBlockedBy = blockedBy.filter((entry) => !isResolvedLinearState(entry.blockerCurrentLinearStateType, entry.blockerCurrentLinearState));
-    const pendingWake = this.peekIssueSessionWake(issue.projectId, issue.linearIssueId);
-    const failureContext = parseGitHubFailureContext(issue.lastGitHubFailureContextJson);
-    const blockedByKeys = unresolvedBlockedBy.map((entry) => entry.blockerIssueKey ?? entry.blockerLinearIssueId);
-    const waitingReason = derivePatchRelayWaitingReason({
-      ...(issue.activeRunId !== undefined ? { activeRunId: issue.activeRunId } : {}),
-      blockedByKeys,
-      factoryState: issue.factoryState,
-      pendingRunType: issue.pendingRunType,
-      prNumber: issue.prNumber,
-      prHeadSha: issue.prHeadSha,
-      prReviewState: issue.prReviewState,
-      prCheckStatus: issue.prCheckStatus,
-      lastBlockingReviewHeadSha: issue.lastBlockingReviewHeadSha,
-      latestFailureCheckName: issue.lastGitHubFailureCheckName,
-    });
-    const latestRun = this.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
-    const latestEvent = this.listIssueSessionEvents(issue.projectId, issue.linearIssueId, { limit: 1 }).at(-1);
-    const statusNote = deriveIssueStatusNote({
+    return buildTrackedIssueRecord({
       issue,
-      sessionSummary: session?.summaryText,
-      latestRun,
-      latestEvent,
-      failureSummary: failureContext?.summary,
-      blockedByKeys,
-      waitingReason,
+      session: this.getIssueSession(issue.projectId, issue.linearIssueId),
+      blockedBy: this.listIssueDependencies(issue.projectId, issue.linearIssueId),
+      hasPendingWake: this.peekIssueSessionWake(issue.projectId, issue.linearIssueId) !== undefined,
+      latestRun: this.getLatestRunForIssue(issue.projectId, issue.linearIssueId),
+      latestEvent: this.listIssueSessionEvents(issue.projectId, issue.linearIssueId, { limit: 1 }).at(-1),
     });
-    return {
-      id: issue.id,
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
-      ...(issue.title ? { title: issue.title } : {}),
-      ...(issue.url ? { issueUrl: issue.url } : {}),
-      ...(statusNote ? { statusNote } : {}),
-      ...(issue.currentLinearState ? { currentLinearState: issue.currentLinearState } : {}),
-      ...(session?.sessionState ? { sessionState: session.sessionState } : {}),
-      factoryState: issue.factoryState,
-      blockedByCount: unresolvedBlockedBy.length,
-      blockedByKeys,
-      readyForExecution: isIssueSessionReadyForExecution({
-        sessionState: session?.sessionState,
-        factoryState: issue.factoryState,
-        activeRunId: issue.activeRunId,
-        blockedByCount: unresolvedBlockedBy.length,
-        hasPendingWake: pendingWake !== undefined,
-        hasLegacyPendingRun: issue.pendingRunType !== undefined,
-        ...(issue.prNumber !== undefined ? { prNumber: issue.prNumber } : {}),
-        ...(issue.prState ? { prState: issue.prState } : {}),
-        ...(issue.prReviewState ? { prReviewState: issue.prReviewState } : {}),
-        ...(issue.prCheckStatus ? { prCheckStatus: issue.prCheckStatus } : {}),
-        ...(issue.lastGitHubFailureSource ? { latestFailureSource: issue.lastGitHubFailureSource } : {}),
-      }),
-      ...(issue.lastGitHubFailureSource ? { latestFailureSource: issue.lastGitHubFailureSource } : {}),
-      ...(issue.lastGitHubFailureHeadSha ? { latestFailureHeadSha: issue.lastGitHubFailureHeadSha } : {}),
-      ...(issue.lastGitHubFailureCheckName ? { latestFailureCheckName: issue.lastGitHubFailureCheckName } : {}),
-      ...(failureContext?.stepName ? { latestFailureStepName: failureContext.stepName } : {}),
-      ...(failureContext?.summary ? { latestFailureSummary: failureContext.summary } : {}),
-      ...(waitingReason ? { waitingReason } : {}),
-      ...(issue.activeRunId !== undefined ? { activeRunId: issue.activeRunId } : {}),
-      ...(issue.agentSessionId ? { activeAgentSessionId: issue.agentSessionId } : {}),
-      updatedAt: issue.updatedAt,
-    };
   }
 
   getTrackedIssue(projectId: string, linearIssueId: string): TrackedIssueRecord | undefined {
@@ -1660,8 +1601,4 @@ function mapRunRow(row: Record<string, unknown>): RunRecord {
     startedAt: String(row.started_at),
     ...(row.ended_at !== null ? { endedAt: String(row.ended_at) } : {}),
   };
-}
-
-function isResolvedLinearState(stateType: string | undefined, stateName: string | undefined): boolean {
-  return stateType === "completed" || stateName?.trim().toLowerCase() === "done";
 }

@@ -5,7 +5,7 @@ import {
 import { buildAgentSessionExternalUrls } from "./agent-session-presentation.ts";
 import type { CodexAppServerClient } from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
-import { TERMINAL_STATES, type RunType, type FactoryState } from "./factory-state.ts";
+import { TERMINAL_STATES, type RunType } from "./factory-state.ts";
 import {
   buildAlreadyRunningThought,
   buildDelegationThought,
@@ -17,6 +17,20 @@ import type { OperatorEventFeed } from "./operator-feed.ts";
 import { resolveProject, triggerEventAllowed, trustedActorAllowed } from "./project-resolution.ts";
 import { normalizeWebhook } from "./webhooks.ts";
 import { InstallationWebhookHandler } from "./webhook-installation-handler.ts";
+import {
+  decideActiveRunRelease,
+  decideAgentSession,
+  decideRunIntent,
+  decideUnDelegation,
+  hasCompleteIssueContext,
+  isTerminalDelegationState,
+  mergeIssueMetadata,
+} from "./webhooks/decision-helpers.ts";
+import {
+  hasExplicitPatchRelayWakeIntent,
+  isInertPatchRelayComment,
+  isPatchRelayManagedCommentAuthor,
+} from "./webhooks/comment-policy.ts";
 import type {
   AppConfig,
   IssueMetadata,
@@ -694,8 +708,8 @@ export class WebhookHandler {
     // refreshes its visible status comment, and those updates should never
     // consume review-fix budget or wake a new run.
     const installation = this.db.linearInstallations.getLinearInstallationForProject(project.id);
-    const selfAuthored = this.isPatchRelayManagedCommentAuthor(installation, normalized.actor, normalized.comment.userName);
-    const inertPatchRelayComment = this.isInertPatchRelayComment(issue, normalized.comment.id, trimmedBody, normalized.actor?.type);
+    const selfAuthored = isPatchRelayManagedCommentAuthor(installation, normalized.actor, normalized.comment.userName);
+    const inertPatchRelayComment = isInertPatchRelayComment(issue, normalized.comment.id, trimmedBody, normalized.actor?.type);
     if (selfAuthored || inertPatchRelayComment) {
       this.db.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
         projectId: project.id,
@@ -714,7 +728,7 @@ export class WebhookHandler {
       const ENQUEUEABLE_STATES = new Set(["pr_open", "changes_requested", "implementing", "delegated", "awaiting_input"]);
       if (ENQUEUEABLE_STATES.has(issue.factoryState)) {
         const directReply = this.isDirectReplyToOutstandingQuestion(issue);
-        const wakeIntent = directReply || this.hasExplicitPatchRelayWakeIntent(trimmedBody);
+        const wakeIntent = directReply || hasExplicitPatchRelayWakeIntent(trimmedBody);
         if (!wakeIntent) {
           this.feed?.publish({
             level: "info",
@@ -801,60 +815,6 @@ export class WebhookHandler {
         summary: `Could not deliver follow-up comment to active ${run.runType} workflow`,
       });
     }
-  }
-
-  private isInertPatchRelayComment(
-    issue: NonNullable<ReturnType<PatchRelayDatabase["getIssue"]>>,
-    commentId: string,
-    body: string,
-    actorType?: string,
-  ): boolean {
-    if (commentId === issue.statusCommentId) {
-      return true;
-    }
-    if (body.startsWith("## PatchRelay status")
-      && body.includes("_PatchRelay updates this comment as it works. Review and merge remain downstream._")) {
-      return true;
-    }
-    const normalizedActorType = actorType?.trim().toLowerCase();
-    if (normalizedActorType && normalizedActorType !== "user") {
-      return this.isPatchRelayGeneratedActivityComment(body);
-    }
-    return false;
-  }
-
-  private isPatchRelayManagedCommentAuthor(
-    installation: ReturnType<PatchRelayDatabase["linearInstallations"]["getLinearInstallationForProject"]>,
-    actor: NormalizedEvent["actor"],
-    commentUserName?: string,
-  ): boolean {
-    const actorName = actor?.name?.trim().toLowerCase();
-    const commentAuthor = commentUserName?.trim().toLowerCase();
-    const installationName = installation?.actorName?.trim().toLowerCase();
-    if (installation?.actorId && actor?.id === installation.actorId) {
-      return true;
-    }
-    if (installationName && actorName === installationName) {
-      return true;
-    }
-    if (actorName === "patchrelay" || commentAuthor === "patchrelay") {
-      return true;
-    }
-    return false;
-  }
-
-  private isPatchRelayGeneratedActivityComment(body: string): boolean {
-    return body.startsWith("PatchRelay needs human help to continue.")
-      || body.startsWith("PatchRelay is already working on ")
-      || body.startsWith("PatchRelay received the ")
-      || body.startsWith("PatchRelay routed your latest instructions into ")
-      || body.startsWith("PatchRelay has stopped work as requested.")
-      || body.startsWith("Merge preparation failed ")
-      || body === "This thread is for an agent session with patchrelay.";
-  }
-
-  private hasExplicitPatchRelayWakeIntent(body: string): boolean {
-    return /\bpatchrelay\b/i.test(body);
   }
 
   private peekPendingSessionWakeRunType(projectId: string, issueId: string): RunType | undefined {
@@ -1006,118 +966,4 @@ export class WebhookHandler {
     })?.trim();
     return Boolean(statusNote?.endsWith("?"));
   }
-}
-
-// ─── Pure decision functions for recordDesiredStage ──────────────
-
-function decideRunIntent(p: {
-  delegated: boolean;
-  triggerAllowed: boolean;
-  triggerEvent: string;
-  unresolvedBlockers: number;
-  hasActiveRun: boolean;
-  hasPendingWake: boolean;
-  terminal: boolean;
-  currentState?: FactoryState | undefined;
-}): RunType | undefined {
-  const wakeEligibleState =
-    p.currentState === undefined
-    || p.currentState === "delegated"
-    || p.currentState === "awaiting_input";
-  const delegatedStartupRecovery =
-    p.delegated
-    && p.currentState === "awaiting_input"
-    && p.triggerEvent === "issueCreated";
-  if (p.delegated && (p.triggerAllowed || delegatedStartupRecovery) && p.unresolvedBlockers === 0
-      && !p.hasActiveRun && !p.hasPendingWake && !p.terminal && wakeEligibleState) {
-    return "implementation";
-  }
-  return undefined;
-}
-
-function decideActiveRunRelease(p: {
-  hasActiveRun: boolean;
-  terminal: boolean;
-  triggerEvent: string;
-  delegated: boolean;
-}): { release: boolean; reason?: string } {
-  if (!p.hasActiveRun) return { release: false };
-  if (p.terminal) return { release: true, reason: "Issue reached terminal state during active run" };
-  if (p.triggerEvent === "delegateChanged" && !p.delegated) return { release: true, reason: "Un-delegated from PatchRelay" };
-  return { release: false };
-}
-
-function decideUnDelegation(p: {
-  triggerEvent: string;
-  delegated: boolean;
-  currentState?: FactoryState | undefined;
-}): { factoryState?: FactoryState | undefined; clearPending: boolean } {
-  if (p.triggerEvent !== "delegateChanged" || p.delegated) return { clearPending: false };
-  if (!p.currentState) return { clearPending: false };
-  const pastNoReturn = p.currentState === "awaiting_queue" || TERMINAL_STATES.has(p.currentState);
-  if (pastNoReturn) return { clearPending: false };
-  return { factoryState: "awaiting_input", clearPending: true };
-}
-
-function decideAgentSession(p: {
-  sessionId?: string | undefined;
-  triggerEvent: string;
-  delegated: boolean;
-}): string | null | undefined {
-  if (p.sessionId) return p.sessionId;
-  if (p.triggerEvent === "delegateChanged" && !p.delegated) return null;
-  return undefined;
-}
-
-// ─── Helper predicates ──────────────────────────────────────────
-
-function isResolvedLinearState(stateType?: string, stateName?: string): boolean {
-  return stateType === "completed" || stateName?.trim().toLowerCase() === "done";
-}
-
-function isTerminalDelegationState(
-  existingIssue: ReturnType<PatchRelayDatabase["getIssue"]>,
-  hydratedIssue: IssueMetadata,
-): boolean {
-  if (existingIssue?.prState === "merged") {
-    return true;
-  }
-  if (existingIssue?.factoryState && existingIssue.factoryState !== "awaiting_input" && TERMINAL_STATES.has(existingIssue.factoryState)) {
-    return true;
-  }
-  return isResolvedLinearState(hydratedIssue.stateType, hydratedIssue.stateName);
-}
-
-function hasCompleteIssueContext(issue: IssueMetadata): boolean {
-  return Boolean(issue.stateName && issue.delegateId && issue.teamId && issue.teamKey);
-}
-
-function mergeIssueMetadata(
-  issue: IssueMetadata,
-  liveIssue: {
-    identifier?: string; title?: string; url?: string;
-    teamId?: string; teamKey?: string; stateId?: string; stateName?: string; stateType?: string;
-    delegateId?: string; delegateName?: string;
-    blockedBy?: Array<{ id: string; identifier?: string; title?: string; stateName?: string; stateType?: string }>;
-    blocks?: Array<{ id: string; identifier?: string; title?: string; stateName?: string; stateType?: string }>;
-    labels?: Array<{ id: string; name: string }>;
-  },
-): IssueMetadata {
-  return {
-    ...issue,
-    ...(issue.identifier ? {} : liveIssue.identifier ? { identifier: liveIssue.identifier } : {}),
-    ...(issue.title ? {} : liveIssue.title ? { title: liveIssue.title } : {}),
-    ...(issue.url ? {} : liveIssue.url ? { url: liveIssue.url } : {}),
-    ...(issue.teamId ? {} : liveIssue.teamId ? { teamId: liveIssue.teamId } : {}),
-    ...(issue.teamKey ? {} : liveIssue.teamKey ? { teamKey: liveIssue.teamKey } : {}),
-    ...(issue.stateId ? {} : liveIssue.stateId ? { stateId: liveIssue.stateId } : {}),
-    ...(issue.stateName ? {} : liveIssue.stateName ? { stateName: liveIssue.stateName } : {}),
-    ...(issue.stateType ? {} : liveIssue.stateType ? { stateType: liveIssue.stateType } : {}),
-    ...(issue.delegateId ? {} : liveIssue.delegateId ? { delegateId: liveIssue.delegateId } : {}),
-    ...(issue.delegateName ? {} : liveIssue.delegateName ? { delegateName: liveIssue.delegateName } : {}),
-    relationsKnown: issue.relationsKnown || liveIssue.blockedBy !== undefined || liveIssue.blocks !== undefined,
-    labelNames: issue.labelNames.length > 0 ? issue.labelNames : (liveIssue.labels ?? []).map((l) => l.name),
-    blockedBy: issue.relationsKnown ? issue.blockedBy : (liveIssue.blockedBy ?? issue.blockedBy),
-    blocks: issue.relationsKnown ? issue.blocks : (liveIssue.blocks ?? issue.blocks),
-  };
 }
