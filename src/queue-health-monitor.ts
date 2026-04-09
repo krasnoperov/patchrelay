@@ -46,7 +46,7 @@ export class QueueHealthMonitor {
   ) {}
 
   async reconcile(): Promise<void> {
-    for (const issue of this.db.listAwaitingQueueIssues()) {
+    for (const issue of this.db.issues.listAwaitingQueueIssues()) {
       await this.probeQueuedIssue(issue);
     }
   }
@@ -99,7 +99,7 @@ export class QueueHealthMonitor {
     this.probeFailureFeedTimes.delete(`${issue.projectId}::${issue.linearIssueId}`);
 
     if (pr.state === "MERGED") {
-      this.db.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, prState: "merged" });
+      this.db.issues.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, prState: "merged" });
       this.advancer.advanceIdleIssue(issue, "done", { clearFailureProvenance: true });
       return;
     }
@@ -135,7 +135,7 @@ export class QueueHealthMonitor {
         return;
       }
 
-      this.db.upsertIssue({
+      this.db.issues.upsertIssue({
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         lastAttemptedFailureHeadSha: headRefOid,
