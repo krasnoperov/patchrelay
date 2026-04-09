@@ -200,10 +200,6 @@ interface ReviewFixCommentContext {
   authorLogin?: string | undefined;
 }
 
-function isRequestedChangesRunType(runType: RunType): boolean {
-  return runType === "review_fix" || runType === "branch_upkeep";
-}
-
 type RequestedChangesMode = "address_review_feedback" | "branch_upkeep";
 
 function resolveRequestedChangesMode(runType: RunType, context?: Record<string, unknown>): RequestedChangesMode {
