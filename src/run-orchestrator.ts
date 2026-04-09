@@ -28,6 +28,7 @@ import type { ImplementationDeliveryMode } from "./prompting/patchrelay.ts";
 import { IdleIssueReconciler, resolveBranchOwnerForStateTransition } from "./idle-reconciliation.ts";
 import { LinearSessionSync } from "./linear-session-sync.ts";
 import { IssueSessionLeaseService } from "./issue-session-lease-service.ts";
+import { InterruptedRunRecovery, resolveRecoverablePostRunState } from "./interrupted-run-recovery.ts";
 import { RunFinalizer } from "./run-finalizer.ts";
 import { RunLauncher } from "./run-launcher.ts";
 import { RunRecoveryService } from "./run-recovery-service.ts";
@@ -39,17 +40,6 @@ function lowerCaseFirst(value: string): string {
 
 function isRequestedChangesRunType(runType: RunType): boolean {
   return runType === "review_fix" || runType === "branch_upkeep";
-}
-
-type RequestedChangesMode = "address_review_feedback" | "branch_upkeep";
-
-function resolveRequestedChangesMode(runType: RunType, context?: Record<string, unknown>): RequestedChangesMode {
-  if (runType === "branch_upkeep") {
-    return "branch_upkeep";
-  }
-  return context?.reviewFixMode === "branch_upkeep" || context?.branchUpkeepRequired === true
-    ? "branch_upkeep"
-    : "address_review_feedback";
 }
 
 interface RemotePrState {
@@ -83,6 +73,7 @@ export class RunOrchestrator {
   private readonly runLauncher: RunLauncher;
   private readonly runRecovery: RunRecoveryService;
   private readonly runWakePlanner: RunWakePlanner;
+  private readonly interruptedRunRecovery: InterruptedRunRecovery;
   readonly activeSessionLeases: Map<string, string>;
   botIdentity?: GitHubAppBotIdentity;
 
@@ -126,6 +117,22 @@ export class RunOrchestrator {
       (projectId, linearIssueId) => this.releaseIssueSessionLease(projectId, linearIssueId),
       (projectId, issueId) => this.enqueueIssue(projectId, issueId),
       (newState, pendingRunType) => this.resolveBranchOwnerForStateTransition(newState, pendingRunType),
+      feed,
+    );
+    this.interruptedRunRecovery = new InterruptedRunRecovery(
+      db,
+      logger,
+      this.linearSync,
+      (projectId, linearIssueId, fn) => this.withHeldIssueSessionLease(projectId, linearIssueId, fn),
+      (projectId, linearIssueId) => this.releaseIssueSessionLease(projectId, linearIssueId),
+      (run, message, nextState) => this.failRunAndClear(run, message, nextState),
+      (issue) => this.restoreIdleWorktree(issue),
+      (run, issue) => this.refreshIssueAfterReactivePublish(run, issue),
+      async (issue, runType, context) => {
+        const project = this.config.projects.find((entry) => entry.id === issue.projectId);
+        return project ? await this.resolveRequestedChangesWakeContext(issue, runType, context, project) : context;
+      },
+      (projectId, issueId) => this.enqueueIssue(projectId, issueId),
       feed,
     );
     this.runWakePlanner = new RunWakePlanner(db);
@@ -751,117 +758,7 @@ export class RunOrchestrator {
     // The agent may have partially completed work (commits, PR) before interruption.
     // Reactive loops (CI repair, review fix) will handle follow-up if needed.
     if (latestTurn?.status === "interrupted") {
-      this.logger.warn(
-        { issueKey: issue.issueKey, runType: run.runType, threadId: run.threadId },
-        "Run has interrupted turn — marking as failed",
-      );
-      // Interrupted runs are not real failures — undo the budget increment.
-      const repairedCounters = this.withHeldIssueSessionLease(issue.projectId, issue.linearIssueId, (lease) => {
-        if (run.runType === "ci_repair" && issue.ciRepairAttempts > 0) {
-          this.db.issueSessions.upsertIssueWithLease(lease, {
-            projectId: issue.projectId,
-            linearIssueId: issue.linearIssueId,
-            ciRepairAttempts: issue.ciRepairAttempts - 1,
-          });
-        } else if (run.runType === "queue_repair" && issue.queueRepairAttempts > 0) {
-          this.db.issueSessions.upsertIssueWithLease(lease, {
-            projectId: issue.projectId,
-            linearIssueId: issue.linearIssueId,
-            queueRepairAttempts: issue.queueRepairAttempts - 1,
-          });
-        }
-        if (run.runType === "ci_repair" || run.runType === "queue_repair") {
-          this.db.issueSessions.upsertIssueWithLease(lease, {
-            projectId: issue.projectId,
-            linearIssueId: issue.linearIssueId,
-            lastAttemptedFailureHeadSha: null,
-            lastAttemptedFailureSignature: null,
-          });
-        }
-        return true;
-      });
-      if (!repairedCounters) {
-        this.logger.warn({ runId: run.id, issueId: run.linearIssueId }, "Skipping interrupted-run recovery after losing issue-session lease");
-        this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
-        return;
-      }
-      if (isRequestedChangesRunType(run.runType)) {
-        const refreshedIssue = await this.refreshIssueAfterReactivePublish(run, this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue);
-        const project = this.config.projects.find((entry) => entry.id === run.projectId);
-        const retryContext = project
-          ? await this.resolveRequestedChangesWakeContext(
-              refreshedIssue,
-              run.runType,
-              run.runType === "branch_upkeep"
-                ? {
-                    branchUpkeepRequired: true,
-                    reviewFixMode: "branch_upkeep",
-                    wakeReason: "branch_upkeep",
-                  }
-                : undefined,
-              project,
-            )
-          : undefined;
-        const retryRunType = resolveRequestedChangesMode(run.runType, retryContext) === "branch_upkeep"
-          ? "branch_upkeep"
-          : "review_fix";
-        const recoveredState = resolveRecoverablePostRunState(refreshedIssue) ?? "failed";
-        const interruptedMessage = "Requested-changes run was interrupted before PatchRelay could verify that a new PR head was published";
-        this.failRunAndClear(run, interruptedMessage, recoveredState);
-        await this.restoreIdleWorktree(issue);
-        const recoveredIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? refreshedIssue;
-        if (recoveredState === "changes_requested") {
-          this.db.issues.upsertIssue({
-            projectId: run.projectId,
-            linearIssueId: run.linearIssueId,
-            pendingRunType: retryRunType,
-            pendingRunContextJson: retryContext ? JSON.stringify(retryContext) : null,
-          });
-          this.feed?.publish({
-            level: "warn",
-            kind: "workflow",
-            issueKey: issue.issueKey,
-            projectId: run.projectId,
-            stage: run.runType,
-            status: "retry_queued",
-            summary: "Requested-changes run was interrupted; PatchRelay will retry from fresh GitHub truth",
-          });
-          this.enqueueIssue(run.projectId, run.linearIssueId);
-        } else {
-          this.feed?.publish({
-            level: "error",
-            kind: "workflow",
-            issueKey: issue.issueKey,
-            projectId: run.projectId,
-            stage: run.runType,
-            status: "escalated",
-            summary: interruptedMessage,
-          });
-        }
-        void this.linearSync.emitActivity(recoveredIssue, buildRunFailureActivity(run.runType, interruptedMessage));
-        void this.linearSync.syncSession(recoveredIssue, { activeRunType: run.runType });
-        this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
-        return;
-      }
-      const recoveredState = resolveRecoverablePostRunState(this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue);
-      this.failRunAndClear(run, "Codex turn was interrupted", recoveredState);
-      await this.restoreIdleWorktree(issue);
-      const failedIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue;
-      if (recoveredState) {
-        this.feed?.publish({
-          level: "info",
-          kind: "stage",
-          issueKey: issue.issueKey,
-          projectId: run.projectId,
-          stage: recoveredState,
-          status: "reconciled",
-          summary: `Interrupted ${run.runType} recovered \u2192 ${recoveredState}`,
-        });
-      } else {
-        void this.linearSync.emitActivity(failedIssue, buildRunFailureActivity(run.runType, "The Codex turn was interrupted."));
-      }
-      void this.linearSync.syncSession(failedIssue, { activeRunType: run.runType });
-      this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
+      await this.interruptedRunRecovery.handle(run, issue);
       return;
     }
 
@@ -1400,26 +1297,6 @@ function resolvePostRunState(issue: IssueRecord): FactoryState | undefined {
 function resolveCompletedRunState(issue: IssueRecord, run: Pick<RunRecord, "runType" | "promptText">): FactoryState | undefined {
   if (run.runType === "implementation" && resolveImplementationDeliveryMode(issue, undefined, run.promptText) === "linear_only") {
     return "done";
-  }
-  return resolvePostRunState(issue);
-}
-
-function resolveRecoverablePostRunState(issue: IssueRecord): FactoryState | undefined {
-  if (!issue.prNumber) {
-    return resolvePostRunState(issue);
-  }
-  if (issue.prState === "merged") return "done";
-  if (issue.prState === "open") {
-    const reactiveIntent = deriveIssueSessionReactiveIntent({
-      prNumber: issue.prNumber,
-      prState: issue.prState,
-      prReviewState: issue.prReviewState,
-      prCheckStatus: issue.prCheckStatus,
-      latestFailureSource: issue.lastGitHubFailureSource,
-    });
-    if (reactiveIntent) return reactiveIntent.compatibilityFactoryState;
-    if (issue.prReviewState === "approved") return "awaiting_queue";
-    return "pr_open";
   }
   return resolvePostRunState(issue);
 }
