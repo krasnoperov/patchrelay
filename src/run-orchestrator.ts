@@ -21,7 +21,6 @@ import { resolveAuthoritativeLinearStopState, resolvePreferredCompletedLinearSta
 import { execCommand } from "./utils.ts";
 import { getThreadTurns } from "./codex-thread-utils.ts";
 import { deriveIssueSessionReactiveIntent } from "./issue-session.ts";
-import type { IssueSessionEventType } from "./issue-session-events.ts";
 import { loadPatchRelayRepoPrompting } from "./patchrelay-customization.ts";
 import { QueueHealthMonitor } from "./queue-health-monitor.ts";
 import {
@@ -38,15 +37,7 @@ import { LinearSessionSync } from "./linear-session-sync.ts";
 import { IssueSessionLeaseService } from "./issue-session-lease-service.ts";
 import { RunFinalizer } from "./run-finalizer.ts";
 import { RunRecoveryService } from "./run-recovery-service.ts";
-
-const DEFAULT_CI_REPAIR_BUDGET = 3;
-const DEFAULT_QUEUE_REPAIR_BUDGET = 3;
-// Requested-changes loops can legitimately take more iterations than CI/queue
-// repair when the reviewer is catching nuanced product or timing bugs across
-// successive heads. Keep a hard ceiling to prevent infinite ping-pong, but make
-// it wide enough that real review cycles can continue after multiple successful
-// head advances.
-const DEFAULT_REVIEW_FIX_BUDGET = 12;
+import { RunWakePlanner, type PendingRunWake } from "./run-wake-planner.ts";
 const MAX_THREAD_GENERATION_BEFORE_COMPACTION = 4;
 const MAX_FOLLOW_UPS_BEFORE_COMPACTION = 4;
 
@@ -75,14 +66,6 @@ function resolveRequestedChangesMode(runType: RunType, context?: Record<string, 
   return context?.reviewFixMode === "branch_upkeep" || context?.branchUpkeepRequired === true
     ? "branch_upkeep"
     : "address_review_feedback";
-}
-
-interface PendingRunWake {
-  runType: RunType;
-  context?: Record<string, unknown> | undefined;
-  wakeReason?: string | undefined;
-  resumeThread: boolean;
-  eventIds: number[];
 }
 
 function shouldCompactThread(issue: IssueRecord, threadGeneration: number | undefined, context?: Record<string, unknown>): boolean {
@@ -129,6 +112,7 @@ export class RunOrchestrator {
   private readonly leaseService: IssueSessionLeaseService;
   private readonly runFinalizer: RunFinalizer;
   private readonly runRecovery: RunRecoveryService;
+  private readonly runWakePlanner: RunWakePlanner;
   readonly activeSessionLeases: Map<string, string>;
   botIdentity?: GitHubAppBotIdentity;
 
@@ -160,6 +144,7 @@ export class RunOrchestrator {
       (newState, pendingRunType) => this.resolveBranchOwnerForStateTransition(newState, pendingRunType),
       feed,
     );
+    this.runWakePlanner = new RunWakePlanner(db);
     this.idleReconciler = new IdleIssueReconciler(db, config, {
       enqueueIssue: (projectId, issueId) => this.enqueueIssue(projectId, issueId),
     }, logger, feed);
@@ -170,17 +155,7 @@ export class RunOrchestrator {
   }
 
   private resolveRunWake(issue: IssueRecord): PendingRunWake | undefined {
-    const sessionWake = this.db.peekIssueSessionWake(issue.projectId, issue.linearIssueId);
-    if (sessionWake) {
-      return {
-        runType: sessionWake.runType,
-        context: sessionWake.context,
-        wakeReason: sessionWake.wakeReason,
-        resumeThread: sessionWake.resumeThread,
-        eventIds: sessionWake.eventIds,
-      };
-    }
-    return undefined;
+    return this.runWakePlanner.resolveRunWake(issue);
   }
 
   private appendWakeEventWithLease(
@@ -190,48 +165,14 @@ export class RunOrchestrator {
     context?: Record<string, unknown>,
     dedupeScope?: string,
   ): boolean {
-    let eventType: IssueSessionEventType;
-    let dedupeKey: string;
-    if (runType === "queue_repair") {
-      eventType = "merge_steward_incident";
-      dedupeKey = `${dedupeScope ?? "wake"}:queue_repair:${issue.linearIssueId}:${issue.prHeadSha ?? issue.lastGitHubFailureHeadSha ?? "unknown-sha"}`;
-    } else if (runType === "ci_repair") {
-      eventType = "settled_red_ci";
-      dedupeKey = `${dedupeScope ?? "wake"}:ci_repair:${issue.linearIssueId}:${issue.lastGitHubFailureSignature ?? issue.prHeadSha ?? "unknown-sha"}`;
-    } else if (runType === "review_fix" || runType === "branch_upkeep") {
-      eventType = "review_changes_requested";
-      dedupeKey = `${dedupeScope ?? "wake"}:${runType}:${issue.linearIssueId}:${issue.prHeadSha ?? "unknown-sha"}`;
-    } else {
-      eventType = "delegated";
-      dedupeKey = `${dedupeScope ?? "wake"}:implementation:${issue.linearIssueId}`;
-    }
-
-    return Boolean(this.db.appendIssueSessionEventWithLease(lease, {
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      eventType,
-      ...(context ? { eventJson: JSON.stringify(context) } : {}),
-      dedupeKey,
-    }));
+    return this.runWakePlanner.appendWakeEventWithLease(lease, issue, runType, context, dedupeScope);
   }
 
   private materializeLegacyPendingWake(
     issue: IssueRecord,
     lease: { projectId: string; linearIssueId: string; leaseId: string },
   ): IssueRecord {
-    if (!issue.pendingRunType) return issue;
-    const context = issue.pendingRunContextJson
-      ? JSON.parse(issue.pendingRunContextJson) as Record<string, unknown>
-      : undefined;
-    this.appendWakeEventWithLease(lease, issue, issue.pendingRunType, context, "legacy_pending");
-    const updated = this.db.upsertIssueWithLease(lease, {
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      pendingRunType: null,
-      pendingRunContextJson: null,
-    });
-    if (!updated) return issue;
-    return this.db.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
+    return this.runWakePlanner.materializeLegacyPendingWake(issue, lease);
   }
 
   // ─── Run ────────────────────────────────────────────────────────
@@ -278,50 +219,20 @@ export class RunOrchestrator {
       : typeof effectiveContext?.headSha === "string"
         ? effectiveContext.headSha
         : issue.prHeadSha;
-    // Check repair budgets
-    if (runType === "ci_repair" && issue.ciRepairAttempts >= DEFAULT_CI_REPAIR_BUDGET) {
-      this.escalate(issue, runType, `CI repair budget exhausted (${DEFAULT_CI_REPAIR_BUDGET} attempts)`);
-      return;
-    }
-    if (runType === "queue_repair" && issue.queueRepairAttempts >= DEFAULT_QUEUE_REPAIR_BUDGET) {
-      this.escalate(issue, runType, `Queue repair budget exhausted (${DEFAULT_QUEUE_REPAIR_BUDGET} attempts)`);
-      return;
-    }
-    if (isRequestedChangesRunType(runType) && issue.reviewFixAttempts >= DEFAULT_REVIEW_FIX_BUDGET) {
-      this.escalate(issue, runType, `Requested-changes budget exhausted (${DEFAULT_REVIEW_FIX_BUDGET} attempts)`);
+    const budgetExceeded = this.runWakePlanner.budgetExceeded(issue, runType, isRequestedChangesRunType);
+    if (budgetExceeded) {
+      this.escalate(issue, runType, budgetExceeded);
       return;
     }
 
-    // Increment repair counters
-    if (runType === "ci_repair") {
-      const updated = this.db.upsertIssueWithLease(
-        { projectId: issue.projectId, linearIssueId: issue.linearIssueId, leaseId },
-        { projectId: issue.projectId, linearIssueId: issue.linearIssueId, ciRepairAttempts: issue.ciRepairAttempts + 1 },
-      );
-      if (!updated) {
-        this.releaseIssueSessionLease(item.projectId, item.issueId);
-        return;
-      }
-    }
-    if (runType === "queue_repair") {
-      const updated = this.db.upsertIssueWithLease(
-        { projectId: issue.projectId, linearIssueId: issue.linearIssueId, leaseId },
-        { projectId: issue.projectId, linearIssueId: issue.linearIssueId, queueRepairAttempts: issue.queueRepairAttempts + 1 },
-      );
-      if (!updated) {
-        this.releaseIssueSessionLease(item.projectId, item.issueId);
-        return;
-      }
-    }
-    if (isRequestedChangesRunType(runType)) {
-      const updated = this.db.upsertIssueWithLease(
-        { projectId: issue.projectId, linearIssueId: issue.linearIssueId, leaseId },
-        { projectId: issue.projectId, linearIssueId: issue.linearIssueId, reviewFixAttempts: issue.reviewFixAttempts + 1 },
-      );
-      if (!updated) {
-        this.releaseIssueSessionLease(item.projectId, item.issueId);
-        return;
-      }
+    if (!this.runWakePlanner.incrementAttemptCounters(
+      issue,
+      { projectId: issue.projectId, linearIssueId: issue.linearIssueId, leaseId },
+      runType,
+      isRequestedChangesRunType,
+    )) {
+      this.releaseIssueSessionLease(item.projectId, item.issueId);
+      return;
     }
 
     const repoPrompting = loadPatchRelayRepoPrompting({
