@@ -1,22 +1,14 @@
 import type { Logger } from "pino";
-import {
-  buildAgentSessionPlanForIssue,
-} from "./agent-session-plan.ts";
-import { buildAgentSessionExternalUrls } from "./agent-session-presentation.ts";
 import type { CodexAppServerClient } from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
-import { TERMINAL_STATES, type RunType } from "./factory-state.ts";
-import {
-  buildAlreadyRunningThought,
-  buildDelegationThought,
-  buildPromptDeliveredThought,
-  buildStopConfirmationActivity,
-} from "./linear-session-reporting.ts";
+import type { RunType } from "./factory-state.ts";
 import { deriveIssueStatusNote } from "./status-note.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import { resolveProject, triggerEventAllowed, trustedActorAllowed } from "./project-resolution.ts";
 import { normalizeWebhook } from "./webhooks.ts";
 import { InstallationWebhookHandler } from "./webhook-installation-handler.ts";
+import { AgentSessionHandler } from "./webhooks/agent-session-handler.ts";
+import { CommentWakeHandler } from "./webhooks/comment-wake-handler.ts";
 import {
   decideActiveRunRelease,
   decideAgentSession,
@@ -26,11 +18,7 @@ import {
   isTerminalDelegationState,
   mergeIssueMetadata,
 } from "./webhooks/decision-helpers.ts";
-import {
-  hasExplicitPatchRelayWakeIntent,
-  isInertPatchRelayComment,
-  isPatchRelayManagedCommentAuthor,
-} from "./webhooks/comment-policy.ts";
+import { IssueRemovalHandler } from "./webhooks/issue-removal-handler.ts";
 import type {
   AppConfig,
   IssueMetadata,
@@ -39,7 +27,6 @@ import type {
   NormalizedEvent,
   ProjectConfig,
   TrackedIssueRecord,
-  LinearAgentActivityContent,
 } from "./types.ts";
 import { safeJsonParse, sanitizeDiagnosticText } from "./utils.ts";
 import { extractLatestAssistantSummary } from "./issue-session-events.ts";
@@ -51,6 +38,9 @@ export interface IssueQueueItem {
 
 export class WebhookHandler {
   private readonly installationHandler: InstallationWebhookHandler;
+  private readonly issueRemovalHandler: IssueRemovalHandler;
+  private readonly commentWakeHandler: CommentWakeHandler;
+  private readonly agentSessionHandler: AgentSessionHandler;
 
   constructor(
     private readonly config: AppConfig,
@@ -62,6 +52,9 @@ export class WebhookHandler {
     private readonly feed?: OperatorEventFeed,
   ) {
     this.installationHandler = new InstallationWebhookHandler(config, { linearInstallations: db.linearInstallations }, logger);
+    this.issueRemovalHandler = new IssueRemovalHandler(db, feed);
+    this.commentWakeHandler = new CommentWakeHandler(db, codex, logger, feed);
+    this.agentSessionHandler = new AgentSessionHandler(config, db, linearProvider, codex, logger, feed);
   }
 
   async processWebhookEvent(webhookEventId: number): Promise<void> {
@@ -148,68 +141,34 @@ export class WebhookHandler {
       const newlyReadyDependents = this.reconcileDependentReadiness(project.id, issue.id);
 
       // Handle issue removal: release active runs, mark as failed.
-      if (hydrated.triggerEvent === "issueRemoved" && trackedIssue) {
-        const removedIssue = this.db.getIssue(project.id, issue.id);
-        const activeLease = this.db.getActiveIssueSessionLease(project.id, issue.id);
-        const commitRemoval = () => {
-          if (removedIssue?.activeRunId) {
-            const run = this.db.getRun(removedIssue.activeRunId);
-            if (run) {
-              this.db.finishRun(run.id, { status: "released", failureReason: "Issue removed from Linear" });
-            }
-            return this.db.upsertIssue({
-              projectId: project.id,
-              linearIssueId: issue.id,
-              activeRunId: null,
-              pendingRunType: null,
-              factoryState: "failed" as never,
-            });
-          }
-          if (removedIssue && !TERMINAL_STATES.has(removedIssue.factoryState)) {
-            return this.db.upsertIssue({
-              projectId: project.id,
-              linearIssueId: issue.id,
-              pendingRunType: null,
-              factoryState: "failed" as never,
-            });
-          }
-          return removedIssue;
-        };
-        if (removedIssue?.activeRunId) {
-          const run = this.db.getRun(removedIssue.activeRunId);
-          if (run) {
-            await this.stopActiveRun(run, "STOP: The Linear issue was removed. Stop working immediately and exit.");
-          }
-        }
-        if (activeLease) {
-          this.db.withIssueSessionLease(project.id, issue.id, activeLease.leaseId, commitRemoval);
-        } else {
-          commitRemoval();
-        }
-        this.db.appendIssueSessionEvent({
+      if (hydrated.triggerEvent === "issueRemoved") {
+        await this.issueRemovalHandler.handle({
           projectId: project.id,
-          linearIssueId: issue.id,
-          eventType: "issue_removed",
-          dedupeKey: `issue_removed:${issue.id}`,
-        });
-        this.db.clearPendingIssueSessionEventsRespectingActiveLease(project.id, issue.id);
-        this.db.releaseIssueSessionLeaseRespectingActiveLease(project.id, issue.id);
-        this.feed?.publish({
-          level: "warn",
-          kind: "stage",
-          issueKey: issue.identifier,
-          projectId: project.id,
-          stage: "failed",
-          status: "issue_removed",
-          summary: "Issue removed from Linear",
+          issue,
+          trackedIssue,
+          stopActiveRun: (run, input) => this.stopActiveRun(run, input),
         });
       }
 
-      // Handle agent session events
-      await this.handleAgentSession(hydrated, project, trackedIssue, result.wakeRunType, result.delegated);
+      await this.agentSessionHandler.handle({
+        normalized: hydrated,
+        project,
+        trackedIssue,
+        wakeRunType: result.wakeRunType,
+        delegated: result.delegated,
+        peekPendingSessionWakeRunType: (projectId, issueId) => this.peekPendingSessionWakeRunType(projectId, issueId),
+        enqueuePendingSessionWake: (projectId, issueId) => this.enqueuePendingSessionWake(projectId, issueId),
+        isDirectReplyToOutstandingQuestion: (targetIssue) => this.isDirectReplyToOutstandingQuestion(targetIssue),
+      });
 
-      // Handle comments during active run
-      await this.handleComment(hydrated, project, trackedIssue);
+      await this.commentWakeHandler.handle({
+        normalized: hydrated,
+        project,
+        trackedIssue,
+        enqueuePendingSessionWake: (projectId, issueId) => this.enqueuePendingSessionWake(projectId, issueId),
+        peekPendingSessionWakeRunType: (projectId, issueId) => this.peekPendingSessionWakeRunType(projectId, issueId),
+        isDirectReplyToOutstandingQuestion: (targetIssue) => this.isDirectReplyToOutstandingQuestion(targetIssue),
+      });
 
       this.db.markWebhookProcessed(webhookEventId, "processed");
 
@@ -496,181 +455,6 @@ export class WebhookHandler {
     return newlyReady;
   }
 
-  // ─── Agent session handling (inlined) ─────────────────────────────
-
-  private async handleAgentSession(
-    normalized: NormalizedEvent,
-    project: ProjectConfig,
-    trackedIssue: TrackedIssueRecord | undefined,
-    wakeRunType: RunType | undefined,
-    delegated: boolean,
-  ): Promise<void> {
-    if (!normalized.agentSession?.id || !normalized.issue) return;
-
-    const linear = await this.linearProvider.forProject(project.id);
-    if (!linear) return;
-
-    const existingIssue = this.db.getIssue(project.id, normalized.issue.id);
-    const activeRun = existingIssue?.activeRunId ? this.db.getRun(existingIssue.activeRunId) : undefined;
-
-    if (normalized.triggerEvent === "agentSessionCreated") {
-      if (!delegated) {
-        const latestIssue = this.db.getIssue(project.id, normalized.issue.id);
-        if (latestIssue ?? trackedIssue) {
-          await this.syncAgentSession(linear, normalized.agentSession.id, latestIssue ?? trackedIssue);
-        }
-        return;
-      }
-      if (wakeRunType) {
-        const latestIssue = this.db.getIssue(project.id, normalized.issue.id);
-        await this.syncAgentSession(linear, normalized.agentSession.id, latestIssue ?? trackedIssue, { pendingRunType: wakeRunType });
-        await this.publishAgentActivity(linear, normalized.agentSession.id, buildDelegationThought(wakeRunType));
-        return;
-      }
-      if (activeRun) {
-        const latestIssue = this.db.getIssue(project.id, normalized.issue.id);
-        await this.syncAgentSession(linear, normalized.agentSession.id, latestIssue ?? trackedIssue, { activeRunType: activeRun.runType });
-        await this.publishAgentActivity(linear, normalized.agentSession.id, buildAlreadyRunningThought(activeRun.runType));
-        return;
-      }
-      const blockerSummary = trackedIssue?.blockedByCount
-        ? `PatchRelay is delegated and waiting on blockers to reach Done: ${trackedIssue.blockedByKeys.join(", ")}.`
-        : "PatchRelay is delegated, but no work is queued. Delegate the issue or move it to Start to trigger implementation.";
-      await this.publishAgentActivity(linear, normalized.agentSession.id, {
-        type: "elicitation",
-        body: blockerSummary,
-      });
-      return;
-    }
-
-    // Stop signal — halt active work and confirm disengagement
-    if (normalized.triggerEvent === "agentSignal" && normalized.agentSession.signal === "stop") {
-      await this.handleStopSignal(normalized, project, trackedIssue, existingIssue, activeRun, linear);
-      return;
-    }
-
-    if (normalized.triggerEvent !== "agentPrompted") return;
-    if (!triggerEventAllowed(project, normalized.triggerEvent)) return;
-
-    const promptBody = normalized.agentSession.promptBody?.trim();
-    if (activeRun && promptBody && activeRun.threadId && activeRun.turnId) {
-      // Deliver prompt directly to active Codex turn
-      const input = `New Linear agent prompt received while you are working.\n\n${promptBody}`;
-      try {
-        await this.codex.steerTurn({ threadId: activeRun.threadId, turnId: activeRun.turnId, input });
-        this.feed?.publish({
-          level: "info",
-          kind: "agent",
-          projectId: project.id,
-          issueKey: trackedIssue?.issueKey,
-          stage: activeRun.runType,
-          status: "delivered",
-          summary: `Delivered follow-up prompt to active ${activeRun.runType} workflow`,
-        });
-      } catch (error) {
-        this.logger.warn({ issueKey: trackedIssue?.issueKey, error: error instanceof Error ? error.message : String(error) }, "Failed to deliver follow-up prompt");
-        this.feed?.publish({
-          level: "warn",
-          kind: "agent",
-          projectId: project.id,
-          issueKey: trackedIssue?.issueKey,
-          stage: activeRun.runType,
-          status: "delivery_failed",
-          summary: `Could not deliver follow-up prompt to active ${activeRun.runType} workflow`,
-        });
-      }
-      await this.publishAgentActivity(linear, normalized.agentSession.id, buildPromptDeliveredThought(activeRun.runType), { ephemeral: true });
-      return;
-    }
-
-    if (promptBody && existingIssue && (delegated || existingIssue.factoryState === "awaiting_input")) {
-      const hadPendingWake = this.db.peekIssueSessionWake(project.id, normalized.issue.id) !== undefined;
-      const directReply = this.isDirectReplyToOutstandingQuestion(existingIssue);
-      this.db.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
-        projectId: project.id,
-        linearIssueId: normalized.issue.id,
-        eventType: directReply ? "direct_reply" : "followup_prompt",
-        eventJson: JSON.stringify({
-          text: promptBody,
-          source: "linear_agent_prompt",
-        }),
-      });
-      const queuedRunType = hadPendingWake
-        ? this.peekPendingSessionWakeRunType(project.id, normalized.issue.id)
-        : this.enqueuePendingSessionWake(project.id, normalized.issue.id);
-      const latestIssue = this.db.getIssue(project.id, normalized.issue.id);
-      await this.syncAgentSession(linear, normalized.agentSession.id, latestIssue ?? trackedIssue, {
-        pendingRunType: queuedRunType ?? wakeRunType ?? (existingIssue.prReviewState === "changes_requested" ? "review_fix" : "implementation"),
-      });
-      await this.publishAgentActivity(linear, normalized.agentSession.id, buildPromptDeliveredThought(queuedRunType ?? wakeRunType ?? "implementation"), { ephemeral: true });
-      return;
-    }
-
-    if (wakeRunType) {
-      const latestIssue = this.db.getIssue(project.id, normalized.issue.id);
-      await this.syncAgentSession(linear, normalized.agentSession.id, latestIssue ?? trackedIssue, { pendingRunType: wakeRunType });
-      await this.publishAgentActivity(linear, normalized.agentSession.id, buildDelegationThought(wakeRunType, "prompt"), { ephemeral: true });
-    }
-  }
-
-  // ─── Stop signal handling ────────────────────────────────────────
-
-  private async handleStopSignal(
-    normalized: NormalizedEvent,
-    project: ProjectConfig,
-    trackedIssue: TrackedIssueRecord | undefined,
-    existingIssue: ReturnType<PatchRelayDatabase["getIssue"]>,
-    activeRun: ReturnType<PatchRelayDatabase["getRun"]>,
-    linear: NonNullable<Awaited<ReturnType<LinearClientProvider["forProject"]>>>,
-  ): Promise<void> {
-    const issueId = normalized.issue!.id;
-    const sessionId = normalized.agentSession!.id;
-
-    // Best-effort halt: steer the active Codex turn with a stop instruction
-    if (activeRun?.threadId && activeRun.turnId) {
-      try {
-        await this.codex.steerTurn({
-          threadId: activeRun.threadId,
-          turnId: activeRun.turnId,
-          input: "STOP: The user has requested you stop working immediately. Do not make further changes. Wrap up and exit.",
-        });
-      } catch (error) {
-        this.logger.warn({ issueKey: trackedIssue?.issueKey, error: error instanceof Error ? error.message : String(error) }, "Failed to steer Codex turn for stop signal");
-      }
-
-      this.db.finishRun(activeRun.id, { status: "released", threadId: activeRun.threadId, turnId: activeRun.turnId });
-    }
-
-    this.db.upsertIssueRespectingActiveLease(project.id, issueId, {
-      projectId: project.id,
-      linearIssueId: issueId,
-      activeRunId: null,
-      factoryState: "awaiting_input",
-      agentSessionId: sessionId,
-    });
-    this.db.appendIssueSessionEvent({
-      projectId: project.id,
-      linearIssueId: issueId,
-      eventType: "stop_requested",
-      dedupeKey: `stop_requested:${issueId}`,
-    });
-    this.db.clearPendingIssueSessionEventsRespectingActiveLease(project.id, issueId);
-    this.db.releaseIssueSessionLeaseRespectingActiveLease(project.id, issueId);
-
-    this.feed?.publish({
-      level: "info",
-      kind: "agent",
-      projectId: project.id,
-      issueKey: trackedIssue?.issueKey,
-      status: "stopped",
-      summary: "Stop signal received — work halted",
-    });
-
-    const updatedIssue = this.db.getIssue(project.id, issueId);
-    await this.publishAgentActivity(linear, sessionId, buildStopConfirmationActivity());
-    await this.syncAgentSession(linear, sessionId, updatedIssue ?? trackedIssue);
-  }
-
   private async stopActiveRun(
     run: NonNullable<ReturnType<PatchRelayDatabase["getRun"]>>,
     input: string,
@@ -680,140 +464,6 @@ export class WebhookHandler {
       await this.codex.steerTurn({ threadId: run.threadId, turnId: run.turnId, input });
     } catch (error) {
       this.logger.warn({ runId: run.id, error: error instanceof Error ? error.message : String(error) }, "Failed to steer active run during session shutdown");
-    }
-  }
-
-  // ─── Comment handling (inlined) ───────────────────────────────────
-
-  private async handleComment(
-    normalized: NormalizedEvent,
-    project: ProjectConfig,
-    trackedIssue: TrackedIssueRecord | undefined,
-  ): Promise<void> {
-    if (
-      (normalized.triggerEvent !== "commentCreated" && normalized.triggerEvent !== "commentUpdated") ||
-      !normalized.comment?.body ||
-      !normalized.issue
-    ) {
-      return;
-    }
-    if (!triggerEventAllowed(project, normalized.triggerEvent)) return;
-
-    const issue = this.db.getIssue(project.id, normalized.issue.id);
-    if (!issue) return;
-    const trimmedBody = normalized.comment.body.trim();
-
-    // Ignore PatchRelay-managed comments to prevent status-sync feedback loops.
-    // Linear commentUpdated/commentCreated events can arrive after PatchRelay
-    // refreshes its visible status comment, and those updates should never
-    // consume review-fix budget or wake a new run.
-    const installation = this.db.linearInstallations.getLinearInstallationForProject(project.id);
-    const selfAuthored = isPatchRelayManagedCommentAuthor(installation, normalized.actor, normalized.comment.userName);
-    const inertPatchRelayComment = isInertPatchRelayComment(issue, normalized.comment.id, trimmedBody, normalized.actor?.type);
-    if (selfAuthored || inertPatchRelayComment) {
-      this.db.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
-        projectId: project.id,
-        linearIssueId: normalized.issue.id,
-        eventType: "self_comment",
-        eventJson: JSON.stringify({
-          body: trimmedBody,
-          author: normalized.comment.userName,
-        }),
-      });
-      return;
-    }
-
-    // No active run — enqueue a run with the comment as context if appropriate
-    if (!issue.activeRunId) {
-      const ENQUEUEABLE_STATES = new Set(["pr_open", "changes_requested", "implementing", "delegated", "awaiting_input"]);
-      if (ENQUEUEABLE_STATES.has(issue.factoryState)) {
-        const directReply = this.isDirectReplyToOutstandingQuestion(issue);
-        const wakeIntent = directReply || hasExplicitPatchRelayWakeIntent(trimmedBody);
-        if (!wakeIntent) {
-          this.feed?.publish({
-            level: "info",
-            kind: "comment",
-            projectId: project.id,
-            issueKey: trackedIssue?.issueKey,
-            status: "ignored",
-            summary: "Ignored comment with no explicit PatchRelay wake intent",
-            detail: trimmedBody.slice(0, 200),
-          });
-          return;
-        }
-        const runType = issue.prReviewState === "changes_requested" ? "review_fix" : "implementation";
-        const hadPendingWake = this.db.peekIssueSessionWake(project.id, normalized.issue.id) !== undefined;
-        this.db.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
-          projectId: project.id,
-          linearIssueId: normalized.issue.id,
-          eventType: directReply ? "direct_reply" : "followup_comment",
-          eventJson: JSON.stringify({
-            body: trimmedBody,
-            author: normalized.comment.userName,
-          }),
-        });
-        const queuedRunType = hadPendingWake
-          ? this.peekPendingSessionWakeRunType(project.id, normalized.issue.id)
-          : this.enqueuePendingSessionWake(project.id, normalized.issue.id);
-        this.feed?.publish({
-          level: "info",
-          kind: "comment",
-          projectId: project.id,
-          issueKey: trackedIssue?.issueKey,
-          status: "enqueued",
-          summary: `Comment enqueued ${(queuedRunType ?? runType)} run`,
-          detail: trimmedBody.slice(0, 200),
-        });
-      }
-      return;
-    }
-
-    const run = this.db.getRun(issue.activeRunId);
-    if (!run?.threadId || !run.turnId) return;
-
-    const body = [
-      "New Linear comment received while you are working.",
-      normalized.comment.userName ? `Author: ${normalized.comment.userName}` : undefined,
-      "",
-      trimmedBody,
-    ].filter(Boolean).join("\n");
-
-    try {
-      await this.codex.steerTurn({ threadId: run.threadId, turnId: run.turnId, input: body });
-      this.feed?.publish({
-        level: "info",
-        kind: "comment",
-        projectId: project.id,
-        issueKey: trackedIssue?.issueKey,
-        stage: run.runType,
-        status: "delivered",
-        summary: `Delivered follow-up comment to active ${run.runType} workflow`,
-      });
-    } catch (error) {
-      this.logger.warn({ issueKey: trackedIssue?.issueKey, error: error instanceof Error ? error.message : String(error) }, "Failed to deliver follow-up comment");
-      const hadPendingWake = this.db.hasPendingIssueSessionEvents(project.id, normalized.issue.id);
-      const directReply = this.isDirectReplyToOutstandingQuestion(issue);
-      this.db.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
-        projectId: project.id,
-        linearIssueId: normalized.issue.id,
-        eventType: directReply ? "direct_reply" : "followup_comment",
-        eventJson: JSON.stringify({
-          body: trimmedBody,
-          author: normalized.comment.userName,
-        }),
-      });
-      if (!hadPendingWake) {
-        this.enqueuePendingSessionWake(project.id, normalized.issue.id);
-      }
-      this.feed?.publish({
-        level: "warn",
-        kind: "comment",
-        projectId: project.id,
-        issueKey: trackedIssue?.issueKey,
-        stage: run.runType,
-        status: "delivery_failed",
-        summary: `Could not deliver follow-up comment to active ${run.runType} workflow`,
-      });
     }
   }
 
@@ -828,84 +478,6 @@ export class WebhookHandler {
     }
     this.enqueueIssue(projectId, issueId);
     return wake.runType;
-  }
-
-  // ─── Helpers ──────────────────────────────────────────────────────
-
-  private async publishAgentActivity(
-    linear: NonNullable<Awaited<ReturnType<LinearClientProvider["forProject"]>>>,
-    agentSessionId: string,
-    content: LinearAgentActivityContent,
-    options?: { ephemeral?: boolean },
-  ): Promise<void> {
-    try {
-      await linear.createAgentActivity({
-        agentSessionId,
-        content,
-        ephemeral: options?.ephemeral ?? content.type === "thought",
-      });
-    } catch (error) {
-      this.logger.warn(
-        { agentSessionId, error: error instanceof Error ? error.message : String(error) },
-        "Failed to publish Linear agent activity",
-      );
-    }
-  }
-
-  private async isCurrentLinearIssueDelegatedToPatchRelay(
-    linear: NonNullable<Awaited<ReturnType<LinearClientProvider["forProject"]>>>,
-    projectId: string,
-    issueId: string,
-  ): Promise<boolean> {
-    const installation = this.db.linearInstallations.getLinearInstallationForProject(projectId);
-    if (!installation?.actorId) return false;
-    try {
-      const issue = await linear.getIssue(issueId);
-      return issue.delegateId === installation.actorId;
-    } catch {
-      return false;
-    }
-  }
-
-  private async syncAgentSession(
-    linear: NonNullable<Awaited<ReturnType<LinearClientProvider["forProject"]>>>,
-    agentSessionId: string,
-    issue: TrackedIssueRecord | ReturnType<PatchRelayDatabase["getIssue"]> | undefined,
-    options?: { activeRunType?: RunType; pendingRunType?: RunType },
-  ): Promise<void> {
-    if (!linear.updateAgentSession) return;
-    try {
-      const prUrl = issue && "prUrl" in issue ? issue.prUrl : undefined;
-      const externalUrls = buildAgentSessionExternalUrls(this.config, {
-        ...(issue?.issueKey ? { issueKey: issue.issueKey } : {}),
-        ...(prUrl ? { prUrl } : {}),
-      });
-      await linear.updateAgentSession({
-        agentSessionId,
-        ...(externalUrls ? { externalUrls } : {}),
-        ...(issue
-          ? {
-              plan: buildAgentSessionPlanForIssue(
-                {
-                  factoryState: issue.factoryState,
-                  pendingRunType: options?.pendingRunType ?? this.peekPendingSessionWakeRunType(
-                    issue.projectId,
-                    issue.linearIssueId,
-                  ),
-                  ciRepairAttempts: "ciRepairAttempts" in issue ? issue.ciRepairAttempts : 0,
-                  queueRepairAttempts: "queueRepairAttempts" in issue ? issue.queueRepairAttempts : 0,
-                },
-                options?.activeRunType ? { activeRunType: options.activeRunType } : undefined,
-              ),
-            }
-          : {}),
-      });
-    } catch (error) {
-      this.logger.warn(
-        { agentSessionId, error: error instanceof Error ? error.message : String(error) },
-        "Failed to update Linear agent session",
-      );
-    }
   }
 
   private async hydrateIssueContext(projectId: string, normalized: NormalizedEvent): Promise<NormalizedEvent> {
