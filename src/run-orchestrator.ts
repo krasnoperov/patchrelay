@@ -156,7 +156,7 @@ export class RunOrchestrator {
       return;
     }
 
-    const issue = this.db.getIssue(item.projectId, item.issueId);
+    const issue = this.db.issues.getIssue(item.projectId, item.issueId);
     if (!issue || issue.activeRunId !== undefined) return;
     const issueSession = this.db.issueSessions.getIssueSession(item.projectId, item.issueId);
 
@@ -299,7 +299,7 @@ export class RunOrchestrator {
     );
 
     // Emit Linear activity + plan
-    const freshIssue = this.db.getIssue(item.projectId, item.issueId) ?? issue;
+    const freshIssue = this.db.issues.getIssue(item.projectId, item.issueId) ?? issue;
     void this.linearSync.emitActivity(freshIssue, buildRunStartedActivity(runType));
     void this.linearSync.syncSession(freshIssue, { activeRunType: runType });
   }
@@ -461,7 +461,7 @@ export class RunOrchestrator {
 
     // Sync codex plan to Linear session when it updates
     if (notification.method === "turn/plan/updated") {
-      const issue = this.db.getIssue(run.projectId, run.linearIssueId);
+      const issue = this.db.issues.getIssue(run.projectId, run.linearIssueId);
       if (issue) {
         void this.linearSync.syncCodexPlan(issue, notification.params);
       }
@@ -470,7 +470,7 @@ export class RunOrchestrator {
     if (notification.method !== "turn/completed") return;
 
     const thread = await this.readThreadWithRetry(threadId);
-    const issue = this.db.getIssue(run.projectId, run.linearIssueId);
+    const issue = this.db.issues.getIssue(run.projectId, run.linearIssueId);
     if (!issue) return;
 
     const completedTurnId = extractTurnId(notification.params);
@@ -507,7 +507,7 @@ export class RunOrchestrator {
         status: "failed",
         summary: `Turn failed for ${run.runType}`,
       });
-      const failedIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
+      const failedIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue;
       void this.linearSync.emitActivity(failedIssue, buildRunFailureActivity(run.runType));
       void this.linearSync.syncSession(failedIssue, { activeRunType: run.runType });
       this.linearSync.clearProgress(run.id);
@@ -542,7 +542,7 @@ export class RunOrchestrator {
   // ─── Active status for query ──────────────────────────────────────
 
   async getActiveRunStatus(issueKey: string) {
-    const issue = this.db.getIssueByKey(issueKey);
+    const issue = this.db.issues.getIssueByKey(issueKey);
     if (!issue?.activeRunId) return undefined;
 
     const run = this.db.runs.getRunById(issue.activeRunId);
@@ -574,7 +574,7 @@ export class RunOrchestrator {
   }
 
   private async reconcileMergedLinearCompletion(): Promise<void> {
-    for (const issue of this.db.listIssues()) {
+    for (const issue of this.db.issues.listIssues()) {
       if (issue.prState !== "merged") continue;
       if (issue.currentLinearStateType?.trim().toLowerCase() === "completed") continue;
 
@@ -588,7 +588,7 @@ export class RunOrchestrator {
 
         const normalizedCurrent = liveIssue.stateName?.trim().toLowerCase();
         if (normalizedCurrent === targetState.trim().toLowerCase()) {
-          this.db.upsertIssue({
+          this.db.issues.upsertIssue({
             projectId: issue.projectId,
             linearIssueId: issue.linearIssueId,
             ...(liveIssue.stateName ? { currentLinearState: liveIssue.stateName } : {}),
@@ -598,7 +598,7 @@ export class RunOrchestrator {
         }
 
         const updated = await linear.setIssueState(issue.linearIssueId, targetState);
-        this.db.upsertIssue({
+        this.db.issues.upsertIssue({
           projectId: issue.projectId,
           linearIssueId: issue.linearIssueId,
           ...(updated.stateName ? { currentLinearState: updated.stateName } : {}),
@@ -644,7 +644,7 @@ export class RunOrchestrator {
   }
 
   private async reconcileRun(run: RunRecord): Promise<void> {
-    const issue = this.db.getIssue(run.projectId, run.linearIssueId);
+    const issue = this.db.issues.getIssue(run.projectId, run.linearIssueId);
     if (!issue) return;
     let recoveryLease = this.claimLeaseForReconciliation(run.projectId, run.linearIssueId);
     if (recoveryLease === "skip" && await this.reclaimForeignRecoveryLeaseIfSafe(run, issue)) {
@@ -658,10 +658,10 @@ export class RunOrchestrator {
     if (TERMINAL_STATES.has(issue.factoryState)) {
       this.withHeldIssueSessionLease(run.projectId, run.linearIssueId, () => {
         this.db.runs.finishRun(run.id, { status: "released", failureReason: "Issue reached terminal state during active run" });
-        this.db.upsertIssue({ projectId: run.projectId, linearIssueId: run.linearIssueId, activeRunId: null });
+        this.db.issues.upsertIssue({ projectId: run.projectId, linearIssueId: run.linearIssueId, activeRunId: null });
       });
       this.logger.info({ issueKey: issue.issueKey, runId: run.id, factoryState: issue.factoryState }, "Reconciliation: released run on terminal issue");
-      const releasedIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
+      const releasedIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue;
       void this.linearSync.syncSession(releasedIssue, { activeRunType: run.runType });
       this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
       return;
@@ -675,10 +675,10 @@ export class RunOrchestrator {
       );
       this.withHeldIssueSessionLease(run.projectId, run.linearIssueId, () => {
         this.db.runs.finishRun(run.id, { status: "failed", failureReason: "Zombie: never started (no thread after restart)" });
-        this.db.upsertIssue({ projectId: run.projectId, linearIssueId: run.linearIssueId, activeRunId: null });
+        this.db.issues.upsertIssue({ projectId: run.projectId, linearIssueId: run.linearIssueId, activeRunId: null });
       });
       this.recoverOrEscalate(issue, run.runType, "zombie");
-      const recoveredIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
+      const recoveredIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue;
       void this.linearSync.emitActivity(recoveredIssue, buildRunFailureActivity(run.runType, "The Codex turn never started before PatchRelay restarted."));
       void this.linearSync.syncSession(recoveredIssue, { activeRunType: run.runType });
       this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
@@ -696,10 +696,10 @@ export class RunOrchestrator {
       );
       this.withHeldIssueSessionLease(run.projectId, run.linearIssueId, () => {
         this.db.runs.finishRun(run.id, { status: "failed", failureReason: "Stale thread after restart" });
-        this.db.upsertIssue({ projectId: run.projectId, linearIssueId: run.linearIssueId, activeRunId: null });
+        this.db.issues.upsertIssue({ projectId: run.projectId, linearIssueId: run.linearIssueId, activeRunId: null });
       });
       this.recoverOrEscalate(issue, run.runType, "stale_thread");
-      const recoveredIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
+      const recoveredIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue;
       void this.linearSync.emitActivity(recoveredIssue, buildRunFailureActivity(run.runType, "PatchRelay lost the active Codex thread after restart and needs to recover."));
       void this.linearSync.syncSession(recoveredIssue, { activeRunType: run.runType });
       this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
@@ -715,7 +715,7 @@ export class RunOrchestrator {
         if (stopState?.isFinal) {
           this.withHeldIssueSessionLease(run.projectId, run.linearIssueId, () => {
             this.db.runs.finishRun(run.id, { status: "released" });
-            this.db.upsertIssue({
+            this.db.issues.upsertIssue({
               projectId: run.projectId,
               linearIssueId: run.linearIssueId,
               activeRunId: null,
@@ -732,7 +732,7 @@ export class RunOrchestrator {
             status: "reconciled",
             summary: `Linear state ${stopState.stateName} \u2192 done`,
           });
-          const doneIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
+          const doneIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue;
           void this.linearSync.syncSession(doneIssue, { activeRunType: run.runType });
           this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
           return;
@@ -781,7 +781,7 @@ export class RunOrchestrator {
         return;
       }
       if (isRequestedChangesRunType(run.runType)) {
-        const refreshedIssue = await this.refreshIssueAfterReactivePublish(run, this.db.getIssue(run.projectId, run.linearIssueId) ?? issue);
+        const refreshedIssue = await this.refreshIssueAfterReactivePublish(run, this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue);
         const project = this.config.projects.find((entry) => entry.id === run.projectId);
         const retryContext = project
           ? await this.resolveRequestedChangesWakeContext(
@@ -804,9 +804,9 @@ export class RunOrchestrator {
         const interruptedMessage = "Requested-changes run was interrupted before PatchRelay could verify that a new PR head was published";
         this.failRunAndClear(run, interruptedMessage, recoveredState);
         await this.restoreIdleWorktree(issue);
-        const recoveredIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? refreshedIssue;
+        const recoveredIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? refreshedIssue;
         if (recoveredState === "changes_requested") {
-          this.db.upsertIssue({
+          this.db.issues.upsertIssue({
             projectId: run.projectId,
             linearIssueId: run.linearIssueId,
             pendingRunType: retryRunType,
@@ -838,10 +838,10 @@ export class RunOrchestrator {
         this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
         return;
       }
-      const recoveredState = resolveRecoverablePostRunState(this.db.getIssue(run.projectId, run.linearIssueId) ?? issue);
+      const recoveredState = resolveRecoverablePostRunState(this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue);
       this.failRunAndClear(run, "Codex turn was interrupted", recoveredState);
       await this.restoreIdleWorktree(issue);
-      const failedIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
+      const failedIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue;
       if (recoveredState) {
         this.feed?.publish({
           level: "info",
@@ -975,21 +975,21 @@ export class RunOrchestrator {
 
   private async refreshIssueAfterReactivePublish(run: RunRecord, issue: IssueRecord): Promise<IssueRecord> {
     if (run.runType !== "ci_repair" && run.runType !== "queue_repair" && !isRequestedChangesRunType(run.runType)) {
-      return this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
+      return this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue;
     }
     if (!issue.prNumber) {
-      return this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
+      return this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue;
     }
     const project = this.config.projects.find((entry) => entry.id === run.projectId);
     const repoFullName = project?.github?.repoFullName;
     if (!repoFullName) {
-      return this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
+      return this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue;
     }
 
     try {
       const pr = await this.loadRemotePrState(repoFullName, issue.prNumber);
       if (!pr) {
-        return this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
+        return this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue;
       }
 
       const nextPrState = normalizeRemotePrState(pr.state);
@@ -1039,7 +1039,7 @@ export class RunOrchestrator {
       }, "Failed to refresh PR state after reactive publish");
     }
 
-    return this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
+    return this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue;
   }
 
   private async loadRemotePrState(

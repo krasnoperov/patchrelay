@@ -114,7 +114,7 @@ export class RunLauncher {
     worktreePath: string;
   }): RunRecord | undefined {
     return this.db.issueSessions.withIssueSessionLease(params.item.projectId, params.item.issueId, params.leaseId, () => {
-      const fresh = this.db.getIssue(params.item.projectId, params.item.issueId);
+      const fresh = this.db.issues.getIssue(params.item.projectId, params.item.issueId);
       if (!fresh || fresh.activeRunId !== undefined) return undefined;
       const wakeIssue = params.materializeLegacyPendingWake(fresh, {
         projectId: params.item.projectId,
@@ -136,7 +136,7 @@ export class RunLauncher {
         ? params.effectiveContext.failureHeadSha
         : typeof params.effectiveContext?.headSha === "string" ? params.effectiveContext.headSha : undefined;
       const failureSignature = typeof params.effectiveContext?.failureSignature === "string" ? params.effectiveContext.failureSignature : undefined;
-      this.db.upsertIssue({
+      this.db.issues.upsertIssue({
         projectId: params.item.projectId,
         linearIssueId: params.item.issueId,
         pendingRunType: null,
@@ -283,7 +283,7 @@ export class RunLauncher {
         );
       }
       this.logger.error({ issueKey: params.issue.issueKey, runType: params.runType, error: message }, `Failed to launch ${params.runType} run`);
-      const failedIssue = this.db.getIssue(params.project.id, params.issue.linearIssueId) ?? params.issue;
+      const failedIssue = this.db.issues.getIssue(params.project.id, params.issue.linearIssueId) ?? params.issue;
       void params.linearSync.emitActivity(failedIssue, buildRunFailureActivity(params.runType, `Failed to start ${params.lowerCaseFirst(message)}`));
       void params.linearSync.syncSession(failedIssue, { activeRunType: params.runType });
       params.releaseLease(params.project.id, params.issue.linearIssueId);

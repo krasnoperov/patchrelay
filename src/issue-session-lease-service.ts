@@ -13,6 +13,16 @@ export interface IssueSessionLease {
   leaseId: string;
 }
 
+export type WithHeldIssueSessionLease = <T>(
+  projectId: string,
+  linearIssueId: string,
+  fn: (lease: IssueSessionLease) => T,
+) => T | undefined;
+
+export type ReleaseIssueSessionLease = (projectId: string, linearIssueId: string) => void;
+
+export type GetHeldIssueSessionLease = (projectId: string, linearIssueId: string) => IssueSessionLease | undefined;
+
 export class IssueSessionLeaseService {
   readonly activeSessionLeases = new Map<string, string>();
 

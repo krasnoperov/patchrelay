@@ -1,5 +1,6 @@
 import type { BranchOwner, IssueRecord, IssueSessionEventRecord, IssueSessionRecord, RunStatus } from "../db-types.ts";
 import type { RunType } from "../factory-state.ts";
+import type { UpsertIssueParams } from "./issue-store.ts";
 import { deriveSessionWakePlan, type IssueSessionEventType } from "../issue-session-events.ts";
 import { isoNow, type DatabaseConnection } from "./shared.ts";
 
@@ -21,7 +22,7 @@ export class IssueSessionStore {
       context: Record<string, unknown>;
     } | undefined,
     private readonly transaction: <T>(fn: () => T) => T,
-    private readonly upsertIssue: (params: Record<string, unknown>) => IssueRecord,
+    private readonly upsertIssue: (params: UpsertIssueParams) => IssueRecord,
     private readonly finishRun: (runId: number, params: {
       status: RunStatus;
       threadId?: string;
@@ -318,11 +319,11 @@ export class IssueSessionStore {
     });
   }
 
-  upsertIssueWithLease(lease: IssueSessionLease, params: Record<string, unknown>): IssueRecord | undefined {
+  upsertIssueWithLease(lease: IssueSessionLease, params: UpsertIssueParams): IssueRecord | undefined {
     return this.withIssueSessionLease(lease.projectId, lease.linearIssueId, lease.leaseId, () => this.upsertIssue(params));
   }
 
-  upsertIssueRespectingActiveLease(projectId: string, linearIssueId: string, params: Record<string, unknown>): IssueRecord | undefined {
+  upsertIssueRespectingActiveLease(projectId: string, linearIssueId: string, params: UpsertIssueParams): IssueRecord | undefined {
     const lease = this.getActiveIssueSessionLease(projectId, linearIssueId);
     if (!lease) {
       return this.upsertIssue(params);

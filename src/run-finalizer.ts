@@ -3,9 +3,11 @@ import type { CodexThreadSummary } from "./types.ts";
 import type { IssueRecord, RunRecord } from "./db-types.ts";
 import type { FactoryState, RunType } from "./factory-state.ts";
 import type { PatchRelayDatabase } from "./db.ts";
+import type { ReleaseIssueSessionLease, WithHeldIssueSessionLease } from "./issue-session-lease-service.ts";
 import type { LinearSessionSync } from "./linear-session-sync.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import { buildStageReport, countEventMethods } from "./run-reporting.ts";
+import type { AppendWakeEventWithLease } from "./run-wake-planner.ts";
 import { buildRunCompletedActivity, buildRunFailureActivity } from "./linear-session-reporting.ts";
 
 interface PostRunFollowUp {
@@ -31,8 +33,8 @@ export class RunFinalizer {
     thread: CodexThreadSummary;
     threadId: string;
     completedTurnId?: string;
-    withHeldLease: <T>(projectId: string, linearIssueId: string, fn: (lease: { projectId: string; linearIssueId: string; leaseId: string }) => T) => T | undefined;
-    releaseLease: (projectId: string, linearIssueId: string) => void;
+    withHeldLease: WithHeldIssueSessionLease;
+    releaseLease: ReleaseIssueSessionLease;
     failRunAndClear: (run: RunRecord, message: string, nextState?: FactoryState) => void;
     verifyReactiveRunAdvancedBranch: (run: RunRecord, issue: IssueRecord) => Promise<string | undefined>;
     verifyReviewFixAdvancedHead: (run: RunRecord, issue: IssueRecord) => Promise<string | undefined>;
@@ -41,13 +43,7 @@ export class RunFinalizer {
     resolvePostRunFollowUp: (run: Pick<RunRecord, "runType" | "projectId">, issue: IssueRecord) => Promise<PostRunFollowUp | undefined>;
     resolveCompletedRunState: (issue: IssueRecord, run: Pick<RunRecord, "runType" | "promptText">) => FactoryState | undefined;
     resolveRecoverableRunState: (issue: IssueRecord) => FactoryState | undefined;
-    appendWakeEventWithLease: (
-      lease: { projectId: string; linearIssueId: string; leaseId: string },
-      issue: Pick<IssueRecord, "projectId" | "linearIssueId" | "prHeadSha" | "lastGitHubFailureSignature" | "lastGitHubFailureHeadSha">,
-      runType: RunType,
-      context?: Record<string, unknown>,
-      dedupeScope?: string,
-    ) => boolean;
+    appendWakeEventWithLease: AppendWakeEventWithLease;
   }): Promise<void> {
     const { run, issue, thread, threadId } = params;
     const trackedIssue = this.db.issueToTrackedIssue(issue);
@@ -58,12 +54,12 @@ export class RunFinalizer {
       countEventMethods(this.db.runs.listThreadEvents(run.id)),
     );
 
-    const freshIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
+    const freshIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue;
     const verifiedRepairError = await params.verifyReactiveRunAdvancedBranch(run, freshIssue);
     if (verifiedRepairError) {
       const holdState = params.resolveRecoverableRunState(freshIssue) ?? "failed";
       params.failRunAndClear(run, verifiedRepairError, holdState);
-      const heldIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? freshIssue;
+      const heldIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? freshIssue;
       this.feed?.publish({
         level: "warn",
         kind: "turn",
@@ -83,7 +79,7 @@ export class RunFinalizer {
     const missingReviewFixHeadError = await params.verifyReviewFixAdvancedHead(run, freshIssue);
     if (missingReviewFixHeadError) {
       params.failRunAndClear(run, missingReviewFixHeadError, "escalated");
-      const failedIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? freshIssue;
+      const failedIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? freshIssue;
       this.feed?.publish({
         level: "error",
         kind: "turn",
@@ -103,7 +99,7 @@ export class RunFinalizer {
     const publishedOutcomeError = await params.verifyPublishedRunOutcome(run, freshIssue);
     if (publishedOutcomeError) {
       params.failRunAndClear(run, publishedOutcomeError, "failed");
-      const failedIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? freshIssue;
+      const failedIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? freshIssue;
       this.feed?.publish({
         level: "warn",
         kind: "turn",
@@ -134,7 +130,7 @@ export class RunFinalizer {
         summaryJson: JSON.stringify({ latestAssistantMessage: report.assistantMessages.at(-1) ?? null }),
         reportJson: JSON.stringify(report),
       });
-      this.db.upsertIssue({
+      this.db.issues.upsertIssue({
         projectId: run.projectId,
         linearIssueId: run.linearIssueId,
         activeRunId: null,
@@ -200,7 +196,7 @@ export class RunFinalizer {
       ...(report.assistantMessages.at(-1) ? { detail: report.assistantMessages.at(-1) } : {}),
     });
 
-    const updatedIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? refreshedIssue;
+    const updatedIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? refreshedIssue;
     const completionSummary = report.assistantMessages.at(-1)?.slice(0, 300) ?? `${run.runType} completed.`;
     void this.linearSync.emitActivity(updatedIssue, buildRunCompletedActivity({
       runType: run.runType,

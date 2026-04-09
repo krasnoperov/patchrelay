@@ -1,6 +1,7 @@
 import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord } from "./db-types.ts";
 import type { RunType } from "./factory-state.ts";
+import type { IssueSessionLease } from "./issue-session-lease-service.ts";
 import type { IssueSessionEventType } from "./issue-session-events.ts";
 
 const DEFAULT_CI_REPAIR_BUDGET = 3;
@@ -14,6 +15,14 @@ export interface PendingRunWake {
   resumeThread: boolean;
   eventIds: number[];
 }
+
+export type AppendWakeEventWithLease = (
+  lease: IssueSessionLease,
+  issue: Pick<IssueRecord, "projectId" | "linearIssueId" | "prHeadSha" | "lastGitHubFailureSignature" | "lastGitHubFailureHeadSha">,
+  runType: RunType,
+  context?: Record<string, unknown>,
+  dedupeScope?: string,
+) => boolean;
 
 export class RunWakePlanner {
   constructor(private readonly db: PatchRelayDatabase) {}
@@ -31,7 +40,7 @@ export class RunWakePlanner {
   }
 
   appendWakeEventWithLease(
-    lease: { projectId: string; linearIssueId: string; leaseId: string },
+    lease: IssueSessionLease,
     issue: Pick<IssueRecord, "projectId" | "linearIssueId" | "prHeadSha" | "lastGitHubFailureSignature" | "lastGitHubFailureHeadSha">,
     runType: RunType,
     context?: Record<string, unknown>,
@@ -64,7 +73,7 @@ export class RunWakePlanner {
 
   materializeLegacyPendingWake(
     issue: IssueRecord,
-    lease: { projectId: string; linearIssueId: string; leaseId: string },
+    lease: IssueSessionLease,
   ): IssueRecord {
     if (!issue.pendingRunType) return issue;
     const context = issue.pendingRunContextJson
@@ -78,7 +87,7 @@ export class RunWakePlanner {
       pendingRunContextJson: null,
     });
     if (!updated) return issue;
-    return this.db.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
+    return this.db.issues.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
   }
 
   budgetExceeded(issue: IssueRecord, runType: RunType, isRequestedChangesRunType: (runType: RunType) => boolean): string | undefined {
@@ -96,7 +105,7 @@ export class RunWakePlanner {
 
   incrementAttemptCounters(
     issue: IssueRecord,
-    lease: { projectId: string; linearIssueId: string; leaseId: string },
+    lease: IssueSessionLease,
     runType: RunType,
     isRequestedChangesRunType: (runType: RunType) => boolean,
   ): boolean {
