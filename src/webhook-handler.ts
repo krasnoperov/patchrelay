@@ -4,7 +4,7 @@ import type { PatchRelayDatabase } from "./db.ts";
 import type { RunType } from "./factory-state.ts";
 import { deriveIssueStatusNote } from "./status-note.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
-import { resolveProject, triggerEventAllowed, trustedActorAllowed } from "./project-resolution.ts";
+import { resolveProject, trustedActorAllowed } from "./project-resolution.ts";
 import { normalizeWebhook } from "./webhooks.ts";
 import { InstallationWebhookHandler } from "./webhook-installation-handler.ts";
 import { AgentSessionHandler } from "./webhooks/agent-session-handler.ts";

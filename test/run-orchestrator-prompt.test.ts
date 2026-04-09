@@ -10,7 +10,7 @@ import {
   findDisallowedPatchRelayPromptSectionIds,
   resolveImplementationDeliveryMode,
 } from "../src/prompting/patchrelay.ts";
-import { shouldReuseIssueThread } from "../src/run-orchestrator.ts";
+import { shouldReuseIssueThread } from "../src/run-launcher.ts";
 import type { PromptCustomizationLayer } from "../src/types.ts";
 import type { IssueRecord } from "../src/db-types.ts";
 

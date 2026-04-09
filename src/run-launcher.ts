@@ -17,7 +17,7 @@ import {
 import type { PendingRunWake } from "./run-wake-planner.ts";
 import type { AppConfig, LinearAgentActivityContent } from "./types.ts";
 import { execCommand } from "./utils.ts";
-import { WorktreeManager } from "./worktree-manager.ts";
+import type { WorktreeManager } from "./worktree-manager.ts";
 
 function slugify(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
@@ -34,7 +34,7 @@ function shouldCompactThread(issue: IssueRecord, threadGeneration: number | unde
     && followUpCount >= 4;
 }
 
-function shouldReuseIssueThread(params: {
+export function shouldReuseIssueThread(params: {
   existingThreadId?: string | undefined;
   compactThread: boolean;
   resumeThread: boolean;
