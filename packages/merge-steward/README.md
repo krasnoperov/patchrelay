@@ -258,6 +258,7 @@ These are the first commands to reach for after setup or when a queue looks wron
 ```bash
 merge-steward doctor --repo app
 merge-steward service status
+merge-steward service restart
 merge-steward dashboard
 merge-steward queue status --repo app
 merge-steward queue show --repo app --pr 123

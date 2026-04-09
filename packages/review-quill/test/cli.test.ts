@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -97,6 +98,93 @@ test("repo help and alias help both describe the repo command surface", async ()
     stderr: createBufferStream().stream,
   }), 0);
   assert.match(aliasHelp.read(), /review-quill repo attach <owner\/repo>/);
+});
+
+test("service status --json reports systemd state and normalized local health", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "review-quill-cli-service-status-"));
+  const port = 18788;
+  const server = createServer((request, response) => {
+    if (request.url === "/health") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ok: true, service: "review-quill", repos: ["krasnoperov/mafia"] }));
+      return;
+    }
+    response.writeHead(404).end();
+  });
+
+  try {
+    const configDir = path.join(baseDir, "config");
+    mkdirSync(configDir, { recursive: true });
+    const configPath = path.join(configDir, "review-quill.json");
+    writeFileSync(configPath, `${JSON.stringify({
+      server: { bind: "127.0.0.1", port, publicBaseUrl: "https://review-quill.example.com" },
+      database: { path: path.join(baseDir, "review-quill.sqlite"), wal: true },
+      codex: {
+        bin: "codex",
+        args: ["app-server"],
+        approvalPolicy: "never",
+        sandboxMode: "danger-full-access",
+      },
+      repositories: [],
+    }, null, 2)}\n`, "utf8");
+
+    await new Promise<void>((resolve, reject) => {
+      server.listen(port, "127.0.0.1", (error?: Error) => error ? reject(error) : resolve());
+    });
+
+    await withEnv(
+      {
+        REVIEW_QUILL_CONFIG: configPath,
+        REVIEW_QUILL_CONFIG_DIR: configDir,
+      },
+      async () => {
+        const stdout = createBufferStream();
+        const code = await runCli(["service", "status", "--json"], {
+          stdout: stdout.stream,
+          stderr: createBufferStream().stream,
+          runCommand: async () => ({
+            exitCode: 0,
+            stdout: [
+              "Id=review-quill.service",
+              "LoadState=loaded",
+              "UnitFileState=enabled",
+              "ActiveState=active",
+              "SubState=running",
+              "ExecMainPID=5150",
+            ].join("\n"),
+            stderr: "",
+          }),
+        });
+
+        assert.equal(code, 0);
+        const status = JSON.parse(stdout.read()) as Record<string, unknown>;
+        assert.equal(status.service, "review-quill");
+        assert.equal(status.unit, "review-quill.service");
+        assert.equal((status.systemd as Record<string, unknown>).ActiveState, "active");
+        assert.deepEqual(status.health, { reachable: true, ok: true, status: 200 });
+      },
+    );
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("service restart --json emits the shared restart payload", async () => {
+  const stdout = createBufferStream();
+  const code = await runCli(["service", "restart", "--json"], {
+    stdout: stdout.stream,
+    stderr: createBufferStream().stream,
+    runCommand: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+  });
+
+  assert.equal(code, 0);
+  const restart = JSON.parse(stdout.read()) as Record<string, unknown>;
+  assert.equal(restart.service, "review-quill");
+  assert.equal(restart.unit, "review-quill.service");
+  assert.equal(restart.daemonReloaded, true);
+  assert.equal(restart.restarted, true);
+  assert.deepEqual(restart.errors, []);
 });
 
 test("attempts shows recorded review history for one PR", async () => {

@@ -3,7 +3,7 @@ import type { ParsedArgs, Output, CommandRunner } from "../types.ts";
 import { UsageError } from "../types.ts";
 import { parseIntegerFlag } from "../args.ts";
 import { formatJson, writeOutput } from "../output.ts";
-import { formatCommandFailure, parseSystemctlShowOutput, runSystemctl } from "../system.ts";
+import { fetchServiceHealthStatus, formatCommandFailure, parseSystemctlShowOutput, runSystemctl } from "../system.ts";
 
 const UNIT_NAME = "merge-steward.service";
 
@@ -39,6 +39,8 @@ export async function handleService(parsed: ParsedArgs, stdout: Output, runComma
     const restart = await runSystemctl(runCommand, ["reload-or-restart", UNIT_NAME]);
     if (parsed.flags.get("json") === true) {
       writeOutput(stdout, formatJson({
+        service: "merge-steward",
+        unit: UNIT_NAME,
         daemonReloaded: daemonReload.ok,
         restarted: restart.ok,
         errors: [
@@ -67,8 +69,9 @@ export async function handleService(parsed: ParsedArgs, stdout: Output, runComma
       throw new Error(status.error);
     }
     const properties = parseSystemctlShowOutput(status.result.stdout);
+    const health = await fetchServiceHealthStatus();
     if (parsed.flags.get("json") === true) {
-      writeOutput(stdout, formatJson({ unit: UNIT_NAME, systemd: properties }));
+      writeOutput(stdout, formatJson({ service: "merge-steward", unit: UNIT_NAME, systemd: properties, health }));
       return 0;
     }
     writeOutput(
@@ -79,6 +82,9 @@ export async function handleService(parsed: ParsedArgs, stdout: Output, runComma
         `Enabled: ${properties.UnitFileState ?? "unknown"}`,
         `Active: ${properties.ActiveState ?? "unknown"}${properties.SubState ? ` (${properties.SubState})` : ""}`,
         properties.ExecMainPID ? `Main PID: ${properties.ExecMainPID}` : undefined,
+        health.reachable
+          ? `Health: ${health.ok ? "ok" : "unhealthy"} (HTTP ${health.status})`
+          : `Health: not reachable (${health.error})`,
       ]
         .filter(Boolean)
         .join("\n") + "\n",

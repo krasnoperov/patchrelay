@@ -22,7 +22,7 @@ function rootHelpText(): string {
     "  repo list [--json]                                     List attached repositories",
     "  repo show <id> [--json]                                Show one repo config",
     "  doctor [--repo <id>] [--json]                          Validate config, secrets, auth, and required binaries",
-    "  service status [--json]                                Show systemd state",
+    "  service status [--json]                                Show systemd state and local health",
     "  service logs [--lines <count>] [--json]                Show recent journal logs",
     "  queue status --repo <id> [--json]                      Show queue summary and current entries",
     "  queue show --repo <id> (--entry <id> | --pr <num>) [--events <count>] [--json]",
@@ -87,7 +87,7 @@ function serviceHelpText(): string {
     "Commands:",
     "  install [--force] [--json]    Reinstall the systemd unit",
     "  restart [--json]              Reload-or-restart the service",
-    "  status [--json]               Show systemd state",
+    "  status [--json]               Show systemd state and local health",
     "  logs [--lines <count>] [--json]",
     "                                Show recent journal logs",
   ].join("\n");

@@ -203,7 +203,7 @@ export function getGatewayBaseUrl(): string {
     throw new Error("merge-steward home not initialized.");
   }
   const homeConfig = parseHomeConfigObject(readFileSync(homeConfigPath, "utf8"), homeConfigPath);
-  const bind = homeConfig.server.bind;
+  const bind = homeConfig.server.bind === "0.0.0.0" ? "127.0.0.1" : homeConfig.server.bind;
   const port = homeConfig.server.gateway_port ?? (homeConfig.server.port_base - 1);
   return `http://${bind}:${port}`;
 }
@@ -235,6 +235,36 @@ async function requestGatewayJson<T>(url: string, options?: { method?: string; b
 export async function fetchGatewayJson<T>(relativePath: string, options?: { method?: string; body?: unknown }): Promise<T> {
   const base = getGatewayBaseUrl();
   return await requestGatewayJson<T>(`${base}${relativePath}`, options);
+}
+
+export async function fetchServiceHealthStatus(): Promise<
+  | { reachable: true; ok: boolean; status: number }
+  | { reachable: false; error: string }
+> {
+  try {
+    const response = await fetch(`${getGatewayBaseUrl()}/health`, {
+      signal: AbortSignal.timeout(2_000),
+    });
+    let ok = response.ok;
+    try {
+      const body = await response.json() as { ok?: unknown };
+      if (typeof body.ok === "boolean") {
+        ok = response.ok && body.ok;
+      }
+    } catch {
+      ok = response.ok;
+    }
+    return {
+      reachable: true,
+      ok,
+      status: response.status,
+    };
+  } catch (error) {
+    return {
+      reachable: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 export async function fetchLocalJson<T>(repoId: string, relativePath: string, options?: { method?: string }): Promise<T> {

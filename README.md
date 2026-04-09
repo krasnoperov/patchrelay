@@ -306,6 +306,7 @@ Useful commands:
 - `patchrelay issue path APP-123 --cd`
 - `patchrelay issue open APP-123`
 - `patchrelay issue retry APP-123`
+- `patchrelay service restart`
 - `patchrelay service logs --lines 100`
 
 PatchRelay's operator surface is being reduced to its own runtime responsibilities: issue status,

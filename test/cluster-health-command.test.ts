@@ -227,10 +227,10 @@ test("cli cluster reports a same-head requested-changes stall", async () => {
           return {
             exitCode: 0,
             stdout: JSON.stringify({
+              service: "review-quill",
               unit: "review-quill.service",
               systemd: { ActiveState: "active" },
-              health: { ok: true },
-              watch: { runningAttempts: 0 },
+              health: { reachable: true, ok: true, status: 200 },
             }),
             stderr: "",
           };
@@ -313,10 +313,10 @@ test("cli cluster ignores reviewer requests when the same head is still blocked"
           return {
             exitCode: 0,
             stdout: JSON.stringify({
+              service: "review-quill",
               unit: "review-quill.service",
               systemd: { ActiveState: "active" },
-              health: { ok: true },
-              watch: { runningAttempts: 0 },
+              health: { reachable: true, ok: true, status: 200 },
             }),
             stderr: "",
           };
@@ -396,10 +396,10 @@ test("cli cluster reports dirty requested-changes PRs as missing branch upkeep, 
           return {
             exitCode: 0,
             stdout: JSON.stringify({
+              service: "review-quill",
               unit: "review-quill.service",
               systemd: { ActiveState: "active" },
-              health: { ok: true },
-              watch: { runningAttempts: 0 },
+              health: { reachable: true, ok: true, status: 200 },
             }),
             stderr: "",
           };
@@ -479,10 +479,10 @@ test("cli cluster treats a live review-quill attempt on the current head as an o
           return {
             exitCode: 0,
             stdout: JSON.stringify({
+              service: "review-quill",
               unit: "review-quill.service",
               systemd: { ActiveState: "active" },
-              health: { ok: true },
-              watch: { runningAttempts: 1 },
+              health: { reachable: true, ok: true, status: 200 },
             }),
             stderr: "",
           };
@@ -576,10 +576,10 @@ test("cli cluster treats in-progress CI as externally owned instead of orphaned"
           return {
             exitCode: 0,
             stdout: JSON.stringify({
+              service: "review-quill",
               unit: "review-quill.service",
               systemd: { ActiveState: "active" },
-              health: { ok: true },
-              watch: { runningAttempts: 0 },
+              health: { reachable: true, ok: true, status: 200 },
             }),
             stderr: "",
           };

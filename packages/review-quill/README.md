@@ -149,6 +149,7 @@ The operator-facing commands are:
 - `review-quill repo show <id>`
 - `review-quill doctor --repo <id>`
 - `review-quill service status`
+- `review-quill service restart`
 - `review-quill service logs --lines 100`
 - `review-quill dashboard`
 - `review-quill attempts <repo> <pr-number>`
@@ -165,6 +166,7 @@ These are the key commands once the service is installed:
 ```bash
 review-quill doctor --repo repo
 review-quill service status
+review-quill service restart
 review-quill dashboard
 review-quill attempts repo 123
 review-quill transcript repo 123

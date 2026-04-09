@@ -1310,6 +1310,7 @@ test("cli issue and service groups expose the supported operator flow", async ()
   assert.equal((parsed.systemd as Record<string, unknown>).ActiveState, "active");
   assert.equal((parsed.systemd as Record<string, unknown>).ExecMainPID, "4242");
   assert.equal(typeof (parsed.health as { reachable?: boolean }).reachable, "boolean");
+  assert.equal(typeof (parsed.health as { ok?: boolean }).ok, "boolean");
 
   const clusterHelp = createBufferStream();
   assert.equal(await runCli(["cluster", "--help"], { stdout: clusterHelp.stream, stderr: createBufferStream().stream }), 0);
@@ -1464,9 +1465,10 @@ test("cli init writes XDG config files and service install manages the system un
         assert.match(unit, /LoadCredentialEncrypted=linear-webhook-secret/);
 
         const commands: string[] = [];
+        const restartOut = createBufferStream();
         assert.equal(
           await runCli(["service", "restart", "--json"], {
-            stdout: createBufferStream().stream,
+            stdout: restartOut.stream,
             stderr: createBufferStream().stream,
             runInteractive: async (command, args) => {
               commands.push([command, ...args].join(" "));
@@ -1479,6 +1481,12 @@ test("cli init writes XDG config files and service install manages the system un
           "sudo systemctl daemon-reload",
           "sudo systemctl reload-or-restart patchrelay.service",
         ]);
+        const restart = JSON.parse(restartOut.read()) as Record<string, unknown>;
+        assert.equal(restart.service, "patchrelay");
+        assert.equal(restart.unit, "patchrelay.service");
+        assert.equal(restart.daemonReloaded, true);
+        assert.equal(restart.restarted, true);
+        assert.deepEqual(restart.errors, []);
       },
     );
   } finally {
