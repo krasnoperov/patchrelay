@@ -19,10 +19,10 @@ import {
   deriveIssueSessionWakeReason,
 } from "./issue-session.ts";
 import {
-  deriveSessionWakePlan,
   extractLatestAssistantSummary,
   type IssueSessionEventType,
 } from "./issue-session-events.ts";
+import { IssueSessionStore } from "./db/issue-session-store.ts";
 import { LinearInstallationStore } from "./db/linear-installation-store.ts";
 import { OperatorFeedStore } from "./db/operator-feed-store.ts";
 import { RepositoryLinkStore } from "./db/repository-link-store.ts";
@@ -118,6 +118,7 @@ export class PatchRelayDatabase {
   readonly operatorFeed: OperatorFeedStore;
   readonly repositories: RepositoryLinkStore;
   readonly webhookEvents: WebhookEventStore;
+  readonly issueSessions: IssueSessionStore;
 
   constructor(databasePath: string, wal: boolean) {
     this.connection = new SqliteConnection(databasePath);
@@ -129,6 +130,18 @@ export class PatchRelayDatabase {
     this.operatorFeed = new OperatorFeedStore(this.connection);
     this.repositories = new RepositoryLinkStore(this.connection);
     this.webhookEvents = new WebhookEventStore(this.connection);
+    this.issueSessions = new IssueSessionStore(
+      this.connection,
+      mapIssueSessionRow,
+      mapIssueSessionEventRow,
+      (projectId, linearIssueId) => this.getIssue(projectId, linearIssueId),
+      deriveImplicitReactiveWake,
+      <T>(fn: () => T) => this.transaction(fn),
+      (params) => this.upsertIssue(params as Parameters<PatchRelayDatabase["upsertIssue"]>[0]),
+      (runId, params) => this.finishRun(runId, params),
+      (runId, params) => this.updateRunThread(runId, params),
+      (projectId, linearIssueId, owner) => this.setBranchOwner(projectId, linearIssueId, owner),
+    );
   }
 
   runMigrations(): void {
@@ -392,15 +405,11 @@ export class PatchRelayDatabase {
   }
 
   getIssueSession(projectId: string, linearIssueId: string): IssueSessionRecord | undefined {
-    const row = this.connection
-      .prepare("SELECT * FROM issue_sessions WHERE project_id = ? AND linear_issue_id = ?")
-      .get(projectId, linearIssueId) as Record<string, unknown> | undefined;
-    return row ? mapIssueSessionRow(row) : undefined;
+    return this.issueSessions.getIssueSession(projectId, linearIssueId);
   }
 
   getIssueSessionByKey(issueKey: string): IssueSessionRecord | undefined {
-    const row = this.connection.prepare("SELECT * FROM issue_sessions WHERE issue_key = ?").get(issueKey) as Record<string, unknown> | undefined;
-    return row ? mapIssueSessionRow(row) : undefined;
+    return this.issueSessions.getIssueSessionByKey(issueKey);
   }
 
   appendIssueSessionEvent(params: {
@@ -410,36 +419,14 @@ export class PatchRelayDatabase {
     eventJson?: string | undefined;
     dedupeKey?: string | undefined;
   }): IssueSessionEventRecord {
-    if (params.dedupeKey) {
-      const existing = this.connection.prepare(`
-        SELECT * FROM issue_session_events
-        WHERE project_id = ? AND linear_issue_id = ? AND dedupe_key = ? AND processed_at IS NULL
-        ORDER BY id DESC LIMIT 1
-      `).get(params.projectId, params.linearIssueId, params.dedupeKey) as Record<string, unknown> | undefined;
-      if (existing) return mapIssueSessionEventRow(existing);
-    }
-
-    const now = isoNow();
-    const result = this.connection.prepare(`
-      INSERT INTO issue_session_events (
-        project_id, linear_issue_id, event_type, event_json, dedupe_key, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?)
-    `).run(
-      params.projectId,
-      params.linearIssueId,
-      params.eventType,
-      params.eventJson ?? null,
-      params.dedupeKey ?? null,
-      now,
-    );
-    return this.getIssueSessionEvent(Number(result.lastInsertRowid))!;
+    return this.issueSessions.appendIssueSessionEvent(params);
   }
 
   appendIssueSessionEventWithLease(
     lease: { projectId: string; linearIssueId: string; leaseId: string },
     params: Parameters<PatchRelayDatabase["appendIssueSessionEvent"]>[0],
   ): IssueSessionEventRecord | undefined {
-    return this.withIssueSessionLease(lease.projectId, lease.linearIssueId, lease.leaseId, () => this.appendIssueSessionEvent(params));
+    return this.issueSessions.appendIssueSessionEventWithLease(lease, params);
   }
 
   appendIssueSessionEventRespectingActiveLease(
@@ -447,16 +434,11 @@ export class PatchRelayDatabase {
     linearIssueId: string,
     params: Parameters<PatchRelayDatabase["appendIssueSessionEvent"]>[0],
   ): IssueSessionEventRecord | undefined {
-    const lease = this.getActiveIssueSessionLease(projectId, linearIssueId);
-    if (!lease) {
-      return this.appendIssueSessionEvent(params);
-    }
-    return this.appendIssueSessionEventWithLease(lease, params);
+    return this.issueSessions.appendIssueSessionEventRespectingActiveLease(projectId, linearIssueId, params);
   }
 
   getIssueSessionEvent(id: number): IssueSessionEventRecord | undefined {
-    const row = this.connection.prepare("SELECT * FROM issue_session_events WHERE id = ?").get(id) as Record<string, unknown> | undefined;
-    return row ? mapIssueSessionEventRow(row) : undefined;
+    return this.issueSessions.getIssueSessionEvent(id);
   }
 
   listIssueSessionEvents(
@@ -464,47 +446,19 @@ export class PatchRelayDatabase {
     linearIssueId: string,
     options?: { pendingOnly?: boolean; limit?: number },
   ): IssueSessionEventRecord[] {
-    const conditions = ["project_id = ?", "linear_issue_id = ?"];
-    const values: Array<string | number> = [projectId, linearIssueId];
-    if (options?.pendingOnly) {
-      conditions.push("processed_at IS NULL");
-    }
-    let query = `SELECT * FROM issue_session_events WHERE ${conditions.join(" AND ")} ORDER BY id`;
-    if (options?.limit !== undefined) {
-      query += " LIMIT ?";
-      values.push(options.limit);
-    }
-    const rows = this.connection.prepare(query).all(...values) as Array<Record<string, unknown>>;
-    return rows.map(mapIssueSessionEventRow);
+    return this.issueSessions.listIssueSessionEvents(projectId, linearIssueId, options);
   }
 
   consumeIssueSessionEvents(projectId: string, linearIssueId: string, eventIds: number[], runId: number): void {
-    if (eventIds.length === 0) return;
-    const now = isoNow();
-    const placeholders = eventIds.map(() => "?").join(", ");
-    this.connection.prepare(`
-      UPDATE issue_session_events
-      SET processed_at = ?, consumed_by_run_id = ?
-      WHERE project_id = ? AND linear_issue_id = ? AND id IN (${placeholders}) AND processed_at IS NULL
-    `).run(now, runId, projectId, linearIssueId, ...eventIds);
+    this.issueSessions.consumeIssueSessionEvents(projectId, linearIssueId, eventIds, runId);
   }
 
   clearPendingIssueSessionEvents(projectId: string, linearIssueId: string): void {
-    this.connection.prepare(`
-      UPDATE issue_session_events
-      SET processed_at = ?, consumed_by_run_id = NULL
-      WHERE project_id = ? AND linear_issue_id = ? AND processed_at IS NULL
-    `).run(isoNow(), projectId, linearIssueId);
+    this.issueSessions.clearPendingIssueSessionEvents(projectId, linearIssueId);
   }
 
   hasPendingIssueSessionEvents(projectId: string, linearIssueId: string): boolean {
-    const row = this.connection.prepare(`
-      SELECT 1
-      FROM issue_session_events
-      WHERE project_id = ? AND linear_issue_id = ? AND processed_at IS NULL
-      LIMIT 1
-    `).get(projectId, linearIssueId) as Record<string, unknown> | undefined;
-    return row !== undefined;
+    return this.issueSessions.hasPendingIssueSessionEvents(projectId, linearIssueId);
   }
 
   peekIssueSessionWake(projectId: string, linearIssueId: string): {
@@ -514,28 +468,7 @@ export class PatchRelayDatabase {
     wakeReason?: string | undefined;
     resumeThread: boolean;
   } | undefined {
-    const issue = this.getIssue(projectId, linearIssueId);
-    if (!issue) return undefined;
-    const events = this.listIssueSessionEvents(projectId, linearIssueId, { pendingOnly: true });
-    const plan = deriveSessionWakePlan(issue, events);
-    if (plan?.runType) {
-      return {
-        eventIds: events.map((event) => event.id),
-        runType: plan.runType,
-        context: plan.context,
-        ...(plan.wakeReason ? { wakeReason: plan.wakeReason } : {}),
-        resumeThread: plan.resumeThread,
-      };
-    }
-    const implicitWake = deriveImplicitReactiveWake(issue);
-    if (!implicitWake) return undefined;
-    return {
-      eventIds: [],
-      runType: implicitWake.runType,
-      context: implicitWake.context,
-      wakeReason: implicitWake.wakeReason,
-      resumeThread: false,
-    };
+    return this.issueSessions.peekIssueSessionWake(projectId, linearIssueId);
   }
 
   acquireIssueSessionLease(params: {
@@ -546,23 +479,7 @@ export class PatchRelayDatabase {
     leasedUntil: string;
     now?: string;
   }): boolean {
-    const now = params.now ?? isoNow();
-    const result = this.connection.prepare(`
-      UPDATE issue_sessions
-      SET lease_id = ?, worker_id = ?, leased_until = ?, updated_at = ?
-      WHERE project_id = ? AND linear_issue_id = ?
-        AND (leased_until IS NULL OR leased_until <= ? OR lease_id = ?)
-    `).run(
-      params.leaseId,
-      params.workerId,
-      params.leasedUntil,
-      now,
-      params.projectId,
-      params.linearIssueId,
-      now,
-      params.leaseId,
-    );
-    return Number(result.changes ?? 0) > 0;
+    return this.issueSessions.acquireIssueSessionLease(params);
   }
 
   forceAcquireIssueSessionLease(params: {
@@ -573,20 +490,7 @@ export class PatchRelayDatabase {
     leasedUntil: string;
     now?: string;
   }): boolean {
-    const now = params.now ?? isoNow();
-    const result = this.connection.prepare(`
-      UPDATE issue_sessions
-      SET lease_id = ?, worker_id = ?, leased_until = ?, updated_at = ?
-      WHERE project_id = ? AND linear_issue_id = ?
-    `).run(
-      params.leaseId,
-      params.workerId,
-      params.leasedUntil,
-      now,
-      params.projectId,
-      params.linearIssueId,
-    );
-    return Number(result.changes ?? 0) > 0;
+    return this.issueSessions.forceAcquireIssueSessionLease(params);
   }
 
   renewIssueSessionLease(params: {
@@ -596,47 +500,19 @@ export class PatchRelayDatabase {
     leasedUntil: string;
     now?: string;
   }): boolean {
-    const now = params.now ?? isoNow();
-    const result = this.connection.prepare(`
-      UPDATE issue_sessions
-      SET leased_until = ?, updated_at = ?
-      WHERE project_id = ? AND linear_issue_id = ? AND lease_id = ?
-    `).run(
-      params.leasedUntil,
-      now,
-      params.projectId,
-      params.linearIssueId,
-      params.leaseId,
-    );
-    return Number(result.changes ?? 0) > 0;
+    return this.issueSessions.renewIssueSessionLease(params);
   }
 
   releaseIssueSessionLease(projectId: string, linearIssueId: string, leaseId?: string): void {
-    this.connection.prepare(`
-      UPDATE issue_sessions
-      SET lease_id = NULL, worker_id = NULL, leased_until = NULL, updated_at = ?
-      WHERE project_id = ? AND linear_issue_id = ? AND (? IS NULL OR lease_id = ?)
-    `).run(isoNow(), projectId, linearIssueId, leaseId ?? null, leaseId ?? null);
+    this.issueSessions.releaseIssueSessionLease(projectId, linearIssueId, leaseId);
   }
 
   releaseExpiredIssueSessionLeases(now = isoNow()): void {
-    this.connection.prepare(`
-      UPDATE issue_sessions
-      SET lease_id = NULL, worker_id = NULL, leased_until = NULL, updated_at = ?
-      WHERE leased_until IS NOT NULL AND leased_until <= ?
-    `).run(now, now);
+    this.issueSessions.releaseExpiredIssueSessionLeases(now);
   }
 
   hasActiveIssueSessionLease(projectId: string, linearIssueId: string, leaseId: string, now = isoNow()): boolean {
-    const row = this.connection.prepare(`
-      SELECT 1
-      FROM issue_sessions
-      WHERE project_id = ? AND linear_issue_id = ? AND lease_id = ?
-        AND leased_until IS NOT NULL
-        AND leased_until > ?
-      LIMIT 1
-    `).get(projectId, linearIssueId, leaseId, now) as Record<string, unknown> | undefined;
-    return row !== undefined;
+    return this.issueSessions.hasActiveIssueSessionLease(projectId, linearIssueId, leaseId, now);
   }
 
   getActiveIssueSessionLease(
@@ -644,18 +520,7 @@ export class PatchRelayDatabase {
     linearIssueId: string,
     now = isoNow(),
   ): { projectId: string; linearIssueId: string; leaseId: string } | undefined {
-    const row = this.connection.prepare(`
-      SELECT lease_id
-      FROM issue_sessions
-      WHERE project_id = ? AND linear_issue_id = ?
-        AND lease_id IS NOT NULL
-        AND leased_until IS NOT NULL
-        AND leased_until > ?
-      LIMIT 1
-    `).get(projectId, linearIssueId, now) as Record<string, unknown> | undefined;
-    const leaseId = typeof row?.lease_id === "string" ? row.lease_id : undefined;
-    if (!leaseId) return undefined;
-    return { projectId, linearIssueId, leaseId };
+    return this.issueSessions.getActiveIssueSessionLease(projectId, linearIssueId, now);
   }
 
   withIssueSessionLease<T>(
@@ -664,19 +529,14 @@ export class PatchRelayDatabase {
     leaseId: string,
     fn: () => T,
   ): T | undefined {
-    return this.transaction(() => {
-      if (!this.hasActiveIssueSessionLease(projectId, linearIssueId, leaseId)) {
-        return undefined;
-      }
-      return fn();
-    });
+    return this.issueSessions.withIssueSessionLease(projectId, linearIssueId, leaseId, fn);
   }
 
   upsertIssueWithLease(
     lease: { projectId: string; linearIssueId: string; leaseId: string },
     params: Parameters<PatchRelayDatabase["upsertIssue"]>[0],
   ): IssueRecord | undefined {
-    return this.withIssueSessionLease(lease.projectId, lease.linearIssueId, lease.leaseId, () => this.upsertIssue(params));
+    return this.issueSessions.upsertIssueWithLease(lease, params);
   }
 
   upsertIssueRespectingActiveLease(
@@ -684,11 +544,7 @@ export class PatchRelayDatabase {
     linearIssueId: string,
     params: Parameters<PatchRelayDatabase["upsertIssue"]>[0],
   ): IssueRecord | undefined {
-    const lease = this.getActiveIssueSessionLease(projectId, linearIssueId);
-    if (!lease) {
-      return this.upsertIssue(params);
-    }
-    return this.upsertIssueWithLease(lease, params);
+    return this.issueSessions.upsertIssueRespectingActiveLease(projectId, linearIssueId, params);
   }
 
   finishRunWithLease(
@@ -696,10 +552,7 @@ export class PatchRelayDatabase {
     runId: number,
     params: Parameters<PatchRelayDatabase["finishRun"]>[1],
   ): boolean {
-    return this.withIssueSessionLease(lease.projectId, lease.linearIssueId, lease.leaseId, () => {
-      this.finishRun(runId, params);
-      return true;
-    }) ?? false;
+    return this.issueSessions.finishRunWithLease(lease, runId, params);
   }
 
   finishRunRespectingActiveLease(
@@ -708,12 +561,7 @@ export class PatchRelayDatabase {
     runId: number,
     params: Parameters<PatchRelayDatabase["finishRun"]>[1],
   ): boolean {
-    const lease = this.getActiveIssueSessionLease(projectId, linearIssueId);
-    if (!lease) {
-      this.finishRun(runId, params);
-      return true;
-    }
-    return this.finishRunWithLease(lease, runId, params);
+    return this.issueSessions.finishRunRespectingActiveLease(projectId, linearIssueId, runId, params);
   }
 
   updateRunThreadWithLease(
@@ -721,10 +569,7 @@ export class PatchRelayDatabase {
     runId: number,
     params: Parameters<PatchRelayDatabase["updateRunThread"]>[1],
   ): boolean {
-    return this.withIssueSessionLease(lease.projectId, lease.linearIssueId, lease.leaseId, () => {
-      this.updateRunThread(runId, params);
-      return true;
-    }) ?? false;
+    return this.issueSessions.updateRunThreadWithLease(lease, runId, params);
   }
 
   consumeIssueSessionEventsWithLease(
@@ -732,46 +577,28 @@ export class PatchRelayDatabase {
     eventIds: number[],
     runId: number,
   ): boolean {
-    return this.withIssueSessionLease(lease.projectId, lease.linearIssueId, lease.leaseId, () => {
-      this.consumeIssueSessionEvents(lease.projectId, lease.linearIssueId, eventIds, runId);
-      return true;
-    }) ?? false;
+    return this.issueSessions.consumeIssueSessionEventsWithLease(lease, eventIds, runId);
   }
 
   clearPendingIssueSessionEventsWithLease(
     lease: { projectId: string; linearIssueId: string; leaseId: string },
   ): boolean {
-    return this.withIssueSessionLease(lease.projectId, lease.linearIssueId, lease.leaseId, () => {
-      this.clearPendingIssueSessionEvents(lease.projectId, lease.linearIssueId);
-      return true;
-    }) ?? false;
+    return this.issueSessions.clearPendingIssueSessionEventsWithLease(lease);
   }
 
   clearPendingIssueSessionEventsRespectingActiveLease(projectId: string, linearIssueId: string): boolean {
-    const lease = this.getActiveIssueSessionLease(projectId, linearIssueId);
-    if (!lease) {
-      this.clearPendingIssueSessionEvents(projectId, linearIssueId);
-      return true;
-    }
-    return this.clearPendingIssueSessionEventsWithLease(lease);
+    return this.issueSessions.clearPendingIssueSessionEventsRespectingActiveLease(projectId, linearIssueId);
   }
 
   setIssueSessionLastWakeReasonWithLease(
     lease: { projectId: string; linearIssueId: string; leaseId: string },
     lastWakeReason?: string | null,
   ): boolean {
-    return this.withIssueSessionLease(lease.projectId, lease.linearIssueId, lease.leaseId, () => {
-      this.setIssueSessionLastWakeReason(lease.projectId, lease.linearIssueId, lastWakeReason);
-      return true;
-    }) ?? false;
+    return this.issueSessions.setIssueSessionLastWakeReasonWithLease(lease, lastWakeReason);
   }
 
   setIssueSessionLastWakeReason(projectId: string, linearIssueId: string, lastWakeReason?: string | null): void {
-    this.connection.prepare(`
-      UPDATE issue_sessions
-      SET last_wake_reason = ?, updated_at = ?
-      WHERE project_id = ? AND linear_issue_id = ?
-    `).run(lastWakeReason ?? null, isoNow(), projectId, linearIssueId);
+    this.issueSessions.setIssueSessionLastWakeReason(projectId, linearIssueId, lastWakeReason);
   }
 
   setBranchOwner(projectId: string, linearIssueId: string, owner: BranchOwner): void {
@@ -786,24 +613,15 @@ export class PatchRelayDatabase {
     lease: { projectId: string; linearIssueId: string; leaseId: string },
     owner: BranchOwner,
   ): boolean {
-    return this.withIssueSessionLease(lease.projectId, lease.linearIssueId, lease.leaseId, () => {
-      this.setBranchOwner(lease.projectId, lease.linearIssueId, owner);
-      return true;
-    }) ?? false;
+    return this.issueSessions.setBranchOwnerWithLease(lease, owner);
   }
 
   setBranchOwnerRespectingActiveLease(projectId: string, linearIssueId: string, owner: BranchOwner): boolean {
-    const lease = this.getActiveIssueSessionLease(projectId, linearIssueId);
-    if (!lease) {
-      this.setBranchOwner(projectId, linearIssueId, owner);
-      return true;
-    }
-    return this.setBranchOwnerWithLease(lease, owner);
+    return this.issueSessions.setBranchOwnerRespectingActiveLease(projectId, linearIssueId, owner);
   }
 
   releaseIssueSessionLeaseRespectingActiveLease(projectId: string, linearIssueId: string): void {
-    const lease = this.getActiveIssueSessionLease(projectId, linearIssueId);
-    this.releaseIssueSessionLease(projectId, linearIssueId, lease?.leaseId);
+    this.issueSessions.releaseIssueSessionLeaseRespectingActiveLease(projectId, linearIssueId);
   }
 
   replaceIssueDependencies(params: {
