@@ -15,7 +15,7 @@ import type {
   CodexThreadSummary,
   LinearClientProvider,
 } from "./types.ts";
-import { resolvePreferredCompletedLinearState } from "./linear-workflow.ts";
+import { MergedLinearCompletionReconciler } from "./merged-linear-completion-reconciler.ts";
 import { QueueHealthMonitor } from "./queue-health-monitor.ts";
 import { IdleIssueReconciler, resolveBranchOwnerForStateTransition } from "./idle-reconciliation.ts";
 import { LinearSessionSync } from "./linear-session-sync.ts";
@@ -64,6 +64,7 @@ export class RunOrchestrator {
   private readonly runCompletionPolicy: RunCompletionPolicy;
   private readonly runNotificationHandler: RunNotificationHandler;
   private readonly runReconciler: RunReconciler;
+  private readonly mergedLinearCompletionReconciler: MergedLinearCompletionReconciler;
   readonly activeSessionLeases: Map<string, string>;
   botIdentity?: GitHubAppBotIdentity;
 
@@ -157,6 +158,7 @@ export class RunOrchestrator {
     this.idleReconciler = new IdleIssueReconciler(db, config, {
       enqueueIssue: (projectId, issueId) => this.enqueueIssue(projectId, issueId),
     }, logger, feed);
+    this.mergedLinearCompletionReconciler = new MergedLinearCompletionReconciler(db, linearProvider, logger);
     this.queueHealthMonitor = new QueueHealthMonitor(db, config, {
       advanceIdleIssue: (issue, newState, options) => this.idleReconciler.advanceIdleIssue(issue, newState, options),
       enqueueIssue: (projectId, issueId) => this.enqueueIssue(projectId, issueId),
@@ -398,47 +400,7 @@ export class RunOrchestrator {
     // Advance issues stuck in pr_open whose stored PR metadata already
     // shows they should transition (e.g. approved PR, missed webhook).
     await this.idleReconciler.reconcile();
-    await this.reconcileMergedLinearCompletion();
-  }
-
-  private async reconcileMergedLinearCompletion(): Promise<void> {
-    for (const issue of this.db.issues.listIssues()) {
-      if (issue.prState !== "merged") continue;
-      if (issue.currentLinearStateType?.trim().toLowerCase() === "completed") continue;
-
-      const linear = await this.linearProvider.forProject(issue.projectId).catch(() => undefined);
-      if (!linear) continue;
-
-      try {
-        const liveIssue = await linear.getIssue(issue.linearIssueId);
-        const targetState = resolvePreferredCompletedLinearState(liveIssue);
-        if (!targetState) continue;
-
-        const normalizedCurrent = liveIssue.stateName?.trim().toLowerCase();
-        if (normalizedCurrent === targetState.trim().toLowerCase()) {
-          this.db.issues.upsertIssue({
-            projectId: issue.projectId,
-            linearIssueId: issue.linearIssueId,
-            ...(liveIssue.stateName ? { currentLinearState: liveIssue.stateName } : {}),
-            ...(liveIssue.stateType ? { currentLinearStateType: liveIssue.stateType } : {}),
-          });
-          continue;
-        }
-
-        const updated = await linear.setIssueState(issue.linearIssueId, targetState);
-        this.db.issues.upsertIssue({
-          projectId: issue.projectId,
-          linearIssueId: issue.linearIssueId,
-          ...(updated.stateName ? { currentLinearState: updated.stateName } : {}),
-          ...(updated.stateType ? { currentLinearStateType: updated.stateType } : {}),
-        });
-      } catch (error) {
-        this.logger.warn(
-          { issueKey: issue.issueKey, error: error instanceof Error ? error.message : String(error) },
-          "Failed to reconcile merged issue to a completed Linear state",
-        );
-      }
-    }
+    await this.mergedLinearCompletionReconciler.reconcile();
   }
 
   // advanceIdleIssue is now on IdleIssueReconciler — delegate for internal callers
