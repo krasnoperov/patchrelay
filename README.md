@@ -161,7 +161,7 @@ PatchRelay uses repo-local workflow files as prompts for Codex runs:
 
 These files define how the agent should work in that repository. Keep them short, action-oriented, and human-authored.
 
-The built-in PatchRelay prompt scaffold lives in `src/prompting/patchrelay.ts`. It is intentionally small: task objective, scope discipline, reactive repair context, workflow guidance, and publication contract. Installation-level and repo-level prompt fragments can extend or replace named sections without replacing the whole default prompt. See [`docs/prompting.md`](./docs/prompting.md).
+The built-in PatchRelay prompt scaffold lives in `src/prompting/patchrelay.ts`. It is intentionally small: task objective, scope discipline, reactive repair context, workflow guidance, and publication contract. Installation-level and repo-level prompt config can add one extra instructions file or replace a small set of policy sections. See [`docs/prompting.md`](./docs/prompting.md).
 
 ## Knowledge And Validation Surfaces
 

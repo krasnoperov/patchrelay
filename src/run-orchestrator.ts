@@ -33,7 +33,9 @@ import type { IssueSessionEventType } from "./issue-session-events.ts";
 import { loadPatchRelayRepoPrompting } from "./patchrelay-customization.ts";
 import {
   buildRunPrompt as buildPatchRelayRunPrompt,
+  findDisallowedPatchRelayPromptSectionIds,
   findUnknownPatchRelayPromptSectionIds,
+  mergePromptCustomizationLayers,
   resolveImplementationDeliveryMode,
   resolvePromptLayers,
 } from "./prompting/patchrelay.ts";
@@ -314,15 +316,22 @@ export class RunOrchestrator {
       repoRoot: project.repoPath,
       logger: this.logger,
     });
-    const promptLayers = [
-      ...resolvePromptLayers(this.config.prompting, runType),
-      ...resolvePromptLayers(repoPrompting, runType),
-    ];
-    const unknownPromptSections = findUnknownPatchRelayPromptSectionIds(promptLayers);
+    const promptLayer = mergePromptCustomizationLayers(
+      resolvePromptLayers(this.config.prompting, runType),
+      resolvePromptLayers(repoPrompting, runType),
+    );
+    const unknownPromptSections = findUnknownPatchRelayPromptSectionIds(promptLayer);
     if (unknownPromptSections.length > 0) {
       this.logger.warn(
         { issueKey: issue.issueKey, runType, unknownPromptSections },
         "PatchRelay prompt customization references unknown section ids",
+      );
+    }
+    const disallowedPromptSections = findDisallowedPatchRelayPromptSectionIds(promptLayer);
+    if (disallowedPromptSections.length > 0) {
+      this.logger.warn(
+        { issueKey: issue.issueKey, runType, disallowedPromptSections },
+        "PatchRelay prompt customization attempted to replace non-overridable sections",
       );
     }
 
@@ -331,7 +340,7 @@ export class RunOrchestrator {
       runType,
       repoPath: project.repoPath,
       ...(effectiveContext ? { context: effectiveContext } : {}),
-      promptLayers,
+      ...(promptLayer ? { promptLayer } : {}),
     });
 
     // Resolve workspace

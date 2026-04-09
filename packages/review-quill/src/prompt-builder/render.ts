@@ -5,7 +5,6 @@ export const REVIEW_QUILL_PROMPT_SECTION_IDS = [
   "preamble",
   "output-contract",
   "review-rubric",
-  "grounding",
   "pull-request",
   "diff-context",
   "repo-guidance",
@@ -13,15 +12,25 @@ export const REVIEW_QUILL_PROMPT_SECTION_IDS = [
 ] as const;
 
 type ReviewPromptSectionId = typeof REVIEW_QUILL_PROMPT_SECTION_IDS[number];
+export const REVIEW_QUILL_REPLACEABLE_SECTION_IDS = [
+  "review-rubric",
+] as const;
+type ReviewQuillReplaceableSectionId = typeof REVIEW_QUILL_REPLACEABLE_SECTION_IDS[number];
 
 interface ReviewPromptSection {
-  id: ReviewPromptSectionId | `custom:${string}`;
+  id: ReviewPromptSectionId | "extra-instructions";
   content: string;
 }
 
 export function findUnknownReviewPromptSectionIds(replaceSections: Record<string, unknown>): string[] {
   const known = new Set<string>(REVIEW_QUILL_PROMPT_SECTION_IDS);
   return Object.keys(replaceSections).filter((sectionId) => !known.has(sectionId));
+}
+
+export function findDisallowedReviewPromptSectionIds(replaceSections: Record<string, unknown>): string[] {
+  const known = new Set<string>(REVIEW_QUILL_PROMPT_SECTION_IDS);
+  const allowed = new Set<string>(REVIEW_QUILL_REPLACEABLE_SECTION_IDS);
+  return Object.keys(replaceSections).filter((sectionId) => known.has(sectionId) && !allowed.has(sectionId));
 }
 
 export const OUTPUT_SCHEMA = `{
@@ -59,7 +68,7 @@ export const OUTPUT_RULES = `Output rules — the response parser expects strict
 - \`line\` MUST be a line number in the new version of the file at the current PR head.
 - Findings on files not visible in the inventory will be silently dropped before posting.`;
 
-const REVIEW_RUBRIC = `## Review rubric
+const REVIEW_RULES = `## Review rules
 Review the current PR head only.
 
 - Start by understanding the actual code and diff before deciding on a verdict.
@@ -69,9 +78,7 @@ Review the current PR head only.
 - Keep findings for one concrete issue at one concrete file/line on the current head.
 - If any finding or architectural concern is blocking, verdict must be \`request_changes\`. Otherwise verdict must be \`approve\`.
 - This is a decisive reviewer in the merge pipeline. Do not emit a neutral/comment-only outcome.
-- Do not post the review yourself with \`gh\` or other tools. Return JSON only; review-quill will publish it.`;
-
-const GROUNDING_RULES = `## Grounding
+- Do not post the review yourself with \`gh\` or other tools. Return JSON only; review-quill will publish it.
 - The changed-files inventory and patch set below define this PR's scope on the current head.
 - Use the checked-out repository for surrounding context, but do not expand the claimed PR scope beyond the diff inventory.
 - Do not silently widen the delegated task. A broader inconsistency is blocking only when the current diff introduces it, the repository guidance explicitly treats the changed surfaces as one flow, or the PR title/body makes that broader behavior part of the task.
@@ -112,8 +119,7 @@ export function renderReviewPrompt(context: Omit<ReviewContext, "prompt">): stri
         OUTPUT_RULES,
       ].join("\n"),
     },
-    { id: "review-rubric", content: REVIEW_RUBRIC },
-    { id: "grounding", content: GROUNDING_RULES },
+    { id: "review-rubric", content: REVIEW_RULES },
     {
       id: "pull-request",
       content: [
@@ -161,25 +167,30 @@ export function renderReviewPrompt(context: Omit<ReviewContext, "prompt">): stri
     });
   }
 
+  const allowed = new Set<string>(REVIEW_QUILL_REPLACEABLE_SECTION_IDS);
   const replacements = new Map<string, string>();
-  const prepend: ReviewPromptSection[] = [];
-  const append: ReviewPromptSection[] = [];
-
-  context.promptCustomization.prepend.forEach((fragment, index) => {
-    prepend.push({ id: `custom:prepend:${index}`, content: fragment.content });
-  });
   Object.entries(context.promptCustomization.replaceSections).forEach(([sectionId, fragment]) => {
-    replacements.set(sectionId, fragment.content);
-  });
-  context.promptCustomization.append.forEach((fragment, index) => {
-    append.push({ id: `custom:append:${index}`, content: fragment.content });
+    if (allowed.has(sectionId)) {
+      replacements.set(sectionId, fragment.content);
+    }
   });
 
-  return [...prepend, ...sections.map((section) => ({
+  const renderedSections = sections.map((section) => ({
     ...section,
     content: replacements.get(section.id) ?? section.content,
-  })), ...append]
-    .map((section) => section.content.trim())
-    .filter(Boolean)
-    .join("\n\n");
+  }));
+  if (context.promptCustomization.extraInstructions?.content.trim()) {
+    const extraSection: ReviewPromptSection = {
+      id: "extra-instructions",
+      content: ["## Extra Instructions", "", context.promptCustomization.extraInstructions.content.trim()].join("\n"),
+    };
+    const repoGuidanceIndex = renderedSections.findIndex((section) => section.id === "repo-guidance");
+    if (repoGuidanceIndex === -1) {
+      renderedSections.push(extraSection);
+    } else {
+      renderedSections.splice(repoGuidanceIndex, 0, extraSection);
+    }
+  }
+
+  return renderedSections.map((section) => section.content.trim()).filter(Boolean).join("\n\n");
 }

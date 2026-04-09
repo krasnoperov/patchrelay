@@ -34,8 +34,7 @@ export interface PromptFileFragment {
 }
 
 export interface PromptCustomizationLayer {
-  prepend: PromptFileFragment[];
-  append: PromptFileFragment[];
+  extraInstructions?: PromptFileFragment;
   replaceSections: Record<string, PromptFileFragment>;
 }
 

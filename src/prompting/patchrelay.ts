@@ -24,9 +24,15 @@ export const PATCHRELAY_PROMPT_SECTION_IDS = [
 ] as const;
 
 export type PatchRelayPromptSectionId = typeof PATCHRELAY_PROMPT_SECTION_IDS[number];
+export const PATCHRELAY_REPLACEABLE_SECTION_IDS = [
+  "scope-discipline",
+  "workflow-guidance",
+  "publication-contract",
+] as const;
+type PatchRelayReplaceableSectionId = typeof PATCHRELAY_REPLACEABLE_SECTION_IDS[number];
 
 interface PatchRelayPromptSection {
-  id: PatchRelayPromptSectionId | `custom:${string}`;
+  id: PatchRelayPromptSectionId | "extra-instructions";
   content: string;
 }
 
@@ -35,7 +41,7 @@ export interface PatchRelayPromptBuildParams {
   runType: RunType;
   repoPath: string;
   context?: Record<string, unknown>;
-  promptLayers?: PromptCustomizationLayer[];
+  promptLayer?: PromptCustomizationLayer;
 }
 
 function readWorkflowFile(repoPath: string, runType: RunType): string | undefined {
@@ -131,13 +137,22 @@ function extractIssueSection(description: string | undefined, heading: string): 
   return body && body.length > 0 ? body : undefined;
 }
 
+function extractIssueIntroText(description: string | undefined): string | undefined {
+  if (!description) return undefined;
+  const trimmed = description.trim();
+  if (!trimmed) return undefined;
+  const firstSectionIndex = trimmed.search(/^##\s+/m);
+  const intro = firstSectionIndex === -1 ? trimmed : trimmed.slice(0, firstSectionIndex).trim();
+  return intro.length > 0 ? intro : undefined;
+}
+
 function buildTaskObjective(issue: IssueRecord): string {
-  const description = issue.description?.trim();
+  const intro = extractIssueIntroText(issue.description);
   return [
     "## Task Objective",
     "",
     issue.title || `Complete ${issue.issueKey ?? issue.linearIssueId}.`,
-    ...(description ? ["", description] : []),
+    ...(intro ? ["", intro] : []),
   ].join("\n");
 }
 
@@ -436,19 +451,20 @@ function buildFollowUpPromptPrelude(issue: IssueRecord, runType: RunType, contex
   ];
 
   if (followUpLines.length > 0) {
-    lines.push("## What Changed Since The Last Turn", "", ...followUpLines, "");
+    lines.push("Recent updates:");
+    followUpLines.forEach((line) => lines.push(`- ${line}`));
+    lines.push("");
   }
 
   if (issue.prNumber || issue.prHeadSha || issue.prReviewState || context?.mergeStateStatus) {
     lines.push(
-      "## Fact Freshness",
+      "## Current PR Facts",
       "",
-      context?.githubFactsFresh === true
-        ? "GitHub facts below were refreshed immediately before this turn was created."
-        : "GitHub facts below may now be stale. Refresh them before making any irreversible decision.",
-      "",
-      "## Authoritative GitHub Facts",
-      "",
+      `Fact freshness: ${
+        context?.githubFactsFresh === true
+          ? "refreshed immediately before this turn was created."
+          : "may now be stale; refresh before making irreversible decisions."
+      }`,
       issue.prNumber ? `Current PR: #${issue.prNumber}` : "",
       issue.prHeadSha ? `Current relevant head SHA: ${issue.prHeadSha}` : "",
       issue.prReviewState ? `Current review state: ${issue.prReviewState}` : "",
@@ -573,39 +589,49 @@ function buildSections(
   return sections;
 }
 
-function applyPromptLayers(
+function filterAllowedReplacements(promptLayer: PromptCustomizationLayer | undefined): Map<PatchRelayReplaceableSectionId, string> {
+  const allowed = new Set<string>(PATCHRELAY_REPLACEABLE_SECTION_IDS);
+  const replacements = new Map<PatchRelayReplaceableSectionId, string>();
+  for (const [sectionId, fragment] of Object.entries(promptLayer?.replaceSections ?? {})) {
+    if (!allowed.has(sectionId)) {
+      continue;
+    }
+    replacements.set(sectionId as PatchRelayReplaceableSectionId, fragment.content);
+  }
+  return replacements;
+}
+
+function applyPromptLayer(
   sections: PatchRelayPromptSection[],
-  promptLayers: PromptCustomizationLayer[] | undefined,
+  promptLayer: PromptCustomizationLayer | undefined,
 ): PatchRelayPromptSection[] {
-  if (!promptLayers || promptLayers.length === 0) {
+  if (!promptLayer) {
     return sections;
   }
 
-  const replacements = new Map<string, string>();
-  const prepend: PatchRelayPromptSection[] = [];
-  const append: PatchRelayPromptSection[] = [];
-
-  promptLayers.forEach((layer, layerIndex) => {
-    layer.prepend.forEach((fragment, fragmentIndex) => {
-      prepend.push({ id: `custom:prepend:${layerIndex}:${fragmentIndex}`, content: fragment.content });
-    });
-    Object.entries(layer.replaceSections).forEach(([sectionId, fragment]) => {
-      replacements.set(sectionId, fragment.content);
-    });
-    layer.append.forEach((fragment, fragmentIndex) => {
-      append.push({ id: `custom:append:${layerIndex}:${fragmentIndex}`, content: fragment.content });
-    });
-  });
-
+  const replacements = filterAllowedReplacements(promptLayer);
   const replaced = sections.map((section) => ({
     ...section,
-    content: replacements.get(section.id) ?? section.content,
+    content: replacements.get(section.id as PatchRelayReplaceableSectionId) ?? section.content,
   })).filter((section) => section.content.trim().length > 0);
 
+  if (!promptLayer.extraInstructions || promptLayer.extraInstructions.content.trim().length === 0) {
+    return replaced;
+  }
+
+  const workflowIndex = replaced.findIndex((section) => section.id === "workflow-guidance");
+  const extraSection: PatchRelayPromptSection = {
+    id: "extra-instructions",
+    content: ["## Extra Instructions", "", promptLayer.extraInstructions.content.trim()].join("\n"),
+  };
+  if (workflowIndex === -1) {
+    return [...replaced, extraSection];
+  }
+
   return [
-    ...prepend.filter((section) => section.content.trim().length > 0),
-    ...replaced,
-    ...append.filter((section) => section.content.trim().length > 0),
+    ...replaced.slice(0, workflowIndex),
+    extraSection,
+    ...replaced.slice(workflowIndex),
   ];
 }
 
@@ -626,37 +652,64 @@ function shouldBuildFollowUpPrompt(runType: RunType, context?: Record<string, un
 export function resolvePromptLayers(
   config: PatchRelayPromptingConfig | undefined,
   runType: RunType,
-): PromptCustomizationLayer[] {
-  if (!config) {
-    return [];
-  }
-  return [config.default, config.byRunType[runType]].filter((layer): layer is PromptCustomizationLayer => Boolean(layer));
+): PromptCustomizationLayer | undefined {
+  return mergePromptCustomizationLayers(config?.default, config?.byRunType[runType]);
 }
 
-export function findUnknownPatchRelayPromptSectionIds(promptLayers: PromptCustomizationLayer[] | undefined): string[] {
+export function mergePromptCustomizationLayers(
+  base: PromptCustomizationLayer | undefined,
+  override: PromptCustomizationLayer | undefined,
+): PromptCustomizationLayer | undefined {
+  if (!base && !override) {
+    return undefined;
+  }
+  return {
+    ...(override?.extraInstructions
+      ? { extraInstructions: override.extraInstructions }
+      : base?.extraInstructions
+      ? { extraInstructions: base.extraInstructions }
+      : {}),
+    replaceSections: {
+      ...(base?.replaceSections ?? {}),
+      ...(override?.replaceSections ?? {}),
+    },
+  };
+}
+
+export function findUnknownPatchRelayPromptSectionIds(promptLayer: PromptCustomizationLayer | undefined): string[] {
   const known = new Set<string>(PATCHRELAY_PROMPT_SECTION_IDS);
   const unknown = new Set<string>();
-  for (const layer of promptLayers ?? []) {
-    for (const sectionId of Object.keys(layer.replaceSections)) {
-      if (!known.has(sectionId)) {
-        unknown.add(sectionId);
-      }
+  for (const sectionId of Object.keys(promptLayer?.replaceSections ?? {})) {
+    if (!known.has(sectionId)) {
+      unknown.add(sectionId);
     }
   }
   return [...unknown];
 }
 
+export function findDisallowedPatchRelayPromptSectionIds(promptLayer: PromptCustomizationLayer | undefined): string[] {
+  const allowed = new Set<string>(PATCHRELAY_REPLACEABLE_SECTION_IDS);
+  const known = new Set<string>(PATCHRELAY_PROMPT_SECTION_IDS);
+  const disallowed = new Set<string>();
+  for (const sectionId of Object.keys(promptLayer?.replaceSections ?? {})) {
+    if (known.has(sectionId) && !allowed.has(sectionId)) {
+      disallowed.add(sectionId);
+    }
+  }
+  return [...disallowed];
+}
+
 export function buildInitialRunPrompt(params: PatchRelayPromptBuildParams): string {
-  return renderPromptSections(applyPromptLayers(
+  return renderPromptSections(applyPromptLayer(
     buildSections(params.issue, params.runType, params.repoPath, params.context, false),
-    params.promptLayers,
+    params.promptLayer,
   ));
 }
 
 export function buildFollowUpRunPrompt(params: PatchRelayPromptBuildParams): string {
-  return renderPromptSections(applyPromptLayers(
+  return renderPromptSections(applyPromptLayer(
     buildSections(params.issue, params.runType, params.repoPath, params.context, true),
-    params.promptLayers,
+    params.promptLayer,
   ));
 }
 

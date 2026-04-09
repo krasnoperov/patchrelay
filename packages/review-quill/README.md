@@ -203,7 +203,7 @@ The default context path is:
 - prior formal PR reviews from GitHub
 - optional Linear issue context when issue keys appear in the PR metadata
 
-The built-in review scaffold lives in `packages/review-quill/src/prompt-builder/render.ts`. It keeps the always-on reviewer prompt small: output contract, review rubric, grounding rules, PR metadata, diff, repo guidance, and prior review claims. Install-level and repo-level prompt fragments can prepend, append, or replace named sections without replacing the full builder. See [`docs/prompting.md`](../../docs/prompting.md).
+The built-in review scaffold lives in `packages/review-quill/src/prompt-builder/render.ts`. It keeps the always-on reviewer prompt small: output contract, review rules, PR metadata, diff, repo guidance, and prior review claims. Install-level and repo-level prompt config can add one extra instructions file or replace the review-rubric section. See [`docs/prompting.md`](../../docs/prompting.md).
 
 Diff context is intentionally filtered:
 

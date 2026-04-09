@@ -219,7 +219,7 @@ test("loadConfig defaults to the XDG config path when PATCHRELAY_CONFIG is unset
   }
 });
 
-test("loadConfig resolves installation prompt fragments relative to the config file", () => {
+test("loadConfig resolves installation prompt files relative to the config file", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-config-prompting-"));
   const configDir = path.join(baseDir, "config");
   const repoPath = path.join(baseDir, "repo");
@@ -230,7 +230,7 @@ test("loadConfig resolves installation prompt fragments relative to the config f
     mkdirSync(repoPath, { recursive: true });
     mkdirSync(worktreeRoot, { recursive: true });
     mkdirSync(path.join(configDir, "prompts"), { recursive: true });
-    writeFileSync(path.join(configDir, "prompts", "prelude.md"), "Install prelude\n");
+    writeFileSync(path.join(configDir, "prompts", "local-policy.md"), "Install local policy\n");
     writeFileSync(path.join(configDir, "prompts", "publication.md"), "## Publication Requirements\n\nCustom publication\n");
     writeConfigFixture(path.join(configDir, "patchrelay.json"), {
       logging: { file_path: path.join(baseDir, "patchrelay.log") },
@@ -241,7 +241,7 @@ test("loadConfig resolves installation prompt fragments relative to the config f
       },
       prompting: {
         default: {
-          prepend_files: ["./prompts/prelude.md"],
+          extra_instructions_file: "./prompts/local-policy.md",
           replace_sections: {
             "publication-contract": "./prompts/publication.md",
           },
@@ -266,7 +266,7 @@ test("loadConfig resolves installation prompt fragments relative to the config f
       },
       () => {
         const config = loadConfig();
-        assert.equal(config.prompting.default.prepend[0]?.content, "Install prelude");
+        assert.equal(config.prompting.default.extraInstructions?.content, "Install local policy");
         assert.equal(
           config.prompting.default.replaceSections["publication-contract"]?.content,
           "## Publication Requirements\n\nCustom publication",

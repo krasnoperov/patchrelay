@@ -23,9 +23,8 @@ const repositorySchema = z.object({
 });
 
 const promptLayerSchema = z.object({
-  prependFiles: z.array(z.string().min(1)).default([]),
-  appendFiles: z.array(z.string().min(1)).default([]),
-  replaceSections: z.record(z.string().min(1), z.string().min(1)).default({}),
+  extra_instructions_file: z.string().min(1).optional(),
+  replace_sections: z.record(z.string().min(1), z.string().min(1)).default({}),
 });
 
 const configSchema = z.object({
@@ -90,14 +89,13 @@ const configSchema = z.object({
     sandboxMode: "danger-full-access",
   }),
   prompting: promptLayerSchema.default({
-    prependFiles: [],
-    appendFiles: [],
-    replaceSections: {},
+    replace_sections: {},
   }),
   repositories: z.array(repositorySchema).default([]),
 });
+type PromptLayerConfig = z.infer<typeof promptLayerSchema>;
 
-function readPromptFile(configDir: string, filePath: string): ReviewQuillConfig["prompting"]["prepend"][number] {
+function readPromptFile(configDir: string, filePath: string): NonNullable<ReviewQuillConfig["prompting"]["extraInstructions"]> {
   const resolvedPath = path.isAbsolute(filePath) ? filePath : path.resolve(configDir, filePath);
   if (!existsSync(resolvedPath)) {
     throw new Error(`Prompt file not found: ${resolvedPath}`);
@@ -110,21 +108,14 @@ function readPromptFile(configDir: string, filePath: string): ReviewQuillConfig[
 
 function loadPromptLayer(
   configDir: string,
-  layer: {
-    prependFiles: string[];
-    appendFiles: string[];
-    replaceSections: Record<string, string>;
-  },
+  layer: PromptLayerConfig,
 ): ReviewQuillConfig["prompting"] {
   return {
-    prepend: layer.prependFiles
-      .map((filePath) => readPromptFile(configDir, filePath))
-      .filter((fragment) => fragment.content.length > 0),
-    append: layer.appendFiles
-      .map((filePath) => readPromptFile(configDir, filePath))
-      .filter((fragment) => fragment.content.length > 0),
+    ...(layer.extra_instructions_file
+      ? { extraInstructions: readPromptFile(configDir, layer.extra_instructions_file) }
+      : {}),
     replaceSections: Object.fromEntries(
-      Object.entries(layer.replaceSections).map(([sectionId, fragmentPath]) => [sectionId, readPromptFile(configDir, fragmentPath)]),
+      Object.entries(layer.replace_sections).map(([sectionId, fragmentPath]) => [sectionId, readPromptFile(configDir, fragmentPath)]),
     ),
   };
 }

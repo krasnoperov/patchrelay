@@ -5,16 +5,14 @@ import { z } from "zod";
 import type { PromptCustomizationLayer, PromptFileFragment } from "./types.ts";
 
 const promptLayerSchema = z.object({
-  prependFiles: z.array(z.string().min(1)).default([]),
-  appendFiles: z.array(z.string().min(1)).default([]),
+  extraInstructionsFile: z.string().min(1).optional(),
   replaceSections: z.record(z.string().min(1), z.string().min(1)).default({}),
 });
+type PromptLayerConfig = z.infer<typeof promptLayerSchema>;
 
 const reviewQuillCustomizationSchema = z.object({
   version: z.literal(1),
   prompt: promptLayerSchema.default({
-    prependFiles: [],
-    appendFiles: [],
     replaceSections: {},
   }),
 });
@@ -36,19 +34,12 @@ function readPromptFile(repoRoot: string, filePath: string): PromptFileFragment 
 
 function loadPromptLayer(
   repoRoot: string,
-  layer: {
-    prependFiles: string[];
-    appendFiles: string[];
-    replaceSections: Record<string, string>;
-  },
+  layer: PromptLayerConfig,
 ): PromptCustomizationLayer {
   return {
-    prepend: layer.prependFiles
-      .map((filePath) => readPromptFile(repoRoot, filePath))
-      .filter((fragment) => fragment.content.length > 0),
-    append: layer.appendFiles
-      .map((filePath) => readPromptFile(repoRoot, filePath))
-      .filter((fragment) => fragment.content.length > 0),
+    ...(layer.extraInstructionsFile
+      ? { extraInstructions: readPromptFile(repoRoot, layer.extraInstructionsFile) }
+      : {}),
     replaceSections: Object.fromEntries(
       Object.entries(layer.replaceSections).map(([sectionId, fragmentPath]) => [sectionId, readPromptFile(repoRoot, fragmentPath)]),
     ),

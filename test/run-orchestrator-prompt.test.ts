@@ -7,6 +7,7 @@ import {
   buildFollowUpRunPrompt,
   buildInitialRunPrompt,
   buildRunPrompt as buildLayeredRunPrompt,
+  findDisallowedPatchRelayPromptSectionIds,
   resolveImplementationDeliveryMode,
 } from "../src/prompting/patchrelay.ts";
 import { shouldReuseIssueThread } from "../src/run-orchestrator.ts";
@@ -132,9 +133,8 @@ test("branch_upkeep prompt includes explicit branch upkeep guidance when the PR 
     assert.match(prompt, /## Follow-up Turn/);
     assert.match(prompt, /Why this turn exists: GitHub still shows the PR branch as needing upkeep after the requested code change was addressed/);
     assert.match(prompt, /## Branch Upkeep After Requested Changes/);
-    assert.match(prompt, /## Fact Freshness/);
-    assert.match(prompt, /GitHub facts below were refreshed immediately before this turn was created/);
-    assert.match(prompt, /## Authoritative GitHub Facts/);
+    assert.match(prompt, /## Current PR Facts/);
+    assert.match(prompt, /Fact freshness: refreshed immediately before this turn was created\./);
     assert.match(prompt, /Current PR: #12/);
     assert.match(prompt, /Current review state: changes_requested/);
     assert.match(prompt, /Merge state against main: DIRTY/);
@@ -247,11 +247,11 @@ test("buildRunPrompt switches implementation follow-ups to the follow-up prompt 
     assert.match(prompt, /## Follow-up Turn/);
     assert.match(prompt, /Why this turn exists: A human follow-up comment arrived after the previous turn/);
     assert.match(prompt, /Required action now: Continue from the latest branch state/);
-    assert.match(prompt, /## What Changed Since The Last Turn/);
+    assert.match(prompt, /Recent updates:/);
+    assert.doesNotMatch(prompt, /## What Changed Since The Last Turn/);
     assert.match(prompt, /followup_comment from alice: Please keep the existing API stable/);
-    assert.match(prompt, /## Fact Freshness/);
-    assert.match(prompt, /may now be stale/);
-    assert.match(prompt, /## Authoritative GitHub Facts/);
+    assert.match(prompt, /## Current PR Facts/);
+    assert.match(prompt, /Fact freshness: may now be stale; refresh before making irreversible decisions\./);
     assert.match(prompt, /Current PR: #22/);
     assert.match(prompt, /Current relevant head SHA: abc123def456/);
   } finally {
@@ -292,20 +292,17 @@ test("buildRunPrompt keeps direct-reply follow-ups concise", () => {
   }
 });
 
-test("buildRunPrompt applies prompt layers without replacing the whole default prompt", () => {
+test("buildRunPrompt applies extra instructions and section replacement without replacing the whole default prompt", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-prompt-layer-"));
-  const promptLayers: PromptCustomizationLayer[] = [
-    {
-      prepend: [{ sourcePath: "/install/prelude.md", content: "Install-level prelude" }],
-      append: [{ sourcePath: "/repo/appendix.md", content: "Repo appendix" }],
-      replaceSections: {
-        "publication-contract": {
-          sourcePath: "/repo/publication.md",
-          content: "## Publication Requirements\n\nUse the existing publication contract.",
-        },
+  const promptLayer: PromptCustomizationLayer = {
+    extraInstructions: { sourcePath: "/install/local-policy.md", content: "Use the repo's rollout checklist." },
+    replaceSections: {
+      "publication-contract": {
+        sourcePath: "/repo/publication.md",
+        content: "## Publication Requirements\n\nUse the existing publication contract.",
       },
     },
-  ];
+  };
 
   try {
     writeFileSync(path.join(baseDir, "IMPLEMENTATION_WORKFLOW.md"), "# Implementation Workflow\n\nStay focused.\n");
@@ -317,16 +314,29 @@ test("buildRunPrompt applies prompt layers without replacing the whole default p
       },
       runType: "implementation",
       repoPath: baseDir,
-      promptLayers,
+      promptLayer,
     });
 
-    assert.match(prompt, /Install-level prelude/);
+    assert.match(prompt, /## Extra Instructions/);
+    assert.match(prompt, /Use the repo's rollout checklist\./);
     assert.match(prompt, /## Task Objective/);
     assert.match(prompt, /## Scope Discipline/);
     assert.match(prompt, /Stay focused\./);
     assert.match(prompt, /Use the existing publication contract/);
-    assert.match(prompt, /Repo appendix/);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
+});
+
+test("disallowed PatchRelay section replacements are detected and ignored by the builder", () => {
+  const promptLayer: PromptCustomizationLayer = {
+    replaceSections: {
+      "reactive-context": {
+        sourcePath: "/repo/reactive.md",
+        content: "## Reactive Context\n\nDo not use this replacement.",
+      },
+    },
+  };
+
+  assert.deepEqual(findDisallowedPatchRelayPromptSectionIds(promptLayer), ["reactive-context"]);
 });

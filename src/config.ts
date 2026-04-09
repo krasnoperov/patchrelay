@@ -74,8 +74,7 @@ const repositorySchema = z.object({
 });
 
 const promptLayerSchema = z.object({
-  prepend_files: z.array(z.string().min(1)).default([]),
-  append_files: z.array(z.string().min(1)).default([]),
+  extra_instructions_file: z.string().min(1).optional(),
   replace_sections: z.record(z.string().min(1), z.string().min(1)).default({}),
 });
 
@@ -86,6 +85,7 @@ const promptByRunTypeSchema = z.object({
   ci_repair: promptLayerSchema.optional(),
   queue_repair: promptLayerSchema.optional(),
 });
+type PromptLayerConfig = z.infer<typeof promptLayerSchema>;
 
 const configSchema = z.object({
   server: z.object({
@@ -151,15 +151,11 @@ const configSchema = z.object({
   }),
   prompting: z.object({
     default: promptLayerSchema.default({
-      prepend_files: [],
-      append_files: [],
       replace_sections: {},
     }),
     by_run_type: promptByRunTypeSchema.default({}),
   }).default({
     default: {
-      prepend_files: [],
-      append_files: [],
       replace_sections: {},
     },
     by_run_type: {},
@@ -237,7 +233,7 @@ function resolveRepoSettingsPath(repoPath: string): string {
   return path.join(repoPath, REPO_SETTINGS_DIRNAME, REPO_SETTINGS_FILENAME);
 }
 
-function readPromptFile(configDir: string, filePath: string): AppConfig["prompting"]["default"]["prepend"][number] {
+function readPromptFile(configDir: string, filePath: string): NonNullable<AppConfig["prompting"]["default"]["extraInstructions"]> {
   const resolvedPath = path.isAbsolute(filePath) ? filePath : path.resolve(configDir, filePath);
   if (!existsSync(resolvedPath)) {
     throw new Error(`Prompt file not found: ${resolvedPath}`);
@@ -250,19 +246,12 @@ function readPromptFile(configDir: string, filePath: string): AppConfig["prompti
 
 function loadPromptLayer(
   configDir: string,
-  layer: {
-    prepend_files: string[];
-    append_files: string[];
-    replace_sections: Record<string, string>;
-  },
+  layer: PromptLayerConfig,
 ): AppConfig["prompting"]["default"] {
   return {
-    prepend: layer.prepend_files
-      .map((filePath) => readPromptFile(configDir, filePath))
-      .filter((fragment) => fragment.content.length > 0),
-    append: layer.append_files
-      .map((filePath) => readPromptFile(configDir, filePath))
-      .filter((fragment) => fragment.content.length > 0),
+    ...(layer.extra_instructions_file
+      ? { extraInstructions: readPromptFile(configDir, layer.extra_instructions_file) }
+      : {}),
     replaceSections: Object.fromEntries(
       Object.entries(layer.replace_sections).map(([sectionId, fragmentPath]) => [sectionId, readPromptFile(configDir, fragmentPath)]),
     ),

@@ -1,15 +1,15 @@
 # Prompting
 
-PatchRelay and Review Quill both follow the same simple rule:
+PatchRelay and Review Quill use the same simple rule:
 
-- keep the always-on harness prompt small
+- keep the built-in harness prompt small
 - keep `AGENTS.md` short and navigational
-- keep repo-specific workflow guidance in versioned repo files
-- let additive prompt layers extend the default instead of replacing it
+- keep durable repo guidance in workflow docs
+- use one extra instructions file only when the defaults need a local policy overlay
 
 ## Mental Models
 
-PatchRelay is an implementation agent scaffold:
+PatchRelay is an implementation scaffold:
 
 - understand the delegated task
 - stay in scope
@@ -17,7 +17,7 @@ PatchRelay is an implementation agent scaffold:
 - validate in the real worktree
 - publish correctly
 
-Review Quill is a review agent scaffold:
+Review Quill is a review scaffold:
 
 - review the current head only
 - ground claims in the current diff
@@ -35,15 +35,15 @@ Review Quill default prompt builder:
 
 - `packages/review-quill/src/prompt-builder/render.ts`
 
-Those are the canonical places to review or change the built-in prompt structure.
+Those are the canonical places to inspect or change the built-in prompt structure.
 
 ## Repo Guidance
 
-Repo-local workflow files still carry most of the domain-specific guidance:
+The normal customization path is still repo docs:
 
+- `AGENTS.md`
 - `IMPLEMENTATION_WORKFLOW.md`
 - `REVIEW_WORKFLOW.md`
-- `AGENTS.md`
 
 Recommended split:
 
@@ -56,16 +56,16 @@ Recommended split:
 PatchRelay prompt order:
 
 1. built-in sections from `src/prompting/patchrelay.ts`
-2. install-level prompt fragments from `patchrelay.json`
-3. repo-level prompt fragments from `.patchrelay/patchrelay.json`
-4. runtime context from the active issue/run
+2. install-level prompt config from `patchrelay.json`
+3. repo-level prompt config from `.patchrelay/patchrelay.json`
+4. runtime issue/run context
 5. workflow guidance from the repo
 
 Review Quill prompt order:
 
 1. built-in sections from `packages/review-quill/src/prompt-builder/render.ts`
-2. install-level prompt fragments from `review-quill.json`
-3. repo-level prompt fragments from `.patchrelay/review-quill.json`
+2. install-level prompt config from `review-quill.json`
+3. repo-level prompt config from `.patchrelay/review-quill.json`
 4. PR and diff context
 5. repo guidance docs
 
@@ -76,16 +76,13 @@ PatchRelay service config supports:
 ```json
 {
   "prompting": {
-    "default": {
-      "prepend_files": ["./prompts/prelude.md"],
-      "append_files": ["./prompts/appendix.md"],
-      "replace_sections": {
-        "publication-contract": "./prompts/publication.md"
-      }
+    "extra_instructions_file": "./prompts/local-policy.md",
+    "replace_sections": {
+      "publication-contract": "./prompts/publication.md"
     },
     "by_run_type": {
       "review_fix": {
-        "append_files": ["./prompts/review-fix.md"]
+        "extra_instructions_file": "./prompts/review-fix.md"
       }
     }
   }
@@ -97,16 +94,15 @@ Review Quill service config supports:
 ```json
 {
   "prompting": {
-    "prependFiles": ["./prompts/prelude.md"],
-    "appendFiles": ["./prompts/appendix.md"],
-    "replaceSections": {
-      "grounding": "./prompts/grounding.md"
+    "extra_instructions_file": "./prompts/review-policy.md",
+    "replace_sections": {
+      "review-rubric": "./prompts/review-rubric.md"
     }
   }
 }
 ```
 
-Prompt fragment paths are resolved relative to the service config file.
+Paths are resolved relative to the service config file.
 
 ## Repo-Level Customization
 
@@ -116,12 +112,13 @@ PatchRelay repo-local prompt config:
 {
   "version": 1,
   "prompt": {
-    "default": {
-      "appendFiles": [".patchrelay/prompts/implementation-notes.md"]
+    "extraInstructionsFile": ".patchrelay/prompts/local-policy.md",
+    "replaceSections": {
+      "publication-contract": ".patchrelay/prompts/publication.md"
     },
     "byRunType": {
-      "ci_repair": {
-        "appendFiles": [".patchrelay/prompts/ci-repair.md"]
+      "review_fix": {
+        "extraInstructionsFile": ".patchrelay/prompts/review-fix.md"
       }
     }
   }
@@ -134,7 +131,7 @@ Review Quill repo-local prompt config:
 {
   "version": 1,
   "prompt": {
-    "appendFiles": [".patchrelay/prompts/review-notes.md"],
+    "extraInstructionsFile": ".patchrelay/prompts/review-policy.md",
     "replaceSections": {
       "review-rubric": ".patchrelay/prompts/review-rubric.md"
     }
@@ -142,33 +139,21 @@ Review Quill repo-local prompt config:
 }
 ```
 
-Prompt fragment paths are resolved relative to the repo root.
+Paths are resolved relative to the repo root.
 
-## Section Replacement
+## Replaceable Sections
 
-PatchRelay section ids:
+PatchRelay allows replacing only these policy sections:
 
-- `header`
-- `follow-up-turn`
-- `task-objective`
 - `scope-discipline`
-- `human-context`
-- `reactive-context`
 - `workflow-guidance`
 - `publication-contract`
 
-Review Quill section ids:
+Review Quill allows replacing only:
 
-- `preamble`
-- `output-contract`
 - `review-rubric`
-- `grounding`
-- `pull-request`
-- `diff-context`
-- `repo-guidance`
-- `prior-review-claims`
 
-Unknown section ids are ignored and logged as warnings.
+Unknown section ids are ignored and logged as warnings. Known but non-overridable sections are also ignored and logged.
 
 ## Recommended Usage
 
@@ -176,8 +161,8 @@ Prefer this order:
 
 1. keep `AGENTS.md` short
 2. put durable repo behavior in workflow files and docs
-3. use prepend/append fragments for extra local context
+3. use one extra instructions file for local policy overlays
 4. use section replacement only for narrow policy changes
-5. replace the full prompt only if the additive model is genuinely insufficient
+5. use hooks for dynamic/computed context
 
-The default prompts are meant to be usable without tuning. The customization layers exist so teams can stay minimal by default and still bend the harness when they need to.
+The default prompts are meant to work without tuning. Prompt config exists as a small escape hatch, not as a second documentation system.

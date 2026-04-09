@@ -5,8 +5,7 @@ import { z } from "zod";
 import type { PatchRelayPromptingConfig, PromptCustomizationLayer, PromptFileFragment } from "./types.ts";
 
 const promptLayerSchema = z.object({
-  prependFiles: z.array(z.string().min(1)).default([]),
-  appendFiles: z.array(z.string().min(1)).default([]),
+  extraInstructionsFile: z.string().min(1).optional(),
   replaceSections: z.record(z.string().min(1), z.string().min(1)).default({}),
 });
 
@@ -17,20 +16,17 @@ const promptByRunTypeSchema = z.object({
   ci_repair: promptLayerSchema.optional(),
   queue_repair: promptLayerSchema.optional(),
 });
+type PromptLayerConfig = z.infer<typeof promptLayerSchema>;
 
 const patchRelayCustomizationSchema = z.object({
   version: z.literal(1),
   prompt: z.object({
     default: promptLayerSchema.default({
-      prependFiles: [],
-      appendFiles: [],
       replaceSections: {},
     }),
     byRunType: promptByRunTypeSchema.default({}),
   }).default({
     default: {
-      prependFiles: [],
-      appendFiles: [],
       replaceSections: {},
     },
     byRunType: {},
@@ -54,19 +50,12 @@ function readPromptFile(repoRoot: string, filePath: string): PromptFileFragment 
 
 function loadPromptLayer(
   repoRoot: string,
-  layer: {
-    prependFiles: string[];
-    appendFiles: string[];
-    replaceSections: Record<string, string>;
-  } | undefined,
+  layer: PromptLayerConfig | undefined,
 ): PromptCustomizationLayer {
   return {
-    prepend: (layer?.prependFiles ?? [])
-      .map((filePath) => readPromptFile(repoRoot, filePath))
-      .filter((fragment) => fragment.content.length > 0),
-    append: (layer?.appendFiles ?? [])
-      .map((filePath) => readPromptFile(repoRoot, filePath))
-      .filter((fragment) => fragment.content.length > 0),
+    ...(layer?.extraInstructionsFile
+      ? { extraInstructions: readPromptFile(repoRoot, layer.extraInstructionsFile) }
+      : {}),
     replaceSections: Object.fromEntries(
       Object.entries(layer?.replaceSections ?? {})
         .map(([sectionId, fragmentPath]) => [sectionId, readPromptFile(repoRoot, fragmentPath)]),

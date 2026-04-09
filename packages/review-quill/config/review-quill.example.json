@@ -23,9 +23,8 @@
     "sandboxMode": "danger-full-access"
   },
   "prompting": {
-    "prependFiles": [],
-    "appendFiles": [],
-    "replaceSections": {}
+    "extra_instructions_file": "./prompts/review-policy.md",
+    "replace_sections": {}
   },
   "repositories": [
     {
