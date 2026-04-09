@@ -5,9 +5,8 @@ import type { PatchRelayDatabase } from "./db.ts";
 import type { BranchOwner, IssueRecord, RunRecord } from "./db-types.ts";
 import type { FactoryState, RunType } from "./factory-state.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
-import { extractTurnId, resolveRunCompletionStatus, summarizeCurrentThread } from "./run-reporting.ts";
+import { summarizeCurrentThread } from "./run-reporting.ts";
 import {
-  buildRunFailureActivity,
   buildRunStartedActivity,
 } from "./linear-session-reporting.ts";
 import { WorktreeManager } from "./worktree-manager.ts";
@@ -21,10 +20,11 @@ import { QueueHealthMonitor } from "./queue-health-monitor.ts";
 import { IdleIssueReconciler, resolveBranchOwnerForStateTransition } from "./idle-reconciliation.ts";
 import { LinearSessionSync } from "./linear-session-sync.ts";
 import { IssueSessionLeaseService } from "./issue-session-lease-service.ts";
-import { InterruptedRunRecovery, resolveRecoverablePostRunState } from "./interrupted-run-recovery.ts";
+import { InterruptedRunRecovery } from "./interrupted-run-recovery.ts";
 import { RunCompletionPolicy } from "./run-completion-policy.ts";
 import { RunFinalizer } from "./run-finalizer.ts";
 import { RunLauncher } from "./run-launcher.ts";
+import { RunNotificationHandler } from "./run-notification-handler.ts";
 import { RunReconciler } from "./run-reconciler.ts";
 import { RunRecoveryService } from "./run-recovery-service.ts";
 import { RunWakePlanner, type PendingRunWake } from "./run-wake-planner.ts";
@@ -54,7 +54,6 @@ export class RunOrchestrator {
   private readonly queueHealthMonitor: QueueHealthMonitor;
   private readonly idleReconciler: IdleIssueReconciler;
   readonly linearSync: LinearSessionSync;
-  private activeThreadId: string | undefined;
   private readonly workerId = `patchrelay:${process.pid}`;
   private readonly leaseService: IssueSessionLeaseService;
   private readonly runFinalizer: RunFinalizer;
@@ -63,6 +62,7 @@ export class RunOrchestrator {
   private readonly runWakePlanner: RunWakePlanner;
   private readonly interruptedRunRecovery: InterruptedRunRecovery;
   private readonly runCompletionPolicy: RunCompletionPolicy;
+  private readonly runNotificationHandler: RunNotificationHandler;
   private readonly runReconciler: RunReconciler;
   readonly activeSessionLeases: Map<string, string>;
   botIdentity?: GitHubAppBotIdentity;
@@ -104,6 +104,18 @@ export class RunOrchestrator {
       feed,
     );
     this.runLauncher = new RunLauncher(config, db, codex, logger, this.worktreeManager);
+    this.runNotificationHandler = new RunNotificationHandler(
+      config,
+      db,
+      logger,
+      this.linearSync,
+      this.runFinalizer,
+      (threadId, maxRetries) => this.readThreadWithRetry(threadId, maxRetries),
+      (projectId, linearIssueId, fn) => this.withHeldIssueSessionLease(projectId, linearIssueId, fn),
+      (projectId, linearIssueId) => this.heartbeatIssueSessionLease(projectId, linearIssueId),
+      (projectId, linearIssueId) => this.releaseIssueSessionLease(projectId, linearIssueId),
+      feed,
+    );
     this.runRecovery = new RunRecoveryService(
       db,
       logger,
@@ -352,107 +364,7 @@ export class RunOrchestrator {
   // ─── Notification handler ─────────────────────────────────────────
 
   async handleCodexNotification(notification: CodexNotification): Promise<void> {
-    // threadId is present on turn-level notifications but NOT on item-level ones.
-    // Fall back to the tracked active thread for item/delta notifications.
-    let threadId = typeof notification.params.threadId === "string" ? notification.params.threadId : undefined;
-    if (!threadId) {
-      threadId = this.activeThreadId;
-    }
-    if (!threadId) return;
-
-    // Track the active thread from turn/started so item notifications can find it
-    if (notification.method === "turn/started" && threadId) {
-      this.activeThreadId = threadId;
-    }
-
-    const run = this.db.runs.getRunByThreadId(threadId);
-    if (!run) return;
-    if (!this.heartbeatIssueSessionLease(run.projectId, run.linearIssueId)) {
-      this.logger.warn({ runId: run.id, issueId: run.linearIssueId }, "Ignoring Codex notification after losing issue-session lease");
-      return;
-    }
-
-    const turnId = typeof notification.params.turnId === "string" ? notification.params.turnId : undefined;
-    if (this.config.runner.codex.persistExtendedHistory) {
-      this.db.runs.saveThreadEvent({
-        runId: run.id,
-        threadId,
-        ...(turnId ? { turnId } : {}),
-        method: notification.method,
-        eventJson: JSON.stringify(notification.params),
-      });
-    }
-
-    // Emit ephemeral progress activity to Linear for notable in-flight events
-    this.linearSync.maybeEmitProgress(notification, run);
-
-    // Sync codex plan to Linear session when it updates
-    if (notification.method === "turn/plan/updated") {
-      const issue = this.db.issues.getIssue(run.projectId, run.linearIssueId);
-      if (issue) {
-        void this.linearSync.syncCodexPlan(issue, notification.params);
-      }
-    }
-
-    if (notification.method !== "turn/completed") return;
-
-    const thread = await this.readThreadWithRetry(threadId);
-    const issue = this.db.issues.getIssue(run.projectId, run.linearIssueId);
-    if (!issue) return;
-
-    const completedTurnId = extractTurnId(notification.params);
-    const status = resolveRunCompletionStatus(notification.params);
-
-    if (status === "failed") {
-      const nextState: FactoryState = isRequestedChangesRunType(run.runType) ? "escalated" : "failed";
-      const updated = this.withHeldIssueSessionLease(run.projectId, run.linearIssueId, (lease) => {
-        this.db.issueSessions.finishRunWithLease(lease, run.id, {
-          status: "failed",
-          threadId,
-          ...(completedTurnId ? { turnId: completedTurnId } : {}),
-          failureReason: "Codex reported the turn completed in a failed state",
-        });
-        this.db.issueSessions.upsertIssueWithLease(lease, {
-          projectId: run.projectId,
-          linearIssueId: run.linearIssueId,
-          activeRunId: null,
-          factoryState: nextState,
-        });
-        return true;
-      });
-      if (!updated) {
-        this.logger.warn({ runId: run.id, issueId: run.linearIssueId }, "Skipping failed-turn cleanup after losing issue-session lease");
-        this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
-        return;
-      }
-      this.feed?.publish({
-        level: "error",
-        kind: "turn",
-        issueKey: issue.issueKey,
-        projectId: run.projectId,
-        stage: run.runType,
-        status: "failed",
-        summary: `Turn failed for ${run.runType}`,
-      });
-      const failedIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue;
-      void this.linearSync.emitActivity(failedIssue, buildRunFailureActivity(run.runType));
-      void this.linearSync.syncSession(failedIssue, { activeRunType: run.runType });
-      this.linearSync.clearProgress(run.id);
-      this.activeThreadId = undefined;
-      this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
-      return;
-    }
-
-    await this.runFinalizer.finalizeCompletedRun({
-      source: "notification",
-      run,
-      issue,
-      thread,
-      threadId,
-      ...(completedTurnId ? { completedTurnId } : {}),
-      resolveRecoverableRunState: resolveRecoverablePostRunState,
-    });
-    this.activeThreadId = undefined;
+    await this.runNotificationHandler.handle(notification);
   }
 
   // ─── Active status for query ──────────────────────────────────────
