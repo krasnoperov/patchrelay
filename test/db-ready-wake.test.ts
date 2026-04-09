@@ -75,7 +75,7 @@ test("repairing_ci issues can synthesize a one-time wake from the current PR hea
   }
 });
 
-test("terminal issues with stale pending wakes are not treated as ready for execution", () => {
+test("terminal issues with a fresh GitHub wake become ready for execution again", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-db-ready-wake-terminal-"));
   try {
     const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
@@ -100,7 +100,10 @@ test("terminal issues with stale pending wakes are not treated as ready for exec
 
     const wake = db.peekIssueSessionWake("usertold", "issue-3");
     assert.equal(wake?.runType, "review_fix");
-    assert.deepEqual(db.listIssuesReadyForExecution(), []);
+    assert.deepEqual(
+      db.listIssuesReadyForExecution(),
+      [{ projectId: "usertold", linearIssueId: "issue-3" }],
+    );
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

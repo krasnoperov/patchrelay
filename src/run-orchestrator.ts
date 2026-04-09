@@ -35,7 +35,7 @@ import type { IssueSessionEventType } from "./issue-session-events.ts";
 
 const DEFAULT_CI_REPAIR_BUDGET = 3;
 const DEFAULT_QUEUE_REPAIR_BUDGET = 3;
-const DEFAULT_REVIEW_FIX_BUDGET = 3;
+const DEFAULT_REVIEW_FIX_BUDGET = 6;
 const DEFAULT_ZOMBIE_RECOVERY_BUDGET = 5;
 const ZOMBIE_RECOVERY_BASE_DELAY_MS = 15_000; // 15s, 30s, 60s, 120s, 240s
 const ISSUE_SESSION_LEASE_MS = 10 * 60_000;
@@ -899,8 +899,8 @@ export class RunOrchestrator {
       this.escalate(issue, runType, `Queue repair budget exhausted (${DEFAULT_QUEUE_REPAIR_BUDGET} attempts)`);
       return;
     }
-    if (runType === "review_fix" && issue.reviewFixAttempts >= DEFAULT_REVIEW_FIX_BUDGET) {
-      this.escalate(issue, runType, `Review fix budget exhausted (${DEFAULT_REVIEW_FIX_BUDGET} attempts)`);
+    if (isRequestedChangesRunType(runType) && issue.reviewFixAttempts >= DEFAULT_REVIEW_FIX_BUDGET) {
+      this.escalate(issue, runType, `Requested-changes budget exhausted (${DEFAULT_REVIEW_FIX_BUDGET} attempts)`);
       return;
     }
 
@@ -925,7 +925,7 @@ export class RunOrchestrator {
         return;
       }
     }
-    if (runType === "review_fix") {
+    if (isRequestedChangesRunType(runType)) {
       const updated = this.db.upsertIssueWithLease(
         { projectId: issue.projectId, linearIssueId: issue.linearIssueId, leaseId },
         { projectId: issue.projectId, linearIssueId: issue.linearIssueId, reviewFixAttempts: issue.reviewFixAttempts + 1 },
@@ -1861,12 +1861,6 @@ export class RunOrchestrator {
             linearIssueId: issue.linearIssueId,
             queueRepairAttempts: issue.queueRepairAttempts - 1,
           });
-        } else if (run.runType === "review_fix" && issue.reviewFixAttempts > 0) {
-          this.db.upsertIssueWithLease(lease, {
-            projectId: issue.projectId,
-            linearIssueId: issue.linearIssueId,
-            reviewFixAttempts: issue.reviewFixAttempts - 1,
-          });
         }
         if (run.runType === "ci_repair" || run.runType === "queue_repair") {
           this.db.upsertIssueWithLease(lease, {
@@ -1884,21 +1878,60 @@ export class RunOrchestrator {
         return;
       }
       if (isRequestedChangesRunType(run.runType)) {
+        const refreshedIssue = await this.refreshIssueAfterReactivePublish(run, this.db.getIssue(run.projectId, run.linearIssueId) ?? issue);
+        const project = this.config.projects.find((entry) => entry.id === run.projectId);
+        const retryContext = project
+          ? await this.resolveRequestedChangesWakeContext(
+              refreshedIssue,
+              run.runType,
+              run.runType === "branch_upkeep"
+                ? {
+                    branchUpkeepRequired: true,
+                    reviewFixMode: "branch_upkeep",
+                    wakeReason: "branch_upkeep",
+                  }
+                : undefined,
+              project,
+            )
+          : undefined;
+        const retryRunType = resolveRequestedChangesMode(run.runType, retryContext) === "branch_upkeep"
+          ? "branch_upkeep"
+          : "review_fix";
+        const recoveredState = resolveRecoverablePostRunState(refreshedIssue) ?? "failed";
         const interruptedMessage = "Requested-changes run was interrupted before PatchRelay could verify that a new PR head was published";
-        this.failRunAndClear(run, interruptedMessage, "escalated");
+        this.failRunAndClear(run, interruptedMessage, recoveredState);
         await this.restoreIdleWorktree(issue);
-        const failedIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? issue;
-        this.feed?.publish({
-          level: "error",
-          kind: "workflow",
-          issueKey: issue.issueKey,
-          projectId: run.projectId,
-          stage: "review_fix",
-          status: "escalated",
-          summary: interruptedMessage,
-        });
-        void this.linearSync.emitActivity(failedIssue, buildRunFailureActivity(run.runType, interruptedMessage));
-        void this.linearSync.syncSession(failedIssue, { activeRunType: run.runType });
+        const recoveredIssue = this.db.getIssue(run.projectId, run.linearIssueId) ?? refreshedIssue;
+        if (recoveredState === "changes_requested") {
+          this.db.upsertIssue({
+            projectId: run.projectId,
+            linearIssueId: run.linearIssueId,
+            pendingRunType: retryRunType,
+            pendingRunContextJson: retryContext ? JSON.stringify(retryContext) : null,
+          });
+          this.feed?.publish({
+            level: "warn",
+            kind: "workflow",
+            issueKey: issue.issueKey,
+            projectId: run.projectId,
+            stage: run.runType,
+            status: "retry_queued",
+            summary: "Requested-changes run was interrupted; PatchRelay will retry from fresh GitHub truth",
+          });
+          this.enqueueIssue(run.projectId, run.linearIssueId);
+        } else {
+          this.feed?.publish({
+            level: "error",
+            kind: "workflow",
+            issueKey: issue.issueKey,
+            projectId: run.projectId,
+            stage: run.runType,
+            status: "escalated",
+            summary: interruptedMessage,
+          });
+        }
+        void this.linearSync.emitActivity(recoveredIssue, buildRunFailureActivity(run.runType, interruptedMessage));
+        void this.linearSync.syncSession(recoveredIssue, { activeRunType: run.runType });
         this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
         return;
       }

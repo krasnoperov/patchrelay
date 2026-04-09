@@ -310,6 +310,7 @@ export class PatchRelayDatabase {
           last_github_ci_snapshot_head_sha, last_github_ci_snapshot_gate_check_name, last_github_ci_snapshot_gate_check_status, last_github_ci_snapshot_json, last_github_ci_snapshot_settled_at,
           last_queue_signal_at, last_queue_incident_json,
           last_attempted_failure_head_sha, last_attempted_failure_signature,
+          ci_repair_attempts, queue_repair_attempts, review_fix_attempts, zombie_recovery_attempts, last_zombie_recovery_at,
           updated_at
         ) VALUES (
           @projectId, @linearIssueId, @issueKey, @title, @description, @url,
@@ -322,6 +323,7 @@ export class PatchRelayDatabase {
           @lastGitHubCiSnapshotHeadSha, @lastGitHubCiSnapshotGateCheckName, @lastGitHubCiSnapshotGateCheckStatus, @lastGitHubCiSnapshotJson, @lastGitHubCiSnapshotSettledAt,
           @lastQueueSignalAt, @lastQueueIncidentJson,
           @lastAttemptedFailureHeadSha, @lastAttemptedFailureSignature,
+          @ciRepairAttempts, @queueRepairAttempts, @reviewFixAttempts, @zombieRecoveryAttempts, @lastZombieRecoveryAt,
           @now
         )
       `).run({
@@ -368,6 +370,11 @@ export class PatchRelayDatabase {
         lastQueueIncidentJson: params.lastQueueIncidentJson ?? null,
         lastAttemptedFailureHeadSha: params.lastAttemptedFailureHeadSha ?? null,
         lastAttemptedFailureSignature: params.lastAttemptedFailureSignature ?? null,
+        ciRepairAttempts: params.ciRepairAttempts ?? 0,
+        queueRepairAttempts: params.queueRepairAttempts ?? 0,
+        reviewFixAttempts: params.reviewFixAttempts ?? 0,
+        zombieRecoveryAttempts: params.zombieRecoveryAttempts ?? 0,
+        lastZombieRecoveryAt: params.lastZombieRecoveryAt ?? null,
         now,
       });
     }
