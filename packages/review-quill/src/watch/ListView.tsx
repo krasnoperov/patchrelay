@@ -1,11 +1,13 @@
 import { Box, Text, useStdout } from "ink";
 import type { ReviewAttemptRecord, ReviewQuillWatchSnapshot } from "../types.ts";
-import { attemptLabel, attemptStateColor, formatSha, relativeTime, truncate, webhookLabel } from "./format.ts";
+import { attemptLabel, attemptStateColor, formatSha, relativeTime, truncate } from "./format.ts";
+import { getClusterSummary, getRecentActivity, getRepoHealth, getReviewQueueText, projectStatsSummary } from "./dashboard-model.ts";
 
 interface ListViewProps {
   snapshot: ReviewQuillWatchSnapshot;
   attempts: ReviewAttemptRecord[];
   selectedAttemptId: number | null;
+  selectedRepoFullName: string | null;
 }
 
 function AttemptRow({ attempt, selected }: { attempt: ReviewAttemptRecord; selected: boolean }): React.JSX.Element {
@@ -24,28 +26,46 @@ function AttemptRow({ attempt, selected }: { attempt: ReviewAttemptRecord; selec
     );
 }
 
-export function ListView({ snapshot, attempts, selectedAttemptId }: ListViewProps): React.JSX.Element {
+export function ListView({ snapshot, attempts, selectedAttemptId, selectedRepoFullName }: ListViewProps): React.JSX.Element {
   const { stdout } = useStdout();
   const rows = stdout?.rows ?? 24;
   const repoRows = Math.min(snapshot.repos.length, 5);
-  const attemptRows = Math.max(4, rows - repoRows - 14);
+  const attemptRows = Math.max(4, rows - repoRows * 2 - 11);
   const visibleAttempts = attempts.slice(0, attemptRows);
-  const visibleWebhooks = snapshot.recentWebhooks.slice(0, 6);
+  const cluster = getClusterSummary(snapshot);
+  const repoLookup = new Map(snapshot.repos.map((repo) => [repo.repoFullName, repo]));
+  const visibleActivity = getRecentActivity(snapshot, repoLookup).slice(0, 6);
 
   return (
     <Box flexDirection="column" marginTop={1}>
-      <Text bold>Repositories</Text>
-      {snapshot.repos.slice(0, repoRows).map((repo) => (
-        <Box key={repo.repoId}>
-          <Text>{truncate(repo.repoFullName, 28)}</Text>
-          <Text dimColor>{`  base:${repo.baseBranch}`}</Text>
-          <Text>{`  `}</Text>
-          <Text color={repo.runningAttempts > 0 ? "yellow" : repo.failedAttempts > 0 ? "red" : "green"}>
-            {`${repo.runningAttempts} running`}
-          </Text>
-          <Text dimColor>{`  ${repo.queuedAttempts} queued  ${repo.failedAttempts} failed`}</Text>
-        </Box>
-      ))}
+      <Text bold>Review Overview</Text>
+      <Text dimColor>
+        {cluster.total} repositories · {cluster.connected} connected · {cluster.active} active · {cluster.queued} queued · {cluster.stuck} stuck · {cluster.attention} need attention
+      </Text>
+      {snapshot.repos.slice(0, repoRows).map((repo) => {
+        const health = getRepoHealth(snapshot, repo);
+        const queueText = getReviewQueueText(snapshot, repo);
+        return (
+          <Box key={repo.repoId} flexDirection="column">
+            <Box>
+              <Text color={repo.repoFullName === selectedRepoFullName ? "cyan" : "gray"}>
+                {repo.repoFullName === selectedRepoFullName ? "\u25b8" : " "}
+              </Text>
+              <Text bold>{repo.repoId}</Text>
+              <Text dimColor>{`  ${truncate(repo.repoFullName, 28)}`}</Text>
+              <Text>{`  `}</Text>
+              <Text color={health.color}>{health.label}</Text>
+              <Text dimColor>{`  ${projectStatsSummary(repo)}`}</Text>
+            </Box>
+            <Box paddingLeft={2}>
+              <Text dimColor>{`Reviews: ${truncate(queueText, 100)}`}</Text>
+            </Box>
+            <Box paddingLeft={2}>
+              <Text color={health.color}>{truncate(health.detail, 110)}</Text>
+            </Box>
+          </Box>
+        );
+      })}
 
       <Box marginTop={1} flexDirection="column">
         <Text bold>Attempts</Text>
@@ -59,14 +79,14 @@ export function ListView({ snapshot, attempts, selectedAttemptId }: ListViewProp
       </Box>
 
       <Box marginTop={1} flexDirection="column">
-        <Text bold>Recent Webhooks</Text>
-        {visibleWebhooks.length === 0 ? (
-          <Text dimColor>No webhook deliveries yet.</Text>
+        <Text bold>Recent Activity</Text>
+        {visibleActivity.length === 0 ? (
+          <Text dimColor>No recent activity yet.</Text>
         ) : (
-          visibleWebhooks.map((event) => (
-            <Box key={event.deliveryId}>
-              <Text dimColor>{relativeTime(event.receivedAt).padStart(4, " ")}</Text>
-              <Text>{` ${truncate(webhookLabel(event), 80)}`}</Text>
+          visibleActivity.map((item) => (
+            <Box key={item.key}>
+              <Text dimColor>{item.age.padStart(4, " ")}</Text>
+              <Text>{` ${truncate(item.message, 90)}`}</Text>
             </Box>
           ))
         )}

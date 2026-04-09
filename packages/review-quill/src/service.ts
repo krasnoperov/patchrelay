@@ -16,6 +16,7 @@ import type { GitHubClient } from "./github-client.ts";
 import type { ReviewRunner } from "./review-runner.ts";
 import type { PullRequestReviewRecord } from "./types.ts";
 import { decorateAttempt, describeAttemptState, isAttemptActive } from "./attempt-state.ts";
+import { getLatestAttemptsByPullRequest } from "./attempt-summary.ts";
 import { buildReviewContext } from "./review-context.ts";
 
 // Findings below this confidence score are dropped before posting.
@@ -282,9 +283,10 @@ export class ReviewQuillService {
 
   getWatchSnapshot(): ReviewQuillWatchSnapshot {
     const attempts = this.store.listAttempts(60).map((attempt) => this.decorateAttempt(attempt));
+    const latestAttempts = getLatestAttemptsByPullRequest(attempts);
     const recentWebhooks = this.store.listWebhooks(25);
     const repos = this.config.repositories.map((repo) => {
-      const repoAttempts = attempts.filter((attempt) => attempt.repoFullName === repo.repoFullName);
+      const repoAttempts = latestAttempts.filter((attempt) => attempt.repoFullName === repo.repoFullName);
       const latestAttempt = repoAttempts[0];
       return {
         repoId: repo.repoId,
@@ -303,11 +305,11 @@ export class ReviewQuillService {
     return {
       summary: {
         totalRepos: repos.length,
-        totalAttempts: attempts.length,
-        queuedAttempts: attempts.filter((attempt) => attempt.status === "queued").length,
-        runningAttempts: attempts.filter((attempt) => attempt.status === "running").length,
-        completedAttempts: attempts.filter((attempt) => attempt.status === "completed").length,
-        failedAttempts: attempts.filter((attempt) => attempt.status === "failed").length,
+        totalAttempts: latestAttempts.length,
+        queuedAttempts: latestAttempts.filter((attempt) => attempt.status === "queued").length,
+        runningAttempts: latestAttempts.filter((attempt) => attempt.status === "running").length,
+        completedAttempts: latestAttempts.filter((attempt) => attempt.status === "completed").length,
+        failedAttempts: latestAttempts.filter((attempt) => attempt.status === "failed").length,
       },
       runtime: { ...this.runtime },
       repos,

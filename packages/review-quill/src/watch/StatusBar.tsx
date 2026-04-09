@@ -31,9 +31,10 @@ export function StatusBar({ snapshot, connected, filter, lastSnapshotReceivedAt 
 
   const left = [
     "review-quill",
-    `${snapshot.summary.runningAttempts} running`,
+    `${snapshot.summary.runningAttempts} active`,
     `${snapshot.summary.queuedAttempts} queued`,
     `${snapshot.summary.failedAttempts} failed`,
+    "runner serial",
     `reconcile ${runtimeLabel(snapshot.runtime)}`,
     `last ${relativeTime(snapshot.runtime.lastReconcileCompletedAt ?? snapshot.runtime.lastReconcileStartedAt)}`,
     filter,
