@@ -1,7 +1,7 @@
 import type { Logger } from "pino";
 import type { CodexThreadSummary } from "./types.ts";
 import type { IssueRecord, RunRecord } from "./db-types.ts";
-import type { FactoryState, RunType } from "./factory-state.ts";
+import type { FactoryState } from "./factory-state.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { ReleaseIssueSessionLease, WithHeldIssueSessionLease } from "./issue-session-lease-service.ts";
 import type { LinearSessionSync } from "./linear-session-sync.ts";
@@ -9,13 +9,7 @@ import type { OperatorEventFeed } from "./operator-feed.ts";
 import { buildStageReport, countEventMethods } from "./run-reporting.ts";
 import type { AppendWakeEventWithLease } from "./run-wake-planner.ts";
 import { buildRunCompletedActivity, buildRunFailureActivity } from "./linear-session-reporting.ts";
-
-interface PostRunFollowUp {
-  pendingRunType: RunType;
-  factoryState: FactoryState;
-  context?: Record<string, unknown> | undefined;
-  summary: string;
-}
+import { RunCompletionPolicy, resolveCompletedRunState } from "./run-completion-policy.ts";
 
 export class RunFinalizer {
   constructor(
@@ -27,6 +21,7 @@ export class RunFinalizer {
     private readonly releaseLease: ReleaseIssueSessionLease,
     private readonly appendWakeEventWithLease: AppendWakeEventWithLease,
     private readonly failRunAndClear: (run: RunRecord, message: string, nextState?: FactoryState) => void,
+    private readonly completionPolicy: RunCompletionPolicy,
     private readonly feed?: OperatorEventFeed,
   ) {}
 
@@ -37,12 +32,6 @@ export class RunFinalizer {
     thread: CodexThreadSummary;
     threadId: string;
     completedTurnId?: string;
-    verifyReactiveRunAdvancedBranch: (run: RunRecord, issue: IssueRecord) => Promise<string | undefined>;
-    verifyReviewFixAdvancedHead: (run: RunRecord, issue: IssueRecord) => Promise<string | undefined>;
-    verifyPublishedRunOutcome: (run: RunRecord, issue: IssueRecord) => Promise<string | undefined>;
-    refreshIssueAfterReactivePublish: (run: RunRecord, issue: IssueRecord) => Promise<IssueRecord>;
-    resolvePostRunFollowUp: (run: Pick<RunRecord, "runType" | "projectId">, issue: IssueRecord) => Promise<PostRunFollowUp | undefined>;
-    resolveCompletedRunState: (issue: IssueRecord, run: Pick<RunRecord, "runType" | "promptText">) => FactoryState | undefined;
     resolveRecoverableRunState: (issue: IssueRecord) => FactoryState | undefined;
   }): Promise<void> {
     const { run, issue, thread, threadId } = params;
@@ -55,7 +44,7 @@ export class RunFinalizer {
     );
 
     const freshIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue;
-    const verifiedRepairError = await params.verifyReactiveRunAdvancedBranch(run, freshIssue);
+    const verifiedRepairError = await this.completionPolicy.verifyReactiveRunAdvancedBranch(run, freshIssue);
     if (verifiedRepairError) {
       const holdState = params.resolveRecoverableRunState(freshIssue) ?? "failed";
       this.failRunAndClear(run, verifiedRepairError, holdState);
@@ -76,7 +65,7 @@ export class RunFinalizer {
       return;
     }
 
-    const missingReviewFixHeadError = await params.verifyReviewFixAdvancedHead(run, freshIssue);
+    const missingReviewFixHeadError = await this.completionPolicy.verifyReviewFixAdvancedHead(run, freshIssue);
     if (missingReviewFixHeadError) {
       this.failRunAndClear(run, missingReviewFixHeadError, "escalated");
       const failedIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? freshIssue;
@@ -96,7 +85,7 @@ export class RunFinalizer {
       return;
     }
 
-    const publishedOutcomeError = await params.verifyPublishedRunOutcome(run, freshIssue);
+    const publishedOutcomeError = await this.completionPolicy.verifyPublishedRunOutcome(run, freshIssue);
     if (publishedOutcomeError) {
       this.failRunAndClear(run, publishedOutcomeError, "failed");
       const failedIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? freshIssue;
@@ -118,9 +107,9 @@ export class RunFinalizer {
       return;
     }
 
-    const refreshedIssue = await params.refreshIssueAfterReactivePublish(run, freshIssue);
-    const postRunFollowUp = await params.resolvePostRunFollowUp(run, refreshedIssue);
-    const postRunState = postRunFollowUp?.factoryState ?? params.resolveCompletedRunState(refreshedIssue, run);
+    const refreshedIssue = await this.completionPolicy.refreshIssueAfterReactivePublish(run, freshIssue);
+    const postRunFollowUp = await this.completionPolicy.resolvePostRunFollowUp(run, refreshedIssue);
+    const postRunState = postRunFollowUp?.factoryState ?? resolveCompletedRunState(refreshedIssue, run);
 
     const completed = this.withHeldLease(run.projectId, run.linearIssueId, (lease) => {
       this.db.runs.finishRun(run.id, {

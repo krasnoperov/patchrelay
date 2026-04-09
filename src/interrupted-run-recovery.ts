@@ -6,6 +6,7 @@ import type { ReleaseIssueSessionLease, WithHeldIssueSessionLease } from "./issu
 import { buildRunFailureActivity } from "./linear-session-reporting.ts";
 import type { LinearSessionSync } from "./linear-session-sync.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
+import { RunCompletionPolicy } from "./run-completion-policy.ts";
 import { deriveIssueSessionReactiveIntent } from "./issue-session.ts";
 
 function isRequestedChangesRunType(runType: RunType): boolean {
@@ -59,12 +60,7 @@ export class InterruptedRunRecovery {
     private readonly releaseLease: ReleaseIssueSessionLease,
     private readonly failRunAndClear: (run: RunRecord, message: string, nextState?: FactoryState) => void,
     private readonly restoreIdleWorktree: (issue: IssueRecord) => Promise<void>,
-    private readonly refreshIssueAfterReactivePublish: (run: RunRecord, issue: IssueRecord) => Promise<IssueRecord>,
-    private readonly resolveRequestedChangesWakeContext: (
-      issue: IssueRecord,
-      runType: RunType,
-      context: Record<string, unknown> | undefined,
-    ) => Promise<Record<string, unknown> | undefined>,
+    private readonly completionPolicy: RunCompletionPolicy,
     private readonly enqueueIssue: (projectId: string, issueId: string) => void,
     private readonly feed?: OperatorEventFeed,
   ) {}
@@ -133,8 +129,8 @@ export class InterruptedRunRecovery {
 
   private async handleInterruptedRequestedChangesRun(run: RunRecord, issue: IssueRecord): Promise<void> {
     const freshIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue;
-    const refreshedIssue = await this.refreshIssueAfterReactivePublish(run, freshIssue);
-    const retryContext = await this.resolveRequestedChangesWakeContext(
+    const refreshedIssue = await this.completionPolicy.refreshIssueAfterReactivePublish(run, freshIssue);
+    const retryContext = await this.completionPolicy.resolveRequestedChangesWakeContext(
       refreshedIssue,
       run.runType,
       run.runType === "branch_upkeep"

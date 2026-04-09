@@ -21,14 +21,11 @@ import { execCommand } from "./utils.ts";
 import { getThreadTurns } from "./codex-thread-utils.ts";
 import { deriveIssueSessionReactiveIntent } from "./issue-session.ts";
 import { QueueHealthMonitor } from "./queue-health-monitor.ts";
-import {
-  resolveImplementationDeliveryMode,
-} from "./prompting/patchrelay.ts";
-import type { ImplementationDeliveryMode } from "./prompting/patchrelay.ts";
 import { IdleIssueReconciler, resolveBranchOwnerForStateTransition } from "./idle-reconciliation.ts";
 import { LinearSessionSync } from "./linear-session-sync.ts";
 import { IssueSessionLeaseService } from "./issue-session-lease-service.ts";
 import { InterruptedRunRecovery, resolveRecoverablePostRunState } from "./interrupted-run-recovery.ts";
+import { RunCompletionPolicy } from "./run-completion-policy.ts";
 import { RunFinalizer } from "./run-finalizer.ts";
 import { RunLauncher } from "./run-launcher.ts";
 import { RunRecoveryService } from "./run-recovery-service.ts";
@@ -40,24 +37,6 @@ function lowerCaseFirst(value: string): string {
 
 function isRequestedChangesRunType(runType: RunType): boolean {
   return runType === "review_fix" || runType === "branch_upkeep";
-}
-
-interface RemotePrState {
-  headRefOid?: string;
-  state?: string;
-  reviewDecision?: string;
-  mergeStateStatus?: string;
-}
-
-interface PostRunFollowUp {
-  pendingRunType: RunType;
-  factoryState: FactoryState;
-  context?: Record<string, unknown> | undefined;
-  summary: string;
-}
-
-function isBranchUpkeepRequired(context: Record<string, unknown> | undefined): boolean {
-  return context?.branchUpkeepRequired === true;
 }
 
 export class RunOrchestrator {
@@ -74,6 +53,7 @@ export class RunOrchestrator {
   private readonly runRecovery: RunRecoveryService;
   private readonly runWakePlanner: RunWakePlanner;
   private readonly interruptedRunRecovery: InterruptedRunRecovery;
+  private readonly runCompletionPolicy: RunCompletionPolicy;
   readonly activeSessionLeases: Map<string, string>;
   botIdentity?: GitHubAppBotIdentity;
 
@@ -95,6 +75,12 @@ export class RunOrchestrator {
       (threadId, maxRetries) => this.readThreadWithRetry(threadId, maxRetries),
     );
     this.activeSessionLeases = this.leaseService.activeSessionLeases;
+    this.runCompletionPolicy = new RunCompletionPolicy(
+      config,
+      db,
+      logger,
+      (projectId, linearIssueId, fn) => this.withHeldIssueSessionLease(projectId, linearIssueId, fn),
+    );
     this.runFinalizer = new RunFinalizer(
       db,
       logger,
@@ -104,6 +90,7 @@ export class RunOrchestrator {
       (projectId, linearIssueId) => this.releaseIssueSessionLease(projectId, linearIssueId),
       (lease, issue, runType, context, dedupeScope) => this.appendWakeEventWithLease(lease, issue, runType, context, dedupeScope),
       (run, message, nextState) => this.failRunAndClear(run, message, nextState),
+      this.runCompletionPolicy,
       feed,
     );
     this.runLauncher = new RunLauncher(config, db, codex, logger, this.worktreeManager);
@@ -127,11 +114,7 @@ export class RunOrchestrator {
       (projectId, linearIssueId) => this.releaseIssueSessionLease(projectId, linearIssueId),
       (run, message, nextState) => this.failRunAndClear(run, message, nextState),
       (issue) => this.restoreIdleWorktree(issue),
-      (run, issue) => this.refreshIssueAfterReactivePublish(run, issue),
-      async (issue, runType, context) => {
-        const project = this.config.projects.find((entry) => entry.id === issue.projectId);
-        return project ? await this.resolveRequestedChangesWakeContext(issue, runType, context, project) : context;
-      },
+      this.runCompletionPolicy,
       (projectId, issueId) => this.enqueueIssue(projectId, issueId),
       feed,
     );
@@ -203,7 +186,7 @@ export class RunOrchestrator {
     }
     const { runType, context, resumeThread } = wake;
     const effectiveContext = isRequestedChangesRunType(runType)
-      ? await this.resolveRequestedChangesWakeContext(issue, runType, context, project)
+      ? await this.runCompletionPolicy.resolveRequestedChangesWakeContext(issue, runType, context)
       : context;
     const sourceHeadSha = typeof effectiveContext?.failureHeadSha === "string"
       ? effectiveContext.failureHeadSha
@@ -543,12 +526,6 @@ export class RunOrchestrator {
       thread,
       threadId,
       ...(completedTurnId ? { completedTurnId } : {}),
-      verifyReactiveRunAdvancedBranch: (targetRun, targetIssue) => this.verifyReactiveRunAdvancedBranch(targetRun, targetIssue),
-      verifyReviewFixAdvancedHead: (targetRun, targetIssue) => this.verifyReviewFixAdvancedHead(targetRun, targetIssue),
-      verifyPublishedRunOutcome: (targetRun, targetIssue) => this.verifyPublishedRunOutcome(targetRun, targetIssue),
-      refreshIssueAfterReactivePublish: (targetRun, targetIssue) => this.refreshIssueAfterReactivePublish(targetRun, targetIssue),
-      resolvePostRunFollowUp: (targetRun, targetIssue) => this.resolvePostRunFollowUp(targetRun, targetIssue),
-      resolveCompletedRunState,
       resolveRecoverableRunState: resolveRecoverablePostRunState,
     });
     this.activeThreadId = undefined;
@@ -771,12 +748,6 @@ export class RunOrchestrator {
         thread,
         threadId: run.threadId,
         ...(latestTurn.id ? { completedTurnId: latestTurn.id } : {}),
-        verifyReactiveRunAdvancedBranch: (targetRun, targetIssue) => this.verifyReactiveRunAdvancedBranch(targetRun, targetIssue),
-        verifyReviewFixAdvancedHead: (targetRun, targetIssue) => this.verifyReviewFixAdvancedHead(targetRun, targetIssue),
-        verifyPublishedRunOutcome: (targetRun, targetIssue) => this.verifyPublishedRunOutcome(targetRun, targetIssue),
-        refreshIssueAfterReactivePublish: (targetRun, targetIssue) => this.refreshIssueAfterReactivePublish(targetRun, targetIssue),
-        resolvePostRunFollowUp: (targetRun, targetIssue) => this.resolvePostRunFollowUp(targetRun, targetIssue),
-        resolveCompletedRunState,
         resolveRecoverableRunState: resolveRecoverablePostRunState,
       });
       return;
@@ -807,398 +778,13 @@ export class RunOrchestrator {
     return resolveBranchOwnerForStateTransition(newState, pendingRunType);
   }
 
-  private async verifyReactiveRunAdvancedBranch(run: RunRecord, issue: IssueRecord): Promise<string | undefined> {
-    if (run.runType !== "ci_repair" && run.runType !== "queue_repair") {
-      return undefined;
-    }
-    if (!issue.prNumber || issue.prState !== "open" || !issue.lastGitHubFailureHeadSha) {
-      return undefined;
-    }
-    const project = this.config.projects.find((entry) => entry.id === run.projectId);
-    if (!project?.github?.repoFullName) {
-      return undefined;
-    }
-    try {
-      const pr = await this.loadRemotePrState(project.github.repoFullName, issue.prNumber);
-      if (!pr || pr.state?.toUpperCase() !== "OPEN") return undefined;
-      if (!pr.headRefOid || pr.headRefOid !== issue.lastGitHubFailureHeadSha) return undefined;
-      return `Repair finished but PR #${issue.prNumber} is still on failing head ${issue.lastGitHubFailureHeadSha.slice(0, 8)}`;
-    } catch (error) {
-      this.logger.debug({
-        issueKey: issue.issueKey,
-        prNumber: issue.prNumber,
-        error: error instanceof Error ? error.message : String(error),
-      }, "Failed to verify PR head advancement after repair");
-      return undefined;
-    }
-  }
-
-  private async verifyReviewFixAdvancedHead(run: RunRecord, issue: IssueRecord): Promise<string | undefined> {
-    if (!isRequestedChangesRunType(run.runType)) {
-      return undefined;
-    }
-    if (!issue.prNumber || issue.prState !== "open") {
-      return undefined;
-    }
-    if (!run.sourceHeadSha) {
-      return `Requested-changes run finished for PR #${issue.prNumber} without a recorded starting head SHA. PatchRelay cannot verify that a new head was published.`;
-    }
-    const project = this.config.projects.find((entry) => entry.id === run.projectId);
-    if (!project?.github?.repoFullName) {
-      return undefined;
-    }
-    try {
-      const pr = await this.loadRemotePrState(project.github.repoFullName, issue.prNumber);
-      if (!pr || pr.state?.toUpperCase() !== "OPEN") return undefined;
-      if (!pr.headRefOid) {
-        return `Requested-changes run finished for PR #${issue.prNumber} but GitHub did not report a current head SHA.`;
-      }
-      if (pr.headRefOid === run.sourceHeadSha) {
-        return `Requested-changes run finished for PR #${issue.prNumber} without pushing a new head; PatchRelay must not hand the same SHA back to review.`;
-      }
-      return undefined;
-    } catch (error) {
-      this.logger.debug({
-        issueKey: issue.issueKey,
-        prNumber: issue.prNumber,
-        error: error instanceof Error ? error.message : String(error),
-      }, "Failed to verify PR head advancement after requested-changes work");
-      return undefined;
-    }
-  }
-
-  private async refreshIssueAfterReactivePublish(run: RunRecord, issue: IssueRecord): Promise<IssueRecord> {
-    if (run.runType !== "ci_repair" && run.runType !== "queue_repair" && !isRequestedChangesRunType(run.runType)) {
-      return this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue;
-    }
-    if (!issue.prNumber) {
-      return this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue;
-    }
-    const project = this.config.projects.find((entry) => entry.id === run.projectId);
-    const repoFullName = project?.github?.repoFullName;
-    if (!repoFullName) {
-      return this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue;
-    }
-
-    try {
-      const pr = await this.loadRemotePrState(repoFullName, issue.prNumber);
-      if (!pr) {
-        return this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue;
-      }
-
-      const nextPrState = normalizeRemotePrState(pr.state);
-      const nextReviewState = normalizeRemoteReviewDecision(pr.reviewDecision);
-      const gateCheckName = project?.gateChecks?.find((entry) => entry.trim())?.trim() ?? "verify";
-      const headAdvanced = Boolean(pr.headRefOid && pr.headRefOid !== issue.lastGitHubFailureHeadSha);
-      const reviewFixHeadAdvanced = isRequestedChangesRunType(run.runType)
-        && Boolean(pr.headRefOid && run.sourceHeadSha && pr.headRefOid !== run.sourceHeadSha);
-
-      this.upsertIssueIfLeaseHeld(
-        run.projectId,
-        run.linearIssueId,
-        {
-        projectId: run.projectId,
-        linearIssueId: run.linearIssueId,
-        ...(nextPrState ? { prState: nextPrState } : {}),
-        ...(pr.headRefOid ? { prHeadSha: pr.headRefOid } : {}),
-        ...(nextReviewState ? { prReviewState: nextReviewState } : {}),
-        ...((headAdvanced || reviewFixHeadAdvanced)
-          ? {
-              prCheckStatus: "pending",
-              lastGitHubFailureSource: null,
-              lastGitHubFailureHeadSha: null,
-              lastGitHubFailureSignature: null,
-              lastGitHubFailureCheckName: null,
-              lastGitHubFailureCheckUrl: null,
-              lastGitHubFailureContextJson: null,
-              lastGitHubFailureAt: null,
-              lastQueueIncidentJson: null,
-              lastAttemptedFailureHeadSha: null,
-              lastAttemptedFailureSignature: null,
-              lastGitHubCiSnapshotHeadSha: pr.headRefOid ?? null,
-              lastGitHubCiSnapshotGateCheckName: gateCheckName,
-              lastGitHubCiSnapshotGateCheckStatus: "pending",
-              lastGitHubCiSnapshotJson: null,
-              lastGitHubCiSnapshotSettledAt: null,
-            }
-          : {}),
-        },
-        "reactive publish refresh",
-      );
-    } catch (error) {
-      this.logger.debug({
-        issueKey: issue.issueKey,
-        prNumber: issue.prNumber,
-        error: error instanceof Error ? error.message : String(error),
-      }, "Failed to refresh PR state after reactive publish");
-    }
-
-    return this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue;
-  }
-
-  private async loadRemotePrState(
-    repoFullName: string,
-    prNumber: number,
-  ): Promise<RemotePrState | undefined> {
-    const { stdout, exitCode } = await execCommand("gh", [
-      "pr", "view", String(prNumber),
-      "--repo", repoFullName,
-      "--json", "headRefOid,state,reviewDecision,mergeStateStatus",
-    ], { timeoutMs: 10_000 });
-    if (exitCode !== 0) return undefined;
-    return JSON.parse(stdout) as RemotePrState;
-  }
-
   private async resolveRequestedChangesWakeContext(
     issue: IssueRecord,
     runType: RunType,
     context: Record<string, unknown> | undefined,
-    project: { github?: { repoFullName?: string; baseBranch?: string } },
   ): Promise<Record<string, unknown> | undefined> {
-    if (runType === "branch_upkeep" || isBranchUpkeepRequired(context)) {
-      return context;
-    }
-    if (!issue.prNumber || issue.prState !== "open" || issue.prReviewState !== "changes_requested") {
-      return context;
-    }
-
-    const repoFullName = project.github?.repoFullName;
-    if (!repoFullName) {
-      return context;
-    }
-
-    try {
-      const pr = await this.loadRemotePrState(repoFullName, issue.prNumber);
-      if (!pr) return context;
-
-      const nextPrState = normalizeRemotePrState(pr.state);
-      const nextReviewState = normalizeRemoteReviewDecision(pr.reviewDecision);
-      this.upsertIssueIfLeaseHeld(
-        issue.projectId,
-        issue.linearIssueId,
-        {
-        projectId: issue.projectId,
-        linearIssueId: issue.linearIssueId,
-        ...(nextPrState ? { prState: nextPrState } : {}),
-        ...(pr.headRefOid ? { prHeadSha: pr.headRefOid } : {}),
-        ...(nextReviewState ? { prReviewState: nextReviewState } : {}),
-        },
-        "review-fix wake refresh",
-      );
-
-      if (nextPrState !== "open") return context;
-      if (nextReviewState && nextReviewState !== "changes_requested") return context;
-      if (!isDirtyMergeStateStatus(pr.mergeStateStatus)) return context;
-
-      return buildReviewFixBranchUpkeepContext(
-        issue.prNumber,
-        project.github?.baseBranch ?? "main",
-        pr,
-        context,
-      );
-    } catch (error) {
-      this.logger.debug({
-        issueKey: issue.issueKey,
-        prNumber: issue.prNumber,
-        error: error instanceof Error ? error.message : String(error),
-      }, "Failed to resolve requested-changes wake context");
-      return context;
-    }
+    return await this.runCompletionPolicy.resolveRequestedChangesWakeContext(issue, runType, context);
   }
-
-  private async resolvePostRunFollowUp(
-    run: Pick<RunRecord, "runType" | "projectId">,
-    issue: IssueRecord,
-    projectOverride?: { github?: { repoFullName?: string; baseBranch?: string } } | undefined,
-  ): Promise<PostRunFollowUp | undefined> {
-    if (run.runType !== "review_fix") {
-      return undefined;
-    }
-    if (!issue.prNumber || issue.prState !== "open") {
-      return undefined;
-    }
-    if (issue.prReviewState !== "changes_requested") {
-      return undefined;
-    }
-
-    const project = projectOverride ?? this.config.projects.find((entry) => entry.id === run.projectId);
-    const repoFullName = project?.github?.repoFullName;
-    if (!repoFullName) {
-      return undefined;
-    }
-
-    try {
-      const pr = await this.loadRemotePrState(repoFullName, issue.prNumber);
-      if (!pr) return undefined;
-
-      const nextPrState = normalizeRemotePrState(pr.state);
-      const nextReviewState = normalizeRemoteReviewDecision(pr.reviewDecision);
-      this.upsertIssueIfLeaseHeld(
-        issue.projectId,
-        issue.linearIssueId,
-        {
-        projectId: issue.projectId,
-        linearIssueId: issue.linearIssueId,
-        ...(nextPrState ? { prState: nextPrState } : {}),
-        ...(pr.headRefOid ? { prHeadSha: pr.headRefOid } : {}),
-        ...(nextReviewState ? { prReviewState: nextReviewState } : {}),
-        },
-        "post-run follow-up refresh",
-      );
-
-      if (nextPrState !== "open") return undefined;
-      if (nextReviewState && nextReviewState !== "changes_requested") return undefined;
-      if (!isDirtyMergeStateStatus(pr.mergeStateStatus)) return undefined;
-
-      return {
-        pendingRunType: "branch_upkeep",
-        factoryState: "changes_requested",
-        context: buildReviewFixBranchUpkeepContext(
-          issue.prNumber,
-          project?.github?.baseBranch ?? "main",
-          pr,
-        ),
-        summary: `PR #${issue.prNumber} is still dirty after review fix; queued branch upkeep`,
-      };
-    } catch (error) {
-      this.logger.debug({
-        issueKey: issue.issueKey,
-        prNumber: issue.prNumber,
-        error: error instanceof Error ? error.message : String(error),
-      }, "Failed to resolve post-run PR upkeep");
-      return undefined;
-    }
-  }
-
-  private async verifyPublishedRunOutcome(
-    run: RunRecord,
-    issue: IssueRecord,
-    projectOverride?: { github?: { repoFullName?: string; baseBranch?: string } } | undefined,
-  ): Promise<string | undefined> {
-    if (run.runType !== "implementation") {
-      return undefined;
-    }
-    const project = projectOverride ?? this.config.projects.find((entry) => entry.id === run.projectId);
-    const baseBranch = project?.github?.baseBranch ?? "main";
-    const deliveryMode = resolveImplementationDeliveryMode(issue, undefined, run.promptText);
-    if (deliveryMode === "linear_only") {
-      if (issue.prNumber !== undefined) {
-        return `Planning-only implementation should not open a PR, but PR #${issue.prNumber} was observed`;
-      }
-      return this.describeLocalImplementationOutcome(issue, baseBranch, deliveryMode);
-    }
-    if (issue.prNumber && issue.prState && issue.prState !== "closed") {
-      return undefined;
-    }
-
-    if (project?.github?.repoFullName && issue.branchName) {
-      try {
-        const { stdout, exitCode } = await execCommand("gh", [
-          "pr",
-          "list",
-          "--repo",
-          project.github.repoFullName,
-          "--head",
-          issue.branchName,
-          "--state",
-          "all",
-          "--json",
-          "number,url,state,author,headRefOid",
-        ], { timeoutMs: 10_000 });
-        if (exitCode === 0) {
-          const matches = JSON.parse(stdout) as Array<{
-            number?: number;
-            url?: string;
-            state?: string;
-            headRefOid?: string;
-            author?: { login?: string };
-          }>;
-          const pr = matches[0];
-          if (pr?.number) {
-            this.upsertIssueIfLeaseHeld(
-              issue.projectId,
-              issue.linearIssueId,
-              {
-              projectId: issue.projectId,
-              linearIssueId: issue.linearIssueId,
-              prNumber: pr.number,
-              ...(pr.url ? { prUrl: pr.url } : {}),
-              ...(pr.state ? { prState: pr.state.toLowerCase() } : {}),
-              ...(pr.headRefOid ? { prHeadSha: pr.headRefOid } : {}),
-              ...(pr.author?.login ? { prAuthorLogin: pr.author.login } : {}),
-              },
-              "published PR verification refresh",
-            );
-            return undefined;
-          }
-        }
-      } catch (error) {
-        this.logger.debug({
-          issueKey: issue.issueKey,
-          branchName: issue.branchName,
-          repoFullName: project.github.repoFullName,
-          error: error instanceof Error ? error.message : String(error),
-        }, "Failed to verify published PR state after implementation");
-      }
-    }
-
-    const details = await this.describeLocalImplementationOutcome(issue, baseBranch, deliveryMode);
-    return details ?? `Implementation completed without opening a PR for branch ${issue.branchName ?? issue.linearIssueId}`;
-  }
-
-  private async describeLocalImplementationOutcome(
-    issue: IssueRecord,
-    baseBranch: string,
-    deliveryMode: ImplementationDeliveryMode = "publish_pr",
-  ): Promise<string | undefined> {
-    if (!issue.worktreePath) {
-      return undefined;
-    }
-
-    try {
-      const status = await execCommand(this.config.runner.gitBin, [
-        "-C",
-        issue.worktreePath,
-        "status",
-        "--short",
-      ], { timeoutMs: 10_000 });
-      const dirtyEntries = status.exitCode === 0
-        ? status.stdout.split("\n").map((line) => line.trim()).filter(Boolean)
-        : [];
-      if (dirtyEntries.length > 0) {
-        if (deliveryMode === "linear_only") {
-          return `Planning-only implementation should not modify the repo; worktree still has ${dirtyEntries.length} uncommitted change(s)`;
-        }
-        return `Implementation completed without opening a PR; worktree still has ${dirtyEntries.length} uncommitted change(s)`;
-      }
-    } catch {
-      // Best effort only.
-    }
-
-    try {
-      const ahead = await execCommand(this.config.runner.gitBin, [
-        "-C",
-        issue.worktreePath,
-        "rev-list",
-        "--count",
-        `origin/${baseBranch}..HEAD`,
-      ], { timeoutMs: 10_000 });
-      if (ahead.exitCode === 0) {
-        const count = Number(ahead.stdout.trim());
-        if (Number.isFinite(count) && count > 0) {
-          if (deliveryMode === "linear_only") {
-            return `Planning-only implementation should not create repo commits; worktree is ${count} local commit(s) ahead of origin/${baseBranch}`;
-          }
-          return `Implementation completed with ${count} local commit(s) ahead of origin/${baseBranch} but no PR was observed`;
-        }
-      }
-    } catch {
-      // Best effort only.
-    }
-
-    return undefined;
-  }
-
 
   private async readThreadWithRetry(threadId: string, maxRetries = 3): Promise<CodexThreadSummary> {
     for (let attempt = 0; attempt < maxRetries; attempt++) {
@@ -1277,70 +863,4 @@ export class RunOrchestrator {
   private releaseIssueSessionLease(projectId: string, linearIssueId: string): void {
     this.leaseService.release(projectId, linearIssueId);
   }
-}
-
-/**
- * Determine post-run factory state from current PR metadata.
- * Used by both the normal completion path and reconciliation.
- */
-function resolvePostRunState(issue: IssueRecord): FactoryState | undefined {
-  if (ACTIVE_RUN_STATES.has(issue.factoryState) && issue.prNumber) {
-    // Check merged first — a merged PR is both approved and merged,
-    // and "done" must take priority over "awaiting_queue".
-    if (issue.prState === "merged") return "done";
-    if (issue.prReviewState === "approved") return "awaiting_queue";
-    return "pr_open";
-  }
-  return undefined;
-}
-
-function resolveCompletedRunState(issue: IssueRecord, run: Pick<RunRecord, "runType" | "promptText">): FactoryState | undefined {
-  if (run.runType === "implementation" && resolveImplementationDeliveryMode(issue, undefined, run.promptText) === "linear_only") {
-    return "done";
-  }
-  return resolvePostRunState(issue);
-}
-
-function normalizeRemotePrState(value: string | undefined): "open" | "closed" | "merged" | undefined {
-  const normalized = value?.trim().toUpperCase();
-  if (normalized === "OPEN") return "open";
-  if (normalized === "CLOSED") return "closed";
-  if (normalized === "MERGED") return "merged";
-  return undefined;
-}
-
-function normalizeRemoteReviewDecision(value: string | undefined): "approved" | "changes_requested" | "commented" | undefined {
-  const normalized = value?.trim().toUpperCase();
-  if (normalized === "APPROVED") return "approved";
-  if (normalized === "CHANGES_REQUESTED") return "changes_requested";
-  if (normalized === "REVIEW_REQUIRED") return "commented";
-  return undefined;
-}
-
-function isDirtyMergeStateStatus(value: string | undefined): boolean {
-  return value?.trim().toUpperCase() === "DIRTY";
-}
-
-function buildReviewFixBranchUpkeepContext(
-  prNumber: number,
-  baseBranch: string,
-  pr: RemotePrState,
-  context?: Record<string, unknown>,
-): Record<string, unknown> {
-  const promptContext = [
-    `The requested code change may already be present, but GitHub still reports PR #${prNumber} as ${String(pr.mergeStateStatus)} against latest ${baseBranch}.`,
-    `This turn is branch upkeep on the existing PR branch: update onto latest ${baseBranch}, resolve any conflicts, rerun the narrowest relevant verification, and push a newer head.`,
-    "Do not stop just because the requested code change is already present. Review can only move forward after a new pushed head.",
-  ].join(" ");
-
-  return {
-    ...(context ?? {}),
-    branchUpkeepRequired: true,
-    reviewFixMode: "branch_upkeep",
-    wakeReason: "branch_upkeep",
-    promptContext,
-    ...(pr.mergeStateStatus ? { mergeStateStatus: pr.mergeStateStatus } : {}),
-    ...(pr.headRefOid ? { failingHeadSha: pr.headRefOid } : {}),
-    baseBranch,
-  };
 }
