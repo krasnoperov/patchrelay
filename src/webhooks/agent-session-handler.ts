@@ -51,25 +51,25 @@ export class AgentSessionHandler {
     const linear = await this.linearProvider.forProject(project.id);
     if (!linear) return;
 
-    const existingIssue = this.db.getIssue(project.id, normalized.issue.id);
+    const existingIssue = this.db.issues.getIssue(project.id, normalized.issue.id);
     const activeRun = existingIssue?.activeRunId ? this.db.runs.getRunById(existingIssue.activeRunId) : undefined;
 
     if (normalized.triggerEvent === "agentSessionCreated") {
       if (!delegated) {
-        const latestIssue = this.db.getIssue(project.id, normalized.issue.id);
+        const latestIssue = this.db.issues.getIssue(project.id, normalized.issue.id);
         if (latestIssue ?? trackedIssue) {
           await this.syncAgentSession(linear, normalized.agentSession.id, latestIssue ?? trackedIssue, params.peekPendingSessionWakeRunType);
         }
         return;
       }
       if (wakeRunType) {
-        const latestIssue = this.db.getIssue(project.id, normalized.issue.id);
+        const latestIssue = this.db.issues.getIssue(project.id, normalized.issue.id);
         await this.syncAgentSession(linear, normalized.agentSession.id, latestIssue ?? trackedIssue, params.peekPendingSessionWakeRunType, { pendingRunType: wakeRunType });
         await this.publishAgentActivity(linear, normalized.agentSession.id, buildDelegationThought(wakeRunType));
         return;
       }
       if (activeRun) {
-        const latestIssue = this.db.getIssue(project.id, normalized.issue.id);
+        const latestIssue = this.db.issues.getIssue(project.id, normalized.issue.id);
         await this.syncAgentSession(linear, normalized.agentSession.id, latestIssue ?? trackedIssue, params.peekPendingSessionWakeRunType, { activeRunType: activeRun.runType });
         await this.publishAgentActivity(linear, normalized.agentSession.id, buildAlreadyRunningThought(activeRun.runType));
         return;
@@ -145,7 +145,7 @@ export class AgentSessionHandler {
       const queuedRunType = hadPendingWake
         ? params.peekPendingSessionWakeRunType(project.id, normalized.issue.id)
         : params.enqueuePendingSessionWake(project.id, normalized.issue.id);
-      const latestIssue = this.db.getIssue(project.id, normalized.issue.id);
+      const latestIssue = this.db.issues.getIssue(project.id, normalized.issue.id);
       await this.syncAgentSession(
         linear,
         normalized.agentSession.id,
@@ -158,7 +158,7 @@ export class AgentSessionHandler {
     }
 
     if (wakeRunType) {
-      const latestIssue = this.db.getIssue(project.id, normalized.issue.id);
+      const latestIssue = this.db.issues.getIssue(project.id, normalized.issue.id);
       await this.syncAgentSession(linear, normalized.agentSession.id, latestIssue ?? trackedIssue, params.peekPendingSessionWakeRunType, { pendingRunType: wakeRunType });
       await this.publishAgentActivity(linear, normalized.agentSession.id, buildDelegationThought(wakeRunType, "prompt"), { ephemeral: true });
     }
@@ -218,7 +218,7 @@ export class AgentSessionHandler {
       summary: "Stop signal received - work halted",
     });
 
-    const updatedIssue = this.db.getIssue(params.project.id, issueId);
+    const updatedIssue = this.db.issues.getIssue(params.project.id, issueId);
     await this.publishAgentActivity(params.linear, sessionId, buildStopConfirmationActivity());
     await params.syncAgentSession(sessionId, updatedIssue ?? params.trackedIssue);
   }

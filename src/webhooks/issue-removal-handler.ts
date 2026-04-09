@@ -17,7 +17,7 @@ export class IssueRemovalHandler {
   }): Promise<void> {
     if (!params.trackedIssue) return;
 
-    const removedIssue = this.db.getIssue(params.projectId, params.issue.id);
+    const removedIssue = this.db.issues.getIssue(params.projectId, params.issue.id);
     const activeLease = this.db.issueSessions.getActiveIssueSessionLease(params.projectId, params.issue.id);
     const commitRemoval = () => {
       if (removedIssue?.activeRunId) {
@@ -25,7 +25,7 @@ export class IssueRemovalHandler {
         if (run) {
           this.db.runs.finishRun(run.id, { status: "released", failureReason: "Issue removed from Linear" });
         }
-        return this.db.upsertIssue({
+        return this.db.issues.upsertIssue({
           projectId: params.projectId,
           linearIssueId: params.issue.id,
           activeRunId: null,
@@ -34,7 +34,7 @@ export class IssueRemovalHandler {
         });
       }
       if (removedIssue && !TERMINAL_STATES.has(removedIssue.factoryState)) {
-        return this.db.upsertIssue({
+        return this.db.issues.upsertIssue({
           projectId: params.projectId,
           linearIssueId: params.issue.id,
           pendingRunType: null,

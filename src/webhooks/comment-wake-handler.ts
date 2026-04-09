@@ -39,7 +39,7 @@ export class CommentWakeHandler {
     }
     if (!triggerEventAllowed(project, normalized.triggerEvent)) return;
 
-    const issue = this.db.getIssue(project.id, normalized.issue.id);
+    const issue = this.db.issues.getIssue(project.id, normalized.issue.id);
     if (!issue) return;
     const trimmedBody = normalized.comment.body.trim();
 

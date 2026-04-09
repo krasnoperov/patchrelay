@@ -241,7 +241,7 @@ export class PatchRelayService {
   }
 
   private async syncKnownAgentSessions(): Promise<void> {
-    for (const issue of this.db.listIssues()) {
+    for (const issue of this.db.issues.listIssues()) {
       if (issue.factoryState === "done") {
         continue;
       }
@@ -250,7 +250,7 @@ export class PatchRelayService {
         : (() => {
             const recoveredAgentSessionId = this.db.webhookEvents.findLatestAgentSessionIdForIssue(issue.linearIssueId);
             return recoveredAgentSessionId
-              ? this.db.upsertIssue({
+              ? this.db.issues.upsertIssue({
                   projectId: issue.projectId,
                   linearIssueId: issue.linearIssueId,
                   agentSessionId: recoveredAgentSessionId,
@@ -266,7 +266,7 @@ export class PatchRelayService {
   }
 
   private async recoverDelegatedIssueStateFromLinear(): Promise<void> {
-    for (const issue of this.db.listIssuesWithAgentSessions()) {
+    for (const issue of this.db.issues.listIssuesWithAgentSessions()) {
       if (issue.factoryState === "done" || issue.activeRunId !== undefined) {
         continue;
       }
@@ -284,7 +284,7 @@ export class PatchRelayService {
         continue;
       }
 
-      this.db.replaceIssueDependencies({
+      this.db.issues.replaceIssueDependencies({
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         blockers: liveIssue.blockedBy.map((blocker) => ({
@@ -297,13 +297,13 @@ export class PatchRelayService {
       });
 
       const delegated = liveIssue.delegateId === installation.actorId;
-      const unresolvedBlockers = this.db.countUnresolvedBlockers(issue.projectId, issue.linearIssueId);
+      const unresolvedBlockers = this.db.issues.countUnresolvedBlockers(issue.projectId, issue.linearIssueId);
       const shouldRecoverAwaitingInput =
         delegated
         && issue.factoryState === "awaiting_input"
         && this.db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId) === undefined;
 
-      const updated = this.db.upsertIssue({
+      const updated = this.db.issues.upsertIssue({
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         ...(liveIssue.identifier ? { issueKey: liveIssue.identifier } : {}),
@@ -644,7 +644,7 @@ export class PatchRelayService {
     text: string,
     source: string = "watch",
   ): Promise<{ delivered: boolean; queued?: boolean } | { error: string } | undefined> {
-    const issue = this.db.getIssueByKey(issueKey);
+    const issue = this.db.issues.getIssueByKey(issueKey);
     if (!issue) return undefined;
 
     // Publish to operator feed so all clients see the prompt
@@ -699,7 +699,7 @@ export class PatchRelayService {
   }
 
   async stopIssue(issueKey: string): Promise<{ stopped: boolean } | { error: string } | undefined> {
-    const issue = this.db.getIssueByKey(issueKey);
+    const issue = this.db.issues.getIssueByKey(issueKey);
     if (!issue) return undefined;
     if (!issue.activeRunId) return { error: "No active run to stop" };
 
@@ -743,7 +743,7 @@ export class PatchRelayService {
   }
 
   retryIssue(issueKey: string): { issueKey: string; runType: string } | { error: string } | undefined {
-    const issue = this.db.getIssueByKey(issueKey);
+    const issue = this.db.issues.getIssueByKey(issueKey);
     if (!issue) return undefined;
     if (issue.activeRunId) return { error: "Issue already has an active run" };
     const issueSession = this.db.issueSessions.getIssueSession(issue.projectId, issue.linearIssueId);
