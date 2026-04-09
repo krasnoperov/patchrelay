@@ -4,7 +4,6 @@ import type { CodexAppServerClient, CodexNotification } from "./codex-app-server
 import type { PatchRelayDatabase } from "./db.ts";
 import type { BranchOwner, IssueRecord, RunRecord } from "./db-types.ts";
 import { ACTIVE_RUN_STATES, TERMINAL_STATES, type FactoryState, type RunType } from "./factory-state.ts";
-import { buildHookEnv, runProjectHook } from "./hook-runner.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import { extractTurnId, resolveRunCompletionStatus, summarizeCurrentThread } from "./run-reporting.ts";
 import {
@@ -21,33 +20,18 @@ import { resolveAuthoritativeLinearStopState, resolvePreferredCompletedLinearSta
 import { execCommand } from "./utils.ts";
 import { getThreadTurns } from "./codex-thread-utils.ts";
 import { deriveIssueSessionReactiveIntent } from "./issue-session.ts";
-import { loadPatchRelayRepoPrompting } from "./patchrelay-customization.ts";
 import { QueueHealthMonitor } from "./queue-health-monitor.ts";
 import {
-  buildRunPrompt as buildPatchRelayRunPrompt,
-  findDisallowedPatchRelayPromptSectionIds,
-  findUnknownPatchRelayPromptSectionIds,
-  mergePromptCustomizationLayers,
   resolveImplementationDeliveryMode,
-  resolvePromptLayers,
 } from "./prompting/patchrelay.ts";
 import type { ImplementationDeliveryMode } from "./prompting/patchrelay.ts";
 import { IdleIssueReconciler, resolveBranchOwnerForStateTransition } from "./idle-reconciliation.ts";
 import { LinearSessionSync } from "./linear-session-sync.ts";
 import { IssueSessionLeaseService } from "./issue-session-lease-service.ts";
 import { RunFinalizer } from "./run-finalizer.ts";
+import { RunLauncher } from "./run-launcher.ts";
 import { RunRecoveryService } from "./run-recovery-service.ts";
 import { RunWakePlanner, type PendingRunWake } from "./run-wake-planner.ts";
-const MAX_THREAD_GENERATION_BEFORE_COMPACTION = 4;
-const MAX_FOLLOW_UPS_BEFORE_COMPACTION = 4;
-
-function slugify(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
-}
-
-function sanitizePathSegment(value: string): string {
-  return value.replace(/[^a-zA-Z0-9._-]+/g, "-");
-}
 
 function lowerCaseFirst(value: string): string {
   return value ? `${value.slice(0, 1).toLowerCase()}${value.slice(1)}` : value;
@@ -66,21 +50,6 @@ function resolveRequestedChangesMode(runType: RunType, context?: Record<string, 
   return context?.reviewFixMode === "branch_upkeep" || context?.branchUpkeepRequired === true
     ? "branch_upkeep"
     : "address_review_feedback";
-}
-
-function shouldCompactThread(issue: IssueRecord, threadGeneration: number | undefined, context?: Record<string, unknown>): boolean {
-  const followUpCount = typeof context?.followUpCount === "number" ? context.followUpCount : 0;
-  return issue.threadId !== undefined
-    && (threadGeneration ?? 0) >= MAX_THREAD_GENERATION_BEFORE_COMPACTION
-    && followUpCount >= MAX_FOLLOW_UPS_BEFORE_COMPACTION;
-}
-
-export function shouldReuseIssueThread(params: {
-  existingThreadId?: string | undefined;
-  compactThread: boolean;
-  resumeThread: boolean;
-}): boolean {
-  return Boolean(params.existingThreadId) && !params.compactThread && params.resumeThread;
 }
 
 interface RemotePrState {
@@ -111,6 +80,7 @@ export class RunOrchestrator {
   private readonly workerId = `patchrelay:${process.pid}`;
   private readonly leaseService: IssueSessionLeaseService;
   private readonly runFinalizer: RunFinalizer;
+  private readonly runLauncher: RunLauncher;
   private readonly runRecovery: RunRecoveryService;
   private readonly runWakePlanner: RunWakePlanner;
   readonly activeSessionLeases: Map<string, string>;
@@ -135,6 +105,7 @@ export class RunOrchestrator {
     );
     this.activeSessionLeases = this.leaseService.activeSessionLeases;
     this.runFinalizer = new RunFinalizer(db, logger, this.linearSync, this.enqueueIssue, feed);
+    this.runLauncher = new RunLauncher(config, db, codex, logger, this.worktreeManager);
     this.runRecovery = new RunRecoveryService(
       db,
       logger,
@@ -235,88 +206,25 @@ export class RunOrchestrator {
       return;
     }
 
-    const repoPrompting = loadPatchRelayRepoPrompting({
-      repoRoot: project.repoPath,
-      logger: this.logger,
-    });
-    const promptLayer = mergePromptCustomizationLayers(
-      resolvePromptLayers(this.config.prompting, runType),
-      resolvePromptLayers(repoPrompting, runType),
-    );
-    const unknownPromptSections = findUnknownPatchRelayPromptSectionIds(promptLayer);
-    if (unknownPromptSections.length > 0) {
-      this.logger.warn(
-        { issueKey: issue.issueKey, runType, unknownPromptSections },
-        "PatchRelay prompt customization references unknown section ids",
-      );
-    }
-    const disallowedPromptSections = findDisallowedPatchRelayPromptSectionIds(promptLayer);
-    if (disallowedPromptSections.length > 0) {
-      this.logger.warn(
-        { issueKey: issue.issueKey, runType, disallowedPromptSections },
-        "PatchRelay prompt customization attempted to replace non-overridable sections",
-      );
-    }
-
-    const prompt = buildPatchRelayRunPrompt({
+    const { prompt, branchName, worktreePath } = this.runLauncher.prepareLaunchPlan({
+      project,
       issue,
       runType,
-      repoPath: project.repoPath,
-      ...(effectiveContext ? { context: effectiveContext } : {}),
-      ...(promptLayer ? { promptLayer } : {}),
+      ...(effectiveContext ? { effectiveContext } : {}),
     });
 
-    // Resolve workspace
-    const issueRef = sanitizePathSegment(issue.issueKey ?? issue.linearIssueId);
-    const slug = issue.title ? slugify(issue.title) : "";
-    const branchSuffix = slug ? `${issueRef}-${slug}` : issueRef;
-    const branchName = issue.branchName ?? `${project.branchPrefix}/${branchSuffix}`;
-    const worktreePath = issue.worktreePath ?? `${project.worktreeRoot}/${issueRef}`;
-
-    // Claim the run atomically
-    const run = this.db.withIssueSessionLease(item.projectId, item.issueId, leaseId, () => {
-      const fresh = this.db.getIssue(item.projectId, item.issueId);
-      if (!fresh || fresh.activeRunId !== undefined) return undefined;
-      const wakeIssue = this.materializeLegacyPendingWake(fresh, { projectId: item.projectId, linearIssueId: item.issueId, leaseId });
-      const freshWake = this.resolveRunWake(wakeIssue);
-      if (!freshWake || freshWake.runType !== runType) return undefined;
-
-      const created = this.db.createRun({
-        issueId: fresh.id,
-        projectId: item.projectId,
-        linearIssueId: item.issueId,
-        runType,
-        ...(sourceHeadSha ? { sourceHeadSha } : {}),
-        promptText: prompt,
-      });
-      const failureHeadSha = typeof effectiveContext?.failureHeadSha === "string"
-          ? effectiveContext.failureHeadSha
-          : typeof effectiveContext?.headSha === "string" ? effectiveContext.headSha : undefined;
-      const failureSignature = typeof effectiveContext?.failureSignature === "string" ? effectiveContext.failureSignature : undefined;
-      this.db.upsertIssue({
-        projectId: item.projectId,
-        linearIssueId: item.issueId,
-        pendingRunType: null,
-        pendingRunContextJson: null,
-        activeRunId: created.id,
-        branchName,
-        worktreePath,
-        factoryState: runType === "implementation" ? "implementing"
-          : runType === "ci_repair" ? "repairing_ci"
-          : runType === "review_fix" || runType === "branch_upkeep" ? "changes_requested"
-          : runType === "queue_repair" ? "repairing_queue"
-          : "implementing",
-        ...((runType === "ci_repair" || runType === "queue_repair") && failureSignature
-          ? {
-              lastAttemptedFailureSignature: failureSignature,
-              lastAttemptedFailureHeadSha: failureHeadSha ?? null,
-            }
-          : {}),
-      });
-      this.db.consumeIssueSessionEvents(item.projectId, item.issueId, freshWake.eventIds, created.id);
-      this.db.setIssueSessionLastWakeReason(item.projectId, item.issueId, freshWake.wakeReason ?? null);
-      this.db.setBranchOwnerWithLease({ projectId: item.projectId, linearIssueId: item.issueId, leaseId }, "patchrelay");
-      return created;
+    const run = this.runLauncher.claimRun({
+      item,
+      issue,
+      leaseId,
+      runType,
+      prompt,
+      ...(sourceHeadSha ? { sourceHeadSha } : {}),
+      ...(effectiveContext ? { effectiveContext } : {}),
+      materializeLegacyPendingWake: (targetIssue, lease) => this.materializeLegacyPendingWake(targetIssue, lease),
+      resolveRunWake: (targetIssue) => this.resolveRunWake(targetIssue),
+      branchName,
+      worktreePath,
     });
     if (!run) {
       this.releaseIssueSessionLease(item.projectId, item.issueId);
@@ -333,118 +241,33 @@ export class RunOrchestrator {
       summary: `Starting ${runType} run`,
     });
 
-    let threadId: string;
-    let turnId: string;
-    let parentThreadId: string | undefined;
-    try {
-      // Ensure worktree
-      await this.worktreeManager.ensureIssueWorktree(
-        project.repoPath,
-        project.worktreeRoot,
-        worktreePath,
-        branchName,
-        { allowExistingOutsideRoot: issue.branchName !== undefined },
-      );
-
-      // Set bot git identity and push credentials when GitHub App is configured.
-      // This ensures commits are authored by and pushes are authenticated as
-      // patchrelay[bot], not the system user.
-      if (this.botIdentity) {
-        const gitBin = this.config.runner.gitBin;
-        await execCommand(gitBin, ["-C", worktreePath, "config", "user.name", this.botIdentity.name], { timeoutMs: 5_000 });
-        await execCommand(gitBin, ["-C", worktreePath, "config", "user.email", this.botIdentity.email], { timeoutMs: 5_000 });
-        // Override credential helper to use the App installation token for git push.
-        // The helper script reads the token file and returns it as the password.
-        const credentialHelper = `!f() { echo "username=x-access-token"; echo "password=$(cat ${this.botIdentity.tokenFile})"; }; f`;
-        await execCommand(gitBin, ["-C", worktreePath, "config", "credential.helper", credentialHelper], { timeoutMs: 5_000 });
-      }
-
-      await this.resetWorktreeToTrackedBranch(worktreePath, branchName, issue);
-
-      // Freshen the worktree: fetch + rebase onto latest base branch.
-      // This prevents branch contamination when local main has drifted
-      // and avoids scope-bundling review rejections from stale commits.
-      // Skip for queue_repair — its entire purpose is to resolve rebase conflicts.
-      if (runType !== "queue_repair") {
-        await this.freshenWorktree(worktreePath, project, issue);
-      }
-
-      // Run prepare-worktree hook
-      const hookEnv = buildHookEnv(issue.issueKey ?? issue.linearIssueId, branchName, runType, worktreePath);
-      const prepareResult = await runProjectHook(project.repoPath, "prepare-worktree", { cwd: worktreePath, env: hookEnv });
-      if (prepareResult.ran && prepareResult.exitCode !== 0) {
-        throw new Error(`prepare-worktree hook failed (exit ${prepareResult.exitCode}): ${prepareResult.stderr?.slice(0, 500) ?? ""}`);
-      }
-      this.assertLaunchLease(run, "before starting the Codex turn");
-
-      // Reuse the existing thread only for additive follow-ups that explicitly
-      // request continuity. Fresh review-fix runs now start a new thread so the
-      // model is not anchored to the implementation conversation that produced
-      // the rejected patch. If the thread has accumulated many resumptions and
-      // batched follow-ups, compact by starting a fresh main thread while
-      // keeping a parent link.
-      const compactThread = shouldCompactThread(issue, issueSession?.threadGeneration, effectiveContext);
-      if (compactThread && issue.threadId) {
-        parentThreadId = issue.threadId;
-      }
-      if (shouldReuseIssueThread({ existingThreadId: issue.threadId, compactThread, resumeThread })) {
-        threadId = issue.threadId!;
-      } else {
-        const thread = await this.codex.startThread({ cwd: worktreePath });
-        threadId = thread.id;
-        this.db.upsertIssueWithLease(
-          { projectId: item.projectId, linearIssueId: item.issueId, leaseId },
-          { projectId: item.projectId, linearIssueId: item.issueId, threadId },
-        );
-      }
-
-      try {
-        const turn = await this.codex.startTurn({ threadId, cwd: worktreePath, input: prompt });
-        turnId = turn.turnId;
-      } catch (turnError) {
-        // If the thread is stale (e.g. after app-server restart), start fresh and retry once.
-        const msg = turnError instanceof Error ? turnError.message : String(turnError);
-        if (msg.includes("thread not found") || msg.includes("not materialized")) {
-          this.logger.info({ issueKey: issue.issueKey, staleThreadId: threadId }, "Thread is stale, retrying with fresh thread");
-          const thread = await this.codex.startThread({ cwd: worktreePath });
-          threadId = thread.id;
-          this.db.upsertIssueWithLease(
-            { projectId: item.projectId, linearIssueId: item.issueId, leaseId },
-            { projectId: item.projectId, linearIssueId: item.issueId, threadId },
-          );
-          const turn = await this.codex.startTurn({ threadId, cwd: worktreePath, input: prompt });
-          turnId = turn.turnId;
-        } else {
-          throw turnError;
-        }
-      }
-      this.assertLaunchLease(run, "after starting the Codex turn");
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const lostLease = error instanceof Error && error.name === "IssueSessionLeaseLostError";
-      if (!lostLease) {
-        const nextState: FactoryState = isRequestedChangesRunType(runType) ? "escalated" : "failed";
-        this.db.finishRunWithLease({ projectId: item.projectId, linearIssueId: item.issueId, leaseId }, run.id, {
-          status: "failed",
-          failureReason: message,
-        });
-        this.db.upsertIssueWithLease(
-          { projectId: item.projectId, linearIssueId: item.issueId, leaseId },
-          {
-            projectId: item.projectId,
-            linearIssueId: item.issueId,
-            activeRunId: null,
-            factoryState: nextState,
-          },
-        );
-      }
-      this.logger.error({ issueKey: issue.issueKey, runType, error: message }, `Failed to launch ${runType} run`);
-      const failedIssue = this.db.getIssue(item.projectId, item.issueId) ?? issue;
-      void this.linearSync.emitActivity(failedIssue, buildRunFailureActivity(runType, `Failed to start ${lowerCaseFirst(message)}`));
-      void this.linearSync.syncSession(failedIssue, { activeRunType: runType });
-      this.releaseIssueSessionLease(item.projectId, item.issueId);
-      throw error;
-    }
+    const {
+      threadId,
+      turnId,
+      parentThreadId,
+    } = await this.runLauncher.launchTurn({
+      project,
+      issue,
+      ...(issueSession ? { issueSession } : {}),
+      run,
+      runType,
+      prompt,
+      branchName,
+      worktreePath,
+      resumeThread,
+      ...(effectiveContext ? { effectiveContext } : {}),
+      leaseId,
+      ...(this.botIdentity ? { botIdentity: this.botIdentity } : {}),
+      assertLaunchLease: (targetRun, phase) => this.assertLaunchLease(targetRun, phase),
+      resetWorktreeToTrackedBranch: (targetWorktreePath, targetBranchName, targetIssue) =>
+        this.resetWorktreeToTrackedBranch(targetWorktreePath, targetBranchName, targetIssue),
+      freshenWorktree: (targetWorktreePath, targetProject, targetIssue) =>
+        this.freshenWorktree(targetWorktreePath, targetProject, targetIssue),
+      linearSync: this.linearSync,
+      releaseLease: (projectId, issueId) => this.releaseIssueSessionLease(projectId, issueId),
+      isRequestedChangesRunType,
+      lowerCaseFirst,
+    });
 
     this.assertLaunchLease(run, "before recording the active thread");
     if (!this.db.updateRunThreadWithLease(

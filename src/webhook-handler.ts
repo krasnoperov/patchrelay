@@ -15,7 +15,7 @@ import {
   mergeIssueMetadata,
 } from "./webhooks/decision-helpers.ts";
 import { IssueRemovalHandler } from "./webhooks/issue-removal-handler.ts";
-import type { AppConfig, LinearClientProvider, LinearWebhookPayload, NormalizedEvent } from "./types.ts";
+import type { AppConfig, LinearClientProvider, LinearWebhookPayload, NormalizedEvent, ProjectConfig } from "./types.ts";
 import { safeJsonParse, sanitizeDiagnosticText } from "./utils.ts";
 import { extractLatestAssistantSummary } from "./issue-session-events.ts";
 
