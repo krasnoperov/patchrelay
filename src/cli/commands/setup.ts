@@ -1,7 +1,4 @@
 import {
-  getDefaultConfigPath,
-  getDefaultRuntimeEnvPath,
-  getDefaultServiceEnvPath,
   getSystemdUnitPath,
 } from "../../runtime-paths.ts";
 import { initializePatchRelayHome, installServiceUnits } from "../../install.ts";
@@ -11,7 +8,7 @@ import type { CommandRunner, InteractiveRunner, Output, ParsedArgs } from "../co
 import { CliUsageError } from "../errors.ts";
 import { formatJson } from "../formatters/json.ts";
 import { writeOutput } from "../output.ts";
-import { installServiceCommands, restartServiceCommands, runServiceCommands, runSystemctl, tryManageService } from "../service-commands.ts";
+import { installServiceCommands, runServiceCommands, runSystemctl, tryManageService } from "../service-commands.ts";
 
 interface SetupCommandParams {
   commandArgs: string[];
