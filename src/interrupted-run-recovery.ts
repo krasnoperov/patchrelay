@@ -6,7 +6,7 @@ import type { ReleaseIssueSessionLease, WithHeldIssueSessionLease } from "./issu
 import { buildRunFailureActivity } from "./linear-session-reporting.ts";
 import type { LinearSessionSync } from "./linear-session-sync.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
-import { RunCompletionPolicy } from "./run-completion-policy.ts";
+import type { RunCompletionPolicy } from "./run-completion-policy.ts";
 import { deriveIssueSessionReactiveIntent } from "./issue-session.ts";
 
 function isRequestedChangesRunType(runType: RunType): boolean {

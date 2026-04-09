@@ -1,7 +1,6 @@
 import type {
   BranchOwner,
   GitHubCiSnapshotRecord,
-  GitHubFailureSource,
   IssueRecord,
   IssueSessionEventRecord,
   IssueSessionRecord,
@@ -14,13 +13,11 @@ import {
   isIssueSessionReadyForExecution,
   deriveIssueSessionState,
   deriveIssueSessionReactiveIntent,
-  deriveIssueSessionWakeReason,
 } from "./issue-session.ts";
 import {
-  extractLatestAssistantSummary,
   type IssueSessionEventType,
 } from "./issue-session-events.ts";
-import { IssueStore, mapIssueRow, type UpsertIssueParams } from "./db/issue-store.ts";
+import { IssueStore, type UpsertIssueParams } from "./db/issue-store.ts";
 import { IssueSessionStore } from "./db/issue-session-store.ts";
 import { LinearInstallationStore } from "./db/linear-installation-store.ts";
 import { OperatorFeedStore } from "./db/operator-feed-store.ts";
@@ -28,7 +25,7 @@ import { RepositoryLinkStore } from "./db/repository-link-store.ts";
 import { RunStore } from "./db/run-store.ts";
 import { WebhookEventStore } from "./db/webhook-event-store.ts";
 import { runPatchRelayMigrations } from "./db/migrations.ts";
-import { SqliteConnection, isoNow, type DatabaseConnection } from "./db/shared.ts";
+import { SqliteConnection, type DatabaseConnection } from "./db/shared.ts";
 import { syncIssueSessionFromIssue } from "./issue-session-projector.ts";
 import { buildTrackedIssueRecord } from "./tracked-issue-projector.ts";
 

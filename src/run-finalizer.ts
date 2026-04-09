@@ -9,7 +9,8 @@ import type { OperatorEventFeed } from "./operator-feed.ts";
 import { buildStageReport, countEventMethods } from "./run-reporting.ts";
 import type { AppendWakeEventWithLease } from "./run-wake-planner.ts";
 import { buildRunCompletedActivity, buildRunFailureActivity } from "./linear-session-reporting.ts";
-import { RunCompletionPolicy, resolveCompletedRunState } from "./run-completion-policy.ts";
+import type { RunCompletionPolicy } from "./run-completion-policy.ts";
+import { resolveCompletedRunState } from "./run-completion-policy.ts";
 
 export class RunFinalizer {
   constructor(

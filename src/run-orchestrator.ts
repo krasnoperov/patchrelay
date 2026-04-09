@@ -3,7 +3,7 @@ import type { GitHubAppBotIdentity } from "./github-app-token.ts";
 import type { CodexAppServerClient, CodexNotification } from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { BranchOwner, IssueRecord, RunRecord } from "./db-types.ts";
-import { ACTIVE_RUN_STATES, TERMINAL_STATES, type FactoryState, type RunType } from "./factory-state.ts";
+import { TERMINAL_STATES, type FactoryState, type RunType } from "./factory-state.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import { extractTurnId, resolveRunCompletionStatus, summarizeCurrentThread } from "./run-reporting.ts";
 import {
@@ -18,7 +18,6 @@ import type {
 } from "./types.ts";
 import { resolveAuthoritativeLinearStopState, resolvePreferredCompletedLinearState } from "./linear-workflow.ts";
 import { getThreadTurns } from "./codex-thread-utils.ts";
-import { deriveIssueSessionReactiveIntent } from "./issue-session.ts";
 import { QueueHealthMonitor } from "./queue-health-monitor.ts";
 import { IdleIssueReconciler, resolveBranchOwnerForStateTransition } from "./idle-reconciliation.ts";
 import { LinearSessionSync } from "./linear-session-sync.ts";
