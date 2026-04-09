@@ -136,11 +136,14 @@ export function deriveIssueSessionReactiveIntent(
 export function isIssueSessionReadyForExecution(params: IssueSessionReadyInput): boolean {
   if (params.activeRunId !== undefined) return false;
   if (params.blockedByCount > 0) return false;
-  if (params.sessionState === "done" || params.sessionState === "failed" || params.sessionState === "waiting_input") {
+  if (params.sessionState === "done" || params.sessionState === "waiting_input") {
     return false;
   }
   if (params.hasPendingWake) {
     return true;
+  }
+  if (params.sessionState === "failed") {
+    return false;
   }
   if (!params.hasLegacyPendingRun) {
     return false;

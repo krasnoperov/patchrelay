@@ -579,6 +579,33 @@ export class IdleIssueReconciler {
         mergeConflictDetected,
         downstreamOwned,
       });
+      if ((issue.factoryState === "escalated" || issue.factoryState === "failed")
+        && (reactiveIntent?.runType === "review_fix" || reactiveIntent?.runType === "branch_upkeep")) {
+        const pendingRunContext = reactiveIntent.runType === "branch_upkeep"
+          ? buildBranchUpkeepContext(
+              issue.prNumber,
+              project.github?.baseBranch ?? "main",
+              pr.mergeStateStatus,
+              pr.headRefOid,
+            )
+          : undefined;
+        this.logger.info(
+          {
+            issueKey: issue.issueKey,
+            prNumber: issue.prNumber,
+            from: issue.factoryState,
+            runType: reactiveIntent.runType,
+            mergeStateStatus: pr.mergeStateStatus,
+          },
+          "Reconciliation: recovered terminal requested-changes issue from GitHub truth",
+        );
+        this.advanceIdleIssue(issue, reactiveIntent.compatibilityFactoryState, {
+          pendingRunType: reactiveIntent.runType,
+          ...(pendingRunContext ? { pendingRunContext } : {}),
+          clearFailureProvenance: true,
+        });
+        return;
+      }
       if (reactiveIntent?.runType === "branch_upkeep" && mergeConflictDetected) {
         this.logger.info(
           { issueKey: issue.issueKey, prNumber: issue.prNumber, mergeable: pr.mergeable, mergeStateStatus: pr.mergeStateStatus },
