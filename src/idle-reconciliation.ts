@@ -150,7 +150,7 @@ export class IdleIssueReconciler {
   ) {}
 
   async reconcile(): Promise<void> {
-    for (const issue of this.db.listIdleNonTerminalIssues()) {
+    for (const issue of this.db.issues.listIdleNonTerminalIssues()) {
       if (issue.prState === "merged") {
         this.advanceIdleIssue(issue, "done", { clearFailureProvenance: true });
         continue;
@@ -189,13 +189,13 @@ export class IdleIssueReconciler {
       }
     }
 
-    for (const issue of this.db.listIssues()) {
+    for (const issue of this.db.issues.listIssues()) {
       if (!this.shouldProbeTerminalIssueFromGitHub(issue)) continue;
       await this.reconcileFromGitHub(issue);
     }
 
-    for (const issue of this.db.listBlockedDelegatedIssues()) {
-      const unresolved = this.db.countUnresolvedBlockers(issue.projectId, issue.linearIssueId);
+    for (const issue of this.db.issues.listBlockedDelegatedIssues()) {
+      const unresolved = this.db.issues.countUnresolvedBlockers(issue.projectId, issue.linearIssueId);
       if (unresolved === 0) {
         this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
           projectId: issue.projectId,
@@ -233,7 +233,7 @@ export class IdleIssueReconciler {
       { issueKey: issue.issueKey, from: issue.factoryState, to: newState, pendingRunType: options?.pendingRunType },
       "Reconciliation: advancing idle issue",
     );
-    this.db.upsertIssue({
+    this.db.issues.upsertIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       factoryState: newState,
@@ -260,7 +260,7 @@ export class IdleIssueReconciler {
     });
     const branchOwner = resolveBranchOwnerForStateTransition(newState, options?.pendingRunType);
     if (branchOwner) {
-      this.db.setBranchOwner(issue.projectId, issue.linearIssueId, branchOwner);
+      this.db.issues.setBranchOwner(issue.projectId, issue.linearIssueId, branchOwner);
     }
     if (options?.pendingRunType) {
       this.appendWakeEvent(issue, options.pendingRunType, options.pendingRunContext, "idle_reconciliation");
@@ -372,7 +372,7 @@ export class IdleIssueReconciler {
       ?? (inferred === "queue_eviction" && failureHeadSha && checkName
         ? ["queue_eviction", failureHeadSha, checkName].join("::")
         : null);
-    this.db.upsertIssue({
+    this.db.issues.upsertIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       lastGitHubFailureSource: inferred,
@@ -380,7 +380,7 @@ export class IdleIssueReconciler {
       ...(checkName ? { lastGitHubFailureCheckName: checkName } : {}),
       ...(failureSignature ? { lastGitHubFailureSignature: failureSignature } : {}),
     });
-    const refreshed = this.db.getIssue(issue.projectId, issue.linearIssueId);
+    const refreshed = this.db.issues.getIssue(issue.projectId, issue.linearIssueId);
     if (!refreshed) return issue;
     this.logger.info(
       { issueKey: issue.issueKey, prNumber: issue.prNumber, inferred, factoryState: issue.factoryState },
@@ -403,7 +403,7 @@ export class IdleIssueReconciler {
     const checkName = issue.lastGitHubFailureCheckName ?? protocol.evictionCheckName;
     const failureSignature = issue.lastGitHubFailureSignature
       ?? (failureHeadSha && checkName ? ["queue_eviction", failureHeadSha, checkName].join("::") : null);
-    this.db.upsertIssue({
+    this.db.issues.upsertIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       lastGitHubFailureSource: "queue_eviction",
@@ -411,7 +411,7 @@ export class IdleIssueReconciler {
       ...(checkName ? { lastGitHubFailureCheckName: checkName } : {}),
       ...(failureSignature ? { lastGitHubFailureSignature: failureSignature } : {}),
     });
-    const refreshed = this.db.getIssue(issue.projectId, issue.linearIssueId);
+    const refreshed = this.db.issues.getIssue(issue.projectId, issue.linearIssueId);
     if (!refreshed) return issue;
     this.logger.info(
       { issueKey: issue.issueKey, prNumber: issue.prNumber },
@@ -486,7 +486,7 @@ export class IdleIssueReconciler {
       const previousHeadSha = issue.prHeadSha;
       const gateCheckNames = getGateCheckNames(project);
       const gateCheckStatus = deriveGateCheckStatusFromRollup(pr.statusCheckRollup, gateCheckNames);
-      this.db.upsertIssue({
+      this.db.issues.upsertIssue({
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         ...(pr.headRefOid ? { prHeadSha: pr.headRefOid } : {}),
@@ -509,7 +509,7 @@ export class IdleIssueReconciler {
           : {}),
       });
       if (pr.state === "MERGED") {
-        this.db.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, prState: "merged" });
+        this.db.issues.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, prState: "merged" });
         this.advanceIdleIssue(issue, "done", { clearFailureProvenance: true });
         return;
       }
@@ -518,7 +518,7 @@ export class IdleIssueReconciler {
           { issueKey: issue.issueKey, prNumber: issue.prNumber },
           "Reconciliation: PR was closed, re-delegating for implementation",
         );
-        this.db.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, prState: "closed" });
+        this.db.issues.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, prState: "closed" });
         this.advanceIdleIssue(issue, "delegated" as never, {
           pendingRunType: "implementation",
           clearFailureProvenance: true,
@@ -569,7 +569,7 @@ export class IdleIssueReconciler {
 
       const downstreamOwned = issue.factoryState === "awaiting_queue" || issue.prReviewState === "approved" || pr.reviewDecision === "APPROVED";
       const mergeConflictDetected = pr.mergeable === "CONFLICTING" || pr.mergeStateStatus === "DIRTY";
-      const refreshedIssue = this.db.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
+      const refreshedIssue = this.db.issues.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
       const reactiveIntent = deriveIssueSessionReactiveIntent({
         prNumber: refreshedIssue.prNumber,
         prState: refreshedIssue.prState,
@@ -656,7 +656,7 @@ export class IdleIssueReconciler {
         return;
       }
       if (isReviewDecisionApproved(pr.reviewDecision)) {
-        this.db.upsertIssue({
+        this.db.issues.upsertIssue({
           projectId: issue.projectId,
           linearIssueId: issue.linearIssueId,
           prReviewState: "approved",

@@ -40,7 +40,7 @@ export class DesiredStageRecorder {
       return { issue: undefined, wakeRunType: undefined, delegated: false };
     }
 
-    const existingIssue = this.db.getIssue(params.project.id, normalizedIssue.id);
+    const existingIssue = this.db.issues.getIssue(params.project.id, normalizedIssue.id);
     const activeRun = existingIssue?.activeRunId ? this.db.runs.getRunById(existingIssue.activeRunId) : undefined;
     const delegated = this.isDelegatedToPatchRelay(params.project, params.normalized);
     const triggerAllowed = triggerEventAllowed(params.project, params.normalized.triggerEvent);
@@ -52,7 +52,7 @@ export class DesiredStageRecorder {
     }
 
     const hydratedIssue = await this.syncIssueDependencies(params.project.id, normalizedIssue);
-    const unresolvedBlockers = this.db.countUnresolvedBlockers(params.project.id, normalizedIssue.id);
+    const unresolvedBlockers = this.db.issues.countUnresolvedBlockers(params.project.id, normalizedIssue.id);
     const terminal = isTerminalDelegationState(existingIssue, hydratedIssue);
 
     const desiredStage = decideRunIntent({
@@ -97,7 +97,7 @@ export class DesiredStageRecorder {
     });
 
     const commitIssueUpdate = () => {
-      const record = this.db.upsertIssue({
+      const record = this.db.issues.upsertIssue({
         projectId: params.project.id,
         linearIssueId: normalizedIssue.id,
         ...(hydratedIssue.identifier ? { issueKey: hydratedIssue.identifier } : {}),
@@ -124,7 +124,7 @@ export class DesiredStageRecorder {
 
     const activeLease = this.db.issueSessions.getActiveIssueSessionLease(params.project.id, normalizedIssue.id);
     const issue = activeLease
-      ? this.db.issueSessions.withIssueSessionLease(params.project.id, normalizedIssue.id, activeLease.leaseId, commitIssueUpdate) ?? (existingIssue ?? this.db.upsertIssue({
+      ? this.db.issueSessions.withIssueSessionLease(params.project.id, normalizedIssue.id, activeLease.leaseId, commitIssueUpdate) ?? (existingIssue ?? this.db.issues.upsertIssue({
           projectId: params.project.id,
           linearIssueId: normalizedIssue.id,
           ...(hydratedIssue.identifier ? { issueKey: hydratedIssue.identifier } : {}),
@@ -199,7 +199,7 @@ export class DesiredStageRecorder {
     }
 
     if (source.relationsKnown) {
-      this.db.replaceIssueDependencies({
+      this.db.issues.replaceIssueDependencies({
         projectId,
         linearIssueId: source.id,
         blockers: source.blockedBy.map((blocker) => ({

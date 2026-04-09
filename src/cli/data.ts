@@ -197,7 +197,7 @@ export class CliDataAccess extends CliOperatorApiClient {
     const issue = this.db.getTrackedIssueByKey(issueKey);
     if (!issue) return undefined;
 
-    const dbIssue = this.db.getIssueByKey(issueKey)!;
+    const dbIssue = this.db.issues.getIssueByKey(issueKey)!;
     const activeRun = dbIssue.activeRunId ? this.db.runs.getRunById(dbIssue.activeRunId) : undefined;
     const latestRun = this.db.runs.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
     const latestReport = normalizeStageReport(latestRun?.reportJson, latestRun?.status);
@@ -230,7 +230,7 @@ export class CliDataAccess extends CliOperatorApiClient {
     const issue = this.db.getTrackedIssueByKey(issueKey);
     if (!issue) return undefined;
 
-    const dbIssue = this.db.getIssueByKey(issueKey)!;
+    const dbIssue = this.db.issues.getIssueByKey(issueKey)!;
     const run = dbIssue.activeRunId ? this.db.runs.getRunById(dbIssue.activeRunId) : undefined;
     if (!run) return undefined;
 
@@ -245,7 +245,7 @@ export class CliDataAccess extends CliOperatorApiClient {
     const issue = this.db.getTrackedIssueByKey(issueKey);
     if (!issue) return undefined;
 
-    const dbIssue = this.db.getIssueByKey(issueKey)!;
+    const dbIssue = this.db.issues.getIssueByKey(issueKey)!;
     if (!dbIssue.branchName || !dbIssue.worktreePath) return undefined;
 
     return { issue, branchName: dbIssue.branchName, worktreePath: dbIssue.worktreePath, repoId: issue.projectId };
@@ -255,7 +255,7 @@ export class CliDataAccess extends CliOperatorApiClient {
     const worktree = this.worktree(issueKey);
     if (!worktree) return undefined;
 
-    const dbIssue = this.db.getIssueByKey(issueKey)!;
+    const dbIssue = this.db.issues.getIssueByKey(issueKey)!;
     const resumeThreadId = dbIssue.threadId ?? undefined;
     return {
       ...worktree,
@@ -274,7 +274,7 @@ export class CliDataAccess extends CliOperatorApiClient {
       await this.ensureOpenWorktree(worktree);
     }
 
-    const dbIssue = this.db.getIssueByKey(issueKey)!;
+    const dbIssue = this.db.issues.getIssueByKey(issueKey)!;
     const existingThreadId = dbIssue.threadId;
     if (existingThreadId && (await this.canReadThread(existingThreadId))) {
       return { ...worktree, resumeThreadId: existingThreadId };
@@ -286,7 +286,7 @@ export class CliDataAccess extends CliOperatorApiClient {
 
     const codex = await this.getCodex();
     const thread = await codex.startThread({ cwd: worktree.worktreePath });
-    this.db.upsertIssue({
+    this.db.issues.upsertIssue({
       projectId: worktree.issue.projectId,
       linearIssueId: worktree.issue.linearIssueId,
       threadId: thread.id,
@@ -302,7 +302,7 @@ export class CliDataAccess extends CliOperatorApiClient {
     const issue = this.db.getTrackedIssueByKey(issueKey);
     if (!issue) return undefined;
 
-    const dbIssue = this.db.getIssueByKey(issueKey)!;
+    const dbIssue = this.db.issues.getIssueByKey(issueKey)!;
     const issueSession = this.db.issueSessions.getIssueSession(issue.projectId, issue.linearIssueId);
     if (dbIssue.activeRunId !== undefined) {
       throw new Error(`Issue ${issueKey} already has an active run.`);
@@ -326,7 +326,7 @@ export class CliDataAccess extends CliOperatorApiClient {
           : "delegated";
 
     this.appendRetryWake(dbIssue, runType);
-    this.db.upsertIssue({
+    this.db.issues.upsertIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       pendingRunType: null,
@@ -341,7 +341,7 @@ export class CliDataAccess extends CliOperatorApiClient {
     const issue = this.db.getTrackedIssueByKey(issueKey);
     if (!issue) return undefined;
 
-    const dbIssue = this.db.getIssueByKey(issueKey)!;
+    const dbIssue = this.db.issues.getIssueByKey(issueKey)!;
     const runs = this.db.runs.listRunsForIssue(issue.projectId, issue.linearIssueId);
     const sessions = runs
       .slice()

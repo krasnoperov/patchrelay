@@ -195,7 +195,7 @@ export class GitHubWebhookHandler {
     }
 
     // Route to issue via branch name
-    const issue = this.db.getIssueByBranch(event.branchName);
+    const issue = this.db.issues.getIssueByBranch(event.branchName);
     if (!issue) {
       this.logger.debug({ branchName: event.branchName, triggerEvent: event.triggerEvent }, "GitHub webhook: no matching issue for branch");
       return;
@@ -204,7 +204,7 @@ export class GitHubWebhookHandler {
     const project = this.config.projects.find((p) => p.id === issue.projectId);
 
     // Update PR state on the issue
-    this.db.upsertIssue({
+    this.db.issues.upsertIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       ...(event.prNumber !== undefined ? { prNumber: event.prNumber } : {}),
@@ -227,7 +227,7 @@ export class GitHubWebhookHandler {
 
     if (!isMetadataOnlyCheckEvent(event) || queueEvictionCheck) {
       // Re-read issue after PR metadata upsert so guards see fresh prReviewState
-      const afterMetadata = this.db.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
+      const afterMetadata = this.db.issues.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
 
       const newState = this.resolveFactoryStateForEvent(afterMetadata, event, project);
 
@@ -244,7 +244,7 @@ export class GitHubWebhookHandler {
           "Factory state transition from GitHub event",
         );
 
-        const transitionedIssue = this.db.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
+        const transitionedIssue = this.db.issues.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
         void this.emitLinearActivity(transitionedIssue, newState, event);
         void this.syncLinearSession(transitionedIssue);
 
@@ -252,7 +252,7 @@ export class GitHubWebhookHandler {
     }
 
     // Re-read issue after all upserts so reactive run logic sees current state
-    const freshIssue = this.db.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
+    const freshIssue = this.db.issues.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
 
     // Reset repair counters on new push — but only when no repair run is active,
     // since Codex pushes during repair and resetting mid-run would bypass budgets.
@@ -337,7 +337,7 @@ export class GitHubWebhookHandler {
     project?: ProjectConfig,
   ): Promise<void> {
     if (event.triggerEvent === "pr_merged") {
-      this.db.upsertIssue({
+      this.db.issues.upsertIssue({
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         lastGitHubCiSnapshotHeadSha: null,
@@ -350,7 +350,7 @@ export class GitHubWebhookHandler {
     }
 
     if (event.triggerEvent === "pr_synchronize") {
-      this.db.upsertIssue({
+      this.db.issues.upsertIssue({
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         lastGitHubCiSnapshotHeadSha: event.headSha ?? null,
@@ -374,7 +374,7 @@ export class GitHubWebhookHandler {
       gateCheckNames: this.getGateCheckNames(project),
     });
     if (!snapshot) {
-      this.db.upsertIssue({
+      this.db.issues.upsertIssue({
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         lastGitHubCiSnapshotHeadSha: event.headSha ?? issue.lastGitHubCiSnapshotHeadSha ?? null,
@@ -399,7 +399,7 @@ export class GitHubWebhookHandler {
       return;
     }
 
-    this.db.upsertIssue({
+    this.db.issues.upsertIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       prCheckStatus: snapshot.gateCheckStatus,
@@ -442,7 +442,7 @@ export class GitHubWebhookHandler {
           return;
         }
         const hadPendingWake = this.db.issueSessions.hasPendingIssueSessionEvents(issue.projectId, issue.linearIssueId);
-        this.db.upsertIssue({
+        this.db.issues.upsertIssue({
           projectId: issue.projectId,
           linearIssueId: issue.linearIssueId,
           lastGitHubFailureSource: "queue_eviction",
@@ -499,7 +499,7 @@ export class GitHubWebhookHandler {
         }
         const hadPendingWake = this.db.issueSessions.hasPendingIssueSessionEvents(issue.projectId, issue.linearIssueId);
         const snapshot = this.getRelevantCiSnapshot(issue, event);
-        this.db.upsertIssue({
+        this.db.issues.upsertIssue({
           projectId: issue.projectId,
           linearIssueId: issue.linearIssueId,
           lastGitHubFailureSource: "branch_ci",
@@ -627,7 +627,7 @@ export class GitHubWebhookHandler {
             : "Pull request closed during active run",
         });
       }
-      this.db.upsertIssue({
+      this.db.issues.upsertIssue({
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         activeRunId: null,
@@ -641,7 +641,7 @@ export class GitHubWebhookHandler {
       this.db.transaction(commitTerminalUpdate);
     }
     this.db.issueSessions.releaseIssueSessionLeaseRespectingActiveLease(issue.projectId, issue.linearIssueId);
-    const updatedIssue = this.db.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
+    const updatedIssue = this.db.issues.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
     if (event.triggerEvent === "pr_merged") {
       await this.completeLinearIssueAfterMerge(updatedIssue);
     }
@@ -662,7 +662,7 @@ export class GitHubWebhookHandler {
 
       const normalizedCurrent = liveIssue.stateName?.trim().toLowerCase();
       if (normalizedCurrent === targetState.trim().toLowerCase()) {
-        this.db.upsertIssue({
+        this.db.issues.upsertIssue({
           projectId: issue.projectId,
           linearIssueId: issue.linearIssueId,
           ...(liveIssue.stateName ? { currentLinearState: liveIssue.stateName } : {}),
@@ -672,7 +672,7 @@ export class GitHubWebhookHandler {
       }
 
       const updated = await linear.setIssueState(issue.linearIssueId, targetState);
-      this.db.upsertIssue({
+      this.db.issues.upsertIssue({
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         ...(updated.stateName ? { currentLinearState: updated.stateName } : {}),
@@ -697,7 +697,7 @@ export class GitHubWebhookHandler {
       const failureContext = source === "queue_eviction"
         ? this.buildQueueFailureContext(issue, event)
         : await this.resolveBranchFailureContext(issue, event, project);
-      this.db.upsertIssue({
+      this.db.issues.upsertIssue({
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         lastGitHubFailureSource: source,
@@ -727,7 +727,7 @@ export class GitHubWebhookHandler {
       if (event.triggerEvent === "check_passed" && !this.canClearFailureProvenance(issue, event, project)) {
         return;
       }
-      this.db.upsertIssue({
+      this.db.issues.upsertIssue({
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         lastGitHubFailureSource: null,
@@ -899,7 +899,7 @@ export class GitHubWebhookHandler {
   }
 
   private getRelevantCiSnapshot(issue: IssueRecord, event: NormalizedGitHubEvent): GitHubCiSnapshotRecord | undefined {
-    const snapshot = this.db.getLatestGitHubCiSnapshot(issue.projectId, issue.linearIssueId);
+    const snapshot = this.db.issues.getLatestGitHubCiSnapshot(issue.projectId, issue.linearIssueId);
     if (!snapshot) return undefined;
     if (snapshot.headSha !== event.headSha) return undefined;
     return snapshot;
@@ -1046,7 +1046,7 @@ export class GitHubWebhookHandler {
     if (typeof user?.type === "string" && user.type === "Bot") return;
     const prNumber = typeof issuePayload.number === "number" ? issuePayload.number : undefined;
     if (!prNumber) return;
-    const issue = this.db.getIssueByPrNumber(prNumber);
+    const issue = this.db.issues.getIssueByPrNumber(prNumber);
     if (!issue) return;
     if (!this.isPatchRelayOwnedPr(issue)) return;
 

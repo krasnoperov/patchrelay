@@ -219,18 +219,18 @@ export class WebhookHandler {
 
   private reconcileDependentReadiness(projectId: string, blockerLinearIssueId: string): string[] {
     const newlyReady: string[] = [];
-    for (const dependent of this.db.listDependents(projectId, blockerLinearIssueId)) {
-      const issue = this.db.getIssue(projectId, dependent.linearIssueId);
+    for (const dependent of this.db.issues.listDependents(projectId, blockerLinearIssueId)) {
+      const issue = this.db.issues.getIssue(projectId, dependent.linearIssueId);
       if (!issue) {
         continue;
       }
 
-      const unresolved = this.db.countUnresolvedBlockers(projectId, dependent.linearIssueId);
+      const unresolved = this.db.issues.countUnresolvedBlockers(projectId, dependent.linearIssueId);
       if (unresolved > 0) {
         if (this.peekPendingSessionWakeRunType(projectId, dependent.linearIssueId) === "implementation"
           && issue.activeRunId === undefined
           && !this.db.issueSessions.hasPendingIssueSessionEvents(projectId, dependent.linearIssueId)) {
-          this.db.upsertIssue({
+          this.db.issues.upsertIssue({
             projectId,
             linearIssueId: dependent.linearIssueId,
             pendingRunType: null,
@@ -245,7 +245,7 @@ export class WebhookHandler {
       }
 
       if (this.peekPendingSessionWakeRunType(projectId, dependent.linearIssueId) === "implementation") {
-        this.db.upsertIssue({
+        this.db.issues.upsertIssue({
           projectId,
           linearIssueId: dependent.linearIssueId,
           pendingRunType: null,

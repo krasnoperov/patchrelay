@@ -132,7 +132,7 @@ export async function collectClusterHealth(
 
   const snapshots = openIssues.map((issue) => {
     const tracked = db.getTrackedIssue(issue.projectId, issue.linearIssueId);
-    const deps = db.listIssueDependencies(issue.projectId, issue.linearIssueId);
+    const deps = db.issues.listIssueDependencies(issue.projectId, issue.linearIssueId);
     const blockedBy = deps.filter((dep) => !isResolvedDependency(dep));
     const missingTrackedBlockers = blockedBy.filter((dep) => {
       if (trackedByLinearId.has(dep.blockerLinearIssueId)) return false;

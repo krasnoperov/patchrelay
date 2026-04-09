@@ -114,7 +114,7 @@ export class RunLauncher {
     worktreePath: string;
   }): RunRecord | undefined {
     return this.db.issueSessions.withIssueSessionLease(params.item.projectId, params.item.issueId, params.leaseId, () => {
-      const fresh = this.db.getIssue(params.item.projectId, params.item.issueId);
+      const fresh = this.db.issues.getIssue(params.item.projectId, params.item.issueId);
       if (!fresh || fresh.activeRunId !== undefined) return undefined;
       const wakeIssue = params.materializeLegacyPendingWake(fresh, {
         projectId: params.item.projectId,
@@ -136,7 +136,7 @@ export class RunLauncher {
         ? params.effectiveContext.failureHeadSha
         : typeof params.effectiveContext?.headSha === "string" ? params.effectiveContext.headSha : undefined;
       const failureSignature = typeof params.effectiveContext?.failureSignature === "string" ? params.effectiveContext.failureSignature : undefined;
-      this.db.upsertIssue({
+      this.db.issues.upsertIssue({
         projectId: params.item.projectId,
         linearIssueId: params.item.issueId,
         pendingRunType: null,
@@ -177,16 +177,6 @@ export class RunLauncher {
     leaseId: string;
     botIdentity?: GitHubAppBotIdentity;
     assertLaunchLease: (run: Pick<RunRecord, "id" | "projectId" | "linearIssueId">, phase: string) => void;
-    resetWorktreeToTrackedBranch: (
-      worktreePath: string,
-      branchName: string,
-      issue: Pick<IssueRecord, "issueKey">,
-    ) => Promise<void>;
-    freshenWorktree: (
-      worktreePath: string,
-      project: { github?: { baseBranch?: string }; repoPath: string },
-      issue: IssueRecord,
-    ) => Promise<void>;
     linearSync: {
       emitActivity: (issue: IssueRecord, activity: LinearAgentActivityContent) => Promise<void> | void;
       syncSession: (issue: IssueRecord, options?: { activeRunType?: RunType }) => Promise<void> | void;
@@ -215,9 +205,9 @@ export class RunLauncher {
         await execCommand(gitBin, ["-C", params.worktreePath, "config", "credential.helper", credentialHelper], { timeoutMs: 5_000 });
       }
 
-      await params.resetWorktreeToTrackedBranch(params.worktreePath, params.branchName, params.issue);
+      await this.worktreeManager.resetWorktreeToTrackedBranch(params.worktreePath, params.branchName, params.issue, this.logger);
       if (params.runType !== "queue_repair") {
-        await params.freshenWorktree(params.worktreePath, params.project, params.issue);
+        await this.worktreeManager.freshenWorktree(params.worktreePath, params.project, params.issue, this.logger);
       }
 
       const hookEnv = buildHookEnv(params.issue.issueKey ?? params.issue.linearIssueId, params.branchName, params.runType, params.worktreePath);
@@ -283,7 +273,7 @@ export class RunLauncher {
         );
       }
       this.logger.error({ issueKey: params.issue.issueKey, runType: params.runType, error: message }, `Failed to launch ${params.runType} run`);
-      const failedIssue = this.db.getIssue(params.project.id, params.issue.linearIssueId) ?? params.issue;
+      const failedIssue = this.db.issues.getIssue(params.project.id, params.issue.linearIssueId) ?? params.issue;
       void params.linearSync.emitActivity(failedIssue, buildRunFailureActivity(params.runType, `Failed to start ${params.lowerCaseFirst(message)}`));
       void params.linearSync.syncSession(failedIssue, { activeRunType: params.runType });
       params.releaseLease(params.project.id, params.issue.linearIssueId);

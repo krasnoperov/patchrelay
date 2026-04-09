@@ -1,14 +1,14 @@
 import type { IssueRecord, RunRecord, RunStatus, ThreadEventRecord } from "../db-types.ts";
 import type { RunType } from "../factory-state.ts";
 import { extractLatestAssistantSummary } from "../issue-session-events.ts";
+import type { IssueStore } from "./issue-store.ts";
 import { isoNow, type DatabaseConnection } from "./shared.ts";
 
 export class RunStore {
   constructor(
     private readonly connection: DatabaseConnection,
     private readonly mapRunRow: (row: Record<string, unknown>) => RunRecord,
-    private readonly getRun: (id: number) => RunRecord | undefined,
-    private readonly getIssue: (projectId: string, linearIssueId: string) => IssueRecord | undefined,
+    private readonly issues: IssueStore,
     private readonly syncIssueSessionFromIssue: (
       issue: IssueRecord,
       options?: {
@@ -40,8 +40,8 @@ export class RunStore {
       params.promptText ?? null,
       now,
     );
-    const run = this.getRun(Number(result.lastInsertRowid))!;
-    const issue = this.getIssue(params.projectId, params.linearIssueId);
+    const run = this.getRunById(Number(result.lastInsertRowid))!;
+    const issue = this.issues.getIssue(params.projectId, params.linearIssueId);
     if (issue) {
       this.syncIssueSessionFromIssue(issue, { lastRunType: run.runType });
     }
@@ -97,9 +97,9 @@ export class RunStore {
         AND ended_at IS NULL
         AND status IN ('queued', 'running')
     `).run(params.threadId, params.parentThreadId ?? null, params.turnId ?? null, runId);
-    const run = this.getRun(runId);
+    const run = this.getRunById(runId);
     if (!run) return;
-    const issue = this.getIssue(run.projectId, run.linearIssueId);
+    const issue = this.issues.getIssue(run.projectId, run.linearIssueId);
     if (issue) {
       this.syncIssueSessionFromIssue(issue);
     }
@@ -138,12 +138,12 @@ export class RunStore {
       now,
       runId,
     );
-    const run = this.getRun(runId);
+    const run = this.getRunById(runId);
     if (!run) return;
-    const issue = this.getIssue(run.projectId, run.linearIssueId);
+    const issue = this.issues.getIssue(run.projectId, run.linearIssueId);
     if (issue) {
       this.syncIssueSessionFromIssue(issue, {
-        summaryText: extractLatestAssistantSummary(this.getRun(runId) ?? run),
+        summaryText: extractLatestAssistantSummary(this.getRunById(runId) ?? run),
         lastRunType: run.runType,
       });
     }

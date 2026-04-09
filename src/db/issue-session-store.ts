@@ -1,5 +1,7 @@
 import type { BranchOwner, IssueRecord, IssueSessionEventRecord, IssueSessionRecord, RunStatus } from "../db-types.ts";
 import type { RunType } from "../factory-state.ts";
+import type { IssueStore, UpsertIssueParams } from "./issue-store.ts";
+import type { RunStore } from "./run-store.ts";
 import { deriveSessionWakePlan, type IssueSessionEventType } from "../issue-session-events.ts";
 import { isoNow, type DatabaseConnection } from "./shared.ts";
 
@@ -14,24 +16,13 @@ export class IssueSessionStore {
     private readonly connection: DatabaseConnection,
     private readonly mapIssueSessionRow: (row: Record<string, unknown>) => IssueSessionRecord,
     private readonly mapIssueSessionEventRow: (row: Record<string, unknown>) => IssueSessionEventRecord,
-    private readonly getIssue: (projectId: string, linearIssueId: string) => IssueRecord | undefined,
+    private readonly issues: IssueStore,
+    private readonly runs: RunStore,
     private readonly deriveImplicitReactiveWake: (issue: IssueRecord) => {
       runType: RunType;
       wakeReason: string;
       context: Record<string, unknown>;
     } | undefined,
-    private readonly transaction: <T>(fn: () => T) => T,
-    private readonly upsertIssue: (params: Record<string, unknown>) => IssueRecord,
-    private readonly finishRun: (runId: number, params: {
-      status: RunStatus;
-      threadId?: string;
-      turnId?: string;
-      failureReason?: string;
-      summaryJson?: string;
-      reportJson?: string;
-    }) => void,
-    private readonly updateRunThread: (runId: number, params: { threadId: string; parentThreadId?: string; turnId?: string }) => void,
-    private readonly setBranchOwner: (projectId: string, linearIssueId: string, owner: BranchOwner) => void,
   ) {}
 
   getIssueSession(projectId: string, linearIssueId: string): IssueSessionRecord | undefined {
@@ -169,7 +160,7 @@ export class IssueSessionStore {
     wakeReason?: string | undefined;
     resumeThread: boolean;
   } | undefined {
-    const issue = this.getIssue(projectId, linearIssueId);
+    const issue = this.issues.getIssue(projectId, linearIssueId);
     if (!issue) return undefined;
     const events = this.listIssueSessionEvents(projectId, linearIssueId, { pendingOnly: true });
     const plan = deriveSessionWakePlan(issue, events);
@@ -310,22 +301,22 @@ export class IssueSessionStore {
   }
 
   withIssueSessionLease<T>(projectId: string, linearIssueId: string, leaseId: string, fn: () => T): T | undefined {
-    return this.transaction(() => {
+    return this.connection.transaction(() => {
       if (!this.hasActiveIssueSessionLease(projectId, linearIssueId, leaseId)) {
         return undefined;
       }
       return fn();
-    });
+    })();
   }
 
-  upsertIssueWithLease(lease: IssueSessionLease, params: Record<string, unknown>): IssueRecord | undefined {
-    return this.withIssueSessionLease(lease.projectId, lease.linearIssueId, lease.leaseId, () => this.upsertIssue(params));
+  upsertIssueWithLease(lease: IssueSessionLease, params: UpsertIssueParams): IssueRecord | undefined {
+    return this.withIssueSessionLease(lease.projectId, lease.linearIssueId, lease.leaseId, () => this.issues.upsertIssue(params));
   }
 
-  upsertIssueRespectingActiveLease(projectId: string, linearIssueId: string, params: Record<string, unknown>): IssueRecord | undefined {
+  upsertIssueRespectingActiveLease(projectId: string, linearIssueId: string, params: UpsertIssueParams): IssueRecord | undefined {
     const lease = this.getActiveIssueSessionLease(projectId, linearIssueId);
     if (!lease) {
-      return this.upsertIssue(params);
+      return this.issues.upsertIssue(params);
     }
     return this.upsertIssueWithLease(lease, params);
   }
@@ -339,7 +330,7 @@ export class IssueSessionStore {
     reportJson?: string;
   }): boolean {
     return this.withIssueSessionLease(lease.projectId, lease.linearIssueId, lease.leaseId, () => {
-      this.finishRun(runId, params);
+      this.runs.finishRun(runId, params);
       return true;
     }) ?? false;
   }
@@ -354,7 +345,7 @@ export class IssueSessionStore {
   }): boolean {
     const lease = this.getActiveIssueSessionLease(projectId, linearIssueId);
     if (!lease) {
-      this.finishRun(runId, params);
+      this.runs.finishRun(runId, params);
       return true;
     }
     return this.finishRunWithLease(lease, runId, params);
@@ -362,7 +353,7 @@ export class IssueSessionStore {
 
   updateRunThreadWithLease(lease: IssueSessionLease, runId: number, params: { threadId: string; parentThreadId?: string; turnId?: string }): boolean {
     return this.withIssueSessionLease(lease.projectId, lease.linearIssueId, lease.leaseId, () => {
-      this.updateRunThread(runId, params);
+      this.runs.updateRunThread(runId, params);
       return true;
     }) ?? false;
   }
@@ -407,7 +398,7 @@ export class IssueSessionStore {
 
   setBranchOwnerWithLease(lease: IssueSessionLease, owner: BranchOwner): boolean {
     return this.withIssueSessionLease(lease.projectId, lease.linearIssueId, lease.leaseId, () => {
-      this.setBranchOwner(lease.projectId, lease.linearIssueId, owner);
+      this.issues.setBranchOwner(lease.projectId, lease.linearIssueId, owner);
       return true;
     }) ?? false;
   }
@@ -415,7 +406,7 @@ export class IssueSessionStore {
   setBranchOwnerRespectingActiveLease(projectId: string, linearIssueId: string, owner: BranchOwner): boolean {
     const lease = this.getActiveIssueSessionLease(projectId, linearIssueId);
     if (!lease) {
-      this.setBranchOwner(projectId, linearIssueId, owner);
+      this.issues.setBranchOwner(projectId, linearIssueId, owner);
       return true;
     }
     return this.setBranchOwnerWithLease(lease, owner);

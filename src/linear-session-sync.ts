@@ -32,7 +32,7 @@ export class LinearSessionSync {
     if (!recoveredAgentSessionId) return issue;
 
     this.logger.info({ issueKey: issue.issueKey, agentSessionId: recoveredAgentSessionId }, "Recovered missing Linear agent session id from webhook history");
-    return this.db.upsertIssue({
+    return this.db.issues.upsertIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       agentSessionId: recoveredAgentSessionId,
@@ -113,7 +113,7 @@ export class LinearSessionSync {
       currentLinearState: liveIssue.stateName,
       currentLinearStateType: liveIssue.stateType,
     })) {
-      this.db.upsertIssue({
+      this.db.issues.upsertIssue({
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         ...(liveIssue.stateName ? { currentLinearState: liveIssue.stateName } : {}),
@@ -127,7 +127,7 @@ export class LinearSessionSync {
 
     const normalizedCurrent = liveIssue.stateName?.trim().toLowerCase();
     if (normalizedCurrent === targetState.trim().toLowerCase()) {
-      this.db.upsertIssue({
+      this.db.issues.upsertIssue({
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         ...(liveIssue.stateName ? { currentLinearState: liveIssue.stateName } : {}),
@@ -137,7 +137,7 @@ export class LinearSessionSync {
     }
 
     const updated = await linear.setIssueState(issue.linearIssueId, targetState);
-    this.db.upsertIssue({
+    this.db.issues.upsertIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
       ...(updated.stateName ? { currentLinearState: updated.stateName } : {}),
@@ -192,7 +192,7 @@ export class LinearSessionSync {
     if (now - lastEmit < PROGRESS_THROTTLE_MS) return;
     this.progressThrottle.set(run.id, now);
 
-    const issue = this.db.getIssue(run.projectId, run.linearIssueId);
+    const issue = this.db.issues.getIssue(run.projectId, run.linearIssueId);
     if (issue) {
       void this.emitActivity(issue, activity, { ephemeral: true });
     }
@@ -216,7 +216,7 @@ export class LinearSessionSync {
         body,
       });
       if (result.id !== issue.statusCommentId) {
-        this.db.upsertIssue({
+        this.db.issues.upsertIssue({
           projectId: issue.projectId,
           linearIssueId: issue.linearIssueId,
           statusCommentId: result.id,

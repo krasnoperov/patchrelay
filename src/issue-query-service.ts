@@ -126,7 +126,7 @@ export class IssueQueryService {
       const legacy = this.db.getIssueOverview(issueKey);
       if (!legacy) return undefined;
 
-      const issueRecord = this.db.getIssueByKey(issueKey);
+      const issueRecord = this.db.issues.getIssueByKey(issueKey);
       const activeStatus = await this.runStatusProvider.getActiveRunStatus(issueKey);
       const activeRun = activeStatus?.run ?? legacy.activeRun;
       const latestRun = this.db.runs.getLatestRunForIssue(legacy.issue.projectId, legacy.issue.linearIssueId);
@@ -180,8 +180,8 @@ export class IssueQueryService {
       };
     }
 
-    const issueRecord = this.db.getIssueByKey(issueKey);
-    const blockedBy = this.db.listIssueDependencies(session.projectId, session.linearIssueId);
+    const issueRecord = this.db.issues.getIssueByKey(issueKey);
+    const blockedBy = this.db.issues.listIssueDependencies(session.projectId, session.linearIssueId);
     const unresolvedBlockedBy = blockedBy.filter((entry) => (
       entry.blockerCurrentLinearStateType !== "completed"
       && entry.blockerCurrentLinearState?.trim().toLowerCase() !== "done"
@@ -294,7 +294,7 @@ export class IssueQueryService {
     const overview = await this.getIssueOverview(issueKey);
     if (!overview) return undefined;
 
-    const issueRecord = this.db.getIssueByKey(issueKey);
+    const issueRecord = this.db.issues.getIssueByKey(issueKey);
     const latestRunReport = parseStageReport(overview.latestRun?.reportJson, overview.latestRun?.status ?? "unknown");
     const runs = (overview.runs ?? this.buildRuns(overview.issue.projectId, overview.issue.linearIssueId)).map((run) => ({
       run: {
