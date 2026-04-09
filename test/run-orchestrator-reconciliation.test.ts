@@ -877,6 +877,127 @@ exit 1`, "utf8");
   }
 });
 
+test("reconcileRun keeps a pending wake when zombie recovery backoff defers retry", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-zombie-backoff-"));
+  try {
+    const { db, enqueueCalls, orchestrator } = createOrchestrator(baseDir);
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-zombie-backoff",
+      issueKey: "USE-ZOMBIE-BACKOFF",
+      branchName: "feat-zombie-backoff",
+      factoryState: "implementing",
+      zombieRecoveryAttempts: 1,
+      lastZombieRecoveryAt: new Date().toISOString(),
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "implementation",
+      promptText: "recover zombie run",
+    });
+    db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      activeRunId: run.id,
+      factoryState: "implementing",
+      zombieRecoveryAttempts: 1,
+      lastZombieRecoveryAt: issue.lastZombieRecoveryAt,
+    });
+
+    const leaseId = "lease-zombie-backoff";
+    assert.equal(
+      db.issueSessions.acquireIssueSessionLease({
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        leaseId,
+        workerId: "worker-zombie-backoff",
+        leasedUntil: "2030-04-06T10:05:00.000Z",
+        now: "2030-04-06T10:00:00.000Z",
+      }),
+      true,
+    );
+    ((orchestrator as unknown as { activeSessionLeases: Map<string, string> }).activeSessionLeases)
+      .set(`${issue.projectId}:${issue.linearIssueId}`, leaseId);
+
+    await (orchestrator as unknown as { reconcileRun: (targetRun: typeof run) => Promise<void> }).reconcileRun(run);
+
+    const recoveredIssue = db.getIssue(issue.projectId, issue.linearIssueId);
+    assert.equal(recoveredIssue?.activeRunId, undefined);
+    assert.equal(recoveredIssue?.factoryState, "implementing");
+    assert.equal(recoveredIssue?.zombieRecoveryAttempts, 1);
+    assert.equal(db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId)?.runType, "implementation");
+    assert.deepEqual(enqueueCalls, []);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("run defers recovered zombie retries until the backoff window expires", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-run-zombie-delay-"));
+  try {
+    const { db, orchestrator } = createOrchestrator(baseDir);
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-zombie-delay",
+      issueKey: "USE-ZOMBIE-DELAY",
+      branchName: "feat-zombie-delay",
+      factoryState: "implementing",
+      zombieRecoveryAttempts: 1,
+      lastZombieRecoveryAt: new Date().toISOString(),
+    });
+    db.connection.prepare(`
+      UPDATE issue_sessions
+      SET last_run_type = 'implementation'
+      WHERE project_id = ? AND linear_issue_id = ?
+    `).run(issue.projectId, issue.linearIssueId);
+    db.issueSessions.appendIssueSessionEvent({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      eventType: "delegated",
+      dedupeKey: `recovery:2:implementation:${issue.linearIssueId}`,
+    });
+
+    let prepareCalls = 0;
+    let claimCalls = 0;
+    const runLauncher = (orchestrator as unknown as {
+      runLauncher: {
+        prepareLaunchPlan: (...args: unknown[]) => unknown;
+        claimRun: (...args: unknown[]) => unknown;
+      };
+    }).runLauncher;
+    runLauncher.prepareLaunchPlan = (() => {
+      prepareCalls += 1;
+      return { prompt: "prompt", branchName: "use/issue-zombie-delay", worktreePath: path.join(baseDir, "wt") };
+    }) as never;
+    runLauncher.claimRun = (() => {
+      claimCalls += 1;
+      return undefined;
+    }) as never;
+
+    await orchestrator.run({ projectId: issue.projectId, issueId: issue.linearIssueId });
+
+    assert.equal(prepareCalls, 0);
+    assert.equal(claimCalls, 0);
+    assert.equal(db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId)?.runType, "implementation");
+    assert.equal(db.issueSessions.getIssueSession(issue.projectId, issue.linearIssueId)?.leaseId, undefined);
+
+    db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      lastZombieRecoveryAt: new Date(Date.now() - 31_000).toISOString(),
+    });
+
+    await orchestrator.run({ projectId: issue.projectId, issueId: issue.linearIssueId });
+
+    assert.equal(prepareCalls, 1);
+    assert.equal(claimCalls, 1);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("reconcileIdleIssues does not dispatch queue repair for DIRTY PRs without queue admission", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-dirty-no-queue-"));
   const fakeBin = path.join(baseDir, "bin");

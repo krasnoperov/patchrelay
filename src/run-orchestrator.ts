@@ -28,6 +28,7 @@ import { RunFinalizer } from "./run-finalizer.ts";
 import { RunLauncher } from "./run-launcher.ts";
 import { RunRecoveryService } from "./run-recovery-service.ts";
 import { RunWakePlanner, type PendingRunWake } from "./run-wake-planner.ts";
+import { getRemainingZombieRecoveryDelayMs } from "./zombie-recovery.ts";
 
 function lowerCaseFirst(value: string): string {
   return value ? `${value.slice(0, 1).toLowerCase()}${value.slice(1)}` : value;
@@ -35,6 +36,16 @@ function lowerCaseFirst(value: string): string {
 
 function isRequestedChangesRunType(runType: RunType): boolean {
   return runType === "review_fix" || runType === "branch_upkeep";
+}
+
+function shouldDelayZombieRecoveryLaunch(
+  issue: Pick<IssueRecord, "zombieRecoveryAttempts" | "lastZombieRecoveryAt">,
+  issueSession: Pick<{ lastRunType?: RunType | undefined }, "lastRunType"> | undefined,
+  runType: RunType,
+): number {
+  if (issue.zombieRecoveryAttempts <= 0) return 0;
+  if (issueSession?.lastRunType !== runType) return 0;
+  return getRemainingZombieRecoveryDelayMs(issue.lastZombieRecoveryAt, issue.zombieRecoveryAttempts);
 }
 
 export class RunOrchestrator {
@@ -183,6 +194,15 @@ export class RunOrchestrator {
       return;
     }
     const { runType, context, resumeThread } = wake;
+    const remainingZombieDelayMs = shouldDelayZombieRecoveryLaunch(issue, issueSession, runType);
+    if (remainingZombieDelayMs > 0) {
+      this.logger.debug(
+        { issueKey: issue.issueKey, runType, remainingZombieDelayMs },
+        "Deferring recovered run launch until zombie backoff elapses",
+      );
+      this.releaseIssueSessionLease(item.projectId, item.issueId);
+      return;
+    }
     const effectiveContext = isRequestedChangesRunType(runType)
       ? await this.runCompletionPolicy.resolveRequestedChangesWakeContext(issue, runType, context)
       : context;

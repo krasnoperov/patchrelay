@@ -11,9 +11,9 @@ import type { LinearSessionSync } from "./linear-session-sync.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import type { AppendWakeEventWithLease } from "./run-wake-planner.ts";
 import { buildRunFailureActivity } from "./linear-session-reporting.ts";
+import { getRemainingZombieRecoveryDelayMs } from "./zombie-recovery.ts";
 
 const DEFAULT_ZOMBIE_RECOVERY_BUDGET = 5;
-const ZOMBIE_RECOVERY_BASE_DELAY_MS = 15_000;
 
 export class RunRecoveryService {
   constructor(
@@ -121,10 +121,18 @@ export class RunRecoveryService {
     }
 
     if (fresh.lastZombieRecoveryAt) {
-      const elapsed = Date.now() - new Date(fresh.lastZombieRecoveryAt).getTime();
-      const delay = ZOMBIE_RECOVERY_BASE_DELAY_MS * Math.pow(2, fresh.zombieRecoveryAttempts);
-      if (elapsed < delay) {
-        this.logger.debug({ issueKey: fresh.issueKey, attempts: fresh.zombieRecoveryAttempts, delay, elapsed }, "Recovery: backoff not elapsed, skipping");
+      const remainingDelayMs = getRemainingZombieRecoveryDelayMs(
+        fresh.lastZombieRecoveryAt,
+        fresh.zombieRecoveryAttempts,
+      );
+      if (remainingDelayMs > 0) {
+        this.withHeldLease(fresh.projectId, fresh.linearIssueId, (lease) => {
+          this.appendWakeEventWithLease(lease, fresh, runType, undefined, `recovery:${attempts}`);
+        });
+        this.logger.debug(
+          { issueKey: fresh.issueKey, attempts: fresh.zombieRecoveryAttempts, remainingDelayMs },
+          "Recovery: backoff not elapsed, deferring retry",
+        );
         return;
       }
     }
