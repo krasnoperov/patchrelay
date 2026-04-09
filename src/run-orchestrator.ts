@@ -35,7 +35,12 @@ import type { IssueSessionEventType } from "./issue-session-events.ts";
 
 const DEFAULT_CI_REPAIR_BUDGET = 3;
 const DEFAULT_QUEUE_REPAIR_BUDGET = 3;
-const DEFAULT_REVIEW_FIX_BUDGET = 6;
+// Requested-changes loops can legitimately take more iterations than CI/queue
+// repair when the reviewer is catching nuanced product or timing bugs across
+// successive heads. Keep a hard ceiling to prevent infinite ping-pong, but make
+// it wide enough that real review cycles can continue after multiple successful
+// head advances.
+const DEFAULT_REVIEW_FIX_BUDGET = 12;
 const DEFAULT_ZOMBIE_RECOVERY_BUDGET = 5;
 const ZOMBIE_RECOVERY_BASE_DELAY_MS = 15_000; // 15s, 30s, 60s, 120s, 240s
 const ISSUE_SESSION_LEASE_MS = 10 * 60_000;
