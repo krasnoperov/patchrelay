@@ -136,24 +136,19 @@ export class PatchRelayDatabase {
       this.connection,
       (issue) => this.syncIssueSessionFromIssue(issue),
     );
+    this.runs = new RunStore(
+      this.connection,
+      mapRunRow,
+      this.issues,
+      (issue, options) => this.syncIssueSessionFromIssue(issue, options),
+    );
     this.issueSessions = new IssueSessionStore(
       this.connection,
       mapIssueSessionRow,
       mapIssueSessionEventRow,
-      (projectId, linearIssueId) => this.issues.getIssue(projectId, linearIssueId),
+      this.issues,
+      this.runs,
       deriveImplicitReactiveWake,
-      <T>(fn: () => T) => this.transaction(fn),
-      (params) => this.issues.upsertIssue(params),
-      (runId, params) => this.runs.finishRun(runId, params),
-      (runId, params) => this.runs.updateRunThread(runId, params),
-      (projectId, linearIssueId, owner) => this.issues.setBranchOwner(projectId, linearIssueId, owner),
-    );
-    this.runs = new RunStore(
-      this.connection,
-      mapRunRow,
-      (id) => this.runs.getRunById(id),
-      (projectId, linearIssueId) => this.issues.getIssue(projectId, linearIssueId),
-      (issue, options) => this.syncIssueSessionFromIssue(issue, options),
     );
   }
 
