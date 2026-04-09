@@ -3,7 +3,7 @@ import type { GitHubAppBotIdentity } from "./github-app-token.ts";
 import type { CodexAppServerClient, CodexNotification } from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { BranchOwner, IssueRecord, RunRecord } from "./db-types.ts";
-import { TERMINAL_STATES, type FactoryState, type RunType } from "./factory-state.ts";
+import type { FactoryState, RunType } from "./factory-state.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import { extractTurnId, resolveRunCompletionStatus, summarizeCurrentThread } from "./run-reporting.ts";
 import {
@@ -16,8 +16,7 @@ import type {
   CodexThreadSummary,
   LinearClientProvider,
 } from "./types.ts";
-import { resolveAuthoritativeLinearStopState, resolvePreferredCompletedLinearState } from "./linear-workflow.ts";
-import { getThreadTurns } from "./codex-thread-utils.ts";
+import { resolvePreferredCompletedLinearState } from "./linear-workflow.ts";
 import { QueueHealthMonitor } from "./queue-health-monitor.ts";
 import { IdleIssueReconciler, resolveBranchOwnerForStateTransition } from "./idle-reconciliation.ts";
 import { LinearSessionSync } from "./linear-session-sync.ts";
@@ -26,6 +25,7 @@ import { InterruptedRunRecovery, resolveRecoverablePostRunState } from "./interr
 import { RunCompletionPolicy } from "./run-completion-policy.ts";
 import { RunFinalizer } from "./run-finalizer.ts";
 import { RunLauncher } from "./run-launcher.ts";
+import { RunReconciler } from "./run-reconciler.ts";
 import { RunRecoveryService } from "./run-recovery-service.ts";
 import { RunWakePlanner, type PendingRunWake } from "./run-wake-planner.ts";
 import { getRemainingZombieRecoveryDelayMs } from "./zombie-recovery.ts";
@@ -63,6 +63,7 @@ export class RunOrchestrator {
   private readonly runWakePlanner: RunWakePlanner;
   private readonly interruptedRunRecovery: InterruptedRunRecovery;
   private readonly runCompletionPolicy: RunCompletionPolicy;
+  private readonly runReconciler: RunReconciler;
   readonly activeSessionLeases: Map<string, string>;
   botIdentity?: GitHubAppBotIdentity;
 
@@ -125,6 +126,19 @@ export class RunOrchestrator {
       (issue) => this.restoreIdleWorktree(issue),
       this.runCompletionPolicy,
       (projectId, issueId) => this.enqueueIssue(projectId, issueId),
+      feed,
+    );
+    this.runReconciler = new RunReconciler(
+      db,
+      logger,
+      linearProvider,
+      this.linearSync,
+      this.interruptedRunRecovery,
+      this.runFinalizer,
+      (projectId, linearIssueId, fn) => this.withHeldIssueSessionLease(projectId, linearIssueId, fn),
+      (projectId, linearIssueId) => this.releaseIssueSessionLease(projectId, linearIssueId),
+      (threadId, maxRetries) => this.readThreadWithRetry(threadId, maxRetries),
+      (issue, runType, reason) => this.recoverOrEscalate(issue, runType, reason),
       feed,
     );
     this.runWakePlanner = new RunWakePlanner(db);
@@ -550,129 +564,7 @@ export class RunOrchestrator {
       recoveryLease = true;
     }
     if (recoveryLease === "skip") return;
-    const acquiredRecoveryLease = recoveryLease === true;
-
-    // If the issue reached a terminal state while this run was active
-    // (e.g. pr_merged processed, DB manually edited), just release the run.
-    if (TERMINAL_STATES.has(issue.factoryState)) {
-      this.withHeldIssueSessionLease(run.projectId, run.linearIssueId, () => {
-        this.db.runs.finishRun(run.id, { status: "released", failureReason: "Issue reached terminal state during active run" });
-        this.db.issues.upsertIssue({ projectId: run.projectId, linearIssueId: run.linearIssueId, activeRunId: null });
-      });
-      this.logger.info({ issueKey: issue.issueKey, runId: run.id, factoryState: issue.factoryState }, "Reconciliation: released run on terminal issue");
-      const releasedIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue;
-      void this.linearSync.syncSession(releasedIssue, { activeRunType: run.runType });
-      this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
-      return;
-    }
-
-    // Zombie run: claimed in DB but Codex never started (no thread).
-    // If this process still owns the live lease, launch may still be in flight
-    // between worktree prep and Codex thread creation, so do not self-recover it.
-    if (!run.threadId) {
-      if (recoveryLease === "owned") {
-        this.logger.debug(
-          { issueKey: issue.issueKey, runId: run.id, runType: run.runType },
-          "Skipping zombie reconciliation for locally-owned launch that has not created a thread yet",
-        );
-        return;
-      }
-      this.logger.warn(
-        { issueKey: issue.issueKey, runId: run.id, runType: run.runType },
-        "Zombie run detected (no thread)",
-      );
-      this.withHeldIssueSessionLease(run.projectId, run.linearIssueId, () => {
-        this.db.runs.finishRun(run.id, { status: "failed", failureReason: "Zombie: never started (no thread after restart)" });
-        this.db.issues.upsertIssue({ projectId: run.projectId, linearIssueId: run.linearIssueId, activeRunId: null });
-      });
-      this.recoverOrEscalate(issue, run.runType, "zombie");
-      const recoveredIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue;
-      void this.linearSync.emitActivity(recoveredIssue, buildRunFailureActivity(run.runType, "The Codex turn never started before PatchRelay restarted."));
-      void this.linearSync.syncSession(recoveredIssue, { activeRunType: run.runType });
-      this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
-      return;
-    }
-
-    // Read Codex state — thread may not exist after app-server restart.
-    let thread: CodexThreadSummary | undefined;
-    try {
-      thread = await this.readThreadWithRetry(run.threadId);
-    } catch {
-      this.logger.warn(
-        { issueKey: issue.issueKey, runId: run.id, runType: run.runType, threadId: run.threadId },
-        "Stale thread during reconciliation",
-      );
-      this.withHeldIssueSessionLease(run.projectId, run.linearIssueId, () => {
-        this.db.runs.finishRun(run.id, { status: "failed", failureReason: "Stale thread after restart" });
-        this.db.issues.upsertIssue({ projectId: run.projectId, linearIssueId: run.linearIssueId, activeRunId: null });
-      });
-      this.recoverOrEscalate(issue, run.runType, "stale_thread");
-      const recoveredIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue;
-      void this.linearSync.emitActivity(recoveredIssue, buildRunFailureActivity(run.runType, "PatchRelay lost the active Codex thread after restart and needs to recover."));
-      void this.linearSync.syncSession(recoveredIssue, { activeRunType: run.runType });
-      this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
-      return;
-    }
-
-    // Check Linear state (non-fatal — token refresh may fail)
-    const linear = await this.linearProvider.forProject(run.projectId).catch(() => undefined);
-    if (linear) {
-      const linearIssue = await linear.getIssue(run.linearIssueId).catch(() => undefined);
-      if (linearIssue) {
-        const stopState = resolveAuthoritativeLinearStopState(linearIssue);
-        if (stopState?.isFinal) {
-          this.withHeldIssueSessionLease(run.projectId, run.linearIssueId, () => {
-            this.db.runs.finishRun(run.id, { status: "released" });
-            this.db.issues.upsertIssue({
-              projectId: run.projectId,
-              linearIssueId: run.linearIssueId,
-              activeRunId: null,
-              currentLinearState: stopState.stateName,
-              factoryState: "done",
-            });
-          });
-          this.feed?.publish({
-            level: "info",
-            kind: "stage",
-            issueKey: issue.issueKey,
-            projectId: run.projectId,
-            stage: "done",
-            status: "reconciled",
-            summary: `Linear state ${stopState.stateName} \u2192 done`,
-          });
-          const doneIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue;
-          void this.linearSync.syncSession(doneIssue, { activeRunType: run.runType });
-          this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
-          return;
-        }
-      }
-    }
-
-    const latestTurn = getThreadTurns(thread).at(-1);
-
-    // Handle interrupted turn — fail the run rather than retrying indefinitely.
-    // The agent may have partially completed work (commits, PR) before interruption.
-    // Reactive loops (CI repair, review fix) will handle follow-up if needed.
-    if (latestTurn?.status === "interrupted") {
-      await this.interruptedRunRecovery.handle(run, issue);
-      return;
-    }
-
-    // Handle completed turn discovered during reconciliation
-    if (latestTurn?.status === "completed") {
-      await this.runFinalizer.finalizeCompletedRun({
-        source: "reconciliation",
-        run,
-        issue,
-        thread,
-        threadId: run.threadId,
-        ...(latestTurn.id ? { completedTurnId: latestTurn.id } : {}),
-        resolveRecoverableRunState: resolveRecoverablePostRunState,
-      });
-      return;
-    }
-
-    if (acquiredRecoveryLease) this.releaseIssueSessionLease(run.projectId, run.linearIssueId);
+    await this.runReconciler.reconcile({ run, issue, recoveryLease });
   }
 
   // ─── Internal helpers ─────────────────────────────────────────────
