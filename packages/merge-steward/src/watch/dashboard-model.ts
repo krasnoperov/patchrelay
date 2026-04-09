@@ -55,6 +55,21 @@ function getLatestEntries(snapshot: QueueWatchSnapshot | null): QueueEntry[] {
   return [...byPR.values()].sort((a, b) => a.position - b.position);
 }
 
+function getMostRecentActivityAt(snapshot: QueueWatchSnapshot | null): string | undefined {
+  const latestEntries = getLatestEntries(snapshot);
+  if (latestEntries.length === 0) {
+    return undefined;
+  }
+  return latestEntries.reduce((latest, entry) => {
+    if (!latest) {
+      return entry.updatedAt;
+    }
+    return new Date(entry.updatedAt).getTime() > new Date(latest).getTime()
+      ? entry.updatedAt
+      : latest;
+  }, undefined as string | undefined);
+}
+
 export function matchRepoRef(repo: DashboardRepoConfig, repoRef: string | undefined): boolean {
   if (!repoRef) {
     return false;
@@ -174,7 +189,7 @@ export function getRepoHealth(repo: DashboardRepoState, now = Date.now()): RepoH
     label: "Idle",
     color: "green",
     detail: snapshot.summary.total > 0
-      ? `No active queue work right now. Last activity was ${relativeTime(snapshot.entries[0]?.updatedAt)} ago.`
+      ? `No active queue work right now. Last activity was ${relativeTime(getMostRecentActivityAt(snapshot))} ago.`
       : "No pull requests are queued right now.",
   };
 }

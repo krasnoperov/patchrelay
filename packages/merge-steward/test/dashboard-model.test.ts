@@ -116,3 +116,25 @@ test("project stats only count unresolved latest evictions as need repair", () =
   assert.match(summary, /1 need repair/);
   assert.doesNotMatch(summary, /2 need repair/);
 });
+
+test("idle repo health reports the most recent activity instead of the oldest queue history", () => {
+  const oldMerged = makeEntry({
+    prNumber: 10,
+    position: 1,
+    status: "merged",
+    updatedAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1_000).toISOString(),
+  });
+  const recentMerged = makeEntry({
+    prNumber: 53,
+    position: 2,
+    status: "merged",
+    updatedAt: new Date(Date.now() - 30_000).toISOString(),
+  });
+  const snapshot = makeSnapshot([oldMerged, recentMerged]);
+
+  const health = getRepoHealth(makeRepo(snapshot));
+
+  assert.equal(health.kind, "idle");
+  assert.match(health.detail, /Last activity was 30s ago\./);
+  assert.doesNotMatch(health.detail, /2d ago/);
+});
