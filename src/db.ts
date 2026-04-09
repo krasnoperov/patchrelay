@@ -26,6 +26,7 @@ import { IssueSessionStore } from "./db/issue-session-store.ts";
 import { LinearInstallationStore } from "./db/linear-installation-store.ts";
 import { OperatorFeedStore } from "./db/operator-feed-store.ts";
 import { RepositoryLinkStore } from "./db/repository-link-store.ts";
+import { RunStore } from "./db/run-store.ts";
 import { WebhookEventStore } from "./db/webhook-event-store.ts";
 import { runPatchRelayMigrations } from "./db/migrations.ts";
 import { SqliteConnection, isoNow, type DatabaseConnection } from "./db/shared.ts";
@@ -119,6 +120,7 @@ export class PatchRelayDatabase {
   readonly repositories: RepositoryLinkStore;
   readonly webhookEvents: WebhookEventStore;
   readonly issueSessions: IssueSessionStore;
+  readonly runs: RunStore;
 
   constructor(databasePath: string, wal: boolean) {
     this.connection = new SqliteConnection(databasePath);
@@ -141,6 +143,13 @@ export class PatchRelayDatabase {
       (runId, params) => this.finishRun(runId, params),
       (runId, params) => this.updateRunThread(runId, params),
       (projectId, linearIssueId, owner) => this.setBranchOwner(projectId, linearIssueId, owner),
+    );
+    this.runs = new RunStore(
+      this.connection,
+      mapRunRow,
+      (id) => this.getRun(id),
+      (projectId, linearIssueId) => this.getIssue(projectId, linearIssueId),
+      (issue, options) => this.syncIssueSessionFromIssue(issue, options),
     );
   }
 
@@ -838,86 +847,39 @@ export class PatchRelayDatabase {
     sourceHeadSha?: string;
     promptText?: string;
   }): RunRecord {
-    const now = isoNow();
-    const result = this.connection.prepare(`
-      INSERT INTO runs (issue_id, project_id, linear_issue_id, run_type, status, source_head_sha, prompt_text, started_at)
-      VALUES (?, ?, ?, ?, 'queued', ?, ?, ?)
-    `).run(
-      params.issueId,
-      params.projectId,
-      params.linearIssueId,
-      params.runType,
-      params.sourceHeadSha ?? null,
-      params.promptText ?? null,
-      now,
-    );
-    const run = this.getRun(Number(result.lastInsertRowid))!;
-    const issue = this.getIssue(params.projectId, params.linearIssueId);
-    if (issue) {
-      this.syncIssueSessionFromIssue(issue, { lastRunType: run.runType });
-    }
-    return run;
+    return this.runs.createRun(params);
   }
 
   getRun(id: number): RunRecord | undefined {
-    const row = this.connection.prepare("SELECT * FROM runs WHERE id = ?").get(id) as Record<string, unknown> | undefined;
-    return row ? mapRunRow(row) : undefined;
+    return this.runs.getRunById(id);
   }
 
   getRunByThreadId(threadId: string): RunRecord | undefined {
-    const row = this.connection.prepare("SELECT * FROM runs WHERE thread_id = ?").get(threadId) as Record<string, unknown> | undefined;
-    return row ? mapRunRow(row) : undefined;
+    return this.runs.getRunByThreadId(threadId);
   }
 
   listRunsForIssue(projectId: string, linearIssueId: string): RunRecord[] {
-    const rows = this.connection
-      .prepare("SELECT * FROM runs WHERE project_id = ? AND linear_issue_id = ? ORDER BY id")
-      .all(projectId, linearIssueId) as Array<Record<string, unknown>>;
-    return rows.map(mapRunRow);
+    return this.runs.listRunsForIssue(projectId, linearIssueId);
   }
 
   getLatestRunForIssue(projectId: string, linearIssueId: string): RunRecord | undefined {
-    const row = this.connection
-      .prepare("SELECT * FROM runs WHERE project_id = ? AND linear_issue_id = ? ORDER BY id DESC LIMIT 1")
-      .get(projectId, linearIssueId) as Record<string, unknown> | undefined;
-    return row ? mapRunRow(row) : undefined;
+    return this.runs.getLatestRunForIssue(projectId, linearIssueId);
   }
 
   listActiveRuns(): RunRecord[] {
-    const rows = this.connection
-      .prepare("SELECT * FROM runs WHERE status IN ('queued', 'running')")
-      .all() as Array<Record<string, unknown>>;
-    return rows.map(mapRunRow);
+    return this.runs.listActiveRuns();
   }
 
   listRunningRuns(): RunRecord[] {
-    const rows = this.connection
-      .prepare("SELECT * FROM runs WHERE status IN ('running', 'queued')")
-      .all() as Array<Record<string, unknown>>;
-    return rows.map(mapRunRow);
+    return this.runs.listRunningRuns();
   }
 
   updateRunThread(runId: number, params: { threadId: string; parentThreadId?: string; turnId?: string }): void {
-    this.connection.prepare(`
-      UPDATE runs SET
-        thread_id = ?,
-        parent_thread_id = COALESCE(?, parent_thread_id),
-        turn_id = COALESCE(?, turn_id),
-        status = 'running'
-      WHERE id = ?
-        AND ended_at IS NULL
-        AND status IN ('queued', 'running')
-    `).run(params.threadId, params.parentThreadId ?? null, params.turnId ?? null, runId);
-    const run = this.getRun(runId);
-    if (!run) return;
-    const issue = this.getIssue(run.projectId, run.linearIssueId);
-    if (issue) {
-      this.syncIssueSessionFromIssue(issue);
-    }
+    this.runs.updateRunThread(runId, params);
   }
 
   updateRunTurnId(runId: number, turnId: string): void {
-    this.connection.prepare("UPDATE runs SET turn_id = ? WHERE id = ?").run(turnId, runId);
+    this.runs.updateRunTurnId(runId, turnId);
   }
 
   finishRun(runId: number, params: {
@@ -928,36 +890,7 @@ export class PatchRelayDatabase {
     summaryJson?: string;
     reportJson?: string;
   }): void {
-    const now = isoNow();
-    this.connection.prepare(`
-      UPDATE runs SET
-        status = ?,
-        thread_id = COALESCE(?, thread_id),
-        turn_id = COALESCE(?, turn_id),
-        failure_reason = COALESCE(?, failure_reason),
-        summary_json = COALESCE(?, summary_json),
-        report_json = COALESCE(?, report_json),
-        ended_at = ?
-      WHERE id = ?
-    `).run(
-      params.status,
-      params.threadId ?? null,
-      params.turnId ?? null,
-      params.failureReason ?? null,
-      params.summaryJson ?? null,
-      params.reportJson ?? null,
-      now,
-      runId,
-    );
-    const run = this.getRun(runId);
-    if (!run) return;
-    const issue = this.getIssue(run.projectId, run.linearIssueId);
-    if (issue) {
-      this.syncIssueSessionFromIssue(issue, {
-        summaryText: extractLatestAssistantSummary(this.getRun(runId) ?? run),
-        lastRunType: run.runType,
-      });
-    }
+    this.runs.finishRun(runId, params);
   }
 
   // ─── Thread Events (kept for extended history) ────────────────────
@@ -969,25 +902,11 @@ export class PatchRelayDatabase {
     method: string;
     eventJson: string;
   }): void {
-    this.connection.prepare(`
-      INSERT INTO run_thread_events (run_id, thread_id, turn_id, method, event_json, created_at)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(params.runId, params.threadId, params.turnId ?? null, params.method, params.eventJson, isoNow());
+    this.runs.saveThreadEvent(params);
   }
 
   listThreadEvents(runId: number): ThreadEventRecord[] {
-    const rows = this.connection
-      .prepare("SELECT * FROM run_thread_events WHERE run_id = ? ORDER BY id")
-      .all(runId) as Array<Record<string, unknown>>;
-    return rows.map((row) => ({
-      id: Number(row.id),
-      runId: Number(row.run_id),
-      threadId: String(row.thread_id),
-      ...(row.turn_id !== null ? { turnId: String(row.turn_id) } : {}),
-      method: String(row.method),
-      eventJson: String(row.event_json),
-      createdAt: String(row.created_at),
-    }));
+    return this.runs.listThreadEvents(runId);
   }
 
   // ─── View builders ──────────────────────────────────────────────
