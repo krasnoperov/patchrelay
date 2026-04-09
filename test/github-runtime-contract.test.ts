@@ -451,6 +451,41 @@ test("green gate-check completion does not queue new PatchRelay work", async () 
   }
 });
 
+test("non-gate successful checks do not mark PR checks green early", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-runtime-non-gate-green-"));
+  try {
+    const { db, enqueueCalls, handler } = createHandler(baseDir);
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-non-gate-green",
+      issueKey: "USE-11B",
+      branchName: "feat-non-gate-green",
+      prNumber: 112,
+      prState: "open",
+      factoryState: "pr_open",
+      prCheckStatus: "pending",
+    });
+
+    await handler.processGitHubWebhookEvent({
+      eventType: "check_run",
+      rawBody: buildSuccessfulCheckRunPayload({
+        branch: "feat-non-gate-green",
+        headSha: "sha-non-gate-green",
+        prNumber: 112,
+        checkName: "Static checks",
+      }),
+    });
+
+    const issue = db.getIssue("usertold", "issue-non-gate-green");
+    assert.equal(issue?.prCheckStatus, "pending");
+    assert.equal(issue?.pendingRunType, undefined);
+    assert.equal(issue?.activeRunId, undefined);
+    assert.deepEqual(enqueueCalls, []);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("pull request label events are inert for PatchRelay queue scheduling", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-runtime-queue-label-"));
   try {
@@ -644,6 +679,7 @@ test("push after requested changes does not auto request re-review", async () =>
       prAuthorLogin: "patchrelay[bot]",
       factoryState: "changes_requested",
       prReviewState: "changes_requested",
+      prCheckStatus: "success",
     });
 
     await handler.processGitHubWebhookEvent({
@@ -668,6 +704,8 @@ test("push after requested changes does not auto request re-review", async () =>
       }),
     });
 
+    const issue = db.getIssue("usertold", "issue-rereview");
+    assert.equal(issue?.prCheckStatus, "pending");
     assert.deepEqual(enqueueCalls, []);
     assert.deepEqual(fetchCalls, []);
   } finally {

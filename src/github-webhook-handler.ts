@@ -203,6 +203,8 @@ export class GitHubWebhookHandler {
 
     const project = this.config.projects.find((p) => p.id === issue.projectId);
 
+    const immediateCheckStatus = this.deriveImmediatePrCheckStatus(issue, event, project);
+
     // Update PR state on the issue
     this.db.issues.upsertIssue({
       projectId: issue.projectId,
@@ -213,7 +215,7 @@ export class GitHubWebhookHandler {
       ...(event.headSha !== undefined ? { prHeadSha: event.headSha } : {}),
       ...(event.prAuthorLogin !== undefined ? { prAuthorLogin: event.prAuthorLogin } : {}),
       ...(event.reviewState !== undefined ? { prReviewState: event.reviewState } : {}),
-      ...(event.checkStatus !== undefined ? { prCheckStatus: event.checkStatus } : {}),
+      ...(immediateCheckStatus !== undefined ? { prCheckStatus: immediateCheckStatus } : {}),
       ...(event.reviewState === "changes_requested"
         ? { lastBlockingReviewHeadSha: event.reviewCommitId ?? event.headSha ?? null }
         : event.reviewState === "approved"
@@ -861,6 +863,26 @@ export class GitHubWebhookHandler {
     if (event.eventSource !== "check_run" || !event.checkName) return false;
     const normalized = event.checkName.trim().toLowerCase();
     return this.getGateCheckNames(project).some((entry) => entry.trim().toLowerCase() === normalized);
+  }
+
+  private deriveImmediatePrCheckStatus(
+    issue: IssueRecord,
+    event: NormalizedGitHubEvent,
+    project?: ProjectConfig,
+  ): "pending" | "success" | "failure" | undefined {
+    if (event.triggerEvent === "pr_synchronize") {
+      return "pending";
+    }
+    if (event.eventSource !== "check_run") {
+      return undefined;
+    }
+    if (!this.isGateCheckEvent(event, project)) {
+      return undefined;
+    }
+    if (this.isStaleGateEvent(issue, event)) {
+      return undefined;
+    }
+    return event.checkStatus;
   }
 
   private isStaleGateEvent(issue: IssueRecord, event: NormalizedGitHubEvent): boolean {

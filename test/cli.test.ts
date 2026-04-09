@@ -880,6 +880,53 @@ test("cli sessions shows recorded app-server runs with resume commands", async (
   }
 });
 
+test("cli sessions explains when thread events are not persisted", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-sessions-no-history-"));
+  let data: CliDataAccess | undefined;
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, true);
+    db.runMigrations();
+    seedDatabase(db, config);
+
+    const issue = db.getIssue("usertold", "issue-1");
+    assert.ok(issue);
+
+    const reviewRun = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "review_fix",
+      promptText: "Address requested review changes",
+    });
+    db.runs.updateRunThread(reviewRun.id, {
+      threadId: "thread-54-review-no-history",
+      turnId: "turn-54-review-no-history",
+    });
+    db.runs.finishRun(reviewRun.id, {
+      status: "completed",
+      threadId: "thread-54-review-no-history",
+      turnId: "turn-54-review-no-history",
+      summaryJson: JSON.stringify({
+        latestAssistantMessage: "Finished without persisted raw thread events.",
+      }),
+    });
+
+    data = new CliDataAccess(config, { db });
+
+    const stdout = createBufferStream();
+    const stderr = createBufferStream();
+    assert.equal(await runCli(["issue", "sessions", "USE-54"], { config, data, stdout: stdout.stream, stderr: stderr.stream }), 0);
+
+    const rendered = stdout.read();
+    assert.match(rendered, /Events: not persisted \(persistExtendedHistory=false\)/);
+    assert.match(rendered, /Finished without persisted raw thread events/);
+  } finally {
+    data?.close();
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("cli rejects unknown commands and unknown flags", async () => {
   const commandError = createBufferStream();
   assert.equal(await runCli(["conenct"], { stdout: createBufferStream().stream, stderr: commandError.stream }), 1);
