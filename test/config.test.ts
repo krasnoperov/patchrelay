@@ -219,6 +219,65 @@ test("loadConfig defaults to the XDG config path when PATCHRELAY_CONFIG is unset
   }
 });
 
+test("loadConfig resolves installation prompt fragments relative to the config file", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-config-prompting-"));
+  const configDir = path.join(baseDir, "config");
+  const repoPath = path.join(baseDir, "repo");
+  const worktreeRoot = path.join(baseDir, "worktrees");
+
+  try {
+    mkdirSync(configDir, { recursive: true });
+    mkdirSync(repoPath, { recursive: true });
+    mkdirSync(worktreeRoot, { recursive: true });
+    mkdirSync(path.join(configDir, "prompts"), { recursive: true });
+    writeFileSync(path.join(configDir, "prompts", "prelude.md"), "Install prelude\n");
+    writeFileSync(path.join(configDir, "prompts", "publication.md"), "## Publication Requirements\n\nCustom publication\n");
+    writeConfigFixture(path.join(configDir, "patchrelay.json"), {
+      logging: { file_path: path.join(baseDir, "patchrelay.log") },
+      database: { path: path.join(baseDir, "patchrelay.sqlite") },
+      linear: {
+        webhook_secret_env: "REQUIRED_SECRET",
+        ...oauthConfig,
+      },
+      prompting: {
+        default: {
+          prepend_files: ["./prompts/prelude.md"],
+          replace_sections: {
+            "publication-contract": "./prompts/publication.md",
+          },
+        },
+      },
+      projects: [
+        {
+          id: "usertold",
+          repo_path: repoPath,
+          worktree_root: worktreeRoot,
+          trigger_events: ["statusChanged"],
+          branch_prefix: "use",
+        },
+      ],
+    });
+
+    withEnv(
+      {
+        PATCHRELAY_CONFIG: path.join(configDir, "patchrelay.json"),
+        REQUIRED_SECRET: "top-secret",
+        ...oauthEnv,
+      },
+      () => {
+        const config = loadConfig();
+        assert.equal(config.prompting.default.prepend[0]?.content, "Install prelude");
+        assert.equal(
+          config.prompting.default.replaceSections["publication-contract"]?.content,
+          "## Publication Requirements\n\nCustom publication",
+        );
+      },
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("loadConfig reads service secrets from the default adjacent service.env file", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-config-service-env-"));
   const configHome = path.join(baseDir, "config-home");

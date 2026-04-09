@@ -1,3 +1,4 @@
+import type { RunType } from "./factory-state.ts";
 import type { SecretSource } from "./resolve-secret.ts";
 import type { ProjectConfig } from "./workflow-types.ts";
 
@@ -25,6 +26,22 @@ export interface CodexAppServerConfig {
   sandboxMode: "danger-full-access" | "workspace-write" | "read-only";
   persistExtendedHistory: boolean;
   experimentalRawEvents?: boolean;
+}
+
+export interface PromptFileFragment {
+  sourcePath: string;
+  content: string;
+}
+
+export interface PromptCustomizationLayer {
+  prepend: PromptFileFragment[];
+  append: PromptFileFragment[];
+  replaceSections: Record<string, PromptFileFragment>;
+}
+
+export interface PatchRelayPromptingConfig {
+  default: PromptCustomizationLayer;
+  byRunType: Partial<Record<RunType, PromptCustomizationLayer>>;
 }
 
 export interface AppConfig {
@@ -70,6 +87,7 @@ export interface AppConfig {
     gitBin: string;
     codex: CodexAppServerConfig;
   };
+  prompting: PatchRelayPromptingConfig;
   repos: {
     root: string;
   };

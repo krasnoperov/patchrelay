@@ -566,6 +566,8 @@ export class ReviewQuillService {
         github: this.github,
         repo,
         pr,
+        prompting: this.config.prompting,
+        logger: this.logger,
       });
       // Log diff packer stats so production reviews show the same
       // numbers the `review-quill diff --json` CLI exposes locally.

@@ -12,6 +12,17 @@ export interface ReviewQuillRepositoryConfig {
   patchBodyBudgetTokens: number;
 }
 
+export interface PromptFileFragment {
+  sourcePath: string;
+  content: string;
+}
+
+export interface PromptCustomizationLayer {
+  prepend: PromptFileFragment[];
+  append: PromptFileFragment[];
+  replaceSections: Record<string, PromptFileFragment>;
+}
+
 export interface CodexAppServerConfig {
   bin: string;
   args: string[];
@@ -45,6 +56,7 @@ export interface ReviewQuillConfig {
     staleRunningAfterMs: number;
   };
   codex: CodexAppServerConfig;
+  prompting: PromptCustomizationLayer;
   repositories: ReviewQuillRepositoryConfig[];
   secretSources: Record<string, SecretSource>;
 }
@@ -153,6 +165,7 @@ export interface ReviewContext {
   repo: ReviewQuillRepositoryConfig;
   pr: PullRequestSummary;
   diff: ReviewDiffContext;
+  promptCustomization: PromptCustomizationLayer;
   promptContext: PromptContext;
   prompt: string;
 }

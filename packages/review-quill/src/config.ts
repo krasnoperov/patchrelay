@@ -22,6 +22,12 @@ const repositorySchema = z.object({
   patchBodyBudgetTokens: z.number().int().min(1_000).default(DEFAULT_PATCH_BODY_BUDGET_TOKENS),
 });
 
+const promptLayerSchema = z.object({
+  prependFiles: z.array(z.string().min(1)).default([]),
+  appendFiles: z.array(z.string().min(1)).default([]),
+  replaceSections: z.record(z.string().min(1), z.string().min(1)).default({}),
+});
+
 const configSchema = z.object({
   server: z.object({
     bind: z.string().default("127.0.0.1"),
@@ -83,8 +89,45 @@ const configSchema = z.object({
     approvalPolicy: "never",
     sandboxMode: "danger-full-access",
   }),
+  prompting: promptLayerSchema.default({
+    prependFiles: [],
+    appendFiles: [],
+    replaceSections: {},
+  }),
   repositories: z.array(repositorySchema).default([]),
 });
+
+function readPromptFile(configDir: string, filePath: string): ReviewQuillConfig["prompting"]["prepend"][number] {
+  const resolvedPath = path.isAbsolute(filePath) ? filePath : path.resolve(configDir, filePath);
+  if (!existsSync(resolvedPath)) {
+    throw new Error(`Prompt file not found: ${resolvedPath}`);
+  }
+  return {
+    sourcePath: resolvedPath,
+    content: readFileSync(resolvedPath, "utf8").trim(),
+  };
+}
+
+function loadPromptLayer(
+  configDir: string,
+  layer: {
+    prependFiles: string[];
+    appendFiles: string[];
+    replaceSections: Record<string, string>;
+  },
+): ReviewQuillConfig["prompting"] {
+  return {
+    prepend: layer.prependFiles
+      .map((filePath) => readPromptFile(configDir, filePath))
+      .filter((fragment) => fragment.content.length > 0),
+    append: layer.appendFiles
+      .map((filePath) => readPromptFile(configDir, filePath))
+      .filter((fragment) => fragment.content.length > 0),
+    replaceSections: Object.fromEntries(
+      Object.entries(layer.replaceSections).map(([sectionId, fragmentPath]) => [sectionId, readPromptFile(configDir, fragmentPath)]),
+    ),
+  };
+}
 
 function readEnvFile(filePath: string): Record<string, string> {
   if (!existsSync(filePath)) return {};
@@ -121,6 +164,7 @@ export function loadConfig(configPath: string): ReviewQuillConfig {
   const adjacentEnv = Object.assign({}, ...getAdjacentEnvFiles(configPath).map((filePath) => readEnvFile(filePath)));
   const env = { ...adjacentEnv, ...process.env } as Record<string, string | undefined>;
   const parsed = configSchema.parse(JSON.parse(raw) as unknown);
+  const configDir = path.dirname(configPath);
   const webhookSecret = resolveSecretWithSource("review-quill-webhook-secret", "REVIEW_QUILL_WEBHOOK_SECRET", env);
   const publicBaseUrl = parsed.server.publicBaseUrl ?? env.REVIEW_QUILL_PUBLIC_BASE_URL;
   const server = {
@@ -145,6 +189,7 @@ export function loadConfig(configPath: string): ReviewQuillConfig {
     ...parsed,
     server,
     codex,
+    prompting: loadPromptLayer(configDir, parsed.prompting),
     secretSources: {
       "review-quill-webhook-secret": webhookSecret.source,
     },

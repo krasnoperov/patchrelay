@@ -6,10 +6,11 @@ import test from "node:test";
 import {
   buildFollowUpRunPrompt,
   buildInitialRunPrompt,
-  buildRunPrompt,
+  buildRunPrompt as buildLayeredRunPrompt,
   resolveImplementationDeliveryMode,
-  shouldReuseIssueThread,
-} from "../src/run-orchestrator.ts";
+} from "../src/prompting/patchrelay.ts";
+import { shouldReuseIssueThread } from "../src/run-orchestrator.ts";
+import type { PromptCustomizationLayer } from "../src/types.ts";
 import type { IssueRecord } from "../src/db-types.ts";
 
 function createIssue(): IssueRecord {
@@ -40,7 +41,7 @@ test("implementation prompt always appends publication requirements even when th
       "- run tests",
     ].join("\n"));
 
-    const prompt = buildInitialRunPrompt(createIssue(), "implementation", baseDir);
+    const prompt = buildInitialRunPrompt({ issue: createIssue(), runType: "implementation", repoPath: baseDir });
 
     assert.match(prompt, /## Task Objective/);
     assert.match(prompt, /## Scope Discipline/);
@@ -60,11 +61,16 @@ test("repair prompts append publication requirements for the existing PR branch"
   try {
     writeFileSync(path.join(baseDir, "IMPLEMENTATION_WORKFLOW.md"), "# Implementation Workflow\n");
 
-    const prompt = buildRunPrompt({
-      ...createIssue(),
-      factoryState: "repairing_ci",
-      prNumber: 12,
-    }, "ci_repair", baseDir, { checkName: "lint" });
+    const prompt = buildLayeredRunPrompt({
+      issue: {
+        ...createIssue(),
+        factoryState: "repairing_ci",
+        prNumber: 12,
+      },
+      runType: "ci_repair",
+      repoPath: baseDir,
+      context: { checkName: "lint" },
+    });
 
     assert.match(prompt, /## Publication Requirements/);
     assert.match(prompt, /publish the result to the existing PR branch/);
@@ -88,7 +94,7 @@ test("planning-only implementation prompts switch to Linear-only delivery requir
       ].join("\n"),
     };
 
-    const prompt = buildInitialRunPrompt(issue, "implementation", baseDir);
+    const prompt = buildInitialRunPrompt({ issue, runType: "implementation", repoPath: baseDir });
 
     assert.equal(resolveImplementationDeliveryMode(issue), "linear_only");
     assert.match(prompt, /## Delivery Requirements/);
@@ -105,17 +111,22 @@ test("branch_upkeep prompt includes explicit branch upkeep guidance when the PR 
     writeFileSync(path.join(baseDir, "REVIEW_WORKFLOW.md"), "# Review Workflow\n");
 
     const prompt = buildFollowUpRunPrompt({
-      ...createIssue(),
-      factoryState: "changes_requested",
-      prNumber: 12,
-      prReviewState: "changes_requested",
-    }, "branch_upkeep", baseDir, {
-      promptContext: "The requested review change is already addressed, but GitHub still reports PR #12 as DIRTY against latest main. Before stopping, update the existing PR branch onto latest main, resolve any conflicts, rerun the narrowest relevant verification, and push again.",
-      branchUpkeepRequired: true,
-      mergeStateStatus: "DIRTY",
-      baseBranch: "main",
-      wakeReason: "branch_upkeep",
-      githubFactsFresh: true,
+      issue: {
+        ...createIssue(),
+        factoryState: "changes_requested",
+        prNumber: 12,
+        prReviewState: "changes_requested",
+      },
+      runType: "branch_upkeep",
+      repoPath: baseDir,
+      context: {
+        promptContext: "The requested review change is already addressed, but GitHub still reports PR #12 as DIRTY against latest main. Before stopping, update the existing PR branch onto latest main, resolve any conflicts, rerun the narrowest relevant verification, and push again.",
+        branchUpkeepRequired: true,
+        mergeStateStatus: "DIRTY",
+        baseBranch: "main",
+        wakeReason: "branch_upkeep",
+        githubFactsFresh: true,
+      },
     });
 
     assert.match(prompt, /## Follow-up Turn/);
@@ -140,25 +151,30 @@ test("review_fix prompt embeds structured inline review context", () => {
     writeFileSync(path.join(baseDir, "REVIEW_WORKFLOW.md"), "# Review Workflow\n");
 
     const prompt = buildFollowUpRunPrompt({
-      ...createIssue(),
-      factoryState: "changes_requested",
-      prNumber: 26,
-      prReviewState: "changes_requested",
-    }, "review_fix", baseDir, {
-      reviewerName: "review-quill",
-      reviewBody: "The recovery shell still shows fake standings.",
-      reviewId: 901,
-      reviewCommitId: "abc123def456",
-      reviewUrl: "https://github.com/owner/repo/pull/26#pullrequestreview-901",
-      reviewComments: [
-        {
-          body: "Blank totals should not produce a leader.",
-          path: "src/frontend/app/sessionSchema.ts",
-          line: 1526,
-          side: "RIGHT",
-          url: "https://github.com/owner/repo/pull/26#discussion_r71",
-        },
-      ],
+      issue: {
+        ...createIssue(),
+        factoryState: "changes_requested",
+        prNumber: 26,
+        prReviewState: "changes_requested",
+      },
+      runType: "review_fix",
+      repoPath: baseDir,
+      context: {
+        reviewerName: "review-quill",
+        reviewBody: "The recovery shell still shows fake standings.",
+        reviewId: 901,
+        reviewCommitId: "abc123def456",
+        reviewUrl: "https://github.com/owner/repo/pull/26#pullrequestreview-901",
+        reviewComments: [
+          {
+            body: "Blank totals should not produce a leader.",
+            path: "src/frontend/app/sessionSchema.ts",
+            line: 1526,
+            side: "RIGHT",
+            url: "https://github.com/owner/repo/pull/26#discussion_r71",
+          },
+        ],
+      },
     });
 
     assert.match(prompt, /## Structured Review Context/);
@@ -209,18 +225,23 @@ test("buildRunPrompt switches implementation follow-ups to the follow-up prompt 
   try {
     writeFileSync(path.join(baseDir, "IMPLEMENTATION_WORKFLOW.md"), "# Implementation Workflow\n");
 
-    const prompt = buildRunPrompt({
-      ...createIssue(),
-      factoryState: "pr_open",
-      prNumber: 22,
-      prHeadSha: "abc123def456",
-      prReviewState: "commented",
-    }, "implementation", baseDir, {
-      wakeReason: "followup_comment",
-      followUpMode: true,
-      followUps: [
-        { type: "followup_comment", text: "Please keep the existing API stable.", author: "alice" },
-      ],
+    const prompt = buildLayeredRunPrompt({
+      issue: {
+        ...createIssue(),
+        factoryState: "pr_open",
+        prNumber: 22,
+        prHeadSha: "abc123def456",
+        prReviewState: "commented",
+      },
+      runType: "implementation",
+      repoPath: baseDir,
+      context: {
+        wakeReason: "followup_comment",
+        followUpMode: true,
+        followUps: [
+          { type: "followup_comment", text: "Please keep the existing API stable.", author: "alice" },
+        ],
+      },
     });
 
     assert.match(prompt, /## Follow-up Turn/);
@@ -243,24 +264,68 @@ test("buildRunPrompt keeps direct-reply follow-ups concise", () => {
   try {
     writeFileSync(path.join(baseDir, "IMPLEMENTATION_WORKFLOW.md"), "# Implementation Workflow\n");
 
-    const prompt = buildRunPrompt({
-      ...createIssue(),
-      factoryState: "awaiting_input",
-      prNumber: 22,
-      prHeadSha: "abc123def456",
-    }, "implementation", baseDir, {
-      wakeReason: "direct_reply",
-      directReplyMode: true,
-      followUpCount: 1,
-      followUps: [
-        { type: "direct_reply", text: "Use the staged rollout copy.", author: "alice" },
-      ],
+    const prompt = buildLayeredRunPrompt({
+      issue: {
+        ...createIssue(),
+        factoryState: "awaiting_input",
+        prNumber: 22,
+        prHeadSha: "abc123def456",
+      },
+      runType: "implementation",
+      repoPath: baseDir,
+      context: {
+        wakeReason: "direct_reply",
+        directReplyMode: true,
+        followUpCount: 1,
+        followUps: [
+          { type: "direct_reply", text: "Use the staged rollout copy.", author: "alice" },
+        ],
+      },
     });
 
     assert.match(prompt, /Why this turn exists: A human reply arrived for the outstanding question from the previous turn/);
     assert.match(prompt, /Required action now: Apply the latest human answer, continue from the current branch\/session context/);
     assert.match(prompt, /direct_reply from alice: Use the staged rollout copy/);
     assert.doesNotMatch(prompt, /## Direct Reply Handling/);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("buildRunPrompt applies prompt layers without replacing the whole default prompt", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-prompt-layer-"));
+  const promptLayers: PromptCustomizationLayer[] = [
+    {
+      prepend: [{ sourcePath: "/install/prelude.md", content: "Install-level prelude" }],
+      append: [{ sourcePath: "/repo/appendix.md", content: "Repo appendix" }],
+      replaceSections: {
+        "publication-contract": {
+          sourcePath: "/repo/publication.md",
+          content: "## Publication Requirements\n\nUse the existing publication contract.",
+        },
+      },
+    },
+  ];
+
+  try {
+    writeFileSync(path.join(baseDir, "IMPLEMENTATION_WORKFLOW.md"), "# Implementation Workflow\n\nStay focused.\n");
+
+    const prompt = buildLayeredRunPrompt({
+      issue: {
+        ...createIssue(),
+        factoryState: "delegated",
+      },
+      runType: "implementation",
+      repoPath: baseDir,
+      promptLayers,
+    });
+
+    assert.match(prompt, /Install-level prelude/);
+    assert.match(prompt, /## Task Objective/);
+    assert.match(prompt, /## Scope Discipline/);
+    assert.match(prompt, /Stay focused\./);
+    assert.match(prompt, /Use the existing publication contract/);
+    assert.match(prompt, /Repo appendix/);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

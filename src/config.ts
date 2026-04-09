@@ -73,6 +73,20 @@ const repositorySchema = z.object({
   }).optional(),
 });
 
+const promptLayerSchema = z.object({
+  prepend_files: z.array(z.string().min(1)).default([]),
+  append_files: z.array(z.string().min(1)).default([]),
+  replace_sections: z.record(z.string().min(1), z.string().min(1)).default({}),
+});
+
+const promptByRunTypeSchema = z.object({
+  implementation: promptLayerSchema.optional(),
+  review_fix: promptLayerSchema.optional(),
+  branch_upkeep: promptLayerSchema.optional(),
+  ci_repair: promptLayerSchema.optional(),
+  queue_repair: promptLayerSchema.optional(),
+});
+
 const configSchema = z.object({
   server: z.object({
     bind: z.string().default("127.0.0.1"),
@@ -135,6 +149,21 @@ const configSchema = z.object({
       experimental_raw_events: z.boolean().default(true),
     }),
   }),
+  prompting: z.object({
+    default: promptLayerSchema.default({
+      prepend_files: [],
+      append_files: [],
+      replace_sections: {},
+    }),
+    by_run_type: promptByRunTypeSchema.default({}),
+  }).default({
+    default: {
+      prepend_files: [],
+      append_files: [],
+      replace_sections: {},
+    },
+    by_run_type: {},
+  }),
   repos: z.object({
     root: z.string().min(1).default(path.join(homedir(), "projects")),
   }).default(() => ({ root: path.join(homedir(), "projects") })),
@@ -188,6 +217,7 @@ function withSectionDefaults(input: unknown): unknown {
     logging: {},
     database: {},
     operator_api: {},
+    prompting: {},
     repos: {},
     projects: [],
     repositories: [],
@@ -205,6 +235,38 @@ function withSectionDefaults(input: unknown): unknown {
 
 function resolveRepoSettingsPath(repoPath: string): string {
   return path.join(repoPath, REPO_SETTINGS_DIRNAME, REPO_SETTINGS_FILENAME);
+}
+
+function readPromptFile(configDir: string, filePath: string): AppConfig["prompting"]["default"]["prepend"][number] {
+  const resolvedPath = path.isAbsolute(filePath) ? filePath : path.resolve(configDir, filePath);
+  if (!existsSync(resolvedPath)) {
+    throw new Error(`Prompt file not found: ${resolvedPath}`);
+  }
+  return {
+    sourcePath: resolvedPath,
+    content: readFileSync(resolvedPath, "utf8").trim(),
+  };
+}
+
+function loadPromptLayer(
+  configDir: string,
+  layer: {
+    prepend_files: string[];
+    append_files: string[];
+    replace_sections: Record<string, string>;
+  },
+): AppConfig["prompting"]["default"] {
+  return {
+    prepend: layer.prepend_files
+      .map((filePath) => readPromptFile(configDir, filePath))
+      .filter((fragment) => fragment.content.length > 0),
+    append: layer.append_files
+      .map((filePath) => readPromptFile(configDir, filePath))
+      .filter((fragment) => fragment.content.length > 0),
+    replaceSections: Object.fromEntries(
+      Object.entries(layer.replace_sections).map(([sectionId, fragmentPath]) => [sectionId, readPromptFile(configDir, fragmentPath)]),
+    ),
+  };
 }
 
 function expandEnv(value: unknown, env: Record<string, string | undefined>): unknown {
@@ -395,6 +457,7 @@ export function loadConfig(
 
   const parsedFile = parseJsonFile(requestedPath, "config file");
   const parsed = configSchema.parse(withSectionDefaults(expandEnv(parsedFile, env)));
+  const configDir = path.dirname(requestedPath);
 
   const requirements = getLoadProfileRequirements(profile);
   const rWebhookSecret = resolveSecretWithSource("linear-webhook-secret", parsed.linear.webhook_secret_env, env);
@@ -571,6 +634,14 @@ export function loadConfig(
         persistExtendedHistory: parsed.runner.codex.persist_extended_history,
         experimentalRawEvents: parsed.runner.codex.experimental_raw_events,
       },
+    },
+    prompting: {
+      default: loadPromptLayer(configDir, parsed.prompting.default),
+      byRunType: Object.fromEntries(
+        Object.entries(parsed.prompting.by_run_type)
+          .filter(([, layer]) => Boolean(layer))
+          .map(([runType, layer]) => [runType, loadPromptLayer(configDir, layer!)]),
+      ) as AppConfig["prompting"]["byRunType"],
     },
     repos: {
       root: reposRoot,

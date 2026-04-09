@@ -22,6 +22,11 @@
     "approvalPolicy": "never",
     "sandboxMode": "danger-full-access"
   },
+  "prompting": {
+    "prependFiles": [],
+    "appendFiles": [],
+    "replaceSections": {}
+  },
   "repositories": [
     {
       "repoId": "mafia",
