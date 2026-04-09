@@ -4,18 +4,16 @@ import type { PatchRelayDatabase } from "./db.ts";
 import type { RunType } from "./factory-state.ts";
 import { deriveIssueStatusNote } from "./status-note.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
-import { resolveProject, trustedActorAllowed } from "./project-resolution.ts";
+import { trustedActorAllowed } from "./project-resolution.ts";
 import { normalizeWebhook } from "./webhooks.ts";
 import { InstallationWebhookHandler } from "./webhook-installation-handler.ts";
 import { AgentSessionHandler } from "./webhooks/agent-session-handler.ts";
 import { CommentWakeHandler } from "./webhooks/comment-wake-handler.ts";
+import { WebhookContextLoader } from "./webhooks/context-loader.ts";
+import { DependencyReadinessHandler } from "./webhooks/dependency-readiness-handler.ts";
 import { DesiredStageRecorder } from "./webhooks/desired-stage-recorder.ts";
-import {
-  hasCompleteIssueContext,
-  mergeIssueMetadata,
-} from "./webhooks/decision-helpers.ts";
 import { IssueRemovalHandler } from "./webhooks/issue-removal-handler.ts";
-import type { AppConfig, LinearClientProvider, LinearWebhookPayload, NormalizedEvent, ProjectConfig } from "./types.ts";
+import type { AppConfig, LinearClientProvider, LinearWebhookPayload } from "./types.ts";
 import { safeJsonParse, sanitizeDiagnosticText } from "./utils.ts";
 import { extractLatestAssistantSummary } from "./issue-session-events.ts";
 
@@ -30,6 +28,8 @@ export class WebhookHandler {
   private readonly commentWakeHandler: CommentWakeHandler;
   private readonly agentSessionHandler: AgentSessionHandler;
   private readonly desiredStageRecorder: DesiredStageRecorder;
+  private readonly contextLoader: WebhookContextLoader;
+  private readonly dependencyReadinessHandler: DependencyReadinessHandler;
 
   constructor(
     private readonly config: AppConfig,
@@ -45,6 +45,11 @@ export class WebhookHandler {
     this.commentWakeHandler = new CommentWakeHandler(db, codex, logger, feed);
     this.agentSessionHandler = new AgentSessionHandler(config, db, linearProvider, codex, logger, feed);
     this.desiredStageRecorder = new DesiredStageRecorder(db, linearProvider, feed);
+    this.contextLoader = new WebhookContextLoader(config, linearProvider);
+    this.dependencyReadinessHandler = new DependencyReadinessHandler(
+      db,
+      (projectId, issueId) => this.peekPendingSessionWakeRunType(projectId, issueId),
+    );
   }
 
   async processWebhookEvent(webhookEventId: number): Promise<void> {
@@ -84,11 +89,8 @@ export class WebhookHandler {
         return;
       }
 
-      let project = resolveProject(this.config, normalized.issue);
-      if (!project) {
-        const routed = await this.tryHydrateProjectRoute(normalized);
-        if (routed) { normalized = routed.normalized; project = routed.project; }
-      }
+      const routed = await this.contextLoader.load(normalized);
+      const project = routed?.project;
       if (!project) {
         this.feed?.publish({
           level: "warn",
@@ -100,6 +102,7 @@ export class WebhookHandler {
         this.db.webhookEvents.markWebhookProcessed(webhookEventId, "processed");
         return;
       }
+      normalized = routed.normalized;
 
       const routedIssue = normalized.issue;
       if (!routedIssue) {
@@ -121,7 +124,7 @@ export class WebhookHandler {
       }
 
       this.db.webhookEvents.assignWebhookProject(webhookEventId, project.id);
-      const hydrated = await this.hydrateIssueContext(project.id, normalized);
+      const hydrated = normalized;
       const issue = hydrated.issue ?? routedIssue;
 
       // Record desired stage and upsert issue
@@ -133,7 +136,7 @@ export class WebhookHandler {
       });
       const trackedIssue = result.issue;
 
-      const newlyReadyDependents = this.reconcileDependentReadiness(project.id, issue.id);
+      const newlyReadyDependents = this.dependencyReadinessHandler.reconcile(project.id, issue.id);
 
       // Handle issue removal: release active runs, mark as failed.
       if (hydrated.triggerEvent === "issueRemoved") {
@@ -217,53 +220,6 @@ export class WebhookHandler {
     }
   }
 
-  private reconcileDependentReadiness(projectId: string, blockerLinearIssueId: string): string[] {
-    const newlyReady: string[] = [];
-    for (const dependent of this.db.issues.listDependents(projectId, blockerLinearIssueId)) {
-      const issue = this.db.issues.getIssue(projectId, dependent.linearIssueId);
-      if (!issue) {
-        continue;
-      }
-
-      const unresolved = this.db.issues.countUnresolvedBlockers(projectId, dependent.linearIssueId);
-      if (unresolved > 0) {
-        if (this.peekPendingSessionWakeRunType(projectId, dependent.linearIssueId) === "implementation"
-          && issue.activeRunId === undefined
-          && !this.db.issueSessions.hasPendingIssueSessionEvents(projectId, dependent.linearIssueId)) {
-          this.db.issues.upsertIssue({
-            projectId,
-            linearIssueId: dependent.linearIssueId,
-            pendingRunType: null,
-            pendingRunContextJson: null,
-          });
-        }
-        continue;
-      }
-
-      if (issue.factoryState !== "delegated" || issue.activeRunId !== undefined || this.db.issueSessions.hasPendingIssueSessionEvents(projectId, dependent.linearIssueId)) {
-        continue;
-      }
-
-      if (this.peekPendingSessionWakeRunType(projectId, dependent.linearIssueId) === "implementation") {
-        this.db.issues.upsertIssue({
-          projectId,
-          linearIssueId: dependent.linearIssueId,
-          pendingRunType: null,
-          pendingRunContextJson: null,
-        });
-      }
-      this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(projectId, dependent.linearIssueId, {
-        projectId,
-        linearIssueId: dependent.linearIssueId,
-        eventType: "delegated",
-        dedupeKey: `delegated:${dependent.linearIssueId}`,
-      });
-      newlyReady.push(dependent.linearIssueId);
-    }
-
-    return newlyReady;
-  }
-
   private async stopActiveRun(
     run: NonNullable<ReturnType<PatchRelayDatabase["runs"]["getRunById"]>>,
     input: string,
@@ -287,43 +243,6 @@ export class WebhookHandler {
     }
     this.enqueueIssue(projectId, issueId);
     return wake.runType;
-  }
-
-  private async hydrateIssueContext(projectId: string, normalized: NormalizedEvent): Promise<NormalizedEvent> {
-    if (!normalized.issue) return normalized;
-    if (normalized.triggerEvent !== "agentSessionCreated" && normalized.triggerEvent !== "agentPrompted" && normalized.entityType !== "Issue") {
-      return normalized;
-    }
-    if (normalized.entityType !== "Issue" && hasCompleteIssueContext(normalized.issue)) return normalized;
-
-    const linear = await this.linearProvider.forProject(projectId);
-    if (!linear) return normalized;
-
-    try {
-      const liveIssue = await linear.getIssue(normalized.issue.id);
-      return { ...normalized, issue: mergeIssueMetadata(normalized.issue, liveIssue) };
-    } catch {
-      return normalized;
-    }
-  }
-
-  private async tryHydrateProjectRoute(
-    normalized: NormalizedEvent,
-  ): Promise<{ project: ProjectConfig; normalized: NormalizedEvent } | undefined> {
-    if (!normalized.issue) return undefined;
-    if (normalized.triggerEvent !== "agentSessionCreated" && normalized.triggerEvent !== "agentPrompted") return undefined;
-
-    for (const candidate of this.config.projects) {
-      const linear = await this.linearProvider.forProject(candidate.id);
-      if (!linear) continue;
-      try {
-        const liveIssue = await linear.getIssue(normalized.issue.id);
-        const hydrated = { ...normalized, issue: mergeIssueMetadata(normalized.issue, liveIssue) };
-        const resolved = resolveProject(this.config, hydrated.issue);
-        if (resolved) return { project: resolved, normalized: hydrated };
-      } catch { /* continue to next candidate */ }
-    }
-    return undefined;
   }
 
   private isDirectReplyToOutstandingQuestion(issue: ReturnType<PatchRelayDatabase["getIssue"]>): boolean {
