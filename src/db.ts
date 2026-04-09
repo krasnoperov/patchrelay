@@ -26,6 +26,7 @@ import {
 import { LinearInstallationStore } from "./db/linear-installation-store.ts";
 import { OperatorFeedStore } from "./db/operator-feed-store.ts";
 import { RepositoryLinkStore } from "./db/repository-link-store.ts";
+import { WebhookEventStore } from "./db/webhook-event-store.ts";
 import { runPatchRelayMigrations } from "./db/migrations.ts";
 import { SqliteConnection, isoNow, type DatabaseConnection } from "./db/shared.ts";
 import { buildTrackedIssueRecord } from "./tracked-issue-projector.ts";
@@ -116,6 +117,7 @@ export class PatchRelayDatabase {
   readonly linearInstallations: LinearInstallationStore;
   readonly operatorFeed: OperatorFeedStore;
   readonly repositories: RepositoryLinkStore;
+  readonly webhookEvents: WebhookEventStore;
 
   constructor(databasePath: string, wal: boolean) {
     this.connection = new SqliteConnection(databasePath);
@@ -126,6 +128,7 @@ export class PatchRelayDatabase {
     this.linearInstallations = new LinearInstallationStore(this.connection);
     this.operatorFeed = new OperatorFeedStore(this.connection);
     this.repositories = new RepositoryLinkStore(this.connection);
+    this.webhookEvents = new WebhookEventStore(this.connection);
   }
 
   runMigrations(): void {
@@ -139,16 +142,7 @@ export class PatchRelayDatabase {
   // ─── Webhook Events ───────────────────────────────────────────────
 
   insertWebhookEvent(webhookId: string, receivedAt: string): { id: number; duplicate: boolean } {
-    const existing = this.connection
-      .prepare("SELECT id FROM webhook_events WHERE webhook_id = ?")
-      .get(webhookId) as { id: number } | undefined;
-    if (existing) {
-      return { id: existing.id as number, duplicate: true };
-    }
-    const result = this.connection
-      .prepare("INSERT INTO webhook_events (webhook_id, received_at, processing_status) VALUES (?, ?, 'processed')")
-      .run(webhookId, receivedAt);
-    return { id: Number(result.lastInsertRowid), duplicate: false };
+    return this.webhookEvents.insertWebhookEvent(webhookId, receivedAt);
   }
 
   insertFullWebhookEvent(params: {
@@ -156,34 +150,23 @@ export class PatchRelayDatabase {
     receivedAt: string;
     payloadJson: string;
   }): { id: number; dedupeStatus: string } {
-    const existing = this.connection
-      .prepare("SELECT id FROM webhook_events WHERE webhook_id = ?")
-      .get(params.webhookId) as { id: number } | undefined;
-    if (existing) {
-      return { id: existing.id as number, dedupeStatus: "duplicate" };
-    }
-    const result = this.connection
-      .prepare("INSERT INTO webhook_events (webhook_id, received_at, payload_json) VALUES (?, ?, ?)")
-      .run(params.webhookId, params.receivedAt, params.payloadJson);
-    return { id: Number(result.lastInsertRowid), dedupeStatus: "accepted" };
+    return this.webhookEvents.insertFullWebhookEvent(params);
   }
 
   getWebhookPayload(id: number): { webhookId: string; payloadJson: string } | undefined {
-    const row = this.connection.prepare("SELECT webhook_id, payload_json FROM webhook_events WHERE id = ?").get(id) as Record<string, unknown> | undefined;
-    if (!row || !row.payload_json) return undefined;
-    return { webhookId: String(row.webhook_id), payloadJson: String(row.payload_json) };
+    return this.webhookEvents.getWebhookPayload(id);
   }
 
   isWebhookDuplicate(webhookId: string): boolean {
-    return this.connection.prepare("SELECT 1 FROM webhook_events WHERE webhook_id = ?").get(webhookId) !== undefined;
+    return this.webhookEvents.isWebhookDuplicate(webhookId);
   }
 
   markWebhookProcessed(id: number, status: string): void {
-    this.connection.prepare("UPDATE webhook_events SET processing_status = ? WHERE id = ?").run(status, id);
+    this.webhookEvents.markWebhookProcessed(id, status);
   }
 
   assignWebhookProject(id: number, projectId: string): void {
-    this.connection.prepare("UPDATE webhook_events SET project_id = ? WHERE id = ?").run(projectId, id);
+    this.webhookEvents.assignWebhookProject(id, projectId);
   }
 
   // ─── Issues ───────────────────────────────────────────────────────

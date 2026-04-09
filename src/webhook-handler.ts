@@ -9,25 +9,13 @@ import { normalizeWebhook } from "./webhooks.ts";
 import { InstallationWebhookHandler } from "./webhook-installation-handler.ts";
 import { AgentSessionHandler } from "./webhooks/agent-session-handler.ts";
 import { CommentWakeHandler } from "./webhooks/comment-wake-handler.ts";
+import { DesiredStageRecorder } from "./webhooks/desired-stage-recorder.ts";
 import {
-  decideActiveRunRelease,
-  decideAgentSession,
-  decideRunIntent,
-  decideUnDelegation,
   hasCompleteIssueContext,
-  isTerminalDelegationState,
   mergeIssueMetadata,
 } from "./webhooks/decision-helpers.ts";
 import { IssueRemovalHandler } from "./webhooks/issue-removal-handler.ts";
-import type {
-  AppConfig,
-  IssueMetadata,
-  LinearClientProvider,
-  LinearWebhookPayload,
-  NormalizedEvent,
-  ProjectConfig,
-  TrackedIssueRecord,
-} from "./types.ts";
+import type { AppConfig, LinearClientProvider, LinearWebhookPayload, NormalizedEvent } from "./types.ts";
 import { safeJsonParse, sanitizeDiagnosticText } from "./utils.ts";
 import { extractLatestAssistantSummary } from "./issue-session-events.ts";
 
@@ -41,6 +29,7 @@ export class WebhookHandler {
   private readonly issueRemovalHandler: IssueRemovalHandler;
   private readonly commentWakeHandler: CommentWakeHandler;
   private readonly agentSessionHandler: AgentSessionHandler;
+  private readonly desiredStageRecorder: DesiredStageRecorder;
 
   constructor(
     private readonly config: AppConfig,
@@ -55,6 +44,7 @@ export class WebhookHandler {
     this.issueRemovalHandler = new IssueRemovalHandler(db, feed);
     this.commentWakeHandler = new CommentWakeHandler(db, codex, logger, feed);
     this.agentSessionHandler = new AgentSessionHandler(config, db, linearProvider, codex, logger, feed);
+    this.desiredStageRecorder = new DesiredStageRecorder(db, linearProvider, feed);
   }
 
   async processWebhookEvent(webhookEventId: number): Promise<void> {
@@ -135,7 +125,12 @@ export class WebhookHandler {
       const issue = hydrated.issue ?? routedIssue;
 
       // Record desired stage and upsert issue
-      const result = await this.recordDesiredStage(project, hydrated);
+      const result = await this.desiredStageRecorder.record({
+        project,
+        normalized: hydrated,
+        peekPendingSessionWakeRunType: (projectId, issueId) => this.peekPendingSessionWakeRunType(projectId, issueId),
+        stopActiveRun: (run, input) => this.stopActiveRun(run, input),
+      });
       const trackedIssue = result.issue;
 
       const newlyReadyDependents = this.reconcileDependentReadiness(project.id, issue.id);
@@ -220,192 +215,6 @@ export class WebhookHandler {
       );
       throw err;
     }
-  }
-
-  private async recordDesiredStage(
-    project: ProjectConfig,
-    normalized: NormalizedEvent,
-  ): Promise<{
-    issue: TrackedIssueRecord | undefined;
-    wakeRunType: RunType | undefined;
-    delegated: boolean;
-  }> {
-    const normalizedIssue = normalized.issue;
-    if (!normalizedIssue) {
-      return { issue: undefined, wakeRunType: undefined, delegated: false };
-    }
-
-    // ── 1. Fetch data ────────────────────────────────────────────
-    const existingIssue = this.db.getIssue(project.id, normalizedIssue.id);
-    const activeRun = existingIssue?.activeRunId ? this.db.getRun(existingIssue.activeRunId) : undefined;
-    const delegated = this.isDelegatedToPatchRelay(project, normalized);
-    const triggerAllowed = triggerEventAllowed(project, normalized.triggerEvent);
-    const incomingAgentSessionId = normalized.agentSession?.id;
-    const hasPendingWake = this.db.peekIssueSessionWake(project.id, normalizedIssue.id) !== undefined;
-
-    if (!existingIssue && !delegated && !incomingAgentSessionId) {
-      return { issue: undefined, wakeRunType: undefined, delegated };
-    }
-
-    const hydratedIssue = await this.syncIssueDependencies(project.id, normalizedIssue);
-    const unresolvedBlockers = this.db.countUnresolvedBlockers(project.id, normalizedIssue.id);
-    const terminal = isTerminalDelegationState(existingIssue, hydratedIssue);
-
-    // ── 2. Pure decisions ────────────────────────────────────────
-    const desiredStage = decideRunIntent({
-      delegated, triggerAllowed, triggerEvent: normalized.triggerEvent, unresolvedBlockers,
-      hasActiveRun: Boolean(activeRun),
-      hasPendingWake,
-      terminal,
-      currentState: existingIssue?.factoryState,
-    });
-
-    const runRelease = decideActiveRunRelease({
-      hasActiveRun: Boolean(activeRun),
-      terminal,
-      triggerEvent: normalized.triggerEvent,
-      delegated,
-    });
-
-    const undelegation = decideUnDelegation({
-      triggerEvent: normalized.triggerEvent,
-      delegated,
-      currentState: existingIssue?.factoryState,
-    });
-    const delegatedStateRecovery =
-      delegated
-      && !terminal
-      && existingIssue?.factoryState === "awaiting_input"
-      && !undelegation.factoryState;
-
-    const existingWakeRunType = existingIssue ? this.peekPendingSessionWakeRunType(project.id, normalizedIssue.id) : undefined;
-    const clearPending = (unresolvedBlockers > 0 && existingWakeRunType === "implementation" && !activeRun)
-      || undelegation.clearPending;
-
-    const agentSessionId = decideAgentSession({
-      sessionId: normalized.agentSession?.id,
-      triggerEvent: normalized.triggerEvent,
-      delegated,
-    });
-
-    // ── 3. Transactional commit ──────────────────────────────────
-    const commitIssueUpdate = () => {
-      const record = this.db.upsertIssue({
-        projectId: project.id,
-        linearIssueId: normalizedIssue.id,
-        ...(hydratedIssue.identifier ? { issueKey: hydratedIssue.identifier } : {}),
-        ...(hydratedIssue.title ? { title: hydratedIssue.title } : {}),
-        ...(hydratedIssue.description ? { description: hydratedIssue.description } : {}),
-        ...(hydratedIssue.url ? { url: hydratedIssue.url } : {}),
-        ...(hydratedIssue.priority != null ? { priority: hydratedIssue.priority } : {}),
-        ...(hydratedIssue.estimate != null ? { estimate: hydratedIssue.estimate } : {}),
-        ...(hydratedIssue.stateName ? { currentLinearState: hydratedIssue.stateName } : {}),
-        ...(hydratedIssue.stateType ? { currentLinearStateType: hydratedIssue.stateType } : {}),
-        ...(!existingIssue && !delegated && incomingAgentSessionId ? { factoryState: "awaiting_input" as const } : {}),
-        ...(delegatedStateRecovery ? { factoryState: "delegated" as const } : {}),
-        ...(desiredStage ? { pendingRunType: null, pendingRunContextJson: null, factoryState: "delegated" as const } : {}),
-        ...(clearPending ? { pendingRunType: null, pendingRunContextJson: null } : {}),
-        ...(agentSessionId !== undefined ? { agentSessionId } : {}),
-        ...(runRelease.release ? { activeRunId: null } : {}),
-        ...(undelegation.factoryState ? { factoryState: undelegation.factoryState as never } : {}),
-      });
-      if (runRelease.release && activeRun && runRelease.reason) {
-        this.db.finishRun(activeRun.id, { status: "released", failureReason: runRelease.reason });
-      }
-      return record;
-    };
-    const activeLease = this.db.getActiveIssueSessionLease(project.id, normalizedIssue.id);
-    const issue = activeLease
-      ? this.db.withIssueSessionLease(project.id, normalizedIssue.id, activeLease.leaseId, commitIssueUpdate) ?? (existingIssue ?? this.db.upsertIssue({
-          projectId: project.id,
-          linearIssueId: normalizedIssue.id,
-          ...(hydratedIssue.identifier ? { issueKey: hydratedIssue.identifier } : {}),
-        }))
-      : this.db.transaction(commitIssueUpdate);
-
-    // ── 4. Side effects (after transaction) ──────────────────────
-    if (undelegation.factoryState) {
-      if (activeRun?.threadId && activeRun.turnId) {
-        await this.stopActiveRun(activeRun, "STOP: The issue was un-delegated from PatchRelay. Stop working immediately and exit.");
-      }
-      this.db.appendIssueSessionEvent({
-        projectId: project.id,
-        linearIssueId: normalizedIssue.id,
-        eventType: "undelegated",
-        dedupeKey: `undelegated:${normalizedIssue.id}`,
-      });
-      this.db.clearPendingIssueSessionEventsRespectingActiveLease(project.id, normalizedIssue.id);
-      this.db.releaseIssueSessionLeaseRespectingActiveLease(project.id, normalizedIssue.id);
-      this.feed?.publish({
-        level: "warn",
-        kind: "stage",
-        issueKey: issue.issueKey,
-        projectId: project.id,
-        stage: "awaiting_input",
-        status: "un_delegated",
-        summary: "Issue un-delegated from PatchRelay",
-      });
-    } else if (
-      desiredStage === "implementation"
-      && normalized.triggerEvent !== "commentCreated"
-      && normalized.triggerEvent !== "commentUpdated"
-      && normalized.triggerEvent !== "agentPrompted"
-    ) {
-      this.db.appendIssueSessionEventRespectingActiveLease(project.id, normalizedIssue.id, {
-        projectId: project.id,
-        linearIssueId: normalizedIssue.id,
-        eventType: "delegated",
-        eventJson: JSON.stringify({
-          promptContext: normalized.agentSession?.promptContext?.trim()
-            ?? (issue.issueKey ? `Linear issue ${issue.issueKey} was delegated to PatchRelay.` : undefined),
-          promptBody: normalized.agentSession?.promptBody?.trim(),
-        }),
-        dedupeKey: `delegated:${normalizedIssue.id}`,
-      });
-    }
-
-    return {
-      issue: this.db.issueToTrackedIssue(issue),
-      wakeRunType: this.peekPendingSessionWakeRunType(project.id, normalizedIssue.id),
-      delegated,
-    };
-  }
-
-  private isDelegatedToPatchRelay(project: ProjectConfig, normalized: NormalizedEvent): boolean {
-    if (!normalized.issue) return false;
-    const installation = this.db.linearInstallations.getLinearInstallationForProject(project.id);
-    if (!installation?.actorId) return false;
-    return normalized.issue.delegateId === installation.actorId;
-  }
-
-  private async syncIssueDependencies(projectId: string, issue: IssueMetadata): Promise<IssueMetadata> {
-    let source = issue;
-    if (!source.relationsKnown) {
-      const linear = await this.linearProvider.forProject(projectId);
-      if (linear) {
-        try {
-          source = mergeIssueMetadata(source, await linear.getIssue(issue.id));
-        } catch {
-          // Preserve existing dependency rows when webhook relation data is incomplete.
-        }
-      }
-    }
-
-    if (source.relationsKnown) {
-      this.db.replaceIssueDependencies({
-        projectId,
-        linearIssueId: source.id,
-        blockers: source.blockedBy.map((blocker) => ({
-          blockerLinearIssueId: blocker.id,
-          ...(blocker.identifier ? { blockerIssueKey: blocker.identifier } : {}),
-          ...(blocker.title ? { blockerTitle: blocker.title } : {}),
-          ...(blocker.stateName ? { blockerCurrentLinearState: blocker.stateName } : {}),
-          ...(blocker.stateType ? { blockerCurrentLinearStateType: blocker.stateType } : {}),
-        })),
-      });
-    }
-
-    return source;
   }
 
   private reconcileDependentReadiness(projectId: string, blockerLinearIssueId: string): string[] {
