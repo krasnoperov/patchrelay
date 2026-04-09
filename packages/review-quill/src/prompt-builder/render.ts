@@ -139,6 +139,15 @@ const GROUNDING_RULES = `Current-head grounding rules:
 - The checked-out repository is for surrounding context only. Use it to understand impacted behavior, but not to expand the claimed scope of the PR beyond the diff inventory.
 - If you believe there is a scope/control problem, quote the specific files or patches from the current diff inventory that create that problem.`;
 
+const TASK_BOUNDARY_RULES = `Task-boundary rules:
+- Review the PR that is actually in front of you. Do not silently widen the delegated task.
+- A broader product inconsistency should be blocking only when ONE of these is true:
+  1. the current diff directly introduces the regression,
+  2. the repository guidance explicitly says the changed surfaces must stay aligned as one flow,
+  3. the PR title/body explicitly makes that broader behavior part of the task.
+- If you notice a worthwhile adjacent improvement outside those conditions, keep it as a non-blocking concern or nit instead of requesting changes.
+- Do not turn "this should probably also be cleaned up elsewhere" into a blocking verdict unless the current PR clearly makes that mismatch worse.`;
+
 const PRIOR_REVIEW_RULES = `How to use previous reviews:
 - Previous formal reviews are historical claims to verify, not facts to repeat automatically.
 - Re-check each important prior-review claim against the CURRENT head, CURRENT diff inventory, and CURRENT code before reusing it.
@@ -202,6 +211,9 @@ export function renderReviewPrompt(context: Omit<ReviewContext, "prompt">): stri
     "## Grounding",
     GROUNDING_RULES,
     "",
+    "## Task Boundary",
+    TASK_BOUNDARY_RULES,
+    "",
     "## Previous review handling",
     PRIOR_REVIEW_RULES,
     "",
@@ -224,8 +236,7 @@ export function renderReviewPrompt(context: Omit<ReviewContext, "prompt">): stri
     lines.push(
       "",
       `Linked issue keys detected: ${issueKeys.join(", ")}`,
-      "If the `linear` MCP tool is available, read the most relevant issue before finalizing your verdict.",
-      "Use the issue to understand intent and acceptance context, then return to the checked-out code and diff.",
+      "Treat issue keys as identifiers only. Do not fetch or infer extra tracker scope unless that intent is already visible in the PR title/body or repository guidance.",
     );
   }
 

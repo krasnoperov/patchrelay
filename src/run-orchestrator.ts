@@ -198,6 +198,51 @@ function appendTaskObjective(lines: string[], issue: IssueRecord): void {
   lines.push("");
 }
 
+function extractIssueSection(description: string | undefined, heading: string): string | undefined {
+  if (!description) return undefined;
+  const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`^## ${escaped}\\s*$([\\s\\S]*?)(?=^##\\s+|$)`, "im");
+  const match = description.match(pattern);
+  const body = match?.[1]?.trim();
+  return body && body.length > 0 ? body : undefined;
+}
+
+function appendScopeDiscipline(lines: string[], issue: IssueRecord): void {
+  const description = issue.description?.trim();
+  const scope = extractIssueSection(description, "Scope");
+  const acceptance = extractIssueSection(description, "Acceptance criteria")
+    ?? extractIssueSection(description, "Success criteria");
+  const relevantCode = extractIssueSection(description, "Relevant code");
+
+  lines.push("## Scope Discipline", "");
+  lines.push(
+    "Stay inside the delegated task.",
+    "Finish the issue completely enough to satisfy its stated scope and acceptance criteria, but do not widen it into unrelated product polish or follow-up cleanup.",
+    "Only broaden to adjacent routes, copy, or supporting surfaces when the issue text or repository guidance explicitly says they are the same user flow.",
+    "If you notice a worthwhile broader inconsistency that is not required to make this task correct, mention it in your summary as follow-up context instead of expanding the implementation.",
+    "",
+  );
+
+  if (scope) {
+    lines.push("### In Scope", "", scope, "");
+  }
+  if (acceptance) {
+    lines.push("### Acceptance / Done", "", acceptance, "");
+  }
+  if (relevantCode) {
+    lines.push("### Relevant Code", "", relevantCode, "");
+  }
+
+  lines.push(
+    "### Likely Review Invariants",
+    "",
+    "- Check the surfaces explicitly named in the task before stopping.",
+    "- If repository guidance says certain changed surfaces are one flow, verify that shared flow, but do not treat unrelated surrounding cleanup as part of this task.",
+    "- A review repair should fix the concrete concern on the current head, not silently expand the Linear issue into a broader rewrite.",
+    "",
+  );
+}
+
 function appendLinearContext(lines: string[], context?: Record<string, unknown>): void {
   const promptContext = typeof context?.promptContext === "string" ? context.promptContext.trim() : "";
   const latestPrompt = typeof context?.promptBody === "string" ? context.promptBody.trim() : "";
@@ -542,6 +587,7 @@ function appendRequestedChangesInstructions(lines: string[], runType: RunType, c
 export function buildInitialRunPrompt(issue: IssueRecord, runType: RunType, repoPath: string, context?: Record<string, unknown>): string {
   const lines: string[] = buildPromptHeader(issue);
   appendTaskObjective(lines, issue);
+  appendScopeDiscipline(lines, issue);
   appendLinearContext(lines, context);
 
   // Add run-type-specific context for reactive runs
@@ -620,6 +666,8 @@ export function buildInitialRunPrompt(issue: IssueRecord, runType: RunType, repo
 export function buildFollowUpRunPrompt(issue: IssueRecord, runType: RunType, repoPath: string, context?: Record<string, unknown>): string {
   const lines: string[] = buildPromptHeader(issue);
   appendFollowUpPromptPrelude(lines, issue, runType, context);
+  appendTaskObjective(lines, issue);
+  appendScopeDiscipline(lines, issue);
 
   // Add run-type-specific context for reactive runs
   switch (runType) {

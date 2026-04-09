@@ -109,7 +109,10 @@ test("renderReviewPrompt includes explicit guidance docs and suppressed summarie
   assert.match(prompt, /## Prior review claims to verify/);
   assert.match(prompt, /Do not repeat a claim just because it appeared in a previous review/);
   assert.match(prompt, /Linked issue keys detected: TST-28/);
-  assert.match(prompt, /linear` MCP tool is available/);
+  assert.match(prompt, /## Task Boundary/);
+  assert.match(prompt, /Do not silently widen the delegated task/);
+  assert.match(prompt, /broader product inconsistency should be blocking only when ONE of these is true/);
+  assert.match(prompt, /Treat issue keys as identifiers only/);
   assert.match(prompt, /authoritative definition of this PR's scope on the current head/);
   assert.match(prompt, /historical claims to verify/);
   assert.match(prompt, /Do NOT claim that this PR changes files, routes, or surfaces that do not appear in that current diff inventory/);

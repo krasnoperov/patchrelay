@@ -43,6 +43,9 @@ test("implementation prompt always appends publication requirements even when th
     const prompt = buildInitialRunPrompt(createIssue(), "implementation", baseDir);
 
     assert.match(prompt, /## Task Objective/);
+    assert.match(prompt, /## Scope Discipline/);
+    assert.match(prompt, /Stay inside the delegated task/);
+    assert.match(prompt, /### Likely Review Invariants/);
     assert.match(prompt, /## Publication Requirements/);
     assert.match(prompt, /commit them, push the issue branch, and open or update the PR before stopping/);
     assert.match(prompt, /Do not stop with only local commits or uncommitted changes/);
@@ -159,6 +162,8 @@ test("review_fix prompt embeds structured inline review context", () => {
     });
 
     assert.match(prompt, /## Structured Review Context/);
+    assert.match(prompt, /## Scope Discipline/);
+    assert.match(prompt, /Only broaden to adjacent routes, copy, or supporting surfaces when the issue text or repository guidance explicitly says they are the same user flow/);
     assert.match(prompt, /Review ID: 901/);
     assert.match(prompt, /Reviewed commit: abc123def456/);
     assert.match(prompt, /Inline review comments captured: 1/);
