@@ -9,7 +9,9 @@ import type { LinearSessionSync } from "./linear-session-sync.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import { buildStageReport, countEventMethods } from "./run-reporting.ts";
 import type { AppendWakeEventWithLease } from "./run-wake-planner.ts";
-import { buildCompletionCheckActivity, buildRunCompletedActivity, buildRunFailureActivity } from "./linear-session-reporting.ts";
+import type { buildCompletionCheckActivity } from "./linear-session-reporting.ts";
+import { buildRunCompletedActivity, buildRunFailureActivity } from "./linear-session-reporting.ts";
+import { handleNoPrCompletionCheck } from "./no-pr-completion-check.ts";
 import type { RunCompletionPolicy } from "./run-completion-policy.ts";
 import { resolveCompletedRunState } from "./run-completion-policy.ts";
 
@@ -89,7 +91,7 @@ export class RunFinalizer {
     level: "warn" | "error";
     status: string;
     summary: string;
-    detail?: string;
+    detail?: string | undefined;
   }): void {
     const issue = this.db.issues.getIssue(params.run.projectId, params.run.linearIssueId) ?? params.fallbackIssue;
     this.publishTurnEvent({
@@ -111,9 +113,9 @@ export class RunFinalizer {
     level: "info" | "warn";
     status: string;
     summary: string;
-    detail?: string;
+    detail?: string | undefined;
     activity: ReturnType<typeof buildCompletionCheckActivity>;
-    enqueue?: boolean;
+    enqueue?: boolean | undefined;
   }): void {
     const issue = this.db.issues.getIssue(params.run.projectId, params.run.linearIssueId) ?? params.fallbackIssue;
     this.publishTurnEvent({
@@ -183,197 +185,23 @@ export class RunFinalizer {
 
     const publishedOutcomeError = await this.completionPolicy.verifyPublishedRunOutcome(run, freshIssue);
     if (publishedOutcomeError) {
-      this.publishTurnEvent({
-        level: "info",
+      await handleNoPrCompletionCheck({
+        db: this.db,
+        logger: this.logger,
+        withHeldLease: this.withHeldLease,
+        completionCheck: this.completionCheck,
         run,
-        issueKey: freshIssue.issueKey,
-        status: "completion_check_started",
-        summary: "No PR found; checking next step",
-        detail: publishedOutcomeError,
-      });
-      void this.linearSync.emitActivity(freshIssue, buildCompletionCheckActivity("started"), { ephemeral: true });
-
-      let completionCheck: CompletionCheckExecution;
-      try {
-        completionCheck = await this.completionCheck.run({
-          issue: freshIssue,
-          run,
-          noPrSummary: publishedOutcomeError,
-          onStarted: ({ threadId: completionCheckThreadId, turnId: completionCheckTurnId }) => {
-            this.db.runs.markCompletionCheckStarted(run.id, {
-              threadId: completionCheckThreadId,
-              turnId: completionCheckTurnId,
-            });
-          },
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        const failureMessage = `No PR observed and the completion check failed: ${message}`;
-        this.failRunAndClear(run, failureMessage, "failed");
-        this.syncFailureOutcome({
-          run,
-          fallbackIssue: freshIssue,
-          message: failureMessage,
-          level: "error",
-          status: "completion_check_failed",
-          summary: "No PR found; completion check failed",
-          detail: message,
-        });
-        return;
-      }
-
-      const completedRunUpdate = this.buildCompletedRunUpdate({
+        issue: freshIssue,
+        report,
         threadId,
         ...(params.completedTurnId ? { completedTurnId: params.completedTurnId } : {}),
-        report,
-      });
-
-      if (completionCheck.outcome === "continue") {
-        const continued = this.withHeldLease(run.projectId, run.linearIssueId, (lease) => {
-          this.db.runs.finishRun(run.id, completedRunUpdate);
-          this.db.runs.saveCompletionCheck(run.id, completionCheck);
-          this.db.issues.upsertIssue({
-            projectId: run.projectId,
-            linearIssueId: run.linearIssueId,
-            activeRunId: null,
-            factoryState: "delegated",
-            pendingRunType: null,
-            pendingRunContextJson: null,
-          });
-          return Boolean(this.db.issueSessions.appendIssueSessionEventWithLease(lease, {
-            projectId: run.projectId,
-            linearIssueId: run.linearIssueId,
-            eventType: "completion_check_continue",
-            eventJson: JSON.stringify({
-              runType: run.runType,
-              summary: completionCheck.summary,
-            }),
-            dedupeKey: `completion_check_continue:${run.id}`,
-          }));
-        });
-        if (!continued) {
-          this.logger.warn({ runId: run.id, issueId: run.linearIssueId }, "Skipping completion-check continue writes after losing issue-session lease");
-          this.clearProgressAndRelease(run);
-          return;
-        }
-        this.syncCompletionCheckOutcome({
-          run,
-          fallbackIssue: freshIssue,
-          level: "info",
-          status: "completion_check_continue",
-          summary: "No PR found; continuing automatically",
-          detail: completionCheck.summary,
-          activity: buildCompletionCheckActivity("continue"),
-          enqueue: true,
-        });
-        return;
-      }
-
-      if (completionCheck.outcome === "needs_input") {
-        const completed = this.withHeldLease(run.projectId, run.linearIssueId, (lease) => {
-          this.db.runs.finishRun(run.id, completedRunUpdate);
-          this.db.runs.saveCompletionCheck(run.id, completionCheck);
-          this.db.issueSessions.clearPendingIssueSessionEventsWithLease(lease);
-          this.db.issues.upsertIssue({
-            projectId: run.projectId,
-            linearIssueId: run.linearIssueId,
-            activeRunId: null,
-            factoryState: "awaiting_input",
-            pendingRunType: null,
-            pendingRunContextJson: null,
-          });
-          return true;
-        });
-        if (!completed) {
-          this.logger.warn({ runId: run.id, issueId: run.linearIssueId }, "Skipping completion-check needs-input writes after losing issue-session lease");
-          this.clearProgressAndRelease(run);
-          return;
-        }
-        this.syncCompletionCheckOutcome({
-          run,
-          fallbackIssue: freshIssue,
-          level: "warn",
-          status: "completion_check_needs_input",
-          summary: "No PR found; waiting for answer",
-          detail: completionCheck.question ?? completionCheck.summary,
-          activity: buildCompletionCheckActivity("needs_input", completionCheck),
-        });
-        return;
-      }
-
-      if (completionCheck.outcome === "done") {
-        const completed = this.withHeldLease(run.projectId, run.linearIssueId, (lease) => {
-          this.db.runs.finishRun(run.id, completedRunUpdate);
-          this.db.runs.saveCompletionCheck(run.id, completionCheck);
-          this.db.issueSessions.clearPendingIssueSessionEventsWithLease(lease);
-          this.db.issues.upsertIssue({
-            projectId: run.projectId,
-            linearIssueId: run.linearIssueId,
-            activeRunId: null,
-            factoryState: "done",
-            pendingRunType: null,
-            pendingRunContextJson: null,
-            lastGitHubFailureSource: null,
-            lastGitHubFailureHeadSha: null,
-            lastGitHubFailureSignature: null,
-            lastGitHubFailureCheckName: null,
-            lastGitHubFailureCheckUrl: null,
-            lastGitHubFailureContextJson: null,
-            lastGitHubFailureAt: null,
-            lastQueueIncidentJson: null,
-            lastAttemptedFailureHeadSha: null,
-            lastAttemptedFailureSignature: null,
-          });
-          return true;
-        });
-        if (!completed) {
-          this.logger.warn({ runId: run.id, issueId: run.linearIssueId }, "Skipping completion-check done writes after losing issue-session lease");
-          this.clearProgressAndRelease(run);
-          return;
-        }
-        this.syncCompletionCheckOutcome({
-          run,
-          fallbackIssue: freshIssue,
-          level: "info",
-          status: "completion_check_done",
-          summary: "No PR found; confirmed done",
-          detail: completionCheck.summary,
-          activity: buildCompletionCheckActivity("done", completionCheck),
-        });
-        return;
-      }
-
-      const failureReason = `No PR observed and the completion check failed this run: ${completionCheck.summary}`;
-      const failed = this.withHeldLease(run.projectId, run.linearIssueId, () => {
-        this.db.runs.finishRun(run.id, {
-          ...completedRunUpdate,
-          status: "failed",
-          failureReason,
-        });
-        this.db.runs.saveCompletionCheck(run.id, completionCheck);
-        this.db.issues.upsertIssue({
-          projectId: run.projectId,
-          linearIssueId: run.linearIssueId,
-          activeRunId: null,
-          factoryState: "failed",
-          pendingRunType: null,
-          pendingRunContextJson: null,
-        });
-        return true;
-      });
-      if (!failed) {
-        this.logger.warn({ runId: run.id, issueId: run.linearIssueId }, "Skipping completion-check failed writes after losing issue-session lease");
-        this.clearProgressAndRelease(run);
-        return;
-      }
-      this.syncFailureOutcome({
-        run,
-        fallbackIssue: freshIssue,
-        message: failureReason,
-        level: "warn",
-        status: "completion_check_failed",
-        summary: "No PR found; completion check failed",
-        detail: completionCheck.summary,
+        publishedOutcomeError,
+        failRunAndClear: this.failRunAndClear,
+        emitActivity: (issueRecord, activity, options) => this.linearSync.emitActivity(issueRecord, activity, options),
+        publishTurnEvent: (event) => this.publishTurnEvent(event),
+        syncFailureOutcome: (event) => this.syncFailureOutcome(event),
+        syncCompletionCheckOutcome: (event) => this.syncCompletionCheckOutcome(event),
+        clearProgressAndRelease: (releaseRun) => this.clearProgressAndRelease(releaseRun),
       });
       return;
     }
