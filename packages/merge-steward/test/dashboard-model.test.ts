@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { QueueEntry, QueueWatchSnapshot, QueueEntryStatus } from "../src/types.ts";
-import { getRepoHealth, projectStatsSummary, type DashboardRepoState } from "../src/watch/dashboard-model.ts";
+import { buildQueueSummary, getRepoHealth, projectStatsSummary, type DashboardRepoState } from "../src/watch/dashboard-model.ts";
 
 function makeEntry(overrides: Partial<QueueEntry> & { prNumber: number; position: number; status: QueueEntryStatus }): QueueEntry {
   return {
@@ -115,6 +115,33 @@ test("project stats only count unresolved latest evictions as need repair", () =
 
   assert.match(summary, /1 need repair/);
   assert.doesNotMatch(summary, /2 need repair/);
+});
+
+test("queue summary counts active and terminal entries by latest queue state", () => {
+  const queued = makeEntry({
+    prNumber: 60,
+    position: 1,
+    status: "queued",
+  });
+  const merged = makeEntry({
+    prNumber: 61,
+    position: 2,
+    status: "merged",
+  });
+  const evicted = makeEntry({
+    prNumber: 62,
+    position: 3,
+    status: "evicted",
+  });
+
+  const summary = buildQueueSummary([queued, merged, evicted]);
+
+  assert.equal(summary.total, 3);
+  assert.equal(summary.active, 1);
+  assert.equal(summary.queued, 1);
+  assert.equal(summary.merged, 1);
+  assert.equal(summary.evicted, 1);
+  assert.equal(summary.headPrNumber, 60);
 });
 
 test("idle repo health reports the most recent activity instead of the oldest queue history", () => {

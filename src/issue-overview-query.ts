@@ -4,6 +4,7 @@ import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueSessionRecord } from "./db-types.ts";
 import { parseGitHubFailureContext } from "./github-failure-context.ts";
 import { isIssueSessionReadyForExecution } from "./issue-session.ts";
+import { getLegacyIssueOverview } from "./legacy-issue-overview.ts";
 import type { StageReport, RunRecord, TrackedIssueRecord } from "./types.ts";
 import { deriveIssueStatusNote } from "./status-note.ts";
 import { derivePatchRelayWaitingReason } from "./waiting-reason.ts";
@@ -80,7 +81,13 @@ export class IssueOverviewQuery {
   async getIssueOverview(issueKey: string): Promise<IssueOverviewResult | undefined> {
     const session = this.db.issueSessions.getIssueSessionByKey(issueKey);
     if (!session) {
-      return await this.getLegacyIssueOverview(issueKey);
+      return await getLegacyIssueOverview({
+        db: this.db,
+        issueKey,
+        runStatusProvider: this.runStatusProvider,
+        buildRuns: (projectId, linearIssueId) => this.buildRuns(projectId, linearIssueId),
+        readLiveThread: (run) => this.readLiveThread(run),
+      });
     }
     return await this.getSessionIssueOverview(issueKey, session);
   }
@@ -120,64 +127,6 @@ export class IssueOverviewQuery {
         return events.length > 0 ? { events } : {};
       })(),
     }));
-  }
-
-  private async getLegacyIssueOverview(issueKey: string): Promise<IssueOverviewResult | undefined> {
-    const legacy = this.db.getIssueOverview(issueKey);
-    if (!legacy) return undefined;
-
-    const issueRecord = this.db.issues.getIssueByKey(issueKey);
-    const activeStatus = await this.runStatusProvider.getActiveRunStatus(issueKey);
-    const activeRun = activeStatus?.run ?? legacy.activeRun;
-    const latestRun = this.db.runs.getLatestRunForIssue(legacy.issue.projectId, legacy.issue.linearIssueId);
-    const latestEvent = this.db.issueSessions.listIssueSessionEvents(legacy.issue.projectId, legacy.issue.linearIssueId, { limit: 1 }).at(-1);
-    const runs = this.buildRuns(legacy.issue.projectId, legacy.issue.linearIssueId);
-    const runCount = runs.length;
-    const liveThread = await this.readLiveThread(activeRun);
-    const statusNote = issueRecord
-      ? deriveIssueStatusNote({
-          issue: issueRecord,
-          latestRun,
-          latestEvent,
-          failureSummary: legacy.issue.latestFailureSummary,
-          blockedByKeys: legacy.issue.blockedByKeys,
-          waitingReason: legacy.issue.waitingReason,
-        })
-      : legacy.issue.statusNote;
-
-    return {
-      issue: {
-        ...legacy.issue,
-        ...(statusNote ? { statusNote } : {}),
-      },
-      ...(activeRun ? { activeRun } : {}),
-      ...(latestRun ? { latestRun } : {}),
-      ...(liveThread ? { liveThread } : {}),
-      ...(runs.length > 0 ? { runs } : {}),
-      ...(issueRecord
-        ? {
-            issueContext: {
-              ...(issueRecord.description ? { description: issueRecord.description } : {}),
-              ...(issueRecord.currentLinearState ? { currentLinearState: issueRecord.currentLinearState } : {}),
-              ...(issueRecord.url ? { issueUrl: issueRecord.url } : {}),
-              ...(issueRecord.worktreePath ? { worktreePath: issueRecord.worktreePath } : {}),
-              ...(issueRecord.branchName ? { branchName: issueRecord.branchName } : {}),
-              ...(issueRecord.prUrl ? { prUrl: issueRecord.prUrl } : {}),
-              ...(issueRecord.priority != null ? { priority: issueRecord.priority } : {}),
-              ...(issueRecord.estimate != null ? { estimate: issueRecord.estimate } : {}),
-              ciRepairAttempts: issueRecord.ciRepairAttempts,
-              queueRepairAttempts: issueRecord.queueRepairAttempts,
-              reviewFixAttempts: issueRecord.reviewFixAttempts,
-              ...(legacy.issue.latestFailureSource ? { latestFailureSource: legacy.issue.latestFailureSource } : {}),
-              ...(legacy.issue.latestFailureHeadSha ? { latestFailureHeadSha: legacy.issue.latestFailureHeadSha } : {}),
-              ...(legacy.issue.latestFailureCheckName ? { latestFailureCheckName: legacy.issue.latestFailureCheckName } : {}),
-              ...(legacy.issue.latestFailureStepName ? { latestFailureStepName: legacy.issue.latestFailureStepName } : {}),
-              ...(legacy.issue.latestFailureSummary ? { latestFailureSummary: legacy.issue.latestFailureSummary } : {}),
-              runCount,
-            },
-          }
-        : {}),
-    };
   }
 
   private async getSessionIssueOverview(
