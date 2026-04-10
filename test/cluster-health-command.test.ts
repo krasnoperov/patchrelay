@@ -736,6 +736,173 @@ test("cli cluster treats in-progress CI as externally owned instead of orphaned"
   }
 });
 
+test("cli cluster treats undelegated requested-changes PRs as paused instead of missing repair", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cluster-undelegated-review-paused-"));
+  const config = createConfig(baseDir, 19797);
+  mkdirSync(config.projects[0]!.repoPath, { recursive: true });
+  mkdirSync(config.projects[0]!.worktreeRoot, { recursive: true });
+  const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+  db.runMigrations();
+  const server = await startPatchRelayHealthServer(config);
+
+  try {
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-use-38",
+      issueKey: "USE-38",
+      title: "Paused requested changes",
+      currentLinearState: "In Progress",
+      factoryState: "pr_open",
+      delegatedToPatchRelay: false,
+      prNumber: 38,
+      prState: "open",
+      prReviewState: "changes_requested",
+      prCheckStatus: "success",
+    });
+    const staleTime = new Date(Date.now() - 300_000).toISOString();
+    db.connection.prepare("UPDATE issues SET updated_at = ?").run(staleTime);
+    db.connection.prepare("UPDATE issue_sessions SET updated_at = ?").run(staleTime);
+
+    const stdout = createBufferStream();
+    const stderr = createBufferStream();
+    const exitCode = await runCli(["cluster"], {
+      config,
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      runCommand: async (command, args) => {
+        if (command === "review-quill") {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              service: "review-quill",
+              unit: "review-quill.service",
+              systemd: { ActiveState: "active" },
+              health: { reachable: true, ok: true, status: 200 },
+            }),
+            stderr: "",
+          };
+        }
+        if (command === "gh" && args[0] === "pr" && args[1] === "view") {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              state: "OPEN",
+              reviewDecision: "CHANGES_REQUESTED",
+              reviewRequests: [],
+              latestReviews: [
+                {
+                  state: "CHANGES_REQUESTED",
+                  commit: { oid: "abc123" },
+                },
+              ],
+              statusCheckRollup: [
+                { __typename: "CheckRun", name: "verify", status: "COMPLETED", conclusion: "SUCCESS" },
+              ],
+              mergeable: "MERGEABLE",
+              mergeStateStatus: "CLEAN",
+              headRefOid: "abc123",
+            }),
+            stderr: "",
+          };
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    });
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr.read(), "");
+    const text = stdout.read();
+    assert.match(text, /PASS \[ci\] Tracked 1 PR-backed issue and each PR has a visible next owner/);
+    assert.match(text, /CI summary: prs=1 pending=0 success=1 failure=0 unknown=0 missing_owner=0/);
+    assert.match(text, /CI USE-38 PR #38 {2}gate=success {2}next=paused {2}PatchRelay is paused; delegate the issue again to address requested changes/);
+    assert.doesNotMatch(text, /github:review-handoff USE-38/);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("cli cluster treats undelegated failing CI PRs as paused instead of missing repair", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cluster-undelegated-ci-paused-"));
+  const config = createConfig(baseDir, 19798);
+  mkdirSync(config.projects[0]!.repoPath, { recursive: true });
+  mkdirSync(config.projects[0]!.worktreeRoot, { recursive: true });
+  const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+  db.runMigrations();
+  const server = await startPatchRelayHealthServer(config);
+
+  try {
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-use-39",
+      issueKey: "USE-39",
+      title: "Paused failing CI",
+      currentLinearState: "In Progress",
+      factoryState: "pr_open",
+      delegatedToPatchRelay: false,
+      prNumber: 39,
+      prState: "open",
+      prReviewState: "commented",
+      prCheckStatus: "failed",
+    });
+    const staleTime = new Date(Date.now() - 300_000).toISOString();
+    db.connection.prepare("UPDATE issues SET updated_at = ?").run(staleTime);
+    db.connection.prepare("UPDATE issue_sessions SET updated_at = ?").run(staleTime);
+
+    const stdout = createBufferStream();
+    const stderr = createBufferStream();
+    const exitCode = await runCli(["cluster"], {
+      config,
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      runCommand: async (command, args) => {
+        if (command === "review-quill") {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              service: "review-quill",
+              unit: "review-quill.service",
+              systemd: { ActiveState: "active" },
+              health: { reachable: true, ok: true, status: 200 },
+            }),
+            stderr: "",
+          };
+        }
+        if (command === "gh" && args[0] === "pr" && args[1] === "view") {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              state: "OPEN",
+              reviewDecision: "REVIEW_REQUIRED",
+              reviewRequests: [],
+              latestReviews: [],
+              statusCheckRollup: [
+                { __typename: "CheckRun", name: "verify", status: "COMPLETED", conclusion: "FAILURE" },
+              ],
+              mergeable: "MERGEABLE",
+              mergeStateStatus: "CLEAN",
+              headRefOid: "def456",
+            }),
+            stderr: "",
+          };
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    });
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr.read(), "");
+    const text = stdout.read();
+    assert.match(text, /PASS \[ci\] Tracked 1 PR-backed issue and each PR has a visible next owner/);
+    assert.match(text, /CI summary: prs=1 pending=0 success=0 failure=1 unknown=0 missing_owner=0/);
+    assert.match(text, /CI USE-39 PR #39 {2}gate=failure {2}next=paused {2}PatchRelay is paused; delegate the issue again to repair failing CI/);
+    assert.doesNotMatch(text, /github:ci USE-39/);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("cli cluster warns when active repo work overlaps on the same files", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cluster-overlap-"));
   const config = createConfig(baseDir, 19796);

@@ -40,7 +40,7 @@ export interface ClusterCiEntry {
   projectId: string;
   prNumber: number;
   gateStatus: "pending" | "success" | "failure" | "unknown";
-  owner: "patchrelay" | "reviewer" | "review-quill" | "downstream" | "external" | "unknown";
+  owner: "patchrelay" | "reviewer" | "review-quill" | "downstream" | "external" | "paused" | "unknown";
   orphaned: boolean;
   factoryState: string;
   reviewDecision?: string | undefined;
@@ -452,6 +452,7 @@ async function evaluateGitHubIssueHealth(
 
   const ciEntry = buildCiEntry({
     issue,
+    delegatedToPatchRelay: issue.delegatedToPatchRelay,
     gateCheckStatus,
     reviewDecision,
     reviewRequested,
@@ -461,7 +462,35 @@ async function evaluateGitHubIssueHealth(
     reviewQuillAttempt,
   });
 
-  if (gateCheckStatus === "failure" && issue.factoryState !== "repairing_ci" && issue.activeRunId === undefined && ageMs >= RECONCILIATION_GRACE_MS) {
+  if (pr.state === "MERGED" && issue.factoryState !== "done" && ageMs >= RECONCILIATION_GRACE_MS) {
+    return {
+      ciEntry,
+      finding: {
+        status: "fail",
+        scope: "github:reconcile",
+        message: "PR is already merged but the issue has not advanced to done",
+      },
+    };
+  }
+
+  if (pr.state === "CLOSED" && issue.factoryState !== "delegated" && issue.factoryState !== "done" && ageMs >= RECONCILIATION_GRACE_MS) {
+    return {
+      ciEntry,
+      finding: {
+        status: "fail",
+        scope: "github:reconcile",
+        message: "PR is closed but the issue is still waiting on PR state",
+      },
+    };
+  }
+
+  if (
+    issue.delegatedToPatchRelay
+    && gateCheckStatus === "failure"
+    && issue.factoryState !== "repairing_ci"
+    && issue.activeRunId === undefined
+    && ageMs >= RECONCILIATION_GRACE_MS
+  ) {
     return {
       ciEntry,
       finding: {
@@ -487,6 +516,7 @@ async function evaluateGitHubIssueHealth(
     gateCheckStatus === "success"
     && reviewDecision === "CHANGES_REQUESTED"
     && mergeConflictDetected
+    && issue.delegatedToPatchRelay
     && issue.factoryState !== "changes_requested"
     && issue.activeRunId === undefined
     && ageMs >= RECONCILIATION_GRACE_MS
@@ -506,6 +536,7 @@ async function evaluateGitHubIssueHealth(
     && reviewDecision === "CHANGES_REQUESTED"
     && latestBlockingReviewHeadSha === pr.headRefOid
     && !reviewQuillAttempt
+    && issue.delegatedToPatchRelay
     && issue.factoryState !== "changes_requested"
     && ageMs >= RECONCILIATION_GRACE_MS
   ) {
@@ -530,7 +561,13 @@ async function evaluateGitHubIssueHealth(
     };
   }
 
-  if (issue.factoryState === "awaiting_queue" && mergeConflictDetected && issue.activeRunId === undefined && ageMs >= RECONCILIATION_GRACE_MS) {
+  if (
+    issue.delegatedToPatchRelay
+    && issue.factoryState === "awaiting_queue"
+    && mergeConflictDetected
+    && issue.activeRunId === undefined
+    && ageMs >= RECONCILIATION_GRACE_MS
+  ) {
     return {
       ciEntry,
       finding: {
@@ -557,6 +594,7 @@ async function evaluateGitHubIssueHealth(
 
 function buildCiEntry(params: {
   issue: IssueRecord;
+  delegatedToPatchRelay: boolean;
   gateCheckStatus: "pending" | "success" | "failure" | "unknown";
   reviewDecision?: string | undefined;
   reviewRequested: boolean;
@@ -567,6 +605,7 @@ function buildCiEntry(params: {
 }): ClusterCiEntry {
   const {
     issue,
+    delegatedToPatchRelay,
     gateCheckStatus,
     reviewDecision,
     reviewRequested,
@@ -576,6 +615,7 @@ function buildCiEntry(params: {
     reviewQuillAttempt,
   } = params;
   const owner = deriveCiOwner({
+    delegatedToPatchRelay,
     gateCheckStatus,
     factoryState: issue.factoryState,
     reviewDecision,
@@ -595,6 +635,7 @@ function buildCiEntry(params: {
     factoryState: issue.factoryState,
     ...(reviewDecision ? { reviewDecision } : {}),
     message: describeCiOwnership({
+      delegatedToPatchRelay,
       gateCheckStatus,
       owner,
       reviewDecision,
@@ -608,6 +649,7 @@ function buildCiEntry(params: {
 }
 
 function deriveCiOwner(params: {
+  delegatedToPatchRelay: boolean;
   gateCheckStatus: "pending" | "success" | "failure" | "unknown";
   factoryState: string;
   reviewDecision?: string | undefined;
@@ -616,27 +658,33 @@ function deriveCiOwner(params: {
   latestBlockingReviewHeadSha?: string | undefined;
   mergeConflictDetected: boolean;
   reviewQuillAttempt?: ReviewQuillAttemptOwnership | undefined;
-}): "patchrelay" | "reviewer" | "review-quill" | "downstream" | "external" | "unknown" {
+}): "patchrelay" | "reviewer" | "review-quill" | "downstream" | "external" | "paused" | "unknown" {
   const headAdvancedPastBlockingReview = Boolean(
     params.currentHeadSha
       && params.latestBlockingReviewHeadSha
       && params.currentHeadSha !== params.latestBlockingReviewHeadSha,
   );
   if (params.gateCheckStatus === "failure") {
+    if (!params.delegatedToPatchRelay) return "paused";
     return params.factoryState === "repairing_ci" ? "patchrelay" : "unknown";
   }
   if (params.gateCheckStatus === "pending") {
     return "external";
   }
   if (params.factoryState === "awaiting_queue" || params.reviewDecision === "APPROVED") {
+    if (params.mergeConflictDetected && !params.delegatedToPatchRelay) {
+      return "paused";
+    }
     return params.mergeConflictDetected && params.factoryState !== "repairing_queue"
       ? "unknown"
       : "downstream";
   }
   if (params.reviewDecision === "CHANGES_REQUESTED") {
     if (params.mergeConflictDetected) {
+      if (!params.delegatedToPatchRelay) return "paused";
       return params.factoryState === "changes_requested" ? "patchrelay" : "unknown";
     }
+    if (!params.delegatedToPatchRelay) return "paused";
     if (params.factoryState === "changes_requested") return "patchrelay";
     if (params.reviewQuillAttempt) return "review-quill";
     if (headAdvancedPastBlockingReview) return "reviewer";
@@ -654,8 +702,9 @@ function deriveCiOwner(params: {
 }
 
 function describeCiOwnership(params: {
+  delegatedToPatchRelay: boolean;
   gateCheckStatus: "pending" | "success" | "failure" | "unknown";
-  owner: "patchrelay" | "reviewer" | "review-quill" | "downstream" | "external" | "unknown";
+  owner: "patchrelay" | "reviewer" | "review-quill" | "downstream" | "external" | "paused" | "unknown";
   reviewDecision?: string | undefined;
   reviewRequested: boolean;
   currentHeadSha?: string | undefined;
@@ -703,6 +752,20 @@ function describeCiOwnership(params: {
     return params.gateCheckStatus === "pending"
       ? "Waiting on external CI checks to settle"
       : "Waiting on external GitHub automation";
+  }
+  if (params.owner === "paused") {
+    if (params.gateCheckStatus === "failure") {
+      return "PatchRelay is paused; delegate the issue again to repair failing CI";
+    }
+    if (params.reviewDecision === "CHANGES_REQUESTED") {
+      return params.mergeConflictDetected
+        ? "PatchRelay is paused; delegate the issue again to repair the blocked PR branch"
+        : "PatchRelay is paused; delegate the issue again to address requested changes";
+    }
+    if (params.mergeConflictDetected) {
+      return "PatchRelay is paused; delegate the issue again to repair this merge conflict";
+    }
+    return "PatchRelay is paused; no automatic repair will start until the issue is delegated again";
   }
   if (params.reviewDecision === "CHANGES_REQUESTED") {
     if (params.mergeConflictDetected) {
