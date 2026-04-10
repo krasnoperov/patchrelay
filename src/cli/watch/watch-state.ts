@@ -4,7 +4,7 @@ import type {
   TimelineRunInput,
 } from "./timeline-builder.ts";
 import {
-  buildTimelineFromRehydration,
+  reconcileTimelineFromRehydration,
   appendFeedToTimeline,
   appendCodexItemToTimeline,
   completeCodexItemInTimeline,
@@ -415,7 +415,8 @@ export function watchReducer(state: WatchState, action: WatchAction): WatchState
     }
 
     case "timeline-rehydrate": {
-      const timeline = buildTimelineFromRehydration(
+      const timeline = reconcileTimelineFromRehydration(
+        state.timeline,
         action.runs,
         action.feedEvents,
         action.liveThread,

@@ -409,6 +409,137 @@ test("timeline-rehydrate sets activeRunId and startedAt", () => {
   assert.equal(state.activeRunStartedAt, "2026-03-25T10:10:00.000Z");
 });
 
+test("timeline-rehydrate preserves stable timestamps and richer live item fields for known rows", () => {
+  const initial = stateWith({
+    timeline: [{
+      id: "run-start-42",
+      at: "2026-03-25T10:10:00.000Z",
+      kind: "run-start",
+      runId: 42,
+      run: {
+        runType: "implementation",
+        status: "running",
+        startedAt: "2026-03-25T10:10:00.000Z",
+      },
+    }, {
+      id: "live-cmd-1",
+      at: "2026-03-25T10:10:00.123Z",
+      kind: "item",
+      runId: 42,
+      item: {
+        id: "cmd-1",
+        type: "commandExecution",
+        status: "inProgress",
+        command: "npm test",
+        output: "PASS src/watch\n",
+      },
+    }],
+  });
+
+  const state = reduce(initial, {
+    type: "timeline-rehydrate",
+    runs: [{
+      id: 42,
+      runType: "implementation",
+      status: "running",
+      startedAt: "2026-03-25T10:10:00.000Z",
+    }],
+    feedEvents: [],
+    liveThread: {
+      id: "thread-42",
+      preview: "",
+      cwd: "/tmp",
+      status: "running",
+      turns: [{
+        id: "turn-1",
+        status: "running",
+        items: [{
+          id: "cmd-1",
+          type: "commandExecution",
+          command: "npm test",
+          cwd: "/tmp",
+          status: "inProgress",
+        }],
+      }],
+    },
+    activeRunId: 42,
+    issueContext: null,
+  });
+
+  const commandEntry = state.timeline.find((entry) => entry.id === "live-cmd-1");
+  assert.equal(commandEntry?.at, "2026-03-25T10:10:00.123Z");
+  assert.equal(commandEntry?.item?.output, "PASS src/watch\n");
+});
+
+test("timeline-rehydrate carries forward optimistic active-run items that are not yet in the snapshot", () => {
+  const initial = stateWith({
+    timeline: [{
+      id: "live-cmd-2",
+      at: "2026-03-25T10:10:01.000Z",
+      kind: "item",
+      runId: 42,
+      item: {
+        id: "cmd-2",
+        type: "commandExecution",
+        status: "inProgress",
+        command: "npm run lint",
+      },
+    }],
+  });
+
+  const state = reduce(initial, {
+    type: "timeline-rehydrate",
+    runs: [{
+      id: 42,
+      runType: "implementation",
+      status: "running",
+      startedAt: "2026-03-25T10:10:00.000Z",
+    }],
+    feedEvents: [],
+    liveThread: {
+      id: "thread-42",
+      preview: "",
+      cwd: "/tmp",
+      status: "running",
+      turns: [],
+    },
+    activeRunId: 42,
+    issueContext: null,
+  });
+
+  const commandEntry = state.timeline.find((entry) => entry.id === "live-cmd-2");
+  assert.ok(commandEntry);
+  assert.equal(commandEntry?.item?.command, "npm run lint");
+});
+
+test("buildTimelineFromRehydration assigns deterministic timestamps to live thread rows", () => {
+  const timeline = buildTimelineFromRehydration([{
+    id: 42,
+    runType: "implementation",
+    status: "running",
+    startedAt: "2026-03-25T10:10:00.000Z",
+  }], [], {
+    id: "thread-42",
+    preview: "",
+    cwd: "/tmp",
+    status: "running",
+    turns: [{
+      id: "turn-1",
+      status: "running",
+      items: [
+        { id: "agent-1", type: "agentMessage", text: "Working..." },
+        { id: "cmd-1", type: "commandExecution", command: "npm test", cwd: "/tmp", status: "inProgress" },
+      ],
+    }],
+  }, 42);
+
+  const liveEntries = timeline.filter((entry) => entry.kind === "item");
+  assert.deepEqual(
+    liveEntries.map((entry) => entry.at),
+    ["2026-03-25T10:10:00.000Z", "2026-03-25T10:10:00.001Z"],
+  );
+});
+
 // ─── Codex Notification → Timeline ────────────────────────────────
 
 test("item/started appends item to timeline", () => {
