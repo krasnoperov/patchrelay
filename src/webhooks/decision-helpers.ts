@@ -1,6 +1,7 @@
 import { TERMINAL_STATES, type FactoryState } from "../factory-state.ts";
 import type { PatchRelayDatabase } from "../db.ts";
 import type { IssueMetadata, RunType } from "../types.ts";
+import { deriveIssueSessionReactiveIntent } from "../issue-session.ts";
 
 export function decideRunIntent(p: {
   delegated: boolean;
@@ -43,12 +44,66 @@ export function decideUnDelegation(p: {
   triggerEvent: string;
   delegated: boolean;
   currentState?: FactoryState | undefined;
+  hasPr: boolean;
 }): { factoryState?: FactoryState | undefined; clearPending: boolean } {
   if (p.triggerEvent !== "delegateChanged" || p.delegated) return { clearPending: false };
   if (!p.currentState) return { clearPending: false };
-  const pastNoReturn = p.currentState === "awaiting_queue" || TERMINAL_STATES.has(p.currentState);
-  if (pastNoReturn) return { clearPending: false };
-  return { factoryState: "awaiting_input", clearPending: true };
+  if (TERMINAL_STATES.has(p.currentState)) return { clearPending: false };
+  if (!p.hasPr && (p.currentState === "delegated" || p.currentState === "implementing")) {
+    return { factoryState: "awaiting_input", clearPending: true };
+  }
+  return { factoryState: p.currentState, clearPending: true };
+}
+
+export function resolveReDelegationResume(p: {
+  delegated: boolean;
+  previouslyDelegated?: boolean | undefined;
+  currentState?: FactoryState | undefined;
+  unresolvedBlockers?: number | undefined;
+  prNumber?: number | undefined;
+  prState?: string | undefined;
+  prReviewState?: string | undefined;
+  prCheckStatus?: string | undefined;
+  latestFailureSource?: string | undefined;
+}): { factoryState?: FactoryState | undefined; pendingRunType?: RunType | null } {
+  if (!p.delegated || p.previouslyDelegated !== false) {
+    return {};
+  }
+
+  if (p.prState === "merged") {
+    return { factoryState: "done", pendingRunType: null };
+  }
+
+  const reactiveIntent = deriveIssueSessionReactiveIntent({
+    delegatedToPatchRelay: true,
+    prNumber: p.prNumber,
+    prState: p.prState,
+    prReviewState: p.prReviewState,
+    prCheckStatus: p.prCheckStatus,
+    latestFailureSource: p.latestFailureSource,
+  });
+  if (reactiveIntent) {
+    return {
+      factoryState: reactiveIntent.compatibilityFactoryState,
+      pendingRunType: reactiveIntent.runType,
+    };
+  }
+
+  if (p.prNumber !== undefined && (p.prState === undefined || p.prState === "open")) {
+    if (p.prReviewState === "approved") {
+      return { factoryState: "awaiting_queue", pendingRunType: null };
+    }
+    return { factoryState: "pr_open", pendingRunType: null };
+  }
+
+  if (p.currentState === "awaiting_input" || p.currentState === "delegated" || p.currentState === "implementing") {
+    return {
+      factoryState: "delegated",
+      pendingRunType: (p.unresolvedBlockers ?? 0) === 0 ? "implementation" : null,
+    };
+  }
+
+  return {};
 }
 
 export function decideAgentSession(p: {

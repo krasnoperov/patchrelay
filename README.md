@@ -90,12 +90,40 @@ You will also need:
 8. If requested changes, red CI, or a merge-steward incident lands on a PatchRelay-owned PR, PatchRelay resumes work on that same PR branch.
 9. Native agent prompts and Linear comments can steer the active run. An operator can take over from the exact same worktree when needed.
 
+### Undelegation And Re-delegation
+
+Undelegation pauses PatchRelay authority. It does not erase PR truth.
+
+- If there is no PR yet and PatchRelay was still implementing, the issue pauses into `awaiting_input`.
+- If a PR already exists, the issue keeps its PR-backed state and PatchRelay becomes observer-only.
+- Worktrees, branches, and PRs remain in place.
+- PatchRelay still reflects GitHub review, CI, queue, merge, and close events while undelegated.
+- PatchRelay does not enqueue implementation, review-fix, CI-repair, or queue-repair work again until the issue is delegated back.
+
+Downstream services stay PR-centric:
+
+- `review-quill` may still review a qualifying PR
+- `merge-steward` may still queue or merge a qualifying PR
+
+When the issue is delegated back to PatchRelay, it should resume from current truth:
+
+- no PR: queue implementation
+- PR with requested changes: queue review fix or branch upkeep
+- PR with failing CI: queue CI repair
+- PR with queue eviction/conflict: queue queue repair
+- healthy open PR: keep waiting on review
+- approved PR: keep waiting downstream
+
 ## Ownership Model
 
 PatchRelay tracks two different kinds of ownership:
 
 - issue ownership: who may start new delegated implementation work from Linear
 - PR ownership: who is responsible for keeping an existing PR healthy until it merges or closes
+
+PatchRelay also tracks one runtime authority bit:
+
+- `delegatedToPatchRelay`: whether PatchRelay may actively implement or repair code for the issue right now
 
 For PatchRelay, PR ownership is determined by one concrete GitHub fact: a PR is PatchRelay-owned when its author is the PatchRelay GitHub app or service account.
 

@@ -749,7 +749,7 @@ test("un-delegation during active run releases run and transitions to awaiting_i
   }
 });
 
-test("un-delegation of awaiting_queue issue does not change state (point of no return)", async () => {
+test("un-delegation pauses awaiting_queue issue and preserves downstream PR-backed state", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-noreturn-"));
   try {
     const config = createConfig(baseDir);
@@ -768,6 +768,7 @@ test("un-delegation of awaiting_queue issue does not change state (point of no r
       linearIssueId: "issue-maf-51",
       issueKey: "MAF-51",
       title: "Approved feature",
+      delegatedToPatchRelay: true,
       factoryState: "awaiting_queue",
       prNumber: 120,
       prState: "open",
@@ -808,6 +809,80 @@ test("un-delegation of awaiting_queue issue does not change state (point of no r
 
     const issue = db.getIssue("krasnoperov/mafia", "issue-maf-51");
     assert.equal(issue?.factoryState, "awaiting_queue");
+    assert.equal(issue?.delegatedToPatchRelay, false);
+    assert.equal(issue?.prNumber, 120);
+    assert.equal(issue?.prState, "open");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("re-delegation resumes requested-changes issue from PR state instead of restarting implementation", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-redelegate-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+
+    db.upsertIssue({
+      projectId: "krasnoperov/mafia",
+      linearIssueId: "issue-maf-52",
+      issueKey: "MAF-52",
+      title: "Resume existing PR",
+      delegatedToPatchRelay: false,
+      factoryState: "awaiting_input",
+      prNumber: 121,
+      prState: "open",
+      prReviewState: "changes_requested",
+    });
+
+    const enqueued: Array<{ projectId: string; issueId: string }> = [];
+    const handler = new WebhookHandler(
+      config,
+      db,
+      { forProject: async () => undefined } as never,
+      { steerTurn: async () => undefined } as never,
+      (projectId, issueId) => { enqueued.push({ projectId, issueId }); },
+      pino({ enabled: false }),
+    );
+
+    const payload: LinearWebhookPayload = {
+      action: "update",
+      type: "Issue",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      webhookTimestamp: Date.now(),
+      updatedFrom: { delegateId: null },
+      data: {
+        id: "issue-maf-52",
+        identifier: "MAF-52",
+        title: "Resume existing PR",
+        team: { id: "team-maf", key: "MAF" },
+        state: { id: "state-start", name: "Start", type: "started" },
+        delegate: { id: "patchrelay-actor", name: "PatchRelay" },
+      },
+    };
+
+    const stored = db.webhookEvents.insertFullWebhookEvent({
+      webhookId: "delivery-redelegate-52",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(payload),
+    });
+
+    await handler.processWebhookEvent(stored.id);
+
+    const issue = db.getIssue("krasnoperov/mafia", "issue-maf-52");
+    assert.equal(issue?.delegatedToPatchRelay, true);
+    assert.equal(issue?.factoryState, "changes_requested");
+    const wake = db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-52");
+    assert.equal(wake?.runType, "review_fix");
+    assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-52" }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

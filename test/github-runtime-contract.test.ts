@@ -713,6 +713,50 @@ test("push after requested changes does not auto request re-review", async () =>
   }
 });
 
+test("undelegated issue tracks requested-changes state without queuing repair work", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-runtime-undelegated-"));
+  try {
+    const { db, enqueueCalls, handler } = createHandler(baseDir, {
+      fetchImpl: async (input) => {
+        if (String(input).includes("/reviews/901/comments")) {
+          return createJsonResponse([]);
+        }
+        return createJsonResponse({}, 201);
+      },
+    });
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-undelegated-review",
+      issueKey: "USE-44",
+      delegatedToPatchRelay: false,
+      branchName: "feat-undelegated",
+      prNumber: 44,
+      prState: "open",
+      prAuthorLogin: "patchrelay[bot]",
+      factoryState: "pr_open",
+    });
+
+    await handler.processGitHubWebhookEvent({
+      eventType: "pull_request_review",
+      rawBody: buildChangesRequestedReviewPayload({
+        branch: "feat-undelegated",
+        headSha: "sha-undelegated",
+        prNumber: 44,
+        prAuthorLogin: "patchrelay[bot]",
+      }),
+    });
+
+    const wake = db.issueSessions.peekIssueSessionWake("usertold", "issue-undelegated-review");
+    const issue = db.getIssue("usertold", "issue-undelegated-review");
+    assert.equal(wake, undefined);
+    assert.equal(issue?.factoryState, "changes_requested");
+    assert.equal(issue?.delegatedToPatchRelay, false);
+    assert.deepEqual(enqueueCalls, []);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("GitHub PR comments on idle PatchRelay-owned PRs queue follow-up session work", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-runtime-pr-comment-"));
   try {

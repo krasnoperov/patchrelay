@@ -51,6 +51,7 @@ export function syncIssueSessionFromIssue(params: {
   });
   const lastWakeReason = options?.lastWakeReason
     ?? deriveIssueSessionWakeReason({
+      delegatedToPatchRelay: issue.delegatedToPatchRelay,
       pendingRunType: issue.pendingRunType,
       factoryState: issue.factoryState,
       prNumber: issue.prNumber,

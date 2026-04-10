@@ -50,6 +50,7 @@ function deriveImplicitReactiveWake(issue: IssueRecord):
   | { runType: RunType; wakeReason: string; context: Record<string, unknown> }
   | undefined {
   const reactiveIntent = deriveIssueSessionReactiveIntent({
+    delegatedToPatchRelay: issue.delegatedToPatchRelay,
     activeRunId: issue.activeRunId,
     prNumber: issue.prNumber,
     prState: issue.prState,

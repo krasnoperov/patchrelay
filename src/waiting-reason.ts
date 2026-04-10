@@ -1,5 +1,7 @@
 export const PATCHRELAY_WAITING_REASONS = {
   activeWork: "PatchRelay is actively working",
+  automationPaused: "PatchRelay automation is paused because the issue is undelegated",
+  automationPausedDownstream: "PatchRelay automation is paused; downstream merge may still continue until the PR is closed",
   finalizingPublishedPr: "PatchRelay is finalizing a published PR",
   finalizingMergedChange: "PatchRelay is finalizing a merged change",
   waitingForOperatorInput: "Waiting on operator input",
@@ -16,18 +18,25 @@ export const PATCHRELAY_WAITING_REASONS = {
 export type PatchRelayWaitingReason = (typeof PATCHRELAY_WAITING_REASONS)[keyof typeof PATCHRELAY_WAITING_REASONS] | string;
 
 export function derivePatchRelayWaitingReason(params: {
+  delegatedToPatchRelay?: boolean | undefined;
   activeRunType?: string | undefined;
   activeRunId?: number | undefined;
   blockedByKeys?: string[] | undefined;
   factoryState?: string | undefined;
   pendingRunType?: string | undefined;
   prNumber?: number | undefined;
+  prState?: string | undefined;
   prHeadSha?: string | undefined;
   prReviewState?: string | undefined;
   prCheckStatus?: string | undefined;
   lastBlockingReviewHeadSha?: string | undefined;
   latestFailureCheckName?: string | undefined;
 }): PatchRelayWaitingReason | undefined {
+  if (params.delegatedToPatchRelay === false && params.factoryState !== "done" && params.factoryState !== "failed" && params.factoryState !== "escalated") {
+    return params.factoryState === "awaiting_queue" || (hasLiveOpenPr(params.prNumber, params.prState) && params.prReviewState === "approved")
+      ? PATCHRELAY_WAITING_REASONS.automationPausedDownstream
+      : PATCHRELAY_WAITING_REASONS.automationPaused;
+  }
   if (params.activeRunType) {
     if (params.prNumber !== undefined && (params.factoryState === "pr_open" || params.factoryState === "awaiting_queue")) {
       return PATCHRELAY_WAITING_REASONS.finalizingPublishedPr;
@@ -97,4 +106,8 @@ export function derivePatchRelayWaitingReason(params: {
 
 function humanize(value: string): string {
   return value.replaceAll("_", " ");
+}
+
+function hasLiveOpenPr(prNumber: number | undefined, prState: string | undefined): boolean {
+  return prNumber !== undefined && (prState === undefined || prState === "open");
 }

@@ -22,6 +22,9 @@ export class ServiceIssueActions {
   ): Promise<{ delivered: boolean; queued?: boolean } | { error: string } | undefined> {
     const issue = this.db.issues.getIssueByKey(issueKey);
     if (!issue) return undefined;
+    if (!issue.delegatedToPatchRelay && !issue.activeRunId) {
+      return { error: "Issue is undelegated from PatchRelay; delegate it again before prompting work" };
+    }
 
     this.feed.publish({
       level: "info",
@@ -105,6 +108,7 @@ export class ServiceIssueActions {
   retryIssue(issueKey: string): { issueKey: string; runType: string } | { error: string } | undefined {
     const issue = this.db.issues.getIssueByKey(issueKey);
     if (!issue) return undefined;
+    if (!issue.delegatedToPatchRelay) return { error: "Issue is undelegated from PatchRelay; delegate it again before retrying" };
     if (issue.activeRunId) return { error: "Issue already has an active run" };
     const issueSession = this.db.issueSessions.getIssueSession(issue.projectId, issue.linearIssueId);
 

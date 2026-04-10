@@ -197,6 +197,7 @@ export class IdleIssueReconciler {
     }
 
     for (const issue of this.db.issues.listBlockedDelegatedIssues()) {
+      if (!issue.delegatedToPatchRelay) continue;
       const unresolved = this.db.issues.countUnresolvedBlockers(issue.projectId, issue.linearIssueId);
       if (unresolved === 0) {
         this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
@@ -312,6 +313,9 @@ export class IdleIssueReconciler {
   }
 
   private async routeFailedIssue(issue: IssueRecord): Promise<void> {
+    if (!issue.delegatedToPatchRelay) {
+      return;
+    }
     issue = await this.refreshMissingFailureProvenance(issue);
     issue = await this.reclassifyStaleBranchFailure(issue);
     const latestRun = this.db.runs.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
@@ -516,15 +520,23 @@ export class IdleIssueReconciler {
         return;
       }
       if (pr.state === "CLOSED") {
-        this.logger.info(
-          { issueKey: issue.issueKey, prNumber: issue.prNumber },
-          "Reconciliation: PR was closed, re-delegating for implementation",
-        );
         this.db.issues.upsertIssue({ projectId: issue.projectId, linearIssueId: issue.linearIssueId, prState: "closed" });
-        this.advanceIdleIssue(issue, "delegated" as never, {
-          pendingRunType: "implementation",
-          clearFailureProvenance: true,
-        });
+        if (issue.delegatedToPatchRelay) {
+          this.logger.info(
+            { issueKey: issue.issueKey, prNumber: issue.prNumber },
+            "Reconciliation: PR was closed, re-delegating for implementation",
+          );
+          this.advanceIdleIssue(issue, "delegated" as never, {
+            pendingRunType: "implementation",
+            clearFailureProvenance: true,
+          });
+        } else {
+          this.logger.info(
+            { issueKey: issue.issueKey, prNumber: issue.prNumber },
+            "Reconciliation: PR was closed while undelegated; preserving paused no-PR state",
+          );
+          this.advanceIdleIssue(issue, "awaiting_input", { clearFailureProvenance: true });
+        }
         return;
       }
 
@@ -549,7 +561,8 @@ export class IdleIssueReconciler {
         }
       }
 
-      if (isReviewDecisionReviewRequired(pr.reviewDecision)
+      if (issue.delegatedToPatchRelay
+        && isReviewDecisionReviewRequired(pr.reviewDecision)
         && gateCheckStatus === "success"
         && hasCompletedReviewQuillVerdict(pr.statusCheckRollup)) {
         this.logger.warn(
@@ -581,7 +594,8 @@ export class IdleIssueReconciler {
         mergeConflictDetected,
         downstreamOwned,
       });
-      if ((issue.factoryState === "escalated" || issue.factoryState === "failed")
+      if (issue.delegatedToPatchRelay
+        && (issue.factoryState === "escalated" || issue.factoryState === "failed")
         && (reactiveIntent?.runType === "review_fix" || reactiveIntent?.runType === "branch_upkeep")) {
         if (issue.reviewFixAttempts >= DEFAULT_REVIEW_FIX_BUDGET) {
           this.logger.debug(
@@ -621,7 +635,7 @@ export class IdleIssueReconciler {
         });
         return;
       }
-      if (reactiveIntent?.runType === "branch_upkeep" && mergeConflictDetected) {
+      if (issue.delegatedToPatchRelay && reactiveIntent?.runType === "branch_upkeep" && mergeConflictDetected) {
         this.logger.info(
           { issueKey: issue.issueKey, prNumber: issue.prNumber, mergeable: pr.mergeable, mergeStateStatus: pr.mergeStateStatus },
           "Reconciliation: PR still needs branch upkeep after requested changes",
@@ -646,7 +660,7 @@ export class IdleIssueReconciler {
         });
         return;
       }
-      if (reactiveIntent?.runType === "queue_repair" && mergeConflictDetected) {
+      if (issue.delegatedToPatchRelay && reactiveIntent?.runType === "queue_repair" && mergeConflictDetected) {
         this.logger.info(
           { issueKey: issue.issueKey, prNumber: issue.prNumber, mergeable: pr.mergeable },
           "Reconciliation: PR needs queue repair from fresh GitHub truth",

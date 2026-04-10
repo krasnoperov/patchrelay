@@ -71,11 +71,13 @@ function renderStatusComment(
     ? (options?.activeRunType ?? activeRun?.runType)
     : undefined;
   const waitingReason = trackedIssue?.waitingReason ?? derivePatchRelayWaitingReason({
+    delegatedToPatchRelay: issue.delegatedToPatchRelay,
     ...(activeRunType ? { activeRunType } : {}),
     ...(issue.activeRunId !== undefined ? { activeRunId: issue.activeRunId } : {}),
     factoryState: issue.factoryState,
     pendingRunType: issue.pendingRunType,
     ...(issue.prNumber !== undefined ? { prNumber: issue.prNumber } : {}),
+    prState: issue.prState,
     prHeadSha: issue.prHeadSha,
     prReviewState: issue.prReviewState,
     prCheckStatus: issue.prCheckStatus,

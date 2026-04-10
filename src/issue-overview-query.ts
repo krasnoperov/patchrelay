@@ -202,11 +202,13 @@ export class IssueOverviewQuery {
     const failureContext = parseGitHubFailureContext(issueRecord?.lastGitHubFailureContextJson);
 
     const waitingReason = session.waitingReason ?? derivePatchRelayWaitingReason({
+      delegatedToPatchRelay: issueRecord?.delegatedToPatchRelay,
       ...(activeRun ? { activeRunType: activeRun.runType } : {}),
       blockedByKeys,
       factoryState: issueRecord?.factoryState ?? "delegated",
       pendingRunType: issueRecord?.pendingRunType,
       prNumber: session.prNumber,
+      prState: issueRecord?.prState,
       prHeadSha: issueRecord?.prHeadSha ?? session.prHeadSha,
       prReviewState: issueRecord?.prReviewState,
       prCheckStatus: issueRecord?.prCheckStatus,
@@ -217,6 +219,7 @@ export class IssueOverviewQuery {
       id: issueRecord?.id ?? session.id,
       projectId: session.projectId,
       linearIssueId: session.linearIssueId,
+      delegatedToPatchRelay: issueRecord?.delegatedToPatchRelay ?? true,
       ...(session.issueKey ? { issueKey: session.issueKey } : {}),
       ...(issueRecord?.title ? { title: issueRecord.title } : {}),
       ...(issueRecord?.url ? { issueUrl: issueRecord.url } : {}),
@@ -228,6 +231,7 @@ export class IssueOverviewQuery {
       readyForExecution: isIssueSessionReadyForExecution({
         sessionState: session.sessionState,
         factoryState: issueRecord?.factoryState ?? "delegated",
+        delegatedToPatchRelay: issueRecord?.delegatedToPatchRelay,
         ...(activeRun ? { activeRunId: activeRun.id } : {}),
         blockedByCount: unresolvedBlockedBy.length,
         hasPendingWake: this.db.issueSessions.peekIssueSessionWake(session.projectId, session.linearIssueId) !== undefined,

@@ -9,6 +9,7 @@ export interface IssueSessionStateInput {
 }
 
 export interface IssueSessionWaitingReasonInput {
+  delegatedToPatchRelay?: boolean | undefined;
   activeRunId?: number | undefined;
   blockedByKeys: string[];
   factoryState: FactoryState;
@@ -22,6 +23,7 @@ export interface IssueSessionWaitingReasonInput {
 }
 
 export interface IssueSessionWakeReasonInput {
+  delegatedToPatchRelay?: boolean | undefined;
   pendingRunType?: RunType | undefined;
   factoryState: FactoryState;
   prNumber?: number | undefined;
@@ -32,6 +34,7 @@ export interface IssueSessionWakeReasonInput {
 }
 
 export interface IssueSessionReactiveIntentInput {
+  delegatedToPatchRelay?: boolean | undefined;
   activeRunId?: number | undefined;
   prNumber?: number | undefined;
   prState?: string | undefined;
@@ -51,6 +54,7 @@ export interface IssueSessionReactiveIntent {
 export interface IssueSessionReadyInput {
   sessionState?: IssueSessionState | undefined;
   factoryState: FactoryState;
+  delegatedToPatchRelay?: boolean | undefined;
   activeRunId?: number | undefined;
   blockedByCount: number;
   hasPendingWake: boolean;
@@ -75,6 +79,7 @@ export function deriveIssueSessionWaitingReason(params: IssueSessionWaitingReaso
 }
 
 export function deriveIssueSessionWakeReason(params: IssueSessionWakeReasonInput): string | undefined {
+  if (params.delegatedToPatchRelay === false) return undefined;
   if (params.pendingRunType === "implementation") return "delegated";
   if (params.pendingRunType === "review_fix") return "review_changes_requested";
   if (params.pendingRunType === "branch_upkeep") return "branch_upkeep";
@@ -82,6 +87,7 @@ export function deriveIssueSessionWakeReason(params: IssueSessionWakeReasonInput
   if (params.pendingRunType === "queue_repair") return "merge_steward_incident";
   if (params.factoryState === "awaiting_input") return "waiting_for_human_reply";
   const reactiveIntent = deriveIssueSessionReactiveIntent({
+    delegatedToPatchRelay: params.delegatedToPatchRelay,
     prNumber: params.prNumber,
     prState: params.prState,
     prReviewState: params.prReviewState,
@@ -95,6 +101,7 @@ export function deriveIssueSessionWakeReason(params: IssueSessionWakeReasonInput
 export function deriveIssueSessionReactiveIntent(
   params: IssueSessionReactiveIntentInput,
 ): IssueSessionReactiveIntent | undefined {
+  if (params.delegatedToPatchRelay === false) return undefined;
   if (params.activeRunId !== undefined) return undefined;
   if (params.prNumber === undefined) return undefined;
   if (params.prState && params.prState !== "open") return undefined;
@@ -134,6 +141,7 @@ export function deriveIssueSessionReactiveIntent(
 }
 
 export function isIssueSessionReadyForExecution(params: IssueSessionReadyInput): boolean {
+  if (params.delegatedToPatchRelay === false) return false;
   if (params.activeRunId !== undefined) return false;
   if (params.blockedByCount > 0) return false;
   if (params.sessionState === "done" || params.sessionState === "waiting_input") {
@@ -150,6 +158,7 @@ export function isIssueSessionReadyForExecution(params: IssueSessionReadyInput):
   }
   if (
     deriveIssueSessionReactiveIntent({
+      delegatedToPatchRelay: params.delegatedToPatchRelay,
       prNumber: params.prNumber,
       prState: params.prState,
       prReviewState: params.prReviewState,

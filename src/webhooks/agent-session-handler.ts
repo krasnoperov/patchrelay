@@ -53,6 +53,7 @@ export class AgentSessionHandler {
 
     const existingIssue = this.db.issues.getIssue(project.id, normalized.issue.id);
     const activeRun = existingIssue?.activeRunId ? this.db.runs.getRunById(existingIssue.activeRunId) : undefined;
+    const automationEnabled = delegated || existingIssue?.delegatedToPatchRelay === true;
 
     if (normalized.triggerEvent === "agentSessionCreated") {
       if (!delegated) {
@@ -100,6 +101,14 @@ export class AgentSessionHandler {
     if (!triggerEventAllowed(project, normalized.triggerEvent)) return;
 
     const promptBody = normalized.agentSession.promptBody?.trim();
+    if (!automationEnabled && promptBody && existingIssue) {
+      await this.publishAgentActivity(linear, normalized.agentSession.id, {
+        type: "thought",
+        body: "PatchRelay is paused because the issue is undelegated.",
+      }, { ephemeral: true });
+      return;
+    }
+
     if (activeRun && promptBody && activeRun.threadId && activeRun.turnId) {
       const input = `New Linear agent prompt received while you are working.\n\n${promptBody}`;
       try {
@@ -129,7 +138,7 @@ export class AgentSessionHandler {
       return;
     }
 
-    if (promptBody && existingIssue && (delegated || existingIssue.factoryState === "awaiting_input")) {
+    if (promptBody && existingIssue && automationEnabled) {
       const hadPendingWake = this.db.issueSessions.peekIssueSessionWake(project.id, normalized.issue.id) !== undefined;
       const directReply = params.isDirectReplyToOutstandingQuestion(existingIssue);
       this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
