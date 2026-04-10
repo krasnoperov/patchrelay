@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import pino from "pino";
 import { CodexAppServerClient } from "../codex-app-server.ts";
+import { extractCompletionCheck } from "../completion-check.ts";
 import { getThreadTurns } from "../codex-thread-utils.ts";
 import { PatchRelayDatabase } from "../db.ts";
 import { WorktreeManager } from "../worktree-manager.ts";
@@ -42,6 +43,11 @@ export interface InspectResult {
   sessionState?: string | undefined;
   waitingReason?: string | undefined;
   statusNote?: string | undefined;
+  completionCheckOutcome?: string | undefined;
+  completionCheckSummary?: string | undefined;
+  completionCheckQuestion?: string | undefined;
+  completionCheckWhy?: string | undefined;
+  completionCheckRecommendedReply?: string | undefined;
 }
 
 export interface WorktreeResult {
@@ -151,6 +157,13 @@ function parseObjectJson(value: string | undefined): Record<string, unknown> | u
 }
 
 function summarizeRun(run: RunRecord): string | undefined {
+  const completionCheck = extractCompletionCheck(run);
+  if (completionCheck) {
+    return completionCheck.outcome === "needs_input"
+      ? completionCheck.question ?? completionCheck.summary
+      : completionCheck.summary;
+  }
+
   const summary = parseObjectJson(run.summaryJson);
   if (typeof summary?.latestAssistantMessage === "string" && summary.latestAssistantMessage.trim()) {
     return summary.latestAssistantMessage.trim();
@@ -203,8 +216,10 @@ export class CliDataAccess extends CliOperatorApiClient {
     const latestRun = this.db.runs.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
     const latestReport = normalizeStageReport(latestRun?.reportJson, latestRun?.status);
     const latestSummary = safeJsonParse(latestRun?.summaryJson);
+    const completionCheck = latestRun ? extractCompletionCheck(latestRun) : undefined;
 
     const statusNote =
+      (completionCheck?.outcome === "needs_input" ? completionCheck.question : completionCheck?.summary) ??
       latestReport?.assistantMessages.at(-1) ??
       (typeof latestSummary?.latestAssistantMessage === "string" ? latestSummary.latestAssistantMessage : undefined) ??
       (latestRun?.status === "failed" ? "Latest run failed." : undefined) ??
@@ -221,6 +236,11 @@ export class CliDataAccess extends CliOperatorApiClient {
       ...(((dbIssue as { sessionState?: string }).sessionState) ? { sessionState: (dbIssue as { sessionState?: string }).sessionState } : {}),
       ...(((dbIssue as { waitingReason?: string }).waitingReason) ? { waitingReason: (dbIssue as { waitingReason?: string }).waitingReason } : {}),
       ...(statusNote ? { statusNote } : {}),
+      ...(completionCheck?.outcome ? { completionCheckOutcome: completionCheck.outcome } : {}),
+      ...(completionCheck?.summary ? { completionCheckSummary: completionCheck.summary } : {}),
+      ...(completionCheck?.question ? { completionCheckQuestion: completionCheck.question } : {}),
+      ...(completionCheck?.why ? { completionCheckWhy: completionCheck.why } : {}),
+      ...(completionCheck?.recommendedReply ? { completionCheckRecommendedReply: completionCheck.recommendedReply } : {}),
     };
   }
 

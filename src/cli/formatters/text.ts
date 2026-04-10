@@ -33,6 +33,11 @@ export function formatInspect(result: InspectResult): string {
     result.activeRun ? value("Active run", `${result.activeRun.runType} (${result.activeRun.status})`) : undefined,
     result.latestRun && !result.activeRun ? value("Latest run", `${result.latestRun.runType} (${result.latestRun.status})`) : undefined,
     result.prNumber ? value("PR", `#${result.prNumber}${result.prReviewState ? ` [${result.prReviewState}]` : ""}`) : undefined,
+    result.completionCheckOutcome ? value("Completion check", result.completionCheckOutcome) : undefined,
+    result.completionCheckSummary ? value("Completion summary", truncateLine(result.completionCheckSummary)) : undefined,
+    result.completionCheckQuestion ? value("Question", truncateLine(result.completionCheckQuestion)) : undefined,
+    result.completionCheckWhy ? value("Why", truncateLine(result.completionCheckWhy)) : undefined,
+    result.completionCheckRecommendedReply ? value("Suggested reply", truncateLine(result.completionCheckRecommendedReply)) : undefined,
     result.statusNote ? value("Status", truncateLine(result.statusNote)) : undefined,
   ].filter(Boolean);
 

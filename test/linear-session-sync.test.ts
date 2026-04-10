@@ -261,6 +261,75 @@ test("syncSession updates the existing visible Linear status comment even withou
   }
 });
 
+test("syncSession renders completion-check input details for awaiting-input issues", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-linear-sync-completion-check-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+
+    const issue = db.upsertIssue({
+      projectId: "krasnoperov/ballony-i-nasosy",
+      linearIssueId: "issue-tst-completion-check",
+      issueKey: "TST-44",
+      title: "Harden worker security headers",
+      factoryState: "awaiting_input",
+      agentSessionId: "session-completion-check",
+      currentLinearState: "In Progress",
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "implementation",
+    });
+    db.runs.finishRun(run.id, {
+      status: "completed",
+      summaryJson: JSON.stringify({ latestAssistantMessage: "Approval is needed before continuing." }),
+      reportJson: JSON.stringify({ assistantMessages: ["Approval is needed before continuing."] }),
+    });
+    db.runs.saveCompletionCheck(run.id, {
+      outcome: "needs_input",
+      summary: "Approval is needed before the worker routing can change.",
+      question: "Approve routing /v1/* through the worker?",
+      why: "The widget asset still bypasses the worker.",
+      recommendedReply: "Approved: route /v1/* through the worker.",
+    });
+
+    const commentUpdates: Array<Record<string, unknown>> = [];
+    const linear: Partial<LinearClient> = {
+      updateAgentSession: async (params) => ({ id: params.agentSessionId }),
+      upsertIssueComment: async (params) => {
+        commentUpdates.push(params as unknown as Record<string, unknown>);
+        return { id: "comment-completion-check", body: params.body };
+      },
+      createAgentActivity: async () => ({ id: "activity-completion-check" }),
+      getIssue: async () => { throw new Error("not used"); },
+      setIssueState: async () => { throw new Error("not used"); },
+      updateIssueLabels: async () => { throw new Error("not used"); },
+      getActorProfile: async () => ({ actorId: "patchrelay-actor" }),
+      getWorkspaceCatalog: async () => ({ workspace: {}, teams: [], projects: [] }),
+    };
+
+    const sync = new LinearSessionSync(
+      config,
+      db,
+      { forProject: async () => linear as LinearClient },
+      pino({ enabled: false }),
+    );
+
+    await sync.syncSession(db.getIssue(issue.projectId, issue.linearIssueId)!);
+
+    assert.equal(commentUpdates.length, 1);
+    assert.match(String(commentUpdates[0]?.body), /Input needed: Approve routing \/v1\/\* through the worker\?/);
+    assert.match(String(commentUpdates[0]?.body), /Why: The widget asset still bypasses the worker\./);
+    assert.match(String(commentUpdates[0]?.body), /Suggested reply: Approved: route \/v1\/\* through the worker\./);
+    assert.match(String(commentUpdates[0]?.body), /patchrelay issue prompt TST-44 "\.\.\."/);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("syncSession includes actionable input text for awaiting_input sessions", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-linear-sync-awaiting-input-"));
   try {

@@ -1,4 +1,5 @@
 import type { Logger } from "pino";
+import { extractCompletionCheck } from "./completion-check.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord, RunRecord, TrackedIssueRecord } from "./db-types.ts";
 import type { RunType } from "./factory-state.ts";
@@ -375,6 +376,18 @@ function renderStatusComment(
     lines.push("", `${label}: ${statusNote}`);
   }
 
+  const completionCheck = extractCompletionCheck(latestRun);
+  if (completionCheck?.outcome === "needs_input") {
+    if (completionCheck.why) {
+      lines.push("", `Why: ${completionCheck.why}`);
+    }
+    if (completionCheck.recommendedReply) {
+      lines.push("", `Suggested reply: ${completionCheck.recommendedReply}`);
+    }
+    const issueRef = issue.issueKey ?? issue.linearIssueId;
+    lines.push("", `Reply in a Linear comment to continue, or run \`patchrelay issue prompt ${issueRef} "..."\`.`);
+  }
+
   if (issue.prNumber !== undefined || issue.prUrl) {
     const prLabel = issue.prNumber !== undefined ? `#${issue.prNumber}` : "open";
     lines.push("", `PR: ${issue.prUrl ? `[${prLabel}](${issue.prUrl})` : prLabel}`);
@@ -384,6 +397,9 @@ function renderStatusComment(
     lines.push("", `Latest run: ${formatLatestRun(latestRun)}`);
     if (latestRun.failureReason) {
       lines.push("", `Failure: ${latestRun.failureReason}`);
+    }
+    if (completionCheck && completionCheck.outcome !== "needs_input" && completionCheck.summary !== statusNote) {
+      lines.push("", `Completion check: ${completionCheck.summary}`);
     }
   }
 

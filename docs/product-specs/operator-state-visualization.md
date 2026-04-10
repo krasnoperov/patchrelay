@@ -91,6 +91,27 @@ Example observations:
 - `queue repair run active`
 - `PR merged in GitHub`
 
+### No-PR Completion Check
+
+When an implementation run ends without a linked PR, PatchRelay should surface one compact operator-facing step:
+
+- `No PR found; checking next step`
+
+While that fork is active, the dashboard should show `completion check` as the transient internal stage for the issue rather than hiding it behind generic `implementing`.
+
+Then one of:
+
+- `No PR found; continuing automatically`
+- `No PR found; waiting for answer`
+- `No PR found; confirmed done`
+- `No PR found; completion check failed`
+
+Operator precision should stay in PatchRelay surfaces:
+
+- dashboard/feed/detail view show the exact completion-check result
+- Linear collapses non-automatic stops into `Human Needed` with concise copy
+- logs keep the fork thread id and turn id for forensic review
+
 ## merge-steward
 
 ### Native States

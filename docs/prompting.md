@@ -166,3 +166,32 @@ Prefer this order:
 5. use hooks for dynamic/computed context
 
 The default prompts are meant to work without tuning. Prompt config exists as a small escape hatch, not as a second documentation system.
+
+## No-PR Completion Check
+
+PatchRelay does not use prompt-time delivery-mode inference.
+
+The main work prompt always assumes the agent should do the task normally and publish a PR when code delivery is the natural outcome. If the run ends without a linked PR, PatchRelay performs a separate forked `completion check`.
+
+That completion check is intentionally secondary and read-only:
+
+- it runs in a dedicated read-only fork
+- it must not run commands, call tools, or edit files
+- it exists only to decide the next step after a no-PR outcome
+
+The completion-check prompt is JSON-only and must return exactly one object with:
+
+- `outcome`
+- `summary`
+- `question` when `outcome = "needs_input"`
+- optional `why`
+- optional `recommendedReply`
+
+Allowed `outcome` values are:
+
+- `continue`
+- `needs_input`
+- `done`
+- `failed`
+
+This keeps the main task prompt simple and moves no-PR reasoning into one explicit post-task step.

@@ -5,6 +5,7 @@ import { sanitizeOperatorFacingText } from "./presentation-text.ts";
 export type IssueSessionEventType =
   | "delegated"
   | "direct_reply"
+  | "completion_check_continue"
   | "followup_prompt"
   | "followup_comment"
   | "self_comment"
@@ -44,6 +45,12 @@ const TERMINAL_SESSION_EVENTS = new Set<IssueSessionEventType>([
   "pr_closed",
   "pr_merged",
 ]);
+
+const RUN_TYPES = new Set<RunType>(["implementation", "review_fix", "branch_upkeep", "ci_repair", "queue_repair"]);
+
+function parseRunType(value: unknown): RunType | undefined {
+  return typeof value === "string" && RUN_TYPES.has(value as RunType) ? value as RunType : undefined;
+}
 
 export function deriveSessionWakePlan(
   issue: IssueRecord,
@@ -113,6 +120,19 @@ export function deriveSessionWakePlan(
         resumeThread = true;
         break;
       }
+      case "completion_check_continue": {
+        if (!runType) {
+          runType = parseRunType(payload?.runType)
+            ?? (issue.prReviewState === "changes_requested" ? "review_fix" : "implementation");
+          wakeReason = "completion_check_continue";
+        }
+        if (typeof payload?.summary === "string" && payload.summary.trim()) {
+          context.completionCheckSummary = payload.summary.trim();
+        }
+        context.completionCheckMode = true;
+        resumeThread = true;
+        break;
+      }
       case "followup_prompt":
       case "followup_comment":
       case "operator_prompt": {
@@ -157,7 +177,9 @@ export function deriveSessionWakePlan(
   return { runType, wakeReason, resumeThread, context };
 }
 
-export function extractLatestAssistantSummary(run: RunRecord | undefined): string | undefined {
+export function extractLatestAssistantSummary(
+  run: Pick<RunRecord, "summaryJson" | "reportJson" | "failureReason"> | undefined,
+): string | undefined {
   if (!run) return undefined;
   if (run.summaryJson) {
     try {

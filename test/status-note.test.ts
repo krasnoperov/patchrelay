@@ -59,3 +59,23 @@ test("deriveIssueStatusNote unwraps shell-wrapped commands in assistant summarie
     "Verification passed with `npm run test:ui:local -- tests/ui/app-shell.spec.ts tests/ui/game-flow.spec.ts`.",
   );
 });
+
+test("deriveIssueStatusNote prefers completion-check questions for awaiting-input issues", () => {
+  const note = deriveIssueStatusNote({
+    issue: { factoryState: "awaiting_input" },
+    latestRun: {
+      id: 1,
+      issueId: 1,
+      projectId: "project",
+      linearIssueId: "issue-1",
+      runType: "implementation",
+      status: "completed",
+      startedAt: "2026-04-10T08:00:00.000Z",
+      completionCheckOutcome: "needs_input",
+      completionCheckSummary: "Approval is required before continuing.",
+      completionCheckQuestion: "Approve routing /v1/* through the worker?",
+    } as never,
+  });
+
+  assert.equal(note, "Approve routing /v1/* through the worker?");
+});

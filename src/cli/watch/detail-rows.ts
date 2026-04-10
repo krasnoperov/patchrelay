@@ -46,6 +46,7 @@ const STAGE_DISPLAY: Record<string, string> = {
   ready: "ready",
   delegated: "delegated",
   implementing: "implementing",
+  completion_check: "completion check",
   pr_open: "PR open",
   changes_requested: "review changes",
   repairing_ci: "repairing CI",
@@ -610,6 +611,7 @@ function stageDisplay(issue: WatchIssue): string {
 function effectiveState(issue: WatchIssue): string {
   if (issue.sessionState === "done") return "done";
   if (issue.sessionState === "failed") return "failed";
+  if (issue.completionCheckActive) return "completion_check";
   if (issue.blockedByCount > 0 && !issue.activeRunType) return "blocked";
   if (issue.sessionState === "waiting_input") return "awaiting_input";
   if (issue.prNumber !== undefined) return issue.factoryState;
@@ -620,6 +622,7 @@ function effectiveState(issue: WatchIssue): string {
 function blockerText(issue: WatchIssue, issueContext: WatchIssueContext | null): string | null {
   const rereviewNeeded = isRereviewNeeded(issue);
   if (issue.sessionState === "waiting_input") return issue.waitingReason ?? "Waiting for input";
+  if (issue.completionCheckActive) return "No PR found; checking next step";
   if (issue.sessionState === "failed" || issue.factoryState === "failed" || issue.factoryState === "escalated") {
     return issue.statusNote ?? issue.waitingReason ?? "Needs operator intervention";
   }

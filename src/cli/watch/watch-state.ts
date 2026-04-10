@@ -51,6 +51,7 @@ export interface WatchIssue {
   latestFailureStepName?: string | undefined;
   latestFailureSummary?: string | undefined;
   waitingReason?: string | undefined;
+  completionCheckActive?: boolean | undefined;
   updatedAt: string;
 }
 

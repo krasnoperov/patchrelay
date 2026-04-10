@@ -51,74 +51,6 @@ function readWorkflowFile(repoPath: string, runType: RunType): string | undefine
   return readFileSync(filePath, "utf8").trim();
 }
 
-export type ImplementationDeliveryMode = "publish_pr" | "linear_only";
-
-function collectImplementationInstructionText(
-  issue: Pick<IssueRecord, "title" | "description">,
-  context?: Record<string, unknown>,
-  promptText?: string,
-): string {
-  const parts: string[] = [];
-  if (issue.title) parts.push(issue.title);
-  if (issue.description) parts.push(issue.description);
-  if (promptText) parts.push(promptText);
-
-  const stringFields = ["promptContext", "promptBody", "operatorPrompt", "userComment"];
-  for (const field of stringFields) {
-    const value = context?.[field];
-    if (typeof value === "string" && value.trim()) {
-      parts.push(value);
-    }
-  }
-
-  if (Array.isArray(context?.followUps)) {
-    for (const entry of context.followUps) {
-      if (!entry || typeof entry !== "object") continue;
-      const text = (entry as { text?: unknown }).text;
-      if (typeof text === "string" && text.trim()) {
-        parts.push(text);
-      }
-    }
-  }
-
-  return parts.join("\n").toLowerCase();
-}
-
-export function resolveImplementationDeliveryMode(
-  issue: Pick<IssueRecord, "title" | "description">,
-  context?: Record<string, unknown>,
-  promptText?: string,
-): ImplementationDeliveryMode {
-  const instructionText = collectImplementationInstructionText(issue, context, promptText);
-  if (!instructionText) return "publish_pr";
-
-  const hasExplicitNoPr = [
-    /\bdo not open (?:a |any )?pr\b/,
-    /\bdo not open (?:a |any )?pull request\b/,
-    /\bno pr is opened\b/,
-    /\bpatchrelay should not open a pr\b/,
-    /\bwithout opening a pr\b/,
-  ].some((pattern) => pattern.test(instructionText));
-  const forbidsRepoChanges = [
-    /\bdo not make repository changes\b/,
-    /\bdo not make repo changes\b/,
-    /\bno repository changes\b/,
-    /\bno repo changes\b/,
-    /\bdo not modify repo files\b/,
-  ].some((pattern) => pattern.test(instructionText));
-  const planningOnly = [
-    /\bplanning\/specification issue only\b/,
-    /\bplanning[- ]only\b/,
-    /\bspecification[- ]only\b/,
-    /\bplanning issue only\b/,
-  ].some((pattern) => pattern.test(instructionText));
-
-  if (hasExplicitNoPr || (planningOnly && forbidsRepoChanges)) {
-    return "linear_only";
-  }
-  return "publish_pr";
-}
-
 function buildPromptHeader(issue: IssueRecord): string {
   return [
     `Issue: ${issue.issueKey ?? issue.linearIssueId}`,
@@ -439,6 +371,8 @@ function buildFollowUpPromptPrelude(issue: IssueRecord, runType: RunType, contex
     "",
     wakeReason === "direct_reply"
       ? "Why this turn exists: A human reply arrived for the outstanding question from the previous turn."
+      : wakeReason === "completion_check_continue"
+        ? "Why this turn exists: The previous turn ended without a PR, and PatchRelay's completion check decided the work should continue automatically."
       : wakeReason === "branch_upkeep"
         ? "Why this turn exists: GitHub still shows the PR branch as needing upkeep after the requested code change was addressed."
         : wakeReason === "followup_comment"
@@ -446,9 +380,15 @@ function buildFollowUpPromptPrelude(issue: IssueRecord, runType: RunType, contex
           : `Why this turn exists: Continue the existing ${runType} run from the latest issue state.`,
     wakeReason === "direct_reply"
       ? "Required action now: Apply the latest human answer, continue from the current branch/session context, and publish the next concrete result."
+      : wakeReason === "completion_check_continue"
+        ? "Required action now: Continue from the current branch and thread context, finish the task, and publish the next concrete result."
       : "Required action now: Continue from the latest branch state, refresh any stale assumptions, and publish the next concrete result.",
     "",
   ];
+
+  if (wakeReason === "completion_check_continue" && typeof context?.completionCheckSummary === "string" && context.completionCheckSummary.trim()) {
+    lines.push(`Completion check summary: ${context.completionCheckSummary.trim()}`, "");
+  }
 
   if (followUpLines.length > 0) {
     lines.push("Recent updates:");
@@ -512,28 +452,13 @@ function buildWorkflowGuidance(repoPath: string, runType: RunType): string {
 
 function buildPublicationContract(
   runType: RunType,
-  issue?: Pick<IssueRecord, "title" | "description">,
-  context?: Record<string, unknown>,
 ): string {
-  const deliveryMode = runType === "implementation" && issue
-    ? resolveImplementationDeliveryMode(issue, context)
-    : "publish_pr";
-  if (runType === "implementation" && deliveryMode === "linear_only") {
-    return [
-      "## Delivery Requirements",
-      "",
-      "This issue is planning/specification only.",
-      "Do not modify repo files or open a PR for this issue.",
-      "Deliver the result through Linear artifacts such as follow-up issues, documents, and a concise summary.",
-      "Leave the worktree clean before stopping.",
-    ].join("\n");
-  }
-
   if (runType === "implementation") {
     return [
       "## Publication Requirements",
       "",
       "Before finishing, publish the result instead of leaving it only in the worktree.",
+      "If the task is genuinely complete without a PR, say so clearly in your normal summary instead of inventing one.",
       "If the worktree already contains relevant changes for this issue, verify them and publish them.",
       "If you changed files for this issue, commit them, push the issue branch, and open or update the PR before stopping.",
       "Do not stop with only local commits or uncommitted changes.",
@@ -585,7 +510,7 @@ function buildSections(
     sections.push({ id: "workflow-guidance", content: workflow });
   }
 
-  sections.push({ id: "publication-contract", content: buildPublicationContract(runType, issue, context) });
+  sections.push({ id: "publication-contract", content: buildPublicationContract(runType) });
   return sections;
 }
 
