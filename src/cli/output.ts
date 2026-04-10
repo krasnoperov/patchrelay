@@ -76,6 +76,8 @@ function formatCiOwnerLabel(owner: ClusterHealthReport["ci"][number]["owner"]): 
       return "merge-queue";
     case "external":
       return "ci/github";
+    case "paused":
+      return "paused";
     default:
       return "missing";
   }
