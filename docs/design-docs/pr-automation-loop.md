@@ -72,3 +72,10 @@ If CI later fails on that undelegated PR:
 - PatchRelay should record the failing state
 - PatchRelay should not repair it yet
 - when the issue is delegated back to PatchRelay, it should resume from current PR truth rather than restarting from scratch, even if the linked PR was opened externally
+
+If an issue is undelegated before any PR exists:
+
+- PatchRelay should stop the active local run
+- the issue should stay in its literal local-work state such as `delegated` or `implementing`
+- operator surfaces should show that automation is paused
+- `awaiting_input` should only be used when a real human reply is required

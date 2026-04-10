@@ -5,6 +5,7 @@ import type { IssueRecord, RunRecord, TrackedIssueRecord } from "./db-types.ts";
 import type { RunType } from "./factory-state.ts";
 import { deriveIssueStatusNote } from "./status-note.ts";
 import { derivePatchRelayWaitingReason } from "./waiting-reason.ts";
+import { isUndelegatedPausedIssue } from "./paused-issue-state.ts";
 import type { LinearClientProvider } from "./types.ts";
 
 export async function syncVisibleStatusComment(params: {
@@ -51,7 +52,7 @@ export function shouldSyncVisibleIssueComment(
     return true;
   }
 
-  if (!issue.delegatedToPatchRelay && (issue.prNumber !== undefined || issue.prUrl)) {
+  if (isUndelegatedPausedIssue(issue)) {
     return true;
   }
 
@@ -189,6 +190,14 @@ function statusHeadline(
       return `PR #${issue.prNumber} has failing CI while PatchRelay is paused`;
     }
     return `PR #${issue.prNumber} is awaiting review while PatchRelay is paused`;
+  }
+  if (!issue.delegatedToPatchRelay) {
+    if (issue.factoryState === "implementing") {
+      return "Implementation is paused because the issue is undelegated";
+    }
+    if (issue.factoryState === "delegated") {
+      return "Queued to start work while PatchRelay is paused";
+    }
   }
   switch (issue.factoryState) {
     case "delegated":

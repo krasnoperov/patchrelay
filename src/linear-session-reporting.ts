@@ -229,7 +229,7 @@ export function summarizeIssueStateForLinear(
     case "running":
       return issue.waitingReason ?? (issue.prNumber ? `PR #${issue.prNumber} is actively running.` : "Actively running.");
     case "idle":
-      if (!issue.delegatedToPatchRelay && issue.prNumber) {
+      if (!issue.delegatedToPatchRelay) {
         break;
       }
       return issue.waitingReason ?? (issue.prNumber ? `PR #${issue.prNumber} is idle.` : "Idle.");
@@ -240,6 +240,16 @@ export function summarizeIssueStateForLinear(
   }
 
   switch (issue.factoryState) {
+    case "delegated":
+      if (!issue.delegatedToPatchRelay) {
+        return "PatchRelay is queued to start work, but automation is paused.";
+      }
+      return "Queued to start work.";
+    case "implementing":
+      if (!issue.delegatedToPatchRelay) {
+        return "Implementation is paused because the issue is undelegated.";
+      }
+      return "Implementation in progress.";
     case "pr_open":
       if (!issue.delegatedToPatchRelay && issue.prNumber) {
         return `PR #${issue.prNumber} is awaiting review while PatchRelay is paused.`;

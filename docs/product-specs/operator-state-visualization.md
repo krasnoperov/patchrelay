@@ -124,7 +124,7 @@ When an issue is undelegated from PatchRelay, the dashboard should present this 
 
 Rules:
 
-- `delegated` or `implementing` with no PR may pause into `awaiting_input`
+- `delegated` or `implementing` with no PR should stay in that native state and show a pause overlay
 - PR-backed states such as `pr_open`, `changes_requested`, and `awaiting_queue` should stay visible if they are still true
 - if an external PR becomes linked to the issue by key while PatchRelay is paused, keep the PR-backed state visible rather than treating it as a fresh local implementation
 - waiting text should explain that PatchRelay automation is paused
@@ -136,6 +136,7 @@ Recommended compact copy:
 - `PatchRelay automation is paused; downstream merge may still continue until the PR is closed`
 
 Do not present undelegated PR-backed issues as if the PR disappeared or as if PatchRelay were still actively repairing them.
+Also do not rewrite undelegated local work into `awaiting_input` unless the issue truly needs a human answer.
 
 ## merge-steward
 
