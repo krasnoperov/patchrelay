@@ -5,6 +5,7 @@ import type { NormalizedGitHubEvent } from "./github-types.ts";
 import type { LinearAgentActivityContent } from "./linear-types.ts";
 import { formatRunTypeLabel } from "./agent-session-plan.ts";
 import { sanitizeOperatorFacingText } from "./presentation-text.ts";
+import { isClosedPrState } from "./pr-state.ts";
 
 function lowerRunTypeLabel(runType: RunType): string {
   return formatRunTypeLabel(runType).toLowerCase();
@@ -225,15 +226,17 @@ export function summarizeIssueStateForLinear(
 ): string | undefined {
   switch (issue.sessionState) {
     case "waiting_input":
-      return issue.waitingReason ?? (issue.prNumber ? `PR #${issue.prNumber} is waiting for input.` : "Waiting for input.");
+      return issue.waitingReason ?? (issue.prNumber && !isClosedPrState(issue.prState) ? `PR #${issue.prNumber} is waiting for input.` : "Waiting for input.");
     case "running":
-      return issue.waitingReason ?? (issue.prNumber ? `PR #${issue.prNumber} is actively running.` : "Actively running.");
+      return issue.waitingReason ?? (issue.prNumber && !isClosedPrState(issue.prState) ? `PR #${issue.prNumber} is actively running.` : "Actively running.");
     case "idle":
-      return issue.waitingReason ?? (issue.prNumber ? `PR #${issue.prNumber} is idle.` : "Idle.");
+      return issue.waitingReason ?? (issue.prNumber && !isClosedPrState(issue.prState) ? `PR #${issue.prNumber} is idle.` : "Idle.");
     case "done":
-      return issue.prNumber ? `PR #${issue.prNumber} has merged.` : "Change merged.";
+      if (issue.prNumber && issue.prState === "merged") return `PR #${issue.prNumber} has merged.`;
+      if (issue.prNumber && isClosedPrState(issue.prState)) return `Completed without merging PR #${issue.prNumber}.`;
+      return issue.prNumber ? `Completed with PR #${issue.prNumber}.` : "Completed.";
     case "failed":
-      return issue.waitingReason ?? (issue.prNumber ? `PR #${issue.prNumber} needs help to recover.` : "Needs help to recover.");
+      return issue.waitingReason ?? (issue.prNumber && !isClosedPrState(issue.prState) ? `PR #${issue.prNumber} needs help to recover.` : "Needs help to recover.");
   }
 
   switch (issue.factoryState) {
@@ -242,7 +245,9 @@ export function summarizeIssueStateForLinear(
     case "awaiting_queue":
       return issue.prNumber ? `PR #${issue.prNumber} is approved and awaiting merge.` : "Approved and awaiting merge.";
     case "done":
-      return issue.prNumber ? `PR #${issue.prNumber} has merged.` : "Change merged.";
+      if (issue.prNumber && issue.prState === "merged") return `PR #${issue.prNumber} has merged.`;
+      if (issue.prNumber && isClosedPrState(issue.prState)) return `Completed without merging PR #${issue.prNumber}.`;
+      return issue.prNumber ? `Completed with PR #${issue.prNumber}.` : "Completed.";
     default:
       return undefined;
   }

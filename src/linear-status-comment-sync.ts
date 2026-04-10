@@ -5,6 +5,7 @@ import type { IssueRecord, RunRecord, TrackedIssueRecord } from "./db-types.ts";
 import type { RunType } from "./factory-state.ts";
 import { deriveIssueStatusNote } from "./status-note.ts";
 import { derivePatchRelayWaitingReason } from "./waiting-reason.ts";
+import { isClosedPrState } from "./pr-state.ts";
 import type { LinearClientProvider } from "./types.ts";
 
 export async function syncVisibleStatusComment(params: {
@@ -37,7 +38,7 @@ export async function syncVisibleStatusComment(params: {
 }
 
 export function shouldSyncVisibleIssueComment(
-  issue: Pick<IssueRecord, "factoryState" | "prNumber" | "prUrl"> & {
+  issue: Pick<IssueRecord, "factoryState" | "prNumber" | "prUrl" | "prState"> & {
     sessionState?: string | undefined;
   },
   hasAgentSession: boolean,
@@ -51,7 +52,13 @@ export function shouldSyncVisibleIssueComment(
     return true;
   }
 
-  if ((issue.sessionState === "done" || issue.factoryState === "done") && issue.prNumber === undefined && !issue.prUrl) {
+  if (
+    (issue.sessionState === "done" || issue.factoryState === "done")
+    && (
+      (issue.prNumber === undefined && !issue.prUrl)
+      || isClosedPrState(issue.prState)
+    )
+  ) {
     return true;
   }
 
@@ -141,7 +148,7 @@ function renderStatusComment(
 }
 
 function statusHeadline(
-  issue: Pick<IssueRecord, "factoryState" | "prNumber"> & {
+  issue: Pick<IssueRecord, "factoryState" | "prNumber" | "prState"> & {
     sessionState?: string | undefined;
     waitingReason?: string | undefined;
   },
@@ -156,6 +163,8 @@ function statusHeadline(
     case "running":
       return issue.prNumber !== undefined ? `PR #${issue.prNumber} is actively running` : "Actively running";
     case "done":
+      if (issue.prNumber !== undefined && issue.prState === "merged") return `Completed with merged PR #${issue.prNumber}`;
+      if (issue.prNumber !== undefined && isClosedPrState(issue.prState)) return `Completed without merging PR #${issue.prNumber}`;
       return issue.prNumber !== undefined ? `Completed with PR #${issue.prNumber}` : "Completed";
     case "failed":
       return "Needs operator intervention";
@@ -184,6 +193,8 @@ function statusHeadline(
     case "escalated":
       return "Needs operator intervention";
     case "done":
+      if (issue.prNumber !== undefined && issue.prState === "merged") return `Completed with merged PR #${issue.prNumber}`;
+      if (issue.prNumber !== undefined && isClosedPrState(issue.prState)) return `Completed without merging PR #${issue.prNumber}`;
       return issue.prNumber !== undefined ? `Completed with PR #${issue.prNumber}` : "Completed";
     default:
       return humanize(issue.factoryState);

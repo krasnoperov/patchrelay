@@ -494,6 +494,66 @@ test("syncSession keeps a final visible comment for done planning-only issues", 
   }
 });
 
+test("syncSession keeps a final visible comment for done issues with a closed historical PR", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-linear-sync-closed-pr-done-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+
+    const issue = db.upsertIssue({
+      projectId: "krasnoperov/ballony-i-nasosy",
+      linearIssueId: "issue-tst-closed-pr-done",
+      issueKey: "TST-22",
+      title: "Publish findings without merging the placeholder PR",
+      factoryState: "done",
+      agentSessionId: "session-22",
+      currentLinearState: "Done",
+      currentLinearStateType: "completed",
+      prNumber: 193,
+      prState: "closed",
+      prUrl: "https://github.com/krasnoperov/ballony-i-nasosy/pull/193",
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "implementation",
+    });
+    db.runs.finishRun(run.id, { status: "completed" });
+
+    const commentUpdates: Array<Record<string, unknown>> = [];
+    const linear: Partial<LinearClient> = {
+      updateAgentSession: async (params) => ({ id: params.agentSessionId }),
+      upsertIssueComment: async (params) => {
+        commentUpdates.push(params as unknown as Record<string, unknown>);
+        return { id: "comment-22", body: params.body };
+      },
+      createAgentActivity: async () => ({ id: "activity-22" }),
+      getIssue: async () => { throw new Error("not used"); },
+      setIssueState: async () => { throw new Error("not used"); },
+      updateIssueLabels: async () => { throw new Error("not used"); },
+      getActorProfile: async () => ({ actorId: "patchrelay-actor" }),
+      getWorkspaceCatalog: async () => ({ workspace: {}, teams: [], projects: [] }),
+    };
+
+    const sync = new LinearSessionSync(
+      config,
+      db,
+      { forProject: async () => linear as LinearClient },
+      pino({ enabled: false }),
+    );
+
+    await sync.syncSession(db.getIssue(issue.projectId, issue.linearIssueId)!);
+
+    assert.equal(commentUpdates.length, 1);
+    assert.match(String(commentUpdates[0]?.body), /Completed without merging PR #193/);
+    assert.match(String(commentUpdates[0]?.body), /PR: \[#193\]/);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("syncSession moves backlog issues into an active started state when implementation starts", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-linear-sync-active-state-"));
   try {
