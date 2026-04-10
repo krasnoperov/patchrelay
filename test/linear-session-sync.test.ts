@@ -261,6 +261,87 @@ test("syncSession updates the existing visible Linear status comment even withou
   }
 });
 
+test("syncSession keeps visible status comments current for paused undelegated PR-backed issues", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-linear-sync-paused-pr-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+
+    const issue = db.upsertIssue({
+      projectId: "krasnoperov/ballony-i-nasosy",
+      linearIssueId: "issue-tst-paused-pr",
+      issueKey: "TST-57",
+      title: "Paused PR-backed issue",
+      factoryState: "changes_requested",
+      delegatedToPatchRelay: false,
+      agentSessionId: "session-paused-pr",
+      currentLinearState: "In Progress",
+      prNumber: 57,
+      prState: "open",
+      prReviewState: "changes_requested",
+      prCheckStatus: "success",
+      prUrl: "https://github.com/krasnoperov/ballony-i-nasosy/pull/57",
+    });
+
+    const commentUpdates: Array<Record<string, unknown>> = [];
+    const linear: Partial<LinearClient> = {
+      updateAgentSession: async (params) => ({ id: params.agentSessionId }),
+      upsertIssueComment: async (params) => {
+        commentUpdates.push(params as unknown as Record<string, unknown>);
+        return { id: "comment-paused-pr", body: params.body };
+      },
+      createAgentActivity: async () => ({ id: "activity-paused-pr" }),
+      getIssue: async () => ({
+        id: "issue-tst-paused-pr",
+        identifier: "TST-57",
+        title: "Paused PR-backed issue",
+        teamId: "team-tst",
+        teamKey: "TST",
+        delegateId: "someone-else",
+        stateId: "state-review",
+        stateName: "Review",
+        stateType: "started",
+        workflowStates: [
+          { name: "Review", type: "unstarted" },
+          { name: "Reviewing", type: "started" },
+          { name: "Deploying", type: "started" },
+          { name: "Human Needed", type: "unstarted" },
+          { name: "Done", type: "completed" },
+        ],
+        labelIds: [],
+        labels: [],
+        teamLabels: [],
+        blockedBy: [],
+        blocks: [],
+      }),
+      setIssueState: async (issueId, stateName) => ({
+        issueId,
+        stateName,
+        stateType: stateName === "Review" ? "unstarted" : "started",
+      }),
+      updateIssueLabels: async () => { throw new Error("not used"); },
+      getActorProfile: async () => ({ actorId: "patchrelay-actor" }),
+      getWorkspaceCatalog: async () => ({ workspace: {}, teams: [], projects: [] }),
+    };
+
+    const sync = new LinearSessionSync(
+      config,
+      db,
+      { forProject: async () => linear as LinearClient },
+      pino({ enabled: false }),
+    );
+
+    await sync.syncSession(db.getIssue(issue.projectId, issue.linearIssueId)!);
+
+    assert.equal(commentUpdates.length, 1);
+    assert.match(String(commentUpdates[0]?.body), /PR #57 has requested changes while PatchRelay is paused/);
+    assert.match(String(commentUpdates[0]?.body), /Waiting: PatchRelay automation is paused because the issue is undelegated/);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("syncSession renders completion-check input details for awaiting-input issues", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-linear-sync-completion-check-"));
   try {

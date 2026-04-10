@@ -74,7 +74,7 @@ function shouldAutoAdvanceLinearState(issue: {
 }
 
 function resolveDesiredActiveWorkflowState(
-  issue: Pick<IssueRecord, "factoryState" | "prNumber" | "prUrl" | "prReviewState" | "prCheckStatus" | "activeRunId" | "lastGitHubCiSnapshotJson">,
+  issue: Pick<IssueRecord, "factoryState" | "prNumber" | "prUrl" | "prReviewState" | "prCheckStatus" | "activeRunId" | "lastGitHubCiSnapshotJson" | "delegatedToPatchRelay">,
   trackedIssue: Pick<TrackedIssueRecord, "sessionState"> | undefined,
   options: { activeRunType?: RunType } | undefined,
   liveIssue: {
@@ -86,14 +86,16 @@ function resolveDesiredActiveWorkflowState(
     return resolvePreferredHumanNeededLinearState(liveIssue);
   }
 
-  const activelyWorking = issue.activeRunId !== undefined
+  const activelyWorking = issue.delegatedToPatchRelay !== false && (
+    issue.activeRunId !== undefined
     || options?.activeRunType !== undefined
     || trackedIssue?.sessionState === "running"
     || issue.factoryState === "delegated"
     || issue.factoryState === "implementing"
     || issue.factoryState === "changes_requested"
     || issue.factoryState === "repairing_ci"
-    || issue.factoryState === "repairing_queue";
+    || issue.factoryState === "repairing_queue"
+  );
   if (activelyWorking) {
     return resolvePreferredImplementingLinearState(liveIssue);
   }
