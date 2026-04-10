@@ -135,10 +135,11 @@ export function reconcileTimelineFromRehydration(
 
   const previousById = new Map(previousTimeline.map((entry) => [entry.id, entry]));
   const rehydratedIds = new Set(rehydrated.map((entry) => entry.id));
+  const liveUserMessages = collectUserMessageTexts(rehydrated, activeRunId);
   const merged = rehydrated.map((entry) => mergeTimelineEntry(previousById.get(entry.id), entry));
   const carriedForward = previousTimeline.filter((entry) => {
     if (rehydratedIds.has(entry.id)) return false;
-    return shouldCarryForwardEntry(entry, activeRunId);
+    return shouldCarryForwardEntry(entry, activeRunId, liveUserMessages);
   });
 
   return sortTimelineEntries([...merged, ...carriedForward]);
@@ -277,6 +278,8 @@ function materializeItem(item: CodexThreadItem): TimelineItemPayload {
   const base: TimelineItemPayload = { id, type, status: "completed" };
 
   switch (type) {
+    case "userMessage":
+      return { ...base, text: extractUserMessageText(r.content) };
     case "agentMessage":
       return { ...base, text: String(r.text ?? "") };
     case "commandExecution":
@@ -475,13 +478,17 @@ function mergeDefinedItemFields(base: TimelineItemPayload, patch: TimelineItemPa
     ...base,
     id: patch.id,
     type: patch.type,
-    status: patch.status,
-    ...(patch.text !== undefined ? { text: patch.text } : {}),
+    status: preferredItemStatus(base.status, patch.status),
+    ...(mergePreferredString(base.text, patch.text) !== undefined ? { text: mergePreferredString(base.text, patch.text) } : {}),
     ...(patch.command !== undefined ? { command: patch.command } : {}),
-    ...(patch.output !== undefined ? { output: patch.output } : {}),
+    ...(mergePreferredString(base.output, patch.output) !== undefined ? { output: mergePreferredString(base.output, patch.output) } : {}),
     ...(patch.exitCode !== undefined ? { exitCode: patch.exitCode } : {}),
-    ...(patch.durationMs !== undefined ? { durationMs: patch.durationMs } : {}),
-    ...(patch.changes !== undefined ? { changes: patch.changes } : {}),
+    ...(patch.durationMs !== undefined || base.durationMs !== undefined
+      ? { durationMs: preferredNumber(base.durationMs, patch.durationMs) }
+      : {}),
+    ...(patch.changes !== undefined || base.changes !== undefined
+      ? { changes: preferredChanges(base.changes, patch.changes) }
+      : {}),
     ...(patch.toolName !== undefined ? { toolName: patch.toolName } : {}),
   };
 }
@@ -521,12 +528,21 @@ function mergeTimelineEntry(existing: TimelineEntry | undefined, incoming: Timel
   }
 }
 
-function shouldCarryForwardEntry(entry: TimelineEntry, activeRunId: number | null | undefined): boolean {
+function shouldCarryForwardEntry(
+  entry: TimelineEntry,
+  activeRunId: number | null | undefined,
+  liveUserMessages: Set<string>,
+): boolean {
   if (entry.kind !== "item" || entry.runId !== activeRunId) {
     return false;
   }
 
-  return entry.item?.status === "inProgress" || entry.item?.id.startsWith("prompt-") === true;
+  if (entry.item?.id.startsWith("prompt-") === true) {
+    const text = normalizePromptText(entry.item.text);
+    return !text || !liveUserMessages.has(text);
+  }
+
+  return entry.item?.status === "inProgress";
 }
 
 function sortTimelineEntries(entries: TimelineEntry[]): TimelineEntry[] {
@@ -538,6 +554,70 @@ function sortTimelineEntries(entries: TimelineEntry[]): TimelineEntry[] {
     if (kindCmp !== 0) return kindCmp;
     return a.id.localeCompare(b.id);
   });
+}
+
+function preferredItemStatus(existing: string, incoming: string): string {
+  return itemStatusRank(incoming) >= itemStatusRank(existing) ? incoming : existing;
+}
+
+function itemStatusRank(status: string): number {
+  switch (status) {
+    case "failed":
+    case "completed":
+    case "declined":
+      return 2;
+    case "inProgress":
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+function mergePreferredString(existing: string | undefined, incoming: string | undefined): string | undefined {
+  if (incoming === undefined) return existing;
+  if (existing === undefined) return incoming;
+  return incoming.length >= existing.length ? incoming : existing;
+}
+
+function preferredNumber(existing: number | undefined, incoming: number | undefined): number | undefined {
+  return incoming ?? existing;
+}
+
+function preferredChanges(existing: unknown[] | undefined, incoming: unknown[] | undefined): unknown[] | undefined {
+  if (incoming === undefined) return existing;
+  if (existing === undefined) return incoming;
+  return incoming.length >= existing.length ? incoming : existing;
+}
+
+function collectUserMessageTexts(entries: TimelineEntry[], activeRunId: number | null | undefined): Set<string> {
+  const texts = new Set<string>();
+  for (const entry of entries) {
+    if (entry.kind !== "item" || entry.runId !== activeRunId || entry.item?.type !== "userMessage") {
+      continue;
+    }
+    const text = normalizePromptText(entry.item.text);
+    if (text) {
+      texts.add(text);
+    }
+  }
+  return texts;
+}
+
+function normalizePromptText(text: string | undefined): string | null {
+  const normalized = text?.trim();
+  return normalized && normalized.length > 0 ? normalized : null;
+}
+
+function extractUserMessageText(content: unknown): string {
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") return undefined;
+      const value = (entry as Record<string, unknown>).text;
+      return typeof value === "string" ? value : undefined;
+    })
+    .filter((value): value is string => Boolean(value))
+    .join("\n\n");
 }
 
 // ─── Feed Events to Timeline Entries ──────────────────────────────

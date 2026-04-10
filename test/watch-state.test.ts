@@ -471,6 +471,61 @@ test("timeline-rehydrate preserves stable timestamps and richer live item fields
   assert.equal(commandEntry?.item?.output, "PASS src/watch\n");
 });
 
+test("timeline-rehydrate does not regress a completed live item back to in-progress", () => {
+  const initial = stateWith({
+    timeline: [{
+      id: "live-cmd-1",
+      at: "2026-03-25T10:10:00.123Z",
+      kind: "item",
+      runId: 42,
+      item: {
+        id: "cmd-1",
+        type: "commandExecution",
+        status: "completed",
+        command: "npm test",
+        output: "PASS src/watch\n",
+        exitCode: 0,
+      },
+    }],
+  });
+
+  const state = reduce(initial, {
+    type: "timeline-rehydrate",
+    runs: [{
+      id: 42,
+      runType: "implementation",
+      status: "running",
+      startedAt: "2026-03-25T10:10:00.000Z",
+    }],
+    feedEvents: [],
+    liveThread: {
+      id: "thread-42",
+      preview: "",
+      cwd: "/tmp",
+      status: "running",
+      turns: [{
+        id: "turn-1",
+        status: "running",
+        items: [{
+          id: "cmd-1",
+          type: "commandExecution",
+          command: "npm test",
+          cwd: "/tmp",
+          status: "inProgress",
+          aggregatedOutput: "PASS\n",
+        }],
+      }],
+    },
+    activeRunId: 42,
+    issueContext: null,
+  });
+
+  const commandEntry = state.timeline.find((entry) => entry.id === "live-cmd-1");
+  assert.equal(commandEntry?.item?.status, "completed");
+  assert.equal(commandEntry?.item?.output, "PASS src/watch\n");
+  assert.equal(commandEntry?.item?.exitCode, 0);
+});
+
 test("timeline-rehydrate carries forward optimistic active-run items that are not yet in the snapshot", () => {
   const initial = stateWith({
     timeline: [{
@@ -510,6 +565,55 @@ test("timeline-rehydrate carries forward optimistic active-run items that are no
   const commandEntry = state.timeline.find((entry) => entry.id === "live-cmd-2");
   assert.ok(commandEntry);
   assert.equal(commandEntry?.item?.command, "npm run lint");
+});
+
+test("timeline-rehydrate drops synthetic prompt rows once the live thread includes the matching user message", () => {
+  const initial = stateWith({
+    timeline: [{
+      id: "live-prompt-1",
+      at: "2026-03-25T10:10:01.000Z",
+      kind: "item",
+      runId: 42,
+      item: {
+        id: "prompt-1",
+        type: "userMessage",
+        status: "completed",
+        text: "Please continue with the fix",
+      },
+    }],
+  });
+
+  const state = reduce(initial, {
+    type: "timeline-rehydrate",
+    runs: [{
+      id: 42,
+      runType: "implementation",
+      status: "running",
+      startedAt: "2026-03-25T10:10:00.000Z",
+    }],
+    feedEvents: [],
+    liveThread: {
+      id: "thread-42",
+      preview: "",
+      cwd: "/tmp",
+      status: "running",
+      turns: [{
+        id: "turn-1",
+        status: "running",
+        items: [{
+          id: "user-1",
+          type: "userMessage",
+          content: [{ text: "Please continue with the fix" }],
+        }],
+      }],
+    },
+    activeRunId: 42,
+    issueContext: null,
+  });
+
+  assert.equal(state.timeline.some((entry) => entry.id === "live-prompt-1"), false);
+  const userEntry = state.timeline.find((entry) => entry.kind === "item" && entry.item?.type === "userMessage");
+  assert.equal(userEntry?.item?.text, "Please continue with the fix");
 });
 
 test("buildTimelineFromRehydration assigns deterministic timestamps to live thread rows", () => {
