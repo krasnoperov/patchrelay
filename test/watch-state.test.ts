@@ -148,19 +148,6 @@ test("exit-detail returns to list view and clears timeline", () => {
   assert.equal(state.activeDetailKey, null);
 });
 
-test("enter-feed switches to feed view and clears detail state", () => {
-  const initial = stateWith({ view: "detail", activeDetailKey: "USE-74" });
-  const state = reduce(initial, { type: "enter-feed" });
-  assert.equal(state.view, "feed");
-  assert.equal(state.activeDetailKey, null);
-});
-
-test("exit-feed returns to list view", () => {
-  const initial = stateWith({ view: "feed" });
-  const state = reduce(initial, { type: "exit-feed" });
-  assert.equal(state.view, "list");
-});
-
 test("detail-navigate cycles through filtered issues", () => {
   const issues = [makeIssue("USE-1"), makeIssue("USE-2"), makeIssue("USE-3")];
   const initial = stateWith({ view: "detail", activeDetailKey: "USE-1", issues });
@@ -961,7 +948,7 @@ test("buildTimelineRows sorts compact rows deterministically when timestamps mat
     null,
   );
 
-  const rows = buildTimelineRows(timeline, "compact").filter((row) => row.kind === "run");
+  const rows = buildTimelineRows(timeline).filter((row) => row.kind === "run");
   assert.equal(rows[0]?.id, "run-1");
   assert.equal(rows[1]?.id, "run-2");
 });
@@ -1017,7 +1004,7 @@ test("buildTimelineRows hides queue handoff chatter and collapses repeated appli
     null,
   );
 
-  const rows = buildTimelineRows(timeline, "compact").filter((row) => row.kind === "feed");
+  const rows = buildTimelineRows(timeline).filter((row) => row.kind === "feed");
   assert.equal(rows.length, 2);
   assert.equal(rows[0]?.feed.status, "queue_label_applied");
   assert.equal(rows[0]?.repeatCount, 2);
@@ -1142,20 +1129,6 @@ test("buildTimelineRows keeps active runs focused on the latest live context", (
   const runRow = rows.find((row) => row.kind === "run");
   assert.ok(runRow && runRow.kind === "run");
   assert.deepEqual(runRow.items.map(({ item }) => item.id), ["msg-2", "cmd-2", "files-1"]);
-});
-
-// ─── Feed Events ─────────────────────────────────────────────
-
-test("feed-snapshot sets feed events", () => {
-  const events = [makeFeedEvent({ id: 1 }), makeFeedEvent({ id: 2 })];
-  const state = reduce(initialWatchState, { type: "feed-snapshot", events });
-  assert.equal(state.feedEvents.length, 2);
-});
-
-test("feed-new-event appends to feed events", () => {
-  const initial = stateWith({ feedEvents: [makeFeedEvent({ id: 1 })] });
-  const state = reduce(initial, { type: "feed-new-event", event: makeFeedEvent({ id: 2 }) });
-  assert.equal(state.feedEvents.length, 2);
 });
 
 // ─── Aggregates ──────────────────────────────────────────────

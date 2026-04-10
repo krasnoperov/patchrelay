@@ -26,9 +26,6 @@ export function buildHelpBarText(view: WatchView, follow?: boolean, detailTab?: 
       .filter(Boolean)
       .join("  ");
   }
-  if (view === "feed") {
-    return "Legacy feed view  Esc: back";
-  }
   return "Enter: detail  Tab: filter";
 }
 
