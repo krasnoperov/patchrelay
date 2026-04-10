@@ -4,7 +4,6 @@ import type { CompletionCheckOutcome } from "./completion-check-types.ts";
 
 export type RunStatus = "queued" | "running" | "completed" | "failed" | "released";
 export type GitHubFailureSource = "branch_ci" | "queue_eviction";
-export type BranchOwner = "patchrelay";
 
 export interface GitHubCiSnapshotCheckRecord {
   name: string;
@@ -41,8 +40,6 @@ export interface IssueRecord {
   pendingRunType?: RunType | undefined;
   pendingRunContextJson?: string | undefined;
   branchName?: string | undefined;
-  branchOwner?: BranchOwner | undefined;
-  branchOwnershipChangedAt?: string | undefined;
   worktreePath?: string | undefined;
   threadId?: string | undefined;
   activeRunId?: number | undefined;

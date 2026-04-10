@@ -15,8 +15,6 @@ CREATE TABLE IF NOT EXISTS issues (
   pending_run_type TEXT,
   pending_run_context_json TEXT,
   branch_name TEXT,
-  branch_owner TEXT NOT NULL DEFAULT 'patchrelay',
-  branch_ownership_changed_at TEXT,
   worktree_path TEXT,
   thread_id TEXT,
   active_run_id INTEGER,
@@ -252,11 +250,6 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
   // Add pending_merge_prep column for merge queue stewardship
   addColumnIfMissing(connection, "issues", "pending_merge_prep", "INTEGER NOT NULL DEFAULT 0");
 
-  // Explicit PR branch ownership hand-off between PatchRelay and MergeSteward
-  addColumnIfMissing(connection, "issues", "branch_owner", "TEXT NOT NULL DEFAULT 'patchrelay'");
-  addColumnIfMissing(connection, "issues", "branch_ownership_changed_at", "TEXT");
-  connection.prepare("UPDATE issues SET branch_owner = 'patchrelay' WHERE branch_owner IS NULL OR branch_owner != 'patchrelay'").run();
-
   // Add merge_prep_attempts for retry budget / escalation
   addColumnIfMissing(connection, "issues", "merge_prep_attempts", "INTEGER NOT NULL DEFAULT 0");
 
@@ -324,7 +317,7 @@ function addColumnIfMissing(connection: DatabaseConnection, table: string, colum
 function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): void {
   const cols = connection.prepare("PRAGMA table_info(issues)").all() as Array<Record<string, unknown>>;
   const columnNames = new Set(cols.map((column) => String(column.name)));
-  const retired = ["queue_label_applied", "pending_merge_prep", "merge_prep_attempts"];
+  const retired = ["queue_label_applied", "pending_merge_prep", "merge_prep_attempts", "branch_owner", "branch_ownership_changed_at"];
   if (!retired.some((name) => columnNames.has(name))) {
     return;
   }
@@ -349,8 +342,6 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
         pending_run_type TEXT,
         pending_run_context_json TEXT,
         branch_name TEXT,
-        branch_owner TEXT NOT NULL DEFAULT 'patchrelay',
-        branch_ownership_changed_at TEXT,
         worktree_path TEXT,
         thread_id TEXT,
         active_run_id INTEGER,
@@ -406,8 +397,6 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
         pending_run_type,
         pending_run_context_json,
         branch_name,
-        branch_owner,
-        branch_ownership_changed_at,
         worktree_path,
         thread_id,
         active_run_id,
@@ -461,8 +450,6 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
         pending_run_type,
         pending_run_context_json,
         branch_name,
-        COALESCE(branch_owner, 'patchrelay'),
-        branch_ownership_changed_at,
         worktree_path,
         thread_id,
         active_run_id,
