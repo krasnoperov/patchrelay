@@ -721,7 +721,6 @@ export class GitHubWebhookHandler {
         eventType: "delegated",
         dedupeKey: `github_pr_closed:implementation:${issue.linearIssueId}`,
       });
-      this.db.issueSessions.setBranchOwnerRespectingActiveLease(issue.projectId, issue.linearIssueId, "patchrelay");
       if (this.db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId)) {
         this.enqueueIssue(issue.projectId, issue.linearIssueId);
       }
