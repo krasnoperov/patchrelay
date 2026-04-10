@@ -259,7 +259,7 @@ The target runtime is a smaller `IssueSession` state machine:
 - `done`
 - `failed`
 
-Waiting on review or queue should be represented as `waitingReason`, not as a major PatchRelay-owned lifecycle state.
+Waiting on review or queue should be represented as `waitingReason`, not as a major PatchRelay-native lifecycle state.
 
 For undelegated issues, the key mental model is:
 
