@@ -3,6 +3,28 @@ function normalizeLinearState(value: string | undefined): string | undefined {
   return trimmed ? trimmed.toLowerCase() : undefined;
 }
 
+function includesAny(normalized: string | undefined, candidates: string[]): boolean {
+  return Boolean(normalized && candidates.includes(normalized));
+}
+
+function resolvePreferredLinearState(issue: {
+  workflowStates: Array<{ name: string; type?: string }>;
+}, params: {
+  names: string[];
+  types?: string[] | undefined;
+  fallback?: string | undefined;
+}): string | undefined {
+  const match = issue.workflowStates.find((state) => {
+    const normalizedType = normalizeLinearState(state.type);
+    const normalizedName = normalizeLinearState(state.name);
+    if (params.types && !params.types.includes(normalizedType ?? "")) {
+      return false;
+    }
+    return includesAny(normalizedName, params.names);
+  });
+  return match?.name ?? params.fallback;
+}
+
 export function resolvePreferredStartedLinearState(issue: {
   workflowStates: Array<{ name: string; type?: string }>;
 }): string | undefined {
@@ -14,15 +36,67 @@ export function resolvePreferredStartedLinearState(issue: {
   return preferred?.name ?? startedStates[0]?.name;
 }
 
+export function resolvePreferredImplementingLinearState(issue: {
+  workflowStates: Array<{ name: string; type?: string }>;
+}): string | undefined {
+  return resolvePreferredLinearState(issue, {
+    names: ["implementing", "in progress", "in-progress", "started", "doing"],
+    types: ["started"],
+    fallback: resolvePreferredStartedLinearState(issue),
+  });
+}
+
 export function resolvePreferredReviewLinearState(issue: {
   workflowStates: Array<{ name: string; type?: string }>;
 }): string | undefined {
-  const reviewState = issue.workflowStates.find((state) => {
-    if (normalizeLinearState(state.type) !== "started") return false;
-    const normalized = normalizeLinearState(state.name);
-    return normalized === "in review" || normalized === "review";
+  return resolvePreferredLinearState(issue, {
+    names: ["review", "awaiting review"],
+    types: ["unstarted"],
+    fallback: resolvePreferredLinearState(issue, {
+      names: ["reviewing", "in review", "review"],
+      types: ["started"],
+      fallback: resolvePreferredStartedLinearState(issue),
+    }),
   });
-  return reviewState?.name ?? resolvePreferredStartedLinearState(issue);
+}
+
+export function resolvePreferredReviewingLinearState(issue: {
+  workflowStates: Array<{ name: string; type?: string }>;
+}): string | undefined {
+  return resolvePreferredLinearState(issue, {
+    names: ["reviewing", "in review", "review"],
+    types: ["started"],
+    fallback: resolvePreferredReviewLinearState(issue),
+  });
+}
+
+export function resolvePreferredDeployLinearState(issue: {
+  workflowStates: Array<{ name: string; type?: string }>;
+}): string | undefined {
+  return resolvePreferredLinearState(issue, {
+    names: ["deploy", "ready to deploy", "ready for deploy", "merge"],
+    types: ["unstarted"],
+    fallback: resolvePreferredReviewLinearState(issue),
+  });
+}
+
+export function resolvePreferredDeployingLinearState(issue: {
+  workflowStates: Array<{ name: string; type?: string }>;
+}): string | undefined {
+  return resolvePreferredLinearState(issue, {
+    names: ["deploying", "merging", "shipping"],
+    types: ["started"],
+    fallback: resolvePreferredDeployLinearState(issue),
+  });
+}
+
+export function resolvePreferredHumanNeededLinearState(issue: {
+  workflowStates: Array<{ name: string; type?: string }>;
+}): string | undefined {
+  return resolvePreferredLinearState(issue, {
+    names: ["human needed", "needs human", "help needed", "operator needed", "blocked"],
+    fallback: undefined,
+  });
 }
 
 export function resolvePreferredCompletedLinearState(issue: {
