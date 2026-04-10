@@ -1003,3 +1003,76 @@ test("maybeEmitProgress publishes the first sentence from each agent message as 
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("maybeEmitProgress waits for a complete sentence before publishing streamed agent progress", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-linear-sync-agent-message-complete-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+
+    const issue = db.upsertIssue({
+      projectId: "krasnoperov/ballony-i-nasosy",
+      linearIssueId: "issue-use-message-complete",
+      issueKey: "USE-109",
+      title: "Wait for full streamed sentence",
+      factoryState: "implementing",
+      agentSessionId: "session-use-message-complete",
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "implementation",
+    });
+
+    const activities: Array<Record<string, unknown>> = [];
+    const linear: Partial<LinearClient> = {
+      updateAgentSession: async (params) => ({ id: params.agentSessionId }),
+      upsertIssueComment: async (params) => ({ id: "comment-use-message-complete", body: params.body }),
+      createAgentActivity: async (params) => {
+        activities.push(params as unknown as Record<string, unknown>);
+        return { id: `activity-${activities.length}` };
+      },
+      getIssue: async () => { throw new Error("not used"); },
+      setIssueState: async () => { throw new Error("not used"); },
+      updateIssueLabels: async () => { throw new Error("not used"); },
+      getActorProfile: async () => ({ actorId: "patchrelay-actor" }),
+      getWorkspaceCatalog: async () => ({ workspace: {}, teams: [], projects: [] }),
+    };
+
+    const sync = new LinearSessionSync(
+      config,
+      db,
+      { forProject: async () => linear as LinearClient },
+      pino({ enabled: false }),
+    );
+
+    sync.maybeEmitProgress({
+      method: "item/agentMessage/delta",
+      params: { itemId: "msg-2", delta: "I" },
+    }, run);
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(activities.length, 0);
+
+    sync.maybeEmitProgress({
+      method: "item/agentMessage/delta",
+      params: { itemId: "msg-2", delta: " am checking the shared Study field styles." },
+    }, run);
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.equal(activities.length, 2);
+    assert.deepEqual(activities[0]?.content, {
+      type: "response",
+      body: "Working on: I am checking the shared Study field styles.",
+    });
+    assert.deepEqual(activities[1]?.content, {
+      type: "thought",
+      body: "I am checking the shared Study field styles.",
+    });
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
