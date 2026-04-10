@@ -1,7 +1,7 @@
 import type { Logger } from "pino";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord, BranchOwner } from "./db-types.ts";
-import { TERMINAL_STATES, type FactoryState, type RunType } from "./factory-state.ts";
+import { type FactoryState, type RunType } from "./factory-state.ts";
 import type { AppConfig } from "./types.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import { resolveMergeQueueProtocol } from "./merge-queue-protocol.ts";
@@ -9,6 +9,7 @@ import { parseGitHubFailureContext } from "./github-failure-context.ts";
 import { deriveGateCheckStatusFromRollup, type GitHubStatusRollupEntry } from "./github-rollup.ts";
 import { deriveIssueSessionReactiveIntent } from "./issue-session.ts";
 import { parseStoredQueueRepairContext } from "./merge-queue-incident.ts";
+import { buildClosedPrCleanupFields, resolveClosedPrDisposition } from "./pr-state.ts";
 import { execCommand } from "./utils.ts";
 
 const DEFAULT_REVIEW_FIX_BUDGET = 12;
@@ -516,22 +517,14 @@ export class IdleIssueReconciler {
         return;
       }
       if (pr.state === "CLOSED") {
-        const resolvedLinearState = issue.currentLinearStateType === "completed"
-          || issue.currentLinearState?.trim().toLowerCase() === "done";
+        const closedPrDisposition = resolveClosedPrDisposition(issue);
         this.db.issues.upsertIssue({
           projectId: issue.projectId,
           linearIssueId: issue.linearIssueId,
           prState: "closed",
-          prReviewState: null,
-          prCheckStatus: null,
-          lastBlockingReviewHeadSha: null,
-          lastGitHubCiSnapshotHeadSha: null,
-          lastGitHubCiSnapshotGateCheckName: null,
-          lastGitHubCiSnapshotGateCheckStatus: null,
-          lastGitHubCiSnapshotJson: null,
-          lastGitHubCiSnapshotSettledAt: null,
+          ...buildClosedPrCleanupFields(),
         });
-        if (resolvedLinearState || issue.factoryState === "done") {
+        if (closedPrDisposition === "done") {
           this.logger.info(
             { issueKey: issue.issueKey, prNumber: issue.prNumber },
             "Reconciliation: PR was closed for an already completed issue; preserving done state",
@@ -539,7 +532,7 @@ export class IdleIssueReconciler {
           this.advanceIdleIssue(issue, "done", { clearFailureProvenance: true });
           return;
         }
-        if (TERMINAL_STATES.has(issue.factoryState)) {
+        if (closedPrDisposition === "terminal") {
           this.logger.info(
             { issueKey: issue.issueKey, prNumber: issue.prNumber, factoryState: issue.factoryState },
             "Reconciliation: PR was closed on a terminal issue; preserving terminal state",

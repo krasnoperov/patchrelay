@@ -1,7 +1,7 @@
 import type { Logger } from "pino";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { GitHubCiSnapshotRecord, IssueRecord } from "./db-types.ts";
-import { resolveFactoryStateFromGitHub, TERMINAL_STATES, type FactoryState } from "./factory-state.ts";
+import { resolveFactoryStateFromGitHub, type FactoryState } from "./factory-state.ts";
 import {
   createGitHubCiSnapshotResolver,
   createGitHubFailureContextResolver,
@@ -20,6 +20,12 @@ import {
 } from "./merge-queue-protocol.ts";
 import { buildQueueRepairContextFromEvent } from "./merge-queue-incident.ts";
 import { resolvePreferredCompletedLinearState } from "./linear-workflow.ts";
+import {
+  buildClosedPrCleanupFields,
+  isIssueCompleted,
+  isIssueTerminal,
+  resolveClosedPrDisposition,
+} from "./pr-state.ts";
 import { resolveSecret } from "./resolve-secret.ts";
 import type { AppConfig, LinearClientProvider } from "./types.ts";
 import type { ProjectConfig } from "./workflow-types.ts";
@@ -222,16 +228,7 @@ export class GitHubWebhookHandler {
           ? { lastBlockingReviewHeadSha: null }
           : {}),
       ...(event.triggerEvent === "pr_closed"
-        ? {
-            prReviewState: null,
-            prCheckStatus: null,
-            lastBlockingReviewHeadSha: null,
-            lastGitHubCiSnapshotHeadSha: null,
-            lastGitHubCiSnapshotGateCheckName: null,
-            lastGitHubCiSnapshotGateCheckStatus: null,
-            lastGitHubCiSnapshotJson: null,
-            lastGitHubCiSnapshotSettledAt: null,
-          }
+        ? buildClosedPrCleanupFields()
         : {}),
     });
     await this.updateCiSnapshot(issue, event, project);
@@ -331,11 +328,7 @@ export class GitHubWebhookHandler {
   ): FactoryState | undefined {
     if (
       event.triggerEvent === "pr_closed"
-      && (
-        TERMINAL_STATES.has(issue.factoryState)
-        || issue.currentLinearStateType === "completed"
-        || issue.currentLinearState?.trim().toLowerCase() === "done"
-      )
+      && (isIssueTerminal(issue) || isIssueCompleted(issue))
     ) {
       return undefined;
     }
@@ -345,7 +338,7 @@ export class GitHubWebhookHandler {
       && this.isQueueEvictionFailure(issue, event, project)
       && issue.prState === "open"
       && issue.activeRunId === undefined
-      && !TERMINAL_STATES.has(issue.factoryState)
+      && !isIssueTerminal(issue)
     ) {
       return "repairing_queue";
     }
@@ -442,7 +435,7 @@ export class GitHubWebhookHandler {
 
     // Don't trigger on terminal issues — late-arriving webhooks (e.g.
     // merge_group_failed after pr_merged) must not resurrect done issues.
-    if (TERMINAL_STATES.has(issue.factoryState as FactoryState)) return;
+    if (isIssueTerminal(issue)) return;
 
     if (!this.isPatchRelayOwnedPr(issue)) {
       this.feed?.publish({
@@ -652,15 +645,14 @@ export class GitHubWebhookHandler {
             : "Pull request closed during active run",
         });
       }
-      const completedLinearState = issue.currentLinearStateType === "completed"
-        || issue.currentLinearState?.trim().toLowerCase() === "done";
+      const closedPrDisposition = resolveClosedPrDisposition(issue);
       const terminalFactoryState = event.triggerEvent === "pr_merged"
         ? "done"
-        : completedLinearState
+        : closedPrDisposition === "done"
           ? "done"
-          : TERMINAL_STATES.has(issue.factoryState)
-          ? issue.factoryState
-          : "failed";
+          : closedPrDisposition === "terminal"
+            ? issue.factoryState
+            : "failed";
       this.db.issues.upsertIssue({
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
