@@ -65,9 +65,10 @@ If an issue is undelegated while a PR already exists:
 - PatchRelay should not enqueue review-fix, CI-repair, branch-upkeep, or queue-repair work
 - `review-quill` should still review the PR when its own conditions are met
 - `merge-steward` should still queue or merge the PR when its own conditions are met
+- if a new PR appears on a different branch, PatchRelay may link it to the issue when the PR title, body, or branch carries one unambiguous tracked issue key for the same project
 
 If CI later fails on that undelegated PR:
 
 - PatchRelay should record the failing state
 - PatchRelay should not repair it yet
-- when the issue is delegated back to PatchRelay, it should resume from current PR truth rather than restarting from scratch
+- when the issue is delegated back to PatchRelay, it should resume from current PR truth rather than restarting from scratch, even if the linked PR was opened externally

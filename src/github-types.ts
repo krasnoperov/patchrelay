@@ -16,6 +16,8 @@ export interface NormalizedGitHubEvent {
   repoFullName: string;
   branchName: string;
   headSha: string;
+  prTitle?: string | undefined;
+  prBody?: string | undefined;
   prNumber?: number | undefined;
   prUrl?: string | undefined;
   prState?: "open" | "closed" | "merged" | undefined;
@@ -43,6 +45,8 @@ export interface GitHubWebhookPayload {
   pull_request?: {
     number: number;
     html_url: string;
+    title?: string;
+    body?: string;
     state: string;
     merged: boolean;
     user?: { login: string };

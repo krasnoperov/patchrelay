@@ -1,8 +1,8 @@
 # PatchRelay
 
-PatchRelay is a self-hosted harness for delegated Linear work and upkeep of PatchRelay-owned pull requests on your own machine.
+PatchRelay is a self-hosted harness for delegated Linear work and upkeep of linked pull requests on your own machine.
 
-It receives Linear webhooks, routes issues to the right local repository, prepares durable issue worktrees, runs Codex sessions through `codex app-server`, and keeps the issue loop observable and resumable from the CLI. GitHub webhooks drive reactive loops for CI repair, review fixes, and merge-steward incidents on PatchRelay-owned PRs. Separate downstream services own review automation and merge execution.
+It receives Linear webhooks, routes issues to the right local repository, prepares durable issue worktrees, runs Codex sessions through `codex app-server`, and keeps the issue loop observable and resumable from the CLI. GitHub webhooks drive reactive loops for CI repair, review fixes, and merge-steward incidents on linked delegated PRs. Separate downstream services own review automation and merge execution.
 
 PatchRelay is the system around the model:
 
@@ -38,8 +38,9 @@ PatchRelay does the deterministic harness work that you do not want to re-implem
 - creates and reuses one durable worktree and branch per issue lifecycle
 - starts Codex threads for implementation runs
 - triggers reactive runs for CI failures, review feedback, and Merge Steward evictions
-- opens and updates PatchRelay-owned PRs
+- opens and updates PRs for delegated implementation work
 - marks its own PRs ready when implementation is complete
+- can later repair a linked PR that was opened externally once the issue is delegated
 - persists enough state to correlate the Linear issue, local workspace, run, and Codex thread
 - reports progress back to Linear and forwards follow-up agent input into active runs
 - exposes CLI and optional read-only inspection surfaces so operators can understand what happened
@@ -87,7 +88,7 @@ You will also need:
 5. GitHub webhooks drive reactive verification and repair loops: CI repair on check failures and review fix on changes requested.
 6. PatchRelay opens draft PRs while implementation is in progress and marks its own PR ready when implementation is complete.
 7. Downstream automation reacts to GitHub truth: `reviewbot` reviews ready PRs with green CI, and Merge Steward admits ready PRs with green CI and approval into the merge queue.
-8. If requested changes, red CI, or a merge-steward incident lands on a PatchRelay-owned PR, PatchRelay resumes work on that same PR branch.
+8. If requested changes, red CI, or a merge-steward incident lands on a linked delegated PR, PatchRelay resumes work on that same PR branch.
 9. Native agent prompts and Linear comments can steer the active run. An operator can take over from the exact same worktree when needed.
 
 ### Undelegation And Re-delegation
@@ -99,6 +100,7 @@ Undelegation pauses PatchRelay authority. It does not erase PR truth.
 - Worktrees, branches, and PRs remain in place.
 - PatchRelay still reflects GitHub review, CI, queue, merge, and close events while undelegated.
 - PatchRelay does not enqueue implementation, review-fix, CI-repair, or queue-repair work again until the issue is delegated back.
+- If someone opens a new PR for the issue while it is undelegated, PatchRelay can link that PR when the title, body, or branch name contains one unambiguous tracked issue key for the project.
 
 Downstream services stay PR-centric:
 
@@ -119,15 +121,15 @@ When the issue is delegated back to PatchRelay, it should resume from current tr
 PatchRelay tracks two different kinds of ownership:
 
 - issue ownership: who may start new delegated implementation work from Linear
-- PR ownership: who is responsible for keeping an existing PR healthy until it merges or closes
+- branch/worktree ownership: who most recently owned the local branch and worktree lifecycle
 
 PatchRelay also tracks one runtime authority bit:
 
 - `delegatedToPatchRelay`: whether PatchRelay may actively implement or repair code for the issue right now
 
-For PatchRelay, PR ownership is determined by one concrete GitHub fact: a PR is PatchRelay-owned when its author is the PatchRelay GitHub app or service account.
+Once a PR is linked to an issue, delegation decides whether PatchRelay may repair it. The PR may have been opened by PatchRelay, a human, or another external system.
 
-That ownership does not change just because:
+That authority does not change just because:
 
 - the issue is undelegated
 - the PR becomes ready for review
