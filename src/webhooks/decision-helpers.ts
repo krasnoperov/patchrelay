@@ -50,9 +50,6 @@ export function decideUnDelegation(p: {
   if (p.triggerEvent !== "delegateChanged" || p.delegated) return { clearPending: false };
   if (!p.currentState) return { clearPending: false };
   if (TERMINAL_STATES.has(p.currentState)) return { clearPending: false };
-  if (!p.hasPr && (p.currentState === "delegated" || p.currentState === "implementing")) {
-    return { factoryState: "awaiting_input", clearPending: true };
-  }
   return { factoryState: p.currentState, clearPending: true };
 }
 

@@ -238,7 +238,7 @@ test("listTrackedIssues surfaces actionable stop guidance for awaiting_input iss
   }
 });
 
-test("service start recovers delegated blocked issues from stale awaiting_input state", async () => {
+test("service start recovers delegated blocked issues from paused local-work state", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-service-startup-recover-blocked-"));
   try {
     const config = createConfig(baseDir);
@@ -258,7 +258,7 @@ test("service start recovers delegated blocked issues from stale awaiting_input 
       issueKey: "USE-3",
       title: "Blocked delegated issue",
       currentLinearState: "Backlog",
-      factoryState: "awaiting_input",
+      factoryState: "implementing",
       agentSessionId: "session-3",
     });
 

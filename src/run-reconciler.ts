@@ -37,12 +37,9 @@ export class RunReconciler {
     const acquiredRecoveryLease = recoveryLease === true;
 
     if (!issue.delegatedToPatchRelay) {
-      const pausedState = (issue.prNumber === undefined && (issue.factoryState === "delegated" || issue.factoryState === "implementing"))
-        ? "awaiting_input"
-        : issue.factoryState;
       this.withHeldLease(run.projectId, run.linearIssueId, () => {
         this.db.runs.finishRun(run.id, { status: "released", failureReason: "Issue was un-delegated during active run" });
-        this.db.issues.upsertIssue({ projectId: run.projectId, linearIssueId: run.linearIssueId, activeRunId: null, factoryState: pausedState as never });
+        this.db.issues.upsertIssue({ projectId: run.projectId, linearIssueId: run.linearIssueId, activeRunId: null, factoryState: issue.factoryState });
       });
       const pausedIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue;
       void this.linearSync.syncSession(pausedIssue, { activeRunType: run.runType });
