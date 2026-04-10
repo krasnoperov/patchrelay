@@ -1,5 +1,5 @@
 import { useReducer, useMemo, useCallback, useState } from "react";
-import { Box, Text, useApp, useInput } from "ink";
+import { Box, Text, useApp, useInput, useStdout } from "ink";
 import { watchReducer, initialWatchState, filterIssues } from "./watch-state.ts";
 import { useWatchStream } from "./use-watch-stream.ts";
 import { useDetailStream } from "./use-detail-stream.ts";
@@ -14,6 +14,8 @@ import {
   openTextInPager,
   writeTextToClipboard,
 } from "./watch-actions.ts";
+import { measureRenderedTextRows } from "./layout-measure.ts";
+import { measurePromptComposerRows } from "./prompt-layout.ts";
 
 interface AppProps {
   baseUrl: string;
@@ -82,6 +84,7 @@ async function postRetry(baseUrl: string, issueKey: string, bearerToken?: string
 
 export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.JSX.Element {
   const { exit } = useApp();
+  const { stdout } = useStdout();
   const [state, dispatch] = useReducer(watchReducer, {
     ...initialWatchState,
     ...(initialIssueKey ? { view: "detail" as const, activeDetailKey: initialIssueKey } : {}),
@@ -89,6 +92,7 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
 
   const filtered = useMemo(() => filterIssues(state.issues, state.filter), [state.issues, state.filter]);
   const [frozen, setFrozen] = useState(false);
+  const width = Math.max(20, stdout?.columns ?? 80);
 
   useWatchStream({ baseUrl, bearerToken, dispatch, active: !frozen });
   useDetailStream({ baseUrl, bearerToken, issueKey: state.activeDetailKey, dispatch, active: !frozen });
@@ -392,7 +396,13 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
     }
   });
 
-  const reservedRows = 1 + (promptMode ? promptComposerRowCount(promptBuffer) : promptStatus ? 1 : 0);
+  const reservedRows = 1 + (
+    promptMode
+      ? measurePromptComposerRows(promptBuffer, promptCursor, width)
+      : promptStatus
+        ? measureRenderedTextRows(promptStatus, width)
+        : 0
+  );
 
   return (
     <Box flexDirection="column">
@@ -450,10 +460,6 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
       ) : null}
     </Box>
   );
-}
-
-function promptComposerRowCount(buffer: string): number {
-  return Math.max(1, buffer.split("\n").length) + 1;
 }
 
 function PromptComposer({ buffer, cursor }: { buffer: string; cursor: number }): React.JSX.Element {

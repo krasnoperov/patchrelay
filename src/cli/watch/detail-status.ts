@@ -33,6 +33,13 @@ export function buildDetailStatusSegments(
   return joinGroups(groups);
 }
 
+export function buildDetailStatusText(
+  input: DetailStatusInput,
+  now: number = Date.now(),
+): string {
+  return buildDetailStatusSegments(input, now).map((segment) => segment.text).join("");
+}
+
 function formatElapsed(startedAt: string, now: number): string {
   const startedMs = Date.parse(startedAt);
   if (!Number.isFinite(startedMs)) return "0m 00s";

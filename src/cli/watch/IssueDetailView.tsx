@@ -2,9 +2,10 @@ import { useEffect, useMemo, useReducer } from "react";
 import { Box, Text, useStdout } from "ink";
 import type { TimelineEntry, TimelineRunInput } from "./timeline-builder.ts";
 import type { DetailTab, OperatorFeedEvent, WatchDiffSummary, WatchIssue, WatchIssueContext, WatchTokenUsage } from "./watch-state.ts";
-import { HelpBar } from "./HelpBar.tsx";
+import { HelpBar, buildHelpBarText } from "./HelpBar.tsx";
 import { buildDetailLines } from "./detail-rows.ts";
-import { buildDetailStatusSegments } from "./detail-status.ts";
+import { buildDetailStatusSegments, buildDetailStatusText } from "./detail-status.ts";
+import { measureRenderedTextRows } from "./layout-measure.ts";
 import type { TextLine } from "./render-rich-text.ts";
 
 interface IssueDetailViewProps {
@@ -51,7 +52,17 @@ export function IssueDetailView({
   const { stdout } = useStdout();
   const width = Math.max(20, stdout?.columns ?? 80);
   const totalRows = stdout?.rows ?? 24;
-  const footerRows = 2;
+  const footerRows = useMemo(() => {
+    const statusRows = measureRenderedTextRows(buildDetailStatusText({
+      follow,
+      unreadBelow,
+      activeRunStartedAt,
+      connected,
+      lastServerMessageAt,
+    }), width);
+    const helpRows = measureRenderedTextRows(buildHelpBarText("detail", follow, detailTab), width);
+    return statusRows + helpRows;
+  }, [activeRunStartedAt, connected, detailTab, follow, lastServerMessageAt, unreadBelow, width]);
   const viewportRows = Math.max(4, totalRows - reservedRows - footerRows);
 
   const lines = useMemo(() => {
@@ -87,9 +98,6 @@ export function IssueDetailView({
     detailTab,
     rawRuns,
     rawFeedEvents,
-    follow,
-    connected,
-    lastServerMessageAt,
     width,
   ]);
 
