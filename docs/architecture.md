@@ -259,6 +259,33 @@ PatchRelay uses SQLite with these tables today:
 
 The target model is to keep a smaller durable `IssueSession` record that stores only PatchRelay runtime truth, while GitHub remains the source of truth for PR readiness, review, and merge state.
 
+## No-PR Completion Check
+
+Implementation runs now have one lean fallback path when no PR is linked at turn completion:
+
+1. the main run finishes
+2. PatchRelay checks whether a PR was published
+3. if no PR was observed, PatchRelay forks the thread once for a `completion check`
+4. the fork returns one typed outcome:
+   - `continue`
+   - `needs_input`
+   - `done`
+   - `failed`
+
+This is the only supported no-PR decision path.
+
+The completion check is intentionally secondary and read-only:
+
+- it runs in a read-only fork
+- it must not execute tools or edit the repository
+- it exists only to decide the next step after a no-PR outcome
+
+Observability is intentionally split by surface:
+
+- dashboard: `No PR found; checking next step` and the final completion-check result
+- Linear: only persistent human-relevant outcomes such as `needs_input`, valid no-PR `done`, or `failed`
+- run/session logs: fork thread id, turn id, and typed completion-check result
+
 ## Knowledge Layout
 
 PatchRelay should keep repository knowledge organized for progressive disclosure:

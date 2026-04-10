@@ -9,6 +9,7 @@ import { summarizeCurrentThread } from "./run-reporting.ts";
 import {
   buildRunStartedActivity,
 } from "./linear-session-reporting.ts";
+import { CompletionCheckService } from "./completion-check.ts";
 import { WorktreeManager } from "./worktree-manager.ts";
 import type {
   AppConfig,
@@ -62,6 +63,7 @@ export class RunOrchestrator {
   private readonly runWakePlanner: RunWakePlanner;
   private readonly interruptedRunRecovery: InterruptedRunRecovery;
   private readonly runCompletionPolicy: RunCompletionPolicy;
+  private readonly completionCheck: CompletionCheckService;
   private readonly runNotificationHandler: RunNotificationHandler;
   private readonly runReconciler: RunReconciler;
   private readonly mergedLinearCompletionReconciler: MergedLinearCompletionReconciler;
@@ -92,6 +94,7 @@ export class RunOrchestrator {
       logger,
       (projectId, linearIssueId, fn) => this.withHeldIssueSessionLease(projectId, linearIssueId, fn),
     );
+    this.completionCheck = new CompletionCheckService(codex, logger);
     this.runFinalizer = new RunFinalizer(
       db,
       logger,
@@ -102,6 +105,7 @@ export class RunOrchestrator {
       (lease, issue, runType, context, dedupeScope) => this.appendWakeEventWithLease(lease, issue, runType, context, dedupeScope),
       (run, message, nextState) => this.failRunAndClear(run, message, nextState),
       this.runCompletionPolicy,
+      this.completionCheck,
       feed,
     );
     this.runLauncher = new RunLauncher(config, db, codex, logger, this.worktreeManager);

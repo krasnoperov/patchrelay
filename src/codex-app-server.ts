@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { tmpdir } from "node:os";
 import type { Logger } from "pino";
 import type { CodexAppServerConfig, CodexThreadItem, CodexThreadSummary } from "./types.ts";
 import { sanitizeDiagnosticText } from "./utils.ts";
@@ -49,6 +50,24 @@ export interface SteerTurnOptions {
   turnId: string;
   input: string;
 }
+
+interface ForkThreadOverrides {
+  cwd?: string | undefined;
+  approvalPolicy?: CodexAppServerConfig["approvalPolicy"] | undefined;
+  sandboxMode?: CodexAppServerConfig["sandboxMode"] | undefined;
+  model?: string | null | undefined;
+  modelProvider?: string | null | undefined;
+  baseInstructions?: string | null | undefined;
+  developerInstructions?: string | null | undefined;
+}
+
+const COMPLETION_CHECK_DEVELOPER_INSTRUCTIONS = [
+  "You are PatchRelay's completion check.",
+  "This is a read-only follow-up used only to decide what should happen after a task ended without a PR.",
+  "Do not run commands, do not call tools, do not edit files, and do not inspect or modify the repository.",
+  "Use only the prior thread context and the facts in the current prompt.",
+  "Return only the requested JSON object.",
+].join("\n");
 
 export function resolveCodexAppServerLaunch(config: CodexAppServerConfig): { command: string; args: string[] } {
   if (!config.sourceBashrc) {
@@ -241,22 +260,30 @@ export class CodexAppServerClient extends EventEmitter {
     return this.mapThread(response.thread);
   }
 
-  async forkThread(threadId: string, cwd?: string): Promise<CodexThreadSummary> {
+  async forkThread(threadId: string, cwd?: string, overrides?: ForkThreadOverrides): Promise<CodexThreadSummary> {
     const params: Record<string, unknown> = {
       threadId,
-      cwd: cwd ?? null,
-      approvalPolicy: this.config.approvalPolicy,
-      sandbox: this.config.sandboxMode,
-      model: this.config.model ?? null,
-      modelProvider: this.config.modelProvider ?? null,
-      baseInstructions: this.config.baseInstructions ?? null,
-      developerInstructions: this.config.developerInstructions ?? null,
+      cwd: overrides?.cwd ?? cwd ?? null,
+      approvalPolicy: overrides?.approvalPolicy ?? this.config.approvalPolicy,
+      sandbox: overrides?.sandboxMode ?? this.config.sandboxMode,
+      model: overrides?.model ?? this.config.model ?? null,
+      modelProvider: overrides?.modelProvider ?? this.config.modelProvider ?? null,
+      baseInstructions: overrides?.baseInstructions ?? this.config.baseInstructions ?? null,
+      developerInstructions: overrides?.developerInstructions ?? this.config.developerInstructions ?? null,
     };
     if (this.config.persistExtendedHistory) {
       this.logger.warn("persistExtendedHistory is requested but not enabled in the active app-server capability handshake; ignoring");
     }
     const response = (await this.sendRequest("thread/fork", params)) as { thread: Record<string, unknown> };
     return this.mapThread(response.thread);
+  }
+
+  async forkThreadForCompletionCheck(threadId: string): Promise<CodexThreadSummary> {
+    return await this.forkThread(threadId, tmpdir(), {
+      approvalPolicy: "never",
+      sandboxMode: "read-only",
+      developerInstructions: COMPLETION_CHECK_DEVELOPER_INSTRUCTIONS,
+    });
   }
 
   async startTurn(options: StartTurnOptions): Promise<{ threadId: string; turnId: string; status: string }> {

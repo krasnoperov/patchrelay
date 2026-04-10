@@ -1,4 +1,5 @@
 import type { IssueRecord, RunRecord, RunStatus, ThreadEventRecord } from "../db-types.ts";
+import type { CompletionCheckResult } from "../completion-check-types.ts";
 import type { RunType } from "../factory-state.ts";
 import { extractLatestAssistantSummary } from "../issue-session-events.ts";
 import type { IssueStore } from "./issue-store.ts";
@@ -144,6 +145,59 @@ export class RunStore {
     if (issue) {
       this.syncIssueSessionFromIssue(issue, {
         summaryText: extractLatestAssistantSummary(this.getRunById(runId) ?? run),
+        lastRunType: run.runType,
+      });
+    }
+  }
+
+  saveCompletionCheck(runId: number, params: CompletionCheckResult & {
+    threadId?: string;
+    turnId?: string;
+  }): void {
+    this.connection.prepare(`
+      UPDATE runs SET
+        completion_check_thread_id = COALESCE(?, completion_check_thread_id),
+        completion_check_turn_id = COALESCE(?, completion_check_turn_id),
+        completion_check_outcome = ?,
+        completion_check_summary = ?,
+        completion_check_question = ?,
+        completion_check_why = ?,
+        completion_check_recommended_reply = ?,
+        completion_checked_at = ?
+      WHERE id = ?
+    `).run(
+      params.threadId ?? null,
+      params.turnId ?? null,
+      params.outcome,
+      params.summary,
+      params.question ?? null,
+      params.why ?? null,
+      params.recommendedReply ?? null,
+      isoNow(),
+      runId,
+    );
+  }
+
+  markCompletionCheckStarted(runId: number, params: {
+    threadId: string;
+    turnId: string;
+  }): void {
+    this.connection.prepare(`
+      UPDATE runs SET
+        completion_check_thread_id = ?,
+        completion_check_turn_id = ?,
+        completion_checked_at = NULL
+      WHERE id = ?
+    `).run(
+      params.threadId,
+      params.turnId,
+      runId,
+    );
+    const run = this.getRunById(runId);
+    if (!run) return;
+    const issue = this.issues.getIssue(run.projectId, run.linearIssueId);
+    if (issue) {
+      this.syncIssueSessionFromIssue(issue, {
         lastRunType: run.runType,
       });
     }

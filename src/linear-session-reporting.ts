@@ -1,4 +1,5 @@
 import type { IssueRecord } from "./db-types.ts";
+import type { CompletionCheckResult } from "./completion-check-types.ts";
 import type { FactoryState, RunType } from "./factory-state.ts";
 import type { NormalizedGitHubEvent } from "./github-types.ts";
 import type { LinearAgentActivityContent } from "./linear-types.ts";
@@ -78,21 +79,53 @@ export function buildRunCompletedActivity(params: {
   completionSummary?: string;
   postRunState?: FactoryState;
   prNumber?: number;
-}): LinearAgentActivityContent {
-  const label = formatRunTypeLabel(params.runType);
-  const nextState = describeNextState(params.postRunState, params.prNumber);
+}): LinearAgentActivityContent | undefined {
+  const prLabel = params.prNumber ? `PR #${params.prNumber}` : "the pull request";
   const summary = trimSummary(params.completionSummary);
-  const lines = [`${label} completed.`];
-  if (nextState) {
-    lines.push("", nextState);
+  const detail = summary ? ` ${summary}` : "";
+
+  switch (params.runType) {
+    case "implementation":
+      if (params.postRunState === "pr_open") {
+        return {
+          type: "response",
+          body: `${prLabel} opened:${detail || " Published and ready for review."}`,
+        };
+      }
+      return undefined;
+    case "review_fix":
+      return {
+        type: "response",
+        body: `Updated ${prLabel} to address review feedback.${detail}`,
+      };
+    case "ci_repair":
+      return {
+        type: "response",
+        body: `Updated ${prLabel} after CI repair.${detail}`,
+      };
+    case "queue_repair":
+      return {
+        type: "response",
+        body: `Updated ${prLabel} after merge-queue repair.${detail}`,
+      };
+    case "branch_upkeep":
+      return undefined;
+    default: {
+      const label = formatRunTypeLabel(params.runType);
+      const nextState = describeNextState(params.postRunState, params.prNumber);
+      const lines = [`${label} completed.`];
+      if (nextState) {
+        lines.push("", nextState);
+      }
+      if (summary) {
+        lines.push("", summary);
+      }
+      return {
+        type: "response",
+        body: lines.join("\n"),
+      };
+    }
   }
-  if (summary) {
-    lines.push("", summary);
-  }
-  return {
-    type: "response",
-    body: lines.join("\n"),
-  };
 }
 
 export function buildRunFailureActivity(runType: RunType, reason?: string): LinearAgentActivityContent {
@@ -101,6 +134,32 @@ export function buildRunFailureActivity(runType: RunType, reason?: string): Line
     type: "error",
     body: reason ? `${label} failed.\n\n${reason}` : `${label} failed.`,
   };
+}
+
+export function buildCompletionCheckActivity(
+  phase: "started" | "continue" | "needs_input" | "done",
+  result?: CompletionCheckResult,
+): LinearAgentActivityContent {
+  switch (phase) {
+    case "started":
+      return { type: "thought", body: "No PR found; checking the next step." };
+    case "continue":
+      return { type: "thought", body: "No PR found; PatchRelay is continuing automatically." };
+    case "needs_input":
+      return {
+        type: "response",
+        body: result?.question
+          ? `PatchRelay needs an answer before it can continue.\n\nQuestion: ${result.question}${result.why ? `\n\nWhy: ${result.why}` : ""}${result.recommendedReply ? `\n\nSuggested reply: ${result.recommendedReply}` : ""}`
+          : "PatchRelay needs more input before it can continue.",
+      };
+    case "done":
+      return {
+        type: "response",
+        body: result?.summary
+          ? `Completed without a PR.\n\n${result.summary}`
+          : "Completed without a PR.",
+      };
+  }
 }
 
 export function buildStopConfirmationActivity(): LinearAgentActivityContent {
@@ -115,33 +174,16 @@ export function buildGitHubStateActivity(
   event: NormalizedGitHubEvent,
 ): LinearAgentActivityContent | undefined {
   switch (newState) {
-    case "pr_open": {
-      const parts = [`PR #${event.prNumber ?? "?"} is open and ready for review.`];
-      if (event.prUrl) {
-        parts.push("", event.prUrl);
-      }
-      return { type: "response", body: parts.join("\n") };
-    }
+    case "pr_open":
+      return undefined;
     case "awaiting_queue":
-      return { type: "response", body: "Review approved. PatchRelay is moving the PR toward merge." };
+      return undefined;
     case "changes_requested":
-      return {
-        type: "action",
-        action: "Addressing",
-        parameter: event.reviewerName ? `review feedback from ${event.reviewerName}` : "review feedback",
-      };
+      return undefined;
     case "repairing_ci":
-      return {
-        type: "action",
-        action: "Repairing",
-        parameter: event.checkName ? `CI failure: ${event.checkName}` : "failing CI checks",
-      };
+      return undefined;
     case "repairing_queue":
-      return {
-        type: "action",
-        action: "Repairing",
-        parameter: "merge queue validation",
-      };
+      return undefined;
     case "done":
       return { type: "response", body: `PR merged.${event.prNumber ? ` PR #${event.prNumber}` : ""}` };
     case "failed":

@@ -4,9 +4,6 @@ import type { PatchRelayDatabase } from "./db.ts";
 import type { WithHeldIssueSessionLease } from "./issue-session-lease-service.ts";
 import type { AppConfig } from "./types.ts";
 import { execCommand } from "./utils.ts";
-import {
-  resolveImplementationDeliveryMode,
-} from "./prompting/patchrelay.ts";
 
 export class ImplementationOutcomePolicy {
   constructor(
@@ -22,13 +19,6 @@ export class ImplementationOutcomePolicy {
     }
     const project = this.config.projects.find((entry) => entry.id === run.projectId);
     const baseBranch = project?.github?.baseBranch ?? "main";
-    const deliveryMode = resolveImplementationDeliveryMode(issue, undefined, run.promptText);
-    if (deliveryMode === "linear_only") {
-      if (issue.prNumber !== undefined) {
-        return `Planning-only implementation should not open a PR, but PR #${issue.prNumber} was observed`;
-      }
-      return this.describeLocalImplementationOutcome(issue, baseBranch, deliveryMode);
-    }
     if (issue.prNumber && issue.prState && issue.prState !== "closed") {
       return undefined;
     }
@@ -84,7 +74,7 @@ export class ImplementationOutcomePolicy {
       }
     }
 
-    const details = await this.describeLocalImplementationOutcome(issue, baseBranch, deliveryMode);
+    const details = await this.describeLocalImplementationOutcome(issue, baseBranch);
     return details ?? `Implementation completed without opening a PR for branch ${issue.branchName ?? issue.linearIssueId}`;
   }
 
@@ -106,7 +96,6 @@ export class ImplementationOutcomePolicy {
   private async describeLocalImplementationOutcome(
     issue: IssueRecord,
     baseBranch: string,
-    deliveryMode: "publish_pr" | "linear_only" = "publish_pr",
   ): Promise<string | undefined> {
     if (!issue.worktreePath) {
       return undefined;
@@ -123,9 +112,6 @@ export class ImplementationOutcomePolicy {
         ? status.stdout.split("\n").map((line) => line.trim()).filter(Boolean)
         : [];
       if (dirtyEntries.length > 0) {
-        if (deliveryMode === "linear_only") {
-          return `Planning-only implementation should not modify the repo; worktree still has ${dirtyEntries.length} uncommitted change(s)`;
-        }
         return `Implementation completed without opening a PR; worktree still has ${dirtyEntries.length} uncommitted change(s)`;
       }
     } catch {
@@ -143,9 +129,6 @@ export class ImplementationOutcomePolicy {
       if (ahead.exitCode === 0) {
         const count = Number(ahead.stdout.trim());
         if (Number.isFinite(count) && count > 0) {
-          if (deliveryMode === "linear_only") {
-            return `Planning-only implementation should not create repo commits; worktree is ${count} local commit(s) ahead of origin/${baseBranch}`;
-          }
           return `Implementation completed with ${count} local commit(s) ahead of origin/${baseBranch} but no PR was observed`;
         }
       }

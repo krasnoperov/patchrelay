@@ -106,6 +106,11 @@ export class InterruptedRunRecovery {
       return;
     }
 
+    if (run.runType === "implementation" && !issue.prNumber) {
+      await this.handleInterruptedImplementationRun(run, issue);
+      return;
+    }
+
     const recoveredState = resolveRecoverablePostRunState(this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue);
     this.failRunAndClear(run, "Codex turn was interrupted", recoveredState);
     await this.restoreIdleWorktree(issue);
@@ -124,6 +129,51 @@ export class InterruptedRunRecovery {
       void this.linearSync.emitActivity(failedIssue, buildRunFailureActivity(run.runType, "The Codex turn was interrupted."));
     }
     void this.linearSync.syncSession(failedIssue, { activeRunType: run.runType });
+    this.releaseLease(run.projectId, run.linearIssueId);
+  }
+
+  private async handleInterruptedImplementationRun(run: RunRecord, issue: IssueRecord): Promise<void> {
+    const interruptedMessage = "Implementation run was interrupted before PatchRelay could publish a PR";
+    this.failRunAndClear(run, "Codex turn was interrupted", "delegated");
+    await this.restoreIdleWorktree(issue);
+
+    const refreshedIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue;
+    this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(run.projectId, run.linearIssueId, {
+      projectId: run.projectId,
+      linearIssueId: run.linearIssueId,
+      eventType: "delegated",
+      dedupeKey: `interrupted_implementation:implementation:${run.linearIssueId}`,
+    });
+
+    if (!this.db.issueSessions.peekIssueSessionWake(run.projectId, run.linearIssueId)) {
+      const failedIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? refreshedIssue;
+      this.feed?.publish({
+        level: "error",
+        kind: "workflow",
+        issueKey: issue.issueKey,
+        projectId: run.projectId,
+        stage: run.runType,
+        status: "escalated",
+        summary: interruptedMessage,
+      });
+      void this.linearSync.emitActivity(failedIssue, buildRunFailureActivity(run.runType, interruptedMessage));
+      void this.linearSync.syncSession(failedIssue, { activeRunType: run.runType });
+      this.releaseLease(run.projectId, run.linearIssueId);
+      return;
+    }
+
+    this.feed?.publish({
+      level: "warn",
+      kind: "workflow",
+      issueKey: issue.issueKey,
+      projectId: run.projectId,
+      stage: run.runType,
+      status: "retry_queued",
+      summary: "Implementation run was interrupted; PatchRelay will retry automatically",
+    });
+    const recoveredIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? refreshedIssue;
+    void this.linearSync.syncSession(recoveredIssue, { activeRunType: run.runType });
+    this.enqueueIssue(run.projectId, run.linearIssueId);
     this.releaseLease(run.projectId, run.linearIssueId);
   }
 

@@ -467,6 +467,7 @@ export class PatchRelayService {
     latestFailureStepName?: string;
     latestFailureSummary?: string;
     waitingReason?: string;
+    completionCheckActive?: boolean;
     updatedAt: string;
   }> {
     const rows = this.db.connection
@@ -482,10 +483,18 @@ export class PatchRelayService {
           i.last_github_failure_check_name,
           i.last_github_failure_context_json,
           active_run.run_type AS active_run_type,
+          active_run.completion_check_thread_id AS active_completion_check_thread_id,
+          active_run.completion_check_outcome AS active_completion_check_outcome,
           latest_run.run_type AS latest_run_type,
           latest_run.status AS latest_run_status,
           latest_run.summary_json AS latest_run_summary_json,
           latest_run.report_json AS latest_run_report_json,
+          latest_run.completion_check_thread_id AS latest_run_completion_check_thread_id,
+          latest_run.completion_check_outcome AS latest_run_completion_check_outcome,
+          latest_run.completion_check_summary AS latest_run_completion_check_summary,
+          latest_run.completion_check_question AS latest_run_completion_check_question,
+          latest_run.completion_check_why AS latest_run_completion_check_why,
+          latest_run.completion_check_recommended_reply AS latest_run_completion_check_recommended_reply,
           (
             SELECT COUNT(*)
             FROM issue_session_events e
@@ -588,6 +597,12 @@ export class PatchRelayService {
             status: String(row.latest_run_status) as never,
             ...(typeof row.latest_run_summary_json === "string" ? { summaryJson: row.latest_run_summary_json } : {}),
             ...(typeof row.latest_run_report_json === "string" ? { reportJson: row.latest_run_report_json } : {}),
+            ...(typeof row.latest_run_completion_check_thread_id === "string" ? { completionCheckThreadId: row.latest_run_completion_check_thread_id } : {}),
+            ...(typeof row.latest_run_completion_check_outcome === "string" ? { completionCheckOutcome: row.latest_run_completion_check_outcome as never } : {}),
+            ...(typeof row.latest_run_completion_check_summary === "string" ? { completionCheckSummary: row.latest_run_completion_check_summary } : {}),
+            ...(typeof row.latest_run_completion_check_question === "string" ? { completionCheckQuestion: row.latest_run_completion_check_question } : {}),
+            ...(typeof row.latest_run_completion_check_why === "string" ? { completionCheckWhy: row.latest_run_completion_check_why } : {}),
+            ...(typeof row.latest_run_completion_check_recommended_reply === "string" ? { completionCheckRecommendedReply: row.latest_run_completion_check_recommended_reply } : {}),
             startedAt: String(row.updated_at),
           }
         : undefined;
@@ -608,6 +623,10 @@ export class PatchRelayService {
       })
         ? undefined
         : statusNoteCandidate;
+      const completionCheckActive = typeof row.active_completion_check_thread_id === "string"
+        && row.active_completion_check_thread_id.length > 0
+        && row.active_completion_check_outcome === null
+        && row.active_run_type !== null;
 
       return {
         ...(row.issue_key !== null ? { issueKey: String(row.issue_key) } : {}),
@@ -634,6 +653,7 @@ export class PatchRelayService {
         ...(failureContext?.stepName ? { latestFailureStepName: failureContext.stepName } : {}),
         ...(failureContext?.summary ? { latestFailureSummary: failureContext.summary } : {}),
         ...(waitingReason ? { waitingReason } : {}),
+        ...(completionCheckActive ? { completionCheckActive } : {}),
         updatedAt: String(row.updated_at),
       };
     });

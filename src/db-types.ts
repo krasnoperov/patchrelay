@@ -1,5 +1,6 @@
 import type { FactoryState, RunType } from "./factory-state.ts";
 import type { IssueSessionState } from "./issue-session.ts";
+import type { CompletionCheckOutcome } from "./completion-check-types.ts";
 
 export type RunStatus = "queued" | "running" | "completed" | "failed" | "released";
 export type GitHubFailureSource = "branch_ci" | "queue_eviction";
@@ -121,6 +122,14 @@ export interface RunRecord {
   threadId?: string | undefined;
   turnId?: string | undefined;
   parentThreadId?: string | undefined;
+  completionCheckThreadId?: string | undefined;
+  completionCheckTurnId?: string | undefined;
+  completionCheckOutcome?: CompletionCheckOutcome | undefined;
+  completionCheckSummary?: string | undefined;
+  completionCheckQuestion?: string | undefined;
+  completionCheckWhy?: string | undefined;
+  completionCheckRecommendedReply?: string | undefined;
+  completionCheckedAt?: string | undefined;
   summaryJson?: string | undefined;
   reportJson?: string | undefined;
   failureReason?: string | undefined;
@@ -168,6 +177,7 @@ export interface TrackedIssueRecord {
   latestFailureStepName?: string | undefined;
   latestFailureSummary?: string | undefined;
   waitingReason?: string | undefined;
+  completionCheckActive?: boolean | undefined;
   activeRunId?: number | undefined;
   activeAgentSessionId?: string | undefined;
   updatedAt: string;

@@ -4,9 +4,6 @@ import type { PatchRelayDatabase } from "./db.ts";
 import { ACTIVE_RUN_STATES, type FactoryState, type RunType } from "./factory-state.ts";
 import type { WithHeldIssueSessionLease } from "./issue-session-lease-service.ts";
 import type { AppConfig } from "./types.ts";
-import {
-  resolveImplementationDeliveryMode,
-} from "./prompting/patchrelay.ts";
 import { ImplementationOutcomePolicy } from "./implementation-outcome-policy.ts";
 import { ReactiveRunPolicy } from "./reactive-run-policy.ts";
 
@@ -28,11 +25,8 @@ function resolvePostRunState(issue: IssueRecord): FactoryState | undefined {
 
 export function resolveCompletedRunState(
   issue: IssueRecord,
-  run: Pick<RunRecord, "runType" | "promptText">,
+  _run: Pick<RunRecord, "runType">,
 ): FactoryState | undefined {
-  if (run.runType === "implementation" && resolveImplementationDeliveryMode(issue, undefined, run.promptText) === "linear_only") {
-    return "done";
-  }
   return resolvePostRunState(issue);
 }
 
