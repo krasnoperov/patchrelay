@@ -682,6 +682,11 @@ test("loadConfig derives runtime projects from repository-first config", () => {
           linear_team_ids: ["team-use"],
           linear_project_ids: ["project-site"],
           issue_key_prefixes: ["USE"],
+          repair_budgets: {
+            ci_repair: 7,
+            queue_repair: 7,
+            review_fix: 7,
+          },
         },
       ],
     });
@@ -698,6 +703,11 @@ test("loadConfig derives runtime projects from repository-first config", () => {
         assert.equal(config.repositories.length, 1);
         assert.equal(config.repositories[0]?.githubRepo, "krasnoperov/usertold");
         assert.equal(config.repositories[0]?.workspace, "usertold");
+        assert.deepEqual(config.projects[0]?.repairBudgets, {
+          ciRepair: 7,
+          queueRepair: 7,
+          reviewFix: 7,
+        });
         assert.deepEqual(config.repositories[0]?.linearProjectIds, ["project-site"]);
         assert.equal(config.projects[0]?.id, "krasnoperov/usertold");
         assert.equal(config.projects[0]?.repoPath, repoPath);
