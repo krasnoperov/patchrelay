@@ -2,6 +2,7 @@ import type { PatchRelayDatabase } from "../db.ts";
 import type { RunType } from "../factory-state.ts";
 import type { OperatorEventFeed } from "../operator-feed.ts";
 import { triggerEventAllowed } from "../project-resolution.ts";
+import { resolveAwaitingInputReason } from "../awaiting-input-reason.ts";
 import {
   decideActiveRunRelease,
   decideAgentSession,
@@ -44,6 +45,7 @@ export class DesiredStageRecorder {
 
     const existingIssue = this.db.issues.getIssue(params.project.id, normalizedIssue.id);
     const activeRun = existingIssue?.activeRunId ? this.db.runs.getRunById(existingIssue.activeRunId) : undefined;
+    const latestRun = existingIssue ? this.db.runs.getLatestRunForIssue(params.project.id, normalizedIssue.id) : undefined;
     const delegated = this.isDelegatedToPatchRelay(params.project, params.normalized);
     const triggerAllowed = triggerEventAllowed(params.project, params.normalized.triggerEvent);
     const incomingAgentSessionId = params.normalized.agentSession?.id;
@@ -85,6 +87,9 @@ export class DesiredStageRecorder {
       delegated,
       previouslyDelegated: existingIssue?.delegatedToPatchRelay,
       currentState: existingIssue?.factoryState,
+      awaitingInputReason: existingIssue
+        ? resolveAwaitingInputReason({ issue: existingIssue, latestRun })
+        : undefined,
       unresolvedBlockers,
       prNumber: existingIssue?.prNumber,
       prState: existingIssue?.prState,

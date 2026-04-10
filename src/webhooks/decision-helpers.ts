@@ -2,6 +2,7 @@ import { TERMINAL_STATES, type FactoryState } from "../factory-state.ts";
 import type { PatchRelayDatabase } from "../db.ts";
 import type { IssueMetadata, RunType } from "../types.ts";
 import { deriveIssueSessionReactiveIntent } from "../issue-session.ts";
+import type { AwaitingInputReason } from "../awaiting-input-reason.ts";
 
 export function decideRunIntent(p: {
   delegated: boolean;
@@ -59,6 +60,7 @@ export function resolveReDelegationResume(p: {
   delegated: boolean;
   previouslyDelegated?: boolean | undefined;
   currentState?: FactoryState | undefined;
+  awaitingInputReason?: AwaitingInputReason | undefined;
   unresolvedBlockers?: number | undefined;
   prNumber?: number | undefined;
   prState?: string | undefined;
@@ -94,6 +96,13 @@ export function resolveReDelegationResume(p: {
       return { factoryState: "awaiting_queue", pendingRunType: null };
     }
     return { factoryState: "pr_open", pendingRunType: null };
+  }
+
+  if (p.currentState === "awaiting_input" && p.awaitingInputReason === "completion_check_question") {
+    return {
+      factoryState: "awaiting_input",
+      pendingRunType: null,
+    };
   }
 
   if (p.currentState === "awaiting_input" || p.currentState === "delegated" || p.currentState === "implementing") {

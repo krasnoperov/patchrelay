@@ -2,6 +2,7 @@ import type { Logger } from "pino";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { LinearClientProvider } from "./types.ts";
 import type { LinearSessionSync } from "./linear-session-sync.ts";
+import { resolveAwaitingInputReason } from "./awaiting-input-reason.ts";
 
 export class ServiceStartupRecovery {
   constructor(
@@ -70,9 +71,11 @@ export class ServiceStartupRecovery {
 
       const delegated = liveIssue.delegateId === installation.actorId;
       const unresolvedBlockers = this.db.issues.countUnresolvedBlockers(issue.projectId, issue.linearIssueId);
+      const latestRun = this.db.runs.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
       const shouldRecoverAwaitingInput =
         delegated
         && issue.factoryState === "awaiting_input"
+        && resolveAwaitingInputReason({ issue, latestRun }) === "paused_local_work"
         && this.db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId) === undefined;
 
       const updated = this.db.issues.upsertIssue({

@@ -322,6 +322,102 @@ test("service start recovers delegated blocked issues from stale awaiting_input 
   }
 });
 
+test("service start preserves delegated completion-check questions in awaiting_input", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-service-startup-preserve-question-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("usertold", installation.id);
+
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-3b",
+      issueKey: "USE-3B",
+      title: "Needs decision before continuing",
+      currentLinearState: "Backlog",
+      factoryState: "awaiting_input",
+      agentSessionId: "session-3b",
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "implementation",
+      promptText: "Ship it",
+    });
+    db.runs.finishRun(run.id, {
+      status: "completed",
+      summaryJson: JSON.stringify({ latestAssistantMessage: "I need a product decision before continuing." }),
+    });
+    db.runs.saveCompletionCheck(run.id, {
+      outcome: "needs_input",
+      summary: "PatchRelay needs a product decision before continuing.",
+      question: "Should the workflow prefer the compact layout?",
+      why: "Both options are plausible, and the issue does not specify which one to ship.",
+      recommendedReply: "Use the compact layout.",
+    });
+
+    const service = new PatchRelayService(
+      config,
+      db,
+      {
+        start: async () => undefined,
+        stop: async () => undefined,
+        isStarted: () => true,
+        on: () => undefined,
+        readThread: async () => ({ id: "thread-1", turns: [] }),
+      } as never,
+      {
+        forProject: async () => ({
+          getIssue: async () => ({
+            id: "issue-3b",
+            identifier: "USE-3B",
+            title: "Needs decision before continuing",
+            description: "",
+            url: "https://linear.app/usertold/issue/USE-3B",
+            teamId: "team-use",
+            teamKey: "USE",
+            stateId: "state-backlog",
+            stateName: "Backlog",
+            stateType: "unstarted",
+            delegateId: "patchrelay-actor",
+            delegateName: "PatchRelay",
+            workflowStates: [],
+            labelIds: [],
+            labels: [],
+            teamLabels: [],
+            blockedBy: [],
+            blocks: [],
+          }),
+          updateAgentSession: async () => ({ id: "session-3b" }),
+          upsertIssueComment: async () => ({ id: "comment-3b", body: "ok" }),
+          createAgentActivity: async () => ({ id: "activity-3b" }),
+        }),
+      } as never,
+      pino({ enabled: false }),
+    );
+
+    await service.start();
+
+    const tracked = service.listTrackedIssues().find((entry) => entry.issueKey === "USE-3B");
+    assert.ok(tracked);
+    assert.equal(tracked.factoryState, "awaiting_input");
+    assert.equal(tracked.waitingReason, "Waiting on operator input");
+    assert.equal(tracked.statusNote, "Should the workflow prefer the compact layout?");
+    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-3b"), undefined);
+    await service.stop();
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("listTrackedIssues does not mark downstream waiting issues as ready just because legacy pending state exists", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-service-list-downstream-ready-"));
   try {
