@@ -33,6 +33,16 @@ export function showTransientStatus<T>(
   }, delayMs);
 }
 
+export function setPersistentStatus<T>(
+  controller: TransientStatusController<T>,
+  message: string,
+  setStatus: (message: string | null) => void,
+  timers: TimerApi<T>,
+): void {
+  clearTransientStatus(controller, timers);
+  setStatus(message);
+}
+
 export function clearTransientStatus<T>(
   controller: TransientStatusController<T>,
   timers: TimerApi<T>,

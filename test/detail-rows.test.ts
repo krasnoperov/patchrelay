@@ -106,9 +106,6 @@ test("buildDetailLines keeps completed timeline runs collapsed to a summary", ()
     detailTab: "timeline",
     rawRuns: [],
     rawFeedEvents: [],
-    follow: true,
-    connected: true,
-    lastServerMessageAt: Date.now(),
     width: 80,
   })).join("\n");
 
@@ -175,9 +172,6 @@ test("buildDetailLines keeps active runs focused on the latest command output an
     detailTab: "timeline",
     rawRuns: [],
     rawFeedEvents: [],
-    follow: true,
-    connected: true,
-    lastServerMessageAt: Date.now(),
     width: 90,
   })).join("\n");
 
@@ -225,9 +219,6 @@ test("buildDetailLines renders history messages with markdown-friendly formattin
     detailTab: "history",
     rawRuns,
     rawFeedEvents: [],
-    follow: true,
-    connected: true,
-    lastServerMessageAt: Date.now(),
     width: 90,
   })).join("\n");
 
@@ -254,9 +245,6 @@ test("buildDetailLines renders header status notes with markdown-friendly format
     detailTab: "timeline",
     rawRuns: [],
     rawFeedEvents: [],
-    follow: true,
-    connected: true,
-    lastServerMessageAt: Date.now(),
     width: 90,
   })).join("\n");
 
@@ -277,9 +265,6 @@ test("buildDetailLines renders header status notes with markdown-friendly format
     detailTab: "timeline",
     rawRuns: [],
     rawFeedEvents: [],
-    follow: true,
-    connected: true,
-    lastServerMessageAt: Date.now(),
     width: 90,
   }).find((line) => line.segments.some((segment) => segment.text.includes("Updated")));
 
@@ -303,9 +288,6 @@ test("buildDetailLines keeps volatile stream status out of the transcript body",
     detailTab: "timeline",
     rawRuns: [],
     rawFeedEvents: [],
-    follow: true,
-    connected: false,
-    lastServerMessageAt: Date.parse("2026-03-25T10:11:15.000Z"),
     width: 90,
   })).join("\n");
 
@@ -344,9 +326,6 @@ test("buildDetailLines prefers full check summary over gate status for re-review
     detailTab: "timeline",
     rawRuns: [],
     rawFeedEvents: [],
-    follow: true,
-    connected: true,
-    lastServerMessageAt: Date.now(),
     width: 100,
   })).join("\n");
 
@@ -379,9 +358,6 @@ test("buildDetailLines shows completion check as a first-class transient stage",
     detailTab: "timeline",
     rawRuns: [],
     rawFeedEvents: [],
-    follow: true,
-    connected: true,
-    lastServerMessageAt: Date.now(),
     width: 100,
   })).join("\n");
 
@@ -408,9 +384,6 @@ test("buildDetailLines keeps header PR and review facts colorized instead of fla
     detailTab: "timeline",
     rawRuns: [],
     rawFeedEvents: [],
-    follow: true,
-    connected: true,
-    lastServerMessageAt: Date.now(),
     width: 100,
   });
 
@@ -453,9 +426,6 @@ test("buildDetailLines shows awaiting review and downstream queue facts without 
     detailTab: "timeline",
     rawRuns: [],
     rawFeedEvents: [],
-    follow: true,
-    connected: true,
-    lastServerMessageAt: Date.now(),
     width: 100,
   })).join("\n");
   const downstreamText = detailText(buildDetailLines({
@@ -470,9 +440,6 @@ test("buildDetailLines shows awaiting review and downstream queue facts without 
     detailTab: "timeline",
     rawRuns: [],
     rawFeedEvents: [],
-    follow: true,
-    connected: true,
-    lastServerMessageAt: Date.now(),
     width: 100,
   })).join("\n");
 

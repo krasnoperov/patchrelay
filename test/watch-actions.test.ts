@@ -79,9 +79,6 @@ test("buildWatchDetailExportText renders the current detail surface as plain tex
     detailTab: "timeline",
     rawRuns: [],
     rawFeedEvents: [],
-    follow: true,
-    connected: true,
-    lastServerMessageAt: Date.now(),
     width: 100,
   });
 
@@ -124,7 +121,8 @@ test("writeTextToClipboard writes OSC 52 payloads for interactive streams", () =
 
   assert.equal(writeTextToClipboard("copied text", ttyStream), true);
   assert.equal(writes.length, 1);
-  assert.match(writes[0] ?? "", /^\u001b]52;c;.+\u0007$/);
+  assert.equal((writes[0] ?? "").startsWith("\u001b]52;c;"), true);
+  assert.equal((writes[0] ?? "").endsWith("\u0007"), true);
 });
 
 test("exportWatchTextToTempFile writes transcript text to a sanitized path", () => {

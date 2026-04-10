@@ -81,9 +81,6 @@ export function IssueDetailView({
       detailTab,
       rawRuns,
       rawFeedEvents,
-      follow,
-      connected,
-      lastServerMessageAt,
       width,
     });
   }, [

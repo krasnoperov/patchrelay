@@ -16,7 +16,7 @@ import {
 } from "./watch-actions.ts";
 import { measureRenderedTextRows } from "./layout-measure.ts";
 import { PROMPT_COMPOSER_HINT, measurePromptComposerRows } from "./prompt-layout.ts";
-import { clearTransientStatus, defaultTimerApi, showTransientStatus } from "./transient-status.ts";
+import { clearTransientStatus, defaultTimerApi, setPersistentStatus, showTransientStatus } from "./transient-status.ts";
 
 interface AppProps {
   baseUrl: string;
@@ -111,6 +111,9 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
   const showStatus = useCallback((message: string) => {
     showTransientStatus(promptStatusController.current, message, setPromptStatus, defaultTimerApi);
   }, []);
+  const showPersistentStatus = useCallback((message: string) => {
+    setPersistentStatus(promptStatusController.current, message, setPromptStatus, defaultTimerApi);
+  }, []);
 
   useEffect(() => () => {
     clearTransientStatus(promptStatusController.current, defaultTimerApi);
@@ -126,11 +129,11 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
 
   const handleRetry = useCallback(() => {
     if (!state.activeDetailKey) return;
-    setPromptStatus("retrying...");
+    showPersistentStatus("retrying...");
     void postRetry(baseUrl, state.activeDetailKey, bearerToken).then((result) => {
       showStatus(result.ok ? "retry queued" : `retry failed: ${result.reason ?? "unknown"}`);
     });
-  }, [baseUrl, bearerToken, showStatus, state.activeDetailKey]);
+  }, [baseUrl, bearerToken, showPersistentStatus, showStatus, state.activeDetailKey]);
 
   const handlePromptSubmit = useCallback(() => {
     const text = promptBuffer.trim();
@@ -151,7 +154,7 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
       return next.slice(-20);
     });
     resetPromptComposer();
-    setPromptStatus("sending...");
+    showPersistentStatus("sending...");
 
     void postPrompt(baseUrl, state.activeDetailKey, text, bearerToken).then((result) => {
       if (result.delivered) {
@@ -162,7 +165,7 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
         showStatus(`failed: ${result.reason}`);
       }
     });
-  }, [baseUrl, bearerToken, dispatch, promptBuffer, resetPromptComposer, showStatus, state.activeDetailKey]);
+  }, [baseUrl, bearerToken, dispatch, promptBuffer, resetPromptComposer, showPersistentStatus, showStatus, state.activeDetailKey]);
 
   const withActiveIssueExport = useCallback(() => {
     if (!activeIssue) return null;
@@ -178,20 +181,14 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
       detailTab: state.detailTab,
       rawRuns: state.rawRuns,
       rawFeedEvents: state.rawFeedEvents,
-      follow: state.follow,
-      connected: state.connected,
-      lastServerMessageAt: state.lastServerMessageAt,
     };
   }, [
     activeIssue,
     state.activeRunId,
     state.activeRunStartedAt,
-    state.connected,
     state.detailTab,
     state.diffSummary,
-    state.follow,
     state.issueContext,
-    state.lastServerMessageAt,
     state.plan,
     state.rawFeedEvents,
     state.rawRuns,
@@ -362,7 +359,7 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
         setPromptCursor(promptBuffer.length);
       } else if (input === "s") {
         if (state.activeDetailKey) {
-          setPromptStatus("stopping...");
+          showPersistentStatus("stopping...");
           void postStop(baseUrl, state.activeDetailKey, bearerToken).then((result) => {
             showStatus(result.ok ? "stop sent" : `stop failed: ${result.reason ?? "unknown"}`);
           });

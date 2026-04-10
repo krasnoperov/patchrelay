@@ -26,9 +26,6 @@ interface BuildDetailLinesInput {
   detailTab: DetailTab;
   rawRuns: TimelineRunInput[];
   rawFeedEvents: OperatorFeedEvent[];
-  follow: boolean;
-  connected: boolean;
-  lastServerMessageAt: number | null;
   width: number;
 }
 
