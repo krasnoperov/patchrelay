@@ -5,7 +5,7 @@ import type { InteractiveRunner, Output, ParsedArgs } from "../command-types.ts"
 import type { CliDataAccess } from "../data.ts";
 import { CliUsageError } from "../errors.ts";
 import { formatJson } from "../formatters/json.ts";
-import { formatInspect, formatList, formatLive, formatOpen, formatRetry, formatSessionHistory, formatWorktree } from "../formatters/text.ts";
+import { formatClose, formatInspect, formatList, formatLive, formatOpen, formatRetry, formatSessionHistory, formatWorktree } from "../formatters/text.ts";
 import { buildOpenCommand } from "../interactive.ts";
 import { writeOutput } from "../output.ts";
 
@@ -54,6 +54,8 @@ export async function handleIssueCommand(params: IssueCommandParams): Promise<nu
       return await handleSessionsCommand(nested);
     case "retry":
       return await handleRetryCommand(nested);
+    case "close":
+      return await handleCloseCommand(nested);
     default:
       throw new CliUsageError(`Unknown issue command: ${subcommand}`, "issue");
   }
@@ -177,6 +179,24 @@ export async function handleRetryCommand(params: IssueCommandParams): Promise<nu
     throw new Error(`Issue not found: ${issueKey}`);
   }
   writeOutput(params.stdout, params.json ? formatJson(result) : formatRetry(result));
+  return 0;
+}
+
+export async function handleCloseCommand(params: IssueCommandParams): Promise<number> {
+  const issueKey = params.commandArgs[0];
+  if (!issueKey) {
+    throw new Error("close requires <issueKey>.");
+  }
+  const result = params.data.closeIssue(issueKey, {
+    failed: params.parsed.flags.get("failed") === true,
+    ...(typeof params.parsed.flags.get("reason") === "string"
+      ? { reason: String(params.parsed.flags.get("reason")) }
+      : {}),
+  });
+  if (!result) {
+    throw new Error(`Issue not found: ${issueKey}`);
+  }
+  writeOutput(params.stdout, params.json ? formatJson(result) : formatClose(result));
   return 0;
 }
 

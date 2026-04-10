@@ -4,6 +4,7 @@ import { CodexAppServerClient } from "../codex-app-server.ts";
 import { extractCompletionCheck } from "../completion-check.ts";
 import { getThreadTurns } from "../codex-thread-utils.ts";
 import { PatchRelayDatabase } from "../db.ts";
+import { buildManualRetryAttemptReset, resolveRetryTarget } from "../manual-issue-actions.ts";
 import { WorktreeManager } from "../worktree-manager.ts";
 import { CliOperatorApiClient } from "./operator-client.ts";
 import type { RunType } from "../factory-state.ts";
@@ -67,6 +68,13 @@ export interface RetryResult {
   issue: TrackedIssueRecord;
   runType: string;
   reason?: string;
+}
+
+export interface CloseResult {
+  issue: TrackedIssueRecord;
+  factoryState: "done" | "failed";
+  reason?: string;
+  releasedRunId?: number;
 }
 
 export interface IssueSessionHistoryItem {
@@ -332,13 +340,15 @@ export class CliDataAccess extends CliOperatorApiClient {
     }
 
     const runType = (options?.runType
-      ?? (issue.latestFailureSource === "queue_eviction" || issue.factoryState === "repairing_queue"
-        ? "queue_repair"
-        : dbIssue.prCheckStatus === "failed" || dbIssue.prCheckStatus === "failure" || issue.latestFailureSource === "branch_ci" || issue.factoryState === "repairing_ci"
-          ? "ci_repair"
-          : dbIssue.prReviewState === "changes_requested" || issue.factoryState === "changes_requested"
-            ? (dbIssue.pendingRunType === "branch_upkeep" || issueSession?.lastRunType === "branch_upkeep" ? "branch_upkeep" : "review_fix")
-            : "implementation")) as RunType;
+      ?? resolveRetryTarget({
+        prNumber: dbIssue.prNumber,
+        prState: dbIssue.prState,
+        prReviewState: dbIssue.prReviewState,
+        prCheckStatus: dbIssue.prCheckStatus,
+        pendingRunType: dbIssue.pendingRunType,
+        lastRunType: issueSession?.lastRunType,
+        lastGitHubFailureSource: issue.latestFailureSource,
+      }).runType) as RunType;
 
     const factoryState = runType === "queue_repair"
       ? "repairing_queue"
@@ -355,9 +365,56 @@ export class CliDataAccess extends CliOperatorApiClient {
       pendingRunType: null,
       pendingRunContextJson: null,
       factoryState,
+      ...buildManualRetryAttemptReset(runType),
     });
     const updated = this.db.getTrackedIssue(issue.projectId, issue.linearIssueId)!;
     return { issue: updated, runType, ...(options?.reason ? { reason: options.reason } : {}) };
+  }
+
+  closeIssue(issueKey: string, options?: { failed?: boolean; reason?: string }): CloseResult | undefined {
+    const issue = this.db.getTrackedIssueByKey(issueKey);
+    if (!issue) return undefined;
+
+    const dbIssue = this.db.issues.getIssueByKey(issueKey)!;
+    const terminalState = options?.failed ? "failed" : "done";
+    const run = dbIssue.activeRunId ? this.db.runs.getRunById(dbIssue.activeRunId) : undefined;
+
+    this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      eventType: "operator_closed",
+      eventJson: JSON.stringify({
+        terminalState,
+        ...(options?.reason ? { reason: options.reason } : {}),
+      }),
+      dedupeKey: `operator_closed:${issue.linearIssueId}:${terminalState}:${dbIssue.activeRunId ?? "no-run"}`,
+    });
+    this.db.issueSessions.clearPendingIssueSessionEventsRespectingActiveLease(issue.projectId, issue.linearIssueId);
+    if (run) {
+      this.db.issueSessions.finishRunRespectingActiveLease(issue.projectId, issue.linearIssueId, run.id, {
+        status: "released",
+        failureReason: options?.reason
+          ? `Operator closed issue as ${terminalState}: ${options.reason}`
+          : `Operator closed issue as ${terminalState}`,
+      });
+    }
+    this.db.issueSessions.upsertIssueRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      factoryState: terminalState as never,
+      activeRunId: null,
+      pendingRunType: null,
+      pendingRunContextJson: null,
+    });
+    this.db.issueSessions.releaseIssueSessionLeaseRespectingActiveLease(issue.projectId, issue.linearIssueId);
+
+    const updated = this.db.getTrackedIssue(issue.projectId, issue.linearIssueId)!;
+    return {
+      issue: updated,
+      factoryState: terminalState,
+      ...(options?.reason ? { reason: options.reason } : {}),
+      ...(run ? { releasedRunId: run.id } : {}),
+    };
   }
 
   sessions(issueKey: string): IssueSessionHistoryResult | undefined {

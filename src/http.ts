@@ -361,6 +361,24 @@ export async function buildHttpServer(config: AppConfig, service: PatchRelayServ
       return reply.send({ ok: true, ...result });
     });
 
+    app.post("/api/issues/:issueKey/close", async (request, reply) => {
+      const issueKey = (request.params as { issueKey: string }).issueKey;
+      const body = request.body as { failed?: boolean; reason?: string } | undefined;
+      const result = await service.closeIssue(issueKey, {
+        failed: body?.failed === true,
+        ...(typeof body?.reason === "string" && body.reason.trim()
+          ? { reason: body.reason.trim() }
+          : {}),
+      });
+      if (!result) {
+        return reply.code(404).send({ ok: false, reason: "issue_not_found" });
+      }
+      if ("error" in result) {
+        return reply.code(409).send({ ok: false, reason: result.error });
+      }
+      return reply.send({ ok: true, ...result });
+    });
+
     app.get("/api/installations", async (_request, reply) => {
       return reply.send({ ok: true, installations: service.listLinearInstallations() });
     });
