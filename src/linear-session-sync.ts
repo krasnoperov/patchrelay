@@ -292,7 +292,7 @@ export class LinearSessionSync {
       const previous = this.agentMessageBuffers.get(messageKey) ?? "";
       const next = `${previous}${delta}`;
       this.agentMessageBuffers.set(messageKey, next);
-      const sentence = extractFirstSentence(next);
+      const sentence = extractFirstCompletedSentence(next);
       if (!sentence) return undefined;
       this.agentMessageProgressPublished.add(messageKey);
       return { sentence };
@@ -620,6 +620,13 @@ function extractFirstSentence(text: string | undefined): string | undefined {
   if (!sanitized) return undefined;
   const match = sanitized.match(/^(.+?[.!?])(?:\s|$)/);
   return truncateProgressText((match?.[1] ?? sanitized).trim(), MAX_PROGRESS_TEXT_LENGTH);
+}
+
+function extractFirstCompletedSentence(text: string | undefined): string | undefined {
+  const sanitized = sanitizeOperatorFacingText(text)?.replace(/\s+/g, " ").trim();
+  if (!sanitized) return undefined;
+  const match = sanitized.match(/^(.+?[.!?])(?:\s|$)/);
+  return match?.[1] ? truncateProgressText(match[1].trim(), MAX_PROGRESS_TEXT_LENGTH) : undefined;
 }
 
 function summarizeProgressSentence(text: string | undefined): string | undefined {
