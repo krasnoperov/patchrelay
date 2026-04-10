@@ -123,7 +123,7 @@ export class TrackedIssueListQuery {
       .prepare(
         `SELECT
           s.project_id, s.linear_issue_id, s.issue_key, i.title,
-          i.current_linear_state, i.factory_state, s.session_state, s.waiting_reason, s.summary_text, s.updated_at,
+          i.current_linear_state, i.factory_state, i.delegated_to_patchrelay, s.session_state, s.waiting_reason, s.summary_text, s.updated_at,
           i.pending_run_type,
           i.pr_number, i.pr_state, i.pr_head_sha, i.pr_review_state, i.pr_check_status, i.last_blocking_review_head_sha,
           i.last_github_ci_snapshot_json,
@@ -207,6 +207,7 @@ export class TrackedIssueListQuery {
       const readyForExecution = isIssueSessionReadyForExecution({
         ...(typeof row.session_state === "string" ? { sessionState: String(row.session_state) as never } : {}),
         factoryState: String(row.factory_state ?? "delegated") as never,
+        ...(row.delegated_to_patchrelay !== null ? { delegatedToPatchRelay: Number(row.delegated_to_patchrelay) !== 0 } : {}),
         ...(row.active_run_type !== null ? { activeRunId: 1 } : {}),
         blockedByCount,
         hasPendingWake,
@@ -225,6 +226,7 @@ export class TrackedIssueListQuery {
         ? row.summary_text
         : undefined;
       const waitingReason = sessionWaitingReason ?? derivePatchRelayWaitingReason({
+        ...(row.delegated_to_patchrelay !== null ? { delegatedToPatchRelay: Number(row.delegated_to_patchrelay) !== 0 } : {}),
         ...(row.active_run_type !== null ? { activeRunType: String(row.active_run_type) } : {}),
         blockedByKeys,
         factoryState: String(row.factory_state ?? "delegated"),

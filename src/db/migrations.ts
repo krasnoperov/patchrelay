@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS issues (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   project_id TEXT NOT NULL,
   linear_issue_id TEXT NOT NULL,
+  delegated_to_patchrelay INTEGER NOT NULL DEFAULT 1,
   issue_key TEXT,
   title TEXT,
   url TEXT,
@@ -246,6 +247,8 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
     "UPDATE webhook_events SET processing_status = 'processed' WHERE processing_status = 'pending' AND payload_json IS NULL",
   ).run();
 
+  addColumnIfMissing(connection, "issues", "delegated_to_patchrelay", "INTEGER NOT NULL DEFAULT 1");
+
   // Add pending_merge_prep column for merge queue stewardship
   addColumnIfMissing(connection, "issues", "pending_merge_prep", "INTEGER NOT NULL DEFAULT 0");
 
@@ -333,6 +336,7 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         project_id TEXT NOT NULL,
         linear_issue_id TEXT NOT NULL,
+        delegated_to_patchrelay INTEGER NOT NULL DEFAULT 1,
         issue_key TEXT,
         title TEXT,
         description TEXT,
@@ -389,6 +393,7 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
         id,
         project_id,
         linear_issue_id,
+        delegated_to_patchrelay,
         issue_key,
         title,
         description,
@@ -443,6 +448,7 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
         id,
         project_id,
         linear_issue_id,
+        COALESCE(delegated_to_patchrelay, 1),
         issue_key,
         title,
         description,

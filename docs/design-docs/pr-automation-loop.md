@@ -5,11 +5,14 @@ and GitHub.
 
 ## Roles
 
-- `patchrelay` updates the PR branch
+- `patchrelay` updates or repairs the PR branch only when the issue is delegated to PatchRelay
 - GitHub CI validates the raw PR head SHA
 - `review-quill` reviews the latest green PR head SHA
 - `merge-steward` admits eligible PRs and validates speculative integrated SHAs
 - GitHub remains the source of truth for PR state, review state, and checks
+
+Delegation to PatchRelay controls PatchRelay write authority only.
+It does not gate `review-quill` or `merge-steward`.
 
 ## Normal Flow
 
@@ -52,3 +55,19 @@ and GitHub.
 - `merge-steward` retries on conflicts/CI failures within budget, then evicts
   with a durable incident and queue check run
 - PatchRelay can repair evicted or conflicted queue entries and re-admit them
+  when the issue is delegated to PatchRelay
+
+## Undelegated PRs
+
+If an issue is undelegated while a PR already exists:
+
+- PatchRelay should keep ingesting GitHub truth for that PR
+- PatchRelay should not enqueue review-fix, CI-repair, branch-upkeep, or queue-repair work
+- `review-quill` should still review the PR when its own conditions are met
+- `merge-steward` should still queue or merge the PR when its own conditions are met
+
+If CI later fails on that undelegated PR:
+
+- PatchRelay should record the failing state
+- PatchRelay should not repair it yet
+- when the issue is delegated back to PatchRelay, it should resume from current PR truth rather than restarting from scratch

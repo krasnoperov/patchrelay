@@ -30,6 +30,7 @@ export function buildTrackedIssueRecord(params: {
   const failureContext = parseGitHubFailureContext(params.issue.lastGitHubFailureContextJson);
   const blockedByKeys = unresolvedBlockedBy.map((entry) => entry.blockerIssueKey ?? entry.blockerLinearIssueId);
   const waitingReason = derivePatchRelayWaitingReason({
+    delegatedToPatchRelay: params.issue.delegatedToPatchRelay,
     ...(params.issue.activeRunId !== undefined ? { activeRunId: params.issue.activeRunId } : {}),
     blockedByKeys,
     factoryState: params.issue.factoryState,
@@ -63,6 +64,7 @@ export function buildTrackedIssueRecord(params: {
     id: params.issue.id,
     projectId: params.issue.projectId,
     linearIssueId: params.issue.linearIssueId,
+    delegatedToPatchRelay: params.issue.delegatedToPatchRelay,
     ...(params.issue.issueKey ? { issueKey: params.issue.issueKey } : {}),
     ...(params.issue.title ? { title: params.issue.title } : {}),
     ...(params.issue.url ? { issueUrl: params.issue.url } : {}),
@@ -79,6 +81,7 @@ export function buildTrackedIssueRecord(params: {
     readyForExecution: isIssueSessionReadyForExecution({
       sessionState: params.session?.sessionState,
       factoryState: params.issue.factoryState,
+      delegatedToPatchRelay: params.issue.delegatedToPatchRelay,
       activeRunId: params.issue.activeRunId,
       blockedByCount: unresolvedBlockedBy.length,
       hasPendingWake: params.hasPendingWake,

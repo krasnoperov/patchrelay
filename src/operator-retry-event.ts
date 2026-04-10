@@ -10,7 +10,7 @@ function parseObjectJson(value: string | undefined): Record<string, unknown> | u
   }
 }
 
-export function buildOperatorRetryEvent(issue: IssueRecord, runType: string) {
+export function buildOperatorRetryEvent(issue: IssueRecord, runType: string, source: string = "operator_retry") {
   if (runType === "queue_repair") {
     const queueIncident = parseObjectJson(issue.lastQueueIncidentJson);
     const failureContext = parseObjectJson(issue.lastGitHubFailureContextJson);
@@ -19,9 +19,9 @@ export function buildOperatorRetryEvent(issue: IssueRecord, runType: string) {
       eventJson: JSON.stringify({
         ...(queueIncident ?? {}),
         ...(failureContext ?? {}),
-        source: "operator_retry",
+        source,
       }),
-      dedupeKey: `operator_retry:queue_repair:${issue.linearIssueId}:${issue.prHeadSha ?? issue.lastGitHubFailureHeadSha ?? "unknown-sha"}`,
+      dedupeKey: `${source}:queue_repair:${issue.linearIssueId}:${issue.prHeadSha ?? issue.lastGitHubFailureHeadSha ?? "unknown-sha"}`,
     };
   }
 
@@ -31,9 +31,9 @@ export function buildOperatorRetryEvent(issue: IssueRecord, runType: string) {
       eventType: "settled_red_ci" as const,
       eventJson: JSON.stringify({
         ...(failureContext ?? {}),
-        source: "operator_retry",
+        source,
       }),
-      dedupeKey: `operator_retry:ci_repair:${issue.linearIssueId}:${issue.lastGitHubFailureSignature ?? issue.prHeadSha ?? "unknown-sha"}`,
+      dedupeKey: `${source}:ci_repair:${issue.linearIssueId}:${issue.lastGitHubFailureSignature ?? issue.prHeadSha ?? "unknown-sha"}`,
     };
   }
 
@@ -42,21 +42,25 @@ export function buildOperatorRetryEvent(issue: IssueRecord, runType: string) {
       eventType: "review_changes_requested" as const,
       eventJson: JSON.stringify({
         reviewBody: runType === "branch_upkeep"
-          ? "Operator requested retry of branch upkeep after requested changes."
-          : "Operator requested retry of review-fix work.",
+          ? `${humanizeSource(source)} requested retry of branch upkeep after requested changes.`
+          : `${humanizeSource(source)} requested retry of review-fix work.`,
         ...(runType === "branch_upkeep" ? { branchUpkeepRequired: true, wakeReason: "branch_upkeep" } : {}),
-        source: "operator_retry",
+        source,
       }),
-      dedupeKey: `operator_retry:${runType}:${issue.linearIssueId}:${issue.prHeadSha ?? "unknown-sha"}`,
+      dedupeKey: `${source}:${runType}:${issue.linearIssueId}:${issue.prHeadSha ?? "unknown-sha"}`,
     };
   }
 
   return {
     eventType: "delegated" as const,
     eventJson: JSON.stringify({
-      promptContext: "Operator requested retry of PatchRelay work.",
-      source: "operator_retry",
+      promptContext: `${humanizeSource(source)} requested PatchRelay work resume.`,
+      source,
     }),
-    dedupeKey: `operator_retry:implementation:${issue.linearIssueId}`,
+    dedupeKey: `${source}:implementation:${issue.linearIssueId}`,
   };
+}
+
+function humanizeSource(source: string): string {
+  return source.replaceAll("_", " ");
 }

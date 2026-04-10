@@ -28,6 +28,7 @@ export interface IssueRecord {
   id: number;
   projectId: string;
   linearIssueId: string;
+  delegatedToPatchRelay: boolean;
   issueKey?: string | undefined;
   title?: string | undefined;
   description?: string | undefined;
@@ -161,6 +162,7 @@ export interface TrackedIssueRecord {
   id: number;
   projectId: string;
   linearIssueId: string;
+  delegatedToPatchRelay: boolean;
   issueKey?: string | undefined;
   title?: string | undefined;
   issueUrl?: string | undefined;

@@ -8,6 +8,7 @@ function createIssue(overrides: Partial<IssueRecord> = {}): IssueRecord {
     id: 1,
     projectId: "usertold",
     linearIssueId: "issue-1",
+    delegatedToPatchRelay: true,
     issueKey: "USE-1",
     factoryState: "failed",
     createdAt: new Date().toISOString(),

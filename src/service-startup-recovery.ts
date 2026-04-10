@@ -78,6 +78,7 @@ export class ServiceStartupRecovery {
       const updated = this.db.issues.upsertIssue({
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
+        delegatedToPatchRelay: delegated,
         ...(liveIssue.identifier ? { issueKey: liveIssue.identifier } : {}),
         ...(liveIssue.title ? { title: liveIssue.title } : {}),
         ...(liveIssue.description ? { description: liveIssue.description } : {}),

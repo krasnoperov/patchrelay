@@ -434,6 +434,19 @@ export class GitHubWebhookHandler {
     // merge_group_failed after pr_merged) must not resurrect done issues.
     if (isIssueTerminal(issue)) return;
 
+    if (!issue.delegatedToPatchRelay) {
+      this.feed?.publish({
+        level: "info",
+        kind: "github",
+        issueKey: issue.issueKey,
+        projectId: issue.projectId,
+        stage: issue.factoryState,
+        status: "ignored_undelegated",
+        summary: `Ignored ${event.triggerEvent} because the issue is undelegated`,
+      });
+      return;
+    }
+
     if (!this.isPatchRelayOwnedPr(issue)) {
       this.feed?.publish({
         level: "info",

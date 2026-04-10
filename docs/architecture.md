@@ -141,11 +141,36 @@ PatchRelay tracks two different ownership models:
 - issue ownership
 - PR ownership
 
+PatchRelay also tracks one runtime authority bit:
+
+- `delegatedToPatchRelay`
+
 Issue ownership decides who may start new delegated implementation work from Linear.
 PR ownership decides who must keep an existing PR healthy until merge or close.
+`delegatedToPatchRelay` decides whether PatchRelay may actively write or repair code right now.
 
 For PatchRelay, a PR is PatchRelay-owned when its author is the PatchRelay GitHub app or service account.
 That ownership does not change just because the issue is undelegated, the PR becomes ready, or the PR enters the queue.
+
+This creates a deliberate split between workflow truth and automation authority:
+
+- workflow truth comes from factory state plus GitHub facts
+- automation authority comes from current Linear delegation to PatchRelay
+
+When an issue is undelegated:
+
+- active PatchRelay runs must stop
+- pending PatchRelay wakes must clear
+- PatchRelay must stop starting new implementation or repair runs
+- PatchRelay must continue ingesting GitHub truth for the issue
+- PR-backed states such as `pr_open`, `changes_requested`, and `awaiting_queue` should remain visible when still true
+
+That observer-only mode is important because downstream services keep operating from PR truth:
+
+- `review-quill` remains PR-centric
+- `merge-steward` remains PR-centric
+
+Re-delegation should resume from current truth, not from a generic “start over” state.
 
 ## Issue Lifecycle
 
@@ -191,6 +216,8 @@ Behavior:
 - Codex reads failure logs, fixes the code, pushes
 - budget: 2 attempts before escalation
 
+This loop must not start while the issue is undelegated, even though GitHub check state should still be recorded.
+
 #### Queue Repair Loop
 
 Triggered by:
@@ -203,6 +230,8 @@ Behavior:
 - Codex reads the steward's failure context, fixes the code, pushes
 - PatchRelay re-adds the `queue` label so the steward can re-admit the PR
 - budget: 2 attempts before escalation
+
+This loop must also respect `delegatedToPatchRelay`. Merge Steward may continue reporting queue truth on undelegated PRs, but PatchRelay should only repair when authority is restored.
 
 ## Factory State Machine
 
@@ -230,6 +259,13 @@ The target runtime is a smaller `IssueSession` state machine:
 - `failed`
 
 Waiting on review or queue should be represented as `waitingReason`, not as a major PatchRelay-owned lifecycle state.
+
+For undelegated issues, the key mental model is:
+
+- no PR yet: pause local work into `awaiting_input`
+- PR exists: preserve the PR-backed factory state and expose a paused waiting reason
+
+That keeps operator-facing state truthful without letting PatchRelay continue writing code.
 
 ## Failure Taxonomy
 
