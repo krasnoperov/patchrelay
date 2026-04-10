@@ -208,6 +208,17 @@ test("linear summaries prefer session state over factory state", () => {
   );
 });
 
+test("linear summaries describe closed historical PRs as non-merged completion", () => {
+  assert.equal(
+    summarizeIssueStateForLinear({
+      factoryState: "done",
+      prNumber: 193,
+      prState: "closed",
+    }),
+    "Completed without merging PR #193.",
+  );
+});
+
 test("session external urls include both status and pull request links", () => {
   const urls = buildAgentSessionExternalUrls(createConfig(), {
     issueKey: "USE-42",

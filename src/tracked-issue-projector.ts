@@ -35,6 +35,7 @@ export function buildTrackedIssueRecord(params: {
     factoryState: params.issue.factoryState,
     pendingRunType: params.issue.pendingRunType,
     prNumber: params.issue.prNumber,
+    prState: params.issue.prState,
     prHeadSha: params.issue.prHeadSha,
     prReviewState: params.issue.prReviewState,
     prCheckStatus: params.issue.prCheckStatus,
@@ -69,6 +70,10 @@ export function buildTrackedIssueRecord(params: {
     ...(params.issue.currentLinearState ? { currentLinearState: params.issue.currentLinearState } : {}),
     ...(params.session?.sessionState ? { sessionState: params.session.sessionState } : {}),
     factoryState: params.issue.factoryState,
+    ...(params.issue.prNumber !== undefined ? { prNumber: params.issue.prNumber } : {}),
+    ...(params.issue.prState ? { prState: params.issue.prState } : {}),
+    ...(params.issue.prReviewState ? { prReviewState: params.issue.prReviewState } : {}),
+    ...(params.issue.prCheckStatus ? { prCheckStatus: params.issue.prCheckStatus } : {}),
     blockedByCount: unresolvedBlockedBy.length,
     blockedByKeys,
     readyForExecution: isIssueSessionReadyForExecution({

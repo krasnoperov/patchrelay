@@ -155,3 +155,42 @@ test("retryIssue preserves branch upkeep retries for requested-changes issues", 
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("retryIssue treats closed PR issues as fresh implementation retries", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-service-retry-closed-pr-"));
+  let db: PatchRelayDatabase | undefined;
+  try {
+    const config = createConfig(baseDir);
+    db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const service = new PatchRelayService(
+      config,
+      db,
+      { on: () => undefined } as never,
+      undefined,
+      pino({ enabled: false }),
+    );
+
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-closed-retry",
+      issueKey: "USE-2C",
+      title: "Closed PR should not stay in review repair",
+      factoryState: "failed",
+      prNumber: 193,
+      prState: "closed",
+      prReviewState: "changes_requested",
+      prCheckStatus: "success",
+    });
+
+    const result = service.retryIssue("USE-2C");
+
+    assert.deepEqual(result, { issueKey: "USE-2C", runType: "implementation" });
+    const wake = db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId);
+    assert.ok(wake);
+    assert.equal(wake.runType, "implementation");
+  } finally {
+    db?.connection.close();
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});

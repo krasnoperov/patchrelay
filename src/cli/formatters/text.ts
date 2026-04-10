@@ -32,7 +32,16 @@ export function formatInspect(result: InspectResult): string {
     value("Debug stage", result.issue?.factoryState),
     result.activeRun ? value("Active run", `${result.activeRun.runType} (${result.activeRun.status})`) : undefined,
     result.latestRun && !result.activeRun ? value("Latest run", `${result.latestRun.runType} (${result.latestRun.status})`) : undefined,
-    result.prNumber ? value("PR", `#${result.prNumber}${result.prReviewState ? ` [${result.prReviewState}]` : ""}`) : undefined,
+    result.prNumber
+      ? value(
+          "PR",
+          `#${result.prNumber}${
+            result.prState || result.prReviewState
+              ? ` [${[result.prState, result.prReviewState].filter(Boolean).join(", ")}]`
+              : ""
+          }`,
+        )
+      : undefined,
     result.completionCheckOutcome ? value("Completion check", result.completionCheckOutcome) : undefined,
     result.completionCheckSummary ? value("Completion summary", truncateLine(result.completionCheckSummary)) : undefined,
     result.completionCheckQuestion ? value("Question", truncateLine(result.completionCheckQuestion)) : undefined,

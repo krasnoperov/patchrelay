@@ -1,4 +1,5 @@
 import { Box, Text } from "ink";
+import { hasOpenPr } from "../../pr-state.ts";
 import type { WatchFilter, WatchIssue } from "./watch-state.ts";
 import { computeAggregates } from "./watch-state.ts";
 import { FreshnessBadge } from "./FreshnessBadge.tsx";
@@ -31,7 +32,7 @@ export function StatusBar({
   const showing = filter === "all" ? `${totalCount} issues` : `${issues.length}/${totalCount} issues`;
   const aggregateSource = filter === "all" ? allIssues : issues;
   const agg = computeAggregates(aggregateSource);
-  const withPr = aggregateSource.filter((i) => i.prNumber !== undefined).length;
+  const withPr = aggregateSource.filter((i) => hasOpenPr(i.prNumber, i.prState)).length;
   const waitingInput = aggregateSource.filter((i) => i.sessionState === "waiting_input" || i.factoryState === "awaiting_input").length;
   const intervention = aggregateSource.filter((i) => i.sessionState === "failed" || i.factoryState === "failed" || i.factoryState === "escalated").length;
   const running = aggregateSource.filter((i) => i.sessionState === "running").length;

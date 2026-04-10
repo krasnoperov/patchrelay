@@ -1,3 +1,5 @@
+import { hasOpenPr } from "./pr-state.ts";
+
 export const PATCHRELAY_WAITING_REASONS = {
   activeWork: "PatchRelay is actively working",
   finalizingPublishedPr: "PatchRelay is finalizing a published PR",
@@ -22,6 +24,7 @@ export function derivePatchRelayWaitingReason(params: {
   factoryState?: string | undefined;
   pendingRunType?: string | undefined;
   prNumber?: number | undefined;
+  prState?: string | undefined;
   prHeadSha?: string | undefined;
   prReviewState?: string | undefined;
   prCheckStatus?: string | undefined;
@@ -29,7 +32,7 @@ export function derivePatchRelayWaitingReason(params: {
   latestFailureCheckName?: string | undefined;
 }): PatchRelayWaitingReason | undefined {
   if (params.activeRunType) {
-    if (params.prNumber !== undefined && (params.factoryState === "pr_open" || params.factoryState === "awaiting_queue")) {
+    if (hasOpenPr(params.prNumber, params.prState) && (params.factoryState === "pr_open" || params.factoryState === "awaiting_queue")) {
       return PATCHRELAY_WAITING_REASONS.finalizingPublishedPr;
     }
     if (params.factoryState === "done") {
@@ -86,7 +89,7 @@ export function derivePatchRelayWaitingReason(params: {
   if (params.prReviewState === "approved") {
     return PATCHRELAY_WAITING_REASONS.waitingForDownstreamAutomation;
   }
-  if (params.prNumber !== undefined) {
+  if (hasOpenPr(params.prNumber, params.prState)) {
     return PATCHRELAY_WAITING_REASONS.waitingForExternalReview;
   }
   if (params.pendingRunType) {

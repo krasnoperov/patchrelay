@@ -39,6 +39,7 @@ export interface InspectResult {
   latestReport?: StageReport | undefined;
   latestSummary?: Record<string, unknown> | undefined;
   prNumber?: number | undefined;
+  prState?: string | undefined;
   prReviewState?: string | undefined;
   sessionState?: string | undefined;
   waitingReason?: string | undefined;
@@ -232,6 +233,7 @@ export class CliDataAccess extends CliOperatorApiClient {
       ...(latestReport ? { latestReport } : {}),
       ...(latestSummary ? { latestSummary } : {}),
       ...(dbIssue.prNumber ? { prNumber: dbIssue.prNumber } : {}),
+      ...(dbIssue.prState ? { prState: dbIssue.prState } : {}),
       ...(dbIssue.prReviewState ? { prReviewState: dbIssue.prReviewState } : {}),
       ...(((dbIssue as { sessionState?: string }).sessionState) ? { sessionState: (dbIssue as { sessionState?: string }).sessionState } : {}),
       ...(((dbIssue as { waitingReason?: string }).waitingReason) ? { waitingReason: (dbIssue as { waitingReason?: string }).waitingReason } : {}),

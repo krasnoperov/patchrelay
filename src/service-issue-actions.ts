@@ -4,6 +4,7 @@ import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord } from "./db-types.ts";
 import { buildOperatorRetryEvent } from "./operator-retry-event.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
+import { hasOpenPr } from "./pr-state.ts";
 import type { ServiceRuntime } from "./service-runtime.ts";
 
 export class ServiceIssueActions {
@@ -119,18 +120,18 @@ export class ServiceIssueActions {
 
     let runType = "implementation";
     let factoryState: string = "delegated";
-    if (issue.prNumber && issue.lastGitHubFailureSource === "queue_eviction") {
+    if (hasOpenPr(issue.prNumber, issue.prState) && issue.lastGitHubFailureSource === "queue_eviction") {
       runType = "queue_repair";
       factoryState = "repairing_queue";
-    } else if (issue.prNumber && (issue.prCheckStatus === "failed" || issue.prCheckStatus === "failure" || issue.lastGitHubFailureSource === "branch_ci")) {
+    } else if (hasOpenPr(issue.prNumber, issue.prState) && (issue.prCheckStatus === "failed" || issue.prCheckStatus === "failure" || issue.lastGitHubFailureSource === "branch_ci")) {
       runType = "ci_repair";
       factoryState = "repairing_ci";
-    } else if (issue.prNumber && issue.prReviewState === "changes_requested") {
+    } else if (hasOpenPr(issue.prNumber, issue.prState) && issue.prReviewState === "changes_requested") {
       runType = issue.pendingRunType === "branch_upkeep" || issueSession?.lastRunType === "branch_upkeep"
         ? "branch_upkeep"
         : "review_fix";
       factoryState = "changes_requested";
-    } else if (issue.prNumber) {
+    } else if (hasOpenPr(issue.prNumber, issue.prState)) {
       runType = "implementation";
       factoryState = "implementing";
     }

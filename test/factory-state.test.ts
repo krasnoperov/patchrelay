@@ -127,9 +127,12 @@ test("pr_merged from any state → done", () => {
   }
 });
 
-test("pr_closed without active run → failed", () => {
-  for (const state of ALL_STATES) {
+test("pr_closed without active run fails only non-terminal states", () => {
+  for (const state of ALL_STATES.filter((value) => !TERMINAL_STATES.has(value))) {
     assert.equal(resolve("pr_closed", state, {}), "failed", `pr_closed from ${state}`);
+  }
+  for (const state of TERMINAL_STATES) {
+    assert.equal(resolve("pr_closed", state, {}), undefined, `pr_closed from terminal ${state}`);
   }
 });
 
@@ -179,9 +182,9 @@ test("CI failure in merge queue → repair → fast-track back if approved", () 
 
 // ─── Structural validation ───────────────────────────────────────
 
-test("terminal states accept no transitions except pr_merged and pr_closed", () => {
+test("terminal states accept no transitions except pr_merged", () => {
   for (const event of ALL_EVENTS) {
-    if (event === "pr_merged" || event === "pr_closed") continue;
+    if (event === "pr_merged") continue;
     for (const state of TERMINAL_STATES) {
       assert.equal(resolve(event, state), undefined, `${event} from terminal ${state}`);
     }

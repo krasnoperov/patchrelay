@@ -540,6 +540,124 @@ test("cli cluster treats a live review-quill attempt on the current head as an o
   }
 });
 
+test("cli cluster ignores closed PRs on completed issues", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cluster-closed-pr-done-"));
+  const config = createConfig(baseDir, 19795);
+  mkdirSync(config.projects[0]!.repoPath, { recursive: true });
+  mkdirSync(config.projects[0]!.worktreeRoot, { recursive: true });
+  const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+  db.runMigrations();
+  const server = await startPatchRelayHealthServer(config);
+
+  try {
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-use-closed",
+      issueKey: "USE-CLOSED",
+      title: "Closed report PR",
+      currentLinearState: "Done",
+      currentLinearStateType: "completed",
+      factoryState: "done",
+      prNumber: 193,
+      prState: "closed",
+      prReviewState: "commented",
+      prCheckStatus: "success",
+    });
+
+    const stdout = createBufferStream();
+    const stderr = createBufferStream();
+    const exitCode = await runCli(["cluster"], {
+      config,
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      runCommand: async (command, args) => {
+        if (command === "review-quill" && args.join(" ") === "service status --json") {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              service: "review-quill",
+              unit: "review-quill.service",
+              systemd: { ActiveState: "active" },
+              health: { reachable: true, ok: true, status: 200 },
+            }),
+            stderr: "",
+          };
+        }
+        if (command === "merge-steward" && args.join(" ") === "service status --json") {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              service: "merge-steward",
+              unit: "merge-steward.service",
+              systemd: { ActiveState: "active" },
+              health: { reachable: true, ok: true, status: 200 },
+            }),
+            stderr: "",
+          };
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    });
+
+    assert.equal(exitCode, 0);
+    const text = stdout.read();
+    assert.doesNotMatch(text, /CI USE-CLOSED PR #193/);
+    assert.doesNotMatch(text, /missing_owner=1/);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("cli cluster treats closed PRs on terminal issues as historical, not active PR ownership", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cluster-closed-pr-terminal-"));
+  const config = createConfig(baseDir, 19796);
+  mkdirSync(config.projects[0]!.repoPath, { recursive: true });
+  mkdirSync(config.projects[0]!.worktreeRoot, { recursive: true });
+  const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+  db.runMigrations();
+  const server = await startPatchRelayHealthServer(config);
+
+  try {
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-use-closed-terminal",
+      issueKey: "USE-CLOSED-TERM",
+      title: "Closed escalated PR",
+      currentLinearState: "In Progress",
+      currentLinearStateType: "started",
+      factoryState: "escalated",
+      prNumber: 194,
+      prState: "closed",
+      prReviewState: "changes_requested",
+      prCheckStatus: "success",
+    });
+    const staleTime = new Date(Date.now() - 300_000).toISOString();
+    db.connection.prepare("UPDATE issues SET updated_at = ?").run(staleTime);
+    db.connection.prepare("UPDATE issue_sessions SET updated_at = ?").run(staleTime);
+
+    const stdout = createBufferStream();
+    const stderr = createBufferStream();
+    const exitCode = await runCli(["cluster"], {
+      config,
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      runCommand: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+    });
+
+    assert.equal(exitCode, 1);
+    assert.equal(stderr.read(), "");
+    const text = stdout.read();
+    assert.match(text, /FAIL \[issue:terminal USE-CLOSED-TERM(?: PR #194)?\] Issue is in terminal failure state escalated/);
+    assert.doesNotMatch(text, /CI USE-CLOSED-TERM PR #194/);
+    assert.doesNotMatch(text, /github:reconcile USE-CLOSED-TERM/);
+    assert.doesNotMatch(text, /missing_owner=1/);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("cli cluster treats in-progress CI as externally owned instead of orphaned", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cluster-ci-pending-"));
   const config = createConfig(baseDir, 19793);

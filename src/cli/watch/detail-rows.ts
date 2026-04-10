@@ -1,5 +1,6 @@
 import type { OperatorFeedEvent, DetailTab, WatchDiffSummary, WatchIssue, WatchIssueContext, WatchTokenUsage } from "./watch-state.ts";
 import type { TimelineEntry, TimelineRunInput } from "./timeline-builder.ts";
+import { hasOpenPr } from "../../pr-state.ts";
 import { buildStateHistory, type HistoryRunInfo, type SideTripNode, type StateHistoryNode } from "./history-builder.ts";
 import { buildTimelineRows } from "./timeline-presentation.ts";
 import { planStepColor, planStepSymbol } from "./plan-helpers.ts";
@@ -482,7 +483,7 @@ function buildFactSegments(issue: WatchIssue, issueContext: WatchIssueContext | 
   else if (rereviewNeeded) facts.push([{ text: "re-review needed", color: "yellow" }]);
   else if (isChangesRequestedReviewState(issue.prReviewState)) facts.push([{ text: "changes requested", color: "yellow" }]);
   else if (
-    issue.prNumber !== undefined
+    hasOpenPr(issue.prNumber, issue.prState)
     && (isAwaitingReviewState(issue.prReviewState) || (!issue.prReviewState && issue.factoryState === "pr_open"))
   ) facts.push([{ text: "awaiting review", color: "yellow" }]);
   if (issue.factoryState === "awaiting_queue") facts.push([{ text: "merge queue", color: "cyan" }]);
@@ -593,7 +594,7 @@ function effectiveState(issue: WatchIssue): string {
   if (issue.completionCheckActive) return "completion_check";
   if (issue.blockedByCount > 0 && !issue.activeRunType) return "blocked";
   if (issue.sessionState === "waiting_input") return "awaiting_input";
-  if (issue.prNumber !== undefined) return issue.factoryState;
+  if (hasOpenPr(issue.prNumber, issue.prState)) return issue.factoryState;
   if (issue.readyForExecution && !issue.activeRunType && !hasDisplayPrBlocker(issue)) return "ready";
   return issue.factoryState;
 }
@@ -626,7 +627,7 @@ function blockerText(issue: WatchIssue, issueContext: WatchIssueContext | null):
   }
   if (rereviewNeeded) return "Awaiting re-review after requested changes";
   if (isChangesRequestedReviewState(issue.prReviewState)) return "Review changes requested";
-  if (issue.prNumber !== undefined && (isAwaitingReviewState(issue.prReviewState) || (!issue.prReviewState && effectiveState(issue) !== "done"))) {
+  if (hasOpenPr(issue.prNumber, issue.prState) && (isAwaitingReviewState(issue.prReviewState) || (!issue.prReviewState && effectiveState(issue) !== "done"))) {
     return "Awaiting review";
   }
   return null;

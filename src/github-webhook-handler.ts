@@ -1,7 +1,7 @@
 import type { Logger } from "pino";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { GitHubCiSnapshotRecord, IssueRecord } from "./db-types.ts";
-import { resolveFactoryStateFromGitHub, TERMINAL_STATES, type FactoryState } from "./factory-state.ts";
+import { resolveFactoryStateFromGitHub, type FactoryState } from "./factory-state.ts";
 import {
   createGitHubCiSnapshotResolver,
   createGitHubFailureContextResolver,
@@ -20,6 +20,12 @@ import {
 } from "./merge-queue-protocol.ts";
 import { buildQueueRepairContextFromEvent } from "./merge-queue-incident.ts";
 import { resolvePreferredCompletedLinearState } from "./linear-workflow.ts";
+import {
+  buildClosedPrCleanupFields,
+  isIssueTerminal,
+  resolveClosedPrFactoryState,
+  resolveClosedPrDisposition,
+} from "./pr-state.ts";
 import { resolveSecret } from "./resolve-secret.ts";
 import type { AppConfig, LinearClientProvider } from "./types.ts";
 import type { ProjectConfig } from "./workflow-types.ts";
@@ -221,6 +227,9 @@ export class GitHubWebhookHandler {
         : event.reviewState === "approved"
           ? { lastBlockingReviewHeadSha: null }
           : {}),
+      ...(event.triggerEvent === "pr_closed"
+        ? buildClosedPrCleanupFields()
+        : {}),
     });
     await this.updateCiSnapshot(issue, event, project);
     await this.updateFailureProvenance(issue, event, project);
@@ -317,12 +326,16 @@ export class GitHubWebhookHandler {
     event: NormalizedGitHubEvent,
     project?: ProjectConfig,
   ): FactoryState | undefined {
+    if (event.triggerEvent === "pr_closed") {
+      return undefined;
+    }
+
     if (
       event.triggerEvent === "check_failed"
       && this.isQueueEvictionFailure(issue, event, project)
       && issue.prState === "open"
       && issue.activeRunId === undefined
-      && !TERMINAL_STATES.has(issue.factoryState)
+      && !isIssueTerminal(issue)
     ) {
       return "repairing_queue";
     }
@@ -419,7 +432,7 @@ export class GitHubWebhookHandler {
 
     // Don't trigger on terminal issues — late-arriving webhooks (e.g.
     // merge_group_failed after pr_merged) must not resurrect done issues.
-    if (TERMINAL_STATES.has(issue.factoryState as FactoryState)) return;
+    if (isIssueTerminal(issue)) return;
 
     if (!this.isPatchRelayOwnedPr(issue)) {
       this.feed?.publish({
@@ -629,11 +642,14 @@ export class GitHubWebhookHandler {
             : "Pull request closed during active run",
         });
       }
+      const terminalFactoryState = event.triggerEvent === "pr_merged"
+        ? "done"
+        : resolveClosedPrFactoryState(issue);
       this.db.issues.upsertIssue({
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         activeRunId: null,
-        factoryState: event.triggerEvent === "pr_merged" ? "done" : "failed",
+        factoryState: terminalFactoryState,
       });
     };
     const activeLease = this.db.issueSessions.getActiveIssueSessionLease(issue.projectId, issue.linearIssueId);
@@ -644,6 +660,18 @@ export class GitHubWebhookHandler {
     }
     this.db.issueSessions.releaseIssueSessionLeaseRespectingActiveLease(issue.projectId, issue.linearIssueId);
     const updatedIssue = this.db.issues.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
+    if (event.triggerEvent === "pr_closed" && resolveClosedPrDisposition(issue) === "redelegate") {
+      this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        eventType: "delegated",
+        dedupeKey: `github_pr_closed:implementation:${issue.linearIssueId}`,
+      });
+      this.db.issueSessions.setBranchOwnerRespectingActiveLease(issue.projectId, issue.linearIssueId, "patchrelay");
+      if (this.db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId)) {
+        this.enqueueIssue(issue.projectId, issue.linearIssueId);
+      }
+    }
     if (event.triggerEvent === "pr_merged") {
       await this.completeLinearIssueAfterMerge(updatedIssue);
     }

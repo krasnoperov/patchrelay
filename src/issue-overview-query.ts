@@ -207,6 +207,7 @@ export class IssueOverviewQuery {
       factoryState: issueRecord?.factoryState ?? "delegated",
       pendingRunType: issueRecord?.pendingRunType,
       prNumber: session.prNumber,
+      prState: issueRecord?.prState,
       prHeadSha: issueRecord?.prHeadSha ?? session.prHeadSha,
       prReviewState: issueRecord?.prReviewState,
       prCheckStatus: issueRecord?.prCheckStatus,
@@ -223,6 +224,10 @@ export class IssueOverviewQuery {
       ...(issueRecord?.currentLinearState ? { currentLinearState: issueRecord.currentLinearState } : {}),
       sessionState: session.sessionState,
       factoryState: issueRecord?.factoryState ?? "delegated",
+      ...(session.prNumber !== undefined ? { prNumber: session.prNumber } : {}),
+      ...(issueRecord?.prState ? { prState: issueRecord.prState } : {}),
+      ...(issueRecord?.prReviewState ? { prReviewState: issueRecord.prReviewState } : {}),
+      ...(issueRecord?.prCheckStatus ? { prCheckStatus: issueRecord.prCheckStatus } : {}),
       blockedByCount: unresolvedBlockedBy.length,
       blockedByKeys,
       readyForExecution: isIssueSessionReadyForExecution({

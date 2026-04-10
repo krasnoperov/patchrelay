@@ -34,6 +34,7 @@ export interface WatchIssue {
   latestRunType?: string | undefined;
   latestRunStatus?: string | undefined;
   prNumber?: number | undefined;
+  prState?: string | undefined;
   prReviewState?: string | undefined;
   prCheckStatus?: string | undefined;
   prChecksSummary?: {
