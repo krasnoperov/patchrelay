@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseCiSnapshotSummary } from "../src/service.ts";
+import { parseCiSnapshotSummary } from "../src/tracked-issue-list-query.ts";
 
 test("parseCiSnapshotSummary collapses duplicate check runs to the latest effective check per name", () => {
   const summary = parseCiSnapshotSummary(JSON.stringify({
