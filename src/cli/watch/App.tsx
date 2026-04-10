@@ -15,7 +15,7 @@ import {
   writeTextToClipboard,
 } from "./watch-actions.ts";
 import { measureRenderedTextRows } from "./layout-measure.ts";
-import { measurePromptComposerRows } from "./prompt-layout.ts";
+import { PROMPT_COMPOSER_HINT, measurePromptComposerRows } from "./prompt-layout.ts";
 
 interface AppProps {
   baseUrl: string;
@@ -290,10 +290,10 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
     if (promptMode) {
       if (key.escape) {
         resetPromptComposer();
-      } else if (key.ctrl && input === "s") {
-        handlePromptSubmit();
-      } else if (key.return) {
+      } else if (key.ctrl && input === "n") {
         insertPromptText("\n");
+      } else if (key.return) {
+        handlePromptSubmit();
       } else if (key.leftArrow) {
         movePromptCursor(-1);
       } else if (key.rightArrow) {
@@ -474,7 +474,7 @@ function PromptComposer({ buffer, cursor }: { buffer: string; cursor: number }):
           <Text>{line}</Text>
         </Text>
       ))}
-      <Text dimColor>Enter: newline  Ctrl-S: send  Up/Down: history  Esc: cancel</Text>
+      <Text dimColor>{PROMPT_COMPOSER_HINT}</Text>
     </Box>
   );
 }

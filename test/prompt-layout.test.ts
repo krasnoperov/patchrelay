@@ -7,7 +7,7 @@ test("buildPromptComposerDisplayLines includes prefixed prompt lines and a hint 
   assert.deepEqual(lines, [
     "prompt> first| line",
     "        second line",
-    "Enter: newline  Ctrl-S: send  Up/Down: history  Esc: cancel",
+    "Enter: send  Ctrl-N: newline  Up/Down: history  Esc: cancel",
   ]);
 });
 
