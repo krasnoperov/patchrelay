@@ -327,6 +327,13 @@ export class PatchRelayService {
     return this.issueActions.retryIssue(issueKey);
   }
 
+  async closeIssue(
+    issueKey: string,
+    options?: { failed?: boolean; reason?: string },
+  ): Promise<{ issueKey: string; factoryState: "done" | "failed"; releasedRunId?: number } | { error: string } | undefined> {
+    return await this.issueActions.closeIssue(issueKey, options);
+  }
+
   async acceptWebhook(params: {
     webhookId: string;
     headers: Record<string, string | string[] | undefined>;

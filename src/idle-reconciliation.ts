@@ -10,9 +10,8 @@ import { deriveGateCheckStatusFromRollup, type GitHubStatusRollupEntry } from ".
 import { deriveIssueSessionReactiveIntent } from "./issue-session.ts";
 import { parseStoredQueueRepairContext } from "./merge-queue-incident.ts";
 import { buildClosedPrCleanupFields, resolveClosedPrDisposition } from "./pr-state.ts";
+import { DEFAULT_REVIEW_FIX_BUDGET } from "./run-budgets.ts";
 import { execCommand } from "./utils.ts";
-
-const DEFAULT_REVIEW_FIX_BUDGET = 12;
 
 function isFailingCheckStatus(status: string | undefined): boolean {
   return status === "failed" || status === "failure";

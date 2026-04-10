@@ -1,0 +1,3 @@
+export const DEFAULT_CI_REPAIR_BUDGET = 3;
+export const DEFAULT_QUEUE_REPAIR_BUDGET = 3;
+export const DEFAULT_REVIEW_FIX_BUDGET = 3;

@@ -509,7 +509,7 @@ exit 1
       prHeadSha: "sha-stuck",
       prReviewState: "changes_requested",
       prCheckStatus: "success",
-      reviewFixAttempts: 12,
+      reviewFixAttempts: 3,
       factoryState: "escalated",
     });
 

@@ -3,10 +3,11 @@ import type { IssueRecord } from "./db-types.ts";
 import type { RunType } from "./factory-state.ts";
 import type { IssueSessionLease } from "./issue-session-lease-service.ts";
 import type { IssueSessionEventType } from "./issue-session-events.ts";
-
-const DEFAULT_CI_REPAIR_BUDGET = 3;
-const DEFAULT_QUEUE_REPAIR_BUDGET = 3;
-const DEFAULT_REVIEW_FIX_BUDGET = 12;
+import {
+  DEFAULT_CI_REPAIR_BUDGET,
+  DEFAULT_QUEUE_REPAIR_BUDGET,
+  DEFAULT_REVIEW_FIX_BUDGET,
+} from "./run-budgets.ts";
 
 export interface PendingRunWake {
   runType: RunType;

@@ -3,8 +3,8 @@ import type { CodexAppServerClient } from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord } from "./db-types.ts";
 import { buildOperatorRetryEvent } from "./operator-retry-event.ts";
+import { buildManualRetryAttemptReset, resolveRetryTarget } from "./manual-issue-actions.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
-import { hasOpenPr } from "./pr-state.ts";
 import type { ServiceRuntime } from "./service-runtime.ts";
 
 export class ServiceIssueActions {
@@ -112,8 +112,17 @@ export class ServiceIssueActions {
     if (!issue.delegatedToPatchRelay) return { error: "Issue is undelegated from PatchRelay; delegate it again before retrying" };
     if (issue.activeRunId) return { error: "Issue already has an active run" };
     const issueSession = this.db.issueSessions.getIssueSession(issue.projectId, issue.linearIssueId);
+    const retryTarget = resolveRetryTarget({
+      prNumber: issue.prNumber,
+      prState: issue.prState,
+      prReviewState: issue.prReviewState,
+      prCheckStatus: issue.prCheckStatus,
+      pendingRunType: issue.pendingRunType,
+      lastRunType: issueSession?.lastRunType,
+      lastGitHubFailureSource: issue.lastGitHubFailureSource,
+    });
 
-    if (issue.prState === "merged") {
+    if (retryTarget.runType === "none") {
       this.db.issueSessions.upsertIssueRespectingActiveLease(issue.projectId, issue.linearIssueId, {
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
@@ -122,43 +131,96 @@ export class ServiceIssueActions {
       return { issueKey, runType: "none" };
     }
 
-    let runType = "implementation";
-    let factoryState: string = "delegated";
-    if (hasOpenPr(issue.prNumber, issue.prState) && issue.lastGitHubFailureSource === "queue_eviction") {
-      runType = "queue_repair";
-      factoryState = "repairing_queue";
-    } else if (hasOpenPr(issue.prNumber, issue.prState) && (issue.prCheckStatus === "failed" || issue.prCheckStatus === "failure" || issue.lastGitHubFailureSource === "branch_ci")) {
-      runType = "ci_repair";
-      factoryState = "repairing_ci";
-    } else if (hasOpenPr(issue.prNumber, issue.prState) && issue.prReviewState === "changes_requested") {
-      runType = issue.pendingRunType === "branch_upkeep" || issueSession?.lastRunType === "branch_upkeep"
-        ? "branch_upkeep"
-        : "review_fix";
-      factoryState = "changes_requested";
-    } else if (hasOpenPr(issue.prNumber, issue.prState)) {
-      runType = "implementation";
-      factoryState = "implementing";
-    }
-
-    this.appendOperatorRetryEvent(issue, runType);
+    this.appendOperatorRetryEvent(issue, retryTarget.runType);
     this.db.issueSessions.upsertIssueRespectingActiveLease(issue.projectId, issue.linearIssueId, {
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
-      factoryState: factoryState as never,
+      factoryState: retryTarget.factoryState as never,
+      ...buildManualRetryAttemptReset(retryTarget.runType),
     });
     this.feed.publish({
       level: "info",
       kind: "stage",
       issueKey: issue.issueKey,
       projectId: issue.projectId,
-      stage: factoryState,
+      stage: retryTarget.factoryState,
       status: "retry",
-      summary: `Retry queued: ${runType}`,
+      summary: `Retry queued: ${retryTarget.runType}`,
     });
     if (this.db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId)) {
       this.runtime.enqueueIssue(issue.projectId, issue.linearIssueId);
     }
-    return { issueKey, runType };
+    return { issueKey, runType: retryTarget.runType };
+  }
+
+  async closeIssue(
+    issueKey: string,
+    options?: { failed?: boolean; reason?: string },
+  ): Promise<{ issueKey: string; factoryState: "done" | "failed"; releasedRunId?: number } | { error: string } | undefined> {
+    const issue = this.db.issues.getIssueByKey(issueKey);
+    if (!issue) return undefined;
+
+    const terminalState = options?.failed ? "failed" : "done";
+    const run = issue.activeRunId ? this.db.runs.getRunById(issue.activeRunId) : undefined;
+
+    if (run?.threadId && run.turnId) {
+      try {
+        await this.codex.steerTurn({
+          threadId: run.threadId,
+          turnId: run.turnId,
+          input: `STOP: The operator manually closed this issue in PatchRelay as ${terminalState}. Stop working immediately and exit without making further changes.`,
+        });
+      } catch {
+        // The turn may already be settled.
+      }
+    }
+
+    this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      eventType: "operator_closed",
+      eventJson: JSON.stringify({
+        terminalState,
+        ...(options?.reason ? { reason: options.reason } : {}),
+      }),
+      dedupeKey: `operator_closed:${issue.linearIssueId}:${terminalState}:${issue.activeRunId ?? "no-run"}`,
+    });
+    this.db.issueSessions.clearPendingIssueSessionEventsRespectingActiveLease(issue.projectId, issue.linearIssueId);
+    if (run) {
+      this.db.issueSessions.finishRunRespectingActiveLease(issue.projectId, issue.linearIssueId, run.id, {
+        status: "released",
+        failureReason: options?.reason
+          ? `Operator closed issue as ${terminalState}: ${options.reason}`
+          : `Operator closed issue as ${terminalState}`,
+      });
+    }
+    this.db.issueSessions.upsertIssueRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      factoryState: terminalState as never,
+      activeRunId: null,
+      pendingRunType: null,
+      pendingRunContextJson: null,
+    });
+    this.db.issueSessions.releaseIssueSessionLeaseRespectingActiveLease(issue.projectId, issue.linearIssueId);
+
+    this.feed.publish({
+      level: terminalState === "failed" ? "warn" : "info",
+      kind: "workflow",
+      issueKey: issue.issueKey,
+      projectId: issue.projectId,
+      stage: terminalState,
+      status: "operator_closed",
+      summary: options?.reason
+        ? `Operator closed issue as ${terminalState}: ${options.reason}`
+        : `Operator closed issue as ${terminalState}`,
+    });
+
+    return {
+      issueKey,
+      factoryState: terminalState,
+      ...(run ? { releasedRunId: run.id } : {}),
+    };
   }
 
   private queueOperatorPrompt(issue: IssueRecord, text: string, source: string): void {
