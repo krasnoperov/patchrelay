@@ -136,26 +136,19 @@ Owns:
 
 ## Ownership
 
-PatchRelay tracks two different ownership models:
+PatchRelay keeps ownership simple:
 
-- issue ownership
-- branch/worktree ownership
+- workflow truth comes from factory state plus GitHub facts
+- automation authority comes from current Linear delegation to PatchRelay
 
-PatchRelay also tracks one runtime authority bit:
+PatchRelay persists one explicit authority bit:
 
 - `delegatedToPatchRelay`
 
-Issue ownership decides who may start new delegated implementation work from Linear.
-Branch/worktree ownership decides who most recently owned the local worktree lifecycle.
 `delegatedToPatchRelay` decides whether PatchRelay may actively write or repair code right now.
 
 Once a PR is linked to an issue, delegation decides whether PatchRelay may actively repair it.
 That PR may have been opened by PatchRelay, a human, or another external system.
-
-This creates a deliberate split between workflow truth and automation authority:
-
-- workflow truth comes from factory state plus GitHub facts
-- automation authority comes from current Linear delegation to PatchRelay
 
 When an issue is undelegated:
 
@@ -163,6 +156,7 @@ When an issue is undelegated:
 - pending PatchRelay wakes must clear
 - PatchRelay must stop starting new implementation or repair runs
 - PatchRelay must continue ingesting GitHub truth for the issue
+- local no-PR work should keep its literal state such as `delegated` or `implementing`
 - PR-backed states such as `pr_open`, `changes_requested`, and `awaiting_queue` should remain visible when still true
 
 That observer-only mode is important because downstream services keep operating from PR truth:
@@ -263,10 +257,12 @@ Waiting on review or queue should be represented as `waitingReason`, not as a ma
 
 For undelegated issues, the key mental model is:
 
-- no PR yet: pause local work into `awaiting_input`
+- no PR yet: preserve the literal local-work state and expose a paused waiting reason
 - PR exists: preserve the PR-backed factory state and expose a paused waiting reason
 
 That keeps operator-facing state truthful without letting PatchRelay continue writing code.
+
+`awaiting_input` should be reserved for real human-needed states, not for generic paused local work.
 
 ## Failure Taxonomy
 

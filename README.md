@@ -95,7 +95,7 @@ You will also need:
 
 Undelegation pauses PatchRelay authority. It does not erase PR truth.
 
-- If there is no PR yet and PatchRelay was still implementing, the issue pauses into `awaiting_input`.
+- If there is no PR yet, the issue keeps its literal local-work state such as `delegated` or `implementing`, but PatchRelay becomes paused.
 - If a PR already exists, the issue keeps its PR-backed state and PatchRelay becomes observer-only.
 - Worktrees, branches, and PRs remain in place.
 - PatchRelay still reflects GitHub review, CI, queue, merge, and close events while undelegated.
@@ -118,12 +118,12 @@ When the issue is delegated back to PatchRelay, it should resume from current tr
 
 ## Ownership Model
 
-PatchRelay tracks two different kinds of ownership:
+PatchRelay keeps ownership simple:
 
-- issue ownership: who may start new delegated implementation work from Linear
-- branch/worktree ownership: who most recently owned the local branch and worktree lifecycle
+- workflow truth: the current factory state plus GitHub PR/review/CI facts
+- runtime authority: whether PatchRelay may actively write or repair code right now
 
-PatchRelay also tracks one runtime authority bit:
+PatchRelay persists one explicit authority bit:
 
 - `delegatedToPatchRelay`: whether PatchRelay may actively implement or repair code for the issue right now
 
@@ -167,6 +167,14 @@ The long-term runtime model is a small durable `IssueSession`:
 - `failed`
 
 Waiting on review or queue should be represented as a waiting reason, not as a large internal control-plane state machine.
+
+`awaiting_input` is reserved for real human-needed situations:
+
+- a completion check asked a question
+- an operator explicitly stopped the run and wants a next decision
+- a reply is required before PatchRelay can continue
+
+Undelegated local work should stay in its literal workflow state and show a paused waiting reason instead.
 
 ## Restart And Reconciliation
 

@@ -262,6 +262,32 @@ test("linear summaries describe paused undelegated PR-backed states explicitly",
   );
 });
 
+test("linear summaries describe paused undelegated no-PR states explicitly", () => {
+  assert.equal(
+    summarizeIssueStateForLinear({
+      factoryState: "delegated",
+      sessionState: "idle",
+      delegatedToPatchRelay: false,
+      prState: undefined,
+      prReviewState: undefined,
+      prCheckStatus: undefined,
+    }),
+    "PatchRelay is queued to start work, but automation is paused.",
+  );
+
+  assert.equal(
+    summarizeIssueStateForLinear({
+      factoryState: "implementing",
+      sessionState: "idle",
+      delegatedToPatchRelay: false,
+      prState: undefined,
+      prReviewState: undefined,
+      prCheckStatus: undefined,
+    }),
+    "Implementation is paused because the issue is undelegated.",
+  );
+});
+
 test("session external urls include both status and pull request links", () => {
   const urls = buildAgentSessionExternalUrls(createConfig(), {
     issueKey: "USE-42",

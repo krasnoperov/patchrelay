@@ -342,6 +342,76 @@ test("syncSession keeps visible status comments current for paused undelegated P
   }
 });
 
+test("syncSession keeps visible status comments current for paused undelegated no-PR issues", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-linear-sync-paused-no-pr-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+
+    const issue = db.upsertIssue({
+      projectId: "krasnoperov/ballony-i-nasosy",
+      linearIssueId: "issue-tst-paused-local",
+      issueKey: "TST-58",
+      title: "Paused local work",
+      factoryState: "implementing",
+      delegatedToPatchRelay: false,
+      agentSessionId: "session-paused-local",
+      currentLinearState: "In Progress",
+    });
+
+    const commentUpdates: Array<Record<string, unknown>> = [];
+    const linear: Partial<LinearClient> = {
+      updateAgentSession: async (params) => ({ id: params.agentSessionId }),
+      upsertIssueComment: async (params) => {
+        commentUpdates.push(params as unknown as Record<string, unknown>);
+        return { id: "comment-paused-local", body: params.body };
+      },
+      createAgentActivity: async () => ({ id: "activity-paused-local" }),
+      getIssue: async () => ({
+        id: "issue-tst-paused-local",
+        identifier: "TST-58",
+        title: "Paused local work",
+        teamId: "team-tst",
+        teamKey: "TST",
+        delegateId: "someone-else",
+        stateId: "state-start",
+        stateName: "Start",
+        stateType: "started",
+        workflowStates: [
+          { name: "Implementing", type: "started" },
+          { name: "Human Needed", type: "unstarted" },
+          { name: "Done", type: "completed" },
+        ],
+        labelIds: [],
+        labels: [],
+        teamLabels: [],
+        blockedBy: [],
+        blocks: [],
+      }),
+      setIssueState: async () => { throw new Error("not used"); },
+      updateIssueLabels: async () => { throw new Error("not used"); },
+      getActorProfile: async () => ({ actorId: "patchrelay-actor" }),
+      getWorkspaceCatalog: async () => ({ workspace: {}, teams: [], projects: [] }),
+    };
+
+    const sync = new LinearSessionSync(
+      config,
+      db,
+      { forProject: async () => linear as LinearClient },
+      pino({ enabled: false }),
+    );
+
+    await sync.syncSession(db.getIssue(issue.projectId, issue.linearIssueId)!);
+
+    assert.equal(commentUpdates.length, 1);
+    assert.match(String(commentUpdates[0]?.body), /Implementation is paused because the issue is undelegated/);
+    assert.match(String(commentUpdates[0]?.body), /Waiting: PatchRelay automation is paused because the issue is undelegated/);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("syncSession renders completion-check input details for awaiting-input issues", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-linear-sync-completion-check-"));
   try {
