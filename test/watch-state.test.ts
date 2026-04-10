@@ -603,6 +603,68 @@ test("timeline-rehydrate drops synthetic prompt rows once the live thread includ
   assert.equal(userEntry?.item?.text, "Please continue with the fix");
 });
 
+test("timeline-rehydrate only consumes one synthetic prompt for each matching live user message", () => {
+  const initial = stateWith({
+    timeline: [
+      {
+        id: "live-prompt-1",
+        at: "2026-03-25T10:10:01.000Z",
+        kind: "item",
+        runId: 42,
+        item: {
+          id: "prompt-1",
+          type: "userMessage",
+          status: "completed",
+          text: "Please continue with the fix",
+        },
+      },
+      {
+        id: "live-prompt-2",
+        at: "2026-03-25T10:10:02.000Z",
+        kind: "item",
+        runId: 42,
+        item: {
+          id: "prompt-2",
+          type: "userMessage",
+          status: "completed",
+          text: "Please continue with the fix",
+        },
+      },
+    ],
+  });
+
+  const state = reduce(initial, {
+    type: "timeline-rehydrate",
+    runs: [{
+      id: 42,
+      runType: "implementation",
+      status: "running",
+      startedAt: "2026-03-25T10:10:00.000Z",
+    }],
+    feedEvents: [],
+    liveThread: {
+      id: "thread-42",
+      preview: "",
+      cwd: "/tmp",
+      status: "running",
+      turns: [{
+        id: "turn-1",
+        status: "running",
+        items: [{
+          id: "user-1",
+          type: "userMessage",
+          content: [{ text: "Please continue with the fix" }],
+        }],
+      }],
+    },
+    activeRunId: 42,
+    issueContext: null,
+  });
+
+  assert.equal(state.timeline.some((entry) => entry.id === "live-prompt-1"), false);
+  assert.equal(state.timeline.some((entry) => entry.id === "live-prompt-2"), true);
+});
+
 test("buildTimelineFromRehydration assigns deterministic timestamps to live thread rows", () => {
   const timeline = buildTimelineFromRehydration([{
     id: 42,

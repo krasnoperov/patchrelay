@@ -135,7 +135,7 @@ export function reconcileTimelineFromRehydration(
 
   const previousById = new Map(previousTimeline.map((entry) => [entry.id, entry]));
   const rehydratedIds = new Set(rehydrated.map((entry) => entry.id));
-  const liveUserMessages = collectUserMessageTexts(rehydrated, activeRunId);
+  const liveUserMessages = collectUserMessageCounts(rehydrated, activeRunId);
   const merged = rehydrated.map((entry) => mergeTimelineEntry(previousById.get(entry.id), entry));
   const carriedForward = previousTimeline.filter((entry) => {
     if (rehydratedIds.has(entry.id)) return false;
@@ -531,7 +531,7 @@ function mergeTimelineEntry(existing: TimelineEntry | undefined, incoming: Timel
 function shouldCarryForwardEntry(
   entry: TimelineEntry,
   activeRunId: number | null | undefined,
-  liveUserMessages: Set<string>,
+  liveUserMessages: Map<string, number>,
 ): boolean {
   if (entry.kind !== "item" || entry.runId !== activeRunId) {
     return false;
@@ -539,7 +539,7 @@ function shouldCarryForwardEntry(
 
   if (entry.item?.id.startsWith("prompt-") === true) {
     const text = normalizePromptText(entry.item.text);
-    return !text || !liveUserMessages.has(text);
+    return !text || !consumeUserMessageMatch(liveUserMessages, text);
   }
 
   return entry.item?.status === "inProgress";
@@ -589,18 +589,31 @@ function preferredChanges(existing: unknown[] | undefined, incoming: unknown[] |
   return incoming.length >= existing.length ? incoming : existing;
 }
 
-function collectUserMessageTexts(entries: TimelineEntry[], activeRunId: number | null | undefined): Set<string> {
-  const texts = new Set<string>();
+function collectUserMessageCounts(entries: TimelineEntry[], activeRunId: number | null | undefined): Map<string, number> {
+  const texts = new Map<string, number>();
   for (const entry of entries) {
     if (entry.kind !== "item" || entry.runId !== activeRunId || entry.item?.type !== "userMessage") {
       continue;
     }
     const text = normalizePromptText(entry.item.text);
     if (text) {
-      texts.add(text);
+      texts.set(text, (texts.get(text) ?? 0) + 1);
     }
   }
   return texts;
+}
+
+function consumeUserMessageMatch(messages: Map<string, number>, text: string): boolean {
+  const count = messages.get(text) ?? 0;
+  if (count <= 0) {
+    return false;
+  }
+  if (count === 1) {
+    messages.delete(text);
+  } else {
+    messages.set(text, count - 1);
+  }
+  return true;
 }
 
 function normalizePromptText(text: string | undefined): string | null {
