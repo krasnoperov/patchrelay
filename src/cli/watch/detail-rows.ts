@@ -310,7 +310,7 @@ function renderTimelineItemLines(
           : { dimColor: item.type !== "commandExecution" },
   });
 
-  if (item.output && item.status === "inProgress") {
+  if (item.output && item.type === "commandExecution") {
     lines.push(...renderTextLines(lastNonEmptyLine(item.output), {
       key: `${key}-output`,
       width,

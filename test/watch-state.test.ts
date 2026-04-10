@@ -967,6 +967,79 @@ test("buildTimelineRows keeps verbose runs focused on meaningful items", () => {
   assert.ok(runRow.items.length >= 2, "run should include items");
 });
 
+test("buildTimelineRows keeps active runs focused on the latest live context", () => {
+  const entries: TimelineEntry[] = [
+    {
+      id: "run-start-9",
+      at: "2026-03-25T10:00:00.000Z",
+      kind: "run-start",
+      runId: 9,
+      run: { runType: "implementation", status: "running", startedAt: "2026-03-25T10:00:00.000Z" },
+    },
+    {
+      id: "item-user-1",
+      at: "2026-03-25T10:00:01.000Z",
+      kind: "item",
+      runId: 9,
+      item: { id: "user-1", type: "userMessage", status: "completed", text: "Please fix the tests." },
+    },
+    {
+      id: "item-plan-1",
+      at: "2026-03-25T10:00:02.000Z",
+      kind: "item",
+      runId: 9,
+      item: { id: "plan-1", type: "plan", status: "completed", text: "Plan details" },
+    },
+    {
+      id: "item-msg-1",
+      at: "2026-03-25T10:00:03.000Z",
+      kind: "item",
+      runId: 9,
+      item: { id: "msg-1", type: "agentMessage", status: "completed", text: "Checking the failures." },
+    },
+    {
+      id: "item-tool-1",
+      at: "2026-03-25T10:00:04.000Z",
+      kind: "item",
+      runId: 9,
+      item: { id: "tool-1", type: "dynamicToolCall", status: "completed", toolName: "grep" },
+    },
+    {
+      id: "item-cmd-1",
+      at: "2026-03-25T10:00:05.000Z",
+      kind: "item",
+      runId: 9,
+      item: { id: "cmd-1", type: "commandExecution", status: "completed", command: "npm test", output: "FAIL old test\n" },
+    },
+    {
+      id: "item-msg-2",
+      at: "2026-03-25T10:00:06.000Z",
+      kind: "item",
+      runId: 9,
+      item: { id: "msg-2", type: "agentMessage", status: "inProgress", text: "I found the failing suite and I am patching it." },
+    },
+    {
+      id: "item-cmd-2",
+      at: "2026-03-25T10:00:07.000Z",
+      kind: "item",
+      runId: 9,
+      item: { id: "cmd-2", type: "commandExecution", status: "inProgress", command: "npm test -- watch", output: "PASS updated test\n" },
+    },
+    {
+      id: "item-files-1",
+      at: "2026-03-25T10:00:08.000Z",
+      kind: "item",
+      runId: 9,
+      item: { id: "files-1", type: "fileChange", status: "completed", changes: [{ path: "src/watch.ts" }] },
+    },
+  ];
+
+  const rows = buildTimelineRows(entries);
+  const runRow = rows.find((row) => row.kind === "run");
+  assert.ok(runRow && runRow.kind === "run");
+  assert.deepEqual(runRow.items.map(({ item }) => item.id), ["msg-2", "cmd-2", "files-1"]);
+});
+
 // ─── Feed Events ─────────────────────────────────────────────
 
 test("feed-snapshot sets feed events", () => {

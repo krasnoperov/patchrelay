@@ -146,6 +146,7 @@ function buildCompactTimelineRows(entries: TimelineEntry[]): TimelineDisplayRow[
 
   for (const run of runs.values()) {
     const status = resolveCompactRunStatus(run.run, run.items);
+    const verboseItems = status === "running" ? selectVerboseItems(run.items) : run.items;
     rows.push({
       id: run.id,
       kind: "run",
@@ -153,7 +154,7 @@ function buildCompactTimelineRows(entries: TimelineEntry[]): TimelineDisplayRow[
       finalized: status !== "running",
       run: { ...run.run, status, ...(run.endedAt ? { endedAt: run.endedAt } : {}) },
       details: summarizeRunDetails(run.items),
-      items: run.items.map((item) => ({ at: run.at, item })),
+      items: verboseItems.map((item) => ({ at: run.at, item })),
     });
   }
 
@@ -245,6 +246,30 @@ function summarizeRunDetails(items: TimelineItemPayload[]): TimelineRunDetail[] 
   }
 
   return dedupeDetails(details).slice(0, 3);
+}
+
+function selectVerboseItems(items: TimelineItemPayload[]): TimelineItemPayload[] {
+  const latestAssistantMessage = findLatest(items, (item) => item.type === "agentMessage" && Boolean(item.text?.trim()));
+  const latestUserMessage = !latestAssistantMessage
+    ? findLatest(items, (item) => item.type === "userMessage" && Boolean(item.text?.trim()))
+    : undefined;
+  const activeCommand = findLatest(items, (item) => item.type === "commandExecution" && item.status === "inProgress");
+  const latestCommandWithOutput = findLatest(items, (item) => item.type === "commandExecution" && Boolean(item.output?.trim()));
+  const latestCommand = activeCommand
+    ?? latestCommandWithOutput
+    ?? findLatest(items, (item) => item.type === "commandExecution" && Boolean(item.command?.trim()));
+  const latestFileChange = findLatest(items, (item) => item.type === "fileChange" && Array.isArray(item.changes) && item.changes.length > 0);
+  const latestToolCall = !latestFileChange
+    ? findLatest(items, (item) => item.type === "mcpToolCall" || item.type === "dynamicToolCall")
+    : undefined;
+
+  const selectedIds = new Set(
+    [latestUserMessage, latestAssistantMessage, latestCommand, latestFileChange, latestToolCall]
+      .filter((item): item is TimelineItemPayload => Boolean(item))
+      .map((item) => item.id),
+  );
+
+  return items.filter((item) => selectedIds.has(item.id));
 }
 
 function summarizeNarrative(input: string): string {

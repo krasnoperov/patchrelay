@@ -116,6 +116,79 @@ test("buildDetailLines keeps completed timeline runs collapsed to a summary", ()
   assert.doesNotMatch(text, /First progress update\./);
 });
 
+test("buildDetailLines keeps active runs focused on the latest command output and file changes", () => {
+  const issue = makeIssue("USE-3", { activeRunType: "implementation" });
+  const timeline: TimelineEntry[] = [
+    {
+      id: "run-start-9",
+      at: "2026-03-25T10:00:00.000Z",
+      kind: "run-start",
+      runId: 9,
+      run: { runType: "implementation", status: "running", startedAt: "2026-03-25T10:00:00.000Z" },
+    },
+    {
+      id: "item-msg-1",
+      at: "2026-03-25T10:00:03.000Z",
+      kind: "item",
+      runId: 9,
+      item: { id: "msg-1", type: "agentMessage", status: "completed", text: "Earlier note." },
+    },
+    {
+      id: "item-cmd-1",
+      at: "2026-03-25T10:00:04.000Z",
+      kind: "item",
+      runId: 9,
+      item: { id: "cmd-1", type: "commandExecution", status: "completed", command: "npm test", output: "FAIL old test\n" },
+    },
+    {
+      id: "item-msg-2",
+      at: "2026-03-25T10:00:06.000Z",
+      kind: "item",
+      runId: 9,
+      item: { id: "msg-2", type: "agentMessage", status: "inProgress", text: "Patching the watch rendering now." },
+    },
+    {
+      id: "item-cmd-2",
+      at: "2026-03-25T10:00:07.000Z",
+      kind: "item",
+      runId: 9,
+      item: { id: "cmd-2", type: "commandExecution", status: "inProgress", command: "npm test -- watch", output: "PASS updated watch test\n" },
+    },
+    {
+      id: "item-files-1",
+      at: "2026-03-25T10:00:08.000Z",
+      kind: "item",
+      runId: 9,
+      item: { id: "files-1", type: "fileChange", status: "completed", changes: [{ path: "src/cli/watch/App.tsx" }] },
+    },
+  ];
+
+  const text = detailText(buildDetailLines({
+    issue,
+    timeline,
+    activeRunStartedAt: "2026-03-25T10:00:00.000Z",
+    activeRunId: 9,
+    tokenUsage: null,
+    diffSummary: null,
+    plan: null,
+    issueContext: null,
+    detailTab: "timeline",
+    rawRuns: [],
+    rawFeedEvents: [],
+    follow: true,
+    connected: true,
+    lastServerMessageAt: Date.now(),
+    width: 90,
+  })).join("\n");
+
+  assert.match(text, /Patching the watch rendering now\./);
+  assert.match(text, /\$ npm test -- watch/);
+  assert.match(text, /PASS updated watch test/);
+  assert.match(text, /updated 1 file: App\.tsx/);
+  assert.doesNotMatch(text, /Earlier note\./);
+  assert.doesNotMatch(text, /FAIL old test/);
+});
+
 test("buildDetailLines renders history messages with markdown-friendly formatting", () => {
   const issue = makeIssue("USE-1", { factoryState: "changes_requested" });
   const rawRuns: TimelineRunInput[] = [{
