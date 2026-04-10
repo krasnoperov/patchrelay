@@ -521,6 +521,57 @@ test("closed non-merged PR on a completed issue preserves done state and clears 
   }
 });
 
+test("closed non-merged PR on unfinished work re-delegates implementation immediately", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-runtime-closed-redelegate-"));
+  try {
+    const { db, enqueueCalls, handler } = createHandler(baseDir);
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-closed-redelegate",
+      issueKey: "USE-109",
+      branchName: "use-109-redelegate",
+      prNumber: 194,
+      prState: "open",
+      prHeadSha: "closed-redelegate-sha-1",
+      prAuthorLogin: "patchrelay[bot]",
+      prReviewState: "commented",
+      prCheckStatus: "success",
+      lastBlockingReviewHeadSha: "closed-redelegate-sha-1",
+      ciSummaryJson: JSON.stringify({ total: 1, completed: 1, passed: 1, failed: 0, pending: 0, overall: "success" }),
+      ciLastUpdatedAt: "2026-04-10T09:05:00.000Z",
+      factoryState: "pr_open",
+      currentLinearState: "Implementing",
+      currentLinearStateType: "started",
+    });
+
+    await handler.processGitHubWebhookEvent({
+      eventType: "pull_request",
+      rawBody: buildTerminalPrPayload({
+        action: "closed",
+        branch: "use-109-redelegate",
+        headSha: "closed-redelegate-sha-1",
+        prNumber: 194,
+        merged: false,
+        prAuthorLogin: "patchrelay[bot]",
+      }),
+    });
+
+    const issue = db.getIssue("usertold", "issue-closed-redelegate");
+    const wake = db.issueSessions.peekIssueSessionWake("usertold", "issue-closed-redelegate");
+    assert.equal(issue?.factoryState, "delegated");
+    assert.equal(issue?.prState, "closed");
+    assert.equal(issue?.prReviewState, undefined);
+    assert.equal(issue?.prCheckStatus, undefined);
+    assert.equal(issue?.lastBlockingReviewHeadSha, undefined);
+    assert.equal(issue?.ciSummaryJson, undefined);
+    assert.equal(issue?.ciLastUpdatedAt, undefined);
+    assert.equal(wake?.runType, "implementation");
+    assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-closed-redelegate" }]);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("green gate-check completion does not queue new PatchRelay work", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-runtime-green-"));
   try {

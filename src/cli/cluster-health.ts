@@ -2,7 +2,7 @@ import { deriveGateCheckStatusFromRollup, type GitHubStatusRollupEntry } from ".
 import { ACTIVE_RUN_STATES } from "../factory-state.ts";
 import type { PatchRelayDatabase } from "../db.ts";
 import type { IssueDependencyRecord, IssueRecord, IssueSessionRecord } from "../db-types.ts";
-import { hasOpenPr } from "../pr-state.ts";
+import { hasOpenPr, resolveClosedPrDisposition } from "../pr-state.ts";
 import type { AppConfig } from "../types.ts";
 import type { CommandRunner, CommandRunnerResult } from "./command-types.ts";
 
@@ -215,7 +215,7 @@ export async function collectClusterHealth(
   checks.push(...await collectActiveOverlapFindings(snapshots, runCommand));
 
   for (const snapshot of snapshots) {
-    if (!snapshot.issue.prNumber) {
+    if (!hasOpenPr(snapshot.issue.prNumber, snapshot.issue.prState)) {
       continue;
     }
     const githubHealth = await evaluateGitHubIssueHealth(
@@ -425,6 +425,31 @@ async function evaluateGitHubIssueHealth(
   const latestBlockingReviewHeadSha = extractLatestBlockingReviewHeadSha(pr.latestReviews);
   const mergeConflictDetected = pr.mergeable === "CONFLICTING" || pr.mergeStateStatus === "DIRTY";
   const reviewQuillAttempt = issue.issueKey ? reviewQuillAttemptOwners?.get(issue.issueKey) : undefined;
+
+  if (pr.state === "MERGED" && issue.factoryState !== "done" && ageMs >= RECONCILIATION_GRACE_MS) {
+    return {
+      finding: {
+        status: "fail",
+        scope: "github:reconcile",
+        message: "PR is already merged but the issue has not advanced to done",
+      },
+    };
+  }
+
+  if (pr.state === "CLOSED") {
+    const closedPrDisposition = resolveClosedPrDisposition(issue);
+    if (closedPrDisposition === "redelegate" && issue.factoryState !== "delegated" && ageMs >= RECONCILIATION_GRACE_MS) {
+      return {
+        finding: {
+          status: "fail",
+          scope: "github:reconcile",
+          message: "PR is closed but unfinished work has not been re-delegated",
+        },
+      };
+    }
+    return {};
+  }
+
   const ciEntry = buildCiEntry({
     issue,
     gateCheckStatus,
@@ -435,28 +460,6 @@ async function evaluateGitHubIssueHealth(
     mergeConflictDetected,
     reviewQuillAttempt,
   });
-
-  if (pr.state === "MERGED" && issue.factoryState !== "done" && ageMs >= RECONCILIATION_GRACE_MS) {
-    return {
-      ciEntry,
-      finding: {
-        status: "fail",
-        scope: "github:reconcile",
-        message: "PR is already merged but the issue has not advanced to done",
-      },
-    };
-  }
-
-  if (pr.state === "CLOSED" && issue.factoryState !== "delegated" && issue.factoryState !== "done" && ageMs >= RECONCILIATION_GRACE_MS) {
-    return {
-      ciEntry,
-      finding: {
-        status: "fail",
-        scope: "github:reconcile",
-        message: "PR is closed but the issue is still waiting on PR state",
-      },
-    };
-  }
 
   if (gateCheckStatus === "failure" && issue.factoryState !== "repairing_ci" && issue.activeRunId === undefined && ageMs >= RECONCILIATION_GRACE_MS) {
     return {

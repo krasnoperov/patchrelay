@@ -13,6 +13,8 @@ export function isOpenPrState(prState: string | undefined): boolean {
 }
 
 export function hasOpenPr(prNumber: number | undefined, prState: string | undefined): boolean {
+  // Transitional compatibility: older rows may still have a tracked PR number
+  // before webhook/reconciliation has populated pr_state.
   return prNumber !== undefined && isOpenPrState(prState);
 }
 
@@ -40,6 +42,15 @@ export function resolveClosedPrDisposition(issue: Pick<PrLifecycleIssueLike, "cu
   if (isIssueCompleted(issue)) return "done";
   if (isIssueTerminal(issue)) return "terminal";
   return "redelegate";
+}
+
+export function resolveClosedPrFactoryState(
+  issue: Pick<PrLifecycleIssueLike, "currentLinearStateType" | "currentLinearState" | "factoryState">,
+): FactoryState {
+  const disposition = resolveClosedPrDisposition(issue);
+  if (disposition === "done") return "done";
+  if (disposition === "terminal") return issue.factoryState as FactoryState;
+  return "delegated";
 }
 
 export function buildClosedPrCleanupFields() {

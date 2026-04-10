@@ -22,8 +22,8 @@ import { buildQueueRepairContextFromEvent } from "./merge-queue-incident.ts";
 import { resolvePreferredCompletedLinearState } from "./linear-workflow.ts";
 import {
   buildClosedPrCleanupFields,
-  isIssueCompleted,
   isIssueTerminal,
+  resolveClosedPrFactoryState,
   resolveClosedPrDisposition,
 } from "./pr-state.ts";
 import { resolveSecret } from "./resolve-secret.ts";
@@ -326,10 +326,7 @@ export class GitHubWebhookHandler {
     event: NormalizedGitHubEvent,
     project?: ProjectConfig,
   ): FactoryState | undefined {
-    if (
-      event.triggerEvent === "pr_closed"
-      && (isIssueTerminal(issue) || isIssueCompleted(issue))
-    ) {
+    if (event.triggerEvent === "pr_closed") {
       return undefined;
     }
 
@@ -645,14 +642,9 @@ export class GitHubWebhookHandler {
             : "Pull request closed during active run",
         });
       }
-      const closedPrDisposition = resolveClosedPrDisposition(issue);
       const terminalFactoryState = event.triggerEvent === "pr_merged"
         ? "done"
-        : closedPrDisposition === "done"
-          ? "done"
-          : closedPrDisposition === "terminal"
-            ? issue.factoryState
-            : "failed";
+        : resolveClosedPrFactoryState(issue);
       this.db.issues.upsertIssue({
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
@@ -668,6 +660,18 @@ export class GitHubWebhookHandler {
     }
     this.db.issueSessions.releaseIssueSessionLeaseRespectingActiveLease(issue.projectId, issue.linearIssueId);
     const updatedIssue = this.db.issues.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
+    if (event.triggerEvent === "pr_closed" && resolveClosedPrDisposition(issue) === "redelegate") {
+      this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        eventType: "delegated",
+        dedupeKey: `github_pr_closed:implementation:${issue.linearIssueId}`,
+      });
+      this.db.issueSessions.setBranchOwnerRespectingActiveLease(issue.projectId, issue.linearIssueId, "patchrelay");
+      if (this.db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId)) {
+        this.enqueueIssue(issue.projectId, issue.linearIssueId);
+      }
+    }
     if (event.triggerEvent === "pr_merged") {
       await this.completeLinearIssueAfterMerge(updatedIssue);
     }
