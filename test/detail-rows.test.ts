@@ -213,6 +213,35 @@ test("buildDetailLines renders header status notes with markdown-friendly format
   assert.equal(noteLine?.segments.some((segment) => segment.dimColor === true), false);
 });
 
+test("buildDetailLines keeps volatile stream status out of the transcript body", () => {
+  const issue = makeIssue("USE-12", {
+    activeRunType: "implementation",
+  });
+
+  const text = detailText(buildDetailLines({
+    issue,
+    timeline: [],
+    activeRunStartedAt: "2026-03-25T10:10:00.000Z",
+    activeRunId: 12,
+    tokenUsage: null,
+    diffSummary: null,
+    plan: null,
+    issueContext: null,
+    detailTab: "timeline",
+    rawRuns: [],
+    rawFeedEvents: [],
+    follow: true,
+    connected: false,
+    lastServerMessageAt: Date.parse("2026-03-25T10:11:15.000Z"),
+    width: 90,
+  })).join("\n");
+
+  assert.doesNotMatch(text, /live edge/);
+  assert.doesNotMatch(text, /anchored review/);
+  assert.doesNotMatch(text, /disconnected · stale/);
+  assert.doesNotMatch(text, /run \d+m \d{2}s/);
+});
+
 test("buildDetailLines prefers full check summary over gate status for re-review state", () => {
   const issue = makeIssue("TST-30", {
     factoryState: "changes_requested",
