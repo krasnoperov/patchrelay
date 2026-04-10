@@ -20,11 +20,11 @@ import {
   verifySessionStatusToken,
 } from "./public-agent-session-status.ts";
 import { ServiceRuntime } from "./service-runtime.ts";
+import { ServiceIssueActions } from "./service-issue-actions.ts";
 import { ServiceStartupRecovery } from "./service-startup-recovery.ts";
 import { WebhookHandler } from "./webhook-handler.ts";
 import { acceptIncomingWebhook } from "./service-webhooks.ts";
 import type { AppConfig, LinearClient, LinearClientProvider } from "./types.ts";
-import type { IssueRecord } from "./db-types.ts";
 import { parseStringArray, TrackedIssueListQuery } from "./tracked-issue-list-query.ts";
 
 export class PatchRelayService {
@@ -37,6 +37,7 @@ export class PatchRelayService {
   private readonly queryService: IssueQueryService;
   private readonly runtime: ServiceRuntime;
   private readonly feed: OperatorEventFeed;
+  private readonly issueActions: ServiceIssueActions;
   private readonly startupRecovery: ServiceStartupRecovery;
   private readonly trackedIssueListQuery: TrackedIssueListQuery;
 
@@ -92,6 +93,7 @@ export class PatchRelayService {
     this.oauthService = new LinearOAuthService(config, { linearInstallations: db.linearInstallations }, logger);
     this.queryService = new IssueQueryService(db, codex, this.orchestrator);
     this.runtime = runtime;
+    this.issueActions = new ServiceIssueActions(db, codex, runtime, this.feed, logger);
     this.startupRecovery = new ServiceStartupRecovery(
       db,
       this.linearProvider,
@@ -314,169 +316,15 @@ export class PatchRelayService {
     text: string,
     source: string = "watch",
   ): Promise<{ delivered: boolean; queued?: boolean } | { error: string } | undefined> {
-    const issue = this.db.issues.getIssueByKey(issueKey);
-    if (!issue) return undefined;
-
-    // Publish to operator feed so all clients see the prompt
-    this.feed.publish({
-      level: "info",
-      kind: "comment",
-      issueKey: issue.issueKey,
-      projectId: issue.projectId,
-      stage: issue.factoryState,
-      status: "operator_prompt",
-      summary: `Operator prompt (${source})`,
-      detail: text.slice(0, 200),
-    });
-
-    // If no active run, queue as pending context for the next run
-    if (!issue.activeRunId) {
-      this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
-        projectId: issue.projectId,
-        linearIssueId: issue.linearIssueId,
-        eventType: "operator_prompt",
-        eventJson: JSON.stringify({ text, source }),
-      });
-      this.runtime.enqueueIssue(issue.projectId, issue.linearIssueId);
-      return { delivered: false, queued: true };
-    }
-
-    const run = this.db.runs.getRunById(issue.activeRunId);
-    if (!run?.threadId || !run.turnId) {
-      return { error: "Active run has no thread or turn yet" };
-    }
-
-    try {
-      await this.codex.steerTurn({
-        threadId: run.threadId,
-        turnId: run.turnId,
-        input: `Operator prompt (${source}):\n\n${text}`,
-      });
-      return { delivered: true };
-    } catch (error) {
-      // Turn may have completed between check and steer — queue for next run
-      const msg = error instanceof Error ? error.message : String(error);
-      this.logger.warn({ issueKey, error: msg }, "steerTurn failed, queuing prompt for next run");
-      this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
-        projectId: issue.projectId,
-        linearIssueId: issue.linearIssueId,
-        eventType: "operator_prompt",
-        eventJson: JSON.stringify({ text, source }),
-      });
-      this.runtime.enqueueIssue(issue.projectId, issue.linearIssueId);
-      return { delivered: false, queued: true };
-    }
+    return await this.issueActions.promptIssue(issueKey, text, source);
   }
 
   async stopIssue(issueKey: string): Promise<{ stopped: boolean } | { error: string } | undefined> {
-    const issue = this.db.issues.getIssueByKey(issueKey);
-    if (!issue) return undefined;
-    if (!issue.activeRunId) return { error: "No active run to stop" };
-
-    const run = this.db.runs.getRunById(issue.activeRunId);
-    if (run?.threadId && run.turnId) {
-      try {
-        await this.codex.steerTurn({
-          threadId: run.threadId,
-          turnId: run.turnId,
-          input: "STOP: The operator has requested this run to halt immediately. Finish your current action, commit any partial progress, and stop.",
-        });
-      } catch {
-        // Turn may already be done
-      }
-    }
-
-    this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      eventType: "stop_requested",
-      dedupeKey: `operator_stop:${issue.linearIssueId}`,
-    });
-    this.db.issueSessions.clearPendingIssueSessionEventsRespectingActiveLease(issue.projectId, issue.linearIssueId);
-
-    this.db.issueSessions.upsertIssueRespectingActiveLease(issue.projectId, issue.linearIssueId, {
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      factoryState: "awaiting_input" as never,
-    });
-
-    this.feed.publish({
-      level: "warn",
-      kind: "workflow",
-      issueKey: issue.issueKey,
-      projectId: issue.projectId,
-      status: "stopped",
-      summary: "Operator stopped the run",
-    });
-
-    return { stopped: true };
+    return await this.issueActions.stopIssue(issueKey);
   }
 
   retryIssue(issueKey: string): { issueKey: string; runType: string } | { error: string } | undefined {
-    const issue = this.db.issues.getIssueByKey(issueKey);
-    if (!issue) return undefined;
-    if (issue.activeRunId) return { error: "Issue already has an active run" };
-    const issueSession = this.db.issueSessions.getIssueSession(issue.projectId, issue.linearIssueId);
-
-    if (issue.prState === "merged") {
-      this.db.issueSessions.upsertIssueRespectingActiveLease(issue.projectId, issue.linearIssueId, {
-        projectId: issue.projectId,
-        linearIssueId: issue.linearIssueId,
-        factoryState: "done" as never,
-      });
-      return { issueKey, runType: "none" };
-    }
-
-    // Infer run type from current state instead of always resetting to implementation
-    let runType = "implementation";
-    let factoryState: string = "delegated";
-    if (issue.prNumber && issue.lastGitHubFailureSource === "queue_eviction") {
-      runType = "queue_repair";
-      factoryState = "repairing_queue";
-    } else if (issue.prNumber && (issue.prCheckStatus === "failed" || issue.prCheckStatus === "failure" || issue.lastGitHubFailureSource === "branch_ci")) {
-      runType = "ci_repair";
-      factoryState = "repairing_ci";
-    } else if (issue.prNumber && issue.prReviewState === "changes_requested") {
-      runType = issue.pendingRunType === "branch_upkeep" || issueSession?.lastRunType === "branch_upkeep"
-        ? "branch_upkeep"
-        : "review_fix";
-      factoryState = "changes_requested";
-    } else if (issue.prNumber) {
-      // PR exists but no specific failure — re-run implementation
-      runType = "implementation";
-      factoryState = "implementing";
-    }
-
-    this.appendOperatorRetryEvent(issue, runType);
-    this.db.issueSessions.upsertIssueRespectingActiveLease(issue.projectId, issue.linearIssueId, {
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      factoryState: factoryState as never,
-    });
-    this.feed.publish({
-      level: "info",
-      kind: "stage",
-      issueKey: issue.issueKey,
-      projectId: issue.projectId,
-      stage: factoryState,
-      status: "retry",
-      summary: `Retry queued: ${runType}`,
-    });
-    if (this.db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId)) {
-      this.runtime.enqueueIssue(issue.projectId, issue.linearIssueId);
-    }
-    return { issueKey, runType };
-  }
-
-  private appendOperatorRetryEvent(
-    issue: IssueRecord,
-    runType: string,
-  ): void {
-    this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      ...this.trackedIssueListQuery.buildOperatorRetryEvent(issue, runType),
-    });
+    return this.issueActions.retryIssue(issueKey);
   }
 
   async acceptWebhook(params: {
