@@ -1,5 +1,4 @@
 import type { Logger } from "pino";
-import { extractCompletionCheck } from "./completion-check.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord, RunRecord, TrackedIssueRecord } from "./db-types.ts";
 import type { RunType } from "./factory-state.ts";
@@ -7,8 +6,6 @@ import type { AppConfig, LinearClientProvider, LinearAgentActivityContent } from
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import { buildAgentSessionPlanForIssue } from "./agent-session-plan.ts";
 import { buildAgentSessionExternalUrls } from "./agent-session-presentation.ts";
-import { deriveIssueStatusNote } from "./status-note.ts";
-import { derivePatchRelayWaitingReason } from "./waiting-reason.ts";
 import {
   resolvePreferredDeployingLinearState,
   resolvePreferredHumanNeededLinearState,
@@ -16,6 +13,7 @@ import {
   resolvePreferredReviewLinearState,
   resolvePreferredReviewingLinearState,
 } from "./linear-workflow.ts";
+import { shouldSyncVisibleIssueComment, syncVisibleStatusComment } from "./linear-status-comment-sync.ts";
 import { sanitizeOperatorFacingCommand, sanitizeOperatorFacingText } from "./presentation-text.ts";
 
 const PROGRESS_THROTTLE_MS = 5_000;
@@ -100,7 +98,14 @@ export class LinearSessionSync {
         });
       }
       if (shouldSyncVisibleIssueComment(trackedIssue ?? syncedIssue, Boolean(syncedIssue.agentSessionId))) {
-        await this.syncStatusComment(syncedIssue, linear, options);
+        await syncVisibleStatusComment({
+          db: this.db,
+          issue: syncedIssue,
+          linear,
+          logger: this.logger,
+          ...(trackedIssue ? { trackedIssue } : {}),
+          ...(options ? { options } : {}),
+        });
       }
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -306,194 +311,6 @@ export class LinearSessionSync {
     this.agentMessageProgressPublished.add(messageKey);
     return { sentence };
   }
-
-  private async syncStatusComment(
-    issue: IssueRecord,
-    linear: NonNullable<Awaited<ReturnType<LinearClientProvider["forProject"]>>>,
-    options?: { activeRunType?: RunType },
-  ): Promise<void> {
-    try {
-      const trackedIssue = this.db.getTrackedIssue(issue.projectId, issue.linearIssueId);
-      const body = renderStatusComment(this.db, issue, trackedIssue, options);
-      const result = await linear.upsertIssueComment({
-        issueId: issue.linearIssueId,
-        ...(issue.statusCommentId ? { commentId: issue.statusCommentId } : {}),
-        body,
-      });
-      if (result.id !== issue.statusCommentId) {
-        this.db.issues.upsertIssue({
-          projectId: issue.projectId,
-          linearIssueId: issue.linearIssueId,
-          statusCommentId: result.id,
-        });
-      }
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      this.logger.warn({ issueKey: issue.issueKey, error: msg }, "Failed to sync Linear status comment");
-    }
-  }
-}
-
-function renderStatusComment(
-  db: PatchRelayDatabase,
-  issue: IssueRecord,
-  trackedIssue: TrackedIssueRecord | undefined,
-  options?: { activeRunType?: RunType },
-): string {
-  const activeRun = issue.activeRunId ? db.runs.getRunById(issue.activeRunId) : undefined;
-  const latestRun = db.runs.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
-  const latestEvent = db.issueSessions.listIssueSessionEvents(issue.projectId, issue.linearIssueId, { limit: 1 }).at(-1);
-  const activeRunType = issue.activeRunId !== undefined
-    ? (options?.activeRunType ?? activeRun?.runType)
-    : undefined;
-  const waitingReason = trackedIssue?.waitingReason ?? derivePatchRelayWaitingReason({
-    ...(activeRunType ? { activeRunType } : {}),
-    ...(issue.activeRunId !== undefined ? { activeRunId: issue.activeRunId } : {}),
-    factoryState: issue.factoryState,
-    pendingRunType: issue.pendingRunType,
-    ...(issue.prNumber !== undefined ? { prNumber: issue.prNumber } : {}),
-    prHeadSha: issue.prHeadSha,
-    prReviewState: issue.prReviewState,
-    prCheckStatus: issue.prCheckStatus,
-    lastBlockingReviewHeadSha: issue.lastBlockingReviewHeadSha,
-    latestFailureCheckName: issue.lastGitHubFailureCheckName,
-  });
-
-  const lines = [
-    "## PatchRelay status",
-    "",
-    statusHeadline(trackedIssue ?? issue, activeRunType),
-  ];
-  const statusNote = trackedIssue?.statusNote ?? deriveIssueStatusNote({ issue, latestRun, latestEvent, waitingReason });
-
-  if (waitingReason) {
-    lines.push("", `Waiting: ${waitingReason}`);
-  }
-  if (statusNote && statusNote !== waitingReason) {
-    const label = trackedIssue?.sessionState === "waiting_input" || issue.factoryState === "awaiting_input" ? "Input needed"
-      : trackedIssue?.sessionState === "failed" || issue.factoryState === "failed" || issue.factoryState === "escalated" ? "Action needed"
-      : "Note";
-    lines.push("", `${label}: ${statusNote}`);
-  }
-
-  const completionCheck = extractCompletionCheck(latestRun);
-  if (completionCheck?.outcome === "needs_input") {
-    if (completionCheck.why) {
-      lines.push("", `Why: ${completionCheck.why}`);
-    }
-    if (completionCheck.recommendedReply) {
-      lines.push("", `Suggested reply: ${completionCheck.recommendedReply}`);
-    }
-    const issueRef = issue.issueKey ?? issue.linearIssueId;
-    lines.push("", `Reply in a Linear comment to continue, or run \`patchrelay issue prompt ${issueRef} "..."\`.`);
-  }
-
-  if (issue.prNumber !== undefined || issue.prUrl) {
-    const prLabel = issue.prNumber !== undefined ? `#${issue.prNumber}` : "open";
-    lines.push("", `PR: ${issue.prUrl ? `[${prLabel}](${issue.prUrl})` : prLabel}`);
-  }
-
-  if (latestRun) {
-    lines.push("", `Latest run: ${formatLatestRun(latestRun)}`);
-    if (latestRun.failureReason) {
-      lines.push("", `Failure: ${latestRun.failureReason}`);
-    }
-    if (completionCheck && completionCheck.outcome !== "needs_input" && completionCheck.summary !== statusNote) {
-      lines.push("", `Completion check: ${completionCheck.summary}`);
-    }
-  }
-
-  if (issue.lastGitHubFailureCheckName && (issue.factoryState === "repairing_ci" || issue.prCheckStatus === "failed" || issue.prCheckStatus === "failure")) {
-    lines.push("", `Latest failing check: ${issue.lastGitHubFailureCheckName}`);
-  }
-
-  lines.push(
-    "",
-    "_PatchRelay updates this comment as it works. Review and merge remain downstream._",
-  );
-
-  return lines.join("\n");
-}
-
-function shouldSyncVisibleIssueComment(
-  issue: Pick<IssueRecord, "factoryState" | "prNumber" | "prUrl"> & {
-    sessionState?: string | undefined;
-  },
-  hasAgentSession: boolean,
-): boolean {
-  if (!hasAgentSession) {
-    return true;
-  }
-
-  if (issue.sessionState === "waiting_input" || issue.sessionState === "failed"
-    || issue.factoryState === "awaiting_input" || issue.factoryState === "failed" || issue.factoryState === "escalated") {
-    return true;
-  }
-
-  if ((issue.sessionState === "done" || issue.factoryState === "done") && issue.prNumber === undefined && !issue.prUrl) {
-    return true;
-  }
-
-  return false;
-}
-
-function statusHeadline(
-  issue: Pick<IssueRecord, "factoryState" | "prNumber"> & {
-    sessionState?: string | undefined;
-    waitingReason?: string | undefined;
-  },
-  activeRunType?: string,
-): string {
-  if (activeRunType) {
-    return `Running ${humanize(activeRunType)}`;
-  }
-  switch (issue.sessionState) {
-    case "waiting_input":
-      return issue.waitingReason ?? "Waiting for more input";
-    case "running":
-      return issue.prNumber !== undefined ? `PR #${issue.prNumber} is actively running` : "Actively running";
-    case "done":
-      return issue.prNumber !== undefined ? `Completed with PR #${issue.prNumber}` : "Completed";
-    case "failed":
-      return "Needs operator intervention";
-    default:
-      break;
-  }
-  switch (issue.factoryState) {
-    case "delegated":
-      return "Queued to start work";
-    case "implementing":
-      return "Implementing requested change";
-    case "pr_open":
-      return issue.prNumber !== undefined ? `PR #${issue.prNumber} opened` : "PR opened";
-    case "changes_requested":
-      return "Addressing requested review changes";
-    case "repairing_ci":
-      return "Repairing failing CI";
-    case "awaiting_queue":
-      return "Handed off downstream for merge";
-    case "repairing_queue":
-      return "Repairing merge handoff";
-    case "awaiting_input":
-      return "Waiting for more input";
-    case "failed":
-      return "Needs operator intervention";
-    case "escalated":
-      return "Needs operator intervention";
-    case "done":
-      return issue.prNumber !== undefined ? `Completed with PR #${issue.prNumber}` : "Completed";
-    default:
-      return humanize(issue.factoryState);
-  }
-}
-
-function formatLatestRun(run: Pick<RunRecord, "runType" | "status" | "endedAt" | "startedAt">): string {
-  const at = run.endedAt ?? run.startedAt;
-  return `${humanize(run.runType)} ${run.status} at ${at}`;
-}
-
-function humanize(value: string): string {
-  return value.replaceAll("_", " ");
 }
 
 function shouldAutoAdvanceLinearState(issue: {
