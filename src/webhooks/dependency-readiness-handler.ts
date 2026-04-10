@@ -31,6 +31,7 @@ export class DependencyReadinessHandler {
       }
 
       if (issue.factoryState !== "delegated"
+        || !issue.delegatedToPatchRelay
         || issue.activeRunId !== undefined
         || this.db.issueSessions.hasPendingIssueSessionEvents(projectId, dependent.linearIssueId)) {
         continue;

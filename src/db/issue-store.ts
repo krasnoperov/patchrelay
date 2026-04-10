@@ -1,5 +1,4 @@
 import type {
-  BranchOwner,
   GitHubCiSnapshotRecord,
   GitHubFailureSource,
   IssueDependencyRecord,
@@ -11,6 +10,7 @@ import { isoNow, type DatabaseConnection } from "./shared.ts";
 export interface UpsertIssueParams {
   projectId: string;
   linearIssueId: string;
+  delegatedToPatchRelay?: boolean;
   issueKey?: string;
   title?: string;
   description?: string;
@@ -75,6 +75,7 @@ export class IssueStore {
         projectId: params.projectId,
         linearIssueId: params.linearIssueId,
       };
+      if (params.delegatedToPatchRelay !== undefined) { sets.push("delegated_to_patchrelay = @delegatedToPatchRelay"); values.delegatedToPatchRelay = params.delegatedToPatchRelay ? 1 : 0; }
       if (params.issueKey !== undefined) { sets.push("issue_key = COALESCE(@issueKey, issue_key)"); values.issueKey = params.issueKey; }
       if (params.title !== undefined) { sets.push("title = COALESCE(@title, title)"); values.title = params.title; }
       if (params.description !== undefined) { sets.push("description = COALESCE(@description, description)"); values.description = params.description; }
@@ -125,7 +126,7 @@ export class IssueStore {
     } else {
       this.connection.prepare(`
         INSERT INTO issues (
-          project_id, linear_issue_id, issue_key, title, description, url,
+          project_id, linear_issue_id, delegated_to_patchrelay, issue_key, title, description, url,
           priority, estimate,
           current_linear_state, current_linear_state_type, factory_state, pending_run_type, pending_run_context_json,
           branch_name, worktree_path, thread_id, active_run_id, status_comment_id,
@@ -138,7 +139,7 @@ export class IssueStore {
           ci_repair_attempts, queue_repair_attempts, review_fix_attempts, zombie_recovery_attempts, last_zombie_recovery_at,
           updated_at
         ) VALUES (
-          @projectId, @linearIssueId, @issueKey, @title, @description, @url,
+          @projectId, @linearIssueId, @delegatedToPatchRelay, @issueKey, @title, @description, @url,
           @priority, @estimate,
           @currentLinearState, @currentLinearStateType, @factoryState, @pendingRunType, @pendingRunContextJson,
           @branchName, @worktreePath, @threadId, @activeRunId, @statusCommentId,
@@ -154,6 +155,7 @@ export class IssueStore {
       `).run({
         projectId: params.projectId,
         linearIssueId: params.linearIssueId,
+        delegatedToPatchRelay: params.delegatedToPatchRelay === false ? 0 : 1,
         issueKey: params.issueKey ?? null,
         title: params.title ?? null,
         description: params.description ?? null,
@@ -295,15 +297,6 @@ export class IssueStore {
     return rows.map(mapIssueRow);
   }
 
-  setBranchOwner(projectId: string, linearIssueId: string, owner: BranchOwner): void {
-    const now = isoNow();
-    this.connection.prepare(`
-      UPDATE issues
-      SET branch_owner = ?, branch_ownership_changed_at = ?, updated_at = ?
-      WHERE project_id = ? AND linear_issue_id = ?
-    `).run(owner, now, now, projectId, linearIssueId);
-  }
-
   replaceIssueDependencies(params: {
     projectId: string;
     linearIssueId: string;
@@ -432,6 +425,7 @@ export function mapIssueRow(row: Record<string, unknown>): IssueRecord {
     id: Number(row.id),
     projectId: String(row.project_id),
     linearIssueId: String(row.linear_issue_id),
+    delegatedToPatchRelay: Number(row.delegated_to_patchrelay ?? 1) !== 0,
     ...(row.issue_key !== null ? { issueKey: String(row.issue_key) } : {}),
     ...(row.title !== null ? { title: String(row.title) } : {}),
     ...(row.description !== null && row.description !== undefined ? { description: String(row.description) } : {}),
@@ -446,12 +440,6 @@ export function mapIssueRow(row: Record<string, unknown>): IssueRecord {
     ...(row.pending_run_type !== null && row.pending_run_type !== undefined ? { pendingRunType: String(row.pending_run_type) as RunType } : {}),
     ...(row.pending_run_context_json !== null && row.pending_run_context_json !== undefined ? { pendingRunContextJson: String(row.pending_run_context_json) } : {}),
     ...(row.branch_name !== null ? { branchName: String(row.branch_name) } : {}),
-    ...(row.branch_owner !== null && row.branch_owner !== undefined && String(row.branch_owner) === "patchrelay"
-      ? { branchOwner: "patchrelay" as BranchOwner }
-      : { branchOwner: "patchrelay" as BranchOwner }),
-    ...(row.branch_ownership_changed_at !== null && row.branch_ownership_changed_at !== undefined
-      ? { branchOwnershipChangedAt: String(row.branch_ownership_changed_at) }
-      : {}),
     ...(row.worktree_path !== null ? { worktreePath: String(row.worktree_path) } : {}),
     ...(row.thread_id !== null ? { threadId: String(row.thread_id) } : {}),
     ...(row.active_run_id !== null ? { activeRunId: Number(row.active_run_id) } : {}),

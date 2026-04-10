@@ -1,5 +1,5 @@
 import type { Logger } from "pino";
-import type { BranchOwner, IssueRecord, RunRecord } from "./db-types.ts";
+import type { IssueRecord, RunRecord } from "./db-types.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { FactoryState, RunType } from "./factory-state.ts";
 import type {
@@ -25,7 +25,6 @@ export class RunRecoveryService {
     private readonly appendWakeEventWithLease: AppendWakeEventWithLease,
     private readonly releaseLease: ReleaseIssueSessionLease,
     private readonly enqueueIssue: (projectId: string, issueId: string) => void,
-    private readonly resolveBranchOwnerForStateTransition: (newState: FactoryState, pendingRunType?: RunType) => BranchOwner | undefined,
     private readonly feed?: OperatorEventFeed,
   ) {}
 
@@ -219,13 +218,6 @@ export class RunRecoveryService {
         activeRunId: null,
         factoryState: nextState,
       });
-      const branchOwner = this.resolveBranchOwnerForStateTransition(nextState);
-      if (branchOwner) {
-        const heldLease = this.getHeldLease(run.projectId, run.linearIssueId);
-        if (heldLease) {
-          this.db.issueSessions.setBranchOwnerWithLease(heldLease, branchOwner);
-        }
-      }
       return true;
     });
     if (!updated) {

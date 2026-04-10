@@ -187,6 +187,7 @@ test("linear summaries prefer session state over factory state", () => {
       sessionState: "waiting_input",
       waitingReason: "Waiting for a merge queue retry.",
       prNumber: 7,
+      delegatedToPatchRelay: true,
       prState: "open",
       prReviewState: "approved",
       prCheckStatus: "passed",
@@ -200,6 +201,7 @@ test("linear summaries prefer session state over factory state", () => {
       sessionState: "running",
       waitingReason: "PatchRelay is finalizing a published PR",
       prNumber: 8,
+      delegatedToPatchRelay: true,
       prState: "open",
       prReviewState: "approved",
       prCheckStatus: "passed",
@@ -216,6 +218,73 @@ test("linear summaries describe closed historical PRs as non-merged completion",
       prState: "closed",
     }),
     "Completed without merging PR #193.",
+  );
+});
+
+test("linear summaries describe paused undelegated PR-backed states explicitly", () => {
+  assert.equal(
+    summarizeIssueStateForLinear({
+      factoryState: "pr_open",
+      sessionState: "idle",
+      delegatedToPatchRelay: false,
+      prNumber: 41,
+      prState: "open",
+      prReviewState: "review_required",
+      prCheckStatus: "success",
+    }),
+    "PR #41 is awaiting review while PatchRelay is paused.",
+  );
+
+  assert.equal(
+    summarizeIssueStateForLinear({
+      factoryState: "changes_requested",
+      sessionState: "idle",
+      delegatedToPatchRelay: false,
+      prNumber: 42,
+      prState: "open",
+      prReviewState: "changes_requested",
+      prCheckStatus: "success",
+    }),
+    "PR #42 has requested changes while PatchRelay is paused.",
+  );
+
+  assert.equal(
+    summarizeIssueStateForLinear({
+      factoryState: "awaiting_queue",
+      sessionState: "idle",
+      delegatedToPatchRelay: false,
+      prNumber: 43,
+      prState: "open",
+      prReviewState: "approved",
+      prCheckStatus: "success",
+    }),
+    "PR #43 is approved and awaiting merge while PatchRelay is paused.",
+  );
+});
+
+test("linear summaries describe paused undelegated no-PR states explicitly", () => {
+  assert.equal(
+    summarizeIssueStateForLinear({
+      factoryState: "delegated",
+      sessionState: "idle",
+      delegatedToPatchRelay: false,
+      prState: undefined,
+      prReviewState: undefined,
+      prCheckStatus: undefined,
+    }),
+    "PatchRelay is queued to start work, but automation is paused.",
+  );
+
+  assert.equal(
+    summarizeIssueStateForLinear({
+      factoryState: "implementing",
+      sessionState: "idle",
+      delegatedToPatchRelay: false,
+      prState: undefined,
+      prReviewState: undefined,
+      prCheckStatus: undefined,
+    }),
+    "Implementation is paused because the issue is undelegated.",
   );
 });
 

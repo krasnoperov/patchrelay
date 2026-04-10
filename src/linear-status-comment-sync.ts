@@ -6,6 +6,7 @@ import type { RunType } from "./factory-state.ts";
 import { deriveIssueStatusNote } from "./status-note.ts";
 import { derivePatchRelayWaitingReason } from "./waiting-reason.ts";
 import { isClosedPrState } from "./pr-state.ts";
+import { isUndelegatedPausedIssue } from "./paused-issue-state.ts";
 import type { LinearClientProvider } from "./types.ts";
 
 export async function syncVisibleStatusComment(params: {
@@ -38,7 +39,7 @@ export async function syncVisibleStatusComment(params: {
 }
 
 export function shouldSyncVisibleIssueComment(
-  issue: Pick<IssueRecord, "factoryState" | "prNumber" | "prUrl" | "prState"> & {
+  issue: Pick<IssueRecord, "factoryState" | "prNumber" | "prUrl" | "prState" | "delegatedToPatchRelay"> & {
     sessionState?: string | undefined;
   },
   hasAgentSession: boolean,
@@ -49,6 +50,10 @@ export function shouldSyncVisibleIssueComment(
 
   if (issue.sessionState === "waiting_input" || issue.sessionState === "failed"
     || issue.factoryState === "awaiting_input" || issue.factoryState === "failed" || issue.factoryState === "escalated") {
+    return true;
+  }
+
+  if (isUndelegatedPausedIssue(issue)) {
     return true;
   }
 
@@ -78,6 +83,7 @@ function renderStatusComment(
     ? (options?.activeRunType ?? activeRun?.runType)
     : undefined;
   const waitingReason = trackedIssue?.waitingReason ?? derivePatchRelayWaitingReason({
+    delegatedToPatchRelay: issue.delegatedToPatchRelay,
     ...(activeRunType ? { activeRunType } : {}),
     ...(issue.activeRunId !== undefined ? { activeRunId: issue.activeRunId } : {}),
     factoryState: issue.factoryState,
@@ -94,7 +100,18 @@ function renderStatusComment(
   const lines = [
     "## PatchRelay status",
     "",
-    statusHeadline(trackedIssue ?? issue, activeRunType),
+    statusHeadline(
+      trackedIssue
+        ? {
+            ...trackedIssue,
+            delegatedToPatchRelay: issue.delegatedToPatchRelay,
+            prNumber: issue.prNumber,
+            prReviewState: issue.prReviewState,
+            prCheckStatus: issue.prCheckStatus,
+          }
+        : issue,
+      activeRunType,
+    ),
   ];
   const statusNote = trackedIssue?.statusNote ?? deriveIssueStatusNote({ issue, latestRun, latestEvent, waitingReason });
 
@@ -148,7 +165,7 @@ function renderStatusComment(
 }
 
 function statusHeadline(
-  issue: Pick<IssueRecord, "factoryState" | "prNumber" | "prState"> & {
+  issue: Pick<IssueRecord, "factoryState" | "prNumber" | "prState" | "delegatedToPatchRelay" | "prReviewState" | "prCheckStatus"> & {
     sessionState?: string | undefined;
     waitingReason?: string | undefined;
   },
@@ -170,6 +187,26 @@ function statusHeadline(
       return "Needs operator intervention";
     default:
       break;
+  }
+  if (!issue.delegatedToPatchRelay && issue.prNumber !== undefined) {
+    if (issue.factoryState === "awaiting_queue" || issue.prReviewState === "approved") {
+      return `PR #${issue.prNumber} is awaiting downstream merge while PatchRelay is paused`;
+    }
+    if (issue.factoryState === "changes_requested" || issue.prReviewState === "changes_requested") {
+      return `PR #${issue.prNumber} has requested changes while PatchRelay is paused`;
+    }
+    if (issue.factoryState === "repairing_ci" || issue.prCheckStatus === "failed" || issue.prCheckStatus === "failure") {
+      return `PR #${issue.prNumber} has failing CI while PatchRelay is paused`;
+    }
+    return `PR #${issue.prNumber} is awaiting review while PatchRelay is paused`;
+  }
+  if (!issue.delegatedToPatchRelay) {
+    if (issue.factoryState === "implementing") {
+      return "Implementation is paused because the issue is undelegated";
+    }
+    if (issue.factoryState === "delegated") {
+      return "Queued to start work while PatchRelay is paused";
+    }
   }
   switch (issue.factoryState) {
     case "delegated":

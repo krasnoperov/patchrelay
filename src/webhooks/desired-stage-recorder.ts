@@ -2,6 +2,7 @@ import type { PatchRelayDatabase } from "../db.ts";
 import type { RunType } from "../factory-state.ts";
 import type { OperatorEventFeed } from "../operator-feed.ts";
 import { triggerEventAllowed } from "../project-resolution.ts";
+import { resolveAwaitingInputReason } from "../awaiting-input-reason.ts";
 import {
   decideActiveRunRelease,
   decideAgentSession,
@@ -9,6 +10,7 @@ import {
   decideUnDelegation,
   isTerminalDelegationState,
   mergeIssueMetadata,
+  resolveReDelegationResume,
 } from "./decision-helpers.ts";
 import type {
   IssueMetadata,
@@ -17,6 +19,7 @@ import type {
   ProjectConfig,
   TrackedIssueRecord,
 } from "../types.ts";
+import { buildOperatorRetryEvent } from "../operator-retry-event.ts";
 
 export class DesiredStageRecorder {
   constructor(
@@ -42,6 +45,7 @@ export class DesiredStageRecorder {
 
     const existingIssue = this.db.issues.getIssue(params.project.id, normalizedIssue.id);
     const activeRun = existingIssue?.activeRunId ? this.db.runs.getRunById(existingIssue.activeRunId) : undefined;
+    const latestRun = existingIssue ? this.db.runs.getLatestRunForIssue(params.project.id, normalizedIssue.id) : undefined;
     const delegated = this.isDelegatedToPatchRelay(params.project, params.normalized);
     const triggerAllowed = triggerEventAllowed(params.project, params.normalized.triggerEvent);
     const incomingAgentSessionId = params.normalized.agentSession?.id;
@@ -77,12 +81,22 @@ export class DesiredStageRecorder {
       triggerEvent: params.normalized.triggerEvent,
       delegated,
       currentState: existingIssue?.factoryState,
+      hasPr: existingIssue?.prNumber !== undefined && existingIssue?.prState !== "merged",
     });
-    const delegatedStateRecovery =
-      delegated
-      && !terminal
-      && existingIssue?.factoryState === "awaiting_input"
-      && !undelegation.factoryState;
+    const reDelegationResume = resolveReDelegationResume({
+      delegated,
+      previouslyDelegated: existingIssue?.delegatedToPatchRelay,
+      currentState: existingIssue?.factoryState,
+      awaitingInputReason: existingIssue
+        ? resolveAwaitingInputReason({ issue: existingIssue, latestRun })
+        : undefined,
+      unresolvedBlockers,
+      prNumber: existingIssue?.prNumber,
+      prState: existingIssue?.prState,
+      prReviewState: existingIssue?.prReviewState,
+      prCheckStatus: existingIssue?.prCheckStatus,
+      latestFailureSource: existingIssue?.lastGitHubFailureSource,
+    });
 
     const existingWakeRunType = existingIssue
       ? params.peekPendingSessionWakeRunType(params.project.id, normalizedIssue.id)
@@ -108,9 +122,13 @@ export class DesiredStageRecorder {
         ...(hydratedIssue.estimate != null ? { estimate: hydratedIssue.estimate } : {}),
         ...(hydratedIssue.stateName ? { currentLinearState: hydratedIssue.stateName } : {}),
         ...(hydratedIssue.stateType ? { currentLinearStateType: hydratedIssue.stateType } : {}),
+        delegatedToPatchRelay: delegated,
         ...(!existingIssue && !delegated && incomingAgentSessionId ? { factoryState: "awaiting_input" as const } : {}),
-        ...(delegatedStateRecovery ? { factoryState: "delegated" as const } : {}),
-        ...(desiredStage ? { pendingRunType: null, pendingRunContextJson: null, factoryState: "delegated" as const } : {}),
+        ...(reDelegationResume.factoryState ? { factoryState: reDelegationResume.factoryState as never } : {}),
+        ...(reDelegationResume.pendingRunType !== undefined
+          ? { pendingRunType: null, pendingRunContextJson: null }
+          : {}),
+        ...(!reDelegationResume.factoryState && desiredStage ? { pendingRunType: null, pendingRunContextJson: null, factoryState: "delegated" as const } : {}),
         ...(clearPending ? { pendingRunType: null, pendingRunContextJson: null } : {}),
         ...(agentSessionId !== undefined ? { agentSessionId } : {}),
         ...(runRelease.release ? { activeRunId: null } : {}),
@@ -148,11 +166,22 @@ export class DesiredStageRecorder {
         kind: "stage",
         issueKey: issue.issueKey,
         projectId: params.project.id,
-        stage: "awaiting_input",
+        stage: issue.factoryState,
         status: "un_delegated",
-        summary: "Issue un-delegated from PatchRelay",
+        summary: issue.factoryState === "awaiting_input"
+          ? "Issue un-delegated from PatchRelay"
+          : `Issue un-delegated from PatchRelay; ${issue.factoryState} is now paused`,
+      });
+    } else if (reDelegationResume.pendingRunType) {
+      this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(params.project.id, normalizedIssue.id, {
+        projectId: params.project.id,
+        linearIssueId: normalizedIssue.id,
+        ...buildOperatorRetryEvent(issue, reDelegationResume.pendingRunType, "re_delegated"),
       });
     } else if (
+      !reDelegationResume.factoryState
+      && !reDelegationResume.pendingRunType
+      &&
       desiredStage === "implementation"
       && params.normalized.triggerEvent !== "commentCreated"
       && params.normalized.triggerEvent !== "commentUpdated"

@@ -1,5 +1,4 @@
 import type {
-  BranchOwner,
   GitHubCiSnapshotRecord,
   IssueRecord,
   IssueSessionEventRecord,
@@ -50,6 +49,7 @@ function deriveImplicitReactiveWake(issue: IssueRecord):
   | { runType: RunType; wakeReason: string; context: Record<string, unknown> }
   | undefined {
   const reactiveIntent = deriveIssueSessionReactiveIntent({
+    delegatedToPatchRelay: issue.delegatedToPatchRelay,
     activeRunId: issue.activeRunId,
     prNumber: issue.prNumber,
     prState: issue.prState,
@@ -186,10 +186,6 @@ export class PatchRelayDatabase {
 
   getIssueByPrNumber(prNumber: number): IssueRecord | undefined {
     return this.issues.getIssueByPrNumber(prNumber);
-  }
-
-  setBranchOwner(projectId: string, linearIssueId: string, owner: BranchOwner): void {
-    this.issues.setBranchOwner(projectId, linearIssueId, owner);
   }
 
   replaceIssueDependencies(params: {

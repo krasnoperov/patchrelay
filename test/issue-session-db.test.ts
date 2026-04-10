@@ -27,8 +27,6 @@ test("migrations create issue_sessions and upgrade legacy issue schema", () => {
         pending_run_type TEXT,
         pending_run_context_json TEXT,
         branch_name TEXT,
-        branch_owner TEXT NOT NULL DEFAULT 'patchrelay',
-        branch_ownership_changed_at TEXT,
         worktree_path TEXT,
         thread_id TEXT,
         active_run_id INTEGER,
@@ -53,6 +51,8 @@ test("migrations create issue_sessions and upgrade legacy issue schema", () => {
     assert.ok(!issueColumns.some((column) => column.name === "queue_label_applied"));
     assert.ok(!issueColumns.some((column) => column.name === "pending_merge_prep"));
     assert.ok(!issueColumns.some((column) => column.name === "merge_prep_attempts"));
+    assert.ok(!issueColumns.some((column) => column.name === "branch_owner"));
+    assert.ok(!issueColumns.some((column) => column.name === "branch_ownership_changed_at"));
 
     const sessionColumns = connection.prepare("PRAGMA table_info(issue_sessions)").all() as Array<Record<string, unknown>>;
     assert.ok(sessionColumns.some((column) => column.name === "session_state"));
@@ -412,7 +412,6 @@ test("active-lease-aware helpers use the current live lease for control writes",
       linearIssueId: "issue-active-lease",
       issueKey: "USE-ACTIVE-LEASE",
       factoryState: "delegated",
-      branchOwner: "user",
     });
     db.issueSessions.appendIssueSessionEvent({
       projectId: "usertold",
@@ -462,18 +461,6 @@ test("active-lease-aware helpers use the current live lease for control writes",
     assert.equal(db.issueSessions.hasPendingIssueSessionEvents("usertold", "issue-active-lease"), true);
     assert.equal(db.issueSessions.clearPendingIssueSessionEventsRespectingActiveLease("usertold", "issue-active-lease"), true);
     assert.equal(db.issueSessions.hasPendingIssueSessionEvents("usertold", "issue-active-lease"), false);
-
-    const originalBranchOwner = db.getIssue("usertold", "issue-active-lease")?.branchOwner;
-    assert.equal(
-      db.issueSessions.setBranchOwnerWithLease(
-        { projectId: "usertold", linearIssueId: "issue-active-lease", leaseId: "lease-1" },
-        "patchrelay",
-      ),
-      false,
-    );
-    assert.equal(db.getIssue("usertold", "issue-active-lease")?.branchOwner, originalBranchOwner);
-    assert.equal(db.issueSessions.setBranchOwnerRespectingActiveLease("usertold", "issue-active-lease", "patchrelay"), true);
-    assert.equal(db.getIssue("usertold", "issue-active-lease")?.branchOwner, "patchrelay");
 
     db.issueSessions.releaseIssueSessionLeaseRespectingActiveLease("usertold", "issue-active-lease");
     assert.equal(db.issueSessions.getIssueSession("usertold", "issue-active-lease")?.leaseId, undefined);

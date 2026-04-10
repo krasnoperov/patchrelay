@@ -59,6 +59,19 @@ export class CommentWakeHandler {
       return;
     }
 
+    if (!issue.delegatedToPatchRelay) {
+      this.feed?.publish({
+        level: "info",
+        kind: "comment",
+        projectId: project.id,
+        issueKey: trackedIssue?.issueKey,
+        status: "ignored_undelegated",
+        summary: "Ignored comment because the issue is undelegated",
+        detail: trimmedBody.slice(0, 200),
+      });
+      return;
+    }
+
     if (!issue.activeRunId) {
       if (ENQUEUEABLE_STATES.has(issue.factoryState)) {
         const directReply = params.isDirectReplyToOutstandingQuestion(issue);

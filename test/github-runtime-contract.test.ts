@@ -5,6 +5,7 @@ import path from "node:path";
 import pino from "pino";
 import test from "node:test";
 import { PatchRelayDatabase } from "../src/db.ts";
+import type { GitHubCiSnapshotResolver, GitHubFailureContextResolver } from "../src/github-failure-context.ts";
 import { GitHubWebhookHandler } from "../src/github-webhook-handler.ts";
 import { normalizeGitHubWebhook } from "../src/github-webhooks.ts";
 import type { AppConfig, GitHubWebhookPayload, LinearClient } from "../src/types.ts";
@@ -82,6 +83,8 @@ function createHandler(
   baseDir: string,
   options?: {
     linearProvider?: { forProject(projectId: string): Promise<LinearClient | undefined> };
+    failureContextResolver?: GitHubFailureContextResolver;
+    ciSnapshotResolver?: GitHubCiSnapshotResolver;
     fetchImpl?: typeof fetch;
   },
 ) {
@@ -99,8 +102,8 @@ function createHandler(
     pino({ enabled: false }),
     { steerTurn: async () => undefined } as never,
     undefined,
-    undefined,
-    undefined,
+    options?.failureContextResolver,
+    options?.ciSnapshotResolver,
     options?.fetchImpl,
   );
   return { db, enqueueCalls, handler };
@@ -111,6 +114,8 @@ function buildApprovedReviewPayload(params: {
   headSha: string;
   prNumber: number;
   prAuthorLogin?: string;
+  prTitle?: string;
+  prBody?: string;
 }): string {
   return JSON.stringify({
     action: "submitted",
@@ -118,6 +123,8 @@ function buildApprovedReviewPayload(params: {
     pull_request: {
       number: params.prNumber,
       html_url: `https://github.com/owner/repo/pull/${params.prNumber}`,
+      title: params.prTitle ?? `PR for #${params.prNumber}`,
+      body: params.prBody ?? "",
       state: "open",
       merged: false,
       user: { login: params.prAuthorLogin ?? "patchrelay[bot]" },
@@ -139,6 +146,8 @@ function buildChangesRequestedReviewPayload(params: {
   prAuthorLogin: string;
   reviewId?: number;
   reviewCommitId?: string;
+  prTitle?: string;
+  prBody?: string;
 }): string {
   return JSON.stringify({
     action: "submitted",
@@ -146,6 +155,8 @@ function buildChangesRequestedReviewPayload(params: {
     pull_request: {
       number: params.prNumber,
       html_url: `https://github.com/owner/repo/pull/${params.prNumber}`,
+      title: params.prTitle ?? `PR for #${params.prNumber}`,
+      body: params.prBody ?? "",
       state: "open",
       merged: false,
       user: { login: params.prAuthorLogin },
@@ -158,6 +169,31 @@ function buildChangesRequestedReviewPayload(params: {
       body: "Please tighten this up.",
       commit_id: params.reviewCommitId ?? params.headSha,
       user: { login: "reviewbot" },
+    },
+  });
+}
+
+function buildOpenedPrPayload(params: {
+  branch: string;
+  headSha: string;
+  prNumber: number;
+  prAuthorLogin?: string;
+  prTitle?: string;
+  prBody?: string;
+}): string {
+  return JSON.stringify({
+    action: "opened",
+    repository: { full_name: "owner/repo" },
+    pull_request: {
+      number: params.prNumber,
+      html_url: `https://github.com/owner/repo/pull/${params.prNumber}`,
+      title: params.prTitle ?? `PR for #${params.prNumber}`,
+      body: params.prBody ?? "",
+      state: "open",
+      merged: false,
+      user: { login: params.prAuthorLogin ?? "human-dev" },
+      head: { ref: params.branch, sha: params.headSha },
+      base: { ref: "main" },
     },
   });
 }
@@ -188,6 +224,38 @@ function buildSuccessfulCheckRunPayload(params: {
       output: {
         title: "Tests passed",
         summary: "All required checks succeeded.",
+      },
+      check_suite: {
+        head_branch: params.branch,
+        pull_requests: [
+          {
+            number: params.prNumber,
+            head: { ref: params.branch },
+          },
+        ],
+      },
+    },
+  });
+}
+
+function buildFailedCheckRunPayload(params: {
+  branch: string;
+  headSha: string;
+  prNumber: number;
+  checkName?: string;
+}): string {
+  return JSON.stringify({
+    action: "completed",
+    repository: { full_name: "owner/repo" },
+    check_run: {
+      conclusion: "failure",
+      name: params.checkName ?? "Tests",
+      html_url: `https://github.com/owner/repo/actions/runs/${params.prNumber}`,
+      details_url: `https://github.com/owner/repo/actions/runs/${params.prNumber}`,
+      head_sha: params.headSha,
+      output: {
+        title: "Tests failed",
+        summary: "Required checks failed.",
       },
       check_suite: {
         head_branch: params.branch,
@@ -696,13 +764,20 @@ test("ready_for_review pull request events are inert for PatchRelay start rules"
   assert.equal(normalized, undefined);
 });
 
-test("requested changes on a non-PatchRelay-owned PR do not queue follow-up work", async () => {
-  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-runtime-nonowned-review-"));
+test("requested changes on a delegated external PR queue review_fix", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-runtime-external-review-"));
   try {
-    const { db, enqueueCalls, handler } = createHandler(baseDir);
+    const { db, enqueueCalls, handler } = createHandler(baseDir, {
+      fetchImpl: async (input) => {
+        if (String(input).includes("/reviews/901/comments")) {
+          return createJsonResponse([]);
+        }
+        return createJsonResponse({}, 201);
+      },
+    });
     db.upsertIssue({
       projectId: "usertold",
-      linearIssueId: "issue-nonowned-review",
+      linearIssueId: "issue-external-review",
       issueKey: "USE-12",
       branchName: "feat-nonowned",
       prNumber: 12,
@@ -721,10 +796,12 @@ test("requested changes on a non-PatchRelay-owned PR do not queue follow-up work
       }),
     });
 
-    const issue = db.getIssue("usertold", "issue-nonowned-review");
+    const issue = db.getIssue("usertold", "issue-external-review");
+    const wake = db.issueSessions.peekIssueSessionWake("usertold", "issue-external-review");
     assert.equal(issue?.prReviewState, "changes_requested");
-    assert.equal(issue?.pendingRunType, undefined);
-    assert.deepEqual(enqueueCalls, []);
+    assert.equal(wake?.runType, "review_fix");
+    assert.equal(wake?.wakeReason, "review_changes_requested");
+    assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-external-review" }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -862,6 +939,168 @@ test("push after requested changes does not auto request re-review", async () =>
     assert.equal(issue?.prCheckStatus, "pending");
     assert.deepEqual(enqueueCalls, []);
     assert.deepEqual(fetchCalls, []);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("undelegated issue tracks requested-changes state without queuing repair work", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-runtime-undelegated-"));
+  try {
+    const { db, enqueueCalls, handler } = createHandler(baseDir, {
+      fetchImpl: async (input) => {
+        if (String(input).includes("/reviews/901/comments")) {
+          return createJsonResponse([]);
+        }
+        return createJsonResponse({}, 201);
+      },
+    });
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-undelegated-review",
+      issueKey: "USE-44",
+      delegatedToPatchRelay: false,
+      branchName: "feat-undelegated",
+      prNumber: 44,
+      prState: "open",
+      prAuthorLogin: "patchrelay[bot]",
+      factoryState: "pr_open",
+    });
+
+    await handler.processGitHubWebhookEvent({
+      eventType: "pull_request_review",
+      rawBody: buildChangesRequestedReviewPayload({
+        branch: "feat-undelegated",
+        headSha: "sha-undelegated",
+        prNumber: 44,
+        prAuthorLogin: "patchrelay[bot]",
+      }),
+    });
+
+    const wake = db.issueSessions.peekIssueSessionWake("usertold", "issue-undelegated-review");
+    const issue = db.getIssue("usertold", "issue-undelegated-review");
+    assert.equal(wake, undefined);
+    assert.equal(issue?.factoryState, "changes_requested");
+    assert.equal(issue?.delegatedToPatchRelay, false);
+    assert.deepEqual(enqueueCalls, []);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("undelegated issue links an external PR by issue key and tracks it without queuing work", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-runtime-external-link-"));
+  try {
+    const { db, enqueueCalls, handler } = createHandler(baseDir);
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-external-link",
+      issueKey: "USE-60",
+      delegatedToPatchRelay: false,
+      branchName: "use/60-old-branch",
+      factoryState: "awaiting_input",
+    });
+
+    await handler.processGitHubWebhookEvent({
+      eventType: "pull_request",
+      rawBody: buildOpenedPrPayload({
+        branch: "handoff/use-60-fix",
+        headSha: "sha-external-open",
+        prNumber: 60,
+        prAuthorLogin: "human-dev",
+        prTitle: "USE-60 tighten mobile input sizing",
+        prBody: "Implements USE-60 from an external branch.",
+      }),
+    });
+
+    const issue = db.getIssue("usertold", "issue-external-link");
+    const wake = db.issueSessions.peekIssueSessionWake("usertold", "issue-external-link");
+    assert.equal(issue?.prNumber, 60);
+    assert.equal(issue?.prState, "open");
+    assert.equal(issue?.prAuthorLogin, "human-dev");
+    assert.equal(issue?.branchName, "handoff/use-60-fix");
+    assert.equal(issue?.factoryState, "pr_open");
+    assert.equal(issue?.delegatedToPatchRelay, false);
+    assert.equal(wake, undefined);
+    assert.deepEqual(enqueueCalls, []);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("delegated issue can repair failing CI on an externally linked PR", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-runtime-external-ci-repair-"));
+  try {
+    const failureContextResolver: GitHubFailureContextResolver = {
+      resolve: async () => ({
+        source: "branch_ci",
+        failureHeadSha: "sha-external-ci",
+        failureSignature: "branch_ci::sha-external-ci::Tests",
+        checkName: "Tests",
+        summary: "Tests failed",
+      }),
+    };
+    const ciSnapshotResolver: GitHubCiSnapshotResolver = {
+      resolve: async () => ({
+        headSha: "sha-external-ci",
+        gateCheckName: "Tests",
+        gateCheckStatus: "failure",
+        settledAt: "2026-04-10T08:30:00.000Z",
+        checks: [
+          { name: "Tests", status: "failure", conclusion: "failure" },
+        ],
+        failedChecks: [
+          { name: "Tests", status: "failure", conclusion: "failure" },
+        ],
+      }),
+    };
+    const { db, enqueueCalls, handler } = createHandler(baseDir, {
+      failureContextResolver,
+      ciSnapshotResolver,
+    });
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-external-ci-repair",
+      issueKey: "USE-61",
+      delegatedToPatchRelay: false,
+      branchName: "use/61-old-branch",
+      factoryState: "awaiting_input",
+    });
+
+    await handler.processGitHubWebhookEvent({
+      eventType: "pull_request",
+      rawBody: buildOpenedPrPayload({
+        branch: "handoff/use-61-fix",
+        headSha: "sha-external-open",
+        prNumber: 61,
+        prAuthorLogin: "human-dev",
+        prTitle: "USE-61 keep external PR linked",
+        prBody: "External branch for USE-61.",
+      }),
+    });
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-external-ci-repair",
+      delegatedToPatchRelay: true,
+      factoryState: "pr_open",
+    });
+
+    await handler.processGitHubWebhookEvent({
+      eventType: "check_run",
+      rawBody: buildFailedCheckRunPayload({
+        branch: "handoff/use-61-fix",
+        headSha: "sha-external-ci",
+        prNumber: 61,
+      }),
+    });
+
+    const issue = db.getIssue("usertold", "issue-external-ci-repair");
+    const wake = db.issueSessions.peekIssueSessionWake("usertold", "issue-external-ci-repair");
+    assert.equal(issue?.lastGitHubFailureSource, "branch_ci");
+    assert.equal(issue?.branchName, "handoff/use-61-fix");
+    assert.equal(wake?.runType, "ci_repair");
+    assert.equal(wake?.wakeReason, "settled_red_ci");
+    assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-external-ci-repair" }]);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

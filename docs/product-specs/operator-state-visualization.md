@@ -40,6 +40,12 @@ PatchRelay's native issue lifecycle is the `FactoryState` union in `src/factory-
 - `done`
 - `failed`
 
+Native state should be read together with one overlay:
+
+- PatchRelay automation enabled or paused
+
+Pausing PatchRelay does not necessarily change the native workflow state.
+
 ### Native Graph
 
 The PatchRelay dashboard should render a compact native-state graph for the selected issue.
@@ -111,6 +117,26 @@ Operator precision should stay in PatchRelay surfaces:
 - dashboard/feed/detail view show the exact completion-check result
 - Linear collapses non-automatic stops into `Human Needed` with concise copy
 - logs keep the fork thread id and turn id for forensic review
+
+### Undelegated Overlay
+
+When an issue is undelegated from PatchRelay, the dashboard should present this as a pause overlay, not as a fake state rewrite.
+
+Rules:
+
+- `delegated` or `implementing` with no PR should stay in that native state and show a pause overlay
+- PR-backed states such as `pr_open`, `changes_requested`, and `awaiting_queue` should stay visible if they are still true
+- if an external PR becomes linked to the issue by key while PatchRelay is paused, keep the PR-backed state visible rather than treating it as a fresh local implementation
+- waiting text should explain that PatchRelay automation is paused
+- downstream review or merge may still continue while paused
+
+Recommended compact copy:
+
+- `PatchRelay automation is paused because the issue is undelegated`
+- `PatchRelay automation is paused; downstream merge may still continue until the PR is closed`
+
+Do not present undelegated PR-backed issues as if the PR disappeared or as if PatchRelay were still actively repairing them.
+Also do not rewrite undelegated local work into `awaiting_input` unless the issue truly needs a human answer.
 
 ## merge-steward
 
@@ -213,3 +239,4 @@ Recommended structure:
 - If shorthand is used in list rows, detail views must still show the exact native state names.
 - Every observation line should explain either `what happened`, `what system observed it`, or `what needs to happen next`.
 - When a transition reason is known, prefer a concrete explanation over a generic label.
+- When PatchRelay is paused, surfaces should make that pause explicit without hiding real GitHub-backed state.
