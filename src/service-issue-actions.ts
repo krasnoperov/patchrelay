@@ -2,9 +2,9 @@ import type { Logger } from "pino";
 import type { CodexAppServerClient } from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord } from "./db-types.ts";
+import { buildOperatorRetryEvent } from "./operator-retry-event.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import type { ServiceRuntime } from "./service-runtime.ts";
-import { buildOperatorRetryEvent } from "./tracked-issue-list-query.ts";
 
 export class ServiceIssueActions {
   constructor(
