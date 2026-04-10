@@ -8,7 +8,6 @@ import {
   buildInitialRunPrompt,
   buildRunPrompt as buildLayeredRunPrompt,
   findDisallowedPatchRelayPromptSectionIds,
-  resolveImplementationDeliveryMode,
 } from "../src/prompting/patchrelay.ts";
 import { shouldReuseIssueThread } from "../src/run-launcher.ts";
 import type { PromptCustomizationLayer } from "../src/types.ts";
@@ -81,7 +80,7 @@ test("repair prompts append publication requirements for the existing PR branch"
   }
 });
 
-test("planning-only implementation prompts switch to Linear-only delivery requirements", () => {
+test("implementation prompts keep the no-PR case explicit without switching delivery modes", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-prompt-"));
   try {
     writeFileSync(path.join(baseDir, "IMPLEMENTATION_WORKFLOW.md"), "# Implementation Workflow\n");
@@ -97,10 +96,8 @@ test("planning-only implementation prompts switch to Linear-only delivery requir
 
     const prompt = buildInitialRunPrompt({ issue, runType: "implementation", repoPath: baseDir });
 
-    assert.equal(resolveImplementationDeliveryMode(issue), "linear_only");
-    assert.match(prompt, /## Delivery Requirements/);
-    assert.match(prompt, /Do not modify repo files or open a PR for this issue/);
-    assert.doesNotMatch(prompt, /## Publication Requirements/);
+    assert.match(prompt, /## Publication Requirements/);
+    assert.match(prompt, /If the task is genuinely complete without a PR, say so clearly in your normal summary instead of inventing one/);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

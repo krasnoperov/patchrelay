@@ -47,6 +47,14 @@ CREATE TABLE IF NOT EXISTS runs (
   thread_id TEXT,
   turn_id TEXT,
   parent_thread_id TEXT,
+  completion_check_thread_id TEXT,
+  completion_check_turn_id TEXT,
+  completion_check_outcome TEXT,
+  completion_check_summary TEXT,
+  completion_check_question TEXT,
+  completion_check_why TEXT,
+  completion_check_recommended_reply TEXT,
+  completion_checked_at TEXT,
   summary_json TEXT,
   report_json TEXT,
   failure_reason TEXT,
@@ -255,6 +263,14 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
   // Preserve the PR head SHA seen when a run started so PatchRelay can
   // verify that requested-changes work actually published a new head.
   addColumnIfMissing(connection, "runs", "source_head_sha", "TEXT");
+  addColumnIfMissing(connection, "runs", "completion_check_thread_id", "TEXT");
+  addColumnIfMissing(connection, "runs", "completion_check_turn_id", "TEXT");
+  addColumnIfMissing(connection, "runs", "completion_check_outcome", "TEXT");
+  addColumnIfMissing(connection, "runs", "completion_check_summary", "TEXT");
+  addColumnIfMissing(connection, "runs", "completion_check_question", "TEXT");
+  addColumnIfMissing(connection, "runs", "completion_check_why", "TEXT");
+  addColumnIfMissing(connection, "runs", "completion_check_recommended_reply", "TEXT");
+  addColumnIfMissing(connection, "runs", "completion_checked_at", "TEXT");
   addColumnIfMissing(connection, "issues", "last_blocking_review_head_sha", "TEXT");
 
   // Collapse awaiting_review into pr_open (state normalization)

@@ -33,6 +33,7 @@ function needsOperatorIntervention(issue: WatchIssue): boolean {
 function effectiveState(issue: WatchIssue): string {
   if (issue.sessionState === "done") return "done";
   if (issue.sessionState === "failed") return "failed";
+  if (issue.completionCheckActive) return "completion_check";
   if (issue.blockedByCount > 0 && !issue.activeRunType) return "blocked";
   if (issue.sessionState === "waiting_input") return "awaiting_input";
   if (issue.prNumber !== undefined) return issue.factoryState;
@@ -67,6 +68,7 @@ function stageLabel(issue: WatchIssue): string {
     case "ready": return "ready";
     case "delegated": return "delegated";
     case "implementing": return "implementing";
+    case "completion_check": return "completion check";
     case "pr_open": return "PR open";
     case "changes_requested": return "review changes";
     case "repairing_ci": return "repairing CI";
@@ -142,6 +144,7 @@ function blockerText(issue: WatchIssue): string | null {
   const rereviewNeeded = isRereviewNeeded(issue);
   if (issue.sessionState === "waiting_input") return issue.waitingReason ?? "Waiting for input";
   if (needsOperatorIntervention(issue)) return issue.statusNote ?? issue.waitingReason ?? "Needs operator intervention";
+  if (issue.completionCheckActive) return "No PR found; checking next step";
   if (issue.waitingReason && issue.activeRunType && issue.factoryState === "pr_open") return issue.waitingReason;
   if (issue.waitingReason && issue.activeRunType && issue.factoryState === "awaiting_queue") return issue.waitingReason;
   if (issue.waitingReason && !issue.activeRunType) return issue.waitingReason;

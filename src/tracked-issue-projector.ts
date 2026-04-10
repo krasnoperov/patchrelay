@@ -50,6 +50,13 @@ export function buildTrackedIssueRecord(params: {
     blockedByKeys,
     waitingReason,
   });
+  const completionCheckActive = Boolean(
+    params.issue.activeRunId !== undefined
+      && params.latestRun?.id === params.issue.activeRunId
+      && params.latestRun.status === "running"
+      && params.latestRun.completionCheckThreadId
+      && !params.latestRun.completionCheckOutcome,
+  );
 
   return {
     id: params.issue.id,
@@ -83,6 +90,7 @@ export function buildTrackedIssueRecord(params: {
     ...(failureContext?.stepName ? { latestFailureStepName: failureContext.stepName } : {}),
     ...(failureContext?.summary ? { latestFailureSummary: failureContext.summary } : {}),
     ...(waitingReason ? { waitingReason } : {}),
+    ...(completionCheckActive ? { completionCheckActive } : {}),
     ...(params.issue.activeRunId !== undefined ? { activeRunId: params.issue.activeRunId } : {}),
     ...(params.issue.agentSessionId ? { activeAgentSessionId: params.issue.agentSessionId } : {}),
     updatedAt: params.issue.updatedAt,

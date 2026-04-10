@@ -1,4 +1,5 @@
 import type { IssueRecord } from "./db-types.ts";
+import type { CompletionCheckResult } from "./completion-check-types.ts";
 import type { FactoryState, RunType } from "./factory-state.ts";
 import type { NormalizedGitHubEvent } from "./github-types.ts";
 import type { LinearAgentActivityContent } from "./linear-types.ts";
@@ -133,6 +134,32 @@ export function buildRunFailureActivity(runType: RunType, reason?: string): Line
     type: "error",
     body: reason ? `${label} failed.\n\n${reason}` : `${label} failed.`,
   };
+}
+
+export function buildCompletionCheckActivity(
+  phase: "started" | "continue" | "needs_input" | "done",
+  result?: CompletionCheckResult,
+): LinearAgentActivityContent {
+  switch (phase) {
+    case "started":
+      return { type: "thought", body: "No PR found; checking the next step." };
+    case "continue":
+      return { type: "thought", body: "No PR found; PatchRelay is continuing automatically." };
+    case "needs_input":
+      return {
+        type: "response",
+        body: result?.question
+          ? `PatchRelay needs an answer before it can continue.\n\nQuestion: ${result.question}${result.why ? `\n\nWhy: ${result.why}` : ""}${result.recommendedReply ? `\n\nSuggested reply: ${result.recommendedReply}` : ""}`
+          : "PatchRelay needs more input before it can continue.",
+      };
+    case "done":
+      return {
+        type: "response",
+        body: result?.summary
+          ? `Completed without a PR.\n\n${result.summary}`
+          : "Completed without a PR.",
+      };
+  }
 }
 
 export function buildStopConfirmationActivity(): LinearAgentActivityContent {

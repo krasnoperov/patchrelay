@@ -256,6 +256,37 @@ test("buildDetailLines prefers full check summary over gate status for re-review
   assert.doesNotMatch(text, / {2}ready {2}/);
 });
 
+test("buildDetailLines shows completion check as a first-class transient stage", () => {
+  const issue = makeIssue("USE-120", {
+    factoryState: "implementing",
+    sessionState: "running",
+    activeRunType: "implementation",
+    completionCheckActive: true,
+    statusNote: "No PR found; checking next step",
+  });
+
+  const text = detailText(buildDetailLines({
+    issue,
+    timeline: [],
+    activeRunStartedAt: null,
+    activeRunId: 42,
+    tokenUsage: null,
+    diffSummary: null,
+    plan: null,
+    issueContext: null,
+    detailTab: "timeline",
+    rawRuns: [],
+    rawFeedEvents: [],
+    follow: true,
+    connected: true,
+    lastServerMessageAt: Date.now(),
+    width: 100,
+  })).join("\n");
+
+  assert.match(text, /completion check/);
+  assert.match(text, /No PR found; checking next step/);
+});
+
 test("buildDetailLines keeps header PR and review facts colorized instead of flattening them to dim text", () => {
   const issue = makeIssue("TST-33", {
     prNumber: 27,

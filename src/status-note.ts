@@ -1,3 +1,4 @@
+import { extractCompletionCheck } from "./completion-check.ts";
 import type { IssueRecord, IssueSessionEventRecord, RunRecord } from "./db-types.ts";
 import { extractLatestAssistantSummary } from "./issue-session-events.ts";
 import { sanitizeOperatorFacingText } from "./presentation-text.ts";
@@ -39,19 +40,36 @@ export function deriveIssueStatusNote(params: {
   }
 
   const sessionSummary = clean(params.sessionSummary);
+  const completionCheckActive = Boolean(
+    params.latestRun?.status === "running"
+      && params.latestRun.completionCheckThreadId
+      && !params.latestRun.completionCheckOutcome,
+  );
+  const completionCheck = extractCompletionCheck(params.latestRun);
+  const completionCheckNote = clean(
+    completionCheck?.outcome === "needs_input"
+      ? completionCheck.question ?? completionCheck.summary
+      : completionCheck?.summary,
+  );
   const latestRunNote = clean(extractLatestAssistantSummary(params.latestRun));
   const latestEventNote = clean(eventStatusNote(params.latestEvent));
   const failureSummary = clean(params.failureSummary);
   const waitingReason = clean(params.waitingReason);
 
   let note: string | undefined;
+  if (completionCheckActive) {
+    note = "No PR found; checking next step";
+  } else {
   switch (params.issue.factoryState) {
     case "awaiting_input":
-      note = latestRunNote ?? latestEventNote ?? sessionSummary;
+      note = completionCheckNote ?? latestRunNote ?? latestEventNote ?? sessionSummary;
       break;
     case "failed":
     case "escalated":
-      note = latestEventNote ?? failureSummary ?? latestRunNote ?? sessionSummary;
+      note = latestEventNote ?? completionCheckNote ?? failureSummary ?? latestRunNote ?? sessionSummary;
+      break;
+    case "done":
+      note = completionCheckNote ?? sessionSummary ?? latestRunNote ?? failureSummary;
       break;
     case "repairing_ci":
     case "repairing_queue":
@@ -60,6 +78,7 @@ export function deriveIssueStatusNote(params: {
     default:
       note = sessionSummary ?? latestRunNote ?? failureSummary;
       break;
+  }
   }
 
   if (!note) return undefined;
