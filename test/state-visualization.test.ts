@@ -119,3 +119,15 @@ test("patchrelay queue observations report merge completion", () => {
   assert.equal(observations[0]?.tone, "success");
   assert.match(observations[1]?.text ?? "", /merged/i);
 });
+
+test("patchrelay queue observations show closed PRs as historical", () => {
+  const issue = makeIssue({
+    factoryState: "done",
+    prState: "closed",
+    prReviewState: "commented",
+  });
+
+  const observations = buildPatchRelayQueueObservations(issue, []);
+
+  assert.match(observations[1]?.text ?? "", /Tracked PR: #88 \(closed\) \(commented\)/);
+});

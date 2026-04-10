@@ -168,6 +168,10 @@ export interface TrackedIssueRecord {
   currentLinearState?: string | undefined;
   sessionState?: IssueSessionState | undefined;
   factoryState: FactoryState;
+  prNumber?: number | undefined;
+  prState?: string | undefined;
+  prReviewState?: string | undefined;
+  prCheckStatus?: string | undefined;
   blockedByCount: number;
   blockedByKeys: string[];
   readyForExecution: boolean;

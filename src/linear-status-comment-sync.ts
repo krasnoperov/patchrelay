@@ -76,6 +76,7 @@ function renderStatusComment(
     factoryState: issue.factoryState,
     pendingRunType: issue.pendingRunType,
     ...(issue.prNumber !== undefined ? { prNumber: issue.prNumber } : {}),
+    ...(issue.prState ? { prState: issue.prState } : {}),
     prHeadSha: issue.prHeadSha,
     prReviewState: issue.prReviewState,
     prCheckStatus: issue.prCheckStatus,

@@ -221,6 +221,18 @@ export class GitHubWebhookHandler {
         : event.reviewState === "approved"
           ? { lastBlockingReviewHeadSha: null }
           : {}),
+      ...(event.triggerEvent === "pr_closed"
+        ? {
+            prReviewState: null,
+            prCheckStatus: null,
+            lastBlockingReviewHeadSha: null,
+            lastGitHubCiSnapshotHeadSha: null,
+            lastGitHubCiSnapshotGateCheckName: null,
+            lastGitHubCiSnapshotGateCheckStatus: null,
+            lastGitHubCiSnapshotJson: null,
+            lastGitHubCiSnapshotSettledAt: null,
+          }
+        : {}),
     });
     await this.updateCiSnapshot(issue, event, project);
     await this.updateFailureProvenance(issue, event, project);
@@ -317,6 +329,17 @@ export class GitHubWebhookHandler {
     event: NormalizedGitHubEvent,
     project?: ProjectConfig,
   ): FactoryState | undefined {
+    if (
+      event.triggerEvent === "pr_closed"
+      && (
+        TERMINAL_STATES.has(issue.factoryState)
+        || issue.currentLinearStateType === "completed"
+        || issue.currentLinearState?.trim().toLowerCase() === "done"
+      )
+    ) {
+      return undefined;
+    }
+
     if (
       event.triggerEvent === "check_failed"
       && this.isQueueEvictionFailure(issue, event, project)
@@ -629,11 +652,20 @@ export class GitHubWebhookHandler {
             : "Pull request closed during active run",
         });
       }
+      const completedLinearState = issue.currentLinearStateType === "completed"
+        || issue.currentLinearState?.trim().toLowerCase() === "done";
+      const terminalFactoryState = event.triggerEvent === "pr_merged"
+        ? "done"
+        : completedLinearState
+          ? "done"
+          : TERMINAL_STATES.has(issue.factoryState)
+          ? issue.factoryState
+          : "failed";
       this.db.issues.upsertIssue({
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,
         activeRunId: null,
-        factoryState: event.triggerEvent === "pr_merged" ? "done" : "failed",
+        factoryState: terminalFactoryState,
       });
     };
     const activeLease = this.db.issueSessions.getActiveIssueSessionLease(issue.projectId, issue.linearIssueId);

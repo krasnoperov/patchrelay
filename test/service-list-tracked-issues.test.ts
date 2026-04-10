@@ -400,3 +400,44 @@ test("listTrackedIssues does not mark awaiting-review issues as ready just becau
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("listTrackedIssues does not treat closed PRs on done issues as awaiting external review", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-service-list-closed-pr-done-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const service = new PatchRelayService(
+      config,
+      db,
+      {
+        on: () => undefined,
+        readThread: async () => ({ id: "thread-1", turns: [] }),
+      } as never,
+      undefined,
+      pino({ enabled: false }),
+    );
+
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-closed-done",
+      issueKey: "USE-CLOSED",
+      title: "Closed report PR",
+      currentLinearState: "Done",
+      currentLinearStateType: "completed",
+      factoryState: "done",
+      prNumber: 193,
+      prState: "closed",
+      prReviewState: "commented",
+      prCheckStatus: "success",
+    });
+
+    const tracked = service.listTrackedIssues().find((entry) => entry.issueKey === "USE-CLOSED");
+    assert.ok(tracked);
+    assert.equal(tracked.prState, "closed");
+    assert.equal(tracked.waitingReason, "PatchRelay work is complete");
+    assert.equal(tracked.readyForExecution, false);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});

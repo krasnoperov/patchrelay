@@ -1,4 +1,5 @@
 import { Box, Text } from "ink";
+import { hasOpenPr } from "../../pr-state.ts";
 import type { WatchIssue } from "./watch-state.ts";
 import { summarizeIssueStatusNote } from "./issue-status-note.ts";
 import { relativeTime, truncate } from "./format-utils.ts";
@@ -36,7 +37,7 @@ function effectiveState(issue: WatchIssue): string {
   if (issue.completionCheckActive) return "completion_check";
   if (issue.blockedByCount > 0 && !issue.activeRunType) return "blocked";
   if (issue.sessionState === "waiting_input") return "awaiting_input";
-  if (issue.prNumber !== undefined) return issue.factoryState;
+  if (hasOpenPr(issue.prNumber, issue.prState)) return issue.factoryState;
   if (issue.readyForExecution && !issue.activeRunType && !hasDisplayPrBlocker(issue)) return "ready";
   return issue.factoryState;
 }
@@ -114,7 +115,7 @@ function buildFacts(issue: WatchIssue, selected: boolean): Array<{ text: string;
   } else if (isChangesRequestedReviewState(issue.prReviewState)) {
     facts.push({ text: "changes requested", color: "yellow" });
   } else if (
-    issue.prNumber !== undefined
+    hasOpenPr(issue.prNumber, issue.prState)
     && (isAwaitingReviewState(issue.prReviewState) || (!issue.prReviewState && !TERMINAL_STATES.has(effectiveState(issue))))
   ) {
     facts.push({ text: "awaiting review", color: "yellow" });
@@ -163,7 +164,7 @@ function blockerText(issue: WatchIssue): string | null {
   }
   if (rereviewNeeded) return "Awaiting re-review after requested changes";
   if (isChangesRequestedReviewState(issue.prReviewState)) return "Review changes requested";
-  if (issue.prNumber !== undefined && isAwaitingReviewState(issue.prReviewState)) return "Awaiting review";
+  if (hasOpenPr(issue.prNumber, issue.prState) && isAwaitingReviewState(issue.prReviewState)) return "Awaiting review";
   return null;
 }
 

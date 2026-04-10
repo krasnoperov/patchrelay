@@ -1,5 +1,6 @@
 import type { StateHistoryNode } from "./history-builder.ts";
 import type { OperatorFeedEvent } from "../../operator-feed.ts";
+import { hasOpenPr } from "../../pr-state.ts";
 
 export type VisualizationNodeStatus = "current" | "visited" | "upcoming";
 
@@ -20,6 +21,7 @@ export interface PatchRelayObservationIssue {
   factoryState: string;
   activeRunType?: string | undefined;
   prNumber?: number | undefined;
+  prState?: string | undefined;
   prReviewState?: string | undefined;
 }
 
@@ -213,9 +215,12 @@ export function buildPatchRelayQueueObservations(
   }
 
   if (issue.prNumber !== undefined) {
+    const prLabel = hasOpenPr(issue.prNumber, issue.prState)
+      ? `Tracked PR: #${issue.prNumber}`
+      : `Tracked PR: #${issue.prNumber}${issue.prState ? ` (${issue.prState})` : ""}`;
     observations.push({
       tone: "info",
-      text: `Tracked PR: #${issue.prNumber}${issue.prReviewState ? ` (${issue.prReviewState})` : ""}`,
+      text: `${prLabel}${issue.prReviewState ? ` (${issue.prReviewState})` : ""}`,
     });
   }
 

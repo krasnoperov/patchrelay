@@ -288,6 +288,7 @@ export class PatchRelayService {
     latestRunType?: string;
     latestRunStatus?: string;
     prNumber?: number;
+    prState?: string;
     prReviewState?: string;
     prCheckStatus?: string;
     prChecksSummary?: {

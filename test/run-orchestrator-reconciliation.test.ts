@@ -708,6 +708,54 @@ test("reconcileIdleIssues marks merged idle issues done without enqueueing", asy
   }
 });
 
+test("reconcileIdleIssues preserves done state when a completed issue's PR is closed", { concurrency: false }, async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-closed-done-"));
+  const oldPath = process.env.PATH;
+  try {
+    const fakeBin = path.join(baseDir, "bin");
+    const ghPath = path.join(fakeBin, "gh");
+    mkdirSync(fakeBin, { recursive: true });
+    writeFileSync(ghPath, `#!/usr/bin/env bash
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  printf '{"headRefOid":"sha-closed","state":"CLOSED","reviewDecision":"REVIEW_REQUIRED","mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED","statusCheckRollup":[]}'
+  exit 0
+fi
+echo "unexpected gh args: $*" >&2
+exit 1
+`, "utf8");
+    chmodSync(ghPath, 0o755);
+    process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
+
+    const { db, enqueueCalls, orchestrator } = createOrchestrator(baseDir);
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-closed-done",
+      issueKey: "USE-CLOSED",
+      branchName: "feat-closed-done",
+      currentLinearState: "Done",
+      currentLinearStateType: "completed",
+      prNumber: 193,
+      prState: "open",
+      prReviewState: "commented",
+      prCheckStatus: "success",
+      factoryState: "delegated",
+    });
+
+    await (orchestrator as unknown as { idleReconciler: { reconcile: () => Promise<void> } }).idleReconciler.reconcile();
+
+    const issue = db.getIssue("usertold", "issue-closed-done");
+    assert.equal(issue?.factoryState, "done");
+    assert.equal(issue?.prState, "closed");
+    assert.equal(issue?.prReviewState, undefined);
+    assert.equal(issue?.prCheckStatus, undefined);
+    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-closed-done"), undefined);
+    assert.deepEqual(enqueueCalls, []);
+  } finally {
+    process.env.PATH = oldPath;
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("reconcileIdleIssues currently routes failed idle issues to ci_repair", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-failed-"));
   try {

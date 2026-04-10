@@ -1,3 +1,4 @@
+import { hasOpenPr } from "../../pr-state.ts";
 import type { WatchIssue } from "./watch-state.ts";
 
 function isPassingCheckStatus(status: string | undefined): boolean {
@@ -86,7 +87,7 @@ export function prChecksFact(issue: WatchIssue): { text: string; color: "green" 
 }
 
 export function hasDisplayPrBlocker(issue: WatchIssue): boolean {
-  if (issue.prNumber === undefined || issue.activeRunType) {
+  if (!hasOpenPr(issue.prNumber, issue.prState) || issue.activeRunType) {
     return false;
   }
   if (issue.factoryState === "pr_open" || issue.factoryState === "awaiting_queue" || issue.factoryState === "repairing_queue") {

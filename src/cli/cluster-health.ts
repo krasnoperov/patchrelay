@@ -2,6 +2,7 @@ import { deriveGateCheckStatusFromRollup, type GitHubStatusRollupEntry } from ".
 import { ACTIVE_RUN_STATES } from "../factory-state.ts";
 import type { PatchRelayDatabase } from "../db.ts";
 import type { IssueDependencyRecord, IssueRecord, IssueSessionRecord } from "../db-types.ts";
+import { hasOpenPr } from "../pr-state.ts";
 import type { AppConfig } from "../types.ts";
 import type { CommandRunner, CommandRunnerResult } from "./command-types.ts";
 
@@ -724,7 +725,7 @@ function needsReviewAutomation(issue: IssueRecord): boolean {
   if (issue.factoryState === "awaiting_queue" || issue.factoryState === "done") {
     return false;
   }
-  return issue.prNumber !== undefined;
+  return hasOpenPr(issue.prNumber, issue.prState);
 }
 
 async function collectReviewQuillAttemptOwners(

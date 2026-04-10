@@ -418,6 +418,109 @@ test("merged PatchRelay PR moves the Linear issue to a completed state", async (
   }
 });
 
+test("closed non-merged PR on a completed issue preserves done state and clears stale PR review signals", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-runtime-closed-done-"));
+  try {
+    const setIssueStateCalls: string[] = [];
+    const { db, handler } = createHandler(baseDir, {
+      linearProvider: {
+        forProject: async () => ({
+          getIssue: async () => ({
+            id: "issue-closed-done",
+            identifier: "USE-108",
+            title: "Analysis-only issue",
+            description: "",
+            url: "https://linear.app/usertold/issue/USE-108",
+            teamId: "team-use",
+            teamKey: "USE",
+            stateId: "state-done",
+            stateName: "Done",
+            stateType: "completed",
+            workflowStates: [
+              { id: "state-review", name: "In Review", type: "started" },
+              { id: "state-done", name: "Done", type: "completed" },
+            ],
+            labelIds: [],
+            labels: [],
+            teamLabels: [],
+            blockedBy: [],
+            blocks: [],
+          }),
+          setIssueState: async (_issueId: string, stateName: string) => {
+            setIssueStateCalls.push(stateName);
+            return {
+              id: "issue-closed-done",
+              identifier: "USE-108",
+              title: "Analysis-only issue",
+              description: "",
+              url: "https://linear.app/usertold/issue/USE-108",
+              teamId: "team-use",
+              teamKey: "USE",
+              stateId: "state-done",
+              stateName: "Done",
+              stateType: "completed",
+              workflowStates: [
+                { id: "state-review", name: "In Review", type: "started" },
+                { id: "state-done", name: "Done", type: "completed" },
+              ],
+              labelIds: [],
+              labels: [],
+              teamLabels: [],
+              blockedBy: [],
+              blocks: [],
+            };
+          },
+        }) as LinearClient,
+      },
+    });
+
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-closed-done",
+      issueKey: "USE-108",
+      branchName: "use-108-analysis",
+      prNumber: 193,
+      prState: "open",
+      prHeadSha: "closed-done-sha-1",
+      prAuthorLogin: "patchrelay[bot]",
+      prReviewState: "commented",
+      prCheckStatus: "success",
+      lastBlockingReviewHeadSha: "closed-done-sha-1",
+      ciSummaryJson: JSON.stringify({ total: 1, completed: 1, passed: 1, failed: 0, pending: 0, overall: "success" }),
+      ciLastUpdatedAt: "2026-04-10T09:00:00.000Z",
+      factoryState: "done",
+      currentLinearState: "Done",
+      currentLinearStateType: "completed",
+    });
+
+    await handler.processGitHubWebhookEvent({
+      eventType: "pull_request",
+      rawBody: buildTerminalPrPayload({
+        action: "closed",
+        branch: "use-108-analysis",
+        headSha: "closed-done-sha-1",
+        prNumber: 193,
+        merged: false,
+        prAuthorLogin: "patchrelay[bot]",
+      }),
+    });
+
+    const issue = db.getIssue("usertold", "issue-closed-done");
+    assert.equal(issue?.factoryState, "done");
+    assert.equal(issue?.currentLinearState, "Done");
+    assert.equal(issue?.currentLinearStateType, "completed");
+    assert.equal(issue?.prState, "closed");
+    assert.equal(issue?.prReviewState, undefined);
+    assert.equal(issue?.prCheckStatus, undefined);
+    assert.equal(issue?.lastBlockingReviewHeadSha, undefined);
+    assert.equal(issue?.ciSummaryJson, undefined);
+    assert.equal(issue?.ciLastUpdatedAt, undefined);
+    assert.deepEqual(setIssueStateCalls, []);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("green gate-check completion does not queue new PatchRelay work", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-runtime-green-"));
   try {

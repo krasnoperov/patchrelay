@@ -75,7 +75,7 @@ const TRANSITION_RULES: readonly TransitionRule[] = [
   // pr_closed during an active run is suppressed — Codex may reopen.
   // Without a guard match, the event produces no transition (undefined).
   { event: "pr_closed",
-    guard: (_, ctx) => ctx.activeRunId === undefined,
+    guard: (s, ctx) => ctx.activeRunId === undefined && !TERMINAL_STATES.has(s),
     to: "failed" },
 
   // ── PR lifecycle ───────────────────────────────────────────────

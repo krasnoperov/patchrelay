@@ -61,7 +61,9 @@ export class ImplementationOutcomePolicy {
               },
               "published PR verification refresh",
             );
-            return undefined;
+            if (pr.state?.toLowerCase() !== "closed") {
+              return undefined;
+            }
           }
         }
       } catch (error) {
