@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
+import { readFileSync, rmSync } from "node:fs";
 import test from "node:test";
 import type { TimelineEntry } from "../src/cli/watch/timeline-builder.ts";
 import {
   buildWatchDetailExportText,
+  exportWatchTextToTempFile,
   findLastAssistantMessage,
   findLastCommand,
   findLastCommandOutput,
+  openTextInPager,
+  writeTextToClipboard,
 } from "../src/cli/watch/watch-actions.ts";
 
 const timeline: TimelineEntry[] = [
@@ -85,4 +89,65 @@ test("buildWatchDetailExportText renders the current detail surface as plain tex
   assert.match(text, /Stabilize transcript view/);
   assert.match(text, /Latest assistant update\./);
   assert.match(text, /\$ npm test -- watch/);
+});
+
+test("writeTextToClipboard refuses empty text and non-TTY streams", () => {
+  const writes: string[] = [];
+  const ttyStream = {
+    isTTY: true,
+    write(chunk: string) {
+      writes.push(chunk);
+      return true;
+    },
+  } as NodeJS.WriteStream;
+  const nonTtyStream = {
+    isTTY: false,
+    write() {
+      return true;
+    },
+  } as NodeJS.WriteStream;
+
+  assert.equal(writeTextToClipboard("", ttyStream), false);
+  assert.equal(writeTextToClipboard("copied text", nonTtyStream), false);
+  assert.equal(writes.length, 0);
+});
+
+test("writeTextToClipboard writes OSC 52 payloads for interactive streams", () => {
+  const writes: string[] = [];
+  const ttyStream = {
+    isTTY: true,
+    write(chunk: string) {
+      writes.push(chunk);
+      return true;
+    },
+  } as NodeJS.WriteStream;
+
+  assert.equal(writeTextToClipboard("copied text", ttyStream), true);
+  assert.equal(writes.length, 1);
+  assert.match(writes[0] ?? "", /^\u001b]52;c;.+\u0007$/);
+});
+
+test("exportWatchTextToTempFile writes transcript text to a sanitized path", () => {
+  const filePath = exportWatchTextToTempFile("hello transcript\n", "USE/17:bad key");
+  try {
+    assert.match(filePath, /USE-17-bad-key-transcript\.txt$/);
+    assert.equal(readFileSync(filePath, "utf8"), "hello transcript\n");
+  } finally {
+    rmSync(filePath, { force: true });
+    rmSync(filePath.replace(/\/[^/]+$/, ""), { recursive: true, force: true });
+  }
+});
+
+test("openTextInPager reports a clear reason when no interactive TTY is available", () => {
+  const stream = {
+    isTTY: false,
+    write() {
+      return true;
+    },
+  } as NodeJS.WriteStream;
+
+  assert.deepEqual(openTextInPager("hello", stream), {
+    ok: false,
+    reason: "interactive TTY required",
+  });
 });
