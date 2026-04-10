@@ -2,7 +2,7 @@ import type { Logger } from "pino";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { LinearClientProvider } from "./types.ts";
 import type { LinearSessionSync } from "./linear-session-sync.ts";
-import { resolveAwaitingInputReason } from "./awaiting-input-reason.ts";
+import { isResumablePausedLocalWork } from "./paused-issue-state.ts";
 
 export class ServiceStartupRecovery {
   constructor(
@@ -72,10 +72,9 @@ export class ServiceStartupRecovery {
       const delegated = liveIssue.delegateId === installation.actorId;
       const unresolvedBlockers = this.db.issues.countUnresolvedBlockers(issue.projectId, issue.linearIssueId);
       const latestRun = this.db.runs.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
-      const shouldRecoverAwaitingInput =
+      const shouldRecoverPausedLocalWork =
         delegated
-        && issue.factoryState === "awaiting_input"
-        && resolveAwaitingInputReason({ issue, latestRun }) === "paused_local_work"
+        && isResumablePausedLocalWork({ issue, latestRun })
         && this.db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId) === undefined;
 
       const updated = this.db.issues.upsertIssue({
@@ -90,10 +89,10 @@ export class ServiceStartupRecovery {
         ...(liveIssue.estimate != null ? { estimate: liveIssue.estimate } : {}),
         ...(liveIssue.stateName ? { currentLinearState: liveIssue.stateName } : {}),
         ...(liveIssue.stateType ? { currentLinearStateType: liveIssue.stateType } : {}),
-        ...(shouldRecoverAwaitingInput ? { factoryState: "delegated" as never } : {}),
+        ...(shouldRecoverPausedLocalWork ? { factoryState: "delegated" as never } : {}),
       });
 
-      if (!shouldRecoverAwaitingInput) {
+      if (!shouldRecoverPausedLocalWork) {
         continue;
       }
 
@@ -107,9 +106,9 @@ export class ServiceStartupRecovery {
         if (this.db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId)) {
           this.enqueueIssue(issue.projectId, issue.linearIssueId);
         }
-        this.logger.info({ issueKey: updated.issueKey }, "Recovered delegated issue from stale awaiting_input state and re-queued implementation");
+        this.logger.info({ issueKey: updated.issueKey }, "Recovered delegated issue from paused local-work state and re-queued implementation");
       } else {
-        this.logger.info({ issueKey: updated.issueKey, unresolvedBlockers }, "Recovered delegated blocked issue from stale awaiting_input state");
+        this.logger.info({ issueKey: updated.issueKey, unresolvedBlockers }, "Recovered delegated blocked issue from paused local-work state");
       }
     }
   }
