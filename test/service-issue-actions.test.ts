@@ -77,9 +77,10 @@ function createConfig(baseDir: string): AppConfig {
 
 test("promptIssue queues operator input for the next run when no run is active", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-service-actions-"));
+  let db: PatchRelayDatabase | undefined;
   try {
     const config = createConfig(baseDir);
-    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db = new PatchRelayDatabase(config.database.path, config.database.wal);
     db.runMigrations();
     const service = new PatchRelayService(
       config,
@@ -104,15 +105,17 @@ test("promptIssue queues operator input for the next run when no run is active",
     assert.equal(latestEvent?.eventType, "operator_prompt");
     assert.match(latestEvent?.eventJson ?? "", /Please retry carefully/);
   } finally {
+    db?.connection.close();
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
 
-test("retryIssue preserves branch upkeep retries for requested-changes issues", () => {
+test("retryIssue preserves branch upkeep retries for requested-changes issues", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-service-retry-"));
+  let db: PatchRelayDatabase | undefined;
   try {
     const config = createConfig(baseDir);
-    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db = new PatchRelayDatabase(config.database.path, config.database.wal);
     db.runMigrations();
     const service = new PatchRelayService(
       config,
@@ -148,6 +151,7 @@ test("retryIssue preserves branch upkeep retries for requested-changes issues", 
     assert.equal(latestEvent?.eventType, "review_changes_requested");
     assert.match(latestEvent?.eventJson ?? "", /branch upkeep/i);
   } finally {
+    db?.connection.close();
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
