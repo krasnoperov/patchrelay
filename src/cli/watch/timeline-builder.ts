@@ -77,6 +77,7 @@ export function buildTimelineFromRehydration(
   activeRunId: number | null | undefined,
 ): TimelineEntry[] {
   const entries: TimelineEntry[] = [];
+  const activeRun = activeRunId ? runs.find((run) => run.id === activeRunId) : undefined;
 
   // 1. Add run boundaries and items from reports
   for (const run of runs) {
@@ -110,23 +111,38 @@ export function buildTimelineFromRehydration(
 
   // 2. Items from live thread (active run)
   if (liveThread && activeRunId) {
-    entries.push(...itemsFromThread(activeRunId, liveThread));
+    entries.push(...itemsFromThread(activeRunId, liveThread, activeRun?.startedAt));
   }
 
   // 3. Feed events → feed entries + CI check aggregation
   entries.push(...feedEventsToEntries(feedEvents));
 
   // 4. Sort by timestamp, then by entry order for stability
-  entries.sort((a, b) => {
-    const cmp = a.at.localeCompare(b.at);
-    if (cmp !== 0) return cmp;
-    // Within same timestamp: run-start before items, items before run-end
-    const kindCmp = kindOrder(a.kind) - kindOrder(b.kind);
-    if (kindCmp !== 0) return kindCmp;
-    return a.id.localeCompare(b.id);
+  return sortTimelineEntries(entries);
+}
+
+export function reconcileTimelineFromRehydration(
+  previousTimeline: TimelineEntry[],
+  runs: TimelineRunInput[],
+  feedEvents: OperatorFeedEvent[],
+  liveThread: CodexThreadSummary | null | undefined,
+  activeRunId: number | null | undefined,
+): TimelineEntry[] {
+  const rehydrated = buildTimelineFromRehydration(runs, feedEvents, liveThread, activeRunId);
+  if (previousTimeline.length === 0) {
+    return rehydrated;
+  }
+
+  const previousById = new Map(previousTimeline.map((entry) => [entry.id, entry]));
+  const rehydratedIds = new Set(rehydrated.map((entry) => entry.id));
+  const liveUserMessages = collectUserMessageCounts(rehydrated, activeRunId);
+  const merged = rehydrated.map((entry) => mergeTimelineEntry(previousById.get(entry.id), entry));
+  const carriedForward = previousTimeline.filter((entry) => {
+    if (rehydratedIds.has(entry.id)) return false;
+    return shouldCarryForwardEntry(entry, activeRunId, liveUserMessages);
   });
 
-  return entries;
+  return sortTimelineEntries([...merged, ...carriedForward]);
 }
 
 function kindOrder(kind: TimelineEntry["kind"]): number {
@@ -225,20 +241,34 @@ function syntheticTimestamp(startMs: number, endMs: number, index: number, total
 
 // ─── Items from Live Thread ───────────────────────────────────────
 
-function itemsFromThread(runId: number, thread: CodexThreadSummary): TimelineEntry[] {
+function itemsFromThread(
+  runId: number,
+  thread: CodexThreadSummary,
+  runStartedAt?: string,
+): TimelineEntry[] {
   const entries: TimelineEntry[] = [];
+  let itemIndex = 0;
   for (const turn of getThreadTurns(thread)) {
     for (const item of turn.items) {
       entries.push({
         id: `live-${item.id}`,
-        at: new Date().toISOString(), // live items don't have timestamps; they'll sort to the end
+        at: liveItemTimestamp(runStartedAt, itemIndex),
         kind: "item",
         runId,
         item: materializeItem(item),
       });
+      itemIndex += 1;
     }
   }
   return entries;
+}
+
+const LIVE_ITEM_FALLBACK_START_MS = Date.UTC(9999, 0, 1, 0, 0, 0, 0);
+
+function liveItemTimestamp(runStartedAt: string | undefined, itemIndex: number): string {
+  const baseMs = runStartedAt ? Date.parse(runStartedAt) : LIVE_ITEM_FALLBACK_START_MS;
+  const stableBaseMs = Number.isFinite(baseMs) ? baseMs : LIVE_ITEM_FALLBACK_START_MS;
+  return new Date(stableBaseMs + itemIndex).toISOString();
 }
 
 function materializeItem(item: CodexThreadItem): TimelineItemPayload {
@@ -248,6 +278,8 @@ function materializeItem(item: CodexThreadItem): TimelineItemPayload {
   const base: TimelineItemPayload = { id, type, status: "completed" };
 
   switch (type) {
+    case "userMessage":
+      return { ...base, text: extractUserMessageText(r.content) };
     case "agentMessage":
       return { ...base, text: String(r.text ?? "") };
     case "commandExecution":
@@ -446,15 +478,159 @@ function mergeDefinedItemFields(base: TimelineItemPayload, patch: TimelineItemPa
     ...base,
     id: patch.id,
     type: patch.type,
-    status: patch.status,
-    ...(patch.text !== undefined ? { text: patch.text } : {}),
+    status: preferredItemStatus(base.status, patch.status),
+    ...(mergePreferredString(base.text, patch.text) !== undefined ? { text: mergePreferredString(base.text, patch.text) } : {}),
     ...(patch.command !== undefined ? { command: patch.command } : {}),
-    ...(patch.output !== undefined ? { output: patch.output } : {}),
+    ...(mergePreferredString(base.output, patch.output) !== undefined ? { output: mergePreferredString(base.output, patch.output) } : {}),
     ...(patch.exitCode !== undefined ? { exitCode: patch.exitCode } : {}),
-    ...(patch.durationMs !== undefined ? { durationMs: patch.durationMs } : {}),
-    ...(patch.changes !== undefined ? { changes: patch.changes } : {}),
+    ...(patch.durationMs !== undefined || base.durationMs !== undefined
+      ? { durationMs: preferredNumber(base.durationMs, patch.durationMs) }
+      : {}),
+    ...(patch.changes !== undefined || base.changes !== undefined
+      ? { changes: preferredChanges(base.changes, patch.changes) }
+      : {}),
     ...(patch.toolName !== undefined ? { toolName: patch.toolName } : {}),
   };
+}
+
+function mergeTimelineEntry(existing: TimelineEntry | undefined, incoming: TimelineEntry): TimelineEntry {
+  if (!existing || existing.kind !== incoming.kind) {
+    return incoming;
+  }
+
+  switch (incoming.kind) {
+    case "item":
+      return {
+        ...incoming,
+        at: existing.at,
+        ...(existing.runId !== undefined && incoming.runId === undefined ? { runId: existing.runId } : {}),
+        item: incoming.item && existing.item ? mergeDefinedItemFields(existing.item, incoming.item) : incoming.item,
+      };
+    case "run-start":
+    case "run-end":
+      return {
+        ...incoming,
+        at: existing.at,
+        run: existing.run && incoming.run ? { ...existing.run, ...incoming.run } : incoming.run,
+      };
+    case "feed":
+      return {
+        ...incoming,
+        at: existing.at,
+        feed: existing.feed && incoming.feed ? { ...existing.feed, ...incoming.feed } : incoming.feed,
+      };
+    case "ci-checks":
+      return {
+        ...incoming,
+        at: existing.at,
+        ciChecks: incoming.ciChecks ?? existing.ciChecks,
+      };
+  }
+}
+
+function shouldCarryForwardEntry(
+  entry: TimelineEntry,
+  activeRunId: number | null | undefined,
+  liveUserMessages: Map<string, number>,
+): boolean {
+  if (entry.kind !== "item" || entry.runId !== activeRunId) {
+    return false;
+  }
+
+  if (entry.item?.id.startsWith("prompt-") === true) {
+    const text = normalizePromptText(entry.item.text);
+    return !text || !consumeUserMessageMatch(liveUserMessages, text);
+  }
+
+  return entry.item?.status === "inProgress";
+}
+
+function sortTimelineEntries(entries: TimelineEntry[]): TimelineEntry[] {
+  return [...entries].sort((a, b) => {
+    const cmp = a.at.localeCompare(b.at);
+    if (cmp !== 0) return cmp;
+    // Within same timestamp: run-start before items, items before run-end
+    const kindCmp = kindOrder(a.kind) - kindOrder(b.kind);
+    if (kindCmp !== 0) return kindCmp;
+    return a.id.localeCompare(b.id);
+  });
+}
+
+function preferredItemStatus(existing: string, incoming: string): string {
+  return itemStatusRank(incoming) >= itemStatusRank(existing) ? incoming : existing;
+}
+
+function itemStatusRank(status: string): number {
+  switch (status) {
+    case "failed":
+    case "completed":
+    case "declined":
+      return 2;
+    case "inProgress":
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+function mergePreferredString(existing: string | undefined, incoming: string | undefined): string | undefined {
+  if (incoming === undefined) return existing;
+  if (existing === undefined) return incoming;
+  return incoming.length >= existing.length ? incoming : existing;
+}
+
+function preferredNumber(existing: number | undefined, incoming: number | undefined): number | undefined {
+  return incoming ?? existing;
+}
+
+function preferredChanges(existing: unknown[] | undefined, incoming: unknown[] | undefined): unknown[] | undefined {
+  if (incoming === undefined) return existing;
+  if (existing === undefined) return incoming;
+  return incoming.length >= existing.length ? incoming : existing;
+}
+
+function collectUserMessageCounts(entries: TimelineEntry[], activeRunId: number | null | undefined): Map<string, number> {
+  const texts = new Map<string, number>();
+  for (const entry of entries) {
+    if (entry.kind !== "item" || entry.runId !== activeRunId || entry.item?.type !== "userMessage") {
+      continue;
+    }
+    const text = normalizePromptText(entry.item.text);
+    if (text) {
+      texts.set(text, (texts.get(text) ?? 0) + 1);
+    }
+  }
+  return texts;
+}
+
+function consumeUserMessageMatch(messages: Map<string, number>, text: string): boolean {
+  const count = messages.get(text) ?? 0;
+  if (count <= 0) {
+    return false;
+  }
+  if (count === 1) {
+    messages.delete(text);
+  } else {
+    messages.set(text, count - 1);
+  }
+  return true;
+}
+
+function normalizePromptText(text: string | undefined): string | null {
+  const normalized = text?.trim();
+  return normalized && normalized.length > 0 ? normalized : null;
+}
+
+function extractUserMessageText(content: unknown): string {
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") return undefined;
+      const value = (entry as Record<string, unknown>).text;
+      return typeof value === "string" ? value : undefined;
+    })
+    .filter((value): value is string => Boolean(value))
+    .join("\n\n");
 }
 
 // ─── Feed Events to Timeline Entries ──────────────────────────────

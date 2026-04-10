@@ -2,8 +2,10 @@ import { useEffect, useMemo, useReducer } from "react";
 import { Box, Text, useStdout } from "ink";
 import type { TimelineEntry, TimelineRunInput } from "./timeline-builder.ts";
 import type { DetailTab, OperatorFeedEvent, WatchDiffSummary, WatchIssue, WatchIssueContext, WatchTokenUsage } from "./watch-state.ts";
-import { HelpBar } from "./HelpBar.tsx";
+import { HelpBar, buildHelpBarText } from "./HelpBar.tsx";
 import { buildDetailLines } from "./detail-rows.ts";
+import { buildDetailStatusSegments, buildDetailStatusText } from "./detail-status.ts";
+import { measureRenderedTextRows } from "./layout-measure.ts";
 import type { TextLine } from "./render-rich-text.ts";
 
 interface IssueDetailViewProps {
@@ -47,17 +49,21 @@ export function IssueDetailView({
   reservedRows = 0,
   onLayoutChange,
 }: IssueDetailViewProps): React.JSX.Element {
-  const [, tick] = useReducer((value: number) => value + 1, 0);
   const { stdout } = useStdout();
   const width = Math.max(20, stdout?.columns ?? 80);
   const totalRows = stdout?.rows ?? 24;
-  const footerRows = 1 + (unreadBelow > 0 ? 1 : 0);
+  const footerRows = useMemo(() => {
+    const statusRows = measureRenderedTextRows(buildDetailStatusText({
+      follow,
+      unreadBelow,
+      activeRunStartedAt,
+      connected,
+      lastServerMessageAt,
+    }), width);
+    const helpRows = measureRenderedTextRows(buildHelpBarText("detail", follow, detailTab), width);
+    return statusRows + helpRows;
+  }, [activeRunStartedAt, connected, detailTab, follow, lastServerMessageAt, unreadBelow, width]);
   const viewportRows = Math.max(4, totalRows - reservedRows - footerRows);
-
-  useEffect(() => {
-    const id = setInterval(tick, 1_000);
-    return () => clearInterval(id);
-  }, []);
 
   const lines = useMemo(() => {
     if (!issue) {
@@ -75,9 +81,6 @@ export function IssueDetailView({
       detailTab,
       rawRuns,
       rawFeedEvents,
-      follow,
-      connected,
-      lastServerMessageAt,
       width,
     });
   }, [
@@ -92,9 +95,6 @@ export function IssueDetailView({
     detailTab,
     rawRuns,
     rawFeedEvents,
-    follow,
-    connected,
-    lastServerMessageAt,
     width,
   ]);
 
@@ -115,9 +115,13 @@ export function IssueDetailView({
       {Array.from({ length: fillerCount }, (_, index) => (
         <Text key={`detail-fill-${index}`}> </Text>
       ))}
-      {unreadBelow > 0 && (
-        <Text color="yellow">{`${unreadBelow} below · End jumps back to live`}</Text>
-      )}
+      <DetailStatusStrip
+        follow={follow}
+        unreadBelow={unreadBelow}
+        activeRunStartedAt={activeRunStartedAt}
+        connected={connected}
+        lastServerMessageAt={lastServerMessageAt}
+      />
       <HelpBar view="detail" follow={follow} detailTab={detailTab} />
     </Box>
   );
@@ -134,6 +138,51 @@ function RenderedLine({ line }: { line: TextLine }): React.JSX.Element {
         <Text
           // eslint-disable-next-line react/no-array-index-key
           key={`${line.key}-${index}`}
+          {...(segment.color ? { color: segment.color } : {})}
+          {...(segment.dimColor ? { dimColor: true } : {})}
+          {...(segment.bold ? { bold: true } : {})}
+        >
+          {segment.text}
+        </Text>
+      ))}
+    </Text>
+  );
+}
+
+function DetailStatusStrip({
+  follow,
+  unreadBelow,
+  activeRunStartedAt,
+  connected,
+  lastServerMessageAt,
+}: {
+  follow: boolean;
+  unreadBelow: number;
+  activeRunStartedAt: string | null;
+  connected: boolean;
+  lastServerMessageAt: number | null;
+}): React.JSX.Element {
+  const [tick, bumpTick] = useReducer((value: number) => value + 1, 0);
+
+  useEffect(() => {
+    const id = setInterval(bumpTick, 1_000);
+    return () => clearInterval(id);
+  }, []);
+
+  const segments = useMemo(() => buildDetailStatusSegments({
+    follow,
+    unreadBelow,
+    activeRunStartedAt,
+    connected,
+    lastServerMessageAt,
+  }), [activeRunStartedAt, connected, follow, lastServerMessageAt, tick, unreadBelow]);
+
+  return (
+    <Text>
+      {segments.map((segment, index) => (
+        <Text
+          // eslint-disable-next-line react/no-array-index-key
+          key={`detail-status-${index}`}
           {...(segment.color ? { color: segment.color } : {})}
           {...(segment.dimColor ? { dimColor: true } : {})}
           {...(segment.bold ? { bold: true } : {})}

@@ -4,7 +4,6 @@ import { buildStateHistory, type HistoryRunInfo, type SideTripNode, type StateHi
 import { buildTimelineRows } from "./timeline-presentation.ts";
 import { planStepColor, planStepSymbol } from "./plan-helpers.ts";
 import { progressBar } from "./format-utils.ts";
-import { describePatchRelayFreshness } from "./freshness.ts";
 import {
   hasDisplayPrBlocker,
   isApprovedReviewState,
@@ -27,9 +26,6 @@ interface BuildDetailLinesInput {
   detailTab: DetailTab;
   rawRuns: TimelineRunInput[];
   rawFeedEvents: OperatorFeedEvent[];
-  follow: boolean;
-  connected: boolean;
-  lastServerMessageAt: number | null;
   width: number;
 }
 
@@ -121,19 +117,9 @@ function buildHeaderLines(input: BuildDetailLinesInput, width: number): TextLine
     headerSegments.push({ text: "  ", dimColor: true });
     headerSegments.push(...joinFactSegments(facts));
   }
-  if (input.activeRunStartedAt) {
-    headerSegments.push({ text: "  ", dimColor: true });
-    headerSegments.push({ text: elapsedLabel(input.activeRunStartedAt), dimColor: true });
-  }
   if (meta.length > 0) {
     headerSegments.push({ text: "  ", dimColor: true });
     headerSegments.push({ text: meta.join("  "), dimColor: true });
-  }
-  headerSegments.push({ text: "  ", dimColor: true });
-  headerSegments.push(...freshnessSegments(input.connected, input.lastServerMessageAt));
-  if (input.follow) {
-    headerSegments.push({ text: "  " });
-    headerSegments.push({ text: "live", color: "yellow", bold: true });
   }
 
   const lines = renderTextLines(segmentsToText(headerSegments), {
@@ -321,7 +307,7 @@ function renderTimelineItemLines(
           : { dimColor: item.type !== "commandExecution" },
   });
 
-  if (item.output && item.status === "inProgress") {
+  if (item.output && item.type === "commandExecution") {
     lines.push(...renderTextLines(lastNonEmptyLine(item.output), {
       key: `${key}-output`,
       width,
@@ -553,13 +539,6 @@ function formatTime(iso: string): string {
   return new Date(iso).toLocaleTimeString("en-GB", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
-function elapsedLabel(startedAt: string): string {
-  const elapsed = Math.max(0, Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000));
-  const minutes = Math.floor(elapsed / 60);
-  const seconds = elapsed % 60;
-  return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
-}
-
 function itemSummary(item: { type: string; text?: string | undefined; command?: string | undefined; exitCode?: number | undefined; durationMs?: number | undefined; changes?: unknown[] | undefined; toolName?: string | undefined }): string {
   switch (item.type) {
     case "commandExecution": {
@@ -681,11 +660,6 @@ function feedGlyph(status?: string): string {
   if (status === "failed") return "✗";
   if (status === "completed" || status === "pr_merged") return "✓";
   return "●";
-}
-
-function freshnessSegments(connected: boolean, lastServerMessageAt: number | null): TextSegment[] {
-  const freshness = describePatchRelayFreshness(connected, lastServerMessageAt);
-  return [{ text: freshness.label, color: freshness.color, bold: true }];
 }
 
 function blankLine(key: string): TextLine {

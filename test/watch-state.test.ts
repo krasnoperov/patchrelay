@@ -148,19 +148,6 @@ test("exit-detail returns to list view and clears timeline", () => {
   assert.equal(state.activeDetailKey, null);
 });
 
-test("enter-feed switches to feed view and clears detail state", () => {
-  const initial = stateWith({ view: "detail", activeDetailKey: "USE-74" });
-  const state = reduce(initial, { type: "enter-feed" });
-  assert.equal(state.view, "feed");
-  assert.equal(state.activeDetailKey, null);
-});
-
-test("exit-feed returns to list view", () => {
-  const initial = stateWith({ view: "feed" });
-  const state = reduce(initial, { type: "exit-feed" });
-  assert.equal(state.view, "list");
-});
-
 test("detail-navigate cycles through filtered issues", () => {
   const issues = [makeIssue("USE-1"), makeIssue("USE-2"), makeIssue("USE-3")];
   const initial = stateWith({ view: "detail", activeDetailKey: "USE-1", issues });
@@ -407,6 +394,303 @@ test("timeline-rehydrate sets activeRunId and startedAt", () => {
 
   assert.equal(state.activeRunId, 42);
   assert.equal(state.activeRunStartedAt, "2026-03-25T10:10:00.000Z");
+});
+
+test("timeline-rehydrate preserves stable timestamps and richer live item fields for known rows", () => {
+  const initial = stateWith({
+    timeline: [{
+      id: "run-start-42",
+      at: "2026-03-25T10:10:00.000Z",
+      kind: "run-start",
+      runId: 42,
+      run: {
+        runType: "implementation",
+        status: "running",
+        startedAt: "2026-03-25T10:10:00.000Z",
+      },
+    }, {
+      id: "live-cmd-1",
+      at: "2026-03-25T10:10:00.123Z",
+      kind: "item",
+      runId: 42,
+      item: {
+        id: "cmd-1",
+        type: "commandExecution",
+        status: "inProgress",
+        command: "npm test",
+        output: "PASS src/watch\n",
+      },
+    }],
+  });
+
+  const state = reduce(initial, {
+    type: "timeline-rehydrate",
+    runs: [{
+      id: 42,
+      runType: "implementation",
+      status: "running",
+      startedAt: "2026-03-25T10:10:00.000Z",
+    }],
+    feedEvents: [],
+    liveThread: {
+      id: "thread-42",
+      preview: "",
+      cwd: "/tmp",
+      status: "running",
+      turns: [{
+        id: "turn-1",
+        status: "running",
+        items: [{
+          id: "cmd-1",
+          type: "commandExecution",
+          command: "npm test",
+          cwd: "/tmp",
+          status: "inProgress",
+        }],
+      }],
+    },
+    activeRunId: 42,
+    issueContext: null,
+  });
+
+  const commandEntry = state.timeline.find((entry) => entry.id === "live-cmd-1");
+  assert.equal(commandEntry?.at, "2026-03-25T10:10:00.123Z");
+  assert.equal(commandEntry?.item?.output, "PASS src/watch\n");
+});
+
+test("timeline-rehydrate does not regress a completed live item back to in-progress", () => {
+  const initial = stateWith({
+    timeline: [{
+      id: "live-cmd-1",
+      at: "2026-03-25T10:10:00.123Z",
+      kind: "item",
+      runId: 42,
+      item: {
+        id: "cmd-1",
+        type: "commandExecution",
+        status: "completed",
+        command: "npm test",
+        output: "PASS src/watch\n",
+        exitCode: 0,
+      },
+    }],
+  });
+
+  const state = reduce(initial, {
+    type: "timeline-rehydrate",
+    runs: [{
+      id: 42,
+      runType: "implementation",
+      status: "running",
+      startedAt: "2026-03-25T10:10:00.000Z",
+    }],
+    feedEvents: [],
+    liveThread: {
+      id: "thread-42",
+      preview: "",
+      cwd: "/tmp",
+      status: "running",
+      turns: [{
+        id: "turn-1",
+        status: "running",
+        items: [{
+          id: "cmd-1",
+          type: "commandExecution",
+          command: "npm test",
+          cwd: "/tmp",
+          status: "inProgress",
+          aggregatedOutput: "PASS\n",
+        }],
+      }],
+    },
+    activeRunId: 42,
+    issueContext: null,
+  });
+
+  const commandEntry = state.timeline.find((entry) => entry.id === "live-cmd-1");
+  assert.equal(commandEntry?.item?.status, "completed");
+  assert.equal(commandEntry?.item?.output, "PASS src/watch\n");
+  assert.equal(commandEntry?.item?.exitCode, 0);
+});
+
+test("timeline-rehydrate carries forward optimistic active-run items that are not yet in the snapshot", () => {
+  const initial = stateWith({
+    timeline: [{
+      id: "live-cmd-2",
+      at: "2026-03-25T10:10:01.000Z",
+      kind: "item",
+      runId: 42,
+      item: {
+        id: "cmd-2",
+        type: "commandExecution",
+        status: "inProgress",
+        command: "npm run lint",
+      },
+    }],
+  });
+
+  const state = reduce(initial, {
+    type: "timeline-rehydrate",
+    runs: [{
+      id: 42,
+      runType: "implementation",
+      status: "running",
+      startedAt: "2026-03-25T10:10:00.000Z",
+    }],
+    feedEvents: [],
+    liveThread: {
+      id: "thread-42",
+      preview: "",
+      cwd: "/tmp",
+      status: "running",
+      turns: [],
+    },
+    activeRunId: 42,
+    issueContext: null,
+  });
+
+  const commandEntry = state.timeline.find((entry) => entry.id === "live-cmd-2");
+  assert.ok(commandEntry);
+  assert.equal(commandEntry?.item?.command, "npm run lint");
+});
+
+test("timeline-rehydrate drops synthetic prompt rows once the live thread includes the matching user message", () => {
+  const initial = stateWith({
+    timeline: [{
+      id: "live-prompt-1",
+      at: "2026-03-25T10:10:01.000Z",
+      kind: "item",
+      runId: 42,
+      item: {
+        id: "prompt-1",
+        type: "userMessage",
+        status: "completed",
+        text: "Please continue with the fix",
+      },
+    }],
+  });
+
+  const state = reduce(initial, {
+    type: "timeline-rehydrate",
+    runs: [{
+      id: 42,
+      runType: "implementation",
+      status: "running",
+      startedAt: "2026-03-25T10:10:00.000Z",
+    }],
+    feedEvents: [],
+    liveThread: {
+      id: "thread-42",
+      preview: "",
+      cwd: "/tmp",
+      status: "running",
+      turns: [{
+        id: "turn-1",
+        status: "running",
+        items: [{
+          id: "user-1",
+          type: "userMessage",
+          content: [{ text: "Please continue with the fix" }],
+        }],
+      }],
+    },
+    activeRunId: 42,
+    issueContext: null,
+  });
+
+  assert.equal(state.timeline.some((entry) => entry.id === "live-prompt-1"), false);
+  const userEntry = state.timeline.find((entry) => entry.kind === "item" && entry.item?.type === "userMessage");
+  assert.equal(userEntry?.item?.text, "Please continue with the fix");
+});
+
+test("timeline-rehydrate only consumes one synthetic prompt for each matching live user message", () => {
+  const initial = stateWith({
+    timeline: [
+      {
+        id: "live-prompt-1",
+        at: "2026-03-25T10:10:01.000Z",
+        kind: "item",
+        runId: 42,
+        item: {
+          id: "prompt-1",
+          type: "userMessage",
+          status: "completed",
+          text: "Please continue with the fix",
+        },
+      },
+      {
+        id: "live-prompt-2",
+        at: "2026-03-25T10:10:02.000Z",
+        kind: "item",
+        runId: 42,
+        item: {
+          id: "prompt-2",
+          type: "userMessage",
+          status: "completed",
+          text: "Please continue with the fix",
+        },
+      },
+    ],
+  });
+
+  const state = reduce(initial, {
+    type: "timeline-rehydrate",
+    runs: [{
+      id: 42,
+      runType: "implementation",
+      status: "running",
+      startedAt: "2026-03-25T10:10:00.000Z",
+    }],
+    feedEvents: [],
+    liveThread: {
+      id: "thread-42",
+      preview: "",
+      cwd: "/tmp",
+      status: "running",
+      turns: [{
+        id: "turn-1",
+        status: "running",
+        items: [{
+          id: "user-1",
+          type: "userMessage",
+          content: [{ text: "Please continue with the fix" }],
+        }],
+      }],
+    },
+    activeRunId: 42,
+    issueContext: null,
+  });
+
+  assert.equal(state.timeline.some((entry) => entry.id === "live-prompt-1"), false);
+  assert.equal(state.timeline.some((entry) => entry.id === "live-prompt-2"), true);
+});
+
+test("buildTimelineFromRehydration assigns deterministic timestamps to live thread rows", () => {
+  const timeline = buildTimelineFromRehydration([{
+    id: 42,
+    runType: "implementation",
+    status: "running",
+    startedAt: "2026-03-25T10:10:00.000Z",
+  }], [], {
+    id: "thread-42",
+    preview: "",
+    cwd: "/tmp",
+    status: "running",
+    turns: [{
+      id: "turn-1",
+      status: "running",
+      items: [
+        { id: "agent-1", type: "agentMessage", text: "Working..." },
+        { id: "cmd-1", type: "commandExecution", command: "npm test", cwd: "/tmp", status: "inProgress" },
+      ],
+    }],
+  }, 42);
+
+  const liveEntries = timeline.filter((entry) => entry.kind === "item");
+  assert.deepEqual(
+    liveEntries.map((entry) => entry.at),
+    ["2026-03-25T10:10:00.000Z", "2026-03-25T10:10:00.001Z"],
+  );
 });
 
 // ─── Codex Notification → Timeline ────────────────────────────────
@@ -726,7 +1010,7 @@ test("buildTimelineRows sorts compact rows deterministically when timestamps mat
     null,
   );
 
-  const rows = buildTimelineRows(timeline, "compact").filter((row) => row.kind === "run");
+  const rows = buildTimelineRows(timeline).filter((row) => row.kind === "run");
   assert.equal(rows[0]?.id, "run-1");
   assert.equal(rows[1]?.id, "run-2");
 });
@@ -782,7 +1066,7 @@ test("buildTimelineRows hides queue handoff chatter and collapses repeated appli
     null,
   );
 
-  const rows = buildTimelineRows(timeline, "compact").filter((row) => row.kind === "feed");
+  const rows = buildTimelineRows(timeline).filter((row) => row.kind === "feed");
   assert.equal(rows.length, 2);
   assert.equal(rows[0]?.feed.status, "queue_label_applied");
   assert.equal(rows[0]?.repeatCount, 2);
@@ -836,18 +1120,77 @@ test("buildTimelineRows keeps verbose runs focused on meaningful items", () => {
   assert.ok(runRow.items.length >= 2, "run should include items");
 });
 
-// ─── Feed Events ─────────────────────────────────────────────
+test("buildTimelineRows keeps active runs focused on the latest live context", () => {
+  const entries: TimelineEntry[] = [
+    {
+      id: "run-start-9",
+      at: "2026-03-25T10:00:00.000Z",
+      kind: "run-start",
+      runId: 9,
+      run: { runType: "implementation", status: "running", startedAt: "2026-03-25T10:00:00.000Z" },
+    },
+    {
+      id: "item-user-1",
+      at: "2026-03-25T10:00:01.000Z",
+      kind: "item",
+      runId: 9,
+      item: { id: "user-1", type: "userMessage", status: "completed", text: "Please fix the tests." },
+    },
+    {
+      id: "item-plan-1",
+      at: "2026-03-25T10:00:02.000Z",
+      kind: "item",
+      runId: 9,
+      item: { id: "plan-1", type: "plan", status: "completed", text: "Plan details" },
+    },
+    {
+      id: "item-msg-1",
+      at: "2026-03-25T10:00:03.000Z",
+      kind: "item",
+      runId: 9,
+      item: { id: "msg-1", type: "agentMessage", status: "completed", text: "Checking the failures." },
+    },
+    {
+      id: "item-tool-1",
+      at: "2026-03-25T10:00:04.000Z",
+      kind: "item",
+      runId: 9,
+      item: { id: "tool-1", type: "dynamicToolCall", status: "completed", toolName: "grep" },
+    },
+    {
+      id: "item-cmd-1",
+      at: "2026-03-25T10:00:05.000Z",
+      kind: "item",
+      runId: 9,
+      item: { id: "cmd-1", type: "commandExecution", status: "completed", command: "npm test", output: "FAIL old test\n" },
+    },
+    {
+      id: "item-msg-2",
+      at: "2026-03-25T10:00:06.000Z",
+      kind: "item",
+      runId: 9,
+      item: { id: "msg-2", type: "agentMessage", status: "inProgress", text: "I found the failing suite and I am patching it." },
+    },
+    {
+      id: "item-cmd-2",
+      at: "2026-03-25T10:00:07.000Z",
+      kind: "item",
+      runId: 9,
+      item: { id: "cmd-2", type: "commandExecution", status: "inProgress", command: "npm test -- watch", output: "PASS updated test\n" },
+    },
+    {
+      id: "item-files-1",
+      at: "2026-03-25T10:00:08.000Z",
+      kind: "item",
+      runId: 9,
+      item: { id: "files-1", type: "fileChange", status: "completed", changes: [{ path: "src/watch.ts" }] },
+    },
+  ];
 
-test("feed-snapshot sets feed events", () => {
-  const events = [makeFeedEvent({ id: 1 }), makeFeedEvent({ id: 2 })];
-  const state = reduce(initialWatchState, { type: "feed-snapshot", events });
-  assert.equal(state.feedEvents.length, 2);
-});
-
-test("feed-new-event appends to feed events", () => {
-  const initial = stateWith({ feedEvents: [makeFeedEvent({ id: 1 })] });
-  const state = reduce(initial, { type: "feed-new-event", event: makeFeedEvent({ id: 2 }) });
-  assert.equal(state.feedEvents.length, 2);
+  const rows = buildTimelineRows(entries);
+  const runRow = rows.find((row) => row.kind === "run");
+  assert.ok(runRow && runRow.kind === "run");
+  assert.deepEqual(runRow.items.map(({ item }) => item.id), ["msg-2", "cmd-2", "files-1"]);
 });
 
 // ─── Aggregates ──────────────────────────────────────────────

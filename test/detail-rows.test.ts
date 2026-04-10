@@ -106,14 +106,81 @@ test("buildDetailLines keeps completed timeline runs collapsed to a summary", ()
     detailTab: "timeline",
     rawRuns: [],
     rawFeedEvents: [],
-    follow: true,
-    connected: true,
-    lastServerMessageAt: Date.now(),
     width: 80,
   })).join("\n");
 
   assert.match(text, /Final summary update\./);
   assert.doesNotMatch(text, /First progress update\./);
+});
+
+test("buildDetailLines keeps active runs focused on the latest command output and file changes", () => {
+  const issue = makeIssue("USE-3", { activeRunType: "implementation" });
+  const timeline: TimelineEntry[] = [
+    {
+      id: "run-start-9",
+      at: "2026-03-25T10:00:00.000Z",
+      kind: "run-start",
+      runId: 9,
+      run: { runType: "implementation", status: "running", startedAt: "2026-03-25T10:00:00.000Z" },
+    },
+    {
+      id: "item-msg-1",
+      at: "2026-03-25T10:00:03.000Z",
+      kind: "item",
+      runId: 9,
+      item: { id: "msg-1", type: "agentMessage", status: "completed", text: "Earlier note." },
+    },
+    {
+      id: "item-cmd-1",
+      at: "2026-03-25T10:00:04.000Z",
+      kind: "item",
+      runId: 9,
+      item: { id: "cmd-1", type: "commandExecution", status: "completed", command: "npm test", output: "FAIL old test\n" },
+    },
+    {
+      id: "item-msg-2",
+      at: "2026-03-25T10:00:06.000Z",
+      kind: "item",
+      runId: 9,
+      item: { id: "msg-2", type: "agentMessage", status: "inProgress", text: "Patching the watch rendering now." },
+    },
+    {
+      id: "item-cmd-2",
+      at: "2026-03-25T10:00:07.000Z",
+      kind: "item",
+      runId: 9,
+      item: { id: "cmd-2", type: "commandExecution", status: "inProgress", command: "npm test -- watch", output: "PASS updated watch test\n" },
+    },
+    {
+      id: "item-files-1",
+      at: "2026-03-25T10:00:08.000Z",
+      kind: "item",
+      runId: 9,
+      item: { id: "files-1", type: "fileChange", status: "completed", changes: [{ path: "src/cli/watch/App.tsx" }] },
+    },
+  ];
+
+  const text = detailText(buildDetailLines({
+    issue,
+    timeline,
+    activeRunStartedAt: "2026-03-25T10:00:00.000Z",
+    activeRunId: 9,
+    tokenUsage: null,
+    diffSummary: null,
+    plan: null,
+    issueContext: null,
+    detailTab: "timeline",
+    rawRuns: [],
+    rawFeedEvents: [],
+    width: 90,
+  })).join("\n");
+
+  assert.match(text, /Patching the watch rendering now\./);
+  assert.match(text, /\$ npm test -- watch/);
+  assert.match(text, /PASS updated watch test/);
+  assert.match(text, /updated 1 file: App\.tsx/);
+  assert.doesNotMatch(text, /Earlier note\./);
+  assert.doesNotMatch(text, /FAIL old test/);
 });
 
 test("buildDetailLines renders history messages with markdown-friendly formatting", () => {
@@ -152,9 +219,6 @@ test("buildDetailLines renders history messages with markdown-friendly formattin
     detailTab: "history",
     rawRuns,
     rawFeedEvents: [],
-    follow: true,
-    connected: true,
-    lastServerMessageAt: Date.now(),
     width: 90,
   })).join("\n");
 
@@ -181,9 +245,6 @@ test("buildDetailLines renders header status notes with markdown-friendly format
     detailTab: "timeline",
     rawRuns: [],
     rawFeedEvents: [],
-    follow: true,
-    connected: true,
-    lastServerMessageAt: Date.now(),
     width: 90,
   })).join("\n");
 
@@ -204,13 +265,36 @@ test("buildDetailLines renders header status notes with markdown-friendly format
     detailTab: "timeline",
     rawRuns: [],
     rawFeedEvents: [],
-    follow: true,
-    connected: true,
-    lastServerMessageAt: Date.now(),
     width: 90,
   }).find((line) => line.segments.some((segment) => segment.text.includes("Updated")));
 
   assert.equal(noteLine?.segments.some((segment) => segment.dimColor === true), false);
+});
+
+test("buildDetailLines keeps volatile stream status out of the transcript body", () => {
+  const issue = makeIssue("USE-12", {
+    activeRunType: "implementation",
+  });
+
+  const text = detailText(buildDetailLines({
+    issue,
+    timeline: [],
+    activeRunStartedAt: "2026-03-25T10:10:00.000Z",
+    activeRunId: 12,
+    tokenUsage: null,
+    diffSummary: null,
+    plan: null,
+    issueContext: null,
+    detailTab: "timeline",
+    rawRuns: [],
+    rawFeedEvents: [],
+    width: 90,
+  })).join("\n");
+
+  assert.doesNotMatch(text, /live edge/);
+  assert.doesNotMatch(text, /anchored review/);
+  assert.doesNotMatch(text, /disconnected · stale/);
+  assert.doesNotMatch(text, /run \d+m \d{2}s/);
 });
 
 test("buildDetailLines prefers full check summary over gate status for re-review state", () => {
@@ -242,9 +326,6 @@ test("buildDetailLines prefers full check summary over gate status for re-review
     detailTab: "timeline",
     rawRuns: [],
     rawFeedEvents: [],
-    follow: true,
-    connected: true,
-    lastServerMessageAt: Date.now(),
     width: 100,
   })).join("\n");
 
@@ -277,9 +358,6 @@ test("buildDetailLines shows completion check as a first-class transient stage",
     detailTab: "timeline",
     rawRuns: [],
     rawFeedEvents: [],
-    follow: true,
-    connected: true,
-    lastServerMessageAt: Date.now(),
     width: 100,
   })).join("\n");
 
@@ -306,9 +384,6 @@ test("buildDetailLines keeps header PR and review facts colorized instead of fla
     detailTab: "timeline",
     rawRuns: [],
     rawFeedEvents: [],
-    follow: true,
-    connected: true,
-    lastServerMessageAt: Date.now(),
     width: 100,
   });
 
@@ -351,9 +426,6 @@ test("buildDetailLines shows awaiting review and downstream queue facts without 
     detailTab: "timeline",
     rawRuns: [],
     rawFeedEvents: [],
-    follow: true,
-    connected: true,
-    lastServerMessageAt: Date.now(),
     width: 100,
   })).join("\n");
   const downstreamText = detailText(buildDetailLines({
@@ -368,9 +440,6 @@ test("buildDetailLines shows awaiting review and downstream queue facts without 
     detailTab: "timeline",
     rawRuns: [],
     rawFeedEvents: [],
-    follow: true,
-    connected: true,
-    lastServerMessageAt: Date.now(),
     width: 100,
   })).join("\n");
 

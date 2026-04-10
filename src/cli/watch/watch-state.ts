@@ -4,7 +4,7 @@ import type {
   TimelineRunInput,
 } from "./timeline-builder.ts";
 import {
-  buildTimelineFromRehydration,
+  reconcileTimelineFromRehydration,
   appendFeedToTimeline,
   appendCodexItemToTimeline,
   completeCodexItemInTimeline,
@@ -92,7 +92,7 @@ export interface WatchIssueContext {
 
 export type WatchFilter = "all" | "active" | "non-done";
 
-export type WatchView = "list" | "detail" | "feed";
+export type WatchView = "list" | "detail";
 
 export type DetailTab = "timeline" | "history";
 
@@ -120,8 +120,6 @@ export interface WatchState {
   diffSummary: WatchDiffSummary | null;
   plan: Array<{ step: string; status: string }> | null;
   issueContext: WatchIssueContext | null;
-  // Feed view state
-  feedEvents: OperatorFeedEvent[];
 }
 
 export type WatchAction =
@@ -142,18 +140,12 @@ export type WatchAction =
   | { type: "codex-notification"; method: string; params: Record<string, unknown> }
   | { type: "cycle-filter" }
   | { type: "toggle-follow" }
-  | { type: "enter-feed" }
-  | { type: "exit-feed" }
-  | { type: "feed-snapshot"; events: OperatorFeedEvent[] }
-  | { type: "feed-new-event"; event: OperatorFeedEvent }
-  | { type: "switch-detail-tab"; tab: DetailTab }
-  | { type: "toggle-timeline-mode" };
+  | { type: "switch-detail-tab"; tab: DetailTab };
 
 // ─── Array size caps (prevent OOM) ───────────────────────────────
 
 const MAX_TIMELINE_ENTRIES = 2000;
 const MAX_RAW_FEED_EVENTS = 2000;
-const MAX_FEED_EVENTS = 1000;
 
 function capArray<T>(arr: T[], max: number): T[] {
   return arr.length > max ? arr.slice(arr.length - max) : arr;
@@ -186,7 +178,6 @@ export const initialWatchState: WatchState = {
   filter: "non-done",
   follow: true,
   ...DETAIL_INITIAL,
-  feedEvents: [],
 };
 
 const TERMINAL_FACTORY_STATES = new Set(["done", "failed"]);
@@ -415,7 +406,8 @@ export function watchReducer(state: WatchState, action: WatchAction): WatchState
     }
 
     case "timeline-rehydrate": {
-      const timeline = buildTimelineFromRehydration(
+      const timeline = reconcileTimelineFromRehydration(
+        state.timeline,
         action.runs,
         action.feedEvents,
         action.liveThread,
@@ -457,18 +449,6 @@ export function watchReducer(state: WatchState, action: WatchAction): WatchState
               true,
             ),
           };
-
-    case "enter-feed":
-      return { ...state, view: "feed", activeDetailKey: null, ...DETAIL_INITIAL };
-
-    case "exit-feed":
-      return { ...state, view: "list" };
-
-    case "feed-snapshot":
-      return { ...state, feedEvents: action.events };
-
-    case "feed-new-event":
-      return { ...state, feedEvents: capArray([...state.feedEvents, action.event], MAX_FEED_EVENTS) };
 
     case "switch-detail-tab":
       return { ...state, follow: true, ...DETAIL_INITIAL, detailTab: action.tab };
