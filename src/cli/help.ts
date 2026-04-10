@@ -149,7 +149,7 @@ export function issueHelpText(): string {
     "Commands:",
     "  show <issueKey>                 Show the latest known issue state",
     "  list                            List tracked issues",
-    "  watch <issueKey>                Follow PatchRelay-owned activity until it settles",
+    "  watch <issueKey>                Follow issue activity until it settles",
     "  path <issueKey>                 Print the issue worktree path",
     "  open <issueKey>                 Open Codex in the issue worktree",
     "  sessions <issueKey>             Show recorded Codex app-server sessions",
