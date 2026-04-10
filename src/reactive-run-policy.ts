@@ -3,16 +3,9 @@ import type { IssueRecord, RunRecord } from "./db-types.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { RunType } from "./factory-state.ts";
 import type { WithHeldIssueSessionLease } from "./issue-session-lease-service.ts";
+import { readRemotePrState, type RemotePrState } from "./remote-pr-state.ts";
 import type { AppConfig } from "./types.ts";
-import { execCommand } from "./utils.ts";
 import type { PostRunFollowUp } from "./run-completion-policy.ts";
-
-interface RemotePrState {
-  headRefOid?: string;
-  state?: string;
-  reviewDecision?: string;
-  mergeStateStatus?: string;
-}
 
 function isRequestedChangesRunType(runType: RunType): boolean {
   return runType === "review_fix" || runType === "branch_upkeep";
@@ -82,7 +75,7 @@ export class ReactiveRunPolicy {
       return undefined;
     }
     try {
-      const pr = await this.loadRemotePrState(project.github.repoFullName, issue.prNumber);
+      const pr = await readRemotePrState(project.github.repoFullName, issue.prNumber);
       if (!pr || pr.state?.toUpperCase() !== "OPEN") return undefined;
       if (!pr.headRefOid || pr.headRefOid !== issue.lastGitHubFailureHeadSha) return undefined;
       return `Repair finished but PR #${issue.prNumber} is still on failing head ${issue.lastGitHubFailureHeadSha.slice(0, 8)}`;
@@ -111,7 +104,7 @@ export class ReactiveRunPolicy {
       return undefined;
     }
     try {
-      const pr = await this.loadRemotePrState(project.github.repoFullName, issue.prNumber);
+      const pr = await readRemotePrState(project.github.repoFullName, issue.prNumber);
       if (!pr || pr.state?.toUpperCase() !== "OPEN") return undefined;
       if (!pr.headRefOid) {
         return `Requested-changes run finished for PR #${issue.prNumber} but GitHub did not report a current head SHA.`;
@@ -144,7 +137,7 @@ export class ReactiveRunPolicy {
     }
 
     try {
-      const pr = await this.loadRemotePrState(repoFullName, issue.prNumber);
+      const pr = await readRemotePrState(repoFullName, issue.prNumber);
       if (!pr) {
         return this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? issue;
       }
@@ -218,7 +211,7 @@ export class ReactiveRunPolicy {
     }
 
     try {
-      const pr = await this.loadRemotePrState(repoFullName, issue.prNumber);
+      const pr = await readRemotePrState(repoFullName, issue.prNumber);
       if (!pr) return context;
 
       const nextPrState = normalizeRemotePrState(pr.state);
@@ -277,7 +270,7 @@ export class ReactiveRunPolicy {
     }
 
     try {
-      const pr = await this.loadRemotePrState(repoFullName, issue.prNumber);
+      const pr = await readRemotePrState(repoFullName, issue.prNumber);
       if (!pr) return undefined;
 
       const nextPrState = normalizeRemotePrState(pr.state);
@@ -317,16 +310,6 @@ export class ReactiveRunPolicy {
       }, "Failed to resolve post-run PR upkeep");
       return undefined;
     }
-  }
-
-  private async loadRemotePrState(repoFullName: string, prNumber: number): Promise<RemotePrState | undefined> {
-    const { stdout, exitCode } = await execCommand("gh", [
-      "pr", "view", String(prNumber),
-      "--repo", repoFullName,
-      "--json", "headRefOid,state,reviewDecision,mergeStateStatus",
-    ], { timeoutMs: 10_000 });
-    if (exitCode !== 0) return undefined;
-    return JSON.parse(stdout) as RemotePrState;
   }
 
   private upsertIssueIfLeaseHeld(

@@ -26,6 +26,7 @@ import {
   resolveClosedPrFactoryState,
   resolveClosedPrDisposition,
 } from "./pr-state.ts";
+import { GitHubPrCommentHandler } from "./github-pr-comment-handler.ts";
 import { resolveSecret } from "./resolve-secret.ts";
 import type { AppConfig, LinearClientProvider } from "./types.ts";
 import type { ProjectConfig } from "./workflow-types.ts";
@@ -81,6 +82,8 @@ interface GitHubReviewThreadComment {
 type FetchLike = typeof fetch;
 
 export class GitHubWebhookHandler {
+  private readonly prCommentHandler: GitHubPrCommentHandler;
+
   constructor(
     private readonly config: AppConfig,
     private readonly db: PatchRelayDatabase,
@@ -92,7 +95,15 @@ export class GitHubWebhookHandler {
     private readonly failureContextResolver: GitHubFailureContextResolver = createGitHubFailureContextResolver(),
     private readonly ciSnapshotResolver: GitHubCiSnapshotResolver = createGitHubCiSnapshotResolver(),
     private readonly fetchImpl: FetchLike = fetch,
-  ) {}
+  ) {
+    this.prCommentHandler = new GitHubPrCommentHandler(
+      db,
+      enqueueIssue,
+      logger,
+      codex,
+      feed,
+    );
+  }
 
   async acceptGitHubWebhook(params: {
     deliveryId: string;
@@ -171,7 +182,7 @@ export class GitHubWebhookHandler {
     }
 
     if (params.eventType === "issue_comment") {
-      await this.handlePrComment(payload as Record<string, unknown>);
+      await this.prCommentHandler.handleCreatedComment(payload as Record<string, unknown>);
       return;
     }
 
@@ -1134,59 +1145,6 @@ export class GitHubWebhookHandler {
     }
 
     return comments;
-  }
-
-  private async handlePrComment(payload: Record<string, unknown>): Promise<void> {
-    if (payload.action !== "created") return;
-    const issuePayload = payload.issue as Record<string, unknown> | undefined;
-    const comment = payload.comment as Record<string, unknown> | undefined;
-    if (!issuePayload || !comment) return;
-    if (!issuePayload.pull_request) return; // only PR comments
-    const body = typeof comment.body === "string" ? comment.body : "";
-    if (!body.trim()) return;
-    const user = comment.user as Record<string, unknown> | undefined;
-    const author = typeof user?.login === "string" ? user.login : "unknown";
-    if (typeof user?.type === "string" && user.type === "Bot") return;
-    const prNumber = typeof issuePayload.number === "number" ? issuePayload.number : undefined;
-    if (!prNumber) return;
-    const issue = this.db.issues.getIssueByPrNumber(prNumber);
-    if (!issue) return;
-    this.feed?.publish({
-      level: "info",
-      kind: "comment",
-      issueKey: issue.issueKey,
-      projectId: issue.projectId,
-      stage: issue.factoryState,
-      status: "pr_comment",
-      summary: `GitHub PR comment from ${author}`,
-      detail: body.slice(0, 200),
-    });
-
-    if (issue.activeRunId) {
-      const run = this.db.runs.getRunById(issue.activeRunId);
-      if (run?.threadId && run.turnId) {
-        try {
-          await this.codex.steerTurn({
-            threadId: run.threadId,
-            turnId: run.turnId,
-            input: `GitHub PR comment from ${author}:\n\n${body}`,
-          });
-          this.logger.info({ issueKey: issue.issueKey, author }, "Forwarded GitHub PR comment to active run");
-          return;
-        } catch (error) {
-          const msg = error instanceof Error ? error.message : String(error);
-          this.logger.warn({ issueKey: issue.issueKey, error: msg }, "Failed to forward GitHub PR comment");
-        }
-      }
-    }
-
-    this.db.issueSessions.appendIssueSessionEvent({
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      eventType: "followup_comment",
-      eventJson: JSON.stringify({ body, author }),
-    });
-    this.enqueuePendingSessionWake(issue.projectId, issue.linearIssueId);
   }
 
   private async readGitHubErrorResponse(response: Response): Promise<string> {
