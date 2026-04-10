@@ -218,7 +218,7 @@ export function buildMergePrepEscalationActivity(attempts: number): LinearAgentA
 }
 
 export function summarizeIssueStateForLinear(
-  issue: Pick<IssueRecord, "factoryState" | "prNumber" | "prState" | "prReviewState" | "prCheckStatus"> & {
+  issue: Pick<IssueRecord, "factoryState" | "prNumber" | "prState" | "prReviewState" | "prCheckStatus" | "delegatedToPatchRelay"> & {
     sessionState?: string | undefined;
     waitingReason?: string | undefined;
   },
@@ -229,6 +229,9 @@ export function summarizeIssueStateForLinear(
     case "running":
       return issue.waitingReason ?? (issue.prNumber ? `PR #${issue.prNumber} is actively running.` : "Actively running.");
     case "idle":
+      if (!issue.delegatedToPatchRelay && issue.prNumber) {
+        break;
+      }
       return issue.waitingReason ?? (issue.prNumber ? `PR #${issue.prNumber} is idle.` : "Idle.");
     case "done":
       return issue.prNumber ? `PR #${issue.prNumber} has merged.` : "Change merged.";
@@ -238,8 +241,24 @@ export function summarizeIssueStateForLinear(
 
   switch (issue.factoryState) {
     case "pr_open":
+      if (!issue.delegatedToPatchRelay && issue.prNumber) {
+        return `PR #${issue.prNumber} is awaiting review while PatchRelay is paused.`;
+      }
       return issue.prNumber ? `PR #${issue.prNumber} is awaiting review.` : "Awaiting review.";
+    case "changes_requested":
+      if (!issue.delegatedToPatchRelay && issue.prNumber) {
+        return `PR #${issue.prNumber} has requested changes while PatchRelay is paused.`;
+      }
+      return issue.prNumber ? `PR #${issue.prNumber} has requested changes.` : "Requested changes received.";
+    case "repairing_ci":
+      if (!issue.delegatedToPatchRelay && issue.prNumber) {
+        return `PR #${issue.prNumber} has failing CI while PatchRelay is paused.`;
+      }
+      return issue.prNumber ? `PR #${issue.prNumber} has failing CI.` : "Failing CI.";
     case "awaiting_queue":
+      if (!issue.delegatedToPatchRelay && issue.prNumber) {
+        return `PR #${issue.prNumber} is approved and awaiting merge while PatchRelay is paused.`;
+      }
       return issue.prNumber ? `PR #${issue.prNumber} is approved and awaiting merge.` : "Approved and awaiting merge.";
     case "done":
       return issue.prNumber ? `PR #${issue.prNumber} has merged.` : "Change merged.";

@@ -37,7 +37,7 @@ export async function syncVisibleStatusComment(params: {
 }
 
 export function shouldSyncVisibleIssueComment(
-  issue: Pick<IssueRecord, "factoryState" | "prNumber" | "prUrl"> & {
+  issue: Pick<IssueRecord, "factoryState" | "prNumber" | "prUrl" | "delegatedToPatchRelay"> & {
     sessionState?: string | undefined;
   },
   hasAgentSession: boolean,
@@ -48,6 +48,10 @@ export function shouldSyncVisibleIssueComment(
 
   if (issue.sessionState === "waiting_input" || issue.sessionState === "failed"
     || issue.factoryState === "awaiting_input" || issue.factoryState === "failed" || issue.factoryState === "escalated") {
+    return true;
+  }
+
+  if (!issue.delegatedToPatchRelay && (issue.prNumber !== undefined || issue.prUrl)) {
     return true;
   }
 
@@ -88,7 +92,18 @@ function renderStatusComment(
   const lines = [
     "## PatchRelay status",
     "",
-    statusHeadline(trackedIssue ?? issue, activeRunType),
+    statusHeadline(
+      trackedIssue
+        ? {
+            ...trackedIssue,
+            delegatedToPatchRelay: issue.delegatedToPatchRelay,
+            prNumber: issue.prNumber,
+            prReviewState: issue.prReviewState,
+            prCheckStatus: issue.prCheckStatus,
+          }
+        : issue,
+      activeRunType,
+    ),
   ];
   const statusNote = trackedIssue?.statusNote ?? deriveIssueStatusNote({ issue, latestRun, latestEvent, waitingReason });
 
@@ -142,7 +157,7 @@ function renderStatusComment(
 }
 
 function statusHeadline(
-  issue: Pick<IssueRecord, "factoryState" | "prNumber"> & {
+  issue: Pick<IssueRecord, "factoryState" | "prNumber" | "delegatedToPatchRelay" | "prReviewState" | "prCheckStatus"> & {
     sessionState?: string | undefined;
     waitingReason?: string | undefined;
   },
@@ -162,6 +177,18 @@ function statusHeadline(
       return "Needs operator intervention";
     default:
       break;
+  }
+  if (!issue.delegatedToPatchRelay && issue.prNumber !== undefined) {
+    if (issue.factoryState === "awaiting_queue" || issue.prReviewState === "approved") {
+      return `PR #${issue.prNumber} is awaiting downstream merge while PatchRelay is paused`;
+    }
+    if (issue.factoryState === "changes_requested" || issue.prReviewState === "changes_requested") {
+      return `PR #${issue.prNumber} has requested changes while PatchRelay is paused`;
+    }
+    if (issue.factoryState === "repairing_ci" || issue.prCheckStatus === "failed" || issue.prCheckStatus === "failure") {
+      return `PR #${issue.prNumber} has failing CI while PatchRelay is paused`;
+    }
+    return `PR #${issue.prNumber} is awaiting review while PatchRelay is paused`;
   }
   switch (issue.factoryState) {
     case "delegated":
