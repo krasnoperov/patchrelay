@@ -74,13 +74,12 @@ export class AgentSessionHandler {
         await this.publishAgentActivity(linear, normalized.agentSession.id, buildAlreadyRunningThought(activeRun.runType));
         return;
       }
-      const blockerSummary = trackedIssue?.blockedByCount
-        ? `PatchRelay is delegated and waiting on blockers to reach Done: ${trackedIssue.blockedByKeys.join(", ")}.`
-        : "PatchRelay is delegated, but no work is queued. Delegate the issue or move it to Start to trigger implementation.";
-      await this.publishAgentActivity(linear, normalized.agentSession.id, {
-        type: "elicitation",
-        body: blockerSummary,
-      });
+      if (!trackedIssue?.blockedByCount) {
+        await this.publishAgentActivity(linear, normalized.agentSession.id, {
+          type: "elicitation",
+          body: "PatchRelay is delegated, but no work is queued. Delegate the issue or move it to Start to trigger implementation.",
+        });
+      }
       return;
     }
 
