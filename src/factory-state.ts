@@ -98,6 +98,8 @@ const TRANSITION_RULES: readonly TransitionRule[] = [
   // review_commented: no rule → no transition (informational only)
 
   // ── CI check events ────────────────────────────────────────────
+  // check_pending: no rule → no transition (metadata / progress only)
+
   // After queue repair, return to the merge queue.
   { event: "check_passed",
     guard: (s) => s === "repairing_queue",

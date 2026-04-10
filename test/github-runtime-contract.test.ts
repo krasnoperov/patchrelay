@@ -238,6 +238,40 @@ function buildSuccessfulCheckRunPayload(params: {
   });
 }
 
+function buildPendingCheckRunPayload(params: {
+  branch: string;
+  headSha: string;
+  prNumber: number;
+  checkName?: string;
+  action?: string;
+}): string {
+  return JSON.stringify({
+    action: params.action ?? "in_progress",
+    repository: { full_name: "owner/repo" },
+    check_run: {
+      conclusion: null,
+      status: "in_progress",
+      name: params.checkName ?? "Tests",
+      html_url: `https://github.com/owner/repo/actions/runs/${params.prNumber}`,
+      details_url: `https://github.com/owner/repo/actions/runs/${params.prNumber}`,
+      head_sha: params.headSha,
+      output: {
+        title: "Tests are running",
+        summary: "Required checks are still in progress.",
+      },
+      check_suite: {
+        head_branch: params.branch,
+        pull_requests: [
+          {
+            number: params.prNumber,
+            head: { ref: params.branch },
+          },
+        ],
+      },
+    },
+  });
+}
+
 function buildFailedCheckRunPayload(params: {
   branch: string;
   headSha: string;
@@ -702,6 +736,47 @@ test("non-gate successful checks do not mark PR checks green early", async () =>
     assert.equal(issue?.prCheckStatus, "pending");
     assert.equal(issue?.pendingRunType, undefined);
     assert.equal(issue?.activeRunId, undefined);
+    assert.deepEqual(enqueueCalls, []);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("in-progress gate checks on the current head reset stored green status back to pending", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-runtime-pending-gate-"));
+  try {
+    const { db, enqueueCalls, handler } = createHandler(baseDir);
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-pending-gate",
+      issueKey: "USE-11C",
+      branchName: "feat-pending-gate",
+      prNumber: 113,
+      prState: "open",
+      prHeadSha: "sha-pending-gate",
+      factoryState: "pr_open",
+      prCheckStatus: "success",
+      lastGitHubCiSnapshotHeadSha: "sha-pending-gate",
+      lastGitHubCiSnapshotGateCheckName: "Tests",
+      lastGitHubCiSnapshotGateCheckStatus: "success",
+      lastGitHubCiSnapshotJson: JSON.stringify({ headSha: "sha-pending-gate", gateCheckName: "Tests", gateCheckStatus: "success" }),
+      lastGitHubCiSnapshotSettledAt: "2026-04-10T09:00:00.000Z",
+    });
+
+    await handler.processGitHubWebhookEvent({
+      eventType: "check_run",
+      rawBody: buildPendingCheckRunPayload({
+        branch: "feat-pending-gate",
+        headSha: "sha-pending-gate",
+        prNumber: 113,
+      }),
+    });
+
+    const issue = db.getIssue("usertold", "issue-pending-gate");
+    assert.equal(issue?.prCheckStatus, "pending");
+    assert.equal(issue?.lastGitHubCiSnapshotGateCheckStatus, "pending");
+    assert.equal(issue?.lastGitHubCiSnapshotSettledAt, undefined);
+    assert.equal(issue?.pendingRunType, undefined);
     assert.deepEqual(enqueueCalls, []);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });

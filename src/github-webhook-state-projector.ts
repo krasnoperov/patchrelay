@@ -174,6 +174,7 @@ async function updateGitHubCiSnapshot(
     deps.db.issues.upsertIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
+      prCheckStatus: "pending",
       lastGitHubCiSnapshotHeadSha: event.headSha ?? null,
       lastGitHubCiSnapshotGateCheckName: getPrimaryGateCheckName(project),
       lastGitHubCiSnapshotGateCheckStatus: "pending",
@@ -184,10 +185,23 @@ async function updateGitHubCiSnapshot(
   }
 
   if (issue.prState !== "open") return;
-  if (event.eventSource !== "check_run") return;
+  if (event.eventSource !== "check_run" && event.eventSource !== "check_suite") return;
   if (isQueueEvictionFailure(issue, event, project)) return;
   if (!isGateCheckEvent(event, project)) return;
   if (isStaleGateEvent(issue, event)) return;
+  if (event.triggerEvent === "check_pending") {
+    deps.db.issues.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      prCheckStatus: "pending",
+      lastGitHubCiSnapshotHeadSha: event.headSha ?? issue.lastGitHubCiSnapshotHeadSha ?? null,
+      lastGitHubCiSnapshotGateCheckName: event.checkName ?? getPrimaryGateCheckName(project),
+      lastGitHubCiSnapshotGateCheckStatus: "pending",
+      lastGitHubCiSnapshotJson: null,
+      lastGitHubCiSnapshotSettledAt: null,
+    });
+    return;
+  }
 
   const snapshot = await ciSnapshotResolver.resolve({
     repoFullName: project?.github?.repoFullName ?? event.repoFullName,

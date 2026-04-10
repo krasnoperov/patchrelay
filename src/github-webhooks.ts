@@ -131,9 +131,25 @@ function normalizePullRequestReviewEvent(payload: GitHubWebhookPayload, repoFull
 }
 
 function normalizeCheckSuiteEvent(payload: GitHubWebhookPayload, repoFullName: string): NormalizedGitHubEvent | undefined {
-  if (payload.action !== "completed") return undefined;
-
   const suite = payload.check_suite!;
+  if (payload.action !== "completed") {
+    if (payload.action !== "requested" && payload.action !== "rerequested" && payload.action !== "in_progress") {
+      return undefined;
+    }
+    const pr = suite.pull_requests?.[0];
+    const branchName = pr?.head.ref ?? suite.head_branch ?? "";
+    if (!branchName) return undefined;
+    return {
+      triggerEvent: "check_pending",
+      repoFullName,
+      branchName,
+      headSha: suite.head_sha,
+      prNumber: pr?.number,
+      checkStatus: "pending",
+      eventSource: "check_suite",
+    };
+  }
+
   const conclusion = suite.conclusion?.toLowerCase();
   const pr = suite.pull_requests?.[0];
   const branchName = pr?.head.ref ?? suite.head_branch ?? "";
@@ -154,9 +170,28 @@ function normalizeCheckSuiteEvent(payload: GitHubWebhookPayload, repoFullName: s
 }
 
 function normalizeCheckRunEvent(payload: GitHubWebhookPayload, repoFullName: string): NormalizedGitHubEvent | undefined {
-  if (payload.action !== "completed") return undefined;
-
   const run = payload.check_run!;
+  if (payload.action !== "completed") {
+    if (payload.action !== "requested" && payload.action !== "rerequested" && payload.action !== "in_progress") {
+      return undefined;
+    }
+    const pr = run.check_suite?.pull_requests?.[0];
+    const branchName = pr?.head.ref ?? run.check_suite?.head_branch ?? "";
+    if (!branchName) return undefined;
+    return {
+      triggerEvent: "check_pending",
+      repoFullName,
+      branchName,
+      headSha: run.head_sha,
+      prNumber: pr?.number,
+      checkStatus: "pending",
+      checkName: run.name,
+      checkUrl: run.html_url,
+      checkDetailsUrl: run.details_url,
+      eventSource: "check_run",
+    };
+  }
+
   const conclusion = run.conclusion?.toLowerCase();
   const pr = run.check_suite?.pull_requests?.[0];
   const branchName = pr?.head.ref ?? run.check_suite?.head_branch ?? "";

@@ -6,6 +6,7 @@ export type GitHubTriggerEvent =
   | "review_approved"
   | "review_changes_requested"
   | "review_commented"
+  | "check_pending"
   | "check_passed"
   | "check_failed"
   | "merge_group_passed"
