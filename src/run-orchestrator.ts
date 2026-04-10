@@ -81,18 +81,33 @@ export class RunOrchestrator {
   ) {
     this.worktreeManager = new WorktreeManager(config);
     this.linearSync = new LinearSessionSync(config, db, linearProvider, logger, feed);
+    const threadOps = {
+      readThreadWithRetry: (threadId: string, maxRetries?: number) => this.readThreadWithRetry(threadId, maxRetries),
+    };
+    const leaseOps = {
+      withHeldLease: <T>(projectId: string, linearIssueId: string, fn: (lease: { projectId: string; linearIssueId: string; leaseId: string }) => T) =>
+        this.withHeldIssueSessionLease(projectId, linearIssueId, fn),
+      releaseLease: (projectId: string, linearIssueId: string) => this.releaseIssueSessionLease(projectId, linearIssueId),
+      heartbeatLease: (projectId: string, linearIssueId: string) => this.heartbeatIssueSessionLease(projectId, linearIssueId),
+      getHeldLease: (projectId: string, linearIssueId: string) => this.getHeldIssueSessionLease(projectId, linearIssueId),
+    };
+    const recoveryOps = {
+      failRunAndClear: (run: RunRecord, message: string, nextState?: FactoryState) => this.failRunAndClear(run, message, nextState),
+      restoreIdleWorktree: (issue: Pick<IssueRecord, "issueKey" | "worktreePath" | "branchName">) => this.restoreIdleWorktree(issue),
+      recoverOrEscalate: (issue: IssueRecord, runType: RunType, reason: string) => this.recoverOrEscalate(issue, runType, reason),
+    };
     this.leaseService = new IssueSessionLeaseService(
       db,
       logger,
       this.workerId,
-      (threadId, maxRetries) => this.readThreadWithRetry(threadId, maxRetries),
+      threadOps.readThreadWithRetry,
     );
     this.activeSessionLeases = this.leaseService.activeSessionLeases;
     this.runCompletionPolicy = new RunCompletionPolicy(
       config,
       db,
       logger,
-      (projectId, linearIssueId, fn) => this.withHeldIssueSessionLease(projectId, linearIssueId, fn),
+      leaseOps.withHeldLease,
     );
     this.completionCheck = new CompletionCheckService(codex, logger);
     this.runFinalizer = new RunFinalizer(
@@ -100,10 +115,10 @@ export class RunOrchestrator {
       logger,
       this.linearSync,
       this.enqueueIssue,
-      (projectId, linearIssueId, fn) => this.withHeldIssueSessionLease(projectId, linearIssueId, fn),
-      (projectId, linearIssueId) => this.releaseIssueSessionLease(projectId, linearIssueId),
+      leaseOps.withHeldLease,
+      leaseOps.releaseLease,
       (lease, issue, runType, context, dedupeScope) => this.appendWakeEventWithLease(lease, issue, runType, context, dedupeScope),
-      (run, message, nextState) => this.failRunAndClear(run, message, nextState),
+      recoveryOps.failRunAndClear,
       this.runCompletionPolicy,
       this.completionCheck,
       feed,
@@ -115,20 +130,20 @@ export class RunOrchestrator {
       logger,
       this.linearSync,
       this.runFinalizer,
-      (threadId, maxRetries) => this.readThreadWithRetry(threadId, maxRetries),
-      (projectId, linearIssueId, fn) => this.withHeldIssueSessionLease(projectId, linearIssueId, fn),
-      (projectId, linearIssueId) => this.heartbeatIssueSessionLease(projectId, linearIssueId),
-      (projectId, linearIssueId) => this.releaseIssueSessionLease(projectId, linearIssueId),
+      threadOps.readThreadWithRetry,
+      leaseOps.withHeldLease,
+      leaseOps.heartbeatLease,
+      leaseOps.releaseLease,
       feed,
     );
     this.runRecovery = new RunRecoveryService(
       db,
       logger,
       this.linearSync,
-      (projectId, linearIssueId, fn) => this.withHeldIssueSessionLease(projectId, linearIssueId, fn),
-      (projectId, linearIssueId) => this.getHeldIssueSessionLease(projectId, linearIssueId),
+      leaseOps.withHeldLease,
+      leaseOps.getHeldLease,
       (lease, issue, runType, context, dedupeScope) => this.appendWakeEventWithLease(lease, issue, runType, context, dedupeScope),
-      (projectId, linearIssueId) => this.releaseIssueSessionLease(projectId, linearIssueId),
+      leaseOps.releaseLease,
       (projectId, issueId) => this.enqueueIssue(projectId, issueId),
       feed,
     );
@@ -136,10 +151,10 @@ export class RunOrchestrator {
       db,
       logger,
       this.linearSync,
-      (projectId, linearIssueId, fn) => this.withHeldIssueSessionLease(projectId, linearIssueId, fn),
-      (projectId, linearIssueId) => this.releaseIssueSessionLease(projectId, linearIssueId),
-      (run, message, nextState) => this.failRunAndClear(run, message, nextState),
-      (issue) => this.restoreIdleWorktree(issue),
+      leaseOps.withHeldLease,
+      leaseOps.releaseLease,
+      recoveryOps.failRunAndClear,
+      recoveryOps.restoreIdleWorktree,
       this.runCompletionPolicy,
       (projectId, issueId) => this.enqueueIssue(projectId, issueId),
       feed,
@@ -151,10 +166,10 @@ export class RunOrchestrator {
       this.linearSync,
       this.interruptedRunRecovery,
       this.runFinalizer,
-      (projectId, linearIssueId, fn) => this.withHeldIssueSessionLease(projectId, linearIssueId, fn),
-      (projectId, linearIssueId) => this.releaseIssueSessionLease(projectId, linearIssueId),
-      (threadId, maxRetries) => this.readThreadWithRetry(threadId, maxRetries),
-      (issue, runType, reason) => this.recoverOrEscalate(issue, runType, reason),
+      leaseOps.withHeldLease,
+      leaseOps.releaseLease,
+      threadOps.readThreadWithRetry,
+      recoveryOps.recoverOrEscalate,
       feed,
     );
     this.runWakePlanner = new RunWakePlanner(db);
