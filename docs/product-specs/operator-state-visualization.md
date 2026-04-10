@@ -126,6 +126,7 @@ Rules:
 
 - `delegated` or `implementing` with no PR may pause into `awaiting_input`
 - PR-backed states such as `pr_open`, `changes_requested`, and `awaiting_queue` should stay visible if they are still true
+- if an external PR becomes linked to the issue by key while PatchRelay is paused, keep the PR-backed state visible rather than treating it as a fresh local implementation
 - waiting text should explain that PatchRelay automation is paused
 - downstream review or merge may still continue while paused
 

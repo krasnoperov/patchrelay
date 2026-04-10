@@ -81,8 +81,6 @@ interface GitHubReviewThreadComment {
 type FetchLike = typeof fetch;
 
 export class GitHubWebhookHandler {
-  private readonly patchRelayAuthorLogins = new Set<string>();
-
   constructor(
     private readonly config: AppConfig,
     private readonly db: PatchRelayDatabase,
@@ -94,21 +92,9 @@ export class GitHubWebhookHandler {
     private readonly failureContextResolver: GitHubFailureContextResolver = createGitHubFailureContextResolver(),
     private readonly ciSnapshotResolver: GitHubCiSnapshotResolver = createGitHubCiSnapshotResolver(),
     private readonly fetchImpl: FetchLike = fetch,
-  ) {
-    for (const login of resolvePatchRelayAuthorLoginsFromEnv()) {
-      this.patchRelayAuthorLogins.add(login);
-    }
-  }
+  ) {}
 
-  setPatchRelayAuthorLogins(logins: string[]): void {
-    this.patchRelayAuthorLogins.clear();
-    for (const login of logins) {
-      const normalized = normalizeAuthorLogin(login);
-      if (normalized) {
-        this.patchRelayAuthorLogins.add(normalized);
-      }
-    }
-  }
+  setPatchRelayAuthorLogins(_logins: string[]): void {}
 
   async acceptGitHubWebhook(params: {
     deliveryId: string;
@@ -200,14 +186,21 @@ export class GitHubWebhookHandler {
       return;
     }
 
-    // Route to issue via branch name
-    const issue = this.db.issues.getIssueByBranch(event.branchName);
-    if (!issue) {
-      this.logger.debug({ branchName: event.branchName, triggerEvent: event.triggerEvent }, "GitHub webhook: no matching issue for branch");
+    const project = this.config.projects.find((candidate) => candidate.github?.repoFullName === event.repoFullName);
+    if (!project) {
+      this.logger.debug({ repoFullName: event.repoFullName, triggerEvent: event.triggerEvent }, "GitHub webhook: no configured project for repository");
       return;
     }
 
-    const project = this.config.projects.find((p) => p.id === issue.projectId);
+    const resolved = this.resolveIssueForEvent(project, event);
+    const issue = resolved?.issue;
+    if (!issue) {
+      this.logger.debug(
+        { repoFullName: event.repoFullName, branchName: event.branchName, prNumber: event.prNumber, triggerEvent: event.triggerEvent },
+        "GitHub webhook: no matching tracked issue",
+      );
+      return;
+    }
 
     const immediateCheckStatus = this.deriveImmediatePrCheckStatus(issue, event, project);
 
@@ -222,6 +215,7 @@ export class GitHubWebhookHandler {
       ...(event.prAuthorLogin !== undefined ? { prAuthorLogin: event.prAuthorLogin } : {}),
       ...(event.reviewState !== undefined ? { prReviewState: event.reviewState } : {}),
       ...(immediateCheckStatus !== undefined ? { prCheckStatus: immediateCheckStatus } : {}),
+      ...(resolved.linkedBy === "issue_key" ? { branchName: event.branchName } : {}),
       ...(event.reviewState === "changes_requested"
         ? { lastBlockingReviewHeadSha: event.reviewCommitId ?? event.headSha ?? null }
         : event.reviewState === "approved"
@@ -321,6 +315,58 @@ export class GitHubWebhookHandler {
     }
   }
 
+  private resolveIssueForEvent(
+    project: ProjectConfig,
+    event: NormalizedGitHubEvent,
+  ): { issue: IssueRecord; linkedBy: "pr" | "branch" | "issue_key" } | undefined {
+    if (event.prNumber !== undefined) {
+      const byPr = this.db.issues.getIssueByPrNumber(event.prNumber);
+      if (byPr && byPr.projectId === project.id) {
+        return { issue: byPr, linkedBy: "pr" };
+      }
+    }
+
+    const byBranch = this.db.issues.getIssueByBranch(event.branchName);
+    if (byBranch && byBranch.projectId === project.id) {
+      return { issue: byBranch, linkedBy: "branch" };
+    }
+
+    const byIssueKey = this.resolveIssueByExplicitIssueKey(project, event);
+    if (byIssueKey) {
+      return { issue: byIssueKey, linkedBy: "issue_key" };
+    }
+
+    return undefined;
+  }
+
+  private resolveIssueByExplicitIssueKey(project: ProjectConfig, event: NormalizedGitHubEvent): IssueRecord | undefined {
+    const candidates = new Set<string>();
+    const sources = [event.prTitle, event.prBody, event.branchName];
+
+    for (const prefix of project.issueKeyPrefixes) {
+      const normalizedPrefix = prefix.trim();
+      if (!normalizedPrefix) continue;
+      const pattern = new RegExp(`\\b${escapeRegExp(normalizedPrefix)}-\\d+\\b`, "gi");
+      for (const source of sources) {
+        if (!source) continue;
+        for (const match of source.matchAll(pattern)) {
+          candidates.add(match[0].toUpperCase());
+        }
+      }
+    }
+
+    if (candidates.size !== 1) {
+      return undefined;
+    }
+
+    const [issueKey] = [...candidates];
+    if (!issueKey) {
+      return undefined;
+    }
+    const issue = this.db.issues.getIssueByKey(issueKey);
+    return issue?.projectId === project.id ? issue : undefined;
+  }
+
   private resolveFactoryStateForEvent(
     issue: IssueRecord,
     event: NormalizedGitHubEvent,
@@ -329,6 +375,12 @@ export class GitHubWebhookHandler {
     if (event.triggerEvent === "pr_closed") {
       return undefined;
     }
+
+    const effectiveCurrentState =
+      (issue.factoryState === "awaiting_input" || issue.factoryState === "delegated")
+      && (event.prState === "open" || event.prNumber !== undefined)
+        ? "pr_open"
+        : issue.factoryState;
 
     if (
       event.triggerEvent === "check_failed"
@@ -340,10 +392,17 @@ export class GitHubWebhookHandler {
       return "repairing_queue";
     }
 
-    return resolveFactoryStateFromGitHub(event.triggerEvent, issue.factoryState, {
+    const resolved = resolveFactoryStateFromGitHub(event.triggerEvent, effectiveCurrentState, {
       prReviewState: issue.prReviewState,
       activeRunId: issue.activeRunId,
     });
+    if (resolved !== undefined) {
+      return resolved;
+    }
+    if (effectiveCurrentState !== issue.factoryState) {
+      return effectiveCurrentState;
+    }
+    return undefined;
   }
 
   private async updateCiSnapshot(
@@ -443,19 +502,6 @@ export class GitHubWebhookHandler {
         stage: issue.factoryState,
         status: "ignored_undelegated",
         summary: `Ignored ${event.triggerEvent} because the issue is undelegated`,
-      });
-      return;
-    }
-
-    if (!this.isPatchRelayOwnedPr(issue)) {
-      this.feed?.publish({
-        level: "info",
-        kind: "github",
-        issueKey: issue.issueKey,
-        projectId: issue.projectId,
-        stage: issue.factoryState,
-        status: "ignored_non_patchrelay_pr",
-        summary: `Ignored ${event.triggerEvent} on non-PatchRelay-owned PR`,
       });
       return;
     }
@@ -857,7 +903,7 @@ export class GitHubWebhookHandler {
     if (!signature) return false;
 
     const pendingWake = this.db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId);
-    if (pendingWake?.runType === runType) {
+    if (pendingWake?.runType === runType && pendingWake.eventIds.length > 0) {
       const existing = pendingWake.context;
       if (existing?.failureSignature === signature
         && (headSha === undefined || existing.failureHeadSha === headSha || existing.headSha === headSha)) {
@@ -1111,8 +1157,6 @@ export class GitHubWebhookHandler {
     if (!prNumber) return;
     const issue = this.db.issues.getIssueByPrNumber(prNumber);
     if (!issue) return;
-    if (!this.isPatchRelayOwnedPr(issue)) return;
-
     this.feed?.publish({
       level: "info",
       kind: "comment",
@@ -1179,33 +1223,10 @@ export class GitHubWebhookHandler {
     this.enqueueIssue(projectId, issueId);
     return wake.runType;
   }
-
-  private isPatchRelayOwnedPr(issue: IssueRecord): boolean {
-    const author = normalizeAuthorLogin(issue.prAuthorLogin);
-    if (author) {
-      if (this.patchRelayAuthorLogins.size > 0) {
-        return this.patchRelayAuthorLogins.has(author);
-      }
-      return author.includes("patchrelay");
-    }
-    // Transitional fallback for rows written before author tracking existed.
-    return issue.prNumber !== undefined && issue.branchOwner === "patchrelay";
-  }
 }
 
-function normalizeAuthorLogin(login: string | undefined): string | undefined {
-  const normalized = login?.trim().toLowerCase();
-  return normalized ? normalized : undefined;
-}
-
-function resolvePatchRelayAuthorLoginsFromEnv(): string[] {
-  return [
-    process.env.PATCHRELAY_GITHUB_BOT_LOGIN,
-    process.env.PATCHRELAY_GITHUB_BOT_NAME,
-  ]
-    .flatMap((value) => (value ?? "").split(","))
-    .map((value) => normalizeAuthorLogin(value))
-    .filter((value): value is string => Boolean(value));
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function buildGitHubReviewUrl(

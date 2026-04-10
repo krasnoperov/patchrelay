@@ -4,7 +4,7 @@
 
 This document describes the target architecture for PatchRelay as a Linear-native agentic software factory.
 
-The service is not a generic prompt runner. It is the deterministic orchestration layer that turns a delegated Linear issue into a PatchRelay-owned pull request and keeps that PR healthy until merge or close. Separate downstream services own review automation and merge execution.
+The service is not a generic prompt runner. It is the deterministic orchestration layer that turns a delegated Linear issue into a linked pull request and keeps that PR healthy until merge or close. Separate downstream services own review automation and merge execution.
 
 ## External Patterns We Are Combining
 
@@ -100,7 +100,7 @@ Owns:
 
 - GitHub webhook signature verification
 - PR state tracking (number, URL, review state, check status)
-- triggering reactive runs on PatchRelay-owned PR follow-up events
+- triggering reactive runs on linked delegated PR follow-up events
 - repair counter management
 
 ### Run Orchestrator (`run-orchestrator.ts`)
@@ -139,18 +139,18 @@ Owns:
 PatchRelay tracks two different ownership models:
 
 - issue ownership
-- PR ownership
+- branch/worktree ownership
 
 PatchRelay also tracks one runtime authority bit:
 
 - `delegatedToPatchRelay`
 
 Issue ownership decides who may start new delegated implementation work from Linear.
-PR ownership decides who must keep an existing PR healthy until merge or close.
+Branch/worktree ownership decides who most recently owned the local worktree lifecycle.
 `delegatedToPatchRelay` decides whether PatchRelay may actively write or repair code right now.
 
-For PatchRelay, a PR is PatchRelay-owned when its author is the PatchRelay GitHub app or service account.
-That ownership does not change just because the issue is undelegated, the PR becomes ready, or the PR enters the queue.
+Once a PR is linked to an issue, delegation decides whether PatchRelay may actively repair it.
+That PR may have been opened by PatchRelay, a human, or another external system.
 
 This creates a deliberate split between workflow truth and automation authority:
 
@@ -171,6 +171,7 @@ That observer-only mode is important because downstream services keep operating 
 - `merge-steward` remains PR-centric
 
 Re-delegation should resume from current truth, not from a generic “start over” state.
+If an external PR appears on a different branch, PatchRelay can link it when the webhook carries one unambiguous tracked issue key for the same project.
 
 ## Issue Lifecycle
 
@@ -186,7 +187,7 @@ Delegated in Linear
 -> PatchRelay marks PR ready when implementation is complete
 -> ReviewBot reviews ready PRs with green CI
 -> Merge Steward queues ready PRs with green CI and approval
--> If requested changes, red CI, or merge-steward incident lands on a PatchRelay-owned PR, PatchRelay resumes the same branch
+-> If requested changes, red CI, or merge-steward incident lands on a linked delegated PR, PatchRelay resumes the same branch
 -> Merged → done
 ```
 
