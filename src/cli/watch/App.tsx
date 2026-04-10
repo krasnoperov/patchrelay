@@ -5,6 +5,15 @@ import { useWatchStream } from "./use-watch-stream.ts";
 import { useDetailStream } from "./use-detail-stream.ts";
 import { IssueListView } from "./IssueListView.tsx";
 import { IssueDetailView } from "./IssueDetailView.tsx";
+import {
+  buildWatchDetailExportText,
+  exportWatchTextToTempFile,
+  findLastAssistantMessage,
+  findLastCommand,
+  findLastCommandOutput,
+  openTextInPager,
+  writeTextToClipboard,
+} from "./watch-actions.ts";
 
 interface AppProps {
   baseUrl: string;
@@ -86,23 +95,38 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
 
   const [promptMode, setPromptMode] = useState(false);
   const [promptBuffer, setPromptBuffer] = useState("");
+  const [promptCursor, setPromptCursor] = useState(0);
+  const [promptHistory, setPromptHistory] = useState<string[]>([]);
+  const [promptHistoryIndex, setPromptHistoryIndex] = useState<number | null>(null);
+  const [promptDraftBeforeHistory, setPromptDraftBeforeHistory] = useState("");
+  const [promptStatus, setPromptStatus] = useState<string | null>(null);
+  const activeIssue = state.issues.find((issue) => issue.issueKey === state.activeDetailKey);
+
+  const showStatus = useCallback((message: string) => {
+    setPromptStatus(message);
+    setTimeout(() => setPromptStatus(null), 3_000);
+  }, []);
+
+  const resetPromptComposer = useCallback(() => {
+    setPromptMode(false);
+    setPromptBuffer("");
+    setPromptCursor(0);
+    setPromptHistoryIndex(null);
+    setPromptDraftBeforeHistory("");
+  }, []);
 
   const handleRetry = useCallback(() => {
     if (!state.activeDetailKey) return;
     setPromptStatus("retrying...");
     void postRetry(baseUrl, state.activeDetailKey, bearerToken).then((result) => {
-      setPromptStatus(result.ok ? "retry queued" : `retry failed: ${result.reason ?? "unknown"}`);
-      setTimeout(() => setPromptStatus(null), 3000);
+      showStatus(result.ok ? "retry queued" : `retry failed: ${result.reason ?? "unknown"}`);
     });
-  }, [baseUrl, bearerToken, state.activeDetailKey]);
-
-  const [promptStatus, setPromptStatus] = useState<string | null>(null);
+  }, [baseUrl, bearerToken, showStatus, state.activeDetailKey]);
 
   const handlePromptSubmit = useCallback(() => {
     const text = promptBuffer.trim();
     if (!state.activeDetailKey || !text) {
-      setPromptMode(false);
-      setPromptBuffer("");
+      resetPromptComposer();
       return;
     }
 
@@ -113,28 +137,185 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
       params: { item: { id: `prompt-${Date.now()}`, type: "userMessage", status: "completed", text } },
     });
 
-    setPromptMode(false);
-    setPromptBuffer("");
+    setPromptHistory((history) => {
+      const next = history.at(-1) === text ? history : [...history, text];
+      return next.slice(-20);
+    });
+    resetPromptComposer();
     setPromptStatus("sending...");
 
     void postPrompt(baseUrl, state.activeDetailKey, text, bearerToken).then((result) => {
       if (result.delivered) {
-        setPromptStatus("delivered");
+        showStatus("delivered");
       } else if (result.queued) {
-        setPromptStatus("queued for next run");
+        showStatus("queued for next run");
       } else if (result.reason) {
-        setPromptStatus(`failed: ${result.reason}`);
+        showStatus(`failed: ${result.reason}`);
       }
-      setTimeout(() => setPromptStatus(null), 3000);
     });
-  }, [baseUrl, bearerToken, state.activeDetailKey, promptBuffer]);
+  }, [baseUrl, bearerToken, dispatch, promptBuffer, resetPromptComposer, showStatus, state.activeDetailKey]);
+
+  const withActiveIssueExport = useCallback(() => {
+    if (!activeIssue) return null;
+    return {
+      issue: activeIssue,
+      timeline: state.timeline,
+      activeRunStartedAt: state.activeRunStartedAt,
+      activeRunId: state.activeRunId,
+      tokenUsage: state.tokenUsage,
+      diffSummary: state.diffSummary,
+      plan: state.plan,
+      issueContext: state.issueContext,
+      detailTab: state.detailTab,
+      rawRuns: state.rawRuns,
+      rawFeedEvents: state.rawFeedEvents,
+      follow: state.follow,
+      connected: state.connected,
+      lastServerMessageAt: state.lastServerMessageAt,
+    };
+  }, [
+    activeIssue,
+    state.activeRunId,
+    state.activeRunStartedAt,
+    state.connected,
+    state.detailTab,
+    state.diffSummary,
+    state.follow,
+    state.issueContext,
+    state.lastServerMessageAt,
+    state.plan,
+    state.rawFeedEvents,
+    state.rawRuns,
+    state.timeline,
+    state.tokenUsage,
+  ]);
+
+  const handleCopyLastAssistant = useCallback(() => {
+    const text = findLastAssistantMessage(state.timeline);
+    if (!text) {
+      showStatus("no assistant message to copy");
+      return;
+    }
+    showStatus(writeTextToClipboard(text) ? "copied assistant message" : "clipboard unavailable");
+  }, [showStatus, state.timeline]);
+
+  const handleCopyLastCommand = useCallback(() => {
+    const text = findLastCommand(state.timeline);
+    if (!text) {
+      showStatus("no command to copy");
+      return;
+    }
+    showStatus(writeTextToClipboard(text) ? "copied last command" : "clipboard unavailable");
+  }, [showStatus, state.timeline]);
+
+  const handleCopyLastCommandOutput = useCallback(() => {
+    const text = findLastCommandOutput(state.timeline);
+    if (!text) {
+      showStatus("no command output to copy");
+      return;
+    }
+    showStatus(writeTextToClipboard(text) ? "copied command output" : "clipboard unavailable");
+  }, [showStatus, state.timeline]);
+
+  const handleExportTranscript = useCallback(() => {
+    const exportInput = withActiveIssueExport();
+    if (!exportInput) return;
+    const text = buildWatchDetailExportText(exportInput);
+    const filePath = exportWatchTextToTempFile(text, exportInput.issue.issueKey ?? exportInput.issue.projectId);
+    showStatus(`exported transcript: ${filePath}`);
+  }, [showStatus, withActiveIssueExport]);
+
+  const handleOpenTranscriptInPager = useCallback(() => {
+    const exportInput = withActiveIssueExport();
+    if (!exportInput) return;
+    const text = buildWatchDetailExportText(exportInput);
+    const result = openTextInPager(text);
+    if (result.ok) {
+      showStatus("opened transcript in pager");
+      return;
+    }
+    const filePath = exportWatchTextToTempFile(text, exportInput.issue.issueKey ?? exportInput.issue.projectId);
+    showStatus(`pager failed, exported transcript: ${filePath}`);
+  }, [showStatus, withActiveIssueExport]);
+
+  const insertPromptText = useCallback((text: string) => {
+    setPromptBuffer((buffer) => `${buffer.slice(0, promptCursor)}${text}${buffer.slice(promptCursor)}`);
+    setPromptCursor((cursor) => cursor + text.length);
+    setPromptHistoryIndex(null);
+  }, [promptCursor]);
+
+  const movePromptCursor = useCallback((delta: number) => {
+    setPromptCursor((cursor) => Math.max(0, Math.min(promptBuffer.length, cursor + delta)));
+  }, [promptBuffer.length]);
+
+  const recallPromptHistory = useCallback((direction: "older" | "newer") => {
+    if (promptHistory.length === 0) return;
+    if (direction === "older") {
+      if (promptHistoryIndex === null) {
+        setPromptDraftBeforeHistory(promptBuffer);
+        const nextIndex = promptHistory.length - 1;
+        const next = promptHistory[nextIndex] ?? "";
+        setPromptHistoryIndex(nextIndex);
+        setPromptBuffer(next);
+        setPromptCursor(next.length);
+        return;
+      }
+      const nextIndex = Math.max(0, promptHistoryIndex - 1);
+      const next = promptHistory[nextIndex] ?? "";
+      setPromptHistoryIndex(nextIndex);
+      setPromptBuffer(next);
+      setPromptCursor(next.length);
+      return;
+    }
+
+    if (promptHistoryIndex === null) return;
+    if (promptHistoryIndex >= promptHistory.length - 1) {
+      setPromptHistoryIndex(null);
+      setPromptBuffer(promptDraftBeforeHistory);
+      setPromptCursor(promptDraftBeforeHistory.length);
+      return;
+    }
+    const nextIndex = promptHistoryIndex + 1;
+    const next = promptHistory[nextIndex] ?? "";
+    setPromptHistoryIndex(nextIndex);
+    setPromptBuffer(next);
+    setPromptCursor(next.length);
+  }, [promptBuffer, promptDraftBeforeHistory, promptHistory, promptHistoryIndex]);
 
   useInput((input, key) => {
     if (promptMode) {
-      if (key.escape) { setPromptMode(false); setPromptBuffer(""); }
-      else if (key.return) { handlePromptSubmit(); }
-      else if (key.backspace || key.delete) { setPromptBuffer((b) => b.slice(0, -1)); }
-      else if (input && !key.ctrl && !key.meta) { setPromptBuffer((b) => b + input); }
+      if (key.escape) {
+        resetPromptComposer();
+      } else if (key.ctrl && input === "s") {
+        handlePromptSubmit();
+      } else if (key.return) {
+        insertPromptText("\n");
+      } else if (key.leftArrow) {
+        movePromptCursor(-1);
+      } else if (key.rightArrow) {
+        movePromptCursor(1);
+      } else if (key.home) {
+        setPromptCursor(0);
+      } else if (key.end) {
+        setPromptCursor(promptBuffer.length);
+      } else if (key.upArrow) {
+        recallPromptHistory("older");
+      } else if (key.downArrow) {
+        recallPromptHistory("newer");
+      } else if (key.backspace) {
+        if (promptCursor > 0) {
+          setPromptBuffer((buffer) => `${buffer.slice(0, promptCursor - 1)}${buffer.slice(promptCursor)}`);
+          setPromptCursor((cursor) => Math.max(0, cursor - 1));
+          setPromptHistoryIndex(null);
+        }
+      } else if (key.delete) {
+        if (promptCursor < promptBuffer.length) {
+          setPromptBuffer((buffer) => `${buffer.slice(0, promptCursor)}${buffer.slice(promptCursor + 1)}`);
+          setPromptHistoryIndex(null);
+        }
+      } else if (input && !key.ctrl && !key.meta) {
+        insertPromptText(input);
+      }
       return;
     }
 
@@ -169,14 +350,24 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
         handleRetry();
       } else if (input === "p") {
         setPromptMode(true);
+        setPromptCursor(promptBuffer.length);
       } else if (input === "s") {
         if (state.activeDetailKey) {
           setPromptStatus("stopping...");
           void postStop(baseUrl, state.activeDetailKey, bearerToken).then((result) => {
-            setPromptStatus(result.ok ? "stop sent" : `stop failed: ${result.reason ?? "unknown"}`);
-            setTimeout(() => setPromptStatus(null), 3000);
+            showStatus(result.ok ? "stop sent" : `stop failed: ${result.reason ?? "unknown"}`);
           });
         }
+      } else if (input === "y") {
+        handleCopyLastAssistant();
+      } else if (input === "c") {
+        handleCopyLastCommand();
+      } else if (input === "o") {
+        handleCopyLastCommandOutput();
+      } else if (input === "e") {
+        handleExportTranscript();
+      } else if (input === "v") {
+        handleOpenTranscriptInPager();
       } else if (input === "h") {
         dispatch({ type: "switch-detail-tab", tab: "history" });
       } else if (input === "t") {
@@ -200,6 +391,8 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
       }
     }
   });
+
+  const reservedRows = 1 + (promptMode ? promptComposerRowCount(promptBuffer) : promptStatus ? 1 : 0);
 
   return (
     <Box flexDirection="column">
@@ -242,23 +435,40 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
           rawFeedEvents={state.rawFeedEvents}
           connected={state.connected}
           lastServerMessageAt={state.lastServerMessageAt}
-          reservedRows={1 + ((promptMode || promptStatus) ? 1 : 0)}
+          reservedRows={reservedRows}
           onLayoutChange={(viewportRows, contentRows) => {
             dispatch({ type: "detail-layout-updated", viewportRows, contentRows });
           }}
         />
         {promptMode && (
-          <Box>
-            <Text color="yellow">prompt&gt; </Text>
-            <Text>{promptBuffer}</Text>
-            <Text dimColor>_</Text>
-          </Box>
+          <PromptComposer buffer={promptBuffer} cursor={promptCursor} />
         )}
         {promptStatus && !promptMode && (
           <Text dimColor>{promptStatus}</Text>
         )}
         </Box>
       ) : null}
+    </Box>
+  );
+}
+
+function promptComposerRowCount(buffer: string): number {
+  return Math.max(1, buffer.split("\n").length) + 1;
+}
+
+function PromptComposer({ buffer, cursor }: { buffer: string; cursor: number }): React.JSX.Element {
+  const withCursor = `${buffer.slice(0, cursor)}|${buffer.slice(cursor)}`;
+  const lines = withCursor.split("\n");
+
+  return (
+    <Box flexDirection="column">
+      {lines.map((line, index) => (
+        <Text key={`prompt-line-${index}`}>
+          <Text color="yellow">{index === 0 ? "prompt> " : "        "}</Text>
+          <Text>{line}</Text>
+        </Text>
+      ))}
+      <Text dimColor>Enter: newline  Ctrl-S: send  Up/Down: history  Esc: cancel</Text>
     </Box>
   );
 }

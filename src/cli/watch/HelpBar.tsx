@@ -11,7 +11,19 @@ export function HelpBar({ view, follow, detailTab }: HelpBarProps): React.JSX.El
   let text: string;
   if (view === "detail") {
     const tabHint = detailTab === "history" ? "t: timeline" : "h: history";
-    text = [tabHint, "j/k: scroll", "Ctrl-U/Ctrl-D: page", "[ ]: issue", "Home/End: jump", `f: live ${follow ? "on" : "off"}`, "p: prompt", "s: stop", "r: retry"]
+    text = [
+      tabHint,
+      "j/k: scroll",
+      "Ctrl-U/Ctrl-D: page",
+      "[ ]: issue",
+      "Home/End: jump",
+      `f: live ${follow ? "on" : "off"}`,
+      "p: prompt",
+      "y/c/o: copy",
+      "v/e: transcript",
+      "s: stop",
+      "r: retry",
+    ]
       .filter(Boolean)
       .join("  ");
   } else if (view === "feed") {
