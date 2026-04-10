@@ -1,4 +1,4 @@
-import { useReducer, useMemo, useCallback, useState } from "react";
+import { useReducer, useMemo, useCallback, useEffect, useRef, useState } from "react";
 import { Box, Text, useApp, useInput, useStdout } from "ink";
 import { watchReducer, initialWatchState, filterIssues } from "./watch-state.ts";
 import { useWatchStream } from "./use-watch-stream.ts";
@@ -16,6 +16,7 @@ import {
 } from "./watch-actions.ts";
 import { measureRenderedTextRows } from "./layout-measure.ts";
 import { PROMPT_COMPOSER_HINT, measurePromptComposerRows } from "./prompt-layout.ts";
+import { clearTransientStatus, defaultTimerApi, showTransientStatus } from "./transient-status.ts";
 
 interface AppProps {
   baseUrl: string;
@@ -104,11 +105,15 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
   const [promptHistoryIndex, setPromptHistoryIndex] = useState<number | null>(null);
   const [promptDraftBeforeHistory, setPromptDraftBeforeHistory] = useState("");
   const [promptStatus, setPromptStatus] = useState<string | null>(null);
+  const promptStatusController = useRef<{ timer: ReturnType<typeof setTimeout> | null }>({ timer: null });
   const activeIssue = state.issues.find((issue) => issue.issueKey === state.activeDetailKey);
 
   const showStatus = useCallback((message: string) => {
-    setPromptStatus(message);
-    setTimeout(() => setPromptStatus(null), 3_000);
+    showTransientStatus(promptStatusController.current, message, setPromptStatus, defaultTimerApi);
+  }, []);
+
+  useEffect(() => () => {
+    clearTransientStatus(promptStatusController.current, defaultTimerApi);
   }, []);
 
   const resetPromptComposer = useCallback(() => {
