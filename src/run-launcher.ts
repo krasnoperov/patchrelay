@@ -158,7 +158,6 @@ export class RunLauncher {
       });
       this.db.issueSessions.consumeIssueSessionEvents(params.item.projectId, params.item.issueId, freshWake.eventIds, created.id);
       this.db.issueSessions.setIssueSessionLastWakeReason(params.item.projectId, params.item.issueId, freshWake.wakeReason ?? null);
-      this.db.issueSessions.setBranchOwnerWithLease({ projectId: params.item.projectId, linearIssueId: params.item.issueId, leaseId: params.leaseId }, "patchrelay");
       return created;
     });
   }

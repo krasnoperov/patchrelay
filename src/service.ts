@@ -160,7 +160,6 @@ export class PatchRelayService {
       const identity = this.githubAppTokenManager.botIdentity();
       if (identity) {
         this.orchestrator.botIdentity = identity;
-        this.githubWebhookHandler.setPatchRelayAuthorLogins([identity.name]);
       }
     }
     await this.runtime.start();

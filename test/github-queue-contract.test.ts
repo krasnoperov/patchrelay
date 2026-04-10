@@ -152,7 +152,6 @@ test("queue eviction check_run queues queue_repair with explicit provenance", as
       linearIssueId: "issue-1",
       issueKey: "USE-1",
       branchName: "feat-queue",
-      branchOwner: "patchrelay",
       prNumber: 42,
       prState: "open",
       factoryState: "awaiting_queue",
@@ -185,7 +184,6 @@ test("queue eviction check_run queues queue_repair with explicit provenance", as
 
     const issue = db.getIssue("usertold", "issue-1");
     const wake = db.issueSessions.peekIssueSessionWake("usertold", "issue-1");
-    assert.equal(issue?.branchOwner, "patchrelay");
     assert.equal(issue?.factoryState, "repairing_queue");
     assert.equal(wake?.runType, "queue_repair");
     const pending = wake?.context ?? {};
@@ -289,7 +287,6 @@ test("default gate fallback recognizes verify and enqueues CI repair", async () 
       linearIssueId: "issue-verify",
       issueKey: "USE-VERIFY",
       branchName: "feat-verify",
-      branchOwner: "patchrelay",
       prNumber: 44,
       prState: "open",
       prAuthorLogin: "patchrelay[bot]",
@@ -326,7 +323,6 @@ test("queue eviction falls back to minimal context when incident payload is malf
       linearIssueId: "issue-3",
       issueKey: "USE-3",
       branchName: "feat-malformed",
-      branchOwner: "patchrelay",
       prNumber: 43,
       prState: "open",
       factoryState: "awaiting_queue",
@@ -403,7 +399,6 @@ test("branch CI failures clear stale queue incident context", async () => {
       linearIssueId: "issue-4",
       issueKey: "USE-4",
       branchName: "feat-branch-fail",
-      branchOwner: "patchrelay",
       prNumber: 44,
       prState: "open",
       factoryState: "awaiting_queue",
@@ -430,7 +425,6 @@ test("branch CI failures clear stale queue incident context", async () => {
 
     const issue = db.getIssue("usertold", "issue-4");
     const wake = db.issueSessions.peekIssueSessionWake("usertold", "issue-4");
-    assert.equal(issue?.branchOwner, "patchrelay");
     assert.equal(wake?.runType, "ci_repair");
     assert.equal(issue?.lastGitHubFailureSource, "branch_ci");
     assert.equal(issue?.lastQueueIncidentJson, undefined);
@@ -502,7 +496,6 @@ test("branch CI failures persist enriched Actions context in pending repair prom
       linearIssueId: "issue-5",
       issueKey: "USE-5",
       branchName: "feat-ci-context",
-      branchOwner: "patchrelay",
       prNumber: 45,
       prState: "open",
       factoryState: "pr_open",

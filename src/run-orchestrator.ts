@@ -2,7 +2,7 @@ import type { Logger } from "pino";
 import type { GitHubAppBotIdentity } from "./github-app-token.ts";
 import type { CodexAppServerClient, CodexNotification } from "./codex-app-server.ts";
 import type { PatchRelayDatabase } from "./db.ts";
-import type { BranchOwner, IssueRecord, RunRecord } from "./db-types.ts";
+import type { IssueRecord, RunRecord } from "./db-types.ts";
 import type { FactoryState, RunType } from "./factory-state.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import { summarizeCurrentThread } from "./run-reporting.ts";
@@ -18,7 +18,7 @@ import type {
 } from "./types.ts";
 import { MergedLinearCompletionReconciler } from "./merged-linear-completion-reconciler.ts";
 import { QueueHealthMonitor } from "./queue-health-monitor.ts";
-import { IdleIssueReconciler, resolveBranchOwnerForStateTransition } from "./idle-reconciliation.ts";
+import { IdleIssueReconciler } from "./idle-reconciliation.ts";
 import { LinearSessionSync } from "./linear-session-sync.ts";
 import { IssueSessionLeaseService } from "./issue-session-lease-service.ts";
 import { InterruptedRunRecovery } from "./interrupted-run-recovery.ts";
@@ -130,7 +130,6 @@ export class RunOrchestrator {
       (lease, issue, runType, context, dedupeScope) => this.appendWakeEventWithLease(lease, issue, runType, context, dedupeScope),
       (projectId, linearIssueId) => this.releaseIssueSessionLease(projectId, linearIssueId),
       (projectId, issueId) => this.enqueueIssue(projectId, issueId),
-      (newState, pendingRunType) => this.resolveBranchOwnerForStateTransition(newState, pendingRunType),
       feed,
     );
     this.interruptedRunRecovery = new InterruptedRunRecovery(
@@ -461,10 +460,6 @@ export class RunOrchestrator {
       message,
       nextState,
     });
-  }
-
-  private resolveBranchOwnerForStateTransition(newState: FactoryState, pendingRunType?: RunType): BranchOwner | undefined {
-    return resolveBranchOwnerForStateTransition(newState, pendingRunType);
   }
 
   private async resolveRequestedChangesWakeContext(

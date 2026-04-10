@@ -88,8 +88,6 @@ export class GitHubWebhookHandler {
     private readonly fetchImpl: FetchLike = fetch,
   ) {}
 
-  setPatchRelayAuthorLogins(_logins: string[]): void {}
-
   async acceptGitHubWebhook(params: {
     deliveryId: string;
     eventType: string;
@@ -526,7 +524,6 @@ export class GitHubWebhookHandler {
           }),
           dedupeKey: failureContext.failureSignature,
         });
-        this.db.issueSessions.setBranchOwnerRespectingActiveLease(issue.projectId, issue.linearIssueId, "patchrelay");
         const queuedRunType = hadPendingWake
           ? this.peekPendingSessionWakeRunType(issue.projectId, issue.linearIssueId)
           : this.enqueuePendingSessionWake(issue.projectId, issue.linearIssueId);
@@ -583,7 +580,6 @@ export class GitHubWebhookHandler {
           }),
           dedupeKey: failureContext.failureSignature,
         });
-        this.db.issueSessions.setBranchOwnerRespectingActiveLease(issue.projectId, issue.linearIssueId, "patchrelay");
         const queuedRunType = hadPendingWake
           ? this.peekPendingSessionWakeRunType(issue.projectId, issue.linearIssueId)
           : this.enqueuePendingSessionWake(issue.projectId, issue.linearIssueId);
@@ -633,7 +629,6 @@ export class GitHubWebhookHandler {
           event.reviewerName ?? "unknown-reviewer",
         ].join("::"),
       });
-      this.db.issueSessions.setBranchOwnerRespectingActiveLease(issue.projectId, issue.linearIssueId, "patchrelay");
       const queuedRunType = hadPendingWake
         ? this.peekPendingSessionWakeRunType(issue.projectId, issue.linearIssueId)
         : this.enqueuePendingSessionWake(issue.projectId, issue.linearIssueId);

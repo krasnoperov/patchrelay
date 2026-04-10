@@ -1,5 +1,4 @@
 import type {
-  BranchOwner,
   GitHubCiSnapshotRecord,
   IssueRecord,
   IssueSessionEventRecord,
@@ -187,10 +186,6 @@ export class PatchRelayDatabase {
 
   getIssueByPrNumber(prNumber: number): IssueRecord | undefined {
     return this.issues.getIssueByPrNumber(prNumber);
-  }
-
-  setBranchOwner(projectId: string, linearIssueId: string, owner: BranchOwner): void {
-    this.issues.setBranchOwner(projectId, linearIssueId, owner);
   }
 
   replaceIssueDependencies(params: {

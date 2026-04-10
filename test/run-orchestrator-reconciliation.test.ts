@@ -253,7 +253,6 @@ test("reconcileIdleIssues advances approved idle issues to awaiting_queue", asyn
 
     const issue = db.getIssue("usertold", "issue-10");
     assert.equal(issue?.factoryState, "awaiting_queue");
-    assert.equal(issue?.branchOwner, "patchrelay");
     assert.equal(issue?.pendingRunType, undefined);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -727,7 +726,6 @@ test("reconcileIdleIssues currently routes failed idle issues to ci_repair", asy
 
     const issue = db.getIssue("usertold", "issue-12");
     assert.equal(issue?.factoryState, "repairing_ci");
-    assert.equal(issue?.branchOwner, "patchrelay");
     assert.equal(issue?.pendingRunType, undefined);
     assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-12")?.runType, "ci_repair");
     assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-12" }]);
@@ -804,7 +802,6 @@ test("reconcileIdleIssues preserves stored steward incident context for queue re
 
     const issue = db.getIssue("usertold", "issue-13");
     assert.equal(issue?.factoryState, "repairing_queue");
-    assert.equal(issue?.branchOwner, "patchrelay");
     assert.equal(issue?.pendingRunType, undefined);
     assert.deepEqual(db.issueSessions.peekIssueSessionWake("usertold", "issue-13")?.context, {
       failureReason: "queue_eviction",
@@ -2579,7 +2576,6 @@ test("reconcileIdleIssues leaves awaiting_queue issues idle when they are alread
       prCheckStatus: "success",
       factoryState: "awaiting_queue",
     });
-    db.setBranchOwner("usertold", "issue-15", "patchrelay");
     const before = db.getIssue("usertold", "issue-15");
     assert.ok(before);
 
@@ -2587,7 +2583,6 @@ test("reconcileIdleIssues leaves awaiting_queue issues idle when they are alread
 
     const issue = db.getIssue("usertold", "issue-15");
     assert.equal(issue?.factoryState, "awaiting_queue");
-    assert.equal(issue?.branchOwner, "patchrelay");
     assert.equal(issue?.pendingRunType, undefined);
     assert.equal(issue?.updatedAt, before.updatedAt);
   } finally {

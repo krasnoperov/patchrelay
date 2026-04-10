@@ -237,7 +237,6 @@ exit 1`;
     const issue = harness.db.getIssue("proj", "issue-1");
     assert.equal(issue?.factoryState, "repairing_queue");
     assert.equal(issue?.pendingRunType, undefined);
-    assert.equal(issue?.branchOwner, "patchrelay");
     const wake = harness.db.issueSessions.peekIssueSessionWake("proj", "issue-1");
     assert.equal(wake?.runType, "queue_repair");
     const ctx = wake?.context ?? {};

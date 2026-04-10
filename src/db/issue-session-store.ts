@@ -1,4 +1,4 @@
-import type { BranchOwner, IssueRecord, IssueSessionEventRecord, IssueSessionRecord, RunStatus } from "../db-types.ts";
+import type { IssueRecord, IssueSessionEventRecord, IssueSessionRecord, RunStatus } from "../db-types.ts";
 import type { RunType } from "../factory-state.ts";
 import type { IssueStore, UpsertIssueParams } from "./issue-store.ts";
 import type { RunStore } from "./run-store.ts";
@@ -394,22 +394,6 @@ export class IssueSessionStore {
       SET last_wake_reason = ?, updated_at = ?
       WHERE project_id = ? AND linear_issue_id = ?
     `).run(lastWakeReason ?? null, isoNow(), projectId, linearIssueId);
-  }
-
-  setBranchOwnerWithLease(lease: IssueSessionLease, owner: BranchOwner): boolean {
-    return this.withIssueSessionLease(lease.projectId, lease.linearIssueId, lease.leaseId, () => {
-      this.issues.setBranchOwner(lease.projectId, lease.linearIssueId, owner);
-      return true;
-    }) ?? false;
-  }
-
-  setBranchOwnerRespectingActiveLease(projectId: string, linearIssueId: string, owner: BranchOwner): boolean {
-    const lease = this.getActiveIssueSessionLease(projectId, linearIssueId);
-    if (!lease) {
-      this.issues.setBranchOwner(projectId, linearIssueId, owner);
-      return true;
-    }
-    return this.setBranchOwnerWithLease(lease, owner);
   }
 
   releaseIssueSessionLeaseRespectingActiveLease(projectId: string, linearIssueId: string): void {

@@ -1,6 +1,6 @@
 import type { Logger } from "pino";
 import type { PatchRelayDatabase } from "./db.ts";
-import type { IssueRecord, BranchOwner } from "./db-types.ts";
+import type { IssueRecord } from "./db-types.ts";
 import type { FactoryState, RunType } from "./factory-state.ts";
 import type { AppConfig } from "./types.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
@@ -131,13 +131,6 @@ function hasFailureProvenance(issue: Pick<
   );
 }
 
-export function resolveBranchOwnerForStateTransition(newState: FactoryState, pendingRunType?: RunType): BranchOwner | undefined {
-  if (pendingRunType) return "patchrelay";
-  if (newState === "awaiting_queue") return "patchrelay";
-  if (newState === "repairing_ci" || newState === "repairing_queue") return "patchrelay";
-  return undefined;
-}
-
 export interface IdleReconciliationDeps {
   enqueueIssue(projectId: string, issueId: string): void;
 }
@@ -261,10 +254,6 @@ export class IdleIssueReconciler {
           }
         : {}),
     });
-    const branchOwner = resolveBranchOwnerForStateTransition(newState, options?.pendingRunType);
-    if (branchOwner) {
-      this.db.issues.setBranchOwner(issue.projectId, issue.linearIssueId, branchOwner);
-    }
     if (options?.pendingRunType) {
       this.appendWakeEvent(issue, options.pendingRunType, options.pendingRunContext, "idle_reconciliation");
     }

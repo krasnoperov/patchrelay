@@ -1,5 +1,4 @@
 import type {
-  BranchOwner,
   GitHubCiSnapshotRecord,
   GitHubFailureSource,
   IssueDependencyRecord,
@@ -298,15 +297,6 @@ export class IssueStore {
     return rows.map(mapIssueRow);
   }
 
-  setBranchOwner(projectId: string, linearIssueId: string, owner: BranchOwner): void {
-    const now = isoNow();
-    this.connection.prepare(`
-      UPDATE issues
-      SET branch_owner = ?, branch_ownership_changed_at = ?, updated_at = ?
-      WHERE project_id = ? AND linear_issue_id = ?
-    `).run(owner, now, now, projectId, linearIssueId);
-  }
-
   replaceIssueDependencies(params: {
     projectId: string;
     linearIssueId: string;
@@ -450,12 +440,6 @@ export function mapIssueRow(row: Record<string, unknown>): IssueRecord {
     ...(row.pending_run_type !== null && row.pending_run_type !== undefined ? { pendingRunType: String(row.pending_run_type) as RunType } : {}),
     ...(row.pending_run_context_json !== null && row.pending_run_context_json !== undefined ? { pendingRunContextJson: String(row.pending_run_context_json) } : {}),
     ...(row.branch_name !== null ? { branchName: String(row.branch_name) } : {}),
-    ...(row.branch_owner !== null && row.branch_owner !== undefined && String(row.branch_owner) === "patchrelay"
-      ? { branchOwner: "patchrelay" as BranchOwner }
-      : { branchOwner: "patchrelay" as BranchOwner }),
-    ...(row.branch_ownership_changed_at !== null && row.branch_ownership_changed_at !== undefined
-      ? { branchOwnershipChangedAt: String(row.branch_ownership_changed_at) }
-      : {}),
     ...(row.worktree_path !== null ? { worktreePath: String(row.worktree_path) } : {}),
     ...(row.thread_id !== null ? { threadId: String(row.thread_id) } : {}),
     ...(row.active_run_id !== null ? { activeRunId: Number(row.active_run_id) } : {}),
