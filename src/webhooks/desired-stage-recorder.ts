@@ -46,16 +46,16 @@ export class DesiredStageRecorder {
     const existingIssue = this.db.issues.getIssue(params.project.id, normalizedIssue.id);
     const activeRun = existingIssue?.activeRunId ? this.db.runs.getRunById(existingIssue.activeRunId) : undefined;
     const latestRun = existingIssue ? this.db.runs.getLatestRunForIssue(params.project.id, normalizedIssue.id) : undefined;
-    const delegated = this.isDelegatedToPatchRelay(params.project, params.normalized);
     const triggerAllowed = triggerEventAllowed(params.project, params.normalized.triggerEvent);
     const incomingAgentSessionId = params.normalized.agentSession?.id;
     const hasPendingWake = this.db.issueSessions.peekIssueSessionWake(params.project.id, normalizedIssue.id) !== undefined;
 
-    if (!existingIssue && !delegated && !incomingAgentSessionId) {
-      return { issue: undefined, wakeRunType: undefined, delegated };
+    if (!existingIssue && !this.isDelegatedToPatchRelay(params.project, normalizedIssue) && !incomingAgentSessionId) {
+      return { issue: undefined, wakeRunType: undefined, delegated: false };
     }
 
     const hydratedIssue = await this.syncIssueDependencies(params.project.id, normalizedIssue);
+    const delegated = this.isDelegatedToPatchRelay(params.project, hydratedIssue);
     const unresolvedBlockers = this.db.issues.countUnresolvedBlockers(params.project.id, normalizedIssue.id);
     const terminal = isTerminalDelegationState(existingIssue, hydratedIssue);
 
@@ -207,11 +207,10 @@ export class DesiredStageRecorder {
     };
   }
 
-  private isDelegatedToPatchRelay(project: ProjectConfig, normalized: NormalizedEvent): boolean {
-    if (!normalized.issue) return false;
+  private isDelegatedToPatchRelay(project: ProjectConfig, issue: { delegateId?: string | undefined }): boolean {
     const installation = this.db.linearInstallations.getLinearInstallationForProject(project.id);
     if (!installation?.actorId) return false;
-    return normalized.issue.delegateId === installation.actorId;
+    return issue.delegateId === installation.actorId;
   }
 
   private async syncIssueDependencies(projectId: string, issue: IssueMetadata): Promise<IssueMetadata> {

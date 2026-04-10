@@ -889,6 +889,107 @@ test("re-delegation resumes requested-changes issue from PR state instead of res
   }
 });
 
+test("later issue webhooks recover missed re-delegation from live Linear delegate state", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-redelegate-repair-"));
+  try {
+    const config = createConfig(baseDir);
+    config.projects[0] = {
+      ...config.projects[0]!,
+      triggerEvents: [...config.projects[0]!.triggerEvents, "commentUpdated"],
+    };
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+
+    db.upsertIssue({
+      projectId: "krasnoperov/mafia",
+      linearIssueId: "issue-maf-52c",
+      issueKey: "MAF-52C",
+      title: "Repair missed re-delegation",
+      delegatedToPatchRelay: false,
+      factoryState: "escalated",
+      prNumber: 122,
+      prState: "open",
+      prReviewState: "changes_requested",
+    });
+
+    const linearClient: Partial<LinearClient> = {
+      getIssue: async (issueId: string) => {
+        assert.equal(issueId, "issue-maf-52c");
+        return {
+          id: "issue-maf-52c",
+          identifier: "MAF-52C",
+          title: "Repair missed re-delegation",
+          teamId: "team-maf",
+          teamKey: "MAF",
+          delegateId: "patchrelay-actor",
+          stateId: "state-start",
+          stateName: "In Progress",
+          stateType: "started",
+          workflowStates: [],
+          labelIds: [],
+          labels: [],
+          teamLabels: [],
+          blockedBy: [],
+          blocks: [],
+        };
+      },
+    };
+
+    const enqueued: Array<{ projectId: string; issueId: string }> = [];
+    const handler = new WebhookHandler(
+      config,
+      db,
+      { forProject: async () => linearClient as LinearClient } as never,
+      { steerTurn: async () => undefined } as never,
+      (projectId, issueId) => { enqueued.push({ projectId, issueId }); },
+      pino({ enabled: false }),
+    );
+
+    const payload: LinearWebhookPayload = {
+      action: "update",
+      type: "Comment",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      webhookTimestamp: Date.now(),
+      data: {
+        id: "comment-redelegate-repair",
+        body: "PatchRelay, please continue on the latest review.",
+        user: { name: "Alex Operator" },
+        issue: {
+          id: "issue-maf-52c",
+          identifier: "MAF-52C",
+          title: "Repair missed re-delegation",
+          team: { id: "team-maf", key: "MAF" },
+          state: { id: "state-start", name: "In Progress", type: "started" },
+        },
+      },
+    };
+
+    const stored = db.webhookEvents.insertFullWebhookEvent({
+      webhookId: "delivery-redelegate-repair",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(payload),
+    });
+
+    await handler.processWebhookEvent(stored.id);
+
+    const issue = db.getIssue("krasnoperov/mafia", "issue-maf-52c");
+    assert.equal(issue?.delegatedToPatchRelay, true);
+    assert.equal(issue?.factoryState, "changes_requested");
+    const wake = db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-52c");
+    assert.equal(wake?.runType, "review_fix");
+    assert.deepEqual(enqueued, []);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("re-delegation preserves completion-check questions instead of restarting implementation", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-redelegate-completion-check-"));
   try {
