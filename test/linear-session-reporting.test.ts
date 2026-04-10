@@ -106,24 +106,16 @@ test("GitHub state activities keep repair work active instead of erroring", () =
     triggerEvent: "check_failed",
     checkName: "lint",
   } as never);
-  assert.deepEqual(repairingCi, {
-    type: "action",
-    action: "Repairing",
-    parameter: "CI failure: lint",
-  });
+  assert.equal(repairingCi, undefined);
 
   const changesRequested = buildGitHubStateActivity("changes_requested", {
     triggerEvent: "review_changes_requested",
     reviewerName: "Ada",
   } as never);
-  assert.deepEqual(changesRequested, {
-    type: "action",
-    action: "Addressing",
-    parameter: "review feedback from Ada",
-  });
+  assert.equal(changesRequested, undefined);
 });
 
-test("run completion activity summarizes the next visible milestone", () => {
+test("run completion activity reports PR publication concisely", () => {
   const activity = buildRunCompletedActivity({
     runType: "implementation",
     completionSummary: "Implemented the API endpoint and pushed the branch.",
@@ -133,11 +125,11 @@ test("run completion activity summarizes the next visible milestone", () => {
 
   assert.deepEqual(activity, {
     type: "response",
-    body: "Implementation completed.\n\nPR #42 is ready for review.\n\nImplemented the API endpoint and pushed the branch.",
+    body: "PR #42 opened: Implemented the API endpoint and pushed the branch.",
   });
 });
 
-test("run completion activity unwraps shell-wrapped verification commands", () => {
+test("run completion activity unwraps shell-wrapped verification commands in publish comments", () => {
   const activity = buildRunCompletedActivity({
     runType: "implementation",
     completionSummary:
@@ -149,7 +141,42 @@ test("run completion activity unwraps shell-wrapped verification commands", () =
   assert.deepEqual(activity, {
     type: "response",
     body:
-      "Implementation completed.\n\nPR #42 is ready for review.\n\nVerification passed with `npm run test:ui:local -- tests/ui/app-shell.spec.ts tests/ui/game-flow.spec.ts`.",
+      "PR #42 opened: Verification passed with `npm run test:ui:local -- tests/ui/app-shell.spec.ts tests/ui/game-flow.spec.ts`.",
+  });
+});
+
+test("run completion activity suppresses routine branch upkeep chatter", () => {
+  const activity = buildRunCompletedActivity({
+    runType: "branch_upkeep",
+    completionSummary: "Rebased the PR branch onto the latest origin/main.",
+    postRunState: "pr_open",
+    prNumber: 52,
+  });
+
+  assert.equal(activity, undefined);
+});
+
+test("run completion activity keeps repair comments concise and human-facing", () => {
+  const reviewFix = buildRunCompletedActivity({
+    runType: "review_fix",
+    completionSummary: "Fixed the mobile header regression and pushed a new head.",
+    postRunState: "pr_open",
+    prNumber: 50,
+  });
+  assert.deepEqual(reviewFix, {
+    type: "response",
+    body: "Updated PR #50 to address review feedback. Fixed the mobile header regression and pushed a new head.",
+  });
+
+  const queueRepair = buildRunCompletedActivity({
+    runType: "queue_repair",
+    completionSummary: "Resolved the merge conflict and force-pushed the repaired branch.",
+    postRunState: "pr_open",
+    prNumber: 50,
+  });
+  assert.deepEqual(queueRepair, {
+    type: "response",
+    body: "Updated PR #50 after merge-queue repair. Resolved the merge conflict and force-pushed the repaired branch.",
   });
 });
 

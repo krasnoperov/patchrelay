@@ -188,12 +188,15 @@ export class RunFinalizer {
 
     const updatedIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? refreshedIssue;
     const completionSummary = report.assistantMessages.at(-1)?.slice(0, 300) ?? `${run.runType} completed.`;
-    void this.linearSync.emitActivity(updatedIssue, buildRunCompletedActivity({
+    const linearActivity = buildRunCompletedActivity({
       runType: run.runType,
       completionSummary,
       postRunState: updatedIssue.factoryState,
       ...(updatedIssue.prNumber !== undefined ? { prNumber: updatedIssue.prNumber } : {}),
-    }));
+    });
+    if (linearActivity) {
+      void this.linearSync.emitActivity(updatedIssue, linearActivity);
+    }
     void this.linearSync.syncSession(updatedIssue);
     this.linearSync.clearProgress(run.id);
     this.releaseLease(run.projectId, run.linearIssueId);

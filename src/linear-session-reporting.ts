@@ -78,21 +78,53 @@ export function buildRunCompletedActivity(params: {
   completionSummary?: string;
   postRunState?: FactoryState;
   prNumber?: number;
-}): LinearAgentActivityContent {
-  const label = formatRunTypeLabel(params.runType);
-  const nextState = describeNextState(params.postRunState, params.prNumber);
+}): LinearAgentActivityContent | undefined {
+  const prLabel = params.prNumber ? `PR #${params.prNumber}` : "the pull request";
   const summary = trimSummary(params.completionSummary);
-  const lines = [`${label} completed.`];
-  if (nextState) {
-    lines.push("", nextState);
+  const detail = summary ? ` ${summary}` : "";
+
+  switch (params.runType) {
+    case "implementation":
+      if (params.postRunState === "pr_open") {
+        return {
+          type: "response",
+          body: `${prLabel} opened:${detail || " Published and ready for review."}`,
+        };
+      }
+      return undefined;
+    case "review_fix":
+      return {
+        type: "response",
+        body: `Updated ${prLabel} to address review feedback.${detail}`,
+      };
+    case "ci_repair":
+      return {
+        type: "response",
+        body: `Updated ${prLabel} after CI repair.${detail}`,
+      };
+    case "queue_repair":
+      return {
+        type: "response",
+        body: `Updated ${prLabel} after merge-queue repair.${detail}`,
+      };
+    case "branch_upkeep":
+      return undefined;
+    default: {
+      const label = formatRunTypeLabel(params.runType);
+      const nextState = describeNextState(params.postRunState, params.prNumber);
+      const lines = [`${label} completed.`];
+      if (nextState) {
+        lines.push("", nextState);
+      }
+      if (summary) {
+        lines.push("", summary);
+      }
+      return {
+        type: "response",
+        body: lines.join("\n"),
+      };
+    }
   }
-  if (summary) {
-    lines.push("", summary);
-  }
-  return {
-    type: "response",
-    body: lines.join("\n"),
-  };
 }
 
 export function buildRunFailureActivity(runType: RunType, reason?: string): LinearAgentActivityContent {
@@ -115,33 +147,16 @@ export function buildGitHubStateActivity(
   event: NormalizedGitHubEvent,
 ): LinearAgentActivityContent | undefined {
   switch (newState) {
-    case "pr_open": {
-      const parts = [`PR #${event.prNumber ?? "?"} is open and ready for review.`];
-      if (event.prUrl) {
-        parts.push("", event.prUrl);
-      }
-      return { type: "response", body: parts.join("\n") };
-    }
+    case "pr_open":
+      return undefined;
     case "awaiting_queue":
-      return { type: "response", body: "Review approved. PatchRelay is moving the PR toward merge." };
+      return undefined;
     case "changes_requested":
-      return {
-        type: "action",
-        action: "Addressing",
-        parameter: event.reviewerName ? `review feedback from ${event.reviewerName}` : "review feedback",
-      };
+      return undefined;
     case "repairing_ci":
-      return {
-        type: "action",
-        action: "Repairing",
-        parameter: event.checkName ? `CI failure: ${event.checkName}` : "failing CI checks",
-      };
+      return undefined;
     case "repairing_queue":
-      return {
-        type: "action",
-        action: "Repairing",
-        parameter: "merge queue validation",
-      };
+      return undefined;
     case "done":
       return { type: "response", body: `PR merged.${event.prNumber ? ` PR #${event.prNumber}` : ""}` };
     case "failed":
