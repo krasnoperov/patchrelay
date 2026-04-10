@@ -70,6 +70,57 @@ function getMostRecentActivityAt(snapshot: QueueWatchSnapshot | null): string | 
   }, undefined as string | undefined);
 }
 
+export function buildQueueSummary(entries: QueueEntry[]): QueueWatchSnapshot["summary"] {
+  const summary: QueueWatchSnapshot["summary"] = {
+    total: entries.length,
+    active: 0,
+    queued: 0,
+    preparingHead: 0,
+    validating: 0,
+    merging: 0,
+    merged: 0,
+    evicted: 0,
+    dequeued: 0,
+    headEntryId: null,
+    headPrNumber: null,
+  };
+
+  const activeEntries = entries.filter((entry) => !["merged", "evicted", "dequeued"].includes(entry.status));
+  if (activeEntries.length > 0) {
+    summary.headEntryId = activeEntries[0]!.id;
+    summary.headPrNumber = activeEntries[0]!.prNumber;
+    summary.active = activeEntries.length;
+  }
+
+  for (const entry of entries) {
+    switch (entry.status) {
+      case "queued":
+        summary.queued += 1;
+        break;
+      case "preparing_head":
+        summary.preparingHead += 1;
+        break;
+      case "validating":
+        summary.validating += 1;
+        break;
+      case "merging":
+        summary.merging += 1;
+        break;
+      case "merged":
+        summary.merged += 1;
+        break;
+      case "evicted":
+        summary.evicted += 1;
+        break;
+      case "dequeued":
+        summary.dequeued += 1;
+        break;
+    }
+  }
+
+  return summary;
+}
+
 export function matchRepoRef(repo: DashboardRepoConfig, repoRef: string | undefined): boolean {
   if (!repoRef) {
     return false;

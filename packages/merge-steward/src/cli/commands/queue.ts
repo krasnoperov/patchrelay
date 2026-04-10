@@ -1,5 +1,4 @@
 import { SqliteStore } from "../../db/sqlite-store.ts";
-import { buildSummary } from "../../service.ts";
 import { TERMINAL_STATUSES, type QueueEntry, type QueueEntryDetail, type QueueWatchSnapshot } from "../../types.ts";
 import type { StewardConfig } from "../../config.ts";
 import type { ParsedArgs, Output } from "../types.ts";
@@ -7,6 +6,7 @@ import { UsageError } from "../types.ts";
 import { parseIntegerFlag } from "../args.ts";
 import { formatJson, writeOutput } from "../output.ts";
 import { loadRepoConfigById, resolveRepoId, fetchLocalJson } from "../system.ts";
+import { buildQueueSummary } from "../../watch/dashboard-model.ts";
 
 async function readQueueSnapshot(config: StewardConfig, eventLimit: number): Promise<{ source: "service" | "database"; snapshot: QueueWatchSnapshot }> {
   try {
@@ -23,7 +23,7 @@ async function readQueueSnapshot(config: StewardConfig, eventLimit: number): Pro
           repoId: config.repoId,
           repoFullName: config.repoFullName,
           baseBranch: config.baseBranch,
-          summary: buildSummary(entries),
+          summary: buildQueueSummary(entries),
           runtime: {
             tickInProgress: false,
             lastTickStartedAt: null,
