@@ -62,6 +62,77 @@ export class RunFinalizer {
     this.releaseLease(run.projectId, run.linearIssueId);
   }
 
+  private publishTurnEvent(params: {
+    level: "info" | "warn" | "error";
+    run: Pick<RunRecord, "projectId" | "runType">;
+    issueKey?: string | undefined;
+    status: string;
+    summary: string;
+    detail?: string | undefined;
+  }): void {
+    this.feed?.publish({
+      level: params.level,
+      kind: "turn",
+      issueKey: params.issueKey,
+      projectId: params.run.projectId,
+      stage: params.run.runType,
+      status: params.status,
+      summary: params.summary,
+      ...(params.detail ? { detail: params.detail } : {}),
+    });
+  }
+
+  private syncFailureOutcome(params: {
+    run: RunRecord;
+    fallbackIssue: IssueRecord;
+    message: string;
+    level: "warn" | "error";
+    status: string;
+    summary: string;
+    detail?: string;
+  }): void {
+    const issue = this.db.issues.getIssue(params.run.projectId, params.run.linearIssueId) ?? params.fallbackIssue;
+    this.publishTurnEvent({
+      level: params.level,
+      run: params.run,
+      issueKey: params.fallbackIssue.issueKey,
+      status: params.status,
+      summary: params.summary,
+      ...(params.detail ? { detail: params.detail } : {}),
+    });
+    void this.linearSync.emitActivity(issue, buildRunFailureActivity(params.run.runType, params.message));
+    void this.linearSync.syncSession(issue, { activeRunType: params.run.runType });
+    this.clearProgressAndRelease(params.run);
+  }
+
+  private syncCompletionCheckOutcome(params: {
+    run: RunRecord;
+    fallbackIssue: IssueRecord;
+    level: "info" | "warn";
+    status: string;
+    summary: string;
+    detail?: string;
+    activity: ReturnType<typeof buildCompletionCheckActivity>;
+    enqueue?: boolean;
+  }): void {
+    const issue = this.db.issues.getIssue(params.run.projectId, params.run.linearIssueId) ?? params.fallbackIssue;
+    this.publishTurnEvent({
+      level: params.level,
+      run: params.run,
+      issueKey: params.fallbackIssue.issueKey,
+      status: params.status,
+      summary: params.summary,
+      ...(params.detail ? { detail: params.detail } : {}),
+    });
+    void this.linearSync.emitActivity(issue, params.activity, { ephemeral: true });
+    void this.linearSync.syncSession(issue);
+    this.linearSync.clearProgress(params.run.id);
+    if (params.enqueue) {
+      this.enqueueIssue(params.run.projectId, params.run.linearIssueId);
+    }
+    this.releaseLease(params.run.projectId, params.run.linearIssueId);
+  }
+
   async finalizeCompletedRun(params: {
     source: "notification" | "reconciliation";
     run: RunRecord;
@@ -85,51 +156,37 @@ export class RunFinalizer {
     if (verifiedRepairError) {
       const holdState = params.resolveRecoverableRunState(freshIssue) ?? "failed";
       this.failRunAndClear(run, verifiedRepairError, holdState);
-      const heldIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? freshIssue;
-      this.feed?.publish({
+      this.syncFailureOutcome({
+        run,
+        fallbackIssue: freshIssue,
+        message: verifiedRepairError,
         level: "warn",
-        kind: "turn",
-        issueKey: freshIssue.issueKey,
-        projectId: run.projectId,
-        stage: run.runType,
         status: "branch_not_advanced",
         summary: verifiedRepairError,
       });
-      void this.linearSync.emitActivity(heldIssue, buildRunFailureActivity(run.runType, verifiedRepairError));
-      void this.linearSync.syncSession(heldIssue, { activeRunType: run.runType });
-      this.linearSync.clearProgress(run.id);
-      this.releaseLease(run.projectId, run.linearIssueId);
       return;
     }
 
     const missingReviewFixHeadError = await this.completionPolicy.verifyReviewFixAdvancedHead(run, freshIssue);
     if (missingReviewFixHeadError) {
       this.failRunAndClear(run, missingReviewFixHeadError, "escalated");
-      const failedIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? freshIssue;
-      this.feed?.publish({
+      this.syncFailureOutcome({
+        run,
+        fallbackIssue: freshIssue,
+        message: missingReviewFixHeadError,
         level: "error",
-        kind: "turn",
-        issueKey: freshIssue.issueKey,
-        projectId: run.projectId,
-        stage: run.runType,
         status: "same_head_review_handoff_blocked",
         summary: missingReviewFixHeadError,
       });
-      void this.linearSync.emitActivity(failedIssue, buildRunFailureActivity(run.runType, missingReviewFixHeadError));
-      void this.linearSync.syncSession(failedIssue, { activeRunType: run.runType });
-      this.linearSync.clearProgress(run.id);
-      this.releaseLease(run.projectId, run.linearIssueId);
       return;
     }
 
     const publishedOutcomeError = await this.completionPolicy.verifyPublishedRunOutcome(run, freshIssue);
     if (publishedOutcomeError) {
-      this.feed?.publish({
+      this.publishTurnEvent({
         level: "info",
-        kind: "turn",
+        run,
         issueKey: freshIssue.issueKey,
-        projectId: run.projectId,
-        stage: run.runType,
         status: "completion_check_started",
         summary: "No PR found; checking next step",
         detail: publishedOutcomeError,
@@ -151,21 +208,17 @@ export class RunFinalizer {
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        this.failRunAndClear(run, `No PR observed and the completion check failed: ${message}`, "failed");
-        const failedIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? freshIssue;
-        this.feed?.publish({
+        const failureMessage = `No PR observed and the completion check failed: ${message}`;
+        this.failRunAndClear(run, failureMessage, "failed");
+        this.syncFailureOutcome({
+          run,
+          fallbackIssue: freshIssue,
+          message: failureMessage,
           level: "error",
-          kind: "turn",
-          issueKey: freshIssue.issueKey,
-          projectId: run.projectId,
-          stage: run.runType,
           status: "completion_check_failed",
           summary: "No PR found; completion check failed",
           detail: message,
         });
-        void this.linearSync.emitActivity(failedIssue, buildRunFailureActivity(run.runType, `No PR observed and the completion check failed: ${message}`));
-        void this.linearSync.syncSession(failedIssue, { activeRunType: run.runType });
-        this.clearProgressAndRelease(run);
         return;
       }
 
@@ -203,22 +256,16 @@ export class RunFinalizer {
           this.clearProgressAndRelease(run);
           return;
         }
-        const continuedIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? freshIssue;
-        this.feed?.publish({
+        this.syncCompletionCheckOutcome({
+          run,
+          fallbackIssue: freshIssue,
           level: "info",
-          kind: "turn",
-          issueKey: freshIssue.issueKey,
-          projectId: run.projectId,
-          stage: run.runType,
           status: "completion_check_continue",
           summary: "No PR found; continuing automatically",
           detail: completionCheck.summary,
+          activity: buildCompletionCheckActivity("continue"),
+          enqueue: true,
         });
-        void this.linearSync.emitActivity(continuedIssue, buildCompletionCheckActivity("continue"), { ephemeral: true });
-        void this.linearSync.syncSession(continuedIssue);
-        this.linearSync.clearProgress(run.id);
-        this.enqueueIssue(run.projectId, run.linearIssueId);
-        this.releaseLease(run.projectId, run.linearIssueId);
         return;
       }
 
@@ -242,20 +289,15 @@ export class RunFinalizer {
           this.clearProgressAndRelease(run);
           return;
         }
-        const awaitingIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? freshIssue;
-        this.feed?.publish({
+        this.syncCompletionCheckOutcome({
+          run,
+          fallbackIssue: freshIssue,
           level: "warn",
-          kind: "turn",
-          issueKey: freshIssue.issueKey,
-          projectId: run.projectId,
-          stage: run.runType,
           status: "completion_check_needs_input",
           summary: "No PR found; waiting for answer",
           detail: completionCheck.question ?? completionCheck.summary,
+          activity: buildCompletionCheckActivity("needs_input", completionCheck),
         });
-        void this.linearSync.emitActivity(awaitingIssue, buildCompletionCheckActivity("needs_input", completionCheck));
-        void this.linearSync.syncSession(awaitingIssue);
-        this.clearProgressAndRelease(run);
         return;
       }
 
@@ -289,20 +331,15 @@ export class RunFinalizer {
           this.clearProgressAndRelease(run);
           return;
         }
-        const doneIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? freshIssue;
-        this.feed?.publish({
+        this.syncCompletionCheckOutcome({
+          run,
+          fallbackIssue: freshIssue,
           level: "info",
-          kind: "turn",
-          issueKey: freshIssue.issueKey,
-          projectId: run.projectId,
-          stage: run.runType,
           status: "completion_check_done",
           summary: "No PR found; confirmed done",
           detail: completionCheck.summary,
+          activity: buildCompletionCheckActivity("done", completionCheck),
         });
-        void this.linearSync.emitActivity(doneIssue, buildCompletionCheckActivity("done", completionCheck));
-        void this.linearSync.syncSession(doneIssue);
-        this.clearProgressAndRelease(run);
         return;
       }
 
@@ -329,20 +366,15 @@ export class RunFinalizer {
         this.clearProgressAndRelease(run);
         return;
       }
-      const failedIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? freshIssue;
-      this.feed?.publish({
+      this.syncFailureOutcome({
+        run,
+        fallbackIssue: freshIssue,
+        message: failureReason,
         level: "warn",
-        kind: "turn",
-        issueKey: freshIssue.issueKey,
-        projectId: run.projectId,
-        stage: run.runType,
         status: "completion_check_failed",
         summary: "No PR found; completion check failed",
         detail: completionCheck.summary,
       });
-      void this.linearSync.emitActivity(failedIssue, buildRunFailureActivity(run.runType, failureReason));
-      void this.linearSync.syncSession(failedIssue, { activeRunType: run.runType });
-      this.clearProgressAndRelease(run);
       return;
     }
 
@@ -411,17 +443,15 @@ export class RunFinalizer {
       this.enqueueIssue(run.projectId, run.linearIssueId);
     }
 
-    this.feed?.publish({
+    this.publishTurnEvent({
       level: "info",
-      kind: "turn",
+      run,
       issueKey: issue.issueKey,
-      projectId: run.projectId,
-      stage: run.runType,
       status: "completed",
       summary: params.source === "notification"
         ? `Turn completed for ${run.runType}`
         : `Reconciliation: ${run.runType} completed${postRunState ? ` -> ${postRunState}` : ""}`,
-      ...(report.assistantMessages.at(-1) ? { detail: report.assistantMessages.at(-1) } : {}),
+      detail: report.assistantMessages.at(-1),
     });
 
     const updatedIssue = this.db.issues.getIssue(run.projectId, run.linearIssueId) ?? refreshedIssue;
