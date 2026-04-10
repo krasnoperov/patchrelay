@@ -47,6 +47,10 @@ export class RunNotificationHandler {
 
     const run = this.db.runs.getRunByThreadId(threadId);
     if (!run) return;
+    if (run.status !== "running") {
+      this.logger.info({ runId: run.id, status: run.status, issueId: run.linearIssueId }, "Ignoring Codex notification for inactive run");
+      return;
+    }
     if (!this.heartbeatIssueSessionLease(run.projectId, run.linearIssueId)) {
       this.logger.warn({ runId: run.id, issueId: run.linearIssueId }, "Ignoring Codex notification after losing issue-session lease");
       return;

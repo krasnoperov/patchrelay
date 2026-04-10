@@ -1103,6 +1103,69 @@ test("undelegated issue links an external PR by issue key and tracks it without 
   }
 });
 
+test("late PatchRelay PR from a released implementation run is auto-closed instead of being linked", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-runtime-late-pr-close-"));
+  const oldToken = process.env.GH_TOKEN;
+  try {
+    process.env.GH_TOKEN = "test-token";
+    const fetchCalls: Array<{ url: string; method: string; body?: string }> = [];
+    const { db, enqueueCalls, handler } = createHandler(baseDir, {
+      fetchImpl: async (input, init) => {
+        fetchCalls.push({
+          url: String(input),
+          method: String(init?.method ?? "GET"),
+          body: typeof init?.body === "string" ? init.body : undefined,
+        });
+        return createJsonResponse({ state: "closed" });
+      },
+    });
+    const issueRecord = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-late-pr-close",
+      issueKey: "USE-62",
+      delegatedToPatchRelay: true,
+      branchName: "use/62-setup",
+      factoryState: "delegated",
+    });
+    db.runs.finishRun(
+      db.runs.createRun({
+        issueId: issueRecord.id,
+        projectId: "usertold",
+        linearIssueId: "issue-late-pr-close",
+        runType: "implementation",
+        promptText: "do the work",
+      }).id,
+      { status: "released", failureReason: "Issue became blocked during implementation" },
+    );
+
+    await handler.processGitHubWebhookEvent({
+      eventType: "pull_request",
+      rawBody: buildOpenedPrPayload({
+        branch: "use/62-setup",
+        headSha: "sha-late-open",
+        prNumber: 62,
+        prAuthorLogin: "patchrelay[bot]",
+        prTitle: "USE-62 late PR",
+      }),
+    });
+
+    const issue = db.getIssue("usertold", "issue-late-pr-close");
+    assert.equal(issue?.prNumber, undefined);
+    assert.equal(fetchCalls.length, 1);
+    assert.equal(fetchCalls[0]?.method, "PATCH");
+    assert.match(fetchCalls[0]?.url ?? "", /\/repos\/owner\/repo\/pulls\/62$/);
+    assert.equal(fetchCalls[0]?.body, JSON.stringify({ state: "closed" }));
+    assert.deepEqual(enqueueCalls, []);
+  } finally {
+    if (oldToken === undefined) {
+      delete process.env.GH_TOKEN;
+    } else {
+      process.env.GH_TOKEN = oldToken;
+    }
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("delegated issue can repair failing CI on an externally linked PR", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-runtime-external-ci-repair-"));
   try {

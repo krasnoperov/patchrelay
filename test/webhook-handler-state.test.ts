@@ -344,6 +344,120 @@ test("delegated issue webhooks enqueue implementation wake immediately when the 
   }
 });
 
+test("issue becoming blocked during implementation releases the active run and pauses work", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-blocked-active-run-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+
+    const issueRecord = db.upsertIssue({
+      projectId: "krasnoperov/mafia",
+      linearIssueId: "issue-maf-blocked-active",
+      issueKey: "MAF-42",
+      title: "Sequencing bug",
+      delegatedToPatchRelay: true,
+      factoryState: "implementing",
+    });
+    const run = db.runs.createRun({
+      issueId: issueRecord.id,
+      projectId: issueRecord.projectId,
+      linearIssueId: issueRecord.linearIssueId,
+      runType: "implementation",
+    });
+    db.runs.updateRunThread(run.id, { threadId: "thread-blocked-active", turnId: "turn-blocked-active" });
+    db.upsertIssue({
+      projectId: issueRecord.projectId,
+      linearIssueId: issueRecord.linearIssueId,
+      activeRunId: run.id,
+      branchName: "maf/42-sequencing-bug",
+    });
+
+    const steerInputs: string[] = [];
+    const linearClient: Partial<LinearClient> = {
+      getIssue: async () => ({
+        id: "issue-maf-blocked-active",
+        identifier: "MAF-42",
+        title: "Sequencing bug",
+        teamId: "team-maf",
+        teamKey: "MAF",
+        delegateId: "patchrelay-actor",
+        stateId: "state-start",
+        stateName: "Start",
+        stateType: "started",
+        workflowStates: [],
+        labelIds: [],
+        labels: [],
+        teamLabels: [],
+        blockedBy: [{
+          id: "issue-maf-blocker",
+          identifier: "MAF-10",
+          title: "Blocking task",
+          stateName: "In Progress",
+          stateType: "started",
+        }],
+        blocks: [],
+      }),
+    };
+
+    const handler = new WebhookHandler(
+      config,
+      db,
+      { forProject: async () => linearClient as LinearClient } as never,
+      {
+        steerTurn: async ({ input }) => {
+          steerInputs.push(input);
+        },
+      } as never,
+      () => undefined,
+      pino({ enabled: false }),
+    );
+
+    const payload: LinearWebhookPayload = {
+      action: "update",
+      type: "Issue",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      webhookTimestamp: Date.now(),
+      updatedFrom: { stateId: "state-start" },
+      data: {
+        id: "issue-maf-blocked-active",
+        identifier: "MAF-42",
+        title: "Sequencing bug",
+        team: { id: "team-maf", key: "MAF" },
+        state: { id: "state-start", name: "Start", type: "started" },
+        delegate: { id: "patchrelay-actor", name: "PatchRelay" },
+      },
+    };
+
+    const stored = db.webhookEvents.insertFullWebhookEvent({
+      webhookId: "delivery-maf-blocked-active",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(payload),
+    });
+    await handler.processWebhookEvent(stored.id);
+
+    const issue = db.getIssue("krasnoperov/mafia", "issue-maf-blocked-active");
+    const finishedRun = db.runs.getRunById(run.id);
+    assert.equal(issue?.factoryState, "delegated");
+    assert.equal(issue?.activeRunId, undefined);
+    assert.equal(issue?.delegatedToPatchRelay, true);
+    assert.equal(db.countUnresolvedBlockers("krasnoperov/mafia", "issue-maf-blocked-active"), 1);
+    assert.equal(finishedRun?.status, "released");
+    assert.equal(finishedRun?.failureReason, "Issue became blocked during implementation");
+    assert.equal(steerInputs.length, 1);
+    assert.match(steerInputs[0] ?? "", /now blocked/i);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("delegated issue is tracked via repository-link installation fallback", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-installation-fallback-"));
   try {
