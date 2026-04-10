@@ -25,7 +25,7 @@ function resolvePostRunState(issue: IssueRecord): FactoryState | undefined {
 
 export function resolveCompletedRunState(
   issue: IssueRecord,
-  run: Pick<RunRecord, "runType">,
+  _run: Pick<RunRecord, "runType">,
 ): FactoryState | undefined {
   return resolvePostRunState(issue);
 }
