@@ -58,6 +58,32 @@ function withEnv(values: Record<string, string | undefined>, run: () => Promise<
   }
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[|\\{}()\[\]\^$+*?.]/g, "\\$&");
+}
+
+function writeCodexSessionFile(baseDir: string, threadId: string, options?: {
+  startedAt?: string;
+  cwd?: string;
+  originator?: string;
+}): string {
+  const startedAt = options?.startedAt ?? "2026-04-11T12:00:00.000Z";
+  const sessionDir = path.join(baseDir, "sessions", "2026", "04", "11");
+  mkdirSync(sessionDir, { recursive: true });
+  const filePath = path.join(sessionDir, "rollout-2026-04-11T12-00-00-" + threadId + ".jsonl");
+  const sessionMeta = {
+    type: "session_meta",
+    payload: {
+      id: threadId,
+      timestamp: startedAt,
+      cwd: options?.cwd ?? path.join(baseDir, "workspace"),
+      originator: options?.originator ?? "review-quill",
+    },
+  };
+  writeFileSync(filePath, JSON.stringify(sessionMeta) + "\n", "utf8");
+  return filePath;
+}
+
 test("help shows dashboard in the root command surface", async () => {
   const stdout = createBufferStream();
   const code = await runCli(["help"], {
@@ -243,11 +269,19 @@ test("attempts shows recorded review history for one PR", async () => {
     });
     store.close();
 
+    const codexHome = path.join(baseDir, "codex-home");
+    const sessionPath = writeCodexSessionFile(codexHome, "thread-review-42", {
+      startedAt: "2026-04-11T15:00:00.000Z",
+      cwd: path.join(baseDir, "worktrees", "mafia-42"),
+      originator: "review-quill",
+    });
+
     await withEnv(
       {
         REVIEW_QUILL_CONFIG: configPath,
         REVIEW_QUILL_CONFIG_DIR: configDir,
         REVIEW_QUILL_WEBHOOK_SECRET: "test-secret",
+        CODEX_HOME: codexHome,
       },
       async () => {
         const stdout = createBufferStream();
@@ -263,7 +297,10 @@ test("attempts shows recorded review history for one PR", async () => {
         assert.match(rendered, /PR: #42/);
         assert.match(rendered, /attempt #\d+  completed  declined/);
         assert.match(rendered, /Thread: thread-review-42/);
-        assert.match(rendered, /Catalog: search Codex old sessions for thread thread-review-42/);
+        assert.match(rendered, new RegExp("Session source: " + escapeRegExp(sessionPath)));
+        assert.match(rendered, /Started: 2026-04-11T15:00:00.000Z/);
+        assert.match(rendered, /Originator: review-quill/);
+        assert.match(rendered, /Working directory: .*mafia-42/);
         assert.match(rendered, /Check run: 9001/);
         assert.match(rendered, /Found a regression in the session bootstrap path/);
       },
@@ -435,6 +472,93 @@ test("transcript shows the full stored Codex thread for one PR review attempt", 
         assert.match(rendered, /assistant \(assistant-1\):/);
         assert.match(rendered, /Review walkthrough paragraph one/);
         assert.match(rendered, /item customItem \(item-2\):/);
+      },
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("transcript-source shows the raw Codex session file for one review attempt", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "review-quill-cli-transcript-source-"));
+  try {
+    const configDir = path.join(baseDir, "config");
+    mkdirSync(configDir, { recursive: true });
+    const configPath = path.join(configDir, "review-quill.json");
+    const dbPath = path.join(baseDir, "review-quill.sqlite");
+
+    writeFileSync(configPath, JSON.stringify({
+      server: { bind: "127.0.0.1", port: 8788, publicBaseUrl: "https://review-quill.example.com" },
+      database: { path: dbPath, wal: true },
+      codex: {
+        bin: "codex",
+        args: ["app-server"],
+        approvalPolicy: "never",
+        sandboxMode: "danger-full-access",
+      },
+      repositories: [
+        {
+          repoId: "mafia",
+          repoFullName: "krasnoperov/mafia",
+          baseBranch: "main",
+          requiredChecks: [],
+          reviewDocs: ["REVIEW_WORKFLOW.md"],
+          excludeBranches: [],
+          diffIgnore: [],
+          diffSummarizeOnly: [],
+          patchBodyBudgetTokens: 12000,
+        },
+      ],
+    }, null, 2) + "\n", "utf8");
+
+    const store = new SqliteStore(dbPath);
+    const attempt = store.createAttempt({
+      repoFullName: "krasnoperov/mafia",
+      prNumber: 45,
+      headSha: "feedbabe",
+      status: "running",
+    });
+    store.updateAttempt(attempt.id, {
+      status: "completed",
+      conclusion: "approved",
+      summary: "Review completed successfully.",
+      threadId: "thread-review-45",
+      turnId: "turn-review-45",
+      completedAt: "2026-04-07T10:20:00.000Z",
+    });
+    store.close();
+
+    const codexHome = path.join(baseDir, "codex-home");
+    const sessionPath = writeCodexSessionFile(codexHome, "thread-review-45", {
+      startedAt: "2026-04-11T16:00:00.000Z",
+      cwd: path.join(baseDir, "worktrees", "mafia-45"),
+      originator: "review-quill",
+    });
+
+    await withEnv(
+      {
+        REVIEW_QUILL_CONFIG: configPath,
+        REVIEW_QUILL_CONFIG_DIR: configDir,
+        REVIEW_QUILL_WEBHOOK_SECRET: "test-secret",
+        CODEX_HOME: codexHome,
+      },
+      async () => {
+        const stdout = createBufferStream();
+        const stderr = createBufferStream();
+        const code = await runCli(["transcript-source", "mafia", "45"], {
+          stdout: stdout.stream,
+          stderr: stderr.stream,
+        });
+
+        assert.equal(code, 0);
+        const rendered = stdout.read();
+        assert.match(rendered, /Repo: krasnoperov\/mafia/);
+        assert.match(rendered, /PR: #45/);
+        assert.match(rendered, /Thread: thread-review-45/);
+        assert.match(rendered, new RegExp("Session source: " + escapeRegExp(sessionPath)));
+        assert.match(rendered, /Started: 2026-04-11T16:00:00.000Z/);
+        assert.match(rendered, /Originator: review-quill/);
+        assert.match(rendered, /Working directory: .*mafia-45/);
       },
     );
   } finally {

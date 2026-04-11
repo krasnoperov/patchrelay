@@ -205,6 +205,32 @@ function withEnv(values: Record<string, string | undefined>, run: () => Promise<
   }
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[|\\{}()\[\]\^$+*?.]/g, "\\$&");
+}
+
+function writeCodexSessionFile(baseDir: string, threadId: string, options?: {
+  startedAt?: string;
+  cwd?: string;
+  originator?: string;
+}): string {
+  const startedAt = options?.startedAt ?? "2026-04-11T12:00:00.000Z";
+  const sessionDir = path.join(baseDir, "sessions", "2026", "04", "11");
+  mkdirSync(sessionDir, { recursive: true });
+  const filePath = path.join(sessionDir, "rollout-2026-04-11T12-00-00-" + threadId + ".jsonl");
+  const sessionMeta = {
+    type: "session_meta",
+    payload: {
+      id: threadId,
+      timestamp: startedAt,
+      cwd: options?.cwd ?? path.join(baseDir, "workspace"),
+      originator: options?.originator ?? "patchrelay",
+    },
+  };
+  writeFileSync(filePath, JSON.stringify(sessionMeta) + "\n", "utf8");
+  return filePath;
+}
+
 function writeRunnerBinaries(configPath: string, binaries: { gitBin?: string; codexBin?: string }): void {
   const raw = JSON.parse(readFileSync(configPath, "utf8")) as {
     runner?: {
@@ -841,6 +867,12 @@ test("cli sessions shows recorded app-server runs with resume commands", async (
       runType: "review_fix",
       promptText: "Address requested review changes",
     });
+    const codexHome = path.join(baseDir, "codex-home");
+    const sessionPath = writeCodexSessionFile(codexHome, "thread-54-review", {
+      startedAt: "2026-04-11T12:34:56.000Z",
+      cwd: path.join(config.projects[0].worktreeRoot, "USE-54"),
+      originator: "patchrelay",
+    });
     db.runs.updateRunThread(reviewRun.id, {
       threadId: "thread-54-review",
       parentThreadId: "thread-54",
@@ -866,15 +898,84 @@ test("cli sessions shows recorded app-server runs with resume commands", async (
 
     const stdout = createBufferStream();
     const stderr = createBufferStream();
-    assert.equal(await runCli(["issue", "sessions", "USE-54"], { config, data, stdout: stdout.stream, stderr: stderr.stream }), 0);
+    await withEnv({ CODEX_HOME: codexHome }, async () => {
+      assert.equal(await runCli(["issue", "sessions", "USE-54"], { config, data, stdout: stdout.stream, stderr: stderr.stream }), 0);
+    });
 
     const rendered = stdout.read();
     assert.match(rendered, /run #\d+[ ]{2}review_fix[ ]{2}completed/);
     assert.match(rendered, /Thread: thread-54-review/);
     assert.match(rendered, /Parent thread: thread-54/);
     assert.match(rendered, /Applied the requested review changes and pushed an update/);
+    assert.match(rendered, new RegExp("Session source: " + escapeRegExp(sessionPath)));
+    assert.match(rendered, /Started: 2026-04-11T12:34:56.000Z/);
+    assert.match(rendered, /Originator: patchrelay/);
+    assert.match(rendered, /Working directory: .*USE-54/);
     assert.match(rendered, /Open: codex --dangerously-bypass-approvals-and-sandbox resume -C .*USE-54 thread-54-review/);
     assert.match(rendered, /run #\d+[ ]{2}implementation[ ]{2}failed/);
+  } finally {
+    data?.close();
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("cli transcript-source prints the raw Codex session file for one run", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-transcript-source-"));
+  let data: CliDataAccess | undefined;
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, true);
+    db.runMigrations();
+    seedDatabase(db, config);
+
+    const issue = db.getIssue("usertold", "issue-1");
+    assert.ok(issue);
+
+    const reviewRun = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "review_fix",
+      promptText: "Address requested review changes",
+    });
+    db.runs.updateRunThread(reviewRun.id, {
+      threadId: "thread-54-transcript-source",
+      turnId: "turn-54-transcript-source",
+    });
+    db.runs.finishRun(reviewRun.id, {
+      status: "completed",
+      threadId: "thread-54-transcript-source",
+      turnId: "turn-54-transcript-source",
+    });
+
+    data = new CliDataAccess(config, { db });
+    const codexHome = path.join(baseDir, "codex-home");
+    const sessionPath = writeCodexSessionFile(codexHome, "thread-54-transcript-source", {
+      startedAt: "2026-04-11T14:00:00.000Z",
+      cwd: path.join(config.projects[0].worktreeRoot, "USE-54"),
+      originator: "patchrelay",
+    });
+
+    const stdout = createBufferStream();
+    const stderr = createBufferStream();
+    await withEnv({ CODEX_HOME: codexHome }, async () => {
+      assert.equal(
+        await runCli(["issue", "transcript-source", "USE-54", "--run", String(reviewRun.id)], {
+          config,
+          data,
+          stdout: stdout.stream,
+          stderr: stderr.stream,
+        }),
+        0,
+      );
+    });
+
+    const rendered = stdout.read();
+    assert.match(rendered, new RegExp("Run: #" + reviewRun.id + " review_fix \\(completed\\)"));
+    assert.match(rendered, /Thread: thread-54-transcript-source/);
+    assert.match(rendered, new RegExp("Session source: " + escapeRegExp(sessionPath)));
+    assert.match(rendered, /Started: 2026-04-11T14:00:00.000Z/);
+    assert.match(rendered, /Originator: patchrelay/);
   } finally {
     data?.close();
     rmSync(baseDir, { recursive: true, force: true });

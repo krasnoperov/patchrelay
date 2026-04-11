@@ -30,6 +30,7 @@ function rootHelpText(): string {
     "  repo show <id> [--json]                                Show one repo config",
     "  attempts <repo> <pr-number> [--json]                   Show recorded review attempts for one pull request",
     "  transcript <repo> <pr-number> [--attempt <id>] [--json]  Show the full visible Codex thread for one recorded review attempt",
+    "  transcript-source <repo> <pr-number> [--attempt <id>] [--json]  Show the raw Codex session file for one review attempt",
     "  doctor [--repo <id>] [--json]                          Validate config, secrets, binaries, and service reachability",
     "  service status [--json]                                Show systemd state and local health",
     "  service logs [--lines <count>] [--json]                Show recent journal logs",

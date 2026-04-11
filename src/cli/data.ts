@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import pino from "pino";
 import { CodexAppServerClient } from "../codex-app-server.ts";
+import { type CodexSessionSourceRecord, resolveCodexSessionSource } from "../codex-session-source.ts";
 import { extractCompletionCheck } from "../completion-check.ts";
 import { getThreadTurns } from "../codex-thread-utils.ts";
 import { PatchRelayDatabase } from "../db.ts";
@@ -78,6 +79,7 @@ export interface CloseResult {
 }
 
 export interface IssueSessionHistoryItem {
+  sessionSource?: CodexSessionSourceRecord;
   runId: number;
   runType: string;
   status: string;
@@ -98,6 +100,17 @@ export interface IssueSessionHistoryResult {
   worktreePath?: string;
   currentThreadId?: string;
   sessions: IssueSessionHistoryItem[];
+}
+
+export interface IssueTranscriptSourceResult {
+  issue: TrackedIssueRecord;
+  runId?: number;
+  runType?: string;
+  runStatus?: string;
+  threadId?: string;
+  turnId?: string;
+  worktreePath?: string;
+  sessionSource?: CodexSessionSourceRecord;
 }
 
 export interface ListResultItem {
@@ -417,6 +430,27 @@ export class CliDataAccess extends CliOperatorApiClient {
     };
   }
 
+  transcriptSource(issueKey: string, runId?: number): IssueTranscriptSourceResult | undefined {
+    const issue = this.db.getTrackedIssueByKey(issueKey);
+    if (!issue) return undefined;
+
+    const dbIssue = this.db.issues.getIssueByKey(issueKey)!;
+    const runs = this.db.runs.listRunsForIssue(issue.projectId, issue.linearIssueId);
+    const selectedRun = runId !== undefined
+      ? runs.find((run) => run.id === runId)
+      : runs.slice().reverse().find((run) => run.threadId);
+    const threadId = selectedRun?.threadId ?? dbIssue.threadId;
+
+    return {
+      issue,
+      ...(selectedRun ? { runId: selectedRun.id, runType: selectedRun.runType, runStatus: selectedRun.status } : {}),
+      ...(threadId ? { threadId } : {}),
+      ...(selectedRun?.turnId ? { turnId: selectedRun.turnId } : {}),
+      ...(dbIssue.worktreePath ? { worktreePath: dbIssue.worktreePath } : {}),
+      ...(threadId ? { sessionSource: resolveCodexSessionSource(threadId) } : {}),
+    };
+  }
+
   sessions(issueKey: string): IssueSessionHistoryResult | undefined {
     const issue = this.db.getTrackedIssueByKey(issueKey);
     if (!issue) return undefined;
@@ -429,6 +463,7 @@ export class CliDataAccess extends CliOperatorApiClient {
       .map((run) => {
         const summary = summarizeRun(run);
         const eventCount = this.db.runs.listThreadEvents(run.id).length;
+        const sessionSource = run.threadId ? resolveCodexSessionSource(run.threadId) : undefined;
         return {
           runId: run.id,
           runType: run.runType,
@@ -438,6 +473,7 @@ export class CliDataAccess extends CliOperatorApiClient {
           ...(run.parentThreadId ? { parentThreadId: run.parentThreadId } : {}),
           ...(summary ? { summary } : {}),
           ...(run.failureReason ? { failureReason: run.failureReason } : {}),
+          ...(sessionSource ? { sessionSource } : {}),
           eventCount,
           eventCountAvailable: this.config.runner.codex.persistExtendedHistory || eventCount > 0,
           startedAt: run.startedAt,

@@ -23,6 +23,7 @@ import { handleDoctor } from "./cli/doctor.ts";
 import { handleAttach, handleInit, handleRepos } from "./cli/repo.ts";
 import { handleService } from "./cli/service.ts";
 import { handleTranscript } from "./cli/transcript.ts";
+import { handleTranscriptSource } from "./cli/transcript-source.ts";
 import type { CodexThreadSummary } from "./types.ts";
 
 interface RunCliOptions {
@@ -135,6 +136,8 @@ export async function runCli(args: string[], options?: RunCliOptions): Promise<n
         return await handleAttempts(parsed, stdout);
       case "transcript":
         return await handleTranscript(parsed, stdout, options?.readCodexThread);
+      case "transcript-source":
+        return await handleTranscriptSource(parsed, stdout);
       case "diff":
         return await handleDiff(parsed, stdout);
       case "service":

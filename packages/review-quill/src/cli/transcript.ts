@@ -1,5 +1,6 @@
 import pino from "pino";
 import { decorateAttempt } from "../attempt-state.ts";
+import { resolveCodexSessionSource } from "../codex-session-source.ts";
 import { loadConfig } from "../config.ts";
 import { CodexAppServerClient } from "../codex-app-server.ts";
 import { SqliteStore } from "../db/sqlite-store.ts";
@@ -9,54 +10,14 @@ import type { CodexThreadSummary, ReviewAttemptRecord } from "../types.ts";
 import type { Output } from "./shared.ts";
 import { formatJson, writeOutput } from "./shared.ts";
 import { parsePullRequestNumber, type ParsedArgs, UsageError } from "./args.ts";
-
-function parseAttemptId(value: string | boolean | undefined): number | undefined {
-  if (value === undefined || value === false) {
-    return undefined;
-  }
-  if (value === true || typeof value !== "string" || !/^\d+$/.test(value.trim())) {
-    throw new UsageError(`Attempt id must be a positive integer. Received: ${String(value)}`);
-  }
-  return Number(value.trim());
-}
-
-function selectTranscriptAttempt(
-  attempts: ReviewAttemptRecord[],
-  attemptId?: number,
-): { attempt: ReviewAttemptRecord; notice?: string } {
-  if (attemptId !== undefined) {
-    const match = attempts.find((attempt) => attempt.id === attemptId);
-    if (!match) {
-      throw new UsageError(`No recorded review attempt #${attemptId} for that pull request.`);
-    }
-    return { attempt: match };
-  }
-
-  const latest = attempts[0];
-  const withThread = attempts.find((attempt) => attempt.threadId);
-  if (withThread) {
-    return {
-      attempt: withThread,
-      ...(latest && latest.id !== withThread.id && latest.stale && !latest.threadId
-        ? {
-            notice: `Newest attempt #${latest.id} is stale and has no stored Codex thread. Showing latest attempt with a stored thread instead (#${withThread.id}).`,
-          }
-        : {}),
-    };
-  }
-
-  if (latest?.stale) {
-    throw new UsageError(`Newest attempt #${latest.id} is stale and has no stored Codex thread. ${latest.staleReason ?? ""}`.trim());
-  }
-
-  throw new UsageError("No recorded review attempt with a stored Codex thread was found for that pull request.");
-}
+import { parseAttemptId, selectTranscriptAttempt } from "./attempt-selection.ts";
 
 function formatTranscriptText(params: {
   repoFullName: string;
   prNumber: number;
   attempt: ReviewAttemptRecord;
   thread: CodexThreadSummary;
+  sessionSource?: { exists: boolean; path?: string; startedAt?: string; cwd?: string; originator?: string; error?: string } | undefined;
   notice?: string;
 }): string {
   const formatUserMessage = (item: Record<string, unknown>): string | undefined => {
@@ -93,6 +54,10 @@ function formatTranscriptText(params: {
     `Head SHA: ${params.attempt.headSha}`,
     `Thread: ${params.thread.id}`,
     params.attempt.turnId ? `Recorded turn: ${params.attempt.turnId}` : undefined,
+    params.sessionSource ? `Session source: ${params.sessionSource.exists ? params.sessionSource.path : params.sessionSource.error ?? "not found"}` : undefined,
+    params.sessionSource?.startedAt ? `Started: ${params.sessionSource.startedAt}` : undefined,
+    params.sessionSource?.originator ? `Originator: ${params.sessionSource.originator}` : undefined,
+    params.sessionSource?.cwd ? `Working directory: ${params.sessionSource.cwd}` : undefined,
     params.attempt.staleReason ? `Stale: ${params.attempt.staleReason}` : undefined,
     params.notice,
     "Visible thread items are shown below. Hidden model reasoning is not exposed by the app-server.",
@@ -189,11 +154,13 @@ export async function handleTranscript(
           }
         })();
 
+    const sessionSource = attempt.threadId ? resolveCodexSessionSource(attempt.threadId) : undefined;
     const payload = {
       repoId: repo.repoId,
       repoFullName: repo.repoFullName,
       prNumber,
       attempt,
+      ...(sessionSource ? { sessionSource } : {}),
       thread,
     };
 
@@ -207,6 +174,7 @@ export async function handleTranscript(
       prNumber,
       attempt,
       thread,
+      ...(sessionSource ? { sessionSource } : {}),
       ...(selection.notice ? { notice: selection.notice } : {}),
     }));
     return 0;
