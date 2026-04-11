@@ -16,7 +16,7 @@ import {
 } from "./prompting/patchrelay.ts";
 import type { PendingRunWake } from "./run-wake-planner.ts";
 import type { AppConfig, LinearAgentActivityContent } from "./types.ts";
-import { execCommand } from "./utils.ts";
+import { configureGitHubBotAuthForWorktree } from "./github-worktree-auth.ts";
 import type { WorktreeManager } from "./worktree-manager.ts";
 
 function slugify(value: string): string {
@@ -197,11 +197,11 @@ export class RunLauncher {
       );
 
       if (params.botIdentity) {
-        const gitBin = this.config.runner.gitBin;
-        await execCommand(gitBin, ["-C", params.worktreePath, "config", "user.name", params.botIdentity.name], { timeoutMs: 5_000 });
-        await execCommand(gitBin, ["-C", params.worktreePath, "config", "user.email", params.botIdentity.email], { timeoutMs: 5_000 });
-        const credentialHelper = `!f() { echo "username=x-access-token"; echo "password=$(cat ${params.botIdentity.tokenFile})"; }; f`;
-        await execCommand(gitBin, ["-C", params.worktreePath, "config", "credential.helper", credentialHelper], { timeoutMs: 5_000 });
+        await configureGitHubBotAuthForWorktree({
+          gitBin: this.config.runner.gitBin,
+          worktreePath: params.worktreePath,
+          botIdentity: params.botIdentity,
+        });
       }
 
       await this.worktreeManager.resetWorktreeToTrackedBranch(params.worktreePath, params.branchName, params.issue, this.logger);
