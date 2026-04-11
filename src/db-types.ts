@@ -45,6 +45,7 @@ export interface IssueRecord {
   activeRunId?: number | undefined;
   statusCommentId?: string | undefined;
   agentSessionId?: string | undefined;
+  lastLinearActivityKey?: string | undefined;
   prNumber?: number | undefined;
   prUrl?: string | undefined;
   prState?: string | undefined;

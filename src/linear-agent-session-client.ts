@@ -6,6 +6,7 @@ import type { AppConfig, LinearAgentActivityContent, LinearClientProvider } from
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import { buildAgentSessionPlanForIssue } from "./agent-session-plan.ts";
 import { buildAgentSessionExternalUrls } from "./agent-session-presentation.ts";
+import { computeLinearActivityKey } from "./linear-activity-key.ts";
 
 export class LinearAgentSessionClient {
   constructor(
@@ -43,11 +44,23 @@ export class LinearAgentSessionClient {
       const linear = await this.linearProvider.forProject(syncedIssue.projectId);
       if (!linear) return;
       const allowEphemeral = content.type === "thought" || content.type === "action";
+      const ephemeral = options?.ephemeral && allowEphemeral;
+      const activityKey = ephemeral ? undefined : computeLinearActivityKey(content);
+      if (activityKey && syncedIssue.lastLinearActivityKey === activityKey) {
+        return;
+      }
       await linear.createAgentActivity({
         agentSessionId: syncedIssue.agentSessionId,
         content,
-        ...(options?.ephemeral && allowEphemeral ? { ephemeral: true } : {}),
+        ...(ephemeral ? { ephemeral: true } : {}),
       });
+      if (activityKey) {
+        this.db.issues.upsertIssue({
+          projectId: syncedIssue.projectId,
+          linearIssueId: syncedIssue.linearIssueId,
+          lastLinearActivityKey: activityKey,
+        });
+      }
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       this.logger.warn({ issueKey: syncedIssue.issueKey, type: content.type, error: msg }, "Failed to emit Linear activity");

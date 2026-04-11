@@ -143,6 +143,88 @@ test("syncSession mirrors failure state into a visible Linear status comment", a
   }
 });
 
+test("syncSession keeps the durable status comment current during active delegated work", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-linear-sync-active-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+
+    const issue = db.upsertIssue({
+      projectId: "krasnoperov/ballony-i-nasosy",
+      linearIssueId: "issue-tst-active",
+      issueKey: "TST-12",
+      title: "Keep the active Linear status comment current",
+      factoryState: "implementing",
+      delegatedToPatchRelay: true,
+      agentSessionId: "session-active",
+      currentLinearState: "In Progress",
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "implementation",
+    });
+    db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      activeRunId: run.id,
+    });
+
+    const commentUpdates: Array<Record<string, unknown>> = [];
+    const linear: Partial<LinearClient> = {
+      updateAgentSession: async (params) => ({ id: params.agentSessionId }),
+      upsertIssueComment: async (params) => {
+        commentUpdates.push(params as unknown as Record<string, unknown>);
+        return { id: "comment-active", body: params.body };
+      },
+      createAgentActivity: async () => ({ id: "activity-active" }),
+      getIssue: async () => ({
+        id: "issue-tst-active",
+        identifier: "TST-12",
+        title: "Keep the active Linear status comment current",
+        teamId: "team-tst",
+        teamKey: "TST",
+        delegateId: "patchrelay",
+        stateId: "state-implementing",
+        stateName: "Implementing",
+        stateType: "started",
+        workflowStates: [
+          { name: "Implementing", type: "started" },
+          { name: "Review", type: "started" },
+          { name: "Human Needed", type: "unstarted" },
+          { name: "Done", type: "completed" },
+        ],
+        labelIds: [],
+        labels: [],
+        teamLabels: [],
+        blockedBy: [],
+        blocks: [],
+      }),
+      setIssueState: async () => { throw new Error("not used"); },
+      updateIssueLabels: async () => { throw new Error("not used"); },
+      getActorProfile: async () => ({ actorId: "patchrelay-actor" }),
+      getWorkspaceCatalog: async () => ({ workspace: {}, teams: [], projects: [] }),
+    };
+
+    const sync = new LinearSessionSync(
+      config,
+      db,
+      { forProject: async () => linear as LinearClient },
+      pino({ enabled: false }),
+    );
+
+    await sync.syncSession(db.getIssue(issue.projectId, issue.linearIssueId)!, { activeRunType: "implementation" });
+
+    assert.equal(commentUpdates.length, 1);
+    assert.match(String(commentUpdates[0]?.body), /Running implementation/);
+    assert.match(String(commentUpdates[0]?.body), /_PatchRelay updates this comment as it works/);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("syncSession prefers the intervention reason over the last assistant summary for escalated issues", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-linear-sync-escalated-"));
   try {
@@ -535,7 +617,7 @@ test("syncSession includes actionable input text for awaiting_input sessions", a
   }
 });
 
-test("syncSession does not write a routine visible issue comment for healthy agent-session runs", async () => {
+test("syncSession keeps the durable status comment current for healthy agent-session runs", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-linear-sync-healthy-agent-session-"));
   try {
     const config = createConfig(baseDir);
@@ -584,7 +666,9 @@ test("syncSession does not write a routine visible issue comment for healthy age
     await sync.syncSession(db.getIssue(issue.projectId, issue.linearIssueId)!);
 
     assert.equal(sessionUpdates.length, 1);
-    assert.equal(commentUpdates.length, 0);
+    assert.equal(commentUpdates.length, 1);
+    assert.match(String(commentUpdates[0]?.body), /Handed off downstream for merge/);
+    assert.match(String(commentUpdates[0]?.body), /PR: \[#17\]\(https:\/\/github.com\/krasnoperov\/ballony-i-nasosy\/pull\/17\)/);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -1146,7 +1230,7 @@ test("syncSession maps a pending review-quill verdict to Reviewing", async () =>
   }
 });
 
-test("maybeEmitProgress publishes a working summary and strips shell wrappers from commands", async () => {
+test("maybeEmitProgress keeps routine plan and command progress out of Linear", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-linear-sync-progress-"));
   try {
     const config = createConfig(baseDir);
@@ -1201,24 +1285,13 @@ test("maybeEmitProgress publishes a working summary and strips shell wrappers fr
 
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    assert.equal(activities.length, 2);
-    assert.deepEqual(activities[0]?.content, {
-      type: "response",
-      body: "Working on: Audit the mobile Study form controls.",
-    });
-    assert.equal(activities[0]?.ephemeral, undefined);
-    assert.deepEqual(activities[1]?.content, {
-      type: "action",
-      action: "Running",
-      parameter: "npm run check",
-    });
-    assert.equal(activities[1]?.ephemeral, true);
+    assert.equal(activities.length, 0);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
 
-test("maybeEmitProgress publishes the first sentence from each agent message as an ephemeral thought", async () => {
+test("maybeEmitProgress keeps streamed agent-message progress out of Linear", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-linear-sync-agent-message-"));
   try {
     const config = createConfig(baseDir);
@@ -1269,22 +1342,13 @@ test("maybeEmitProgress publishes the first sentence from each agent message as 
 
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    assert.equal(activities.length, 2);
-    assert.deepEqual(activities[0]?.content, {
-      type: "response",
-      body: "Working on: Checking the shared Study field styles.",
-    });
-    assert.deepEqual(activities[1]?.content, {
-      type: "thought",
-      body: "Checking the shared Study field styles.",
-    });
-    assert.equal(activities[1]?.ephemeral, true);
+    assert.equal(activities.length, 0);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
 
-test("maybeEmitProgress waits for a complete sentence before publishing streamed agent progress", async () => {
+test("maybeEmitProgress stays silent even after a streamed sentence completes", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-linear-sync-agent-message-complete-"));
   try {
     const config = createConfig(baseDir);
@@ -1343,15 +1407,63 @@ test("maybeEmitProgress waits for a complete sentence before publishing streamed
 
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    assert.equal(activities.length, 2);
-    assert.deepEqual(activities[0]?.content, {
-      type: "response",
-      body: "Working on: I am checking the shared Study field styles.",
+    assert.equal(activities.length, 0);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("emitActivity deduplicates repeated durable milestone activities", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-linear-dedupe-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+
+    const issue = db.upsertIssue({
+      projectId: "krasnoperov/ballony-i-nasosy",
+      linearIssueId: "issue-tst-dedupe",
+      issueKey: "TST-91",
+      title: "Avoid duplicate milestone comments",
+      factoryState: "changes_requested",
+      agentSessionId: "session-dedupe",
     });
-    assert.deepEqual(activities[1]?.content, {
-      type: "thought",
-      body: "I am checking the shared Study field styles.",
-    });
+
+    const activities: Array<Record<string, unknown>> = [];
+    const linear: Partial<LinearClient> = {
+      updateAgentSession: async (params) => ({ id: params.agentSessionId }),
+      upsertIssueComment: async (params) => ({ id: "comment-dedupe", body: params.body }),
+      createAgentActivity: async (params) => {
+        activities.push(params as unknown as Record<string, unknown>);
+        return { id: `activity-${activities.length}` };
+      },
+      getIssue: async () => { throw new Error("not used"); },
+      setIssueState: async () => { throw new Error("not used"); },
+      updateIssueLabels: async () => { throw new Error("not used"); },
+      getActorProfile: async () => ({ actorId: "patchrelay-actor" }),
+      getWorkspaceCatalog: async () => ({ workspace: {}, teams: [], projects: [] }),
+    };
+
+    const sync = new LinearSessionSync(
+      config,
+      db,
+      { forProject: async () => linear as LinearClient },
+      pino({ enabled: false }),
+    );
+
+    const milestone = {
+      type: "response" as const,
+      body: "Updated PR #91 to address review feedback. Pushed a new head.",
+    };
+
+    await sync.emitActivity(issue, milestone);
+    await sync.emitActivity(db.getIssue(issue.projectId, issue.linearIssueId)!, milestone);
+
+    assert.equal(activities.length, 1);
+    assert.equal(
+      db.getIssue(issue.projectId, issue.linearIssueId)?.lastLinearActivityKey,
+      "response:Updated PR #91 to address review feedback. Pushed a new head.",
+    );
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

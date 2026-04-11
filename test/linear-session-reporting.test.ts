@@ -145,6 +145,22 @@ test("run completion activity unwraps shell-wrapped verification commands in pub
   });
 });
 
+test("run completion activity strips repo-local absolute paths from publish comments", () => {
+  const activity = buildRunCompletedActivity({
+    runType: "review_fix",
+    completionSummary:
+      "Updated [sessionSchema.ts](</home/alv/.local/share/patchrelay/worktrees/example/TST-58/src/frontend/app/sessionSchema.ts>) and `/home/alv/projects/patchrelay/tmp/debug.log`, then pushed a new head.",
+    postRunState: "pr_open",
+    prNumber: 42,
+  });
+
+  assert.deepEqual(activity, {
+    type: "response",
+    body:
+      "Updated PR #42 to address review feedback. Updated `sessionSchema.ts` and `local path omitted`, then pushed a new head.",
+  });
+});
+
 test("run completion activity suppresses routine branch upkeep chatter", () => {
   const activity = buildRunCompletedActivity({
     runType: "branch_upkeep",

@@ -3,10 +3,9 @@ import { extractCompletionCheck } from "./completion-check.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord, RunRecord, TrackedIssueRecord } from "./db-types.ts";
 import type { RunType } from "./factory-state.ts";
+import { isClosedPrState } from "./pr-state.ts";
 import { deriveIssueStatusNote } from "./status-note.ts";
 import { derivePatchRelayWaitingReason } from "./waiting-reason.ts";
-import { isClosedPrState } from "./pr-state.ts";
-import { isUndelegatedPausedIssue } from "./paused-issue-state.ts";
 import type { LinearClientProvider } from "./types.ts";
 
 export async function syncVisibleStatusComment(params: {
@@ -39,35 +38,12 @@ export async function syncVisibleStatusComment(params: {
 }
 
 export function shouldSyncVisibleIssueComment(
-  issue: Pick<IssueRecord, "factoryState" | "prNumber" | "prUrl" | "prState" | "delegatedToPatchRelay"> & {
+  _issue: Pick<IssueRecord, "factoryState" | "prNumber" | "prUrl" | "prState" | "delegatedToPatchRelay"> & {
     sessionState?: string | undefined;
   },
-  hasAgentSession: boolean,
+  _hasAgentSession: boolean,
 ): boolean {
-  if (!hasAgentSession) {
-    return true;
-  }
-
-  if (issue.sessionState === "waiting_input" || issue.sessionState === "failed"
-    || issue.factoryState === "awaiting_input" || issue.factoryState === "failed" || issue.factoryState === "escalated") {
-    return true;
-  }
-
-  if (isUndelegatedPausedIssue(issue)) {
-    return true;
-  }
-
-  if (
-    (issue.sessionState === "done" || issue.factoryState === "done")
-    && (
-      (issue.prNumber === undefined && !issue.prUrl)
-      || isClosedPrState(issue.prState)
-    )
-  ) {
-    return true;
-  }
-
-  return false;
+  return true;
 }
 
 function renderStatusComment(

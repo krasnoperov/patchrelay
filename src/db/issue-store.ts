@@ -28,6 +28,7 @@ export interface UpsertIssueParams {
   activeRunId?: number | null;
   statusCommentId?: string | null;
   agentSessionId?: string | null;
+  lastLinearActivityKey?: string | null;
   prNumber?: number | null;
   prUrl?: string | null;
   prState?: string | null;
@@ -93,6 +94,7 @@ export class IssueStore {
       if (params.activeRunId !== undefined) { sets.push("active_run_id = @activeRunId"); values.activeRunId = params.activeRunId; }
       if (params.statusCommentId !== undefined) { sets.push("status_comment_id = @statusCommentId"); values.statusCommentId = params.statusCommentId; }
       if (params.agentSessionId !== undefined) { sets.push("agent_session_id = @agentSessionId"); values.agentSessionId = params.agentSessionId; }
+      if (params.lastLinearActivityKey !== undefined) { sets.push("last_linear_activity_key = @lastLinearActivityKey"); values.lastLinearActivityKey = params.lastLinearActivityKey; }
       if (params.prNumber !== undefined) { sets.push("pr_number = @prNumber"); values.prNumber = params.prNumber; }
       if (params.prUrl !== undefined) { sets.push("pr_url = @prUrl"); values.prUrl = params.prUrl; }
       if (params.prState !== undefined) { sets.push("pr_state = @prState"); values.prState = params.prState; }
@@ -130,7 +132,7 @@ export class IssueStore {
           priority, estimate,
           current_linear_state, current_linear_state_type, factory_state, pending_run_type, pending_run_context_json,
           branch_name, worktree_path, thread_id, active_run_id, status_comment_id,
-          agent_session_id,
+          agent_session_id, last_linear_activity_key,
           pr_number, pr_url, pr_state, pr_head_sha, pr_author_login, pr_review_state, pr_check_status, last_blocking_review_head_sha,
           last_github_failure_source, last_github_failure_head_sha, last_github_failure_signature, last_github_failure_check_name, last_github_failure_check_url, last_github_failure_context_json, last_github_failure_at,
           last_github_ci_snapshot_head_sha, last_github_ci_snapshot_gate_check_name, last_github_ci_snapshot_gate_check_status, last_github_ci_snapshot_json, last_github_ci_snapshot_settled_at,
@@ -143,7 +145,7 @@ export class IssueStore {
           @priority, @estimate,
           @currentLinearState, @currentLinearStateType, @factoryState, @pendingRunType, @pendingRunContextJson,
           @branchName, @worktreePath, @threadId, @activeRunId, @statusCommentId,
-          @agentSessionId,
+          @agentSessionId, @lastLinearActivityKey,
           @prNumber, @prUrl, @prState, @prHeadSha, @prAuthorLogin, @prReviewState, @prCheckStatus, @lastBlockingReviewHeadSha,
           @lastGitHubFailureSource, @lastGitHubFailureHeadSha, @lastGitHubFailureSignature, @lastGitHubFailureCheckName, @lastGitHubFailureCheckUrl, @lastGitHubFailureContextJson, @lastGitHubFailureAt,
           @lastGitHubCiSnapshotHeadSha, @lastGitHubCiSnapshotGateCheckName, @lastGitHubCiSnapshotGateCheckStatus, @lastGitHubCiSnapshotJson, @lastGitHubCiSnapshotSettledAt,
@@ -173,6 +175,7 @@ export class IssueStore {
         activeRunId: params.activeRunId ?? null,
         statusCommentId: params.statusCommentId ?? null,
         agentSessionId: params.agentSessionId ?? null,
+        lastLinearActivityKey: params.lastLinearActivityKey ?? null,
         prNumber: params.prNumber ?? null,
         prUrl: params.prUrl ?? null,
         prState: params.prState ?? null,
@@ -445,6 +448,9 @@ export function mapIssueRow(row: Record<string, unknown>): IssueRecord {
     ...(row.active_run_id !== null ? { activeRunId: Number(row.active_run_id) } : {}),
     ...(row.status_comment_id !== null && row.status_comment_id !== undefined ? { statusCommentId: String(row.status_comment_id) } : {}),
     ...(row.agent_session_id !== null ? { agentSessionId: String(row.agent_session_id) } : {}),
+    ...(row.last_linear_activity_key !== null && row.last_linear_activity_key !== undefined
+      ? { lastLinearActivityKey: String(row.last_linear_activity_key) }
+      : {}),
     updatedAt: String(row.updated_at),
     ...(row.pr_number !== null && row.pr_number !== undefined ? { prNumber: Number(row.pr_number) } : {}),
     ...(row.pr_url !== null && row.pr_url !== undefined ? { prUrl: String(row.pr_url) } : {}),
