@@ -206,7 +206,7 @@ function withEnv(values: Record<string, string | undefined>, run: () => Promise<
 }
 
 function escapeRegExp(value: string): string {
-  return value.replace(/[|\\{}()\[\]\^$+*?.]/g, "\\$&");
+  return RegExp.escape(value);
 }
 
 function writeCodexSessionFile(baseDir: string, threadId: string, options?: {
