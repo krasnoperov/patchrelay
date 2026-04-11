@@ -146,3 +146,60 @@ test("reconciler reopens stale blocked local done issues back into delegated sta
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("reconciler completes trusted no-PR done issues in Linear instead of reopening them", async () => {
+  const { baseDir, db } = createDb();
+  try {
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-no-pr-complete",
+      issueKey: "USE-203",
+      delegatedToPatchRelay: true,
+      factoryState: "done",
+      currentLinearState: "In Progress",
+      currentLinearStateType: "started",
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "implementation",
+    });
+    db.runs.finishRun(run.id, { status: "completed" });
+    db.runs.saveCompletionCheck(run.id, {
+      outcome: "done",
+      summary: "Already complete without a PR.",
+    });
+
+    let requestedState: string | undefined;
+    const reconciler = new MergedLinearCompletionReconciler(
+      db,
+      {
+        forProject: async () => ({
+          getIssue: async () => buildLiveIssue({
+            id: "issue-no-pr-complete",
+            identifier: "USE-203",
+            title: "No PR completion",
+            stateName: "In Progress",
+            stateType: "started",
+          }),
+          setIssueState: async (_issueId, state) => {
+            requestedState = state;
+            return { stateName: state, stateType: "completed" };
+          },
+        }) as LinearClient,
+      },
+      pino({ enabled: false }),
+    );
+
+    await reconciler.reconcile();
+
+    const refreshed = db.getIssue("usertold", "issue-no-pr-complete");
+    assert.equal(requestedState, "Done");
+    assert.equal(refreshed?.factoryState, "done");
+    assert.equal(refreshed?.currentLinearState, "Done");
+    assert.equal(refreshed?.currentLinearStateType, "completed");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});

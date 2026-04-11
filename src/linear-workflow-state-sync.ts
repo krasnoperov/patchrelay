@@ -1,14 +1,17 @@
 import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord, TrackedIssueRecord } from "./db-types.ts";
 import type { RunType } from "./factory-state.ts";
-import type { LinearClientProvider } from "./types.ts";
 import {
+  resolvePreferredCompletedLinearState,
   resolvePreferredDeployingLinearState,
   resolvePreferredHumanNeededLinearState,
   resolvePreferredImplementingLinearState,
   resolvePreferredReviewLinearState,
   resolvePreferredReviewingLinearState,
 } from "./linear-workflow.ts";
+import { isCompletedLinearState } from "./pr-state.ts";
+import { hasTrustedNoPrCompletion } from "./trusted-no-pr-completion.ts";
+import type { LinearClientProvider } from "./types.ts";
 
 export async function syncActiveWorkflowState(params: {
   db: PatchRelayDatabase;
@@ -18,23 +21,24 @@ export async function syncActiveWorkflowState(params: {
   options?: { activeRunType?: RunType } | undefined;
 }): Promise<void> {
   const { db, issue, linear, trackedIssue, options } = params;
-  if (!shouldAutoAdvanceLinearState(issue)) {
+  const liveIssue = await linear.getIssue(issue.linearIssueId).catch(() => undefined);
+  if (!liveIssue) return;
+
+  const latestRun = db.runs.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
+  if (hasTrustedNoPrCompletion(issue, latestRun)) {
+    await syncCompletedLinearState({ db, issue, linear, liveIssue });
     return;
   }
 
-  const liveIssue = await linear.getIssue(issue.linearIssueId).catch(() => undefined);
-  if (!liveIssue) return;
+  if (!shouldAutoAdvanceLinearState(issue)) {
+    return;
+  }
 
   if (!shouldAutoAdvanceLinearState({
     currentLinearState: liveIssue.stateName,
     currentLinearStateType: liveIssue.stateType,
   })) {
-    db.issues.upsertIssue({
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      ...(liveIssue.stateName ? { currentLinearState: liveIssue.stateName } : {}),
-      ...(liveIssue.stateType ? { currentLinearStateType: liveIssue.stateType } : {}),
-    });
+    refreshCachedLinearState(db, issue, liveIssue.stateName, liveIssue.stateType);
     return;
   }
 
@@ -43,21 +47,57 @@ export async function syncActiveWorkflowState(params: {
 
   const normalizedCurrent = liveIssue.stateName?.trim().toLowerCase();
   if (normalizedCurrent === targetState.trim().toLowerCase()) {
-    db.issues.upsertIssue({
-      projectId: issue.projectId,
-      linearIssueId: issue.linearIssueId,
-      ...(liveIssue.stateName ? { currentLinearState: liveIssue.stateName } : {}),
-      ...(liveIssue.stateType ? { currentLinearStateType: liveIssue.stateType } : {}),
-    });
+    refreshCachedLinearState(db, issue, liveIssue.stateName, liveIssue.stateType);
     return;
   }
 
   const updated = await linear.setIssueState(issue.linearIssueId, targetState);
+  refreshCachedLinearState(db, issue, updated.stateName, updated.stateType);
+}
+
+async function syncCompletedLinearState(params: {
+  db: PatchRelayDatabase;
+  issue: Pick<IssueRecord, "projectId" | "linearIssueId">;
+  linear: NonNullable<Awaited<ReturnType<LinearClientProvider["forProject"]>>>;
+  liveIssue: {
+    stateName?: string;
+    stateType?: string;
+    workflowStates: Array<{ name: string; type?: string }>;
+  };
+}): Promise<void> {
+  const { db, issue, linear, liveIssue } = params;
+  if (isCompletedLinearState(liveIssue.stateType, liveIssue.stateName)) {
+    refreshCachedLinearState(db, issue, liveIssue.stateName, liveIssue.stateType);
+    return;
+  }
+
+  const targetState = resolvePreferredCompletedLinearState(liveIssue);
+  if (!targetState) {
+    refreshCachedLinearState(db, issue, liveIssue.stateName, liveIssue.stateType);
+    return;
+  }
+
+  const normalizedCurrent = liveIssue.stateName?.trim().toLowerCase();
+  if (normalizedCurrent === targetState.trim().toLowerCase()) {
+    refreshCachedLinearState(db, issue, liveIssue.stateName, liveIssue.stateType);
+    return;
+  }
+
+  const updated = await linear.setIssueState(issue.linearIssueId, targetState);
+  refreshCachedLinearState(db, issue, updated.stateName, updated.stateType);
+}
+
+function refreshCachedLinearState(
+  db: PatchRelayDatabase,
+  issue: Pick<IssueRecord, "projectId" | "linearIssueId">,
+  stateName: string | undefined,
+  stateType: string | undefined,
+): void {
   db.issues.upsertIssue({
     projectId: issue.projectId,
     linearIssueId: issue.linearIssueId,
-    ...(updated.stateName ? { currentLinearState: updated.stateName } : {}),
-    ...(updated.stateType ? { currentLinearStateType: updated.stateType } : {}),
+    ...(stateName ? { currentLinearState: stateName } : {}),
+    ...(stateType ? { currentLinearStateType: stateType } : {}),
   });
 }
 

@@ -5,6 +5,7 @@ import type { FactoryState, RunType } from "./factory-state.ts";
 import { deriveIssueSessionReactiveIntent } from "./issue-session.ts";
 import { resolvePreferredCompletedLinearState } from "./linear-workflow.ts";
 import { isCompletedLinearState } from "./pr-state.ts";
+import { hasTrustedNoPrCompletion } from "./trusted-no-pr-completion.ts";
 import type { LinearClientProvider } from "./types.ts";
 
 export class MergedLinearCompletionReconciler {
@@ -39,8 +40,11 @@ export class MergedLinearCompletionReconciler {
           })),
         });
 
-        if (issue.prState === "merged") {
-          await this.reconcileMergedLinearState(issue, liveIssue, linear);
+        const latestRun = this.db.runs.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
+        const trustedNoPrDone = hasTrustedNoPrCompletion(issue, latestRun);
+
+        if (issue.prState === "merged" || trustedNoPrDone) {
+          await this.reconcileCompletedLinearState(issue, liveIssue, linear);
           continue;
         }
 
@@ -58,12 +62,12 @@ export class MergedLinearCompletionReconciler {
     }
   }
 
-  private async reconcileMergedLinearState(
+  private async reconcileCompletedLinearState(
     issue: IssueRecord,
     liveIssue: Awaited<ReturnType<NonNullable<Awaited<ReturnType<LinearClientProvider["forProject"]>>>["getIssue"]>>,
     linear: NonNullable<Awaited<ReturnType<LinearClientProvider["forProject"]>>>,
   ): Promise<void> {
-    if (issue.currentLinearStateType?.trim().toLowerCase() === "completed") {
+    if (isCompletedLinearState(liveIssue.stateType, liveIssue.stateName)) {
       this.refreshCachedLinearState(issue, liveIssue);
       return;
     }
