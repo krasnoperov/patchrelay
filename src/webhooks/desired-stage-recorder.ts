@@ -46,18 +46,24 @@ export class DesiredStageRecorder {
     const existingIssue = this.db.issues.getIssue(params.project.id, normalizedIssue.id);
     const activeRun = existingIssue?.activeRunId ? this.db.runs.getRunById(existingIssue.activeRunId) : undefined;
     const latestRun = existingIssue ? this.db.runs.getLatestRunForIssue(params.project.id, normalizedIssue.id) : undefined;
-    const delegated = this.isDelegatedToPatchRelay(params.project, params.normalized);
     const triggerAllowed = triggerEventAllowed(params.project, params.normalized.triggerEvent);
     const incomingAgentSessionId = params.normalized.agentSession?.id;
     const hasPendingWake = this.db.issueSessions.peekIssueSessionWake(params.project.id, normalizedIssue.id) !== undefined;
 
-    if (!existingIssue && !delegated && !incomingAgentSessionId) {
-      return { issue: undefined, wakeRunType: undefined, delegated };
+    if (!existingIssue && !this.isDelegatedToPatchRelay(params.project, normalizedIssue) && !incomingAgentSessionId) {
+      return { issue: undefined, wakeRunType: undefined, delegated: false };
     }
 
     const hydratedIssue = await this.syncIssueDependencies(params.project.id, normalizedIssue);
+    const delegated = this.isDelegatedToPatchRelay(params.project, hydratedIssue);
     const unresolvedBlockers = this.db.issues.countUnresolvedBlockers(params.project.id, normalizedIssue.id);
     const terminal = isTerminalDelegationState(existingIssue, hydratedIssue);
+    const openPrExists = existingIssue?.prNumber !== undefined
+      && existingIssue.prState !== "closed"
+      && existingIssue.prState !== "merged";
+    const blockerPausedImplementation = unresolvedBlockers > 0
+      && activeRun?.runType === "implementation"
+      && !openPrExists;
 
     const desiredStage = decideRunIntent({
       delegated,
@@ -76,6 +82,9 @@ export class DesiredStageRecorder {
       triggerEvent: params.normalized.triggerEvent,
       delegated,
     });
+    const effectiveRunRelease = blockerPausedImplementation
+      ? { release: true, reason: "Issue became blocked during implementation" }
+      : runRelease;
 
     const undelegation = decideUnDelegation({
       triggerEvent: params.normalized.triggerEvent,
@@ -131,11 +140,12 @@ export class DesiredStageRecorder {
         ...(!reDelegationResume.factoryState && desiredStage ? { pendingRunType: null, pendingRunContextJson: null, factoryState: "delegated" as const } : {}),
         ...(clearPending ? { pendingRunType: null, pendingRunContextJson: null } : {}),
         ...(agentSessionId !== undefined ? { agentSessionId } : {}),
-        ...(runRelease.release ? { activeRunId: null } : {}),
+        ...(effectiveRunRelease.release ? { activeRunId: null } : {}),
+        ...(blockerPausedImplementation ? { factoryState: "delegated" as const } : {}),
         ...(undelegation.factoryState ? { factoryState: undelegation.factoryState as never } : {}),
       });
-      if (runRelease.release && activeRun && runRelease.reason) {
-        this.db.runs.finishRun(activeRun.id, { status: "released", failureReason: runRelease.reason });
+      if (effectiveRunRelease.release && activeRun && effectiveRunRelease.reason) {
+        this.db.runs.finishRun(activeRun.id, { status: "released", failureReason: effectiveRunRelease.reason });
       }
       return record;
     };
@@ -172,6 +182,21 @@ export class DesiredStageRecorder {
           ? "Issue un-delegated from PatchRelay"
           : `Issue un-delegated from PatchRelay; ${issue.factoryState} is now paused`,
       });
+    } else if (blockerPausedImplementation) {
+      if (activeRun?.threadId && activeRun.turnId) {
+        await params.stopActiveRun(activeRun, "STOP: The issue is now blocked by another task. Stop working immediately and exit without publishing.");
+      }
+      this.db.issueSessions.clearPendingIssueSessionEventsRespectingActiveLease(params.project.id, normalizedIssue.id);
+      this.db.issueSessions.releaseIssueSessionLeaseRespectingActiveLease(params.project.id, normalizedIssue.id);
+      this.feed?.publish({
+        level: "warn",
+        kind: "stage",
+        issueKey: issue.issueKey,
+        projectId: params.project.id,
+        stage: issue.factoryState,
+        status: "blocked",
+        summary: `Implementation paused because ${issue.issueKey ?? normalizedIssue.id} is now blocked`,
+      });
     } else if (reDelegationResume.pendingRunType) {
       this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(params.project.id, normalizedIssue.id, {
         projectId: params.project.id,
@@ -207,11 +232,10 @@ export class DesiredStageRecorder {
     };
   }
 
-  private isDelegatedToPatchRelay(project: ProjectConfig, normalized: NormalizedEvent): boolean {
-    if (!normalized.issue) return false;
+  private isDelegatedToPatchRelay(project: ProjectConfig, issue: { delegateId?: string | undefined }): boolean {
     const installation = this.db.linearInstallations.getLinearInstallationForProject(project.id);
     if (!installation?.actorId) return false;
-    return normalized.issue.delegateId === installation.actorId;
+    return issue.delegateId === installation.actorId;
   }
 
   private async syncIssueDependencies(projectId: string, issue: IssueMetadata): Promise<IssueMetadata> {

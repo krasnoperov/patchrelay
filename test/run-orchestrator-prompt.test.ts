@@ -135,6 +135,7 @@ test("branch_upkeep prompt includes explicit branch upkeep guidance when the PR 
     assert.match(prompt, /Current PR: #12/);
     assert.match(prompt, /Current review state: changes_requested/);
     assert.match(prompt, /Merge state against main: DIRTY/);
+    assert.match(prompt, /Goal: restore merge readiness on the existing PR branch without regressing review or CI readiness\./);
     assert.match(prompt, /update the existing PR branch onto latest main/);
     assert.doesNotMatch(prompt, /## Review Changes Requested/);
   } finally {
@@ -183,6 +184,10 @@ test("review_fix prompt embeds structured inline review context", () => {
     assert.match(prompt, /only complete if you push a newer PR head or deliberately escalate/);
     assert.match(prompt, /src\/frontend\/app\/sessionSchema\.ts:1526 \(RIGHT\)/);
     assert.match(prompt, /Blank totals should not produce a leader\./);
+    assert.match(prompt, /Goal: restore review readiness on the existing PR branch, not merely patch the latest cited line\./);
+    assert.match(prompt, /Treat the reviewer comments as evidence of what still makes the branch unready\./);
+    assert.match(prompt, /Infer the underlying concern or invariant behind the review feedback\./);
+    assert.match(prompt, /Only finish when you believe the branch is review-ready again\./);
     assert.match(prompt, /GitHub review happens after the new head is pushed and CI is green/);
     assert.doesNotMatch(prompt, /If you believe all concerns are resolved, request a re-review/);
   } finally {

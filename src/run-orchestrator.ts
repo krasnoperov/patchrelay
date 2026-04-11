@@ -263,6 +263,12 @@ export class RunOrchestrator {
       return;
     }
     const { runType, context, resumeThread } = wake;
+    if (runType === "implementation" && this.db.issues.countUnresolvedBlockers(item.projectId, item.issueId) > 0) {
+      this.db.issueSessions.clearPendingIssueSessionEventsRespectingActiveLease(item.projectId, item.issueId);
+      this.releaseIssueSessionLease(item.projectId, item.issueId);
+      this.logger.info({ issueKey: issue.issueKey }, "Skipped implementation launch because the issue is blocked");
+      return;
+    }
     const remainingZombieDelayMs = shouldDelayZombieRecoveryLaunch(issue, issueSession, runType);
     if (remainingZombieDelayMs > 0) {
       this.logger.debug(
@@ -280,7 +286,7 @@ export class RunOrchestrator {
       : typeof effectiveContext?.headSha === "string"
         ? effectiveContext.headSha
         : issue.prHeadSha;
-    const budgetExceeded = this.runWakePlanner.budgetExceeded(issue, runType, isRequestedChangesRunType);
+    const budgetExceeded = this.runWakePlanner.budgetExceeded(issue, project, runType, isRequestedChangesRunType);
     if (budgetExceeded) {
       this.escalate(issue, runType, budgetExceeded);
       return;

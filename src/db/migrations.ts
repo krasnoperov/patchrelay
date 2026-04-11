@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS issues (
   active_run_id INTEGER,
   status_comment_id TEXT,
   agent_session_id TEXT,
+  last_linear_activity_key TEXT,
   pr_number INTEGER,
   pr_url TEXT,
   pr_state TEXT,
@@ -277,6 +278,7 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
   addColumnIfMissing(connection, "issues", "priority", "INTEGER");
   addColumnIfMissing(connection, "issues", "estimate", "REAL");
   addColumnIfMissing(connection, "issues", "status_comment_id", "TEXT");
+  addColumnIfMissing(connection, "issues", "last_linear_activity_key", "TEXT");
   addColumnIfMissing(connection, "issues", "current_linear_state_type", "TEXT");
   addColumnIfMissing(connection, "issue_dependencies", "blocker_current_linear_state_type", "TEXT");
 
@@ -347,6 +349,7 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
         active_run_id INTEGER,
         status_comment_id TEXT,
         agent_session_id TEXT,
+        last_linear_activity_key TEXT,
         pr_number INTEGER,
         pr_url TEXT,
         pr_state TEXT,
@@ -402,6 +405,7 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
         active_run_id,
         status_comment_id,
         agent_session_id,
+        last_linear_activity_key,
         pr_number,
         pr_url,
         pr_state,
@@ -455,6 +459,7 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
         active_run_id,
         status_comment_id,
         agent_session_id,
+        last_linear_activity_key,
         pr_number,
         pr_url,
         pr_state,

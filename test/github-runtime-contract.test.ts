@@ -238,6 +238,40 @@ function buildSuccessfulCheckRunPayload(params: {
   });
 }
 
+function buildPendingCheckRunPayload(params: {
+  branch: string;
+  headSha: string;
+  prNumber: number;
+  checkName?: string;
+  action?: string;
+}): string {
+  return JSON.stringify({
+    action: params.action ?? "in_progress",
+    repository: { full_name: "owner/repo" },
+    check_run: {
+      conclusion: null,
+      status: "in_progress",
+      name: params.checkName ?? "Tests",
+      html_url: `https://github.com/owner/repo/actions/runs/${params.prNumber}`,
+      details_url: `https://github.com/owner/repo/actions/runs/${params.prNumber}`,
+      head_sha: params.headSha,
+      output: {
+        title: "Tests are running",
+        summary: "Required checks are still in progress.",
+      },
+      check_suite: {
+        head_branch: params.branch,
+        pull_requests: [
+          {
+            number: params.prNumber,
+            head: { ref: params.branch },
+          },
+        ],
+      },
+    },
+  });
+}
+
 function buildFailedCheckRunPayload(params: {
   branch: string;
   headSha: string;
@@ -708,6 +742,47 @@ test("non-gate successful checks do not mark PR checks green early", async () =>
   }
 });
 
+test("in-progress gate checks on the current head reset stored green status back to pending", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-runtime-pending-gate-"));
+  try {
+    const { db, enqueueCalls, handler } = createHandler(baseDir);
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-pending-gate",
+      issueKey: "USE-11C",
+      branchName: "feat-pending-gate",
+      prNumber: 113,
+      prState: "open",
+      prHeadSha: "sha-pending-gate",
+      factoryState: "pr_open",
+      prCheckStatus: "success",
+      lastGitHubCiSnapshotHeadSha: "sha-pending-gate",
+      lastGitHubCiSnapshotGateCheckName: "Tests",
+      lastGitHubCiSnapshotGateCheckStatus: "success",
+      lastGitHubCiSnapshotJson: JSON.stringify({ headSha: "sha-pending-gate", gateCheckName: "Tests", gateCheckStatus: "success" }),
+      lastGitHubCiSnapshotSettledAt: "2026-04-10T09:00:00.000Z",
+    });
+
+    await handler.processGitHubWebhookEvent({
+      eventType: "check_run",
+      rawBody: buildPendingCheckRunPayload({
+        branch: "feat-pending-gate",
+        headSha: "sha-pending-gate",
+        prNumber: 113,
+      }),
+    });
+
+    const issue = db.getIssue("usertold", "issue-pending-gate");
+    assert.equal(issue?.prCheckStatus, "pending");
+    assert.equal(issue?.lastGitHubCiSnapshotGateCheckStatus, "pending");
+    assert.equal(issue?.lastGitHubCiSnapshotSettledAt, undefined);
+    assert.equal(issue?.pendingRunType, undefined);
+    assert.deepEqual(enqueueCalls, []);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("pull request label events are inert for PatchRelay queue scheduling", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-runtime-queue-label-"));
   try {
@@ -1024,6 +1099,69 @@ test("undelegated issue links an external PR by issue key and tracks it without 
     assert.equal(wake, undefined);
     assert.deepEqual(enqueueCalls, []);
   } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("late PatchRelay PR from a released implementation run is auto-closed instead of being linked", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-runtime-late-pr-close-"));
+  const oldToken = process.env.GH_TOKEN;
+  try {
+    process.env.GH_TOKEN = "test-token";
+    const fetchCalls: Array<{ url: string; method: string; body?: string }> = [];
+    const { db, enqueueCalls, handler } = createHandler(baseDir, {
+      fetchImpl: async (input, init) => {
+        fetchCalls.push({
+          url: String(input),
+          method: String(init?.method ?? "GET"),
+          body: typeof init?.body === "string" ? init.body : undefined,
+        });
+        return createJsonResponse({ state: "closed" });
+      },
+    });
+    const issueRecord = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-late-pr-close",
+      issueKey: "USE-62",
+      delegatedToPatchRelay: true,
+      branchName: "use/62-setup",
+      factoryState: "delegated",
+    });
+    db.runs.finishRun(
+      db.runs.createRun({
+        issueId: issueRecord.id,
+        projectId: "usertold",
+        linearIssueId: "issue-late-pr-close",
+        runType: "implementation",
+        promptText: "do the work",
+      }).id,
+      { status: "released", failureReason: "Issue became blocked during implementation" },
+    );
+
+    await handler.processGitHubWebhookEvent({
+      eventType: "pull_request",
+      rawBody: buildOpenedPrPayload({
+        branch: "use/62-setup",
+        headSha: "sha-late-open",
+        prNumber: 62,
+        prAuthorLogin: "patchrelay[bot]",
+        prTitle: "USE-62 late PR",
+      }),
+    });
+
+    const issue = db.getIssue("usertold", "issue-late-pr-close");
+    assert.equal(issue?.prNumber, undefined);
+    assert.equal(fetchCalls.length, 1);
+    assert.equal(fetchCalls[0]?.method, "PATCH");
+    assert.match(fetchCalls[0]?.url ?? "", /\/repos\/owner\/repo\/pulls\/62$/);
+    assert.equal(fetchCalls[0]?.body, JSON.stringify({ state: "closed" }));
+    assert.deepEqual(enqueueCalls, []);
+  } finally {
+    if (oldToken === undefined) {
+      delete process.env.GH_TOKEN;
+    } else {
+      process.env.GH_TOKEN = oldToken;
+    }
     rmSync(baseDir, { recursive: true, force: true });
   }
 });

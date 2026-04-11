@@ -33,6 +33,12 @@ const repoSettingsSchema = z.object({
   branch_prefix: z.string().min(1).optional(),
 });
 
+const repairBudgetsSchema = z.object({
+  ci_repair: z.number().int().positive().default(3),
+  queue_repair: z.number().int().positive().default(3),
+  review_fix: z.number().int().positive().default(3),
+});
+
 const projectSchema = z.object({
   id: z.string().min(1),
   repo_path: z.string().min(1),
@@ -43,6 +49,11 @@ const projectSchema = z.object({
   allow_labels: z.array(z.string().min(1)).default([]),
   trigger_events: z.array(z.string().min(1)).min(1).optional(),
   branch_prefix: z.string().min(1).optional(),
+  repair_budgets: repairBudgetsSchema.default({
+    ci_repair: 3,
+    queue_repair: 3,
+    review_fix: 3,
+  }),
   /** Check names that are review gates (AI Review, quality analysis). Default: code class. */
   review_checks: z.array(z.string().min(1)).default([]),
   /** Check names that are policy gates (conventional title, release policy). Default: code class. */
@@ -65,6 +76,11 @@ const repositorySchema = z.object({
   gate_checks: z.array(z.string().min(1)).default([]),
   trigger_events: z.array(z.string().min(1)).min(1).optional(),
   branch_prefix: z.string().min(1).optional(),
+  repair_budgets: repairBudgetsSchema.default({
+    ci_repair: 3,
+    queue_repair: 3,
+    review_fix: 3,
+  }),
   github: z.object({
     webhook_secret: z.string().min(1).optional(),
     base_branch: z.string().min(1).optional(),
@@ -491,6 +507,11 @@ export function loadConfig(
       gateChecks: repository.gate_checks,
       triggerEvents: repository.trigger_events as AppConfig["projects"][number]["triggerEvents"] | undefined,
       branchPrefix: repository.branch_prefix,
+      repairBudgets: {
+        ciRepair: repository.repair_budgets.ci_repair,
+        queueRepair: repository.repair_budgets.queue_repair,
+        reviewFix: repository.repair_budgets.review_fix,
+      },
       github: repository.github,
     };
   });
@@ -511,6 +532,7 @@ export function loadConfig(
         (repoSettings?.trigger_events as AppConfig["projects"][number]["triggerEvents"] | undefined) ?? repository.triggerEvents,
       ),
       branchPrefix: repoSettings?.branch_prefix ?? repository.branchPrefix ?? defaultBranchPrefix(repository.githubRepo),
+      repairBudgets: repository.repairBudgets,
       ...(repoSettings?.configPath ? { repoSettingsPath: repoSettings.configPath } : {}),
       github: {
         repoFullName: repository.githubRepo,
@@ -551,6 +573,11 @@ export function loadConfig(
               (project.trigger_events as AppConfig["projects"][number]["triggerEvents"] | undefined),
           ),
           branchPrefix: repoSettings?.branch_prefix ?? project.branch_prefix ?? defaultBranchPrefix(project.id),
+          repairBudgets: {
+            ciRepair: project.repair_budgets.ci_repair,
+            queueRepair: project.repair_budgets.queue_repair,
+            reviewFix: project.repair_budgets.review_fix,
+          },
           ...(repoSettings?.configPath ? { repoSettingsPath: repoSettings.configPath } : {}),
           ...(project.github ? {
             github: {

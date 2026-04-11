@@ -344,6 +344,120 @@ test("delegated issue webhooks enqueue implementation wake immediately when the 
   }
 });
 
+test("issue becoming blocked during implementation releases the active run and pauses work", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-blocked-active-run-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+
+    const issueRecord = db.upsertIssue({
+      projectId: "krasnoperov/mafia",
+      linearIssueId: "issue-maf-blocked-active",
+      issueKey: "MAF-42",
+      title: "Sequencing bug",
+      delegatedToPatchRelay: true,
+      factoryState: "implementing",
+    });
+    const run = db.runs.createRun({
+      issueId: issueRecord.id,
+      projectId: issueRecord.projectId,
+      linearIssueId: issueRecord.linearIssueId,
+      runType: "implementation",
+    });
+    db.runs.updateRunThread(run.id, { threadId: "thread-blocked-active", turnId: "turn-blocked-active" });
+    db.upsertIssue({
+      projectId: issueRecord.projectId,
+      linearIssueId: issueRecord.linearIssueId,
+      activeRunId: run.id,
+      branchName: "maf/42-sequencing-bug",
+    });
+
+    const steerInputs: string[] = [];
+    const linearClient: Partial<LinearClient> = {
+      getIssue: async () => ({
+        id: "issue-maf-blocked-active",
+        identifier: "MAF-42",
+        title: "Sequencing bug",
+        teamId: "team-maf",
+        teamKey: "MAF",
+        delegateId: "patchrelay-actor",
+        stateId: "state-start",
+        stateName: "Start",
+        stateType: "started",
+        workflowStates: [],
+        labelIds: [],
+        labels: [],
+        teamLabels: [],
+        blockedBy: [{
+          id: "issue-maf-blocker",
+          identifier: "MAF-10",
+          title: "Blocking task",
+          stateName: "In Progress",
+          stateType: "started",
+        }],
+        blocks: [],
+      }),
+    };
+
+    const handler = new WebhookHandler(
+      config,
+      db,
+      { forProject: async () => linearClient as LinearClient } as never,
+      {
+        steerTurn: async ({ input }) => {
+          steerInputs.push(input);
+        },
+      } as never,
+      () => undefined,
+      pino({ enabled: false }),
+    );
+
+    const payload: LinearWebhookPayload = {
+      action: "update",
+      type: "Issue",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      webhookTimestamp: Date.now(),
+      updatedFrom: { stateId: "state-start" },
+      data: {
+        id: "issue-maf-blocked-active",
+        identifier: "MAF-42",
+        title: "Sequencing bug",
+        team: { id: "team-maf", key: "MAF" },
+        state: { id: "state-start", name: "Start", type: "started" },
+        delegate: { id: "patchrelay-actor", name: "PatchRelay" },
+      },
+    };
+
+    const stored = db.webhookEvents.insertFullWebhookEvent({
+      webhookId: "delivery-maf-blocked-active",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(payload),
+    });
+    await handler.processWebhookEvent(stored.id);
+
+    const issue = db.getIssue("krasnoperov/mafia", "issue-maf-blocked-active");
+    const finishedRun = db.runs.getRunById(run.id);
+    assert.equal(issue?.factoryState, "delegated");
+    assert.equal(issue?.activeRunId, undefined);
+    assert.equal(issue?.delegatedToPatchRelay, true);
+    assert.equal(db.countUnresolvedBlockers("krasnoperov/mafia", "issue-maf-blocked-active"), 1);
+    assert.equal(finishedRun?.status, "released");
+    assert.equal(finishedRun?.failureReason, "Issue became blocked during implementation");
+    assert.equal(steerInputs.length, 1);
+    assert.match(steerInputs[0] ?? "", /now blocked/i);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("delegated issue is tracked via repository-link installation fallback", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-installation-fallback-"));
   try {
@@ -884,6 +998,107 @@ test("re-delegation resumes requested-changes issue from PR state instead of res
     const wake = db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-52");
     assert.equal(wake?.runType, "review_fix");
     assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-52" }]);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("later issue webhooks recover missed re-delegation from live Linear delegate state", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-redelegate-repair-"));
+  try {
+    const config = createConfig(baseDir);
+    config.projects[0] = {
+      ...config.projects[0]!,
+      triggerEvents: [...config.projects[0]!.triggerEvents, "commentUpdated"],
+    };
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+
+    db.upsertIssue({
+      projectId: "krasnoperov/mafia",
+      linearIssueId: "issue-maf-52c",
+      issueKey: "MAF-52C",
+      title: "Repair missed re-delegation",
+      delegatedToPatchRelay: false,
+      factoryState: "escalated",
+      prNumber: 122,
+      prState: "open",
+      prReviewState: "changes_requested",
+    });
+
+    const linearClient: Partial<LinearClient> = {
+      getIssue: async (issueId: string) => {
+        assert.equal(issueId, "issue-maf-52c");
+        return {
+          id: "issue-maf-52c",
+          identifier: "MAF-52C",
+          title: "Repair missed re-delegation",
+          teamId: "team-maf",
+          teamKey: "MAF",
+          delegateId: "patchrelay-actor",
+          stateId: "state-start",
+          stateName: "In Progress",
+          stateType: "started",
+          workflowStates: [],
+          labelIds: [],
+          labels: [],
+          teamLabels: [],
+          blockedBy: [],
+          blocks: [],
+        };
+      },
+    };
+
+    const enqueued: Array<{ projectId: string; issueId: string }> = [];
+    const handler = new WebhookHandler(
+      config,
+      db,
+      { forProject: async () => linearClient as LinearClient } as never,
+      { steerTurn: async () => undefined } as never,
+      (projectId, issueId) => { enqueued.push({ projectId, issueId }); },
+      pino({ enabled: false }),
+    );
+
+    const payload: LinearWebhookPayload = {
+      action: "update",
+      type: "Comment",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      webhookTimestamp: Date.now(),
+      data: {
+        id: "comment-redelegate-repair",
+        body: "PatchRelay, please continue on the latest review.",
+        user: { name: "Alex Operator" },
+        issue: {
+          id: "issue-maf-52c",
+          identifier: "MAF-52C",
+          title: "Repair missed re-delegation",
+          team: { id: "team-maf", key: "MAF" },
+          state: { id: "state-start", name: "In Progress", type: "started" },
+        },
+      },
+    };
+
+    const stored = db.webhookEvents.insertFullWebhookEvent({
+      webhookId: "delivery-redelegate-repair",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(payload),
+    });
+
+    await handler.processWebhookEvent(stored.id);
+
+    const issue = db.getIssue("krasnoperov/mafia", "issue-maf-52c");
+    assert.equal(issue?.delegatedToPatchRelay, true);
+    assert.equal(issue?.factoryState, "changes_requested");
+    const wake = db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-52c");
+    assert.equal(wake?.runType, "review_fix");
+    assert.deepEqual(enqueued, []);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

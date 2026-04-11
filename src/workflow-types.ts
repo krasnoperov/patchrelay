@@ -35,6 +35,11 @@ export interface ProjectConfig {
   };
   triggerEvents: TriggerEvent[];
   branchPrefix: string;
+  repairBudgets: {
+    ciRepair: number;
+    queueRepair: number;
+    reviewFix: number;
+  };
   repoSettingsPath?: string;
   github?: {
     webhookSecret?: string;

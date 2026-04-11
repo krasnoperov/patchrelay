@@ -808,6 +808,7 @@ test("cli list and retry cover operator control flows", async () => {
 
     const reviewFixIssue = db.getIssue("usertold", "issue-review-fix");
     assert.equal(reviewFixIssue?.factoryState, "changes_requested");
+    assert.equal(reviewFixIssue?.reviewFixAttempts, 0);
     const reviewFixWake = db.issueSessions.peekIssueSessionWake("usertold", "issue-review-fix");
     assert.equal(reviewFixIssue?.pendingRunType, undefined);
     assert.equal(reviewFixWake?.runType, "review_fix");
@@ -976,6 +977,60 @@ test("cli retry blocks when the issue still has an active run", () => {
     });
 
     assert.throws(() => data!.retry("USE-55"), /already has an active run/);
+  } finally {
+    data?.close();
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("cli close force-terminates a stuck issue and releases its active run", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-close-"));
+  let data: CliDataAccess | undefined;
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, true);
+    db.runMigrations();
+    seedDatabase(db, config);
+    data = new CliDataAccess(config, { db });
+
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-close-cli",
+      issueKey: "USE-CLOSE-CLI",
+      title: "CLI close",
+      factoryState: "implementing",
+      pendingRunType: "implementation",
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "implementation",
+    });
+    db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      activeRunId: run.id,
+    });
+
+    const closeOut = createBufferStream();
+    assert.equal(
+      await runCli(["close", "USE-CLOSE-CLI", "--reason", "fixed externally"], {
+        config,
+        data,
+        stdout: closeOut.stream,
+        stderr: createBufferStream().stream,
+      }),
+      0,
+    );
+
+    assert.match(closeOut.read(), /Closed as: done/);
+    const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId);
+    const updatedRun = db.runs.getRunById(run.id);
+    assert.equal(updatedIssue?.factoryState, "done");
+    assert.equal(updatedIssue?.activeRunId, undefined);
+    assert.equal(updatedRun?.status, "released");
+    assert.match(updatedRun?.failureReason ?? "", /fixed externally/);
   } finally {
     data?.close();
     rmSync(baseDir, { recursive: true, force: true });

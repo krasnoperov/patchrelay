@@ -69,6 +69,11 @@ function latestAttemptDetail(attempt: ReviewAttemptRecord): string {
   return `No review work right now. Last activity was ${relativeTime(attempt.updatedAt)} ago.`;
 }
 
+function hasRepoActivityAfterAttempt(attempt: ReviewAttemptRecord, events: WebhookEventRecord[]): boolean {
+  const attemptUpdatedAt = new Date(attempt.updatedAt).getTime();
+  return events.some((event) => new Date(event.receivedAt).getTime() > attemptUpdatedAt);
+}
+
 export function getRepoHealth(snapshot: ReviewQuillWatchSnapshot | null, repo: ReviewQuillRepoSummary): RepoHealthSummary {
   if (!snapshot) {
     return {
@@ -126,6 +131,15 @@ export function getRepoHealth(snapshot: ReviewQuillWatchSnapshot | null, repo: R
 
   const latest = attempts[0];
   if (latest) {
+    const webhooks = repoWebhooks(snapshot, repo);
+    if (hasRepoActivityAfterAttempt(latest, webhooks)) {
+      return {
+        kind: "idle",
+        label: "Idle",
+        color: "green",
+        detail: `No review work right now. Newer repo activity arrived after PR #${latest.prNumber}'s last review result, so review-quill is waiting for the latest head to become eligible.`,
+      };
+    }
     return {
       kind: "idle",
       label: "Idle",

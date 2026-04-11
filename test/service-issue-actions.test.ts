@@ -145,9 +145,12 @@ test("retryIssue preserves branch upkeep retries for requested-changes issues", 
     const result = service.retryIssue("USE-2");
 
     assert.deepEqual(result, { issueKey: "USE-2", runType: "branch_upkeep" });
+    const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId);
+    assert.equal(updatedIssue?.reviewFixAttempts, 0);
     const wake = db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId);
     assert.ok(wake);
-    const latestEvent = db.issueSessions.listIssueSessionEvents(issue.projectId, issue.linearIssueId, { limit: 1 }).at(-1);
+    const events = db.issueSessions.listIssueSessionEvents(issue.projectId, issue.linearIssueId, { limit: 10 });
+    const latestEvent = events.at(-1);
     assert.equal(latestEvent?.eventType, "review_changes_requested");
     assert.match(latestEvent?.eventJson ?? "", /branch upkeep/i);
   } finally {
@@ -189,6 +192,67 @@ test("retryIssue treats closed PR issues as fresh implementation retries", async
     const wake = db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId);
     assert.ok(wake);
     assert.equal(wake.runType, "implementation");
+  } finally {
+    db?.connection.close();
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("closeIssue releases active runs and clears pending work", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-service-close-"));
+  let db: PatchRelayDatabase | undefined;
+  try {
+    const config = createConfig(baseDir);
+    db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const service = new PatchRelayService(
+      config,
+      db,
+      { on: () => undefined, steerTurn: async () => undefined } as never,
+      undefined,
+      pino({ enabled: false }),
+    );
+
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-close-1",
+      issueKey: "USE-CLOSE-1",
+      title: "Close me",
+      factoryState: "implementing",
+      pendingRunType: "implementation",
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "implementation",
+    });
+    db.runs.updateRunThread(run.id, { threadId: "thread-close-1", turnId: "turn-close-1" });
+    db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      activeRunId: run.id,
+    });
+    db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      eventType: "delegated",
+      dedupeKey: "close-test-wake",
+    });
+
+    const result = await service.closeIssue("USE-CLOSE-1", { reason: "handled manually" });
+
+    assert.deepEqual(result, { issueKey: "USE-CLOSE-1", factoryState: "done", releasedRunId: run.id });
+    const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId);
+    const updatedRun = db.runs.getRunById(run.id);
+    const events = db.issueSessions.listIssueSessionEvents(issue.projectId, issue.linearIssueId, { limit: 10 });
+    assert.equal(updatedIssue?.factoryState, "done");
+    assert.equal(updatedIssue?.activeRunId, undefined);
+    assert.equal(updatedIssue?.pendingRunType, undefined);
+    assert.equal(updatedRun?.status, "released");
+    assert.match(updatedRun?.failureReason ?? "", /handled manually/);
+    assert.equal(events.some((event) => event.eventType === "operator_closed"), true);
+    assert.equal(db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId), undefined);
   } finally {
     db?.connection.close();
     rmSync(baseDir, { recursive: true, force: true });

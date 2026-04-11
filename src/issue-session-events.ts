@@ -14,6 +14,7 @@ export type IssueSessionEventType =
   | "settled_red_ci"
   | "merge_steward_incident"
   | "stop_requested"
+  | "operator_closed"
   | "undelegated"
   | "issue_removed"
   | "pr_closed"
@@ -40,6 +41,7 @@ export interface SessionWakePlan {
 
 const TERMINAL_SESSION_EVENTS = new Set<IssueSessionEventType>([
   "stop_requested",
+  "operator_closed",
   "undelegated",
   "issue_removed",
   "pr_closed",

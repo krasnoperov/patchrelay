@@ -74,6 +74,9 @@ function validateFlags(command: string, commandArgs: string[], parsed: ReturnTyp
         case "retry":
           assertKnownFlags(parsed, "issue", ["run-type", "reason", "json"]);
           return;
+        case "close":
+          assertKnownFlags(parsed, "issue", ["failed", "reason", "json"]);
+          return;
         default:
           assertKnownFlags(parsed, "issue", []);
           return;

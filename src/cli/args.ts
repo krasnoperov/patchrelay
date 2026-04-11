@@ -5,6 +5,7 @@ export const KNOWN_COMMANDS = new Set([
   "version",
   "serve",
   "issue",
+  "close",
   "cluster",
   "doctor",
   "init",
@@ -65,7 +66,10 @@ export function resolveCommand(parsed: ParsedArgs): ResolvedCommand {
     return { command: "help", commandArgs: [] };
   }
 
-  if (KNOWN_COMMANDS.has(requestedCommand)) {
+    if (KNOWN_COMMANDS.has(requestedCommand)) {
+    if (requestedCommand === "close") {
+      return { command: "issue", commandArgs: ["close", ...parsed.positionals.slice(1)] };
+    }
     if (requestedCommand === "attach") {
       return { command: "repo", commandArgs: ["link", ...parsed.positionals.slice(1)] };
     }

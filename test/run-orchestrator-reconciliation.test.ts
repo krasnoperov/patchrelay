@@ -509,7 +509,7 @@ exit 1
       prHeadSha: "sha-stuck",
       prReviewState: "changes_requested",
       prCheckStatus: "success",
-      reviewFixAttempts: 12,
+      reviewFixAttempts: 3,
       factoryState: "escalated",
     });
 
@@ -2325,6 +2325,72 @@ exit 1
     const updatedIssue = db.getIssue("usertold", "issue-review-wake");
     assert.equal(updatedIssue?.prHeadSha, "sha-review-wake");
     assert.equal(updatedIssue?.prReviewState, "changes_requested");
+  } finally {
+    process.env.PATH = oldPath;
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("completed notification for a released run is ignored", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-notification-ignore-released-"));
+  const oldPath = process.env.PATH;
+  try {
+    const { db, orchestrator } = createOrchestrator(baseDir, undefined, {
+      startThread: async () => ({ threadId: "thread-ignore-released" }),
+      steerTurn: async () => undefined,
+      readThread: async () => ({
+        id: "thread-ignore-released",
+        turns: [{ id: "turn-ignore-released", status: "completed", items: [] }],
+      }),
+    });
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-ignore-released",
+      issueKey: "USE-IGNORE-RELEASED",
+      factoryState: "delegated",
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "implementation",
+      promptText: "implement",
+    });
+    db.runs.updateRunThread(run.id, { threadId: "thread-ignore-released", turnId: "turn-ignore-released" });
+    db.runs.finishRun(run.id, { status: "released", failureReason: "Issue was un-delegated during active run" });
+
+    const leaseId = "lease-ignore-released";
+    assert.equal(
+      db.issueSessions.acquireIssueSessionLease({
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        leaseId,
+        workerId: "worker-ignore-released",
+        leasedUntil: "2030-04-06T10:05:00.000Z",
+        now: "2030-04-06T10:00:00.000Z",
+      }),
+      true,
+    );
+    ((orchestrator as unknown as { activeSessionLeases: Map<string, string> }).activeSessionLeases)
+      .set(`${issue.projectId}:${issue.linearIssueId}`, leaseId);
+
+    await orchestrator.handleCodexNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-ignore-released",
+        turn: {
+          id: "turn-ignore-released",
+          status: "completed",
+        },
+      },
+    });
+
+    const untouchedRun = db.runs.getRunById(run.id);
+    const untouchedIssue = db.getIssue(issue.projectId, issue.linearIssueId);
+    assert.equal(untouchedRun?.status, "released");
+    assert.equal(untouchedRun?.failureReason, "Issue was un-delegated during active run");
+    assert.equal(untouchedIssue?.factoryState, "delegated");
+    assert.equal(untouchedIssue?.activeRunId, undefined);
   } finally {
     process.env.PATH = oldPath;
     rmSync(baseDir, { recursive: true, force: true });

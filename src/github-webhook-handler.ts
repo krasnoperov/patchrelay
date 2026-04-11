@@ -14,6 +14,7 @@ import {
   type GitHubFailureContextResolver,
 } from "./github-failure-context.ts";
 import { resolveGitHubWebhookIssue } from "./github-webhook-issue-resolution.ts";
+import { maybeCloseLatePublishedImplementationPr } from "./github-webhook-late-publication-guard.ts";
 import { projectGitHubWebhookState } from "./github-webhook-state-projector.ts";
 import { maybeEnqueueGitHubReactiveRun } from "./github-webhook-reactive-run.ts";
 import { handleGitHubTerminalPrEvent } from "./github-webhook-terminal-handler.ts";
@@ -130,6 +131,18 @@ export class GitHubWebhookHandler {
         { repoFullName: event.repoFullName, branchName: event.branchName, prNumber: event.prNumber, triggerEvent: event.triggerEvent },
         "GitHub webhook: no matching tracked issue",
       );
+      return;
+    }
+
+    const suppressedLatePublication = await maybeCloseLatePublishedImplementationPr({
+      db: this.db,
+      logger: this.logger,
+      feed: this.feed,
+      issue,
+      event,
+      fetchImpl: this.fetchImpl,
+    });
+    if (suppressedLatePublication) {
       return;
     }
 

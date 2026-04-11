@@ -10,9 +10,8 @@ import { deriveGateCheckStatusFromRollup, type GitHubStatusRollupEntry } from ".
 import { deriveIssueSessionReactiveIntent } from "./issue-session.ts";
 import { parseStoredQueueRepairContext } from "./merge-queue-incident.ts";
 import { buildClosedPrCleanupFields, resolveClosedPrDisposition } from "./pr-state.ts";
+import { getReviewFixBudget } from "./run-budgets.ts";
 import { execCommand } from "./utils.ts";
-
-const DEFAULT_REVIEW_FIX_BUDGET = 12;
 
 function isFailingCheckStatus(status: string | undefined): boolean {
   return status === "failed" || status === "failure";
@@ -608,7 +607,8 @@ export class IdleIssueReconciler {
       if (issue.delegatedToPatchRelay
         && (issue.factoryState === "escalated" || issue.factoryState === "failed")
         && (reactiveIntent?.runType === "review_fix" || reactiveIntent?.runType === "branch_upkeep")) {
-        if (issue.reviewFixAttempts >= DEFAULT_REVIEW_FIX_BUDGET) {
+        const reviewFixBudget = getReviewFixBudget(project);
+        if (issue.reviewFixAttempts >= reviewFixBudget) {
           this.logger.debug(
             {
               issueKey: issue.issueKey,
@@ -616,6 +616,7 @@ export class IdleIssueReconciler {
               from: issue.factoryState,
               runType: reactiveIntent.runType,
               reviewFixAttempts: issue.reviewFixAttempts,
+              reviewFixBudget,
             },
             "Reconciliation: leaving terminal requested-changes issue escalated because the repair budget is exhausted",
           );

@@ -3,10 +3,12 @@ import type { IssueRecord } from "./db-types.ts";
 import type { RunType } from "./factory-state.ts";
 import type { IssueSessionLease } from "./issue-session-lease-service.ts";
 import type { IssueSessionEventType } from "./issue-session-events.ts";
-
-const DEFAULT_CI_REPAIR_BUDGET = 3;
-const DEFAULT_QUEUE_REPAIR_BUDGET = 3;
-const DEFAULT_REVIEW_FIX_BUDGET = 12;
+import {
+  getCiRepairBudget,
+  getQueueRepairBudget,
+  getReviewFixBudget,
+} from "./run-budgets.ts";
+import type { ProjectConfig } from "./workflow-types.ts";
 
 export interface PendingRunWake {
   runType: RunType;
@@ -90,15 +92,23 @@ export class RunWakePlanner {
     return this.db.issues.getIssue(issue.projectId, issue.linearIssueId) ?? issue;
   }
 
-  budgetExceeded(issue: IssueRecord, runType: RunType, isRequestedChangesRunType: (runType: RunType) => boolean): string | undefined {
-    if (runType === "ci_repair" && issue.ciRepairAttempts >= DEFAULT_CI_REPAIR_BUDGET) {
-      return `CI repair budget exhausted (${DEFAULT_CI_REPAIR_BUDGET} attempts)`;
+  budgetExceeded(
+    issue: IssueRecord,
+    project: ProjectConfig | undefined,
+    runType: RunType,
+    isRequestedChangesRunType: (runType: RunType) => boolean,
+  ): string | undefined {
+    const ciRepairBudget = getCiRepairBudget(project);
+    if (runType === "ci_repair" && issue.ciRepairAttempts >= ciRepairBudget) {
+      return `CI repair budget exhausted (${ciRepairBudget} attempts)`;
     }
-    if (runType === "queue_repair" && issue.queueRepairAttempts >= DEFAULT_QUEUE_REPAIR_BUDGET) {
-      return `Queue repair budget exhausted (${DEFAULT_QUEUE_REPAIR_BUDGET} attempts)`;
+    const queueRepairBudget = getQueueRepairBudget(project);
+    if (runType === "queue_repair" && issue.queueRepairAttempts >= queueRepairBudget) {
+      return `Queue repair budget exhausted (${queueRepairBudget} attempts)`;
     }
-    if (isRequestedChangesRunType(runType) && issue.reviewFixAttempts >= DEFAULT_REVIEW_FIX_BUDGET) {
-      return `Requested-changes budget exhausted (${DEFAULT_REVIEW_FIX_BUDGET} attempts)`;
+    const reviewFixBudget = getReviewFixBudget(project);
+    if (isRequestedChangesRunType(runType) && issue.reviewFixAttempts >= reviewFixBudget) {
+      return `Requested-changes budget exhausted (${reviewFixBudget} attempts)`;
     }
     return undefined;
   }
