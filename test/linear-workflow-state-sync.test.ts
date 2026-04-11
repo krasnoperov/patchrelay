@@ -136,3 +136,56 @@ test("syncActiveWorkflowState routes pending review-quill verdicts to the prefer
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("syncActiveWorkflowState completes trusted no-PR done issues in Linear", async () => {
+  const { baseDir, db } = createDb();
+  try {
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-no-pr-done",
+      issueKey: "USE-DONE",
+      factoryState: "done",
+      currentLinearState: "In Progress",
+      currentLinearStateType: "started",
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "implementation",
+    });
+    db.runs.finishRun(run.id, { status: "completed" });
+    db.runs.saveCompletionCheck(run.id, {
+      outcome: "done",
+      summary: "Already complete on the published head.",
+    });
+
+    let requestedState: string | undefined;
+    await syncActiveWorkflowState({
+      db,
+      issue: db.getIssue(issue.projectId, issue.linearIssueId)!,
+      linear: {
+        getIssue: async () => ({
+          id: issue.linearIssueId,
+          stateName: "In Progress",
+          stateType: "started",
+          workflowStates: [
+            { name: "In Progress", type: "started" },
+            { name: "Done", type: "completed" },
+          ],
+        }),
+        setIssueState: async (_issueId, state) => {
+          requestedState = state;
+          return { stateName: state, stateType: "completed" };
+        },
+      } as never,
+    });
+
+    assert.equal(requestedState, "Done");
+    const refreshed = db.issues.getIssue(issue.projectId, issue.linearIssueId);
+    assert.equal(refreshed?.currentLinearState, "Done");
+    assert.equal(refreshed?.currentLinearStateType, "completed");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});

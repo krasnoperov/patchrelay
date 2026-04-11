@@ -32,6 +32,8 @@ function createFinalizer(db: PatchRelayDatabase, completionCheckResult: {
   question?: string;
   why?: string;
   recommendedReply?: string;
+}, options?: {
+  publishedOutcomeError?: string;
 }) {
   const feedEvents: Array<Record<string, unknown>> = [];
   const activities: Array<Record<string, unknown>> = [];
@@ -56,7 +58,7 @@ function createFinalizer(db: PatchRelayDatabase, completionCheckResult: {
     {
       verifyReactiveRunAdvancedBranch: async () => undefined,
       verifyReviewFixAdvancedHead: async () => undefined,
-      verifyPublishedRunOutcome: async () => "Implementation completed without opening a PR.",
+      verifyPublishedRunOutcome: async () => options?.publishedOutcomeError ?? "Implementation completed without opening a PR.",
       refreshIssueAfterReactivePublish: async (_run, issue) => issue,
       resolvePostRunFollowUp: async () => undefined,
     } as never,
@@ -191,6 +193,70 @@ test("run finalizer queues a same-thread follow-up when completion check says co
     assert.equal(wake?.runType, "implementation");
     assert.equal(wake?.resumeThread, true);
     assert.equal(pendingEvent?.eventType, "completion_check_continue");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("run finalizer continues automatically when no-PR done leaves local changes unpublished", async () => {
+  const { baseDir, db } = createDb();
+  try {
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-1",
+      issueKey: "USE-112A",
+      title: "Publish local changes before closing the issue",
+      factoryState: "implementing",
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "implementation",
+    });
+    db.runs.updateRunThread(run.id, { threadId: "thread-1", turnId: "turn-main" });
+
+    const { finalizer, feedEvents } = createFinalizer(db, {
+      outcome: "done",
+      summary: "The requested code changes are finished.",
+    }, {
+      publishedOutcomeError: "Implementation completed without opening a PR; worktree still has 2 uncommitted change(s)",
+    });
+
+    await finalizer.finalizeCompletedRun({
+      source: "notification",
+      run: db.runs.getRunById(run.id)!,
+      issue: db.getIssue(issue.projectId, issue.linearIssueId)!,
+      thread: {
+        id: "thread-1",
+        preview: "",
+        cwd: "/tmp/work",
+        status: "idle",
+        turns: [
+          {
+            id: "turn-main",
+            status: "completed",
+            items: [{ id: "msg-1", type: "agentMessage", text: "I made the code changes locally." }],
+          },
+        ],
+      },
+      threadId: "thread-1",
+      completedTurnId: "turn-main",
+      resolveRecoverableRunState: () => undefined,
+    });
+
+    const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId)!;
+    const updatedRun = db.runs.getRunById(run.id)!;
+    const wake = db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId);
+    const pendingEvent = db.issueSessions.listIssueSessionEvents(issue.projectId, issue.linearIssueId, { pendingOnly: true }).at(-1);
+    assert.equal(updatedIssue.factoryState, "delegated");
+    assert.equal(updatedRun.status, "completed");
+    assert.equal(updatedRun.completionCheckOutcome, "continue");
+    assert.match(String(updatedRun.completionCheckSummary ?? ""), /has not published them yet/);
+    assert.equal(wake?.runType, "implementation");
+    assert.equal(wake?.resumeThread, true);
+    assert.equal(pendingEvent?.eventType, "completion_check_continue");
+    assert.equal(feedEvents.at(-1)?.status, "completion_check_continue");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
