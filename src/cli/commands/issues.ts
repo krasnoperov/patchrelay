@@ -5,7 +5,7 @@ import type { InteractiveRunner, Output, ParsedArgs } from "../command-types.ts"
 import type { CliDataAccess } from "../data.ts";
 import { CliUsageError } from "../errors.ts";
 import { formatJson } from "../formatters/json.ts";
-import { formatClose, formatInspect, formatList, formatLive, formatOpen, formatRetry, formatSessionHistory, formatWorktree } from "../formatters/text.ts";
+import { formatClose, formatInspect, formatList, formatLive, formatOpen, formatRetry, formatSessionHistory, formatTranscriptSource, formatWorktree } from "../formatters/text.ts";
 import { buildOpenCommand } from "../interactive.ts";
 import { writeOutput } from "../output.ts";
 
@@ -52,6 +52,8 @@ export async function handleIssueCommand(params: IssueCommandParams): Promise<nu
       return await handleOpenCommand(nested);
     case "sessions":
       return await handleSessionsCommand(nested);
+    case "transcript-source":
+      return await handleTranscriptSourceCommand(nested);
     case "retry":
       return await handleRetryCommand(nested);
     case "close":
@@ -136,6 +138,34 @@ export async function handleOpenCommand(params: IssueCommandParams): Promise<num
   }
   const openCommand = buildOpenCommand(params.config, result.worktreePath, result.resumeThreadId);
   return await params.runInteractive(openCommand.command, openCommand.args);
+}
+
+export async function handleTranscriptSourceCommand(params: IssueCommandParams): Promise<number> {
+  const issueKey = params.commandArgs[0];
+  if (!issueKey) {
+    throw new Error("transcript-source requires <issueKey>.");
+  }
+
+  const runFlag = params.parsed.flags.get("run");
+  let runId: number | undefined;
+  if (typeof runFlag === "string") {
+    const parsedRunId = Number(runFlag);
+    if (!Number.isSafeInteger(parsedRunId) || parsedRunId <= 0) {
+      throw new Error("--run must be a positive integer.");
+    }
+    runId = parsedRunId;
+  }
+
+  const result = params.data.transcriptSource(issueKey, runId);
+  if (!result) {
+    throw new Error(`Issue not found: ${issueKey}`);
+  }
+  if (runId !== undefined && result.runId !== runId) {
+    throw new Error(`Run not found for ${issueKey}: ${runId}`);
+  }
+
+  writeOutput(params.stdout, params.json ? formatJson(result) : formatTranscriptSource(result));
+  return 0;
 }
 
 export async function handleSessionsCommand(params: IssueCommandParams): Promise<number> {

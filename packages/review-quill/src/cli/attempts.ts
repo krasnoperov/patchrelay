@@ -1,4 +1,5 @@
 import { decorateAttempt } from "../attempt-state.ts";
+import { resolveCodexSessionSource } from "../codex-session-source.ts";
 import { loadConfig } from "../config.ts";
 import { SqliteStore } from "../db/sqlite-store.ts";
 import { getDefaultConfigPath } from "../runtime-paths.ts";
@@ -25,6 +26,10 @@ export async function handleAttempts(parsed: ParsedArgs, stdout: Output): Promis
           queuedAfterMs: config.reconciliation.staleQueuedAfterMs,
           runningAfterMs: config.reconciliation.staleRunningAfterMs,
         },
+      }))
+      .map((attempt) => ({
+        ...attempt,
+        ...(attempt.threadId ? { sessionSource: resolveCodexSessionSource(attempt.threadId) } : {}),
       }));
     const payload = {
       repoId: repo.repoId,
@@ -68,10 +73,19 @@ export async function handleAttempts(parsed: ParsedArgs, stdout: Output): Promis
       lines.push(`Head SHA: ${attempt.headSha}`);
       if (attempt.threadId) {
         lines.push(`Thread: ${attempt.threadId}`);
-        lines.push(`Catalog: search Codex old sessions for thread ${attempt.threadId}`);
+        lines.push(`Session source: ${attempt.sessionSource?.exists ? attempt.sessionSource.path : attempt.sessionSource?.error ?? "not found"}`);
       }
       if (attempt.turnId) {
         lines.push(`Turn: ${attempt.turnId}`);
+      }
+      if (attempt.sessionSource?.startedAt) {
+        lines.push(`Started: ${attempt.sessionSource.startedAt}`);
+      }
+      if (attempt.sessionSource?.originator) {
+        lines.push(`Originator: ${attempt.sessionSource.originator}`);
+      }
+      if (attempt.sessionSource?.cwd) {
+        lines.push(`Working directory: ${attempt.sessionSource.cwd}`);
       }
       if (attempt.externalCheckRunId !== undefined) {
         lines.push(`Check run: ${attempt.externalCheckRunId}`);

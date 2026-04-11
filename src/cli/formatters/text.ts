@@ -2,6 +2,7 @@ import type {
   CloseResult,
   InspectResult,
   IssueSessionHistoryResult,
+  IssueTranscriptSourceResult,
   ListResultItem,
   LiveResult,
   OpenResult,
@@ -130,6 +131,33 @@ function formatTimestampRange(startedAt: string, endedAt?: string): string {
   return endedAt ? `${startedAt} -> ${endedAt}` : `${startedAt} -> running`;
 }
 
+function formatSessionSource(sessionSource: { exists: boolean; path?: string; error?: string } | undefined): string | undefined {
+  if (!sessionSource) return undefined;
+  if (sessionSource.exists) return sessionSource.path;
+  return sessionSource.error ?? "not found";
+}
+
+export function formatTranscriptSource(result: IssueTranscriptSourceResult): string {
+  const lines = [
+    value("Issue", result.issue.issueKey ?? result.issue.linearIssueId),
+    value("Worktree", result.worktreePath),
+    value(
+      "Run",
+      result.runId !== undefined
+        ? `#${result.runId}${result.runType ? ` ${result.runType}` : ""}${result.runStatus ? ` (${result.runStatus})` : ""}`
+        : undefined,
+    ),
+    value("Thread", result.threadId),
+    value("Turn", result.turnId),
+    value("Session source", formatSessionSource(result.sessionSource)),
+    result.sessionSource?.startedAt ? value("Started", result.sessionSource.startedAt) : undefined,
+    result.sessionSource?.originator ? value("Originator", result.sessionSource.originator) : undefined,
+    result.sessionSource?.cwd ? value("Working directory", result.sessionSource.cwd) : undefined,
+  ].filter(Boolean);
+
+  return `${lines.join("\n")}\n`;
+}
+
 export function formatSessionHistory(
   result: IssueSessionHistoryResult,
   buildOpenForThread?: (threadId: string) => { command: string; args: string[] },
@@ -175,6 +203,18 @@ export function formatSessionHistory(
       lines.push(value("Summary", truncateLine(session.summary)));
     } else if (session.failureReason) {
       lines.push(value("Failure", truncateLine(session.failureReason)));
+    }
+    if (session.sessionSource) {
+      lines.push(value("Session source", formatSessionSource(session.sessionSource)));
+      if (session.sessionSource.startedAt) {
+        lines.push(value("Started", session.sessionSource.startedAt));
+      }
+      if (session.sessionSource.originator) {
+        lines.push(value("Originator", session.sessionSource.originator));
+      }
+      if (session.sessionSource.cwd) {
+        lines.push(value("Working directory", session.sessionSource.cwd));
+      }
     }
     if (session.threadId && result.worktreePath && buildOpenForThread) {
       const command = buildOpenForThread(session.threadId);
