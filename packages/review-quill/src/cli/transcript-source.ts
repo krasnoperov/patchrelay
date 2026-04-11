@@ -8,6 +8,12 @@ import type { Output } from "./shared.ts";
 import { formatJson, writeOutput } from "./shared.ts";
 import { parsePullRequestNumber, type ParsedArgs, UsageError } from "./args.ts";
 import { parseAttemptId, selectTranscriptAttempt } from "./attempt-selection.ts";
+import type { ReviewAttemptRecord } from "../types.ts";
+import type { CodexSessionSourceRecord } from "../codex-session-source.ts";
+
+type ReviewAttemptWithSessionSource = ReviewAttemptRecord & {
+  sessionSource?: CodexSessionSourceRecord;
+};
 
 function formatSessionSource(sessionSource: { exists: boolean; path?: string; error?: string } | undefined): string {
   if (!sessionSource) return "-";
@@ -44,7 +50,7 @@ export async function handleTranscriptSource(parsed: ParsedArgs, stdout: Output)
       throw new UsageError("No recorded review attempts were found for that pull request.");
     }
 
-    const selection = selectTranscriptAttempt(attempts, attemptId);
+    const selection = selectTranscriptAttempt(attempts, attemptId) as { attempt: ReviewAttemptWithSessionSource; notice?: string };
     const { attempt } = selection;
     const payload = {
       repoId: repo.repoId,
