@@ -7,6 +7,13 @@ import type { WithHeldIssueSessionLease } from "./issue-session-lease-service.ts
 import { buildCompletionCheckActivity } from "./linear-session-reporting.ts";
 import type { buildStageReport } from "./run-reporting.ts";
 
+function shouldContinueForUnpublishedLocalChanges(message: string): boolean {
+  const normalized = message.trim().toLowerCase();
+  if (!normalized) return false;
+  return normalized.includes("worktree still has")
+    || (normalized.includes("local commit") && normalized.includes("ahead of origin/"));
+}
+
 export async function handleNoPrCompletionCheck(params: {
   db: PatchRelayDatabase;
   logger: Logger;
@@ -179,6 +186,52 @@ export async function handleNoPrCompletionCheck(params: {
   }
 
   if (completionCheck.outcome === "done") {
+    if (shouldContinueForUnpublishedLocalChanges(params.publishedOutcomeError)) {
+      const continued = params.withHeldLease(params.run.projectId, params.run.linearIssueId, (lease) => {
+        params.db.runs.finishRun(params.run.id, completedRunUpdate);
+        params.db.runs.saveCompletionCheck(params.run.id, {
+          ...completionCheck,
+          outcome: "continue",
+          summary: "PatchRelay changed files locally but has not published them yet; continuing automatically to finish publication.",
+          why: params.publishedOutcomeError,
+        });
+        params.db.issues.upsertIssue({
+          projectId: params.run.projectId,
+          linearIssueId: params.run.linearIssueId,
+          activeRunId: null,
+          factoryState: "delegated",
+          pendingRunType: null,
+          pendingRunContextJson: null,
+        });
+        return Boolean(params.db.issueSessions.appendIssueSessionEventWithLease(lease, {
+          projectId: params.run.projectId,
+          linearIssueId: params.run.linearIssueId,
+          eventType: "completion_check_continue",
+          eventJson: JSON.stringify({
+            runType: params.run.runType,
+            summary: params.publishedOutcomeError,
+          }),
+          dedupeKey: `completion_check_continue:${params.run.id}`,
+        }));
+      });
+      if (!continued) {
+        params.logger.warn({ runId: params.run.id, issueId: params.run.linearIssueId }, "Skipping completion-check continue writes after losing issue-session lease");
+        params.clearProgressAndRelease(params.run);
+        return;
+      }
+      params.syncCompletionCheckOutcome({
+        run: params.run,
+        fallbackIssue: params.issue,
+        level: "info",
+        status: "completion_check_continue",
+        summary: "No PR found; continuing automatically to finish publication",
+        detail: params.publishedOutcomeError,
+        activity: buildCompletionCheckActivity("continue"),
+        enqueue: true,
+      });
+      return;
+    }
+
     const completed = params.withHeldLease(params.run.projectId, params.run.linearIssueId, (lease) => {
       params.db.runs.finishRun(params.run.id, completedRunUpdate);
       params.db.runs.saveCompletionCheck(params.run.id, completionCheck);
