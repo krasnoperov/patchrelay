@@ -195,9 +195,12 @@ function normalizeMeaningKey(text: string): string {
 }
 
 function lastBoundaryWithinLimit(text: string, maxLength: number, pattern: RegExp): number | undefined {
-  let match: RegExpExecArray | null = null;
   let last = -1;
-  while ((match = pattern.exec(text)) !== null) {
+  for (;;) {
+    const match = pattern.exec(text);
+    if (!match) {
+      break;
+    }
     if (match.index >= maxLength) {
       break;
     }
