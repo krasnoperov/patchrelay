@@ -61,13 +61,12 @@ export class ServiceRuntime {
   async start(): Promise<void> {
     try {
       await this.codex.start();
-      await this.runReconciler.reconcileActiveRuns();
       for (const issue of this.readyIssueSource.listIssuesReadyForExecution()) {
         this.enqueueIssue(issue.projectId, issue.linearIssueId);
       }
       this.ready = true;
       this.startupError = undefined;
-      this.scheduleBackgroundReconcile();
+      void this.runBackgroundReconcile();
     } catch (error) {
       this.ready = false;
       this.startupError = error instanceof Error ? error.message : String(error);

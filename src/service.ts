@@ -163,7 +163,10 @@ export class PatchRelayService {
       }
     }
     await this.runtime.start();
-    await this.startupRecovery.recoverDelegatedIssueStateFromLinear();
+    void this.startupRecovery.recoverDelegatedIssueStateFromLinear().catch((error) => {
+      const msg = error instanceof Error ? error.message : String(error);
+      this.logger.warn({ error: msg }, "Background delegated issue recovery failed");
+    });
     void this.startupRecovery.syncKnownAgentSessions().catch((error) => {
       const msg = error instanceof Error ? error.message : String(error);
       this.logger.warn({ error: msg }, "Background agent session sync failed");

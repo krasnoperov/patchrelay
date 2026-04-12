@@ -33,10 +33,11 @@ async function flushQueue(): Promise<void> {
   await delay(0);
 }
 
-test("service runtime starts codex, reconciles active runs, seeds ready issues, and reports ready", async () => {
+test("service runtime starts codex, seeds ready issues, triggers reconcile in the background, and reports ready", async () => {
   const codex = new FakeCodexClient();
   const calls: string[] = [];
   const processedIssues: RuntimeIssueQueueItem[] = [];
+  let readyIssueReads = 0;
 
   const runtime = new ServiceRuntime(
     codex as never,
@@ -49,6 +50,10 @@ test("service runtime starts codex, reconciles active runs, seeds ready issues, 
     {
       listIssuesReadyForExecution() {
         calls.push("ready-issues");
+        readyIssueReads += 1;
+        if (readyIssueReads > 1) {
+          return [];
+        }
         return [
           { projectId: "app", linearIssueId: "issue-1" },
           { projectId: "app", linearIssueId: "issue-2" },
@@ -74,7 +79,7 @@ test("service runtime starts codex, reconciles active runs, seeds ready issues, 
   await flushQueue();
 
   assert.equal(codex.startCalls, 1);
-  assert.deepEqual(calls, ["reconcile", "ready-issues"]);
+  assert.deepEqual(calls, ["ready-issues", "reconcile", "ready-issues"]);
   assert.deepEqual(processedIssues, [
     { projectId: "app", issueId: "issue-1" },
     { projectId: "app", issueId: "issue-2" },
@@ -178,27 +183,29 @@ test("service runtime records startup error when codex start fails", async () =>
   });
 });
 
-test("service runtime records startup error when reconciliation fails after codex starts", async () => {
+test("service runtime does not fail startup when background reconciliation fails after codex starts", async () => {
   const codex = new FakeCodexClient();
   let readyIssuesCalled = false;
+  let reconcileCalls = 0;
 
   const runtime = new ServiceRuntime(
     codex as never,
     pino({ enabled: false }),
-    { async reconcileActiveRuns() { throw new Error("reconcile failed"); } },
+    { async reconcileActiveRuns() { reconcileCalls += 1; throw new Error("reconcile failed"); } },
     { listIssuesReadyForExecution() { readyIssuesCalled = true; return []; } },
     { async processWebhookEvent() {} },
     { async processIssue() {} },
   );
 
-  await assert.rejects(runtime.start(), /reconcile failed/);
+  await runtime.start();
+  await flushQueue();
 
-  assert.equal(readyIssuesCalled, false);
+  assert.equal(readyIssuesCalled, true);
+  assert.ok(reconcileCalls >= 1);
   assert.deepEqual(runtime.getReadiness(), {
     ready: false,
     codexStarted: true,
     linearConnected: false,
-    startupError: "reconcile failed",
   });
 });
 
@@ -221,6 +228,38 @@ test("service runtime continues reconciling active runs after startup", async ()
 
   assert.ok(reconcileCalls >= 2);
   runtime.stop();
+});
+
+test("service runtime does not wait for the first reconciliation pass before returning from start", async () => {
+  const codex = new FakeCodexClient();
+  let releaseReconcile: (() => void) | undefined;
+  let reconcileCalls = 0;
+  const reconcileStarted = new Promise<void>((resolve) => {
+    releaseReconcile = resolve;
+  });
+
+  const runtime = new ServiceRuntime(
+    codex as never,
+    pino({ enabled: false }),
+    {
+      async reconcileActiveRuns() {
+        reconcileCalls += 1;
+        await reconcileStarted;
+      },
+    },
+    { listIssuesReadyForExecution: () => [] },
+    { async processWebhookEvent() {} },
+    { async processIssue() {} },
+  );
+
+  await runtime.start();
+
+  assert.equal(codex.startCalls, 1);
+  assert.equal(reconcileCalls, 1);
+  assert.equal(runtime.getReadiness().codexStarted, true);
+
+  releaseReconcile?.();
+  await flushQueue();
 });
 
 test("service runtime recovers after a background reconciliation timeout", async () => {
