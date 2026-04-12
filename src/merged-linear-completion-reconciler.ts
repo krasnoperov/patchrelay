@@ -8,7 +8,13 @@ import { isCompletedLinearState } from "./pr-state.ts";
 import { hasTrustedNoPrCompletion } from "./trusted-no-pr-completion.ts";
 import type { LinearClientProvider } from "./types.ts";
 
+const COMPLETION_RECONCILE_WINDOW_MS = 24 * 60 * 60 * 1000;
+const COMPLETION_RECONCILE_FAILURE_BACKOFF_MS = 5 * 60 * 1000;
+const COMPLETION_RECONCILE_RATE_LIMIT_BACKOFF_MS = 30 * 60 * 1000;
+
 export class MergedLinearCompletionReconciler {
+  private readonly retryAfterByIssueKey = new Map<string, number>();
+
   constructor(
     private readonly db: PatchRelayDatabase,
     private readonly linearProvider: LinearClientProvider,
@@ -16,8 +22,12 @@ export class MergedLinearCompletionReconciler {
   ) {}
 
   async reconcile(): Promise<void> {
-    for (const issue of this.db.issues.listIssues()) {
-      if (issue.factoryState !== "done" && issue.prState !== "merged") {
+    const now = Date.now();
+    const candidates = this.db.issues.listIssues().filter((issue) => this.isRecentCompletionCandidate(issue, now));
+    this.pruneRetryBackoff(candidates, now);
+
+    for (const issue of candidates) {
+      if (!this.shouldAttemptIssue(issue, now)) {
         continue;
       }
 
@@ -54,6 +64,7 @@ export class MergedLinearCompletionReconciler {
           this.refreshCachedLinearState(issue, liveIssue);
         }
       } catch (error) {
+        this.deferIssue(issue, error, now);
         this.logger.warn(
           { issueKey: issue.issueKey, error: error instanceof Error ? error.message : String(error) },
           "Failed to reconcile merged or stale completed issue state",
@@ -127,6 +138,40 @@ export class MergedLinearCompletionReconciler {
       ...(liveIssue.stateName ? { currentLinearState: liveIssue.stateName } : {}),
       ...(liveIssue.stateType ? { currentLinearStateType: liveIssue.stateType } : {}),
     });
+  }
+
+  private isRecentCompletionCandidate(issue: IssueRecord, now: number): boolean {
+    if (issue.factoryState !== "done" && issue.prState !== "merged") {
+      return false;
+    }
+    const updatedAt = Date.parse(issue.updatedAt);
+    return Number.isFinite(updatedAt) && now - updatedAt <= COMPLETION_RECONCILE_WINDOW_MS;
+  }
+
+  private shouldAttemptIssue(issue: IssueRecord, now: number): boolean {
+    const retryAfter = this.retryAfterByIssueKey.get(this.issueKey(issue));
+    return retryAfter === undefined || retryAfter <= now;
+  }
+
+  private deferIssue(issue: IssueRecord, error: unknown, now: number): void {
+    const message = error instanceof Error ? error.message : String(error);
+    const backoffMs = /ratelimit|rate limit/i.test(message)
+      ? COMPLETION_RECONCILE_RATE_LIMIT_BACKOFF_MS
+      : COMPLETION_RECONCILE_FAILURE_BACKOFF_MS;
+    this.retryAfterByIssueKey.set(this.issueKey(issue), now + backoffMs);
+  }
+
+  private pruneRetryBackoff(candidates: IssueRecord[], now: number): void {
+    const candidateKeys = new Set(candidates.map((issue) => this.issueKey(issue)));
+    for (const [key, retryAfter] of this.retryAfterByIssueKey.entries()) {
+      if (!candidateKeys.has(key) || retryAfter <= now) {
+        this.retryAfterByIssueKey.delete(key);
+      }
+    }
+  }
+
+  private issueKey(issue: Pick<IssueRecord, "projectId" | "linearIssueId">): string {
+    return `${issue.projectId}::${issue.linearIssueId}`;
   }
 }
 

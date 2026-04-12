@@ -203,3 +203,95 @@ test("reconciler completes trusted no-PR done issues in Linear instead of reopen
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("reconciler skips stale historical completed issues outside the recent window", async () => {
+  const { baseDir, db } = createDb();
+  try {
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-old-done",
+      issueKey: "USE-204",
+      delegatedToPatchRelay: true,
+      factoryState: "done",
+      currentLinearState: "In Progress",
+      currentLinearStateType: "started",
+    });
+    db.connection.prepare(`
+      UPDATE issues
+      SET updated_at = ?
+      WHERE project_id = ? AND linear_issue_id = ?
+    `).run(
+      "2026-03-01T00:00:00.000Z",
+      "usertold",
+      "issue-old-done",
+    );
+
+    let getIssueCalls = 0;
+    const reconciler = new MergedLinearCompletionReconciler(
+      db,
+      {
+        forProject: async () => ({
+          getIssue: async () => {
+            getIssueCalls += 1;
+            return buildLiveIssue({
+              id: "issue-old-done",
+              identifier: "USE-204",
+              title: "Old done issue",
+              stateName: "In Progress",
+              stateType: "started",
+            });
+          },
+          setIssueState: async () => {
+            throw new Error("setIssueState should not be called for old completed issues");
+          },
+        }) as LinearClient,
+      },
+      pino({ enabled: false }),
+    );
+
+    await reconciler.reconcile();
+
+    assert.equal(getIssueCalls, 0);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("reconciler backs off recent completed issues after a rate-limited Linear failure", async () => {
+  const { baseDir, db } = createDb();
+  try {
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-rate-limited",
+      issueKey: "USE-205",
+      delegatedToPatchRelay: true,
+      factoryState: "done",
+      currentLinearState: "In Progress",
+      currentLinearStateType: "started",
+    });
+
+    let getIssueCalls = 0;
+    const reconciler = new MergedLinearCompletionReconciler(
+      db,
+      {
+        forProject: async () => ({
+          getIssue: async () => {
+            getIssueCalls += 1;
+            throw new Error("Rate limit exceeded");
+          },
+          setIssueState: async () => {
+            throw new Error("setIssueState should not be called after a failed getIssue");
+          },
+        }) as LinearClient,
+      },
+      pino({ enabled: false }),
+    );
+
+    await reconciler.reconcile();
+    await reconciler.reconcile();
+
+    assert.equal(getIssueCalls, 1);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
