@@ -16,6 +16,7 @@ export function DetailView({ detail }: DetailViewProps): React.JSX.Element {
   }
 
   const { attempt } = detail;
+  const currentPullRequest = detail.currentPullRequest;
   const latestAttempt = detail.relatedAttempts[0] ?? attempt;
   const isLatestForPullRequest = latestAttempt.id === attempt.id;
   const resultLabel = attempt.status === "completed"
@@ -36,8 +37,16 @@ export function DetailView({ detail }: DetailViewProps): React.JSX.Element {
         <Text color={attemptStateColor(attempt)}>{attemptLabel(attempt)}</Text>
       </Box>
       <Text>{resultLabel}</Text>
+      {currentPullRequest ? (
+        <Text>{`PR state: ${currentPullRequest.state.toLowerCase()}${currentPullRequest.isDraft ? " (draft)" : ""}`}</Text>
+      ) : null}
       {attempt.staleReason ? <Text>{`Stale: ${attempt.staleReason}`}</Text> : null}
       <Text>{`Reviewed head: ${formatSha(attempt.headSha)}`}</Text>
+      {currentPullRequest ? (
+        <Text>
+          {`Current PR head: ${formatSha(currentPullRequest.headSha)}${currentPullRequest.headSha === attempt.headSha ? " (matches reviewed head)" : " (newer than this review result)"}`}
+        </Text>
+      ) : null}
       <Text>{reviewedHeadLabel}</Text>
       <Text>{`Created: ${attempt.createdAt} (${relativeTime(attempt.createdAt)} ago)`}</Text>
       <Text>{`Updated: ${attempt.updatedAt} (${relativeTime(attempt.updatedAt)} ago)`}</Text>

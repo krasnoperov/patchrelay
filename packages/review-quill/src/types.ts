@@ -310,4 +310,5 @@ export interface ReviewQuillWatchSnapshot {
 export interface ReviewAttemptDetail {
   attempt: ReviewAttemptRecord;
   relatedAttempts: ReviewAttemptRecord[];
+  currentPullRequest?: PullRequestSummary;
 }

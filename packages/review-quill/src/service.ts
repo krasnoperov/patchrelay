@@ -65,14 +65,21 @@ export class ReviewQuillService {
     return this.store.listAttempts(100).map((attempt) => this.decorateAttempt(attempt));
   }
 
-  getAttemptDetail(attemptId: number): ReviewAttemptDetail | undefined {
+  async getAttemptDetail(attemptId: number): Promise<ReviewAttemptDetail | undefined> {
     const attempt = this.store.getAttemptById(attemptId);
     if (!attempt) return undefined;
+    let currentPullRequest: ReviewAttemptDetail["currentPullRequest"];
+    try {
+      currentPullRequest = await this.github.getPullRequest(attempt.repoFullName, attempt.prNumber);
+    } catch {
+      currentPullRequest = undefined;
+    }
     return {
       attempt: this.decorateAttempt(attempt),
       relatedAttempts: this.store
         .listAttemptsForPullRequest(attempt.repoFullName, attempt.prNumber, 10)
         .map((related) => this.decorateAttempt(related)),
+      ...(currentPullRequest ? { currentPullRequest } : {}),
     };
   }
 

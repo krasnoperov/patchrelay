@@ -123,6 +123,78 @@ test("getWatchSnapshot counts only the latest attempt per pull request", () => {
   assert.equal(snapshot.repos[0]?.completedAttempts, 1);
 });
 
+test("getAttemptDetail includes current pull request state when GitHub data is available", async () => {
+  const service = new ReviewQuillService(
+    {
+      server: { bind: "127.0.0.1", port: 8788 },
+      database: { path: ":memory:", wal: true },
+      logging: { level: "info" },
+      reconciliation: {
+        pollIntervalMs: 1_000,
+        heartbeatIntervalMs: 1_000,
+        staleQueuedAfterMs: 60_000,
+        staleRunningAfterMs: 60_000,
+      },
+      codex: {
+        bin: "codex",
+        args: [],
+        approvalPolicy: "never",
+        sandboxMode: "danger-full-access",
+      },
+      prompting: { replaceSections: {} },
+      repositories: [
+        {
+          repoId: "subtitles",
+          repoFullName: "krasnoperov/subtitles",
+          baseBranch: "main",
+          requiredChecks: [],
+          excludeBranches: [],
+          reviewDocs: [],
+          diffIgnore: [],
+          diffSummarizeOnly: [],
+          patchBodyBudgetTokens: 5_000,
+        },
+      ],
+      secretSources: {},
+    } as never,
+    {
+      getAttemptById: () => ({
+        id: 231,
+        repoFullName: "krasnoperov/subtitles",
+        prNumber: 16,
+        headSha: "9f64980040eccbcebca45599b015ca36187e928b",
+        status: "completed",
+        conclusion: "approved",
+        createdAt: "2026-04-11T23:50:24.691Z",
+        updatedAt: "2026-04-12T00:07:46.364Z",
+        completedAt: "2026-04-12T00:07:46.363Z",
+      }),
+      listAttemptsForPullRequest: () => [],
+    } as never,
+    {
+      getPullRequest: async () => ({
+        number: 16,
+        title: "Fix 502 error during conversation",
+        url: "https://github.com/krasnoperov/subtitles/pull/16",
+        state: "MERGED",
+        isDraft: false,
+        headSha: "9f64980040eccbcebca45599b015ca36187e928b",
+        headRefName: "krasnoperov-subtitles/LSR-5-fix-502-error-during-conversation",
+        baseRefName: "main",
+        mergedAt: "2026-04-12T00:39:00.000Z",
+        closedAt: "2026-04-12T00:39:00.000Z",
+      }),
+    } as never,
+    {} as never,
+    { child: () => ({}) } as never,
+  );
+
+  const detail = await service.getAttemptDetail(231);
+  assert.ok(detail);
+  assert.equal(detail.currentPullRequest?.state, "MERGED");
+  assert.equal(detail.currentPullRequest?.headSha, "9f64980040eccbcebca45599b015ca36187e928b");
+});
+
 test("triggerReconcile retires active attempts for merged pull requests", async () => {
   const activeAttempt = {
     id: 226,

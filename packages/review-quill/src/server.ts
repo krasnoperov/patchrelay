@@ -67,7 +67,7 @@ export async function startServer(configPath = process.env.REVIEW_QUILL_CONFIG ?
     if (!Number.isInteger(attemptId) || attemptId <= 0) {
       return reply.status(400).send({ ok: false, error: "invalid_attempt_id" });
     }
-    const detail = service.getAttemptDetail(attemptId);
+    const detail = await service.getAttemptDetail(attemptId);
     if (!detail) {
       return reply.status(404).send({ ok: false, error: "attempt_not_found" });
     }
