@@ -8,12 +8,20 @@ import { isCompletedLinearState } from "./pr-state.ts";
 import { hasTrustedNoPrCompletion } from "./trusted-no-pr-completion.ts";
 import type { LinearClientProvider } from "./types.ts";
 
-const COMPLETION_RECONCILE_WINDOW_MS = 24 * 60 * 60 * 1000;
+const COMPLETION_RECONCILE_WINDOW_MS = 60 * 60 * 1000;
+const COMPLETION_RECONCILE_SUCCESS_BACKOFF_MS = 60 * 60 * 1000;
 const COMPLETION_RECONCILE_FAILURE_BACKOFF_MS = 5 * 60 * 1000;
 const COMPLETION_RECONCILE_RATE_LIMIT_BACKOFF_MS = 30 * 60 * 1000;
+const COMPLETION_RECONCILE_MAX_ISSUES_PER_PASS = 10;
+
+interface CompletionRetryEntry {
+  retryAfter: number;
+  updatedAt: string;
+}
 
 export class MergedLinearCompletionReconciler {
-  private readonly retryAfterByIssueKey = new Map<string, number>();
+  private readonly retryAfterByIssueKey = new Map<string, CompletionRetryEntry>();
+  private globalRetryAfter: number | undefined;
 
   constructor(
     private readonly db: PatchRelayDatabase,
@@ -23,10 +31,23 @@ export class MergedLinearCompletionReconciler {
 
   async reconcile(): Promise<void> {
     const now = Date.now();
-    const candidates = this.db.issues.listIssues().filter((issue) => this.isRecentCompletionCandidate(issue, now));
+    if (this.globalRetryAfter !== undefined) {
+      if (this.globalRetryAfter > now) {
+        return;
+      }
+      this.globalRetryAfter = undefined;
+    }
+
+    const candidates = this.db.issues.listIssues()
+      .filter((issue) => this.isRecentCompletionCandidate(issue, now))
+      .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
     this.pruneRetryBackoff(candidates, now);
 
+    let attemptedIssues = 0;
     for (const issue of candidates) {
+      if (attemptedIssues >= COMPLETION_RECONCILE_MAX_ISSUES_PER_PASS) {
+        break;
+      }
       if (!this.shouldAttemptIssue(issue, now)) {
         continue;
       }
@@ -35,6 +56,7 @@ export class MergedLinearCompletionReconciler {
       if (!linear) {
         continue;
       }
+      attemptedIssues += 1;
 
       try {
         const liveIssue = await linear.getIssue(issue.linearIssueId);
@@ -55,6 +77,7 @@ export class MergedLinearCompletionReconciler {
 
         if (issue.prState === "merged" || trustedNoPrDone) {
           await this.reconcileCompletedLinearState(issue, liveIssue, linear);
+          this.settleIssue(issue, now);
           continue;
         }
 
@@ -63,12 +86,17 @@ export class MergedLinearCompletionReconciler {
         } else {
           this.refreshCachedLinearState(issue, liveIssue);
         }
+        this.settleIssue(issue, now);
       } catch (error) {
         this.deferIssue(issue, error, now);
         this.logger.warn(
           { issueKey: issue.issueKey, error: error instanceof Error ? error.message : String(error) },
           "Failed to reconcile merged or stale completed issue state",
         );
+        if (isRateLimitedError(error)) {
+          this.globalRetryAfter = now + COMPLETION_RECONCILE_RATE_LIMIT_BACKOFF_MS;
+          break;
+        }
       }
     }
   }
@@ -129,9 +157,12 @@ export class MergedLinearCompletionReconciler {
   }
 
   private refreshCachedLinearState(
-    issue: Pick<IssueRecord, "projectId" | "linearIssueId">,
+    issue: Pick<IssueRecord, "projectId" | "linearIssueId" | "currentLinearState" | "currentLinearStateType">,
     liveIssue: Awaited<ReturnType<NonNullable<Awaited<ReturnType<LinearClientProvider["forProject"]>>>["getIssue"]>>,
   ): void {
+    if (issue.currentLinearState === liveIssue.stateName && issue.currentLinearStateType === liveIssue.stateType) {
+      return;
+    }
     this.db.issues.upsertIssue({
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
@@ -149,8 +180,22 @@ export class MergedLinearCompletionReconciler {
   }
 
   private shouldAttemptIssue(issue: IssueRecord, now: number): boolean {
-    const retryAfter = this.retryAfterByIssueKey.get(this.issueKey(issue));
-    return retryAfter === undefined || retryAfter <= now;
+    const retry = this.retryAfterByIssueKey.get(this.issueKey(issue));
+    if (!retry) {
+      return true;
+    }
+    if (retry.updatedAt !== issue.updatedAt) {
+      this.retryAfterByIssueKey.delete(this.issueKey(issue));
+      return true;
+    }
+    return retry.retryAfter <= now;
+  }
+
+  private settleIssue(issue: IssueRecord, now: number): void {
+    this.retryAfterByIssueKey.set(this.issueKey(issue), {
+      retryAfter: now + COMPLETION_RECONCILE_SUCCESS_BACKOFF_MS,
+      updatedAt: issue.updatedAt,
+    });
   }
 
   private deferIssue(issue: IssueRecord, error: unknown, now: number): void {
@@ -158,13 +203,16 @@ export class MergedLinearCompletionReconciler {
     const backoffMs = /ratelimit|rate limit/i.test(message)
       ? COMPLETION_RECONCILE_RATE_LIMIT_BACKOFF_MS
       : COMPLETION_RECONCILE_FAILURE_BACKOFF_MS;
-    this.retryAfterByIssueKey.set(this.issueKey(issue), now + backoffMs);
+    this.retryAfterByIssueKey.set(this.issueKey(issue), {
+      retryAfter: now + backoffMs,
+      updatedAt: issue.updatedAt,
+    });
   }
 
   private pruneRetryBackoff(candidates: IssueRecord[], now: number): void {
     const candidateKeys = new Set(candidates.map((issue) => this.issueKey(issue)));
-    for (const [key, retryAfter] of this.retryAfterByIssueKey.entries()) {
-      if (!candidateKeys.has(key) || retryAfter <= now) {
+    for (const [key, retry] of this.retryAfterByIssueKey.entries()) {
+      if (!candidateKeys.has(key) || retry.retryAfter <= now) {
         this.retryAfterByIssueKey.delete(key);
       }
     }
@@ -173,6 +221,11 @@ export class MergedLinearCompletionReconciler {
   private issueKey(issue: Pick<IssueRecord, "projectId" | "linearIssueId">): string {
     return `${issue.projectId}::${issue.linearIssueId}`;
   }
+}
+
+function isRateLimitedError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /ratelimit|rate limit/i.test(message);
 }
 
 function resolveOpenWorkflowState(
