@@ -11,6 +11,7 @@ interface StatusBarProps {
   filter: "active" | "all";
   lastSnapshotReceivedAt: number | null;
   expectedFreshMs: number;
+  gatewayError: string | null;
 }
 
 export function StatusBar({
@@ -20,6 +21,7 @@ export function StatusBar({
   filter,
   lastSnapshotReceivedAt,
   expectedFreshMs,
+  gatewayError,
 }: StatusBarProps): React.JSX.Element {
   const { stdout } = useStdout();
   const width = stdout?.columns ?? 80;
@@ -53,6 +55,7 @@ export function StatusBar({
         connected={connected}
         lastSnapshotReceivedAt={lastSnapshotReceivedAt}
         expectedFreshMs={expectedFreshMs}
+        gatewayError={gatewayError}
       />
     </Box>
   );

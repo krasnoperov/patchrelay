@@ -11,8 +11,27 @@ function summarizeCheckNames(checks: Array<{ name: string }>, limit = 3): string
   return `${names.slice(0, limit).join(", ")} +${names.length - limit} more`;
 }
 
-function describeMainBroken(failingChecks: Array<{ name: string }>, pendingChecks: Array<{ name: string }>): string {
+function normalizeCheckName(name: string): string {
+  return name.trim().toLowerCase();
+}
+
+function getMissingRequiredChecks(requiredChecks: string[], checks: Array<{ name: string }>): string[] {
+  if (requiredChecks.length === 0) {
+    return [];
+  }
+  const available = new Set(checks.map((check) => normalizeCheckName(check.name)).filter(Boolean));
+  return requiredChecks.filter((check) => !available.has(normalizeCheckName(check)));
+}
+
+function describeMainBroken(
+  failingChecks: Array<{ name: string }>,
+  pendingChecks: Array<{ name: string }>,
+  missingRequiredChecks: string[],
+): string {
   const parts: string[] = [];
+  if (missingRequiredChecks.length > 0) {
+    parts.push(`missing required ${missingRequiredChecks.join(", ")}`);
+  }
   if (failingChecks.length > 0) {
     parts.push(`failing ${summarizeCheckNames(failingChecks)}`);
   }
@@ -55,11 +74,13 @@ export async function prepareEntry(
         }
         const failingChecks = mainChecks.filter((check) => check.conclusion === "failure");
         const pendingChecks = mainChecks.filter((check) => check.conclusion === "pending");
+        const missingRequiredChecks = getMissingRequiredChecks(ctx.requiredChecks, mainChecks);
         emit(ctx, entry, "main_broken", {
           baseSha,
           failingChecks,
           pendingChecks,
-          detail: describeMainBroken(failingChecks, pendingChecks),
+          missingRequiredChecks,
+          detail: describeMainBroken(failingChecks, pendingChecks, missingRequiredChecks),
         });
         return;
       }

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { getLatestAttemptsByPullRequest } from "../src/attempt-summary.ts";
-import { getRecentActivity, getRepoHealth } from "../src/watch/dashboard-model.ts";
+import { getRecentActivity, getRepoHealth, getReviewQueueText, projectStatsSummary } from "../src/watch/dashboard-model.ts";
 import type { ReviewAttemptRecord, ReviewQuillRepoSummary, ReviewQuillWatchSnapshot, WebhookEventRecord } from "../src/types.ts";
 
 function fakeAttempt(overrides: Partial<ReviewAttemptRecord> = {}): ReviewAttemptRecord {
@@ -163,4 +163,29 @@ test("repo health treats webhook activity after the last verdict as waiting on a
   const health = getRepoHealth(snapshot, repo);
   assert.equal(health.kind, "idle");
   assert.match(health.detail, /waiting for the latest head to become eligible/i);
+});
+
+test("review dashboard does not count stale attempts as active work", () => {
+  const repo = fakeRepo({
+    runningAttempts: 1,
+    latestAttemptAt: "2026-04-09T20:03:00.000Z",
+    latestConclusion: null,
+  });
+  const snapshot = fakeSnapshot({
+    repos: [repo],
+    attempts: [
+      fakeAttempt({
+        id: 9,
+        prNumber: 15,
+        status: "running",
+        conclusion: undefined,
+        updatedAt: "2026-04-09T20:03:00.000Z",
+        stale: true,
+        staleReason: "Attempt was left running across a restart.",
+      }),
+    ],
+  });
+
+  assert.equal(projectStatsSummary(snapshot, repo), "0 active · 0 queued · 1 stale");
+  assert.match(getReviewQueueText(snapshot, repo), /stale attempt/i);
 });

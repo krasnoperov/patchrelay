@@ -151,6 +151,8 @@ export class GitHubClient {
       ...(typeof (pr.user as Record<string, unknown> | undefined)?.login === "string"
         ? { authorLogin: String((pr.user as Record<string, unknown>).login) }
         : {}),
+      ...(typeof pr.merged_at === "string" ? { mergedAt: pr.merged_at } : {}),
+      ...(typeof pr.closed_at === "string" ? { closedAt: pr.closed_at } : {}),
     }));
   }
 
@@ -189,6 +191,8 @@ export class GitHubClient {
       ...(typeof (pr.user as Record<string, unknown> | undefined)?.login === "string"
         ? { authorLogin: String((pr.user as Record<string, unknown>).login) }
         : {}),
+      ...(typeof pr.merged_at === "string" ? { mergedAt: pr.merged_at } : {}),
+      ...(typeof pr.closed_at === "string" ? { closedAt: pr.closed_at } : {}),
     };
   }
 

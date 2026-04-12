@@ -176,6 +176,7 @@ export class ReviewQuillService {
 
   private async reconcileRepo(repo: ReviewQuillRepositoryConfig): Promise<void> {
     const prs = await this.github.listOpenPullRequests(repo.repoFullName);
+    await this.reconcileClosedPullRequestAttempts(repo, prs);
     for (const pr of prs) {
       await this.reconcileActiveAttemptsForPullRequest(repo, pr);
       const currentReviews = await this.github.listPullRequestReviews(repo.repoFullName, pr.number);
@@ -188,6 +189,61 @@ export class ReviewQuillService {
       }
       if (!eligibility.eligible) continue;
       await this.executeReview(repo, pr, existing);
+    }
+  }
+
+  private async reconcileClosedPullRequestAttempts(
+    repo: ReviewQuillRepositoryConfig,
+    openPullRequests: Awaited<ReturnType<GitHubClient["listOpenPullRequests"]>>,
+  ): Promise<void> {
+    const openPullRequestNumbers = new Set(openPullRequests.map((pr) => pr.number));
+    const activeAttempts = this.store.listActiveAttemptsForRepo(repo.repoFullName, 50);
+    for (const attempt of activeAttempts) {
+      if (openPullRequestNumbers.has(attempt.prNumber)) {
+        continue;
+      }
+
+      let pr: Awaited<ReturnType<GitHubClient["getPullRequest"]>>;
+      try {
+        pr = await this.github.getPullRequest(repo.repoFullName, attempt.prNumber);
+      } catch (error) {
+        this.logger.warn({
+          repo: repo.repoFullName,
+          prNumber: attempt.prNumber,
+          attemptId: attempt.id,
+          error: error instanceof Error ? error.message : String(error),
+        }, "Could not inspect non-open pull request while recovering active attempt");
+        continue;
+      }
+
+      if (pr.state === "OPEN") {
+        continue;
+      }
+
+      if (pr.headSha !== attempt.headSha) {
+        await this.retireAttempt(repo, attempt, {
+          status: "superseded",
+          conclusion: "skipped",
+          checkConclusion: "cancelled",
+          summary: `Superseded by newer head ${pr.headSha.slice(0, 12)} before review finished.`,
+        });
+        continue;
+      }
+
+      const closure = pr.mergedAt ? "merged" : "closed";
+      await this.retireAttempt(repo, attempt, {
+        status: "cancelled",
+        conclusion: "skipped",
+        checkConclusion: "cancelled",
+        summary: `Pull request was ${closure} before the review attempt finished.`,
+      });
+      this.logger.warn({
+        repo: repo.repoFullName,
+        prNumber: attempt.prNumber,
+        attemptId: attempt.id,
+        headSha: attempt.headSha,
+        closure,
+      }, "Recovered stranded review attempt for a non-open pull request");
     }
   }
 

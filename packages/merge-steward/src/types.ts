@@ -144,6 +144,7 @@ export interface QueueBlockState {
   observedAt: string;
   failingChecks: CheckResult[];
   pendingChecks: CheckResult[];
+  missingRequiredChecks: string[];
 }
 
 export interface QueueWatchSnapshot {
@@ -237,6 +238,7 @@ export interface ReconcileEvent {
   conflictFiles?: string[] | undefined;
   failingChecks?: CheckResult[] | undefined;
   pendingChecks?: CheckResult[] | undefined;
+  missingRequiredChecks?: string[] | undefined;
   failureClass?: string | undefined;
   dependsOn?: string | undefined;
 }

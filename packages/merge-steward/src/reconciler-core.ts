@@ -6,6 +6,7 @@ export interface ReconcileContext {
   store: QueueStore;
   repoId: string;
   baseBranch: string;
+  requiredChecks: string[];
   remotePrefix: string;
   git: GitOperations;
   ci: CIRunner;
@@ -41,4 +42,3 @@ export function isBudgetExhausted(entry: QueueEntry): boolean {
 export function isRetryGated(entry: QueueEntry, currentBaseSha: string): boolean {
   return entry.lastFailedBaseSha === currentBaseSha;
 }
-

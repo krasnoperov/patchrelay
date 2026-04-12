@@ -369,6 +369,7 @@ describe("webhook admission integration", () => {
         baseBranch: string;
         failingChecks: Array<{ name: string; conclusion: string }>;
         pendingChecks: Array<{ name: string; conclusion: string }>;
+        missingRequiredChecks: string[];
       } | null;
     };
 
@@ -377,6 +378,7 @@ describe("webhook admission integration", () => {
     assert.ok(watch.queueBlock);
     assert.strictEqual(watch.queueBlock?.reason, "main_broken");
     assert.strictEqual(watch.queueBlock?.baseBranch, "main");
+    assert.deepStrictEqual(watch.queueBlock?.missingRequiredChecks, []);
     assert.deepStrictEqual(watch.queueBlock?.failingChecks.map((check) => check.name), ["Tests", "Deploy stage"]);
     assert.deepStrictEqual(watch.queueBlock?.pendingChecks.map((check) => check.name), ["Claude"]);
   });

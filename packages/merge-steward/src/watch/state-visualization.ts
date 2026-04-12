@@ -91,15 +91,19 @@ export function buildExternalRepairObservations(
   } else if (options.isHead && options.queueBlock?.reason === "main_broken") {
     const failingNames = options.queueBlock.failingChecks.map((check) => check.name);
     const pendingNames = options.queueBlock.pendingChecks.map((check) => check.name);
+    const missingNames = options.queueBlock.missingRequiredChecks;
     const detail = [
+      missingNames.length > 0 ? `missing required ${missingNames.join(", ")}` : null,
       failingNames.length > 0 ? `failing ${failingNames.join(", ")}` : null,
       pendingNames.length > 0 ? `pending ${pendingNames.join(", ")}` : null,
     ].filter(Boolean).join("; ");
     observations.push({
       tone: "warn",
-      text: pendingNames.length > 0 && failingNames.length === 0
-        ? `Queue paused: ${options.queueBlock.baseBranch} is still verifying${detail ? ` (${detail})` : ""}. Will resume when checks settle.`
-        : `Queue paused: ${options.queueBlock.baseBranch} is unhealthy${detail ? ` (${detail})` : ""}. Will resume when main is healthy.`,
+      text: missingNames.length > 0
+        ? `Queue paused: ${options.queueBlock.baseBranch} is missing required checks${detail ? ` (${detail})` : ""}. Operator action is required on main before the queue can continue.`
+        : pendingNames.length > 0 && failingNames.length === 0
+          ? `Queue paused: ${options.queueBlock.baseBranch} is still verifying${detail ? ` (${detail})` : ""}. Will resume when checks settle.`
+          : `Queue paused: ${options.queueBlock.baseBranch} is unhealthy${detail ? ` (${detail})` : ""}. Will resume when main is healthy.`,
     });
   } else if (options.isHead) {
     observations.push({ tone: "info", text: "First in queue. Will advance on the next tick." });

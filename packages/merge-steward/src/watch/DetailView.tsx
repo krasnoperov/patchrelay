@@ -74,7 +74,11 @@ export function DetailView({
       {isHead && queueBlock && (
         <Box marginTop={1} flexDirection="column">
           <Text color="yellow">Queue paused: {summarizeQueueBlock(queueBlock) ?? `waiting for ${queueBlock.baseBranch} checks`}.</Text>
-          <Text dimColor>Will resume automatically once {queueBlock.baseBranch} is healthy.</Text>
+          <Text dimColor>
+            {queueBlock.missingRequiredChecks.length > 0
+              ? `Fix ${queueBlock.baseBranch} first, then reconcile this repo to resume the queue.`
+              : `Will resume automatically once ${queueBlock.baseBranch} is healthy.`}
+          </Text>
         </Box>
       )}
 

@@ -1,5 +1,13 @@
 import type { QueueEntryDetail, QueueWatchSnapshot } from "../types.ts";
 
+export interface GatewayHealthResponse {
+  ok: boolean;
+  repos: Array<{
+    repoId: string;
+    repoFullName: string;
+  }>;
+}
+
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
     ...init,
@@ -44,6 +52,10 @@ function repoBaseUrl(gatewayBaseUrl: string, repoId: string): string {
 
 export async function fetchSnapshot(gatewayBaseUrl: string, repoId: string): Promise<QueueWatchSnapshot> {
   return await requestJson<QueueWatchSnapshot>(buildUrl(repoBaseUrl(gatewayBaseUrl, repoId), "/queue/watch", { eventLimit: "40" }));
+}
+
+export async function fetchGatewayHealth(gatewayBaseUrl: string): Promise<GatewayHealthResponse> {
+  return await requestJson<GatewayHealthResponse>(buildUrl(gatewayBaseUrl, "/health"));
 }
 
 export async function fetchEntryDetail(gatewayBaseUrl: string, repoId: string, entryId: string): Promise<QueueEntryDetail> {

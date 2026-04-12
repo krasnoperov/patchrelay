@@ -38,6 +38,21 @@ function repoWebhooks(snapshot: ReviewQuillWatchSnapshot | null, repo: ReviewQui
   return snapshot.recentWebhooks.filter((event) => event.repoFullName === repo.repoFullName);
 }
 
+function repoAttemptStats(snapshot: ReviewQuillWatchSnapshot | null, repo: ReviewQuillRepoSummary): {
+  queued: number;
+  running: number;
+  failed: number;
+  stale: number;
+} {
+  const attempts = repoAttempts(snapshot, repo);
+  return {
+    queued: attempts.filter((attempt) => attempt.status === "queued" && !attempt.stale).length,
+    running: attempts.filter((attempt) => attempt.status === "running" && !attempt.stale).length,
+    failed: attempts.filter((attempt) => attempt.status === "failed").length,
+    stale: attempts.filter((attempt) => attempt.stale).length,
+  };
+}
+
 function summarizeWebhookBurst(events: WebhookEventRecord[]): string | null {
   if (events.length === 0) {
     return null;
@@ -206,14 +221,16 @@ export function getClusterSummary(snapshot: ReviewQuillWatchSnapshot | null): Cl
   });
 }
 
-export function projectStatsSummary(repo: ReviewQuillRepoSummary): string {
-  const staleSuffix = repo.failedAttempts > 0 ? ` · ${repo.failedAttempts} failed` : "";
-  return `${repo.runningAttempts} active · ${repo.queuedAttempts} queued${staleSuffix}`;
+export function projectStatsSummary(snapshot: ReviewQuillWatchSnapshot | null, repo: ReviewQuillRepoSummary): string {
+  const stats = repoAttemptStats(snapshot, repo);
+  const failedSuffix = stats.failed > 0 ? ` · ${stats.failed} failed` : "";
+  const staleSuffix = stats.stale > 0 ? ` · ${stats.stale} stale` : "";
+  return `${stats.running} active · ${stats.queued} queued${failedSuffix}${staleSuffix}`;
 }
 
 export function getReviewQueueText(snapshot: ReviewQuillWatchSnapshot | null, repo: ReviewQuillRepoSummary): string {
   const attempts = repoAttempts(snapshot, repo)
-    .filter((attempt) => attempt.status === "running" || attempt.status === "queued")
+    .filter((attempt) => (attempt.status === "running" || attempt.status === "queued") && !attempt.stale)
     .sort((left, right) => {
       if (left.status !== right.status) {
         return left.status === "running" ? -1 : 1;
@@ -221,6 +238,10 @@ export function getReviewQueueText(snapshot: ReviewQuillWatchSnapshot | null, re
       return new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime();
     });
   if (attempts.length === 0) {
+    const staleAttempts = repoAttempts(snapshot, repo).filter((attempt) => attempt.stale);
+    if (staleAttempts.length > 0) {
+      return `${staleAttempts.length} stale attempt${staleAttempts.length === 1 ? "" : "s"} need cleanup`;
+    }
     return "runner is idle";
   }
   return attempts.map((attempt) => `#${attempt.prNumber} ${attempt.status}`).join("  ");

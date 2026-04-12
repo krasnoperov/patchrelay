@@ -113,7 +113,11 @@ export function QueueListView({
           <Text color="yellow">
             Queue paused: {queueBlockLabel ?? "waiting for main checks"}{queueBlock.baseSha ? ` at ${truncate(queueBlock.baseSha, 10)}` : ""}.
           </Text>
-          <Text dimColor>Head PR #{queueBlock.headPrNumber ?? "?"} will resume automatically once main is healthy.</Text>
+          <Text dimColor>
+            {queueBlock.missingRequiredChecks.length > 0
+              ? `Head PR #${queueBlock.headPrNumber ?? "?"} is waiting for an operator fix on ${queueBlock.baseBranch}.`
+              : `Head PR #${queueBlock.headPrNumber ?? "?"} will resume automatically once main is healthy.`}
+          </Text>
         </Box>
       )}
       {entries.length === 0 ? (

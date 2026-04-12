@@ -1,7 +1,12 @@
 import type { CheckResult, QueueBlockState, QueueEntryStatus, QueueEventRecord, QueueEventSummary, QueueRuntimeStatus } from "../types.ts";
 
 export function isPendingMainVerification(block: QueueBlockState | null | undefined): boolean {
-  return Boolean(block && block.failingChecks.length === 0 && block.pendingChecks.length > 0);
+  return Boolean(
+    block
+      && block.failingChecks.length === 0
+      && block.pendingChecks.length > 0
+      && block.missingRequiredChecks.length === 0,
+  );
 }
 
 export function shortSha(value: string | null | undefined): string {
@@ -245,8 +250,23 @@ export function ciStatusIcon(entry: { status: QueueEntryStatus; ciRunId: string 
 
 export function summarizeQueueBlock(block: QueueBlockState | null | undefined): string | null {
   if (!block) return null;
+  const missing = block.missingRequiredChecks.length > 0
+    ? `operator fix needed on ${block.baseBranch}: missing required ${block.missingRequiredChecks.join(", ")}`
+    : null;
   const failing = block.failingChecks.length > 0 ? `failing ${summarizeCheckNames(block.failingChecks)}` : null;
   const pending = block.pendingChecks.length > 0 ? `${summarizeCheckNames(block.pendingChecks)} pending` : null;
+  if (missing && failing && pending) {
+    return `${missing}; ${failing}; ${pending}`;
+  }
+  if (missing && failing) {
+    return `${missing}; ${failing}`;
+  }
+  if (missing && pending) {
+    return `${missing}; ${pending}`;
+  }
+  if (missing) {
+    return missing;
+  }
   if (failing && pending) {
     return `waiting for ${block.baseBranch}: ${failing}; ${pending}`;
   }

@@ -6,6 +6,7 @@ import { getChainEntries, getClusterSummary, getRepoHealth, projectStatsSummary 
 interface OverviewViewProps {
   repos: DashboardRepoState[];
   selectedRepoId: string | null;
+  gatewayError: string | null;
 }
 
 function clampWindowStart(selectedIndex: number, itemCount: number, maxItems: number): number {
@@ -16,7 +17,7 @@ function clampWindowStart(selectedIndex: number, itemCount: number, maxItems: nu
   return Math.max(0, Math.min(itemCount - maxItems, selectedIndex - half));
 }
 
-export function OverviewView({ repos, selectedRepoId }: OverviewViewProps): React.JSX.Element {
+export function OverviewView({ repos, selectedRepoId, gatewayError }: OverviewViewProps): React.JSX.Element {
   const { stdout } = useStdout();
   const rows = stdout?.rows ?? 24;
   const cluster = getClusterSummary(repos);
@@ -31,6 +32,9 @@ export function OverviewView({ repos, selectedRepoId }: OverviewViewProps): Reac
       <Text dimColor>
         {cluster.total} projects · {cluster.connected} connected · {cluster.active} active · {cluster.blocked} blocked · {cluster.stuck} stuck · {cluster.attention} need attention
       </Text>
+      {gatewayError ? (
+        <Text color="red">{`Gateway offline: ${truncate(gatewayError, 88)}. Run \`merge-steward service restart\`.`}</Text>
+      ) : null}
       {repos.length === 0 ? (
         <Box marginTop={1}>
           <Text dimColor>No repositories are attached yet. Run {"`merge-steward repo attach <owner/repo>`"} first.</Text>

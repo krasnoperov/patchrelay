@@ -145,6 +145,7 @@ test("merge-steward observations explain when the head is blocked by unhealthy m
       observedAt: "2026-03-28T12:06:00.000Z",
       failingChecks: [{ name: "Tests", conclusion: "failure" }],
       pendingChecks: [],
+      missingRequiredChecks: [],
     },
   });
 
@@ -174,9 +175,41 @@ test("merge-steward observations explain when the head is waiting for main verif
       observedAt: "2026-03-28T12:06:00.000Z",
       failingChecks: [],
       pendingChecks: [{ name: "verify", conclusion: "pending" }],
+      missingRequiredChecks: [],
     },
   });
 
   assert.match(observations[0]?.text ?? "", /still verifying/i);
   assert.match(observations[0]?.text ?? "", /verify/);
+});
+
+test("merge-steward observations explain when main is missing a required check", () => {
+  const detail = makeDetail({
+    entry: {
+      ...makeDetail().entry,
+      status: "preparing_head",
+    },
+  });
+
+  const observations = buildExternalRepairObservations(detail, {
+    isHead: true,
+    activeIndex: 1,
+    activeCount: 2,
+    headPrNumber: 41,
+    queueBlock: {
+      reason: "main_broken",
+      entryId: "entry-1",
+      headPrNumber: 41,
+      baseBranch: "main",
+      baseSha: "abc123def456",
+      observedAt: "2026-03-28T12:06:00.000Z",
+      failingChecks: [],
+      pendingChecks: [],
+      missingRequiredChecks: ["Tests"],
+    },
+  });
+
+  assert.match(observations[0]?.text ?? "", /missing required checks/i);
+  assert.match(observations[0]?.text ?? "", /Tests/);
+  assert.match(observations[0]?.text ?? "", /operator action/i);
 });
