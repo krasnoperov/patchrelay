@@ -130,6 +130,8 @@ merge-steward queue status --repo repo
 
 `attach` now discovers the GitHub default branch automatically when GitHub App auth is configured. Required checks are taken directly from GitHub branch protection and rulesets at runtime rather than being stored in local repo config. `doctor --repo <id>` reports the live GitHub-required checks for the configured base branch, and the dashboard / `queue status` surfaces show the currently discovered policy so operators can see when GitHub policy changed underneath the queue.
 
+Current policy decision: the same GitHub-required checks are used for both candidate admission and current-`main` drift detection. If `Tests` is the required check in GitHub, Merge Steward currently treats `Tests` as both the merge gate and the signal that `main` remains in-policy. We may later split these concerns into separate GitHub check names, but there is no extra local merge-steward check config today.
+
 See [packages/merge-steward/README.md](../packages/merge-steward/README.md) for configuration, API reference, watch TUI, and systemd setup.
 
 ## Read More

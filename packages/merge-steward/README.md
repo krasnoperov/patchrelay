@@ -201,6 +201,8 @@ On startup, the steward reconciles GitHub protection for every attached repo. Po
 
 The dashboard project view and `merge-steward queue status --repo <id>` also show the live GitHub-required checks and the last policy refresh, so an operator can tell whether a queue pause came from a policy change or from the branch state itself.
 
+Current policy decision: Merge Steward uses the same GitHub-required check names for both PR/spec admission and current-`main` drift detection. For example, if branch protection requires `Tests`, the steward treats `Tests` as both the merge gate for candidate commits and the signal that current `main` is still in-policy. This is an explicit simplification for now and may be split into separate merge-gate and main-health signals later.
+
 ### Running
 
 ```bash
