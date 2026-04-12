@@ -156,6 +156,17 @@ export class SqliteStore {
     `).all(repoFullName, prNumber, limit).map(mapAttempt);
   }
 
+  listActiveAttemptsForRepo(repoFullName: string, limit = 50): ReviewAttemptRecord[] {
+    return this.db.prepare(`
+      SELECT *
+      FROM review_attempts
+      WHERE repo_full_name = ?
+        AND status IN ('queued', 'running')
+      ORDER BY id DESC
+      LIMIT ?
+    `).all(repoFullName, limit).map(mapAttempt);
+  }
+
   listWebhooks(limit = 50): WebhookEventRecord[] {
     return this.db.prepare(`
       SELECT *

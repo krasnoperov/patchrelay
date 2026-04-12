@@ -66,6 +66,7 @@ export function formatQueueStatusText(source: "service" | "database", snapshot: 
     ...(snapshot.queueBlock
       ? [
         `Queue blocked: ${snapshot.queueBlock.reason} on ${snapshot.queueBlock.baseBranch}${snapshot.queueBlock.baseSha ? ` @ ${snapshot.queueBlock.baseSha.slice(0, 8)}` : ""}`,
+        `Missing required: ${snapshot.queueBlock.missingRequiredChecks.length > 0 ? snapshot.queueBlock.missingRequiredChecks.join(", ") : "(none)"}`,
         `Base failures: ${snapshot.queueBlock.failingChecks.length > 0 ? snapshot.queueBlock.failingChecks.map((check) => check.name).join(", ") : "(none)"}`,
         ...(snapshot.queueBlock.pendingChecks.length > 0
           ? [`Base pending: ${snapshot.queueBlock.pendingChecks.map((check) => check.name).join(", ")}`]

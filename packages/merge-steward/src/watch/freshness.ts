@@ -15,9 +15,16 @@ export function describeSnapshotFreshness(
   connected: boolean,
   lastSnapshotReceivedAt: number | null,
   expectedFreshMs: number,
+  gatewayError?: string | null,
   now = Date.now(),
 ): SnapshotFreshness {
   if (lastSnapshotReceivedAt === null) {
+    if (gatewayError) {
+      return {
+        label: `gateway offline · ${gatewayError}`,
+        color: "red",
+      };
+    }
     return {
       label: connected ? "connecting" : "waiting for first snapshot",
       color: connected ? "yellow" : "red",

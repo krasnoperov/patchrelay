@@ -239,6 +239,7 @@ test("queue status text output surfaces failed tick errors ahead of stale queue 
       observedAt: "2026-04-06T16:26:30.217Z",
       failingChecks: [],
       pendingChecks: [{ name: "verify", conclusion: "pending", url: "https://example.test/run" }],
+      missingRequiredChecks: [],
     },
     entries: [{
       id: "entry-1",

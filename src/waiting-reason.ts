@@ -11,7 +11,7 @@ export const PATCHRELAY_WAITING_REASONS = {
   waitingForReviewOnNewHead: "Waiting on review of a newer pushed head",
   sameHeadStillBlocked: "Requested changes still block the current head",
   waitingForMergeStewardRepair: "Waiting to repair a merge-steward incident",
-  waitingForDownstreamAutomation: "Waiting on downstream review/merge automation",
+  waitingForDownstreamAutomation: "PatchRelay work is done; waiting on downstream review/merge automation",
   workComplete: "PatchRelay work is complete",
   waitingForOperatorIntervention: "Waiting on operator intervention",
   waitingForExternalReview: "Waiting on external review",

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Box, Text, useApp, useInput } from "ink";
 import type { QueueEntryDetail } from "../types.ts";
-import { dequeueEntry, fetchEntryDetail, fetchSnapshot, triggerReconcile } from "./api.ts";
+import { dequeueEntry, fetchEntryDetail, fetchGatewayHealth, fetchSnapshot, triggerReconcile } from "./api.ts";
 import type { DashboardRepoConfig, DashboardRepoState } from "./dashboard-model.ts";
 import { getDefaultEntryId, getVisibleEntries, matchRepoRef } from "./dashboard-model.ts";
 import { HelpBar } from "./HelpBar.tsx";
@@ -41,6 +41,7 @@ export function App({ gatewayBaseUrl, repos, initialRepoRef, initialPrNumber }: 
   })));
   const [lastSnapshotReceivedAt, setLastSnapshotReceivedAt] = useState<number | null>(null);
   const [detail, setDetail] = useState<QueueEntryDetail | null>(null);
+  const [gatewayError, setGatewayError] = useState<string | null>(null);
   const [selectedRepoId, setSelectedRepoId] = useState<string | null>(() => {
     const initialRepo = repos.find((repo) => matchRepoRef(repo, initialRepoRef));
     return initialRepo?.repoId ?? repos[0]?.repoId ?? null;
@@ -79,6 +80,24 @@ export function App({ gatewayBaseUrl, repos, initialRepoRef, initialPrNumber }: 
     let cancelled = false;
 
     const refresh = async () => {
+      try {
+        await fetchGatewayHealth(gatewayBaseUrl);
+        if (!cancelled) {
+          setGatewayError(null);
+        }
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        setGatewayError(message);
+        setRepoStates((current) => current.map((repo) => ({
+          ...repo,
+          error: message,
+        })));
+        return;
+      }
+
       const results = await Promise.all(repos.map(async (repo) => {
         try {
           const snapshot = await fetchSnapshot(gatewayBaseUrl, repo.repoId);
@@ -300,9 +319,10 @@ export function App({ gatewayBaseUrl, repos, initialRepoRef, initialPrNumber }: 
         filter={filter}
         lastSnapshotReceivedAt={lastSnapshotReceivedAt}
         expectedFreshMs={REFRESH_INTERVAL_MS * 2}
+        gatewayError={gatewayError}
       />
       {view === "overview" ? (
-        <OverviewView repos={repoStates} selectedRepoId={selectedRepoId} />
+        <OverviewView repos={repoStates} selectedRepoId={selectedRepoId} gatewayError={gatewayError} />
       ) : (
         <ProjectDetailView
           repo={currentRepo}

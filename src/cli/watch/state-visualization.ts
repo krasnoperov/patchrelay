@@ -177,7 +177,7 @@ export function buildPatchRelayQueueObservations(
     case "awaiting_queue":
       observations.push({
         tone: "info",
-        text: "PatchRelay has finished active work and is waiting for downstream merge flow.",
+        text: "PatchRelay has finished active work. Delivery now depends on downstream review and merge automation.",
       });
       break;
     case "repairing_queue":

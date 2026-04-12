@@ -84,6 +84,7 @@ export class MergeStewardRuntime {
         store: this.store,
         repoId: this.config.repoId,
         baseBranch: this.config.baseBranch,
+        requiredChecks: this.config.requiredChecks,
         remotePrefix: "origin/",
         git: this.git,
         ci: this.ci,
@@ -156,6 +157,15 @@ export class MergeStewardRuntime {
       observedAt: event.at,
       failingChecks: event.failingChecks ?? checks.filter((check) => check.conclusion === "failure"),
       pendingChecks: event.pendingChecks ?? checks.filter((check) => check.conclusion === "pending"),
+      missingRequiredChecks: event.missingRequiredChecks ?? this.getMissingRequiredChecks(checks),
     };
+  }
+
+  private getMissingRequiredChecks(checks: CheckResult[]): string[] {
+    if (this.config.requiredChecks.length === 0) {
+      return [];
+    }
+    const available = new Set(checks.map((check) => check.name.trim().toLowerCase()).filter(Boolean));
+    return this.config.requiredChecks.filter((check) => !available.has(check.trim().toLowerCase()));
   }
 }

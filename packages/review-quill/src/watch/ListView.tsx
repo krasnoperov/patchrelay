@@ -55,7 +55,7 @@ export function ListView({ snapshot, attempts, selectedAttemptId, selectedRepoFu
               <Text dimColor>{`  ${truncate(repo.repoFullName, 28)}`}</Text>
               <Text>{`  `}</Text>
               <Text color={health.color}>{health.label}</Text>
-              <Text dimColor>{`  ${projectStatsSummary(repo)}`}</Text>
+              <Text dimColor>{`  ${projectStatsSummary(snapshot, repo)}`}</Text>
             </Box>
             <Box paddingLeft={2}>
               <Text dimColor>{`Reviews: ${truncate(queueText, 100)}`}</Text>

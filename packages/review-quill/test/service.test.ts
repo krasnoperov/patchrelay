@@ -123,6 +123,95 @@ test("getWatchSnapshot counts only the latest attempt per pull request", () => {
   assert.equal(snapshot.repos[0]?.completedAttempts, 1);
 });
 
+test("triggerReconcile retires active attempts for merged pull requests", async () => {
+  const activeAttempt = {
+    id: 226,
+    repoFullName: "krasnoperov/subtitles",
+    prNumber: 15,
+    headSha: "0e987ee9f80ed2b165d41aeb5ea0b32c04dd61dd",
+    status: "running",
+    createdAt: "2026-04-11T22:28:56.962Z",
+    updatedAt: "2026-04-11T22:28:56.971Z",
+  } as const;
+
+  let storedAttempt: Record<string, unknown> = { ...activeAttempt };
+  const updates: Array<Record<string, unknown>> = [];
+
+  const service = new ReviewQuillService(
+    {
+      server: { bind: "127.0.0.1", port: 8788 },
+      database: { path: ":memory:", wal: true },
+      logging: { level: "info" },
+      reconciliation: {
+        pollIntervalMs: 1_000,
+        heartbeatIntervalMs: 1_000,
+        staleQueuedAfterMs: 60_000,
+        staleRunningAfterMs: 60_000,
+      },
+      codex: {
+        bin: "codex",
+        args: [],
+        approvalPolicy: "never",
+        sandboxMode: "danger-full-access",
+      },
+      prompting: { replaceSections: {} },
+      repositories: [
+        {
+          repoId: "subtitles",
+          repoFullName: "krasnoperov/subtitles",
+          baseBranch: "main",
+          requiredChecks: [],
+          excludeBranches: [],
+          reviewDocs: [],
+          diffIgnore: [],
+          diffSummarizeOnly: [],
+          patchBodyBudgetTokens: 5_000,
+        },
+      ],
+      secretSources: {},
+    } as never,
+    {
+      listAttempts: () => [],
+      listWebhooks: () => [],
+      listActiveAttemptsForRepo: () => [storedAttempt],
+      listAttemptsForPullRequest: () => [],
+      getAttempt: () => undefined,
+      updateAttempt: (_id: number, params: Record<string, unknown>) => {
+        updates.push(params);
+        storedAttempt = {
+          ...storedAttempt,
+          ...params,
+        };
+        return storedAttempt;
+      },
+    } as never,
+    {
+      listOpenPullRequests: async () => [],
+      getPullRequest: async () => ({
+        number: 15,
+        title: "Tutor consolidation",
+        url: "https://github.com/krasnoperov/subtitles/pull/15",
+        state: "MERGED",
+        isDraft: false,
+        headSha: "0e987ee9f80ed2b165d41aeb5ea0b32c04dd61dd",
+        headRefName: "feat/tutor",
+        baseRefName: "main",
+        mergedAt: "2026-04-11T22:29:32Z",
+        closedAt: "2026-04-11T22:29:32Z",
+      }),
+    } as never,
+    {} as never,
+    { info() {}, warn() {}, child() { return this; } } as never,
+  );
+
+  await service.triggerReconcile();
+
+  assert.equal(storedAttempt.status, "cancelled");
+  assert.equal(storedAttempt.conclusion, "skipped");
+  assert.match(String(storedAttempt.summary), /merged before the review attempt finished/i);
+  assert.equal(updates.length, 1);
+});
+
 test("sanitizeJsonPayload strips markdown fences", () => {
   assert.equal(sanitizeJsonPayload("```json\n{\"a\":1}\n```"), "{\"a\":1}");
   assert.equal(sanitizeJsonPayload("```\n{\"a\":1}\n```"), "{\"a\":1}");

@@ -71,6 +71,8 @@ export interface PullRequestSummary {
   headRefName: string;
   baseRefName: string;
   authorLogin?: string;
+  mergedAt?: string;
+  closedAt?: string;
 }
 
 export interface PullRequestFile {
