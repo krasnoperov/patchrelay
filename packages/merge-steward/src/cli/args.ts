@@ -70,7 +70,7 @@ export function validateFlags(parsed: ParsedArgs): void {
       assertKnownFlags(parsed, "root", ["repo", "pr"]);
       return;
     case "attach":
-      assertKnownFlags(parsed, "repos", ["base-branch", "required-check", "label", "merge-queue-check-name", "refresh", "json"]);
+      assertKnownFlags(parsed, "repos", ["base-branch", "label", "merge-queue-check-name", "refresh", "json"]);
       return;
     case "repos":
       assertKnownFlags(parsed, "repos", ["json"]);
@@ -83,7 +83,7 @@ export function validateFlags(parsed: ParsedArgs): void {
           assertKnownFlags(parsed, "repo", ["json"]);
           return;
         case "attach":
-          assertKnownFlags(parsed, "repo", ["base-branch", "required-check", "label", "merge-queue-check-name", "refresh", "json"]);
+          assertKnownFlags(parsed, "repo", ["base-branch", "label", "merge-queue-check-name", "refresh", "json"]);
           return;
         default:
           assertKnownFlags(parsed, "repo", []);
@@ -128,11 +128,6 @@ export function validateFlags(parsed: ParsedArgs): void {
     default:
       assertKnownFlags(parsed, "root", []);
   }
-}
-
-export function parseCsvFlag(value: string | boolean | undefined): string[] {
-  if (typeof value !== "string") return [];
-  return value.split(",").map((entry) => entry.trim()).filter(Boolean);
 }
 
 export function parseIntegerFlag(value: string | boolean | undefined, label: string): number | undefined {

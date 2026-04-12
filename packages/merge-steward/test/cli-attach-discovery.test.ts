@@ -106,11 +106,10 @@ test("attach owner/repo auto-discovers repo settings and derives the repo id", a
         const text = stdout.read();
         assert.match(text, /Attached repo api-service for example\/api-service/);
         assert.match(text, /Base branch: trunk/);
-        assert.match(text, /Required checks: lint, test/);
 
         const repoConfig = readFileSync(path.join(baseDir, ".config", "merge-steward", "repos", "api-service.json"), "utf8");
         assert.match(repoConfig, /"baseBranch": "trunk"/);
-        assert.match(repoConfig, /"requiredChecks": \[/);
+        assert.doesNotMatch(repoConfig, /"requiredChecks": \[/);
       },
     );
   } finally {
@@ -119,7 +118,7 @@ test("attach owner/repo auto-discovers repo settings and derives the repo id", a
   }
 });
 
-test("attach --refresh re-discovers required checks for an existing repo", async () => {
+test("attach --refresh re-discovers repo defaults for an existing repo", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "ms-attach-refresh-"));
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (input, init) => {
@@ -154,7 +153,7 @@ test("attach --refresh re-discovers required checks for an existing repo", async
           runCommand: noop,
         });
 
-        await runCli(["attach", "app", "example/repo", "--base-branch", "main", "--required-check", "lint"], {
+        await runCli(["attach", "app", "example/repo", "--base-branch", "main"], {
           stdout: createBufferStream().stream,
           stderr: createBufferStream().stream,
           runCommand: noop,
@@ -167,10 +166,10 @@ test("attach --refresh re-discovers required checks for an existing repo", async
           runCommand: noop,
         });
         assert.equal(code, 0);
-        assert.match(stdout.read(), /Required checks: test/);
+        assert.match(stdout.read(), /Base branch: main/);
 
         const repoConfig = readFileSync(path.join(baseDir, ".config", "merge-steward", "repos", "app.json"), "utf8");
-        assert.match(repoConfig, /"requiredChecks": \[\n    "test"\n  \]/);
+        assert.doesNotMatch(repoConfig, /"requiredChecks": \[/);
       },
     );
   } finally {

@@ -83,7 +83,7 @@ Configure a webhook on the repository pointing to the steward:
 - **Payload URL:** `https://queue.example.com/webhooks/github`
 - **Content type:** `application/json`
 - **Secret:** same as `MERGE_STEWARD_WEBHOOK_SECRET` or the `merge-steward-webhook-secret` systemd credential
-- **Events:** Pull requests, Pull request reviews, Check suites, Pushes
+- **Events:** Pull requests, Pull request reviews, Check suites, Pushes, Branch protection rules, Repository rulesets
 
 Merge Steward now uses one unified multi-repo webhook endpoint and routes by `repository.full_name`.
 
@@ -127,7 +127,7 @@ merge-steward service status
 merge-steward queue status --repo repo
 ```
 
-`attach` now discovers the GitHub default branch and required status checks automatically when GitHub App auth is configured, then stores those values into local repo config. `doctor --repo <id>` compares the stored values to GitHub and warns if base branch or required checks drift.
+`attach` now discovers the GitHub default branch automatically when GitHub App auth is configured. Required checks are taken directly from GitHub branch protection and rulesets at runtime rather than being stored in local repo config. `doctor --repo <id>` reports the live GitHub-required checks for the configured base branch, and the dashboard / `queue status` surfaces show the currently discovered policy so operators can see when GitHub policy changed underneath the queue.
 
 See [packages/merge-steward/README.md](../packages/merge-steward/README.md) for configuration, API reference, watch TUI, and systemd setup.
 

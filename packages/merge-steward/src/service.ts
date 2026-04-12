@@ -2,6 +2,7 @@ import type { Logger } from "pino";
 import type { GitOperations, CIRunner, GitHubPRApi, EvictionReporter, SpeculativeBranchBuilder } from "./interfaces.ts";
 import type { QueueEntry, QueueEntryDetail, IncidentRecord, QueueRuntimeStatus, QueueWatchSnapshot } from "./types.ts";
 import type { StewardConfig } from "./config.ts";
+import type { GitHubPolicyCache, GitHubPolicyRefreshResult, GitHubPolicySnapshot } from "./github-policy.ts";
 import type { QueueStore } from "./store.ts";
 import { MergeStewardRuntime } from "./service-runtime.ts";
 import { MergeStewardQueueCommands } from "./service-queue.ts";
@@ -18,6 +19,7 @@ export class MergeStewardService {
 
   constructor(
     private readonly config: StewardConfig,
+    private readonly policy: GitHubPolicyCache,
     private readonly store: QueueStore,
     private readonly git: GitOperations,
     private readonly ci: CIRunner,
@@ -26,8 +28,8 @@ export class MergeStewardService {
     private readonly specBuilder: SpeculativeBranchBuilder,
     private readonly logger: Logger,
   ) {
-    this.runtime = new MergeStewardRuntime(config, store, git, ci, github, eviction, specBuilder, logger);
-    this.queueCommands = new MergeStewardQueueCommands(config, store, github, specBuilder, logger);
+    this.runtime = new MergeStewardRuntime(config, policy, store, git, ci, github, eviction, specBuilder, logger);
+    this.queueCommands = new MergeStewardQueueCommands(config, policy, store, github, specBuilder, logger);
     this.watchQueries = new MergeStewardWatchQueries(config, store, this.runtime);
   }
 
@@ -115,5 +117,13 @@ export class MergeStewardService {
 
   async triggerReconcile(): Promise<{ started: boolean; runtime: ReturnType<MergeStewardRuntime["getRuntimeStatus"]> }> {
     return await this.runtime.triggerReconcile();
+  }
+
+  getGitHubPolicy(): GitHubPolicySnapshot {
+    return this.policy.getSnapshot();
+  }
+
+  async refreshGitHubPolicyFromWebhook(reason: string): Promise<GitHubPolicyRefreshResult> {
+    return await this.policy.refreshFromWebhook(reason);
   }
 }

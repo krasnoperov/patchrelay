@@ -1,6 +1,7 @@
 import git from "isomorphic-git";
 import { GitSim } from "../src/sim/git-sim.ts";
 import { CISim, type CIRule } from "../src/sim/ci-sim.ts";
+import { GitHubPolicyCache } from "../src/github-policy.ts";
 import { GitHubSim, EvictionReporterSim } from "../src/sim/github-sim.ts";
 import { MemoryStore } from "../src/memory-store.ts";
 import { reconcile } from "../src/reconciler.ts";
@@ -30,6 +31,7 @@ export class Harness {
   readonly githubSim: GitHubSim;
   readonly evictionSim: EvictionReporterSim;
   readonly store: MemoryStore;
+  readonly policy: GitHubPolicyCache;
 
   readonly allEntryIds: Set<string> = new Set();
   readonly mergedPRs: number[] = [];
@@ -60,6 +62,17 @@ export class Harness {
     this.githubSim = new GitHubSim();
     this.evictionSim = new EvictionReporterSim();
     this.store = new MemoryStore();
+    this.policy = new GitHubPolicyCache({
+      repoFullName: "test/repo",
+      initialRequiredChecks: [],
+      logger: { info() {}, warn() {}, error() {}, debug() {}, fatal() {}, trace() {}, child() { return this; } } as any,
+      refreshPolicy: async () => ({
+        defaultBranch: this.baseBranch,
+        branch: this.baseBranch,
+        requiredChecks: [],
+        warnings: [],
+      }),
+    });
 
     this.ciSim.resolveFiles = async (branch: string) => {
       try {
@@ -275,6 +288,7 @@ export class Harness {
       specBuilder: this.gitSim,
       speculativeDepth: this.speculativeDepth,
       flakyRetries: this.flakyRetries,
+      policy: this.policy,
       onEvent: (event: ReconcileEvent) => {
         this.reconcileEvents.push(event);
         if (event.action === "merge_succeeded" || event.action === "merge_external") {

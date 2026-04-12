@@ -33,6 +33,7 @@ export class MergeStewardWatchQueries {
       repoId: this.config.repoId,
       repoFullName: this.config.repoFullName,
       baseBranch: this.config.baseBranch,
+      githubPolicy: this.runtime.getGitHubPolicy(),
       summary: buildQueueSummary(entries),
       runtime: this.runtime.getRuntimeStatus(),
       queueBlock: this.runtime.getCurrentQueueBlock(),

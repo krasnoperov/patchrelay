@@ -386,7 +386,7 @@ test("doctor reports pinned GitHub App installation mode from the running servic
   }
 });
 
-test("doctor warns when local base branch and required checks drift from GitHub", async () => {
+test("doctor reports GitHub base branch and required checks truthfully", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "ms-doctor-drift-"));
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (input, init) => {
@@ -431,7 +431,7 @@ test("doctor warns when local base branch and required checks drift from GitHub"
           stderr: createBufferStream().stream,
           runCommand: noop,
         });
-        await runCli(["attach", "app", "owner/repo", "--base-branch", "release", "--required-check", "lint"], {
+        await runCli(["attach", "app", "owner/repo", "--base-branch", "release"], {
           stdout: createBufferStream().stream,
           stderr: createBufferStream().stream,
           runCommand: noop,
@@ -449,8 +449,8 @@ test("doctor warns when local base branch and required checks drift from GitHub"
         const requiredChecks = result.checks.find((check) => check.scope === "repo:app:github-required-checks");
         assert.equal(branchCheck?.status, "warn");
         assert.match(branchCheck?.message ?? "", /GitHub default branch is main/);
-        assert.equal(requiredChecks?.status, "warn");
-        assert.match(requiredChecks?.message ?? "", /\[lint\].*\[test\]/);
+        assert.equal(requiredChecks?.status, "pass");
+        assert.match(requiredChecks?.message ?? "", /\[test\]/);
       },
     );
   } finally {

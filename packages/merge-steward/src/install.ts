@@ -188,7 +188,6 @@ export async function upsertRepoConfig(options: {
   id: string;
   repoFullName: string;
   baseBranch?: string;
-  requiredChecks?: string[];
   admissionLabel?: string;
   mergeQueueCheckName?: string;
 }): Promise<{
@@ -198,7 +197,6 @@ export async function upsertRepoConfig(options: {
     id: string;
     repoFullName: string;
     baseBranch: string;
-    requiredChecks: string[];
     admissionLabel: string;
     mergeQueueCheckName: string;
     port: number;
@@ -219,7 +217,6 @@ export async function upsertRepoConfig(options: {
   const existing: StewardConfig | undefined = existingRaw
     ? parseConfig(existingRaw, { configPath })
     : undefined;
-  const requiredChecks = [...new Set((options.requiredChecks ?? existing?.requiredChecks ?? []).map((entry) => entry.trim()).filter(Boolean))];
   const baseBranch = options.baseBranch?.trim() || existing?.baseBranch || "main";
   const admissionLabel = options.admissionLabel?.trim() || existing?.admissionLabel || "queue";
   const mergeQueueCheckName = options.mergeQueueCheckName?.trim() || existing?.mergeQueueCheckName || DEFAULT_MERGE_QUEUE_CHECK_NAME;
@@ -235,7 +232,6 @@ export async function upsertRepoConfig(options: {
     maxRetries: existing?.maxRetries ?? 2,
     flakyRetries: existing?.flakyRetries ?? 1,
     speculativeDepth: existing?.speculativeDepth ?? 10,
-    requiredChecks,
     pollIntervalMs: existing?.pollIntervalMs ?? 30_000,
     server: {
       bind: existing?.server.bind ?? (homeConfig.server?.bind ?? "127.0.0.1"),
@@ -269,7 +265,6 @@ export async function upsertRepoConfig(options: {
       id,
       repoFullName,
       baseBranch,
-      requiredChecks,
       admissionLabel,
       mergeQueueCheckName,
       port,

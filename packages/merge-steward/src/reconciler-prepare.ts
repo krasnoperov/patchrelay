@@ -74,7 +74,23 @@ export async function prepareEntry(
         }
         const failingChecks = mainChecks.filter((check) => check.conclusion === "failure");
         const pendingChecks = mainChecks.filter((check) => check.conclusion === "pending");
-        const missingRequiredChecks = getMissingRequiredChecks(ctx.requiredChecks, mainChecks);
+        let missingRequiredChecks = getMissingRequiredChecks(ctx.policy.getRequiredChecks(), mainChecks);
+        if (missingRequiredChecks.length > 0) {
+          try {
+            const refresh = await ctx.policy.refreshOnIssue("main_missing_required_checks");
+            if (refresh.attempted && refresh.changed) {
+              missingRequiredChecks = getMissingRequiredChecks(ctx.policy.getRequiredChecks(), mainChecks);
+              emit(ctx, entry, "policy_changed", {
+                detail: `GitHub required checks changed from [${refresh.previousRequiredChecks.join(", ") || "(none)"}] to [${refresh.requiredChecks.join(", ") || "(none)"}]`,
+              });
+              if (missingRequiredChecks.length === 0 && failingChecks.length === 0 && pendingChecks.length === 0) {
+                return;
+              }
+            }
+          } catch {
+            // Keep using the last known GitHub policy and surface the current block.
+          }
+        }
         emit(ctx, entry, "main_broken", {
           baseSha,
           failingChecks,

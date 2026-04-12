@@ -55,6 +55,16 @@ export async function mergeHead(ctx: ReconcileContext, entry: QueueEntry): Promi
   if (ctx.ci.getMainStatus) {
     const mainStatus = await ctx.ci.getMainStatus(ctx.baseBranch);
     if (mainStatus !== "pass") {
+      try {
+        const refresh = await ctx.policy.refreshOnIssue("main_unhealthy_at_merge");
+        if (refresh.attempted && refresh.changed) {
+          emit(ctx, entry, "policy_changed", {
+            detail: `GitHub required checks changed from [${refresh.previousRequiredChecks.join(", ") || "(none)"}] to [${refresh.requiredChecks.join(", ") || "(none)"}]`,
+          });
+        }
+      } catch {
+        // Keep using cached GitHub policy and pause the queue conservatively.
+      }
       emit(ctx, entry, "main_broken", { detail: "main unhealthy at merge time, re-preparing" });
       ctx.store.transition(entry.id, "preparing_head", { ...CLEAN_CI, ...CLEAN_SPEC }, "main unhealthy at merge time");
       return;
@@ -64,6 +74,20 @@ export async function mergeHead(ctx: ReconcileContext, entry: QueueEntry): Promi
   try {
     await ctx.git.push(entry.specBranch, false, ctx.baseBranch);
   } catch {
+    try {
+      const refresh = await ctx.policy.refreshOnIssue("merge_push_rejected");
+      if (refresh.attempted && refresh.changed) {
+        emit(ctx, entry, "policy_changed", {
+          detail: `GitHub required checks changed from [${refresh.previousRequiredChecks.join(", ") || "(none)"}] to [${refresh.requiredChecks.join(", ") || "(none)"}]`,
+        });
+        ctx.store.transition(entry.id, "preparing_head", { ...CLEAN_CI, ...CLEAN_SPEC }, "GitHub protection changed, re-preparing");
+        const allActive = ctx.store.listActive(ctx.repoId);
+        await invalidateDownstream(ctx, allActive, 0);
+        return;
+      }
+    } catch {
+      // Fall through to the normal push failure handling when policy refresh is unavailable.
+    }
     emit(ctx, entry, "merge_rejected", { detail: "push to main failed" });
     const allActive = ctx.store.listActive(ctx.repoId);
     if (isBudgetExhausted(entry)) {
@@ -90,4 +114,3 @@ export async function mergeHead(ctx: ReconcileContext, entry: QueueEntry): Promi
     /* cosmetic */
   }
 }
-

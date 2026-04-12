@@ -1,5 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { GitHubPolicyCache } from "../../src/github-policy.ts";
 import { normalizeWebhook, processWebhookEvent } from "../../src/webhook-handler.ts";
 import { GitHubSim, EvictionReporterSim } from "../../src/sim/github-sim.ts";
 import { MemoryStore } from "../../src/memory-store.ts";
@@ -20,7 +21,6 @@ const testConfig: StewardConfig = {
   maxRetries: 2,
   flakyRetries: 0,
   speculativeDepth: 1,
-  requiredChecks: [],
   pollIntervalMs: 600_000,
   admissionLabel: "queue",
   mergeQueueCheckName: "merge-steward/queue",
@@ -32,7 +32,14 @@ const testConfig: StewardConfig = {
 
 function createService(store: MemoryStore, githubSim: GitHubSim) {
   return new MergeStewardService(
-    testConfig, store,
+    testConfig,
+    new GitHubPolicyCache({
+      repoFullName: "test/repo",
+      initialRequiredChecks: [],
+      logger: silentLogger,
+      refreshPolicy: async () => ({ defaultBranch: "main", branch: "main", requiredChecks: [], warnings: [] }),
+    }),
+    store,
     new GitSim() as any,
     new CISim(() => "pass") as any,
     githubSim,
@@ -110,6 +117,80 @@ describe("check_suite_completed with empty pull_requests", () => {
     );
 
     assert.strictEqual(store.listAll("test-repo").length, 0);
+  });
+});
+
+describe("policy webhooks", () => {
+  it("normalizes branch protection rule edits into policy_changed events", () => {
+    const event = normalizeWebhook("branch_protection_rule", {
+      action: "edited",
+      rule: { name: "main" },
+    });
+
+    assert.deepStrictEqual(event, {
+      type: "policy_changed",
+      source: "branch_protection_rule",
+      action: "edited",
+      branch: "main",
+    });
+  });
+
+  it("normalizes repository ruleset edits into policy_changed events", () => {
+    const event = normalizeWebhook("repository_ruleset", {
+      action: "edited",
+      repository_ruleset: { name: "Default" },
+    });
+
+    assert.deepStrictEqual(event, {
+      type: "policy_changed",
+      source: "repository_ruleset",
+      action: "edited",
+    });
+  });
+
+  it("ignores unrelated branch protection rule edits for other branches", async () => {
+    let refreshed = 0;
+    let reconciled = 0;
+    const service = {
+      async refreshGitHubPolicyFromWebhook() {
+        refreshed += 1;
+        return {
+          attempted: true,
+          changed: false,
+          previousRequiredChecks: [],
+          requiredChecks: [],
+          fetchedAt: new Date().toISOString(),
+        };
+      },
+      async triggerReconcile() {
+        reconciled += 1;
+        return {
+          started: true,
+          runtime: {
+            tickInProgress: false,
+            lastTickStartedAt: null,
+            lastTickCompletedAt: null,
+            lastTickOutcome: "idle" as const,
+            lastTickError: null,
+          },
+        };
+      },
+    } as unknown as MergeStewardService;
+
+    await processWebhookEvent(
+      {
+        type: "policy_changed",
+        source: "branch_protection_rule",
+        action: "edited",
+        branch: "release",
+      },
+      service,
+      { admissionLabel: "queue", baseBranch: "main", repoFullName: "test/repo" },
+      silentLogger,
+    );
+
+    assert.strictEqual(refreshed, 0);
+    assert.strictEqual(reconciled, 0);
   });
 });
 

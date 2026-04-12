@@ -1,5 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { GitHubPolicyCache } from "../../src/github-policy.ts";
 import { createHarness, type SimPR } from "../harness.ts";
 
 describe("PR update (force-push) handling", () => {
@@ -71,7 +72,6 @@ describe("PR update (force-push) handling", () => {
         gitBin: "git",
         maxRetries: 3,
         flakyRetries: 0,
-        requiredChecks: [],
         pollIntervalMs: 60_000,
         admissionLabel: "queue",
         mergeQueueCheckName: "merge-steward/queue",
@@ -81,6 +81,12 @@ describe("PR update (force-push) handling", () => {
         logging: { level: "silent" },
         speculativeDepth: 1,
       },
+      new GitHubPolicyCache({
+        repoFullName: "test/repo",
+        initialRequiredChecks: [],
+        logger: (await import("pino")).default({ level: "silent" }),
+        refreshPolicy: async () => ({ defaultBranch: "main", branch: "main", requiredChecks: [], warnings: [] }),
+      }),
       h.store,
       h.gitSim as any,
       h.ciSim as any,
