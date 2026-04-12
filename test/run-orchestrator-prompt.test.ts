@@ -46,6 +46,8 @@ test("implementation prompt always appends publication requirements even when th
     assert.match(prompt, /## Task Objective/);
     assert.match(prompt, /## Scope Discipline/);
     assert.match(prompt, /Stay inside the delegated task/);
+    assert.match(prompt, /implementation goal is to leave the branch review-ready, not merely locally working/);
+    assert.match(prompt, /If a narrow patch fixes the immediate symptom but leaves the same underlying risk elsewhere in the changed flow, keep going/);
     assert.match(prompt, /### Likely Review Invariants/);
     assert.match(prompt, /## Publication Requirements/);
     assert.match(prompt, /commit them, push the issue branch, and open or update the PR before stopping/);
@@ -186,6 +188,8 @@ test("review_fix prompt embeds structured inline review context", () => {
     assert.match(prompt, /Blank totals should not produce a leader\./);
     assert.match(prompt, /Goal: restore review readiness on the existing PR branch, not merely patch the latest cited line\./);
     assert.match(prompt, /Treat the reviewer comments as evidence of what still makes the branch unready\./);
+    assert.match(prompt, /1\. Start with the structured review context below, then inspect the PR's inline review comments with `gh api repos\/<owner>\/<repo>\/pulls\/<pr>\/comments\?per_page=100`/);
+    assert.match(prompt, /2\. Inspect the current diff with `review-quill diff` when available so you see the reviewer-oriented diff view from this checkout; use `git diff origin\/main` as a fallback/);
     assert.match(prompt, /Infer the underlying concern or invariant behind the review feedback\./);
     assert.match(prompt, /Only finish when you believe the branch is review-ready again\./);
     assert.match(prompt, /GitHub review happens after the new head is pushed and CI is green/);
