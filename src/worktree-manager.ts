@@ -63,7 +63,7 @@ export class WorktreeManager {
     await execCommand(gitBin, ["-C", worktreePath, "reset", "--hard", "HEAD"], { timeoutMs: 30_000 });
     await execCommand(gitBin, ["-C", worktreePath, "clean", "-fd"], { timeoutMs: 30_000 });
 
-    const checkoutTarget = hasRemoteBranch ? `origin/${branchName}` : branchName;
+    const checkoutTarget = hasRemoteBranch ? `origin/${branchName}` : "HEAD";
     const checkoutResult = await execCommand(
       gitBin,
       ["-C", worktreePath, "checkout", "--ignore-other-worktrees", "-B", branchName, checkoutTarget],
