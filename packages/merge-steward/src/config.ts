@@ -51,9 +51,6 @@ export const stewardConfigSchema = z.object({
 });
 
 export type StewardConfig = z.infer<typeof stewardConfigSchema>;
-export interface RuntimeStewardConfig extends StewardConfig {
-  githubRequiredChecks: string[];
-}
 
 function readEnvFile(filePath: string): Record<string, string> {
   if (!existsSync(filePath)) {

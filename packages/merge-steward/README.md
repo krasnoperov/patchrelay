@@ -58,7 +58,7 @@ Add one repo-scoped steward instance:
 merge-steward attach owner/repo
 ```
 
-That writes `~/.config/merge-steward/repos/<derived-id>.json`. By default, `attach` derives the repo id from the GitHub repo name, discovers the default branch and required status checks from GitHub, and stores the discovered values into local config.
+That writes `~/.config/merge-steward/repos/<derived-id>.json`. By default, `attach` derives the repo id from the GitHub repo name and discovers the default branch from GitHub. Required checks are not stored locally; the running steward reads GitHub branch protection as the source of truth.
 
 If you also use `review-quill`, its `review-quill/verdict` check can be added to
 the repository's required checks if you want machine review to be part of the
@@ -145,7 +145,6 @@ The CLI is a thin local client and does not need direct access to secret credent
   "clonePath": "~/.local/state/merge-steward/repos/app",
   "maxRetries": 2,
   "flakyRetries": 1,
-  "requiredChecks": ["test", "lint"],
   "pollIntervalMs": 30000,
   "admissionLabel": "queue",
   "mergeQueueCheckName": "merge-steward/queue",
@@ -167,7 +166,6 @@ The CLI is a thin local client and does not need direct access to secret credent
 | `clonePath` | Local clone directory (created on first run) |
 | `maxRetries` | Rebase/CI retry attempts before eviction |
 | `flakyRetries` | CI-only retries before counting toward maxRetries |
-| `requiredChecks` | Check names that must pass for admission (empty = any green) |
 | `pollIntervalMs` | Reconciliation loop interval |
 | `admissionLabel` | Optional GitHub label used as a manual/operator admission nudge |
 | `mergeQueueCheckName` | GitHub check run name emitted on eviction |
@@ -176,9 +174,8 @@ The CLI is a thin local client and does not need direct access to secret credent
 
 - `repoId` defaults to the repo name portion of `owner/repo`
 - `baseBranch` defaults to the GitHub default branch
-- `requiredChecks` default to the active `required_status_checks` branch rules for the configured base branch
 
-Pass `--refresh` to re-discover base branch and required checks for an existing repo config. `merge-steward doctor --repo <id>` compares the stored config to GitHub and warns on drift.
+Pass `--refresh` to re-discover the base branch for an existing repo config. `merge-steward doctor --repo <id>` reports the GitHub-required checks currently enforced for that branch.
 
 ### GitHub Webhook
 
@@ -187,7 +184,7 @@ Configure one webhook on the repository pointing to the steward:
 - **Payload URL:** `https://queue.example.com/webhooks/github`
 - **Content type:** `application/json`
 - **Secret:** same as `MERGE_STEWARD_WEBHOOK_SECRET` or the `merge-steward-webhook-secret` systemd credential
-- **Events:** Pull requests, Pull request reviews, Check suites, Pushes
+- **Events:** Pull requests, Pull request reviews, Check suites, Pushes, Branch protection rules, Repository rulesets
 
 The steward uses a single multi-repo webhook endpoint and routes events by `repository.full_name`.
 
@@ -197,9 +194,10 @@ It can wake up on:
 - review approvals
 - successful check-suite completion
 - pushes to the base branch
+- branch protection edits
+- repository ruleset edits
 
-Even without a webhook, startup and periodic reconcile will still scan open PRs
-and admit anything that already satisfies the gate.
+On startup, the steward reconciles GitHub protection for every attached repo. Policy changes are normally learned from GitHub policy webhooks. If a merge is rejected unexpectedly, the steward performs a guarded one-shot policy refresh to recover from a missed webhook without polling GitHub continuously.
 
 ### Running
 

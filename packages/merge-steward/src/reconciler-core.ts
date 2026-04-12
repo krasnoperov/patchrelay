@@ -1,4 +1,5 @@
 import type { GitOperations, CIRunner, GitHubPRApi, EvictionReporter, SpeculativeBranchBuilder } from "./interfaces.ts";
+import type { GitHubPolicyCache } from "./github-policy.ts";
 import type { QueueStore } from "./store.ts";
 import type { QueueEntry, ReconcileEvent, ReconcileAction } from "./types.ts";
 
@@ -6,7 +7,6 @@ export interface ReconcileContext {
   store: QueueStore;
   repoId: string;
   baseBranch: string;
-  requiredChecks: string[];
   remotePrefix: string;
   git: GitOperations;
   ci: CIRunner;
@@ -15,6 +15,7 @@ export interface ReconcileContext {
   specBuilder: SpeculativeBranchBuilder;
   speculativeDepth: number;
   flakyRetries: number;
+  policy: GitHubPolicyCache;
   onEvent: (event: ReconcileEvent) => void;
 }
 

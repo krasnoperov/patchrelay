@@ -4,10 +4,11 @@ import { createHmac } from "node:crypto";
 import { MemoryStore } from "../../src/memory-store.ts";
 import { GitSim } from "../../src/sim/git-sim.ts";
 import { CISim } from "../../src/sim/ci-sim.ts";
+import { GitHubPolicyCache } from "../../src/github-policy.ts";
 import { GitHubSim, EvictionReporterSim } from "../../src/sim/github-sim.ts";
 import { MergeStewardService } from "../../src/service.ts";
 import { buildMultiRepoHttpServer } from "../../src/http-multi.ts";
-import type { RuntimeStewardConfig } from "../../src/config.ts";
+import type { StewardConfig } from "../../src/config.ts";
 import pino from "pino";
 import { SqliteStore } from "../../src/db/sqlite-store.ts";
 
@@ -33,7 +34,7 @@ const githubAdmin = {
   },
 };
 
-const config: RuntimeStewardConfig = {
+const config: StewardConfig = {
   repoId: "test-repo",
   repoFullName: "test/repo",
   baseBranch: "main",
@@ -41,7 +42,6 @@ const config: RuntimeStewardConfig = {
   gitBin: "git",
   maxRetries: 2,
   flakyRetries: 1,
-  githubRequiredChecks: [],
   pollIntervalMs: 60_000,
   admissionLabel: "queue",
   mergeQueueCheckName: "merge-steward/queue",
@@ -54,6 +54,20 @@ const config: RuntimeStewardConfig = {
 
 function sign(body: string): string {
   return "sha256=" + createHmac("sha256", WEBHOOK_SECRET).update(body).digest("hex");
+}
+
+function createPolicy(requiredChecks: string[] = []) {
+  return new GitHubPolicyCache({
+    repoFullName: config.repoFullName,
+    initialRequiredChecks: requiredChecks,
+    logger: pino({ level: "silent" }),
+    refreshPolicy: async () => ({
+      defaultBranch: config.baseBranch,
+      branch: config.baseBranch,
+      requiredChecks,
+      warnings: [],
+    }),
+  });
 }
 
 function makeApp(service: MergeStewardService) {
@@ -82,7 +96,7 @@ describe("webhook admission integration", () => {
 
     const gitSim = new GitSim() as any;
     const service = new MergeStewardService(
-      config, store, gitSim, new CISim(() => "pass") as any,
+      config, createPolicy(), store, gitSim, new CISim(() => "pass") as any,
       githubSim, evictionSim, gitSim, logger,
     );
 
@@ -146,7 +160,7 @@ describe("webhook admission integration", () => {
     const logger = pino({ level: "silent" });
 
     const service = new MergeStewardService(
-      config, store, new GitSim() as any, new CISim(() => "pass") as any,
+      config, createPolicy(), store, new GitSim() as any, new CISim(() => "pass") as any,
       new GitHubSim(), new EvictionReporterSim(), new GitSim() as any, logger,
     );
 
@@ -172,7 +186,7 @@ describe("webhook admission integration", () => {
     githubSim.setChecks(99, [{ name: "checks", conclusion: "success" }]);
 
     const service = new MergeStewardService(
-      config, store, new GitSim() as any, new CISim(() => "pass") as any,
+      config, createPolicy(), store, new GitSim() as any, new CISim(() => "pass") as any,
       githubSim, new EvictionReporterSim(), new GitSim() as any, logger,
     );
 
@@ -209,7 +223,8 @@ describe("webhook admission integration", () => {
     githubSim.setChecks(109, [{ name: "Verify", conclusion: "success" }]);
 
     const service = new MergeStewardService(
-      { ...config, githubRequiredChecks: ["verify"] },
+      config,
+      createPolicy(["verify"]),
       store,
       new GitSim() as any,
       new CISim(() => "pass") as any,
@@ -251,7 +266,7 @@ describe("webhook admission integration", () => {
     githubSim.addPR({ number: 7, branch: "feat-watch", headSha: "sha-watch", reviewApproved: true, labels: ["queue"] });
 
     const service = new MergeStewardService(
-      config, store, new GitSim() as any, new CISim(() => "pass") as any,
+      config, createPolicy(), store, new GitSim() as any, new CISim(() => "pass") as any,
       githubSim, new EvictionReporterSim(), new GitSim() as any, logger,
     );
 
@@ -338,6 +353,7 @@ describe("webhook admission integration", () => {
 
     const service = new MergeStewardService(
       config,
+      createPolicy(["Tests"]),
       store,
       git as any,
       ci as any,
@@ -388,7 +404,7 @@ describe("webhook admission integration", () => {
     const logger = pino({ level: "silent" });
 
     const service = new MergeStewardService(
-      config, store, new GitSim() as any, new CISim(() => "pass") as any,
+      config, createPolicy(), store, new GitSim() as any, new CISim(() => "pass") as any,
       new GitHubSim(), new EvictionReporterSim(), new GitSim() as any, logger,
     );
 
@@ -421,7 +437,7 @@ describe("webhook admission integration", () => {
     githubSim.setChecks(123, [{ name: "checks", conclusion: "success" }]);
 
     const service = new MergeStewardService(
-      config, store, new GitSim() as any, new CISim(() => "pass") as any,
+      config, createPolicy(), store, new GitSim() as any, new CISim(() => "pass") as any,
       githubSim, new EvictionReporterSim(), new GitSim() as any, logger,
     );
 
@@ -434,5 +450,46 @@ describe("webhook admission integration", () => {
     } finally {
       await service.stop();
     }
+  });
+
+  it("refreshes GitHub policy when a branch protection webhook arrives", async () => {
+    const store = new MemoryStore();
+    const logger = pino({ level: "silent" });
+    let requiredChecks = ["Checks"];
+    const policy = new GitHubPolicyCache({
+      repoFullName: config.repoFullName,
+      initialRequiredChecks: requiredChecks,
+      logger,
+      refreshPolicy: async () => ({
+        defaultBranch: config.baseBranch,
+        branch: config.baseBranch,
+        requiredChecks,
+        warnings: [],
+      }),
+    });
+    const service = new MergeStewardService(
+      config, policy, store, new GitSim() as any, new CISim(() => "pass") as any,
+      new GitHubSim(), new EvictionReporterSim(), new GitSim() as any, logger,
+    );
+
+    const app = await makeApp(service);
+    const address = await app.listen({ port: 0 });
+    after(async () => { await app.close(); });
+
+    requiredChecks = ["Deploy"];
+    const body = JSON.stringify({
+      action: "edited",
+      repository: { full_name: "test/repo" },
+      rule: { name: "main" },
+    });
+
+    const response = await fetch(`${address}/webhooks/github`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-github-event": "branch_protection_rule", "x-hub-signature-256": sign(body) },
+      body,
+    });
+
+    assert.strictEqual(response.status, 200);
+    assert.deepStrictEqual(service.getGitHubPolicy().requiredChecks, ["Deploy"]);
   });
 });

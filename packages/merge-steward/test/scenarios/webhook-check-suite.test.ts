@@ -1,5 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { GitHubPolicyCache } from "../../src/github-policy.ts";
 import { normalizeWebhook, processWebhookEvent } from "../../src/webhook-handler.ts";
 import { GitHubSim, EvictionReporterSim } from "../../src/sim/github-sim.ts";
 import { MemoryStore } from "../../src/memory-store.ts";
@@ -7,11 +8,11 @@ import { MergeStewardService } from "../../src/service.ts";
 import { GitSim } from "../../src/sim/git-sim.ts";
 import { CISim } from "../../src/sim/ci-sim.ts";
 import pino from "pino";
-import type { RuntimeStewardConfig } from "../../src/config.ts";
+import type { StewardConfig } from "../../src/config.ts";
 
 const silentLogger = pino({ level: "silent" });
 
-const testConfig: RuntimeStewardConfig = {
+const testConfig: StewardConfig = {
   repoId: "test-repo",
   repoFullName: "test/repo",
   baseBranch: "main",
@@ -20,7 +21,6 @@ const testConfig: RuntimeStewardConfig = {
   maxRetries: 2,
   flakyRetries: 0,
   speculativeDepth: 1,
-  githubRequiredChecks: [],
   pollIntervalMs: 600_000,
   admissionLabel: "queue",
   mergeQueueCheckName: "merge-steward/queue",
@@ -32,7 +32,14 @@ const testConfig: RuntimeStewardConfig = {
 
 function createService(store: MemoryStore, githubSim: GitHubSim) {
   return new MergeStewardService(
-    testConfig, store,
+    testConfig,
+    new GitHubPolicyCache({
+      repoFullName: "test/repo",
+      initialRequiredChecks: [],
+      logger: silentLogger,
+      refreshPolicy: async () => ({ defaultBranch: "main", branch: "main", requiredChecks: [], warnings: [] }),
+    }),
+    store,
     new GitSim() as any,
     new CISim(() => "pass") as any,
     githubSim,
@@ -110,6 +117,34 @@ describe("check_suite_completed with empty pull_requests", () => {
     );
 
     assert.strictEqual(store.listAll("test-repo").length, 0);
+  });
+});
+
+describe("policy webhooks", () => {
+  it("normalizes branch protection rule edits into policy_changed events", () => {
+    const event = normalizeWebhook("branch_protection_rule", {
+      action: "edited",
+      rule: { name: "main" },
+    });
+
+    assert.deepStrictEqual(event, {
+      type: "policy_changed",
+      source: "branch_protection_rule",
+      action: "edited",
+    });
+  });
+
+  it("normalizes repository ruleset edits into policy_changed events", () => {
+    const event = normalizeWebhook("repository_ruleset", {
+      action: "edited",
+      repository_ruleset: { name: "Default" },
+    });
+
+    assert.deepStrictEqual(event, {
+      type: "policy_changed",
+      source: "repository_ruleset",
+      action: "edited",
+    });
   });
 });
 

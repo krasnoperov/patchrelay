@@ -15,7 +15,7 @@ function normalizeCheckName(name: string): string {
 export class GitHubActionsRunner implements CIRunner {
   constructor(
     private readonly repoFullName: string,
-    private readonly requiredChecks: string[] = [],
+    private readonly getRequiredChecks: () => string[] = () => [],
   ) {}
 
   async triggerRun(_branch: string, sha: string): Promise<string> {
@@ -43,8 +43,9 @@ export class GitHubActionsRunner implements CIRunner {
 
       if (checkRuns.length === 0) return "pending";
 
-      const normalizedRequired = this.requiredChecks.map(normalizeCheckName);
-      const relevant = this.requiredChecks.length > 0
+      const requiredChecks = this.getRequiredChecks();
+      const normalizedRequired = requiredChecks.map(normalizeCheckName);
+      const relevant = requiredChecks.length > 0
         ? checkRuns.filter((c) => normalizedRequired.includes(normalizeCheckName(c.name)))
         : checkRuns;
 

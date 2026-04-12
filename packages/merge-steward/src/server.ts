@@ -1,7 +1,8 @@
 import pino from "pino";
-import type { RuntimeStewardConfig, StewardConfig } from "./config.ts";
+import type { StewardConfig } from "./config.ts";
 import { SqliteStore } from "./db/sqlite-store.ts";
 import { CloneManager } from "./github/clone-manager.ts";
+import { GitHubPolicyCache } from "./github-policy.ts";
 import { ShellGitOperations, type BotIdentity } from "./github/shell-git.ts";
 import { GitHubActionsRunner } from "./github/actions-runner.ts";
 import { GitHubPRClient } from "./github/pr-client.ts";
@@ -20,12 +21,17 @@ import type { Logger } from "pino";
 import type { ServiceGitHubAuthStatus, ServiceGitHubRepoAccessResponse } from "./admin-types.ts";
 
 export interface RepoInstance {
-  config: RuntimeStewardConfig;
+  config: StewardConfig;
   service: MergeStewardService;
   store: SqliteStore;
 }
 
-async function createRepoInstance(config: RuntimeStewardConfig, logger: Logger, botIdentity?: BotIdentity): Promise<RepoInstance> {
+async function createRepoInstance(
+  config: StewardConfig,
+  policy: GitHubPolicyCache,
+  logger: Logger,
+  botIdentity?: BotIdentity,
+): Promise<RepoInstance> {
   const repoUrl = `https://github.com/${config.repoFullName}.git`;
   const clone = new CloneManager(config.clonePath, repoUrl, config.repoFullName, config.gitBin, logger);
   await clone.ensureClone();
@@ -35,7 +41,7 @@ async function createRepoInstance(config: RuntimeStewardConfig, logger: Logger, 
   const git = new ShellGitOperations(clone.path, config.repoFullName, config.gitBin);
   if (botIdentity) git.setBotIdentity(botIdentity);
   if (config.autoResolvePatterns.length > 0) git.setAutoResolvePatterns(config.autoResolvePatterns);
-  const ci = new GitHubActionsRunner(config.repoFullName, config.githubRequiredChecks);
+  const ci = new GitHubActionsRunner(config.repoFullName, () => policy.getRequiredChecks());
   const github = new GitHubPRClient(config.repoFullName);
   const eviction = new GitHubCheckRunReporter(
     config.repoFullName,
@@ -45,7 +51,7 @@ async function createRepoInstance(config: RuntimeStewardConfig, logger: Logger, 
     config.admissionLabel,
     config.mergeQueueCheckName,
   );
-  const service = new MergeStewardService(config, store, git, ci, github, eviction, git, logger);
+  const service = new MergeStewardService(config, policy, store, git, ci, github, eviction, git, logger);
 
   return { config, service, store };
 }
@@ -171,16 +177,30 @@ export async function startMultiServer(): Promise<void> {
     const discovery = githubAuth.mode === "app"
       ? await discoverRepoSettings(githubAuth.credentials, config.repoFullName, { baseBranch: config.baseBranch })
       : { defaultBranch: config.baseBranch, branch: config.baseBranch, requiredChecks: [], warnings: [] };
-    const runtimeConfig: RuntimeStewardConfig = {
-      ...config,
-      githubRequiredChecks: discovery.requiredChecks,
-    };
+    const policy = new GitHubPolicyCache({
+      repoFullName: config.repoFullName,
+      initialRequiredChecks: discovery.requiredChecks,
+      logger: logger.child({ repoId: config.repoId, component: "github-policy" }),
+      refreshPolicy: async () => {
+        if (githubAuth.mode !== "app") {
+          return {
+            defaultBranch: config.baseBranch,
+            branch: config.baseBranch,
+            requiredChecks: [],
+            warnings: [],
+          };
+        }
+        return await discoverRepoSettings(githubAuth.credentials, config.repoFullName, {
+          baseBranch: config.baseBranch,
+        });
+      },
+    });
     logger.info({
       repoId: config.repoId,
       repoFullName: config.repoFullName,
-      githubRequiredChecks: runtimeConfig.githubRequiredChecks,
+      githubRequiredChecks: policy.getRequiredChecks(),
     }, "Resolved GitHub protection requirements");
-    const instance = await createRepoInstance(runtimeConfig, logger.child({ repoId: config.repoId }), botIdentity);
+    const instance = await createRepoInstance(config, policy, logger.child({ repoId: config.repoId }), botIdentity);
     instances.set(config.repoFullName, instance);
   }
 

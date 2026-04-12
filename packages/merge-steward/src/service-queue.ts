@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Logger } from "pino";
-import type { RuntimeStewardConfig } from "./config.ts";
+import type { StewardConfig } from "./config.ts";
+import type { GitHubPolicyCache } from "./github-policy.ts";
 import { INVALIDATION_PATCH, selectDownstream } from "./invalidation.ts";
 import type { GitHubPRApi, SpeculativeBranchBuilder } from "./interfaces.ts";
 import type { QueueStore } from "./store.ts";
@@ -17,7 +18,8 @@ function matchGlob(pattern: string, value: string): boolean {
 
 export class MergeStewardQueueCommands {
   constructor(
-    private readonly config: RuntimeStewardConfig,
+    private readonly config: StewardConfig,
+    private readonly policy: GitHubPolicyCache,
     private readonly store: QueueStore,
     private readonly github: GitHubPRApi,
     private readonly specBuilder: SpeculativeBranchBuilder,
@@ -118,8 +120,9 @@ export class MergeStewardQueueCommands {
       }
 
       const checks = await this.github.listChecks(prNumber);
-      if (this.config.githubRequiredChecks.length > 0) {
-        const required = new Set(this.config.githubRequiredChecks.map(normalizeCheckName));
+      const requiredChecks = this.policy.getRequiredChecks();
+      if (requiredChecks.length > 0) {
+        const required = new Set(requiredChecks.map(normalizeCheckName));
         const passing = checks.filter((c) => c.conclusion === "success" && required.has(normalizeCheckName(c.name)));
         if (passing.length < required.size) {
           this.logger.debug(
@@ -128,7 +131,7 @@ export class MergeStewardQueueCommands {
               passing: passing.length,
               required: required.size,
               checkNames: checks.map((check) => check.name),
-              requiredChecks: this.config.githubRequiredChecks,
+              requiredChecks,
             },
             "Required checks not all green",
           );

@@ -14,6 +14,7 @@ export type StewardWebhookEvent =
   | { type: "pr_synchronize"; prNumber: number; branch: string; headSha: string }
   | { type: "review_approved"; prNumber: number; branch: string; headSha: string }
   | { type: "check_suite_completed"; prNumber: number | null; branch: string; headSha: string; conclusion: string }
+  | { type: "policy_changed"; source: "branch_protection_rule" | "repository_ruleset"; action: string }
   | { type: "push"; ref: string; headSha: string };
 
 /**
@@ -108,6 +109,18 @@ export function normalizeWebhook(
       };
     }
 
+    case "branch_protection_rule": {
+      const action = String(payload.action ?? "");
+      if (!["created", "edited", "deleted"].includes(action)) return undefined;
+      return { type: "policy_changed", source: "branch_protection_rule", action };
+    }
+
+    case "repository_ruleset": {
+      const action = String(payload.action ?? "");
+      if (!["created", "edited", "deleted"].includes(action)) return undefined;
+      return { type: "policy_changed", source: "repository_ruleset", action };
+    }
+
     default:
       return undefined;
   }
@@ -178,6 +191,26 @@ export async function processWebhookEvent(
       // on the next tick (non-spinning retry gate checks baseSha).
       if (event.ref === `refs/heads/${config.baseBranch}`) {
         logger.debug("Base branch pushed, reconciler will pick up new base");
+      }
+      break;
+    }
+
+    case "policy_changed": {
+      try {
+        const refresh = await service.refreshGitHubPolicyFromWebhook(`${event.source}:${event.action}`);
+        logger.info({
+          source: event.source,
+          action: event.action,
+          changed: refresh.changed,
+          requiredChecks: refresh.requiredChecks,
+        }, "GitHub protection policy webhook processed");
+        await service.triggerReconcile();
+      } catch (error) {
+        logger.warn({
+          source: event.source,
+          action: event.action,
+          error: error instanceof Error ? error.message : String(error),
+        }, "GitHub protection policy webhook refresh failed");
       }
       break;
     }

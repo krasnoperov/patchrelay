@@ -48,7 +48,7 @@ describe("GitHubActionsRunner.getStatus", () => {
     chmodSync(ghPath, 0o755);
     process.env.PATH = `${baseDir}${path.delimiter}${prevPath ?? ""}`;
     process.env.GH_CHECKS_MAP = JSON.stringify(checksMap);
-    return new GitHubActionsRunner("owner/repo", ["Tests"]);
+    return new GitHubActionsRunner("owner/repo", () => ["Tests"]);
   }
 
   it("reports pass when required check succeeds", async () => {
@@ -110,14 +110,14 @@ describe("GitHubActionsRunner.getStatus", () => {
     process.env.GH_CHECKS_MAP = JSON.stringify({
       abc123: [{ name: "Verify", status: "completed", conclusion: "success" }],
     });
-    const runner = new GitHubActionsRunner("owner/repo", ["verify"]);
+    const runner = new GitHubActionsRunner("owner/repo", () => ["verify"]);
     assert.strictEqual(await runner.getStatus("sha:abc123"), "pass");
   });
 
   it("fails when gate job succeeds but underlying check is skipped (MAF-49 scenario)", async () => {
     // This reproduces the exact bug: "Tests" gate job succeeds, but the
     // actual "Build & UI Tests" job was skipped on the spec branch.
-    const runner = new GitHubActionsRunner("owner/repo", ["Tests", "Build & UI Tests"]);
+    const runner = new GitHubActionsRunner("owner/repo", () => ["Tests", "Build & UI Tests"]);
     const ghPath = path.join(baseDir, "gh");
     writeFileSync(ghPath, buildGhStub({
       abc123: [

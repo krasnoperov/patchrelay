@@ -127,7 +127,7 @@ merge-steward service status
 merge-steward queue status --repo repo
 ```
 
-`attach` now discovers the GitHub default branch and required status checks automatically when GitHub App auth is configured, then stores those values into local repo config. `doctor --repo <id>` compares the stored values to GitHub and warns if base branch or required checks drift.
+`attach` now discovers the GitHub default branch automatically when GitHub App auth is configured. Required checks are taken directly from GitHub branch protection and rulesets at runtime rather than being stored in local repo config. `doctor --repo <id>` reports the live GitHub-required checks for the configured base branch.
 
 See [packages/merge-steward/README.md](../packages/merge-steward/README.md) for configuration, API reference, watch TUI, and systemd setup.
 

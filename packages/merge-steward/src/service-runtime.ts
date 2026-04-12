@@ -2,7 +2,8 @@ import type { Logger } from "pino";
 import type { GitOperations, CIRunner, GitHubPRApi, EvictionReporter, SpeculativeBranchBuilder } from "./interfaces.ts";
 import type { QueueStore } from "./store.ts";
 import type { CheckResult, QueueBlockState, QueueRuntimeStatus, ReconcileEvent } from "./types.ts";
-import type { RuntimeStewardConfig } from "./config.ts";
+import type { StewardConfig } from "./config.ts";
+import type { GitHubPolicyCache } from "./github-policy.ts";
 import { reconcile } from "./reconciler.ts";
 
 export class MergeStewardRuntime {
@@ -15,7 +16,8 @@ export class MergeStewardRuntime {
   private currentQueueBlock: QueueBlockState | null = null;
 
   constructor(
-    private readonly config: RuntimeStewardConfig,
+    private readonly config: StewardConfig,
+    private readonly policy: GitHubPolicyCache,
     private readonly store: QueueStore,
     private readonly git: GitOperations,
     private readonly ci: CIRunner,
@@ -84,7 +86,6 @@ export class MergeStewardRuntime {
         store: this.store,
         repoId: this.config.repoId,
         baseBranch: this.config.baseBranch,
-        requiredChecks: this.config.githubRequiredChecks,
         remotePrefix: "origin/",
         git: this.git,
         ci: this.ci,
@@ -93,6 +94,7 @@ export class MergeStewardRuntime {
         speculativeDepth: this.config.speculativeDepth,
         eviction: this.eviction,
         flakyRetries: this.config.flakyRetries,
+        policy: this.policy,
         onEvent: (event) => {
           const isWarn = event.action === "evicted" || event.action === "spec_build_conflict"
             || event.action === "ci_failed"
@@ -162,10 +164,11 @@ export class MergeStewardRuntime {
   }
 
   private getMissingRequiredChecks(checks: CheckResult[]): string[] {
-    if (this.config.githubRequiredChecks.length === 0) {
+    const requiredChecks = this.policy.getRequiredChecks();
+    if (requiredChecks.length === 0) {
       return [];
     }
     const available = new Set(checks.map((check) => check.name.trim().toLowerCase()).filter(Boolean));
-    return this.config.githubRequiredChecks.filter((check) => !available.has(check.trim().toLowerCase()));
+    return requiredChecks.filter((check) => !available.has(check.trim().toLowerCase()));
   }
 }

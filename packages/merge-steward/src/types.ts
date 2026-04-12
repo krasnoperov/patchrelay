@@ -216,6 +216,7 @@ export type ReconcileAction =
   | "merge_succeeded"
   | "merge_rejected"
   | "merge_external"      // already merged outside queue
+  | "policy_changed"      // GitHub branch protection changed
   | "evicted"
   | "invalidated"         // downstream entry reset due to base change
   | "retry_gated"         // non-spinning, waiting for base change

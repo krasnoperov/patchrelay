@@ -4,10 +4,11 @@ import { createHmac } from "node:crypto";
 import { MemoryStore } from "../../src/memory-store.ts";
 import { GitSim } from "../../src/sim/git-sim.ts";
 import { CISim } from "../../src/sim/ci-sim.ts";
+import { GitHubPolicyCache } from "../../src/github-policy.ts";
 import { GitHubSim, EvictionReporterSim } from "../../src/sim/github-sim.ts";
 import { MergeStewardService } from "../../src/service.ts";
 import { buildMultiRepoHttpServer } from "../../src/http-multi.ts";
-import type { RuntimeStewardConfig } from "../../src/config.ts";
+import type { StewardConfig } from "../../src/config.ts";
 import pino from "pino";
 
 const WEBHOOK_SECRET = "multi-repo-test-secret";
@@ -33,7 +34,7 @@ const githubAdmin = {
   },
 };
 
-function makeConfig(repoId: string, repoFullName: string): RuntimeStewardConfig {
+function makeConfig(repoId: string, repoFullName: string): StewardConfig {
   return {
     repoId,
     repoFullName,
@@ -42,7 +43,6 @@ function makeConfig(repoId: string, repoFullName: string): RuntimeStewardConfig 
     gitBin: "git",
     maxRetries: 2,
     flakyRetries: 0,
-    githubRequiredChecks: ["ci"],
     pollIntervalMs: 60_000,
     admissionLabel: "queue",
     mergeQueueCheckName: "merge-steward/queue",
@@ -60,6 +60,12 @@ function makeServiceAndConfig(repoId: string, repoFullName: string) {
   const githubSim = new GitHubSim();
   const service = new MergeStewardService(
     config,
+    new GitHubPolicyCache({
+      repoFullName,
+      initialRequiredChecks: ["ci"],
+      logger,
+      refreshPolicy: async () => ({ defaultBranch: "main", branch: "main", requiredChecks: ["ci"], warnings: [] }),
+    }),
     store,
     new GitSim() as any,
     new CISim(() => "pass") as any,
