@@ -66,7 +66,7 @@ export class WorktreeManager {
     const checkoutTarget = hasRemoteBranch ? `origin/${branchName}` : branchName;
     const checkoutResult = await execCommand(
       gitBin,
-      ["-C", worktreePath, "checkout", "-B", branchName, checkoutTarget],
+      ["-C", worktreePath, "checkout", "--ignore-other-worktrees", "-B", branchName, checkoutTarget],
       { timeoutMs: 30_000 },
     );
     if (checkoutResult.exitCode !== 0) {
@@ -125,12 +125,21 @@ export class WorktreeManager {
     // Fetch latest main so the branch forks from a clean, up-to-date base.
     // This prevents branch contamination when local HEAD has drifted.
     // freshenWorktree in run-orchestrator acts as a secondary safety net.
-    await execCommand(this.config.runner.gitBin, ["-C", repoPath, "fetch", "origin", "main"], {
+    const fetchResult = await execCommand(this.config.runner.gitBin, ["-C", repoPath, "fetch", "origin", "main"], {
       timeoutMs: 60_000,
     });
-    await execCommand(this.config.runner.gitBin, ["-C", repoPath, "worktree", "add", "--force", "-B", branchName, worktreePath, "origin/main"], {
-      timeoutMs: 120_000,
-    });
+    if (fetchResult.exitCode !== 0) {
+      throw new Error(`Failed to fetch origin/main before creating issue worktree: ${fetchResult.stderr?.slice(0, 300) ?? "git fetch failed"}`);
+    }
+
+    const addResult = await execCommand(
+      this.config.runner.gitBin,
+      ["-C", repoPath, "worktree", "add", "--detach", worktreePath, "origin/main"],
+      { timeoutMs: 120_000 },
+    );
+    if (addResult.exitCode !== 0) {
+      throw new Error(`Failed to create issue worktree at ${worktreePath}: ${addResult.stderr?.slice(0, 300) ?? "git worktree add failed"}`);
+    }
   }
 
   private async assertTrustedExistingWorktree(
