@@ -3,6 +3,7 @@ import type { RunType } from "../factory-state.ts";
 import type { OperatorEventFeed } from "../operator-feed.ts";
 import { triggerEventAllowed } from "../project-resolution.ts";
 import { resolveAwaitingInputReason } from "../awaiting-input-reason.ts";
+import { appendDelegationObservedEvent, type DelegationAuditHydration } from "../delegation-audit.ts";
 import {
   decideActiveRunRelease,
   decideAgentSession,
@@ -13,6 +14,7 @@ import {
   resolveReDelegationResume,
 } from "./decision-helpers.ts";
 import type {
+  IssueRecord,
   IssueMetadata,
   LinearClientProvider,
   NormalizedEvent,
@@ -54,8 +56,20 @@ export class DesiredStageRecorder {
       return { issue: undefined, wakeRunType: undefined, delegated: false };
     }
 
-    const hydratedIssue = await this.syncIssueDependencies(params.project.id, normalizedIssue);
-    const delegated = this.isDelegatedToPatchRelay(params.project, hydratedIssue);
+    const syncResult = await this.syncIssueDependencies(params.project.id, normalizedIssue);
+    const hydratedIssue = syncResult.issue;
+    const delegation = this.resolveDelegationTruth({
+      project: params.project,
+      normalizedIssue,
+      hydratedIssue,
+      existingIssue,
+      triggerEvent: params.normalized.triggerEvent,
+      webhookId: params.normalized.webhookId,
+      actorId: params.normalized.actor?.id,
+      hydration: syncResult.hydration,
+      activeRunId: activeRun?.id,
+    });
+    const delegated = delegation.delegated;
     const unresolvedBlockers = this.db.issues.countUnresolvedBlockers(params.project.id, normalizedIssue.id);
     const terminal = isTerminalDelegationState(existingIssue, hydratedIssue);
     const openPrExists = existingIssue?.prNumber !== undefined
@@ -238,15 +252,77 @@ export class DesiredStageRecorder {
     return issue.delegateId === installation.actorId;
   }
 
-  private async syncIssueDependencies(projectId: string, issue: IssueMetadata): Promise<IssueMetadata> {
+  private resolveDelegationTruth(params: {
+    project: ProjectConfig;
+    normalizedIssue: IssueMetadata;
+    hydratedIssue: IssueMetadata;
+    existingIssue: IssueRecord | undefined;
+    triggerEvent: string;
+    webhookId: string;
+    actorId?: string | undefined;
+    hydration: DelegationAuditHydration;
+    activeRunId?: number | undefined;
+  }): {
+    delegated: boolean;
+  } {
+    const previousDelegated = params.existingIssue?.delegatedToPatchRelay;
+    const observedDelegated = this.isDelegatedToPatchRelay(params.project, params.hydratedIssue);
+    const explicitDelegateSignal = params.triggerEvent === "delegateChanged";
+    const hasObservedDelegate = params.hydratedIssue.delegateId !== undefined;
+
+    let delegated = observedDelegated;
+    let reason = hasObservedDelegate
+      ? "delegate_id_present"
+      : `missing_delegate_identity_after_${params.hydration}`;
+
+    if (!hasObservedDelegate && !explicitDelegateSignal && previousDelegated !== undefined) {
+      delegated = previousDelegated;
+      reason = `preserved_previous_delegation_after_${params.hydration}`;
+    }
+
+    if (
+      previousDelegated !== delegated
+      || params.hydration === "live_linear_failed"
+      || (!hasObservedDelegate && previousDelegated !== undefined)
+    ) {
+      appendDelegationObservedEvent(this.db, {
+        projectId: params.project.id,
+        linearIssueId: params.normalizedIssue.id,
+        payload: {
+          source: "linear_webhook",
+          webhookId: params.webhookId,
+          triggerEvent: params.triggerEvent,
+          ...(params.actorId ? { actorId: params.actorId } : {}),
+          ...(params.hydratedIssue.delegateId ? { observedDelegateId: params.hydratedIssue.delegateId } : {}),
+          ...(previousDelegated !== undefined ? { previousDelegatedToPatchRelay: previousDelegated } : {}),
+          observedDelegatedToPatchRelay: observedDelegated,
+          appliedDelegatedToPatchRelay: delegated,
+          hydration: params.hydration,
+          ...(params.activeRunId !== undefined ? { activeRunId: params.activeRunId } : {}),
+          decision: "none",
+          reason,
+        },
+      });
+    }
+
+    return { delegated };
+  }
+
+  private async syncIssueDependencies(projectId: string, issue: IssueMetadata): Promise<{
+    issue: IssueMetadata;
+    hydration: DelegationAuditHydration;
+  }> {
     let source = issue;
+    let hydration: DelegationAuditHydration = "webhook_only";
     if (!source.relationsKnown) {
       const linear = await this.linearProvider.forProject(projectId);
       if (linear) {
         try {
           source = mergeIssueMetadata(source, await linear.getIssue(issue.id));
+          hydration = "live_linear";
         } catch {
           // Preserve existing dependency rows when webhook relation data is incomplete.
+          hydration = "live_linear_failed";
         }
       }
     }
@@ -265,6 +341,6 @@ export class DesiredStageRecorder {
       });
     }
 
-    return source;
+    return { issue: source, hydration };
   }
 }

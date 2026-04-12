@@ -150,7 +150,7 @@ export class IssueOverviewQuery {
     const liveThread = await this.readLiveThread(activeRun);
     const failureContext = parseGitHubFailureContext(issueRecord?.lastGitHubFailureContextJson);
 
-    const waitingReason = session.waitingReason ?? derivePatchRelayWaitingReason({
+    const derivedWaitingReason = derivePatchRelayWaitingReason({
       delegatedToPatchRelay: issueRecord?.delegatedToPatchRelay,
       ...(activeRun ? { activeRunType: activeRun.runType } : {}),
       blockedByKeys,
@@ -164,6 +164,7 @@ export class IssueOverviewQuery {
       lastBlockingReviewHeadSha: issueRecord?.lastBlockingReviewHeadSha,
       latestFailureCheckName: issueRecord?.lastGitHubFailureCheckName,
     });
+    const waitingReason = derivedWaitingReason ?? session.waitingReason;
     const issue: TrackedIssueRecord = {
       id: issueRecord?.id ?? session.id,
       projectId: session.projectId,

@@ -2,7 +2,7 @@ import type { IssueRecord, IssueSessionEventRecord, IssueSessionRecord, RunStatu
 import type { RunType } from "../factory-state.ts";
 import type { IssueStore, UpsertIssueParams } from "./issue-store.ts";
 import type { RunStore } from "./run-store.ts";
-import { deriveSessionWakePlan, type IssueSessionEventType } from "../issue-session-events.ts";
+import { deriveSessionWakePlan, isActionableIssueSessionEventType, type IssueSessionEventType } from "../issue-session-events.ts";
 import { isoNow, type DatabaseConnection } from "./shared.ts";
 
 interface IssueSessionLease {
@@ -144,13 +144,8 @@ export class IssueSessionStore {
   }
 
   hasPendingIssueSessionEvents(projectId: string, linearIssueId: string): boolean {
-    const row = this.connection.prepare(`
-      SELECT 1
-      FROM issue_session_events
-      WHERE project_id = ? AND linear_issue_id = ? AND processed_at IS NULL
-      LIMIT 1
-    `).get(projectId, linearIssueId) as Record<string, unknown> | undefined;
-    return row !== undefined;
+    return this.listIssueSessionEvents(projectId, linearIssueId, { pendingOnly: true })
+      .some((event) => isActionableIssueSessionEventType(event.eventType));
   }
 
   peekIssueSessionWake(projectId: string, linearIssueId: string): {

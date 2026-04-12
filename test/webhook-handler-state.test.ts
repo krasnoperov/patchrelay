@@ -932,6 +932,77 @@ test("un-delegation pauses awaiting_queue issue and preserves downstream PR-back
   }
 });
 
+test("status webhook preserves previous delegation when live Linear hydration fails and webhook lacks delegate identity", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-preserve-delegation-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+
+    db.upsertIssue({
+      projectId: "krasnoperov/mafia",
+      linearIssueId: "issue-maf-preserve",
+      issueKey: "MAF-57",
+      title: "Preserve delegation on partial webhook",
+      delegatedToPatchRelay: true,
+      factoryState: "pr_open",
+      prNumber: 157,
+      prState: "open",
+    });
+
+    const handler = new WebhookHandler(
+      config,
+      db,
+      { forProject: async () => ({ getIssue: async () => { throw new Error("linear down"); } } as LinearClient) } as never,
+      { steerTurn: async () => undefined } as never,
+      () => undefined,
+      pino({ enabled: false }),
+    );
+
+    const payload: LinearWebhookPayload = {
+      action: "update",
+      type: "Issue",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      webhookTimestamp: Date.now(),
+      updatedFrom: { stateId: "state-backlog" },
+      data: {
+        id: "issue-maf-preserve",
+        identifier: "MAF-57",
+        title: "Preserve delegation on partial webhook",
+        team: { id: "team-maf", key: "MAF" },
+        state: { id: "state-review", name: "In Review", type: "started" },
+      },
+    };
+
+    const stored = db.webhookEvents.insertFullWebhookEvent({
+      webhookId: "delivery-preserve-delegation",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(payload),
+    });
+
+    await handler.processWebhookEvent(stored.id);
+
+    const issue = db.getIssue("krasnoperov/mafia", "issue-maf-preserve");
+    assert.equal(issue?.delegatedToPatchRelay, true);
+    const audit = db.issueSessions.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-preserve")
+      .findLast((event) => event.eventType === "delegation_observed");
+    assert.ok(audit?.eventJson);
+    const parsed = JSON.parse(audit.eventJson) as { hydration?: string; appliedDelegatedToPatchRelay?: boolean; reason?: string };
+    assert.equal(parsed.hydration, "live_linear_failed");
+    assert.equal(parsed.appliedDelegatedToPatchRelay, true);
+    assert.equal(parsed.reason, "preserved_previous_delegation_after_live_linear_failed");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("re-delegation resumes requested-changes issue from PR state instead of restarting implementation", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-redelegate-"));
   try {

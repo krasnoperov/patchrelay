@@ -5,7 +5,7 @@ import type { InteractiveRunner, Output, ParsedArgs } from "../command-types.ts"
 import type { CliDataAccess } from "../data.ts";
 import { CliUsageError } from "../errors.ts";
 import { formatJson } from "../formatters/json.ts";
-import { formatClose, formatInspect, formatList, formatLive, formatOpen, formatRetry, formatSessionHistory, formatTranscriptSource, formatWorktree } from "../formatters/text.ts";
+import { formatAudit, formatClose, formatInspect, formatList, formatLive, formatOpen, formatRetry, formatSessionHistory, formatTranscriptSource, formatWorktree } from "../formatters/text.ts";
 import { buildOpenCommand } from "../interactive.ts";
 import { writeOutput } from "../output.ts";
 
@@ -52,6 +52,8 @@ export async function handleIssueCommand(params: IssueCommandParams): Promise<nu
       return await handleOpenCommand(nested);
     case "sessions":
       return await handleSessionsCommand(nested);
+    case "audit":
+      return await handleAuditCommand(nested);
     case "transcript-source":
       return await handleTranscriptSourceCommand(nested);
     case "retry":
@@ -188,6 +190,21 @@ export async function handleSessionsCommand(params: IssueCommandParams): Promise
         (threadId) => buildOpenCommand(params.config, result.worktreePath ?? "", threadId),
       ),
   );
+  return 0;
+}
+
+export async function handleAuditCommand(params: IssueCommandParams): Promise<number> {
+  const issueKey = params.commandArgs[0];
+  if (!issueKey) {
+    throw new Error("audit requires <issueKey>.");
+  }
+
+  const result = params.data.audit(issueKey);
+  if (!result) {
+    throw new Error(`Issue not found: ${issueKey}`);
+  }
+
+  writeOutput(params.stdout, params.json ? formatJson(result) : formatAudit(result));
   return 0;
 }
 

@@ -1,4 +1,5 @@
 import type {
+  IssueAuditResult,
   CloseResult,
   InspectResult,
   IssueSessionHistoryResult,
@@ -114,6 +115,30 @@ export function formatRetry(result: RetryResult): string {
   ]
     .filter(Boolean)
     .join("\n")}\n`;
+}
+
+export function formatAudit(result: IssueAuditResult): string {
+  const lines = [
+    `${result.issue.issueKey ?? result.issue.linearIssueId}${result.issue.currentLinearState ? `  ${result.issue.currentLinearState}` : ""}`,
+  ];
+
+  if (result.events.length === 0) {
+    lines.push("No delegation audit events recorded.");
+    return `${lines.join("\n")}\n`;
+  }
+
+  for (const event of result.events) {
+    lines.push("");
+    lines.push([event.createdAt, event.eventType].join("  "));
+    lines.push(event.summary);
+    if (event.details && Object.keys(event.details).length > 0) {
+      lines.push(Object.entries(event.details)
+        .map(([key, value]) => `${key}=${value === undefined ? "-" : typeof value === "string" ? value : JSON.stringify(value)}`)
+        .join(" "));
+    }
+  }
+
+  return `${lines.join("\n")}\n`;
 }
 
 export function formatClose(result: CloseResult): string {

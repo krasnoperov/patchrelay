@@ -4,6 +4,7 @@ import { sanitizeOperatorFacingText } from "./presentation-text.ts";
 
 export type IssueSessionEventType =
   | "delegated"
+  | "delegation_observed"
   | "direct_reply"
   | "completion_check_continue"
   | "followup_prompt"
@@ -18,7 +19,8 @@ export type IssueSessionEventType =
   | "undelegated"
   | "issue_removed"
   | "pr_closed"
-  | "pr_merged";
+  | "pr_merged"
+  | "run_released_authority";
 
 export interface IssueSessionEventRecord {
   id: number;
@@ -48,6 +50,11 @@ const TERMINAL_SESSION_EVENTS = new Set<IssueSessionEventType>([
   "pr_merged",
 ]);
 
+const NON_ACTIONABLE_SESSION_EVENTS = new Set<IssueSessionEventType>([
+  "delegation_observed",
+  "run_released_authority",
+]);
+
 const RUN_TYPES = new Set<RunType>(["implementation", "review_fix", "branch_upkeep", "ci_repair", "queue_repair"]);
 
 function parseRunType(value: unknown): RunType | undefined {
@@ -58,8 +65,9 @@ export function deriveSessionWakePlan(
   issue: IssueRecord,
   events: IssueSessionEventRecord[],
 ): SessionWakePlan | undefined {
-  if (events.length === 0) return undefined;
-  if (events.some((event) => TERMINAL_SESSION_EVENTS.has(event.eventType))) {
+  const actionableEvents = events.filter((event) => !NON_ACTIONABLE_SESSION_EVENTS.has(event.eventType));
+  if (actionableEvents.length === 0) return undefined;
+  if (actionableEvents.some((event) => TERMINAL_SESSION_EVENTS.has(event.eventType))) {
     return undefined;
   }
 
@@ -69,7 +77,7 @@ export function deriveSessionWakePlan(
   let runType: RunType | undefined;
   let resumeThread = false;
 
-  for (const event of events) {
+  for (const event of actionableEvents) {
     const payload = parseEventJson(event.eventJson);
     switch (event.eventType) {
       case "merge_steward_incident":
@@ -177,6 +185,10 @@ export function deriveSessionWakePlan(
   }
 
   return { runType, wakeReason, resumeThread, context };
+}
+
+export function isActionableIssueSessionEventType(eventType: IssueSessionEventType): boolean {
+  return !NON_ACTIONABLE_SESSION_EVENTS.has(eventType);
 }
 
 export function extractLatestAssistantSummary(

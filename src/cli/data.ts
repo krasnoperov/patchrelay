@@ -7,6 +7,7 @@ import { getThreadTurns } from "../codex-thread-utils.ts";
 import { PatchRelayDatabase } from "../db.ts";
 import { buildManualRetryAttemptReset, resolveRetryTarget } from "../manual-issue-actions.ts";
 import { WorktreeManager } from "../worktree-manager.ts";
+import { parseDelegationObservedPayload, parseRunReleasedAuthorityPayload } from "../delegation-audit.ts";
 import { CliOperatorApiClient } from "./operator-client.ts";
 import type { RunType } from "../factory-state.ts";
 import type {
@@ -69,6 +70,18 @@ export interface RetryResult {
   issue: TrackedIssueRecord;
   runType: string;
   reason?: string;
+}
+
+export interface IssueAuditItem {
+  createdAt: string;
+  eventType: string;
+  summary: string;
+  details?: Record<string, unknown> | undefined;
+}
+
+export interface IssueAuditResult {
+  issue: TrackedIssueRecord;
+  events: IssueAuditItem[];
 }
 
 export interface CloseResult {
@@ -428,6 +441,55 @@ export class CliDataAccess extends CliOperatorApiClient {
       ...(options?.reason ? { reason: options.reason } : {}),
       ...(run ? { releasedRunId: run.id } : {}),
     };
+  }
+
+  audit(issueKey: string): IssueAuditResult | undefined {
+    const issue = this.db.getTrackedIssueByKey(issueKey);
+    if (!issue) return undefined;
+
+    const events = this.db.issueSessions
+      .listIssueSessionEvents(issue.projectId, issue.linearIssueId)
+      .flatMap((event): IssueAuditItem[] => {
+        const delegationObserved = parseDelegationObservedPayload(event);
+        if (delegationObserved) {
+          return [{
+            createdAt: event.createdAt,
+            eventType: event.eventType,
+            summary: [
+              delegationObserved.source,
+              `observed=${delegationObserved.observedDelegatedToPatchRelay ? "delegated" : "undelegated"}`,
+              `applied=${delegationObserved.appliedDelegatedToPatchRelay ? "delegated" : "undelegated"}`,
+              `hydration=${delegationObserved.hydration}`,
+              delegationObserved.reason ? `reason=${delegationObserved.reason}` : undefined,
+            ].filter(Boolean).join(" "),
+            details: delegationObserved as unknown as Record<string, unknown>,
+          }];
+        }
+
+        const authorityRelease = parseRunReleasedAuthorityPayload(event);
+        if (authorityRelease) {
+          return [{
+            createdAt: event.createdAt,
+            eventType: event.eventType,
+            summary: `released run #${authorityRelease.runId} (${authorityRelease.runType}) via ${authorityRelease.source}: ${authorityRelease.reason}`,
+            details: authorityRelease as unknown as Record<string, unknown>,
+          }];
+        }
+
+        if (event.eventType === "delegated" || event.eventType === "undelegated") {
+          return [{
+            createdAt: event.createdAt,
+            eventType: event.eventType,
+            summary: event.eventType === "delegated"
+              ? "PatchRelay accepted delegation"
+              : "PatchRelay recorded undelegation",
+          }];
+        }
+
+        return [];
+      });
+
+    return { issue, events };
   }
 
   transcriptSource(issueKey: string, runId?: number): IssueTranscriptSourceResult | undefined {
