@@ -196,6 +196,32 @@ test("GitHubClient dismissReview uses the dismissals endpoint", async () => {
   });
 });
 
+test("GitHubClient normalizes merged pull requests to MERGED state", async () => {
+  const stub = new FetchStub([
+    {
+      kind: "ok",
+      status: 200,
+      body: JSON.stringify({
+        number: 16,
+        title: "Fix 502 error during conversation",
+        html_url: "https://github.com/owner/repo/pull/16",
+        state: "closed",
+        draft: false,
+        merged_at: "2026-04-12T12:46:04Z",
+        closed_at: "2026-04-12T12:46:04Z",
+        head: { sha: "abc123", ref: "feature" },
+        base: { ref: "main" },
+      }),
+    },
+  ]);
+  await withFetchStub(stub, async () => {
+    const client = makeClient();
+    const pr = await client.getPullRequest("owner/repo", 16);
+    assert.equal(pr.state, "MERGED");
+    assert.equal(pr.mergedAt, "2026-04-12T12:46:04Z");
+  });
+});
+
 // ---- parseModelResponse tests ----------------------------------------
 
 test("parseModelResponse returns ok for a valid JSON response", () => {

@@ -63,6 +63,12 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
+function normalizePullRequestState(pr: Record<string, unknown>): PullRequestSummary["state"] {
+  if (typeof pr.merged_at === "string" && pr.merged_at.trim()) return "MERGED";
+  const state = String(pr.state ?? "OPEN").toUpperCase();
+  return state;
+}
+
 export class GitHubClient {
   constructor(private readonly auth: GitHubClientAuthProvider) {}
 
@@ -143,7 +149,7 @@ export class GitHubClient {
       title: String(pr.title ?? ""),
       ...(typeof pr.body === "string" ? { body: pr.body } : {}),
       url: String(pr.html_url ?? ""),
-      state: String(pr.state ?? "OPEN"),
+      state: normalizePullRequestState(pr),
       isDraft: Boolean(pr.draft),
       headSha: String((pr.head as Record<string, unknown> | undefined)?.sha ?? ""),
       headRefName: String((pr.head as Record<string, unknown> | undefined)?.ref ?? ""),
@@ -183,7 +189,7 @@ export class GitHubClient {
       title: String(pr.title ?? ""),
       ...(typeof pr.body === "string" ? { body: pr.body } : {}),
       url: String(pr.html_url ?? ""),
-      state: String(pr.state ?? "OPEN"),
+      state: normalizePullRequestState(pr),
       isDraft: Boolean(pr.draft),
       headSha: String((pr.head as Record<string, unknown> | undefined)?.sha ?? ""),
       headRefName: String((pr.head as Record<string, unknown> | undefined)?.ref ?? ""),
