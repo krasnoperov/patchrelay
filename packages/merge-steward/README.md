@@ -230,6 +230,7 @@ The first screen shows all configured projects with:
 - readable queue stats
 - a compact queue chain like `#123 ●  #124 ○`
 - clear bad states such as blocked, stuck, or needs attention
+- explicit startup states such as `Initializing` and `Init failed` for repo-local boot problems
 
 Press `Enter` on a project to open the second screen. That project detail view shows:
 
@@ -238,6 +239,7 @@ Press `Enter` on a project to open the second screen. That project detail view s
 - recent queue activity in plain language
 - incidents for evicted PRs
 - direct actions like reconcile and dequeue
+- live GitHub-required checks plus the last policy refresh
 
 Use `merge-steward dashboard --repo <id>` to open the project detail screen directly. Use `--pr <number>` to preselect a PR when you already know what you need to inspect.
 
@@ -252,6 +254,8 @@ Controls:
 - `q` — quit
 
 ### Validation, Visibility, And Troubleshooting
+
+The gateway binds its HTTP port before repo initialization finishes. Each repo then initializes independently in the background, so a bad clone or GitHub discovery problem stays local to that repo instead of taking down the whole dashboard.
 
 These are the first commands to reach for after setup or when a queue looks wrong:
 

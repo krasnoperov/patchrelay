@@ -1,5 +1,24 @@
 import type { DiscoveredRepoSettings } from "./github-repo-discovery.ts";
 
+export type RepoRuntimeState = "initializing" | "ready" | "failed";
+
+export interface RepoRuntimeStatus {
+  repoId: string;
+  repoFullName: string;
+  baseBranch: string;
+  state: RepoRuntimeState;
+  startedAt: string;
+  readyAt?: string | undefined;
+  failedAt?: string | undefined;
+  lastError?: string | undefined;
+}
+
+export interface ServiceHealthResponse {
+  ok: boolean;
+  startupComplete: boolean;
+  repos: RepoRuntimeStatus[];
+}
+
 export interface ServiceGitHubAuthStatus {
   mode: "none" | "app";
   configured: boolean;
@@ -31,4 +50,5 @@ export interface ServiceGitHubRepoAccessResponse {
 export interface ServiceErrorResponse {
   ok: false;
   error: string;
+  code?: string;
 }

@@ -32,6 +32,12 @@ function makeSnapshot(entries: QueueEntry[]): QueueWatchSnapshot {
     repoId: "ballony-i-nasosy",
     repoFullName: "krasnoperov/ballony-i-nasosy",
     baseBranch: "main",
+    githubPolicy: {
+      requiredChecks: [],
+      fetchedAt: null,
+      lastRefreshReason: null,
+      lastRefreshChanged: null,
+    },
     summary: {
       total: entries.length,
       active: entries.filter((entry) => !["merged", "evicted", "dequeued"].includes(entry.status)).length,
@@ -63,6 +69,8 @@ function makeRepo(snapshot: QueueWatchSnapshot): DashboardRepoState {
     repoId: snapshot.repoId,
     repoFullName: snapshot.repoFullName,
     baseBranch: snapshot.baseBranch,
+    serviceState: "ready",
+    serviceMessage: null,
     snapshot,
     error: null,
     lastSnapshotReceivedAt: Date.now(),
@@ -164,4 +172,22 @@ test("idle repo health reports the most recent activity instead of the oldest qu
   assert.equal(health.kind, "idle");
   assert.match(health.detail, /Last activity was 30s ago\./);
   assert.doesNotMatch(health.detail, /2d ago/);
+});
+
+test("repo health shows initializing repos as connected startup work", () => {
+  const repo: DashboardRepoState = {
+    repoId: "ballony-i-nasosy",
+    repoFullName: "krasnoperov/ballony-i-nasosy",
+    baseBranch: "main",
+    serviceState: "initializing",
+    serviceMessage: "Merge Steward is still initializing this repo.",
+    snapshot: null,
+    error: null,
+    lastSnapshotReceivedAt: null,
+  };
+
+  const health = getRepoHealth(repo);
+
+  assert.equal(health.kind, "initializing");
+  assert.equal(health.label, "Initializing");
 });

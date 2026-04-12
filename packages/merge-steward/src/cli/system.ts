@@ -12,6 +12,7 @@ import {
 import { parseHomeConfigObject } from "../steward-home.ts";
 import type {
   ServiceErrorResponse,
+  ServiceHealthResponse,
   ServiceGitHubAuthStatus,
   ServiceGitHubDiscoverResponse,
   ServiceGitHubRepoAccessResponse,
@@ -206,6 +207,17 @@ export function getGatewayBaseUrl(): string {
   return `http://${bind}:${port}`;
 }
 
+export class ServiceApiError extends Error {
+  constructor(
+    message: string,
+    readonly status?: number,
+    readonly code?: string,
+  ) {
+    super(message);
+    this.name = "ServiceApiError";
+  }
+}
+
 async function requestGatewayJson<T>(url: string, options?: { method?: string; body?: unknown }): Promise<T> {
   const response = await fetch(url, {
     method: options?.method ?? "GET",
@@ -218,7 +230,7 @@ async function requestGatewayJson<T>(url: string, options?: { method?: string; b
     try {
       const payload = JSON.parse(text) as Partial<ServiceErrorResponse>;
       if (typeof payload.error === "string" && payload.error) {
-        throw new Error(payload.error);
+        throw new ServiceApiError(payload.error, response.status, payload.code);
       }
     } catch (error) {
       if (error instanceof Error) {
@@ -236,7 +248,7 @@ export async function fetchGatewayJson<T>(relativePath: string, options?: { meth
 }
 
 export async function fetchServiceHealthStatus(): Promise<
-  | { reachable: true; ok: boolean; status: number }
+  | { reachable: true; ok: boolean; status: number; health?: ServiceHealthResponse }
   | { reachable: false; error: string }
 > {
   try {
@@ -244,8 +256,10 @@ export async function fetchServiceHealthStatus(): Promise<
       signal: AbortSignal.timeout(2_000),
     });
     let ok = response.ok;
+    let health: ServiceHealthResponse | undefined;
     try {
-      const body = await response.json() as { ok?: unknown };
+      const body = await response.json() as ServiceHealthResponse;
+      health = body;
       if (typeof body.ok === "boolean") {
         ok = response.ok && body.ok;
       }
@@ -256,6 +270,7 @@ export async function fetchServiceHealthStatus(): Promise<
       reachable: true,
       ok,
       status: response.status,
+      ...(health ? { health } : {}),
     };
   } catch (error) {
     return {

@@ -86,6 +86,7 @@ Configure a webhook on the repository pointing to the steward:
 - **Events:** Pull requests, Pull request reviews, Check suites, Pushes, Branch protection rules, Repository rulesets
 
 Merge Steward now uses one unified multi-repo webhook endpoint and routes by `repository.full_name`.
+The gateway starts listening before every repo is initialized, and repo startup is isolated per repo. A broken clone or discovery failure should show up as `Init failed` for that repo rather than making the whole gateway look offline.
 
 Set the steward config and secrets like this:
 

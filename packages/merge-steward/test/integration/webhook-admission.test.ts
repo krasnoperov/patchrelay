@@ -9,6 +9,7 @@ import { GitHubSim, EvictionReporterSim } from "../../src/sim/github-sim.ts";
 import { MergeStewardService } from "../../src/service.ts";
 import { buildMultiRepoHttpServer } from "../../src/http-multi.ts";
 import type { StewardConfig } from "../../src/config.ts";
+import type { RepoRuntimeRecord } from "../../src/repo-runtime.ts";
 import pino from "pino";
 import { SqliteStore } from "../../src/db/sqlite-store.ts";
 
@@ -71,9 +72,15 @@ function createPolicy(requiredChecks: string[] = []) {
 }
 
 function makeApp(service: MergeStewardService) {
-  const instances = new Map([["test/repo", { config, service }]]);
+  const repos = new Map<string, RepoRuntimeRecord>([["test/repo", {
+    config,
+    state: "ready",
+    startedAt: new Date().toISOString(),
+    readyAt: new Date().toISOString(),
+    instance: { config, service, store: null as unknown as SqliteStore },
+  }]]);
   return buildMultiRepoHttpServer({
-    instances,
+    repos,
     webhookSecret: WEBHOOK_SECRET,
     githubAdmin,
     logger: pino({ level: "silent" }),
@@ -414,9 +421,15 @@ describe("webhook admission integration", () => {
     store.transition(entry.id, "validating");
     store.transition(entry.id, "merging");
 
-    const instances = new Map([["test/repo", { config, service }]]);
+    const repos = new Map<string, RepoRuntimeRecord>([["test/repo", {
+      config,
+      state: "ready",
+      startedAt: new Date().toISOString(),
+      readyAt: new Date().toISOString(),
+      instance: { config, service, store },
+    }]]);
     const app = await buildMultiRepoHttpServer({
-      instances,
+      repos,
       webhookSecret: WEBHOOK_SECRET,
       githubAdmin,
       logger,

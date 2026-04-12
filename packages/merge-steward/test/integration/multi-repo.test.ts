@@ -9,6 +9,7 @@ import { GitHubSim, EvictionReporterSim } from "../../src/sim/github-sim.ts";
 import { MergeStewardService } from "../../src/service.ts";
 import { buildMultiRepoHttpServer } from "../../src/http-multi.ts";
 import type { StewardConfig } from "../../src/config.ts";
+import type { RepoRuntimeRecord } from "../../src/repo-runtime.ts";
 import pino from "pino";
 
 const WEBHOOK_SECRET = "multi-repo-test-secret";
@@ -81,6 +82,16 @@ function sign(body: string, secret = WEBHOOK_SECRET): string {
   return "sha256=" + createHmac("sha256", secret).update(body).digest("hex");
 }
 
+function readyRecord(item: ReturnType<typeof makeServiceAndConfig>): RepoRuntimeRecord {
+  return {
+    config: item.config,
+    state: "ready",
+    startedAt: new Date().toISOString(),
+    readyAt: new Date().toISOString(),
+    instance: { config: item.config, service: item.service, store: item.store as any },
+  };
+}
+
 function labelWebhookBody(repoFullName: string, prNumber: number, branch: string, sha: string): string {
   return JSON.stringify({
     action: "labeled",
@@ -98,11 +109,11 @@ describe("multi-repo HTTP server", () => {
     a.githubSim.addPR({ number: 1, branch: "feat-a", headSha: "sha-a", reviewApproved: true, labels: ["queue"] });
     a.githubSim.setChecks(1, [{ name: "ci", conclusion: "success" }]);
 
-    const instances = new Map([
-      ["org/repo-a", { config: a.config, service: a.service }],
-      ["org/repo-b", { config: b.config, service: b.service }],
+    const repos = new Map([
+      ["org/repo-a", readyRecord(a)],
+      ["org/repo-b", readyRecord(b)],
     ]);
-    const app = await buildMultiRepoHttpServer({ instances, webhookSecret: WEBHOOK_SECRET, githubAdmin, logger });
+    const app = await buildMultiRepoHttpServer({ repos, webhookSecret: WEBHOOK_SECRET, githubAdmin, logger });
     const address = await app.listen({ port: 0 });
     after(async () => { await app.close(); });
 
@@ -131,8 +142,8 @@ describe("multi-repo HTTP server", () => {
 
   it("ignores webhook for unknown repo", async () => {
     const a = makeServiceAndConfig("repo-a", "org/repo-a");
-    const instances = new Map([["org/repo-a", { config: a.config, service: a.service }]]);
-    const app = await buildMultiRepoHttpServer({ instances, webhookSecret: WEBHOOK_SECRET, githubAdmin, logger });
+    const repos = new Map([["org/repo-a", readyRecord(a)]]);
+    const app = await buildMultiRepoHttpServer({ repos, webhookSecret: WEBHOOK_SECRET, githubAdmin, logger });
     const address = await app.listen({ port: 0 });
     after(async () => { await app.close(); });
 
@@ -157,8 +168,8 @@ describe("multi-repo HTTP server", () => {
 
   it("rejects webhook with invalid signature", async () => {
     const a = makeServiceAndConfig("repo-a", "org/repo-a");
-    const instances = new Map([["org/repo-a", { config: a.config, service: a.service }]]);
-    const app = await buildMultiRepoHttpServer({ instances, webhookSecret: WEBHOOK_SECRET, githubAdmin, logger });
+    const repos = new Map([["org/repo-a", readyRecord(a)]]);
+    const app = await buildMultiRepoHttpServer({ repos, webhookSecret: WEBHOOK_SECRET, githubAdmin, logger });
     const address = await app.listen({ port: 0 });
     after(async () => { await app.close(); });
 
@@ -180,8 +191,8 @@ describe("multi-repo HTTP server", () => {
     a.githubSim.addPR({ number: 1, branch: "feat-a", headSha: "sha-a", reviewApproved: true, labels: ["queue"] });
     a.githubSim.setChecks(1, [{ name: "ci", conclusion: "success" }]);
 
-    const instances = new Map([["org/repo-a", { config: a.config, service: a.service }]]);
-    const app = await buildMultiRepoHttpServer({ instances, webhookSecret: undefined, githubAdmin, logger });
+    const repos = new Map([["org/repo-a", readyRecord(a)]]);
+    const app = await buildMultiRepoHttpServer({ repos, webhookSecret: undefined, githubAdmin, logger });
     const address = await app.listen({ port: 0 });
     after(async () => { await app.close(); });
 
@@ -203,11 +214,11 @@ describe("multi-repo HTTP server", () => {
   it("health lists all repos", async () => {
     const a = makeServiceAndConfig("repo-a", "org/repo-a");
     const b = makeServiceAndConfig("repo-b", "org/repo-b");
-    const instances = new Map([
-      ["org/repo-a", { config: a.config, service: a.service }],
-      ["org/repo-b", { config: b.config, service: b.service }],
+    const repos = new Map([
+      ["org/repo-a", readyRecord(a)],
+      ["org/repo-b", readyRecord(b)],
     ]);
-    const app = await buildMultiRepoHttpServer({ instances, webhookSecret: undefined, githubAdmin, logger });
+    const app = await buildMultiRepoHttpServer({ repos, webhookSecret: undefined, githubAdmin, logger });
     const address = await app.listen({ port: 0 });
     after(async () => { await app.close(); });
 
@@ -228,11 +239,11 @@ describe("multi-repo HTTP server", () => {
     a.service.enqueue({ prNumber: 1, branch: "feat-a", headSha: "sha-a" });
     b.service.enqueue({ prNumber: 2, branch: "feat-b", headSha: "sha-b" });
 
-    const instances = new Map([
-      ["org/repo-a", { config: a.config, service: a.service }],
-      ["org/repo-b", { config: b.config, service: b.service }],
+    const repos = new Map([
+      ["org/repo-a", readyRecord(a)],
+      ["org/repo-b", readyRecord(b)],
     ]);
-    const app = await buildMultiRepoHttpServer({ instances, webhookSecret: undefined, githubAdmin, logger });
+    const app = await buildMultiRepoHttpServer({ repos, webhookSecret: undefined, githubAdmin, logger });
     const address = await app.listen({ port: 0 });
     after(async () => { await app.close(); });
 
@@ -247,8 +258,8 @@ describe("multi-repo HTTP server", () => {
 
   it("returns 404 for unknown repoId", async () => {
     const a = makeServiceAndConfig("repo-a", "org/repo-a");
-    const instances = new Map([["org/repo-a", { config: a.config, service: a.service }]]);
-    const app = await buildMultiRepoHttpServer({ instances, webhookSecret: undefined, githubAdmin, logger });
+    const repos = new Map([["org/repo-a", readyRecord(a)]]);
+    const app = await buildMultiRepoHttpServer({ repos, webhookSecret: undefined, githubAdmin, logger });
     const address = await app.listen({ port: 0 });
     after(async () => { await app.close(); });
 
@@ -258,8 +269,8 @@ describe("multi-repo HTTP server", () => {
 
   it("rejects webhook missing x-github-event header", async () => {
     const a = makeServiceAndConfig("repo-a", "org/repo-a");
-    const instances = new Map([["org/repo-a", { config: a.config, service: a.service }]]);
-    const app = await buildMultiRepoHttpServer({ instances, webhookSecret: undefined, githubAdmin, logger });
+    const repos = new Map([["org/repo-a", readyRecord(a)]]);
+    const app = await buildMultiRepoHttpServer({ repos, webhookSecret: undefined, githubAdmin, logger });
     const address = await app.listen({ port: 0 });
     after(async () => { await app.close(); });
 
@@ -273,8 +284,8 @@ describe("multi-repo HTTP server", () => {
 
   it("exposes service runtime auth status through the admin endpoint", async () => {
     const a = makeServiceAndConfig("repo-a", "org/repo-a");
-    const instances = new Map([["org/repo-a", { config: a.config, service: a.service }]]);
-    const app = await buildMultiRepoHttpServer({ instances, webhookSecret: undefined, githubAdmin, logger });
+    const repos = new Map([["org/repo-a", readyRecord(a)]]);
+    const app = await buildMultiRepoHttpServer({ repos, webhookSecret: undefined, githubAdmin, logger });
     const address = await app.listen({ port: 0 });
     after(async () => { await app.close(); });
 
@@ -292,8 +303,8 @@ describe("multi-repo HTTP server", () => {
 
   it("exposes repo discovery through the admin endpoint", async () => {
     const a = makeServiceAndConfig("repo-a", "org/repo-a");
-    const instances = new Map([["org/repo-a", { config: a.config, service: a.service }]]);
-    const app = await buildMultiRepoHttpServer({ instances, webhookSecret: undefined, githubAdmin, logger });
+    const repos = new Map([["org/repo-a", readyRecord(a)]]);
+    const app = await buildMultiRepoHttpServer({ repos, webhookSecret: undefined, githubAdmin, logger });
     const address = await app.listen({ port: 0 });
     after(async () => { await app.close(); });
 
@@ -315,9 +326,9 @@ describe("multi-repo HTTP server", () => {
 
   it("returns 503 when repo discovery fails", async () => {
     const a = makeServiceAndConfig("repo-a", "org/repo-a");
-    const instances = new Map([["org/repo-a", { config: a.config, service: a.service }]]);
+    const repos = new Map([["org/repo-a", readyRecord(a)]]);
     const app = await buildMultiRepoHttpServer({
-      instances,
+      repos,
       webhookSecret: undefined,
       githubAdmin: {
         ...githubAdmin,
@@ -339,5 +350,57 @@ describe("multi-repo HTTP server", () => {
     const result = await resp.json() as { ok: boolean; error: string };
     assert.strictEqual(result.ok, false);
     assert.match(result.error, /not ready/);
+  });
+
+  it("reports initializing repos through health and repo endpoints", async () => {
+    const a = makeServiceAndConfig("repo-a", "org/repo-a");
+    const repos = new Map<string, RepoRuntimeRecord>([["org/repo-a", {
+      config: a.config,
+      state: "initializing",
+      startedAt: new Date().toISOString(),
+    }]]);
+    const app = await buildMultiRepoHttpServer({ repos, webhookSecret: undefined, githubAdmin, logger });
+    const address = await app.listen({ port: 0 });
+    after(async () => { await app.close(); });
+
+    const health = await (await fetch(`${address}/health`)).json() as {
+      startupComplete: boolean;
+      repos: Array<{ repoId: string; state: string }>;
+    };
+    assert.strictEqual(health.startupComplete, false);
+    assert.strictEqual(health.repos[0]?.state, "initializing");
+
+    const resp = await fetch(`${address}/repos/repo-a/queue/status`);
+    assert.strictEqual(resp.status, 503);
+    const result = await resp.json() as { ok: boolean; code: string; error: string };
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.code, "repo_initializing");
+  });
+
+  it("reports repo-local initialization failures without affecting other repos", async () => {
+    const a = makeServiceAndConfig("repo-a", "org/repo-a");
+    const b = makeServiceAndConfig("repo-b", "org/repo-b");
+    const repos = new Map<string, RepoRuntimeRecord>([
+      ["org/repo-a", readyRecord(a)],
+      ["org/repo-b", {
+        config: b.config,
+        state: "failed",
+        startedAt: new Date().toISOString(),
+        failedAt: new Date().toISOString(),
+        lastError: "clone failed",
+      }],
+    ]);
+    const app = await buildMultiRepoHttpServer({ repos, webhookSecret: undefined, githubAdmin, logger });
+    const address = await app.listen({ port: 0 });
+    after(async () => { await app.close(); });
+
+    const okResp = await fetch(`${address}/repos/repo-a/queue/status`);
+    assert.strictEqual(okResp.status, 200);
+
+    const failedResp = await fetch(`${address}/repos/repo-b/queue/status`);
+    assert.strictEqual(failedResp.status, 503);
+    const result = await failedResp.json() as { code: string; error: string };
+    assert.strictEqual(result.code, "repo_init_failed");
+    assert.match(result.error, /clone failed/);
   });
 });

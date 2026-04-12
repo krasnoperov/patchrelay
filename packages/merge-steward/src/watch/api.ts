@@ -1,11 +1,17 @@
+import type { ServiceHealthResponse } from "../admin-types.ts";
 import type { QueueEntryDetail, QueueWatchSnapshot } from "../types.ts";
 
-export interface GatewayHealthResponse {
-  ok: boolean;
-  repos: Array<{
-    repoId: string;
-    repoFullName: string;
-  }>;
+export class ServiceApiError extends Error {
+  constructor(
+    message: string,
+    readonly options?: {
+      status?: number;
+      code?: string;
+    },
+  ) {
+    super(message);
+    this.name = "ServiceApiError";
+  }
 }
 
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -20,15 +26,25 @@ async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   });
   const body = await response.text();
   if (!response.ok) {
-    throw new Error(readErrorMessage(body) ?? `Request failed: ${response.status}`);
+    const parsed = readError(body);
+    throw new ServiceApiError(
+      parsed?.message ?? `Request failed: ${response.status}`,
+      {
+        status: response.status,
+        ...(parsed?.code ? { code: parsed.code } : {}),
+      },
+    );
   }
   return JSON.parse(body) as T;
 }
 
-function readErrorMessage(body: string): string | undefined {
+function readError(body: string): { message?: string; code?: string } | undefined {
   try {
-    const parsed = JSON.parse(body) as { error?: string; reason?: string; message?: string };
-    return parsed.error ?? parsed.reason ?? parsed.message;
+    const parsed = JSON.parse(body) as { error?: string; reason?: string; message?: string; code?: string };
+    return {
+      ...(parsed.error ?? parsed.reason ?? parsed.message ? { message: parsed.error ?? parsed.reason ?? parsed.message } : {}),
+      ...(parsed.code ? { code: parsed.code } : {}),
+    };
   } catch {
     return undefined;
   }
@@ -54,8 +70,8 @@ export async function fetchSnapshot(gatewayBaseUrl: string, repoId: string): Pro
   return await requestJson<QueueWatchSnapshot>(buildUrl(repoBaseUrl(gatewayBaseUrl, repoId), "/queue/watch", { eventLimit: "40" }));
 }
 
-export async function fetchGatewayHealth(gatewayBaseUrl: string): Promise<GatewayHealthResponse> {
-  return await requestJson<GatewayHealthResponse>(buildUrl(gatewayBaseUrl, "/health"));
+export async function fetchGatewayHealth(gatewayBaseUrl: string): Promise<ServiceHealthResponse> {
+  return await requestJson<ServiceHealthResponse>(buildUrl(gatewayBaseUrl, "/health"));
 }
 
 export async function fetchEntryDetail(gatewayBaseUrl: string, repoId: string, entryId: string): Promise<QueueEntryDetail> {

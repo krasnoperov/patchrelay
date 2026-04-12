@@ -210,6 +210,12 @@ test("queue status text output surfaces failed tick errors ahead of stale queue 
     repoId: "app",
     repoFullName: "owner/repo",
     baseBranch: "main",
+    githubPolicy: {
+      requiredChecks: [],
+      fetchedAt: null,
+      lastRefreshReason: null,
+      lastRefreshChanged: null,
+    },
     summary: {
       total: 1,
       active: 1,
@@ -271,4 +277,57 @@ test("queue status text output surfaces failed tick errors ahead of stale queue 
   assert.match(text, /Last tick: failed/);
   assert.match(text, /Last error: Command failed: git push/);
   assert.match(text, /Queue blocked: main_broken on main @ edc495b5/);
+});
+
+test("queue status reports initializing repos from the service without falling back to the database", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "ms-queue-status-initializing-"));
+  try {
+    await withEnv(
+      {
+        XDG_CONFIG_HOME: path.join(baseDir, ".config"),
+        XDG_STATE_HOME: path.join(baseDir, ".state"),
+        XDG_DATA_HOME: path.join(baseDir, ".share"),
+        MERGE_STEWARD_SYSTEMD_DIR: path.join(baseDir, "systemd"),
+      },
+      async () => {
+        await runCli(["init", "queue.example.com"], {
+          stdout: createBufferStream().stream,
+          stderr: createBufferStream().stream,
+          runCommand: noop,
+        });
+        await runCli(["attach", "app", "owner/repo"], {
+          stdout: createBufferStream().stream,
+          stderr: createBufferStream().stream,
+          runCommand: noop,
+        });
+
+        const realFetch = globalThis.fetch;
+        globalThis.fetch = async () => new Response(JSON.stringify({
+          ok: false,
+          code: "repo_initializing",
+          error: "Repo app is still initializing in merge-steward.",
+        }), {
+          status: 503,
+          headers: { "content-type": "application/json" },
+        });
+
+        try {
+          const stdout = createBufferStream();
+          const code = await runCli(["queue", "status", "--repo", "app"], {
+            stdout: stdout.stream,
+            stderr: createBufferStream().stream,
+          });
+          assert.equal(code, 0);
+          const text = stdout.read();
+          assert.match(text, /State: initializing/);
+          assert.match(text, /still initializing/);
+          assert.doesNotMatch(text, /Source: database/);
+        } finally {
+          globalThis.fetch = realFetch;
+        }
+      },
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
 });

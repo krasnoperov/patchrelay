@@ -5,19 +5,29 @@ import type { ParsedArgs, Output } from "../types.ts";
 import { UsageError } from "../types.ts";
 import { parseIntegerFlag } from "../args.ts";
 import { formatJson, writeOutput } from "../output.ts";
-import { loadRepoConfigById, resolveRepoId, fetchLocalJson } from "../system.ts";
+import { ServiceApiError, loadRepoConfigById, resolveRepoId, fetchLocalJson } from "../system.ts";
 import { buildQueueSummary } from "../../watch/dashboard-model.ts";
 
-async function readQueueSnapshot(config: StewardConfig, eventLimit: number): Promise<{ source: "service" | "database"; snapshot: QueueWatchSnapshot }> {
+async function readQueueSnapshot(config: StewardConfig, eventLimit: number): Promise<
+  | { kind: "snapshot"; source: "service" | "database"; snapshot: QueueWatchSnapshot }
+  | { kind: "repo_unavailable"; state: "initializing" | "failed"; message: string }
+> {
   try {
     const query = new URLSearchParams({ eventLimit: String(eventLimit) });
     const snapshot = await fetchLocalJson<QueueWatchSnapshot>(config.repoId, `/queue/watch?${query.toString()}`);
-    return { source: "service", snapshot };
-  } catch {
+    return { kind: "snapshot", source: "service", snapshot };
+  } catch (error) {
+    if (error instanceof ServiceApiError && error.code === "repo_initializing") {
+      return { kind: "repo_unavailable", state: "initializing", message: error.message };
+    }
+    if (error instanceof ServiceApiError && error.code === "repo_init_failed") {
+      return { kind: "repo_unavailable", state: "failed", message: error.message };
+    }
     const store = new SqliteStore(config.database.path);
     try {
       const entries = store.listAll(config.repoId);
-    return {
+      return {
+        kind: "snapshot",
         source: "database",
         snapshot: {
           repoId: config.repoId,
@@ -149,7 +159,30 @@ export async function handleQueue(parsed: ParsedArgs, stdout: Output): Promise<n
 
   if (subcommand === "status") {
     const eventLimit = parseIntegerFlag(parsed.flags.get("events"), "--events") ?? 20;
-    const { source, snapshot } = await readQueueSnapshot(config, eventLimit);
+    const result = await readQueueSnapshot(config, eventLimit);
+    if (result.kind === "repo_unavailable") {
+      if (parsed.flags.get("json") === true) {
+        writeOutput(stdout, formatJson({
+          repoId: config.repoId,
+          repoFullName: config.repoFullName,
+          source: "service",
+          state: result.state,
+          error: result.message,
+        }));
+        return 0;
+      }
+      writeOutput(
+        stdout,
+        [
+          `Repo: ${config.repoId} (${config.repoFullName})`,
+          "Source: service",
+          `State: ${result.state}`,
+          result.message,
+        ].join("\n") + "\n",
+      );
+      return 0;
+    }
+    const { source, snapshot } = result;
     const payload = { source, ...snapshot };
     if (parsed.flags.get("json") === true) {
       writeOutput(stdout, formatJson(payload));

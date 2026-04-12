@@ -35,6 +35,8 @@ export function App({ gatewayBaseUrl, repos, initialRepoRef, initialPrNumber }: 
   const { exit } = useApp();
   const [repoStates, setRepoStates] = useState<DashboardRepoState[]>(() => repos.map((repo) => ({
     ...repo,
+    serviceState: "offline",
+    serviceMessage: null,
     snapshot: null,
     error: null,
     lastSnapshotReceivedAt: null,
@@ -81,9 +83,78 @@ export function App({ gatewayBaseUrl, repos, initialRepoRef, initialPrNumber }: 
 
     const refresh = async () => {
       try {
-        await fetchGatewayHealth(gatewayBaseUrl);
+        const health = await fetchGatewayHealth(gatewayBaseUrl);
         if (!cancelled) {
           setGatewayError(null);
+        }
+        setRepoStates((current) => current.map((repo) => {
+          const runtime = health.repos.find((candidate) => candidate.repoId === repo.repoId);
+          if (!runtime) {
+            return {
+              ...repo,
+              serviceState: "offline",
+              serviceMessage: "Repo is not registered in the running merge-steward gateway.",
+              snapshot: null,
+            };
+          }
+          return {
+            ...repo,
+            serviceState: runtime.state,
+            serviceMessage: runtime.state === "initializing"
+              ? "Merge Steward is still initializing this repo."
+              : runtime.state === "failed"
+                ? runtime.lastError ?? "Repo initialization failed in merge-steward."
+                : null,
+            ...(runtime.state === "ready" ? {} : { snapshot: null }),
+          };
+        }));
+
+        const readyRepoIds = health.repos.filter((repo) => repo.state === "ready").map((repo) => repo.repoId);
+        const results = await Promise.all(readyRepoIds.map(async (repoId) => {
+          try {
+            const snapshot = await fetchSnapshot(gatewayBaseUrl, repoId);
+            return { repoId, snapshot, receivedAt: Date.now(), error: null as string | null };
+          } catch (error) {
+            return {
+              repoId,
+              snapshot: null,
+              receivedAt: null,
+              error: error instanceof Error ? error.message : String(error),
+            };
+          }
+        }));
+
+        if (cancelled) {
+          return;
+        }
+
+        setRepoStates((current) => current.map((repo) => {
+          const result = results.find((candidate) => candidate.repoId === repo.repoId);
+          if (!result) {
+            return repo;
+          }
+          if (result.snapshot) {
+            return {
+              ...repo,
+              snapshot: result.snapshot,
+              error: null,
+              lastSnapshotReceivedAt: result.receivedAt,
+            };
+          }
+          return {
+            ...repo,
+            error: result.error,
+          };
+        }));
+
+        const latest = results.reduce<number | null>((max, result) => {
+          if (result.receivedAt === null) {
+            return max;
+          }
+          return max === null ? result.receivedAt : Math.max(max, result.receivedAt);
+        }, null);
+        if (latest !== null) {
+          setLastSnapshotReceivedAt(latest);
         }
       } catch (error) {
         if (cancelled) {
@@ -93,56 +164,11 @@ export function App({ gatewayBaseUrl, repos, initialRepoRef, initialPrNumber }: 
         setGatewayError(message);
         setRepoStates((current) => current.map((repo) => ({
           ...repo,
+          serviceState: "offline",
+          serviceMessage: message,
           error: message,
         })));
         return;
-      }
-
-      const results = await Promise.all(repos.map(async (repo) => {
-        try {
-          const snapshot = await fetchSnapshot(gatewayBaseUrl, repo.repoId);
-          return { repoId: repo.repoId, snapshot, receivedAt: Date.now(), error: null as string | null };
-        } catch (error) {
-          return {
-            repoId: repo.repoId,
-            snapshot: null,
-            receivedAt: null,
-            error: error instanceof Error ? error.message : String(error),
-          };
-        }
-      }));
-
-      if (cancelled) {
-        return;
-      }
-
-      setRepoStates((current) => current.map((repo) => {
-        const result = results.find((candidate) => candidate.repoId === repo.repoId);
-        if (!result) {
-          return repo;
-        }
-        if (result.snapshot) {
-          return {
-            ...repo,
-            snapshot: result.snapshot,
-            error: null,
-            lastSnapshotReceivedAt: result.receivedAt,
-          };
-        }
-        return {
-          ...repo,
-          error: result.error,
-        };
-      }));
-
-      const latest = results.reduce<number | null>((max, result) => {
-        if (result.receivedAt === null) {
-          return max;
-        }
-        return max === null ? result.receivedAt : Math.max(max, result.receivedAt);
-      }, null);
-      if (latest !== null) {
-        setLastSnapshotReceivedAt(latest);
       }
     };
 
@@ -198,7 +224,7 @@ export function App({ gatewayBaseUrl, repos, initialRepoRef, initialPrNumber }: 
   }, [currentRepo, currentVisibleEntries, filter, pendingInitialPrNumber]);
 
   useEffect(() => {
-    if (view !== "project" || !currentRepo?.repoId || !selectedEntryId) {
+    if (view !== "project" || !currentRepo?.repoId || !selectedEntryId || currentRepo.serviceState !== "ready") {
       setDetail(null);
       return;
     }
@@ -223,13 +249,13 @@ export function App({ gatewayBaseUrl, repos, initialRepoRef, initialPrNumber }: 
       cancelled = true;
       clearInterval(interval);
     };
-  }, [gatewayBaseUrl, currentRepo?.repoId, selectedEntryId, view]);
+  }, [gatewayBaseUrl, currentRepo?.repoId, currentRepo?.serviceState, selectedEntryId, view]);
 
   async function refreshRepo(repoId: string): Promise<void> {
     const nextSnapshot = await fetchSnapshot(gatewayBaseUrl, repoId);
     const receivedAt = Date.now();
     setRepoStates((current) => current.map((repo) => repo.repoId === repoId
-      ? { ...repo, snapshot: nextSnapshot, error: null, lastSnapshotReceivedAt: receivedAt }
+      ? { ...repo, serviceState: "ready", serviceMessage: null, snapshot: nextSnapshot, error: null, lastSnapshotReceivedAt: receivedAt }
       : repo));
     setLastSnapshotReceivedAt(receivedAt);
   }
@@ -248,7 +274,7 @@ export function App({ gatewayBaseUrl, repos, initialRepoRef, initialPrNumber }: 
   }
 
   async function runDequeue(): Promise<void> {
-    if (!currentRepo?.repoId || !selectedEntryId) {
+    if (!currentRepo?.repoId || !selectedEntryId || currentRepo.serviceState !== "ready") {
       return;
     }
     try {

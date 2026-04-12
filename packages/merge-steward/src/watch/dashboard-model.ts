@@ -1,4 +1,5 @@
 import type { QueueEntry, QueueWatchSnapshot } from "../types.ts";
+import type { RepoRuntimeState } from "../admin-types.ts";
 import { buildChainEntries, buildDisplayEntries } from "./display-filter.ts";
 import { formatDuration, humanStatus, nextStepLabel, relativeTime, summarizeQueueBlock } from "./format.ts";
 
@@ -9,13 +10,15 @@ export interface DashboardRepoConfig {
 }
 
 export interface DashboardRepoState extends DashboardRepoConfig {
+  serviceState: RepoRuntimeState | "offline";
+  serviceMessage: string | null;
   snapshot: QueueWatchSnapshot | null;
   error: string | null;
   lastSnapshotReceivedAt: number | null;
 }
 
 export interface RepoHealthSummary {
-  kind: "offline" | "blocked" | "stuck" | "attention" | "active" | "idle";
+  kind: "offline" | "initializing" | "failed" | "blocked" | "stuck" | "attention" | "active" | "idle";
   label: string;
   color: "red" | "yellow" | "green" | "gray" | "cyan";
   detail: string;
@@ -170,6 +173,22 @@ export function getDefaultEntryId(
 export function getRepoHealth(repo: DashboardRepoState, now = Date.now()): RepoHealthSummary {
   const snapshot = repo.snapshot;
   const staleForMs = repo.lastSnapshotReceivedAt === null ? Infinity : now - repo.lastSnapshotReceivedAt;
+  if (repo.serviceState === "initializing") {
+    return {
+      kind: "initializing",
+      label: "Initializing",
+      color: "cyan",
+      detail: repo.serviceMessage ?? "Loading GitHub policy and local clone state.",
+    };
+  }
+  if (repo.serviceState === "failed") {
+    return {
+      kind: "failed",
+      label: "Init failed",
+      color: "red",
+      detail: repo.serviceMessage ?? "Repo initialization failed in merge-steward.",
+    };
+  }
   if (!snapshot || (repo.error && staleForMs > OFFLINE_STALE_MS)) {
     return {
       kind: "offline",

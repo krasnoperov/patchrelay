@@ -2,16 +2,10 @@ import fastify from "fastify";
 import rawBody from "fastify-raw-body";
 import type { Logger } from "pino";
 import { z } from "zod";
-import type { ServiceGitHubAuthStatus, ServiceGitHubRepoAccessResponse } from "./admin-types.ts";
+import type { RepoRuntimeStatus, ServiceGitHubAuthStatus, ServiceGitHubRepoAccessResponse, ServiceHealthResponse } from "./admin-types.ts";
 import type { DiscoveredRepoSettings } from "./github-repo-discovery.ts";
-import type { MergeStewardService } from "./service.ts";
-import type { StewardConfig } from "./config.ts";
 import { verifySignature, normalizeWebhook, processWebhookEvent } from "./webhook-handler.ts";
-
-interface RepoInstance {
-  config: StewardConfig;
-  service: MergeStewardService;
-}
+import type { RepoInstance, RepoRuntimeRecord } from "./repo-runtime.ts";
 
 const enqueueBody = z.object({
   prNumber: z.number().int(),
@@ -44,7 +38,7 @@ const repoAccessBody = z.object({
 });
 
 export async function buildMultiRepoHttpServer(options: {
-  instances: Map<string, RepoInstance>;
+  repos: Map<string, RepoRuntimeRecord>;
   webhookSecret: string | undefined;
   githubAdmin: {
     getStatus(): ServiceGitHubAuthStatus;
@@ -53,23 +47,30 @@ export async function buildMultiRepoHttpServer(options: {
   };
   logger: Logger;
 }) {
-  const { instances, webhookSecret, githubAdmin, logger } = options;
+  const { repos, webhookSecret, githubAdmin, logger } = options;
 
   // Build a repoId → instance lookup for the /repos/:repoId routes.
-  const byRepoId = new Map<string, RepoInstance>();
-  for (const inst of instances.values()) {
-    byRepoId.set(inst.config.repoId, inst);
+  const byRepoId = new Map<string, RepoRuntimeRecord>();
+  for (const record of repos.values()) {
+    byRepoId.set(record.config.repoId, record);
   }
 
   const app = fastify({ loggerInstance: logger, disableRequestLogging: true });
   await app.register(rawBody, { runFirst: true });
 
   // --- Health ---
-  app.get("/health", async () => ({
+  app.get("/health", async (): Promise<ServiceHealthResponse> => ({
     ok: true,
-    repos: [...instances.entries()].map(([fullName, inst]) => ({
-      repoId: inst.config.repoId,
-      repoFullName: fullName,
+    startupComplete: [...repos.values()].every((record) => record.state !== "initializing"),
+    repos: [...repos.values()].map<RepoRuntimeStatus>((record) => ({
+      repoId: record.config.repoId,
+      repoFullName: record.config.repoFullName,
+      baseBranch: record.config.baseBranch,
+      state: record.state,
+      startedAt: record.startedAt,
+      ...(record.readyAt ? { readyAt: record.readyAt } : {}),
+      ...(record.failedAt ? { failedAt: record.failedAt } : {}),
+      ...(record.lastError ? { lastError: record.lastError } : {}),
     })),
   }));
 
@@ -130,9 +131,12 @@ export async function buildMultiRepoHttpServer(options: {
       return { ok: true, ignored: true };
     }
 
-    const instance = instances.get(repoFullName);
-    if (!instance) {
+    const record = repos.get(repoFullName);
+    if (!record) {
       return { ok: true, ignored: true, reason: "unknown_repo" };
+    }
+    if (record.state !== "ready" || !record.instance) {
+      return { ok: true, ignored: true, reason: record.state === "initializing" ? "repo_initializing" : "repo_init_failed" };
     }
 
     const event = normalizeWebhook(eventType, payload);
@@ -140,11 +144,11 @@ export async function buildMultiRepoHttpServer(options: {
       return { ok: true, ignored: true };
     }
 
-    await processWebhookEvent(event, instance.service, {
-      admissionLabel: instance.config.admissionLabel,
-      baseBranch: instance.config.baseBranch,
-      repoFullName: instance.config.repoFullName,
-      github: instance.service.githubApi,
+    await processWebhookEvent(event, record.instance.service, {
+      admissionLabel: record.config.admissionLabel,
+      baseBranch: record.config.baseBranch,
+      repoFullName: record.config.repoFullName,
+      github: record.instance.service.githubApi,
     }, logger);
 
     return { ok: true, repo: repoFullName };
@@ -152,15 +156,44 @@ export async function buildMultiRepoHttpServer(options: {
 
   // --- Per-repo queue endpoints under /repos/:repoId ---
 
-  function getRepo(repoId: string) {
-    return byRepoId.get(repoId);
+  function resolveRepo(repoId: string): { ok: true; record: RepoRuntimeRecord; instance: RepoInstance } | { ok: false; status: number; body: { ok: false; error: string; code: string } } {
+    const record = byRepoId.get(repoId);
+    if (!record) {
+      return { ok: false, status: 404, body: { ok: false, error: "Repo not found", code: "repo_not_found" } };
+    }
+    if (record.state === "failed") {
+      return {
+        ok: false,
+        status: 503,
+        body: {
+          ok: false,
+          error: record.lastError
+            ? `Repo ${repoId} failed to initialize: ${record.lastError}`
+            : `Repo ${repoId} failed to initialize in merge-steward.`,
+          code: "repo_init_failed",
+        },
+      };
+    }
+    if (record.state === "initializing" || !record.instance) {
+      return {
+        ok: false,
+        status: 503,
+        body: {
+          ok: false,
+          error: `Repo ${repoId} is still initializing in merge-steward.`,
+          code: "repo_initializing",
+        },
+      };
+    }
+    return { ok: true, record, instance: record.instance };
   }
 
   app.get<{ Params: { repoId: string } }>(
     "/repos/:repoId/queue/status",
     async (request, reply) => {
-      const inst = getRepo(request.params.repoId);
-      if (!inst) return reply.status(404).send({ ok: false, error: "Repo not found" });
+      const resolved = resolveRepo(request.params.repoId);
+      if (!resolved.ok) return reply.status(resolved.status).send(resolved.body);
+      const { instance: inst } = resolved;
       return { entries: inst.service.getStatus() };
     },
   );
@@ -168,8 +201,9 @@ export async function buildMultiRepoHttpServer(options: {
   app.get<{ Params: { repoId: string } }>(
     "/repos/:repoId/queue/watch",
     async (request, reply) => {
-      const inst = getRepo(request.params.repoId);
-      if (!inst) return reply.status(404).send({ ok: false, error: "Repo not found" });
+      const resolved = resolveRepo(request.params.repoId);
+      if (!resolved.ok) return reply.status(resolved.status).send(resolved.body);
+      const { instance: inst } = resolved;
       const query = watchQuery.parse(request.query ?? {});
       return inst.service.getWatchSnapshot(
         query.eventLimit !== undefined ? { eventLimit: query.eventLimit } : undefined,
@@ -180,8 +214,9 @@ export async function buildMultiRepoHttpServer(options: {
   app.get<{ Params: { repoId: string; entryId: string } }>(
     "/repos/:repoId/queue/entries/:entryId/detail",
     async (request, reply) => {
-      const inst = getRepo(request.params.repoId);
-      if (!inst) return reply.status(404).send({ ok: false, error: "Repo not found" });
+      const resolved = resolveRepo(request.params.repoId);
+      if (!resolved.ok) return reply.status(resolved.status).send(resolved.body);
+      const { instance: inst } = resolved;
       const query = detailQuery.parse(request.query ?? {});
       const detail = inst.service.getEntryDetail(
         request.params.entryId,
@@ -195,8 +230,9 @@ export async function buildMultiRepoHttpServer(options: {
   app.post<{ Params: { repoId: string } }>(
     "/repos/:repoId/queue/reconcile",
     async (request, reply) => {
-      const inst = getRepo(request.params.repoId);
-      if (!inst) return reply.status(404).send({ ok: false, error: "Repo not found" });
+      const resolved = resolveRepo(request.params.repoId);
+      if (!resolved.ok) return reply.status(resolved.status).send(resolved.body);
+      const { instance: inst } = resolved;
       const result = await inst.service.triggerReconcile();
       return { ok: true, ...result };
     },
@@ -205,8 +241,9 @@ export async function buildMultiRepoHttpServer(options: {
   app.post<{ Params: { repoId: string } }>(
     "/repos/:repoId/queue/enqueue",
     async (request, reply) => {
-      const inst = getRepo(request.params.repoId);
-      if (!inst) return reply.status(404).send({ ok: false, error: "Repo not found" });
+      const resolved = resolveRepo(request.params.repoId);
+      if (!resolved.ok) return reply.status(resolved.status).send(resolved.body);
+      const { instance: inst } = resolved;
       const body = enqueueBody.parse(request.body);
       try {
         const params: Parameters<typeof inst.service.enqueue>[0] = {
@@ -232,8 +269,9 @@ export async function buildMultiRepoHttpServer(options: {
   app.post<{ Params: { repoId: string; entryId: string } }>(
     "/repos/:repoId/queue/entries/:entryId/dequeue",
     async (request, reply) => {
-      const inst = getRepo(request.params.repoId);
-      if (!inst) return reply.status(404).send({ ok: false, error: "Repo not found" });
+      const resolved = resolveRepo(request.params.repoId);
+      if (!resolved.ok) return reply.status(resolved.status).send(resolved.body);
+      const { instance: inst } = resolved;
       const ok = inst.service.dequeueEntry(request.params.entryId);
       if (!ok) return reply.status(404).send({ ok: false, error: "Entry not found" });
       return { ok: true };
@@ -243,8 +281,9 @@ export async function buildMultiRepoHttpServer(options: {
   app.post<{ Params: { repoId: string; entryId: string } }>(
     "/repos/:repoId/queue/entries/:entryId/update-head",
     async (request, reply) => {
-      const inst = getRepo(request.params.repoId);
-      if (!inst) return reply.status(404).send({ ok: false, error: "Repo not found" });
+      const resolved = resolveRepo(request.params.repoId);
+      if (!resolved.ok) return reply.status(resolved.status).send(resolved.body);
+      const { instance: inst } = resolved;
       const body = updateHeadBody.parse(request.body);
       const ok = inst.service.updateEntryHead(request.params.entryId, body.headSha);
       if (!ok) return reply.status(404).send({ ok: false, error: "Entry not found" });
@@ -255,8 +294,9 @@ export async function buildMultiRepoHttpServer(options: {
   app.get<{ Params: { repoId: string; incidentId: string } }>(
     "/repos/:repoId/queue/incidents/:incidentId",
     async (request, reply) => {
-      const inst = getRepo(request.params.repoId);
-      if (!inst) return reply.status(404).send({ ok: false, error: "Repo not found" });
+      const resolved = resolveRepo(request.params.repoId);
+      if (!resolved.ok) return reply.status(resolved.status).send(resolved.body);
+      const { instance: inst } = resolved;
       const incident = inst.service.getIncident(request.params.incidentId);
       if (!incident) return reply.status(404).send({ ok: false, error: "Incident not found" });
       return incident;
@@ -266,8 +306,9 @@ export async function buildMultiRepoHttpServer(options: {
   app.get<{ Params: { repoId: string; entryId: string } }>(
     "/repos/:repoId/queue/entries/:entryId/incidents",
     async (request, reply) => {
-      const inst = getRepo(request.params.repoId);
-      if (!inst) return reply.status(404).send({ ok: false, error: "Repo not found" });
+      const resolved = resolveRepo(request.params.repoId);
+      if (!resolved.ok) return reply.status(resolved.status).send(resolved.body);
+      const { instance: inst } = resolved;
       return { incidents: inst.service.listIncidents(request.params.entryId) };
     },
   );

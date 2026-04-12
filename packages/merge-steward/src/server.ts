@@ -19,12 +19,7 @@ import { setRuntimeGitHubAuthProvider } from "./exec.ts";
 import { readFileSync, existsSync } from "node:fs";
 import type { Logger } from "pino";
 import type { ServiceGitHubAuthStatus, ServiceGitHubRepoAccessResponse } from "./admin-types.ts";
-
-export interface RepoInstance {
-  config: StewardConfig;
-  service: MergeStewardService;
-  store: SqliteStore;
-}
+import type { RepoInstance, RepoRuntimeRecord } from "./repo-runtime.ts";
 
 async function createRepoInstance(
   config: StewardConfig,
@@ -171,49 +166,19 @@ export async function startMultiServer(): Promise<void> {
     }
   }
 
-  const instances = new Map<string, RepoInstance>();
+  const repos = new Map<string, RepoRuntimeRecord>();
   for (const config of configs) {
-    logger.info({ repoId: config.repoId, repoFullName: config.repoFullName }, "Initializing repo");
-    try {
-      const discovery = githubAuth.mode === "app"
-        ? await discoverRepoSettings(githubAuth.credentials, config.repoFullName, { baseBranch: config.baseBranch })
-        : { defaultBranch: config.baseBranch, branch: config.baseBranch, requiredChecks: [], warnings: [] };
-      const policy = new GitHubPolicyCache({
-        repoFullName: config.repoFullName,
-        initialRequiredChecks: discovery.requiredChecks,
-        logger: logger.child({ repoId: config.repoId, component: "github-policy" }),
-        refreshPolicy: async () => {
-          if (githubAuth.mode !== "app") {
-            return {
-              defaultBranch: config.baseBranch,
-              branch: config.baseBranch,
-              requiredChecks: [],
-              warnings: [],
-            };
-          }
-          return await discoverRepoSettings(githubAuth.credentials, config.repoFullName, {
-            baseBranch: config.baseBranch,
-          });
-        },
-      });
-      logger.info({
-        repoId: config.repoId,
-        repoFullName: config.repoFullName,
-        githubRequiredChecks: policy.getRequiredChecks(),
-      }, "Resolved GitHub protection requirements");
-      const instance = await createRepoInstance(config, policy, logger.child({ repoId: config.repoId }), botIdentity);
-      instances.set(config.repoFullName, instance);
-    } catch (error) {
-      logger.error({
-        repoId: config.repoId,
-        repoFullName: config.repoFullName,
-        error: error instanceof Error ? error.message : String(error),
-      }, "Failed to initialize repo; continuing without this repo");
-    }
+    repos.set(config.repoFullName, {
+      config,
+      state: "initializing",
+      startedAt: new Date().toISOString(),
+    });
   }
 
+  let shuttingDown = false;
+
   const app = await buildMultiRepoHttpServer({
-    instances,
+    repos,
     webhookSecret,
     githubAdmin: {
       getStatus: () => githubRuntimeStatus,
@@ -264,10 +229,15 @@ export async function startMultiServer(): Promise<void> {
   });
 
   const shutdown = async () => {
+    shuttingDown = true;
     logger.info("Shutting down...");
     githubAppTokenManager?.stop();
     setRuntimeGitHubAuthProvider(undefined);
-    for (const inst of instances.values()) {
+    for (const record of repos.values()) {
+      const inst = record.instance;
+      if (!inst) {
+        continue;
+      }
       await inst.service.stop();
       inst.store.close();
     }
@@ -279,9 +249,61 @@ export async function startMultiServer(): Promise<void> {
   process.on("SIGINT", () => void shutdown());
 
   await app.listen({ host: bind, port });
-  logger.info({ bind, port, repos: instances.size }, "merge-steward listening");
+  logger.info({ bind, port, repos: repos.size }, "merge-steward listening");
 
-  for (const inst of instances.values()) {
-    await inst.service.start();
-  }
+  const initializeRepo = async (record: RepoRuntimeRecord): Promise<void> => {
+    const config = record.config;
+    logger.info({ repoId: config.repoId, repoFullName: config.repoFullName }, "Initializing repo");
+    try {
+      const discovery = githubAuth.mode === "app"
+        ? await discoverRepoSettings(githubAuth.credentials, config.repoFullName, { baseBranch: config.baseBranch })
+        : { defaultBranch: config.baseBranch, branch: config.baseBranch, requiredChecks: [], warnings: [] };
+      const policy = new GitHubPolicyCache({
+        repoFullName: config.repoFullName,
+        initialRequiredChecks: discovery.requiredChecks,
+        logger: logger.child({ repoId: config.repoId, component: "github-policy" }),
+        refreshPolicy: async () => {
+          if (githubAuth.mode !== "app") {
+            return {
+              defaultBranch: config.baseBranch,
+              branch: config.baseBranch,
+              requiredChecks: [],
+              warnings: [],
+            };
+          }
+          return await discoverRepoSettings(githubAuth.credentials, config.repoFullName, {
+            baseBranch: config.baseBranch,
+          });
+        },
+      });
+      logger.info({
+        repoId: config.repoId,
+        repoFullName: config.repoFullName,
+        githubRequiredChecks: policy.getRequiredChecks(),
+      }, "Resolved GitHub protection requirements");
+      const instance = await createRepoInstance(config, policy, logger.child({ repoId: config.repoId }), botIdentity);
+      if (shuttingDown) {
+        instance.store.close();
+        return;
+      }
+      await instance.service.start();
+      record.instance = instance;
+      record.state = "ready";
+      record.readyAt = new Date().toISOString();
+      record.failedAt = undefined;
+      record.lastError = undefined;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      record.state = "failed";
+      record.failedAt = new Date().toISOString();
+      record.lastError = message;
+      logger.error({
+        repoId: config.repoId,
+        repoFullName: config.repoFullName,
+        error: message,
+      }, "Failed to initialize repo; this repo will stay unavailable until restart");
+    }
+  };
+
+  void Promise.allSettled([...repos.values()].map(async (record) => await initializeRepo(record)));
 }

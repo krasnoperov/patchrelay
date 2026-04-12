@@ -49,8 +49,15 @@ export function ProjectDetailView({
   if (!repo.snapshot) {
     return (
       <Box marginTop={1} flexDirection="column">
-        <Text color="red">Queue data is unavailable for {repo.repoId}.</Text>
-        {repo.error ? <Text dimColor>{repo.error}</Text> : null}
+        <Text color={repo.serviceState === "initializing" ? "cyan" : "red"}>
+          {repo.serviceState === "initializing"
+            ? `Merge Steward is still initializing ${repo.repoId}.`
+            : repo.serviceState === "failed"
+              ? `Merge Steward failed to initialize ${repo.repoId}.`
+              : `Queue data is unavailable for ${repo.repoId}.`}
+        </Text>
+        {repo.serviceMessage ? <Text dimColor>{repo.serviceMessage}</Text> : null}
+        {repo.error && repo.error !== repo.serviceMessage ? <Text dimColor>{repo.error}</Text> : null}
       </Box>
     );
   }
