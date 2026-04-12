@@ -39,6 +39,7 @@ export interface IssueSessionReactiveIntentInput {
   activeRunId?: number | undefined;
   prNumber?: number | undefined;
   prState?: string | undefined;
+  prIsDraft?: boolean | undefined;
   prReviewState?: string | undefined;
   prCheckStatus?: string | undefined;
   latestFailureSource?: string | undefined;
@@ -106,6 +107,7 @@ export function deriveIssueSessionReactiveIntent(
   if (params.activeRunId !== undefined) return undefined;
   if (params.prNumber === undefined) return undefined;
   if (params.prState && params.prState !== "open") return undefined;
+  if (params.prIsDraft) return undefined;
 
   if (params.latestFailureSource === "queue_eviction" || (params.mergeConflictDetected && params.downstreamOwned)) {
     return {

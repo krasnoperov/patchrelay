@@ -65,14 +65,26 @@ function createConfig(): AppConfig {
 test("LinearGraphqlClient sends Bearer auth for access tokens", async () => {
   const originalFetch = globalThis.fetch;
   let seenAuthorization = "";
+  let seenBody = "";
 
   globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     seenAuthorization = String((init?.headers as Record<string, string>)?.authorization ?? "");
+    seenBody = String(init?.body ?? "");
     return new Response(
       JSON.stringify({
         data: {
           issue: {
             id: "issue_1",
+            attachments: {
+              nodes: [
+                {
+                  id: "attachment_1",
+                  title: "GitHub PR #24",
+                  subtitle: "Pull request",
+                  url: "https://github.com/krasnoperov/subtitles/pull/24",
+                },
+              ],
+            },
             state: { id: "start", name: "Start" },
             labels: { nodes: [] },
             team: { states: { nodes: [] }, labels: { nodes: [] } },
@@ -95,8 +107,15 @@ test("LinearGraphqlClient sends Bearer auth for access tokens", async () => {
       pino({ enabled: false }),
     );
 
-    await client.getIssue("issue_1");
+    const issue = await client.getIssue("issue_1");
     assert.equal(seenAuthorization, "Bearer secret-token");
+    assert.match(seenBody, /attachments/);
+    assert.deepEqual(issue.attachments, [{
+      id: "attachment_1",
+      title: "GitHub PR #24",
+      subtitle: "Pull request",
+      url: "https://github.com/krasnoperov/subtitles/pull/24",
+    }]);
   } finally {
     globalThis.fetch = originalFetch;
   }

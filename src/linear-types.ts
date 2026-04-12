@@ -27,6 +27,7 @@ export interface IssueMetadata {
   title?: string;
   description?: string;
   url?: string;
+  attachments?: LinearIssueAttachment[];
   teamId?: string;
   teamKey?: string;
   stateId?: string;
@@ -185,6 +186,7 @@ export interface LinearIssueSnapshot {
   title?: string;
   description?: string;
   url?: string;
+  attachments?: LinearIssueAttachment[];
   priority?: number;
   estimate?: number;
   stateId?: string;
@@ -210,6 +212,13 @@ export interface LinearIssueSnapshot {
   }>;
   blockedBy: LinearIssueRelationSummary[];
   blocks: LinearIssueRelationSummary[];
+}
+
+export interface LinearIssueAttachment {
+  id: string;
+  title?: string;
+  subtitle?: string;
+  url: string;
 }
 
 export interface LinearIssueRelationSummary {
