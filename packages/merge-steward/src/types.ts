@@ -195,7 +195,6 @@ export interface QueueConfig {
   maxRetries: number;
   flakyRetries: number;
   pollIntervalMs: number;
-  requiredChecks: string[];
 }
 
 // ─── Reconciler Event Stream ────────────────────────────────────

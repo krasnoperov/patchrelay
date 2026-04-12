@@ -92,7 +92,7 @@ function normalizeRequiredChecks(rules: GitHubRule[]): { requiredChecks: string[
     }
 
     if (rule.type === "workflows") {
-      warnings.add("GitHub branch rules require workflows; Steward still needs explicit requiredChecks if workflow names differ from check-run names.");
+      warnings.add("GitHub branch rules require workflows; Steward enforces check-run names from GitHub protection, so workflow names may still need a matching required status check context.");
     }
   }
 
@@ -156,7 +156,7 @@ export async function discoverRepoSettings(
   const requiredChecks = [...new Set([...ruleChecks, ...protectionChecks])].sort((left, right) => left.localeCompare(right));
 
   if (requiredChecks.length === 0) {
-    warnings.push(`No required status checks discovered for ${branch}; Steward will admit on any green check unless you configure requiredChecks explicitly.`);
+    warnings.push(`No required status checks discovered for ${branch}; Steward will treat any green check as sufficient until GitHub branch protection declares explicit required checks.`);
   }
 
   return {

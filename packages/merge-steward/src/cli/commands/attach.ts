@@ -1,7 +1,6 @@
 import { upsertRepoConfig } from "../../install.ts";
 import type { ParsedArgs, Output, CommandRunner } from "../types.ts";
 import { UsageError } from "../types.ts";
-import { parseCsvFlag } from "../args.ts";
 import { formatJson, writeOutput } from "../output.ts";
 import { runSystemctl } from "../system.ts";
 import { fetchServiceRepoDiscovery, listRepoConfigs } from "../system.ts";
@@ -49,7 +48,6 @@ export async function handleAttach(parsed: ParsedArgs, stdout: Output, runComman
   const existing = listRepoConfigs().find((repo) => repo.repoId === repoId || repo.repoFullName === repoFullName);
 
   const explicitBaseBranch = typeof parsed.flags.get("base-branch") === "string" ? String(parsed.flags.get("base-branch")) : undefined;
-  const explicitRequiredChecks = parseCsvFlag(parsed.flags.get("required-check"));
   const admissionLabel = typeof parsed.flags.get("label") === "string" ? String(parsed.flags.get("label")) : undefined;
   const mergeQueueCheckName = typeof parsed.flags.get("merge-queue-check-name") === "string"
     ? String(parsed.flags.get("merge-queue-check-name"))
@@ -57,14 +55,12 @@ export async function handleAttach(parsed: ParsedArgs, stdout: Output, runComman
   const refresh = parsed.flags.get("refresh") === true;
 
   const shouldDiscoverBaseBranch = !explicitBaseBranch && (!existing || refresh);
-  const shouldDiscoverRequiredChecks = explicitRequiredChecks.length === 0 && (!existing || refresh || !!explicitBaseBranch);
-  const needsDiscovery = shouldDiscoverBaseBranch || shouldDiscoverRequiredChecks;
+  const needsDiscovery = shouldDiscoverBaseBranch || refresh;
 
   let discovered:
     | {
       defaultBranch: string;
       branch: string;
-      requiredChecks: string[];
       warnings: string[];
     }
     | undefined;
@@ -88,15 +84,11 @@ export async function handleAttach(parsed: ParsedArgs, stdout: Output, runComman
 
   const baseBranch = explicitBaseBranch
     ?? (shouldDiscoverBaseBranch ? discovered?.branch : undefined);
-  const requiredChecks = explicitRequiredChecks.length > 0
-    ? explicitRequiredChecks
-    : (shouldDiscoverRequiredChecks ? discovered?.requiredChecks : undefined);
 
   const result = await upsertRepoConfig({
     id: repoId,
     repoFullName,
     ...(baseBranch ? { baseBranch } : {}),
-    ...(requiredChecks ? { requiredChecks } : {}),
     ...(admissionLabel ? { admissionLabel } : {}),
     ...(mergeQueueCheckName ? { mergeQueueCheckName } : {}),
   });
@@ -121,7 +113,6 @@ export async function handleAttach(parsed: ParsedArgs, stdout: Output, runComman
       `Base branch: ${result.repo.baseBranch}`,
       `Admission label: ${result.repo.admissionLabel}`,
       `Queue eviction check: ${result.repo.mergeQueueCheckName}`,
-      `Required checks: ${result.repo.requiredChecks.length > 0 ? result.repo.requiredChecks.join(", ") : "(any green check)"}`,
       ...warnings.map((warning) => `Warning: ${warning}`),
       ...(discovered?.warnings.map((warning) => `Warning: ${warning}`) ?? []),
       restartState.ok

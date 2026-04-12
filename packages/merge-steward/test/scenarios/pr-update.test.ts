@@ -71,7 +71,7 @@ describe("PR update (force-push) handling", () => {
         gitBin: "git",
         maxRetries: 3,
         flakyRetries: 0,
-        requiredChecks: [],
+        githubRequiredChecks: [],
         pollIntervalMs: 60_000,
         admissionLabel: "queue",
         mergeQueueCheckName: "merge-steward/queue",

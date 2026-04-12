@@ -17,7 +17,6 @@ export const stewardConfigSchema = z.object({
   flakyRetries: z.number().int().min(0).default(1),
   /** Max speculative branches to maintain in parallel. 1 = serial mode. */
   speculativeDepth: z.number().int().min(1).default(10),
-  requiredChecks: z.array(z.string()).default([]),
   pollIntervalMs: z.number().int().min(1000).default(30_000),
   server: z.object({
     bind: z.string().default("127.0.0.1"),
@@ -52,6 +51,9 @@ export const stewardConfigSchema = z.object({
 });
 
 export type StewardConfig = z.infer<typeof stewardConfigSchema>;
+export interface RuntimeStewardConfig extends StewardConfig {
+  githubRequiredChecks: string[];
+}
 
 function readEnvFile(filePath: string): Record<string, string> {
   if (!existsSync(filePath)) {

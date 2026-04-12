@@ -7,11 +7,11 @@ import { MergeStewardService } from "../../src/service.ts";
 import { GitSim } from "../../src/sim/git-sim.ts";
 import { CISim } from "../../src/sim/ci-sim.ts";
 import pino from "pino";
-import type { StewardConfig } from "../../src/config.ts";
+import type { RuntimeStewardConfig } from "../../src/config.ts";
 
 const silentLogger = pino({ level: "silent" });
 
-const testConfig: StewardConfig = {
+const testConfig: RuntimeStewardConfig = {
   repoId: "test-repo",
   repoFullName: "test/repo",
   baseBranch: "main",
@@ -20,7 +20,7 @@ const testConfig: StewardConfig = {
   maxRetries: 2,
   flakyRetries: 0,
   speculativeDepth: 1,
-  requiredChecks: [],
+  githubRequiredChecks: [],
   pollIntervalMs: 600_000,
   admissionLabel: "queue",
   mergeQueueCheckName: "merge-steward/queue",

@@ -2,7 +2,6 @@ import { spawnSync } from "node:child_process";
 import { accessSync, constants, existsSync, mkdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { loadConfig } from "../../config.ts";
-import { normalizeCheckList } from "../../github-repo-discovery.ts";
 import {
   getDefaultConfigPath,
   getDefaultRepoConfigDir,
@@ -248,24 +247,10 @@ export async function handleDoctor(parsed: ParsedArgs, stdout: Output): Promise<
                 : `Local base branch is ${config.baseBranch}, but GitHub default branch is ${discovered.defaultBranch}`,
             });
 
-            const configuredChecks = normalizeCheckList(config.requiredChecks);
-            const discoveredChecks = normalizeCheckList(discovered.requiredChecks);
-            const configuredSet = new Set(configuredChecks);
-            const discoveredSet = new Set(discoveredChecks);
-            const missingFromLocal = discoveredChecks.filter((value) => !configuredSet.has(value));
-            const extraLocal = configuredChecks.filter((value) => !discoveredSet.has(value));
-            const checksMatch = missingFromLocal.length === 0 && extraLocal.length === 0;
-            const localSuperset = missingFromLocal.length === 0 && extraLocal.length > 0;
             checks.push({
-              status: checksMatch || localSuperset ? "pass" : "warn",
+              status: "pass",
               scope: `repo:${repoId}:github-required-checks`,
-              message: checksMatch
-                ? (configuredChecks.length > 0
-                    ? `Local required checks match GitHub for ${config.baseBranch}`
-                    : `No required checks configured locally and GitHub does not require status checks for ${config.baseBranch}`)
-                : localSuperset
-                  ? `Local required checks extend GitHub for ${config.baseBranch} with additional gates [${extraLocal.join(", ")}]`
-                : `Local required checks [${configuredChecks.join(", ") || "(none)"}] differ from GitHub [${discoveredChecks.join(", ") || "(none)"}] for ${config.baseBranch}${discoveredSource === "gh" ? " (via gh fallback)" : ""}`,
+              message: `GitHub requires [${discovered.requiredChecks.join(", ") || "(none)"}] for ${config.baseBranch}${discoveredSource === "gh" ? " (via gh fallback)" : ""}`,
             });
 
             for (const warning of discovered.warnings ?? []) {

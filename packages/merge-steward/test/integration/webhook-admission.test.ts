@@ -7,7 +7,7 @@ import { CISim } from "../../src/sim/ci-sim.ts";
 import { GitHubSim, EvictionReporterSim } from "../../src/sim/github-sim.ts";
 import { MergeStewardService } from "../../src/service.ts";
 import { buildMultiRepoHttpServer } from "../../src/http-multi.ts";
-import type { StewardConfig } from "../../src/config.ts";
+import type { RuntimeStewardConfig } from "../../src/config.ts";
 import pino from "pino";
 import { SqliteStore } from "../../src/db/sqlite-store.ts";
 
@@ -33,7 +33,7 @@ const githubAdmin = {
   },
 };
 
-const config: StewardConfig = {
+const config: RuntimeStewardConfig = {
   repoId: "test-repo",
   repoFullName: "test/repo",
   baseBranch: "main",
@@ -41,7 +41,7 @@ const config: StewardConfig = {
   gitBin: "git",
   maxRetries: 2,
   flakyRetries: 1,
-  requiredChecks: [],
+  githubRequiredChecks: [],
   pollIntervalMs: 60_000,
   admissionLabel: "queue",
   mergeQueueCheckName: "merge-steward/queue",
@@ -209,7 +209,7 @@ describe("webhook admission integration", () => {
     githubSim.setChecks(109, [{ name: "Verify", conclusion: "success" }]);
 
     const service = new MergeStewardService(
-      { ...config, requiredChecks: ["verify"] },
+      { ...config, githubRequiredChecks: ["verify"] },
       store,
       new GitSim() as any,
       new CISim(() => "pass") as any,

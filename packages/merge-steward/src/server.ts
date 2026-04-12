@@ -1,5 +1,5 @@
 import pino from "pino";
-import type { StewardConfig } from "./config.ts";
+import type { RuntimeStewardConfig, StewardConfig } from "./config.ts";
 import { SqliteStore } from "./db/sqlite-store.ts";
 import { CloneManager } from "./github/clone-manager.ts";
 import { ShellGitOperations, type BotIdentity } from "./github/shell-git.ts";
@@ -20,12 +20,12 @@ import type { Logger } from "pino";
 import type { ServiceGitHubAuthStatus, ServiceGitHubRepoAccessResponse } from "./admin-types.ts";
 
 export interface RepoInstance {
-  config: StewardConfig;
+  config: RuntimeStewardConfig;
   service: MergeStewardService;
   store: SqliteStore;
 }
 
-async function createRepoInstance(config: StewardConfig, logger: Logger, botIdentity?: BotIdentity): Promise<RepoInstance> {
+async function createRepoInstance(config: RuntimeStewardConfig, logger: Logger, botIdentity?: BotIdentity): Promise<RepoInstance> {
   const repoUrl = `https://github.com/${config.repoFullName}.git`;
   const clone = new CloneManager(config.clonePath, repoUrl, config.repoFullName, config.gitBin, logger);
   await clone.ensureClone();
@@ -35,7 +35,7 @@ async function createRepoInstance(config: StewardConfig, logger: Logger, botIden
   const git = new ShellGitOperations(clone.path, config.repoFullName, config.gitBin);
   if (botIdentity) git.setBotIdentity(botIdentity);
   if (config.autoResolvePatterns.length > 0) git.setAutoResolvePatterns(config.autoResolvePatterns);
-  const ci = new GitHubActionsRunner(config.repoFullName, config.requiredChecks);
+  const ci = new GitHubActionsRunner(config.repoFullName, config.githubRequiredChecks);
   const github = new GitHubPRClient(config.repoFullName);
   const eviction = new GitHubCheckRunReporter(
     config.repoFullName,
@@ -168,7 +168,19 @@ export async function startMultiServer(): Promise<void> {
   const instances = new Map<string, RepoInstance>();
   for (const config of configs) {
     logger.info({ repoId: config.repoId, repoFullName: config.repoFullName }, "Initializing repo");
-    const instance = await createRepoInstance(config, logger.child({ repoId: config.repoId }), botIdentity);
+    const discovery = githubAuth.mode === "app"
+      ? await discoverRepoSettings(githubAuth.credentials, config.repoFullName, { baseBranch: config.baseBranch })
+      : { defaultBranch: config.baseBranch, branch: config.baseBranch, requiredChecks: [], warnings: [] };
+    const runtimeConfig: RuntimeStewardConfig = {
+      ...config,
+      githubRequiredChecks: discovery.requiredChecks,
+    };
+    logger.info({
+      repoId: config.repoId,
+      repoFullName: config.repoFullName,
+      githubRequiredChecks: runtimeConfig.githubRequiredChecks,
+    }, "Resolved GitHub protection requirements");
+    const instance = await createRepoInstance(runtimeConfig, logger.child({ repoId: config.repoId }), botIdentity);
     instances.set(config.repoFullName, instance);
   }
 

@@ -5,11 +5,11 @@ import { z } from "zod";
 import type { ServiceGitHubAuthStatus, ServiceGitHubRepoAccessResponse } from "./admin-types.ts";
 import type { DiscoveredRepoSettings } from "./github-repo-discovery.ts";
 import type { MergeStewardService } from "./service.ts";
-import type { StewardConfig } from "./config.ts";
+import type { RuntimeStewardConfig } from "./config.ts";
 import { verifySignature, normalizeWebhook, processWebhookEvent } from "./webhook-handler.ts";
 
 interface RepoInstance {
-  config: StewardConfig;
+  config: RuntimeStewardConfig;
   service: MergeStewardService;
 }
 

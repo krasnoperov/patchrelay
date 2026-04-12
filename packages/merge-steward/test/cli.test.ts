@@ -111,8 +111,6 @@ test("merge-steward init and repo commands manage bootstrap state with explicit 
             "owner/repo",
             "--base-branch",
             "main",
-            "--required-check",
-            "test,lint",
             "--merge-queue-check-name",
             "custom/queue-eviction",
           ], {

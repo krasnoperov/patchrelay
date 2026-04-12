@@ -1,7 +1,7 @@
 import type { Logger } from "pino";
 import type { GitOperations, CIRunner, GitHubPRApi, EvictionReporter, SpeculativeBranchBuilder } from "./interfaces.ts";
 import type { QueueEntry, QueueEntryDetail, IncidentRecord, QueueRuntimeStatus, QueueWatchSnapshot } from "./types.ts";
-import type { StewardConfig } from "./config.ts";
+import type { RuntimeStewardConfig } from "./config.ts";
 import type { QueueStore } from "./store.ts";
 import { MergeStewardRuntime } from "./service-runtime.ts";
 import { MergeStewardQueueCommands } from "./service-queue.ts";
@@ -17,7 +17,7 @@ export class MergeStewardService {
   private readonly watchQueries: MergeStewardWatchQueries;
 
   constructor(
-    private readonly config: StewardConfig,
+    private readonly config: RuntimeStewardConfig,
     private readonly store: QueueStore,
     private readonly git: GitOperations,
     private readonly ci: CIRunner,

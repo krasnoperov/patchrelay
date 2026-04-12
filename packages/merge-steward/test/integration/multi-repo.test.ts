@@ -7,7 +7,7 @@ import { CISim } from "../../src/sim/ci-sim.ts";
 import { GitHubSim, EvictionReporterSim } from "../../src/sim/github-sim.ts";
 import { MergeStewardService } from "../../src/service.ts";
 import { buildMultiRepoHttpServer } from "../../src/http-multi.ts";
-import type { StewardConfig } from "../../src/config.ts";
+import type { RuntimeStewardConfig } from "../../src/config.ts";
 import pino from "pino";
 
 const WEBHOOK_SECRET = "multi-repo-test-secret";
@@ -33,7 +33,7 @@ const githubAdmin = {
   },
 };
 
-function makeConfig(repoId: string, repoFullName: string): StewardConfig {
+function makeConfig(repoId: string, repoFullName: string): RuntimeStewardConfig {
   return {
     repoId,
     repoFullName,
@@ -42,7 +42,7 @@ function makeConfig(repoId: string, repoFullName: string): StewardConfig {
     gitBin: "git",
     maxRetries: 2,
     flakyRetries: 0,
-    requiredChecks: [],
+    githubRequiredChecks: ["ci"],
     pollIntervalMs: 60_000,
     admissionLabel: "queue",
     mergeQueueCheckName: "merge-steward/queue",
