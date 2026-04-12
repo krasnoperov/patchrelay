@@ -295,3 +295,94 @@ test("reconciler backs off recent completed issues after a rate-limited Linear f
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("reconciler does not immediately revisit recently settled completed issues", async () => {
+  const { baseDir, db } = createDb();
+  try {
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-settled",
+      issueKey: "USE-206",
+      delegatedToPatchRelay: true,
+      factoryState: "done",
+      currentLinearState: "Done",
+      currentLinearStateType: "completed",
+    });
+
+    let getIssueCalls = 0;
+    const reconciler = new MergedLinearCompletionReconciler(
+      db,
+      {
+        forProject: async () => ({
+          getIssue: async () => {
+            getIssueCalls += 1;
+            return buildLiveIssue({
+              id: "issue-settled",
+              identifier: "USE-206",
+              title: "Settled done issue",
+              stateName: "Done",
+              stateType: "completed",
+            });
+          },
+          setIssueState: async () => {
+            throw new Error("setIssueState should not be called for already completed issues");
+          },
+        }) as LinearClient,
+      },
+      pino({ enabled: false }),
+    );
+
+    await reconciler.reconcile();
+    await reconciler.reconcile();
+
+    assert.equal(getIssueCalls, 1);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("reconciler caps completion checks per pass to avoid startup fanout", async () => {
+  const { baseDir, db } = createDb();
+  try {
+    for (let index = 0; index < 12; index += 1) {
+      db.upsertIssue({
+        projectId: "usertold",
+        linearIssueId: `issue-cap-${index}`,
+        issueKey: `USE-${300 + index}`,
+        delegatedToPatchRelay: true,
+        factoryState: "done",
+        currentLinearState: "Done",
+        currentLinearStateType: "completed",
+      });
+    }
+
+    let getIssueCalls = 0;
+    const reconciler = new MergedLinearCompletionReconciler(
+      db,
+      {
+        forProject: async () => ({
+          getIssue: async () => {
+            getIssueCalls += 1;
+            return buildLiveIssue({
+              id: "issue-cap",
+              identifier: "USE-cap",
+              title: "Capped completion issue",
+              stateName: "Done",
+              stateType: "completed",
+            });
+          },
+          setIssueState: async () => {
+            throw new Error("setIssueState should not be called for already completed issues");
+          },
+        }) as LinearClient,
+      },
+      pino({ enabled: false }),
+    );
+
+    await reconciler.reconcile();
+
+    assert.equal(getIssueCalls, 10);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
