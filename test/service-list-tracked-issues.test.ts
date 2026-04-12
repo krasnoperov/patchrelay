@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import pino from "pino";
 import test from "node:test";
 import { PatchRelayDatabase } from "../src/db.ts";
@@ -309,6 +310,8 @@ test("service start recovers delegated blocked issues from paused local-work sta
     );
 
     await service.start();
+    await delay(0);
+    await delay(0);
 
     const tracked = service.listTrackedIssues().find((entry) => entry.issueKey === "USE-3");
     assert.ok(tracked);
@@ -450,7 +453,7 @@ test("listTrackedIssues does not mark downstream waiting issues as ready just be
 
     const tracked = service.listTrackedIssues().find((entry) => entry.issueKey === "USE-QUEUE");
     assert.ok(tracked);
-    assert.equal(tracked.waitingReason, "Waiting on downstream review/merge automation");
+    assert.equal(tracked.waitingReason, "PatchRelay work is done; waiting on downstream review/merge automation");
     assert.equal(tracked.readyForExecution, false);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
