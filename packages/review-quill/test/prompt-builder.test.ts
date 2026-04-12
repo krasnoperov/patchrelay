@@ -114,8 +114,12 @@ test("renderReviewPrompt includes explicit guidance docs and suppressed summarie
   assert.match(prompt, /Linked issue keys: TST-28/);
   assert.match(prompt, /## Review rules/);
   assert.match(prompt, /Flag only high-signal issues/);
+  assert.match(prompt, /previous blocking review concerns are now resolved, still blocking, or no longer relevant/);
+  assert.match(prompt, /Only raise a new blocker when it is clearly independent from the previous blockers/);
+  assert.match(prompt, /When several symptoms share one root cause, report them as one blocker/);
   assert.match(prompt, /Do not silently widen the delegated task/);
   assert.match(prompt, /Verify these historical claims against the current head before reusing them/);
+  assert.match(prompt, /make the continuity explicit: note what appears resolved since the prior review, what still blocks on this head, and what is genuinely new/);
 });
 
 test("renderReviewPrompt embeds renderDiffContextLines verbatim (CLI/LLM parity lock)", () => {

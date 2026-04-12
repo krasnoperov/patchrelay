@@ -72,6 +72,11 @@ const REVIEW_RULES = `## Review rules
 Review the current PR head only.
 
 - Start by understanding the actual code and diff before deciding on a verdict.
+- Start by checking whether the previous blocking review concerns are now resolved, still blocking, or no longer relevant on the current head.
+- If a previous blocker still applies, prefer restating that blocker clearly over inventing a differently phrased version of the same concern.
+- Only raise a new blocker when it is clearly independent from the previous blockers.
+- When several symptoms share one root cause, report them as one blocker instead of separate variants.
+- Prefer the smallest set of remaining merge-blocking concerns that makes the PR's current risk clear.
 - Flag only high-signal issues: real correctness bugs, definite regressions, or clear documented rule violations you can quote from repository guidance.
 - Do not raise speculative issues, style debates, pre-existing problems, or linter/typechecker noise.
 - Keep architectural concerns for cross-file or product-level issues that cannot be pinned to one line.
@@ -155,6 +160,7 @@ export function renderReviewPrompt(context: Omit<ReviewContext, "prompt">): stri
       content: [
         "## Prior review claims to verify",
         "Verify these historical claims against the current head before reusing them.",
+        "In your walkthrough, make the continuity explicit: note what appears resolved since the prior review, what still blocks on this head, and what is genuinely new if anything.",
         ...context.promptContext.priorReviewClaims.map((claim) => {
           const label = [
             claim.authorLogin ?? "unknown",
