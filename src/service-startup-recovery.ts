@@ -1,5 +1,6 @@
 import type { Logger } from "pino";
 import type { PatchRelayDatabase } from "./db.ts";
+import { appendDelegationObservedEvent } from "./delegation-audit.ts";
 import type { LinearClientProvider } from "./types.ts";
 import type { LinearSessionSync } from "./linear-session-sync.ts";
 import { isResumablePausedLocalWork } from "./paused-issue-state.ts";
@@ -70,6 +71,24 @@ export class ServiceStartupRecovery {
       });
 
       const delegated = liveIssue.delegateId === installation.actorId;
+      if (issue.delegatedToPatchRelay !== delegated) {
+        appendDelegationObservedEvent(this.db, {
+          projectId: issue.projectId,
+          linearIssueId: issue.linearIssueId,
+          payload: {
+            source: "startup_recovery",
+            actorId: installation.actorId,
+            ...(liveIssue.delegateId ? { observedDelegateId: liveIssue.delegateId } : {}),
+            previousDelegatedToPatchRelay: issue.delegatedToPatchRelay,
+            observedDelegatedToPatchRelay: delegated,
+            appliedDelegatedToPatchRelay: delegated,
+            hydration: "live_linear",
+            ...(issue.activeRunId !== undefined ? { activeRunId: issue.activeRunId } : {}),
+            decision: delegated ? "resume_issue" : "none",
+            reason: "startup_recovery_refreshed_linear_delegation",
+          },
+        });
+      }
       const unresolvedBlockers = this.db.issues.countUnresolvedBlockers(issue.projectId, issue.linearIssueId);
       const latestRun = this.db.runs.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
       const shouldRecoverPausedLocalWork =

@@ -2397,6 +2397,106 @@ test("completed notification for a released run is ignored", async () => {
   }
 });
 
+test("reconciliation repairs stale undelegated local state from live Linear before releasing an active run", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-delegation-authority-"));
+  try {
+    const { db, orchestrator } = createOrchestrator(
+      baseDir,
+      {
+        forProject: async () => ({
+          getIssue: async () => ({
+            id: "issue-delegation-authority",
+            identifier: "USE-208",
+            title: "Repair stale delegation during reconciliation",
+            teamId: "USE",
+            teamKey: "USE",
+            delegateId: "patchrelay-actor",
+            stateId: "state-start",
+            stateName: "In Progress",
+            stateType: "started",
+            workflowStates: [],
+            labelIds: [],
+            labels: [],
+            teamLabels: [],
+            blockedBy: [],
+            blocks: [],
+          }),
+        }),
+      },
+      {
+        startThread: async () => ({ threadId: "thread-1" }),
+        steerTurn: async () => undefined,
+        readThread: async () => ({
+          id: "thread-1",
+          turns: [{ id: "turn-1", status: "running", items: [] }],
+        }),
+      },
+    );
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("usertold", installation.id);
+
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-delegation-authority",
+      issueKey: "USE-208",
+      title: "Repair stale delegation during reconciliation",
+      delegatedToPatchRelay: false,
+      factoryState: "implementing",
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "implementation",
+    });
+    db.runs.updateRunThread(run.id, { threadId: "thread-1", turnId: "turn-1" });
+    db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      activeRunId: run.id,
+      delegatedToPatchRelay: false,
+      factoryState: "implementing",
+    });
+    (orchestrator as unknown as {
+      leaseService: { acquire: (projectId: string, linearIssueId: string) => string | undefined };
+    }).leaseService.acquire("usertold", "issue-delegation-authority");
+
+    await (orchestrator as unknown as {
+      runReconciler: {
+        reconcile: (params: { run: typeof run; issue: NonNullable<ReturnType<typeof db.getIssue>>; recoveryLease: boolean | "owned" }) => Promise<void>;
+      };
+    }).runReconciler.reconcile({
+      run: db.runs.getRunById(run.id)!,
+      issue: db.getIssue("usertold", "issue-delegation-authority")!,
+      recoveryLease: "owned",
+    });
+
+    const updatedIssue = db.getIssue("usertold", "issue-delegation-authority");
+    const updatedRun = db.runs.getRunById(run.id);
+    assert.equal(updatedIssue?.delegatedToPatchRelay, true);
+    assert.equal(updatedIssue?.activeRunId, run.id);
+    assert.equal(updatedRun?.status, "running");
+    assert.equal(
+      db.issueSessions.listIssueSessionEvents("usertold", "issue-delegation-authority")
+        .some((event) => event.eventType === "run_released_authority"),
+      false,
+    );
+    const audit = db.issueSessions.listIssueSessionEvents("usertold", "issue-delegation-authority")
+      .findLast((event) => event.eventType === "delegation_observed");
+    assert.ok(audit?.eventJson);
+    const parsed = JSON.parse(audit.eventJson) as { reason?: string; appliedDelegatedToPatchRelay?: boolean };
+    assert.equal(parsed.reason, "live_linear_confirmed_issue_is_still_delegated");
+    assert.equal(parsed.appliedDelegatedToPatchRelay, true);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("reconcileIdleIssues prioritizes queue eviction recovery over approved waiting state", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-queue-eviction-priority-"));
   try {
