@@ -61,6 +61,7 @@ export function resolveReDelegationResume(p: {
   unresolvedBlockers?: number | undefined;
   prNumber?: number | undefined;
   prState?: string | undefined;
+  prIsDraft?: boolean | undefined;
   prReviewState?: string | undefined;
   prCheckStatus?: string | undefined;
   latestFailureSource?: string | undefined;
@@ -73,10 +74,18 @@ export function resolveReDelegationResume(p: {
     return { factoryState: "done", pendingRunType: null };
   }
 
+  if (p.prNumber !== undefined && (p.prState === undefined || p.prState === "open") && p.prIsDraft) {
+    return {
+      factoryState: "delegated",
+      pendingRunType: (p.unresolvedBlockers ?? 0) === 0 ? "implementation" : null,
+    };
+  }
+
   const reactiveIntent = deriveIssueSessionReactiveIntent({
     delegatedToPatchRelay: true,
     prNumber: p.prNumber,
     prState: p.prState,
+    prIsDraft: p.prIsDraft,
     prReviewState: p.prReviewState,
     prCheckStatus: p.prCheckStatus,
     latestFailureSource: p.latestFailureSource,
@@ -147,6 +156,7 @@ export function mergeIssueMetadata(
   issue: IssueMetadata,
   liveIssue: {
     identifier?: string; title?: string; url?: string;
+    attachments?: Array<{ id: string; title?: string; subtitle?: string; url: string }>;
     teamId?: string; teamKey?: string; stateId?: string; stateName?: string; stateType?: string;
     delegateId?: string; delegateName?: string;
     blockedBy?: Array<{ id: string; identifier?: string; title?: string; stateName?: string; stateType?: string }>;
@@ -159,6 +169,7 @@ export function mergeIssueMetadata(
     ...(issue.identifier ? {} : liveIssue.identifier ? { identifier: liveIssue.identifier } : {}),
     ...(issue.title ? {} : liveIssue.title ? { title: liveIssue.title } : {}),
     ...(issue.url ? {} : liveIssue.url ? { url: liveIssue.url } : {}),
+    ...(issue.attachments && issue.attachments.length > 0 ? {} : liveIssue.attachments ? { attachments: liveIssue.attachments } : {}),
     ...(issue.teamId ? {} : liveIssue.teamId ? { teamId: liveIssue.teamId } : {}),
     ...(issue.teamKey ? {} : liveIssue.teamKey ? { teamKey: liveIssue.teamKey } : {}),
     ...(issue.stateId ? {} : liveIssue.stateId ? { stateId: liveIssue.stateId } : {}),

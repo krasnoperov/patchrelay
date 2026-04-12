@@ -28,6 +28,14 @@ interface LinearIssueRawFields {
   title?: string | null;
   description?: string | null;
   url?: string | null;
+  attachments?: {
+    nodes?: Array<{
+      id: string;
+      title?: string | null;
+      subtitle?: string | null;
+      url?: string | null;
+    }>;
+  } | null;
   priority?: number | null;
   estimate?: number | null;
   delegate?: { id?: string | null; name?: string | null } | null;
@@ -74,6 +82,14 @@ const LINEAR_ISSUE_SELECTION = `
   title
   description
   url
+  attachments {
+    nodes {
+      id
+      title
+      subtitle
+      url
+    }
+  }
   priority
   estimate
   delegate {
@@ -518,12 +534,21 @@ export class LinearGraphqlClient implements LinearClient {
     const teamLabels = (issue.team?.labels?.nodes ?? []).map((label) => ({ id: label.id, name: label.name }));
     const blocksRelations = (issue.relations?.nodes ?? []).filter((relation) => relation.type?.trim().toLowerCase() === "blocks");
     const blockedByRelations = (issue.inverseRelations?.nodes ?? []).filter((relation) => relation.type?.trim().toLowerCase() === "blocks");
+    const attachments = (issue.attachments?.nodes ?? [])
+      .filter((attachment): attachment is NonNullable<typeof attachment> & { url: string } => Boolean(attachment?.url))
+      .map((attachment) => ({
+        id: attachment.id,
+        ...(attachment.title ? { title: attachment.title } : {}),
+        ...(attachment.subtitle ? { subtitle: attachment.subtitle } : {}),
+        url: attachment.url,
+      }));
     return {
       id: issue.id,
       ...(issue.identifier ? { identifier: issue.identifier } : {}),
       ...(issue.title ? { title: issue.title } : {}),
       ...(issue.description ? { description: issue.description } : {}),
       ...(issue.url ? { url: issue.url } : {}),
+      ...(attachments.length > 0 ? { attachments } : {}),
       ...(issue.priority != null ? { priority: issue.priority } : {}),
       ...(issue.estimate != null ? { estimate: issue.estimate } : {}),
       ...(issue.state?.id ? { stateId: issue.state.id } : {}),

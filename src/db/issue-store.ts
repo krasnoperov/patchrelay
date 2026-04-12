@@ -32,6 +32,7 @@ export interface UpsertIssueParams {
   prNumber?: number | null;
   prUrl?: string | null;
   prState?: string | null;
+  prIsDraft?: boolean | null;
   prHeadSha?: string | null;
   prAuthorLogin?: string | null;
   prReviewState?: string | null;
@@ -98,6 +99,7 @@ export class IssueStore {
       if (params.prNumber !== undefined) { sets.push("pr_number = @prNumber"); values.prNumber = params.prNumber; }
       if (params.prUrl !== undefined) { sets.push("pr_url = @prUrl"); values.prUrl = params.prUrl; }
       if (params.prState !== undefined) { sets.push("pr_state = @prState"); values.prState = params.prState; }
+      if (params.prIsDraft !== undefined) { sets.push("pr_is_draft = @prIsDraft"); values.prIsDraft = params.prIsDraft == null ? null : params.prIsDraft ? 1 : 0; }
       if (params.prHeadSha !== undefined) { sets.push("pr_head_sha = @prHeadSha"); values.prHeadSha = params.prHeadSha; }
       if (params.prAuthorLogin !== undefined) { sets.push("pr_author_login = @prAuthorLogin"); values.prAuthorLogin = params.prAuthorLogin; }
       if (params.prReviewState !== undefined) { sets.push("pr_review_state = @prReviewState"); values.prReviewState = params.prReviewState; }
@@ -133,7 +135,7 @@ export class IssueStore {
           current_linear_state, current_linear_state_type, factory_state, pending_run_type, pending_run_context_json,
           branch_name, worktree_path, thread_id, active_run_id, status_comment_id,
           agent_session_id, last_linear_activity_key,
-          pr_number, pr_url, pr_state, pr_head_sha, pr_author_login, pr_review_state, pr_check_status, last_blocking_review_head_sha,
+          pr_number, pr_url, pr_state, pr_is_draft, pr_head_sha, pr_author_login, pr_review_state, pr_check_status, last_blocking_review_head_sha,
           last_github_failure_source, last_github_failure_head_sha, last_github_failure_signature, last_github_failure_check_name, last_github_failure_check_url, last_github_failure_context_json, last_github_failure_at,
           last_github_ci_snapshot_head_sha, last_github_ci_snapshot_gate_check_name, last_github_ci_snapshot_gate_check_status, last_github_ci_snapshot_json, last_github_ci_snapshot_settled_at,
           last_queue_signal_at, last_queue_incident_json,
@@ -146,7 +148,7 @@ export class IssueStore {
           @currentLinearState, @currentLinearStateType, @factoryState, @pendingRunType, @pendingRunContextJson,
           @branchName, @worktreePath, @threadId, @activeRunId, @statusCommentId,
           @agentSessionId, @lastLinearActivityKey,
-          @prNumber, @prUrl, @prState, @prHeadSha, @prAuthorLogin, @prReviewState, @prCheckStatus, @lastBlockingReviewHeadSha,
+          @prNumber, @prUrl, @prState, @prIsDraft, @prHeadSha, @prAuthorLogin, @prReviewState, @prCheckStatus, @lastBlockingReviewHeadSha,
           @lastGitHubFailureSource, @lastGitHubFailureHeadSha, @lastGitHubFailureSignature, @lastGitHubFailureCheckName, @lastGitHubFailureCheckUrl, @lastGitHubFailureContextJson, @lastGitHubFailureAt,
           @lastGitHubCiSnapshotHeadSha, @lastGitHubCiSnapshotGateCheckName, @lastGitHubCiSnapshotGateCheckStatus, @lastGitHubCiSnapshotJson, @lastGitHubCiSnapshotSettledAt,
           @lastQueueSignalAt, @lastQueueIncidentJson,
@@ -179,6 +181,7 @@ export class IssueStore {
         prNumber: params.prNumber ?? null,
         prUrl: params.prUrl ?? null,
         prState: params.prState ?? null,
+        prIsDraft: params.prIsDraft == null ? null : params.prIsDraft ? 1 : 0,
         prHeadSha: params.prHeadSha ?? null,
         prAuthorLogin: params.prAuthorLogin ?? null,
         prReviewState: params.prReviewState ?? null,
@@ -455,6 +458,7 @@ export function mapIssueRow(row: Record<string, unknown>): IssueRecord {
     ...(row.pr_number !== null && row.pr_number !== undefined ? { prNumber: Number(row.pr_number) } : {}),
     ...(row.pr_url !== null && row.pr_url !== undefined ? { prUrl: String(row.pr_url) } : {}),
     ...(row.pr_state !== null && row.pr_state !== undefined ? { prState: String(row.pr_state) } : {}),
+    ...(row.pr_is_draft !== null && row.pr_is_draft !== undefined ? { prIsDraft: Boolean(row.pr_is_draft) } : {}),
     ...(row.pr_head_sha !== null && row.pr_head_sha !== undefined ? { prHeadSha: String(row.pr_head_sha) } : {}),
     ...(row.pr_author_login !== null && row.pr_author_login !== undefined ? { prAuthorLogin: String(row.pr_author_login) } : {}),
     ...(row.pr_review_state !== null && row.pr_review_state !== undefined ? { prReviewState: String(row.pr_review_state) } : {}),

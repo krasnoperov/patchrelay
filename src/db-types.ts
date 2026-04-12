@@ -49,6 +49,7 @@ export interface IssueRecord {
   prNumber?: number | undefined;
   prUrl?: string | undefined;
   prState?: string | undefined;
+  prIsDraft?: boolean | undefined;
   prHeadSha?: string | undefined;
   prAuthorLogin?: string | undefined;
   prReviewState?: string | undefined;

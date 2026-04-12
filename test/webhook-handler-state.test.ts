@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import pino from "pino";
@@ -72,6 +72,53 @@ function createConfig(baseDir: string): AppConfig {
       },
     ],
     secretSources: {},
+  };
+}
+
+function installFakeGh(baseDir: string, responseBody: string): () => void {
+  const fakeBin = path.join(baseDir, "bin");
+  const ghPath = path.join(fakeBin, "gh");
+  mkdirSync(fakeBin, { recursive: true });
+  writeFileSync(ghPath, `#!/usr/bin/env bash
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  printf '%s' '${responseBody}'
+  exit 0
+fi
+echo "unexpected gh args: $*" >&2
+exit 1
+`, "utf8");
+  chmodSync(ghPath, 0o755);
+  const oldPath = process.env.PATH;
+  process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
+  return () => {
+    process.env.PATH = oldPath;
+  };
+}
+
+function createHydratedIssueSnapshot(params: {
+  id: string;
+  identifier: string;
+  title: string;
+  delegateId?: string;
+  attachments?: NonNullable<LinearIssueSnapshot["attachments"]>;
+}): LinearIssueSnapshot {
+  return {
+    id: params.id,
+    identifier: params.identifier,
+    title: params.title,
+    teamId: "team-maf",
+    teamKey: "MAF",
+    delegateId: params.delegateId,
+    stateId: "state-start",
+    stateName: "In Progress",
+    stateType: "started",
+    ...(params.attachments ? { attachments: params.attachments } : {}),
+    workflowStates: [],
+    labelIds: [],
+    labels: [],
+    teamLabels: [],
+    blockedBy: [],
+    blocks: [],
   };
 }
 
@@ -1069,6 +1116,434 @@ test("re-delegation resumes requested-changes issue from PR state instead of res
     const wake = db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-52");
     assert.equal(wake?.runType, "review_fix");
     assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-52" }]);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("delegateChanged adopts a linked same-repo PR with requested changes", { concurrency: false }, async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-linked-pr-review-fix-"));
+  const restorePath = installFakeGh(
+    baseDir,
+    JSON.stringify({
+      url: "https://github.com/krasnoperov/mafia/pull/124",
+      headRefName: "feat-existing-pr",
+      headRefOid: "sha-linked-review",
+      isDraft: false,
+      isCrossRepository: false,
+      state: "OPEN",
+      author: { login: "external-dev" },
+      reviewDecision: "CHANGES_REQUESTED",
+      mergeable: "MERGEABLE",
+      mergeStateStatus: "BLOCKED",
+      statusCheckRollup: [{ __typename: "CheckRun", name: "verify", status: "COMPLETED", conclusion: "SUCCESS" }],
+    }),
+  );
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+
+    const linearClient: Partial<LinearClient> = {
+      getIssue: async () => createHydratedIssueSnapshot({
+        id: "issue-maf-adopt-review",
+        identifier: "MAF-124",
+        title: "Adopt linked review PR",
+        delegateId: "patchrelay-actor",
+        attachments: [{
+          id: "attachment-124",
+          title: "GitHub PR #124",
+          url: "https://github.com/krasnoperov/mafia/pull/124",
+        }],
+      }),
+    };
+
+    const enqueued: Array<{ projectId: string; issueId: string }> = [];
+    const handler = new WebhookHandler(
+      config,
+      db,
+      { forProject: async () => linearClient as LinearClient } as never,
+      { steerTurn: async () => undefined } as never,
+      (projectId, issueId) => { enqueued.push({ projectId, issueId }); },
+      pino({ enabled: false }),
+    );
+
+    const payload: LinearWebhookPayload = {
+      action: "update",
+      type: "Issue",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      webhookTimestamp: Date.now(),
+      updatedFrom: { delegateId: null },
+      data: {
+        id: "issue-maf-adopt-review",
+        identifier: "MAF-124",
+        title: "Adopt linked review PR",
+        team: { id: "team-maf", key: "MAF" },
+        state: { id: "state-start", name: "In Progress", type: "started" },
+        delegate: { id: "patchrelay-actor", name: "PatchRelay" },
+      },
+    };
+
+    const stored = db.webhookEvents.insertFullWebhookEvent({
+      webhookId: "delivery-adopt-review",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(payload),
+    });
+    await handler.processWebhookEvent(stored.id);
+
+    const issue = db.getIssue("krasnoperov/mafia", "issue-maf-adopt-review");
+    assert.equal(issue?.delegatedToPatchRelay, true);
+    assert.equal(issue?.factoryState, "changes_requested");
+    assert.equal(issue?.prNumber, 124);
+    assert.equal(issue?.branchName, "feat-existing-pr");
+    assert.equal(issue?.prHeadSha, "sha-linked-review");
+    assert.equal(issue?.prReviewState, "changes_requested");
+    assert.equal(issue?.prCheckStatus, "success");
+    assert.equal(issue?.prIsDraft, false);
+    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-adopt-review")?.runType, "review_fix");
+    assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-adopt-review" }]);
+  } finally {
+    restorePath();
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("delegateChanged adopts a linked same-repo PR with failing CI", { concurrency: false }, async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-linked-pr-ci-"));
+  const restorePath = installFakeGh(
+    baseDir,
+    JSON.stringify({
+      url: "https://github.com/krasnoperov/mafia/pull/125",
+      headRefName: "feat-linked-ci",
+      headRefOid: "sha-linked-ci",
+      isDraft: false,
+      isCrossRepository: false,
+      state: "OPEN",
+      author: { login: "external-dev" },
+      reviewDecision: "REVIEW_REQUIRED",
+      mergeable: "MERGEABLE",
+      mergeStateStatus: "BLOCKED",
+      statusCheckRollup: [{ __typename: "CheckRun", name: "verify", status: "COMPLETED", conclusion: "FAILURE" }],
+    }),
+  );
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+
+    const linearClient: Partial<LinearClient> = {
+      getIssue: async () => createHydratedIssueSnapshot({
+        id: "issue-maf-adopt-ci",
+        identifier: "MAF-125",
+        title: "Adopt linked CI PR",
+        delegateId: "patchrelay-actor",
+        attachments: [{
+          id: "attachment-125",
+          title: "GitHub PR #125",
+          url: "https://github.com/krasnoperov/mafia/pull/125",
+        }],
+      }),
+    };
+
+    const enqueued: Array<{ projectId: string; issueId: string }> = [];
+    const handler = new WebhookHandler(
+      config,
+      db,
+      { forProject: async () => linearClient as LinearClient } as never,
+      { steerTurn: async () => undefined } as never,
+      (projectId, issueId) => { enqueued.push({ projectId, issueId }); },
+      pino({ enabled: false }),
+    );
+
+    const payload: LinearWebhookPayload = {
+      action: "update",
+      type: "Issue",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      webhookTimestamp: Date.now(),
+      updatedFrom: { delegateId: null },
+      data: {
+        id: "issue-maf-adopt-ci",
+        identifier: "MAF-125",
+        title: "Adopt linked CI PR",
+        team: { id: "team-maf", key: "MAF" },
+        state: { id: "state-start", name: "In Progress", type: "started" },
+        delegate: { id: "patchrelay-actor", name: "PatchRelay" },
+      },
+    };
+
+    const stored = db.webhookEvents.insertFullWebhookEvent({
+      webhookId: "delivery-adopt-ci",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(payload),
+    });
+    await handler.processWebhookEvent(stored.id);
+
+    const issue = db.getIssue("krasnoperov/mafia", "issue-maf-adopt-ci");
+    assert.equal(issue?.factoryState, "repairing_ci");
+    assert.equal(issue?.prCheckStatus, "failure");
+    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-adopt-ci")?.runType, "ci_repair");
+    assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-adopt-ci" }]);
+  } finally {
+    restorePath();
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("delegateChanged adopts a linked draft PR as implementation work", { concurrency: false }, async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-linked-pr-draft-"));
+  const restorePath = installFakeGh(
+    baseDir,
+    JSON.stringify({
+      url: "https://github.com/krasnoperov/mafia/pull/126",
+      headRefName: "feat-linked-draft",
+      headRefOid: "sha-linked-draft",
+      isDraft: true,
+      isCrossRepository: false,
+      state: "OPEN",
+      author: { login: "external-dev" },
+      reviewDecision: "REVIEW_REQUIRED",
+      mergeable: "MERGEABLE",
+      mergeStateStatus: "BLOCKED",
+      statusCheckRollup: [{ __typename: "CheckRun", name: "verify", status: "IN_PROGRESS", conclusion: null }],
+    }),
+  );
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+
+    const linearClient: Partial<LinearClient> = {
+      getIssue: async () => createHydratedIssueSnapshot({
+        id: "issue-maf-adopt-draft",
+        identifier: "MAF-126",
+        title: "Adopt linked draft PR",
+        delegateId: "patchrelay-actor",
+        attachments: [{
+          id: "attachment-126",
+          title: "GitHub PR #126",
+          url: "https://github.com/krasnoperov/mafia/pull/126",
+        }],
+      }),
+    };
+
+    const enqueued: Array<{ projectId: string; issueId: string }> = [];
+    const handler = new WebhookHandler(
+      config,
+      db,
+      { forProject: async () => linearClient as LinearClient } as never,
+      { steerTurn: async () => undefined } as never,
+      (projectId, issueId) => { enqueued.push({ projectId, issueId }); },
+      pino({ enabled: false }),
+    );
+
+    const payload: LinearWebhookPayload = {
+      action: "update",
+      type: "Issue",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      webhookTimestamp: Date.now(),
+      updatedFrom: { delegateId: null },
+      data: {
+        id: "issue-maf-adopt-draft",
+        identifier: "MAF-126",
+        title: "Adopt linked draft PR",
+        team: { id: "team-maf", key: "MAF" },
+        state: { id: "state-start", name: "In Progress", type: "started" },
+        delegate: { id: "patchrelay-actor", name: "PatchRelay" },
+      },
+    };
+
+    const stored = db.webhookEvents.insertFullWebhookEvent({
+      webhookId: "delivery-adopt-draft",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(payload),
+    });
+    await handler.processWebhookEvent(stored.id);
+
+    const issue = db.getIssue("krasnoperov/mafia", "issue-maf-adopt-draft");
+    assert.equal(issue?.factoryState, "delegated");
+    assert.equal(issue?.prIsDraft, true);
+    assert.equal(issue?.branchName, "feat-linked-draft");
+    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-adopt-draft")?.runType, "implementation");
+    assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-adopt-draft" }]);
+  } finally {
+    restorePath();
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("delegateChanged moves linked cross-repo PR adoption to awaiting_input", { concurrency: false }, async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-linked-pr-cross-repo-"));
+  const restorePath = installFakeGh(
+    baseDir,
+    JSON.stringify({
+      url: "https://github.com/krasnoperov/mafia/pull/127",
+      headRefName: "feat-linked-fork",
+      headRefOid: "sha-linked-fork",
+      isDraft: false,
+      isCrossRepository: true,
+      state: "OPEN",
+      author: { login: "external-dev" },
+      reviewDecision: "CHANGES_REQUESTED",
+      mergeable: "MERGEABLE",
+      mergeStateStatus: "BLOCKED",
+      statusCheckRollup: [{ __typename: "CheckRun", name: "verify", status: "COMPLETED", conclusion: "SUCCESS" }],
+    }),
+  );
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+
+    const linearClient: Partial<LinearClient> = {
+      getIssue: async () => createHydratedIssueSnapshot({
+        id: "issue-maf-adopt-cross",
+        identifier: "MAF-127",
+        title: "Adopt linked fork PR",
+        delegateId: "patchrelay-actor",
+        attachments: [{
+          id: "attachment-127",
+          title: "GitHub PR #127",
+          url: "https://github.com/krasnoperov/mafia/pull/127",
+        }],
+      }),
+    };
+
+    const enqueued: Array<{ projectId: string; issueId: string }> = [];
+    const handler = new WebhookHandler(
+      config,
+      db,
+      { forProject: async () => linearClient as LinearClient } as never,
+      { steerTurn: async () => undefined } as never,
+      (projectId, issueId) => { enqueued.push({ projectId, issueId }); },
+      pino({ enabled: false }),
+    );
+
+    const payload: LinearWebhookPayload = {
+      action: "update",
+      type: "Issue",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      webhookTimestamp: Date.now(),
+      updatedFrom: { delegateId: null },
+      data: {
+        id: "issue-maf-adopt-cross",
+        identifier: "MAF-127",
+        title: "Adopt linked fork PR",
+        team: { id: "team-maf", key: "MAF" },
+        state: { id: "state-start", name: "In Progress", type: "started" },
+        delegate: { id: "patchrelay-actor", name: "PatchRelay" },
+      },
+    };
+
+    const stored = db.webhookEvents.insertFullWebhookEvent({
+      webhookId: "delivery-adopt-cross",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(payload),
+    });
+    await handler.processWebhookEvent(stored.id);
+
+    const issue = db.getIssue("krasnoperov/mafia", "issue-maf-adopt-cross");
+    assert.equal(issue?.factoryState, "awaiting_input");
+    assert.equal(issue?.prNumber, 127);
+    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-adopt-cross"), undefined);
+    assert.deepEqual(enqueued, []);
+  } finally {
+    restorePath();
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("delegateChanged pauses for multiple linked PRs instead of guessing", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-linked-pr-ambiguous-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+
+    const linearClient: Partial<LinearClient> = {
+      getIssue: async () => createHydratedIssueSnapshot({
+        id: "issue-maf-adopt-ambiguous",
+        identifier: "MAF-128",
+        title: "Adopt ambiguous PR links",
+        delegateId: "patchrelay-actor",
+        attachments: [
+          { id: "attachment-128a", title: "GitHub PR #128", url: "https://github.com/krasnoperov/mafia/pull/128" },
+          { id: "attachment-128b", title: "GitHub PR #129", url: "https://github.com/krasnoperov/mafia/pull/129" },
+        ],
+      }),
+    };
+
+    const enqueued: Array<{ projectId: string; issueId: string }> = [];
+    const handler = new WebhookHandler(
+      config,
+      db,
+      { forProject: async () => linearClient as LinearClient } as never,
+      { steerTurn: async () => undefined } as never,
+      (projectId, issueId) => { enqueued.push({ projectId, issueId }); },
+      pino({ enabled: false }),
+    );
+
+    const payload: LinearWebhookPayload = {
+      action: "update",
+      type: "Issue",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      webhookTimestamp: Date.now(),
+      updatedFrom: { delegateId: null },
+      data: {
+        id: "issue-maf-adopt-ambiguous",
+        identifier: "MAF-128",
+        title: "Adopt ambiguous PR links",
+        team: { id: "team-maf", key: "MAF" },
+        state: { id: "state-start", name: "In Progress", type: "started" },
+        delegate: { id: "patchrelay-actor", name: "PatchRelay" },
+      },
+    };
+
+    const stored = db.webhookEvents.insertFullWebhookEvent({
+      webhookId: "delivery-adopt-ambiguous",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(payload),
+    });
+    await handler.processWebhookEvent(stored.id);
+
+    const issue = db.getIssue("krasnoperov/mafia", "issue-maf-adopt-ambiguous");
+    assert.equal(issue?.factoryState, "awaiting_input");
+    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-adopt-ambiguous"), undefined);
+    assert.deepEqual(enqueued, []);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

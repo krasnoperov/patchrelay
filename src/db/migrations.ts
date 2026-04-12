@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS issues (
   pr_number INTEGER,
   pr_url TEXT,
   pr_state TEXT,
+  pr_is_draft INTEGER,
   pr_head_sha TEXT,
   pr_author_login TEXT,
   pr_review_state TEXT,
@@ -290,6 +291,7 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
   // branch CI failures from merge-queue evictions after webhook delivery.
   addColumnIfMissing(connection, "issues", "pr_head_sha", "TEXT");
   addColumnIfMissing(connection, "issues", "pr_author_login", "TEXT");
+  addColumnIfMissing(connection, "issues", "pr_is_draft", "INTEGER");
   addColumnIfMissing(connection, "issues", "last_github_failure_source", "TEXT");
   addColumnIfMissing(connection, "issues", "last_github_failure_head_sha", "TEXT");
   addColumnIfMissing(connection, "issues", "last_github_failure_signature", "TEXT");
@@ -353,6 +355,7 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
         pr_number INTEGER,
         pr_url TEXT,
         pr_state TEXT,
+        pr_is_draft INTEGER,
         pr_head_sha TEXT,
         pr_author_login TEXT,
         pr_review_state TEXT,
@@ -409,6 +412,7 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
         pr_number,
         pr_url,
         pr_state,
+        pr_is_draft,
         pr_head_sha,
         pr_author_login,
         pr_review_state,
@@ -463,6 +467,7 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
         pr_number,
         pr_url,
         pr_state,
+        pr_is_draft,
         pr_head_sha,
         pr_author_login,
         pr_review_state,

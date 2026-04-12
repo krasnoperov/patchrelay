@@ -22,6 +22,9 @@ import type {
   TrackedIssueRecord,
 } from "../types.ts";
 import { buildOperatorRetryEvent } from "../operator-retry-event.ts";
+import { resolveLinkedPullRequest } from "../linear-linked-pr-reconciliation.ts";
+import { readRemotePrState } from "../remote-pr-state.ts";
+import { deriveLinkedPrAdoptionOutcome } from "../delegation-linked-pr.ts";
 
 export class DesiredStageRecorder {
   constructor(
@@ -70,6 +73,13 @@ export class DesiredStageRecorder {
       activeRunId: activeRun?.id,
     });
     const delegated = delegation.delegated;
+    const linkedPrAdoption = await this.resolveLinkedPrAdoption({
+      project: params.project,
+      issue: hydratedIssue,
+      existingIssue,
+      delegated,
+      triggerEvent: params.normalized.triggerEvent,
+    });
     const unresolvedBlockers = this.db.issues.countUnresolvedBlockers(params.project.id, normalizedIssue.id);
     const terminal = isTerminalDelegationState(existingIssue, hydratedIssue);
     const openPrExists = existingIssue?.prNumber !== undefined
@@ -79,16 +89,18 @@ export class DesiredStageRecorder {
       && activeRun?.runType === "implementation"
       && !openPrExists;
 
-    const desiredStage = decideRunIntent({
-      delegated,
-      triggerAllowed,
-      triggerEvent: params.normalized.triggerEvent,
-      unresolvedBlockers,
-      hasActiveRun: Boolean(activeRun),
-      hasPendingWake,
-      terminal,
-      currentState: existingIssue?.factoryState,
-    });
+    const desiredStage = linkedPrAdoption
+      ? undefined
+      : decideRunIntent({
+        delegated,
+        triggerAllowed,
+        triggerEvent: params.normalized.triggerEvent,
+        unresolvedBlockers,
+        hasActiveRun: Boolean(activeRun),
+        hasPendingWake,
+        terminal,
+        currentState: existingIssue?.factoryState,
+      });
 
     const runRelease = decideActiveRunRelease({
       hasActiveRun: Boolean(activeRun),
@@ -106,20 +118,31 @@ export class DesiredStageRecorder {
       currentState: existingIssue?.factoryState,
       hasPr: existingIssue?.prNumber !== undefined && existingIssue?.prState !== "merged",
     });
-    const reDelegationResume = resolveReDelegationResume({
-      delegated,
-      previouslyDelegated: existingIssue?.delegatedToPatchRelay,
-      currentState: existingIssue?.factoryState,
-      awaitingInputReason: existingIssue
-        ? resolveAwaitingInputReason({ issue: existingIssue, latestRun })
-        : undefined,
-      unresolvedBlockers,
-      prNumber: existingIssue?.prNumber,
-      prState: existingIssue?.prState,
-      prReviewState: existingIssue?.prReviewState,
-      prCheckStatus: existingIssue?.prCheckStatus,
-      latestFailureSource: existingIssue?.lastGitHubFailureSource,
-    });
+    const startupResume = linkedPrAdoption
+      ? {
+          factoryState: linkedPrAdoption.factoryState,
+          pendingRunType: linkedPrAdoption.pendingRunType,
+          pendingRunContext: linkedPrAdoption.pendingRunContext,
+          source: "linked_pr_adoption",
+        }
+      : {
+          ...resolveReDelegationResume({
+            delegated,
+            previouslyDelegated: existingIssue?.delegatedToPatchRelay,
+            currentState: existingIssue?.factoryState,
+            awaitingInputReason: existingIssue
+              ? resolveAwaitingInputReason({ issue: existingIssue, latestRun })
+              : undefined,
+            unresolvedBlockers,
+            prNumber: existingIssue?.prNumber,
+            prState: existingIssue?.prState,
+            prIsDraft: existingIssue?.prIsDraft,
+            prReviewState: existingIssue?.prReviewState,
+            prCheckStatus: existingIssue?.prCheckStatus,
+            latestFailureSource: existingIssue?.lastGitHubFailureSource,
+          }),
+          source: "re_delegated",
+        };
 
     const existingWakeRunType = existingIssue
       ? params.peekPendingSessionWakeRunType(params.project.id, normalizedIssue.id)
@@ -145,13 +168,19 @@ export class DesiredStageRecorder {
         ...(hydratedIssue.estimate != null ? { estimate: hydratedIssue.estimate } : {}),
         ...(hydratedIssue.stateName ? { currentLinearState: hydratedIssue.stateName } : {}),
         ...(hydratedIssue.stateType ? { currentLinearStateType: hydratedIssue.stateType } : {}),
+        ...(linkedPrAdoption?.issueUpdates ?? {}),
         delegatedToPatchRelay: delegated,
         ...(!existingIssue && !delegated && incomingAgentSessionId ? { factoryState: "awaiting_input" as const } : {}),
-        ...(reDelegationResume.factoryState ? { factoryState: reDelegationResume.factoryState as never } : {}),
-        ...(reDelegationResume.pendingRunType !== undefined
-          ? { pendingRunType: null, pendingRunContextJson: null }
+        ...(startupResume.factoryState ? { factoryState: startupResume.factoryState as never } : {}),
+        ...(startupResume.pendingRunType !== undefined
+          ? {
+              pendingRunType: null,
+              pendingRunContextJson: startupResume.pendingRunContext
+                ? JSON.stringify(startupResume.pendingRunContext)
+                : null,
+            }
           : {}),
-        ...(!reDelegationResume.factoryState && desiredStage ? { pendingRunType: null, pendingRunContextJson: null, factoryState: "delegated" as const } : {}),
+        ...(!startupResume.factoryState && desiredStage ? { pendingRunType: null, pendingRunContextJson: null, factoryState: "delegated" as const } : {}),
         ...(clearPending ? { pendingRunType: null, pendingRunContextJson: null } : {}),
         ...(agentSessionId !== undefined ? { agentSessionId } : {}),
         ...(effectiveRunRelease.release ? { activeRunId: null } : {}),
@@ -211,15 +240,15 @@ export class DesiredStageRecorder {
         status: "blocked",
         summary: `Implementation paused because ${issue.issueKey ?? normalizedIssue.id} is now blocked`,
       });
-    } else if (reDelegationResume.pendingRunType) {
+    } else if (startupResume.pendingRunType) {
       this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(params.project.id, normalizedIssue.id, {
         projectId: params.project.id,
         linearIssueId: normalizedIssue.id,
-        ...buildOperatorRetryEvent(issue, reDelegationResume.pendingRunType, "re_delegated"),
+        ...buildOperatorRetryEvent(issue, startupResume.pendingRunType, startupResume.source),
       });
     } else if (
-      !reDelegationResume.factoryState
-      && !reDelegationResume.pendingRunType
+      !startupResume.factoryState
+      && !startupResume.pendingRunType
       &&
       desiredStage === "implementation"
       && params.normalized.triggerEvent !== "commentCreated"
@@ -342,5 +371,43 @@ export class DesiredStageRecorder {
     }
 
     return { issue: source, hydration };
+  }
+
+  private async resolveLinkedPrAdoption(params: {
+    project: ProjectConfig;
+    issue: IssueMetadata;
+    existingIssue: IssueRecord | undefined;
+    delegated: boolean;
+    triggerEvent: string;
+  }) {
+    if (!params.delegated) return undefined;
+    if (params.triggerEvent !== "delegateChanged") return undefined;
+    if (params.existingIssue?.prNumber !== undefined) return undefined;
+
+    const resolution = resolveLinkedPullRequest(params.issue.attachments, params.project.github?.repoFullName);
+    if (resolution.kind === "none") return undefined;
+    if (resolution.kind === "ambiguous") {
+      return {
+        factoryState: "awaiting_input" as const,
+        pendingRunType: null,
+        pendingRunContext: undefined,
+        issueUpdates: {},
+      };
+    }
+
+    const remote = await readRemotePrState(resolution.reference.repoFullName, resolution.reference.prNumber);
+    if (!remote) {
+      return {
+        factoryState: "awaiting_input" as const,
+        pendingRunType: null,
+        pendingRunContext: undefined,
+        issueUpdates: {
+          prNumber: resolution.reference.prNumber,
+          prUrl: resolution.reference.url,
+        },
+      };
+    }
+
+    return deriveLinkedPrAdoptionOutcome(params.project, resolution.reference.prNumber, remote);
   }
 }
