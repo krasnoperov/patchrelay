@@ -23,6 +23,22 @@ export function relativeTime(value: string | null | undefined): string {
   return `${Math.floor(deltaHours / 24)}d`;
 }
 
+export function formatTimestamp(value: string | null | undefined): string {
+  if (!value) return "unknown";
+  const parsed = new Date(value);
+  if (!Number.isFinite(parsed.getTime())) return value;
+  return new Intl.DateTimeFormat("en-GB", {
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+    timeZoneName: "short",
+  }).format(parsed);
+}
+
 export function runtimeLabel(runtime: ReviewQuillRuntimeStatus): string {
   if (runtime.reconcileInProgress || runtime.lastReconcileOutcome === "running") return "running";
   if (runtime.lastReconcileOutcome === "failed") return "failed";

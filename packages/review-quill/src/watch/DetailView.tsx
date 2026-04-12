@@ -1,6 +1,6 @@
 import { Box, Text } from "ink";
 import type { ReviewAttemptDetail } from "../types.ts";
-import { attemptLabel, attemptStateColor, formatSha, relativeTime, truncate } from "./format.ts";
+import { attemptLabel, attemptStateColor, formatSha, formatTimestamp, relativeTime } from "./format.ts";
 
 interface DetailViewProps {
   detail: ReviewAttemptDetail | null;
@@ -48,16 +48,16 @@ export function DetailView({ detail }: DetailViewProps): React.JSX.Element {
         </Text>
       ) : null}
       <Text>{reviewedHeadLabel}</Text>
-      <Text>{`Created: ${attempt.createdAt} (${relativeTime(attempt.createdAt)} ago)`}</Text>
-      <Text>{`Updated: ${attempt.updatedAt} (${relativeTime(attempt.updatedAt)} ago)`}</Text>
-      {attempt.completedAt ? <Text>{`Completed: ${attempt.completedAt}`}</Text> : null}
+      <Text>{`Created: ${formatTimestamp(attempt.createdAt)} (${relativeTime(attempt.createdAt)} ago)`}</Text>
+      <Text>{`Updated: ${formatTimestamp(attempt.updatedAt)} (${relativeTime(attempt.updatedAt)} ago)`}</Text>
+      {attempt.completedAt ? <Text>{`Completed: ${formatTimestamp(attempt.completedAt)} (${relativeTime(attempt.completedAt)} ago)`}</Text> : null}
       {attempt.externalCheckRunId ? <Text>{`Check run: ${attempt.externalCheckRunId}`}</Text> : null}
       {attempt.threadId ? <Text>{`Thread: ${attempt.threadId}`}</Text> : null}
       {attempt.turnId ? <Text>{`Turn: ${attempt.turnId}`}</Text> : null}
 
       <Box marginTop={1} flexDirection="column">
         <Text bold>Review Summary</Text>
-        <Text>{truncate(attempt.summary ?? "No summary captured.", 400)}</Text>
+        <Text>{attempt.summary ?? "No summary captured."}</Text>
       </Box>
 
       <Box marginTop={1} flexDirection="column">
