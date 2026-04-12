@@ -66,6 +66,10 @@ export class MergeStewardRuntime {
     return this.currentQueueBlock;
   }
 
+  getGitHubPolicy() {
+    return this.policy.getSnapshot();
+  }
+
   private scheduleNextTick(): void {
     if (this.tickTimer) {
       clearTimeout(this.tickTimer);

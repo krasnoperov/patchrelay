@@ -4,6 +4,8 @@ import type { DiscoveredRepoSettings } from "./github-repo-discovery.ts";
 export interface GitHubPolicySnapshot {
   requiredChecks: string[];
   fetchedAt: string | null;
+  lastRefreshReason: string | null;
+  lastRefreshChanged: boolean | null;
 }
 
 export interface GitHubPolicyRefreshResult {
@@ -40,6 +42,8 @@ export class GitHubPolicyCache {
   private fetchedAt: string | null;
   private lastIssueRefreshAt = 0;
   private readonly issueRefreshCooldownMs: number;
+  private lastRefreshReason: string | null = null;
+  private lastRefreshChanged: boolean | null = null;
 
   constructor(private readonly options: GitHubPolicyCacheOptions) {
     this.requiredChecks = normalizeChecks(options.initialRequiredChecks);
@@ -51,6 +55,8 @@ export class GitHubPolicyCache {
     return {
       requiredChecks: [...this.requiredChecks],
       fetchedAt: this.fetchedAt,
+      lastRefreshReason: this.lastRefreshReason,
+      lastRefreshChanged: this.lastRefreshChanged,
     };
   }
 
@@ -88,6 +94,8 @@ export class GitHubPolicyCache {
     const changed = !equalChecks(previousRequiredChecks, nextRequiredChecks);
     this.requiredChecks = nextRequiredChecks;
     this.fetchedAt = new Date().toISOString();
+    this.lastRefreshReason = reason;
+    this.lastRefreshChanged = changed;
 
     this.options.logger.info({
       repoFullName: this.options.repoFullName,

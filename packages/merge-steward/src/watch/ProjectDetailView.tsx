@@ -86,6 +86,17 @@ export function ProjectDetailView({
       <Text dimColor>{runtimeSummary(snapshot)}</Text>
       <Text dimColor>{`Queue: main -> ${truncate(chainText, 96)}`}</Text>
       {queueBlockSummary ? <Text color="yellow">{queueBlockSummary}</Text> : null}
+      <Text dimColor>
+        GitHub required checks: {snapshot.githubPolicy.requiredChecks.length > 0 ? snapshot.githubPolicy.requiredChecks.join(", ") : "(none)"}
+      </Text>
+      {snapshot.githubPolicy.fetchedAt ? (
+        <Text dimColor>
+          Policy fetched {relativeTime(snapshot.githubPolicy.fetchedAt)} ago
+          {snapshot.githubPolicy.lastRefreshReason
+            ? ` via ${snapshot.githubPolicy.lastRefreshReason}${snapshot.githubPolicy.lastRefreshChanged === null ? "" : snapshot.githubPolicy.lastRefreshChanged ? " (changed)" : " (unchanged)"}`
+            : ""}
+        </Text>
+      ) : null}
 
       <Box marginTop={1} flexDirection="column">
         <Text bold>Pull Requests</Text>

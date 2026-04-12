@@ -1,5 +1,5 @@
 import { Box, Text } from "ink";
-import type { QueueBlockState, QueueEntryDetail } from "../types.ts";
+import type { GitHubPolicyState, QueueBlockState, QueueEntryDetail } from "../types.ts";
 import { formatEntryEvent, humanStatus, nextStepLabel, relativeTime, shortSha, statusColor, summarizeQueueBlock } from "./format.ts";
 import { EntryStateGraph } from "./EntryStateGraph.tsx";
 import { ExternalRepairObservation } from "./ExternalRepairObservation.tsx";
@@ -12,6 +12,7 @@ interface DetailViewProps {
   activeCount: number;
   headPrNumber: number | null;
   queueBlock: QueueBlockState | null;
+  githubPolicy: GitHubPolicyState;
 }
 
 export function DetailView({
@@ -21,6 +22,7 @@ export function DetailView({
   activeCount,
   headPrNumber,
   queueBlock,
+  githubPolicy,
 }: DetailViewProps): React.JSX.Element {
   if (!detail) {
     return (
@@ -81,6 +83,20 @@ export function DetailView({
           </Text>
         </Box>
       )}
+
+      <Box marginTop={1} flexDirection="column">
+        <Text bold>GitHub Policy</Text>
+        <Text dimColor>
+          Required checks: {githubPolicy.requiredChecks.length > 0 ? githubPolicy.requiredChecks.join(", ") : "(none)"}
+        </Text>
+        {githubPolicy.fetchedAt ? <Text dimColor>Fetched: {githubPolicy.fetchedAt}</Text> : null}
+        {githubPolicy.lastRefreshReason ? (
+          <Text dimColor>
+            Last refresh: {githubPolicy.lastRefreshReason}
+            {githubPolicy.lastRefreshChanged === null ? "" : githubPolicy.lastRefreshChanged ? " (changed)" : " (unchanged)"}
+          </Text>
+        ) : null}
+      </Box>
 
       <EntryStateGraph main={graph.main} exits={graph.exits} />
       <ExternalRepairObservation observations={observations} />

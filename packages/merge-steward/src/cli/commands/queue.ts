@@ -17,12 +17,18 @@ async function readQueueSnapshot(config: StewardConfig, eventLimit: number): Pro
     const store = new SqliteStore(config.database.path);
     try {
       const entries = store.listAll(config.repoId);
-      return {
+    return {
         source: "database",
         snapshot: {
           repoId: config.repoId,
           repoFullName: config.repoFullName,
           baseBranch: config.baseBranch,
+          githubPolicy: {
+            requiredChecks: [],
+            fetchedAt: null,
+            lastRefreshReason: null,
+            lastRefreshChanged: null,
+          },
           summary: buildQueueSummary(entries),
           runtime: {
             tickInProgress: false,
@@ -49,10 +55,18 @@ function firstLine(text: string | null | undefined): string | null {
 }
 
 export function formatQueueStatusText(source: "service" | "database", snapshot: QueueWatchSnapshot): string {
+  const githubPolicy = snapshot.githubPolicy ?? {
+    requiredChecks: [],
+    fetchedAt: null,
+    lastRefreshReason: null,
+    lastRefreshChanged: null,
+  };
   return [
     `Repo: ${snapshot.repoId} (${snapshot.repoFullName})`,
     `Source: ${source}`,
     `Base branch: ${snapshot.baseBranch}`,
+    `GitHub required checks: ${githubPolicy.requiredChecks.length > 0 ? githubPolicy.requiredChecks.join(", ") : "(none)"}`,
+    ...(githubPolicy.fetchedAt ? [`GitHub policy fetched: ${githubPolicy.fetchedAt}`] : []),
     `Active entries: ${snapshot.summary.active}`,
     `Queued: ${snapshot.summary.queued}  preparing: ${snapshot.summary.preparingHead}  validating: ${snapshot.summary.validating}  merging: ${snapshot.summary.merging}`,
     `Merged: ${snapshot.summary.merged}  evicted: ${snapshot.summary.evicted}  dequeued: ${snapshot.summary.dequeued}`,

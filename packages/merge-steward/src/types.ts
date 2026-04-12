@@ -147,10 +147,18 @@ export interface QueueBlockState {
   missingRequiredChecks: string[];
 }
 
+export interface GitHubPolicyState {
+  requiredChecks: string[];
+  fetchedAt: string | null;
+  lastRefreshReason: string | null;
+  lastRefreshChanged: boolean | null;
+}
+
 export interface QueueWatchSnapshot {
   repoId: string;
   repoFullName: string;
   baseBranch: string;
+  githubPolicy: GitHubPolicyState;
   summary: QueueStatusSummary;
   runtime: QueueRuntimeStatus;
   queueBlock: QueueBlockState | null;

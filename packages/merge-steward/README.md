@@ -199,6 +199,8 @@ It can wake up on:
 
 On startup, the steward reconciles GitHub protection for every attached repo. Policy changes are normally learned from GitHub policy webhooks. If a merge is rejected unexpectedly, the steward performs a guarded one-shot policy refresh to recover from a missed webhook without polling GitHub continuously.
 
+The dashboard project view and `merge-steward queue status --repo <id>` also show the live GitHub-required checks and the last policy refresh, so an operator can tell whether a queue pause came from a policy change or from the branch state itself.
+
 ### Running
 
 ```bash

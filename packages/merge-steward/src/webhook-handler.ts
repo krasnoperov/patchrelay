@@ -14,7 +14,7 @@ export type StewardWebhookEvent =
   | { type: "pr_synchronize"; prNumber: number; branch: string; headSha: string }
   | { type: "review_approved"; prNumber: number; branch: string; headSha: string }
   | { type: "check_suite_completed"; prNumber: number | null; branch: string; headSha: string; conclusion: string }
-  | { type: "policy_changed"; source: "branch_protection_rule" | "repository_ruleset"; action: string }
+  | { type: "policy_changed"; source: "branch_protection_rule" | "repository_ruleset"; action: string; branch?: string | undefined }
   | { type: "push"; ref: string; headSha: string };
 
 /**
@@ -112,7 +112,9 @@ export function normalizeWebhook(
     case "branch_protection_rule": {
       const action = String(payload.action ?? "");
       if (!["created", "edited", "deleted"].includes(action)) return undefined;
-      return { type: "policy_changed", source: "branch_protection_rule", action };
+      const rule = payload.rule as Record<string, unknown> | undefined;
+      const branch = typeof rule?.name === "string" && rule.name.length > 0 ? rule.name : undefined;
+      return { type: "policy_changed", source: "branch_protection_rule", action, branch };
     }
 
     case "repository_ruleset": {
@@ -196,11 +198,21 @@ export async function processWebhookEvent(
     }
 
     case "policy_changed": {
+      if (event.source === "branch_protection_rule" && event.branch && event.branch !== config.baseBranch) {
+        logger.debug({
+          source: event.source,
+          action: event.action,
+          branch: event.branch,
+          baseBranch: config.baseBranch,
+        }, "Ignoring unrelated branch protection policy event");
+        break;
+      }
       try {
         const refresh = await service.refreshGitHubPolicyFromWebhook(`${event.source}:${event.action}`);
         logger.info({
           source: event.source,
           action: event.action,
+          branch: event.branch,
           changed: refresh.changed,
           requiredChecks: refresh.requiredChecks,
         }, "GitHub protection policy webhook processed");
@@ -209,6 +221,7 @@ export async function processWebhookEvent(
         logger.warn({
           source: event.source,
           action: event.action,
+          branch: event.branch,
           error: error instanceof Error ? error.message : String(error),
         }, "GitHub protection policy webhook refresh failed");
       }

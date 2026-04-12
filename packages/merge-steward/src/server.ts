@@ -174,34 +174,42 @@ export async function startMultiServer(): Promise<void> {
   const instances = new Map<string, RepoInstance>();
   for (const config of configs) {
     logger.info({ repoId: config.repoId, repoFullName: config.repoFullName }, "Initializing repo");
-    const discovery = githubAuth.mode === "app"
-      ? await discoverRepoSettings(githubAuth.credentials, config.repoFullName, { baseBranch: config.baseBranch })
-      : { defaultBranch: config.baseBranch, branch: config.baseBranch, requiredChecks: [], warnings: [] };
-    const policy = new GitHubPolicyCache({
-      repoFullName: config.repoFullName,
-      initialRequiredChecks: discovery.requiredChecks,
-      logger: logger.child({ repoId: config.repoId, component: "github-policy" }),
-      refreshPolicy: async () => {
-        if (githubAuth.mode !== "app") {
-          return {
-            defaultBranch: config.baseBranch,
-            branch: config.baseBranch,
-            requiredChecks: [],
-            warnings: [],
-          };
-        }
-        return await discoverRepoSettings(githubAuth.credentials, config.repoFullName, {
-          baseBranch: config.baseBranch,
-        });
-      },
-    });
-    logger.info({
-      repoId: config.repoId,
-      repoFullName: config.repoFullName,
-      githubRequiredChecks: policy.getRequiredChecks(),
-    }, "Resolved GitHub protection requirements");
-    const instance = await createRepoInstance(config, policy, logger.child({ repoId: config.repoId }), botIdentity);
-    instances.set(config.repoFullName, instance);
+    try {
+      const discovery = githubAuth.mode === "app"
+        ? await discoverRepoSettings(githubAuth.credentials, config.repoFullName, { baseBranch: config.baseBranch })
+        : { defaultBranch: config.baseBranch, branch: config.baseBranch, requiredChecks: [], warnings: [] };
+      const policy = new GitHubPolicyCache({
+        repoFullName: config.repoFullName,
+        initialRequiredChecks: discovery.requiredChecks,
+        logger: logger.child({ repoId: config.repoId, component: "github-policy" }),
+        refreshPolicy: async () => {
+          if (githubAuth.mode !== "app") {
+            return {
+              defaultBranch: config.baseBranch,
+              branch: config.baseBranch,
+              requiredChecks: [],
+              warnings: [],
+            };
+          }
+          return await discoverRepoSettings(githubAuth.credentials, config.repoFullName, {
+            baseBranch: config.baseBranch,
+          });
+        },
+      });
+      logger.info({
+        repoId: config.repoId,
+        repoFullName: config.repoFullName,
+        githubRequiredChecks: policy.getRequiredChecks(),
+      }, "Resolved GitHub protection requirements");
+      const instance = await createRepoInstance(config, policy, logger.child({ repoId: config.repoId }), botIdentity);
+      instances.set(config.repoFullName, instance);
+    } catch (error) {
+      logger.error({
+        repoId: config.repoId,
+        repoFullName: config.repoFullName,
+        error: error instanceof Error ? error.message : String(error),
+      }, "Failed to initialize repo; continuing without this repo");
+    }
   }
 
   const app = await buildMultiRepoHttpServer({
