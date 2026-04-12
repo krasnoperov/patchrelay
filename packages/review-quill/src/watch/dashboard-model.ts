@@ -70,16 +70,16 @@ function summarizeWebhookBurst(events: WebhookEventRecord[]): string | null {
 
 function latestAttemptDetail(attempt: ReviewAttemptRecord): string {
   if (attempt.status === "completed" && attempt.conclusion === "approved") {
-    return `No review work right now. Last review approved PR #${attempt.prNumber} ${relativeTime(attempt.updatedAt)} ago.`;
+    return `No review work right now. Latest stored review result: PR #${attempt.prNumber} approved ${relativeTime(attempt.updatedAt)} ago.`;
   }
   if (attempt.status === "completed" && attempt.conclusion === "declined") {
-    return `No review work right now. Last review requested changes on PR #${attempt.prNumber} ${relativeTime(attempt.updatedAt)} ago.`;
+    return `No review work right now. Latest stored review result: PR #${attempt.prNumber} requested changes ${relativeTime(attempt.updatedAt)} ago.`;
   }
   if (attempt.status === "superseded") {
-    return `No review work right now. PR #${attempt.prNumber} was superseded ${relativeTime(attempt.updatedAt)} ago.`;
+    return `No review work right now. Latest stored review attempt for PR #${attempt.prNumber} was superseded ${relativeTime(attempt.updatedAt)} ago.`;
   }
   if (attempt.status === "cancelled") {
-    return `No review work right now. PR #${attempt.prNumber} was cancelled ${relativeTime(attempt.updatedAt)} ago.`;
+    return `No review work right now. Latest stored review attempt for PR #${attempt.prNumber} was cancelled ${relativeTime(attempt.updatedAt)} ago.`;
   }
   return `No review work right now. Last activity was ${relativeTime(attempt.updatedAt)} ago.`;
 }
@@ -148,11 +148,18 @@ export function getRepoHealth(snapshot: ReviewQuillWatchSnapshot | null, repo: R
   if (latest) {
     const webhooks = repoWebhooks(snapshot, repo);
     if (hasRepoActivityAfterAttempt(latest, webhooks)) {
+      const latestResult = latest.status === "completed"
+        ? latest.conclusion === "approved"
+          ? `Latest stored review result: PR #${latest.prNumber} approved ${relativeTime(latest.updatedAt)} ago.`
+          : latest.conclusion === "declined"
+            ? `Latest stored review result: PR #${latest.prNumber} requested changes ${relativeTime(latest.updatedAt)} ago.`
+            : `Latest stored review result for PR #${latest.prNumber} finished ${relativeTime(latest.updatedAt)} ago.`
+        : `Latest stored review activity was on PR #${latest.prNumber} ${relativeTime(latest.updatedAt)} ago.`;
       return {
         kind: "idle",
         label: "Idle",
         color: "green",
-        detail: `No review work right now. Newer repo activity arrived after PR #${latest.prNumber}'s last review result, so review-quill is waiting for the latest head to become eligible.`,
+        detail: `${latestResult} Recent repo activity has not produced newer eligible review work yet.`,
       };
     }
     return {
@@ -242,7 +249,7 @@ export function getReviewQueueText(snapshot: ReviewQuillWatchSnapshot | null, re
     if (staleAttempts.length > 0) {
       return `${staleAttempts.length} stale attempt${staleAttempts.length === 1 ? "" : "s"} need cleanup`;
     }
-    return "runner is idle";
+    return "no eligible review work";
   }
   return attempts.map((attempt) => `#${attempt.prNumber} ${attempt.status}`).join("  ");
 }

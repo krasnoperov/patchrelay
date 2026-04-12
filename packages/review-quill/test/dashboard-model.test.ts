@@ -96,7 +96,7 @@ test("repo health ignores older failed attempts once the same PR was later appro
 
   const health = getRepoHealth(snapshot, repo);
   assert.equal(health.kind, "idle");
-  assert.match(health.detail, /approved PR #55/);
+  assert.match(health.detail, /Latest stored review result: PR #55 approved/);
 });
 
 test("recent activity prefers latest review attempts over raw webhook spam", () => {
@@ -136,7 +136,7 @@ test("repo health summarizes webhook bursts when no review attempts exist yet", 
   assert.match(health.detail, /Recent wakeups: 2 check_run, 1 check_suite/);
 });
 
-test("repo health treats webhook activity after the last verdict as waiting on a newer head", () => {
+test("repo health explains repo activity after the last verdict without implying active review work", () => {
   const repo = fakeRepo({
     latestConclusion: "declined",
     latestAttemptAt: "2026-04-09T20:01:00.000Z",
@@ -162,7 +162,8 @@ test("repo health treats webhook activity after the last verdict as waiting on a
 
   const health = getRepoHealth(snapshot, repo);
   assert.equal(health.kind, "idle");
-  assert.match(health.detail, /waiting for the latest head to become eligible/i);
+  assert.match(health.detail, /Latest stored review result: PR #57 requested changes/i);
+  assert.match(health.detail, /Recent repo activity has not produced newer eligible review work yet/i);
 });
 
 test("review dashboard does not count stale attempts as active work", () => {
@@ -188,4 +189,14 @@ test("review dashboard does not count stale attempts as active work", () => {
 
   assert.equal(projectStatsSummary(snapshot, repo), "0 active · 0 queued · 1 stale");
   assert.match(getReviewQueueText(snapshot, repo), /stale attempt/i);
+});
+
+test("review queue text says no eligible review work when the runner is idle", () => {
+  const repo = fakeRepo();
+  const snapshot = fakeSnapshot({
+    repos: [repo],
+    attempts: [],
+  });
+
+  assert.equal(getReviewQueueText(snapshot, repo), "no eligible review work");
 });
