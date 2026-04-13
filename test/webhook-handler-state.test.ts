@@ -911,6 +911,95 @@ test("un-delegation during active run releases run and preserves implementing st
   }
 });
 
+test("terminal Linear completion during active run releases the run and marks the issue done", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-terminal-active-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+
+    const issueRecord = db.upsertIssue({
+      projectId: "krasnoperov/mafia",
+      linearIssueId: "issue-maf-50-done",
+      issueKey: "MAF-50D",
+      title: "Planning-only issue",
+      delegatedToPatchRelay: true,
+      currentLinearState: "In Progress",
+      currentLinearStateType: "started",
+      factoryState: "implementing",
+      pendingRunType: "implementation",
+      pendingRunContextJson: JSON.stringify({ note: "stale wake" }),
+    });
+    const run = db.runs.createRun({
+      issueId: issueRecord.id,
+      projectId: "krasnoperov/mafia",
+      linearIssueId: "issue-maf-50-done",
+      runType: "implementation",
+    });
+    db.upsertIssue({
+      projectId: "krasnoperov/mafia",
+      linearIssueId: "issue-maf-50-done",
+      activeRunId: run.id,
+    });
+
+    const enqueued: Array<{ projectId: string; issueId: string }> = [];
+    const handler = new WebhookHandler(
+      config,
+      db,
+      { forProject: async () => undefined } as never,
+      { steerTurn: async () => undefined } as never,
+      (projectId, issueId) => { enqueued.push({ projectId, issueId }); },
+      pino({ enabled: false }),
+    );
+
+    const payload: LinearWebhookPayload = {
+      action: "update",
+      type: "Issue",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      webhookTimestamp: Date.now(),
+      updatedFrom: { stateId: "state-start" },
+      data: {
+        id: "issue-maf-50-done",
+        identifier: "MAF-50D",
+        title: "Planning-only issue",
+        team: { id: "team-maf", key: "MAF" },
+        state: { id: "state-done", name: "Done", type: "completed" },
+        delegate: { id: "patchrelay-actor", name: "PatchRelay" },
+      },
+    };
+
+    const stored = db.webhookEvents.insertFullWebhookEvent({
+      webhookId: "delivery-terminal-active-50-done",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(payload),
+    });
+
+    await handler.processWebhookEvent(stored.id);
+
+    const issue = db.getIssue("krasnoperov/mafia", "issue-maf-50-done");
+    assert.equal(issue?.currentLinearState, "Done");
+    assert.equal(issue?.currentLinearStateType, "completed");
+    assert.equal(issue?.factoryState, "done");
+    assert.equal(issue?.activeRunId, undefined);
+    assert.equal(issue?.pendingRunType, undefined);
+    assert.equal(issue?.pendingRunContextJson, undefined);
+    assert.deepEqual(enqueued, []);
+
+    const finishedRun = db.runs.getRunById(run.id);
+    assert.equal(finishedRun?.status, "released");
+    assert.equal(finishedRun?.failureReason, "Issue reached terminal state during active run");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("un-delegation pauses awaiting_queue issue and preserves downstream PR-backed state", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-noreturn-"));
   try {

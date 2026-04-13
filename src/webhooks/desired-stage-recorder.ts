@@ -155,6 +155,7 @@ export class DesiredStageRecorder {
       triggerEvent: params.normalized.triggerEvent,
       delegated,
     });
+    const terminalRunRelease = effectiveRunRelease.release && terminal;
 
     const commitIssueUpdate = () => {
       const record = this.db.issues.upsertIssue({
@@ -184,6 +185,7 @@ export class DesiredStageRecorder {
         ...(clearPending ? { pendingRunType: null, pendingRunContextJson: null } : {}),
         ...(agentSessionId !== undefined ? { agentSessionId } : {}),
         ...(effectiveRunRelease.release ? { activeRunId: null } : {}),
+        ...(terminalRunRelease ? { factoryState: "done" as const, pendingRunType: null, pendingRunContextJson: null } : {}),
         ...(blockerPausedImplementation ? { factoryState: "delegated" as const } : {}),
         ...(undelegation.factoryState ? { factoryState: undelegation.factoryState as never } : {}),
       });
