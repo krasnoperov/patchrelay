@@ -1,7 +1,7 @@
 import { useEffect, useReducer } from "react";
 import { Box, Text, useStdout } from "ink";
 import type { WatchFilter, WatchIssue } from "./watch-state.ts";
-import { IssueRow } from "./IssueRow.tsx";
+import { IssueRow, estimateIssueRowHeight } from "./IssueRow.tsx";
 import { StatusBar } from "./StatusBar.tsx";
 import { HelpBar } from "./HelpBar.tsx";
 
@@ -18,7 +18,45 @@ interface IssueListViewProps {
 
 const FIXED_COLS = 8;
 const CHROME_ROWS = 4;
-const ISSUE_ROW_HEIGHT = 4;
+
+export function computeVisibleWindow(
+  issues: WatchIssue[],
+  selectedIndex: number,
+  maxRows: number,
+  cols: number,
+  titleWidth: number,
+): { start: number; end: number } {
+  if (issues.length === 0) return { start: 0, end: 0 };
+
+  const clampedSelected = Math.max(0, Math.min(selectedIndex, issues.length - 1));
+  const heights = issues.map((issue, index) => estimateIssueRowHeight(issue, index === clampedSelected, cols, titleWidth));
+  let start = clampedSelected;
+  let end = clampedSelected + 1;
+  let usedRows = heights[clampedSelected] ?? 1;
+
+  while (true) {
+    const canAddAbove = start > 0 && usedRows + (heights[start - 1] ?? 1) <= maxRows;
+    const canAddBelow = end < issues.length && usedRows + (heights[end] ?? 1) <= maxRows;
+    if (!canAddAbove && !canAddBelow) break;
+
+    const aboveDistance = clampedSelected - start;
+    const belowDistance = end - 1 - clampedSelected;
+    const preferAbove = canAddAbove && (!canAddBelow || aboveDistance <= belowDistance);
+
+    if (preferAbove) {
+      start -= 1;
+      usedRows += heights[start] ?? 1;
+      continue;
+    }
+
+    if (canAddBelow) {
+      usedRows += heights[end] ?? 1;
+      end += 1;
+    }
+  }
+
+  return { start, end };
+}
 
 export function IssueListView({
   issues,
@@ -34,7 +72,7 @@ export function IssueListView({
   const cols = stdout?.columns ?? 80;
   const rows = stdout?.rows ?? 24;
   const titleWidth = Math.max(0, cols - FIXED_COLS);
-  const maxVisible = Math.max(1, Math.floor((rows - CHROME_ROWS) / ISSUE_ROW_HEIGHT));
+  const maxVisibleRows = Math.max(1, rows - CHROME_ROWS);
 
   // Periodic refresh for elapsed times
   const [, tick] = useReducer((c: number) => c + 1, 0);
@@ -44,13 +82,10 @@ export function IssueListView({
     return () => clearInterval(id);
   }, [frozen]);
 
-  let startIndex = 0;
-  if (issues.length > maxVisible) {
-    startIndex = Math.max(0, Math.min(selectedIndex - Math.floor(maxVisible / 2), issues.length - maxVisible));
-  }
-  const visible = issues.slice(startIndex, startIndex + maxVisible);
+  const { start: startIndex, end: endIndex } = computeVisibleWindow(issues, selectedIndex, maxVisibleRows, cols, titleWidth);
+  const visible = issues.slice(startIndex, endIndex);
   const hiddenAbove = startIndex;
-  const hiddenBelow = Math.max(0, issues.length - startIndex - maxVisible);
+  const hiddenBelow = Math.max(0, issues.length - endIndex);
 
   return (
     <Box flexDirection="column">

@@ -3,6 +3,7 @@ import { hasOpenPr } from "../../pr-state.ts";
 import type { WatchIssue } from "./watch-state.ts";
 import { summarizeIssueStatusNote } from "./issue-status-note.ts";
 import { relativeTime, truncate } from "./format-utils.ts";
+import { measureRenderedTextRows } from "./layout-measure.ts";
 import {
   hasDisplayPrBlocker,
   isApprovedReviewState,
@@ -238,4 +239,36 @@ export function IssueRow({ issue, selected, titleWidth }: IssueRowProps): React.
       ) : null}
     </Box>
   );
+}
+
+export function estimateIssueRowHeight(issue: WatchIssue, selected: boolean, cols: number, titleWidth?: number): number {
+  const width = Math.max(20, cols);
+  const key = issue.issueKey ?? issue.projectId;
+  const tw = titleWidth ?? 60;
+  const title = issue.title ? truncate(issue.title, tw) : "";
+  const detail = selected ? summarizeIssueStatusNote(issue.statusNote) : undefined;
+  const session = sessionDisplay(issue);
+  const facts = buildFacts(issue, selected);
+  const blocker = selected ? blockerText(issue) : null;
+  const isTerminal = TERMINAL_STATES.has(effectiveState(issue));
+
+  if (isTerminal && !selected) {
+    return 1;
+  }
+
+  const line1Parts = [
+    `${selected ? "\u25b8" : " "} ${key}`,
+    relativeTime(issue.updatedAt).padStart(4),
+    session.label,
+    ...facts.map((fact) => fact.text),
+  ];
+  let rows = measureRenderedTextRows(line1Parts.join(" · "), width);
+
+  if (title) rows += measureRenderedTextRows(title, Math.max(8, width - 2));
+  if (blocker) rows += measureRenderedTextRows(blocker, Math.max(8, width - 2));
+  if (detail) rows += measureRenderedTextRows(detail, Math.max(8, width - 4));
+  if (selected && issue.factoryState && issue.sessionState) rows += 1;
+  if (detail) rows += 1;
+
+  return Math.max(1, rows);
 }
