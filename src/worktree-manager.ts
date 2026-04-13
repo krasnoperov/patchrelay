@@ -5,6 +5,18 @@ import type { IssueRecord } from "./db-types.ts";
 import type { AppConfig } from "./types.ts";
 import { ensureDir, execCommand } from "./utils.ts";
 
+const FETCH_RETRY_DELAYS_MS = [0, 1_000];
+const TRANSIENT_FETCH_ERROR_PATTERNS = [
+  /connection reset by peer/i,
+  /recv failure/i,
+  /tls handshake timeout/i,
+  /connection timed out/i,
+  /operation timed out/i,
+  /timed out after \d+ms/i,
+  /remote end hung up unexpectedly/i,
+  /unexpected disconnect while reading sideband packet/i,
+];
+
 export class WorktreeManager {
   constructor(private readonly config: Pick<AppConfig, "runner">) {}
 
@@ -125,11 +137,11 @@ export class WorktreeManager {
     // Fetch latest main so the branch forks from a clean, up-to-date base.
     // This prevents branch contamination when local HEAD has drifted.
     // freshenWorktree in run-orchestrator acts as a secondary safety net.
-    const fetchResult = await execCommand(this.config.runner.gitBin, ["-C", repoPath, "fetch", "origin", "main"], {
-      timeoutMs: 60_000,
-    });
+    const fetchResult = await this.fetchWithTransientRetry(repoPath, "main");
     if (fetchResult.exitCode !== 0) {
-      throw new Error(`Failed to fetch origin/main before creating issue worktree: ${fetchResult.stderr?.slice(0, 300) ?? "git fetch failed"}`);
+      throw new Error(
+        `Failed to fetch origin/main before creating issue worktree: ${fetchResult.stderr?.slice(0, 300) ?? "git fetch failed"}`,
+      );
     }
 
     const addResult = await execCommand(
@@ -140,6 +152,38 @@ export class WorktreeManager {
     if (addResult.exitCode !== 0) {
       throw new Error(`Failed to create issue worktree at ${worktreePath}: ${addResult.stderr?.slice(0, 300) ?? "git worktree add failed"}`);
     }
+  }
+
+  private async fetchWithTransientRetry(repoPath: string, branchName: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    let lastResult: { stdout: string; stderr: string; exitCode: number } | undefined;
+    let lastError: Error | undefined;
+
+    for (let attempt = 0; attempt <= FETCH_RETRY_DELAYS_MS.length; attempt += 1) {
+      if (attempt > 0) {
+        await delay(FETCH_RETRY_DELAYS_MS[attempt - 1] ?? 0);
+      }
+
+      try {
+        const result = await execCommand(this.config.runner.gitBin, ["-C", repoPath, "fetch", "origin", branchName], {
+          timeoutMs: 60_000,
+        });
+        if (result.exitCode === 0 || !isTransientFetchFailure(result.stderr)) {
+          return result;
+        }
+        lastResult = result;
+      } catch (error) {
+        if (!isTransientFetchFailure(error instanceof Error ? error.message : String(error))) {
+          throw error;
+        }
+        lastError = error instanceof Error ? error : new Error(String(error));
+      }
+    }
+
+    if (lastResult) {
+      return lastResult;
+    }
+
+    throw lastError ?? new Error(`Failed to fetch origin/${branchName}`);
   }
 
   private async assertTrustedExistingWorktree(
@@ -205,4 +249,18 @@ export class WorktreeManager {
 function isPathWithinRoot(rootPath: string, candidatePath: string): boolean {
   const relative = path.relative(rootPath, candidatePath);
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function isTransientFetchFailure(message: string | undefined): boolean {
+  if (!message) {
+    return false;
+  }
+  return TRANSIENT_FETCH_ERROR_PATTERNS.some((pattern) => pattern.test(message));
+}
+
+function delay(delayMs: number): Promise<void> {
+  if (delayMs <= 0) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
