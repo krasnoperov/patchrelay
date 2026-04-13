@@ -445,6 +445,6 @@ test("buildDetailLines shows awaiting review and downstream queue facts without 
 
   assert.match(reviewText, /awaiting review/);
   assert.doesNotMatch(reviewText, / {2}ready {2}/);
-  assert.match(downstreamText, /merge queue/);
+  assert.match(downstreamText, /downstream ready/);
   assert.doesNotMatch(downstreamText, / {2}ready {2}/);
 });

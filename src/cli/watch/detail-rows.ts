@@ -486,7 +486,7 @@ function buildFactSegments(issue: WatchIssue, issueContext: WatchIssueContext | 
     hasOpenPr(issue.prNumber, issue.prState)
     && (isAwaitingReviewState(issue.prReviewState) || (!issue.prReviewState && issue.factoryState === "pr_open"))
   ) facts.push([{ text: "awaiting review", color: "yellow" }]);
-  if (issue.factoryState === "awaiting_queue") facts.push([{ text: "merge queue", color: "cyan" }]);
+  if (issue.factoryState === "awaiting_queue") facts.push([{ text: "downstream ready", color: "cyan" }]);
   if (issue.waitingReason && issue.sessionState === "waiting_input") facts.push([{ text: issue.waitingReason, color: "yellow" }]);
   const checks = prChecksFact({
     ...issue,
