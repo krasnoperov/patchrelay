@@ -25,6 +25,7 @@ export class MergeStewardRuntime {
     private readonly eviction: EvictionReporter,
     private readonly specBuilder: SpeculativeBranchBuilder,
     private readonly logger: Logger,
+    private readonly beforeTick?: (() => Promise<void>) | undefined,
   ) {}
 
   async start(): Promise<void> {
@@ -85,6 +86,7 @@ export class MergeStewardRuntime {
     this.lastTickOutcome = "running";
     this.lastTickError = null;
     try {
+      await this.beforeTick?.();
       let tickQueueBlockEvent: ReconcileEvent | null = null;
       await reconcile({
         store: this.store,

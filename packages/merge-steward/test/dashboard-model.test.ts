@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { QueueEntry, QueueWatchSnapshot, QueueEntryStatus } from "../src/types.ts";
-import { buildQueueSummary, getRepoHealth, projectStatsSummary, type DashboardRepoState } from "../src/watch/dashboard-model.ts";
+import { buildQueueSummary, getDefaultEntryId, getRepoHealth, projectStatsSummary, type DashboardRepoState } from "../src/watch/dashboard-model.ts";
 
 function makeEntry(overrides: Partial<QueueEntry> & { prNumber: number; position: number; status: QueueEntryStatus }): QueueEntry {
   return {
@@ -172,6 +172,24 @@ test("idle repo health reports the most recent activity instead of the oldest qu
   assert.equal(health.kind, "idle");
   assert.match(health.detail, /Last activity was 30s ago\./);
   assert.doesNotMatch(health.detail, /2d ago/);
+});
+
+test("default entry is null when the active filter has no visible entries", () => {
+  const oldMerged = makeEntry({
+    prNumber: 12,
+    position: 1,
+    status: "merged",
+    updatedAt: new Date(Date.now() - 2 * 60 * 1_000).toISOString(),
+  });
+  const oldEvicted = makeEntry({
+    prNumber: 13,
+    position: 2,
+    status: "evicted",
+    updatedAt: new Date(Date.now() - 3 * 60 * 1_000).toISOString(),
+  });
+  const snapshot = makeSnapshot([oldMerged, oldEvicted]);
+
+  assert.equal(getDefaultEntryId(snapshot, "active"), null);
 });
 
 test("repo health shows initializing repos as connected startup work", () => {

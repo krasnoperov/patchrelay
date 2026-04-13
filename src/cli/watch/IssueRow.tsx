@@ -123,7 +123,7 @@ function buildFacts(issue: WatchIssue, selected: boolean): Array<{ text: string;
   }
 
   if (issue.factoryState === "awaiting_queue") {
-    facts.push({ text: "merge queue", color: "cyan" });
+    facts.push({ text: "downstream ready", color: "cyan" });
   }
 
   // Check status — compact

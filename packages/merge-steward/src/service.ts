@@ -28,8 +28,21 @@ export class MergeStewardService {
     private readonly specBuilder: SpeculativeBranchBuilder,
     private readonly logger: Logger,
   ) {
-    this.runtime = new MergeStewardRuntime(config, policy, store, git, ci, github, eviction, specBuilder, logger);
     this.queueCommands = new MergeStewardQueueCommands(config, policy, store, github, specBuilder, logger);
+    this.runtime = new MergeStewardRuntime(
+      config,
+      policy,
+      store,
+      git,
+      ci,
+      github,
+      eviction,
+      specBuilder,
+      logger,
+      async () => {
+        await this.queueCommands.scanEligibleOpenPrs();
+      },
+    );
     this.watchQueries = new MergeStewardWatchQueries(config, store, this.runtime);
   }
 

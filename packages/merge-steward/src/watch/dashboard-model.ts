@@ -167,7 +167,7 @@ export function getDefaultEntryId(
       return match.id;
     }
   }
-  return snapshot.summary.headEntryId ?? visibleEntries[0]?.id ?? snapshot.entries[0]?.id ?? null;
+  return snapshot.summary.headEntryId ?? visibleEntries[0]?.id ?? null;
 }
 
 export function getRepoHealth(repo: DashboardRepoState, now = Date.now()): RepoHealthSummary {

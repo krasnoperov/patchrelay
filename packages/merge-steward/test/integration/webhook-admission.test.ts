@@ -9,6 +9,7 @@ import { GitHubSim, EvictionReporterSim } from "../../src/sim/github-sim.ts";
 import { MergeStewardService } from "../../src/service.ts";
 import { buildMultiRepoHttpServer } from "../../src/http-multi.ts";
 import type { StewardConfig } from "../../src/config.ts";
+import type { GitHubPRApi } from "../../src/interfaces.ts";
 import type { RepoRuntimeRecord } from "../../src/repo-runtime.ts";
 import pino from "pino";
 import { SqliteStore } from "../../src/db/sqlite-store.ts";
@@ -219,6 +220,89 @@ describe("webhook admission integration", () => {
     assert.strictEqual(status.entries.length, 1, "eligible PR should be admitted without a queue label");
     assert.strictEqual(status.entries[0]!.prNumber, 99);
     assert.strictEqual(status.entries[0]!.status, "queued");
+  });
+
+  it("manual reconcile recovers a ready PR after a transient admission lookup failure", async () => {
+    const store = new MemoryStore();
+    const githubSim = new GitHubSim();
+    const logger = pino({ level: "silent" });
+
+    githubSim.addPR({ number: 140, branch: "feat-recover", headSha: "sha-140", reviewApproved: true, labels: [] });
+    githubSim.setChecks(140, [{ name: "checks", conclusion: "success" }]);
+
+    let failFirstStatusLookup = true;
+    const flakyGitHub: GitHubPRApi = {
+      async mergePR(prNumber) {
+        await githubSim.mergePR(prNumber);
+      },
+      async getStatus(prNumber) {
+        if (prNumber === 140 && failFirstStatusLookup) {
+          failFirstStatusLookup = false;
+          throw new Error("transient GitHub timeout");
+        }
+        return await githubSim.getStatus(prNumber);
+      },
+      async listChecks(prNumber) {
+        return await githubSim.listChecks(prNumber);
+      },
+      async listChecksForRef(ref) {
+        return await githubSim.listChecksForRef(ref);
+      },
+      async listLabels(prNumber) {
+        return await githubSim.listLabels(prNumber);
+      },
+      async listOpenPRs() {
+        return await githubSim.listOpenPRs();
+      },
+      async findPRByBranch(branch) {
+        return await githubSim.findPRByBranch(branch);
+      },
+      async deleteBranch(prNumber) {
+        await githubSim.deleteBranch(prNumber);
+      },
+      async listOpenPRsWithLabel(label) {
+        return await githubSim.listOpenPRsWithLabel(label);
+      },
+    };
+
+    const service = new MergeStewardService(
+      config, createPolicy(), store, new GitSim() as any, new CISim(() => "pass") as any,
+      flakyGitHub, new EvictionReporterSim(), new GitSim() as any, logger,
+    );
+
+    const app = await makeApp(service);
+    const address = await app.listen({ port: 0 });
+    after(async () => { await app.close(); });
+
+    const reviewBody = webhookBody({
+      action: "submitted",
+      review: { state: "approved" },
+      pull_request: { number: 140, head: { ref: "feat-recover", sha: "sha-140" } },
+    });
+
+    await fetch(`${address}/webhooks/github`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-github-event": "pull_request_review", "x-hub-signature-256": sign(reviewBody) },
+      body: reviewBody,
+    });
+
+    const before = await (await fetch(`${address}/repos/test-repo/queue/status`)).json() as {
+      entries: Array<{ prNumber: number; status: string }>;
+    };
+    assert.strictEqual(before.entries.length, 0, "transient admission failure should leave the PR unqueued initially");
+
+    const reconcile = await (await fetch(`${address}/repos/test-repo/queue/reconcile`, { method: "POST" })).json() as {
+      ok: boolean;
+      started: boolean;
+    };
+    assert.strictEqual(reconcile.ok, true);
+    assert.strictEqual(reconcile.started, true);
+
+    const statusAfter = await (await fetch(`${address}/repos/test-repo/queue/status`)).json() as {
+      entries: Array<{ prNumber: number; status: string }>;
+    };
+    assert.strictEqual(statusAfter.entries.length, 1, "manual reconcile should re-scan and admit the ready PR");
+    assert.strictEqual(statusAfter.entries[0]!.prNumber, 140);
   });
 
   it("admits PR when required check names differ only by case", async () => {
