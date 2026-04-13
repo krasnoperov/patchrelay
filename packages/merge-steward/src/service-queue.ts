@@ -87,17 +87,22 @@ export class MergeStewardQueueCommands {
   async scanStartupAdmissions(): Promise<void> {
     this.logger.info({ repoId: this.config.repoId }, "Scanning startup admissions");
     try {
-      const open = await this.github.listOpenPRs();
-      let admitted = 0;
-      for (const pr of open) {
-        if (await this.tryAdmit(pr.number, pr.branch, pr.headSha)) admitted += 1;
-      }
-      if (open.length > 0) {
-        this.logger.info({ scanned: open.length, admitted }, "Startup scan for eligible open PRs complete");
+      const { scanned, admitted } = await this.scanEligibleOpenPrs();
+      if (scanned > 0) {
+        this.logger.info({ scanned, admitted }, "Startup scan for eligible open PRs complete");
       }
     } catch (error) {
       this.logger.warn({ err: error }, "Startup scan for eligible open PRs failed");
     }
+  }
+
+  async scanEligibleOpenPrs(): Promise<{ scanned: number; admitted: number }> {
+    const open = await this.github.listOpenPRs();
+    let admitted = 0;
+    for (const pr of open) {
+      if (await this.tryAdmit(pr.number, pr.branch, pr.headSha)) admitted += 1;
+    }
+    return { scanned: open.length, admitted };
   }
 
   async tryAdmit(prNumber: number, branch: string, headSha: string): Promise<boolean> {
