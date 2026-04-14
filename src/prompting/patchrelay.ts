@@ -478,6 +478,22 @@ function buildPublicationContract(
       "If the worktree already contains relevant changes for this issue, verify them and publish them.",
       "If you changed files for this issue, commit them, push the issue branch, and open or update the PR before stopping.",
       "Do not stop with only local commits or uncommitted changes.",
+      "",
+      "## PR Body Contract",
+      "",
+      "When you open or update a PR, shape the body so a strict reviewer can decide in one pass.",
+      "",
+      "Title: imperative, ≤72 chars. Do not prefix with the issue key — the branch carries it.",
+      "",
+      "Body sections, in this order. Omit any that do not apply but keep the order:",
+      "",
+      "  ## Why — 1-3 sentences on the problem and motivation.",
+      "  ## What — ≤5 bullets naming the files or surfaces that change.",
+      "  ## Tradeoffs — one explicit tradeoff taken, or the single word \"None\".",
+      "  ## Risks — 1-3 things a strict reviewer would ask about. For each, either fix it before committing or explain why it is acceptable. This section is load-bearing; a strict reviewer reads it first.",
+      "",
+      "Do not restate the diff in prose. Quote the ambiguous fragment directly if the reader needs to see it.",
+      "Do not add a \"Verification\" or \"I ran these commands\" section; CI owns pass/fail and posts check runs the reviewer already sees.",
     ].join("\n");
   }
 
