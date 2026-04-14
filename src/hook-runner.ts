@@ -32,7 +32,7 @@ export async function runProjectHook(
 
   const result = await execCommand(hookPath, [], {
     cwd: options.cwd,
-    env: { ...process.env, ...(options.env ?? {}) },
+    env: { ...sanitizedParentEnv(), ...(options.env ?? {}) },
     timeoutMs: options.timeoutMs ?? 120_000,
   });
 
@@ -42,6 +42,25 @@ export async function runProjectHook(
     stdout: result.stdout,
     stderr: result.stderr,
   };
+}
+
+// Patchrelay runs as a service with NODE_ENV=production, which makes `npm ci`
+// in a project hook silently omit devDependencies. The subject project's install
+// surface is a separate concern from patchrelay's own runtime, so scrub the
+// variables that would leak patchrelay's production posture into the hook.
+const STRIPPED_PARENT_ENV_VARS = [
+  "NODE_ENV",
+  "NPM_CONFIG_PRODUCTION",
+  "NPM_CONFIG_OMIT",
+  "NPM_CONFIG_INCLUDE",
+];
+
+function sanitizedParentEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  for (const key of STRIPPED_PARENT_ENV_VARS) {
+    delete env[key];
+  }
+  return env;
 }
 
 export function buildHookEnv(
