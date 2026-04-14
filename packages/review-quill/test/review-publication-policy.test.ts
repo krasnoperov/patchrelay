@@ -55,6 +55,44 @@ test("buildReviewBody and buildInlineCommentBody render the reviewer payload", (
   assert.match(buildInlineCommentBody(fakeFinding({ suggestion: "x = y" })), /suggestion/);
 });
 
+test("buildReviewBody leads with the verdict line (inverted pyramid)", () => {
+  const body = buildReviewBody({
+    verdict: fakeVerdict({
+      walkthrough: "Some trailing context paragraph.",
+      verdict_reason: "All checks pass.",
+    }),
+    event: "APPROVE",
+  });
+  const firstLine = body.split("\n")[0];
+  assert.ok(firstLine?.startsWith("**Verdict:"), `expected first line to be the verdict, got: ${firstLine}`);
+  // Context section only appears after the verdict, never before it.
+  const verdictIdx = body.indexOf("**Verdict:");
+  const contextIdx = body.indexOf("## Context");
+  assert.ok(contextIdx === -1 || contextIdx > verdictIdx, "Context section must follow the verdict");
+});
+
+test("buildReviewBody omits the Context section when walkthrough is empty", () => {
+  const body = buildReviewBody({
+    verdict: fakeVerdict({ walkthrough: "" }),
+    event: "APPROVE",
+  });
+  assert.ok(!body.includes("## Context"), `empty walkthrough should not produce a Context section, got: ${body}`);
+});
+
+test("buildReviewBody renders architectural concerns between verdict and context", () => {
+  const body = buildReviewBody({
+    verdict: fakeVerdict({
+      walkthrough: "Trailing context.",
+      architectural_concerns: [{ severity: "blocking", category: "correctness", message: "cross-file issue" }],
+    }),
+    event: "REQUEST_CHANGES",
+  });
+  const verdictIdx = body.indexOf("**Verdict:");
+  const archIdx = body.indexOf("## Architectural concerns");
+  const contextIdx = body.indexOf("## Context");
+  assert.ok(verdictIdx < archIdx && archIdx < contextIdx, `expected verdict < architectural < context, got ${verdictIdx}, ${archIdx}, ${contextIdx}`);
+});
+
 test("hasMatchingLatestReviewForHead detects matching state and body", () => {
   const reviews = [{
     id: 1,

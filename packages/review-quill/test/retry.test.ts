@@ -261,9 +261,11 @@ test("parseModelResponse returns a reason when JSON is unrecoverably malformed",
 });
 
 test("parseModelResponse returns a reason when JSON parses but schema normalization fails", () => {
-  // Valid JSON but no walkthrough / no summary / no overview / no description.
-  // normalizeVerdict will throw and parseModelResponse converts that to a reason.
-  const result = parseModelResponse("{\"findings\":[],\"verdict\":\"approve\"}");
+  // Valid JSON but no recognizable verdict field. normalizeVerdict throws
+  // and parseModelResponse converts that to a reason. (Empty walkthrough
+  // is now legitimate under the inverted-pyramid body layout, so we use a
+  // missing-verdict payload to exercise the schema-failure path instead.)
+  const result = parseModelResponse("{\"findings\":[],\"walkthrough\":\"x\"}");
   assert.equal(result.ok, false);
   if (!result.ok) {
     assert.match(result.reason, /schema/);

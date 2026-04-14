@@ -167,17 +167,16 @@ export function normalizeVerdict(raw: Record<string, unknown>): ReviewVerdict {
     ? "approve"
     : normalizedRawVerdict;
 
-  // Walkthrough falls back through a few common model variants. Always
-  // require something substantial — an empty walkthrough means the model
-  // didn't understand the schema and we should fail loudly.
+  // Walkthrough is an optional trailing Context appendix as of the
+  // inverted-pyramid body layout. Empty string is legitimate and means
+  // "the diff alone explains the change" - `buildReviewBody` omits the
+  // Context section entirely in that case. The load-bearing signal is
+  // verdict_reason (with a canned fallback below).
   const walkthrough = asString(raw.walkthrough)
     ?? asString(raw.summary)
     ?? asString(raw.overview)
     ?? asString(raw.description)
     ?? "";
-  if (!walkthrough) {
-    throw new Error("Review run returned no walkthrough or summary text");
-  }
 
   const verdictReason = asString(raw.verdict_reason)
     ?? (hasBlocking
