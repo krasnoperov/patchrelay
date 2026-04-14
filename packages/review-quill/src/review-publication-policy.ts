@@ -76,10 +76,12 @@ export function resolveEvent(verdict: ReviewVerdict, filtered: ReviewFinding[]):
 }
 
 // Build the review body (posted into the `body` field of the GitHub
-// review, i.e. the walkthrough comment at the top). Structured as:
-//   1. Walkthrough narrative
+// review). Inverted pyramid — authors skim top-down and only reliably
+// read the first section, so the verdict line leads. Walkthrough becomes
+// a trailing `## Context` appendix shown only when the model emitted one.
+//   1. Verdict line with rationale
 //   2. Architectural concerns section (if any)
-//   3. Final verdict line with rationale
+//   3. `## Context` walkthrough (only when present and non-empty)
 export function buildReviewBody(params: {
   verdict: ReviewVerdict;
   event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT";
@@ -87,7 +89,12 @@ export function buildReviewBody(params: {
   const { verdict, event } = params;
   const lines: string[] = [];
 
-  lines.push(verdict.walkthrough.trim());
+  const verdictLabel = event === "APPROVE"
+    ? "✅ Approve"
+    : event === "REQUEST_CHANGES"
+      ? "🛑 Request changes"
+      : "💬 Comment";
+  lines.push(`**Verdict: ${verdictLabel}** — ${verdict.verdict_reason}`);
 
   if (verdict.architectural_concerns.length > 0) {
     lines.push("", "## Architectural concerns");
@@ -97,13 +104,10 @@ export function buildReviewBody(params: {
     }
   }
 
-  lines.push("");
-  const verdictLabel = event === "APPROVE"
-    ? "✅ Approve"
-    : event === "REQUEST_CHANGES"
-      ? "🛑 Request changes"
-      : "💬 Comment";
-  lines.push(`**Verdict: ${verdictLabel}** — ${verdict.verdict_reason}`);
+  const walkthrough = verdict.walkthrough.trim();
+  if (walkthrough) {
+    lines.push("", "## Context", walkthrough);
+  }
 
   return lines.join("\n");
 }

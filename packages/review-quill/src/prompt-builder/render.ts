@@ -34,7 +34,7 @@ export function findDisallowedReviewPromptSectionIds(replaceSections: Record<str
 }
 
 export const OUTPUT_SCHEMA = `{
-  "walkthrough": "2-4 paragraph narrative: what this PR changes, the author's apparent intent, how it fits into the wider codebase, notable risks.",
+  "walkthrough": "Optional 1-2 sentence Context appendix. Include ONLY when the author's intent or a codebase-wide constraint is NOT visible from the diff alone. Default to empty string. Never restate the PR body or describe what the diff already shows.",
   "architectural_concerns": [
     {
       "severity": "blocking" | "nit",
@@ -78,6 +78,7 @@ Review the current PR head only.
 - When several symptoms share one root cause, report them as one blocker instead of separate variants.
 - Prefer the smallest set of remaining merge-blocking concerns that makes the PR's current risk clear.
 - Flag only high-signal issues: real correctness bugs, definite regressions, or clear documented rule violations you can quote from repository guidance.
+- Keep each \`finding.message\` under ~200 characters of prose. Put multi-line fix detail in the \`suggestion\` committable block (≤6 lines) instead of the message body.
 - Do not raise speculative issues, style debates, pre-existing problems, or linter/typechecker noise.
 - Keep architectural concerns for cross-file or product-level issues that cannot be pinned to one line.
 - Keep findings for one concrete issue at one concrete file/line on the current head.
