@@ -72,8 +72,10 @@ const REVIEW_RULES = `## Review rules
 Review the current PR head only.
 
 - Start by understanding the actual code and diff before deciding on a verdict.
+- Every blocking concern must name (a) a concrete input, runtime state, or sequence that triggers it on the current head, and (b) the realistic usage pattern under which that state arises in this repository. Hypothetical failure modes that require unstated preconditions are not blockers — flag them as nits at most, or drop them.
+- If the PR body, diff, or repository guidance directly names your concern and argues against it — e.g., a threat-model section, a "why not X" paragraph, or an explicit rationale inside the changed code — engage with that argument. Either identify the specific condition under which the rebuttal fails on this head, or drop the concern. Do not re-raise it without rebutting.
 - Start by checking whether the previous blocking review concerns are now resolved, still blocking, or no longer relevant on the current head.
-- If a previous blocker still applies, prefer restating that blocker clearly over inventing a differently phrased version of the same concern.
+- If a previous blocker still applies AND the author has not visibly engaged with it on the new head, restate it clearly. If the author has pushed heads without accepting it OR has added a rebuttal in the current head's content, engage with that engagement — do not mechanically restate.
 - Only raise a new blocker when it is clearly independent from the previous blockers.
 - When several symptoms share one root cause, report them as one blocker instead of separate variants.
 - Prefer the smallest set of remaining merge-blocking concerns that makes the PR's current risk clear.

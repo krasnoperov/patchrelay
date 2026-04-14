@@ -31,6 +31,7 @@ export async function buildReviewContext(params: {
   pr: PullRequestSummary;
   prompting: ReviewContext["promptCustomization"];
   logger: Logger;
+  selfLogin: string | undefined;
 }): Promise<{ context: ReviewContext; dispose: () => Promise<void> }> {
   const token = params.github.currentTokenForRepo(params.repo.repoFullName);
   if (!token) {
@@ -52,6 +53,7 @@ export async function buildReviewContext(params: {
       params.pr,
       materialized.workspace,
       params.repo.reviewDocs,
+      params.selfLogin,
     );
     const repoPromptCustomization = loadReviewQuillRepoPrompting({
       repoRoot: materialized.workspace.worktreePath,
