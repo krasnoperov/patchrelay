@@ -8,3 +8,4 @@ config/patchrelay.json
 *.sqlite-wal
 logs/
 *.tgz
+.claude/
