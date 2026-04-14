@@ -10,8 +10,9 @@ export async function buildPromptContext(
   pr: PullRequestSummary,
   workspace: ReviewWorkspace,
   reviewDocs: string[],
+  selfLogin?: string,
 ): Promise<PromptContext> {
-  const githubContext = await buildGitHubPromptContext(github, repoFullName, pr);
+  const githubContext = await buildGitHubPromptContext(github, repoFullName, pr, selfLogin);
   const guidanceDocs = await loadRepoGuidanceDocs(workspace.worktreePath, reviewDocs);
   return {
     guidanceDocs,

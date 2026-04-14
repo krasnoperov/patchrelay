@@ -50,13 +50,42 @@ export function summarizeReviewBody(body: string | undefined): string | undefine
   return `${prefix}${separator}${verdictLine}`;
 }
 
-function buildPriorReviewClaims(priorReviews: PullRequestReviewRecord[]): PriorReviewClaim[] {
-  const scored = priorReviews
+// After this many decisive reviews from our own login accumulate on a PR,
+// the anchor-bias of carrying forward our own prior claims starts to harm
+// review quality — the model reaffirms its own past rejections instead of
+// re-engaging with the current head. Drop our own claims at that point and
+// let the next round reach a verdict independently. Other authors' reviews
+// (humans) still pass through.
+const SELF_CLAIM_FRESH_START_THRESHOLD = 3;
+
+function normalizeLogin(login: string | undefined): string | undefined {
+  return login?.replace(/\[bot\]$/i, "").toLowerCase();
+}
+
+function isDecisive(state: string | undefined): boolean {
+  return state === "CHANGES_REQUESTED" || state === "APPROVED";
+}
+
+export function buildPriorReviewClaims(
+  priorReviews: PullRequestReviewRecord[],
+  selfLogin?: string,
+): PriorReviewClaim[] {
+  const normalizedSelf = normalizeLogin(selfLogin);
+  const selfDecisiveCount = normalizedSelf
+    ? priorReviews.filter((r) => isDecisive(r.state) && normalizeLogin(r.authorLogin) === normalizedSelf).length
+    : 0;
+  const shouldDropSelfClaims = selfDecisiveCount >= SELF_CLAIM_FRESH_START_THRESHOLD;
+
+  const filtered = shouldDropSelfClaims
+    ? priorReviews.filter((r) => normalizeLogin(r.authorLogin) !== normalizedSelf)
+    : priorReviews;
+
+  const scored = filtered
     .map((review, index) => ({ review, index }))
     .filter(({ review }) => Boolean(summarizeReviewBody(review.body)))
     .sort((left, right) => {
-      const leftDecisive = left.review.state === "CHANGES_REQUESTED" || left.review.state === "APPROVED";
-      const rightDecisive = right.review.state === "CHANGES_REQUESTED" || right.review.state === "APPROVED";
+      const leftDecisive = isDecisive(left.review.state);
+      const rightDecisive = isDecisive(right.review.state);
       if (leftDecisive !== rightDecisive) {
         return leftDecisive ? -1 : 1;
       }
@@ -82,7 +111,8 @@ export async function buildGitHubPromptContext(
   github: GitHubClient,
   repoFullName: string,
   pr: PullRequestSummary,
+  selfLogin?: string,
 ): Promise<{ priorReviewClaims: PriorReviewClaim[] }> {
   const priorReviews = await github.listPullRequestReviews(repoFullName, pr.number);
-  return { priorReviewClaims: buildPriorReviewClaims(priorReviews) };
+  return { priorReviewClaims: buildPriorReviewClaims(priorReviews, selfLogin) };
 }
