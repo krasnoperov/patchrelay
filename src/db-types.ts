@@ -71,6 +71,7 @@ export interface IssueRecord {
   lastQueueIncidentJson?: string | undefined;
   lastAttemptedFailureHeadSha?: string | undefined;
   lastAttemptedFailureSignature?: string | undefined;
+  lastAttemptedFailureAt?: string | undefined;
   ciRepairAttempts: number;
   queueRepairAttempts: number;
   reviewFixAttempts: number;

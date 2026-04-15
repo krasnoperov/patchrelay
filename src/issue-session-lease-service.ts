@@ -34,11 +34,11 @@ export class IssueSessionLeaseService {
   ) {}
 
   hasLocalLease(projectId: string, linearIssueId: string): boolean {
-    return this.activeSessionLeases.has(this.issueSessionLeaseKey(projectId, linearIssueId));
+    return this.getValidatedLocalLeaseId(projectId, linearIssueId) !== undefined;
   }
 
   getHeldLease(projectId: string, linearIssueId: string): IssueSessionLease | undefined {
-    const leaseId = this.activeSessionLeases.get(this.issueSessionLeaseKey(projectId, linearIssueId));
+    const leaseId = this.getValidatedLocalLeaseId(projectId, linearIssueId);
     if (!leaseId) return undefined;
     return { projectId, linearIssueId, leaseId };
   }
@@ -161,9 +161,20 @@ export class IssueSessionLeaseService {
 
   release(projectId: string, linearIssueId: string): void {
     const key = this.issueSessionLeaseKey(projectId, linearIssueId);
-    const leaseId = this.activeSessionLeases.get(key);
+    const leaseId = this.getValidatedLocalLeaseId(projectId, linearIssueId);
     this.db.issueSessions.releaseIssueSessionLease(projectId, linearIssueId, leaseId);
     this.activeSessionLeases.delete(key);
+  }
+
+  private getValidatedLocalLeaseId(projectId: string, linearIssueId: string): string | undefined {
+    const key = this.issueSessionLeaseKey(projectId, linearIssueId);
+    const leaseId = this.activeSessionLeases.get(key);
+    if (!leaseId) return undefined;
+    if (this.db.issueSessions.hasActiveIssueSessionLease(projectId, linearIssueId, leaseId)) {
+      return leaseId;
+    }
+    this.activeSessionLeases.delete(key);
+    return undefined;
   }
 
   private issueSessionLeaseKey(projectId: string, linearIssueId: string): string {

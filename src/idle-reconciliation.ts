@@ -58,7 +58,10 @@ function getGateCheckNames(project: AppConfig["projects"][number] | undefined): 
 }
 
 function isDuplicateRepairAttempt(
-  issue: Pick<IssueRecord, "lastAttemptedFailureHeadSha" | "lastAttemptedFailureSignature">,
+  issue: Pick<
+    IssueRecord,
+    "lastAttemptedFailureHeadSha" | "lastAttemptedFailureSignature" | "lastAttemptedFailureAt" | "lastGitHubFailureAt"
+  >,
   context: Record<string, unknown> | undefined,
 ): boolean {
   const signature = typeof context?.failureSignature === "string" ? context.failureSignature : undefined;
@@ -66,8 +69,17 @@ function isDuplicateRepairAttempt(
     ? context.failureHeadSha
     : typeof context?.headSha === "string" ? context.headSha : undefined;
   if (!signature) return false;
-  return issue.lastAttemptedFailureSignature === signature
-    && (headSha === undefined || issue.lastAttemptedFailureHeadSha === headSha);
+  if (issue.lastAttemptedFailureSignature !== signature) return false;
+  if (headSha !== undefined && issue.lastAttemptedFailureHeadSha !== headSha) return false;
+  // A signature+headSha match alone isn't enough: for queue evictions the PR head
+  // doesn't advance (we haven't pushed) and the steward's check name is constant,
+  // so a fresh incident after main advances looks identical. Treat the attempt as
+  // stale if a newer failure has been observed since it was recorded.
+  if (issue.lastAttemptedFailureAt && issue.lastGitHubFailureAt
+    && issue.lastGitHubFailureAt > issue.lastAttemptedFailureAt) {
+    return false;
+  }
+  return true;
 }
 
 function buildFailureContext(issue: Pick<
@@ -251,6 +263,7 @@ export class IdleIssueReconciler {
             lastQueueIncidentJson: null,
             lastAttemptedFailureHeadSha: null,
             lastAttemptedFailureSignature: null,
+            lastAttemptedFailureAt: null,
           }
         : {}),
     });

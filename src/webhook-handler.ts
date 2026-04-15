@@ -4,6 +4,7 @@ import type { PatchRelayDatabase } from "./db.ts";
 import type { RunType } from "./factory-state.ts";
 import { deriveIssueStatusNote } from "./status-note.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
+import { LinearSessionSync } from "./linear-session-sync.ts";
 import { trustedActorAllowed } from "./project-resolution.ts";
 import { normalizeWebhook } from "./webhooks.ts";
 import { InstallationWebhookHandler } from "./webhook-installation-handler.ts";
@@ -30,6 +31,7 @@ export class WebhookHandler {
   private readonly desiredStageRecorder: DesiredStageRecorder;
   private readonly contextLoader: WebhookContextLoader;
   private readonly dependencyReadinessHandler: DependencyReadinessHandler;
+  private readonly linearSync: LinearSessionSync;
 
   constructor(
     private readonly config: AppConfig,
@@ -46,6 +48,7 @@ export class WebhookHandler {
     this.agentSessionHandler = new AgentSessionHandler(config, db, linearProvider, codex, logger, feed);
     this.desiredStageRecorder = new DesiredStageRecorder(db, linearProvider, feed);
     this.contextLoader = new WebhookContextLoader(config, linearProvider);
+    this.linearSync = new LinearSessionSync(config, db, linearProvider, logger, feed);
     this.dependencyReadinessHandler = new DependencyReadinessHandler(
       db,
       (projectId, issueId) => this.peekPendingSessionWakeRunType(projectId, issueId),
@@ -138,6 +141,12 @@ export class WebhookHandler {
 
       const newlyReadyDependents = this.dependencyReadinessHandler.reconcile(project.id, issue.id);
 
+      const syncTargets = new Set<string>(
+        shouldSyncLinearStateAfterWebhook(hydrated.triggerEvent)
+          ? [issue.id, ...newlyReadyDependents]
+          : newlyReadyDependents,
+      );
+
       // Handle issue removal: release active runs, mark as failed.
       if (hydrated.triggerEvent === "issueRemoved") {
         await this.issueRemovalHandler.handle({
@@ -200,6 +209,13 @@ export class WebhookHandler {
           summary: `Queued ${(queuedRunType ?? "implementation")} after blockers resolved`,
           detail: `All blockers are now done for ${dependent?.issueKey ?? dependentIssueId}.`,
         });
+      }
+      for (const issueId of syncTargets) {
+        const syncIssue = this.db.getIssue(project.id, issueId);
+        if (!syncIssue) {
+          continue;
+        }
+        await this.linearSync.syncSession(syncIssue);
       }
     } catch (error) {
       this.db.webhookEvents.markWebhookProcessed(webhookEventId, "failed");
@@ -266,4 +282,12 @@ export class WebhookHandler {
     })?.trim();
     return Boolean(statusNote?.endsWith("?"));
   }
+}
+
+function shouldSyncLinearStateAfterWebhook(triggerEvent: string): boolean {
+  return triggerEvent !== "agentSessionCreated"
+    && triggerEvent !== "agentPrompted"
+    && triggerEvent !== "commentCreated"
+    && triggerEvent !== "commentUpdated"
+    && triggerEvent !== "commentRemoved";
 }

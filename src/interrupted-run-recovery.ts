@@ -91,6 +91,7 @@ export class InterruptedRunRecovery {
           linearIssueId: issue.linearIssueId,
           lastAttemptedFailureHeadSha: null,
           lastAttemptedFailureSignature: null,
+          lastAttemptedFailureAt: null,
         });
       }
       return true;

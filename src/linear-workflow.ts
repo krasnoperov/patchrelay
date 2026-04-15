@@ -36,6 +36,19 @@ export function resolvePreferredStartedLinearState(issue: {
   return preferred?.name ?? startedStates[0]?.name;
 }
 
+export function resolvePreferredQueuedLinearState(issue: {
+  workflowStates: Array<{ name: string; type?: string }>;
+}): string | undefined {
+  return resolvePreferredLinearState(issue, {
+    names: ["backlog", "start", "todo", "to do", "planned", "ready"],
+    types: ["backlog", "unstarted"],
+    fallback: issue.workflowStates.find((state) => {
+      const normalizedType = normalizeLinearState(state.type);
+      return normalizedType === "backlog" || normalizedType === "unstarted";
+    })?.name,
+  });
+}
+
 export function resolvePreferredImplementingLinearState(issue: {
   workflowStates: Array<{ name: string; type?: string }>;
 }): string | undefined {

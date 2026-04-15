@@ -2,6 +2,7 @@ import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord, TrackedIssueRecord } from "./db-types.ts";
 import type { RunType } from "./factory-state.ts";
 import {
+  resolvePreferredQueuedLinearState,
   resolvePreferredCompletedLinearState,
   resolvePreferredDeployingLinearState,
   resolvePreferredHumanNeededLinearState,
@@ -115,7 +116,7 @@ function shouldAutoAdvanceLinearState(issue: {
 
 function resolveDesiredActiveWorkflowState(
   issue: Pick<IssueRecord, "factoryState" | "prNumber" | "prUrl" | "prReviewState" | "prCheckStatus" | "activeRunId" | "lastGitHubCiSnapshotJson" | "delegatedToPatchRelay">,
-  trackedIssue: Pick<TrackedIssueRecord, "sessionState"> | undefined,
+  trackedIssue: Pick<TrackedIssueRecord, "sessionState" | "blockedByCount" | "readyForExecution"> | undefined,
   options: { activeRunType?: RunType } | undefined,
   liveIssue: {
     workflowStates: Array<{ name: string; type?: string }>;
@@ -126,11 +127,17 @@ function resolveDesiredActiveWorkflowState(
     return resolvePreferredHumanNeededLinearState(liveIssue);
   }
 
+  const blocked = (trackedIssue?.blockedByCount ?? 0) > 0;
+  const pausedNoPrWork = issue.prNumber === undefined && (!issue.delegatedToPatchRelay || blocked);
+  if (pausedNoPrWork) {
+    return resolvePreferredQueuedLinearState(liveIssue);
+  }
+
   const activelyWorking = issue.delegatedToPatchRelay !== false && (
     issue.activeRunId !== undefined
     || options?.activeRunType !== undefined
     || trackedIssue?.sessionState === "running"
-    || issue.factoryState === "delegated"
+    || (issue.factoryState === "delegated" && !blocked && trackedIssue?.readyForExecution !== false)
     || issue.factoryState === "implementing"
     || issue.factoryState === "changes_requested"
     || issue.factoryState === "repairing_ci"

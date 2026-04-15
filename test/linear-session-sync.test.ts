@@ -442,6 +442,7 @@ test("syncSession keeps visible status comments current for paused undelegated n
       currentLinearState: "In Progress",
     });
 
+    const setIssueStateCalls: string[] = [];
     const commentUpdates: Array<Record<string, unknown>> = [];
     const linear: Partial<LinearClient> = {
       updateAgentSession: async (params) => ({ id: params.agentSessionId }),
@@ -458,9 +459,10 @@ test("syncSession keeps visible status comments current for paused undelegated n
         teamKey: "TST",
         delegateId: "someone-else",
         stateId: "state-start",
-        stateName: "Start",
+        stateName: "In Progress",
         stateType: "started",
         workflowStates: [
+          { name: "Backlog", type: "backlog" },
           { name: "Implementing", type: "started" },
           { name: "Human Needed", type: "unstarted" },
           { name: "Done", type: "completed" },
@@ -471,7 +473,24 @@ test("syncSession keeps visible status comments current for paused undelegated n
         blockedBy: [],
         blocks: [],
       }),
-      setIssueState: async () => { throw new Error("not used"); },
+      setIssueState: async (_issueId, stateName) => {
+        setIssueStateCalls.push(stateName);
+        return {
+          id: "issue-tst-paused-local",
+          identifier: "TST-58",
+          title: "Paused local work",
+          stateName,
+          stateType: stateName === "Backlog" ? "backlog" : "started",
+          workflowStates: [
+            { name: "Backlog", type: "backlog" },
+            { name: "Implementing", type: "started" },
+            { name: "Human Needed", type: "unstarted" },
+            { name: "Done", type: "completed" },
+          ],
+          blockedBy: [],
+          relationsKnown: true,
+        };
+      },
       updateIssueLabels: async () => { throw new Error("not used"); },
       getActorProfile: async () => ({ actorId: "patchrelay-actor" }),
       getWorkspaceCatalog: async () => ({ workspace: {}, teams: [], projects: [] }),
@@ -486,6 +505,7 @@ test("syncSession keeps visible status comments current for paused undelegated n
 
     await sync.syncSession(db.getIssue(issue.projectId, issue.linearIssueId)!);
 
+    assert.deepEqual(setIssueStateCalls, ["Backlog"]);
     assert.equal(commentUpdates.length, 1);
     assert.match(String(commentUpdates[0]?.body), /Implementation is paused because the issue is undelegated/);
     assert.match(String(commentUpdates[0]?.body), /Waiting: PatchRelay automation is paused because the issue is undelegated/);

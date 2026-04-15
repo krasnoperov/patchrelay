@@ -253,6 +253,7 @@ export async function handleNoPrCompletionCheck(params: {
         lastQueueIncidentJson: null,
         lastAttemptedFailureHeadSha: null,
         lastAttemptedFailureSignature: null,
+        lastAttemptedFailureAt: null,
       });
       return true;
     });

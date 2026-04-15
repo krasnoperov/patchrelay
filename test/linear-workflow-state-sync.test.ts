@@ -189,3 +189,97 @@ test("syncActiveWorkflowState completes trusted no-PR done issues in Linear", as
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("syncActiveWorkflowState moves undelegated no-PR work back to the queued Linear state", async () => {
+  const { baseDir, db } = createDb();
+  try {
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-paused",
+      issueKey: "USE-PAUSED",
+      factoryState: "implementing",
+      delegatedToPatchRelay: false,
+      currentLinearState: "In Progress",
+      currentLinearStateType: "started",
+    });
+
+    let requestedState: string | undefined;
+    await syncActiveWorkflowState({
+      db,
+      issue,
+      trackedIssue: {
+        sessionState: "idle",
+        blockedByCount: 0,
+        readyForExecution: false,
+      } as never,
+      linear: {
+        getIssue: async () => ({
+          id: issue.linearIssueId,
+          stateName: "In Progress",
+          stateType: "started",
+          workflowStates: [
+            { name: "Backlog", type: "backlog" },
+            { name: "In Progress", type: "started" },
+            { name: "Done", type: "completed" },
+          ],
+        }),
+        setIssueState: async (_issueId, state) => {
+          requestedState = state;
+          return { stateName: state, stateType: "backlog" };
+        },
+      } as never,
+    });
+
+    assert.equal(requestedState, "Backlog");
+    assert.equal(db.issues.getIssue(issue.projectId, issue.linearIssueId)?.currentLinearState, "Backlog");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("syncActiveWorkflowState moves blocked delegated no-PR work back to the queued Linear state", async () => {
+  const { baseDir, db } = createDb();
+  try {
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-blocked",
+      issueKey: "USE-BLOCKED",
+      factoryState: "delegated",
+      delegatedToPatchRelay: true,
+      currentLinearState: "In Progress",
+      currentLinearStateType: "started",
+    });
+
+    let requestedState: string | undefined;
+    await syncActiveWorkflowState({
+      db,
+      issue,
+      trackedIssue: {
+        sessionState: "idle",
+        blockedByCount: 2,
+        readyForExecution: false,
+      } as never,
+      linear: {
+        getIssue: async () => ({
+          id: issue.linearIssueId,
+          stateName: "In Progress",
+          stateType: "started",
+          workflowStates: [
+            { name: "Backlog", type: "backlog" },
+            { name: "In Progress", type: "started" },
+            { name: "Done", type: "completed" },
+          ],
+        }),
+        setIssueState: async (_issueId, state) => {
+          requestedState = state;
+          return { stateName: state, stateType: "backlog" };
+        },
+      } as never,
+    });
+
+    assert.equal(requestedState, "Backlog");
+    assert.equal(db.issues.getIssue(issue.projectId, issue.linearIssueId)?.currentLinearState, "Backlog");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});

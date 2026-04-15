@@ -40,7 +40,7 @@ export class ServiceStartupRecovery {
   }
 
   async recoverDelegatedIssueStateFromLinear(): Promise<void> {
-    for (const issue of this.db.issues.listIssuesWithAgentSessions()) {
+    for (const issue of this.db.issues.listIssues()) {
       if (issue.factoryState === "done" || issue.activeRunId !== undefined) {
         continue;
       }
@@ -93,7 +93,13 @@ export class ServiceStartupRecovery {
       const latestRun = this.db.runs.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
       const shouldRecoverPausedLocalWork =
         delegated
-        && isResumablePausedLocalWork({ issue, latestRun })
+        && isResumablePausedLocalWork({
+          issue: {
+            ...issue,
+            delegatedToPatchRelay: delegated,
+          },
+          latestRun,
+        })
         && this.db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId) === undefined;
 
       const updated = this.db.issues.upsertIssue({

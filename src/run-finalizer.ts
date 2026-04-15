@@ -237,6 +237,7 @@ export class RunFinalizer {
               lastQueueIncidentJson: null,
               lastAttemptedFailureHeadSha: null,
               lastAttemptedFailureSignature: null,
+              lastAttemptedFailureAt: null,
             }
           : {})),
       });
