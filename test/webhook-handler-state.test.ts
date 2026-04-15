@@ -911,6 +911,125 @@ test("un-delegation during active run releases run and preserves implementing st
   }
 });
 
+test("un-delegation webhook syncs the issue back to a queued Linear state immediately", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-undelegate-linear-sync-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+
+    db.upsertIssue({
+      projectId: "krasnoperov/mafia",
+      linearIssueId: "issue-maf-50-sync",
+      issueKey: "MAF-50S",
+      title: "Pause implementation",
+      factoryState: "implementing",
+      delegatedToPatchRelay: true,
+      currentLinearState: "In Progress",
+      currentLinearStateType: "started",
+    });
+
+    const setIssueStateCalls: string[] = [];
+    const commentUpdates: Array<Record<string, unknown>> = [];
+    const linearClient: Partial<LinearClient> = {
+      getIssue: async (issueId: string) => {
+        assert.equal(issueId, "issue-maf-50-sync");
+        return {
+          id: "issue-maf-50-sync",
+          identifier: "MAF-50S",
+          title: "Pause implementation",
+          teamId: "team-maf",
+          teamKey: "MAF",
+          delegateId: undefined,
+          stateId: "state-progress",
+          stateName: "In Progress",
+          stateType: "started",
+          workflowStates: [
+            { id: "state-backlog", name: "Backlog", type: "backlog" },
+            { id: "state-progress", name: "In Progress", type: "started" },
+            { id: "state-done", name: "Done", type: "completed" },
+          ],
+          labelIds: [],
+          labels: [],
+          teamLabels: [],
+          blockedBy: [],
+          blocks: [],
+        };
+      },
+      setIssueState: async (_issueId, stateName) => {
+        setIssueStateCalls.push(stateName);
+        return {
+          id: "issue-maf-50-sync",
+          identifier: "MAF-50S",
+          title: "Pause implementation",
+          stateName,
+          stateType: stateName === "Backlog" ? "backlog" : "started",
+          workflowStates: [
+            { id: "state-backlog", name: "Backlog", type: "backlog" },
+            { id: "state-progress", name: "In Progress", type: "started" },
+            { id: "state-done", name: "Done", type: "completed" },
+          ],
+          blockedBy: [],
+          relationsKnown: true,
+        };
+      },
+      upsertIssueComment: async (params) => {
+        commentUpdates.push(params as unknown as Record<string, unknown>);
+        return { id: "comment-50-sync", body: params.body };
+      },
+      createAgentActivity: async () => ({ id: "activity-50-sync" }),
+      updateAgentSession: async () => ({ id: "session-50-sync" }),
+    };
+
+    const handler = new WebhookHandler(
+      config,
+      db,
+      { forProject: async () => linearClient as LinearClient } as never,
+      { steerTurn: async () => undefined } as never,
+      () => undefined,
+      pino({ enabled: false }),
+    );
+
+    const payload: LinearWebhookPayload = {
+      action: "update",
+      type: "Issue",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      webhookTimestamp: Date.now(),
+      updatedFrom: { delegateId: "patchrelay-actor" },
+      data: {
+        id: "issue-maf-50-sync",
+        identifier: "MAF-50S",
+        title: "Pause implementation",
+        team: { id: "team-maf", key: "MAF" },
+        state: { id: "state-progress", name: "In Progress", type: "started" },
+        delegate: null,
+      },
+    };
+
+    const stored = db.webhookEvents.insertFullWebhookEvent({
+      webhookId: "delivery-undelegate-50-sync",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(payload),
+    });
+
+    await handler.processWebhookEvent(stored.id);
+
+    assert.deepEqual(setIssueStateCalls, ["Backlog"]);
+    assert.equal(db.getIssue("krasnoperov/mafia", "issue-maf-50-sync")?.currentLinearState, "Backlog");
+    assert.equal(commentUpdates.length, 1);
+    assert.match(String(commentUpdates[0]?.body), /PatchRelay automation is paused because the issue is undelegated/);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("terminal Linear completion during active run releases the run and marks the issue done", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-terminal-active-"));
   try {
