@@ -153,6 +153,7 @@ export class RunLauncher {
           ? {
               lastAttemptedFailureSignature: failureSignature,
               lastAttemptedFailureHeadSha: failureHeadSha ?? null,
+              lastAttemptedFailureAt: new Date().toISOString(),
             }
           : {}),
       });

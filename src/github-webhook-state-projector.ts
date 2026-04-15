@@ -128,6 +128,7 @@ export async function projectGitHubWebhookState(
       lastQueueIncidentJson: null,
       lastAttemptedFailureHeadSha: null,
       lastAttemptedFailureSignature: null,
+      lastAttemptedFailureAt: null,
     });
   }
 
@@ -314,6 +315,7 @@ async function updateGitHubFailureProvenance(
       lastQueueIncidentJson: null,
       lastAttemptedFailureHeadSha: null,
       lastAttemptedFailureSignature: null,
+      lastAttemptedFailureAt: null,
     });
   }
 }

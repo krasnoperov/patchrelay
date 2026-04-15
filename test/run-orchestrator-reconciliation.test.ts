@@ -2803,3 +2803,79 @@ test("reconcileIdleIssues leaves awaiting_queue issues idle when they are alread
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("reconcileIdleIssues re-enqueues queue_repair when a fresh steward incident fires after a prior failed attempt", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-fresh-incident-"));
+  try {
+    const { db, enqueueCalls, orchestrator } = createOrchestrator(baseDir);
+    const attemptedAt = "2026-04-14T20:53:32.000Z";
+    const freshFailureAt = "2026-04-14T22:10:00.000Z";
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-fresh-incident",
+      issueKey: "USE-FI",
+      branchName: "feat-fresh-incident",
+      prNumber: 59,
+      prState: "open",
+      prHeadSha: "sha-pr",
+      prReviewState: "approved",
+      prCheckStatus: "failed",
+      factoryState: "repairing_queue",
+      lastGitHubFailureSource: "queue_eviction",
+      lastGitHubFailureHeadSha: "sha-pr",
+      lastGitHubFailureSignature: "queue_eviction::sha-pr::merge-steward/queue",
+      lastGitHubFailureCheckName: "merge-steward/queue",
+      lastGitHubFailureAt: freshFailureAt,
+      lastAttemptedFailureHeadSha: "sha-pr",
+      lastAttemptedFailureSignature: "queue_eviction::sha-pr::merge-steward/queue",
+      lastAttemptedFailureAt: attemptedAt,
+    });
+
+    await (orchestrator as unknown as { idleReconciler: { reconcile: () => Promise<void> } }).idleReconciler.reconcile();
+
+    const issue = db.getIssue("usertold", "issue-fresh-incident");
+    assert.equal(issue?.factoryState, "repairing_queue");
+    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-fresh-incident")?.runType, "queue_repair");
+    assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-fresh-incident" }]);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("reconcileIdleIssues still dedupes queue_repair when the last attempt covered the current incident", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-dedupe-same-incident-"));
+  try {
+    const { db, enqueueCalls, orchestrator } = createOrchestrator(baseDir);
+    const sameAt = "2026-04-14T20:53:32.000Z";
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-dedupe-same",
+      issueKey: "USE-DS",
+      branchName: "feat-dedupe-same",
+      prNumber: 60,
+      prState: "open",
+      prHeadSha: "sha-pr",
+      prReviewState: "approved",
+      prCheckStatus: "failed",
+      factoryState: "repairing_queue",
+      lastGitHubFailureSource: "queue_eviction",
+      lastGitHubFailureHeadSha: "sha-pr",
+      lastGitHubFailureSignature: "queue_eviction::sha-pr::merge-steward/queue",
+      lastGitHubFailureCheckName: "merge-steward/queue",
+      lastGitHubFailureAt: sameAt,
+      lastAttemptedFailureHeadSha: "sha-pr",
+      lastAttemptedFailureSignature: "queue_eviction::sha-pr::merge-steward/queue",
+      lastAttemptedFailureAt: sameAt,
+    });
+
+    await (orchestrator as unknown as { idleReconciler: { reconcile: () => Promise<void> } }).idleReconciler.reconcile();
+
+    const issue = db.getIssue("usertold", "issue-dedupe-same");
+    assert.equal(issue?.factoryState, "repairing_queue");
+    assert.equal(issue?.pendingRunType, undefined);
+    assert.equal(db.issueSessions.peekIssueSessionWake("usertold", "issue-dedupe-same"), undefined);
+    assert.deepEqual(enqueueCalls, []);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});

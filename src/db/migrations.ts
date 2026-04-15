@@ -308,6 +308,7 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
   addColumnIfMissing(connection, "issues", "last_queue_incident_json", "TEXT");
   addColumnIfMissing(connection, "issues", "last_attempted_failure_head_sha", "TEXT");
   addColumnIfMissing(connection, "issues", "last_attempted_failure_signature", "TEXT");
+  addColumnIfMissing(connection, "issues", "last_attempted_failure_at", "TEXT");
 
   removeRetiredIssueColumnsIfPresent(connection);
 }
@@ -377,6 +378,7 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
         last_queue_incident_json TEXT,
         last_attempted_failure_head_sha TEXT,
         last_attempted_failure_signature TEXT,
+        last_attempted_failure_at TEXT,
         ci_repair_attempts INTEGER NOT NULL DEFAULT 0,
         queue_repair_attempts INTEGER NOT NULL DEFAULT 0,
         review_fix_attempts INTEGER NOT NULL DEFAULT 0,
@@ -434,6 +436,7 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
         last_queue_incident_json,
         last_attempted_failure_head_sha,
         last_attempted_failure_signature,
+        last_attempted_failure_at,
         ci_repair_attempts,
         queue_repair_attempts,
         review_fix_attempts,
@@ -489,6 +492,7 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
         last_queue_incident_json,
         last_attempted_failure_head_sha,
         last_attempted_failure_signature,
+        last_attempted_failure_at,
         COALESCE(ci_repair_attempts, 0),
         COALESCE(queue_repair_attempts, 0),
         COALESCE(review_fix_attempts, 0),

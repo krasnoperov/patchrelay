@@ -54,6 +54,7 @@ export interface UpsertIssueParams {
   lastQueueIncidentJson?: string | null;
   lastAttemptedFailureHeadSha?: string | null;
   lastAttemptedFailureSignature?: string | null;
+  lastAttemptedFailureAt?: string | null;
   ciRepairAttempts?: number;
   queueRepairAttempts?: number;
   reviewFixAttempts?: number;
@@ -121,6 +122,7 @@ export class IssueStore {
       if (params.lastQueueIncidentJson !== undefined) { sets.push("last_queue_incident_json = @lastQueueIncidentJson"); values.lastQueueIncidentJson = params.lastQueueIncidentJson; }
       if (params.lastAttemptedFailureHeadSha !== undefined) { sets.push("last_attempted_failure_head_sha = @lastAttemptedFailureHeadSha"); values.lastAttemptedFailureHeadSha = params.lastAttemptedFailureHeadSha; }
       if (params.lastAttemptedFailureSignature !== undefined) { sets.push("last_attempted_failure_signature = @lastAttemptedFailureSignature"); values.lastAttemptedFailureSignature = params.lastAttemptedFailureSignature; }
+      if (params.lastAttemptedFailureAt !== undefined) { sets.push("last_attempted_failure_at = @lastAttemptedFailureAt"); values.lastAttemptedFailureAt = params.lastAttemptedFailureAt; }
       if (params.ciRepairAttempts !== undefined) { sets.push("ci_repair_attempts = @ciRepairAttempts"); values.ciRepairAttempts = params.ciRepairAttempts; }
       if (params.queueRepairAttempts !== undefined) { sets.push("queue_repair_attempts = @queueRepairAttempts"); values.queueRepairAttempts = params.queueRepairAttempts; }
       if (params.reviewFixAttempts !== undefined) { sets.push("review_fix_attempts = @reviewFixAttempts"); values.reviewFixAttempts = params.reviewFixAttempts; }
@@ -139,7 +141,7 @@ export class IssueStore {
           last_github_failure_source, last_github_failure_head_sha, last_github_failure_signature, last_github_failure_check_name, last_github_failure_check_url, last_github_failure_context_json, last_github_failure_at,
           last_github_ci_snapshot_head_sha, last_github_ci_snapshot_gate_check_name, last_github_ci_snapshot_gate_check_status, last_github_ci_snapshot_json, last_github_ci_snapshot_settled_at,
           last_queue_signal_at, last_queue_incident_json,
-          last_attempted_failure_head_sha, last_attempted_failure_signature,
+          last_attempted_failure_head_sha, last_attempted_failure_signature, last_attempted_failure_at,
           ci_repair_attempts, queue_repair_attempts, review_fix_attempts, zombie_recovery_attempts, last_zombie_recovery_at,
           updated_at
         ) VALUES (
@@ -152,7 +154,7 @@ export class IssueStore {
           @lastGitHubFailureSource, @lastGitHubFailureHeadSha, @lastGitHubFailureSignature, @lastGitHubFailureCheckName, @lastGitHubFailureCheckUrl, @lastGitHubFailureContextJson, @lastGitHubFailureAt,
           @lastGitHubCiSnapshotHeadSha, @lastGitHubCiSnapshotGateCheckName, @lastGitHubCiSnapshotGateCheckStatus, @lastGitHubCiSnapshotJson, @lastGitHubCiSnapshotSettledAt,
           @lastQueueSignalAt, @lastQueueIncidentJson,
-          @lastAttemptedFailureHeadSha, @lastAttemptedFailureSignature,
+          @lastAttemptedFailureHeadSha, @lastAttemptedFailureSignature, @lastAttemptedFailureAt,
           @ciRepairAttempts, @queueRepairAttempts, @reviewFixAttempts, @zombieRecoveryAttempts, @lastZombieRecoveryAt,
           @now
         )
@@ -203,6 +205,7 @@ export class IssueStore {
         lastQueueIncidentJson: params.lastQueueIncidentJson ?? null,
         lastAttemptedFailureHeadSha: params.lastAttemptedFailureHeadSha ?? null,
         lastAttemptedFailureSignature: params.lastAttemptedFailureSignature ?? null,
+        lastAttemptedFailureAt: params.lastAttemptedFailureAt ?? null,
         ciRepairAttempts: params.ciRepairAttempts ?? 0,
         queueRepairAttempts: params.queueRepairAttempts ?? 0,
         reviewFixAttempts: params.reviewFixAttempts ?? 0,
@@ -513,6 +516,9 @@ export function mapIssueRow(row: Record<string, unknown>): IssueRecord {
       : {}),
     ...(row.last_attempted_failure_signature !== null && row.last_attempted_failure_signature !== undefined
       ? { lastAttemptedFailureSignature: String(row.last_attempted_failure_signature) }
+      : {}),
+    ...(row.last_attempted_failure_at !== null && row.last_attempted_failure_at !== undefined
+      ? { lastAttemptedFailureAt: String(row.last_attempted_failure_at) }
       : {}),
     ciRepairAttempts: Number(row.ci_repair_attempts ?? 0),
     queueRepairAttempts: Number(row.queue_repair_attempts ?? 0),

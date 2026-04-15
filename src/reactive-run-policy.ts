@@ -31,6 +31,13 @@ export class ReactiveRunPolicy {
       const snapshot = await readReactivePrSnapshot(this.config, run.projectId, issue.prNumber);
       if (!snapshot || snapshot.prState !== "open") return undefined;
       if (!snapshot.headSha || snapshot.headSha !== issue.lastGitHubFailureHeadSha) return undefined;
+      // For queue repairs, the agent's no-op is legitimate when the incident has
+      // already self-resolved: GitHub reports the PR as mergeable, so there is no
+      // conflict left to push. Only flag as failed when the merge state is still
+      // DIRTY after the run — then the agent really did miss the fix.
+      if (run.runType === "queue_repair" && !isDirtyMergeStateStatus(snapshot.pr.mergeStateStatus)) {
+        return undefined;
+      }
       return `Repair finished but PR #${issue.prNumber} is still on failing head ${issue.lastGitHubFailureHeadSha.slice(0, 8)}`;
     } catch (error) {
       this.logger.debug({
@@ -112,6 +119,7 @@ export class ReactiveRunPolicy {
                 lastQueueIncidentJson: null,
                 lastAttemptedFailureHeadSha: null,
                 lastAttemptedFailureSignature: null,
+                lastAttemptedFailureAt: null,
                 lastGitHubCiSnapshotHeadSha: snapshot.headSha ?? null,
                 lastGitHubCiSnapshotGateCheckName: snapshot.gateCheckName,
                 lastGitHubCiSnapshotGateCheckStatus: "pending",
