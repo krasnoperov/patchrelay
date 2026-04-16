@@ -228,6 +228,26 @@ function withAttachedConfig<T>(run: () => Promise<T>): Promise<T> {
   return run().finally(restore) as Promise<T>;
 }
 
+test("handlePrStatus without injected resolveCommand does not use the 'no resolveCommand provided' stub", async () => {
+  await withAttachedConfig(async () => {
+    const stdout = createBufferStream();
+    const stderr = createBufferStream();
+    // No resolveCommand, no fetchGitHub. With explicit --repo/--pr the resolver stays out of the way,
+    // but the github fallback path will shell to `gh`, which will either succeed or fail with its own
+    // error — the important thing is we never see the legacy stub text.
+    const code = await handlePrStatus({
+      parsed: parseArgs(["pr", "status", "--repo", "app", "--pr", "99999999", "--json"]),
+      stdout: stdout.stream,
+    }).catch((error: unknown) => {
+      stderr.stream.write(error instanceof Error ? error.message : String(error));
+      return 1;
+    });
+    const out = stdout.read() + stderr.read();
+    assert.doesNotMatch(out, /no resolveCommand provided/);
+    void code;
+  });
+});
+
 test("handlePrStatus uses fetchGitHub fallback when queue has no entry", async () => {
   await withAttachedConfig(async () => {
     const stdout = createBufferStream();

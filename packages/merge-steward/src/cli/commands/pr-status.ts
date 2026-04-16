@@ -4,7 +4,7 @@ import type { StewardConfig } from "../../config.ts";
 import type { Output, ParsedArgs } from "../types.ts";
 import { formatJson, writeOutput } from "../output.ts";
 import { ServiceApiError, fetchLocalJson, loadRepoConfigById } from "../system.ts";
-import { resolvePrNumber, resolveRepo, type ResolveCommandRunner } from "../resolve.ts";
+import { defaultResolveRunner, resolvePrNumber, resolveRepo, type ResolveCommandRunner } from "../resolve.ts";
 import { parseIntegerFlag } from "../args.ts";
 import { fetchPrGitHubOverview, type PrGitHubOverview } from "./pr-github.ts";
 
@@ -305,11 +305,7 @@ export async function handlePrStatus(options: HandlePrStatusOptions): Promise<nu
 
   const fetchGh = options.fetchGitHub
     ?? ((repoFullName, prNumber) =>
-      fetchPrGitHubOverview(repoFullName, prNumber, resolveCommand ?? (async () => ({
-        exitCode: 127,
-        stdout: "",
-        stderr: "no resolveCommand provided",
-      }))));
+      fetchPrGitHubOverview(repoFullName, prNumber, resolveCommand ?? defaultResolveRunner));
 
   const buildReport = async (): Promise<PrStatusReport> => {
     const queueResult = await loadQueueEntry(config, resolvedPr.prNumber);
