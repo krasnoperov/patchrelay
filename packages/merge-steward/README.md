@@ -266,6 +266,7 @@ merge-steward doctor --repo app
 merge-steward service status
 merge-steward service restart
 merge-steward dashboard
+merge-steward pr status               # from a git checkout; resolves repo + PR automatically
 merge-steward queue status --repo app
 merge-steward queue show --repo app --pr 123
 merge-steward service logs --lines 100
@@ -275,9 +276,24 @@ Use them this way:
 
 - `doctor` checks config, GitHub auth, branch rules, and required checks.
 - `dashboard` is the best live operator view across all configured projects.
+- `pr status` gives a single agent-friendly verdict on one PR (queue entry when it exists, GitHub state otherwise) with a stable exit code so scripts can chain with `&&`. Supports `--wait` to poll until a terminal state is reached.
 - `queue status` is the fastest text snapshot when you need one repo in a shell script or over SSH.
 - `queue show --pr <number>` is the most direct way to inspect one PR's queue events and incidents.
 - `service logs` helps when the queue is not reacting to webhooks, GitHub auth is failing, or reconcile ticks are erroring.
+
+### Resolving --repo and --pr from the current checkout
+
+`pr status`, `queue status`, `queue show`, and `queue reconcile` accept `--repo` and `--pr` but you can omit them when running from inside a git checkout. `merge-steward` reads `origin`'s remote URL, matches it to an attached repoId, and uses `gh pr view` to find the PR for the current branch. Pass `--cwd <path>` to resolve from a different directory.
+
+### Exit codes (pr status)
+
+| code | meaning |
+|-|-|
+| 0 | merged / approved with green required checks |
+| 2 | changes_requested / failing required checks / evicted / closed |
+| 3 | still in flight (queued, preparing, validating, merging, pending) |
+| 4 | `--wait` timed out before a terminal state was reached |
+| 1 | usage or configuration error |
 
 ### systemd
 

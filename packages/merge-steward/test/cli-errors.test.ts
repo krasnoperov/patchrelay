@@ -342,14 +342,29 @@ test("service logs without repo id succeeds", async () => {
   assert.match(stdout.read(), /2026-03-31 ok/);
 });
 
-test("queue status without repo id exits 1", async () => {
-  const stderr = createBufferStream();
-  const code = await runCli(["queue", "status"], {
-    stdout: createBufferStream().stream,
-    stderr: stderr.stream,
-  });
-  assert.equal(code, 1);
-  assert.match(stderr.read(), /Repo id is required/);
+test("queue status with unattached --repo exits 1", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "ms-err-queue-noattach-"));
+  try {
+    await withEnv(
+      {
+        XDG_CONFIG_HOME: path.join(baseDir, ".config"),
+        XDG_STATE_HOME: path.join(baseDir, ".state"),
+        XDG_DATA_HOME: path.join(baseDir, ".share"),
+      },
+      async () => {
+        const stderr = createBufferStream();
+        const code = await runCli(["queue", "status", "--repo", "definitely-not-attached-repo"], {
+          stdout: createBufferStream().stream,
+          stderr: stderr.stream,
+          resolveCommand: async () => ({ exitCode: 128, stdout: "", stderr: "no remote" }),
+        });
+        assert.equal(code, 1);
+        assert.match(stderr.read(), /not attached/);
+      },
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
 });
 
 // --- queue show missing --entry or --pr ---

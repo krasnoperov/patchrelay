@@ -6,14 +6,22 @@ import { getDefaultConfigPath } from "../runtime-paths.ts";
 import { loadRepoConfigById } from "../cli-system.ts";
 import type { Output } from "./shared.ts";
 import { formatJson, writeOutput } from "./shared.ts";
-import { parsePullRequestNumber, type ParsedArgs, UsageError } from "./args.ts";
+import { parsePullRequestNumber, type ParsedArgs } from "./args.ts";
+import { resolvePrNumber, resolveRepo, type ResolveCommandRunner } from "./resolve.ts";
 
-export async function handleAttempts(parsed: ParsedArgs, stdout: Output): Promise<number> {
-  const repoRef = parsed.positionals[1];
-  const prNumber = parsePullRequestNumber(parsed.positionals[2]);
-  if (!repoRef) {
-    throw new UsageError("review-quill attempts requires <repo> <pr-number>.");
-  }
+export async function handleAttempts(
+  parsed: ParsedArgs,
+  stdout: Output,
+  resolveCommand?: ResolveCommandRunner,
+): Promise<number> {
+  const positionalRepo = parsed.positionals[1];
+  const positionalPr = parsed.positionals[2];
+
+  const repoRef = positionalRepo
+    ?? (await resolveRepo({ parsed, runCommand: resolveCommand, helpTopic: "root" })).repoId;
+  const prNumber = positionalPr
+    ? parsePullRequestNumber(positionalPr)
+    : (await resolvePrNumber({ parsed, runCommand: resolveCommand, helpTopic: "root" })).prNumber;
 
   const configPath = process.env.REVIEW_QUILL_CONFIG ?? getDefaultConfigPath();
   const config = loadConfig(configPath);

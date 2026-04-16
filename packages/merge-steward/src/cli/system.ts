@@ -17,7 +17,7 @@ import type {
   ServiceGitHubDiscoverResponse,
   ServiceGitHubRepoAccessResponse,
 } from "../admin-types.ts";
-import type { ParsedArgs, HelpTopic, CommandResult, CommandRunner } from "./types.ts";
+import type { CommandResult, CommandRunner } from "./types.ts";
 import { UsageError } from "./types.ts";
 
 export function readEnvFile(filePath: string): Record<string, string> {
@@ -140,18 +140,6 @@ export function buildWebhookUrl(): string | undefined {
   const homeConfig = parseHomeConfigObject(readFileSync(homeConfigPath, "utf8"), homeConfigPath);
   const publicBaseUrl = homeConfig.server.public_base_url;
   return publicBaseUrl ? `${publicBaseUrl.replace(/\/$/, "")}/webhooks/github` : undefined;
-}
-
-export function resolveRepoId(parsed: ParsedArgs, positionalIndex = 2, helpTopic: HelpTopic = "root"): string {
-  const positional = parsed.positionals[positionalIndex];
-  if (positional) {
-    return positional;
-  }
-  const flagged = parsed.flags.get("repo");
-  if (typeof flagged === "string" && flagged.trim()) {
-    return flagged.trim();
-  }
-  throw new UsageError("Repo id is required.", helpTopic);
 }
 
 export function defaultRunCommand(command: string, args: string[]): Promise<CommandResult> {

@@ -5,8 +5,19 @@ import type { ParsedArgs, Output } from "../types.ts";
 import { UsageError } from "../types.ts";
 import { parseIntegerFlag } from "../args.ts";
 import { formatJson, writeOutput } from "../output.ts";
-import { ServiceApiError, loadRepoConfigById, resolveRepoId, fetchLocalJson } from "../system.ts";
+import { ServiceApiError, loadRepoConfigById, fetchLocalJson } from "../system.ts";
+import { resolveRepo, type ResolveCommandRunner } from "../resolve.ts";
 import { buildQueueSummary } from "../../watch/dashboard-model.ts";
+
+async function resolveRepoIdWithCwdFallback(
+  parsed: ParsedArgs,
+  positionalIndex: number,
+  resolveCommand: ResolveCommandRunner | undefined,
+): Promise<string> {
+  const positional = parsed.positionals[positionalIndex];
+  if (positional) return positional;
+  return (await resolveRepo({ parsed, helpTopic: "queue", runCommand: resolveCommand })).repoId;
+}
 
 async function readQueueSnapshot(config: StewardConfig, eventLimit: number): Promise<
   | { kind: "snapshot"; source: "service" | "database"; snapshot: QueueWatchSnapshot }
@@ -139,7 +150,11 @@ function readQueueEntryDetail(config: StewardConfig, options: { entryId?: string
   }
 }
 
-export async function handleQueue(parsed: ParsedArgs, stdout: Output): Promise<number> {
+export async function handleQueue(
+  parsed: ParsedArgs,
+  stdout: Output,
+  resolveCommand?: ResolveCommandRunner,
+): Promise<number> {
   const subcommand = parsed.positionals[1];
   if (!subcommand) {
     throw new UsageError("merge-steward queue requires a subcommand.", "queue");
@@ -154,7 +169,7 @@ export async function handleQueue(parsed: ParsedArgs, stdout: Output): Promise<n
     return await handleDashboard(parsed);
   }
 
-  const repoId = resolveRepoId(parsed, 2, "queue");
+  const repoId = await resolveRepoIdWithCwdFallback(parsed, 2, resolveCommand);
   const { config } = loadRepoConfigById(repoId);
 
   if (subcommand === "status") {

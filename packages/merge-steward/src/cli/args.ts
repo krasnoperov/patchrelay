@@ -107,19 +107,28 @@ export function validateFlags(parsed: ParsedArgs): void {
           assertKnownFlags(parsed, "service", []);
           return;
       }
+    case "pr":
+      switch (subcommand) {
+        case "status":
+          assertKnownFlags(parsed, "root", ["repo", "pr", "cwd", "wait", "timeout", "poll", "json"]);
+          return;
+        default:
+          assertKnownFlags(parsed, "root", []);
+          return;
+      }
     case "queue":
       switch (subcommand) {
         case "dashboard":
           assertKnownFlags(parsed, "queue", ["repo", "pr"]);
           return;
         case "status":
-          assertKnownFlags(parsed, "queue", ["repo", "events", "json"]);
+          assertKnownFlags(parsed, "queue", ["repo", "pr", "cwd", "events", "json"]);
           return;
         case "show":
-          assertKnownFlags(parsed, "queue", ["repo", "entry", "pr", "events", "json"]);
+          assertKnownFlags(parsed, "queue", ["repo", "entry", "pr", "cwd", "events", "json"]);
           return;
         case "reconcile":
-          assertKnownFlags(parsed, "queue", ["repo", "json"]);
+          assertKnownFlags(parsed, "queue", ["repo", "cwd", "json"]);
           return;
         default:
           assertKnownFlags(parsed, "queue", []);

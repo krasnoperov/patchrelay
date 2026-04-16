@@ -21,6 +21,7 @@ export interface RunCliOptions {
   stdout?: Output;
   stderr?: Output;
   runCommand?: CommandRunner;
+  resolveCommand?: (command: string, args: string[], options?: { cwd?: string }) => Promise<CommandResult>;
 }
 
 export class UsageError extends Error {

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+* **cli:** new `review-quill pr status` command that classifies the latest non-superseded review attempt and exits 0 approved/skipped / 2 declined/errored/cancelled / 3 still-in-flight / 4 `--wait` timeout.
+* **cli:** `attempts`, `transcript`, and `transcript-source` now accept `--repo`/`--pr` flags and also auto-resolve `<repo>` and `<pr-number>` from the current git checkout when both positional arguments are omitted. `--cwd <path>` overrides the resolution directory.
+* **cli:** `pr status` supports `--wait`, `--timeout <seconds>`, and `--poll <seconds>` polling so agents can block until a terminal state is reached.
+
 ## [0.2.1](https://github.com/krasnoperov/patchrelay/compare/review-quill-v0.2.0...review-quill-v0.2.1) (2026-04-07)
 
 

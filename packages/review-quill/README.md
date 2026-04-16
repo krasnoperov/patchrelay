@@ -152,12 +152,28 @@ The operator-facing commands are:
 - `review-quill service restart`
 - `review-quill service logs --lines 100`
 - `review-quill dashboard`
-- `review-quill attempts <repo> <pr-number>`
-- `review-quill transcript <repo> <pr-number>`
+- `review-quill attempts [<repo>] [<pr-number>]` (accepts `--repo`/`--pr` flags, auto-resolves from git checkout)
+- `review-quill transcript [<repo>] [<pr-number>]`
+- `review-quill transcript-source [<repo>] [<pr-number>]`
+- `review-quill pr status [--repo <id>] [--pr <num>] [--wait] [--timeout <s>] [--poll <s>] [--json]`
 - `review-quill diff --repo <id>`
 
 `watch` is kept as an alias for `dashboard`, but `dashboard` is the name to
 document and use.
+
+### Resolving --repo and --pr from the current checkout
+
+`pr status`, `attempts`, `transcript`, and `transcript-source` accept `--repo` and `--pr` but you can omit them when running from inside a git checkout. `review-quill` reads `origin`'s remote URL, matches it to an attached repoId, and uses `gh pr view` to find the PR for the current branch. Pass `--cwd <path>` to resolve from a different directory.
+
+### Exit codes (pr status)
+
+| code | meaning |
+|-|-|
+| 0 | approved / skipped |
+| 2 | declined (changes requested) / errored / cancelled |
+| 3 | queued / running / no attempt yet |
+| 4 | `--wait` timed out before a terminal state was reached |
+| 1 | usage or configuration error |
 
 ## Validation, Visibility, And Troubleshooting
 
@@ -170,6 +186,7 @@ review-quill service restart
 review-quill dashboard
 review-quill attempts repo 123
 review-quill transcript repo 123
+review-quill pr status                # from a git checkout; resolves repo + PR automatically
 review-quill diff --repo repo
 review-quill service logs --lines 100
 ```
@@ -178,6 +195,7 @@ Use them this way:
 
 - `doctor` checks config, binaries, service reachability, and GitHub review wiring.
 - `dashboard` shows queued/running/completed review attempts and recent webhook wakeups.
+- `pr status` returns a single agent-friendly verdict on one PR with a stable exit code; supports `--wait` to poll until a review attempt terminates.
 - `attempts` shows recorded review history for one PR.
 - `transcript` lets you inspect the visible Codex thread for a review attempt.
 - `diff` shows the exact local diff/inventory the reviewer would see.
