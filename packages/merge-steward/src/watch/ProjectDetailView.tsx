@@ -102,7 +102,10 @@ export function ProjectDetailView({
     : snapshot.recentEvents.slice(-eventRows);
   const chainEntries = getChainEntries(snapshot);
   const chainText = chainEntries.length > 0
-    ? chainEntries.map((entry) => `#${entry.prNumber}`).join(" -> ")
+    ? chainEntries.map((entry) => {
+      const ci = ciStatusIcon(entry);
+      return `#${entry.prNumber}${ci.icon}`;
+    }).join(" ")
     : "empty";
 
   return (
@@ -114,7 +117,10 @@ export function ProjectDetailView({
       </Box>
       <Text dimColor>{` ${projectStatsSummary(snapshot, compact)}`}</Text>
       {compact ? null : <Text dimColor>{runtimeSummary(snapshot)}</Text>}
-      <Text dimColor>{`Queue: main -> ${truncate(chainText, compact ? width - 18 : 96)}`}</Text>
+      <Text dimColor>{compact
+        ? `Queue: ${truncate(chainText, width - 10)}`
+        : `Queue: main -> ${truncate(chainText, width - 18)}`}
+      </Text>
       {compact ? null : queueBlockSummary ? <Text color="yellow">{queueBlockSummary}</Text> : null}
 
       {compact ? null : (

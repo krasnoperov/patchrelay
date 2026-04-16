@@ -207,6 +207,53 @@ test("review queue text says no eligible review work when the runner is idle", (
   assert.equal(getReviewQueueText(snapshot, repo), "no eligible review work");
 });
 
+test("compact review queue text uses single-character status symbols", () => {
+  const repo = fakeRepo();
+  const snapshot = fakeSnapshot({
+    repos: [repo],
+    attempts: [
+      fakeAttempt({
+        id: 1,
+        prNumber: 1,
+        status: "completed",
+        conclusion: "declined",
+        updatedAt: "2026-04-09T20:00:00.000Z",
+      }),
+      fakeAttempt({
+        id: 2,
+        prNumber: 2,
+        status: "queued",
+        updatedAt: "2026-04-09T20:01:00.000Z",
+      }),
+      fakeAttempt({
+        id: 3,
+        prNumber: 3,
+        status: "running",
+        updatedAt: "2026-04-09T20:02:00.000Z",
+      }),
+      fakeAttempt({
+        id: 4,
+        prNumber: 4,
+        status: "completed",
+        conclusion: "approved",
+        updatedAt: "2026-04-09T20:03:00.000Z",
+      }),
+    ],
+  });
+
+  assert.equal(getReviewQueueText(snapshot, repo, true), "#4✓ #3● #2○ #1✗");
+});
+
+test("compact review queue text falls back to idle when no queue items exist", () => {
+  const repo = fakeRepo();
+  const snapshot = fakeSnapshot({
+    repos: [repo],
+    attempts: [],
+  });
+
+  assert.equal(getReviewQueueText(snapshot, repo, true), "idle");
+});
+
 test("projectStatsSummary compact format keeps active/queued focus", () => {
   const repo = fakeRepo();
   const snapshot = fakeSnapshot({
