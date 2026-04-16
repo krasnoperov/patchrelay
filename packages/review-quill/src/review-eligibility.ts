@@ -43,7 +43,10 @@ export async function evaluateReviewEligibility(params: {
   if (isDraft) return { eligible: false, reason: "draft" };
   if (!headSha) return { eligible: false, reason: "missing_head_sha" };
   if (branchExcluded(repo, branchName)) return { eligible: false, reason: "excluded_branch" };
-  const checks = await github.listCheckRuns(repo.repoFullName, headSha);
+  const checks = (await github.listCheckRuns(repo.repoFullName, headSha)).map((check, index) => ({
+    ...check,
+    id: index + 1,
+  }));
   if (!requiredChecksGreen(repo.requiredChecks, checks)) {
     return { eligible: false, reason: "required_checks_not_green", checkRuns: checks };
   }
