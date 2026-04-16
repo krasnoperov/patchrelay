@@ -34,11 +34,11 @@ function mapEntry(row: Record<string, unknown>): QueueEntry {
     specSha: row.spec_sha === null || row.spec_sha === undefined ? null : String(row.spec_sha),
     specBasedOn: row.spec_based_on === null || row.spec_based_on === undefined ? null : String(row.spec_based_on),
     postMergeStatus: row.post_merge_status === null || row.post_merge_status === undefined
-      ? undefined
+      ? null
       : String(row.post_merge_status) as QueueEntry["postMergeStatus"],
-    postMergeSha: row.post_merge_sha === null || row.post_merge_sha === undefined ? undefined : String(row.post_merge_sha),
-    postMergeSummary: row.post_merge_summary === null || row.post_merge_summary === undefined ? undefined : String(row.post_merge_summary),
-    postMergeCheckedAt: row.post_merge_checked_at === null || row.post_merge_checked_at === undefined ? undefined : String(row.post_merge_checked_at),
+    postMergeSha: row.post_merge_sha === null || row.post_merge_sha === undefined ? null : String(row.post_merge_sha),
+    postMergeSummary: row.post_merge_summary === null || row.post_merge_summary === undefined ? null : String(row.post_merge_summary),
+    postMergeCheckedAt: row.post_merge_checked_at === null || row.post_merge_checked_at === undefined ? null : String(row.post_merge_checked_at),
     enqueuedAt: String(row.enqueued_at),
     updatedAt: String(row.updated_at),
   };

@@ -62,6 +62,10 @@ export class MergeStewardQueueCommands {
       specBranch: null,
       specSha: null,
       specBasedOn: null,
+      postMergeStatus: null,
+      postMergeSha: null,
+      postMergeSummary: null,
+      postMergeCheckedAt: null,
       enqueuedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
