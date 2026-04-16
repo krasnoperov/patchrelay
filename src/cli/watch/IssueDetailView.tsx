@@ -27,6 +27,7 @@ interface IssueDetailViewProps {
   lastServerMessageAt: number | null;
   reservedRows?: number | undefined;
   onLayoutChange: (viewportRows: number, contentRows: number) => void;
+  compact?: boolean | undefined;
 }
 
 export function IssueDetailView({
@@ -47,6 +48,7 @@ export function IssueDetailView({
   connected,
   lastServerMessageAt,
   reservedRows = 0,
+  compact = false,
   onLayoutChange,
 }: IssueDetailViewProps): React.JSX.Element {
   const { stdout } = useStdout();
@@ -60,9 +62,9 @@ export function IssueDetailView({
       connected,
       lastServerMessageAt,
     }), width);
-    const helpRows = measureRenderedTextRows(buildHelpBarText("detail", follow, detailTab), width);
+    const helpRows = measureRenderedTextRows(buildHelpBarText("detail", follow, detailTab, compact), width);
     return statusRows + helpRows;
-  }, [activeRunStartedAt, connected, detailTab, follow, lastServerMessageAt, unreadBelow, width]);
+  }, [activeRunStartedAt, connected, detailTab, follow, lastServerMessageAt, unreadBelow, width, compact]);
   const viewportRows = Math.max(4, totalRows - reservedRows - footerRows);
 
   const lines = useMemo(() => {
@@ -122,7 +124,7 @@ export function IssueDetailView({
         connected={connected}
         lastServerMessageAt={lastServerMessageAt}
       />
-      <HelpBar view="detail" follow={follow} detailTab={detailTab} />
+      <HelpBar view="detail" follow={follow} detailTab={detailTab} compact={compact} />
     </Box>
   );
 }

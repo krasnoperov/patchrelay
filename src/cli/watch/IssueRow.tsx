@@ -17,6 +17,7 @@ interface IssueRowProps {
   issue: WatchIssue;
   selected: boolean;
   titleWidth?: number | undefined;
+  compact?: boolean | undefined;
 }
 
 // ─── State display ──────────────────────────────────────────────
@@ -86,7 +87,7 @@ function stageLabel(issue: WatchIssue): string {
 
 // ─── Context facts (what matters right now) ─────────────────────
 
-function buildFacts(issue: WatchIssue, selected: boolean): Array<{ text: string; color?: string }> {
+function buildFacts(issue: WatchIssue, selected: boolean, compact = false): Array<{ text: string; color?: string }> {
   const facts: Array<{ text: string; color?: string }> = [];
   const rereviewNeeded = isRereviewNeeded(issue);
 
@@ -137,7 +138,7 @@ function buildFacts(issue: WatchIssue, selected: boolean): Array<{ text: string;
     facts.push({ text: `waiting on ${issue.blockedByKeys.join(", ")}`, color: "yellow" });
   }
 
-  return facts;
+  return compact ? facts.slice(0, 3) : facts;
 }
 
 // ─── What's blocking progress ───────────────────────────────────
@@ -171,14 +172,19 @@ function blockerText(issue: WatchIssue): string | null {
 
 // ─── Render ─────────────────────────────────────────────────────
 
-export function IssueRow({ issue, selected, titleWidth }: IssueRowProps): React.JSX.Element {
+export function IssueRow({
+  issue,
+  selected,
+  titleWidth,
+  compact = false,
+}: IssueRowProps): React.JSX.Element {
   const key = issue.issueKey ?? issue.projectId;
   const tw = titleWidth ?? 60;
   const title = issue.title ? truncate(issue.title, tw) : "";
-  const detail = selected ? summarizeIssueStatusNote(issue.statusNote) : undefined;
   const session = sessionDisplay(issue);
-  const facts = buildFacts(issue, selected);
-  const blocker = selected ? blockerText(issue) : null;
+  const facts = buildFacts(issue, selected, compact);
+  const blocker = compact || !selected ? null : blockerText(issue);
+  const detail = compact || !selected ? undefined : summarizeIssueStatusNote(issue.statusNote);
 
   const isTerminal = TERMINAL_STATES.has(effectiveState(issue));
 
@@ -191,6 +197,25 @@ export function IssueRow({ issue, selected, titleWidth }: IssueRowProps): React.
         <Text dimColor>{`  ${relativeTime(issue.updatedAt).padStart(4)}`}</Text>
         <Text>{`  `}</Text>
         <Text color={session.color}>{session.label}</Text>
+      </Box>
+    );
+  }
+
+  if (compact) {
+    return (
+      <Box>
+        <Text color={selected ? "blueBright" : "gray"}>{selected ? "\u25b8" : " "}</Text>
+        <Text bold>{` ${key}`}</Text>
+        <Text dimColor>{`  ${relativeTime(issue.updatedAt).padStart(4)}`}</Text>
+        <Text>{`  `}</Text>
+        <Text color={session.color}>{session.label}</Text>
+        {facts.length > 0 && <Text dimColor>{` · `}</Text>}
+        {facts.map((fact, i) => (
+          <Text key={i}>
+            {i > 0 ? <Text dimColor>{` `}</Text> : null}
+            <Text color={fact.color ?? "white"} dimColor={!fact.color}>{fact.text}</Text>
+          </Text>
+        ))}
       </Box>
     );
   }
@@ -241,18 +266,27 @@ export function IssueRow({ issue, selected, titleWidth }: IssueRowProps): React.
   );
 }
 
-export function estimateIssueRowHeight(issue: WatchIssue, selected: boolean, cols: number, titleWidth?: number): number {
+export function estimateIssueRowHeight(
+  issue: WatchIssue,
+  selected: boolean,
+  cols: number,
+  titleWidth?: number,
+  compact = false,
+): number {
   const width = Math.max(20, cols);
   const key = issue.issueKey ?? issue.projectId;
   const tw = titleWidth ?? 60;
   const title = issue.title ? truncate(issue.title, tw) : "";
-  const detail = selected ? summarizeIssueStatusNote(issue.statusNote) : undefined;
+  const detail = compact || !selected ? undefined : summarizeIssueStatusNote(issue.statusNote);
   const session = sessionDisplay(issue);
-  const facts = buildFacts(issue, selected);
-  const blocker = selected ? blockerText(issue) : null;
+  const facts = buildFacts(issue, selected, compact);
+  const blocker = compact || !selected ? null : blockerText(issue);
   const isTerminal = TERMINAL_STATES.has(effectiveState(issue));
 
   if (isTerminal && !selected) {
+    return 1;
+  }
+  if (compact) {
     return 1;
   }
 

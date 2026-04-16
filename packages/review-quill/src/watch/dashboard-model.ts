@@ -228,11 +228,41 @@ export function getClusterSummary(snapshot: ReviewQuillWatchSnapshot | null): Cl
   });
 }
 
-export function projectStatsSummary(snapshot: ReviewQuillWatchSnapshot | null, repo: ReviewQuillRepoSummary): string {
+export function projectStatsSummary(snapshot: ReviewQuillWatchSnapshot | null, repo: ReviewQuillRepoSummary, compact = false): string {
   const stats = repoAttemptStats(snapshot, repo);
+  if (compact) {
+    const parts = [
+      `${stats.running}a`,
+      `${stats.queued}w`,
+    ];
+    if (stats.failed > 0) {
+      parts.push(`${stats.failed}f`);
+    }
+    if (stats.stale > 0) {
+      parts.push(`${stats.stale}s`);
+    }
+    return parts.join(" ");
+  }
+
   const failedSuffix = stats.failed > 0 ? ` · ${stats.failed} failed` : "";
   const staleSuffix = stats.stale > 0 ? ` · ${stats.stale} stale` : "";
   return `${stats.running} active · ${stats.queued} queued${failedSuffix}${staleSuffix}`;
+}
+
+export function clusterSummaryText(snapshot: ReviewQuillWatchSnapshot | null, compact = false): string {
+  const summary = getClusterSummary(snapshot);
+  if (compact) {
+    const compactParts = [
+      `${summary.total} repos`,
+      `${summary.connected} online`,
+      `${summary.active} active`,
+      `${summary.queued} queued`,
+      `${summary.stuck} stuck`,
+      `${summary.attention} need-att`,
+    ];
+    return compactParts.join(" ");
+  }
+  return `${summary.total} repositories · ${summary.connected} connected · ${summary.active} active · ${summary.queued} queued · ${summary.stuck} stuck · ${summary.attention} need attention`;
 }
 
 export function getReviewQueueText(snapshot: ReviewQuillWatchSnapshot | null, repo: ReviewQuillRepoSummary): string {

@@ -14,6 +14,7 @@ interface IssueListViewProps {
   filter: WatchFilter;
   totalCount: number;
   frozen?: boolean | undefined;
+  compact?: boolean | undefined;
 }
 
 const FIXED_COLS = 8;
@@ -25,11 +26,12 @@ export function computeVisibleWindow(
   maxRows: number,
   cols: number,
   titleWidth: number,
+  compact: boolean,
 ): { start: number; end: number } {
   if (issues.length === 0) return { start: 0, end: 0 };
 
   const clampedSelected = Math.max(0, Math.min(selectedIndex, issues.length - 1));
-  const heights = issues.map((issue, index) => estimateIssueRowHeight(issue, index === clampedSelected, cols, titleWidth));
+  const heights = issues.map((issue, index) => estimateIssueRowHeight(issue, index === clampedSelected, cols, titleWidth, compact));
   let start = clampedSelected;
   let end = clampedSelected + 1;
   let usedRows = heights[clampedSelected] ?? 1;
@@ -67,12 +69,13 @@ export function IssueListView({
   filter,
   totalCount,
   frozen,
+  compact = false,
 }: IssueListViewProps): React.JSX.Element {
   const { stdout } = useStdout();
   const cols = stdout?.columns ?? 80;
   const rows = stdout?.rows ?? 24;
-  const titleWidth = Math.max(0, cols - FIXED_COLS);
-  const maxVisibleRows = Math.max(1, rows - CHROME_ROWS);
+  const titleWidth = Math.max(0, cols - (compact ? 24 : FIXED_COLS));
+  const maxVisibleRows = Math.max(1, rows - (compact ? 3 : CHROME_ROWS));
 
   // Periodic refresh for elapsed times
   const [, tick] = useReducer((c: number) => c + 1, 0);
@@ -82,7 +85,14 @@ export function IssueListView({
     return () => clearInterval(id);
   }, [frozen]);
 
-  const { start: startIndex, end: endIndex } = computeVisibleWindow(issues, selectedIndex, maxVisibleRows, cols, titleWidth);
+  const { start: startIndex, end: endIndex } = computeVisibleWindow(
+    issues,
+    selectedIndex,
+    maxVisibleRows,
+    cols,
+    titleWidth,
+    compact,
+  );
   const visible = issues.slice(startIndex, endIndex);
   const hiddenAbove = startIndex;
   const hiddenBelow = Math.max(0, issues.length - endIndex);
@@ -97,27 +107,29 @@ export function IssueListView({
         lastServerMessageAt={lastServerMessageAt}
         allIssues={allIssues}
         frozen={frozen ?? false}
+        compact={compact}
       />
       <Box marginTop={1} flexDirection="column">
         {issues.length === 0 ? (
           <Text dimColor>No issues match the current filter.</Text>
         ) : (
           <>
-            {hiddenAbove > 0 && <Text dimColor>  {hiddenAbove} more above</Text>}
+            {hiddenAbove > 0 && <Text dimColor>{compact ? `↑${hiddenAbove}` : `  ${hiddenAbove} more above`}</Text>}
             {visible.map((issue, i) => (
               <IssueRow
                 key={issue.issueKey ?? `${issue.projectId}-${startIndex + i}`}
                 issue={issue}
                 selected={startIndex + i === selectedIndex}
                 titleWidth={titleWidth}
+                compact={compact}
               />
             ))}
-            {hiddenBelow > 0 && <Text dimColor>  {hiddenBelow} more below</Text>}
+            {hiddenBelow > 0 && <Text dimColor>{compact ? `↓${hiddenBelow}` : `  ${hiddenBelow} more below`}</Text>}
           </>
         )}
       </Box>
       <Box marginTop={1}>
-        <HelpBar view="list" />
+        <HelpBar view="list" compact={compact} />
       </Box>
     </Box>
   );

@@ -12,6 +12,7 @@ interface StatusBarProps {
   lastServerMessageAt: number | null;
   allIssues: WatchIssue[];
   frozen: boolean;
+  compact?: boolean;
 }
 
 const FILTER_LABELS: Record<WatchFilter, string> = {
@@ -28,6 +29,7 @@ export function StatusBar({
   lastServerMessageAt,
   allIssues,
   frozen,
+  compact = false,
 }: StatusBarProps): React.JSX.Element {
   const showing = filter === "all" ? `${totalCount} issues` : `${issues.length}/${totalCount} issues`;
   const aggregateSource = filter === "all" ? allIssues : issues;
@@ -37,6 +39,32 @@ export function StatusBar({
   const intervention = aggregateSource.filter((i) => i.sessionState === "failed" || i.factoryState === "failed" || i.factoryState === "escalated").length;
   const running = aggregateSource.filter((i) => i.sessionState === "running").length;
   const idle = aggregateSource.filter((i) => i.sessionState === "idle").length;
+  if (compact) {
+    const compactParts = [
+      withPr > 0 ? `p${withPr}` : null,
+      running > 0 ? `r${running}` : null,
+      waitingInput > 0 ? `w${waitingInput}` : null,
+      intervention > 0 ? `x${intervention}` : null,
+      agg.blocked > 0 ? `b${agg.blocked}` : null,
+      agg.ready > 0 ? `q${agg.ready}` : null,
+      agg.failed > 0 ? `f${agg.failed}` : null,
+      agg.done > 0 ? `d${agg.done}` : null,
+      frozen ? "frozen" : null,
+    ].filter(Boolean) as string[];
+
+    return (
+      <Box justifyContent="space-between">
+        <Box gap={1}>
+          <Text bold>patchrelay</Text>
+          <Text dimColor>{showing}</Text>
+          <Text dimColor>[{FILTER_LABELS[filter][0]}]</Text>
+          {compactParts.length > 0 ? <Text dimColor>{compactParts.join(" ")}</Text> : null}
+        </Box>
+        <FreshnessBadge connected={connected} lastServerMessageAt={lastServerMessageAt} />
+      </Box>
+    );
+  }
+
   return (
     <Box justifyContent="space-between">
       <Box gap={1}>

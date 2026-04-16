@@ -1,12 +1,13 @@
 import { Box, Text } from "ink";
 import type { ReviewAttemptDetail } from "../types.ts";
-import { attemptLabel, attemptStateColor, formatSha, formatTimestamp, relativeTime } from "./format.ts";
+import { attemptLabel, attemptStateColor, formatSha, formatTimestamp, relativeTime, truncate } from "./format.ts";
 
 interface DetailViewProps {
   detail: ReviewAttemptDetail | null;
+  compact?: boolean;
 }
 
-export function DetailView({ detail }: DetailViewProps): React.JSX.Element {
+export function DetailView({ detail, compact = false }: DetailViewProps): React.JSX.Element {
   if (!detail) {
     return (
       <Box marginTop={1}>
@@ -29,6 +30,44 @@ export function DetailView({ detail }: DetailViewProps): React.JSX.Element {
   const reviewedHeadLabel = isLatestForPullRequest
     ? "This is the latest stored review result for this pull request."
     : `This is historical review output. A newer attempt (#${latestAttempt.id}) exists for this pull request.`;
+
+  if (compact) {
+    return (
+      <Box flexDirection="column" marginTop={1}>
+        <Text bold>{`${attempt.repoFullName} PR #${attempt.prNumber}`}</Text>
+        <Box>
+          <Text>Result: </Text>
+          <Text color={attemptStateColor(attempt)}>{attemptLabel(attempt)}</Text>
+          {attempt.status === "completed" && attempt.conclusion === "approved" ? <Text dimColor> (approved)</Text> : null}
+        </Box>
+        <Text>{attempt.staleReason ? `Stale: ${attempt.staleReason}` : resultLabel}</Text>
+        {currentPullRequest ? (
+          <Text>{`PR state: ${currentPullRequest.state.toLowerCase()}${currentPullRequest.isDraft ? " (draft)" : ""}`}</Text>
+        ) : null}
+        <Text>{`Reviewed head: ${formatSha(attempt.headSha)}${currentPullRequest && currentPullRequest.headSha !== attempt.headSha ? " (outdated)" : ""}`}</Text>
+        <Text dimColor>{`Updated: ${relativeTime(attempt.updatedAt)} ago`}</Text>
+        {attempt.summary ? (
+          <Text>{`Summary: ${truncate(attempt.summary, 140)}`}</Text>
+        ) : (
+          <Text>Summary: No summary captured.</Text>
+        )}
+
+        <Box marginTop={1} flexDirection="column">
+          <Text bold>Review History</Text>
+          {detail.relatedAttempts.slice(0, 2).map((related) => (
+            <Box key={related.id}>
+              <Text>{`#${related.id}`}</Text>
+              <Text>{` ${formatSha(related.headSha)}`}</Text>
+              <Text>{` `}</Text>
+              <Text color={attemptStateColor(related)}>{attemptLabel(related)}</Text>
+              <Text dimColor>{` ${relativeTime(related.updatedAt)} ago`}</Text>
+            </Box>
+          ))}
+        </Box>
+      </Box>
+    );
+  }
+
   return (
     <Box flexDirection="column" marginTop={1}>
       <Text bold>{`${attempt.repoFullName} PR #${attempt.prNumber}`}</Text>
