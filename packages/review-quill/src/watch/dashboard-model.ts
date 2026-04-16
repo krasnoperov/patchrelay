@@ -470,7 +470,10 @@ export function getCompactReviewQueueTokens(
     }];
   });
 
-  const tokens = [...attemptTokens, ...pendingTokens];
+  // Pending PRs (checks still running, waiting on eligibility) come first:
+  // the operator cares about in-flight work more than completed history, and
+  // the row-level width truncation in ListView drops the tail of this list.
+  const tokens = [...pendingTokens, ...attemptTokens];
   return tokens.slice(0, 10);
 }
 
