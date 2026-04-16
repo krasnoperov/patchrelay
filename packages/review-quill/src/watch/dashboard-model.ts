@@ -62,7 +62,7 @@ function repoWebhooks(snapshot: ReviewQuillWatchSnapshot | null, repo: ReviewQui
 
 function repoPendingReviews(snapshot: ReviewQuillWatchSnapshot | null, repo: ReviewQuillRepoSummary): ReviewQuillPendingReview[] {
   if (!snapshot) return [];
-  return snapshot.pendingReviews
+  return (snapshot.pendingReviews ?? [])
     .filter((pending) => pending.repoId === repo.repoId || pending.repoFullName === repo.repoFullName)
     .sort((left, right) => {
       const leftTime = new Date(left.updatedAt).getTime();
