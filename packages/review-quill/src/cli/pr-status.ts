@@ -139,6 +139,65 @@ export interface HandlePrStatusOptions {
   parsed: ParsedArgs;
   stdout: Output;
   resolveCommand?: ResolveCommandRunner | undefined;
+  now?: (() => number) | undefined;
+  sleep?: ((ms: number) => Promise<void>) | undefined;
+}
+
+export interface WaitOptions {
+  timeoutMs: number;
+  pollMs: number;
+  now: () => number;
+  sleep: (ms: number) => Promise<void>;
+}
+
+const DEFAULT_WAIT_TIMEOUT_MS = 30 * 60_000;
+const MAX_WAIT_TIMEOUT_MS = 2 * 60 * 60_000;
+const MIN_WAIT_TIMEOUT_MS = 1_000;
+const DEFAULT_POLL_MS = 5_000;
+const MIN_POLL_MS = 1_000;
+const MAX_POLL_MS = 5 * 60_000;
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+export function resolveWaitOptions(parsed: ParsedArgs, overrides?: Partial<Pick<WaitOptions, "now" | "sleep">>): WaitOptions {
+  const timeoutSeconds = parseIntegerFlag(parsed.flags.get("timeout"), "--timeout");
+  const pollSeconds = parseIntegerFlag(parsed.flags.get("poll"), "--poll");
+  const timeoutMs = clamp(
+    timeoutSeconds !== undefined ? timeoutSeconds * 1000 : DEFAULT_WAIT_TIMEOUT_MS,
+    MIN_WAIT_TIMEOUT_MS,
+    MAX_WAIT_TIMEOUT_MS,
+  );
+  const pollMs = clamp(
+    pollSeconds !== undefined ? pollSeconds * 1000 : DEFAULT_POLL_MS,
+    MIN_POLL_MS,
+    MAX_POLL_MS,
+  );
+  return {
+    timeoutMs,
+    pollMs,
+    now: overrides?.now ?? (() => Date.now()),
+    sleep: overrides?.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
+  };
+}
+
+export async function waitForTerminalReport(
+  build: () => Promise<PrReviewReport>,
+  options: WaitOptions,
+): Promise<{ report: PrReviewReport; timedOut: boolean }> {
+  const deadline = options.now() + options.timeoutMs;
+  let report = await build();
+  while (!report.terminal) {
+    const remaining = deadline - options.now();
+    if (remaining <= 0) {
+      return { report, timedOut: true };
+    }
+    const waitMs = Math.min(options.pollMs, remaining);
+    if (waitMs > 0) await options.sleep(waitMs);
+    report = await build();
+  }
+  return { report, timedOut: false };
 }
 
 export async function handlePrStatus(options: HandlePrStatusOptions): Promise<number> {
@@ -151,35 +210,50 @@ export async function handlePrStatus(options: HandlePrStatusOptions): Promise<nu
   const configPath = process.env.REVIEW_QUILL_CONFIG ?? getDefaultConfigPath();
   const config = loadConfig(configPath);
   const { repo } = loadRepoConfigById(resolvedRepo.repoId);
-  const store = new SqliteStore(config.database.path);
-  try {
-    const attempts = store.listAttemptsForPullRequest(repo.repoFullName, resolvedPr.prNumber, 50).map((attempt) =>
-      decorateAttempt(attempt, {
-        policy: {
-          queuedAfterMs: config.reconciliation.staleQueuedAfterMs,
-          runningAfterMs: config.reconciliation.staleRunningAfterMs,
-        },
-      }),
-    );
-    const selected = selectLatestAttempt(attempts);
-    const report = buildPrReviewReport({
-      repoId: resolvedRepo.repoId,
-      repoFullName: repo.repoFullName,
-      prNumber: resolvedPr.prNumber,
-      attempt: selected,
-    });
 
-    // Reserved for --wait (shipped in a follow-up commit).
-    void parseIntegerFlag(parsed.flags.get("timeout"), "--timeout");
-    void parseIntegerFlag(parsed.flags.get("poll"), "--poll");
-
-    if (parsed.flags.get("json") === true) {
-      writeOutput(stdout, formatJson(report));
-    } else {
-      writeOutput(stdout, formatReportText(report));
+  const buildReport = async (): Promise<PrReviewReport> => {
+    const store = new SqliteStore(config.database.path);
+    try {
+      const attempts = store.listAttemptsForPullRequest(repo.repoFullName, resolvedPr.prNumber, 50).map((attempt) =>
+        decorateAttempt(attempt, {
+          policy: {
+            queuedAfterMs: config.reconciliation.staleQueuedAfterMs,
+            runningAfterMs: config.reconciliation.staleRunningAfterMs,
+          },
+        }),
+      );
+      const selected = selectLatestAttempt(attempts);
+      return buildPrReviewReport({
+        repoId: resolvedRepo.repoId,
+        repoFullName: repo.repoFullName,
+        prNumber: resolvedPr.prNumber,
+        attempt: selected,
+      });
+    } finally {
+      store.close();
     }
-    return report.exitCode;
-  } finally {
-    store.close();
+  };
+
+  const shouldWait = parsed.flags.get("wait") === true || typeof parsed.flags.get("wait") === "string";
+  let report: PrReviewReport;
+  let timedOut = false;
+  if (shouldWait) {
+    const waitOptions = resolveWaitOptions(parsed, {
+      ...(options.now ? { now: options.now } : {}),
+      ...(options.sleep ? { sleep: options.sleep } : {}),
+    });
+    const result = await waitForTerminalReport(buildReport, waitOptions);
+    report = result.report;
+    timedOut = result.timedOut;
+  } else {
+    report = await buildReport();
   }
+
+  const payload = timedOut ? { ...report, timedOut: true } : report;
+  if (parsed.flags.get("json") === true) {
+    writeOutput(stdout, formatJson(payload));
+  } else {
+    writeOutput(stdout, formatReportText(report) + (timedOut ? "Timed out waiting for terminal state.\n" : ""));
+  }
+  return timedOut ? 4 : report.exitCode;
 }

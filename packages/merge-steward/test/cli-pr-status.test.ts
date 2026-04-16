@@ -257,6 +257,82 @@ test("handlePrStatus uses fetchGitHub fallback when queue has no entry", async (
   });
 });
 
+test("merge-steward pr status --wait loops until github reports terminal state", async () => {
+  await withAttachedConfig(async () => {
+    const stdout = createBufferStream();
+    let call = 0;
+    let slept = 0;
+    let timeMs = 1_000;
+    const code = await handlePrStatus({
+      parsed: parseArgs(["pr", "status", "--repo", "app", "--pr", "42", "--wait", "--json", "--poll", "1"]),
+      stdout: stdout.stream,
+      resolveCommand: async () => ({ exitCode: 127, stdout: "", stderr: "unused" }),
+      fetchGitHub: async () => {
+        call += 1;
+        if (call < 3) {
+          return {
+            number: 42,
+            branch: "feat/x",
+            headSha: "abc",
+            state: "OPEN",
+            merged: false,
+            reviewDecision: "REVIEW_REQUIRED",
+            labels: [],
+            checks: [{ name: "ci", status: "pending", required: true }],
+          };
+        }
+        return {
+          number: 42,
+          branch: "feat/x",
+          headSha: "abc",
+          state: "OPEN",
+          merged: false,
+          reviewDecision: "APPROVED",
+          labels: [],
+          checks: [{ name: "ci", status: "success", required: true }],
+        };
+      },
+      now: () => timeMs,
+      sleep: async (ms: number) => {
+        slept += 1;
+        timeMs += ms;
+      },
+    });
+    assert.equal(code, 0);
+    assert.equal(call, 3);
+    assert.ok(slept >= 2, `expected >=2 sleeps, got ${slept}`);
+  });
+});
+
+test("merge-steward pr status --wait times out with exit 4", async () => {
+  await withAttachedConfig(async () => {
+    const stdout = createBufferStream();
+    let timeMs = 1_000;
+    const code = await handlePrStatus({
+      parsed: parseArgs(["pr", "status", "--repo", "app", "--pr", "42", "--wait", "--json", "--timeout", "2", "--poll", "1"]),
+      stdout: stdout.stream,
+      resolveCommand: async () => ({ exitCode: 127, stdout: "", stderr: "unused" }),
+      fetchGitHub: async () => ({
+        number: 42,
+        branch: "feat/x",
+        headSha: "abc",
+        state: "OPEN",
+        merged: false,
+        reviewDecision: "REVIEW_REQUIRED",
+        labels: [],
+        checks: [{ name: "ci", status: "pending", required: true }],
+      }),
+      now: () => timeMs,
+      sleep: async (ms: number) => {
+        timeMs += ms;
+      },
+    });
+    assert.equal(code, 4);
+    const payload = JSON.parse(stdout.read());
+    assert.equal(payload.timedOut, true);
+  });
+});
+
 test("merge-steward pr status smoke: JSON output and exit code via runCli", async () => {
   await withAttachedConfig(async () => {
     const stdout = createBufferStream();

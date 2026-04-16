@@ -236,6 +236,92 @@ test("review-quill pr status exits 3 when there is no attempt yet", async () => 
   );
 });
 
+test("review-quill pr status --wait loops until a terminal conclusion is recorded", async () => {
+  let sharedDbPath = "";
+  await withConfig(
+    (configPath, dbPath) => {
+      sharedDbPath = dbPath;
+      writeConfig(configPath, dbPath);
+      const store = new SqliteStore(dbPath);
+      store.createAttempt({
+        repoFullName: "owner/app",
+        prNumber: 42,
+        headSha: "abc",
+        status: "running",
+      });
+      store.close();
+    },
+    async () => {
+      const stdout = createBufferStream();
+      let sleeps = 0;
+      let timeMs = 1_000;
+      const code = await runCli(
+        ["pr", "status", "--repo", "app", "--pr", "42", "--wait", "--poll", "1", "--json"],
+        {
+          stdout: stdout.stream,
+          stderr: createBufferStream().stream,
+          now: () => timeMs,
+          sleep: async (ms: number) => {
+            sleeps += 1;
+            timeMs += ms;
+            if (sleeps === 1) {
+              const store = new SqliteStore(sharedDbPath);
+              const running = store.listAttemptsForPullRequest("owner/app", 42, 10)[0];
+              if (running) {
+                store.updateAttempt(running.id, {
+                  status: "completed",
+                  conclusion: "approved",
+                  summary: "LGTM",
+                  completedAt: "2026-04-17T00:10:00Z",
+                });
+              }
+              store.close();
+            }
+          },
+        },
+      );
+      assert.equal(code, 0);
+      assert.ok(sleeps >= 1);
+      const payload = JSON.parse(stdout.read());
+      assert.equal(payload.kind, "approved");
+    },
+  );
+});
+
+test("review-quill pr status --wait times out with exit 4", async () => {
+  await withConfig(
+    (configPath, dbPath) => {
+      writeConfig(configPath, dbPath);
+      const store = new SqliteStore(dbPath);
+      store.createAttempt({
+        repoFullName: "owner/app",
+        prNumber: 42,
+        headSha: "abc",
+        status: "running",
+      });
+      store.close();
+    },
+    async () => {
+      const stdout = createBufferStream();
+      let timeMs = 1_000;
+      const code = await runCli(
+        ["pr", "status", "--repo", "app", "--pr", "42", "--wait", "--timeout", "2", "--poll", "1", "--json"],
+        {
+          stdout: stdout.stream,
+          stderr: createBufferStream().stream,
+          now: () => timeMs,
+          sleep: async (ms: number) => {
+            timeMs += ms;
+          },
+        },
+      );
+      assert.equal(code, 4);
+      const payload = JSON.parse(stdout.read());
+      assert.equal(payload.timedOut, true);
+    },
+  );
+});
+
 test("review-quill pr status picks the non-superseded attempt over a superseded newer row", async () => {
   await withConfig(
     (configPath, dbPath) => {

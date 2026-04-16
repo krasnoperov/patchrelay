@@ -34,6 +34,8 @@ interface RunCliOptions {
   runCommand?: CommandRunner;
   resolveCommand?: ResolveCommandRunner;
   readCodexThread?: (threadId: string) => Promise<CodexThreadSummary>;
+  now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
 }
 
 function writeHelp(stream: Output, topic: HelpTopic): void {
@@ -153,7 +155,13 @@ export async function runCli(args: string[], options?: RunCliOptions): Promise<n
           throw new UsageError(`Unknown pr command: ${subcommand ?? "(none)"}. Try \`review-quill pr status\`.`);
         }
         const { handlePrStatus } = await import("./cli/pr-status.ts");
-        return await handlePrStatus({ parsed, stdout, resolveCommand: options?.resolveCommand });
+        return await handlePrStatus({
+          parsed,
+          stdout,
+          resolveCommand: options?.resolveCommand,
+          ...(options?.now ? { now: options.now } : {}),
+          ...(options?.sleep ? { sleep: options.sleep } : {}),
+        });
       }
       default:
         throw new UsageError(`Unknown command: ${command}`);

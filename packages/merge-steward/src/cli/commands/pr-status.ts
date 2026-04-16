@@ -232,6 +232,67 @@ export interface HandlePrStatusOptions {
   resolveCommand?: ResolveCommandRunner | undefined;
   /** For tests: inject a custom fetcher instead of shelling to `gh`. */
   fetchGitHub?: ((repoFullName: string, prNumber: number) => Promise<PrGitHubOverview>) | undefined;
+  /** For tests: inject a clock. Defaults to Date.now. */
+  now?: (() => number) | undefined;
+  /** For tests: inject a sleep. Defaults to setTimeout. */
+  sleep?: ((ms: number) => Promise<void>) | undefined;
+}
+
+export interface WaitOptions {
+  timeoutMs: number;
+  pollMs: number;
+  now: () => number;
+  sleep: (ms: number) => Promise<void>;
+}
+
+const DEFAULT_WAIT_TIMEOUT_MS = 30 * 60_000;
+const MAX_WAIT_TIMEOUT_MS = 2 * 60 * 60_000;
+const MIN_WAIT_TIMEOUT_MS = 1_000;
+const DEFAULT_POLL_MS = 5_000;
+const MIN_POLL_MS = 1_000;
+const MAX_POLL_MS = 5 * 60_000;
+
+export function resolveWaitOptions(parsed: ParsedArgs, overrides?: Partial<Pick<WaitOptions, "now" | "sleep">>): WaitOptions {
+  const timeoutSeconds = parseIntegerFlag(parsed.flags.get("timeout"), "--timeout");
+  const pollSeconds = parseIntegerFlag(parsed.flags.get("poll"), "--poll");
+  const timeoutMs = clamp(
+    timeoutSeconds !== undefined ? timeoutSeconds * 1000 : DEFAULT_WAIT_TIMEOUT_MS,
+    MIN_WAIT_TIMEOUT_MS,
+    MAX_WAIT_TIMEOUT_MS,
+  );
+  const pollMs = clamp(
+    pollSeconds !== undefined ? pollSeconds * 1000 : DEFAULT_POLL_MS,
+    MIN_POLL_MS,
+    MAX_POLL_MS,
+  );
+  return {
+    timeoutMs,
+    pollMs,
+    now: overrides?.now ?? (() => Date.now()),
+    sleep: overrides?.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
+  };
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+export async function waitForTerminalReport(
+  build: () => Promise<PrStatusReport>,
+  options: WaitOptions,
+): Promise<{ report: PrStatusReport; timedOut: boolean }> {
+  const deadline = options.now() + options.timeoutMs;
+  let report = await build();
+  while (!report.terminal) {
+    const remaining = deadline - options.now();
+    if (remaining <= 0) {
+      return { report, timedOut: true };
+    }
+    const waitMs = Math.min(options.pollMs, remaining);
+    if (waitMs > 0) await options.sleep(waitMs);
+    report = await build();
+  }
+  return { report, timedOut: false };
 }
 
 export async function handlePrStatus(options: HandlePrStatusOptions): Promise<number> {
@@ -242,40 +303,53 @@ export async function handlePrStatus(options: HandlePrStatusOptions): Promise<nu
   const resolvedPr = await resolvePrNumber({ parsed, helpTopic: "root", runCommand: resolveCommand });
   const { config } = loadRepoConfigById(resolvedRepo.repoId);
 
-  const queueResult = await loadQueueEntry(config, resolvedPr.prNumber);
-  let report: PrStatusReport;
-  if (queueResult.kind === "found") {
-    report = buildPrStatusReport({
-      repoId: resolvedRepo.repoId,
-      repoFullName: resolvedRepo.repoFullName,
-      prNumber: resolvedPr.prNumber,
-      queueEntry: queueResult.entry,
-    });
-  } else {
-    const fetchGh = options.fetchGitHub
-      ?? ((repoFullName, prNumber) =>
-        fetchPrGitHubOverview(repoFullName, prNumber, resolveCommand ?? (async () => ({
-          exitCode: 127,
-          stdout: "",
-          stderr: "no resolveCommand provided",
-        }))));
+  const fetchGh = options.fetchGitHub
+    ?? ((repoFullName, prNumber) =>
+      fetchPrGitHubOverview(repoFullName, prNumber, resolveCommand ?? (async () => ({
+        exitCode: 127,
+        stdout: "",
+        stderr: "no resolveCommand provided",
+      }))));
+
+  const buildReport = async (): Promise<PrStatusReport> => {
+    const queueResult = await loadQueueEntry(config, resolvedPr.prNumber);
+    if (queueResult.kind === "found") {
+      return buildPrStatusReport({
+        repoId: resolvedRepo.repoId,
+        repoFullName: resolvedRepo.repoFullName,
+        prNumber: resolvedPr.prNumber,
+        queueEntry: queueResult.entry,
+      });
+    }
     const overview = await fetchGh(resolvedRepo.repoFullName, resolvedPr.prNumber);
-    report = buildPrStatusReport({
+    return buildPrStatusReport({
       repoId: resolvedRepo.repoId,
       repoFullName: resolvedRepo.repoFullName,
       prNumber: resolvedPr.prNumber,
       github: overview,
     });
-  }
+  };
 
-  // --wait/--timeout/--poll wiring is added in a follow-up commit.
-  void parseIntegerFlag(parsed.flags.get("timeout"), "--timeout");
-  void parseIntegerFlag(parsed.flags.get("poll"), "--poll");
-
-  if (parsed.flags.get("json") === true) {
-    writeOutput(stdout, formatJson(report));
+  const shouldWait = parsed.flags.get("wait") === true || typeof parsed.flags.get("wait") === "string";
+  let report: PrStatusReport;
+  let timedOut = false;
+  if (shouldWait) {
+    const waitOptions = resolveWaitOptions(parsed, {
+      ...(options.now ? { now: options.now } : {}),
+      ...(options.sleep ? { sleep: options.sleep } : {}),
+    });
+    const result = await waitForTerminalReport(buildReport, waitOptions);
+    report = result.report;
+    timedOut = result.timedOut;
   } else {
-    writeOutput(stdout, formatReportText(report));
+    report = await buildReport();
   }
-  return report.exitCode;
+
+  const payload = timedOut ? { ...report, timedOut: true } : report;
+  if (parsed.flags.get("json") === true) {
+    writeOutput(stdout, formatJson(payload));
+  } else {
+    writeOutput(stdout, formatReportText(report) + (timedOut ? "Timed out waiting for terminal state.\n" : ""));
+  }
+  return timedOut ? 4 : report.exitCode;
 }
