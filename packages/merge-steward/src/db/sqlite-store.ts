@@ -159,14 +159,17 @@ export class SqliteStore implements QueueStore {
           max_retries, last_failed_base_sha, issue_key,
           post_merge_status, post_merge_sha, post_merge_summary, post_merge_checked_at,
           enqueued_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         entry.id, entry.repoId, entry.prNumber, entry.branch,
         entry.headSha, entry.baseSha, entry.status, entry.position,
         entry.priority, entry.generation, entry.ciRunId, entry.ciRetries,
         entry.retryAttempts, entry.maxRetries, entry.lastFailedBaseSha,
-        entry.issueKey, entry.postMergeStatus, entry.postMergeSha,
-        entry.postMergeSummary, entry.postMergeCheckedAt,
+        entry.issueKey ?? null,
+        entry.postMergeStatus ?? null,
+        entry.postMergeSha ?? null,
+        entry.postMergeSummary ?? null,
+        entry.postMergeCheckedAt ?? null,
         entry.enqueuedAt, entry.updatedAt,
       );
       this.writeEvent(entry.id, null, entry.status);
