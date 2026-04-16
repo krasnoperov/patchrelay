@@ -64,7 +64,7 @@ export function OverviewView({ repos, selectedRepoId, gatewayError }: OverviewVi
             return (
               <Box key={repo.repoId} flexDirection="column">
                 <Box>
-                  <Text color={repo.repoId === selectedRepoId ? "cyan" : "gray"}>{repo.repoId === selectedRepoId ? "\u25b8" : " "}</Text>
+                  <Text color={repo.repoId === selectedRepoId ? "cyan" : "gray"}>{repo.repoId === selectedRepoId ? ">" : " "}</Text>
                   <Text bold>{truncate(repo.repoId, idWidth)}</Text>
                   {compact ? null : <Text dimColor>{`  ${truncate(repo.repoFullName, 28)}`}</Text>}
                   <Text>{`  `}</Text>
