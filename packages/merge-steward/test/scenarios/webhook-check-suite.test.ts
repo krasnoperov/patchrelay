@@ -9,6 +9,7 @@ import { GitSim } from "../../src/sim/git-sim.ts";
 import { CISim } from "../../src/sim/ci-sim.ts";
 import pino from "pino";
 import type { StewardConfig } from "../../src/config.ts";
+import type { QueueEntry } from "../../src/types.ts";
 
 const silentLogger = pino({ level: "silent" });
 
@@ -117,6 +118,108 @@ describe("check_suite_completed with empty pull_requests", () => {
     );
 
     assert.strictEqual(store.listAll("test-repo").length, 0);
+  });
+
+  it("does not re-admit a PR when the latest evicted entry has the same head SHA", async () => {
+    const githubSim = new GitHubSim();
+    const store = new MemoryStore();
+    githubSim.addPR({ number: 77, branch: "feat-lookup", headSha: "sha-77", reviewApproved: true, labels: ["queue"] });
+    githubSim.setChecks(77, [{ name: "build", conclusion: "success" }]);
+
+    const evicted: QueueEntry = {
+      id: "entry-evicted",
+      repoId: "test-repo",
+      prNumber: 77,
+      branch: "feat-lookup",
+      headSha: "sha-77",
+      baseSha: "base-1",
+      status: "evicted",
+      position: 1,
+      priority: 0,
+      generation: 0,
+      ciRunId: null,
+      ciRetries: 0,
+      retryAttempts: 2,
+      maxRetries: 2,
+      lastFailedBaseSha: "base-1",
+      issueKey: null,
+      specBranch: null,
+      specSha: null,
+      specBasedOn: null,
+      waitDetail: null,
+      postMergeStatus: null,
+      postMergeSha: null,
+      postMergeSummary: null,
+      postMergeCheckedAt: null,
+      enqueuedAt: "2026-03-28T12:00:00.000Z",
+      updatedAt: "2026-03-28T12:10:00.000Z",
+    };
+    store.insert(evicted);
+
+    const service = createService(store, githubSim);
+
+    await processWebhookEvent(
+      { type: "check_suite_completed", prNumber: 77, branch: "feat-lookup", headSha: "sha-77", conclusion: "success" },
+      service,
+      { admissionLabel: "queue", baseBranch: "main", repoFullName: "test/repo", github: githubSim },
+      silentLogger,
+    );
+
+    const entries = store.listAll("test-repo");
+    assert.strictEqual(entries.length, 1);
+    assert.strictEqual(entries[0]!.status, "evicted");
+  });
+
+  it("re-admits a PR after eviction when a new head SHA is pushed", async () => {
+    const githubSim = new GitHubSim();
+    const store = new MemoryStore();
+    githubSim.addPR({ number: 78, branch: "feat-lookup", headSha: "sha-78-new", reviewApproved: true, labels: ["queue"] });
+    githubSim.setChecks(78, [{ name: "build", conclusion: "success" }]);
+
+    const evicted: QueueEntry = {
+      id: "entry-evicted",
+      repoId: "test-repo",
+      prNumber: 78,
+      branch: "feat-lookup",
+      headSha: "sha-78-old",
+      baseSha: "base-1",
+      status: "evicted",
+      position: 1,
+      priority: 0,
+      generation: 0,
+      ciRunId: null,
+      ciRetries: 0,
+      retryAttempts: 2,
+      maxRetries: 2,
+      lastFailedBaseSha: "base-1",
+      issueKey: null,
+      specBranch: null,
+      specSha: null,
+      specBasedOn: null,
+      waitDetail: null,
+      postMergeStatus: null,
+      postMergeSha: null,
+      postMergeSummary: null,
+      postMergeCheckedAt: null,
+      enqueuedAt: "2026-03-28T12:00:00.000Z",
+      updatedAt: "2026-03-28T12:10:00.000Z",
+    };
+    store.insert(evicted);
+
+    const service = createService(store, githubSim);
+
+    await processWebhookEvent(
+      { type: "check_suite_completed", prNumber: 78, branch: "feat-lookup", headSha: "sha-78-new", conclusion: "success" },
+      service,
+      { admissionLabel: "queue", baseBranch: "main", repoFullName: "test/repo", github: githubSim },
+      silentLogger,
+    );
+
+    const entries = store.listAll("test-repo");
+    assert.strictEqual(entries.length, 2);
+    assert.strictEqual(entries[1]!.prNumber, 78);
+    assert.strictEqual(entries[1]!.status, "queued");
+    assert.strictEqual(entries[1]!.headSha, "sha-78-new");
   });
 });
 

@@ -140,7 +140,13 @@ export function buildExternalRepairObservations(
       text: `CI running on combined changes.${cascadeNote}`,
     });
   } else if (entry.status === "merging") {
-    observations.push({ tone: "info", text: "CI passed. Landing on main." });
+    if (entry.waitDetail?.toLowerCase().includes("approval") || entry.waitDetail?.toLowerCase().includes("review")) {
+      observations.push({ tone: "warn", text: "CI passed. Merge is blocked until GitHub approval returns." });
+    } else if (entry.waitDetail?.toLowerCase().includes("main")) {
+      observations.push({ tone: "info", text: "CI passed. Waiting for main verification before landing." });
+    } else {
+      observations.push({ tone: "info", text: "CI passed. Landing on main." });
+    }
   }
 
   return observations.slice(0, 4);

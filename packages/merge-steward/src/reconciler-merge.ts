@@ -22,6 +22,7 @@ export async function mergeHead(ctx: ReconcileContext, entry: QueueEntry): Promi
         ? "required approval missing"
         : `review gate not satisfied (${prStatus.reviewDecision ?? "unknown"})`;
     emit(ctx, entry, "merge_waiting_approval", { detail });
+    ctx.store.transition(entry.id, "merging", { waitDetail: detail }, detail);
     return;
   }
 
@@ -63,6 +64,7 @@ export async function mergeHead(ctx: ReconcileContext, entry: QueueEntry): Promi
       // Throwing the spec away here would force a rebuild + re-run of
       // CI that produces the same tree — wasting the speculation.
       emit(ctx, entry, "merge_waiting_main", { detail: "main checks still pending, holding merge" });
+      ctx.store.transition(entry.id, "merging", { waitDetail: "main checks still pending, holding merge" }, "main checks still pending, holding merge");
       return;
     }
     if (mainStatus === "fail") {

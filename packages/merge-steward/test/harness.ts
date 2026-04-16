@@ -161,6 +161,7 @@ export class Harness {
       specBranch: null,
       specSha: null,
       specBasedOn: null,
+      waitDetail: null,
       enqueuedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };

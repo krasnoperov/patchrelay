@@ -33,6 +33,7 @@ function mapEntry(row: Record<string, unknown>): QueueEntry {
     specBranch: row.spec_branch === null || row.spec_branch === undefined ? null : String(row.spec_branch),
     specSha: row.spec_sha === null || row.spec_sha === undefined ? null : String(row.spec_sha),
     specBasedOn: row.spec_based_on === null || row.spec_based_on === undefined ? null : String(row.spec_based_on),
+    waitDetail: row.wait_detail === null || row.wait_detail === undefined ? null : String(row.wait_detail),
     postMergeStatus: row.post_merge_status === null || row.post_merge_status === undefined
       ? null
       : String(row.post_merge_status) as QueueEntry["postMergeStatus"],
@@ -156,16 +157,17 @@ export class SqliteStore implements QueueStore {
         `INSERT INTO queue_entries
          (id, repo_id, pr_number, branch, head_sha, base_sha, status, position,
           priority, generation, ci_run_id, ci_retries, retry_attempts,
-          max_retries, last_failed_base_sha, issue_key,
+          max_retries, last_failed_base_sha, issue_key, wait_detail,
           post_merge_status, post_merge_sha, post_merge_summary, post_merge_checked_at,
           enqueued_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         entry.id, entry.repoId, entry.prNumber, entry.branch,
         entry.headSha, entry.baseSha, entry.status, entry.position,
         entry.priority, entry.generation, entry.ciRunId, entry.ciRetries,
         entry.retryAttempts, entry.maxRetries, entry.lastFailedBaseSha,
         entry.issueKey ?? null,
+        entry.waitDetail ?? null,
         entry.postMergeStatus ?? null,
         entry.postMergeSha ?? null,
         entry.postMergeSummary ?? null,
@@ -183,7 +185,7 @@ export class SqliteStore implements QueueStore {
       Pick<
         QueueEntry,
         "headSha" | "baseSha" | "ciRunId" | "ciRetries" | "retryAttempts" |
-        "lastFailedBaseSha" | "specBranch" | "specSha" | "specBasedOn" |
+        "lastFailedBaseSha" | "specBranch" | "specSha" | "specBasedOn" | "waitDetail" |
         "postMergeStatus" | "postMergeSha" | "postMergeSummary" | "postMergeCheckedAt"
       >
     >,
@@ -205,6 +207,8 @@ export class SqliteStore implements QueueStore {
       if (patch?.specBranch !== undefined) { sets.push("spec_branch = ?"); values.push(patch.specBranch); }
       if (patch?.specSha !== undefined) { sets.push("spec_sha = ?"); values.push(patch.specSha); }
       if (patch?.specBasedOn !== undefined) { sets.push("spec_based_on = ?"); values.push(patch.specBasedOn); }
+      if (patch?.waitDetail !== undefined) { sets.push("wait_detail = ?"); values.push(patch.waitDetail); }
+      else if (from !== to) { sets.push("wait_detail = NULL"); }
       if (patch?.postMergeStatus !== undefined) { sets.push("post_merge_status = ?"); values.push(patch.postMergeStatus); }
       if (patch?.postMergeSha !== undefined) { sets.push("post_merge_sha = ?"); values.push(patch.postMergeSha); }
       if (patch?.postMergeSummary !== undefined) { sets.push("post_merge_summary = ?"); values.push(patch.postMergeSummary); }
@@ -235,6 +239,7 @@ export class SqliteStore implements QueueStore {
           ci_run_id = NULL, ci_retries = 0, retry_attempts = 0,
           last_failed_base_sha = NULL,
           spec_branch = NULL, spec_sha = NULL, spec_based_on = NULL,
+          wait_detail = NULL,
           post_merge_status = NULL, post_merge_sha = NULL, post_merge_summary = NULL, post_merge_checked_at = NULL,
           updated_at = ?
          WHERE id = ?`,

@@ -27,6 +27,7 @@ describe("PR update (force-push) handling", () => {
     assert.strictEqual(after.ciRetries, 0);
     assert.strictEqual(after.retryAttempts, 0);
     assert.strictEqual(after.lastFailedBaseSha, null);
+    assert.strictEqual(after.waitDetail, null);
 
     const events = h.store.listEvents(before.id);
     const lastEvent = events[events.length - 1]!;
@@ -102,5 +103,21 @@ describe("PR update (force-push) handling", () => {
     assert.strictEqual(after.status, "validating");
     assert.strictEqual(after.generation, currentGeneration);
     assert.strictEqual(h.store.listEvents(entry.id).length, currentEventCount);
+  });
+
+  it("updateHead clears merge wait detail on a new pushed head", async () => {
+    const h = await createHarness({ ciRule: () => "pass" });
+    const prA: SimPR = { number: 1, branch: "feat-a", files: [{ path: "a.ts", content: "a" }] };
+    await h.enqueue(prA);
+
+    const entry = h.entries[0]!;
+    h.store.transition(entry.id, "merging", { waitDetail: "blocking review present, waiting for approval" }, "blocking review present, waiting for approval");
+
+    h.store.updateHead(entry.id, "new-sha-after-review-refresh");
+
+    const after = h.entries[0]!;
+    assert.strictEqual(after.status, "queued");
+    assert.strictEqual(after.headSha, "new-sha-after-review-refresh");
+    assert.strictEqual(after.waitDetail, null);
   });
 });

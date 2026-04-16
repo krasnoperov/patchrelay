@@ -26,6 +26,7 @@ export function ensureSchema(connection: DatabaseConnection): void {
       spec_branch TEXT,
       spec_sha TEXT,
       spec_based_on TEXT,
+      wait_detail TEXT,
       post_merge_status TEXT,
       post_merge_sha TEXT,
       post_merge_summary TEXT,
@@ -78,6 +79,7 @@ export function ensureSchema(connection: DatabaseConnection): void {
   ensureColumn(connection, "queue_entries", "post_merge_sha", "TEXT");
   ensureColumn(connection, "queue_entries", "post_merge_summary", "TEXT");
   ensureColumn(connection, "queue_entries", "post_merge_checked_at", "TEXT");
+  ensureColumn(connection, "queue_entries", "wait_detail", "TEXT");
   connection.exec(`
     UPDATE queue_entries
        SET post_merge_status = 'pending'
