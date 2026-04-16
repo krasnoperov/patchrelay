@@ -14,6 +14,12 @@ export class MergeStewardRuntime {
   private lastTickOutcome: QueueRuntimeStatus["lastTickOutcome"] = "idle";
   private lastTickError: string | null = null;
   private currentQueueBlock: QueueBlockState | null = null;
+  // Per-entry timestamp of the last info-level `merge_waiting_main` log.
+  // The event fires every tick while the gate waits, so subsequent ticks
+  // log at debug to avoid spamming; a re-emission of info every ~5 min keeps
+  // long waits visible in `service logs` without drowning it out.
+  private readonly waitingMainInfoAt = new Map<string, number>();
+  private static readonly WAITING_MAIN_INFO_INTERVAL_MS = 5 * 60 * 1000;
 
   constructor(
     private readonly config: StewardConfig,
@@ -106,8 +112,22 @@ export class MergeStewardRuntime {
             || event.action === "ci_failed"
             || event.action === "merge_rejected" || event.action === "budget_exhausted";
           const isDebug = event.action === "ci_pending" || event.action === "retry_gated"
-            || event.action === "fetch_started" || event.action === "merge_waiting_main";
-          const level = isWarn ? "warn" : isDebug ? "debug" : "info";
+            || event.action === "fetch_started";
+          let level: "warn" | "debug" | "info" = isWarn ? "warn" : isDebug ? "debug" : "info";
+          if (event.action === "merge_waiting_main") {
+            // The event fires every ~tick while the gate waits on main's own
+            // CI.  Log at info the first time (so an operator can see *why*
+            // the head entry is parked in merging) and once every interval
+            // after, debug on the intermediate ticks to avoid spamming.
+            const last = this.waitingMainInfoAt.get(event.entryId);
+            const now = Date.now();
+            if (last === undefined || now - last >= MergeStewardRuntime.WAITING_MAIN_INFO_INTERVAL_MS) {
+              level = "info";
+              this.waitingMainInfoAt.set(event.entryId, now);
+            } else {
+              level = "debug";
+            }
+          }
           this.logger[level]({ ...event }, `Queue: ${event.action} PR #${event.prNumber}`);
 
           if (event.action === "main_broken" && tickQueueBlockEvent === null) {
