@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Box, Text, useApp, useInput } from "ink";
+import { Box, Text, useApp, useInput, useStdout } from "ink";
 import type { ReviewAttemptDetail, ReviewAttemptRecord, ReviewQuillWatchSnapshot } from "../types.ts";
 import { fetchAttemptDetail, fetchSnapshot, triggerReconcile } from "./api.ts";
 import { DetailView } from "./DetailView.tsx";
@@ -28,6 +28,7 @@ function nextSelection(attempts: ReviewAttemptRecord[], selectedAttemptId: numbe
 
 export function App({ baseUrl }: AppProps): React.JSX.Element {
   const { exit } = useApp();
+  const { stdout } = useStdout();
   const [connected, setConnected] = useState(false);
   const [snapshot, setSnapshot] = useState<ReviewQuillWatchSnapshot | null>(null);
   const [detail, setDetail] = useState<ReviewAttemptDetail | null>(null);
@@ -36,6 +37,8 @@ export function App({ baseUrl }: AppProps): React.JSX.Element {
   const [filter, setFilter] = useState<WatchFilter>("active");
   const [flashMessage, setFlashMessage] = useState<string | null>(null);
   const [lastSnapshotReceivedAt, setLastSnapshotReceivedAt] = useState<number | null>(null);
+  const width = Math.max(20, stdout?.columns ?? 80);
+  const compact = width < 90;
 
   const visibleAttempts = useMemo(() => {
     const attempts = snapshot?.attempts ?? [];
@@ -176,15 +179,17 @@ export function App({ baseUrl }: AppProps): React.JSX.Element {
         connected={connected}
         filter={filter}
         lastSnapshotReceivedAt={lastSnapshotReceivedAt}
+        compact={compact}
       />
       {view === "detail" && selectedAttemptId ? (
-        <DetailView detail={detail} />
+        <DetailView detail={detail} compact={compact} />
       ) : snapshot ? (
         <ListView
           snapshot={snapshot}
           attempts={visibleAttempts}
           selectedAttemptId={selectedAttemptId}
           selectedRepoFullName={selectedRepoFullName}
+          compact={compact}
         />
       ) : (
         <Box marginTop={1}>
@@ -196,7 +201,7 @@ export function App({ baseUrl }: AppProps): React.JSX.Element {
           <Text dimColor>{flashMessage}</Text>
         </Box>
       ) : null}
-      <HelpBar view={view} />
+      <HelpBar view={view} compact={compact} />
     </Box>
   );
 }

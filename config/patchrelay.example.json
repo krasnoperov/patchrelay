@@ -1,5 +1,12 @@
 {
   "server": {
     "public_base_url": "https://patchrelay.example.com"
+  },
+  "runner": {
+    "git_bin": "git",
+    "codex": {
+      "model": "gpt-5.3-codex-spark",
+      "reasoning_effort": "high"
+    }
   }
 }

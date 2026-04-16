@@ -7,6 +7,7 @@ interface StatusBarProps {
   connected: boolean;
   filter: "active" | "all";
   lastSnapshotReceivedAt: number | null;
+  compact?: boolean;
 }
 
 function freshnessLabel(connected: boolean, lastSnapshotReceivedAt: number | null): string {
@@ -15,12 +16,20 @@ function freshnessLabel(connected: boolean, lastSnapshotReceivedAt: number | nul
   return `fresh ${relativeTime(new Date(lastSnapshotReceivedAt).toISOString())}`;
 }
 
-export function StatusBar({ snapshot, connected, filter, lastSnapshotReceivedAt }: StatusBarProps): React.JSX.Element {
+export function StatusBar({
+  snapshot,
+  connected,
+  filter,
+  lastSnapshotReceivedAt,
+  compact = false,
+}: StatusBarProps): React.JSX.Element {
   const { stdout } = useStdout();
   const width = stdout?.columns ?? 80;
 
   if (!snapshot) {
-    const left = "review-quill";
+    const left = compact
+      ? `review-quill · ${filter === "active" ? "active" : "all"}`
+      : "review-quill";
     return (
       <Box justifyContent="space-between">
         <Text bold>{truncate(left, Math.max(1, width - 16))}</Text>
@@ -38,11 +47,21 @@ export function StatusBar({ snapshot, connected, filter, lastSnapshotReceivedAt 
     `reconcile ${runtimeLabel(snapshot.runtime)}`,
     `last ${relativeTime(snapshot.runtime.lastReconcileCompletedAt ?? snapshot.runtime.lastReconcileStartedAt)}`,
     filter,
-  ].join(" | ");
+  ];
+  const compactLeft = [
+    "review-quill",
+    `${snapshot.summary.runningAttempts}a`,
+    `${snapshot.summary.queuedAttempts}q`,
+    snapshot.summary.failedAttempts ? `${snapshot.summary.failedAttempts}f` : null,
+    runtimeLabel(snapshot.runtime) === "running"
+      ? "reconcile running"
+      : `runner ${runtimeLabel(snapshot.runtime)}`,
+    filter === "active" ? "active" : "all",
+  ];
 
   return (
     <Box justifyContent="space-between">
-      <Text bold>{truncate(left, Math.max(1, width - 16))}</Text>
+      <Text bold>{truncate((compact ? compactLeft : left).join(" | "), Math.max(1, width - 16))}</Text>
       <Text>{freshnessLabel(connected, lastSnapshotReceivedAt)}</Text>
     </Box>
   );

@@ -19,6 +19,7 @@ export interface CodexAppServerConfig {
   requestTimeoutMs?: number;
   model?: string;
   modelProvider?: string;
+  reasoningEffort?: "low" | "medium" | "high";
   serviceName?: string;
   baseInstructions?: string;
   developerInstructions?: string;

@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { getLatestAttemptsByPullRequest } from "../src/attempt-summary.ts";
-import { getRecentActivity, getRepoHealth, getReviewQueueText, projectStatsSummary } from "../src/watch/dashboard-model.ts";
+import {
+  clusterSummaryText,
+  getRecentActivity,
+  getRepoHealth,
+  getReviewQueueText,
+  projectStatsSummary,
+} from "../src/watch/dashboard-model.ts";
 import type { ReviewAttemptRecord, ReviewQuillRepoSummary, ReviewQuillWatchSnapshot, WebhookEventRecord } from "../src/types.ts";
 
 function fakeAttempt(overrides: Partial<ReviewAttemptRecord> = {}): ReviewAttemptRecord {
@@ -199,4 +205,59 @@ test("review queue text says no eligible review work when the runner is idle", (
   });
 
   assert.equal(getReviewQueueText(snapshot, repo), "no eligible review work");
+});
+
+test("projectStatsSummary compact format keeps active/queued focus", () => {
+  const repo = fakeRepo();
+  const snapshot = fakeSnapshot({
+    repos: [repo],
+    attempts: [
+      fakeAttempt({ prNumber: 101, status: "running", updatedAt: "2026-04-09T20:02:00.000Z" }),
+      fakeAttempt({ prNumber: 102, status: "queued", id: 2, updatedAt: "2026-04-09T20:01:00.000Z" }),
+      fakeAttempt({ prNumber: 103, status: "failed", id: 3, updatedAt: "2026-04-09T20:00:30.000Z", conclusion: "error" }),
+      fakeAttempt({ prNumber: 104, status: "cancelled", id: 4, stale: true, updatedAt: "2026-04-09T19:59:00.000Z" }),
+    ],
+  });
+
+  assert.equal(projectStatsSummary(snapshot, repo, true), "1a 1w 1f 1s");
+});
+
+test("clusterSummaryText compact format is non-ambiguous", () => {
+  const activeRepo = fakeRepo({ repoId: "repo-1", repoFullName: "team/repo-1", totalAttempts: 4, queuedAttempts: 1 });
+  const stalledRepo = fakeRepo({ repoId: "repo-2", repoFullName: "team/repo-2", totalAttempts: 2 });
+  const snapshot = fakeSnapshot({
+    repos: [activeRepo, stalledRepo],
+    attempts: [
+      fakeAttempt({
+        id: 11,
+        repoFullName: activeRepo.repoFullName,
+        prNumber: 101,
+        status: "running",
+        stale: false,
+        updatedAt: "2026-04-09T20:03:00.000Z",
+      }),
+      fakeAttempt({
+        id: 12,
+        repoFullName: activeRepo.repoFullName,
+        prNumber: 102,
+        status: "queued",
+        stale: false,
+        updatedAt: "2026-04-09T20:02:00.000Z",
+      }),
+      fakeAttempt({
+        id: 13,
+        repoFullName: stalledRepo.repoFullName,
+        prNumber: 1,
+        status: "completed",
+        conclusion: "approved",
+        stale: true,
+        updatedAt: "2026-04-09T20:01:00.000Z",
+      }),
+    ],
+  });
+
+  assert.equal(
+    clusterSummaryText(snapshot, true),
+    "2 repos 2 online 1 active 1 queued 1 stuck 0 need-att",
+  );
 });

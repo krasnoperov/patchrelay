@@ -94,6 +94,7 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
   const filtered = useMemo(() => filterIssues(state.issues, state.filter), [state.issues, state.filter]);
   const [frozen, setFrozen] = useState(false);
   const width = Math.max(20, stdout?.columns ?? 80);
+  const compact = width < 90;
 
   useWatchStream({ baseUrl, bearerToken, dispatch, active: !frozen });
   useDetailStream({ baseUrl, bearerToken, issueKey: state.activeDetailKey, dispatch, active: !frozen });
@@ -418,6 +419,7 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
           filter={state.filter}
           totalCount={state.issues.length}
           frozen={frozen}
+          compact={compact}
         />
       ) : state.view === "detail" ? (
         <Box flexDirection="column">
@@ -447,6 +449,7 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
           rawFeedEvents={state.rawFeedEvents}
           connected={state.connected}
           lastServerMessageAt={state.lastServerMessageAt}
+          compact={compact}
           reservedRows={reservedRows}
           onLayoutChange={(viewportRows, contentRows) => {
             dispatch({ type: "detail-layout-updated", viewportRows, contentRows });

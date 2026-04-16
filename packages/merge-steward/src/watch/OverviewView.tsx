@@ -1,7 +1,8 @@
 import { Box, Text, useStdout } from "ink";
 import { ciStatusIcon, summarizeQueueBlock, truncate } from "./format.ts";
 import type { DashboardRepoState } from "./dashboard-model.ts";
-import { getChainEntries, getClusterSummary, getRepoHealth, projectStatsSummary } from "./dashboard-model.ts";
+import { getClusterSummary, getRepoHealth, projectStatsSummary } from "./dashboard-model.ts";
+import { getChainEntries } from "./dashboard-model.ts";
 
 interface OverviewViewProps {
   repos: DashboardRepoState[];
@@ -20,18 +21,23 @@ function clampWindowStart(selectedIndex: number, itemCount: number, maxItems: nu
 export function OverviewView({ repos, selectedRepoId, gatewayError }: OverviewViewProps): React.JSX.Element {
   const { stdout } = useStdout();
   const rows = stdout?.rows ?? 24;
+  const width = stdout?.columns ?? 80;
+  const compact = width < 90;
   const cluster = getClusterSummary(repos);
   const selectedIndex = Math.max(0, repos.findIndex((repo) => repo.repoId === selectedRepoId));
   const maxItems = Math.max(1, Math.floor((rows - 8) / 2));
   const startIndex = clampWindowStart(selectedIndex, repos.length, maxItems);
   const visibleRepos = repos.slice(startIndex, startIndex + maxItems);
+  const summaryText = compact
+    ? `${cluster.total}p ${cluster.connected}c ${cluster.active}a ${cluster.blocked}b ${cluster.stuck}s`
+    : `${cluster.total} projects · ${cluster.connected} connected · ${cluster.active} active · ${cluster.blocked} blocked · ${cluster.stuck} stuck · ${cluster.attention} need attention`;
+  const idWidth = compact ? Math.max(14, Math.min(24, Math.floor(width * 0.44))) : 18;
+  const chainWidth = compact ? Math.max(12, width - 10) : 100;
 
   return (
     <Box flexDirection="column" marginTop={1}>
       <Text bold>Queue Overview</Text>
-      <Text dimColor>
-        {cluster.total} projects · {cluster.connected} connected · {cluster.active} active · {cluster.blocked} blocked · {cluster.stuck} stuck · {cluster.attention} need attention
-      </Text>
+      <Text dimColor>{summaryText}</Text>
       {gatewayError ? (
         <Text color="red">{`Gateway offline: ${truncate(gatewayError, 88)}. Run \`merge-steward service restart\`.`}</Text>
       ) : null}
@@ -49,26 +55,30 @@ export function OverviewView({ repos, selectedRepoId, gatewayError }: OverviewVi
               ? chainEntries.length > 0
                 ? chainEntries.map((entry) => {
                   const ci = ciStatusIcon(entry);
-                  return `#${entry.prNumber} ${ci.icon}`;
-                }).join("  ")
-                : "queue is empty"
+                  return compact
+                    ? `#${entry.prNumber}${ci.icon}`
+                    : `#${entry.prNumber} ${ci.icon}`;
+                }).join(" ")
+                : compact ? "empty" : "queue is empty"
               : "queue data unavailable";
             return (
               <Box key={repo.repoId} flexDirection="column">
                 <Box>
                   <Text color={repo.repoId === selectedRepoId ? "cyan" : "gray"}>{repo.repoId === selectedRepoId ? "\u25b8" : " "}</Text>
-                  <Text bold>{repo.repoId}</Text>
-                  <Text dimColor>{`  ${truncate(repo.repoFullName, 28)}`}</Text>
+                  <Text bold>{truncate(repo.repoId, idWidth)}</Text>
+                  {compact ? null : <Text dimColor>{`  ${truncate(repo.repoFullName, 28)}`}</Text>}
                   <Text>{`  `}</Text>
-                  <Text color={health.color}>{health.label}</Text>
-                  <Text dimColor>{`  ${projectStatsSummary(repo.snapshot)}`}</Text>
+                  <Text color={health.color}>{compact ? health.label.slice(0, 5) : health.label}</Text>
+                  <Text dimColor>{`  ${projectStatsSummary(repo.snapshot, compact)}`}</Text>
                 </Box>
                 <Box paddingLeft={2}>
-                  <Text dimColor>{`Queue: ${truncate(chainText, 100)}`}</Text>
+                  <Text dimColor>{`Queue: ${truncate(chainText, chainWidth)}`}</Text>
                 </Box>
-                <Box paddingLeft={2}>
-                  <Text color={health.color}>{truncate(queueBlockSummary ?? health.detail, 110)}</Text>
-                </Box>
+                {compact ? null : (
+                  <Box paddingLeft={2}>
+                    <Text color={health.color}>{truncate(queueBlockSummary ?? health.detail, 110)}</Text>
+                  </Box>
+                )}
               </Box>
             );
           })}

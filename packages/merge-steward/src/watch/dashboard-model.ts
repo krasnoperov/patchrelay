@@ -295,7 +295,7 @@ export function getClusterSummary(repos: DashboardRepoState[], now = Date.now())
   }, initial);
 }
 
-export function projectStatsSummary(snapshot: QueueWatchSnapshot | null): string {
+export function projectStatsSummary(snapshot: QueueWatchSnapshot | null, compact = false): string {
   if (!snapshot) {
     return "No queue data yet.";
   }
@@ -308,17 +308,24 @@ export function projectStatsSummary(snapshot: QueueWatchSnapshot | null): string
   const validating = latestEntries.filter((entry) => entry.status === "validating" || entry.status === "preparing_head").length;
   const merging = latestEntries.filter((entry) => entry.status === "merging").length;
   const evicted = latestEntries.filter((entry) => entry.status === "evicted").length;
-  const parts = [
-    `${activeEntries.length} active`,
-    `${queued} waiting`,
-    `${validating} testing`,
-    `${merging} merging`,
-  ];
+  const parts = compact
+    ? [
+      `${activeEntries.length}a`,
+      `${queued}w`,
+      `${validating}t`,
+      `${merging}m`,
+    ]
+    : [
+      `${activeEntries.length} active`,
+      `${queued} waiting`,
+      `${validating} testing`,
+      `${merging} merging`,
+    ];
   if (evicted > 0) {
-    parts.push(`${evicted} need repair`);
+    parts.push(compact ? `${evicted}x` : `${evicted} need repair`);
   }
   if (avgWaitMs > 0) {
-    parts.push(`avg wait ${formatDuration(avgWaitMs)}`);
+    parts.push(compact ? `w ${formatDuration(avgWaitMs)}` : `avg wait ${formatDuration(avgWaitMs)}`);
   }
   return parts.join(" · ");
 }

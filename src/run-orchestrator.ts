@@ -30,6 +30,7 @@ import { RunReconciler } from "./run-reconciler.ts";
 import { RunRecoveryService } from "./run-recovery-service.ts";
 import { RunWakePlanner, type PendingRunWake } from "./run-wake-planner.ts";
 import { getRemainingZombieRecoveryDelayMs } from "./zombie-recovery.ts";
+import { loadConfig } from "./config.ts";
 
 function lowerCaseFirst(value: string): string {
   return value ? `${value.slice(0, 1).toLowerCase()}${value.slice(1)}` : value;
@@ -91,6 +92,7 @@ export class RunOrchestrator {
   private readonly runNotificationHandler: RunNotificationHandler;
   private readonly runReconciler: RunReconciler;
   private readonly mergedLinearCompletionReconciler: MergedLinearCompletionReconciler;
+  private codexRuntimeConfig: AppConfig["runner"]["codex"];
   private readonly threadPorts: RunThreadPorts = {
     readThreadWithRetry: (threadId, maxRetries) => this.readThreadWithRetry(threadId, maxRetries),
   };
@@ -116,8 +118,10 @@ export class RunOrchestrator {
     private readonly enqueueIssue: (projectId: string, issueId: string) => void,
     private readonly logger: Logger,
     private readonly feed?: OperatorEventFeed,
+    private readonly configPath?: string,
   ) {
     this.worktreeManager = new WorktreeManager(config);
+    this.codexRuntimeConfig = config.runner.codex;
     this.linearSync = new LinearSessionSync(config, db, linearProvider, logger, feed);
     this.leaseService = new IssueSessionLeaseService(
       db,
@@ -206,6 +210,33 @@ export class RunOrchestrator {
     }, logger, feed);
   }
 
+  private async refreshCodexRuntimeConfig(): Promise<void> {
+    if (!this.configPath) {
+      return;
+    }
+
+    try {
+      const freshConfig = loadConfig(this.configPath, { profile: "service" });
+      if (
+        this.codexRuntimeConfig.model === freshConfig.runner.codex.model &&
+        this.codexRuntimeConfig.modelProvider === freshConfig.runner.codex.modelProvider &&
+        this.codexRuntimeConfig.reasoningEffort === freshConfig.runner.codex.reasoningEffort
+      ) {
+        return;
+      }
+      this.codexRuntimeConfig = freshConfig.runner.codex;
+      this.codex.setRuntimeConfig(this.codexRuntimeConfig);
+    } catch (error) {
+      this.logger.warn(
+        {
+          error: error instanceof Error ? error.message : String(error),
+          configPath: this.configPath,
+        },
+        "Failed to reload patchrelay runtime config before run; using previous codex configuration",
+      );
+    }
+  }
+
   private resolveRunWake(issue: IssueRecord): PendingRunWake | undefined {
     return this.runWakePlanner.resolveRunWake(issue);
   }
@@ -230,6 +261,8 @@ export class RunOrchestrator {
   // ─── Run ────────────────────────────────────────────────────────
 
   async run(item: { projectId: string; issueId: string }): Promise<void> {
+    await this.refreshCodexRuntimeConfig();
+
     const project = this.config.projects.find((p) => p.id === item.projectId);
     if (!project) return;
 
