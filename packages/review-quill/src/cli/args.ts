@@ -101,13 +101,13 @@ export function validateFlags(parsed: ParsedArgs): void {
       assertKnownFlags(parsed, "root", ["repo", "json"]);
       return;
     case "attempts":
-      assertKnownFlags(parsed, "root", ["json"]);
+      assertKnownFlags(parsed, "root", ["repo", "pr", "cwd", "json"]);
       return;
     case "transcript":
-      assertKnownFlags(parsed, "root", ["attempt", "json"]);
+      assertKnownFlags(parsed, "root", ["repo", "pr", "cwd", "attempt", "json"]);
       return;
     case "transcript-source":
-      assertKnownFlags(parsed, "root", ["attempt", "json"]);
+      assertKnownFlags(parsed, "root", ["repo", "pr", "cwd", "attempt", "json"]);
       return;
     case "diff":
       assertKnownFlags(parsed, "root", [

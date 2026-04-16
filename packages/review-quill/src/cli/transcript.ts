@@ -11,6 +11,7 @@ import type { Output } from "./shared.ts";
 import { formatJson, writeOutput } from "./shared.ts";
 import { parsePullRequestNumber, type ParsedArgs, UsageError } from "./args.ts";
 import { parseAttemptId, selectTranscriptAttempt } from "./attempt-selection.ts";
+import { resolvePrNumber, resolveRepo, type ResolveCommandRunner } from "./resolve.ts";
 
 function formatTranscriptText(params: {
   repoFullName: string;
@@ -108,12 +109,16 @@ export async function handleTranscript(
   parsed: ParsedArgs,
   stdout: Output,
   readCodexThread?: (threadId: string) => Promise<CodexThreadSummary>,
+  resolveCommand?: ResolveCommandRunner,
 ): Promise<number> {
-  const repoRef = parsed.positionals[1];
-  const prNumber = parsePullRequestNumber(parsed.positionals[2]);
-  if (!repoRef) {
-    throw new UsageError("review-quill transcript requires <repo> <pr-number>.");
-  }
+  const positionalRepo = parsed.positionals[1];
+  const positionalPr = parsed.positionals[2];
+
+  const repoRef = positionalRepo
+    ?? (await resolveRepo({ parsed, runCommand: resolveCommand, helpTopic: "root" })).repoId;
+  const prNumber = positionalPr
+    ? parsePullRequestNumber(positionalPr)
+    : (await resolvePrNumber({ parsed, runCommand: resolveCommand, helpTopic: "root" })).prNumber;
 
   const configPath = process.env.REVIEW_QUILL_CONFIG ?? getDefaultConfigPath();
   const config = loadConfig(configPath);

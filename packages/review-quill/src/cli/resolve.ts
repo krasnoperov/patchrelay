@@ -59,9 +59,9 @@ async function resolveGitRemote(runCommand: ResolveCommandRunner, cwd: string): 
 
 export interface ResolveOptions {
   parsed: ParsedArgs;
-  runCommand?: ResolveCommandRunner;
-  cwd?: string;
-  helpTopic?: HelpTopic;
+  runCommand?: ResolveCommandRunner | undefined;
+  cwd?: string | undefined;
+  helpTopic?: HelpTopic | undefined;
 }
 
 export async function resolveRepo(options: ResolveOptions): Promise<ResolvedRepo> {

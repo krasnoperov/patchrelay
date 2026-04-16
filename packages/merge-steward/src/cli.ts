@@ -82,7 +82,7 @@ export async function runCli(argv: string[], options?: RunCliOptions): Promise<n
       case "service":
         return await (await import("./cli/commands/service.ts")).handleService(parsed, stdout, runCommand);
       case "queue":
-        return await (await import("./cli/commands/queue.ts")).handleQueue(parsed, stdout);
+        return await (await import("./cli/commands/queue.ts")).handleQueue(parsed, stdout, options?.resolveCommand);
       default:
         throw new UsageError(`Unknown command: ${command}`);
     }
