@@ -23,7 +23,7 @@ function AttemptRow({ attempt, selected, compact }: { attempt: ReviewAttemptReco
   const repoLabel = compact ? (attempt.repoFullName.split("/").at(-1) ?? attempt.repoFullName) : truncate(attempt.repoFullName, 24);
   return (
     <Box>
-      <Text color={selected ? "cyan" : "gray"}>{selected ? "\u25b8" : " "}</Text>
+      <Text color={selected ? "cyan" : "gray"}>{selected ? ">" : " "}</Text>
       <Text bold>{` #${attempt.prNumber}`}</Text>
       <Text>{` ${repoLabel}`}</Text>
       <Text dimColor>{` ${formatSha(attempt.headSha)}`}</Text>
@@ -105,7 +105,7 @@ export function ListView({
           <Box key={repo.repoId} flexDirection="column">
             <Box>
               <Text color={repo.repoFullName === selectedRepoFullName ? "cyan" : "gray"}>
-                {repo.repoFullName === selectedRepoFullName ? "\u25b8" : " "}
+                {repo.repoFullName === selectedRepoFullName ? ">" : " "}
               </Text>
               <Text bold>{repo.repoId}</Text>
             </Box>

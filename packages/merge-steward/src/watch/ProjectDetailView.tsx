@@ -153,7 +153,7 @@ export function ProjectDetailView({
             return (
               <Box key={entry.id} flexDirection="column">
                 <Box>
-                  <Text color={isSelected ? "cyan" : "gray"}>{isSelected ? "\u25b8" : " "}</Text>
+                  <Text color={isSelected ? "cyan" : "gray"}>{isSelected ? ">" : " "}</Text>
                   <Text bold>{`#${entry.prNumber}`}</Text>
                   {entry.issueKey ? <Text>{` ${entry.issueKey}`}</Text> : null}
                   <Text>{`  `}</Text>

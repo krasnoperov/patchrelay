@@ -61,7 +61,7 @@ function QueueRow({
 
   return (
     <Box>
-      <Text color={selected ? "cyan" : "gray"}>{selected ? "\u25b8" : " "}</Text>
+      <Text color={selected ? "cyan" : "gray"}>{selected ? ">" : " "}</Text>
       <Text {...(isHead ? { color: "green" } : {})} bold>{` #${entry.prNumber}`}</Text>
       {entry.issueKey ? <Text>{` ${entry.issueKey}`}</Text> : null}
       <Text dimColor>{`  ${relativeTime(entry.updatedAt).padStart(4)}`}</Text>
