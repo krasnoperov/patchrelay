@@ -10,6 +10,16 @@ function renderTemplate(template: string, replacements?: { publicBaseUrl?: strin
   const home = homedir();
   const user = basename(home);
   const layout = getMergeStewardPathLayout();
+  // When running from source (e.g. during tests or `npm run dev`) the dist/
+  // entrypoint isn't built yet.  Fall back to the PATH-resolved binary so the
+  // systemd template still renders — the ExecStart will need `merge-steward`
+  // on PATH at service start, which is true for any normal install.
+  let cliEntry: string;
+  try {
+    cliEntry = getBuiltCliEntryPath();
+  } catch {
+    cliEntry = "/usr/bin/env merge-steward";
+  }
   let rendered = template
     .replaceAll("/home/your-user", home)
     .replaceAll("your-user", user)
@@ -20,7 +30,7 @@ function renderTemplate(template: string, replacements?: { publicBaseUrl?: strin
     .replaceAll("/home/your-user/.config/merge-steward/repos", layout.repoConfigDir)
     .replaceAll("/home/your-user/.local/state/merge-steward", layout.stateDir)
     .replaceAll("/home/your-user/.local/share/merge-steward", layout.dataDir)
-    .replaceAll("/usr/bin/env merge-steward", `${getBuiltCliEntryPath()}`);
+    .replaceAll("/usr/bin/env merge-steward", cliEntry);
 
   if (replacements?.publicBaseUrl) {
     rendered = rendered.replaceAll("https://queue.example.com", replacements.publicBaseUrl);
