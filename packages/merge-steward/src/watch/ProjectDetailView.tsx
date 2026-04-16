@@ -210,7 +210,7 @@ export function ProjectDetailView({
           visibleEvents.map((event) => (
             <Box key={"id" in event && event.id ? String(event.id) : `${event.entryId}-${event.at}`} gap={1}>
               <Text dimColor>{relativeTime(event.at).padStart(4, " ")}</Text>
-              <Text>{truncate(formatEventNarrative(event), compact ? Math.max(12, width - 8) : 106)}</Text>
+              <Text>{truncate(formatEventNarrative(event, selectedEntry ? { prNumber: selectedEntry.prNumber } : {}), compact ? Math.max(12, width - 8) : 106)}</Text>
             </Box>
           ))
         )}
