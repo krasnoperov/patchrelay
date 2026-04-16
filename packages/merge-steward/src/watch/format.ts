@@ -178,8 +178,13 @@ function withDetail(text: string, detail?: string | undefined): string {
   return `${text} ${shortenHashes(detail)}`;
 }
 
-export function formatEventNarrative(event: QueueEventRecord | QueueEventSummary): string {
-  const prPrefix = "prNumber" in event ? `PR #${event.prNumber} ` : "This PR ";
+export function formatEventNarrative(
+  event: QueueEventRecord | QueueEventSummary,
+  options: { prNumber?: number } = {},
+): string {
+  const eventPrNumber = "prNumber" in event ? event.prNumber : undefined;
+  const resolvedPr = options.prNumber ?? eventPrNumber;
+  const prPrefix = resolvedPr !== undefined ? `PR #${resolvedPr} ` : "This PR ";
   if (!event.fromStatus && event.toStatus === "queued") {
     return withDetail(`${prPrefix}entered the merge queue.`, event.detail);
   }

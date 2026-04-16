@@ -39,7 +39,7 @@
     "lint": "eslint .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "check": "npm run typecheck",
-    "test": "node --experimental-transform-types --test test/**/*.test.ts",
+    "test": "node --experimental-transform-types --test 'test/**/*.test.ts'",
     "ci": "npm run lint && npm run check && npm test && npm run build"
   },
   "dependencies": {

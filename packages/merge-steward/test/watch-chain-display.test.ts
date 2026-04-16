@@ -84,6 +84,63 @@ test("active filter still shows recent evicted entries long enough to explain th
   assert.strictEqual(result[1]!.prNumber, 2);
 });
 
+test("active filter keeps merged entries visible while post-merge CI is still pending", () => {
+  // The operator needs to watch main's post-merge CI settle after a land.
+  // Even past the recently-completed window, a merged entry with unresolved
+  // post-merge status must stay on screen.
+  const pendingMerged = makeEntry({
+    prNumber: 1, position: 1, status: "merged",
+    updatedAt: new Date(Date.now() - 5 * 60_000).toISOString(),
+    postMergeStatus: "pending",
+    postMergeSummary: "checks pending: Checks",
+    postMergeSha: "landed-sha",
+    postMergeCheckedAt: new Date().toISOString(),
+  });
+  const active = makeEntry({ prNumber: 2, position: 2, status: "validating", ciRunId: "ci-2" });
+
+  const result = buildDisplayEntries([pendingMerged, active], "active");
+
+  assert.strictEqual(result.length, 2);
+  assert.strictEqual(result[0]!.prNumber, 1);
+  assert.strictEqual(result[0]!.status, "merged");
+  assert.strictEqual(result[1]!.prNumber, 2);
+});
+
+test("active filter drops merged entries once post-merge CI has settled past the window", () => {
+  const settled = makeEntry({
+    prNumber: 1, position: 1, status: "merged",
+    updatedAt: new Date(Date.now() - 5 * 60_000).toISOString(),
+    postMergeStatus: "pass",
+    postMergeSummary: "all checks passed",
+    postMergeSha: "landed-sha",
+    postMergeCheckedAt: new Date(Date.now() - 4 * 60_000).toISOString(),
+  });
+  const active = makeEntry({ prNumber: 2, position: 2, status: "validating", ciRunId: "ci-2" });
+
+  const result = buildDisplayEntries([settled, active], "active");
+
+  assert.strictEqual(result.length, 1);
+  assert.strictEqual(result[0]!.prNumber, 2);
+});
+
+test("chain header keeps a merged entry present until post-merge CI resolves", () => {
+  const pendingMerged = makeEntry({
+    prNumber: 1, position: 1, status: "merged",
+    updatedAt: new Date(Date.now() - 5 * 60_000).toISOString(),
+    postMergeStatus: "pending",
+    postMergeSummary: "checks pending: Checks",
+    postMergeSha: "landed-sha",
+    postMergeCheckedAt: new Date().toISOString(),
+  });
+  const active = makeEntry({ prNumber: 2, position: 2, status: "validating", ciRunId: "ci-2" });
+
+  const result = buildChainEntries([pendingMerged, active]);
+
+  assert.strictEqual(result.length, 2);
+  assert.strictEqual(result[0]!.prNumber, 1);
+  assert.strictEqual(result[1]!.prNumber, 2);
+});
+
 test("re-admitted PR shows active entry, not terminal", () => {
   const evicted = makeEntry({
     prNumber: 1, position: 1, status: "evicted",
@@ -144,8 +201,8 @@ test("all filter returns everything unfiltered", () => {
 // ─── CI status icons ────────────────────────────────────────────
 
 test("ciStatusIcon returns correct icons for each status", () => {
-  assert.strictEqual(ciStatusIcon({ status: "merged", ciRunId: null }).icon, "\u2713");
-  assert.strictEqual(ciStatusIcon({ status: "merged", ciRunId: null }).color, "green");
+  assert.strictEqual(ciStatusIcon({ status: "merged", ciRunId: null, postMergeStatus: "pass" }).icon, "\u2713");
+  assert.strictEqual(ciStatusIcon({ status: "merged", ciRunId: null, postMergeStatus: "pass" }).color, "green");
   assert.strictEqual(ciStatusIcon({ status: "merging", ciRunId: null }).icon, "\u2713");
   assert.strictEqual(ciStatusIcon({ status: "validating", ciRunId: "ci-1" }).icon, "\u25cf");
   assert.strictEqual(ciStatusIcon({ status: "validating", ciRunId: "ci-1" }).color, "cyan");

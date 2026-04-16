@@ -114,9 +114,35 @@ describe("GitHubActionsRunner.getStatus", () => {
     assert.strictEqual(await runner.getStatus("sha:abc123"), "pass");
   });
 
-  it("fails when gate job succeeds but underlying check is skipped (MAF-49 scenario)", async () => {
-    // This reproduces the exact bug: "Tests" gate job succeeds, but the
-    // actual "Build & UI Tests" job was skipped on the spec branch.
+  it("treats skipped as pass when no required checks are configured", async () => {
+    // Matches listChecksForRef's mapRestConclusion.  When the repo hasn't
+    // declared required checks, skipped conditional jobs (e.g. deploy-stage
+    // on main) must not cause getMainStatus to report "fail" — that would
+    // stall the queue with an empty failing-check list.
+    const runner = new GitHubActionsRunner("owner/repo", () => []);
+    const ghPath = path.join(baseDir, "gh");
+    writeFileSync(ghPath, buildGhStub({
+      abc123: [
+        { name: "Tests", status: "completed", conclusion: "success" },
+        { name: "Deploy stage", status: "completed", conclusion: "skipped" },
+      ],
+    }), "utf8");
+    chmodSync(ghPath, 0o755);
+    process.env.PATH = `${baseDir}${path.delimiter}${prevPath ?? ""}`;
+    process.env.GH_CHECKS_MAP = JSON.stringify({
+      abc123: [
+        { name: "Tests", status: "completed", conclusion: "success" },
+        { name: "Deploy stage", status: "completed", conclusion: "skipped" },
+      ],
+    });
+
+    assert.strictEqual(await runner.getStatus("sha:abc123"), "pass");
+  });
+
+  it("fails when gate job succeeds but an underlying required check is skipped", async () => {
+    // Reproduces the gate-job hazard: a "Tests" gate reports success, but
+    // the underlying required "Build & UI Tests" job was skipped on the
+    // spec branch (e.g. by a workflow branch filter).
     const runner = new GitHubActionsRunner("owner/repo", () => ["Tests", "Build & UI Tests"]);
     const ghPath = path.join(baseDir, "gh");
     writeFileSync(ghPath, buildGhStub({
