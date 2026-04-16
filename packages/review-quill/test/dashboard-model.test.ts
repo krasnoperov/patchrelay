@@ -3,12 +3,13 @@ import test from "node:test";
 import { getLatestAttemptsByPullRequest } from "../src/attempt-summary.ts";
 import {
   clusterSummaryText,
+  getCompactReviewQueueTokens,
   getRecentActivity,
   getRepoHealth,
   getReviewQueueText,
   projectStatsSummary,
 } from "../src/watch/dashboard-model.ts";
-import type { ReviewAttemptRecord, ReviewQuillRepoSummary, ReviewQuillWatchSnapshot, WebhookEventRecord } from "../src/types.ts";
+import type { ReviewAttemptRecord, ReviewQuillPendingReview, ReviewQuillRepoSummary, ReviewQuillWatchSnapshot, WebhookEventRecord } from "../src/types.ts";
 
 function fakeAttempt(overrides: Partial<ReviewAttemptRecord> = {}): ReviewAttemptRecord {
   return {
@@ -55,6 +56,7 @@ function fakeSnapshot(params: {
   repos?: ReviewQuillRepoSummary[];
   attempts?: ReviewAttemptRecord[];
   recentWebhooks?: WebhookEventRecord[];
+  pendingReviews?: ReviewQuillPendingReview[];
 } = {}): ReviewQuillWatchSnapshot {
   return {
     summary: {
@@ -75,6 +77,7 @@ function fakeSnapshot(params: {
     repos: params.repos ?? [fakeRepo()],
     attempts: params.attempts ?? [],
     recentWebhooks: params.recentWebhooks ?? [],
+    pendingReviews: params.pendingReviews ?? [],
   };
 }
 
@@ -242,6 +245,43 @@ test("compact review queue text uses single-character status symbols", () => {
   });
 
   assert.equal(getReviewQueueText(snapshot, repo, true), "#4✓ #3● #2○ #1✗");
+});
+
+test("compact queue tokens put pending PRs before completed attempts so narrow rows keep the in-flight work visible", () => {
+  const repo = fakeRepo();
+  const snapshot = fakeSnapshot({
+    repos: [repo],
+    attempts: [
+      fakeAttempt({
+        id: 1, prNumber: 1, status: "completed", conclusion: "approved",
+        updatedAt: "2026-04-16T18:00:00.000Z",
+      }),
+      fakeAttempt({
+        id: 2, prNumber: 2, status: "completed", conclusion: "declined",
+        updatedAt: "2026-04-16T18:01:00.000Z",
+      }),
+    ],
+    pendingReviews: [
+      {
+        repoId: repo.repoId,
+        repoFullName: repo.repoFullName,
+        prNumber: 3,
+        headSha: "head-3",
+        headRefName: "feature/x",
+        reason: "checks_running",
+        failedChecks: [],
+        pendingChecks: ["Tests"],
+        updatedAt: "2026-04-16T18:02:00.000Z",
+      },
+    ],
+  });
+
+  const tokens = getCompactReviewQueueTokens(snapshot, repo);
+  assert.deepStrictEqual(
+    tokens.map((token) => token.prNumber),
+    [3, 2, 1],
+    "pending PR #3 should lead; attempts follow in recency order",
+  );
 });
 
 test("compact review queue text falls back to idle when no queue items exist", () => {
