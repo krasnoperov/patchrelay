@@ -39,7 +39,7 @@ export function relativeTime(iso: string | null | undefined): string {
   return `${days}d`;
 }
 
-export function mergeWaitState(entry: { status: QueueEntryStatus; waitDetail?: string | null } | undefined): "approval" | "main" | null {
+export function mergeWaitState(entry: { status: QueueEntryStatus; waitDetail?: string | null | undefined } | undefined): "approval" | "main" | null {
   if (!entry || entry.status !== "merging" || !entry.waitDetail) {
     return null;
   }
@@ -53,7 +53,7 @@ export function mergeWaitState(entry: { status: QueueEntryStatus; waitDetail?: s
   return null;
 }
 
-export function statusColor(status: QueueEntryStatus, entry?: { waitDetail?: string | null }): "yellow" | "cyan" | "green" | "red" | "gray" {
+export function statusColor(status: QueueEntryStatus, entry?: { waitDetail?: string | null | undefined }): "yellow" | "cyan" | "green" | "red" | "gray" {
   switch (status) {
     case "queued":
       return "yellow";
@@ -71,7 +71,7 @@ export function statusColor(status: QueueEntryStatus, entry?: { waitDetail?: str
   }
 }
 
-export function humanStatus(status: QueueEntryStatus, entry?: { lastFailedBaseSha: string | null; specBranch: string | null; waitDetail?: string | null }): string {
+export function humanStatus(status: QueueEntryStatus, entry?: { lastFailedBaseSha: string | null; specBranch: string | null; waitDetail?: string | null | undefined }): string {
   switch (status) {
     case "queued":
       return "waiting in queue";
@@ -113,7 +113,7 @@ export function queueProgress(status: QueueEntryStatus): { current: number; tota
   }
 }
 
-export function nextStepLabel(status: QueueEntryStatus, entry?: { lastFailedBaseSha: string | null; specBasedOn: string | null; waitDetail?: string | null }): string {
+export function nextStepLabel(status: QueueEntryStatus, entry?: { lastFailedBaseSha: string | null; specBasedOn: string | null; waitDetail?: string | null | undefined }): string {
   switch (status) {
     case "queued":
       return "starting shortly";
@@ -314,7 +314,7 @@ export function summarizeCheckNames(checks: CheckResult[], limit = 3): string {
 export function ciStatusIcon(entry: {
   status: QueueEntryStatus;
   ciRunId: string | null;
-  waitDetail?: string | null;
+  waitDetail?: string | null | undefined;
   postMergeStatus?: PostMergeStatus | null;
 }): { icon: string; color: string } {
   switch (entry.status) {
