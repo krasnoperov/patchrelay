@@ -106,7 +106,7 @@ export class MergeStewardRuntime {
             || event.action === "ci_failed"
             || event.action === "merge_rejected" || event.action === "budget_exhausted";
           const isDebug = event.action === "ci_pending" || event.action === "retry_gated"
-            || event.action === "fetch_started";
+            || event.action === "fetch_started" || event.action === "merge_waiting_main";
           const level = isWarn ? "warn" : isDebug ? "debug" : "info";
           this.logger[level]({ ...event }, `Queue: ${event.action} PR #${event.prNumber}`);
 

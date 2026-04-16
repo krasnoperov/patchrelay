@@ -55,7 +55,17 @@ export async function mergeHead(ctx: ReconcileContext, entry: QueueEntry): Promi
 
   if (ctx.ci.getMainStatus) {
     const mainStatus = await ctx.ci.getMainStatus(ctx.baseBranch);
-    if (mainStatus !== "pass") {
+    if (mainStatus === "pending") {
+      // Main is still verifying itself (typically post-merge CI from the
+      // previous entry).  The spec was built on top of main-as-it-was
+      // (isFF check above guarantees main hasn't diverged) and already
+      // passed CI, so keep the spec + CI state and retry next tick.
+      // Throwing the spec away here would force a rebuild + re-run of
+      // CI that produces the same tree — wasting the speculation.
+      emit(ctx, entry, "merge_waiting_main", { detail: "main checks still pending, holding merge" });
+      return;
+    }
+    if (mainStatus === "fail") {
       try {
         const refresh = await ctx.policy.refreshOnIssue("main_unhealthy_at_merge");
         if (refresh.attempted && refresh.changed) {

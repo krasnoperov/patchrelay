@@ -240,6 +240,7 @@ export type ReconcileAction =
   | "retry_gated"         // non-spinning, waiting for base change
   | "budget_exhausted"
   | "merge_waiting_approval" // approval withdrawn, waiting for re-approval
+  | "merge_waiting_main"     // main still verifying post-merge; keep spec + CI and retry
   | "sanitized_closed"    // entry terminalized: PR closed on GitHub
   | "sanitized_duplicate" // older duplicate entry superseded
   | "post_merge_verification_started"

@@ -49,4 +49,41 @@ describe("main branch broken", () => {
     h.mainGreen = true;
     h.assertInvariants();
   });
+
+  it("holds a ready-to-merge entry in merging when main is only pending, preserving spec + CI", async () => {
+    // When main is pending (its own post-merge CI still running), the gate
+    // must not throw away the green spec — the next entry has to stay in
+    // merging so that a single tick can land it as soon as main settles.
+    let mainStatus: CIStatus = "pass";
+    const h = await createHarness({ ciRule: () => "pass" });
+    h.ciSim.getMainStatus = async () => mainStatus;
+
+    await h.enqueue(prA);
+    // Drive the entry up to merging with a fully green spec.
+    for (let i = 0; i < 20 && h.entries[0]?.status !== "merging"; i++) {
+      await h.tick();
+    }
+    const entry = h.entries[0]!;
+    assert.strictEqual(entry.status, "merging", "entry should reach merging");
+    const specBranchBefore = entry.specBranch;
+    const specShaBefore = entry.specSha;
+    const ciRunIdBefore = entry.ciRunId;
+    assert.ok(specBranchBefore, "spec branch should be set before the merge gate");
+    assert.ok(specShaBefore, "spec SHA should be set before the merge gate");
+
+    // Main turns pending (its own verification workflow is still running).
+    mainStatus = "pending";
+
+    await h.tick();
+    const held = h.entries[0]!;
+    assert.strictEqual(held.status, "merging", "pending main must not demote to preparing_head");
+    assert.strictEqual(held.specBranch, specBranchBefore, "spec branch preserved");
+    assert.strictEqual(held.specSha, specShaBefore, "spec SHA preserved");
+    assert.strictEqual(held.ciRunId, ciRunIdBefore, "CI run ID preserved");
+
+    // Main resolves green; the next tick should land it without re-running CI.
+    mainStatus = "pass";
+    await h.runUntilStable();
+    assert.deepStrictEqual(h.merged, [1]);
+  });
 });
