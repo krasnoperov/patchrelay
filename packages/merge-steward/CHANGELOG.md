@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+* **cli:** new `merge-steward pr status` command that classifies a single PR (queue entry first, GitHub fallback) and exits 0 terminal-ok / 2 terminal-failure / 3 still-in-flight / 4 `--wait` timeout so agent scripts can chain with `&&`.
+* **cli:** `queue status`, `queue show`, and `queue reconcile` now infer `--repo` from the current git checkout (via `origin`'s remote URL) when the flag is omitted. `--cwd <path>` overrides the resolution directory.
+* **cli:** `pr status` supports `--wait`, `--timeout <seconds>`, and `--poll <seconds>` polling so agents can block until a terminal state is reached.
+
 ## [0.9.6](https://github.com/krasnoperov/patchrelay/compare/merge-steward-v0.9.5...merge-steward-v0.9.6) (2026-04-07)
 
 
