@@ -3,8 +3,21 @@ import { TERMINAL_STATUSES } from "../types.ts";
 
 const RECENTLY_COMPLETED_MS = 60_000;
 
+function isPostMergeUnresolved(entry: QueueEntry): boolean {
+  if (entry.status !== "merged") return false;
+  return entry.postMergeStatus === null
+    || entry.postMergeStatus === "pending"
+    || entry.postMergeStatus === "unknown";
+}
+
 function isActiveFilterVisible(entry: QueueEntry, cutoff: number): boolean {
   if (!TERMINAL_STATUSES.includes(entry.status)) {
+    return true;
+  }
+  // Keep a merged entry visible until main's own post-merge CI resolves so
+  // the operator can watch the verification land.  Once it's pass/fail we
+  // fall back to the recently-completed window.
+  if (isPostMergeUnresolved(entry)) {
     return true;
   }
   return new Date(entry.updatedAt).getTime() > cutoff;
@@ -56,7 +69,7 @@ export function buildChainEntries(entries: QueueEntry[]): QueueEntry[] {
     .filter((entry) => {
       const isActive = !TERMINAL_STATUSES.includes(entry.status);
       const isRecent = !isActive && new Date(entry.updatedAt).getTime() > cutoff;
-      return isActive || isRecent;
+      return isActive || isRecent || isPostMergeUnresolved(entry);
     })
     .sort((a, b) => a.position - b.position);
 }
