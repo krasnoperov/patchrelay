@@ -114,10 +114,10 @@ export class MemoryStore implements QueueStore {
     entry.specBranch = null;
     entry.specSha = null;
     entry.specBasedOn = null;
-    entry.postMergeStatus = undefined;
-    entry.postMergeSha = undefined;
-    entry.postMergeSummary = undefined;
-    entry.postMergeCheckedAt = undefined;
+    entry.postMergeStatus = null;
+    entry.postMergeSha = null;
+    entry.postMergeSummary = null;
+    entry.postMergeCheckedAt = null;
     entry.updatedAt = isoNow();
     this.appendEvent(entryId, from, "queued", `updateHead: generation ${entry.generation}`);
   }

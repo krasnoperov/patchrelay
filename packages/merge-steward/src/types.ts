@@ -49,13 +49,13 @@ export interface QueueEntry {
   /** Entry ID of the previous entry this spec branch is based on. Null if based on main. */
   specBasedOn: string | null;
   /** Post-merge verification status for the landed commit on main. */
-  postMergeStatus?: PostMergeStatus | null;
+  postMergeStatus: PostMergeStatus | null;
   /** Commit SHA used when checking post-merge status. */
-  postMergeSha?: string | null;
+  postMergeSha: string | null;
   /** Optional one-line summary of post-merge checks. */
-  postMergeSummary?: string | null;
+  postMergeSummary: string | null;
   /** Timestamp of the most recent post-merge verification attempt. */
-  postMergeCheckedAt?: string | null;
+  postMergeCheckedAt: string | null;
   enqueuedAt: string;
   updatedAt: string;
 }
