@@ -101,6 +101,15 @@ export function ListView({
         const queueText = getReviewQueueText(snapshot, repo, compact);
         const queueTokens = compact ? getCompactReviewQueueTokens(snapshot, repo) : [];
         const queueWidth = Math.max(6, width - 20);
+        const compactQueueDisplay = queueTokens.length === 0 ? (
+          <Box paddingLeft={2}>
+            <Text dimColor>{truncate(queueText, queueWidth)}</Text>
+          </Box>
+        ) : (
+          <Box paddingLeft={2}>
+            <CompactReviewQueueTokens tokens={queueTokens} width={queueWidth} />
+          </Box>
+        );
         return (
           <Box key={repo.repoId} flexDirection="column">
             <Box>
@@ -109,17 +118,7 @@ export function ListView({
               </Text>
               <Text bold>{repo.repoId}</Text>
             </Box>
-            {compact ? (
-              queueTokens.length === 0 ? (
-                <Box paddingLeft={2}>
-                  <Text dimColor>{truncate(queueText, queueWidth)}</Text>
-                </Box>
-              ) : (
-                <Box paddingLeft={2}>
-                  <CompactReviewQueueTokens tokens={queueTokens} width={queueWidth} />
-                </Box>
-              )
-            ) : (
+            {compact ? compactQueueDisplay : (
               <>
                 <Text dimColor>{`  ${truncate(repo.repoFullName, 28)}`}</Text>
                 <Text>{`  `}</Text>
