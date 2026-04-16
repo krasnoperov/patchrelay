@@ -38,5 +38,15 @@ test("evaluateReviewEligibility accepts green required checks", async () => {
     isDraft: false,
     branchName: "feature/x",
   });
-  assert.deepEqual(result, { eligible: true });
+  assert.deepEqual(result, {
+    eligible: true,
+    checkRuns: [
+      {
+        id: 1,
+        name: "Tests",
+        status: "completed",
+        conclusion: "success",
+      },
+    ],
+  });
 });
