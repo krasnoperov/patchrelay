@@ -45,19 +45,30 @@ export class GitHubActionsRunner implements CIRunner {
 
       const requiredChecks = this.getRequiredChecks();
       const normalizedRequired = requiredChecks.map(normalizeCheckName);
-      const relevant = requiredChecks.length > 0
+      const hasRequired = requiredChecks.length > 0;
+      const relevant = hasRequired
         ? checkRuns.filter((c) => normalizedRequired.includes(normalizeCheckName(c.name)))
         : checkRuns;
 
       if (relevant.length === 0) return "pending";
 
       if (relevant.some((c) => c.status !== "completed")) return "pending";
-      // REST API returns lowercase conclusions; any non-success completed
-      // check is a failure.  "skipped" is NOT accepted — if a check is
-      // required it must actually execute.  A skipped required check means
-      // the CI workflow doesn't trigger on the spec branch, which would
-      // let untested code through (see: MAF-49 incident).
-      if (relevant.some((c) => c.conclusion !== "success" && c.conclusion !== "neutral")) return "fail";
+      // REST API returns lowercase conclusions.  For required checks,
+      // "skipped" is rejected — a gate job can report success while the
+      // underlying required job was skipped by a workflow branch filter,
+      // letting untested code through.  When no required checks are
+      // configured, "skipped" is accepted as passing, matching
+      // mapRestConclusion in pr-client.ts — otherwise getMainStatus reports
+      // "fail" whenever main has conditional workflow jobs that are skipped
+      // (e.g. deploy-stage on main), even though listChecksForRef treats
+      // those same checks as success, producing a "main_broken" block with
+      // an empty failing-check list and stalling the queue.
+      const acceptSkipped = !hasRequired;
+      if (relevant.some((c) => {
+        if (c.conclusion === "success" || c.conclusion === "neutral") return false;
+        if (acceptSkipped && c.conclusion === "skipped") return false;
+        return true;
+      })) return "fail";
 
       return "pass";
     } catch {
