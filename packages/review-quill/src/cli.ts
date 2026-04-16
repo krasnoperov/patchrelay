@@ -147,6 +147,14 @@ export async function runCli(args: string[], options?: RunCliOptions): Promise<n
         return await handleDiff(parsed, stdout);
       case "service":
         return await handleService(parsed, stdout, runCommand);
+      case "pr": {
+        const subcommand = parsed.positionals[1];
+        if (subcommand !== "status") {
+          throw new UsageError(`Unknown pr command: ${subcommand ?? "(none)"}. Try \`review-quill pr status\`.`);
+        }
+        const { handlePrStatus } = await import("./cli/pr-status.ts");
+        return await handlePrStatus({ parsed, stdout, resolveCommand: options?.resolveCommand });
+      }
       default:
         throw new UsageError(`Unknown command: ${command}`);
     }

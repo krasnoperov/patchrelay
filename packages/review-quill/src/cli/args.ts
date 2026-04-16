@@ -109,6 +109,15 @@ export function validateFlags(parsed: ParsedArgs): void {
     case "transcript-source":
       assertKnownFlags(parsed, "root", ["repo", "pr", "cwd", "attempt", "json"]);
       return;
+    case "pr":
+      switch (subcommand) {
+        case "status":
+          assertKnownFlags(parsed, "root", ["repo", "pr", "cwd", "wait", "timeout", "poll", "json"]);
+          return;
+        default:
+          assertKnownFlags(parsed, "root", []);
+          return;
+      }
     case "diff":
       assertKnownFlags(parsed, "root", [
         "repo",
