@@ -113,7 +113,7 @@ export function ProjectDetailView({
       <Box>
         <Text bold>{repo.repoId}</Text>
         <Text>{`  `}</Text>
-        <Text color={health.color}>{compact ? health.label.slice(0, 5) : health.label}</Text>
+        <Text color={health.color}>{health.label}</Text>
       </Box>
       <Text dimColor>{` ${projectStatsSummary(snapshot, compact)}`}</Text>
       {compact ? null : <Text dimColor>{runtimeSummary(snapshot)}</Text>}
@@ -169,7 +169,7 @@ export function ProjectDetailView({
                 </Box>
                 {(isSelected || entry.status === "evicted" || (isHead && queueBlockSummary)) && (
                   <Box paddingLeft={2}>
-                    <Text dimColor>{truncate(describeEntry(entry, { isHead, queueBlockSummary }), compact ? width - 4 : 110)}</Text>
+                    <Text dimColor>{describeEntry(entry, { isHead, queueBlockSummary })}</Text>
                   </Box>
                 )}
               </Box>
@@ -210,7 +210,7 @@ export function ProjectDetailView({
           visibleEvents.map((event) => (
             <Box key={"id" in event && event.id ? String(event.id) : `${event.entryId}-${event.at}`} gap={1}>
               <Text dimColor>{relativeTime(event.at).padStart(4, " ")}</Text>
-              <Text>{truncate(formatEventNarrative(event, selectedEntry ? { prNumber: selectedEntry.prNumber } : {}), compact ? Math.max(12, width - 8) : 106)}</Text>
+              <Text>{formatEventNarrative(event, selectedEntry ? { prNumber: selectedEntry.prNumber } : {})}</Text>
             </Box>
           ))
         )}
