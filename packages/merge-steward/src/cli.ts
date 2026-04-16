@@ -81,6 +81,14 @@ export async function runCli(argv: string[], options?: RunCliOptions): Promise<n
         return await (await import("./cli/commands/dashboard.ts")).handleDashboard(parsed);
       case "service":
         return await (await import("./cli/commands/service.ts")).handleService(parsed, stdout, runCommand);
+      case "pr": {
+        const subcommand = parsed.positionals[1];
+        if (subcommand !== "status") {
+          throw new UsageError(`Unknown pr command: ${subcommand ?? "(none)"}. Try \`merge-steward pr status\`.`);
+        }
+        const { handlePrStatus } = await import("./cli/commands/pr-status.ts");
+        return await handlePrStatus({ parsed, stdout, resolveCommand: options?.resolveCommand });
+      }
       case "queue":
         return await (await import("./cli/commands/queue.ts")).handleQueue(parsed, stdout, options?.resolveCommand);
       default:

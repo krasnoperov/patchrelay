@@ -107,6 +107,15 @@ export function validateFlags(parsed: ParsedArgs): void {
           assertKnownFlags(parsed, "service", []);
           return;
       }
+    case "pr":
+      switch (subcommand) {
+        case "status":
+          assertKnownFlags(parsed, "root", ["repo", "pr", "cwd", "wait", "timeout", "poll", "json"]);
+          return;
+        default:
+          assertKnownFlags(parsed, "root", []);
+          return;
+      }
     case "queue":
       switch (subcommand) {
         case "dashboard":
