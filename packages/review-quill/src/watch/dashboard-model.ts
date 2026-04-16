@@ -24,6 +24,12 @@ export interface RecentActivityItem {
   message: string;
 }
 
+export interface CompactReviewQueueToken {
+  prNumber: number;
+  symbol: string;
+  color: "red" | "green" | "yellow" | "gray" | "white" | "cyan";
+}
+
 function repoAttempts(snapshot: ReviewQuillWatchSnapshot | null, repo: ReviewQuillRepoSummary): ReviewAttemptRecord[] {
   if (!snapshot) {
     return [];
@@ -51,6 +57,71 @@ function repoAttemptStats(snapshot: ReviewQuillWatchSnapshot | null, repo: Revie
     failed: attempts.filter((attempt) => attempt.status === "failed").length,
     stale: attempts.filter((attempt) => attempt.stale).length,
   };
+}
+
+function attemptSymbol(attempt: ReviewAttemptRecord): string {
+  if (attempt.stale) {
+    return "\u26a0";
+  }
+  if (attempt.status === "running") {
+    return "\u25cf";
+  }
+  if (attempt.status === "queued") {
+    return "\u25cb";
+  }
+  if (attempt.status === "failed") {
+    return "\u26a0";
+  }
+  if (attempt.status === "cancelled") {
+    return "\u2013";
+  }
+  if (attempt.status === "superseded") {
+    return "\u21bb";
+  }
+  if (attempt.status === "completed") {
+    if (attempt.conclusion === "approved") {
+      return "\u2713";
+    }
+    if (attempt.conclusion === "declined") {
+      return "\u2717";
+    }
+    if (attempt.conclusion === "error") {
+      return "\u26a0";
+    }
+    return "\u2753";
+  }
+  return "\u2753";
+}
+
+function attemptSymbolColor(attempt: ReviewAttemptRecord): CompactReviewQueueToken["color"] {
+  if (attempt.stale) {
+    return "red";
+  }
+  if (attempt.status === "running") {
+    return "yellow";
+  }
+  if (attempt.status === "completed") {
+    if (attempt.conclusion === "approved") {
+      return "green";
+    }
+    if (attempt.conclusion === "declined") {
+      return "red";
+    }
+    if (attempt.conclusion === "error") {
+      return "red";
+    }
+    return "yellow";
+  }
+  if (attempt.status === "queued") {
+    return "gray";
+  }
+  if (attempt.status === "cancelled" || attempt.status === "superseded") {
+    return "gray";
+  }
+  if (attempt.status === "failed") {
+    return "red";
+  }
+  return "white";
 }
 
 function summarizeWebhookBurst(events: WebhookEventRecord[]): string | null {
@@ -265,23 +336,59 @@ export function clusterSummaryText(snapshot: ReviewQuillWatchSnapshot | null, co
   return `${summary.total} repositories · ${summary.connected} connected · ${summary.active} active · ${summary.queued} queued · ${summary.stuck} stuck · ${summary.attention} need attention`;
 }
 
-export function getReviewQueueText(snapshot: ReviewQuillWatchSnapshot | null, repo: ReviewQuillRepoSummary): string {
+export function getReviewQueueText(
+  snapshot: ReviewQuillWatchSnapshot | null,
+  repo: ReviewQuillRepoSummary,
+  compact = false,
+): string {
   const attempts = repoAttempts(snapshot, repo)
-    .filter((attempt) => (attempt.status === "running" || attempt.status === "queued") && !attempt.stale)
+    .filter((attempt) => !attempt.stale || compact)
     .sort((left, right) => {
-      if (left.status !== right.status) {
-        return left.status === "running" ? -1 : 1;
+      const leftTime = new Date(left.updatedAt).getTime();
+      const rightTime = new Date(right.updatedAt).getTime();
+      if (leftTime !== rightTime) {
+        return rightTime - leftTime;
       }
-      return new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime();
+      return left.id - right.id;
     });
-  if (attempts.length === 0) {
+
+  if (compact) {
+    if (attempts.length === 0) {
+      return "idle";
+    }
+    return attempts.slice(0, 10).map((attempt) => `#${attempt.prNumber}${attemptSymbol(attempt)}`).join(" ");
+  }
+
+  const activeOrQueued = attempts.filter((attempt) => attempt.status === "running" || attempt.status === "queued");
+  if (activeOrQueued.length === 0) {
     const staleAttempts = repoAttempts(snapshot, repo).filter((attempt) => attempt.stale);
     if (staleAttempts.length > 0) {
       return `${staleAttempts.length} stale attempt${staleAttempts.length === 1 ? "" : "s"} need cleanup`;
     }
     return "no eligible review work";
   }
-  return attempts.map((attempt) => `#${attempt.prNumber} ${attempt.status}`).join("  ");
+  return activeOrQueued.map((attempt) => `#${attempt.prNumber} ${attemptLabel(attempt)}`).join("  ");
+}
+
+export function getCompactReviewQueueTokens(
+  snapshot: ReviewQuillWatchSnapshot | null,
+  repo: ReviewQuillRepoSummary,
+): CompactReviewQueueToken[] {
+  const attempts = repoAttempts(snapshot, repo)
+    .sort((left, right) => {
+      const leftTime = new Date(left.updatedAt).getTime();
+      const rightTime = new Date(right.updatedAt).getTime();
+      if (leftTime !== rightTime) {
+        return rightTime - leftTime;
+      }
+      return right.id - left.id;
+    });
+
+  return attempts.slice(0, 10).map((attempt) => ({
+    prNumber: attempt.prNumber,
+    symbol: attemptSymbol(attempt),
+    color: attemptSymbolColor(attempt),
+  }));
 }
 
 export function getRecentActivity(snapshot: ReviewQuillWatchSnapshot | null, repoLookup: Map<string, ReviewQuillRepoSummary>): RecentActivityItem[] {
