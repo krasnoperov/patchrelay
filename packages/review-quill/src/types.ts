@@ -211,6 +211,19 @@ export interface WebhookEventRecord {
 export interface ReviewEligibility {
   eligible: boolean;
   reason?: string;
+  checkRuns?: CheckRunRecord[];
+}
+
+export interface ReviewQuillPendingReview {
+  repoId: string;
+  repoFullName: string;
+  prNumber: number;
+  headSha: string;
+  headRefName: string;
+  reason: "checks_running" | "checks_failed" | "checks_unknown";
+  failedChecks: string[];
+  pendingChecks: string[];
+  updatedAt: string;
 }
 
 export type ReviewFindingSeverity = "blocking" | "nit";
@@ -305,6 +318,7 @@ export interface ReviewQuillWatchSnapshot {
   repos: ReviewQuillRepoSummary[];
   attempts: ReviewAttemptRecord[];
   recentWebhooks: WebhookEventRecord[];
+  pendingReviews: ReviewQuillPendingReview[];
 }
 
 export interface ReviewAttemptDetail {

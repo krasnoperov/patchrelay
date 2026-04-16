@@ -8,6 +8,7 @@ import { checkValidation } from "./reconciler-validate.ts";
 import { mergeHead } from "./reconciler-merge.ts";
 import { cleanupSpec } from "./reconciler-evict.ts";
 import { INVALIDATION_PATCH } from "./invalidation.ts";
+import { verifyPostMergeStatus } from "./reconciler-post-merge.ts";
 
 export type { ReconcileContext } from "./reconciler-core.ts";
 
@@ -84,6 +85,47 @@ export async function reconcile(ctx: ReconcileContext): Promise<void> {
       const wrapped = new Error(`[PR #${entry.prNumber} ${entry.id} phase=${phase}] ${msg}`);
       if (error instanceof Error && error.stack) wrapped.stack = error.stack;
       throw wrapped;
+    }
+  }
+
+  await verifyMergedEntriesPostPush(ctx);
+}
+
+async function verifyMergedEntriesPostPush(ctx: ReconcileContext): Promise<void> {
+  const mergedEntries = ctx.store.listAll(ctx.repoId).filter((entry) => entry.status === "merged");
+  for (const entry of mergedEntries) {
+    if (entry.postMergeStatus === "pass" || entry.postMergeStatus === "fail") continue;
+    const postMergeSha = entry.postMergeSha ?? entry.specSha ?? entry.headSha;
+    if (!postMergeSha) {
+      continue;
+    }
+
+    emit(ctx, entry, "post_merge_verification_started", {
+      detail: `post-merge check on ${postMergeSha.slice(0, 8)}`,
+    });
+    const verification = await verifyPostMergeStatus(ctx, entry);
+    emit(ctx, entry, "post_merge_verification_completed", {
+      detail: `post-merge checks ${verification.postMergeStatus}: ${verification.postMergeSummary}`,
+    });
+
+    const now = new Date().toISOString();
+    const previousStatus = entry.postMergeStatus ?? "pending";
+    if (
+      previousStatus !== verification.postMergeStatus
+      || entry.postMergeSummary !== verification.postMergeSummary
+      || entry.postMergeCheckedAt === null
+      || entry.postMergeCheckedAt === undefined
+    ) {
+      ctx.store.transition(entry.id, "merged", {
+        postMergeStatus: verification.postMergeStatus,
+        postMergeSha: verification.postMergeSha,
+        postMergeSummary: verification.postMergeSummary,
+        postMergeCheckedAt: now,
+      }, `post-merge verification: ${verification.postMergeStatus}`);
+    } else {
+      ctx.store.transition(entry.id, "merged", {
+        postMergeCheckedAt: now,
+      }, "post-merge verification");
     }
   }
 }

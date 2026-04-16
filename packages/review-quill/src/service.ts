@@ -5,6 +5,7 @@ import type {
   ReviewEligibility,
   ReviewQuillConfig,
   ReviewQuillRepositoryConfig,
+  ReviewQuillPendingReview,
   ReviewQuillRuntimeStatus,
   ReviewQuillWatchSnapshot,
 } from "./types.ts";
@@ -32,6 +33,7 @@ export class ReviewQuillService {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private reconcileInProgress = false;
   private readonly startedAt = new Date().toISOString();
+  private readonly pendingReviewsByRepo = new Map<string, ReviewQuillPendingReview[]>();
   private readonly runtime: ReviewQuillRuntimeStatus = {
     reconcileInProgress: false,
     lastReconcileStartedAt: null,
@@ -117,7 +119,98 @@ export class ReviewQuillService {
       repos,
       attempts,
       recentWebhooks,
+      pendingReviews: [...this.pendingReviewsByRepo.values()].flat(),
     };
+  }
+
+  private static determinePendingCheckState(
+    checks: Array<{ name: string; status: string; conclusion?: string }>,
+    requiredChecks: string[],
+  ): ReviewQuillPendingReview["reason"] {
+    const loweredChecks = checks.map((check) => ({
+      name: check.name.toLowerCase(),
+      status: check.status.toLowerCase(),
+      conclusion: check.conclusion?.toLowerCase(),
+    }));
+    const byName = new Map(loweredChecks.map((check) => [check.name, check]));
+    if (requiredChecks.length > 0) {
+      for (const required of requiredChecks) {
+        const check = byName.get(required.toLowerCase());
+        if (!check || check.status !== "completed") {
+          return "checks_running";
+        }
+        if (!["success", "neutral", "skipped"].includes(check.conclusion ?? "")) {
+          return "checks_failed";
+        }
+      }
+      return "checks_unknown";
+    }
+
+    if (loweredChecks.length === 0) {
+      return "checks_unknown";
+    }
+    if (loweredChecks.some((check) => check.status !== "completed")) {
+      return "checks_running";
+    }
+    if (loweredChecks.some((check) => !["success", "neutral", "skipped"].includes(check.conclusion ?? ""))) {
+      return "checks_failed";
+    }
+    return "checks_unknown";
+  }
+
+  private static pendingCheckNames(
+    checks: Array<{ name: string; status: string; conclusion?: string }>,
+    requiredChecks: string[],
+  ): { failed: string[]; pending: string[] } {
+    const loweredChecks = checks.map((check) => ({
+      name: check.name.toLowerCase(),
+      status: check.status.toLowerCase(),
+      conclusion: check.conclusion?.toLowerCase(),
+    }));
+    const byName = new Map(loweredChecks.map((check) => [check.name, check]));
+    if (requiredChecks.length > 0) {
+      return requiredChecks.reduce((acc, required) => {
+        const check = byName.get(required.toLowerCase());
+        if (!check) {
+          acc.pending.push(required);
+          return acc;
+        }
+        if (check.status !== "completed") {
+          acc.pending.push(required);
+          return acc;
+        }
+        if (!["success", "neutral", "skipped"].includes(check.conclusion ?? "")) {
+          acc.failed.push(required);
+        }
+        return acc;
+      }, { failed: [], pending: [] } as { failed: string[]; pending: string[] });
+    }
+
+    return checks.reduce((acc, check) => {
+      if (check.status !== "completed") {
+        acc.pending.push(check.name);
+      } else if (!["success", "neutral", "skipped"].includes(check.conclusion ?? "")) {
+        acc.failed.push(check.name);
+      }
+      return acc;
+    }, { failed: [], pending: [] } as { failed: string[]; pending: string[] });
+  }
+
+  private setPendingReviews(repoId: string, pending: ReviewQuillPendingReview[]): void {
+    this.pendingReviewsByRepo.set(repoId, pending);
+  }
+
+  private get pendingRepoIds(): string[] {
+    return [...this.pendingReviewsByRepo.keys()];
+  }
+
+  private prunePendingReviews(openRepoIds: string[]): void {
+    const toKeep = new Set(openRepoIds);
+    for (const repoId of this.pendingRepoIds) {
+      if (!toKeep.has(repoId)) {
+        this.pendingReviewsByRepo.delete(repoId);
+      }
+    }
   }
 
   async triggerReconcile(repoFullName?: string): Promise<boolean> {
@@ -144,6 +237,7 @@ export class ReviewQuillService {
       for (const repo of this.config.repositories) {
         await this.reconcileRepo(repo);
       }
+      this.prunePendingReviews(this.config.repositories.map((repo) => repo.repoId));
       this.runtime.lastReconcileCompletedAt = new Date().toISOString();
       this.runtime.lastReconcileOutcome = "succeeded";
     } catch (error) {
@@ -168,6 +262,7 @@ export class ReviewQuillService {
     this.runtime.lastReconcileError = null;
     try {
       await this.reconcileRepo(repo);
+      this.prunePendingReviews(this.config.repositories.map((repo) => repo.repoId));
       this.runtime.lastReconcileCompletedAt = new Date().toISOString();
       this.runtime.lastReconcileOutcome = "succeeded";
     } catch (error) {
@@ -183,6 +278,7 @@ export class ReviewQuillService {
 
   private async reconcileRepo(repo: ReviewQuillRepositoryConfig): Promise<void> {
     const prs = await this.github.listOpenPullRequests(repo.repoFullName);
+    const pendingForRepo: ReviewQuillPendingReview[] = [];
     await this.reconcileClosedPullRequestAttempts(repo, prs);
     for (const pr of prs) {
       await this.reconcileActiveAttemptsForPullRequest(repo, pr);
@@ -190,6 +286,24 @@ export class ReviewQuillService {
       await this.dismissStaleDecisiveReviews(repo, pr, currentReviews);
       const existing = this.store.getAttempt(repo.repoFullName, pr.number, pr.headSha);
       const eligibility = await this.evaluateEligibility(repo, pr.number, pr.headSha, pr.isDraft, pr.headRefName);
+      if (!eligibility.eligible && !pr.isDraft && eligibility.reason === "required_checks_not_green") {
+        const checks = eligibility.checkRuns ?? [];
+        const state = ReviewQuillService.determinePendingCheckState(checks, repo.requiredChecks);
+        const summary = ReviewQuillService.pendingCheckNames(checks, repo.requiredChecks);
+        if (state !== "checks_unknown" || summary.failed.length > 0 || summary.pending.length > 0) {
+          pendingForRepo.push({
+            repoId: repo.repoId,
+            repoFullName: repo.repoFullName,
+            prNumber: pr.number,
+            headSha: pr.headSha,
+            headRefName: pr.headRefName,
+            reason: state,
+            failedChecks: summary.failed,
+            pendingChecks: summary.pending,
+            updatedAt: new Date().toISOString(),
+          });
+        }
+      }
       if (existing && !["failed", "cancelled", "superseded"].includes(existing.status)) {
         if (!eligibility.eligible) continue;
         continue;
@@ -197,6 +311,8 @@ export class ReviewQuillService {
       if (!eligibility.eligible) continue;
       await this.executeReview(repo, pr, existing);
     }
+
+    this.setPendingReviews(repo.repoId, pendingForRepo);
   }
 
   private async reconcileClosedPullRequestAttempts(

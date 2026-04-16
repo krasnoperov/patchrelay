@@ -3,7 +3,7 @@ import type { QueueEntryDetail, QueueWatchSnapshot } from "../types.ts";
 import { buildDisplayEntries } from "./display-filter.ts";
 import type { DashboardRepoState } from "./dashboard-model.ts";
 import { describeEntry, getChainEntries, getRepoHealth, projectStatsSummary, runtimeSummary } from "./dashboard-model.ts";
-import { ciStatusIcon, formatEventNarrative, humanStatus, relativeTime, shortSha, specChainLabel, summarizeQueueBlock, truncate } from "./format.ts";
+import { ciStatusIcon, formatEventNarrative, humanStatus, postMergeStatusLine, relativeTime, shortSha, specChainLabel, summarizeQueueBlock, truncate } from "./format.ts";
 
 interface ProjectDetailViewProps {
   repo: DashboardRepoState | null;
@@ -87,7 +87,7 @@ export function ProjectDetailView({
 
   const snapshot = repo.snapshot;
   const health = getRepoHealth(repo);
-  const queueBlockSummary = summarizeQueueBlock(snapshot.queueBlock);
+                const queueBlockSummary = summarizeQueueBlock(snapshot.queueBlock);
   const entries = buildDisplayEntries(snapshot.entries, filter);
   const currentSelectedIndex = selectedEntryIndex(snapshot, filter, selectedEntryId);
   const maxEntryRows = Math.max(3, Math.floor((rows - 16) / 2));
@@ -145,15 +145,16 @@ export function ProjectDetailView({
           <Text dimColor>No queue entries in this filter.</Text>
         ) : (
           visibleEntries.map((entry) => {
-            const ci = ciStatusIcon(entry);
-            const isHead = snapshot.summary.headEntryId === entry.id;
-            const isSelected = entry.id === selectedEntryId;
-            const statusColor = entry.status === "evicted" ? "red" : ci.color;
-            const statusText = compact ? compactEntryStatus(entry.status) : humanStatus(entry.status, entry);
+                const ci = ciStatusIcon(entry);
+                const isHead = snapshot.summary.headEntryId === entry.id;
+                const isSelected = entry.id === selectedEntryId;
+                const statusColor = entry.status === "evicted" ? "red" : ci.color;
+                const baseStatusText = compact ? compactEntryStatus(entry.status) : humanStatus(entry.status, entry);
+            const statusText = entry.status === "merged" ? `${baseStatusText}: ${postMergeStatusLine(entry)}` : baseStatusText;
             return (
               <Box key={entry.id} flexDirection="column">
                 <Box>
-                  <Text color={isSelected ? "cyan" : "gray"}>{isSelected ? ">" : " "}</Text>
+                <Text color={isSelected ? "cyan" : "gray"}>{isSelected ? ">" : " "}</Text>
                   <Text bold>{`#${entry.prNumber}`}</Text>
                   {entry.issueKey ? <Text>{` ${entry.issueKey}`}</Text> : null}
                   <Text>{`  `}</Text>
@@ -188,6 +189,9 @@ export function ProjectDetailView({
             </Text>
           )}
           {compact ? null : <Text dimColor>{`Test branch: ${specChainLabel(selectedEntry, snapshot.entries)}`}</Text>}
+          {selectedEntry.status === "merged" ? (
+            <Text dimColor>{`Post-merge: ${postMergeStatusLine(selectedEntry)}${selectedEntry.postMergeCheckedAt ? ` · ${relativeTime(selectedEntry.postMergeCheckedAt)} ago` : ""}`}</Text>
+          ) : null}
           {detail?.incidents.length
             ? detail.incidents.slice(-2).map((incident) => (
               <Text key={incident.id} color="red">

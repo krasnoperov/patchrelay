@@ -71,6 +71,9 @@ export function validateFlags(parsed: ParsedArgs): void {
     case "dashboard":
       assertKnownFlags(parsed, "root", ["config"]);
       return;
+    case "status":
+      assertKnownFlags(parsed, "root", ["config", "json"]);
+      return;
     case "init":
       assertKnownFlags(parsed, "root", ["force", "json"]);
       return;

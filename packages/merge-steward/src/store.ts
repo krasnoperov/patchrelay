@@ -26,6 +26,7 @@ export interface QueueStore {
     to: QueueEntryStatus,
     patch?: Partial<Pick<QueueEntry,
       "headSha" | "baseSha" | "ciRunId" | "ciRetries" | "retryAttempts" | "lastFailedBaseSha" | "specBranch" | "specSha" | "specBasedOn"
+      | "postMergeStatus" | "postMergeSha" | "postMergeSummary" | "postMergeCheckedAt"
     >>,
     detail?: string,
   ): void;

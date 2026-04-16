@@ -33,6 +33,12 @@ function mapEntry(row: Record<string, unknown>): QueueEntry {
     specBranch: row.spec_branch === null || row.spec_branch === undefined ? null : String(row.spec_branch),
     specSha: row.spec_sha === null || row.spec_sha === undefined ? null : String(row.spec_sha),
     specBasedOn: row.spec_based_on === null || row.spec_based_on === undefined ? null : String(row.spec_based_on),
+    postMergeStatus: row.post_merge_status === null || row.post_merge_status === undefined
+      ? undefined
+      : String(row.post_merge_status) as QueueEntry["postMergeStatus"],
+    postMergeSha: row.post_merge_sha === null || row.post_merge_sha === undefined ? undefined : String(row.post_merge_sha),
+    postMergeSummary: row.post_merge_summary === null || row.post_merge_summary === undefined ? undefined : String(row.post_merge_summary),
+    postMergeCheckedAt: row.post_merge_checked_at === null || row.post_merge_checked_at === undefined ? undefined : String(row.post_merge_checked_at),
     enqueuedAt: String(row.enqueued_at),
     updatedAt: String(row.updated_at),
   };
@@ -150,14 +156,18 @@ export class SqliteStore implements QueueStore {
         `INSERT INTO queue_entries
          (id, repo_id, pr_number, branch, head_sha, base_sha, status, position,
           priority, generation, ci_run_id, ci_retries, retry_attempts,
-          max_retries, last_failed_base_sha, issue_key, enqueued_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          max_retries, last_failed_base_sha, issue_key,
+          post_merge_status, post_merge_sha, post_merge_summary, post_merge_checked_at,
+          enqueued_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         entry.id, entry.repoId, entry.prNumber, entry.branch,
         entry.headSha, entry.baseSha, entry.status, entry.position,
         entry.priority, entry.generation, entry.ciRunId, entry.ciRetries,
         entry.retryAttempts, entry.maxRetries, entry.lastFailedBaseSha,
-        entry.issueKey, entry.enqueuedAt, entry.updatedAt,
+        entry.issueKey, entry.postMergeStatus, entry.postMergeSha,
+        entry.postMergeSummary, entry.postMergeCheckedAt,
+        entry.enqueuedAt, entry.updatedAt,
       );
       this.writeEvent(entry.id, null, entry.status);
     })();
@@ -166,7 +176,14 @@ export class SqliteStore implements QueueStore {
   transition(
     entryId: string,
     to: QueueEntryStatus,
-    patch?: Partial<Pick<QueueEntry, "headSha" | "baseSha" | "ciRunId" | "ciRetries" | "retryAttempts" | "lastFailedBaseSha" | "specBranch" | "specSha" | "specBasedOn">>,
+    patch?: Partial<
+      Pick<
+        QueueEntry,
+        "headSha" | "baseSha" | "ciRunId" | "ciRetries" | "retryAttempts" |
+        "lastFailedBaseSha" | "specBranch" | "specSha" | "specBasedOn" |
+        "postMergeStatus" | "postMergeSha" | "postMergeSummary" | "postMergeCheckedAt"
+      >
+    >,
     detail?: string,
   ): void {
     this.conn.transaction(() => {
@@ -185,6 +202,10 @@ export class SqliteStore implements QueueStore {
       if (patch?.specBranch !== undefined) { sets.push("spec_branch = ?"); values.push(patch.specBranch); }
       if (patch?.specSha !== undefined) { sets.push("spec_sha = ?"); values.push(patch.specSha); }
       if (patch?.specBasedOn !== undefined) { sets.push("spec_based_on = ?"); values.push(patch.specBasedOn); }
+      if (patch?.postMergeStatus !== undefined) { sets.push("post_merge_status = ?"); values.push(patch.postMergeStatus); }
+      if (patch?.postMergeSha !== undefined) { sets.push("post_merge_sha = ?"); values.push(patch.postMergeSha); }
+      if (patch?.postMergeSummary !== undefined) { sets.push("post_merge_summary = ?"); values.push(patch.postMergeSummary); }
+      if (patch?.postMergeCheckedAt !== undefined) { sets.push("post_merge_checked_at = ?"); values.push(patch.postMergeCheckedAt); }
 
       this.conn.prepare(
         `UPDATE queue_entries SET ${sets.join(", ")} WHERE id = ?`,
@@ -211,6 +232,7 @@ export class SqliteStore implements QueueStore {
           ci_run_id = NULL, ci_retries = 0, retry_attempts = 0,
           last_failed_base_sha = NULL,
           spec_branch = NULL, spec_sha = NULL, spec_based_on = NULL,
+          post_merge_status = NULL, post_merge_sha = NULL, post_merge_summary = NULL, post_merge_checked_at = NULL,
           updated_at = ?
          WHERE id = ?`,
       ).run(newHeadSha, newGen, isoNow(), entryId);

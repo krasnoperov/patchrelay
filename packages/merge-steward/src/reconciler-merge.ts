@@ -2,6 +2,7 @@ import type { QueueEntry } from "./types.ts";
 import type { ReconcileContext } from "./reconciler-core.ts";
 import { CLEAN_CI, CLEAN_SPEC, emit, isBudgetExhausted, ref } from "./reconciler-core.ts";
 import { cleanupSpec, evictEntry, invalidateDownstream } from "./reconciler-evict.ts";
+import { verifyPostMergeStatus } from "./reconciler-post-merge.ts";
 
 export async function mergeHead(ctx: ReconcileContext, entry: QueueEntry): Promise<void> {
   emit(ctx, entry, "merge_revalidating");
@@ -105,7 +106,18 @@ export async function mergeHead(ctx: ReconcileContext, entry: QueueEntry): Promi
   }
 
   emit(ctx, entry, "merge_succeeded");
-  ctx.store.transition(entry.id, "merged", CLEAN_SPEC, "spec pushed to main");
+  const verificationResult = await verifyPostMergeStatus(ctx, {
+    ...entry,
+    postMergeSha: entry.specSha ?? entry.headSha,
+  });
+  ctx.store.transition(entry.id, "merged", {
+    ...CLEAN_SPEC,
+    postMergeStatus: verificationResult.postMergeStatus,
+    postMergeSha: verificationResult.postMergeSha,
+    postMergeSummary: verificationResult.postMergeSummary,
+    postMergeCheckedAt: new Date().toISOString(),
+  }, `spec pushed to main; ${verificationResult.postMergeSummary}`);
+
   await cleanupSpec(ctx, entry);
 
   try {
