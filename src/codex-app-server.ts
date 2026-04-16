@@ -57,6 +57,7 @@ interface ForkThreadOverrides {
   sandboxMode?: CodexAppServerConfig["sandboxMode"] | undefined;
   model?: string | null | undefined;
   modelProvider?: string | null | undefined;
+  reasoningEffort?: CodexAppServerConfig["reasoningEffort"] | undefined;
   baseInstructions?: string | null | undefined;
   developerInstructions?: string | null | undefined;
 }
@@ -98,11 +99,22 @@ export class CodexAppServerClient extends EventEmitter {
   private stopping = false;
 
   constructor(
-    private readonly config: CodexAppServerConfig,
+    private config: CodexAppServerConfig,
     private readonly logger: Logger,
     private readonly spawnProcess: typeof spawn = spawn,
   ) {
     super();
+  }
+
+  /**
+   * Update runtime codex settings used by future thread/thread-fork calls.
+   * This allows service config changes to take effect without restarting.
+   */
+  setRuntimeConfig(config: CodexAppServerConfig): void {
+    this.config = {
+      ...this.config,
+      ...config,
+    };
   }
 
   isStarted(): boolean {
@@ -234,6 +246,7 @@ export class CodexAppServerClient extends EventEmitter {
       serviceName: this.config.serviceName ?? "patchrelay",
       model: this.config.model ?? null,
       modelProvider: this.config.modelProvider ?? null,
+      reasoningEffort: this.config.reasoningEffort ?? null,
       baseInstructions: this.config.baseInstructions ?? null,
       developerInstructions: this.config.developerInstructions ?? null,
       experimentalRawEvents: this.config.experimentalRawEvents ?? false,
@@ -250,6 +263,7 @@ export class CodexAppServerClient extends EventEmitter {
       sandbox: this.config.sandboxMode,
       model: this.config.model ?? null,
       modelProvider: this.config.modelProvider ?? null,
+      reasoningEffort: this.config.reasoningEffort ?? null,
       baseInstructions: this.config.baseInstructions ?? null,
       developerInstructions: this.config.developerInstructions ?? null,
     };
@@ -268,6 +282,7 @@ export class CodexAppServerClient extends EventEmitter {
       sandbox: overrides?.sandboxMode ?? this.config.sandboxMode,
       model: overrides?.model ?? this.config.model ?? null,
       modelProvider: overrides?.modelProvider ?? this.config.modelProvider ?? null,
+      reasoningEffort: overrides?.reasoningEffort ?? this.config.reasoningEffort ?? null,
       baseInstructions: overrides?.baseInstructions ?? this.config.baseInstructions ?? null,
       developerInstructions: overrides?.developerInstructions ?? this.config.developerInstructions ?? null,
     };

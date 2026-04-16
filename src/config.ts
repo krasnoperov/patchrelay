@@ -156,6 +156,7 @@ const configSchema = z.object({
       request_timeout_ms: z.number().int().positive().default(30000),
       model: z.string().optional(),
       model_provider: z.string().optional(),
+      reasoning_effort: z.enum(["low", "medium", "high"]).optional(),
       service_name: z.string().default("patchrelay"),
       base_instructions: z.string().optional(),
       developer_instructions: z.string().optional(),
@@ -640,6 +641,7 @@ export function loadConfig(
         requestTimeoutMs: parsed.runner.codex.request_timeout_ms,
         ...(parsed.runner.codex.model ? { model: parsed.runner.codex.model } : {}),
         ...(parsed.runner.codex.model_provider ? { modelProvider: parsed.runner.codex.model_provider } : {}),
+        ...(parsed.runner.codex.reasoning_effort ? { reasoningEffort: parsed.runner.codex.reasoning_effort } : {}),
         ...(parsed.runner.codex.service_name ? { serviceName: parsed.runner.codex.service_name } : {}),
         ...(parsed.runner.codex.base_instructions ? { baseInstructions: parsed.runner.codex.base_instructions } : {}),
         ...(parsed.runner.codex.developer_instructions

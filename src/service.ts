@@ -47,6 +47,7 @@ export class PatchRelayService {
     readonly codex: CodexAppServerClient,
     linearProvider: LinearClientProvider | LinearClient | undefined,
     readonly logger: Logger,
+    private readonly configPath?: string,
   ) {
     this.linearProvider = toLinearClientProvider(linearProvider);
     this.feed = new OperatorEventFeed(db.operatorFeed);
@@ -56,9 +57,14 @@ export class PatchRelayService {
     };
 
     this.orchestrator = new RunOrchestrator(
-      config, db, codex, this.linearProvider,
+      config,
+      db,
+      codex,
+      this.linearProvider,
       (projectId: string, issueId: string) => enqueueIssue(projectId, issueId),
-      logger, this.feed,
+      logger,
+      this.feed,
+      this.configPath,
     );
 
     this.webhookHandler = new WebhookHandler(

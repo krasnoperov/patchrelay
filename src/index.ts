@@ -58,7 +58,7 @@ async function main(): Promise<void> {
 
   const codex = new CodexAppServerClient(config.runner.codex, logger);
   const linearProvider = new DatabaseBackedLinearClientProvider(config, db, logger);
-  const service = new PatchRelayService(config, db, codex, linearProvider, logger);
+  const service = new PatchRelayService(config, db, codex, linearProvider, logger, configPath);
   await service.start();
   const app = await buildHttpServer(config, service, logger);
 
