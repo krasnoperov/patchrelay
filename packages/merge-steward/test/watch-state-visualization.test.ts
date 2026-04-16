@@ -22,6 +22,7 @@ function makeDetail(overrides?: Partial<QueueEntryDetail>): QueueEntryDetail {
       maxRetries: 2,
       lastFailedBaseSha: null,
       issueKey: "USE-41",
+      waitDetail: null,
       enqueuedAt: "2026-03-28T12:00:00.000Z",
       updatedAt: "2026-03-28T12:05:00.000Z",
     },
@@ -212,4 +213,44 @@ test("merge-steward observations explain when main is missing a required check",
   assert.match(observations[0]?.text ?? "", /missing required checks/i);
   assert.match(observations[0]?.text ?? "", /Tests/);
   assert.match(observations[0]?.text ?? "", /operator action/i);
+});
+
+test("merge-steward observations explain when merge is blocked on approval", () => {
+  const detail = makeDetail({
+    entry: {
+      ...makeDetail().entry,
+      status: "merging",
+      waitDetail: "blocking review present, waiting for approval",
+    },
+  });
+
+  const observations = buildExternalRepairObservations(detail, {
+    isHead: true,
+    activeIndex: 1,
+    activeCount: 1,
+    headPrNumber: 41,
+    queueBlock: null,
+  });
+
+  assert.match(observations[1]?.text ?? "", /blocked until GitHub approval returns/i);
+});
+
+test("merge-steward observations explain when merge is waiting on main verification", () => {
+  const detail = makeDetail({
+    entry: {
+      ...makeDetail().entry,
+      status: "merging",
+      waitDetail: "main checks still pending, holding merge",
+    },
+  });
+
+  const observations = buildExternalRepairObservations(detail, {
+    isHead: true,
+    activeIndex: 1,
+    activeCount: 1,
+    headPrNumber: 41,
+    queueBlock: null,
+  });
+
+  assert.match(observations[1]?.text ?? "", /waiting for main verification before landing/i);
 });

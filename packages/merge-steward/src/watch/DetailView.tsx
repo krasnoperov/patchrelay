@@ -47,7 +47,7 @@ export function DetailView({
       <Box gap={2}>
         <Text bold>#{entry.prNumber}</Text>
         {entry.issueKey ? <Text>{entry.issueKey}</Text> : null}
-        <Text color={statusColor(entry.status)}>{humanStatus(entry.status, entry)}</Text>
+        <Text color={statusColor(entry.status, entry)}>{humanStatus(entry.status, entry)}</Text>
         <Text dimColor>{`· ${nextStepLabel(entry.status, entry)}`}</Text>
       </Box>
 

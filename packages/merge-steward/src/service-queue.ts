@@ -16,6 +16,16 @@ function matchGlob(pattern: string, value: string): boolean {
   return regex.test(value);
 }
 
+function getLatestEvictedEntry(entries: QueueEntry[], prNumber: number): QueueEntry | undefined {
+  const evicted = entries.filter((entry) => entry.prNumber === prNumber && entry.status === "evicted");
+  evicted.sort((left, right) => {
+    const updatedDelta = Date.parse(right.updatedAt) - Date.parse(left.updatedAt);
+    if (updatedDelta !== 0) return updatedDelta;
+    return right.position - left.position;
+  });
+  return evicted[0];
+}
+
 export class MergeStewardQueueCommands {
   constructor(
     private readonly config: StewardConfig,
@@ -62,6 +72,7 @@ export class MergeStewardQueueCommands {
       specBranch: null,
       specSha: null,
       specBasedOn: null,
+      waitDetail: null,
       postMergeStatus: null,
       postMergeSha: null,
       postMergeSummary: null,
@@ -118,6 +129,15 @@ export class MergeStewardQueueCommands {
     const existing = this.store.getEntryByPR(this.config.repoId, prNumber);
     if (existing) {
       this.logger.debug({ prNumber }, "PR already queued, skipping admission");
+      return false;
+    }
+
+    const latestEvicted = getLatestEvictedEntry(this.store.listAll(this.config.repoId), prNumber);
+    if (latestEvicted?.headSha === headSha) {
+      this.logger.debug(
+        { prNumber, headSha, evictedEntryId: latestEvicted.id },
+        "PR head matches latest evicted entry, skipping admission until a new push",
+      );
       return false;
     }
 

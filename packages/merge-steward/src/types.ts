@@ -48,6 +48,8 @@ export interface QueueEntry {
   specSha: string | null;
   /** Entry ID of the previous entry this spec branch is based on. Null if based on main. */
   specBasedOn: string | null;
+  /** Optional human-facing wait reason when the entry is blocked inside its current state. */
+  waitDetail?: string | null;
   /** Post-merge verification status for the landed commit on main. */
   postMergeStatus: PostMergeStatus | null;
   /** Commit SHA used when checking post-merge status. */

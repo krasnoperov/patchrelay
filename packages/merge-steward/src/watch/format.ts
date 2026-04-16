@@ -39,14 +39,29 @@ export function relativeTime(iso: string | null | undefined): string {
   return `${days}d`;
 }
 
-export function statusColor(status: QueueEntryStatus): "yellow" | "cyan" | "green" | "red" | "gray" {
+export function mergeWaitState(entry: { status: QueueEntryStatus; waitDetail?: string | null | undefined } | undefined): "approval" | "main" | null {
+  if (!entry || entry.status !== "merging" || !entry.waitDetail) {
+    return null;
+  }
+  const detail = entry.waitDetail.toLowerCase();
+  if (detail.includes("approval") || detail.includes("review")) {
+    return "approval";
+  }
+  if (detail.includes("main")) {
+    return "main";
+  }
+  return null;
+}
+
+export function statusColor(status: QueueEntryStatus, entry?: { waitDetail?: string | null | undefined }): "yellow" | "cyan" | "green" | "red" | "gray" {
   switch (status) {
     case "queued":
       return "yellow";
     case "preparing_head":
     case "validating":
-    case "merging":
       return "cyan";
+    case "merging":
+      return mergeWaitState(entry ? { status, waitDetail: entry.waitDetail } : undefined) ? "yellow" : "cyan";
     case "merged":
       return "green";
     case "evicted":
@@ -56,7 +71,7 @@ export function statusColor(status: QueueEntryStatus): "yellow" | "cyan" | "gree
   }
 }
 
-export function humanStatus(status: QueueEntryStatus, entry?: { lastFailedBaseSha: string | null; specBranch: string | null }): string {
+export function humanStatus(status: QueueEntryStatus, entry?: { lastFailedBaseSha: string | null; specBranch: string | null; waitDetail?: string | null | undefined }): string {
   switch (status) {
     case "queued":
       return "waiting in queue";
@@ -66,6 +81,12 @@ export function humanStatus(status: QueueEntryStatus, entry?: { lastFailedBaseSh
     case "validating":
       return "testing";
     case "merging":
+      if (mergeWaitState(entry ? { status, waitDetail: entry.waitDetail } : undefined) === "approval") {
+        return "waiting for approval";
+      }
+      if (mergeWaitState(entry ? { status, waitDetail: entry.waitDetail } : undefined) === "main") {
+        return "waiting for main";
+      }
       return "merging";
     case "merged":
       return "merged";
@@ -92,7 +113,7 @@ export function queueProgress(status: QueueEntryStatus): { current: number; tota
   }
 }
 
-export function nextStepLabel(status: QueueEntryStatus, entry?: { lastFailedBaseSha: string | null; specBasedOn: string | null }): string {
+export function nextStepLabel(status: QueueEntryStatus, entry?: { lastFailedBaseSha: string | null; specBasedOn: string | null; waitDetail?: string | null | undefined }): string {
   switch (status) {
     case "queued":
       return "starting shortly";
@@ -104,6 +125,12 @@ export function nextStepLabel(status: QueueEntryStatus, entry?: { lastFailedBase
         ? "CI running, tested together with PRs ahead"
         : "CI running on combined changes";
     case "merging":
+      if (mergeWaitState(entry ? { status, waitDetail: entry.waitDetail } : undefined) === "approval") {
+        return "waiting for GitHub approval before landing on main";
+      }
+      if (mergeWaitState(entry ? { status, waitDetail: entry.waitDetail } : undefined) === "main") {
+        return "waiting for main checks to settle before landing";
+      }
       return "landing on main";
     case "merged":
       return "landed on main";
@@ -195,6 +222,13 @@ export function formatEventNarrative(
     return withDetail(`${prPrefix}started running CI.`, event.detail);
   }
   if (event.toStatus === "merging") {
+    const detail = event.detail?.toLowerCase() ?? "";
+    if (detail.includes("approval") || detail.includes("review")) {
+      return withDetail(`${prPrefix}is waiting for approval before merging to main.`, event.detail);
+    }
+    if (detail.includes("main")) {
+      return withDetail(`${prPrefix}is waiting for main verification before merging.`, event.detail);
+    }
     return withDetail(`${prPrefix}passed CI and started merging to main.`, event.detail);
   }
   if (event.toStatus === "merged") {
@@ -280,6 +314,7 @@ export function summarizeCheckNames(checks: CheckResult[], limit = 3): string {
 export function ciStatusIcon(entry: {
   status: QueueEntryStatus;
   ciRunId: string | null;
+  waitDetail?: string | null | undefined;
   postMergeStatus?: PostMergeStatus | null;
 }): { icon: string; color: string } {
   switch (entry.status) {
@@ -288,7 +323,8 @@ export function ciStatusIcon(entry: {
         icon: postMergeSymbol(entry.postMergeStatus as PostMergeStatus | null | undefined),
         color: postMergeColor(entry.postMergeStatus as PostMergeStatus | null | undefined),
       };
-    case "merging": return { icon: "\u2713", color: "cyan" };     // ✓
+    case "merging":
+      return mergeWaitState(entry) ? { icon: QUEUE_SYMBOLS.inProgress, color: "yellow" } : { icon: "\u2713", color: "cyan" };
     case "evicted": return { icon: "\u2717", color: "red" };      // ✗
     case "dequeued": return { icon: "\u2012", color: "gray" };    // ‒
     case "validating":

@@ -68,7 +68,7 @@ export class MemoryStore implements QueueStore {
   transition(
     entryId: string,
     to: QueueEntryStatus,
-    patch?: Partial<Pick<QueueEntry, "headSha" | "baseSha" | "ciRunId" | "ciRetries" | "retryAttempts" | "lastFailedBaseSha" | "specBranch" | "specSha" | "specBasedOn" | "postMergeStatus" | "postMergeSha" | "postMergeSummary" | "postMergeCheckedAt">>,
+    patch?: Partial<Pick<QueueEntry, "headSha" | "baseSha" | "ciRunId" | "ciRetries" | "retryAttempts" | "lastFailedBaseSha" | "specBranch" | "specSha" | "specBasedOn" | "waitDetail" | "postMergeStatus" | "postMergeSha" | "postMergeSummary" | "postMergeCheckedAt">>,
     detail?: string,
   ): void {
     const entry = this.entries.get(entryId);
@@ -86,12 +86,16 @@ export class MemoryStore implements QueueStore {
       if (patch.specBranch !== undefined) entry.specBranch = patch.specBranch;
       if (patch.specSha !== undefined) entry.specSha = patch.specSha;
       if (patch.specBasedOn !== undefined) entry.specBasedOn = patch.specBasedOn;
+      if (patch.waitDetail !== undefined) entry.waitDetail = patch.waitDetail;
       if (patch.postMergeStatus !== undefined) {
         entry.postMergeStatus = patch.postMergeStatus;
       }
       if (patch.postMergeSha !== undefined) entry.postMergeSha = patch.postMergeSha;
       if (patch.postMergeSummary !== undefined) entry.postMergeSummary = patch.postMergeSummary;
       if (patch.postMergeCheckedAt !== undefined) entry.postMergeCheckedAt = patch.postMergeCheckedAt;
+    }
+    if (from !== to && patch?.waitDetail === undefined) {
+      entry.waitDetail = null;
     }
     this.appendEvent(entryId, from, to, detail);
   }
@@ -114,6 +118,7 @@ export class MemoryStore implements QueueStore {
     entry.specBranch = null;
     entry.specSha = null;
     entry.specBasedOn = null;
+    entry.waitDetail = null;
     entry.postMergeStatus = null;
     entry.postMergeSha = null;
     entry.postMergeSummary = null;
