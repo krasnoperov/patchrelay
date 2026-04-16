@@ -29,6 +29,27 @@ function selectedEntryIndex(snapshot: QueueWatchSnapshot | null, filter: "active
   return index >= 0 ? index : 0;
 }
 
+function compactEntryStatus(entryStatus: string): string {
+  switch (entryStatus) {
+    case "queued":
+      return "waiting";
+    case "preparing_head":
+      return "prep";
+    case "validating":
+      return "testing";
+    case "merging":
+      return "merging";
+    case "merged":
+      return "merged";
+    case "evicted":
+      return "repair";
+    case "dequeued":
+      return "removed";
+    default:
+      return entryStatus;
+  }
+}
+
 export function ProjectDetailView({
   repo,
   selectedEntryId,
@@ -37,6 +58,8 @@ export function ProjectDetailView({
 }: ProjectDetailViewProps): React.JSX.Element {
   const { stdout } = useStdout();
   const rows = stdout?.rows ?? 24;
+  const width = stdout?.columns ?? 80;
+  const compact = width < 95;
 
   if (!repo) {
     return (
@@ -73,9 +96,10 @@ export function ProjectDetailView({
   const selectedEntry = entries.find((entry) => entry.id === selectedEntryId)
     ?? snapshot.entries.find((entry) => entry.id === selectedEntryId)
     ?? null;
+  const eventRows = compact ? 4 : 6;
   const visibleEvents = detail
-    ? detail.events.slice(-6)
-    : snapshot.recentEvents.slice(-6);
+    ? detail.events.slice(-eventRows)
+    : snapshot.recentEvents.slice(-eventRows);
   const chainEntries = getChainEntries(snapshot);
   const chainText = chainEntries.length > 0
     ? chainEntries.map((entry) => `#${entry.prNumber}`).join(" -> ")
@@ -85,25 +109,29 @@ export function ProjectDetailView({
     <Box flexDirection="column" marginTop={1}>
       <Box>
         <Text bold>{repo.repoId}</Text>
-        <Text dimColor>{`  ${repo.repoFullName}`}</Text>
         <Text>{`  `}</Text>
-        <Text color={health.color}>{health.label}</Text>
+        <Text color={health.color}>{compact ? health.label.slice(0, 5) : health.label}</Text>
       </Box>
-      <Text dimColor>{projectStatsSummary(snapshot)}</Text>
-      <Text dimColor>{runtimeSummary(snapshot)}</Text>
-      <Text dimColor>{`Queue: main -> ${truncate(chainText, 96)}`}</Text>
-      {queueBlockSummary ? <Text color="yellow">{queueBlockSummary}</Text> : null}
-      <Text dimColor>
-        GitHub required checks: {snapshot.githubPolicy.requiredChecks.length > 0 ? snapshot.githubPolicy.requiredChecks.join(", ") : "(none)"}
-      </Text>
-      {snapshot.githubPolicy.fetchedAt ? (
-        <Text dimColor>
-          Policy fetched {relativeTime(snapshot.githubPolicy.fetchedAt)} ago
-          {snapshot.githubPolicy.lastRefreshReason
-            ? ` via ${snapshot.githubPolicy.lastRefreshReason}${snapshot.githubPolicy.lastRefreshChanged === null ? "" : snapshot.githubPolicy.lastRefreshChanged ? " (changed)" : " (unchanged)"}`
-            : ""}
-        </Text>
-      ) : null}
+      <Text dimColor>{` ${projectStatsSummary(snapshot, compact)}`}</Text>
+      {compact ? null : <Text dimColor>{runtimeSummary(snapshot)}</Text>}
+      <Text dimColor>{`Queue: main -> ${truncate(chainText, compact ? width - 18 : 96)}`}</Text>
+      {compact ? null : queueBlockSummary ? <Text color="yellow">{queueBlockSummary}</Text> : null}
+
+      {compact ? null : (
+        <>
+          <Text dimColor>
+            GitHub required checks: {snapshot.githubPolicy.requiredChecks.length > 0 ? snapshot.githubPolicy.requiredChecks.join(", ") : "(none)"}
+          </Text>
+          {snapshot.githubPolicy.fetchedAt ? (
+            <Text dimColor>
+              Policy fetched {relativeTime(snapshot.githubPolicy.fetchedAt)} ago
+              {snapshot.githubPolicy.lastRefreshReason
+                ? ` via ${snapshot.githubPolicy.lastRefreshReason}${snapshot.githubPolicy.lastRefreshChanged === null ? "" : snapshot.githubPolicy.lastRefreshChanged ? " (changed)" : " (unchanged)"}`
+                : ""}
+            </Text>
+          ) : null}
+        </>
+      )}
 
       <Box marginTop={1} flexDirection="column">
         <Text bold>Pull Requests</Text>
@@ -113,21 +141,28 @@ export function ProjectDetailView({
           visibleEntries.map((entry) => {
             const ci = ciStatusIcon(entry);
             const isHead = snapshot.summary.headEntryId === entry.id;
+            const isSelected = entry.id === selectedEntryId;
+            const statusColor = entry.status === "evicted" ? "red" : ci.color;
+            const statusText = compact ? compactEntryStatus(entry.status) : humanStatus(entry.status, entry);
             return (
               <Box key={entry.id} flexDirection="column">
                 <Box>
-                  <Text color={entry.id === selectedEntryId ? "cyan" : "gray"}>{entry.id === selectedEntryId ? "\u25b8" : " "}</Text>
+                  <Text color={isSelected ? "cyan" : "gray"}>{isSelected ? "\u25b8" : " "}</Text>
                   <Text bold>{`#${entry.prNumber}`}</Text>
                   {entry.issueKey ? <Text>{` ${entry.issueKey}`}</Text> : null}
                   <Text>{`  `}</Text>
                   <Text color={ci.color}>{ci.icon}</Text>
-                  <Text>{` `}</Text>
-                  <Text {...(entry.status === "evicted" ? { color: "red" as const } : {})}>{humanStatus(entry.status, entry)}</Text>
-                  <Text dimColor>{`  updated ${relativeTime(entry.updatedAt)} ago`}</Text>
+                  <Text color={statusColor}>{` ${statusText}`}</Text>
+                  {compact ? null : (
+                    <>
+                      <Text dimColor>{`  updated ${relativeTime(entry.updatedAt)} ago`}</Text>
+                      {isHead ? <Text dimColor>{`  · ${humanStatus(entry.status, entry)} head`}</Text> : null}
+                    </>
+                  )}
                 </Box>
-                {(entry.id === selectedEntryId || entry.status === "evicted" || (isHead && queueBlockSummary)) && (
+                {(isSelected || entry.status === "evicted" || (isHead && queueBlockSummary)) && (
                   <Box paddingLeft={2}>
-                    <Text dimColor>{truncate(describeEntry(entry, { isHead, queueBlockSummary }), 110)}</Text>
+                    <Text dimColor>{truncate(describeEntry(entry, { isHead, queueBlockSummary }), compact ? width - 4 : 110)}</Text>
                   </Box>
                 )}
               </Box>
@@ -136,13 +171,17 @@ export function ProjectDetailView({
         )}
       </Box>
 
-      {selectedEntry && (
+      {selectedEntry ? (
         <Box marginTop={1} flexDirection="column">
           <Text bold>{`Selected PR #${selectedEntry.prNumber}`}</Text>
-          <Text dimColor>
-            {selectedEntry.branch} · head {shortSha(selectedEntry.headSha)} · base {shortSha(selectedEntry.baseSha)}
-          </Text>
-          <Text dimColor>{`Test branch: ${specChainLabel(selectedEntry, snapshot.entries)}`}</Text>
+          {compact ? (
+            <Text dimColor>{`head ${shortSha(selectedEntry.headSha)} · base ${shortSha(selectedEntry.baseSha)}`}</Text>
+          ) : (
+            <Text dimColor>
+              {selectedEntry.branch} · head {shortSha(selectedEntry.headSha)} · base {shortSha(selectedEntry.baseSha)}
+            </Text>
+          )}
+          {compact ? null : <Text dimColor>{`Test branch: ${specChainLabel(selectedEntry, snapshot.entries)}`}</Text>}
           {detail?.incidents.length
             ? detail.incidents.slice(-2).map((incident) => (
               <Text key={incident.id} color="red">
@@ -151,7 +190,7 @@ export function ProjectDetailView({
             ))
             : null}
         </Box>
-      )}
+      ) : null}
 
       <Box marginTop={1} flexDirection="column">
         <Text bold>{detail ? "Selected PR Activity" : "Recent Project Activity"}</Text>
@@ -161,7 +200,7 @@ export function ProjectDetailView({
           visibleEvents.map((event) => (
             <Box key={"id" in event && event.id ? String(event.id) : `${event.entryId}-${event.at}`} gap={1}>
               <Text dimColor>{relativeTime(event.at).padStart(4, " ")}</Text>
-              <Text>{truncate(formatEventNarrative(event), 106)}</Text>
+              <Text>{truncate(formatEventNarrative(event), compact ? Math.max(12, width - 8) : 106)}</Text>
             </Box>
           ))
         )}
