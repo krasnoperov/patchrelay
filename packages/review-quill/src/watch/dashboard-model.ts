@@ -1,4 +1,5 @@
 import type { ReviewAttemptRecord, ReviewQuillRepoSummary, ReviewQuillWatchSnapshot, WebhookEventRecord } from "../types.ts";
+import type { ReviewQuillPendingReview } from "../types.ts";
 import { getLatestAttemptsByPullRequest } from "../attempt-summary.ts";
 import { attemptLabel, relativeTime } from "./format.ts";
 
@@ -30,6 +31,21 @@ export interface CompactReviewQueueToken {
   color: "red" | "green" | "yellow" | "gray" | "white" | "cyan";
 }
 
+const QUEUE_SYMBOL = {
+  running: "\u25cf",
+  queued: "\u25cb",
+  completedApproved: "\u2713",
+  completedDeclined: "\u2717",
+  completedError: "\u26a0",
+  failed: "\u26a0",
+  stale: "\u26a0",
+  cancelled: "\u2013",
+  superseded: "\u21bb",
+  checksRunning: "\u25cf",
+  checksFailed: "\u2717",
+  checksUnknown: "\u25cb",
+};
+
 function repoAttempts(snapshot: ReviewQuillWatchSnapshot | null, repo: ReviewQuillRepoSummary): ReviewAttemptRecord[] {
   if (!snapshot) {
     return [];
@@ -42,6 +58,42 @@ function repoWebhooks(snapshot: ReviewQuillWatchSnapshot | null, repo: ReviewQui
     return [];
   }
   return snapshot.recentWebhooks.filter((event) => event.repoFullName === repo.repoFullName);
+}
+
+function repoPendingReviews(snapshot: ReviewQuillWatchSnapshot | null, repo: ReviewQuillRepoSummary): ReviewQuillPendingReview[] {
+  if (!snapshot) return [];
+  return snapshot.pendingReviews
+    .filter((pending) => pending.repoId === repo.repoId || pending.repoFullName === repo.repoFullName)
+    .sort((left, right) => {
+      const leftTime = new Date(left.updatedAt).getTime();
+      const rightTime = new Date(right.updatedAt).getTime();
+      if (leftTime !== rightTime) {
+        return rightTime - leftTime;
+      }
+      return right.prNumber - left.prNumber;
+    });
+}
+
+function pendingReviewSymbol(reason: ReviewQuillPendingReview["reason"]): string {
+  switch (reason) {
+    case "checks_running":
+      return QUEUE_SYMBOL.checksRunning;
+    case "checks_failed":
+      return QUEUE_SYMBOL.checksFailed;
+    case "checks_unknown":
+      return QUEUE_SYMBOL.checksUnknown;
+  }
+}
+
+function pendingReviewSymbolColor(reason: ReviewQuillPendingReview["reason"]): CompactReviewQueueToken["color"] {
+  switch (reason) {
+    case "checks_running":
+      return "yellow";
+    case "checks_failed":
+      return "red";
+    case "checks_unknown":
+      return "gray";
+  }
 }
 
 function repoAttemptStats(snapshot: ReviewQuillWatchSnapshot | null, repo: ReviewQuillRepoSummary): {
@@ -61,36 +113,36 @@ function repoAttemptStats(snapshot: ReviewQuillWatchSnapshot | null, repo: Revie
 
 function attemptSymbol(attempt: ReviewAttemptRecord): string {
   if (attempt.stale) {
-    return "\u26a0";
+    return QUEUE_SYMBOL.stale;
   }
   if (attempt.status === "running") {
-    return "\u25cf";
+    return QUEUE_SYMBOL.running;
   }
   if (attempt.status === "queued") {
-    return "\u25cb";
+    return QUEUE_SYMBOL.queued;
   }
   if (attempt.status === "failed") {
-    return "\u26a0";
+    return QUEUE_SYMBOL.failed;
   }
   if (attempt.status === "cancelled") {
-    return "\u2013";
+    return QUEUE_SYMBOL.cancelled;
   }
   if (attempt.status === "superseded") {
-    return "\u21bb";
+    return QUEUE_SYMBOL.superseded;
   }
   if (attempt.status === "completed") {
     if (attempt.conclusion === "approved") {
-      return "\u2713";
+      return QUEUE_SYMBOL.completedApproved;
     }
     if (attempt.conclusion === "declined") {
-      return "\u2717";
+      return QUEUE_SYMBOL.completedDeclined;
     }
     if (attempt.conclusion === "error") {
-      return "\u26a0";
+      return QUEUE_SYMBOL.completedError;
     }
-    return "\u2753";
+    return QUEUE_SYMBOL.checksUnknown;
   }
-  return "\u2753";
+  return QUEUE_SYMBOL.checksUnknown;
 }
 
 function attemptSymbolColor(attempt: ReviewAttemptRecord): CompactReviewQueueToken["color"] {
@@ -354,6 +406,10 @@ export function getReviewQueueText(
 
   if (compact) {
     if (attempts.length === 0) {
+      const pending = repoPendingReviews(snapshot, repo);
+      if (pending.length > 0) {
+        return `checks ${pending.slice(0, 10).map((entry) => `#${entry.prNumber}${pendingReviewSymbol(entry.reason)}`).join(" ")}`;
+      }
       return "idle";
     }
     return attempts.slice(0, 10).map((attempt) => `#${attempt.prNumber}${attemptSymbol(attempt)}`).join(" ");
@@ -365,6 +421,10 @@ export function getReviewQueueText(
     if (staleAttempts.length > 0) {
       return `${staleAttempts.length} stale attempt${staleAttempts.length === 1 ? "" : "s"} need cleanup`;
     }
+    const pending = repoPendingReviews(snapshot, repo);
+    if (pending.length > 0) {
+      return `checks pending ${pending.slice(0, 4).map((entry) => `#${entry.prNumber}${pendingReviewSymbol(entry.reason)}`).join(" ")}`;
+    }
     return "no eligible review work";
   }
   return activeOrQueued.map((attempt) => `#${attempt.prNumber} ${attemptLabel(attempt)}`).join("  ");
@@ -374,7 +434,9 @@ export function getCompactReviewQueueTokens(
   snapshot: ReviewQuillWatchSnapshot | null,
   repo: ReviewQuillRepoSummary,
 ): CompactReviewQueueToken[] {
+  const latestByPr = new Map<number, ReviewAttemptRecord>();
   const attempts = repoAttempts(snapshot, repo)
+    .filter((attempt) => !attempt.stale)
     .sort((left, right) => {
       const leftTime = new Date(left.updatedAt).getTime();
       const rightTime = new Date(right.updatedAt).getTime();
@@ -383,12 +445,33 @@ export function getCompactReviewQueueTokens(
       }
       return right.id - left.id;
     });
-
-  return attempts.slice(0, 10).map((attempt) => ({
+  for (const attempt of attempts) {
+    if (!latestByPr.has(attempt.prNumber)) {
+      latestByPr.set(attempt.prNumber, attempt);
+    }
+  }
+  const attemptTokens = [...latestByPr.values()].map((attempt) => ({
     prNumber: attempt.prNumber,
     symbol: attemptSymbol(attempt),
     color: attemptSymbolColor(attempt),
   }));
+
+  const pendingTokens = repoPendingReviews(snapshot, repo).flatMap((pending) => {
+    const latestAttempt = latestByPr.get(pending.prNumber);
+    if (latestAttempt && latestAttempt.headSha === pending.headSha) {
+      if (latestAttempt.status === "running" || latestAttempt.status === "queued") {
+        return [];
+      }
+    }
+    return [{
+      prNumber: pending.prNumber,
+      symbol: pendingReviewSymbol(pending.reason),
+      color: pendingReviewSymbolColor(pending.reason),
+    }];
+  });
+
+  const tokens = [...attemptTokens, ...pendingTokens];
+  return tokens.slice(0, 10);
 }
 
 export function getRecentActivity(snapshot: ReviewQuillWatchSnapshot | null, repoLookup: Map<string, ReviewQuillRepoSummary>): RecentActivityItem[] {

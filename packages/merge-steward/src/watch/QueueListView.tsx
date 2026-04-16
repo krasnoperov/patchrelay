@@ -3,7 +3,7 @@ import { Box, Text, useStdout } from "ink";
 import type { QueueBlockState, QueueEntry, QueueEventSummary } from "../types.ts";
 import { TERMINAL_STATUSES } from "../types.ts";
 import { buildChainEntries } from "./display-filter.ts";
-import { ciStatusIcon, formatEventSummary, humanStatus, isPendingMainVerification, nextStepLabel, relativeTime, statusColor, summarizeQueueBlock, truncate } from "./format.ts";
+import { ciStatusIcon, formatEventSummary, humanStatus, isPendingMainVerification, nextStepLabel, postMergeStatusLine, relativeTime, statusColor, summarizeQueueBlock, truncate } from "./format.ts";
 
 interface QueueListViewProps {
   entries: QueueEntry[];
@@ -32,6 +32,9 @@ function QueueRow({
   if (isTerminal) {
     const icon = entry.status === "merged" ? "\u2713" : "\u2717";
     const iconColor = entry.status === "merged" ? "green" : "red";
+    const statusSuffix = entry.status === "merged"
+      ? ` \u00b7 ${postMergeStatusLine(entry)}`
+      : "";
     return (
       <Box>
         <Text dimColor> </Text>
@@ -39,7 +42,7 @@ function QueueRow({
         {entry.issueKey ? <Text dimColor>{` ${entry.issueKey}`}</Text> : null}
         <Text dimColor>{`  ${relativeTime(entry.updatedAt).padStart(4)}`}</Text>
         <Text>{`  `}</Text>
-        <Text color={iconColor}>{`${icon} ${humanStatus(entry.status)}`}</Text>
+        <Text color={iconColor}>{`${icon} ${humanStatus(entry.status)}${statusSuffix}`}</Text>
       </Box>
     );
   }
@@ -61,7 +64,7 @@ function QueueRow({
 
   return (
     <Box>
-      <Text color={selected ? "cyan" : "gray"}>{selected ? ">" : " "}</Text>
+        <Text color={selected ? "cyan" : "gray"}>{selected ? ">" : " "}</Text>
       <Text {...(isHead ? { color: "green" } : {})} bold>{` #${entry.prNumber}`}</Text>
       {entry.issueKey ? <Text>{` ${entry.issueKey}`}</Text> : null}
       <Text dimColor>{`  ${relativeTime(entry.updatedAt).padStart(4)}`}</Text>
@@ -102,7 +105,7 @@ export function QueueListView({
               <Box key={entry.id} gap={0}>
                 <Text dimColor>{" \u2500 "}</Text>
                 <Text bold>#{entry.prNumber}</Text>
-                <Text color={ci.color}>{` ${ci.icon}`}</Text>
+                <Text color={ci.color}>{ci.icon}</Text>
               </Box>
             );
           })}

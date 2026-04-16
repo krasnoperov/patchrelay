@@ -109,12 +109,18 @@ export function ListView({
               </Text>
               <Text bold>{repo.repoId}</Text>
             </Box>
-            {compact ? (
-              <Box paddingLeft={2}>
-                {queueTokens.length === 0
-                  ? <Text>{truncate(queueText, queueWidth)}</Text>
-                  : <CompactReviewQueueTokens tokens={queueTokens} width={queueWidth} />}
-              </Box>
+        {compact ? (
+              <>
+                {queueTokens.length === 0 ? null : (
+                  <Box paddingLeft={2}>
+                    <CompactReviewQueueTokens tokens={queueTokens} width={queueWidth} />
+                  </Box>
+                ) : (
+                  <Box paddingLeft={2}>
+                    <Text dimColor>{truncate(queueText, queueWidth)}</Text>
+                  </Box>
+                )}
+              </>
             ) : (
               <>
                 <Text dimColor>{`  ${truncate(repo.repoFullName, 28)}`}</Text>

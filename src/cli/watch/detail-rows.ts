@@ -425,7 +425,7 @@ function renderHistoryRunLines(run: HistoryRunInfo, index: number, width: number
     run.fileChangeCount ? `${run.fileChangeCount} files` : null,
   ].filter((value): value is string => Boolean(value));
   const lines = renderTextLines(
-    `${gutter}${run.status === "completed" ? "✓" : run.status === "failed" ? "✗" : run.status === "running" ? "▸" : "•"} #${index + 1} (${RUN_LABELS[run.runType] ?? run.runType})${duration ? ` ${duration}` : ""}${stats.length ? `  ${stats.join(", ")}` : ""}`,
+    `${gutter}${run.status === "completed" ? "✓" : run.status === "failed" ? "✗" : run.status === "running" ? "▶" : "•"} #${index + 1} (${RUN_LABELS[run.runType] ?? run.runType})${duration ? ` ${duration}` : ""}${stats.length ? `  ${stats.join(", ")}` : ""}`,
     {
       key: `history-run-${run.id}`,
       width,

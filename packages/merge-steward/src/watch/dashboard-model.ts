@@ -1,7 +1,7 @@
 import type { QueueEntry, QueueWatchSnapshot } from "../types.ts";
 import type { RepoRuntimeState } from "../admin-types.ts";
 import { buildChainEntries, buildDisplayEntries } from "./display-filter.ts";
-import { formatDuration, humanStatus, nextStepLabel, relativeTime, summarizeQueueBlock } from "./format.ts";
+import { formatDuration, humanStatus, nextStepLabel, postMergeStatusLine, relativeTime, summarizeQueueBlock } from "./format.ts";
 
 export interface DashboardRepoConfig {
   repoId: string;
@@ -349,6 +349,10 @@ export function runtimeSummary(snapshot: QueueWatchSnapshot | null): string {
 export function describeEntry(entry: QueueEntry, options: { isHead: boolean; queueBlockSummary: string | null }): string {
   if (options.isHead && options.queueBlockSummary) {
     return options.queueBlockSummary;
+  }
+  if (entry.status === "merged") {
+    return `Landed on main. ${postMergeStatusLine(entry)}`
+      + (entry.postMergeCheckedAt ? ` (${relativeTime(entry.postMergeCheckedAt)} ago).` : ".");
   }
   if (entry.status === "queued") {
     if (entry.position > 1) {

@@ -26,6 +26,10 @@ export function ensureSchema(connection: DatabaseConnection): void {
       spec_branch TEXT,
       spec_sha TEXT,
       spec_based_on TEXT,
+      post_merge_status TEXT,
+      post_merge_sha TEXT,
+      post_merge_summary TEXT,
+      post_merge_checked_at TEXT,
       enqueued_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     )
@@ -70,10 +74,43 @@ export function ensureSchema(connection: DatabaseConnection): void {
     CREATE INDEX IF NOT EXISTS idx_queue_events_entry
       ON queue_events(entry_id, id)
   `);
+  ensureColumn(connection, "queue_entries", "post_merge_status", "TEXT");
+  ensureColumn(connection, "queue_entries", "post_merge_sha", "TEXT");
+  ensureColumn(connection, "queue_entries", "post_merge_summary", "TEXT");
+  ensureColumn(connection, "queue_entries", "post_merge_checked_at", "TEXT");
+  connection.exec(`
+    UPDATE queue_entries
+       SET post_merge_status = 'pending'
+     WHERE status = 'merged'
+       AND post_merge_status IS NULL
+  `);
+
   // Must match TERMINAL_STATUSES in types.ts: merged, evicted, dequeued
   connection.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_one_active_per_pr
       ON queue_entries(repo_id, pr_number)
       WHERE status NOT IN ('merged', 'evicted', 'dequeued')
   `);
+}
+
+function hasColumn(connection: DatabaseConnection, table: string, column: string): boolean {
+  const rows = connection.prepare(`PRAGMA table_info(${table})`).all();
+  for (const row of rows) {
+    if (String((row as Record<string, unknown>).name) === column) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function ensureColumn(
+  connection: DatabaseConnection,
+  table: string,
+  column: string,
+  type: string,
+): void {
+  if (hasColumn(connection, table, column)) {
+    return;
+  }
+  connection.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
 }

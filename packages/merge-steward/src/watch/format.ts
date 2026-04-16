@@ -1,4 +1,12 @@
-import type { CheckResult, QueueBlockState, QueueEntryStatus, QueueEventRecord, QueueEventSummary, QueueRuntimeStatus } from "../types.ts";
+import type { CheckResult, PostMergeStatus, QueueBlockState, QueueEntryStatus, QueueEventRecord, QueueEventSummary, QueueRuntimeStatus } from "../types.ts";
+
+const QUEUE_SYMBOLS = {
+  inProgress: "\u25cf",
+  checkPassed: "\u2713",
+  checkFailed: "\u2717",
+  checkPending: "\u25cf",
+  checkUnknown: "\u25cb",
+};
 
 export function isPendingMainVerification(block: QueueBlockState | null | undefined): boolean {
   return Boolean(
@@ -224,6 +232,38 @@ export function truncate(value: string, width: number): string {
   return `${value.slice(0, width - 1)}…`;
 }
 
+function postMergeSymbol(status: PostMergeStatus | null | undefined): string {
+  if (status === "pass") return QUEUE_SYMBOLS.checkPassed;
+  if (status === "fail") return QUEUE_SYMBOLS.checkFailed;
+  if (status === "pending") return QUEUE_SYMBOLS.checkPending;
+  return QUEUE_SYMBOLS.checkUnknown;
+}
+
+function postMergeColor(status: PostMergeStatus | null | undefined): string {
+  if (status === "pass") return "green";
+  if (status === "fail") return "red";
+  if (status === "pending") return "yellow";
+  return "gray";
+}
+
+export function postMergeLabel(status: PostMergeStatus | null | undefined): string {
+  if (status === "pass") return "checks passed";
+  if (status === "fail") return "checks failed";
+  if (status === "pending") return "checks running";
+  return "checks unknown";
+}
+
+export function postMergeStatusLine(entry: {
+  postMergeStatus?: PostMergeStatus | null;
+  postMergeSummary?: string | null;
+}): string {
+  const status = postMergeLabel(entry.postMergeStatus);
+  if (!entry.postMergeSummary) {
+    return status;
+  }
+  return `${status}: ${entry.postMergeSummary}`;
+}
+
 export function summarizeCheckNames(checks: CheckResult[], limit = 3): string {
   const names = [...new Set(checks.map((check) => check.name))];
   if (names.length === 0) return "unknown checks";
@@ -232,19 +272,27 @@ export function summarizeCheckNames(checks: CheckResult[], limit = 3): string {
 }
 
 /** CI status icon for the spec chain summary line. */
-export function ciStatusIcon(entry: { status: QueueEntryStatus; ciRunId: string | null }): { icon: string; color: string } {
+export function ciStatusIcon(entry: {
+  status: QueueEntryStatus;
+  ciRunId: string | null;
+  postMergeStatus?: PostMergeStatus | null;
+}): { icon: string; color: string } {
   switch (entry.status) {
-    case "merged": return { icon: "\u2713", color: "green" };     // ✓
+    case "merged":
+      return {
+        icon: postMergeSymbol(entry.postMergeStatus as PostMergeStatus | null | undefined),
+        color: postMergeColor(entry.postMergeStatus as PostMergeStatus | null | undefined),
+      };
     case "merging": return { icon: "\u2713", color: "cyan" };     // ✓
     case "evicted": return { icon: "\u2717", color: "red" };      // ✗
     case "dequeued": return { icon: "\u2012", color: "gray" };    // ‒
     case "validating":
-      return entry.ciRunId ? { icon: "\u25cf", color: "cyan" } : { icon: "\u25cb", color: "gray" };  // ● or ○
+      return entry.ciRunId ? { icon: QUEUE_SYMBOLS.inProgress, color: "cyan" } : { icon: QUEUE_SYMBOLS.checkUnknown, color: "gray" };
     case "preparing_head":
-      return { icon: "\u25cb", color: "yellow" };                  // ○
+      return { icon: QUEUE_SYMBOLS.checkUnknown, color: "yellow" };
     case "queued":
     default:
-      return { icon: "\u25cb", color: "gray" };                    // ○
+      return { icon: QUEUE_SYMBOLS.checkUnknown, color: "gray" };
   }
 }
 

@@ -1,4 +1,9 @@
 import type { ReviewEligibility, ReviewQuillRepositoryConfig } from "./types.ts";
+import type { CheckRunRecord } from "./types.ts";
+
+function normalizeCheckName(name: string): string {
+  return name.trim().toLowerCase();
+}
 
 function branchExcluded(repo: ReviewQuillRepositoryConfig, branchName: string): boolean {
   return repo.excludeBranches.some((pattern) => pattern.endsWith("*")
@@ -6,13 +11,22 @@ function branchExcluded(repo: ReviewQuillRepositoryConfig, branchName: string): 
     : branchName === pattern);
 }
 
-function requiredChecksGreen(requiredChecks: string[], checks: Array<{ name: string; status: string; conclusion?: string }>): boolean {
+function requiredChecksGreen(requiredChecks: string[], checks: CheckRunRecord[]): boolean {
   if (requiredChecks.length === 0) {
-    return checks.length > 0 && checks.every((check) => check.status === "completed" && ["success", "neutral", "skipped"].includes(check.conclusion ?? ""));
+    return checks.length > 0
+      && checks.every((check) => {
+        const conclusion = (check.conclusion ?? "").toLowerCase();
+        return check.status === "completed" && ["success", "neutral", "skipped"].includes(conclusion);
+      });
   }
   return requiredChecks.every((required) => {
-    const match = checks.find((check) => check.name === required);
-    return Boolean(match && match.status === "completed" && ["success", "neutral", "skipped"].includes(match.conclusion ?? ""));
+    const key = normalizeCheckName(required);
+    const match = checks.find((check) => normalizeCheckName(check.name) === key);
+    if (!match) {
+      return false;
+    }
+    const conclusion = (match.conclusion ?? "").toLowerCase();
+    return match.status === "completed" && ["success", "neutral", "skipped"].includes(conclusion);
   });
 }
 
@@ -31,7 +45,7 @@ export async function evaluateReviewEligibility(params: {
   if (branchExcluded(repo, branchName)) return { eligible: false, reason: "excluded_branch" };
   const checks = await github.listCheckRuns(repo.repoFullName, headSha);
   if (!requiredChecksGreen(repo.requiredChecks, checks)) {
-    return { eligible: false, reason: "required_checks_not_green" };
+    return { eligible: false, reason: "required_checks_not_green", checkRuns: checks };
   }
-  return { eligible: true };
+  return { eligible: true, checkRuns: checks };
 }

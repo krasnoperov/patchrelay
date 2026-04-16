@@ -22,6 +22,8 @@ export type QueueEntryStatus =
 
 export const TERMINAL_STATUSES: QueueEntryStatus[] = ["merged", "evicted", "dequeued"];
 
+export type PostMergeStatus = "pending" | "pass" | "fail" | "unknown";
+
 export interface QueueEntry {
   id: string;
   repoId: string;
@@ -46,6 +48,14 @@ export interface QueueEntry {
   specSha: string | null;
   /** Entry ID of the previous entry this spec branch is based on. Null if based on main. */
   specBasedOn: string | null;
+  /** Post-merge verification status for the landed commit on main. */
+  postMergeStatus?: PostMergeStatus | null;
+  /** Commit SHA used when checking post-merge status. */
+  postMergeSha?: string | null;
+  /** Optional one-line summary of post-merge checks. */
+  postMergeSummary?: string | null;
+  /** Timestamp of the most recent post-merge verification attempt. */
+  postMergeCheckedAt?: string | null;
   enqueuedAt: string;
   updatedAt: string;
 }
@@ -232,6 +242,8 @@ export type ReconcileAction =
   | "merge_waiting_approval" // approval withdrawn, waiting for re-approval
   | "sanitized_closed"    // entry terminalized: PR closed on GitHub
   | "sanitized_duplicate" // older duplicate entry superseded
+  | "post_merge_verification_started"
+  | "post_merge_verification_completed"
   | "branch_unreachable"; // branch gone or git operation failed unexpectedly
 
 export interface ReconcileEvent {
