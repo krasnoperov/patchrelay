@@ -669,7 +669,7 @@ export class ReviewQuillService {
       this.store.updateAttempt(attempt.id, {
         status: "completed",
         conclusion: attemptConclusion,
-        summary: result.verdict.walkthrough,
+        summary: result.verdict.walkthrough?.trim() || result.verdict.verdict_reason,
         threadId: result.threadId,
         turnId: result.turnId,
         externalCheckRunId: null,
