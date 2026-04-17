@@ -1,5 +1,11 @@
 import { Buffer } from "node:buffer";
-import type { CheckRunRecord, PullRequestFile, PullRequestReviewRecord, PullRequestSummary } from "./types.ts";
+import type {
+  CheckRunRecord,
+  PullRequestFile,
+  PullRequestReviewCommentRecord,
+  PullRequestReviewRecord,
+  PullRequestSummary,
+} from "./types.ts";
 
 export interface GitHubClientAuthProvider {
   currentTokenForRepo(repoFullName?: string): string | undefined;
@@ -220,6 +226,28 @@ export class GitHubClient {
     }));
   }
 
+  async listPullRequestReviewComments(repoFullName: string, prNumber: number): Promise<PullRequestReviewCommentRecord[]> {
+    const encodedRepo = repoFullName.split("/").map(encodeURIComponent).join("/");
+    const comments = await this.request<Array<Record<string, unknown>>>(
+      repoFullName,
+      `/repos/${encodedRepo}/pulls/${prNumber}/comments?per_page=100`,
+    );
+    return comments.map((comment) => ({
+      id: Number(comment.id),
+      ...(comment.pull_request_review_id !== null && comment.pull_request_review_id !== undefined
+        ? { reviewId: Number(comment.pull_request_review_id) }
+        : {}),
+      ...(typeof comment.body === "string" ? { body: comment.body } : {}),
+      ...(typeof comment.path === "string" ? { path: comment.path } : {}),
+      ...(typeof comment.line === "number" ? { line: comment.line } : {}),
+      ...(typeof comment.commit_id === "string" ? { commitId: comment.commit_id } : {}),
+      ...(typeof (comment.user as Record<string, unknown> | undefined)?.login === "string"
+        ? { authorLogin: String((comment.user as Record<string, unknown>).login) }
+        : {}),
+      ...(typeof comment.created_at === "string" ? { createdAt: comment.created_at } : {}),
+    }));
+  }
+
   async listCheckRuns(repoFullName: string, headSha: string): Promise<CheckRunRecord[]> {
     const encodedRepo = repoFullName.split("/").map(encodeURIComponent).join("/");
     const payload = await this.request<{ check_runs: Array<Record<string, unknown>> }>(
@@ -232,6 +260,15 @@ export class GitHubClient {
       status: String(check.status ?? ""),
       ...(typeof check.conclusion === "string" ? { conclusion: check.conclusion } : {}),
       ...(typeof check.details_url === "string" ? { detailsUrl: check.details_url } : {}),
+      ...(typeof (check.output as Record<string, unknown> | undefined)?.title === "string"
+        ? { outputTitle: String((check.output as Record<string, unknown>).title) }
+        : {}),
+      ...(typeof (check.output as Record<string, unknown> | undefined)?.summary === "string"
+        ? { outputSummary: String((check.output as Record<string, unknown>).summary) }
+        : {}),
+      ...(typeof (check.output as Record<string, unknown> | undefined)?.text === "string"
+        ? { outputText: String((check.output as Record<string, unknown>).text) }
+        : {}),
     }));
   }
 

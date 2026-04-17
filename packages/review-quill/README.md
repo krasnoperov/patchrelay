@@ -27,6 +27,11 @@ For each eligible PR head, `review-quill`:
 This keeps review grounded in the real repository state instead of only the
 GitHub files API.
 
+By default, a PR becomes eligible for review as soon as its branch head
+updates. If a repo needs the older behavior, set
+`waitForGreenChecks: true` in that repo's `review-quill` config to wait for
+configured checks to go green first.
+
 ## Quick Start
 
 ### 1. Install
@@ -78,6 +83,7 @@ review-quill repo attach owner/repo
 
 - it adds or updates one watched repository
 - it can auto-discover the default branch and required checks
+- it starts reviews immediately after branch updates unless you opt into waiting for green checks
 - it stores repo-local review doc paths
 - it reloads the service when needed
 

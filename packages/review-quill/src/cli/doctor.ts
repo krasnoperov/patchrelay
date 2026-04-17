@@ -212,13 +212,15 @@ export async function handleDoctor(parsed: ParsedArgs, stdout: Output, runComman
         const remoteChecks = [...discovered.requiredChecks].sort();
         const checksMatch = localChecks.length === remoteChecks.length && localChecks.every((value, index) => value === remoteChecks[index]);
         checks.push({
-          status: checksMatch ? "pass" : "warn",
+          status: !repo.waitForGreenChecks || checksMatch ? "pass" : "warn",
           scope: `repo:${repo.repoId}:github-required-checks`,
-          message: checksMatch
-            ? (localChecks.length > 0
-                ? `Local required checks match GitHub for ${repo.baseBranch}`
-                : `No required checks configured locally and GitHub does not require status checks for ${repo.baseBranch}`)
-            : `Local required checks [${localChecks.join(", ") || "(none)"}] differ from GitHub [${remoteChecks.join(", ") || "(none)"}] for ${repo.baseBranch}`,
+          message: !repo.waitForGreenChecks
+            ? "Review starts immediately after branch updates; required-check alignment is informational only."
+            : checksMatch
+              ? (localChecks.length > 0
+                  ? `Local required checks match GitHub for ${repo.baseBranch}`
+                  : `No required checks configured locally and GitHub does not require status checks for ${repo.baseBranch}`)
+              : `Local required checks [${localChecks.join(", ") || "(none)"}] differ from GitHub [${remoteChecks.join(", ") || "(none)"}] for ${repo.baseBranch}`,
         });
         checks.push({
           status: "pass",

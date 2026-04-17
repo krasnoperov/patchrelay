@@ -4,6 +4,7 @@ export interface ReviewQuillRepositoryConfig {
   repoId: string;
   repoFullName: string;
   baseBranch: string;
+  waitForGreenChecks: boolean;
   requiredChecks: string[];
   excludeBranches: string[];
   reviewDocs: string[];
@@ -93,6 +94,17 @@ export interface PullRequestReviewRecord {
   commitId?: string;
 }
 
+export interface PullRequestReviewCommentRecord {
+  id: number;
+  reviewId?: number;
+  body?: string;
+  path?: string;
+  line?: number;
+  commitId?: string;
+  authorLogin?: string;
+  createdAt?: string;
+}
+
 export interface PriorReviewClaim {
   authorLogin?: string;
   state?: string;
@@ -106,6 +118,9 @@ export interface CheckRunRecord {
   status: string;
   conclusion?: string;
   detailsUrl?: string;
+  outputTitle?: string;
+  outputSummary?: string;
+  outputText?: string;
 }
 
 export interface GuidanceDoc {

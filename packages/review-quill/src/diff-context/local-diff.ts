@@ -41,6 +41,7 @@ export function defaultDiffRepoConfig(repoFullName?: string, baseBranch?: string
     repoId: "local",
     repoFullName: repoFullName ?? "local/working-tree",
     baseBranch: baseBranch ?? "main",
+    waitForGreenChecks: false,
     requiredChecks: [],
     excludeBranches: [],
     reviewDocs: [],

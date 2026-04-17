@@ -27,6 +27,7 @@ import { handleTranscriptSource } from "./cli/transcript-source.ts";
 import { handleStatus } from "./cli/status.ts";
 import type { ResolveCommandRunner } from "./cli/resolve.ts";
 import type { CodexThreadSummary } from "./types.ts";
+import type { PrReviewFailureDetails } from "./cli/pr-status.ts";
 
 interface RunCliOptions {
   stdout?: Output;
@@ -36,6 +37,11 @@ interface RunCliOptions {
   readCodexThread?: (threadId: string) => Promise<CodexThreadSummary>;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
+  inspectFailureDetails?: (params: {
+    repoFullName: string;
+    prNumber: number;
+    headSha: string;
+  }) => Promise<PrReviewFailureDetails | undefined>;
 }
 
 function writeHelp(stream: Output, topic: HelpTopic): void {
@@ -161,6 +167,7 @@ export async function runCli(args: string[], options?: RunCliOptions): Promise<n
           resolveCommand: options?.resolveCommand,
           ...(options?.now ? { now: options.now } : {}),
           ...(options?.sleep ? { sleep: options.sleep } : {}),
+          ...(options?.inspectFailureDetails ? { inspectFailureDetails: options.inspectFailureDetails } : {}),
         });
       }
       default:
