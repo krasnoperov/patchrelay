@@ -1,58 +1,33 @@
 import { useEffect, useMemo, useState } from "react";
-import { Box, Text, useApp, useInput, useStdout } from "ink";
-import type { ReviewAttemptDetail, ReviewAttemptRecord, ReviewQuillWatchSnapshot } from "../types.ts";
-import { fetchAttemptDetail, fetchSnapshot, triggerReconcile } from "./api.ts";
+import { Box, Text, useApp, useInput } from "ink";
+import type { ReviewQuillWatchSnapshot } from "../types.ts";
+import { fetchSnapshot, triggerReconcile } from "./api.ts";
 import { DetailView } from "./DetailView.tsx";
 import { HelpBar } from "./HelpBar.tsx";
 import { ListView } from "./ListView.tsx";
 import { StatusBar } from "./StatusBar.tsx";
+import { buildDashboard, repoSelector, stepRepo } from "./dashboard-model.ts";
 
 interface AppProps {
   baseUrl: string;
 }
 
-type WatchFilter = "active" | "all";
 const REFRESH_INTERVAL_MS = 1_500;
-
-function nextSelection(attempts: ReviewAttemptRecord[], selectedAttemptId: number | null, direction: "next" | "prev"): number | null {
-  if (attempts.length === 0) {
-    return null;
-  }
-  const index = attempts.findIndex((attempt) => attempt.id === selectedAttemptId);
-  const currentIndex = index === -1 ? 0 : index;
-  const nextIndex = direction === "next"
-    ? (currentIndex + 1) % attempts.length
-    : (currentIndex - 1 + attempts.length) % attempts.length;
-  return attempts[nextIndex]?.id ?? null;
-}
 
 export function App({ baseUrl }: AppProps): React.JSX.Element {
   const { exit } = useApp();
-  const { stdout } = useStdout();
   const [connected, setConnected] = useState(false);
   const [snapshot, setSnapshot] = useState<ReviewQuillWatchSnapshot | null>(null);
-  const [detail, setDetail] = useState<ReviewAttemptDetail | null>(null);
-  const [selectedAttemptId, setSelectedAttemptId] = useState<number | null>(null);
+  const [selectedRepoFullName, setSelectedRepoFullName] = useState<string | null>(null);
   const [view, setView] = useState<"list" | "detail">("list");
-  const [filter, setFilter] = useState<WatchFilter>("active");
   const [flashMessage, setFlashMessage] = useState<string | null>(null);
   const [lastSnapshotReceivedAt, setLastSnapshotReceivedAt] = useState<number | null>(null);
-  const width = Math.max(20, stdout?.columns ?? 80);
-  const compact = width < 90;
 
-  const visibleAttempts = useMemo(() => {
-    const attempts = snapshot?.attempts ?? [];
-    if (filter === "all") return attempts;
-    return attempts.filter((attempt) => attempt.status === "queued" || attempt.status === "running");
-  }, [filter, snapshot?.attempts]);
+  const model = useMemo(() => buildDashboard(snapshot), [snapshot]);
 
-  const selectedRepoFullName = useMemo(() => {
-    if (!snapshot) {
-      return null;
-    }
-    const selectedAttempt = snapshot.attempts.find((attempt) => attempt.id === selectedAttemptId);
-    return selectedAttempt?.repoFullName ?? snapshot.repos[0]?.repoFullName ?? null;
-  }, [selectedAttemptId, snapshot]);
+  useEffect(() => {
+    setSelectedRepoFullName((current) => repoSelector(model.repos, current));
+  }, [model]);
 
   useEffect(() => {
     if (!flashMessage) return;
@@ -65,20 +40,11 @@ export function App({ baseUrl }: AppProps): React.JSX.Element {
 
     const refresh = async () => {
       try {
-        const nextSnapshot = await fetchSnapshot(baseUrl);
+        const next = await fetchSnapshot(baseUrl);
         if (cancelled) return;
-        setSnapshot(nextSnapshot);
+        setSnapshot(next);
         setLastSnapshotReceivedAt(Date.now());
         setConnected(true);
-        setSelectedAttemptId((current) => {
-          if (current && nextSnapshot.attempts.some((attempt) => attempt.id === current)) {
-            return current;
-          }
-          const nextVisible = filter === "all"
-            ? nextSnapshot.attempts
-            : nextSnapshot.attempts.filter((attempt) => attempt.status === "queued" || attempt.status === "running");
-          return nextVisible[0]?.id ?? nextSnapshot.attempts[0]?.id ?? null;
-        });
       } catch (error) {
         if (!cancelled) {
           setConnected(false);
@@ -96,42 +62,14 @@ export function App({ baseUrl }: AppProps): React.JSX.Element {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [baseUrl, filter]);
-
-  useEffect(() => {
-    if (view !== "detail" || !selectedAttemptId) {
-      setDetail(null);
-      return;
-    }
-    let cancelled = false;
-    const refresh = async () => {
-      try {
-        const nextDetail = await fetchAttemptDetail(baseUrl, selectedAttemptId);
-        if (!cancelled) {
-          setDetail(nextDetail);
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setFlashMessage(error instanceof Error ? error.message : String(error));
-        }
-      }
-    };
-    void refresh();
-    const interval = setInterval(() => {
-      void refresh();
-    }, REFRESH_INTERVAL_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [baseUrl, selectedAttemptId, view]);
+  }, [baseUrl]);
 
   async function runReconcile(): Promise<void> {
     try {
       const result = await triggerReconcile(baseUrl);
       setFlashMessage(result.started ? "reconcile tick completed" : "reconcile already running");
-      const nextSnapshot = await fetchSnapshot(baseUrl);
-      setSnapshot(nextSnapshot);
+      const next = await fetchSnapshot(baseUrl);
+      setSnapshot(next);
       setLastSnapshotReceivedAt(Date.now());
       setConnected(true);
     } catch (error) {
@@ -148,60 +86,50 @@ export function App({ baseUrl }: AppProps): React.JSX.Element {
       void runReconcile();
       return;
     }
+    if (input === "j" || key.downArrow) {
+      setSelectedRepoFullName((current) => stepRepo(model.repos, current, 1));
+      return;
+    }
+    if (input === "k" || key.upArrow) {
+      setSelectedRepoFullName((current) => stepRepo(model.repos, current, -1));
+      return;
+    }
     if (view === "list") {
-      if (input === "a") {
-        setFilter((current) => current === "active" ? "all" : "active");
-      } else if (input === "j" || key.downArrow) {
-        setSelectedAttemptId(nextSelection(visibleAttempts, selectedAttemptId, "next"));
-      } else if (input === "k" || key.upArrow) {
-        setSelectedAttemptId(nextSelection(visibleAttempts, selectedAttemptId, "prev"));
-      } else if (key.return && selectedAttemptId) {
+      if (key.return) {
         setView("detail");
       }
       return;
     }
-
     if (key.escape || key.backspace || key.delete) {
       setView("list");
-      return;
-    }
-    if (input === "j" || key.downArrow) {
-      setSelectedAttemptId(nextSelection(visibleAttempts, selectedAttemptId, "next"));
-    } else if (input === "k" || key.upArrow) {
-      setSelectedAttemptId(nextSelection(visibleAttempts, selectedAttemptId, "prev"));
     }
   });
 
   return (
     <Box flexDirection="column">
       <StatusBar
-        snapshot={snapshot}
         connected={connected}
-        filter={filter}
         lastSnapshotReceivedAt={lastSnapshotReceivedAt}
-        compact={compact}
       />
-      {view === "detail" && selectedAttemptId ? (
-        <DetailView detail={detail} compact={compact} />
-      ) : snapshot ? (
-        <ListView
-          snapshot={snapshot}
-          attempts={visibleAttempts}
-          selectedAttemptId={selectedAttemptId}
-          selectedRepoFullName={selectedRepoFullName}
-          compact={compact}
-        />
-      ) : (
+      {!snapshot ? (
         <Box marginTop={1}>
           <Text dimColor>Loading review-quill snapshot…</Text>
         </Box>
+      ) : view === "detail" ? (
+        <DetailView model={model} selectedRepoFullName={selectedRepoFullName} />
+      ) : (
+        <ListView
+          model={model}
+          selectedRepoFullName={selectedRepoFullName}
+          showCursor={true}
+        />
       )}
       {flashMessage ? (
         <Box marginTop={1}>
           <Text dimColor>{flashMessage}</Text>
         </Box>
       ) : null}
-      <HelpBar view={view} compact={compact} />
+      <HelpBar view={view} />
     </Box>
   );
 }
