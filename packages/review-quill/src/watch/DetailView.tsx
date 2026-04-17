@@ -57,21 +57,21 @@ export function DetailView({ model, selectedRepoFullName }: DetailViewProps): Re
   const afterRepoRow = Math.max(0, availableRows - 2);
   const entries = repo.entries;
 
-  type PlannedEntry = { entry: DashboardPrEntry; includeSummary: boolean; lines: number };
+  type PlannedEntry = { entry: DashboardPrEntry; includeSummary: boolean };
   const planned: PlannedEntry[] = [];
   let used = 0;
   const maxSummaryLines = 3;
 
   for (const entry of entries) {
     if (used >= afterRepoRow) break;
-    const phraseLine = 1;
-    if (used + phraseLine > afterRepoRow) break;
-    planned.push({ entry, includeSummary: false, lines: phraseLine });
-    used += phraseLine;
+    if (used + 1 > afterRepoRow) break;
+    planned.push({ entry, includeSummary: false });
+    used += 1;
   }
 
   if (afterRepoRow - used >= 2) {
-    for (const item of planned) {
+    for (let i = 0; i < planned.length; i += 1) {
+      const item = planned[i]!;
       if (!item.entry.summary) continue;
       const summaryText = clipSummary(item.entry.summary, {
         maxLines: maxSummaryLines,
@@ -79,10 +79,11 @@ export function DetailView({ model, selectedRepoFullName }: DetailViewProps): Re
       });
       if (!summaryText) continue;
       const summaryLines = summaryText.split("\n").length;
-      if (used + summaryLines > afterRepoRow) break;
+      const isLast = i === planned.length - 1;
+      const extra = summaryLines + (isLast ? 0 : 1);
+      if (used + extra > afterRepoRow) break;
       item.includeSummary = true;
-      item.lines += summaryLines;
-      used += summaryLines;
+      used += extra;
     }
   }
 
@@ -90,14 +91,15 @@ export function DetailView({ model, selectedRepoFullName }: DetailViewProps): Re
     <Box flexDirection="column" marginTop={1}>
       <RepoRow repo={repo} selected={false} showCursor={false} width={width - 2} />
       {planned.length > 0 ? <Box><Text> </Text></Box> : null}
-      {planned.map(({ entry, includeSummary }) => (
-        <PrEntryRow
-          key={entry.prNumber}
-          entry={entry}
-          width={width}
-          includeSummary={includeSummary}
-        />
-      ))}
+      {planned.map(({ entry, includeSummary }, index) => {
+        const isLast = index === planned.length - 1;
+        return (
+          <Box key={entry.prNumber} flexDirection="column">
+            <PrEntryRow entry={entry} width={width} includeSummary={includeSummary} />
+            {includeSummary && !isLast ? <Box><Text> </Text></Box> : null}
+          </Box>
+        );
+      })}
     </Box>
   );
 }
