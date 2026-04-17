@@ -93,7 +93,7 @@ export interface WatchIssueContext {
 
 export type WatchFilter = "all" | "active" | "non-done";
 
-export type WatchView = "list" | "detail";
+export type WatchView = "list" | "detail" | "log";
 
 export type DetailTab = "timeline" | "history";
 
@@ -132,6 +132,8 @@ export type WatchAction =
   | { type: "select"; index: number }
   | { type: "enter-detail"; issueKey: string }
   | { type: "exit-detail" }
+  | { type: "enter-log" }
+  | { type: "exit-log" }
   | { type: "detail-navigate"; direction: "next" | "prev"; filtered: WatchIssue[] }
   | { type: "detail-scroll"; delta: number }
   | { type: "detail-page"; direction: "up" | "down" }
@@ -345,6 +347,14 @@ export function watchReducer(state: WatchState, action: WatchAction): WatchState
 
     case "exit-detail":
       return { ...state, view: "list", activeDetailKey: null, ...DETAIL_INITIAL };
+
+    case "enter-log":
+      if (state.view !== "detail" || !state.activeDetailKey) return state;
+      return { ...state, view: "log", follow: true, detailScrollOffset: 0 };
+
+    case "exit-log":
+      if (state.view !== "log") return state;
+      return { ...state, view: "detail", follow: true, detailScrollOffset: 0 };
 
     case "detail-navigate": {
       const list = action.filtered;

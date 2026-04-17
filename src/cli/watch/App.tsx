@@ -5,6 +5,7 @@ import { useWatchStream } from "./use-watch-stream.ts";
 import { useDetailStream } from "./use-detail-stream.ts";
 import { IssueListView } from "./IssueListView.tsx";
 import { IssueDetailView } from "./IssueDetailView.tsx";
+import { LogView } from "./LogView.tsx";
 import {
   buildWatchDetailExportText,
   exportWatchTextToTempFile,
@@ -345,26 +346,17 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
         if (issue?.issueKey) {
           dispatch({ type: "enter-detail", issueKey: issue.issueKey });
         }
-      } else if (key.tab) {
+      } else if (input === "a" || key.tab) {
         dispatch({ type: "cycle-filter" });
       }
-    } else if (state.view === "detail") {
+      return;
+    }
+
+    if (state.view === "log") {
       if (key.escape || key.backspace || key.delete) {
-        dispatch({ type: "exit-detail" });
+        dispatch({ type: "exit-log" });
       } else if (input === "f") {
         dispatch({ type: "toggle-follow" });
-      } else if (input === "r") {
-        handleRetry();
-      } else if (input === "p") {
-        setPromptMode(true);
-        setPromptCursor(promptBuffer.length);
-      } else if (input === "s") {
-        if (state.activeDetailKey) {
-          showPersistentStatus("stopping...");
-          void postStop(baseUrl, state.activeDetailKey, bearerToken).then((result) => {
-            showStatus(result.ok ? "stop sent" : `stop failed: ${result.reason ?? "unknown"}`);
-          });
-        }
       } else if (input === "y") {
         handleCopyLastAssistant();
       } else if (input === "c") {
@@ -375,17 +367,13 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
         handleExportTranscript();
       } else if (input === "v") {
         handleOpenTranscriptInPager();
-      } else if (input === "h") {
-        dispatch({ type: "switch-detail-tab", tab: "history" });
-      } else if (input === "t") {
-        dispatch({ type: "switch-detail-tab", tab: "timeline" });
       } else if (input === "j" || key.downArrow) {
         dispatch({ type: "detail-scroll", delta: 1 });
       } else if (input === "k" || key.upArrow) {
         dispatch({ type: "detail-scroll", delta: -1 });
-      } else if (key.pageDown || (key.ctrl && input === "d") || (key.ctrl && key.downArrow)) {
+      } else if (key.pageDown || (key.ctrl && input === "d")) {
         dispatch({ type: "detail-page", direction: "down" });
-      } else if (key.pageUp || (key.ctrl && input === "u") || (key.ctrl && key.upArrow)) {
+      } else if (key.pageUp || (key.ctrl && input === "u")) {
         dispatch({ type: "detail-page", direction: "up" });
       } else if (key.home) {
         dispatch({ type: "detail-jump", target: "start" });
@@ -396,6 +384,44 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
       } else if (input === "]" || key.rightArrow) {
         dispatch({ type: "detail-navigate", direction: "next", filtered });
       }
+      return;
+    }
+
+    // detail view
+    if (key.escape || key.backspace || key.delete) {
+      dispatch({ type: "exit-detail" });
+    } else if (input === "l") {
+      dispatch({ type: "enter-log" });
+    } else if (input === "f") {
+      dispatch({ type: "toggle-follow" });
+    } else if (input === "r") {
+      handleRetry();
+    } else if (input === "p") {
+      setPromptMode(true);
+      setPromptCursor(promptBuffer.length);
+    } else if (input === "s") {
+      if (state.activeDetailKey) {
+        showPersistentStatus("stopping...");
+        void postStop(baseUrl, state.activeDetailKey, bearerToken).then((result) => {
+          showStatus(result.ok ? "stop sent" : `stop failed: ${result.reason ?? "unknown"}`);
+        });
+      }
+    } else if (input === "j" || key.downArrow) {
+      dispatch({ type: "detail-scroll", delta: 1 });
+    } else if (input === "k" || key.upArrow) {
+      dispatch({ type: "detail-scroll", delta: -1 });
+    } else if (key.pageDown || (key.ctrl && input === "d")) {
+      dispatch({ type: "detail-page", direction: "down" });
+    } else if (key.pageUp || (key.ctrl && input === "u")) {
+      dispatch({ type: "detail-page", direction: "up" });
+    } else if (key.home) {
+      dispatch({ type: "detail-jump", target: "start" });
+    } else if (key.end) {
+      dispatch({ type: "detail-jump", target: "end" });
+    } else if (input === "[" || key.leftArrow) {
+      dispatch({ type: "detail-navigate", direction: "prev", filtered });
+    } else if (input === "]" || key.rightArrow) {
+      dispatch({ type: "detail-navigate", direction: "next", filtered });
     }
   });
 
@@ -412,57 +438,58 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
       {state.view === "list" ? (
         <IssueListView
           issues={filtered}
-          allIssues={state.issues}
           selectedIndex={state.selectedIndex}
           connected={state.connected}
           lastServerMessageAt={state.lastServerMessageAt}
           filter={state.filter}
-          totalCount={state.issues.length}
           frozen={frozen}
           compact={compact}
         />
-      ) : state.view === "detail" ? (
-        <Box flexDirection="column">
-        {state.activeDetailKey && (
-          <Box>
-            <Text dimColor>Issues</Text>
-            <Text dimColor> › </Text>
-            <Text bold>{state.activeDetailKey}</Text>
-            <Text dimColor> › </Text>
-            <Text dimColor>{state.detailTab === "timeline" ? "Timeline" : "History"}</Text>
-          </Box>
-        )}
-        <IssueDetailView
-          issue={state.issues.find((i) => i.issueKey === state.activeDetailKey)}
+      ) : state.view === "log" ? (
+        <LogView
+          issue={activeIssue}
           timeline={state.timeline}
           follow={state.follow}
           scrollOffset={state.detailScrollOffset}
-          unreadBelow={state.detailUnreadBelow}
-          activeRunStartedAt={state.activeRunStartedAt}
           activeRunId={state.activeRunId}
-          tokenUsage={state.tokenUsage}
-          diffSummary={state.diffSummary}
-          plan={state.plan}
-          issueContext={state.issueContext}
-          detailTab={state.detailTab}
-          rawRuns={state.rawRuns}
-          rawFeedEvents={state.rawFeedEvents}
-          connected={state.connected}
-          lastServerMessageAt={state.lastServerMessageAt}
-          compact={compact}
           reservedRows={reservedRows}
           onLayoutChange={(viewportRows, contentRows) => {
             dispatch({ type: "detail-layout-updated", viewportRows, contentRows });
           }}
         />
-        {promptMode && (
-          <PromptComposer buffer={promptBuffer} cursor={promptCursor} />
-        )}
-        {promptStatus && !promptMode && (
-          <Text dimColor>{promptStatus}</Text>
-        )}
+      ) : (
+        <Box flexDirection="column">
+          <IssueDetailView
+            issue={activeIssue}
+            timeline={state.timeline}
+            follow={state.follow}
+            scrollOffset={state.detailScrollOffset}
+            unreadBelow={state.detailUnreadBelow}
+            activeRunStartedAt={state.activeRunStartedAt}
+            activeRunId={state.activeRunId}
+            tokenUsage={state.tokenUsage}
+            diffSummary={state.diffSummary}
+            plan={state.plan}
+            issueContext={state.issueContext}
+            detailTab={state.detailTab}
+            rawRuns={state.rawRuns}
+            rawFeedEvents={state.rawFeedEvents}
+            connected={state.connected}
+            lastServerMessageAt={state.lastServerMessageAt}
+            compact={compact}
+            reservedRows={reservedRows}
+            onLayoutChange={(viewportRows, contentRows) => {
+              dispatch({ type: "detail-layout-updated", viewportRows, contentRows });
+            }}
+          />
+          {promptMode && (
+            <PromptComposer buffer={promptBuffer} cursor={promptCursor} />
+          )}
+          {promptStatus && !promptMode && (
+            <Text dimColor>{promptStatus}</Text>
+          )}
         </Box>
-      ) : null}
+      )}
     </Box>
   );
 }

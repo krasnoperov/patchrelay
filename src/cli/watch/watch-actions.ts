@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { buildDetailLines } from "./detail-rows.ts";
+import { buildCodexLogLines } from "./codex-log-rows.ts";
 import { lineToPlainText } from "./render-rich-text.ts";
 import type { TimelineEntry, TimelineRunInput } from "./timeline-builder.ts";
 import type { DetailTab, OperatorFeedEvent, WatchDiffSummary, WatchIssue, WatchIssueContext, WatchTokenUsage } from "./watch-state.ts";
@@ -35,11 +36,14 @@ export function findLastCommandOutput(timeline: TimelineEntry[]): string | null 
 }
 
 export function buildWatchDetailExportText(input: WatchDetailExportInput): string {
-  const lines = buildDetailLines({
-    ...input,
-    width: input.width ?? 100,
-  });
-  return `${lines.map(lineToPlainText).join("\n").trimEnd()}\n`;
+  const width = input.width ?? 100;
+  const detail = buildDetailLines({ ...input, width });
+  const log = buildCodexLogLines(input.timeline, width);
+  const sections: string[] = [detail.map(lineToPlainText).join("\n").trimEnd()];
+  if (log.length > 0) {
+    sections.push(`app-server log\n${log.map(lineToPlainText).join("\n").trimEnd()}`);
+  }
+  return `${sections.join("\n\n").trimEnd()}\n`;
 }
 
 export function writeTextToClipboard(text: string, stream: NodeJS.WriteStream = process.stderr): boolean {

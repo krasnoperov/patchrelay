@@ -62,9 +62,9 @@ export function IssueDetailView({
       connected,
       lastServerMessageAt,
     }), width);
-    const helpRows = measureRenderedTextRows(buildHelpBarText("detail", follow, detailTab, compact), width);
+    const helpRows = measureRenderedTextRows(buildHelpBarText("detail", follow), width);
     return statusRows + helpRows;
-  }, [activeRunStartedAt, connected, detailTab, follow, lastServerMessageAt, unreadBelow, width, compact]);
+  }, [activeRunStartedAt, connected, follow, lastServerMessageAt, unreadBelow, width]);
   const viewportRows = Math.max(4, totalRows - reservedRows - footerRows);
 
   const lines = useMemo(() => {
@@ -124,7 +124,7 @@ export function IssueDetailView({
         connected={connected}
         lastServerMessageAt={lastServerMessageAt}
       />
-      <HelpBar view="detail" follow={follow} detailTab={detailTab} compact={compact} />
+      <HelpBar view="detail" follow={follow} />
     </Box>
   );
 }
