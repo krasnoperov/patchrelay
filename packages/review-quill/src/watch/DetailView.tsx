@@ -1,116 +1,103 @@
-import { Box, Text } from "ink";
-import type { ReviewAttemptDetail } from "../types.ts";
-import { attemptLabel, attemptStateColor, formatSha, formatTimestamp, relativeTime, truncate } from "./format.ts";
+import { Box, Text, useStdout } from "ink";
+import { RepoRow } from "./ListView.tsx";
+import { clipSummary, type DashboardModel, type DashboardPrEntry, type DashboardRepo } from "./dashboard-model.ts";
 
 interface DetailViewProps {
-  detail: ReviewAttemptDetail | null;
-  compact?: boolean;
+  model: DashboardModel;
+  selectedRepoFullName: string | null;
 }
 
-export function DetailView({ detail, compact = false }: DetailViewProps): React.JSX.Element {
-  if (!detail) {
-    return (
-      <Box marginTop={1}>
-        <Text dimColor>Loading attempt detail…</Text>
+const PR_ID_WIDTH = 7;
+const SUMMARY_INDENT = 9;
+
+function PrEntryRow({
+  entry,
+  width,
+  includeSummary,
+}: {
+  entry: DashboardPrEntry;
+  width: number;
+  includeSummary: boolean;
+}): React.JSX.Element {
+  const idText = `#${entry.prNumber}`.padEnd(PR_ID_WIDTH, " ");
+  const summaryText = includeSummary
+    ? clipSummary(entry.summary, { maxLines: 3, width: Math.max(20, width - SUMMARY_INDENT) })
+    : "";
+  return (
+    <Box flexDirection="column">
+      <Box>
+        <Text color={entry.color}>{idText}</Text>
+        <Text color={entry.color}>{entry.glyph}</Text>
+        <Text>{`  ${entry.phrase}`}</Text>
       </Box>
-    );
+      {summaryText ? (
+        <Box>
+          <Text>{" ".repeat(SUMMARY_INDENT)}</Text>
+          <Text dimColor>{summaryText}</Text>
+        </Box>
+      ) : null}
+    </Box>
+  );
+}
+
+export function DetailView({ model, selectedRepoFullName }: DetailViewProps): React.JSX.Element {
+  const { stdout } = useStdout();
+  const rows = Math.max(3, stdout?.rows ?? 24);
+  const width = Math.max(40, stdout?.columns ?? 80);
+
+  const repo: DashboardRepo | null = selectedRepoFullName
+    ? model.repos.find((candidate) => candidate.repoFullName === selectedRepoFullName) ?? model.repos[0] ?? null
+    : model.repos[0] ?? null;
+
+  if (!repo) {
+    return <Box marginTop={1}><Text dimColor> </Text></Box>;
   }
 
-  const { attempt } = detail;
-  const currentPullRequest = detail.currentPullRequest;
-  const latestAttempt = detail.relatedAttempts[0] ?? attempt;
-  const isLatestForPullRequest = latestAttempt.id === attempt.id;
-  const resultLabel = attempt.status === "completed"
-    ? attempt.conclusion === "approved"
-      ? "Latest stored review result: approved"
-      : attempt.conclusion === "declined"
-        ? "Latest stored review result: requested changes"
-        : `Latest stored review result: ${attemptLabel(attempt)}`
-    : `Attempt state: ${attemptLabel(attempt)}`;
-  const reviewedHeadLabel = isLatestForPullRequest
-    ? "This is the latest stored review result for this pull request."
-    : `This is historical review output. A newer attempt (#${latestAttempt.id}) exists for this pull request.`;
+  const availableRows = Math.max(1, rows - 3);
+  const afterRepoRow = Math.max(0, availableRows - 2);
+  const entries = repo.entries;
 
-  if (compact) {
-    return (
-      <Box flexDirection="column" marginTop={1}>
-        <Text bold>{`${attempt.repoFullName} PR #${attempt.prNumber}`}</Text>
-        <Box>
-          <Text>Result: </Text>
-          <Text color={attemptStateColor(attempt)}>{attemptLabel(attempt)}</Text>
-          {attempt.status === "completed" && attempt.conclusion === "approved" ? <Text dimColor> (approved)</Text> : null}
-        </Box>
-        <Text>{attempt.staleReason ? `Stale: ${attempt.staleReason}` : resultLabel}</Text>
-        {currentPullRequest ? (
-          <Text>{`PR state: ${currentPullRequest.state.toLowerCase()}${currentPullRequest.isDraft ? " (draft)" : ""}`}</Text>
-        ) : null}
-        <Text>{`Reviewed head: ${formatSha(attempt.headSha)}${currentPullRequest && currentPullRequest.headSha !== attempt.headSha ? " (outdated)" : ""}`}</Text>
-        <Text dimColor>{`Updated: ${relativeTime(attempt.updatedAt)} ago`}</Text>
-        {attempt.summary ? (
-          <Text>{`Summary: ${truncate(attempt.summary, 140)}`}</Text>
-        ) : (
-          <Text>Summary: No summary captured.</Text>
-        )}
+  type PlannedEntry = { entry: DashboardPrEntry; includeSummary: boolean; lines: number };
+  const planned: PlannedEntry[] = [];
+  let used = 0;
+  const maxSummaryLines = 3;
 
-        <Box marginTop={1} flexDirection="column">
-          <Text bold>Review History</Text>
-          {detail.relatedAttempts.slice(0, 2).map((related) => (
-            <Box key={related.id}>
-              <Text>{`#${related.id}`}</Text>
-              <Text>{` ${formatSha(related.headSha)}`}</Text>
-              <Text>{` `}</Text>
-              <Text color={attemptStateColor(related)}>{attemptLabel(related)}</Text>
-              <Text dimColor>{` ${relativeTime(related.updatedAt)} ago`}</Text>
-            </Box>
-          ))}
-        </Box>
-      </Box>
-    );
+  for (const entry of entries) {
+    if (used >= afterRepoRow) break;
+    const phraseLine = 1;
+    if (used + phraseLine > afterRepoRow) break;
+    planned.push({ entry, includeSummary: false, lines: phraseLine });
+    used += phraseLine;
+  }
+
+  if (afterRepoRow - used >= 2) {
+    for (const item of planned) {
+      if (!item.entry.summary) continue;
+      const summaryText = clipSummary(item.entry.summary, {
+        maxLines: maxSummaryLines,
+        width: Math.max(20, width - SUMMARY_INDENT),
+      });
+      if (!summaryText) continue;
+      const summaryLines = summaryText.split("\n").length;
+      if (used + summaryLines > afterRepoRow) break;
+      item.includeSummary = true;
+      item.lines += summaryLines;
+      used += summaryLines;
+    }
   }
 
   return (
     <Box flexDirection="column" marginTop={1}>
-      <Text bold>{`${attempt.repoFullName} PR #${attempt.prNumber}`}</Text>
-      <Box>
-        <Text>Result: </Text>
-        <Text color={attemptStateColor(attempt)}>{attemptLabel(attempt)}</Text>
-      </Box>
-      <Text>{resultLabel}</Text>
-      {currentPullRequest ? (
-        <Text>{`PR state: ${currentPullRequest.state.toLowerCase()}${currentPullRequest.isDraft ? " (draft)" : ""}`}</Text>
-      ) : null}
-      {attempt.staleReason ? <Text>{`Stale: ${attempt.staleReason}`}</Text> : null}
-      <Text>{`Reviewed head: ${formatSha(attempt.headSha)}`}</Text>
-      {currentPullRequest ? (
-        <Text>
-          {`Current PR head: ${formatSha(currentPullRequest.headSha)}${currentPullRequest.headSha === attempt.headSha ? " (matches reviewed head)" : " (newer than this review result)"}`}
-        </Text>
-      ) : null}
-      <Text>{reviewedHeadLabel}</Text>
-      <Text>{`Created: ${formatTimestamp(attempt.createdAt)} (${relativeTime(attempt.createdAt)} ago)`}</Text>
-      <Text>{`Updated: ${formatTimestamp(attempt.updatedAt)} (${relativeTime(attempt.updatedAt)} ago)`}</Text>
-      {attempt.completedAt ? <Text>{`Completed: ${formatTimestamp(attempt.completedAt)} (${relativeTime(attempt.completedAt)} ago)`}</Text> : null}
-      {attempt.externalCheckRunId ? <Text>{`Check run: ${attempt.externalCheckRunId}`}</Text> : null}
-      {attempt.threadId ? <Text>{`Thread: ${attempt.threadId}`}</Text> : null}
-      {attempt.turnId ? <Text>{`Turn: ${attempt.turnId}`}</Text> : null}
-
-      <Box marginTop={1} flexDirection="column">
-        <Text bold>Review Summary</Text>
-        <Text>{attempt.summary ?? "No summary captured."}</Text>
-      </Box>
-
-      <Box marginTop={1} flexDirection="column">
-        <Text bold>Review History</Text>
-        {detail.relatedAttempts.map((related) => (
-          <Box key={related.id}>
-            <Text>{`#${related.id}`}</Text>
-            <Text>{` ${formatSha(related.headSha)}`}</Text>
-            <Text>{` `}</Text>
-            <Text color={attemptStateColor(related)}>{attemptLabel(related)}</Text>
-            <Text dimColor>{` ${relativeTime(related.updatedAt)} ago`}</Text>
-          </Box>
-        ))}
-      </Box>
+      <RepoRow repo={repo} selected={false} showCursor={false} width={width - 2} />
+      {planned.length > 0 ? <Box><Text> </Text></Box> : null}
+      {planned.map(({ entry, includeSummary }) => (
+        <PrEntryRow
+          key={entry.prNumber}
+          entry={entry}
+          width={width}
+          includeSummary={includeSummary}
+        />
+      ))}
     </Box>
   );
 }

@@ -1,53 +1,45 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { getLatestAttemptsByPullRequest } from "../src/attempt-summary.ts";
 import {
-  clusterSummaryText,
-  getCompactReviewQueueTokens,
-  getRecentActivity,
-  getRepoHealth,
-  getReviewQueueText,
-  projectStatsSummary,
+  buildDashboard,
+  clipSummary,
+  stepRepo,
 } from "../src/watch/dashboard-model.ts";
-import type { ReviewAttemptRecord, ReviewQuillPendingReview, ReviewQuillRepoSummary, ReviewQuillWatchSnapshot, WebhookEventRecord } from "../src/types.ts";
+import type {
+  ReviewAttemptRecord,
+  ReviewQuillPendingReview,
+  ReviewQuillRepoSummary,
+  ReviewQuillWatchSnapshot,
+} from "../src/types.ts";
+
+const NOW = Date.parse("2026-04-17T12:00:00.000Z");
 
 function fakeAttempt(overrides: Partial<ReviewAttemptRecord> = {}): ReviewAttemptRecord {
   return {
     id: 1,
-    repoFullName: "krasnoperov/ballony-i-nasosy",
+    repoFullName: "owner/repo-a",
     prNumber: 55,
     headSha: "head-sha",
     status: "completed",
     conclusion: "approved",
-    createdAt: "2026-04-09T20:00:00.000Z",
-    updatedAt: "2026-04-09T20:01:00.000Z",
+    createdAt: "2026-04-17T11:00:00.000Z",
+    updatedAt: "2026-04-17T11:30:00.000Z",
     ...overrides,
   };
 }
 
 function fakeRepo(overrides: Partial<ReviewQuillRepoSummary> = {}): ReviewQuillRepoSummary {
   return {
-    repoId: "ballony-i-nasosy",
-    repoFullName: "krasnoperov/ballony-i-nasosy",
+    repoId: "repo-a",
+    repoFullName: "owner/repo-a",
     baseBranch: "main",
-    totalAttempts: 1,
+    totalAttempts: 0,
     queuedAttempts: 0,
     runningAttempts: 0,
-    completedAttempts: 1,
+    completedAttempts: 0,
     failedAttempts: 0,
-    latestAttemptAt: "2026-04-09T20:01:00.000Z",
-    latestConclusion: "approved",
-    ...overrides,
-  };
-}
-
-function fakeWebhook(overrides: Partial<WebhookEventRecord> = {}): WebhookEventRecord {
-  return {
-    deliveryId: "delivery-1",
-    eventType: "check_run",
-    repoFullName: "krasnoperov/ballony-i-nasosy",
-    receivedAt: "2026-04-09T20:05:00.000Z",
-    processedAt: "2026-04-09T20:05:01.000Z",
+    latestAttemptAt: null,
+    latestConclusion: null,
     ...overrides,
   };
 }
@@ -55,7 +47,6 @@ function fakeWebhook(overrides: Partial<WebhookEventRecord> = {}): WebhookEventR
 function fakeSnapshot(params: {
   repos?: ReviewQuillRepoSummary[];
   attempts?: ReviewAttemptRecord[];
-  recentWebhooks?: WebhookEventRecord[];
   pendingReviews?: ReviewQuillPendingReview[];
 } = {}): ReviewQuillWatchSnapshot {
   return {
@@ -69,282 +60,191 @@ function fakeSnapshot(params: {
     },
     runtime: {
       reconcileInProgress: false,
-      lastReconcileStartedAt: "2026-04-09T20:05:00.000Z",
-      lastReconcileCompletedAt: "2026-04-09T20:05:01.000Z",
-      lastReconcileOutcome: "succeeded",
+      lastReconcileStartedAt: null,
+      lastReconcileCompletedAt: null,
+      lastReconcileOutcome: "idle",
       lastReconcileError: null,
     },
     repos: params.repos ?? [fakeRepo()],
     attempts: params.attempts ?? [],
-    recentWebhooks: params.recentWebhooks ?? [],
+    recentWebhooks: [],
     pendingReviews: params.pendingReviews ?? [],
   };
 }
 
-test("getLatestAttemptsByPullRequest keeps only the latest attempt per repo PR", () => {
-  const attempts = getLatestAttemptsByPullRequest([
-    fakeAttempt({ id: 1, prNumber: 55, status: "failed", conclusion: "error", updatedAt: "2026-04-09T20:00:00.000Z" }),
-    fakeAttempt({ id: 2, prNumber: 55, status: "completed", conclusion: "approved", updatedAt: "2026-04-09T20:02:00.000Z" }),
-    fakeAttempt({ id: 3, repoFullName: "krasnoperov/blog", prNumber: 12, updatedAt: "2026-04-09T20:01:00.000Z" }),
-  ]);
-
-  assert.equal(attempts.length, 2);
-  assert.equal(attempts[0]?.id, 2);
-  assert.equal(attempts[1]?.id, 3);
-});
-
-test("repo health ignores older failed attempts once the same PR was later approved", () => {
+test("PR token color matches glyph color for each kind", () => {
   const repo = fakeRepo();
   const snapshot = fakeSnapshot({
     repos: [repo],
     attempts: [
-      fakeAttempt({ id: 1, prNumber: 55, status: "failed", conclusion: "error", updatedAt: "2026-04-09T20:00:00.000Z", summary: "older failure" }),
-      fakeAttempt({ id: 2, prNumber: 55, status: "completed", conclusion: "approved", updatedAt: "2026-04-09T20:03:00.000Z" }),
+      fakeAttempt({ id: 1, prNumber: 1, status: "completed", conclusion: "approved", updatedAt: "2026-04-17T11:50:00.000Z" }),
+      fakeAttempt({ id: 2, prNumber: 2, status: "completed", conclusion: "declined", updatedAt: "2026-04-17T11:51:00.000Z" }),
+      fakeAttempt({ id: 3, prNumber: 3, status: "running", conclusion: undefined, updatedAt: "2026-04-17T11:55:00.000Z" }),
     ],
   });
 
-  const health = getRepoHealth(snapshot, repo);
-  assert.equal(health.kind, "idle");
-  assert.match(health.detail, /Latest stored review result: PR #55 approved/);
+  const model = buildDashboard(snapshot, { now: NOW });
+  const [only] = model.repos;
+  assert.ok(only);
+  const byPr = new Map(only!.tokens.map((token) => [token.prNumber, token]));
+  assert.equal(byPr.get(1)?.color, "green");
+  assert.equal(byPr.get(1)?.glyph, "\u2713");
+  assert.equal(byPr.get(2)?.color, "red");
+  assert.equal(byPr.get(2)?.glyph, "\u2717");
+  assert.equal(byPr.get(3)?.color, "yellow");
+  assert.equal(byPr.get(3)?.glyph, "\u25cf");
 });
 
-test("recent activity prefers latest review attempts over raw webhook spam", () => {
+test("tokens order: running then queued then decided, newest decided first", () => {
   const repo = fakeRepo();
   const snapshot = fakeSnapshot({
     repos: [repo],
-    attempts: [fakeAttempt({ id: 22, prNumber: 55, status: "running", updatedAt: "2026-04-09T20:04:00.000Z" })],
-    recentWebhooks: [
-      fakeWebhook({ deliveryId: "delivery-1", eventType: "check_run" }),
-      fakeWebhook({ deliveryId: "delivery-2", eventType: "check_suite", receivedAt: "2026-04-09T20:04:30.000Z" }),
-    ],
-  });
-
-  const items = getRecentActivity(snapshot, new Map([[repo.repoFullName, repo]]));
-  assert.equal(items[0]?.message, "ballony-i-nasosy PR #55 running");
-});
-
-test("repo health summarizes webhook bursts when no review attempts exist yet", () => {
-  const repo = fakeRepo({
-    totalAttempts: 0,
-    completedAttempts: 0,
-    latestAttemptAt: null,
-    latestConclusion: null,
-  });
-  const snapshot = fakeSnapshot({
-    repos: [repo],
-    attempts: [],
-    recentWebhooks: [
-      fakeWebhook({ deliveryId: "delivery-1", eventType: "check_run" }),
-      fakeWebhook({ deliveryId: "delivery-2", eventType: "check_run", receivedAt: "2026-04-09T20:04:30.000Z" }),
-      fakeWebhook({ deliveryId: "delivery-3", eventType: "check_suite", receivedAt: "2026-04-09T20:04:00.000Z" }),
-    ],
-  });
-
-  const health = getRepoHealth(snapshot, repo);
-  assert.equal(health.kind, "idle");
-  assert.match(health.detail, /Recent wakeups: 2 check_run, 1 check_suite/);
-});
-
-test("repo health explains repo activity after the last verdict without implying active review work", () => {
-  const repo = fakeRepo({
-    latestConclusion: "declined",
-    latestAttemptAt: "2026-04-09T20:01:00.000Z",
-  });
-  const snapshot = fakeSnapshot({
-    repos: [repo],
     attempts: [
-      fakeAttempt({
-        id: 4,
-        prNumber: 57,
-        conclusion: "declined",
-        updatedAt: "2026-04-09T20:01:00.000Z",
-      }),
-    ],
-    recentWebhooks: [
-      fakeWebhook({
-        deliveryId: "delivery-new-head",
-        eventType: "pull_request",
-        receivedAt: "2026-04-09T20:02:00.000Z",
-      }),
+      fakeAttempt({ id: 10, prNumber: 10, status: "completed", conclusion: "approved", updatedAt: "2026-04-17T11:00:00.000Z" }),
+      fakeAttempt({ id: 11, prNumber: 11, status: "completed", conclusion: "declined", updatedAt: "2026-04-17T11:30:00.000Z" }),
+      fakeAttempt({ id: 12, prNumber: 12, status: "queued", conclusion: undefined, updatedAt: "2026-04-17T11:40:00.000Z" }),
+      fakeAttempt({ id: 13, prNumber: 13, status: "running", conclusion: undefined, updatedAt: "2026-04-17T11:45:00.000Z" }),
     ],
   });
 
-  const health = getRepoHealth(snapshot, repo);
-  assert.equal(health.kind, "idle");
-  assert.match(health.detail, /Latest stored review result: PR #57 requested changes/i);
-  assert.match(health.detail, /Recent repo activity has not produced newer eligible review work yet/i);
+  const model = buildDashboard(snapshot, { now: NOW });
+  const [only] = model.repos;
+  assert.deepEqual(only?.tokens.map((t) => t.prNumber), [13, 12, 11, 10]);
 });
 
-test("review dashboard does not count stale attempts as active work", () => {
-  const repo = fakeRepo({
-    runningAttempts: 1,
-    latestAttemptAt: "2026-04-09T20:03:00.000Z",
-    latestConclusion: null,
-  });
-  const snapshot = fakeSnapshot({
-    repos: [repo],
-    attempts: [
-      fakeAttempt({
-        id: 9,
-        prNumber: 15,
-        status: "running",
-        conclusion: undefined,
-        updatedAt: "2026-04-09T20:03:00.000Z",
-        stale: true,
-        staleReason: "Attempt was left running across a restart.",
-      }),
-    ],
-  });
-
-  assert.equal(projectStatsSummary(snapshot, repo), "0 active · 0 queued · 1 stale");
-  assert.match(getReviewQueueText(snapshot, repo), /stale attempt/i);
-});
-
-test("review queue text says no eligible review work when the runner is idle", () => {
+test("decided PRs outside the time window are dropped but running/queued always stay", () => {
   const repo = fakeRepo();
   const snapshot = fakeSnapshot({
     repos: [repo],
-    attempts: [],
+    attempts: [
+      fakeAttempt({ id: 1, prNumber: 1, status: "completed", conclusion: "approved", updatedAt: "2026-04-14T00:00:00.000Z" }),
+      fakeAttempt({ id: 2, prNumber: 2, status: "queued", conclusion: undefined, updatedAt: "2026-04-10T00:00:00.000Z" }),
+    ],
   });
 
-  assert.equal(getReviewQueueText(snapshot, repo), "no eligible review work");
+  const model = buildDashboard(snapshot, { now: NOW, windowMs: 24 * 60 * 60 * 1000 });
+  const tokens = model.repos[0]?.tokens ?? [];
+  assert.deepEqual(tokens.map((t) => t.prNumber), [2]);
+  assert.equal(tokens[0]?.kind, "queued");
 });
 
-test("compact review queue text uses single-character status symbols", () => {
+test("pending reviews render as checks tokens and are shadowed by an existing running attempt", () => {
+  const repo = fakeRepo();
+  const snapshot = fakeSnapshot({
+    repos: [repo],
+    attempts: [
+      fakeAttempt({ id: 1, prNumber: 7, status: "running", conclusion: undefined, updatedAt: "2026-04-17T11:50:00.000Z" }),
+    ],
+    pendingReviews: [
+      {
+        repoId: repo.repoId,
+        repoFullName: repo.repoFullName,
+        prNumber: 7,
+        headSha: "sha",
+        headRefName: "feature/x",
+        reason: "checks_running",
+        failedChecks: [],
+        pendingChecks: ["ci"],
+        updatedAt: "2026-04-17T11:55:00.000Z",
+      },
+      {
+        repoId: repo.repoId,
+        repoFullName: repo.repoFullName,
+        prNumber: 9,
+        headSha: "sha9",
+        headRefName: "feature/y",
+        reason: "checks_running",
+        failedChecks: [],
+        pendingChecks: ["ci"],
+        updatedAt: "2026-04-17T11:56:00.000Z",
+      },
+    ],
+  });
+
+  const model = buildDashboard(snapshot, { now: NOW });
+  const tokens = model.repos[0]?.tokens ?? [];
+  const byPr = new Map(tokens.map((token) => [token.prNumber, token.kind]));
+  assert.equal(byPr.get(7), "running");
+  assert.equal(byPr.get(9), "checks_running");
+});
+
+test("stale attempt renders as error glyph", () => {
   const repo = fakeRepo();
   const snapshot = fakeSnapshot({
     repos: [repo],
     attempts: [
       fakeAttempt({
         id: 1,
-        prNumber: 1,
-        status: "completed",
-        conclusion: "declined",
-        updatedAt: "2026-04-09T20:00:00.000Z",
-      }),
-      fakeAttempt({
-        id: 2,
-        prNumber: 2,
-        status: "queued",
-        updatedAt: "2026-04-09T20:01:00.000Z",
-      }),
-      fakeAttempt({
-        id: 3,
-        prNumber: 3,
+        prNumber: 42,
         status: "running",
-        updatedAt: "2026-04-09T20:02:00.000Z",
-      }),
-      fakeAttempt({
-        id: 4,
-        prNumber: 4,
-        status: "completed",
-        conclusion: "approved",
-        updatedAt: "2026-04-09T20:03:00.000Z",
-      }),
-    ],
-  });
-
-  assert.equal(getReviewQueueText(snapshot, repo, true), "#4✓ #3● #2○ #1✗");
-});
-
-test("compact queue tokens put pending PRs before completed attempts so narrow rows keep the in-flight work visible", () => {
-  const repo = fakeRepo();
-  const snapshot = fakeSnapshot({
-    repos: [repo],
-    attempts: [
-      fakeAttempt({
-        id: 1, prNumber: 1, status: "completed", conclusion: "approved",
-        updatedAt: "2026-04-16T18:00:00.000Z",
-      }),
-      fakeAttempt({
-        id: 2, prNumber: 2, status: "completed", conclusion: "declined",
-        updatedAt: "2026-04-16T18:01:00.000Z",
-      }),
-    ],
-    pendingReviews: [
-      {
-        repoId: repo.repoId,
-        repoFullName: repo.repoFullName,
-        prNumber: 3,
-        headSha: "head-3",
-        headRefName: "feature/x",
-        reason: "checks_running",
-        failedChecks: [],
-        pendingChecks: ["Tests"],
-        updatedAt: "2026-04-16T18:02:00.000Z",
-      },
-    ],
-  });
-
-  const tokens = getCompactReviewQueueTokens(snapshot, repo);
-  assert.deepStrictEqual(
-    tokens.map((token) => token.prNumber),
-    [3, 2, 1],
-    "pending PR #3 should lead; attempts follow in recency order",
-  );
-});
-
-test("compact review queue text falls back to idle when no queue items exist", () => {
-  const repo = fakeRepo();
-  const snapshot = fakeSnapshot({
-    repos: [repo],
-    attempts: [],
-  });
-
-  assert.equal(getReviewQueueText(snapshot, repo, true), "idle");
-});
-
-test("projectStatsSummary compact format keeps active/queued focus", () => {
-  const repo = fakeRepo();
-  const snapshot = fakeSnapshot({
-    repos: [repo],
-    attempts: [
-      fakeAttempt({ prNumber: 101, status: "running", updatedAt: "2026-04-09T20:02:00.000Z" }),
-      fakeAttempt({ prNumber: 102, status: "queued", id: 2, updatedAt: "2026-04-09T20:01:00.000Z" }),
-      fakeAttempt({ prNumber: 103, status: "failed", id: 3, updatedAt: "2026-04-09T20:00:30.000Z", conclusion: "error" }),
-      fakeAttempt({ prNumber: 104, status: "cancelled", id: 4, stale: true, updatedAt: "2026-04-09T19:59:00.000Z" }),
-    ],
-  });
-
-  assert.equal(projectStatsSummary(snapshot, repo, true), "1a 1w 1f 1s");
-});
-
-test("clusterSummaryText compact format is non-ambiguous", () => {
-  const activeRepo = fakeRepo({ repoId: "repo-1", repoFullName: "team/repo-1", totalAttempts: 4, queuedAttempts: 1 });
-  const stalledRepo = fakeRepo({ repoId: "repo-2", repoFullName: "team/repo-2", totalAttempts: 2 });
-  const snapshot = fakeSnapshot({
-    repos: [activeRepo, stalledRepo],
-    attempts: [
-      fakeAttempt({
-        id: 11,
-        repoFullName: activeRepo.repoFullName,
-        prNumber: 101,
-        status: "running",
-        stale: false,
-        updatedAt: "2026-04-09T20:03:00.000Z",
-      }),
-      fakeAttempt({
-        id: 12,
-        repoFullName: activeRepo.repoFullName,
-        prNumber: 102,
-        status: "queued",
-        stale: false,
-        updatedAt: "2026-04-09T20:02:00.000Z",
-      }),
-      fakeAttempt({
-        id: 13,
-        repoFullName: stalledRepo.repoFullName,
-        prNumber: 1,
-        status: "completed",
-        conclusion: "approved",
+        conclusion: undefined,
         stale: true,
-        updatedAt: "2026-04-09T20:01:00.000Z",
+        staleReason: "worker restart",
+        updatedAt: "2026-04-17T11:50:00.000Z",
       }),
     ],
   });
 
-  assert.equal(
-    clusterSummaryText(snapshot, true),
-    "2 repos 2 online 1 active 1 queued 1 stuck 0 need-att",
-  );
+  const tokens = buildDashboard(snapshot, { now: NOW }).repos[0]?.tokens ?? [];
+  assert.equal(tokens[0]?.kind, "error");
+  assert.equal(tokens[0]?.glyph, "\u26a0");
+  assert.equal(tokens[0]?.color, "red");
+});
+
+test("quiet repos are counted but not listed", () => {
+  const active = fakeRepo({ repoId: "active", repoFullName: "owner/active" });
+  const quiet = fakeRepo({ repoId: "quiet", repoFullName: "owner/quiet" });
+  const snapshot = fakeSnapshot({
+    repos: [active, quiet],
+    attempts: [
+      fakeAttempt({ id: 1, repoFullName: active.repoFullName, prNumber: 1, status: "running", conclusion: undefined, updatedAt: "2026-04-17T11:50:00.000Z" }),
+    ],
+  });
+
+  const model = buildDashboard(snapshot, { now: NOW });
+  assert.equal(model.repos.length, 1);
+  assert.equal(model.repos[0]?.repoFullName, active.repoFullName);
+  assert.equal(model.quietCount, 1);
+});
+
+test("cancelled and superseded PRs do not populate the strip", () => {
+  const repo = fakeRepo();
+  const snapshot = fakeSnapshot({
+    repos: [repo],
+    attempts: [
+      fakeAttempt({ id: 1, prNumber: 1, status: "cancelled", conclusion: undefined, updatedAt: "2026-04-17T11:50:00.000Z" }),
+      fakeAttempt({ id: 2, prNumber: 2, status: "superseded", conclusion: undefined, updatedAt: "2026-04-17T11:50:00.000Z" }),
+    ],
+  });
+
+  const model = buildDashboard(snapshot, { now: NOW });
+  assert.deepEqual(model.repos.length, 0);
+});
+
+test("stepRepo cycles through repos in both directions", () => {
+  const repos = [
+    { repoFullName: "a", repoId: "a", tokens: [], entries: [], latestActivityAt: 0, hasActivity: true },
+    { repoFullName: "b", repoId: "b", tokens: [], entries: [], latestActivityAt: 0, hasActivity: true },
+    { repoFullName: "c", repoId: "c", tokens: [], entries: [], latestActivityAt: 0, hasActivity: true },
+  ];
+  assert.equal(stepRepo(repos, "a", 1), "b");
+  assert.equal(stepRepo(repos, "c", 1), "a");
+  assert.equal(stepRepo(repos, "a", -1), "c");
+  assert.equal(stepRepo(repos, null, 1), "b");
+});
+
+test("clipSummary cuts on a sentence boundary and never appends an ellipsis", () => {
+  const summary = "Queue planner refactor. All reconcile tests pass. Extra context about the shape of the change that could not fit.";
+  const clipped = clipSummary(summary, { maxLines: 2, width: 40 });
+  assert.ok(!clipped.includes("\u2026"));
+  assert.ok(!clipped.endsWith("..."));
+  assert.ok(clipped.length > 0);
+  assert.ok(clipped.length <= summary.length);
+  const lines = clipped.split("\n");
+  assert.ok(lines.length <= 2, `expected <=2 lines, got ${lines.length}`);
+});
+
+test("clipSummary returns empty string when summary is missing or blank", () => {
+  assert.equal(clipSummary(undefined, { maxLines: 2, width: 60 }), "");
+  assert.equal(clipSummary("   \n\t  ", { maxLines: 2, width: 60 }), "");
 });

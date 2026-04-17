@@ -1,171 +1,98 @@
 import { Box, Text, useStdout } from "ink";
-import type { ReviewAttemptRecord, ReviewQuillWatchSnapshot } from "../types.ts";
-import { attemptLabel, attemptStateColor, formatSha, relativeTime, truncate } from "./format.ts";
-import {
-  clusterSummaryText,
-  getCompactReviewQueueTokens,
-  getRecentActivity,
-  getRepoHealth,
-  getReviewQueueText,
-  projectStatsSummary,
-  type CompactReviewQueueToken,
-} from "./dashboard-model.ts";
+import type { DashboardModel, DashboardRepo, DashboardToken } from "./dashboard-model.ts";
 
 interface ListViewProps {
-  snapshot: ReviewQuillWatchSnapshot;
-  attempts: ReviewAttemptRecord[];
-  selectedAttemptId: number | null;
+  model: DashboardModel;
   selectedRepoFullName: string | null;
-  compact?: boolean;
+  showCursor: boolean;
 }
 
-function AttemptRow({ attempt, selected, compact }: { attempt: ReviewAttemptRecord; selected: boolean; compact: boolean }): React.JSX.Element {
-  const repoLabel = compact ? (attempt.repoFullName.split("/").at(-1) ?? attempt.repoFullName) : truncate(attempt.repoFullName, 24);
-  return (
-    <Box>
-      <Text color={selected ? "cyan" : "gray"}>{selected ? ">" : " "}</Text>
-      <Text bold>{` #${attempt.prNumber}`}</Text>
-      <Text>{` ${repoLabel}`}</Text>
-      <Text dimColor>{` ${formatSha(attempt.headSha)}`}</Text>
-      <Text>{` `}</Text>
-      <Text color={attemptStateColor(attempt)}>{attemptLabel(attempt)}</Text>
-      {compact ? null : attempt.status === "superseded" ? <Text dimColor>{` stale-head`}</Text> : null}
-      {compact ? null : attempt.stale ? <Text dimColor>{` stale-worker`}</Text> : null}
-      {attempt.stale && compact ? <Text dimColor>{` stale`}</Text> : null}
-      <Text dimColor>{` ${relativeTime(attempt.updatedAt)} ago`}</Text>
-    </Box>
-  );
-}
-
-function CompactReviewQueueTokens({
-  tokens,
-  width,
-}: {
-  tokens: CompactReviewQueueToken[];
-  width: number;
-}): React.JSX.Element {
-  const parts = tokens
-    .map((entry) => `#${entry.prNumber}${entry.symbol}`);
-  const visible = [];
+function RepoTokens({ tokens, width }: { tokens: DashboardToken[]; width: number }): React.JSX.Element | null {
+  if (tokens.length === 0 || width < 6) return null;
+  const parts: { token: DashboardToken; text: string }[] = [];
   let used = 0;
-  for (const part of parts) {
-    const nextSize = part.length + (visible.length > 0 ? 1 : 0);
-    if (used + nextSize > width) {
-      break;
-    }
-    visible.push(part);
-    used += nextSize;
-  }
-  if (visible.length === 0) {
-    return <Text>{""}</Text>;
+  for (const token of tokens) {
+    const text = `#${token.prNumber} ${token.glyph}`;
+    const separatorWidth = parts.length === 0 ? 0 : 2;
+    if (used + separatorWidth + text.length > width) break;
+    used += separatorWidth + text.length;
+    parts.push({ token, text });
   }
   return (
     <Text>
-      {visible.map((part, index) => {
-        const token = tokens[index];
-        if (!token) {
-          return null;
-        }
-        return (
-          <Text key={part} color={token.color}>
-            {index === 0 ? part : ` ${part}`}
-          </Text>
-        );
-      })}
+      {parts.map((part, index) => (
+        <Text key={`${part.token.prNumber}-${index}`} color={part.token.color}>
+          {index === 0 ? part.text : `  ${part.text}`}
+        </Text>
+      ))}
     </Text>
   );
 }
 
-export function ListView({
-  snapshot,
-  attempts,
-  selectedAttemptId,
-  selectedRepoFullName,
-  compact = false,
-}: ListViewProps): React.JSX.Element {
+export function RepoRow({
+  repo,
+  selected,
+  showCursor,
+  width,
+}: {
+  repo: DashboardRepo;
+  selected: boolean;
+  showCursor: boolean;
+  width: number;
+}): React.JSX.Element {
+  const cursorChar = showCursor && selected ? ">" : " ";
+  const repoLabelWidth = Math.min(28, Math.max(12, Math.floor(width * 0.35)));
+  const tokenWidth = Math.max(6, width - repoLabelWidth - 3);
+  const repoLabel = repo.repoFullName.length > repoLabelWidth
+    ? repo.repoFullName.slice(0, repoLabelWidth)
+    : repo.repoFullName.padEnd(repoLabelWidth, " ");
+  return (
+    <Box>
+      <Text color={selected ? "cyan" : "gray"}>{cursorChar}</Text>
+      <Text bold={selected}>{` ${repoLabel}  `}</Text>
+      <RepoTokens tokens={repo.tokens} width={tokenWidth} />
+    </Box>
+  );
+}
+
+export function ListView({ model, selectedRepoFullName, showCursor }: ListViewProps): React.JSX.Element {
   const { stdout } = useStdout();
-  const rows = stdout?.rows ?? 24;
-  const width = Math.max(20, stdout?.columns ?? 80);
-  const repoRows = compact ? Math.min(snapshot.repos.length, Math.max(3, rows - 7)) : Math.min(snapshot.repos.length, 5);
-  const attemptRows = Math.max(1, rows - repoRows * 2 - (compact ? 4 : 11));
-  const visibleAttempts = attempts.slice(0, attemptRows);
-  const repoLookup = new Map(snapshot.repos.map((repo) => [repo.repoFullName, repo]));
-  const visibleActivity = compact ? [] : getRecentActivity(snapshot, repoLookup).slice(0, 6);
+  const rows = Math.max(3, stdout?.rows ?? 24);
+  const width = Math.max(40, stdout?.columns ?? 80);
+
+  const availableRows = Math.max(1, rows - 3);
+  const selectedIndex = model.repos.findIndex((repo) => repo.repoFullName === selectedRepoFullName);
+  const selected = selectedIndex >= 0 ? model.repos[selectedIndex]! : model.repos[0];
+  const others = model.repos.filter((repo) => repo !== selected);
+
+  const ordered: DashboardRepo[] = [];
+  if (selected) ordered.push(selected);
+  ordered.push(...others);
+
+  const quietLine = model.quietCount > 0 ? 1 : 0;
+  const maxRepoLines = Math.max(1, availableRows - quietLine);
+  const visible = ordered.slice(0, maxRepoLines);
+  const hiddenActive = ordered.length - visible.length;
+  const quietFooter = model.quietCount + hiddenActive;
+
+  if (visible.length === 0) {
+    return <Box marginTop={1}><Text dimColor> </Text></Box>;
+  }
 
   return (
     <Box flexDirection="column" marginTop={1}>
-      <Text bold>Review Overview</Text>
-      <Text dimColor>{clusterSummaryText(snapshot, compact)}</Text>
-      {snapshot.repos.slice(0, repoRows).map((repo) => {
-        const health = getRepoHealth(snapshot, repo);
-        const queueText = getReviewQueueText(snapshot, repo, compact);
-        const queueTokens = compact ? getCompactReviewQueueTokens(snapshot, repo) : [];
-        const queueWidth = Math.max(6, width - 20);
-        const compactQueueDisplay = queueTokens.length === 0 ? (
-          <Box paddingLeft={2}>
-            <Text dimColor>{truncate(queueText, queueWidth)}</Text>
-          </Box>
-        ) : (
-          <Box paddingLeft={2}>
-            <CompactReviewQueueTokens tokens={queueTokens} width={queueWidth} />
-          </Box>
-        );
-        return (
-          <Box key={repo.repoId} flexDirection="column">
-            <Box>
-              <Text color={repo.repoFullName === selectedRepoFullName ? "cyan" : "gray"}>
-                {repo.repoFullName === selectedRepoFullName ? ">" : " "}
-              </Text>
-              <Text bold>{repo.repoId}</Text>
-            </Box>
-            {compact ? compactQueueDisplay : (
-              <>
-                <Text dimColor>{`  ${truncate(repo.repoFullName, 28)}`}</Text>
-                <Text>{`  `}</Text>
-                <Text color={health.color}>{health.label}</Text>
-                <Text dimColor>{`  ${projectStatsSummary(snapshot, repo, compact)}`}</Text>
-              </>
-            )}
-            {compact ? null : (
-              <Box paddingLeft={2}>
-                <Text color={health.color}>{`Reviews: ${truncate(queueText, 100)}`}</Text>
-              </Box>
-            )}
-          </Box>
-        );
-      })}
-
-      {!compact ? (
-        <Box marginTop={1} flexDirection="column">
-          <Text bold>Attempts</Text>
-          {visibleAttempts.length === 0 ? (
-            <Text dimColor>No review attempts yet.</Text>
-          ) : (
-            visibleAttempts.map((attempt) => (
-              <AttemptRow
-                key={attempt.id}
-                attempt={attempt}
-                selected={attempt.id === selectedAttemptId}
-                compact={compact}
-              />
-            ))
-          )}
-        </Box>
-      ) : null}
-
-      {!compact ? (
-        <Box marginTop={1} flexDirection="column">
-          <Text bold>Recent Activity</Text>
-          {visibleActivity.length === 0 ? (
-            <Text dimColor>No recent activity yet.</Text>
-          ) : (
-            visibleActivity.map((item) => (
-              <Box key={item.key}>
-                <Text dimColor>{item.age.padStart(4, " ")}</Text>
-                <Text>{` ${truncate(item.message, compact ? Math.max(24, width - 8) : 90)}`}</Text>
-              </Box>
-            ))
-          )}
+      {visible.map((repo) => (
+        <RepoRow
+          key={repo.repoFullName}
+          repo={repo}
+          selected={repo === selected}
+          showCursor={showCursor}
+          width={width - 2}
+        />
+      ))}
+      {quietFooter > 0 ? (
+        <Box paddingLeft={2}>
+          <Text dimColor>{`+${quietFooter} quiet`}</Text>
         </Box>
       ) : null}
     </Box>

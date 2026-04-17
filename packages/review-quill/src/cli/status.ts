@@ -1,8 +1,6 @@
 import { loadConfig } from "../config.ts";
 import { getDefaultConfigPath } from "../runtime-paths.ts";
-import type { ReviewQuillWatchSnapshot, ReviewQuillRepoSummary } from "../types.ts";
-import { clusterSummaryText, getRepoHealth, getReviewQueueText, projectStatsSummary } from "../watch/dashboard-model.ts";
-import { relativeTime, runtimeLabel } from "../watch/format.ts";
+import { buildDashboard } from "../watch/dashboard-model.ts";
 import { fetchSnapshot } from "../watch/api.ts";
 import type { ParsedArgs } from "./args.ts";
 import type { Output } from "./shared.ts";
@@ -17,14 +15,6 @@ function resolveBaseUrl(configPath: string): string {
   return `http://${bind}:${config.server.port}`;
 }
 
-function repoSnapshotLine(snapshot: ReviewQuillWatchSnapshot, repo: ReviewQuillRepoSummary): string {
-  const health = getRepoHealth(snapshot, repo);
-  const queueText = getReviewQueueText(snapshot, repo, true);
-  const summary = projectStatsSummary(snapshot, repo, true);
-  const detail = queueText === "idle" ? "idle" : queueText;
-  return `${repo.repoId.padEnd(12)} ${health.label.toLowerCase()} ${summary}  ${detail}`;
-}
-
 export async function handleStatus(configPath: string | undefined, parsed: ParsedArgs, stdout: Output): Promise<number> {
   const resolvedConfigPath = configPath ?? getDefaultConfigPath();
   const baseUrl = resolveBaseUrl(resolvedConfigPath);
@@ -34,26 +24,15 @@ export async function handleStatus(configPath: string | undefined, parsed: Parse
     return 0;
   }
 
-  const header = [
-    `review-quill`,
-    `${snapshot.summary.runningAttempts}a`,
-    `${snapshot.summary.queuedAttempts}q`,
-    `${snapshot.summary.failedAttempts}f`,
-    `runner ${runtimeLabel(snapshot.runtime)}`,
-    snapshot.runtime.lastReconcileCompletedAt || snapshot.runtime.lastReconcileStartedAt
-      ? `last ${relativeTime(snapshot.runtime.lastReconcileCompletedAt ?? snapshot.runtime.lastReconcileStartedAt)}`
-      : "last never",
-    "fresh 0s",
-  ].filter(Boolean).join(" | ");
-
-  const lines = [
-    header,
-    "",
-    "Review Overview",
-    clusterSummaryText(snapshot),
-    "",
-    ...snapshot.repos.map((repo) => `  ${repoSnapshotLine(snapshot, repo)}`),
-  ];
+  const model = buildDashboard(snapshot);
+  const lines: string[] = ["review-quill"];
+  for (const repo of model.repos) {
+    const strip = repo.tokens.map((token) => `#${token.prNumber} ${token.glyph}`).join("  ");
+    lines.push(`  ${repo.repoFullName}  ${strip}`);
+  }
+  if (model.quietCount > 0) {
+    lines.push(`  +${model.quietCount} quiet`);
+  }
   writeOutput(stdout, `${lines.join("\n")}\n`);
   return 0;
 }
