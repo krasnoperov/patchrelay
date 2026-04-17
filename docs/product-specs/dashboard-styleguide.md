@@ -185,5 +185,61 @@ Otherwise omit it.
 - `packages/review-quill/src/watch/*` — list and detail views.
 - `packages/merge-steward/src/watch/*` — overview, queue list, and per-entry
   detail.
+- `src/cli/watch/*` — patchrelay issue list, issue detail (event log), and
+  issue app-server log views.
 
 Other row-oriented dashboards added later should follow the same rules.
+
+## Issue Token (patchrelay)
+
+The patchrelay dashboard is issue-centric: each row is a Linear issue. The
+issue token follows the same color convention as the PR token, mapped from
+`FactoryState`:
+
+| FactoryState | Glyph | Color | Phrase |
+|-|-|-|-|
+| `delegated` | `○` | gray | `delegated` |
+| `implementing` | `●` | yellow | `implementing` |
+| `pr_open` | `●` | yellow | `pr_open` |
+| `changes_requested` | `●` | yellow | `changes requested` |
+| `repairing_ci` | `●` | yellow | `repairing ci` |
+| `awaiting_queue` | `●` | yellow | `awaiting queue` |
+| `repairing_queue` | `●` | yellow | `repairing queue` |
+| `awaiting_input` | `⚠` | red | `needs human` |
+| `escalated` | `⚠` | red | `escalated` |
+| `done` | `✓` | green | `done` |
+| `failed` | `✗` | red | `failed` |
+
+The issue key (e.g. `EQ-42`) and its glyph share a color. The related PR,
+when one exists, is rendered as a separate PR token to the right using the
+existing PR color convention — never double-labelled with the issue state.
+
+## Event Log Rules
+
+The patchrelay detail view is an event log. Rules:
+
+- One line per event: `age  category  phrase`.
+- Age is a single relative token (`2h`, `5m`, `now`), left-aligned in a
+  fixed-width column.
+- Category is one of: `stage`, `run`, `github`, `review`, `human`. No other
+  categories appear — internal webhook deliveries, low-level item events,
+  per-check status changes are dropped.
+- Phrase is terse and severity-colored (red for failures, green for success,
+  yellow for attention, gray for routine).
+- A failure line may be followed by one indented continuation line with the
+  concrete reason (exit code, check name, message). Never more than one.
+- Side-trip repairs (CI fix, queue repair) fold inline with a leading `↳`.
+  No separate history tab.
+
+## App-Server Log Rules
+
+The app-server log view is a Codex transcript for the active or latest run.
+Rules:
+
+- Header line reuses the issue-row format plus a dim thread-and-turn id
+  suffix. Nothing else.
+- Body is one entry per thread item, role-prefixed (`user`, `assistant`,
+  `tool`), plain indentation. No box drawing.
+- `tool` blocks render dim; `assistant` bright; `user` neutral.
+- Stage labels, plan progress, blockers, retry controls do not appear here
+  — those belong in the detail view.
