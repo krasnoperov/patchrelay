@@ -38,6 +38,7 @@ function repoConfig(overrides?: Partial<ReviewQuillRepositoryConfig>): ReviewQui
     repoId: "fixture",
     repoFullName: "example/fixture",
     baseBranch: "main",
+    waitForGreenChecks: false,
     requiredChecks: [],
     excludeBranches: [],
     reviewDocs: ["REVIEW_WORKFLOW.md", "CLAUDE.md", "AGENTS.md"],

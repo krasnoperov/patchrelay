@@ -201,6 +201,7 @@ export async function upsertRepoConfig(options: {
   id: string;
   repoFullName: string;
   baseBranch?: string;
+  waitForGreenChecks?: boolean;
   requiredChecks?: string[];
   excludeBranches?: string[];
   reviewDocs?: string[];
@@ -231,6 +232,7 @@ export async function upsertRepoConfig(options: {
     repoId,
     repoFullName,
     baseBranch: options.baseBranch?.trim() || (typeof existing?.baseBranch === "string" ? existing.baseBranch : "main"),
+    waitForGreenChecks: options.waitForGreenChecks ?? (typeof existing?.waitForGreenChecks === "boolean" ? existing.waitForGreenChecks : false),
     requiredChecks: [...new Set((options.requiredChecks ?? (Array.isArray(existing?.requiredChecks) ? existing.requiredChecks as string[] : [])).map((entry) => entry.trim()).filter(Boolean))],
     excludeBranches: [...new Set((options.excludeBranches ?? (Array.isArray(existing?.excludeBranches) ? existing.excludeBranches as string[] : [])).map((entry) => entry.trim()).filter(Boolean))],
     reviewDocs: [...new Set((options.reviewDocs ?? (Array.isArray(existing?.reviewDocs) ? existing.reviewDocs as string[] : ["REVIEW_WORKFLOW.md", "CLAUDE.md", "AGENTS.md"])).map((entry) => entry.trim()).filter(Boolean))],
@@ -244,6 +246,7 @@ export async function upsertRepoConfig(options: {
     repoId: repo.repoId,
     repoFullName: repo.repoFullName,
     baseBranch: repo.baseBranch,
+    waitForGreenChecks: repo.waitForGreenChecks,
     requiredChecks: repo.requiredChecks,
     excludeBranches: repo.excludeBranches,
     reviewDocs: repo.reviewDocs,

@@ -78,7 +78,7 @@ export function validateFlags(parsed: ParsedArgs): void {
       assertKnownFlags(parsed, "root", ["force", "json"]);
       return;
     case "attach":
-      assertKnownFlags(parsed, "repo", ["base-branch", "required-check", "review-doc", "refresh", "json"]);
+      assertKnownFlags(parsed, "repo", ["base-branch", "wait-for-green-checks", "required-check", "review-doc", "refresh", "json"]);
       return;
     case "repos":
       assertKnownFlags(parsed, "repo", ["json"]);
@@ -91,7 +91,7 @@ export function validateFlags(parsed: ParsedArgs): void {
           assertKnownFlags(parsed, "repo", ["json"]);
           return;
         case "attach":
-          assertKnownFlags(parsed, "repo", ["base-branch", "required-check", "review-doc", "refresh", "json"]);
+          assertKnownFlags(parsed, "repo", ["base-branch", "wait-for-green-checks", "required-check", "review-doc", "refresh", "json"]);
           return;
         default:
           assertKnownFlags(parsed, "repo", []);
@@ -112,7 +112,7 @@ export function validateFlags(parsed: ParsedArgs): void {
     case "pr":
       switch (subcommand) {
         case "status":
-          assertKnownFlags(parsed, "root", ["repo", "pr", "cwd", "wait", "timeout", "poll", "json"]);
+          assertKnownFlags(parsed, "root", ["repo", "pr", "cwd", "wait", "timeout", "poll", "json", "silent"]);
           return;
         default:
           assertKnownFlags(parsed, "root", []);
@@ -161,6 +161,15 @@ export function parseConfigPath(args: string[]): string | undefined {
 export function parseCsvFlag(value: string | boolean | undefined): string[] {
   if (typeof value !== "string") return [];
   return value.split(",").map((entry) => entry.trim()).filter(Boolean);
+}
+
+export function parseBooleanFlag(value: string | boolean | undefined, label: string): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === "boolean") return value;
+  const normalized = value.trim().toLowerCase();
+  if (["true", "1", "yes", "on"].includes(normalized)) return true;
+  if (["false", "0", "no", "off"].includes(normalized)) return false;
+  throw new UsageError(`${label} must be true or false.`);
 }
 
 export function parseIntegerFlag(value: string | boolean | undefined, label: string): number | undefined {

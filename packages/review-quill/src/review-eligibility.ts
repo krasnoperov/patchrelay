@@ -47,6 +47,9 @@ export async function evaluateReviewEligibility(params: {
     ...check,
     id: index + 1,
   }));
+  if (!repo.waitForGreenChecks) {
+    return { eligible: true, checkRuns: checks };
+  }
   if (!requiredChecksGreen(repo.requiredChecks, checks)) {
     return { eligible: false, reason: "required_checks_not_green", checkRuns: checks };
   }

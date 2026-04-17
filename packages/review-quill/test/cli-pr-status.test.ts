@@ -92,6 +92,31 @@ test("buildPrReviewReport sets summaryFirstLine", () => {
   assert.equal(report.summaryFirstLine, "LGTM");
 });
 
+test("buildPrReviewReport carries failure details", () => {
+  const report = buildPrReviewReport({
+    repoId: "app",
+    repoFullName: "owner/app",
+    prNumber: 42,
+    attempt: makeAttempt({ status: "completed", conclusion: "declined", summary: "Found a regression." }),
+    failureDetails: {
+      reviewRequest: {
+        id: 77,
+        authorLogin: "review-quill[bot]",
+        body: "Please fix the regression in session bootstrap.",
+        inlineComments: [
+          { id: 1, path: "src/app.ts", line: 18, body: "This path still throws on startup." },
+        ],
+      },
+      failedChecks: [
+        { id: 9, name: "Tests", status: "completed", conclusion: "failure", outputSummary: "1 failing test" },
+      ],
+      pendingChecks: [],
+    },
+  });
+  assert.equal(report.failureDetails?.reviewRequest?.id, 77);
+  assert.equal(report.failureDetails?.failedChecks[0]?.name, "Tests");
+});
+
 function withConfig<T>(setup: (configPath: string, dbPath: string) => void, run: () => Promise<T>): Promise<T> {
   const baseDir = mkdtempSync(path.join(tmpdir(), "rq-pr-status-"));
   const configDir = path.join(baseDir, ".config", "review-quill");
@@ -208,11 +233,211 @@ test("review-quill pr status exits 2 when latest attempt requested changes", asy
         {
           stdout: stdout.stream,
           stderr: createBufferStream().stream,
+          inspectFailureDetails: async () => ({
+            reviewRequest: {
+              id: 77,
+              authorLogin: "review-quill[bot]",
+              submittedAt: "2026-04-17T00:05:30Z",
+              body: "Please fix the regression in the session bootstrap path.",
+              inlineComments: [
+                { id: 11, path: "src/bootstrap.ts", line: 19, body: "This still throws on missing config." },
+              ],
+            },
+            failedChecks: [
+              {
+                id: 91,
+                name: "Tests",
+                status: "completed",
+                conclusion: "failure",
+                outputSummary: "1 failing test: bootstrap handles missing config",
+                detailsUrl: "https://ci.example.test/run/91",
+              },
+            ],
+            pendingChecks: [],
+          }),
         },
       );
       assert.equal(code, 2);
       const payload = JSON.parse(stdout.read());
       assert.equal(payload.kind, "declined");
+      assert.equal(payload.failureDetails.reviewRequest.id, 77);
+      assert.equal(payload.failureDetails.reviewRequest.inlineComments[0].path, "src/bootstrap.ts");
+      assert.equal(payload.failureDetails.failedChecks[0].name, "Tests");
+      assert.match(payload.failureDetails.failedChecks[0].outputSummary, /bootstrap handles missing config/);
+    },
+  );
+});
+
+test("review-quill pr status text output includes requested changes and failed checks", async () => {
+  await withConfig(
+    (configPath, dbPath) => {
+      writeConfig(configPath, dbPath);
+      const store = new SqliteStore(dbPath);
+      const attempt = store.createAttempt({
+        repoFullName: "owner/app",
+        prNumber: 42,
+        headSha: "abc",
+        status: "running",
+      });
+      store.updateAttempt(attempt.id, {
+        status: "completed",
+        conclusion: "declined",
+        summary: "Found a regression.",
+        completedAt: "2026-04-17T00:05:00Z",
+      });
+      store.close();
+    },
+    async () => {
+      const stdout = createBufferStream();
+      const code = await runCli(
+        ["pr", "status", "--repo", "app", "--pr", "42"],
+        {
+          stdout: stdout.stream,
+          stderr: createBufferStream().stream,
+          inspectFailureDetails: async () => ({
+            reviewRequest: {
+              id: 77,
+              authorLogin: "review-quill[bot]",
+              body: "Please fix the regression in the session bootstrap path.",
+              inlineComments: [
+                { id: 11, path: "src/bootstrap.ts", line: 19, body: "This still throws on missing config." },
+              ],
+            },
+            failedChecks: [
+              {
+                id: 91,
+                name: "Tests",
+                status: "completed",
+                conclusion: "failure",
+                outputSummary: "1 failing test: bootstrap handles missing config",
+                detailsUrl: "https://ci.example.test/run/91",
+              },
+            ],
+            pendingChecks: [],
+          }),
+        },
+      );
+      assert.equal(code, 2);
+      const text = stdout.read();
+      assert.match(text, /Requested changes review: #77 by review-quill\[bot\]/);
+      assert.match(text, /Requested change at src\/bootstrap.ts:19: This still throws on missing config\./);
+      assert.match(text, /Failed check: Tests \[completed\/failure\] — 1 failing test: bootstrap handles missing config/);
+      assert.match(text, /Check details: https:\/\/ci\.example\.test\/run\/91/);
+    },
+  );
+});
+
+test("review-quill pr status --silent omits verbose failure details in json", async () => {
+  await withConfig(
+    (configPath, dbPath) => {
+      writeConfig(configPath, dbPath);
+      const store = new SqliteStore(dbPath);
+      const attempt = store.createAttempt({
+        repoFullName: "owner/app",
+        prNumber: 42,
+        headSha: "abc",
+        status: "running",
+      });
+      store.updateAttempt(attempt.id, {
+        status: "completed",
+        conclusion: "declined",
+        summary: "Found a regression.",
+        completedAt: "2026-04-17T00:05:00Z",
+      });
+      store.close();
+    },
+    async () => {
+      const stdout = createBufferStream();
+      const code = await runCli(
+        ["pr", "status", "--repo", "app", "--pr", "42", "--silent", "--json"],
+        {
+          stdout: stdout.stream,
+          stderr: createBufferStream().stream,
+          inspectFailureDetails: async () => ({
+            reviewRequest: {
+              id: 77,
+              authorLogin: "review-quill[bot]",
+              body: "Please fix the regression in the session bootstrap path.",
+              inlineComments: [
+                { id: 11, path: "src/bootstrap.ts", line: 19, body: "This still throws on missing config." },
+              ],
+            },
+            failedChecks: [
+              {
+                id: 91,
+                name: "Tests",
+                status: "completed",
+                conclusion: "failure",
+                outputSummary: "1 failing test: bootstrap handles missing config",
+              },
+            ],
+            pendingChecks: [],
+          }),
+        },
+      );
+      assert.equal(code, 2);
+      const payload = JSON.parse(stdout.read());
+      assert.equal(payload.kind, "declined");
+      assert.equal(payload.failureDetails, undefined);
+      assert.equal(payload.summaryFirstLine, "Found a regression.");
+    },
+  );
+});
+
+test("review-quill pr status --silent omits verbose failure details in text", async () => {
+  await withConfig(
+    (configPath, dbPath) => {
+      writeConfig(configPath, dbPath);
+      const store = new SqliteStore(dbPath);
+      const attempt = store.createAttempt({
+        repoFullName: "owner/app",
+        prNumber: 42,
+        headSha: "abc",
+        status: "running",
+      });
+      store.updateAttempt(attempt.id, {
+        status: "completed",
+        conclusion: "declined",
+        summary: "Found a regression.",
+        completedAt: "2026-04-17T00:05:00Z",
+      });
+      store.close();
+    },
+    async () => {
+      const stdout = createBufferStream();
+      const code = await runCli(
+        ["pr", "status", "--repo", "app", "--pr", "42", "--silent"],
+        {
+          stdout: stdout.stream,
+          stderr: createBufferStream().stream,
+          inspectFailureDetails: async () => ({
+            reviewRequest: {
+              id: 77,
+              authorLogin: "review-quill[bot]",
+              body: "Please fix the regression in the session bootstrap path.",
+              inlineComments: [
+                { id: 11, path: "src/bootstrap.ts", line: 19, body: "This still throws on missing config." },
+              ],
+            },
+            failedChecks: [
+              {
+                id: 91,
+                name: "Tests",
+                status: "completed",
+                conclusion: "failure",
+                outputSummary: "1 failing test: bootstrap handles missing config",
+              },
+            ],
+            pendingChecks: [],
+          }),
+        },
+      );
+      assert.equal(code, 2);
+      const text = stdout.read();
+      assert.match(text, /State: declined/);
+      assert.match(text, /Summary: Found a regression\./);
+      assert.doesNotMatch(text, /Requested changes review:/);
+      assert.doesNotMatch(text, /Failed check:/);
     },
   );
 });

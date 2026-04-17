@@ -8,7 +8,7 @@ test("evaluateReviewEligibility rejects drafts and missing heads", async () => {
   };
   assert.deepEqual(
     await evaluateReviewEligibility({
-      repo: { repoFullName: "owner/repo", requiredChecks: [], excludeBranches: [] } as never,
+      repo: { repoFullName: "owner/repo", waitForGreenChecks: false, requiredChecks: [], excludeBranches: [] } as never,
       github,
       headSha: "",
       isDraft: false,
@@ -18,7 +18,7 @@ test("evaluateReviewEligibility rejects drafts and missing heads", async () => {
   );
   assert.deepEqual(
     await evaluateReviewEligibility({
-      repo: { repoFullName: "owner/repo", requiredChecks: [], excludeBranches: [] } as never,
+      repo: { repoFullName: "owner/repo", waitForGreenChecks: false, requiredChecks: [], excludeBranches: [] } as never,
       github,
       headSha: "sha",
       isDraft: true,
@@ -28,9 +28,31 @@ test("evaluateReviewEligibility rejects drafts and missing heads", async () => {
   );
 });
 
-test("evaluateReviewEligibility accepts green required checks", async () => {
+test("evaluateReviewEligibility starts immediately after branch updates by default", async () => {
   const result = await evaluateReviewEligibility({
-    repo: { repoFullName: "owner/repo", requiredChecks: ["Tests"], excludeBranches: [] } as never,
+    repo: { repoFullName: "owner/repo", waitForGreenChecks: false, requiredChecks: ["Tests"], excludeBranches: [] } as never,
+    github: {
+      listCheckRuns: async () => [{ name: "Tests", status: "in_progress" }],
+    },
+    headSha: "sha",
+    isDraft: false,
+    branchName: "feature/x",
+  });
+  assert.deepEqual(result, {
+    eligible: true,
+    checkRuns: [
+      {
+        id: 1,
+        name: "Tests",
+        status: "in_progress",
+      },
+    ],
+  });
+});
+
+test("evaluateReviewEligibility accepts green required checks when waiting is enabled", async () => {
+  const result = await evaluateReviewEligibility({
+    repo: { repoFullName: "owner/repo", waitForGreenChecks: true, requiredChecks: ["Tests"], excludeBranches: [] } as never,
     github: {
       listCheckRuns: async () => [{ name: "Tests", status: "completed", conclusion: "success" }],
     },
@@ -46,6 +68,29 @@ test("evaluateReviewEligibility accepts green required checks", async () => {
         name: "Tests",
         status: "completed",
         conclusion: "success",
+      },
+    ],
+  });
+});
+
+test("evaluateReviewEligibility blocks on non-green checks when waiting is enabled", async () => {
+  const result = await evaluateReviewEligibility({
+    repo: { repoFullName: "owner/repo", waitForGreenChecks: true, requiredChecks: ["Tests"], excludeBranches: [] } as never,
+    github: {
+      listCheckRuns: async () => [{ name: "Tests", status: "in_progress" }],
+    },
+    headSha: "sha",
+    isDraft: false,
+    branchName: "feature/x",
+  });
+  assert.deepEqual(result, {
+    eligible: false,
+    reason: "required_checks_not_green",
+    checkRuns: [
+      {
+        id: 1,
+        name: "Tests",
+        status: "in_progress",
       },
     ],
   });

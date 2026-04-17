@@ -1,9 +1,17 @@
+import pino from "pino";
 import { decorateAttempt } from "../attempt-state.ts";
 import { loadConfig } from "../config.ts";
 import { SqliteStore } from "../db/sqlite-store.ts";
 import { getDefaultConfigPath } from "../runtime-paths.ts";
-import { loadRepoConfigById } from "../cli-system.ts";
-import type { ReviewAttemptRecord } from "../types.ts";
+import { getHomeEnv, loadRepoConfigById } from "../cli-system.ts";
+import { resolveGitHubAuthConfig, createGitHubAppTokenManager } from "../github-auth.ts";
+import { GitHubClient } from "../github-client.ts";
+import type {
+  CheckRunRecord,
+  PullRequestReviewCommentRecord,
+  PullRequestReviewRecord,
+  ReviewAttemptRecord,
+} from "../types.ts";
 import type { Output } from "./shared.ts";
 import { formatJson, writeOutput } from "./shared.ts";
 import { type ParsedArgs } from "./args.ts";
@@ -31,6 +39,38 @@ export interface PrReviewReport {
   summaryFirstLine?: string;
   checkedAt: string;
   reason?: string;
+  failureDetails?: PrReviewFailureDetails;
+}
+
+export interface PrReviewFailureReviewComment {
+  id: number;
+  authorLogin?: string;
+  path?: string;
+  line?: number;
+  body?: string;
+}
+
+export interface PrReviewFailureCheck {
+  id: number;
+  name: string;
+  status: string;
+  conclusion?: string;
+  detailsUrl?: string;
+  outputTitle?: string;
+  outputSummary?: string;
+  outputText?: string;
+}
+
+export interface PrReviewFailureDetails {
+  reviewRequest?: {
+    id: number;
+    authorLogin?: string;
+    submittedAt?: string;
+    body?: string;
+    inlineComments: PrReviewFailureReviewComment[];
+  };
+  failedChecks: PrReviewFailureCheck[];
+  pendingChecks: PrReviewFailureCheck[];
 }
 
 export function classifyAttempt(attempt: ReviewAttemptRecord | undefined): { kind: PrReviewKind; reason?: string } {
@@ -89,6 +129,7 @@ export interface BuildReviewReportOptions {
   repoFullName: string;
   prNumber: number;
   attempt?: (ReviewAttemptRecord & { stale?: boolean; staleReason?: string }) | undefined;
+  failureDetails?: PrReviewFailureDetails;
 }
 
 export function buildPrReviewReport(options: BuildReviewReportOptions): PrReviewReport {
@@ -105,8 +146,29 @@ export function buildPrReviewReport(options: BuildReviewReportOptions): PrReview
     ...(options.attempt ? { attempt: options.attempt } : {}),
     ...(summaryLine ? { summaryFirstLine: summaryLine } : {}),
     ...(reason ? { reason } : {}),
+    ...(options.failureDetails ? { failureDetails: options.failureDetails } : {}),
     checkedAt,
   };
+}
+
+function toSilentReport(report: PrReviewReport): PrReviewReport {
+  if (!report.failureDetails) return report;
+  const { failureDetails: _failureDetails, ...rest } = report;
+  return rest;
+}
+
+function firstNonEmptyLine(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean);
+}
+
+function formatCheckFailureReason(check: PrReviewFailureCheck): string | undefined {
+  return firstNonEmptyLine(check.outputSummary)
+    ?? firstNonEmptyLine(check.outputText)
+    ?? firstNonEmptyLine(check.outputTitle);
 }
 
 function formatReportText(report: PrReviewReport): string {
@@ -124,6 +186,29 @@ function formatReportText(report: PrReviewReport): string {
     if (report.attempt.stale) lines.push(`Stale: ${report.attempt.staleReason ?? "yes"}`);
     if (report.summaryFirstLine) lines.push(`Summary: ${report.summaryFirstLine}`);
   }
+  if (report.failureDetails?.reviewRequest) {
+    const review = report.failureDetails.reviewRequest;
+    lines.push(`Requested changes review: #${review.id}${review.authorLogin ? ` by ${review.authorLogin}` : ""}`);
+    if (review.submittedAt) lines.push(`Requested changes at: ${review.submittedAt}`);
+    if (review.body?.trim()) {
+      lines.push("Review request body:");
+      lines.push(review.body.trim());
+    }
+    for (const comment of review.inlineComments) {
+      const location = [comment.path, comment.line !== undefined ? String(comment.line) : undefined].filter(Boolean).join(":");
+      const prefix = location ? `Requested change at ${location}` : "Requested change";
+      lines.push(`${prefix}: ${comment.body?.trim() ?? "(no body)"}`);
+    }
+  }
+  for (const check of report.failureDetails?.failedChecks ?? []) {
+    const reason = formatCheckFailureReason(check);
+    lines.push(`Failed check: ${check.name} [${check.status}${check.conclusion ? `/${check.conclusion}` : ""}]${reason ? ` — ${reason}` : ""}`);
+    if (check.detailsUrl) lines.push(`Check details: ${check.detailsUrl}`);
+  }
+  for (const check of report.failureDetails?.pendingChecks ?? []) {
+    lines.push(`Pending check: ${check.name} [${check.status}${check.conclusion ? `/${check.conclusion}` : ""}]`);
+    if (check.detailsUrl) lines.push(`Check details: ${check.detailsUrl}`);
+  }
   return lines.join("\n") + "\n";
 }
 
@@ -135,12 +220,112 @@ function selectLatestAttempt(attempts: Array<ReviewAttemptRecord & { stale?: boo
   return pool[0];
 }
 
+function isCheckSuccessful(check: CheckRunRecord): boolean {
+  const conclusion = (check.conclusion ?? "").toLowerCase();
+  return check.status === "completed" && ["success", "neutral", "skipped"].includes(conclusion);
+}
+
+function mapCheck(check: CheckRunRecord): PrReviewFailureCheck {
+  return {
+    id: check.id,
+    name: check.name,
+    status: check.status,
+    ...(check.conclusion ? { conclusion: check.conclusion } : {}),
+    ...(check.detailsUrl ? { detailsUrl: check.detailsUrl } : {}),
+    ...(check.outputTitle ? { outputTitle: check.outputTitle } : {}),
+    ...(check.outputSummary ? { outputSummary: check.outputSummary } : {}),
+    ...(check.outputText ? { outputText: check.outputText } : {}),
+  };
+}
+
+function matchRequestedChangesReview(
+  reviews: PullRequestReviewRecord[],
+  headSha: string,
+): PullRequestReviewRecord | undefined {
+  const exactHead = [...reviews].reverse().find((review) => review.state === "CHANGES_REQUESTED" && review.commitId === headSha);
+  if (exactHead) return exactHead;
+  return [...reviews].reverse().find((review) => review.state === "CHANGES_REQUESTED");
+}
+
+function mapInlineComments(
+  comments: PullRequestReviewCommentRecord[],
+  reviewId: number,
+  headSha: string,
+): PrReviewFailureReviewComment[] {
+  return comments
+    .filter((comment) => comment.reviewId === reviewId && (!comment.commitId || comment.commitId === headSha))
+    .map((comment) => ({
+      id: comment.id,
+      ...(comment.authorLogin ? { authorLogin: comment.authorLogin } : {}),
+      ...(comment.path ? { path: comment.path } : {}),
+      ...(comment.line !== undefined ? { line: comment.line } : {}),
+      ...(comment.body ? { body: comment.body } : {}),
+    }));
+}
+
+async function loadFailureDetailsFromGitHub(params: {
+  repoFullName: string;
+  prNumber: number;
+  headSha: string;
+}): Promise<PrReviewFailureDetails | undefined> {
+  const auth = resolveGitHubAuthConfig(getHomeEnv());
+  if (auth.mode !== "app") {
+    return undefined;
+  }
+
+  const logger = pino({ enabled: false });
+  const tokenManager = createGitHubAppTokenManager(auth.credentials, [params.repoFullName], logger);
+  await tokenManager.start();
+  try {
+    const github = new GitHubClient({
+      currentTokenForRepo: (repoFullName?: string) => tokenManager.currentTokenForRepo(repoFullName),
+    });
+    const [reviews, comments, checks] = await Promise.all([
+      github.listPullRequestReviews(params.repoFullName, params.prNumber),
+      github.listPullRequestReviewComments(params.repoFullName, params.prNumber),
+      github.listCheckRuns(params.repoFullName, params.headSha),
+    ]);
+    const requestedReview = matchRequestedChangesReview(reviews, params.headSha);
+    const failedChecks = checks
+      .filter((check) => check.status === "completed" && !isCheckSuccessful(check))
+      .map(mapCheck);
+    const pendingChecks = checks
+      .filter((check) => check.status !== "completed")
+      .map(mapCheck);
+    if (!requestedReview && failedChecks.length === 0 && pendingChecks.length === 0) {
+      return undefined;
+    }
+    return {
+      ...(requestedReview
+        ? {
+          reviewRequest: {
+            id: requestedReview.id,
+            ...(requestedReview.authorLogin ? { authorLogin: requestedReview.authorLogin } : {}),
+            ...(requestedReview.submittedAt ? { submittedAt: requestedReview.submittedAt } : {}),
+            ...(requestedReview.body ? { body: requestedReview.body } : {}),
+            inlineComments: mapInlineComments(comments, requestedReview.id, params.headSha),
+          },
+        }
+        : {}),
+      failedChecks,
+      pendingChecks,
+    };
+  } finally {
+    tokenManager.stop();
+  }
+}
+
 export interface HandlePrStatusOptions {
   parsed: ParsedArgs;
   stdout: Output;
   resolveCommand?: ResolveCommandRunner | undefined;
   now?: (() => number) | undefined;
   sleep?: ((ms: number) => Promise<void>) | undefined;
+  inspectFailureDetails?: ((params: {
+    repoFullName: string;
+    prNumber: number;
+    headSha: string;
+  }) => Promise<PrReviewFailureDetails | undefined>) | undefined;
 }
 
 export interface WaitOptions {
@@ -223,11 +408,20 @@ export async function handlePrStatus(options: HandlePrStatusOptions): Promise<nu
         }),
       );
       const selected = selectLatestAttempt(attempts);
+      const { kind } = classifyAttempt(selected);
+      const failureDetails = selected && exitCodeForKind(kind) === 2
+        ? await (options.inspectFailureDetails ?? loadFailureDetailsFromGitHub)({
+          repoFullName: repo.repoFullName,
+          prNumber: resolvedPr.prNumber,
+          headSha: selected.headSha,
+        }).catch(() => undefined)
+        : undefined;
       return buildPrReviewReport({
         repoId: resolvedRepo.repoId,
         repoFullName: repo.repoFullName,
         prNumber: resolvedPr.prNumber,
         attempt: selected,
+        ...(failureDetails ? { failureDetails } : {}),
       });
     } finally {
       store.close();
@@ -247,6 +441,10 @@ export async function handlePrStatus(options: HandlePrStatusOptions): Promise<nu
     timedOut = result.timedOut;
   } else {
     report = await buildReport();
+  }
+
+  if (parsed.flags.get("silent") === true || typeof parsed.flags.get("silent") === "string") {
+    report = toSilentReport(report);
   }
 
   const payload = timedOut ? { ...report, timedOut: true } : report;

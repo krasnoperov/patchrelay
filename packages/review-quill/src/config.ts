@@ -14,6 +14,7 @@ const repositorySchema = z.object({
   repoId: z.string().min(1),
   repoFullName: z.string().min(1),
   baseBranch: z.string().default("main"),
+  waitForGreenChecks: z.boolean().default(false),
   requiredChecks: z.array(z.string()).default([]),
   excludeBranches: z.array(z.string()).default([]),
   reviewDocs: z.array(z.string()).default(["REVIEW_WORKFLOW.md", "CLAUDE.md", "AGENTS.md"]),

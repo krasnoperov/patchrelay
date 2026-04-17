@@ -4,7 +4,7 @@ import { initializeReviewQuillHome, installServiceUnit, upsertRepoConfig } from 
 import type { Output } from "./shared.ts";
 import { formatJson, writeOutput } from "./shared.ts";
 import type { ParsedArgs } from "./args.ts";
-import { normalizePublicBaseUrl, parseAttachTarget, UsageError } from "./args.ts";
+import { normalizePublicBaseUrl, parseAttachTarget, parseBooleanFlag, UsageError } from "./args.ts";
 import { discoverRepoSettingsViaGhCli } from "./gh.ts";
 import { runSystemctl } from "../cli-system.ts";
 
@@ -68,6 +68,7 @@ export async function handleAttach(parsed: ParsedArgs, stdout: Output, runComman
   const { repoId, repoFullName } = parseAttachTarget(parsed);
   const existing = listRepoConfigs().find((repo) => repo.repoId === repoId || repo.repoFullName === repoFullName);
   const explicitBaseBranch = typeof parsed.flags.get("base-branch") === "string" ? String(parsed.flags.get("base-branch")) : undefined;
+  const explicitWaitForGreenChecks = parseBooleanFlag(parsed.flags.get("wait-for-green-checks"), "--wait-for-green-checks");
   const explicitRequiredChecks = typeof parsed.flags.get("required-check") === "string"
     ? String(parsed.flags.get("required-check")).split(",").map((entry) => entry.trim()).filter(Boolean)
     : [];
@@ -100,6 +101,7 @@ export async function handleAttach(parsed: ParsedArgs, stdout: Output, runComman
     id: repoId,
     repoFullName,
     ...((explicitBaseBranch ?? discovered?.branch) ? { baseBranch: explicitBaseBranch ?? discovered?.branch ?? "main" } : {}),
+    ...(explicitWaitForGreenChecks !== undefined ? { waitForGreenChecks: explicitWaitForGreenChecks } : {}),
     ...(explicitRequiredChecks.length > 0 ? { requiredChecks: explicitRequiredChecks } : discovered ? { requiredChecks: discovered.requiredChecks } : {}),
     ...(explicitReviewDocs.length > 0 ? { reviewDocs: explicitReviewDocs } : {}),
   });
@@ -122,7 +124,8 @@ export async function handleAttach(parsed: ParsedArgs, stdout: Output, runComman
       `Repo config: ${result.configPath}`,
       `${result.status === "created" ? "Attached" : result.status === "updated" ? "Updated" : "Verified"} repo ${result.repo.repoId} for ${result.repo.repoFullName}`,
       `Base branch: ${result.repo.baseBranch}`,
-      `Required checks: ${result.repo.requiredChecks.length > 0 ? result.repo.requiredChecks.join(", ") : "(any green check)"}`,
+      `Review start: ${result.repo.waitForGreenChecks ? "after required checks are green" : "immediately after branch updates"}`,
+      `Required checks: ${result.repo.requiredChecks.length > 0 ? result.repo.requiredChecks.join(", ") : "(GitHub-discovered when waiting is enabled)"}`,
       `Review docs: ${result.repo.reviewDocs.join(", ")}`,
       `Summarize-only diff patterns: ${result.repo.diffSummarizeOnly.join(", ") || "(none)"}`,
       `Ignored diff patterns: ${result.repo.diffIgnore.join(", ") || "(none)"}`,
@@ -161,6 +164,7 @@ export async function handleRepos(parsed: ParsedArgs, stdout: Output): Promise<n
     repoId: repo.repoId,
     repoFullName: repo.repoFullName,
     baseBranch: repo.baseBranch,
+    waitForGreenChecks: repo.waitForGreenChecks,
     requiredChecks: repo.requiredChecks,
     excludeBranches: repo.excludeBranches,
     reviewDocs: repo.reviewDocs,
@@ -183,7 +187,8 @@ export async function handleRepos(parsed: ParsedArgs, stdout: Output): Promise<n
       `GitHub repo: ${repo.repoFullName}`,
       `Config path: ${configPath}`,
       `Base branch: ${repo.baseBranch}`,
-      `Required checks: ${repo.requiredChecks.length > 0 ? repo.requiredChecks.join(", ") : "(any green check)"}`,
+      `Review start: ${repo.waitForGreenChecks ? "after required checks are green" : "immediately after branch updates"}`,
+      `Required checks: ${repo.requiredChecks.length > 0 ? repo.requiredChecks.join(", ") : "(GitHub-discovered when waiting is enabled)"}`,
       `Exclude branches: ${repo.excludeBranches.join(", ")}`,
       `Review docs: ${repo.reviewDocs.join(", ")}`,
       `Summarize-only diff patterns: ${repo.diffSummarizeOnly.join(", ") || "(none)"}`,

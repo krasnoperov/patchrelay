@@ -20,6 +20,7 @@ function baseContext(): Omit<ReviewContext, "prompt"> {
       repoId: "fixture",
       repoFullName: "example/fixture",
       baseBranch: "main",
+      waitForGreenChecks: true,
       requiredChecks: ["Tests"],
       excludeBranches: [],
       reviewDocs: ["REVIEW_WORKFLOW.md", "CLAUDE.md", "AGENTS.md"],

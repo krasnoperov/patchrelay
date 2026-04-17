@@ -33,3 +33,28 @@ test("loadConfig resolves installation prompt files relative to the config file"
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("loadConfig defaults waitForGreenChecks to false for repositories", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "review-quill-config-repo-defaults-"));
+  const configDir = path.join(baseDir, "config");
+  const configPath = path.join(configDir, "review-quill.json");
+
+  try {
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(configPath, JSON.stringify({
+      server: { bind: "127.0.0.1", port: 8788 },
+      database: { path: path.join(baseDir, "review-quill.sqlite"), wal: true },
+      repositories: [
+        {
+          repoId: "mafia",
+          repoFullName: "owner/repo",
+        },
+      ],
+    }, null, 2));
+
+    const config = loadConfig(configPath);
+    assert.equal(config.repositories[0]?.waitForGreenChecks, false);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
