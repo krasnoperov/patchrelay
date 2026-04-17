@@ -1,12 +1,24 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { QueueEntry, QueueWatchSnapshot, QueueEntryStatus } from "../src/types.ts";
-import { buildQueueSummary, getDefaultEntryId, getRepoHealth, projectStatsSummary, type DashboardRepoState } from "../src/watch/dashboard-model.ts";
+import type { QueueEntry, QueueEntryStatus, QueueWatchSnapshot } from "../src/types.ts";
+import {
+  buildDashboard,
+  buildQueueSummary,
+  clipSummary,
+  stepRepo,
+  type DashboardRepoState,
+} from "../src/watch/dashboard-model.ts";
+
+const NOW = Date.parse("2026-04-17T12:00:00.000Z");
+
+function minutesAgo(n: number): string {
+  return new Date(NOW - n * 60_000).toISOString();
+}
 
 function makeEntry(overrides: Partial<QueueEntry> & { prNumber: number; position: number; status: QueueEntryStatus }): QueueEntry {
   return {
     id: `qe-${overrides.prNumber}-${overrides.position}`,
-    repoId: "ballony-i-nasosy",
+    repoId: "repo-a",
     branch: `feat-${overrides.prNumber}`,
     headSha: `head-${overrides.prNumber}-${overrides.position}`,
     baseSha: "base-sha",
@@ -21,16 +33,20 @@ function makeEntry(overrides: Partial<QueueEntry> & { prNumber: number; position
     specBranch: null,
     specSha: null,
     specBasedOn: null,
-    enqueuedAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
+    postMergeStatus: null,
+    postMergeSha: null,
+    postMergeSummary: null,
+    postMergeCheckedAt: null,
+    enqueuedAt: minutesAgo(10),
+    updatedAt: minutesAgo(5),
     ...overrides,
   };
 }
 
-function makeSnapshot(entries: QueueEntry[]): QueueWatchSnapshot {
+function makeSnapshot(entries: QueueEntry[], queueBlock: QueueWatchSnapshot["queueBlock"] = null): QueueWatchSnapshot {
   return {
-    repoId: "ballony-i-nasosy",
-    repoFullName: "krasnoperov/ballony-i-nasosy",
+    repoId: "repo-a",
+    repoFullName: "owner/repo-a",
     baseBranch: "main",
     githubPolicy: {
       requiredChecks: [],
@@ -38,27 +54,15 @@ function makeSnapshot(entries: QueueEntry[]): QueueWatchSnapshot {
       lastRefreshReason: null,
       lastRefreshChanged: null,
     },
-    summary: {
-      total: entries.length,
-      active: entries.filter((entry) => !["merged", "evicted", "dequeued"].includes(entry.status)).length,
-      queued: entries.filter((entry) => entry.status === "queued").length,
-      preparingHead: entries.filter((entry) => entry.status === "preparing_head").length,
-      validating: entries.filter((entry) => entry.status === "validating").length,
-      merging: entries.filter((entry) => entry.status === "merging").length,
-      merged: entries.filter((entry) => entry.status === "merged").length,
-      evicted: entries.filter((entry) => entry.status === "evicted").length,
-      dequeued: entries.filter((entry) => entry.status === "dequeued").length,
-      headEntryId: null,
-      headPrNumber: null,
-    },
+    summary: buildQueueSummary(entries),
     runtime: {
       tickInProgress: false,
       lastTickStartedAt: null,
-      lastTickCompletedAt: new Date().toISOString(),
+      lastTickCompletedAt: minutesAgo(1),
       lastTickOutcome: "succeeded",
       lastTickError: null,
     },
-    queueBlock: null,
+    queueBlock,
     entries,
     recentEvents: [],
   };
@@ -73,139 +77,165 @@ function makeRepo(snapshot: QueueWatchSnapshot): DashboardRepoState {
     serviceMessage: null,
     snapshot,
     error: null,
-    lastSnapshotReceivedAt: Date.now(),
+    lastSnapshotReceivedAt: NOW,
   };
 }
 
-test("repo health ignores an older evicted attempt when the same PR was later merged", () => {
-  const evicted = makeEntry({
-    prNumber: 49,
-    position: 1,
-    status: "evicted",
-    updatedAt: new Date(Date.now() - 30_000).toISOString(),
-  });
-  const merged = makeEntry({
-    prNumber: 49,
-    position: 2,
-    status: "merged",
-    updatedAt: new Date().toISOString(),
-  });
-  const snapshot = makeSnapshot([evicted, merged]);
-
-  const health = getRepoHealth(makeRepo(snapshot));
-
-  assert.equal(health.kind, "idle");
-  assert.doesNotMatch(health.detail, /was evicted and needs repair/i);
+test("PR token color matches glyph color across queue kinds", () => {
+  const snapshot = makeSnapshot([
+    makeEntry({ prNumber: 1, position: 1, status: "validating" }),
+    makeEntry({ prNumber: 2, position: 2, status: "queued" }),
+    makeEntry({ prNumber: 3, position: 3, status: "merged", postMergeStatus: "pass", updatedAt: minutesAgo(30) }),
+    makeEntry({ prNumber: 4, position: 4, status: "evicted", updatedAt: minutesAgo(20) }),
+  ]);
+  const model = buildDashboard([makeRepo(snapshot)], { now: NOW });
+  const tokens = model.repos[0]?.tokens ?? [];
+  const byPr = new Map(tokens.map((token) => [token.prNumber, token]));
+  assert.equal(byPr.get(1)?.color, "yellow");
+  assert.equal(byPr.get(1)?.glyph, "\u25cf");
+  assert.equal(byPr.get(2)?.color, "gray");
+  assert.equal(byPr.get(2)?.glyph, "\u25cb");
+  assert.equal(byPr.get(3)?.color, "green");
+  assert.equal(byPr.get(3)?.glyph, "\u2713");
+  assert.equal(byPr.get(4)?.color, "red");
+  assert.equal(byPr.get(4)?.glyph, "\u26a0");
 });
 
-test("project stats only count unresolved latest evictions as need repair", () => {
-  const supersededEvicted = makeEntry({
-    prNumber: 49,
-    position: 1,
-    status: "evicted",
-    updatedAt: new Date(Date.now() - 30_000).toISOString(),
-  });
-  const merged = makeEntry({
-    prNumber: 49,
-    position: 2,
-    status: "merged",
-    updatedAt: new Date().toISOString(),
-  });
-  const unresolvedEvicted = makeEntry({
-    prNumber: 51,
-    position: 3,
-    status: "evicted",
-    updatedAt: new Date().toISOString(),
-  });
-  const snapshot = makeSnapshot([supersededEvicted, merged, unresolvedEvicted]);
-
-  const summary = projectStatsSummary(snapshot);
-
-  assert.match(summary, /1 need repair/);
-  assert.doesNotMatch(summary, /2 need repair/);
+test("running entries come first then queued then decided newest-first", () => {
+  const snapshot = makeSnapshot([
+    makeEntry({ prNumber: 10, position: 1, status: "merged", postMergeStatus: "pass", updatedAt: minutesAgo(90) }),
+    makeEntry({ prNumber: 11, position: 2, status: "merged", postMergeStatus: "pass", updatedAt: minutesAgo(60) }),
+    makeEntry({ prNumber: 12, position: 3, status: "queued", updatedAt: minutesAgo(10) }),
+    makeEntry({ prNumber: 13, position: 4, status: "validating", updatedAt: minutesAgo(5) }),
+  ]);
+  const model = buildDashboard([makeRepo(snapshot)], { now: NOW });
+  assert.deepEqual(
+    model.repos[0]?.tokens.map((t) => t.prNumber),
+    [13, 12, 11, 10],
+  );
 });
 
-test("queue summary counts active and terminal entries by latest queue state", () => {
-  const queued = makeEntry({
-    prNumber: 60,
-    position: 1,
-    status: "queued",
-  });
-  const merged = makeEntry({
-    prNumber: 61,
-    position: 2,
-    status: "merged",
-  });
-  const evicted = makeEntry({
-    prNumber: 62,
-    position: 3,
-    status: "evicted",
-  });
+test("decided PRs older than the time window are dropped", () => {
+  const snapshot = makeSnapshot([
+    makeEntry({ prNumber: 20, position: 1, status: "merged", postMergeStatus: "pass", updatedAt: minutesAgo(60 * 48) }),
+    makeEntry({ prNumber: 21, position: 2, status: "validating", updatedAt: minutesAgo(5) }),
+  ]);
+  const model = buildDashboard([makeRepo(snapshot)], { now: NOW });
+  assert.deepEqual(
+    model.repos[0]?.tokens.map((t) => t.prNumber),
+    [21],
+  );
+});
 
+test("queue block re-labels the head PR as main broken with red glyph", () => {
+  const snapshot = makeSnapshot(
+    [
+      makeEntry({ prNumber: 30, position: 1, status: "merging" }),
+      makeEntry({ prNumber: 31, position: 2, status: "queued" }),
+    ],
+    {
+      baseSha: "base",
+      baseBranch: "main",
+      failingChecks: ["ci"],
+      pendingChecks: [],
+      missingRequiredChecks: [],
+      branchAt: new Date().toISOString(),
+      lastRefreshedAt: new Date().toISOString(),
+    } as unknown as QueueWatchSnapshot["queueBlock"],
+  );
+  const model = buildDashboard([makeRepo(snapshot)], { now: NOW });
+  const head = model.repos[0]?.entries.find((entry) => entry.prNumber === 30);
+  assert.equal(head?.kind, "error");
+  assert.equal(head?.glyph, "\u26a0");
+  assert.equal(head?.phrase, "main broken");
+});
+
+test("merged PR with failed post-merge CI becomes a red declined token", () => {
+  const snapshot = makeSnapshot([
+    makeEntry({
+      prNumber: 40,
+      position: 1,
+      status: "merged",
+      postMergeStatus: "fail",
+      postMergeSummary: "required check `integration` failed on main",
+      updatedAt: minutesAgo(30),
+    }),
+  ]);
+  const entry = buildDashboard([makeRepo(snapshot)], { now: NOW }).repos[0]?.entries[0];
+  assert.equal(entry?.kind, "declined");
+  assert.equal(entry?.color, "red");
+  assert.equal(entry?.phrase, "post-merge failed");
+  assert.equal(entry?.summary, "required check `integration` failed on main");
+});
+
+test("dequeued entries do not appear in the dashboard", () => {
+  const snapshot = makeSnapshot([
+    makeEntry({ prNumber: 50, position: 1, status: "dequeued", updatedAt: minutesAgo(10) }),
+    makeEntry({ prNumber: 51, position: 2, status: "queued", updatedAt: minutesAgo(5) }),
+  ]);
+  const model = buildDashboard([makeRepo(snapshot)], { now: NOW });
+  const prs = model.repos[0]?.tokens.map((t) => t.prNumber) ?? [];
+  assert.deepEqual(prs, [51]);
+});
+
+test("queued non-head entry gets a 'behind head' phrase", () => {
+  const snapshot = makeSnapshot([
+    makeEntry({ prNumber: 60, position: 1, status: "validating" }),
+    makeEntry({ prNumber: 61, position: 2, status: "queued" }),
+  ]);
+  const entries = buildDashboard([makeRepo(snapshot)], { now: NOW }).repos[0]?.entries ?? [];
+  const second = entries.find((entry) => entry.prNumber === 61);
+  assert.equal(second?.phrase, "behind head");
+});
+
+test("offline repo renders an offline message instead of tokens", () => {
+  const repos: DashboardRepoState[] = [
+    {
+      repoId: "repo-a",
+      repoFullName: "owner/repo-a",
+      baseBranch: "main",
+      serviceState: "offline",
+      serviceMessage: null,
+      snapshot: null,
+      error: "gateway unreachable",
+      lastSnapshotReceivedAt: null,
+    },
+  ];
+  const model = buildDashboard(repos, { now: NOW });
+  assert.equal(model.repos.length, 1);
+  assert.equal(model.repos[0]?.offlineMessage, "gateway unreachable");
+  assert.equal(model.repos[0]?.tokens.length, 0);
+});
+
+test("stepRepo cycles through repos", () => {
+  const repos = [
+    { repoId: "a", repoFullName: "a", tokens: [], entries: [], latestActivityAt: 0, hasActivity: true, offlineMessage: null },
+    { repoId: "b", repoFullName: "b", tokens: [], entries: [], latestActivityAt: 0, hasActivity: true, offlineMessage: null },
+    { repoId: "c", repoFullName: "c", tokens: [], entries: [], latestActivityAt: 0, hasActivity: true, offlineMessage: null },
+  ];
+  assert.equal(stepRepo(repos, "a", 1), "b");
+  assert.equal(stepRepo(repos, "c", 1), "a");
+  assert.equal(stepRepo(repos, "a", -1), "c");
+});
+
+test("clipSummary cuts on a sentence boundary and never appends an ellipsis", () => {
+  const summary = "Required check `integration` failed on main. Follow-up rollback opened. Further context that definitely will not fit.";
+  const clipped = clipSummary(summary, { maxLines: 2, width: 40 });
+  assert.ok(!clipped.includes("\u2026"));
+  assert.ok(!clipped.endsWith("..."));
+  assert.ok(clipped.length > 0);
+  assert.ok(clipped.split("\n").length <= 2);
+});
+
+test("buildQueueSummary counts each PR once by queue state", () => {
+  const queued = makeEntry({ prNumber: 100, position: 1, status: "queued" });
+  const merged = makeEntry({ prNumber: 101, position: 2, status: "merged" });
+  const evicted = makeEntry({ prNumber: 102, position: 3, status: "evicted" });
   const summary = buildQueueSummary([queued, merged, evicted]);
-
   assert.equal(summary.total, 3);
   assert.equal(summary.active, 1);
   assert.equal(summary.queued, 1);
   assert.equal(summary.merged, 1);
   assert.equal(summary.evicted, 1);
-  assert.equal(summary.headPrNumber, 60);
-});
-
-test("idle repo health reports the most recent activity instead of the oldest queue history", () => {
-  const oldMerged = makeEntry({
-    prNumber: 10,
-    position: 1,
-    status: "merged",
-    updatedAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1_000).toISOString(),
-  });
-  const recentMerged = makeEntry({
-    prNumber: 53,
-    position: 2,
-    status: "merged",
-    updatedAt: new Date(Date.now() - 30_000).toISOString(),
-  });
-  const snapshot = makeSnapshot([oldMerged, recentMerged]);
-
-  const health = getRepoHealth(makeRepo(snapshot));
-
-  assert.equal(health.kind, "idle");
-  assert.match(health.detail, /Last activity was 30s ago\./);
-  assert.doesNotMatch(health.detail, /2d ago/);
-});
-
-test("default entry is null when the active filter has no visible entries", () => {
-  const oldMerged = makeEntry({
-    prNumber: 12,
-    position: 1,
-    status: "merged",
-    updatedAt: new Date(Date.now() - 2 * 60 * 1_000).toISOString(),
-  });
-  const oldEvicted = makeEntry({
-    prNumber: 13,
-    position: 2,
-    status: "evicted",
-    updatedAt: new Date(Date.now() - 3 * 60 * 1_000).toISOString(),
-  });
-  const snapshot = makeSnapshot([oldMerged, oldEvicted]);
-
-  assert.equal(getDefaultEntryId(snapshot, "active"), null);
-});
-
-test("repo health shows initializing repos as connected startup work", () => {
-  const repo: DashboardRepoState = {
-    repoId: "ballony-i-nasosy",
-    repoFullName: "krasnoperov/ballony-i-nasosy",
-    baseBranch: "main",
-    serviceState: "initializing",
-    serviceMessage: "Merge Steward is still initializing this repo.",
-    snapshot: null,
-    error: null,
-    lastSnapshotReceivedAt: null,
-  };
-
-  const health = getRepoHealth(repo);
-
-  assert.equal(health.kind, "initializing");
-  assert.equal(health.label, "Initializing");
+  assert.equal(summary.headPrNumber, 100);
 });
