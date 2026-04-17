@@ -1,83 +1,53 @@
 import { useEffect, useReducer } from "react";
 import { Box, Text, useStdout } from "ink";
 import type { WatchFilter, WatchIssue } from "./watch-state.ts";
-import { IssueRow, estimateIssueRowHeight } from "./IssueRow.tsx";
+import { IssueRow } from "./IssueRow.tsx";
 import { StatusBar } from "./StatusBar.tsx";
 import { HelpBar } from "./HelpBar.tsx";
 
 interface IssueListViewProps {
   issues: WatchIssue[];
-  allIssues: WatchIssue[];
   selectedIndex: number;
   connected: boolean;
   lastServerMessageAt: number | null;
   filter: WatchFilter;
-  totalCount: number;
   frozen?: boolean | undefined;
   compact?: boolean | undefined;
 }
 
-const FIXED_COLS = 8;
-const CHROME_ROWS = 4;
+const CHROME_ROWS = 3;
 
 export function computeVisibleWindow(
   issues: WatchIssue[],
   selectedIndex: number,
   maxRows: number,
-  cols: number,
-  titleWidth: number,
-  compact: boolean,
 ): { start: number; end: number } {
   if (issues.length === 0) return { start: 0, end: 0 };
-
-  const clampedSelected = Math.max(0, Math.min(selectedIndex, issues.length - 1));
-  const heights = issues.map((issue, index) => estimateIssueRowHeight(issue, index === clampedSelected, cols, titleWidth, compact));
-  let start = clampedSelected;
-  let end = clampedSelected + 1;
-  let usedRows = heights[clampedSelected] ?? 1;
-
-  while (true) {
-    const canAddAbove = start > 0 && usedRows + (heights[start - 1] ?? 1) <= maxRows;
-    const canAddBelow = end < issues.length && usedRows + (heights[end] ?? 1) <= maxRows;
-    if (!canAddAbove && !canAddBelow) break;
-
-    const aboveDistance = clampedSelected - start;
-    const belowDistance = end - 1 - clampedSelected;
-    const preferAbove = canAddAbove && (!canAddBelow || aboveDistance <= belowDistance);
-
-    if (preferAbove) {
-      start -= 1;
-      usedRows += heights[start] ?? 1;
-      continue;
-    }
-
-    if (canAddBelow) {
-      usedRows += heights[end] ?? 1;
-      end += 1;
-    }
+  const clamped = Math.max(0, Math.min(selectedIndex, issues.length - 1));
+  const half = Math.floor(maxRows / 2);
+  let start = Math.max(0, clamped - half);
+  let end = Math.min(issues.length, start + maxRows);
+  if (end - start < maxRows) {
+    start = Math.max(0, end - maxRows);
   }
-
   return { start, end };
 }
 
 export function IssueListView({
   issues,
-  allIssues,
   selectedIndex,
   connected,
   lastServerMessageAt,
   filter,
-  totalCount,
   frozen,
   compact = false,
 }: IssueListViewProps): React.JSX.Element {
   const { stdout } = useStdout();
   const cols = stdout?.columns ?? 80;
   const rows = stdout?.rows ?? 24;
-  const titleWidth = Math.max(0, cols - (compact ? 24 : FIXED_COLS));
-  const maxVisibleRows = Math.max(1, rows - (compact ? 3 : CHROME_ROWS));
+  const titleWidth = Math.max(0, cols - 42);
+  const maxVisibleRows = Math.max(1, rows - CHROME_ROWS);
 
-  // Periodic refresh for elapsed times
   const [, tick] = useReducer((c: number) => c + 1, 0);
   useEffect(() => {
     if (frozen) return;
@@ -85,14 +55,7 @@ export function IssueListView({
     return () => clearInterval(id);
   }, [frozen]);
 
-  const { start: startIndex, end: endIndex } = computeVisibleWindow(
-    issues,
-    selectedIndex,
-    maxVisibleRows,
-    cols,
-    titleWidth,
-    compact,
-  );
+  const { start: startIndex, end: endIndex } = computeVisibleWindow(issues, selectedIndex, maxVisibleRows);
   const visible = issues.slice(startIndex, endIndex);
   const hiddenAbove = startIndex;
   const hiddenBelow = Math.max(0, issues.length - endIndex);
@@ -100,21 +63,17 @@ export function IssueListView({
   return (
     <Box flexDirection="column">
       <StatusBar
-        issues={issues}
-        totalCount={totalCount}
         filter={filter}
         connected={connected}
         lastServerMessageAt={lastServerMessageAt}
-        allIssues={allIssues}
         frozen={frozen ?? false}
-        compact={compact}
       />
       <Box marginTop={1} flexDirection="column">
         {issues.length === 0 ? (
-          <Text dimColor>No issues match the current filter.</Text>
+          <Text dimColor> </Text>
         ) : (
           <>
-            {hiddenAbove > 0 && <Text dimColor>{compact ? `↑${hiddenAbove}` : `  ${hiddenAbove} more above`}</Text>}
+            {hiddenAbove > 0 ? <Text dimColor>{`  ↑${hiddenAbove}`}</Text> : null}
             {visible.map((issue, i) => (
               <IssueRow
                 key={issue.issueKey ?? `${issue.projectId}-${startIndex + i}`}
@@ -124,12 +83,12 @@ export function IssueListView({
                 compact={compact}
               />
             ))}
-            {hiddenBelow > 0 && <Text dimColor>{compact ? `↓${hiddenBelow}` : `  ${hiddenBelow} more below`}</Text>}
+            {hiddenBelow > 0 ? <Text dimColor>{`  ↓${hiddenBelow}`}</Text> : null}
           </>
         )}
       </Box>
       <Box marginTop={1}>
-        <HelpBar view="list" compact={compact} />
+        <HelpBar view="list" />
       </Box>
     </Box>
   );

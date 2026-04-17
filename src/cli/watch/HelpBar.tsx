@@ -1,46 +1,43 @@
 import { Box, Text } from "ink";
-import type { WatchView, DetailTab } from "./watch-state.ts";
+import type { WatchView } from "./watch-state.ts";
 
 interface HelpBarProps {
   view: WatchView;
   follow?: boolean | undefined;
-  detailTab?: DetailTab | undefined;
-  compact?: boolean;
 }
 
-export function buildHelpBarText(view: WatchView, follow?: boolean, detailTab?: DetailTab, compact = false): string {
-  if (view === "detail") {
-    const tabHint = detailTab === "history" ? "t: timeline" : "h: history";
-    if (compact) {
-      return "j/k: scroll  f: live  p: prompt  y/c/o: copy  r: retry  s: stop  esc: list  q: quit";
-    }
+export function buildHelpBarText(view: WatchView, follow?: boolean): string {
+  if (view === "log") {
     return [
-      tabHint,
-      "j/k: scroll",
-      "Ctrl-U/Ctrl-D: page",
-      "[ ]: issue",
-      "Home/End: jump",
-      `f: live ${follow ? "on" : "off"}`,
-      "p: prompt",
-      "y/c/o: copy",
-      "v/e: transcript",
-      "s: stop",
-      "r: retry",
-    ]
-      .filter(Boolean)
-      .join("  ");
+      "j/k scroll",
+      "[ ] turn",
+      `f live ${follow ? "on" : "off"}`,
+      "y/c/o copy",
+      "e export",
+      "v pager",
+      "esc back",
+      "q quit",
+    ].join("  ");
   }
-  if (compact) {
-    return "Enter: detail  Tab: filter  x: pause  q: quit";
+  if (view === "detail") {
+    return [
+      "j/k scroll",
+      "[ ] issue",
+      "l log",
+      "p prompt",
+      "r retry",
+      "s stop",
+      "esc list",
+      "q quit",
+    ].join("  ");
   }
-  return "Enter: detail  Tab: filter";
+  return "↑↓ select  enter detail  a filter  x pause  q quit";
 }
 
-export function HelpBar({ view, follow, detailTab, compact = false }: HelpBarProps): React.JSX.Element {
-  const text = buildHelpBarText(view, follow, detailTab, compact);
+export function HelpBar({ view, follow }: HelpBarProps): React.JSX.Element {
   return (
     <Box>
-      <Text dimColor>{text}</Text>
+      <Text dimColor>{buildHelpBarText(view, follow)}</Text>
     </Box>
   );
 }

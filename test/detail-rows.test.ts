@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { TimelineEntry, TimelineRunInput } from "../src/cli/watch/timeline-builder.ts";
+import type { TimelineRunInput } from "../src/cli/watch/timeline-builder.ts";
 import { buildDetailLines } from "../src/cli/watch/detail-rows.ts";
 import { lineToPlainText, renderRichTextLines } from "../src/cli/watch/render-rich-text.ts";
+import type { OperatorFeedEvent } from "../src/operator-feed.ts";
 import type { WatchIssue } from "../src/cli/watch/watch-state.ts";
 
 function makeIssue(key: string, overrides?: Partial<WatchIssue>): WatchIssue {
@@ -61,42 +62,23 @@ test("renderRichTextLines uses color without extra bolding for links and inline 
   }
 });
 
-test("buildDetailLines keeps completed timeline runs collapsed to a summary", () => {
-  const issue = makeIssue("USE-1");
-  const timeline: TimelineEntry[] = [
-    {
-      id: "run-start-1",
-      at: "2026-03-25T10:00:00.000Z",
-      kind: "run-start",
-      runId: 1,
-      run: { runType: "implementation", status: "completed", startedAt: "2026-03-25T10:00:00.000Z", endedAt: "2026-03-25T10:05:00.000Z" },
-    },
-    {
-      id: "item-1",
-      at: "2026-03-25T10:00:10.000Z",
-      kind: "item",
-      runId: 1,
-      item: { id: "msg-1", type: "agentMessage", status: "completed", text: "First progress update." },
-    },
-    {
-      id: "item-2",
-      at: "2026-03-25T10:00:20.000Z",
-      kind: "item",
-      runId: 1,
-      item: { id: "msg-2", type: "agentMessage", status: "completed", text: "Final summary update." },
-    },
-    {
-      id: "run-end-1",
-      at: "2026-03-25T10:05:00.000Z",
-      kind: "run-end",
-      runId: 1,
-      run: { runType: "implementation", status: "completed", startedAt: "2026-03-25T10:00:00.000Z", endedAt: "2026-03-25T10:05:00.000Z" },
-    },
-  ];
-
-  const text = detailText(buildDetailLines({
-    issue,
-    timeline,
+test("detail header renders issue token, phrase, PR token, and title", () => {
+  const lines = buildDetailLines({
+    issue: makeIssue("EQ-42", {
+      title: "Fix the race in loadUser",
+      factoryState: "implementing",
+      prNumber: 1135,
+      prState: "open",
+      prChecksSummary: {
+        total: 3,
+        completed: 3,
+        passed: 3,
+        failed: 0,
+        pending: 0,
+        overall: "success",
+      },
+    }),
+    timeline: [],
     activeRunStartedAt: null,
     activeRunId: null,
     tokenUsage: null,
@@ -106,274 +88,49 @@ test("buildDetailLines keeps completed timeline runs collapsed to a summary", ()
     detailTab: "timeline",
     rawRuns: [],
     rawFeedEvents: [],
-    width: 80,
-  })).join("\n");
+    width: 100,
+  });
 
-  assert.match(text, /Final summary update\./);
-  assert.doesNotMatch(text, /First progress update\./);
+  const text = detailText(lines)[0]!;
+  assert.match(text, /EQ-42/);
+  assert.match(text, /●/);
+  assert.match(text, /implementing/);
+  assert.match(text, /#1135/);
+  assert.match(text, /✓/);
+  assert.match(text, /Fix the race in loadUser/);
 });
 
-test("buildDetailLines keeps active runs focused on the latest command output and file changes", () => {
-  const issue = makeIssue("USE-3", { activeRunType: "implementation" });
-  const timeline: TimelineEntry[] = [
+test("detail event log orders runs and feed events chronologically with category tokens", () => {
+  const runs: TimelineRunInput[] = [
     {
-      id: "run-start-9",
-      at: "2026-03-25T10:00:00.000Z",
-      kind: "run-start",
-      runId: 9,
-      run: { runType: "implementation", status: "running", startedAt: "2026-03-25T10:00:00.000Z" },
-    },
-    {
-      id: "item-msg-1",
-      at: "2026-03-25T10:00:03.000Z",
-      kind: "item",
-      runId: 9,
-      item: { id: "msg-1", type: "agentMessage", status: "completed", text: "Earlier note." },
-    },
-    {
-      id: "item-cmd-1",
-      at: "2026-03-25T10:00:04.000Z",
-      kind: "item",
-      runId: 9,
-      item: { id: "cmd-1", type: "commandExecution", status: "completed", command: "npm test", output: "FAIL old test\n" },
-    },
-    {
-      id: "item-msg-2",
-      at: "2026-03-25T10:00:06.000Z",
-      kind: "item",
-      runId: 9,
-      item: { id: "msg-2", type: "agentMessage", status: "inProgress", text: "Patching the watch rendering now." },
-    },
-    {
-      id: "item-cmd-2",
-      at: "2026-03-25T10:00:07.000Z",
-      kind: "item",
-      runId: 9,
-      item: { id: "cmd-2", type: "commandExecution", status: "inProgress", command: "npm test -- watch", output: "PASS updated watch test\n" },
-    },
-    {
-      id: "item-files-1",
-      at: "2026-03-25T10:00:08.000Z",
-      kind: "item",
-      runId: 9,
-      item: { id: "files-1", type: "fileChange", status: "completed", changes: [{ path: "src/cli/watch/App.tsx" }] },
-    },
-  ];
-
-  const text = detailText(buildDetailLines({
-    issue,
-    timeline,
-    activeRunStartedAt: "2026-03-25T10:00:00.000Z",
-    activeRunId: 9,
-    tokenUsage: null,
-    diffSummary: null,
-    plan: null,
-    issueContext: null,
-    detailTab: "timeline",
-    rawRuns: [],
-    rawFeedEvents: [],
-    width: 90,
-  })).join("\n");
-
-  assert.match(text, /Patching the watch rendering now\./);
-  assert.match(text, /\$ npm test -- watch/);
-  assert.match(text, /PASS updated watch test/);
-  assert.match(text, /updated 1 file: App\.tsx/);
-  assert.doesNotMatch(text, /Earlier note\./);
-  assert.doesNotMatch(text, /FAIL old test/);
-});
-
-test("buildDetailLines renders history messages with markdown-friendly formatting", () => {
-  const issue = makeIssue("USE-1", { factoryState: "changes_requested" });
-  const rawRuns: TimelineRunInput[] = [{
-    id: 7,
-    runType: "review_fix",
-    status: "completed",
-    startedAt: "2026-03-25T10:00:00.000Z",
-    endedAt: "2026-03-25T10:05:00.000Z",
-    report: {
-      runType: "review_fix",
+      id: 1,
+      runType: "implementation",
       status: "completed",
-      prompt: "",
-      assistantMessages: [
-        "Updated [app-shell.spec.ts](/tmp/app-shell.spec.ts#L282) and verified with `npm test`.",
-      ],
-      plans: [],
-      reasoning: [],
-      commands: [],
-      fileChanges: [],
-      toolCalls: [],
-      eventCounts: {},
+      startedAt: "2026-03-25T09:00:00.000Z",
+      endedAt: "2026-03-25T09:15:00.000Z",
     },
-  }];
-
-  const text = detailText(buildDetailLines({
-    issue,
-    timeline: [],
-    activeRunStartedAt: null,
-    activeRunId: null,
-    tokenUsage: null,
-    diffSummary: null,
-    plan: null,
-    issueContext: null,
-    detailTab: "history",
-    rawRuns,
-    rawFeedEvents: [],
-    width: 90,
-  })).join("\n");
-
-  assert.match(text, /app-shell\.spec\.ts/);
-  assert.doesNotMatch(text, /\/tmp\/app-shell\.spec\.ts#L282/);
-  assert.match(text, /npm test/);
-  assert.doesNotMatch(text, /\[app-shell\.spec\.ts\]\(/);
-});
-
-test("buildDetailLines renders header status notes with markdown-friendly formatting and compact link labels", () => {
-  const issue = makeIssue("USE-9", {
-    statusNote: "Updated [AppOverviewPanel.tsx](/tmp/AppOverviewPanel.tsx#L24) and verified with `npm test`.",
-  });
-
-  const text = detailText(buildDetailLines({
-    issue,
-    timeline: [],
-    activeRunStartedAt: null,
-    activeRunId: null,
-    tokenUsage: null,
-    diffSummary: null,
-    plan: null,
-    issueContext: null,
-    detailTab: "timeline",
-    rawRuns: [],
-    rawFeedEvents: [],
-    width: 90,
-  })).join("\n");
-
-  assert.match(text, /AppOverviewPanel\.tsx/);
-  assert.doesNotMatch(text, /\/tmp\/AppOverviewPanel\.tsx#L24/);
-  assert.match(text, /npm test/);
-  assert.doesNotMatch(text, /\[AppOverviewPanel\.tsx\]\(/);
-
-  const noteLine = buildDetailLines({
-    issue,
-    timeline: [],
-    activeRunStartedAt: null,
-    activeRunId: null,
-    tokenUsage: null,
-    diffSummary: null,
-    plan: null,
-    issueContext: null,
-    detailTab: "timeline",
-    rawRuns: [],
-    rawFeedEvents: [],
-    width: 90,
-  }).find((line) => line.segments.some((segment) => segment.text.includes("Updated")));
-
-  assert.equal(noteLine?.segments.some((segment) => segment.dimColor === true), false);
-});
-
-test("buildDetailLines keeps volatile stream status out of the transcript body", () => {
-  const issue = makeIssue("USE-12", {
-    activeRunType: "implementation",
-  });
-
-  const text = detailText(buildDetailLines({
-    issue,
-    timeline: [],
-    activeRunStartedAt: "2026-03-25T10:10:00.000Z",
-    activeRunId: 12,
-    tokenUsage: null,
-    diffSummary: null,
-    plan: null,
-    issueContext: null,
-    detailTab: "timeline",
-    rawRuns: [],
-    rawFeedEvents: [],
-    width: 90,
-  })).join("\n");
-
-  assert.doesNotMatch(text, /live edge/);
-  assert.doesNotMatch(text, /anchored review/);
-  assert.doesNotMatch(text, /disconnected · stale/);
-  assert.doesNotMatch(text, /run \d+m \d{2}s/);
-});
-
-test("buildDetailLines prefers full check summary over gate status for re-review state", () => {
-  const issue = makeIssue("TST-30", {
-    factoryState: "changes_requested",
-    readyForExecution: true,
-    prNumber: 26,
-    prReviewState: "changes_requested",
-    prCheckStatus: "success",
-    prChecksSummary: {
-      total: 3,
-      completed: 2,
-      passed: 2,
-      failed: 0,
-      pending: 1,
-      overall: "success",
+  ];
+  const feedEvents: OperatorFeedEvent[] = [
+    {
+      id: 1,
+      at: "2026-03-25T09:10:00.000Z",
+      level: "info",
+      kind: "stage",
+      summary: "stage transition",
+      stage: "delegated",
+      nextStage: "implementing",
     },
-  });
-
-  const text = detailText(buildDetailLines({
-    issue,
-    timeline: [],
-    activeRunStartedAt: null,
-    activeRunId: null,
-    tokenUsage: null,
-    diffSummary: null,
-    plan: null,
-    issueContext: null,
-    detailTab: "timeline",
-    rawRuns: [],
-    rawFeedEvents: [],
-    width: 100,
-  })).join("\n");
-
-  assert.match(text, /changes requested/);
-  assert.match(text, /checks 2\/3/);
-  assert.match(text, /checks 2\/3 still running/);
-  assert.doesNotMatch(text, /re-review needed/);
-  assert.doesNotMatch(text, /checks passed/);
-  assert.doesNotMatch(text, / {2}ready {2}/);
-});
-
-test("buildDetailLines shows completion check as a first-class transient stage", () => {
-  const issue = makeIssue("USE-120", {
-    factoryState: "implementing",
-    sessionState: "running",
-    activeRunType: "implementation",
-    completionCheckActive: true,
-    statusNote: "No PR found; checking next step",
-  });
-
-  const text = detailText(buildDetailLines({
-    issue,
-    timeline: [],
-    activeRunStartedAt: null,
-    activeRunId: 42,
-    tokenUsage: null,
-    diffSummary: null,
-    plan: null,
-    issueContext: null,
-    detailTab: "timeline",
-    rawRuns: [],
-    rawFeedEvents: [],
-    width: 100,
-  })).join("\n");
-
-  assert.match(text, /completion check/);
-  assert.match(text, /No PR found; checking next step/);
-});
-
-test("buildDetailLines keeps header PR and review facts colorized instead of flattening them to dim text", () => {
-  const issue = makeIssue("TST-33", {
-    prNumber: 27,
-    prReviewState: "approved",
-    prCheckStatus: "success",
-  });
+    {
+      id: 2,
+      at: "2026-03-25T09:20:00.000Z",
+      level: "info",
+      kind: "github",
+      summary: "PR #1135 opened",
+    },
+  ];
 
   const lines = buildDetailLines({
-    issue,
+    issue: makeIssue("EQ-42"),
     timeline: [],
     activeRunStartedAt: null,
     activeRunId: null,
@@ -382,40 +139,47 @@ test("buildDetailLines keeps header PR and review facts colorized instead of fla
     plan: null,
     issueContext: null,
     detailTab: "timeline",
-    rawRuns: [],
-    rawFeedEvents: [],
+    rawRuns: runs,
+    rawFeedEvents: feedEvents,
     width: 100,
   });
 
-  const headerLine = lines[0];
-  assert.ok(headerLine);
-  const prSegment = headerLine.segments.find((segment) => segment.text === "PR #27");
-  const approvedSegment = headerLine.segments.find((segment) => segment.text === "approved");
-  const checksSegment = headerLine.segments.find((segment) => segment.text === "checks passed");
-
-  assert.equal(prSegment?.color, "cyan");
-  assert.equal(approvedSegment?.color, "green");
-  assert.equal(checksSegment?.color, "green");
+  const texts = detailText(lines);
+  const eventTexts = texts.slice(1);
+  assert.equal(eventTexts.length, 4, `expected 4 events, got ${eventTexts.length}: ${eventTexts.join("\n")}`);
+  assert.match(eventTexts[0]!, /run\s+implementation started/);
+  assert.match(eventTexts[1]!, /stage\s+delegated → implementing/);
+  assert.match(eventTexts[2]!, /run\s+implementation ended · success/);
+  assert.match(eventTexts[3]!, /github\s+PR #1135 opened/);
 });
 
-test("buildDetailLines shows awaiting review and downstream queue facts without falling back to ready", () => {
-  const reviewIssue = makeIssue("TST-39", {
-    factoryState: "pr_open",
-    readyForExecution: true,
-    prNumber: 38,
-    prReviewState: "review_required",
-    prCheckStatus: "success",
-  });
-  const downstreamIssue = makeIssue("TST-43", {
-    factoryState: "awaiting_queue",
-    readyForExecution: true,
-    prNumber: 36,
-    prReviewState: "approved",
-    prCheckStatus: "success",
-  });
+test("detail event log drops internal webhook/service/hook kinds", () => {
+  const feedEvents: OperatorFeedEvent[] = [
+    {
+      id: 1,
+      at: "2026-03-25T09:00:00.000Z",
+      level: "info",
+      kind: "webhook",
+      summary: "webhook received",
+    },
+    {
+      id: 2,
+      at: "2026-03-25T09:05:00.000Z",
+      level: "info",
+      kind: "service",
+      summary: "service started",
+    },
+    {
+      id: 3,
+      at: "2026-03-25T09:10:00.000Z",
+      level: "info",
+      kind: "github",
+      summary: "PR merged",
+    },
+  ];
 
-  const reviewText = detailText(buildDetailLines({
-    issue: reviewIssue,
+  const lines = buildDetailLines({
+    issue: makeIssue("EQ-42"),
     timeline: [],
     activeRunStartedAt: null,
     activeRunId: null,
@@ -425,11 +189,29 @@ test("buildDetailLines shows awaiting review and downstream queue facts without 
     issueContext: null,
     detailTab: "timeline",
     rawRuns: [],
-    rawFeedEvents: [],
+    rawFeedEvents: feedEvents,
     width: 100,
-  })).join("\n");
-  const downstreamText = detailText(buildDetailLines({
-    issue: downstreamIssue,
+  });
+
+  const texts = detailText(lines).slice(1).join("\n");
+  assert.doesNotMatch(texts, /webhook received/);
+  assert.doesNotMatch(texts, /service started/);
+  assert.match(texts, /PR merged/);
+});
+
+test("failed run gets a red phrase and a continuation line with the reason", () => {
+  const runs: TimelineRunInput[] = [
+    {
+      id: 7,
+      runType: "ci_repair",
+      status: "failed",
+      startedAt: "2026-03-25T09:00:00.000Z",
+      endedAt: "2026-03-25T09:05:00.000Z",
+      report: { failureReason: "tsc exit 2: type error in loadUser.ts" } as unknown as TimelineRunInput["report"],
+    },
+  ];
+  const lines = buildDetailLines({
+    issue: makeIssue("EQ-42"),
     timeline: [],
     activeRunStartedAt: null,
     activeRunId: null,
@@ -438,13 +220,15 @@ test("buildDetailLines shows awaiting review and downstream queue facts without 
     plan: null,
     issueContext: null,
     detailTab: "timeline",
-    rawRuns: [],
+    rawRuns: runs,
     rawFeedEvents: [],
     width: 100,
-  })).join("\n");
+  });
 
-  assert.match(reviewText, /awaiting review/);
-  assert.doesNotMatch(reviewText, / {2}ready {2}/);
-  assert.match(downstreamText, /downstream ready/);
-  assert.doesNotMatch(downstreamText, / {2}ready {2}/);
+  const endLine = lines.find((line) => lineToPlainText(line).includes("ci repair ended"));
+  assert.ok(endLine, "expected 'ci repair ended' line");
+  const phraseSegment = endLine!.segments.find((segment) => segment.color === "red");
+  assert.ok(phraseSegment, "expected red phrase segment for failed run");
+  const text = detailText(lines).join("\n");
+  assert.match(text, /tsc exit 2: type error/);
 });
