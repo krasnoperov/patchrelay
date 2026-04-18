@@ -23,6 +23,7 @@ function makeIssue(key: string, overrides?: Partial<WatchIssue>): WatchIssue {
   return {
     issueKey: key,
     projectId: "test-project",
+    delegatedToPatchRelay: true,
     factoryState: "implementing",
     blockedByCount: 0,
     blockedByKeys: [],

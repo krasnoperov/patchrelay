@@ -2,6 +2,7 @@ import { deriveGateCheckStatusFromRollup, type GitHubStatusRollupEntry } from ".
 import { ACTIVE_RUN_STATES } from "../factory-state.ts";
 import type { PatchRelayDatabase } from "../db.ts";
 import type { IssueDependencyRecord, IssueRecord, IssueSessionRecord } from "../db-types.ts";
+import { isUndelegatedPausedNoPrWork } from "../paused-issue-state.ts";
 import { hasOpenPr, resolveClosedPrDisposition } from "../pr-state.ts";
 import type { AppConfig } from "../types.ts";
 import type { CommandRunner, CommandRunnerResult } from "./command-types.ts";
@@ -293,6 +294,7 @@ export async function collectClusterHealth(
 
 function evaluateLocalIssueHealth(snapshot: IssueSnapshot): ClusterHealthCheck | undefined {
   const { issue, session, missingTrackedBlockers, blockedBy, ageMs, readyForExecution } = snapshot;
+  const pausedNoPrWork = isUndelegatedPausedNoPrWork(issue);
   if (issue.factoryState === "failed" || issue.factoryState === "escalated") {
     return {
       status: "fail",
@@ -337,7 +339,7 @@ function evaluateLocalIssueHealth(snapshot: IssueSnapshot): ClusterHealthCheck |
     };
   }
 
-  if (ACTIVE_RUN_STATES.has(issue.factoryState) && issue.activeRunId === undefined && ageMs >= RECONCILIATION_GRACE_MS) {
+  if (!pausedNoPrWork && ACTIVE_RUN_STATES.has(issue.factoryState) && issue.activeRunId === undefined && ageMs >= RECONCILIATION_GRACE_MS) {
     return {
       status: "fail",
       scope: "issue:dispatch",
@@ -345,7 +347,7 @@ function evaluateLocalIssueHealth(snapshot: IssueSnapshot): ClusterHealthCheck |
     };
   }
 
-  if (issue.factoryState === "delegated" && issue.activeRunId === undefined && !readyForExecution && ageMs >= RECONCILIATION_GRACE_MS) {
+  if (!pausedNoPrWork && issue.factoryState === "delegated" && issue.activeRunId === undefined && !readyForExecution && ageMs >= RECONCILIATION_GRACE_MS) {
     return {
       status: "fail",
       scope: "issue:dispatch",

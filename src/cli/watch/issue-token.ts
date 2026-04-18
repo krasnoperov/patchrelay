@@ -1,4 +1,5 @@
 import type { WatchIssue } from "./watch-state.ts";
+import { isUndelegatedPausedIssue } from "../../paused-issue-state.ts";
 
 export type IssueTokenColor = "red" | "yellow" | "green" | "gray";
 
@@ -40,6 +41,9 @@ const COLOR: Record<IssueTokenKind, IssueTokenColor> = {
 };
 
 export function issueTokenFor(issue: WatchIssue): IssueToken {
+  if (isUndelegatedPausedIssue(issue)) {
+    return { glyph: GLYPH.queued, color: COLOR.queued, kind: "queued", phrase: phraseForPaused(issue) };
+  }
   if (issue.factoryState === "done") {
     return { glyph: GLYPH.approved, color: COLOR.approved, kind: "approved", phrase: "done" };
   }
@@ -79,6 +83,25 @@ function phraseForRunning(issue: WatchIssue): string {
       return "repairing queue";
     default:
       return issue.factoryState;
+  }
+}
+
+function phraseForPaused(issue: WatchIssue): string {
+  switch (issue.factoryState) {
+    case "implementing":
+      return "paused impl";
+    case "pr_open":
+      return "paused pr";
+    case "changes_requested":
+      return "paused review";
+    case "repairing_ci":
+      return "paused ci";
+    case "awaiting_queue":
+      return "paused queue";
+    case "repairing_queue":
+      return "paused merge";
+    default:
+      return "paused";
   }
 }
 

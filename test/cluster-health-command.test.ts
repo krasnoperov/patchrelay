@@ -903,6 +903,49 @@ test("cli cluster treats undelegated failing CI PRs as paused instead of missing
   }
 });
 
+test("cli cluster treats undelegated paused no-pr work as paused instead of stuck dispatch", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cluster-undelegated-local-paused-"));
+  const config = createConfig(baseDir, 19799);
+  mkdirSync(config.projects[0]!.repoPath, { recursive: true });
+  mkdirSync(config.projects[0]!.worktreeRoot, { recursive: true });
+  const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+  db.runMigrations();
+  const server = await startPatchRelayHealthServer(config);
+
+  try {
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-use-40",
+      issueKey: "USE-40",
+      title: "Paused local implementation",
+      currentLinearState: "Backlog",
+      factoryState: "implementing",
+      delegatedToPatchRelay: false,
+    });
+    const staleTime = new Date(Date.now() - 300_000).toISOString();
+    db.connection.prepare("UPDATE issues SET updated_at = ?").run(staleTime);
+    db.connection.prepare("UPDATE issue_sessions SET updated_at = ?").run(staleTime);
+
+    const stdout = createBufferStream();
+    const stderr = createBufferStream();
+    const exitCode = await runCli(["cluster"], {
+      config,
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      runCommand: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+    });
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr.read(), "");
+    const text = stdout.read();
+    assert.doesNotMatch(text, /issue:dispatch USE-40 Issue is parked in implementing without an active run/);
+    assert.doesNotMatch(text, /issue:dispatch USE-40 Delegated issue is idle but no wake is queued/);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("cli cluster warns when active repo work overlaps on the same files", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cluster-overlap-"));
   const config = createConfig(baseDir, 19796);

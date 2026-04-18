@@ -87,6 +87,7 @@ export class TrackedIssueListQuery {
     title?: string;
     statusNote?: string;
     projectId: string;
+    delegatedToPatchRelay: boolean;
     sessionState?: string;
     factoryState: string;
     blockedByCount: number;
@@ -285,6 +286,7 @@ export class TrackedIssueListQuery {
         ...(row.title !== null ? { title: String(row.title) } : {}),
         ...(statusNoteForReturn ? { statusNote: statusNoteForReturn } : {}),
         projectId: String(row.project_id),
+        delegatedToPatchRelay: row.delegated_to_patchrelay === null ? true : Number(row.delegated_to_patchrelay) !== 0,
         ...(row.session_state !== null ? { sessionState: String(row.session_state) } : {}),
         factoryState: String(row.factory_state ?? "delegated"),
         blockedByCount,

@@ -1,7 +1,7 @@
 import type { IssueRecord, RunRecord } from "./db-types.ts";
 import { resolveAwaitingInputReason } from "./awaiting-input-reason.ts";
 
-export function isUndelegatedPausedIssue(issue: Pick<IssueRecord, "delegatedToPatchRelay" | "factoryState">): boolean {
+export function isUndelegatedPausedIssue(issue: { delegatedToPatchRelay?: boolean | undefined; factoryState?: string | undefined }): boolean {
   return issue.delegatedToPatchRelay === false
     && issue.factoryState !== "done"
     && issue.factoryState !== "failed"
@@ -9,7 +9,7 @@ export function isUndelegatedPausedIssue(issue: Pick<IssueRecord, "delegatedToPa
 }
 
 export function isUndelegatedPausedNoPrWork(
-  issue: Pick<IssueRecord, "delegatedToPatchRelay" | "factoryState" | "prNumber">,
+  issue: { delegatedToPatchRelay?: boolean | undefined; factoryState?: string | undefined; prNumber?: number | undefined },
 ): boolean {
   return isUndelegatedPausedIssue(issue)
     && issue.prNumber === undefined
