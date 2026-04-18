@@ -5,6 +5,7 @@ interface ListViewProps {
   model: DashboardModel;
   selectedRepoFullName: string | null;
   showCursor: boolean;
+  bodyRows: number;
 }
 
 function RepoTokens({ tokens, width }: { tokens: DashboardToken[]; width: number }): React.JSX.Element | null {
@@ -77,42 +78,57 @@ export function pickVisibleWindow(
   return { start, end };
 }
 
-export function ListView({ model, selectedRepoFullName, showCursor }: ListViewProps): React.JSX.Element {
+export function ListView({ model, selectedRepoFullName, showCursor, bodyRows }: ListViewProps): React.JSX.Element {
   const { stdout } = useStdout();
-  const rows = Math.max(3, stdout?.rows ?? 24);
   const width = Math.max(40, stdout?.columns ?? 80);
 
-  const availableRows = Math.max(1, rows - 3);
+  const total = model.repos.length;
   const selectedIndex = Math.max(0, model.repos.findIndex((repo) => repo.repoFullName === selectedRepoFullName));
-  const quietVisibleReserve = model.repos.length > availableRows && model.quietCount > 0 ? 1 : 0;
-  const windowRows = Math.max(1, availableRows - quietVisibleReserve);
-  const { start, end } = pickVisibleWindow(model.repos, selectedIndex, windowRows);
+
+  let { start, end } = pickVisibleWindow(model.repos, selectedIndex, Math.max(1, bodyRows));
+  let needTop = start > 0;
+  let needBottom = end < total;
+  if (needTop || needBottom) {
+    const reserve = (needTop ? 1 : 0) + (needBottom ? 1 : 0);
+    const windowRows = Math.max(1, bodyRows - reserve);
+    ({ start, end } = pickVisibleWindow(model.repos, selectedIndex, windowRows));
+    needTop = start > 0;
+    needBottom = end < total;
+  }
   const visible = model.repos.slice(start, end);
+  const above = start;
+  const below = total - end;
 
-  const hiddenQuiet = model.repos
-    .filter((repo, index) => !repo.hasActivity && (index < start || index >= end))
-    .length;
-
-  if (visible.length === 0) {
+  if (total === 0 || bodyRows <= 0) {
     return <Box marginTop={1}><Text dimColor> </Text></Box>;
+  }
+
+  const children: React.JSX.Element[] = [];
+  if (needTop) {
+    children.push(
+      <Box key="above" paddingLeft={2}><Text dimColor>{`\u2191${above} more above`}</Text></Box>,
+    );
+  }
+  for (const repo of visible) {
+    children.push(
+      <RepoRow
+        key={repo.repoFullName}
+        repo={repo}
+        selected={repo.repoFullName === selectedRepoFullName}
+        showCursor={showCursor}
+        width={width - 2}
+      />,
+    );
+  }
+  if (needBottom) {
+    children.push(
+      <Box key="below" paddingLeft={2}><Text dimColor>{`\u2193${below} more below`}</Text></Box>,
+    );
   }
 
   return (
     <Box flexDirection="column" marginTop={1}>
-      {visible.map((repo) => (
-        <RepoRow
-          key={repo.repoFullName}
-          repo={repo}
-          selected={repo.repoFullName === selectedRepoFullName}
-          showCursor={showCursor}
-          width={width - 2}
-        />
-      ))}
-      {hiddenQuiet > 0 ? (
-        <Box paddingLeft={2}>
-          <Text dimColor>{`+${hiddenQuiet} quiet`}</Text>
-        </Box>
-      ) : null}
+      {children.slice(0, Math.max(1, bodyRows))}
     </Box>
   );
 }

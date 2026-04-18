@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Box, Text, useApp, useInput } from "ink";
+import { Box, Text, useApp, useInput, useStdout } from "ink";
 import type { ReviewQuillWatchSnapshot } from "../types.ts";
 import { fetchSnapshot, triggerReconcile } from "./api.ts";
 import { DetailView } from "./DetailView.tsx";
@@ -16,12 +16,14 @@ const REFRESH_INTERVAL_MS = 1_500;
 
 export function App({ baseUrl }: AppProps): React.JSX.Element {
   const { exit } = useApp();
+  const { stdout } = useStdout();
   const [connected, setConnected] = useState(false);
   const [snapshot, setSnapshot] = useState<ReviewQuillWatchSnapshot | null>(null);
   const [selectedRepoFullName, setSelectedRepoFullName] = useState<string | null>(null);
   const [view, setView] = useState<"list" | "detail">("list");
   const [flashMessage, setFlashMessage] = useState<string | null>(null);
   const [lastSnapshotReceivedAt, setLastSnapshotReceivedAt] = useState<number | null>(null);
+  const [detailScrollOffset, setDetailScrollOffset] = useState(0);
 
   const model = useMemo(() => buildDashboard(snapshot), [snapshot]);
 
@@ -77,6 +79,10 @@ export function App({ baseUrl }: AppProps): React.JSX.Element {
     }
   }
 
+  const rows = Math.max(8, stdout?.rows ?? 24);
+  const chromeRows = 1 /* status */ + 1 /* body marginTop */ + (flashMessage ? 2 : 0) + 2 /* help bar + its marginTop */;
+  const bodyRows = Math.max(2, rows - chromeRows);
+
   useInput((input, key) => {
     if (input === "q") {
       exit();
@@ -86,22 +92,66 @@ export function App({ baseUrl }: AppProps): React.JSX.Element {
       void runReconcile();
       return;
     }
-    if (input === "j" || key.downArrow) {
+
+    if (view === "list") {
+      if (input === "j" || key.downArrow) {
+        setSelectedRepoFullName((current) => stepRepo(model.repos, current, 1));
+        return;
+      }
+      if (input === "k" || key.upArrow) {
+        setSelectedRepoFullName((current) => stepRepo(model.repos, current, -1));
+        return;
+      }
+      if (input === "]") {
+        setSelectedRepoFullName((current) => stepRepo(model.repos, current, 1));
+        return;
+      }
+      if (input === "[") {
+        setSelectedRepoFullName((current) => stepRepo(model.repos, current, -1));
+        return;
+      }
+      if (key.return) setView("detail");
+      return;
+    }
+
+    // detail view
+    if (input === "]") {
       setSelectedRepoFullName((current) => stepRepo(model.repos, current, 1));
+      setDetailScrollOffset(0);
+      return;
+    }
+    if (input === "[") {
+      setSelectedRepoFullName((current) => stepRepo(model.repos, current, -1));
+      setDetailScrollOffset(0);
+      return;
+    }
+    if (input === "j" || key.downArrow) {
+      setDetailScrollOffset((offset) => offset + 1);
       return;
     }
     if (input === "k" || key.upArrow) {
-      setSelectedRepoFullName((current) => stepRepo(model.repos, current, -1));
+      setDetailScrollOffset((offset) => Math.max(0, offset - 1));
       return;
     }
-    if (view === "list") {
-      if (key.return) {
-        setView("detail");
-      }
+    if (key.pageDown || input === " ") {
+      setDetailScrollOffset((offset) => offset + Math.max(1, bodyRows - 2));
+      return;
+    }
+    if (key.pageUp) {
+      setDetailScrollOffset((offset) => Math.max(0, offset - Math.max(1, bodyRows - 2)));
+      return;
+    }
+    if (input === "g") {
+      setDetailScrollOffset(0);
+      return;
+    }
+    if (input === "G") {
+      setDetailScrollOffset(Number.MAX_SAFE_INTEGER);
       return;
     }
     if (key.escape || key.backspace || key.delete) {
       setView("list");
+      setDetailScrollOffset(0);
     }
   });
 
@@ -116,12 +166,18 @@ export function App({ baseUrl }: AppProps): React.JSX.Element {
           <Text dimColor>Loading review-quill snapshot…</Text>
         </Box>
       ) : view === "detail" ? (
-        <DetailView model={model} selectedRepoFullName={selectedRepoFullName} />
+        <DetailView
+          model={model}
+          selectedRepoFullName={selectedRepoFullName}
+          bodyRows={bodyRows}
+          scrollOffset={detailScrollOffset}
+        />
       ) : (
         <ListView
           model={model}
           selectedRepoFullName={selectedRepoFullName}
           showCursor={true}
+          bodyRows={bodyRows}
         />
       )}
       {flashMessage ? (

@@ -5,47 +5,18 @@ import { clipSummary, type DashboardModel, type DashboardPrEntry, type Dashboard
 interface ProjectDetailViewProps {
   model: DashboardModel;
   selectedRepoId: string | null;
+  bodyRows: number;
+  scrollOffset: number;
 }
 
 const PR_ID_WIDTH = 7;
 const PR_PHRASE_WIDTH = 20;
 const SUMMARY_INDENT = 9;
 
-function PrEntryRow({
-  entry,
-  width,
-  includeSummary,
-}: {
-  entry: DashboardPrEntry;
-  width: number;
-  includeSummary: boolean;
-}): React.JSX.Element {
-  const idText = `#${entry.prNumber}`.padEnd(PR_ID_WIDTH, " ");
-  const paddedPhrase = entry.phrase.padEnd(PR_PHRASE_WIDTH, " ");
-  const summaryText = includeSummary
-    ? clipSummary(entry.summary, { maxLines: 3, width: Math.max(20, width - SUMMARY_INDENT) })
-    : "";
-  const titleSpace = Math.max(0, width - (PR_ID_WIDTH + 3 + PR_PHRASE_WIDTH + 1));
-  const title = entry.title && entry.title !== entry.phrase && titleSpace >= 8
-    ? truncate(entry.title, titleSpace)
-    : "";
-  return (
-    <Box flexDirection="column">
-      <Box>
-        <Text color={entry.color}>{idText}</Text>
-        <Text color={entry.color}>{entry.glyph}</Text>
-        <Text>{`  ${paddedPhrase}`}</Text>
-        {title ? <Text dimColor>{`  ${title}`}</Text> : null}
-      </Box>
-      {summaryText ? (
-        <Box>
-          <Text>{" ".repeat(SUMMARY_INDENT)}</Text>
-          <Text dimColor>{summaryText}</Text>
-        </Box>
-      ) : null}
-    </Box>
-  );
-}
+type ContentLine =
+  | { kind: "blank" }
+  | { kind: "entry-header"; entry: DashboardPrEntry }
+  | { kind: "summary-line"; text: string };
 
 function truncate(value: string, maxWidth: number): string {
   if (value.length <= maxWidth) return value;
@@ -53,9 +24,64 @@ function truncate(value: string, maxWidth: number): string {
   return `${value.slice(0, Math.max(0, maxWidth - 1))}\u2026`;
 }
 
-export function ProjectDetailView({ model, selectedRepoId }: ProjectDetailViewProps): React.JSX.Element {
+export function buildContentLines(repo: DashboardRepo, width: number): ContentLine[] {
+  const lines: ContentLine[] = [];
+  repo.entries.forEach((entry, index) => {
+    if (index > 0) lines.push({ kind: "blank" });
+    lines.push({ kind: "entry-header", entry });
+    if (entry.summary) {
+      const summaryText = clipSummary(entry.summary, {
+        maxLines: 3,
+        width: Math.max(20, width - SUMMARY_INDENT),
+      });
+      if (summaryText) {
+        summaryText.split("\n").forEach((line) => lines.push({ kind: "summary-line", text: line }));
+      }
+    }
+  });
+  return lines;
+}
+
+function EntryHeaderRow({ entry, width }: { entry: DashboardPrEntry; width: number }): React.JSX.Element {
+  const idText = `#${entry.prNumber}`.padEnd(PR_ID_WIDTH, " ");
+  const paddedPhrase = entry.phrase.padEnd(PR_PHRASE_WIDTH, " ");
+  const titleSpace = Math.max(0, width - (PR_ID_WIDTH + 3 + PR_PHRASE_WIDTH + 1));
+  const title = entry.title && entry.title !== entry.phrase && titleSpace >= 8
+    ? truncate(entry.title, titleSpace)
+    : "";
+  return (
+    <Box>
+      <Text color={entry.color}>{idText}</Text>
+      <Text color={entry.color}>{entry.glyph}</Text>
+      <Text>{`  ${paddedPhrase}`}</Text>
+      {title ? <Text dimColor>{`  ${title}`}</Text> : null}
+    </Box>
+  );
+}
+
+function renderLine(line: ContentLine, key: number, width: number): React.JSX.Element {
+  if (line.kind === "blank") return <Box key={key}><Text> </Text></Box>;
+  if (line.kind === "summary-line") {
+    return (
+      <Box key={key}>
+        <Text>{" ".repeat(SUMMARY_INDENT)}</Text>
+        <Text dimColor>{line.text}</Text>
+      </Box>
+    );
+  }
+  return <EntryHeaderRow key={key} entry={line.entry} width={width} />;
+}
+
+export function clampScrollOffset(requested: number, totalLines: number, scrollArea: number): number {
+  if (scrollArea <= 0 || totalLines <= scrollArea) return 0;
+  // When scrolled at all, a one-row top indicator eats into the viewport, so the
+  // largest useful offset lets (scrollArea - 1) rows of content fill the remainder.
+  const maxOffset = Math.max(0, totalLines - Math.max(1, scrollArea - 1));
+  return Math.max(0, Math.min(requested, maxOffset));
+}
+
+export function ProjectDetailView({ model, selectedRepoId, bodyRows, scrollOffset }: ProjectDetailViewProps): React.JSX.Element {
   const { stdout } = useStdout();
-  const rows = Math.max(3, stdout?.rows ?? 24);
   const width = Math.max(40, stdout?.columns ?? 80);
 
   const repo: DashboardRepo | null = selectedRepoId
@@ -66,53 +92,46 @@ export function ProjectDetailView({ model, selectedRepoId }: ProjectDetailViewPr
     return <Box marginTop={1}><Text dimColor> </Text></Box>;
   }
 
-  const availableRows = Math.max(1, rows - 3);
-  const afterRepoRow = Math.max(0, availableRows - 2);
-  const entries = repo.entries;
+  const repoHeaderRows = 1;
+  const separatorRows = bodyRows >= 3 ? 1 : 0;
+  const scrollArea = Math.max(0, bodyRows - repoHeaderRows - separatorRows);
 
-  type PlannedEntry = { entry: DashboardPrEntry; includeSummary: boolean };
-  const planned: PlannedEntry[] = [];
-  let used = 0;
-  const maxSummaryLines = 3;
+  const contentWidth = Math.max(20, width - 2);
+  const contentLines = buildContentLines(repo, contentWidth);
+  const offset = clampScrollOffset(scrollOffset, contentLines.length, scrollArea);
 
-  for (const entry of entries) {
-    if (used >= afterRepoRow) break;
-    if (used + 1 > afterRepoRow) break;
-    planned.push({ entry, includeSummary: false });
-    used += 1;
+  const children: React.JSX.Element[] = [];
+  const couldHaveAbove = offset > 0;
+  const reserveTop = couldHaveAbove && scrollArea > 0 ? 1 : 0;
+  let remaining = scrollArea - reserveTop;
+  let tentativeEnd = Math.min(contentLines.length, offset + remaining);
+  const belowCount = contentLines.length - tentativeEnd;
+  const reserveBottom = belowCount > 0 && remaining > 0 ? 1 : 0;
+  if (reserveBottom) {
+    remaining = Math.max(0, remaining - 1);
+    tentativeEnd = Math.min(contentLines.length, offset + remaining);
   }
 
-  if (afterRepoRow - used >= 2) {
-    for (let i = 0; i < planned.length; i += 1) {
-      const item = planned[i]!;
-      if (!item.entry.summary) continue;
-      const summaryText = clipSummary(item.entry.summary, {
-        maxLines: maxSummaryLines,
-        width: Math.max(20, width - SUMMARY_INDENT),
-      });
-      if (!summaryText) continue;
-      const summaryLines = summaryText.split("\n").length;
-      const isLast = i === planned.length - 1;
-      const extra = summaryLines + (isLast ? 0 : 1);
-      if (used + extra > afterRepoRow) break;
-      item.includeSummary = true;
-      used += extra;
-    }
+  if (reserveTop) {
+    children.push(
+      <Box key="above"><Text dimColor>{`  \u2191${offset} more above`}</Text></Box>,
+    );
+  }
+  for (let i = offset; i < tentativeEnd; i += 1) {
+    children.push(renderLine(contentLines[i]!, i, contentWidth));
+  }
+  if (reserveBottom) {
+    const hidden = contentLines.length - tentativeEnd;
+    children.push(
+      <Box key="below"><Text dimColor>{`  \u2193${hidden} more below`}</Text></Box>,
+    );
   }
 
   return (
     <Box flexDirection="column" marginTop={1}>
       <RepoRow repo={repo} selected={false} showCursor={false} width={width - 2} />
-      {planned.length > 0 ? <Box><Text> </Text></Box> : null}
-      {planned.map(({ entry, includeSummary }, index) => {
-        const isLast = index === planned.length - 1;
-        return (
-          <Box key={entry.prNumber} flexDirection="column">
-            <PrEntryRow entry={entry} width={width} includeSummary={includeSummary} />
-            {includeSummary && !isLast ? <Box><Text> </Text></Box> : null}
-          </Box>
-        );
-      })}
+      {separatorRows > 0 ? <Box><Text> </Text></Box> : null}
+      {children}
     </Box>
   );
 }
