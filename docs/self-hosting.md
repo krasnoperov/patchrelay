@@ -89,36 +89,9 @@ Default runtime paths are:
 - logs: `~/.local/state/patchrelay/patchrelay.log`
 - worktree roots: usually `~/.local/share/patchrelay/worktrees/<project>`
 
-## Troubleshooting
-
-When something looks stuck or inconsistent, start with the local PatchRelay logs:
-
-- log file: `~/.local/state/patchrelay/patchrelay.log`
-- system service logs: `journalctl -u patchrelay.service -f`
-
-Use the log file when you want the persisted service history on disk. Use `journalctl` when you want the live user-service stream managed by systemd.
-
-Common places to look:
-
-- Linear did nothing after a delegation or mention:
-  check for webhook intake logs such as accepted, rejected, stale, or duplicate deliveries
-- the agent ignored a new Linear comment or prompt:
-  check for queued turn-input delivery logs and any delivery failure warnings
-- Codex execution looks broken or stops unexpectedly:
-  check for `Starting Codex app-server`, `Codex app-server request failed`, `Codex app-server stderr`, or `Codex app-server exited`
-
-The most useful correlation fields in logs are:
-
-- `webhookId`
-- `webhookEventId`
-- `projectId`
-- `issueKey`
-- `runType`
-- `threadId`
-- `turnId`
-- `agentSessionId`
-
 The generated `patchrelay.json` stays intentionally minimal. In the default setup it only needs `server.public_base_url`; PatchRelay already has built-in defaults for the local bind address, database path, logs, worktree roots, workflow filenames, and Codex runner settings.
+
+For day-to-day operations and troubleshooting after install, see [operator-guide.md](./operator-guide.md).
 
 ## 3. Configure Machine-Level Secrets
 
@@ -200,7 +173,7 @@ These files are the repo-local policy PatchRelay passes into each run. They shou
 
 Keep workflow files short and action-oriented. Codex performs better with concise instructions than with lengthy bureaucratic rules.
 
-## 6. Validate And Operate
+## 6. Validate
 
 Before delegating or mentioning work, run the built-in preflight:
 
@@ -214,16 +187,9 @@ For a foreground manual start:
 patchrelay serve
 ```
 
-Stay in the terminal:
+`patchrelay linear connect` opens the browser only long enough to approve the Linear OAuth app when it needs a fresh workspace installation, then returns to the CLI. `patchrelay repo link` reuses that saved workspace installation without opening the browser again.
 
-```bash
-patchrelay linear list
-patchrelay repo link krasnoperov/usertold --workspace usertold --team USE
-patchrelay repo list
-patchrelay issue show APP-123
-```
-
-`patchrelay linear connect` opens the browser only long enough to approve the Linear OAuth app when it needs a fresh workspace installation, then returns to the CLI workflow. `patchrelay repo link` reuses that saved workspace installation without opening the browser again.
+Daily operations (dashboard, issue inspection, takeover, troubleshooting, log fields) are covered in [operator-guide.md](./operator-guide.md).
 
 ## 7. Run As A Service
 
