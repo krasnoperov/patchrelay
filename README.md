@@ -83,13 +83,21 @@ You will also need:
 
 1. A human delegates PatchRelay on an issue to start automation.
 2. PatchRelay verifies the webhook, routes the issue to the right local project, and packages the issue context for the first loop.
-3. Delegated issues create or reuse the issue worktree and launch an implementation run through `codex app-server`.
+3. Delegated issues create or reuse the issue worktree and launch the appropriate first run through `codex app-server`.
 4. PatchRelay persists thread ids, run state, and observations so the work stays inspectable and resumable.
 5. GitHub webhooks drive reactive verification and repair loops: CI repair on check failures and review fix on changes requested.
-6. PatchRelay opens draft PRs while implementation is in progress and marks its own PR ready when implementation is complete.
+6. Implementation issues usually open draft PRs while work is in progress and mark PatchRelay-owned PRs ready when implementation is complete.
 7. Downstream automation reacts to GitHub truth: `reviewbot` reviews ready PRs with green CI, and Merge Steward admits ready PRs with green CI and approval into the merge queue.
 8. If requested changes, red CI, or a merge-steward incident lands on a linked delegated PR, PatchRelay resumes work on that same PR branch.
 9. Native agent prompts and Linear comments can steer the active run. An operator can take over from the exact same worktree when needed.
+
+Not every delegated issue should produce its own PR. Some delegated issues are coordination-only:
+
+- parent trackers that spawn or coordinate child implementation issues
+- audit or convergence issues that should wait for child issues before doing a narrow final pass
+- planning/specification issues that are complete once the right follow-up issues or decisions exist
+
+In those cases, PatchRelay should avoid opening an overlapping umbrella PR and should finish through coordination, follow-up issue creation, or a no-PR completion path instead.
 
 ### Undelegation And Re-delegation
 

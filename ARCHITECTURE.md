@@ -119,10 +119,11 @@ The codebase uses a flat module structure rather than a layered directory hierar
 Linear delegate event
 -> acknowledge session
 -> publish plan
--> prepare worktree
--> run Codex (implementation)
--> PatchRelay opens draft PR
--> PatchRelay marks PR ready
+-> classify the delegated issue: implementation work vs coordination-only work
+-> prepare worktree when code work is actually needed
+-> run Codex
+-> if the issue owns concrete code, PatchRelay opens draft PR
+-> PatchRelay marks its PR ready
 -> ReviewBot reviews when GitHub says the PR is ready and CI is green
 -> Merge Steward queues when GitHub says the PR is ready, green, and approved
 -> PatchRelay wakes only for follow-up work on PatchRelay-owned PRs
@@ -175,6 +176,7 @@ Review and queue waiting should be represented as `waitingReason`, not as contro
 ## Design Implications
 
 - One owning agent per issue branch keeps coordination manageable.
+- Delegation does not automatically imply "this issue must own a branch and PR"; tracker and orchestration issues may complete without opening code.
 - The same worktree should be resumed for all iterations of an issue.
 - Queue failures are integration problems, not just CI failures.
 - The short root docs should point to deeper `docs/` material rather than duplicating it.

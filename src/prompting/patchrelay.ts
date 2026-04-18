@@ -88,7 +88,87 @@ function buildTaskObjective(issue: IssueRecord): string {
   ].join("\n");
 }
 
-function buildScopeDiscipline(issue: IssueRecord): string {
+function summarizeRelationEntries(
+  entries: Array<Record<string, unknown>>,
+  options?: { emptyText?: string; maxItems?: number },
+): string[] {
+  if (entries.length === 0) {
+    return options?.emptyText ? [options.emptyText] : [];
+  }
+
+  const maxItems = options?.maxItems ?? 5;
+  const lines = entries.slice(0, maxItems).map((entry) => {
+    const issueRef = typeof entry.issueKey === "string" && entry.issueKey.trim()
+      ? entry.issueKey.trim()
+      : typeof entry.linearIssueId === "string" && entry.linearIssueId.trim()
+        ? entry.linearIssueId.trim()
+        : "unknown issue";
+    const title = typeof entry.title === "string" && entry.title.trim() ? entry.title.trim() : undefined;
+    const stateName = typeof entry.stateName === "string" && entry.stateName.trim()
+      ? entry.stateName.trim()
+      : typeof entry.currentLinearState === "string" && entry.currentLinearState.trim()
+        ? entry.currentLinearState.trim()
+        : undefined;
+    const factoryState = typeof entry.factoryState === "string" && entry.factoryState.trim() ? entry.factoryState.trim() : undefined;
+    const delegated = typeof entry.delegatedToPatchRelay === "boolean"
+      ? (entry.delegatedToPatchRelay ? "delegated" : "not delegated")
+      : undefined;
+    const openPr = typeof entry.hasOpenPr === "boolean"
+      ? (entry.hasOpenPr ? "open PR" : "no open PR")
+      : undefined;
+
+    return [
+      `- ${issueRef}`,
+      title ? `: ${title}` : "",
+      [stateName, factoryState, delegated, openPr].filter(Boolean).length > 0
+        ? ` (${[stateName, factoryState, delegated, openPr].filter(Boolean).join("; ")})`
+        : "",
+    ].join("");
+  });
+
+  if (entries.length > maxItems) {
+    lines.push(`- ...and ${entries.length - maxItems} more`);
+  }
+  return lines;
+}
+
+function buildCoordinationGuidance(context?: Record<string, unknown>): string[] {
+  const unresolvedBlockers = Array.isArray(context?.unresolvedBlockers)
+    ? context.unresolvedBlockers.filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
+    : [];
+  const trackedDependents = Array.isArray(context?.trackedDependents)
+    ? context.trackedDependents.filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
+    : [];
+
+  const lines = [
+    "### Coordination / Issue Topology",
+    "",
+    "First decide whether this issue should publish code itself or mainly coordinate other issues.",
+    "If this issue is a parent tracker, umbrella, migration program, or convergence container and the concrete implementation belongs in child issues, do not create a duplicate umbrella PR.",
+    "When child issues already own the concrete code slices, use this issue to coordinate, create or refine follow-up issues, or verify convergence. Only ship code here if this issue still has unique implementation scope that is not already owned elsewhere.",
+    "Prefer one PR per concrete implementation issue over a broad parent branch that restates overlapping child work.",
+  ];
+
+  if (unresolvedBlockers.length === 0 && trackedDependents.length === 0) {
+    return lines;
+  }
+
+  lines.push("", "Known relations from PatchRelay:");
+  if (unresolvedBlockers.length > 0) {
+    lines.push("Unresolved blockers:");
+    lines.push(...summarizeRelationEntries(unresolvedBlockers));
+  }
+  if (trackedDependents.length > 0) {
+    if (unresolvedBlockers.length > 0) {
+      lines.push("");
+    }
+    lines.push("Tracked dependent issues:");
+    lines.push(...summarizeRelationEntries(trackedDependents));
+  }
+  return lines;
+}
+
+function buildScopeDiscipline(issue: IssueRecord, context?: Record<string, unknown>): string {
   const description = issue.description?.trim();
   const scope = extractIssueSection(description, "Scope");
   const acceptance = extractIssueSection(description, "Acceptance criteria")
@@ -108,6 +188,8 @@ function buildScopeDiscipline(issue: IssueRecord): string {
     ...(scope ? ["### In Scope", "", scope, ""] : []),
     ...(acceptance ? ["### Acceptance / Done", "", acceptance, ""] : []),
     ...(relevantCode ? ["### Relevant Code", "", relevantCode, ""] : []),
+    ...buildCoordinationGuidance(context),
+    "",
     "### Likely Review Invariants",
     "",
     "- Check the surfaces explicitly named in the task before stopping.",
@@ -475,6 +557,7 @@ function buildPublicationContract(
       "",
       "Before finishing, publish the result instead of leaving it only in the worktree.",
       "If the task is genuinely complete without a PR, say so clearly in your normal summary instead of inventing one.",
+      "If the issue is acting as coordination-only work and the real implementation belongs in child issues, finish without opening an overlapping umbrella PR.",
       "If the worktree already contains relevant changes for this issue, verify them and publish them.",
       "If you changed files for this issue, commit them, push the issue branch, and open or update the PR before stopping.",
       "Do not stop with only local commits or uncommitted changes.",
@@ -525,7 +608,7 @@ function buildSections(
 
   sections.push(
     { id: "task-objective", content: buildTaskObjective(issue) },
-    { id: "scope-discipline", content: buildScopeDiscipline(issue) },
+    { id: "scope-discipline", content: buildScopeDiscipline(issue, context) },
   );
 
   const humanContext = buildHumanContext(context);
