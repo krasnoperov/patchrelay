@@ -186,4 +186,16 @@ describe("GitHubActionsRunner.getStatus", () => {
     const runner = setupAllChecksRequired({ abc123: [] });
     assert.strictEqual(await runner.getStatus("sha:abc123"), "pending");
   });
+
+  it("accepts skipped conclusions in all-checks-required mode", async () => {
+    const runner = setupAllChecksRequired({
+      abc123: [
+        { name: "Checks", status: "completed", conclusion: "success" },
+        { name: "Tests", status: "completed", conclusion: "success" },
+        { name: "Deploy stage", status: "completed", conclusion: "skipped" },
+        { name: "Delete stage preview worker", status: "completed", conclusion: "skipped" },
+      ],
+    });
+    assert.strictEqual(await runner.getStatus("sha:abc123"), "pass");
+  });
 });

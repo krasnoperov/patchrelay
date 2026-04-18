@@ -65,7 +65,14 @@ export class GitHubActionsRunner implements CIRunner {
       // (e.g. deploy-stage on main), even though listChecksForRef treats
       // those same checks as success, producing a "main_broken" block with
       // an empty failing-check list and stalling the queue.
-      const acceptSkipped = !hasRequired && !requireAllChecks;
+      // Accept "skipped" whenever there are no named required checks,
+      // including strict-protection-with-empty-contexts mode. A skipped
+      // job is an `if:` or `on:` gate by the workflow author declaring
+      // the job does not apply here; it is not a failure. The bypass
+      // concern (a gate job reporting success while a required job was
+      // skipped) only matters when we have a named required-check set
+      // to gate against, i.e. `hasRequired === true`.
+      const acceptSkipped = !hasRequired;
       if (relevant.some((c) => {
         if (c.conclusion === "success" || c.conclusion === "neutral") return false;
         if (acceptSkipped && c.conclusion === "skipped") return false;
