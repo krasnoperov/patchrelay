@@ -191,19 +191,22 @@ test("stale attempt renders as error glyph", () => {
   assert.equal(tokens[0]?.color, "red");
 });
 
-test("quiet repos are counted but not listed", () => {
+test("active repos sort before quiet repos; quietCount reflects the quiet ones", () => {
   const active = fakeRepo({ repoId: "active", repoFullName: "owner/active" });
   const quiet = fakeRepo({ repoId: "quiet", repoFullName: "owner/quiet" });
   const snapshot = fakeSnapshot({
-    repos: [active, quiet],
+    repos: [quiet, active],
     attempts: [
       fakeAttempt({ id: 1, repoFullName: active.repoFullName, prNumber: 1, status: "running", conclusion: undefined, updatedAt: "2026-04-17T11:50:00.000Z" }),
     ],
   });
 
   const model = buildDashboard(snapshot, { now: NOW });
-  assert.equal(model.repos.length, 1);
+  assert.equal(model.repos.length, 2);
   assert.equal(model.repos[0]?.repoFullName, active.repoFullName);
+  assert.equal(model.repos[0]?.hasActivity, true);
+  assert.equal(model.repos[1]?.repoFullName, quiet.repoFullName);
+  assert.equal(model.repos[1]?.hasActivity, false);
   assert.equal(model.quietCount, 1);
 });
 
@@ -218,7 +221,10 @@ test("cancelled and superseded PRs do not populate the strip", () => {
   });
 
   const model = buildDashboard(snapshot, { now: NOW });
-  assert.deepEqual(model.repos.length, 0);
+  assert.equal(model.repos.length, 1);
+  assert.equal(model.repos[0]?.tokens.length, 0);
+  assert.equal(model.repos[0]?.hasActivity, false);
+  assert.equal(model.quietCount, 1);
 });
 
 test("stepRepo cycles through repos in both directions", () => {

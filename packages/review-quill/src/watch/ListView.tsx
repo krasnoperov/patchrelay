@@ -55,25 +55,43 @@ export function RepoRow({
   );
 }
 
+export function pickVisibleWindow(
+  repos: DashboardRepo[],
+  selectedIndex: number,
+  availableRows: number,
+): { start: number; end: number } {
+  if (repos.length === 0) return { start: 0, end: 0 };
+  if (repos.length <= availableRows) return { start: 0, end: repos.length };
+  const clamped = Math.max(0, Math.min(selectedIndex, repos.length - 1));
+  let start = clamped;
+  let end = clamped + 1;
+  while (end - start < availableRows) {
+    if (start > 0 && (end === repos.length || clamped - start <= end - 1 - clamped)) {
+      start -= 1;
+    } else if (end < repos.length) {
+      end += 1;
+    } else {
+      break;
+    }
+  }
+  return { start, end };
+}
+
 export function ListView({ model, selectedRepoFullName, showCursor }: ListViewProps): React.JSX.Element {
   const { stdout } = useStdout();
   const rows = Math.max(3, stdout?.rows ?? 24);
   const width = Math.max(40, stdout?.columns ?? 80);
 
   const availableRows = Math.max(1, rows - 3);
-  const selectedIndex = model.repos.findIndex((repo) => repo.repoFullName === selectedRepoFullName);
-  const selected = selectedIndex >= 0 ? model.repos[selectedIndex]! : model.repos[0];
-  const others = model.repos.filter((repo) => repo !== selected);
+  const selectedIndex = Math.max(0, model.repos.findIndex((repo) => repo.repoFullName === selectedRepoFullName));
+  const quietVisibleReserve = model.repos.length > availableRows && model.quietCount > 0 ? 1 : 0;
+  const windowRows = Math.max(1, availableRows - quietVisibleReserve);
+  const { start, end } = pickVisibleWindow(model.repos, selectedIndex, windowRows);
+  const visible = model.repos.slice(start, end);
 
-  const ordered: DashboardRepo[] = [];
-  if (selected) ordered.push(selected);
-  ordered.push(...others);
-
-  const quietLine = model.quietCount > 0 ? 1 : 0;
-  const maxRepoLines = Math.max(1, availableRows - quietLine);
-  const visible = ordered.slice(0, maxRepoLines);
-  const hiddenActive = ordered.length - visible.length;
-  const quietFooter = model.quietCount + hiddenActive;
+  const hiddenQuiet = model.repos
+    .filter((repo, index) => !repo.hasActivity && (index < start || index >= end))
+    .length;
 
   if (visible.length === 0) {
     return <Box marginTop={1}><Text dimColor> </Text></Box>;
@@ -85,14 +103,14 @@ export function ListView({ model, selectedRepoFullName, showCursor }: ListViewPr
         <RepoRow
           key={repo.repoFullName}
           repo={repo}
-          selected={repo === selected}
+          selected={repo.repoFullName === selectedRepoFullName}
           showCursor={showCursor}
           width={width - 2}
         />
       ))}
-      {quietFooter > 0 ? (
+      {hiddenQuiet > 0 ? (
         <Box paddingLeft={2}>
-          <Text dimColor>{`+${quietFooter} quiet`}</Text>
+          <Text dimColor>{`+${hiddenQuiet} quiet`}</Text>
         </Box>
       ) : null}
     </Box>

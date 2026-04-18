@@ -264,19 +264,21 @@ export function buildDashboard(
     };
   });
 
-  const active = mapped.filter((repo) => repo.hasActivity || repo.offlineMessage);
-  active.sort((left, right) => {
+  mapped.sort((left, right) => {
     if (left.offlineMessage !== null && right.offlineMessage === null) return 1;
     if (right.offlineMessage !== null && left.offlineMessage === null) return -1;
-    const leftHasActive = left.entries.some((entry) => entry.kind === "running" || entry.kind === "queued");
-    const rightHasActive = right.entries.some((entry) => entry.kind === "running" || entry.kind === "queued");
-    if (leftHasActive !== rightHasActive) return leftHasActive ? -1 : 1;
+    const leftVisible = left.hasActivity || left.offlineMessage !== null;
+    const rightVisible = right.hasActivity || right.offlineMessage !== null;
+    if (leftVisible !== rightVisible) return leftVisible ? -1 : 1;
+    const leftActive = left.entries.some((entry) => entry.kind === "running" || entry.kind === "queued");
+    const rightActive = right.entries.some((entry) => entry.kind === "running" || entry.kind === "queued");
+    if (leftActive !== rightActive) return leftActive ? -1 : 1;
     if (left.latestActivityAt !== right.latestActivityAt) return right.latestActivityAt - left.latestActivityAt;
     return left.repoFullName.localeCompare(right.repoFullName);
   });
 
-  const quietCount = mapped.length - active.length;
-  return { repos: active, quietCount };
+  const quietCount = mapped.filter((repo) => !repo.hasActivity && repo.offlineMessage === null).length;
+  return { repos: mapped, quietCount };
 }
 
 export function clipSummary(

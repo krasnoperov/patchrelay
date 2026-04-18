@@ -204,8 +204,10 @@ export function buildDashboard(
     });
   }
 
-  const active = repos.filter((repo) => repo.hasActivity);
-  active.sort((left, right) => {
+  repos.sort((left, right) => {
+    if (left.hasActivity !== right.hasActivity) {
+      return left.hasActivity ? -1 : 1;
+    }
     const leftActive = left.entries.some((entry) => isActive(entry.kind));
     const rightActive = right.entries.some((entry) => isActive(entry.kind));
     if (leftActive !== rightActive) {
@@ -217,8 +219,8 @@ export function buildDashboard(
     return left.repoFullName.localeCompare(right.repoFullName);
   });
 
-  const quietCount = repos.length - active.length;
-  return { repos: active, quietCount };
+  const quietCount = repos.filter((repo) => !repo.hasActivity).length;
+  return { repos, quietCount };
 }
 
 function repoEntries(
