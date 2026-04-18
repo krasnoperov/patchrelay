@@ -204,6 +204,7 @@ export interface ReviewAttemptRecord {
   status: ReviewAttemptStatus;
   conclusion?: ReviewAttemptConclusion;
   summary?: string;
+  prTitle?: string;
   threadId?: string;
   turnId?: string;
   externalCheckRunId?: number;
@@ -235,6 +236,7 @@ export interface ReviewQuillPendingReview {
   prNumber: number;
   headSha: string;
   headRefName: string;
+  prTitle?: string;
   reason: "checks_running" | "checks_failed" | "checks_unknown";
   failedChecks: string[];
   pendingChecks: string[];

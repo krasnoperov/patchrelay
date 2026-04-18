@@ -30,6 +30,7 @@ export interface DashboardToken {
 export interface DashboardPrEntry extends DashboardToken {
   phrase: string;
   summary?: string;
+  title?: string;
   attemptId?: number;
   eventAt: number;
 }
@@ -246,23 +247,31 @@ function repoEntries(
     if (isDecided(kind) && attempt.summary) {
       entry.summary = attempt.summary;
     }
+    if (attempt.prTitle) {
+      entry.title = attempt.prTitle;
+    }
     byPr.set(attempt.prNumber, entry);
   }
 
   for (const item of pending) {
     if (byPr.has(item.prNumber)) {
       const existing = byPr.get(item.prNumber)!;
-      if (isActive(existing.kind)) continue;
+      if (isActive(existing.kind)) {
+        if (item.prTitle && !existing.title) existing.title = item.prTitle;
+        continue;
+      }
     }
     const kind = pendingKind(item.reason);
-    byPr.set(item.prNumber, {
+    const pendingEntry: DashboardPrEntry = {
       prNumber: item.prNumber,
       glyph: GLYPH[kind],
       color: COLOR[kind],
       kind,
       phrase: PHRASE[kind],
       eventAt: timestamp(item.updatedAt),
-    });
+    };
+    if (item.prTitle) pendingEntry.title = item.prTitle;
+    byPr.set(item.prNumber, pendingEntry);
   }
 
   return [...byPr.values()].sort((left, right) => {

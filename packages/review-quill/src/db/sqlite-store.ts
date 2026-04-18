@@ -11,6 +11,7 @@ function mapAttempt(row: Record<string, unknown>): ReviewAttemptRecord {
     status: String(row.status) as ReviewAttemptStatus,
     ...(row.conclusion ? { conclusion: String(row.conclusion) as ReviewAttemptConclusion } : {}),
     ...(row.summary ? { summary: String(row.summary) } : {}),
+    ...(row.pr_title ? { prTitle: String(row.pr_title) } : {}),
     ...(row.thread_id ? { threadId: String(row.thread_id) } : {}),
     ...(row.turn_id ? { turnId: String(row.turn_id) } : {}),
     ...(row.external_check_run_id !== null && row.external_check_run_id !== undefined ? { externalCheckRunId: Number(row.external_check_run_id) } : {}),
@@ -39,6 +40,13 @@ export class SqliteStore {
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("foreign_keys = ON");
     this.db.exec(SCHEMA_SQL);
+    this.addColumnIfMissing("review_attempts", "pr_title", "TEXT");
+  }
+
+  private addColumnIfMissing(table: string, column: string, type: string): void {
+    const rows = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<Record<string, unknown>>;
+    if (rows.some((row) => String(row.name) === column)) return;
+    this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
   }
 
   close(): void {
@@ -84,14 +92,19 @@ export class SqliteStore {
     prNumber: number;
     headSha: string;
     status: ReviewAttemptStatus;
+    prTitle?: string;
   }): ReviewAttemptRecord {
     const now = isoNow();
     const result = this.db.prepare(`
       INSERT INTO review_attempts (
-        repo_full_name, pr_number, head_sha, status, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?)
-    `).run(params.repoFullName, params.prNumber, params.headSha, params.status, now, now);
+        repo_full_name, pr_number, head_sha, status, pr_title, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(params.repoFullName, params.prNumber, params.headSha, params.status, params.prTitle ?? null, now, now);
     return this.getAttemptById(Number(result.lastInsertRowid))!;
+  }
+
+  setAttemptTitle(id: number, prTitle: string | null): void {
+    this.db.prepare("UPDATE review_attempts SET pr_title = ? WHERE id = ?").run(prTitle, id);
   }
 
   updateAttempt(id: number, params: {
