@@ -8,6 +8,7 @@ interface ProjectDetailViewProps {
 }
 
 const PR_ID_WIDTH = 7;
+const PR_PHRASE_WIDTH = 20;
 const SUMMARY_INDENT = 9;
 
 function PrEntryRow({
@@ -20,15 +21,21 @@ function PrEntryRow({
   includeSummary: boolean;
 }): React.JSX.Element {
   const idText = `#${entry.prNumber}`.padEnd(PR_ID_WIDTH, " ");
+  const paddedPhrase = entry.phrase.padEnd(PR_PHRASE_WIDTH, " ");
   const summaryText = includeSummary
     ? clipSummary(entry.summary, { maxLines: 3, width: Math.max(20, width - SUMMARY_INDENT) })
+    : "";
+  const titleSpace = Math.max(0, width - (PR_ID_WIDTH + 3 + PR_PHRASE_WIDTH + 1));
+  const title = entry.title && entry.title !== entry.phrase && titleSpace >= 8
+    ? truncate(entry.title, titleSpace)
     : "";
   return (
     <Box flexDirection="column">
       <Box>
         <Text color={entry.color}>{idText}</Text>
         <Text color={entry.color}>{entry.glyph}</Text>
-        <Text>{`  ${entry.phrase}`}</Text>
+        <Text>{`  ${paddedPhrase}`}</Text>
+        {title ? <Text dimColor>{`  ${title}`}</Text> : null}
       </Box>
       {summaryText ? (
         <Box>
@@ -38,6 +45,12 @@ function PrEntryRow({
       ) : null}
     </Box>
   );
+}
+
+function truncate(value: string, maxWidth: number): string {
+  if (value.length <= maxWidth) return value;
+  if (maxWidth <= 1) return value.slice(0, maxWidth);
+  return `${value.slice(0, Math.max(0, maxWidth - 1))}\u2026`;
 }
 
 export function ProjectDetailView({ model, selectedRepoId }: ProjectDetailViewProps): React.JSX.Element {

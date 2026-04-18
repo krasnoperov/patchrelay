@@ -52,6 +52,8 @@ export interface QueueEntry {
   waitDetail?: string | null;
   /** Post-merge verification status for the landed commit on main. */
   postMergeStatus: PostMergeStatus | null;
+  /** PR title captured at admission. Falls back to branch name in the UI. */
+  prTitle?: string | null;
   /** Commit SHA used when checking post-merge status. */
   postMergeSha: string | null;
   /** Optional one-line summary of post-merge checks. */
@@ -203,6 +205,7 @@ export interface PRStatus {
   number: number;
   branch: string;
   headSha: string;
+  title?: string | undefined;
   mergeable: boolean;
   mergeStateStatus?: string | undefined;
   reviewDecision?: string | undefined;

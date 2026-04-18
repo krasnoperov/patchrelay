@@ -57,7 +57,7 @@ exit 1
     }
 
     const log = readFileSync(logPath, "utf8");
-    assert.match(log, /pr view 101 --repo owner\/repo --json number,headRefName,headRefOid,reviewDecision,state/);
+    assert.match(log, /pr view 101 --repo owner\/repo --json number,title,headRefName,headRefOid,reviewDecision,state/);
     assert.match(log, /api repos\/owner\/repo\/commits\/sha-101\/check-runs --jq \.check_runs/);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
