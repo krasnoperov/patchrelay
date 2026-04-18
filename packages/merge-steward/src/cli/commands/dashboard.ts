@@ -23,6 +23,7 @@ export async function handleDashboard(parsed: ParsedArgs): Promise<number> {
     return 1;
   }
 
+  if (!process.env.NODE_ENV) process.env.NODE_ENV = "production";
   const { startDashboard } = await import("../../watch/index.tsx");
   await startDashboard(options);
   return 0;
