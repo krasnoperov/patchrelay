@@ -42,6 +42,7 @@ export class MergeStewardQueueCommands {
     headSha: string;
     issueKey?: string;
     priority?: number;
+    prTitle?: string;
   }): QueueEntry | undefined {
     const existing = this.store.getEntryByPR(this.config.repoId, params.prNumber);
     if (existing) {
@@ -77,6 +78,7 @@ export class MergeStewardQueueCommands {
       postMergeSha: null,
       postMergeSummary: null,
       postMergeCheckedAt: null,
+      prTitle: params.prTitle ?? null,
       enqueuedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -192,7 +194,7 @@ export class MergeStewardQueueCommands {
         }
       }
 
-      this.enqueue({ prNumber, branch, headSha });
+      this.enqueue({ prNumber, branch, headSha, ...(status.title ? { prTitle: status.title } : {}) });
       return true;
     } catch (error) {
       this.logger.warn({ prNumber, err: error }, "Failed to check admission eligibility");

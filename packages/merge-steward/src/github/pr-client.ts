@@ -26,11 +26,12 @@ export class GitHubPRClient implements GitHubPRApi {
     const result = await exec("gh", [
       "pr", "view", String(prNumber),
       "--repo", this.repoFullName,
-      "--json", "number,headRefName,headRefOid,reviewDecision,state,mergeStateStatus",
+      "--json", "number,title,headRefName,headRefOid,reviewDecision,state,mergeStateStatus",
     ], { githubRepoFullName: this.repoFullName });
 
     const data = JSON.parse(result.stdout) as {
       number: number;
+      title?: string;
       headRefName: string;
       headRefOid: string;
       reviewDecision: string;
@@ -42,6 +43,7 @@ export class GitHubPRClient implements GitHubPRApi {
       number: data.number,
       branch: data.headRefName,
       headSha: data.headRefOid,
+      ...(data.title ? { title: data.title } : {}),
       mergeable: data.state === "OPEN",
       mergeStateStatus: data.mergeStateStatus,
       reviewDecision: data.reviewDecision,

@@ -38,6 +38,7 @@ export interface DashboardToken {
 export interface DashboardPrEntry extends DashboardToken {
   phrase: string;
   summary?: string;
+  title?: string;
   eventAt: number;
 }
 
@@ -213,6 +214,8 @@ function repoEntriesFromSnapshot(
     };
     const summary = entrySummary(entry);
     if (summary) item.summary = summary;
+    const title = entry.prTitle?.trim() || entry.branch;
+    if (title) item.title = title;
     byPr.set(entry.prNumber, item);
   }
 
