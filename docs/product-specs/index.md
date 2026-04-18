@@ -1,18 +1,7 @@
-# Product Specs Index
+# Product Specs
 
-The root [PRODUCT_SPEC.md](../../PRODUCT_SPEC.md) is the current top-level product requirements document.
+- [patchrelay.md](./patchrelay.md) — top-level product requirements document for the PatchRelay harness (positioning, users, jobs-to-be-done, functional requirements, MVP scope)
+- [operator-state-visualization.md](./operator-state-visualization.md) — native state graphs and external observation panels for the PatchRelay dashboard and merge-steward watch
+- [dashboard-styleguide.md](./dashboard-styleguide.md) — row layout, color convention, progressive disclosure, and forbidden noise for the review-quill and merge-steward watch TUIs
 
-This directory is for deeper product specs later, such as:
-
-- onboarding and installation flows
-- operator workflows
-- review and repair UX
-- merge queue provider behavior
-- state visualization and downstream queue observation UX
-
-Until those docs exist, treat the root product spec and [../architecture.md](../architecture.md) as authoritative.
-
-Available deeper specs:
-
-- [operator-state-visualization.md](./operator-state-visualization.md) - native state graphs and external observation panels for the PatchRelay dashboard and merge-steward watch
-- [dashboard-styleguide.md](./dashboard-styleguide.md) - row layout, color convention, progressive disclosure, and forbidden noise for the review-quill and merge-steward watch TUIs
+For stack-level architecture, see [../architecture.md](../architecture.md).

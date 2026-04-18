@@ -34,6 +34,16 @@ What we are **not** copying:
 - a polling-only backlog worker
 - a one-shot coding session without repair loops
 
+## Architectural Priorities
+
+1. **Agent legibility over cleverness** — the system should be easy for an agent to reason about without studying the internals.
+2. **Flat, direct orchestration over layered abstraction** — orchestrators, handlers, and service shells stay narrow; extract by responsibility before layering.
+3. **Persistent issue workspaces** — one durable worktree per issue lifecycle, resumed across iterations.
+4. **Repair loops as first-class workflows** — `implementation`, `review_fix`, `ci_repair`, `queue_repair` have distinct context, entry conditions, and success criteria, not one generic "try again."
+5. **Repository-local guidance as the source of truth** — `IMPLEMENTATION_WORKFLOW.md`, `REVIEW_WORKFLOW.md`, and repo-local docs define how the agent should work in that repo.
+
+For the detailed extraction rules, see [architecture-guardrails.md](./architecture-guardrails.md).
+
 ## Component Topology
 
 ```mermaid
@@ -74,10 +84,23 @@ flowchart TB
   RO --> ST
   ST --> RO
   RO --> LS
-  GH --> RB[ReviewBot]
+  GH --> RQ[review-quill]
   GH --> MS[Merge Steward]
   MS -->|merge / evict| GH
 ```
+
+## Source Layout
+
+The codebase uses a flat module structure rather than a layered directory hierarchy:
+
+- `factory-state.ts` — state machine types and transitions
+- `run-orchestrator.ts` — run lifecycle, Codex thread management, reconciliation
+- `webhook-handler.ts` — Linear webhook processing, delegation, agent sessions
+- `github-webhook-handler.ts` — GitHub webhook processing, reactive run triggers
+- `service.ts` — top-level service wiring
+- `service-runtime.ts` — async queues, background reconciliation
+- `db.ts` — SQLite persistence (issues, runs, webhooks, thread events)
+- `http.ts` — Fastify HTTP server and routes
 
 ## Core Responsibilities
 
@@ -179,7 +202,7 @@ Delegated in Linear
 -> Implementation run (Codex)
 -> PatchRelay opens draft PR
 -> PatchRelay marks PR ready when implementation is complete
--> ReviewBot reviews ready PRs with green CI
+-> review-quill reviews ready PRs with green CI
 -> Merge Steward queues ready PRs with green CI and approval
 -> If requested changes, red CI, or merge-steward incident lands on a linked delegated PR, PatchRelay resumes the same branch
 -> Merged → done
@@ -338,6 +361,15 @@ The repository should contain:
 - `REVIEW_WORKFLOW.md` — guidance for review fix runs
 
 The run orchestrator reads these files and includes them in the Codex prompt. Keep them short and action-oriented.
+
+## Design Implications
+
+- One owning agent per issue branch keeps coordination manageable.
+- Delegation does not automatically imply "this issue must own a branch and PR"; tracker and orchestration issues may complete without opening code.
+- The same worktree should be resumed for all iterations of an issue.
+- Queue failures are integration problems, not just CI failures.
+- The short root docs should point to deeper `docs/` material rather than duplicating it.
+- Historical designs are reference material only unless reaffirmed in current docs.
 
 ## What The Current Repo Should Optimize For
 

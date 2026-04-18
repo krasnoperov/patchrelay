@@ -13,8 +13,8 @@ PatchRelay is currently focused on a self-hosted execution harness for Linear-dr
 ## Pull request guidelines
 
 - Do feature work in branches and open pull requests into `main`.
-- Prefer squash merges so each merged PR produces one clean changelog entry.
-- Use conventional commit style for PR titles or the final squash commit message, for example `feat: add project bootstrap wizard` or `fix: validate reused worktree paths`.
+- **Use regular merges (`gh pr merge --merge`), never squash.** Release-please reads non-merge commit subjects to plan version bumps — squashing drops that signal and breaks the release workflow.
+- Use conventional commit style on the actual branch commits (not just the PR title), for example `feat: add project bootstrap wizard` or `fix: validate reused worktree paths`.
 - Add or update tests when behavior changes.
 - Update docs and examples when config or operational behavior changes.
 - Keep security-sensitive changes small and well explained.
