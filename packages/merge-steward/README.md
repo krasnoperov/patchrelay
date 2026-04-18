@@ -14,6 +14,17 @@ Shared protocol:
 
 - [../../docs/design-docs/pr-automation-loop.md](../../docs/design-docs/pr-automation-loop.md)
 
+## Use with your own agent
+
+If you want your own agent (Claude Code, Cursor, Codex CLI, …) to drive PRs through the queue and react to evictions / failing checks instead of running PatchRelay's full harness, install the [`ship-pr`](https://github.com/krasnoperov/patchrelay-agents) skill from the companion Claude Code marketplace:
+
+```
+/plugin marketplace add krasnoperov/patchrelay-agents
+/plugin install ship-pr@patchrelay
+```
+
+The skill wraps `merge-steward pr status --wait` and `review-quill pr status --wait` into a blocking-gate workflow with stable exit codes, so the agent only wakes on terminal outcomes.
+
 ## How it works
 
 1. A PR becomes eligible when GitHub says it is approved and its required checks are green
