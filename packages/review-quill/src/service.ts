@@ -297,6 +297,7 @@ export class ReviewQuillService {
             prNumber: pr.number,
             headSha: pr.headSha,
             headRefName: pr.headRefName,
+            ...(pr.title ? { prTitle: pr.title } : {}),
             reason: state,
             failedChecks: summary.failed,
             pendingChecks: summary.pending,
@@ -524,7 +525,12 @@ export class ReviewQuillService {
         prNumber: pr.number,
         headSha: pr.headSha,
         status: "queued",
+        ...(pr.title ? { prTitle: pr.title } : {}),
       });
+    if (existingAttempt && pr.title && attempt.prTitle !== pr.title) {
+      this.store.setAttemptTitle(attempt.id, pr.title);
+      attempt.prTitle = pr.title;
+    }
     let heartbeat: ReturnType<typeof setInterval> | undefined;
 
     try {

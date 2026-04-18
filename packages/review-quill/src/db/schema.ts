@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS review_attempts (
   status TEXT NOT NULL,
   conclusion TEXT,
   summary TEXT,
+  pr_title TEXT,
   thread_id TEXT,
   turn_id TEXT,
   external_check_run_id INTEGER,
