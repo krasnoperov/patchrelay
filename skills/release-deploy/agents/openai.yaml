@@ -1,0 +1,4 @@
+interface:
+  display_name: "Release Deploy"
+  short_description: "Release, install, and deploy PatchRelay stack"
+  default_prompt: "Use $release-deploy to run the PatchRelay branch-to-main release and deployment workflow."
