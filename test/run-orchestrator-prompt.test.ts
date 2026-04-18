@@ -105,13 +105,16 @@ test("implementation prompts keep the no-PR case explicit without switching deli
   }
 });
 
-test("implementation prompts include tracker-orchestration guidance when dependent issues exist", () => {
+test("orchestration prompts switch to umbrella-convergence guidance when dependent issues exist", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-prompt-"));
   try {
     writeFileSync(path.join(baseDir, "IMPLEMENTATION_WORKFLOW.md"), "# Implementation Workflow\n");
 
     const prompt = buildInitialRunPrompt({
-      issue: createIssue(),
+      issue: {
+        ...createIssue(),
+        issueClass: "orchestration",
+      },
       runType: "implementation",
       repoPath: baseDir,
       context: {
@@ -136,13 +139,13 @@ test("implementation prompts include tracker-orchestration guidance when depende
       },
     });
 
-    assert.match(prompt, /### Coordination \/ Issue Topology/);
-    assert.match(prompt, /First decide whether this issue should publish code itself or mainly coordinate other issues\./);
-    assert.match(prompt, /do not create a duplicate umbrella PR/);
-    assert.match(prompt, /Tracked dependent issues:/);
+    assert.match(prompt, /This issue is orchestration work\./);
+    assert.match(prompt, /Treat it as the owner of convergence across related issues/);
+    assert.match(prompt, /Do not create an overlapping umbrella PR unless this parent clearly owns unique direct cleanup work/);
+    assert.match(prompt, /### Child Issue Summaries/);
     assert.match(prompt, /TST-4: Migrate public pages to Lingui \(In Progress; implementing; delegated; open PR\)/);
     assert.match(prompt, /TST-5: Audit lingering translation helpers \(Start; delegated; delegated; no open PR\)/);
-    assert.match(prompt, /finish without opening an overlapping umbrella PR/);
+    assert.match(prompt, /Valid orchestration outcomes include: recording an observation, updating the rollout plan, creating follow-up issues/);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

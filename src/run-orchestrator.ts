@@ -30,6 +30,7 @@ import { RunReconciler } from "./run-reconciler.ts";
 import { RunRecoveryService } from "./run-recovery-service.ts";
 import { RunWakePlanner, type PendingRunWake } from "./run-wake-planner.ts";
 import { getRemainingZombieRecoveryDelayMs } from "./zombie-recovery.ts";
+import { classifyIssue } from "./issue-class.ts";
 import { loadConfig } from "./config.ts";
 
 function lowerCaseFirst(value: string): string {
@@ -262,7 +263,7 @@ export class RunOrchestrator {
     return this.runWakePlanner.materializeLegacyPendingWake(issue, lease);
   }
 
-  private buildImplementationCoordinationContext(issue: IssueRecord): Record<string, unknown> | undefined {
+  private buildRelatedIssueContext(issue: IssueRecord): Record<string, unknown> | undefined {
     const unresolvedBlockers = this.db.issues
       .listIssueDependencies(issue.projectId, issue.linearIssueId)
       .filter((entry) => !isResolvedDependencyState(entry.blockerCurrentLinearStateType))
@@ -298,6 +299,20 @@ export class RunOrchestrator {
     };
   }
 
+  private classifyTrackedIssue(issue: IssueRecord): IssueRecord {
+    const trackedDependentCount = this.db.issues.listDependents(issue.projectId, issue.linearIssueId).length;
+    const classification = classifyIssue({ issue, trackedDependentCount });
+    if (issue.issueClass === classification.issueClass && issue.issueClassSource === classification.issueClassSource) {
+      return issue;
+    }
+    return this.db.issues.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      issueClass: classification.issueClass,
+      issueClassSource: classification.issueClassSource,
+    });
+  }
+
   // ─── Run ────────────────────────────────────────────────────────
 
   async run(item: { projectId: string; issueId: string }): Promise<void> {
@@ -310,7 +325,8 @@ export class RunOrchestrator {
       return;
     }
 
-    const issue = this.db.issues.getIssue(item.projectId, item.issueId);
+    const initialIssue = this.db.issues.getIssue(item.projectId, item.issueId);
+    const issue = initialIssue ? this.classifyTrackedIssue(initialIssue) : undefined;
     if (!issue || issue.activeRunId !== undefined) return;
     const issueSession = this.db.issueSessions.getIssueSession(item.projectId, item.issueId);
 
@@ -355,7 +371,7 @@ export class RunOrchestrator {
       ? await this.runCompletionPolicy.resolveRequestedChangesWakeContext(issue, runType, context)
       : context;
     const coordinationContext = runType === "implementation"
-      ? this.buildImplementationCoordinationContext(issue)
+      ? this.buildRelatedIssueContext(issue)
       : undefined;
     const effectiveContext = coordinationContext
       ? { ...coordinationContext, ...(baseContext ?? {}) }

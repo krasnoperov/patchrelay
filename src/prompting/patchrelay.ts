@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import type { IssueRecord } from "../db-types.ts";
 import type { RunType } from "../factory-state.ts";
+import type { IssueClass } from "../issue-class.ts";
 import type { PatchRelayPromptingConfig, PromptCustomizationLayer } from "../types.ts";
 
 const WORKFLOW_FILES: Record<RunType, string> = {
@@ -195,6 +196,43 @@ function buildScopeDiscipline(issue: IssueRecord, context?: Record<string, unkno
     "- Check the surfaces explicitly named in the task before stopping.",
     "- If repository guidance says certain changed surfaces are one flow, verify that shared flow, but do not treat unrelated surrounding cleanup as part of this task.",
     "- A review repair should fix the concrete concern on the current head, not silently expand the Linear issue into a broader rewrite.",
+  ].join("\n");
+}
+
+function buildOrchestrationScopeDiscipline(context?: Record<string, unknown>): string {
+  const unresolvedBlockers = Array.isArray(context?.unresolvedBlockers)
+    ? context.unresolvedBlockers.filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
+    : [];
+  const trackedDependents = Array.isArray(context?.trackedDependents)
+    ? context.trackedDependents.filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
+    : [];
+
+  return [
+    "## Scope Discipline",
+    "",
+    "This issue is orchestration work.",
+    "Treat it as the owner of convergence across related issues rather than as a normal code-owning implementation branch.",
+    "Inspect why this wake happened before acting.",
+    "Do not create an overlapping umbrella PR unless this parent clearly owns unique direct cleanup work that child issues do not already cover.",
+    "If child work is still in motion, babysit the plan, record useful observations, and return to waiting.",
+    "If child work looks delivered, audit whether the original parent goal is actually satisfied.",
+    "Create blocking follow-up work only when it is necessary to satisfy the original parent goal.",
+    "Prefer non-blocking follow-up issues over keeping the umbrella open for optional polish or adjacent expansion.",
+    "",
+    "### Child Issue Summaries",
+    "",
+    ...(trackedDependents.length > 0
+      ? summarizeRelationEntries(trackedDependents, { emptyText: "No child issues are currently tracked." })
+      : ["No child issues are currently tracked."]),
+    "",
+    ...(unresolvedBlockers.length > 0
+      ? ["### Unresolved Blockers", "", ...summarizeRelationEntries(unresolvedBlockers), ""]
+      : []),
+    "### Convergence Rule",
+    "",
+    "- Close the umbrella when the original parent goal is satisfied.",
+    "- If you discover one missing required slice, you may create a justified blocking follow-up.",
+    "- Do not invent optional expansion without explicit human approval.",
   ].join("\n");
 }
 
@@ -469,6 +507,16 @@ function buildFollowUpPromptPrelude(issue: IssueRecord, runType: RunType, contex
     "",
     wakeReason === "direct_reply"
       ? "Why this turn exists: A human reply arrived for the outstanding question from the previous turn."
+      : wakeReason === "initial_delegate"
+        ? "Why this turn exists: This orchestration issue was just delegated and needs an initial plan."
+      : wakeReason === "child_delivered"
+        ? "Why this turn exists: A child issue was delivered and the umbrella needs to review the outcome."
+      : wakeReason === "child_changed"
+        ? "Why this turn exists: A child issue changed state and the umbrella may need to adjust."
+      : wakeReason === "child_regressed"
+        ? "Why this turn exists: A previously progressing child issue regressed and the umbrella needs to reassess."
+      : wakeReason === "human_instruction"
+        ? "Why this turn exists: A human added new guidance for this orchestration issue."
       : wakeReason === "completion_check_continue"
         ? "Why this turn exists: The previous turn ended without a PR, and PatchRelay's completion check decided the work should continue automatically."
       : wakeReason === "branch_upkeep"
@@ -478,6 +526,8 @@ function buildFollowUpPromptPrelude(issue: IssueRecord, runType: RunType, contex
           : `Why this turn exists: Continue the existing ${runType} run from the latest issue state.`,
     wakeReason === "direct_reply"
       ? "Required action now: Apply the latest human answer, continue from the current branch/session context, and publish the next concrete result."
+      : wakeReason === "initial_delegate"
+        ? "Required action now: Inspect the umbrella goal, review the child set, and record the next orchestration step."
       : wakeReason === "completion_check_continue"
         ? "Required action now: Continue from the current branch and thread context, finish the task, and publish the next concrete result."
       : "Required action now: Continue from the latest branch state, refresh any stale assumptions, and publish the next concrete result.",
@@ -548,16 +598,36 @@ function buildWorkflowGuidance(repoPath: string, runType: RunType): string {
   return "";
 }
 
+function buildOrchestrationWorkflowGuidance(): string {
+  return [
+    "## Workflow Guidance",
+    "",
+    "Use the wake reason and current child issue summaries to decide what kind of orchestration work is needed now.",
+    "Typical orchestration phases are: initial setup, waiting on child progress, reviewing delivered child work, final audit, creating a justified follow-up, or closing the umbrella.",
+    "Keep outputs concise and observable in Linear.",
+  ].join("\n");
+}
+
 function buildPublicationContract(
   runType: RunType,
+  issueClass?: IssueClass,
 ): string {
+  if (issueClass === "orchestration") {
+    return [
+      "## Publication Requirements",
+      "",
+      "Before finishing, publish the orchestration outcome rather than leaving it implicit.",
+      "By default, orchestration work should finish without opening an overlapping umbrella PR.",
+      "Valid orchestration outcomes include: recording an observation, updating the rollout plan, creating follow-up issues, opening a small cleanup PR that the parent clearly owns, or closing the umbrella.",
+      "If you create new blocking follow-up work, justify it against the original parent goal rather than optional polish.",
+    ].join("\n");
+  }
   if (runType === "implementation") {
     return [
       "## Publication Requirements",
       "",
       "Before finishing, publish the result instead of leaving it only in the worktree.",
       "If the task is genuinely complete without a PR, say so clearly in your normal summary instead of inventing one.",
-      "If the issue is acting as coordination-only work and the real implementation belongs in child issues, finish without opening an overlapping umbrella PR.",
       "If the worktree already contains relevant changes for this issue, verify them and publish them.",
       "If you changed files for this issue, commit them, push the issue branch, and open or update the PR before stopping.",
       "Do not stop with only local commits or uncommitted changes.",
@@ -597,6 +667,7 @@ function buildSections(
   context?: Record<string, unknown>,
   followUp = false,
 ): PatchRelayPromptSection[] {
+  const issueClass = issue.issueClass;
   const sections: PatchRelayPromptSection[] = [
     { id: "header", content: buildPromptHeader(issue) },
   ];
@@ -608,7 +679,10 @@ function buildSections(
 
   sections.push(
     { id: "task-objective", content: buildTaskObjective(issue) },
-    { id: "scope-discipline", content: buildScopeDiscipline(issue, context) },
+    {
+      id: "scope-discipline",
+      content: issueClass === "orchestration" ? buildOrchestrationScopeDiscipline(context) : buildScopeDiscipline(issue, context),
+    },
   );
 
   const humanContext = buildHumanContext(context);
@@ -620,12 +694,14 @@ function buildSections(
     sections.push({ id: "reactive-context", content: reactiveContext });
   }
 
-  const workflow = buildWorkflowGuidance(repoPath, runType);
+  const workflow = issueClass === "orchestration"
+    ? buildOrchestrationWorkflowGuidance()
+    : buildWorkflowGuidance(repoPath, runType);
   if (workflow) {
     sections.push({ id: "workflow-guidance", content: workflow });
   }
 
-  sections.push({ id: "publication-contract", content: buildPublicationContract(runType) });
+  sections.push({ id: "publication-contract", content: buildPublicationContract(runType, issueClass) });
   return sections;
 }
 
