@@ -451,6 +451,45 @@ test("service start recovers delegated blocked issues from paused local-work sta
   }
 });
 
+test("listTrackedIssues keeps undelegated local work paused instead of ready or active", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-service-list-paused-local-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const service = new PatchRelayService(
+      config,
+      db,
+      {
+        on: () => undefined,
+        readThread: async () => ({ id: "thread-1", turns: [] }),
+      } as never,
+      undefined,
+      pino({ enabled: false }),
+    );
+
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-paused-local",
+      issueKey: "USE-PAUSED",
+      title: "Paused local implementation",
+      delegatedToPatchRelay: false,
+      currentLinearState: "Backlog",
+      factoryState: "implementing",
+    });
+
+    const tracked = service.listTrackedIssues().find((entry) => entry.issueKey === "USE-PAUSED");
+    assert.ok(tracked);
+    assert.equal(tracked.delegatedToPatchRelay, false);
+    assert.equal(tracked.readyForExecution, false);
+    assert.equal(tracked.activeRunType, undefined);
+    assert.equal(tracked.waitingReason, "PatchRelay automation is paused because the issue is undelegated");
+    assert.equal(tracked.statusNote, "PatchRelay automation is paused because the issue is undelegated");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("service start preserves delegated completion-check questions in awaiting_input", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-service-startup-preserve-question-"));
   try {

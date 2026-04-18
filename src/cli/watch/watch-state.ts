@@ -23,6 +23,7 @@ export interface WatchIssue {
   title?: string | undefined;
   statusNote?: string | undefined;
   projectId: string;
+  delegatedToPatchRelay: boolean;
   sessionState?: string | undefined;
   factoryState: string;
   blockedByCount: number;
