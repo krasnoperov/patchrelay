@@ -60,6 +60,7 @@ test("discoverRepoSettings resolves default branch and required checks from GitH
     assert.equal(discovered.defaultBranch, "main");
     assert.equal(discovered.branch, "main");
     assert.deepEqual(discovered.requiredChecks, ["lint", "test"]);
+    assert.equal(discovered.requireAllChecksOnEmptyRequiredSet, false);
     assert.deepEqual(discovered.warnings, []);
     assert.equal(calls.length, 4);
   } finally {
@@ -103,6 +104,7 @@ test("discoverRepoSettings warns when GitHub only exposes workflow rules or no r
     assert.equal(discovered.defaultBranch, "main");
     assert.equal(discovered.branch, "release");
     assert.deepEqual(discovered.requiredChecks, []);
+    assert.equal(discovered.requireAllChecksOnEmptyRequiredSet, false);
     assert.equal(discovered.warnings.length, 2);
     assert.match(discovered.warnings[0] ?? "", /require workflows/i);
     assert.match(discovered.warnings[1] ?? "", /No required status checks discovered/i);
@@ -149,7 +151,55 @@ test("discoverRepoSettings falls back to classic branch protection required chec
     assert.equal(discovered.defaultBranch, "main");
     assert.equal(discovered.branch, "main");
     assert.deepEqual(discovered.requiredChecks, ["Verify"]);
+    assert.equal(discovered.requireAllChecksOnEmptyRequiredSet, false);
     assert.deepEqual(discovered.warnings, []);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("discoverRepoSettings requires all observed checks when protection is strict but contexts are empty", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    if (url.endsWith("/app/installations/123/access_tokens")) {
+      assert.equal(init?.method, "POST");
+      return createJsonResponse({ token: "installation-token" });
+    }
+    if (url.endsWith("/repos/owner/repo")) {
+      return createJsonResponse({ default_branch: "main" });
+    }
+    if (url.endsWith("/repos/owner/repo/rules/branches/main")) {
+      return createJsonResponse([]);
+    }
+    if (url.endsWith("/repos/owner/repo/branches/main/protection")) {
+      return createJsonResponse({
+        required_status_checks: {
+          strict: true,
+          contexts: [],
+          checks: [],
+        },
+      });
+    }
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  };
+
+  try {
+    const discovered = await discoverRepoSettings(
+      {
+        appId: "123456",
+        installationId: "123",
+        privateKey: createPrivateKeyPem(),
+      },
+      "owner/repo",
+    );
+
+    assert.equal(discovered.defaultBranch, "main");
+    assert.equal(discovered.branch, "main");
+    assert.deepEqual(discovered.requiredChecks, []);
+    assert.equal(discovered.requireAllChecksOnEmptyRequiredSet, true);
+    assert.equal(discovered.warnings.length, 1);
+    assert.match(discovered.warnings[0] ?? "", /require all observed checks on the ref to pass/i);
   } finally {
     globalThis.fetch = originalFetch;
   }

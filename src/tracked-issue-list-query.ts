@@ -123,7 +123,7 @@ export class TrackedIssueListQuery {
       .prepare(
         `SELECT
           s.project_id, s.linear_issue_id, s.issue_key, i.title,
-          i.current_linear_state, i.factory_state, i.delegated_to_patchrelay, s.session_state, s.waiting_reason, s.summary_text, s.updated_at,
+          i.current_linear_state, i.factory_state, i.delegated_to_patchrelay, s.session_state, s.waiting_reason, s.summary_text, s.display_updated_at,
           i.pending_run_type,
           i.pr_number, i.pr_state, i.pr_head_sha, i.pr_review_state, i.pr_check_status, i.last_blocking_review_head_sha,
           i.last_github_ci_snapshot_json,
@@ -187,7 +187,7 @@ export class TrackedIssueListQuery {
           WHERE r.project_id = s.project_id AND r.linear_issue_id = s.linear_issue_id
           ORDER BY r.id DESC LIMIT 1
         )
-        ORDER BY s.updated_at DESC, s.issue_key ASC`,
+        ORDER BY s.display_updated_at DESC, s.issue_key ASC`,
       )
       .all() as Array<Record<string, unknown>>;
     return rows.map((row) => {
@@ -255,7 +255,7 @@ export class TrackedIssueListQuery {
             ...(typeof row.latest_run_completion_check_question === "string" ? { completionCheckQuestion: row.latest_run_completion_check_question } : {}),
             ...(typeof row.latest_run_completion_check_why === "string" ? { completionCheckWhy: row.latest_run_completion_check_why } : {}),
             ...(typeof row.latest_run_completion_check_recommended_reply === "string" ? { completionCheckRecommendedReply: row.latest_run_completion_check_recommended_reply } : {}),
-            startedAt: String(row.updated_at),
+            startedAt: String(row.display_updated_at),
           }
         : undefined;
       const latestEvent = this.db.issueSessions.listIssueSessionEvents(String(row.project_id), String(row.linear_issue_id), { limit: 1 }).at(-1);
@@ -307,7 +307,7 @@ export class TrackedIssueListQuery {
         ...(failureContext?.summary ? { latestFailureSummary: failureContext.summary } : {}),
         ...(waitingReason ? { waitingReason } : {}),
         ...(completionCheckActive ? { completionCheckActive } : {}),
-        updatedAt: String(row.updated_at),
+        updatedAt: String(row.display_updated_at),
       };
     });
   }

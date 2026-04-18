@@ -89,6 +89,7 @@ CREATE TABLE IF NOT EXISTS issue_sessions (
   worker_id TEXT,
   leased_until TEXT,
   created_at TEXT NOT NULL,
+  display_updated_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   UNIQUE(project_id, linear_issue_id)
 );
@@ -260,6 +261,12 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
 
   // Preserve the PR head SHA seen when a run started so PatchRelay can
   // verify that requested-changes work actually published a new head.
+  addColumnIfMissing(connection, "issue_sessions", "display_updated_at", "TEXT");
+  connection.prepare(`
+    UPDATE issue_sessions
+    SET display_updated_at = COALESCE(display_updated_at, updated_at, created_at)
+    WHERE display_updated_at IS NULL
+  `).run();
   addColumnIfMissing(connection, "runs", "source_head_sha", "TEXT");
   addColumnIfMissing(connection, "runs", "completion_check_thread_id", "TEXT");
   addColumnIfMissing(connection, "runs", "completion_check_turn_id", "TEXT");

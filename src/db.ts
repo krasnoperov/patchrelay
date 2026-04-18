@@ -308,6 +308,7 @@ function mapIssueSessionRow(row: Record<string, unknown>): IssueSessionRecord {
     ...(row.worker_id !== null && row.worker_id !== undefined ? { workerId: String(row.worker_id) } : {}),
     ...(row.leased_until !== null && row.leased_until !== undefined ? { leasedUntil: String(row.leased_until) } : {}),
     createdAt: String(row.created_at),
+    displayUpdatedAt: String(row.display_updated_at ?? row.updated_at),
     updatedAt: String(row.updated_at),
   };
 }

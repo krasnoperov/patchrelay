@@ -5,6 +5,7 @@ export interface DiscoveredRepoSettings {
   defaultBranch: string;
   branch: string;
   requiredChecks: string[];
+  requireAllChecksOnEmptyRequiredSet: boolean;
   warnings: string[];
 }
 
@@ -29,6 +30,7 @@ interface GitHubBranchProtectionCheck {
 
 interface GitHubBranchProtectionResponse {
   required_status_checks?: {
+    strict?: boolean;
     contexts?: string[];
     checks?: GitHubBranchProtectionCheck[];
   };
@@ -153,16 +155,26 @@ export async function discoverRepoSettings(
     token,
   );
   const protectionChecks = extractProtectionChecks(protection);
+  const requireAllChecksOnEmptyRequiredSet = (
+    ruleChecks.length === 0
+    && protectionChecks.length === 0
+    && Boolean(protection?.required_status_checks)
+  );
   const requiredChecks = [...new Set([...ruleChecks, ...protectionChecks])].sort((left, right) => left.localeCompare(right));
 
   if (requiredChecks.length === 0) {
-    warnings.push(`No required status checks discovered for ${branch}; Steward will treat any green check as sufficient until GitHub branch protection declares explicit required checks.`);
+    warnings.push(
+      requireAllChecksOnEmptyRequiredSet
+        ? `GitHub requires status checks on ${branch} but does not expose explicit contexts; Steward will require all observed checks on the ref to pass until branch protection declares named required checks.`
+        : `No required status checks discovered for ${branch}; Steward will treat any green check as sufficient until GitHub branch protection declares explicit required checks.`,
+    );
   }
 
   return {
     defaultBranch,
     branch,
     requiredChecks,
+    requireAllChecksOnEmptyRequiredSet,
     warnings,
   };
 }

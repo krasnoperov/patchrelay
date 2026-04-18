@@ -51,6 +51,15 @@ describe("GitHubActionsRunner.getStatus", () => {
     return new GitHubActionsRunner("owner/repo", () => ["Tests"]);
   }
 
+  function setupAllChecksRequired(checksMap: Record<string, unknown[]>): GitHubActionsRunner {
+    const ghPath = path.join(baseDir, "gh");
+    writeFileSync(ghPath, buildGhStub(checksMap), "utf8");
+    chmodSync(ghPath, 0o755);
+    process.env.PATH = `${baseDir}${path.delimiter}${prevPath ?? ""}`;
+    process.env.GH_CHECKS_MAP = JSON.stringify(checksMap);
+    return new GitHubActionsRunner("owner/repo", () => [], () => true);
+  }
+
   it("reports pass when required check succeeds", async () => {
     const runner = setup({
       abc123: [{ name: "Tests", status: "completed", conclusion: "success" }],
@@ -161,5 +170,20 @@ describe("GitHubActionsRunner.getStatus", () => {
     });
 
     assert.strictEqual(await runner.getStatus("sha:abc123"), "fail");
+  });
+
+  it("requires all observed checks to pass when GitHub requires checks but names none", async () => {
+    const runner = setupAllChecksRequired({
+      abc123: [
+        { name: "Checks", status: "completed", conclusion: "success" },
+        { name: "Deploy production", status: "completed", conclusion: "failure" },
+      ],
+    });
+    assert.strictEqual(await runner.getStatus("sha:abc123"), "fail");
+  });
+
+  it("stays pending when all-checks-required mode sees no checks yet", async () => {
+    const runner = setupAllChecksRequired({ abc123: [] });
+    assert.strictEqual(await runner.getStatus("sha:abc123"), "pending");
   });
 });

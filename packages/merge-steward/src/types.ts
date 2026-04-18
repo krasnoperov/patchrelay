@@ -161,6 +161,7 @@ export interface QueueBlockState {
 
 export interface GitHubPolicyState {
   requiredChecks: string[];
+  requireAllChecksOnEmptyRequiredSet: boolean;
   fetchedAt: string | null;
   lastRefreshReason: string | null;
   lastRefreshChanged: boolean | null;

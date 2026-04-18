@@ -166,6 +166,23 @@ export class MergeStewardQueueCommands {
           );
           return false;
         }
+      } else if (this.policy.shouldRequireAllChecksOnEmptyRequiredSet()) {
+        if (checks.length === 0) {
+          this.logger.debug({ prNumber }, "GitHub requires checks but none are visible yet, skipping admission");
+          return false;
+        }
+        const hasPending = checks.some((check) => check.conclusion === "pending");
+        const hasFailures = checks.some((check) => check.conclusion === "failure");
+        if (hasPending || hasFailures) {
+          this.logger.debug(
+            {
+              prNumber,
+              checkNames: checks.map((check) => `${check.name}:${check.conclusion}`),
+            },
+            "GitHub requires all observed checks to pass before admission",
+          );
+          return false;
+        }
       } else {
         const nonSteward = checks.filter((c) => !c.name.startsWith("merge-steward"));
         const hasGreen = nonSteward.some((c) => c.conclusion === "success");

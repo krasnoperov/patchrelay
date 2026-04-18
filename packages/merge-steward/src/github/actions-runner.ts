@@ -16,6 +16,7 @@ export class GitHubActionsRunner implements CIRunner {
   constructor(
     private readonly repoFullName: string,
     private readonly getRequiredChecks: () => string[] = () => [],
+    private readonly shouldRequireAllChecksOnEmptyRequiredSet: () => boolean = () => false,
   ) {}
 
   async triggerRun(_branch: string, sha: string): Promise<string> {
@@ -46,6 +47,7 @@ export class GitHubActionsRunner implements CIRunner {
       const requiredChecks = this.getRequiredChecks();
       const normalizedRequired = requiredChecks.map(normalizeCheckName);
       const hasRequired = requiredChecks.length > 0;
+      const requireAllChecks = !hasRequired && this.shouldRequireAllChecksOnEmptyRequiredSet();
       const relevant = hasRequired
         ? checkRuns.filter((c) => normalizedRequired.includes(normalizeCheckName(c.name)))
         : checkRuns;
@@ -63,7 +65,7 @@ export class GitHubActionsRunner implements CIRunner {
       // (e.g. deploy-stage on main), even though listChecksForRef treats
       // those same checks as success, producing a "main_broken" block with
       // an empty failing-check list and stalling the queue.
-      const acceptSkipped = !hasRequired;
+      const acceptSkipped = !hasRequired && !requireAllChecks;
       if (relevant.some((c) => {
         if (c.conclusion === "success" || c.conclusion === "neutral") return false;
         if (acceptSkipped && c.conclusion === "skipped") return false;
