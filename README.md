@@ -4,6 +4,40 @@ PatchRelay is a self-hosted harness for delegated Linear work and upkeep of link
 
 It receives Linear webhooks, routes issues to the right local repository, prepares durable issue worktrees, runs Codex sessions through `codex app-server`, and keeps the issue loop observable and resumable from the CLI. GitHub webhooks drive reactive loops for CI repair, review fixes, and merge-steward incidents on linked delegated PRs. Separate downstream services own review automation and merge execution.
 
+## The PatchRelay stack
+
+This repository ships **three independent services**. Each one works on its own, communicates through GitHub, and can be paired with any agent or dev workflow:
+
+| Service | Package | Role |
+|-|-|-|
+| [`patchrelay`](./) | `npm install -g patchrelay` | Linear-driven harness that runs Codex sessions inside your real repos. Fully autonomous on webhooks. |
+| [`review-quill`](./packages/review-quill) | `npm install -g review-quill` | GitHub PR review bot. Reviews every merge-ready head from a real local checkout and posts a normal `APPROVE` / `REQUEST_CHANGES` review. |
+| [`merge-steward`](./packages/merge-steward) | `npm install -g merge-steward` | Serial merge queue. Speculatively integrates approved PRs on top of the latest `main`, validates, and fast-forwards. Ships PRs **fully tested against the current main**, not the stale base they were opened on. |
+
+You do not have to install all three. Common setups:
+
+- **Full autonomy** — run all three. PatchRelay implements, review-quill reviews, merge-steward delivers. No human in the room.
+- **Supervised delivery** — run `review-quill` + `merge-steward` without PatchRelay, and drive them from your own agent (Claude Code, Cursor, Codex CLI, …). See [Use with your own agent](#use-with-your-own-agent) below.
+- **Queue only** — run `merge-steward` alone if you already have a review story you are happy with.
+- **Review only** — run `review-quill` alone if you already have a merge path you trust.
+
+### Why this combination is transformational
+
+- **PRs ship fully tested against the latest `main`.** The merge queue re-validates on the integrated SHA; no more "green yesterday, broken today."
+- **Most PR failures have mechanical fixes.** Reviewer asked for a rename, a missing null check, a new test? Rerun a flaky job? Rebase on `main`? An agent with access to the diff can do all of these without human judgment — and both services surface structured failure reasons (inline review comments, failing check names, queue incidents) that an agent can act on directly.
+- **No prerequisites beyond GitHub.** A GitHub App, a webhook, and `npm install -g` per service.
+
+## Use with your own agent
+
+If you want supervised delivery — an agent you drive from Claude Code / Cursor / Codex iterating on PRs in real time — install the [`ship-pr`](https://github.com/krasnoperov/patchrelay-agents) skill from the companion marketplace:
+
+```
+/plugin marketplace add krasnoperov/patchrelay-agents
+/plugin install ship-pr@patchrelay
+```
+
+`ship-pr` teaches the agent to block on `review-quill pr status --wait` and `merge-steward pr status --wait`, read structured failure reasons on exit `2`, fix the code, push, and re-enter the wait. No polling loop, no LLM-judged "is it done yet?" reasoning. See the [patchrelay-agents repo](https://github.com/krasnoperov/patchrelay-agents) for more.
+
 PatchRelay is the system around the model:
 
 - webhook intake and verification (Linear and GitHub)
@@ -383,23 +417,39 @@ PatchRelay keeps enough durable state to answer the questions that matter during
 - which files it changed
 - whether the run completed, failed, or needs handoff
 
-## Merge Steward
+## Downstream services
 
-[Merge Steward](./packages/merge-steward) is a separate service that owns serial merge queue integration. PatchRelay develops code and produces pull requests. Merge Steward delivers those PRs into production — rebasing onto main, waiting for CI, and merging when green.
+PatchRelay implements code and produces pull requests. Two separate services take those PRs the rest of the way. Both are independent, GitHub-native, and usable without PatchRelay.
 
-The two services communicate through GitHub. PatchRelay makes its own PR ready, and Merge Steward decides queue admission and merge execution from GitHub truth. On failure, the steward reports the incident through GitHub signals, and PatchRelay can trigger a queue repair run in response.
+### Review Quill
 
-The steward now has its own bootstrap flow:
+[review-quill](./packages/review-quill) watches PRs and posts ordinary GitHub reviews from a real local checkout of the PR head. By default it reviews as soon as the head updates; it can optionally wait for configured checks to go green first.
+
+```bash
+review-quill init https://review.example.com
+review-quill repo attach owner/repo
+review-quill doctor --repo repo
+```
+
+See [review-quill README](./packages/review-quill/README.md) for setup, GitHub App permissions, and the review context pipeline.
+
+### Merge Steward
+
+[merge-steward](./packages/merge-steward) is a serial merge queue with speculative integration: it rebases each approved PR onto the current `main`, runs CI on the integrated SHA, and fast-forwards `main` only when that tested result is green. On failure it evicts with a durable incident and a GitHub check run — the signal PatchRelay (or any agent) uses to trigger a repair.
 
 ```bash
 merge-steward init https://queue.example.com
-merge-steward attach app owner/repo --base-branch main --required-check test,lint
-merge-steward doctor --repo app
+merge-steward attach owner/repo --base-branch main
+merge-steward doctor --repo repo
 merge-steward service status
-merge-steward queue status --repo app
+merge-steward queue status --repo repo
 ```
 
-See [Merge queue](./docs/merge-queue.md) for the full two-service overview and [Merge Steward README](./packages/merge-steward/README.md) for operational details.
+See [Merge queue](./docs/merge-queue.md) for the full two-service overview and [merge-steward README](./packages/merge-steward/README.md) for operational details.
+
+### Driving these with your own agent
+
+If you want to use `review-quill` and `merge-steward` with your own agent (Claude Code, Cursor, Codex CLI, …) without running the PatchRelay harness itself, install the [`ship-pr`](https://github.com/krasnoperov/patchrelay-agents) skill from the companion marketplace. It teaches the agent to drive both services through their `pr status --wait` verbs and react to structured failure reasons. See [patchrelay-agents](https://github.com/krasnoperov/patchrelay-agents).
 
 ## Docs
 

@@ -12,6 +12,17 @@ It fits alongside:
 
 You can run `review-quill` on its own. PatchRelay is not required.
 
+## Use with your own agent
+
+If you want your own agent (Claude Code, Cursor, Codex CLI, …) to iterate on PR review feedback instead of running PatchRelay's full harness, install the [`ship-pr`](https://github.com/krasnoperov/patchrelay-agents) skill from the companion Claude Code marketplace:
+
+```
+/plugin marketplace add krasnoperov/patchrelay-agents
+/plugin install ship-pr@patchrelay
+```
+
+The skill wraps `review-quill pr status --wait` and `merge-steward pr status --wait` into a blocking-gate workflow so the agent only wakes on terminal outcomes (approved / requested-changes / merged / failing-checks).
+
 ## What It Does
 
 For each eligible PR head, `review-quill`:
