@@ -24,26 +24,68 @@ PR review was split out for the same reason: it has its own decision surface (ap
 
 See the design docs for the full analysis: [design-docs/merge-steward.md](./design-docs/merge-steward.md), [design-docs/review-quill.md](./design-docs/review-quill.md).
 
-## Lifecycle
+## End-to-end lifecycle
 
-```text
-PR opened (by patchrelay or a human)
-  → review-quill reviews each new merge-ready head
-  → when GitHub shows approved + required checks green, merge-steward admits
-  → steward rebases onto main, runs CI on the integrated SHA
-  → if green and main hasn't moved, fast-forward main; otherwise retry
-  → on failure: retry (gated on base SHA change), then evict with a
-    GitHub check run
-  → patchrelay, ship-pr, or a human fixes the branch and pushes a new head
-  → cycle repeats
+```mermaid
+sequenceDiagram
+    participant A as Agent / Human
+    participant GH as GitHub
+    participant RQ as review-quill
+    participant MS as merge-steward
+
+    A->>GH: Push branch, open PR
+    GH-->>RQ: webhook: PR opened / head updated
+    RQ->>GH: Checkout head SHA in throwaway worktree
+    RQ->>GH: Submit APPROVE / REQUEST_CHANGES review
+
+    Note over A,MS: If APPROVE + required checks green:
+    GH-->>MS: webhook: review approved / checks green
+    MS->>GH: Admit to queue (DB record)
+    MS->>GH: Build speculative branch (main + PR)
+    MS->>GH: Push spec branch, trigger CI on spec SHA
+    GH-->>MS: webhook: check_suite completed on spec
+
+    alt CI green on spec
+        MS->>GH: Fast-forward push spec SHA → main
+        Note over MS,GH: main now points at the tested SHA
+    else CI red on spec
+        MS->>GH: Retry (if base SHA changed) or evict + emit check run
+        GH-->>A: check_run failure visible on PR
+        A->>GH: Fix branch, push new head → loop restarts
+    end
 ```
 
-Steward state machine:
+## Queue state machine
 
-```text
-queued → preparing_head → validating → merging → merged
-                                              → evicted (on failure after retries)
+```mermaid
+stateDiagram-v2
+    [*] --> queued: admit
+    queued --> preparing_head: becomes head
+    preparing_head --> validating: spec built, CI triggered
+    preparing_head --> evicted: conflict or retry budget exhausted
+    validating --> merging: CI passed
+    validating --> preparing_head: CI failed, retry
+    validating --> evicted: retry budget exhausted
+    merging --> merged: fast-forward push succeeded
+    merging --> preparing_head: push rejected (main advanced)
+    merging --> evicted: budget exhausted after push failure
+    queued --> dequeued: operator intervention
+    merged --> [*]
+    evicted --> [*]
+    dequeued --> [*]
 ```
+
+States:
+
+| State | Meaning |
+|-|-|
+| `queued` | Admitted; waiting in line |
+| `preparing_head` | Building the speculative branch on top of `main` (or the previous entry's spec) |
+| `validating` | CI running on the speculative SHA |
+| `merging` | Revalidating approval + attempting fast-forward push to `main` |
+| `merged` | Done — `main` now points at the tested SHA |
+| `evicted` | Failed after retries; durable incident created, GitHub check run emitted |
+| `dequeued` | Manually removed by an operator |
 
 ## Failure and repair handoff
 

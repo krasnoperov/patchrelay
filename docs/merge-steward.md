@@ -157,7 +157,105 @@ On startup, the steward reconciles GitHub branch protection for every attached r
 | 4 | `--wait` timed out before a terminal state |
 | 1 | usage or configuration error |
 
-## Queue state machine
+## How the queue actually works
+
+The steward runs a reconcile loop per repo. Each tick asks: "for each queue entry, what state transition is currently possible?" The following sections show the real git commands executed at each step. Implementation in `packages/merge-steward/src/github/shell-git.ts` and `packages/merge-steward/src/reconciler-*.ts`.
+
+### Speculative chain
+
+The queue is serial, but validation is parallel: each entry is tested on a **cumulative speculative branch** that stacks every entry ahead of it in the queue.
+
+```mermaid
+flowchart LR
+    main([main])
+    A[PR #A spec]
+    B[PR #B spec]
+    C[PR #C spec]
+    main --> A
+    A --> B
+    B --> C
+```
+
+The head entry's spec is `main + A`. The second entry's spec is `main + A + B`, built on top of A's spec. The third is `main + A + B + C`. When A lands, B's spec is already the tested tree — no re-validation needed. When A fails and gets evicted, B and C rebuild without it (**cascade invalidation**).
+
+### Step 1 — build the speculative branch
+
+When an entry becomes the head and `main` is healthy (required checks green, no retry gate), the steward builds its speculative branch in an **isolated worktree** so it never touches the main clone's working tree.
+
+```bash
+# 1. Refresh remote refs
+git fetch
+
+# 2. Clean up any leftover from a previous attempt
+git worktree remove --force <wt-path>
+git branch -D mq-spec-<entry-id>
+git worktree prune
+
+# 3. Create an isolated worktree at the base (main, or the previous entry's spec)
+git worktree add -B mq-spec-<entry-id> <wt-path> <base>
+
+# 4. Use the steward's bot identity for the merge commit
+git -C <wt-path> config user.name  <bot-name>
+git -C <wt-path> config user.email <bot-email>
+
+# 5. Merge the PR branch into the spec (non-fast-forward; patience strategy)
+git -C <wt-path> merge --no-ff -X patience -m "Merge PR #<num>: <branch>" origin/<pr-branch>
+
+# 6. Record the spec SHA for later verification
+git -C <wt-path> rev-parse HEAD   # → this is the SHA CI will run against
+
+# 7. Remove the worktree but keep the branch ref
+git worktree remove --force <wt-path>
+```
+
+If the `merge` step hits a conflict, the steward first tries to auto-resolve lockfile-only conflicts by regenerating them (`tryAutoResolveConflict`). Otherwise it aborts the merge, destroys the spec branch, and either retries (on base-SHA change) or evicts the entry with an `integration_conflict` incident.
+
+### Step 2 — push the spec and wait for CI
+
+```bash
+# Push the spec branch to GitHub so CI and reviewers can see it
+git push --force-with-lease origin mq-spec-<entry-id>
+```
+
+The steward then triggers a CI run on that SHA (or lets GitHub's push-triggered workflows fire) and transitions the entry to `validating`. Status updates come from webhook events (`check_suite completed`) rather than polling.
+
+### Step 3 — revalidate and fast-forward main
+
+When CI is green, the steward revalidates before merging:
+
+1. GitHub PR is not already `merged` externally.
+2. The reviewer approval on the original PR head still holds.
+3. The spec SHA is still a fast-forward from current `main` (`git merge-base --is-ancestor`).
+4. `main`'s own required checks are still passing.
+
+If all four hold, the merge is a single command:
+
+```bash
+# Fast-forward main to the already-tested spec SHA
+git push origin mq-spec-<entry-id>:main
+```
+
+That is the actual "merge" — **no `gh pr merge` button is ever pressed**. What lands on `main` is byte-for-byte the tree that CI validated. This is why the steward needs `Contents: Read and write` on the GitHub App and must be allowed to push to protected branches.
+
+If the push is rejected (main advanced, policy changed), the steward either refreshes its cached policy + retries, or increments the retry counter. Push failures that exhaust the retry budget evict the entry.
+
+### Step 4 — post-merge cleanup
+
+```bash
+# Delete the spec branch
+git push origin --delete mq-spec-<entry-id>
+
+# Delete the PR's head branch (the PR is already merged, branch is cosmetic)
+# Done via GitHub API, not shell git
+```
+
+A post-merge verification pass records the state of `main`'s CI on the new tip; if it goes red, the next entry's `preparing_head` will see `main_broken` and wait.
+
+### Cascade invalidation
+
+If the head entry fails mid-queue (spec CI red, push rejected, merge conflict), the steward invalidates every downstream spec that depended on it and rebuilds them without the evicted entry. Each downstream entry transitions back to `preparing_head` and runs Step 1 again against the new base.
+
+### State machine (simplified)
 
 ```
 queued → preparing_head → validating → merging → merged
