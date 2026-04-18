@@ -115,6 +115,7 @@ export async function runCli(args: string[], options?: RunCliOptions): Promise<n
       case "watch":
       case "dashboard": {
         const configPath = parseConfigPath(args.slice(1)) ?? process.env.REVIEW_QUILL_CONFIG ?? getDefaultConfigPath();
+        if (!process.env.NODE_ENV) process.env.NODE_ENV = "production";
         const { startWatch } = await import("./watch/index.tsx");
         await startWatch(configPath);
         return 0;

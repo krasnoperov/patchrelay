@@ -28,6 +28,7 @@ export async function handleWatchCommand(params: WatchCommandParams): Promise<nu
     return 1;
   }
 
+  if (!process.env.NODE_ENV) process.env.NODE_ENV = "production";
   const { render } = await import("ink");
   const { createElement } = await import("react");
   const { App } = await import("../watch/App.tsx");
