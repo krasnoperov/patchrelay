@@ -6,6 +6,8 @@ CREATE TABLE IF NOT EXISTS issues (
   project_id TEXT NOT NULL,
   linear_issue_id TEXT NOT NULL,
   delegated_to_patchrelay INTEGER NOT NULL DEFAULT 1,
+  issue_class TEXT,
+  issue_class_source TEXT,
   issue_key TEXT,
   title TEXT,
   url TEXT,
@@ -249,6 +251,8 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
   ).run();
 
   addColumnIfMissing(connection, "issues", "delegated_to_patchrelay", "INTEGER NOT NULL DEFAULT 1");
+  addColumnIfMissing(connection, "issues", "issue_class", "TEXT");
+  addColumnIfMissing(connection, "issues", "issue_class_source", "TEXT");
 
   // Add pending_merge_prep column for merge queue stewardship
   addColumnIfMissing(connection, "issues", "pending_merge_prep", "INTEGER NOT NULL DEFAULT 0");
@@ -342,6 +346,8 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
         project_id TEXT NOT NULL,
         linear_issue_id TEXT NOT NULL,
         delegated_to_patchrelay INTEGER NOT NULL DEFAULT 1,
+        issue_class TEXT,
+        issue_class_source TEXT,
         issue_key TEXT,
         title TEXT,
         description TEXT,
@@ -400,6 +406,8 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
         project_id,
         linear_issue_id,
         delegated_to_patchrelay,
+        issue_class,
+        issue_class_source,
         issue_key,
         title,
         description,
@@ -456,6 +464,8 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
         project_id,
         linear_issue_id,
         COALESCE(delegated_to_patchrelay, 1),
+        issue_class,
+        issue_class_source,
         issue_key,
         title,
         description,

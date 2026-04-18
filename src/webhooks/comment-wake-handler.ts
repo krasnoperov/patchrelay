@@ -9,6 +9,7 @@ import {
   isInertPatchRelayComment,
   isPatchRelayManagedCommentAuthor,
 } from "./comment-policy.ts";
+import { classifyIssue } from "../issue-class.ts";
 import type { NormalizedEvent, ProjectConfig, TrackedIssueRecord } from "../types.ts";
 
 const ENQUEUEABLE_STATES = new Set(["pr_open", "changes_requested", "implementing", "delegated", "awaiting_input"]);
@@ -41,6 +42,10 @@ export class CommentWakeHandler {
 
     const issue = this.db.issues.getIssue(project.id, normalized.issue.id);
     if (!issue) return;
+    const issueClass = classifyIssue({
+      issue,
+      trackedDependentCount: this.db.issues.listDependents(project.id, normalized.issue.id).length,
+    }).issueClass;
     const trimmedBody = normalized.comment.body.trim();
 
     const installation = this.db.linearInstallations.getLinearInstallationForProject(project.id);
@@ -75,7 +80,7 @@ export class CommentWakeHandler {
     if (!issue.activeRunId) {
       if (ENQUEUEABLE_STATES.has(issue.factoryState)) {
         const directReply = params.isDirectReplyToOutstandingQuestion(issue);
-        const wakeIntent = directReply || hasExplicitPatchRelayWakeIntent(trimmedBody);
+        const wakeIntent = issueClass === "orchestration" || directReply || hasExplicitPatchRelayWakeIntent(trimmedBody);
         if (!wakeIntent) {
           this.feed?.publish({
             level: "info",

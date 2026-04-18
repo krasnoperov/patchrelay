@@ -5,6 +5,9 @@ import { sanitizeOperatorFacingText } from "./presentation-text.ts";
 export type IssueSessionEventType =
   | "delegated"
   | "delegation_observed"
+  | "child_changed"
+  | "child_delivered"
+  | "child_regressed"
   | "direct_reply"
   | "completion_check_continue"
   | "followup_prompt"
@@ -102,7 +105,7 @@ export function deriveSessionWakePlan(
       case "delegated":
         if (!runType) {
           runType = "implementation";
-          wakeReason = "delegated";
+          wakeReason = issue.issueClass === "orchestration" ? "initial_delegate" : "delegated";
         }
         if (payload?.promptContext !== undefined) {
           context.promptContext = payload.promptContext;
@@ -110,6 +113,16 @@ export function deriveSessionWakePlan(
         if (payload?.promptBody !== undefined) {
           context.promptBody = payload.promptBody;
         }
+        break;
+      case "child_changed":
+      case "child_delivered":
+      case "child_regressed":
+        if (!runType) {
+          runType = "implementation";
+          wakeReason = event.eventType;
+        }
+        Object.assign(context, payload ?? {});
+        resumeThread = true;
         break;
       case "direct_reply": {
         if (!runType) {
@@ -148,7 +161,7 @@ export function deriveSessionWakePlan(
       case "operator_prompt": {
         if (!runType) {
           runType = issue.prReviewState === "changes_requested" ? "review_fix" : "implementation";
-          wakeReason = event.eventType;
+          wakeReason = issue.issueClass === "orchestration" ? "human_instruction" : event.eventType;
         }
         const text = typeof payload?.text === "string"
           ? payload.text

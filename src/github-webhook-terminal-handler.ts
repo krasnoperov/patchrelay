@@ -8,6 +8,7 @@ import { resolveClosedPrDisposition, resolveClosedPrFactoryState } from "./pr-st
 import { resolvePreferredCompletedLinearState } from "./linear-workflow.ts";
 import { syncGitHubLinearSession } from "./github-linear-session-sync.ts";
 import type { AppConfig } from "./types.ts";
+import { wakeOrchestrationParentsForChildEvent } from "./orchestration-parent-wake.ts";
 
 export async function handleGitHubTerminalPrEvent(params: {
   config: AppConfig;
@@ -84,6 +85,12 @@ export async function handleGitHubTerminalPrEvent(params: {
     }
   }
   if (event.triggerEvent === "pr_merged") {
+    wakeOrchestrationParentsForChildEvent({
+      db,
+      child: updatedIssue,
+      eventType: "child_delivered",
+      enqueueIssue,
+    });
     await completeLinearIssueAfterMerge(params, updatedIssue);
   }
   void syncGitHubLinearSession({

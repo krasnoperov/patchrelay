@@ -1,5 +1,6 @@
 import type { IssueRecord, RunRecord } from "./db-types.ts";
 import type { FactoryState, RunType } from "./factory-state.ts";
+import type { IssueClass } from "./issue-class.ts";
 
 export type AgentSessionPlanStatus = "pending" | "inProgress" | "completed" | "canceled";
 
@@ -30,6 +31,15 @@ function implementationPlan(): AgentSessionPlanStep[] {
     { content: "Implementing", status: "pending" },
     { content: "Awaiting verification", status: "pending" },
     { content: "Merge", status: "pending" },
+  ];
+}
+
+function orchestrationPlan(): AgentSessionPlanStep[] {
+  return [
+    { content: "Review umbrella goal and child set", status: "pending" },
+    { content: "Wait for or inspect child progress", status: "pending" },
+    { content: "Audit delivered outcome", status: "pending" },
+    { content: "Close umbrella or create follow-up work", status: "pending" },
   ];
 }
 
@@ -126,11 +136,34 @@ function resolvePlanRunType(params: {
 
 export function buildAgentSessionPlan(params: {
   factoryState: FactoryState;
+  issueClass?: IssueClass;
   activeRunType?: RunType;
   pendingRunType?: RunType;
   ciRepairAttempts?: number;
   queueRepairAttempts?: number;
 }): AgentSessionPlanStep[] {
+  if (params.issueClass === "orchestration") {
+    switch (params.factoryState) {
+      case "done":
+        return setStatuses(orchestrationPlan(), ["completed", "completed", "completed", "completed"]);
+      case "awaiting_input":
+      case "failed":
+      case "escalated":
+        return setStatuses(orchestrationPlan(), ["completed", "completed", "completed", "inProgress"]);
+      case "implementing":
+      case "changes_requested":
+      case "repairing_ci":
+      case "repairing_queue":
+        return setStatuses(orchestrationPlan(), ["completed", "inProgress", "pending", "pending"]);
+      case "pr_open":
+      case "awaiting_queue":
+        return setStatuses(orchestrationPlan(), ["completed", "completed", "inProgress", "pending"]);
+      case "delegated":
+      default:
+        return setStatuses(orchestrationPlan(), ["inProgress", "pending", "pending", "pending"]);
+    }
+  }
+
   const runType = resolvePlanRunType(params);
 
   switch (params.factoryState) {
@@ -192,13 +225,14 @@ function planForRunType(
 }
 
 export function buildAgentSessionPlanForIssue(
-  issue: Pick<IssueRecord, "factoryState" | "pendingRunType" | "ciRepairAttempts" | "queueRepairAttempts">,
+  issue: Pick<IssueRecord, "factoryState" | "pendingRunType" | "ciRepairAttempts" | "queueRepairAttempts" | "issueClass">,
   options?: { activeRunType?: RunType },
 ): AgentSessionPlanStep[] {
   return buildAgentSessionPlan({
     factoryState: issue.factoryState,
     ciRepairAttempts: issue.ciRepairAttempts,
     queueRepairAttempts: issue.queueRepairAttempts,
+    ...(issue.issueClass ? { issueClass: issue.issueClass } : {}),
     ...(issue.pendingRunType ? { pendingRunType: issue.pendingRunType } : {}),
     ...(options?.activeRunType ? { activeRunType: options.activeRunType } : {}),
   });

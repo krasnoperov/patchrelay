@@ -99,6 +99,21 @@ test("agent session plans reflect queued, review, and repair states", () => {
       { content: "Awaiting merge", status: "inProgress" },
     ],
   );
+
+  assert.deepEqual(
+    buildAgentSessionPlanForIssue({
+      factoryState: "delegated",
+      issueClass: "orchestration",
+      ciRepairAttempts: 0,
+      queueRepairAttempts: 0,
+    }),
+    [
+      { content: "Review umbrella goal and child set", status: "inProgress" },
+      { content: "Wait for or inspect child progress", status: "pending" },
+      { content: "Audit delivered outcome", status: "pending" },
+      { content: "Close umbrella or create follow-up work", status: "pending" },
+    ],
+  );
 });
 
 test("GitHub state activities keep repair work active instead of erroring", () => {

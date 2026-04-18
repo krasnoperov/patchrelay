@@ -5,6 +5,7 @@ import type { IssueRecord, RunRecord } from "./db-types.ts";
 import type { FactoryState } from "./factory-state.ts";
 import type { WithHeldIssueSessionLease } from "./issue-session-lease-service.ts";
 import { buildCompletionCheckActivity } from "./linear-session-reporting.ts";
+import { wakeOrchestrationParentsForChildEvent } from "./orchestration-parent-wake.ts";
 import type { buildStageReport } from "./run-reporting.ts";
 
 function shouldContinueForUnpublishedLocalChanges(message: string): boolean {
@@ -270,6 +271,12 @@ export async function handleNoPrCompletionCheck(params: {
       summary: "No PR found; confirmed done",
       detail: completionCheck.summary,
       activity: buildCompletionCheckActivity("done", completionCheck),
+    });
+    const doneIssue = params.db.issues.getIssue(params.run.projectId, params.run.linearIssueId) ?? params.issue;
+    wakeOrchestrationParentsForChildEvent({
+      db: params.db,
+      child: doneIssue,
+      eventType: "child_delivered",
     });
     return;
   }

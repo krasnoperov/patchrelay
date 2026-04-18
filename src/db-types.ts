@@ -1,4 +1,5 @@
 import type { FactoryState, RunType } from "./factory-state.ts";
+import type { IssueClass, IssueClassSource } from "./issue-class.ts";
 import type { IssueSessionState } from "./issue-session.ts";
 import type { CompletionCheckOutcome } from "./completion-check-types.ts";
 
@@ -28,6 +29,8 @@ export interface IssueRecord {
   projectId: string;
   linearIssueId: string;
   delegatedToPatchRelay: boolean;
+  issueClass?: IssueClass | undefined;
+  issueClassSource?: IssueClassSource | undefined;
   issueKey?: string | undefined;
   title?: string | undefined;
   description?: string | undefined;
@@ -164,6 +167,7 @@ export interface TrackedIssueRecord {
   projectId: string;
   linearIssueId: string;
   delegatedToPatchRelay: boolean;
+  issueClass?: IssueClass | undefined;
   issueKey?: string | undefined;
   title?: string | undefined;
   issueUrl?: string | undefined;

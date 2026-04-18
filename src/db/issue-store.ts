@@ -5,12 +5,15 @@ import type {
   IssueRecord,
 } from "../db-types.ts";
 import type { FactoryState, RunType } from "../factory-state.ts";
+import type { IssueClass, IssueClassSource } from "../issue-class.ts";
 import { isoNow, type DatabaseConnection } from "./shared.ts";
 
 export interface UpsertIssueParams {
   projectId: string;
   linearIssueId: string;
   delegatedToPatchRelay?: boolean;
+  issueClass?: IssueClass | null;
+  issueClassSource?: IssueClassSource | null;
   issueKey?: string;
   title?: string;
   description?: string;
@@ -79,6 +82,8 @@ export class IssueStore {
         linearIssueId: params.linearIssueId,
       };
       if (params.delegatedToPatchRelay !== undefined) { sets.push("delegated_to_patchrelay = @delegatedToPatchRelay"); values.delegatedToPatchRelay = params.delegatedToPatchRelay ? 1 : 0; }
+      if (params.issueClass !== undefined) { sets.push("issue_class = @issueClass"); values.issueClass = params.issueClass; }
+      if (params.issueClassSource !== undefined) { sets.push("issue_class_source = @issueClassSource"); values.issueClassSource = params.issueClassSource; }
       if (params.issueKey !== undefined) { sets.push("issue_key = COALESCE(@issueKey, issue_key)"); values.issueKey = params.issueKey; }
       if (params.title !== undefined) { sets.push("title = COALESCE(@title, title)"); values.title = params.title; }
       if (params.description !== undefined) { sets.push("description = COALESCE(@description, description)"); values.description = params.description; }
@@ -132,7 +137,7 @@ export class IssueStore {
     } else {
       this.connection.prepare(`
         INSERT INTO issues (
-          project_id, linear_issue_id, delegated_to_patchrelay, issue_key, title, description, url,
+          project_id, linear_issue_id, delegated_to_patchrelay, issue_class, issue_class_source, issue_key, title, description, url,
           priority, estimate,
           current_linear_state, current_linear_state_type, factory_state, pending_run_type, pending_run_context_json,
           branch_name, worktree_path, thread_id, active_run_id, status_comment_id,
@@ -145,7 +150,7 @@ export class IssueStore {
           ci_repair_attempts, queue_repair_attempts, review_fix_attempts, zombie_recovery_attempts, last_zombie_recovery_at,
           updated_at
         ) VALUES (
-          @projectId, @linearIssueId, @delegatedToPatchRelay, @issueKey, @title, @description, @url,
+          @projectId, @linearIssueId, @delegatedToPatchRelay, @issueClass, @issueClassSource, @issueKey, @title, @description, @url,
           @priority, @estimate,
           @currentLinearState, @currentLinearStateType, @factoryState, @pendingRunType, @pendingRunContextJson,
           @branchName, @worktreePath, @threadId, @activeRunId, @statusCommentId,
@@ -162,6 +167,8 @@ export class IssueStore {
         projectId: params.projectId,
         linearIssueId: params.linearIssueId,
         delegatedToPatchRelay: params.delegatedToPatchRelay === false ? 0 : 1,
+        issueClass: params.issueClass ?? null,
+        issueClassSource: params.issueClassSource ?? null,
         issueKey: params.issueKey ?? null,
         title: params.title ?? null,
         description: params.description ?? null,
@@ -435,6 +442,10 @@ export function mapIssueRow(row: Record<string, unknown>): IssueRecord {
     projectId: String(row.project_id),
     linearIssueId: String(row.linear_issue_id),
     delegatedToPatchRelay: Number(row.delegated_to_patchrelay ?? 1) !== 0,
+    ...(row.issue_class !== null && row.issue_class !== undefined ? { issueClass: String(row.issue_class) as IssueClass } : {}),
+    ...(row.issue_class_source !== null && row.issue_class_source !== undefined
+      ? { issueClassSource: String(row.issue_class_source) as IssueClassSource }
+      : {}),
     ...(row.issue_key !== null ? { issueKey: String(row.issue_key) } : {}),
     ...(row.title !== null ? { title: String(row.title) } : {}),
     ...(row.description !== null && row.description !== undefined ? { description: String(row.description) } : {}),

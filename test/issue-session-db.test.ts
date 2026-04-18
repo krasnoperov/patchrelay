@@ -539,6 +539,39 @@ test("followup_comment alone reuses the main thread for the next turn", () => {
   }
 });
 
+test("orchestration child delivery wakes the next turn on the same thread", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-session-child-delivered-"));
+  try {
+    const db = new PatchRelayDatabase(path.join(baseDir, "patchrelay.sqlite"), true);
+    db.runMigrations();
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-parent",
+      issueKey: "USE-PARENT",
+      issueClass: "orchestration",
+      factoryState: "delegated",
+      threadId: "thread-parent",
+    });
+    db.issueSessions.appendIssueSessionEventRespectingActiveLease("usertold", "issue-parent", {
+      projectId: "usertold",
+      linearIssueId: "issue-parent",
+      eventType: "child_delivered",
+      eventJson: JSON.stringify({
+        childIssueId: "issue-child",
+        childIssueKey: "USE-CHILD",
+        childTitle: "Ship the child task",
+      }),
+    });
+
+    const wake = db.issueSessions.peekIssueSessionWake("usertold", "issue-parent");
+    assert.equal(wake?.runType, "implementation");
+    assert.equal(wake?.wakeReason, "child_delivered");
+    assert.equal(wake?.resumeThread, true);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("direct_reply wakes the next turn in direct-reply mode on the same thread", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-session-direct-reply-"));
   try {

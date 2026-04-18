@@ -65,6 +65,7 @@ export function buildTrackedIssueRecord(params: {
     projectId: params.issue.projectId,
     linearIssueId: params.issue.linearIssueId,
     delegatedToPatchRelay: params.issue.delegatedToPatchRelay,
+    ...(params.issue.issueClass ? { issueClass: params.issue.issueClass } : {}),
     ...(params.issue.issueKey ? { issueKey: params.issue.issueKey } : {}),
     ...(params.issue.title ? { title: params.issue.title } : {}),
     ...(params.issue.url ? { issueUrl: params.issue.url } : {}),
