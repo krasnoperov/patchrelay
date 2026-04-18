@@ -1,50 +1,22 @@
-# PatchRelay Detailed Architecture
+# PatchRelay Architecture
 
-## Purpose
+## Scope
 
-This document describes the target architecture for PatchRelay as a Linear-native agentic software factory.
+This document covers the `patchrelay` harness specifically: what it owns, how it is structured, and how issue lifecycles flow through it. For the stack-level overview (patchrelay + review-quill + merge-steward), see the [README](../README.md) and [merge-queue.md](./merge-queue.md).
 
-The service is not a generic prompt runner. It is the deterministic orchestration layer that turns a delegated Linear issue into a linked pull request and keeps that PR healthy until merge or close. Separate downstream services own review automation and merge execution.
+The harness is not a generic prompt runner. It is the deterministic orchestration layer that turns a delegated Linear issue into a linked pull request and keeps that PR healthy until merge or close. Review and merge execution live in separate services.
 
-## External Patterns We Are Combining
-
-PatchRelay intentionally combines three patterns:
-
-1. **OpenAI harness engineering**
-   - short `AGENTS.md`
-   - repo-local docs as system of record
-   - progressive disclosure through linked docs
-   - worktree-bootable development environments
-   - agent-legible validation signals
-   - strict architecture boundaries that agents can reason about
-   - recurring garbage collection for drift
-2. **Linear official agent demo**
-   - app-backed OAuth installation
-   - webhook-driven Linear interactions
-   - native session activity model
-3. **Community long-running agent harness**
-   - durable autonomous loop
-   - resume-after-failure behavior
-   - environment and command safety hooks
-
-What we are **not** copying:
-
-- a comment-only Linear bot
-- a single monolithic instruction file
-- a polling-only backlog worker
-- a one-shot coding session without repair loops
-
-## Architectural Priorities
+## Architectural priorities
 
 1. **Agent legibility over cleverness** — the system should be easy for an agent to reason about without studying the internals.
-2. **Flat, direct orchestration over layered abstraction** — orchestrators, handlers, and service shells stay narrow; extract by responsibility before layering.
+2. **Flat, direct orchestration over layered abstraction** — orchestrators, handlers, and service shells stay narrow; extract by responsibility before layering. See [architecture-guardrails.md](./architecture-guardrails.md) for the extraction rules.
 3. **Persistent issue workspaces** — one durable worktree per issue lifecycle, resumed across iterations.
 4. **Repair loops as first-class workflows** — `implementation`, `review_fix`, `ci_repair`, `queue_repair` have distinct context, entry conditions, and success criteria, not one generic "try again."
 5. **Repository-local guidance as the source of truth** — `IMPLEMENTATION_WORKFLOW.md`, `REVIEW_WORKFLOW.md`, and repo-local docs define how the agent should work in that repo.
 
-For the detailed extraction rules, see [architecture-guardrails.md](./architecture-guardrails.md).
+Design lineage (OpenAI harness engineering patterns, Linear's official agent demo, community long-running agent harnesses) and the decisions behind these priorities are in [design-docs/core-beliefs.md](./design-docs/core-beliefs.md) and [references/external-patterns.md](./references/external-patterns.md).
 
-## Component Topology
+## Component topology
 
 ```mermaid
 flowchart TB
@@ -68,7 +40,8 @@ flowchart TB
 
   subgraph Delivery
     GH[GitHub]
-    MS[Merge Steward]
+    RQ[review-quill]
+    MS[merge-steward]
   end
 
   LS --> WH
@@ -84,12 +57,13 @@ flowchart TB
   RO --> ST
   ST --> RO
   RO --> LS
-  GH --> RQ[review-quill]
-  GH --> MS[Merge Steward]
+  GH --> RQ
+  GH --> MS
+  RQ -->|review| GH
   MS -->|merge / evict| GH
 ```
 
-## Source Layout
+## Source layout
 
 The codebase uses a flat module structure rather than a layered directory hierarchy:
 
@@ -102,7 +76,7 @@ The codebase uses a flat module structure rather than a layered directory hierar
 - `db.ts` — SQLite persistence (issues, runs, webhooks, thread events)
 - `http.ts` — Fastify HTTP server and routes
 
-## Core Responsibilities
+## Core responsibilities
 
 ### Webhook Handler (`webhook-handler.ts`)
 
@@ -190,9 +164,9 @@ That observer-only mode is important because downstream services keep operating 
 Re-delegation should resume from current truth, not from a generic “start over” state.
 If an external PR appears on a different branch, PatchRelay can link it when the webhook carries one unambiguous tracked issue key for the same project.
 
-## Issue Lifecycle
+## Issue lifecycle
 
-### Main Flow
+### Main flow
 
 ```text
 Delegated in Linear
@@ -203,14 +177,14 @@ Delegated in Linear
 -> PatchRelay opens draft PR
 -> PatchRelay marks PR ready when implementation is complete
 -> review-quill reviews ready PRs with green CI
--> Merge Steward queues ready PRs with green CI and approval
+-> merge-steward queues ready PRs with green CI and approval
 -> If requested changes, red CI, or merge-steward incident lands on a linked delegated PR, PatchRelay resumes the same branch
 -> Merged → done
 ```
 
-### Reactive Loops
+### Reactive loops
 
-#### Review Fix Loop
+#### Review fix loop
 
 Triggered by:
 
@@ -222,7 +196,7 @@ Behavior:
 - start a `review_fix` run with reviewer feedback as context
 - Codex addresses the feedback and pushes
 
-#### CI Repair Loop
+#### CI repair loop
 
 Triggered by:
 
@@ -236,11 +210,11 @@ Behavior:
 
 This loop must not start while the issue is undelegated, even though GitHub check state should still be recorded.
 
-#### Queue Repair Loop
+#### Queue repair loop
 
 Triggered by:
 
-- Merge Steward eviction — a `merge-steward/queue` check run with failure status
+- merge-steward eviction — a `merge-steward/queue` check run with failure status
 
 Behavior:
 
@@ -249,11 +223,11 @@ Behavior:
 - PatchRelay re-adds the `queue` label so the steward can re-admit the PR
 - budget: 2 attempts before escalation
 
-This loop must also respect `delegatedToPatchRelay`. Merge Steward may continue reporting queue truth on undelegated PRs, but PatchRelay should only repair when authority is restored.
+This loop must also respect `delegatedToPatchRelay`. merge-steward may continue reporting queue truth on undelegated PRs, but PatchRelay should only repair when authority is restored.
 
-## Factory State Machine
+## Factory state machine
 
-States as defined in `factory-state.ts`:
+**Current**, as defined in `factory-state.ts`:
 
 ```text
 delegated → implementing → pr_open → awaiting_queue → done
@@ -267,8 +241,7 @@ terminal exits:
 - failed
 ```
 
-The current implementation still carries a broader factory-state model than the desired `v2` runtime.
-The target runtime is a smaller `IssueSession` state machine:
+**Target** (in-progress simplification): a smaller `IssueSession` machine where waiting on review or queue is a `waitingReason` rather than a top-level state:
 
 - `idle`
 - `running`
@@ -276,46 +249,46 @@ The target runtime is a smaller `IssueSession` state machine:
 - `done`
 - `failed`
 
-Waiting on review or queue should be represented as `waitingReason`, not as a major PatchRelay-native lifecycle state.
+The live code still carries the broader factory-state model above. The simplification is happening in steps and tracked as refactors.
 
-For undelegated issues, the key mental model is:
+### Undelegation semantics
 
-- no PR yet: preserve the literal local-work state and expose a paused waiting reason
-- PR exists: preserve the PR-backed factory state and expose a paused waiting reason
+For undelegated issues:
 
-That keeps operator-facing state truthful without letting PatchRelay continue writing code.
+- no PR yet — preserve the literal local-work state and expose a paused waiting reason
+- PR exists — preserve the PR-backed factory state and expose a paused waiting reason
 
-`awaiting_input` should be reserved for real human-needed states, not for generic paused local work.
+That keeps operator-facing state truthful without letting PatchRelay continue writing code. `awaiting_input` is reserved for real human-needed states, not generic paused local work.
 
-## Failure Taxonomy
+## Failure taxonomy
 
-### Repairable Automatically
+### Repairable automatically
 
 - formatting or lint failures
 - deterministic test failures
 - straightforward rebase conflicts
 
-### Escalate Quickly
+### Escalate quickly
 
 - ambiguous product decisions
 - repeated semantic integration failures
 - broken credentials or revoked installations
 - repository setup hook failures that block all progress
 
-## State Storage
+## State storage
 
-PatchRelay uses SQLite with these tables today:
+PatchRelay uses SQLite. Current tables:
 
-- `issues` — one record per tracked issue, includes factory state, PR state, run pointers, repair counters
-- `runs` — one record per Codex run (implementation, review_fix, ci_repair, queue_repair)
+- `issues` — one record per tracked issue: factory state, PR state, run pointers, repair counters
+- `runs` — one record per Codex run (`implementation`, `review_fix`, `ci_repair`, `queue_repair`)
 - `webhook_events` — deduplication and processing status for Linear webhooks
 - `run_thread_events` — per-run transcript of Codex thread events (when extended history is enabled)
 - `linear_installations` — OAuth credentials and installation metadata
-- `operator_feed_events` — event log for operator CLI
+- `operator_feed_events` — event log for the operator CLI
 
-The target model is to keep a smaller durable `IssueSession` record that stores only PatchRelay runtime truth, while GitHub remains the source of truth for PR readiness, review, and merge state.
+GitHub remains the source of truth for PR readiness, review, and merge state — PatchRelay stores derived state to correlate Linear issues with local workspaces and runs, not to duplicate GitHub.
 
-## No-PR Completion Check
+## No-PR completion check
 
 Implementation runs now have one lean fallback path when no PR is linked at turn completion:
 
@@ -342,41 +315,22 @@ Observability is intentionally split by surface:
 - Linear: only persistent human-relevant outcomes such as `needs_input`, valid no-PR `done`, or `failed`
 - run/session logs: fork thread id, turn id, and typed completion-check result
 
-## Knowledge Layout
+## Workflow files
 
-PatchRelay should keep repository knowledge organized for progressive disclosure:
-
-- root docs provide the product map and link deeper references
-- `docs/design-docs/` holds durable design rules and boundary decisions
-- `docs/` operating guides explain runtime, deployment, and queue behavior
-- archived material is clearly marked non-authoritative
-
-This layout matters because the repository is part of the harness. If an agent cannot rediscover a rule in-repo, the rule is operationally weak.
-
-## Workflow Files
-
-The repository should contain:
+The target repository (the one PatchRelay is implementing for) should contain:
 
 - `IMPLEMENTATION_WORKFLOW.md` — guidance for implementation, CI repair, and queue repair runs
 - `REVIEW_WORKFLOW.md` — guidance for review fix runs
 
-The run orchestrator reads these files and includes them in the Codex prompt. Keep them short and action-oriented.
+The run orchestrator reads these files and includes them in the Codex prompt. Keep them short and action-oriented. See [prompting.md](./prompting.md) for how they compose with the built-in scaffold.
 
-## Design Implications
+## Design implications
 
 - One owning agent per issue branch keeps coordination manageable.
 - Delegation does not automatically imply "this issue must own a branch and PR"; tracker and orchestration issues may complete without opening code.
-- The same worktree should be resumed for all iterations of an issue.
-- Queue failures are integration problems, not just CI failures.
-- The short root docs should point to deeper `docs/` material rather than duplicating it.
+- The same worktree is resumed for all iterations of an issue — not a fresh clone per run.
+- Queue failures are integration problems, not just CI failures — they get their own `queue_repair` loop.
+- The repository is part of the harness. If an agent cannot rediscover a rule in-repo, the rule is operationally weak. Keep root docs navigational and treat deeper `docs/` material as the durable system of record.
 - Historical designs are reference material only unless reaffirmed in current docs.
-
-## What The Current Repo Should Optimize For
-
-- docs that an agent can navigate quickly
-- flat, direct orchestration code over layered abstractions
-- making local execution per worktree cheap and repeatable
-- keeping every important decision visible in-repo
-- preserving compact verification evidence that explains why a loop advanced or failed
-- recurring cleanup of stale docs and weak patterns before they spread
-- high-signal Linear communication: immediate acknowledgment, concise in-flight activity, lifecycle-aware plans, and deeper status behind session links rather than noisy transcript dumps
+- Preserve compact verification evidence (failing check names, review comments, queue incidents) rather than replaying ever-growing transcripts.
+- Linear communication stays high-signal: immediate acknowledgment, concise in-flight activity, lifecycle-aware plans; deeper status lives behind session links, not in transcript dumps.
