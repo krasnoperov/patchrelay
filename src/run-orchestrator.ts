@@ -50,6 +50,10 @@ function shouldDelayZombieRecoveryLaunch(
   return getRemainingZombieRecoveryDelayMs(issue.lastZombieRecoveryAt, issue.zombieRecoveryAttempts);
 }
 
+function isResolvedDependencyState(stateType?: string): boolean {
+  return stateType === "completed" || stateType?.trim().toLowerCase() === "done";
+}
+
 interface RunThreadPorts {
   readThreadWithRetry: (threadId: string, maxRetries?: number) => Promise<CodexThreadSummary>;
 }
@@ -258,6 +262,42 @@ export class RunOrchestrator {
     return this.runWakePlanner.materializeLegacyPendingWake(issue, lease);
   }
 
+  private buildImplementationCoordinationContext(issue: IssueRecord): Record<string, unknown> | undefined {
+    const unresolvedBlockers = this.db.issues
+      .listIssueDependencies(issue.projectId, issue.linearIssueId)
+      .filter((entry) => !isResolvedDependencyState(entry.blockerCurrentLinearStateType))
+      .map((entry) => ({
+        linearIssueId: entry.blockerLinearIssueId,
+        ...(entry.blockerIssueKey ? { issueKey: entry.blockerIssueKey } : {}),
+        ...(entry.blockerTitle ? { title: entry.blockerTitle } : {}),
+        ...(entry.blockerCurrentLinearState ? { stateName: entry.blockerCurrentLinearState } : {}),
+        ...(entry.blockerCurrentLinearStateType ? { stateType: entry.blockerCurrentLinearStateType } : {}),
+      }));
+
+    const trackedDependents = this.db.issues
+      .listDependents(issue.projectId, issue.linearIssueId)
+      .map((entry) => this.db.issues.getIssue(issue.projectId, entry.linearIssueId))
+      .filter((entry): entry is IssueRecord => Boolean(entry))
+      .map((entry) => ({
+        linearIssueId: entry.linearIssueId,
+        ...(entry.issueKey ? { issueKey: entry.issueKey } : {}),
+        ...(entry.title ? { title: entry.title } : {}),
+        factoryState: entry.factoryState,
+        ...(entry.currentLinearState ? { currentLinearState: entry.currentLinearState } : {}),
+        delegatedToPatchRelay: entry.delegatedToPatchRelay,
+        hasOpenPr: entry.prNumber !== undefined && entry.prState !== "closed" && entry.prState !== "merged",
+      }));
+
+    if (unresolvedBlockers.length === 0 && trackedDependents.length === 0) {
+      return {};
+    }
+
+    return {
+      ...(unresolvedBlockers.length > 0 ? { unresolvedBlockers } : {}),
+      ...(trackedDependents.length > 0 ? { trackedDependents } : {}),
+    };
+  }
+
   // ─── Run ────────────────────────────────────────────────────────
 
   async run(item: { projectId: string; issueId: string }): Promise<void> {
@@ -311,9 +351,15 @@ export class RunOrchestrator {
       this.releaseIssueSessionLease(item.projectId, item.issueId);
       return;
     }
-    const effectiveContext = isRequestedChangesRunType(runType)
+    const baseContext = isRequestedChangesRunType(runType)
       ? await this.runCompletionPolicy.resolveRequestedChangesWakeContext(issue, runType, context)
       : context;
+    const coordinationContext = runType === "implementation"
+      ? this.buildImplementationCoordinationContext(issue)
+      : undefined;
+    const effectiveContext = coordinationContext
+      ? { ...coordinationContext, ...(baseContext ?? {}) }
+      : baseContext;
     const sourceHeadSha = typeof effectiveContext?.failureHeadSha === "string"
       ? effectiveContext.failureHeadSha
       : typeof effectiveContext?.headSha === "string"
