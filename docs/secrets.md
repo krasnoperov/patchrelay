@@ -1,5 +1,7 @@
 # Secrets Management
 
+Covers the PatchRelay harness. `review-quill` and `merge-steward` use the same three-level resolution pattern — see their operator references ([review-quill](./review-quill.md), [merge-steward](./merge-steward.md)) for the per-service credential names.
+
 PatchRelay resolves secrets through a three-level fallback so that the application code is decoupled from the secret provider:
 
 1. **`$CREDENTIALS_DIRECTORY/<name>`** — systemd-creds, Docker secrets, or any mount-based provider

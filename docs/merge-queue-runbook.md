@@ -1,25 +1,27 @@
 # Merge Queue Runbook
 
-This document explains how the shipped PatchRelay + Merge Steward queue behaves in practice, what kinds of failures it handles well, where human or agent judgment is still required, and what operators should look at when something goes wrong.
+This document explains how the shipped delivery pipeline behaves in practice, what kinds of failures it handles well, where human or agent judgment is still required, and what operators should look at when something goes wrong.
 
 Use this alongside:
 
 - [GitHub queue contract](./github-queue-contract.md) for the shared protocol
-- [Merge queue overview](./merge-queue.md) for setup and high-level lifecycle
+- [PR delivery pipeline](./merge-queue.md) for setup and high-level lifecycle
 - [Merge queue operations recommendations](./design-docs/merge-queue-operations.md) for broader design guidance and future ideas
 
-## Service Split
+## Service split
 
-PatchRelay and Merge Steward are intentionally separate:
+Three services are intentionally separate, each with its own loop:
 
-- PatchRelay owns issue implementation, review fixes, branch-local CI repair, queue repair, and Linear-facing workflow UX
-- Merge Steward owns queue admission, rebasing, validation, retries, merges, and eviction decisions
+- **patchrelay** owns issue implementation, review fixes, branch-local CI repair, queue repair, and Linear-facing workflow UX
+- **review-quill** owns PR review publication (approve / request changes)
+- **merge-steward** owns queue admission, rebasing, validation, retries, merges, and eviction decisions
 
-GitHub is the protocol boundary:
+GitHub is the protocol boundary. No service calls another's API directly:
 
-- Merge Steward admits, validates, merges, or evicts based on GitHub PR state and CI
-- Merge Steward reports queue eviction via the configured GitHub check run
-- PatchRelay interprets that signal as `queue_repair` rather than ordinary `ci_repair`
+- `review-quill` publishes a normal GitHub review on each merge-ready head
+- `merge-steward` admits PRs that GitHub shows as approved + green, then validates and lands or evicts
+- `merge-steward` reports queue eviction via the configured GitHub check run
+- `patchrelay` (or a supervising agent driving the [ship-pr](https://github.com/krasnoperov/patchrelay-agents) skill) interprets that check run as `queue_repair` rather than ordinary `ci_repair` and fixes the branch
 
 This is healthy coupling. The services share GitHub primitives and queue semantics, but they do not call each other directly.
 

@@ -46,8 +46,25 @@ This is why PatchRelay maintains `issues` and `runs` tables alongside Codex thre
 
 1. **`patchrelay dashboard`** — see active issues and waiting reasons across the service.
 2. **`patchrelay issue show APP-123`** or **`patchrelay issue watch APP-123`** — inspect one issue in detail.
-3. **`patchrelay issue open APP-123`** — take over inside the exact worktree and continue from the same issue context.
+3. **`patchrelay issue open APP-123`** — take over inside the same worktree and continue from the same issue context.
 4. **`patchrelay service logs --lines 100`** — when the problem looks like webhook intake, Codex startup, or service runtime failure.
+
+### Where the logs live
+
+- log file on disk: `~/.local/state/patchrelay/patchrelay.log`
+- live systemd stream: `journalctl -u patchrelay.service -f`
+
+Use the log file for persisted history, `journalctl` for the live stream.
+
+### Common log patterns
+
+| Symptom | Look for |
+|-|-|
+| Linear did nothing after a delegation or mention | Webhook intake lines — accepted, rejected, stale, or duplicate deliveries |
+| Agent ignored a new Linear comment or prompt | Queued turn-input delivery lines and any delivery failure warnings |
+| Codex execution looks broken or stops unexpectedly | `Starting Codex app-server`, `Codex app-server request failed`, `Codex app-server stderr`, `Codex app-server exited` |
+
+The most useful correlation fields across logs: `webhookId`, `webhookEventId`, `projectId`, `issueKey`, `runType`, `threadId`, `turnId`, `agentSessionId`.
 
 ## Waking a run with new input
 
