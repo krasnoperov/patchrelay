@@ -197,6 +197,132 @@ test("listTrackedIssues suppresses stale zombie notes while a run is active", as
   }
 });
 
+test("listTrackedIssues ordering ignores lease heartbeats", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-service-list-lease-order-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const service = new PatchRelayService(
+      config,
+      db,
+      {
+        on: () => undefined,
+        readThread: async () => ({ id: "thread-1", turns: [] }),
+      } as never,
+      undefined,
+      pino({ enabled: false }),
+    );
+
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-1",
+      issueKey: "USE-1",
+      title: "Older visible update",
+      factoryState: "delegated",
+    });
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-2",
+      issueKey: "USE-2",
+      title: "Newer visible update",
+      factoryState: "delegated",
+    });
+
+    db.connection.prepare(`
+      UPDATE issue_sessions
+      SET display_updated_at = ?, updated_at = ?
+      WHERE project_id = ? AND linear_issue_id = ?
+    `).run("2026-04-01T09:00:00.000Z", "2026-04-01T09:00:00.000Z", "usertold", "issue-1");
+    db.connection.prepare(`
+      UPDATE issue_sessions
+      SET display_updated_at = ?, updated_at = ?
+      WHERE project_id = ? AND linear_issue_id = ?
+    `).run("2026-04-01T10:00:00.000Z", "2026-04-01T10:00:00.000Z", "usertold", "issue-2");
+
+    db.issueSessions.acquireIssueSessionLease({
+      projectId: "usertold",
+      linearIssueId: "issue-1",
+      leaseId: "lease-1",
+      workerId: "worker-1",
+      leasedUntil: "2026-04-01T11:00:00.000Z",
+      now: "2026-04-01T10:30:00.000Z",
+    });
+    db.issueSessions.renewIssueSessionLease({
+      projectId: "usertold",
+      linearIssueId: "issue-1",
+      leaseId: "lease-1",
+      leasedUntil: "2026-04-01T11:30:00.000Z",
+      now: "2026-04-01T10:45:00.000Z",
+    });
+
+    const listed = service.listTrackedIssues().map((entry) => entry.issueKey);
+    assert.deepEqual(listed.slice(0, 2), ["USE-2", "USE-1"]);
+    assert.equal(db.issueSessions.getIssueSession("usertold", "issue-1")?.updatedAt, "2026-04-01T10:45:00.000Z");
+    assert.equal(db.issueSessions.getIssueSession("usertold", "issue-1")?.displayUpdatedAt, "2026-04-01T09:00:00.000Z");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("listTrackedIssues ordering follows visible session updates", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-service-list-visible-order-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const service = new PatchRelayService(
+      config,
+      db,
+      {
+        on: () => undefined,
+        readThread: async () => ({ id: "thread-1", turns: [] }),
+      } as never,
+      undefined,
+      pino({ enabled: false }),
+    );
+
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-1",
+      issueKey: "USE-1",
+      title: "Will become newest",
+      factoryState: "delegated",
+    });
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-2",
+      issueKey: "USE-2",
+      title: "Starts newest",
+      factoryState: "delegated",
+    });
+
+    db.connection.prepare(`
+      UPDATE issue_sessions
+      SET display_updated_at = ?, updated_at = ?
+      WHERE project_id = ? AND linear_issue_id = ?
+    `).run("2026-04-01T09:00:00.000Z", "2026-04-01T09:00:00.000Z", "usertold", "issue-1");
+    db.connection.prepare(`
+      UPDATE issue_sessions
+      SET display_updated_at = ?, updated_at = ?
+      WHERE project_id = ? AND linear_issue_id = ?
+    `).run("2026-04-01T10:00:00.000Z", "2026-04-01T10:00:00.000Z", "usertold", "issue-2");
+
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-1",
+      factoryState: "implementing",
+      activeRunId: 42,
+    });
+
+    const listed = service.listTrackedIssues();
+    assert.equal(listed[0]?.issueKey, "USE-1");
+    assert.equal(listed[0]?.updatedAt, db.issueSessions.getIssueSession("usertold", "issue-1")?.displayUpdatedAt);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("listTrackedIssues surfaces actionable stop guidance for awaiting_input issues", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-service-list-awaiting-input-"));
   try {

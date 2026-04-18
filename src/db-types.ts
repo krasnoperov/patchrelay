@@ -106,6 +106,7 @@ export interface IssueSessionRecord {
   workerId?: string | undefined;
   leasedUntil?: string | undefined;
   createdAt: string;
+  displayUpdatedAt: string;
   updatedAt: string;
 }
 

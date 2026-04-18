@@ -84,6 +84,7 @@ export function syncIssueSessionFromIssue(params: {
         ci_repair_attempts = ?,
         queue_repair_attempts = ?,
         review_fix_attempts = ?,
+        display_updated_at = ?,
         updated_at = ?
       WHERE project_id = ? AND linear_issue_id = ?
     `).run(
@@ -106,6 +107,7 @@ export function syncIssueSessionFromIssue(params: {
       issue.queueRepairAttempts,
       issue.reviewFixAttempts,
       now,
+      now,
       issue.projectId,
       issue.linearIssueId,
     );
@@ -118,8 +120,8 @@ export function syncIssueSessionFromIssue(params: {
       pr_number, pr_head_sha, pr_author_login, session_state, waiting_reason, summary_text,
       active_thread_id, thread_generation, active_run_id, last_run_type, last_wake_reason,
       ci_repair_attempts, queue_repair_attempts, review_fix_attempts,
-      created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      created_at, display_updated_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     issue.projectId,
     issue.linearIssueId,
@@ -141,6 +143,7 @@ export function syncIssueSessionFromIssue(params: {
     issue.ciRepairAttempts,
     issue.queueRepairAttempts,
     issue.reviewFixAttempts,
+    now,
     now,
     now,
   );
