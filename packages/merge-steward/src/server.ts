@@ -36,7 +36,11 @@ async function createRepoInstance(
   const git = new ShellGitOperations(clone.path, config.repoFullName, config.gitBin);
   if (botIdentity) git.setBotIdentity(botIdentity);
   if (config.autoResolvePatterns.length > 0) git.setAutoResolvePatterns(config.autoResolvePatterns);
-  const ci = new GitHubActionsRunner(config.repoFullName, () => policy.getRequiredChecks());
+  const ci = new GitHubActionsRunner(
+    config.repoFullName,
+    () => policy.getRequiredChecks(),
+    () => policy.shouldRequireAllChecksOnEmptyRequiredSet(),
+  );
   const github = new GitHubPRClient(config.repoFullName);
   const eviction = new GitHubCheckRunReporter(
     config.repoFullName,
@@ -257,10 +261,11 @@ export async function startMultiServer(): Promise<void> {
     try {
       const discovery = githubAuth.mode === "app"
         ? await discoverRepoSettings(githubAuth.credentials, config.repoFullName, { baseBranch: config.baseBranch })
-        : { defaultBranch: config.baseBranch, branch: config.baseBranch, requiredChecks: [], warnings: [] };
+        : { defaultBranch: config.baseBranch, branch: config.baseBranch, requiredChecks: [], requireAllChecksOnEmptyRequiredSet: false, warnings: [] };
       const policy = new GitHubPolicyCache({
         repoFullName: config.repoFullName,
         initialRequiredChecks: discovery.requiredChecks,
+        initialRequireAllChecksOnEmptyRequiredSet: discovery.requireAllChecksOnEmptyRequiredSet,
         logger: logger.child({ repoId: config.repoId, component: "github-policy" }),
         refreshPolicy: async () => {
           if (githubAuth.mode !== "app") {
@@ -268,6 +273,7 @@ export async function startMultiServer(): Promise<void> {
               defaultBranch: config.baseBranch,
               branch: config.baseBranch,
               requiredChecks: [],
+              requireAllChecksOnEmptyRequiredSet: false,
               warnings: [],
             };
           }
@@ -280,6 +286,7 @@ export async function startMultiServer(): Promise<void> {
         repoId: config.repoId,
         repoFullName: config.repoFullName,
         githubRequiredChecks: policy.getRequiredChecks(),
+        requireAllChecksOnEmptyRequiredSet: policy.shouldRequireAllChecksOnEmptyRequiredSet(),
       }, "Resolved GitHub protection requirements");
       const instance = await createRepoInstance(config, policy, logger.child({ repoId: config.repoId }), botIdentity);
       if (shuttingDown) {

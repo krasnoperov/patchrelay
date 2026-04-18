@@ -20,6 +20,7 @@ function joinItems(items: string[]): string {
 
 function evaluateChecks(
   requiredChecks: string[],
+  requireAllChecksOnEmptyRequiredSet: boolean,
   checks: CheckResult[],
 ): { postMergeStatus: PostMergeStatus; summary: string } {
   const isPassingConclusion = (conclusion: CheckResult["conclusion"]) => conclusion === "success";
@@ -59,7 +60,10 @@ function evaluateChecks(
   const failed = checks.filter((check) => !isPassingConclusion(check.conclusion)).map((check) => check.name);
 
   if (checks.length === 0) {
-    return { postMergeStatus: "unknown", summary: "no checks found yet" };
+    return {
+      postMergeStatus: requireAllChecksOnEmptyRequiredSet ? "pending" : "unknown",
+      summary: requireAllChecksOnEmptyRequiredSet ? "checks required but none found yet" : "no checks found yet",
+    };
   }
   if (failed.length > 0) {
     return {
@@ -73,7 +77,10 @@ function evaluateChecks(
       summary: pending.length === 1 ? `check pending: ${pending[0]}` : `checks pending: ${joinItems(pending)}`,
     };
   }
-  return { postMergeStatus: "pass", summary: "all checks passed" };
+  return {
+    postMergeStatus: "pass",
+    summary: requireAllChecksOnEmptyRequiredSet ? "all observed checks passed" : "all checks passed",
+  };
 }
 
 export async function verifyPostMergeStatus(
@@ -82,6 +89,7 @@ export async function verifyPostMergeStatus(
 ): Promise<PostMergeVerificationResult> {
   const postMergeSha = entry.postMergeSha ?? entry.specSha ?? entry.headSha;
   const requiredChecks = ctx.policy.getRequiredChecks();
+  const requireAllChecksOnEmptyRequiredSet = ctx.policy.shouldRequireAllChecksOnEmptyRequiredSet();
 
   if (!postMergeSha) {
     return {
@@ -97,7 +105,7 @@ export async function verifyPostMergeStatus(
   } catch {
     checks = [];
   }
-  const evaluation = evaluateChecks(requiredChecks, checks);
+  const evaluation = evaluateChecks(requiredChecks, requireAllChecksOnEmptyRequiredSet, checks);
   return {
     postMergeStatus: evaluation.postMergeStatus,
     postMergeSummary: evaluation.summary,

@@ -46,6 +46,7 @@ async function readQueueSnapshot(config: StewardConfig, eventLimit: number): Pro
           baseBranch: config.baseBranch,
           githubPolicy: {
             requiredChecks: [],
+            requireAllChecksOnEmptyRequiredSet: false,
             fetchedAt: null,
             lastRefreshReason: null,
             lastRefreshChanged: null,
