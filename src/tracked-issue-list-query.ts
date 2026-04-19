@@ -4,6 +4,7 @@ import type { GitHubCiSnapshotRecord } from "./db-types.ts";
 import { derivePatchRelayWaitingReason } from "./waiting-reason.ts";
 import { deriveIssueStatusNote } from "./status-note.ts";
 import { isIssueSessionReadyForExecution } from "./issue-session.ts";
+import { hasDetachedActiveLatestRun } from "./effective-active-run.ts";
 
 function shouldSuppressStatusNote(params: {
   activeRunType?: string | null | undefined;
@@ -206,11 +207,24 @@ export class TrackedIssueListQuery {
       const hasPendingSessionEvents = Number(row.pending_session_event_count ?? 0) > 0;
       const hasPendingWake = hasPendingSessionEvents
         || this.db.issueSessions.peekIssueSessionWake(String(row.project_id), String(row.linear_issue_id)) !== undefined;
+      const detachedActiveRun = hasDetachedActiveLatestRun({
+        activeRunId: row.active_run_type !== null ? 1 : undefined,
+        latestRun: row.latest_run_status !== null
+          ? { id: 0, status: String(row.latest_run_status) as never }
+          : undefined,
+      });
+      const effectiveActiveRunType = row.active_run_type !== null
+        ? String(row.active_run_type)
+        : detachedActiveRun && row.latest_run_type !== null
+          ? String(row.latest_run_type)
+          : undefined;
       const readyForExecution = isIssueSessionReadyForExecution({
-        ...(typeof row.session_state === "string" ? { sessionState: String(row.session_state) as never } : {}),
+        ...(typeof row.session_state === "string"
+          ? { sessionState: detachedActiveRun ? "running" as never : String(row.session_state) as never }
+          : {}),
         factoryState: String(row.factory_state ?? "delegated") as never,
         ...(row.delegated_to_patchrelay !== null ? { delegatedToPatchRelay: Number(row.delegated_to_patchrelay) !== 0 } : {}),
-        ...(row.active_run_type !== null ? { activeRunId: 1 } : {}),
+        ...((row.active_run_type !== null || detachedActiveRun) ? { activeRunId: 1 } : {}),
         blockedByCount,
         hasPendingWake,
         hasLegacyPendingRun: row.pending_run_type !== null && row.pending_run_type !== undefined,
@@ -228,9 +242,9 @@ export class TrackedIssueListQuery {
       const sessionSummary = typeof row.summary_text === "string" && row.summary_text.trim().length > 0
         ? row.summary_text
         : undefined;
-      const waitingReason = sessionWaitingReason ?? derivePatchRelayWaitingReason({
+      const derivedWaitingReason = derivePatchRelayWaitingReason({
         ...(row.delegated_to_patchrelay !== null ? { delegatedToPatchRelay: Number(row.delegated_to_patchrelay) !== 0 } : {}),
-        ...(row.active_run_type !== null ? { activeRunType: String(row.active_run_type) } : {}),
+        ...((row.active_run_type !== null || detachedActiveRun) ? { activeRunId: 1 } : {}),
         blockedByKeys,
         factoryState: String(row.factory_state ?? "delegated"),
         ...(row.pending_run_type !== null ? { pendingRunType: String(row.pending_run_type) } : {}),
@@ -243,6 +257,7 @@ export class TrackedIssueListQuery {
         ...(row.last_blocking_review_head_sha !== null ? { lastBlockingReviewHeadSha: String(row.last_blocking_review_head_sha) } : {}),
         ...(row.last_github_failure_check_name !== null ? { latestFailureCheckName: String(row.last_github_failure_check_name) } : {}),
       });
+      const waitingReason = detachedActiveRun ? derivedWaitingReason : sessionWaitingReason ?? derivedWaitingReason;
       const latestRun = row.latest_run_type !== null && row.latest_run_status !== null
         ? {
             id: 0,
@@ -273,16 +288,26 @@ export class TrackedIssueListQuery {
         waitingReason,
       }) ?? waitingReason;
       const statusNoteForReturn = shouldSuppressStatusNote({
-        activeRunType: row.active_run_type as string | null | undefined,
-        sessionState: row.session_state as string | null | undefined,
+        activeRunType: effectiveActiveRunType,
+        sessionState: detachedActiveRun ? "running" : row.session_state as string | null | undefined,
         statusNote: statusNoteCandidate,
       })
         ? undefined
         : statusNoteCandidate;
-      const completionCheckActive = typeof row.active_completion_check_thread_id === "string"
-        && row.active_completion_check_thread_id.length > 0
-        && row.active_completion_check_outcome === null
-        && row.active_run_type !== null;
+      const activeCompletionCheckThreadId = row.active_run_type !== null
+        ? row.active_completion_check_thread_id
+        : detachedActiveRun
+          ? row.latest_run_completion_check_thread_id
+          : null;
+      const activeCompletionCheckOutcome = row.active_run_type !== null
+        ? row.active_completion_check_outcome
+        : detachedActiveRun
+          ? row.latest_run_completion_check_outcome
+          : null;
+      const completionCheckActive = typeof activeCompletionCheckThreadId === "string"
+        && activeCompletionCheckThreadId.length > 0
+        && activeCompletionCheckOutcome === null
+        && effectiveActiveRunType !== undefined;
 
       return {
         ...(row.issue_key !== null ? { issueKey: String(row.issue_key) } : {}),
@@ -290,13 +315,13 @@ export class TrackedIssueListQuery {
         ...(statusNoteForReturn ? { statusNote: statusNoteForReturn } : {}),
         projectId: String(row.project_id),
         delegatedToPatchRelay: row.delegated_to_patchrelay === null ? true : Number(row.delegated_to_patchrelay) !== 0,
-        ...(row.session_state !== null ? { sessionState: String(row.session_state) } : {}),
+        ...(row.session_state !== null ? { sessionState: detachedActiveRun ? "running" : String(row.session_state) } : {}),
         factoryState: String(row.factory_state ?? "delegated"),
         blockedByCount,
         blockedByKeys,
         readyForExecution,
         ...(row.current_linear_state !== null ? { currentLinearState: String(row.current_linear_state) } : {}),
-        ...(row.active_run_type !== null ? { activeRunType: String(row.active_run_type) } : {}),
+        ...(effectiveActiveRunType ? { activeRunType: effectiveActiveRunType } : {}),
         ...(row.pending_run_type !== null ? { pendingRunType: String(row.pending_run_type) } : {}),
         ...(row.latest_run_type !== null ? { latestRunType: String(row.latest_run_type) } : {}),
         ...(row.latest_run_status !== null ? { latestRunStatus: String(row.latest_run_status) } : {}),

@@ -13,6 +13,7 @@ import type { InterruptedRunRecovery } from "./interrupted-run-recovery.ts";
 import { resolveRecoverablePostRunState } from "./interrupted-run-recovery.ts";
 import type { RunFinalizer } from "./run-finalizer.ts";
 import type { ReleaseIssueSessionLease, WithHeldIssueSessionLease } from "./issue-session-lease-service.ts";
+import { resolveEffectiveActiveRun } from "./effective-active-run.ts";
 
 export class RunReconciler {
   constructor(
@@ -37,6 +38,23 @@ export class RunReconciler {
     const { run, issue, recoveryLease } = params;
     const acquiredRecoveryLease = recoveryLease === true;
     let effectiveIssue = issue;
+
+    const effectiveActiveRun = resolveEffectiveActiveRun({
+      activeRun: issue.activeRunId === run.id ? run : undefined,
+      latestRun: run,
+    });
+    if (effectiveActiveRun?.id === run.id && issue.activeRunId !== run.id) {
+      effectiveIssue = this.withHeldLease(run.projectId, run.linearIssueId, () => this.db.issues.upsertIssue({
+        projectId: run.projectId,
+        linearIssueId: run.linearIssueId,
+        activeRunId: run.id,
+        ...(run.threadId ? { threadId: run.threadId } : {}),
+      })) ?? effectiveIssue;
+      this.logger.info(
+        { issueKey: effectiveIssue.issueKey, runId: run.id, runType: run.runType },
+        "Reattached detached active run during reconciliation",
+      );
+    }
 
     if (!effectiveIssue.delegatedToPatchRelay) {
       const authority = await this.confirmDelegationAuthorityBeforeRelease(run, effectiveIssue);

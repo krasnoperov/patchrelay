@@ -10,6 +10,8 @@ import { WorktreeManager } from "../worktree-manager.ts";
 import { parseDelegationObservedPayload, parseRunReleasedAuthorityPayload } from "../delegation-audit.ts";
 import { CliOperatorApiClient } from "./operator-client.ts";
 import type { RunType } from "../factory-state.ts";
+import { resolveEffectiveActiveRun } from "../effective-active-run.ts";
+import { derivePatchRelayWaitingReason } from "../waiting-reason.ts";
 import type {
   AppConfig,
   CodexThreadItem,
@@ -247,8 +249,11 @@ export class CliDataAccess extends CliOperatorApiClient {
     if (!issue) return undefined;
 
     const dbIssue = this.db.issues.getIssueByKey(issueKey)!;
-    const activeRun = dbIssue.activeRunId ? this.db.runs.getRunById(dbIssue.activeRunId) : undefined;
     const latestRun = this.db.runs.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
+    const activeRun = resolveEffectiveActiveRun({
+      activeRun: dbIssue.activeRunId ? this.db.runs.getRunById(dbIssue.activeRunId) : undefined,
+      latestRun,
+    });
     const latestReport = normalizeStageReport(latestRun?.reportJson, latestRun?.status);
     const latestSummary = safeJsonParse(latestRun?.summaryJson);
     const completionCheck = latestRun ? extractCompletionCheck(latestRun) : undefined;
@@ -288,7 +293,10 @@ export class CliDataAccess extends CliOperatorApiClient {
     if (!issue) return undefined;
 
     const dbIssue = this.db.issues.getIssueByKey(issueKey)!;
-    const run = dbIssue.activeRunId ? this.db.runs.getRunById(dbIssue.activeRunId) : undefined;
+    const run = resolveEffectiveActiveRun({
+      activeRun: dbIssue.activeRunId ? this.db.runs.getRunById(dbIssue.activeRunId) : undefined,
+      latestRun: this.db.runs.getLatestRunForIssue(issue.projectId, issue.linearIssueId),
+    });
     if (!run) return undefined;
 
     const live =
@@ -656,19 +664,36 @@ export class CliDataAccess extends CliOperatorApiClient {
       )
       .all(...values) as Array<Record<string, unknown>>;
 
-    const items: ListResultItem[] = rows.map((row) => ({
-      ...(row.issue_key !== null ? { issueKey: String(row.issue_key) } : {}),
-      ...(row.title !== null ? { title: String(row.title) } : {}),
-      projectId: String(row.project_id),
-      ...(row.current_linear_state !== null ? { currentLinearState: String(row.current_linear_state) } : {}),
-      ...(row.session_state !== null ? { sessionState: String(row.session_state) } : {}),
-      factoryState: String(row.factory_state ?? "delegated"),
-      ...(row.waiting_reason !== null ? { waitingReason: String(row.waiting_reason) } : {}),
-      ...(row.active_run_type !== null ? { activeRunType: String(row.active_run_type) } : {}),
-      ...(row.latest_run_type !== null ? { latestRunType: String(row.latest_run_type) } : {}),
-      ...(row.latest_run_status !== null ? { latestRunStatus: String(row.latest_run_status) } : {}),
-      updatedAt: String(row.updated_at),
-    }));
+    const items: ListResultItem[] = rows.map((row) => {
+      const detachedActiveRun = row.active_run_type === null
+        && (row.latest_run_status === "queued" || row.latest_run_status === "running");
+      const activeRunType = row.active_run_type !== null
+        ? String(row.active_run_type)
+        : detachedActiveRun && row.latest_run_type !== null
+          ? String(row.latest_run_type)
+          : undefined;
+      const waitingReason = detachedActiveRun
+        ? derivePatchRelayWaitingReason({
+            activeRunId: 1,
+            factoryState: String(row.factory_state ?? "delegated"),
+          })
+        : row.waiting_reason !== null
+          ? String(row.waiting_reason)
+          : undefined;
+      return {
+        ...(row.issue_key !== null ? { issueKey: String(row.issue_key) } : {}),
+        ...(row.title !== null ? { title: String(row.title) } : {}),
+        projectId: String(row.project_id),
+        ...(row.current_linear_state !== null ? { currentLinearState: String(row.current_linear_state) } : {}),
+        ...(row.session_state !== null ? { sessionState: detachedActiveRun ? "running" : String(row.session_state) } : {}),
+        factoryState: String(row.factory_state ?? "delegated"),
+        ...(waitingReason ? { waitingReason } : {}),
+        ...(activeRunType ? { activeRunType } : {}),
+        ...(row.latest_run_type !== null ? { latestRunType: String(row.latest_run_type) } : {}),
+        ...(row.latest_run_status !== null ? { latestRunStatus: String(row.latest_run_status) } : {}),
+        updatedAt: String(row.updated_at),
+      };
+    });
 
     return items.filter((item) => {
       if (options?.active && !item.activeRunType) return false;

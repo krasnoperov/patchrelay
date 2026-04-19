@@ -259,6 +259,60 @@ test("reconcileIdleIssues advances approved idle issues to awaiting_queue", asyn
   }
 });
 
+test("reconcileActiveRuns reattaches a detached running run before continuing reconciliation", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-detached-run-"));
+  try {
+    const { db, orchestrator } = createOrchestrator(
+      baseDir,
+      undefined,
+      {
+        startThread: async () => ({ threadId: "thread-detached" }),
+        steerTurn: async () => undefined,
+        readThread: async () => ({
+          id: "thread-detached",
+          turns: [
+            {
+              id: "turn-detached",
+              status: "inProgress",
+              items: [{ type: "agentMessage", id: "assistant-detached", text: "Still working after the completion check resume." }],
+            },
+          ],
+        }),
+      },
+    );
+
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-detached",
+      issueKey: "USE-DETACHED",
+      title: "Detached resumed run",
+      factoryState: "delegated",
+      threadId: "thread-detached",
+      activeRunId: null,
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "implementation",
+    });
+    db.runs.updateRunThread(run.id, { threadId: "thread-detached", turnId: "turn-detached" });
+    db.connection.prepare("UPDATE issue_sessions SET active_run_id = NULL, session_state = ? WHERE project_id = ? AND linear_issue_id = ?")
+      .run("idle", issue.projectId, issue.linearIssueId);
+
+    await orchestrator.reconcileActiveRuns();
+
+    const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId);
+    const updatedSession = db.issueSessions.getIssueSession(issue.projectId, issue.linearIssueId);
+    assert.equal(updatedIssue?.activeRunId, run.id);
+    assert.equal(updatedSession?.activeRunId, run.id);
+    assert.equal(updatedSession?.sessionState, "running");
+    assert.equal(db.runs.getRunById(run.id)?.status, "running");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("reconcileActiveRuns moves merged issues to a completed Linear state", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reconcile-merged-linear-state-"));
   try {
