@@ -18,6 +18,7 @@ import {
 import { measureRenderedTextRows } from "./layout-measure.ts";
 import { PROMPT_COMPOSER_HINT, measurePromptComposerRows } from "./prompt-layout.ts";
 import { clearTransientStatus, defaultTimerApi, setPersistentStatus, showTransientStatus } from "./transient-status.ts";
+import { isPromptBackspaceKey, isPromptDeleteKey } from "./input-keys.ts";
 
 interface AppProps {
   baseUrl: string;
@@ -310,13 +311,13 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
         recallPromptHistory("older");
       } else if (key.downArrow) {
         recallPromptHistory("newer");
-      } else if (key.backspace) {
+      } else if (isPromptBackspaceKey(input, key)) {
         if (promptCursor > 0) {
           setPromptBuffer((buffer) => `${buffer.slice(0, promptCursor - 1)}${buffer.slice(promptCursor)}`);
           setPromptCursor((cursor) => Math.max(0, cursor - 1));
           setPromptHistoryIndex(null);
         }
-      } else if (key.delete) {
+      } else if (isPromptDeleteKey(input, key)) {
         if (promptCursor < promptBuffer.length) {
           setPromptBuffer((buffer) => `${buffer.slice(0, promptCursor)}${buffer.slice(promptCursor + 1)}`);
           setPromptHistoryIndex(null);
