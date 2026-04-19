@@ -10,6 +10,7 @@ import { parseGitHubFailureContext } from "./github-failure-context.ts";
 import { isIssueSessionReadyForExecution } from "./issue-session.ts";
 import { deriveIssueStatusNote } from "./status-note.ts";
 import { derivePatchRelayWaitingReason } from "./waiting-reason.ts";
+import { hasDetachedActiveLatestRun, resolveEffectiveActiveRun } from "./effective-active-run.ts";
 
 export function isResolvedLinearState(stateType: string | undefined, stateName: string | undefined): boolean {
   return stateType === "completed" || stateName?.trim().toLowerCase() === "done";
@@ -29,9 +30,17 @@ export function buildTrackedIssueRecord(params: {
   ));
   const failureContext = parseGitHubFailureContext(params.issue.lastGitHubFailureContextJson);
   const blockedByKeys = unresolvedBlockedBy.map((entry) => entry.blockerIssueKey ?? entry.blockerLinearIssueId);
+  const effectiveActiveRun = resolveEffectiveActiveRun({
+    activeRun: params.issue.activeRunId !== undefined && params.latestRun?.id === params.issue.activeRunId ? params.latestRun : undefined,
+    latestRun: params.latestRun,
+  });
+  const detachedActiveRun = hasDetachedActiveLatestRun({
+    activeRunId: params.issue.activeRunId,
+    latestRun: params.latestRun,
+  });
   const waitingReason = derivePatchRelayWaitingReason({
     delegatedToPatchRelay: params.issue.delegatedToPatchRelay,
-    ...(params.issue.activeRunId !== undefined ? { activeRunId: params.issue.activeRunId } : {}),
+    ...(effectiveActiveRun ? { activeRunId: effectiveActiveRun.id } : {}),
     blockedByKeys,
     factoryState: params.issue.factoryState,
     pendingRunType: params.issue.pendingRunType,
@@ -54,11 +63,9 @@ export function buildTrackedIssueRecord(params: {
     waitingReason,
   });
   const completionCheckActive = Boolean(
-    params.issue.activeRunId !== undefined
-      && params.latestRun?.id === params.issue.activeRunId
-      && params.latestRun.status === "running"
-      && params.latestRun.completionCheckThreadId
-      && !params.latestRun.completionCheckOutcome,
+    effectiveActiveRun?.status === "running"
+      && effectiveActiveRun.completionCheckThreadId
+      && !effectiveActiveRun.completionCheckOutcome,
   );
 
   return {
@@ -84,7 +91,7 @@ export function buildTrackedIssueRecord(params: {
       sessionState: params.session?.sessionState,
       factoryState: params.issue.factoryState,
       delegatedToPatchRelay: params.issue.delegatedToPatchRelay,
-      activeRunId: params.issue.activeRunId,
+      ...(effectiveActiveRun ? { activeRunId: effectiveActiveRun.id } : {}),
       blockedByCount: unresolvedBlockedBy.length,
       hasPendingWake: params.hasPendingWake,
       hasLegacyPendingRun: params.issue.pendingRunType !== undefined,
@@ -102,8 +109,9 @@ export function buildTrackedIssueRecord(params: {
     ...(failureContext?.summary ? { latestFailureSummary: failureContext.summary } : {}),
     ...(waitingReason ? { waitingReason } : {}),
     ...(completionCheckActive ? { completionCheckActive } : {}),
-    ...(params.issue.activeRunId !== undefined ? { activeRunId: params.issue.activeRunId } : {}),
+    ...(effectiveActiveRun ? { activeRunId: effectiveActiveRun.id } : {}),
     ...(params.issue.agentSessionId ? { activeAgentSessionId: params.issue.agentSessionId } : {}),
+    ...(detachedActiveRun && params.session?.sessionState ? { sessionState: "running" } : {}),
     updatedAt: params.issue.updatedAt,
   };
 }

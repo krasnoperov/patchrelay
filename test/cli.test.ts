@@ -1259,6 +1259,74 @@ test("cli doctor reports deployment readiness problems", async () => {
   }
 });
 
+test("cli live falls back to the latest detached running run", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-detached-live-"));
+  let data: CliDataAccess | undefined;
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    mkdirSync(config.projects[0].worktreeRoot, { recursive: true });
+
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-detached-live",
+      issueKey: "USE-58",
+      title: "Detached resumed run",
+      factoryState: "delegated",
+      threadId: "thread-58",
+      activeRunId: null,
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "implementation",
+    });
+    db.runs.updateRunThread(run.id, { threadId: "thread-58", turnId: "turn-58" });
+    db.connection.prepare(`
+      UPDATE issue_sessions
+      SET active_run_id = NULL, session_state = ?, waiting_reason = ?
+      WHERE project_id = ? AND linear_issue_id = ?
+    `).run("idle", "PatchRelay work is complete", issue.projectId, issue.linearIssueId);
+
+    data = new CliDataAccess(config, {
+      db,
+      codex: createStubCodex({
+        "thread-58": {
+          id: "thread-58",
+          preview: "Detached running issue",
+          cwd: path.join(config.projects[0].worktreeRoot, "USE-58"),
+          status: "running",
+          turns: [
+            {
+              id: "turn-58",
+              status: "inProgress",
+              items: [{ type: "agentMessage", id: "assistant-58", text: "Resumed run is still publishing the PR." }],
+            },
+          ],
+        },
+      }) as never,
+    });
+
+    const inspect = await data.inspect("USE-58");
+    assert.equal(inspect?.activeRun?.id, run.id);
+
+    const live = await data.live("USE-58");
+    assert.equal(live?.run.id, run.id);
+    assert.equal(live?.run.runType, "implementation");
+    assert.equal(live?.live?.latestTurnStatus, "inProgress");
+
+    const listed = data.list({ active: true }).find((entry) => entry.issueKey === "USE-58");
+    assert.equal(listed?.activeRunType, "implementation");
+    assert.equal(listed?.latestRunStatus, "running");
+    assert.equal(listed?.sessionState, "running");
+  } finally {
+    data?.close();
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("cli doctor reports preflight status", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-doctor-"));
   try {

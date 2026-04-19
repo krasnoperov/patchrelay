@@ -5,6 +5,7 @@ import { deriveIssueSessionState, isIssueSessionReadyForExecution } from "./issu
 import type { IssueStore } from "./db/issue-store.ts";
 import type { IssueSessionStore } from "./db/issue-session-store.ts";
 import type { RunStore } from "./db/run-store.ts";
+import { resolveEffectiveActiveRun } from "./effective-active-run.ts";
 
 export class TrackedIssueQuery {
   constructor(
@@ -65,7 +66,10 @@ export class TrackedIssueQuery {
     const issue = this.issues.getIssueByKey(issueKey);
     if (!issue) return undefined;
     const tracked = this.issueToTrackedIssue(issue);
-    const activeRun = issue.activeRunId ? this.runs.getRunById(issue.activeRunId) : undefined;
+    const activeRun = resolveEffectiveActiveRun({
+      activeRun: issue.activeRunId ? this.runs.getRunById(issue.activeRunId) : undefined,
+      latestRun: this.runs.getLatestRunForIssue(issue.projectId, issue.linearIssueId),
+    });
     return {
       issue: tracked,
       ...(activeRun ? { activeRun } : {}),

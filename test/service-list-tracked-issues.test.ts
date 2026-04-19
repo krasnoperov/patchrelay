@@ -138,6 +138,63 @@ test("listTrackedIssues suppresses stale interrupted notes while a run is active
   }
 });
 
+test("listTrackedIssues treats a detached running latest run as active work", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-service-list-detached-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const service = new PatchRelayService(
+      config,
+      db,
+      {
+        on: () => undefined,
+        readThread: async () => ({ id: "thread-detached", turns: [] }),
+      } as never,
+      undefined,
+      pino({ enabled: false }),
+    );
+
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-detached",
+      issueKey: "USE-D",
+      title: "Detached resumed implementation",
+      factoryState: "delegated",
+      threadId: "thread-detached",
+      activeRunId: null,
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "implementation",
+    });
+    db.runs.updateRunThread(run.id, { threadId: "thread-detached", turnId: "turn-detached" });
+    db.connection.prepare(`
+      UPDATE issue_sessions
+      SET summary_text = ?, session_state = ?, active_run_id = ?, waiting_reason = ?
+      WHERE project_id = ? AND linear_issue_id = ?
+    `).run(
+      "PatchRelay work is complete",
+      "idle",
+      null,
+      "PatchRelay work is complete",
+      issue.projectId,
+      issue.linearIssueId,
+    );
+
+    const tracked = service.listTrackedIssues().find((entry) => entry.issueKey === "USE-D");
+    assert.ok(tracked);
+    assert.equal(tracked.activeRunType, "implementation");
+    assert.equal(tracked.sessionState, "running");
+    assert.equal(tracked.waitingReason, "PatchRelay is actively working");
+    assert.equal(tracked.readyForExecution, false);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("listTrackedIssues suppresses stale zombie notes while a run is active", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-service-list-zombie-"));
   try {
