@@ -275,10 +275,8 @@ export class RunOrchestrator {
         ...(entry.blockerCurrentLinearStateType ? { stateType: entry.blockerCurrentLinearStateType } : {}),
       }));
 
-    const trackedDependents = this.db.issues
-      .listDependents(issue.projectId, issue.linearIssueId)
-      .map((entry) => this.db.issues.getIssue(issue.projectId, entry.linearIssueId))
-      .filter((entry): entry is IssueRecord => Boolean(entry))
+    const childIssues = this.db.issues
+      .listChildIssues(issue.projectId, issue.linearIssueId)
       .map((entry) => ({
         linearIssueId: entry.linearIssueId,
         ...(entry.issueKey ? { issueKey: entry.issueKey } : {}),
@@ -289,19 +287,19 @@ export class RunOrchestrator {
         hasOpenPr: entry.prNumber !== undefined && entry.prState !== "closed" && entry.prState !== "merged",
       }));
 
-    if (unresolvedBlockers.length === 0 && trackedDependents.length === 0) {
+    if (unresolvedBlockers.length === 0 && childIssues.length === 0) {
       return {};
     }
 
     return {
       ...(unresolvedBlockers.length > 0 ? { unresolvedBlockers } : {}),
-      ...(trackedDependents.length > 0 ? { trackedDependents } : {}),
+      ...(childIssues.length > 0 ? { childIssues } : {}),
     };
   }
 
   private classifyTrackedIssue(issue: IssueRecord): IssueRecord {
-    const trackedDependentCount = this.db.issues.listDependents(issue.projectId, issue.linearIssueId).length;
-    const classification = classifyIssue({ issue, trackedDependentCount });
+    const childIssueCount = this.db.issues.listChildIssues(issue.projectId, issue.linearIssueId).length;
+    const classification = classifyIssue({ issue, childIssueCount });
     if (issue.issueClass === classification.issueClass && issue.issueClassSource === classification.issueClassSource) {
       return issue;
     }

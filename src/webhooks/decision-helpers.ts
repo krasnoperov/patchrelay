@@ -155,6 +155,9 @@ export function hasCompleteIssueContext(issue: IssueMetadata): boolean {
 export function mergeIssueMetadata(
   issue: IssueMetadata,
   liveIssue: {
+    parentId?: string;
+    parentIdentifier?: string;
+    parentTitle?: string;
     identifier?: string; title?: string; url?: string;
     attachments?: Array<{ id: string; title?: string; subtitle?: string; url: string }>;
     teamId?: string; teamKey?: string; stateId?: string; stateName?: string; stateType?: string;
@@ -166,6 +169,9 @@ export function mergeIssueMetadata(
 ): IssueMetadata {
   return {
     ...issue,
+    ...(issue.parentId ? {} : liveIssue.parentId ? { parentId: liveIssue.parentId } : {}),
+    ...(issue.parentIdentifier ? {} : liveIssue.parentIdentifier ? { parentIdentifier: liveIssue.parentIdentifier } : {}),
+    ...(issue.parentTitle ? {} : liveIssue.parentTitle ? { parentTitle: liveIssue.parentTitle } : {}),
     ...(issue.identifier ? {} : liveIssue.identifier ? { identifier: liveIssue.identifier } : {}),
     ...(issue.title ? {} : liveIssue.title ? { title: liveIssue.title } : {}),
     ...(issue.url ? {} : liveIssue.url ? { url: liveIssue.url } : {}),

@@ -137,8 +137,10 @@ function buildCoordinationGuidance(context?: Record<string, unknown>): string[] 
   const unresolvedBlockers = Array.isArray(context?.unresolvedBlockers)
     ? context.unresolvedBlockers.filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
     : [];
-  const trackedDependents = Array.isArray(context?.trackedDependents)
-    ? context.trackedDependents.filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
+  const childIssues = Array.isArray(context?.childIssues)
+    ? context.childIssues.filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
+    : Array.isArray(context?.trackedDependents)
+      ? context.trackedDependents.filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
     : [];
 
   const lines = [
@@ -150,7 +152,7 @@ function buildCoordinationGuidance(context?: Record<string, unknown>): string[] 
     "Prefer one PR per concrete implementation issue over a broad parent branch that restates overlapping child work.",
   ];
 
-  if (unresolvedBlockers.length === 0 && trackedDependents.length === 0) {
+  if (unresolvedBlockers.length === 0 && childIssues.length === 0) {
     return lines;
   }
 
@@ -159,12 +161,12 @@ function buildCoordinationGuidance(context?: Record<string, unknown>): string[] 
     lines.push("Unresolved blockers:");
     lines.push(...summarizeRelationEntries(unresolvedBlockers));
   }
-  if (trackedDependents.length > 0) {
+  if (childIssues.length > 0) {
     if (unresolvedBlockers.length > 0) {
       lines.push("");
     }
-    lines.push("Tracked dependent issues:");
-    lines.push(...summarizeRelationEntries(trackedDependents));
+    lines.push("Canonical child issues:");
+    lines.push(...summarizeRelationEntries(childIssues));
   }
   return lines;
 }
@@ -203,8 +205,10 @@ function buildOrchestrationScopeDiscipline(context?: Record<string, unknown>): s
   const unresolvedBlockers = Array.isArray(context?.unresolvedBlockers)
     ? context.unresolvedBlockers.filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
     : [];
-  const trackedDependents = Array.isArray(context?.trackedDependents)
-    ? context.trackedDependents.filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
+  const childIssues = Array.isArray(context?.childIssues)
+    ? context.childIssues.filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
+    : Array.isArray(context?.trackedDependents)
+      ? context.trackedDependents.filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
     : [];
 
   return [
@@ -213,6 +217,8 @@ function buildOrchestrationScopeDiscipline(context?: Record<string, unknown>): s
     "This issue is orchestration work.",
     "Treat it as the owner of convergence across related issues rather than as a normal code-owning implementation branch.",
     "Inspect why this wake happened before acting.",
+    "Adopt already-existing canonical child issues when they cover the intended split.",
+    "Do not recreate child issues that already exist under this parent unless a genuinely missing required slice remains.",
     "Do not create an overlapping umbrella PR unless this parent clearly owns unique direct cleanup work that child issues do not already cover.",
     "If child work is still in motion, babysit the plan, record useful observations, and return to waiting.",
     "If child work looks delivered, audit whether the original parent goal is actually satisfied.",
@@ -221,8 +227,8 @@ function buildOrchestrationScopeDiscipline(context?: Record<string, unknown>): s
     "",
     "### Child Issue Summaries",
     "",
-    ...(trackedDependents.length > 0
-      ? summarizeRelationEntries(trackedDependents, { emptyText: "No child issues are currently tracked." })
+    ...(childIssues.length > 0
+      ? summarizeRelationEntries(childIssues, { emptyText: "No child issues are currently tracked." })
       : ["No child issues are currently tracked."]),
     "",
     ...(unresolvedBlockers.length > 0

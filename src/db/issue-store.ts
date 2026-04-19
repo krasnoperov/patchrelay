@@ -1,5 +1,6 @@
 import type {
   GitHubCiSnapshotRecord,
+  IssueChildRecord,
   GitHubFailureSource,
   IssueDependencyRecord,
   IssueRecord,
@@ -14,6 +15,8 @@ export interface UpsertIssueParams {
   delegatedToPatchRelay?: boolean;
   issueClass?: IssueClass | null;
   issueClassSource?: IssueClassSource | null;
+  parentLinearIssueId?: string | null;
+  parentIssueKey?: string | null;
   issueKey?: string;
   title?: string;
   description?: string;
@@ -63,6 +66,7 @@ export interface UpsertIssueParams {
   reviewFixAttempts?: number;
   zombieRecoveryAttempts?: number;
   lastZombieRecoveryAt?: string | null;
+  orchestrationSettleUntil?: string | null;
 }
 
 export class IssueStore {
@@ -84,6 +88,8 @@ export class IssueStore {
       if (params.delegatedToPatchRelay !== undefined) { sets.push("delegated_to_patchrelay = @delegatedToPatchRelay"); values.delegatedToPatchRelay = params.delegatedToPatchRelay ? 1 : 0; }
       if (params.issueClass !== undefined) { sets.push("issue_class = @issueClass"); values.issueClass = params.issueClass; }
       if (params.issueClassSource !== undefined) { sets.push("issue_class_source = @issueClassSource"); values.issueClassSource = params.issueClassSource; }
+      if (params.parentLinearIssueId !== undefined) { sets.push("parent_linear_issue_id = @parentLinearIssueId"); values.parentLinearIssueId = params.parentLinearIssueId; }
+      if (params.parentIssueKey !== undefined) { sets.push("parent_issue_key = @parentIssueKey"); values.parentIssueKey = params.parentIssueKey; }
       if (params.issueKey !== undefined) { sets.push("issue_key = COALESCE(@issueKey, issue_key)"); values.issueKey = params.issueKey; }
       if (params.title !== undefined) { sets.push("title = COALESCE(@title, title)"); values.title = params.title; }
       if (params.description !== undefined) { sets.push("description = COALESCE(@description, description)"); values.description = params.description; }
@@ -133,11 +139,12 @@ export class IssueStore {
       if (params.reviewFixAttempts !== undefined) { sets.push("review_fix_attempts = @reviewFixAttempts"); values.reviewFixAttempts = params.reviewFixAttempts; }
       if (params.zombieRecoveryAttempts !== undefined) { sets.push("zombie_recovery_attempts = @zombieRecoveryAttempts"); values.zombieRecoveryAttempts = params.zombieRecoveryAttempts; }
       if (params.lastZombieRecoveryAt !== undefined) { sets.push("last_zombie_recovery_at = @lastZombieRecoveryAt"); values.lastZombieRecoveryAt = params.lastZombieRecoveryAt; }
+      if (params.orchestrationSettleUntil !== undefined) { sets.push("orchestration_settle_until = @orchestrationSettleUntil"); values.orchestrationSettleUntil = params.orchestrationSettleUntil; }
       this.connection.prepare(`UPDATE issues SET ${sets.join(", ")} WHERE project_id = @projectId AND linear_issue_id = @linearIssueId`).run(values);
     } else {
       this.connection.prepare(`
         INSERT INTO issues (
-          project_id, linear_issue_id, delegated_to_patchrelay, issue_class, issue_class_source, issue_key, title, description, url,
+          project_id, linear_issue_id, delegated_to_patchrelay, issue_class, issue_class_source, parent_linear_issue_id, parent_issue_key, issue_key, title, description, url,
           priority, estimate,
           current_linear_state, current_linear_state_type, factory_state, pending_run_type, pending_run_context_json,
           branch_name, worktree_path, thread_id, active_run_id, status_comment_id,
@@ -147,10 +154,10 @@ export class IssueStore {
           last_github_ci_snapshot_head_sha, last_github_ci_snapshot_gate_check_name, last_github_ci_snapshot_gate_check_status, last_github_ci_snapshot_json, last_github_ci_snapshot_settled_at,
           last_queue_signal_at, last_queue_incident_json,
           last_attempted_failure_head_sha, last_attempted_failure_signature, last_attempted_failure_at,
-          ci_repair_attempts, queue_repair_attempts, review_fix_attempts, zombie_recovery_attempts, last_zombie_recovery_at,
+          ci_repair_attempts, queue_repair_attempts, review_fix_attempts, zombie_recovery_attempts, last_zombie_recovery_at, orchestration_settle_until,
           updated_at
         ) VALUES (
-          @projectId, @linearIssueId, @delegatedToPatchRelay, @issueClass, @issueClassSource, @issueKey, @title, @description, @url,
+          @projectId, @linearIssueId, @delegatedToPatchRelay, @issueClass, @issueClassSource, @parentLinearIssueId, @parentIssueKey, @issueKey, @title, @description, @url,
           @priority, @estimate,
           @currentLinearState, @currentLinearStateType, @factoryState, @pendingRunType, @pendingRunContextJson,
           @branchName, @worktreePath, @threadId, @activeRunId, @statusCommentId,
@@ -160,7 +167,7 @@ export class IssueStore {
           @lastGitHubCiSnapshotHeadSha, @lastGitHubCiSnapshotGateCheckName, @lastGitHubCiSnapshotGateCheckStatus, @lastGitHubCiSnapshotJson, @lastGitHubCiSnapshotSettledAt,
           @lastQueueSignalAt, @lastQueueIncidentJson,
           @lastAttemptedFailureHeadSha, @lastAttemptedFailureSignature, @lastAttemptedFailureAt,
-          @ciRepairAttempts, @queueRepairAttempts, @reviewFixAttempts, @zombieRecoveryAttempts, @lastZombieRecoveryAt,
+          @ciRepairAttempts, @queueRepairAttempts, @reviewFixAttempts, @zombieRecoveryAttempts, @lastZombieRecoveryAt, @orchestrationSettleUntil,
           @now
         )
       `).run({
@@ -169,6 +176,8 @@ export class IssueStore {
         delegatedToPatchRelay: params.delegatedToPatchRelay === false ? 0 : 1,
         issueClass: params.issueClass ?? null,
         issueClassSource: params.issueClassSource ?? null,
+        parentLinearIssueId: params.parentLinearIssueId ?? null,
+        parentIssueKey: params.parentIssueKey ?? null,
         issueKey: params.issueKey ?? null,
         title: params.title ?? null,
         description: params.description ?? null,
@@ -218,6 +227,7 @@ export class IssueStore {
         reviewFixAttempts: params.reviewFixAttempts ?? 0,
         zombieRecoveryAttempts: params.zombieRecoveryAttempts ?? 0,
         lastZombieRecoveryAt: params.lastZombieRecoveryAt ?? null,
+        orchestrationSettleUntil: params.orchestrationSettleUntil ?? null,
         now,
       });
     }
@@ -409,6 +419,85 @@ export class IssueStore {
     }));
   }
 
+  replaceIssueParentLink(params: {
+    projectId: string;
+    childLinearIssueId: string;
+    parentLinearIssueId?: string | null;
+  }): void {
+    const now = isoNow();
+    this.connection
+      .prepare("DELETE FROM issue_children WHERE project_id = ? AND child_linear_issue_id = ?")
+      .run(params.projectId, params.childLinearIssueId);
+
+    if (!params.parentLinearIssueId) {
+      return;
+    }
+
+    this.connection.prepare(`
+      INSERT INTO issue_children (
+        project_id,
+        parent_linear_issue_id,
+        child_linear_issue_id,
+        updated_at
+      ) VALUES (?, ?, ?, ?)
+    `).run(
+      params.projectId,
+      params.parentLinearIssueId,
+      params.childLinearIssueId,
+      now,
+    );
+  }
+
+  listChildLinks(projectId: string, parentLinearIssueId: string): IssueChildRecord[] {
+    const rows = this.connection.prepare(`
+      SELECT project_id, parent_linear_issue_id, child_linear_issue_id, updated_at
+      FROM issue_children
+      WHERE project_id = ? AND parent_linear_issue_id = ?
+      ORDER BY child_linear_issue_id ASC
+    `).all(projectId, parentLinearIssueId) as Array<Record<string, unknown>>;
+
+    return rows.map((row) => ({
+      projectId: String(row.project_id),
+      parentLinearIssueId: String(row.parent_linear_issue_id),
+      childLinearIssueId: String(row.child_linear_issue_id),
+      updatedAt: String(row.updated_at),
+    }));
+  }
+
+  listChildIssues(projectId: string, parentLinearIssueId: string): IssueRecord[] {
+    const rows = this.connection.prepare(`
+      SELECT child.*
+      FROM issue_children edges
+      JOIN issues child
+        ON child.project_id = edges.project_id
+       AND child.linear_issue_id = edges.child_linear_issue_id
+      WHERE edges.project_id = ? AND edges.parent_linear_issue_id = ?
+      ORDER BY COALESCE(child.issue_key, child.linear_issue_id) ASC
+    `).all(projectId, parentLinearIssueId) as Array<Record<string, unknown>>;
+
+    return rows.map(mapIssueRow);
+  }
+
+  countOpenChildIssues(projectId: string, parentLinearIssueId: string): number {
+    const row = this.connection.prepare(`
+      SELECT COUNT(*) AS count
+      FROM issue_children edges
+      LEFT JOIN issues child
+        ON child.project_id = edges.project_id
+       AND child.linear_issue_id = edges.child_linear_issue_id
+      WHERE edges.project_id = ? AND edges.parent_linear_issue_id = ?
+        AND (
+          child.linear_issue_id IS NULL
+          OR (
+            COALESCE(child.current_linear_state_type, '') NOT IN ('completed', 'canceled')
+            AND LOWER(TRIM(COALESCE(child.current_linear_state, ''))) NOT IN ('done', 'duplicate', 'canceled')
+          )
+        )
+    `).get(projectId, parentLinearIssueId) as Record<string, unknown> | undefined;
+
+    return Number(row?.count ?? 0);
+  }
+
   countUnresolvedBlockers(projectId: string, linearIssueId: string): number {
     const row = this.connection.prepare(`
       SELECT COUNT(*) AS count
@@ -446,6 +535,10 @@ export function mapIssueRow(row: Record<string, unknown>): IssueRecord {
     ...(row.issue_class_source !== null && row.issue_class_source !== undefined
       ? { issueClassSource: String(row.issue_class_source) as IssueClassSource }
       : {}),
+    ...(row.parent_linear_issue_id !== null && row.parent_linear_issue_id !== undefined
+      ? { parentLinearIssueId: String(row.parent_linear_issue_id) }
+      : {}),
+    ...(row.parent_issue_key !== null && row.parent_issue_key !== undefined ? { parentIssueKey: String(row.parent_issue_key) } : {}),
     ...(row.issue_key !== null ? { issueKey: String(row.issue_key) } : {}),
     ...(row.title !== null ? { title: String(row.title) } : {}),
     ...(row.description !== null && row.description !== undefined ? { description: String(row.description) } : {}),
@@ -536,5 +629,8 @@ export function mapIssueRow(row: Record<string, unknown>): IssueRecord {
     reviewFixAttempts: Number(row.review_fix_attempts ?? 0),
     zombieRecoveryAttempts: Number(row.zombie_recovery_attempts ?? 0),
     ...(row.last_zombie_recovery_at !== null && row.last_zombie_recovery_at !== undefined ? { lastZombieRecoveryAt: String(row.last_zombie_recovery_at) } : {}),
+    ...(row.orchestration_settle_until !== null && row.orchestration_settle_until !== undefined
+      ? { orchestrationSettleUntil: String(row.orchestration_settle_until) }
+      : {}),
   };
 }

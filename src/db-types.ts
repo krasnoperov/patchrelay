@@ -31,6 +31,8 @@ export interface IssueRecord {
   delegatedToPatchRelay: boolean;
   issueClass?: IssueClass | undefined;
   issueClassSource?: IssueClassSource | undefined;
+  parentLinearIssueId?: string | undefined;
+  parentIssueKey?: string | undefined;
   issueKey?: string | undefined;
   title?: string | undefined;
   description?: string | undefined;
@@ -80,6 +82,7 @@ export interface IssueRecord {
   reviewFixAttempts: number;
   zombieRecoveryAttempts: number;
   lastZombieRecoveryAt?: string | undefined;
+  orchestrationSettleUntil?: string | undefined;
   updatedAt: string;
 }
 
@@ -150,6 +153,13 @@ export interface IssueDependencyRecord {
   blockerTitle?: string | undefined;
   blockerCurrentLinearState?: string | undefined;
   blockerCurrentLinearStateType?: string | undefined;
+  updatedAt: string;
+}
+
+export interface IssueChildRecord {
+  projectId: string;
+  parentLinearIssueId: string;
+  childLinearIssueId: string;
   updatedAt: string;
 }
 

@@ -233,6 +233,9 @@ export async function handleNoPrCompletionCheck(params: {
       return;
     }
 
+    const orchestrationOpenChildren = params.issue.issueClass === "orchestration"
+      ? params.db.issues.countOpenChildIssues(params.run.projectId, params.run.linearIssueId)
+      : 0;
     const completed = params.withHeldLease(params.run.projectId, params.run.linearIssueId, (lease) => {
       params.db.runs.finishRun(params.run.id, completedRunUpdate);
       params.db.runs.saveCompletionCheck(params.run.id, completionCheck);
@@ -241,9 +244,10 @@ export async function handleNoPrCompletionCheck(params: {
         projectId: params.run.projectId,
         linearIssueId: params.run.linearIssueId,
         activeRunId: null,
-        factoryState: "done",
+        factoryState: params.issue.issueClass === "orchestration" && orchestrationOpenChildren > 0 ? "delegated" : "done",
         pendingRunType: null,
         pendingRunContextJson: null,
+        orchestrationSettleUntil: null,
         lastGitHubFailureSource: null,
         lastGitHubFailureHeadSha: null,
         lastGitHubFailureSignature: null,
@@ -268,8 +272,12 @@ export async function handleNoPrCompletionCheck(params: {
       fallbackIssue: params.issue,
       level: "info",
       status: "completion_check_done",
-      summary: "No PR found; confirmed done",
-      detail: completionCheck.summary,
+      summary: params.issue.issueClass === "orchestration" && orchestrationOpenChildren > 0
+        ? "No PR found; orchestration will wait on child deliveries"
+        : "No PR found; confirmed done",
+      detail: params.issue.issueClass === "orchestration" && orchestrationOpenChildren > 0
+        ? `${completionCheck.summary} Waiting on ${orchestrationOpenChildren} open child issue(s) before final convergence.`
+        : completionCheck.summary,
       activity: buildCompletionCheckActivity("done", completionCheck),
     });
     const doneIssue = params.db.issues.getIssue(params.run.projectId, params.run.linearIssueId) ?? params.issue;
