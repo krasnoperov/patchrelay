@@ -8,6 +8,8 @@ CREATE TABLE IF NOT EXISTS issues (
   delegated_to_patchrelay INTEGER NOT NULL DEFAULT 1,
   issue_class TEXT,
   issue_class_source TEXT,
+  parent_linear_issue_id TEXT,
+  parent_issue_key TEXT,
   issue_key TEXT,
   title TEXT,
   url TEXT,
@@ -34,6 +36,7 @@ CREATE TABLE IF NOT EXISTS issues (
   last_blocking_review_head_sha TEXT,
   ci_repair_attempts INTEGER NOT NULL DEFAULT 0,
   queue_repair_attempts INTEGER NOT NULL DEFAULT 0,
+  orchestration_settle_until TEXT,
   updated_at TEXT NOT NULL,
   UNIQUE(project_id, linear_issue_id)
 );
@@ -220,6 +223,14 @@ CREATE TABLE IF NOT EXISTS issue_dependencies (
   PRIMARY KEY (project_id, linear_issue_id, blocker_linear_issue_id)
 );
 
+CREATE TABLE IF NOT EXISTS issue_children (
+  project_id TEXT NOT NULL,
+  parent_linear_issue_id TEXT NOT NULL,
+  child_linear_issue_id TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (project_id, parent_linear_issue_id, child_linear_issue_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_issues_project ON issues(project_id, linear_issue_id);
 CREATE INDEX IF NOT EXISTS idx_issues_key ON issues(issue_key);
 CREATE INDEX IF NOT EXISTS idx_issues_ready ON issues(pending_run_type, active_run_id);
@@ -240,6 +251,8 @@ CREATE INDEX IF NOT EXISTS idx_linear_catalog_teams_installation ON linear_catal
 CREATE INDEX IF NOT EXISTS idx_linear_catalog_projects_installation ON linear_catalog_projects(installation_id, project_name);
 CREATE INDEX IF NOT EXISTS idx_issue_dependencies_issue ON issue_dependencies(project_id, linear_issue_id);
 CREATE INDEX IF NOT EXISTS idx_issue_dependencies_blocker ON issue_dependencies(project_id, blocker_linear_issue_id);
+CREATE INDEX IF NOT EXISTS idx_issue_children_parent ON issue_children(project_id, parent_linear_issue_id);
+CREATE INDEX IF NOT EXISTS idx_issue_children_child ON issue_children(project_id, child_linear_issue_id);
 `;
 
 export function runPatchRelayMigrations(connection: DatabaseConnection): void {
@@ -253,6 +266,18 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
   addColumnIfMissing(connection, "issues", "delegated_to_patchrelay", "INTEGER NOT NULL DEFAULT 1");
   addColumnIfMissing(connection, "issues", "issue_class", "TEXT");
   addColumnIfMissing(connection, "issues", "issue_class_source", "TEXT");
+  addColumnIfMissing(connection, "issues", "parent_linear_issue_id", "TEXT");
+  addColumnIfMissing(connection, "issues", "parent_issue_key", "TEXT");
+  addColumnIfMissing(connection, "issues", "orchestration_settle_until", "TEXT");
+  // Earlier releases persisted derived classifications as "explicit", which
+  // made bad umbrella guesses sticky forever. We do not have a user-authored
+  // explicit classification path yet, so downgrade old rows back to heuristic
+  // and let current classification logic recompute them.
+  connection.prepare(`
+    UPDATE issues
+    SET issue_class_source = 'heuristic'
+    WHERE issue_class_source = 'explicit'
+  `).run();
 
   // Add pending_merge_prep column for merge queue stewardship
   addColumnIfMissing(connection, "issues", "pending_merge_prep", "INTEGER NOT NULL DEFAULT 0");
@@ -348,6 +373,8 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
         delegated_to_patchrelay INTEGER NOT NULL DEFAULT 1,
         issue_class TEXT,
         issue_class_source TEXT,
+        parent_linear_issue_id TEXT,
+        parent_issue_key TEXT,
         issue_key TEXT,
         title TEXT,
         description TEXT,
@@ -397,6 +424,7 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
         review_fix_attempts INTEGER NOT NULL DEFAULT 0,
         zombie_recovery_attempts INTEGER NOT NULL DEFAULT 0,
         last_zombie_recovery_at TEXT,
+        orchestration_settle_until TEXT,
         updated_at TEXT NOT NULL,
         UNIQUE(project_id, linear_issue_id)
       );
@@ -408,6 +436,8 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
         delegated_to_patchrelay,
         issue_class,
         issue_class_source,
+        parent_linear_issue_id,
+        parent_issue_key,
         issue_key,
         title,
         description,
@@ -457,6 +487,7 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
         review_fix_attempts,
         zombie_recovery_attempts,
         last_zombie_recovery_at,
+        orchestration_settle_until,
         updated_at
       )
       SELECT
@@ -466,6 +497,8 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
         COALESCE(delegated_to_patchrelay, 1),
         issue_class,
         issue_class_source,
+        parent_linear_issue_id,
+        parent_issue_key,
         issue_key,
         title,
         description,
@@ -515,6 +548,7 @@ function removeRetiredIssueColumnsIfPresent(connection: DatabaseConnection): voi
         COALESCE(review_fix_attempts, 0),
         COALESCE(zombie_recovery_attempts, 0),
         last_zombie_recovery_at,
+        orchestration_settle_until,
         updated_at
       FROM issues;
 

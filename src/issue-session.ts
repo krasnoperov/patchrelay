@@ -14,6 +14,7 @@ export interface IssueSessionWaitingReasonInput {
   blockedByKeys: string[];
   factoryState: FactoryState;
   pendingRunType?: RunType | undefined;
+  orchestrationSettleUntil?: string | undefined;
   prNumber?: number | undefined;
   prState?: string | undefined;
   prHeadSha?: string | undefined;
@@ -27,6 +28,7 @@ export interface IssueSessionWakeReasonInput {
   delegatedToPatchRelay?: boolean | undefined;
   pendingRunType?: RunType | undefined;
   factoryState: FactoryState;
+  orchestrationSettleUntil?: string | undefined;
   prNumber?: number | undefined;
   prState?: string | undefined;
   prReviewState?: string | undefined;
@@ -61,6 +63,7 @@ export interface IssueSessionReadyInput {
   blockedByCount: number;
   hasPendingWake: boolean;
   hasLegacyPendingRun: boolean;
+  orchestrationSettleUntil?: string | undefined;
   prNumber?: number | undefined;
   prState?: string | undefined;
   prReviewState?: string | undefined;
@@ -147,6 +150,12 @@ export function isIssueSessionReadyForExecution(params: IssueSessionReadyInput):
   if (params.delegatedToPatchRelay === false) return false;
   if (params.activeRunId !== undefined) return false;
   if (params.blockedByCount > 0) return false;
+  if (params.orchestrationSettleUntil) {
+    const settleAt = Date.parse(params.orchestrationSettleUntil);
+    if (Number.isFinite(settleAt) && settleAt > Date.now()) {
+      return false;
+    }
+  }
   if (params.sessionState === "done" || params.sessionState === "waiting_input") {
     return false;
   }

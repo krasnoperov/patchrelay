@@ -11,6 +11,7 @@ import { deriveIssueSessionReactiveIntent } from "./issue-session.ts";
 import { parseStoredQueueRepairContext } from "./merge-queue-incident.ts";
 import { buildClosedPrCleanupFields, resolveClosedPrDisposition } from "./pr-state.ts";
 import { getReviewFixBudget } from "./run-budgets.ts";
+import { queueSettledOrchestrationIssue } from "./orchestration-parent-wake.ts";
 import { execCommand } from "./utils.ts";
 
 function isFailingCheckStatus(status: string | undefined): boolean {
@@ -215,6 +216,27 @@ export class IdleIssueReconciler {
           this.deps.enqueueIssue(issue.projectId, issue.linearIssueId);
         }
       }
+    }
+
+    const now = Date.now();
+    for (const issue of this.db.issues.listIssues()) {
+      if (
+        issue.issueClass !== "orchestration"
+        || !issue.orchestrationSettleUntil
+        || issue.activeRunId !== undefined
+        || !issue.delegatedToPatchRelay
+      ) {
+        continue;
+      }
+      const settleAt = Date.parse(issue.orchestrationSettleUntil);
+      if (!Number.isFinite(settleAt) || settleAt > now) {
+        continue;
+      }
+      queueSettledOrchestrationIssue({
+        db: this.db,
+        issue,
+        enqueueIssue: this.deps.enqueueIssue,
+      });
     }
   }
 

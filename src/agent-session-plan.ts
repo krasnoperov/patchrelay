@@ -137,12 +137,24 @@ function resolvePlanRunType(params: {
 export function buildAgentSessionPlan(params: {
   factoryState: FactoryState;
   issueClass?: IssueClass;
+  orchestrationSettleUntil?: string;
   activeRunType?: RunType;
   pendingRunType?: RunType;
   ciRepairAttempts?: number;
   queueRepairAttempts?: number;
 }): AgentSessionPlanStep[] {
   if (params.issueClass === "orchestration") {
+    const settling = params.orchestrationSettleUntil
+      ? Number.isFinite(Date.parse(params.orchestrationSettleUntil)) && Date.parse(params.orchestrationSettleUntil) > Date.now()
+      : false;
+    if (settling) {
+      return [
+        { content: "Wait for child set to settle", status: "inProgress" },
+        { content: "Review umbrella goal and child set", status: "pending" },
+        { content: "Wait for or inspect child progress", status: "pending" },
+        { content: "Audit delivered outcome", status: "pending" },
+      ];
+    }
     switch (params.factoryState) {
       case "done":
         return setStatuses(orchestrationPlan(), ["completed", "completed", "completed", "completed"]);
@@ -225,7 +237,7 @@ function planForRunType(
 }
 
 export function buildAgentSessionPlanForIssue(
-  issue: Pick<IssueRecord, "factoryState" | "pendingRunType" | "ciRepairAttempts" | "queueRepairAttempts" | "issueClass">,
+  issue: Pick<IssueRecord, "factoryState" | "pendingRunType" | "ciRepairAttempts" | "queueRepairAttempts" | "issueClass" | "orchestrationSettleUntil">,
   options?: { activeRunType?: RunType },
 ): AgentSessionPlanStep[] {
   return buildAgentSessionPlan({
@@ -233,6 +245,7 @@ export function buildAgentSessionPlanForIssue(
     ciRepairAttempts: issue.ciRepairAttempts,
     queueRepairAttempts: issue.queueRepairAttempts,
     ...(issue.issueClass ? { issueClass: issue.issueClass } : {}),
+    ...(issue.orchestrationSettleUntil ? { orchestrationSettleUntil: issue.orchestrationSettleUntil } : {}),
     ...(issue.pendingRunType ? { pendingRunType: issue.pendingRunType } : {}),
     ...(options?.activeRunType ? { activeRunType: options.activeRunType } : {}),
   });

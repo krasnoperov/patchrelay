@@ -24,14 +24,21 @@ function looksLikeUmbrellaText(issue: Pick<IssueRecord, "title" | "description">
 }
 
 export function classifyIssue(params: {
-  issue: Pick<IssueRecord, "issueClass" | "title" | "description">;
-  trackedDependentCount: number;
+  issue: Pick<IssueRecord, "issueClass" | "issueClassSource" | "title" | "description" | "parentLinearIssueId">;
+  childIssueCount: number;
 }): { issueClass: IssueClass; issueClassSource: IssueClassSource } {
-  if (params.issue.issueClass === "implementation" || params.issue.issueClass === "orchestration") {
+  if (
+    params.issue.issueClassSource === "explicit"
+    && (params.issue.issueClass === "implementation" || params.issue.issueClass === "orchestration")
+  ) {
     return { issueClass: params.issue.issueClass, issueClassSource: "explicit" };
   }
 
-  if (params.trackedDependentCount > 0) {
+  if (params.issue.parentLinearIssueId) {
+    return { issueClass: "implementation", issueClassSource: "hierarchy" };
+  }
+
+  if (params.childIssueCount > 0) {
     return { issueClass: "orchestration", issueClassSource: "hierarchy" };
   }
 

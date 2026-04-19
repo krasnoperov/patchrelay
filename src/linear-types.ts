@@ -23,6 +23,9 @@ export interface LinearActorMetadata {
 
 export interface IssueMetadata {
   id: string;
+  parentId?: string;
+  parentIdentifier?: string;
+  parentTitle?: string;
   identifier?: string;
   title?: string;
   description?: string;
@@ -182,6 +185,9 @@ export interface LinearWorkspaceCatalog {
 
 export interface LinearIssueSnapshot {
   id: string;
+  parentId?: string;
+  parentIdentifier?: string;
+  parentTitle?: string;
   identifier?: string;
   title?: string;
   description?: string;

@@ -240,6 +240,7 @@ function extractIssueMetadata(payload: LinearWebhookPayload): IssueMetadata | un
   }
 
   const teamRecord = asRecord(issueRecord.team);
+  const parentRecord = asRecord(issueRecord.parent);
   const identifier = getString(issueRecord, "identifier");
   const title = getString(issueRecord, "title");
   const url = getString(issueRecord, "url") ?? payload.url;
@@ -253,6 +254,9 @@ function extractIssueMetadata(payload: LinearWebhookPayload): IssueMetadata | un
   const delegateId = getString(issueRecord, "delegateId") ?? getString(delegateRecord ?? {}, "id");
   const delegateName = getString(delegateRecord ?? {}, "name");
   const description = getString(issueRecord, "description");
+  const parentId = getString(issueRecord, "parentId") ?? getString(parentRecord ?? {}, "id");
+  const parentIdentifier = getString(parentRecord ?? {}, "identifier");
+  const parentTitle = getString(parentRecord ?? {}, "title");
   const rawPriority = issueRecord.priority;
   const priority = typeof rawPriority === "number" ? rawPriority : undefined;
   const rawEstimate = issueRecord.estimate;
@@ -260,6 +264,9 @@ function extractIssueMetadata(payload: LinearWebhookPayload): IssueMetadata | un
 
   return {
     id,
+    ...(parentId ? { parentId } : {}),
+    ...(parentIdentifier ? { parentIdentifier } : {}),
+    ...(parentTitle ? { parentTitle } : {}),
     ...(identifier ? { identifier } : {}),
     ...(title ? { title } : {}),
     ...(description ? { description } : {}),

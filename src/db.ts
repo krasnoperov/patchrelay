@@ -1,5 +1,6 @@
 import type {
   GitHubCiSnapshotRecord,
+  IssueChildRecord,
   IssueRecord,
   IssueSessionEventRecord,
   IssueSessionRecord,
@@ -208,6 +209,26 @@ export class PatchRelayDatabase {
 
   listDependents(projectId: string, blockerLinearIssueId: string): Array<{ projectId: string; linearIssueId: string }> {
     return this.issues.listDependents(projectId, blockerLinearIssueId);
+  }
+
+  replaceIssueParentLink(params: {
+    projectId: string;
+    childLinearIssueId: string;
+    parentLinearIssueId?: string | null;
+  }): void {
+    this.issues.replaceIssueParentLink(params);
+  }
+
+  listChildLinks(projectId: string, parentLinearIssueId: string): IssueChildRecord[] {
+    return this.issues.listChildLinks(projectId, parentLinearIssueId);
+  }
+
+  listChildIssues(projectId: string, parentLinearIssueId: string): IssueRecord[] {
+    return this.issues.listChildIssues(projectId, parentLinearIssueId);
+  }
+
+  countOpenChildIssues(projectId: string, parentLinearIssueId: string): number {
+    return this.issues.countOpenChildIssues(projectId, parentLinearIssueId);
   }
 
   getLatestGitHubCiSnapshot(projectId: string, linearIssueId: string): GitHubCiSnapshotRecord | undefined {

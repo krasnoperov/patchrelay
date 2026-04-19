@@ -24,6 +24,7 @@ interface GraphqlResponse<T> {
 
 interface LinearIssueRawFields {
   id: string;
+  parent?: LinearIssueRelationRawFields | null;
   identifier?: string | null;
   title?: string | null;
   description?: string | null;
@@ -78,6 +79,16 @@ interface LinearIssueRelationRawFields {
 
 const LINEAR_ISSUE_SELECTION = `
   id
+  parent {
+    id
+    identifier
+    title
+    state {
+      id
+      name
+      type
+    }
+  }
   identifier
   title
   description
@@ -544,6 +555,9 @@ export class LinearGraphqlClient implements LinearClient {
       }));
     return {
       id: issue.id,
+      ...(issue.parent?.id ? { parentId: issue.parent.id } : {}),
+      ...(issue.parent?.identifier ? { parentIdentifier: issue.parent.identifier } : {}),
+      ...(issue.parent?.title ? { parentTitle: issue.parent.title } : {}),
       ...(issue.identifier ? { identifier: issue.identifier } : {}),
       ...(issue.title ? { title: issue.title } : {}),
       ...(issue.description ? { description: issue.description } : {}),

@@ -64,6 +64,7 @@ function renderStatusComment(
     ...(issue.activeRunId !== undefined ? { activeRunId: issue.activeRunId } : {}),
     factoryState: issue.factoryState,
     pendingRunType: issue.pendingRunType,
+    orchestrationSettleUntil: issue.orchestrationSettleUntil,
     ...(issue.prNumber !== undefined ? { prNumber: issue.prNumber } : {}),
     ...(issue.prState ? { prState: issue.prState } : {}),
     prHeadSha: issue.prHeadSha,

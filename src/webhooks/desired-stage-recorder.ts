@@ -1,6 +1,11 @@
 import type { PatchRelayDatabase } from "../db.ts";
 import type { RunType } from "../factory-state.ts";
 import type { OperatorEventFeed } from "../operator-feed.ts";
+import { classifyIssue } from "../issue-class.ts";
+import {
+  computeOrchestrationSettleUntil,
+  wakeOrchestrationParentsForChildEvent,
+} from "../orchestration-parent-wake.ts";
 import { triggerEventAllowed } from "../project-resolution.ts";
 import { resolveAwaitingInputReason } from "../awaiting-input-reason.ts";
 import { appendDelegationObservedEvent, type DelegationAuditHydration } from "../delegation-audit.ts";
@@ -9,6 +14,7 @@ import {
   decideAgentSession,
   decideRunIntent,
   decideUnDelegation,
+  isResolvedLinearState,
   isTerminalDelegationState,
   mergeIssueMetadata,
   resolveReDelegationResume,
@@ -102,6 +108,27 @@ export class DesiredStageRecorder {
         currentState: existingIssue?.factoryState,
       });
 
+    const childIssueCount = this.db.issues.listChildIssues(params.project.id, normalizedIssue.id).length;
+    const classification = classifyIssue({
+      issue: {
+        issueClass: existingIssue?.issueClass,
+        issueClassSource: existingIssue?.issueClassSource,
+        title: hydratedIssue.title ?? existingIssue?.title,
+        description: hydratedIssue.description ?? existingIssue?.description,
+        parentLinearIssueId: hydratedIssue.parentId ?? existingIssue?.parentLinearIssueId,
+      },
+      childIssueCount,
+    });
+    const shouldEnterOrchestrationSettle = Boolean(
+      delegated
+      && desiredStage === "implementation"
+      && classification.issueClass === "orchestration"
+      && childIssueCount === 0
+      && !existingIssue?.threadId
+      && !activeRun
+      && !terminal,
+    );
+
     const runRelease = decideActiveRunRelease({
       hasActiveRun: Boolean(activeRun),
       terminal,
@@ -162,6 +189,10 @@ export class DesiredStageRecorder {
         projectId: params.project.id,
         linearIssueId: normalizedIssue.id,
         ...(hydratedIssue.identifier ? { issueKey: hydratedIssue.identifier } : {}),
+        ...(hydratedIssue.parentId !== undefined ? { parentLinearIssueId: hydratedIssue.parentId ?? null } : {}),
+        ...(hydratedIssue.parentIdentifier !== undefined ? { parentIssueKey: hydratedIssue.parentIdentifier ?? null } : {}),
+        issueClass: classification.issueClass,
+        issueClassSource: classification.issueClassSource,
         ...(hydratedIssue.title ? { title: hydratedIssue.title } : {}),
         ...(hydratedIssue.description ? { description: hydratedIssue.description } : {}),
         ...(hydratedIssue.url ? { url: hydratedIssue.url } : {}),
@@ -188,6 +219,7 @@ export class DesiredStageRecorder {
         ...(terminalRunRelease ? { factoryState: "done" as const, pendingRunType: null, pendingRunContextJson: null } : {}),
         ...(blockerPausedImplementation ? { factoryState: "delegated" as const } : {}),
         ...(undelegation.factoryState ? { factoryState: undelegation.factoryState as never } : {}),
+        ...(shouldEnterOrchestrationSettle ? { orchestrationSettleUntil: computeOrchestrationSettleUntil() } : {}),
       });
       if (effectiveRunRelease.release && activeRun && effectiveRunRelease.reason) {
         this.db.runs.finishRun(activeRun.id, { status: "released", failureReason: effectiveRunRelease.reason });
@@ -203,6 +235,11 @@ export class DesiredStageRecorder {
           ...(hydratedIssue.identifier ? { issueKey: hydratedIssue.identifier } : {}),
         }))
       : this.db.transaction(commitIssueUpdate);
+
+    const previousParentIssueId = existingIssue?.parentLinearIssueId;
+    const currentParentIssueId = issue.parentLinearIssueId;
+    const wasResolved = isResolvedLinearState(existingIssue?.currentLinearStateType, existingIssue?.currentLinearState);
+    const isResolved = isResolvedLinearState(issue.currentLinearStateType, issue.currentLinearState);
 
     if (undelegation.factoryState) {
       if (activeRun?.threadId && activeRun.turnId) {
@@ -248,6 +285,16 @@ export class DesiredStageRecorder {
         linearIssueId: normalizedIssue.id,
         ...buildOperatorRetryEvent(issue, startupResume.pendingRunType, startupResume.source),
       });
+    } else if (shouldEnterOrchestrationSettle) {
+      this.feed?.publish({
+        level: "info",
+        kind: "stage",
+        issueKey: issue.issueKey,
+        projectId: params.project.id,
+        stage: issue.factoryState,
+        status: "settling_children",
+        summary: "Waiting briefly for child issues to settle before orchestration starts",
+      });
     } else if (
       !startupResume.factoryState
       && !startupResume.pendingRunType
@@ -267,6 +314,48 @@ export class DesiredStageRecorder {
           promptBody: params.normalized.agentSession?.promptBody?.trim(),
         }),
         dedupeKey: `delegated:${normalizedIssue.id}`,
+      });
+    }
+
+    if (previousParentIssueId && previousParentIssueId !== currentParentIssueId) {
+      wakeOrchestrationParentsForChildEvent({
+        db: this.db,
+        child: {
+          projectId: issue.projectId,
+          linearIssueId: issue.linearIssueId,
+          parentLinearIssueId: previousParentIssueId,
+          ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
+          ...(issue.title ? { title: issue.title } : {}),
+          factoryState: issue.factoryState,
+          ...(issue.currentLinearState ? { currentLinearState: issue.currentLinearState } : {}),
+          ...(issue.prNumber !== undefined ? { prNumber: issue.prNumber } : {}),
+          ...(issue.prState ? { prState: issue.prState } : {}),
+        },
+        eventType: "child_changed",
+        changeKind: "detached",
+      });
+    }
+
+    if (currentParentIssueId) {
+      const changeKind = previousParentIssueId !== currentParentIssueId
+        ? "attached"
+        : issue.currentLinearState?.trim().toLowerCase() === "duplicate"
+          ? "duplicate"
+          : issue.currentLinearStateType === "canceled"
+            ? "canceled"
+            : "updated";
+      const eventType = previousParentIssueId !== currentParentIssueId
+        ? "child_changed"
+        : !wasResolved && isResolved
+          ? "child_delivered"
+          : wasResolved && !isResolved
+            ? "child_regressed"
+            : "child_changed";
+      wakeOrchestrationParentsForChildEvent({
+        db: this.db,
+        child: issue,
+        eventType,
+        changeKind,
       });
     }
 
@@ -371,6 +460,12 @@ export class DesiredStageRecorder {
         })),
       });
     }
+
+    this.db.issues.replaceIssueParentLink({
+      projectId,
+      childLinearIssueId: source.id,
+      parentLinearIssueId: source.parentId ?? null,
+    });
 
     return { issue: source, hydration };
   }

@@ -12,6 +12,7 @@ export const PATCHRELAY_WAITING_REASONS = {
   sameHeadStillBlocked: "Requested changes still block the current head",
   waitingForMergeStewardRepair: "Waiting to repair a merge-steward incident",
   waitingForDownstreamAutomation: "PatchRelay work is done; waiting on downstream review/merge automation",
+  waitingForChildSettle: "Waiting briefly for child issues to settle before orchestration starts",
   workComplete: "PatchRelay work is complete",
   waitingForOperatorIntervention: "Waiting on operator intervention",
   waitingForExternalReview: "Waiting on external review",
@@ -26,6 +27,7 @@ export function derivePatchRelayWaitingReason(params: {
   blockedByKeys?: string[] | undefined;
   factoryState?: string | undefined;
   pendingRunType?: string | undefined;
+  orchestrationSettleUntil?: string | undefined;
   prNumber?: number | undefined;
   prState?: string | undefined;
   prHeadSha?: string | undefined;
@@ -50,6 +52,12 @@ export function derivePatchRelayWaitingReason(params: {
   }
   if (params.activeRunId !== undefined) {
     return PATCHRELAY_WAITING_REASONS.activeWork;
+  }
+  if (params.orchestrationSettleUntil) {
+    const settleAt = Date.parse(params.orchestrationSettleUntil);
+    if (Number.isFinite(settleAt) && settleAt > Date.now()) {
+      return PATCHRELAY_WAITING_REASONS.waitingForChildSettle;
+    }
   }
 
   const blockedByKeys = (params.blockedByKeys ?? []).filter((value) => value.trim().length > 0);
