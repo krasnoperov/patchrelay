@@ -10,6 +10,7 @@ class FakeChildProcess extends EventEmitter {
   readonly stdout = new PassThrough();
   readonly stderr = new PassThrough();
   readonly approvalResponses: Array<{ id: string; decision: string }> = [];
+  readonly threadStartParams: Array<Record<string, unknown>> = [];
 
   constructor(private readonly scenario: string) {
     super();
@@ -86,6 +87,7 @@ class FakeChildProcess extends EventEmitter {
     }
 
     if (message.method === "thread/start") {
+      this.threadStartParams.push(((message.params as Record<string, unknown>) ?? {}));
       if (this.scenario === "pending-close") {
         setTimeout(() => {
           this.emit("close", 7, null);
@@ -325,6 +327,51 @@ test("CodexAppServerClient handles initialize, approval requests, notifications,
         },
       },
     ]);
+  } finally {
+    await client.stop();
+  }
+});
+
+test("CodexAppServerClient sends configured runtime instructions on thread start", async () => {
+  const child = new FakeChildProcess("normal");
+  const client = new CodexAppServerClient(
+    {
+      bin: process.execPath,
+      args: ["unused"],
+      sourceBashrc: false,
+      requestTimeoutMs: 50,
+      approvalPolicy: "never",
+      sandboxMode: "danger-full-access",
+      persistExtendedHistory: false,
+      serviceName: "patchrelay-test",
+      model: "gpt-5.4",
+      modelProvider: "openai",
+      reasoningEffort: "high",
+      baseInstructions: "Base instructions here.",
+      developerInstructions: "Merged developer instructions here.",
+      experimentalRawEvents: true,
+    },
+    createCaptureLogger().logger,
+    (() => child) as never,
+  );
+
+  try {
+    await client.start();
+    await client.startThread({ cwd: "/tmp/worktree" });
+
+    assert.equal(child.threadStartParams.length, 1);
+    assert.deepEqual(child.threadStartParams[0], {
+      cwd: "/tmp/worktree",
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+      serviceName: "patchrelay-test",
+      model: "gpt-5.4",
+      modelProvider: "openai",
+      reasoningEffort: "high",
+      baseInstructions: "Base instructions here.",
+      developerInstructions: "Merged developer instructions here.",
+      experimentalRawEvents: true,
+    });
   } finally {
     await client.stop();
   }

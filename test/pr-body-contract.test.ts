@@ -24,32 +24,26 @@ function fakeIssue(overrides: Partial<IssueRecord> = {}): IssueRecord {
   } as IssueRecord;
 }
 
-test("implementation prompt includes the PR Body Contract", () => {
+test("implementation prompt uses publish guidance instead of a built-in PR body contract", () => {
   const prompt = buildInitialRunPrompt({
     issue: fakeIssue(),
     runType: "implementation",
     repoPath: "/nonexistent",
   });
 
-  assert.match(prompt, /## PR Body Contract/, "expected PR Body Contract section");
-  assert.match(prompt, /## Why/, "expected Why section marker");
-  assert.match(prompt, /## What/, "expected What section marker");
-  assert.match(prompt, /## Tradeoffs/, "expected Tradeoffs section marker");
-  assert.match(prompt, /## Risks/, "expected Risks section marker");
-  assert.ok(
-    !/## Verification/.test(prompt),
-    "PR body contract must not ask for a Verification section — CI owns pass/fail",
-  );
+  assert.match(prompt, /## Publish/, "expected Publish section");
+  assert.match(prompt, /open or update the PR/, "expected publish guidance for implementation runs");
+  assert.ok(!/## PR Body Contract/.test(prompt), "built-in prompt should no longer carry a PR body contract");
 });
 
-test("review_fix prompt does not include the PR Body Contract", () => {
-  // Repairs push to an existing PR; they do not rewrite the body, so the
-  // contract only applies to the implementation run type.
+test("review_fix prompt publishes to the existing PR branch without a PR body contract", () => {
   const prompt = buildInitialRunPrompt({
     issue: fakeIssue({ prNumber: 42, branchName: "krasnoperov-example/EX-1-wire-up-a-feature" }),
     runType: "review_fix",
     repoPath: "/nonexistent",
   });
 
+  assert.match(prompt, /## Publish/, "review_fix should still carry publish guidance");
+  assert.match(prompt, /existing PR branch/, "review_fix should target the existing PR branch");
   assert.ok(!/## PR Body Contract/.test(prompt), "review_fix should not carry the PR Body Contract");
 });

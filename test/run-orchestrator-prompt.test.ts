@@ -28,7 +28,7 @@ function createIssue(): IssueRecord {
   };
 }
 
-test("implementation prompt always appends publication requirements even when the repo workflow omits them", () => {
+test("implementation prompt keeps a concise scaffold with workflow pointer and publish guidance", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-prompt-"));
   try {
     writeFileSync(path.join(baseDir, "IMPLEMENTATION_WORKFLOW.md"), [
@@ -44,21 +44,24 @@ test("implementation prompt always appends publication requirements even when th
     const prompt = buildInitialRunPrompt({ issue: createIssue(), runType: "implementation", repoPath: baseDir });
 
     assert.match(prompt, /## Task Objective/);
-    assert.match(prompt, /## Scope Discipline/);
+    assert.match(prompt, /## Constraints/);
     assert.match(prompt, /Stay inside the delegated task/);
-    assert.match(prompt, /implementation goal is to leave the branch review-ready, not merely locally working/);
-    assert.match(prompt, /If a narrow patch fixes the immediate symptom but leaves the same underlying risk elsewhere in the changed flow, keep going/);
-    assert.match(prompt, /### Likely Review Invariants/);
-    assert.match(prompt, /## Publication Requirements/);
-    assert.match(prompt, /commit them, push the issue branch, and open or update the PR before stopping/);
-    assert.match(prompt, /Do not stop with only local commits or uncommitted changes/);
+    assert.match(prompt, /## Workflow/);
+    assert.match(prompt, /Read and follow `IMPLEMENTATION_WORKFLOW\.md` in the repository for task-specific behavior/);
+    assert.match(prompt, /## Publish/);
+    assert.match(prompt, /If this is code-delivery work, publish before stopping: commit, push the issue branch, and open or update the PR\./);
+    assert.match(prompt, /## Final Self-Review Before Push/);
+    assert.match(prompt, /Before you open or update the PR, do one brief reviewer-minded pass on the current head\./);
+    assert.match(prompt, /Fix any likely in-scope blocker you can see now: missing edge-case handling, broken adjacent invariant in the touched flow/);
+    assert.match(prompt, /If the issue explicitly allows a non-PR outcome, complete that outcome clearly; otherwise publish before stopping\./);
+    assert.doesNotMatch(prompt, /## PR Body Contract/);
     assert.doesNotMatch(prompt, /## Follow-up Turn/);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
 
-test("repair prompts append publication requirements for the existing PR branch", () => {
+test("repair prompts publish to the existing PR branch with concise self-review guidance", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-prompt-"));
   try {
     writeFileSync(path.join(baseDir, "IMPLEMENTATION_WORKFLOW.md"), "# Implementation Workflow\n");
@@ -74,15 +77,18 @@ test("repair prompts append publication requirements for the existing PR branch"
       context: { checkName: "lint" },
     });
 
-    assert.match(prompt, /## Publication Requirements/);
-    assert.match(prompt, /publish the result to the existing PR branch/);
+    assert.match(prompt, /## Publish/);
+    assert.match(prompt, /Restore and publish on the existing PR branch: commit and push the same branch\./);
     assert.match(prompt, /Do not open a new PR/);
+    assert.match(prompt, /A PR-less stop is not a successful outcome for a repair run unless a genuine external blocker prevents any correct push\./);
+    assert.match(prompt, /## Final Self-Review Before Push/);
+    assert.match(prompt, /Before you push the existing PR branch, do one brief reviewer-minded pass on the current head\./);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
 
-test("implementation prompts keep the no-PR case explicit without switching delivery modes", () => {
+test("implementation prompts keep explicit no-PR handling for planning-only issues", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-prompt-"));
   try {
     writeFileSync(path.join(baseDir, "IMPLEMENTATION_WORKFLOW.md"), "# Implementation Workflow\n");
@@ -98,14 +104,14 @@ test("implementation prompts keep the no-PR case explicit without switching deli
 
     const prompt = buildInitialRunPrompt({ issue, runType: "implementation", repoPath: baseDir });
 
-    assert.match(prompt, /## Publication Requirements/);
-    assert.match(prompt, /If the task is genuinely complete without a PR, say so clearly in your normal summary instead of inventing one/);
+    assert.match(prompt, /## Publish/);
+    assert.match(prompt, /If the issue explicitly allows a non-PR outcome, complete that outcome clearly instead of inventing a PR\./);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
 
-test("orchestration prompts switch to umbrella-convergence guidance when dependent issues exist", () => {
+test("orchestration prompts keep concise convergence guidance", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-prompt-"));
   try {
     writeFileSync(path.join(baseDir, "IMPLEMENTATION_WORKFLOW.md"), "# Implementation Workflow\n");
@@ -139,25 +145,21 @@ test("orchestration prompts switch to umbrella-convergence guidance when depende
       },
     });
 
-    assert.match(prompt, /This issue is orchestration work\./);
-    assert.match(prompt, /Treat it as the owner of convergence across related issues/);
-    assert.match(prompt, /Do not create an overlapping umbrella PR unless this parent clearly owns unique direct cleanup work/);
-    assert.match(prompt, /make it a child issue of this umbrella rather than making the parent block the child/);
-    assert.match(prompt, /do not model the child as blocked by the parent umbrella it is supposed to satisfy/);
-    assert.match(prompt, /New child issues should stay in Backlog and undelegated by default\./);
-    assert.match(prompt, /Only delegate or move a new child to Start when it is immediately actionable, unblocked, and you intend for PatchRelay to begin it right away\./);
+    assert.match(prompt, /## Constraints/);
+    assert.match(prompt, /This issue is orchestration work\. Coordinate convergence instead of duplicating child implementation\./);
+    assert.match(prompt, /Do not open an overlapping umbrella PR unless this parent owns unique direct work\./);
+    assert.match(prompt, /Leave later-wave child issues queued unless they are immediately actionable\./);
     assert.match(prompt, /### Child Issue Summaries/);
     assert.match(prompt, /TST-4: Migrate public pages to Lingui \(In Progress; implementing; delegated; open PR\)/);
     assert.match(prompt, /TST-5: Audit lingering translation helpers \(Start; delegated; delegated; no open PR\)/);
-    assert.match(prompt, /Valid orchestration outcomes include: recording an observation, updating the rollout plan, creating follow-up issues/);
-    assert.match(prompt, /Blocking follow-up children must block the parent goal they satisfy, not the other way around\./);
-    assert.match(prompt, /If you create new child issues, leave them in Backlog unless they are truly ready to start now\./);
+    assert.match(prompt, /## Publish/);
+    assert.match(prompt, /Publish the orchestration outcome clearly: observation, follow-up issues, rollout update, closeout, or a small parent-owned cleanup PR\./);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
 
-test("branch_upkeep prompt includes explicit branch upkeep guidance when the PR is still dirty", () => {
+test("branch_upkeep prompt folds follow-up and PR facts into current context", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-prompt-"));
   try {
     writeFileSync(path.join(baseDir, "REVIEW_WORKFLOW.md"), "# Review Workflow\n");
@@ -181,23 +183,22 @@ test("branch_upkeep prompt includes explicit branch upkeep guidance when the PR 
       },
     });
 
-    assert.match(prompt, /## Follow-up Turn/);
-    assert.match(prompt, /Why this turn exists: GitHub still shows the PR branch as needing upkeep after the requested code change was addressed/);
-    assert.match(prompt, /## Branch Upkeep After Requested Changes/);
-    assert.match(prompt, /## Current PR Facts/);
+    assert.match(prompt, /## Current Context/);
+    assert.match(prompt, /Turn reason: GitHub still shows the PR branch as needing upkeep\./);
+    assert.match(prompt, /Current PR facts:/);
     assert.match(prompt, /Fact freshness: refreshed immediately before this turn was created\./);
     assert.match(prompt, /Current PR: #12/);
     assert.match(prompt, /Current review state: changes_requested/);
     assert.match(prompt, /Merge state against main: DIRTY/);
-    assert.match(prompt, /Goal: restore merge readiness on the existing PR branch without regressing review or CI readiness\./);
-    assert.match(prompt, /update the existing PR branch onto latest main/);
-    assert.doesNotMatch(prompt, /## Review Changes Requested/);
+    assert.match(prompt, /Branch upkeep is required on the existing PR branch\./);
+    assert.match(prompt, /Goal: restore merge readiness on the current branch and push a newer head without regressing review or CI readiness\./);
+    assert.doesNotMatch(prompt, /## Follow-up Turn/);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
 
-test("review_fix prompt embeds structured inline review context", () => {
+test("review_fix prompt keeps concise reviewer context plus structured comments", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-prompt-"));
   try {
     writeFileSync(path.join(baseDir, "REVIEW_WORKFLOW.md"), "# Review Workflow\n");
@@ -229,23 +230,19 @@ test("review_fix prompt embeds structured inline review context", () => {
       },
     });
 
-    assert.match(prompt, /## Structured Review Context/);
-    assert.match(prompt, /## Scope Discipline/);
-    assert.match(prompt, /Only broaden to adjacent routes, copy, or supporting surfaces when the issue text or repository guidance explicitly says they are the same user flow/);
+    assert.match(prompt, /## Constraints/);
+    assert.match(prompt, /## Current Context/);
+    assert.match(prompt, /Requested changes on the existing PR branch\./);
     assert.match(prompt, /Review ID: 901/);
     assert.match(prompt, /Reviewed commit: abc123def456/);
     assert.match(prompt, /Inline review comments captured: 1/);
     assert.match(prompt, /only complete if you push a newer PR head or deliberately escalate/);
     assert.match(prompt, /src\/frontend\/app\/sessionSchema\.ts:1526 \(RIGHT\)/);
     assert.match(prompt, /Blank totals should not produce a leader\./);
-    assert.match(prompt, /Goal: restore review readiness on the existing PR branch, not merely patch the latest cited line\./);
-    assert.match(prompt, /Treat the reviewer comments as evidence of what still makes the branch unready\./);
-    assert.match(prompt, /1\. Start with the structured review context below, then inspect the PR's inline review comments with `gh api repos\/<owner>\/<repo>\/pulls\/<pr>\/comments\?per_page=100`/);
-    assert.match(prompt, /2\. Inspect the current diff with `review-quill diff` when available so you see the reviewer-oriented diff view from this checkout; use `git diff origin\/main` as a fallback/);
-    assert.match(prompt, /Infer the underlying concern or invariant behind the review feedback\./);
-    assert.match(prompt, /Only finish when you believe the branch is review-ready again\./);
-    assert.match(prompt, /GitHub review happens after the new head is pushed and CI is green/);
-    assert.doesNotMatch(prompt, /If you believe all concerns are resolved, request a re-review/);
+    assert.match(prompt, /Goal: restore review readiness and push a newer head on the current PR branch\./);
+    assert.match(prompt, /Address the real concern behind the feedback and verify nearby invariants in the touched flow before you publish\./);
+    assert.match(prompt, /## Final Self-Review Before Push/);
+    assert.match(prompt, /Fix any likely in-scope blocker you can see now: missing edge-case handling, broken adjacent invariant in the touched flow/);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -278,7 +275,7 @@ test("thread reuse is limited to explicit follow-up continuity", () => {
   );
 });
 
-test("buildRunPrompt switches implementation follow-ups to the follow-up prompt shape", () => {
+test("buildRunPrompt folds implementation follow-ups into current context", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-prompt-"));
   try {
     writeFileSync(path.join(baseDir, "IMPLEMENTATION_WORKFLOW.md"), "# Implementation Workflow\n");
@@ -302,22 +299,21 @@ test("buildRunPrompt switches implementation follow-ups to the follow-up prompt 
       },
     });
 
-    assert.match(prompt, /## Follow-up Turn/);
-    assert.match(prompt, /Why this turn exists: A human follow-up comment arrived after the previous turn/);
-    assert.match(prompt, /Required action now: Continue from the latest branch state/);
+    assert.match(prompt, /## Current Context/);
+    assert.match(prompt, /Turn reason: A human follow-up comment arrived after the previous turn\./);
     assert.match(prompt, /Recent updates:/);
-    assert.doesNotMatch(prompt, /## What Changed Since The Last Turn/);
     assert.match(prompt, /followup_comment from alice: Please keep the existing API stable/);
-    assert.match(prompt, /## Current PR Facts/);
+    assert.match(prompt, /Current PR facts:/);
     assert.match(prompt, /Fact freshness: may now be stale; refresh before making irreversible decisions\./);
     assert.match(prompt, /Current PR: #22/);
     assert.match(prompt, /Current relevant head SHA: abc123def456/);
+    assert.doesNotMatch(prompt, /## Follow-up Turn/);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
 
-test("buildRunPrompt keeps direct-reply follow-ups concise", () => {
+test("buildRunPrompt keeps direct-reply follow-ups concise inside current context", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-direct-reply-prompt-"));
   try {
     writeFileSync(path.join(baseDir, "IMPLEMENTATION_WORKFLOW.md"), "# Implementation Workflow\n");
@@ -341,10 +337,10 @@ test("buildRunPrompt keeps direct-reply follow-ups concise", () => {
       },
     });
 
-    assert.match(prompt, /Why this turn exists: A human reply arrived for the outstanding question from the previous turn/);
-    assert.match(prompt, /Required action now: Apply the latest human answer, continue from the current branch\/session context/);
+    assert.match(prompt, /## Current Context/);
+    assert.match(prompt, /Turn reason: Human reply to the previous question\./);
     assert.match(prompt, /direct_reply from alice: Use the staged rollout copy/);
-    assert.doesNotMatch(prompt, /## Direct Reply Handling/);
+    assert.doesNotMatch(prompt, /## Follow-up Turn/);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -357,7 +353,7 @@ test("buildRunPrompt applies extra instructions and section replacement without 
     replaceSections: {
       "publication-contract": {
         sourcePath: "/repo/publication.md",
-        content: "## Publication Requirements\n\nUse the existing publication contract.",
+        content: "## Publish\n\nUse the existing publication contract.",
       },
     },
   };
@@ -378,8 +374,9 @@ test("buildRunPrompt applies extra instructions and section replacement without 
     assert.match(prompt, /## Extra Instructions/);
     assert.match(prompt, /Use the repo's rollout checklist\./);
     assert.match(prompt, /## Task Objective/);
-    assert.match(prompt, /## Scope Discipline/);
-    assert.match(prompt, /Stay focused\./);
+    assert.match(prompt, /## Constraints/);
+    assert.match(prompt, /## Workflow/);
+    assert.match(prompt, /Read and follow `IMPLEMENTATION_WORKFLOW\.md` in the repository for task-specific behavior/);
     assert.match(prompt, /Use the existing publication contract/);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
