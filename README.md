@@ -61,12 +61,12 @@ patchrelay service status
 patchrelay dashboard
 ```
 
-Each repo needs two workflow files that act as agent prompts:
+Each repo needs two workflow files for repo-specific run behavior:
 
 - `IMPLEMENTATION_WORKFLOW.md` — implementation, CI repair, queue repair runs
 - `REVIEW_WORKFLOW.md` — review fix runs
 
-Keep them short, action-oriented, human-authored. See [prompting.md](./docs/prompting.md) for how the built-in scaffold composes them with the rest of the prompt.
+Keep them short, action-oriented, human-authored. Durable machine-level policy belongs in Codex `developer_instructions`; workflow files are for repo-local behavior and validation. See [prompting.md](./docs/prompting.md) for how the built-in scaffold composes them.
 
 Full install, ingress, and GitHub/Linear app setup: [self-hosting.md](./docs/self-hosting.md). Daily ops and CLI cheatsheet: [operator-guide.md](./docs/operator-guide.md).
 

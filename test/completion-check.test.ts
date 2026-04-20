@@ -62,6 +62,9 @@ test("completion check parses wrapped JSON from the forked thread", async () => 
   assert.equal(result.turnId, "turn-1");
   assert.match(capturedPrompt, /Do not run commands, call tools, edit files, or inspect the repository\./);
   assert.match(capturedPrompt, /Return exactly one JSON object and no extra prose\./);
+  assert.match(capturedPrompt, /Bias rules:/);
+  assert.match(capturedPrompt, /Prefer "continue" when the task looks like normal code-delivery work and the run simply ended before publishing a branch or PR\./);
+  assert.match(capturedPrompt, /Use "done" only when the issue explicitly permits a no-PR outcome/);
 });
 
 test("completion check falls back to failed when the fork result is not valid JSON", async () => {

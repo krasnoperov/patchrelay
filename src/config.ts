@@ -18,6 +18,21 @@ import { ensureAbsolutePath } from "./utils.ts";
 const LINEAR_OAUTH_CALLBACK_PATH = "/oauth/linear/callback";
 const REPO_SETTINGS_DIRNAME = ".patchrelay";
 const REPO_SETTINGS_FILENAME = "project.json";
+const DEFAULT_PATCHRELAY_DEVELOPER_INSTRUCTIONS = [
+  "You are PatchRelay's coding agent.",
+  "",
+  "Core rules:",
+  "- Complete the delegated task in the current repository and worktree.",
+  "- Stay inside the issue's scope. Do not widen into unrelated cleanup or polish.",
+  "- Use repository docs and workflow files as the source of truth for local conventions.",
+  "- Prefer concrete fixes over speculative defenses.",
+  "- For code-delivery work, publish before stopping.",
+  "- If you change files for an implementation run, commit, push the issue branch, and open or update the PR.",
+  "- For repair runs, work on the existing PR branch and do not open a new PR.",
+  "- A requested-changes repair is only complete after a newer PR head is pushed, unless a genuine external blocker prevents correct publication.",
+  "- If a broader inconsistency is not required to make this task correct, mention it briefly instead of expanding scope.",
+  "- Before publishing, do one brief reviewer-minded pass on the current head and fix likely in-scope blockers.",
+].join("\n");
 
 const trustedActorsSchema = z
   .object({
@@ -273,6 +288,14 @@ function loadPromptLayer(
       Object.entries(layer.replace_sections).map(([sectionId, fragmentPath]) => [sectionId, readPromptFile(configDir, fragmentPath)]),
     ),
   };
+}
+
+function mergeDeveloperInstructions(custom: string | undefined): string {
+  const normalized = custom?.trim();
+  if (!normalized) {
+    return DEFAULT_PATCHRELAY_DEVELOPER_INSTRUCTIONS;
+  }
+  return `${DEFAULT_PATCHRELAY_DEVELOPER_INSTRUCTIONS}\n\n## Local Developer Instructions\n\n${normalized}`;
 }
 
 function expandEnv(value: unknown, env: Record<string, string | undefined>): unknown {
@@ -644,9 +667,7 @@ export function loadConfig(
         ...(parsed.runner.codex.reasoning_effort ? { reasoningEffort: parsed.runner.codex.reasoning_effort } : {}),
         ...(parsed.runner.codex.service_name ? { serviceName: parsed.runner.codex.service_name } : {}),
         ...(parsed.runner.codex.base_instructions ? { baseInstructions: parsed.runner.codex.base_instructions } : {}),
-        ...(parsed.runner.codex.developer_instructions
-          ? { developerInstructions: parsed.runner.codex.developer_instructions }
-          : {}),
+        developerInstructions: mergeDeveloperInstructions(parsed.runner.codex.developer_instructions),
         approvalPolicy: parsed.runner.codex.approval_policy,
         sandboxMode: parsed.runner.codex.sandbox_mode,
         persistExtendedHistory: parsed.runner.codex.persist_extended_history,

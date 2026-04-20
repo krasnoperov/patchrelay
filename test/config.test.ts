@@ -231,7 +231,7 @@ test("loadConfig resolves installation prompt files relative to the config file"
     mkdirSync(worktreeRoot, { recursive: true });
     mkdirSync(path.join(configDir, "prompts"), { recursive: true });
     writeFileSync(path.join(configDir, "prompts", "local-policy.md"), "Install local policy\n");
-    writeFileSync(path.join(configDir, "prompts", "publication.md"), "## Publication Requirements\n\nCustom publication\n");
+    writeFileSync(path.join(configDir, "prompts", "publication.md"), "## Publish\n\nCustom publication\n");
     writeConfigFixture(path.join(configDir, "patchrelay.json"), {
       logging: { file_path: path.join(baseDir, "patchrelay.log") },
       database: { path: path.join(baseDir, "patchrelay.sqlite") },
@@ -269,8 +269,59 @@ test("loadConfig resolves installation prompt files relative to the config file"
         assert.equal(config.prompting.default.extraInstructions?.content, "Install local policy");
         assert.equal(
           config.prompting.default.replaceSections["publication-contract"]?.content,
-          "## Publication Requirements\n\nCustom publication",
+          "## Publish\n\nCustom publication",
         );
+      },
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("loadConfig injects default PatchRelay developer instructions and appends local developer instructions", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-config-dev-instructions-"));
+  const configPath = path.join(baseDir, "patchrelay.json");
+  const repoPath = path.join(baseDir, "repo");
+  const worktreeRoot = path.join(baseDir, "worktrees");
+
+  try {
+    mkdirSync(repoPath, { recursive: true });
+    mkdirSync(worktreeRoot, { recursive: true });
+    writeConfigFixture(configPath, {
+      logging: { file_path: path.join(baseDir, "patchrelay.log") },
+      database: { path: path.join(baseDir, "patchrelay.sqlite") },
+      linear: {
+        webhook_secret_env: "REQUIRED_SECRET",
+        ...oauthConfig,
+      },
+      runner: {
+        codex: {
+          developer_instructions: "Always preserve the repo's public API shape.",
+        },
+      },
+      projects: [
+        {
+          id: "usertold",
+          repo_path: repoPath,
+          worktree_root: worktreeRoot,
+          trigger_events: ["statusChanged"],
+          branch_prefix: "use",
+        },
+      ],
+    });
+
+    withEnv(
+      {
+        PATCHRELAY_CONFIG: configPath,
+        REQUIRED_SECRET: "top-secret",
+        ...oauthEnv,
+      },
+      () => {
+        const config = loadConfig();
+        assert.match(String(config.runner.codex.developerInstructions ?? ""), /You are PatchRelay's coding agent\./);
+        assert.match(String(config.runner.codex.developerInstructions ?? ""), /For repair runs, work on the existing PR branch and do not open a new PR\./);
+        assert.match(String(config.runner.codex.developerInstructions ?? ""), /## Local Developer Instructions/);
+        assert.match(String(config.runner.codex.developerInstructions ?? ""), /Always preserve the repo's public API shape\./);
       },
     );
   } finally {

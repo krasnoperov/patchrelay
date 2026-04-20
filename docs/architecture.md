@@ -131,6 +131,13 @@ Owns:
 - notification handling (turn/completed events)
 - exposing thread, turn, and item state that can be reduced into human-facing status summaries
 
+Prompting is split across two layers:
+
+- durable PatchRelay rules in Codex `developerInstructions`
+- a lean per-run prompt with the current objective, constraints, runtime context, workflow pointer, and publish target
+
+This keeps stable harness policy out of every task turn while still letting PatchRelay inject the exact GitHub, Linear, and repair evidence relevant to the current run.
+
 ## Ownership
 
 PatchRelay keeps ownership simple:
@@ -322,7 +329,7 @@ The target repository (the one PatchRelay is implementing for) should contain:
 - `IMPLEMENTATION_WORKFLOW.md` — guidance for implementation, CI repair, and queue repair runs
 - `REVIEW_WORKFLOW.md` — guidance for review fix runs
 
-The run orchestrator reads these files and includes them in the Codex prompt. Keep them short and action-oriented. See [prompting.md](./prompting.md) for how they compose with the built-in scaffold.
+The run orchestrator points Codex at these files from the lean per-run scaffold rather than inlining them into every turn. Keep them short and action-oriented. See [prompting.md](./prompting.md) for how they compose with `developerInstructions` and the built-in scaffold.
 
 ## Design implications
 

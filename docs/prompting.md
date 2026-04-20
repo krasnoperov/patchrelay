@@ -3,6 +3,7 @@
 PatchRelay and Review Quill use the same simple rule:
 
 - keep the built-in harness prompt small
+- keep durable harness rules in long-lived instructions
 - keep `AGENTS.md` short and navigational
 - keep durable repo guidance in workflow docs
 - use one extra instructions file only when the defaults need a local policy overlay
@@ -11,6 +12,7 @@ PatchRelay and Review Quill use the same simple rule:
 
 PatchRelay is an implementation scaffold:
 
+- keep stable PatchRelay policy in Codex `developerInstructions`
 - understand the delegated task
 - stay in scope
 - use repo docs as source of truth
@@ -53,13 +55,14 @@ Recommended split:
 
 ## Layering
 
-PatchRelay prompt order:
+PatchRelay instruction order:
 
-1. built-in sections from `src/prompting/patchrelay.ts`
-2. install-level prompt config from `patchrelay.json`
-3. repo-level prompt config from `.patchrelay/patchrelay.json`
-4. runtime issue/run context
-5. workflow guidance from the repo
+1. Codex `developerInstructions`
+2. built-in per-turn scaffold from `src/prompting/patchrelay.ts`
+3. install-level prompt config from `patchrelay.json`
+4. repo-level prompt config from `.patchrelay/patchrelay.json`
+5. runtime issue/run context
+6. workflow file pointer from the repo
 
 Review Quill prompt order:
 
@@ -68,6 +71,28 @@ Review Quill prompt order:
 3. repo-level prompt config from `.patchrelay/review-quill.json`
 4. PR and diff context
 5. repo guidance docs
+
+## PatchRelay Shape
+
+PatchRelay now splits stable policy from volatile task context.
+
+Stable harness behavior lives in Codex `developerInstructions`, including:
+
+- stay in scope
+- publish code-delivery work before stopping
+- repair on the existing PR branch
+- brief reviewer-minded self-review before publishing
+
+The per-turn PatchRelay prompt is intentionally lean and usually contains only:
+
+- header (`Issue`, `Title`, `Branch`, `PR`)
+- `## Task Objective`
+- `## Constraints`
+- `## Current Context` when needed
+- `## Workflow`
+- `## Publish`
+
+Workflow docs are referenced, not inlined. The built-in prompt points the agent at `IMPLEMENTATION_WORKFLOW.md` or `REVIEW_WORKFLOW.md` instead of copying those files into every turn.
 
 ## Install-Level Customization
 
@@ -149,6 +174,8 @@ PatchRelay allows replacing only these policy sections:
 - `workflow-guidance`
 - `publication-contract`
 
+These ids are stable compatibility ids for prompt overlays. They do not necessarily match the visible section headings exactly.
+
 Review Quill allows replacing only:
 
 - `review-rubric`
@@ -166,6 +193,9 @@ Prefer this order:
 5. use hooks for dynamic/computed context
 
 The default prompts are meant to work without tuning. Prompt config exists as a small escape hatch, not as a second documentation system.
+
+If you need a durable global rule for all PatchRelay runs, prefer `runner.codex.developer_instructions`.
+PatchRelay appends local developer instructions under a separate heading rather than replacing the built-in harness rules.
 
 ## No-PR Completion Check
 

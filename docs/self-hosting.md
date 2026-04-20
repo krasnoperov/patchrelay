@@ -91,6 +91,8 @@ Default runtime paths are:
 
 The generated `patchrelay.json` stays intentionally minimal. In the default setup it only needs `server.public_base_url`; PatchRelay already has built-in defaults for the local bind address, database path, logs, worktree roots, workflow filenames, and Codex runner settings.
 
+If you need durable machine-level Codex policy for every repository on this PatchRelay install, set it under `runner.codex.developer_instructions`. PatchRelay appends those local instructions after its built-in harness rules.
+
 For day-to-day operations and troubleshooting after install, see [operator-guide.md](./operator-guide.md).
 
 ## 3. Configure Machine-Level Secrets
@@ -169,9 +171,9 @@ Each automated repository should contain:
 - `IMPLEMENTATION_WORKFLOW.md` — guidance for implementation, CI repair, and queue repair runs
 - `REVIEW_WORKFLOW.md` — guidance for review fix runs
 
-These files are the repo-local policy PatchRelay passes into each run. They should explain what the agent is allowed to do in that repository, what validation is required, and how to finish the work.
+These files are the repo-local workflow guidance PatchRelay points Codex at during each run. They should explain what the agent is allowed to do in that repository, what validation is required, and how to finish the work.
 
-Keep workflow files short and action-oriented. Codex performs better with concise instructions than with lengthy bureaucratic rules.
+Keep workflow files short and action-oriented. Durable install-wide policy belongs in `runner.codex.developer_instructions`; workflow files should stay focused on repo-specific behavior and validation.
 
 ## 6. Validate
 
