@@ -14,14 +14,14 @@ function review(overrides: Partial<PullRequestReviewRecord>): PullRequestReviewR
   } as PullRequestReviewRecord;
 }
 
-test("buildPriorReviewClaims returns same-author decisive claims below the fresh-start threshold", () => {
+test("buildPriorReviewClaims keeps only the latest same-author claim below the fresh-start threshold", () => {
   const reviews = [
     review({ id: 1, body: "**Verdict: 🛑 Request changes** — First concern." }),
     review({ id: 2, body: "**Verdict: 🛑 Request changes** — Second concern." }),
   ];
   const claims = buildPriorReviewClaims(reviews, "review-quill");
-  assert.equal(claims.length, 2);
-  assert.ok(claims[0]?.excerpt.includes("First concern") || claims[1]?.excerpt.includes("First concern"));
+  assert.equal(claims.length, 1);
+  assert.equal(claims[0]?.excerpt, "**Verdict: 🛑 Request changes** — Second concern.");
 });
 
 test("buildPriorReviewClaims drops the bot's own claims once 3 decisive reviews accumulate (fresh-start)", () => {
@@ -45,6 +45,21 @@ test("buildPriorReviewClaims keeps human reviewer claims even after bot fresh-st
   assert.equal(claims.length, 1);
   assert.equal(claims[0]?.authorLogin, "alice");
   assert.ok(claims[0]?.excerpt.includes("Human reviewer"));
+});
+
+test("buildPriorReviewClaims keeps one self claim plus newer human claims within the cap", () => {
+  const reviews = [
+    review({ id: 1, authorLogin: "review-quill", body: "**Verdict: 🛑 Request changes** — Bot concern." }),
+    review({ id: 2, authorLogin: "alice", body: "**Verdict: 🛑 Request changes** — Human blocker A." }),
+    review({ id: 3, authorLogin: "bob", state: "COMMENTED", body: "**Verdict: 💬 Comment** — Human note." }),
+    review({ id: 4, authorLogin: "carol", body: "**Verdict: 🛑 Request changes** — Human blocker B." }),
+  ];
+  const claims = buildPriorReviewClaims(reviews, "review-quill");
+  assert.equal(claims.length, 3);
+  assert.equal(claims[0]?.authorLogin, "review-quill");
+  assert.equal(claims[0]?.excerpt, "**Verdict: 🛑 Request changes** — Bot concern.");
+  assert.equal(claims[1]?.authorLogin, "carol");
+  assert.equal(claims[2]?.authorLogin, "alice");
 });
 
 test("buildPriorReviewClaims tolerates [bot] suffix on selfLogin (github apps)", () => {
@@ -76,6 +91,8 @@ test("buildPriorReviewClaims only counts decisive reviews toward the fresh-start
     review({ id: 3, body: "**Verdict: 🛑 Request changes** — Real concern." }),
   ];
   const claims = buildPriorReviewClaims(reviews, "review-quill");
-  // Only 1 decisive same-author review; fresh-start must NOT trigger; all 3 surface.
-  assert.equal(claims.length, 3);
+  // Only 1 decisive same-author review; fresh-start must NOT trigger.
+  // We still surface only one self-authored claim to avoid ratcheting.
+  assert.equal(claims.length, 1);
+  assert.equal(claims[0]?.excerpt, "**Verdict: 🛑 Request changes** — Real concern.");
 });
