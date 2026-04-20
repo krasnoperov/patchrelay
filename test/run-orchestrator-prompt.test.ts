@@ -111,7 +111,7 @@ test("implementation prompts keep explicit no-PR handling for planning-only issu
   }
 });
 
-test("orchestration prompts keep concise convergence guidance", () => {
+test("orchestration prompts keep child-reuse and convergence babysitting guidance", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-prompt-"));
   try {
     writeFileSync(path.join(baseDir, "IMPLEMENTATION_WORKFLOW.md"), "# Implementation Workflow\n");
@@ -147,13 +147,56 @@ test("orchestration prompts keep concise convergence guidance", () => {
 
     assert.match(prompt, /## Constraints/);
     assert.match(prompt, /This issue is orchestration work\. Coordinate convergence instead of duplicating child implementation\./);
+    assert.match(prompt, /Inspect the current child set before acting\. Reuse existing child issues when they already cover the needed slices instead of creating duplicates\./);
+    assert.match(prompt, /Babysit child progress and solve parent-owned integration or convergence issues when the delivered pieces do not yet fit together cleanly\./);
     assert.match(prompt, /Do not open an overlapping umbrella PR unless this parent owns unique direct work\./);
+    assert.match(prompt, /Create new child issues only for genuinely missing required work needed to satisfy the parent goal\./);
     assert.match(prompt, /Leave later-wave child issues queued unless they are immediately actionable\./);
     assert.match(prompt, /### Child Issue Summaries/);
     assert.match(prompt, /TST-4: Migrate public pages to Lingui \(In Progress; implementing; delegated; open PR\)/);
     assert.match(prompt, /TST-5: Audit lingering translation helpers \(Start; delegated; delegated; no open PR\)/);
+    assert.match(prompt, /## Workflow/);
+    assert.match(prompt, /Use the wake reason and child issue summaries to decide the next orchestration step\./);
+    assert.match(prompt, /Prefer supervising, auditing, and unblocking existing child work over creating more issues\./);
+    assert.match(prompt, /If the parent goal now depends on an integration fix between delivered child slices, own that convergence work here without restating already-owned child implementation\./);
+    assert.match(prompt, /Close the umbrella when the original parent goal is satisfied\./);
+    assert.match(prompt, /Create blocking follow-up work only when it is required to satisfy that goal\./);
     assert.match(prompt, /## Publish/);
     assert.match(prompt, /Publish the orchestration outcome clearly: observation, follow-up issues, rollout update, closeout, or a small parent-owned cleanup PR\./);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("orchestration follow-up prompts reason explicitly from the wake cause", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-prompt-"));
+  try {
+    const prompt = buildFollowUpRunPrompt({
+      issue: {
+        ...createIssue(),
+        issueClass: "orchestration",
+      },
+      runType: "implementation",
+      repoPath: baseDir,
+      context: {
+        wakeReason: "child_delivered",
+        trackedDependents: [
+          {
+            issueKey: "TST-4",
+            title: "Migrate public pages to Lingui",
+            currentLinearState: "Done",
+            factoryState: "done",
+            delegatedToPatchRelay: true,
+            hasOpenPr: false,
+          },
+        ],
+      },
+    });
+
+    assert.match(prompt, /## Current Context/);
+    assert.match(prompt, /Turn reason: A child issue was delivered\./);
+    assert.match(prompt, /## Workflow/);
+    assert.match(prompt, /Use the wake reason and child issue summaries to decide the next orchestration step\./);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

@@ -195,7 +195,10 @@ function buildOrchestrationConstraints(context?: Record<string, unknown>): strin
     "## Constraints",
     "",
     "This issue is orchestration work. Coordinate convergence instead of duplicating child implementation.",
+    "Inspect the current child set before acting. Reuse existing child issues when they already cover the needed slices instead of creating duplicates.",
+    "Babysit child progress and solve parent-owned integration or convergence issues when the delivered pieces do not yet fit together cleanly.",
     "Do not open an overlapping umbrella PR unless this parent owns unique direct work.",
+    "Create new child issues only for genuinely missing required work needed to satisfy the parent goal.",
     "Leave later-wave child issues queued unless they are immediately actionable.",
     "",
     "### Child Issue Summaries",
@@ -543,6 +546,8 @@ function buildOrchestrationWorkflowGuidance(): string {
     "## Workflow",
     "",
     "Use the wake reason and child issue summaries to decide the next orchestration step.",
+    "Prefer supervising, auditing, and unblocking existing child work over creating more issues.",
+    "If the parent goal now depends on an integration fix between delivered child slices, own that convergence work here without restating already-owned child implementation.",
     "Keep outputs concise and observable in Linear.",
   ].join("\n");
 }
