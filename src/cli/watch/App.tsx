@@ -18,7 +18,7 @@ import {
 import { measureRenderedTextRows } from "./layout-measure.ts";
 import { PROMPT_COMPOSER_HINT, measurePromptComposerRows } from "./prompt-layout.ts";
 import { clearTransientStatus, defaultTimerApi, setPersistentStatus, showTransientStatus } from "./transient-status.ts";
-import { isPromptBackspaceKey, isPromptDeleteKey } from "./input-keys.ts";
+import { getPromptEditAction } from "./input-keys.ts";
 
 interface AppProps {
   baseUrl: string;
@@ -293,6 +293,7 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
 
   useInput((input, key) => {
     if (promptMode) {
+      const editAction = getPromptEditAction({ input, key, cursor: promptCursor, bufferLength: promptBuffer.length });
       if (key.escape) {
         resetPromptComposer();
       } else if (key.ctrl && input === "n") {
@@ -311,13 +312,13 @@ export function App({ baseUrl, bearerToken, initialIssueKey }: AppProps): React.
         recallPromptHistory("older");
       } else if (key.downArrow) {
         recallPromptHistory("newer");
-      } else if (isPromptBackspaceKey(input, key)) {
+      } else if (editAction === "backspace") {
         if (promptCursor > 0) {
           setPromptBuffer((buffer) => `${buffer.slice(0, promptCursor - 1)}${buffer.slice(promptCursor)}`);
           setPromptCursor((cursor) => Math.max(0, cursor - 1));
           setPromptHistoryIndex(null);
         }
-      } else if (isPromptDeleteKey(input, key)) {
+      } else if (editAction === "delete") {
         if (promptCursor < promptBuffer.length) {
           setPromptBuffer((buffer) => `${buffer.slice(0, promptCursor)}${buffer.slice(promptCursor + 1)}`);
           setPromptHistoryIndex(null);
