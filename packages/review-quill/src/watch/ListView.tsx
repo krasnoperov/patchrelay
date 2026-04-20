@@ -1,5 +1,6 @@
 import { Box, Text, useStdout } from "ink";
 import type { DashboardModel, DashboardRepo, DashboardToken } from "./dashboard-model.ts";
+import { formatRepoTokenText } from "./format.ts";
 
 interface ListViewProps {
   model: DashboardModel;
@@ -13,7 +14,7 @@ function RepoTokens({ tokens, width }: { tokens: DashboardToken[]; width: number
   const parts: { token: DashboardToken; text: string }[] = [];
   let used = 0;
   for (const token of tokens) {
-    const text = `#${token.prNumber} ${token.glyph}`;
+    const text = formatRepoTokenText(token);
     const separatorWidth = parts.length === 0 ? 0 : 2;
     if (used + separatorWidth + text.length > width) break;
     used += separatorWidth + text.length;

@@ -24,11 +24,12 @@ export function shortSha(value: string | null | undefined): string {
   return value.slice(0, 7);
 }
 
-export function relativeTime(iso: string | null | undefined): string {
+export function relativeTime(iso: string | number | null | undefined): string {
   if (!iso) {
     return "-";
   }
-  const seconds = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
+  const timestamp = typeof iso === "number" ? iso : new Date(iso).getTime();
+  const seconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
   if (seconds < 5) return "now";
   if (seconds < 60) return `${seconds}s`;
   const minutes = Math.floor(seconds / 60);
@@ -37,6 +38,14 @@ export function relativeTime(iso: string | null | undefined): string {
   if (hours < 24) return `${hours}h`;
   const days = Math.floor(hours / 24);
   return `${days}d`;
+}
+
+export function formatTokenAge(eventAt: number): string {
+  return relativeTime(eventAt).padStart(4, " ");
+}
+
+export function formatRepoTokenText(token: { prNumber: number; glyph: string; eventAt: number }): string {
+  return `#${token.prNumber} ${token.glyph} ${relativeTime(token.eventAt)}`;
 }
 
 export function mergeWaitState(entry: { status: QueueEntryStatus; waitDetail?: string | null | undefined } | undefined): "approval" | "main" | null {

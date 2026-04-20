@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { issueTokenFor } from "../src/cli/watch/issue-token.ts";
+import { issueTokenFor, prTokenFor } from "../src/cli/watch/issue-token.ts";
 import type { WatchIssue } from "../src/cli/watch/watch-state.ts";
 
 function makeIssue(overrides?: Partial<WatchIssue>): WatchIssue {
@@ -41,5 +41,38 @@ test("issueTokenFor keeps delegated implementation work visibly active", () => {
     color: "yellow",
     kind: "running",
     phrase: "implementing",
+  });
+});
+
+test("prTokenFor exposes a readable review phrase", () => {
+  const token = prTokenFor(makeIssue({
+    prNumber: 218,
+    prState: "open",
+    prReviewState: "changes_requested",
+    prCheckStatus: "failure",
+  }));
+
+  assert.deepEqual(token, {
+    prNumber: 218,
+    glyph: "\u2717",
+    color: "red",
+    kind: "declined",
+    phrase: "changes req",
+  });
+});
+
+test("prTokenFor falls back to checks text when review state is not decisive", () => {
+  const token = prTokenFor(makeIssue({
+    prNumber: 226,
+    prState: "open",
+    prCheckStatus: "success",
+  }));
+
+  assert.deepEqual(token, {
+    prNumber: 226,
+    glyph: "\u2713",
+    color: "green",
+    kind: "approved",
+    phrase: "checks passed",
   });
 });

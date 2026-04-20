@@ -17,6 +17,10 @@ export function relativeTime(iso: string): string {
   return `${days}d`;
 }
 
+export function formatIssueAge(updatedAt: string): string {
+  return relativeTime(updatedAt).padStart(4, " ");
+}
+
 /** Format millisecond duration as "2m 30s" or "45s". */
 export function formatDuration(ms: number): string {
   const seconds = Math.floor(ms / 1000);

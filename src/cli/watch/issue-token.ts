@@ -1,5 +1,13 @@
 import type { WatchIssue } from "./watch-state.ts";
 import { isUndelegatedPausedIssue } from "../../paused-issue-state.ts";
+import {
+  hasFailedPrChecks,
+  hasPendingPrChecks,
+  isApprovedReviewState,
+  isAwaitingReviewState,
+  isChangesRequestedReviewState,
+  prChecksFact,
+} from "./pr-status.ts";
 
 export type IssueTokenColor = "red" | "yellow" | "green" | "gray";
 
@@ -22,6 +30,7 @@ export interface PrTokenDisplay {
   glyph: string;
   color: IssueTokenColor;
   kind: IssueTokenKind;
+  phrase: string;
 }
 
 const GLYPH: Record<IssueTokenKind, string> = {
@@ -113,6 +122,7 @@ export function prTokenFor(issue: WatchIssue): PrTokenDisplay | null {
     glyph: GLYPH[kind],
     color: COLOR[kind],
     kind,
+    phrase: prPhraseFor(issue),
   };
 }
 
@@ -124,4 +134,15 @@ function prKind(issue: WatchIssue): IssueTokenKind {
   if (issue.prChecksSummary?.overall === "failure" || issue.prCheckStatus === "failure") return "declined";
   if (issue.prChecksSummary?.overall === "success" || issue.prCheckStatus === "success") return "approved";
   return "running";
+}
+
+function prPhraseFor(issue: WatchIssue): string {
+  if (issue.prState === "merged") return "merged";
+  if (issue.prState === "closed") return "closed";
+  if (isChangesRequestedReviewState(issue.prReviewState)) return "changes req";
+  if (isApprovedReviewState(issue.prReviewState)) return "approved";
+  if (isAwaitingReviewState(issue.prReviewState)) return "awaiting review";
+  if (hasFailedPrChecks(issue)) return prChecksFact(issue)?.text ?? "checks failed";
+  if (hasPendingPrChecks(issue)) return prChecksFact(issue)?.text ?? "checks running";
+  return prChecksFact(issue)?.text ?? "open";
 }

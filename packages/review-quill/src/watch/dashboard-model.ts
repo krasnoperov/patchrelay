@@ -25,6 +25,7 @@ export interface DashboardToken {
   glyph: string;
   color: DashboardTokenColor;
   kind: DashboardTokenKind;
+  eventAt: number;
 }
 
 export interface DashboardPrEntry extends DashboardToken {
@@ -198,7 +199,7 @@ export function buildDashboard(
     repos.push({
       repoId: repo.repoId,
       repoFullName: repo.repoFullName,
-      tokens: entries.map(({ prNumber, glyph, color, kind }) => ({ prNumber, glyph, color, kind })),
+      tokens: entries.map(({ prNumber, glyph, color, kind, eventAt }) => ({ prNumber, glyph, color, kind, eventAt })),
       entries,
       latestActivityAt,
       hasActivity: entries.length > 0,
