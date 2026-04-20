@@ -34,9 +34,9 @@ const repoSettingsSchema = z.object({
 });
 
 const repairBudgetsSchema = z.object({
-  ci_repair: z.number().int().positive().default(3),
-  queue_repair: z.number().int().positive().default(3),
-  review_fix: z.number().int().positive().default(3),
+  ci_repair: z.number().int().positive().default(10),
+  queue_repair: z.number().int().positive().default(10),
+  review_fix: z.number().int().positive().default(10),
 });
 
 const projectSchema = z.object({
@@ -50,9 +50,9 @@ const projectSchema = z.object({
   trigger_events: z.array(z.string().min(1)).min(1).optional(),
   branch_prefix: z.string().min(1).optional(),
   repair_budgets: repairBudgetsSchema.default({
-    ci_repair: 3,
-    queue_repair: 3,
-    review_fix: 3,
+    ci_repair: 10,
+    queue_repair: 10,
+    review_fix: 10,
   }),
   /** Check names that are review gates (AI Review, quality analysis). Default: code class. */
   review_checks: z.array(z.string().min(1)).default([]),
@@ -77,9 +77,9 @@ const repositorySchema = z.object({
   trigger_events: z.array(z.string().min(1)).min(1).optional(),
   branch_prefix: z.string().min(1).optional(),
   repair_budgets: repairBudgetsSchema.default({
-    ci_repair: 3,
-    queue_repair: 3,
-    review_fix: 3,
+    ci_repair: 10,
+    queue_repair: 10,
+    review_fix: 10,
   }),
   github: z.object({
     webhook_secret: z.string().min(1).optional(),

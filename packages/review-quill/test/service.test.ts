@@ -284,6 +284,84 @@ test("triggerReconcile retires active attempts for merged pull requests", async 
   assert.equal(updates.length, 1);
 });
 
+test("triggerReconcile prioritizes queued repo nudges that arrive mid-pass", async () => {
+  const service = new ReviewQuillService(
+    {
+      server: { bind: "127.0.0.1", port: 8788 },
+      database: { path: ":memory:", wal: true },
+      logging: { level: "info" },
+      reconciliation: {
+        pollIntervalMs: 1_000,
+        heartbeatIntervalMs: 1_000,
+        staleQueuedAfterMs: 60_000,
+        staleRunningAfterMs: 60_000,
+      },
+      codex: {
+        bin: "codex",
+        args: [],
+        approvalPolicy: "never",
+        sandboxMode: "danger-full-access",
+      },
+      prompting: { replaceSections: {} },
+      repositories: [
+        {
+          repoId: "subtitles",
+          repoFullName: "krasnoperov/subtitles",
+          baseBranch: "main",
+          requiredChecks: [],
+          excludeBranches: [],
+          reviewDocs: [],
+          diffIgnore: [],
+          diffSummarizeOnly: [],
+          patchBodyBudgetTokens: 5_000,
+        },
+        {
+          repoId: "usertold",
+          repoFullName: "krasnoperov/usertold",
+          baseBranch: "main",
+          requiredChecks: [],
+          excludeBranches: [],
+          reviewDocs: [],
+          diffIgnore: [],
+          diffSummarizeOnly: [],
+          patchBodyBudgetTokens: 5_000,
+        },
+      ],
+      secretSources: {},
+    } as never,
+    {
+      listAttempts: () => [],
+      listWebhooks: () => [],
+    } as never,
+    {} as never,
+    {} as never,
+    { info() {}, warn() {}, child() { return this; } } as never,
+  );
+
+  const processed: string[] = [];
+  const queuedResults: boolean[] = [];
+  let queued = false;
+  (service as unknown as {
+    reconcileRepo: (repo: { repoFullName: string }) => Promise<void>;
+  }).reconcileRepo = async (repo) => {
+    processed.push(repo.repoFullName);
+    if (repo.repoFullName === "krasnoperov/subtitles" && !queued) {
+      queued = true;
+      queuedResults.push(await service.triggerReconcile("krasnoperov/subtitles"));
+    }
+  };
+
+  const started = await service.triggerReconcile();
+
+  assert.equal(started, true);
+  assert.deepEqual(queuedResults, [false]);
+  assert.deepEqual(processed, [
+    "krasnoperov/subtitles",
+    "krasnoperov/subtitles",
+    "krasnoperov/usertold",
+  ]);
+});
+
 test("sanitizeJsonPayload strips markdown fences", () => {
   assert.equal(sanitizeJsonPayload("```json\n{\"a\":1}\n```"), "{\"a\":1}");
   assert.equal(sanitizeJsonPayload("```\n{\"a\":1}\n```"), "{\"a\":1}");

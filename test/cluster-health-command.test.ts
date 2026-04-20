@@ -540,6 +540,229 @@ test("cli cluster treats a live review-quill attempt on the current head as an o
   }
 });
 
+test("cli cluster treats review-quill repo backlog as an owner for review-required PRs", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cluster-review-quill-backlog-"));
+  const config = createConfig(baseDir, 19801);
+  mkdirSync(config.projects[0]!.repoPath, { recursive: true });
+  mkdirSync(config.projects[0]!.worktreeRoot, { recursive: true });
+  const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+  db.runMigrations();
+  const server = await startPatchRelayHealthServer(config);
+
+  try {
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-use-35b",
+      issueKey: "USE-35B",
+      title: "Review quill is draining repo backlog",
+      currentLinearState: "In Progress",
+      factoryState: "pr_open",
+      prNumber: 351,
+      prState: "open",
+      prReviewState: "review_required",
+    });
+    const staleTime = new Date(Date.now() - 300_000).toISOString();
+    db.connection.prepare("UPDATE issues SET updated_at = ?").run(staleTime);
+    db.connection.prepare("UPDATE issue_sessions SET updated_at = ?").run(staleTime);
+
+    const stdout = createBufferStream();
+    const stderr = createBufferStream();
+    const exitCode = await runCli(["cluster"], {
+      config,
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      runCommand: async (command, args) => {
+        if (command === "review-quill" && args.join(" ") === "service status --json") {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              service: "review-quill",
+              unit: "review-quill.service",
+              systemd: { ActiveState: "active" },
+              health: { reachable: true, ok: true, status: 200 },
+            }),
+            stderr: "",
+          };
+        }
+        if (command === "review-quill" && args.join(" ") === "status --json") {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              runtime: { reconcileInProgress: true },
+              repos: [
+                {
+                  repoId: "usertold",
+                  repoFullName: "krasnoperov/usertold",
+                  queuedAttempts: 0,
+                  runningAttempts: 1,
+                },
+              ],
+            }),
+            stderr: "",
+          };
+        }
+        if (command === "review-quill" && args.join(" ") === "attempts usertold 351 --json") {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              repoId: "usertold",
+              repoFullName: "krasnoperov/usertold",
+              prNumber: 351,
+              attempts: [],
+            }),
+            stderr: "",
+          };
+        }
+        if (command === "gh" && args[0] === "pr" && args[1] === "view") {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              state: "OPEN",
+              reviewDecision: "REVIEW_REQUIRED",
+              reviewRequests: [],
+              statusCheckRollup: [],
+              mergeable: "MERGEABLE",
+              mergeStateStatus: "CLEAN",
+              headRefOid: "backlog-head",
+            }),
+            stderr: "",
+          };
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    });
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr.read(), "");
+    const text = stdout.read();
+    assert.match(text, /PASS \[ci\] Tracked 1 PR-backed issue and each PR has a visible next owner/);
+    assert.match(text, /CI summary: prs=1 pending=0 success=0 failure=0 unknown=1 missing_owner=0/);
+    assert.match(text, /CI USE-35B PR #351 {2}gate=unknown {2}next=review-quill {2}review-quill is actively reconciling this repo; this PR is waiting in the current review backlog/);
+    assert.doesNotMatch(text, /github:review-handoff USE-35B/);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("cli cluster treats review-quill repo backlog as an owner for newer requested-changes heads", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cluster-review-quill-backlog-newer-head-"));
+  const config = createConfig(baseDir, 19802);
+  mkdirSync(config.projects[0]!.repoPath, { recursive: true });
+  mkdirSync(config.projects[0]!.worktreeRoot, { recursive: true });
+  const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+  db.runMigrations();
+  const server = await startPatchRelayHealthServer(config);
+
+  try {
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-use-35c",
+      issueKey: "USE-35C",
+      title: "Review quill backlog covers newer requested-changes head",
+      currentLinearState: "In Progress",
+      factoryState: "pr_open",
+      prNumber: 352,
+      prState: "open",
+      prReviewState: "changes_requested",
+    });
+    const staleTime = new Date(Date.now() - 300_000).toISOString();
+    db.connection.prepare("UPDATE issues SET updated_at = ?").run(staleTime);
+    db.connection.prepare("UPDATE issue_sessions SET updated_at = ?").run(staleTime);
+
+    const stdout = createBufferStream();
+    const stderr = createBufferStream();
+    const exitCode = await runCli(["cluster"], {
+      config,
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      runCommand: async (command, args) => {
+        if (command === "review-quill" && args.join(" ") === "service status --json") {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              service: "review-quill",
+              unit: "review-quill.service",
+              systemd: { ActiveState: "active" },
+              health: { reachable: true, ok: true, status: 200 },
+            }),
+            stderr: "",
+          };
+        }
+        if (command === "review-quill" && args.join(" ") === "status --json") {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              runtime: { reconcileInProgress: true },
+              repos: [
+                {
+                  repoId: "usertold",
+                  repoFullName: "krasnoperov/usertold",
+                  queuedAttempts: 0,
+                  runningAttempts: 1,
+                },
+              ],
+            }),
+            stderr: "",
+          };
+        }
+        if (command === "review-quill" && args.join(" ") === "attempts usertold 352 --json") {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              repoId: "usertold",
+              repoFullName: "krasnoperov/usertold",
+              prNumber: 352,
+              attempts: [
+                {
+                  id: 91,
+                  headSha: "old-head",
+                  status: "completed",
+                  stale: false,
+                },
+              ],
+            }),
+            stderr: "",
+          };
+        }
+        if (command === "gh" && args[0] === "pr" && args[1] === "view") {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              state: "OPEN",
+              reviewDecision: "CHANGES_REQUESTED",
+              reviewRequests: [],
+              latestReviews: [
+                {
+                  state: "CHANGES_REQUESTED",
+                  commit: { oid: "" },
+                },
+              ],
+              statusCheckRollup: [],
+              mergeable: "MERGEABLE",
+              mergeStateStatus: "BLOCKED",
+              headRefOid: "new-head",
+            }),
+            stderr: "",
+          };
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    });
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr.read(), "");
+    const text = stdout.read();
+    assert.match(text, /PASS \[ci\] Tracked 1 PR-backed issue and each PR has a visible next owner/);
+    assert.match(text, /CI summary: prs=1 pending=0 success=0 failure=0 unknown=1 missing_owner=0/);
+    assert.match(text, /CI USE-35C PR #352 {2}gate=unknown {2}next=review-quill {2}review-quill is actively reconciling this repo; this PR is waiting in the current review backlog/);
+    assert.doesNotMatch(text, /github:review-handoff USE-35C/);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("cli cluster ignores closed PRs on completed issues", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cluster-closed-pr-done-"));
   const config = createConfig(baseDir, 19795);
@@ -940,6 +1163,66 @@ test("cli cluster treats undelegated paused no-pr work as paused instead of stuc
     const text = stdout.read();
     assert.doesNotMatch(text, /issue:dispatch USE-40 Issue is parked in implementing without an active run/);
     assert.doesNotMatch(text, /issue:dispatch USE-40 Delegated issue is idle but no wake is queued/);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("cli cluster ignores canceled blockers", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cluster-canceled-blocker-"));
+  const config = createConfig(baseDir, 19803);
+  mkdirSync(config.projects[0]!.repoPath, { recursive: true });
+  mkdirSync(config.projects[0]!.worktreeRoot, { recursive: true });
+  const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+  db.runMigrations();
+  const server = await startPatchRelayHealthServer(config);
+
+  try {
+    const blocker = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-use-cancelled-blocker",
+      issueKey: "USE-CAN-1",
+      title: "Canceled blocker",
+      currentLinearState: "Canceled",
+      currentLinearStateType: "canceled",
+      factoryState: "failed",
+    });
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-use-blocked-by-cancelled",
+      issueKey: "USE-CAN-2",
+      title: "Blocked by canceled issue",
+      currentLinearState: "Start",
+      currentLinearStateType: "unstarted",
+      factoryState: "delegated",
+      blockedByJson: JSON.stringify([
+        {
+          blockerIssueId: blocker.linearIssueId,
+          blockerIssueKey: blocker.issueKey,
+          blockerCurrentLinearState: blocker.currentLinearState,
+          blockerCurrentLinearStateType: blocker.currentLinearStateType,
+        },
+      ]),
+    });
+    const staleTime = new Date(Date.now() - 300_000).toISOString();
+    db.connection.prepare("UPDATE issues SET updated_at = ?").run(staleTime);
+    db.connection.prepare("UPDATE issue_sessions SET updated_at = ?").run(staleTime);
+
+    const stdout = createBufferStream();
+    const stderr = createBufferStream();
+    const exitCode = await runCli(["cluster"], {
+      config,
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      runCommand: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+    });
+
+    assert.equal(exitCode, 1);
+    assert.equal(stderr.read(), "");
+    const text = stdout.read();
+    assert.doesNotMatch(text, /issue:blockers USE-CAN-2/);
+    assert.doesNotMatch(text, /Blocked by unmanaged issue USE-CAN-1/);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     rmSync(baseDir, { recursive: true, force: true });

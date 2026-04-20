@@ -563,7 +563,7 @@ exit 1
       prHeadSha: "sha-stuck",
       prReviewState: "changes_requested",
       prCheckStatus: "success",
-      reviewFixAttempts: 3,
+      reviewFixAttempts: 10,
       factoryState: "escalated",
     });
 
@@ -2318,7 +2318,7 @@ test("review_fix wake infers branch upkeep context from a dirty PR", async () =>
       prState: "open",
       prReviewState: "changes_requested",
       factoryState: "changes_requested",
-      reviewFixAttempts: 3,
+      reviewFixAttempts: 10,
     });
 
     const fakeBin = path.join(baseDir, "fake-bin");

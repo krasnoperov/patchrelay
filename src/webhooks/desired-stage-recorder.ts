@@ -350,13 +350,15 @@ export class DesiredStageRecorder {
           ? "child_delivered"
           : wasResolved && !isResolved
             ? "child_regressed"
-            : "child_changed";
-      wakeOrchestrationParentsForChildEvent({
-        db: this.db,
-        child: issue,
-        eventType,
-        changeKind,
-      });
+            : undefined;
+      if (eventType) {
+        wakeOrchestrationParentsForChildEvent({
+          db: this.db,
+          child: issue,
+          eventType,
+          changeKind,
+        });
+      }
     }
 
     return {

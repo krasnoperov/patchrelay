@@ -66,6 +66,8 @@ type JsonObject = Record<string, unknown>;
 interface ReviewQuillStatusJson extends JsonObject {
   health?: { reachable?: boolean; ok?: boolean } | undefined;
   systemd?: { ActiveState?: string } | undefined;
+  runtime?: { reconcileInProgress?: boolean } | undefined;
+  repos?: unknown[] | undefined;
 }
 
 interface ReviewQuillAttemptsJson extends JsonObject {
@@ -98,9 +100,10 @@ interface IssueSnapshot {
 }
 
 interface ReviewQuillAttemptOwnership {
-  id: number;
-  status: "queued" | "running";
-  headSha: string;
+  id?: number | undefined;
+  status?: "queued" | "running" | undefined;
+  headSha?: string | undefined;
+  backlog?: boolean | undefined;
 }
 
 interface ActiveWorktreeDiff {
@@ -688,7 +691,15 @@ function deriveCiOwner(params: {
     }
     if (!params.delegatedToPatchRelay) return "paused";
     if (params.factoryState === "changes_requested") return "patchrelay";
-    if (params.reviewQuillAttempt) return "review-quill";
+    if (
+      params.reviewQuillAttempt?.backlog
+      && params.currentHeadSha
+      && params.reviewQuillAttempt.headSha
+      && params.currentHeadSha !== params.reviewQuillAttempt.headSha
+    ) {
+      return "review-quill";
+    }
+    if (params.reviewQuillAttempt && !params.reviewQuillAttempt.backlog) return "review-quill";
     if (headAdvancedPastBlockingReview) return "reviewer";
     return "unknown";
   }
@@ -733,7 +744,10 @@ function describeCiOwnership(params: {
       : "PatchRelay owns the next requested-changes move";
   }
   if (params.owner === "review-quill") {
-    return params.reviewQuillAttempt
+    if (params.reviewQuillAttempt?.backlog) {
+      return "review-quill is actively reconciling this repo; this PR is waiting in the current review backlog";
+    }
+    return params.reviewQuillAttempt?.id && params.reviewQuillAttempt.status
       ? `review-quill attempt #${params.reviewQuillAttempt.id} is ${params.reviewQuillAttempt.status} on the current head`
       : "review-quill owns the current review attempt";
   }
@@ -786,7 +800,14 @@ function describeCiOwnership(params: {
 }
 
 function isResolvedDependency(dep: IssueDependencyRecord): boolean {
-  return dep.blockerCurrentLinearStateType === "completed" || dep.blockerCurrentLinearState?.trim().toLowerCase() === "done";
+  const stateType = dep.blockerCurrentLinearStateType?.trim().toLowerCase();
+  const state = dep.blockerCurrentLinearState?.trim().toLowerCase();
+  return stateType === "completed"
+    || stateType === "canceled"
+    || stateType === "cancelled"
+    || state === "done"
+    || state === "canceled"
+    || state === "cancelled";
 }
 
 function needsReviewAutomation(issue: IssueRecord): boolean {
@@ -802,6 +823,7 @@ async function collectReviewQuillAttemptOwners(
   runCommand: CommandRunner,
 ): Promise<Map<string, ReviewQuillAttemptOwnership>> {
   const owners = new Map<string, ReviewQuillAttemptOwnership>();
+  const repoBacklog = await probeReviewQuillRepoBacklog(runCommand);
 
   for (const snapshot of snapshots) {
     const issueKey = snapshot.issue.issueKey;
@@ -820,7 +842,12 @@ async function collectReviewQuillAttemptOwners(
       && !attempt.stale
       && attempt.headSha === probe.currentHeadSha
     );
-    if (!activeAttempt) continue;
+    if (!activeAttempt) {
+      if (repoBacklog.has(repoFullName)) {
+        owners.set(issueKey, { backlog: true, headSha: probe.latestAttemptHeadSha });
+      }
+      continue;
+    }
 
     owners.set(issueKey, {
       id: activeAttempt.id,
@@ -830,6 +857,46 @@ async function collectReviewQuillAttemptOwners(
   }
 
   return owners;
+}
+
+async function probeReviewQuillRepoBacklog(
+  runCommand: CommandRunner,
+): Promise<Set<string>> {
+  let result: CommandRunnerResult;
+  try {
+    result = await runCommand("review-quill", ["status", "--json"]);
+  } catch {
+    return new Set();
+  }
+
+  if (result.exitCode !== 0) {
+    return new Set();
+  }
+
+  const parsed = safeJsonParse(result.stdout) as ReviewQuillStatusJson | undefined;
+  if (!parsed || parsed.runtime?.reconcileInProgress !== true || !Array.isArray(parsed.repos)) {
+    return new Set();
+  }
+
+  const activeRepos = new Set<string>();
+  for (const repo of parsed.repos) {
+    if (!repo || typeof repo !== "object") continue;
+    const repoFullName = typeof (repo as { repoFullName?: unknown }).repoFullName === "string"
+      ? String((repo as { repoFullName: string }).repoFullName).trim()
+      : undefined;
+    const runningAttempts = typeof (repo as { runningAttempts?: unknown }).runningAttempts === "number"
+      ? Number((repo as { runningAttempts: number }).runningAttempts)
+      : 0;
+    const queuedAttempts = typeof (repo as { queuedAttempts?: unknown }).queuedAttempts === "number"
+      ? Number((repo as { queuedAttempts: number }).queuedAttempts)
+      : 0;
+    if (!repoFullName) continue;
+    if (runningAttempts > 0 || queuedAttempts > 0) {
+      activeRepos.add(repoFullName);
+    }
+  }
+
+  return activeRepos;
 }
 
 async function collectActiveOverlapFindings(
@@ -943,6 +1010,7 @@ async function probeReviewQuillAttempts(
   | {
       ok: true;
       currentHeadSha?: string | undefined;
+      latestAttemptHeadSha?: string | undefined;
       attempts: Array<{ id: number; headSha: string; status: "queued" | "running"; stale: boolean }>;
     }
   | { ok: false; error: string }
@@ -976,12 +1044,16 @@ async function probeReviewQuillAttempts(
     return { ok: false, error: prProbe.error };
   }
 
+  let latestAttemptHeadSha: string | undefined;
   const attempts = parsedAttempts.attempts.flatMap((entry) => {
     if (!entry || typeof entry !== "object") return [];
     const id = (entry as { id?: unknown }).id;
     const headSha = (entry as { headSha?: unknown }).headSha;
     const status = (entry as { status?: unknown }).status;
     const stale = (entry as { stale?: unknown }).stale;
+    if (!latestAttemptHeadSha && typeof headSha === "string" && headSha.trim().length > 0) {
+      latestAttemptHeadSha = headSha.trim();
+    }
     if (
       typeof id !== "number"
       || typeof headSha !== "string"
@@ -1000,6 +1072,7 @@ async function probeReviewQuillAttempts(
   return {
     ok: true,
     currentHeadSha: prProbe.pr.headRefOid,
+    latestAttemptHeadSha,
     attempts,
   };
 }
