@@ -118,7 +118,11 @@ test("renderReviewPrompt includes explicit guidance docs and suppressed summarie
   assert.match(prompt, /previous blocking review concerns are now resolved, still blocking, or no longer relevant/);
   assert.match(prompt, /Only raise a new blocker when it is clearly independent from the previous blockers/);
   assert.match(prompt, /When several symptoms share one root cause, report them as one blocker/);
+  assert.match(prompt, /Start by identifying the PR's primary task from the title, body, and diff/);
+  assert.match(prompt, /Treat explicit scope notes, out-of-scope notes, supersedes notes, and threat-model notes in the PR body as evidence of author intent, not automatic waivers/);
+  assert.match(prompt, /Do not let the PR description waive direct regressions or correctness issues introduced by the diff/);
   assert.match(prompt, /Do not silently widen the delegated task/);
+  assert.match(prompt, /If a concern is real but mostly pre-existing or only weakly connected to the stated PR task, prefer a nit or drop it instead of blocking/);
   assert.match(prompt, /Verify these historical claims against the current head before reusing them/);
   assert.match(prompt, /make the continuity explicit: note what appears resolved since the prior review, what still blocks on this head, and what is genuinely new/);
 });
