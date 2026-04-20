@@ -8,7 +8,7 @@ import type { PriorReviewClaim, PullRequestSummary, PullRequestReviewRecord } fr
 const PRIOR_REVIEW_EXCERPT_LIMIT = 1500;
 const VERDICT_LINE_REGEX = /\*\*Verdict:[^\n]*/;
 
-function extractVerdictLine(body: string): string | undefined {
+export function extractVerdictLine(body: string): string | undefined {
   const match = body.match(VERDICT_LINE_REGEX);
   if (!match) {
     return undefined;
@@ -50,6 +50,19 @@ export function summarizeReviewBody(body: string | undefined): string | undefine
   return `${prefix}${separator}${verdictLine}`;
 }
 
+function summarizePriorClaim(
+  review: PullRequestReviewRecord,
+  options?: { preferVerdictLineOnly?: boolean },
+): string | undefined {
+  if (!review.body) {
+    return undefined;
+  }
+  if (options?.preferVerdictLineOnly) {
+    return extractVerdictLine(review.body) ?? summarizeReviewBody(review.body);
+  }
+  return summarizeReviewBody(review.body);
+}
+
 // After this many decisive reviews from our own login accumulate on a PR,
 // the anchor-bias of carrying forward our own prior claims starts to harm
 // review quality — the model reaffirms its own past rejections instead of
@@ -80,9 +93,37 @@ export function buildPriorReviewClaims(
     ? priorReviews.filter((r) => normalizeLogin(r.authorLogin) !== normalizedSelf)
     : priorReviews;
 
-  const scored = filtered
+  const selfClaims = normalizedSelf
+    ? filtered
+      .map((review, index) => ({ review, index }))
+      .filter(({ review }) => normalizeLogin(review.authorLogin) === normalizedSelf)
+      .sort((left, right) => {
+        const leftDecisive = isDecisive(left.review.state);
+        const rightDecisive = isDecisive(right.review.state);
+        if (leftDecisive !== rightDecisive) {
+          return leftDecisive ? -1 : 1;
+        }
+        return right.index - left.index;
+      })
+      .slice(0, 1)
+      .flatMap(({ review }) => {
+        const excerpt = summarizePriorClaim(review, { preferVerdictLineOnly: true });
+        if (!excerpt) {
+          return [];
+        }
+        return [{
+          ...(review.authorLogin ? { authorLogin: review.authorLogin } : {}),
+          ...(review.state ? { state: review.state } : {}),
+          ...(review.commitId ? { commitId: review.commitId } : {}),
+          excerpt,
+        }];
+      })
+    : [];
+
+  const scoredOthers = filtered
     .map((review, index) => ({ review, index }))
-    .filter(({ review }) => Boolean(summarizeReviewBody(review.body)))
+    .filter(({ review }) => normalizeLogin(review.authorLogin) !== normalizedSelf)
+    .filter(({ review }) => Boolean(summarizePriorClaim(review)))
     .sort((left, right) => {
       const leftDecisive = isDecisive(left.review.state);
       const rightDecisive = isDecisive(right.review.state);
@@ -91,10 +132,10 @@ export function buildPriorReviewClaims(
       }
       return right.index - left.index;
     })
-    .slice(0, 3);
+    .slice(0, Math.max(0, 3 - selfClaims.length));
 
-  return scored.flatMap(({ review }) => {
-    const excerpt = summarizeReviewBody(review.body);
+  const otherClaims = scoredOthers.flatMap(({ review }) => {
+    const excerpt = summarizePriorClaim(review);
     if (!excerpt) {
       return [];
     }
@@ -105,6 +146,8 @@ export function buildPriorReviewClaims(
       excerpt,
     }];
   });
+
+  return [...selfClaims, ...otherClaims];
 }
 
 export async function buildGitHubPromptContext(

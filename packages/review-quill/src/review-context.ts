@@ -8,6 +8,23 @@ import { renderReviewPrompt } from "./prompt-builder/index.ts";
 import { findDisallowedReviewPromptSectionIds, findUnknownReviewPromptSectionIds } from "./prompt-builder/render.ts";
 import { materializeReviewWorkspace } from "./review-workspace/index.ts";
 
+export async function resolvePromptPullRequest(params: {
+  github: GitHubClient;
+  repoFullName: string;
+  pr: PullRequestSummary;
+}): Promise<PullRequestSummary> {
+  const latestPr = await params.github.getPullRequest(params.repoFullName, params.pr.number);
+  // Keep the reconcile-selected head stable. We only refresh the mutable PR
+  // description/title when GitHub still points at the same commit.
+  if (latestPr.headSha !== params.pr.headSha) {
+    return params.pr;
+  }
+  return {
+    ...params.pr,
+    ...latestPr,
+  };
+}
+
 function mergePromptCustomization(
   base: ReviewContext["promptCustomization"],
   override: ReviewContext["promptCustomization"] | undefined,
@@ -46,11 +63,16 @@ export async function buildReviewContext(params: {
   });
 
   try {
+    const promptPr = await resolvePromptPullRequest({
+      github: params.github,
+      repoFullName: params.repo.repoFullName,
+      pr: params.pr,
+    });
     const diff = await buildDiffContext(params.repo, materialized.workspace);
     const promptContext = await buildPromptContext(
       params.github,
       params.repo.repoFullName,
-      params.pr,
+      promptPr,
       materialized.workspace,
       params.repo.reviewDocs,
       params.selfLogin,
@@ -63,7 +85,7 @@ export async function buildReviewContext(params: {
       workspaceMode: "checkout" as const,
       workspace: materialized.workspace,
       repo: params.repo,
-      pr: params.pr,
+      pr: promptPr,
       diff,
       promptCustomization: mergePromptCustomization(params.prompting, repoPromptCustomization),
       promptContext,
