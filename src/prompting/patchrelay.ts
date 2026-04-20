@@ -220,10 +220,15 @@ function buildOrchestrationScopeDiscipline(context?: Record<string, unknown>): s
     "Adopt already-existing canonical child issues when they cover the intended split.",
     "Do not recreate child issues that already exist under this parent unless a genuinely missing required slice remains.",
     "Do not create an overlapping umbrella PR unless this parent clearly owns unique direct cleanup work that child issues do not already cover.",
+    "When you split required implementation work out of the parent, make it a child issue of this umbrella rather than making the parent block the child.",
+    "If sequencing matters, let the parent wait on the child; do not model the child as blocked by the parent umbrella it is supposed to satisfy.",
     "If child work is still in motion, babysit the plan, record useful observations, and return to waiting.",
     "If child work looks delivered, audit whether the original parent goal is actually satisfied.",
     "Create blocking follow-up work only when it is necessary to satisfy the original parent goal.",
     "Prefer non-blocking follow-up issues over keeping the umbrella open for optional polish or adjacent expansion.",
+    "New child issues should stay in Backlog and undelegated by default.",
+    "Only delegate or move a new child to Start when it is immediately actionable, unblocked, and you intend for PatchRelay to begin it right away.",
+    "If you create multiple new child issues, keep later-wave or dependency-bound children queued rather than waking them all at once.",
     "",
     "### Child Issue Summaries",
     "",
@@ -610,6 +615,7 @@ function buildOrchestrationWorkflowGuidance(): string {
     "",
     "Use the wake reason and current child issue summaries to decide what kind of orchestration work is needed now.",
     "Typical orchestration phases are: initial setup, waiting on child progress, reviewing delivered child work, final audit, creating a justified follow-up, or closing the umbrella.",
+    "When creating follow-up work, prefer one immediately runnable child at a time and keep the rest queued until their prerequisites are genuinely ready.",
     "Keep outputs concise and observable in Linear.",
   ].join("\n");
 }
@@ -626,6 +632,8 @@ function buildPublicationContract(
       "By default, orchestration work should finish without opening an overlapping umbrella PR.",
       "Valid orchestration outcomes include: recording an observation, updating the rollout plan, creating follow-up issues, opening a small cleanup PR that the parent clearly owns, or closing the umbrella.",
       "If you create new blocking follow-up work, justify it against the original parent goal rather than optional polish.",
+      "Blocking follow-up children must block the parent goal they satisfy, not the other way around.",
+      "If you create new child issues, leave them in Backlog unless they are truly ready to start now.",
     ].join("\n");
   }
   if (runType === "implementation") {

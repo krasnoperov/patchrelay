@@ -34,6 +34,8 @@ export class ReviewQuillService {
   private reconcileInProgress = false;
   private readonly startedAt = new Date().toISOString();
   private readonly pendingReviewsByRepo = new Map<string, ReviewQuillPendingReview[]>();
+  private pendingFullReconcile = false;
+  private readonly pendingRepoReconciles = new Set<string>();
   private readonly runtime: ReviewQuillRuntimeStatus = {
     reconcileInProgress: false,
     lastReconcileStartedAt: null,
@@ -214,7 +216,10 @@ export class ReviewQuillService {
   }
 
   async triggerReconcile(repoFullName?: string): Promise<boolean> {
-    if (this.reconcileInProgress) return false;
+    if (this.reconcileInProgress) {
+      this.queueReconcileRequest(repoFullName);
+      return false;
+    }
     await (repoFullName ? this.reconcileRepoByName(repoFullName) : this.reconcileAll());
     return true;
   }
@@ -228,40 +233,70 @@ export class ReviewQuillService {
 
   private async reconcileAll(): Promise<void> {
     if (this.reconcileInProgress) return;
-    this.reconcileInProgress = true;
-    this.runtime.reconcileInProgress = true;
-    this.runtime.lastReconcileStartedAt = new Date().toISOString();
-    this.runtime.lastReconcileOutcome = "running";
-    this.runtime.lastReconcileError = null;
-    try {
-      for (const repo of this.config.repositories) {
-        await this.reconcileRepo(repo);
-      }
-      this.prunePendingReviews(this.config.repositories.map((repo) => repo.repoId));
-      this.runtime.lastReconcileCompletedAt = new Date().toISOString();
-      this.runtime.lastReconcileOutcome = "succeeded";
-    } catch (error) {
-      this.runtime.lastReconcileCompletedAt = new Date().toISOString();
-      this.runtime.lastReconcileOutcome = "failed";
-      this.runtime.lastReconcileError = error instanceof Error ? error.message : String(error);
-      throw error;
-    } finally {
-      this.reconcileInProgress = false;
-      this.runtime.reconcileInProgress = false;
-    }
+    await this.runQueuedReconcile(this.config.repositories.map((repo) => repo.repoFullName));
   }
 
   private async reconcileRepoByName(repoFullName: string): Promise<void> {
     const repo = this.config.repositories.find((entry) => entry.repoFullName === repoFullName);
     if (!repo) return;
     if (this.reconcileInProgress) return;
+    await this.runQueuedReconcile([repo.repoFullName]);
+  }
+
+  private queueReconcileRequest(repoFullName?: string): void {
+    if (!repoFullName) {
+      this.pendingFullReconcile = true;
+      this.pendingRepoReconciles.clear();
+      return;
+    }
+    const repo = this.config.repositories.find((entry) => entry.repoFullName === repoFullName);
+    if (!repo) return;
+    this.pendingRepoReconciles.add(repo.repoFullName);
+  }
+
+  private prependQueuedReconciles(
+    queue: string[],
+    queuedRepoNames: Set<string>,
+  ): void {
+    const prioritize: string[] = [];
+    if (this.pendingFullReconcile) {
+      this.pendingFullReconcile = false;
+      this.pendingRepoReconciles.clear();
+      for (const repo of this.config.repositories) {
+        if (queuedRepoNames.has(repo.repoFullName)) continue;
+        prioritize.push(repo.repoFullName);
+      }
+    } else if (this.pendingRepoReconciles.size > 0) {
+      for (const repoFullName of this.pendingRepoReconciles) {
+        if (queuedRepoNames.has(repoFullName)) continue;
+        prioritize.push(repoFullName);
+      }
+      this.pendingRepoReconciles.clear();
+    }
+    for (let index = prioritize.length - 1; index >= 0; index -= 1) {
+      const repoFullName = prioritize[index]!;
+      queue.unshift(repoFullName);
+      queuedRepoNames.add(repoFullName);
+    }
+  }
+
+  private async runQueuedReconcile(initialQueue: string[]): Promise<void> {
     this.reconcileInProgress = true;
     this.runtime.reconcileInProgress = true;
     this.runtime.lastReconcileStartedAt = new Date().toISOString();
     this.runtime.lastReconcileOutcome = "running";
     this.runtime.lastReconcileError = null;
+    const queue = [...initialQueue];
+    const queuedRepoNames = new Set(queue);
     try {
-      await this.reconcileRepo(repo);
+      while (queue.length > 0) {
+        const repoFullName = queue.shift()!;
+        queuedRepoNames.delete(repoFullName);
+        const repo = this.config.repositories.find((entry) => entry.repoFullName === repoFullName);
+        if (!repo) continue;
+        await this.reconcileRepo(repo);
+        this.prependQueuedReconciles(queue, queuedRepoNames);
+      }
       this.prunePendingReviews(this.config.repositories.map((repo) => repo.repoId));
       this.runtime.lastReconcileCompletedAt = new Date().toISOString();
       this.runtime.lastReconcileOutcome = "succeeded";

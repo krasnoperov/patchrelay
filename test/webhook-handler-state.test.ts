@@ -3492,3 +3492,116 @@ test("issueCreated recovers delegated blocked startup without queueing implement
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("orchestration parents do not wake on non-terminal child status churn", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-orchestration-child-churn-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+
+    db.upsertIssue({
+      projectId: "krasnoperov/mafia",
+      linearIssueId: "issue-maf-parent",
+      issueKey: "MAF-200",
+      title: "Umbrella parent",
+      delegatedToPatchRelay: true,
+      factoryState: "delegated",
+      currentLinearState: "Start",
+      currentLinearStateType: "started",
+    });
+    db.upsertIssue({
+      projectId: "krasnoperov/mafia",
+      linearIssueId: "issue-maf-child",
+      issueKey: "MAF-201",
+      title: "Child implementation",
+      delegatedToPatchRelay: true,
+      factoryState: "implementing",
+      currentLinearState: "Implementing",
+      currentLinearStateType: "started",
+      parentLinearIssueId: "issue-maf-parent",
+      parentIssueKey: "MAF-200",
+    });
+
+    const linearClient: Partial<LinearClient> = {
+      getIssue: async () => ({
+        id: "issue-maf-child",
+        identifier: "MAF-201",
+        title: "Child implementation",
+        parentId: "issue-maf-parent",
+        parentIdentifier: "MAF-200",
+        parentTitle: "Umbrella parent",
+        teamId: "team-maf",
+        teamKey: "MAF",
+        delegateId: "patchrelay-actor",
+        stateId: "state-reviewing",
+        stateName: "In Review",
+        stateType: "started",
+        workflowStates: [],
+        labelIds: [],
+        labels: [],
+        teamLabels: [],
+        blockedBy: [],
+        blocks: [],
+      }),
+      createAgentActivity: async () => undefined,
+      updateAgentSession: async () => undefined,
+    };
+
+    const enqueued: Array<{ projectId: string; issueId: string }> = [];
+    const handler = new WebhookHandler(
+      config,
+      db,
+      { forProject: async () => linearClient as LinearClient } as never,
+      { steerTurn: async () => undefined } as never,
+      (projectId, issueId) => {
+        enqueued.push({ projectId, issueId });
+      },
+      pino({ enabled: false }),
+    );
+
+    const payload: LinearWebhookPayload = {
+      action: "update",
+      type: "Issue",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      webhookTimestamp: Date.now(),
+      updatedFrom: { stateId: "state-implementing" },
+      data: {
+        id: "issue-maf-child",
+        identifier: "MAF-201",
+        title: "Child implementation",
+        parent: { id: "issue-maf-parent", identifier: "MAF-200", title: "Umbrella parent" },
+        team: { id: "team-maf", key: "MAF" },
+        delegateId: "patchrelay-actor",
+        delegate: { id: "patchrelay-actor", name: "PatchRelay" },
+        state: { id: "state-reviewing", name: "In Review", type: "started" },
+      },
+    };
+
+    const stored = db.webhookEvents.insertFullWebhookEvent({
+      webhookId: "delivery-orchestration-child-churn",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(payload),
+    });
+
+    await handler.processWebhookEvent(stored.id);
+
+    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-parent"), undefined);
+    assert.deepEqual(
+      db.issueSessions
+        .listIssueSessionEvents("krasnoperov/mafia", "issue-maf-parent")
+        .filter((event) => event.eventType === "child_changed" || event.eventType === "child_delivered" || event.eventType === "child_regressed"),
+      [],
+    );
+    assert.deepEqual(enqueued, []);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});

@@ -142,10 +142,16 @@ test("orchestration prompts switch to umbrella-convergence guidance when depende
     assert.match(prompt, /This issue is orchestration work\./);
     assert.match(prompt, /Treat it as the owner of convergence across related issues/);
     assert.match(prompt, /Do not create an overlapping umbrella PR unless this parent clearly owns unique direct cleanup work/);
+    assert.match(prompt, /make it a child issue of this umbrella rather than making the parent block the child/);
+    assert.match(prompt, /do not model the child as blocked by the parent umbrella it is supposed to satisfy/);
+    assert.match(prompt, /New child issues should stay in Backlog and undelegated by default\./);
+    assert.match(prompt, /Only delegate or move a new child to Start when it is immediately actionable, unblocked, and you intend for PatchRelay to begin it right away\./);
     assert.match(prompt, /### Child Issue Summaries/);
     assert.match(prompt, /TST-4: Migrate public pages to Lingui \(In Progress; implementing; delegated; open PR\)/);
     assert.match(prompt, /TST-5: Audit lingering translation helpers \(Start; delegated; delegated; no open PR\)/);
     assert.match(prompt, /Valid orchestration outcomes include: recording an observation, updating the rollout plan, creating follow-up issues/);
+    assert.match(prompt, /Blocking follow-up children must block the parent goal they satisfy, not the other way around\./);
+    assert.match(prompt, /If you create new child issues, leave them in Backlog unless they are truly ready to start now\./);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
