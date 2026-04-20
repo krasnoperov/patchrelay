@@ -1,6 +1,7 @@
 import { Box, Text, useStdout } from "ink";
 import { RepoRow } from "./OverviewView.tsx";
 import { clipSummary, type DashboardModel, type DashboardPrEntry, type DashboardRepo } from "./dashboard-model.ts";
+import { formatTokenAge } from "./format.ts";
 
 interface ProjectDetailViewProps {
   model: DashboardModel;
@@ -12,6 +13,7 @@ interface ProjectDetailViewProps {
 const PR_ID_WIDTH = 7;
 const PR_PHRASE_WIDTH = 20;
 const SUMMARY_INDENT = 9;
+const AGE_WIDTH = 4;
 
 type ContentLine =
   | { kind: "blank" }
@@ -45,7 +47,8 @@ export function buildContentLines(repo: DashboardRepo, width: number): ContentLi
 function EntryHeaderRow({ entry, width }: { entry: DashboardPrEntry; width: number }): React.JSX.Element {
   const idText = `#${entry.prNumber}`.padEnd(PR_ID_WIDTH, " ");
   const paddedPhrase = entry.phrase.padEnd(PR_PHRASE_WIDTH, " ");
-  const titleSpace = Math.max(0, width - (PR_ID_WIDTH + 3 + PR_PHRASE_WIDTH + 1));
+  const age = formatTokenAge(entry.eventAt);
+  const titleSpace = Math.max(0, width - (PR_ID_WIDTH + 3 + PR_PHRASE_WIDTH + 3 + AGE_WIDTH));
   const title = entry.title && entry.title !== entry.phrase && titleSpace >= 8
     ? truncate(entry.title, titleSpace)
     : "";
@@ -54,6 +57,7 @@ function EntryHeaderRow({ entry, width }: { entry: DashboardPrEntry; width: numb
       <Text color={entry.color}>{idText}</Text>
       <Text color={entry.color}>{entry.glyph}</Text>
       <Text>{`  ${paddedPhrase}`}</Text>
+      <Text dimColor>{`  ${age}`}</Text>
       {title ? <Text dimColor>{`  ${title}`}</Text> : null}
     </Box>
   );
