@@ -89,7 +89,11 @@ Review the current PR head only.
 - Do not post the review yourself with \`gh\` or other tools. Return JSON only; review-quill will publish it.
 - The changed-files inventory and patch set below define this PR's scope on the current head.
 - Use the checked-out repository for surrounding context, but do not expand the claimed PR scope beyond the diff inventory.
-- Do not silently widen the delegated task. A broader inconsistency is blocking only when the current diff introduces it, the repository guidance explicitly treats the changed surfaces as one flow, or the PR title/body makes that broader behavior part of the task.
+- Start by identifying the PR's primary task from the title, body, and diff.
+- Treat explicit scope notes, out-of-scope notes, supersedes notes, and threat-model notes in the PR body as evidence of author intent, not automatic waivers.
+- Do not let the PR description waive direct regressions or correctness issues introduced by the diff.
+- Do not silently widen the delegated task. A broader inconsistency is blocking only when the current diff introduces it, materially worsens it, the repository guidance explicitly treats the changed surfaces as one flow, or the stated PR task depends on it being correct.
+- If a concern is real but mostly pre-existing or only weakly connected to the stated PR task, prefer a nit or drop it instead of blocking.
 - Previous reviews are historical claims to verify, not facts to repeat. Re-check them against the current head, current diff, and current behavior before reusing them.`;
 
 export function renderCorrectivePrompt(reason: string): string {
