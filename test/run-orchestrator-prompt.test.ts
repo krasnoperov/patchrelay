@@ -53,6 +53,8 @@ test("implementation prompt keeps a concise scaffold with workflow pointer and p
     assert.match(prompt, /## Final Self-Review Before Push/);
     assert.match(prompt, /Before you open or update the PR, do one brief reviewer-minded pass on the current head\./);
     assert.match(prompt, /Fix any likely in-scope blocker you can see now: missing edge-case handling, broken adjacent invariant in the touched flow/);
+    assert.match(prompt, /Name 2-4 concrete invariants most likely to regress in the touched flow, confirm which file or path enforces each one, and verify at least one adjacent path you did not edit directly\./);
+    assert.match(prompt, /If you changed schema, enums, shared vocabulary, normalization helpers, or compatibility mappings, inspect the main read\/write paths that can bypass the new abstraction and verify one legacy-flow and one new-flow case before publishing\./);
     assert.match(prompt, /If the issue explicitly allows a non-PR outcome, complete that outcome clearly; otherwise publish before stopping\./);
     assert.doesNotMatch(prompt, /## PR Body Contract/);
     assert.doesNotMatch(prompt, /## Follow-up Turn/);
@@ -81,6 +83,8 @@ test("repair prompts publish to the existing PR branch with concise self-review 
     assert.match(prompt, /Restore and publish on the existing PR branch: commit and push the same branch\./);
     assert.match(prompt, /Do not open a new PR/);
     assert.match(prompt, /A PR-less stop is not a successful outcome for a repair run unless a genuine external blocker prevents any correct push\./);
+    assert.match(prompt, /Before changing code or config, reproduce the failure on the exact failing head or identify the concrete log signature that justifies the fix\./);
+    assert.match(prompt, /If the exact failing head does not reproduce locally and the logs do not support a scoped fix, prefer a rerun-only repair over speculative branch changes\./);
     assert.match(prompt, /## Final Self-Review Before Push/);
     assert.match(prompt, /Before you push the existing PR branch, do one brief reviewer-minded pass on the current head\./);
   } finally {

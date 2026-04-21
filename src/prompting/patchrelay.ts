@@ -367,6 +367,8 @@ function buildCiRepairContext(context?: Record<string, unknown>): string {
   return [
     "Settled CI failure on the existing PR branch.",
     "Goal: restore CI readiness and push a branch that is likely to pass the next full CI run.",
+    "Before changing code or config, reproduce the failure on the exact failing head or identify the concrete log signature that justifies the fix.",
+    "If the exact failing head does not reproduce locally and the logs do not support a scoped fix, prefer a rerun-only repair over speculative branch changes.",
     snapshot?.gateCheckName ? `Gate check: ${String(snapshot.gateCheckName)}` : "",
     snapshot?.gateCheckStatus ? `Gate status: ${String(snapshot.gateCheckStatus)}` : "",
     snapshot?.settledAt ? `Settled at: ${String(snapshot.settledAt)}` : "",
@@ -552,18 +554,30 @@ function buildOrchestrationWorkflowGuidance(): string {
   ].join("\n");
 }
 
-function buildPrePushSelfReviewSection(target: "new_pr" | "existing_pr"): string[] {
+function buildPrePushSelfReviewSection(target: "new_pr" | "existing_pr", runType: RunType): string[] {
   const publishTarget = target === "new_pr"
     ? "open or update the PR"
     : "push the existing PR branch";
 
-  return [
+  const lines = [
     "## Final Self-Review Before Push",
     "",
     `Before you ${publishTarget}, do one brief reviewer-minded pass on the current head.`,
     "Fix any likely in-scope blocker you can see now: missing edge-case handling, broken adjacent invariant in the touched flow, mismatch between the PR explanation and the code, or an obviously unreviewable half-finished branch.",
-    "Do not widen scope for optional cleanup. If the issue explicitly allows a non-PR outcome, complete that outcome clearly; otherwise publish before stopping.",
   ];
+
+  if (runType === "implementation") {
+    lines.push(
+      "Name 2-4 concrete invariants most likely to regress in the touched flow, confirm which file or path enforces each one, and verify at least one adjacent path you did not edit directly.",
+      "If you changed schema, enums, shared vocabulary, normalization helpers, or compatibility mappings, inspect the main read/write paths that can bypass the new abstraction and verify one legacy-flow and one new-flow case before publishing.",
+    );
+  }
+
+  lines.push(
+    "Do not widen scope for optional cleanup. If the issue explicitly allows a non-PR outcome, complete that outcome clearly; otherwise publish before stopping.",
+  );
+
+  return lines;
 }
 
 function buildPublicationContract(
@@ -585,7 +599,7 @@ function buildPublicationContract(
       "If this is code-delivery work, publish before stopping: commit, push the issue branch, and open or update the PR.",
       "If the issue explicitly allows a non-PR outcome, complete that outcome clearly instead of inventing a PR.",
       "",
-      ...buildPrePushSelfReviewSection("new_pr"),
+      ...buildPrePushSelfReviewSection("new_pr", runType),
     ].join("\n");
   }
 
@@ -596,7 +610,7 @@ function buildPublicationContract(
     "Do not open a new PR.",
     "A PR-less stop is not a successful outcome for a repair run unless a genuine external blocker prevents any correct push.",
     "",
-    ...buildPrePushSelfReviewSection("existing_pr"),
+    ...buildPrePushSelfReviewSection("existing_pr", runType),
   ].join("\n");
 }
 

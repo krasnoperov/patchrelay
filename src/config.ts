@@ -30,6 +30,8 @@ const DEFAULT_PATCHRELAY_DEVELOPER_INSTRUCTIONS = [
   "- If you change files for an implementation run, commit, push the issue branch, and open or update the PR.",
   "- For repair runs, work on the existing PR branch and do not open a new PR.",
   "- A requested-changes repair is only complete after a newer PR head is pushed, unless a genuine external blocker prevents correct publication.",
+  "- If you change schema, enums, shared vocabulary, normalization helpers, or compatibility mappings, inspect the main read/write paths that can bypass the new abstraction and fix or cover any mismatch before publishing.",
+  "- For CI repair, do not change code or config until you either reproduce the failure on the exact failing head or can point to a concrete log signature that justifies the fix. If you cannot reproduce it, prefer a rerun-only repair over speculative changes.",
   "- If a broader inconsistency is not required to make this task correct, mention it briefly instead of expanding scope.",
   "- Before publishing, do one brief reviewer-minded pass on the current head and fix likely in-scope blockers.",
 ].join("\n");
