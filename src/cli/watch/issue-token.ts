@@ -1,5 +1,6 @@
 import type { WatchIssue } from "./watch-state.ts";
 import { isUndelegatedPausedIssue } from "../../paused-issue-state.ts";
+import { derivePrDisplayContext } from "../../pr-display-context.ts";
 import {
   hasFailedPrChecks,
   hasPendingPrChecks,
@@ -127,8 +128,11 @@ export function prTokenFor(issue: WatchIssue): PrTokenDisplay | null {
 }
 
 function prKind(issue: WatchIssue): IssueTokenKind {
-  if (issue.prState === "merged") return "approved";
-  if (issue.prState === "closed") return "declined";
+  const prContext = derivePrDisplayContext(issue);
+  if (prContext.kind === "merged_pr") return "approved";
+  if (prContext.kind === "closed_replacement_pending") return "queued";
+  if (prContext.kind === "closed_pr_paused") return "attention";
+  if (prContext.kind === "closed_historical_pr") return "declined";
   if (issue.prReviewState === "approved") return "approved";
   if (issue.prReviewState === "changes_requested") return "declined";
   if (issue.prChecksSummary?.overall === "failure" || issue.prCheckStatus === "failure") return "declined";
@@ -137,8 +141,11 @@ function prKind(issue: WatchIssue): IssueTokenKind {
 }
 
 function prPhraseFor(issue: WatchIssue): string {
-  if (issue.prState === "merged") return "merged";
-  if (issue.prState === "closed") return "closed";
+  const prContext = derivePrDisplayContext(issue);
+  if (prContext.kind === "merged_pr") return "merged";
+  if (prContext.kind === "closed_replacement_pending") return "replace pr";
+  if (prContext.kind === "closed_pr_paused") return "redelegate";
+  if (prContext.kind === "closed_historical_pr") return "closed";
   if (isChangesRequestedReviewState(issue.prReviewState)) return "changes req";
   if (isApprovedReviewState(issue.prReviewState)) return "approved";
   if (isAwaitingReviewState(issue.prReviewState)) return "awaiting review";

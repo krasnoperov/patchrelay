@@ -1,6 +1,7 @@
 import type { StateHistoryNode } from "./history-builder.ts";
 import type { OperatorFeedEvent } from "../../operator-feed.ts";
 import { hasOpenPr } from "../../pr-state.ts";
+import { derivePrDisplayContext } from "../../pr-display-context.ts";
 
 export type VisualizationNodeStatus = "current" | "visited" | "upcoming";
 
@@ -215,9 +216,28 @@ export function buildPatchRelayQueueObservations(
   }
 
   if (issue.prNumber !== undefined) {
-    const prLabel = hasOpenPr(issue.prNumber, issue.prState)
-      ? `Tracked PR: #${issue.prNumber}`
-      : `Tracked PR: #${issue.prNumber}${issue.prState ? ` (${issue.prState})` : ""}`;
+    const prContext = derivePrDisplayContext(issue);
+    let prLabel: string;
+    switch (prContext.kind) {
+      case "active_pr":
+      case "merged_pr":
+        prLabel = hasOpenPr(issue.prNumber, issue.prState)
+          ? `Tracked PR: #${issue.prNumber}`
+          : `Tracked PR: #${issue.prNumber}${issue.prState ? ` (${issue.prState})` : ""}`;
+        break;
+      case "closed_historical_pr":
+        prLabel = `Previous PR: #${prContext.prNumber} (closed)`;
+        break;
+      case "closed_replacement_pending":
+        prLabel = `Previous PR: #${prContext.prNumber} (closed; replacement pending)`;
+        break;
+      case "closed_pr_paused":
+        prLabel = `Previous PR: #${prContext.prNumber} (closed; redelegate to replace)`;
+        break;
+      case "no_pr":
+        prLabel = "PR context unavailable";
+        break;
+    }
     observations.push({
       tone: "info",
       text: `${prLabel}${issue.prReviewState ? ` (${issue.prReviewState})` : ""}`,

@@ -6,6 +6,7 @@ import type { LinearAgentActivityContent } from "./linear-types.ts";
 import { formatRunTypeLabel } from "./agent-session-plan.ts";
 import { sanitizeOperatorFacingText } from "./presentation-text.ts";
 import { isClosedPrState } from "./pr-state.ts";
+import { derivePrDisplayContext } from "./pr-display-context.ts";
 
 function lowerRunTypeLabel(runType: RunType): string {
   return formatRunTypeLabel(runType).toLowerCase();
@@ -224,6 +225,7 @@ export function summarizeIssueStateForLinear(
     waitingReason?: string | undefined;
   },
 ): string | undefined {
+  const prContext = derivePrDisplayContext(issue);
   switch (issue.sessionState) {
     case "waiting_input":
       return issue.waitingReason ?? (issue.prNumber && !isClosedPrState(issue.prState) ? `PR #${issue.prNumber} is waiting for input.` : "Waiting for input.");
@@ -245,11 +247,23 @@ export function summarizeIssueStateForLinear(
 
   switch (issue.factoryState) {
     case "delegated":
+      if (prContext.kind === "closed_replacement_pending") {
+        return `Queued to replace closed PR #${prContext.prNumber}.`;
+      }
+      if (prContext.kind === "closed_pr_paused") {
+        return `Closed PR #${prContext.prNumber} needs redelegation before replacement.`;
+      }
       if (!issue.delegatedToPatchRelay) {
         return "PatchRelay is queued to start work, but automation is paused.";
       }
       return "Queued to start work.";
     case "implementing":
+      if (prContext.kind === "closed_replacement_pending") {
+        return `Replacing closed PR #${prContext.prNumber} with a fresh PR.`;
+      }
+      if (prContext.kind === "closed_pr_paused") {
+        return `Closed PR #${prContext.prNumber} needs redelegation before replacement.`;
+      }
       if (!issue.delegatedToPatchRelay) {
         return "Implementation is paused because the issue is undelegated.";
       }

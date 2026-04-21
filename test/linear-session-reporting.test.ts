@@ -252,6 +252,18 @@ test("linear summaries describe closed historical PRs as non-merged completion",
   );
 });
 
+test("linear summaries describe closed PR replacement work explicitly", () => {
+  assert.equal(
+    summarizeIssueStateForLinear({
+      factoryState: "implementing",
+      prNumber: 194,
+      prState: "closed",
+      delegatedToPatchRelay: true,
+    }),
+    "Replacing closed PR #194 with a fresh PR.",
+  );
+});
+
 test("linear summaries describe paused undelegated PR-backed states explicitly", () => {
   assert.equal(
     summarizeIssueStateForLinear({

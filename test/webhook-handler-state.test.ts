@@ -1600,6 +1600,95 @@ test("delegateChanged adopts a linked draft PR as implementation work", { concur
   }
 });
 
+test("delegateChanged adopts a linked closed same-repo PR as replacement implementation work", { concurrency: false }, async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-linked-pr-closed-"));
+  const restorePath = installFakeGh(
+    baseDir,
+    JSON.stringify({
+      url: "https://github.com/krasnoperov/mafia/pull/1260",
+      headRefName: "feat-linked-closed",
+      headRefOid: "sha-linked-closed",
+      isDraft: false,
+      isCrossRepository: false,
+      state: "CLOSED",
+      author: { login: "external-dev" },
+      reviewDecision: "CHANGES_REQUESTED",
+      mergeable: "MERGEABLE",
+      mergeStateStatus: "BLOCKED",
+      statusCheckRollup: [{ __typename: "CheckRun", name: "verify", status: "COMPLETED", conclusion: "SUCCESS" }],
+    }),
+  );
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+
+    const linearClient: Partial<LinearClient> = {
+      getIssue: async () => createHydratedIssueSnapshot({
+        id: "issue-maf-adopt-closed",
+        identifier: "MAF-1260",
+        title: "Adopt linked closed PR",
+        delegateId: "patchrelay-actor",
+        attachments: [{
+          id: "attachment-1260",
+          title: "GitHub PR #1260",
+          url: "https://github.com/krasnoperov/mafia/pull/1260",
+        }],
+      }),
+    };
+
+    const enqueued: Array<{ projectId: string; issueId: string }> = [];
+    const handler = new WebhookHandler(
+      config,
+      db,
+      { forProject: async () => linearClient as LinearClient } as never,
+      { steerTurn: async () => undefined } as never,
+      (projectId, issueId) => { enqueued.push({ projectId, issueId }); },
+      pino({ enabled: false }),
+    );
+
+    const payload: LinearWebhookPayload = {
+      action: "update",
+      type: "Issue",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      webhookTimestamp: Date.now(),
+      updatedFrom: { delegateId: null },
+      data: {
+        id: "issue-maf-adopt-closed",
+        identifier: "MAF-1260",
+        title: "Adopt linked closed PR",
+        team: { id: "team-maf", key: "MAF" },
+        state: { id: "state-start", name: "In Progress", type: "started" },
+        delegate: { id: "patchrelay-actor", name: "PatchRelay" },
+      },
+    };
+
+    const stored = db.webhookEvents.insertFullWebhookEvent({
+      webhookId: "delivery-adopt-closed",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(payload),
+    });
+    await handler.processWebhookEvent(stored.id);
+
+    const issue = db.getIssue("krasnoperov/mafia", "issue-maf-adopt-closed");
+    assert.equal(issue?.factoryState, "delegated");
+    assert.equal(issue?.prNumber, 1260);
+    assert.equal(issue?.prState, "closed");
+    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-adopt-closed")?.runType, "implementation");
+    assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-adopt-closed" }]);
+  } finally {
+    restorePath();
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("delegateChanged moves linked cross-repo PR adoption to awaiting_input", { concurrency: false }, async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-linked-pr-cross-repo-"));
   const restorePath = installFakeGh(

@@ -4,6 +4,7 @@ import type { PatchRelayDatabase } from "./db.ts";
 import type { IssueRecord, RunRecord, TrackedIssueRecord } from "./db-types.ts";
 import type { RunType } from "./factory-state.ts";
 import { isClosedPrState } from "./pr-state.ts";
+import { derivePrDisplayContext } from "./pr-display-context.ts";
 import { deriveIssueStatusNote } from "./status-note.ts";
 import { derivePatchRelayWaitingReason } from "./waiting-reason.ts";
 import type { LinearClientProvider } from "./types.ts";
@@ -115,8 +116,17 @@ function renderStatusComment(
   }
 
   if (issue.prNumber !== undefined || issue.prUrl) {
+    const prContext = derivePrDisplayContext(issue);
     const prLabel = issue.prNumber !== undefined ? `#${issue.prNumber}` : "open";
-    lines.push("", `PR: ${issue.prUrl ? `[${prLabel}](${issue.prUrl})` : prLabel}`);
+    const linkedLabel = issue.prUrl ? `[${prLabel}](${issue.prUrl})` : prLabel;
+    const prLine = prContext.kind === "closed_historical_pr"
+      ? `Previous PR: ${linkedLabel} (closed)`
+      : prContext.kind === "closed_replacement_pending"
+        ? `Previous PR: ${linkedLabel} (closed; replacement PR needed)`
+        : prContext.kind === "closed_pr_paused"
+          ? `Previous PR: ${linkedLabel} (closed; redelegate to replace it)`
+          : `PR: ${linkedLabel}`;
+    lines.push("", prLine);
   }
 
   if (latestRun) {
@@ -148,6 +158,7 @@ function statusHeadline(
   },
   activeRunType?: string,
 ): string {
+  const prContext = derivePrDisplayContext(issue);
   if (activeRunType) {
     return `Running ${humanize(activeRunType)}`;
   }
@@ -166,6 +177,9 @@ function statusHeadline(
       break;
   }
   if (!issue.delegatedToPatchRelay && issue.prNumber !== undefined) {
+    if (prContext.kind === "closed_pr_paused") {
+      return `Closed PR #${prContext.prNumber} is waiting for redelegation before replacement`;
+    }
     if (issue.factoryState === "awaiting_queue" || issue.prReviewState === "approved") {
       return `PR #${issue.prNumber} is awaiting downstream merge while PatchRelay is paused`;
     }
@@ -187,8 +201,14 @@ function statusHeadline(
   }
   switch (issue.factoryState) {
     case "delegated":
+      if (prContext.kind === "closed_replacement_pending") {
+        return `Queued to replace closed PR #${prContext.prNumber}`;
+      }
       return "Queued to start work";
     case "implementing":
+      if (prContext.kind === "closed_replacement_pending") {
+        return `Replacing closed PR #${prContext.prNumber} with a fresh PR`;
+      }
       return "Implementing requested change";
     case "pr_open":
       return issue.prNumber !== undefined ? `PR #${issue.prNumber} opened` : "PR opened";

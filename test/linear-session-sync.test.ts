@@ -803,7 +803,7 @@ test("syncSession keeps a final visible comment for done issues with a closed hi
 
     assert.equal(commentUpdates.length, 1);
     assert.match(String(commentUpdates[0]?.body), /Completed without merging PR #193/);
-    assert.match(String(commentUpdates[0]?.body), /PR: \[#193\]/);
+    assert.match(String(commentUpdates[0]?.body), /Previous PR: \[#193\]\(https:\/\/github.com\/krasnoperov\/ballony-i-nasosy\/pull\/193\) \(closed\)/);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
