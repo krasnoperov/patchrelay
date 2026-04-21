@@ -23,6 +23,14 @@ interface MainBranchCheckRun {
   details_url?: string;
 }
 
+function isUnhealthyMainConclusion(conclusion: string | null | undefined): boolean {
+  return conclusion === "failure"
+    || conclusion === "timed_out"
+    || conclusion === "cancelled"
+    || conclusion === "action_required"
+    || conclusion === "stale";
+}
+
 export class MainBranchHealthMonitor {
   constructor(
     private readonly db: PatchRelayDatabase,
@@ -55,19 +63,21 @@ export class MainBranchHealthMonitor {
       && issue.factoryState !== "escalated"
     ));
 
+    const summary = await this.readMainBranchFailure(project.github.repoFullName, baseBranch);
+    if (!summary) {
+      if (existing) {
+        this.resolveRecoveredMainRepair(existing);
+      }
+      return;
+    }
+
+    const protocol = resolveMergeQueueProtocol(project);
     if (existing) {
       const age = Date.now() - Date.parse(existing.updatedAt);
       if (age < MAIN_BRANCH_HEALTH_GRACE_MS) {
         return;
       }
     }
-
-    const summary = await this.readMainBranchFailure(project.github.repoFullName, baseBranch);
-    if (!summary) {
-      return;
-    }
-
-    const protocol = resolveMergeQueueProtocol(project);
     if (existing) {
       this.queueExistingMainRepair(existing, summary, protocol.priorityLabel);
       return;
@@ -155,6 +165,31 @@ export class MainBranchHealthMonitor {
     }
   }
 
+  private resolveRecoveredMainRepair(issue: IssueRecord): void {
+    if (issue.activeRunId !== undefined) return;
+    if (issue.prState === "open" || issue.factoryState === "awaiting_queue" || issue.factoryState === "pr_open") {
+      return;
+    }
+
+    this.db.issueSessions.clearPendingIssueSessionEventsRespectingActiveLease(issue.projectId, issue.linearIssueId);
+    this.db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      factoryState: "done",
+      pendingRunType: null,
+    });
+
+    this.feed?.publish({
+      level: "info",
+      kind: "github",
+      issueKey: issue.issueKey,
+      projectId: issue.projectId,
+      stage: "done",
+      status: "main_repair_resolved",
+      summary: "Closed stale main_repair after main recovered externally",
+    });
+  }
+
   private async readMainBranchFailure(repoFullName: string, baseBranch: string): Promise<MainRepairCheckSummary | undefined> {
     const { stdout: shaOut } = await execCommand("gh", [
       "api",
@@ -174,7 +209,7 @@ export class MainBranchHealthMonitor {
 
     const runs = JSON.parse(checksOut || "[]") as MainBranchCheckRun[];
     const failingChecks = runs
-      .filter((run) => run.status === "completed" && run.conclusion === "failure" && typeof run.name === "string" && run.name.trim())
+      .filter((run) => run.status === "completed" && isUnhealthyMainConclusion(run.conclusion) && typeof run.name === "string" && run.name.trim())
       .map((run) => ({ name: run.name!.trim(), ...(run.details_url ? { url: run.details_url } : {}) }));
     if (failingChecks.length === 0) {
       return undefined;

@@ -32,6 +32,7 @@ export interface QueueStore {
   ): void;
   dequeue(entryId: string): void;
   updateHead(entryId: string, newHeadSha: string): void;
+  updatePriority(entryId: string, priority: number, detail?: string): void;
 
   // === Incidents (durable eviction records) ===
   insertIncident(incident: IncidentRecord): void;

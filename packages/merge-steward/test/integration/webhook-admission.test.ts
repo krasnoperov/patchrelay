@@ -262,6 +262,110 @@ describe("webhook admission integration", () => {
     assert.strictEqual(status.entries[0]!.status, "queued");
   });
 
+  it("promotes an already-queued PR when queue:priority is added later", async () => {
+    const store = new MemoryStore();
+    const githubSim = new GitHubSim();
+    const logger = pino({ level: "silent" });
+
+    githubSim.addPR({ number: 201, branch: "feat-normal", headSha: "sha-201", reviewApproved: true, labels: ["queue"] });
+    githubSim.addPR({ number: 202, branch: "feat-late-priority", headSha: "sha-202", reviewApproved: true, labels: ["queue"] });
+    githubSim.setChecks(201, [{ name: "checks", conclusion: "success" }]);
+    githubSim.setChecks(202, [{ name: "checks", conclusion: "success" }]);
+
+    const service = new MergeStewardService(
+      config, createPolicy(), store, new GitSim() as any, new CISim(() => "pass") as any,
+      githubSim, new EvictionReporterSim(), new GitSim() as any, logger,
+    );
+    const app = await makeApp(service);
+    const address = await app.listen({ port: 0 });
+    after(async () => { await app.close(); });
+
+    for (const [number, branch, sha] of [[201, "feat-normal", "sha-201"], [202, "feat-late-priority", "sha-202"]] as const) {
+      const body = webhookBody({
+        action: "labeled",
+        label: { name: "queue" },
+        pull_request: { number, head: { ref: branch, sha } },
+      });
+      await fetch(`${address}/webhooks/github`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-github-event": "pull_request", "x-hub-signature-256": sign(body) },
+        body,
+      });
+    }
+
+    githubSim.addLabel(202, "queue:priority");
+    const promoteBody = webhookBody({
+      action: "labeled",
+      label: { name: "queue:priority" },
+      pull_request: { number: 202, head: { ref: "feat-late-priority", sha: "sha-202" } },
+    });
+    await fetch(`${address}/webhooks/github`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-github-event": "pull_request", "x-hub-signature-256": sign(promoteBody) },
+      body: promoteBody,
+    });
+
+    const status = await (await fetch(`${address}/repos/test-repo/queue/status`)).json() as {
+      entries: Array<{ prNumber: number; priority: number; status: string }>;
+    };
+    assert.deepStrictEqual(status.entries.map((entry) => entry.prNumber), [202, 201]);
+    assert.strictEqual(status.entries[0]!.priority, 1);
+    assert.strictEqual(status.entries[1]!.priority, 0);
+  });
+
+  it("demotes a queued priority PR when queue:priority is removed", async () => {
+    const store = new MemoryStore();
+    const githubSim = new GitHubSim();
+    const logger = pino({ level: "silent" });
+
+    githubSim.addPR({ number: 211, branch: "feat-normal", headSha: "sha-211", reviewApproved: true, labels: ["queue"] });
+    githubSim.addPR({ number: 212, branch: "feat-priority", headSha: "sha-212", reviewApproved: true, labels: ["queue", "queue:priority"] });
+    githubSim.setChecks(211, [{ name: "checks", conclusion: "success" }]);
+    githubSim.setChecks(212, [{ name: "checks", conclusion: "success" }]);
+
+    const service = new MergeStewardService(
+      config, createPolicy(), store, new GitSim() as any, new CISim(() => "pass") as any,
+      githubSim, new EvictionReporterSim(), new GitSim() as any, logger,
+    );
+    const app = await makeApp(service);
+    const address = await app.listen({ port: 0 });
+    after(async () => { await app.close(); });
+
+    for (const [number, branch, sha, label] of [
+      [211, "feat-normal", "sha-211", "queue"],
+      [212, "feat-priority", "sha-212", "queue:priority"],
+    ] as const) {
+      const body = webhookBody({
+        action: "labeled",
+        label: { name: label },
+        pull_request: { number, head: { ref: branch, sha } },
+      });
+      await fetch(`${address}/webhooks/github`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-github-event": "pull_request", "x-hub-signature-256": sign(body) },
+        body,
+      });
+    }
+
+    githubSim.removeLabel(212, "queue:priority");
+    const demoteBody = webhookBody({
+      action: "unlabeled",
+      label: { name: "queue:priority" },
+      pull_request: { number: 212, head: { ref: "feat-priority", sha: "sha-212" } },
+    });
+    await fetch(`${address}/webhooks/github`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-github-event": "pull_request", "x-hub-signature-256": sign(demoteBody) },
+      body: demoteBody,
+    });
+
+    const status = await (await fetch(`${address}/repos/test-repo/queue/status`)).json() as {
+      entries: Array<{ prNumber: number; priority: number }>;
+    };
+    assert.deepStrictEqual(status.entries.map((entry) => entry.prNumber), [211, 212]);
+    assert.strictEqual(status.entries[1]!.priority, 0);
+  });
+
   it("manual reconcile recovers a ready PR after a transient admission lookup failure", async () => {
     const store = new MemoryStore();
     const githubSim = new GitHubSim();

@@ -141,11 +141,18 @@ export async function processWebhookEvent(
     case "pr_labeled": {
       if (event.label !== config.admissionLabel && event.label !== config.priorityQueueLabel) return;
       logger.info({ prNumber: event.prNumber, label: event.label }, "Queue label added, checking eligibility");
+      if (event.label === config.priorityQueueLabel && service.updatePriorityByPR(event.prNumber, 1)) {
+        break;
+      }
       await service.tryAdmit(event.prNumber, event.branch, event.headSha);
       break;
     }
 
     case "pr_unlabeled": {
+      if (event.label === config.priorityQueueLabel) {
+        service.updatePriorityByPR(event.prNumber, 0);
+        break;
+      }
       if (event.label !== config.admissionLabel) return;
       // Label removed — dequeue if active.
       service.dequeueByPR(event.prNumber);

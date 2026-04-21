@@ -252,6 +252,24 @@ export class SqliteStore implements QueueStore {
     })();
   }
 
+  updatePriority(entryId: string, priority: number, detail?: string): void {
+    this.conn.transaction(() => {
+      const current = this.conn.prepare("SELECT status, priority FROM queue_entries WHERE id = ?").get(entryId);
+      if (!current) return;
+      const from = String(current.status) as QueueEntryStatus;
+      if (Number(current.priority) === priority) return;
+
+      this.conn.prepare(
+        `UPDATE queue_entries SET
+          priority = ?,
+          updated_at = ?
+         WHERE id = ?`,
+      ).run(priority, isoNow(), entryId);
+
+      this.writeEvent(entryId, from, from, detail ?? `priority updated to ${priority}`);
+    })();
+  }
+
   insertIncident(incident: IncidentRecord): void {
     this.conn.prepare(
       `INSERT INTO queue_incidents (id, entry_id, at, failure_class, context_json, outcome)
