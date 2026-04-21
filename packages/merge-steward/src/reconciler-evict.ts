@@ -14,7 +14,7 @@ export async function cleanupSpec(ctx: ReconcileContext, entry: QueueEntry): Pro
 }
 
 export async function invalidateDownstream(ctx: ReconcileContext, allActive: QueueEntry[], afterIndex: number): Promise<void> {
-  const targets = selectDownstream(allActive, allActive[afterIndex]!.position);
+  const targets = selectDownstream(allActive, allActive[afterIndex]!.id);
   for (const downstream of targets) {
     emit(ctx, downstream, "invalidated", { detail: `base changed after position ${afterIndex}` });
     await cleanupSpec(ctx, downstream);

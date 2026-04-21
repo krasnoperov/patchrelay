@@ -31,6 +31,7 @@ export const stewardConfigSchema = z.object({
     level: z.enum(["debug", "info", "warn", "error"]).default("info"),
   }).default({ level: "info" }),
   admissionLabel: z.string().default("queue"),
+  priorityQueueLabel: z.string().default("queue:priority"),
   mergeQueueCheckName: z.string().default(DEFAULT_MERGE_QUEUE_CHECK_NAME),
   /** Branch name patterns to exclude from admission (glob-style). */
   excludeBranches: z.array(z.string()).default([]),

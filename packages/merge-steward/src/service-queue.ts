@@ -98,6 +98,9 @@ export class MergeStewardQueueCommands {
     }
 
     this.logger.info({ prNumber: params.prNumber, entryId: entry.id }, "PR enqueued");
+    if (entry.priority > 0) {
+      this.invalidateDownstreamOf(entry);
+    }
     return entry;
   }
 
@@ -150,6 +153,9 @@ export class MergeStewardQueueCommands {
         return false;
       }
 
+      const labels = await this.github.listLabels(prNumber);
+      const priority = labels.includes(this.config.priorityQueueLabel) ? 1 : 0;
+
       const checks = await this.github.listChecks(prNumber);
       const requiredChecks = this.policy.getRequiredChecks();
       if (requiredChecks.length > 0) {
@@ -194,7 +200,13 @@ export class MergeStewardQueueCommands {
         }
       }
 
-      this.enqueue({ prNumber, branch, headSha, ...(status.title ? { prTitle: status.title } : {}) });
+      this.enqueue({
+        prNumber,
+        branch,
+        headSha,
+        priority,
+        ...(status.title ? { prTitle: status.title } : {}),
+      });
       return true;
     } catch (error) {
       this.logger.warn({ prNumber, err: error }, "Failed to check admission eligibility");
@@ -239,7 +251,7 @@ export class MergeStewardQueueCommands {
 
   private invalidateDownstreamOf(removedEntry: QueueEntry): void {
     const allActive = this.store.listActive(this.config.repoId);
-    const targets = selectDownstream(allActive, removedEntry.position);
+    const targets = selectDownstream(allActive, removedEntry.id);
     for (const downstream of targets) {
       if (downstream.specBranch) {
         this.specBuilder.deleteSpeculative(downstream.specBranch).catch(() => {});

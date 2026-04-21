@@ -25,6 +25,7 @@ function formatDuration(startedAt: string, endedAt: string): string {
 
 const RUN_LABELS: Record<string, string> = {
   implementation: "implementation",
+  main_repair: "main repair",
   ci_repair: "ci repair",
   review_fix: "review fix",
   branch_upkeep: "branch upkeep",

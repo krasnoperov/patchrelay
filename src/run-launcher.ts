@@ -145,6 +145,7 @@ export class RunLauncher {
         branchName: params.branchName,
         worktreePath: params.worktreePath,
         factoryState: params.runType === "implementation" ? "implementing"
+          : params.runType === "main_repair" ? "implementing"
           : params.runType === "ci_repair" ? "repairing_ci"
           : params.runType === "review_fix" || params.runType === "branch_upkeep" ? "changes_requested"
           : params.runType === "queue_repair" ? "repairing_queue"

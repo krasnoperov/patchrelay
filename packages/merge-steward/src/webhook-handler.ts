@@ -134,13 +134,13 @@ export function normalizeWebhook(
 export async function processWebhookEvent(
   event: StewardWebhookEvent,
   service: MergeStewardService,
-  config: { admissionLabel: string; baseBranch: string; repoFullName: string; github?: GitHubPRApi },
+  config: { admissionLabel: string; priorityQueueLabel: string; baseBranch: string; repoFullName: string; github?: GitHubPRApi },
   logger: Logger,
 ): Promise<void> {
   switch (event.type) {
     case "pr_labeled": {
-      if (event.label !== config.admissionLabel) return;
-      logger.info({ prNumber: event.prNumber }, "Admission label added, checking eligibility");
+      if (event.label !== config.admissionLabel && event.label !== config.priorityQueueLabel) return;
+      logger.info({ prNumber: event.prNumber, label: event.label }, "Queue label added, checking eligibility");
       await service.tryAdmit(event.prNumber, event.branch, event.headSha);
       break;
     }

@@ -197,6 +197,46 @@ export class LinearGraphqlClient implements LinearClient {
     return this.mapIssue(response.issue);
   }
 
+  async createIssue(params: { teamId: string; title: string; description?: string; labelNames?: string[] }): Promise<LinearIssueSnapshot> {
+    const response = await this.request<{
+      issueCreate: {
+        success: boolean;
+        issue?: LinearIssueRawFields | null;
+      };
+    }>(
+      `
+      mutation PatchRelayCreateIssue($input: IssueCreateInput!) {
+        issueCreate(input: $input) {
+          success
+          issue {
+            ${LINEAR_ISSUE_SELECTION}
+          }
+        }
+      }
+      `,
+      {
+        input: {
+          teamId: params.teamId,
+          title: params.title,
+          ...(params.description ? { description: params.description } : {}),
+        },
+      },
+    );
+
+    if (!response.issueCreate.success || !response.issueCreate.issue) {
+      throw new Error(`Linear rejected issue creation for team ${params.teamId}`);
+    }
+
+    let issue = this.mapIssue(response.issueCreate.issue);
+    if (params.labelNames && params.labelNames.length > 0) {
+      issue = await this.updateIssueLabels({
+        issueId: issue.id,
+        addNames: params.labelNames,
+      });
+    }
+    return issue;
+  }
+
   async setIssueState(issueId: string, stateName: string): Promise<LinearIssueSnapshot> {
     const issue = await this.getIssue(issueId);
     const state = issue.workflowStates.find((entry) => entry.name.trim().toLowerCase() === stateName.trim().toLowerCase());

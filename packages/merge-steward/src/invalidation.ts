@@ -12,9 +12,11 @@ export const INVALIDATION_PATCH = {
   lastFailedBaseSha: null,
 } as const satisfies Partial<Pick<QueueEntry, "ciRunId" | "ciRetries" | "specBranch" | "specSha" | "specBasedOn" | "retryAttempts" | "lastFailedBaseSha">>;
 
-/** Select non-terminal entries after `afterPosition` from a position-sorted list. */
-export function selectDownstream(allActive: QueueEntry[], afterPosition: number): QueueEntry[] {
-  return allActive.filter(
-    (e) => e.position > afterPosition && !TERMINAL_STATUSES.includes(e.status as QueueEntryStatus),
+/** Select non-terminal entries after `entryId` from an already ordered active queue list. */
+export function selectDownstream(allActive: QueueEntry[], entryId: string): QueueEntry[] {
+  const index = allActive.findIndex((entry) => entry.id === entryId);
+  if (index < 0) return [];
+  return allActive.slice(index + 1).filter(
+    (entry) => !TERMINAL_STATUSES.includes(entry.status as QueueEntryStatus),
   );
 }

@@ -70,6 +70,15 @@ function ciRepairPlan(attempt: number): AgentSessionPlanStep[] {
   ];
 }
 
+function mainRepairPlan(attempt: number): AgentSessionPlanStep[] {
+  return [
+    { content: "Inspect main failure", status: "pending" },
+    { content: `Repairing main (${attemptLabel(attempt)})`, status: "pending" },
+    { content: "Awaiting re-verification", status: "pending" },
+    { content: "Priority merge", status: "pending" },
+  ];
+}
+
 function queueRepairPlan(attempt: number): AgentSessionPlanStep[] {
   return [
     { content: "Prepare workspace", status: "completed" },
@@ -182,7 +191,12 @@ export function buildAgentSessionPlan(params: {
     case "delegated":
       return setStatuses(planForRunType(runType, params), ["inProgress", "pending", "pending", "pending"]);
     case "implementing":
-      return setStatuses(planForRunType("implementation", params), ["completed", "inProgress", "pending", "pending"]);
+      return setStatuses(
+        params.activeRunType === "main_repair" || params.pendingRunType === "main_repair"
+          ? mainRepairPlan(params.ciRepairAttempts ?? 1)
+          : planForRunType("implementation", params),
+        ["completed", "inProgress", "pending", "pending"],
+      );
     case "pr_open":
       return setStatuses(implementationPlan(), ["completed", "completed", "inProgress", "pending"]);
     case "changes_requested":
@@ -222,6 +236,8 @@ function planForRunType(
   },
 ): AgentSessionPlanStep[] {
   switch (runType) {
+    case "main_repair":
+      return mainRepairPlan(params.ciRepairAttempts ?? 1);
     case "review_fix":
       return reviewFixPlan();
     case "branch_upkeep":
@@ -254,6 +270,7 @@ export function buildAgentSessionPlanForIssue(
 export function buildRunningSessionPlan(runType: string): AgentSessionPlanStep[] {
   return buildAgentSessionPlan({
     factoryState: runType === "ci_repair" ? "repairing_ci"
+      : runType === "main_repair" ? "implementing"
       : runType === "review_fix" || runType === "branch_upkeep" ? "changes_requested"
       : runType === "queue_repair" ? "repairing_queue"
       : "implementing",

@@ -63,7 +63,8 @@ export async function prepareEntry(
   }
 
   if (isHead) {
-    if (ctx.ci.getMainStatus) {
+    const bypassMainBlock = entry.priority > 0;
+    if (ctx.ci.getMainStatus && !bypassMainBlock) {
       const mainStatus = await ctx.ci.getMainStatus(ctx.baseBranch);
       if (mainStatus !== "pass") {
         let mainChecks: Array<{ name: string; conclusion: "success" | "failure" | "pending"; url?: string | undefined }> = [];

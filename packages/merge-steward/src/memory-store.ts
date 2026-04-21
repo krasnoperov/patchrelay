@@ -49,14 +49,14 @@ export class MemoryStore implements QueueStore {
   listActive(repoId: string): QueueEntry[] {
     return [...this.entries.values()]
       .filter((e) => e.repoId === repoId && !TERMINAL_STATUSES.includes(e.status))
-      .sort((a, b) => a.position - b.position)
+      .sort((a, b) => (b.priority - a.priority) || (a.position - b.position))
       .map((e) => ({ ...e }));
   }
 
   listAll(repoId: string): QueueEntry[] {
     return [...this.entries.values()]
       .filter((e) => e.repoId === repoId)
-      .sort((a, b) => a.position - b.position)
+      .sort((a, b) => (b.priority - a.priority) || (a.position - b.position))
       .map((e) => ({ ...e }));
   }
 

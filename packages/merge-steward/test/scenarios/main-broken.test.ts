@@ -4,6 +4,7 @@ import { createHarness, Harness, type SimPR } from "../harness.ts";
 import type { CIStatus } from "../../src/types.ts";
 
 const prA: SimPR = { number: 1, branch: "feat-a", files: [{ path: "a.ts", content: "a" }] };
+const prPriority: SimPR = { number: 2, branch: "feat-priority", files: [{ path: "priority.ts", content: "priority" }], priority: 1 };
 
 describe("main branch broken", () => {
   it("pauses queue when main CI is red, resumes when green", async () => {
@@ -85,5 +86,24 @@ describe("main branch broken", () => {
     mainStatus = "pass";
     await h.runUntilStable();
     assert.deepStrictEqual(h.merged, [1]);
+  });
+
+  it("lets a priority entry bypass red main while normal entries stay blocked behind it", async () => {
+    let mainStatus: CIStatus = "fail";
+    const h = await createHarness({ ciRule: () => "pass" });
+    h.ciSim.getMainStatus = async () => mainStatus;
+
+    await h.enqueue(prA);
+    await h.enqueue(prPriority);
+
+    await h.runUntilStable();
+
+    assert.deepStrictEqual(h.merged, [2], "priority entry should merge ahead of the normal queue");
+    assert.strictEqual(h.entryStatus(prA), "preparing_head", "normal entry should remain blocked on broken main");
+    assert.strictEqual(h.entryStatus(prPriority), "merged");
+
+    mainStatus = "pass";
+    await h.runUntilStable();
+    assert.deepStrictEqual(h.merged, [2, 1]);
   });
 });

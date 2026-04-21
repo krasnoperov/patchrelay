@@ -146,6 +146,7 @@ export async function buildMultiRepoHttpServer(options: {
 
     await processWebhookEvent(event, record.instance.service, {
       admissionLabel: record.config.admissionLabel,
+      priorityQueueLabel: record.config.priorityQueueLabel,
       baseBranch: record.config.baseBranch,
       repoFullName: record.config.repoFullName,
       github: record.instance.service.githubApi,

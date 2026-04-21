@@ -56,6 +56,9 @@ export class RunWakePlanner {
     } else if (runType === "ci_repair") {
       eventType = "settled_red_ci";
       dedupeKey = `${dedupeScope ?? "wake"}:ci_repair:${issue.linearIssueId}:${issue.lastGitHubFailureSignature ?? issue.prHeadSha ?? "unknown-sha"}`;
+    } else if (runType === "main_repair") {
+      eventType = "delegated";
+      dedupeKey = `${dedupeScope ?? "wake"}:main_repair:${issue.linearIssueId}`;
     } else if (runType === "review_fix" || runType === "branch_upkeep") {
       eventType = "review_changes_requested";
       dedupeKey = `${dedupeScope ?? "wake"}:${runType}:${issue.linearIssueId}:${issue.prHeadSha ?? "unknown-sha"}`;
