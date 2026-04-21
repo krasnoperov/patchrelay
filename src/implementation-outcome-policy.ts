@@ -19,65 +19,94 @@ export class ImplementationOutcomePolicy {
     }
     const project = this.config.projects.find((entry) => entry.id === run.projectId);
     const baseBranch = project?.github?.baseBranch ?? "main";
-    if (issue.prNumber && issue.prState && issue.prState !== "closed") {
+    const publishedPrState = await this.detectPublishedPrState(issue, project?.github?.repoFullName);
+    if (publishedPrState === "open") {
       return undefined;
-    }
-
-    if (project?.github?.repoFullName && issue.branchName) {
-      try {
-        const { stdout, exitCode } = await execCommand("gh", [
-          "pr",
-          "list",
-          "--repo",
-          project.github.repoFullName,
-          "--head",
-          issue.branchName,
-          "--state",
-          "all",
-          "--json",
-          "number,url,state,author,headRefOid",
-        ], { timeoutMs: 10_000 });
-        if (exitCode === 0) {
-          const matches = JSON.parse(stdout) as Array<{
-            number?: number;
-            url?: string;
-            state?: string;
-            headRefOid?: string;
-            author?: { login?: string };
-          }>;
-          const pr = matches[0];
-          if (pr?.number) {
-            this.upsertIssueIfLeaseHeld(
-              issue.projectId,
-              issue.linearIssueId,
-              {
-                projectId: issue.projectId,
-                linearIssueId: issue.linearIssueId,
-                prNumber: pr.number,
-                ...(pr.url ? { prUrl: pr.url } : {}),
-                ...(pr.state ? { prState: pr.state.toLowerCase() } : {}),
-                ...(pr.headRefOid ? { prHeadSha: pr.headRefOid } : {}),
-                ...(pr.author?.login ? { prAuthorLogin: pr.author.login } : {}),
-              },
-              "published PR verification refresh",
-            );
-            if (pr.state?.toLowerCase() !== "closed") {
-              return undefined;
-            }
-          }
-        }
-      } catch (error) {
-        this.logger.debug({
-          issueKey: issue.issueKey,
-          branchName: issue.branchName,
-          repoFullName: project.github.repoFullName,
-          error: error instanceof Error ? error.message : String(error),
-        }, "Failed to verify published PR state after implementation");
-      }
     }
 
     const details = await this.describeLocalImplementationOutcome(issue, baseBranch);
     return details ?? `Implementation completed without opening a PR for branch ${issue.branchName ?? issue.linearIssueId}`;
+  }
+
+  async detectRecoverableFailedImplementationOutcome(run: RunRecord, issue: IssueRecord): Promise<string | undefined> {
+    if (run.runType !== "implementation") {
+      return undefined;
+    }
+    const project = this.config.projects.find((entry) => entry.id === run.projectId);
+    const publishedPrState = await this.detectPublishedPrState(issue, project?.github?.repoFullName);
+    if (publishedPrState === "open" || publishedPrState === "unknown") {
+      return undefined;
+    }
+
+    const baseBranch = project?.github?.baseBranch ?? "main";
+    return await this.describeLocalImplementationOutcome(issue, baseBranch);
+  }
+
+  private async detectPublishedPrState(
+    issue: IssueRecord,
+    repoFullName: string | undefined,
+  ): Promise<"open" | "closed" | "none" | "unknown"> {
+    if (issue.prNumber && issue.prState && issue.prState !== "closed") {
+      return "open";
+    }
+    if (!repoFullName || !issue.branchName) {
+      return "unknown";
+    }
+
+    try {
+      const { stdout, exitCode } = await execCommand("gh", [
+        "pr",
+        "list",
+        "--repo",
+        repoFullName,
+        "--head",
+        issue.branchName,
+        "--state",
+        "all",
+        "--json",
+        "number,url,state,author,headRefOid",
+      ], { timeoutMs: 10_000 });
+      if (exitCode !== 0) {
+        return "unknown";
+      }
+
+      const matches = JSON.parse(stdout) as Array<{
+        number?: number;
+        url?: string;
+        state?: string;
+        headRefOid?: string;
+        author?: { login?: string };
+      }>;
+      const pr = matches[0];
+      if (!pr?.number) {
+        return "none";
+      }
+
+      const state = pr.state?.toLowerCase();
+      this.upsertIssueIfLeaseHeld(
+        issue.projectId,
+        issue.linearIssueId,
+        {
+          projectId: issue.projectId,
+          linearIssueId: issue.linearIssueId,
+          prNumber: pr.number,
+          ...(pr.url ? { prUrl: pr.url } : {}),
+          ...(state ? { prState: state } : {}),
+          ...(pr.headRefOid ? { prHeadSha: pr.headRefOid } : {}),
+          ...(pr.author?.login ? { prAuthorLogin: pr.author.login } : {}),
+        },
+        "published PR verification refresh",
+      );
+      return state === "closed" ? "closed" : "open";
+    } catch (error) {
+      this.logger.debug({
+        issueKey: issue.issueKey,
+        branchName: issue.branchName,
+        repoFullName,
+        error: error instanceof Error ? error.message : String(error),
+      }, "Failed to verify published PR state after implementation");
+      return "unknown";
+    }
   }
 
   private upsertIssueIfLeaseHeld(

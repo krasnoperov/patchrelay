@@ -30,8 +30,10 @@ export async function handleNoPrCompletionCheck(params: {
   run: RunRecord;
   issue: IssueRecord;
   report: ReturnType<typeof buildStageReport>;
+  runStatus: "completed" | "failed";
   threadId: string;
   completedTurnId?: string | undefined;
+  failureReason?: string | undefined;
   publishedOutcomeError: string;
   failRunAndClear: (run: RunRecord, message: string, nextState?: FactoryState) => void;
   emitActivity: (
@@ -68,10 +70,12 @@ export async function handleNoPrCompletionCheck(params: {
   }) => void;
   clearProgressAndRelease: (run: Pick<RunRecord, "id" | "projectId" | "linearIssueId">) => void;
 }): Promise<void> {
-  const completedRunUpdate = buildCompletedRunUpdate({
+  const runUpdate = buildRunUpdate({
+    status: params.runStatus,
     threadId: params.threadId,
     ...(params.completedTurnId ? { completedTurnId: params.completedTurnId } : {}),
     report: params.report,
+    ...(params.failureReason ? { failureReason: params.failureReason } : {}),
   });
 
   params.publishTurnEvent({
@@ -115,7 +119,7 @@ export async function handleNoPrCompletionCheck(params: {
 
   if (completionCheck.outcome === "continue") {
     const continued = params.withHeldLease(params.run.projectId, params.run.linearIssueId, (lease) => {
-      params.db.runs.finishRun(params.run.id, completedRunUpdate);
+      params.db.runs.finishRun(params.run.id, runUpdate);
       params.db.runs.saveCompletionCheck(params.run.id, completionCheck);
       params.db.issues.upsertIssue({
         projectId: params.run.projectId,
@@ -156,7 +160,7 @@ export async function handleNoPrCompletionCheck(params: {
 
   if (completionCheck.outcome === "needs_input") {
     const completed = params.withHeldLease(params.run.projectId, params.run.linearIssueId, (lease) => {
-      params.db.runs.finishRun(params.run.id, completedRunUpdate);
+      params.db.runs.finishRun(params.run.id, runUpdate);
       params.db.runs.saveCompletionCheck(params.run.id, completionCheck);
       params.db.issueSessions.clearPendingIssueSessionEventsWithLease(lease);
       params.db.issues.upsertIssue({
@@ -189,7 +193,7 @@ export async function handleNoPrCompletionCheck(params: {
   if (completionCheck.outcome === "done") {
     if (shouldContinueForUnpublishedLocalChanges(params.publishedOutcomeError)) {
       const continued = params.withHeldLease(params.run.projectId, params.run.linearIssueId, (lease) => {
-        params.db.runs.finishRun(params.run.id, completedRunUpdate);
+        params.db.runs.finishRun(params.run.id, runUpdate);
         params.db.runs.saveCompletionCheck(params.run.id, {
           ...completionCheck,
           outcome: "continue",
@@ -237,7 +241,7 @@ export async function handleNoPrCompletionCheck(params: {
       ? params.db.issues.countOpenChildIssues(params.run.projectId, params.run.linearIssueId)
       : 0;
     const completed = params.withHeldLease(params.run.projectId, params.run.linearIssueId, (lease) => {
-      params.db.runs.finishRun(params.run.id, completedRunUpdate);
+      params.db.runs.finishRun(params.run.id, runUpdate);
       params.db.runs.saveCompletionCheck(params.run.id, completionCheck);
       params.db.issueSessions.clearPendingIssueSessionEventsWithLease(lease);
       params.db.issues.upsertIssue({
@@ -292,7 +296,7 @@ export async function handleNoPrCompletionCheck(params: {
   const failureReason = `No PR observed and the completion check failed this run: ${completionCheck.summary}`;
   const failed = params.withHeldLease(params.run.projectId, params.run.linearIssueId, () => {
     params.db.runs.finishRun(params.run.id, {
-      ...completedRunUpdate,
+      ...runUpdate,
       status: "failed",
       failureReason,
     });
@@ -323,22 +327,26 @@ export async function handleNoPrCompletionCheck(params: {
   });
 }
 
-function buildCompletedRunUpdate(params: {
+function buildRunUpdate(params: {
+  status: "completed" | "failed";
   threadId: string;
   completedTurnId?: string | undefined;
   report: ReturnType<typeof buildStageReport>;
+  failureReason?: string | undefined;
 }): {
-  status: "completed";
+  status: "completed" | "failed";
   threadId: string;
   turnId?: string;
   summaryJson: string;
   reportJson: string;
+  failureReason?: string;
 } {
   return {
-    status: "completed",
+    status: params.status,
     threadId: params.threadId,
     ...(params.completedTurnId ? { turnId: params.completedTurnId } : {}),
     summaryJson: JSON.stringify({ latestAssistantMessage: params.report.assistantMessages.at(-1) ?? null }),
     reportJson: JSON.stringify(params.report),
+    ...(params.failureReason ? { failureReason: params.failureReason } : {}),
   };
 }

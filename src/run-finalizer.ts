@@ -193,6 +193,7 @@ export class RunFinalizer {
         run,
         issue: freshIssue,
         report,
+        runStatus: "completed",
         threadId,
         ...(params.completedTurnId ? { completedTurnId: params.completedTurnId } : {}),
         publishedOutcomeError,
@@ -297,5 +298,50 @@ export class RunFinalizer {
     void this.linearSync.syncSession(updatedIssue);
     this.linearSync.clearProgress(run.id);
     this.releaseLease(run.projectId, run.linearIssueId);
+  }
+
+  async recoverFailedImplementationRun(params: {
+    run: RunRecord;
+    issue: IssueRecord;
+    thread: CodexThreadSummary;
+    threadId: string;
+    completedTurnId?: string;
+    failureReason: string;
+  }): Promise<boolean> {
+    const freshIssue = this.db.issues.getIssue(params.run.projectId, params.run.linearIssueId) ?? params.issue;
+    const publishedOutcomeError = await this.completionPolicy.detectRecoverableFailedImplementationOutcome(params.run, freshIssue);
+    if (!publishedOutcomeError) {
+      return false;
+    }
+
+    const trackedIssue = this.db.issueToTrackedIssue(freshIssue);
+    const report = buildStageReport(
+      { ...params.run, status: "failed" },
+      trackedIssue,
+      params.thread,
+      countEventMethods(this.db.runs.listThreadEvents(params.run.id)),
+    );
+
+    await handleNoPrCompletionCheck({
+      db: this.db,
+      logger: this.logger,
+      withHeldLease: this.withHeldLease,
+      completionCheck: this.completionCheck,
+      run: params.run,
+      issue: freshIssue,
+      report,
+      runStatus: "failed",
+      threadId: params.threadId,
+      ...(params.completedTurnId ? { completedTurnId: params.completedTurnId } : {}),
+      failureReason: params.failureReason,
+      publishedOutcomeError,
+      failRunAndClear: this.failRunAndClear,
+      emitActivity: (issueRecord, activity, options) => this.linearSync.emitActivity(issueRecord, activity, options),
+      publishTurnEvent: (event) => this.publishTurnEvent(event),
+      syncFailureOutcome: (event) => this.syncFailureOutcome(event),
+      syncCompletionCheckOutcome: (event) => this.syncCompletionCheckOutcome(event),
+      clearProgressAndRelease: (releaseRun) => this.clearProgressAndRelease(releaseRun),
+    });
+    return true;
   }
 }

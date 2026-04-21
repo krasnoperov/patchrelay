@@ -86,13 +86,27 @@ export class RunNotificationHandler {
     const status = resolveRunCompletionStatus(notification.params);
 
     if (status === "failed") {
+      const failureReason = "Codex reported the turn completed in a failed state";
+      const recovered = await this.runFinalizer.recoverFailedImplementationRun({
+        run,
+        issue,
+        thread,
+        threadId,
+        ...(completedTurnId ? { completedTurnId } : {}),
+        failureReason,
+      });
+      if (recovered) {
+        this.activeThreadId = undefined;
+        return;
+      }
+
       const nextState: FactoryState = isRequestedChangesRunType(run.runType) ? "escalated" : "failed";
       const updated = this.withHeldIssueSessionLease(run.projectId, run.linearIssueId, (lease) => {
         this.db.issueSessions.finishRunWithLease(lease, run.id, {
           status: "failed",
           threadId,
           ...(completedTurnId ? { turnId: completedTurnId } : {}),
-          failureReason: "Codex reported the turn completed in a failed state",
+          failureReason,
         });
         this.db.issueSessions.upsertIssueWithLease(lease, {
           projectId: run.projectId,

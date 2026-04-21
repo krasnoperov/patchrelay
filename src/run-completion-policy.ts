@@ -74,4 +74,8 @@ export class RunCompletionPolicy {
   async verifyPublishedRunOutcome(run: RunRecord, issue: IssueRecord): Promise<string | undefined> {
     return await this.implementationOutcomes.verifyPublishedRunOutcome(run, issue);
   }
+
+  async detectRecoverableFailedImplementationOutcome(run: RunRecord, issue: IssueRecord): Promise<string | undefined> {
+    return await this.implementationOutcomes.detectRecoverableFailedImplementationOutcome(run, issue);
+  }
 }
