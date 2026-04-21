@@ -93,6 +93,7 @@ Review the current PR head only.
 - Treat explicit scope notes, out-of-scope notes, supersedes notes, and threat-model notes in the PR body as evidence of author intent, not automatic waivers.
 - Do not let the PR description waive direct regressions or correctness issues introduced by the diff.
 - Do not silently widen the delegated task. A broader inconsistency is blocking only when the current diff introduces it, materially worsens it, the repository guidance explicitly treats the changed surfaces as one flow, or the stated PR task depends on it being correct.
+- When a PR introduces or rewires stored enums, schema vocabulary, normalization helpers, or compatibility mappings, inspect untouched read/write paths that can bypass the new abstraction — especially webhooks, background jobs, DAO update methods, and auth/session sync.
 - If a concern is real but mostly pre-existing or only weakly connected to the stated PR task, prefer a nit or drop it instead of blocking.
 - Previous reviews are historical claims to verify, not facts to repeat. Re-check them against the current head, current diff, and current behavior before reusing them.`;
 

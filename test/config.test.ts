@@ -320,6 +320,8 @@ test("loadConfig injects default PatchRelay developer instructions and appends l
         const config = loadConfig();
         assert.match(String(config.runner.codex.developerInstructions ?? ""), /You are PatchRelay's coding agent\./);
         assert.match(String(config.runner.codex.developerInstructions ?? ""), /For repair runs, work on the existing PR branch and do not open a new PR\./);
+        assert.match(String(config.runner.codex.developerInstructions ?? ""), /If you change schema, enums, shared vocabulary, normalization helpers, or compatibility mappings, inspect the main read\/write paths that can bypass the new abstraction and fix or cover any mismatch before publishing\./);
+        assert.match(String(config.runner.codex.developerInstructions ?? ""), /For CI repair, do not change code or config until you either reproduce the failure on the exact failing head or can point to a concrete log signature that justifies the fix\./);
         assert.match(String(config.runner.codex.developerInstructions ?? ""), /## Local Developer Instructions/);
         assert.match(String(config.runner.codex.developerInstructions ?? ""), /Always preserve the repo's public API shape\./);
       },
