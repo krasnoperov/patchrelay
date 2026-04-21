@@ -100,6 +100,10 @@ export class MergeStewardService {
     this.queueCommands.updateHeadByPR(prNumber, headSha);
   }
 
+  updatePriorityByPR(prNumber: number, priority: number): boolean {
+    return this.queueCommands.updatePriorityByPR(prNumber, priority);
+  }
+
   acknowledgeExternalMerge(prNumber: number): void {
     this.queueCommands.acknowledgeExternalMerge(prNumber);
   }

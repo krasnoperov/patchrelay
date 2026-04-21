@@ -127,6 +127,14 @@ export class MemoryStore implements QueueStore {
     this.appendEvent(entryId, from, "queued", `updateHead: generation ${entry.generation}`);
   }
 
+  updatePriority(entryId: string, priority: number, detail?: string): void {
+    const entry = this.entries.get(entryId);
+    if (!entry || entry.priority === priority) return;
+    entry.priority = priority;
+    entry.updatedAt = isoNow();
+    this.appendEvent(entryId, entry.status, entry.status, detail ?? `priority updated to ${priority}`);
+  }
+
   insertIncident(incident: IncidentRecord): void {
     this.incidents.push({ ...incident });
   }

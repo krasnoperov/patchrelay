@@ -125,6 +125,24 @@ export class MergeStewardQueueCommands {
     return { scanned: open.length, admitted };
   }
 
+  updatePriorityByPR(prNumber: number, priority: number): boolean {
+    const entry = this.store.getEntryByPR(this.config.repoId, prNumber);
+    if (!entry) {
+      return false;
+    }
+    if (entry.priority === priority) {
+      return true;
+    }
+
+    const before = this.store.listActive(this.config.repoId);
+    this.store.updatePriority(entry.id, priority, `priority lane ${priority > 0 ? "enabled" : "disabled"}`);
+    const after = this.store.listActive(this.config.repoId);
+    const affected = this.findAffectedEntriesAfterPriorityChange(before, after);
+    this.requeueAffectedEntries(affected, `priority changed for entry ${entry.id.slice(0, 8)}`);
+    this.logger.info({ prNumber, entryId: entry.id, priority }, "Updated queued PR priority");
+    return true;
+  }
+
   async tryAdmit(prNumber: number, branch: string, headSha: string): Promise<boolean> {
     if (this.config.excludeBranches.some((pattern) => matchGlob(pattern, branch))) {
       this.logger.debug({ prNumber, branch }, "Branch excluded from admission");
@@ -261,6 +279,33 @@ export class MergeStewardQueueCommands {
     }
     if (targets.length > 0) {
       this.logger.info({ removedEntryId: removedEntry.id, invalidated: targets.length }, "Invalidated downstream entries after dequeue");
+    }
+  }
+
+  private findAffectedEntriesAfterPriorityChange(before: QueueEntry[], after: QueueEntry[]): QueueEntry[] {
+    const maxLength = Math.max(before.length, after.length);
+    let firstChangedIndex = -1;
+    for (let index = 0; index < maxLength; index += 1) {
+      if (before[index]?.id !== after[index]?.id) {
+        firstChangedIndex = index;
+        break;
+      }
+    }
+    if (firstChangedIndex < 0) {
+      return [];
+    }
+    return after.slice(firstChangedIndex);
+  }
+
+  private requeueAffectedEntries(entries: QueueEntry[], reason: string): void {
+    for (const affected of entries) {
+      if (affected.specBranch) {
+        this.specBuilder.deleteSpeculative(affected.specBranch).catch(() => {});
+      }
+      this.store.transition(affected.id, "queued", INVALIDATION_PATCH, reason);
+    }
+    if (entries.length > 0) {
+      this.logger.info({ affectedEntries: entries.length, reason }, "Requeued affected entries after priority change");
     }
   }
 

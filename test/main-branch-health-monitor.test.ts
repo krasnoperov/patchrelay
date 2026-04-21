@@ -78,7 +78,7 @@ function createConfig(baseDir: string): AppConfig {
   };
 }
 
-function writeGhScript(baseDir: string): string {
+function writeGhScript(baseDir: string, checksJson = '[{"name":"Tests","status":"completed","conclusion":"failure","details_url":"https://ci.example/tests"},{"name":"Deploy","status":"queued","conclusion":null}]'): string {
   const fakeBin = path.join(baseDir, "bin");
   const ghPath = path.join(fakeBin, "gh");
   mkdirSync(fakeBin, { recursive: true });
@@ -88,7 +88,7 @@ if [ "$1" = "api" ] && [ "$2" = "repos/owner/repo/branches/main" ]; then
   exit 0
 fi
 if [ "$1" = "api" ] && [ "$2" = "repos/owner/repo/commits/base-sha-123/check-runs" ]; then
-  printf '[{"name":"Tests","status":"completed","conclusion":"failure","details_url":"https://ci.example/tests"},{"name":"Deploy","status":"queued","conclusion":null}]'
+  printf '%s' ${JSON.stringify(checksJson)}
   exit 0
 fi
 echo "unexpected gh args: $*" >&2
@@ -186,6 +186,106 @@ test("main branch health monitor creates a main_repair issue and wake when main 
     assert.deepEqual(wake?.context.failingChecks, [{ name: "Tests", url: "https://ci.example/tests" }]);
     assert.deepEqual(wake?.context.pendingChecks, [{ name: "Deploy" }]);
     assert.deepEqual(enqueueCalls, [{ projectId: "proj", issueId: "lin-1" }]);
+  } finally {
+    process.env.PATH = oldPath;
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("main branch health monitor treats timed_out checks as broken main", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-main-repair-timeout-"));
+  const oldPath = process.env.PATH;
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+
+    const fakeBin = writeGhScript(
+      baseDir,
+      '[{"name":"Tests","status":"completed","conclusion":"timed_out","details_url":"https://ci.example/tests"}]',
+    );
+    process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
+
+    const linearClient: LinearClient = {
+      async getIssue() { throw new Error("not used"); },
+      async createIssue() { return makeLinearIssueSnapshot(); },
+      async setIssueState() { throw new Error("not used"); },
+      async upsertIssueComment() { throw new Error("not used"); },
+      async createAgentActivity() { throw new Error("not used"); },
+      async updateIssueLabels() { throw new Error("not used"); },
+      async getActorProfile() { throw new Error("not used"); },
+      async getWorkspaceCatalog() { throw new Error("not used"); },
+    };
+
+    const monitor = new MainBranchHealthMonitor(
+      db,
+      config,
+      { forProject: async () => linearClient },
+      () => undefined,
+      pino({ enabled: false }),
+    );
+
+    await monitor.reconcile();
+
+    const wake = db.issueSessions.peekIssueSessionWake("proj", "lin-1");
+    assert.equal(wake?.runType, "main_repair");
+    assert.deepStrictEqual(wake?.context.failingChecks, [{ name: "Tests", url: "https://ci.example/tests" }]);
+  } finally {
+    process.env.PATH = oldPath;
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("main branch health monitor closes stale main_repair issues once main recovers externally", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-main-repair-recovered-"));
+  const oldPath = process.env.PATH;
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+
+    const fakeBin = writeGhScript(baseDir, '[{"name":"Tests","status":"completed","conclusion":"success"}]');
+    process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
+
+    db.upsertIssue({
+      projectId: "proj",
+      linearIssueId: "lin-1",
+      issueKey: "PRJ-77",
+      branchName: "main-repair/main",
+      factoryState: "delegated",
+    });
+    db.issueSessions.appendIssueSessionEvent({
+      projectId: "proj",
+      linearIssueId: "lin-1",
+      eventType: "delegated",
+      eventJson: JSON.stringify({ runType: "main_repair" }),
+      dedupeKey: "main_repair:proj:base-sha-123:Tests",
+    });
+
+    const linearClient: LinearClient = {
+      async getIssue() { throw new Error("not used"); },
+      async createIssue() { throw new Error("not used"); },
+      async setIssueState() { throw new Error("not used"); },
+      async upsertIssueComment() { throw new Error("not used"); },
+      async createAgentActivity() { throw new Error("not used"); },
+      async updateIssueLabels() { throw new Error("not used"); },
+      async getActorProfile() { throw new Error("not used"); },
+      async getWorkspaceCatalog() { throw new Error("not used"); },
+    };
+
+    const monitor = new MainBranchHealthMonitor(
+      db,
+      config,
+      { forProject: async () => linearClient },
+      () => undefined,
+      pino({ enabled: false }),
+    );
+
+    await monitor.reconcile();
+
+    const issue = db.getIssue("proj", "lin-1");
+    assert.equal(issue?.factoryState, "done");
+    assert.equal(db.issueSessions.peekIssueSessionWake("proj", "lin-1"), undefined);
   } finally {
     process.env.PATH = oldPath;
     rmSync(baseDir, { recursive: true, force: true });
