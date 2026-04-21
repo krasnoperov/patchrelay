@@ -86,6 +86,7 @@ export function deriveIssueSessionWaitingReason(params: IssueSessionWaitingReaso
 export function deriveIssueSessionWakeReason(params: IssueSessionWakeReasonInput): string | undefined {
   if (params.delegatedToPatchRelay === false) return undefined;
   if (params.pendingRunType === "implementation") return "delegated";
+  if (params.pendingRunType === "main_repair") return "main_repair";
   if (params.pendingRunType === "review_fix") return "review_changes_requested";
   if (params.pendingRunType === "branch_upkeep") return "branch_upkeep";
   if (params.pendingRunType === "ci_repair") return "settled_red_ci";

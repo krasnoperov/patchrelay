@@ -54,7 +54,7 @@ export async function mergeHead(ctx: ReconcileContext, entry: QueueEntry): Promi
     // Can't verify — proceed and let push fail if needed.
   }
 
-  if (ctx.ci.getMainStatus) {
+  if (ctx.ci.getMainStatus && entry.priority <= 0) {
     const mainStatus = await ctx.ci.getMainStatus(ctx.baseBranch);
     if (mainStatus === "pending") {
       // Main is still verifying itself (typically post-merge CI from the

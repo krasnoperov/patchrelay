@@ -4,6 +4,7 @@ import type { IssueRecord } from "./db-types.ts";
 import type { FactoryState, RunType } from "./factory-state.ts";
 import type { AppConfig } from "./types.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
+import { isMainRepairIssue } from "./main-repair.ts";
 import { resolveMergeQueueProtocol } from "./merge-queue-protocol.ts";
 import { parseGitHubFailureContext } from "./github-failure-context.ts";
 import { deriveGateCheckStatusFromRollup, type GitHubStatusRollupEntry } from "./github-rollup.ts";
@@ -496,6 +497,34 @@ export class IdleIssueReconciler {
     return resolveMergeQueueProtocol(project);
   }
 
+  private async ensurePriorityQueueLabel(issue: IssueRecord, repoFullName: string): Promise<void> {
+    if (!isMainRepairIssue(issue) || !issue.prNumber) return;
+    const priorityLabel = this.getIssueProtocol(issue).priorityLabel;
+    try {
+      const { stdout } = await execCommand("gh", [
+        "pr", "view", String(issue.prNumber),
+        "--repo", repoFullName,
+        "--json", "labels",
+      ], { timeoutMs: 10_000 });
+      const payload = JSON.parse(stdout) as { labels?: Array<{ name?: string }> };
+      if ((payload.labels ?? []).some((entry) => entry.name === priorityLabel)) {
+        return;
+      }
+      await execCommand("gh", [
+        "pr", "edit", String(issue.prNumber),
+        "--repo", repoFullName,
+        "--add-label", priorityLabel,
+      ], { timeoutMs: 10_000 });
+    } catch (error) {
+      this.logger.warn({
+        issueKey: issue.issueKey,
+        prNumber: issue.prNumber,
+        priorityLabel,
+        error: error instanceof Error ? error.message : String(error),
+      }, "Reconciliation: failed to enforce priority queue label");
+    }
+  }
+
   private async reconcileFromGitHub(issue: IssueRecord): Promise<void> {
     const project = this.config.projects.find((p) => p.id === issue.projectId);
     if (!project?.github?.repoFullName || !issue.prNumber) return;
@@ -516,6 +545,9 @@ export class IdleIssueReconciler {
       const previousHeadSha = issue.prHeadSha;
       const gateCheckNames = getGateCheckNames(project);
       const gateCheckStatus = deriveGateCheckStatusFromRollup(pr.statusCheckRollup, gateCheckNames);
+      if (pr.state === "OPEN") {
+        await this.ensurePriorityQueueLabel(issue, project.github.repoFullName);
+      }
       this.db.issues.upsertIssue({
         projectId: issue.projectId,
         linearIssueId: issue.linearIssueId,

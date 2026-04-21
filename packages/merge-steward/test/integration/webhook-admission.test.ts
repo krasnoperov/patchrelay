@@ -46,6 +46,7 @@ const config: StewardConfig = {
   flakyRetries: 1,
   pollIntervalMs: 60_000,
   admissionLabel: "queue",
+  priorityQueueLabel: "queue:priority",
   mergeQueueCheckName: "merge-steward/queue",
   excludeBranches: [],
   server: { bind: "127.0.0.1", port: 0 },
@@ -219,6 +220,45 @@ describe("webhook admission integration", () => {
     };
     assert.strictEqual(status.entries.length, 1, "eligible PR should be admitted without a queue label");
     assert.strictEqual(status.entries[0]!.prNumber, 99);
+    assert.strictEqual(status.entries[0]!.status, "queued");
+  });
+
+  it("admits a PR when only the priority queue label is added and records it as priority", async () => {
+    const store = new MemoryStore();
+    const githubSim = new GitHubSim();
+    const logger = pino({ level: "silent" });
+
+    githubSim.addPR({ number: 120, branch: "feat-priority", headSha: "sha-120", reviewApproved: true, labels: ["queue:priority"] });
+    githubSim.setChecks(120, [{ name: "checks", conclusion: "success" }]);
+
+    const service = new MergeStewardService(
+      config, createPolicy(), store, new GitSim() as any, new CISim(() => "pass") as any,
+      githubSim, new EvictionReporterSim(), new GitSim() as any, logger,
+    );
+
+    const app = await makeApp(service);
+    const address = await app.listen({ port: 0 });
+    after(async () => { await app.close(); });
+
+    const labelBody = webhookBody({
+      action: "labeled",
+      label: { name: "queue:priority" },
+      pull_request: { number: 120, head: { ref: "feat-priority", sha: "sha-120" } },
+    });
+
+    const response = await fetch(`${address}/webhooks/github`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-github-event": "pull_request", "x-hub-signature-256": sign(labelBody) },
+      body: labelBody,
+    });
+    assert.strictEqual(response.status, 200);
+
+    const status = await (await fetch(`${address}/repos/test-repo/queue/status`)).json() as {
+      entries: Array<{ prNumber: number; priority: number; status: string }>;
+    };
+    assert.strictEqual(status.entries.length, 1);
+    assert.strictEqual(status.entries[0]!.prNumber, 120);
+    assert.strictEqual(status.entries[0]!.priority, 1);
     assert.strictEqual(status.entries[0]!.status, "queued");
   });
 

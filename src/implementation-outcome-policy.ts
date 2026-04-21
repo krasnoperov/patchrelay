@@ -2,6 +2,8 @@ import type { Logger } from "pino";
 import type { IssueRecord, RunRecord } from "./db-types.ts";
 import type { PatchRelayDatabase } from "./db.ts";
 import type { WithHeldIssueSessionLease } from "./issue-session-lease-service.ts";
+import { isMainRepairIssue } from "./main-repair.ts";
+import { resolveMergeQueueProtocol } from "./merge-queue-protocol.ts";
 import type { AppConfig } from "./types.ts";
 import { execCommand } from "./utils.ts";
 
@@ -14,12 +16,12 @@ export class ImplementationOutcomePolicy {
   ) {}
 
   async verifyPublishedRunOutcome(run: RunRecord, issue: IssueRecord): Promise<string | undefined> {
-    if (run.runType !== "implementation") {
+    if (run.runType !== "implementation" && run.runType !== "main_repair") {
       return undefined;
     }
     const project = this.config.projects.find((entry) => entry.id === run.projectId);
     const baseBranch = project?.github?.baseBranch ?? "main";
-    const publishedPrState = await this.detectPublishedPrState(issue, project?.github?.repoFullName);
+    const publishedPrState = await this.detectPublishedPrState(run, issue, project?.github?.repoFullName);
     if (publishedPrState === "open") {
       return undefined;
     }
@@ -29,11 +31,11 @@ export class ImplementationOutcomePolicy {
   }
 
   async detectRecoverableFailedImplementationOutcome(run: RunRecord, issue: IssueRecord): Promise<string | undefined> {
-    if (run.runType !== "implementation") {
+    if (run.runType !== "implementation" && run.runType !== "main_repair") {
       return undefined;
     }
     const project = this.config.projects.find((entry) => entry.id === run.projectId);
-    const publishedPrState = await this.detectPublishedPrState(issue, project?.github?.repoFullName);
+    const publishedPrState = await this.detectPublishedPrState(run, issue, project?.github?.repoFullName);
     if (publishedPrState === "open" || publishedPrState === "unknown") {
       return undefined;
     }
@@ -43,6 +45,7 @@ export class ImplementationOutcomePolicy {
   }
 
   private async detectPublishedPrState(
+    run: Pick<RunRecord, "projectId" | "runType">,
     issue: IssueRecord,
     repoFullName: string | undefined,
   ): Promise<"open" | "closed" | "none" | "unknown"> {
@@ -97,6 +100,9 @@ export class ImplementationOutcomePolicy {
         },
         "published PR verification refresh",
       );
+      if (state !== "closed" && isMainRepairIssue(issue)) {
+        await this.ensurePriorityQueueLabel(run.projectId, pr.number, repoFullName);
+      }
       return state === "closed" ? "closed" : "open";
     } catch (error) {
       this.logger.debug({
@@ -168,5 +174,47 @@ export class ImplementationOutcomePolicy {
     }
 
     return undefined;
+  }
+
+  private async ensurePriorityQueueLabel(
+    projectId: string,
+    prNumber: number,
+    repoFullName: string | undefined,
+  ): Promise<void> {
+    const project = this.config.projects.find((entry) => entry.id === projectId);
+    if (!project || !repoFullName) return;
+    const priorityLabel = resolveMergeQueueProtocol(project).priorityLabel;
+
+    try {
+      const { stdout } = await execCommand("gh", [
+        "pr",
+        "view",
+        String(prNumber),
+        "--repo",
+        repoFullName,
+        "--json",
+        "labels",
+      ], { timeoutMs: 10_000 });
+      const labels = JSON.parse(stdout) as { labels?: Array<{ name?: string }> };
+      const hasLabel = (labels.labels ?? []).some((entry) => entry.name === priorityLabel);
+      if (hasLabel) return;
+
+      await execCommand("gh", [
+        "pr",
+        "edit",
+        String(prNumber),
+        "--repo",
+        repoFullName,
+        "--add-label",
+        priorityLabel,
+      ], { timeoutMs: 10_000 });
+    } catch (error) {
+      this.logger.warn({
+        projectId,
+        prNumber,
+        priorityLabel,
+        error: error instanceof Error ? error.message : String(error),
+      }, "Failed to enforce priority queue label on main repair PR");
+    }
   }
 }

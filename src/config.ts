@@ -79,6 +79,7 @@ const projectSchema = z.object({
     webhook_secret: z.string().min(1).optional(),
     repo_full_name: z.string().min(1).optional(),
     base_branch: z.string().min(1).optional(),
+    priority_queue_label: z.string().min(1).optional(),
   }).optional(),
 });
 
@@ -103,6 +104,7 @@ const repositorySchema = z.object({
     base_branch: z.string().min(1).optional(),
     merge_queue_label: z.string().min(1).optional(),
     merge_queue_check_name: z.string().min(1).optional(),
+    priority_queue_label: z.string().min(1).optional(),
   }).optional(),
 });
 
@@ -113,6 +115,7 @@ const promptLayerSchema = z.object({
 
 const promptByRunTypeSchema = z.object({
   implementation: promptLayerSchema.optional(),
+  main_repair: promptLayerSchema.optional(),
   review_fix: promptLayerSchema.optional(),
   branch_upkeep: promptLayerSchema.optional(),
   ci_repair: promptLayerSchema.optional(),
@@ -566,6 +569,7 @@ export function loadConfig(
         ...(repository.github?.webhook_secret ? { webhookSecret: repository.github.webhook_secret } : {}),
         ...(repository.github?.merge_queue_label ? { mergeQueueLabel: repository.github.merge_queue_label } : {}),
         ...(repository.github?.merge_queue_check_name ? { mergeQueueCheckName: repository.github.merge_queue_check_name } : {}),
+        ...(repository.github?.priority_queue_label ? { priorityQueueLabel: repository.github.priority_queue_label } : {}),
       },
     };
   });
@@ -610,6 +614,7 @@ export function loadConfig(
               ...(project.github.webhook_secret ? { webhookSecret: project.github.webhook_secret } : {}),
               ...(project.github.repo_full_name ? { repoFullName: project.github.repo_full_name } : {}),
               ...(project.github.base_branch ? { baseBranch: project.github.base_branch } : {}),
+              ...(project.github.priority_queue_label ? { priorityQueueLabel: project.github.priority_queue_label } : {}),
             },
           } : {}),
         };

@@ -11,6 +11,7 @@ const promptLayerSchema = z.object({
 
 const promptByRunTypeSchema = z.object({
   implementation: promptLayerSchema.optional(),
+  main_repair: promptLayerSchema.optional(),
   review_fix: promptLayerSchema.optional(),
   branch_upkeep: promptLayerSchema.optional(),
   ci_repair: promptLayerSchema.optional(),

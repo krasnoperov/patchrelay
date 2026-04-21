@@ -21,6 +21,7 @@ interface EventSource {
 
 const RUN_LABEL: Record<string, string> = {
   implementation: "implementation",
+  main_repair: "main repair",
   ci_repair: "ci repair",
   review_fix: "review fix",
   branch_upkeep: "branch upkeep",

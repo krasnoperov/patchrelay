@@ -8,6 +8,7 @@ import type { PatchRelayPromptingConfig, PromptCustomizationLayer } from "../typ
 
 const WORKFLOW_FILES: Record<RunType, string> = {
   implementation: "IMPLEMENTATION_WORKFLOW.md",
+  main_repair: "IMPLEMENTATION_WORKFLOW.md",
   review_fix: "REVIEW_WORKFLOW.md",
   branch_upkeep: "REVIEW_WORKFLOW.md",
   ci_repair: "IMPLEMENTATION_WORKFLOW.md",

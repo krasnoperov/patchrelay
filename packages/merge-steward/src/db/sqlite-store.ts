@@ -114,7 +114,7 @@ export class SqliteStore implements QueueStore {
     const row = this.conn.prepare(
       `SELECT * FROM queue_entries
        WHERE repo_id = ? AND status NOT IN (${NOT_TERMINAL_SQL})
-       ORDER BY position ASC LIMIT 1`,
+       ORDER BY priority DESC, position ASC LIMIT 1`,
     ).get(repoId, ...TERMINAL_STATUSES);
     return row ? mapEntry(row) : undefined;
   }
@@ -130,7 +130,7 @@ export class SqliteStore implements QueueStore {
     const row = this.conn.prepare(
       `SELECT * FROM queue_entries
        WHERE repo_id = ? AND pr_number = ? AND status NOT IN (${NOT_TERMINAL_SQL})
-       ORDER BY position ASC
+       ORDER BY priority DESC, position ASC
        LIMIT 1`,
     ).get(repoId, prNumber, ...TERMINAL_STATUSES);
     return row ? mapEntry(row) : undefined;
@@ -140,14 +140,14 @@ export class SqliteStore implements QueueStore {
     const rows = this.conn.prepare(
       `SELECT * FROM queue_entries
        WHERE repo_id = ? AND status NOT IN (${NOT_TERMINAL_SQL})
-       ORDER BY position ASC`,
+       ORDER BY priority DESC, position ASC`,
     ).all(repoId, ...TERMINAL_STATUSES);
     return rows.map(mapEntry);
   }
 
   listAll(repoId: string): QueueEntry[] {
     const rows = this.conn.prepare(
-      "SELECT * FROM queue_entries WHERE repo_id = ? ORDER BY position ASC",
+      "SELECT * FROM queue_entries WHERE repo_id = ? ORDER BY priority DESC, position ASC",
     ).all(repoId);
     return rows.map(mapEntry);
   }

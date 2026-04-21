@@ -58,7 +58,7 @@ const NON_ACTIONABLE_SESSION_EVENTS = new Set<IssueSessionEventType>([
   "run_released_authority",
 ]);
 
-const RUN_TYPES = new Set<RunType>(["implementation", "review_fix", "branch_upkeep", "ci_repair", "queue_repair"]);
+const RUN_TYPES = new Set<RunType>(["implementation", "main_repair", "review_fix", "branch_upkeep", "ci_repair", "queue_repair"]);
 
 function parseRunType(value: unknown): RunType | undefined {
   return typeof value === "string" && RUN_TYPES.has(value as RunType) ? value as RunType : undefined;
@@ -104,15 +104,12 @@ export function deriveSessionWakePlan(
         break;
       case "delegated":
         if (!runType) {
-          runType = "implementation";
-          wakeReason = issue.issueClass === "orchestration" ? "initial_delegate" : "delegated";
+          runType = parseRunType(payload?.runType) ?? "implementation";
+          wakeReason = runType === "main_repair"
+            ? "main_repair"
+            : issue.issueClass === "orchestration" ? "initial_delegate" : "delegated";
         }
-        if (payload?.promptContext !== undefined) {
-          context.promptContext = payload.promptContext;
-        }
-        if (payload?.promptBody !== undefined) {
-          context.promptBody = payload.promptBody;
-        }
+        Object.assign(context, payload ?? {});
         break;
       case "child_changed":
       case "child_delivered":

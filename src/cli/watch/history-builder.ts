@@ -40,6 +40,7 @@ const SIDE_TRIP_STATES = new Set(["changes_requested", "repairing_ci", "repairin
 
 const RUN_TYPE_TO_STATE: Record<string, string> = {
   implementation: "implementing",
+  main_repair: "implementing",
   ci_repair: "repairing_ci",
   review_fix: "changes_requested",
   branch_upkeep: "changes_requested",

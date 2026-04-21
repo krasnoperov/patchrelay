@@ -17,7 +17,7 @@ export type FactoryState =
   | "failed";
 
 /** What kind of Codex run to start. */
-export type RunType = "implementation" | "ci_repair" | "review_fix" | "branch_upkeep" | "queue_repair";
+export type RunType = "implementation" | "main_repair" | "ci_repair" | "review_fix" | "branch_upkeep" | "queue_repair";
 
 /** Which factory states involve an active Codex run. */
 export const ACTIVE_RUN_STATES: ReadonlySet<FactoryState> = new Set([

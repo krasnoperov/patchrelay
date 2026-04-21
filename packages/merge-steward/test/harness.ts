@@ -15,6 +15,7 @@ export interface SimPR {
   number: number;
   branch: string;
   files: Array<{ path: string; content: string }>;
+  priority?: number;
 }
 
 export interface HarnessOptions {
@@ -150,7 +151,7 @@ export class Harness {
       baseSha,
       status: "queued",
       position: this.nextPosition++,
-      priority: 0,
+      priority: pr.priority ?? 0,
       generation: 0,
       ciRunId: null,
       ciRetries: 0,

@@ -49,5 +49,7 @@ export interface ProjectConfig {
     mergeQueueLabel?: string;
     /** Check run name that signals queue eviction (default: "merge-steward/queue"). */
     mergeQueueCheckName?: string;
+    /** GitHub label that puts a PR into the priority queue lane (default: "queue:priority"). */
+    priorityQueueLabel?: string;
   };
 }
