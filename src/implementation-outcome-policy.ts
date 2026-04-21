@@ -80,6 +80,19 @@ export class ImplementationOutcomePolicy {
     return details ?? `Implementation completed without opening a PR for branch ${issue.branchName ?? issue.linearIssueId}`;
   }
 
+  async detectRecoverableFailedImplementationOutcome(run: RunRecord, issue: IssueRecord): Promise<string | undefined> {
+    if (run.runType !== "implementation") {
+      return undefined;
+    }
+    if (issue.prNumber && issue.prState && issue.prState !== "closed") {
+      return undefined;
+    }
+
+    const project = this.config.projects.find((entry) => entry.id === run.projectId);
+    const baseBranch = project?.github?.baseBranch ?? "main";
+    return await this.describeLocalImplementationOutcome(issue, baseBranch);
+  }
+
   private upsertIssueIfLeaseHeld(
     projectId: string,
     linearIssueId: string,

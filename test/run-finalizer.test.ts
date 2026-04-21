@@ -34,6 +34,7 @@ function createFinalizer(db: PatchRelayDatabase, completionCheckResult: {
   recommendedReply?: string;
 }, options?: {
   publishedOutcomeError?: string;
+  failedRecoveryError?: string;
 }) {
   const feedEvents: Array<Record<string, unknown>> = [];
   const activities: Array<Record<string, unknown>> = [];
@@ -59,6 +60,7 @@ function createFinalizer(db: PatchRelayDatabase, completionCheckResult: {
       verifyReactiveRunAdvancedBranch: async () => undefined,
       verifyReviewFixAdvancedHead: async () => undefined,
       verifyPublishedRunOutcome: async () => options?.publishedOutcomeError ?? "Implementation completed without opening a PR.",
+      detectRecoverableFailedImplementationOutcome: async () => options?.failedRecoveryError,
       refreshIssueAfterReactivePublish: async (_run, issue) => issue,
       resolvePostRunFollowUp: async () => undefined,
     } as never,
@@ -372,6 +374,123 @@ test("run finalizer fails no-PR completion checks when the fork says the run sto
     assert.equal(updatedRun.completionCheckOutcome, "failed");
     assert.equal(wake, undefined);
     assert.equal(feedEvents.at(-1)?.status, "completion_check_failed");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("run finalizer recovers failed implementation turns when unpublished local work exists", async () => {
+  const { baseDir, db } = createDb();
+  try {
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-1",
+      issueKey: "USE-114",
+      title: "Recover failed implementation publication",
+      factoryState: "implementing",
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "implementation",
+    });
+    db.runs.updateRunThread(run.id, { threadId: "thread-1", turnId: "turn-main" });
+
+    const { finalizer, feedEvents } = createFinalizer(db, {
+      outcome: "continue",
+      summary: "PatchRelay can keep going and publish the local work.",
+    }, {
+      failedRecoveryError: "Implementation completed without opening a PR; worktree still has 3 uncommitted change(s)",
+    });
+
+    const recovered = await finalizer.recoverFailedImplementationRun({
+      run: db.runs.getRunById(run.id)!,
+      issue: db.getIssue(issue.projectId, issue.linearIssueId)!,
+      thread: {
+        id: "thread-1",
+        preview: "",
+        cwd: "/tmp/work",
+        status: "idle",
+        turns: [
+          {
+            id: "turn-main",
+            status: "failed",
+            items: [{ id: "msg-1", type: "agentMessage", text: "I changed files locally before the turn failed." }],
+          },
+        ],
+      },
+      threadId: "thread-1",
+      completedTurnId: "turn-main",
+      failureReason: "Codex reported the turn completed in a failed state",
+    });
+
+    const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId)!;
+    const updatedRun = db.runs.getRunById(run.id)!;
+    const wake = db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId);
+    assert.equal(recovered, true);
+    assert.equal(updatedIssue.factoryState, "delegated");
+    assert.equal(updatedRun.status, "failed");
+    assert.equal(updatedRun.failureReason, "Codex reported the turn completed in a failed state");
+    assert.equal(updatedRun.completionCheckOutcome, "continue");
+    assert.equal(wake?.runType, "implementation");
+    assert.equal(wake?.resumeThread, true);
+    assert.equal(feedEvents.at(-1)?.status, "completion_check_continue");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("run finalizer leaves failed implementation turns alone when no unpublished work is detected", async () => {
+  const { baseDir, db } = createDb();
+  try {
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-1",
+      issueKey: "USE-115",
+      title: "Do not recover clean failed implementation turns",
+      factoryState: "implementing",
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "implementation",
+    });
+    db.runs.updateRunThread(run.id, { threadId: "thread-1", turnId: "turn-main" });
+
+    const { finalizer } = createFinalizer(db, {
+      outcome: "continue",
+      summary: "unused",
+    });
+
+    const recovered = await finalizer.recoverFailedImplementationRun({
+      run: db.runs.getRunById(run.id)!,
+      issue: db.getIssue(issue.projectId, issue.linearIssueId)!,
+      thread: {
+        id: "thread-1",
+        preview: "",
+        cwd: "/tmp/work",
+        status: "idle",
+        turns: [
+          {
+            id: "turn-main",
+            status: "failed",
+            items: [],
+          },
+        ],
+      },
+      threadId: "thread-1",
+      completedTurnId: "turn-main",
+      failureReason: "Codex reported the turn completed in a failed state",
+    });
+
+    const updatedRun = db.runs.getRunById(run.id)!;
+    const wake = db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId);
+    assert.equal(recovered, false);
+    assert.equal(updatedRun.status, "running");
+    assert.equal(updatedRun.completionCheckOutcome, undefined);
+    assert.equal(wake, undefined);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
