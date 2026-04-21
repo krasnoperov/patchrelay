@@ -76,3 +76,20 @@ test("prTokenFor falls back to checks text when review state is not decisive", (
     phrase: "checks passed",
   });
 });
+
+test("prTokenFor shows replacement work for closed PRs on active delegated issues", () => {
+  const token = prTokenFor(makeIssue({
+    prNumber: 260,
+    prState: "closed",
+    factoryState: "implementing",
+    delegatedToPatchRelay: true,
+  }));
+
+  assert.deepEqual(token, {
+    prNumber: 260,
+    glyph: "\u25cb",
+    color: "gray",
+    kind: "queued",
+    phrase: "replace pr",
+  });
+});

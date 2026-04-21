@@ -82,8 +82,8 @@ export function deriveLinkedPrAdoptionOutcome(
 
   if (prState === "closed") {
     return {
-      factoryState: "awaiting_input",
-      pendingRunType: null,
+      factoryState: "delegated",
+      pendingRunType: "implementation",
       issueUpdates: {
         ...issueUpdates,
         prIsDraft: false,

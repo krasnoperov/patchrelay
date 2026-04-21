@@ -393,6 +393,35 @@ test("buildRunPrompt keeps direct-reply follow-ups concise inside current contex
   }
 });
 
+test("follow-up prompts describe closed PRs as replacement context instead of current PRs", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-prompt-"));
+  try {
+    writeFileSync(path.join(baseDir, "IMPLEMENTATION_WORKFLOW.md"), "# Implementation Workflow\n");
+
+    const prompt = buildFollowUpRunPrompt({
+      issue: {
+        ...createIssue(),
+        factoryState: "implementing",
+        prNumber: 260,
+        prState: "closed",
+        prHeadSha: "deadbeef",
+      },
+      runType: "implementation",
+      repoPath: baseDir,
+      context: {
+        wakeReason: "followup_comment",
+        followUpMode: true,
+      },
+    });
+
+    assert.match(prompt, /Previous PR: #260 \(closed; replacement PR needed\)/);
+    assert.doesNotMatch(prompt, /Current PR: #260/);
+    assert.match(prompt, /Previous PR facts:/);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("buildRunPrompt applies extra instructions and section replacement without replacing the whole default prompt", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-prompt-layer-"));
   const promptLayer: PromptCustomizationLayer = {

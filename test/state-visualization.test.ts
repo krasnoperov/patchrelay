@@ -123,11 +123,25 @@ test("patchrelay queue observations report merge completion", () => {
 test("patchrelay queue observations show closed PRs as historical", () => {
   const issue = makeIssue({
     factoryState: "done",
+    delegatedToPatchRelay: true,
     prState: "closed",
     prReviewState: "commented",
   });
 
   const observations = buildPatchRelayQueueObservations(issue, []);
 
-  assert.match(observations[1]?.text ?? "", /Tracked PR: #88 \(closed\) \(commented\)/);
+  assert.match(observations[1]?.text ?? "", /Previous PR: #88 \(closed\) \(commented\)/);
+});
+
+test("patchrelay queue observations show closed PR replacement work explicitly", () => {
+  const issue = makeIssue({
+    factoryState: "implementing",
+    delegatedToPatchRelay: true,
+    prState: "closed",
+    prReviewState: "commented",
+  });
+
+  const observations = buildPatchRelayQueueObservations(issue, []);
+
+  assert.match(observations[1]?.text ?? "", /Previous PR: #88 \(closed; replacement pending\) \(commented\)/);
 });

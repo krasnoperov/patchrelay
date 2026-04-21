@@ -3,6 +3,7 @@ import path from "node:path";
 import type { IssueRecord } from "../db-types.ts";
 import type { RunType } from "../factory-state.ts";
 import type { IssueClass } from "../issue-class.ts";
+import { derivePrDisplayContext } from "../pr-display-context.ts";
 import type { PatchRelayPromptingConfig, PromptCustomizationLayer } from "../types.ts";
 
 const WORKFLOW_FILES: Record<RunType, string> = {
@@ -52,11 +53,23 @@ function hasWorkflowFile(repoPath: string, runType: RunType): boolean {
 }
 
 function buildPromptHeader(issue: IssueRecord): string {
+  const prContext = derivePrDisplayContext(issue);
+  const prLine = prContext.kind === "active_pr"
+    ? `PR: #${prContext.prNumber}`
+    : prContext.kind === "merged_pr"
+      ? `Merged PR: #${prContext.prNumber}`
+      : prContext.kind === "closed_historical_pr"
+        ? `Previous PR: #${prContext.prNumber} (closed)`
+        : prContext.kind === "closed_replacement_pending"
+          ? `Previous PR: #${prContext.prNumber} (closed; replacement PR needed)`
+          : prContext.kind === "closed_pr_paused"
+            ? `Previous PR: #${prContext.prNumber} (closed; redelegate to replace it)`
+            : undefined;
   return [
     `Issue: ${issue.issueKey ?? issue.linearIssueId}`,
     issue.title ? `Title: ${issue.title}` : undefined,
     issue.branchName ? `Branch: ${issue.branchName}` : undefined,
-    issue.prNumber ? `PR: #${issue.prNumber}` : undefined,
+    prLine,
   ].filter(Boolean).join("\n");
 }
 
@@ -440,6 +453,7 @@ function buildQueueRepairContext(context?: Record<string, unknown>): string {
 }
 
 function buildFollowUpContextLines(issue: IssueRecord, runType: RunType, context?: Record<string, unknown>): string[] {
+  const prContext = derivePrDisplayContext(issue);
   const wakeReason = typeof context?.wakeReason === "string" ? context.wakeReason : undefined;
   const followUps = Array.isArray(context?.followUps) ? context.followUps : [];
   const followUpLines = followUps
@@ -480,15 +494,31 @@ function buildFollowUpContextLines(issue: IssueRecord, runType: RunType, context
   }
 
   if (issue.prNumber || issue.prHeadSha || issue.prReviewState || context?.mergeStateStatus) {
+    const prHeading = prContext.kind === "closed_historical_pr"
+      || prContext.kind === "closed_replacement_pending"
+      || prContext.kind === "closed_pr_paused"
+      ? "Previous PR facts:"
+      : "Current PR facts:";
+    const prLine = prContext.kind === "active_pr"
+      ? `Current PR: #${prContext.prNumber}`
+      : prContext.kind === "merged_pr"
+        ? `Merged PR: #${prContext.prNumber}`
+        : prContext.kind === "closed_historical_pr"
+          ? `Previous PR: #${prContext.prNumber} (closed)`
+          : prContext.kind === "closed_replacement_pending"
+            ? `Previous PR: #${prContext.prNumber} (closed; replacement PR needed)`
+            : prContext.kind === "closed_pr_paused"
+              ? `Previous PR: #${prContext.prNumber} (closed; redelegate to replace it)`
+              : "";
     lines.push(
       "",
-      "Current PR facts:",
+      prHeading,
       `Fact freshness: ${
         context?.githubFactsFresh === true
           ? "refreshed immediately before this turn was created."
           : "may now be stale; refresh before making irreversible decisions."
       }`,
-      issue.prNumber ? `Current PR: #${issue.prNumber}` : "",
+      prLine,
       issue.prHeadSha ? `Current relevant head SHA: ${issue.prHeadSha}` : "",
       issue.prReviewState ? `Current review state: ${issue.prReviewState}` : "",
       typeof context?.mergeStateStatus === "string" ? `Merge state against ${String(context?.baseBranch ?? "main")}: ${String(context.mergeStateStatus)}` : "",
