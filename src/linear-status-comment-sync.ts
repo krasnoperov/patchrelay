@@ -1,7 +1,7 @@
 import type { Logger } from "pino";
 import { extractCompletionCheck } from "./completion-check.ts";
 import type { PatchRelayDatabase } from "./db.ts";
-import type { IssueRecord, RunRecord, TrackedIssueRecord } from "./db-types.ts";
+import type { IssueRecord, TrackedIssueRecord } from "./db-types.ts";
 import type { RunType } from "./factory-state.ts";
 import { isClosedPrState } from "./pr-state.ts";
 import { derivePrDisplayContext } from "./pr-display-context.ts";
@@ -39,12 +39,48 @@ export async function syncVisibleStatusComment(params: {
 }
 
 export function shouldSyncVisibleIssueComment(
-  _issue: Pick<IssueRecord, "factoryState" | "prNumber" | "prUrl" | "prState" | "delegatedToPatchRelay"> & {
+  issue: Pick<IssueRecord, "factoryState" | "prNumber" | "prUrl" | "prState" | "delegatedToPatchRelay"> & {
     sessionState?: string | undefined;
   },
-  _hasAgentSession: boolean,
+  hasAgentSession: boolean,
 ): boolean {
-  return true;
+  if (!hasAgentSession) {
+    return true;
+  }
+  if (!issue.delegatedToPatchRelay) {
+    return true;
+  }
+  if (issue.sessionState === "waiting_input" || issue.factoryState === "awaiting_input") {
+    return true;
+  }
+  if (issue.sessionState === "failed" || issue.factoryState === "failed" || issue.factoryState === "escalated") {
+    return true;
+  }
+  if (issue.factoryState === "done") {
+    return issue.prState !== "merged";
+  }
+  return false;
+}
+
+export async function collapseVisibleStatusComment(params: {
+  issue: Pick<IssueRecord, "projectId" | "linearIssueId" | "statusCommentId">;
+  linear: NonNullable<Awaited<ReturnType<LinearClientProvider["forProject"]>>>;
+  logger: Logger;
+}): Promise<void> {
+  const { issue, linear, logger } = params;
+  if (!issue.statusCommentId) {
+    return;
+  }
+  try {
+    await linear.upsertIssueComment({
+      issueId: issue.linearIssueId,
+      commentId: issue.statusCommentId,
+      body: renderCollapsedStatusComment(),
+    });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    logger.warn({ issueId: issue.linearIssueId, error: msg }, "Failed to collapse Linear status comment");
+  }
 }
 
 function renderStatusComment(
@@ -129,26 +165,19 @@ function renderStatusComment(
     lines.push("", prLine);
   }
 
-  if (latestRun) {
-    lines.push("", `Latest run: ${formatLatestRun(latestRun)}`);
-    if (latestRun.failureReason) {
-      lines.push("", `Failure: ${latestRun.failureReason}`);
-    }
-    if (completionCheck && completionCheck.outcome !== "needs_input" && completionCheck.summary !== statusNote) {
-      lines.push("", `Completion check: ${completionCheck.summary}`);
-    }
-  }
-
   if (issue.lastGitHubFailureCheckName && (issue.factoryState === "repairing_ci" || issue.prCheckStatus === "failed" || issue.prCheckStatus === "failure")) {
     lines.push("", `Latest failing check: ${issue.lastGitHubFailureCheckName}`);
   }
 
-  lines.push(
-    "",
-    "_PatchRelay updates this comment as it works. Review and merge remain downstream._",
-  );
-
   return lines.join("\n");
+}
+
+function renderCollapsedStatusComment(): string {
+  return [
+    "## PatchRelay status",
+    "",
+    "Live status is in the agent session and activity feed. This comment is reused only when PatchRelay needs human input or intervention.",
+  ].join("\n");
 }
 
 function statusHeadline(
@@ -233,11 +262,6 @@ function statusHeadline(
     default:
       return humanize(issue.factoryState);
   }
-}
-
-function formatLatestRun(run: Pick<RunRecord, "runType" | "status" | "endedAt" | "startedAt">): string {
-  const at = run.endedAt ?? run.startedAt;
-  return `${humanize(run.runType)} ${run.status} at ${at}`;
 }
 
 function humanize(value: string): string {

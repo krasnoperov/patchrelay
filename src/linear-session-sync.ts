@@ -5,6 +5,7 @@ import type { RunType } from "./factory-state.ts";
 import type { AppConfig, LinearAgentActivityContent, LinearClientProvider } from "./types.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import {
+  collapseVisibleStatusComment,
   shouldSyncVisibleIssueComment,
   syncVisibleStatusComment,
 } from "./linear-status-comment-sync.ts";
@@ -61,6 +62,12 @@ export class LinearSessionSync {
           logger: this.logger,
           ...(trackedIssue ? { trackedIssue } : {}),
           ...(options ? { options } : {}),
+        });
+      } else if (syncedIssue.statusCommentId) {
+        await collapseVisibleStatusComment({
+          issue: syncedIssue,
+          linear,
+          logger: this.logger,
         });
       }
     } catch (error) {

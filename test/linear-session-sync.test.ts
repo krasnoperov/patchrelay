@@ -135,15 +135,14 @@ test("syncSession mirrors failure state into a visible Linear status comment", a
     assert.equal(commentUpdates[0]?.commentId, undefined);
     assert.match(String(commentUpdates[0]?.body), /Needs operator intervention/);
     assert.doesNotMatch(String(commentUpdates[0]?.body), /Running implementation/);
-    assert.match(String(commentUpdates[0]?.body), /Latest run: implementation failed/);
-    assert.match(String(commentUpdates[0]?.body), /Failure: Implementation completed without opening a PR/);
+    assert.match(String(commentUpdates[0]?.body), /Action needed: Implementation completed without opening a PR/);
     assert.equal(db.getIssue(issue.projectId, issue.linearIssueId)?.statusCommentId, "comment-1");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
 
-test("syncSession keeps the durable status comment current during active delegated work", async () => {
+test("syncSession does not create a durable status comment during active delegated work with an agent session", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-linear-sync-active-"));
   try {
     const config = createConfig(baseDir);
@@ -217,9 +216,59 @@ test("syncSession keeps the durable status comment current during active delegat
 
     await sync.syncSession(db.getIssue(issue.projectId, issue.linearIssueId)!, { activeRunType: "implementation" });
 
+    assert.equal(commentUpdates.length, 0);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("syncSession collapses an existing durable status comment during active delegated work", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-linear-sync-collapse-active-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+
+    const issue = db.upsertIssue({
+      projectId: "krasnoperov/ballony-i-nasosy",
+      linearIssueId: "issue-tst-collapse-active",
+      issueKey: "TST-13",
+      title: "Collapse stale visible status comment",
+      factoryState: "implementing",
+      delegatedToPatchRelay: true,
+      agentSessionId: "session-collapse-active",
+      statusCommentId: "comment-collapse-active",
+      currentLinearState: "In Progress",
+      activeRunId: 13,
+    });
+
+    const commentUpdates: Array<Record<string, unknown>> = [];
+    const linear: Partial<LinearClient> = {
+      updateAgentSession: async (params) => ({ id: params.agentSessionId }),
+      upsertIssueComment: async (params) => {
+        commentUpdates.push(params as unknown as Record<string, unknown>);
+        return { id: String(params.commentId ?? "comment-collapse-active"), body: params.body };
+      },
+      createAgentActivity: async () => ({ id: "activity-collapse-active" }),
+      getIssue: async () => { throw new Error("not used"); },
+      setIssueState: async () => { throw new Error("not used"); },
+      updateIssueLabels: async () => { throw new Error("not used"); },
+      getActorProfile: async () => ({ actorId: "patchrelay-actor" }),
+      getWorkspaceCatalog: async () => ({ workspace: {}, teams: [], projects: [] }),
+    };
+
+    const sync = new LinearSessionSync(
+      config,
+      db,
+      { forProject: async () => linear as LinearClient },
+      pino({ enabled: false }),
+    );
+
+    await sync.syncSession(issue, { activeRunType: "implementation" });
+
     assert.equal(commentUpdates.length, 1);
-    assert.match(String(commentUpdates[0]?.body), /Running implementation/);
-    assert.match(String(commentUpdates[0]?.body), /_PatchRelay updates this comment as it works/);
+    assert.equal(commentUpdates[0]?.commentId, "comment-collapse-active");
+    assert.match(String(commentUpdates[0]?.body), /Live status is in the agent session and activity feed/);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -637,7 +686,7 @@ test("syncSession includes actionable input text for awaiting_input sessions", a
   }
 });
 
-test("syncSession keeps the durable status comment current for healthy agent-session runs", async () => {
+test("syncSession skips the durable status comment for healthy agent-session runs", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-linear-sync-healthy-agent-session-"));
   try {
     const config = createConfig(baseDir);
@@ -686,9 +735,7 @@ test("syncSession keeps the durable status comment current for healthy agent-ses
     await sync.syncSession(db.getIssue(issue.projectId, issue.linearIssueId)!);
 
     assert.equal(sessionUpdates.length, 1);
-    assert.equal(commentUpdates.length, 1);
-    assert.match(String(commentUpdates[0]?.body), /Handed off downstream for merge/);
-    assert.match(String(commentUpdates[0]?.body), /PR: \[#17\]\(https:\/\/github.com\/krasnoperov\/ballony-i-nasosy\/pull\/17\)/);
+    assert.equal(commentUpdates.length, 0);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
