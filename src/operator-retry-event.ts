@@ -41,9 +41,9 @@ export function buildOperatorRetryEvent(issue: IssueRecord, runType: string, sou
     return {
       eventType: "review_changes_requested" as const,
       eventJson: JSON.stringify({
-        reviewBody: runType === "branch_upkeep"
-          ? `${humanizeSource(source)} requested retry of branch upkeep after requested changes.`
-          : `${humanizeSource(source)} requested retry of review-fix work.`,
+        ...(runType === "branch_upkeep"
+          ? { reviewBody: `${humanizeSource(source)} requested retry of branch upkeep after requested changes.` }
+          : { promptContext: `${humanizeSource(source)} requested retry of review-fix work.` }),
         ...(runType === "branch_upkeep" ? { branchUpkeepRequired: true, wakeReason: "branch_upkeep" } : {}),
         source,
       }),

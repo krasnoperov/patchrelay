@@ -9,6 +9,7 @@ import {
   isRequestedChangesRunType,
   readReactivePrSnapshot,
 } from "./reactive-pr-state.ts";
+import { readLatestRequestedChangesReviewContext } from "./remote-pr-review.ts";
 import type { AppConfig } from "./types.ts";
 import type { PostRunFollowUp } from "./run-completion-policy.ts";
 
@@ -157,6 +158,14 @@ export class ReactiveRunPolicy {
       const snapshot = await readReactivePrSnapshot(this.config, issue.projectId, issue.prNumber);
       if (!snapshot) return context;
 
+      const refreshedContext = await this.hydrateRequestedChangesContext(
+        issue.projectId,
+        issue.prNumber,
+        snapshot.repoFullName,
+        snapshot.headSha,
+        context,
+      );
+
       this.upsertIssueIfLeaseHeld(
         issue.projectId,
         issue.linearIssueId,
@@ -170,15 +179,15 @@ export class ReactiveRunPolicy {
         "review-fix wake refresh",
       );
 
-      if (snapshot.prState !== "open") return context;
-      if (snapshot.reviewState && snapshot.reviewState !== "changes_requested") return context;
-      if (!isDirtyMergeStateStatus(snapshot.pr.mergeStateStatus)) return context;
+      if (snapshot.prState !== "open") return refreshedContext;
+      if (snapshot.reviewState && snapshot.reviewState !== "changes_requested") return refreshedContext;
+      if (!isDirtyMergeStateStatus(snapshot.pr.mergeStateStatus)) return refreshedContext;
 
       return buildReviewFixBranchUpkeepContext(
         issue.prNumber,
         snapshot.baseBranch,
         snapshot.pr,
-        context,
+        refreshedContext,
       );
     } catch (error) {
       this.logger.debug({
@@ -259,4 +268,51 @@ export class ReactiveRunPolicy {
     }
     return updated;
   }
+
+  private async hydrateRequestedChangesContext(
+    projectId: string,
+    prNumber: number,
+    repoFullName: string,
+    headSha: string | undefined,
+    context: Record<string, unknown> | undefined,
+  ): Promise<Record<string, unknown> | undefined> {
+    const merged: Record<string, unknown> = {
+      ...(context ?? {}),
+      ...(headSha ? { headSha } : {}),
+    };
+
+    if (hasStructuredReviewContext(merged)) {
+      return merged;
+    }
+
+    const liveReview = await readLatestRequestedChangesReviewContext(repoFullName, prNumber);
+    if (!liveReview) {
+      return Object.keys(merged).length > 0 ? merged : context;
+    }
+
+    return {
+      ...merged,
+      ...(liveReview.reviewId !== undefined ? { reviewId: liveReview.reviewId } : {}),
+      ...(liveReview.reviewCommitId ? { reviewCommitId: liveReview.reviewCommitId } : {}),
+      ...(liveReview.reviewUrl ? { reviewUrl: liveReview.reviewUrl } : {}),
+      ...(liveReview.reviewerName ? { reviewerName: liveReview.reviewerName } : {}),
+      ...(liveReview.reviewBody ? { reviewBody: liveReview.reviewBody } : {}),
+      ...(liveReview.reviewComments ? { reviewComments: liveReview.reviewComments } : {}),
+    };
+  }
+}
+
+function hasStructuredReviewContext(context: Record<string, unknown> | undefined): boolean {
+  if (!context) return false;
+  const reviewBody = typeof context.reviewBody === "string" ? context.reviewBody.trim() : "";
+  const isOperatorRetryPlaceholder = typeof context.source === "string"
+    && context.source === "operator_retry"
+    && /^operator requested retry of review-fix work\.?$/i.test(reviewBody);
+  if (isOperatorRetryPlaceholder) {
+    return false;
+  }
+  if (reviewBody) return true;
+  if (typeof context.reviewUrl === "string" && context.reviewUrl.trim()) return true;
+  if (typeof context.reviewerName === "string" && context.reviewerName.trim()) return true;
+  return Array.isArray(context.reviewComments) && context.reviewComments.length > 0;
 }

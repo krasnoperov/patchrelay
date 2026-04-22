@@ -2385,6 +2385,96 @@ exit 1
   }
 });
 
+test("review-fix retry rehydrates live review context before relaunch", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-review-retry-context-"));
+  const oldPath = process.env.PATH;
+  try {
+    const { config, db, orchestrator } = createOrchestrator(baseDir);
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-review-retry-context",
+      issueKey: "USE-RETRY-CONTEXT",
+      prNumber: 32,
+      prState: "open",
+      prHeadSha: "sha-stale",
+      prReviewState: "changes_requested",
+      factoryState: "changes_requested",
+      reviewFixAttempts: 1,
+    });
+
+    const fakeBin = path.join(baseDir, "fake-bin");
+    mkdirSync(fakeBin, { recursive: true });
+    const ghPath = path.join(fakeBin, "gh");
+    writeFileSync(ghPath, `#!/usr/bin/env bash
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  printf '{"headRefOid":"sha-live","state":"OPEN","reviewDecision":"CHANGES_REQUESTED","mergeStateStatus":"BLOCKED"}'
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "repos/owner/repo/pulls/32/reviews?per_page=100" ]; then
+  printf '[{"id":901,"state":"CHANGES_REQUESTED","body":"Please fix the checkout eligibility for prelaunch accounts.","commit_id":"commit-901","html_url":"https://github.com/owner/repo/pull/32#pullrequestreview-901","user":{"login":"review-quill"}}]'
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "repos/owner/repo/pulls/32/reviews/901/comments?per_page=100" ]; then
+  printf '[{"body":"allow_trial should stay false once the user has any prior subscription history.","path":"src/backend/services/billing-service.ts","line":633,"side":"RIGHT","html_url":"https://github.com/owner/repo/pull/32#discussion_r901","user":{"login":"review-quill"}}]'
+  exit 0
+fi
+echo "unexpected gh args: $*" >&2
+exit 1
+`);
+    chmodSync(ghPath, 0o755);
+    process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
+
+    const leaseId = "lease-review-retry-context";
+    assert.equal(
+      db.issueSessions.acquireIssueSessionLease({
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        leaseId,
+        workerId: "worker-review-retry-context",
+        leasedUntil: "2030-04-06T10:05:00.000Z",
+        now: "2030-04-06T10:00:00.000Z",
+      }),
+      true,
+    );
+    ((orchestrator as unknown as { activeSessionLeases: Map<string, string> }).activeSessionLeases)
+      .set(`${issue.projectId}:${issue.linearIssueId}`, leaseId);
+
+    const context = await (orchestrator as unknown as {
+      resolveRequestedChangesWakeContext: (
+        issue: typeof issue,
+        runType: "review_fix" | "branch_upkeep",
+        context: Record<string, unknown> | undefined,
+        project: AppConfig["projects"][number],
+      ) => Promise<Record<string, unknown> | undefined>;
+    }).resolveRequestedChangesWakeContext(issue, "review_fix", {
+      reviewBody: "Operator requested retry of review-fix work.",
+      source: "operator_retry",
+    }, config.projects[0]!);
+
+    assert.equal(context?.headSha, "sha-live");
+    assert.equal(context?.reviewId, 901);
+    assert.equal(context?.reviewCommitId, "commit-901");
+    assert.equal(context?.reviewUrl, "https://github.com/owner/repo/pull/32#pullrequestreview-901");
+    assert.equal(context?.reviewerName, "review-quill");
+    assert.match(String(context?.reviewBody ?? ""), /checkout eligibility for prelaunch accounts/);
+    assert.deepEqual(context?.reviewComments, [{
+      body: "allow_trial should stay false once the user has any prior subscription history.",
+      path: "src/backend/services/billing-service.ts",
+      line: 633,
+      side: "RIGHT",
+      url: "https://github.com/owner/repo/pull/32#discussion_r901",
+      authorLogin: "review-quill",
+    }]);
+
+    const updatedIssue = db.getIssue("usertold", "issue-review-retry-context");
+    assert.equal(updatedIssue?.prHeadSha, "sha-live");
+    assert.equal(updatedIssue?.prReviewState, "changes_requested");
+  } finally {
+    process.env.PATH = oldPath;
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("completed notification for a released run is ignored", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-notification-ignore-released-"));
   const oldPath = process.env.PATH;

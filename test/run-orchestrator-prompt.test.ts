@@ -9,7 +9,7 @@ import {
   buildRunPrompt as buildLayeredRunPrompt,
   findDisallowedPatchRelayPromptSectionIds,
 } from "../src/prompting/patchrelay.ts";
-import { shouldReuseIssueThread } from "../src/run-launcher.ts";
+import { shouldFreshenWorktreeBeforeLaunch, shouldReuseIssueThread } from "../src/run-launcher.ts";
 import type { PromptCustomizationLayer } from "../src/types.ts";
 import type { IssueRecord } from "../src/db-types.ts";
 
@@ -320,6 +320,20 @@ test("thread reuse is limited to explicit follow-up continuity", () => {
     }),
     false,
   );
+});
+
+test("plain review-fix runs stay on the live PR head instead of rebasing onto main", () => {
+  assert.equal(shouldFreshenWorktreeBeforeLaunch({ runType: "review_fix" }), false);
+  assert.equal(shouldFreshenWorktreeBeforeLaunch({
+    runType: "review_fix",
+    effectiveContext: { branchUpkeepRequired: true },
+  }), true);
+  assert.equal(shouldFreshenWorktreeBeforeLaunch({
+    runType: "review_fix",
+    effectiveContext: { reviewFixMode: "branch_upkeep" },
+  }), true);
+  assert.equal(shouldFreshenWorktreeBeforeLaunch({ runType: "branch_upkeep" }), true);
+  assert.equal(shouldFreshenWorktreeBeforeLaunch({ runType: "queue_repair" }), false);
 });
 
 test("buildRunPrompt folds implementation follow-ups into current context", () => {
