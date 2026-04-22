@@ -202,6 +202,9 @@ function summarizeRun(run: RunRecord): string | undefined {
   }
 
   const summary = parseObjectJson(run.summaryJson);
+  if (typeof summary?.publicationRecapSummary === "string" && summary.publicationRecapSummary.trim()) {
+    return summary.publicationRecapSummary.trim();
+  }
   if (typeof summary?.latestAssistantMessage === "string" && summary.latestAssistantMessage.trim()) {
     return summary.latestAssistantMessage.trim();
   }

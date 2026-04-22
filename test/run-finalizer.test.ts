@@ -33,8 +33,9 @@ function createFinalizer(db: PatchRelayDatabase, completionCheckResult: {
   why?: string;
   recommendedReply?: string;
 }, options?: {
-  publishedOutcomeError?: string;
-  failedRecoveryError?: string;
+  publishedOutcomeError?: string | null;
+  failedRecoveryError?: string | null;
+  publicationRecapSummary?: string;
 }) {
   const feedEvents: Array<Record<string, unknown>> = [];
   const activities: Array<Record<string, unknown>> = [];
@@ -59,8 +60,12 @@ function createFinalizer(db: PatchRelayDatabase, completionCheckResult: {
     {
       verifyReactiveRunAdvancedBranch: async () => undefined,
       verifyReviewFixAdvancedHead: async () => undefined,
-      verifyPublishedRunOutcome: async () => options?.publishedOutcomeError ?? "Implementation completed without opening a PR.",
-      detectRecoverableFailedImplementationOutcome: async () => options?.failedRecoveryError,
+      verifyPublishedRunOutcome: async () => options && "publishedOutcomeError" in options
+        ? options.publishedOutcomeError ?? undefined
+        : "Implementation completed without opening a PR.",
+      detectRecoverableFailedImplementationOutcome: async () => options && "failedRecoveryError" in options
+        ? options.failedRecoveryError ?? undefined
+        : undefined,
       refreshIssueAfterReactivePublish: async (_run, issue) => issue,
       resolvePostRunFollowUp: async () => undefined,
     } as never,
@@ -71,6 +76,15 @@ function createFinalizer(db: PatchRelayDatabase, completionCheckResult: {
         ...completionCheckResult,
       }),
     },
+    options?.publicationRecapSummary
+      ? {
+          run: async () => ({
+            threadId: "fork-publication-1",
+            turnId: "turn-publication-1",
+            summary: options.publicationRecapSummary!,
+          }),
+        }
+      : undefined,
     {
       publish(event) {
         feedEvents.push(event as unknown as Record<string, unknown>);
@@ -491,6 +505,87 @@ test("run finalizer leaves failed implementation turns alone when no unpublished
     assert.equal(updatedRun.status, "running");
     assert.equal(updatedRun.completionCheckOutcome, undefined);
     assert.equal(wake, undefined);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("run finalizer prefers the separate publication recap for Linear-visible completion text", async () => {
+  const { baseDir, db } = createDb();
+  try {
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-1",
+      issueKey: "USE-116",
+      title: "Publish concise Linear recap",
+      factoryState: "implementing",
+      prNumber: 42,
+      prState: "open",
+    });
+    db.issueSessions.appendIssueSessionEvent({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      eventType: "review_changes_requested",
+      eventJson: JSON.stringify({
+        reviewerName: "Ada",
+        reviewBody: "Please tighten the publishing summary.",
+      }),
+    });
+    const wake = db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId);
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "review_fix",
+    });
+    db.issueSessions.consumeIssueSessionEvents(issue.projectId, issue.linearIssueId, wake?.eventIds ?? [], run.id);
+    db.issueSessions.setIssueSessionLastWakeReason(issue.projectId, issue.linearIssueId, wake?.wakeReason ?? null);
+    db.runs.updateRunThread(run.id, { threadId: "thread-1", turnId: "turn-main" });
+
+    const { finalizer, activities, feedEvents } = createFinalizer(db, {
+      outcome: "done",
+      summary: "unused",
+    }, {
+      publishedOutcomeError: null,
+      publicationRecapSummary: "Addressed the requested publishing-summary feedback and updated PR #42.",
+    });
+
+    await finalizer.finalizeCompletedRun({
+      source: "notification",
+      run: db.runs.getRunById(run.id)!,
+      issue: db.getIssue(issue.projectId, issue.linearIssueId)!,
+      thread: {
+        id: "thread-1",
+        preview: "",
+        cwd: "/tmp/work",
+        status: "idle",
+        turns: [
+          {
+            id: "turn-main",
+            status: "completed",
+            items: [
+              {
+                id: "msg-1",
+                type: "agentMessage",
+                text: "Updated the PR, reran the relevant checks, and adjusted the copy to match the requested review changes in detail.",
+              },
+            ],
+          },
+        ],
+      },
+      threadId: "thread-1",
+      completedTurnId: "turn-main",
+      resolveRecoverableRunState: () => undefined,
+    });
+
+    const updatedRun = db.runs.getRunById(run.id)!;
+    const parsedSummary = JSON.parse(updatedRun.summaryJson ?? "{}") as Record<string, unknown>;
+    assert.equal(parsedSummary.publicationRecapSummary, "Addressed the requested publishing-summary feedback and updated PR #42.");
+    assert.equal(
+      activities.at(-1)?.body,
+      "Updated PR #42 to address review feedback. Addressed the requested publishing-summary feedback and updated PR #42.",
+    );
+    assert.equal(feedEvents.at(-1)?.detail, "Addressed the requested publishing-summary feedback and updated PR #42.");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

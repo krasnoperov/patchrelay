@@ -207,7 +207,13 @@ export function extractLatestAssistantSummary(
   if (!run) return undefined;
   if (run.summaryJson) {
     try {
-      const parsed = JSON.parse(run.summaryJson) as { latestAssistantMessage?: unknown };
+      const parsed = JSON.parse(run.summaryJson) as {
+        publicationRecapSummary?: unknown;
+        latestAssistantMessage?: unknown;
+      };
+      if (typeof parsed.publicationRecapSummary === "string" && parsed.publicationRecapSummary.trim()) {
+        return sanitizeOperatorFacingText(parsed.publicationRecapSummary);
+      }
       if (typeof parsed.latestAssistantMessage === "string" && parsed.latestAssistantMessage.trim()) {
         return sanitizeOperatorFacingText(parsed.latestAssistantMessage);
       }

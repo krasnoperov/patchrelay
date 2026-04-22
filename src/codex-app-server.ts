@@ -70,6 +70,15 @@ const COMPLETION_CHECK_DEVELOPER_INSTRUCTIONS = [
   "Return only the requested JSON object.",
 ].join("\n");
 
+const PUBLICATION_RECAP_DEVELOPER_INSTRUCTIONS = [
+  "You are PatchRelay's publication recap helper.",
+  "This is a read-only follow-up used only to produce one concise Linear-visible summary for a successful run.",
+  "Keep reasoning light and concise.",
+  "Do not run commands, do not call tools, do not edit files, and do not inspect or modify the repository.",
+  "Use only the prior thread context and the facts in the current prompt.",
+  "Return only the requested JSON object.",
+].join("\n");
+
 export function resolveCodexAppServerLaunch(config: CodexAppServerConfig): { command: string; args: string[] } {
   if (!config.sourceBashrc) {
     return {
@@ -298,6 +307,15 @@ export class CodexAppServerClient extends EventEmitter {
       approvalPolicy: "never",
       sandboxMode: "read-only",
       developerInstructions: COMPLETION_CHECK_DEVELOPER_INSTRUCTIONS,
+    });
+  }
+
+  async forkThreadForPublicationRecap(threadId: string): Promise<CodexThreadSummary> {
+    return await this.forkThread(threadId, tmpdir(), {
+      approvalPolicy: "never",
+      sandboxMode: "read-only",
+      reasoningEffort: "low",
+      developerInstructions: PUBLICATION_RECAP_DEVELOPER_INSTRUCTIONS,
     });
   }
 
