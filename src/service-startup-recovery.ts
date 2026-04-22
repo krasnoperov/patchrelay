@@ -35,7 +35,10 @@ export class ServiceStartupRecovery {
         continue;
       }
       const activeRun = syncedIssue.activeRunId ? this.db.runs.getRunById(syncedIssue.activeRunId) : undefined;
-      await this.linearSync.syncSession(syncedIssue, activeRun ? { activeRunType: activeRun.runType } : undefined);
+      if (!activeRun) {
+        continue;
+      }
+      await this.linearSync.syncSession(syncedIssue, { activeRunType: activeRun.runType });
     }
   }
 

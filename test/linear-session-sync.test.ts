@@ -392,7 +392,7 @@ test("syncSession updates the existing visible Linear status comment even withou
   }
 });
 
-test("syncSession keeps visible status comments current for paused undelegated PR-backed issues", async () => {
+test("syncSession collapses paused undelegated PR-backed status comments when an agent session exists", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-linear-sync-paused-pr-"));
   try {
     const config = createConfig(baseDir);
@@ -407,6 +407,7 @@ test("syncSession keeps visible status comments current for paused undelegated P
       factoryState: "changes_requested",
       delegatedToPatchRelay: false,
       agentSessionId: "session-paused-pr",
+      statusCommentId: "comment-paused-pr",
       currentLinearState: "In Progress",
       prNumber: 57,
       prState: "open",
@@ -466,14 +467,14 @@ test("syncSession keeps visible status comments current for paused undelegated P
     await sync.syncSession(db.getIssue(issue.projectId, issue.linearIssueId)!);
 
     assert.equal(commentUpdates.length, 1);
-    assert.match(String(commentUpdates[0]?.body), /PR #57 has requested changes while PatchRelay is paused/);
-    assert.match(String(commentUpdates[0]?.body), /Waiting: PatchRelay automation is paused because the issue is undelegated/);
+    assert.equal(commentUpdates[0]?.commentId, "comment-paused-pr");
+    assert.match(String(commentUpdates[0]?.body), /Live status is in the agent session and activity feed/);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
 
-test("syncSession keeps visible status comments current for paused undelegated no-PR issues", async () => {
+test("syncSession skips visible status comments for paused undelegated no-PR issues with an agent session", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-linear-sync-paused-no-pr-"));
   try {
     const config = createConfig(baseDir);
@@ -555,9 +556,7 @@ test("syncSession keeps visible status comments current for paused undelegated n
     await sync.syncSession(db.getIssue(issue.projectId, issue.linearIssueId)!);
 
     assert.deepEqual(setIssueStateCalls, ["Backlog"]);
-    assert.equal(commentUpdates.length, 1);
-    assert.match(String(commentUpdates[0]?.body), /Implementation is paused because the issue is undelegated/);
-    assert.match(String(commentUpdates[0]?.body), /Waiting: PatchRelay automation is paused because the issue is undelegated/);
+    assert.equal(commentUpdates.length, 0);
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
