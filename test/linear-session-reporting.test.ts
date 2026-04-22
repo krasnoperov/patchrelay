@@ -171,8 +171,7 @@ test("run completion activity strips repo-local absolute paths from publish comm
 
   assert.deepEqual(activity, {
     type: "response",
-    body:
-      "Updated PR #42 to address review feedback. Updated `sessionSchema.ts` and `local path omitted`, then pushed a new head.",
+    body: "Updated `sessionSchema.ts` and `local path omitted`, then pushed a new head.",
   });
 });
 
@@ -196,7 +195,7 @@ test("run completion activity keeps repair comments concise and human-facing", (
   });
   assert.deepEqual(reviewFix, {
     type: "response",
-    body: "Updated PR #50 to address review feedback. Fixed the mobile header regression and pushed a new head.",
+    body: "Fixed the mobile header regression and pushed a new head.",
   });
 
   const queueRepair = buildRunCompletedActivity({
@@ -207,7 +206,7 @@ test("run completion activity keeps repair comments concise and human-facing", (
   });
   assert.deepEqual(queueRepair, {
     type: "response",
-    body: "Updated PR #50 after merge-queue repair. Resolved the merge conflict and force-pushed the repaired branch.",
+    body: "Resolved the merge conflict and force-pushed the repaired branch.",
   });
 });
 

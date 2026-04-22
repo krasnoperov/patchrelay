@@ -96,20 +96,35 @@ export function buildRunCompletedActivity(params: {
       }
       return undefined;
     case "review_fix":
-      return {
-        type: "response",
-        body: `Updated ${prLabel} to address review feedback.${detail}`,
-      };
+      return summary
+        ? {
+            type: "response",
+            body: summary,
+          }
+        : {
+            type: "response",
+            body: `Updated ${prLabel} to address review feedback.`,
+          };
     case "ci_repair":
-      return {
-        type: "response",
-        body: `Updated ${prLabel} after CI repair.${detail}`,
-      };
+      return summary
+        ? {
+            type: "response",
+            body: summary,
+          }
+        : {
+            type: "response",
+            body: `Updated ${prLabel} after CI repair.`,
+          };
     case "queue_repair":
-      return {
-        type: "response",
-        body: `Updated ${prLabel} after merge-queue repair.${detail}`,
-      };
+      return summary
+        ? {
+            type: "response",
+            body: summary,
+          }
+        : {
+            type: "response",
+            body: `Updated ${prLabel} after merge-queue repair.`,
+          };
     case "branch_upkeep":
       return undefined;
     default: {
