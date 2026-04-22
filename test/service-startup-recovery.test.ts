@@ -142,3 +142,96 @@ test("startup recovery repairs re-delegated paused local work even without an ag
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("startup recovery does not resync idle paused issues just because they still have an agent session", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-startup-recovery-idle-session-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-paused-session",
+      issueKey: "USE-PAUSED",
+      title: "Paused requested-changes issue",
+      delegatedToPatchRelay: false,
+      factoryState: "changes_requested",
+      agentSessionId: "session-paused",
+    });
+
+    const syncCalls: Array<Record<string, unknown>> = [];
+    const recovery = new ServiceStartupRecovery(
+      db,
+      { forProject: async () => undefined } as never,
+      {
+        syncSession: async (issue, options) => {
+          syncCalls.push({
+            issueKey: issue.issueKey,
+            ...(options?.activeRunType ? { activeRunType: options.activeRunType } : {}),
+          });
+        },
+      } as never,
+      () => undefined,
+      pino({ enabled: false }),
+    );
+
+    await recovery.syncKnownAgentSessions();
+
+    assert.deepEqual(syncCalls, []);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("startup recovery still resyncs active runs with agent sessions", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-startup-recovery-active-session-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-active-session",
+      issueKey: "USE-ACTIVE",
+      title: "Actively running issue",
+      delegatedToPatchRelay: true,
+      factoryState: "implementing",
+      agentSessionId: "session-active",
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "implementation",
+    });
+    db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      activeRunId: run.id,
+    });
+
+    const syncCalls: Array<Record<string, unknown>> = [];
+    const recovery = new ServiceStartupRecovery(
+      db,
+      { forProject: async () => undefined } as never,
+      {
+        syncSession: async (syncedIssue, options) => {
+          syncCalls.push({
+            issueKey: syncedIssue.issueKey,
+            ...(options?.activeRunType ? { activeRunType: options.activeRunType } : {}),
+          });
+        },
+      } as never,
+      () => undefined,
+      pino({ enabled: false }),
+    );
+
+    await recovery.syncKnownAgentSessions();
+
+    assert.deepEqual(syncCalls, [{ issueKey: "USE-ACTIVE", activeRunType: "implementation" }]);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});

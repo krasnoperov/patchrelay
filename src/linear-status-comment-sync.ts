@@ -47,9 +47,6 @@ export function shouldSyncVisibleIssueComment(
   if (!hasAgentSession) {
     return true;
   }
-  if (!issue.delegatedToPatchRelay) {
-    return true;
-  }
   if (issue.sessionState === "waiting_input" || issue.factoryState === "awaiting_input") {
     return true;
   }
