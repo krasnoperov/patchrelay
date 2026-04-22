@@ -285,3 +285,54 @@ test("progress reporter re-emits durable history when the run meaning advances",
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("progress reporter keeps durable history full when the ephemeral status is compacted", async () => {
+  const { baseDir, db } = createDatabase();
+  try {
+    const issue = db.upsertIssue({
+      projectId: "project-1",
+      linearIssueId: "issue-5",
+      issueKey: "TST-5",
+      factoryState: "implementing",
+      delegatedToPatchRelay: true,
+      agentSessionId: "session-5",
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "implementation",
+    });
+
+    const emitted: Array<{ content: LinearAgentActivityContent; options?: { ephemeral?: boolean } }> = [];
+    const reporter = new LinearProgressReporter(
+      db,
+      async (_issue, content, options) => {
+        emitted.push({ content, options });
+      },
+    );
+
+    reporter.maybeEmitProgress({
+      method: "item/completed",
+      params: {
+        item: {
+          id: "item-5",
+          type: "agentMessage",
+          status: "completed",
+          text: "The build output reached the packaging step cleanly and the session closed normally, so I’m on the final publish pass now: checking the exact changed files, rerunning the focused verification, and preparing the push.",
+        },
+      },
+    }, run);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(emitted.length, 2);
+    assert.equal(emitted[0]?.options?.ephemeral, true);
+    assert.match((emitted[0]?.content as { body?: string }).body ?? "", /\.\.\.$/);
+    assert.equal(
+      (emitted[1]?.content as { body?: string }).body,
+      "The build output reached the packaging step cleanly and the session closed normally, so I’m on the final publish pass now: checking the exact changed files, rerunning the focused verification, and preparing the push.",
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});

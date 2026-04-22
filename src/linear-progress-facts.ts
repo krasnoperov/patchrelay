@@ -36,33 +36,34 @@ function deriveProgressFactFromCompletedItem(
     return undefined;
   }
 
-  const body = compactOperatorSentence(item.text);
-  if (!body) {
+  const fullBody = sanitizeOperatorFacingText(item.text)?.replace(/\s+/g, " ").trim();
+  if (!fullBody) {
     return undefined;
   }
+  const ephemeralBody = compactOperatorSentence(fullBody) ?? fullBody;
 
-  if (looksLikeVerification(body)) {
+  if (looksLikeVerification(fullBody)) {
     return {
       kind: "verification_started",
-      meaningKey: `verification:${normalizeMeaningKey(body)}`,
-      ephemeralContent: { type: "thought", body },
-      historyContent: { type: "thought", body },
+      meaningKey: `verification:${normalizeMeaningKey(fullBody)}`,
+      ephemeralContent: { type: "thought", body: ephemeralBody },
+      historyContent: { type: "thought", body: fullBody },
     };
   }
-  if (looksLikePublishing(body)) {
+  if (looksLikePublishing(fullBody)) {
     return {
       kind: "publishing_started",
-      meaningKey: `publishing:${normalizeMeaningKey(body)}`,
-      ephemeralContent: { type: "thought", body },
-      historyContent: { type: "thought", body },
+      meaningKey: `publishing:${normalizeMeaningKey(fullBody)}`,
+      ephemeralContent: { type: "thought", body: ephemeralBody },
+      historyContent: { type: "thought", body: fullBody },
     };
   }
-  if (looksLikeRootCause(body)) {
+  if (looksLikeRootCause(fullBody)) {
     return {
       kind: "root_cause_found",
-      meaningKey: `finding:${normalizeMeaningKey(body)}`,
-      ephemeralContent: { type: "thought", body },
-      historyContent: { type: "thought", body },
+      meaningKey: `finding:${normalizeMeaningKey(fullBody)}`,
+      ephemeralContent: { type: "thought", body: ephemeralBody },
+      historyContent: { type: "thought", body: fullBody },
     };
   }
 

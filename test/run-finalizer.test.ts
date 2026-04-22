@@ -668,7 +668,7 @@ test("run finalizer prefers the separate publication recap for Linear-visible co
     assert.equal(parsedSummary.publicationRecapSummary, "Addressed the requested publishing-summary feedback and updated PR #42.");
     assert.equal(
       activities.at(-1)?.body,
-      "Updated PR #42 to address review feedback. Addressed the requested publishing-summary feedback and updated PR #42.",
+      "Addressed the requested publishing-summary feedback and updated PR #42.",
     );
     assert.equal(feedEvents.at(-1)?.detail, "Addressed the requested publishing-summary feedback and updated PR #42.");
   } finally {
