@@ -28,8 +28,8 @@ function createConfig(baseDir: string): AppConfig {
       filePath: path.join(baseDir, "patchrelay.log"),
     },
     database: {
-      path: path.join(baseDir, "patchrelay.sqlite"),
-      wal: true,
+      path: ":memory:",
+      wal: false,
     },
     linear: {
       webhookSecret: "secret",
