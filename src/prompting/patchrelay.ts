@@ -401,6 +401,25 @@ function buildCiRepairContext(context?: Record<string, unknown>): string {
   ].filter(Boolean).join("\n");
 }
 
+function buildMainRepairContext(context?: Record<string, unknown>): string {
+  const failingCheckNames = Array.isArray(context?.failingChecks)
+    ? context.failingChecks
+      .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
+      .map((entry) => String(entry.name ?? "").trim())
+      .filter((name) => name.length > 0)
+    : [];
+
+  return [
+    "Base-branch repair on the red mainline.",
+    "Goal: restore main by fixing the real persistent failure, not by papering over a transient runner incident.",
+    "Before changing code or workflow config, verify that the original incident still persists on the exact failing main SHA or identify a concrete log signature that justifies the fix.",
+    "For transient infrastructure symptoms such as disk pressure, runner exhaustion, or network flakiness, prefer a rerun-only repair if the rerun clears the branch.",
+    "Do not propose or implement moving CI, deploy, or tests onto different nodes or runner pools unless a human explicitly asked for that infrastructure migration.",
+    context?.baseSha ? `Failing main SHA: ${String(context.baseSha)}` : "",
+    failingCheckNames.length > 0 ? `Failing checks: ${failingCheckNames.join(", ")}` : "",
+  ].filter(Boolean).join("\n");
+}
+
 function appendQueueRepairContext(lines: string[], context?: Record<string, unknown>): void {
   const queueContext = context?.mergeQueueContext;
   if (!queueContext || typeof queueContext !== "object") {
@@ -539,6 +558,9 @@ function buildCurrentContext(runType: RunType, issue: IssueRecord, context?: Rec
   lines.push(...buildHumanContextLines(context));
 
   switch (runType) {
+    case "main_repair":
+      lines.push(buildMainRepairContext(context));
+      break;
     case "ci_repair":
       lines.push(buildCiRepairContext(context));
       break;
