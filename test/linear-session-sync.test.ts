@@ -1479,6 +1479,83 @@ test("maybeEmitProgress stays silent even after a streamed sentence completes", 
   }
 });
 
+test("maybeEmitProgress writes durable history alongside ephemeral status for meaningful progress", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-linear-sync-progress-history-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+
+    const issue = db.upsertIssue({
+      projectId: "krasnoperov/ballony-i-nasosy",
+      linearIssueId: "issue-progress-history",
+      issueKey: "USE-110",
+      title: "Persist implementation progress history",
+      factoryState: "implementing",
+      agentSessionId: "session-progress-history",
+      prNumber: 110,
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "implementation",
+    });
+
+    const activities: Array<Record<string, unknown>> = [];
+    const linear: Partial<LinearClient> = {
+      updateAgentSession: async (params) => ({ id: params.agentSessionId }),
+      upsertIssueComment: async (params) => ({ id: "comment-progress-history", body: params.body }),
+      createAgentActivity: async (params) => {
+        activities.push(params as unknown as Record<string, unknown>);
+        return { id: `activity-${activities.length}` };
+      },
+      getIssue: async () => { throw new Error("not used"); },
+      setIssueState: async () => { throw new Error("not used"); },
+      updateIssueLabels: async () => { throw new Error("not used"); },
+      getActorProfile: async () => ({ actorId: "patchrelay-actor" }),
+      getWorkspaceCatalog: async () => ({ workspace: {}, teams: [], projects: [] }),
+    };
+
+    const sync = new LinearSessionSync(
+      config,
+      db,
+      { forProject: async () => linear as LinearClient },
+      pino({ enabled: false }),
+    );
+
+    sync.maybeEmitProgress({
+      method: "turn/plan/updated",
+      params: {
+        plan: [{ step: "Publish the repair to GitHub", status: "inProgress" }],
+      },
+    }, run);
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.equal(activities.length, 2);
+    assert.deepEqual(activities[0], {
+      agentSessionId: "session-progress-history",
+      content: {
+        type: "action",
+        action: "Publishing",
+        parameter: "the repair to GitHub",
+      },
+      ephemeral: true,
+    });
+    assert.deepEqual(activities[1], {
+      agentSessionId: "session-progress-history",
+      content: {
+        type: "action",
+        action: "Publishing",
+        parameter: "the repair to GitHub",
+      },
+    });
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("emitActivity deduplicates repeated durable milestone activities", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-linear-dedupe-"));
   try {

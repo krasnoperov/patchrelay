@@ -5,7 +5,8 @@ import type { LinearAgentActivityContent } from "./types.ts";
 export interface LinearProgressFact {
   kind: "root_cause_found" | "verification_started" | "publishing_started";
   meaningKey: string;
-  content: LinearAgentActivityContent;
+  ephemeralContent: LinearAgentActivityContent;
+  historyContent: LinearAgentActivityContent;
 }
 
 export function deriveLinearProgressFact(
@@ -44,21 +45,24 @@ function deriveProgressFactFromCompletedItem(
     return {
       kind: "verification_started",
       meaningKey: `verification:${normalizeMeaningKey(body)}`,
-      content: { type: "thought", body },
+      ephemeralContent: { type: "thought", body },
+      historyContent: { type: "thought", body },
     };
   }
   if (looksLikePublishing(body)) {
     return {
       kind: "publishing_started",
       meaningKey: `publishing:${normalizeMeaningKey(body)}`,
-      content: { type: "thought", body },
+      ephemeralContent: { type: "thought", body },
+      historyContent: { type: "thought", body },
     };
   }
   if (looksLikeRootCause(body)) {
     return {
       kind: "root_cause_found",
       meaningKey: `finding:${normalizeMeaningKey(body)}`,
-      content: { type: "thought", body },
+      ephemeralContent: { type: "thought", body },
+      historyContent: { type: "thought", body },
     };
   }
 
@@ -84,7 +88,12 @@ function deriveProgressFactFromPlan(
     return {
       kind: "verification_started",
       meaningKey: `verification:${normalizeMeaningKey(activeStep.step)}`,
-      content: {
+      ephemeralContent: {
+        type: "action",
+        action: "Verifying",
+        parameter: summarizePlanStep(activeStep.step, "latest changes before publishing"),
+      },
+      historyContent: {
         type: "action",
         action: "Verifying",
         parameter: summarizePlanStep(activeStep.step, "latest changes before publishing"),
@@ -97,7 +106,12 @@ function deriveProgressFactFromPlan(
     return {
       kind: "publishing_started",
       meaningKey: `publishing:${normalizeMeaningKey(activeStep.step)}`,
-      content: {
+      ephemeralContent: {
+        type: "action",
+        action: "Publishing",
+        parameter,
+      },
+      historyContent: {
         type: "action",
         action: "Publishing",
         parameter,
