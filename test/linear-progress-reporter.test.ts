@@ -14,7 +14,7 @@ function createDatabase(): { baseDir: string; db: PatchRelayDatabase } {
   return { baseDir, db };
 }
 
-test("progress reporter emits a deduped root-cause update from assistant progress text", async () => {
+test("progress reporter emits deduped ephemeral and durable root-cause updates", async () => {
   const { baseDir, db } = createDatabase();
   try {
     const issue = db.upsertIssue({
@@ -61,7 +61,7 @@ test("progress reporter emits a deduped root-cause update from assistant progres
     reporter.maybeEmitProgress(notification, run);
     await new Promise((resolve) => setImmediate(resolve));
 
-    assert.equal(emitted.length, 1);
+    assert.equal(emitted.length, 2);
     assert.deepEqual(emitted[0], {
       content: {
         type: "thought",
@@ -69,12 +69,19 @@ test("progress reporter emits a deduped root-cause update from assistant progres
       },
       options: { ephemeral: true },
     });
+    assert.deepEqual(emitted[1], {
+      content: {
+        type: "thought",
+        body: "Narrowed the CI failure to one React hook lint rule in GameRoundPage.tsx.",
+      },
+      options: undefined,
+    });
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
 
-test("progress reporter emits verification and publishing actions from active plan steps", async () => {
+test("progress reporter emits verification and publishing history alongside active plan steps", async () => {
   const { baseDir, db } = createDatabase();
   try {
     const issue = db.upsertIssue({
@@ -133,7 +140,7 @@ test("progress reporter emits verification and publishing actions from active pl
     }, run);
     await new Promise((resolve) => setImmediate(resolve));
 
-    assert.equal(emitted.length, 2);
+    assert.equal(emitted.length, 4);
     assert.deepEqual(emitted[0], {
       content: {
         type: "action",
@@ -145,10 +152,26 @@ test("progress reporter emits verification and publishing actions from active pl
     assert.deepEqual(emitted[1], {
       content: {
         type: "action",
+        action: "Verifying",
+        parameter: "targeted verification before publishing",
+      },
+      options: undefined,
+    });
+    assert.deepEqual(emitted[2], {
+      content: {
+        type: "action",
         action: "Publishing",
         parameter: "the repair to GitHub",
       },
       options: { ephemeral: true },
+    });
+    assert.deepEqual(emitted[3], {
+      content: {
+        type: "action",
+        action: "Publishing",
+        parameter: "the repair to GitHub",
+      },
+      options: undefined,
     });
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
@@ -195,6 +218,69 @@ test("progress reporter ignores raw command chatter", async () => {
     await new Promise((resolve) => setImmediate(resolve));
 
     assert.equal(emitted.length, 0);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("progress reporter re-emits durable history when the run meaning advances", async () => {
+  const { baseDir, db } = createDatabase();
+  try {
+    const issue = db.upsertIssue({
+      projectId: "project-1",
+      linearIssueId: "issue-4",
+      issueKey: "TST-4",
+      factoryState: "implementing",
+      delegatedToPatchRelay: true,
+      agentSessionId: "session-4",
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "implementation",
+    });
+
+    const emitted: Array<{ content: LinearAgentActivityContent; options?: { ephemeral?: boolean } }> = [];
+    const reporter = new LinearProgressReporter(
+      db,
+      async (_issue, content, options) => {
+        emitted.push({ content, options });
+      },
+    );
+
+    reporter.maybeEmitProgress({
+      method: "turn/plan/updated",
+      params: {
+        plan: [{ step: "Run targeted verification before publishing", status: "in_progress" }],
+      },
+    }, run);
+    reporter.maybeEmitProgress({
+      method: "turn/plan/updated",
+      params: {
+        plan: [{ step: "Publish the repair to GitHub", status: "in_progress" }],
+      },
+    }, run);
+    reporter.maybeEmitProgress({
+      method: "turn/plan/updated",
+      params: {
+        plan: [{ step: "Run targeted verification before publishing", status: "in_progress" }],
+      },
+    }, run);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(emitted.length, 6);
+    assert.deepEqual(
+      emitted.map((entry) => [entry.content.type, entry.options?.ephemeral === true ? "ephemeral" : "durable"]),
+      [
+        ["action", "ephemeral"],
+        ["action", "durable"],
+        ["action", "ephemeral"],
+        ["action", "durable"],
+        ["action", "ephemeral"],
+        ["action", "durable"],
+      ],
+    );
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

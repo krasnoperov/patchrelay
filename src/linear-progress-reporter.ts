@@ -4,8 +4,10 @@ import { deriveLinearProgressFact } from "./linear-progress-facts.ts";
 import type { LinearAgentActivityContent } from "./types.ts";
 
 interface ProgressPublicationState {
-  meaningKey: string;
-  publishedAtMs: number;
+  ephemeralMeaningKey?: string;
+  ephemeralPublishedAtMs?: number;
+  historyMeaningKey?: string;
+  historyPublishedAtMs?: number;
 }
 
 export class LinearProgressReporter {
@@ -32,24 +34,91 @@ export class LinearProgressReporter {
     }
 
     const previous = this.publicationsByRun.get(run.id);
-    if (previous?.meaningKey === fact.meaningKey) {
+    const shouldEmitEphemeral = previous?.ephemeralMeaningKey !== fact.meaningKey;
+    const shouldEmitHistory = previous?.historyMeaningKey !== fact.meaningKey;
+    if (!shouldEmitEphemeral && !shouldEmitHistory) {
       return;
     }
 
-    const publication = {
-      meaningKey: fact.meaningKey,
-      publishedAtMs: Date.now(),
+    const now = Date.now();
+    const publication: ProgressPublicationState = {
+      ...previous,
+      ...(shouldEmitEphemeral
+        ? {
+            ephemeralMeaningKey: fact.meaningKey,
+            ephemeralPublishedAtMs: now,
+          }
+        : {}),
+      ...(shouldEmitHistory
+        ? {
+            historyMeaningKey: fact.meaningKey,
+            historyPublishedAtMs: now,
+          }
+        : {}),
     };
     this.publicationsByRun.set(run.id, publication);
-    void this.emitActivity(issue, fact.content, { ephemeral: true }).catch(() => {
-      const current = this.publicationsByRun.get(run.id);
-      if (current?.publishedAtMs === publication.publishedAtMs && current.meaningKey === publication.meaningKey) {
-        this.publicationsByRun.delete(run.id);
-      }
-    });
+
+    if (shouldEmitEphemeral) {
+      void this.emitActivity(issue, fact.ephemeralContent, { ephemeral: true }).catch(() => {
+        this.clearFailedPublication(run.id, "ephemeral", fact.meaningKey, now);
+      });
+    }
+
+    if (shouldEmitHistory) {
+      void this.emitActivity(issue, fact.historyContent).catch(() => {
+        this.clearFailedPublication(run.id, "history", fact.meaningKey, now);
+      });
+    }
   }
 
   clearProgress(runId: number): void {
     this.publicationsByRun.delete(runId);
+  }
+
+  private clearFailedPublication(
+    runId: number,
+    channel: "ephemeral" | "history",
+    meaningKey: string,
+    publishedAtMs: number,
+  ): void {
+    const current = this.publicationsByRun.get(runId);
+    if (!current) {
+      return;
+    }
+
+    if (channel === "ephemeral") {
+      if (current.ephemeralMeaningKey !== meaningKey || current.ephemeralPublishedAtMs !== publishedAtMs) {
+        return;
+      }
+      const next: ProgressPublicationState = {};
+      if (current.historyMeaningKey !== undefined) {
+        next.historyMeaningKey = current.historyMeaningKey;
+      }
+      if (current.historyPublishedAtMs !== undefined) {
+        next.historyPublishedAtMs = current.historyPublishedAtMs;
+      }
+      if (!next.historyMeaningKey) {
+        this.publicationsByRun.delete(runId);
+        return;
+      }
+      this.publicationsByRun.set(runId, next);
+      return;
+    }
+
+    if (current.historyMeaningKey !== meaningKey || current.historyPublishedAtMs !== publishedAtMs) {
+      return;
+    }
+    const next: ProgressPublicationState = {};
+    if (current.ephemeralMeaningKey !== undefined) {
+      next.ephemeralMeaningKey = current.ephemeralMeaningKey;
+    }
+    if (current.ephemeralPublishedAtMs !== undefined) {
+      next.ephemeralPublishedAtMs = current.ephemeralPublishedAtMs;
+    }
+    if (!next.ephemeralMeaningKey) {
+      this.publicationsByRun.delete(runId);
+      return;
+    }
+    this.publicationsByRun.set(runId, next);
   }
 }
