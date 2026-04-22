@@ -81,7 +81,7 @@ export class MergedLinearCompletionReconciler {
           continue;
         }
 
-        if (issue.factoryState === "done" && !isCompletedLinearState(liveIssue.stateType, liveIssue.stateName)) {
+        if (issue.factoryState === "done" && !isTerminalLinearState(liveIssue.stateType, liveIssue.stateName)) {
           this.reopenStaleLocalDoneIssue(issue, liveIssue);
         } else {
           this.refreshCachedLinearState(issue, liveIssue);
@@ -226,6 +226,18 @@ export class MergedLinearCompletionReconciler {
 function isRateLimitedError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /ratelimit|rate limit/i.test(message);
+}
+
+function isTerminalLinearState(
+  currentLinearStateType: string | undefined,
+  currentLinearState: string | undefined,
+): boolean {
+  const normalizedType = currentLinearStateType?.trim().toLowerCase();
+  if (normalizedType === "completed" || normalizedType === "canceled" || normalizedType === "cancelled") {
+    return true;
+  }
+  const normalizedName = currentLinearState?.trim().toLowerCase();
+  return normalizedName === "done" || normalizedName === "completed" || normalizedName === "canceled" || normalizedName === "cancelled";
 }
 
 function resolveOpenWorkflowState(

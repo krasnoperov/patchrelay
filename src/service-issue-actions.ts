@@ -197,6 +197,7 @@ export class ServiceIssueActions {
     this.db.issueSessions.upsertIssueRespectingActiveLease(issue.projectId, issue.linearIssueId, {
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
+      delegatedToPatchRelay: false,
       factoryState: terminalState as never,
       activeRunId: null,
       pendingRunType: null,

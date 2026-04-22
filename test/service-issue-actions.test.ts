@@ -247,6 +247,7 @@ test("closeIssue releases active runs and clears pending work", async () => {
     const updatedRun = db.runs.getRunById(run.id);
     const events = db.issueSessions.listIssueSessionEvents(issue.projectId, issue.linearIssueId, { limit: 10 });
     assert.equal(updatedIssue?.factoryState, "done");
+    assert.equal(updatedIssue?.delegatedToPatchRelay, false);
     assert.equal(updatedIssue?.activeRunId, undefined);
     assert.equal(updatedIssue?.pendingRunType, undefined);
     assert.equal(updatedRun?.status, "released");
