@@ -54,14 +54,7 @@ export class MainBranchHealthMonitor {
 
     const baseBranch = project.github.baseBranch ?? "main";
     const branchName = buildMainRepairBranchName(baseBranch);
-    const existing = this.db.listIssues().find((issue) => (
-      issue.projectId === projectId
-      && issue.branchName === branchName
-      && isMainRepairIssue(issue)
-      && issue.factoryState !== "done"
-      && issue.factoryState !== "failed"
-      && issue.factoryState !== "escalated"
-    ));
+    const existing = this.findExistingMainRepair(projectId, branchName);
 
     const summary = await this.readMainBranchFailure(project.github.repoFullName, baseBranch);
     if (!summary) {
@@ -142,10 +135,47 @@ export class MainBranchHealthMonitor {
     });
   }
 
+  private findExistingMainRepair(projectId: string, branchName: string): IssueRecord | undefined {
+    const candidates = this.db.listIssues()
+      .filter((issue) => (
+        issue.projectId === projectId
+        && issue.branchName === branchName
+        && isMainRepairIssue(issue)
+        && issue.factoryState !== "done"
+      ))
+      .sort((left, right) => this.compareMainRepairCandidates(left, right));
+    return candidates[0];
+  }
+
+  private compareMainRepairCandidates(left: IssueRecord, right: IssueRecord): number {
+    const leftPriority = this.rankMainRepairCandidate(left);
+    const rightPriority = this.rankMainRepairCandidate(right);
+    if (leftPriority !== rightPriority) return leftPriority - rightPriority;
+    return Date.parse(right.updatedAt) - Date.parse(left.updatedAt);
+  }
+
+  private rankMainRepairCandidate(issue: IssueRecord): number {
+    if (issue.activeRunId !== undefined) return 0;
+    if (issue.prState === "open" || issue.factoryState === "awaiting_queue" || issue.factoryState === "pr_open") return 1;
+    if (issue.factoryState === "delegated" || issue.factoryState === "implementing") return 2;
+    if (issue.factoryState === "failed" || issue.factoryState === "escalated") return 3;
+    return 4;
+  }
+
   private queueExistingMainRepair(issue: IssueRecord, summary: MainRepairCheckSummary, priorityLabel: string): void {
     if (issue.activeRunId !== undefined) return;
     if (this.db.issueSessions.hasPendingIssueSessionEvents(issue.projectId, issue.linearIssueId)) return;
     if (issue.prState === "open" || issue.factoryState === "awaiting_queue" || issue.factoryState === "pr_open") return;
+
+    this.db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      delegatedToPatchRelay: true,
+      factoryState: "delegated",
+      pendingRunType: null,
+      pendingRunContextJson: null,
+      activeRunId: null,
+    });
 
     this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
       projectId: issue.projectId,
@@ -157,6 +187,11 @@ export class MainBranchHealthMonitor {
         failingChecks: summary.failingChecks,
         pendingChecks: summary.pendingChecks,
         priorityLabel,
+        promptContext: buildMainRepairPromptContext(
+          this.config.projects.find((project) => project.id === issue.projectId) ?? { id: issue.projectId },
+          summary,
+          priorityLabel,
+        ),
       }),
       dedupeKey: `main_repair:${issue.projectId}:${summary.baseSha}:${summary.failingChecks.map((check) => check.name).join("|")}`,
     });
