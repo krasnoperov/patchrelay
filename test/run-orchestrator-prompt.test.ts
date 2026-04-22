@@ -92,6 +92,36 @@ test("repair prompts publish to the existing PR branch with concise self-review 
   }
 });
 
+test("main_repair prompts require persistence checks before speculative infra changes", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-prompt-"));
+  try {
+    writeFileSync(path.join(baseDir, "IMPLEMENTATION_WORKFLOW.md"), "# Implementation Workflow\n");
+
+    const prompt = buildLayeredRunPrompt({
+      issue: {
+        ...createIssue(),
+        title: "Repair main for owner/repo",
+        branchName: "main-repair/main",
+      },
+      runType: "main_repair",
+      repoPath: baseDir,
+      context: {
+        baseSha: "deadbeef",
+        failingChecks: [{ name: "Checks" }, { name: "Deploy production" }],
+      },
+    });
+
+    assert.match(prompt, /Base-branch repair on the red mainline\./);
+    assert.match(prompt, /Before changing code or workflow config, verify that the original incident still persists on the exact failing main SHA or identify a concrete log signature that justifies the fix\./);
+    assert.match(prompt, /For transient infrastructure symptoms such as disk pressure, runner exhaustion, or network flakiness, prefer a rerun-only repair if the rerun clears the branch\./);
+    assert.match(prompt, /Do not propose or implement moving CI, deploy, or tests onto different nodes or runner pools unless a human explicitly asked for that infrastructure migration\./);
+    assert.match(prompt, /Failing main SHA: deadbeef/);
+    assert.match(prompt, /Failing checks: Checks, Deploy production/);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("implementation prompts keep explicit no-PR handling for planning-only issues", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-prompt-"));
   try {
