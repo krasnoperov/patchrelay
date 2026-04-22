@@ -49,7 +49,7 @@ export class ImplementationOutcomePolicy {
     issue: IssueRecord,
     repoFullName: string | undefined,
   ): Promise<"open" | "closed" | "none" | "unknown"> {
-    if (issue.prNumber && issue.prState && issue.prState !== "closed") {
+    if (issue.prNumber && isOpenPrState(issue.prState)) {
       return "open";
     }
     if (!repoFullName || !issue.branchName) {
@@ -80,30 +80,35 @@ export class ImplementationOutcomePolicy {
         headRefOid?: string;
         author?: { login?: string };
       }>;
-      const pr = matches[0];
+      const pr = matches.find((candidate) => isOpenPrState(candidate.state)) ?? matches[0];
       if (!pr?.number) {
+        this.clearObservedPrIfLeaseHeld(issue, "published PR verification found no PRs for branch");
         return "none";
       }
 
       const state = pr.state?.toLowerCase();
-      this.upsertIssueIfLeaseHeld(
-        issue.projectId,
-        issue.linearIssueId,
-        {
-          projectId: issue.projectId,
-          linearIssueId: issue.linearIssueId,
-          prNumber: pr.number,
-          ...(pr.url ? { prUrl: pr.url } : {}),
-          ...(state ? { prState: state } : {}),
-          ...(pr.headRefOid ? { prHeadSha: pr.headRefOid } : {}),
-          ...(pr.author?.login ? { prAuthorLogin: pr.author.login } : {}),
-        },
-        "published PR verification refresh",
-      );
-      if (state !== "closed" && isMainRepairIssue(issue)) {
+      if (isOpenPrState(state)) {
+        this.upsertIssueIfLeaseHeld(
+          issue.projectId,
+          issue.linearIssueId,
+          {
+            projectId: issue.projectId,
+            linearIssueId: issue.linearIssueId,
+            prNumber: pr.number,
+            ...(pr.url ? { prUrl: pr.url } : {}),
+            ...(state ? { prState: state } : {}),
+            ...(pr.headRefOid ? { prHeadSha: pr.headRefOid } : {}),
+            ...(pr.author?.login ? { prAuthorLogin: pr.author.login } : {}),
+          },
+          "published PR verification refresh",
+        );
+      } else {
+        this.clearObservedPrIfLeaseHeld(issue, "published PR verification found only historical PRs for branch");
+      }
+      if (isOpenPrState(state) && isMainRepairIssue(issue)) {
         await this.ensurePriorityQueueLabel(run.projectId, pr.number, repoFullName);
       }
-      return state === "closed" ? "closed" : "open";
+      return isOpenPrState(state) ? "open" : "closed";
     } catch (error) {
       this.logger.debug({
         issueKey: issue.issueKey,
@@ -128,6 +133,26 @@ export class ImplementationOutcomePolicy {
       this.logger.warn({ projectId, linearIssueId, context }, "Skipping issue write after losing issue-session lease");
     }
     return updated;
+  }
+
+  private clearObservedPrIfLeaseHeld(issue: IssueRecord, context: string): void {
+    this.upsertIssueIfLeaseHeld(
+      issue.projectId,
+      issue.linearIssueId,
+      {
+        projectId: issue.projectId,
+        linearIssueId: issue.linearIssueId,
+        prNumber: null,
+        prUrl: null,
+        prState: null,
+        prIsDraft: null,
+        prHeadSha: null,
+        prAuthorLogin: null,
+        prReviewState: null,
+        prCheckStatus: null,
+      },
+      context,
+    );
   }
 
   private async describeLocalImplementationOutcome(
@@ -217,4 +242,10 @@ export class ImplementationOutcomePolicy {
       }, "Failed to enforce priority queue label on main repair PR");
     }
   }
+}
+
+function isOpenPrState(state: string | undefined): boolean {
+  if (!state) return false;
+  const normalized = state.trim().toLowerCase();
+  return normalized !== "closed" && normalized !== "merged";
 }

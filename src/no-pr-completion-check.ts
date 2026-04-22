@@ -237,6 +237,52 @@ export async function handleNoPrCompletionCheck(params: {
       return;
     }
 
+    if (params.run.runType === "main_repair") {
+      const continued = params.withHeldLease(params.run.projectId, params.run.linearIssueId, (lease) => {
+        params.db.runs.finishRun(params.run.id, runUpdate);
+        params.db.runs.saveCompletionCheck(params.run.id, {
+          ...completionCheck,
+          outcome: "continue",
+          summary: "Main repair cannot finish without a published repair PR; continuing automatically until the fix is published or main recovers externally.",
+          why: completionCheck.summary,
+        });
+        params.db.issues.upsertIssue({
+          projectId: params.run.projectId,
+          linearIssueId: params.run.linearIssueId,
+          activeRunId: null,
+          factoryState: "delegated",
+          pendingRunType: null,
+          pendingRunContextJson: null,
+        });
+        return Boolean(params.db.issueSessions.appendIssueSessionEventWithLease(lease, {
+          projectId: params.run.projectId,
+          linearIssueId: params.run.linearIssueId,
+          eventType: "completion_check_continue",
+          eventJson: JSON.stringify({
+            runType: params.run.runType,
+            summary: params.publishedOutcomeError,
+          }),
+          dedupeKey: `completion_check_continue:${params.run.id}`,
+        }));
+      });
+      if (!continued) {
+        params.logger.warn({ runId: params.run.id, issueId: params.run.linearIssueId }, "Skipping main-repair completion-check continue writes after losing issue-session lease");
+        params.clearProgressAndRelease(params.run);
+        return;
+      }
+      params.syncCompletionCheckOutcome({
+        run: params.run,
+        fallbackIssue: params.issue,
+        level: "info",
+        status: "completion_check_continue",
+        summary: "No repair PR found; continuing automatically",
+        detail: "Main repair cannot close until PatchRelay publishes a repair PR or main recovers externally.",
+        activity: buildCompletionCheckActivity("continue"),
+        enqueue: true,
+      });
+      return;
+    }
+
     const orchestrationOpenChildren = params.issue.issueClass === "orchestration"
       ? params.db.issues.countOpenChildIssues(params.run.projectId, params.run.linearIssueId)
       : 0;
