@@ -143,6 +143,79 @@ test("startup recovery repairs re-delegated paused local work even without an ag
   }
 });
 
+test("startup recovery re-queues delegated requested-changes work after a restart", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-startup-recovery-reactive-pr-"));
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("usertold", installation.id);
+
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-reactive-review",
+      issueKey: "USE-REVIEW",
+      title: "Resume requested-changes repair after restart",
+      delegatedToPatchRelay: false,
+      factoryState: "pr_open",
+      prNumber: 33,
+      prState: "open",
+      prHeadSha: "sha-review",
+      prReviewState: "changes_requested",
+      prCheckStatus: "success",
+    });
+
+    const enqueued: Array<{ projectId: string; issueId: string }> = [];
+    const recovery = new ServiceStartupRecovery(
+      db,
+      {
+        forProject: async () => ({
+          getIssue: async () => ({
+            id: "issue-reactive-review",
+            identifier: "USE-REVIEW",
+            title: "Resume requested-changes repair after restart",
+            description: "",
+            url: "https://linear.app/usertold/issue/USE-REVIEW",
+            teamId: "team-use",
+            teamKey: "USE",
+            stateId: "state-review",
+            stateName: "In Review",
+            stateType: "started",
+            delegateId: "patchrelay-actor",
+            delegateName: "PatchRelay",
+            workflowStates: [],
+            labelIds: [],
+            labels: [],
+            teamLabels: [],
+            blockedBy: [],
+            blocks: [],
+          }),
+        } satisfies Partial<LinearClient> as LinearClient),
+      } as never,
+      { syncSession: async () => undefined } as never,
+      (projectId, issueId) => { enqueued.push({ projectId, issueId }); },
+      pino({ enabled: false }),
+    );
+
+    await recovery.recoverDelegatedIssueStateFromLinear();
+
+    const issue = db.getIssue("usertold", "issue-reactive-review");
+    const wake = db.issueSessions.peekIssueSessionWake("usertold", "issue-reactive-review");
+    assert.equal(issue?.delegatedToPatchRelay, true);
+    assert.equal(issue?.factoryState, "changes_requested");
+    assert.equal(wake?.runType, "review_fix");
+    assert.deepEqual(enqueued, [{ projectId: "usertold", issueId: "issue-reactive-review" }]);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("startup recovery does not resync idle paused issues just because they still have an agent session", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-startup-recovery-idle-session-"));
   try {

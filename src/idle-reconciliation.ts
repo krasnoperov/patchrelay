@@ -714,6 +714,35 @@ export class IdleIssueReconciler {
         });
         return;
       }
+      if (
+        issue.delegatedToPatchRelay
+        && reactiveIntent?.runType === "review_fix"
+        && this.db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId) === undefined
+      ) {
+        this.logger.info(
+          {
+            issueKey: issue.issueKey,
+            prNumber: issue.prNumber,
+            from: issue.factoryState,
+            runType: reactiveIntent.runType,
+          },
+          "Reconciliation: re-queued requested-changes follow-up from GitHub truth",
+        );
+        this.advanceIdleIssue(issue, reactiveIntent.compatibilityFactoryState, {
+          pendingRunType: reactiveIntent.runType,
+          clearFailureProvenance: true,
+        });
+        this.feed?.publish({
+          level: "warn",
+          kind: "github",
+          issueKey: issue.issueKey,
+          projectId: issue.projectId,
+          stage: reactiveIntent.compatibilityFactoryState,
+          status: "review_fix_queued",
+          summary: `PR #${issue.prNumber} still has requested changes on the current head, dispatching review fix`,
+        });
+        return;
+      }
       if (issue.delegatedToPatchRelay && reactiveIntent?.runType === "branch_upkeep" && mergeConflictDetected) {
         this.logger.info(
           { issueKey: issue.issueKey, prNumber: issue.prNumber, mergeable: pr.mergeable, mergeStateStatus: pr.mergeStateStatus },

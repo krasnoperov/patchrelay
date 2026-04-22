@@ -187,6 +187,29 @@ export class RunFinalizer {
     this.releaseLease(run.projectId, run.linearIssueId);
   }
 
+  private enqueuePendingWakeIfPresent(params: {
+    run: Pick<RunRecord, "projectId" | "linearIssueId" | "runType">;
+    issueKey?: string | undefined;
+  }): { runType: RunType; wakeReason?: string | undefined } | undefined {
+    const wake = this.db.issueSessions.peekIssueSessionWake(params.run.projectId, params.run.linearIssueId);
+    if (!wake) return undefined;
+    this.enqueueIssue(params.run.projectId, params.run.linearIssueId);
+    this.feed?.publish({
+      level: "info",
+      kind: "stage",
+      issueKey: params.issueKey,
+      projectId: params.run.projectId,
+      stage: wake.runType,
+      status: "deferred_follow_up_queued",
+      summary: `${wake.runType} queued after ${params.run.runType} released authority`,
+      ...(wake.wakeReason ? { detail: `wake reason: ${wake.wakeReason}` } : {}),
+    });
+    return {
+      runType: wake.runType,
+      ...(wake.wakeReason ? { wakeReason: wake.wakeReason } : {}),
+    };
+  }
+
   private publishTurnEvent(params: {
     level: "info" | "warn" | "error";
     run: Pick<RunRecord, "projectId" | "runType">;
@@ -398,7 +421,6 @@ export class RunFinalizer {
         status: "follow_up_queued",
         summary: postRunFollowUp.summary,
       });
-      this.enqueueIssue(run.projectId, run.linearIssueId);
     }
 
     this.publishTurnEvent({
@@ -426,6 +448,7 @@ export class RunFinalizer {
       void this.linearSync.emitActivity(updatedIssue, linearActivity);
     }
     void this.linearSync.syncSession(updatedIssue);
+    this.enqueuePendingWakeIfPresent({ run, issueKey: updatedIssue.issueKey });
     this.linearSync.clearProgress(run.id);
     this.releaseLease(run.projectId, run.linearIssueId);
   }
