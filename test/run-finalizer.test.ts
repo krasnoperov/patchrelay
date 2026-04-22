@@ -36,9 +36,11 @@ function createFinalizer(db: PatchRelayDatabase, completionCheckResult: {
   publishedOutcomeError?: string | null;
   failedRecoveryError?: string | null;
   publicationRecapSummary?: string;
+  onEnqueue?: (projectId: string, issueId: string) => void;
 }) {
   const feedEvents: Array<Record<string, unknown>> = [];
   const activities: Array<Record<string, unknown>> = [];
+  const enqueueCalls: Array<{ projectId: string; issueId: string }> = [];
   const lease = acquireLease(db, "usertold", "issue-1");
   const finalizer = new RunFinalizer(
     db,
@@ -50,7 +52,10 @@ function createFinalizer(db: PatchRelayDatabase, completionCheckResult: {
       syncSession: async () => {},
       clearProgress: () => {},
     } as never,
-    () => {},
+    (projectId, issueId) => {
+      enqueueCalls.push({ projectId, issueId });
+      options?.onEnqueue?.(projectId, issueId);
+    },
     (_projectId, _linearIssueId, fn) => fn(lease as never),
     () => db.issueSessions.releaseIssueSessionLease(lease.projectId, lease.linearIssueId, lease.leaseId),
     () => true,
@@ -92,7 +97,7 @@ function createFinalizer(db: PatchRelayDatabase, completionCheckResult: {
       },
     } as never,
   );
-  return { finalizer, feedEvents, activities };
+  return { finalizer, feedEvents, activities, enqueueCalls };
 }
 
 test("run finalizer moves no-PR runs into awaiting_input when completion check needs input", async () => {
@@ -209,6 +214,86 @@ test("run finalizer queues a same-thread follow-up when completion check says co
     assert.equal(wake?.runType, "implementation");
     assert.equal(wake?.resumeThread, true);
     assert.equal(pendingEvent?.eventType, "completion_check_continue");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("run finalizer re-enqueues a pending requested-changes wake after the active run finishes", async () => {
+  const { baseDir, db } = createDb();
+  try {
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-1",
+      issueKey: "USE-111A",
+      title: "Finish main repair before replaying review work",
+      factoryState: "implementing",
+      prNumber: 41,
+      prState: "open",
+      prReviewState: "changes_requested",
+      prHeadSha: "sha-before-finish",
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "main_repair",
+    });
+    db.runs.updateRunThread(run.id, { threadId: "thread-1", turnId: "turn-main" });
+    db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      activeRunId: run.id,
+    });
+    db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      eventType: "review_changes_requested",
+      eventJson: JSON.stringify({
+        reviewBody: "Please revise the migration before merge.",
+        reviewCommitId: "sha-before-finish",
+        reviewId: 91,
+        reviewerName: "reviewbot",
+      }),
+      dedupeKey: "review_changes_requested::sha-before-finish::reviewbot",
+    });
+
+    const { finalizer, enqueueCalls, feedEvents } = createFinalizer(db, {
+      outcome: "done",
+      summary: "The main repair PR is published and ready for downstream automation.",
+    }, {
+      publishedOutcomeError: null,
+    });
+
+    await finalizer.finalizeCompletedRun({
+      source: "notification",
+      run: db.runs.getRunById(run.id)!,
+      issue: db.getIssue(issue.projectId, issue.linearIssueId)!,
+      thread: {
+        id: "thread-1",
+        preview: "",
+        cwd: "/tmp/work",
+        status: "idle",
+        turns: [
+          {
+            id: "turn-main",
+            status: "completed",
+            items: [{ id: "msg-1", type: "agentMessage", text: "The repair PR is published." }],
+          },
+        ],
+      },
+      threadId: "thread-1",
+      completedTurnId: "turn-main",
+      resolveRecoverableRunState: () => undefined,
+    });
+
+    const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId)!;
+    const wake = db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId);
+    assert.equal(updatedIssue.activeRunId, undefined);
+    assert.equal(updatedIssue.factoryState, "pr_open");
+    assert.equal(wake?.runType, "review_fix");
+    assert.deepEqual(enqueueCalls, [{ projectId: "usertold", issueId: "issue-1" }]);
+    assert.equal(feedEvents.at(-1)?.status, "deferred_follow_up_queued");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

@@ -962,6 +962,64 @@ test("requested changes on a PatchRelay-owned PR queue review_fix", async () => 
   }
 });
 
+test("requested changes during an active run are persisted for replay without immediate enqueue", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-runtime-active-review-"));
+  const previousGitHubToken = process.env.GITHUB_TOKEN;
+  try {
+    process.env.GITHUB_TOKEN = "test-github-token";
+    const { db, enqueueCalls, handler } = createHandler(baseDir, {
+      fetchImpl: async () => createJsonResponse([]),
+    });
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-active-review",
+      issueKey: "USE-13A",
+      branchName: "feat-active-review",
+      prNumber: 131,
+      prState: "open",
+      prAuthorLogin: "patchrelay[bot]",
+      factoryState: "implementing",
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "main_repair",
+    });
+    db.upsertIssue({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      activeRunId: run.id,
+    });
+
+    await handler.processGitHubWebhookEvent({
+      eventType: "pull_request_review",
+      rawBody: buildChangesRequestedReviewPayload({
+        branch: "feat-active-review",
+        headSha: "sha-active-review",
+        prNumber: 131,
+        prAuthorLogin: "patchrelay[bot]",
+      }),
+    });
+
+    const updatedIssue = db.getIssue("usertold", "issue-active-review");
+    const wake = db.issueSessions.peekIssueSessionWake("usertold", "issue-active-review");
+    assert.equal(updatedIssue?.factoryState, "implementing");
+    assert.equal(updatedIssue?.prReviewState, "changes_requested");
+    assert.equal(updatedIssue?.activeRunId, run.id);
+    assert.equal(wake?.runType, "review_fix");
+    assert.equal(wake?.wakeReason, "review_changes_requested");
+    assert.deepEqual(enqueueCalls, []);
+  } finally {
+    if (previousGitHubToken === undefined) {
+      delete process.env.GITHUB_TOKEN;
+    } else {
+      process.env.GITHUB_TOKEN = previousGitHubToken;
+    }
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("push after requested changes does not auto request re-review", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-github-runtime-rereview-"));
   try {

@@ -44,7 +44,6 @@ export async function maybeEnqueueGitHubReactiveRun(params: {
 }): Promise<void> {
   const { issue, event, project, logger, feed, enqueueIssue, db, fetchImpl, failureContextResolver } = params;
 
-  if (issue.activeRunId !== undefined) return;
   if (isIssueTerminal(issue)) return;
 
   if (!issue.delegatedToPatchRelay) {
@@ -61,6 +60,9 @@ export async function maybeEnqueueGitHubReactiveRun(params: {
   }
 
   if (event.triggerEvent === "check_failed" && issue.prState === "open") {
+    if (issue.activeRunId !== undefined) {
+      return;
+    }
     await handleCheckFailedEvent({
       db,
       logger,
@@ -239,8 +241,17 @@ async function handleRequestedChangesEvent(params: {
   });
   const queuedRunType = hadPendingWake
     ? db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId)?.runType
-    : enqueuePendingSessionWake(db, enqueueIssue, issue.projectId, issue.linearIssueId);
-  logger.info({ issueKey: issue.issueKey, reviewerName: event.reviewerName }, "Enqueued review fix run");
+    : issue.activeRunId === undefined
+      ? enqueuePendingSessionWake(db, enqueueIssue, issue.projectId, issue.linearIssueId)
+      : db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId)?.runType;
+  logger.info(
+    {
+      issueKey: issue.issueKey,
+      reviewerName: event.reviewerName,
+      deferredUntilRunRelease: issue.activeRunId !== undefined,
+    },
+    "Captured requested-changes follow-up",
+  );
   feed?.publish({
     level: "warn",
     kind: "github",
@@ -248,7 +259,9 @@ async function handleRequestedChangesEvent(params: {
     projectId: issue.projectId,
     stage: "changes_requested",
     status: "review_fix_queued",
-    summary: `${queuedRunType ?? "review_fix"} queued after requested changes`,
+    summary: issue.activeRunId === undefined
+      ? `${queuedRunType ?? "review_fix"} queued after requested changes`
+      : `${queuedRunType ?? "review_fix"} recorded and will resume after the active run finishes`,
     detail: reviewComments && reviewComments.length > 0
       ? `${reviewComments.length} inline review comment${reviewComments.length === 1 ? "" : "s"} captured`
       : event.reviewBody?.slice(0, 200) ?? event.reviewerName,
