@@ -256,3 +256,68 @@ test("main_repair verification re-applies the priority queue label to the publis
     rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test("main_repair verification does not treat a historical merged PR on the repair branch as published output", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-main-repair-merged-history-"));
+  const oldPath = process.env.PATH;
+  try {
+    const config = createConfig(baseDir);
+    config.projects[0]!.github = {
+      repoFullName: "owner/repo",
+      priorityQueueLabel: "queue:priority",
+    };
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const repoDir = createDirtyRepo(baseDir);
+    const fakeBin = writeMainRepairGhScript(baseDir, {
+      listOutput: '[{"number":279,"url":"https://github.com/owner/repo/pull/279","state":"MERGED","author":{"login":"patchrelay"},"headRefOid":"sha-merged-history"}]',
+      labelsOutput: '{"labels":[]}',
+      logPath: path.join(baseDir, "gh-edit.log"),
+    });
+    process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
+
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-main-repair",
+      issueKey: "USE-901",
+      title: "Repair main again",
+      branchName: "main-repair/main",
+      worktreePath: repoDir,
+      factoryState: "implementing",
+      prNumber: 279,
+      prUrl: "https://github.com/owner/repo/pull/279",
+      prState: "merged",
+      prHeadSha: "sha-merged-history",
+      prReviewState: "approved",
+      prCheckStatus: "success",
+    });
+    const lease = acquireLease(db, issue.projectId, issue.linearIssueId);
+    const policy = new ImplementationOutcomePolicy(
+      config,
+      db,
+      pino({ enabled: false }),
+      (_projectId, _linearIssueId, fn) => fn(lease),
+    );
+
+    const outcome = await policy.verifyPublishedRunOutcome({
+      id: 3,
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "main_repair",
+      status: "running",
+      startedAt: new Date().toISOString(),
+    }, issue);
+
+    assert.match(String(outcome ?? ""), /without opening a PR/i);
+    const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId);
+    assert.equal(updatedIssue?.prNumber, undefined);
+    assert.equal(updatedIssue?.prState, undefined);
+    assert.equal(updatedIssue?.prHeadSha, undefined);
+    assert.equal(updatedIssue?.prReviewState, undefined);
+    assert.equal(updatedIssue?.prCheckStatus, undefined);
+  } finally {
+    process.env.PATH = oldPath;
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});

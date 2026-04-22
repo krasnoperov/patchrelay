@@ -420,6 +420,68 @@ test("run finalizer marks no-PR completion checks done when the fork confirms de
   }
 });
 
+test("run finalizer keeps main_repair delegated when no repair PR was published", async () => {
+  const { baseDir, db } = createDb();
+  try {
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-1",
+      issueKey: "USE-112B",
+      title: "Repair main before closing",
+      branchName: "main-repair/main",
+      factoryState: "implementing",
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "main_repair",
+    });
+    db.runs.updateRunThread(run.id, { threadId: "thread-1", turnId: "turn-main" });
+
+    const { finalizer, feedEvents } = createFinalizer(db, {
+      outcome: "done",
+      summary: "The repair branch is green and no more code changes are needed.",
+    }, {
+      publishedOutcomeError: "Implementation completed without opening a PR for branch main-repair/main",
+    });
+
+    await finalizer.finalizeCompletedRun({
+      source: "notification",
+      run: db.runs.getRunById(run.id)!,
+      issue: db.getIssue(issue.projectId, issue.linearIssueId)!,
+      thread: {
+        id: "thread-1",
+        preview: "",
+        cwd: "/tmp/work",
+        status: "idle",
+        turns: [
+          {
+            id: "turn-main",
+            status: "completed",
+            items: [{ id: "msg-1", type: "agentMessage", text: "The fix is on the repair branch, but no PR exists yet." }],
+          },
+        ],
+      },
+      threadId: "thread-1",
+      completedTurnId: "turn-main",
+      resolveRecoverableRunState: () => undefined,
+    });
+
+    const updatedIssue = db.getIssue(issue.projectId, issue.linearIssueId)!;
+    const updatedRun = db.runs.getRunById(run.id)!;
+    const wake = db.issueSessions.peekIssueSessionWake(issue.projectId, issue.linearIssueId);
+    assert.equal(updatedIssue.factoryState, "delegated");
+    assert.equal(updatedRun.status, "completed");
+    assert.equal(updatedRun.completionCheckOutcome, "continue");
+    assert.match(String(updatedRun.completionCheckSummary ?? ""), /cannot finish without a published repair PR/i);
+    assert.equal(wake?.runType, "main_repair");
+    assert.equal(feedEvents.at(-1)?.status, "completion_check_continue");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("run finalizer fails no-PR completion checks when the fork says the run stopped incorrectly", async () => {
   const { baseDir, db } = createDb();
   try {
