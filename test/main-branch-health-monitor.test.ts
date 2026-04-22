@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import pino from "pino";
 import { PatchRelayDatabase } from "../src/db.ts";
@@ -286,6 +287,72 @@ test("main branch health monitor closes stale main_repair issues once main recov
     const issue = db.getIssue("proj", "lin-1");
     assert.equal(issue?.factoryState, "done");
     assert.equal(db.issueSessions.peekIssueSessionWake("proj", "lin-1"), undefined);
+  } finally {
+    process.env.PATH = oldPath;
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("main branch health monitor reuses a failed main_repair issue instead of creating a duplicate", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-main-repair-reuse-failed-"));
+  const oldPath = process.env.PATH;
+  try {
+    const config = createConfig(baseDir);
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+
+    const fakeBin = writeGhScript(baseDir);
+    process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
+
+    db.upsertIssue({
+      projectId: "proj",
+      linearIssueId: "lin-failed",
+      issueKey: "PRJ-80",
+      title: "Repair main for owner/repo",
+      branchName: "main-repair/main",
+      delegatedToPatchRelay: false,
+      factoryState: "failed",
+    });
+    new DatabaseSync(config.database.path)
+      .prepare("UPDATE issues SET updated_at = ? WHERE project_id = ? AND linear_issue_id = ?")
+      .run(new Date(Date.now() - 10 * 60_000).toISOString(), "proj", "lin-failed");
+
+    const createdIssues: Array<{ teamId: string; title: string; description?: string }> = [];
+    const linearClient: LinearClient = {
+      async getIssue() { throw new Error("not used"); },
+      async createIssue(params) {
+        createdIssues.push(params);
+        return makeLinearIssueSnapshot();
+      },
+      async setIssueState() { throw new Error("not used"); },
+      async upsertIssueComment() { throw new Error("not used"); },
+      async createAgentActivity() { throw new Error("not used"); },
+      async updateIssueLabels() { throw new Error("not used"); },
+      async getActorProfile() { throw new Error("not used"); },
+      async getWorkspaceCatalog() { throw new Error("not used"); },
+    };
+
+    const enqueueCalls: Array<{ projectId: string; issueId: string }> = [];
+    const monitor = new MainBranchHealthMonitor(
+      db,
+      config,
+      { forProject: async () => linearClient },
+      (projectId, issueId) => { enqueueCalls.push({ projectId, issueId }); },
+      pino({ enabled: false }),
+    );
+
+    await monitor.reconcile();
+
+    assert.equal(createdIssues.length, 0);
+
+    const issue = db.getIssue("proj", "lin-failed");
+    assert.equal(issue?.delegatedToPatchRelay, true);
+    assert.equal(issue?.factoryState, "delegated");
+
+    const wake = db.issueSessions.peekIssueSessionWake("proj", "lin-failed");
+    assert.equal(wake?.runType, "main_repair");
+    assert.equal(wake?.context.baseSha, "base-sha-123");
+    assert.deepEqual(enqueueCalls, [{ projectId: "proj", issueId: "lin-failed" }]);
   } finally {
     process.env.PATH = oldPath;
     rmSync(baseDir, { recursive: true, force: true });
