@@ -52,6 +52,7 @@ export function deriveIssueStatusNote(params: {
       : completionCheck?.summary,
   );
   const latestRunNote = clean(extractLatestAssistantSummary(params.latestRun));
+  const latestFailureReason = clean(params.latestRun?.failureReason);
   const latestEventNote = clean(eventStatusNote(params.latestEvent));
   const failureSummary = clean(params.failureSummary);
   const waitingReason = clean(params.waitingReason);
@@ -66,7 +67,7 @@ export function deriveIssueStatusNote(params: {
       break;
     case "failed":
     case "escalated":
-      note = latestEventNote ?? completionCheckNote ?? failureSummary ?? latestRunNote ?? sessionSummary;
+      note = latestEventNote ?? completionCheckNote ?? failureSummary ?? latestFailureReason ?? latestRunNote ?? sessionSummary;
       break;
     case "done":
       note = completionCheckNote ?? sessionSummary ?? latestRunNote ?? failureSummary;

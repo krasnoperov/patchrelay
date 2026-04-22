@@ -10,8 +10,7 @@ export function isInertPatchRelayComment(
   if (commentId === issue.statusCommentId) {
     return true;
   }
-  if (body.startsWith("## PatchRelay status")
-    && body.includes("_PatchRelay updates this comment as it works. Review and merge remain downstream._")) {
+  if (body.startsWith("## PatchRelay status")) {
     return true;
   }
   const normalizedActorType = actorType?.trim().toLowerCase();
