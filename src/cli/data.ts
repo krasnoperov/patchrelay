@@ -6,6 +6,7 @@ import { extractCompletionCheck } from "../completion-check.ts";
 import { getThreadTurns } from "../codex-thread-utils.ts";
 import { PatchRelayDatabase } from "../db.ts";
 import { buildManualRetryAttemptReset, resolveRetryTarget } from "../manual-issue-actions.ts";
+import { buildOperatorRetryEvent } from "../operator-retry-event.ts";
 import { WorktreeManager } from "../worktree-manager.ts";
 import { parseDelegationObservedPayload, parseRunReleasedAuthorityPayload } from "../delegation-audit.ts";
 import { CliOperatorApiClient } from "./operator-client.ts";
@@ -564,64 +565,10 @@ export class CliDataAccess extends CliOperatorApiClient {
   }
 
   private appendRetryWake(issue: IssueRecord, runType: RunType): void {
-    if (runType === "queue_repair") {
-      const queueIncident = parseObjectJson(issue.lastQueueIncidentJson);
-      const failureContext = parseObjectJson(issue.lastGitHubFailureContextJson);
-      this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
-        projectId: issue.projectId,
-        linearIssueId: issue.linearIssueId,
-        eventType: "merge_steward_incident",
-        eventJson: JSON.stringify({
-          ...(queueIncident ?? {}),
-          ...(failureContext ?? {}),
-          source: "operator_retry",
-        }),
-        dedupeKey: `operator_retry:queue_repair:${issue.linearIssueId}:${issue.prHeadSha ?? issue.lastGitHubFailureHeadSha ?? "unknown-sha"}`,
-      });
-      return;
-    }
-
-    if (runType === "ci_repair") {
-      const failureContext = parseObjectJson(issue.lastGitHubFailureContextJson);
-      this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
-        projectId: issue.projectId,
-        linearIssueId: issue.linearIssueId,
-        eventType: "settled_red_ci",
-        eventJson: JSON.stringify({
-          ...(failureContext ?? {}),
-          source: "operator_retry",
-        }),
-        dedupeKey: `operator_retry:ci_repair:${issue.linearIssueId}:${issue.lastGitHubFailureSignature ?? issue.prHeadSha ?? "unknown-sha"}`,
-      });
-      return;
-    }
-
-    if (runType === "review_fix" || runType === "branch_upkeep") {
-      this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
-        projectId: issue.projectId,
-        linearIssueId: issue.linearIssueId,
-        eventType: "review_changes_requested",
-        eventJson: JSON.stringify({
-          reviewBody: runType === "branch_upkeep"
-            ? "Operator requested retry of branch upkeep after requested changes."
-            : "Operator requested retry of review-fix work.",
-          ...(runType === "branch_upkeep" ? { branchUpkeepRequired: true, wakeReason: "branch_upkeep" } : {}),
-          source: "operator_retry",
-        }),
-        dedupeKey: `operator_retry:${runType}:${issue.linearIssueId}:${issue.prHeadSha ?? "unknown-sha"}`,
-      });
-      return;
-    }
-
     this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(issue.projectId, issue.linearIssueId, {
       projectId: issue.projectId,
       linearIssueId: issue.linearIssueId,
-      eventType: "delegated",
-      eventJson: JSON.stringify({
-        promptContext: "Operator requested retry of PatchRelay work.",
-        source: "operator_retry",
-      }),
-      dedupeKey: `operator_retry:implementation:${issue.linearIssueId}`,
+      ...buildOperatorRetryEvent(issue, runType),
     });
   }
 

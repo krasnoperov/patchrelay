@@ -64,3 +64,16 @@ test("buildOperatorRetryEvent marks branch upkeep retries explicitly", () => {
   assert.equal(payload.wakeReason, "branch_upkeep");
   assert.equal(payload.source, "operator_retry");
 });
+
+test("buildOperatorRetryEvent keeps review-fix retries generic so live review context can be rehydrated", () => {
+  const event = buildOperatorRetryEvent(createIssue({
+    linearIssueId: "issue-review-fix",
+    prHeadSha: "head-review-fix",
+  }), "review_fix");
+
+  assert.equal(event.eventType, "review_changes_requested");
+  assert.equal(event.dedupeKey, "operator_retry:review_fix:issue-review-fix:head-review-fix");
+  const payload = JSON.parse(event.eventJson) as Record<string, unknown>;
+  assert.equal(payload.promptContext, "operator retry requested retry of review-fix work.");
+  assert.equal("reviewBody" in payload, false);
+});

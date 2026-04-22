@@ -42,6 +42,20 @@ export function shouldReuseIssueThread(params: {
   return Boolean(params.existingThreadId) && !params.compactThread && params.resumeThread;
 }
 
+export function shouldFreshenWorktreeBeforeLaunch(params: {
+  runType: RunType;
+  effectiveContext?: Record<string, unknown>;
+}): boolean {
+  if (params.runType === "queue_repair") {
+    return false;
+  }
+  if (params.runType === "review_fix") {
+    return params.effectiveContext?.branchUpkeepRequired === true
+      || params.effectiveContext?.reviewFixMode === "branch_upkeep";
+  }
+  return true;
+}
+
 export class RunLauncher {
   constructor(
     private readonly config: AppConfig,
@@ -207,7 +221,10 @@ export class RunLauncher {
       }
 
       await this.worktreeManager.resetWorktreeToTrackedBranch(params.worktreePath, params.branchName, params.issue, this.logger);
-      if (params.runType !== "queue_repair") {
+      if (shouldFreshenWorktreeBeforeLaunch({
+        runType: params.runType,
+        ...(params.effectiveContext ? { effectiveContext: params.effectiveContext } : {}),
+      })) {
         await this.worktreeManager.freshenWorktree(params.worktreePath, params.project, params.issue, this.logger);
       }
 
