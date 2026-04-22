@@ -147,6 +147,51 @@ test("reconciler reopens stale blocked local done issues back into delegated sta
   }
 });
 
+test("reconciler keeps canceled issues buried instead of reopening stale local done state", async () => {
+  const { baseDir, db } = createDb();
+  try {
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-canceled-done",
+      issueKey: "USE-202A",
+      delegatedToPatchRelay: false,
+      factoryState: "done",
+      currentLinearState: "In Review",
+      currentLinearStateType: "started",
+    });
+
+    const reconciler = new MergedLinearCompletionReconciler(
+      db,
+      {
+        forProject: async () => ({
+          getIssue: async () => buildLiveIssue({
+            id: "issue-canceled-done",
+            identifier: "USE-202A",
+            title: "Canceled issue",
+            stateName: "Canceled",
+            stateType: "canceled",
+          }),
+          setIssueState: async () => {
+            throw new Error("setIssueState should not be called for canceled issues");
+          },
+        }) as LinearClient,
+      },
+      pino({ enabled: false }),
+    );
+
+    await reconciler.reconcile();
+
+    const issue = db.getIssue("usertold", "issue-canceled-done");
+    assert.equal(issue?.factoryState, "done");
+    assert.equal(issue?.delegatedToPatchRelay, false);
+    assert.equal(issue?.pendingRunType, undefined);
+    assert.equal(issue?.currentLinearState, "Canceled");
+    assert.equal(issue?.currentLinearStateType, "canceled");
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("reconciler completes trusted no-PR done issues in Linear instead of reopening them", async () => {
   const { baseDir, db } = createDb();
   try {
