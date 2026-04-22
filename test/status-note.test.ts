@@ -60,6 +60,27 @@ test("deriveIssueStatusNote unwraps shell-wrapped commands in assistant summarie
   );
 });
 
+test("deriveIssueStatusNote prefers publication recap summaries over raw assistant output", () => {
+  const note = deriveIssueStatusNote({
+    issue: { factoryState: "done" },
+    latestRun: {
+      id: 1,
+      issueId: 1,
+      projectId: "project",
+      linearIssueId: "issue-1",
+      runType: "review_fix",
+      status: "completed",
+      startedAt: "2026-04-07T22:30:00.000Z",
+      summaryJson: JSON.stringify({
+        publicationRecapSummary: "Addressed the requested review feedback and updated PR #42.",
+        latestAssistantMessage: "Updated the branch, reran checks, and tweaked several details.",
+      }),
+    } as never,
+  });
+
+  assert.equal(note, "Addressed the requested review feedback and updated PR #42.");
+});
+
 test("deriveIssueStatusNote prefers completion-check questions for awaiting-input issues", () => {
   const note = deriveIssueStatusNote({
     issue: { factoryState: "awaiting_input" },
