@@ -3,6 +3,7 @@ import type { ReconcileContext } from "./reconciler-core.ts";
 import { CLEAN_CI, CLEAN_SPEC, emit, isBudgetExhausted, ref } from "./reconciler-core.ts";
 import { cleanupSpec, evictEntry, invalidateDownstream } from "./reconciler-evict.ts";
 import { verifyPostMergeStatus } from "./reconciler-post-merge.ts";
+import { getEffectiveMainStatus } from "./reconciler-main-status.ts";
 
 export async function mergeHead(ctx: ReconcileContext, entry: QueueEntry): Promise<void> {
   emit(ctx, entry, "merge_revalidating");
@@ -39,9 +40,10 @@ export async function mergeHead(ctx: ReconcileContext, entry: QueueEntry): Promi
     return;
   }
 
+  let currentBase: string | null = null;
   try {
     await ctx.git.fetch();
-    const currentBase = await ctx.git.headSha(ref(ctx, ctx.baseBranch));
+    currentBase = await ctx.git.headSha(ref(ctx, ctx.baseBranch));
     const isFF = await ctx.git.isAncestor(currentBase, entry.specSha);
     if (!isFF) {
       emit(ctx, entry, "branch_mismatch", { detail: `spec is not a fast-forward from main (${currentBase.slice(0, 8)})` });
@@ -55,8 +57,15 @@ export async function mergeHead(ctx: ReconcileContext, entry: QueueEntry): Promi
   }
 
   if (ctx.ci.getMainStatus && entry.priority <= 0) {
-    const mainStatus = await ctx.ci.getMainStatus(ctx.baseBranch);
-    if (mainStatus === "pending") {
+    const mainStatus = currentBase
+      ? await getEffectiveMainStatus(ctx, currentBase)
+      : { status: await ctx.ci.getMainStatus(ctx.baseBranch) };
+    if (mainStatus.trustedMergedEntryId) {
+      emit(ctx, entry, "main_pending_bypassed", {
+        detail: `main checks pending for already-validated merge of PR #${mainStatus.trustedMergedPrNumber}`,
+      });
+    }
+    if (mainStatus.status === "pending") {
       // Main is still verifying itself (typically post-merge CI from the
       // previous entry).  The spec was built on top of main-as-it-was
       // (isFF check above guarantees main hasn't diverged) and already
@@ -67,7 +76,7 @@ export async function mergeHead(ctx: ReconcileContext, entry: QueueEntry): Promi
       ctx.store.transition(entry.id, "merging", { waitDetail: "main checks still pending, holding merge" }, "main checks still pending, holding merge");
       return;
     }
-    if (mainStatus === "fail") {
+    if (mainStatus.status === "fail") {
       try {
         const refresh = await ctx.policy.refreshOnIssue("main_unhealthy_at_merge");
         if (refresh.attempted && refresh.changed) {

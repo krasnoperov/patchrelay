@@ -41,6 +41,7 @@ export function rootHelpText(): string {
     "  issue open <issueKey> [--print] [--json]                Open Codex in the issue worktree",
     "  issue sessions <issueKey> [--json]                      Show recorded Codex app-server sessions for one issue",
     "  issue transcript-source <issueKey> [--run <id>] [--json]  Show the raw Codex session file for one issue run",
+    "  issue prompt <issueKey> <text> [--json]                 Send operator guidance to the active or next run",
     "  issue close <issueKey> [--failed] [--reason <text>] [--json]",
     "                                                          Force-close one issue and release any active run",
     "  service status [--json]                                 Show systemd state and local health",
@@ -159,6 +160,7 @@ export function issueHelpText(): string {
     "  open <issueKey>                 Open Codex in the issue worktree",
     "  sessions <issueKey>             Show recorded Codex app-server sessions",
     "  transcript-source <issueKey>    Show the raw Codex session file for one issue run",
+    "  prompt <issueKey> <text>        Send operator guidance to the active or next run",
     "  retry <issueKey>                Requeue a run",
     "  close <issueKey>                Force-close a stuck issue",
     "",
@@ -168,6 +170,7 @@ export function issueHelpText(): string {
     "  patchrelay issue watch USE-54",
     "  patchrelay issue sessions USE-54",
     "  patchrelay issue transcript-source USE-54",
+    "  patchrelay issue prompt USE-54 \"rebuild this branch cleanly from main\"",
     "  patchrelay close USE-54 --reason \"already handled manually\"",
   ].join("\n");
 }

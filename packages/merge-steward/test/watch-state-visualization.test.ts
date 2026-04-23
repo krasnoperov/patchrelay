@@ -154,6 +154,40 @@ test("merge-steward observations explain when the head is blocked by unhealthy m
   assert.match(observations[0]?.text ?? "", /Tests/);
 });
 
+test("merge-steward observations do not apply a stale main block to a different head", () => {
+  const detail = makeDetail({
+    entry: {
+      ...makeDetail().entry,
+      id: "entry-current",
+      prNumber: 42,
+      status: "preparing_head",
+      lastFailedBaseSha: "deadbeef1234",
+    },
+  });
+
+  const observations = buildExternalRepairObservations(detail, {
+    isHead: true,
+    activeIndex: 1,
+    activeCount: 1,
+    headPrNumber: 42,
+    queueBlock: {
+      reason: "main_broken",
+      entryId: "entry-old",
+      headPrNumber: 41,
+      baseBranch: "main",
+      baseSha: "abc123def456",
+      observedAt: "2026-03-28T12:06:00.000Z",
+      failingChecks: [{ name: "Tests", conclusion: "failure" }],
+      pendingChecks: [],
+      missingRequiredChecks: [],
+    },
+  });
+
+  assert.doesNotMatch(observations[0]?.text ?? "", /main is unhealthy/i);
+  assert.match(observations[0]?.text ?? "", /First in queue/i);
+  assert.match(observations[1]?.text ?? "", /Conflicts with main/i);
+});
+
 test("merge-steward observations explain when the head is waiting for main verification", () => {
   const detail = makeDetail({
     entry: {

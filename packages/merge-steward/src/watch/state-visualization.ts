@@ -1,4 +1,5 @@
 import type { QueueBlockState, QueueEntry, QueueEntryDetail } from "../types.ts";
+import { queueBlockMatchesEntry } from "./format.ts";
 
 export type VisualizationNodeStatus = "current" | "visited" | "upcoming";
 
@@ -88,7 +89,7 @@ export function buildExternalRepairObservations(
     observations.push({ tone: "info", text: "Removed from queue." });
   } else if (entry.status === "evicted") {
     observations.push({ tone: "warn", text: "Removed after failed retries. Branch needs repair before re-admission." });
-  } else if (options.isHead && options.queueBlock?.reason === "main_broken") {
+  } else if (options.isHead && queueBlockMatchesEntry(options.queueBlock, entry)) {
     const failingNames = options.queueBlock.failingChecks.map((check) => check.name);
     const pendingNames = options.queueBlock.pendingChecks.map((check) => check.name);
     const missingNames = options.queueBlock.missingRequiredChecks;

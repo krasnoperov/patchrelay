@@ -2,6 +2,7 @@ import type { MergeResult, QueueEntry } from "./types.ts";
 import type { ReconcileContext } from "./reconciler-core.ts";
 import { CLEAN_CI, CLEAN_SPEC, emit, isBudgetExhausted, isRetryGated, ref, specBranchName } from "./reconciler-core.ts";
 import { evictEntry } from "./reconciler-evict.ts";
+import { getEffectiveMainStatus } from "./reconciler-main-status.ts";
 
 function summarizeCheckNames(checks: Array<{ name: string }>, limit = 3): string {
   const names = [...new Set(checks.map((check) => check.name))];
@@ -65,8 +66,14 @@ export async function prepareEntry(
   if (isHead) {
     const bypassMainBlock = entry.priority > 0;
     if (ctx.ci.getMainStatus && !bypassMainBlock) {
-      const mainStatus = await ctx.ci.getMainStatus(ctx.baseBranch);
-      if (mainStatus !== "pass") {
+      const mainStatus = await getEffectiveMainStatus(ctx, baseSha);
+      if (mainStatus.trustedMergedEntryId) {
+        emit(ctx, entry, "main_pending_bypassed", {
+          baseSha,
+          detail: `main checks pending for already-validated merge of PR #${mainStatus.trustedMergedPrNumber}`,
+        });
+      }
+      if (mainStatus.status !== "pass") {
         let mainChecks: Array<{ name: string; conclusion: "success" | "failure" | "pending"; url?: string | undefined }> = [];
         try {
           mainChecks = await ctx.github.listChecksForRef(ref(ctx, ctx.baseBranch));

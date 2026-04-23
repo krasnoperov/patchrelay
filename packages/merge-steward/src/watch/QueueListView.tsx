@@ -3,7 +3,7 @@ import { Box, Text, useStdout } from "ink";
 import type { QueueBlockState, QueueEntry, QueueEventSummary } from "../types.ts";
 import { TERMINAL_STATUSES } from "../types.ts";
 import { buildChainEntries } from "./display-filter.ts";
-import { ciStatusIcon, formatEventSummary, humanStatus, isPendingMainVerification, nextStepLabel, postMergeStatusLine, relativeTime, statusColor, summarizeQueueBlock, truncate } from "./format.ts";
+import { ciStatusIcon, formatEventSummary, humanStatus, isPendingMainVerification, nextStepLabel, postMergeStatusLine, queueBlockMatchesEntry, relativeTime, statusColor, summarizeQueueBlock, truncate } from "./format.ts";
 
 interface QueueListViewProps {
   entries: QueueEntry[];
@@ -47,7 +47,7 @@ function QueueRow({
     );
   }
 
-  const blockedOnMain = isHead && queueBlock?.reason === "main_broken" && queueBlock.headPrNumber === entry.prNumber;
+  const blockedOnMain = isHead && queueBlockMatchesEntry(queueBlock, entry);
   const pendingMainVerification = blockedOnMain && isPendingMainVerification(queueBlock);
   const status = blockedOnMain
     ? pendingMainVerification ? "verifying main" : "waiting for main"
@@ -88,7 +88,8 @@ export function QueueListView({
   // All entries are 1 row now.
   const eventRows = Math.min(8, Math.max(4, rows - entries.length - CHROME_ROWS));
   const displayedEvents = useMemo(() => recentEvents.slice(-eventRows), [eventRows, recentEvents]);
-  const queueBlockLabel = summarizeQueueBlock(queueBlock);
+  const effectiveQueueBlock = queueBlock && queueBlock.entryId === headEntryId ? queueBlock : null;
+  const queueBlockLabel = summarizeQueueBlock(effectiveQueueBlock);
 
   // Chain header always shows the live queue, regardless of display filter.
   const chainEntries = useMemo(() => buildChainEntries(allEntries), [allEntries]);
@@ -111,15 +112,15 @@ export function QueueListView({
           })}
         </Box>
       )}
-      {queueBlock && (
+      {effectiveQueueBlock && (
         <Box marginBottom={1} flexDirection="column">
           <Text color="yellow">
-            Queue paused: {queueBlockLabel ?? "waiting for main checks"}{queueBlock.baseSha ? ` at ${truncate(queueBlock.baseSha, 10)}` : ""}.
+            Queue paused: {queueBlockLabel ?? "waiting for main checks"}{effectiveQueueBlock.baseSha ? ` at ${truncate(effectiveQueueBlock.baseSha, 10)}` : ""}.
           </Text>
           <Text dimColor>
-            {queueBlock.missingRequiredChecks.length > 0
-              ? `Head PR #${queueBlock.headPrNumber ?? "?"} is waiting for an operator fix on ${queueBlock.baseBranch}.`
-              : `Head PR #${queueBlock.headPrNumber ?? "?"} will resume automatically once main is healthy.`}
+            {effectiveQueueBlock.missingRequiredChecks.length > 0
+              ? `Head PR #${effectiveQueueBlock.headPrNumber ?? "?"} is waiting for an operator fix on ${effectiveQueueBlock.baseBranch}.`
+              : `Head PR #${effectiveQueueBlock.headPrNumber ?? "?"} will resume automatically once main is healthy.`}
           </Text>
         </Box>
       )}
@@ -132,7 +133,7 @@ export function QueueListView({
             entry={entry}
             selected={entry.id === selectedEntryId}
             isHead={entry.id === headEntryId}
-            queueBlock={queueBlock}
+            queueBlock={effectiveQueueBlock}
           />
         ))
       )}

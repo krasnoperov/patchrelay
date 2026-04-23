@@ -7,6 +7,7 @@ import type {
   ListResultItem,
   LiveResult,
   OpenResult,
+  PromptResult,
   RetryResult,
   WorktreeResult,
 } from "../data.ts";
@@ -112,6 +113,16 @@ export function formatRetry(result: RetryResult): string {
     value("Issue", result.issue.issueKey ?? result.issue.linearIssueId),
     value("Queued stage", result.runType),
     result.reason ? value("Reason", result.reason) : undefined,
+  ]
+    .filter(Boolean)
+    .join("\n")}\n`;
+}
+
+export function formatPrompt(result: PromptResult): string {
+  return `${[
+    value("Issue", result.issueKey),
+    value("Delivered", result.delivered ? "yes" : "no"),
+    result.queued ? value("Queued", "yes") : undefined,
   ]
     .filter(Boolean)
     .join("\n")}\n`;

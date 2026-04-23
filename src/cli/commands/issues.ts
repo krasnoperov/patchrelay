@@ -5,7 +5,7 @@ import type { InteractiveRunner, Output, ParsedArgs } from "../command-types.ts"
 import type { CliDataAccess } from "../data.ts";
 import { CliUsageError } from "../errors.ts";
 import { formatJson } from "../formatters/json.ts";
-import { formatAudit, formatClose, formatInspect, formatList, formatLive, formatOpen, formatRetry, formatSessionHistory, formatTranscriptSource, formatWorktree } from "../formatters/text.ts";
+import { formatAudit, formatClose, formatInspect, formatList, formatLive, formatOpen, formatPrompt, formatRetry, formatSessionHistory, formatTranscriptSource, formatWorktree } from "../formatters/text.ts";
 import { buildOpenCommand } from "../interactive.ts";
 import { writeOutput } from "../output.ts";
 
@@ -56,6 +56,8 @@ export async function handleIssueCommand(params: IssueCommandParams): Promise<nu
       return await handleAuditCommand(nested);
     case "transcript-source":
       return await handleTranscriptSourceCommand(nested);
+    case "prompt":
+      return await handlePromptCommand(nested);
     case "retry":
       return await handleRetryCommand(nested);
     case "close":
@@ -226,6 +228,23 @@ export async function handleRetryCommand(params: IssueCommandParams): Promise<nu
     throw new Error(`Issue not found: ${issueKey}`);
   }
   writeOutput(params.stdout, params.json ? formatJson(result) : formatRetry(result));
+  return 0;
+}
+
+export async function handlePromptCommand(params: IssueCommandParams): Promise<number> {
+  const issueKey = params.commandArgs[0];
+  if (!issueKey) {
+    throw new Error("prompt requires <issueKey>.");
+  }
+
+  const text = params.commandArgs.slice(1).join(" ").trim();
+  if (!text) {
+    throw new Error("prompt requires <text>.");
+  }
+
+  const result = await params.data.promptIssue(issueKey, text);
+  const payload = { issueKey, ...result };
+  writeOutput(params.stdout, params.json ? formatJson(payload) : formatPrompt(payload));
   return 0;
 }
 

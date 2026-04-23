@@ -88,6 +88,35 @@ describe("main branch broken", () => {
     assert.deepStrictEqual(h.merged, [1]);
   });
 
+  it("does not wait for duplicate main CI when main is at an already-validated merge commit", async () => {
+    let mainStatus: CIStatus = "pass";
+    const h = await createHarness({ ciRule: () => "pass", speculativeDepth: 2 });
+    h.ciSim.getMainStatus = async () => mainStatus;
+
+    await h.enqueue(prA);
+    await h.enqueue({ number: 3, branch: "feat-b", files: [{ path: "b.ts", content: "b" }] });
+
+    await h.tick(); // promote both
+    await h.tick(); // A starts validating
+    await h.tick(); // A ready to merge, B starts validating on top of A
+    const firstSpecSha = h.entries.find((entry) => entry.prNumber === 1)?.specSha;
+    assert.ok(firstSpecSha, "first entry should have a speculative SHA before merge");
+    h.githubSim.setRefChecks(firstSpecSha, [{ name: "Tests", conclusion: "success" }]);
+    await h.tick(); // A merges, B becomes ready to merge
+
+    assert.deepStrictEqual(h.merged, [1]);
+    assert.strictEqual(h.entries.find((entry) => entry.prNumber === 3)?.status, "merging");
+
+    mainStatus = "pending";
+    await h.tick();
+
+    assert.deepStrictEqual(h.merged, [1, 3]);
+    assert.ok(
+      h.reconcileEvents.some((event) => event.prNumber === 3 && event.action === "main_pending_bypassed"),
+      "should record that duplicate main CI was bypassed for the downstream merge",
+    );
+  });
+
   it("lets a priority entry bypass red main while normal entries stay blocked behind it", async () => {
     let mainStatus: CIStatus = "fail";
     const h = await createHarness({ ciRule: () => "pass" });

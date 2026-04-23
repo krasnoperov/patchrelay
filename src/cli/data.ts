@@ -75,6 +75,12 @@ export interface RetryResult {
   reason?: string;
 }
 
+export interface PromptResult {
+  issueKey: string;
+  delivered: boolean;
+  queued?: boolean;
+}
+
 export interface IssueAuditItem {
   createdAt: string;
   eventType: string;

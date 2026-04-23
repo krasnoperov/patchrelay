@@ -247,6 +247,7 @@ export type ReconcileAction =
   | "budget_exhausted"
   | "merge_waiting_approval" // approval withdrawn, waiting for re-approval
   | "merge_waiting_main"     // main still verifying post-merge; keep spec + CI and retry
+  | "main_pending_bypassed"  // main rerun pending for an already-validated merge commit
   | "sanitized_closed"    // entry terminalized: PR closed on GitHub
   | "sanitized_duplicate" // older duplicate entry superseded
   | "post_merge_verification_started"

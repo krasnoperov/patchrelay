@@ -74,6 +74,9 @@ function validateFlags(command: string, commandArgs: string[], parsed: ReturnTyp
         case "transcript-source":
           assertKnownFlags(parsed, "issue", ["run", "json"]);
           return;
+        case "prompt":
+          assertKnownFlags(parsed, "issue", ["json"]);
+          return;
         case "retry":
           assertKnownFlags(parsed, "issue", ["run-type", "reason", "json"]);
           return;

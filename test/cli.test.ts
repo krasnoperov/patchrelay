@@ -848,6 +848,34 @@ test("cli list and retry cover operator control flows", async () => {
   }
 });
 
+test("cli prompt sends operator guidance through the operator API client", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-prompt-"));
+  const promptCalls: Array<{ issueKey: string; text: string }> = [];
+  const data = {
+    async inspect() {
+      return undefined;
+    },
+    async promptIssue(issueKey: string, text: string) {
+      promptCalls.push({ issueKey, text });
+      return { delivered: true };
+    },
+  } as unknown as CliDataAccess;
+
+  const stdout = createBufferStream();
+  const exitCode = await runCli(["issue", "prompt", "USE-60", "Please", "rebuild", "this", "branch", "cleanly"], {
+    config: createConfig(baseDir),
+    stdout: stdout.stream,
+    stderr: createBufferStream().stream,
+    data,
+  });
+
+  assert.equal(exitCode, 0);
+  assert.deepEqual(promptCalls, [{ issueKey: "USE-60", text: "Please rebuild this branch cleanly" }]);
+  assert.match(stdout.read(), /Issue: USE-60/);
+  assert.match(stdout.read(), /Delivered: yes/);
+  rmSync(baseDir, { recursive: true, force: true });
+});
+
 test("cli sessions shows recorded app-server runs with resume commands", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cli-sessions-"));
   let data: CliDataAccess | undefined;

@@ -17,6 +17,19 @@ export function isPendingMainVerification(block: QueueBlockState | null | undefi
   );
 }
 
+export function queueBlockMatchesEntry(
+  block: QueueBlockState | null | undefined,
+  entry: { id: string; prNumber: number } | null | undefined,
+): block is QueueBlockState {
+  if (!block || !entry) {
+    return false;
+  }
+  if (block.entryId) {
+    return block.entryId === entry.id;
+  }
+  return block.headPrNumber === entry.prNumber;
+}
+
 export function shortSha(value: string | null | undefined): string {
   if (!value) {
     return "-";

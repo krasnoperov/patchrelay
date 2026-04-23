@@ -68,6 +68,7 @@ export interface CliOperatorDataAccess {
   close(): void;
   connect(projectId?: string): Promise<ConnectResult>;
   connectStatus(state: string): Promise<ConnectStateResult>;
+  promptIssue(issueKey: string, text: string): Promise<{ delivered: boolean; queued?: boolean }>;
   listInstallations(): Promise<InstallationListResult>;
   listLinearWorkspaces(): Promise<LinearWorkspaceListResult>;
   syncLinearWorkspace(workspace?: string): Promise<{
@@ -97,6 +98,21 @@ export class CliOperatorApiClient implements CliOperatorDataAccess {
     }
 
     return await this.requestJson<ConnectStateResult>(`/api/oauth/linear/state/${encodeURIComponent(state)}`);
+  }
+
+  async promptIssue(issueKey: string, text: string): Promise<{ delivered: boolean; queued?: boolean }> {
+    if (!issueKey.trim()) {
+      throw new Error("Issue key is required.");
+    }
+    if (!text.trim()) {
+      throw new Error("Prompt text is required.");
+    }
+
+    return await this.requestJson<{ delivered: boolean; queued?: boolean }>(
+      `/api/issues/${encodeURIComponent(issueKey)}/prompt`,
+      undefined,
+      { method: "POST", body: { text } },
+    );
   }
 
   async listInstallations(): Promise<InstallationListResult> {

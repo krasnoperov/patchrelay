@@ -1,7 +1,7 @@
 import type { QueueEntry, QueueEntryStatus, QueueWatchSnapshot } from "../types.ts";
 import type { RepoRuntimeState } from "../admin-types.ts";
 import { TERMINAL_STATUSES } from "../types.ts";
-import { mergeWaitState } from "./format.ts";
+import { mergeWaitState, queueBlockMatchesEntry } from "./format.ts";
 
 export interface DashboardRepoConfig {
   repoId: string;
@@ -191,7 +191,7 @@ function repoEntriesFromSnapshot(
   const head = latest
     .filter((entry) => isActive(entry.status))
     .sort((a, b) => a.position - b.position)[0] ?? null;
-  const queueBlocked = Boolean(snapshot.queueBlock);
+  const queueBlocked = queueBlockMatchesEntry(snapshot.queueBlock, head);
 
   const byPr = new Map<number, DashboardPrEntry>();
 
