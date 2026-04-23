@@ -48,13 +48,20 @@ function createConfig(baseDir: string): AppConfig {
   };
 }
 
-function stubGh(baseDir: string, prViewJson: string): string {
+function stubGh(baseDir: string, params: {
+  prViewJson: string;
+  compareJson?: string;
+}): string {
   const fakeBin = path.join(baseDir, "bin");
   const ghPath = path.join(fakeBin, "gh");
   mkdirSync(fakeBin, { recursive: true });
   writeFileSync(ghPath, `#!/usr/bin/env bash
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
-  printf '%s' '${prViewJson}'
+  printf '%s' '${params.prViewJson}'
+  exit 0
+fi
+if [ "$1" = "api" ]; then
+  printf '%s' '${params.compareJson ?? JSON.stringify({ files: [], commits: [] })}'
   exit 0
 fi
 exit 1
@@ -103,13 +110,13 @@ test("verifyReactiveRunAdvancedBranch treats queue_repair no-op as success when 
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reactive-noop-ok-"));
   const oldPath = process.env.PATH;
   try {
-    const fakeBin = stubGh(baseDir, JSON.stringify({
+    const fakeBin = stubGh(baseDir, { prViewJson: JSON.stringify({
       headRefOid: "sha-pr",
       state: "OPEN",
       reviewDecision: "APPROVED",
       mergeable: "MERGEABLE",
       mergeStateStatus: "CLEAN",
-    }));
+    }) });
     process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
 
     const { db, policy } = setupPolicy(baseDir);
@@ -133,13 +140,13 @@ test("verifyReactiveRunAdvancedBranch still fails queue_repair when the PR remai
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reactive-noop-dirty-"));
   const oldPath = process.env.PATH;
   try {
-    const fakeBin = stubGh(baseDir, JSON.stringify({
+    const fakeBin = stubGh(baseDir, { prViewJson: JSON.stringify({
       headRefOid: "sha-pr",
       state: "OPEN",
       reviewDecision: "APPROVED",
       mergeable: "CONFLICTING",
       mergeStateStatus: "DIRTY",
-    }));
+    }) });
     process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
 
     const { db, policy } = setupPolicy(baseDir);
@@ -164,13 +171,13 @@ test("verifyReactiveRunAdvancedBranch keeps failing ci_repair when head did not 
   const oldPath = process.env.PATH;
   try {
     // mergeStateStatus=CLEAN should NOT rescue ci_repair: the agent was supposed to fix CI and push.
-    const fakeBin = stubGh(baseDir, JSON.stringify({
+    const fakeBin = stubGh(baseDir, { prViewJson: JSON.stringify({
       headRefOid: "sha-pr",
       state: "OPEN",
       reviewDecision: "APPROVED",
       mergeable: "MERGEABLE",
       mergeStateStatus: "CLEAN",
-    }));
+    }) });
     process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
 
     const { db, policy } = setupPolicy(baseDir);
@@ -184,6 +191,98 @@ test("verifyReactiveRunAdvancedBranch keeps failing ci_repair when head did not 
 
     const result = await policy.verifyReactiveRunAdvancedBranch(run, issue);
     assert.ok(result && result.includes("still on failing head"));
+  } finally {
+    process.env.PATH = oldPath;
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("verifyReactiveRunStayedInScope blocks reactive review fixes that touch repo-meta files", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reactive-scope-drift-"));
+  const oldPath = process.env.PATH;
+  try {
+    const fakeBin = stubGh(baseDir, {
+      prViewJson: JSON.stringify({
+        headRefOid: "sha-next",
+        state: "OPEN",
+        reviewDecision: "CHANGES_REQUESTED",
+        mergeable: "MERGEABLE",
+        mergeStateStatus: "CLEAN",
+      }),
+      compareJson: JSON.stringify({
+        files: [
+          { filename: "package.json" },
+          { filename: "src/paywall-copy.ts" },
+        ],
+        commits: [
+          { commit: { message: "Fix paywall shortfall type narrowing" } },
+        ],
+      }),
+    });
+    process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
+
+    const { db, policy } = setupPolicy(baseDir);
+    const issue = db.upsertIssue({
+      ...baseIssue(),
+      prReviewState: "changes_requested",
+      lastGitHubFailureHeadSha: "sha-prev",
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "review_fix",
+      sourceHeadSha: "sha-prev",
+    });
+
+    const result = await policy.verifyReactiveRunStayedInScope(run, issue);
+    assert.ok(result?.includes("widened scope"));
+    assert.ok(result?.includes("package.json"));
+  } finally {
+    process.env.PATH = oldPath;
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("verifyReactiveRunStayedInScope blocks reactive revert-stack cleanup", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reactive-revert-stack-"));
+  const oldPath = process.env.PATH;
+  try {
+    const fakeBin = stubGh(baseDir, {
+      prViewJson: JSON.stringify({
+        headRefOid: "sha-next",
+        state: "OPEN",
+        reviewDecision: "APPROVED",
+        mergeable: "MERGEABLE",
+        mergeStateStatus: "CLEAN",
+      }),
+      compareJson: JSON.stringify({
+        files: [
+          { filename: "src/paywall-copy.ts" },
+        ],
+        commits: [
+          { commit: { message: "Revert \"Switch package manager from npm to pnpm\"\n\nThis reverts commit 123." } },
+          { commit: { message: "Fix paywall headroom copy" } },
+        ],
+      }),
+    });
+    process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
+
+    const { db, policy } = setupPolicy(baseDir);
+    const issue = db.upsertIssue({
+      ...baseIssue(),
+      lastGitHubFailureHeadSha: "sha-prev",
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "ci_repair",
+    });
+
+    const result = await policy.verifyReactiveRunStayedInScope(run, issue);
+    assert.ok(result?.includes("revert commit"));
+    assert.ok(result?.includes("Switch package manager from npm to pnpm"));
   } finally {
     process.env.PATH = oldPath;
     rmSync(baseDir, { recursive: true, force: true });

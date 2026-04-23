@@ -52,6 +52,10 @@ export class RunCompletionPolicy {
     return await this.reactive.verifyReviewFixAdvancedHead(run, issue);
   }
 
+  async verifyReactiveRunStayedInScope(run: RunRecord, issue: IssueRecord): Promise<string | undefined> {
+    return await this.reactive.verifyReactiveRunStayedInScope(run, issue);
+  }
+
   async refreshIssueAfterReactivePublish(run: RunRecord, issue: IssueRecord): Promise<IssueRecord> {
     return await this.reactive.refreshIssueAfterReactivePublish(run, issue);
   }

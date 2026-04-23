@@ -383,6 +383,7 @@ function buildCiRepairContext(context?: Record<string, unknown>): string {
     "Goal: restore CI readiness and push a branch that is likely to pass the next full CI run.",
     "Before changing code or config, reproduce the failure on the exact failing head or identify the concrete log signature that justifies the fix.",
     "If the exact failing head does not reproduce locally and the logs do not support a scoped fix, prefer a rerun-only repair over speculative branch changes.",
+    "Do not use broad revert stacks or repo-wide package-manager/workflow/docs cleanups as a repair tactic; stay on the failing incident only.",
     snapshot?.gateCheckName ? `Gate check: ${String(snapshot.gateCheckName)}` : "",
     snapshot?.gateCheckStatus ? `Gate status: ${String(snapshot.gateCheckStatus)}` : "",
     snapshot?.settledAt ? `Settled at: ${String(snapshot.settledAt)}` : "",
@@ -629,6 +630,12 @@ function buildPrePushSelfReviewSection(target: "new_pr" | "existing_pr", runType
   lines.push(
     "Do not widen scope for optional cleanup. If the issue explicitly allows a non-PR outcome, complete that outcome clearly; otherwise publish before stopping.",
   );
+
+  if (runType === "review_fix" || runType === "branch_upkeep" || runType === "ci_repair" || runType === "queue_repair") {
+    lines.push(
+      "On reactive repair runs, do not publish broad revert stacks or unrelated workflow/package-manager/docs churn. If that seems necessary, stop and surface the blocker instead.",
+    );
+  }
 
   return lines;
 }

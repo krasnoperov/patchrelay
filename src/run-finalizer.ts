@@ -329,6 +329,20 @@ export class RunFinalizer {
       return;
     }
 
+    const reactiveScopeError = await this.completionPolicy.verifyReactiveRunStayedInScope(run, freshIssue);
+    if (reactiveScopeError) {
+      this.failRunAndClear(run, reactiveScopeError, "escalated");
+      this.syncFailureOutcome({
+        run,
+        fallbackIssue: freshIssue,
+        message: reactiveScopeError,
+        level: "error",
+        status: "reactive_scope_drift_blocked",
+        summary: reactiveScopeError,
+      });
+      return;
+    }
+
     const publishedOutcomeError = await this.completionPolicy.verifyPublishedRunOutcome(run, freshIssue);
     if (publishedOutcomeError) {
       await handleNoPrCompletionCheck({

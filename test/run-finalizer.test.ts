@@ -65,6 +65,7 @@ function createFinalizer(db: PatchRelayDatabase, completionCheckResult: {
     {
       verifyReactiveRunAdvancedBranch: async () => undefined,
       verifyReviewFixAdvancedHead: async () => undefined,
+      verifyReactiveRunStayedInScope: async () => undefined,
       verifyPublishedRunOutcome: async () => options && "publishedOutcomeError" in options
         ? options.publishedOutcomeError ?? undefined
         : "Implementation completed without opening a PR.",

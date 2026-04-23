@@ -9,9 +9,27 @@ import {
   isRequestedChangesRunType,
   readReactivePrSnapshot,
 } from "./reactive-pr-state.ts";
+import { readReactivePublishDelta } from "./reactive-publish-delta.ts";
 import { readLatestRequestedChangesReviewContext } from "./remote-pr-review.ts";
 import type { AppConfig } from "./types.ts";
 import type { PostRunFollowUp } from "./run-completion-policy.ts";
+
+const REACTIVE_SCOPE_RISK_PREFIXES = [
+  ".github/workflows/",
+  "scripts/bootstrap-worktree.",
+];
+
+const REACTIVE_SCOPE_RISK_EXACT_PATHS = new Set([
+  ".patchrelay/hooks/prepare-worktree",
+  "AGENTS.md",
+  "CLAUDE.md",
+  "DEV_SETUP.md",
+  "IMPLEMENTATION_WORKFLOW.md",
+  "REVIEW_WORKFLOW.md",
+  "package.json",
+  "package-lock.json",
+  "pnpm-lock.yaml",
+]);
 
 export class ReactiveRunPolicy {
   constructor(
@@ -76,6 +94,63 @@ export class ReactiveRunPolicy {
         prNumber: issue.prNumber,
         error: error instanceof Error ? error.message : String(error),
       }, "Failed to verify PR head advancement after requested-changes work");
+      return undefined;
+    }
+  }
+
+  async verifyReactiveRunStayedInScope(run: RunRecord, issue: IssueRecord): Promise<string | undefined> {
+    if (run.runType !== "ci_repair" && run.runType !== "review_fix" && run.runType !== "queue_repair" && run.runType !== "branch_upkeep") {
+      return undefined;
+    }
+    if (!issue.prNumber || issue.prState !== "open") {
+      return undefined;
+    }
+
+    const project = this.config.projects.find((entry) => entry.id === run.projectId);
+    const repoFullName = project?.github?.repoFullName;
+    const baselineHeadSha = resolveReactiveBaselineHead(run, issue);
+    if (!repoFullName || !baselineHeadSha) {
+      return undefined;
+    }
+
+    try {
+      const snapshot = await readReactivePrSnapshot(this.config, run.projectId, issue.prNumber);
+      if (!snapshot || snapshot.prState !== "open" || !snapshot.headSha || snapshot.headSha === baselineHeadSha) {
+        return undefined;
+      }
+
+      const delta = await readReactivePublishDelta(repoFullName, baselineHeadSha, snapshot.headSha);
+      if (!delta) {
+        return undefined;
+      }
+
+      const revertSubjects = delta.commitSubjects.filter((subject) => /^Revert\s+"/.test(subject));
+      if (revertSubjects.length > 0) {
+        return [
+          `Reactive ${run.runType.replace("_", "-")} for PR #${issue.prNumber} introduced revert commit(s) after ${baselineHeadSha.slice(0, 8)}.`,
+          `PatchRelay must use scoped edits or a clean reroll instead of revert-stack cleanup.`,
+          `Reverts: ${revertSubjects.slice(0, 3).join("; ")}`,
+        ].join(" ");
+      }
+
+      if (run.runType === "review_fix" || run.runType === "ci_repair") {
+        const riskyFiles = delta.changedFiles.filter(isReactiveScopeRiskPath);
+        if (riskyFiles.length > 0) {
+          return [
+            `Reactive ${run.runType.replace("_", "-")} for PR #${issue.prNumber} widened scope after ${baselineHeadSha.slice(0, 8)} by touching repo-meta files.`,
+            `PatchRelay should stop instead of publishing workflow, package-manager, bootstrap, or docs churn during reactive repair.`,
+            `Files: ${riskyFiles.slice(0, 6).join(", ")}`,
+          ].join(" ");
+        }
+      }
+
+      return undefined;
+    } catch (error) {
+      this.logger.debug({
+        issueKey: issue.issueKey,
+        prNumber: issue.prNumber,
+        error: error instanceof Error ? error.message : String(error),
+      }, "Failed to verify reactive publish scope");
       return undefined;
     }
   }
@@ -300,6 +375,24 @@ export class ReactiveRunPolicy {
       ...(liveReview.reviewComments ? { reviewComments: liveReview.reviewComments } : {}),
     };
   }
+}
+
+function resolveReactiveBaselineHead(
+  run: Pick<RunRecord, "runType" | "sourceHeadSha">,
+  issue: Pick<IssueRecord, "lastGitHubFailureHeadSha">,
+): string | undefined {
+  if (run.runType === "review_fix" || run.runType === "branch_upkeep") {
+    return run.sourceHeadSha;
+  }
+  if (run.runType === "ci_repair" || run.runType === "queue_repair") {
+    return issue.lastGitHubFailureHeadSha;
+  }
+  return undefined;
+}
+
+function isReactiveScopeRiskPath(filePath: string): boolean {
+  return REACTIVE_SCOPE_RISK_EXACT_PATHS.has(filePath)
+    || REACTIVE_SCOPE_RISK_PREFIXES.some((prefix) => filePath.startsWith(prefix));
 }
 
 function hasStructuredReviewContext(context: Record<string, unknown> | undefined): boolean {
