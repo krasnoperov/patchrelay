@@ -176,7 +176,7 @@ const configSchema = z.object({
       shell_bin: z.string().optional(),
       source_bashrc: z.boolean().default(true),
       request_timeout_ms: z.number().int().positive().default(30000),
-      model: z.string().optional(),
+      model: z.string().default("gpt-5.5"),
       model_provider: z.string().optional(),
       reasoning_effort: z.enum(["low", "medium", "high"]).optional(),
       service_name: z.string().default("patchrelay"),

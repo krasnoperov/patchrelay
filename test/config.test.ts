@@ -152,6 +152,7 @@ test("loadConfig expands env vars, resolves paths, and honors runtime overrides"
         });
         assert.equal(config.runner.codex.shellBin, "/bin/bash");
         assert.equal(config.runner.codex.sourceBashrc, true);
+        assert.equal(config.runner.codex.model, "gpt-5.5");
       },
     );
   } finally {
@@ -484,6 +485,7 @@ test("loadConfig accepts machine-level config before any projects are added", ()
         assert.equal(config.server.publicBaseUrl, "https://relay.example.com");
         assert.equal(config.projects.length, 0);
         assert.equal(config.runner.codex.bin, "codex");
+        assert.equal(config.runner.codex.model, "gpt-5.5");
       },
     );
   } finally {

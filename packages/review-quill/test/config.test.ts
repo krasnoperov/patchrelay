@@ -29,6 +29,7 @@ test("loadConfig resolves installation prompt files relative to the config file"
     const config = loadConfig(configPath);
     assert.equal(config.prompting.extraInstructions?.content, "Install review policy");
     assert.equal(config.prompting.replaceSections["review-rubric"]?.content, "## Review rules\n\nCustom review policy");
+    assert.equal(config.codex.model, "gpt-5.5");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
@@ -54,6 +55,7 @@ test("loadConfig defaults waitForGreenChecks to false for repositories", () => {
 
     const config = loadConfig(configPath);
     assert.equal(config.repositories[0]?.waitForGreenChecks, false);
+    assert.equal(config.codex.model, "gpt-5.5");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
