@@ -5,7 +5,7 @@
   "runner": {
     "git_bin": "git",
     "codex": {
-      "model": "gpt-5.3-codex-spark",
+      "model": "gpt-5.5",
       "reasoning_effort": "high",
       "developer_instructions": "Keep the public API stable for this installation unless the task explicitly requires a breaking change."
     }
