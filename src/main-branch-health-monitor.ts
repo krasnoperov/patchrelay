@@ -4,6 +4,7 @@ import type { IssueRecord } from "./db-types.ts";
 import type { OperatorEventFeed } from "./operator-feed.ts";
 import type { AppConfig, LinearClientProvider } from "./types.ts";
 import { resolveMergeQueueProtocol } from "./merge-queue-protocol.ts";
+import { resolvePreferredCompletedLinearState } from "./linear-workflow.ts";
 import {
   buildMainRepairBranchName,
   buildMainRepairDescription,
@@ -59,7 +60,7 @@ export class MainBranchHealthMonitor {
     const summary = await this.readMainBranchFailure(project.github.repoFullName, baseBranch);
     if (!summary) {
       if (existing) {
-        this.resolveRecoveredMainRepair(existing);
+        await this.resolveRecoveredMainRepair(existing);
       }
       return;
     }
@@ -200,10 +201,37 @@ export class MainBranchHealthMonitor {
     }
   }
 
-  private resolveRecoveredMainRepair(issue: IssueRecord): void {
+  private async resolveRecoveredMainRepair(issue: IssueRecord): Promise<void> {
     if (issue.activeRunId !== undefined) return;
     if (issue.prState === "open" || issue.factoryState === "awaiting_queue" || issue.factoryState === "pr_open") {
       return;
+    }
+
+    const linear = await this.linearProvider.forProject(issue.projectId).catch(() => undefined);
+    if (linear) {
+      const liveIssue = await linear.getIssue(issue.linearIssueId).catch(() => undefined);
+      if (liveIssue) {
+        const targetState = resolvePreferredCompletedLinearState(liveIssue);
+        const normalizedCurrent = liveIssue.stateName?.trim().toLowerCase();
+        if (targetState && normalizedCurrent !== targetState.trim().toLowerCase()) {
+          const updated = await linear.setIssueState(issue.linearIssueId, targetState).catch(() => undefined);
+          if (updated) {
+            this.db.upsertIssue({
+              projectId: issue.projectId,
+              linearIssueId: issue.linearIssueId,
+              ...(updated.stateName ? { currentLinearState: updated.stateName } : {}),
+              ...(updated.stateType ? { currentLinearStateType: updated.stateType } : {}),
+            });
+          }
+        } else {
+          this.db.upsertIssue({
+            projectId: issue.projectId,
+            linearIssueId: issue.linearIssueId,
+            ...(liveIssue.stateName ? { currentLinearState: liveIssue.stateName } : {}),
+            ...(liveIssue.stateType ? { currentLinearStateType: liveIssue.stateType } : {}),
+          });
+        }
+      }
     }
 
     this.db.issueSessions.clearPendingIssueSessionEventsRespectingActiveLease(issue.projectId, issue.linearIssueId);
