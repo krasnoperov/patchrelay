@@ -267,6 +267,40 @@ function createClient(
   return { client, child };
 }
 
+function createClientWithChildren(
+  children: FakeChildProcess[],
+  logger: Logger = createCaptureLogger().logger,
+) {
+  let spawnIndex = 0;
+  const client = new CodexAppServerClient(
+    {
+      bin: process.execPath,
+      args: ["unused"],
+      sourceBashrc: false,
+      requestTimeoutMs: 50,
+      approvalPolicy: "never",
+      sandboxMode: "danger-full-access",
+      persistExtendedHistory: false,
+      serviceName: "patchrelay-test",
+    },
+    logger,
+    (() => {
+      const child = children[spawnIndex];
+      spawnIndex += 1;
+      if (!child) {
+        throw new Error("No fake child process available for spawn");
+      }
+      return child;
+    }) as never,
+  );
+  return {
+    client,
+    getSpawnCount() {
+      return spawnIndex;
+    },
+  };
+}
+
 test("CodexAppServerClient handles initialize, approval requests, notifications, and thread operations", async () => {
   const { client, child } = createClient("normal");
   const notifications: Array<{ method: string; params: Record<string, unknown> }> = [];
@@ -427,6 +461,26 @@ test("CodexAppServerClient rejects pending requests when the app-server exits", 
   try {
     await client.start();
     await assert.rejects(() => client.startThread({ cwd: "/tmp/worktree" }), /exited with code 7/);
+  } finally {
+    await client.stop();
+  }
+});
+
+test("CodexAppServerClient restarts automatically after an unexpected exit before the next request", async () => {
+  const firstChild = new FakeChildProcess("normal");
+  const secondChild = new FakeChildProcess("normal");
+  const { client, getSpawnCount } = createClientWithChildren([firstChild, secondChild]);
+
+  try {
+    await client.start();
+    assert.equal(getSpawnCount(), 1);
+
+    firstChild.emit("close", 9, null);
+
+    const thread = await client.startThread({ cwd: "/tmp/restarted-worktree" });
+    assert.equal(thread.id, "thread-1");
+    assert.equal(thread.cwd, "/tmp/restarted-worktree");
+    assert.equal(getSpawnCount(), 2);
   } finally {
     await client.stop();
   }
