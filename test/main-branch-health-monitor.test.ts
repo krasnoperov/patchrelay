@@ -110,7 +110,10 @@ function makeLinearIssueSnapshot(): LinearIssueSnapshot {
     estimate: 2,
     stateName: "In Progress",
     stateType: "started",
-    workflowStates: [],
+    workflowStates: [
+      { id: "state-started", name: "In Progress", type: "started" },
+      { id: "state-done", name: "Done", type: "completed" },
+    ],
     labelIds: [],
     labels: [],
     teamLabels: [],
@@ -263,10 +266,18 @@ test("main branch health monitor closes stale main_repair issues once main recov
       dedupeKey: "main_repair:proj:base-sha-123:Tests",
     });
 
+    const setIssueStateCalls: Array<{ issueId: string; stateName: string }> = [];
     const linearClient: LinearClient = {
-      async getIssue() { throw new Error("not used"); },
+      async getIssue() { return makeLinearIssueSnapshot(); },
       async createIssue() { throw new Error("not used"); },
-      async setIssueState() { throw new Error("not used"); },
+      async setIssueState(issueId, stateName) {
+        setIssueStateCalls.push({ issueId, stateName });
+        return {
+          ...makeLinearIssueSnapshot(),
+          stateName,
+          stateType: "completed",
+        };
+      },
       async upsertIssueComment() { throw new Error("not used"); },
       async createAgentActivity() { throw new Error("not used"); },
       async updateIssueLabels() { throw new Error("not used"); },
@@ -286,6 +297,9 @@ test("main branch health monitor closes stale main_repair issues once main recov
 
     const issue = db.getIssue("proj", "lin-1");
     assert.equal(issue?.factoryState, "done");
+    assert.equal(issue?.currentLinearState, "Done");
+    assert.equal(issue?.currentLinearStateType, "completed");
+    assert.deepEqual(setIssueStateCalls, [{ issueId: "lin-1", stateName: "Done" }]);
     assert.equal(db.issueSessions.peekIssueSessionWake("proj", "lin-1"), undefined);
   } finally {
     process.env.PATH = oldPath;
