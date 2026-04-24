@@ -106,6 +106,7 @@ export class CodexAppServerClient extends EventEmitter {
   private stdoutBuffer = "";
   private started = false;
   private stopping = false;
+  private startPromise: Promise<void> | undefined;
 
   constructor(
     private config: CodexAppServerConfig,
@@ -134,93 +135,16 @@ export class CodexAppServerClient extends EventEmitter {
     if (this.started) {
       return;
     }
+    if (this.startPromise) {
+      return await this.startPromise;
+    }
 
-    this.stopping = false;
-    const launch = resolveCodexAppServerLaunch(this.config);
-    this.logger.info({ command: launch.command, args: launch.args }, "Starting Codex app-server");
-    this.child = this.spawnProcess(launch.command, launch.args, {
-      stdio: ["pipe", "pipe", "pipe"],
-    }) as ChildProcessWithoutNullStreams;
-
-    this.child.stdin.on("error", (error) => {
-      this.logger.error({ error: sanitizeDiagnosticText(error.message) }, "Codex app-server stdin error");
-    });
-    this.child.stdout.on("error", (error) => {
-      this.logger.error({ error: sanitizeDiagnosticText(error.message) }, "Codex app-server stdout error");
-    });
-    this.child.stderr.on("error", (error) => {
-      this.logger.error({ error: sanitizeDiagnosticText(error.message) }, "Codex app-server stderr error");
-    });
-
-    this.child.stderr.on("data", (chunk) => {
-      const line = chunk.toString().trim();
-      if (line) {
-        this.logger.warn({ output: sanitizeDiagnosticText(line) }, "Codex app-server stderr");
-      }
-    });
-
-    this.child.on("error", (error) => {
-      const err = error instanceof Error ? error : new Error(String(error));
-      this.logger.error(
-        {
-          error: sanitizeDiagnosticText(err.message),
-          pendingRequestCount: this.pending.size,
-        },
-        "Codex app-server process errored",
-      );
-      this.rejectAllPending(err);
-    });
-
-    this.child.on("close", (code, signal) => {
-      this.started = false;
-      const log = this.stopping ? this.logger.info.bind(this.logger) : this.logger.warn.bind(this.logger);
-      log(
-        {
-          code: code ?? 1,
-          signal: signal ?? null,
-          pendingRequestCount: this.pending.size,
-        },
-        this.stopping ? "Codex app-server stopped" : "Codex app-server exited",
-      );
-      this.stopping = false;
-      this.rejectAllPending(new Error(`Codex app-server exited with code ${code ?? 1}`));
-    });
-
-    this.child.stdout.on("data", (chunk) => {
-      this.stdoutBuffer += chunk.toString("utf8");
-      if (this.stdoutBuffer.length > 50 * 1024 * 1024) {
-        this.logger.error({ bufferSize: this.stdoutBuffer.length }, "Codex app-server stdout buffer exceeded 50 MB — killing process");
-        this.stdoutBuffer = "";
-        this.rejectAllPending(new Error("Codex app-server stdout buffer overflow"));
-        this.child?.kill("SIGTERM");
-        return;
-      }
-      this.drainMessages();
-    });
-
-    const initializeResponse = await this.sendRequest("initialize", {
-      clientInfo: {
-        name: "patchrelay",
-        title: "PatchRelay",
-        version: "0.1.0",
-      },
-      capabilities: {
-        experimentalApi: true,
-      },
-    });
-    const serverInfo =
-      initializeResponse && typeof initializeResponse === "object" && "serverInfo" in (initializeResponse as Record<string, unknown>)
-        ? ((initializeResponse as Record<string, unknown>).serverInfo as Record<string, unknown> | undefined)
-        : undefined;
-    this.logger.info(
-      {
-        serverName: typeof serverInfo?.name === "string" ? serverInfo.name : undefined,
-        serverVersion: typeof serverInfo?.version === "string" ? serverInfo.version : undefined,
-      },
-      "Connected to Codex app-server",
-    );
-    this.sendNotification("initialized");
-    this.started = true;
+    this.startPromise = this.startInternal();
+    try {
+      await this.startPromise;
+    } finally {
+      this.startPromise = undefined;
+    }
   }
 
   async stop(): Promise<void> {
@@ -374,9 +298,7 @@ export class CodexAppServerClient extends EventEmitter {
   }
 
   private async sendRequest(method: string, params: unknown): Promise<unknown> {
-    if (!this.child?.stdin) {
-      throw new Error("Codex app-server is not running");
-    }
+    await this.ensureRunningForRequest(method);
 
     const id = this.nextRequestId++;
     const requestTimeoutMs = this.config.requestTimeoutMs ?? CodexAppServerClient.DEFAULT_REQUEST_TIMEOUT_MS;
@@ -419,6 +341,111 @@ export class CodexAppServerClient extends EventEmitter {
       );
       throw err;
     });
+  }
+
+  private async startInternal(): Promise<void> {
+    this.stopping = false;
+    this.stdoutBuffer = "";
+    const launch = resolveCodexAppServerLaunch(this.config);
+    this.logger.info({ command: launch.command, args: launch.args }, "Starting Codex app-server");
+    this.child = this.spawnProcess(launch.command, launch.args, {
+      stdio: ["pipe", "pipe", "pipe"],
+    }) as ChildProcessWithoutNullStreams;
+
+    this.child.stdin.on("error", (error) => {
+      this.logger.error({ error: sanitizeDiagnosticText(error.message) }, "Codex app-server stdin error");
+    });
+    this.child.stdout.on("error", (error) => {
+      this.logger.error({ error: sanitizeDiagnosticText(error.message) }, "Codex app-server stdout error");
+    });
+    this.child.stderr.on("error", (error) => {
+      this.logger.error({ error: sanitizeDiagnosticText(error.message) }, "Codex app-server stderr error");
+    });
+
+    this.child.stderr.on("data", (chunk) => {
+      const line = chunk.toString().trim();
+      if (line) {
+        this.logger.warn({ output: sanitizeDiagnosticText(line) }, "Codex app-server stderr");
+      }
+    });
+
+    this.child.on("error", (error) => {
+      const err = error instanceof Error ? error : new Error(String(error));
+      this.logger.error(
+        {
+          error: sanitizeDiagnosticText(err.message),
+          pendingRequestCount: this.pending.size,
+        },
+        "Codex app-server process errored",
+      );
+      this.rejectAllPending(err);
+    });
+
+    this.child.on("close", (code, signal) => {
+      this.started = false;
+      this.child = undefined;
+      this.stdoutBuffer = "";
+      const log = this.stopping ? this.logger.info.bind(this.logger) : this.logger.warn.bind(this.logger);
+      log(
+        {
+          code: code ?? 1,
+          signal: signal ?? null,
+          pendingRequestCount: this.pending.size,
+        },
+        this.stopping ? "Codex app-server stopped" : "Codex app-server exited",
+      );
+      this.stopping = false;
+      this.rejectAllPending(new Error(`Codex app-server exited with code ${code ?? 1}`));
+    });
+
+    this.child.stdout.on("data", (chunk) => {
+      this.stdoutBuffer += chunk.toString("utf8");
+      if (this.stdoutBuffer.length > 50 * 1024 * 1024) {
+        this.logger.error({ bufferSize: this.stdoutBuffer.length }, "Codex app-server stdout buffer exceeded 50 MB — killing process");
+        this.stdoutBuffer = "";
+        this.rejectAllPending(new Error("Codex app-server stdout buffer overflow"));
+        this.child?.kill("SIGTERM");
+        return;
+      }
+      this.drainMessages();
+    });
+
+    const initializeResponse = await this.sendRequest("initialize", {
+      clientInfo: {
+        name: "patchrelay",
+        title: "PatchRelay",
+        version: "0.1.0",
+      },
+      capabilities: {
+        experimentalApi: true,
+      },
+    });
+    const serverInfo =
+      initializeResponse && typeof initializeResponse === "object" && "serverInfo" in (initializeResponse as Record<string, unknown>)
+        ? ((initializeResponse as Record<string, unknown>).serverInfo as Record<string, unknown> | undefined)
+        : undefined;
+    this.logger.info(
+      {
+        serverName: typeof serverInfo?.name === "string" ? serverInfo.name : undefined,
+        serverVersion: typeof serverInfo?.version === "string" ? serverInfo.version : undefined,
+      },
+      "Connected to Codex app-server",
+    );
+    this.sendNotification("initialized");
+    this.started = true;
+  }
+
+  private async ensureRunningForRequest(method: string): Promise<void> {
+    if (this.child?.stdin) {
+      return;
+    }
+    if (method !== "initialize") {
+      this.logger.warn({ method }, "Codex app-server is unavailable before request; restarting");
+    }
+    await this.start();
+    if (!this.child?.stdin) {
+      throw new Error("Codex app-server is not running");
+    }
   }
 
   private writeMessage(message: Record<string, unknown>): void {
