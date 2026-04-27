@@ -265,9 +265,9 @@ queued → preparing_head → validating → merging → merged
 | State | Meaning |
 |-|-|
 | `queued` | Waiting in line |
-| `preparing_head` | Fetching + rebasing onto base branch |
+| `preparing_head` | Fetching and building the speculative branch |
 | `validating` | CI running on the speculative SHA |
-| `merging` | Revalidation + merge |
+| `merging` | Revalidation + fast-forward landing |
 | `merged` | Done |
 | `evicted` | Failed after retry budget; incident created |
 | `dequeued` | Manually removed |
@@ -312,11 +312,11 @@ Use `--repo <id>` to open the project detail view directly, `--pr <num>` to pres
 
 The steward and PatchRelay are independent services that communicate only through GitHub:
 
-1. PatchRelay adds the `queue` label when an issue reaches `awaiting_queue`.
-2. The steward merges the PR, or evicts it and creates the configured eviction check run (default `merge-steward/queue`).
+1. PatchRelay reaches `awaiting_queue` when the linked PR is approved and green, and may add the configured queue label as an admission nudge.
+2. The steward admits from fresh GitHub truth, then either lands the PR or evicts it and creates the configured eviction check run (default `merge-steward/queue`).
 3. PatchRelay watches for that check run failure and triggers `queue_repair`.
-4. After repair, PatchRelay re-adds the `queue` label.
-5. The steward re-admits the PR.
+4. After repair, PatchRelay pushes a new head.
+5. The steward re-admits the PR after the new head is approved and green.
 
 Neither service calls the other's API. See [merge-queue.md](./merge-queue.md) for the contract.
 
@@ -360,14 +360,14 @@ The gateway binds its HTTP port before repo initialization finishes. Each repo i
 Implemented:
 
 - Speculative execution: cumulative branches (`main+A`, `main+A+B`, `main+A+B+C`) tested in parallel. Configurable depth (default 10, set `speculativeDepth: 1` for serial mode).
-- Speculative consistency: when head merges, downstream entries that already passed do not re-test.
+- Speculative consistency: when the head lands, downstream entries that already passed do not re-test if their assumptions still hold.
 - Cascade invalidation: when a mid-chain entry fails, downstream speculative branches are rebuilt without it.
 - Non-spinning conflict retry gated on base SHA change.
 - Flaky CI retry budget (separate from retry budget).
-- Revalidation before merge (approval, SHA, external merge).
+- Revalidation before landing (approval, SHA, external merge).
 - Durable incident records on eviction.
 - GitHub check run as eviction signal.
-- Label-based admission and re-admission.
+- Admission and re-admission from fresh GitHub truth, with queue labels as optional nudges and controls.
 - Structured reconciler event stream for observability.
 
 Not built yet (see [design doc](./design-docs/merge-steward.md)):
@@ -375,4 +375,3 @@ Not built yet (see [design doc](./design-docs/merge-steward.md)):
 - Binary bisection on batch failure.
 - File-path conflict detection for parallel lanes.
 - Flaky test learning (only retry budget today, no historical analysis).
-- Priority reordering after enqueue.

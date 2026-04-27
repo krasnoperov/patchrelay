@@ -24,17 +24,17 @@ This is the current cleanup priority for the requested-changes path.
 
 ### Current File Targets
 
-- [src/run-orchestrator.ts](/home/alv/projects/patchrelay-handoff/src/run-orchestrator.ts)
+- [src/run-orchestrator.ts](/home/alv/projects/patchrelay/src/run-orchestrator.ts)
   - keep the "new head or escalate" invariant obvious in prompts, post-run checks, and reconciliation
   - keep branch-upkeep flow distinct from ordinary requested-changes work
-- [src/idle-reconciliation.ts](/home/alv/projects/patchrelay-handoff/src/idle-reconciliation.ts)
+- [src/idle-reconciliation.ts](/home/alv/projects/patchrelay/src/idle-reconciliation.ts)
   - recover from fresh GitHub truth using head advancement, not reviewer-request state
-- [src/cli/cluster-health.ts](/home/alv/projects/patchrelay-handoff/src/cli/cluster-health.ts)
+- [src/cli/cluster-health.ts](/home/alv/projects/patchrelay/src/cli/cluster-health.ts)
   - describe same-head stalls and newer-head waiting states in plain git terms
-- [packages/review-quill/src/prompt-builder/render.ts](/home/alv/projects/patchrelay-handoff/packages/review-quill/src/prompt-builder/render.ts)
+- [packages/review-quill/src/prompt-builder/render.ts](/home/alv/projects/patchrelay/packages/review-quill/src/prompt-builder/render.ts)
   - keep the current diff authoritative
   - treat previous reviews as short claims to verify, not raw narrative to repeat
-- [packages/review-quill/src/service.ts](/home/alv/projects/patchrelay-handoff/packages/review-quill/src/service.ts)
+- [packages/review-quill/src/service.ts](/home/alv/projects/patchrelay/packages/review-quill/src/service.ts)
   - keep review publication fully GitHub-native
   - avoid any hidden handoff semantics beyond GitHub reviews on the latest head
 

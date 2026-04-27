@@ -89,10 +89,10 @@ PatchRelay does not need to:
 
 ### 4. Merge Queue Delivery And Repair
 
-1. The PR is approved and CI is green. PatchRelay adds the `queue` label.
-2. Merge Steward admits the PR, rebases onto main, waits for CI, and merges when green.
-3. If the steward evicts the PR (rebase conflict, CI failure after retries), it creates a `merge-steward/queue` check run with failure context.
-4. PatchRelay detects the check run failure, starts a `queue_repair` run, and re-adds the `queue` label after the fix.
+1. The PR is approved and CI is green. PatchRelay moves the issue to `awaiting_queue`.
+2. Merge Steward admits from fresh GitHub truth, builds a speculative integrated branch, waits for CI, and fast-forwards `main` when the tested SHA is still valid.
+3. If the steward evicts the PR after retry budget is exhausted, it creates a `merge-steward/queue` check run with failure context.
+4. PatchRelay detects the check run failure, starts a `queue_repair` run, and pushes a fresh PR head after the fix.
 
 ## Functional Requirements
 
@@ -172,7 +172,7 @@ PatchRelay must make it easy to answer:
 - Distinct loop types beat one generic rerun.
 - Context is a product feature, not just prompt text.
 
-## MVP Scope
+## Current Scope
 
 ### In Scope
 

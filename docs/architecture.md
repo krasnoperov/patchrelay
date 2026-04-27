@@ -65,15 +65,16 @@ flowchart TB
 
 ## Source layout
 
-The codebase uses a flat module structure rather than a layered directory hierarchy:
+The codebase uses focused top-level modules with small subdirectories where a responsibility has grown enough to need internal structure:
 
-- `factory-state.ts` — state machine types and transitions
-- `run-orchestrator.ts` — run lifecycle, Codex thread management, reconciliation
+- `factory-state.ts` — compatibility state names and transition helpers still used by parts of the runtime
+- `issue-session.ts`, `issue-session-events.ts`, `issue-session-projector.ts` — the newer session/event model
+- `run-orchestrator.ts`, `run-launcher.ts`, `run-finalizer.ts`, `run-reconciler.ts` — run lifecycle, Codex thread management, and completion handling
 - `webhook-handler.ts` — Linear webhook processing, delegation, agent sessions
 - `github-webhook-handler.ts` — GitHub webhook processing, reactive run triggers
 - `service.ts` — top-level service wiring
 - `service-runtime.ts` — async queues, background reconciliation
-- `db.ts` — SQLite persistence (issues, runs, webhooks, thread events)
+- `db.ts`, `db/*` — SQLite persistence stores and migrations
 - `http.ts` — Fastify HTTP server and routes
 
 ## Core responsibilities
@@ -227,7 +228,7 @@ Behavior:
 
 - PatchRelay detects the check run failure and starts a `queue_repair` run in the same worktree
 - Codex reads the steward's failure context, fixes the code, pushes
-- PatchRelay re-adds the `queue` label so the steward can re-admit the PR
+- PatchRelay returns the issue to queue wait; the steward re-admits after a fresh approved, green head is visible in GitHub
 - budget: 2 attempts before escalation
 
 This loop must also respect `delegatedToPatchRelay`. merge-steward may continue reporting queue truth on undelegated PRs, but PatchRelay should only repair when authority is restored.
@@ -273,7 +274,7 @@ That keeps operator-facing state truthful without letting PatchRelay continue wr
 
 - formatting or lint failures
 - deterministic test failures
-- straightforward rebase conflicts
+- straightforward integration conflicts
 
 ### Escalate quickly
 
@@ -286,7 +287,8 @@ That keeps operator-facing state truthful without letting PatchRelay continue wr
 
 PatchRelay uses SQLite. Current tables:
 
-- `issues` — one record per tracked issue: factory state, PR state, run pointers, repair counters
+- `issues` — one record per tracked issue: compatibility factory state, PR state, run pointers, repair counters
+- `issue_sessions` and `issue_session_events` — session state, waiting reason, lease, and wake-event inbox
 - `runs` — one record per Codex run (`implementation`, `review_fix`, `ci_repair`, `queue_repair`)
 - `webhook_events` — deduplication and processing status for Linear webhooks
 - `run_thread_events` — per-run transcript of Codex thread events (when extended history is enabled)

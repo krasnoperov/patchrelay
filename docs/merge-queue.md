@@ -99,9 +99,9 @@ On eviction, the steward creates a durable incident record and a GitHub check ru
 
 - **patchrelay** sees the check run, triggers a `queue_repair` run, fixes the branch, pushes a new head.
 - **[ship-pr](https://github.com/krasnoperov/patchrelay-agents) skill** (supervised mode) — an agent running in Claude Code / Cursor / Codex CLI interprets `merge-steward pr status --wait` exit-2 `evicted`, reads `merge-steward queue show --pr <num>` for the incident, fixes the branch, pushes.
-- **Human** — reads the check run output and rebases manually.
+- **Human** — reads the check run output and refreshes the branch manually.
 
-In all three cases, the steward re-admits the PR from fresh GitHub truth once CI is green again.
+In all three cases, the steward re-admits the PR from fresh GitHub truth once the fresh head is approved and green again.
 
 ```text
 Steward evicts PR → creates check run with failure context
@@ -110,10 +110,6 @@ Steward → re-admits from fresh GitHub truth
 ```
 
 ## Repository settings
-
-### Allow auto-merge
-
-Enable in Settings → General.
 
 ### Branch protection rules
 
@@ -129,9 +125,11 @@ Configure branch protection on the base branch (e.g., `main`):
 | Dismiss stale pull request approvals when new commits are pushed | **Disabled** |
 | Require approval of the most recent reviewable push | **Disabled** |
 
-**Why "Dismiss stale approvals" must be disabled:** the steward rebases and pushes the branch — that must not invalidate the existing approval.
+If the branch restricts who can push, allow the Merge Steward GitHub App to push to the protected branch. The steward lands by fast-forwarding `main` to the already-tested speculative SHA; it does not press GitHub's merge button.
 
-**Why "Require approval of the most recent reviewable push" must be disabled:** the steward's rebase push is a mechanical branch update, not a reviewable change.
+**Why "Dismiss stale approvals" can stay disabled:** the steward does not rely on rewriting the reviewed PR head as the review signal. It validates a speculative integrated SHA before landing.
+
+**Why "Require approval of the most recent reviewable push" can stay disabled:** the approval gate is the reviewed PR head plus the steward's integrated CI gate, not a second human review of the steward's speculative branch.
 
 If you want machine review to count toward merge admission, include `review-quill/verdict` in the required checks.
 

@@ -83,10 +83,10 @@ The real gate is:
 
 Independent services, GitHub as the shared bus:
 
-1. PatchRelay adds the `queue` label when an issue reaches `awaiting_queue`.
-2. The steward merges the PR, or evicts and creates the eviction check run (default `merge-steward/queue`).
+1. PatchRelay moves an issue to `awaiting_queue` when the linked PR is approved and green, and may add the configured queue label as an admission nudge.
+2. The steward admits from fresh GitHub truth, lands the PR, or evicts and creates the eviction check run (default `merge-steward/queue`).
 3. PatchRelay watches for that check run failure and triggers `queue_repair`.
-4. After repair, PatchRelay re-adds the `queue` label; the steward re-admits.
+4. After repair, PatchRelay pushes a new head; the steward re-admits only after the new head is approved and green.
 
 Neither service calls the other's API.
 
