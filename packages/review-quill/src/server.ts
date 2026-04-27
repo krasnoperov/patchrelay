@@ -10,7 +10,7 @@ import { resolveGitHubAuthConfig, createGitHubAppTokenManager, resolveAppSlug, t
 import { GitHubClient } from "./github-client.ts";
 import { ReviewRunner } from "./review-runner.ts";
 import { ReviewQuillService } from "./service.ts";
-import { normalizeWebhook, verifySignature } from "./webhook-handler.ts";
+import { normalizeWebhook, shouldReconcileWebhook, verifySignature } from "./webhook-handler.ts";
 
 export async function startServer(configPath = process.env.REVIEW_QUILL_CONFIG ?? getDefaultConfigPath()): Promise<void> {
   const layout = getReviewQuillPathLayout();
@@ -126,11 +126,18 @@ export async function startServer(configPath = process.env.REVIEW_QUILL_CONFIG ?
       if (store.isWebhookDuplicate(deliveryId)) return { ok: true, duplicate: true };
       store.recordWebhook(deliveryId, eventType, normalized.repoFullName);
     }
-    await service.triggerReconcile(normalized.repoFullName);
+    const decision = shouldReconcileWebhook(normalized, config.repositories);
+    if (!decision.reconcile) {
+      if (deliveryId) {
+        store.markWebhookProcessed(deliveryId, decision.ignoredReason);
+      }
+      return { ok: true, ignored: true, repo: normalized.repoFullName, reason: decision.ignoredReason };
+    }
+    const started = service.requestReconcile(normalized.repoFullName);
     if (deliveryId) {
       store.markWebhookProcessed(deliveryId);
     }
-    return { ok: true, repo: normalized.repoFullName };
+    return { ok: true, repo: normalized.repoFullName, started };
   });
 
   const shutdown = async () => {

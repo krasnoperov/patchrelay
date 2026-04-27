@@ -224,6 +224,20 @@ export class ReviewQuillService {
     return true;
   }
 
+  requestReconcile(repoFullName?: string): boolean {
+    if (this.reconcileInProgress) {
+      this.queueReconcileRequest(repoFullName);
+      return false;
+    }
+    void (repoFullName ? this.reconcileRepoByName(repoFullName) : this.reconcileAll()).catch((error: unknown) => {
+      this.logger.error({
+        repo: repoFullName,
+        error: error instanceof Error ? error.message : String(error),
+      }, "Background reconcile failed");
+    });
+    return true;
+  }
+
   private schedule(): void {
     this.timer = setTimeout(() => {
       void this.reconcileAll().finally(() => this.schedule());
