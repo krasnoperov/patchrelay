@@ -8,11 +8,9 @@ Read order:
 2. [agentic-loop-principles.md](./agentic-loop-principles.md)
 3. [issue-classification-and-umbrella-orchestration.md](./issue-classification-and-umbrella-orchestration.md)
 4. [review-quill.md](./review-quill.md)
-5. [codex-session-source-forensics.md](./codex-session-source-forensics.md)
-6. [merge-steward.md](./merge-steward.md)
-7. [merge-queue-operations.md](./merge-queue-operations.md)
-8. [../architecture.md](../architecture.md)
-9. [../references/external-patterns.md](../references/external-patterns.md)
+5. [merge-steward.md](./merge-steward.md)
+6. [codex-session-source-forensics.md](./codex-session-source-forensics.md)
+7. [../architecture.md](../architecture.md)
 
 Use this directory for:
 

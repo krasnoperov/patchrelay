@@ -21,7 +21,7 @@ Common setups:
 ### What this buys you
 
 - **PRs ship tested against the latest `main`.** The queue re-validates on the integrated SHA at admission time, and retries if `main` moves during validation. No more "green yesterday, broken today."
-- **Many PR failures have mechanical fixes an agent can handle.** Requested changes like a rename, a missing null check, a new test; rebase on `main`; resolving a conflict surfaced by speculation; rerunning a flaky job. Both services publish structured failure reasons (inline review comments, failing check names, queue incidents) an agent can act on directly.
+- **Many PR failures have mechanical fixes an agent can handle.** Requested changes like a rename, a missing null check, a new test, refreshing against `main`, resolving a conflict surfaced by speculation, or rerunning a flaky job. Both services publish structured failure reasons (inline review comments, failing check names, queue incidents) an agent can act on directly.
 - **No prerequisites beyond GitHub.** A GitHub App, a webhook, and `npm install -g` per service.
 
 ## Use with your own agent
@@ -99,7 +99,7 @@ See the [review-quill package README](./packages/review-quill/README.md) for the
 
 ### merge-steward
 
-Serial merge queue with speculative integration. Rebases each approved PR onto the current `main`, runs CI on the integrated SHA, and fast-forwards `main` only when that tested result is green. Evictions produce a durable incident and a GitHub check run — the signal an agent uses to trigger a repair.
+Serial merge queue with speculative integration. Builds a speculative merge branch for each approved PR on top of the current queue base, runs CI on that integrated SHA, and fast-forwards `main` only when the tested result is still valid. Evictions produce a durable incident and a GitHub check run — the signal an agent uses to trigger a repair.
 
 ```bash
 merge-steward init https://queue.example.com
@@ -119,7 +119,7 @@ See the [merge-steward package README](./packages/merge-steward/README.md) for t
 - [Prompting](./docs/prompting.md) — how workflow files and the built-in scaffold compose
 - [Secrets](./docs/secrets.md) — systemd credentials, resolution order
 - [review-quill reference](./docs/review-quill.md) · [merge-steward reference](./docs/merge-steward.md)
-- [Product specs](./docs/product-specs/index.md) · [Design docs](./docs/design-docs/index.md) · [Core beliefs](./docs/design-docs/core-beliefs.md)
+- [Product brief](./docs/product-specs/patchrelay.md) · [Dashboard guidance](./docs/dashboard-guidance.md) · [Design docs](./docs/design-docs/index.md)
 - [Contributing](./CONTRIBUTING.md) · [Security policy](./SECURITY.md)
 
 ## Status
