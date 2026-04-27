@@ -119,7 +119,7 @@ See the [merge-steward package README](./packages/merge-steward/README.md) for t
 - [Prompting](./docs/prompting.md) — how workflow files and the built-in scaffold compose
 - [Secrets](./docs/secrets.md) — systemd credentials, resolution order
 - [review-quill reference](./docs/review-quill.md) · [merge-steward reference](./docs/merge-steward.md)
-- [Product specs](./docs/product-specs/index.md) · [Design docs](./docs/design-docs/index.md) · [Core beliefs](./docs/design-docs/core-beliefs.md)
+- [Product brief](./docs/product-specs/patchrelay.md) · [Dashboard guidance](./docs/dashboard-guidance.md) · [Design docs](./docs/design-docs/index.md)
 - [Contributing](./CONTRIBUTING.md) · [Security policy](./SECURITY.md)
 
 ## Status

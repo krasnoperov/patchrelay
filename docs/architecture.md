@@ -14,7 +14,7 @@ The harness is not a generic prompt runner. It is the deterministic orchestratio
 4. **Repair loops as first-class workflows** — `implementation`, `review_fix`, `ci_repair`, `queue_repair` have distinct context, entry conditions, and success criteria, not one generic "try again."
 5. **Repository-local guidance as the source of truth** — `IMPLEMENTATION_WORKFLOW.md`, `REVIEW_WORKFLOW.md`, and repo-local docs define how the agent should work in that repo.
 
-Design lineage (OpenAI harness engineering patterns, Linear's official agent demo, community long-running agent harnesses) and the decisions behind these priorities are in [design-docs/core-beliefs.md](./design-docs/core-beliefs.md) and [references/external-patterns.md](./references/external-patterns.md).
+The decisions behind these priorities are captured in [design-docs/core-beliefs.md](./design-docs/core-beliefs.md) and [design-docs/agentic-loop-principles.md](./design-docs/agentic-loop-principles.md).
 
 ## Component topology
 

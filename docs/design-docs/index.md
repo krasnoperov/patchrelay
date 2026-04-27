@@ -9,10 +9,8 @@ Read order:
 3. [issue-classification-and-umbrella-orchestration.md](./issue-classification-and-umbrella-orchestration.md)
 4. [review-quill.md](./review-quill.md)
 5. [merge-steward.md](./merge-steward.md)
-6. [pr-automation-loop.md](./pr-automation-loop.md)
-7. [codex-session-source-forensics.md](./codex-session-source-forensics.md)
-8. [../architecture.md](../architecture.md)
-9. [../references/external-patterns.md](../references/external-patterns.md)
+6. [codex-session-source-forensics.md](./codex-session-source-forensics.md)
+7. [../architecture.md](../architecture.md)
 
 Use this directory for:
 
