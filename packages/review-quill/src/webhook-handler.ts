@@ -6,6 +6,15 @@ export interface ReviewQuillWebhookEvent {
   prNumber?: number;
 }
 
+export interface ReviewQuillWebhookRepository {
+  repoFullName: string;
+  waitForGreenChecks: boolean;
+}
+
+export type ReviewQuillWebhookReconcileDecision =
+  | { reconcile: true }
+  | { reconcile: false; ignoredReason: string };
+
 export function verifySignature(rawBody: Buffer, secret: string, signature: string | undefined): boolean {
   if (!signature || !signature.startsWith("sha256=")) return false;
   const expected = createHmac("sha256", secret).update(rawBody).digest("hex");
@@ -35,4 +44,20 @@ export function normalizeWebhook(eventType: string, payload: Record<string, unkn
   }
 
   return undefined;
+}
+
+export function shouldReconcileWebhook(
+  event: ReviewQuillWebhookEvent,
+  repositories: ReviewQuillWebhookRepository[],
+): ReviewQuillWebhookReconcileDecision {
+  const repo = repositories.find((entry) => entry.repoFullName === event.repoFullName);
+  if (!repo) {
+    return { reconcile: false, ignoredReason: "unwatched_repo" };
+  }
+
+  if ((event.type === "check_run" || event.type === "check_suite") && !repo.waitForGreenChecks) {
+    return { reconcile: false, ignoredReason: "checks_ignored_without_green_gate" };
+  }
+
+  return { reconcile: true };
 }
