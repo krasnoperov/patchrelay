@@ -87,6 +87,18 @@ export function incrementVersion(version, bump) {
   return `${parsed.major}.${parsed.minor}.${parsed.patch + 1}`;
 }
 
+export function versionCommandArgs(pkg, targetVersion) {
+  return [
+    "npm",
+    [
+      ...(pkg.workspace ? ["--prefix", pkg.workspace] : []),
+      "version",
+      targetVersion,
+      "--no-git-tag-version",
+    ],
+  ];
+}
+
 export function highestBump(subjects, version) {
   let bump = "patch";
   for (const subject of subjects) {

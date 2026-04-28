@@ -1,14 +1,18 @@
 #!/usr/bin/env node
 
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import { appendFileSync, readFileSync } from "node:fs";
-import { PACKAGE_SPECS, planPackageRelease } from "./release-plan-lib.mjs";
+import { PACKAGE_SPECS, planPackageRelease, versionCommandArgs } from "./release-plan-lib.mjs";
 
 const GITHUB_OUTPUT = process.env.GITHUB_OUTPUT;
 if (!GITHUB_OUTPUT) throw new Error("GITHUB_OUTPUT not set");
 
 function run(cmd) {
   return execSync(cmd, { encoding: "utf8" }).trim();
+}
+
+function runFile(command, args) {
+  return execFileSync(command, args, { encoding: "utf8" }).trim();
 }
 
 function tryRun(cmd) {
@@ -56,8 +60,8 @@ function changedFiles(hash) {
 function applyVersion(pkg, targetVersion) {
   const currentVersion = readVersion(pkg.packageJson);
   if (currentVersion === targetVersion) return;
-  const directoryArg = pkg.workspace ? ` --dir ${pkg.workspace}` : "";
-  run(`pnpm${directoryArg} version ${targetVersion} --no-git-tag-version`);
+  const [command, args] = versionCommandArgs(pkg, targetVersion);
+  runFile(command, args);
 }
 
 const marker = lastReleaseCommit();
