@@ -23,41 +23,44 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v5
 
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
       - name: Set up Node.js
         uses: actions/setup-node@v5
         with:
           node-version: 24
-          cache: npm
+          cache: pnpm
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Lint
-        run: npm run lint
+        run: pnpm lint
 
       - name: Typecheck
-        run: npm run typecheck
+        run: pnpm typecheck
 
       - name: Typecheck merge-steward
-        run: npm run -w packages/merge-steward typecheck
+        run: pnpm --filter merge-steward typecheck
 
       - name: Typecheck review-quill
-        run: npm run -w packages/review-quill typecheck
+        run: pnpm --filter review-quill typecheck
 
       - name: Test
-        run: npm test
+        run: pnpm test
 
       - name: Test merge-steward
-        run: npm run -w packages/merge-steward test
+        run: pnpm --filter merge-steward test
 
       - name: Test review-quill
-        run: npm run -w packages/review-quill test
+        run: pnpm --filter review-quill test
 
       - name: Build
-        run: npm run build
+        run: pnpm build
 
       - name: Build merge-steward
-        run: npm run -w packages/merge-steward build
+        run: pnpm --filter merge-steward build
 
       - name: Build review-quill
-        run: npm run -w packages/review-quill build
+        run: pnpm --filter review-quill build

@@ -106,7 +106,7 @@ export function readBundledAsset(relativePath: string): string {
 export function getBuiltCliEntryPath(): string {
   const entryPath = getBundledAssetPath("dist/index.js");
   if (!existsSync(entryPath)) {
-    throw new Error(`Built PatchRelay entrypoint not found: ${entryPath}. Run npm run build before installing the service.`);
+    throw new Error(`Built PatchRelay entrypoint not found: ${entryPath}. Run pnpm build before installing the service.`);
   }
   return entryPath;
 }

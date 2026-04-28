@@ -62,8 +62,8 @@ npm install -g patchrelay
 If you are installing from a local source checkout instead of the package registry:
 
 ```bash
-npm install
-npm pack
+pnpm install
+pnpm pack
 npm install -g ./patchrelay-*.tgz
 ```
 

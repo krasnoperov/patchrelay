@@ -44,10 +44,10 @@ export async function runProjectHook(
   };
 }
 
-// Patchrelay runs as a service with NODE_ENV=production, which makes `npm ci`
-// in a project hook silently omit devDependencies. The subject project's install
-// surface is a separate concern from patchrelay's own runtime, so scrub the
-// variables that would leak patchrelay's production posture into the hook.
+// PatchRelay runs as a service with NODE_ENV=production, which can make package
+// manager installs in project hooks silently omit devDependencies. The subject
+// project's install surface is separate from PatchRelay's own runtime, so scrub
+// variables that would leak PatchRelay's production posture into the hook.
 const STRIPPED_PARENT_ENV_VARS = [
   "NODE_ENV",
   "NPM_CONFIG_PRODUCTION",

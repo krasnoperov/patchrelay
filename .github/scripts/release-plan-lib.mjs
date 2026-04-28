@@ -12,7 +12,7 @@ export const PACKAGE_SPECS = [
       if (file.endsWith(".md")) return false;
       return (
         file === "package.json"
-        || file === "package-lock.json"
+        || file === "pnpm-lock.yaml"
         || file === "tsconfig.json"
         || file === "runtime.env.example"
         || file === "service.env.example"
