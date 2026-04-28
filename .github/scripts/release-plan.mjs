@@ -1,18 +1,14 @@
 #!/usr/bin/env node
 
-import { execFileSync, execSync } from "node:child_process";
-import { appendFileSync, readFileSync } from "node:fs";
-import { PACKAGE_SPECS, planPackageRelease, versionCommandArgs } from "./release-plan-lib.mjs";
+import { execSync } from "node:child_process";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { PACKAGE_SPECS, packageMetadataUrl, planPackageRelease } from "./release-plan-lib.mjs";
 
 const GITHUB_OUTPUT = process.env.GITHUB_OUTPUT;
 if (!GITHUB_OUTPUT) throw new Error("GITHUB_OUTPUT not set");
 
 function run(cmd) {
   return execSync(cmd, { encoding: "utf8" }).trim();
-}
-
-function runFile(command, args) {
-  return execFileSync(command, args, { encoding: "utf8" }).trim();
 }
 
 function tryRun(cmd) {
@@ -32,8 +28,23 @@ function readVersion(path) {
   return JSON.parse(readFileSync(path, "utf8")).version;
 }
 
-function publishedVersion(npmName) {
-  return tryRun(`npm view ${npmName} version`);
+function writeVersion(path, version) {
+  const pkg = JSON.parse(readFileSync(path, "utf8"));
+  pkg.version = version;
+  writeFileSync(path, `${JSON.stringify(pkg, null, 2)}\n`);
+}
+
+async function publishedVersion(packageName) {
+  const response = await fetch(packageMetadataUrl(packageName), {
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (response.status === 404) return "";
+  if (!response.ok) {
+    throw new Error(`Failed to read ${packageName} metadata from registry: HTTP ${response.status}`);
+  }
+
+  const metadata = await response.json();
+  return metadata?.["dist-tags"]?.latest ?? "";
 }
 
 function lastReleaseCommit() {
@@ -60,8 +71,7 @@ function changedFiles(hash) {
 function applyVersion(pkg, targetVersion) {
   const currentVersion = readVersion(pkg.packageJson);
   if (currentVersion === targetVersion) return;
-  const [command, args] = versionCommandArgs(pkg, targetVersion);
-  runFile(command, args);
+  writeVersion(pkg.packageJson, targetVersion);
 }
 
 const marker = lastReleaseCommit();
@@ -70,11 +80,11 @@ console.log(`Last release marker: ${marker ? marker.slice(0, 8) : "(none — ana
 let anyRelease = false;
 
 for (const pkg of PACKAGE_SPECS) {
-  console.log(`\n--- ${pkg.key} (${pkg.npmName}) ---`);
+  console.log(`\n--- ${pkg.key} (${pkg.packageName}) ---`);
 
   const localVersion = readVersion(pkg.packageJson);
-  const published = publishedVersion(pkg.npmName);
-  console.log(`Local: ${localVersion}  Published: ${published || "(not on npm)"}`);
+  const published = await publishedVersion(pkg.packageName);
+  console.log(`Local: ${localVersion}  Published: ${published || "(not on registry)"}`);
 
   const relevantCommits = commitsSince(marker).filter((commit) => {
     if (commit.subject.startsWith("ci: release")) return false;
@@ -93,7 +103,7 @@ for (const pkg of PACKAGE_SPECS) {
 
   if (plan.reason === "published_version_ahead_of_repo") {
     throw new Error(
-      `${pkg.npmName} is behind npm (${localVersion} < ${published}). Refusing to guess a recovery. `
+      `${pkg.packageName} is behind the registry (${localVersion} < ${published}). Refusing to guess a recovery. `
       + "Bump the repo version to the published one or publish a newer version from the repo state.",
     );
   }

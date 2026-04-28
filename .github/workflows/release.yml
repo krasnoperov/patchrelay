@@ -89,15 +89,15 @@ jobs:
 
       - name: Publish patchrelay
         if: steps.plan.outputs.root_publish == 'true'
-        run: npm publish --access public
+        run: pnpm publish --access public --no-git-checks
 
       - name: Publish merge-steward
         if: steps.plan.outputs.steward_publish == 'true'
-        run: npm publish -w packages/merge-steward --access public
+        run: pnpm --filter merge-steward publish --access public --no-git-checks
 
       - name: Publish review-quill
         if: steps.plan.outputs.review_quill_publish == 'true'
-        run: npm publish -w packages/review-quill --access public
+        run: pnpm --filter review-quill publish --access public --no-git-checks
 
       - name: Push release tags
         if: steps.plan.outputs.any_release == 'true'

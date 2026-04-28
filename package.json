@@ -36,7 +36,7 @@
     "start": "node dist/index.js serve",
     "doctor": "node dist/index.js doctor",
     "restart": "node dist/index.js service restart",
-    "deploy": "pnpm build && npm install -g . && node dist/index.js service restart",
+    "deploy": "pnpm build && pnpm add -g . && node dist/index.js service restart",
     "lint": "oxlint --ignore-path .gitignore .",
     "typecheck": "tsgo -p tsconfig.json --noEmit",
     "check": "pnpm typecheck",
