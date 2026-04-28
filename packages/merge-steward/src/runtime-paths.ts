@@ -95,7 +95,7 @@ export function readBundledAsset(relativePath: string): string {
 export function getBuiltCliEntryPath(): string {
   const entryPath = getBundledAssetPath("dist/index.js");
   if (!existsSync(entryPath)) {
-    throw new Error(`Built merge-steward entrypoint not found: ${entryPath}. Run npm run build -w merge-steward first.`);
+    throw new Error(`Built merge-steward entrypoint not found: ${entryPath}. Run pnpm --filter merge-steward build first.`);
   }
   return entryPath;
 }

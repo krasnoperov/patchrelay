@@ -1,0 +1,3 @@
+packages:
+  - packages/merge-steward
+  - packages/review-quill

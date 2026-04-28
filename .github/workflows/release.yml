@@ -27,24 +27,27 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
       - name: Set up Node.js
         uses: actions/setup-node@v5
         with:
           node-version: 24
-          cache: npm
+          cache: pnpm
           registry-url: https://registry.npmjs.org
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Lint
-        run: npm run lint
+        run: pnpm lint
 
       - name: Typecheck
-        run: npm run typecheck && npm run -w packages/merge-steward typecheck && npm run -w packages/review-quill typecheck
+        run: pnpm typecheck && pnpm --filter merge-steward typecheck && pnpm --filter review-quill typecheck
 
       - name: Test
-        run: npm test && npm run -w packages/merge-steward test && npm run -w packages/review-quill test
+        run: pnpm test && pnpm --filter merge-steward test && pnpm --filter review-quill test
 
       - name: Compute release plan
         id: plan
@@ -52,15 +55,15 @@ jobs:
 
       - name: Build patchrelay
         if: steps.plan.outputs.root_publish == 'true'
-        run: npm run build
+        run: pnpm build
 
       - name: Build merge-steward
         if: steps.plan.outputs.steward_publish == 'true'
-        run: npm run -w packages/merge-steward build
+        run: pnpm --filter merge-steward build
 
       - name: Build review-quill
         if: steps.plan.outputs.review_quill_publish == 'true'
-        run: npm run -w packages/review-quill build
+        run: pnpm --filter review-quill build
 
       - name: Create release app token
         if: steps.plan.outputs.any_release == 'true'
@@ -79,7 +82,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package.json package-lock.json packages/merge-steward/package.json packages/review-quill/package.json
+          git add package.json pnpm-lock.yaml packages/merge-steward/package.json packages/review-quill/package.json
           git commit --allow-empty -m "ci: release"
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
           git push origin main

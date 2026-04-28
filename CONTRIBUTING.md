@@ -4,11 +4,11 @@ PatchRelay is currently focused on a self-hosted execution harness for Linear-dr
 
 ## Local development
 
-1. Install Node.js 24 and `npm`.
-2. Run `npm ci`.
-3. Run `npm run check`.
-4. Run `npm test`.
-5. Run `npm run build` before opening a pull request if you changed runtime code.
+1. Install Node.js 24 and enable `pnpm` with Corepack.
+2. Run `pnpm install --frozen-lockfile`.
+3. Run `pnpm check`.
+4. Run `pnpm test`.
+5. Run `pnpm build` before opening a pull request if you changed runtime code.
 
 ## Pull request guidelines
 
@@ -24,7 +24,7 @@ PatchRelay is currently focused on a self-hosted execution harness for Linear-dr
 
 - PatchRelay is intentionally pre-1.0 for now. Do not hand-edit versions for feature work.
 - Releases are generated automatically from `main` with Release Please.
-- Release Please opens a release PR that updates `package.json`, `package-lock.json`, and `CHANGELOG.md`.
+- Release Please opens a release PR that updates `package.json`, `pnpm-lock.yaml`, and `CHANGELOG.md`.
 - Merging that release PR creates the GitHub release and publishes the matching npm package automatically through npm trusted publishing.
 - While PatchRelay is below `1.0.0`, `feat:` changes bump the minor version and `fix:` changes bump the patch version.
 - Breaking changes also bump the minor version until the project is explicitly declared stable enough for `1.0.0`.

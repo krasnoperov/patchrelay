@@ -35,23 +35,23 @@
   },
   "scripts": {
     "dev": "node --watch --experimental-transform-types src/index.ts",
-    "prepack": "npm run build",
-    "build": "rm -rf dist && tsc -p tsconfig.json && chmod +x dist/index.js",
+    "prepack": "pnpm build",
+    "build": "rm -rf dist && tsgo -p tsconfig.json && chmod +x dist/index.js",
     "start": "node dist/index.js serve",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsgo -p tsconfig.json --noEmit",
     "test": "node --experimental-transform-types --test 'test/**/*.test.ts'"
   },
   "dependencies": {
-    "fastify": "^5.8.2",
+    "fastify": "^5.8.5",
     "fastify-raw-body": "^5.0.0",
-    "ink": "^6.8.0",
+    "ink": "^7.0.1",
     "pino": "^10.3.1",
-    "react": "^19.2.4",
+    "react": "^19.2.5",
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@types/node": "^25.5.0",
+    "@types/node": "^25.6.0",
     "@types/react": "^19.2.14",
-    "typescript": "^5.8.3"
+    "@typescript/native-preview": "7.0.0-dev.20260427.1"
   }
 }

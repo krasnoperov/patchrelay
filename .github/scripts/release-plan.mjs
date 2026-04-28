@@ -56,8 +56,8 @@ function changedFiles(hash) {
 function applyVersion(pkg, targetVersion) {
   const currentVersion = readVersion(pkg.packageJson);
   if (currentVersion === targetVersion) return;
-  const workspaceArg = pkg.workspace ? ` -w ${pkg.workspace}` : "";
-  run(`npm version ${targetVersion} --no-git-tag-version${workspaceArg}`);
+  const directoryArg = pkg.workspace ? ` --dir ${pkg.workspace}` : "";
+  run(`pnpm${directoryArg} version ${targetVersion} --no-git-tag-version`);
 }
 
 const marker = lastReleaseCommit();

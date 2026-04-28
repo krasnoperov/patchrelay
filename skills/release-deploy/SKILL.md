@@ -25,7 +25,7 @@ Canonical invocation:
 Default repo-wide validation:
 
 ```bash
-npm run ci
+pnpm ci
 ```
 
 Targeted checks are acceptable while iterating, but do not ship without confidence that the touched package(s) are green.
