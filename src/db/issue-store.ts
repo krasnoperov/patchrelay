@@ -370,6 +370,48 @@ export class IssueStore {
     }
   }
 
+  updateDependencyBlockerSnapshot(params: {
+    projectId: string;
+    blockerLinearIssueId: string;
+    blockerIssueKey?: string;
+    blockerTitle?: string;
+    blockerCurrentLinearState?: string;
+    blockerCurrentLinearStateType?: string;
+  }): number {
+    const sets: string[] = ["updated_at = @now"];
+    const values: Record<string, unknown> = {
+      now: isoNow(),
+      projectId: params.projectId,
+      blockerLinearIssueId: params.blockerLinearIssueId,
+    };
+
+    if (params.blockerIssueKey !== undefined) {
+      sets.push("blocker_issue_key = COALESCE(@blockerIssueKey, blocker_issue_key)");
+      values.blockerIssueKey = params.blockerIssueKey;
+    }
+    if (params.blockerTitle !== undefined) {
+      sets.push("blocker_title = COALESCE(@blockerTitle, blocker_title)");
+      values.blockerTitle = params.blockerTitle;
+    }
+    if (params.blockerCurrentLinearState !== undefined) {
+      sets.push("blocker_current_linear_state = COALESCE(@blockerCurrentLinearState, blocker_current_linear_state)");
+      values.blockerCurrentLinearState = params.blockerCurrentLinearState;
+    }
+    if (params.blockerCurrentLinearStateType !== undefined) {
+      sets.push("blocker_current_linear_state_type = COALESCE(@blockerCurrentLinearStateType, blocker_current_linear_state_type)");
+      values.blockerCurrentLinearStateType = params.blockerCurrentLinearStateType;
+    }
+
+    const result = this.connection.prepare(`
+      UPDATE issue_dependencies
+      SET ${sets.join(", ")}
+      WHERE project_id = @projectId
+        AND blocker_linear_issue_id = @blockerLinearIssueId
+    `).run(values);
+
+    return Number(result.changes);
+  }
+
   listIssueDependencies(projectId: string, linearIssueId: string): IssueDependencyRecord[] {
     const rows = this.connection.prepare(`
       SELECT

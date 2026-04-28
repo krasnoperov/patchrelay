@@ -130,6 +130,15 @@ export class WebhookHandler {
       const hydrated = normalized;
       const issue = hydrated.issue ?? routedIssue;
 
+      this.db.issues.updateDependencyBlockerSnapshot({
+        projectId: project.id,
+        blockerLinearIssueId: issue.id,
+        ...(issue.identifier ? { blockerIssueKey: issue.identifier } : {}),
+        ...(issue.title ? { blockerTitle: issue.title } : {}),
+        ...(issue.stateName ? { blockerCurrentLinearState: issue.stateName } : {}),
+        ...(issue.stateType ? { blockerCurrentLinearStateType: issue.stateType } : {}),
+      });
+
       // Record desired stage and upsert issue
       const result = await this.desiredStageRecorder.record({
         project,
