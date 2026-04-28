@@ -1,7 +1,7 @@
 export const PACKAGE_SPECS = [
   {
     key: "root",
-    npmName: "patchrelay",
+    packageName: "patchrelay",
     workspace: null,
     packageJson: "package.json",
     ownsFile(file) {
@@ -25,7 +25,7 @@ export const PACKAGE_SPECS = [
   },
   {
     key: "steward",
-    npmName: "merge-steward",
+    packageName: "merge-steward",
     workspace: "packages/merge-steward",
     packageJson: "packages/merge-steward/package.json",
     ownsFile(file) {
@@ -34,7 +34,7 @@ export const PACKAGE_SPECS = [
   },
   {
     key: "review_quill",
-    npmName: "review-quill",
+    packageName: "review-quill",
     workspace: "packages/review-quill",
     packageJson: "packages/review-quill/package.json",
     ownsFile(file) {
@@ -87,16 +87,8 @@ export function incrementVersion(version, bump) {
   return `${parsed.major}.${parsed.minor}.${parsed.patch + 1}`;
 }
 
-export function versionCommandArgs(pkg, targetVersion) {
-  return [
-    "npm",
-    [
-      ...(pkg.workspace ? ["--prefix", pkg.workspace] : []),
-      "version",
-      targetVersion,
-      "--no-git-tag-version",
-    ],
-  ];
+export function packageMetadataUrl(packageName) {
+  return `https://registry.npmjs.org/${encodeURIComponent(packageName)}`;
 }
 
 export function highestBump(subjects, version) {
