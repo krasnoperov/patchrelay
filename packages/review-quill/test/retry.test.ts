@@ -69,19 +69,66 @@ test("GitHubClient retries a GET on 503 and succeeds on the second attempt", asy
   });
 });
 
-test("GitHubClient retries a GET up to 3 attempts and throws the last error", async () => {
+test("GitHubClient retries a GET up to 5 attempts and throws the last error", async () => {
+  const retryNow = { "Retry-After": "0" };
   const stub = new FetchStub([
-    { kind: "error", status: 500, body: "first" },
-    { kind: "error", status: 502, body: "second" },
-    { kind: "error", status: 503, body: "third" },
+    { kind: "error", status: 500, body: "first", headers: retryNow },
+    { kind: "error", status: 502, body: "second", headers: retryNow },
+    { kind: "error", status: 503, body: "third", headers: retryNow },
+    { kind: "error", status: 503, body: "fourth", headers: retryNow },
+    { kind: "error", status: 503, body: "fifth", headers: retryNow },
   ]);
   await withFetchStub(stub, async () => {
     const client = makeClient();
     await assert.rejects(
       client.listOpenPullRequests("owner/repo"),
-      /GitHub API 503.*third/,
+      /GitHub API 503.*fifth/,
     );
-    assert.equal(stub.calls.length, 3);
+    assert.equal(stub.calls.length, 5);
+  });
+});
+
+test("GitHubClient compacts GitHub HTML outage pages in error messages", async () => {
+  const html = `<!DOCTYPE html>
+<!--
+Hello future GitHubber! I bet you're here to remove those nasty inline styles,
+DRY up these templates and make 'em nice and re-usable, right?
+-->
+<html>
+  <head>
+    <title>Unicorn! &middot; GitHub</title>
+    <style>body { background: #f1f1f1; }</style>
+  </head>
+  <body>
+    <p><img src="data:image/png;base64,${"a".repeat(2_000)}"></p>
+    <p><strong>No server is currently available to service your request.</strong></p>
+    <p>Sorry about that. Please try refreshing and contact us if the problem persists.</p>
+  </body>
+</html>`;
+  const headers = { "content-type": "text/html; charset=utf-8", "Retry-After": "0" };
+  const stub = new FetchStub([
+    { kind: "error", status: 503, body: html, headers },
+    { kind: "error", status: 503, body: html, headers },
+    { kind: "error", status: 503, body: html, headers },
+    { kind: "error", status: 503, body: html, headers },
+    { kind: "error", status: 503, body: html, headers },
+  ]);
+  await withFetchStub(stub, async () => {
+    const client = makeClient();
+    await assert.rejects(
+      client.getPullRequest("owner/repo", 274),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.match(error.message, /GitHub API 503/);
+        assert.match(error.message, /HTML response: Unicorn! · GitHub/);
+        assert.match(error.message, /No server is currently available/);
+        assert.doesNotMatch(error.message, /future GitHubber/);
+        assert.doesNotMatch(error.message, /base64/);
+        assert.ok(error.message.length < 1_000, `message was ${error.message.length} chars`);
+        return true;
+      },
+    );
+    assert.equal(stub.calls.length, 5);
   });
 });
 

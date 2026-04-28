@@ -20,16 +20,19 @@ function githubHeaders(token: string): Record<string, string> {
 }
 
 // Retry policy for transient failures on the GitHub API.
-// - 3 total attempts (the initial call counts as attempt #1).
-// - Exponential backoff: 250ms → 1000ms → 4000ms, ±20% jitter.
+// - GET/HEAD: 5 total attempts for retryable failures (the initial call counts as attempt #1).
+// - Other methods: 3 total attempts for network errors before a response.
+// - Exponential backoff: 250ms → 1000ms → 4000ms → 16000ms, ±20% jitter.
 // - Cap any single delay at 30s even if `Retry-After` asks for more.
 // - GET/HEAD (idempotent) retry on network errors, 5xx, and 429.
 // - POST/PUT/PATCH/DELETE (non-idempotent) retry ONLY on network errors —
 //   blind retry on 5xx risks double-creation on reviews/check-runs.
-const HTTP_RETRY_MAX_ATTEMPTS = 3;
+const HTTP_IDEMPOTENT_RETRY_MAX_ATTEMPTS = 5;
+const HTTP_NON_IDEMPOTENT_NETWORK_RETRY_MAX_ATTEMPTS = 3;
 const HTTP_RETRY_BASE_DELAY_MS = 250;
 const HTTP_RETRY_MAX_DELAY_MS = 30_000;
 const HTTP_RETRY_JITTER_RATIO = 0.2;
+const HTTP_ERROR_BODY_PREVIEW_CHARS = 800;
 
 function isIdempotentMethod(method: string | undefined): boolean {
   const normalized = (method ?? "GET").toUpperCase();
@@ -69,6 +72,89 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
+function decodeHtmlEntities(value: string): string {
+  return value.replace(/&(#x?[0-9a-f]+|[a-z]+);/gi, (entity, raw: string) => {
+    const named: Record<string, string> = {
+      amp: "&",
+      apos: "'",
+      gt: ">",
+      lt: "<",
+      middot: "·",
+      nbsp: " ",
+      quot: "\"",
+    };
+    const lower = raw.toLowerCase();
+    if (lower in named) return named[lower]!;
+    if (lower.startsWith("#x")) {
+      const codePoint = Number.parseInt(lower.slice(2), 16);
+      return Number.isFinite(codePoint) && codePoint >= 0 && codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : entity;
+    }
+    if (lower.startsWith("#")) {
+      const codePoint = Number.parseInt(lower.slice(1), 10);
+      return Number.isFinite(codePoint) && codePoint >= 0 && codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : entity;
+    }
+    return entity;
+  });
+}
+
+function compactWhitespace(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function truncateForError(value: string): string {
+  if (value.length <= HTTP_ERROR_BODY_PREVIEW_CHARS) return value;
+  return `${value.slice(0, HTTP_ERROR_BODY_PREVIEW_CHARS)}…`;
+}
+
+function summarizeHtmlError(body: string): string {
+  const text = decodeHtmlEntities(body)
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<script\b[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ");
+  return truncateForError(compactWhitespace(text) || "HTML response");
+}
+
+function summarizeJsonError(body: string): string | undefined {
+  try {
+    const parsed = JSON.parse(body) as unknown;
+    if (!parsed || typeof parsed !== "object") return undefined;
+    const record = parsed as Record<string, unknown>;
+    const parts: string[] = [];
+    if (typeof record.message === "string" && record.message.trim()) {
+      parts.push(record.message.trim());
+    }
+    if (Array.isArray(record.errors) && record.errors.length > 0) {
+      parts.push(record.errors.map((entry) => {
+        if (typeof entry === "string") return entry;
+        if (entry && typeof entry === "object") {
+          const message = (entry as Record<string, unknown>).message;
+          if (typeof message === "string") return message;
+        }
+        return JSON.stringify(entry);
+      }).join("; "));
+    }
+    if (typeof record.documentation_url === "string" && record.documentation_url.trim()) {
+      parts.push(`docs: ${record.documentation_url.trim()}`);
+    }
+    return truncateForError(parts.length > 0 ? parts.join(" | ") : JSON.stringify(parsed));
+  } catch {
+    return undefined;
+  }
+}
+
+function summarizeErrorBody(body: string, contentType: string | null): string {
+  const trimmed = body.trim();
+  if (!trimmed) return "empty response body";
+  if (contentType?.toLowerCase().includes("json")) {
+    return summarizeJsonError(trimmed) ?? truncateForError(compactWhitespace(trimmed));
+  }
+  if (/^\s*(?:<!doctype\s+html|<html\b)/i.test(trimmed) || contentType?.toLowerCase().includes("html")) {
+    return `HTML response: ${summarizeHtmlError(trimmed)}`;
+  }
+  return truncateForError(compactWhitespace(trimmed));
+}
+
 function normalizePullRequestState(pr: Record<string, unknown>): PullRequestSummary["state"] {
   if (typeof pr.merged_at === "string" && pr.merged_at.trim()) return "MERGED";
   const state = String(pr.state ?? "OPEN").toUpperCase();
@@ -98,8 +184,11 @@ export class GitHubClient {
     };
 
     let lastError: Error | undefined;
+    const maxAttempts = isIdempotentMethod(method)
+      ? HTTP_IDEMPOTENT_RETRY_MAX_ATTEMPTS
+      : HTTP_NON_IDEMPOTENT_NETWORK_RETRY_MAX_ATTEMPTS;
 
-    for (let attempt = 1; attempt <= HTTP_RETRY_MAX_ATTEMPTS; attempt += 1) {
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       // Try the request.
       let response: Response;
       try {
@@ -110,7 +199,7 @@ export class GitHubClient {
         // processed anything. Exponential backoff (no Retry-After
         // information available on a network error).
         lastError = error instanceof Error ? error : new Error(String(error));
-        if (attempt >= HTTP_RETRY_MAX_ATTEMPTS) throw lastError;
+        if (attempt >= maxAttempts) throw lastError;
         await sleep(exponentialBackoffMs(attempt));
         continue;
       }
@@ -122,11 +211,12 @@ export class GitHubClient {
       // Non-ok HTTP response. Read the body once (the body stream is
       // single-use) and decide whether to retry.
       const body = await response.text();
-      const httpError = new Error(`GitHub API ${response.status} for ${path}: ${body}`);
+      const bodySummary = summarizeErrorBody(body, response.headers.get("content-type"));
+      const httpError = new Error(`GitHub API ${response.status} for ${path}: ${bodySummary}`);
       lastError = httpError;
 
       const retryable = isRetryableStatus(response.status) && isIdempotentMethod(method);
-      if (!retryable || attempt >= HTTP_RETRY_MAX_ATTEMPTS) {
+      if (!retryable || attempt >= maxAttempts) {
         throw httpError;
       }
 
@@ -141,7 +231,7 @@ export class GitHubClient {
     // Unreachable in practice — the loop body either returns on success
     // or throws on the final failure. Defensive rethrow to keep TypeScript
     // inference happy.
-    throw lastError ?? new Error(`GitHub API request to ${path} failed after ${HTTP_RETRY_MAX_ATTEMPTS} attempts`);
+    throw lastError ?? new Error(`GitHub API request to ${path} failed after ${maxAttempts} attempts`);
   }
 
   async listOpenPullRequests(repoFullName: string): Promise<PullRequestSummary[]> {
