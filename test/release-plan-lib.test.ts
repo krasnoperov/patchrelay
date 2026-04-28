@@ -6,6 +6,7 @@ import {
   highestBump,
   incrementVersion,
   planPackageRelease,
+  versionCommandArgs,
 } from "../.github/scripts/release-plan-lib.mjs";
 
 test("planPackageRelease refuses to guess when npm is already ahead of the repo", () => {
@@ -69,4 +70,20 @@ test("root package ownership excludes workflow-only churn", () => {
   assert.equal(rootSpec?.ownsFile("src/index.ts"), true);
   assert.equal(rootSpec?.ownsFile("infra/patchrelay.service"), true);
   assert.equal(rootSpec?.ownsFile("packages/merge-steward/src/cli.ts"), false);
+});
+
+test("versionCommandArgs updates workspace packages via npm prefix", () => {
+  const rootSpec = PACKAGE_SPECS.find((entry) => entry.key === "root");
+  const reviewQuillSpec = PACKAGE_SPECS.find((entry) => entry.key === "review_quill");
+
+  assert.ok(rootSpec);
+  assert.ok(reviewQuillSpec);
+  assert.deepEqual(versionCommandArgs(rootSpec, "0.55.0"), [
+    "npm",
+    ["version", "0.55.0", "--no-git-tag-version"],
+  ]);
+  assert.deepEqual(versionCommandArgs(reviewQuillSpec, "0.16.0"), [
+    "npm",
+    ["--prefix", "packages/review-quill", "version", "0.16.0", "--no-git-tag-version"],
+  ]);
 });
