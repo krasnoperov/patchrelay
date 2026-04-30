@@ -355,23 +355,12 @@ The gateway binds its HTTP port before repo initialization finishes. Each repo i
 | Queue looks frozen, no webhook activity | `merge-steward service logs --lines 100` |
 | Required checks not enforced as expected | `merge-steward doctor --repo <id>` reports current GitHub policy |
 
-## Current scope
+## Current gaps
 
-Implemented:
+The queue already supports cumulative speculative validation, cascade invalidation, bounded retry, durable incidents, eviction check runs, and re-admission from fresh GitHub truth.
 
-- Speculative execution: cumulative branches (`main+A`, `main+A+B`, `main+A+B+C`) tested in parallel. Configurable depth (default 10, set `speculativeDepth: 1` for serial mode).
-- Speculative consistency: when the head lands, downstream entries that already passed do not re-test if their assumptions still hold.
-- Cascade invalidation: when a mid-chain entry fails, downstream speculative branches are rebuilt without it.
-- Non-spinning conflict retry gated on base SHA change.
-- Flaky CI retry budget (separate from retry budget).
-- Revalidation before landing (approval, SHA, external merge).
-- Durable incident records on eviction.
-- GitHub check run as eviction signal.
-- Admission and re-admission from fresh GitHub truth, with queue labels as optional nudges and controls.
-- Structured reconciler event stream for observability.
+Known gaps:
 
-Not built yet (see [design doc](./design-docs/merge-steward.md)):
-
-- Binary bisection on batch failure.
-- File-path conflict detection for parallel lanes.
-- Flaky test learning (only retry budget today, no historical analysis).
+- no binary bisection when a speculative chain fails
+- no independent queue lanes by path or target
+- flaky test handling is retry-budget based, not historical learning
