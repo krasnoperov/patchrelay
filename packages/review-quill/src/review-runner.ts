@@ -27,6 +27,13 @@ function isThreadMaterializationRace(error: unknown): boolean {
   return message.includes("not materialized yet") || message.includes("includeTurns is unavailable before first user message");
 }
 
+function isCodexAppServerRequestTimeout(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /^Codex app-server request timed out after \d+ms$/.test(message);
+}
+
+const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
 function collectAssistantMessages(thread: { turns: Array<{ items: Array<{ type: string; text?: string }> }> }): string[] {
   const messages: string[] = [];
   for (const turn of thread.turns) {
@@ -192,14 +199,18 @@ export function normalizeVerdict(raw: Record<string, unknown>): ReviewVerdict {
   };
 }
 
+type CodexRunnerClient = Pick<CodexAppServerClient, "start" | "stop" | "startThread" | "startTurn" | "readThread">;
+
 export class ReviewRunner {
-  private readonly codex: CodexAppServerClient;
+  private readonly codex: CodexRunnerClient;
 
   constructor(
     private readonly config: ReviewQuillConfig,
     private readonly logger: Logger,
+    codex?: CodexRunnerClient,
+    private readonly sleep: (ms: number) => Promise<void> = delay,
   ) {
-    this.codex = new CodexAppServerClient(config.codex, logger.child({ component: "codex" }));
+    this.codex = codex ?? new CodexAppServerClient(config.codex, logger.child({ component: "codex" }));
   }
 
   async start(): Promise<void> {
@@ -274,21 +285,26 @@ export class ReviewRunner {
         thread = await this.codex.readThread(threadId);
       } catch (error) {
         if (isThreadMaterializationRace(error)) {
-          await new Promise((resolve) => setTimeout(resolve, 750));
+          await this.sleep(750);
+          continue;
+        }
+        if (isCodexAppServerRequestTimeout(error)) {
+          this.logger.warn({ threadId, turnId }, "Codex thread read timed out while waiting for review turn; continuing wait");
+          await this.sleep(1_500);
           continue;
         }
         throw error;
       }
       const turn = thread.turns.find((entry) => entry.id === turnId);
       if (!turn) {
-        await new Promise((resolve) => setTimeout(resolve, 1_000));
+        await this.sleep(1_000);
         continue;
       }
       if (turn.status === "completed") return thread;
       if (turn.status === "failed" || turn.status === "interrupted" || turn.status === "cancelled") {
         throw new Error(`Review turn ended with status ${turn.status}`);
       }
-      await new Promise((resolve) => setTimeout(resolve, 1_500));
+      await this.sleep(1_500);
     }
     throw new Error("Timed out waiting for review turn completion");
   }
