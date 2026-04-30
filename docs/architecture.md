@@ -14,7 +14,7 @@ The harness is not a generic prompt runner. It is the deterministic orchestratio
 4. **Repair loops as first-class workflows** — `implementation`, `review_fix`, `ci_repair`, `queue_repair` have distinct context, entry conditions, and success criteria, not one generic "try again."
 5. **Repository-local guidance as the source of truth** — `IMPLEMENTATION_WORKFLOW.md`, `REVIEW_WORKFLOW.md`, and repo-local docs define how the agent should work in that repo.
 
-The decisions behind these priorities are captured in [design-docs/core-beliefs.md](./design-docs/core-beliefs.md) and [design-docs/agentic-loop-principles.md](./design-docs/agentic-loop-principles.md).
+The decisions behind these priorities are captured in [design-docs/core-beliefs.md](./design-docs/core-beliefs.md).
 
 ## Component topology
 
@@ -248,16 +248,6 @@ terminal exits:
 - escalated
 - failed
 ```
-
-**Target** (in-progress simplification): a smaller `IssueSession` machine where waiting on review or queue is a `waitingReason` rather than a top-level state:
-
-- `idle`
-- `running`
-- `waiting_input`
-- `done`
-- `failed`
-
-The live code still carries the broader factory-state model above. The simplification is happening in steps and tracked as refactors.
 
 ### Undelegation semantics
 
