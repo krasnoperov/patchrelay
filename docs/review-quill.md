@@ -5,7 +5,7 @@ Full setup, configuration, and troubleshooting reference for `review-quill`. For
 ## Install and bootstrap
 
 ```bash
-npm install -g review-quill
+pnpm add -g review-quill
 review-quill init https://patchrelay.example.com/review
 ```
 

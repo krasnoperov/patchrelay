@@ -11,7 +11,7 @@ Full setup, configuration, and troubleshooting reference for `merge-steward`. Fo
 ## Install and bootstrap
 
 ```bash
-npm install -g merge-steward
+pnpm add -g merge-steward
 merge-steward init https://queue.example.com
 ```
 

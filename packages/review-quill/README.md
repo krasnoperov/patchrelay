@@ -34,7 +34,7 @@ The skill wraps `review-quill pr status --wait` and `merge-steward pr status --w
 ## Quick start
 
 ```bash
-npm install -g review-quill
+pnpm add -g review-quill
 review-quill init https://patchrelay.example.com/review
 review-quill repo attach owner/repo
 review-quill doctor --repo repo
