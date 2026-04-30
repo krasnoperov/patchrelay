@@ -7,6 +7,7 @@ interface ProjectDetailViewProps {
   model: DashboardModel;
   selectedRepoId: string | null;
   bodyRows: number;
+  topMarginRows?: number | undefined;
   scrollOffset: number;
 }
 
@@ -84,7 +85,13 @@ export function clampScrollOffset(requested: number, totalLines: number, scrollA
   return Math.max(0, Math.min(requested, maxOffset));
 }
 
-export function ProjectDetailView({ model, selectedRepoId, bodyRows, scrollOffset }: ProjectDetailViewProps): React.JSX.Element {
+export function ProjectDetailView({
+  model,
+  selectedRepoId,
+  bodyRows,
+  topMarginRows = 1,
+  scrollOffset,
+}: ProjectDetailViewProps): React.JSX.Element {
   const { stdout } = useStdout();
   const width = Math.max(40, stdout?.columns ?? 80);
 
@@ -93,7 +100,7 @@ export function ProjectDetailView({ model, selectedRepoId, bodyRows, scrollOffse
     : model.repos[0] ?? null;
 
   if (!repo) {
-    return <Box marginTop={1}><Text dimColor> </Text></Box>;
+    return <Box marginTop={topMarginRows}><Text dimColor> </Text></Box>;
   }
 
   const repoHeaderRows = 1;
@@ -132,7 +139,7 @@ export function ProjectDetailView({ model, selectedRepoId, bodyRows, scrollOffse
   }
 
   return (
-    <Box flexDirection="column" marginTop={1}>
+    <Box flexDirection="column" marginTop={topMarginRows}>
       <RepoRow repo={repo} selected={false} showCursor={false} width={width - 2} />
       {separatorRows > 0 ? <Box><Text> </Text></Box> : null}
       {children}

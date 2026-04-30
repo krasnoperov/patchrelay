@@ -7,6 +7,7 @@ import { HelpBar } from "./HelpBar.tsx";
 import { OverviewView } from "./OverviewView.tsx";
 import { ProjectDetailView } from "./ProjectDetailView.tsx";
 import { StatusBar } from "./StatusBar.tsx";
+import { computeDashboardLayout } from "./compact-layout.ts";
 
 interface AppProps {
   gatewayBaseUrl: string;
@@ -164,9 +165,7 @@ export function App({ gatewayBaseUrl, repos, initialRepoRef, initialPrNumber }: 
     }
   }
 
-  const rows = Math.max(8, stdout?.rows ?? 24);
-  const chromeRows = 1 /* status */ + 1 /* body marginTop */ + (flashMessage ? 2 : 0) + 2 /* help bar + its marginTop */;
-  const bodyRows = Math.max(2, rows - chromeRows);
+  const layout = computeDashboardLayout(stdout?.rows ?? 24, Boolean(flashMessage));
 
   useInput((input, key) => {
     if (input === "q") {
@@ -211,11 +210,11 @@ export function App({ gatewayBaseUrl, repos, initialRepoRef, initialPrNumber }: 
       return;
     }
     if (key.pageDown || input === " ") {
-      setDetailScrollOffset((offset) => offset + Math.max(1, bodyRows - 2));
+      setDetailScrollOffset((offset) => offset + Math.max(1, layout.bodyRows - 2));
       return;
     }
     if (key.pageUp) {
-      setDetailScrollOffset((offset) => Math.max(0, offset - Math.max(1, bodyRows - 2)));
+      setDetailScrollOffset((offset) => Math.max(0, offset - Math.max(1, layout.bodyRows - 2)));
       return;
     }
     if (input === "g") {
@@ -243,7 +242,8 @@ export function App({ gatewayBaseUrl, repos, initialRepoRef, initialPrNumber }: 
         <ProjectDetailView
           model={model}
           selectedRepoId={selectedRepoId}
-          bodyRows={bodyRows}
+          bodyRows={layout.bodyRows}
+          topMarginRows={layout.bodyTopMarginRows}
           scrollOffset={detailScrollOffset}
         />
       ) : (
@@ -251,15 +251,16 @@ export function App({ gatewayBaseUrl, repos, initialRepoRef, initialPrNumber }: 
           model={model}
           selectedRepoId={selectedRepoId}
           showCursor={true}
-          bodyRows={bodyRows}
+          bodyRows={layout.bodyRows}
+          topMarginRows={layout.bodyTopMarginRows}
         />
       )}
-      {flashMessage ? (
+      {flashMessage && layout.showFlashMessage ? (
         <Box marginTop={1}>
           <Text dimColor>{flashMessage}</Text>
         </Box>
       ) : null}
-      <HelpBar view={view} />
+      {layout.showHelp ? <HelpBar view={view} /> : null}
     </Box>
   );
 }
