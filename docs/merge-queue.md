@@ -109,6 +109,17 @@ Agent (patchrelay | ship-pr | human) → fixes the branch → pushes a fresh hea
 Steward → re-admits from fresh GitHub truth
 ```
 
+When a PR is stuck or evicted, start with:
+
+```bash
+merge-steward pr status
+merge-steward queue show --pr <num>
+merge-steward service logs --lines 100
+patchrelay issue show APP-123
+```
+
+Escalate to a human when the incident points at product ambiguity, broken credentials, branch protection policy, an unhealthy `main`, or repeated semantic failures.
+
 ## Repository settings
 
 ### Branch protection rules
@@ -169,6 +180,5 @@ For service-specific configuration, see:
 ## Read more
 
 - [github-queue-contract.md](./github-queue-contract.md) — shared GitHub artifacts
-- [merge-queue-runbook.md](./merge-queue-runbook.md) — happy path, conflicts, failures, repair handoff
-- [design-docs/merge-steward.md](./design-docs/merge-steward.md) — why the split, phased roadmap, repair contract
+- [design-docs/merge-steward.md](./design-docs/merge-steward.md) — why the split and the core invariants
 - [design-docs/review-quill.md](./design-docs/review-quill.md) — review service design rationale

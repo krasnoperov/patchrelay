@@ -119,11 +119,4 @@ The steward keeps its own SQLite database for queue truth:
 
 PatchRelay stores only enough queue provenance to route repair and explain issue state.
 
-## Future Work
-
-Not implemented yet:
-
-- binary bisection for failing speculative chains
-- independent queue lanes by path or target
-- richer semantic-conflict evidence packages
-- first-class manual pause or policy state in the queue model
+For current operational gaps, see [../merge-steward.md](../merge-steward.md#current-gaps).
