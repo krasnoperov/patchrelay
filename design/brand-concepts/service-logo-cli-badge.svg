@@ -1,0 +1,30 @@
+<svg width="960" height="960" viewBox="0 0 960 960" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="120" y1="120" x2="860" y2="860" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#121717"/>
+      <stop offset="1" stop-color="#1D2B26"/>
+    </linearGradient>
+    <linearGradient id="frame" x1="198" y1="188" x2="754" y2="766" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#B0FFD9"/>
+      <stop offset="1" stop-color="#5FD58F"/>
+    </linearGradient>
+  </defs>
+  <rect width="960" height="960" rx="188" fill="url(#bg)"/>
+  <rect x="158" y="164" width="644" height="484" rx="36" fill="#09100D" stroke="url(#frame)" stroke-width="8"/>
+  <circle cx="214" cy="220" r="12" fill="#B0FFD9"/>
+  <circle cx="254" cy="220" r="12" fill="#68E6A4"/>
+  <circle cx="294" cy="220" r="12" fill="#3AAD72"/>
+  <path d="M262 344L352 428L262 512" stroke="#B0FFD9" stroke-width="28" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M408 526H562" stroke="#74F2AC" stroke-width="28" stroke-linecap="round"/>
+  <path d="M420 344H692" stroke="#29493C" stroke-width="20" stroke-linecap="round"/>
+  <path d="M420 400H632" stroke="#29493C" stroke-width="20" stroke-linecap="round"/>
+  <path d="M420 456H598" stroke="#29493C" stroke-width="20" stroke-linecap="round"/>
+  <path d="M174 718H786" stroke="#345144" stroke-width="2" stroke-dasharray="16 18"/>
+  <rect x="182" y="754" width="170" height="64" rx="18" fill="#0E1713" stroke="#2A4337" stroke-width="3"/>
+  <text x="267" y="796" fill="#A4EBC4" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="28" font-weight="700" text-anchor="middle">LINEAR</text>
+  <rect x="396" y="754" width="182" height="64" rx="18" fill="#0E1713" stroke="#2A4337" stroke-width="3"/>
+  <text x="487" y="796" fill="#A4EBC4" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="28" font-weight="700" text-anchor="middle">WORKTREE</text>
+  <rect x="622" y="754" width="156" height="64" rx="18" fill="#0E1713" stroke="#2A4337" stroke-width="3"/>
+  <text x="700" y="796" fill="#A4EBC4" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="28" font-weight="700" text-anchor="middle">PR</text>
+  <text x="480" y="886" fill="#D7FBE7" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="72" font-weight="700" text-anchor="middle">patchrelay</text>
+</svg>

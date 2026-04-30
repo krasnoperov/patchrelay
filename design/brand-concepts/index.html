@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PatchRelay Brand Concepts</title>
+    <style>
+      :root {
+        --page-bg: #0c1520;
+        --card-bg: #122131;
+        --card-border: #2b455b;
+        --text: #edf5fb;
+        --muted: #a8bdcd;
+        --accent: #8be7be;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background:
+          radial-gradient(circle at top, rgba(103, 184, 255, 0.14), transparent 28%),
+          radial-gradient(circle at 85% 20%, rgba(139, 231, 190, 0.18), transparent 18%),
+          var(--page-bg);
+        color: var(--text);
+        font-family: ui-sans-serif, system-ui, sans-serif;
+      }
+
+      main {
+        max-width: 1360px;
+        margin: 0 auto;
+        padding: 48px 28px 72px;
+      }
+
+      h1 {
+        margin: 0 0 12px;
+        font-size: clamp(2.6rem, 6vw, 4.8rem);
+        line-height: 0.95;
+      }
+
+      p {
+        margin: 0;
+        max-width: 860px;
+        color: var(--muted);
+        font-size: 1.1rem;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+        gap: 22px;
+        margin-top: 34px;
+      }
+
+      article {
+        background: rgba(18, 33, 49, 0.88);
+        border: 1px solid var(--card-border);
+        border-radius: 24px;
+        padding: 16px;
+        box-shadow: 0 18px 40px rgba(0, 0, 0, 0.18);
+      }
+
+      img {
+        width: 100%;
+        display: block;
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.03);
+      }
+
+      h2 {
+        margin: 14px 0 6px;
+        font-size: 1.2rem;
+      }
+
+      .tag {
+        display: inline-block;
+        margin-top: 12px;
+        padding: 8px 12px;
+        border-radius: 999px;
+        background: rgba(139, 231, 190, 0.12);
+        color: var(--accent);
+        font-size: 0.9rem;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+
+      .notes {
+        margin-top: 40px;
+        padding: 18px 20px;
+        border-left: 4px solid var(--accent);
+        background: rgba(255, 255, 255, 0.03);
+        border-radius: 14px;
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <span class="tag">Developer-first explorations</span>
+      <h1>PatchRelay brand directions</h1>
+      <p>
+        Concepts built around local execution, issue worktrees, PR repair loops, and technical trust. Open this page in a browser to compare which visual language feels most like PatchRelay.
+      </p>
+
+      <section class="grid">
+        <article>
+          <img src="./service-logo-modern-orbit.svg" alt="Modern orbit service logo" />
+          <h2>Modern orbit logo</h2>
+          <p>Infra-forward primary logo with routed nodes and document/worktree cues.</p>
+        </article>
+
+        <article>
+          <img src="./service-logo-cli-badge.svg" alt="CLI badge service logo" />
+          <h2>CLI badge logo</h2>
+          <p>Monospace terminal direction that leans into operator tooling and command-line trust.</p>
+        </article>
+
+        <article>
+          <img src="./github-project-social-blueprint.svg" alt="GitHub project social preview" />
+          <h2>GitHub social preview</h2>
+          <p>Blueprint-like OG image direction for the repository and project card surfaces.</p>
+        </article>
+
+        <article>
+          <img src="./promo-hero-signal-grid.svg" alt="Promo hero signal grid" />
+          <h2>Promo hero: signal grid</h2>
+          <p>Sharper, darker hero built from routing diagrams, queues, and reactive state flow.</p>
+        </article>
+
+        <article>
+          <img src="./promo-hero-checklist-ops.svg" alt="Promo hero checklist ops" />
+          <h2>Promo hero: checklist ops</h2>
+          <p>Warmer operational aesthetic centered on explicit criteria and visible reliability.</p>
+        </article>
+
+        <article>
+          <img src="./raster/marketing-hero-control-room.png" alt="Raster marketing hero control room" />
+          <h2>Raster hero: control room</h2>
+          <p>Rendered marketing visual with calm command-center energy, branch flows, and local-system trust.</p>
+        </article>
+
+        <article>
+          <img src="./raster/marketing-hero-operator-desk.png" alt="Raster marketing hero operator desk" />
+          <h2>Raster hero: operator desk</h2>
+          <p>Rendered warm desk composition that sells procedural confidence without looking like generic SaaS art.</p>
+        </article>
+      </section>
+
+      <div class="notes">
+        Recommended starting point: use the modern orbit logo for the service identity, the blueprint social card for GitHub, and compare the new raster heroes depending on whether you want darker systems-graph energy or warmer operator-confidence energy.
+      </div>
+    </main>
+  </body>
+</html>

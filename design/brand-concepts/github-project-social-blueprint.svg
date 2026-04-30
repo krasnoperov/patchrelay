@@ -1,0 +1,53 @@
+<svg width="1280" height="640" viewBox="0 0 1280 640" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="70" y1="42" x2="1222" y2="606" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#08111C"/>
+      <stop offset="1" stop-color="#143046"/>
+    </linearGradient>
+    <linearGradient id="signal" x1="248" y1="214" x2="1014" y2="474" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#A9F6D2"/>
+      <stop offset="0.5" stop-color="#67BDFF"/>
+      <stop offset="1" stop-color="#E6F2FF"/>
+    </linearGradient>
+  </defs>
+  <rect width="1280" height="640" rx="32" fill="url(#bg)"/>
+  <g opacity="0.2">
+    <path d="M120 128H1160" stroke="#5A7A96" stroke-width="2"/>
+    <path d="M120 224H1160" stroke="#5A7A96" stroke-width="2"/>
+    <path d="M120 320H1160" stroke="#5A7A96" stroke-width="2"/>
+    <path d="M120 416H1160" stroke="#5A7A96" stroke-width="2"/>
+    <path d="M120 512H1160" stroke="#5A7A96" stroke-width="2"/>
+    <path d="M220 80V560" stroke="#5A7A96" stroke-width="2"/>
+    <path d="M420 80V560" stroke="#5A7A96" stroke-width="2"/>
+    <path d="M620 80V560" stroke="#5A7A96" stroke-width="2"/>
+    <path d="M820 80V560" stroke="#5A7A96" stroke-width="2"/>
+    <path d="M1020 80V560" stroke="#5A7A96" stroke-width="2"/>
+  </g>
+  <text x="120" y="116" fill="#9AB4C8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="24">CONTROL SURFACE</text>
+  <text x="120" y="438" fill="#E7F3FD" font-family="ui-sans-serif, system-ui, sans-serif" font-size="88" font-weight="700">PatchRelay</text>
+  <text x="120" y="488" fill="#AFC8DA" font-family="ui-sans-serif, system-ui, sans-serif" font-size="32">Local harness for delegated coding work, durable worktrees, and PR repair loops.</text>
+  <rect x="760" y="110" width="392" height="98" rx="24" fill="#091521" stroke="#2D4C65" stroke-width="3"/>
+  <text x="796" y="146" fill="#8AE8BC" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="22">LINEAR WEBHOOK</text>
+  <text x="796" y="182" fill="#E8F5FF" font-family="ui-sans-serif, system-ui, sans-serif" font-size="34" font-weight="700">Delegate issue</text>
+  <rect x="760" y="264" width="392" height="98" rx="24" fill="#091521" stroke="#2D4C65" stroke-width="3"/>
+  <text x="796" y="300" fill="#8CBFFF" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="22">PATCHRELAY</text>
+  <text x="796" y="336" fill="#E8F5FF" font-family="ui-sans-serif, system-ui, sans-serif" font-size="34" font-weight="700">Route, prepare, run</text>
+  <rect x="760" y="418" width="392" height="98" rx="24" fill="#091521" stroke="#2D4C65" stroke-width="3"/>
+  <text x="796" y="454" fill="#CDE6FF" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="22">GITHUB TRUTH</text>
+  <text x="796" y="490" fill="#E8F5FF" font-family="ui-sans-serif, system-ui, sans-serif" font-size="34" font-weight="700">Review, CI, merge queue</text>
+  <path d="M692 158H760" stroke="url(#signal)" stroke-width="10" stroke-linecap="round"/>
+  <path d="M692 312H760" stroke="url(#signal)" stroke-width="10" stroke-linecap="round"/>
+  <path d="M692 466H760" stroke="url(#signal)" stroke-width="10" stroke-linecap="round"/>
+  <circle cx="670" cy="158" r="18" fill="#86E8BD"/>
+  <circle cx="670" cy="312" r="18" fill="#6ABEFF"/>
+  <circle cx="670" cy="466" r="18" fill="#E9F4FF"/>
+  <rect x="300" y="126" width="300" height="354" rx="28" fill="#091521" stroke="#284760" stroke-width="3"/>
+  <text x="340" y="176" fill="#93AEC2" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="22">ISSUE WORKTREE</text>
+  <path d="M348 232H552" stroke="#A8F4D1" stroke-width="22" stroke-linecap="round"/>
+  <path d="M348 294H520" stroke="#67BDFF" stroke-width="22" stroke-linecap="round"/>
+  <path d="M348 356H448" stroke="#E6F2FF" stroke-width="22" stroke-linecap="round"/>
+  <rect x="346" y="402" width="134" height="42" rx="14" fill="#0F1F2F" stroke="#32546E" stroke-width="2"/>
+  <text x="413" y="430" fill="#A7C7DE" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18" text-anchor="middle">implement</text>
+  <rect x="490" y="402" width="82" height="42" rx="14" fill="#0F1F2F" stroke="#32546E" stroke-width="2"/>
+  <text x="531" y="430" fill="#A7C7DE" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18" text-anchor="middle">repair</text>
+</svg>
