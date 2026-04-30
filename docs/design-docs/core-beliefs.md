@@ -31,10 +31,20 @@ Prompt quality matters, but reliability comes from the system around the model:
 - repair loops
 - clear escalation rules
 
+PatchRelay manages a controlled loop per issue:
+
+```text
+context -> action -> verification -> follow-up or completion
+```
+
+Do not collapse distinct loops into "ask the agent again." Implementation, review fixes, CI repair, queue repair, and orchestration have different entry conditions, prompts, retry budgets, success criteria, and escalation paths.
+
 ## Legibility includes validation surfaces
 
 Agents should be able to see not just instructions, but also the evidence needed to judge whether work succeeded.
 Checks, failure reports, review feedback, and queue incidents should be compact, durable, and easy to route back into the next run.
+
+The loop is not done just because code was generated, a PR opened, or branch CI passed once. Durable verification surfaces include local checks, GitHub CI, GitHub review state, review-quill verdicts when configured, merge-steward speculative validation, queue incidents, and repo-specific validation when required.
 
 ## Linear is the human-facing control plane
 

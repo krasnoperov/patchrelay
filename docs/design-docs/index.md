@@ -5,12 +5,11 @@ This directory holds the durable design guidance for PatchRelay.
 Read order:
 
 1. [core-beliefs.md](./core-beliefs.md)
-2. [agentic-loop-principles.md](./agentic-loop-principles.md)
-3. [issue-classification-and-umbrella-orchestration.md](./issue-classification-and-umbrella-orchestration.md)
-4. [review-quill.md](./review-quill.md)
-5. [merge-steward.md](./merge-steward.md)
-6. [codex-session-source-forensics.md](./codex-session-source-forensics.md)
-7. [../architecture.md](../architecture.md)
+2. [issue-classification-and-umbrella-orchestration.md](./issue-classification-and-umbrella-orchestration.md)
+3. [review-quill.md](./review-quill.md)
+4. [merge-steward.md](./merge-steward.md)
+5. [codex-session-source-forensics.md](./codex-session-source-forensics.md)
+6. [../architecture.md](../architecture.md)
 
 Use this directory for:
 
