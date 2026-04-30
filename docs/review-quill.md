@@ -22,9 +22,9 @@ Required **repository permissions**:
 
 | Permission | Access | Why |
 |-|-|-|
-| Contents | Read and write | Validated setup; needed for the managed checkout flow |
-| Issues | Read and write | |
+| Contents | Read-only | Materialize managed checkouts at the reviewed head SHA |
 | Pull requests | Read and write | Submit `APPROVE` / `REQUEST_CHANGES` reviews |
+| Checks | Read and write | Create and update `review-quill/verdict` check runs |
 | Actions | Read-only | Observe CI state |
 | Metadata | Read-only | |
 

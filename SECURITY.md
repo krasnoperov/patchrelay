@@ -18,7 +18,7 @@ We will acknowledge the report, investigate it, and coordinate a fix and disclos
 PatchRelay is designed for infrastructure you control. Recommended production posture:
 
 - bind to loopback unless you have a strong reason not to
-- expose only `/`, `/health`, `/ready`, and `POST /webhooks/linear`
+- expose only `/`, `/health`, `/ready`, `/oauth/linear/callback`, `POST /webhooks/linear`, and `POST /webhooks/github`
 - leave `operator_api.enabled` disabled unless you explicitly need the HTTP operator endpoints
 - require `PATCHRELAY_OPERATOR_TOKEN` if you enable the operator API on a non-loopback bind
 - treat workflow files and Codex runtime access as privileged automation policy
@@ -28,7 +28,7 @@ PatchRelay is designed for infrastructure you control. Recommended production po
 
 PatchRelay separates trust into three layers:
 
-- Network trust: the public server surface should only accept signed Linear webhooks.
+- Network trust: the public server surface should only accept signed Linear and GitHub webhooks plus the Linear OAuth callback.
 - Operator trust: local setup and inspection routes are for the operator, not the public internet.
 - Linear actor trust: a valid webhook is still ignored if its actor is not trusted for the routed project.
 
