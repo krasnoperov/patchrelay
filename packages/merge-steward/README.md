@@ -34,7 +34,7 @@ The skill wraps `merge-steward pr status --wait` and `review-quill pr status --w
 Prerequisites: Node.js 24+, `gh` CLI in `PATH`, `git`.
 
 ```bash
-npm install -g merge-steward
+pnpm add -g merge-steward
 merge-steward init https://queue.example.com
 merge-steward attach owner/repo --base-branch main
 merge-steward doctor --repo repo

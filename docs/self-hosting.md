@@ -56,15 +56,15 @@ The callback path is fixed and must remain `/oauth/linear/callback`.
 ## 1. Install PatchRelay
 
 ```bash
-npm install -g patchrelay
+pnpm add -g patchrelay
 ```
 
 If you are installing from a local source checkout instead of the package registry:
 
 ```bash
-pnpm install
+pnpm install --frozen-lockfile
 pnpm pack
-npm install -g ./patchrelay-*.tgz
+pnpm add -g ./patchrelay-*.tgz
 ```
 
 ## 2. Create Runtime Files

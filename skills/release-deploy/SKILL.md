@@ -1,13 +1,13 @@
 ---
 name: release-deploy
-description: "Run the PatchRelay stack’s branch-to-main release workflow: commit on a feature branch, get PR CI green, merge to main without squash, wait for main CI, install newly published npm package versions, restart services, and verify runtime health. Use when the user wants one commandable workflow for shipping PatchRelay, merge-steward, and review-quill changes."
+description: "Run the PatchRelay stack’s branch-to-main release workflow: commit on a feature branch, get PR CI green, merge to main without squash, wait for main CI, install newly published package versions with pnpm, restart services, and verify runtime health. Use when the user wants one commandable workflow for shipping PatchRelay, merge-steward, and review-quill changes."
 ---
 
 # PatchRelay Release Deploy
 
 ## Overview
 
-Use this skill when the user wants to ship this repo safely end to end instead of handling git, CI, npm installs, and service restarts as separate ad hoc steps.
+Use this skill when the user wants to ship this repo safely end to end instead of handling git, CI, package installs, and service restarts as separate ad hoc steps.
 
 Canonical invocation:
 
@@ -65,25 +65,25 @@ gh run watch <run-id>
 
 ### 4. Install Published Package Versions
 
-After `main` is green, install the newly published npm package versions on the machine that runs the services.
+After `main` is green, install the newly published package versions on the machine that runs the services.
 
 Typical packages in this repo:
 
 ```bash
-npm install -g patchrelay@latest
-npm install -g merge-steward@latest
-npm install -g review-quill@latest
+pnpm add -g patchrelay@latest
+pnpm add -g merge-steward@latest
+pnpm add -g review-quill@latest
 ```
 
-Before installing, verify npm has the expected version(s) from the merged `main` commit:
+Before installing, verify the registry has the expected version(s) from the merged `main` commit:
 
 ```bash
-npm view patchrelay version
-npm view merge-steward version
-npm view review-quill version
+pnpm view patchrelay version
+pnpm view merge-steward version
+pnpm view review-quill version
 ```
 
-If the user wants a selective rollout, install only the package(s) affected by the merged change. If npm publication has not happened yet, or the registry still reports the pre-merge version, stop and say so instead of deploying stale versions.
+If the user wants a selective rollout, install only the package(s) affected by the merged change. If publication has not happened yet, or the registry still reports the pre-merge version, stop and say so instead of deploying stale versions.
 
 ### 5. Restart Services
 
@@ -121,7 +121,7 @@ review-quill service logs --lines 100
 - If the user asks to “ship”, “release”, “deploy”, or “roll out” this repo, use this workflow.
 - If the user wants local-only testing or branch-only work, do not force the deploy steps.
 - If `main` CI is red, do not install or restart services.
-- If the merged commit has not been published to npm yet, do not install `@latest` and pretend the deploy is complete.
+- If the merged commit has not been published yet, do not install `@latest` and pretend the deploy is complete.
 - If only one package changed, prefer a minimal install/restart set, but keep verification explicit.
 
 ## Definition Of Done
@@ -129,7 +129,7 @@ review-quill service logs --lines 100
 - Branch commits are pushed and PR CI is green.
 - The PR is merged with `--merge`, not squash.
 - `main` CI is green after merge.
-- The intended npm package versions are confirmed on npm before installation.
-- The intended npm package versions are installed on the target machine when a package release occurred.
+- The intended package versions are confirmed in the registry before installation.
+- The intended package versions are installed on the target machine when a package release occurred.
 - Services have been restarted when a package release occurred.
 - Service status and version checks confirm the rollout, or the workflow clearly reports that no deployable package changed.

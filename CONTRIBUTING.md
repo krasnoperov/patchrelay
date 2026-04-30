@@ -23,8 +23,7 @@ PatchRelay is currently focused on a self-hosted execution harness for Linear-dr
 ## Release policy
 
 - PatchRelay is intentionally pre-1.0 for now. Do not hand-edit versions for feature work.
-- Releases are generated automatically from `main` with Release Please.
-- Release Please opens a release PR that updates `package.json`, `pnpm-lock.yaml`, and `CHANGELOG.md`.
-- Merging that release PR creates the GitHub release and publishes the matching npm package automatically through npm trusted publishing.
-- While PatchRelay is below `1.0.0`, `feat:` changes bump the minor version and `fix:` changes bump the patch version.
-- Breaking changes also bump the minor version until the project is explicitly declared stable enough for `1.0.0`.
+- The Release workflow runs from `main`, computes package-specific changes since the last `ci: release` marker, bumps touched package versions, commits the marker, publishes with `pnpm publish`, and pushes release tags.
+- Conventional commit subjects on non-merge branch commits control version bumps. `feat:` bumps minor, `fix:` and other conventional subjects bump patch, and breaking changes bump minor while packages remain below `1.0.0`.
+- Documentation-only commits do not publish packages unless they touch package-owned files.
+- Use `pnpm view <package> version` to verify registry publication before deploying updated services.

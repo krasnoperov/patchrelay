@@ -8,9 +8,9 @@ This repository ships **three independent services**. Install one, two, or all t
 
 | Service | Package | Role |
 |-|-|-|
-| [`patchrelay`](./) | `npm install -g patchrelay` | Linear-driven harness that runs Codex sessions inside your real repos. Fully autonomous on webhooks: implementation, review fix, CI repair, queue repair. |
-| [`review-quill`](./packages/review-quill) | `npm install -g review-quill` | GitHub PR review bot. Reviews every merge-ready head from a real local checkout and posts a normal `APPROVE` / `REQUEST_CHANGES` review. |
-| [`merge-steward`](./packages/merge-steward) | `npm install -g merge-steward` | Serial merge queue. Speculatively integrates approved PRs on top of the latest `main`, runs CI on the integrated SHA, and fast-forwards `main` only when that tested result is green. |
+| [`patchrelay`](./) | `pnpm add -g patchrelay` | Linear-driven harness that runs Codex sessions inside your real repos. Fully autonomous on webhooks: implementation, review fix, CI repair, queue repair. |
+| [`review-quill`](./packages/review-quill) | `pnpm add -g review-quill` | GitHub PR review bot. Reviews every merge-ready head from a real local checkout and posts a normal `APPROVE` / `REQUEST_CHANGES` review. |
+| [`merge-steward`](./packages/merge-steward) | `pnpm add -g merge-steward` | Serial merge queue. Speculatively integrates approved PRs on top of the latest `main`, runs CI on the integrated SHA, and fast-forwards `main` only when that tested result is green. |
 
 Common setups:
 
@@ -22,7 +22,7 @@ Common setups:
 
 - **PRs ship tested against the latest `main`.** The queue re-validates on the integrated SHA at admission time, and retries if `main` moves during validation. No more "green yesterday, broken today."
 - **Many PR failures have mechanical fixes an agent can handle.** Requested changes like a rename, a missing null check, a new test, refreshing against `main`, resolving a conflict surfaced by speculation, or rerunning a flaky job. Both services publish structured failure reasons (inline review comments, failing check names, queue incidents) an agent can act on directly.
-- **No prerequisites beyond GitHub.** A GitHub App, a webhook, and `npm install -g` per service.
+- **No prerequisites beyond GitHub.** A GitHub App, a webhook, and `pnpm add -g` per service.
 
 ## Use with your own agent
 
@@ -45,7 +45,7 @@ Prerequisites:
 - a public HTTPS entrypoint (Caddy, nginx, tunnel) so Linear and GitHub can reach your webhooks
 
 ```bash
-npm install -g patchrelay
+pnpm add -g patchrelay
 patchrelay init https://patchrelay.example.com
 ```
 
