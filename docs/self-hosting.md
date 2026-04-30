@@ -37,6 +37,7 @@ The common production shape is:
 - Linear workspace access
 - one Linear OAuth app for this PatchRelay deployment
 - one Linear webhook secret
+- one GitHub App and webhook secret if PatchRelay should observe PR, review, check, and push events for reactive repair loops
 
 ## Public Ingress
 
@@ -108,13 +109,23 @@ LINEAR_OAUTH_CLIENT_ID=replace-with-linear-oauth-client-id
 LINEAR_OAUTH_CLIENT_SECRET=replace-with-linear-oauth-client-secret
 ```
 
+For GitHub webhook intake and bot identity, also configure:
+
+```bash
+GITHUB_APP_WEBHOOK_SECRET=replace-with-github-app-webhook-secret
+PATCHRELAY_GITHUB_APP_ID=replace-with-github-app-id
+PATCHRELAY_GITHUB_APP_PRIVATE_KEY_FILE=/path/to/github-app-private-key.pem
+# Optional; omit to let PatchRelay discover the installation.
+PATCHRELAY_GITHUB_APP_INSTALLATION_ID=replace-with-installation-id
+```
+
 **Production:** encrypt secrets with `systemd-creds` and load them via `LoadCredentialEncrypted=` in the system service unit. This removes all plaintext secrets from disk and makes them invisible to user-level processes. See [secrets.md](./secrets.md) for step-by-step setup and rotation.
 
 Optional non-secret overrides such as `PATCHRELAY_CONFIG`, `PATCHRELAY_DB_PATH`, and `PATCHRELAY_LOG_FILE` belong in `~/.config/patchrelay/runtime.env`. In personal-mode, prefer user-owned paths over `/opt` or `/var` paths.
 
 Keep these values machine-level. They belong in PatchRelay's own config files, not inside repository `.env` files.
 
-Configure the Linear OAuth app settings and webhook categories in your Linear workspace settings.
+Configure the Linear OAuth app settings and webhook categories in your Linear workspace settings. Configure the GitHub App webhook to send PR, review, check suite, check run, and push events to `${server.public_base_url}/webhooks/github`.
 
 ## 4. Configure Projects
 
