@@ -160,7 +160,7 @@ export function mergeIssueMetadata(
     parentTitle?: string;
     identifier?: string; title?: string; url?: string;
     attachments?: Array<{ id: string; title?: string; subtitle?: string; url: string }>;
-    teamId?: string; teamKey?: string; stateId?: string; stateName?: string; stateType?: string;
+    teamId?: string; teamKey?: string; projectId?: string; projectName?: string; stateId?: string; stateName?: string; stateType?: string;
     delegateId?: string; delegateName?: string;
     blockedBy?: Array<{ id: string; identifier?: string; title?: string; stateName?: string; stateType?: string }>;
     blocks?: Array<{ id: string; identifier?: string; title?: string; stateName?: string; stateType?: string }>;
@@ -178,6 +178,8 @@ export function mergeIssueMetadata(
     ...(issue.attachments && issue.attachments.length > 0 ? {} : liveIssue.attachments ? { attachments: liveIssue.attachments } : {}),
     ...(issue.teamId ? {} : liveIssue.teamId ? { teamId: liveIssue.teamId } : {}),
     ...(issue.teamKey ? {} : liveIssue.teamKey ? { teamKey: liveIssue.teamKey } : {}),
+    ...(issue.projectId ? {} : liveIssue.projectId ? { projectId: liveIssue.projectId } : {}),
+    ...(issue.projectName ? {} : liveIssue.projectName ? { projectName: liveIssue.projectName } : {}),
     ...(issue.stateId ? {} : liveIssue.stateId ? { stateId: liveIssue.stateId } : {}),
     ...(issue.stateName ? {} : liveIssue.stateName ? { stateName: liveIssue.stateName } : {}),
     ...(issue.stateType ? {} : liveIssue.stateType ? { stateType: liveIssue.stateType } : {}),

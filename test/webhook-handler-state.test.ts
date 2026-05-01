@@ -313,6 +313,123 @@ test("delegated blocked issue is tracked but does not queue implementation until
   }
 });
 
+test("delegated blocked agent session is acknowledged without queueing implementation", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-blocked-session-ack-"));
+  try {
+    const config = createConfig(baseDir);
+    config.projects[0] = {
+      ...config.projects[0]!,
+      triggerEvents: ["delegateChanged", "statusChanged", "agentSessionCreated", "agentPrompted", "commentCreated", "commentUpdated"],
+    };
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+
+    const activities: Array<{ agentSessionId: string; content: { type: string; body?: string } }> = [];
+    const sessionUpdates: Array<{ agentSessionId: string; planLength: number }> = [];
+    const linearClient: Partial<LinearClient> = {
+      getIssue: async () => ({
+        id: "issue-maf-blocked-session",
+        identifier: "MAF-97",
+        title: "Blocked delegated session",
+        teamId: "team-maf",
+        teamKey: "MAF",
+        delegateId: "patchrelay-actor",
+        stateId: "state-backlog",
+        stateName: "Backlog",
+        stateType: "backlog",
+        workflowStates: [],
+        labelIds: [],
+        labels: [],
+        teamLabels: [],
+        blockedBy: [{
+          id: "issue-blocker-1",
+          identifier: "MAF-10",
+          title: "Blocking task",
+          stateName: "In Progress",
+          stateType: "started",
+        }],
+        blocks: [],
+      }),
+      createAgentActivity: async ({ agentSessionId, content }) => {
+        activities.push({ agentSessionId, content: content as { type: string; body?: string } });
+        return { id: `activity-${activities.length}` };
+      },
+      updateAgentSession: async ({ agentSessionId, plan }) => {
+        sessionUpdates.push({ agentSessionId, planLength: plan?.length ?? 0 });
+        return { id: agentSessionId };
+      },
+    };
+
+    const enqueued: Array<{ projectId: string; issueId: string }> = [];
+    const handler = new WebhookHandler(
+      config,
+      db,
+      { forProject: async () => linearClient as LinearClient } as never,
+      { steerTurn: async () => undefined } as never,
+      (projectId, issueId) => {
+        enqueued.push({ projectId, issueId });
+      },
+      pino({ enabled: false }),
+    );
+
+    const payload: LinearWebhookPayload = {
+      action: "created",
+      type: "AgentSessionEvent",
+      createdAt: "2026-04-01T03:00:00.000Z",
+      webhookTimestamp: Date.now(),
+      agentSession: {
+        id: "session-blocked-97",
+        issueId: "issue-maf-blocked-session",
+        comment: {
+          id: "comment-blocked-97",
+          body: "This thread is for an agent session with patchrelay.",
+          issueId: "issue-maf-blocked-session",
+        },
+        issue: {
+          id: "issue-maf-blocked-session",
+          identifier: "MAF-97",
+          title: "Blocked delegated session",
+          team: { id: "team-maf", key: "MAF" },
+          state: { id: "state-backlog", name: "Backlog", type: "backlog" },
+          delegateId: "patchrelay-actor",
+          delegate: { id: "patchrelay-actor", name: "PatchRelay" },
+        },
+      },
+      promptContext: "<issue identifier=\"MAF-97\"><title>Blocked delegated session</title></issue>",
+    };
+    const stored = db.webhookEvents.insertFullWebhookEvent({
+      webhookId: "delivery-agent-session-blocked-ack",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(payload),
+    });
+
+    await handler.processWebhookEvent(stored.id);
+
+    const issue = db.getIssue("krasnoperov/mafia", "issue-maf-blocked-session");
+    assert.equal(issue?.factoryState, "delegated");
+    assert.equal(issue?.pendingRunType, undefined);
+    assert.equal(issue?.agentSessionId, "session-blocked-97");
+    assert.equal(db.countUnresolvedBlockers("krasnoperov/mafia", "issue-maf-blocked-session"), 1);
+    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-blocked-session"), undefined);
+    assert.deepEqual(enqueued, []);
+    assert.deepEqual(sessionUpdates, [{ agentSessionId: "session-blocked-97", planLength: 4 }]);
+    assert.equal(activities.length, 1);
+    assert.equal(activities[0]?.agentSessionId, "session-blocked-97");
+    assert.equal(activities[0]?.content.type, "response");
+    assert.match(activities[0]?.content.body ?? "", /accepted this delegation/i);
+    assert.match(activities[0]?.content.body ?? "", /MAF-10/);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("external blocker completion releases delegated dependents without tracking the blocker", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-external-blocker-"));
   try {

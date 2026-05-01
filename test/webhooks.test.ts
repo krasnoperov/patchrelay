@@ -22,6 +22,10 @@ test("normalizeWebhook extracts issue metadata from a Linear issue webhook", () 
         id: "team_1",
         key: "USE",
       },
+      project: {
+        id: "project_patchrelay",
+        name: "PatchRelay",
+      },
       labels: [{ name: "backend" }],
       state: {
         name: "Start",
@@ -38,6 +42,8 @@ test("normalizeWebhook extracts issue metadata from a Linear issue webhook", () 
   assert.equal(normalized.issue.identifier, "USE-123");
   assert.equal(normalized.issue.title, "Track app-server threads");
   assert.equal(normalized.issue.teamKey, "USE");
+  assert.equal(normalized.issue.projectId, "project_patchrelay");
+  assert.equal(normalized.issue.projectName, "PatchRelay");
   assert.equal(normalized.issue.stateName, "Start");
   assert.deepEqual(normalized.issue.labelNames, ["backend"]);
   assert.equal(normalized.triggerEvent, "statusChanged");
@@ -437,6 +443,101 @@ test("resolveProject matches by issue key prefix and team", () => {
   const project = resolveProject(config, normalized.issue);
   assert.equal(project?.id, "usertold");
   assert.equal(triggerEventAllowed(project!, normalized.triggerEvent), true);
+});
+
+test("resolveProject prefers Linear project routing for shared Linear teams", () => {
+  const config = {
+    projects: [
+      {
+        id: "krasnoperov/usertold",
+        repoPath: "/repos/usertold",
+        worktreeRoot: "/worktrees/usertold",
+        issueKeyPrefixes: ["USE"],
+        linearTeamIds: ["team_use"],
+        linearProjectIds: ["project_app"],
+        allowLabels: [],
+        triggerEvents: ["statusChanged"],
+        branchPrefix: "usertold",
+      },
+      {
+        id: "krasnoperov/patchrelay",
+        repoPath: "/repos/patchrelay",
+        worktreeRoot: "/worktrees/patchrelay",
+        issueKeyPrefixes: ["USE"],
+        linearTeamIds: ["team_use"],
+        linearProjectIds: ["project_patchrelay"],
+        allowLabels: [],
+        triggerEvents: ["statusChanged"],
+        branchPrefix: "patchrelay",
+      },
+    ],
+  } as AppConfig;
+
+  const normalized = normalizeWebhook({
+    webhookId: "delivery_project_route",
+    payload: {
+      action: "update",
+      type: "Issue",
+      createdAt: "2026-05-01T12:00:00.000Z",
+      webhookTimestamp: Date.now(),
+      data: {
+        id: "issue_patchrelay",
+        identifier: "USE-172",
+        title: "Route shared teams",
+        team: {
+          id: "team_use",
+          key: "USE",
+        },
+        project: {
+          id: "project_patchrelay",
+          name: "PatchRelay",
+        },
+      },
+    },
+  });
+
+  assert.equal(resolveProject(config, normalized.issue)?.id, "krasnoperov/patchrelay");
+});
+
+test("resolveProject keeps shared-team fallbacks ambiguous without Linear project metadata", () => {
+  const config = {
+    projects: [
+      {
+        id: "krasnoperov/usertold",
+        repoPath: "/repos/usertold",
+        worktreeRoot: "/worktrees/usertold",
+        issueKeyPrefixes: ["USE"],
+        linearTeamIds: ["team_use"],
+        linearProjectIds: ["project_app"],
+        allowLabels: [],
+        triggerEvents: ["statusChanged"],
+        branchPrefix: "usertold",
+      },
+      {
+        id: "krasnoperov/patchrelay",
+        repoPath: "/repos/patchrelay",
+        worktreeRoot: "/worktrees/patchrelay",
+        issueKeyPrefixes: ["USE"],
+        linearTeamIds: ["team_use"],
+        linearProjectIds: ["project_patchrelay"],
+        allowLabels: [],
+        triggerEvents: ["statusChanged"],
+        branchPrefix: "patchrelay",
+      },
+    ],
+  } as AppConfig;
+
+  assert.equal(
+    resolveProject(config, {
+      id: "issue_without_project",
+      identifier: "USE-172",
+      teamId: "team_use",
+      labelNames: [],
+      blockedBy: [],
+      blocks: [],
+    }),
+    undefined,
+  );
 });
 
 test("trustedActorAllowed matches ids, emails, names, and trusted email domains", () => {

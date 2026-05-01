@@ -3,7 +3,7 @@ import { isIP } from "node:net";
 import { homedir } from "node:os";
 import path from "node:path";
 import { z } from "zod";
-import type { AppConfig } from "./types.ts";
+import type { AppConfig, ProjectConfig } from "./types.ts";
 import {
   getDefaultConfigPath,
   getDefaultDatabasePath,
@@ -65,6 +65,7 @@ const projectSchema = z.object({
   trusted_actors: trustedActorsSchema,
   issue_key_prefixes: z.array(z.string().min(1)).default([]),
   linear_team_ids: z.array(z.string().min(1)).default([]),
+  linear_project_ids: z.array(z.string().min(1)).default([]),
   allow_labels: z.array(z.string().min(1)).default([]),
   trigger_events: z.array(z.string().min(1)).min(1).optional(),
   branch_prefix: z.string().min(1).optional(),
@@ -555,6 +556,7 @@ export function loadConfig(
       worktreeRoot: ensureAbsolutePath(defaultWorktreeRoot(repository.githubRepo)),
       issueKeyPrefixes: repository.issueKeyPrefixes,
       linearTeamIds: repository.linearTeamIds,
+      linearProjectIds: repository.linearProjectIds,
       allowLabels: [],
       reviewChecks: repository.reviewChecks,
       gateChecks: repository.gateChecks,
@@ -596,6 +598,7 @@ export function loadConfig(
             : {}),
           issueKeyPrefixes: project.issue_key_prefixes,
           linearTeamIds: project.linear_team_ids,
+          linearProjectIds: project.linear_project_ids,
           allowLabels: project.allow_labels,
           reviewChecks: project.review_checks,
           gateChecks: project.gate_checks,
@@ -768,8 +771,9 @@ function validateConfigSemantics(
 
   const projectIds = new Set<string>();
   const githubRepos = new Set<string>();
-  const issuePrefixes = new Map<string, string>();
-  const linearTeamIds = new Map<string, string>();
+  const issuePrefixes = new Map<string, ProjectConfig>();
+  const linearTeamIds = new Map<string, ProjectConfig>();
+  const linearProjectIds = new Map<string, string>();
 
   for (const repository of config.repositories) {
     if (githubRepos.has(repository.githubRepo)) {
@@ -784,20 +788,28 @@ function validateConfigSemantics(
     }
     projectIds.add(project.id);
 
+    for (const linearProjectId of project.linearProjectIds) {
+      const owner = linearProjectIds.get(linearProjectId);
+      if (owner && owner !== project.id) {
+        throw new Error(`Linear project id "${linearProjectId}" is configured for both ${owner} and ${project.id}`);
+      }
+      linearProjectIds.set(linearProjectId, project.id);
+    }
+
     for (const prefix of project.issueKeyPrefixes) {
       const owner = issuePrefixes.get(prefix);
-      if (owner && owner !== project.id) {
-        throw new Error(`Issue key prefix "${prefix}" is configured for both ${owner} and ${project.id}`);
+      if (owner && owner.id !== project.id && !hasDisjointProjectRouting(owner, project)) {
+        throw new Error(`Issue key prefix "${prefix}" is configured for both ${owner.id} and ${project.id}`);
       }
-      issuePrefixes.set(prefix, project.id);
+      issuePrefixes.set(prefix, project);
     }
 
     for (const teamId of project.linearTeamIds) {
       const owner = linearTeamIds.get(teamId);
-      if (owner && owner !== project.id) {
-        throw new Error(`Linear team id "${teamId}" is configured for both ${owner} and ${project.id}`);
+      if (owner && owner.id !== project.id && !hasDisjointProjectRouting(owner, project)) {
+        throw new Error(`Linear team id "${teamId}" is configured for both ${owner.id} and ${project.id}`);
       }
-      linearTeamIds.set(teamId, project.id);
+      linearTeamIds.set(teamId, project);
     }
 
   }
@@ -810,4 +822,12 @@ function validateConfigSemantics(
   ) {
     throw new Error("operator_api.enabled requires operator_api.bearer_token_env when server.bind is not 127.0.0.1");
   }
+}
+
+function hasDisjointProjectRouting(left: ProjectConfig, right: ProjectConfig): boolean {
+  if (left.linearProjectIds.length === 0 || right.linearProjectIds.length === 0) {
+    return false;
+  }
+  const rightProjectIds = new Set(right.linearProjectIds);
+  return left.linearProjectIds.every((linearProjectId) => !rightProjectIds.has(linearProjectId));
 }

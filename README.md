@@ -61,6 +61,8 @@ patchrelay service status
 patchrelay dashboard
 ```
 
+When one Linear team owns issues for multiple repositories, include `--project <Linear project>` on each `repo link`. PatchRelay routes Linear webhooks by project first, so separate projects inside the same `USE` team can map to separate GitHub repos.
+
 Each repo needs two workflow files for repo-specific run behavior:
 
 - `IMPLEMENTATION_WORKFLOW.md` — implementation, CI repair, queue repair runs

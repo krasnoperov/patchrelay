@@ -24,6 +24,7 @@ export interface ProjectConfig {
   worktreeRoot: string;
   issueKeyPrefixes: string[];
   linearTeamIds: string[];
+  linearProjectIds: string[];
   allowLabels: string[];
   reviewChecks: string[];
   gateChecks: string[];

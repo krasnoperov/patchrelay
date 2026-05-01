@@ -8,6 +8,7 @@ import type { PatchRelayDatabase } from "../db.ts";
 import type { RunType } from "../factory-state.ts";
 import {
   buildAlreadyRunningThought,
+  buildBlockedDelegationActivity,
   buildDelegationThought,
   buildPromptDeliveredThought,
   buildStopConfirmationActivity,
@@ -73,6 +74,12 @@ export class AgentSessionHandler {
         const latestIssue = this.db.issues.getIssue(project.id, normalized.issue.id);
         await this.syncAgentSession(linear, normalized.agentSession.id, latestIssue ?? trackedIssue, params.peekPendingSessionWakeRunType, { activeRunType: activeRun.runType });
         await this.publishAgentActivity(linear, normalized.agentSession.id, buildAlreadyRunningThought(activeRun.runType));
+        return;
+      }
+      if ((trackedIssue?.blockedByCount ?? 0) > 0) {
+        const latestIssue = this.db.issues.getIssue(project.id, normalized.issue.id);
+        await this.syncAgentSession(linear, normalized.agentSession.id, latestIssue ?? trackedIssue, params.peekPendingSessionWakeRunType);
+        await this.publishAgentActivity(linear, normalized.agentSession.id, buildBlockedDelegationActivity(trackedIssue?.blockedByKeys));
         return;
       }
       if (!trackedIssue?.blockedByCount) {

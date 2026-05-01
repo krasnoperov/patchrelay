@@ -12,13 +12,32 @@ function matchesProject(issue: IssueMetadata, project: ProjectConfig): boolean {
 }
 
 export function resolveProject(config: AppConfig, issue: IssueMetadata): ProjectConfig | undefined {
-  const matches = config.projects.filter((project) => matchesProject(issue, project));
+  if (issue.projectId) {
+    const projectMatches = config.projects.filter((project) => matchesLinearProject(issue, project));
+    if (projectMatches.length === 1) {
+      return projectMatches[0];
+    }
+    if (projectMatches.length > 1) {
+      return undefined;
+    }
+  }
 
+  const matches = config.projects.filter((project) => matchesProject(issue, project));
   if (matches.length === 1) {
     return matches[0];
   }
 
   return undefined;
+}
+
+function matchesLinearProject(issue: IssueMetadata, project: ProjectConfig): boolean {
+  if (!issue.projectId || !project.linearProjectIds.includes(issue.projectId)) {
+    return false;
+  }
+  if (project.linearTeamIds.length === 0 || !issue.teamId) {
+    return true;
+  }
+  return project.linearTeamIds.includes(issue.teamId);
 }
 
 export function triggerEventAllowed(project: ProjectConfig, triggerEvent: TriggerEvent): boolean {

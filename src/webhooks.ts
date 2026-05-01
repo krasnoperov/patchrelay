@@ -245,8 +245,11 @@ function extractIssueMetadata(payload: LinearWebhookPayload): IssueMetadata | un
   const title = getString(issueRecord, "title");
   const url = getString(issueRecord, "url") ?? payload.url;
   const delegateRecord = asRecord(issueRecord.delegate);
+  const projectRecord = asRecord(issueRecord.project);
   const teamId = getString(issueRecord, "teamId") ?? getString(teamRecord ?? {}, "id");
   const teamKey = getString(teamRecord ?? {}, "key");
+  const projectId = getString(issueRecord, "projectId") ?? getString(projectRecord ?? {}, "id");
+  const projectName = getString(projectRecord ?? {}, "name");
   const stateRecord = asRecord(issueRecord.state);
   const stateId = getString(issueRecord, "stateId") ?? getString(stateRecord ?? {}, "id");
   const stateName = getString(stateRecord ?? {}, "name");
@@ -273,6 +276,8 @@ function extractIssueMetadata(payload: LinearWebhookPayload): IssueMetadata | un
     ...(url ? { url } : {}),
     ...(teamId ? { teamId } : {}),
     ...(teamKey ? { teamKey } : {}),
+    ...(projectId ? { projectId } : {}),
+    ...(projectName ? { projectName } : {}),
     ...(stateId ? { stateId } : {}),
     ...(stateName ? { stateName } : {}),
     ...(stateType ? { stateType } : {}),

@@ -33,6 +33,8 @@ export interface IssueMetadata {
   attachments?: LinearIssueAttachment[];
   teamId?: string;
   teamKey?: string;
+  projectId?: string;
+  projectName?: string;
   stateId?: string;
   stateName?: string;
   stateType?: string;
@@ -200,6 +202,8 @@ export interface LinearIssueSnapshot {
   stateType?: string;
   teamId?: string;
   teamKey?: string;
+  projectId?: string;
+  projectName?: string;
   delegateId?: string;
   delegateName?: string;
   workflowStates: Array<{
