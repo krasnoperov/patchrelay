@@ -390,6 +390,101 @@ test("LinearGraphqlClient updates agent sessions with external URLs and plan rep
   }
 });
 
+test("LinearGraphqlClient lists agent session activities", async () => {
+  const originalFetch = globalThis.fetch;
+  let requestBody = "";
+
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    requestBody = String(init?.body ?? "");
+    return new Response(
+      JSON.stringify({
+        data: {
+          agentSession: {
+            activities: {
+              edges: [
+                {
+                  node: {
+                    id: "activity-1",
+                    updatedAt: "2026-05-01T10:00:00.000Z",
+                    content: {
+                      __typename: "AgentActivityPromptContent",
+                      body: "Please continue with the implementation.",
+                    },
+                  },
+                },
+                {
+                  node: {
+                    id: "activity-2",
+                    updatedAt: "2026-05-01T10:01:00.000Z",
+                    content: {
+                      __typename: "AgentActivityResponseContent",
+                      body: "Opened PR #478.",
+                    },
+                  },
+                },
+                {
+                  node: {
+                    id: "activity-3",
+                    updatedAt: "2026-05-01T10:02:00.000Z",
+                    content: {
+                      __typename: "AgentActivityActionContent",
+                      action: "run_tests",
+                      parameter: "pnpm test",
+                      result: "passing",
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  }) as typeof fetch;
+
+  try {
+    const client = new LinearGraphqlClient(
+      {
+        accessToken: "secret-token",
+        graphqlUrl: "https://linear.example/graphql",
+      },
+      pino({ enabled: false }),
+    );
+
+    const activities = await client.listAgentSessionActivities("session-1", { first: 99 });
+
+    const request = JSON.parse(requestBody) as { query?: string; variables?: { id?: string; first?: number } };
+    assert.match(request.query ?? "", /AgentActivityPromptContent/);
+    assert.equal(request.variables?.id, "session-1");
+    assert.equal(request.variables?.first, 50);
+    assert.deepEqual(activities, [
+      {
+        id: "activity-1",
+        type: "prompt",
+        body: "Please continue with the implementation.",
+        updatedAt: "2026-05-01T10:00:00.000Z",
+      },
+      {
+        id: "activity-2",
+        type: "response",
+        body: "Opened PR #478.",
+        updatedAt: "2026-05-01T10:01:00.000Z",
+      },
+      {
+        id: "activity-3",
+        type: "action",
+        action: "run_tests",
+        parameter: "pnpm test",
+        result: "passing",
+        updatedAt: "2026-05-01T10:02:00.000Z",
+      },
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("DatabaseBackedLinearClientProvider refreshes expiring tokens and returns a working client", async () => {
   const originalFetch = globalThis.fetch;
   const config = createConfig();

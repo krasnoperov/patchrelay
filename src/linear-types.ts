@@ -256,6 +256,16 @@ export interface LinearAgentActivityResult {
   id: string;
 }
 
+export interface LinearAgentActivitySnapshot {
+  id: string;
+  type?: string;
+  body?: string;
+  action?: string;
+  parameter?: string;
+  result?: string;
+  updatedAt?: string;
+}
+
 export interface LinearAgentSessionExternalUrl {
   label: string;
   url: string;
@@ -280,6 +290,7 @@ export interface LinearClient {
     content: LinearAgentActivityContent;
     ephemeral?: boolean;
   }): Promise<LinearAgentActivityResult>;
+  listAgentSessionActivities?(agentSessionId: string, options?: { first?: number }): Promise<LinearAgentActivitySnapshot[]>;
   updateAgentSession?(params: {
     agentSessionId: string;
     externalUrls?: LinearAgentSessionExternalUrl[];

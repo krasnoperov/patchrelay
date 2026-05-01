@@ -22,6 +22,7 @@ import { MainBranchHealthMonitor } from "./main-branch-health-monitor.ts";
 import { QueueHealthMonitor } from "./queue-health-monitor.ts";
 import { IdleIssueReconciler } from "./idle-reconciliation.ts";
 import { LinearSessionSync } from "./linear-session-sync.ts";
+import { recoverLinearAgentActivityContext } from "./linear-agent-activity-recovery.ts";
 import { IssueSessionLeaseService } from "./issue-session-lease-service.ts";
 import { InterruptedRunRecovery } from "./interrupted-run-recovery.ts";
 import { RunCompletionPolicy } from "./run-completion-policy.ts";
@@ -382,12 +383,23 @@ export class RunOrchestrator {
     const baseContext = isRequestedChangesRunType(runType)
       ? await this.runCompletionPolicy.resolveRequestedChangesWakeContext(issue, runType, context)
       : context;
+    const recoveredLinearActivityContext = await recoverLinearAgentActivityContext({
+      linearProvider: this.linearProvider,
+      projectId: issue.projectId,
+      agentSessionId: issue.agentSessionId,
+      context: baseContext,
+      issueKey: issue.issueKey,
+      logger: this.logger,
+    });
+    const baseContextWithRecoveredActivity = recoveredLinearActivityContext
+      ? { ...baseContext, ...recoveredLinearActivityContext }
+      : baseContext;
     const coordinationContext = runType === "implementation"
       ? this.buildRelatedIssueContext(issue)
       : undefined;
     const effectiveContext = coordinationContext
-      ? { ...coordinationContext, ...(baseContext ?? {}) }
-      : baseContext;
+      ? { ...coordinationContext, ...baseContextWithRecoveredActivity }
+      : baseContextWithRecoveredActivity;
     const sourceHeadSha = typeof effectiveContext?.failureHeadSha === "string"
       ? effectiveContext.failureHeadSha
       : typeof effectiveContext?.headSha === "string"

@@ -236,6 +236,9 @@ function buildHumanContextLines(context?: Record<string, unknown>): string[] {
   const latestPrompt = typeof context?.promptBody === "string" ? context.promptBody.trim() : "";
   const operatorPrompt = typeof context?.operatorPrompt === "string" ? context.operatorPrompt.trim() : "";
   const userComment = typeof context?.userComment === "string" ? context.userComment.trim() : "";
+  const linearAgentActivityContext = typeof context?.linearAgentActivityContext === "string"
+    ? context.linearAgentActivityContext.trim()
+    : "";
 
   const lines: string[] = [];
   if (promptContext) {
@@ -249,6 +252,9 @@ function buildHumanContextLines(context?: Record<string, unknown>): string[] {
   }
   if (userComment) {
     lines.push("Human follow-up comment:", userComment, "");
+  }
+  if (linearAgentActivityContext) {
+    lines.push("Recovered Linear agent activity context:", linearAgentActivityContext, "");
   }
   return lines;
 }
