@@ -75,8 +75,9 @@ export class ReactiveRunPolicy {
     if (!issue.prNumber || issue.prState !== "open") {
       return undefined;
     }
-    if (!run.sourceHeadSha) {
-      return `Requested-changes run finished for PR #${issue.prNumber} without a recorded starting head SHA. PatchRelay cannot verify that a new head was published.`;
+    const blockingReviewHeadSha = resolveRequestedChangesBlockingHead(run, issue);
+    if (!blockingReviewHeadSha) {
+      return `Requested-changes run finished for PR #${issue.prNumber} without a recorded blocking review or starting head SHA. PatchRelay cannot verify that a new head was published.`;
     }
     try {
       const snapshot = await readReactivePrSnapshot(this.config, run.projectId, issue.prNumber);
@@ -84,8 +85,8 @@ export class ReactiveRunPolicy {
       if (!snapshot.headSha) {
         return `Requested-changes run finished for PR #${issue.prNumber} but GitHub did not report a current head SHA.`;
       }
-      if (snapshot.headSha === run.sourceHeadSha) {
-        return `Requested-changes run finished for PR #${issue.prNumber} without pushing a new head; PatchRelay must not hand the same SHA back to review.`;
+      if (snapshot.headSha === blockingReviewHeadSha) {
+        return `Requested-changes run finished for PR #${issue.prNumber} without pushing a new head past blocking review SHA ${blockingReviewHeadSha.slice(0, 8)}; PatchRelay must not hand the same SHA back to review.`;
       }
       return undefined;
     } catch (error) {
@@ -170,8 +171,9 @@ export class ReactiveRunPolicy {
       }
 
       const headAdvanced = Boolean(snapshot.headSha && snapshot.headSha !== issue.lastGitHubFailureHeadSha);
+      const blockingReviewHeadSha = resolveRequestedChangesBlockingHead(run, issue);
       const reviewFixHeadAdvanced = isRequestedChangesRunType(run.runType)
-        && Boolean(snapshot.headSha && run.sourceHeadSha && snapshot.headSha !== run.sourceHeadSha);
+        && Boolean(snapshot.headSha && blockingReviewHeadSha && snapshot.headSha !== blockingReviewHeadSha);
 
       this.upsertIssueIfLeaseHeld(
         run.projectId,
@@ -388,6 +390,13 @@ function resolveReactiveBaselineHead(
     return issue.lastGitHubFailureHeadSha;
   }
   return undefined;
+}
+
+function resolveRequestedChangesBlockingHead(
+  run: Pick<RunRecord, "sourceHeadSha">,
+  issue: Pick<IssueRecord, "lastBlockingReviewHeadSha">,
+): string | undefined {
+  return issue.lastBlockingReviewHeadSha ?? run.sourceHeadSha;
 }
 
 function isReactiveScopeRiskPath(filePath: string): boolean {
