@@ -1,0 +1,51 @@
+<svg width="1440" height="900" viewBox="0 0 1440 900" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="88" y1="92" x2="1310" y2="834" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#071019"/>
+      <stop offset="1" stop-color="#11283D"/>
+    </linearGradient>
+    <linearGradient id="line" x1="280" y1="220" x2="1170" y2="650" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#A9F4D1"/>
+      <stop offset="0.5" stop-color="#5EB4FF"/>
+      <stop offset="1" stop-color="#F1F7FF"/>
+    </linearGradient>
+  </defs>
+  <rect width="1440" height="900" fill="url(#bg)"/>
+  <g opacity="0.18">
+    <path d="M86 126H1356" stroke="#6483A0" stroke-width="2"/>
+    <path d="M86 246H1356" stroke="#6483A0" stroke-width="2"/>
+    <path d="M86 366H1356" stroke="#6483A0" stroke-width="2"/>
+    <path d="M86 486H1356" stroke="#6483A0" stroke-width="2"/>
+    <path d="M86 606H1356" stroke="#6483A0" stroke-width="2"/>
+    <path d="M86 726H1356" stroke="#6483A0" stroke-width="2"/>
+    <path d="M200 66V834" stroke="#6483A0" stroke-width="2"/>
+    <path d="M410 66V834" stroke="#6483A0" stroke-width="2"/>
+    <path d="M620 66V834" stroke="#6483A0" stroke-width="2"/>
+    <path d="M830 66V834" stroke="#6483A0" stroke-width="2"/>
+    <path d="M1040 66V834" stroke="#6483A0" stroke-width="2"/>
+    <path d="M1250 66V834" stroke="#6483A0" stroke-width="2"/>
+  </g>
+  <text x="110" y="146" fill="#8EA9BF" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="24">DEVELOPER-FIRST ORCHESTRATION</text>
+  <text x="110" y="280" fill="#F0F7FE" font-family="ui-sans-serif, system-ui, sans-serif" font-size="104" font-weight="700">Keep the agent</text>
+  <text x="110" y="382" fill="#F0F7FE" font-family="ui-sans-serif, system-ui, sans-serif" font-size="104" font-weight="700">inside the real repo.</text>
+  <text x="110" y="454" fill="#AFC9DB" font-family="ui-sans-serif, system-ui, sans-serif" font-size="34">PatchRelay turns delegated Linear work into durable local runs with worktree ownership, PR truth, and repair loops.</text>
+  <rect x="862" y="128" width="410" height="180" rx="32" fill="#091521" stroke="#2A4962" stroke-width="3"/>
+  <text x="902" y="180" fill="#90E8C0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="22">LINEAR ISSUE</text>
+  <text x="902" y="234" fill="#E8F4FD" font-family="ui-sans-serif, system-ui, sans-serif" font-size="42" font-weight="700">Delegated</text>
+  <text x="902" y="274" fill="#A8C2D4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="26">Webhook verified, project routed, context packaged.</text>
+  <rect x="934" y="390" width="410" height="180" rx="32" fill="#091521" stroke="#2A4962" stroke-width="3"/>
+  <text x="974" y="442" fill="#85BEFF" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="22">ISSUE WORKTREE</text>
+  <text x="974" y="496" fill="#E8F4FD" font-family="ui-sans-serif, system-ui, sans-serif" font-size="42" font-weight="700">Implementation run</text>
+  <text x="974" y="536" fill="#A8C2D4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="26">Codex thread, branch lifecycle, resumable state.</text>
+  <rect x="830" y="650" width="410" height="150" rx="32" fill="#091521" stroke="#2A4962" stroke-width="3"/>
+  <text x="870" y="698" fill="#DCEBFF" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="22">GITHUB EVENTS</text>
+  <text x="870" y="748" fill="#E8F4FD" font-family="ui-sans-serif, system-ui, sans-serif" font-size="38" font-weight="700">Review fix. CI repair. Queue repair.</text>
+  <path d="M796 218C848 218 870 218 902 218" stroke="url(#line)" stroke-width="10" stroke-linecap="round"/>
+  <path d="M1062 308V390" stroke="url(#line)" stroke-width="10" stroke-linecap="round"/>
+  <path d="M1138 570V650" stroke="url(#line)" stroke-width="10" stroke-linecap="round"/>
+  <circle cx="776" cy="218" r="18" fill="#8EEAC1"/>
+  <circle cx="1062" cy="348" r="18" fill="#6BBCFF"/>
+  <circle cx="1138" cy="610" r="18" fill="#EFF6FF"/>
+  <path d="M904 744H1184" stroke="#26475F" stroke-width="22" stroke-linecap="round"/>
+  <path d="M904 708H1088" stroke="#88C4FF" stroke-width="16" stroke-linecap="round"/>
+</svg>

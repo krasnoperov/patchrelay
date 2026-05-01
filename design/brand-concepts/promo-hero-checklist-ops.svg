@@ -1,0 +1,38 @@
+<svg width="1440" height="900" viewBox="0 0 1440 900" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="114" y1="78" x2="1324" y2="830" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F6F3EB"/>
+      <stop offset="1" stop-color="#E4DED0"/>
+    </linearGradient>
+    <linearGradient id="ink" x1="876" y1="158" x2="1246" y2="690" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#18324B"/>
+      <stop offset="1" stop-color="#2A5D53"/>
+    </linearGradient>
+  </defs>
+  <rect width="1440" height="900" fill="url(#bg)"/>
+  <rect x="840" y="108" width="460" height="642" rx="40" fill="#FBF8F0" stroke="#31465A" stroke-width="4"/>
+  <text x="894" y="172" fill="#18324B" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="24">PATCHRELAY CHECKLIST</text>
+  <path d="M902 248L934 280L988 214" stroke="#2E7A63" stroke-width="20" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="1026" y="255" fill="#213648" font-family="ui-sans-serif, system-ui, sans-serif" font-size="34" font-weight="700">Route issue to repo</text>
+  <text x="1026" y="292" fill="#4C6171" font-family="ui-sans-serif, system-ui, sans-serif" font-size="24">Match project, hydrate context, claim worktree.</text>
+  <path d="M902 376L934 408L988 342" stroke="#2E7A63" stroke-width="20" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="1026" y="383" fill="#213648" font-family="ui-sans-serif, system-ui, sans-serif" font-size="34" font-weight="700">Run codex locally</text>
+  <text x="1026" y="420" fill="#4C6171" font-family="ui-sans-serif, system-ui, sans-serif" font-size="24">Keep secrets, tools, and deploy surface in place.</text>
+  <path d="M902 504L934 536L988 470" stroke="#2E7A63" stroke-width="20" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="1026" y="511" fill="#213648" font-family="ui-sans-serif, system-ui, sans-serif" font-size="34" font-weight="700">Repair from PR truth</text>
+  <text x="1026" y="548" fill="#4C6171" font-family="ui-sans-serif, system-ui, sans-serif" font-size="24">React to review requests, red CI, and queue evictions.</text>
+  <path d="M902 632L934 664L988 598" stroke="#2E7A63" stroke-width="20" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="1026" y="639" fill="#213648" font-family="ui-sans-serif, system-ui, sans-serif" font-size="34" font-weight="700">Stay resumable</text>
+  <text x="1026" y="676" fill="#4C6171" font-family="ui-sans-serif, system-ui, sans-serif" font-size="24">Threads, runs, and operator state survive restarts.</text>
+  <text x="110" y="206" fill="#35556E" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="24">CALM OPS / DEV TOOLING / TRUSTED AUTOMATION</text>
+  <text x="110" y="328" fill="#102333" font-family="ui-sans-serif, system-ui, sans-serif" font-size="96" font-weight="700">Automation that</text>
+  <text x="110" y="424" fill="#102333" font-family="ui-sans-serif, system-ui, sans-serif" font-size="96" font-weight="700">thinks like an operator.</text>
+  <text x="110" y="502" fill="#465B69" font-family="ui-sans-serif, system-ui, sans-serif" font-size="34">A warmer direction for docs or marketing pages that still feels technical: procedural confidence, visible criteria, and real repo ownership.</text>
+  <path d="M134 610H560" stroke="#35556E" stroke-width="4"/>
+  <text x="110" y="676" fill="#18324B" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="28">LINEAR  ->  ROUTING  ->  WORKTREE  ->  PR  ->  REPAIR LOOP</text>
+  <circle cx="164" cy="762" r="18" fill="#18324B"/>
+  <circle cx="264" cy="762" r="18" fill="#2E7A63"/>
+  <circle cx="364" cy="762" r="18" fill="#507C72"/>
+  <circle cx="464" cy="762" r="18" fill="#7FA39B"/>
+  <circle cx="564" cy="762" r="18" fill="#B5CBBF"/>
+</svg>
