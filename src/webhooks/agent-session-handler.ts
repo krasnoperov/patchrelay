@@ -8,13 +8,14 @@ import type { PatchRelayDatabase } from "../db.ts";
 import type { RunType } from "../factory-state.ts";
 import {
   buildAlreadyRunningThought,
+  buildAgentSessionAcknowledgementThought,
   buildBlockedDelegationActivity,
   buildDelegationThought,
   buildPromptDeliveredThought,
   buildStopConfirmationActivity,
 } from "../linear-session-reporting.ts";
 import type { OperatorEventFeed } from "../operator-feed.ts";
-import { triggerEventAllowed } from "../project-resolution.ts";
+import { resolveProject, triggerEventAllowed } from "../project-resolution.ts";
 import type {
   AppConfig,
   LinearAgentActivityContent,
@@ -43,6 +44,39 @@ export class AgentSessionHandler {
     private readonly logger: Logger,
     private readonly feed?: OperatorEventFeed,
   ) {}
+
+  async acknowledgeCreated(normalized: NormalizedEvent): Promise<void> {
+    if (normalized.triggerEvent !== "agentSessionCreated" || !normalized.agentSession?.id || !normalized.issue) {
+      return;
+    }
+
+    const project = resolveProject(this.config, normalized.issue);
+    if (!project || !triggerEventAllowed(project, normalized.triggerEvent)) {
+      return;
+    }
+
+    const linear = await this.linearProvider.forProject(project.id);
+    if (!linear?.createAgentActivity) {
+      return;
+    }
+
+    try {
+      await linear.createAgentActivity({
+        agentSessionId: normalized.agentSession.id,
+        content: buildAgentSessionAcknowledgementThought(),
+        ephemeral: true,
+      });
+    } catch (error) {
+      this.logger.warn(
+        {
+          agentSessionId: normalized.agentSession.id,
+          issueKey: normalized.issue.identifier,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        "Failed to acknowledge Linear agent session creation",
+      );
+    }
+  }
 
   async handle(params: {
     normalized: NormalizedEvent;

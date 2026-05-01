@@ -92,6 +92,8 @@ export class WebhookHandler {
         return;
       }
 
+      await this.agentSessionHandler.acknowledgeCreated(normalized);
+
       const routed = await this.contextLoader.load(normalized);
       const project = routed?.project;
       if (!project) {
