@@ -333,35 +333,41 @@ test("delegated blocked agent session is acknowledged without queueing implement
 
     const activities: Array<{ agentSessionId: string; content: { type: string; body?: string } }> = [];
     const sessionUpdates: Array<{ agentSessionId: string; planLength: number }> = [];
+    const operations: string[] = [];
     const linearClient: Partial<LinearClient> = {
-      getIssue: async () => ({
-        id: "issue-maf-blocked-session",
-        identifier: "MAF-97",
-        title: "Blocked delegated session",
-        teamId: "team-maf",
-        teamKey: "MAF",
-        delegateId: "patchrelay-actor",
-        stateId: "state-backlog",
-        stateName: "Backlog",
-        stateType: "backlog",
-        workflowStates: [],
-        labelIds: [],
-        labels: [],
-        teamLabels: [],
-        blockedBy: [{
-          id: "issue-blocker-1",
-          identifier: "MAF-10",
-          title: "Blocking task",
-          stateName: "In Progress",
-          stateType: "started",
-        }],
-        blocks: [],
-      }),
+      getIssue: async () => {
+        operations.push("getIssue");
+        return {
+          id: "issue-maf-blocked-session",
+          identifier: "MAF-97",
+          title: "Blocked delegated session",
+          teamId: "team-maf",
+          teamKey: "MAF",
+          delegateId: "patchrelay-actor",
+          stateId: "state-backlog",
+          stateName: "Backlog",
+          stateType: "backlog",
+          workflowStates: [],
+          labelIds: [],
+          labels: [],
+          teamLabels: [],
+          blockedBy: [{
+            id: "issue-blocker-1",
+            identifier: "MAF-10",
+            title: "Blocking task",
+            stateName: "In Progress",
+            stateType: "started",
+          }],
+          blocks: [],
+        };
+      },
       createAgentActivity: async ({ agentSessionId, content }) => {
+        operations.push(`activity:${content.type}`);
         activities.push({ agentSessionId, content: content as { type: string; body?: string } });
         return { id: `activity-${activities.length}` };
       },
       updateAgentSession: async ({ agentSessionId, plan }) => {
+        operations.push("updateAgentSession");
         sessionUpdates.push({ agentSessionId, planLength: plan?.length ?? 0 });
         return { id: agentSessionId };
       },
@@ -420,11 +426,108 @@ test("delegated blocked agent session is acknowledged without queueing implement
     assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-blocked-session"), undefined);
     assert.deepEqual(enqueued, []);
     assert.deepEqual(sessionUpdates, [{ agentSessionId: "session-blocked-97", planLength: 4 }]);
-    assert.equal(activities.length, 1);
+    assert.equal(operations[0], "activity:thought");
+    assert.ok(operations.indexOf("activity:thought") < operations.indexOf("getIssue"));
+    assert.equal(activities.length, 2);
     assert.equal(activities[0]?.agentSessionId, "session-blocked-97");
-    assert.equal(activities[0]?.content.type, "response");
-    assert.match(activities[0]?.content.body ?? "", /accepted this delegation/i);
-    assert.match(activities[0]?.content.body ?? "", /MAF-10/);
+    assert.equal(activities[0]?.content.type, "thought");
+    assert.match(activities[0]?.content.body ?? "", /received this agent session/i);
+    assert.equal(activities[1]?.agentSessionId, "session-blocked-97");
+    assert.equal(activities[1]?.content.type, "response");
+    assert.match(activities[1]?.content.body ?? "", /accepted this delegation/i);
+    assert.match(activities[1]?.content.body ?? "", /MAF-10/);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("agent session acknowledgement failures do not block later session sync", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-agent-session-ack-failure-"));
+  try {
+    const config = createConfig(baseDir);
+    config.projects[0] = {
+      ...config.projects[0]!,
+      triggerEvents: ["delegateChanged", "statusChanged", "agentSessionCreated", "agentPrompted", "commentCreated", "commentUpdated"],
+    };
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+
+    let activityAttempts = 0;
+    const sessionUpdates: Array<{ agentSessionId: string; planLength: number }> = [];
+    const linearClient: Partial<LinearClient> = {
+      getIssue: async () => ({
+        id: "issue-maf-ack-failure",
+        identifier: "MAF-98",
+        title: "Ack failure session",
+        teamId: "team-maf",
+        teamKey: "MAF",
+        delegateId: undefined,
+        stateId: "state-backlog",
+        stateName: "Backlog",
+        stateType: "backlog",
+        workflowStates: [],
+        labelIds: [],
+        labels: [],
+        teamLabels: [],
+        blockedBy: [],
+        blocks: [],
+      }),
+      createAgentActivity: async () => {
+        activityAttempts += 1;
+        throw new Error("Linear activity API unavailable");
+      },
+      updateAgentSession: async ({ agentSessionId, plan }) => {
+        sessionUpdates.push({ agentSessionId, planLength: plan?.length ?? 0 });
+        return { id: agentSessionId };
+      },
+    };
+
+    const handler = new WebhookHandler(
+      config,
+      db,
+      { forProject: async () => linearClient as LinearClient } as never,
+      { steerTurn: async () => undefined } as never,
+      () => undefined,
+      pino({ enabled: false }),
+    );
+
+    const payload: LinearWebhookPayload = {
+      action: "created",
+      type: "AgentSessionEvent",
+      createdAt: "2026-04-01T03:00:00.000Z",
+      webhookTimestamp: Date.now(),
+      data: {
+        promptContext: "<issue identifier=\"MAF-98\"><title>Ack failure session</title></issue>",
+        agentSession: {
+          id: "session-ack-failure",
+          issue: {
+            id: "issue-maf-ack-failure",
+            identifier: "MAF-98",
+            title: "Ack failure session",
+            team: { id: "team-maf", key: "MAF" },
+            state: { id: "state-backlog", name: "Backlog", type: "backlog" },
+          },
+        },
+      },
+    };
+    const stored = db.webhookEvents.insertFullWebhookEvent({
+      webhookId: "delivery-agent-session-ack-failure",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(payload),
+    });
+
+    await handler.processWebhookEvent(stored.id);
+
+    assert.equal(activityAttempts, 1);
+    assert.deepEqual(sessionUpdates, [{ agentSessionId: "session-ack-failure", planLength: 4 }]);
+    assert.equal(db.getIssue("krasnoperov/mafia", "issue-maf-ack-failure")?.agentSessionId, "session-ack-failure");
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }

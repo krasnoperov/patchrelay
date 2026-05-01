@@ -53,6 +53,13 @@ export function buildAlreadyRunningThought(runType: RunType): LinearAgentActivit
   };
 }
 
+export function buildAgentSessionAcknowledgementThought(): LinearAgentActivityContent {
+  return {
+    type: "thought",
+    body: "PatchRelay received this agent session and is checking the issue state.",
+  };
+}
+
 export function buildBlockedDelegationActivity(blockedByKeys: string[] = []): LinearAgentActivityContent {
   const blockers = blockedByKeys.filter((key) => key.trim().length > 0);
   const blockerText = blockers.length > 0
