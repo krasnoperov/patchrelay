@@ -197,6 +197,183 @@ test("verifyReactiveRunAdvancedBranch keeps failing ci_repair when head did not 
   }
 });
 
+test("verifyReviewFixAdvancedHead blocks returning the blocking review head to review", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-review-blocking-head-"));
+  const oldPath = process.env.PATH;
+  try {
+    const fakeBin = stubGh(baseDir, { prViewJson: JSON.stringify({
+      headRefOid: "sha-blocked",
+      state: "OPEN",
+      reviewDecision: "CHANGES_REQUESTED",
+      mergeable: "MERGEABLE",
+      mergeStateStatus: "CLEAN",
+    }) });
+    process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
+
+    const { db, policy } = setupPolicy(baseDir);
+    const issue = db.upsertIssue({
+      ...baseIssue(),
+      prReviewState: "changes_requested",
+      lastBlockingReviewHeadSha: "sha-blocked",
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "review_fix",
+    });
+
+    const result = await policy.verifyReviewFixAdvancedHead(run, issue);
+    assert.match(result ?? "", /without pushing a new head/);
+    assert.match(result ?? "", /sha-bloc/);
+    assert.match(result ?? "", /same SHA back to review/);
+  } finally {
+    process.env.PATH = oldPath;
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("verifyReviewFixAdvancedHead accepts a head advanced beyond the blocking review SHA", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-review-blocking-advanced-"));
+  const oldPath = process.env.PATH;
+  try {
+    const fakeBin = stubGh(baseDir, { prViewJson: JSON.stringify({
+      headRefOid: "sha-next",
+      state: "OPEN",
+      reviewDecision: "CHANGES_REQUESTED",
+      mergeable: "MERGEABLE",
+      mergeStateStatus: "CLEAN",
+    }) });
+    process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
+
+    const { db, policy } = setupPolicy(baseDir);
+    const issue = db.upsertIssue({
+      ...baseIssue(),
+      prReviewState: "changes_requested",
+      lastBlockingReviewHeadSha: "sha-blocked",
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "review_fix",
+      sourceHeadSha: "sha-next",
+    });
+
+    const result = await policy.verifyReviewFixAdvancedHead(run, issue);
+    assert.equal(result, undefined);
+  } finally {
+    process.env.PATH = oldPath;
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("verifyReviewFixAdvancedHead falls back to the run source head for older issue rows", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-review-source-fallback-"));
+  const oldPath = process.env.PATH;
+  try {
+    const fakeBin = stubGh(baseDir, { prViewJson: JSON.stringify({
+      headRefOid: "sha-source",
+      state: "OPEN",
+      reviewDecision: "CHANGES_REQUESTED",
+      mergeable: "MERGEABLE",
+      mergeStateStatus: "CLEAN",
+    }) });
+    process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
+
+    const { db, policy } = setupPolicy(baseDir);
+    const issue = db.upsertIssue({
+      ...baseIssue(),
+      prReviewState: "changes_requested",
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "review_fix",
+      sourceHeadSha: "sha-source",
+    });
+
+    const result = await policy.verifyReviewFixAdvancedHead(run, issue);
+    assert.match(result ?? "", /without pushing a new head/);
+    assert.match(result ?? "", /same SHA back to review/);
+  } finally {
+    process.env.PATH = oldPath;
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("verifyReviewFixAdvancedHead fails closed when no blocking or starting head is recorded", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-review-no-head-"));
+  try {
+    const { db, policy } = setupPolicy(baseDir);
+    const issue = db.upsertIssue({
+      ...baseIssue(),
+      prReviewState: "changes_requested",
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "review_fix",
+    });
+
+    const result = await policy.verifyReviewFixAdvancedHead(run, issue);
+    assert.match(result ?? "", /without a recorded blocking review or starting head SHA/);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("refreshIssueAfterReactivePublish treats a head beyond the blocking review SHA as advanced", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-review-refresh-blocking-"));
+  const oldPath = process.env.PATH;
+  try {
+    const fakeBin = stubGh(baseDir, { prViewJson: JSON.stringify({
+      headRefOid: "sha-next",
+      state: "OPEN",
+      reviewDecision: "CHANGES_REQUESTED",
+      mergeable: "MERGEABLE",
+      mergeStateStatus: "CLEAN",
+    }) });
+    process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
+
+    const { db, policy } = setupPolicy(baseDir);
+    const issue = db.upsertIssue({
+      ...baseIssue(),
+      prHeadSha: "sha-next",
+      prReviewState: "changes_requested",
+      lastBlockingReviewHeadSha: "sha-blocked",
+      lastGitHubFailureHeadSha: "sha-next",
+      lastGitHubFailureSignature: "queue_eviction::sha-next::merge-steward/queue",
+    });
+    assert.equal(db.issueSessions.forceAcquireIssueSessionLease({
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      leaseId: "lease-1",
+      workerId: "worker-1",
+      leasedUntil: new Date(Date.now() + 60_000).toISOString(),
+    }), true);
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: issue.projectId,
+      linearIssueId: issue.linearIssueId,
+      runType: "review_fix",
+      sourceHeadSha: "sha-next",
+    });
+
+    await policy.refreshIssueAfterReactivePublish(run, issue);
+
+    const updated = db.getIssue(issue.projectId, issue.linearIssueId);
+    assert.equal(updated?.prCheckStatus, "pending");
+    assert.equal(updated?.lastGitHubFailureHeadSha, undefined);
+    assert.equal(updated?.lastGitHubFailureSignature, undefined);
+  } finally {
+    process.env.PATH = oldPath;
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("verifyReactiveRunStayedInScope blocks reactive review fixes that touch repo-meta files", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-reactive-scope-drift-"));
   const oldPath = process.env.PATH;
