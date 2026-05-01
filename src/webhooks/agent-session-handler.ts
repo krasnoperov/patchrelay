@@ -6,16 +6,21 @@ import { buildAgentSessionExternalUrls } from "../agent-session-presentation.ts"
 import type { CodexAppServerClient } from "../codex-app-server.ts";
 import type { PatchRelayDatabase } from "../db.ts";
 import type { RunType } from "../factory-state.ts";
+import { classifyFollowupIntent, followupIntentIsNonActionable } from "../followup-intent.ts";
+import { extractLatestAssistantSummary } from "../issue-session-events.ts";
 import {
   buildAlreadyRunningThought,
   buildAgentSessionAcknowledgementThought,
   buildBlockedDelegationActivity,
   buildDelegationThought,
+  buildFollowupStatusActivity,
+  buildNonActionableFollowupActivity,
   buildPromptDeliveredThought,
   buildStopConfirmationActivity,
 } from "../linear-session-reporting.ts";
 import type { OperatorEventFeed } from "../operator-feed.ts";
 import { resolveProject, triggerEventAllowed } from "../project-resolution.ts";
+import { deriveIssueStatusNote } from "../status-note.ts";
 import type {
   AppConfig,
   LinearAgentActivityContent,
@@ -161,6 +166,41 @@ export class AgentSessionHandler {
     }
 
     const promptBody = normalized.agentSession.promptBody?.trim();
+    const directReply = promptBody && existingIssue ? params.isDirectReplyToOutstandingQuestion(existingIssue) : false;
+    const promptIntent = promptBody ? classifyFollowupIntent(promptBody) : undefined;
+
+    if (promptBody && existingIssue && promptIntent === "stop") {
+      await this.handleStopSignal({
+        normalized,
+        project,
+        trackedIssue,
+        activeRun,
+        linear,
+        syncAgentSession: (agentSessionId, issue, options) =>
+          this.syncAgentSession(linear, agentSessionId, issue, params.peekPendingSessionWakeRunType, options),
+      });
+      return;
+    }
+
+    if (promptBody && existingIssue && promptIntent === "status" && !directReply) {
+      await this.publishAgentActivity(
+        linear,
+        normalized.agentSession.id,
+        this.buildStatusActivity(existingIssue, activeRun, params.peekPendingSessionWakeRunType),
+      );
+      await this.syncAgentSession(linear, normalized.agentSession.id, existingIssue ?? trackedIssue, params.peekPendingSessionWakeRunType, activeRun ? { activeRunType: activeRun.runType } : undefined);
+      return;
+    }
+
+    if (promptBody && promptIntent && followupIntentIsNonActionable(promptIntent) && !directReply) {
+      await this.publishAgentActivity(
+        linear,
+        normalized.agentSession.id,
+        buildNonActionableFollowupActivity(promptIntent),
+      );
+      return;
+    }
+
     if (!automationEnabled && promptBody && existingIssue) {
       await this.publishAgentActivity(linear, normalized.agentSession.id, {
         type: "thought",
@@ -200,7 +240,14 @@ export class AgentSessionHandler {
 
     if (promptBody && existingIssue && automationEnabled) {
       const hadPendingWake = this.db.issueSessions.peekIssueSessionWake(project.id, normalized.issue.id) !== undefined;
-      const directReply = params.isDirectReplyToOutstandingQuestion(existingIssue);
+      if (!directReply && promptIntent && followupIntentIsNonActionable(promptIntent)) {
+        await this.publishAgentActivity(
+          linear,
+          normalized.agentSession.id,
+          buildNonActionableFollowupActivity(promptIntent),
+        );
+        return;
+      }
       this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
         projectId: project.id,
         linearIssueId: normalized.issue.id,
@@ -230,6 +277,29 @@ export class AgentSessionHandler {
       await this.syncAgentSession(linear, normalized.agentSession.id, latestIssue ?? trackedIssue, params.peekPendingSessionWakeRunType, { pendingRunType: wakeRunType });
       await this.publishAgentActivity(linear, normalized.agentSession.id, buildDelegationThought(wakeRunType, "prompt"), { ephemeral: true });
     }
+  }
+
+  private buildStatusActivity(
+    issue: NonNullable<ReturnType<PatchRelayDatabase["getIssue"]>>,
+    activeRun: ReturnType<PatchRelayDatabase["runs"]["getRunById"]>,
+    peekPendingSessionWakeRunType: (projectId: string, issueId: string) => RunType | undefined,
+  ): LinearAgentActivityContent {
+    const latestRun = activeRun ?? this.db.runs.getLatestRunForIssue(issue.projectId, issue.linearIssueId);
+    const latestEvent = this.db.issueSessions.listIssueSessionEvents(issue.projectId, issue.linearIssueId).at(-1);
+    const statusNote = deriveIssueStatusNote({
+      issue,
+      latestRun,
+      latestEvent,
+      sessionSummary: extractLatestAssistantSummary(latestRun),
+      waitingReason: undefined,
+    });
+    const pendingRunType = peekPendingSessionWakeRunType(issue.projectId, issue.linearIssueId);
+    return buildFollowupStatusActivity({
+      issue,
+      ...(statusNote ? { statusNote } : {}),
+      ...(activeRun?.runType ? { activeRunType: activeRun.runType } : {}),
+      ...(pendingRunType ? { pendingRunType } : {}),
+    });
   }
 
   private async handleStopSignal(params: {

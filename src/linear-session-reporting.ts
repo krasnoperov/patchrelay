@@ -1,6 +1,7 @@
 import type { IssueRecord } from "./db-types.ts";
 import type { CompletionCheckResult } from "./completion-check-types.ts";
 import type { FactoryState, RunType } from "./factory-state.ts";
+import type { FollowupIntent } from "./followup-intent.ts";
 import type { NormalizedGitHubEvent } from "./github-types.ts";
 import type { LinearAgentActivityContent } from "./linear-types.ts";
 import { formatRunTypeLabel } from "./agent-session-plan.ts";
@@ -78,6 +79,31 @@ export function buildPromptDeliveredThought(runType: RunType): LinearAgentActivi
   };
 }
 
+export function buildFollowupStatusActivity(params: {
+  issue: Pick<IssueRecord, "issueKey" | "factoryState" | "prNumber">;
+  statusNote?: string | undefined;
+  activeRunType?: RunType | undefined;
+  pendingRunType?: RunType | undefined;
+}): LinearAgentActivityContent {
+  const subject = params.issue.issueKey ? `${params.issue.issueKey}` : "this issue";
+  const runNote = params.activeRunType
+    ? ` Active workflow: ${lowerRunTypeLabel(params.activeRunType)}.`
+    : params.pendingRunType ? ` Queued workflow: ${lowerRunTypeLabel(params.pendingRunType)}.` : "";
+  const prNote = params.issue.prNumber ? ` PR #${params.issue.prNumber}.` : "";
+  const statusNote = params.statusNote ? ` ${params.statusNote}` : "";
+  return {
+    type: "response",
+    body: `PatchRelay status: ${subject} is ${formatFactoryState(params.issue.factoryState)}.${prNote}${runNote}${statusNote}`.trim(),
+  };
+}
+
+export function buildNonActionableFollowupActivity(intent: Exclude<FollowupIntent, "implementation_request" | "retry" | "stop">): LinearAgentActivityContent {
+  const body = intent === "status"
+    ? "PatchRelay status is available in the current agent session."
+    : "PatchRelay did not start implementation because this looks like a question or clarification. Ask PatchRelay to continue, retry, or implement when you want work to run.";
+  return { type: "response", body };
+}
+
 export function buildRunStartedActivity(runType: RunType): LinearAgentActivityContent {
   switch (runType) {
     case "review_fix":
@@ -92,6 +118,10 @@ export function buildRunStartedActivity(runType: RunType): LinearAgentActivityCo
     default:
       return { type: "action", action: "Implementing", parameter: "requested change" };
   }
+}
+
+function formatFactoryState(state: FactoryState): string {
+  return state.replaceAll("_", " ");
 }
 
 export function buildRunCompletedActivity(params: {
