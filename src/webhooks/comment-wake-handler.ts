@@ -1,6 +1,7 @@
 import type { Logger } from "pino";
 import type { CodexAppServerClient } from "../codex-app-server.ts";
 import type { PatchRelayDatabase } from "../db.ts";
+import { classifyFollowupIntent, followupIntentIsNonActionable, followupIntentQueuesWork } from "../followup-intent.ts";
 import type { RunType } from "../factory-state.ts";
 import type { OperatorEventFeed } from "../operator-feed.ts";
 import { triggerEventAllowed } from "../project-resolution.ts";
@@ -77,9 +78,11 @@ export class CommentWakeHandler {
       return;
     }
 
+    const directReply = params.isDirectReplyToOutstandingQuestion(issue);
+    const intent = classifyFollowupIntent(trimmedBody);
+
     if (!issue.activeRunId) {
       if (ENQUEUEABLE_STATES.has(issue.factoryState)) {
-        const directReply = params.isDirectReplyToOutstandingQuestion(issue);
         const wakeIntent = issueClass === "orchestration" || directReply || hasExplicitPatchRelayWakeIntent(trimmedBody);
         if (!wakeIntent) {
           this.feed?.publish({
@@ -89,6 +92,42 @@ export class CommentWakeHandler {
             issueKey: trackedIssue?.issueKey,
             status: "ignored",
             summary: "Ignored comment with no explicit PatchRelay wake intent",
+            detail: trimmedBody.slice(0, 200),
+          });
+          return;
+        }
+        if (intent === "stop") {
+          this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
+            projectId: project.id,
+            linearIssueId: normalized.issue.id,
+            eventType: "stop_requested",
+            eventJson: JSON.stringify({
+              body: trimmedBody,
+              author: normalized.comment.userName,
+            }),
+          });
+          this.db.issueSessions.clearPendingIssueSessionEventsRespectingActiveLease(project.id, normalized.issue.id);
+          this.feed?.publish({
+            level: "info",
+            kind: "comment",
+            projectId: project.id,
+            issueKey: trackedIssue?.issueKey,
+            status: "stopped",
+            summary: "Stop request recorded from Linear comment",
+            detail: trimmedBody.slice(0, 200),
+          });
+          return;
+        }
+        if (!directReply && !followupIntentQueuesWork(intent)) {
+          this.feed?.publish({
+            level: "info",
+            kind: "comment",
+            projectId: project.id,
+            issueKey: trackedIssue?.issueKey,
+            status: intent === "status" ? "status_requested" : "ignored",
+            summary: intent === "status"
+              ? "Ignored status comment without queueing work"
+              : "Ignored non-actionable follow-up comment",
             detail: trimmedBody.slice(0, 200),
           });
           return;
@@ -122,6 +161,61 @@ export class CommentWakeHandler {
 
     const run = this.db.runs.getRunById(issue.activeRunId);
     if (!run?.threadId || !run.turnId) return;
+
+    if (intent === "stop") {
+      try {
+        await this.codex.steerTurn({
+          threadId: run.threadId,
+          turnId: run.turnId,
+          input: "STOP: The user has requested you stop working immediately. Do not make further changes. Wrap up and exit.",
+        });
+      } catch (error) {
+        this.logger.warn({ issueKey: trackedIssue?.issueKey, error: error instanceof Error ? error.message : String(error) }, "Failed to steer Codex turn for comment stop request");
+      }
+      this.db.runs.finishRun(run.id, { status: "released", threadId: run.threadId, turnId: run.turnId });
+      this.db.issueSessions.upsertIssueRespectingActiveLease(project.id, normalized.issue.id, {
+        projectId: project.id,
+        linearIssueId: normalized.issue.id,
+        activeRunId: null,
+        factoryState: "awaiting_input",
+      });
+      this.db.issueSessions.appendIssueSessionEventRespectingActiveLease(project.id, normalized.issue.id, {
+        projectId: project.id,
+        linearIssueId: normalized.issue.id,
+        eventType: "stop_requested",
+        eventJson: JSON.stringify({
+          body: trimmedBody,
+          author: normalized.comment.userName,
+        }),
+      });
+      this.db.issueSessions.clearPendingIssueSessionEventsRespectingActiveLease(project.id, normalized.issue.id);
+      this.feed?.publish({
+        level: "info",
+        kind: "comment",
+        projectId: project.id,
+        issueKey: trackedIssue?.issueKey,
+        stage: run.runType,
+        status: "stopped",
+        summary: "Stop request delivered to active workflow",
+      });
+      return;
+    }
+
+    if (!directReply && followupIntentIsNonActionable(intent)) {
+      this.feed?.publish({
+        level: "info",
+        kind: "comment",
+        projectId: project.id,
+        issueKey: trackedIssue?.issueKey,
+        stage: run.runType,
+        status: intent === "status" ? "status_requested" : "ignored",
+        summary: intent === "status"
+          ? "Ignored status comment without steering active workflow"
+          : "Ignored non-actionable follow-up comment",
+        detail: trimmedBody.slice(0, 200),
+      });
+      return;
+    }
 
     const body = [
       "New Linear comment received while you are working.",

@@ -45,6 +45,8 @@ export function isPatchRelayGeneratedActivityComment(body: string): boolean {
     || body.startsWith("PatchRelay is already working on ")
     || body.startsWith("PatchRelay received the ")
     || body.startsWith("PatchRelay routed your latest instructions into ")
+    || body.startsWith("PatchRelay status:")
+    || body.startsWith("PatchRelay did not start implementation ")
     || body.startsWith("PatchRelay has stopped work as requested.")
     || body.startsWith("Merge preparation failed ")
     || body === "This thread is for an agent session with patchrelay.";

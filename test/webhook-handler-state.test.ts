@@ -2763,6 +2763,85 @@ test("idle comments without explicit PatchRelay intent are ignored", async () =>
   }
 });
 
+test("idle delegated comments with PatchRelay status intent do not queue implementation", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-comment-status-intent-"));
+  try {
+    const config = createConfig(baseDir);
+    config.projects[0] = {
+      ...config.projects[0]!,
+      triggerEvents: [...config.projects[0]!.triggerEvents, "commentCreated", "commentUpdated"],
+    };
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+    db.upsertIssue({
+      projectId: "krasnoperov/mafia",
+      linearIssueId: "issue-maf-comment-status",
+      issueKey: "MAF-91G",
+      title: "Comment status issue",
+      currentLinearState: "Review",
+      currentLinearStateType: "started",
+      factoryState: "pr_open",
+      prNumber: 93,
+    });
+
+    const enqueued: Array<{ projectId: string; issueId: string }> = [];
+    const handler = new WebhookHandler(
+      config,
+      db,
+      { forProject: async () => undefined } as never,
+      { steerTurn: async () => undefined } as never,
+      (projectId, issueId) => { enqueued.push({ projectId, issueId }); },
+      pino({ enabled: false }),
+    );
+
+    const payload: LinearWebhookPayload = {
+      action: "create",
+      type: "Comment",
+      createdAt: "2026-04-01T02:02:00.000Z",
+      webhookTimestamp: Date.now(),
+      actor: {
+        id: "user-5",
+        name: "Riley Operator",
+        email: "riley@example.com",
+        type: "User",
+      } as unknown as Record<string, unknown>,
+      data: {
+        id: "comment-status-2",
+        body: "PatchRelay, what's the status?",
+        user: { name: "Riley Operator" },
+        issue: {
+          id: "issue-maf-comment-status",
+          identifier: "MAF-91G",
+          title: "Comment status issue",
+          team: { id: "team-maf", key: "MAF" },
+          state: { id: "state-review", name: "Review", type: "started" },
+          delegate: { id: "patchrelay-actor", name: "PatchRelay" },
+        },
+      },
+    };
+
+    const stored = db.webhookEvents.insertFullWebhookEvent({
+      webhookId: "delivery-comment-status-intent",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(payload),
+    });
+    await handler.processWebhookEvent(stored.id);
+
+    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-comment-status"), undefined);
+    assert.equal(db.issueSessions.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-comment-status").length, 0);
+    assert.deepEqual(enqueued, []);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("awaiting_input comments without explicit PatchRelay intent are still classified as direct replies", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-comment-awaiting-input-ignored-"));
   try {
@@ -3482,6 +3561,202 @@ test("real agent prompt events still steer active runs", async () => {
     assert.match(codexSteers[0]?.input ?? "", /Please keep the API shape unchanged/);
     assert.deepEqual(agentActivities, [{ agentSessionId: "session-real-prompt-1", contentType: "thought" }]);
     assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-real-prompt"), undefined);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("idle delegated agent status prompts respond without queueing implementation", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-agent-status-prompt-"));
+  try {
+    const config = createConfig(baseDir);
+    config.projects[0] = {
+      ...config.projects[0]!,
+      triggerEvents: [...config.projects[0]!.triggerEvents, "agentPrompted"],
+    };
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+
+    db.upsertIssue({
+      projectId: "krasnoperov/mafia",
+      linearIssueId: "issue-maf-status-prompt",
+      issueKey: "MAF-92C",
+      title: "Status prompt issue",
+      delegatedToPatchRelay: true,
+      currentLinearState: "Review",
+      currentLinearStateType: "started",
+      factoryState: "pr_open",
+      prNumber: 92,
+      agentSessionId: "session-status-prompt-1",
+    });
+
+    const activities: Array<{ agentSessionId: string; body?: string; type?: string }> = [];
+    const enqueued: Array<{ projectId: string; issueId: string }> = [];
+    const handler = new WebhookHandler(
+      config,
+      db,
+      {
+        forProject: async () => ({
+          createAgentActivity: async ({ agentSessionId, content }) => {
+            activities.push({
+              agentSessionId,
+              type: content.type,
+              ...(typeof (content as { body?: string }).body === "string" ? { body: (content as { body: string }).body } : {}),
+            });
+          },
+          updateAgentSession: async () => undefined,
+        } as unknown as LinearClient),
+      } as never,
+      { steerTurn: async () => undefined } as never,
+      (projectId, issueId) => { enqueued.push({ projectId, issueId }); },
+      pino({ enabled: false }),
+    );
+
+    const payload: LinearWebhookPayload = {
+      action: "prompted",
+      type: "AgentSessionEvent",
+      createdAt: "2026-04-01T02:14:00.000Z",
+      webhookTimestamp: Date.now(),
+      data: {
+        agentSession: {
+          id: "session-status-prompt-1",
+          issue: {
+            id: "issue-maf-status-prompt",
+            identifier: "MAF-92C",
+            title: "Status prompt issue",
+            team: { id: "team-maf", key: "MAF" },
+            state: { id: "state-review", name: "Review", type: "started" },
+            delegate: { id: "patchrelay-actor", name: "PatchRelay" },
+          },
+        },
+        comment: {
+          id: "comment-status-prompt-1",
+          body: "what's the status?",
+        },
+      },
+    };
+
+    const stored = db.webhookEvents.insertFullWebhookEvent({
+      webhookId: "delivery-agent-status-prompt",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(payload),
+    });
+    await handler.processWebhookEvent(stored.id);
+
+    assert.deepEqual(enqueued, []);
+    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-status-prompt"), undefined);
+    assert.deepEqual(
+      db.issueSessions
+        .listIssueSessionEvents("krasnoperov/mafia", "issue-maf-status-prompt")
+        .map((event) => event.eventType)
+        .filter((eventType) => eventType === "followup_prompt" || eventType === "direct_reply"),
+      [],
+    );
+    assert.equal(activities.length, 1);
+    assert.equal(activities[0]?.agentSessionId, "session-status-prompt-1");
+    assert.equal(activities[0]?.type, "response");
+    assert.match(activities[0]?.body ?? "", /PatchRelay status: MAF-92C is pr open/);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("idle delegated agent retry prompts queue follow-up implementation", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-agent-retry-prompt-"));
+  try {
+    const config = createConfig(baseDir);
+    config.projects[0] = {
+      ...config.projects[0]!,
+      triggerEvents: [...config.projects[0]!.triggerEvents, "agentPrompted"],
+    };
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+
+    db.upsertIssue({
+      projectId: "krasnoperov/mafia",
+      linearIssueId: "issue-maf-retry-prompt",
+      issueKey: "MAF-92D",
+      title: "Retry prompt issue",
+      delegatedToPatchRelay: true,
+      currentLinearState: "Needs input",
+      currentLinearStateType: "unstarted",
+      factoryState: "awaiting_input",
+      agentSessionId: "session-retry-prompt-1",
+    });
+
+    const activities: Array<{ body?: string; type?: string }> = [];
+    const enqueued: Array<{ projectId: string; issueId: string }> = [];
+    const handler = new WebhookHandler(
+      config,
+      db,
+      {
+        forProject: async () => ({
+          createAgentActivity: async ({ content }) => {
+            activities.push({
+              type: content.type,
+              ...(typeof (content as { body?: string }).body === "string" ? { body: (content as { body: string }).body } : {}),
+            });
+          },
+          updateAgentSession: async () => undefined,
+        } as unknown as LinearClient),
+      } as never,
+      { steerTurn: async () => undefined } as never,
+      (projectId, issueId) => { enqueued.push({ projectId, issueId }); },
+      pino({ enabled: false }),
+    );
+
+    const payload: LinearWebhookPayload = {
+      action: "prompted",
+      type: "AgentSessionEvent",
+      createdAt: "2026-04-01T02:15:00.000Z",
+      webhookTimestamp: Date.now(),
+      data: {
+        agentSession: {
+          id: "session-retry-prompt-1",
+          issue: {
+            id: "issue-maf-retry-prompt",
+            identifier: "MAF-92D",
+            title: "Retry prompt issue",
+            team: { id: "team-maf", key: "MAF" },
+            state: { id: "state-input", name: "Needs input", type: "unstarted" },
+            delegate: { id: "patchrelay-actor", name: "PatchRelay" },
+          },
+        },
+        comment: {
+          id: "comment-retry-prompt-1",
+          body: "please continue",
+        },
+      },
+    };
+
+    const stored = db.webhookEvents.insertFullWebhookEvent({
+      webhookId: "delivery-agent-retry-prompt",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(payload),
+    });
+    await handler.processWebhookEvent(stored.id);
+
+    const wake = db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-retry-prompt");
+    const events = db.issueSessions.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-retry-prompt");
+    assert.equal(wake?.runType, "implementation");
+    assert.equal(wake?.wakeReason, "followup_prompt");
+    assert.deepEqual(enqueued, [{ projectId: "krasnoperov/mafia", issueId: "issue-maf-retry-prompt" }]);
+    assert.equal(events.at(-1)?.eventType, "followup_prompt");
+    assert.ok(activities.some((activity) => activity.body?.includes("PatchRelay routed your latest instructions")));
   } finally {
     rmSync(baseDir, { recursive: true, force: true });
   }
