@@ -154,12 +154,21 @@ Then link repositories by GitHub repo identity:
 patchrelay repo link krasnoperov/usertold --workspace usertold --team USE
 ```
 
+If several repositories live in the same Linear team, route them by Linear project:
+
+```bash
+patchrelay repo link krasnoperov/usertold --workspace usertold --team USE --project App
+patchrelay repo link krasnoperov/patchrelay --workspace usertold --team USE --project PatchRelay
+```
+
+PatchRelay prefers an issue's Linear project ID when routing webhooks, then falls back to the older team and issue-key-prefix match. Shared team or shared prefix routes must declare disjoint `linear_project_ids`; broad team-only routes remain exclusive because they cannot be resolved safely.
+
 A linked repository needs:
 
 - `github_repo`
 - `local_path` (managed automatically unless you override it with `--path`)
 - the Linear workspace name/key/id
-- one or more routing keys: `linear_team_ids`, and optionally `linear_project_ids`
+- one or more routing keys: `linear_team_ids`, and `linear_project_ids` when the team is shared across repositories
 
 `patchrelay repo link` is the idempotent happy-path command:
 

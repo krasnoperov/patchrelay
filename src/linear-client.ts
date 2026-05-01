@@ -64,6 +64,10 @@ interface LinearIssueRawFields {
       nodes?: Array<{ id: string; name: string }>;
     } | null;
   } | null;
+  project?: {
+    id?: string | null;
+    name?: string | null;
+  } | null;
 }
 
 interface LinearIssueRelationRawFields {
@@ -164,6 +168,10 @@ const LINEAR_ISSUE_SELECTION = `
         name
       }
     }
+  }
+  project {
+    id
+    name
   }
 `;
 
@@ -610,6 +618,8 @@ export class LinearGraphqlClient implements LinearClient {
       ...(issue.state?.type ? { stateType: issue.state.type } : {}),
       ...(issue.team?.id ? { teamId: issue.team.id } : {}),
       ...(issue.team?.key ? { teamKey: issue.team.key } : {}),
+      ...(issue.project?.id ? { projectId: issue.project.id } : {}),
+      ...(issue.project?.name ? { projectName: issue.project.name } : {}),
       ...(issue.delegate?.id ? { delegateId: issue.delegate.id } : {}),
       ...(issue.delegate?.name ? { delegateName: issue.delegate.name } : {}),
       workflowStates: (issue.team?.states?.nodes ?? []).map((state) => ({

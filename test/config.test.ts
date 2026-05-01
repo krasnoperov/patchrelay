@@ -767,7 +767,122 @@ test("loadConfig derives runtime projects from repository-first config", () => {
         assert.equal(config.projects[0]?.id, "krasnoperov/usertold");
         assert.equal(config.projects[0]?.repoPath, repoPath);
         assert.deepEqual(config.projects[0]?.linearTeamIds, ["team-use"]);
+        assert.deepEqual(config.projects[0]?.linearProjectIds, ["project-site"]);
         assert.equal(config.projects[0]?.github?.repoFullName, "krasnoperov/usertold");
+      },
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("loadConfig allows shared Linear teams when repositories declare disjoint Linear projects", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-config-shared-team-projects-"));
+  const configPath = path.join(baseDir, "config", "patchrelay.json");
+  const repoRoot = path.join(baseDir, "repos");
+
+  try {
+    mkdirSync(path.dirname(configPath), { recursive: true });
+    mkdirSync(path.join(repoRoot, "usertold"), { recursive: true });
+    mkdirSync(path.join(repoRoot, "patchrelay"), { recursive: true });
+    writeConfigFixture(configPath, {
+      server: {
+        public_base_url: "https://patchrelay.example.com",
+      },
+      repos: {
+        root: repoRoot,
+      },
+      linear: {
+        webhook_secret_env: "REQUIRED_SECRET",
+        ...oauthConfig,
+      },
+      repositories: [
+        {
+          github_repo: "krasnoperov/usertold",
+          workspace: "usertold",
+          local_path: path.join(repoRoot, "usertold"),
+          linear_team_ids: ["team-use"],
+          linear_project_ids: ["linear-project-app"],
+          issue_key_prefixes: ["USE"],
+        },
+        {
+          github_repo: "krasnoperov/patchrelay",
+          workspace: "usertold",
+          local_path: path.join(repoRoot, "patchrelay"),
+          linear_team_ids: ["team-use"],
+          linear_project_ids: ["linear-project-patchrelay"],
+          issue_key_prefixes: ["USE"],
+        },
+      ],
+    });
+
+    withEnv(
+      {
+        PATCHRELAY_CONFIG: configPath,
+        REQUIRED_SECRET: "top-secret",
+        ...oauthEnv,
+      },
+      () => {
+        const config = loadConfig();
+        assert.equal(config.projects.length, 2);
+        assert.deepEqual(config.projects.map((project) => project.linearTeamIds), [["team-use"], ["team-use"]]);
+        assert.deepEqual(config.projects.map((project) => project.linearProjectIds), [
+          ["linear-project-app"],
+          ["linear-project-patchrelay"],
+        ]);
+      },
+    );
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("loadConfig rejects shared Linear team routes without project disambiguation", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-config-shared-team-broad-"));
+  const configPath = path.join(baseDir, "config", "patchrelay.json");
+  const repoRoot = path.join(baseDir, "repos");
+
+  try {
+    mkdirSync(path.dirname(configPath), { recursive: true });
+    writeConfigFixture(configPath, {
+      server: {
+        public_base_url: "https://patchrelay.example.com",
+      },
+      repos: {
+        root: repoRoot,
+      },
+      linear: {
+        webhook_secret_env: "REQUIRED_SECRET",
+        ...oauthConfig,
+      },
+      repositories: [
+        {
+          github_repo: "krasnoperov/usertold",
+          local_path: path.join(repoRoot, "usertold"),
+          linear_team_ids: ["team-use"],
+          linear_project_ids: ["linear-project-app"],
+          issue_key_prefixes: ["USE"],
+        },
+        {
+          github_repo: "krasnoperov/patchrelay",
+          local_path: path.join(repoRoot, "patchrelay"),
+          linear_team_ids: ["team-use"],
+          issue_key_prefixes: ["USE"],
+        },
+      ],
+    });
+
+    withEnv(
+      {
+        PATCHRELAY_CONFIG: configPath,
+        REQUIRED_SECRET: "top-secret",
+        ...oauthEnv,
+      },
+      () => {
+        assert.throws(
+          () => loadConfig(),
+          /Issue key prefix "USE" is configured for both krasnoperov\/usertold and krasnoperov\/patchrelay/,
+        );
       },
     );
   } finally {
