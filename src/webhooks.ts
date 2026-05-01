@@ -78,7 +78,8 @@ function deriveTriggerEvent(payload: LinearWebhookPayload): TriggerEvent {
       ["payload", "agentActivity"],
       ["resource", "agentActivity"],
     ]);
-    if (agentActivityForSignal && getString(agentActivityForSignal, "signal")) {
+    const agentActivityContent = asRecord(agentActivityForSignal?.content);
+    if (agentActivityForSignal && (getString(agentActivityForSignal, "signal") || getString(agentActivityContent ?? {}, "signal"))) {
       return "agentSignal";
     }
 
@@ -393,6 +394,8 @@ function extractAgentSessionMetadata(payload: LinearWebhookPayload): AgentSessio
     ["payload", "agentActivity"],
     ["resource", "agentActivity"],
   ]);
+  const agentActivityRecord = agentActivity ?? {};
+  const agentActivityContent = asRecord(agentActivityRecord.content) ?? {};
   const commentRecord =
     getFirstNestedRecord(data, [
       ["comment"],
@@ -404,19 +407,25 @@ function extractAgentSessionMetadata(payload: LinearWebhookPayload): AgentSessio
     ]) ??
     getFirstNestedRecord(sessionRecord, [["comment"]]);
   const promptContext = getString(data, "promptContext") ?? getString(sessionRecord ?? {}, "promptContext");
+  const activityId = getString(agentActivityRecord, "id");
+  const activityType = getString(agentActivityRecord, "type") ?? getString(agentActivityContent, "type");
+  const activityBody = getString(agentActivityRecord, "body") ?? getString(agentActivityContent, "body");
   const promptBody =
-    getString(agentActivity ?? {}, "body") ??
+    activityBody ??
     getString(commentRecord ?? {}, "body") ??
     getString(data, "body");
   const issueCommentId = getString(commentRecord ?? {}, "id") ?? getString(data, "issueCommentId");
-  const signal = getString(agentActivity ?? {}, "signal");
-  const signalMetadata = asRecord((agentActivity ?? {} as Record<string, unknown>).signalMetadata);
+  const signal = getString(agentActivityRecord, "signal") ?? getString(agentActivityContent, "signal");
+  const signalMetadata = asRecord(agentActivityRecord.signalMetadata) ?? asRecord(agentActivityContent.signalMetadata);
 
   return {
     id,
     ...(promptContext ? { promptContext } : {}),
     ...(promptBody ? { promptBody } : {}),
     ...(issueCommentId ? { issueCommentId } : {}),
+    ...(activityId ? { activityId } : {}),
+    ...(activityType ? { activityType } : {}),
+    ...(activityBody ? { activityBody } : {}),
     ...(signal ? { signal } : {}),
     ...(signalMetadata ? { signalMetadata } : {}),
   };
