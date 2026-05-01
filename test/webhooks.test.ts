@@ -193,6 +193,58 @@ test("normalizeWebhook extracts agent session context from delegation webhooks",
   );
 });
 
+test("normalizeWebhook preserves agent activity metadata on prompted events", () => {
+  const payload: LinearWebhookPayload = {
+    action: "prompted",
+    type: "AgentSessionEvent",
+    createdAt: "2026-03-08T12:05:00.000Z",
+    webhookTimestamp: Date.now(),
+    data: {
+      agentSession: {
+        id: "session_activity",
+        issue: {
+          id: "issue_activity",
+          identifier: "USE-127",
+          title: "Handle activity echoes",
+          delegateId: "app_user_1",
+          delegate: {
+            id: "app_user_1",
+            name: "PatchRelay",
+          },
+          team: {
+            id: "team_1",
+            key: "USE",
+          },
+          state: {
+            id: "state_start",
+            name: "Start",
+            type: "started",
+          },
+        },
+      },
+      agentActivity: {
+        id: "activity_response_1",
+        content: {
+          type: "response",
+          body: "PatchRelay published a status update.",
+        },
+      },
+    },
+  };
+
+  const normalized = normalizeWebhook({
+    webhookId: "delivery_agent_activity",
+    payload,
+  });
+
+  assert.equal(normalized.triggerEvent, "agentPrompted");
+  assert.equal(normalized.agentSession?.id, "session_activity");
+  assert.equal(normalized.agentSession?.activityId, "activity_response_1");
+  assert.equal(normalized.agentSession?.activityType, "response");
+  assert.equal(normalized.agentSession?.activityBody, "PatchRelay published a status update.");
+  assert.equal(normalized.agentSession?.promptBody, "PatchRelay published a status update.");
+});
+
 test("normalizeWebhook tolerates top-level agent session webhook fields", () => {
   const payload: LinearWebhookPayload = {
     action: "created",

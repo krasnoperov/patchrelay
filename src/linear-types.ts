@@ -59,6 +59,9 @@ export interface AgentSessionMetadata {
   promptContext?: string;
   promptBody?: string;
   issueCommentId?: string;
+  activityId?: string;
+  activityType?: string;
+  activityBody?: string;
   signal?: string;
   signalMetadata?: Record<string, unknown>;
 }

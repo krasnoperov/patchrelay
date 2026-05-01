@@ -26,6 +26,14 @@ import type {
 
 type LinearClient = NonNullable<Awaited<ReturnType<LinearClientProvider["forProject"]>>>;
 
+const PATCHRELAY_AGENT_ACTIVITY_TYPES = new Set([
+  "action",
+  "elicitation",
+  "error",
+  "response",
+  "thought",
+]);
+
 export class AgentSessionHandler {
   constructor(
     private readonly config: AppConfig,
@@ -106,6 +114,17 @@ export class AgentSessionHandler {
 
     if (normalized.triggerEvent !== "agentPrompted") return;
     if (!triggerEventAllowed(project, normalized.triggerEvent)) return;
+    if (isPatchRelayAgentActivityEcho(normalized.agentSession)) {
+      this.feed?.publish({
+        level: "info",
+        kind: "agent",
+        projectId: project.id,
+        issueKey: trackedIssue?.issueKey,
+        status: "ignored_echo",
+        summary: `Ignored Linear agent activity echo (${normalized.agentSession.activityType})`,
+      });
+      return;
+    }
 
     const promptBody = normalized.agentSession.promptBody?.trim();
     if (!automationEnabled && promptBody && existingIssue) {
@@ -299,4 +318,9 @@ export class AgentSessionHandler {
       );
     }
   }
+}
+
+function isPatchRelayAgentActivityEcho(agentSession: NormalizedEvent["agentSession"]): boolean {
+  const activityType = agentSession?.activityType?.trim().toLowerCase();
+  return Boolean(activityType && PATCHRELAY_AGENT_ACTIVITY_TYPES.has(activityType));
 }

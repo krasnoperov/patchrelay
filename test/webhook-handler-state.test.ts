@@ -3167,6 +3167,223 @@ test("PatchRelay-generated escalation activity comments stay inert even when Lin
   }
 });
 
+test("PatchRelay agent activity echoes do not steer active runs or queue follow-up work", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-agent-activity-echo-"));
+  try {
+    const config = createConfig(baseDir);
+    config.projects[0] = {
+      ...config.projects[0]!,
+      triggerEvents: [...config.projects[0]!.triggerEvents, "agentPrompted"],
+    };
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+
+    const issueRecord = db.upsertIssue({
+      projectId: "krasnoperov/mafia",
+      linearIssueId: "issue-maf-echo",
+      issueKey: "MAF-92A",
+      title: "Activity echo issue",
+      delegatedToPatchRelay: true,
+      currentLinearState: "In Progress",
+      currentLinearStateType: "started",
+      factoryState: "implementing",
+      agentSessionId: "session-echo-1",
+    });
+    const run = db.runs.createRun({
+      issueId: issueRecord.id,
+      projectId: issueRecord.projectId,
+      linearIssueId: issueRecord.linearIssueId,
+      runType: "implementation",
+    });
+    db.runs.updateRunThread(run.id, { threadId: "thread-echo-1", turnId: "turn-echo-1" });
+    db.upsertIssue({
+      projectId: issueRecord.projectId,
+      linearIssueId: issueRecord.linearIssueId,
+      activeRunId: run.id,
+    });
+
+    const agentActivities: Array<{ agentSessionId: string; contentType: string }> = [];
+    const codexSteers: Array<{ threadId: string; turnId: string; input: string }> = [];
+    const enqueued: Array<{ projectId: string; issueId: string }> = [];
+    const handler = new WebhookHandler(
+      config,
+      db,
+      {
+        forProject: async () => ({
+          createAgentActivity: async ({ agentSessionId, content }) => {
+            agentActivities.push({ agentSessionId, contentType: content.type });
+          },
+        } as unknown as LinearClient),
+      } as never,
+      {
+        steerTurn: async ({ threadId, turnId, input }) => {
+          codexSteers.push({ threadId, turnId, input });
+        },
+      } as never,
+      (projectId, issueId) => { enqueued.push({ projectId, issueId }); },
+      pino({ enabled: false }),
+    );
+
+    const payload: LinearWebhookPayload = {
+      action: "prompted",
+      type: "AgentSessionEvent",
+      createdAt: "2026-04-01T02:12:00.000Z",
+      webhookTimestamp: Date.now(),
+      data: {
+        agentSession: {
+          id: "session-echo-1",
+          issue: {
+            id: "issue-maf-echo",
+            identifier: "MAF-92A",
+            title: "Activity echo issue",
+            team: { id: "team-maf", key: "MAF" },
+            state: { id: "state-start", name: "In Progress", type: "started" },
+            delegate: { id: "patchrelay-actor", name: "PatchRelay" },
+          },
+        },
+        agentActivity: {
+          id: "activity-response-echo",
+          content: {
+            type: "response",
+            body: "PatchRelay delivered this status update.",
+          },
+        },
+      },
+    };
+
+    const stored = db.webhookEvents.insertFullWebhookEvent({
+      webhookId: "delivery-agent-activity-echo",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(payload),
+    });
+    await handler.processWebhookEvent(stored.id);
+
+    assert.deepEqual(codexSteers, []);
+    assert.deepEqual(agentActivities, []);
+    assert.deepEqual(enqueued, []);
+    const events = db.issueSessions.listIssueSessionEvents("krasnoperov/mafia", "issue-maf-echo");
+    assert.deepEqual(
+      events.map((event) => event.eventType).filter((eventType) => eventType === "followup_prompt" || eventType === "direct_reply"),
+      [],
+    );
+    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-echo"), undefined);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("real agent prompt events still steer active runs", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-agent-real-prompt-"));
+  try {
+    const config = createConfig(baseDir);
+    config.projects[0] = {
+      ...config.projects[0]!,
+      triggerEvents: [...config.projects[0]!.triggerEvents, "agentPrompted"],
+    };
+    const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+    db.runMigrations();
+    const installation = db.linearInstallations.upsertLinearInstallation({
+      workspaceId: "workspace-1",
+      actorId: "patchrelay-actor",
+      accessTokenCiphertext: "ciphertext",
+      scopesJson: "[]",
+    });
+    db.linearInstallations.linkProjectInstallation("krasnoperov/mafia", installation.id);
+
+    const issueRecord = db.upsertIssue({
+      projectId: "krasnoperov/mafia",
+      linearIssueId: "issue-maf-real-prompt",
+      issueKey: "MAF-92B",
+      title: "Real prompt issue",
+      delegatedToPatchRelay: true,
+      currentLinearState: "In Progress",
+      currentLinearStateType: "started",
+      factoryState: "implementing",
+      agentSessionId: "session-real-prompt-1",
+    });
+    const run = db.runs.createRun({
+      issueId: issueRecord.id,
+      projectId: issueRecord.projectId,
+      linearIssueId: issueRecord.linearIssueId,
+      runType: "implementation",
+    });
+    db.runs.updateRunThread(run.id, { threadId: "thread-real-prompt-1", turnId: "turn-real-prompt-1" });
+    db.upsertIssue({
+      projectId: issueRecord.projectId,
+      linearIssueId: issueRecord.linearIssueId,
+      activeRunId: run.id,
+    });
+
+    const agentActivities: Array<{ agentSessionId: string; contentType: string }> = [];
+    const codexSteers: Array<{ threadId: string; turnId: string; input: string }> = [];
+    const handler = new WebhookHandler(
+      config,
+      db,
+      {
+        forProject: async () => ({
+          createAgentActivity: async ({ agentSessionId, content }) => {
+            agentActivities.push({ agentSessionId, contentType: content.type });
+          },
+        } as unknown as LinearClient),
+      } as never,
+      {
+        steerTurn: async ({ threadId, turnId, input }) => {
+          codexSteers.push({ threadId, turnId, input });
+        },
+      } as never,
+      () => undefined,
+      pino({ enabled: false }),
+    );
+
+    const payload: LinearWebhookPayload = {
+      action: "prompted",
+      type: "AgentSessionEvent",
+      createdAt: "2026-04-01T02:13:00.000Z",
+      webhookTimestamp: Date.now(),
+      data: {
+        agentSession: {
+          id: "session-real-prompt-1",
+          issue: {
+            id: "issue-maf-real-prompt",
+            identifier: "MAF-92B",
+            title: "Real prompt issue",
+            team: { id: "team-maf", key: "MAF" },
+            state: { id: "state-start", name: "In Progress", type: "started" },
+            delegate: { id: "patchrelay-actor", name: "PatchRelay" },
+          },
+        },
+        comment: {
+          id: "comment-real-prompt-1",
+          body: "Please keep the API shape unchanged.",
+        },
+      },
+    };
+
+    const stored = db.webhookEvents.insertFullWebhookEvent({
+      webhookId: "delivery-agent-real-prompt",
+      receivedAt: new Date().toISOString(),
+      payloadJson: JSON.stringify(payload),
+    });
+    await handler.processWebhookEvent(stored.id);
+
+    assert.equal(codexSteers.length, 1);
+    assert.equal(codexSteers[0]?.threadId, "thread-real-prompt-1");
+    assert.equal(codexSteers[0]?.turnId, "turn-real-prompt-1");
+    assert.match(codexSteers[0]?.input ?? "", /Please keep the API shape unchanged/);
+    assert.deepEqual(agentActivities, [{ agentSessionId: "session-real-prompt-1", contentType: "thought" }]);
+    assert.equal(db.issueSessions.peekIssueSessionWake("krasnoperov/mafia", "issue-maf-real-prompt"), undefined);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("agent signal stop requests halt the active run and emit a stop_requested session event", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-webhook-stop-signal-"));
   try {
