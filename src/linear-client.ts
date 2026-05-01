@@ -6,6 +6,7 @@ import type {
   AppConfig,
   LinearAgentActivityContent,
   LinearAgentActivityResult,
+  LinearAgentActivitySnapshot,
   LinearActorProfile,
   LinearClient,
   LinearClientProvider,
@@ -78,6 +79,18 @@ interface LinearIssueRelationRawFields {
     id?: string | null;
     name?: string | null;
     type?: string | null;
+  } | null;
+}
+
+interface LinearAgentActivityRawFields {
+  id: string;
+  updatedAt?: string | null;
+  content?: {
+    __typename?: string | null;
+    body?: string | null;
+    action?: string | null;
+    parameter?: string | null;
+    result?: string | null;
   } | null;
 }
 
@@ -407,6 +420,72 @@ export class LinearGraphqlClient implements LinearClient {
     return response.agentSessionUpdate.agentSession;
   }
 
+  async listAgentSessionActivities(
+    agentSessionId: string,
+    options?: { first?: number },
+  ): Promise<LinearAgentActivitySnapshot[]> {
+    const response = await this.request<{
+      agentSession?: {
+        activities?: {
+          edges?: Array<{
+            node?: LinearAgentActivityRawFields | null;
+          } | null>;
+          nodes?: Array<LinearAgentActivityRawFields | null> | null;
+        } | null;
+      } | null;
+    }>(
+      `
+      query PatchRelayAgentSessionActivities($id: String!, $first: Int!) {
+        agentSession(id: $id) {
+          activities(first: $first) {
+            edges {
+              node {
+                id
+                updatedAt
+                content {
+                  __typename
+                  ... on AgentActivityThoughtContent {
+                    body
+                  }
+                  ... on AgentActivityActionContent {
+                    action
+                    parameter
+                    result
+                  }
+                  ... on AgentActivityElicitationContent {
+                    body
+                  }
+                  ... on AgentActivityResponseContent {
+                    body
+                  }
+                  ... on AgentActivityErrorContent {
+                    body
+                  }
+                  ... on AgentActivityPromptContent {
+                    body
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      `,
+      {
+        id: agentSessionId,
+        first: Math.max(1, Math.min(options?.first ?? 20, 50)),
+      },
+    );
+
+    const activityEdges = response.agentSession?.activities?.edges;
+    const rawActivities = activityEdges
+      ? activityEdges.map((edge) => edge?.node)
+      : response.agentSession?.activities?.nodes ?? [];
+    return rawActivities
+      .filter((activity): activity is LinearAgentActivityRawFields => Boolean(activity))
+      .map(mapAgentActivity);
+  }
+
   async updateIssueLabels(params: { issueId: string; addNames?: string[]; removeNames?: string[] }): Promise<LinearIssueSnapshot> {
     const issue = await this.getIssue(params.issueId);
     const addIds = this.resolveLabelIds(issue, params.addNames ?? []);
@@ -669,6 +748,27 @@ function mapIssueRelation(raw: LinearIssueRelationRawFields) {
     ...(raw.state?.name ? { stateName: raw.state.name } : {}),
     ...(raw.state?.type ? { stateType: raw.state.type } : {}),
   };
+}
+
+function mapAgentActivity(raw: LinearAgentActivityRawFields): LinearAgentActivitySnapshot {
+  const content = raw.content ?? {};
+  return {
+    id: raw.id,
+    ...(content.__typename ? { type: normalizeAgentActivityType(content.__typename) } : {}),
+    ...(content.body ? { body: content.body } : {}),
+    ...(content.action ? { action: content.action } : {}),
+    ...(content.parameter ? { parameter: content.parameter } : {}),
+    ...(content.result ? { result: content.result } : {}),
+    ...(raw.updatedAt ? { updatedAt: raw.updatedAt } : {}),
+  };
+}
+
+function normalizeAgentActivityType(typename: string): string {
+  return typename
+    .replace(/^AgentActivity/, "")
+    .replace(/Content$/, "")
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .toLowerCase();
 }
 
 export class DatabaseBackedLinearClientProvider implements LinearClientProvider {

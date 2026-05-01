@@ -437,6 +437,36 @@ test("buildRunPrompt keeps direct-reply follow-ups concise inside current contex
   }
 });
 
+test("buildRunPrompt includes recovered Linear agent activity context", () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-linear-activity-prompt-"));
+  try {
+    writeFileSync(path.join(baseDir, "IMPLEMENTATION_WORKFLOW.md"), "# Implementation Workflow\n");
+
+    const prompt = buildLayeredRunPrompt({
+      issue: {
+        ...createIssue(),
+        factoryState: "delegated",
+      },
+      runType: "implementation",
+      repoPath: baseDir,
+      context: {
+        linearAgentActivityContext: [
+          "- prompt: Please use the Linear activity history.",
+          "- response: Previous run opened PR #478.",
+        ].join("\n"),
+        linearAgentActivityCount: 2,
+      },
+    });
+
+    assert.match(prompt, /## Current Context/);
+    assert.match(prompt, /Recovered Linear agent activity context:/);
+    assert.match(prompt, /prompt: Please use the Linear activity history/);
+    assert.match(prompt, /response: Previous run opened PR #478/);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("follow-up prompts describe closed PRs as replacement context instead of current PRs", () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-prompt-"));
   try {
