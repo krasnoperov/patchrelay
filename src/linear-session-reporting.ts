@@ -53,6 +53,17 @@ export function buildAlreadyRunningThought(runType: RunType): LinearAgentActivit
   };
 }
 
+export function buildBlockedDelegationActivity(blockedByKeys: string[] = []): LinearAgentActivityContent {
+  const blockers = blockedByKeys.filter((key) => key.trim().length > 0);
+  const blockerText = blockers.length > 0
+    ? ` Waiting on ${blockers.join(", ")}.`
+    : " Waiting for blocker issues to complete.";
+  return {
+    type: "response",
+    body: `PatchRelay accepted this delegation and will not start implementation until the issue is unblocked.${blockerText}`,
+  };
+}
+
 export function buildPromptDeliveredThought(runType: RunType): LinearAgentActivityContent {
   return {
     type: "thought",
