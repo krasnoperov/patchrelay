@@ -276,6 +276,101 @@ test("cli cluster reports a same-head requested-changes stall", async () => {
   }
 });
 
+test("cli cluster treats active PR repair runs as PatchRelay-owned", async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cluster-active-pr-repair-"));
+  const config = createConfig(baseDir, 19790);
+  mkdirSync(config.projects[0]!.repoPath, { recursive: true });
+  mkdirSync(config.projects[0]!.worktreeRoot, { recursive: true });
+  const db = new PatchRelayDatabase(config.database.path, config.database.wal);
+  db.runMigrations();
+  const server = await startPatchRelayHealthServer(config);
+
+  try {
+    const issue = db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-use-active-repair",
+      issueKey: "USE-ACTIVE-REPAIR",
+      title: "Active PR repair",
+      currentLinearState: "In Progress",
+      factoryState: "repairing_ci",
+      delegatedToPatchRelay: true,
+      prNumber: 41,
+      prState: "open",
+      prReviewState: "changes_requested",
+    });
+    const run = db.runs.createRun({
+      issueId: issue.id,
+      projectId: "usertold",
+      linearIssueId: "issue-use-active-repair",
+      runType: "ci_repair",
+      promptText: "repair this PR",
+    });
+    db.upsertIssue({
+      projectId: "usertold",
+      linearIssueId: "issue-use-active-repair",
+      activeRunId: run.id,
+      factoryState: "repairing_ci",
+    });
+    const staleTime = new Date(Date.now() - 300_000).toISOString();
+    db.connection.prepare("UPDATE issues SET updated_at = ?").run(staleTime);
+    db.connection.prepare("UPDATE issue_sessions SET updated_at = ?").run(staleTime);
+
+    const stdout = createBufferStream();
+    const stderr = createBufferStream();
+    const exitCode = await runCli(["cluster"], {
+      config,
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      runCommand: async (command, args) => {
+        if (command === "review-quill") {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              service: "review-quill",
+              unit: "review-quill.service",
+              systemd: { ActiveState: "active" },
+              health: { reachable: true, ok: true, status: 200 },
+            }),
+            stderr: "",
+          };
+        }
+        if (command === "gh" && args[0] === "pr" && args[1] === "view") {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              state: "OPEN",
+              reviewDecision: "CHANGES_REQUESTED",
+              reviewRequests: [],
+              latestReviews: [
+                {
+                  state: "CHANGES_REQUESTED",
+                  commit: { oid: "" },
+                },
+              ],
+              statusCheckRollup: [],
+              mergeable: "MERGEABLE",
+              mergeStateStatus: "BLOCKED",
+              headRefOid: "new-head",
+            }),
+            stderr: "",
+          };
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    });
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr.read(), "");
+    const text = stdout.read();
+    assert.match(text, /PASS \[ci\] Tracked 1 PR-backed issue and each PR has a visible next owner/);
+    assert.match(text, /CI summary: prs=1 pending=0 success=0 failure=0 unknown=1 missing_owner=0/);
+    assert.match(text, /CI USE-ACTIVE-REPAIR PR #41 {2}gate=unknown {2}next=patchrelay {2}PatchRelay owns the next requested-changes move/);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("cli cluster ignores reviewer requests when the same head is still blocked", async () => {
   const baseDir = mkdtempSync(path.join(tmpdir(), "patchrelay-cluster-review-request-same-head-"));
   const config = createConfig(baseDir, 19795);

@@ -1816,7 +1816,7 @@ exit 1
     const updatedRun = db.runs.getRunById(run.id);
     assert.equal(updatedIssue?.factoryState, "changes_requested");
     assert.equal(updatedIssue?.activeRunId, undefined);
-    assert.equal(updatedIssue?.reviewFixAttempts, 1);
+    assert.equal(updatedIssue?.reviewFixAttempts, 0);
     assert.equal(updatedIssue?.pendingRunType, "review_fix");
     assert.equal(updatedRun?.status, "failed");
     assert.equal(updatedRun?.failureReason, "Requested-changes run was interrupted before PatchRelay could verify that a new PR head was published");
@@ -1906,7 +1906,7 @@ exit 1
       : undefined;
     assert.equal(updatedIssue?.factoryState, "changes_requested");
     assert.equal(updatedIssue?.activeRunId, undefined);
-    assert.equal(updatedIssue?.reviewFixAttempts, 2);
+    assert.equal(updatedIssue?.reviewFixAttempts, 1);
     assert.equal(updatedIssue?.pendingRunType, "branch_upkeep");
     assert.equal(updatedRun?.status, "failed");
     assert.equal(pendingContext?.branchUpkeepRequired, true);

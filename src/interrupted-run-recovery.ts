@@ -84,6 +84,12 @@ export class InterruptedRunRecovery {
           linearIssueId: issue.linearIssueId,
           queueRepairAttempts: issue.queueRepairAttempts - 1,
         });
+      } else if (isRequestedChangesRunType(run.runType) && issue.reviewFixAttempts > 0) {
+        this.db.issueSessions.upsertIssueWithLease(lease, {
+          projectId: issue.projectId,
+          linearIssueId: issue.linearIssueId,
+          reviewFixAttempts: issue.reviewFixAttempts - 1,
+        });
       }
       if (run.runType === "ci_repair" || run.runType === "queue_repair") {
         this.db.issueSessions.upsertIssueWithLease(lease, {
