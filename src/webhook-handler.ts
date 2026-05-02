@@ -42,7 +42,7 @@ export class WebhookHandler {
     private readonly logger: Logger,
     private readonly feed?: OperatorEventFeed,
   ) {
-    this.installationHandler = new InstallationWebhookHandler(config, { linearInstallations: db.linearInstallations }, logger);
+    this.installationHandler = new InstallationWebhookHandler(config, { linearInstallations: db.linearInstallations }, logger, feed);
     this.issueRemovalHandler = new IssueRemovalHandler(db, feed);
     this.commentWakeHandler = new CommentWakeHandler(db, codex, logger, feed);
     this.agentSessionHandler = new AgentSessionHandler(config, db, linearProvider, codex, logger, feed);

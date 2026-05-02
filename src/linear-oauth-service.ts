@@ -146,9 +146,20 @@ export class LinearOAuthService {
           ...(identity.workspaceKey ? { workspaceKey: identity.workspaceKey } : {}),
         });
       }
+      if (installation.healthStatus === "auth_error") {
+        this.stores.linearInstallations.updateLinearInstallationHealth(installation.id, {
+          healthStatus: "ok",
+          healthReason: null,
+        });
+      }
     } catch (error) {
+      const healthReason = `Linear viewer lookup failed: ${error instanceof Error ? error.message : String(error)}`;
+      this.stores.linearInstallations.updateLinearInstallationHealth(installation.id, {
+        healthStatus: "auth_error",
+        healthReason,
+      });
       this.logger.debug(
-        { installationId: installation.id, error: error instanceof Error ? error.message : String(error) },
+        { installationId: installation.id, error: healthReason },
         "Failed to refresh installation identity (non-blocking)",
       );
     }
@@ -162,6 +173,9 @@ export class LinearOAuthService {
       ...(installation.actorName ? { actorName: installation.actorName } : {}),
       ...(installation.actorId ? { actorId: installation.actorId } : {}),
       ...(installation.expiresAt ? { expiresAt: installation.expiresAt } : {}),
+      healthStatus: installation.healthStatus ?? "ok",
+      ...(installation.healthReason ? { healthReason: installation.healthReason } : {}),
+      ...(installation.healthUpdatedAt ? { healthUpdatedAt: installation.healthUpdatedAt } : {}),
     };
   }
 }

@@ -148,7 +148,20 @@ export class PatchRelayService {
         if (client) {
           anyLinearConnected = true;
         } else {
-          this.logger.warn({ projectId: project.id }, "No Linear installation linked — run 'patchrelay linear connect' and then 'patchrelay repo link' to authorize");
+          const installation = this.db.linearInstallations.getLinearInstallationForProject(project.id);
+          if (installation?.healthStatus && installation.healthStatus !== "ok") {
+            this.logger.warn(
+              {
+                projectId: project.id,
+                installationId: installation.id,
+                healthStatus: installation.healthStatus,
+                healthReason: installation.healthReason,
+              },
+              "Linear installation is unhealthy — run 'patchrelay linear connect' to re-authorize before processing this project",
+            );
+          } else {
+            this.logger.warn({ projectId: project.id }, "No Linear installation linked — run 'patchrelay linear connect' and then 'patchrelay repo link' to authorize");
+          }
         }
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
