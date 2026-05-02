@@ -56,6 +56,13 @@ export async function syncGitHubLinearSession(params: {
     const externalUrls = buildAgentSessionExternalUrls(config, {
       ...(issue.issueKey ? { issueKey: issue.issueKey } : {}),
       ...(issue.prUrl ? { prUrl: issue.prUrl } : {}),
+      ...(issue.activeRunId !== undefined ? { activeRunId: issue.activeRunId } : {}),
+      ...(issue.prReviewState ? { prReviewState: issue.prReviewState } : {}),
+      ...(issue.prCheckStatus ? { prCheckStatus: issue.prCheckStatus } : {}),
+      ...(issue.lastGitHubFailureSource ? { lastGitHubFailureSource: issue.lastGitHubFailureSource } : {}),
+      ...(issue.lastGitHubFailureCheckName ? { lastGitHubFailureCheckName: issue.lastGitHubFailureCheckName } : {}),
+      ...(issue.lastGitHubFailureCheckUrl ? { lastGitHubFailureCheckUrl: issue.lastGitHubFailureCheckUrl } : {}),
+      ...(issue.lastQueueIncidentJson ? { lastQueueIncidentJson: issue.lastQueueIncidentJson } : {}),
     });
     await linear.updateAgentSession({
       agentSessionId: issue.agentSessionId,

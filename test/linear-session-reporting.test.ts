@@ -58,7 +58,7 @@ function createConfig(): AppConfig {
   };
 }
 
-test("agent session plans reflect queued, review, and repair states", () => {
+test("agent session plans reflect implementation, review, checks, queue, and merge states", () => {
   assert.deepEqual(
     buildAgentSessionPlan({
       factoryState: "delegated",
@@ -67,7 +67,48 @@ test("agent session plans reflect queued, review, and repair states", () => {
     [
       { content: "Prepare workspace", status: "inProgress" },
       { content: "Implementing", status: "pending" },
-      { content: "Awaiting verification", status: "pending" },
+      { content: "Fresh head pushed", status: "pending" },
+      { content: "Merge", status: "pending" },
+    ],
+  );
+
+  assert.deepEqual(
+    buildAgentSessionPlan({
+      factoryState: "changes_requested",
+      activeRunType: "review_fix",
+    }),
+    [
+      { content: "Prepare workspace", status: "completed" },
+      { content: "Addressing requested changes", status: "inProgress" },
+      { content: "Fresh head pushed", status: "pending" },
+      { content: "Merge", status: "pending" },
+    ],
+  );
+
+  assert.deepEqual(
+    buildAgentSessionPlan({
+      factoryState: "pr_open",
+      prReviewState: "review_required",
+      prCheckStatus: "success",
+    }),
+    [
+      { content: "Prepare workspace", status: "completed" },
+      { content: "Implementing", status: "completed" },
+      { content: "Awaiting review", status: "inProgress" },
+      { content: "Merge", status: "pending" },
+    ],
+  );
+
+  assert.deepEqual(
+    buildAgentSessionPlan({
+      factoryState: "pr_open",
+      prReviewState: "approved",
+      prCheckStatus: "pending",
+    }),
+    [
+      { content: "Prepare workspace", status: "completed" },
+      { content: "Implementing", status: "completed" },
+      { content: "Awaiting checks", status: "inProgress" },
       { content: "Merge", status: "pending" },
     ],
   );
@@ -94,9 +135,35 @@ test("agent session plans reflect queued, review, and repair states", () => {
     }),
     [
       { content: "Prepare workspace", status: "completed" },
+      { content: "Fresh head pushed", status: "completed" },
+      { content: "Verification passed", status: "completed" },
+      { content: "Awaiting queue", status: "inProgress" },
+    ],
+  );
+
+  assert.deepEqual(
+    buildAgentSessionPlan({
+      factoryState: "repairing_queue",
+      activeRunType: "queue_repair",
+      queueRepairAttempts: 3,
+    }),
+    [
+      { content: "Prepare workspace", status: "completed" },
       { content: "Implementing", status: "completed" },
       { content: "Verification passed", status: "completed" },
-      { content: "Awaiting merge", status: "inProgress" },
+      { content: "Repairing merge (attempt 3)", status: "inProgress" },
+    ],
+  );
+
+  assert.deepEqual(
+    buildAgentSessionPlan({
+      factoryState: "done",
+    }),
+    [
+      { content: "Prepare workspace", status: "completed" },
+      { content: "Fresh head pushed", status: "completed" },
+      { content: "Verification passed", status: "completed" },
+      { content: "Merged", status: "completed" },
     ],
   );
 
@@ -330,16 +397,35 @@ test("linear summaries describe paused undelegated no-PR states explicitly", () 
   );
 });
 
-test("session external urls include both status and pull request links", () => {
+test("session external urls include status, pull request, review, queue, and active run links", () => {
   const urls = buildAgentSessionExternalUrls(createConfig(), {
     issueKey: "USE-42",
     prUrl: "https://github.com/example/repo/pull/42",
+    activeRunId: 7,
+    prReviewState: "review_required",
+    lastGitHubFailureSource: "queue_eviction",
+    lastGitHubFailureCheckName: "merge-steward/queue",
+    lastGitHubFailureCheckUrl: "https://github.com/example/repo/actions/runs/42",
+    lastQueueIncidentJson: JSON.stringify({
+      incidentUrl: "https://queue.example.com/incidents/42",
+    }),
   });
 
-  assert.equal(urls?.length, 2);
+  assert.equal(urls?.length, 5);
+  assert.equal(urls?.[0]?.label, "PatchRelay status");
+  assert.match(urls?.[0]?.url ?? "", /agent\/session\/USE-42\?token=/);
   assert.deepEqual(urls?.[1], {
     label: "Pull request",
     url: "https://github.com/example/repo/pull/42",
   });
-  assert.match(urls?.[0]?.url ?? "", /agent\/session\/USE-42\?token=/);
+  assert.deepEqual(urls?.[2], {
+    label: "Review-quill status",
+    url: "https://github.com/example/repo/pull/42/checks",
+  });
+  assert.deepEqual(urls?.[3], {
+    label: "Merge-steward queue",
+    url: "https://queue.example.com/incidents/42",
+  });
+  assert.equal(urls?.[4]?.label, "Active run");
+  assert.match(urls?.[4]?.url ?? "", /agent\/session\/USE-42\?token=.*#current-view$/);
 });

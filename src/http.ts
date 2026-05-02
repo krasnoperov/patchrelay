@@ -703,7 +703,7 @@ function renderAgentSessionStatusPage(params: {
         <span class="chip"><strong>Latest:</strong> ${latestStage}</span>
         <span class="chip"><strong>Thread:</strong> ${threadInfo}</span>
       </div>
-      <div class="section">
+      <div id="current-view" class="section">
         <h2>Current View</h2>
         <table>
           <tbody>
@@ -725,7 +725,7 @@ function renderAgentSessionStatusPage(params: {
         <span class="chip"><strong>CI repairs:</strong> ${escapeHtml(String(ciAttempts))}</span>
         <span class="chip"><strong>Steward repairs:</strong> ${escapeHtml(String(queueAttempts))}</span>
       </div>
-      <div class="section">
+      <div id="recent-stages" class="section">
         <h2>Recent Stages</h2>
         <table>
           <thead>
