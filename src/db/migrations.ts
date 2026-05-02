@@ -143,6 +143,9 @@ CREATE TABLE IF NOT EXISTS linear_installations (
   scopes_json TEXT NOT NULL,
   token_type TEXT,
   expires_at TEXT,
+  health_status TEXT NOT NULL DEFAULT 'ok',
+  health_reason TEXT,
+  health_updated_at TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -345,6 +348,9 @@ export function runPatchRelayMigrations(connection: DatabaseConnection): void {
   addColumnIfMissing(connection, "issues", "last_attempted_failure_head_sha", "TEXT");
   addColumnIfMissing(connection, "issues", "last_attempted_failure_signature", "TEXT");
   addColumnIfMissing(connection, "issues", "last_attempted_failure_at", "TEXT");
+  addColumnIfMissing(connection, "linear_installations", "health_status", "TEXT NOT NULL DEFAULT 'ok'");
+  addColumnIfMissing(connection, "linear_installations", "health_reason", "TEXT");
+  addColumnIfMissing(connection, "linear_installations", "health_updated_at", "TEXT");
 
   removeRetiredIssueColumnsIfPresent(connection);
 }

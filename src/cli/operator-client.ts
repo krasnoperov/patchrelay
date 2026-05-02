@@ -9,6 +9,9 @@ export interface InstallationListResult {
       actorName?: string;
       actorId?: string;
       expiresAt?: string;
+      healthStatus?: string;
+      healthReason?: string;
+      healthUpdatedAt?: string;
     };
     linkedProjects: string[];
   }>;
@@ -23,6 +26,9 @@ export interface LinearWorkspaceListResult {
       actorName?: string;
       actorId?: string;
       expiresAt?: string;
+      healthStatus?: string;
+      healthReason?: string;
+      healthUpdatedAt?: string;
     };
     linkedRepos: string[];
     teams: Array<{ id: string; key?: string; name?: string }>;
@@ -47,6 +53,9 @@ export type ConnectResult =
         workspaceKey?: string;
         actorName?: string;
         actorId?: string;
+        healthStatus?: string;
+        healthReason?: string;
+        healthUpdatedAt?: string;
       };
     };
 
@@ -60,6 +69,9 @@ export interface ConnectStateResult {
     workspaceKey?: string;
     actorName?: string;
     actorId?: string;
+    healthStatus?: string;
+    healthReason?: string;
+    healthUpdatedAt?: string;
   };
   errorMessage?: string;
 }

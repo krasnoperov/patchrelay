@@ -1,4 +1,5 @@
 import type {
+  LinearInstallationHealthStatus,
   LinearInstallationRecord,
   OAuthStateRecord,
   ProjectInstallationRecord,
@@ -47,6 +48,9 @@ export class LinearInstallationStore {
               scopes_json = ?,
               token_type = COALESCE(?, token_type),
               expires_at = COALESCE(?, expires_at),
+              health_status = 'ok',
+              health_reason = NULL,
+              health_updated_at = ?,
               updated_at = ?
           WHERE id = ?
           `,
@@ -62,6 +66,7 @@ export class LinearInstallationStore {
           params.tokenType ?? null,
           params.expiresAt ?? null,
           now,
+          now,
           existing.id,
         );
       return this.getLinearInstallation(existing.id)!;
@@ -72,8 +77,9 @@ export class LinearInstallationStore {
         `
         INSERT INTO linear_installations (
           workspace_id, workspace_name, workspace_key, actor_id, actor_name,
-          access_token_ciphertext, refresh_token_ciphertext, scopes_json, token_type, expires_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          access_token_ciphertext, refresh_token_ciphertext, scopes_json, token_type, expires_at,
+          health_status, health_reason, health_updated_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ok', NULL, ?, ?, ?)
         `,
       )
       .run(
@@ -87,6 +93,7 @@ export class LinearInstallationStore {
         params.scopesJson,
         params.tokenType ?? null,
         params.expiresAt ?? null,
+        now,
         now,
         now,
       );
@@ -156,6 +163,30 @@ export class LinearInstallationStore {
          WHERE id = ?`,
       )
       .run(params.workspaceName ?? null, params.workspaceKey ?? null, isoNow(), id);
+  }
+
+  updateLinearInstallationHealth(
+    id: number,
+    params: {
+      healthStatus: LinearInstallationHealthStatus;
+      healthReason?: string | null;
+      healthUpdatedAt?: string;
+    },
+  ): LinearInstallationRecord | undefined {
+    const healthUpdatedAt = params.healthUpdatedAt ?? isoNow();
+    this.connection
+      .prepare(
+        `
+        UPDATE linear_installations
+        SET health_status = ?,
+            health_reason = ?,
+            health_updated_at = ?,
+            updated_at = ?
+        WHERE id = ?
+        `,
+      )
+      .run(params.healthStatus, params.healthReason ?? null, healthUpdatedAt, healthUpdatedAt, id);
+    return this.getLinearInstallation(id);
   }
 
   getLinearInstallation(id: number): LinearInstallationRecord | undefined {
@@ -387,6 +418,9 @@ function mapLinearInstallation(row: Record<string, unknown>): LinearInstallation
     scopesJson: String(row.scopes_json),
     ...(row.token_type === null ? {} : { tokenType: String(row.token_type) }),
     ...(row.expires_at === null ? {} : { expiresAt: String(row.expires_at) }),
+    ...(row.health_status === null || row.health_status === undefined ? {} : { healthStatus: row.health_status as LinearInstallationHealthStatus }),
+    ...(row.health_reason === null || row.health_reason === undefined ? {} : { healthReason: String(row.health_reason) }),
+    ...(row.health_updated_at === null || row.health_updated_at === undefined ? {} : { healthUpdatedAt: String(row.health_updated_at) }),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };

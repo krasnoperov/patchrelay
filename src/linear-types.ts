@@ -90,6 +90,8 @@ export interface NormalizedEvent {
   payload: LinearWebhookPayload;
 }
 
+export type LinearInstallationHealthStatus = "ok" | "permissions_changed" | "revoked" | "auth_error";
+
 export interface LinearInstallationRecord {
   id: number;
   provider: "linear";
@@ -105,6 +107,9 @@ export interface LinearInstallationRecord {
   scopesJson: string;
   tokenType?: string;
   expiresAt?: string;
+  healthStatus?: LinearInstallationHealthStatus;
+  healthReason?: string;
+  healthUpdatedAt?: string;
   createdAt: string;
   updatedAt: string;
 }

@@ -42,7 +42,11 @@ export async function handleLinearCommand(params: LinearCommandParams): Promise<
               ? "No Linear workspaces connected.\n"
               : `${result.workspaces.map((workspace) => {
                   const name = workspace.installation.workspaceKey ?? workspace.installation.workspaceName ?? `installation-${workspace.installation.id}`;
-                  return `${name}  repos=${workspace.linkedRepos.length} teams=${workspace.teams.length} projects=${workspace.projects.length}`;
+                  const health = workspace.installation.healthStatus && workspace.installation.healthStatus !== "ok"
+                    ? ` health=${workspace.installation.healthStatus}`
+                    : "";
+                  const reason = workspace.installation.healthReason ? ` ${workspace.installation.healthReason}` : "";
+                  return `${name}  repos=${workspace.linkedRepos.length} teams=${workspace.teams.length} projects=${workspace.projects.length}${health}${reason}`;
                 }).join("\n")}\n`,
         );
         return 0;

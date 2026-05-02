@@ -791,6 +791,18 @@ export class DatabaseBackedLinearClientProvider implements LinearClientProvider 
     if (!installation) {
       return undefined;
     }
+    if (installation.healthStatus === "revoked") {
+      this.logger.warn(
+        {
+          installationId: installation.id,
+          workspaceName: installation.workspaceName,
+          workspaceKey: installation.workspaceKey,
+          healthReason: installation.healthReason,
+        },
+        "Linear installation is revoked; reconnect before using it",
+      );
+      return undefined;
+    }
 
     const encryptionKey = this.config.linear.tokenEncryptionKey;
     let accessToken = decryptSecret(installation.accessTokenCiphertext, encryptionKey);
@@ -799,7 +811,21 @@ export class DatabaseBackedLinearClientProvider implements LinearClientProvider 
       : undefined;
 
     if (shouldRefreshToken(installation.expiresAt) && refreshToken) {
-      const refreshed = await refreshLinearOAuthToken(this.config, refreshToken);
+      let refreshed: Awaited<ReturnType<typeof refreshLinearOAuthToken>>;
+      try {
+        refreshed = await refreshLinearOAuthToken(this.config, refreshToken);
+      } catch (error) {
+        const healthReason = `Linear OAuth token refresh failed: ${error instanceof Error ? error.message : String(error)}`;
+        this.db.linearInstallations.updateLinearInstallationHealth(installation.id, {
+          healthStatus: "auth_error",
+          healthReason,
+        });
+        this.logger.error(
+          { installationId: installation.id, workspaceName: installation.workspaceName, error: healthReason },
+          "Linear OAuth token refresh failed; reconnect this installation",
+        );
+        throw error;
+      }
       accessToken = refreshed.accessToken;
       this.db.linearInstallations.updateLinearInstallationTokens(installation.id, {
         accessTokenCiphertext: encryptSecret(refreshed.accessToken, encryptionKey),
@@ -809,6 +835,12 @@ export class DatabaseBackedLinearClientProvider implements LinearClientProvider 
         scopesJson: JSON.stringify(refreshed.scopes),
         ...(refreshed.expiresAt ? { expiresAt: refreshed.expiresAt } : {}),
       });
+      if (installation.healthStatus === "auth_error") {
+        this.db.linearInstallations.updateLinearInstallationHealth(installation.id, {
+          healthStatus: "ok",
+          healthReason: null,
+        });
+      }
     }
 
     return new LinearGraphqlClient(
