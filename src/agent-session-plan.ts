@@ -29,7 +29,7 @@ function implementationPlan(): AgentSessionPlanStep[] {
   return [
     { content: "Prepare workspace", status: "pending" },
     { content: "Implementing", status: "pending" },
-    { content: "Awaiting verification", status: "pending" },
+    { content: "Fresh head pushed", status: "pending" },
     { content: "Merge", status: "pending" },
   ];
 }
@@ -46,8 +46,8 @@ function orchestrationPlan(): AgentSessionPlanStep[] {
 function reviewFixPlan(): AgentSessionPlanStep[] {
   return [
     { content: "Prepare workspace", status: "completed" },
-    { content: "Addressing review feedback", status: "pending" },
-    { content: "Awaiting re-verification", status: "pending" },
+    { content: "Addressing requested changes", status: "pending" },
+    { content: "Fresh head pushed", status: "pending" },
     { content: "Merge", status: "pending" },
   ];
 }
@@ -56,7 +56,7 @@ function branchUpkeepPlan(): AgentSessionPlanStep[] {
   return [
     { content: "Prepare workspace", status: "completed" },
     { content: "Repairing branch upkeep", status: "pending" },
-    { content: "Awaiting re-verification", status: "pending" },
+    { content: "Fresh head pushed", status: "pending" },
     { content: "Merge", status: "pending" },
   ];
 }
@@ -74,7 +74,7 @@ function mainRepairPlan(attempt: number): AgentSessionPlanStep[] {
   return [
     { content: "Inspect main failure", status: "pending" },
     { content: `Repairing main (${attemptLabel(attempt)})`, status: "pending" },
-    { content: "Awaiting re-verification", status: "pending" },
+    { content: "Fresh head pushed", status: "pending" },
     { content: "Priority merge", status: "pending" },
   ];
 }
@@ -151,6 +151,8 @@ export function buildAgentSessionPlan(params: {
   pendingRunType?: RunType;
   ciRepairAttempts?: number;
   queueRepairAttempts?: number;
+  prReviewState?: string;
+  prCheckStatus?: string;
 }): AgentSessionPlanStep[] {
   if (params.issueClass === "orchestration") {
     const settling = params.orchestrationSettleUntil
@@ -198,7 +200,12 @@ export function buildAgentSessionPlan(params: {
         ["completed", "inProgress", "pending", "pending"],
       );
     case "pr_open":
-      return setStatuses(implementationPlan(), ["completed", "completed", "inProgress", "pending"]);
+      return setStatuses([
+        { content: "Prepare workspace", status: "completed" },
+        { content: "Implementing", status: "completed" },
+        { content: prOpenGateLabel(params), status: "inProgress" },
+        { content: "Merge", status: "pending" },
+      ], ["completed", "completed", "inProgress", "pending"]);
     case "changes_requested":
       return setStatuses(reviewFixPlan(), ["completed", "inProgress", "pending", "pending"]);
     case "repairing_ci":
@@ -206,9 +213,9 @@ export function buildAgentSessionPlan(params: {
     case "awaiting_queue":
       return setStatuses([
         { content: "Prepare workspace", status: "completed" },
-        { content: "Implementing", status: "completed" },
+        { content: "Fresh head pushed", status: "completed" },
         { content: "Verification passed", status: "completed" },
-        { content: "Awaiting merge", status: "inProgress" },
+        { content: "Awaiting queue", status: "inProgress" },
       ], ["completed", "completed", "completed", "inProgress"]);
     case "repairing_queue":
       return setStatuses(queueRepairPlan(params.queueRepairAttempts ?? 1), ["completed", "completed", "completed", "inProgress"]);
@@ -221,11 +228,50 @@ export function buildAgentSessionPlan(params: {
     case "done":
       return setStatuses([
         { content: "Prepare workspace", status: "completed" },
-        { content: "Implementing", status: "completed" },
+        { content: "Fresh head pushed", status: "completed" },
         { content: "Verification passed", status: "completed" },
         { content: "Merged", status: "completed" },
       ], ["completed", "completed", "completed", "completed"]);
   }
+}
+
+function prOpenGateLabel(params: {
+  prReviewState?: string;
+  prCheckStatus?: string;
+}): string {
+  const reviewState = normalizeState(params.prReviewState);
+  const checkStatus = normalizeState(params.prCheckStatus);
+
+  if (isPendingCheckStatus(checkStatus)) {
+    return "Awaiting checks";
+  }
+  if (isAwaitingReviewState(reviewState)) {
+    return "Awaiting review";
+  }
+  if (isApprovedReviewState(reviewState) && isPassedCheckStatus(checkStatus)) {
+    return "Awaiting queue";
+  }
+  return "Fresh head pushed";
+}
+
+function isAwaitingReviewState(value: string): boolean {
+  return value === "review_required" || value === "commented" || value === "changes_requested";
+}
+
+function isApprovedReviewState(value: string): boolean {
+  return value === "approved";
+}
+
+function isPendingCheckStatus(value: string): boolean {
+  return value === "pending" || value === "queued" || value === "in_progress" || value === "waiting";
+}
+
+function isPassedCheckStatus(value: string): boolean {
+  return value === "success" || value === "passed";
+}
+
+function normalizeState(value: string | undefined): string {
+  return (value ?? "").trim().toLowerCase().replace(/[-/\s]+/g, "_");
 }
 
 function planForRunType(
@@ -253,7 +299,17 @@ function planForRunType(
 }
 
 export function buildAgentSessionPlanForIssue(
-  issue: Pick<IssueRecord, "factoryState" | "pendingRunType" | "ciRepairAttempts" | "queueRepairAttempts" | "issueClass" | "orchestrationSettleUntil">,
+  issue: Pick<
+    IssueRecord,
+    | "factoryState"
+    | "pendingRunType"
+    | "ciRepairAttempts"
+    | "queueRepairAttempts"
+    | "issueClass"
+    | "orchestrationSettleUntil"
+    | "prReviewState"
+    | "prCheckStatus"
+  >,
   options?: { activeRunType?: RunType },
 ): AgentSessionPlanStep[] {
   return buildAgentSessionPlan({
@@ -263,6 +319,8 @@ export function buildAgentSessionPlanForIssue(
     ...(issue.issueClass ? { issueClass: issue.issueClass } : {}),
     ...(issue.orchestrationSettleUntil ? { orchestrationSettleUntil: issue.orchestrationSettleUntil } : {}),
     ...(issue.pendingRunType ? { pendingRunType: issue.pendingRunType } : {}),
+    ...(issue.prReviewState ? { prReviewState: issue.prReviewState } : {}),
+    ...(issue.prCheckStatus ? { prCheckStatus: issue.prCheckStatus } : {}),
     ...(options?.activeRunType ? { activeRunType: options.activeRunType } : {}),
   });
 }
