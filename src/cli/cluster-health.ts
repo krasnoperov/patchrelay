@@ -622,6 +622,7 @@ function buildCiEntry(params: {
   const owner = deriveCiOwner({
     delegatedToPatchRelay,
     gateCheckStatus,
+    activeRunId: issue.activeRunId,
     factoryState: issue.factoryState,
     reviewDecision,
     reviewRequested,
@@ -656,6 +657,7 @@ function buildCiEntry(params: {
 function deriveCiOwner(params: {
   delegatedToPatchRelay: boolean;
   gateCheckStatus: "pending" | "success" | "failure" | "unknown";
+  activeRunId?: number | undefined;
   factoryState: string;
   reviewDecision?: string | undefined;
   reviewRequested: boolean;
@@ -664,6 +666,9 @@ function deriveCiOwner(params: {
   mergeConflictDetected: boolean;
   reviewQuillAttempt?: ReviewQuillAttemptOwnership | undefined;
 }): "patchrelay" | "reviewer" | "review-quill" | "downstream" | "external" | "paused" | "unknown" {
+  if (params.activeRunId !== undefined) {
+    return "patchrelay";
+  }
   const headAdvancedPastBlockingReview = Boolean(
     params.currentHeadSha
       && params.latestBlockingReviewHeadSha
