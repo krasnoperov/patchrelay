@@ -16,7 +16,17 @@ test("exec retries git without runtime GitHub auth after workflow permission rej
       `#!/usr/bin/env bash
 set -euo pipefail
 LOG_PATH="${logPath}"
-if env | grep -q '^GIT_CONFIG_VALUE_[0-9]*=AUTHORIZATION: basic '; then
+has_runtime_auth=false
+for ((i = 0; i < \${GIT_CONFIG_COUNT:-0}; i++)); do
+  value_var="GIT_CONFIG_VALUE_\${i}"
+  case "\${!value_var:-}" in
+    "AUTHORIZATION: basic "*)
+      has_runtime_auth=true
+      break
+      ;;
+  esac
+done
+if [[ "$has_runtime_auth" == "true" ]]; then
   printf 'with-app-auth\\n' >> "$LOG_PATH"
   cat >&2 <<'EOF'
 To https://github.com/krasnoperov/ballony-i-nasosy.git
@@ -43,6 +53,7 @@ printf 'push ok\\n'
       {
         env: {
           PATH: `${tempDir}:${process.env.PATH ?? ""}`,
+          GIT_CONFIG_COUNT: "0",
         },
         githubRepoFullName: "krasnoperov/ballony-i-nasosy",
       },
