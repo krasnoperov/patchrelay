@@ -54,6 +54,14 @@ export interface TransitionContext {
   prReviewState?: string | undefined;
   /** Active Codex run ID — set when a run is in progress. */
   activeRunId?: number | undefined;
+  /**
+   * Classification of a `check_failed` event. `queue_eviction` is the
+   * lander's structured signal that integration broke; `branch_ci` is
+   * any other gate-check failure. While In Deploy (`awaiting_queue`),
+   * branch_ci failures are metadata only — the lander's spec CI on the
+   * integration tree is the admission gate.
+   */
+  failureSource?: "queue_eviction" | "branch_ci" | undefined;
 }
 
 interface TransitionRule {
@@ -111,9 +119,29 @@ const TRANSITION_RULES: readonly TransitionRule[] = [
     guard: (s) => s === "repairing_ci",
     to: (_, ctx) => ctx.prReviewState === "approved" ? "awaiting_queue" : "pr_open" },
 
-  // CI failure when no run is active triggers repair.
+  // CI failure when no run is active. Plan §4.3: classification by
+  // failureSource determines whether we route to queue or branch repair.
+  // While In Deploy (`awaiting_queue`), branch CI failures are metadata
+  // only — the lander handles the spec; we don't initiate a ci_repair.
   { event: "check_failed",
-    guard: (s, ctx) => isOpen(s) && ctx.activeRunId === undefined,
+    guard: (s, ctx) => isOpen(s)
+                   && ctx.activeRunId === undefined
+                   && ctx.failureSource === "queue_eviction",
+    to: "repairing_queue" },
+  { event: "check_failed",
+    guard: (s, ctx) => isOpen(s)
+                   && ctx.activeRunId === undefined
+                   && ctx.failureSource === "branch_ci"
+                   && s !== "awaiting_queue",
+    to: "repairing_ci" },
+  // Backward-compat fallback for callers that haven't classified the
+  // failure (older code paths or test fixtures). Behaves like today's
+  // single rule but still skips while In Deploy.
+  { event: "check_failed",
+    guard: (s, ctx) => isOpen(s)
+                   && ctx.activeRunId === undefined
+                   && ctx.failureSource === undefined
+                   && s !== "awaiting_queue",
     to: "repairing_ci" },
 
   // pr_synchronize: no rule → no transition (resets counters only)

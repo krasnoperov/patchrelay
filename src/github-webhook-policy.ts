@@ -4,7 +4,6 @@ import type { NormalizedGitHubEvent } from "./github-types.ts";
 import {
   resolveMergeQueueProtocol,
 } from "./merge-queue-protocol.ts";
-import { isIssueTerminal } from "./pr-state.ts";
 import type { ProjectConfig } from "./workflow-types.ts";
 
 const DEFAULT_GATE_CHECK_NAMES = ["verify", "tests"];
@@ -113,19 +112,18 @@ export function resolveGitHubFactoryStateForEvent(
       ? "pr_open"
       : issue.factoryState;
 
-  if (
+  // Classify check_failed events so the rule table can route them.
+  // The duplicate short-circuit that lived here before is gone — the
+  // table now handles queue_eviction via failureSource (plan §4.3).
+  const failureSource: "queue_eviction" | "branch_ci" | undefined =
     event.triggerEvent === "check_failed"
-    && isQueueEvictionFailure(issue, event, project)
-    && issue.prState === "open"
-    && issue.activeRunId === undefined
-    && !isIssueTerminal(issue)
-  ) {
-    return "repairing_queue";
-  }
+      ? (isQueueEvictionFailure(issue, event, project) ? "queue_eviction" : "branch_ci")
+      : undefined;
 
   const resolved = resolveFactoryStateFromGitHub(event.triggerEvent, effectiveCurrentState, {
     prReviewState: issue.prReviewState,
     activeRunId: issue.activeRunId,
+    failureSource,
   });
   if (resolved !== undefined) {
     return resolved;

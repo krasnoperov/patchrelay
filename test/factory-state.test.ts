@@ -79,10 +79,17 @@ test("review_commented never changes state", () => {
 
 // ─── CI check events ─────────────────────────────────────────────
 
-test("check_failed transitions any open non-running state to repairing_ci", () => {
+test("check_failed transitions any open non-running state to repairing_ci (except awaiting_queue)", () => {
+  // Plan §4.3: while In Deploy (`awaiting_queue`), branch CI is metadata
+  // only. Other open states still route to repairing_ci on a generic
+  // (uncategorized) check_failed.
   const openNonRunning = ALL_STATES.filter((s) => !ACTIVE_RUN_STATES.has(s) && !TERMINAL_STATES.has(s));
   for (const state of openNonRunning) {
-    assert.equal(resolve("check_failed", state), "repairing_ci", `check_failed from ${state}`);
+    if (state === "awaiting_queue") {
+      assert.equal(resolve("check_failed", state), undefined, `check_failed from ${state} should be metadata-only`);
+    } else {
+      assert.equal(resolve("check_failed", state), "repairing_ci", `check_failed from ${state}`);
+    }
   }
 });
 
@@ -175,9 +182,19 @@ test("late review after approval pulls issue from merge queue", () => {
   assert.equal(resolve("review_approved", "changes_requested"), "awaiting_queue");
 });
 
-test("CI failure in merge queue → repair → fast-track back if approved", () => {
-  assert.equal(resolve("check_failed", "awaiting_queue"), "repairing_ci");
-  assert.equal(resolve("check_passed", "repairing_ci", { prReviewState: "approved" }), "awaiting_queue");
+test("queue eviction in merge queue → repair → fast-track back to queue", () => {
+  // Plan §4.3: while In Deploy, only the lander's queue_eviction signal
+  // pulls the issue back to a repair state. Branch CI failures are
+  // metadata only.
+  assert.equal(
+    resolve("check_failed", "awaiting_queue", { failureSource: "queue_eviction" }),
+    "repairing_queue",
+  );
+  assert.equal(
+    resolve("check_failed", "awaiting_queue", { failureSource: "branch_ci" }),
+    undefined,
+  );
+  assert.equal(resolve("check_passed", "repairing_queue"), "awaiting_queue");
 });
 
 // ─── Structural validation ───────────────────────────────────────

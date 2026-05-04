@@ -493,6 +493,10 @@ async function evaluateGitHubIssueHealth(
     issue.delegatedToPatchRelay
     && gateCheckStatus === "failure"
     && issue.factoryState !== "repairing_ci"
+    // Plan §6.1 / §4.3: branch CI failures while In Deploy are
+    // metadata only — the lander's spec CI is the gate. Don't flag
+    // these as a missing-ci-repair condition.
+    && issue.factoryState !== "awaiting_queue"
     && issue.activeRunId === undefined
     && ageMs >= RECONCILIATION_GRACE_MS
   ) {
