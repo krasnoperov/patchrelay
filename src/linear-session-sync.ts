@@ -52,7 +52,15 @@ export class LinearSessionSync {
             prUrl: syncedIssue.prUrl,
           }
         : syncedIssue;
-      await syncActiveWorkflowState({ db: this.db, issue: syncedIssue, linear, ...(trackedIssue ? { trackedIssue } : {}), ...(options ? { options } : {}) });
+      const project = this.config.projects.find((p) => p.id === syncedIssue.projectId);
+      await syncActiveWorkflowState({
+        db: this.db,
+        issue: syncedIssue,
+        linear,
+        ...(trackedIssue ? { trackedIssue } : {}),
+        ...(options ? { options } : {}),
+        ...(project ? { project } : {}),
+      });
       await this.agentSessions.syncSessionPlan(syncedIssue, linear, options);
       if (shouldSyncVisibleIssueComment(visibleIssue, Boolean(syncedIssue.agentSessionId))) {
         await syncVisibleStatusComment({
